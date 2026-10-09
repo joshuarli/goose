@@ -5,3 +5,4 @@ samples/*.ppm
 samples/*.pgm
 samples/*.png
 __pycache__
+dist

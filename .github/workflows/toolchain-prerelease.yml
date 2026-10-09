@@ -1,0 +1,70 @@
+name: Toolchain prerelease
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: macos-aarch64
+            script: scripts/package_macos_aarch64.sh
+            archive: goose-macos-aarch64.zip
+          - os: ubuntu-24.04
+            target: linux-x86_64-musl
+            script: scripts/package_linux_x86_64_musl.sh
+            archive: goose-linux-x86_64-musl.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Zig
+        if: matrix.target == 'linux-x86_64-musl'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build and package
+        run: ${{ matrix.script }}
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          dist/*.zip
+          --prerelease
+          --generate-notes
