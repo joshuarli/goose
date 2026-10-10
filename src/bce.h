@@ -119,9 +119,26 @@ struct BCE {
     struct Fact { Base l, r; int64_t c; };   // l <= r + c.
     struct Term { bool ok = false; Base b; int64_t off = 0; };
 
+    // Interned IDs are compact indices. Implicit zero generations let a flow
+    // copy retain dense storage without allocating one hash node per value.
     struct Flow {
         vector<Fact> facts;
-        unordered_map<int, int> vgen, pgen;   // var id / place id -> generation.
+        vector<int> vgen, pgen;   // var id / place id -> generation; missing entries are zero.
+
+        static int Gen(const vector<int> &gens, int id) {
+            return (size_t)id < gens.size() ? gens[id] : 0;
+        }
+        static void SetGen(vector<int> &gens, int id, int gen) {
+            assert(id >= 0);
+            if ((size_t)id >= gens.size()) gens.resize((size_t)id + 1);
+            gens[id] = gen;
+        }
+        static vector<int> MeetGens(const vector<int> &a, const vector<int> &b) {
+            auto r = a;
+            r.resize(std::max(a.size(), b.size()));
+            for (size_t i = 0; i < b.size(); i++) r[i] = std::max(r[i], b[i]);
+            return r;
+        }
     };
     Flow flow;
     int nextgen = 0;
@@ -172,12 +189,10 @@ struct BCE {
     Base TmpBase() { return Base { BK_TMP, nexttmp++, 0 }; }
     Base VarBase(VarDef *v) {
         auto id = VarId(v);
-        auto it = flow.vgen.find(id);
-        return Base { BK_VAR, id, it == flow.vgen.end() ? 0 : it->second };
+        return Base { BK_VAR, id, Flow::Gen(flow.vgen, id) };
     }
     Base LenBase(int pid) {
-        auto it = flow.pgen.find(pid);
-        return Base { BK_LEN, pid, it == flow.pgen.end() ? 0 : it->second };
+        return Base { BK_LEN, pid, Flow::Gen(flow.pgen, pid) };
     }
 
     void AddFactB(Base l, Base r, int64_t c) {
@@ -815,7 +830,7 @@ struct BCE {
     void BumpVar(VarDef *v, bool bridge = true) {
         anybump = true;
         auto old = VarBase(v);
-        flow.vgen[VarId(v)] = ++nextgen;
+        Flow::SetGen(flow.vgen, old.id, ++nextgen);
         if (vksum) vksum->insert(v);
         if (!bridge) return;
         auto it = mono.find(v);
@@ -827,7 +842,7 @@ struct BCE {
     void BumpPlace(int pid, int dir) {   // dir: +1 grow, -1 shrink, 0 unknown.
         anybump = true;
         auto old = LenBase(pid);
-        flow.pgen[pid] = ++nextgen;
+        Flow::SetGen(flow.pgen, pid, ++nextgen);
         if (ksum) ksum->insert(pid);
         if (shsum && dir <= 0) shsum->insert(pid);
         if (dir > 0) AddFactB(old, LenBase(pid), 0);
@@ -844,7 +859,7 @@ struct BCE {
         }
         anybump = true;
         auto old = LenBase(pid);
-        flow.pgen[pid] = ++nextgen;
+        Flow::SetGen(flow.pgen, pid, ++nextgen);
         if (ksum) ksum->insert(pid);
         auto nw = LenBase(pid);
         AddFactB(nw, old, delta);            // new <= old + delta.
@@ -1850,16 +1865,8 @@ struct BCE {
                     r.facts.push_back({ f.l, f.r, std::max(f.c, g.c) });
                     break;
                 }
-        r.vgen = a.vgen;
-        for (auto &[k, v] : b.vgen) {
-            auto &x = r.vgen[k];
-            x = std::max(x, v);
-        }
-        r.pgen = a.pgen;
-        for (auto &[k, v] : b.pgen) {
-            auto &x = r.pgen[k];
-            x = std::max(x, v);
-        }
+        r.vgen = Flow::MeetGens(a.vgen, b.vgen);
+        r.pgen = Flow::MeetGens(a.pgen, b.pgen);
         return r;
     }
 
