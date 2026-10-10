@@ -354,8 +354,9 @@ var grow: i64[>..] = [];           // arenas, builders, pools, tree storage
 for i in 5 { grow.push(i * i); }
 
 var stack: i64[>..<] = [];         // the one that pops
-stack.push(1); stack.push(2);
+stack.push(1); stack.push(2); stack.push(3);
 let top = stack.pop();
+stack.pop_n(2);                    // drops the last two at once
 
 var small: u8[..8] = [];           // lives inline anywhere a fixed value can
 small.push('h'); small.push('i');
@@ -1458,9 +1459,9 @@ exactly which checks survived — use it when a kernel is slower than you
 expect.
 
 Two language rules also help the analysis: a grow-only array
-can only shrink at a `pop`/`resize`/`clear` the compiler can see, so a bound
-established before a `push` still holds after it; and `%` being Euclidean
-means a reduction is in range by construction.
+can only shrink at a `pop`/`pop_n`/`resize`/`clear` the compiler can see, so
+a bound established before a `push` still holds after it; and `%` being
+Euclidean means a reduction is in range by construction.
 
 **What the numbers actually say** ([`bench/summary.md`](../bench/summary.md),
 [`bench/results.md`](../bench/results.md)): 3.3x the speed of idiomatic C++,

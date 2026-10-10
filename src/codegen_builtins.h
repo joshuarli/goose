@@ -285,6 +285,24 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             FixedLocal(elem, tv, cat("*(", CT(elem), " *)", at));
             return { tv };
         }
+        case B_POP_N: {
+            auto lv = RecvLoc(an[0]);
+            auto v = ArrayView(lv);
+            auto ak = lv.t->arr->akind;
+            if (ak != A_LIMITED) NoteLen(lv.stk, v.lenlv);
+            auto nn = GenPure(an[1]);
+            // The length is read after the count, which may have changed it.
+            auto ol = T();
+            L("int64_t ", ol, " = ", v.len, ";");
+            // One unsigned compare rejects both a count past the length and
+            // a negative one, which wraps to above any length.
+            L("if ((uint64_t)(", nn, ") > (uint64_t)", ol, ") gs_abort(GS_E_POPN, ",
+              LocArgs(ln), ");");
+            L(v.lenlv, " = (", LenCast(lv), ")(", ol, " - (int64_t)(", nn, "));");
+            if (ak == A_GROWSHRINK || ak == A_GROW)
+                L(TopW(lv.stk), " -= (int64_t)(", nn, ") * ", FixedSize(v.elem), ";");
+            return {};
+        }
         case B_RESIZE: {
             auto lv = RecvLoc(an[0]);
             auto v = ArrayView(lv);

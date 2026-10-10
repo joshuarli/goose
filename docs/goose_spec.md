@@ -333,12 +333,12 @@ Element restrictions:
 
 Growth operations (`push`, `append`, …) exist only on resizable arrays and on
 limited arrays (`[..k]`, `[..]`) up to capacity (exceeding capacity aborts).
-Shrink operations (`pop`, `resize` downward, `clear`) exist on limited
-arrays anywhere, on `[>..<]` wherever no live variable refers into it
+Shrink operations (`pop`, `pop_n`, `resize` downward, `clear`) exist on
+limited arrays anywhere, on `[>..<]` wherever no live variable refers into it
 (§5.2), and on a grow-only `[>..]` exactly where the compiler can see that
 no reference or slice into it is live (§5.1); they
-abort when they would shrink below empty (`pop` on an empty array, `resize`
-to a negative length).
+abort when they would shrink below empty (`pop` on an empty array, `pop_n`
+of more elements than the array holds, `resize` to a negative length).
 
 Built-in members: `.len` (always, returns `i64`), `.cap` (limited arrays),
 `.push(v)` (returns a reference to the new element on resizable and limited
@@ -346,9 +346,10 @@ arrays — the idiomatic way to link up just-built data),
 `.append(src)` (src an array/slice of the element type, whose elements are
 copied: the references they hold must outlive the array, §9.2, and none may
 be self-relative, §3.9; an array literal there is built instead as a run of
-such elements, §4.2), `.pop()`, `.resize(n, v)` (grow with fill value `v`,
-copied into every slot added, or shrink), `.resize(n)` (shrink only),
-`.clear()` per the rules above, and `.index_of(r) -> i64` (fixed,
+such elements, §4.2), `.pop()`, `.pop_n(n)` (drops the last `n` elements
+at once and returns nothing; a negative `n` aborts), `.resize(n, v)` (grow
+with fill value `v`, copied into every slot added, or shrink), `.resize(n)`
+(shrink only), `.clear()` per the rules above, and `.index_of(r) -> i64` (fixed,
 limited and resizable arrays of fixed-size elements): the index of the
 element `r` refers to, `(addr − base) / elemsize`. `r` must be rooted at the
 array *exactly* (§9.2), so the division is exact and the result is in range without a runtime check.
@@ -1157,10 +1158,10 @@ on the length holds across every `push`.
 
 * `push`/`append` bump the stack.
 * May contain variable-size elements (build strings/ADTs in place, §7.3).
-* Shrinking — `pop`, `resize` downward, `clear` — is legal exactly where the
-  compiler can see that nothing is rooted in the array, under the conditions
-  below. `pop` and `resize` additionally need fixed-size elements, since a
-  sequential array cannot find its last element (§3.3).
+* Shrinking — `pop`, `pop_n`, `resize` downward, `clear` — is legal exactly
+  where the compiler can see that nothing is rooted in the array, under the
+  conditions below. `pop`, `pop_n` and `resize` additionally need fixed-size
+  elements, since a sequential array cannot find its last element (§3.3).
 
 Use grow-only arrays for arenas, pools, string builders, tree storage, and
 scratch buffers that are refilled or popped between phases.
@@ -1293,7 +1294,7 @@ again against the pairs the cycle records once the whole cycle is.
 * `pop()` returns the element by value: a reference or slice element as the
   one it is, pointing where it did and as writable as its slot, as reading
   the element would give it (§9.5), since what a temporary holds is not
-  rooted at the temporary (§9.2); `resize`/`clear` allowed, from
+  rooted at the temporary (§9.2); `pop_n`/`resize`/`clear` allowed, from
   anywhere: on a local, through a reference, on a global, on a struct's
   tail. Assigning the array whole is a shrink too.
 * References and slices into it are created like any other (§3.8, §3.10),
@@ -1373,9 +1374,9 @@ again against the pairs the cycle records once the whole cycle is.
   the same activation initialized to exactly `X.len` of the same path X, or a
   call that is balanced for X. The same path is one variable that cannot be
   rebound (a `var` reference can), then the same fields, none of them a
-  reference. `pop`, `clear`, a resize to anything else, and assigning X or a
-  value holding it whole are not balanced, and neither is a resize to an `m`
-  bound to a writable reference (§4.4): by `&`, `.=`, or a reference parameter,
+  reference. `pop`, `pop_n`, `clear`, a resize to anything else, and assigning
+  X or a value holding it whole are not balanced, and neither is a resize to an
+  `m` bound to a writable reference (§4.4): by `&`, `.=`, or a reference parameter,
   field or binding that is not `const`, in a nested function too, since a write
   through it can lower `m`. Binding `m` to one after a resize back to it is an
   error: that resize has already been judged balanced, while a loop can run the
@@ -2941,7 +2942,8 @@ Aborts (message + exit; not catchable):
 * a slice pool's `free_slice`/`realloc_slice` with a non-empty slice that is
   not one of its runs, where the checker could not tell (§5.4);
 * limited-array capacity overflow;
-* shrinking below empty (`pop` on an empty array, `resize` to a negative
+* shrinking below empty (`pop` on an empty array, `pop_n` of a negative
+  count or of more elements than the array holds, `resize` to a negative
   length);
 * relative-reference offset overflow at store (only where a root array, or
   a named pool, can span more than the width holds, §3.9);
@@ -3273,8 +3275,8 @@ What the language gives it, beyond ordinary flow facts (loop headers,
 conditions and their negations, `assert`, match arms):
 
 * **Monotonicity in the type.** A grow-only `[>..]` shrinks only at a `pop`,
-  `resize` or `clear` on the array itself (§5.1), which the analysis sees, so
-  a bound established before a `push` still holds after it. This is a
+  `pop_n`, `resize` or `clear` on the array itself (§5.1), which the analysis
+  sees, so a bound established before a `push` still holds after it. This is a
   guarantee a resizable-array type without the grow-only/grow-shrink split
   cannot offer.
 * **Roots.** Every reference's root is static per specialization (§9.2), so
@@ -3282,8 +3284,8 @@ conditions and their negations, `assert`, match arms):
   reachable only through a global, a capture, or an explicit `&` (§3.8).
 * **Static extents.** `T[k]`'s length and `[..k]`'s capacity are constants.
 * **Total operations.** `%` is Euclidean (§6.2), so a reduction is in range
-  by construction; a completed `pop` proves the array was non-empty, because
-  the empty case aborts.
+  by construction; a completed `pop` proves the array was non-empty, and a
+  completed `pop_n(n)` that `0 <= n <= len`, because the other cases abort.
 
 Known gaps are TODO 0f. Whole-program compilation lets the analysis reach
 across calls: each specialization sees concrete argument roots, a caller's
@@ -3489,7 +3491,7 @@ And the array members, ordinary functions of their receiver per UFCS
 | `.cap -> i64` | limited arrays | the capacity (§3.3) |
 | `.push(v) -> T&` | limited, grow-only, grow-shrink | one element, constructed in place (§3.3) |
 | `.append(src)` | limited, grow-only, grow-shrink | an array or slice of elements (§3.3) |
-| `.pop() -> T`, `.resize(n, v?)`, `.clear()` | limited, grow-shrink; grow-only where §5.1 allows a shrink | shrinking, and growing with a fill value (§3.3, §5) |
+| `.pop() -> T`, `.pop_n(n)`, `.resize(n, v?)`, `.clear()` | limited, grow-shrink; grow-only where §5.1 allows a shrink | shrinking, and growing with a fill value (§3.3, §5) |
 | `.index_of(r) -> i64` | fixed, limited, grow-only, grow-shrink | the index of the element `r` refers to (§3.3) |
 | `.alloc_index(v) -> i64`, `.alloc_ref(v) -> T&`, `.free(i)` | `reusable` pools | slot reuse (§5.4) |
 | `.alloc_slice(n) -> T[:]`, `.realloc_slice(s, n) -> T[:]`, `.free_slice(s)` | `reusable[]` pools | slice reuse (§5.4) |

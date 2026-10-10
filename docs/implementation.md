@@ -1484,8 +1484,8 @@ the record of its cycle's previous round (§3.11), none in the first.
 
 ### 3.10 The shrink rules, and growth and uses during construction
 
-**Grow-only arrays** (§5.1). `pop`, `resize` and `clear` on a `[>..]`
-(`CheckBuiltin` → `CheckGrowShrink` → `GrowOnlyShrinkAt`,
+**Grow-only arrays** (§5.1). `pop`, `pop_n`, `resize` and `clear` on a
+`[>..]` (`CheckBuiltin` → `CheckGrowShrink` → `GrowOnlyShrinkAt`,
 `typecheck_builtins.h`), and whole assignment of one or of a value holding
 one (`CheckAssign`, `ResizableArrayIn`), pass in this order:
 
@@ -1844,8 +1844,8 @@ marked relied on (`markuse`), which makes a writable reference noted later
 an error: the resize's balance is recorded by then, and a loop checked in
 one pass, or a nested function checked once, can run the write before the
 resize's next run, which nothing judges again. No other shrink in a
-body is balanced: `pop`, `clear`, other resizes, whole assignment, and a
-grow-only array's shrinks (`GrowOnlyShrinkAt` records every shrink
+body is balanced: `pop`, `pop_n`, `clear`, other resizes, whole assignment,
+and a grow-only array's shrinks (`GrowOnlyShrinkAt` records every shrink
 unbalanced). The body's own scans are unchanged, a balanced resize
 included, and so are the pairs `NoteLiveViews` keeps for it. At a call to a
 checked callee, `ApplyCalleeShrinks` first expands every entry into the
@@ -3224,8 +3224,12 @@ slices). A condition that itself changed tracked state
 comparison ran against pre-kill values; the locals the condition declares
 itself, such as the parameter of a predicate inlined into it, do not count,
 since its comparisons cannot name them. A completed `pop` proves the old
-length was at least one; a `resize` states the new length when the count's
-term survived the fill value's evaluation.
+length was at least one; a completed `pop_n(n)` proves `0 <= n <= old
+length` (`CheckedFacts`), and a constant `n` steps the length down exactly;
+a `resize` states the new length when the count's term survived the fill
+value's evaluation. Neither `pop_n` nor `resize` states anything when its
+count moved the receiver (`recvmoved`), since the receiver was resolved
+before the count ran.
 
 A completed check is a fact as well (`CheckedFacts`): the program only
 continues past `a[i]` with `0 <= i < len` and past `a[lo..hi]` with
@@ -4647,8 +4651,8 @@ call sites*. In practice:
   of a field or element (`n.count`, only variables and lengths are bases,
   though a narrow type's range still counts), and any value that reaches the
   index through a cast the facts cannot prove in range;
-* an index whose relation to the length crosses a `pop`, `resize`, `clear`,
-  whole assignment, or a call the summary says may resize that array (or a
+* an index whose relation to the length crosses a `pop`, `pop_n`, `resize`,
+  `clear`, whole assignment, or a call the summary says may resize that array (or a
   call with no summary at all: a thread spawn, a call through an opaque
   site);
 * a comparison against a value computed by a call that mutates tracked state
@@ -4683,8 +4687,8 @@ memory the C compiler must reload after every byte store. Two things remove
 the reloads:
 
 * **View hoisting**: in a loop that only reads and writes *elements* of the
-  array behind a reference variable -- no `push`, `pop`, `resize`, `clear`,
-  whole assignment, rebind, or call that can reach it -- the view is read
+  array behind a reference variable -- no `push`, `pop`, `pop_n`, `resize`,
+  `clear`, whole assignment, rebind, or call that can reach it -- the view is read
   once before the loop. This gives a 4x speedup on `blur` under clang. A loop that
   grows the array cannot have it; move growth out of the read loop, or split
   the loop.
@@ -4820,8 +4824,8 @@ cached stack.
 
 ### 9.7 Scratch, shrinking, and lifetimes
 
-* A grow-only array can be `clear`ed, `pop`ped or `resize`d wherever the
-  checker can see that no reference or slice into it is live afterwards
+* A grow-only array can be shrunk (`clear`, `pop`, `pop_n`, `resize`) wherever
+  the checker can see that no reference or slice into it is live afterwards
   (§3.10): use a view for the last time, then shrink; a shrink is a
   statement of its own, not part of a larger expression.
 * Scope exit releases storage by restoring a stack watermark. A scratch

@@ -151,6 +151,7 @@ enum {
     GS_E_SLICELEN,     /* slice pool length negative or beyond any data stack */
     GS_E_POOLSLICE,    /* a slice handed to a slice pool is not one of its runs */
     GS_E_RELNULL,      /* a non-null optional self-relative target has offset zero */
+    GS_E_POPN,         /* pop_n of a negative count or more than the length */
 };
 
 GS_API GS_NORETURN void gs_panic(const char *msg);

@@ -369,9 +369,11 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         return VoidVal();
     }
     // A grow-only array shrinks only where nothing can still be rooted in
-    // it (§5.1); pop and resize also need an element the shrink can find,
-    // which a sequential array has not got.
-    if (ak == A_GROW && (d.kind == B_POP || d.kind == B_RESIZE || d.kind == B_CLEAR)) {
+    // it (§5.1); pop, pop_n and resize also need an element the shrink can
+    // find, which a sequential array has not got.
+    auto shrink = d.kind == B_POP || d.kind == B_POP_N || d.kind == B_RESIZE ||
+                  d.kind == B_CLEAR;
+    if (ak == A_GROW && shrink) {
         CheckGrowShrink(c, d.name, args[0], rv);
         if (d.kind != B_CLEAR && ClassOf(elem) != SC_FIXED)
             Error(c, cat(".", d.name, " needs fixed-size elements: ", TypeStr(rv.type),
@@ -379,7 +381,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
     }
     // A grow-shrink array shrinks from anywhere, provided nothing in scope
     // refers into it (§5.2).
-    if (ak == A_GROWSHRINK && (d.kind == B_POP || d.kind == B_RESIZE || d.kind == B_CLEAR))
+    if (ak == A_GROWSHRINK && shrink)
         ShrinkThrough(c, d.name, ExprStr(args[0]), rv,
                       IsPlainRef(rv.type) ? rv.type->ref->sub : rv.type,
                       d.kind == B_RESIZE && ResizesToMark(args[0], args[1]) ? SB_BALANCED

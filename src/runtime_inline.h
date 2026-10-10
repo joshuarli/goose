@@ -163,6 +163,7 @@ enum {
     GS_E_SLICELEN,     /* slice pool length negative or beyond any data stack */
     GS_E_POOLSLICE,    /* a slice handed to a slice pool is not one of its runs */
     GS_E_RELNULL,      /* a non-null optional self-relative target has offset zero */
+    GS_E_POPN,         /* pop_n of a negative count or more than the length */
 };
 
 GS_API GS_NORETURN void gs_panic(const char *msg);
@@ -187,9 +188,9 @@ GS_API GS_NORETURN void gs_asfail_u(const char *why, uint64_t v, const char *typ
 GS_API GS_NORETURN void gs_asfail_f(const char *why, double d, int f32, const char *type,
                                     const char *file, int line);
 
-/* Bounds check as one unsigned compare; the index operand must be side-effect
 )GSRT"
-R"GSRT(   free (the compiler guarantees this at emission). The failing arm's int64_t
+R"GSRT(/* Bounds check as one unsigned compare; the index operand must be side-effect
+   free (the compiler guarantees this at emission). The failing arm's int64_t
    gives the result the type of (i) and an int64_t together, and its call is
    one the C compiler knows does not return, also where gs_idxfail is in the
    runtime object. */
@@ -372,9 +373,9 @@ static int gs_memeq(const void *a, const void *b, size_t n) {
    zero-checked always.
 
    Only division and modulo check anything in a release build, so only they
-   need to be functions there; everything else is a macro whose body is the
 )GSRT"
-R"GSRT(   expression the release function would have returned. An optimizing backend
+R"GSRT(   need to be functions there; everything else is a macro whose body is the
+   expression the release function would have returned. An optimizing backend
    inlines either form to the same instruction, but a backend that does not
    inline (libtcc, or any -O0 build) would otherwise pay a call for every
    arithmetic operation in the program — which measured as 13-37% of total
@@ -544,10 +545,10 @@ static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 #define gs_shl_i64(a, n) ((int64_t)((uint64_t)(a) << ((n) & 63)))
 #define gs_shr_i64(a, n) ((int64_t)((a) >> ((n) & 63)))
 
-#define gs_add_u64(a, b) ((uint64_t)((a) + (b)))
-#define gs_sub_u64(a, b) ((uint64_t)((a) - (b)))
 )GSRT"
-R"GSRT(#define gs_mul_u64(a, b) ((uint64_t)((a) * (b)))
+R"GSRT(#define gs_add_u64(a, b) ((uint64_t)((a) + (b)))
+#define gs_sub_u64(a, b) ((uint64_t)((a) - (b)))
+#define gs_mul_u64(a, b) ((uint64_t)((a) * (b)))
 #define gs_shl_u64(a, n) ((uint64_t)((a) << ((n) & 63)))
 #define gs_shr_u64(a, n) ((uint64_t)((a) >> ((n) & 63)))
 
@@ -742,9 +743,9 @@ typedef struct {
    main program and any one worker hold (the compiler's static counts),
    which size their registries and give hardware_threads() its cap. */
 GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
-                        uint64_t budget, int64_t mainregions, int64_t workerregions);
 )GSRT"
-R"GSRT(/* A fresh region, registered to the calling thread program. */
+R"GSRT(                        uint64_t budget, int64_t mainregions, int64_t workerregions);
+/* A fresh region, registered to the calling thread program. */
 GS_API uint8_t *gs_reserve_region(void);
 /* The calling thread program's stack use, on stderr (GS_STACK_STATS):
    `stacks` is how many of its indexed data stacks exist. */
@@ -942,9 +943,9 @@ static int64_t gs_zig_write(uint8_t *p, int64_t v) {
 
 /* ---------------------------------------------------------------------------
    Verified loading (docs/design/serialization.md): what the generated
-   gs_verify_<T> walkers are built from. The bytes are untrusted until the
 )GSRT"
-R"GSRT(   walk finishes, so every read here is bounded by the image end and reports
+R"GSRT(   gs_verify_<T> walkers are built from. The bytes are untrusted until the
+   walk finishes, so every read here is bounded by the image end and reports
    a malformed encoding instead of running past it. */
 
 /* The ULEB128 at p, or 0 if it runs past `end`, past ten bytes, or carries
@@ -1053,6 +1054,7 @@ static const char *gs_errmsgs[] = {
     "invalid slice length",
     "slice not from this pool",
     "non-null relative reference encodes as null",
+    "pop_n count negative or beyond the array's length",
 };
 
 GS_API GS_NORETURN void gs_panic(const char *msg) {
@@ -1231,9 +1233,9 @@ static size_t gs_overflow_text(char *buf, const gs_region *r) {
 }
 
 /* The calling thread program's registry, empty, as it starts. */
-static void gs_regions_begin(int64_t capacity) {
 )GSRT"
-R"GSRT(    gs_regions_cap = (long)capacity;
+R"GSRT(static void gs_regions_begin(int64_t capacity) {
+    gs_regions_cap = (long)capacity;
     gs_regions = (gs_region *)calloc((size_t)(capacity > 0 ? capacity : 1), sizeof(gs_region));
     if (!gs_regions) gs_panic("out of memory allocating the data stack registry");
     gs_nregions = 0;
@@ -1447,9 +1449,9 @@ static void gs_native_stack_free(void) {
     stack_t ss;
     if (!gs_sigstack) return;
     memset(&ss, 0, sizeof(ss));
-    ss.ss_flags = SS_DISABLE;
 )GSRT"
-R"GSRT(    ss.ss_size = gs_sigstack_size();
+R"GSRT(    ss.ss_flags = SS_DISABLE;
+    ss.ss_size = gs_sigstack_size();
     sigaltstack(&ss, NULL);
     free(gs_sigstack);
     gs_sigstack = NULL;

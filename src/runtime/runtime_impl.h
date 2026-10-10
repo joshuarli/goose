@@ -21,6 +21,7 @@ static const char *gs_errmsgs[] = {
     "invalid slice length",
     "slice not from this pool",
     "non-null relative reference encodes as null",
+    "pop_n count negative or beyond the array's length",
 };
 
 GS_API GS_NORETURN void gs_panic(const char *msg) {

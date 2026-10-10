@@ -86,6 +86,7 @@ inline int RecvKindOf(TypeExpr *t) {
     F(B_PUSH,             "push",             2,  2,   "e",  "r", BR_GROWABLE,    BF_MEMBER | BF_WRITE | BF_CUSTOM) \
     F(B_APPEND,           "append",           2,  2,   "a",  "",  BR_GROWABLE,    BF_MEMBER | BF_WRITE) \
     F(B_POP,              "pop",              1,  1,   "",   "e", BR_SHRINKABLE,  BF_MEMBER | BF_WRITE) \
+    F(B_POP_N,            "pop_n",            2,  2,   "i",  "",  BR_SHRINKABLE,  BF_MEMBER | BF_WRITE) \
     F(B_RESIZE,           "resize",           2,  3,   "",   "",  BR_SHRINKABLE,  BF_MEMBER | BF_WRITE | BF_CUSTOM) \
     F(B_CLEAR,            "clear",            1,  1,   "",   "",  BR_SHRINKABLE,  BF_MEMBER | BF_WRITE | BF_CUSTOM) \
     F(B_ALLOC_INDEX,      "alloc_index",      2,  2,   "e",  "i", BR_GROW,        BF_MEMBER | BF_WRITE | BF_REUSABLE) \
