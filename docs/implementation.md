@@ -3091,6 +3091,10 @@ lets an `Index` compare its receiver's length as it was *before* the index
 expression ran (`Index::BceWalk` drops the length term if evaluating the
 index moved anything).
 
+Each flow stores current generations in vectors indexed by the compact
+variable and place IDs. An entry not yet stored is generation zero; joining
+two flows takes the maximum generation at each ID, including implicit zeros.
+
 A length mutation with known direction bridges the generations: a grow adds
 `old <= new`, a shrink `new <= old`, so a bound established before a `push`
 still holds after it and a `pop` cuts it. A push or a constant-length append
