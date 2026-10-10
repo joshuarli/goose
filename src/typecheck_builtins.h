@@ -1391,6 +1391,15 @@ inline void TypeCheck::ApplyCalleeStores(FnSpec *spec, vector<Val> &argvals, Nod
     // that back; the check then stands for this call alone (FnSpec::storesout).
     // A global is left to the judgement of the globals, which follows its
     // stores through the calls that passed each class (CheckGlobalShrinks).
+    // Cached callee locals retain the depth of their original check. A later
+    // deeper call does not make them lexical variables of that caller.
+    auto lexical_container = [&](VarDef *x) {
+        auto named = false;
+        EachNamedVar((int)frames.size() - 1, CurRealFrame().spec, [&](int i) {
+            named = named || vars[i] == x;
+        });
+        return named;
+    };
     auto end = min(rec->eventend, storeevents.size());
     for (auto i = rec->eventstart; i < end; i++) {
         auto e = storeevents[i];
@@ -1400,7 +1409,7 @@ inline void TypeCheck::ApplyCalleeStores(FnSpec *spec, vector<Val> &argvals, Nod
         Roots own;
         auto x = e.container;
         if (!spec->inprogress && classat(e.root, own) >= 0 && x && x->type &&
-            !IsRefOrSlice(x->type) && !x->isglobal && !IsTemp(x) && Depth(x) <= CurDepth()) {
+            !IsRefOrSlice(x->type) && !x->isglobal && !IsTemp(x) && lexical_container(x)) {
             spec->storesout = true;
             std::erase_if(x->contents.alts, [&](const RootAlt &c) { return c.root == e.root; });
             for (auto &a : r.alts) AddContents(x, a, e.classread, src);
@@ -1486,6 +1495,8 @@ inline void TypeCheck::ApplyCalleeStores(FnSpec *spec, vector<Val> &argvals, Nod
             return true;
         };
         if (p < 0) {
+            if (e.container && e.container->type && !e.container->isglobal &&
+                !lexical_container(e.container)) continue;
             // Not the callee's class but a lexical parent's, which a nested
             // function or a function value's body stored into: the storage
             // the parent's callers passed, whose record carries it to them.
