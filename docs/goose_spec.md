@@ -284,7 +284,7 @@ data...]`, inline, packed (exact layouts in Appendix C).
 
 | Type | Class | Stored metadata | Notes |
 |---|---|---|---|
-| `T[k]` | fixed | none | `k` a compile-time constant expression (literals, named constants, arithmetic) |
+| `T[k]` | fixed | none | `k` a compile-time constant expression (literals, named constants, a global's fixed `.len`/`.cap`, arithmetic) |
 | `T[]` | variable | length (`u32` default) | size chosen at construction |
 | `T[u8]` etc. | variable | length of given unsigned int type | explicit length field type: `u8`–`u64` only |
 | `T[varint]` | variable | varint length | most compact |
@@ -295,7 +295,17 @@ data...]`, inline, packed (exact layouts in Appendix C).
 
 A size or capacity `k` is fixed at compile time, as is the count `n` of a
 fill literal `[v; n]` (§4.2): a name in one is a named constant, a `let` or
-`const` global (§11.1), and resolves as any name does, lexically first. A
+`const` global (§11.1), and resolves as any name does, lexically first. One
+may also take `X.len` of such a global `X` whose length its declaration
+fixes, and `X.cap` of one whose capacity it fixes (`const names = ["a",
+"bc"]; var counts: i64[names.len];`): a written type `T[k]` fixes the
+length and `T[..k]` the capacity; with no written type, an array, fill or
+string literal initializer fixes the length, and one naming another such
+global what that global's declaration fixes. A length its type fixes no
+reference can change; one its initializer gives is taken as a named
+constant's value is, so `X` may then not also be bound to a writable
+reference (§11.1). Either is an `i64`, as any `.len` is, which adapts as no
+literal does (§3.1). A
 local of that name — a parameter, a local variable, or one around a nested
 function or block —, a type parameter or a nested function hides the global
 there and is no constant, so a size naming it is an error, as a match
@@ -3383,7 +3393,8 @@ the caller's own facts about `src` intact.
   (§3.1, §6.3). A
   size, a fill count (`[v; N]`), a match pattern (§8.1) or a use adapting
   an untyped one to another type takes a named constant at its
-  initializer's value, so a `let` it names,
+  initializer's value, and a size takes the `.len` an initializer gives
+  (§3.3) at that value's length, so a `let` it names,
   directly or through another named constant's initializer, may not also
   be bound to a writable reference anywhere, through which its value could
   change (§4.4): by `&`, `.=`, or a reference parameter, field or binding

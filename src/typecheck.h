@@ -677,7 +677,8 @@ struct TypeCheck {
 
     // ------------------------------------------------------------------
     // Constant expression evaluation: array sizes, match arm bounds, literal
-    // fit. Understands literals, arithmetic, and `let` globals.
+    // fit. Understands literals, arithmetic, `let` globals, and the `.len` and
+    // `.cap` their types fix.
 
     // A size, fill count or match pattern `at` (a `what`), which takes the
     // named constants its expression names at their initializers' values
@@ -691,6 +692,8 @@ struct TypeCheck {
 
     bool ConstIntValue(Node *n, Val &v, bool &literal, set<VarDecl *> &visiting,
                        ConstUse *use = nullptr);
+    bool ConstExtent(Ident *id, bool cap, int64_t &extent, set<VarDecl *> &visiting,
+                     ConstUse *use);
 
     bool ConstInt(Node *n, int64_t &v, ConstUse *use = nullptr) {
         Val value;
@@ -756,6 +759,8 @@ struct TypeCheck {
         } else if (auto b = Is<Binary>(n)) {
             ConstExprNames(b->left, what, f);
             ConstExprNames(b->right, what, f);
+        } else if (auto d = Is<Dot>(n)) {
+            if (auto obj = Is<Ident>(d->obj)) f(obj, what);
         }
     }
 

@@ -2531,7 +2531,75 @@ inline bool TypeCheck::ConstIntValue(Node *n, Val &v, bool &literal,
         literal = llit && rlit;
         return true;
     }
+    if (auto d = Is<Dot>(n)) {
+        // `X.len` / `X.cap`, an i64 as anywhere else, which adapts as no
+        // literal does.
+        auto id = Is<Ident>(d->obj);
+        auto bd = LookupBuiltin(d->name);
+        if (!id || !bd || (bd->kind != B_LEN && bd->kind != B_CAP)) return false;
+        int64_t extent;
+        if (!ConstExtent(id, bd->kind == B_CAP, extent, visiting, use)) return false;
+        v.type = ast.inttypes[IS_I64];
+        v.ck = CK_INT;
+        v.ival = extent;
+        v.uns = false;
+        literal = false;
+        return true;
+    }
     return false;
+}
+
+// The length (`cap`: the capacity) of the `let` or `const` global id names,
+// where that is fixed before the program runs (§3.3): the size of its
+// written fixed-array type (`cap`: the capacity of its written limited one),
+// or else the length of the array literal, fill literal or string literal it
+// is initialized to, or of the global it copies. As a named constant's value
+// is, it is read off the declaration, which may not have been checked yet.
+// A length its written type fixes no reference can change; one its
+// initializer gives, a `T[]` or a slice may lose to a whole assignment
+// through a writable reference, so a use relies on that global as on a
+// named constant (RelyOnConstant).
+inline bool TypeCheck::ConstExtent(Ident *id, bool cap, int64_t &extent,
+                                   set<VarDecl *> &visiting, ConstUse *use) {
+    auto g = ast.LookupGlobal(id->name, id->ns);
+    if (!g || g->isvar || g->byref || g->reusable || g->names.size() != 1 ||
+        g->inits.size() != 1)
+        return false;
+    if (!visiting.insert(g).second)
+        Error(id, cat("cycle in constant initializer: ", id->name));
+    if (use && visiting.size() == 1) use->named = g->defs[0];
+    auto ok = false;
+    Val v;
+    bool literal;
+    if (auto t = g->type) {
+        if (t->kind == TY_ARRAY && t->arr->sizeexpr &&
+            t->arr->akind == (cap ? A_LIMITED : A_FIXED) &&
+            ConstIntValue(t->arr->sizeexpr, v, literal, visiting, use)) {
+            extent = v.ival;
+            ok = true;
+        }
+    } else {
+        auto init = g->inits[0];
+        if (cap) {
+            if (auto from = Is<Ident>(init)) ok = ConstExtent(from, cap, extent, visiting, use);
+        } else if (auto al = Is<ArrayLit>(init); al && !al->capexpr) {
+            if (!al->fillcount) {
+                extent = (int64_t)al->elems.size();
+                ok = true;
+            } else if (ConstIntValue(al->fillcount, v, literal, visiting, use)) {
+                extent = v.ival;
+                ok = true;
+            }
+        } else if (auto s = Is<StrLit>(init)) {
+            extent = (int64_t)s->val.size();
+            ok = true;
+        } else if (auto from = Is<Ident>(init)) {
+            ok = ConstExtent(from, cap, extent, visiting, use);
+        }
+        if (ok && use) RelyOnConstant(*use, g->defs[0]);
+    }
+    visiting.erase(g);
+    return ok;
 }
 
 // All scalar leaves integers, or all floats; only structs and fixed
