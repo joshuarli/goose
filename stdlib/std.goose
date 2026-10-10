@@ -1078,7 +1078,7 @@ fn format_flt(out: u8[>..]&, v: f64, decimals: i64) {
     }
 }
 
-// An optionally signed whole-string integer; false on anything else.
+// An optionally signed whole-string integer; false on anything else, including a value outside i64.
 fn parse_int(s: u8[:], base: i64 = 10) -> i64, bool {
     var i = 0;
     var neg = false;
@@ -1087,6 +1087,11 @@ fn parse_int(s: u8[:], base: i64 = 10) -> i64, bool {
         i = 1;
     }
     if i >= s.len { return 0, false; }
+    // The magnitude accumulates as a negative number: -2^63 has no positive
+    // counterpart, while every other magnitude has a negative one. `d < base`
+    // is checked first, so `base` is positive in the overflow test; dividing
+    // truncates toward zero, which is the ceiling for these negative bounds.
+    let min = -9223372036854775807 - 1;
     var v = 0;
     while i < s.len {
         let c = s[i] as i64;
@@ -1095,10 +1100,14 @@ fn parse_int(s: u8[:], base: i64 = 10) -> i64, bool {
         else if c >= 'a' && c <= 'z' { d = c - 'a' + 10; }
         else if c >= 'A' && c <= 'Z' { d = c - 'A' + 10; }
         if d < 0 || d >= base { return 0, false; }
-        v = v * base + d;
+        if v < (min + d) / base { return 0, false; }
+        v = v * base - d;
         i += 1;
     }
-    if neg { v = -v; }
+    if !neg {
+        if v == min { return 0, false; }
+        v = -v;
+    }
     return v, true;
 }
 
