@@ -79,6 +79,24 @@ elseif(APPLE)
     target_link_options(goose PRIVATE "LINKER:-stack_size,${goose_main_stack_hex}")
 endif()
 
+option(GOOSE_FUZZ "Build the Clang libFuzzer targets" OFF)
+if(GOOSE_FUZZ)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "GOOSE_FUZZ requires Clang with libFuzzer")
+    endif()
+    function(goose_add_fuzz_target target source)
+        add_executable(${target} ${source})
+        target_compile_options(${target} PRIVATE
+            -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all
+            -fno-omit-frame-pointer -UNDEBUG)
+        target_link_options(${target} PRIVATE
+            -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all)
+        target_link_libraries(${target} PRIVATE Threads::Threads goose_shaderc)
+    endfunction()
+    goose_add_fuzz_target(goose_fuzz_parser fuzz/native/parser_roundtrip.cpp)
+    goose_add_fuzz_target(goose_fuzz_pipeline fuzz/native/compiler_pipeline.cpp)
+endif()
+
 # The shader compiler behind embed_shader: third-party C (third_party/
 # cute_spirv), always built, so a gfx program typechecks and emits the same C
 # with or without SDL.

@@ -1,5 +1,10 @@
 # Compiler and runtime tests
 
+The bounded generated-program correctness check is documented in
+[`fuzz/README.md`](../fuzz/README.md). It compares a small independent integer/boolean model against
+native programs across independently varied Goose and C optimization levels. This is development
+testing for greenfield languages with no users or deployed programs, not software-security work.
+
 Run `python test/run_tests.py --profile baseline --cc native --require-clang`
 after a normal compiler build. CI runs this on Windows, macOS and Linux.
 
