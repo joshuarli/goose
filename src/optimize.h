@@ -372,7 +372,11 @@ struct Optimizer {
             auto r = OptStmt(st);
             if (!r) continue;
             out.push_back(r);
-            if (Is<Return>(r) || Is<Break>(r) || Is<Continue>(r)) dead = true;
+            // The checker leaves values after program termination unadapted:
+            // they never reach a destination and must not become C assignments.
+            auto call = Is<Call>(r);
+            if (Is<Return>(r) || Is<Break>(r) || Is<Continue>(r) ||
+                (call && (call->builtin == B_ABORT || call->builtin == B_EXIT))) dead = true;
         }
         b->stmts = std::move(out);
         if (b->tail) {
