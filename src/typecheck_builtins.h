@@ -1496,7 +1496,7 @@ inline void TypeCheck::ApplyCalleeStores(FnSpec *spec, vector<Val> &argvals, Nod
         };
         if (p < 0) {
             if (e.container && e.container->type && !e.container->isglobal &&
-                !lexical_container(e.container)) continue;
+                !lexical_container(e.container)) return;
             // Not the callee's class but a lexical parent's, which a nested
             // function or a function value's body stored into: the storage
             // the parent's callers passed, whose record carries it to them.
