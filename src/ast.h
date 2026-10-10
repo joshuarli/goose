@@ -1554,6 +1554,13 @@ struct VarDef {
     Node *constuse = nullptr;
     const char *constwhat = nullptr;
     Node *refwrite = nullptr;
+    // Globals only: the first compile-time size, capacity or fill count
+    // taking the `.len` (`extentcap`: the `.cap`) its initializer gives
+    // (§3.3), which a type not fixing it would let change
+    // (TypeCheck::RelyOnExtent); `extentwhat` says which.
+    Node *extentuse = nullptr;
+    const char *extentwhat = nullptr;
+    bool extentcap = false;
     // A slice variable a reference to whose slot has been made (§3.8), so
     // that a reference read out of storage, or a parameter's class, may name
     // it (TypeCheck::RootCandidates, StoreIntoSlot). Kept as the marks are.

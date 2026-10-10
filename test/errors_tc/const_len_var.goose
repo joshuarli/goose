@@ -1,8 +1,9 @@
-// error: constant integer expression expected for array size
-// A size names a `let` or `const` global, never a `var` (§3.3, §11.1).
-var table = [1, 2, 3];
+// error: the array size relies on name keeping its initializer's length, but name is a var of type const u8[:], which does not fix it
+// §3.3: a var's `.len` is a constant only where its type fixes it, as a
+// string literal's `const u8[:]` does not: an assignment may change it.
+var name = "goose";
 
 fn main() {
-    let a: i64[table.len] = [1, 2, 3];
-    print(a, table);
+    let a: u8[name.len] = "geese";
+    print(a, name);
 }

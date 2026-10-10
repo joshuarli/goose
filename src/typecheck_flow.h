@@ -2138,6 +2138,7 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
         if (t->kind == TY_FN)
             Error(vd, "function values are compile-time only and cannot be stored (§7.6)");
         d->type = t;
+        if (global) CheckVarExtent(d, vd);
         if (v && IsRefOrSlice(t)) {
             BindRefProvenance(d, *v);
             if (t->cq) d->ref.writable = false;

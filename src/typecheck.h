@@ -678,7 +678,7 @@ struct TypeCheck {
     // ------------------------------------------------------------------
     // Constant expression evaluation: array sizes, match arm bounds, literal
     // fit. Understands literals, arithmetic, `let` globals, and the `.len` and
-    // `.cap` their types fix.
+    // `.cap` of globals their declarations fix.
 
     // A size, fill count or match pattern `at` (a `what`), which takes the
     // named constants its expression names at their initializers' values
@@ -1618,6 +1618,9 @@ struct TypeCheck {
     VarDef *RelyOnNonneg(const Val &v, Node *at);
     void RelyOnConstant(ConstUse &use, VarDef *d);
     void RelyOnNamed(const Val &v, Node *at);
+    bool TypeFixesExtent(VarDef *d, bool cap);
+    void RelyOnExtent(ConstUse &use, VarDef *d, bool cap);
+    void CheckVarExtent(VarDef *d, Node *at);
     TypeExpr *StorageType(const Val &v);
     bool BindsRef(const Val &v, TypeExpr *dt);
     bool IsNonFixedLValue(const Val &v);

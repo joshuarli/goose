@@ -1390,10 +1390,11 @@ inline Val TypeCheck::CheckRefOf(Unary *x) {
 // A writable reference to d is made at `at` (§4.1: `&d`, or d bound by
 // reference). A `let` is written through one as a `var` is (§4.4), before
 // or after anything that relies on its value: the marks this, RelyOnNonneg,
-// ResizesToMark and RelyOnConstant leave do not follow the flow, so neither
-// a loop's later pass, a cycle's later round nor a nested function checked
-// only once can get past them, and whichever comes second is an error (but
-// for a resize, which is merely unbalanced after the reference).
+// ResizesToMark, RelyOnConstant and RelyOnExtent leave do not follow the
+// flow, so neither a loop's later pass, a cycle's later round nor a nested
+// function checked only once can get past them, and whichever comes second
+// is an error (but for a resize, which is merely unbalanced after the
+// reference).
 inline void TypeCheck::NoteWritableRef(VarDef *d, Node *at) {
     if (!d->refwrite) d->refwrite = at;
     if (d->nonneguse)
@@ -1412,6 +1413,14 @@ inline void TypeCheck::NoteWritableRef(VarDef *d, Node *at) {
                       " relies on it keeping its initializer's value, as a named constant "
                       "(§4.4, §11.1); bind the reference to a copy of it, or declare ",
                       d->name, " const"));
+    if (d->extentuse && !TypeFixesExtent(d, d->extentcap)) {
+        auto what = d->extentcap ? "capacity" : "length";
+        Error(at, cat(d->name, " is bound to a writable reference here, through which its ",
+                      what, " may change, while the ", d->extentwhat, " at ",
+                      Where(d->extentuse->line), " relies on it keeping its initializer's "
+                      "(§3.3, §4.4, §11.1); bind the reference to a copy of it, or give ",
+                      d->name, " a type that fixes its ", what));
+    }
 }
 
 // A comparison with a u64 at `at` relies on v being non-negative (§6.1),
@@ -1453,6 +1462,62 @@ inline void TypeCheck::RelyOnNamed(const Val &v, Node *at) {
     if (unifytrial || !v.constfrom) return;
     ConstUse use { at, "use as a literal", v.constfrom };
     for (auto d = v.constfrom; d; d = d->constfrom) RelyOnConstant(use, d);
+}
+
+// Whether d's type fixes its length (`cap`: its capacity), which no
+// assignment or reference can then change (§3.3). Not before d is checked.
+inline bool TypeCheck::TypeFixesExtent(VarDef *d, bool cap) {
+    auto t = d->type;
+    if (!t || t->kind != TY_ARRAY) return false;
+    return cap ? t->arr->akind == A_LIMITED && t->arr->sizeexpr : t->arr->akind == A_FIXED;
+}
+
+// A compile-time size, capacity or fill count takes the `.len` (`cap`: the
+// `.cap`) the initializer of the global d gives (§3.3), directly or through
+// the initializer of use.named. Where d's type fixes it, nothing can change
+// it. Where it does not, as a string literal's `const u8[:]` does not, a
+// `var` may be assigned another, and a `let` is relied on as a named
+// constant is (RelyOnConstant), though no reference to one holding a
+// literal's slice is writable (§9.5): whichever of the use and a writable
+// reference to it comes second is an error (NoteWritableRef). A reference
+// cannot come before d's declaration has been checked, naming d before its
+// initializer runs being an error (§11.1), but the use can, while d's type
+// is unknown: a `var`'s declaration checks it then (CheckVarExtent), and a
+// writable reference to a `let` afterwards.
+inline void TypeCheck::RelyOnExtent(ConstUse &use, VarDef *d, bool cap) {
+    if (TypeFixesExtent(d, cap)) return;
+    auto what = cap ? "capacity" : "length";
+    auto rests = d != use.named ? cat(", which rests on ", d->name, "'s") : string();
+    if (d->type && d->isvar)
+        Error(use.at, cat("the ", use.what, " relies on ", use.named->name,
+                          " keeping its initializer's ", what, rests, ", but ", d->name,
+                          " is a var of type ", TypeStr(d->type), ", which does not fix it "
+                          "(§3.3); declare ", d->name, " let, or give it a type that fixes "
+                          "its ", what));
+    if (d->refwrite)
+        Error(use.at, cat("the ", use.what, " relies on ", use.named->name,
+                          " keeping its initializer's ", what, rests,
+                          ", but a writable reference bound to ", d->name, " at ",
+                          Where(d->refwrite->line), " may change it (§3.3, §4.4, §11.1); bind "
+                          "that reference to a copy of it, or give ", d->name, " a type that "
+                          "fixes its ", what));
+    if (!d->extentuse) {
+        d->extentuse = use.at;
+        d->extentwhat = use.what;
+        d->extentcap = cap;
+    }
+}
+
+// The var global d's declaration, at `at`, has given it its type, after a
+// size took the `.len` or `.cap` its initializer gives (RelyOnExtent), which
+// the type must fix, since an assignment may give d another.
+inline void TypeCheck::CheckVarExtent(VarDef *d, Node *at) {
+    if (!d->isvar || !d->extentuse || TypeFixesExtent(d, d->extentcap)) return;
+    auto what = d->extentcap ? "capacity" : "length";
+    Error(at, cat(d->name, " is a var of type ", TypeStr(d->type), ", which does not fix its ",
+                  what, ", while the ", d->extentwhat, " at ", Where(d->extentuse->line),
+                  " relies on it keeping its initializer's (§3.3); declare ", d->name,
+                  " let, or give it a type that fixes its ", what));
 }
 
 // Folds a constant binary op at the width and signedness of out.type
@@ -2549,21 +2614,18 @@ inline bool TypeCheck::ConstIntValue(Node *n, Val &v, bool &literal,
     return false;
 }
 
-// The length (`cap`: the capacity) of the `let` or `const` global id names,
-// where that is fixed before the program runs (§3.3): the size of its
-// written fixed-array type (`cap`: the capacity of its written limited one),
-// or else the length of the array literal, fill literal or string literal it
-// is initialized to, or of the global it copies. As a named constant's value
-// is, it is read off the declaration, which may not have been checked yet.
-// A length its written type fixes no reference can change; one its
-// initializer gives, a `T[]` or a slice may lose to a whole assignment
-// through a writable reference, so a use relies on that global as on a
-// named constant (RelyOnConstant).
+// The length (`cap`: the capacity) of the global id names, where that is
+// fixed before the program runs (§3.3): the size of its written fixed-array
+// type (`cap`: the capacity of its written limited one), or else the length
+// of the array literal, fill literal or string literal it is initialized to,
+// or of the global it copies. As a named constant's value is, it is read off
+// the declaration, which may not have been checked yet. A length its written
+// type fixes nothing can change; whether one its initializer gives can, the
+// type that gives the global decides (RelyOnExtent).
 inline bool TypeCheck::ConstExtent(Ident *id, bool cap, int64_t &extent,
                                    set<VarDecl *> &visiting, ConstUse *use) {
     auto g = ast.LookupGlobal(id->name, id->ns);
-    if (!g || g->isvar || g->byref || g->reusable || g->names.size() != 1 ||
-        g->inits.size() != 1)
+    if (!g || g->byref || g->reusable || g->names.size() != 1 || g->inits.size() > 1)
         return false;
     if (!visiting.insert(g).second)
         Error(id, cat("cycle in constant initializer: ", id->name));
@@ -2578,7 +2640,7 @@ inline bool TypeCheck::ConstExtent(Ident *id, bool cap, int64_t &extent,
             extent = v.ival;
             ok = true;
         }
-    } else {
+    } else if (!g->inits.empty()) {
         auto init = g->inits[0];
         if (cap) {
             if (auto from = Is<Ident>(init)) ok = ConstExtent(from, cap, extent, visiting, use);
@@ -2596,7 +2658,7 @@ inline bool TypeCheck::ConstExtent(Ident *id, bool cap, int64_t &extent,
         } else if (auto from = Is<Ident>(init)) {
             ok = ConstExtent(from, cap, extent, visiting, use);
         }
-        if (ok && use) RelyOnConstant(*use, g->defs[0]);
+        if (ok && use) RelyOnExtent(*use, g->defs[0], cap);
     }
     visiting.erase(g);
     return ok;
