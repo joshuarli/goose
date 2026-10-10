@@ -45,8 +45,12 @@ TinyCC also emits the same C when available.
 The work runs on --jobs threads, each waiting on the processes it starts, and
 the log comes out in the same order whatever the number of jobs: each piece of
 work prints into a buffer of its own, shown once everything before it has
-been. A fixture's own runs happen one after another, since a program may write
-files the next run of it would see. The bootstrap's chains at each level, its
+been. The log is in sections, each ending in a line counting its checks, with
+everything but the ok lines printed in place: failures with what led to them,
+and skips. -v prints the ok lines too; under GitHub Actions they are in a
+collapsed group per section. The FAIL lines repeat at the end, with their
+sections. A fixture's own runs happen one after another, since a program may
+write files the next run of it would see. The bootstrap's chains at each level, its
 JIT self-compiles and the samples' runner start first, being the longest.
 One compiler run per fixture parses, checks the dump roundtrip (--roundtrip)
 and typechecks; one per level writes the C and also runs the program through
@@ -59,7 +63,7 @@ its own; a batch that crashes or does not build leaves its files to runs of
 their own, which report the failure as theirs. --batch 1 runs everything one
 to a process.
 
-  python test/run_tests.py [--exe path/to/goose] [--nocgen] [--no-jit] [-j N] [--batch N]
+  python test/run_tests.py [--exe path/to/goose] [--nocgen] [--no-jit] [-j N] [--batch N] [-v]
 """
 
 import argparse
@@ -235,6 +239,60 @@ class Out:
         self.value = None
 
 
+class Section:
+    """One section of the log, printed as its slots finish: what they print
+    but their ok lines, in place, and a closing line counting its checks.
+    ok lines print too with `verbose`. Under GitHub Actions they go into
+    collapsed groups, closed before anything else prints, so that no failure
+    hides inside one. Without either, the title starts the line that the
+    counts end, unless something else prints in between. Either way the
+    title prints as the section starts, ahead of anything in it, and shows
+    where the suite was should it stop there."""
+
+    def __init__(self, title, verbose, github):
+        self.title, self.verbose, self.github = title, verbose, github
+        self.oks, self.fails, self.failures = 0, [], 0
+        # "title": the title is on a line not yet ended; "group": a GitHub
+        # group is open; None: at the start of a line, outside a group.
+        if github:
+            sys.stdout.write(f"::group::{title}\n")
+            self.state = "group"
+        else:
+            sys.stdout.write(f"== {title}" + ("\n" if verbose else ""))
+            self.state = None if verbose else "title"
+        sys.stdout.flush()
+
+    def add(self, out):
+        self.failures += out.failures
+        for line in "".join(out.text).splitlines():
+            if line.startswith("ok   "):
+                self.oks += 1
+                if self.github:
+                    if self.state != "group":
+                        sys.stdout.write(f"::group::{self.title} (continued)\n")
+                        self.state = "group"
+                elif not self.verbose:
+                    continue
+            else:
+                if line.startswith("FAIL "):
+                    self.fails.append(line)
+                sys.stdout.write({"group": "::endgroup::\n", "title": "\n"}.get(self.state, ""))
+                self.state = None
+            sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+    def close(self):
+        # A failure that printed no FAIL line still counts.
+        fails = max(len(self.fails), self.failures)
+        counts = f"{self.oks} ok" + (f", {fails} FAIL" if fails else "")
+        if self.state == "title":
+            sys.stdout.write(f": {counts}\n")
+        else:
+            sys.stdout.write(("::endgroup::\n" if self.state == "group" else "") +
+                             f"== {self.title}: {counts}\n")
+        sys.stdout.flush()
+
+
 class Fixture:
     """One positive fixture's results, an Out per section of the log it
     prints in, and the skips it adds to the summaries."""
@@ -252,15 +310,19 @@ class Fixture:
 class Runner:
     """Runs the suite's work on a pool of threads, which mostly wait for the
     processes they start, and prints it in a fixed order: each piece of work
-    prints into an Out of its own, and `slots` lists, in the order the log
-    shows them, the callables that hand the Outs over. A job may wait for a
-    job submitted before it, which the pool has started by then, never for
-    a later one. With one job everything runs as it is submitted, on this
-    thread."""
+    prints into an Out of its own, and `sections` lists, in the order the log
+    shows them, each section's title and its slots, the callables that hand
+    the Outs over. A job may wait for a job submitted before it, which the
+    pool has started by then, never for a later one. With one job everything
+    runs as it is submitted, on this thread."""
 
-    def __init__(self, exe, jobs):
+    def __init__(self, exe, jobs, verbose=False):
         self.exe = exe
         self.failures = 0
+        # Every FAIL line the log printed, with its section's title.
+        self.failed = []
+        self.verbose = verbose
+        self.github = os.environ.get("GITHUB_ACTIONS") == "true"
         self.local = threading.local()
         self.pool = concurrent.futures.ThreadPoolExecutor(jobs) if jobs > 1 else None
         self.jobs = jobs
@@ -268,7 +330,8 @@ class Runner:
         # number of files and jobs.
         self.batch = 0
         self.fronts = {}
-        self.slots = []
+        # Slots shown before any section print as they are.
+        self.sections = [(None, [])]
         self.gpulock = None
         # What the C that `goose -o` writes links with, built once per
         # configuration by whichever job first asks for it.
@@ -348,10 +411,15 @@ class Runner:
             return out
         return self.submit(run, alone=alone)
 
+    def section(self, title):
+        """Starts a section of the log: the slots shown from here on, up to
+        the next section, print under `title`."""
+        self.sections.append((title, []))
+
     def show(self, source):
         """Adds a slot: a future of an Out, or a callable returning one."""
-        self.slots.append(source.result if isinstance(source, concurrent.futures.Future)
-                          else source)
+        self.sections[-1][1].append(source.result if isinstance(source, concurrent.futures.Future)
+                                    else source)
 
     def show_task(self, fn, *args):
         future = self.task(fn, *args)
@@ -367,23 +435,47 @@ class Runner:
             with self.into(out):
                 fn(*args)
             return out
-        self.slots.append(run)
+        self.show(run)
 
     def flush(self):
         """Prints the slots in order, each as soon as it and everything before
-        it is done, and adds up their failures."""
-        for slot in self.slots:
-            try:
-                out = slot()
-            except Exception:
-                out = Out()
-                out.text.append(traceback.format_exc())
-                out.text.append("FAIL runner exception\n")
-                out.failures = 1
-            sys.stdout.write("".join(out.text))
-            sys.stdout.flush()
-            self.failures += out.failures
-        self.slots = []
+        it is done, a section at a time (Section), and adds up their
+        failures."""
+        for title, slots in self.sections:
+            section = Section(title, self.verbose, self.github) if title else None
+            for slot in slots:
+                try:
+                    out = slot()
+                except Exception:
+                    out = Out()
+                    out.text.append(traceback.format_exc())
+                    out.text.append("FAIL runner exception\n")
+                    out.failures = 1
+                if section:
+                    section.add(out)
+                else:
+                    sys.stdout.write("".join(out.text))
+                    sys.stdout.flush()
+                self.failures += out.failures
+            if section:
+                section.close()
+                self.failed += [(title, line) for line in section.fails]
+        self.sections = [(None, [])]
+
+    def finish(self):
+        """Prints how the suite went, after the log: the FAIL lines again, by
+        section, which under GitHub Actions are also annotations of the run.
+        The exit code."""
+        if not self.failures:
+            print("all tests passed")
+            return 0
+        print(f"{self.failures} FAILURE(S)" + (":" if self.failed else ""))
+        for title, line in self.failed:
+            if self.github:
+                print("::error::" + f"{title}: {line}".replace("%", "%25"))
+            else:
+                print(f"{title}: {line}")
+        return 1
 
     # --- running the compiler and what it built ---------------------------
 
@@ -1112,6 +1204,7 @@ class Runner:
                     self.ok("goose_in_goose self-compile matches between O0 and O2")
 
         def show():
+            self.section("goose_in_goose bootstrap")
             if not cc:
                 self.show_later(self.say, "skip native goose_in_goose bootstrap "
                                           "(no C compiler found or --nocgen)")
@@ -1158,6 +1251,9 @@ def main():
                          "many programs one executable holds (default: by the number of "
                          "files and jobs); 1 gives each a process and an executable of "
                          "its own")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="print a line for every check that passed, not only each "
+                         "section's count of them")
     args = ap.parse_args()
 
     if args.nocgen and (args.cc or args.require_clang or args.profile != "baseline"):
@@ -1184,7 +1280,7 @@ def main():
     # is not itself instrumented, and its runtime allocations are still held
     # when the compiler exits, which LeakSanitizer reports against the compiler.
     jit = not args.no_jit and args.profile != "sanitize" and tc.have_jit(exe)
-    r = Runner(exe, args.jobs)
+    r = Runner(exe, args.jobs, args.verbose)
     r.gpulock = threading.BoundedSemaphore(args.gpu_jobs) if args.gpu_jobs else None
     r.batch = args.batch
 
@@ -1194,8 +1290,7 @@ def main():
     if args.goose_in_goose_only:
         show_goose_in_goose()
         r.flush()
-        print(f"{r.failures} FAILURE(S)" if r.failures else "all tests passed")
-        return int(r.failures != 0)
+        return r.finish()
 
     # The samples: compiled, built, run and compared with their expected output
     # (or only typechecked without a C compiler), by their own runner, with
@@ -1215,9 +1310,13 @@ def main():
 
     def samples():
         result = subprocess.run(sargs, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        r.say(tc.decode(result.stdout).rstrip("\n"))
+        # The section's count says what the runner's last line would.
+        lines = [line for line in tc.decode(result.stdout).splitlines()
+                 if line != "all samples passed"]
+        if lines:
+            r.say("\n".join(lines))
         if result.returncode != 0:
-            r.local.out.failures += 1
+            r.local.out.failures += max(1, sum(line.startswith("FAIL ") for line in lines))
     # On a thread of its own rather than one of the pool's, which it would
     # keep waiting the whole time.
     samples_future = r.task(samples, alone=True)
@@ -1377,6 +1476,8 @@ def main():
 
     # --- what the log shows, in order ---------------------------------------
 
+    r.section("lexer, shader compiler and native module APIs")
+
     def lexer_tokens():
         code, out, err = r.goose("--tokens", HERE / "syntax" / "lexer_tokens.goose")
         if code != 0:
@@ -1431,11 +1532,14 @@ def main():
     for module in native:
         r.show_task(api, module)
 
+    r.section("parse, roundtrip and typecheck")
     for f in tests:
         r.show(lambda f=f: fixtures[f].result().front)
 
     # The optimizer runs at -O1 in every typecheck above; also exercise the
     # other levels (and the --specs dump path) on the optimizer coverage file.
+    r.section("optimizer, stack report and C shapes")
+
     def optimize(lvl):
         code, out, err = r.goose(lvl, "--check", "--specs", HERE / "optimizer" / "optimize.goose")
         if code != 0:
@@ -1540,16 +1644,30 @@ def main():
 
     # Every annotated regression, including the expected-abort cases. These
     # describe the default O1 pass; O0/O2 execution checks semantics.
+    r.section("bounds-check annotations")
     for f in tests:
         r.show(lambda f=f: fixtures[f].result().bce)
 
     # --- codegen: generate C, compile, run, compare ------------------------
+    def native_skips():
+        skipped = [name for f in tests for name in fixtures[f].result().nativeskips]
+        if skipped:
+            r.say(f"skip running {len(set(skipped))} audio, gfx, physics or ui test(s) (no "
+                  f"layer for them, or no GPU device): " + ", ".join(sorted(set(skipped))))
+
+    r.section("generated C, built and run at " + " and ".join(f"-O{ol}" for ol in r.levels))
     if not cc:
         r.show_later(r.say, "skip codegen run tests (no C compiler found or --nocgen)")
-    else:
-        for section in ("cgen", "dump", "debug"):
+    for f in tests if cc else ():
+        r.show(lambda f=f: fixtures[f].result().cgen)
+    r.show_later(native_skips)
+    if cc:
+        for kind, title in (("dump", "dump-runtime programs"), ("debug", "GS_DEBUG programs")):
+            r.section(title)
             for f in tests:
-                r.show(lambda f=f, section=section: getattr(fixtures[f].result(), section))
+                r.show(lambda f=f, kind=kind: getattr(fixtures[f].result(), kind))
+
+        r.section("compiler roots, runtime lifecycle and clang")
 
         # Algebraic properties of the compiler's root domain are easier to
         # exhaust over small abstract states than to express in Goose.
@@ -1677,6 +1795,7 @@ def main():
         except RuntimeError as e:
             r.fail("resource paths", str(e))
     if cc or jit:
+        r.section("resource paths")
         r.show_task(resource_paths)
 
     show_goose_in_goose()
@@ -1685,13 +1804,14 @@ def main():
     # No C file, no external toolchain: what this checks is that the generated
     # C is portable enough for a third, very different C implementation, and
     # that a program means the same when TinyCC builds it.
+    r.section("JIT (TinyCC) runs")
     if not jit:
         r.show_later(r.say, "skip JIT run tests (sanitizer profile, --no-jit, or a compiler "
                             "built without the TinyCC backend)")
     else:
-        for section in ("jit", "jitdebug"):
+        for kind in ("jit", "jitdebug"):
             for f in tests:
-                r.show(lambda f=f, section=section: getattr(fixtures[f].result(), section))
+                r.show(lambda f=f, kind=kind: getattr(fixtures[f].result(), kind))
 
         def jit_skips():
             skipped = [name for f in tests for name in fixtures[f].result().jitskips]
@@ -1707,15 +1827,9 @@ def main():
         code, out, err = r.screened(f, parse_runs[f]())
         if r.check_error(f, "expected-error", code, out, err):
             r.ok(f"error {f.name}")
+    r.section("parse errors (errors/)")
     for f in parse_errors:
         r.show_later(parse_error, f)
-
-    def native_skips():
-        skipped = [name for f in tests for name in fixtures[f].result().nativeskips]
-        if skipped:
-            r.say(f"skip running {len(set(skipped))} audio, gfx, physics or ui test(s) (no "
-                  f"layer for them, or no GPU device): " + ", ".join(sorted(set(skipped))))
-    r.show_later(native_skips)
 
     # Typecheck error tests: must parse, must fail the typechecker. One
     # compiler run tells the two apart by whether it reported the parse done.
@@ -1728,23 +1842,22 @@ def main():
             r.fail(f"tc-error-parses {f.name}", out + err)
         elif r.check_error(f, "expected-tc-error", code, out, err):
             r.ok(f"tc-error {f.name}")
+    r.section("typecheck errors (errors_tc/ and native modules' rejection tests)")
     for f in tc_errors:
         r.show_later(tc_error, f)
 
+    r.section("long call chains and guard runs")
     for future in deep:
         r.show(future)
 
+    r.section("samples")
     r.show(samples_future)
 
     r.flush()
     if r.pool:
         r.pool.shutdown()
     print(f"({time.perf_counter() - started:.0f}s with {args.jobs} job(s))")
-    if r.failures:
-        print(f"{r.failures} FAILURE(S)")
-        return 1
-    print("all tests passed")
-    return 0
+    return r.finish()
 
 
 if __name__ == "__main__":

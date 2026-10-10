@@ -17,6 +17,15 @@ of work, and the suite takes about as long as it does. `--gpu-jobs N` limits
 how many gfx programs run at once within each runner, should a GPU driver not
 take many headless devices at a time; by default nothing limits them.
 
+The log comes in sections (parse, roundtrip and typecheck; generated C;
+JIT runs; `errors_tc/`; samples; ...), each ending in a line counting its
+checks, `== typecheck errors (...): 1668 ok`. What a section prints besides
+its ok lines shows in place, under the section's title: a failure with what
+led to it, and the skips. `-v` prints a line for every check that passed as
+well. Under GitHub Actions those lines are kept in a collapsed group per
+section, closed before anything else prints. After the log, the FAIL lines
+repeat with the titles of their sections, as GitHub annotations there.
+
 The compiler runs per fixture are as few as the checks allow. One run,
 `goose --roundtrip --check`, parses, checks that the dump parses again to
 the same dump, and typechecks (with `--bce-test` where the fixture has
