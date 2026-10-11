@@ -104,3 +104,34 @@ jobs:
 
       - name: Test compiler, generated C, runtime lifecycle and samples
         run: python test/run_tests.py --exe build-sanitize/goose --profile sanitize --cc clang
+
+  gcc-latest:
+    name: Linux / GCC 16.2
+    runs-on: ubuntu-latest
+    container: gcc:16.2.0-trixie
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test tools
+        run: apt-get update && apt-get install -y --no-install-recommends cmake make python3
+
+      - name: Check compiler version
+        run: |
+          test "$(gcc -dumpfullversion)" = "16.2.0"
+          test "$(g++ -dumpfullversion)" = "16.2.0"
+          gcc --version | head -n 1
+          g++ --version | head -n 1
+          getconf GNU_LIBC_VERSION
+
+      - name: Configure with GCC
+        run: >-
+          cmake -S . -B build-gcc -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+
+      - name: Build with GCC
+        run: cmake --build build-gcc --parallel 2
+
+      - name: Test compiler and generated C with GCC
+        run: python3 test/run_tests.py --exe build-gcc/goose --profile baseline --cc gcc

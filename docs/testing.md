@@ -20,7 +20,8 @@ testing for greenfield languages with no users or deployed programs, not softwar
 ## Running the suite
 
 Run `python test/run_tests.py --profile baseline --cc native --require-clang`
-after a normal compiler build. CI runs this on Windows, macOS and Linux.
+after a normal compiler build. CI runs this on Windows, macOS and Linux, and
+also runs the full baseline suite with GCC 16.2.0 on Debian Trixie with glibc.
 
 The runners work on `-j`/`--jobs` things at once (by default one per logical
 processor, up to 32), on threads that mostly wait for the compiler, the C
@@ -121,6 +122,7 @@ rejects duplicate names.
 | Debug Goose compiler; Goose `-O0` / native C `-O0` versus Goose `-O2` / native C `-O2` | Compare actual unoptimized and optimized executables, including native optimizer effects; check output against the existing fixtures. |
 | Goose `-O2`, native C `-O2`, `GS_DEBUG=1`, selected fixtures | Exercise checked arithmetic/conversions and critical runtime paths with optimization enabled. Selection is `codegen_exec.goose` plus files with `runtime-debug` on their first line. |
 | Additional Clang C build of `codegen_exec.goose`, native `-O1`, release/debug runtime | Keep a second C-front-end check on the central codegen coverage file without repeating the whole suite for every backend. |
+| GCC 16.2.0 full baseline suite (Debian Trixie, glibc) | Check the Goose compiler build and all generated C with the current stable GCC release. |
 | Goose `-O0` and `-O2` through the in-process TinyCC backend, plus `GS_DEBUG=1` on the same selected fixtures, over every test and every sample | Check the generated C against a third, very different C implementation, and that a program means the same whichever backend builds it. |
 | One Linux Clang ASan/UBSan job | Instrument the C++ compiler, generated C, selected debug-runtime cases, all samples and the direct runtime lifecycle test. |
 | Goose-in-Goose bootstrap, both profiles | Build stage 1 with the real compiler, stage 2 with stage 1, and stage 3 with stage 2. Build all three executables, compare stage-2/stage-3 C, and run two self-checks in stage 2, which the fixed point makes the same compiler as stage 3, while stage 3 is emitted and built. Baseline requires equal self-compiled C across host/native O0 and O2 and JIT/native execution; sanitize instruments every native stage. |

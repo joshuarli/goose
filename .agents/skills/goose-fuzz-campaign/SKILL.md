@@ -106,9 +106,10 @@ Verify the narrow changed behavior first. Demonstrate the regression on the
 exact unpatched target and the passing result on the fix with identical flags.
 For pathological input or an allocation/performance-sensitive change, also run
 the representative normal-workload measurements required by `AGENTS.md` before
-recommending the patch. Use Clang 23 for final upstream-fix verification and
-record compiler, libc, architecture, kernel, flags, sample count, variability,
-and peak memory when relevant.
+recommending the patch. Use Clang 23 and the current stable GCC release
+(currently GCC 16.2.0) for final upstream-fix verification. Record both
+compiler versions, libc, architecture, kernel, flags, sample count,
+variability, and peak memory when relevant.
 
 Prepare commits and concise draft material only to the extent requested. Follow
 the repository's upstream title, description, Docker reproducer, and testing
