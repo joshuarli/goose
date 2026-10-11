@@ -29,6 +29,10 @@ without `-o` or passing `--jit` fails while TinyCC tries to load libc. Its
 staged `tcclib` files do not make that target JIT-capable. Use the standalone-C
 workflow below for programs built with that package.
 
+The Linux x86-64 glibc package is dynamically linked and supports JIT through
+its staged `tcclib`. It requires host glibc and GNU C++ runtime libraries
+compatible with the versions recorded in the package's `build-info.txt`.
+
 Both modes use identical generated C for the program. Around it, the JIT run
 compiles the whole runtime in the same unit, as `--standalone` writes it, where
 the file `-o` writes by default declares most of the runtime extern for the
@@ -113,6 +117,13 @@ generated C, so this command does not need a separate Goose runtime object.
 The native build still requires a C compiler for the target. The JIT
 failure occurs while TinyCC loads the C library; its exact loader cause has
 not been established. The package README gives this same supported workflow.
+
+### glibc package
+
+The Linux x86-64 glibc package is built against the host's GNU libc and C++
+runtime. It can run programs through TinyCC, as well as emit standalone C.
+The package records the exact GCC and glibc versions used to build it; a host
+must provide compatible versions of both runtime libraries.
 
 ### Threads
 

@@ -26,6 +26,10 @@ jobs:
             target: linux-x86_64-musl
             script: scripts/package_linux_x86_64_musl.sh
             archive: goose-linux-x86_64-musl.zip
+          - os: ubuntu-24.04
+            target: linux-x86_64-glibc
+            script: scripts/package_linux_x86_64_glibc.sh
+            archive: goose-linux-x86_64-glibc.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
