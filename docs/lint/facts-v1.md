@@ -100,10 +100,15 @@ Spans use 0-based, half-open byte offsets.
 ### Specializations and calls
 
 `specialization` describes a checked function context in stable textual form.
-Its declaration location is exact when available; otherwise offsets and
-columns are null and `precision` is `line`. `entry_reachable` is true or
-false when the selected call graph is complete and null when reachability is
-unknown. IDs are stream-local.
+Each present root class in the context includes its normalized `depthkey`;
+the text places `:depthkey<N>` after the positive class index and before its
+other context flags. Classes without a root have no depth key. The key preserves
+how a root class's depth relates to the lexical environment, including the
+distinction between a global root and a local root beyond that environment. Its
+declaration location is exact when available; otherwise offsets and columns
+are null and `precision` is `line`. `entry_reachable` is true or false when the
+selected call graph is complete and null when reachability is unknown. IDs are
+stream-local.
 
 `call` records the resolved package-qualified callee when available, exact
 builtin identity, result arity, source span, and syntactic consumption shape:
