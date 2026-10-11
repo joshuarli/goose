@@ -1439,8 +1439,8 @@ int LintMain(int argc, char **argv, const string &exe) {
             check_complete = true;
             facts_started = true;
             auto facts = BuildLintFacts(ast, warnings, cli.input, cli.optlevel, cli.allow_fetch);
-            if (facts.size() > 64u * 1024u * 1024u)
-                throw CompileError { "lint facts exceed the 64 MiB transport limit", CompileErrorKind::Tool };
+            if (facts.size() > 512u * 1024u * 1024u)
+                throw CompileError { "lint facts exceed the 512 MiB transport limit", CompileErrorKind::Tool };
             if (!WritePrivateFile(facts_path, facts))
                 throw CompileError { "cannot write the private lint facts file", CompileErrorKind::Tool };
             return 0;

@@ -2,9 +2,9 @@
 import os;
 import json;
 
-let MAX_FACTS = 67108864;
+let MAX_FACTS = 536870912;
 let MAX_RECORD = 16777216;
-let MAX_RECORDS = 1000000;
+let MAX_RECORDS = 8000000;
 let MAX_OUTPUT = 268435456;
 
 struct SourceFact { path: const u8[:], id: i64, byte_length: i64 }
@@ -789,7 +789,7 @@ fn parse_facts(input: const u8[:], facts: Facts&, error: u8[>..]&) -> bool {
     specialization_facts.clear(); call_facts.clear(); result_use_facts.clear(); call_argument_facts.clear();
     call_argument_counts.clear(); pure_value_facts.clear();
     overflow_guard_facts.clear(); slice_length_facts.clear();
-    if input.len == 0 || input.len > MAX_FACTS { error.append("facts stream is empty or exceeds 64 MiB"); return false; }
+    if input.len == 0 || input.len > MAX_FACTS { error.append("facts stream is empty or exceeds 512 MiB"); return false; }
     if !valid_utf8(input) { error.append("facts stream contains invalid UTF-8"); return false; }
     if input[input.len - 1] != '\n' { error.append("facts stream is missing its final LF"); return false; }
     var hash: u64 = 14695981039346656037;
@@ -826,7 +826,7 @@ fn parse_facts(input: const u8[:], facts: Facts&, error: u8[>..]&) -> bool {
         if line.len == 0 || contains_byte(line, '\r') { error.append("facts contains an empty or CR-terminated record"); return false; }
         offset++;
         records++;
-        if records > MAX_RECORDS { error.append("facts stream exceeds one million records"); return false; }
+        if records > MAX_RECORDS { error.append("facts stream exceeds eight million records"); return false; }
         var doc: json::Node[>..] = [];
         var decoded: u8[>..] = [];
         let root, parse_error = json::parse(line, doc, decoded);
