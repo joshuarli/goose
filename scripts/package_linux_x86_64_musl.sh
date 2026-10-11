@@ -11,8 +11,6 @@ if ! command -v zig >/dev/null 2>&1; then
     exit 1
 fi
 
-git -C "$repo_root" submodule update --init third_party/tinycc
-
 build_dir="$repo_root/build/toolchain-linux-x86_64-musl"
 stage_dir="$build_dir/package/goose-linux-x86_64-musl"
 dist_dir="$repo_root/dist"
@@ -38,7 +36,7 @@ CC="$cc_wrapper" CXX="$cxx_wrapper" cmake -S "$repo_root" -B "$build_dir" \
     -DCMAKE_C_COMPILER_TARGET=x86_64-linux-musl \
     -DCMAKE_CXX_COMPILER_TARGET=x86_64-linux-musl \
     -DCMAKE_EXE_LINKER_FLAGS=-static \
-    -DGOOSE_GFX=OFF -DGOOSE_AUDIO=OFF -DGOOSE_PHYSICS=OFF -DGOOSE_UI=OFF
+    -DGOOSE_BUILTIN_LIBS=
 cmake --build "$build_dir" --config Release
 
 if readelf -l "$build_dir/goose" | grep -q 'INTERP'; then
@@ -59,8 +57,7 @@ Goose compiler for Linux x86-64 (musl)
 The compiler is statically linked against musl and can run without a system
 glibc or a separately installed C++ runtime. TinyCC support files are in
 bin/tcclib for in-process execution with --jit.
-The native audio, graphics, physics, and ui modules are not enabled in this
-build.
+No optional native packages are bundled in this build.
 
 Run a source file with:
   bin/goose path/to/program.goose
