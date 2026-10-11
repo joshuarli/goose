@@ -23,6 +23,12 @@ and no C toolchain has to be installed.
     goose -o tour.c 01_tour.goose  # the C file, as before
     goose --jit prog.goose         # the same, asked for explicitly
 
+The in-process route depends on the compiler build's runtime linkage. The
+Linux x86-64 static-musl package does not support JIT: running a source file
+without `-o` or passing `--jit` fails while TinyCC tries to load libc. Its
+staged `tcclib` files do not make that target JIT-capable. Use the standalone-C
+workflow below for programs built with that package.
+
 Both modes use identical generated C for the program. Around it, the JIT run
 compiles the whole runtime in the same unit, as `--standalone` writes it, where
 the file `-o` writes by default declares most of the runtime extern for the
@@ -80,6 +86,33 @@ language's requirements.
 
 Remaining limitations and possible improvements, roughly ordered by their
 impact on the project.
+
+### Static-musl package
+
+The Linux x86-64 static-musl package cannot currently run a Goose program
+through TinyCC. For example, this synthetic program is accepted and runs when
+compiled as standalone C, while JIT exits with status 1 before `main` runs and
+reports `tcc: error: /usr/lib/libc.so: unrecognized file type`:
+
+```goose
+fn main() {
+    print("hello from Goose");
+}
+```
+
+Save it as `stdio.goose` and use the supported ahead-of-time route:
+
+```sh
+goose --standalone -o stdio.c stdio.goose
+clang-23 -O2 stdio.c -o stdio -lm -pthread
+./stdio
+```
+
+This prints `hello from Goose`. `--standalone` puts the runtime in the
+generated C, so this command does not need a separate Goose runtime object.
+The native build still requires a C compiler for the target. The JIT
+failure occurs while TinyCC loads the C library; its exact loader cause has
+not been established. The package README gives this same supported workflow.
 
 ### Threads
 
