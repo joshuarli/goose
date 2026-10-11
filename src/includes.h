@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
 #include <cmath>
 #include <deque>
@@ -19,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>

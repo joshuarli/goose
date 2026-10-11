@@ -76,19 +76,16 @@ inline EnumInst *CodeGen::EIVar(TypeExpr *t) {   // For TY_VARIANT.
     return EIOf(t->var->adt);
 }
 
-inline vector<FieldRun> CodeGen::FieldRuns(TypeExpr *t) {
-    vector<FieldRun> runs;
+inline span<const FieldRun> CodeGen::FieldRuns(TypeExpr *t) {
     switch (t->kind) {
-        case TY_STRUCT: runs.push_back(RunOf(SI(t))); break;
-        case TY_ENUM: AllRunsOf(EIOf(t), runs); break;
+        case TY_STRUCT: return RunsOf(SI(t));
+        case TY_ENUM: return RunsOf(EIOf(t));
         case TY_VARIANT: {
             auto ei = EIVar(t);
-            runs.push_back(RunOf(ei, ei->en->VariantIndex(t->var->variant)));
-            break;
+            return RunsOf(ei, ei->en->VariantIndex(t->var->variant));
         }
-        default: break;
+        default: return {};
     }
-    return runs;
 }
 
 inline SizeClass CodeGen::Cls(TypeExpr *t) {
@@ -1148,7 +1145,7 @@ inline bool CodeGen::HasFieldDefaults(TypeExpr *t) {
         case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
             if (t->kind == TY_ENUM && t->enu->varmode) return false;
             auto runs = FieldRuns(t);
-            if (t->kind == TY_ENUM) runs.resize(1);   // Variant 0 is the default variant.
+            if (t->kind == TY_ENUM) runs = runs.first(1);   // Variant 0 is the default variant.
             for (auto &run : runs)
                 for (size_t i = 0; i < run.fields->size(); i++) {
                     auto &f = (*run.fields)[i];

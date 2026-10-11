@@ -77,13 +77,15 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
         Node *nopre = nullptr;
         // A user function set sharing a builtin's name (a `format`
         // overload, §3.7) takes the calls it matches; the builtin the rest.
+        auto entryreach = reachable;
         auto nomatch = false;
         auto v = ResolveCall(c, cands, env, id->name, nullptr, nopre,
-                             bd ? &nomatch : nullptr, expected);
+                             entryreach, bd ? &nomatch : nullptr, expected);
         if (!nomatch) return v;
         // Without a cast, an argument might have matched a function (JudgeCastAt).
         auto args = c->args;
         for (auto a : args) builtinfallback.insert(a);
+        reachable = entryreach;
         v = CheckBuiltin(c, *bd, c->args, nullptr);
         for (auto a : args) builtinfallback.erase(a);
         return v;
@@ -166,6 +168,7 @@ inline FnValBind TypeCheck::LocalFnValue(const vector<SFunction *> &fns, FnSpec 
 }
 
 inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
+    auto entryreach = reachable;
     Val ov;
     {
         PathScope ps(*this, d->obj);
@@ -214,7 +217,8 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
         DefaultScopeName(d->name, c, true);
         cands = ast.LookupFunctions(d->name, d->ns);
     }
-    if (!cands.empty()) return ResolveCall(c, cands, env, d->name, &ov, d->obj, nullptr, expected);
+    if (!cands.empty())
+        return ResolveCall(c, cands, env, d->name, &ov, d->obj, entryreach, nullptr, expected);
     // A member builtin taking any receiver (bytes_of) takes it as checked.
     NoArrayJoin(ov);
     if (bd && !(bd->flags & BF_PROPERTY)) {
@@ -325,8 +329,8 @@ inline void TypeCheck::AddParamDefaults(Call *c, MatchInfo &best, vector<Node *>
 // Phase 1 checks arguments bottom-up for resolution; phase 2 re-checks
 // each against its concrete parameter type (adapting literals etc.).
 inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *env,
-                                  string_view name, Val *preval, Node *&prenode, bool *nomatch,
-                                  TypeExpr *expected) {
+                                  string_view name, Val *preval, Node *&prenode, bool entryreach,
+                                  bool *nomatch, TypeExpr *expected) {
     vector<Node *> argnodes;
     vector<Val> argvals;
     if (prenode) {
@@ -379,7 +383,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
         JudgeCallCasts(c, cands, env, argnodes, argvals, best, name, nomatch != nullptr);
     if (tied.empty()) {
         // Tag dispatch (§8.2): the match-as-overload-set form.
-        auto v = TryDispatch(c, cands, env, argnodes, argvals, name);
+        auto v = TryDispatch(c, cands, env, argnodes, argvals, name, entryreach);
         if (v.type) return v;
         if (nomatch) {   // The caller has a builtin of this name to fall back on.
             *nomatch = true;
@@ -403,12 +407,19 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     }
     LoadSliceArgs(argvals, best.paramtypes);
     RefSliceArgs(argvals, best.paramtypes, c->line);
-    BindBranchesByRef(argnodes, argvals, best.paramtypes, best.sf, -1, best.nwritten);
+    {
+        FlagScope rs(reachable, entryreach);
+        BindBranchesByRef(argnodes, argvals, best.paramtypes, best.sf, -1, best.nwritten);
+    }
     auto spec = GetOrCreateSpec(best, argvals, c);
     ApplyCalleeShrinks(c, spec, argvals, name);
     ApplyCalleeGrows(c, spec, argvals, name);
     // Phase 2: re-check arguments against the resolved parameter types.
     // Arguments construct into fresh parameter slots, not curdst.
+    // Start at the call's entry again: a later argument may have diverged
+    // during discovery, but earlier arguments still execute before it.
+    auto argsreach = reachable;
+    reachable = entryreach;
     {
         DestScope ds(*this, Dest {});
         for (size_t i = 0; i < best.paramtypes.size(); i++) {
@@ -451,7 +462,9 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     // Arguments the re-check rebound by reference replace the originals.
     c->SetArgNodes(argnodes);
     c->spec = spec;
+    reachable = reachable && argsreach;
     ApplyCalleeRebinds(spec);
+    if (auto rec = RecordOf(spec); rec && !rec->mayreturn) reachable = false;
     return CallResult(c, spec, argvals);
 }
 
@@ -1008,7 +1021,7 @@ inline TypeExpr *TypeCheck::SubstOwn(TypeExpr *pt, vector<pair<string_view, Type
 // Returns a Val with null type when no dispatch position exists.
 inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *env,
                                   vector<Node *> &argnodes, vector<Val> &argvals,
-                                  string_view name) {
+                                  string_view name, bool entryreach) {
     auto found = -1;
     vector<MatchInfo> matches;  // Per variant, for the found position.
     TypeExpr *enumtype = nullptr;
@@ -1114,13 +1127,17 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
     // dispatched by reference binds its branches so here, and the copy a
     // construct dispatched by value would take of a branch is reported here.
     if (byref && !IsPlainRef(argvals[found].type)) {
+        FlagScope rs(reachable, entryreach);
         DestScope ds(*this, Dest {});
         SlotScope ss(*this, false);
         argvals[found] = CheckValue(argnodes[found], ast.RefTo(enumtype, c->line), true);
     }
     if (argvals[found].implicitcopy) ImplicitCopyError(argvals[found].implicitcopy);
     RefCopyWarnings(argvals[found]);
-    BindBranchesByRef(argnodes, argvals, matches[0].paramtypes, matches[0].sf, found);
+    {
+        FlagScope rs(reachable, entryreach);
+        BindBranchesByRef(argnodes, argvals, matches[0].paramtypes, matches[0].sf, found);
+    }
     // Specialize every arm; return types and the other parameters must
     // agree across the set.
     c->dispatcharg = found;
@@ -1155,6 +1172,8 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
     }
     // Phase 2 for the non-dispatch args (before CallResult, so nested
     // calls cannot clobber lastcallrets); the dispatch arg keeps its type.
+    auto argsreach = reachable;
+    reachable = entryreach;
     {
         DestScope ds(*this, Dest {});
         for (size_t i = 0; i < matches[0].paramtypes.size(); i++)
@@ -1192,6 +1211,13 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
         }
     }
     lastcallrets = results;
+    reachable = reachable && argsreach;
+    auto mayreturn = false;
+    for (auto spec : c->dispatch) {
+        auto rec = RecordOf(spec);
+        mayreturn |= !rec || rec->mayreturn;
+    }
+    reachable = reachable && mayreturn;
     return results.empty() ? VoidVal() : results[0];
 }
 
@@ -1414,9 +1440,9 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     for (size_t i = 0; i < roots.size(); i++) {
         auto &ra = roots[i];
         if (ra.cls <= 0 || !ra.exact) continue;
-        vector<TypeExpr *> elems, open;
+        vector<TypeExpr *> elems;
         for (size_t j = 0; j < roots.size(); j++)
-            if (roots[j].cls == ra.cls) ArrayElemsReached(mi.paramtypes[j], elems, open);
+            if (roots[j].cls == ra.cls) AppendArrayElemsReached(mi.paramtypes[j], elems);
         for (auto e : elems)
             if (OneArrayOf(argroots[i], e)) ra.onearray.push_back(e);
     }
@@ -2523,12 +2549,12 @@ inline int TypeCheck::EnvReach(const MatchInfo &mi) {
 
 // A specialization's body, checked once -- or, for the head of a recursive
 // cycle, as many times as it takes for what the cycle's members record (the
-// roots their returns give, their shrinks, growths, stores and rebinds, and
+// normal completion, return roots, shrinks, growths, stores and rebinds, and
 // the threaded classes that broke) to settle, and the facts about the
 // variables outside the cycle's activations (CycleRound). Each round reads
 // the round before's records at its back edges (RecordOf), and the first
-// reads none: a back edge then has no effects and a result that points
-// nowhere yet, which every rule passes by. Every member is checked again in
+// reads none: a back edge may return, has no other effects and a result that
+// points nowhere yet, which every rule passes by. Every member is checked again in
 // each round (FnSpec::stale, GetOrCreateSpec) with the class roots its first
 // round made, so a store it made before a call joined it to the cycle is
 // checked as inside it, and one relying on a class a later call broke finds
@@ -2542,8 +2568,8 @@ inline void TypeCheck::CheckSpecBody(FnSpec *spec, vector<Val> *argvals, Line ca
     } roundscope(*this);
     CheckSpecBodyOnce(spec, argvals, callline);
     while (spec->incycle && CycleHead(spec) == spec) {
-        // What a round records only grows (a balance only worsens), so the
-        // rounds are bounded by the records' size.
+        // Bound cycles that do not settle. Completion proofs accumulate, but
+        // pruning a newly unreachable continuation can remove other effects.
         if (spec->rounds >= 8)
             Error(callline, cat("the recursive cycle through ", spec->sf->name,
                                 " does not settle (internal limit of 8 rounds)"));
@@ -2593,6 +2619,7 @@ inline bool TypeCheck::SameRecord(const FnRecord &a, const FnRecord &b, const Fn
         return false;
     };
     auto sametype = [&](TypeExpr *x, TypeExpr *y) { return !x == !y && (!x || TypeEq(x, y)); };
+    if (a.mayreturn != b.mayreturn) return why("normal completion");
     if (a.retroots.size() != b.retroots.size()) return why("returns");
     for (size_t i = 0; i < a.retroots.size(); i++) {
         auto &p = a.retroots[i], &q = b.retroots[i];
@@ -2985,6 +3012,7 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
             exits.vars[i]->maybeassigned = exits.maybeassigned[i];
         }
     }
+    spec->record.mayreturn = exits.reached;
     reachable = savereach;
     RecordEnvExits(spec);
     spec->inprogress = false;
@@ -3357,9 +3385,11 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
     if (fb.named) {
         vector<SFunction *> cands = fb.set ? *fb.set : vector<SFunction *> { fb.named };
         Node *nopre = nullptr;
-        return ResolveCall(c, cands, fb.env, fb.named->name, nullptr, nopre, nullptr, expected);
+        return ResolveCall(c, cands, fb.env, fb.named->name, nullptr, nopre, reachable,
+                           nullptr, expected);
     }
     auto fv = fb.fv;
+    auto entryreach = reachable;
     if (!c->tyargs.empty()) Error(c, "a block takes no type arguments");
     vector<Val> argvals;
     for (auto a : c->args) {
@@ -3397,6 +3427,8 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
         if (!params[i].type || params[i].type->kind != TY_SLICE) NoArrayJoin(argvals[i]);
     }
     RefSliceArgs(argvals, ptypes, c->line);
+    auto argsreach = reachable;
+    reachable = entryreach;
     {
         DestScope ds(*this, Dest {});
         for (size_t i = 0; i < ptypes.size(); i++) {
@@ -3413,6 +3445,7 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
     // Check the body inline, with lookups chaining to the definer. The body
     // checked here is an environment of its own (FnSpec::isfunval), so what
     // it declares and specializes captures this clone's variables.
+    reachable = reachable && argsreach;
     auto named = NamedSpec(fb.env);
     auto env = ast.NewFunValEnv();
     env->sf = named ? named->sf : nullptr;

@@ -1688,9 +1688,9 @@ def main():
         r.section("compiler roots, runtime lifecycle and clang")
 
         # Algebraic properties of the compiler's root domain are easier to
-        # exhaust over small abstract states than to express in Goose.
-        def compiler_roots():
-            name = "compiler_roots"
+        # exhaust over small abstract states than to express in Goose, and
+        # its containers to compare with the standard ones directly.
+        def compiler_unit(name):
             out_exe = gendir / f"{name}{tc.EXE_SUFFIX}"
             ok, log = cc.compile(HERE / f"{name}.cpp", out_exe, cpp=True,
                                  opt=2 if args.profile == "baseline" else 1,
@@ -1703,7 +1703,8 @@ def main():
                     r.fail(f"compiler {name}", out + err)
                 else:
                     r.ok(f"compiler {name}")
-        r.show_task(compiler_roots)
+        for name in ("compiler_roots", "compiler_containers"):
+            r.show_task(compiler_unit, name)
 
         # Direct runtime lifecycle checks use small region limits and allocator
         # instrumentation that cannot be expressed by a Goose program. Keep

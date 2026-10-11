@@ -805,8 +805,8 @@ inline bool TypeCheck::LookupLocalFn(string_view name) {
     return !LookupLocalFns(name, env).empty();
 }
 
-inline vector<int> TypeCheck::NamedFrames(int fi, FnSpec *spec) {
-    vector<int> chain;
+inline small_vector<int, 8> TypeCheck::NamedFrames(int fi, FnSpec *spec) {
+    small_vector<int, 8> chain;
     auto add = [&](int k) {
         for (; k >= 0; k = frames[k].lexframe) {
             if (find(chain.begin(), chain.end(), k) != chain.end()) break;
@@ -834,7 +834,8 @@ inline TypeCheck::FlowState TypeCheck::SaveFlow() {
     });
     // Globals' narrowing participates too (assignment in branches).
     for (auto g : ast.globals)
-        for (auto v : g->defs) f.globals.push_back({ v, v->narrowed });
+        for (auto v : g->defs)
+            if (v->narrowed) f.globals.push_back({ v, v->narrowed });
     f.reachable = reachable;
     return f;
 }
@@ -846,6 +847,8 @@ inline void TypeCheck::RestoreFlow(const FlowState &f) {
         e.var->maybeassigned = e.state.maybeassigned;
         e.var->narrowed = e.state.narrowed;
     }
+    for (auto g : ast.globals)
+        for (auto v : g->defs) v->narrowed = nullptr;
     for (auto [v, narrowed] : f.globals) v->narrowed = narrowed;
     reachable = f.reachable;
 }
@@ -871,11 +874,14 @@ inline TypeCheck::FlowState TypeCheck::JoinFlow(const FlowState &a, const FlowSt
                     (a.reachable && aa.maybeassigned) || (b.reachable && bb.maybeassigned),
                     narrow(aa.narrowed, bb.narrowed) };
     }
-    assert(a.globals.size() == b.globals.size() && a.globals.size() == joined.globals.size());
-    for (size_t i = 0; i < a.globals.size(); i++) {
-        assert(a.globals[i].first == b.globals[i].first &&
-               a.globals[i].first == joined.globals[i].first);
-        joined.globals[i].second = narrow(a.globals[i].second, b.globals[i].second);
+    // A global stays narrowed where every reachable side narrowed it.
+    if (!a.reachable) joined.globals = b.globals;
+    else if (!b.reachable) joined.globals = a.globals;
+    else {
+        joined.globals.clear();
+        for (auto &g : a.globals)
+            for (auto &h : b.globals)
+                if (h.first == g.first) joined.globals.push_back(g);
     }
     joined.reachable = a.reachable || b.reachable;
     return joined;
@@ -2621,7 +2627,7 @@ inline bool TypeCheck::StoreIntoSlot(Node *at, VarDef *r, bool bound, TypeExpr *
     if (auto sv = SliceVarOf(r)) return RebindSliceVar(at, sv, v, via);
     if (!IsClassRoot(r)) return false;
     Val nv = v;
-    std::erase_if(nv.alts, [&](const RootAlt &a) { return !a.exact && a.from == r; });
+    erase_if(nv.alts, [&](const RootAlt &a) { return !a.exact && a.from == r; });
     if (nv.None()) return false;
     auto changed = false;
     VisibleVars([&](VarDef *x) {

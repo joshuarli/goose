@@ -78,7 +78,9 @@ def find_goose(explicit=None):
     # Single-config CMake generators put the binary straight in the build
     # directory; the Visual Studio and Xcode generators put it in a
     # per-configuration subdirectory.
-    for sub in ("Debug", "", "Release", "RelWithDebInfo"):
+    # Routine runs should use an optimized compiler when one is available.
+    # Correctness/CI runs that require assertions select Debug with --exe.
+    for sub in ("Release", "RelWithDebInfo", "", "Debug"):
         p = REPO_ROOT / "build" / sub / ("goose" + EXE_SUFFIX)
         if p.exists():
             return p

@@ -61,6 +61,8 @@
 // are typecheck_nodes.h.
 #pragma once
 
+#include "type_queries.h"
+
 namespace goose {
 
 enum IterKind { IK_RANGE, IK_COUNT, IK_ARRAY, IK_SLICE };
@@ -149,6 +151,13 @@ inline bool IsBranchConstruct(const Node *n) {
 
 struct TypeCheck {
     Ast &ast;
+    StableTypeGraph stabletypes;
+    unordered_map<TypeExpr *, vector<TypeExpr *>> arrayelements;
+    // CanContain's and ReachesThroughRefs' answers for complete type graphs:
+    // RootCandidates asks them of every variable in scope and every global,
+    // at each store and shrink it judges.
+    using TypePairCache = flat_map<pair<TypeExpr *, TypeExpr *>, bool>;
+    TypePairCache cancontain, reachesthrough;
     bool library = false;   // Built for a C host (--header): fn main() is optional.
 
     // (Val, the checked value of an expression, lives in ast.h: node Check
@@ -282,7 +291,9 @@ struct TypeCheck {
         bool operator==(const FlowEntry &) const = default;
     };
     struct FlowState {
-        vector<FlowEntry> locals;
+        small_vector<FlowEntry, 16> locals;
+        // The narrowed globals only, in ast.globals order: the others are
+        // not narrowed.
         vector<pair<VarDef *, TypeExpr *>> globals;
         bool reachable = true;
         bool operator==(const FlowState &) const = default;
@@ -380,7 +391,7 @@ struct TypeCheck {
     bool Descend(Node *n);
     void Ascend(Node *n);
     // The checked value of every expression that points somewhere, by node.
-    unordered_map<Node *, Val> nodevals;
+    flat_map<Node *, Val> nodevals;
     void RecordVal(Node *n, const Val &v) {
         if (!v.None() || v.holderset) nodevals[n] = v;
     }
@@ -1081,7 +1092,7 @@ struct TypeCheck {
     void LimitNestedInsts(TypeExpr *t);
     // The field runs of a nominal type (ast.h FieldRun), instantiating it
     // as needed; empty for every other kind.
-    vector<FieldRun> FieldRuns(TypeExpr *t);
+    span<const FieldRun> FieldRuns(TypeExpr *t);
     // Whether `f` holds of some field type of t, pads skipped, and the same
     // for each of them; instantiating t as FieldRuns does.
     template<typename F> bool AnyField(TypeExpr *t, F f) { return AnyFieldOf(FieldRuns(t), f); }
@@ -1339,7 +1350,7 @@ struct TypeCheck {
     // the ones it is lexically nested in, the global initializers', and
     // those the function values bound in `spec`, or in the specialization
     // of any of those frames, were written in (which calling one reaches).
-    vector<int> NamedFrames(int fi, FnSpec *spec);
+    small_vector<int, 8> NamedFrames(int fi, FnSpec *spec);
     // The variables of those frames, in vars order.
     template<typename F> void EachNamedVar(int fi, FnSpec *spec, F f) {
         for (auto k : NamedFrames(fi, spec)) {
@@ -1486,6 +1497,7 @@ struct TypeCheck {
     TypeExpr *GrowU8Array(Line l);
 
     TypeExpr *LoadType(TypeExpr *t);
+    bool LoadedTypeEq(TypeExpr *t, TypeExpr *of);
     TypeExpr *ValueType(TypeExpr *t);
     TypeExpr *DeclType(TypeExpr *t, TypeExpr *s);
     static bool ImplicitInt(IntStorage from, IntStorage to);
@@ -1549,7 +1561,10 @@ struct TypeCheck {
     // What a parameter's references lead to is the caller's storage, known
     // here only by the parameter's root, which is then a bound as well.
 
+    template<typename F> bool StableTypeQuery(TypePairCache &cache, TypeExpr *t, TypeExpr *of,
+                                              F walk);
     bool CanContain(TypeExpr *t, TypeExpr *of);
+    bool CanContainWalk(TypeExpr *t, TypeExpr *of);
     void ReachedThroughRefs(TypeExpr *t, vector<TypeExpr *> &out);
     bool ReachesThroughRefs(TypeExpr *t, TypeExpr *of);
     void BoundReach(VarDef *r, vector<TypeExpr *> &out);
@@ -1575,6 +1590,7 @@ struct TypeCheck {
     int ElemArrayPlaces(TypeExpr *t, TypeExpr *of);
     bool OneArrayOf(VarDef *r, TypeExpr *elem);
     void ArrayElemsReached(TypeExpr *t, vector<TypeExpr *> &out, vector<TypeExpr *> &open);
+    void AppendArrayElemsReached(TypeExpr *t, vector<TypeExpr *> &out);
     bool RootedAtReceiver(const Val &rv, const Val &av, TypeExpr *elem);
     void CheckRootedAtReceiver(Call *c, const char *op, const Val &rv, const Val &av, TypeExpr *elem,
                                const char *what, const char *sec);
@@ -2012,7 +2028,8 @@ struct TypeCheck {
     FnValBind LocalFnValue(const vector<SFunction *> &fns, FnSpec *env);
     Val CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected);
     Val ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *env, string_view name, Val *preval,
-                    Node *&prenode, bool *nomatch = nullptr, TypeExpr *expected = nullptr);
+                    Node *&prenode, bool entryreach, bool *nomatch = nullptr,
+                    TypeExpr *expected = nullptr);
     void MatchCandidates(Call *c, vector<SFunction *> &cands, FnSpec *env, vector<Val> &argvals,
                          vector<MatchInfo> &tied, vector<MatchInfo> &converting, string *failures,
                          string_view name);
@@ -2043,7 +2060,7 @@ struct TypeCheck {
     bool BindTypes(TypeExpr *pt, TypeExpr *at, vector<pair<string_view, TypeExpr *>> &b);
     TypeExpr *SubstOwn(TypeExpr *pt, vector<pair<string_view, TypeExpr *>> &b);
     Val TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *env, vector<Node *> &argnodes,
-                    vector<Val> &argvals, string_view name);
+                    vector<Val> &argvals, string_view name, bool entryreach);
 
     // ------------------------------------------------------------------
     // Specialization: find or create the FnSpec for a resolved call and

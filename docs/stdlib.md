@@ -1,8 +1,8 @@
 # The Goose standard library
 
-The standard library has fourteen modules under `stdlib/`: `std`,
+The standard library has fifteen modules under `stdlib/`: `std`,
 `dictionary`, `vec`, `math`, `os`, `binary`, `base64`, `csv`, `json`, `regex`,
-`audio`, `gfx`, `physics`, and `ui`. Import each module by name,
+`audio`, `gfx`, `physics`, `ui`, and `exception`. Import each module by name,
 for example `import std;`. The compiler locates the library in its source
 tree; use `--stdlib <dir>` or `GOOSE_STDLIB` to select another location.
 Everything is written in Goose except the C behind `os`
@@ -70,8 +70,8 @@ The library uses these conventions:
   but its temporary array cannot hold copies of self-relative ones (spec
   §3.9).
 * The `std`, `dictionary`, `vec`, `math`, and `os` names are global;
-  `binary`, `base64`, `csv`, `json`, `regex`, `audio`, `gfx`, `physics`, and
-  `ui` use their own namespaces. A local named `fill` or `count`
+  `binary`, `base64`, `csv`, `json`, `regex`, `audio`, `gfx`, `physics`,
+  `ui` and `exception` use their own namespaces. A local named `fill` or `count`
   shadows the corresponding global function, causing an error at a call; a
   global variable of such a name does not, since a call names the functions
   past it (spec §11.1).
@@ -330,6 +330,69 @@ var head: u8[>..] = [];
 format_uleb(head, payload.len);
 write_file(path, head); append_file(path, payload);
 ```
+
+## exception
+
+Typed exceptions implemented in Goose with `return ... from` (spec §7.9),
+inspired by [Lobster's exception module](https://github.com/aardappel/lobster/blob/master/modules/exception.lobster).
+Import `exception`; its functions are in namespace `exception`.
+
+```goose
+fn try<E, Body, Catch>()     // Body(); on an error, Catch(error)
+fn try<E, Body>()            // Body(); discard an error
+fn throw(value)             // exit the nearest enclosing handler
+```
+
+```goose
+import exception;
+
+fn load() {
+    // This can be any number of calls below try.
+    exception::throw(str("cannot load item ", 42));
+}
+
+exception::try<u8[]>(load) { error => print(error); };
+```
+
+`E` is the error type, supplied explicitly at `try`: `u8[]` for owned text,
+an integer, or an application's struct or enum (`Error..` for a
+variable-mode enum). The thrown value must fit `E`, which must be usable
+as an array element. The body and catch are static function values;
+Goose permits one trailing block, so name at least one of the callbacks.
+The body's results are discarded; it can update captured output variables.
+
+The handler returns an empty `E[]` on success and a singleton containing
+the error on failure. This uses the ordinary data stacks, needs no default
+`E`, and allows `0`, `false`, and `""` as errors. The catch runs after that
+handler has returned. Calling `throw` in the catch therefore throws to an
+outer `try`; use `exception::throw(copy(error))` to rethrow an owned
+variable-size error. An existing non-fixed value likewise needs `copy`
+when first thrown; fresh constructors and string slices can be supplied
+directly. Owned text is copied before the frames containing it exit.
+
+The language's checks and limitations still apply:
+
+* Every throw must have a handler on every compile-time call path, including
+  throws from a catch. An incompatible error type is a compile error.
+* References carried by a long-distance return must point to globals or
+  static data. Use owned `u8[]`, not a slice into a local string, and owned
+  fields in error records.
+* Recursive code can throw to an outer handler. A `try` cannot itself be
+  re-entered recursively: its non-fixed handler result would hold a data
+  stack across the recursive call (§7.8).
+* The checker propagates calls that never resume their caller. A function
+  declared to return a value may end with `exception::throw(error);`, and a
+  throwing branch needs no result. This does not give `throw` a value type:
+  use it as a statement or branch, rather than `return throw(error);` or as
+  an argument that requires a value. Recursive inference is conservative
+  (spec §7.3).
+* Only calls to `throw` are caught. Runtime failures, `abort` and `exit`
+  remain uncatchable. There is no stack-trace facility.
+
+There is deliberately no `protect`/`finally` helper. A callback can run
+cleanup after normal completion or a caught exception, but a block's
+lexical `return` or a `return ... from` targeting another function bypasses
+that callback. Such a helper cannot guarantee cleanup on all exits.
 
 ## dictionary
 

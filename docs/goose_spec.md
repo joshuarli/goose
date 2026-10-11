@@ -2063,6 +2063,28 @@ an empty array in the slot, and `r: i64& = counter` binds the global.
 
 ### 7.3 Return values and result placement
 
+**Normal completion.** The checker infers whether each function
+specialization can resume its immediate caller. A body whose paths all
+terminate, loop without an exit, or `return ... from` an outer function
+does not resume that caller; this propagates through ordinary calls and
+static function values. A variant-dispatched call has this property only
+when every case does. A return targeting the function itself, including
+one taken by a nested callee, resumes its caller normally.
+
+A function declared to return values needs no result on a path ending in
+such a call. For example, `fn fail() { abort("failed"); }` permits
+`fn value() -> i64 { fail(); }`. This is a control-flow fact, not a value
+type: `fail()` still produces no value to pass as an `i64` argument or to
+forward in an explicit `return fail();`.
+
+After a proven exit, the remaining statements and trailing expression in
+that block are neither typechecked nor emitted. They still must parse.
+This does not make checking depend on constant folding: both branches of
+`if false { ... } else { ... }` are checked. Unknown recursive calls are
+assumed to return, so inference may miss a recursive function that never
+returns; it does not skip a continuation merely because the recursive
+callee has not yet been checked.
+
 Fixed-size returns use registers/native stack or a caller-owned data-stack
 slot for large values (C.3). A variable or resizable return value is
 **constructed directly in its destination**

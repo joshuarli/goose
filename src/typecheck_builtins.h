@@ -1466,7 +1466,7 @@ inline void TypeCheck::ApplyCalleeStores(FnSpec *spec, vector<Val> &argvals, Nod
         if (!spec->inprogress && classat(e.root, own) >= 0 && x && x->type &&
             !IsRefOrSlice(x->type) && !x->isglobal && !IsTemp(x) && lexical_container(x)) {
             spec->storesout = true;
-            std::erase_if(x->contents.alts, [&](const RootAlt &c) { return c.root == e.root; });
+            erase_if(x->contents.alts, [&](const RootAlt &c) { return c.root == e.root; });
             for (auto &a : r.alts) AddContents(x, a, e.classread, src);
         }
         for (size_t k = 0; k < r.alts.size(); k++) {
@@ -2296,8 +2296,8 @@ inline void TypeCheck::NoteLiveViews(Node *at, const string &prefix, VarDef *roo
             auto own = p;
             if ((growonly || inplace) && !isvar) {
                 Prov held = p;
-                std::erase_if(held.alts, [](const RootAlt &a) { return !a.classread; });
-                std::erase_if(own.alts, [](const RootAlt &a) { return a.classread; });
+                erase_if(held.alts, [](const RootAlt &a) { return !a.classread; });
+                erase_if(own.alts, [](const RootAlt &a) { return a.classread; });
                 auto first = out.size();
                 HeldViews(held, t, false, out);
                 for (auto i = first; i < out.size(); i++) out[i].inplace = inplace;
@@ -3126,7 +3126,7 @@ inline void TypeCheck::CheckBuiltUses(Node *rhs, Node *lval, TypeExpr *target,
         if (auto d = Is<Dot>(path); d && d->fieldidx >= 0) {
             auto ot = d->obj->exprtype;
             if (ot && ot->kind == TY_REF) ot = ot->ref->sub;
-            auto runs = ot ? FieldRuns(ot) : vector<FieldRun>();
+            auto runs = ot ? FieldRuns(ot) : span<const FieldRun>();
             if (runs.size() == 1) vt = (*runs[0].ftypes)[d->fieldidx];
         }
         if (!v || !v->type || !vt) return;
@@ -3217,7 +3217,7 @@ inline bool TypeCheck::FieldsApart(Node *use, Node *lval, TypeExpr *target) {
         if (uf[uf.size() - i]->fieldidx == lf[lf.size() - i]->fieldidx) continue;
         auto ot = uf[0]->obj->exprtype;
         if (ot && ot->kind == TY_REF) ot = ot->ref->sub;
-        auto runs = ot ? FieldRuns(ot) : vector<FieldRun>();
+        auto runs = ot ? FieldRuns(ot) : span<const FieldRun>();
         if (runs.size() != 1) return false;
         auto ft = (*runs[0].ftypes)[uf[0]->fieldidx];
         // Through a reference field the location is its pointee, which may

@@ -1488,7 +1488,8 @@ in, and of the frames the function values it can call were written in
 meanwhile: a fact holds after a join iff it holds in every reachable branch,
 and a variable is maybe assigned iff it is in some reachable one, with
 `reachable` tracking divergence (`return`, `break`, `continue`, `abort`,
-`exit`). A local snapshot entry keeps its index, variable identity and facts
+`exit`, and calls proven not to resume their caller). A local snapshot entry
+keeps its index, variable identity and facts
 together; restoring or joining it never transfers a departed local's facts
 to a later variable at the same index. `JoinFlow` computes a snapshot over
 the currently nameable variables without mutating their live state;
@@ -1517,6 +1518,22 @@ the null "bottom" type, which unifies with anything (`UnifyBranch`,
 to does, and whose `else` diverges is marked `IfExpr::flat` (`CheckIf`,
 by `blockpos`): codegen puts its then-block after the `else` in the C
 block the `if` is in (§6.2), and the inliner counts no block for it (§4).
+
+`FnRecord::mayreturn` retains `BodyExits::reached` when the body finishes.
+Direct calls consume it after applying the callee's effects; dispatch joins
+it across all cases. A missing recursive record conservatively may return,
+and `SameRecord` includes this fact in convergence. It describes Goose
+control flow: long-distance returns still use ordinary C returns and their
+existing flag propagation, so it must not become a C `noreturn` annotation.
+`CheckStmts` stops at the first unreachable statement, truncates the
+specialization clone's statement list and removes its dead tail. Later
+passes therefore see only checked nodes, without dead-node annotations.
+The source body remains available to other specializations. Pruning uses
+proven exits, never a provisional assumption that recursion cannot return.
+Argument rechecks start from the call's entry reachability, including its
+receiver; an exit found in a later argument during discovery must not erase
+an earlier argument's effects. The continuation still requires the arguments
+to complete, including the dispatch argument that phase 2 does not recheck.
 
 A `let` declared without an initializer is assigned, or bound with `.=`,
 only where it is not maybe assigned (`NoLetReassign`, §4.4), which is
@@ -2194,8 +2211,8 @@ exactly the ones on the current path since checking is depth-first (§7.8,
 polymorphic recursion). The error names the instantiation the call would
 have made, and the chain shows the ones before it.
 
-**Rounds** (`CheckSpecBody`). A back edge reaches a function whose returns,
-shrinks, growths, stores and rebinds are not recorded yet, so a cycle is
+**Rounds** (`CheckSpecBody`). A back edge reaches a function whose completion,
+returns, shrinks, growths, stores and rebinds are not recorded yet, so a cycle is
 checked in rounds until what its members record settles. The head -- the
 outermost member on the call path that found the cycle -- runs them: each
 round moves every member's `FnRecord` into `FnSpec::prev`, leaving a fresh
@@ -2214,21 +2231,21 @@ the same objects across rounds. The variables outside the cycle's
 activations start each round as the round before left them, so a `let`
 declared outside the cycle that a round may assign is maybe assigned in the
 next, where assigning it errs (§3.9): every activation shares it. In the
-first round a back edge has no record: it applies no effects, and its
+first round a back edge has no record: it may return, applies no other effects, and its
 result points nowhere yet
 (`Roots::unknown`), which every rule passes by (`FitsAt`,
 `CheckRootedAtReceiver`, `BindRefProvenance`, the shrink scans), as does a
 holder's contents read out of one, a variable bound to one, and a call given
 one, whose specialization is keyed `RootArg::unknown`. A round that changed
-no member's record (`SameRecord`: return roots, shrinks and their balances,
+no member's record (`SameRecord`: normal completion, return roots, shrinks and their balances,
 growths, stores through classes, pairs, rebinds), broke no threaded class
 and noted no fact about a variable declared outside the cycle's activations
 (`CycleRound`, marked by `NoteFact`: one variable at every level of a nested
 function's recursion, which a round may have read for the next level before
 it rebound it) was checked against the settled facts, so its errors stood
-and it was the last; records and facts only grow and balances only worsen,
-so the rounds are bounded (an internal limit of 8 holds a cycle that does
-not settle). A back edge's result is the union of the roots the cycle's
+and it was the last. Completion proofs accumulate; pruning a newly
+unreachable continuation can remove other effects. An internal limit of 8
+holds a cycle that does not settle. A back edge's result is the union of the roots the cycle's
 returns give, mapped through
 the back edge's own arguments (`RetAltVal`: a parameter class maps through
 every argument the back edge gives the class's parameters, united, where an

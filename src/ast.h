@@ -464,7 +464,7 @@ struct RootAlt {
 // would. Two alternatives never share a root: adding one that does keeps the
 // weaker of the two.
 struct Roots {
-    vector<RootAlt> alts;
+    small_vector<RootAlt, 1> alts;
     // No places yet: a reference variable read before its binding in a pass
     // of a loop, or a recursive call's result in the first round of its
     // cycle, which a later pass or round revisits (TypeCheck::RefProvOf,
@@ -1593,12 +1593,22 @@ inline VarDef *Roots::From() const {
     return f;
 }
 
+// One run of fields with their instantiated types, aligned (a pad's type is
+// null): what a nominal type's values are made of. A struct type has one
+// run, a variant type its variant's, and an enum type one per variant, its
+// tag aside. Every pass that walks a type's contents does so run by run.
+struct FieldRun {
+    const vector<Field> *fields = nullptr;
+    const vector<TypeExpr *> *ftypes = nullptr;
+};
+
 // A struct type with concrete generic arguments: substituted field types plus
 // the derived properties every user of the type needs.
 struct StructInst {
     SStruct *st = nullptr;
     vector<TypeExpr *> args;
     vector<TypeExpr *> ftypes;     // Aligned with st->fields; null for pads.
+    FieldRun run;                  // st->fields with ftypes (RunsOf).
     SizeClass sclass = SC_FIXED;
     bool flat = true;
     bool validated = false;        // Guards against recursive by-value nesting.
@@ -1613,6 +1623,7 @@ struct EnumInst {
     SEnum *en = nullptr;
     vector<TypeExpr *> args;
     vector<vector<TypeExpr *>> vftypes;   // Per variant, per field.
+    vector<FieldRun> runs;                // Per variant, its fields and vftypes.
     bool allfixed = true;                 // Every payload is fixed-size.
     // A payload holds self-relative references, which only a binding by
     // reference reads: a copy does not keep them (§3.9), and fixed mode
@@ -1626,35 +1637,22 @@ struct EnumInst {
     vector<uint8_t> vbuilt;
 };
 
-// One run of fields with their instantiated types, aligned (a pad's type is
-// null): what a nominal type's values are made of. A struct type has one
-// run, a variant type its variant's, and an enum type one per variant, its
-// tag aside. Every pass that walks a type's contents does so run by run.
-struct FieldRun {
-    const vector<Field> *fields = nullptr;
-    const vector<TypeExpr *> *ftypes = nullptr;
-};
-
-inline FieldRun RunOf(const StructInst *si) { return { &si->st->fields, &si->ftypes }; }
-inline FieldRun RunOf(const EnumInst *ei, int vi) {
-    return { &ei->en->variants[vi].fields, &ei->vftypes[vi] };
-}
-inline void AllRunsOf(const EnumInst *ei, vector<FieldRun> &out) {
-    for (size_t vi = 0; vi < ei->en->variants.size(); vi++) out.push_back(RunOf(ei, (int)vi));
-}
+inline span<const FieldRun> RunsOf(const StructInst *si) { return { &si->run, 1 }; }
+inline span<const FieldRun> RunsOf(const EnumInst *ei) { return ei->runs; }
+inline span<const FieldRun> RunsOf(const EnumInst *ei, int vi) { return { &ei->runs[vi], 1 }; }
 
 // Whether `f` holds of some field type in these runs, and the same for every
 // one of them; pads (a null type) are skipped. Which runs a type has is the
 // pass's own question -- the checker instantiates the type to answer it, the
 // backend reads the instantiation the checker left behind -- but what to do
 // with them is this.
-template<typename F> bool AnyFieldOf(const vector<FieldRun> &runs, F f) {
+template<typename F> bool AnyFieldOf(span<const FieldRun> runs, F f) {
     for (auto &run : runs)
         for (auto ft : *run.ftypes) if (ft && f(ft)) return true;
     return false;
 }
 
-template<typename F> void EachFieldOf(const vector<FieldRun> &runs, F f) {
+template<typename F> void EachFieldOf(span<const FieldRun> runs, F f) {
     for (auto &run : runs)
         for (auto ft : *run.ftypes) if (ft) f(ft);
 }
@@ -1905,6 +1903,10 @@ struct OuterExit {
 // The event range locates this round's stores in TypeCheck::storeevents; it
 // is replay metadata, not a fact compared for convergence.
 struct FnRecord {
+    // Whether this specialization can resume its immediate Goose caller.
+    // A return-from to an outer body does not, although its C function returns
+    // normally to propagate that exit. Unknown recursive calls may return.
+    bool mayreturn = true;
     vector<RetRoot> retroots;      // Per ret: the checked returns' roots and the prediction.
     // External optional bindings this body (or a callee) may rebind.
     set<VarDef *> reboundoptionals;

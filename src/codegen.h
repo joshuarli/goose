@@ -195,7 +195,7 @@ struct CodeGen {
     EnumInst *EIVar(TypeExpr *t);
     // The field runs of a nominal type (ast.h FieldRun); empty for every
     // other kind.
-    vector<FieldRun> FieldRuns(TypeExpr *t);
+    span<const FieldRun> FieldRuns(TypeExpr *t);
     // As the checker's, over the runs this pass reads rather than builds.
     template<typename F> bool AnyField(TypeExpr *t, F f) { return AnyFieldOf(FieldRuns(t), f); }
     template<typename F> void EachField(TypeExpr *t, F f) { EachFieldOf(FieldRuns(t), f); }

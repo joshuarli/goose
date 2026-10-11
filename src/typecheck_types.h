@@ -65,6 +65,7 @@ inline StructInst *TypeCheck::GetStructInst(TypeExpr *t) {
     auto inst = ast.NewStructInst();
     inst->st = st;
     inst->args = t->struc->args;
+    inst->run = { &st->fields, &inst->ftypes };
     st->insts.push_back(inst);
     t->struc->inst = inst;
     vector<pair<string_view, TypeExpr *>> bindings;
@@ -135,6 +136,8 @@ inline EnumInst *TypeCheck::GetEnumInst(TypeExpr *t) {
                 inst->vftypes.back().push_back(f.ispad ? nullptr : Subst(f.type));
         }
     });
+    for (size_t vi = 0; vi < en->variants.size(); vi++)
+        inst->runs.push_back({ &en->variants[vi].fields, &inst->vftypes[vi] });
     inst->vbuilt.assign(en->variants.size(), 0);
     typechain.push_back(t);
     BeginTypeBuild();
@@ -149,14 +152,14 @@ inline EnumInst *TypeCheck::GetEnumInst(TypeExpr *t) {
     // (CheckMatch), is left alone.
     if (inst->selfrel && inst->varclass == SC_RESIZABLE) {
         auto resizable = [&](size_t vi) {
-            return AnyFieldOf({ RunOf(inst, (int)vi) },
+            return AnyFieldOf(RunsOf(inst, (int)vi),
                               [&](TypeExpr *ft) { return ClassOf(ft) == SC_RESIZABLE; });
         };
         size_t tail = 0;
         while (!resizable(tail)) tail++;
         for (size_t vi = 0; vi < en->variants.size(); vi++)
             if (!resizable(vi) &&
-                AnyFieldOf({ RunOf(inst, (int)vi) }, [&](TypeExpr *ft) { return HasRelRefT(ft); }))
+                AnyFieldOf(RunsOf(inst, (int)vi), [&](TypeExpr *ft) { return HasRelRefT(ft); }))
                 Error(en->line, cat("enum ", TypeStr(ast.EnumOf(en, inst->args, false, en->line)),
                                     " is resizable (its variant ", en->variants[tail].name,
                                     "'s payload is), so a whole assignment may replace its "
@@ -285,19 +288,16 @@ inline Node *TypeCheck::DefaultValue(TypeExpr *t, Line line) {
     }
 }
 
-inline vector<FieldRun> TypeCheck::FieldRuns(TypeExpr *t) {
-    vector<FieldRun> runs;
+inline span<const FieldRun> TypeCheck::FieldRuns(TypeExpr *t) {
     switch (t->kind) {
-        case TY_STRUCT: runs.push_back(RunOf(GetStructInst(t))); break;
-        case TY_ENUM: AllRunsOf(GetEnumInst(t), runs); break;
+        case TY_STRUCT: return RunsOf(GetStructInst(t));
+        case TY_ENUM: return RunsOf(GetEnumInst(t));
         case TY_VARIANT: {
             auto inst = GetEnumInst(t->var->adt);
-            runs.push_back(RunOf(inst, inst->en->VariantIndex(t->var->variant)));
-            break;
+            return RunsOf(inst, inst->en->VariantIndex(t->var->variant));
         }
-        default: break;
+        default: return {};
     }
-    return runs;
 }
 
 inline SizeClass TypeCheck::ClassOf(TypeExpr *t) {
@@ -433,7 +433,7 @@ inline bool TypeCheck::HasDefault(TypeExpr *t, string &why) {
             return false;
         case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
             auto runs = FieldRuns(t);
-            if (t->kind == TY_ENUM) runs.resize(1);   // Variant 0 is the default variant.
+            if (t->kind == TY_ENUM) runs = runs.first(1);   // Variant 0 is the default variant.
             for (auto &run : runs) {
                 for (size_t i = 0; i < run.fields->size(); i++) {
                     auto &f = (*run.fields)[i];
@@ -647,6 +647,27 @@ inline TypeExpr *TypeCheck::LoadType(TypeExpr *t) {
         return r;
     }
     return t;
+}
+
+// Comparing a loaded type needs no persistent AST node. Keep these views on
+// the stack, with exactly LoadType's conversion order, constness and source
+// location. In particular a relative reference loses its storage/pool detail.
+inline bool TypeCheck::LoadedTypeEq(TypeExpr *t, TypeExpr *of) {
+    if (t->kind == TY_INT && t->intstorage == IS_VARINT)
+        return TypeEq(ast.inttypes[IS_I64], of);
+    TypeExpr value = *t;
+    if (t->cq && !IsRefOrSlice(t)) {
+        value.cq = false;
+        return TypeEq(&value, of);
+    }
+    if (t->kind == TY_REF && t->ref->lenstorage >= 0) {
+        TypeRef ref;
+        ref.sub = t->ref->sub;
+        ref.optional = t->ref->optional;
+        value.ref = &ref;
+        return TypeEq(&value, of);
+    }
+    return TypeEq(t, of);
 }
 
 // The type a value that a type argument gives type t has: a function result
@@ -958,14 +979,44 @@ inline void TypeCheck::ValidatePool(TypeExpr *t) {
 // variable, and rules that need identity (a relative-reference store,
 // §3.9) may use it; otherwise the candidates only bound the lifetime.
 
+// A question about two types answered once where both graphs are complete,
+// as AppendArrayElemsReached's is; an unfinished graph takes the walk each
+// time. A complete graph stays complete, so a pair once answered needs no
+// second look at its graphs.
+template<typename F> bool TypeCheck::StableTypeQuery(TypePairCache &cache, TypeExpr *t,
+                                                     TypeExpr *of, F walk) {
+    pair key { t, of };
+    if (auto known = cache.find(key)) {
+        // Assertion builds compare each cached answer with the walk.
+        assert(*known == walk());
+        return *known;
+    }
+    if (typesbuilding || !stabletypes.Ready(t) || !stabletypes.Ready(of)) return walk();
+    auto r = walk();
+    cache[key] = r;
+    return r;
+}
+
 // Can a value of type `t` contain an `of` by value anywhere inside it? A
 // reference or slice field ends the search: what is behind one belongs to
 // its own root. A slice's pointee is its element type as stored, which for a
 // relative reference is not the plain reference a load yields, so the stored
-// type matches too.
+// type matches too. Only the types holding others are worth remembering an
+// answer for.
 inline bool TypeCheck::CanContain(TypeExpr *t, TypeExpr *of) {
     if (!t) return false;
-    if (TypeEq(t, of) || TypeEq(LoadType(t), of)) return true;
+    switch (t->kind) {
+        case TY_STRUCT: case TY_ENUM: case TY_VARIANT: case TY_ARRAY:
+            return StableTypeQuery(cancontain, t, of, [&]() { return CanContainWalk(t, of); });
+        default: return CanContainWalk(t, of);
+    }
+}
+
+inline bool TypeCheck::CanContainWalk(TypeExpr *t, TypeExpr *of) {
+    if (TypeEq(t, of)) return true;
+    auto loaded = LoadedTypeEq(t, of);
+    assert(loaded == TypeEq(LoadType(t), of));
+    if (loaded) return true;
     if (t->kind == TY_ARRAY) return CanContain(t->arr->sub, of);
     return AnyField(t, [&](TypeExpr *ft) { return CanContain(ft, of); });
 }
@@ -1040,11 +1091,13 @@ inline void TypeCheck::ReachedThroughRefs(TypeExpr *t, vector<TypeExpr *> &out) 
 
 // Whether storage that can hold an `of` is among those.
 inline bool TypeCheck::ReachesThroughRefs(TypeExpr *t, TypeExpr *of) {
-    vector<TypeExpr *> reached;
-    ReachedThroughRefs(t, reached);
-    for (auto p : reached)
-        if (CanContain(p, of)) return true;
-    return false;
+    return StableTypeQuery(reachesthrough, t, of, [&]() {
+        vector<TypeExpr *> reached;
+        ReachedThroughRefs(t, reached);
+        for (auto p : reached)
+            if (CanContain(p, of)) return true;
+        return false;
+    });
 }
 
 // The types of the storage an inexact root r stands for beside its own: a
@@ -1224,7 +1277,7 @@ inline Roots TypeCheck::ReadBackRoot(TypeExpr *rt, const Roots &container, bool 
         // storage owns nothing a slot holds. A bound stays, for the lifetime
         // it gives, and so does the owner of a whole grow-shrink array.
         if (slotread)
-            std::erase_if(cands.alts, [&](const RootAlt &a) {
+            erase_if(cands.alts, [&](const RootAlt &a) {
                 return a.exact && GrowShrinkCanHold(a.root, of);
             });
         if (cands.None()) {
@@ -1364,6 +1417,35 @@ inline void TypeCheck::ArrayElemsReached(TypeExpr *t, vector<TypeExpr *> &out,
         ArrayElemsReached(t->arr->sub, out, open);
     } else {
         EachField(t, [&](TypeExpr *ft) { ArrayElemsReached(ft, out, open); });
+    }
+}
+
+// Reuse only complete graphs. An unfinished graph still follows the original
+// traversal, including its lazy instantiation and diagnostics. Each list is
+// in first-appearance order; merging preserves the specialization key's order.
+inline void TypeCheck::AppendArrayElemsReached(TypeExpr *t, vector<TypeExpr *> &out) {
+    if (typesbuilding || !stabletypes.Ready(t)) {
+        vector<TypeExpr *> open;
+        ArrayElemsReached(t, out, open);
+        return;
+    }
+    auto it = arrayelements.find(t);
+    if (it == arrayelements.end()) {
+        vector<TypeExpr *> elems, open;
+        ArrayElemsReached(t, elems, open);
+        it = arrayelements.emplace(t, std::move(elems)).first;
+    }
+#ifndef NDEBUG
+    // Assertion builds continuously compare cached answers with the original
+    // algorithm, including order and const/storage distinctions.
+    vector<TypeExpr *> check, open;
+    ArrayElemsReached(t, check, open);
+    assert(TypeArgsEq(check, it->second));
+#endif
+    for (auto e : it->second) {
+        auto found = false;
+        for (auto x : out) if (TypeEq(x, e)) { found = true; break; }
+        if (!found) out.push_back(e);
     }
 }
 
