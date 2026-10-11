@@ -617,7 +617,8 @@ pointee where §4.1 asks for one).
   element), and a reference to a non-fixed value denotes one (`let a =
   c.args;`, with `args: u8[>..]&`, binds what the field refers to, as `.=`
   does). To bind a reference-returning call to a fixed-size value, use `.=`
-  (`let e .= pool.push(v);`) or annotate (`let e: T& = pool.push(v);`).
+  (`let e .= pool.push(v);`) or annotate (`let e: T& = pool.push(v);`); a
+  value holding self-relative references cannot be copied at all (§3.9).
   A function whose result type is inferred takes it from a return the same
   way (§7.1). An untyped parameter is an
   anonymous type variable and binds the argument's exact type, reference or
@@ -716,16 +717,31 @@ array/pool* as the location storing it.
   parameter (§8.1, §8.2), an element copy, an `append` of anything but an
   array literal, the value a `format` overload takes by value (§3.7), a
   `resize` fill value, which is copied into every slot it adds even when it
-  is a literal)
+  is a literal, `copy(x)`)
   is a compile error: the copied offsets would still be measured from the
-  source location. Construct such values in place (literals; a field a
+  source location. What a reference names is copied the same way wherever
+  a value destination meets the reference (§3.8, §4.1): `let n = f();`, for
+  an `f` returning `Node&`, copies the node out of the array its links
+  point within, as do a `var`, an annotated declaration, a by-value
+  argument, a return (one whose result type is inferred included), an
+  assignment, a literal's field or element, a pushed element and each
+  reference result of a multi-value binding given it; the error suggests
+  the binding `let n .= f();` (§3.8) where a declaration was likely meant
+  to bind one. Nor may a link be read out of a copy a temporary holds, a
+  popped element or a control construct's value, which copies the value of
+  its branch even where that names storage (§4.1): such a value's fields or
+  elements holding self-relative references are not read, sliced or
+  iterated, a `match` does not bind its payload by reference, and `print`,
+  which renders a reference as its pointee, does not render it, while a
+  scalar field of it reads as usual (`a.pop().v`). Construct such values in
+  place (literals; a field a
   literal's `..` fills takes its type's default, whose links are null and
   whose limited arrays are empty, and is no copy), and bind their
   match payloads, take their variants in case functions and have `format`
   overloads take them by reference: an ADT whose payloads hold them is used
   in variable mode, whose payloads bind by reference where the ADT is not
-  resizable (§3.5). None of these is a copy: a call's result, which is
-  built where it is received where it is not fixed-size (§4.3, §7.3), and
+  resizable (§3.5). None of these is a copy: a call's by-value result, which
+  is built where it is received where it is not fixed-size (§4.3, §7.3), and
   where it is holds no link but `self` and null, a returned literal having
   no other root to point within; a function's named result (§7.3), a local
   every return of the function gives, built at the destination from its
@@ -1108,8 +1124,21 @@ different array: of a reference parameter a caller may bind to the global
 being assigned, say, or through a call into a recursive cycle still being
 checked, which counts as using every global and every variable in scope.
 Where the assignment names the array as a field (`t.chars = …`), the
-right-hand side may still name the holding value's other fields that are
-flat (§1.1): `t.chars = render(t.font)`. A slice or reference into the old
+right-hand side may still name the holding value's other fields that cannot
+lead back to it: flat ones (§1.1), and ones whose references, however many
+it takes, are to storage of no type that can be the assigned location, a
+resizable on the way from it to the array, or hold the value it is a field
+of. `t.chars = render(t.font)` is fine, and so is `s.path = find(s.start)`
+through `s: Walk&` for `struct Walk { start: Cell&, path: Pos[>..] }`, as
+is a reference of such a type bound to a variable first; a field
+`last: Walk&` or `other: Pos[>..]&` may refer to `s` or to `s.path`, and
+naming it is an error. An assignment through a reference field
+(`d.r = …` for `r: u8[>..<]&`) writes the array the field refers to, which
+may lie anywhere an array of its type can, the holding value's other fields
+included: there a field that is, or holds by value, an array of that type
+may be the one assigned (`d.r .= d.own`), and so may what another field
+refers to, so naming either is an error, but for a local whose record shows
+where the reference field may point. A slice or reference into the old
 elements is the shrink rule's to judge (§5.1): the right-hand side runs
 after the shrink the assignment starts with, so one it uses is live there.
 New contents computed from the old are built in a variable of their own and
@@ -1201,15 +1230,28 @@ reference or slice variable rooted at the array (a `var` reference the
 same-depth rebinding rule (§9.2) could retarget into it counts, as does one
 not bound yet further down a loop body), and any value that *holds* a
 reference into it — a struct with a reference field, an array of slices, a
-`let` copy of an element of such. Values hold references only where a store
+`let` copy of an element of such, and the struct whose tail the array is,
+through its other fields. Values hold references only where a store
 put them, and every store the checker has seen is on record (§9.2), so this
 half of the test is exact to the store: the error names the holder and the
 line where a reference into the array was stored into it. A value whose type
-cannot hold a reference to anything the array's elements contain by value
-is never a holder, nor is one linked by relative references alone (a node
-pool): those point within their own root. A reference to a slice variable
-or to a holder counts as what it refers to: while the reference is live,
-so is whatever that slice or holder may refer into.
+cannot hold a reference to anything the array's elements contain by value,
+however many references it leads through, is never a holder, nor is one
+linked by relative references alone (a node pool): those point within their
+own root. A reference to a whole array or table is no reference into its
+elements, which a shrink leaves it pointing at: `struct Walk { start: Cell&,
+text: u8[>..]&, path: Pos[>..] }` holds nothing a shrink of `path` frees,
+and `w.path.clear()` through `w: Walk&` may be followed by any use of `w`.
+A view of the elements taken through such a reference is stored, if at all,
+where the holder's type has room for one. The same holds after a whole
+assignment: `s.r = [1, 2]` for `r: u8[>..]&` may be followed by any use of
+`s`. (The right-hand side of a whole assignment is another matter: it runs
+while the array is rebuilt, and may not reach the array at all, §4.4; a
+variable it takes a reference out of counts as holding what that reference
+leads to, but one whose flat fields alone it reads does not.) A reference to a slice variable
+or to a holder, the storage whose tail shrinks among them, counts as what it
+refers to: while the reference is live, so is whatever that slice or holder
+may refer into.
 
 Nor may the shrink free what a `for` loop around it walks (§6.5): each
 reference or slice on the path to its sequence, which the loop loads again
@@ -1248,8 +1290,11 @@ phases, hands out slices of itself freely — "reusable scratch" and
 "structure I can point into" are the same type. The operations
 themselves are the grow-shrink ones: a stack-top move and a length store.
 Assigning the array whole (`a = …`), or a value holding it, replaces its
-elements and is a shrink under the same rule; the right-hand side runs after
-it, so a variable that side names is used after the shrink. `print`, `str`
+elements and is a shrink under the same rule, wherever its location could
+be the receiver of a `clear`: for `s: Stack&`, `s.items = []`,
+`s.items = load(f)` and `s = fresh()` are shrinks of the storage `s`
+names, as `s.items.clear()` is. The right-hand side runs after the shrink,
+so a variable that side names is used after it. `print`, `str`
 and `format` evaluate and render their arguments in order (§3.7), so a
 variable a later argument names is used after a shrink an earlier one makes,
 by a call in it or through a `format` overload rendering it.
@@ -1345,7 +1390,10 @@ again against the pairs the cycle records once the whole cycle is.
   The rule is about references that can point *into* the array:
   one merely rooted at a value that holds one, whose pointee type the
   array's elements cannot contain — a slice key read back out of a
-  dictionary's slots — stores like any other.
+  dictionary's slots — stores like any other, passed to a parameter or
+  not: a `keys: u8[>..]&` read out of a struct with a `u8[>..<]` tail, and
+  a slice a callee makes of the buffer it refers to, are stored as dictionary
+  keys freely.
 * **A shrink is an error while any live variable or value may refer into the
   array** — the test a grow-only shrink applies (§5.1), the values its
   statement still uses, its liveness rule and its call summaries for a shrink
@@ -3091,7 +3139,10 @@ variable stays its candidate. Then, by where `C`'s own root lies:
    was passed to, or later in a loop around the read -- and where each of
    those was rooted at one variable exactly, at static data, or at the
    storage a parameter's argument holds, the value's roots are theirs
-   instead: a word of `words(buf)` for a local `buf` points into `buf`,
+   instead, but for a variable whose storage cannot hold the value's
+   pointee type, which owns none of what was stored there of that type:
+   an `i64&` read out of a holder that also views a `u8` buffer is not
+   rooted at the buffer. A word of `words(buf)` for a local `buf` points into `buf`,
    exactly, whatever else in scope could hold a `u8`, and a by-value
    parameter holds what its argument did, so a slice of `g.edges` for a
    `g: Graph` parameter is bounded by that argument's root, not by the

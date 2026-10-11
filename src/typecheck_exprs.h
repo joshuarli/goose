@@ -59,8 +59,10 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
     }
     if (auto d = Is<Dot>(n)) {
         auto lv = LValueBase(d->obj);
+        auto base = lv.type;
         DerefLValue(lv, d->obj);
         ResolveMemberLValue(lv, d);
+        if (lv.intemp) NoRelRefTempRead(d->obj, base, lv.type);
         n->exprtype = lv.type;
         RecordVal(n, ContainerRead(lv));
         return lv;
@@ -82,6 +84,7 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
             Error(n, cat(lv.type->kind == TY_SLICE ? "slices" : "arrays",
                          " of variable-size elements cannot be indexed, only iterated; for "
                          "random access, keep your own array of references to them (§3.3)"));
+        if (lv.intemp) NoRelRefTempRead(ix->obj, lv.type, elem);
         CheckIntAny(ix->idx);
         if (lv.type->cq) lv.writable = false;   // An element of a const value.
         lv.letbound = false;
@@ -862,6 +865,7 @@ inline Val TypeCheck::CheckInferredResult(Node *&n, FnSpec *tspec) {
     if (IsNonFixedLValue(v) && !IsOwnLocal(n)) n = AutoRef(n, v);
     // All of a multi-value call's results are forwarded, as they are.
     if (auto c = Is<Call>(n); c && c->rettypes.size() > 1) return v;
+    NoRelRefCopy(n, v.type);
     if (reachable && IsNonFixedRef(v)) {
         auto dies = v.Any([&](const RootAlt &a) {
             return (a.root && a.root->ownerspec == tspec) || IsTemp(a.root);
@@ -3056,6 +3060,56 @@ inline bool TypeCheck::EscapingContinue(Node *n) {
     auto hit = false;
     n->Children([&](Node *ch) { hit = hit || (ch != body && EscapingContinue(ch)); });
     return hit;
+}
+
+// Whether the rest of the statement being checked (LaterOperands) may take a
+// reference or slice out of v: it names v other than to read a field path
+// whose value holds none, itself or in a nested function it calls. Syntactic,
+// as UsedAfter is: a field path is resolved by name against v's type.
+inline bool TypeCheck::ExposedLater(VarDef *v) {
+    auto vframe = FrameOfScope(Depth(v) - 1);
+    // The type of the field path `n` reads starting at v, or null.
+    auto fieldtype = [&](Node *n) -> TypeExpr * {
+        vector<string_view> names;
+        while (auto d = Is<Dot>(n)) {
+            names.push_back(d->name);
+            n = d->obj;
+        }
+        auto id = Is<Ident>(n);
+        if (!id || id->name != v->name || names.empty() || !v->type) return nullptr;
+        auto t = v->type;
+        for (auto i = names.size(); i-- > 0;) {
+            if (t->kind == TY_REF) t = t->ref->sub;
+            if (t->kind != TY_STRUCT) return nullptr;
+            auto inst = GetStructInst(t);
+            TypeExpr *ft = nullptr;
+            for (size_t k = 0; k < inst->st->fields.size() && k < inst->ftypes.size(); k++)
+                if (inst->st->fields[k].name == names[i]) ft = inst->ftypes[k];
+            if (!ft) return nullptr;
+            t = ft;
+        }
+        return t;
+    };
+    function<bool(Node *)> exposes = [&](Node *n) -> bool {
+        set<SFunction *> seen;
+        if (!n || !MentionsName(n, v->name, seen)) return false;
+        if (auto ft = fieldtype(n)) return HoldsPlainRef(ft);
+        if (Is<Ident>(n)) return true;
+        // A mention by a nested function the node calls, not by its operands.
+        auto inchild = false, any = false;
+        n->Children([&](Node *ch) {
+            set<SFunction *> s;
+            if (!MentionsName(ch, v->name, s)) return;
+            inchild = true;
+            any = any || exposes(ch);
+        });
+        return any || !inchild;
+    };
+    auto exposed = false;
+    LaterOperands([&](Node *n, int fi) {
+        exposed = exposed || (NamesFrame(fi, vframe) && exposes(n));
+    });
+    return exposed;
 }
 
 // Whether variable v can be read again after the shrink being checked

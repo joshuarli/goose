@@ -814,6 +814,11 @@ one a slice the argument refers to views, or one in what an inexact
 alternative's root leads to that the argument may point into or that its
 pointee holds, a whole grow-shrink array read back out of a parameter's
 storage among them) is taken to hold anything a grow-shrink array could.
+A reference or slice argument whose pointee neither holds a grow-shrink
+array nor can lie in the elements of one its roots hold or, for an inexact
+one, lead to (`GrowShrinkCanHold`, `BoundReachesGrowShrink`) gets no
+grow-shrink class at all: a `u8[>..]&` read out of a struct whose tail is a
+`u8[>..<]`.
 Where every place an argument with such a root, or with a pointee holding
 one, may point, or for a holder every place its references may, is a slot
 read (§3.10), it points into no grow-shrink array's elements all the same:
@@ -1060,7 +1065,11 @@ a `for` or `match` binder's copy takes too, and `ReadBackRoot` and
 a merge keeps only where every value it joins names it), and neither does
 one out of a reference or slice variable, which holds what its binding
 says, not what a store put there. The stored alternative's own root bounds
-such a value. `RecordStore` also maintains
+such a value. A value read back out of the container and stored back into
+its own storage adds nothing and makes no event; stored into storage the
+container only leads to (`StoreEvent::bound`), which may outlive what it
+points into, it is an event like any other, its source the container (a
+call replays it as well). `RecordStore` also maintains
 the container's `contents`: the union of every root stored into it so far,
 one at a parameter's class marked where every store of it there put views
 that class's storage holds (`AddContents`, §3.10 **Class reads**).
@@ -1195,7 +1204,9 @@ into; `ReadBackRoot` (`typecheck_types.h`) re-derives the owner exactly as
   parameter's contents start with where its argument points into several
   arrays, `RootArg::heldexact` false), a value read out of the holder where
   it is checked (`ReadBackLVal`) is one of them (`ContentsReadBack`): an
-  exact root stays exact, as it was stored, a marked one is one of the
+  exact root stays exact, as it was stored, but for a variable whose own
+  storage cannot hold the value's pointee type (`CanContain`), which a
+  store of some other view put there; a marked one is one of the
   views, as one read out of the storage is, and a class bound stays a
   bound, the caller's storage, which it filled before the call and which
   can hold nothing of the activation's own. So
@@ -1487,13 +1498,15 @@ the record of its cycle's previous round (§3.11), none in the first.
 **Grow-only arrays** (§5.1). `pop`, `pop_n`, `resize` and `clear` on a
 `[>..]` (`CheckBuiltin` → `CheckGrowShrink` → `GrowOnlyShrinkAt`,
 `typecheck_builtins.h`), and whole assignment of one or of a value holding
-one (`CheckAssign`, `ResizableArrayIn`), pass in this order:
+one (`CheckAssign`, or `PointeeAssign` through a reference, with
+`ResizableArrayIn`), pass in this order:
 
 1. the receiver names the array's variable, or a reference variable or
    parameter whose root is known (the array behind it shrinks), or is a
    struct's tail field on such a path, whose roots, those of the storage
    the struct lies in, are the receiver's own (`Val`'s); not a temporary,
-   and not in a global initializer;
+   and not in a global initializer. An assignment's location is such a
+   receiver on the same terms (`ShrinkRootsKnown`, `GrowOnlyAssignKnown`);
 2. not a `reusable` pool;
 3. no operand evaluated earlier in this statement and still held may refer
    into it (`CheckHeldShrinks` over `HeldOperands`, §3.3), nor, where it is
@@ -1543,7 +1556,21 @@ one (`CheckAssign`, `ResizableArrayIn`), pass in this order:
    global one a holder refers to, or a global holder a reference or slice
    leads to, which item 5 judges. A slot's references may lead into the
    array at any remove, so both count every type they reach
-   (`ReachedThroughRefs`). The variables are the body's and its lexical
+   (`ReachedThroughRefs`), but for a reference to a whole resizable value,
+   the path to it, which no array's elements hold: a holder whose type has
+   no slot for a view into the array's elements holds none, whatever its
+   record says (`CanHoldViewInto`; a view derived from a stored path lies in
+   such a slot, its store unrecorded where it came out of the same
+   container). A whole assignment's scan counts a path as leading into the
+   array for a variable its right-hand side may take a reference out of,
+   which runs while the array is rebuilt (`ExposedLater`: named there other
+   than to read a field path whose value holds none), and so does an
+   in-place walk's (`pathslive`); for any other variable, used only once
+   the assignment is done, a path is as valid as after a `clear`. The storage that shrinks is a holder like any other: the
+   array's own variable is scanned where the fields before its tail can hold
+   references (`RefsBesideTail`), and a reference to that storage, a
+   reference parameter's class included, by that storage's record rather
+   than as live outright. The variables are the body's and its lexical
    parents', and in a function value's body those of the function running
    it too (`ShrinkScanVars`); every caller's are judged at its call
    instead, the first caller's too (**Calls** below), where the rest of its
@@ -1711,7 +1738,10 @@ parameter names loaded by value, wherever the source is the class exactly
 (`HolderSource`) -- is marked on the store record (`StoreEvent::classread`,
 in `RecordStore`): what the holder got there, the storage holds. A call
 keeps the mark where the class the event names maps onto a class of the
-caller's exactly (`ApplyCalleeStores`). For a grow-only array, the scans
+caller's exactly (`ApplyCalleeStores`), and gives it to a callee's store of
+a value rooted at one of its classes where the argument for that class is
+a view with the mark (`put(b.vars, key(b.keys))` stores what `b`'s storage
+holds, as the same store in the caller would). For a grow-only array, the scans
 judge such an event by the activation's stores into the storage
 (`HolderMayPointInto` on the class, as for a copy of a variable's contents),
 and a slice's slot what came out of there refers to by the class's depth, as
@@ -1826,7 +1856,11 @@ recursive cycle still being checked has the pairs its cycle's previous
 round recorded, which the call maps (§3.11), and none in the first round.
 A class the callee shrank, mapped onto an argument
 whose root only bounds it, may be any array of the shrink's kind in what
-that root leads to (`BoundReach`), as well as the root's own.
+that root leads to (`BoundReach`), as well as the root's own; where the
+class stands for a reference parameter's resizable pointee, it is a value
+of that type there, which becomes the pair's bound, as `ApplyCalleeShrinks`
+takes it. A pair about a parameter's own value whose argument is a slot read
+passes for a grow-shrink array: no reference into one is ever stored.
 
 **Balanced calls** (§5.2). Each summary entry carries a `ShrinkBalance`,
 the worst of the shrinks `NoteShrink` recorded against it: balanced or
@@ -1983,17 +2017,29 @@ shrinks reach the caller's constructions only through the summary.
 **Uses during a whole assignment** (§4.4). The new contents are built over
 the old ones, so once the right-hand side is checked, `CheckBuiltUses`
 walks it for anything that may use the array: an identifier naming the
-array's variable (or the value holding it), or a reference to either
-(`ReachesBuilt`: `CanContain` of the array type, then `MayAliasRoots` as for
-growth, `AL_DEFER` going to `growconflicts`); and for each call, each
+array's variable (or the value holding it), or a reference to storage that
+may be or hold the location assigned (`ReachesBuilt`: `CanContain` of the
+array type for a variable, `MayHoldBuilt` of the pointee for a reference --
+the location's type, a resizable on its tail path, or for a field path
+storage holding its holder by value -- then `MayAliasRoots` as for growth,
+`AL_DEFER` going to `growconflicts`); and for each call, each
 specialization it may run (`spec`, `dispatch`, `fmtspecs`), what that
 callee's body and its callees' name outside their own activations
 (`NamedOutside`, walking the checked bodies with `RunChildren`, so function
 value bodies are included): globals and variables of lexical parents. A
 callee still being checked counts as naming every global and every variable
 in `vars`. A rebind's target (`r .= …`) is not a use, and a field path
-from the lvalue's own variable that parts from the lvalue's path at a flat
-field is not one either (`FieldsApart`): `t.chars = f(t.font)`. Slices and
+from the lvalue's own variable that parts from the lvalue's path at a field
+whose references, at any remove (`ReachedThroughRefs`), reach no storage
+`MayHoldBuilt` accepts is not one either (`FieldsApart`):
+`t.chars = f(t.font)`, `s.path = find(s.start)` for a `start: Cell&`.
+Where the lvalue ends in a reference (`d.r = …`, `PointeeAssign`), the
+location is its pointee, which `MayHoldBuilt` takes to lie in anything that
+can hold its type, and a field that can hold it by value is no field apart.
+Any other field path is a use of the variable, and of what the field holds
+as well: where its references may reach the location, they point where the
+variable's storage bounds, or for a local holder where its record says
+(`VarDef::contents`), against the array's roots. Slices and
 element references are left to the shrink scan, which sees the right-hand
 side as after the shrink. A reference parameter's class may be a global or
 captured array, so using one while building such an array is an error in
@@ -2462,32 +2508,53 @@ is only the whole initializer of a non-optional relative field whose pointee
 is the literal's own type; the `in pool` form additionally needs the literal
 to be under construction inside that pool. `NoRelRefCopy` rejects copying any
 value holding self-relative references (`HasRelRefT` excludes `in pool`
-fields, which copy fine) but what is no copy: a literal built in place, a
-default (`B_DEFAULT`, a `..` field's among them: nulls, an empty limited
-array, `self` where a field's default says so), the result of a call of a
-Goose function (built at the receiver where it is not fixed-size; a
-fixed-size one is what the callee's returns made, which by this rule hold
-no link but `self` and null, a returned literal having no destination root
-to point within), and the body's named result. That last is `return x`, or a
+fields, which copy fine) but what is no copy (`BuiltWhereReceived`): a
+literal built in place, a default (`B_DEFAULT`, a `..` field's among them:
+nulls, an empty limited array, `self` where a field's default says so), the
+by-value result of a call of a Goose function (built at the receiver where
+it is not fixed-size; a fixed-size one is what the callee's returns made,
+which by this rule hold no link but `self` and null, a returned literal
+having no destination root to point within), and the body's named result.
+A call is judged by the callee's declared result (`Call::rettypes`), not by
+the value meeting the destination: a reference result decays to a copy of
+its pointee there. The named result is `return x`, or a
 tail `x`, of a local declared alone at the top of the body
 (`AllowNamedResult`, for the value `retvalnode` says the return checks), of a
 result that is not fixed-size and has x's layout, or is the variable array
 x's resizable elements make, where x's type is not a resizable struct whose
 fields before the tail hold a self-relative reference or a value one in the
 tail may point at (`NamedResultKeepsLinks`), since a frame object's head
-reaches the caller as a copy (C.3). Whether every return gives x only the
+reaches the caller as a copy (C.3); a result type still to be inferred is
+x's. Whether every return gives x only the
 whole body says: `CheckNamedResultUses`, at the end of `CheckSpecBody`, runs
 codegen's structural test (`NamedResultOf`, as `CodeGen::NamedResult`; a
 return it cannot place counts against it) and reports each such return
 otherwise. A body relying on it is marked (`FnSpec::relnamedresult`) and
 never inlined (`Optimizer::Scan`), so its result is built by `DetectNrvo`'s
 named result at every call; codegen fails loudly should a return or an
-inlined body's exit ever copy such a local instead (`NoSelfRelCopy`). The
+inlined body's exit ever copy such a local instead (`NoSelfRelCopy`).
+`NoRelRefCopy` runs wherever a value meets a typed destination
+(`CheckValue`), at an un-annotated declaration, at each decayed reference
+result of a multi-value binding or of a forwarded multi-value return (a
+value result, `from_bytes`' array among them, is built at the receiver), at
+a return inferring the result type (`CheckInferredResult`), and at
+`copy(x)`. A rejected un-annotated declaration of storage or of a reference
+result suggests the `.=` binding it most likely meant. The
 same rule rejects by-value `for` and `match` bindings of such elements and
 payloads, the elements `append` copies from anything but a literal (an
 element that is itself a self-relative reference included), and a `resize`
 fill value, literal or not, which is built once and copied into every slot
 added. Varint-width relative references are construction-only.
+`NoRelRefTempRead` closes the other way out of a root: a value that is not
+storage and is materialized in a temporary (`TempContents`: a popped
+element, a control construct's value, which copies its branch's) may be a
+copy, and unless it is `BuiltWhereReceived`, a field or element holding
+self-relative references may not be read out of it (`Dot::Check`,
+`CheckLValue`), nor may it be sliced (but as the view `==` compares),
+iterated, bound by a `match` reference binder or rendered by
+`print`/`str`/`format` (`CheckPrintable`). The check is made where a path
+leaves the value itself, so a scalar field of a popped element reads as
+usual.
 
 A value is never relative (`FitsAt` refuses one anywhere but an identical
 slot), so neither is a result: `CheckSpecBody` rejects a result type written
