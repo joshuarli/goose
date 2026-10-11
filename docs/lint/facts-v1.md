@@ -39,8 +39,8 @@ The `end.record_count` counts all prior records and excludes itself. Its
 including each LF, as `fnv1a64:<16 lowercase hex digits>`. This detects
 accidental corruption; it is not a cryptographic authenticity check.
 
-The producer and reader cap one record at 16 MiB, the stream at 64 MiB, and the
-record count at one million. Exceeding a limit is a tool failure, never a
+The producer and reader cap one record at 16 MiB, the stream at 512 MiB, and the
+record count at eight million. Exceeding a limit is a tool failure, never a
 truncated success. Source-content hashes use the same FNV-1a 64 encoding over
 the exact source bytes.
 

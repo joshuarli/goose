@@ -398,16 +398,16 @@ inline string BuildLintFacts(const Ast &ast, const vector<LintWarning> &warnings
     string out;
     auto hash = UINT64_C(14695981039346656037);
     size_t record_count = 0;
-    constexpr size_t MAX_FACTS = 64u * 1024u * 1024u;
+    constexpr size_t MAX_FACTS = 512u * 1024u * 1024u;
     constexpr size_t MAX_RECORD = 16u * 1024u * 1024u;
-    constexpr size_t MAX_RECORDS = 1000000;
+    constexpr size_t MAX_RECORDS = 8000000;
     auto record = [&](string line) {
         if (line.size() > MAX_RECORD)
             throw CompileError { "a lint facts record exceeds the 16 MiB record limit", CompileErrorKind::Tool };
         if (record_count >= MAX_RECORDS)
-            throw CompileError { "lint facts exceed the one million record limit", CompileErrorKind::Tool };
+            throw CompileError { "lint facts exceed the eight million record limit", CompileErrorKind::Tool };
         if (line.size() >= MAX_FACTS || out.size() > MAX_FACTS - line.size() - 1)
-            throw CompileError { "lint facts exceed the 64 MiB stream limit", CompileErrorKind::Tool };
+            throw CompileError { "lint facts exceed the 512 MiB stream limit", CompileErrorKind::Tool };
         out += line;
         out += '\n';
         hash = LintHashBytes(hash, line);
