@@ -135,6 +135,17 @@ are started through `process.h`, a translation unit of its own over
 | `--multi-test a.goose b.goose ...` | compile each file in turn with the other flags, as a process of its own on it would (an `Ast` and a compile thread each, which is all the state a compile has), each file's output on both streams ending in a line `==== goose --multi-test: exit <code> <file>`; an `-o` names each file's C with `%` for its name. It runs no programs and writes no dump files. The test runner's batches of compiler runs (`docs/testing.md`) |
 | `--compile-shader f [--shader-source msl\|hlsl]` | hidden: what a shader compiles to, without a program around it |
 
+`goose lint file.goose` is a separate semantic-analysis verb. It uses the same
+parser, resolver and typechecker, then stops before optimization, code
+generation or JIT. The compiler serializes bounded private facts and invokes
+the Goose-native `goose-lint` companion installed beside it. Metadata capture
+is disabled on ordinary compiler paths, preserving `goose check` warning
+output. Lint package fetching is offline unless `--allow-fetch` is given.
+Build and user-facing rule behavior are documented in
+[`docs/lint/README.md`](lint/README.md); the private fact schema and JSONL
+diagnostics live in [facts-v1.md](lint/facts-v1.md) and
+[diagnostics-v1.md](lint/diagnostics-v1.md).
+
 The debug build of the *generated* C is `-DGS_DEBUG=1` on the C compiler (or
 `-DGS_DEBUG=1` to `goose`, which writes it into the file): it enables the
 overflow, `as` range and ADT tag checks of §9.3. The Goose compiler's own

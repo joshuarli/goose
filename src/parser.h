@@ -45,7 +45,9 @@ struct Parser {
     bool declseen = false;           // The directive must come before any declaration.
 
     Parser(Ast &_ast, string_view filename, const char *source, int _fileidx)
-        : ast(_ast), lex(filename, source), fileidx(_fileidx) {}
+        : ast(_ast), lex(filename, source,
+                         ast.capture_lint_metadata ? &ast.lint_comments : nullptr, _fileidx),
+          fileidx(_fileidx) {}
 
     [[noreturn]] void Error(const string &msg) { lex.Error(msg); }
 
@@ -178,6 +180,7 @@ struct Parser {
             default: break;
         }
         declseen = true;
+        auto declstart = lex.tokstart;
         if (AtInline()) goto fndecl;
         switch (lex.tok) {
             case T_STRUCT: ParseStructDecl(); return;
@@ -201,12 +204,14 @@ struct Parser {
             case T_RECURSIVE: case T_FN: case T_THREADFN: case T_EXTERN: case T_EXPORT:
             case T_SIMD: fndecl: {
                 auto fd = ParseFnDecl(false);
+                ast.RecordSourceSpan(fd, declstart, lex.prev_end);
                 ast.topdecls.push_back(fd);
                 return;
             }
             case T_REUSABLE: case T_LET: case T_VAR: case T_CONST: {
                 auto vd = ParseVarDecl(true);
                 Expect(T_SEMI, "global declaration");
+                ast.RecordSourceSpan(vd, declstart, lex.prev_end);
                 ast.topdecls.push_back(vd);
                 return;
             }
@@ -702,6 +707,13 @@ struct Parser {
     Context Sub(bool nostructlit = false) { return Context(*this, nostructlit, false); }
 
     Node *ParseExpr() {
+        auto start = lex.tokstart;
+        auto n = ParseExprCore();
+        if (n) ast.RecordSourceSpan(n, start, lex.prev_end);
+        return n;
+    }
+
+    Node *ParseExprCore() {
         auto line = CurLine();
         switch (lex.tok) {
             case T_IF: {
@@ -1271,21 +1283,41 @@ struct Parser {
             if (AtInline()) goto nestedfndecl;
             switch (lex.tok) {
                 case T_LET: case T_VAR: case T_CONST: case T_REUSABLE: {
+                    auto start = lex.tokstart;
                     auto vd = ParseVarDecl(false);
                     Expect(T_SEMI, "variable declaration");
+                    ast.RecordSourceSpan(vd, start, lex.prev_end);
+                    ast.RecordSourceSpan(vd, start, lex.prev_end, true);
                     b->stmts.push_back(vd);
                     continue;
                 }
                 case T_RECURSIVE: case T_FN: case T_THREADFN: case T_EXTERN: case T_EXPORT:
-                case T_SIMD: nestedfndecl:
-                    b->stmts.push_back(ParseFnDecl(true));
+                case T_SIMD: nestedfndecl: {
+                    auto start = lex.tokstart;
+                    auto fd = ParseFnDecl(true);
+                    ast.RecordSourceSpan(fd, start, lex.prev_end);
+                    ast.RecordSourceSpan(fd, start, lex.prev_end, true);
+                    b->stmts.push_back(fd);
                     continue;
+                }
                 case T_GUARD:
+                {
+                    auto start = lex.tokstart;
+                    auto oldtail = b->tail;
+                    auto oldsize = b->stmts.size();
                     ParseGuard(b);
+                    auto statement = b->tail != oldtail ? b->tail : b->stmts.back();
+                    if (b->stmts.size() < oldsize) statement = nullptr;
+                    if (statement) {
+                        ast.RecordSourceSpan(statement, start, lex.prev_end);
+                        ast.RecordSourceSpan(statement, start, lex.prev_end, true);
+                    }
                     return;
+                }
                 default: break;
             }
             stmt_level = true;
+            auto start = lex.tokstart;
             auto e = ParseExpr();
             stmt_level = false;
             auto line = CurLine();
@@ -1298,20 +1330,27 @@ struct Parser {
                         lex.Next();
                         auto rhs = ParseExpr();
                         Expect(T_SEMI, "assignment statement");
-                        b->stmts.push_back(New<Assign>(line, op, e, rhs));
+                        auto assign = New<Assign>(line, op, e, rhs);
+                        ast.RecordSourceSpan(assign, start, lex.prev_end);
+                        ast.RecordSourceSpan(assign, start, lex.prev_end, true);
+                        b->stmts.push_back(assign);
                         continue;
                     }
                     case T_INC: case T_DEC: {
                         auto op = lex.tok;
                         lex.Next();
                         Expect(T_SEMI, "increment statement");
-                        b->stmts.push_back(New<IncDec>(line, op, e));
+                        auto incdec = New<IncDec>(line, op, e);
+                        ast.RecordSourceSpan(incdec, start, lex.prev_end);
+                        ast.RecordSourceSpan(incdec, start, lex.prev_end, true);
+                        b->stmts.push_back(incdec);
                         continue;
                     }
                     default: break;
                 }
             }
             if (IsNext(T_SEMI)) {  // A ';' is always accepted, even when optional.
+                ast.RecordSourceSpan(e, start, lex.prev_end, true);
                 b->stmts.push_back(e);
                 continue;
             }
@@ -1321,6 +1360,7 @@ struct Parser {
             }
             // Block-ended constructs stand as statements without a semicolon.
             if (stmt_ended) {
+                ast.RecordSourceSpan(e, start, lex.prev_end, true);
                 b->stmts.push_back(e);
                 continue;
             }

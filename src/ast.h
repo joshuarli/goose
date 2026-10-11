@@ -32,6 +32,12 @@ struct Line {
     int fileidx = 0;
 };
 
+struct SourceSpan {
+    size_t start_byte = 0;
+    size_t end_byte = 0;
+    size_t source_order = 0;
+};
+
 // ---------------------------------------------------------------------------
 // Type expressions. During parsing, a type name cannot generally be looked up
 // yet (top-level declarations are order-independent), so names parse as
@@ -2110,6 +2116,11 @@ struct Ast {
     vector<pair<string, unique_ptr<string>>> sources;   // (filename, contents).
     vector<Package> packages;
     vector<int> filepkg;                                // Per source, its package.
+    bool capture_lint_metadata = false;                  // Enabled only by `goose lint`.
+    map<const Node *, SourceSpan> source_spans;          // Original parser nodes only.
+    map<const Node *, SourceSpan> statement_spans;       // Original statement roots only.
+    vector<LintComment> lint_comments;                   // Comments containing `goose-lint:`.
+    size_t next_source_order = 0;
 
     vector<Node *> allnodes;
     vector<TypeExpr *> alltypes;
@@ -2164,6 +2175,17 @@ struct Ast {
         }
         booltype = NewType(TY_BOOL, Line {});
         voidtype = NewType(TY_VOID, Line {});
+    }
+
+    void RecordSourceSpan(const Node *node, size_t start, size_t end, bool statement = false) {
+        if (!capture_lint_metadata) return;
+        auto &spans = statement ? statement_spans : source_spans;
+        auto [it, inserted] = spans.emplace(node, SourceSpan { start, end, next_source_order });
+        if (inserted) next_source_order++;
+        else {
+            it->second.start_byte = min(it->second.start_byte, start);
+            it->second.end_byte = max(it->second.end_byte, end);
+        }
     }
 
     ~Ast() {

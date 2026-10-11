@@ -1888,7 +1888,8 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
             x->iterkind = t->kind == TY_ARRAY ? IK_ARRAY : IK_SLICE;
             // Non-fixed elements bind by reference either way (§4.1).
             if (x->byref && ClassOf(elem) != SC_FIXED) {
-                Warn(x, "redundant &: elements of this type bind by reference without it "
+                Warn(x, LintWarningCode::RedundantReferenceMarker,
+                     "redundant &: elements of this type bind by reference without it "
                         "(§4.1)");
             }
             byref = x->byref || ClassOf(elem) != SC_FIXED;
@@ -2261,7 +2262,8 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
                 v = CheckV(vd->inits[i], nullptr);
                 vd->inits[i]->exprtype = v.type;
                 if (IsNonFixedRef(v))
-                    Warn(vd->inits[i], cat("redundant &: ", ExprStr(refinit->child),
+                    Warn(vd->inits[i], LintWarningCode::RedundantReferenceMarker,
+                         cat("redundant &: ", ExprStr(refinit->child),
                                            " binds by reference without it (§4.1)"));
             } else {
                 v = CheckValue(vd->inits[i], ann, false, false, !ann);

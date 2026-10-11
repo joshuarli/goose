@@ -20,6 +20,10 @@ struct ProcessResult {
 // output is also written to stderr as it arrives, for -v.
 ProcessResult RunProcess(const vector<string> &argv, const string &cwd = "", bool echo = false);
 
+// Creates an empty temporary file with owner-only permissions where the
+// platform supports them. The caller owns removal of the returned path.
+bool CreatePrivateTempFile(string &path, string &error);
+
 // The full path of the program `name` on PATH, or "" when there is none. On
 // Windows a name without an extension is tried with the ones PATHEXT lists
 // (.exe, .cmd, .bat, ...). A name holding a path separator is returned as it

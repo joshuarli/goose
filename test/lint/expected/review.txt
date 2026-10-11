@@ -1,0 +1,4 @@
+test/lint/review.goose:2: warning[post_overflow_guard]: signed i8 add is checked after evaluation; debug builds trap before this guard and release builds wrap
+test/lint/review.goose:8: warning[post_overflow_guard]: signed i8 subtract is checked after evaluation; debug builds trap before this guard and release builds wrap
+test/lint/review.goose:41: warning[stale_slice_length]: slice view keeps its earlier length after values grows, but the later index uses the array's current last element
+checked 0 compiler warnings; 3 selected findings (0 suppressed)

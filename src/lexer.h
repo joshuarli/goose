@@ -4,6 +4,15 @@
 
 namespace goose {
 
+struct LintComment {
+    int fileidx = 0;
+    int line = 0;
+    size_t start_byte = 0;
+    size_t end_byte = 0;
+    bool block = false;
+    string text;
+};
+
 // X-macro token tables: expanded for the enum and for the display-name function.
 #define TOKENS_MISC \
     F(T_EOF,      "end of file") \
@@ -74,10 +83,13 @@ inline bool IsIdentCont(char c)  { return isalnum((uint8_t)c) || c == '_'; }
 // object where it needs to look ahead and backtrack, so it holds nothing
 // that is not that token's: the file name is a view of the driver's.
 struct Lexer {
+    const char *source = nullptr;
     const char *p = nullptr;         // Scan position in the 0-terminated source.
     const char *linestart = nullptr;
     int line = 1;
     string_view filename;
+    vector<LintComment> *lint_comments = nullptr;
+    int fileidx = -1;
 
     // Current token.
     TType tok = T_EOF;
@@ -89,10 +101,24 @@ struct Lexer {
     bool smultiline = false;         // T_STRLIT: a """ string spanning lines.
     int tokline = 1;
     const char *toklinestart = nullptr;
+    size_t tokstart = 0, tokend = 0, prev_end = 0;
 
-    Lexer(string_view _filename, const char *source) : p(source), filename(_filename) {
+    Lexer(string_view _filename, const char *_source, vector<LintComment> *_lint_comments = nullptr,
+          int _fileidx = -1)
+        : source(_source), p(_source), filename(_filename), lint_comments(_lint_comments),
+          fileidx(_fileidx) {
         linestart = p;
         Next();
+    }
+
+    void RememberLintComment(bool block, const char *start, const char *end, int commentline) {
+        if (!lint_comments) return;
+        string_view text(start, (size_t)(end - start));
+        if (text.find("goose-lint:") == string_view::npos) return;
+        auto from = (size_t)(start - source), to = (size_t)(end - source);
+        for (auto &c : *lint_comments)
+            if (c.fileidx == fileidx && c.start_byte == from && c.end_byte == to) return;
+        lint_comments->push_back({ fileidx, commentline, from, to, block, string(text) });
     }
 
     [[noreturn]] void Error(const string &msg) { ErrorAt(msg, tokline, toklinestart); }
@@ -100,6 +126,7 @@ struct Lexer {
     // The token after the current one, without moving.
     TType PeekTok() const {
         auto copy = *this;
+        copy.lint_comments = nullptr;
         copy.Next();
         return copy.tok;
     }
@@ -123,6 +150,7 @@ struct Lexer {
     }
 
     void Next() {
+        if (lint_comments) prev_end = tokend;
         again:
         for (;;) {
             auto c = *p;
@@ -139,6 +167,10 @@ struct Lexer {
         auto Set = [&](TType t) {
             tok = t;
             attr = string_view(start, (size_t)(p - start));
+            if (lint_comments) {
+                tokstart = (size_t)(start - source);
+                tokend = (size_t)(p - source);
+            }
         };
         auto c = *p++;
         switch (c) {
@@ -218,10 +250,13 @@ struct Lexer {
 
             case '/':
                 if (*p == '/') {
+                    auto commentline = tokline;
                     while (*p && *p != '\n') p++;
+                    RememberLintComment(false, start, p, commentline);
                     goto again;
                 }
                 if (*p == '*') {
+                    auto commentline = tokline;
                     // Block comments nest, so commenting out code containing them works.
                     p++;
                     for (auto nesting = 1; nesting;) {
@@ -232,6 +267,7 @@ struct Lexer {
                             case '/': if (*p == '*') { p++; nesting++; } break;
                         }
                     }
+                    RememberLintComment(true, start, p, commentline);
                     goto again;
                 }
                 if (*p == '=') { p++; Set(T_DIVEQ); } else Set(T_DIV);

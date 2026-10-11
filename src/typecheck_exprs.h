@@ -814,7 +814,8 @@ inline void TypeCheck::ImplicitCopyError(Node *n) {
 // A branch `&x` of a fixed-size x whose construct copies it (§4.1).
 inline void TypeCheck::RefCopyWarning(Node *n) {
     auto what = ExprStr(Is<Unary>(n)->child);
-    Warn(n, cat("redundant &: the construct's value is a copy of ", what, " either way (§4.1); "
+    Warn(n, LintWarningCode::AvoidableReferenceCopy,
+         cat("redundant &: the construct's value is a copy of ", what, " either way (§4.1); "
                 "a reference-typed binding binds ", what, " without it"));
 }
 
@@ -854,7 +855,8 @@ inline Val TypeCheck::CheckInferredResult(Node *&n, FnSpec *tspec) {
         auto v = CheckV(n, nullptr);
         n->exprtype = v.type;
         if (IsNonFixedRef(v) && !IsOwnLocal(u->child))
-            Warn(n, cat("redundant &: ", ExprStr(u->child),
+            Warn(n, LintWarningCode::RedundantReferenceMarker,
+                 cat("redundant &: ", ExprStr(u->child),
                         " is returned by reference without it (§4.1)"));
         return v;
     }
@@ -920,7 +922,8 @@ inline Val TypeCheck::CheckValue(Node *&n, TypeExpr *expected, bool callsite, bo
         if (!inferred || !IsNonFixedRef(v)) v = DecayRef(v);
     } else {
         if (!callsite && expected->kind == TY_REF && UserRefOf(n))
-            Warn(n, cat("redundant &: ", ExprStr(Is<Unary>(n)->child),
+            Warn(n, LintWarningCode::RedundantReferenceMarker,
+                 cat("redundant &: ", ExprStr(Is<Unary>(n)->child),
                         " binds by reference here without it (§4.1)"));
         if (BindsRef(v, expected)) n = AutoRef(n, v, !expected->cq);
         if (branchcopy) CheckBranchCopy(v, n, expected, copied);
@@ -2389,6 +2392,7 @@ inline void TypeCheck::CastVerdict(const CastAlt &a, const string &reason,
     if (quiet) return;
     Warning w;
     w.cast = a.cast->Origin();
+    w.code = LintWarningCode::RedundantCast;
     w.redundant = !reason.empty();
     if (w.redundant) {
         w.text = cat("redundant `as", a.cast->unchecked ? "! " : " ", TypeStr(a.cast->totype),
@@ -2436,10 +2440,15 @@ inline void TypeCheck::ReportRedundantCasts() {
         return tuple(l.fileidx, l.line, i);
     };
     sort(out.begin(), out.end(), [&](size_t i, size_t j) { return key(i) < key(j); });
-    for (auto i : out)
-        fputs(cat(Where(castverdicts[i].cast->line), ": warning: ", castverdicts[i].text, "\n")
-                  .c_str(),
-              stderr);
+    for (auto i : out) {
+        if (!lintwarnings)
+            fputs(cat(Where(castverdicts[i].cast->line), ": warning: ",
+                      castverdicts[i].text, "\n").c_str(), stderr);
+        else
+            lintwarnings->push_back({ LintWarningCode::RedundantCast,
+                                      castverdicts[i].cast->Origin(),
+                                      castverdicts[i].text });
+    }
 }
 
 // A name in a compile-time size, capacity or fill count, or in an integer

@@ -546,6 +546,8 @@ branches contain the formatted source changes without the fork's tooling.
 * [Building programs and using packages](docs/packages.md): `goose build`,
   libraries from git repositories or directories, a program's own C, and
   how to make a package of your own.
+* [Linting](docs/lint/README.md): semantic `goose lint` checks, supported rule
+  shapes, suppressions, baselines, coverage, and output formats.
 * [Benchmarks](bench/summary.md): the numbers, with the
   [full results](bench/results.md) and the [design](bench/design.md) behind them.
 * [Implementation notes](docs/implementation.md): how the compiler works, pass

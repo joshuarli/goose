@@ -65,6 +65,33 @@ namespace goose {
 
 enum IterKind { IK_RANGE, IK_COUNT, IK_ARRAY, IK_SLICE };
 
+// Stable identities for the existing compiler warnings that the linter
+// reclassifies. These are assigned at the warning sites, never inferred from
+// their user-facing text.
+enum class LintWarningCode : uint8_t {
+    None,
+    RedundantReferenceMarker,
+    AvoidableReferenceCopy,
+    RedundantCast,
+};
+
+struct LintWarning {
+    LintWarningCode code;
+    const Node *at;
+    string message;
+    vector<const FnSpec *> specializations;
+};
+
+inline const char *LintWarningCodeName(LintWarningCode code) {
+    switch (code) {
+        case LintWarningCode::RedundantReferenceMarker: return "redundant_reference_marker";
+        case LintWarningCode::AvoidableReferenceCopy: return "avoidable_reference_copy";
+        case LintWarningCode::RedundantCast: return "redundant_cast";
+        case LintWarningCode::None: return "";
+    }
+    return "";
+}
+
 // Type validation positions: what may be declared where.
 enum ValidPos { VT_LOCAL, VT_GLOBAL, VT_PARAM, VT_RET, VT_FIELD, VT_ELEM, VT_POINTEE };
 
@@ -618,13 +645,22 @@ struct TypeCheck {
         const AsCast *cast = nullptr;
         bool redundant = false;
         const AsCast *dependson = nullptr;
+        LintWarningCode code = LintWarningCode::None;
+        string message;
+        const FnSpec *spec = nullptr;
     };
+    vector<LintWarning> *lintwarnings = nullptr;
     // A check that phase 2 of a call repeats leaves its warnings to that
     // repetition (BindBranchesByRef).
     bool quiet = false;
-    void Warn(const Node *n, const string &msg) {
+    void Warn(const Node *n, LintWarningCode code, const string &msg) {
         if (quiet) return;
-        Warning w { cat(Where(n->line), ": warning: ", msg, "\n"), n->Origin() };
+        Warning w;
+        w.text = cat(Where(n->line), ": warning: ", msg, "\n");
+        w.at = n->Origin();
+        w.code = code;
+        w.spec = lintwarnings && !frames.empty() ? frames.back().spec : nullptr;
+        if (lintwarnings) w.message = msg;
         if (WarningsHeld()) {
             cur.pendingwarnings.push_back(std::move(w));
             return;
@@ -654,8 +690,30 @@ struct TypeCheck {
     // warning prints once for the node as the source has it, where a check
     // first gives it.
     set<pair<const Node *, string>> warned;
+    unordered_map<const Node *, vector<size_t>> lintwarning_indices;
     void PrintWarning(const Warning &w) {
-        if (warned.insert({ w.at, w.text }).second) fputs(w.text.c_str(), stderr);
+        auto first = warned.insert({ w.at, w.text }).second;
+        if (lintwarnings && w.code != LintWarningCode::None) {
+            auto &indices = lintwarning_indices[w.at];
+            auto found = false;
+            for (auto index : indices) {
+                auto &prior = (*lintwarnings)[index];
+                if (prior.code != w.code || prior.message != w.message) continue;
+                found = true;
+                if (w.spec && find(prior.specializations.begin(), prior.specializations.end(), w.spec) ==
+                                  prior.specializations.end())
+                    prior.specializations.push_back(w.spec);
+                break;
+            }
+            if (!found) {
+                LintWarning warning { w.code, w.at, w.message };
+                if (w.spec) warning.specializations.push_back(w.spec);
+                indices.push_back(lintwarnings->size());
+                lintwarnings->push_back(std::move(warning));
+            }
+        }
+        if (!first) return;
+        if (!(lintwarnings && w.code != LintWarningCode::None)) fputs(w.text.c_str(), stderr);
     }
 
     string TypeStr(const TypeExpr *t) {
@@ -2485,7 +2543,8 @@ struct TypeCheck {
     // ------------------------------------------------------------------
     // The driver: globals in order, then main, then thread entry points.
 
-    TypeCheck(Ast &_ast, bool _library = false) : ast(_ast), library(_library) {
+    TypeCheck(Ast &_ast, bool _library = false, vector<LintWarning> *_lintwarnings = nullptr)
+        : ast(_ast), library(_library), lintwarnings(_lintwarnings) {
         temproot = ast.NewVarDef();
         temproot->name = "<temporary>";
         temproot->istemp = true;
@@ -2782,6 +2841,9 @@ struct TypeCheck {
 };
 
 // Runs the whole pass; errors throw CompileError.
-inline void TypeCheckProgram(Ast &ast, bool library = false) { TypeCheck tc(ast, library); }
+inline void TypeCheckProgram(Ast &ast, bool library = false,
+                             vector<LintWarning> *lintwarnings = nullptr) {
+    TypeCheck tc(ast, library, lintwarnings);
+}
 
 }  // namespace goose
