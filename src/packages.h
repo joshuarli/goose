@@ -84,6 +84,9 @@ inline bool SameSource(const PackageSource &a, const PackageSource &b) {
 // `goose fetch --update`: refs that are not commits are fetched again.
 inline bool package_update = false;
 
+// Offline resolution may use an existing checkout, but cannot fetch or update one.
+enum class PackageFetchPolicy { AllowFetch, Offline, LintAllowFetch };
+
 inline bool IsCommitHash(const string &ref) {
     if (ref.size() < 7 || ref.size() > 40) return false;
     for (auto c : ref) if (!isxdigit((unsigned char)c)) return false;
@@ -211,11 +214,22 @@ inline void RunGit(const string &git, const vector<string> &args) {
 // fetch of the one commit. An interrupted fetch leaves a .tmp directory,
 // never a half checkout under the name. A lock beside it keeps concurrent
 // fetches from removing or writing each other's temporary checkout.
-inline string FetchPackage(const PackageSource &s, const string &name) {
+inline string FetchPackage(const PackageSource &s, const string &name,
+                           PackageFetchPolicy policy = PackageFetchPolicy::AllowFetch) {
     auto dir = GitCacheDir(s);
     std::error_code ec;
     auto have = filesystem::is_directory(filesystem::path(dir), ec);
     auto update = have && package_update && !IsCommitHash(s.ref);
+    if (policy == PackageFetchPolicy::Offline) {
+        if (!have)
+            throw CompileError { cat("cannot resolve package ", name,
+                                     " offline: no cached checkout; rerun with --allow-fetch to "
+                                     "fetch it") };
+        if (update)
+            throw CompileError { cat("cannot resolve package ", name,
+                                     " offline: --update would fetch it; rerun with "
+                                     "--allow-fetch to permit fetching") };
+    }
     if (!have || update) {
         auto parent = filesystem::path(dir).parent_path();
         filesystem::create_directories(parent, ec);
@@ -233,7 +247,7 @@ inline string FetchPackage(const PackageSource &s, const string &name) {
                                      "yourself and declare it as\n    import ", name,
                                      " from \"<the directory>\";") };
         ProgressStep step(cat(update ? "updating" : "fetching", " the package ", name, " from ", s.text),
-                          true);
+                          policy != PackageFetchPolicy::LintAllowFetch);
         // Quiet, but for the progress a live line can show.
         auto progress = ProgressLive() ? "--progress" : "--no-progress";
         try {
@@ -276,20 +290,33 @@ inline string FetchPackage(const PackageSource &s, const string &name) {
 // The root directory of the package `name` from `source`: the directory
 // itself for a path, the checkout in the cache for a git source; either
 // must hold `<name>.goose`.
-inline string PackageRoot(const PackageSource &source, const string &name) {
-    string dir;
-    if (source.ispath) {
-        std::error_code ec;
-        if (!filesystem::is_directory(filesystem::path(source.dir), ec))
-            throw CompileError { cat("the package ", name, "'s source ", source.text,
-                                     " is not a directory (", source.dir, ")") };
-        dir = source.dir;
-    } else {
-        dir = FetchPackage(source, name);
+inline string PackageRoot(const PackageSource &source, const string &name,
+                          PackageFetchPolicy policy = PackageFetchPolicy::AllowFetch) {
+    try {
+        string dir;
+        if (source.ispath) {
+            std::error_code ec;
+            if (!filesystem::is_directory(filesystem::path(source.dir), ec))
+                throw CompileError { cat("the package ", name, "'s source ", source.text,
+                                         " is not a directory (", source.dir, ")") };
+            dir = source.dir;
+        } else {
+            dir = FetchPackage(source, name, policy);
+        }
+        if (!PathExists(cat(dir, name, ".goose")))
+            throw CompileError { cat("the package ", name, " at ", dir, " has no ", name, ".goose") };
+        return dir;
+    } catch (CompileError &e) {
+        if (policy == PackageFetchPolicy::Offline)
+            throw CompileError { cat("cannot resolve package ", name,
+                                     " offline; rerun with --allow-fetch to permit fetching"),
+                                 CompileErrorKind::MissingImport };
+        if (policy == PackageFetchPolicy::LintAllowFetch)
+            throw CompileError { cat("cannot resolve package ", name,
+                                     " while fetching; verify the declared source, cache, and network"),
+                                 CompileErrorKind::MissingImport };
+        throw;
     }
-    if (!PathExists(cat(dir, name, ".goose")))
-        throw CompileError { cat("the package ", name, " at ", dir, " has no ", name, ".goose") };
-    return dir;
 }
 
 // The source as the root file in `rootdir` would write it, for the error

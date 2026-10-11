@@ -241,7 +241,8 @@ inline void TypeCheck::RefArg(Node *&a, Val &v) {
     // slice parameter still takes whole.
     if (IsNonFixedLValue(v) && !v.storagebranches && Referenceable(a, v)) a = AutoRef(a, v);
     else if (UserRefOf(a) && IsNonFixedRef(v))
-        Warn(a, cat("redundant &: ", ExprStr(Is<Unary>(a)->child),
+        Warn(a, LintWarningCode::RedundantReferenceMarker,
+             cat("redundant &: ", ExprStr(Is<Unary>(a)->child),
                     " is passed by reference without it (§4.1)"));
 }
 
@@ -433,7 +434,8 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
             if (i < best.nwritten && UserRefOf(argnodes[i]) && cands.size() == 1 && p.type &&
                 !HasGenerics(p.type) && p.type->kind == TY_REF &&
                 ClassOf(LoadType(p.type->ref->sub)) == SC_FIXED)
-                Warn(argnodes[i], cat("redundant &: ", ExprStr(Is<Unary>(argnodes[i])->child),
+                Warn(argnodes[i], LintWarningCode::RedundantReferenceMarker,
+                     cat("redundant &: ", ExprStr(Is<Unary>(argnodes[i])->child),
                                       " is passed by reference without it (§4.1)"));
             if (i < best.nwritten) CheckArg(argnodes[i], best.paramtypes[i]);
             else InParamDefault(c, best, denv, i,
@@ -3039,7 +3041,8 @@ inline void TypeCheck::NamedResultCopyWarning(FnSpec *spec) {
         NamedResultStop ns;
         if (goose::NamedResultOf(spec->body, spec->sf, spec->rets.size(), j, &ns) || !ns.at)
             continue;
-        Warn(ns.at, cat("`", ns.local->name, "` is copied on return rather than built where the ",
+        Warn(ns.at, LintWarningCode::AvoidableReferenceCopy,
+             cat("`", ns.local->name, "` is copied on return rather than built where the ",
                         "result goes: ", ns.why, " (§7.3)"));
     }
 }

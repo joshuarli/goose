@@ -47,6 +47,7 @@
 #include "packages.h"
 #include "json.h"
 #include "native.h"
+#include "lint_facts.h"
 
 namespace goose {
 
@@ -56,6 +57,7 @@ string DirOf(const string &path) {
 }
 
 string ExePath(const char *argv0);
+int LintMain(int argc, char **argv, const string &exe);
 
 static bool FileExists(const string &path) {
     auto f = fopen(path.c_str(), "rb");
@@ -137,8 +139,9 @@ struct DeclaredPackage {
     int line = 0;            // Where the root declared it.
 };
 
-[[noreturn]] static void ImportError(const string &file, int line, const string &msg) {
-    throw CompileError { cat(file, ":", line, ": error: ", msg) };
+[[noreturn]] static void ImportError(const string &file, int line, const string &msg,
+                                     CompileErrorKind kind = CompileErrorKind::Source) {
+    throw CompileError { cat(file, ":", line, ": error: ", msg), kind };
 }
 
 // Parses a root file and, transitively, everything it imports (each file once).
@@ -151,7 +154,8 @@ struct DeclaredPackage {
 // root's declaration must satisfy (docs/design/packages.md §4.3). A
 // `rootsource` is the root file's text, which is then not read from disk.
 void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlibdirs,
-                  const string *rootsource = nullptr) {
+                  const string *rootsource = nullptr,
+                  PackageFetchPolicy fetch_policy = PackageFetchPolicy::AllowFetch) {
     // The program is package 0; a standard library directory becomes a
     // package the first time a module in it is reached.
     auto rootdir = DirOf(rootpath);
@@ -191,11 +195,20 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
             }
             if (src.dir.empty())
                 throw CompileError { cat("cannot find the blessed package ", be.package,
-                                         " at ", be.source, " of the source tree") };
-            root = PackageRoot(src, be.package);
+                                         " at ", be.source, " of the source tree"),
+                                     CompileErrorKind::MissingImport };
+            try {
+                root = PackageRoot(src, be.package, fetch_policy);
+            } catch (CompileError &e) {
+                throw CompileError { e.msg, CompileErrorKind::MissingImport };
+            }
         } else {
             src = ParsePackageSource(cat(be.source, "@", be.ref), "");
-            root = PackageRoot(src, be.package);
+            try {
+                root = PackageRoot(src, be.package, fetch_policy);
+            } catch (CompileError &e) {
+                throw CompileError { e.msg, CompileErrorKind::MissingImport };
+            }
         }
         ast.packages.push_back(Package { be.package, root, false });
         auto &p = ast.packages.back();
@@ -215,7 +228,9 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
         auto contents = make_unique<string>();
         if (rootsource && path == rootpath) *contents = *rootsource;
         else if (!LoadSource(path, *contents))
-            throw CompileError { cat("cannot open file: ", path) };
+            throw CompileError { cat("cannot open file: ", path),
+                                 path == rootpath ? CompileErrorKind::Source
+                                                  : CompileErrorKind::MissingImport };
         auto fileidx = (int)ast.sources.size();
         ast.sources.emplace_back(path, std::move(contents));
         ast.filepkg.push_back(pkg);
@@ -242,9 +257,9 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                                                             " is declared twice"));
                     string root;
                     try {
-                        root = PackageRoot(src, imp.path);
+                    root = PackageRoot(src, imp.path, fetch_policy);
                     } catch (CompileError &e) {
-                        ImportError(filename, imp.line, e.msg);
+                    ImportError(filename, imp.line, e.msg, CompileErrorKind::MissingImport);
                     }
                     ast.packages.push_back(Package { imp.path, root, false });
                     if (!src.ispath) ast.packages.back().cachekey = GitCacheKey(src);
@@ -267,7 +282,8 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                                 cat(ast.packages[pkg].name, " needs the package ", imp.path,
                                     ": add\n    import ", imp.path, " from \"",
                                     SourceForRoot(src, rootdir), "\";\nto ", rootpath,
-                                    " (packages are declared by the root file only)"));
+                                    " (packages are declared by the root file only)"),
+                                CompileErrorKind::MissingImport);
                 } else if (fileidx != 0 && !SameSource(it->second.source, src)) {
                     ImportError(filename, imp.line,
                                 cat(ast.packages[pkg].name, " needs the package ", imp.path,
@@ -626,6 +642,7 @@ CodeGen::StackConfig StackConfigOf(const vector<string> &cdefines) {
 
 int Main(int argc, char **argv) {
     auto exe = ExePath(argv[0]);
+    if (argc > 1 && string_view(argv[1]) == "lint") return LintMain(argc - 2, argv + 2, exe);
     // The verb forms, `goose run|build|check|fetch|toolchain|version ...`. A
     // first argument that is none of them is read as an option or a file, as
     // it always was, so `goose foo.goose` is `goose run foo.goose`.
@@ -902,7 +919,7 @@ int Main(int argc, char **argv) {
             fprintf(msgs, "roundtrip ok: %d bytes of dump\n", (int)dumped.size());
         }
         if (parseonly) return 0;
-        TypeCheckProgram(ast, library, nocgen);
+        TypeCheckProgram(ast, library, nullptr, nocgen);
         Optimizer opt(ast, optlevel);
         if (specs) {
             string s;
@@ -1242,6 +1259,284 @@ int RunOnCompilerStack(const function<int()> &fn) {
     #endif
     if (t.failure) rethrow_exception(t.failure);
     return t.code;
+}
+
+struct LintCli {
+    string input;
+    string format = "text";
+    string stdlibdir;
+    vector<string> companion_args;
+    bool allow_fetch = false;
+    bool require_complete = false;
+    bool write_baseline = false;
+    int optlevel = 1;
+};
+
+struct RemoveOnExit {
+    string path;
+    ~RemoveOnExit() { if (!path.empty()) std::remove(path.c_str()); }
+};
+
+static bool WritePrivateFile(const string &path, string_view data) {
+    auto f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    auto wrote = fwrite(data.data(), 1, data.size(), f) == data.size();
+    if (fclose(f) != 0) wrote = false;
+    return wrote;
+}
+
+static bool ReadPrivateFile(const string &path, string &out, size_t limit) {
+    auto f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    char buf[65536];
+    bool ok = true;
+    for (;;) {
+        auto n = fread(buf, 1, sizeof buf, f);
+        if (!n) break;
+        if (n > limit || out.size() > limit - n) { ok = false; break; }
+        out.append(buf, n);
+    }
+    if (ferror(f)) ok = false;
+    if (fclose(f) != 0) ok = false;
+    return ok;
+}
+
+static string LintErrorJson(const string &revision, const string &entry, int optlevel,
+                            const string &code, const string &message, int status,
+                            string_view parse_state, string_view check_state) {
+    auto quoted_revision = LintJsonString(revision);
+    auto quoted_entries = entry.empty() ? string("[]")
+                                        : cat("[", LintJsonString(LintDisplayPath(entry)), "]");
+    return cat("{\"kind\":\"header\",\"schema_version\":1,\"tool\":\"goose-lint\","
+               "\"compiler_revision\":", quoted_revision, ",\"entries\":", quoted_entries,
+               ",\"profile\":\"O", optlevel, "\"}\n",
+               "{\"kind\":\"coverage\",\"schema_version\":1,\"path\":null,"
+               "\"parse\":\"", parse_state, "\",\"check\":\"", check_state, "\","
+               "\"checked_specializations\":null,\"unchecked_generic_bodies\":null,"
+               "\"unsupported\":[]}\n",
+               "{\"kind\":\"error\",\"schema_version\":1,\"code\":",
+               LintJsonString(code), ",\"message\":", LintJsonString(message),
+               ",\"exit_status\":", status, "}\n",
+               "{\"kind\":\"summary\",\"schema_version\":1,\"findings\":0,"
+               "\"suppressed\":0,\"errors\":1,\"exit_status\":", status, "}\n");
+}
+
+static string LintSafeMessage(string message, const string &entry, const Ast *ast) {
+    vector<pair<string, string>> paths;
+    if (ast) {
+        for (size_t i = 0; i < ast->sources.size(); i++) {
+            auto safe = LintProjectPath(*ast, (int)i, entry);
+            auto &raw = ast->sources[i].first;
+            if (raw != safe) paths.emplace_back(raw, safe);
+        }
+    }
+    if (!entry.empty()) paths.emplace_back(entry, LintDisplayPath(entry));
+    stable_sort(paths.begin(), paths.end(), [](const auto &a, const auto &b) {
+        return a.first.size() > b.first.size();
+    });
+    for (auto &[raw, safe] : paths) {
+        if (raw.empty() || raw == safe) continue;
+        for (size_t at = 0; (at = message.find(raw, at)) != string::npos; at += safe.size())
+            message.replace(at, raw.size(), safe);
+    }
+    return message;
+}
+
+static int ReportLintError(const string &format, const string &revision, const string &entry,
+                           int optlevel, const string &code, const string &message, int status,
+                           const Ast *ast = nullptr, string_view parse_state = "not_run",
+                           string_view check_state = "not_run") {
+    auto safe_message = LintSafeMessage(message, entry, ast);
+    if (format == "jsonl")
+        fputs(LintErrorJson(revision, entry, optlevel, code, safe_message, status,
+                            parse_state, check_state).c_str(), stdout);
+    else fprintf(stderr, "goose lint: %s\n", safe_message.c_str());
+    return status;
+}
+
+int LintMain(int argc, char **argv, const string &exe) {
+    LintCli cli;
+    auto option_error = string();
+    auto take_value = [&](int &i, const string &name) -> string {
+        if (i + 1 >= argc) { option_error = cat(name, " requires a value"); return {}; }
+        auto value = string(argv[++i]);
+        if (value.empty() || value[0] == '-') option_error = cat(name, " requires a value");
+        return value;
+    };
+    for (int i = 0; i < argc; i++) {
+        string arg = argv[i];
+        if (arg == "--help" || arg == "-h") {
+            fputs("usage: goose lint file.goose [options]\n"
+                  "  --format text|jsonl       output format (default: text)\n"
+                  "  --group NAME              select one rule group\n"
+                  "  --deny RULE               fail when a selected rule is found (repeatable)\n"
+                  "  --allow RULE              ignore a selected rule (repeatable)\n"
+                  "  --config PATH             JSON policy file\n"
+                  "  --baseline PATH           exact-finding baseline\n"
+                  "  --write-baseline          explicitly write the baseline\n"
+                  "  --require-complete        fail when semantic coverage is partial\n"
+                  "  --allow-fetch             permit fetching declared packages\n"
+                  "  -O0|-O1|-O2               select the lint profile (default: -O1)\n"
+                  "\n"
+                  "Rule groups: existing, correctness, suspicious, review, performance, project.\n"
+                  "Default groups: existing, correctness, suspicious. Available rules:\n"
+                  "  redundant_cast, redundant_reference_marker, avoidable_reference_copy\n"
+                  "  discarded_failure (stdlib::parse_int), unchecked_poll_result (qpoll)\n"
+                  "  unused_pure_value (proven pure statements), stale_suppression\n"
+                  "Opt-in review: post_overflow_guard, stale_slice_length\n"
+                  "Opt-in performance: specialization_fanout\n"
+                  "Opt-in project: view_before_append_argument, foreign_container_index\n"
+                  "Project rules require exact API roles in a config contracts file.\n"
+                  "See docs/lint/ for supported proof shapes and coverage limits.\n"
+                  "Exit status: 0 clean, 1 denied finding, 2 invalid source/import,\n"
+                  "3 invalid config/baseline, 4 tool failure or incomplete analysis.\n"
+                  "--write-baseline requires --baseline PATH or config baseline.\n",
+                  stdout);
+            return 0;
+        } else if (arg == "--format") {
+            cli.format = take_value(i, arg);
+            if (!option_error.empty()) break;
+            if (cli.format != "text" && cli.format != "jsonl") {
+                option_error = "--format must be text or jsonl";
+                break;
+            }
+            cli.companion_args.push_back("--format");
+            cli.companion_args.push_back(cli.format);
+        } else if (arg == "--group" || arg == "--deny" || arg == "--allow" ||
+                   arg == "--config" || arg == "--baseline") {
+            auto value = take_value(i, arg);
+            if (!option_error.empty()) break;
+            cli.companion_args.push_back(arg);
+            cli.companion_args.push_back(value);
+        } else if (arg == "--write-baseline" || arg == "--require-complete") {
+            cli.companion_args.push_back(arg);
+            cli.write_baseline |= arg == "--write-baseline";
+            cli.require_complete |= arg == "--require-complete";
+        } else if (arg == "--allow-fetch") {
+            cli.allow_fetch = true;
+        } else if (arg == "--stdlib") {
+            cli.stdlibdir = take_value(i, arg);
+            if (!option_error.empty()) break;
+        } else if (arg == "-O0" || arg == "-O1" || arg == "-O2") {
+            cli.optlevel = arg[2] - '0';
+        } else if (!arg.empty() && arg[0] == '-') {
+            option_error = cat("unknown lint option: ", arg);
+            break;
+        } else if (cli.input.empty()) cli.input = arg;
+        else {
+            option_error = cat("goose lint accepts one input file; unexpected argument: ", arg);
+            break;
+        }
+    }
+    if (!option_error.empty())
+        return ReportLintError(cli.format, RuntimeVersion(), cli.input, cli.optlevel,
+                               "invalid_config", option_error, 3);
+    if (cli.input.empty())
+        return ReportLintError(cli.format, RuntimeVersion(), "", cli.optlevel,
+                               "invalid_config", "goose lint requires one input file", 3);
+
+    string facts_path, output_path, temp_error;
+    if (!CreatePrivateTempFile(facts_path, temp_error))
+        return ReportLintError(cli.format, RuntimeVersion(), cli.input, cli.optlevel,
+                               "tool_failure", temp_error, 4);
+    RemoveOnExit facts_cleanup { facts_path };
+    if (!CreatePrivateTempFile(output_path, temp_error))
+        return ReportLintError(cli.format, RuntimeVersion(), cli.input, cli.optlevel,
+                               "tool_failure", temp_error, 4);
+    RemoveOnExit output_cleanup { output_path };
+
+    Ast ast;
+    bool facts_started = false;
+    bool parse_started = false, parse_complete = false;
+    bool check_started = false, check_complete = false;
+    try {
+        RunOnCompilerStack([&]() -> int {
+            ast.capture_lint_metadata = true;
+            auto stdlibdirs = StdlibDirs(cli.stdlibdir, exe);
+            parse_started = true;
+            ParseProgram(ast, cli.input, stdlibdirs, nullptr,
+                         cli.allow_fetch ? PackageFetchPolicy::LintAllowFetch : PackageFetchPolicy::Offline);
+            parse_complete = true;
+            check_started = true;
+            ResolveTypeNames(ast);
+            vector<LintWarning> warnings;
+            TypeCheckProgram(ast, false, &warnings);
+            check_complete = true;
+            facts_started = true;
+            auto facts = BuildLintFacts(ast, warnings, cli.input, cli.optlevel, cli.allow_fetch);
+            if (facts.size() > 64u * 1024u * 1024u)
+                throw CompileError { "lint facts exceed the 64 MiB transport limit", CompileErrorKind::Tool };
+            if (!WritePrivateFile(facts_path, facts))
+                throw CompileError { "cannot write the private lint facts file", CompileErrorKind::Tool };
+            return 0;
+        });
+    } catch (CompileError &e) {
+        auto tool_failure = facts_started || e.kind == CompileErrorKind::Tool;
+        auto missing_import = e.kind == CompileErrorKind::MissingImport;
+        auto parse_state = parse_complete ? string_view("complete")
+                           : !parse_started ? string_view("not_run")
+                           : ast.sources.empty() ? string_view("failed") : string_view("partial");
+        auto check_state = check_complete ? string_view("complete")
+                          : check_started ? string_view("failed") : string_view("not_run");
+        return ReportLintError(cli.format, RuntimeVersion(),
+                               cli.input, cli.optlevel,
+                               tool_failure ? "tool_failure" : missing_import ? "missing_import"
+                                                                                 : "invalid_source",
+                               e.msg, tool_failure ? 4 : 2, &ast, parse_state, check_state);
+    } catch (exception &e) {
+        auto parse_state = parse_complete ? string_view("complete")
+                           : !parse_started ? string_view("not_run")
+                           : ast.sources.empty() ? string_view("failed") : string_view("partial");
+        auto check_state = check_complete ? string_view("complete")
+                          : check_started ? string_view("failed") : string_view("not_run");
+        return ReportLintError(cli.format, RuntimeVersion(), cli.input, cli.optlevel,
+                               "tool_failure", e.what(), 4, &ast, parse_state, check_state);
+    } catch (...) {
+        auto parse_state = parse_complete ? string_view("complete")
+                           : !parse_started ? string_view("not_run")
+                           : ast.sources.empty() ? string_view("failed") : string_view("partial");
+        auto check_state = check_complete ? string_view("complete")
+                          : check_started ? string_view("failed") : string_view("not_run");
+        return ReportLintError(cli.format, RuntimeVersion(), cli.input, cli.optlevel,
+                               "tool_failure", "unknown compiler failure during lint", 4, &ast,
+                               parse_state, check_state);
+    }
+
+    auto companion = cat(DirOf(exe),
+    #ifdef _WIN32
+                         "goose-lint.exe"
+    #else
+                         "goose-lint"
+    #endif
+    );
+    if (FindOnPath(companion).empty())
+        return ReportLintError(cli.format, RuntimeVersion(), cli.input, cli.optlevel,
+                               "tool_failure", "cannot find the bundled Goose lint companion beside this executable; rebuild or reinstall Goose", 4);
+
+    vector<string> args = { companion, "--facts", facts_path, "--output", output_path };
+    args.push_back("--entry");
+    args.push_back(LintProjectPath(ast, 0, cli.input));
+    args.push_back("--revision");
+    args.push_back(RuntimeVersion());
+    args.push_back("--profile");
+    args.push_back(cat("O", cli.optlevel));
+    args.insert(args.end(), cli.companion_args.begin(), cli.companion_args.end());
+    auto child = RunProcess(args);
+    string output;
+    if (!child.started || !ReadPrivateFile(output_path, output, 256u * 1024u * 1024u) ||
+        output.empty()) {
+        auto why = !child.started ? child.output : child.output.empty()
+                       ? string("the companion produced no valid output") : child.output;
+        if (cli.format == "jsonl") why = "the Goose lint companion failed before producing results";
+        return ReportLintError(cli.format, RuntimeVersion(), cli.input, cli.optlevel,
+                               "tool_failure", cat("goose-lint failed: ", why), 4);
+    }
+    if (child.code != 0 && child.code != 1 && child.code != 3 && child.code != 4)
+        return ReportLintError(cli.format, RuntimeVersion(), cli.input, cli.optlevel,
+                               "tool_failure", cat("goose-lint exited with status ", child.code,
+                                                   child.output.empty() ? string() : cat(": ", child.output)), 4);
+    fwrite(output.data(), 1, output.size(), stdout);
+    return child.code;
 }
 
 }  // namespace goose

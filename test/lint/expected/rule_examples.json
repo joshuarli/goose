@@ -1,0 +1,460 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "redundant_cast": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "redundant_cast",
+        "group": "existing",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "redundant `as i32`: a is already i32",
+        "primary": {
+          "path": "test/typing/redundant_casts.goose",
+          "start_byte": 1774,
+          "end_byte": 1782,
+          "start_line": 40,
+          "start_column": 18,
+          "end_line": 40,
+          "end_column": 26,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": null,
+        "specializations": [],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/typing/redundant_casts.goose:40: warning[redundant_cast]: redundant `as i32`: a is already i32"
+    },
+    "redundant_reference_marker": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "redundant_reference_marker",
+        "group": "existing",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "redundant &: ga is passed by reference without it (\u00a74.1)",
+        "primary": {
+          "path": "test/typing/warnings_once.goose",
+          "start_byte": 1588,
+          "end_byte": 1591,
+          "start_line": 30,
+          "start_column": 20,
+          "end_line": 30,
+          "end_column": 23,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": null,
+        "specializations": [
+          "warnings_once::main (args() roots() views() bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/typing/warnings_once.goose:30: warning[redundant_reference_marker]: redundant &: ga is passed by reference without it (\u00a74.1)"
+    },
+    "avoidable_reference_copy": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "avoidable_reference_copy",
+        "group": "existing",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "redundant &: the construct's value is a copy of a either way (\u00a74.1); a reference-typed binding binds a without it",
+        "primary": {
+          "path": "test/typing/warnings_once.goose",
+          "start_byte": 2200,
+          "end_byte": 2202,
+          "start_line": 53,
+          "start_column": 19,
+          "end_line": 53,
+          "end_column": 21,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": null,
+        "specializations": [
+          "warnings_once::main (args() roots() views() bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/typing/warnings_once.goose:53: warning[avoidable_reference_copy]: redundant &: the construct's value is a copy of a either way (\u00a74.1); a reference-typed binding binds a without it"
+    },
+    "discarded_failure": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "discarded_failure",
+        "group": "correctness",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "stdlib::parse_int status binding parsed_ok is never referenced",
+        "primary": {
+          "path": "test/lint/rules.goose",
+          "start_byte": 222,
+          "end_byte": 237,
+          "start_line": 20,
+          "start_column": 29,
+          "end_line": 20,
+          "end_column": 44,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "callee": "stdlib::parse_int",
+          "status_result": 1,
+          "use": "bound_but_unreferenced",
+          "binding": "parsed_ok"
+        },
+        "specializations": [
+          "rules::main (args() roots() views() bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/rules.goose:20: warning[discarded_failure]: stdlib::parse_int status binding parsed_ok is never referenced"
+    },
+    "unchecked_poll_result": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "unchecked_poll_result",
+        "group": "correctness",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "qpoll status result is discarded",
+        "primary": {
+          "path": "test/lint/rules.goose",
+          "start_byte": 506,
+          "end_byte": 518,
+          "start_line": 30,
+          "start_column": 5,
+          "end_line": 30,
+          "end_column": 17,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "callee": "goose::builtin::qpoll",
+          "status_result": 1,
+          "use": "discarded"
+        },
+        "specializations": [
+          "rules::main (args() roots() views() bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/rules.goose:30: warning[unchecked_poll_result]: qpoll status result is discarded"
+    },
+    "unused_pure_value": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "unused_pure_value",
+        "group": "suspicious",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "discarded integer_literal has no observable effect",
+        "primary": {
+          "path": "test/lint/rules.goose",
+          "start_byte": 735,
+          "end_byte": 737,
+          "start_line": 39,
+          "start_column": null,
+          "end_line": 39,
+          "end_column": null,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "expression_kind": "integer_literal",
+          "proof": "typed-subtree-effect-free-and-nontrapping"
+        },
+        "specializations": [
+          "rules::main (args() roots() views() bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/rules.goose:39: warning[unused_pure_value]: discarded integer_literal has no observable effect"
+    },
+    "stale_suppression": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "stale_suppression",
+        "group": "correctness",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "invalid goose-lint suppression: duplicate suppression is unused",
+        "primary": {
+          "path": "test/lint/suppressions.goose",
+          "start_byte": 289,
+          "end_byte": 351,
+          "start_line": 7,
+          "start_column": null,
+          "end_line": 7,
+          "end_column": null,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "directive": "// goose-lint: allow[discarded_failure] -- duplicate directive",
+          "reason": "duplicate suppression is unused",
+          "rule_id": "discarded_failure"
+        },
+        "specializations": [],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/suppressions.goose:7: warning[stale_suppression]: invalid goose-lint suppression: duplicate suppression is unused"
+    },
+    "post_overflow_guard": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "post_overflow_guard",
+        "group": "review",
+        "severity": "warning",
+        "confidence": "medium",
+        "message": "signed i8 add is checked after evaluation; debug builds trap before this guard and release builds wrap",
+        "primary": {
+          "path": "test/lint/review.goose",
+          "start_byte": 44,
+          "end_byte": 49,
+          "start_line": 2,
+          "start_column": 15,
+          "end_line": 2,
+          "end_column": 20,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "operation": "add",
+          "signed_width": 8,
+          "result": "sum",
+          "compared_operand": "x",
+          "condition": "lt",
+          "nonnegative_operand_proof": "typed nonnegative value",
+          "debug_behavior": "overflow traps before the condition",
+          "release_behavior": "signed operation wraps before the condition",
+          "attempted_guard": {
+            "path": "test/lint/review.goose",
+            "start_byte": 55,
+            "end_byte": 82,
+            "start_line": 3,
+            "start_column": 5,
+            "end_line": 3,
+            "end_column": 32
+          }
+        },
+        "specializations": [
+          "review::add_guard (args(i8) roots(0:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/review.goose:2: warning[post_overflow_guard]: signed i8 add is checked after evaluation; debug builds trap before this guard and release builds wrap"
+    },
+    "stale_slice_length": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "stale_slice_length",
+        "group": "review",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "slice view keeps its earlier length after values grows, but the later index uses the array's current last element",
+        "primary": {
+          "path": "test/lint/review.goose",
+          "start_byte": 751,
+          "end_byte": 771,
+          "start_line": 41,
+          "start_column": 16,
+          "end_line": 41,
+          "end_column": 36,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "view": "view",
+          "array": "values",
+          "same_root": true,
+          "captured_length_is_fixed": true,
+          "index": "array.len - 1",
+          "capture": {
+            "path": "test/lint/review.goose",
+            "start_byte": 704,
+            "end_byte": 714,
+            "start_line": 39,
+            "start_column": 16,
+            "end_column": 26
+          },
+          "growth": {
+            "path": "test/lint/review.goose",
+            "start_byte": 720,
+            "end_byte": 734,
+            "start_line": 40,
+            "start_column": 5,
+            "end_column": 19
+          },
+          "use": {
+            "path": "test/lint/review.goose",
+            "start_byte": 751,
+            "end_byte": 771,
+            "start_line": 41,
+            "start_column": 16,
+            "end_line": 41,
+            "end_column": 36
+          }
+        },
+        "specializations": [
+          "review::stale_view (args() roots() views() bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/review.goose:41: warning[stale_slice_length]: slice view keeps its earlier length after values grows, but the later index uses the array's current last element"
+    },
+    "specialization_fanout": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "specialization_fanout",
+        "group": "performance",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "function rules::identity has 2 reachable specializations",
+        "primary": {
+          "path": "test/lint/rules.goose",
+          "start_byte": 13,
+          "end_byte": 56,
+          "start_line": 3,
+          "start_column": 1,
+          "end_line": 5,
+          "end_column": 2,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "function": "rules::identity",
+          "reachable_specializations": 2,
+          "reachability_unknown": 0
+        },
+        "specializations": [
+          "rules::identity (args(const u8[:]) roots(0:wfalse:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings(T=const u8[:]) escaped=false funval=false)",
+          "rules::identity (args(i64) roots(0:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings(T=i64) escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/rules.goose:3: warning[specialization_fanout]: function rules::identity has 2 reachable specializations"
+    },
+    "view_before_append_argument": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "view_before_append_argument",
+        "group": "project",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "call to contracts::after_append captures a view before a later argument grows the same owner, then uses the view after growth",
+        "primary": {
+          "path": "test/lint/contracts.goose",
+          "start_byte": 485,
+          "end_byte": 537,
+          "start_line": 25,
+          "start_column": 22,
+          "end_line": 25,
+          "end_column": 74,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "callee": "contracts::after_append",
+          "view_argument": 0,
+          "append_argument": 1,
+          "append_callee": "contracts::append_and_return",
+          "same_owner": true,
+          "argument_evaluation": "left-to-right",
+          "view_length": "captured before append",
+          "contract": "callee uses the view after append"
+        },
+        "specializations": [
+          "contracts::main (args() roots() views() bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/contracts.goose:25: warning[view_before_append_argument]: call to contracts::after_append captures a view before a later argument grows the same owner, then uses the view after growth"
+    },
+    "foreign_container_index": {
+      "diagnostic": {
+        "kind": "diagnostic",
+        "schema_version": 1,
+        "code": "foreign_container_index",
+        "group": "project",
+        "severity": "warning",
+        "confidence": "high",
+        "message": "call to contracts::use_index consumes an index produced for a different container owner",
+        "primary": {
+          "path": "test/lint/contracts.goose",
+          "start_byte": 725,
+          "end_byte": 762,
+          "start_line": 29,
+          "start_column": 25,
+          "end_line": 29,
+          "end_column": 62,
+          "precision": "exact"
+        },
+        "related": [],
+        "evidence": {
+          "consumer": "contracts::use_index",
+          "consumer_owner_argument": 0,
+          "index_argument": 1,
+          "producer": "contracts::find_for",
+          "producer_owner_argument": 0,
+          "owner_mismatch": true,
+          "provenance": "exact nested producer call and direct local owners"
+        },
+        "specializations": [
+          "contracts::main (args() roots() views() bindings() escaped=false funval=false)"
+        ],
+        "suppression": null,
+        "baseline": null,
+        "suggestion": null,
+        "fixable": false
+      },
+      "text": "test/lint/contracts.goose:29: warning[foreign_container_index]: call to contracts::use_index consumes an index produced for a different container owner"
+    }
+  }
+}

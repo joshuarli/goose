@@ -85,8 +85,38 @@ endif()
 # The compile runs on a thread of its own, with a larger stack (main.cpp).
 find_package(Threads REQUIRED)
 target_link_libraries(goose PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(goose PRIVATE advapi32)
+endif()
 # The library the process runner (process.cpp) is built on.
 target_include_directories(goose PRIVATE third_party/subprocess)
+
+# goose-lint is Goose source compiled by the canonical compiler, then built
+# with this CMake project's C compiler. The generated C is standalone, so the
+# installed companion needs neither this checkout nor a Goose toolchain.
+file(GLOB_RECURSE GOOSE_LINT_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/lint/*.goose")
+file(GLOB GOOSE_STDLIB_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/stdlib/*.goose")
+set(GOOSE_LINT_C "${CMAKE_CURRENT_BINARY_DIR}/goose-lint.c")
+add_custom_command(
+    OUTPUT "${GOOSE_LINT_C}"
+    COMMAND "$<TARGET_FILE:goose>" --standalone -o "${GOOSE_LINT_C}"
+            --stdlib "${CMAKE_CURRENT_SOURCE_DIR}/stdlib"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/lint/main.goose"
+    DEPENDS goose ${GOOSE_LINT_SOURCES} ${GOOSE_STDLIB_SOURCES}
+    COMMENT "Generating standalone goose-lint source"
+    VERBATIM)
+add_executable(goose-lint "${GOOSE_LINT_C}")
+add_dependencies(goose-lint goose)
+target_link_libraries(goose-lint PRIVATE Threads::Threads)
+if(NOT WIN32)
+    target_link_libraries(goose-lint PRIVATE m)
+endif()
+
+# Keep the compiler and its companion together so `goose lint` can find it.
+install(TARGETS goose goose-lint RUNTIME DESTINATION bin)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/stdlib/" DESTINATION stdlib)
 
 # A program run in-process runs on the main thread (main.cpp), whose stack the
 # executable sets: 64 MB reserved, as for the compile thread, where Windows

@@ -67,6 +67,9 @@ jobs:
       - name: Test
         run: python test/run_tests.py --exe build/${{ runner.os == 'Windows' && 'Debug/goose.exe' || 'goose' }} --profile baseline --cc native --require-clang
 
+      - name: Test semantic linter and self-lint
+        run: python test/lint/run_tests.py
+
   sanitize:
     name: Linux / ASan + UBSan
     runs-on: ubuntu-latest
@@ -135,3 +138,6 @@ jobs:
 
       - name: Test compiler and generated C with GCC
         run: python3 test/run_tests.py --exe build-gcc/goose --profile baseline --cc gcc
+
+      - name: Test Goose semantic linter with GCC
+        run: python3 test/lint/run_tests.py --goose build-gcc/goose

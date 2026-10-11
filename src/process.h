@@ -21,6 +21,10 @@ struct ProcessResult {
 // live line (progress.h) sees it.
 ProcessResult RunProcess(const vector<string> &argv, const string &cwd = "", bool echo = false);
 
+// Creates an empty temporary file with owner-only permissions where the
+// platform supports them. The caller owns removal of the returned path.
+bool CreatePrivateTempFile(string &path, string &error);
+
 // The full path of the program `name` on PATH, or on `path` (a list in PATH's
 // form) where that is given, or "" when there is none. On Windows a name
 // without an extension is tried with the ones PATHEXT lists (.exe, .cmd,

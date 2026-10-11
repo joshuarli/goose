@@ -19,13 +19,17 @@
     #define WIN32_LEAN_AND_MEAN
     #define NOMINMAX
     #include <windows.h>
+    #include <sddl.h>
     #include <io.h>
 #else
     #include <unistd.h>
     #include <dlfcn.h>
     #include <fcntl.h>
     #include <sys/file.h>
+#include <sys/stat.h>
 #endif
+
+#include <filesystem>
 
 namespace goose {
 
@@ -62,6 +66,66 @@ ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool ech
     subprocess_destroy(&p);
     r.code = code;
     return r;
+}
+
+bool CreatePrivateTempFile(string &path, string &error) {
+#ifdef _WIN32
+    char dir[MAX_PATH + 1];
+    auto n = GetTempPathA(MAX_PATH, dir);
+    if (!n || n > MAX_PATH) {
+        error = "cannot find the temporary directory";
+        return false;
+    }
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorA(
+            "D:P(A;;GA;;;OW)", SDDL_REVISION_1, &descriptor, nullptr)) {
+        error = "cannot create a private temporary-file security descriptor";
+        return false;
+    }
+    SECURITY_ATTRIBUTES security { sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE };
+    for (int attempt = 0; attempt < 8; attempt++) {
+        char name[MAX_PATH + 1];
+        if (!GetTempFileNameA(dir, "gsl", 0, name)) break;
+        DeleteFileA(name);
+        auto file = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, &security, CREATE_NEW,
+                                FILE_ATTRIBUTE_TEMPORARY, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            if (GetLastError() == ERROR_FILE_EXISTS) continue;
+            break;
+        }
+        CloseHandle(file);
+        path = name;
+        LocalFree(descriptor);
+        return true;
+    }
+    LocalFree(descriptor);
+    error = "cannot create an owner-only temporary file";
+    return false;
+#else
+    std::error_code ec;
+    auto dir = filesystem::temp_directory_path(ec);
+    if (ec) {
+        error = cat("cannot find the temporary directory: ", ec.message());
+        return false;
+    }
+    auto pattern = (dir / "goose-lint-XXXXXX").string();
+    vector<char> name(pattern.begin(), pattern.end());
+    name.push_back(0);
+    auto fd = mkstemp(name.data());
+    if (fd < 0) {
+        error = cat("cannot create a temporary file: ", strerror(errno));
+        return false;
+    }
+    if (fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
+        error = cat("cannot restrict temporary file permissions: ", strerror(errno));
+        close(fd);
+        unlink(name.data());
+        return false;
+    }
+    close(fd);
+    path = name.data();
+    return true;
+#endif
 }
 
 static bool IsFile(const string &path) {

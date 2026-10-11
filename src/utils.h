@@ -55,7 +55,11 @@ template<typename... Ts> string cat(const Ts &...args) {
 }
 
 // Compile errors (in the program being compiled) throw a string, caught in main.
-struct CompileError { string msg; };
+enum class CompileErrorKind { Source, MissingImport, Tool };
+struct CompileError {
+    string msg;
+    CompileErrorKind kind = CompileErrorKind::Source;
+};
 
 // The native stack. The typechecker recurses once per function on the
 // compile-time call path, which is as long as the program makes it, so the

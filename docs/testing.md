@@ -96,6 +96,7 @@ Test fixtures are grouped by category; `run_tests.py` stays at the root of `test
 | `threads/` | Workers, queues, shared globals and the native runtime lifecycle test. |
 | `stdlib/` | Standard-library modules. |
 | `goose_in_goose/` | A Goose-written compiler used as one multi-file bootstrap regression: build and run three generations, check a C fixed point and repeated self-checks of the stage-2 compiler, and compare JIT/native self-compilation. |
+| `lint/` | Dedicated semantic linter inputs and black-box CLI integration runner (`run_tests.py`), invoked with the Goose executable after its bundled companion is built. |
 | `gfx/` | The `gfx` graphics module: headless rendering, textures, compute, frames and input, a runtime misuse, shaders from files and from the program; shader and threading rejections (fixtures with `// error:` markers). The programs hold their shaders; the shader files beside them are for the file form of `embed_shader` and `--compile-shader`. `gfx/window/` is the windowed showcase, not part of the suite. |
 | `physics/` | The `physics` module: worlds, bodies, every kind of shape and geometry, all joint kinds, queries, events, recording and replay, a runtime misuse, and the threading rejection. |
 | `ui/` | The `ui` module: fonts, windows and layout, widgets, popups and menus, text editing, style, drawing and the input queries, charts, rendering and input through headless gfx, whether the keys and the mouse are the ui's, a runtime misuse, the layer's misuse messages, and the threading rejection. |
@@ -134,6 +135,26 @@ C compiler, it still checks the source and, when available, self-compiles throug
 the JIT, but reports the native chain skipped. Sources and the exact stage
 contract are in [goose_in_goose/README.md](../test/goose_in_goose/README.md);
 artifacts and logs go in `build/gen/<profile>/goose_in_goose/O<level>/`.
+
+Run the dedicated linter integration suite after building the default CMake
+targets (which include `goose-lint`) with:
+
+```sh
+python test/lint/run_tests.py
+```
+
+It checks supported rule findings, opt-in fanout, local suppressions, baseline
+match/drift/write behavior, config precedence, all process statuses, offline
+imports, corrupt facts, a missing companion, deterministic JSONL, a relocated
+compiler/companion/stdlib layout with Unicode and spaces, and the linter's own
+source with `--deny` on the high-confidence default rules. The runner finds a
+single- or multi-configuration CMake build automatically; pass `--goose PATH`
+to select a specific binary. CI runs this suite on Linux, macOS, Windows, and
+the GCC 16.2 toolchain job.
+It also checks CRLF/UTF-8/tab source ranges, raw-string directive text, and
+concurrent runs.
+`test/lint/` fixtures are excluded from the general
+generated-program runner because they are lint inputs, not runtime tests.
 
 The sanitizer job builds Goose with
 `-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all`,

@@ -434,7 +434,8 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         if (av.lvalue && av.type->kind != TY_REF && TypeEq(StorageType(av), elem))
             args[1] = AutoRef(args[1], av, false);
         else if (UserRefOf(args[1]))
-            Warn(args[1], cat("redundant &: ", ExprStr(Is<Unary>(args[1])->child),
+            Warn(args[1], LintWarningCode::RedundantReferenceMarker,
+                 cat("redundant &: ", ExprStr(Is<Unary>(args[1])->child),
                               " is passed by reference without it (§4.1)"));
         args[1]->exprtype = av.type;
         if (!IsPlainRef(av.type) || !TypeEq(av.type->ref->sub, elem))

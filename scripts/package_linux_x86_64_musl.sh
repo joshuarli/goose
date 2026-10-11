@@ -47,6 +47,7 @@ fi
 rm -rf "$stage_dir"
 mkdir -p "$stage_dir/bin"
 cp "$build_dir/goose" "$stage_dir/bin/goose"
+cp "$build_dir/goose-lint" "$stage_dir/bin/goose-lint"
 cp -R "$build_dir/tcclib" "$stage_dir/bin/tcclib"
 cp -R "$repo_root/stdlib" "$stage_dir/stdlib"
 cp "$repo_root/LICENSE" "$stage_dir/LICENSE"

@@ -1,0 +1,153 @@
+[
+  {
+    "kind": "diagnostic",
+    "schema_version": 1,
+    "code": "post_overflow_guard",
+    "group": "review",
+    "severity": "warning",
+    "confidence": "medium",
+    "message": "signed i8 add is checked after evaluation; debug builds trap before this guard and release builds wrap",
+    "primary": {
+      "path": "test/lint/review.goose",
+      "start_byte": 44,
+      "end_byte": 49,
+      "start_line": 2,
+      "start_column": 15,
+      "end_line": 2,
+      "end_column": 20,
+      "precision": "exact"
+    },
+    "related": [],
+    "evidence": {
+      "operation": "add",
+      "signed_width": 8,
+      "result": "sum",
+      "compared_operand": "x",
+      "condition": "lt",
+      "nonnegative_operand_proof": "typed nonnegative value",
+      "debug_behavior": "overflow traps before the condition",
+      "release_behavior": "signed operation wraps before the condition",
+      "attempted_guard": {
+        "path": "test/lint/review.goose",
+        "start_byte": 55,
+        "end_byte": 82,
+        "start_line": 3,
+        "start_column": 5,
+        "end_line": 3,
+        "end_column": 32
+      }
+    },
+    "specializations": [
+      "review::add_guard (args(i8) roots(0:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings() escaped=false funval=false)"
+    ],
+    "suppression": null,
+    "baseline": null,
+    "suggestion": null,
+    "fixable": false
+  },
+  {
+    "kind": "diagnostic",
+    "schema_version": 1,
+    "code": "post_overflow_guard",
+    "group": "review",
+    "severity": "warning",
+    "confidence": "medium",
+    "message": "signed i8 subtract is checked after evaluation; debug builds trap before this guard and release builds wrap",
+    "primary": {
+      "path": "test/lint/review.goose",
+      "start_byte": 152,
+      "end_byte": 157,
+      "start_line": 8,
+      "start_column": 22,
+      "end_line": 8,
+      "end_column": 27,
+      "precision": "exact"
+    },
+    "related": [],
+    "evidence": {
+      "operation": "subtract",
+      "signed_width": 8,
+      "result": "difference",
+      "compared_operand": "x",
+      "condition": "gt",
+      "nonnegative_operand_proof": "typed nonnegative value",
+      "debug_behavior": "overflow traps before the condition",
+      "release_behavior": "signed operation wraps before the condition",
+      "attempted_guard": {
+        "path": "test/lint/review.goose",
+        "start_byte": 163,
+        "end_byte": 197,
+        "start_line": 9,
+        "start_column": 5,
+        "end_line": 9,
+        "end_column": 39
+      }
+    },
+    "specializations": [
+      "review::subtract_guard (args(i8) roots(0:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings() escaped=false funval=false)"
+    ],
+    "suppression": null,
+    "baseline": null,
+    "suggestion": null,
+    "fixable": false
+  },
+  {
+    "kind": "diagnostic",
+    "schema_version": 1,
+    "code": "stale_slice_length",
+    "group": "review",
+    "severity": "warning",
+    "confidence": "high",
+    "message": "slice view keeps its earlier length after values grows, but the later index uses the array's current last element",
+    "primary": {
+      "path": "test/lint/review.goose",
+      "start_byte": 751,
+      "end_byte": 771,
+      "start_line": 41,
+      "start_column": 16,
+      "end_line": 41,
+      "end_column": 36,
+      "precision": "exact"
+    },
+    "related": [],
+    "evidence": {
+      "view": "view",
+      "array": "values",
+      "same_root": true,
+      "captured_length_is_fixed": true,
+      "index": "array.len - 1",
+      "capture": {
+        "path": "test/lint/review.goose",
+        "start_byte": 704,
+        "end_byte": 714,
+        "start_line": 39,
+        "start_column": 16,
+        "end_column": 26
+      },
+      "growth": {
+        "path": "test/lint/review.goose",
+        "start_byte": 720,
+        "end_byte": 734,
+        "start_line": 40,
+        "start_column": 5,
+        "end_column": 19
+      },
+      "use": {
+        "path": "test/lint/review.goose",
+        "start_byte": 751,
+        "end_byte": 771,
+        "start_line": 41,
+        "start_column": 16,
+        "end_line": 41,
+        "end_column": 36
+      }
+    },
+    "specializations": [
+      "review::stale_view (args() roots() views() bindings() escaped=false funval=false)"
+    ],
+    "suppression": null,
+    "baseline": null,
+    "suggestion": null,
+    "fixable": false
+  }
+]
