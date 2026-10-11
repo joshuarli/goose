@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goose fuzz campaign"
+  short_description: "Run and triage a bounded Goose compiler fuzzing campaign"
+  default_prompt: "Run another bounded Goose fuzzing campaign and develop confirmed upstream findings into reviewable fixes."
