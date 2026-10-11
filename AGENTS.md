@@ -2,11 +2,11 @@
 
 ## Goose source formatting
 
-- Format each added or modified `.goose` file with `python scripts/format_goose.py <files>` before finishing a change. This is an exception to the general rule against running formatters; do not run other formatters.
-- Check the result with `python scripts/format_goose.py --check <files>`.
+- Do not run `format_goose.py` on existing `.goose` source or test files. Preserve their current layout and keep edits limited to the changed behavior.
+- Newly added `.goose` tests and reproducers may be formatted with `python scripts/format_goose.py <files>` and checked with `python scripts/format_goose.py --check <files>`.
 - Keep deliberately malformed parser fixtures in `test/errors/` as written. Their source layout and diagnostics are part of the test.
 - Use descriptive names and blank lines between distinct parts of a test. Formatting does not replace making the code understandable.
-- Apply formatting to files being changed rather than rewriting the whole repository. The fork's formatting workflow enforces added and modified files.
+- Never include formatter-only changes in an upstream fix.
 
 ## Upstream pull requests
 
