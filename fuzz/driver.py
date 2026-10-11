@@ -18,15 +18,21 @@ from fuzz import aggregate_model
 from fuzz import model as scalar_model
 from fuzz import numeric_model
 from fuzz import order_model
+from fuzz import parse_flt_model
+from fuzz import reference_model
 from fuzz import resize_model
+from fuzz import serialize_model
 from fuzz import trap_model
+from fuzz.expectation import RejectExpectation
 from fuzz.process import run
 from scripts.toolchain import find_goose, sanitizer_failure, SANITIZER_FLAGS
 
 FULL_MATRIX = [(0, 0), (0, 2), (2, 0), (2, 2)]
 SMOKE_MATRIX = [(0, 0), (2, 2)]
 MODELS = {'aggregate': aggregate_model, 'numeric': numeric_model, 'order': order_model,
-          'resize': resize_model, 'scalar': scalar_model, 'trap': trap_model}
+          'parse_flt': parse_flt_model, 'reference': reference_model,
+          'resize': resize_model, 'scalar': scalar_model, 'serialize': serialize_model,
+          'trap': trap_model}
 
 
 def model_for_program(program):
@@ -49,6 +55,16 @@ def classify(stage, result, expected=None):
         return 'sanitizer'
     if result.limit:
         return 'timeout' if result.limit == 'timeout' else 'output_limit'
+    if isinstance(expected, RejectExpectation):
+        if stage != 'goose':
+            raise ValueError('MustReject is decided by the Goose compiler')
+        if result.returncode < 0:
+            return 'compiler_crash'
+        if not result.returncode:
+            return 'false_acceptance'
+        if not all(fragment in diagnostic for fragment in expected.diagnostic_contains):
+            return 'rejection_diagnostic'
+        return None
     if stage == 'goose' and result.returncode:
         return 'compiler_crash' if result.returncode < 0 else 'false_rejection'
     if stage == 'c' and result.returncode:
@@ -70,6 +86,9 @@ def classify(stage, result, expected=None):
 
 
 def describe_expectation(expected):
+    if isinstance(expected, RejectExpectation):
+        return {'kind': 'MustReject',
+                'diagnostic_contains': list(expected.diagnostic_contains)}
     if isinstance(expected, trap_model.TrapExpectation):
         return {'kind': 'MustTrap', 'stdout_prefix': expected.stdout_prefix.decode('ascii'),
                 'stderr_contains': list(expected.stderr_contains)}
@@ -88,25 +107,41 @@ def check(program, exe, cc, matrix, work, timeout=10, output_limit=65536, saniti
     expected = model.evaluate(program)
     report = {'failure': None, 'results': [], 'expected': describe_expectation(expected),
               'lane': lane, 'matrix': matrix, 'sanitize': sanitize}
+    by_goose_opt = {}
     for goose_opt, c_opt in matrix:
+        by_goose_opt.setdefault(goose_opt, []).append(c_opt)
+    for goose_opt, c_opts in by_goose_opt.items():
         cfile = work / f'goose-O{goose_opt}.c'
-        binary = work / f'program-g{goose_opt}-c{c_opt}'
-        commands = [
-            ('goose', [str(exe), f'-O{goose_opt}', '--standalone', '-o', str(cfile), str(source)]),
-            ('c', [str(cc), f'-O{c_opt}', '-Werror=implicit-function-declaration',
-                   *(SANITIZER_FLAGS if sanitize else ()), str(cfile), '-o', str(binary),
-                   '-pthread', '-lm']),
-            ('program', [str(binary)])]
-        for stage, command in commands:
-            budget = timeout if deadline is None else min(timeout, max(0.001, deadline - time.monotonic()))
-            result = run(command, work, budget, output_limit)
-            report['results'].append({'stage': stage, 'goose_opt': goose_opt,
-                                      'c_opt': c_opt, **result.to_dict()})
-            failure = classify(stage, result, expected)
-            if failure:
-                report['failure'] = {'class': failure, 'stage': stage,
-                                     'goose_opt': goose_opt, 'c_opt': c_opt}
-                return report
+        command = [str(exe), f'-O{goose_opt}', '--standalone', '-o', str(cfile), str(source)]
+        budget = timeout if deadline is None else min(timeout, max(0.001, deadline - time.monotonic()))
+        result = run(command, work, budget, output_limit)
+        report['results'].append({'stage': 'goose', 'goose_opt': goose_opt,
+                                  'c_opt': None, **result.to_dict()})
+        failure = classify('goose', result, expected)
+        if failure:
+            report['failure'] = {'class': failure, 'stage': 'goose',
+                                 'goose_opt': goose_opt, 'c_opt': None}
+            return report
+        if isinstance(expected, RejectExpectation):
+            continue
+        for c_opt in c_opts:
+            binary = work / f'program-g{goose_opt}-c{c_opt}'
+            commands = [
+                ('c', [str(cc), f'-O{c_opt}', '-Werror=implicit-function-declaration',
+                       *(SANITIZER_FLAGS if sanitize else ()), str(cfile), '-o', str(binary),
+                       '-pthread', '-lm']),
+                ('program', [str(binary)])]
+            for stage, command in commands:
+                budget = timeout if deadline is None else min(timeout, max(0.001, deadline - time.monotonic()))
+                environment = {'LSAN_OPTIONS': 'detect_leaks=0'} if sanitize and stage == 'program' else None
+                result = run(command, work, budget, output_limit, env=environment)
+                report['results'].append({'stage': stage, 'goose_opt': goose_opt,
+                                          'c_opt': c_opt, **result.to_dict()})
+                failure = classify(stage, result, expected)
+                if failure:
+                    report['failure'] = {'class': failure, 'stage': stage,
+                                         'goose_opt': goose_opt, 'c_opt': c_opt}
+                    return report
     return report
 
 

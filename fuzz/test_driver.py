@@ -5,7 +5,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from fuzz import aggregate_model, driver, numeric_model, order_model, resize_model, trap_model
+from fuzz import (aggregate_model, driver, numeric_model, order_model,
+                  parse_flt_model, reference_model, resize_model,
+                  serialize_model, trap_model)
 from fuzz.model import evaluate, generate, render
 from fuzz.process import Result
 
@@ -70,6 +72,15 @@ class ClassifierTests(unittest.TestCase):
             'program', result(1, stdout=b'41\n0\n', stderr=b'other failure'), expected),
             'trap_diagnostic')
 
+    def test_expected_rejection_requires_clean_matching_diagnostic(self):
+        expected = reference_model.RejectExpectation(('does not outlive',))
+        self.assertIsNone(driver.classify(
+            'goose', result(1, stderr=b'error: reference does not outlive destination'), expected))
+        self.assertEqual(driver.classify('goose', result(), expected), 'false_acceptance')
+        self.assertEqual(driver.classify(
+            'goose', result(1, stderr=b'error: unrelated'), expected), 'rejection_diagnostic')
+        self.assertEqual(driver.classify('goose', result(-11), expected), 'compiler_crash')
+
 
 class DriverTests(unittest.TestCase):
     def setUp(self):
@@ -82,33 +93,34 @@ class DriverTests(unittest.TestCase):
     def check(self, matrix, **kwargs):
         return driver.check(self.program, Path('/tools/goose'), Path('/tools/cc'), matrix, self.work, **kwargs)
 
-    def test_every_matrix_configuration_executes_all_stages(self):
-        matrix = [(0, 0), (1, 2), (2, 3)]
+    def test_matrix_compiles_goose_once_per_goose_level(self):
+        matrix = [(0, 0), (0, 2), (2, 0), (2, 2)]
         calls = []
 
         def run(argv, cwd, timeout, output_limit, **kwargs):
             calls.append((list(map(str, argv)), (cwd, timeout, output_limit)))
-            return result(stdout=self.expected if len(calls) % 3 == 0 else b'')
+            is_program = Path(argv[0]).name.startswith('program-')
+            return result(stdout=self.expected if is_program else b'')
 
         with patch.object(driver, 'run', side_effect=run):
             report = self.check(matrix, timeout=2.5, output_limit=1234)
         self.assertIsNone(report['failure'])
         self.assertEqual(report['expected'], {
             'kind': 'MustCompileAndReturn', 'stdout': self.expected.decode()})
-        self.assertEqual(len(calls), 9)
+        self.assertEqual(len(calls), 10)
         self.assertEqual(
             [(item['goose_opt'], item['c_opt'], item['stage']) for item in report['results']],
-            [(goose_opt, c_opt, stage) for goose_opt, c_opt in matrix for stage in ('goose', 'c', 'program')],
+            [(0, None, 'goose'), (0, 0, 'c'), (0, 0, 'program'),
+             (0, 2, 'c'), (0, 2, 'program'), (2, None, 'goose'),
+             (2, 0, 'c'), (2, 0, 'program'), (2, 2, 'c'), (2, 2, 'program')],
         )
-        for index, (goose_opt, c_opt) in enumerate(matrix):
-            goose_command, _ = calls[index * 3]
-            c_command, _ = calls[index * 3 + 1]
-            self.assertEqual(goose_command[0], '/tools/goose')
-            self.assertIn('--standalone', goose_command)
-            self.assertIn('-o', goose_command)
-            self.assertIn(f'-O{goose_opt}', goose_command)
-            self.assertEqual(c_command[0], '/tools/cc')
-            self.assertIn(f'-O{c_opt}', c_command)
+        goose_commands = [command for command, _ in calls if command[0] == '/tools/goose']
+        self.assertEqual(len(goose_commands), 2)
+        self.assertIn('-O0', goose_commands[0])
+        self.assertIn('-O2', goose_commands[1])
+        c_commands = [command for command, _ in calls if command[0] == '/tools/cc']
+        self.assertEqual([next(flag for flag in command if flag.startswith('-O'))
+                          for command in c_commands], ['-O0', '-O2', '-O0', '-O2'])
         for _, (cwd, timeout, output_limit) in calls:
             self.assertEqual(cwd, self.work)
             self.assertEqual(timeout, 2.5)
@@ -133,7 +145,8 @@ class DriverTests(unittest.TestCase):
     def test_recipe_lane_selects_the_matching_model(self):
         for lane, model in (('scalar', driver.scalar_model), ('aggregate', aggregate_model),
                             ('numeric', numeric_model),
-                            ('order', order_model),
+                            ('order', order_model), ('parse_flt', parse_flt_model),
+                            ('reference', reference_model),
                             ('resize', resize_model), ('trap', trap_model)):
             recipe = model.generate(9).to_dict()
             selected, program = driver.load_recipe(recipe)
@@ -141,6 +154,11 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(program, model.Program.from_dict(recipe))
         with self.assertRaisesRegex(ValueError, 'unknown fuzz lane'):
             driver.load_recipe({'lane': 'missing'})
+
+        recipe = serialize_model.generate(9).to_dict()
+        selected, program = driver.load_recipe(recipe)
+        self.assertIs(selected, serialize_model)
+        self.assertEqual(program, serialize_model.Program.from_dict(recipe))
 
     def test_campaign_deadline_does_not_shorten_a_started_case(self):
         completed = {'failure': None, 'results': [], 'expected': '', 'lane': 'scalar',
@@ -163,7 +181,21 @@ class DriverTests(unittest.TestCase):
                 with patch.object(driver, 'run', side_effect=replies) as run:
                     report = self.check([(1, 2), (2, 3)])
                 self.assertEqual(run.call_count, len(replies))
-                self.assertEqual(report['failure'], {'class': failure, 'stage': stage, 'goose_opt': 1, 'c_opt': 2})
+                expected_c_opt = None if stage == 'goose' else 2
+                self.assertEqual(report['failure'], {'class': failure, 'stage': stage,
+                                                     'goose_opt': 1, 'c_opt': expected_c_opt})
+
+    def test_expected_rejection_stops_after_goose(self):
+        program = reference_model.ReferenceProgram('return_local_reference', 'MustReject')
+        with patch.object(driver, 'run', return_value=result(
+                1, stderr=b'error: dies with this function')) as run:
+            report = driver.check(program, Path('/tools/goose'), Path('/tools/cc'),
+                                  [(0, 0), (0, 2), (2, 0), (2, 2)], self.work)
+        self.assertIsNone(report['failure'])
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual([item['stage'] for item in report['results']], ['goose', 'goose'])
+        self.assertEqual(report['expected'], {
+            'kind': 'MustReject', 'diagnostic_contains': ['dies with this function']})
 
     def test_sanitizer_build_flags(self):
         with patch.object(driver, 'run', side_effect=[result(), result(), result(stdout=self.expected)]) as run:
@@ -172,6 +204,8 @@ class DriverTests(unittest.TestCase):
         command = list(map(str, run.call_args_list[1].args[0]))
         self.assertIn('-fsanitize=address,undefined', command)
         self.assertIn('-fno-sanitize-recover=all', command)
+        self.assertEqual(run.call_args_list[2].kwargs['env'],
+                         {'LSAN_OPTIONS': 'detect_leaks=0'})
 
     def test_artifact_preserves_recipe_source_report_and_identity(self):
         evidence = result(1, stdout=b'\xff\x00', stderr=b'original error\n').to_dict()
