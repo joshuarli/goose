@@ -145,11 +145,14 @@ inline string LintTypeContext(const TypeExpr *type) {
 }
 
 inline string LintRootContext(const RootArg &root) {
-    return cat(root.cls, ":w", root.writable, ":r", root.reusable,
-               ":gs", root.growshrink, ":via", root.gsvia, ":slot", root.slotread,
-               ":unknown", root.unknown, ":byteview", root.byteview,
-               ":exact", root.exact, ":concrete", root.concrete,
-               ":heldexact", root.heldexact);
+    string context = cat(root.cls);
+    if (root.cls > 0) context += cat(":depthkey", root.depthkey);
+    context += cat(":w", root.writable, ":r", root.reusable,
+                   ":gs", root.growshrink, ":via", root.gsvia, ":slot", root.slotread,
+                   ":unknown", root.unknown, ":byteview", root.byteview,
+                   ":exact", root.exact, ":concrete", root.concrete,
+                   ":heldexact", root.heldexact);
+    return context;
 }
 
 inline string LintSpecializationContext(const FnSpec &spec) {

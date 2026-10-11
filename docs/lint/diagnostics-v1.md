@@ -57,8 +57,12 @@ written. Baseline entries are sorted by fingerprint and contain
 The fingerprint algorithm is FNV-1a 64 with versioned field framing over rule,
 normalized path, message, evidence, specialization context, and a local
 occurrence number. It is designed to survive line shifts, not arbitrary
-semantic refactors. Baseline output is written atomically only when explicitly
-requested.
+semantic refactors. Specialization context strings include the normalized
+depth key for each present root class so otherwise identical displayed
+contexts can distinguish semantically distinct root-depth relationships.
+Adding this context detail changes fingerprints for affected findings; an
+existing baseline may need regeneration. Baseline output is written atomically
+only when explicitly requested.
 
 When existing baseline entries do not match current findings, each stale entry
 is reported as a `baseline` record with `status:"stale"`, fingerprint, code,

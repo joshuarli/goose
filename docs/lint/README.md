@@ -39,7 +39,7 @@ required rules are:
 | correctness | `stale_suppression` | Malformed, unknown, duplicate, or unmatched lexer-recognized directive. |
 | review | `post_overflow_guard` | Opt-in: adjacent signed add/sub assignment and the canonical comparison against its original left operand, with a typed nonnegative right operand. |
 | review | `stale_slice_length` | Opt-in: same-block full slice capture, direct positive growth of the same array, then use of the captured slice at `array.len - 1`. |
-| performance | `specialization_fanout` | Opt-in: two or more concrete specializations proven reachable from the selected entry. Reports contexts, not runtime cost. |
+| performance | `specialization_fanout` | Opt-in: two or more concrete specializations proven reachable from the selected entry. Reports type and root-depth contexts, not runtime cost. |
 | project | `view_before_append_argument` | Opt-in: configured API roles prove a direct slice argument is evaluated before a nested same-owner append call, and the callee uses the view after append. |
 | project | `foreign_container_index` | Opt-in: configured API roles prove a nested index-producing call uses a different direct local array than the consumer. |
 

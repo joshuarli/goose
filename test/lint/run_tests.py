@@ -272,6 +272,23 @@ def main():
               "specialization fanout lost its declaration span")
         check("identity" in fanout["evidence"]["function"] and len(fanout["specializations"]) == 2,
               "fanout omitted the source function or actual contributor contexts")
+        root_depth_fixture = FIXTURES / "fanout_root_depth.goose"
+        root_depth_result = run_lint(
+            goose, root_depth_fixture, "--format", "jsonl", "--group", "performance", env=env,
+        )
+        root_depth_records = parse_jsonl(root_depth_result, "root-depth fanout")
+        root_depth_diagnostics = find_records(root_depth_records, "diagnostic")
+        root_depth_coverage = find_records(root_depth_records, "coverage")
+        check(root_depth_result.returncode == 0 and len(root_depth_diagnostics) == 1 and
+              root_depth_diagnostics[0]["evidence"]["reachable_specializations"] == 2 and
+              len(root_depth_coverage) == 1 and root_depth_coverage[0]["check"] == "complete" and
+              root_depth_coverage[0]["checked_specializations"] == 3,
+              "global/local root fanout changed its complete count")
+        root_depth_contexts = root_depth_diagnostics[0]["specializations"]
+        check(len(root_depth_contexts) == 2 and len(set(root_depth_contexts)) == 2 and
+              any(":depthkey0:" in context for context in root_depth_contexts) and
+              any(":depthkey-1:" in context for context in root_depth_contexts),
+              "fanout contexts did not expose the distinct global/local depth keys")
         denied_fanout = run_lint(goose, fixture, "--format", "jsonl", "--deny", "specialization_fanout", env=env)
         parse_jsonl(denied_fanout, "denied fanout")
         check(denied_fanout.returncode == 1, "explicit fanout denial did not fail")
