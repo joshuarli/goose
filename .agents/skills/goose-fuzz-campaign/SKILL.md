@@ -32,10 +32,23 @@ recorded source revision and flags match. Keep all seeds, commands, environment
 identity, summaries, and failure artifacts under ignored build storage.
 
 For a broad campaign, delegate independent ready lanes when subagents are
-available. Give each lane an exclusive output directory and a bounded CPU and
-memory budget. One coordinator owns deduplication, upstream confirmation,
-candidate selection, and integration. Avoid concurrent builds that contend for
-the same directory or exhaust the host.
+available. Spawn every lane agent with `model: "gpt-6-luna"` and request
+`reasoning_effort: "xhigh"`. The current agent tool lists `max`, not `xhigh`,
+as the highest supported effort for `gpt-6-luna`; use `max` until `xhigh` is
+available for that model. Because explicit model overrides require
+`fork_turns: "none"`, include the campaign and target revisions, lane command,
+exclusive output directory, resource bounds, and relevant repository
+constraints in each task instead of relying on inherited conversation
+history. Give each lane a bounded CPU and memory budget. One coordinator owns
+deduplication, upstream confirmation, candidate selection, and integration.
+Avoid concurrent builds that contend for the same directory or exhaust the
+host.
+
+For ASan-instrumented lanes, do not use `RLIMIT_AS`: ASan needs a large virtual
+address reservation for its shadow memory. Bound resident memory with
+libFuzzer's RSS limit or a compatible memory cgroup. If no compatible hard RSS
+limit is available for a semantic lane, record that limit and bound generated
+input size, per-case timeout, and total duration.
 
 ## Run discovery
 
