@@ -12,7 +12,7 @@
 
 - Use titles such as `fix(parser): describe the behavior` or `fix(typecheck): describe the behavior` for fixes.
 - Write descriptions with `## What`, `## Why`, `## How`, and `## Testing`, in that order. Keep each section short and concrete.
-- Keep reproducer prose to the observed before/after result, one environment record, and the run command. Put the minimal tested Dockerfile in a single collapsed Reproduce block; avoid repeating revisions, flags, setup instructions, or background already evident in the code.
+- Keep reproducer prose to the observed before/after result and one environment record. Add a `## Reproduction` section with the exact build/run commands in a `sh` block, followed by the minimal tested Dockerfile in a `dockerfile` block. Avoid repeating revisions, flags, setup instructions, or background already evident in the code.
 - Describe the observable failure and resulting behavior before implementation details.
 - Report checks actually run. Claim a regression fails before the fix and passes afterward only when that comparison has been verified.
 - A fix for pathological input must also preserve performance on common input. Measure representative valid workloads and normal workloads that exercise the changed path against the exact base revision before recommending the change.
@@ -54,10 +54,7 @@ Tested with `Debian clang version 23.1.3 (1)`, `ldd (Debian GLIBC 2.43-7) 2.43`.
 Linux 6.18.33-0-lts #1-Alpine SMP PREEMPT_DYNAMIC 2026-05-24 18:06:34 x86_64
 ```
 
-<details>
-<summary>Reproduce</summary>
-
-Save as `Dockerfile`, then run:
+## Reproduction
 
 ```sh
 docker build --progress=plain -t goose-pr20-repro .
@@ -94,5 +91,4 @@ echo 'PASS: baseline SIGSEGV reproduced; fixed program matches expected output.'
 SH
 CMD ["sh", "verify.sh"]
 ```
-</details>
 ````
