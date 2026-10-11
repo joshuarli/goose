@@ -1,0 +1,31 @@
+name: Goose formatting
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  format:
+    if: github.repository == 'joshuarli/goose'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Test formatter
+        run: python -m unittest discover -s test -p test_format_goose.py
+      - name: Check changed Goose files
+        env:
+          FORMAT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          if [[ -z "$FORMAT_BASE" ]]; then
+            FORMAT_BASE=HEAD^
+          elif [[ "$FORMAT_BASE" =~ ^0+$ ]]; then
+            FORMAT_BASE=$(git hash-object -t tree /dev/null)
+          fi
+          python scripts/format_goose.py --check --changed-since "$FORMAT_BASE"

@@ -1,0 +1,454 @@
+{
+  "platform": "Linux-6.18.33-0-lts-x86_64-with",
+  "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+  "compiler": "c++ (Alpine 15.2.0) 15.2.0",
+  "base_revision": "de24a15659248fce28a1d5bdc8a6375bea322a0a",
+  "head_revision": "b37cebb737200510e18839eb9db2da5e49896279",
+  "build_flags": "-std=c++20 -O2 -DNDEBUG -pthread",
+  "cpu_affinity": 4,
+  "rounds": 9,
+  "warmup_pairs": 2,
+  "sites_per_generated_file": 50000,
+  "generated_file_repeats": 20,
+  "corpus": [
+    "samples/01_tour.goose",
+    "samples/12_huffman.goose",
+    "samples/14_bst.goose",
+    "samples/17_calc.goose",
+    "samples/18_json.goose",
+    "samples/19_vm.goose",
+    "bench/goose/interp.goose",
+    "bench/goose/lru.goose",
+    "bench/goose/records_var.goose",
+    "bench/goose/respond.goose",
+    "bench/goose/scene.goose",
+    "bench/goose/sexp.goose"
+  ],
+  "corpus_repeats": 80,
+  "pathological_fixture": "test/errors/generic_comparison_backtrack.goose",
+  "command": [
+    "--stdlib",
+    "/tmp/goose-pr19-base/stdlib",
+    "--multi-test",
+    "--parse"
+  ],
+  "workloads": {
+    "comparisons": {
+      "input_bytes_per_invocation": 34663060,
+      "input_sha256": {
+        "comparisons.goose": "f4f0e7caf1c21c27733c350bf85b9f115bff427f22967ffd8d8c7243c3b7da4a"
+      },
+      "summary": {
+        "base": {
+          "median_ms": 812.5347580062225,
+          "min_ms": 788.5134140087757,
+          "max_ms": 853.4816519968444,
+          "median_rss_kib": 40488
+        },
+        "head": {
+          "median_ms": 907.0909780130023,
+          "min_ms": 880.7808860001387,
+          "max_ms": 932.2159230068792,
+          "median_rss_kib": 39396
+        },
+        "time_change_percent": 11.637190787850038
+      },
+      "samples": {
+        "base": [
+          {
+            "ms": 853.4816519968444,
+            "rss_kib": 40656
+          },
+          {
+            "ms": 826.086935994681,
+            "rss_kib": 40440
+          },
+          {
+            "ms": 850.7288109976798,
+            "rss_kib": 40672
+          },
+          {
+            "ms": 812.5347580062225,
+            "rss_kib": 40420
+          },
+          {
+            "ms": 813.8811819953844,
+            "rss_kib": 40436
+          },
+          {
+            "ms": 788.5134140087757,
+            "rss_kib": 40288
+          },
+          {
+            "ms": 793.1005760037806,
+            "rss_kib": 40636
+          },
+          {
+            "ms": 795.0264520040946,
+            "rss_kib": 40680
+          },
+          {
+            "ms": 798.5586750000948,
+            "rss_kib": 40488
+          }
+        ],
+        "head": [
+          {
+            "ms": 922.4726870015729,
+            "rss_kib": 39452
+          },
+          {
+            "ms": 907.0909780130023,
+            "rss_kib": 37376
+          },
+          {
+            "ms": 932.2159230068792,
+            "rss_kib": 39404
+          },
+          {
+            "ms": 922.2534889995586,
+            "rss_kib": 39220
+          },
+          {
+            "ms": 912.6074980013072,
+            "rss_kib": 39180
+          },
+          {
+            "ms": 880.7808860001387,
+            "rss_kib": 39396
+          },
+          {
+            "ms": 888.2888280058978,
+            "rss_kib": 39380
+          },
+          {
+            "ms": 893.8614950020565,
+            "rss_kib": 39476
+          },
+          {
+            "ms": 894.8780900100246,
+            "rss_kib": 39616
+          }
+        ]
+      }
+    },
+    "generics": {
+      "input_bytes_per_invocation": 41663860,
+      "input_sha256": {
+        "generics.goose": "79bb58bac5a4fd7feb5bb7c52de1b8a5ad24f0b5a5eb953980d5e6ab99aebb62"
+      },
+      "summary": {
+        "base": {
+          "median_ms": 875.3247290005675,
+          "min_ms": 862.898535997374,
+          "max_ms": 897.7738019893877,
+          "median_rss_kib": 52516
+        },
+        "head": {
+          "median_ms": 878.4584539971547,
+          "min_ms": 866.1615970049752,
+          "max_ms": 909.1630309994798,
+          "median_rss_kib": 52528
+        },
+        "time_change_percent": 0.358007136410432
+      },
+      "samples": {
+        "base": [
+          {
+            "ms": 862.898535997374,
+            "rss_kib": 52624
+          },
+          {
+            "ms": 885.661585998605,
+            "rss_kib": 52332
+          },
+          {
+            "ms": 880.8132370031672,
+            "rss_kib": 52344
+          },
+          {
+            "ms": 888.3238139969762,
+            "rss_kib": 52340
+          },
+          {
+            "ms": 897.7738019893877,
+            "rss_kib": 52516
+          },
+          {
+            "ms": 875.3247290005675,
+            "rss_kib": 52760
+          },
+          {
+            "ms": 871.1311069928342,
+            "rss_kib": 52344
+          },
+          {
+            "ms": 872.0843509945553,
+            "rss_kib": 52544
+          },
+          {
+            "ms": 870.9833650063956,
+            "rss_kib": 52588
+          }
+        ],
+        "head": [
+          {
+            "ms": 888.6538819933776,
+            "rss_kib": 52324
+          },
+          {
+            "ms": 909.1630309994798,
+            "rss_kib": 52336
+          },
+          {
+            "ms": 871.837091006455,
+            "rss_kib": 52528
+          },
+          {
+            "ms": 902.9606950061861,
+            "rss_kib": 52592
+          },
+          {
+            "ms": 866.1615970049752,
+            "rss_kib": 52368
+          },
+          {
+            "ms": 890.5949970067013,
+            "rss_kib": 52564
+          },
+          {
+            "ms": 874.6870160102844,
+            "rss_kib": 50512
+          },
+          {
+            "ms": 876.4182010054355,
+            "rss_kib": 52672
+          },
+          {
+            "ms": 878.4584539971547,
+            "rss_kib": 52548
+          }
+        ]
+      }
+    },
+    "corpus": {
+      "input_bytes_per_invocation": 5083120,
+      "input_sha256": {
+        "samples/01_tour.goose": "47be41339ce1f8a92dea855783b1a6ccbeb39ea1c560dafda93e544be7640002",
+        "samples/12_huffman.goose": "56748c8dc3c985b0cfd6a75ef11c44f3b2c061e9c97d5ff02f8bf133168e9f28",
+        "samples/14_bst.goose": "bcdb51720fb9fbc65afab098e6ab3e044ec2019cb385b68f9e355fc31a592492",
+        "samples/17_calc.goose": "3007add674543239e94778e0ef094f62712a9fd2e1e461a1afbb0769245a3199",
+        "samples/18_json.goose": "8c87ec759fcfc249531a96f98ca335bff311062398e84ff2684fb11cf33895b1",
+        "samples/19_vm.goose": "5168a33dbb279a4eef63a1b96e8df1bb7f5ea6f5fd2a40d5261e3006b6e0238f",
+        "bench/goose/interp.goose": "77675a06109a6249d4d013390b13140e42dc51856d7f36911deb3dd710abb46b",
+        "bench/goose/lru.goose": "ac0c4968cb9a63a187e56006c57560606b7914655df57a7316a0e3d76827900b",
+        "bench/goose/records_var.goose": "7638558616bb707f8b703330fd968a7668e2f887a4ea218069b22fac11425964",
+        "bench/goose/respond.goose": "087444027ca124f4f450a9b831c0b39b82040478b9da041c3e81a0ea0ef4cfea",
+        "bench/goose/scene.goose": "d4c256dacc6381e25d342fe4f9748c8bc59b386e1aa59bfa98bb9960c09dbde3",
+        "bench/goose/sexp.goose": "406bb29201da3d00711fc7c1d666122307acf6b0028d6703ec97d861246a3bb1"
+      },
+      "summary": {
+        "base": {
+          "median_ms": 752.2754539968446,
+          "min_ms": 722.9597209952772,
+          "max_ms": 783.5179440007778,
+          "median_rss_kib": 7056
+        },
+        "head": {
+          "median_ms": 770.9815310081467,
+          "min_ms": 734.8891779984115,
+          "max_ms": 813.9643799950136,
+          "median_rss_kib": 7072
+        },
+        "time_change_percent": 2.486599411414603
+      },
+      "samples": {
+        "base": [
+          {
+            "ms": 729.1631589905592,
+            "rss_kib": 6872
+          },
+          {
+            "ms": 752.2754539968446,
+            "rss_kib": 7160
+          },
+          {
+            "ms": 722.9597209952772,
+            "rss_kib": 5024
+          },
+          {
+            "ms": 744.4741840008646,
+            "rss_kib": 7220
+          },
+          {
+            "ms": 762.3343909945106,
+            "rss_kib": 7056
+          },
+          {
+            "ms": 758.5456189990509,
+            "rss_kib": 6812
+          },
+          {
+            "ms": 749.9039789981907,
+            "rss_kib": 7072
+          },
+          {
+            "ms": 775.1767559966538,
+            "rss_kib": 7248
+          },
+          {
+            "ms": 783.5179440007778,
+            "rss_kib": 6860
+          }
+        ],
+        "head": [
+          {
+            "ms": 734.8891779984115,
+            "rss_kib": 7080
+          },
+          {
+            "ms": 813.9643799950136,
+            "rss_kib": 7088
+          },
+          {
+            "ms": 780.2986460010288,
+            "rss_kib": 7088
+          },
+          {
+            "ms": 770.9815310081467,
+            "rss_kib": 7072
+          },
+          {
+            "ms": 758.8619710004423,
+            "rss_kib": 7240
+          },
+          {
+            "ms": 750.4158640076639,
+            "rss_kib": 7028
+          },
+          {
+            "ms": 772.7949129912304,
+            "rss_kib": 7012
+          },
+          {
+            "ms": 761.772721001762,
+            "rss_kib": 6828
+          },
+          {
+            "ms": 793.4191309905145,
+            "rss_kib": 7068
+          }
+        ]
+      }
+    },
+    "pathological": {
+      "input_bytes_per_invocation": 305,
+      "input_sha256": {
+        "pathological.goose": "21d726347aff7640500bff781a442378c1e2218af53cac69f8e830e3e522d4f7"
+      },
+      "summary": {
+        "base": {
+          "median_ms": 4476.243766010157,
+          "min_ms": 3774.999161993037,
+          "max_ms": 4988.884079997661,
+          "median_rss_kib": 447228
+        },
+        "head": {
+          "median_ms": 4.1466240072622895,
+          "min_ms": 2.3981650010682642,
+          "max_ms": 8.433884009718895,
+          "median_rss_kib": 5552
+        },
+        "time_change_percent": -99.90736375800735
+      },
+      "samples": {
+        "base": [
+          {
+            "ms": 4126.116589002777,
+            "rss_kib": 447288
+          },
+          {
+            "ms": 4731.426441998337,
+            "rss_kib": 446596
+          },
+          {
+            "ms": 4631.749896012479,
+            "rss_kib": 447228
+          },
+          {
+            "ms": 3774.999161993037,
+            "rss_kib": 447716
+          },
+          {
+            "ms": 3882.0750119921286,
+            "rss_kib": 448696
+          },
+          {
+            "ms": 4620.367918003467,
+            "rss_kib": 448540
+          },
+          {
+            "ms": 4476.243766010157,
+            "rss_kib": 443904
+          },
+          {
+            "ms": 4124.768699010019,
+            "rss_kib": 447208
+          },
+          {
+            "ms": 4988.884079997661,
+            "rss_kib": 444112
+          }
+        ],
+        "head": [
+          {
+            "ms": 5.642269999952987,
+            "rss_kib": 5564
+          },
+          {
+            "ms": 8.433884009718895,
+            "rss_kib": 3756
+          },
+          {
+            "ms": 2.9445149993989617,
+            "rss_kib": 5676
+          },
+          {
+            "ms": 2.3981650010682642,
+            "rss_kib": 5540
+          },
+          {
+            "ms": 4.1466240072622895,
+            "rss_kib": 5540
+          },
+          {
+            "ms": 3.3303999953204766,
+            "rss_kib": 5556
+          },
+          {
+            "ms": 3.2227240008069202,
+            "rss_kib": 3880
+          },
+          {
+            "ms": 5.978059998597018,
+            "rss_kib": 5772
+          },
+          {
+            "ms": 4.436294999322854,
+            "rss_kib": 5552
+          }
+        ]
+      }
+    }
+  },
+  "pathological_command": [
+    "--stdlib",
+    "/tmp/goose-pr19-base/stdlib",
+    "--parse"
+  ],
+  "kernel": "Linux 6.18.33-0-lts #1-Alpine SMP PREEMPT_DYNAMIC 2026-05-24 18:06:34 x86_64",
+  "libc": [
+    "musl libc (x86_64)",
+    "Version 1.2.5"
+  ]
+}

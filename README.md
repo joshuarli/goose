@@ -493,6 +493,33 @@ highlighting, compiler checks on save and one-key runs through the JIT:
 code --install-extension vscode/goose-language.vsix
 ```
 
+## Formatting Goose source in this fork
+
+Format added or modified Goose files with the dependency-free Python tool:
+
+```bash
+python scripts/format_goose.py test/codegen/reordered_implicit_reference_fields.goose
+python scripts/format_goose.py --check test/codegen/reordered_implicit_reference_fields.goose
+```
+
+The formatter uses four-space indentation, expands braces and separates
+statements and top-level declarations, and normalizes operator spacing. It
+preserves comments, literal contents, and the token sequence, including
+reference and generic punctuation. It does not rename variables or wrap long
+expressions. Review the result and run the focused compiler or runtime check
+for the change.
+
+To format all tracked Goose files changed since a commit, use
+`python scripts/format_goose.py --changed-since HEAD`. Add `--check` to report
+files needing formatting without writing them. Stage new files first so Git
+includes them. Deliberately malformed parser fixtures in `test/errors/` are
+excluded from this selection.
+
+The `Goose formatting` workflow runs formatter tests and checks files changed
+by each push or pull request in `joshuarli/goose`. Existing files adopt the
+format when changed; no repository-wide rewrite is required. Upstream fix
+branches contain the formatted source changes without the fork's tooling.
+
 ## Documentation
 
 * [Tutorial](docs/tutorial.md): the friendly introduction, by example. Read
