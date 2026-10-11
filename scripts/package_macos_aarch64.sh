@@ -28,8 +28,6 @@ if [[ "$clang_version" != 23.* || "$llvm_version" != "$clang_version" ]]; then
     exit 1
 fi
 
-git -C "$repo_root" submodule update --init third_party/tinycc
-
 build_dir="$repo_root/build/toolchain-macos-aarch64"
 stage_dir="$build_dir/package/goose-macos-aarch64"
 dist_dir="$repo_root/dist"
@@ -39,7 +37,7 @@ CC="$clang" CXX="$clangxx" cmake -S "$repo_root" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$clang" \
     -DCMAKE_CXX_COMPILER="$clangxx" \
-    -DGOOSE_GFX=OFF -DGOOSE_AUDIO=OFF -DGOOSE_PHYSICS=OFF -DGOOSE_UI=OFF
+    -DGOOSE_BUILTIN_LIBS=
 cmake --build "$build_dir" --config Release
 
 rm -rf "$stage_dir"
@@ -55,8 +53,7 @@ Goose compiler for macOS arm64
 Built with Homebrew LLVM/Clang $clang_version.
 The compiler and standard library are bundled together. TinyCC support files
 are in bin/tcclib for in-process execution with --jit.
-The native audio, graphics, physics, and ui modules are not enabled in this
-build.
+No optional native packages are bundled in this build.
 
 Run a source file with:
   bin/goose path/to/program.goose
