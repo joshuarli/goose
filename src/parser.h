@@ -5,11 +5,15 @@
 
 namespace goose {
 
-// An `import a.b.c;` (path a/b/c.goose relative to the main file) or
-// `import .a.b;` (relative to the importing file).
+// An `import a.b.c;` (path a/b/c.goose relative to the importing file's
+// package root, §11.1), `import .a.b;` (relative to the importing file), or
+// `import name from "source";` (a package: declared by the root file,
+// required by any other, docs/design/packages.md §4).
 struct Import {
     string path;                     // Slash-separated, no extension.
     bool relative = false;           // Leading dot form.
+    string source;                   // The `from` string, "" for none.
+    int line = 0;
 };
 
 struct Parser {
@@ -150,11 +154,21 @@ struct Parser {
                 return;
             }
             case T_IMPORT: {
-                lex.Next();
                 Import imp;
+                imp.line = lex.tokline;
+                lex.Next();
                 imp.relative = IsNext(T_DOT);
                 imp.path = ExpectIdent("import");
                 while (IsNext(T_DOT)) Append(imp.path, "/", ExpectIdent("import"));
+                // `from` is an identifier here, as in `return x from f`.
+                if (lex.tok == T_IDENT && lex.attr == "from") {
+                    if (imp.relative || imp.path.find('/') != string::npos)
+                        Error("a sourced import names one package: import name from \"source\";");
+                    lex.Next();
+                    if (lex.tok != T_STRLIT) Error("expected the package's source, a string, after from");
+                    imp.source = lex.sval;
+                    lex.Next();
+                }
                 Expect(T_SEMI, "import");
                 // Not a topdecl: the driver inlines the imported file's decls,
                 // which keeps a dump of the program self-contained.

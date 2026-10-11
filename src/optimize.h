@@ -203,7 +203,7 @@ struct Optimizer {
             auto v = WrapStorage(i->val, it);
             r = ast.New<IntLit>(lit->line, v, v == i->val ? i->text : string_view {},
                                 it == IS_U64 && v < 0);
-        } else if (auto i = Is<IntLit>(lit)) r = ast.New<IntLit>(lit->line, i->val, i->text, i->uns);
+        } else if (i) r = ast.New<IntLit>(lit->line, i->val, i->text, i->uns);
         else if (auto f = Is<FltLit>(lit)) r = ast.New<FltLit>(lit->line, f->val, f->text);
         else r = ast.New<BoolLit>(lit->line, ((BoolLit *)lit)->val);
         r->exprtype = usetype ? usetype : lit->exprtype;

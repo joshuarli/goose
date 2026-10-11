@@ -657,7 +657,7 @@ def main():
     descs = {k: {"desc": ccs[k].desc, "opt": "/O2" if ccs[k].style == "msvc" else "-O2"}
              for k in ccs}
 
-    jit = not (args.no_jit or args.report_only) and tc.have_jit(args.exe)
+    jit = not (args.no_jit or args.report_only)
     rustc = tc.find_rustc()
     have_rust = bool(rustc) and RUSTDIR.is_dir()
     rust_version = tc.decode(tc.run_capture([rustc, "--version"])[1]).strip() if have_rust else None

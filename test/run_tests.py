@@ -27,12 +27,12 @@ use the SDL3 graphics module, the physics/ tests the Box3D
 physics module and the ui/ tests the Nuklear ui module. They always parse,
 typecheck and generate C; they build and run where the compiler has the
 native layers they use built in -- their category's, and any other they
-import, as a ui test drawing through gfx does -- linking what `goose
---audio-link`, `--gfx-link`, `--physics-link` or `--ui-link` names, and a machine without a
-GPU device counts as a skip for gfx. A fixture there with `// error:`
-markers is a rejection test, as in errors_tc/. test/api_check.py checks
-stdlib/audio.goose, stdlib/gfx.goose, stdlib/physics.goose and stdlib/ui.goose against their C
-layers' own lists of functions, structs and constants.
+import, as a ui test drawing through gfx does -- built by `goose build`,
+which links the packages the compiler was configured with, and a machine
+without a GPU device counts as a skip for gfx. A fixture there with
+`// error:` markers is a rejection test, as in errors_tc/. The packages
+check their modules against their C layers themselves (test/api_check.py in
+each of their repositories).
 
 Profiles keep the CI coverage deliberate: baseline compares Goose/native C
 -O0 and -O2 plus the targeted debug-runtime runs; sanitize uses Goose -O2 and
@@ -67,6 +67,7 @@ to a process.
 """
 
 import argparse
+import json
 import concurrent.futures
 import os
 import re
@@ -81,7 +82,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "scripts"))
 import toolchain as tc
-import api_check
 
 
 def native_modules(f, native):
@@ -305,6 +305,11 @@ class Fixture:
         self.line, self.dumped = "", False
         # By build_options key, the compiler run that wrote the C and where.
         self.modules, self.jitlevels, self.gen, self.c = [], (), {}, {}
+        # Whether the compiler builds its program (goose build) rather than
+        # this runner: a .build sidecar beside it (C of its own), or a
+        # packages/ fixture, whose packages may have C the runner cannot
+        # see.
+        self.sidecar = False
 
 
 class Runner:
@@ -642,6 +647,7 @@ class Runner:
         program writes, still happen one after another."""
         res = Fixture()
         res.line = line = first_line(f)
+        res.sidecar = f.with_suffix(".build").exists() or f.parent.name == "packages"
         bce = has_bce_annotations(f)
         with self.into(res.front):
             res.dumped = self.front(f, line, bce, res)
@@ -735,7 +741,11 @@ class Runner:
         name = f.stem
         res.modules = modules = native_modules(f, self.native)
         levels = self.levels if self.cc else ()
-        res.jitlevels = jitlevels = ("0", "2") if self.jit and "no-jit" not in line else ()
+        # A native module's fixture runs in-process only where the package
+        # is compiled in; the compiler would otherwise build the package.
+        available = all(self.native[m] for m in modules)
+        res.jitlevels = jitlevels = ("0", "2") if self.jit and available and \
+            "no-jit" not in line else ()
         gen, cfiles = res.gen, res.c
         with self.into(res.cgen):
             for ol in sorted(set(levels) | set(jitlevels)):
@@ -761,7 +771,7 @@ class Runner:
         with others': not where it links a native layer, or was not written
         (where a JIT run of it followed, the run has the exit code)."""
         cfile = res.c.get(key)
-        if cfile is None or res.modules:
+        if cfile is None or res.modules or res.sidecar:
             return False
         return cfile.is_file() if key in res.jitlevels else res.gen[key][0] == 0
 
@@ -789,7 +799,6 @@ class Runner:
         judges the program's TinyCC runs."""
         name = f.stem
         modules = res.modules
-        libs = [lib for m in modules for lib in self.native[m]]
         levels = self.levels if self.cc else ()
         jitlevels, gen, cfiles = res.jitlevels, res.gen, res.c
         if levels:
@@ -812,13 +821,26 @@ class Runner:
                         bad = True
                         continue
                     argv = built.get(ol)
-                    if not argv:
+                    if not argv and (res.sidecar or modules):
+                        # A program with C of its own, or using a native
+                        # module, is built by the compiler, which builds or
+                        # finds that C too (native.h, builtin.h).
+                        argv = [efile]
+                        code, out, err = tc.run_capture([self.exe, "build", f"-O{ol}", "-o", efile, f])
+                        if code != 0:
+                            if tc.NO_TOOLCHAIN in err or tc.NO_CMAKE in err:
+                                res.nativeskips.append(f.name)
+                            else:
+                                self.fail(f"goose build -O{ol} {f.name}", out + err)
+                            bad = True
+                            continue
+                    elif not argv:
                         # A program that did not build in a batch shows here
                         # why, built on its own.
                         argv = [efile]
                         opt, _ = self.build_options(ol)
                         ok, log = self.cc.compile(cfile, efile, opt=opt,
-                                                  extra=self.extra, strict_decls=True, libs=libs,
+                                                  extra=self.extra, strict_decls=True,
                                                   runtime=self.runtime,
                                                   log=self.gendir / f"{name}-O{ol}.cc.log")
                         if not ok:
@@ -844,6 +866,10 @@ class Runner:
 
         if not self.jit:
             return
+        if any(not self.native[m] for m in modules):
+            if f.name not in res.nativeskips:
+                res.nativeskips.append(f.name)
+            return
         if not jitlevels:
             res.jitskips.append(f.name)
             return
@@ -857,7 +883,8 @@ class Runner:
                 if code != 0 and tc.JIT_UNSUPPORTED in err:
                     res.jitskips.append(f.name)
                     return
-                if any(tc.native_unavailable(m, err) for m in modules):
+                if any(tc.native_unavailable(m, err) for m in modules) or \
+                        (code != 0 and (tc.NO_TOOLCHAIN in err or tc.NO_CMAKE in err)):
                     res.nativeskips.append(f.name)
                     return
                 out = self.check_run(name, f"jit -O{ol} {f.name}", code, out, err)
@@ -1265,6 +1292,9 @@ def main():
         ap.error("--jobs must be at least 1, and --gpu-jobs and --batch at least 0")
 
     tc.setup_console()
+    # The compiler's cache (runtime objects, fetched packages) for everything
+    # the suite runs: under the build tree, never the user's own.
+    os.environ["GOOSE_HOME"] = str(tc.REPO_ROOT / "build" / "goose-home")
     started = time.perf_counter()
     # The suite opens no windows: a gfx program asking for one draws off
     # screen instead.
@@ -1279,7 +1309,7 @@ def main():
     # Not under the sanitizers: the program runs inside the compiler process and
     # is not itself instrumented, and its runtime allocations are still held
     # when the compiler exits, which LeakSanitizer reports against the compiler.
-    jit = not args.no_jit and args.profile != "sanitize" and tc.have_jit(exe)
+    jit = not args.no_jit and args.profile != "sanitize"
     r = Runner(exe, args.jobs, args.verbose)
     r.gpulock = threading.BoundedSemaphore(args.gpu_jobs) if args.gpu_jobs else None
     r.batch = args.batch
@@ -1324,16 +1354,15 @@ def main():
     clang = None if args.nocgen or args.profile == "sanitize" else tc.find_clang_c()
     if args.require_clang and not clang:
         ap.error("requested secondary C front end is unavailable: clang")
-    # What a gfx, physics or ui test program links, by the category directory
-    # it is in and what it imports, empty for a compiler built without that
-    # layer: those tests then only generate C.
-    native = {"audio": tc.audio_link(exe, cc) if cc else [],
-              "gfx": tc.gfx_link(exe, cc) if cc else [],
-              "physics": tc.physics_link(exe, cc) if cc else [],
-              "ui": tc.ui_link(exe, cc) if cc else []}
+    # Which native modules (by a fixture's category directory and what it
+    # imports) have their package compiled into the compiler: a fixture using
+    # one that is not only generates C, so that the suite never has the
+    # compiler fetch and build a package.
+    builtin = tc.builtin_modules(exe)
+    native = {m: m in builtin for m in tc.NATIVE_MODULES}
     print(f"profile: {args.profile}; C backend: {cc.desc if cc else 'none'}; "
           f"JIT backend: {'TinyCC' if jit else 'none'}; " +
-          "; ".join(f"{m}: {'linked' if libs else 'not built in'}" for m, libs in native.items()))
+          "; ".join(f"{m}: {'built in' if have else 'not built in'}" for m, have in native.items()))
     builddir = tc.REPO_ROOT / "build"
     builddir.mkdir(parents=True, exist_ok=True)
     dumpdir = builddir / "dump"
@@ -1520,17 +1549,6 @@ def main():
     for name in ("gfx_err_shader_syntax", "gfx_err_shader_part"):
         r.show_task(shader_error_line, name)
 
-    # Both sides of each native module's C boundary describe it: they must
-    # agree.
-    def api(module):
-        problems = api_check.check(module)
-        what = f"{module}-api stdlib/{module}.goose against its C layer's header"
-        if problems:
-            r.fail(what, "\n".join(problems))
-        else:
-            r.ok(what)
-    for module in native:
-        r.show_task(api, module)
 
     r.section("parse, roundtrip and typecheck")
     for f in tests:
@@ -1797,6 +1815,80 @@ def main():
     if cc or jit:
         r.section("resource paths")
         r.show_task(resource_paths)
+
+    def git_packages():
+        from packages_git import check_git_packages
+        try:
+            skipped = check_git_packages(exe, gendir, jit=jit)
+            if skipped:
+                r.say(f"skip packages from git ({skipped})")
+            else:
+                r.ok("packages from git: concurrent fetches, submodules, interrupted fetch, "
+                     "tag, commit, update, differing ref")
+        except RuntimeError as e:
+            r.fail("packages from git", str(e))
+    r.section("packages from git")
+    r.show_task(git_packages)
+
+    def driver_verbs():
+        """The verb forms of the command line against the flag forms they
+        stand for: `goose run`, `goose check` and `goose version`."""
+        probe = gendir / "verbs.goose"
+        tc.write_text(probe, 'fn main() { print("verbs"); }\n')
+        checks = []
+        if jit:
+            code, out, err = tc.run_capture([exe, "run", probe])
+            checks.append(("run", code == 0 and out.strip() == "verbs", out + err))
+        code, out, err = tc.run_capture([exe, "check", probe])
+        checks.append(("check", code == 0 and "typechecked ok" in out + err and
+                       "verbs" not in out, out + err))
+        code, out, err = tc.run_capture([exe, "run", "-o", str(gendir / "verbs.c"), probe])
+        checks.append(("run -o (refused)", code != 0 and "takes no -o" in err, out + err))
+        code, out, err = tc.run_capture([exe, "version"])
+        checks.append(("version", code == 0 and
+                       re.match(r"goose runtime [0-9a-f]{12}\s*$", out) is not None, out + err))
+        # The compiler's own toolchain discovery: where this runner found a C
+        # compiler, the compiler must find one too, and say so as JSON.
+        code, out, err = tc.run_capture([exe, "toolchain", "--json"])
+        try:
+            info = json.loads(out)
+            good = (cc is None or info.get("cc") is not None) and \
+                   code == (0 if info.get("cc") else 1)
+        except ValueError:
+            good = False
+        checks.append(("toolchain --json", good, out + err))
+        if cc:
+            # `goose build` against the toolchain the compiler finds itself:
+            # the executable beside -o, running; a dry run writing none.
+            built = gendir / ("verbs_built" + tc.EXE_SUFFIX)
+            code, out, err = tc.run_capture([exe, "build", "-o", str(built), probe])
+            good = code == 0 and built.exists()
+            if good:
+                code, out2, err2 = tc.run_capture([built])
+                good = code == 0 and out2.strip() == "verbs"
+                out, err = out + out2, err + err2
+            checks.append(("build", good, out + err))
+            dry = gendir / ("verbs_dry" + tc.EXE_SUFFIX)
+            code, out, err = tc.run_capture([exe, "build", "--dry-run", "-o", str(dry), probe])
+            checks.append(("build --dry-run", code == 0 and not dry.exists() and
+                           "verbs" in out and "goose_runtime" in out, out + err))
+        for what, good, text in checks:
+            if good:
+                r.ok(f"goose {what}")
+            else:
+                r.fail(f"goose {what}", text)
+    r.section("driver verbs")
+    r.show_task(driver_verbs)
+
+    def runtime_cache():
+        from runtime_cache import check_runtime_cache
+        try:
+            check_runtime_cache(exe, cc, gendir)
+            r.ok("runtime cache: concurrent builds, failed compile, retry and reuse")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("runtime cache", str(e))
+    if cc:
+        r.show_task(runtime_cache)
 
     show_goose_in_goose()
 

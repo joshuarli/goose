@@ -1014,7 +1014,7 @@ NODE(Call)
     // free_slice/realloc_slice: the slice handed back is not provably the pool's,
     // so codegen checks at run time that it lies inside the pool (§5.4).
     bool poolcheck = false;
-    const string *shaderblob = nullptr;  // embed_shader: its compiled blob, in Ast::shaders.
+    const string *shaderblob = nullptr;  // embed_shader's compiled blob or embed_file's bytes, in Ast::shaders.
     Call(Line l, Node *_callee) : Node(l, NKind), callee(_callee) {}
     // What the call passes for the callee's free variable v (fvremap).
     VarDef *FreeVarArg(VarDef *v) const {
@@ -2078,10 +2078,38 @@ inline string_view GlobalLeaf(string_view name) {
 // ---------------------------------------------------------------------------
 // Ast: owner of everything produced by parsing.
 
+// A package (docs/design/packages.md §4.1): a directory of modules, under
+// which a file's `import a.b;` resolves `a/b.goose`. Package 0 is the
+// program, rooted at its root file's directory; a standard library
+// directory is one too, once a module in it is reached.
+struct Package {
+    string name;
+    string root;          // With its trailing separator, or "" for the working directory.
+    bool stdlib = false;
+    string cachekey;      // A git source's place under GOOSE_HOME/pkg; "" for a path.
+    int builtin = -1;     // Its index in builtin_packages when compiled into the compiler.
+    // The sidecar beside its entry, `<name>.build` (docs/design/packages.md
+    // §4.7), read when the package is loaded: the C it compiles, which makes
+    // its native part (§5), and the rest of its settings.
+    string sidecar;
+    bool hassidecar = false;
+    vector<string> csources, cincludes;     // Absolute.
+    vector<string> cdefines, cflags_cc, cflags_msvc, clibs;
+    string cmake_target;
+    vector<string> cmake_options;
+    bool main_thread_only = false;
+    string output;                          // A program's executable, relative to its root.
+    vector<int> required;                   // The packages its files require (§4.3), by index.
+
+    bool HasNative() const { return !csources.empty() || !cmake_target.empty(); }
+};
+
 struct Ast {
     // Source buffers stay alive here; all string_views point into them. The
     // contents are heap-boxed so vector growth never moves an SSO buffer.
     vector<pair<string, unique_ptr<string>>> sources;   // (filename, contents).
+    vector<Package> packages;
+    vector<int> filepkg;                                // Per source, its package.
 
     vector<Node *> allnodes;
     vector<TypeExpr *> alltypes;
@@ -2104,6 +2132,7 @@ struct Ast {
     // embed_shader's compiled blobs, compiled once by the checker and emitted
     // by codegen: a shader file's by its path as resolved from the file
     // calling it, a shader given as source by that file, stage and source.
+    // And embed_file's bytes, by "file\n" and the path, read the same way.
     map<string, string> shaders;
 
     // Every checked tree that runs outside a function body: the global

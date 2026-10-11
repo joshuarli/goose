@@ -14,7 +14,9 @@ language server, runtime dependencies, or compiler changes are required.
   entries. Use **F8 / Shift+F8** to jump between problems. Lexer errors use the
   compiler's caret; type errors highlight the source line. Instantiation chains
   appear as related locations in Problems.
-- **Goose: Check Program**, **Goose: Run with JIT**, **Goose: Generate C**, and
+- **Goose: Check Program**, **Goose: Run with JIT**, **Goose: Build
+  Executable** (`goose build`: an executable beside the source, linked with
+  the packages the program uses), **Goose: Generate C**, and
   **Goose: Show Compiler Output** in the Command Palette. The editor's play
   button and **▶ Goose** status-bar button run the program in a task terminal,
   with stdin and clickable errors.
@@ -24,8 +26,8 @@ language server, runtime dependencies, or compiler changes are required.
 - Top-level declarations in Outline, breadcrumbs and Go to Symbol (**Ctrl+Shift+O**).
 - Clickable imports, with root-relative, importing-file-relative (`import .foo;`),
   and standard-library resolution matching the compiler.
-- Check, Run and Generate C tasks, plus the `$goose` problem matcher for custom
-  tasks with absolute paths or paths relative to the workspace folder.
+- Check, Run, Build and Generate C tasks, plus the `$goose` problem matcher for
+  custom tasks with absolute paths or paths relative to the workspace folder.
 
 The extension uses lexical analysis and compiler commands. It does not yet
 provide semantic completion, rename, cross-file symbol definitions, formatting,
@@ -106,8 +108,8 @@ highlighting, snippets and the outline remain available.
 ## Tasks
 
 JIT Run is the extension's build task. **Ctrl+Shift+B** runs it directly while
-editing a Goose file; Check and Generate C remain explicit commands under
-**Tasks: Run Task** and in the Command Palette. The editor and status-bar play
+editing a Goose file; Check, Build Executable and Generate C remain explicit
+commands under **Tasks: Run Task** and in the Command Palette. The editor and status-bar play
 buttons use the same JIT command. Check-on-save still only checks the program.
 
 The Goose shortcuts take precedence while a Goose editor has focus. To use

@@ -36,6 +36,7 @@
     "commands": [
       { "command": "goose.check", "title": "Check Program", "category": "Goose", "enablement": "editorLangId == goose && isWorkspaceTrusted" },
       { "command": "goose.run", "title": "Run with JIT", "category": "Goose", "icon": "$(play)", "enablement": "editorLangId == goose && isWorkspaceTrusted" },
+      { "command": "goose.build", "title": "Build Executable", "category": "Goose", "enablement": "editorLangId == goose && isWorkspaceTrusted" },
       { "command": "goose.generateC", "title": "Generate C", "category": "Goose", "enablement": "editorLangId == goose && isWorkspaceTrusted" },
       { "command": "goose.showOutput", "title": "Show Compiler Output", "category": "Goose" }
     ],
@@ -81,7 +82,7 @@
     "taskDefinitions": [{
       "type": "goose", "required": ["action"],
       "properties": {
-        "action": { "type": "string", "enum": ["run", "check", "generateC"], "description": "Compiler operation. Run uses the JIT and is the contributed build task." },
+        "action": { "type": "string", "enum": ["run", "check", "build", "generateC"], "description": "Compiler operation. Run uses the JIT and is the contributed build task; build makes an executable beside the source with `goose build`." },
         "file": { "type": "string", "description": "Source file relative to the workspace folder. Defaults to goose.entryFile or the active file. Supports ${workspaceFolder} and ${file}." },
         "output": { "type": "string", "description": "C output file for generateC; defaults to the source basename with .c." }
       }

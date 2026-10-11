@@ -103,10 +103,12 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             }
             return first;
         }
-        case B_EMBED_SHADER: {
-            // The shader compiled now, and the result a read-only view of
-            // static data, like a string literal's (stdlib/gfx.goose).
-            c->shaderblob = EmbedShader(c, args);
+        case B_EMBED_SHADER:
+        case B_EMBED_FILE: {
+            // The shader compiled, or the file read, now, and the result a
+            // read-only view of static data, like a string literal's
+            // (stdlib/gfx.goose, docs/design/packages.md §6.5).
+            c->shaderblob = c->builtin == B_EMBED_FILE ? EmbedFile(c, args) : EmbedShader(c, args);
             c->rettypes.push_back(cu8slice);
             Val v;
             v.type = cu8slice;
@@ -858,6 +860,30 @@ inline StrLit *TypeCheck::ConstStrLit(Node *n) {
         if (auto s = Is<StrLit>(g->inits[0])) return s;
         if (!(id = Is<Ident>(g->inits[0]))) return nullptr;
     }
+}
+
+// The bytes of the file an embed_file call names, read here once per
+// distinct file, resolved relative to the file with the call as a shader
+// file is. The argument is a string literal, or a let or const global
+// initialized with one, which stands in for it: the call reads nothing at
+// run time.
+inline const string *TypeCheck::EmbedFile(Call *c, vector<Node *> &args) {
+    auto &callfile = ast.sources[c->line.fileidx].first;
+    auto lit = ConstStrLit(args[0]);
+    if (!lit)
+        Error(args[0], "embed_file takes a string literal, or a let or const global initialized "
+                       "with one");
+    if (lit != args[0]) args[0] = ast.New<StrLit>(lit->line, lit->val, lit->multiline);
+    args[0]->exprtype = cu8slice;
+    auto path = EmbeddedShaderPath(callfile, lit->val);
+    auto key = cat("file\n", path);
+    auto it = ast.shaders.find(key);
+    if (it == ast.shaders.end()) {
+        string bytes;
+        if (!LoadFile(path, bytes)) Error(c, cat("embed_file: cannot open ", path));
+        it = ast.shaders.emplace(key, std::move(bytes)).first;
+    }
+    return &it->second;
 }
 
 // The blob of the shader an embed_shader call names, compiled here once per

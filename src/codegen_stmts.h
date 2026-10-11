@@ -252,7 +252,7 @@ inline const set<const VarDef *> &CodeGen::RefdLocals() {
 // when one runs. Returns the divisors it adds to divmagic, for the loop to
 // retire. Tail-recursion elimination turns self-calls into a loop that
 // assigns the parameters each round (optimize_tre.h), which is a write.
-inline vector<string> CodeGen::HoistDivisors(Block *body, Node *cond,
+inline vector<string> CodeGen::HoistDivisors(Block *loopbody, Node *cond,
                                              const vector<const VarDef *> &binders) {
     vector<string> added;
     set<const VarDef *> inner(binders.begin(), binders.end());
@@ -292,7 +292,7 @@ inline vector<string> CodeGen::HoistDivisors(Block *body, Node *cond,
         if (auto b = Is<Binary>(n); b && LoopDivisible(b)) divs.push_back(b);
         RunChildren(n, walk);
     };
-    walk(body);
+    walk(loopbody);
     walk(cond);
     for (auto b : divs) {
         const VarDef *root = nullptr;

@@ -3143,13 +3143,13 @@ inline bool TypeCheck::UsedAfter(VarDef *v) {
     if (!blockpos.empty()) {
         auto &bp = blockpos.back();
         auto &stmts = bp.block->stmts;
-        auto cur = (int)frames.size() - 1;
-        if (bp.scopeidx == (int)scopes.size() - 1 && FrameOfScope(bp.scopeidx) == cur &&
+        auto frameidx = (int)frames.size() - 1;
+        if (bp.scopeidx == (int)scopes.size() - 1 && FrameOfScope(bp.scopeidx) == frameidx &&
             bp.idx < stmts.size() && !EscapingContinue(stmts[bp.idx])) {
             for (auto i = bp.idx + 1; i <= stmts.size(); i++) {
                 auto s = i < stmts.size() ? stmts[i] : bp.block->tail;
                 if (!s || EscapingContinue(s)) break;
-                auto to = Is<Return>(s) ? frames[cur].scopebase
+                auto to = Is<Return>(s) ? frames[frameidx].scopebase
                           : Is<Break>(s) ? FindBreakScope(false)
                                          : -1;
                 if (to < 0) continue;

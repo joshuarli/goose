@@ -2147,6 +2147,7 @@ struct TypeCheck {
                          Node *arg);
     StrLit *ConstStrLit(Node *n);
     const string *EmbedShader(Call *c, vector<Node *> &args);
+    const string *EmbedFile(Call *c, vector<Node *> &args);
     void CheckGrowShrink(Node *at, const char *op, Node *recv, const Val &rv);
     void GrowOnlyAssignKnown(Assign *a, const Roots &built, bool whole);
     // Whether a shrink whose receiver has these roots knows the arrays it
@@ -2742,19 +2743,16 @@ struct TypeCheck {
                                      entry->sf->name, ")"));
                 }
                 if (auto c = Is<Call>(n)) {
-                    // The native layers keep one state for the process, and
-                    // SDL's windowing is main-thread only.
+                    // A native layer that keeps one state for the process,
+                    // or SDL's windowing, is main-thread only: its package
+                    // says so in its sidecar (main_thread_only), and the
+                    // error names the module the extern fn was declared in.
                     if (c->spec && c->spec->sf->isextern) {
-                        auto &cname = c->spec->sf->cname;
-                        auto module = cname.rfind("gs_audio_", 0) == 0  ? "audio"
-                                      : cname.rfind("gs_gfx_", 0) == 0  ? "gfx"
-                                      : cname.rfind("gs_phys_", 0) == 0 ? "physics"
-                                      : cname.rfind("gs_ui_", 0) == 0   ? "ui"
-                                                                        : nullptr;
-                        if (module)
-                            Error(n, cat(module, " runs on the main thread only: ",
-                                         c->spec->sf->qname, " is reached from thread_fn ",
-                                         entry->sf->name));
+                        auto fileidx = c->spec->sf->line.fileidx;
+                        if (ast.packages[ast.filepkg[fileidx]].main_thread_only)
+                            Error(n, cat(PathStem(ast.sources[fileidx].first),
+                                         " runs on the main thread only: ", c->spec->sf->qname,
+                                         " is reached from thread_fn ", entry->sf->name));
                     }
                     rec(c->spec);
                     for (auto d : c->dispatch) rec(d);
