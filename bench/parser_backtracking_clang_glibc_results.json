@@ -1,0 +1,460 @@
+{
+  "platform": "Linux-6.18.33-0-lts-x86_64-with-glibc2.39",
+  "kernel": "Linux 6.18.33-0-lts #1-Alpine SMP PREEMPT_DYNAMIC 2026-05-24 18:06:34 x86_64",
+  "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+  "compiler": "Ubuntu clang version 18.1.3 (1ubuntu1)",
+  "libc": [
+    "ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39",
+    "Copyright (C) 2024 Free Software Foundation, Inc."
+  ],
+  "base_revision": "de24a15659248fce28a1d5bdc8a6375bea322a0a",
+  "head_revision": "b37cebb737200510e18839eb9db2da5e49896279",
+  "build_flags": "-O2 -DNDEBUG",
+  "cpu_affinity": 0,
+  "rounds": 9,
+  "warmup_pairs": 2,
+  "sites_per_generated_file": 50000,
+  "generated_file_repeats": 20,
+  "corpus": [
+    "samples/01_tour.goose",
+    "samples/12_huffman.goose",
+    "samples/14_bst.goose",
+    "samples/17_calc.goose",
+    "samples/18_json.goose",
+    "samples/19_vm.goose",
+    "bench/goose/interp.goose",
+    "bench/goose/lru.goose",
+    "bench/goose/records_var.goose",
+    "bench/goose/respond.goose",
+    "bench/goose/scene.goose",
+    "bench/goose/sexp.goose"
+  ],
+  "corpus_repeats": 80,
+  "pathological_fixture": "test/errors/generic_comparison_backtrack.goose",
+  "command": [
+    "--stdlib",
+    "/repro/base/stdlib",
+    "--multi-test",
+    "--parse"
+  ],
+  "pathological_command": [
+    "--stdlib",
+    "/repro/base/stdlib",
+    "--parse"
+  ],
+  "workloads": {
+    "comparisons": {
+      "input_bytes_per_invocation": 34663060,
+      "input_sha256": {
+        "comparisons.goose": "f4f0e7caf1c21c27733c350bf85b9f115bff427f22967ffd8d8c7243c3b7da4a"
+      },
+      "summary": {
+        "base": {
+          "median_ms": 440.76399999903515,
+          "min_ms": 435.1284430013038,
+          "max_ms": 456.858014993486,
+          "median_rss_kib": 39544
+        },
+        "head": {
+          "median_ms": 616.0118939878885,
+          "min_ms": 599.7024179960135,
+          "max_ms": 622.8293190069962,
+          "median_rss_kib": 38120
+        },
+        "time_change_percent": 39.76002894729083
+      },
+      "samples": {
+        "base": [
+          {
+            "ms": 451.09196899284143,
+            "rss_kib": 39528
+          },
+          {
+            "ms": 438.28137499804143,
+            "rss_kib": 39412
+          },
+          {
+            "ms": 451.4698980055982,
+            "rss_kib": 39544
+          },
+          {
+            "ms": 445.64374900073744,
+            "rss_kib": 39572
+          },
+          {
+            "ms": 456.858014993486,
+            "rss_kib": 39852
+          },
+          {
+            "ms": 435.1284430013038,
+            "rss_kib": 39568
+          },
+          {
+            "ms": 440.76399999903515,
+            "rss_kib": 39496
+          },
+          {
+            "ms": 440.16545100021176,
+            "rss_kib": 39324
+          },
+          {
+            "ms": 438.09509999118745,
+            "rss_kib": 39576
+          }
+        ],
+        "head": [
+          {
+            "ms": 616.0118939878885,
+            "rss_kib": 38012
+          },
+          {
+            "ms": 615.7990979991155,
+            "rss_kib": 38120
+          },
+          {
+            "ms": 611.9849380047526,
+            "rss_kib": 38096
+          },
+          {
+            "ms": 617.7508830005536,
+            "rss_kib": 38096
+          },
+          {
+            "ms": 622.6922390051186,
+            "rss_kib": 38248
+          },
+          {
+            "ms": 613.544556996203,
+            "rss_kib": 38160
+          },
+          {
+            "ms": 622.8293190069962,
+            "rss_kib": 38148
+          },
+          {
+            "ms": 599.7024179960135,
+            "rss_kib": 38092
+          },
+          {
+            "ms": 616.2913650041446,
+            "rss_kib": 38208
+          }
+        ]
+      }
+    },
+    "generics": {
+      "input_bytes_per_invocation": 41663860,
+      "input_sha256": {
+        "generics.goose": "79bb58bac5a4fd7feb5bb7c52de1b8a5ad24f0b5a5eb953980d5e6ab99aebb62"
+      },
+      "summary": {
+        "base": {
+          "median_ms": 501.0384220076958,
+          "min_ms": 489.5716449973406,
+          "max_ms": 581.7437040095683,
+          "median_rss_kib": 49340
+        },
+        "head": {
+          "median_ms": 505.2810280030826,
+          "min_ms": 496.46695000410546,
+          "max_ms": 589.8147069965489,
+          "median_rss_kib": 49372
+        },
+        "time_change_percent": 0.8467626052282462
+      },
+      "samples": {
+        "base": [
+          {
+            "ms": 499.68555600207765,
+            "rss_kib": 49340
+          },
+          {
+            "ms": 507.0059610006865,
+            "rss_kib": 49264
+          },
+          {
+            "ms": 508.44096299260855,
+            "rss_kib": 49128
+          },
+          {
+            "ms": 489.5716449973406,
+            "rss_kib": 49264
+          },
+          {
+            "ms": 490.14083899965044,
+            "rss_kib": 49376
+          },
+          {
+            "ms": 494.7326989931753,
+            "rss_kib": 49432
+          },
+          {
+            "ms": 501.0384220076958,
+            "rss_kib": 49256
+          },
+          {
+            "ms": 581.7437040095683,
+            "rss_kib": 49456
+          },
+          {
+            "ms": 568.5522840067279,
+            "rss_kib": 49452
+          }
+        ],
+        "head": [
+          {
+            "ms": 505.17295199097134,
+            "rss_kib": 49564
+          },
+          {
+            "ms": 505.2810280030826,
+            "rss_kib": 49560
+          },
+          {
+            "ms": 496.46695000410546,
+            "rss_kib": 49372
+          },
+          {
+            "ms": 503.3219680044567,
+            "rss_kib": 49148
+          },
+          {
+            "ms": 507.26413300435524,
+            "rss_kib": 49140
+          },
+          {
+            "ms": 498.34688899863977,
+            "rss_kib": 49292
+          },
+          {
+            "ms": 512.2812829940813,
+            "rss_kib": 49600
+          },
+          {
+            "ms": 531.1147619941039,
+            "rss_kib": 49500
+          },
+          {
+            "ms": 589.8147069965489,
+            "rss_kib": 49372
+          }
+        ]
+      }
+    },
+    "corpus": {
+      "input_bytes_per_invocation": 5083120,
+      "input_sha256": {
+        "samples/01_tour.goose": "47be41339ce1f8a92dea855783b1a6ccbeb39ea1c560dafda93e544be7640002",
+        "samples/12_huffman.goose": "56748c8dc3c985b0cfd6a75ef11c44f3b2c061e9c97d5ff02f8bf133168e9f28",
+        "samples/14_bst.goose": "bcdb51720fb9fbc65afab098e6ab3e044ec2019cb385b68f9e355fc31a592492",
+        "samples/17_calc.goose": "3007add674543239e94778e0ef094f62712a9fd2e1e461a1afbb0769245a3199",
+        "samples/18_json.goose": "8c87ec759fcfc249531a96f98ca335bff311062398e84ff2684fb11cf33895b1",
+        "samples/19_vm.goose": "5168a33dbb279a4eef63a1b96e8df1bb7f5ea6f5fd2a40d5261e3006b6e0238f",
+        "bench/goose/interp.goose": "77675a06109a6249d4d013390b13140e42dc51856d7f36911deb3dd710abb46b",
+        "bench/goose/lru.goose": "ac0c4968cb9a63a187e56006c57560606b7914655df57a7316a0e3d76827900b",
+        "bench/goose/records_var.goose": "7638558616bb707f8b703330fd968a7668e2f887a4ea218069b22fac11425964",
+        "bench/goose/respond.goose": "087444027ca124f4f450a9b831c0b39b82040478b9da041c3e81a0ea0ef4cfea",
+        "bench/goose/scene.goose": "d4c256dacc6381e25d342fe4f9748c8bc59b386e1aa59bfa98bb9960c09dbde3",
+        "bench/goose/sexp.goose": "406bb29201da3d00711fc7c1d666122307acf6b0028d6703ec97d861246a3bb1"
+      },
+      "summary": {
+        "base": {
+          "median_ms": 500.8134639938362,
+          "min_ms": 488.9949170028558,
+          "max_ms": 552.2813720017439,
+          "median_rss_kib": 5928
+        },
+        "head": {
+          "median_ms": 513.7347990093986,
+          "min_ms": 494.9333510012366,
+          "max_ms": 549.8275910067605,
+          "median_rss_kib": 6016
+        },
+        "time_change_percent": 2.580069415969488
+      },
+      "samples": {
+        "base": [
+          {
+            "ms": 532.4577579885954,
+            "rss_kib": 5928
+          },
+          {
+            "ms": 552.2813720017439,
+            "rss_kib": 6000
+          },
+          {
+            "ms": 537.1501299960073,
+            "rss_kib": 5832
+          },
+          {
+            "ms": 501.5725880075479,
+            "rss_kib": 6004
+          },
+          {
+            "ms": 500.8134639938362,
+            "rss_kib": 5716
+          },
+          {
+            "ms": 492.8739009919809,
+            "rss_kib": 5936
+          },
+          {
+            "ms": 495.0323800003389,
+            "rss_kib": 5940
+          },
+          {
+            "ms": 496.10990000655875,
+            "rss_kib": 5836
+          },
+          {
+            "ms": 488.9949170028558,
+            "rss_kib": 5812
+          }
+        ],
+        "head": [
+          {
+            "ms": 547.5089579995256,
+            "rss_kib": 5824
+          },
+          {
+            "ms": 549.8275910067605,
+            "rss_kib": 6072
+          },
+          {
+            "ms": 537.7480679890141,
+            "rss_kib": 5852
+          },
+          {
+            "ms": 530.5972570058657,
+            "rss_kib": 6068
+          },
+          {
+            "ms": 513.7347990093986,
+            "rss_kib": 5744
+          },
+          {
+            "ms": 494.9333510012366,
+            "rss_kib": 5944
+          },
+          {
+            "ms": 505.64243500411976,
+            "rss_kib": 6016
+          },
+          {
+            "ms": 513.5184370010393,
+            "rss_kib": 6120
+          },
+          {
+            "ms": 500.8058079984039,
+            "rss_kib": 6040
+          }
+        ]
+      }
+    },
+    "pathological": {
+      "input_bytes_per_invocation": 305,
+      "input_sha256": {
+        "pathological.goose": "21d726347aff7640500bff781a442378c1e2218af53cac69f8e830e3e522d4f7"
+      },
+      "summary": {
+        "base": {
+          "median_ms": 2810.1403009932255,
+          "min_ms": 2718.8073709985474,
+          "max_ms": 2819.712091994006,
+          "median_rss_kib": 428772
+        },
+        "head": {
+          "median_ms": 3.224797997972928,
+          "min_ms": 2.7303069946356118,
+          "max_ms": 5.912334003369324,
+          "median_rss_kib": 5320
+        },
+        "time_change_percent": -99.88524423507135
+      },
+      "samples": {
+        "base": [
+          {
+            "ms": 2779.129373986507,
+            "rss_kib": 429108
+          },
+          {
+            "ms": 2811.1180940031772,
+            "rss_kib": 428656
+          },
+          {
+            "ms": 2811.6378630074905,
+            "rss_kib": 428648
+          },
+          {
+            "ms": 2718.8073709985474,
+            "rss_kib": 428488
+          },
+          {
+            "ms": 2817.245507001644,
+            "rss_kib": 429824
+          },
+          {
+            "ms": 2819.712091994006,
+            "rss_kib": 430180
+          },
+          {
+            "ms": 2720.1371710107196,
+            "rss_kib": 428772
+          },
+          {
+            "ms": 2810.1403009932255,
+            "rss_kib": 429692
+          },
+          {
+            "ms": 2799.349300999893,
+            "rss_kib": 428504
+          }
+        ],
+        "head": [
+          {
+            "ms": 5.912334003369324,
+            "rss_kib": 5172
+          },
+          {
+            "ms": 2.7303069946356118,
+            "rss_kib": 5568
+          },
+          {
+            "ms": 4.030883006635122,
+            "rss_kib": 5320
+          },
+          {
+            "ms": 2.8922850033268332,
+            "rss_kib": 5244
+          },
+          {
+            "ms": 4.789787999470718,
+            "rss_kib": 5276
+          },
+          {
+            "ms": 2.899518993217498,
+            "rss_kib": 5340
+          },
+          {
+            "ms": 3.490464005153626,
+            "rss_kib": 5288
+          },
+          {
+            "ms": 2.731358996243216,
+            "rss_kib": 5500
+          },
+          {
+            "ms": 3.224797997972928,
+            "rss_kib": 5340
+          }
+        ]
+      }
+    }
+  },
+  "cpu_budget_regression": {
+    "nested_prefixes": 24,
+    "cpu_seconds": 1,
+    "base_status": -24,
+    "head_status": 1
+  }
+}
