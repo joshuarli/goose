@@ -134,6 +134,18 @@ to select a specific binary. CI runs this suite on Linux, macOS, Windows, and
 the GCC 16.2 toolchain job.
 It also checks CRLF/UTF-8/tab source ranges, raw-string directive text, and
 concurrent runs.
+
+Run the separately measured facts-scale regression when changing the private
+facts producer, transport, or reader:
+
+```sh
+python test/lint/facts_scale.py --goose build/goose
+```
+
+It generates 4,096 distinct generic instantiations with 256 calls in each
+specialization and checks the complete JSONL coverage result. The stress case
+stays outside the regular integration suite because its frontend and companion
+work is much larger than the focused rule fixtures.
 `test/lint/` fixtures are excluded from the general
 generated-program runner because they are lint inputs, not runtime tests.
 

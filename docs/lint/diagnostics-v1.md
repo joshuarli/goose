@@ -94,7 +94,7 @@ Compiler errors cannot be hidden by `--allow`. Text-mode compiler failures are
 written to stderr; JSONL-mode errors go to stdout as valid records. A missing
 companion or corrupt facts stream never becomes empty success.
 
-The compiler caps private facts at 64 MiB; the Goose companion caps its output
+The compiler caps private facts at 512 MiB; the Goose companion caps its output
 at 256 MiB. The parent reads only the owner-only output path created for that
 invocation. Facts and result temporary files are removed on normal return and
 failure.
