@@ -26,11 +26,16 @@ Each lane has a strict recipe schema, renderer, independent evaluator and struct
 | `scalar` | Signed 64-bit integers, booleans, locals, assignments, branches, bounded loops, comparisons, short circuits and a pure helper call. |
 | `numeric` | Every signed and unsigned integer width, defined wrapping, Euclidean remainder, masked shifts, comparisons and unchecked casts. |
 | `order` | Left-to-right evaluation through effectful operands, destinations, fixed arrays, indices and slices. |
+| `parse_flt` | Standard-library decimal parsing, with an independent host conversion and generated leading-zero, fraction, exponent and invalid-input cases. |
+| `reference` | Mutable/read-only references into locals, fixed arrays and structs, rebinding, recursive aliases, slices and required lifetime rejections. |
 | `resize` | Small resizable integer arrays, including push, pop, `pop_n`, resize, append, clear, indexing and slicing. |
+| `serialize` | Valid and hostile byte images with self-relative links, fixed ADTs, limited arrays and variable fields; independent validation and canonical round trips. |
 | `trap` | Required runtime checks for division, bounds, resize, pop, capacity and effect ordering. |
 
 Validation proves arithmetic and access preconditions before the model or Goose runs. Recipes can
-express `MustCompileAndReturn` or `MustTrap`; required rejections belong to a later family.
+express `MustCompileAndReturn`, `MustTrap`, or `MustReject`. A required rejection succeeds only when
+Goose exits cleanly with the modeled diagnostic category; acceptance, a crash, a sanitizer report,
+or an unrelated diagnostic is a finding.
 
 ## Running it
 
@@ -54,10 +59,17 @@ sequence repeatable; without it, the selected seed is printed and stored. `--cou
 Linux-only. A case that starts before the campaign duration expires receives its full per-process
 timeout; the duration prevents another case from starting after the deadline.
 
+The driver emits C once for each Goose optimization level, then compiles that C at every requested
+C optimization level. The full matrix therefore uses two Goose invocations and four C/program
+invocations per returned case. Report rows represent actual invocations, so a Goose-stage row has
+`c_opt: null`; C and program rows retain their concrete C level. Rejection recipes stop after each
+Goose level.
+
 `--sanitize` instruments the generated C and its embedded runtime with ASan and UBSan. To check the
 C++ compiler itself, pass a separately built sanitizer-instrumented Goose binary. Generated packed
 C disables UBSan's alignment check, matching the repository's existing sanitizer profile; other
-checks remain fatal.
+checks remain fatal. Leak checking is disabled for generated programs because LeakSanitizer
+requires ptrace access on some hosts.
 
 ## Clang and glibc container
 
@@ -94,15 +106,29 @@ not execute their source inputs.
 
 `GOOSE_FUZZ=ON` adds Clang libFuzzer targets for parser dump/reparse stability and the complete
 parse, resolve, typecheck, optimize, bounds-check and code-generation pipeline. Imports and
-file-named shader inputs are rejected so the targets remain hermetic. For example, inside the
-container:
+file-named shader inputs are rejected so the targets remain hermetic.
+
+The pipeline target compiles every input at `-O0`, `-O1`, and `-O2`, requires consistent
+acceptance, perturbs compiler state, and repeats every level. Generated C is compared only between
+repeat compilations at the same level. Semantic equivalence across levels remains the job of the
+modeled execution lanes.
+
+The checked-in pipeline corpus includes reference aliasing, serialization, variable ADTs and the
+smaller syntax/control-flow seeds. `fuzz/native/goose.dict` supplies Goose declarations, types,
+references, array forms and serialization tokens. Run isolated, measured campaigns with:
 
 ```sh
-mkdir -p /work/parser-corpus
-cp test/syntax/*.goose /work/parser-corpus/
-build/fuzz-clang-glibc/goose_fuzz_parser /work/parser-corpus \
-  -max_total_time=300 -timeout=10 -artifact_prefix=/work/parser-
+python3 fuzz/native_campaign.py --target pipeline \
+  --exe build/fuzz-clang-glibc/goose_fuzz_pipeline \
+  --duration 300 --seed 12345 --output /work/fuzz
+python3 fuzz/native_campaign.py --target parser \
+  --exe build/fuzz-clang-glibc/goose_fuzz_parser \
+  --duration 300 --seed 12345 --output /work/fuzz
 ```
+
+Each summary records edge and feature coverage, corpus growth, throughput, peak memory and failure
+artifact hashes. Pipeline summaries also report valid-source acceptance and the furthest compiler
+stage reached. These values make short probe runs comparable before assigning a longer budget.
 
 Each campaign gets a unique directory under `build/fuzz/`. A finding contains its source, strict
 recipe, seed and oracle result, raw base64-encoded process output, generated C, exact commands,
@@ -129,6 +155,26 @@ failure classification, exact output comparison, artifact preservation, output l
 signal reporting, and descendant cleanup. The tests inject compiler rejection, crashes, C build
 failure, traps, output mismatch, and sanitizer diagnostics without adding fault switches to Goose.
 
+## Historical calibration
+
+Seeds zero in `parse_flt`, `serialize`, and `reference` are pinned calibration cases for PRs
+#21, #22 and #23. Their common buggy revision is
+`de24a15659248fce28a1d5bdc8a6375bea322a0a`; the fixed revisions are stored in
+`fuzz/calibrate.py`. Given compiler builds from those revisions, verify a pair with:
+
+```sh
+python3 fuzz/calibrate.py pr21 --buggy-exe /path/to/base/goose \
+  --fixed-exe /path/to/pr21/goose --cc clang-23
+python3 fuzz/calibrate.py pr22 --buggy-exe /path/to/base/goose \
+  --fixed-exe /path/to/pr22/goose --cc clang-23
+python3 fuzz/calibrate.py pr23 --buggy-exe /path/to/base/goose \
+  --fixed-exe /path/to/pr23/goose --cc clang-23
+```
+
+Calibration succeeds only when the buggy compiler produces the expected failure class and stage
+and the fixed compiler passes the same full matrix. PR #22 additionally requires sanitizer
+instrumentation.
+
 ## Limits and guarantees
 
 The driver clears the subprocess environment, uses a temporary working directory, closes stdin,
@@ -137,7 +183,10 @@ repeatability and cleanup measures. They do not make compilation or execution sa
 input. The execution lane accepts only programs rendered from the closed typed representation; it
 does not execute mutated source, FFI, file access, networking, subprocesses, or user-provided code.
 
-The harness does not yet provide required-rejection oracles, storage/lifetime families,
-serialization-byte fuzzing, source coverage, parallel semantic
-workers, or non-Linux process cleanup. It is development evidence over bounded generated subsets,
-not evidence that Goose is sound.
+The reference model currently covers scalar and one-element slice locations in locals, fixed
+arrays and flat structs; it does not yet model nested variable-size holders or self-relative
+reference construction. The serialized image model covers optional self-relative links at every
+fixed offset width, fixed ADT tags, limited fields and variable byte fields. Nested combinations,
+variable-mode ADTs and varint relative links remain future extensions. The harness does not
+provide parallel semantic workers or non-Linux process cleanup. It is development evidence over
+bounded generated subsets, not evidence that Goose is sound.
