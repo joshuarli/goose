@@ -56,14 +56,15 @@ Goose compiler for Linux x86-64 (musl)
 
 The compiler is statically linked against musl and can run without a system
 glibc or a separately installed C++ runtime. TinyCC support files are in
-bin/tcclib for in-process execution with --jit.
+bin/tcclib, but JIT execution is unsupported in this static-musl package.
+Running a source file without -o or passing --jit fails while TinyCC tries to
+load libc. Use the standalone-C workflow below instead.
 No optional native packages are bundled in this build.
 
-Run a source file with:
-  bin/goose path/to/program.goose
-
-Generate C with:
-  bin/goose -o program.c path/to/program.goose
+Generate and compile a standalone program with:
+  bin/goose --standalone -o program.c path/to/program.goose
+  cc -O2 program.c -o program -lm -pthread
+  ./program
 
 Compiling generated C still requires a C compiler for the target system.
 EOF
