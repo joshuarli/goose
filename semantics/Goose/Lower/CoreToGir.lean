@@ -112,7 +112,22 @@ structure LEnv where
   globals : Array (Ty × VarKind)
   sigs : Array (List Ty × List Ty)
 
-abbrev B := ReaderT LEnv (StateM LS)
+/-- The builder: reads the function's tables and threads the state. A plain
+function type, so that its `do` blocks unfold by definition. -/
+def B (α : Type) : Type := LEnv → LS → α × LS
+
+instance : Monad B where
+  pure a := fun _ s => (a, s)
+  bind x f := fun e s => match x e s with
+    | (a, s1) => f a e s1
+
+instance : MonadReaderOf LEnv B where
+  read := fun e s => (e, s)
+
+instance : MonadStateOf LS B where
+  get := fun _ s => (s, s)
+  set s' := fun _ _ => ((), s')
+  modifyGet f := fun _ s => f s
 
 def tyEnv (env : LEnv) (s : LS) : GIR.TyEnv :=
   ⟨env.slots, env.globals, env.sigs, s.vals⟩
@@ -177,6 +192,13 @@ def newBlock (tys : List VTy) : B (BlockId × List ValueId) := do
     vals := tys.foldl (fun a t => a.push (some t)) s.vals }
   pure (b, ids)
 
+/-- Initialize each slot with its value. -/
+def initSlots : List (SlotId × ValueId × OriginId) → B Unit
+  | [] => pure ()
+  | (s, v, o) :: rest => do
+    emitEffect (.slotInit s v (some o))
+    initSlots rest
+
 /-- Run `k` with the current block, or yield `dflt` when there is none. -/
 def whenLive (dflt : α) (k : BlockId → B α) : B α := do
   match (← curBlock) with
@@ -184,10 +206,15 @@ def whenLive (dflt : α) (k : BlockId → B α) : B α := do
   | some b => k b
 
 /-- Leave, innermost first, every scope entered beyond the first `depth`. -/
+def leaveAll : List ScopeId → B Unit
+  | [] => pure ()
+  | sc :: rest => do
+    emitEffect (.leave sc)
+    leaveAll rest
+
 def leaveTo (depth : Nat) : B Unit := do
   let st := (← get).stack
-  for sc in st.take (st.length - depth) do
-    emitEffect (.leave sc)
+  leaveAll (st.take (st.length - depth))
 
 /-- A mutable address frozen to read-only when a read-only reference is wanted. -/
 def freezeTo (m : Mutability) (r : ValueId) : B ValueId := do
@@ -210,6 +237,20 @@ def growOwner (r : ValueId) : B Bool := do
   | .data (.ref _ (.grow _)) => pure true
   | _ => pure false
 
+/-- Append to each block a branch to `jb` passing its value. -/
+def patchBrs (jb : BlockId) : List (BlockId × ValueId) → B Unit
+  | [] => pure ()
+  | (b, v) :: rest => do
+    patchTerm b (.br jb [v])
+    patchBrs jb rest
+
+/-- Append to each block a branch to `jb` passing nothing. -/
+def patchBrs0 (jb : BlockId) : List BlockId → B Unit
+  | [] => pure ()
+  | b :: rest => do
+    patchTerm b (.br jb [])
+    patchBrs0 jb rest
+
 /-- The join of the two arms of an `if` expression: each arm that still has a
 current block branches to it with its value. -/
 def joinValue (endT : Option BlockId) (vt : ValueId) (endF : Option BlockId) (vf : ValueId) :
@@ -222,8 +263,7 @@ def joinValue (endT : Option BlockId) (vt : ValueId) (endF : Option BlockId) (vf
     let live := (endT.map fun b => (b, vt)).toList ++ (endF.map fun b => (b, vf)).toList
     let ty ← valTy (live.headD (0, 0)).2
     let (jb, js) ← newBlock [ty]
-    for (b, v) in live do
-      patchTerm b (.br jb [v])
+    patchBrs jb live
     setCur (some jb)
     pure (js.headD 0)
 
@@ -234,8 +274,7 @@ def joinArms (endT endF : Option BlockId) : B Unit := do
   | none, none => setCur none
   | _, _ =>
     let (jb, _) ← newBlock []
-    for b in endT.toList ++ endF.toList do
-      patchTerm b (.br jb [])
+    patchBrs0 jb (endT.toList ++ endF.toList)
     setCur (some jb)
 
 /-- The right operand of `and`/`or`, whose left value is `x`; `rhs` lowers it. -/
@@ -377,8 +416,7 @@ def lowerBlock (lc : Option LoopCtx) (pre : List (SlotId × ValueId × OriginId)
   | .mk sc stmts value => do
     emitEffect (.enter sc)
     pushScope sc
-    for (s, v, o) in pre do
-      emitEffect (.slotInit s v (some o))
+    initSlots pre
     lowerStmts lc stmts
     let r ← match value with
       | some e => lowerExpr e
@@ -695,7 +733,7 @@ def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
     let v ← lowerBlock none pre false impl.body
     if (← isLive) then
       emitTerm (.ret (if impl.body.value.isSome then [v] else []) none)
-  let ((), s) := (act.run env).run initState
+  let ((), s) := act env initState
   { name := impl.name
     params := impl.params.toList.map fun p => tyOfVar impl p.var
     results := impl.results.toList
@@ -713,7 +751,7 @@ def lowerGlobal (m : Module) (g : Global) : GIR.Global :=
     setCur (some b0)
     let v ← lowerExpr g.init
     emitTerm (.ret [v] (some g.org))
-  let ((), s) := (act.run env).run initState
+  let ((), s) := act env initState
   { name := g.name
     ty := g.ty
     kind := g.kind
