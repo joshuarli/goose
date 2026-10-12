@@ -1,9 +1,13 @@
 import Goose.Audit
+import Goose.Core.Run
 
 /-- Reserved subcommands: named so scripts can already refer to them. -/
-def reserved : List String := ["run", "validate", "share"]
+def reserved : List String := ["share"]
 
-def usage : String := "usage: goose-semantics audit"
+def usage : String :=
+  "usage: goose-semantics audit\n" ++
+  "       goose-semantics run MODULE.json [--numeric release|debug] [--fuel N] [--no-validate]\n" ++
+  "       goose-semantics validate MODULE.json"
 
 /-- Prints one JSON line per audited theorem; fails on a wrong Lean version. -/
 def runAudit : IO UInt32 := do
@@ -15,16 +19,47 @@ def runAudit : IO UInt32 := do
     IO.println s!"[\"{e.theoremName}\",[{axs}]]"
   return 0
 
+/-- A command-line mistake, as opposed to a bad module: nothing on stdout. -/
+def usageError (msg : String) : IO UInt32 := do
+  IO.eprintln s!"goose-semantics: {msg}"
+  IO.eprintln usage
+  return 64
+
+def parseRunOptions (settings : Goose.Core.Run.Settings) :
+    List String → Except String Goose.Core.Run.Settings
+  | [] => .ok settings
+  | "--no-validate" :: rest => parseRunOptions { settings with validate := false } rest
+  | "--numeric" :: v :: rest =>
+    match v with
+    | "release" => parseRunOptions { settings with profile := .release } rest
+    | "debug" => parseRunOptions { settings with profile := .debug } rest
+    | _ => .error s!"--numeric takes release or debug, not {v}"
+  | "--fuel" :: v :: rest =>
+    match v.toNat? with
+    | some n => parseRunOptions { settings with fuel := n } rest
+    | none => .error s!"--fuel takes a natural number, not {v}"
+  | opt :: _ => .error s!"unexpected argument {opt}"
+
+/-- Print the single JSON line a command produces and return its status. -/
+def withModule (path : String) (go : ByteArray → String × UInt32) : IO UInt32 := do
+  let (line, status) ←
+    match (← Goose.Core.Run.readModule path) with
+    | .error msg => pure (Goose.Core.Run.malformed msg)
+    | .ok bs => pure (go bs)
+  IO.println line
+  return status
+
 def main (args : List String) : IO UInt32 :=
   match args with
   | ["audit"] => runAudit
+  | "run" :: path :: opts =>
+    match parseRunOptions {} opts with
+    | .error msg => usageError msg
+    | .ok settings => withModule path (Goose.Core.Run.runBytes settings)
+  | ["validate", path] => withModule path Goose.Core.Run.validateBytes
   | [cmd] =>
     if reserved.contains cmd then do
       IO.eprintln s!"goose-semantics {cmd}: not implemented"
       return 2
-    else do
-      IO.eprintln usage
-      return 2
-  | _ => do
-    IO.eprintln usage
-    return 2
+    else usageError s!"unknown command {cmd}"
+  | _ => usageError "unrecognized arguments"
