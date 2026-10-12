@@ -382,6 +382,8 @@ DEPENDENCY_EDITS = {e.id: e for e in (
     DepEdit("D23", "a format function added for a struct that is printed"),
     DepEdit("D24", "the declared type of a local that a block passed to a callee reads changed"),
     DepEdit("D26", "a nested function that is passed on stops naming a variable of its parent"),
+    DepEdit("D27", "the function a handler runs is renamed: a return from it to the handler "
+                   "must not change"),
     DepEdit("D25", "an overload added in the namespace of a caller, with the same parameter "
                    "types as the one it called"),
 )}
@@ -591,12 +593,23 @@ class DepTargets(Member):
                 "    return dt_fv_apply(3, inner);",
                 "}"]
 
+        # D27: a `return from` leaves to a handler, whichever function the
+        # handler is made to run.
+        thrower = "dt_thrower_b" if e("D27") else "dt_thrower"
+        out += ["fn dt_h<E, Body>() -> E[] { Body(); return []; }",
+                "fn dt_throw(value) { return [value] from dt_h; }",
+                f"fn {thrower}() {{ dt_throw(5); }}",
+                "fn dt_handled(n: i64) -> i64 {",
+                f"    let errs = dt_h<i64>({thrower});",
+                "    return errs.len;",
+                "}"]
+
         # The embedded file, read in a body.
         out += ['fn dt_embed_direct(n: i64) -> i64 { let t = embed_file("ed_embed.txt"); return t.len; }']
         return out
 
     CALLS = ("dtns::dt_shadow_user", "dt_shadow_other", "dt_cand_user", "dt_pair_user", "dt_size_user",
-             "dt_pick_user", "dt_grow_user", "dt_ping", "dt_global_user", "dt_capture_user",
+             "dt_pick_user", "dt_grow_user", "dt_handled", "dt_ping", "dt_global_user", "dt_capture_user",
              "dt_block_user", "dt_def_user", "dt_defstruct_user", "dt_alias_user",
              "dt_enum_user", "dt_order_a", "dt_order_b", "dt_late_user", "dt_noret_user",
              "dt_comment_user", "dt_embed_direct", "dt_fv_user", "dt_inferred_user",

@@ -621,6 +621,7 @@ inline VarDef *TypeCheck::LookupVar(string_view name, string_view ns, Node *use)
     if (use) DefaultScopeName(name, use, false);
     if (ScopeNameKind(name)) return nullptr;
     auto g = DepLookupGlobal(ast, name, ns);
+    if (g && !g->defs.empty()) DepNoteGlobalState(g->defs[0]);
     return g && !g->defs.empty() ? g->defs[0] : nullptr;
 }
 

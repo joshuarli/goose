@@ -10,7 +10,8 @@ each dependency edit below it, before and after, with
 `goose --check --build-report`, and predict.py compares the two reports. Each
 edit is also run backwards, from the edited program to the original. Then a
 randomized sequence of edits, toggled one at a time from a fixed seed, is run
-step by step. The check fails on any context that changed without being
+step by step; with --mutants, so are random one-token mutations of the
+repository's own fixtures. The check fails on any context that changed without being
 predicted, and on any edit that is expected to change nothing and changes
 something. It also requires that two builds of the same program, in two
 directories, agree digest for digest, and that an edit which only adds a
@@ -21,9 +22,11 @@ how many changed, and the over-approximation between them.
 """
 
 import argparse
+import glob
 import json
 import random
 import re
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -47,6 +50,8 @@ SEQUENCES = {i for i, e in edits.EDITS.items() if e.sequence}
 NO_RESULT_CHANGE = {"E02": set(), **{i: set() for i, e in edits.DEPENDENCY_EDITS.items()
                                       if e.effect == "none"}}
 NO_RESULT_CHANGE["D08"] = {"global dt_gv"}
+# Contexts an edit must leave alone although it changes what surrounds them.
+STAYS = {"D27": {"dt_throw(_)"}}
 # Edits that only move text: no dependency but a location may break.
 MOVES_ONLY = {"E02", "D16", "D20"}
 
@@ -190,7 +195,7 @@ class Run:
     def c_text(self, ids):
         return self.b.build(ids).result()[0][1]
 
-    def compare(self, label, before, after, allowed=None, moves_only=False):
+    def compare(self, label, before, after, allowed=None, moves_only=False, stays=()):
         old, new = self.get(before), self.get(after)
         if old is None or new is None:
             return None
@@ -209,6 +214,10 @@ class Run:
             self.failures.append(f"{label}: an edit that only moves text broke a dependency "
                                  f"other than a location of: "
                                  f"{sorted(r['names'][k] for k in r['predicted_set'] - r['gone_set'])[:8]}")
+        if stays:
+            moved = {r["names"][k] for k in r["changed_set"]} & set(stays)
+            if moved:
+                self.failures.append(f"{label}: a result that must not change did: {sorted(moved)}")
         if allowed is not None:
             changed = {r["names"][k] for k in r["changed_set"] - r["gone_set"]}
             if changed - allowed:
@@ -292,6 +301,102 @@ def determinism(run):
         run.failures.append(f"two builds of the same program differ: {diff[:3]}")
 
 
+# Programs the mutants are cut from: the repository's own fixtures. One,
+# test/typing/nested_overloads.goose, makes `--build-report` itself crash (the
+# context keys read an overload set the checker has freed), so it is left out.
+CORPUS = ("test/typing", "test/codegen", "test/optimizer", "test/lifetimes", "test/storage",
+          "test/syntax", "test/threads", "samples")
+CORPUS_SKIP = ("nested_overloads.goose",)
+
+# Each kind of mutation, as a pattern in a line of code: what it matches and
+# what it becomes. An integer literal grows by one, a type narrows, an
+# operator flips, a binding changes kind, a string changes, a call goes to
+# another function, a statement goes, a function becomes recursive or not.
+MUTATIONS = {
+    "literal": (r"(?<![\w.])\d+(?![\w.])", lambda m, names, rng: str(int(m.group(0)) + 1)),
+    "type": (r"\bi64\b", lambda m, names, rng: "i32"),
+    "operator": (r" \+ ", lambda m, names, rng: " - "),
+    "let": (r"\blet\b", lambda m, names, rng: "var"),
+    "var": (r"\bvar\b", lambda m, names, rng: "let"),
+    "string": (r'"[^"]*"', lambda m, names, rng: '"zz"'),
+    "call": (r"\b[a-z_][a-z_0-9]*(?=\()", lambda m, names, rng: rng.choice(names or [m.group(0)])),
+    "statement": (r"^\s*(?:let|var|[a-z_]+\(.*\);|[a-z_]+ [-+]?= .*;)\s*$",
+                  lambda m, names, rng: "// deleted"),
+    "recursion": (r"\bfn\b", lambda m, names, rng: rng.choice(["recursive fn", "fn"])),
+}
+
+
+def mutate(text, rng):
+    """(mutated text, what changed) for one random mutation of the program,
+    or None where it has nothing to mutate."""
+    names = sorted(set(re.findall(r"\bfn (?:recursive )?([a-z_][a-z_0-9]*)", text)))
+    lines = text.split("\n")
+    sites = []
+    for i, line in enumerate(lines):
+        code = line.split("//")[0]
+        for kind, (pattern, _) in MUTATIONS.items():
+            sites += [(kind, i, m) for m in re.finditer(pattern, code)]
+    if not sites:
+        return None
+    kind, i, m = rng.choice(sites)
+    line = lines[i]
+    lines[i] = line[:m.start()] + MUTATIONS[kind][1](m, names, rng) + line[m.end():]
+    return "\n".join(lines), f"{kind} at line {i + 1}"
+
+
+def mutants(run, builder, seed, per_file, work):
+    """A report of each program and of the program with one random mutation,
+    compared as an edit is. Mutants that do not compile are not counted."""
+    rng = random.Random(seed)
+    root = HERE.parent.parent
+    files = sorted(f for d in CORPUS for f in glob.glob(str(root / d / "*.goose"))
+                   if not f.endswith(CORPUS_SKIP))
+    jobs = [(f, k, random.Random(rng.random())) for f in files for k in range(per_file)]
+
+    def report(directory):
+        out = directory / "report.json"
+        out.unlink(missing_ok=True)
+        r = subprocess.run([builder.goose, "--check", "--build-report", str(out),
+                            str(directory / "main.goose")], capture_output=True, text=True,
+                           errors="replace")
+        return predict.load(out) if r.returncode == 0 and out.exists() else None
+
+    def one(job):
+        f, k, r = job
+        text = Path(f).read_text(encoding="utf-8")
+        m = mutate(text, r)
+        if m is None:
+            return None
+        directory = Path(work) / "mutants" / f"{Path(f).parent.name}_{Path(f).stem}_{k}"
+        # Both programs have the same file name: it is part of every key.
+        for sub, body in (("base", text), ("mut", m[0])):
+            d = directory / sub
+            d.mkdir(parents=True, exist_ok=True)
+            for x in Path(f).parent.glob("*"):
+                if x.is_file() and str(x) != f:
+                    shutil.copy(x, d)
+            (d / "main.goose").write_text(body, encoding="utf-8", newline="\n")
+        old, new = report(directory / "base"), report(directory / "mut")
+        if old is None or new is None:
+            return None
+        return f, m[1], predict.compare(old, new)
+
+    done = changed = predicted = 0
+    for res in builder.pool.map(one, jobs):
+        if res is None:
+            continue
+        f, what, r = res
+        done += 1
+        changed += r["changed"]
+        predicted += r["predicted"]
+        if r["under_approximation"] or r["clashes"]:
+            run.failures.append(f"mutant of {f} ({what}): "
+                                + ", ".join(r["names"][k] for k in r["under"][:5])
+                                + "".join(r["clashes"][:2]))
+    print(f"mutants (seed {seed}): {done} compared; {changed} contexts changed, {predicted} "
+          f"predicted, under-approximation {len([x for x in run.failures if x.startswith('mutant')])}")
+
+
 def randomized(run, seed, steps, pool):
     rng = random.Random(seed)
     state = set()
@@ -300,7 +405,8 @@ def randomized(run, seed, steps, pool):
         after = state ^ {i}
         verb = "revert" if i in state else "apply"
         run.compare(f"random {seed}.{step:02d} {verb} {i}", sorted(state), sorted(after),
-                    allowed=NO_RESULT_CHANGE.get(i), moves_only=i in MOVES_ONLY)
+                    allowed=NO_RESULT_CHANGE.get(i), moves_only=i in MOVES_ONLY,
+                    stays=STAYS.get(i, ()))
         state = after
 
 
@@ -311,6 +417,9 @@ def main():
     ap.add_argument("--seed", type=int, default=20261012)
     ap.add_argument("--steps", type=int, default=40)
     ap.add_argument("--edit", action="append", help="only these edits (and no random run)")
+    ap.add_argument("--mutants", type=int, default=0, metavar="N",
+                    help="also compare N random one-token mutants of each fixture in the corpus "
+                         "(a few minutes for N=6)")
     ap.add_argument("--jobs", type=int, default=8)
     for name, value in SHAPE.items():
         ap.add_argument(f"--{name.replace('_', '-')}", type=int, default=value,
@@ -333,11 +442,13 @@ def main():
     determinism(run)
     for i in pool:
         run.compare(f"{i} apply", [], [i], allowed=NO_RESULT_CHANGE.get(i),
-                    moves_only=i in MOVES_ONLY)
+                    moves_only=i in MOVES_ONLY, stays=STAYS.get(i, ()))
         run.compare(f"{i} revert", [i], [], allowed=NO_RESULT_CHANGE.get(i),
-                    moves_only=i in MOVES_ONLY)
+                    moves_only=i in MOVES_ONLY, stays=STAYS.get(i, ()))
     if not args.edit:
         randomized(run, args.seed, args.steps, pool)
+    if args.mutants:
+        mutants(run, run.b, args.seed, args.mutants, args.work)
 
     skipped = sorted(NO_REPORT)
     print(f"\n{len(run.rows)} comparisons; not compared (the edit is a compile error): "
