@@ -1,13 +1,16 @@
 import Goose.Audit
 import Goose.Core.Run
+import Goose.Share.Cli
 
 /-- Reserved subcommands: named so scripts can already refer to them. -/
-def reserved : List String := ["share"]
+def reserved : List String := []
 
 def usage : String :=
   "usage: goose-semantics audit\n" ++
   "       goose-semantics run MODULE.json [--numeric release|debug] [--fuel N] [--no-validate]\n" ++
-  "       goose-semantics validate MODULE.json"
+  "       goose-semantics validate MODULE.json\n" ++
+  "       goose-semantics share UNSHARED.json SHARED.json\n" ++
+  "       goose-semantics share --propose UNSHARED.json"
 
 /-- Prints one JSON line per audited theorem; fails on a wrong Lean version. -/
 def runAudit : IO UInt32 := do
@@ -57,6 +60,14 @@ def main (args : List String) : IO UInt32 :=
     | .error msg => usageError msg
     | .ok settings => withModule path (Goose.Core.Run.runBytes settings)
   | ["validate", path] => withModule path Goose.Core.Run.validateBytes
+  | ["share", "--propose", path] => withModule path Goose.Share.Cli.proposeBytes
+  | ["share", unshared, shared] => do
+    let (line, status) ←
+      match (← Goose.Core.Run.readModule unshared), (← Goose.Core.Run.readModule shared) with
+      | .error msg, _ | _, .error msg => pure (Goose.Core.Run.malformed msg)
+      | .ok a, .ok b => pure (Goose.Share.Cli.checkBytes a b)
+    IO.println line
+    return status
   | [cmd] =>
     if reserved.contains cmd then do
       IO.eprintln s!"goose-semantics {cmd}: not implemented"

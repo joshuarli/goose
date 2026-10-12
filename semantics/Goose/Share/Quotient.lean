@@ -6,10 +6,11 @@ import Goose.Share.Equal
 How a call resolves, and when two modules run the same program.
 
 A call names a context; the context names an implementation; the
-implementation's body runs. `Simulates m m' r` says that `m'` resolves every
-call the way `m` does, up to renaming the callees of the body by `r`, and
-initializes the same globals. It is exactly what `eval` reads of a module, so
-it is the hypothesis of the proof that results agree.
+implementation's body runs. `Simulates m m' ρ` says that `m'` resolves every
+call the way `m` does, except that the body of implementation `g` has its
+callees renamed by `ρ g`, and that globals and entry agree. It is exactly what
+`eval` reads of a module, so it is the hypothesis of the proof that results
+agree.
 -/
 
 namespace Goose.Share
@@ -21,41 +22,49 @@ and a context naming a missing implementation both make the call unbound. -/
 def resolve (m : Module) (c : ContextId) : Option Impl :=
   (m.contexts[c]?).bind fun ctx => m.impls[ctx.impl]?
 
-/-- `m'` runs `m`'s program with every callee renamed by `r`: calls resolve to
-the renamed implementation, the entry does too, and the globals have the same
-renamed initializers. -/
-structure Simulates (m m' : Module) (r : CtxMap) : Prop where
-  resolves : ∀ c, resolve m' (r c) = (resolve m c).map (renImpl r)
-  entry : resolve m' m'.entry = (resolve m m.entry).map (renImpl r)
-  globalCount : m'.globals.size = m.globals.size
-  globalInit : ∀ g : GlobalId, (m'.globals[g]?).map Global.init = (m.globals[g]?).map (fun (gl : Global) => renExpr r gl.init)
+/-- As `resolve`, with the index of the implementation. -/
+def resolveIndexed (m : Module) (c : ContextId) : Option (ImplId × Impl) :=
+  (m.contexts[c]?).bind fun ctx => (m.impls[ctx.impl]?).map fun i => (ctx.impl, i)
 
-/-- `m'` is the quotient of `m` by `q`, a map on implementation indices, with the
-callees of every body renamed by `r`.
+/-- Calling `c` in `m'` runs what calling `c'` runs in `m`, once the body of
+each implementation `g` has its callees renamed by `ρ g`. -/
+def Resolves (m m' : Module) (ρ : ImplId → CtxMap) (c' c : ContextId) : Prop :=
+  resolve m' c' = (resolveIndexed m c).map fun gi => renImpl (ρ gi.1) gi.2
 
-* The header tables, the entry and the contexts' indices are unchanged;
-  each context of `m'` is the context of `m` with its implementation index
-  mapped by `q`. The root annotations are kept as they are.
-* Every implementation a context of `m` names is, in `m`, the body that
-  `m'` holds at `q` of its index, with callees renamed by `r`. Two
-  implementations that `q` identifies therefore have equal bodies once their
-  callees are renamed, and the renaming sends a context to one that `m'`
-  maps to the same implementation (`callees`). Implementations no context
-  names cannot be reached by a run, so nothing is demanded of them.
-* Globals are those of `m` with initializers renamed by `r`. -/
-structure Quotient (m m' : Module) (q : ImplId → ImplId) (r : CtxMap) : Prop where
+/-- `m'` runs `m`'s program: a context means the same in both (`ids`), a call
+in a body renamed by `ρ g` means what it did before the renaming (`bodies`),
+and globals and entry are the same. -/
+structure Simulates (m m' : Module) (ρ : ImplId → CtxMap) : Prop where
+  ids : ∀ c, Resolves m m' ρ c c
+  bodies : ∀ g c, Resolves m m' ρ (ρ g c) c
+  entry : m'.entry = m.entry
+  globals : m'.globals = m.globals
+
+/-- `m'` is the quotient of `m` by `q`, a map on implementation indices, where
+the body of implementation `f` has its callees renamed by `ρ f`.
+
+* The header tables, the entry, the globals and the contexts' indices are
+  unchanged; each context of `m'` is the context of `m` with its
+  implementation index mapped by `q`. The root annotations are kept.
+* Every implementation a context of `m` names is, in `m`, the body that `m'`
+  holds at `q` of its index, with callees renamed by `ρ`. Two implementations
+  that `q` identifies therefore have equal bodies once their callees are
+  renamed. A renaming sends a context to one that `m'` maps to the same
+  implementation (`callees`). Implementations no context names cannot be
+  reached by a run, so nothing is demanded of them. -/
+structure Quotient (m m' : Module) (q : ImplId → ImplId) (ρ : ImplId → CtxMap) : Prop where
   files : m'.files = m.files
   types : m'.types = m.types
   origins : m'.origins = m.origins
   entry : m'.entry = m.entry
-  globals : m'.globals = m.globals.map (renGlobal r)
+  globals : m'.globals = m.globals
   contextCount : m'.contexts.size = m.contexts.size
   contexts : ∀ (c : ContextId) (ctx : Context), m.contexts[c]? = some ctx →
     m'.contexts[c]? = some { ctx with impl := q ctx.impl }
   impls : ∀ (c : ContextId) (ctx : Context), m.contexts[c]? = some ctx →
-    m'.impls[q ctx.impl]? = (m.impls[ctx.impl]?).map (renImpl r)
-  callees : ∀ c : ContextId,
-    (m'.contexts[r c]?).map Context.impl = (m'.contexts[c]?).map Context.impl
+    m'.impls[q ctx.impl]? = (m.impls[ctx.impl]?).map (renImpl (ρ ctx.impl))
+  callees : ∀ (f : ImplId) (c : ContextId),
+    (m'.contexts[ρ f c]?).map Context.impl = (m'.contexts[c]?).map Context.impl
 
 /-! ### The executable check -/
 
@@ -70,22 +79,62 @@ def eqOptImpl : Option Impl → Option Impl → Bool
   | some a, some b => eqImpl a b
   | _, _ => false
 
-/-- Accepts exactly when `m'` is the quotient of `m` by the index map `qt`
-(an index outside the table maps to itself) with callees renamed by the
-context map `rt` (likewise). `qt` and `rt` are untrusted witnesses: a wrong
-one makes the check fail, never succeed. -/
-def checkQuotient (m m' : Module) (qt : Array ImplId) (rt : Array ContextId) : Bool :=
-  let q : ImplId → ImplId := fun f => qt.getD f f
-  let r : CtxMap := fun c => rt.getD c c
-  (m'.files == m.files && m'.types == m.types && m'.origins == m.origins &&
-    m'.entry == m.entry) &&
-  allZip (fun g g' => eqGlobal (renGlobal r g) g') m.globals.toList m'.globals.toList &&
+/-- Header tables, entry and globals: unchanged. -/
+def headerOk (m m' : Module) : Bool :=
+  m'.files == m.files && m'.types == m.types && m'.origins == m.origins &&
+  m'.entry == m.entry && allZip eqGlobal m.globals.toList m'.globals.toList
+
+/-- Contexts: those of `m` with their implementation index mapped by `q`. -/
+def contextsOk (m m' : Module) (q : ImplId → ImplId) : Bool :=
   allZip (fun ctx ctx' => ctx' == { ctx with impl := q ctx.impl })
-    m.contexts.toList m'.contexts.toList &&
-  m.contexts.toList.all (fun ctx =>
-    eqOptImpl (m'.impls[q ctx.impl]?) ((m.impls[ctx.impl]?).map (renImpl r))) &&
+    m.contexts.toList m'.contexts.toList
+
+/-- Whether the shared body at `q f` is the body of `f` as it stands. -/
+def keepsBody (m m' : Module) (q : ImplId → ImplId) (f : ImplId) : Bool :=
+  eqOptImpl (m'.impls[q f]?) (m.impls[f]?)
+
+/-- The callee renaming of the body of `f`: none if the shared body is `f`'s as
+it stands, otherwise the witness `rt`. -/
+def bodyRenaming (m m' : Module) (q : ImplId → ImplId) (rt : Array ContextId)
+    (f : ImplId) : CtxMap :=
+  if keepsBody m m' q f then id else fun c => rt.getD c c
+
+/-- Bodies: each implementation a context of `m` names reappears in `m'` at its
+mapped index, as it stands or with callees renamed by `rt`. -/
+def implsOk (m m' : Module) (q : ImplId → ImplId) (rt : Array ContextId) : Bool :=
+  m.contexts.toList.all fun ctx =>
+    keepsBody m m' q ctx.impl ||
+      eqOptImpl (m'.impls[q ctx.impl]?)
+        ((m.impls[ctx.impl]?).map (renImpl fun c => rt.getD c c))
+
+/-- Callee map: a table over the contexts of `m`, sending each to a context
+that `m'` maps to the same implementation. -/
+def calleesOk (m m' : Module) (rt : Array ContextId) : Bool :=
   rt.size == m.contexts.size &&
-  (List.range m.contexts.size).all (fun c =>
-    (m'.contexts[r c]?).map Context.impl == (m'.contexts[c]?).map Context.impl)
+  (List.range m.contexts.size).all fun c =>
+    (m'.contexts[rt.getD c c]?).map Context.impl == (m'.contexts[c]?).map Context.impl
+
+/-- Accepts exactly when `m'` is the quotient of `m` by the index map `qt`
+(an index outside the table maps to itself) where each body is kept or has its
+callees renamed by the context map `rt` (likewise). `qt` and `rt` are
+untrusted witnesses: a wrong one makes the check fail, never succeed. -/
+def checkQuotient (m m' : Module) (qt : Array ImplId) (rt : Array ContextId) : Bool :=
+  headerOk m m' &&
+  contextsOk m m' (fun f => qt.getD f f) &&
+  implsOk m m' (fun f => qt.getD f f) rt &&
+  calleesOk m m' rt
+
+/-- Why `checkQuotient` rejects, as the first failing condition. Diagnostic
+only: nothing relies on it. -/
+def explainQuotient (m m' : Module) (qt : Array ImplId) (rt : Array ContextId) : String :=
+  if !headerOk m m' then
+    "the header tables, the globals or the entry differ"
+  else if !contextsOk m m' (fun f => qt.getD f f) then
+    "a context of the shared module is not the unshared context with its implementation mapped"
+  else if !calleesOk m m' rt then
+    "a callee is renamed to a context that runs a different implementation"
+  else if !implsOk m m' (fun f => qt.getD f f) rt then
+    "a shared implementation is not equal to the unshared implementation, kept or with its callees renamed"
+  else "accepted"
 
 end Goose.Share
