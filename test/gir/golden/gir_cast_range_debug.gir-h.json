@@ -1,0 +1,1 @@
+["module","gir-h/0.2","core-pilot",[["file","cast_range_debug.goose"]],[["int","i64"],["int","u8"]],[],[["func","main",[],[],[],[["scope",[]]],[["block",[],[["x_enter",0],["i_int",0,0,"300"],["i_conv",1,"as",0,1,0,[0]],["x_print",[["pp_val",1]],[1]],["x_leave",0],["t_ret",[],[]]]]],["summary",[],[],[],[],1,1],[]]],0,[["origin",0,2,"cast"],["origin",0,2,"print"]]]

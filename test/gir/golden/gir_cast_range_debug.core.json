@@ -1,0 +1,1 @@
+["module","goose-core/0.2","core-pilot",[["file","cast_range_debug.goose"]],[["int","u8"],["int","i64"]],[],[["impl","main",[],[],[],["block",0,[["s_print",[["pa_expr",["e_conv","as",0,["e_lit",1,"300"],0]]],1]],[]],["summary",[],[],[],[],1,1]]],[["context",0,"main::main()",[],[]]],0,[["origin",0,2,"cast"],["origin",0,2,"print"]]]

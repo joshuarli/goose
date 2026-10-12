@@ -1,0 +1,1 @@
+["module","goose-core/0.2","core-pilot",[["file","assert_fail.goose"]],[["int","i64"]],[],[["impl","main",[],[],[],["block",0,[["s_print",[["pa_text","x"]],0],["s_assert",["e_cmp","eq",["e_lit",0,"1"],["e_lit",0,"2"]],1]],[]],["summary",[],[],[],[],1,1]]],[["context",0,"main::main()",[],[]]],0,[["origin",0,2,"print"],["origin",0,3,"assert"]]]
