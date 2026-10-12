@@ -294,12 +294,26 @@ theorem checkSummary_ok (impl : Impl) (ctx : Context) (eff : Eff)
     eff.unknown = false ∧
     (∀ t, t ∈ eff.reads → t ∈ expandTargets impl ctx sm.reads) ∧
     (∀ t, t ∈ eff.writes → t ∈ expandTargets impl ctx sm.writes) ∧
-    (∀ t, t ∈ eff.grows → t ∈ expandTargets impl ctx sm.grows) := by
+    (∀ t, t ∈ eff.grows → t ∈ expandTargets impl ctx sm.grows) ∧
+    (∀ i, (Target.param i ∈ sm.reads ∨ Target.param i ∈ sm.writes ∨ Target.param i ∈ sm.grows) →
+      i < impl.params.size) := by
   unfold checkSummary at h
   simp only [hs] at h
   inv at h
-  obtain ⟨hu, h1, h2, h3, _⟩ := h
-  exact ⟨by simpa using hu, effWithin_ok _ _ _ _ h1, effWithin_ok _ _ _ _ h2, effWithin_ok _ _ _ _ h3⟩
+  obtain ⟨hpar, hu, h1, h2, h3, _⟩ := h
+  refine ⟨by simpa using hu, effWithin_ok _ _ _ _ h1, effWithin_ok _ _ _ _ h2,
+    effWithin_ok _ _ _ _ h3, ?_⟩
+  intro i hi
+  have hmem : Target.param i ∈ sm.reads ++ sm.writes ++ sm.grows := by
+    simp only [List.mem_append]
+    rcases hi with h | h | h
+    · exact Or.inl (Or.inl h)
+    · exact Or.inl (Or.inr h)
+    · exact Or.inr h
+  have := (forAll_ok _ _).1 hpar _ hmem
+  simp only at this
+  inv at this
+  exact this
 
 theorem checkInitCall_state (env : TEnv) (callee : Impl) (s : Nat) (r : Unit × Nat)
     (h : checkInitCall env callee s = .ok r) : r.2 = s := by
