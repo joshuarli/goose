@@ -424,7 +424,7 @@ private:
                 s.place = ToPlace(d->lval, true);
                 auto ty = Ty(Pointee(d->lval->exprtype));
                 if (mod.Type(ty).kind != CoreType::Int) Fail("non-integer-increment");
-                s.expr = Lit(ty, "1");
+                s.expr = IntLiteral(ty, false, 1);
                 out.stmts.push_back(std::move(s));
                 return;
             }
@@ -488,10 +488,24 @@ private:
         out.stmts.push_back(std::move(s));
     }
 
+    // Whether a literal of magnitude `mag` (negated when `neg`) lies in the
+    // range of an integer type.
+    static bool LitFits(bool neg, uint64_t mag, CoreIntTy t) {
+        auto bits = CoreIntBits(t);
+        if (CoreIsUnsigned(t)) return !neg || mag == 0 ? (bits == 64 || mag < (1ull << bits)) : false;
+        auto limit = 1ull << (bits - 1);   // |min|; max is one less.
+        return neg ? mag <= limit : mag < limit;
+    }
+
     CoreExprP Lit(CoreTypeId ty, string v) {
         auto e = NewExpr(CoreExprKind::Lit, ty);
         e->value = std::move(v);
         return e;
+    }
+
+    CoreExprP IntLiteral(CoreTypeId ty, bool neg, uint64_t mag) {
+        if (!LitFits(neg, mag, mod.Type(ty).ity)) Fail("literal-range");
+        return Lit(ty, mag == 0 ? string("0") : cat(neg ? "-" : "", to_string(mag)));
     }
 
     CoreExprP NewExpr(CoreExprKind k, CoreTypeId ty) {
@@ -617,7 +631,7 @@ private:
                 s.expr = Value(r->lo);
                 s.expr2 = Value(r->hi);
             } else {
-                s.expr = Lit(vt, "0");
+                s.expr = IntLiteral(vt, false, 0);
                 s.expr2 = Value(f->iter);
             }
         } else {
@@ -842,10 +856,27 @@ private:
         if (t.kind != CoreType::Int) return e;
         auto want = IntTy(target->intstorage);
         if (t.ity == want) return e;
+        return Convert(std::move(e), want, n->line);
+    }
+
+    // Whether converting to a type can never change the value: to a wider type
+    // of the same signedness, or from an unsigned type to a strictly wider
+    // signed one.
+    static bool IsWidening(CoreIntTy from, CoreIntTy to) {
+        if (CoreIntBits(from) >= CoreIntBits(to)) return false;
+        return CoreIsUnsigned(to) ? CoreIsUnsigned(from) : true;
+    }
+
+    // The implicit conversion of an integer to another integer type. Where the
+    // checker fitted a value it knows to be non-negative to an unsigned type
+    // (a comparison with a u64) the conversion is not a widening, and `as`
+    // says so.
+    CoreExprP Convert(CoreExprP e, CoreIntTy want, Line at) {
+        auto from = mod.Type(e->type).ity;
         auto c = NewExpr(CoreExprKind::Conv, mod.IntType(want));
-        c->conv = CoreConvKind::Widen;
+        c->conv = IsWidening(from, want) ? CoreConvKind::Widen : CoreConvKind::As;
         c->a = std::move(e);
-        c->org = Org(n->line, CoreOriginKind::Cast);
+        c->org = Org(at, CoreOriginKind::Cast);
         return c;
     }
 
@@ -874,7 +905,8 @@ private:
                     Fail("literal-type");
                 }
                 auto ty = Ty(n->exprtype);
-                return Lit(ty, l->uns ? to_string((uint64_t)l->val) : to_string(l->val));
+                if (l->uns || l->val >= 0) return IntLiteral(ty, false, (uint64_t)l->val);
+                return IntLiteral(ty, true, 0 - (uint64_t)l->val);
             }
             case NK_BoolLit: {
                 auto e = NewExpr(CoreExprKind::Bool, mod.BoolType());
@@ -1010,10 +1042,9 @@ private:
             case T_MINUS: {
                 // A negated literal is one constant: the most negative value
                 // of a type has no positive literal to negate.
-                if (auto lit = Is<IntLit>(u->child); lit && !lit->uns && u->exprtype &&
-                                                      u->exprtype->kind == TY_INT) {
+                if (auto lit = Is<IntLit>(u->child); lit && u->exprtype && u->exprtype->kind == TY_INT) {
                     auto ty = Ty(u->exprtype);
-                    return Lit(ty, lit->val == 0 ? string("0") : cat("-", to_string(lit->val)));
+                    return IntLiteral(ty, true, (uint64_t)lit->val);
                 }
                 auto e = NewExpr(CoreExprKind::Un, 0);
                 e->un = CoreUnOp::Neg;
@@ -1082,6 +1113,17 @@ private:
         e->a = Value(b->left);
         e->b = Value(b->right);
         e->type = e->a->type;
+        // A shift count may have any integer type. It is masked to the width
+        // of the left operand, which keeps only its low bits, so truncating it
+        // to that type changes nothing and gives both operands one type.
+        if ((op == CoreBinOp::Shl || op == CoreBinOp::Shr) && mod.Type(e->type).kind == CoreType::Int &&
+            mod.Type(e->b->type).kind == CoreType::Int && e->b->type != e->type) {
+            auto c = NewExpr(CoreExprKind::Conv, e->type);
+            c->conv = CoreConvKind::AsUnchecked;
+            c->a = std::move(e->b);
+            c->org = Org(b->right->line, CoreOriginKind::Cast);
+            e->b = std::move(c);
+        }
         if (mod.Type(e->type).kind != CoreType::Int) Fail("elementwise-arithmetic");
         e->org = Org(b->line, CoreOriginKind::Binary);
         return e;
