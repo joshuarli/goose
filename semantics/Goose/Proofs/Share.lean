@@ -134,18 +134,12 @@ theorem renPrintArgs_eq_map (r : CtxMap) : ∀ l, renPrintArgs r l = l.map (renP
   | [] => rfl
   | a :: as => by simp [renPrintArgs, renPrintArgs_eq_map r as]
 
-/-- Mapping a monadic function over a list commutes with renaming the
-elements first, when the function agrees with its counterpart on renamed
-elements. Stated for the evaluator's monad directly because the proof
-unfolds `List.mapM`. -/
-theorem mapM_sim {α β γ : Type} (f : α → M γ) (g : β → M γ) (h : α → β)
-    (hf : ∀ a, f a = g (h a)) (l : List α) : l.mapM f = (l.map h).mapM g := by
-  unfold List.mapM
-  suffices ∀ acc, List.mapM.loop f l acc = List.mapM.loop g (l.map h) acc from this []
-  induction l with
-  | nil => intro acc; rfl
-  | cons a as ih => intro acc; simp only [List.mapM.loop, List.map, hf a, ih]
-
+/-- Running a function over a list commutes with renaming the elements first,
+when the function agrees with its counterpart on renamed elements. -/
+theorem mapList_sim {α β γ : Type} (f : α → M γ) (g : β → M γ) (h : α → β)
+    (hf : ∀ a, f a = g (h a)) : ∀ l : List α, mapList f l = mapList g (l.map h)
+  | [] => rfl
+  | a :: as => by simp [mapList, hf a, mapList_sim f g h hf as]
 
 section Simulation
 
@@ -187,7 +181,7 @@ theorem evalExpr_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     cases e with
     | call c args o =>
       simp only [evalExpr, renExpr, renArgs_eq_map]
-      rw [mapM_sim _ (evalArg n ⟨p, m'⟩ env) (renArg r)
+      rw [mapList_sim _ (evalArg n ⟨p, m'⟩ env) (renArg r)
         (fun a => evalArg_sim hρ r hr n env a)]
       have call : ∀ depth c vals, enterCall n ⟨p, m⟩ depth c vals =
           enterCall n ⟨p, m'⟩ depth (r c) vals :=
@@ -195,7 +189,7 @@ theorem evalExpr_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
       simp only [call]
     | arrLit t es =>
       simp only [evalExpr, renExpr, renExprs_eq_map]
-      rw [mapM_sim _ (evalExpr n ⟨p, m'⟩ env) (renExpr r)
+      rw [mapList_sim _ (evalExpr n ⟨p, m'⟩ env) (renExpr r)
         (fun a => evalExpr_sim hρ r hr n env a)]
     | _ => simp [evalExpr, renExpr, evalExpr_sim hρ r hr n, evalPlace_sim hρ r hr n,
         evalView_sim hρ r hr n, evalBound_sim hρ r hr n, blockValue_sim hρ r hr n]
@@ -278,7 +272,7 @@ theorem execStmt_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     cases s with
     | print args o =>
       simp only [execStmt, renStmt, renPrintArgs_eq_map]
-      rw [mapM_sim _ (execPrintArg n ⟨p, m'⟩ env) (renPrintArg r)
+      rw [mapList_sim _ (execPrintArg n ⟨p, m'⟩ env) (renPrintArg r)
         (fun a => execPrintArg_sim hρ r hr n env a)]
     | ifS c t f o =>
       cases f <;> simp [execStmt, renStmt, renOptBlock, evalExpr_sim hρ r hr n,
@@ -322,31 +316,25 @@ theorem execEach_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     cases idx <;> simp [execEach, execBlock_sim hρ r hr n, execEach_sim hρ r hr n]
 end
 
+/-- The globals are initialized alike. -/
+theorem initGlobals_sim (hs : Simulates m m' ρ) (fuel : Nat) :
+    ∀ gs : List GlobalId, initGlobals fuel ⟨p, m⟩ gs = initGlobals fuel ⟨p, m'⟩ gs
+  | [] => rfl
+  | g :: rest => by
+    have hg : lookupGlobal ⟨p, m⟩ g = lookupGlobal ⟨p, m'⟩ g := by
+      unfold lookupGlobal; simp only [hs.globals]
+    have he : ∀ (env : Env) (e : Expr),
+        evalExpr fuel ⟨p, m⟩ env e = evalExpr fuel ⟨p, m'⟩ env e := fun env e => by
+      rw [evalExpr_sim hs.bodies id hs.ids fuel env e, renExpr_id]
+    simp only [initGlobals, hg, he, initGlobals_sim hs fuel rest]
+
 /-- The globals are initialized alike and the entry runs alike. -/
 theorem runModule_sim (hs : Simulates m m' ρ) (fuel : Nat) :
     runModule fuel ⟨p, m⟩ = runModule fuel ⟨p, m'⟩ := by
-  unfold runModule
   have entry : enterCall fuel ⟨p, m⟩ 0 m.entry [] = enterCall fuel ⟨p, m'⟩ 0 m'.entry [] := by
     rw [hs.entry]
     exact enterCall_sim hs.bodies fuel 0 m.entry m.entry [] (hs.ids _)
-  have glob : ∀ g : GlobalId, (do
-        let gl ← lookupGlobal ⟨p, m⟩ g
-        let act ← freshAct
-        let v ← evalExpr fuel ⟨p, m⟩ ⟨#[], act, [], 0⟩ gl.init
-        bindRoot (.global g) v
-        (pure (ForInStep.yield PUnit.unit) : M (ForInStep PUnit))) = (do
-        let gl ← lookupGlobal ⟨p, m'⟩ g
-        let act ← freshAct
-        let v ← evalExpr fuel ⟨p, m'⟩ ⟨#[], act, [], 0⟩ gl.init
-        bindRoot (.global g) v
-        (pure (ForInStep.yield PUnit.unit) : M (ForInStep PUnit))) := by
-    intro g
-    unfold lookupGlobal
-    simp only [hs.globals]
-    cases m.globals[g]? with
-    | none => simp [fault_bind]
-    | some gl => simp [evalExpr_sim hs.bodies id hs.ids fuel, renExpr_id]
-  simp only [hs.globals, entry, glob]
+  simp only [runModule, hs.globals, initGlobals_sim hs fuel, entry]
 
 end Simulation
 
