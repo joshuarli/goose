@@ -57,12 +57,18 @@ template<typename F> void ScanC(string_view t, F &&f) {
     flush(n);
 }
 
-inline string RenameC(string_view text, const unordered_map<string, string> &names) {
+struct NameHash {
+    using is_transparent = void;
+    size_t operator()(string_view s) const { return hash<string_view>()(s); }
+};
+using NameMap = unordered_map<string, string, NameHash, equal_to<>>;
+
+inline string RenameC(string_view text, const NameMap &names) {
     string out;
     out.reserve(text.size());
     ScanC(text, [&](bool ident, string_view tok, bool member) {
         if (ident && !member) {
-            auto it = names.find(string(tok));
+            auto it = names.find(tok);
             if (it != names.end()) { out += it->second; return; }
         }
         out.append(tok.data(), tok.size());
@@ -134,6 +140,7 @@ inline Digest LoweringInstanceKey(CodeGen &cg, const EmitSeg &seg) {
 inline void EmitPostPass(CodeGen &cg) {
     auto &segs = cg.emitsegs;
     if (segs.empty()) return;
+    auto wall0 = BuildRecorder::Wall(), cpu0 = BuildRecorder::Cpu();
     auto share = emit_options.share, stable = emit_options.stable_names;
     auto n = (int)segs.size();
     vector<PostPassFn> fns(n);
@@ -180,21 +187,49 @@ inline void EmitPostPass(CodeGen &cg) {
         map<Digest, int> ids;
         for (auto &f : fns) f.cls = ids.emplace(f.skeleton, (int)ids.size()).first->second;
         nclasses = (int)ids.size();
-        for (;;) {
-            unordered_map<string, int> next;
-            vector<int> cls(n);
-            for (int i = 0; i < n; i++) {
-                string key((const char *)&fns[i].cls, sizeof(int));
-                for (auto r : fns[i].refs) key.append((const char *)&fns[r].cls, sizeof(int));
-                cls[i] = next.emplace(std::move(key), (int)next.size()).first->second;
+        // Split classes whose members name different classes, and look again
+        // only at the classes that name a class that was just split: a body
+        // is recomputed when something it calls changed, not on every round.
+        vector<vector<int>> mem(nclasses);
+        for (int i = 0; i < n; i++) mem[fns[i].cls].push_back(i);
+        vector<vector<int>> users(n);
+        for (int i = 0; i < n; i++)
+            for (auto r : fns[i].refs) users[r].push_back(i);
+        vector<int> work;
+        vector<char> queued(nclasses, 0);
+        for (int c = 0; c < nclasses; c++)
+            if (mem[c].size() > 1) { work.push_back(c); queued[c] = 1; }
+        while (!work.empty()) {
+            auto round = std::move(work);
+            work.clear();
+            for (auto c : round) queued[c] = 0;
+            for (auto c : round) {
+                if (mem[c].size() < 2) continue;
+                unordered_map<string, vector<int>> groups;
+                vector<string> order;
+                for (auto m : mem[c]) {
+                    string key;
+                    key.reserve(fns[m].refs.size() * sizeof(int));
+                    for (auto r : fns[m].refs) key.append((const char *)&fns[r].cls, sizeof(int));
+                    auto [it, fresh] = groups.try_emplace(std::move(key));
+                    it->second.push_back(m);
+                    if (fresh) order.push_back(it->first);
+                }
+                if (groups.size() < 2) continue;
+                auto old = std::move(mem[c]);
+                mem[c] = std::move(groups[order[0]]);
+                for (size_t g = 1; g < order.size(); g++) {
+                    auto id = (int)mem.size();
+                    mem.push_back(std::move(groups[order[g]]));
+                    queued.push_back(0);
+                    for (auto m : mem[id]) fns[m].cls = id;
+                }
+                for (auto m : old)
+                    for (auto u : users[m])
+                        if (!queued[fns[u].cls]) { queued[fns[u].cls] = 1; work.push_back(fns[u].cls); }
             }
-            // Each round only splits classes, so an unchanged count is an
-            // unchanged partition.
-            auto done = (int)next.size() == nclasses;
-            for (int i = 0; i < n; i++) fns[i].cls = cls[i];
-            nclasses = (int)next.size();
-            if (done) break;
         }
+        nclasses = (int)mem.size();
     } else {
         for (int i = 0; i < n; i++) fns[i].cls = i;
         nclasses = n;
@@ -261,7 +296,7 @@ inline void EmitPostPass(CodeGen &cg) {
     }
 
     // The renaming: every emitted function to its class's name.
-    unordered_map<string, string> rename;
+    NameMap rename;
     unordered_set<string> removed;
     for (int i = 0; i < n; i++) {
         auto &to = finalname[fns[i].cls];
@@ -354,6 +389,8 @@ inline void EmitPostPass(CodeGen &cg) {
     // What was found.
     auto &st = share_stats;
     st.ran = true;
+    st.wall_seconds = BuildRecorder::Wall() - wall0;
+    st.cpu_seconds = BuildRecorder::Cpu() - cpu0;
     st.functions_before = n;
     st.bytes_before = bytes_before;
     st.bytes_after = bytes_after;
@@ -375,7 +412,8 @@ inline void EmitPostPass(CodeGen &cg) {
             auto &b = fns[reps[k]];
             if (a.signature != b.signature) continue;
             if (a.seg->twin != b.seg->twin) continue;
-            if (a.skeleton == b.skeleton) { st.distinct_callee++; continue; }
+            auto bytes = (long long)newlen[reps[k]];
+            if (a.skeleton == b.skeleton) { st.distinct_callee++; st.callee_bytes += bytes; continue; }
             auto inl = [&](const PostPassFn &f) {
                 vector<Digest> v;
                 auto it = consumed_assumptions.inlined.find(f.seg->sp);
@@ -384,7 +422,7 @@ inline void EmitPostPass(CodeGen &cg) {
                 sort(v.begin(), v.end());
                 return v;
             };
-            if (inl(a) != inl(b)) { st.distinct_inlined++; continue; }
+            if (inl(a) != inl(b)) { st.distinct_inlined++; st.inlined_bytes += bytes; continue; }
             // Bodies of the same shape whose lines differ only where one
             // of them checks a bound.
             auto onlychecks = a.lines.size() == b.lines.size();
@@ -395,8 +433,8 @@ inline void EmitPostPass(CodeGen &cg) {
                 onlychecks = a.lines[l].second || b.lines[l].second;
             }
             onlychecks = onlychecks && diffs > 0;
-            if (onlychecks) st.distinct_bounds_checks++;
-            else st.distinct_other++;
+            if (onlychecks) { st.distinct_bounds_checks++; st.bounds_check_bytes += bytes; }
+            else { st.distinct_other++; st.other_bytes += bytes; }
         }
     }
 }
