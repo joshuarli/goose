@@ -70,6 +70,11 @@ add_executable(goose
     src/runtime/runtime_ext.h
     src/runtime/runtime_os.h
     src/gfx.h
+    src/core/core_ir.h
+    src/core/core_json.h
+    src/core/core_export.h
+    src/core/core_summary.h
+    src/core/core_emit.h
 )
 
 # Keep argv, CRT file access, filesystem paths and Win32's narrow APIs in
