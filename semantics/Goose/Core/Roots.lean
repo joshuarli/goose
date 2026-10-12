@@ -219,6 +219,27 @@ def checkBlockValue (n0 n1 : Nat) : List RootRef → V Unit
     else checkBlockValue n0 n1 rest
   | _ :: rest => checkBlockValue n0 n1 rest
 
+/-- The effects of a call added to `e`: the callee's summary through the
+argument roots, or everything when the summary is unknown. -/
+def callEffects (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) (e : Eff) : Eff :=
+  match callee.summary with
+  | .unknown => { e with unknown := true }
+  | .known sm =>
+    { e with
+      reads := addTargets e.reads (mapCallTargets callee cctx argRoots sm.reads)
+      writes := addTargets e.writes (mapCallTargets callee cctx argRoots sm.writes)
+      grows := addTargets e.grows (mapCallTargets callee cctx argRoots sm.grows)
+      aborts := e.aborts || sm.aborts
+      outputs := e.outputs || sm.outputs }
+
+/-- The caller's roots of what a call yields. -/
+def callResultRoots (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) : V (List RootRef) :=
+  match callee.results.toList, cctx.resultRoots with
+  | [t], [rs] =>
+    if t.isRefLike then mapResultRoots argRoots [] rs
+    else pure []
+  | _, _ => pure []
+
 mutual
 
 def rpPlace (env : PEnv) : Place → P (List RootRef)
@@ -350,40 +371,25 @@ def rpCall (env : PEnv) (c : ContextId) (argRoots : List (List RootRef)) : P (Li
   let some cctx := env.mod.contexts[c]? | rejP .call s!"call of context {c}, outside the context table"
   let some callee := env.mod.impls[cctx.impl]? | rejP .call s!"context {c} names a missing implementation"
   liftV (forAll (List.range callee.params.size) (checkArgRoots callee cctx argRoots))
-  match callee.summary with
-  | .unknown => modify fun s => { s with eff := { s.eff with unknown := true } }
-  | .known sm =>
-    modify fun s =>
-      let e := s.eff
-      { s with eff := { e with
-          reads := addTargets e.reads (mapCallTargets callee cctx argRoots sm.reads)
-          writes := addTargets e.writes (mapCallTargets callee cctx argRoots sm.writes)
-          grows := addTargets e.grows (mapCallTargets callee cctx argRoots sm.grows)
-          aborts := e.aborts || sm.aborts
-          outputs := e.outputs || sm.outputs } }
-  match callee.results.toList, cctx.resultRoots with
-  | [t], [rs] =>
-    if t.isRefLike then liftV (mapResultRoots argRoots [] rs)
-    else pure []
-  | _, _ => pure []
+  modify fun s => { s with eff := callEffects callee cctx argRoots s.eff }
+  liftV (callResultRoots callee cctx argRoots)
 
 /-- Check a block and return the roots of its value together with the range
 of variable ids it declares (`pre` included). -/
 def rpBlockValue (env : PEnv) (pre : List VarId) : Block → P (List RootRef × (Nat × Nat))
   | .mk sc stmts value => do
-    let n0 := (← get).nextVar
-    let env' := { env with scopes := sc :: env.scopes }
+    let st0 ← get
     -- The variables a construct declares are the next ones in declaration order.
-    unless pre.all (fun x => n0 ≤ x && x < n0 + pre.length) do
-      rejP .root s!"block {sc} binds a variable out of declaration order"
+    (if pre.all (fun x => st0.nextVar ≤ x && x < st0.nextVar + pre.length) then pure ()
+      else rejP .root s!"block {sc} binds a variable out of declaration order" : P Unit)
     modify fun s => { s with nextVar := s.nextVar + pre.length }
-    rpStmts env' stmts
-    let rho ← match value with
+    rpStmts { env with scopes := sc :: env.scopes } stmts
+    let rho ← (match value with
       | none => pure []
-      | some e => rpExpr env' e
-    let n1 := (← get).nextVar
-    liftV (checkBlockValue n0 n1 rho)
-    pure (rho, (n0, n1))
+      | some e => rpExpr { env with scopes := sc :: env.scopes } e)
+    let st1 ← get
+    liftV (checkBlockValue st0.nextVar st1.nextVar rho)
+    pure (rho, (st0.nextVar, st1.nextVar))
 
 def rpStmts (env : PEnv) : List Stmt → P Unit
   | [] => pure ()
@@ -539,20 +545,22 @@ def showTarget : Target → String
   | .param i => s!"parameter {i}"
   | .global g => s!"global {g}"
 
+/-- Every effect found is among those declared. -/
+def effWithin (name what : String) (found declared : List Target) : V Unit :=
+  match found.find? (fun t => !declared.contains t) with
+  | some t => reject .summary s!"{name} {what} {showTarget t}, which its summary omits"
+  | none => pure ()
+
 def checkSummary (impl : Impl) (ctx : Context) (eff : Eff) : V Unit := do
   match impl.summary with
   | .unknown => pure ()
   | .known s =>
     if eff.unknown then
       reject .summary s!"{impl.name} calls an implementation whose summary is unknown, so its own summary cannot be known"
-    let within (what : String) (found declared : List Target) : V Unit :=
-      match found.find? (fun t => !declared.contains t) with
-      | some t => reject .summary s!"{impl.name} {what} {showTarget t}, which its summary omits"
-      | none => pure ()
-    within "reads" eff.reads (expandTargets impl ctx s.reads)
-    within "writes" eff.writes (expandTargets impl ctx s.writes)
-    within "grows" eff.grows (expandTargets impl ctx s.grows)
-    within "rebinds" eff.rebinds s.rebinds
+    effWithin impl.name "reads" eff.reads (expandTargets impl ctx s.reads)
+    effWithin impl.name "writes" eff.writes (expandTargets impl ctx s.writes)
+    effWithin impl.name "grows" eff.grows (expandTargets impl ctx s.grows)
+    effWithin impl.name "rebinds" eff.rebinds s.rebinds
     if eff.aborts && !s.aborts then reject .summary s!"{impl.name} may abort, which its summary omits"
     if eff.outputs && !s.outputs then reject .summary s!"{impl.name} prints, which its summary omits"
 
