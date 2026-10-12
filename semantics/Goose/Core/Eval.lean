@@ -14,13 +14,12 @@ Shape of the definitions.
 * State and results are plain data (`St`, `Res`, `Stop`, `Flow`); the monad
   `M` is a state-passing function that keeps the state when a computation
   stops, so the trace of an aborted run is available.
-* Each fault kind is raised in one family of helpers:
-  `danglingRoot` and `pathRange` only by the store accessors `readLoc`,
-  `writeLoc`, `appendLoc`, `lengthLoc` and `readRun`; `shape` by the `expect*` helpers and by the
-  value-form tests inside `evalView`, `evalPlace` and the array literal
-  forms; `unbound` by `rootOf`, `lookupContext` and `lookupImpl`; `arity` by
-  `enterCall`; `flow` by `enterCall` when a body leaves by `break` or
-  `continue`.
+* Each fault kind is raised only by one small family of helpers, never by
+  the evaluation functions themselves: `danglingRoot` and `pathRange` by the
+  store accessors `readLoc`, `writeLoc`, `appendLoc`, `lengthLoc` and
+  `readRun`; `shape` by the `expect*` value tests; `unbound` by `rootOf`,
+  `lookupContext`, `lookupImpl` and `lookupGlobal`; `arity` by `enterCall`; `flow` by
+  `expectNormal` and `expectReturned`.
 * Native stack grows only with the call chain, which `maxCallDepth` bounds.
 * Nothing is `partial`, `unsafe`, `opaque` or `implemented_by`. A loop is a
   function calling itself in tail position, which the compiler turns into a
@@ -165,6 +164,55 @@ def expectBool : Val → M Bool
   | .bool b => pure b
   | _ => fault .shape
 
+def expectRef : Val → M Loc
+  | .ref l => pure l
+  | _ => fault .shape
+
+def expectSlice : Val → M (Loc × Nat × Nat)
+  | .slice l start len => pure (l, start, len)
+  | _ => fault .shape
+
+/-- The element count of an array object and whether it can grow. -/
+def expectArray : Val → M (Nat × Bool)
+  | .fixed es => pure (es.size, false)
+  | .resizable es => pure (es.size, true)
+  | _ => fault .shape
+
+def expectSameTy (t u : IntTy) : M Unit :=
+  if t = u then pure () else fault .shape
+
+def expectIntTy : Ty → M IntTy
+  | .int t => pure t
+  | _ => fault .shape
+
+/-- The operands of a comparison as integers; booleans compare as 0 and 1. -/
+def expectComparable : Val → Val → M (Int × Int)
+  | .int t i, .int u j => do expectSameTy t u; pure (i, j)
+  | .bool p, .bool q => pure ((if p then 1 else 0), (if q then 1 else 0))
+  | _, _ => fault .shape
+
+/-- Build the array a literal of type `t` denotes. -/
+def expectArrayLit (t : Ty) (vs : Array Val) : M Val :=
+  match t with
+  | .arr _ _ => pure (.fixed vs)
+  | .grow _ => pure (.resizable vs)
+  | _ => fault .shape
+
+def expectFixedCount : Ty → M Nat
+  | .arr _ k => pure k
+  | _ => fault .shape
+
+/-- Flow tests: raise `flow`. A block operand, and a function body, must end
+by falling through or, for a body, returning. -/
+def expectNormal : Flow → M Val
+  | .normal v => pure v
+  | _ => fault .flow
+
+def expectReturned : Flow → M Val
+  | .normal v => pure v
+  | .ret v => pure v
+  | _ => fault .flow
+
 def render : Val → M String
   | .int _ n => pure (toString n)
   | .bool true => pure "true"
@@ -175,6 +223,11 @@ def render : Val → M String
 def lookupContext (cfg : Cfg) (c : ContextId) : M Context :=
   match cfg.mod.contexts[c]? with
   | some ctx => pure ctx
+  | none => fault .unbound
+
+def lookupGlobal (cfg : Cfg) (g : GlobalId) : M Global :=
+  match cfg.mod.globals[g]? with
+  | some gl => pure gl
   | none => fault .unbound
 
 def lookupImpl (cfg : Cfg) (i : ImplId) : M Impl :=
@@ -237,19 +290,15 @@ def evalExpr : Nat → Cfg → Env → Expr → M Val
     | .bin op a b org => do
       let (t, x) ← expectInt (← evalExpr n cfg env a)
       let (u, y) ← expectInt (← evalExpr n cfg env b)
-      if t = u then
-        match evalBin cfg.profile op t x y with
-        | .ok r => pure (.int t r)
-        | .error k => abortAt (AbortKind.ofNum k) org
-      else fault .shape
+      expectSameTy t u
+      match evalBin cfg.profile op t x y with
+      | .ok r => pure (.int t r)
+      | .error k => abortAt (AbortKind.ofNum k) org
     | .cmp op a b => do
       let x ← evalExpr n cfg env a
       let y ← evalExpr n cfg env b
-      match x, y with
-      | .int t i, .int u j => if t = u then pure (.bool (evalCmp op i j)) else fault .shape
-      | .bool p, .bool q =>
-        pure (.bool (evalCmp op (if p then 1 else 0) (if q then 1 else 0)))
-      | _, _ => fault .shape
+      let (i, j) ← expectComparable x y
+      pure (.bool (evalCmp op i j))
     | .and a b => do
       if (← expectBool (← evalExpr n cfg env a)) then
         pure (.bool (← expectBool (← evalExpr n cfg env b)))
@@ -261,12 +310,10 @@ def evalExpr : Nat → Cfg → Env → Expr → M Val
       pure (.bool (!(← expectBool (← evalExpr n cfg env a))))
     | .conv k target a org => do
       let (src, x) ← expectInt (← evalExpr n cfg env a)
-      match target with
-      | .int dst =>
-        match evalConv cfg.profile k src dst x with
-        | .ok r => pure (.int dst r)
-        | .error k => abortAt (AbortKind.ofNum k) org
-      | _ => fault .shape
+      let dst ← expectIntTy target
+      match evalConv cfg.profile k src dst x with
+      | .ok r => pure (.int dst r)
+      | .error k => abortAt (AbortKind.ofNum k) org
     | .call c args _ => do
       let vals ← args.mapM (evalArg n cfg env)
       enterCall n cfg env.depth c vals
@@ -281,25 +328,18 @@ def evalExpr : Nat → Cfg → Env → Expr → M Val
     | .blockE b => blockValue n cfg env b
     | .arrLit t es => do
       let vs ← es.mapM (evalExpr n cfg env)
-      match t with
-      | .arr _ _ => pure (.fixed vs.toArray)
-      | .grow _ => pure (.resizable vs.toArray)
-      | _ => fault .shape
+      expectArrayLit t vs.toArray
     | .fill t a => do
-      match t with
-      | .arr _ k => do
-        let v ← evalExpr n cfg env a
-        pure (.fixed (Array.replicate k v))
-      | _ => fault .shape
+      let k ← expectFixedCount t
+      let v ← evalExpr n cfg env a
+      pure (.fixed (Array.replicate k v))
 
 /-- A block used as an expression yields its value; `break`, `continue` and
 `return` cannot cross an expression boundary. -/
 def blockValue : Nat → Cfg → Env → Block → M Val
   | 0, _, _, _ => timeout
   | n + 1, cfg, env, b => do
-    match (← execBlock n cfg env [] b) with
-    | .normal v => pure v
-    | _ => fault .flow
+    expectNormal (← execBlock n cfg env [] b)
 
 def evalArg : Nat → Cfg → Env → Arg → M Val
   | 0, _, _, _ => timeout
@@ -332,9 +372,7 @@ def evalPlace : Nat → Cfg → Env → Place → M Loc
       pure ⟨r, []⟩
     | .global g => pure ⟨.global g, []⟩
     | .deref e => do
-      match (← evalExpr n cfg env e) with
-      | .ref l => pure l
-      | _ => fault .shape
+      expectRef (← evalExpr n cfg env e)
     | .elem v i org => do
       let vw ← evalView n cfg env v
       let (_, k) ← expectInt (← evalExpr n cfg env i)
@@ -348,14 +386,11 @@ def evalView : Nat → Cfg → Env → View → M ViewVal
     match v with
     | .of p => do
       let l ← evalPlace n cfg env p
-      match (← readLoc l) with
-      | .fixed es => pure ⟨l, 0, es.size, false⟩
-      | .resizable es => pure ⟨l, 0, es.size, true⟩
-      | _ => fault .shape
+      let (len, resizable) ← expectArray (← readLoc l)
+      pure ⟨l, 0, len, resizable⟩
     | .val e => do
-      match (← evalExpr n cfg env e) with
-      | .slice l start len => pure ⟨l, start, len, false⟩
-      | _ => fault .shape
+      let (l, start, len) ← expectSlice (← evalExpr n cfg env e)
+      pure ⟨l, start, len, false⟩
 
 /-- Enter a fresh activation of the implementation context `c` names. -/
 def enterCall : Nat → Cfg → Nat → ContextId → List Val → M Val
@@ -368,10 +403,7 @@ def enterCall : Nat → Cfg → Nat → ContextId → List Val → M Val
       let act ← freshAct
       let env : Env := ⟨impl.vars, act, [], depth + 1⟩
       let pre := (impl.params.toList.zip vals).map fun (p, v) => (p.var, v)
-      match (← execBlock n cfg env pre impl.body) with
-      | .normal v => pure v
-      | .ret v => pure v
-      | _ => fault .flow
+      expectReturned (← execBlock n cfg env pre impl.body)
     else fault .arity
 
 /-- Run a block in a fresh scope instance. `pre` binds the variables the
@@ -417,13 +449,12 @@ def execStmt : Nat → Cfg → Env → Stmt → M Flow
       let l ← evalPlace n cfg env p
       let (t, x) ← expectInt (← readLoc l)
       let (u, y) ← expectInt (← evalExpr n cfg env e)
-      if t = u then
-        match evalBin cfg.profile op t x y with
-        | .ok r => do
-          writeLoc l (.int t r)
-          pure (.normal .unit)
-        | .error k => abortAt (AbortKind.ofNum k) org
-      else fault .shape
+      expectSameTy t u
+      match evalBin cfg.profile op t x y with
+      | .ok r => do
+        writeLoc l (.int t r)
+        pure (.normal .unit)
+      | .error k => abortAt (AbortKind.ofNum k) org
     | .rebind x e _ => do
       let v ← evalExpr n cfg env e
       let r ← rootOf env x
@@ -452,7 +483,8 @@ def execStmt : Nat → Cfg → Env → Stmt → M Flow
     | .forRange x lo hi body _ => do
       let (t, a) ← expectInt (← evalExpr n cfg env lo)
       let (u, b) ← expectInt (← evalExpr n cfg env hi)
-      if t = u then execRange n cfg env x t a b body else fault .shape
+      expectSameTy t u
+      execRange n cfg env x t a b body
     | .forEach x idx v byRef body _ => do
       let vw ← evalView n cfg env v
       execEach n cfg env x idx byRef body vw 0
@@ -542,12 +574,10 @@ inductive Result
 with no variables, then run the entry context. -/
 def runModule (fuel : Nat) (cfg : Cfg) : M Unit := do
   for g in [0:cfg.mod.globals.size] do
-    match cfg.mod.globals[g]? with
-    | none => fault .unbound
-    | some gl =>
-      let act ← freshAct
-      let v ← evalExpr fuel cfg ⟨#[], act, [], 0⟩ gl.init
-      bindRoot (.global g) v
+    let gl ← lookupGlobal cfg g
+    let act ← freshAct
+    let v ← evalExpr fuel cfg ⟨#[], act, [], 0⟩ gl.init
+    bindRoot (.global g) v
   let _ ← enterCall fuel cfg 0 cfg.mod.entry []
   pure ()
 
