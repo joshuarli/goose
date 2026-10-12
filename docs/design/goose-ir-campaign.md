@@ -369,6 +369,8 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 
 *(append-only; one line per gate or phase end)*
 
+- `T2` merged: `TH-ERASE-01`, `TH-SHARE-01`, `TH-SHARE-02`, `TH-REUSE-01` and the quotient checker's soundness pass the audit (58 theorems audited in all, three allowed axioms only). **`G-SHARE` reached.** The proved quotient renames contexts per implementation rather than implementation indices, because bodies name contexts; it does not claim the shared module itself validates, only that it never faults when the unshared one does not.
+- `S2` follow-up merged: exporter and validator agree on all pilot fixtures (54 agree, 4 unsupported, 0 mismatch); 300 seeded cases each of `scalar` and `numeric` agree; `order` is 298 of 300 unsupported until `S4`.
 - `B2` merged: shared implementations and the stable naming seam in the legacy backend. `G-SHARE` holds except for its theorems, which lane `sem-share` is proving. Measurements in §11.2.
 - Upstream `1cfe4b6` (three commits, including the relative-reference null test fix and extern type emission) merged into the branch without touching running lanes. On the merged tree: baseline suite shows only the two known reds, linter suite passes, default output equals master-plus-upstream on 1,232 emissions.
 - `S2` merged: `--emit-core` reproduces the three goldens byte for byte. First run of the real harness: 49 fixtures agree, 8 mismatch, 1 unsupported; `scalar` and `numeric` fuzz lanes agree on 60 of 60. The mismatches are two disagreements between exporter and validator (what counts as a read in a summary; references to slice variables), sent back to the exporter lane.
