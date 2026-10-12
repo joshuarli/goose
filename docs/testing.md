@@ -89,6 +89,7 @@ skipped under `--only` unless a glob names them: `extra/bootstrap`,
 `extra/guard_runs`, `extra/lexer_tokens`, `extra/shader`, `extra/optimizer`,
 `extra/stacks`, `extra/loop_shapes`, `extra/inline_fn_c`,
 `extra/member_params`, `extra/member_stores`, `extra/compiler_units`,
+`extra/extern_types`,
 `extra/runtime_lifecycle`, `extra/clang`, `extra/resource_paths`,
 `extra/git_packages`, `extra/driver_verbs` and `extra/runtime_cache`. Sections
 left empty by the filter are not printed.
