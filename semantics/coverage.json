@@ -8,8 +8,8 @@
  {
   "feature": "core-pilot validator (validate)",
   "label": "executable",
-  "evidence": "Goose/Core/{Typing,Roots,Validate}.lean; test/semantics/malformed/INDEX (39+ lines); about 62000 random mutants of example modules, none validated and then faulted",
-  "limits": "Not proved sound (see TH-SAFE-01); V-SUMMARY is checked but nothing proved uses it"
+  "evidence": "Goose/Core/{Typing,Roots,Validate}.lean; test/semantics/malformed/INDEX (45 lines); proved sound (TH-SAFE-01)",
+  "limits": "Changed while proving soundness, each in the rejecting direction: a global initializer now gets the root and effect pass and may reach only earlier globals (two accepted modules faulted: rejected_call_global_init_derefs_later, rejected_call_global_init_param_annotation); a call charges the caller with the globals the callee context lists for a parameter its summary names; a by-value loop over a run and an append count as a read of the run (rejected_summary_omits_loop_read); a summary may not name a parameter index past the parameter list (the decoder already refuses it); the root pass rechecks declaration order, which the typing pass already guarantees. The pilot harness result is unchanged (54 agree, 0 mismatch, 4 unsupported). V-MUT is not used by any proof. ValidateAgrees (Guarantees.lean) is a statement only."
  },
  {
   "feature": "TH-FUEL-01",
@@ -34,32 +34,32 @@
  {
   "feature": "TH-MEM-02",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.Memory.liveRefs_write, liveRefs_append, liveRefs_introduce, liveRefs_release, storeLe_release, releaseScope_roots",
-  "statement": "LiveRefs s (every reference or slice held as a root's value denotes a valid typed location, or a run inside a valid array) is preserved by a type-preserving write, by growth, by binding a root that does not exist, and by releasing the roots of one scope instance of one activation provided no surviving reference targets a released root. Releasing roots that did not exist in an earlier state leaves that state refined.",
-  "differs_from_target": "WEAKER than the target. The target is that the invariant is preserved by every evaluation step including scope exit. What is proved is the memory-operation level: the four operations every evaluation rule is built from. That the premise of the release lemma holds at each block exit (no surviving reference targets the scope's roots) is what V-ROOT, V-BLOCK and V-RESULT must establish and is part of the unproved safety induction.",
-  "assumptions": "Premises named in each lemma.",
-  "witnesses": "rejected_root_forged_annotation, rejected_result_local, rejected_block_value_dangling and rejected_call_param_assumption each break the release premise and reach fault dangling_root under --no-validate",
+  "theorem": "Goose.Proofs.Safety.validated_steps_keep_invariant (the induction, Goose.Core.Sound.specs_all); Goose.Proofs.Safety.validated_run_keeps_live_refs; store level: Goose.Core.Sound.StoreInv.{flatStep,bind,rebind,release}, Frame.{bind,rebind,flatStep,outer,push,pop}, Goose.Proofs.Memory.liveRefs_*",
+  "statement": "validate m = ok -> for every fuel and profile, each of the fourteen evaluation functions, run on code of m from a state satisfying the frame invariant, does not fault and ends in a state satisfying it (Specs). The frame invariant contains the store invariant StoreInv: every reference or slice any root holds denotes a typed location or a run inside a typed array, and points into a root that ends no earlier than its holder. Scope exit is the block component: after execBlock releases its scope instance the frame of the surrounding code holds, because every surviving root is older than the instance and so holds no reference into it. Corollary: a run of an accepted module that ends leaves LiveRefs true of the final store.",
+  "differs_from_target": "The invariant is stated over the whole store, not over a demand set (the pilot profile has no shrink, so every stored reference must stay valid). During the initialization of global g a reference to a later global may exist and be passed, but not used: the invariant there allows a reference to the whole of a global not yet bound (Unbound), and LiveRefs in the earlier sense holds once all globals are bound. The per-function statements take the validator's own results for the code as hypotheses (tyExpr = ok, rpExpr = ok); the statement free of checker functions is TH-CORE-01.",
+  "assumptions": "validate m = ok.",
+  "witnesses": "rejected_root_forged_annotation, rejected_result_local, rejected_block_value_dangling and rejected_call_param_assumption each break the invariant at a block exit or a call and fault with dangling_root under --no-validate",
   "reviewer": "pending"
  },
  {
   "feature": "TH-CORE-01",
-  "label": "deferred",
-  "theorem": "Goose.Proofs.Core.th_core_01_entry (partial)",
-  "statement": "validate m = ok gives an entry context whose implementation takes no parameters and returns nothing; the initial state satisfies LiveRefs.",
-  "differs_from_target": "The target is that acceptance gives a declarative invariant about stores, values and locations that the safety induction can use. Only the entry shape is derived. The invariant itself is defined (FlatTy, LocTy, HeldOk, LiveRefs in Goose/Proofs/Memory.lean) but acceptance is not shown to establish its per-form preconditions: that needs inversion of tyExpr/tyStmt and the root pass at every syntactic form. It is weaker than a full independent static semantics because the checker functions are the only statement of the typing and root rules; no relation was written that the checkers are proved to decide.",
-  "assumptions": "None.",
-  "witnesses": "INDEX fixtures for each rule",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.Safety.validated_context_sound; per-item facts Goose.Core.Sound.validate_modOk; entry shape Goose.Proofs.Core.th_core_01_entry",
+  "statement": "validate m = ok -> for every context c of m, every fuel, profile and call depth, every store s satisfying StoreInv with all globals bound, and every argument list of the parameters' types whose references point into roots P gives each parameter (roots older than the call) and into the context's annotation of that parameter: enterCall does not fault, and if it returns then StoreInv holds again, every typed location is still typed, every reference stored before the call is unchanged, no root was added, and the result has the result type and points only into the roots the context declares for the result, read through P.",
+  "differs_from_target": "The target names a predicate WellFormed that is the conjunction of the validation rules as propositions. No declarative typing or root judgment was written: the checker functions remain the only statement of the rules, and what acceptance is shown to give is this semantic property of every context, stated over stores, values, locations and the module's own annotations. It is the fundamental lemma of a logical relation, not a syntactic well-formedness judgment.",
+  "assumptions": "validate m = ok. The hypotheses on s, the arguments and P are the precondition of the semantic property, discharged by the caller's own check at every call the evaluator makes and trivially at the entry.",
+  "witnesses": "INDEX fixtures for each rule; the entry call of every golden and example module is an instance",
   "reviewer": "pending"
  },
  {
   "feature": "TH-SAFE-01",
-  "label": "deferred",
-  "theorem": "none",
-  "statement": "Not proved. The target is validate m = ok -> forall n p k, eval n p m /= fault k.",
-  "differs_from_target": "No theorem about safety is claimed. Goose.Proofs.Memory proves the store-level core (typed locations survive writes, growth, binding and scope release); Goose.Core.Guarantees states FaultFree, TypeSafe and MemorySafe.",
-  "assumptions": "",
-  "witnesses": "Non-vacuity: for each rule the proof would use (V-TYPE, V-ROOT, V-BLOCK, V-RESULT, V-CALL) a module violating only that rule faults under --no-validate; V-MUT and V-SUMMARY do not affect eval and the safety argument does not need them; about 62000 random mutants validated-then-ran with no fault.",
-  "reviewer": "not applicable"
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.Safety.validated_never_faults (also validated_faultFree)",
+  "statement": "validate m = ok -> forall fuel profile kind, eval fuel profile m /= fault kind, for every Module value m, about the eval and validate the tool runs.",
+  "differs_from_target": "No difference in the statement. It was false of the validator this work started from: validate accepted modules that fault (see the validator row); the theorem is about the corrected validator.",
+  "assumptions": "None beyond acceptance. Axioms: propext, Classical.choice, Quot.sound.",
+  "witnesses": "Non-vacuity, each a module one rule rejects that faults under --no-validate: V-TYPE rejected_type_add_bool (shape), rejected_type_global_reads_later; V-ROOT rejected_root_forged_annotation; V-BLOCK rejected_block_value_dangling; V-RESULT rejected_result_local; V-CALL rejected_call_param_assumption, rejected_call_global_init_touches_later, rejected_call_global_init_derefs_later, rejected_call_global_init_param_annotation; V-SUMMARY rejected_summary_hides_later_global (an initializer calls a function whose summary hides a read of a later global). V-MUT does not affect eval and is not used. Two checks the proof uses have no faulting witness: the root pass's recheck of declaration order never fires after the typing pass, and a summary entry for an absent parameter cannot be written in the encoding.",
+  "reviewer": "pending"
  },
  {
   "feature": "eval independent of root annotations",
