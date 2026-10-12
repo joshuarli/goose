@@ -179,7 +179,7 @@ The target of an effect is the set of global and parameter roots of the place re
 
 | Effect | Arises from |
 |---|---|
-| reads | `read` of a place; every `viewOf`, wherever it occurs (sampling an owner reads its length), so also under `refOf (elem …)`, `sliceOf`, `lenOf`, `append` and `forEach`; both sides of `assignOp`. |
+| reads | `read` of a place; every `viewOf`, wherever it occurs (sampling an owner reads its length), so also under `refOf (elem …)`, `sliceOf`, `lenOf`, `append` and `forEach`; the run an `append` copies from and the run a by-value `forEach` iterates, also when the run is a slice value; both sides of `assignOp`. |
 | writes | `assign` and `assignOp` to a place. |
 | grows | `push` and `append` on the owner. |
 | rebinds | `rebind` of a variable that is a parameter. |

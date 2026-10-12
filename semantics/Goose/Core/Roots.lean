@@ -418,7 +418,9 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     let _ ← rpExpr env e
   | .append owner src _ => do
     let rho ← rpPlace env owner
-    let _ ← rpView env src
+    -- The appended elements are copied out of the run.
+    let run ← rpView env src
+    addReads run
     addGrows rho
   | .ifS c t f _ => do
     let _ ← rpExpr env c
@@ -435,7 +437,8 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     let _ ← rpBlockValue env [x] b
   | .forEach x idx v byRef b _ => do
     let rho ← rpView env v
-    if byRef then bindRoots env (b.scope :: env.scopes) x rho
+    -- A loop over values copies each element out of the run.
+    if byRef then bindRoots env (b.scope :: env.scopes) x rho else addReads rho
     let _ ← rpBlockValue env (x :: idx.toList) b
   | .ret e _ => do
     match e with
