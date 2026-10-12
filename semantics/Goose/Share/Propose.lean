@@ -114,13 +114,19 @@ def propose (m : Module) : Except String Proposal := do
     if !seen.getD k false then
       seen := seen.set! k true
       firstMember := firstMember.set! k f
+  -- a group keeps its first member's body untouched when every member has it
+  let mut unchanged : Array Bool := Array.replicate classes true
+  for f in [0:m.impls.size] do
+    let k := cls.getD f 0
+    let first := firstMember.getD k 0
+    if f != first then
+      match m.impls[first]?, m.impls[f]? with
+      | some keep, some other =>
+        unchanged := unchanged.set! k (unchanged.getD k true && eqImpl keep other)
+      | _, _ => throw s!"internal error: no implementation {f}"
   let impls ← firstMember.mapIdxM fun k f => do
     let some keep := m.impls[f]? | throw s!"internal error: no implementation {f}"
-    let unchanged := (List.range m.impls.size).all fun g =>
-      cls.getD g 0 != k || (match m.impls[g]? with
-        | some other => eqImpl keep other
-        | none => false)
-    pure (if unchanged then keep else renImpl r keep)
+    pure (if unchanged.getD k true then keep else renImpl r keep)
   let shared : Module :=
     { m with
       impls

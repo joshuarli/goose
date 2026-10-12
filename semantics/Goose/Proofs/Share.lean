@@ -180,7 +180,7 @@ theorem resolve_eq_map_snd (m : Module) (c : ContextId) :
 
 mutual
 theorem evalExpr_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (e : Expr),
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (e : Expr),
     evalExpr n ⟨p, m⟩ env e = evalExpr n ⟨p, m'⟩ env (renExpr r e)
   | r, _, 0, env, e => by simp [evalExpr]
   | r, hr, n + 1, env, e => by
@@ -201,20 +201,20 @@ theorem evalExpr_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
         evalView_sim hρ r hr n, evalBound_sim hρ r hr n, blockValue_sim hρ r hr n]
 
 theorem blockValue_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (b : Block),
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (b : Block),
     blockValue n ⟨p, m⟩ env b = blockValue n ⟨p, m'⟩ env (renBlock r b)
   | r, _, 0, env, b => by simp [blockValue]
   | r, hr, n + 1, env, b => by simp [blockValue, execBlock_sim hρ r hr n]
 
 theorem evalArg_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (a : Arg),
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (a : Arg),
     evalArg n ⟨p, m⟩ env a = evalArg n ⟨p, m'⟩ env (renArg r a)
   | r, _, 0, env, a => by simp [evalArg]
   | r, hr, n + 1, env, a => by
     cases a <;> simp [evalArg, renArg, evalExpr_sim hρ r hr n, evalPlace_sim hρ r hr n]
 
 theorem evalBound_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
       (len : Nat) (dflt : Int) (b : Bound),
     evalBound n ⟨p, m⟩ env len dflt b = evalBound n ⟨p, m'⟩ env len dflt (renBound r b)
   | r, _, 0, env, len, dflt, b => by simp [evalBound]
@@ -222,14 +222,14 @@ theorem evalBound_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     cases b <;> simp [evalBound, renBound, evalExpr_sim hρ r hr n]
 
 theorem evalPlace_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (pl : Place),
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (pl : Place),
     evalPlace n ⟨p, m⟩ env pl = evalPlace n ⟨p, m'⟩ env (renPlace r pl)
   | r, _, 0, env, pl => by simp [evalPlace]
   | r, hr, n + 1, env, pl => by
     cases pl <;> simp [evalPlace, renPlace, evalExpr_sim hρ r hr n, evalView_sim hρ r hr n]
 
 theorem evalView_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (v : View),
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (v : View),
     evalView n ⟨p, m⟩ env v = evalView n ⟨p, m'⟩ env (renView r v)
   | r, _, 0, env, v => by simp [evalView]
   | r, hr, n + 1, env, v => by
@@ -250,7 +250,7 @@ theorem enterCall_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
       simp [renImpl, execBlock_sim hρ (ρ g) (hρ g) n]
 
 theorem execBlock_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
       (pre : List (VarId × Val)) (b : Block),
     execBlock n ⟨p, m⟩ env pre b = execBlock n ⟨p, m'⟩ env pre (renBlock r b)
   | r, _, 0, env, pre, b => by simp [execBlock]
@@ -263,7 +263,7 @@ theorem execBlock_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
       cases flow <;> simp [evalExpr_sim hρ r hr n]
 
 theorem execStmts_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (ss : List Stmt),
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (ss : List Stmt),
     execStmts n ⟨p, m⟩ env ss = execStmts n ⟨p, m'⟩ env (renStmts r ss)
   | r, _, 0, env, ss => by simp [execStmts]
   | r, hr, n + 1, env, [] => by simp [execStmts, renStmts]
@@ -271,7 +271,7 @@ theorem execStmts_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     simp [execStmts, renStmts, execStmt_sim hρ r hr n, execStmts_sim hρ r hr n]
 
 theorem execStmt_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (s : Stmt),
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (s : Stmt),
     execStmt n ⟨p, m⟩ env s = execStmt n ⟨p, m'⟩ env (renStmt r s)
   | r, _, 0, env, s => by simp [execStmt]
   | r, hr, n + 1, env, s => by
@@ -289,14 +289,14 @@ theorem execStmt_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
         execEach_sim hρ r hr n]
 
 theorem execPrintArg_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (a : PrintArg),
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (a : PrintArg),
     execPrintArg n ⟨p, m⟩ env a = execPrintArg n ⟨p, m'⟩ env (renPrintArg r a)
   | r, _, 0, env, a => by simp [execPrintArg]
   | r, hr, n + 1, env, a => by
     cases a <;> simp [execPrintArg, renPrintArg, evalExpr_sim hρ r hr n]
 
 theorem execWhile_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
       (c : Expr) (body : Block),
     execWhile n ⟨p, m⟩ env c body = execWhile n ⟨p, m'⟩ env (renExpr r c) (renBlock r body)
   | r, _, 0, env, c, body => by simp [execWhile]
@@ -304,7 +304,7 @@ theorem execWhile_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     simp [execWhile, evalExpr_sim hρ r hr n, execBlock_sim hρ r hr n, execWhile_sim hρ r hr n]
 
 theorem execRange_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
       (x : VarId) (t : IntTy) (i hi : Int) (body : Block),
     execRange n ⟨p, m⟩ env x t i hi body = execRange n ⟨p, m'⟩ env x t i hi (renBlock r body)
   | r, _, 0, env, x, t, i, hi, body => by simp [execRange]
@@ -312,7 +312,7 @@ theorem execRange_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     simp [execRange, execBlock_sim hρ r hr n, execRange_sim hρ r hr n]
 
 theorem execEach_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
-    ∀ (r : CtxMap) (hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
+    ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env)
       (x : VarId) (idx : Option VarId) (byRef : Bool) (body : Block)
       (vw : ViewVal) (i : Nat),
     execEach n ⟨p, m⟩ env x idx byRef body vw i =
@@ -394,7 +394,7 @@ theorem resolves_of_quotient (h : Quotient m m' q ρ) (c c' : ContextId)
       have himpl : ctx'.impl = q ctx.impl := Option.some.inj hc
       simp only [Option.bind_some]
       rw [himpl, h.impls c ctx hm]
-      cases hh : m.impls[ctx.impl]? <;> simp [hh]
+      cases hh : m.impls[ctx.impl]? <;> simp
 
 theorem simulates_of_quotient (h : Quotient m m' q ρ) : Simulates m m' ρ where
   ids c := resolves_of_quotient h c c (ctxImpl_of_quotient h c)
@@ -416,6 +416,36 @@ theorem share_eval {m m' : Module} {q : ImplId → ImplId} {ρ : ImplId → CtxM
     (h : Quotient m m' q ρ) (fuel : Nat) (p : NumProfile) :
     eval fuel p m = eval fuel p m' :=
   eval_simulates (simulates_of_quotient h) fuel p
+
+/-- The relation stated for every implementation: each implementation of `m` reappears,
+renamed, at its mapped index of `m'`. With every context naming an
+implementation that exists, this is the relation `Quotient` states for the
+implementations contexts name, so it implies it. -/
+theorem quotient_of_implwise {m m' : Module} {q : ImplId → ImplId} {ρ : ImplId → CtxMap}
+    (files : m'.files = m.files) (types : m'.types = m.types)
+    (origins : m'.origins = m.origins) (entry : m'.entry = m.entry)
+    (globals : m'.globals = m.globals) (contextCount : m'.contexts.size = m.contexts.size)
+    (contexts : ∀ (c : ContextId) (ctx : Context), m.contexts[c]? = some ctx →
+      m'.contexts[c]? = some { ctx with impl := q ctx.impl })
+    (inRange : ∀ (c : ContextId) (ctx : Context), m.contexts[c]? = some ctx →
+      ctx.impl < m.impls.size)
+    (impls : ∀ (f : ImplId) (i : Impl), m.impls[f]? = some i →
+      m'.impls[q f]? = some (renImpl (ρ f) i))
+    (callees : ∀ (f : ImplId) (c : ContextId),
+      (m'.contexts[ρ f c]?).map Context.impl = (m'.contexts[c]?).map Context.impl) :
+    Quotient m m' q ρ where
+  files := files
+  types := types
+  origins := origins
+  entry := entry
+  globals := globals
+  contextCount := contextCount
+  contexts := contexts
+  impls c ctx hm := by
+    have hlt := inRange c ctx hm
+    rw [Array.getElem?_eq_getElem hlt]
+    simpa using impls ctx.impl _ (Array.getElem?_eq_getElem hlt)
+  callees := callees
 
 /-- **A quotient of a module that never faults never faults.** -/
 theorem share_never_faults {m m' : Module} {q : ImplId → ImplId} {ρ : ImplId → CtxMap}
@@ -470,12 +500,6 @@ theorem eval_erase_roots {m m' : Module}
     cases resolveIndexed m c <;> simp [renImpl_id]
   exact eval_simulates (ρ := fun _ => id)
     { ids := res', bodies := fun _ c => res' c, entry := hentry, globals := hglobals } fuel p
-
-/-- The module with every context's declaration key and root annotations
-removed. -/
-def eraseRoots (m : Module) : Module :=
-  { m with contexts := m.contexts.map fun c =>
-      { impl := c.impl, decl := "", varRoots := [], resultRoots := [] } }
 
 theorem eval_eraseRoots (m : Module) (fuel : Nat) (p : NumProfile) :
     eval fuel p (eraseRoots m) = eval fuel p m := by
@@ -554,17 +578,17 @@ theorem checkQuotient_sound {m m' : Module} {qt : Array ImplId} {rt : Array Cont
       have := eqOptImpl_sound hk
       rw [this]
       cases m.impls[ctx.impl]? <;> simp [renImpl_id]
-    · simp only [hk, ite_false]
+    · simp only [hk]
       simp only [Bool.not_eq_true] at hk
       simp only [hk, Bool.false_or] at this
       exact eqOptImpl_sound this
   · intro f c
     by_cases hk : keepsBody m m' (fun f => qt.getD f f) f = true
     · have : bodyRenaming m m' (fun f => qt.getD f f) rt f = id := by
-        unfold bodyRenaming; rw [if_pos hk]
+        unfold bodyRenaming; simp only [hk, ↓reduceIte]
       rw [this]; rfl
     · have : bodyRenaming m m' (fun f => qt.getD f f) rt f = fun c => rt.getD c c := by
-        unfold bodyRenaming; rw [if_neg hk]
+        unfold bodyRenaming; simp only [hk, Bool.false_eq_true, ↓reduceIte]
       rw [this]
       by_cases hc : c < m.contexts.size
       · have := (List.all_eq_true.mp hcallees) c (List.mem_range.mpr hc)

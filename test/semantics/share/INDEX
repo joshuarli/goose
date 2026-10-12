@@ -1,0 +1,25 @@
+# One case per line, tab separated; paths are relative to this directory.
+#
+#   propose FILE CLASSES MODE
+#       share --propose FILE yields a module that "share FILE" accepts with
+#       CLASSES implementations; MODE is merged (some implementations merged)
+#       or unchanged (output bytes equal FILE). Running FILE and its proposal
+#       gives the same output, and both validate.
+#   check UNSHARED SHARED EXIT OUTPUT
+#       share UNSHARED SHARED prints OUTPUT and exits EXIT.
+#   differs A B
+#       run A and run B both finish and print different output.
+#
+# Run with: sh test/semantics/share/run_index.sh [TOOL]
+propose	../golden/first.core.json	2	merged
+propose	free_variable_two_locals.core.json	2	merged
+propose	mutual_pair.core.json	3	merged
+propose	mergeable_callee.core.json	3	merged
+propose	distinct_callees.core.json	5	unchanged
+propose	differ_one_operation.core.json	3	unchanged
+check	../golden/first.core.json	../golden/first.core.json	0	["ok",3]
+check	differ_one_operation.core.json	differ_one_operation.forged.json	5	["rejected","a shared implementation is not equal to the unshared implementation, kept or with its callees renamed"]
+check	mergeable_callee.core.json	forged_merged_body.json	5	["rejected","a shared implementation is not equal to the unshared implementation, kept or with its callees renamed"]
+check	distinct_callees.core.json	forged_wrong_callee.json	5	["rejected","a shared implementation is not equal to the unshared implementation, kept or with its callees renamed"]
+differs	differ_one_operation.core.json	differ_one_operation.forged.json
+differs	distinct_callees.core.json	forged_wrong_callee.json
