@@ -3,6 +3,7 @@ import Goose.Proofs.Num
 import Goose.Proofs.Share
 import Goose.Reuse.Model
 import Goose.Proofs.Fuel
+import Goose.Proofs.Memory
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -138,5 +139,9 @@ end Goose.Audit
 #audit Goose.Reuse.wrong_answer_without_key_determination
 #audit Goose.Reuse.key_omission_example
 #audit Goose.Proofs.Fuel.eval_fuel_mono
+
+#audit Goose.Proofs.Memory.th_mem_01
+#audit Goose.Proofs.Memory.append_le
+#audit Goose.Proofs.Memory.write_le
 
 #audit_registry

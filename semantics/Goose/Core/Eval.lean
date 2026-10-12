@@ -141,7 +141,7 @@ def lengthLoc (l : Loc) : M Nat := fun s =>
 /-- The elements of a sampled run, copied. -/
 def readRun (vw : ViewVal) : M (Array Val) := do
   match (← readLoc vw.loc) with
-  | .fixed es | .resizable es =>
+  | .fixed es | .resizable _ es =>
     if vw.start + vw.len ≤ es.size then pure (es.extract vw.start (vw.start + vw.len))
     else fault .pathRange
   | _ => fault .shape
@@ -190,7 +190,7 @@ def expectSlice : Val → M (Loc × Nat × Nat)
 /-- The element count of an array object and whether it can grow. -/
 def expectArray : Val → M (Nat × Bool)
   | .fixed es => pure (es.size, false)
-  | .resizable es => pure (es.size, true)
+  | .resizable _ es => pure (es.size, true)
   | _ => fault .shape
 
 def expectSameTy (t u : IntTy) : M Unit :=
@@ -210,7 +210,7 @@ def expectComparable : Val → Val → M (Int × Int)
 def expectArrayLit (t : Ty) (vs : Array Val) : M Val :=
   match t with
   | .arr _ _ => pure (.fixed vs)
-  | .grow _ => pure (.resizable vs)
+  | .grow E => pure (.resizable E vs)
   | _ => fault .shape
 
 def expectFixedCount : Ty → M Nat

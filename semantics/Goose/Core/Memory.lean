@@ -49,7 +49,9 @@ inductive Val
   | bool (b : Bool)
   | unit
   | fixed (elems : Array Val)
-  | resizable (elems : Array Val)
+  /-- The element type is part of the value, so growing an empty array cannot
+  change which array type it has. -/
+  | resizable (elem : Ty) (elems : Array Val)
   | ref (l : Loc)
   /-- A run of `len` elements starting at element `start` of the array at `l`. -/
   | slice (l : Loc) (start len : Nat)
@@ -77,7 +79,7 @@ def FaultKind.tag : FaultKind → String
 /-- The elements of an array object. -/
 def Val.elems? : Val → Option (Array Val)
   | .fixed es => some es
-  | .resizable es => some es
+  | .resizable _ es => some es
   | _ => none
 
 /-- The value at `path` inside a value. -/
@@ -100,10 +102,10 @@ def Val.modifyAt? : Val → List Nat → (Val → Option Val) → Option Val
       | some e => some (.fixed (es.set i e))
       | none => none
     else none
-  | .resizable es, i :: rest, f =>
+  | .resizable E es, i :: rest, f =>
     if h : i < es.size then
       match es[i].modifyAt? rest f with
-      | some e => some (.resizable (es.set i e))
+      | some e => some (.resizable E (es.set i e))
       | none => none
     else none
   | _, _ :: _, _ => none
@@ -141,11 +143,16 @@ def Store.modify (s : Store) (l : Loc) (f : Val → Option Val) : Except FaultKi
 def Store.write (s : Store) (l : Loc) (v : Val) : Except FaultKind Store :=
   s.modify l (fun _ => some v)
 
+/-- Append elements to a resizable array value. -/
+def Val.appendAll (vs : Array Val) : Val → Option Val
+  | .resizable E es => some (.resizable E (es ++ vs))
+  | _ => none
+
 /-- The length of the resizable array at `l`. -/
 def Store.length (s : Store) (l : Loc) : Except FaultKind Nat :=
   match s.read l with
   | .error k => .error k
-  | .ok (.resizable es) => .ok es.size
+  | .ok (.resizable _ es) => .ok es.size
   | .ok _ => .error .shape
 
 /-- Append elements to the resizable array at `l`; yields the index of the first. -/
@@ -153,9 +160,7 @@ def Store.append (s : Store) (l : Loc) (vs : Array Val) : Except FaultKind (Stor
   match s.length l with
   | .error k => .error k
   | .ok n =>
-    match s.modify l (fun
-      | .resizable es => some (.resizable (es ++ vs))
-      | _ => none) with
+    match s.modify l (Val.appendAll vs) with
     | .ok s' => .ok (s', n)
     | .error k => .error k
 
