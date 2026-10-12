@@ -50,10 +50,34 @@ inline void ReportUnitsJson(JsonOut &j) {
     j.Key("bytes").Obj();
     j.F("min", sizes.front()).F("median", sizes[sizes.size() / 2]).F("max", sizes.back());
     j.EndObj();
+    // Where the bytes go: per unit, and in total with the runtime header every
+    // unit includes counted once. `location_externs` is part of `externs` and
+    // `location_references` part of `functions`.
+    auto parts = [&](const UnitStats::Breakdown &p) {
+        j.Obj().F("header", p.header).F("types", p.types).F("layouts", p.layouts)
+            .F("includes", p.includes).F("externs", p.externs)
+            .F("location_externs", p.location_externs).F("definitions", p.definitions)
+            .F("functions", p.functions).F("location_references", p.location_references).EndObj();
+    };
+    UnitStats::Breakdown total;
+    for (auto &u : s.units) {
+        total.header += u.parts.header; total.types += u.parts.types; total.layouts += u.parts.layouts;
+        total.includes += u.parts.includes; total.externs += u.parts.externs;
+        total.location_externs += u.parts.location_externs; total.definitions += u.parts.definitions;
+        total.functions += u.parts.functions; total.location_references += u.parts.location_references;
+    }
+    j.Key("breakdown").Obj().F("runtime_header_bytes", s.runtime_header_bytes);
+    j.Key("total");
+    parts(total);
+    j.EndObj();
     j.Key("units").Arr();
-    for (auto &u : s.units)
+    for (auto &u : s.units) {
         j.Obj().F("file", u.file).F("module", u.module).F("kind", u.kind).F("bytes", u.bytes)
-            .F("functions", u.functions).EndObj();
+            .F("functions", u.functions);
+        j.Key("parts");
+        parts(u.parts);
+        j.EndObj();
+    }
     j.EndArr();
     j.EndObj();
 }
