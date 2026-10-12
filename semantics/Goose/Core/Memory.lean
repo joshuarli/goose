@@ -20,7 +20,20 @@ abbrev ScopeInst := Nat
 inductive RootInst
   | global (g : GlobalId)
   | local (act : ActId) (scope : ScopeInst) (x : VarId)
-  deriving DecidableEq, Hashable, Repr
+  deriving DecidableEq, Repr
+
+/-- Plain arithmetic on the ids rather than the runtime's opaque hash mixer, so
+that nothing `eval` depends on is opaque. -/
+instance : Hashable RootInst where
+  hash
+    | .global g => UInt64.ofNat (g + 2 ^ 40)
+    | .local act sc x => UInt64.ofNat ((act * 1000003 + sc) * 1000033 + x)
+
+instance : LawfulHashable RootInst where
+  hash_eq a b h := by
+    have := eq_of_beq h
+    subst this
+    rfl
 
 structure Loc where
   root : RootInst
