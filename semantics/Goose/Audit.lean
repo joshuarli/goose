@@ -159,5 +159,6 @@ end Goose.Audit
 
 #audit Goose.Proofs.Lower.lower_correct_straight
 #audit Goose.GIR.validate_sound
+#audit Goose.GIR.validated_scalar_safe
 
 #audit_registry

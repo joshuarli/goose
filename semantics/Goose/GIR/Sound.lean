@@ -1,4 +1,6 @@
 import Goose.GIR.Validate
+import Goose.GIR.Eval
+import Goose.GIR.Lemmas
 
 /-!
 What acceptance by `validate` establishes about a module.
@@ -213,5 +215,241 @@ theorem validate_sound (m : Module) (h : validate m = .ok ()) :
       | inl hlt => exact hlt
       | inr hge => simp [Array.getElem?_eq_none hge] at hk
     exact summary_of hk (checkAll_mem hs hlt)
+
+end Goose.GIR
+
+namespace Goose.GIR
+
+open Goose.Core
+
+/-! ### Typed operands do not fault -/
+
+/-- The cell of a value holds a value of the scalar type. -/
+def CellOf (fr : Frame) (v : ValueId) : VTy → Prop
+  | .data (.int t) => ∃ n, fr.vals[v]? = some (.val (.int t n))
+  | .data .bool => ∃ b, fr.vals[v]? = some (.val (.bool b))
+  | .data .unit => fr.vals[v]? = some (.val .unit)
+  | _ => False
+
+theorem valTy_of {env : TyEnv} {v : ValueId} {t : VTy} (h : env.valTy v = .ok t) :
+    env.vals[v]? = some (some t) := by
+  unfold TyEnv.valTy at h
+  cases hv : env.vals[v]? with
+  | none => simp [hv, tyErr] at h
+  | some o =>
+    cases o with
+    | none => simp [hv, tyErr] at h
+    | some u => simp [hv] at h; subst h; rfl
+
+theorem dataTy_of {env : TyEnv} {v : ValueId} {t : Ty} (h : env.dataTy v = .ok t) :
+    env.vals[v]? = some (some (.data t)) := by
+  unfold TyEnv.dataTy at h
+  obtain ⟨vt, hvt, h⟩ := bind_ok h
+  cases vt with
+  | data d =>
+    simp only [pure, Except.pure] at h
+    cases h
+    exact valTy_of hvt
+  | view m e => simp [tyErr] at h
+
+theorem intTy_of {env : TyEnv} {v : ValueId} {t : IntTy} (h : env.intTy v = .ok t) :
+    env.vals[v]? = some (some (.data (.int t))) := by
+  unfold TyEnv.intTy at h
+  obtain ⟨d, hd, h⟩ := bind_ok h
+  cases d with
+  | int u =>
+    simp only [pure, Except.pure] at h
+    cases h
+    exact dataTy_of hd
+  | _ => simp [tyErr] at h
+
+theorem evalBin_error {p : NumProfile} {o : BinOp} {t : IntTy} {a b : Int} {k : NumAbort}
+    (h : evalBin p o t a b = .error k) : o.mayAbort = true := by
+  cases o <;> simp [evalBin, BinOp.mayAbort] at h ⊢
+
+theorem evalUn_error {p : NumProfile} {o : UnOp} {t : IntTy} {a : Int} {k : NumAbort}
+    (h : evalUn p o t a = .error k) : unMayAbort o = true := by
+  cases o <;> simp [evalUn, unMayAbort] at h ⊢
+
+theorem evalConv_error {p : NumProfile} {c : ConvKind} {s d : IntTy} {a : Int} {k : NumAbort}
+    (h : evalConv p c s d a = .error k) : convMayAbort c = true := by
+  cases c <;> simp [evalConv, convMayAbort] at h ⊢
+
+/-- The cell holds a value of the type the validator derived for it. -/
+def Typed (env : TyEnv) (fr : Frame) (v : ValueId) : Prop :=
+  ∃ vt, env.vals[v]? = some (some vt) ∧ CellOf fr v vt
+
+theorem typed_int {env : TyEnv} {fr : Frame} {v : ValueId} {t : IntTy}
+    (hty : env.intTy v = .ok t) (h : Typed env fr v) : ∃ n, fr.vals[v]? = some (.val (.int t n)) := by
+  obtain ⟨vt, hv, hc⟩ := h
+  rw [intTy_of hty] at hv
+  cases hv
+  exact hc
+
+theorem typed_bool {env : TyEnv} {fr : Frame} {v : ValueId}
+    (hty : env.dataTy v = .ok .bool) (h : Typed env fr v) : ∃ b, fr.vals[v]? = some (.val (.bool b)) := by
+  obtain ⟨vt, hv, hc⟩ := h
+  rw [dataTy_of hty] at hv
+  cases hv
+  exact hc
+
+
+/-- Running the operation finishes, or aborts with an origin. -/
+def Safe (cx : FnCtx) (fr : Frame) (op : Op) : Prop :=
+  ∀ s, (∃ x s1, execPure cx fr op s = .ok x s1) ∨ ∃ k o s1, execPure cx fr op s = .stop (.abort k o) s1
+
+theorem cond_of_unless {c : Bool} {msg : String}
+    (h : (if c = true then pure () else tyErr msg : TyR Unit) = .ok ()) : c = true := by
+  by_cases hc : c = true
+  · exact hc
+  · simp [hc, tyErr] at h
+
+theorem bin_safe {cx : FnCtx} {fr : Frame} {env : TyEnv} {o : BinOp} {t : IntTy} {a b : ValueId}
+    {org : Option OriginId} {r : VTy}
+    (hty : (Op.bin o t a b org).resultTy env = .ok r) (ha : Typed env fr a) (hb : Typed env fr b)
+    (horg : o.mayAbort = true → org.isSome = true) : Safe cx fr (.bin o t a b org) := by
+  unfold Op.resultTy at hty
+  obtain ⟨x, hx, hty⟩ := bind_ok hty
+  obtain ⟨y, hy, hty⟩ := bind_ok hty
+  have hxy : (decide (x = t) && decide (y = t)) = true := by
+    by_cases hc : (decide (x = t) && decide (y = t)) = true
+    · exact hc
+    · exfalso
+      simp [hc, tyErr, bind, Except.bind] at hty
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hxy
+  obtain ⟨rfl, rfl⟩ := hxy
+  obtain ⟨n, hn⟩ := typed_int hx ha
+  obtain ⟨m, hm⟩ := typed_int hy hb
+  intro s
+  simp only [execPure, getVal_of hn, getVal_of hm, Goose.Core.expectInt, Goose.Core.expectSameTy,
+    ↓reduceIte, bind_assoc, pure_bind]
+  cases hev : evalBin cx.cfg.profile o y n m with
+  | ok v => left; exact ⟨_, _, rfl⟩
+  | error k =>
+    right
+    cases org with
+    | none => simp [evalBin_error hev] at horg
+    | some o' => exact ⟨_, _, _, rfl⟩
+
+
+theorem un_safe {cx : FnCtx} {fr : Frame} {env : TyEnv} {o : UnOp} {t : IntTy} {a : ValueId}
+    {org : Option OriginId} {r : VTy}
+    (hty : (Op.un o t a org).resultTy env = .ok r) (ha : Typed env fr a)
+    (horg : unMayAbort o = true → org.isSome = true) : Safe cx fr (.un o t a org) := by
+  unfold Op.resultTy at hty
+  obtain ⟨x, hx, hty⟩ := bind_ok hty
+  have hxt : x = t := by
+    by_cases hc : x = t
+    · exact hc
+    · exfalso
+      simp [hc, tyErr, bind, Except.bind] at hty
+  subst hxt
+  obtain ⟨n, hn⟩ := typed_int hx ha
+  intro s
+  simp only [execPure, getVal_of hn, Goose.Core.expectInt, bind_assoc, pure_bind]
+  cases hev : evalUn cx.cfg.profile o x n with
+  | ok v => left; exact ⟨_, _, rfl⟩
+  | error k =>
+    right
+    cases org with
+    | none => simp [evalUn_error hev] at horg
+    | some o' => exact ⟨_, _, _, rfl⟩
+
+theorem cmp_safe {cx : FnCtx} {fr : Frame} {env : TyEnv} {o : CmpOp} {t : IntTy} {a b : ValueId}
+    {r : VTy} (hty : (Op.cmp o t a b).resultTy env = .ok r) (ha : Typed env fr a)
+    (hb : Typed env fr b) : Safe cx fr (.cmp o t a b) := by
+  unfold Op.resultTy at hty
+  obtain ⟨x, hx, hty⟩ := bind_ok hty
+  obtain ⟨y, hy, hty⟩ := bind_ok hty
+  have hxy : (decide (x = t) && decide (y = t)) = true := by
+    by_cases hc : (decide (x = t) && decide (y = t)) = true
+    · exact hc
+    · exfalso
+      simp [hc, tyErr, bind, Except.bind] at hty
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hxy
+  obtain ⟨rfl, rfl⟩ := hxy
+  obtain ⟨n, hn⟩ := typed_int hx ha
+  obtain ⟨m, hm⟩ := typed_int hy hb
+  intro s
+  simp only [execPure, getVal_of hn, getVal_of hm, Goose.Core.expectComparable, Goose.Core.expectSameTy,
+    ↓reduceIte, bind_assoc, pure_bind]
+  left
+  exact ⟨_, _, rfl⟩
+
+theorem boolNot_safe {cx : FnCtx} {fr : Frame} {env : TyEnv} {a : ValueId} {r : VTy}
+    (hty : (Op.boolNot a).resultTy env = .ok r) (ha : Typed env fr a) : Safe cx fr (.boolNot a) := by
+  unfold Op.resultTy at hty
+  obtain ⟨x, hx, hty⟩ := bind_ok hty
+  have hxb : x = .bool := by
+    by_cases hc : x = .bool
+    · exact hc
+    · exfalso
+      simp [hc, tyErr, bind, Except.bind] at hty
+  subst hxb
+  obtain ⟨b, hb⟩ := typed_bool hx ha
+  intro s
+  simp only [execPure, getVal_of hb, Goose.Core.expectBool, bind_assoc, pure_bind]
+  left
+  exact ⟨_, _, rfl⟩
+
+theorem conv_safe {cx : FnCtx} {fr : Frame} {env : TyEnv} {k : ConvKind} {src dst : IntTy}
+    {a : ValueId} {org : Option OriginId} {r : VTy}
+    (hty : (Op.conv k src dst a org).resultTy env = .ok r) (ha : Typed env fr a)
+    (horg : convMayAbort k = true → org.isSome = true) : Safe cx fr (.conv k src dst a org) := by
+  unfold Op.resultTy at hty
+  obtain ⟨x, hx, hty⟩ := bind_ok hty
+  have hxs : x = src := by
+    by_cases hc : x = src
+    · exact hc
+    · exfalso
+      simp [hc, tyErr, bind, Except.bind] at hty
+  subst hxs
+  obtain ⟨n, hn⟩ := typed_int hx ha
+  intro s
+  simp only [execPure, getVal_of hn, Goose.Core.expectInt, bind_assoc, pure_bind]
+  cases hev : evalConv cx.cfg.profile k x dst n with
+  | ok v => left; exact ⟨_, _, rfl⟩
+  | error e =>
+    right
+    cases org with
+    | none => simp [evalConv_error hev] at horg
+    | some o' => exact ⟨_, _, _, rfl⟩
+
+
+/-- The operations the typed-operand theorem covers: constants, integer arithmetic, comparison,
+boolean negation and integer conversion. -/
+def scalarOp : Op → Bool
+  | .constInt .. | .constBool _ | .constUnit | .bin .. | .un .. | .cmp .. | .boolNot _ | .conv .. => true
+  | _ => false
+
+/-- **Typed operands do not fault.** In an accepted module, every scalar instruction run on a
+frame whose operand cells hold values of the types the validator derived either finishes or
+aborts at an origin: it never faults on a mismatched shape, an unbound operand or a missing
+origin. -/
+theorem validated_scalar_safe (m : Module) (h : validate m = .ok ()) :
+    ∀ f ∈ m.allFuncs, ∀ b ∈ f.blocks, ∀ r op, Inst.def r op ∈ b.insts → scalarOp op = true →
+      ∀ (cx : FnCtx) (fr : Frame),
+        (∀ v ∈ op.uses, Typed { m.tyEnv f with vals := f.valueTypes m } fr v) → Safe cx fr op := by
+  intro f hf b hb r op hop hsc cx fr hty
+  obtain ⟨_, htd, hor⟩ := (validate_sound m h).1 f hf
+  obtain ⟨t, hrt, _⟩ := htd b hb r op hop
+  have hnorg := hor b hb (.def r op) hop
+  cases op with
+  | constInt t0 n =>
+    intro s; left; exact ⟨_, _, rfl⟩
+  | constBool bb => intro s; left; exact ⟨_, _, rfl⟩
+  | constUnit => intro s; left; exact ⟨_, _, rfl⟩
+  | bin o t0 a b' org =>
+    exact bin_safe hrt (hty a (by simp [Op.uses])) (hty b' (by simp [Op.uses]))
+      (fun hm => by simpa [Inst.origin, Op.origin] using hnorg (by simpa [Inst.needsOrigin] using hm))
+  | un o t0 a org =>
+    exact un_safe hrt (hty a (by simp [Op.uses]))
+      (fun hm => by simpa [Inst.origin, Op.origin] using hnorg (by simpa [Inst.needsOrigin] using hm))
+  | cmp o t0 a b' => exact cmp_safe hrt (hty a (by simp [Op.uses])) (hty b' (by simp [Op.uses]))
+  | boolNot a => exact boolNot_safe hrt (hty a (by simp [Op.uses]))
+  | conv k s0 d a org =>
+    exact conv_safe hrt (hty a (by simp [Op.uses]))
+      (fun hm => by simpa [Inst.origin, Op.origin] using hnorg (by simpa [Inst.needsOrigin] using hm))
+  | _ => simp [scalarOp] at hsc
 
 end Goose.GIR

@@ -106,12 +106,20 @@ def Inst.origin : Inst → Option OriginId
   | .eff e => e.origin
   | .term t => t.origin
 
+def unMayAbort : UnOp → Bool
+  | .neg => true
+  | .bitnot => false
+
+def convMayAbort : ConvKind → Bool
+  | .as => true
+  | .widen | .asUnchecked => false
+
 /-- Instructions that can abort or that stand for a source statement must say
 where they came from. -/
 def Inst.needsOrigin : Inst → Bool
   | .def _ (.bin o ..) => o.mayAbort
-  | .def _ (.un o ..) => (o matches .neg)
-  | .def _ (.conv k ..) => (k matches .as)
+  | .def _ (.un o ..) => unMayAbort o
+  | .def _ (.conv k ..) => convMayAbort k
   | .def _ (.viewSlice ..) | .def _ (.indexChecked ..) | .def _ (.call ..) => true
   | .eff (.slotInit ..) | .eff (.store ..) | .eff (.append ..) | .eff (.print ..) => true
   | .term (.abort ..) | .term (.exit ..) => true
