@@ -174,13 +174,22 @@ def paramGlobals (callee : Impl) (cctx : Context) (j : Nat) : List Target :=
     else []
   | _, _ => []
 
-def mapSummaryTargets (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) :
+def mapSummaryTargets (argRoots : List (List RootRef)) : List Target → List Target
+  | [] => []
+  | .global g :: rest => .global g :: mapSummaryTargets argRoots rest
+  | .param j :: rest =>
+    rootsTargets (argRoots[j]?.getD []) ++ mapSummaryTargets argRoots rest
+
+/-- A callee's summary targets as the caller's: an entry for parameter `j`
+stands for the argument's roots and for the globals the callee context lists
+for the parameter. -/
+def mapCallTargets (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) :
     List Target → List Target
   | [] => []
-  | .global g :: rest => .global g :: mapSummaryTargets callee cctx argRoots rest
+  | .global g :: rest => .global g :: mapCallTargets callee cctx argRoots rest
   | .param j :: rest =>
     rootsTargets (argRoots[j]?.getD []) ++ paramGlobals callee cctx j
-      ++ mapSummaryTargets callee cctx argRoots rest
+      ++ mapCallTargets callee cctx argRoots rest
 
 /-- The callee context's assumption about parameter `i` holds for its argument. -/
 def checkArgRoots (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) (i : Nat) : V Unit :=
@@ -347,9 +356,9 @@ def rpCall (env : PEnv) (c : ContextId) (argRoots : List (List RootRef)) : P (Li
     modify fun s =>
       let e := s.eff
       { s with eff := { e with
-          reads := addTargets e.reads (mapSummaryTargets callee cctx argRoots sm.reads)
-          writes := addTargets e.writes (mapSummaryTargets callee cctx argRoots sm.writes)
-          grows := addTargets e.grows (mapSummaryTargets callee cctx argRoots sm.grows)
+          reads := addTargets e.reads (mapCallTargets callee cctx argRoots sm.reads)
+          writes := addTargets e.writes (mapCallTargets callee cctx argRoots sm.writes)
+          grows := addTargets e.grows (mapCallTargets callee cctx argRoots sm.grows)
           aborts := e.aborts || sm.aborts
           outputs := e.outputs || sm.outputs } }
   match callee.results.toList, cctx.resultRoots with
