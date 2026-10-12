@@ -245,6 +245,15 @@ def context_base(name):
     return leaf.split("(")[0].replace("::", "_")
 
 
+# The counters that number string and blob literals in creation order: one
+# more literal anywhere renumbers those after it.
+LITERAL = re.compile(r"\b(gs_str|gs_blob)\d+\b")
+
+
+def unnumbered(body):
+    return LITERAL.sub(lambda m: m.group(1) + "#", body)
+
+
 def emitted_changes(before_c, after_c):
     """The program functions emitted both before and after whose C differs,
     by C base name, with specialization numbers and runtime-check line
@@ -256,7 +265,8 @@ def emitted_changes(before_c, after_c):
         table = {}
         for n, body in cfuncs.functions(text).items():
             key = c_base(n) if CNAME.search(n) else ""
-            table.setdefault(key, []).append(cfuncs.mask(body) if key else f"{n}\n{body}")
+            table.setdefault(key, []).append(cfuncs.mask(body) if key
+                                             else f"{n}\n{unnumbered(body)}")
         tables.append(table)
     a, b = tables
     # Some body replaced by another. Instances that are merely live on one
