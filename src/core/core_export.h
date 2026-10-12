@@ -20,9 +20,8 @@ struct CoreUnsupported {
 
 class CoreExporter {
 public:
-    CoreExporter(Ast &a, const string &entrypath)
-        : ast(a), entrypath(entrypath),
-          entrydir(filesystem::path(entrypath).parent_path().generic_string()) {}
+    CoreExporter(Ast &a, const string &entry)
+        : ast(a), entrypath(entry), entrydir(filesystem::path(entry).parent_path().generic_string()) {}
 
     CoreModule Export() {
         auto mainsf = ast.MainFunction();
@@ -66,8 +65,6 @@ private:
         vector<VarDef *> vardefs;        // Aligned with impl->vars; null for a free variable's parameter.
         unordered_map<const VarDef *, int> varid;
         int nextscope = 0;
-        int nparams = 0;                 // Declared parameters, then free variables.
-        int loopdepth = 0;
         vector<VarDef *> *free = nullptr;
     } cur;
 
@@ -184,8 +181,6 @@ private:
     }
 
     CoreMut MutOf(const TypeExpr *t) { return t && t->cq ? CoreMut::Const : CoreMut::Mut; }
-
-    static bool IsIntTE(const TypeExpr *t) { return t && t->kind == TY_INT; }
 
     // The value type behind a reference.
     static TypeExpr *Pointee(TypeExpr *t) {
@@ -361,7 +356,6 @@ private:
             cur.varid[fv] = id;
             impl.params.push_back({ id, true });
         }
-        cur.nparams = (int)impl.params.size();
         impl.body = Body(sp->body);
 
         auto &ctx = mod.contexts.back();
@@ -422,7 +416,18 @@ private:
         return s;
     }
 
+    // Restores the coercion origin when a statement, which sets its own, has
+    // been converted: the enclosing statement's coercions after a nested block
+    // belong to the enclosing statement.
+    struct OriginScope {
+        CoreExporter &x;
+        CoreOrigin saved;
+        explicit OriginScope(CoreExporter &e) : x(e), saved(e.coerceorg) {}
+        ~OriginScope() { x.coerceorg = saved; }
+    };
+
     void Stmt(Node *n, CoreBlock &out) {
+        OriginScope keep(*this);
         here = n->line;
         switch (n->nkind) {
             case NK_FnDecl: return;   // A nested function is exported where it is called.
@@ -462,9 +467,7 @@ private:
                 auto x = (While *)n;
                 auto s = MakeStmt(CoreStmtKind::While, n->line, CoreOriginKind::While);
                 s.expr = Value(x->cond);
-                cur.loopdepth++;
                 s.then = BlockOf(x->body, false);
-                cur.loopdepth--;
                 out.stmts.push_back(std::move(s));
                 return;
             }
@@ -669,9 +672,7 @@ private:
                                  out.scope, org);
             s.view = ToView(f->iter);
         }
-        cur.loopdepth++;
         s.then = BlockOf(f->body, false);
-        cur.loopdepth--;
         // The loop's variables belong to its body block.
         cur.impl->vars[s.var].scope = s.then->scope;
         if (s.index >= 0) cur.impl->vars[s.index].scope = s.then->scope;
