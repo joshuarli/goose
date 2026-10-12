@@ -1,7 +1,7 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
 **Status:** ready to execute. Nothing below is implemented.
-**Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`. `master` is not touched.
+**Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12). `master` is not touched.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
 **Goal.** Two outcomes, pursued together. First, an executable, mechanically checked semantics for a Goose fragment and an opt-in IR pipeline that must agree with it. Second, a measurably shorter edit-build-verify loop for large programs: attribution of where build cost comes from, fewer emitted bodies with no weaker checking, and reuse of unchanged native code. A better-structured compiler that still regenerates and recompiles the whole program after a small edit does not meet the goal.
@@ -99,6 +99,7 @@ The executor decides within the bound, takes the smallest reversible option, and
 | Single-fixture filter in `test/run_tests.py` | `--only GLOB` (fixtures by `category/stem`, extras as `extra/NAME`) and `--goose-arg ARG` (every fixture and sample compile; not the bootstrap, the emitted-C shape checks, or the lexer and shader probes). |
 | Aincrad3 | Available. Commit `ef1e1ef33b96fa68748e4ecf3cad37153a4de59c`, extracted to `.work/aincrad3`; its one generated source file is copied from the checkout's own staged build output. Entry point `src/world-core-continue.goose`. `goose --check` (Debug compiler, `-O1`) reports 14,642 specializations, 8,861 inlined calls, and a 1.5 GB compiler peak. Not a timing baseline. |
 | Historical figures (issue #9, 2026-10-11) | 14,575 specializations typechecked; 66,026,053 bytes of C; standalone emission median 43.150 s. Emission only: not native compilation, linking or runtime. Not a baseline; `B1` remeasures. |
+| Parity reference | `.work/build/base2/goose`: `master` with the same upstream commits merged, built from a scratch checkout. `.work/build/base/goose` is the pre-merge base and is kept only until lanes started before the merge have reported. |
 | Frozen budgets | The proposed values of validation plan §11, to be replaced here by `B1`. |
 
 Checks already run are listed in validation plan §1. The code facts the design rests on are in specification §14.
@@ -141,6 +142,7 @@ Semantic track.
 | `S1` | L | G1 | Lean Core for `core-pilot`: types, memory, `eval`, `validate`, decoder; `goose-semantics run` and `validate`. | The goldens decode, validate and run to their expected output; decoder cases `VER-01`, `VER-08`. |
 | `S2` | L | G1 | In-memory Core and `--emit-core FILE` for `core-pilot`: closure conversion, implementation and context tables, effect summaries, `unsupported` errors. No work when the flag is absent. | The goldens' sources export to modules the Lean tool accepts; default emitted C byte-identical to the base (`test/scale/parity.py`). |
 | `S3` | M | S1, S2 | `test/semantics/run_tests.py`; the pilot rows of validation plan §6 as fixtures; Lean and Core export as stages of `fuzz/driver.py`. | `python3 test/semantics/run_tests.py --profile core-pilot` all `agree`; 2000 seeded cases each of `scalar`, `numeric`, `order` agree. The 2000-case runs are gate runs taking many minutes; the loop uses `smoke` and `--case`. |
+| `S4` | M | T1 | References to slice variables in `core-pilot`: content roots in the context annotation, `V-ROOT` and `V-CALL` for stores through such a reference, the safety proof extended, the exporter's `unsupported` lifted. | The `order` fuzz lane exports without `unsupported`; 2000 seeded cases agree; the audit still lists `TH-SAFE-01`. |
 | `T1` | L | S1 | `TH-FUEL-01`, `TH-CORE-01`, `TH-MEM-01`, `TH-MEM-02`, `TH-SAFE-01` for `core-pilot`. | **`G-PILOT`.** |
 | `T2` | M | S1 | `TH-ERASE-01`, `TH-SHARE-01`, `TH-SHARE-02`, `TH-REUSE-01`; the quotient checker as an executable (`goose-semantics share`). | Audit lists them; the witnesses and counterexamples of validation plan §4.2. |
 | `S5` | L | S2 | GIR-H in C++: data structures, Core lowering, verifier, `--emit-gir-high`. | `test/compiler_gir.cpp` cases `VER-02`–`VER-06`, `VER-09`. |
@@ -210,7 +212,7 @@ The full baseline suite runs at `G-PILOT`, `G-SHARE`, `G-UNITS`, `G-GIR` and the
 | 7 | `G-UNITS`. |
 | 8 | `python3 test/scale/edit_matrix.py --workload synthetic` with every structural gate; `H2`. |
 | 9 | `G-BCE`. |
-| 10 | `H3`; `python3 test/scale/parity.py --goose <candidate> --baseline .work/build/base/goose`. |
+| 10 | `H3`; `python3 test/scale/parity.py --goose <candidate> --baseline .work/build/base2/goose`. |
 | 11 | §11 filled from the validation plan's template. |
 
 ## 7. Contract changes
@@ -326,6 +328,7 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 *(append-only; one line per judgment call: the call and why)*
 
 - Aincrad3's core entry imports a source file that its build generates and does not track. Copied it from the checkout's existing staged build output instead of running its generator, which reads another private repository: reading the checkout is within O5, the generator's input is not.
+- A reference to a slice variable (a `T[:]&` parameter, or a captured slice variable after closure conversion) is outside `core-pilot` for now: the exporter reports it unsupported. Writing a slice through such a reference is a stored reference, which needs content roots in the annotation and in the safety invariant; adding that while the safety proof is in progress would move its target. It returns as item `S4` after `T1`, because the `order` fuzz lane relies on it.
 - `return`, `break` and `continue` inside an expression block are outside `core-pilot`: the Lean validator rejects them and the exporter reports them unsupported. Modelling them needs a body result threaded through expression evaluation, which the pilot's proofs do not need.
 - The GIR-H wire encoding is defined by the Lean lane, and the Lean lowering's output for each Core golden is the golden the C++ lowering must reproduce byte for byte. One reference lowering makes the C++ lowering instance-checkable by comparison instead of only by behaviour.
 - `V-ROOT` no longer requires a same-scope root to be declared first. The compiler accepts rebinding a reference to a later-declared variable of its own scope, and that is safe because a scope's variables end together; the stricter rule would have rejected valid programs for no safety gain.
@@ -336,6 +339,8 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 
 *(append-only; one line per gate or phase end)*
 
+- Upstream `1cfe4b6` (three commits, including the relative-reference null test fix and extern type emission) merged into the branch without touching running lanes. On the merged tree: baseline suite shows only the two known reds, linter suite passes, default output equals master-plus-upstream on 1,232 emissions.
+- `S2` merged: `--emit-core` reproduces the three goldens byte for byte. First run of the real harness: 49 fixtures agree, 8 mismatch, 1 unsupported; `scalar` and `numeric` fuzz lanes agree on 60 of 60. The mismatches are two disagreements between exporter and validator (what counts as a read in a summary; references to slice variables), sent back to the exporter lane.
 - `S1` merged: Lean Core for the pilot (decoder, interpreter, validator, `run` and `validate`); goldens agree in both numeric profiles; 39 malformed and rejected fixtures.
 - `B1` merged; `G-ATTR` reached except for budget freezing, which waits for a quiet host. First Aincrad3 attribution in §11.1.
 - `T0` merged: 41 numeric theorems pass the audit; 1,224 generated cases agree with the base compiler in release and debug.
