@@ -2,6 +2,7 @@ import Lean
 import Goose.Proofs.Num
 import Goose.Proofs.Share
 import Goose.Reuse.Model
+import Goose.Proofs.Fuel
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -136,5 +137,6 @@ end Goose.Audit
 #audit Goose.Reuse.cachedRuns₂_agree
 #audit Goose.Reuse.wrong_answer_without_key_determination
 #audit Goose.Reuse.key_omission_example
+#audit Goose.Proofs.Fuel.eval_fuel_mono
 
 #audit_registry

@@ -146,8 +146,23 @@ def readRun (vw : ViewVal) : M (Array Val) := do
     else fault .pathRange
   | _ => fault .shape
 
+/-- Run `f` on each element in order, collecting the results. -/
+def mapList (f : α → M β) : List α → M (List β)
+  | [] => pure []
+  | a :: as => do
+    let b ← f a
+    let bs ← mapList f as
+    pure (b :: bs)
+
 def bindRoot (r : RootInst) (v : Val) : M Unit := fun s =>
   .ok () { s with store := s.store.introduce r v }
+
+/-- Bind each variable of a construct to its value in the scope instance `si`. -/
+def bindAll (act : ActId) (si : ScopeInst) : List (VarId × Val) → M Unit
+  | [] => pure ()
+  | (x, v) :: rest => do
+    bindRoot (.local act si x) v
+    bindAll act si rest
 
 def freshAct : M ActId := fun s => .ok s.nextAct { s with nextAct := s.nextAct + 1 }
 
@@ -315,7 +330,7 @@ def evalExpr : Nat → Cfg → Env → Expr → M Val
       | .ok r => pure (.int dst r)
       | .error k => abortAt (AbortKind.ofNum k) org
     | .call c args _ => do
-      let vals ← args.mapM (evalArg n cfg env)
+      let vals ← mapList (evalArg n cfg env) args
       enterCall n cfg env.depth c vals
     | .push owner a => do
       let l ← evalPlace n cfg env owner
@@ -327,7 +342,7 @@ def evalExpr : Nat → Cfg → Env → Expr → M Val
       else blockValue n cfg env f
     | .blockE b => blockValue n cfg env b
     | .arrLit t es => do
-      let vs ← es.mapM (evalExpr n cfg env)
+      let vs ← mapList (evalExpr n cfg env) es
       expectArrayLit t vs.toArray
     | .fill t a => do
       let k ← expectFixedCount t
@@ -414,8 +429,7 @@ def execBlock : Nat → Cfg → Env → List (VarId × Val) → Block → M Flow
   | n + 1, cfg, env, pre, .mk sc stmts value => do
     let si ← freshScope
     let env' : Env := { env with scopes := (sc, si) :: env.scopes }
-    for (x, v) in pre do
-      bindRoot (.local env.act si x) v
+    bindAll env.act si pre
     let flow ← execStmts n cfg env' stmts
     let flow ← match flow, value with
       | .normal _, some e => do pure (Flow.normal (← evalExpr n cfg env' e))
@@ -495,7 +509,7 @@ def execStmt : Nat → Cfg → Env → Stmt → M Flow
     | .brk _ => pure .brk
     | .cont _ => pure .cont
     | .print args _ => do
-      let parts ← args.mapM (execPrintArg n cfg env)
+      let parts ← mapList (execPrintArg n cfg env) args
       emit (String.join parts ++ "\n")
       pure (.normal .unit)
     | .assertS e org => do
@@ -572,12 +586,17 @@ inductive Result
 
 /-- Initialize the globals in table order, each in an activation of its own
 with no variables, then run the entry context. -/
-def runModule (fuel : Nat) (cfg : Cfg) : M Unit := do
-  for g in [0:cfg.mod.globals.size] do
+def initGlobals (fuel : Nat) (cfg : Cfg) : List GlobalId → M Unit
+  | [] => pure ()
+  | g :: rest => do
     let gl ← lookupGlobal cfg g
     let act ← freshAct
     let v ← evalExpr fuel cfg ⟨#[], act, [], 0⟩ gl.init
     bindRoot (.global g) v
+    initGlobals fuel cfg rest
+
+def runModule (fuel : Nat) (cfg : Cfg) : M Unit := do
+  initGlobals fuel cfg (List.range cfg.mod.globals.size)
   let _ ← enterCall fuel cfg 0 cfg.mod.entry []
   pure ()
 
