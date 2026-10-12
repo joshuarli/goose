@@ -42,6 +42,14 @@ abbrev V := Except Rejection
 
 def reject (r : Rule) (msg : String) : V α := .error ⟨r, msg⟩
 
+/-- Run a check on each element in order, stopping at the first rejection. -/
+def forAll (l : List α) (f : α → V Unit) : V Unit :=
+  match l with
+  | [] => pure ()
+  | a :: rest => do
+    f a
+    forAll rest f
+
 /-! ### Type predicates -/
 
 /-- What a reference may point to. -/
@@ -184,6 +192,15 @@ def requireBool (what : String) (t : Ty) : T Unit :=
 
 def requireWrite (what : String) (mutable : Bool) : T Unit :=
   if mutable then pure () else rej .mut s!"{what} writes through a place that is not mutable"
+
+/-- Declare the variables a construct binds in its block's own scope, in order,
+each with the type the construct gives it. -/
+def declarePre (env : TEnv) (sc : Nat) : List (VarId × Ty) → T TEnv
+  | [] => pure env
+  | (x, ty) :: rest => do
+    let lv ← declare env x sc
+    unless lv.ty == ty do rej .type s!"variable {x} is declared with another type than the loop gives it"
+    declarePre { env with visible := x :: env.visible } sc rest
 
 /-- Arguments against parameters, one by one. -/
 def argMode : Arg → Mode
@@ -388,15 +405,11 @@ block's own scope before the first statement, with their required types. -/
 def tyBlock (env : TEnv) (pre : List (VarId × Ty)) : Block → T Ty
   | .mk sc stmts value => do
     if env.scopes.contains sc then rej .type s!"block {sc} is nested in a block of the same number"
-    let mut env' := { env with scopes := sc :: env.scopes }
-    for (x, ty) in pre do
-      let lv ← declare env' x sc
-      unless lv.ty == ty do rej .type s!"variable {x} is declared with another type than the loop gives it"
-      env' := { env' with visible := x :: env'.visible }
-    env' ← tyStmts env' sc stmts
+    let env1 ← declarePre { env with scopes := sc :: env.scopes } sc pre
+    let env2 ← tyStmts env1 sc stmts
     match value with
     | none => pure .unit
-    | some e => tyExpr env' e
+    | some e => tyExpr env2 e
 
 def tyStmts (env : TEnv) (sc : Nat) : List Stmt → T TEnv
   | [] => pure env
@@ -534,18 +547,12 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
 
 end
 
-/-- Check an implementation: its parameters, its body and that a function with
-a result does not fall off its end. -/
-def checkImpl (m : Module) (impl : Impl) : V Unit := do
-  let env : TEnv := {
-    mod := m, impl := some impl, vars := impl.vars
-    visible := (List.range impl.params.size), loops := 0, inExpr := false, scopes := []
-    globalLimit := m.globals.size, initializing := none }
-  if impl.results.size > 1 then reject .type s!"{impl.name} has several results"
-  for t in impl.results do
-    unless t.readable && t != .unit do reject .type s!"{impl.name} has a result of a type no function may return"
-  for h : i in [0:impl.params.size] do
-    let p := impl.params[i]
+/-- A parameter is the variable of its position, declared in the body block,
+and of a type its passing mode allows. -/
+def checkParam (impl : Impl) (i : Nat) : V Unit :=
+  match impl.params[i]? with
+  | none => pure ()
+  | some p => do
     unless p.var = i do reject .type s!"parameter {i} names variable {p.var}"
     let some lv := impl.vars[i]? | reject .type s!"parameter {i} has no variable row"
     unless lv.scope = 0 do reject .type s!"parameter {i} is not declared in the body block"
@@ -555,9 +562,20 @@ def checkImpl (m : Module) (impl : Impl) : V Unit := do
     | .byValue, .ref _ _ => reject .type s!"by-value parameter {i} is of reference type"
     | .byValue, .grow _ => reject .type s!"by-value parameter {i} is a growable array"
     | .byValue, t => unless t.storable do reject .type s!"parameter {i} has a type no variable may have"
+
+/-- Check an implementation: its parameters, its body and that a function with
+a result does not fall off its end. -/
+def checkImpl (m : Module) (impl : Impl) : V Unit := do
+  let env : TEnv := {
+    mod := m, impl := some impl, vars := impl.vars
+    visible := (List.range impl.params.size), loops := 0, inExpr := false, scopes := []
+    globalLimit := m.globals.size, initializing := none }
+  if impl.results.size > 1 then reject .type s!"{impl.name} has several results"
+  forAll impl.results.toList fun t =>
+    unless t.readable && t != .unit do reject .type s!"{impl.name} has a result of a type no function may return"
+  forAll (List.range impl.params.size) (checkParam impl)
   unless impl.body.scope = 0 do reject .type s!"{impl.name}: the body block is not scope 0"
-  let (bodyTy, declared) ← (tyBlock env [] impl.body).run impl.params.size
-  let _ := declared
+  let (bodyTy, _) ← (tyBlock env [] impl.body).run impl.params.size
   match impl.results.toList with
   | [] =>
     unless bodyTy == .unit do reject .type s!"{impl.name} has no result but its body yields a value"

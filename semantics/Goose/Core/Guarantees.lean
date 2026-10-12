@@ -64,10 +64,12 @@ def stageRejections (m : Module) : List Rejection :=
         | none => [])
     ++ m.impls.toList.flatMap (fun i => err (checkImpl m i))
     ++ m.contexts.toList.flatMap (fun c => err (checkContext m c))
+    ++ (List.range m.globals.size).flatMap (fun g => err (checkInitRoots m g))
 
 /-- Rule `r` holds of the module: no stage rejects it for `r`. `V-MUT` and the
-mutability half of `V-CALL` are decided inside the typing stage, and the root
-half of `V-CALL` and `V-SUMMARY` inside the context stage. -/
+mutability half of `V-CALL` are decided inside the typing stage, the root half
+of `V-CALL` and `V-SUMMARY` inside the context stage, and what an initializer
+may reach, a part of `V-CALL`, in the last stage. -/
 def RuleHolds (r : Rule) (m : Module) : Prop :=
   ∀ e ∈ stageRejections m, e.rule ≠ r
 
