@@ -1,5 +1,6 @@
 import Lean
 import Goose.Proofs.Num
+import Goose.Proofs.Share
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -115,5 +116,12 @@ end Goose.Audit
 #audit Goose.Proofs.Num.evalUn_inRange
 #audit Goose.Proofs.Num.evalBin_inRange
 #audit Goose.Proofs.Num.evalConv_inRange
+
+#audit Goose.Proofs.Share.eval_erase_roots
+#audit Goose.Proofs.Share.eval_eraseRoots
+#audit Goose.Proofs.Share.eval_simulates
+#audit Goose.Proofs.Share.share_eval
+#audit Goose.Proofs.Share.share_never_faults
+#audit Goose.Proofs.Share.share_validated_never_faults
 
 #audit_registry
