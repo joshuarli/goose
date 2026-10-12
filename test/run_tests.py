@@ -1331,8 +1331,8 @@ def main():
                     help="an extra argument for every compiler run that compiles a fixture, "
                          "and may be repeated (--goose-arg=--no-bce); not given to the checks "
                          "that read the shape of the emitted C (loop shapes, inline fn C, "
-                         "member parameters, member stores), nor to the samples and the "
-                         "Goose-in-Goose bootstrap, so it needs --only to leave those out")
+                         "member parameters, member stores), the lexer and shader-compiler "
+                         "probes and the Goose-in-Goose bootstrap; the log says so")
     args = ap.parse_args()
 
     if args.nocgen and (args.cc or args.require_clang or args.profile != "baseline"):
@@ -1357,9 +1357,6 @@ def main():
 
     def wanted(name):
         return not args.only or any(fnmatch.fnmatchcase(name, g) for g in args.only)
-    if args.goose_args and (not args.only or wanted("extra/samples") or wanted("extra/bootstrap")):
-        ap.error("--goose-arg does not reach the samples and the bootstrap: select "
-                 "what runs with --only")
 
     tc.setup_console()
     # The compiler's cache (runtime objects, fetched packages) for everything
@@ -1403,6 +1400,8 @@ def main():
         sargs += ["--gpu-jobs", str(args.gpu_jobs)]
     if not jit:
         sargs.append("--no-jit")
+    for a in args.goose_args:
+        sargs.append(f"--goose-arg={a}")
     if args.nocgen:
         sargs.append("--nocgen")
     else:
@@ -1435,6 +1434,10 @@ def main():
     print(f"profile: {args.profile}; C backend: {cc.desc if cc else 'none'}; "
           f"JIT backend: {'TinyCC' if jit else 'none'}; " +
           "; ".join(f"{m}: {'built in' if have else 'not built in'}" for m, have in native.items()))
+    if args.goose_args:
+        print("--goose-arg " + " ".join(args.goose_args) + " is not given to: the shape checks of "
+              "emitted C (loop shapes, inline fn C, member parameters, member stores), the lexer and "
+              "shader-compiler probes and the Goose-in-Goose bootstrap")
     builddir = tc.REPO_ROOT / "build"
     builddir.mkdir(parents=True, exist_ok=True)
     dumpdir = builddir / "dump"
@@ -1585,7 +1588,7 @@ def main():
     r.section("lexer, shader compiler and native module APIs")
 
     def lexer_tokens():
-        code, out, err = r.goose("--tokens", HERE / "syntax" / "lexer_tokens.goose")
+        code, out, err = r.goose_plain("--tokens", HERE / "syntax" / "lexer_tokens.goose")
         if code != 0:
             r.fail("lex lexer_tokens.goose", out + err)
         elif r.check_stdout("lexer_tokens", "lexer_tokens.goose", joined(out)):
@@ -1597,7 +1600,7 @@ def main():
     # compiles, #include included, and a binding outside SDL_GPU's sets is
     # rejected with the rule it broke.
     def shader_probe():
-        code, out, err = r.goose("--compile-shader", HERE / "gfx" / "probe.frag")
+        code, out, err = r.goose_plain("--compile-shader", HERE / "gfx" / "probe.frag")
         want = "samplers 1, storage textures 0 ro / 0 rw, storage buffers 0 ro / 0 rw, uniform blocks 1 (32 bytes)"
         if code != 0 or want not in out:
             r.fail("compile-shader probe.frag", out + err)
@@ -1605,7 +1608,7 @@ def main():
             r.ok("compile-shader probe.frag")
 
     def shader_badset():
-        code, out, err = r.goose("--compile-shader", HERE / "gfx" / "probe_badset.frag")
+        code, out, err = r.goose_plain("--compile-shader", HERE / "gfx" / "probe_badset.frag")
         if code != 1 or "sampler 'tex' is in set 0, and must be in set 2" not in err:
             r.fail("compile-shader probe_badset.frag", out + err)
         else:

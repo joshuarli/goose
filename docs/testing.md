@@ -94,11 +94,12 @@ skipped under `--only` unless a glob names them: `extra/bootstrap`,
 left empty by the filter are not printed.
 
 `--goose-arg ARG` adds an argument to every compiler run that compiles a
-fixture (also those of a `--multi-test` batch), placed before the file; repeat
-it for several, and write `--goose-arg=--no-bce` for one starting with `-`. The
-checks that read the shape of the emitted C (loop shapes, inline fn C, member
-parameters, member stores) do not get it, and neither do the samples and the
-bootstrap, which run compilers of their own: it needs `--only` to leave those out.
+fixture (also those of a `--multi-test` batch) or a sample, placed before the
+file; repeat it for several, and write `--goose-arg=--no-bce` for one starting
+with `-`. It works with or without `--only`. The checks that read the shape of
+the emitted C (loop shapes, inline fn C, member parameters, member stores), the
+lexer and shader-compiler probes and the Goose-in-Goose bootstrap run without it, and the log has a line saying so.
+`samples/run_samples.py` takes the same option.
 
 ## Fixture layout
 

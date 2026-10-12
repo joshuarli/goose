@@ -66,6 +66,8 @@ def main():
                     help="how many samples are worked on at once; 1 runs them in order")
     ap.add_argument("--gpu-jobs", type=int, default=0,
                     help="how many gfx programs run at once (default: no limit beyond --jobs)")
+    ap.add_argument("--goose-arg", action="append", default=[], metavar="ARG", dest="goose_args",
+                    help="an extra argument for every compiler run on a sample; may be repeated")
     args = ap.parse_args()
 
     if args.nocgen and (args.cc or args.profile != "baseline"):
@@ -132,7 +134,7 @@ def main():
             # Same source, same expected output, no C file and no external
             # compiler: the sample built and run inside the compiler process.
             with gpu(modules):
-                code, out, err = tc.run_capture([exe] + gargs + ["--jit", str(f), "--"] + progargs,
+                code, out, err = tc.run_capture([exe] + gargs + args.goose_args + ["--jit", str(f), "--"] + progargs,
                                                 cwd=HERE,
                                                 stdin_path=infile if infile.exists() else None)
             if code != 0 and tc.JIT_UNSUPPORTED in err:
@@ -152,7 +154,7 @@ def main():
                 else:
                     say(f"ok   sample-jit {f.name}")
         gargs += ["-o", str(cfile)] if cc else ["--check"]
-        code, out, err = tc.run_capture([exe] + gargs + [str(f)])
+        code, out, err = tc.run_capture([exe] + gargs + args.goose_args + [str(f)])
         if code != 0:
             say((out + err).rstrip("\n"))
             say(f"FAIL sample-compile {f.name}")
@@ -168,7 +170,7 @@ def main():
             # runtime object and the packages' link inputs itself.
             code, out, err = tc.run_capture([exe, "build", "-O2", "-o", str(efile)] +
                                             (["--include", str(header)] if header.exists() else []) +
-                                            [str(f)])
+                                            args.goose_args + [str(f)])
             ok, log = code == 0, out + err
         else:
             # The sanitizers' flags go to the C compiler this runner drives.
