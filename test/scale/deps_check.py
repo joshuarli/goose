@@ -50,8 +50,12 @@ SEQUENCES = {i for i, e in edits.EDITS.items() if e.sequence}
 NO_RESULT_CHANGE = {"E02": set(), **{i: set() for i, e in edits.DEPENDENCY_EDITS.items()
                                       if e.effect == "none"}}
 NO_RESULT_CHANGE["D08"] = {"global dt_gv"}
-# Contexts an edit must leave alone although it changes what surrounds them.
-STAYS = {"D27": {"dt_throw(_)"}}
+# Contexts an edit must replace, not change: their key names another context
+# whole, so a different one is a different context. A function that returns
+# from a handler is keyed by the handler's whole context, which names the
+# function the handler runs, and emits the target id derived from that key
+# (the C of dt_throw holds a different `gs_rf` constant).
+REPLACED = {"D27": {"dt_throw(_)"}}
 # Edits that only move text: no dependency but a location may break.
 MOVES_ONLY = {"E02", "D16", "D20"}
 
@@ -195,7 +199,7 @@ class Run:
     def c_text(self, ids):
         return self.b.build(ids).result()[0][1]
 
-    def compare(self, label, before, after, allowed=None, moves_only=False, stays=()):
+    def compare(self, label, before, after, allowed=None, moves_only=False, replaced=()):
         old, new = self.get(before), self.get(after)
         if old is None or new is None:
             return None
@@ -214,10 +218,11 @@ class Run:
             self.failures.append(f"{label}: an edit that only moves text broke a dependency "
                                  f"other than a location of: "
                                  f"{sorted(r['names'][k] for k in r['predicted_set'] - r['gone_set'])[:8]}")
-        if stays:
-            moved = {r["names"][k] for k in r["changed_set"]} & set(stays)
-            if moved:
-                self.failures.append(f"{label}: a result that must not change did: {sorted(moved)}")
+        if replaced:
+            gone = {r["names"][k] for k in r["gone_set"]}
+            if set(replaced) - gone:
+                self.failures.append(f"{label}: expected these contexts to be replaced: "
+                                     f"{sorted(set(replaced) - gone)}")
         if allowed is not None:
             changed = {r["names"][k] for k in r["changed_set"] - r["gone_set"]}
             if changed - allowed:
@@ -416,7 +421,7 @@ def randomized(run, seed, steps, pool):
         verb = "revert" if i in state else "apply"
         run.compare(f"random {seed}.{step:02d} {verb} {i}", sorted(state), sorted(after),
                     allowed=NO_RESULT_CHANGE.get(i), moves_only=i in MOVES_ONLY,
-                    stays=STAYS.get(i, ()))
+                    replaced=REPLACED.get(i, ()))
         state = after
 
 
@@ -452,9 +457,9 @@ def main():
     determinism(run)
     for i in pool:
         run.compare(f"{i} apply", [], [i], allowed=NO_RESULT_CHANGE.get(i),
-                    moves_only=i in MOVES_ONLY, stays=STAYS.get(i, ()))
+                    moves_only=i in MOVES_ONLY, replaced=REPLACED.get(i, ()))
         run.compare(f"{i} revert", [i], [], allowed=NO_RESULT_CHANGE.get(i),
-                    moves_only=i in MOVES_ONLY, stays=STAYS.get(i, ()))
+                    moves_only=i in MOVES_ONLY, replaced=REPLACED.get(i, ()))
     if not args.edit:
         randomized(run, args.seed, args.steps, pool)
     if args.mutants:
