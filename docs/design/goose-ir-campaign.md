@@ -326,6 +326,8 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 *(append-only; one line per judgment call: the call and why)*
 
 - Aincrad3's core entry imports a source file that its build generates and does not track. Copied it from the checkout's existing staged build output instead of running its generator, which reads another private repository: reading the checkout is within O5, the generator's input is not.
+- `return`, `break` and `continue` inside an expression block are outside `core-pilot`: the Lean validator rejects them and the exporter reports them unsupported. Modelling them needs a body result threaded through expression evaluation, which the pilot's proofs do not need.
+- The GIR-H wire encoding is defined by the Lean lane, and the Lean lowering's output for each Core golden is the golden the C++ lowering must reproduce byte for byte. One reference lowering makes the C++ lowering instance-checkable by comparison instead of only by behaviour.
 - `V-ROOT` no longer requires a same-scope root to be declared first. The compiler accepts rebinding a reference to a later-declared variable of its own scope, and that is safe because a scope's variables end together; the stricter rule would have rejected valid programs for no safety gain.
 - Unary minus on an unsigned type is a compile error in Goose. The numeric model keeps a total definition for it; the Lean validator rejects it under `V-TYPE`.
 - The checker already groups roots into classes: one helper called with many distinct globals and many locals at different depths gets two specializations, not one per call site. The synthetic family therefore has to vary the dimensions that do multiply specializations; `B1`'s dimension attribution on Aincrad3 says which those are, and `B5` builds its members from that.
@@ -334,6 +336,7 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 
 *(append-only; one line per gate or phase end)*
 
+- `S1` merged: Lean Core for the pilot (decoder, interpreter, validator, `run` and `validate`); goldens agree in both numeric profiles; 39 malformed and rejected fixtures.
 - `B1` merged; `G-ATTR` reached except for budget freezing, which waits for a quiet host. First Aincrad3 attribution in §11.1.
 - `T0` merged: 41 numeric theorems pass the audit; 1,224 generated cases agree with the base compiler in release and debug.
 - `B5` part 1 merged: findings on what multiplies specializations (`test/scale/README.md`), the synthetic family, 16 source-edit cases passing on the single-file path.

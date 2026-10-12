@@ -167,7 +167,7 @@ Abort kinds and the runtime text they correspond to: `div_zero` (`division by ze
 | `V-BLOCK` | The value of a block or `ifE` is not rooted at a variable declared inside it. |
 | `V-RESULT` | A returned reference or slice is rooted only at `param i` or globals, within the declared result roots. |
 | `V-CALL` | At a call, each `param i` in the callee context's result roots is replaced by the actual argument's roots; the argument's mutability satisfies the parameter's. |
-| `V-SUMMARY` | Each implementation's effect summary is closed: the effects of its body, computed with its callees' summaries, are contained in it. Recursion needs no iteration, because closure is checked, not computed. |
+| `V-SUMMARY` | Each implementation's effect summary is closed: the effects of its body, computed with its callees' summaries, are contained in it. Recursion needs no iteration, because closure is checked, not computed. The check runs once per context: a parameter target is read through that context's root annotation, so a parameter the context knows to be rooted at a global counts as that global. |
 | `V-SHRINK` | At a shrink of the array rooted at `a`, no variable in the demand set has `a` among its roots. The demand set is every variable named in an operand evaluated later in the statement, in a later statement of an enclosing block in the same implementation, or anywhere in an enclosing loop body. |
 | `V-WHOLE` | The right side of `assignWhole p e` neither names a variable rooted at `p`'s root nor calls an implementation whose summary reads, writes or resizes that root. |
 
