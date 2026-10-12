@@ -23,6 +23,14 @@ inline void ReportSharingJson(JsonOut &j) {
         .F("inlined_calls", s.distinct_inlined)
         .F("callee", s.distinct_callee)
         .F("other", s.distinct_other).EndObj();
+    // The bytes of the bodies that stayed apart for each cause.
+    j.Key("not_merged_same_declaration_bytes").Obj()
+        .F("bounds_check_sites", s.bounds_check_bytes)
+        .F("inlined_calls", s.inlined_bytes)
+        .F("callee", s.callee_bytes)
+        .F("other", s.other_bytes).EndObj();
+    // The post-pass's own time, which code_generation includes.
+    j.Key("phase_seconds").Obj().F("wall", s.wall_seconds).F("cpu", s.cpu_seconds).EndObj();
     j.F("incomplete_lowering_keys", s.incomplete_lowering_keys);
     j.EndObj();
 }

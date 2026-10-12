@@ -54,6 +54,10 @@ struct ShareStats {
     // merge, by the first cause found.
     long long distinct_bounds_checks = 0, distinct_inlined = 0, distinct_callee = 0,
               distinct_other = 0;
+    // The bytes of the bodies behind each of those counts.
+    long long bounds_check_bytes = 0, inlined_bytes = 0, callee_bytes = 0, other_bytes = 0;
+    // Time of the post-pass, which the code generation phase includes.
+    double wall_seconds = 0, cpu_seconds = 0;
     // Same declaration key and lowering key, different bodies, in the stable
     // naming scheme.
     long long incomplete_lowering_keys = 0;
