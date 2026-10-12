@@ -375,6 +375,155 @@ The decoder rejects, with `malformed`: an unknown tag, a wrong arity, a wrong el
 
 The schema string names the representation and revision (`goose-core/0.2`, `gir-h/0.2`, `gir-l/0.2`). A reader accepts only the exact string it implements. Artifacts are not persisted across compiler versions, so there is no migration.
 
+### 12.1 Tag table for goose-core/0.2
+
+This subsection is the concrete encoding of §4 for profile `core-pilot`. A tag not listed here is `malformed`. The `core-shrink` and `core-construction` tags are added with those profiles.
+
+#### Lexical rules
+
+A document is one module record followed by one line feed. The writer emits no whitespace except that line feed; the reader may accept any JSON whitespace. Strings are UTF-8; the writer escapes only `"` as `\"`, `\` as `\\` and the characters U+0000 to U+001F as `\u00xx` in lower-case hex, and writes everything else verbatim. Text that is not valid UTF-8 is `unsupported: non-utf8-text` in the exporter.
+
+| Kind | Encoding |
+|---|---|
+| `nat` | JSON integer 0 to 2^31−1, no sign, no leading zero, no fraction or exponent. |
+| `flag` | `nat` that is 0 or 1. |
+| `str` | JSON string. |
+| `int` | JSON string `-?(0|[1-9][0-9]*)` other than `-0`: a program integer constant. |
+| `ty`, `var`, `glob`, `ctx`, `org`, `file`, `scope` | `nat`, an index into the type table, the current implementation's variable table, the global table, the context table, the origin table, the file table, or a scope number. |
+| enumeration | A string from a closed set listed with the tag that uses it. |
+| `[K]` | A bare JSON array, no tag, every element of kind `K`. It is not a record. |
+| `[K]?` | A `[K]` of length 0 or 1: an optional `K`. |
+| record | A JSON array whose first element is the tag string; the arity is the number of fields in the table, not counting the tag. |
+
+Enumerations used below: `IntTy` is `i8 i16 i32 i64 u8 u16 u32 u64`; `Mut` is `mut const`; `VarKind` is `let var`; `Mode` is `by_value by_ref`; `UnOp` is `neg bitnot`; `BinOp` is `add sub mul div mod bitand bitor bitxor shl shr`; `CmpOp` is `eq ne lt le gt ge`; `ConvKind` is `widen as as_unchecked`.
+
+#### Numbering
+
+All ids are dense from 0 and fixed by the rules below, so the same program gives the same bytes. "Document order" is the order of bytes in the output.
+
+| Table | Order |
+|---|---|
+| Contexts | The entry is context 0. Contexts are processed in id order; each `e_call` met in evaluation order whose callee context has no number yet takes the next. |
+| Implementations | The exporter writes implementation `k` for context `k` and shares nothing. The `impl` field of a context exists so that a quotient (§16) can point several contexts at one implementation. |
+| Globals | Program initialization order: imported modules first, then declaration order. Every global of the program is listed, used or not. |
+| Variables of an implementation | Parameters first, in order; then each other variable in the document order of its declaring field: the `var` of `s_let`, `s_for_range`, `s_for_each` (element variable, then index variable). |
+| Scopes of an implementation | One per `block` record, numbered in document order of the opening of the block; the body block is scope 0. |
+| Types | Numbered by first mention in the document order of the globals, then the implementations (a type's components before the type); the contexts mention none. Equal types are one entry. A type's components therefore have smaller numbers. |
+| Origins | Numbered by first mention in the same document order; equal `(file, line, kind)` triples are one entry. |
+| Files | Numbered by first use in the origin table, in origin order. |
+
+#### Module, tables and contexts
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `module` | `str` schema (`goose-core/0.2`), `str` profile (`core-pilot`), `[file]` files, `[Ty]` types, `[global]` globals, `[impl]` impls, `[context]` contexts, `ctx` entry, `[origin]` origins | The numeric profile is not stored: it is a run parameter. The entry context has no parameters and no results. |
+| `file` | `str` path | The path as the compiler writes it in runtime diagnostics. Conformance compares lines, not paths. |
+| `origin` | `file`, `nat` line (from 1), `str` node kind | Node kind is one of `global param let assign assign_op rebind expr if while for return break continue print assert abort exit call index slice binary unary cast`. A synthesized operation takes the origin of the construct responsible for it (an array-to-slice coercion at a call argument takes the call's). |
+| `global` | `str` name, `ty`, `VarKind`, `Expr` initializer, `org` | Initialized in global order before the entry runs. The initializer is read as a body with an empty variable table, so it names no local. |
+| `impl` | `str` name, `[param]`, `[ty]` results, `[local]` variables, `block` body, `Summary` | Name is the source function's name for messages; it is not unique. Zero results is a unit result. |
+| `param` | `var`, `Mode` | Parameter `i` is variable `i`, in scope 0. The mode is `by_ref` exactly when the variable's type is `ref`; the corresponding argument is `a_ref`. A free variable of a nested function is a trailing `by_ref` parameter. |
+| `local` | `str` name, `ty`, `VarKind`, `scope`, `org` | One row per variable, including parameters (scope 0) and loop variables. `scope` is the block that declares it; a loop variable belongs to the loop's body block. |
+| `context` | `impl` index (`nat`), `str` declaration key, `[vr]`, `[[RootRef]]` | One checked specialization. The declaration key is opaque to the Lean tool; the goldens write it as `module::name(written parameter types)`, and a byte comparison of exporter output with a golden ignores this field until stable keys exist. The `[vr]` list has one `vr` for each variable of the implementation whose type is `ref` or `slice`, in ascending variable order. The last field has one list per result. |
+| `vr` | `var`, `[RootRef]` | Root set of that variable in this context. |
+| `r_local` | `var` | A local variable of this implementation. |
+| `r_global` | `glob` | A global. The specialization knows a parameter's argument is rooted there. |
+| `r_param` | `nat` index | Whatever the caller passed as parameter `i`: a caller local or an unconstrained root. |
+| `summary` | `[Target]` reads, `[Target]` writes, `[Target]` grows, `[Target]` rebinds, `flag` aborts, `flag` outputs | Effect summary (§4.6) of the implementation, over its parameters and the globals. Target lists are sorted `t_param` by index, then `t_global` by index, without repeats. A target is in `reads`, `writes` or `grows` when the body, including callees mapped through the arguments, may read, store an element or scalar through, or push to the storage reachable from that parameter or global; `rebinds` when it may rebind a reference or slice variable that is that parameter. `aborts` is 1 when the body contains or calls `p_elem`, `e_slice`, `e_un` with `neg`, `e_bin` with `add sub mul div mod`, `e_conv` with `as`, `s_assert`, `s_abort` or `s_exit`; `outputs` is 1 when it contains or calls `s_print`. Locals are not targets. |
+| `summary_unknown` | none | The distinct value that implies every effect. A summary field of an `impl` is `summary` or `summary_unknown`. |
+| `t_param` | `nat` index | |
+| `t_global` | `glob` | |
+
+#### Types
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `int` | `IntTy` | |
+| `bool`, `unit` | none | |
+| `arr` | `ty` element, `nat` count ≥ 1 | `T[k]` |
+| `grow` | `ty` element | `T[>..]` |
+| `ref` | `Mut`, `ty` pointee | `T&` or `const T&` |
+| `slice` | `Mut`, `ty` element | `T[:]` |
+| `tuple` | `[ty]`, length ≥ 2 | The type of a call with several results. No pilot form builds or takes one apart, so the exporter reports `unsupported: multiple-results`. |
+
+#### Blocks and statements
+
+Every statement ends with an `org` field.
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `block` | `scope`, `[Stmt]`, `[Expr]?` value | A scope. Variables are declared by `s_let` or a loop statement inside it. The value is absent for a unit block. |
+| `s_let` | `var`, `Expr`, `org` | Initialize a variable; `VarKind` is in its row. A `ref` or `slice` variable initialized from a reference expression is the `.=` form. |
+| `s_assign` | `Place`, `Expr`, `org` | `E-ASSIGN` |
+| `s_assign_op` | `BinOp`, `Place`, `Expr`, `org` | `E-ASSIGNOP` |
+| `s_rebind` | `var`, `Expr`, `org` | Rebind a `var` of reference or slice type. |
+| `s_expr` | `Expr`, `org` | Evaluate and discard. |
+| `s_append` | `Place` grow-only owner, `View` source, `org` | |
+| `s_if` | `Expr`, `block`, `[block]?` else, `org` | |
+| `s_while` | `Expr`, `block`, `org` | |
+| `s_for_range` | `var`, `Expr` lo, `Expr` hi, `block`, `org` | `E-RANGE`. The variable has the bounds' common integer type. |
+| `s_for_each` | `var` element, `[var]?` index, `View`, `flag` by_ref, `block`, `org` | `E-EACH`. When `by_ref` is 1 the element variable has type `ref`. |
+| `s_ret` | `[Expr]?`, `org` | |
+| `s_break`, `s_continue` | `org` | |
+| `s_print` | `[PrintArg]`, `org` | Writes the renderings, then a line feed. |
+| `s_assert` | `Expr`, `org` | Abort `assert` when false. |
+| `s_abort` | `str` message, `org` | Abort `user_abort`. |
+| `s_exit` | `Expr`, `org` | |
+| `pa_text` | `str` | Printed verbatim. |
+| `pa_expr` | `Expr` | An integer (decimal) or boolean (`true`, `false`). |
+
+#### Expressions, places, views, bounds, arguments
+
+An expression, place or view that can abort or that is a call ends with an `org`; the others have none.
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `e_lit` | `ty` (an integer type), `int` | The constant must lie in the type's range. |
+| `e_bool` | `flag` | |
+| `e_read` | `Place` | Read the value at the place. A reference variable read through transparency is `e_read(p_deref(e_read(p_local x)))`. |
+| `e_ref` | `Mut`, `Place` | `refOf`. |
+| `e_slice` | `Mut`, `View`, `Bound` lo, `Bound` hi, `org` | `E-SLICE`. Array-to-slice coercions are explicit. |
+| `e_len` | `View` | The sampled length. |
+| `e_un` | `UnOp`, `Expr`, `org` | |
+| `e_bin` | `BinOp`, `Expr`, `Expr`, `org` | |
+| `e_cmp` | `CmpOp`, `Expr`, `Expr` | |
+| `e_and`, `e_or` | `Expr`, `Expr` | `E-SHORT` |
+| `e_not` | `Expr` | Boolean not. |
+| `e_conv` | `ConvKind`, `ty` target, `Expr`, `org` | |
+| `e_call` | `ctx`, `[Arg]`, `org` | `E-CALL`. |
+| `e_push` | `Place` grow-only owner, `Expr` | Yields a reference to the new element. |
+| `e_if` | `Expr`, `block`, `block` | Both blocks yield a value. |
+| `e_block` | `block` | |
+| `e_arr` | `ty`, `[Expr]` | The result type is explicit: `arr` with exactly that many elements, or `grow` (possibly empty). |
+| `e_fill` | `ty` (`arr`), `Expr` | Every element is the value, evaluated once. |
+| `p_local` | `var` | A variable of this implementation. |
+| `p_global` | `glob` | A global. |
+| `p_deref` | `Expr` of `ref` type | The place it points to. |
+| `p_elem` | `View`, `Expr` index, `org` | `E-INDEX`. |
+| `v_of` | `Place` of `arr` or `grow` type | `viewOf`: the length is sampled now. |
+| `v_val` | `Expr` of `slice` type | The slice's own run. |
+| `b_expr` | `Expr` | |
+| `b_end` | `Expr` | `fromEnd`: length minus the value. |
+| `b_none` | none | `omitted`. |
+| `a_val` | `Expr` | |
+| `a_ref` | `Mut`, `Place` | Resolve the place and pass its reference. |
+
+A local or global reference is distinguished by tag (`p_local`, `p_global`, `r_local`, `r_global`, `t_global`). `p_field` is absent: it needs a struct type, which is a `core-shrink` addition.
+
+#### What the reader checks by tag and arity
+
+Before type checking the decoder rejects: an unknown tag or enumeration value; a wrong arity or element kind; an index outside its table, with `var` checked against the current implementation's variable table (empty in a global initializer); a type whose components do not have smaller numbers; an `arr` count below 1; an `e_lit` whose `ty` is not an integer type or whose value is outside its range; a `param` that is not variable `i` at scope 0; a block whose `scope` is not the number of blocks opened before it in the implementation or global initializer; a `local` whose `scope` is not among the implementation's scopes; an unsorted or repeated target list or `vr` list; an `impl` or `context` index at or above its table size. Whether a variable's type, mode, roots or summary are right is the validator's work.
+
+#### Expectation file
+
+A golden `NAME.goose` has `NAME.core.json` and `NAME.out`, the standard output. `NAME.expect.json` is optional; without it the expectation is `["expect",["returned"]]`.
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `expect` | `Outcome` | |
+| `returned` | none | The entry returned. |
+| `aborted` | abort kind, `nat` line | The abort kind is one of `div_zero div_overflow index_oob slice_oob assert user_abort int_overflow cast_range`; the line is that of the aborting operation's origin. |
+| `exited` | `int` | `exit` was executed with that value. |
+
 ## Part B. Build representations
 
 ## 13. The four costs
