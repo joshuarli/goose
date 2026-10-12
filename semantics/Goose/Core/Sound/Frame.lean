@@ -73,16 +73,16 @@ theorem unionRoots_right (a b : List RootRef) : ∀ q, q ∈ b → q ∈ unionRo
 
 /-! ### Effects an activation may have -/
 
-def TargetOk (W : World) : Target → Prop
-  | .global g => g < W.G
-  | .param j => ∀ r, W.P j r → ∀ g, r = .global g → g < W.G
+def TargetOk (G : Nat) (P : Nat → RootInst → Prop) : Target → Prop
+  | .global g => g < G
+  | .param j => ∀ r, P j r → ∀ g, r = .global g → g < G
 
-def EffOk (W : World) (E : Eff) : Prop :=
-  E.unknown = false ∧ ∀ t, (t ∈ E.reads ∨ t ∈ E.writes ∨ t ∈ E.grows) → TargetOk W t
+def EffOk (G : Nat) (P : Nat → RootInst → Prop) (E : Eff) : Prop :=
+  E.unknown = false ∧ ∀ t, (t ∈ E.reads ∨ t ∈ E.writes ∨ t ∈ E.grows) → TargetOk G P t
 
 /-- Either every global is initialized, or the body's allowed effects touch
 only initialized ones. -/
-def Perm (m : Module) (W : World) : Prop := m.globals.size ≤ W.G ∨ EffOk W W.E
+def Perm (m : Module) (W : World) : Prop := m.globals.size ≤ W.G ∨ EffOk W.G W.P W.E
 
 def EffLe (a b : Eff) : Prop :=
   (∀ t, t ∈ a.reads → t ∈ b.reads) ∧ (∀ t, t ∈ a.writes → t ∈ b.writes) ∧
