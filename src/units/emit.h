@@ -72,8 +72,7 @@ inline string UnitRuntimeHeader(string runtime_h, string_view additions) {
             throw CompileError { cat("unit mode: the runtime no longer declares `", from, "`") };
         runtime_h.replace(at, strlen(from), to);
     }
-    return cat("#ifndef GOOSE_RUNTIME_H\n#define GOOSE_RUNTIME_H\n", runtime_h, additions,
-               "\n#endif\n");
+    return cat("#ifndef GOOSE_RUNTIME_H\n#define GOOSE_RUNTIME_H\n", runtime_h, additions);
 }
 
 struct UnitInputs {
@@ -94,6 +93,7 @@ struct UnitTypeChunk {
 
 struct UnitChunk {
     string name, text, head;
+    long long locrefbytes = 0;       // The table entries its checks pass.
     enum Kind { Spec, Helper, Init, Program } kind = Spec;
     string module;
     bool isstatic = false;           // A helper small enough to copy.
@@ -122,6 +122,7 @@ struct UnitBuild {
     set<string> roots;
     long long bytes = 0;
     string text;
+    UnitStats::Breakdown parts;
 };
 
 // The smallest s for which no shard of the symbols holds more than the target.
@@ -582,7 +583,9 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                 it = index.emplace(key, (int)table.entries.size()).first;
                 table.entries.push_back(key);
             }
-            return cat("gs_loc_", c.name, "[", it->second, "].f, gs_loc_", c.name, "[", it->second, "].l");
+            auto ref = cat("gs_loc_", c.name, "[", it->second, "].f, gs_loc_", c.name, "[", it->second, "].l");
+            c.locrefbytes += (long long)ref.size();
+            return ref;
         };
         ScanC(c.text, [&](bool ident, string_view tok, bool member) {
             if (st == GL1) {
@@ -799,6 +802,14 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
     for (size_t ci = 0; ci < chunks.size(); ci++)
         if (chunks[ci].tablesize) ents[entof["gs_loc_" + chunks[ci].name]].home = stem(chunks[ci].module) + ".loc.c";
 
+    // The core types and the runtime's extern support, written against them,
+    // are the same in every unit, so they live once in the runtime header.
+    set<string> providednames = { "gs_rhdr", "gs_rref", "gs_pref", "sl_u8" };
+    string runtime_header = in.runtime_header + "\n#pragma pack(push, 1)\n";
+    for (auto &c : tchunks)
+        if (providednames.count(c.name)) runtime_header += c.text + "\n";
+    runtime_header += "#pragma pack(pop)\n" + in.ext_text + "\n#endif\n";
+
     // ---- The text of each unit. ----
     for (auto &[file, u] : units) {
         // What the unit's definitions use, through the static helpers they
@@ -836,6 +847,8 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
         // Type declarations: those the code names, and what their bodies need.
         set<int> need, needfwd;
         function<void(const string &)> want = [&](const string &name) {
+            // What the runtime header declares for every unit.
+            if (providednames.count(name)) return;
             auto en = enumof.find(name);
             if (en != enumof.end()) { need.insert(en->second); return; }
             for (auto ci : typeof_[name]) {
@@ -850,8 +863,6 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
             for (auto ci : typeof_[name]) if (tchunks[ci].forward) needfwd.insert(ci);
         };
         for (auto &t : typeset) want(t);
-        // The core types the runtime's extern support is written against.
-        for (auto n : { "gs_rhdr", "gs_rref", "gs_pref", "sl_u8" }) if (typeof_.count(n)) want(n);
         // Order: forward declarations by name; then bodies, dependencies
         // first and otherwise by name.
         string types = "#pragma pack(push, 1)\n";
@@ -910,18 +921,26 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
             if (ents[id].kind == UnitEntity::SegBody) layouts.insert(ents[id].name);
         for (auto id : used)
             if (ents[id].kind == UnitEntity::SegBody) layoutstext += ents[id].decl;
+        UnitStats::Breakdown parts;
         string text = in.defines + "#include \"goose_runtime.h\"\n\n";
+        parts.header = (long long)text.size();
         if (u.kind == UnitBuild::Locations || u.kind == UnitBuild::Literals) {
             text += "\n";
         } else {
-            text += types + "\n" + in.ext_text + "\n" + layoutstext;
-            if (usesextern) text += "\n" + cg.includetext;
+            text += types + "\n" + layoutstext;
+            parts.types = (long long)types.size();
+            parts.layouts = (long long)layoutstext.size();
+            if (usesextern) { text += "\n" + cg.includetext; parts.includes += (long long)cg.includetext.size(); }
         }
         text += "\n";
-        for (auto &[name, decl] : externs) text += decl + "\n";
+        for (auto &[name, decl] : externs) {
+            text += decl + "\n";
+            parts.externs += (long long)decl.size() + 1;
+            if (name.compare(0, 7, "gs_loc_") == 0) parts.location_externs += (long long)decl.size() + 1;
+        }
         text += "\n";
         // Definitions: entities first, then functions in symbol order.
-        for (auto &d : u.defs) text += d;
+        for (auto &d : u.defs) { text += d; parts.definitions += (long long)d.size(); }
         vector<int> fns = u.chunks;
         for (auto &s : statics) fns.push_back(ents[entof[s]].chunk);
         sort(fns.begin(), fns.end(), [&](int a, int b) { return chunks[a].name < chunks[b].name; });
@@ -938,7 +957,10 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                 body.replace(0, 7, "GS_HIDDEN ");
             }
             text += body + "\n\n";
+            parts.functions += (long long)body.size() + 2;
+            parts.location_references += c.locrefbytes;
         }
+        u.parts = parts;
         u.text = std::move(text);
         u.bytes = (long long)u.text.size();
     }
@@ -953,7 +975,9 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
         fwrite(text.data(), 1, text.size(), f);
         fclose(f);
     };
-    write("goose_runtime.h", in.runtime_header);
+    write("goose_runtime.h", runtime_header);
+    unit_stats.runtime_header_bytes = (long long)runtime_header.size();
+    unit_stats.files.clear();
     string list;
     for (auto &[file, u] : units) {
         write(file, u.text);
@@ -973,7 +997,9 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                  : "program";
         s.bytes = u.bytes;
         s.functions = (long long)u.chunks.size();
+        s.parts = u.parts;
         st.units.push_back(s);
+        st.files.push_back({ file, u.text });
     }
     for (auto &c : chunks)
         if (c.rep && !c.unit.empty()) st.function_units[c.rep->sf].insert(c.unit);

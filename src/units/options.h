@@ -70,11 +70,26 @@ inline ShareStats share_stats;
 
 // What the units written for a program are, for the report.
 struct UnitStats {
+    // Where a unit's bytes go. `location_references` are inside `functions`.
+    struct Breakdown {
+        long long header = 0;          // The defines and the include of the runtime header.
+        long long types = 0, layouts = 0, includes = 0;
+        long long externs = 0;         // Declarations of what the unit uses and does not define.
+        long long location_externs = 0;     // Of those, the location tables.
+        long long definitions = 0;     // Globals, literals, tables, channels.
+        long long functions = 0;
+        long long location_references = 0;  // Of those, the table entries checks pass.
+    };
     struct Unit {
         string file, module, kind;
         long long bytes = 0, functions = 0;
+        Breakdown parts;
     };
     bool ran = false;
+    long long runtime_header_bytes = 0;     // The one header every unit includes.
+    // The text of each unit written, in file order, for the build that reuses
+    // objects (units/build.h).
+    vector<pair<string, string>> files;
     vector<Unit> units;
     unordered_map<const SFunction *, set<string>> function_units;
 };
