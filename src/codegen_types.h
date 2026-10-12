@@ -654,6 +654,7 @@ inline string CodeGen::SizeFn(TypeExpr *t) {
     EmitSizeWalk(b, t, "q");
     Append(b, "    return q - p;\n}\n\n");
     code += b;
+    ReportHelperEmitted(HelperKind::SizeWalker, b.size());
     return name;
 }
 
@@ -851,6 +852,7 @@ inline string CodeGen::VerifyFn(TypeExpr *elem) {
     if (MinBytes(elem) <= 0) {
         Append(b, "    (void)p; (void)bm;\n    return n == 0 ? 0 : -1;\n}\n\n");
         code += b;
+        ReportHelperEmitted(HelperKind::ImageVerifier, b.size());
         return name;
     }
     auto fixed = IsFix(elem);
@@ -872,6 +874,7 @@ inline string CodeGen::VerifyFn(TypeExpr *elem) {
     }
     Append(b, "    return cnt;\n}\n\n");
     code += b;
+    ReportHelperEmitted(HelperKind::ImageVerifier, b.size());
     return name;
 }
 
@@ -1255,6 +1258,7 @@ inline string CodeGen::EqFn(TypeExpr *t) {
     else EmitEqFixed(bo, t);
     Append(bo, "}\n\n");
     code += bo;
+    ReportHelperEmitted(HelperKind::Equality, bo.size());
     return name;
 }
 

@@ -786,6 +786,7 @@ inline Node *Optimizer::TryInline(Call *c) {
     auto ib = ast.New<InlineBlock>(c->line, K->sf, K, body);
     ib->exprtype = c->exprtype;
     inlined++;
+    ReportInlined(K, info.nodecount);
     // Re-fold the copy so substituted constants cascade — the one re-visit
     // the single-pass design allows, and only over fresh nodes.
     OptBlock(body);

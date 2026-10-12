@@ -1118,6 +1118,7 @@ inline void CodeGen::EmitThreadThunk(FnSpec *sp, int64_t stacks) {
     for (size_t i = 0; i < args.size(); i++) Append(argstr, i ? ", " : "", args[i]);
     Append(b, "    ", ki.cname, "(", argstr, ");\n    free(gs_gl);\n}\n\n");
     code += b;
+    ReportHelperEmitted(HelperKind::ThreadEntry, b.size());
     thunkregions[sp] = regions;
 }
 

@@ -14,6 +14,11 @@ add_executable(goose
     src/main.cpp
     src/process.cpp
     src/process.h
+    src/report/os.cpp
+    src/report/hooks.h
+    src/report/report.h
+    src/ident/sha256.h
+    src/ident/keys.h
     src/buildfile.h
     src/toolchain.h
     src/build.h
@@ -83,7 +88,7 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(goose PRIVATE Threads::Threads)
 if(WIN32)
-    target_link_libraries(goose PRIVATE advapi32)
+    target_link_libraries(goose PRIVATE advapi32 psapi)
 endif()
 # The library the process runner (process.cpp) is built on.
 target_include_directories(goose PRIVATE third_party/subprocess)

@@ -2563,6 +2563,7 @@ inline int TypeCheck::EnvReach(const MatchInfo &mi) {
 // it broken. A member whose calls a round no longer reaches is left as it
 // is: nothing checked afterwards names it.
 inline void TypeCheck::CheckSpecBody(FnSpec *spec, vector<Val> *argvals, Line callline) {
+    ReportCheckScope reportscope(spec);
     struct RoundScope {
         TypeCheck &tc;
         RoundScope(TypeCheck &t) : tc(t) { tc.cyclerounds.push_back({ tc.CurDepth(), false }); }

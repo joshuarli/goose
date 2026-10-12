@@ -581,9 +581,11 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
         Append(fnbody, "    uint8_t *", p.second, " = ", gnames[p.first], ".base;\n");
     fnbody += bodyout;
     auto name = er ? ernames[sp] : curinfo->cname;
+    auto reportmark = code.size();
     if (sp->sf->issimd) EmitSimdVersions(sp, name, params, fnbody);
     else Append(code, "static ", FnAttrs(sp), SigRet(sp), " ", name, "(", params, ") {\n", fnbody,
                 "}\n\n");
+    ReportBodyEmitted(sp, er, code.size() - reportmark);
     curspec = nullptr;
     curinfo = nullptr;
     emiter = false;
