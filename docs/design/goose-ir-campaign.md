@@ -97,7 +97,7 @@ The executor decides within the bound, takes the smallest reversible option, and
 | Compiler build peak memory | About 2 GB for the largest process of a Debug build. |
 | Phase timing in the compiler | None exists. |
 | Single-fixture filter in `test/run_tests.py` | None exists; `G0` adds it. |
-| Aincrad3 | Present at `~/d/aincrad3`; about 71k lines of Goose in 367 files; built through `--standalone -o`. Commit to be recorded by `G2`. |
+| Aincrad3 | Available. Commit `ef1e1ef33b96fa68748e4ecf3cad37153a4de59c`, extracted to `.work/aincrad3`; its one generated source file is copied from the checkout's own staged build output. Entry point `src/world-core-continue.goose`. `goose --check` (Debug compiler, `-O1`) reports 14,642 specializations, 8,861 inlined calls, and a 1.5 GB compiler peak. Not a timing baseline. |
 | Historical figures (issue #9, 2026-10-11) | 14,575 specializations typechecked; 66,026,053 bytes of C; standalone emission median 43.150 s. Emission only: not native compilation, linking or runtime. Not a baseline; `B1` remeasures. |
 | Frozen budgets | The proposed values of validation plan §11, to be replaced here by `B1`. |
 
@@ -296,9 +296,14 @@ The linter builds its facts from the checked program before optimization and spa
 
 *(append-only; one line per judgment call: the call and why)*
 
+- Aincrad3's core entry imports a source file that its build generates and does not track. Copied it from the checkout's existing staged build output instead of running its generator, which reads another private repository: reading the checkout is within O5, the generator's input is not.
+- The checker already groups roots into classes: one helper called with many distinct globals and many locals at different depths gets two specializations, not one per call site. The synthetic family therefore has to vary the dimensions that do multiply specializations; `B1`'s dimension attribution on Aincrad3 says which those are, and `B5` builds its members from that.
+
 ## 13. Campaign log
 
 *(append-only; one line per gate or phase end)*
+
+- `G2` merged: `test/scale/gen.py` (issue #9's program, parameterized) and `test/scale/parity.py` (1,120 emissions compared; base against itself equal, `--no-bce` differs in 696).
 
 ## 14. For the owner afterwards
 
