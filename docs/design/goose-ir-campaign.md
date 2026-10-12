@@ -48,6 +48,7 @@
 | O4 | Sharing, units and reuse land first on the legacy backend through a backend-neutral layer, so Aincrad3 benefits in this campaign. GIR-L feeds the same layer afterwards. |
 | O5 | The executor may read and build the local Aincrad3 checkout at a recorded commit. Only aggregate counts, sizes and timings enter this repository. |
 | O6 | Build scalability is a primary requirement with its own gates, not a consequence hoped for from the IR. |
+| O8 | The host stays noisy for the rest of the campaign (2026-10-12). The final verification gates of an O7 pull request — the before/after measurements, the exact Docker reproducer against the pushed fix commit, the push itself and opening the draft — are deferred until after the campaign ends. During the campaign a confirmed defect gets its fix branch, its regression test, its locally verified reproduction and its drafted description, and is listed in §14. |
 | O7 | A genuine compiler defect found along the way gets a draft pull request to upstream, following the guidelines. They are in two places: this repository's `AGENTS.md` ("Upstream pull requests") and the Aincrad3 checkout's `docs/GOOSE-WORKFLOW.md`; where they differ, the stricter applies. In short: the defect violates a supported language or runtime contract and is confirmed on the failing baseline; it is reduced to a small public fixture; the fix branch starts from upstream `master` and carries one fix, its regression test and no fork tooling; the exact Docker reproducer is run locally with Clang 23 and the current stable GCC and shows the baseline failure and the fixed result; a before/after `test/goose_in_goose` comparison and the affected normal workloads are measured on a quiet host; the title is a Conventional Commit and the body is What, Why, How, Testing, Reproduction; the pull request stays a draft and is never merged by the executor. Linter defects are fork matters and are not sent upstream. The fix is also cherry-picked onto `goose-ir`. |
 
 ### 2.2 Prescribed
@@ -236,7 +237,9 @@ Each change made is appended to §8.
 - `goose --emit-core FILE`: writes a `goose-core/0.2` module for `core-pilot`, or fails with `error: unsupported in core-pilot: <feature-id>`.
 - `goose --share`: merges emitted functions with equal bodies. Default output unchanged without it.
 - `goose --stable-names` (hidden, not in the usage text): names emitted functions, types, literals and nonlocal-target ids from stable keys. A seam for unit output; not pre-authorized by name, added because unit output needs it testable on its own.
-- `goose-semantics` (new tool, test-time only): `audit`, `run`, `validate`.
+- `goose --emit-units DIR`: writes the program as C translation units, one runtime header and a link list; implies stable names; composes with `--share`.
+- `goose --emit-gir-high FILE`: writes a `gir-h/0.2` module; the verifier runs on every lowered module.
+- `goose-semantics` (new tool, test-time only): `audit`, `run`, `validate`, `share`, `lower`, `gir-validate`, `gir-run`, `gir-reencode`, `agree`.
 - `fuzz/driver.py`: `--semantics TOOL`, `--pipeline NAME`.
 
 ## 9. Non-goals and deferrals
@@ -375,6 +378,8 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 
 *(append-only; one line per gate or phase end)*
 
+- `S5` merged: the compiler lowers its Core to GIR-H, verifies it, and writes it with `--emit-gir-high`. On the merged tree all 54 exporting pilot programs are byte-identical to the Lean reference lowering and agree with Core; the lane reports the same for 300 seeds each of `scalar` and `numeric`. Nine verifier rejections are unit-tested.
+- `B3` merged: `--emit-units` writes a program as translation units. On the merged tree: 575 of 630 corpus programs build from units and behave as expected (55 skipped for native layers, none failing), every locality case passes, default output equals the reference on 1,232 emissions, the full suite is green. Aincrad3 at `-O1 --share` emits as 442 units, median 48 KB, largest 1.2 MB; but the units total 67 MB against 47 MB for the same program as one file, so per-unit declarations and preludes add about 40%. That overhead is cold-build cost and goes to `O3`.
 - `U1`, first defect: the two baseline reds are a genuine runtime defect. On musl the main thread's native stack range comes back as only what is mapped so far, so a real overflow falls outside it and the diagnostic is never printed. Fix `7cd7526` on branch `upstream-pr/native-stack-bounds-main-thread-musl` (from upstream `master`), cherry-picked here as `2de048a`. The baseline suite is now fully green on this host. Verified on Alpine in Docker (base fails with status 139, fix prints the diagnostic) and on Debian sid with Clang 23.1.3 and GCC 16.2.0 (unchanged). The draft pull request is not opened yet: the before/after measurement the guidelines require needs a quiet host, and the fix branch has to be pushed to the fork before the exact Docker reproducer can be run.
 - `S7` merged: Lean GIR-H with its interpreter, validator, decoder and writer, the reference lowering, the `gir-h/0.2` tag table (specification §12.2), 26 goldens and 37 invalid modules. The compiler's own exports of 52 pilot programs lower and agree between Core and GIR-H.
 - `T1`, first attempt: `TH-FUEL-01` and `TH-MEM-01` audited; `TH-MEM-02` only per memory operation; `TH-CORE-01` only for the entry's shape; `TH-SAFE-01` not proved. `G-PILOT` not reached. The lane changed `Val.resizable` to carry its element type, which broke the sharing proofs; they are being repaired before either merges.
@@ -394,6 +399,7 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 
 ## 14. For the owner afterwards
 
+- Upstream draft pull requests owed under O7 and deferred by O8, each with its branch and drafted description: (1) `upstream-pr/native-stack-bounds-main-thread-musl`, commit `7cd7526`, description at `.work/wt/u1/.work/pr/description.md` — still owed: the before/after `test/goose_in_goose` and normal-workload measurement on a quiet host, pushing the branch to the fork, running the exact Docker reproducer against the pushed commit, opening the draft. Note for the description: GCC 16.2 on musl could not be run; the musl results use GCC 15.2.
 - §11's attribution: whether the frontend or native compilation dominates Aincrad3's loop decides whether `X1` and `X2` are the next campaign.
 - §8 and `semantics/decisions.md`: every contract change and every disagreement with the legacy compiler.
 - `semantics/coverage.json`: theorems passing, parked, and the reviewer's answers.
