@@ -74,6 +74,46 @@ def elabAuditRegistry : CommandElab
 
 end Goose.Audit
 
-#audit Goose.Proofs.Num.emod_range
+#audit Goose.Proofs.Num.wrap_inRange
+#audit Goose.Proofs.Num.wrap_congr
+#audit Goose.Proofs.Num.wrap_of_inRange
+#audit Goose.Proofs.Num.checked_release
+#audit Goose.Proofs.Num.checked_unsigned
+#audit Goose.Proofs.Num.checked_debug_signed
+#audit Goose.Proofs.Num.checked_inRange
+#audit Goose.Proofs.Num.add_release
+#audit Goose.Proofs.Num.sub_release
+#audit Goose.Proofs.Num.mul_release
+#audit Goose.Proofs.Num.neg_release
+#audit Goose.Proofs.Num.add_unsigned
+#audit Goose.Proofs.Num.sub_unsigned
+#audit Goose.Proofs.Num.mul_unsigned
+#audit Goose.Proofs.Num.neg_unsigned
+#audit Goose.Proofs.Num.add_debug_signed
+#audit Goose.Proofs.Num.sub_debug_signed
+#audit Goose.Proofs.Num.mul_debug_signed
+#audit Goose.Proofs.Num.neg_debug_signed
+#audit Goose.Proofs.Num.div_zero
+#audit Goose.Proofs.Num.div_inRange
+#audit Goose.Proofs.Num.div_i64_min
+#audit Goose.Proofs.Num.div_narrow_min_debug
+#audit Goose.Proofs.Num.div_narrow_min_release
+#audit Goose.Proofs.Num.mod_zero
+#audit Goose.Proofs.Num.mod_spec
+#audit Goose.Proofs.Num.mod_inRange
+#audit Goose.Proofs.Num.shl_eq
+#audit Goose.Proofs.Num.shr_eq
+#audit Goose.Proofs.Num.shift_count_only
+#audit Goose.Proofs.Num.shr_inRange
+#audit Goose.Proofs.Num.ofBits_inRange
+#audit Goose.Proofs.Num.bitwise_inRange
+#audit Goose.Proofs.Num.bitnot_inRange
+#audit Goose.Proofs.Num.widen_id
+#audit Goose.Proofs.Num.asUnchecked_wrap
+#audit Goose.Proofs.Num.as_release_wrap
+#audit Goose.Proofs.Num.as_debug
+#audit Goose.Proofs.Num.evalUn_inRange
+#audit Goose.Proofs.Num.evalBin_inRange
+#audit Goose.Proofs.Num.evalConv_inRange
 
 #audit_registry
