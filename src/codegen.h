@@ -1347,6 +1347,18 @@ struct CodeGen {
         // Extern fns: the runtime's own C follows the types it is written
         // against, then user headers, then prototypes for whatever neither
         // declares.
+        // A header can implement any declared extern, even one no call
+        // reaches. Emit their types without making the functions live.
+        for (auto sp : ast.fnspecs) {
+            if (!sp->sf->isextern) continue;
+            for (auto t : sp->argtypes) {
+                CT(t);
+                // CT only forward-declares a struct behind a pointer; an
+                // adapter needs its fields too. Builders use gs_rref instead.
+                if (t->kind == TY_REF && !IsResz(t->ref->sub)) CT(t->ref->sub);
+            }
+            for (auto t : sp->rets) CT(t);
+        }
         string externs;
         if (!usedexterns.empty() || !runtime_ext_text.empty()) {
             EmitCoreTypes();

@@ -3985,7 +3985,11 @@ value as its own type in a temporary, which is sliced whole or copied as the
 type the destination names, the call's where it names none; the call's value
 is a copy (spec §4.1), so such a slice never points into a variable the body
 names. An `extern fn` is a direct C call with prototypes emitted for
-symbols the runtime does not define.
+called symbols the runtime does not define. Codegen emits the types of every
+checked extern signature, including unused ones and the complete pointee
+types of plain references, before user headers. A reusable `--include`
+adapter can therefore use its interface's types independently of which
+functions the program calls.
 
 **The foreign boundary.** `CheckExternSpec` admits scalars and flat
 fixed-size values by value, including fixed-mode ADTs and limited arrays

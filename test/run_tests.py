@@ -1892,6 +1892,17 @@ def main():
             r.show_task(clang_simd, "stdlib_base64", HERE / "stdlib" / "stdlib_base64.goose",
                         clang_simd_named("base64_encode", "base64_decode"))
 
+    def extern_types():
+        from extern_types import check_extern_types
+        try:
+            check_extern_types(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
+            r.ok("extern types: unused and partially used C adapters")
+        except RuntimeError as e:
+            r.fail("extern types", str(e))
+    if cc or jit:
+        r.section("extern types")
+        r.show_task(extern_types)
+
     def resource_paths():
         from resource_paths import check_resource_paths
         try:

@@ -2644,7 +2644,10 @@ extras, and a prototype is emitted from the declaration unless the runtime
 declares the symbol (the `os` library's `gs_os_*` functions, declared in
 `src/runtime/runtime_ext.h` and defined in `src/runtime/runtime_os.h`). User C reaches the program through
 `--include <header>`, emitted after the generated type declarations so a
-header can implement shims against the generated typedefs. Every name that
+header can implement shims against the generated typedefs. The types in every
+`extern fn` signature are emitted even when the function is unused, including
+the complete types behind reference and slice parameters. An unused extern
+does not require a C implementation to link. Every name that
 comes from the program appears in the C with a `_g` suffix -- a struct `Stats`
 with a field `lo` is `Stats_g` with `lo_g` -- which is what keeps the generated
 file clear of the C keywords and of whatever the platform's headers declare,
