@@ -1335,6 +1335,14 @@ private:
             vector<VarDef *> classes;
             if (auto vd = cur.vardefs[i]) {
                 if (vd->refrootknown) roots = RootsOf(vd->ref, sp, classes);
+                // A parameter is rooted at what the caller passed for it: where
+                // the class it shares with other parameters is not a global,
+                // that is the parameter itself, and a local bound to the class
+                // keeps the whole class.
+                if (i < impl.params.size() && !roots.empty() &&
+                    all_of(roots.begin(), roots.end(),
+                           [](const CoreRootRef &r) { return r.kind == CoreRootRef::Param; }))
+                    roots = { CoreRootRef { CoreRootRef::Param, (int)i } };
             } else {
                 roots.push_back({ CoreRootRef::Param, (int)i });
             }
