@@ -1,0 +1,2 @@
+integer overflow (debug): -128 / -1 at i8
+sem_num03_narrow_min_div_debug.goose:6)
