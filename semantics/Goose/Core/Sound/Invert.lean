@@ -375,4 +375,33 @@ theorem readRoots_ok (env : PEnv) (p : Place) (s : RState) (r : List RootRef × 
     simp only [readRoots] at h; inv at h
     exact ⟨h.2, Or.inr ⟨h.1, fun x' lv e => by cases e⟩⟩
 
+theorem retUnit_ok (env : TEnv) (s : Nat) (r : Unit × Nat) (h : retUnit env s = .ok r) :
+    r.2 = s ∧ env.inExpr = false ∧ ∃ impl, env.impl = some impl ∧ impl.results.toList = [] := by
+  obtain ⟨u, s'⟩ := r
+  unfold retUnit at h
+  cases hi : env.inExpr with
+  | true => simp only [hi] at h; inv at h
+  | false =>
+    cases him : env.impl with
+    | none => simp only [hi, him] at h; inv at h
+    | some impl =>
+      simp only [hi, him] at h
+      rcases hres : impl.results.toList with _ | ⟨t, rest⟩ <;> simp only [hres] at h <;> inv at h
+      exact ⟨h, rfl, impl, rfl, hres⟩
+
+theorem retTy_ok (env : TEnv) (s : Nat) (r : Ty × Nat) (h : retTy env s = .ok r) :
+    r.2 = s ∧ env.inExpr = false ∧ ∃ impl, env.impl = some impl ∧ impl.results.toList = [r.1] := by
+  obtain ⟨t, s'⟩ := r
+  unfold retTy at h
+  cases hi : env.inExpr with
+  | true => simp only [hi] at h; inv at h
+  | false =>
+    cases him : env.impl with
+    | none => simp only [hi, him] at h; inv at h
+    | some impl =>
+      simp only [hi, him] at h
+      rcases hres : impl.results.toList with _ | ⟨t', _ | _⟩ <;> simp only [hres] at h <;> inv at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact ⟨rfl, rfl, impl, rfl, hres⟩
+
 end Goose.Core.Sound
