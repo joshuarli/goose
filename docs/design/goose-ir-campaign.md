@@ -292,6 +292,35 @@ The linter builds its facts from the checked program before optimization and spa
 
 *(written at each gate from the validation plan's template; the Aincrad3 tables hold aggregates only)*
 
+### 11.1 `G-ATTR`: cost attribution, first run
+
+Candidate `8364929` against base `62366eb`. Alpine Linux, musl, x86_64, Clang 23.1.3. Compiler built Debug. **Perf gate deferred: host busy**, so every time below is a share of one busy run of a Debug compiler, good for ordering phases and nothing else. Counts and bytes are exact. Budgets are not frozen.
+
+Checks: the report passes its consistency check on the synthetic family, the linter's source, three large fixtures and samples, and Aincrad3 (456 of 66,636,122 bytes unattributed). Default emitted C is byte-identical to the base compiler's on 1,230 emissions. Stable declaration keys survive an added function, reordering, a comment and a body edit.
+
+Aincrad3 core entry, `-O2 --standalone`:
+
+| Count | Value |
+|---|---|
+| Source functions | 6,481 |
+| Checked contexts | 14,642 |
+| Entry-reachable contexts (the linter's fanout population) | 7,454 |
+| Live instances after optimization, all emitted | 4,701 |
+| Source functions with a live instance; with more than one | 3,687; 529 |
+| Call sites inlined; nodes copied by inlining | 24,307; 552,184 of 1,396,395 live nodes |
+| Emitted C | 66,636,122 bytes: function bodies 65.2 MB, prototypes 0.56 MB, literals 0.53 MB, types 0.21 MB, runtime text 0.13 MB |
+
+What this says about the four costs:
+
+- **(b) Emitted code is mostly not duplicated specializations.** Only 1,014 of the 4,701 emitted bodies are second or later instances of a source function. If every one of them shared a body with its first instance, at most 19.2 MB (29%) of function-body bytes would go; the real figure is lower, because some differ by type. About 40% of live nodes are inlined copies. The 500 largest functions hold 66% of the bytes.
+- **(a) Checking is multiplied more than emission is.** 8,206 contexts are second or later contexts of their function, and 7,188 contexts are not reachable from the entry at all. The depth key is the dimension behind most of it: about 3,700 contexts exist only because of it, then held-exactness (about 1,100) and bound function values (about 800). Concrete types and pools are behind almost none.
+- **Compiler phases**, shares of CPU in this run: check and specialize 44%, code generation 19%, bounds-check elimination 18%, report collection 15%, optimize 3%, parse 1%. Compiler peak memory 1.6 GB.
+- **(c) and (d) are not measured yet**: no native compile or link of the emitted C has been run.
+
+Consequences for the sequence: native-unit reuse (`B3`, `B4`) is the item that can change the edit loop most, since it applies to all 66 MB. Sharing (`B2`) is bounded at 29% of bytes on this workload. Inlining at `-O2` is a larger source of emitted code than specialization and is not addressed by sharing; a development build at a lower Goose `-O` level is the available lever and is measured in `B4`. Check time is the largest compiler phase and is multiplied about 2.3× by contexts, which is deferral `X1`'s subject.
+
+Open from this run: 266 contexts are indistinguishable under every recorded key dimension, so the context key is not yet injective; and report collection costs more than the proposed 10%. Both go back to the `backend` lane.
+
 ## 12. Decision log
 
 *(append-only; one line per judgment call: the call and why)*
@@ -305,6 +334,7 @@ The linter builds its facts from the checked program before optimization and spa
 
 *(append-only; one line per gate or phase end)*
 
+- `B1` merged; `G-ATTR` reached except for budget freezing, which waits for a quiet host. First Aincrad3 attribution in §11.1.
 - `T0` merged: 41 numeric theorems pass the audit; 1,224 generated cases agree with the base compiler in release and debug.
 - `B5` part 1 merged: findings on what multiplies specializations (`test/scale/README.md`), the synthetic family, 16 source-edit cases passing on the single-file path.
 - `S3` part 1 merged: 54 runnable pilot fixtures and 7 rejections passing on the legacy pipeline; harness and fuzz-driver stages tested against fake tools only.
