@@ -1,4 +1,5 @@
 import Goose.Core.Eval
+import Goose.Core.Typing
 
 /-!
 Facts about the store: what a typed location is, how a store changes without
@@ -676,5 +677,318 @@ theorem th_mem_01 (s s' : Store) (o : Loc) (vs : Array Val) (n : Nat)
       have hp : ¬ l.path <+: o.path := fun hp => hn' ⟨hlr, hp⟩
       exact (read_ok_iff _ _ _).2 ⟨new, by rw [hlr, hroots]; simp, (hkeep l.path v hgl).1 hp⟩
     · exact (read_ok_iff _ _ _).2 ⟨ol, by rw [other l hlr]; exact hol, hgl⟩
+
+
+/-! ### The live-reference invariant
+
+A reference or slice is held only as the whole value of a variable. The
+invariant says each one denotes a valid location of an array or flat type. It
+is preserved by every memory operation of the evaluator: a type-preserving
+write, growth, binding a fresh root, and releasing a scope's roots when no
+surviving reference targets one of them. -/
+
+/-- A slice denotes a run inside a valid array location. -/
+def SliceOk (s : Store) (l : Loc) (st n : Nat) : Prop :=
+  ∃ E, (∃ k, LocTy s l (.arr E k) ∧ st + n ≤ k) ∨
+    (LocTy s l (.grow E) ∧ ∃ E' es, s.read l = .ok (.resizable E' es) ∧ st + n ≤ es.size)
+
+/-- A held value is a reference to a valid typed location, a slice of a valid
+run, or holds no reference. -/
+def HeldOk (s : Store) : Val → Prop
+  | .ref l => ∃ T, T.refTarget = true ∧ LocTy s l T
+  | .slice l st n => SliceOk s l st n
+  | _ => True
+
+def LiveRefs (s : Store) : Prop :=
+  ∀ (r : RootInst) (v : Val), s.roots[r]? = some v → HeldOk s v
+
+theorem SliceOk.mono {s s' : Store} {l : Loc} {st n : Nat} (hle : StoreLe s s')
+    (h : SliceOk s l st n) : SliceOk s' l st n := by
+  obtain ⟨E, h⟩ := h
+  refine ⟨E, ?_⟩
+  rcases h with ⟨k, hl, hk⟩ | ⟨hl, E', es, hr, hk⟩
+  · exact Or.inl ⟨k, LocTy.mono hle hl, hk⟩
+  · right
+    refine ⟨LocTy.mono hle hl, ?_⟩
+    obtain ⟨old, ho, hg⟩ := (read_ok_iff _ _ _).1 hr
+    obtain ⟨old', ho', hr'⟩ := hle _ _ ho
+    obtain ⟨x', hx', hT, hs⟩ := hr' _ _ hg
+    have hflat : FlatTy (.grow E) (.resizable E' es) := by
+      obtain ⟨v, hv, hT0⟩ := hl
+      rw [hr] at hv; cases hv; exact hT0
+    have hx2 := hT _ hflat
+    rcases x' with _|_|_|_|⟨E2, es2⟩|_|_ <;> simp only [FlatTy] at hx2
+    obtain ⟨es', hes', hle'⟩ := hs es (by simp [Val.elems?])
+    simp only [Val.elems?, Option.some.injEq] at hes'
+    exact ⟨E2, es2, (read_ok_iff _ _ _).2 ⟨old', ho', hx'⟩, by rw [hes']; omega⟩
+
+theorem HeldOk.mono {s s' : Store} {v : Val} (hle : StoreLe s s') (h : HeldOk s v) :
+    HeldOk s' v := by
+  cases v <;> simp only [HeldOk] at h ⊢
+  · obtain ⟨T, hT, hl⟩ := h
+    exact ⟨T, hT, LocTy.mono hle hl⟩
+  · exact SliceOk.mono hle h
+
+theorem held_of_elems (s : Store) (v : Val) (h : v.elems?.isSome = true) : HeldOk s v := by
+  cases v <;> simp_all [HeldOk, Val.elems?]
+
+/-- Binding a root that does not exist yet. -/
+theorem introduce_le (s : Store) (r : RootInst) (v : Val) (h : s.roots[r]? = none) :
+    StoreLe s (s.introduce r v) := by
+  intro r' v' hv'
+  refine ⟨v', ?_, Refines.refl v'⟩
+  have : r ≠ r' := fun e => by subst e; rw [h] at hv'; cases hv'
+  simp [Store.introduce, Std.HashMap.getElem?_insert, this, hv']
+
+theorem liveRefs_introduce (s : Store) (r : RootInst) (v : Val) (h : s.roots[r]? = none)
+    (hlr : LiveRefs s) (hv : HeldOk s v) : LiveRefs (s.introduce r v) := by
+  have hle := introduce_le s r v h
+  intro r' v' hv'
+  by_cases hr : r = r'
+  · subst hr
+    simp [Store.introduce] at hv'
+    subst hv'
+    exact HeldOk.mono hle hv
+  · have : s.roots[r']? = some v' := by
+      simpa [Store.introduce, Std.HashMap.getElem?_insert, hr] using hv'
+    exact HeldOk.mono hle (hlr r' v' this)
+
+theorem get_cons_elems (v z : Val) (i : Nat) (q : List Nat) (h : v.get? (i :: q) = some z) :
+    v.elems?.isSome = true := by
+  rcases v with _|_|_|es|⟨E, es⟩|_|_ <;> simp_all [Val.get?, Val.elems?]
+
+/-- Growth keeps the live-reference invariant. -/
+theorem liveRefs_append (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat) (E : Ty)
+    (hl : LocTy s l (.grow E)) (hvs : ∀ (i : Nat) (e : Val), vs[i]? = some e → FlatTy E e)
+    (h : s.append l vs = .ok (s', n)) (hlr : LiveRefs s) : LiveRefs s' := by
+  obtain ⟨hle, _, _⟩ := append_le s s' l vs n E hl hvs h
+  obtain ⟨E1, es, hr, hn, hm⟩ := append_spec s s' l vs n h
+  have hE : E = E1 := by
+    obtain ⟨x, hx, hT⟩ := hl
+    rw [hr] at hx; cases hx
+    simpa [FlatTy] using hT.1
+  subst hE
+  obtain ⟨old, x, y, new, ho, hx, hy, hmod, hroots⟩ := modify_spec s s' l _ hm
+  intro r v hv
+  by_cases hrr : r = l.root
+  · subst hrr
+    rw [hroots] at hv
+    simp at hv
+    subst hv
+    -- the root's object is still an array: it had elements and refinement keeps them
+    have hxres : x.elems?.isSome = true := by
+      rcases x with _|_|_|_|⟨E2, es2⟩|_|_ <;> simp [Val.appendAll, Val.elems?] at hy ⊢
+    have hel : old.elems?.isSome = true := by
+      cases hp : l.path with
+      | nil =>
+        rw [hp, get_nil] at hx; cases hx; exact hxres
+      | cons i q => rw [hp] at hx; exact get_cons_elems old x i q hx
+    obtain ⟨es0, hes0⟩ := Option.isSome_iff_exists.1 hel
+    have hRef : Refines old new := by
+      obtain ⟨old1, ho1, hg1⟩ := (read_ok_iff _ _ _).1 hr
+      rw [ho] at ho1; cases ho1
+      rw [hx] at hg1; cases hg1
+      simp only [Val.appendAll, Option.some.injEq] at hy
+      subst hy
+      exact refines_modifyAt _ l.path old new _ _ hmod hx (by simp [Val.appendAll]) (refines_push E es vs hvs)
+    obtain ⟨x', hx', _, hs⟩ := hRef [] old (get_nil _)
+    rw [get_nil] at hx'; cases hx'
+    obtain ⟨es1, hes1, _⟩ := hs es0 hes0
+    exact held_of_elems _ _ (by simp [hes1])
+  · have : s.roots[r]? = some v := by
+      rw [hroots] at hv
+      simpa [Std.HashMap.getElem?_insert, Std.HashMap.getElem?_erase, Ne.symm hrr] using hv
+    exact HeldOk.mono hle (hlr r v this)
+
+
+theorem flat_held (s : Store) (T : Ty) (v : Val) (h : FlatTy T v) : HeldOk s v := by
+  cases v <;> simp only [HeldOk]
+  all_goals first | trivial | (cases T <;> simp [FlatTy] at h)
+
+/-- A type-preserving write keeps the live-reference invariant. -/
+theorem liveRefs_write (s s' : Store) (l : Loc) (v : Val) (T : Ty) (hT : T.flat = true)
+    (hl : LocTy s l T) (hv : FlatTy T v) (h : s.write l v = .ok s') (hlr : LiveRefs s) :
+    LiveRefs s' := by
+  obtain ⟨hle, _⟩ := write_le s s' l v T hT hl hv h
+  have hm : s.modify l (fun _ => some v) = .ok s' := h
+  obtain ⟨old, x, y, new, ho, hx, hy, hmod, hroots⟩ := modify_spec s s' l _ hm
+  intro r w hw
+  by_cases hrr : r = l.root
+  · subst hrr
+    have hwn : w = new := by
+      rw [hroots] at hw
+      simp at hw
+      exact hw.symm
+    cases hp : l.path with
+    | nil =>
+      rw [hp] at hmod
+      simp [Val.modifyAt?] at hmod
+      rw [hwn, ← hmod]
+      exact flat_held _ T _ hv
+    | cons i q =>
+      rw [hp] at hx
+      have hel := get_cons_elems old x i q hx
+      obtain ⟨es0, hes0⟩ := Option.isSome_iff_exists.1 hel
+      have hyv : y = v := by simpa using hy.symm
+      have hRef : Refines old new := by
+        obtain ⟨x1, hx1, hT1⟩ := hl
+        obtain ⟨old1, ho1, hg1⟩ := (read_ok_iff _ _ _).1 hx1
+        rw [ho] at ho1; cases ho1
+        rw [hp, hx] at hg1; cases hg1
+        rw [hp] at hmod
+        exact refines_modifyAt _ _ old new _ _ hmod hx hy (by rw [hyv]; exact flat_refines T hT _ _ hT1 hv)
+      obtain ⟨x', hx', _, hs⟩ := hRef [] old (get_nil _)
+      rw [get_nil] at hx'; cases hx'
+      obtain ⟨es1, hes1, _⟩ := hs es0 hes0
+      rw [hwn]
+      exact held_of_elems _ _ (by simp [hes1])
+  · have h2 : s.roots[r]? = some w := by
+      rw [hroots] at hw
+      simpa [Std.HashMap.getElem?_insert, Std.HashMap.getElem?_erase, Ne.symm hrr] using hw
+    exact HeldOk.mono hle (hlr r w h2)
+
+
+/-- The roots of the variables of block `sc`, instance `si`, in activation `act`. -/
+def ScopeRoots (vars : Array LocalVar) (act : ActId) (sc : Nat) (si : ScopeInst) (r : RootInst) : Prop :=
+  ∃ x lv, vars[x]? = some lv ∧ lv.scope = sc ∧ r = .local act si x
+
+theorem releaseVars_roots (vars : Array LocalVar) (act : ActId) (sc : Nat) (si : ScopeInst) :
+    ∀ (i : Nat) (st : Store) (r : RootInst),
+      (releaseVars vars act sc si i st).roots[r]? =
+        if (∃ x, x < i ∧ ∃ lv, vars[x]? = some lv ∧ lv.scope = sc ∧ r = .local act si x)
+        then none else st.roots[r]? := by
+  intro i
+  induction i with
+  | zero => intro st r; simp [releaseVars]
+  | succ i ih =>
+    intro st r
+    cases hv : vars[i]? with
+    | none =>
+      simp only [releaseVars, hv]
+      rw [ih]
+      congr 1
+      apply propext
+      constructor
+      · rintro ⟨x, hx, lv, h1, h2, h3⟩
+        exact ⟨x, by omega, lv, h1, h2, h3⟩
+      · rintro ⟨x, hx, lv, h1, h2, h3⟩
+        have : x ≠ i := by rintro rfl; rw [hv] at h1; cases h1
+        exact ⟨x, by omega, lv, h1, h2, h3⟩
+    | some lv =>
+      simp only [releaseVars, hv]
+      by_cases hs : lv.scope = sc
+      · simp only [hs, beq_self_eq_true, ite_true]
+        rw [ih]
+        by_cases hr : r = .local act si i
+        · subst hr
+          have : ∃ x, x < i + 1 ∧ ∃ lv, vars[x]? = some lv ∧ lv.scope = sc ∧ RootInst.local act si i = .local act si x :=
+            ⟨i, by omega, lv, hv, hs, rfl⟩
+          have hno : ¬ ∃ x, x < i ∧ ∃ lv, vars[x]? = some lv ∧ lv.scope = sc ∧ RootInst.local act si i = .local act si x := by
+            rintro ⟨x, hx, lv', _, _, h3⟩
+            simp only [RootInst.local.injEq, true_and] at h3
+            subst h3
+            exact Nat.lt_irrefl _ hx
+          simp only [hno, this, ite_false, ite_true]
+          simp [Store.release]
+        · have hiff : (∃ x, x < i ∧ ∃ lv, vars[x]? = some lv ∧ lv.scope = sc ∧ r = .local act si x) ↔
+              (∃ x, x < i + 1 ∧ ∃ lv, vars[x]? = some lv ∧ lv.scope = sc ∧ r = .local act si x) := by
+            constructor
+            · rintro ⟨x, hx, lv', h1, h2, h3⟩
+              exact ⟨x, by omega, lv', h1, h2, h3⟩
+            · rintro ⟨x, hx, lv', h1, h2, h3⟩
+              have : x ≠ i := by rintro rfl; exact hr h3
+              exact ⟨x, by omega, lv', h1, h2, h3⟩
+          simp only [hiff]
+          by_cases hex : (∃ x, x < i + 1 ∧ ∃ lv, vars[x]? = some lv ∧ lv.scope = sc ∧ r = .local act si x)
+          · simp [hex]
+          · simp [hex, Store.release, Std.HashMap.getElem?_erase, Ne.symm hr]
+      · have hb : (lv.scope == sc) = false := by simpa using hs
+        simp only [hb]
+        simp only [Bool.false_eq_true, ite_false]
+        rw [ih]
+        congr 1
+        apply propext
+        constructor
+        · rintro ⟨x, hx, lv', h1, h2, h3⟩
+          exact ⟨x, by omega, lv', h1, h2, h3⟩
+        · rintro ⟨x, hx, lv', h1, h2, h3⟩
+          have : x ≠ i := by rintro rfl; rw [hv] at h1; cases h1; exact hs h2
+          exact ⟨x, by omega, lv', h1, h2, h3⟩
+
+
+theorem releaseScope_roots (vars : Array LocalVar) (act : ActId) (sc : Nat) (si : ScopeInst)
+    (st : Store) :
+    (∀ r, ¬ ScopeRoots vars act sc si r →
+      (releaseVars vars act sc si vars.size st).roots[r]? = st.roots[r]?) ∧
+    (∀ r, ScopeRoots vars act sc si r →
+      (releaseVars vars act sc si vars.size st).roots[r]? = none) := by
+  have key : ∀ r, (∃ x, x < vars.size ∧ ∃ lv, vars[x]? = some lv ∧ lv.scope = sc ∧ r = .local act si x)
+      ↔ ScopeRoots vars act sc si r := by
+    intro r
+    constructor
+    · rintro ⟨x, _, lv, h1, h2, h3⟩; exact ⟨x, lv, h1, h2, h3⟩
+    · rintro ⟨x, lv, h1, h2, h3⟩
+      exact ⟨x, (Array.getElem?_eq_some_iff.1 h1).1, lv, h1, h2, h3⟩
+  constructor
+  · intro r hr
+    rw [releaseVars_roots]
+    have : ¬ (∃ x, x < vars.size ∧ ∃ lv, vars[x]? = some lv ∧ lv.scope = sc ∧ r = .local act si x) :=
+      fun h => hr ((key r).1 h)
+    simp [this]
+  · intro r hr
+    rw [releaseVars_roots]
+    simp [(key r).2 hr]
+
+/-- A reference or slice that does not target a released root. -/
+def TargetsOk (P : RootInst → Prop) : Val → Prop
+  | .ref l => ¬ P l.root
+  | .slice l _ _ => ¬ P l.root
+  | _ => True
+
+theorem read_agree {s s' : Store} {P : RootInst → Prop} {l : Loc} {v : Val}
+    (hagree : ∀ r, ¬ P r → s'.roots[r]? = s.roots[r]?) (hl : ¬ P l.root)
+    (h : s.read l = .ok v) : s'.read l = .ok v := by
+  obtain ⟨old, ho, hg⟩ := (read_ok_iff _ _ _).1 h
+  exact (read_ok_iff _ _ _).2 ⟨old, by rw [hagree _ hl]; exact ho, hg⟩
+
+theorem locTy_agree {s s' : Store} {P : RootInst → Prop} {l : Loc} {T : Ty}
+    (hagree : ∀ r, ¬ P r → s'.roots[r]? = s.roots[r]?) (hl : ¬ P l.root)
+    (h : LocTy s l T) : LocTy s' l T := by
+  obtain ⟨v, hv, hT⟩ := h
+  exact ⟨v, read_agree hagree hl hv, hT⟩
+
+theorem heldOk_agree {s s' : Store} {P : RootInst → Prop} {v : Val}
+    (hagree : ∀ r, ¬ P r → s'.roots[r]? = s.roots[r]?) (ht : TargetsOk P v)
+    (h : HeldOk s v) : HeldOk s' v := by
+  cases v <;> simp only [HeldOk, TargetsOk] at h ht ⊢
+  · obtain ⟨T, hT, hl⟩ := h
+    exact ⟨T, hT, locTy_agree hagree ht hl⟩
+  · obtain ⟨E, h⟩ := h
+    refine ⟨E, ?_⟩
+    rcases h with ⟨k, hl, hk⟩ | ⟨hl, E', es, hr, hk⟩
+    · exact Or.inl ⟨k, locTy_agree hagree ht hl, hk⟩
+    · exact Or.inr ⟨locTy_agree hagree ht hl, E', es, read_agree hagree ht hr, hk⟩
+
+/-- Scope exit keeps the live-reference invariant, given that no reference that
+survives targets a root of the scope that ended. -/
+theorem liveRefs_release (s s' : Store) (P : RootInst → Prop)
+    (hagree : ∀ r, ¬ P r → s'.roots[r]? = s.roots[r]?)
+    (hgone : ∀ r, P r → s'.roots[r]? = none)
+    (hlr : LiveRefs s)
+    (hsurv : ∀ r v, ¬ P r → s.roots[r]? = some v → TargetsOk P v) : LiveRefs s' := by
+  intro r v hv
+  by_cases hr : P r
+  · rw [hgone r hr] at hv; cases hv
+  · have h0 : s.roots[r]? = some v := by rw [← hagree r hr]; exact hv
+    exact heldOk_agree hagree (hsurv r v hr h0) (hlr r v h0)
+
+/-- A block that releases roots created after `s0` leaves `s0` refined. -/
+theorem storeLe_release {s0 s st : Store} (P : RootInst → Prop) (hle : StoreLe s0 s)
+    (hagree : ∀ r, ¬ P r → st.roots[r]? = s.roots[r]?)
+    (hfresh : ∀ r, P r → s0.roots[r]? = none) : StoreLe s0 st := by
+  intro r v hv
+  have hr : ¬ P r := fun h => by rw [hfresh r h] at hv; cases hv
+  obtain ⟨v', hv', hrf⟩ := hle r v hv
+  exact ⟨v', by rw [hagree r hr]; exact hv', hrf⟩
 
 end Goose.Proofs.Memory

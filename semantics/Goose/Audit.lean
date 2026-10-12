@@ -144,4 +144,11 @@ end Goose.Audit
 #audit Goose.Proofs.Memory.append_le
 #audit Goose.Proofs.Memory.write_le
 
+#audit Goose.Proofs.Memory.liveRefs_write
+#audit Goose.Proofs.Memory.liveRefs_append
+#audit Goose.Proofs.Memory.liveRefs_introduce
+#audit Goose.Proofs.Memory.liveRefs_release
+#audit Goose.Proofs.Memory.releaseScope_roots
+#audit Goose.Proofs.Memory.storeLe_release
+
 #audit_registry
