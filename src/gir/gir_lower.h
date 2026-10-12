@@ -691,6 +691,7 @@ private:
                 GirInst i;
                 i.op = GirOp::Abort;
                 i.abort = GirAbortKind::UserAbort;
+                i.text = s.message;   // Not in the wire format; the C emitter prints it.
                 i.org = org;
                 EmitTerm(std::move(i));
                 return;

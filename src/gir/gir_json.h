@@ -50,6 +50,50 @@ public:
         return out;
     }
 
+    // The low stage (schema gir-l/0.2): the same style, written but not read.
+    string WriteLow() {
+        string objs = "[";
+        for (size_t i = 0; i < m.lowglobals.size(); i++) {
+            if (i) objs += ',';
+            auto &g = m.lowglobals[i];
+            objs += "[\"lglobal\",";
+            Str(objs, g.name);
+            if (g.kind == GirMember::Scalar) Append(objs, ",\"scalar\",", T(g.ty), "]");
+            else if (g.kind == GirMember::Bytes) Append(objs, ",\"bytes\",", g.size, "]");
+            else objs += ",\"header\"]";
+        }
+        objs += "],[";
+        for (size_t i = 0; i < m.funcs.size(); i++) {
+            if (i) objs += ',';
+            LowFunc(objs, m.funcs[i]);
+        }
+        objs += ']';
+        string out = "[\"module\",\"gir-l/0.2\",\"core-pilot\",[";
+        for (size_t i = 0; i < m.files.size(); i++) {
+            if (i) out += ',';
+            out += "[\"file\",";
+            Str(out, m.files[i]);
+            out += ']';
+        }
+        out += "],[";
+        for (size_t i = 0; i < typeorder.size(); i++) {
+            if (i) out += ',';
+            TypeRecord(out, m.types[typeorder[i]]);
+        }
+        out += "],";
+        out += objs;
+        Append(out, ",", m.entry, ",");
+        Ints(out, m.initfuncs);
+        Append(out, ",", m.mainstacks, ",", m.globalstacks, ",[");
+        for (size_t i = 0; i < m.origins.size(); i++) {
+            if (i) out += ',';
+            Append(out, "[\"origin\",", m.origins[i].file, ",", m.origins[i].line, ",\"",
+                   CoreOriginKindName(m.origins[i].kind), "\"]");
+        }
+        out += "]]\n";
+        return out;
+    }
+
 private:
     const GirModule &m;
     unordered_map<GirTypeId, int> typenum;
@@ -96,6 +140,7 @@ private:
             case CoreType::View:
                 Append(out, "[\"view\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
                 break;
+            case CoreType::Ptr: out += "[\"ptr\"]"; break;
         }
     }
 
@@ -176,6 +221,132 @@ private:
         out += ',';
         OptOrg(out, f.org);
         out += ']';
+    }
+
+    void LowFunc(string &out, const GirFunc &f) {
+        out += "[\"lfunc\",";
+        Str(out, f.name);
+        out += ",[";
+        for (size_t i = 0; i < f.params.size(); i++) {
+            if (i) out += ',';
+            Append(out, T(f.params[i]));
+        }
+        out += "],[";
+        for (size_t i = 0; i < f.results.size(); i++) {
+            if (i) out += ',';
+            Append(out, T(f.results[i]));
+        }
+        Append(out, "],", f.stacks, ",[");
+        for (size_t i = 0; i < f.members.size(); i++) {
+            if (i) out += ',';
+            auto &mem = f.members[i];
+            if (mem.kind == GirMember::Scalar) Append(out, "[\"m_scalar\",", T(mem.ty), ",");
+            else if (mem.kind == GirMember::Bytes) Append(out, "[\"m_bytes\",", mem.size, ",");
+            else Append(out, "[\"m_header\",", mem.stack, ",");
+            Append(out, mem.scope, ",");
+            Str(out, mem.name);
+            out += ']';
+        }
+        out += "],[";
+        for (size_t i = 0; i < f.scopes.size(); i++) {
+            if (i) out += ',';
+            Append(out, f.scopes[i]);
+        }
+        out += "],[";
+        for (size_t i = 0; i < f.blocks.size(); i++) {
+            if (i) out += ',';
+            auto &b = f.blocks[i];
+            out += "[\"block\",[";
+            for (size_t k = 0; k < b.params.size(); k++) {
+                if (k) out += ',';
+                Append(out, "[\"bp\",", b.params[k].first, ",", T(b.params[k].second), "]");
+            }
+            out += "],[";
+            for (size_t k = 0; k < b.insts.size(); k++) {
+                if (k) out += ',';
+                LowInst(out, b.insts[k]);
+            }
+            out += "]]";
+        }
+        out += "]]";
+    }
+
+    void LowInst(string &out, const GirInst &i) {
+        auto def = [&](const char *tag) { Append(out, "[\"", tag, "\",", i.res); };
+        switch (i.op) {
+            case GirOp::Int: def("i_int"); Append(out, ",", T(i.ty), ",\"", i.text, "\"]"); return;
+            case GirOp::Bool: def("i_bool"); Append(out, ",", (int)i.flag, "]"); return;
+            case GirOp::Bin:
+                def("i_bin");
+                Append(out, ",\"", CoreBinOpName(i.bin), "\",", T(i.ty), ",", i.a, ",", i.b, ",", (int)i.flag, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::Un:
+                def("i_un");
+                Append(out, ",\"", CoreUnOpName(i.un), "\",", T(i.ty), ",", i.a, ",", (int)i.flag, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::Cmp:
+                def("i_cmp");
+                Append(out, ",\"", CoreCmpOpName(i.cmp), "\",", T(i.ty), ",", i.a, ",", i.b, "]");
+                return;
+            case GirOp::Not: def("i_not"); Append(out, ",", i.a, "]"); return;
+            case GirOp::Conv: {
+                def("i_conv");
+                auto src = T(i.ty);
+                auto dst = T(i.ty2);
+                Append(out, ",\"", CoreConvKindName(i.conv), "\",", src, ",", dst, ",", i.a, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            }
+            case GirOp::Call:
+                def("i_call");
+                Append(out, ",", i.idx, ",");
+                Ints(out, i.vals);
+                out += ',';
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::PtrOffset: def("l_offset"); Append(out, ",", i.a, ",", i.b, ",", i.idx, "]"); return;
+            case GirOp::PLoad: def("l_load"); Append(out, ",", T(i.ty), ",", i.a, "]"); return;
+            case GirOp::FrameAddr: def("l_frame"); Append(out, ",", i.idx, "]"); return;
+            case GirOp::LocalGet: def("l_get"); Append(out, ",", i.idx, "]"); return;
+            case GirOp::StackAt: def("l_stack"); Append(out, ",", i.a, ",", i.idx, "]"); return;
+            case GirOp::StackMark: def("l_mark"); Append(out, ",", i.a, "]"); return;
+            case GirOp::GlobalAddr: def("l_gaddr"); Append(out, ",", i.idx, "]"); return;
+            case GirOp::GlobalStack: def("l_gstack"); Append(out, ",", i.idx, "]"); return;
+            case GirOp::HdrBase: def("l_hbase"); Append(out, ",", i.a, "]"); return;
+            case GirOp::HdrLen: def("l_hlen"); Append(out, ",", i.a, "]"); return;
+            case GirOp::PStore: Append(out, "[\"l_store\",", T(i.ty), ",", i.a, ",", i.b, "]"); return;
+            case GirOp::LocalSet: Append(out, "[\"l_set\",", i.idx, ",", i.a, "]"); return;
+            case GirOp::StackRelease: Append(out, "[\"l_release\",", i.a, ",", i.b, "]"); return;
+            case GirOp::StackBump: Append(out, "[\"l_bump\",", i.a, ",", i.b, ",", i.idx, "]"); return;
+            case GirOp::HdrInit: Append(out, "[\"l_hinit\",", i.a, ",", i.b, "]"); return;
+            case GirOp::HdrSetLen: Append(out, "[\"l_hsetlen\",", i.a, ",", i.b, "]"); return;
+            case GirOp::BytesCopy: Append(out, "[\"l_copy\",", i.a, ",", i.b, ",", i.vals[0], "]"); return;
+            case GirOp::BytesMove: Append(out, "[\"l_move\",", i.a, ",", i.b, ",", i.vals[0], "]"); return;
+            case GirOp::BytesFill:
+                Append(out, "[\"l_fill\",", i.a, ",", i.b, ",", i.idx, ",", i.vals[0], "]");
+                return;
+            case GirOp::RtCall:
+                Append(out, "[\"l_rt\",\"", GirRtName(i.idx), "\",", i.a, ",");
+                Str(out, i.text);
+                out += ']';
+                return;
+            case GirOp::Abort:
+                Append(out, "[\"t_abort\",\"", GirAbortKindName(i.abort), "\",");
+                Ints(out, i.vals);
+                out += ',';
+                OptOrg(out, i.org);
+                out += ',';
+                Str(out, i.text);
+                out += ']';
+                return;
+            default: Inst(out, i); return;   // Terminators and nothing else are shared as written.
+        }
     }
 
     void Block(string &out, const GirBlock &b) {

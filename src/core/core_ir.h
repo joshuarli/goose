@@ -39,9 +39,9 @@ using CoreTypeId = int;
 // A pilot type. `elem` is the element or pointee type; `count` is an array's
 // fixed length. A View is not a Core type: it is the type of a sampled run in
 // the lowered form (`mut` and `elem` as for a slice), kept here so that both
-// share one table.
+// share one table. A Ptr is an address, a type of the low stage only.
 struct CoreType {
-    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, Ref, Slice, View } kind = Unit;
+    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, Ref, Slice, View, Ptr } kind = Unit;
     CoreIntTy ity = CoreIntTy::I64;   // Int
     CoreMut mut = CoreMut::Mut;       // Ref, Slice
     CoreTypeId elem = -1;             // Arr, Grow, Ref, Slice
@@ -278,6 +278,9 @@ struct CoreGlobal {
 
 struct CoreModule {
     vector<string> files;
+    // The path of each file as the compiler writes it in a runtime diagnostic,
+    // aligned with `files`. Not part of the wire format.
+    vector<string> diagfiles;
     vector<CoreType> types;
     vector<CoreGlobal> globals;
     vector<CoreImpl> impls;

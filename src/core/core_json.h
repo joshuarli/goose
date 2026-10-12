@@ -103,6 +103,12 @@ public:
         for (auto f : fileorder) out.push_back(m.files[f]);
         return out;
     }
+    // The diagnostic paths in output order.
+    vector<string> DiagFileTable() const {
+        vector<string> out;
+        for (auto f : fileorder) out.push_back(f < (int)m.diagfiles.size() ? m.diagfiles[f] : m.files[f]);
+        return out;
+    }
     // Each origin with its file as numbered in the output.
     vector<CoreOrigin> OriginTable() const {
         auto out = origins;
@@ -176,6 +182,7 @@ private:
             case CoreType::View:
                 Append(out, "[\"view\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
                 break;
+            case CoreType::Ptr: out += "[\"ptr\"]"; break;
         }
     }
 
