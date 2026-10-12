@@ -19,6 +19,10 @@ result of `run` is directly comparable with a result of `Core.eval`.
 * `scope.enter` and the call of a function draw their instance ids from the same
   counters as Core's block entry and call, in the same dynamic order, so a
   reference to a slot has the same `Loc` as the reference to the variable.
+* An integer instruction takes its type from its operands, as Core's evaluator
+  does; the type it states is the verifier's concern and `run` does not read it.
+  A comparison of two integers of one type or of two booleans is the same
+  operation whichever of the two instructions states it.
 * A global initializer is a function activated at depth 0 and the entry at
   depth 1, as Core evaluates them.
 * Faults are raised by the same helpers as in Core (`expect*`, the store
