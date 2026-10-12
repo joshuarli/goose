@@ -204,4 +204,31 @@ theorem sat_readRun_bind {vw : ViewVal} {el : Ty} {f : Array Val → M α} {Q : 
     simp [M.bind', this]
   unfold Sat; rw [e1]; exact k _ hext
 
+/-- Opening a block changes no root a static root denotes. -/
+theorem gam_push (hF : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv.scopes) (k : ScopeInst)
+    {rho : List RootRef} {r : RootInst} (h : Gam env W.P rho r) :
+    Gam { env with scopes := (sc, k) :: env.scopes } W.P rho r := by
+  have hsc' : sc ∉ env.scopes.map Prod.fst := hF.scopes_t ▸ hsc
+  obtain ⟨q, hq, hr⟩ := h
+  refine ⟨q, hq, ?_⟩
+  cases q with
+  | «local» y =>
+    obtain ⟨lv, si, h1, h2, h3⟩ := hr
+    refine ⟨lv, si, h1, ?_, h3⟩
+    show ((sc, k) :: env.scopes).lookup lv.scope = some si
+    rw [lookup_cons]
+    have : lv.scope ≠ sc := fun e => hsc' (e ▸ lookup_key h2)
+    simp [this, h2]
+  | global g => exact hr
+  | param j => exact hr
+
+theorem sat_lengthLoc {l : Loc} {E : Ty} {Q : Nat → St → Prop}
+    (h : LocTy s.store l (.grow E))
+    (k : ∀ es, s.store.read l = .ok (.resizable E es) → Q es.size s) : Sat (lengthLoc l) s Q := by
+  obtain ⟨v, hv, hT⟩ := h
+  rcases v with _|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hT
+  obtain ⟨rfl, _⟩ := hT
+  simp only [Sat, lengthLoc, Store.length, hv]
+  exact k es hv
+
 end Goose.Core.Sound
