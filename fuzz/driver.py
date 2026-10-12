@@ -1,6 +1,7 @@
 """Bounded differential compiler correctness campaigns for generated programs."""
 
 import argparse
+import dataclasses
 from collections import Counter
 import hashlib
 import importlib.util
@@ -133,9 +134,15 @@ def check_pipeline(name, expected, exe, cc, c_opts, work, timeout, output_limit,
     result = run([str(exe), '--pipeline', name, '--standalone', '-o', str(cfile),
                   str(work / 'source.goose')], work, budget(timeout, deadline), output_limit)
     results = [{'stage': f'{name}_goose', 'goose_opt': None, 'c_opt': None, **result.to_dict()}]
+    # A feature outside the pipeline's profile is named, not a finding.
+    marker = f'unsupported in pipeline {name}: '
+    diagnostic = result.stderr.decode('utf-8', errors='replace')
+    if result.returncode == 1 and marker in diagnostic:
+        feature = diagnostic.split(marker, 1)[1].split()[0]
+        return results, None, feature
     failure = classify('goose', result, expected)
     if failure:
-        return results, {'class': failure, 'stage': f'{name}_goose', 'goose_opt': None, 'c_opt': None}
+        return results, {'class': failure, 'stage': f'{name}_goose', 'goose_opt': None, 'c_opt': None}, None
     for c_opt in c_opts:
         binary = work / f'{name}-c{c_opt}'
         for stage, command in (
@@ -148,8 +155,19 @@ def check_pipeline(name, expected, exe, cc, c_opts, work, timeout, output_limit,
             failure = classify(stage, result, expected)
             if failure:
                 return results, {'class': failure, 'stage': f'{name}_{stage}',
-                                 'goose_opt': None, 'c_opt': c_opt}
-    return results, None
+                                 'goose_opt': None, 'c_opt': c_opt}, None
+    # And in process, through the JIT.
+    result = run([str(exe), '--pipeline', name, '--jit', str(work / 'source.goose')], work,
+                 budget(timeout, deadline), output_limit)
+    result = dataclasses.replace(
+        result, stderr=b'\n'.join(line for line in result.stderr.split(b'\n')
+                                  if not line.startswith((b'parsed ok', b'typechecked ok', b'bce:'))
+                                  and b': warning: ' not in line))
+    results.append({'stage': f'{name}_jit', 'goose_opt': None, 'c_opt': None, **result.to_dict()})
+    failure = classify('program', result, expected)
+    if failure:
+        return results, {'class': failure, 'stage': f'{name}_jit', 'goose_opt': None, 'c_opt': None}, None
+    return results, None, None
 
 
 def check_semantics(expected, exe, tool, work, timeout, output_limit, deadline):
@@ -271,10 +289,12 @@ def check(program, exe, cc, matrix, work, timeout=10, output_limit=65536, saniti
     if isinstance(expected, RejectExpectation):
         return report
     if pipeline:
-        results, failure = check_pipeline(pipeline, expected, exe, cc,
-                                          sorted({c_opt for _, c_opt in matrix}), work,
-                                          timeout, output_limit, deadline)
+        results, failure, unsupported = check_pipeline(pipeline, expected, exe, cc,
+                                                       sorted({c_opt for _, c_opt in matrix}), work,
+                                                       timeout, output_limit, deadline)
         report['results'].extend(results)
+        report['pipeline_status'] = {'status': 'unsupported' if unsupported else 'agree',
+                                     'feature': unsupported}
         if failure:
             report['failure'] = failure
             return report
@@ -462,6 +482,8 @@ def main(argv=None):
         stages = Counter()
         semantic_cases = Counter()
         unsupported_features = Counter()
+        pipeline_cases = Counter()
+        pipeline_features = Counter()
         completed = attempted = 0
         failure = None
         for index in range(count):
@@ -480,6 +502,10 @@ def main(argv=None):
                 semantic_cases[verdict['status']] += 1
                 if verdict['feature']:
                     unsupported_features[verdict['feature']] += 1
+            if 'pipeline_status' in report:
+                pipeline_cases[report['pipeline_status']['status']] += 1
+                if report['pipeline_status']['feature']:
+                    pipeline_features[report['pipeline_status']['feature']] += 1
             if report['failure']:
                 failure = save_artifact(campaign / f'failure-{case_seed}', program, report, build)
                 preserve(work, failure)
@@ -499,6 +525,9 @@ def main(argv=None):
                                     'unsupported_features': dict(unsupported_features)}
         if args.pipeline:
             summary['pipeline'] = args.pipeline
+            summary['pipeline_cases'] = {'agree': pipeline_cases['agree'],
+                                         'unsupported': pipeline_cases['unsupported'],
+                                         'unsupported_features': dict(pipeline_features)}
         write_json(campaign / 'summary.json', summary)
         print(json.dumps(summary))
         return int(failure is not None or completed == 0)

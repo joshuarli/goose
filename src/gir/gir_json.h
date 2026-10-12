@@ -517,6 +517,7 @@ private:
                 OptOrg(out, i.org);
                 out += ']';
                 return;
+            default: return;
         }
     }
 };

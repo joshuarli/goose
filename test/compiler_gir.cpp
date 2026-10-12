@@ -1,4 +1,4 @@
-// The GIR-H verifier on small modules built in memory: a module the lowering
+// The GIR-H and GIR-L verifier on small modules built in memory: a module the lowering
 // could produce is accepted, and each way of breaking it is rejected under the
 // code that names the broken property. Keep assertions active even in an
 // optimized test build.
@@ -14,6 +14,7 @@
 #include "../src/core/core_json.h"
 #include "../src/gir/gir_ir.h"
 #include "../src/gir/gir_types.h"
+#include "../src/gir/gir_low.h"
 #include "../src/gir/gir_json.h"
 #include "../src/gir/gir_verify.h"
 
@@ -226,6 +227,106 @@ void RejectsAbortingOperationWithoutOrigin() {
     assert(Code(m) == "");
 }
 
+// A low module: one function, the entry, whose parameter is the stack base.
+GirModule LowBase() {
+    GirModule m;
+    m.low = true;
+    m.files = { "t.goose" };
+    m.diagfiles = { "t.goose" };
+    m.origins = { CoreOrigin { 0, 1, CoreOriginKind::Let } };
+    auto i64 = m.IntType(CoreIntTy::I64);
+    GirFunc f;
+    f.name = "main";
+    f.params = { i64 };
+    f.scopes = { -1 };
+    GirBlock b;
+    b.params = { { 0, i64 } };
+    b.insts = { Ret() };
+    f.blocks = { b };
+    f.summary.unknown = true;
+    m.funcs = { f };
+    return m;
+}
+
+void LowAccepts() {
+    auto m = LowBase();
+    assert(Code(m) == "");
+    // A header on the function's own stack, marked and released.
+    Main(m).stacks = 1;
+    GirMember hdr;
+    hdr.kind = GirMember::Header;
+    hdr.stack = 0;
+    hdr.scope = 0;
+    Main(m).members = { hdr };
+    GirInst at = Def(GirOp::StackAt, 1);
+    at.a = 0;
+    at.idx = 0;
+    GirInst mark = Def(GirOp::StackMark, 2);
+    mark.a = 1;
+    GirInst release;
+    release.op = GirOp::StackRelease;
+    release.a = 1;
+    release.b = 2;
+    Main(m).blocks[0].insts = { at, mark, release, Ret() };
+    assert(Code(m) == "");
+}
+
+void RejectsHighOperationInLowModule() {
+    auto m = LowBase();
+    GirInst snap = Def(GirOp::Snap, 1);
+    snap.a = 0;
+    Main(m).blocks[0].insts = { snap, Ret() };
+    assert(Code(m) == "GIR-V090");
+    // And a low operation in a high module.
+    auto h = Base();
+    GirInst frame = Def(GirOp::FrameAddr, 0);
+    Main(h).blocks[0].insts = { frame, Ret() };
+    assert(Code(h) == "GIR-V090");
+}
+
+void RejectsTwoResizablesOnOneStack() {
+    auto m = LowBase();
+    Main(m).stacks = 1;
+    GirMember a, b;
+    a.kind = b.kind = GirMember::Header;
+    a.stack = b.stack = 0;
+    a.scope = 0;
+    b.scope = 0;
+    Main(m).members = { a, b };
+    assert(Code(m) == "GIR-V090");
+    // Disjoint scopes may share it.
+    Main(m).scopes = { -1, -1 };
+    Main(m).members[1].scope = 1;
+    assert(Code(m) == "");
+}
+
+void RejectsWatermarkPastCallerOwnedRegion() {
+    auto m = LowBase();
+    Main(m).stacks = 1;
+    GirInst at = Def(GirOp::StackAt, 1);
+    at.a = 0;
+    at.idx = 3;   // Beyond the one stack the function owns: the caller's.
+    GirInst mark = Def(GirOp::StackMark, 2);
+    mark.a = 1;
+    GirInst release;
+    release.op = GirOp::StackRelease;
+    release.a = 1;
+    release.b = 2;
+    Main(m).blocks[0].insts = { at, mark, release, Ret() };
+    assert(Code(m) == "GIR-V090");
+}
+
+void RejectsUnresolvedLayout() {
+    auto m = LowBase();
+    GirFunc f = Main(m);
+    f.name = "takes_slice";
+    auto slice = m.SliceType(CoreMut::Mut, m.IntType(CoreIntTy::I64));
+    f.params.push_back(slice);
+    f.blocks[0].params.push_back({ 1, slice });
+    m.funcs.push_back(f);
+    assert(Code(m) == "GIR-V090");
+}
+
 }  // namespace
 
 int main() {
@@ -239,6 +340,11 @@ int main() {
     RejectsReturnInsideAnEnteredScope();
     RejectsSummaryThatOmitsAWrite();
     RejectsAbortingOperationWithoutOrigin();
+    LowAccepts();
+    RejectsHighOperationInLowModule();
+    RejectsTwoResizablesOnOneStack();
+    RejectsWatermarkPastCallerOwnedRegion();
+    RejectsUnresolvedLayout();
     puts("compiler_gir ok");
     return 0;
 }

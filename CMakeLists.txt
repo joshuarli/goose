@@ -93,6 +93,8 @@ add_executable(goose
     src/gir/gir_ir.h
     src/gir/gir_types.h
     src/gir/gir_lower.h
+    src/gir/gir_low.h
+    src/gir/c/gir_c.h
     src/gir/gir_json.h
     src/gir/gir_verify.h
 )

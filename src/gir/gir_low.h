@@ -527,10 +527,6 @@ private:
     void Define(const GirInst &i, vector<int> words) { shape[i.res].w = std::move(words); }
 
     void Lower(const GirInst &i) {
-        if (cur < 0 && !GirIsTerminator(i.op)) {
-            // Unreachable low code cannot happen in a lowered high module, but
-            // a dead tail after a split is skipped all the same.
-        }
         switch (i.op) {
             case GirOp::Int: {
                 auto t = l.IntType(HT(i.ty).ity);

@@ -288,22 +288,41 @@ def judge_tool(fixture: Fixture, mode: str, answer: tuple, outcome: Outcome, std
 
 
 def build_and_run_pipeline(goose: Path, cc: str, pipeline: str, fixture: Fixture, mode: str,
-                           work: Path, timeout: float) -> tuple[int, str, str]:
-    """Build the fixture through the named compiler pipeline and run it natively."""
+                           work: Path, timeout: float) -> list[tuple[str, int, str, str]]:
+    """Build the fixture through the named compiler pipeline and run it: natively
+    at -O0 and -O2 of the C compiler, and in process through --jit. Returns each
+    run's label, exit status, standard output and standard error."""
     defines = ["-DGS_DEBUG=1"] if mode == DEBUG else []
     cfile = work / f"{pipeline}-{mode}.c"
-    program = work / f"{pipeline}-{mode}"
     built = run([goose, "--pipeline", pipeline, *defines, "--standalone", "-o", cfile, fixture.source],
                 timeout)
     if built.returncode != 0:
         raise HarnessFailure(f"{pipeline} pipeline build failed (exit {built.returncode}): "
                              f"{text(built.stderr).strip()[:300]}")
-    compiled = run([cc, "-O0", *defines, cfile, "-o", program, "-lm", "-pthread"], timeout)
-    if compiled.returncode != 0:
-        raise HarnessFailure(f"C compiler rejected the {pipeline} output: "
-                             f"{text(compiled.stderr).strip()[:300]}")
-    ran = run([program], timeout, cwd=work)
-    return ran.returncode, text(ran.stdout), text(ran.stderr)
+    runs = []
+    for opt in ("-O0", "-O2"):
+        program = work / f"{pipeline}-{mode}{opt}"
+        compiled = run([cc, opt, *defines, cfile, "-o", program, "-lm", "-pthread"], timeout)
+        if compiled.returncode != 0:
+            raise HarnessFailure(f"C compiler rejected the {pipeline} output at {opt}: "
+                                 f"{text(compiled.stderr).strip()[:300]}")
+        ran = run([program], timeout, cwd=work)
+        runs.append((opt, ran.returncode, text(ran.stdout), text(ran.stderr)))
+    ran = run([goose, "--pipeline", pipeline, *defines, "--jit", fixture.source], timeout, cwd=work)
+    runs.append(("jit", ran.returncode, text(ran.stdout), text(ran.stderr)))
+    return runs
+
+
+# What the runtime's diagnostic says for each kind of abort, as far as it says it.
+ABORT_TEXT = {
+    "div_zero": "division by zero",
+    "div_overflow": "integer overflow in division",
+    "index_oob": "out of bounds",
+    "slice_oob": "slice bounds out of range",
+    "assert": "assert failed",
+    "int_overflow": "overflow",
+    "cast_range": "",
+}
 
 
 def judge_pipeline(pipeline: str, fixture: Fixture, mode: str, outcome: Outcome, stdout: str,
@@ -322,6 +341,18 @@ def judge_pipeline(pipeline: str, fixture: Fixture, mode: str, outcome: Outcome,
         missing = [marker for marker in markers if marker not in err]
         if missing:
             problems.append(f"stderr lacks {missing}")
+    if outcome[0] == "aborted":
+        # The diagnostic names the kind of abort and the line of the operation.
+        match = re.search(r"goose runtime error: (.*) \((.*):(\d+)\)\s*$", err.strip().splitlines()[-1]
+                          if err.strip() else "")
+        if match is None:
+            problems.append(f"no abort diagnostic in stderr {err.strip()[-120:]!r}")
+        else:
+            if int(match[3]) != outcome[2]:
+                problems.append(f"abort at line {match[3]}, expected {outcome[2]}")
+            text_of = ABORT_TEXT.get(outcome[1])
+            if text_of and text_of not in match[1]:
+                problems.append(f"abort text {match[1]!r}, expected one with {text_of!r}")
     if problems:
         return Verdict(MISMATCH, f"[{mode}] {pipeline}: " + "; ".join(problems))
     return Verdict(AGREE)
@@ -363,8 +394,10 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
         guarded(check_tool)
         if pipeline is not None:
             def check_pipeline():
-                code, out, err = build_and_run_pipeline(goose, cc, pipeline, fixture, mode, work, timeout)
-                verdicts.append(judge_pipeline(pipeline, fixture, mode, outcome, stdout, code, out, err))
+                for label, code, out, err in build_and_run_pipeline(goose, cc, pipeline, fixture, mode,
+                                                                    work, timeout):
+                    verdicts.append(judge_pipeline(f"{pipeline} {label}", fixture, mode, outcome, stdout,
+                                                   code, out, err))
             guarded(check_pipeline)
     worst = max(verdicts, key=lambda verdict: SEVERITY[verdict.cls])
     if worst.cls == AGREE:
@@ -532,7 +565,7 @@ def self_test() -> int:
             "agree_returned": {RELEASE: {"stdout": "hi\n"}},
             "agree_division": {RELEASE: {"stdout": "x\n", "exit": 1,
                                          "stderr": "goose runtime error: division by zero (agree_division.goose:4)\n"}},
-            "agree_debug_only": {DEBUG: {"exit": 1, "stderr": "integer overflow (debug): 127 + 1 at i8 "
+            "agree_debug_only": {DEBUG: {"exit": 1, "stderr": "goose runtime error: integer overflow (debug): 127 + 1 at i8 "
                                                               "(agree_debug_only.goose:5)\n"}},
             "mismatch_stdout": {RELEASE: {"stdout": "1\n"}},
             "mismatch_line": {RELEASE: {"exit": 1, "stderr": "division by zero (mismatch_line.goose:6)\n"}},
