@@ -112,8 +112,12 @@ class KeyMaker {
     unordered_map<const SFunction *, Digest> decls;
     unordered_map<const SFunction *, int> ordinals;       // Among same-named nested siblings, or duplicates.
     bool ordinalsbuilt = false;
-    unordered_map<const FnSpec *, Digest> bases;
-    unordered_set<const FnSpec *> basing;
+    struct Base {
+        Digest key;
+        Digest dims[kSpecDims];
+    };
+    unordered_map<const FnSpec *, Base> bases;
+    unordered_set<const FnSpec *> basing, keying;
     unordered_map<const FnSpec *, ContextKey> contexts;
     unordered_map<const FnSpec *, int> funvalordinal;
     unordered_map<const VarDef *, int> varordinal;
@@ -303,6 +307,15 @@ class KeyMaker {
 
     // The dimensions that do not name another context beyond the lexical
     // chain. They suffice to name a context where another one refers to it.
+    // Most contexts of a program repeat the same few dimension values, so a
+    // digest is looked up by its canonical bytes before it is computed.
+    unordered_map<string, Digest> memo;
+    Digest Memo(const Canon &c) {
+        auto [it, fresh] = memo.emplace(c.Text(), Digest());
+        if (fresh) it->second = c.Hash();
+        return it->second;
+    }
+
     void BaseDims(const FnSpec *s, Digest *dims) {
         auto &d = dims;
         {
@@ -310,23 +323,23 @@ class KeyMaker {
             c.B(s->isfunval);
             if (s->lexparent) c.Dig(BaseKey(s->lexparent));
             else c.Tag('_');
-            d[(int)SpecDim::LexicalParent] = c.Hash();
+            d[(int)SpecDim::LexicalParent] = Memo(c);
         }
-        d[(int)SpecDim::Escaped] = Canon().B(s->escaped).Hash();
-        { Canon c; TypeList(c, s->argtypes); d[(int)SpecDim::ArgTypes] = c.Hash(); }
+        d[(int)SpecDim::Escaped] = Memo(Canon().B(s->escaped));
+        { Canon c; TypeList(c, s->argtypes); d[(int)SpecDim::ArgTypes] = Memo(c); }
         {
             vector<pair<string_view, const TypeExpr *>> b(s->bindings.begin(), s->bindings.end());
             sort(b.begin(), b.end(), [](auto &x, auto &y) { return x.first < y.first; });
             Canon c;
             c.U(b.size());
             for (auto &[name, t] : b) c.Str(name).Dig(Type(t).digest);
-            d[(int)SpecDim::TypeBindings] = c.Hash();
+            d[(int)SpecDim::TypeBindings] = Memo(c);
         }
         {
             Canon c;
             c.U(s->litparams.size());
             for (auto p : s->litparams) c.I(p);
-            d[(int)SpecDim::LiteralParams] = c.Hash();
+            d[(int)SpecDim::LiteralParams] = Memo(c);
         }
         Canon cls, prov, pool, held, gs, one, depth, views;
         for (auto &r : s->roots) {
@@ -344,14 +357,14 @@ class KeyMaker {
             TypeList(one, r.onearray);
             depth.I(r.depthkey);
         }
-        d[(int)SpecDim::RootClass] = cls.Hash();
-        d[(int)SpecDim::RootProvenance] = prov.Hash();
-        d[(int)SpecDim::RootPool] = pool.Hash();
-        d[(int)SpecDim::RootHeldExact] = held.Hash();
-        d[(int)SpecDim::RootGrowShrinkElems] = gs.Hash();
-        d[(int)SpecDim::RootOneArray] = one.Hash();
-        d[(int)SpecDim::RootDepthKey] = depth.Hash();
-        d[(int)SpecDim::SlotViews] = views.Hash();
+        d[(int)SpecDim::RootClass] = Memo(cls);
+        d[(int)SpecDim::RootProvenance] = Memo(prov);
+        d[(int)SpecDim::RootPool] = Memo(pool);
+        d[(int)SpecDim::RootHeldExact] = Memo(held);
+        d[(int)SpecDim::RootGrowShrinkElems] = Memo(gs);
+        d[(int)SpecDim::RootOneArray] = Memo(one);
+        d[(int)SpecDim::RootDepthKey] = Memo(depth);
+        d[(int)SpecDim::SlotViews] = Memo(views);
     }
 
 public:
@@ -448,18 +461,23 @@ public:
     // The part of a context's key that does not depend on other contexts
     // but its lexical parents: what another context's key says in order to
     // name this one.
-    Digest BaseKey(const FnSpec *s) {
+    Digest BaseKey(const FnSpec *s) { return BaseOf(s) ? bases[s].key : Canon().Tag('^').Hash(); }
+
+private:
+    // The base of a context, computed once: its dimensions that do not name
+    // another context beyond the lexical chain, and the key they make. Null
+    // where the context is already being keyed, which a reference leading
+    // back to it stands for.
+    const Base *BaseOf(const FnSpec *s) {
         auto it = bases.find(s);
-        if (it != bases.end()) return it->second;
-        // A reference that leads back to a context being keyed stands for it.
-        if (!basing.insert(s).second) return Canon().Tag('^').Hash();
-        Digest dims[kSpecDims] = {};
-        BaseDims(s, dims);
+        if (it != bases.end()) return &it->second;
+        if (!basing.insert(s).second) return nullptr;
+        Base b;
+        BaseDims(s, b.dims);
         Canon c;
         c.Tag('X');
         if (s->sf) c.Dig(Decl(s->sf).digest);
         if (s->isfunval) {
-            BuildFunVals();
             int ord = 0;
             for (auto e : ast.fvenvs) {
                 if (e == s) break;
@@ -470,22 +488,36 @@ public:
         for (int i = 0; i < kSpecDims; i++)
             if (i != (int)SpecDim::NarrowedEnv && i != (int)SpecDim::EnvReads &&
                 i != (int)SpecDim::FunctionValues && i != (int)SpecDim::NonlocalTargets)
-                c.Dig(dims[i]);
+                c.Dig(b.dims[i]);
+        b.key = c.Hash();
         basing.erase(s);
-        return bases[s] = c.Hash();
+        return &(bases[s] = b);
+    }
+
+public:
+    // How another context is named from inside a key: by its whole key, or,
+    // for a function value's environment or a context whose key is being
+    // made, by its base.
+    Digest RefKey(const FnSpec *s) {
+        if (s->isfunval || !keying.insert(s).second) return BaseKey(s);
+        auto total = Context(s).total;
+        keying.erase(s);
+        return total;
     }
 
     const ContextKey &Context(const FnSpec *s) {
         auto it = contexts.find(s);
         if (it != contexts.end()) return it->second;
+        keying.insert(s);
         ContextKey k;
         k.decl = s->sf ? Decl(s->sf).digest : Digest();
-        BaseDims(s, k.dims);
+        if (auto b = BaseOf(s)) memcpy(k.dims, b->dims, sizeof k.dims);
+        else BaseDims(s, k.dims);
         {
             Canon c;
             c.U(s->narrowedenv.size());
             for (auto v : s->narrowedenv) c.Str(VarName(v));
-            k.dims[(int)SpecDim::NarrowedEnv] = c.Hash();
+            k.dims[(int)SpecDim::NarrowedEnv] = Memo(c);
         }
         {
             vector<string> reads;
@@ -501,7 +533,7 @@ public:
             Canon c;
             c.U(reads.size());
             for (auto &r : reads) c.Str(r);
-            k.dims[(int)SpecDim::EnvReads] = c.Hash();
+            k.dims[(int)SpecDim::EnvReads] = Memo(c);
         }
         {
             Canon c;
@@ -510,27 +542,28 @@ public:
                 c.Str(name);
                 if (bind.fv) c.Tag('v').Str(FunValName(bind.fv));
                 if (bind.named) c.Tag('n').Dig(Decl(bind.named).digest);
-                if (bind.env) c.Tag('e').Dig(BaseKey(bind.env));
+                if (bind.env) c.Tag('e').Dig(RefKey(bind.env));
                 if (bind.set) {
                     c.Tag('s').U(bind.set->size());
                     for (auto f : *bind.set) c.Dig(Decl(f).digest);
                 }
             }
-            k.dims[(int)SpecDim::FunctionValues] = c.Hash();
+            k.dims[(int)SpecDim::FunctionValues] = Memo(c);
         }
         {
             vector<Digest> targets;
-            for (auto t : s->needs) targets.push_back(BaseKey(t));
+            for (auto t : s->needs) targets.push_back(RefKey(t));
             sort(targets.begin(), targets.end());
             Canon c;
             c.U(targets.size());
             for (auto &t : targets) c.Dig(t);
-            k.dims[(int)SpecDim::NonlocalTargets] = c.Hash();
+            k.dims[(int)SpecDim::NonlocalTargets] = Memo(c);
         }
         Canon total;
         total.Tag('C').Dig(k.decl);
         for (int i = 0; i < kSpecDims; i++) total.Dig(k.dims[i]);
         k.total = total.Hash();
+        keying.erase(s);
         return contexts[s] = k;
     }
 };

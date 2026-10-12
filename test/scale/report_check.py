@@ -55,6 +55,11 @@ def check(report, c_file):
          f"source_functions {counts.get('source_functions')} != {len(functions)} listed")
     need(sum(f["contexts"] for f in functions) == contexts,
          "per-function contexts do not sum to checked_contexts")
+    dup = counts.get("duplicate_contexts", {})
+    need(sum(f["duplicate_contexts"] for f in functions) == dup.get("count"),
+         "per-function duplicate contexts do not sum to the program's")
+    need(dup.get("count") == sum(v for k, v in dup.items() if k != "count"),
+         "duplicate contexts are not all classified")
     keys = [f["decl_key"] for f in functions]
     need(len(set(keys)) == len(keys), "two functions share a decl_key")
     if live is not None:
@@ -64,7 +69,9 @@ def check(report, c_file):
             need(f["live_instances"] <= f["contexts"], f"{f['name']}: live instances > contexts")
 
     for f in functions:
-        n = f["contexts"]
+        n = f["contexts"] - f["duplicate_contexts"]
+        need(0 <= f["duplicate_contexts"] < max(f["contexts"], 1) or f["contexts"] == 0,
+             f"{f['name']}: duplicate contexts out of range")
         for d in f["dimensions"]:
             need(1 <= d["distinct_values"] <= n,
                  f"{f['name']}: {d['dimension']} distinct values out of range")
