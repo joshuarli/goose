@@ -21,7 +21,8 @@ struct CoreUnsupported {
 class CoreExporter {
 public:
     CoreExporter(Ast &a, const string &entrypath)
-        : ast(a), entrydir(filesystem::path(entrypath).parent_path().generic_string()) {}
+        : ast(a), entrypath(entrypath),
+          entrydir(filesystem::path(entrypath).parent_path().generic_string()) {}
 
     CoreModule Export() {
         auto mainsf = ast.MainFunction();
@@ -34,12 +35,14 @@ public:
         // implementation may add contexts after it.
         ContextOf(mainspec);
         for (size_t k = 0; k < ctxspecs.size(); k++) BuildImpl((int)k);
+        ExpandGlobalClasses();
         mod.entry = 0;
         return std::move(mod);
     }
 
 private:
     Ast &ast;
+    string entrypath;
     string entrydir;
     CoreModule mod;
 
@@ -90,8 +93,15 @@ private:
     CoreOrigin Org(Line l, CoreOriginKind kind) {
         auto it = filemap.find(l.fileidx);
         if (it == filemap.end()) {
-            auto path = l.fileidx >= 0 && l.fileidx < (int)ast.sources.size()
-                            ? RelativeFile(ast.sources[l.fileidx].first) : string("?");
+            // The program's own files are named from the entry file's
+            // directory, so that the name does not depend on where the compiler
+            // was run; a package's, by the package, as the linter names them.
+            string path = "?";
+            if (l.fileidx >= 0 && l.fileidx < (int)ast.sources.size()) {
+                auto inpackage = l.fileidx < (int)ast.filepkg.size() && ast.filepkg[l.fileidx] != 0;
+                path = inpackage ? LintProjectPath(ast, l.fileidx, entrypath)
+                                 : RelativeFile(ast.sources[l.fileidx].first);
+            }
             if (!CoreIsUtf8(path)) Fail("non-utf8-text", l);
             mod.files.push_back(path);
             it = filemap.emplace(l.fileidx, (int)mod.files.size() - 1).first;
@@ -125,6 +135,7 @@ private:
     }
 
     CoreTypeId Ty(TypeExpr *t) {
+        if (!t) Fail("untyped-expression");
         CoreType ct;
         switch (t->kind) {
             case TY_INT:
@@ -608,6 +619,11 @@ private:
         }
         auto s = MakeStmt(CoreStmtKind::AssignOp, a->line, CoreOriginKind::AssignOp);
         s.bin = AssignOpOf(a->op);
+        // Only integer variables take a compound assignment; an array or a
+        // boolean would be elementwise or logical arithmetic.
+        if (!a->lval->exprtype || Pointee(a->lval->exprtype)->kind != TY_INT)
+            Fail(Pointee(a->lval->exprtype ? a->lval->exprtype : ast.voidtype)->kind == TY_BOOL
+                     ? "boolean-compound-assignment" : "elementwise-arithmetic");
         s.place = ToPlace(a->lval, true);
         s.expr = Value(a->rhs);
         out.stmts.push_back(std::move(s));
@@ -1016,7 +1032,7 @@ private:
         auto ty = Ty(t);
         auto &ct = mod.Type(ty);
         if (a->fillval) {
-            if (ct.kind != CoreType::Arr) Fail("fill-literal");
+            if (ct.kind != CoreType::Arr) Fail("fill-grow");
             auto e = NewExpr(CoreExprKind::Fill, ty);
             e->a = Value(a->fillval);
             return e;
@@ -1168,7 +1184,7 @@ private:
             if (!c->dispatch.empty()) Fail("adt");
             Fail("function-value");
         }
-        if (c->spec->isfunval || c->fvbody) Fail("function-value");
+        if (c->spec->isfunval || c->fvbody || c->trailing) Fail("function-value");
         if (!c->dispatch.empty()) Fail("adt");
         if (!c->fmtspecs.empty()) Fail("user-format");
         if (!cur.spec) Fail("global-initializer-call");
@@ -1234,7 +1250,9 @@ private:
             case B_HARDWARE_THREADS:
                 Fail("thread");
             case B_TO_BYTES: case B_BYTES_OF: case B_FROM_BYTES: Fail("serialization");
-            case B_DEFAULT: Fail("default-value");
+            // A declaration with only a type gets its type's default value
+            // from the checker.
+            case B_DEFAULT: Fail(c->implicit ? "uninitialized-declaration" : "default-value");
             case B_LEN: case B_CAP: case B_INDEX_OF: Fail("builtin-call");
             default: Fail("builtin-call");
         }
@@ -1245,7 +1263,7 @@ private:
 
     // The roots of one checked reference or slice, in the terms of this
     // implementation: its own variables, the globals, and its parameters.
-    vector<CoreRootRef> RootsOf(const Roots &r, FnSpec *sp) {
+    vector<CoreRootRef> RootsOf(const Roots &r, FnSpec *sp, vector<VarDef *> &globalclasses) {
         vector<CoreRootRef> out;
         for (auto &alt : r.alts) {
             auto v = alt.root;
@@ -1277,6 +1295,7 @@ private:
                 auto it = globalindex.find(v->classfrom);
                 if (it == globalindex.end()) Fail("unknown-global", sp->sf->line);
                 out.push_back({ CoreRootRef::Global, it->second });
+                globalclasses.push_back(v);
                 continue;
             }
             auto before = out.size();
@@ -1292,21 +1311,136 @@ private:
 
     void FillRoots(FnSpec *sp, CoreContext &ctx) {
         auto &impl = *cur.impl;
+        auto k = (int)mod.contexts.size() - 1;
         for (size_t i = 0; i < impl.vars.size(); i++) {
             if (!mod.IsRefOrSlice(impl.vars[i].type)) continue;
             vector<CoreRootRef> roots;
+            vector<VarDef *> classes;
             if (auto vd = cur.vardefs[i]) {
-                if (vd->refrootknown) roots = RootsOf(vd->ref, sp);
+                if (vd->refrootknown) roots = RootsOf(vd->ref, sp, classes);
             } else {
                 roots.push_back({ CoreRootRef::Param, (int)i });
             }
+            for (auto c : classes) globalclasses.push_back({ k, false, (int)ctx.varroots.size(), c });
             ctx.varroots.push_back({ (int)i, std::move(roots) });
         }
         for (size_t i = 0; i < impl.results.size(); i++) {
             vector<CoreRootRef> roots;
+            vector<VarDef *> classes;
             if (mod.IsRefOrSlice(impl.results[i]) && i < sp->record.retroots.size())
-                roots = RootsOf(sp->record.retroots[i].alts, sp);
+                roots = RootsOf(sp->record.retroots[i].alts, sp, classes);
+            for (auto c : classes) globalclasses.push_back({ k, true, (int)i, c });
             ctx.resultroots.push_back(std::move(roots));
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Parameter classes at the globals' depth.
+    //
+    // A specialization is shared by every call whose arguments sit at the
+    // globals' depth, whichever global each names, so the root of such a
+    // parameter is not one global but every global some call passes. The
+    // first call's global is recorded as the root where the class is met;
+    // this adds the others, which only the callers' bodies show.
+
+    struct GlobalClassUse {
+        int ctx;
+        bool result;
+        int index;         // Position in the context's varroots or resultroots.
+        VarDef *cls;
+    };
+    vector<GlobalClassUse> globalclasses;
+
+    using RootSet = set<CoreRootRef>;
+
+    const vector<CoreRootRef> *VarRoots(int k, int var) {
+        for (auto &vr : mod.contexts[k].varroots)
+            if (vr.first == var) return &vr.second;
+        return nullptr;
+    }
+
+    RootSet PlaceRoots(const CorePlace &p, int k) {
+        switch (p.kind) {
+            case CorePlace::Local: return { CoreRootRef { CoreRootRef::Local, p.index } };
+            case CorePlace::Global: return { CoreRootRef { CoreRootRef::Global, p.index } };
+            case CorePlace::Deref: return ExprRoots(*p.expr, k);
+            case CorePlace::Elem: return ViewRoots(*p.view, k);
+        }
+        return {};
+    }
+
+    RootSet ViewRoots(const CoreView &v, int k) {
+        return v.kind == CoreView::Of ? PlaceRoots(*v.place, k) : ExprRoots(*v.expr, k);
+    }
+
+    RootSet ArgRoots(const CoreArg &a, int k) {
+        if (a.kind == CoreArg::Ref) return PlaceRoots(*a.place, k);
+        return mod.IsRefOrSlice(a.expr->type) ? ExprRoots(*a.expr, k) : RootSet {};
+    }
+
+    // The roots of a reference- or slice-typed expression in context k.
+    RootSet ExprRoots(const CoreExpr &e, int k) {
+        RootSet out;
+        switch (e.kind) {
+            case CoreExprKind::Read:
+                if (e.place->kind == CorePlace::Local)
+                    if (auto r = VarRoots(k, e.place->index)) out.insert(r->begin(), r->end());
+                break;
+            case CoreExprKind::Ref: case CoreExprKind::Push: out = PlaceRoots(*e.place, k); break;
+            case CoreExprKind::Slice: out = ViewRoots(*e.view, k); break;
+            case CoreExprKind::Call: {
+                auto &res = mod.contexts[e.ctx].resultroots;
+                if (res.empty()) break;
+                for (auto &r : res[0]) {
+                    if (r.kind == CoreRootRef::Param) {
+                        auto a = ArgRoots(e.args[r.index], k);
+                        out.insert(a.begin(), a.end());
+                    } else if (r.kind == CoreRootRef::Global) out.insert(r);
+                }
+                break;
+            }
+            case CoreExprKind::If: case CoreExprKind::Block: {
+                for (auto b : { e.then.get(), e.otherwise.get() })
+                    if (b && b->value) {
+                        auto a = ExprRoots(*b->value, k);
+                        out.insert(a.begin(), a.end());
+                    }
+                break;
+            }
+            default: break;
+        }
+        return out;
+    }
+
+    void ExpandGlobalClasses() {
+        if (globalclasses.empty()) return;
+        // The globals each class is passed, by use.
+        for (auto changed = true; changed;) {
+            changed = false;
+            for (size_t k = 0; k < mod.impls.size(); k++) {
+                CoreVisitExprs(mod.impls[k].body, [&](const CoreExpr &e) {
+                    if (e.kind != CoreExprKind::Call) return;
+                    for (auto &use : globalclasses) {
+                        if (use.ctx != e.ctx) continue;
+                        auto sp = ctxspecs[use.ctx];
+                        auto &list = use.result ? mod.contexts[use.ctx].resultroots[use.index]
+                                                : mod.contexts[use.ctx].varroots[use.index].second;
+                        for (size_t i = 0; i < sp->params.size(); i++) {
+                            auto member = false;
+                            for (auto &pa : sp->params[i]->ref.alts) member |= pa.root == use.cls;
+                            if (!member) continue;
+                            for (auto &r : ArgRoots(e.args[i], (int)k)) {
+                                if (r.kind != CoreRootRef::Global) continue;
+                                if (find(list.begin(), list.end(), r) == list.end()) {
+                                    list.push_back(r);
+                                    changed = true;
+                                }
+                            }
+                        }
+                        sort(list.begin(), list.end());
+                    }
+                });
+            }
         }
     }
 };
