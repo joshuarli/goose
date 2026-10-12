@@ -14,6 +14,7 @@ def usage : String :=
   "       goose-semantics share --propose UNSHARED.json\n" ++
   "       goose-semantics lower CORE.json\n" ++
   "       goose-semantics gir-validate GIR.json\n" ++
+  "       goose-semantics gir-reencode GIR.json\n" ++
   "       goose-semantics gir-run GIR.json [--numeric release|debug] [--fuel N] [--no-validate]\n" ++
   "       goose-semantics agree CORE.json GIR.json [--numeric release|debug] [--fuel N]"
 
@@ -85,9 +86,15 @@ def main (args : List String) : IO UInt32 :=
     IO.println line
     return status
   | ["lower", path] => withModule path Goose.Lower.Commands.lowerBytes
+  | ["gir-reencode", path] => withModule path Goose.Lower.Commands.girReencodeBytes
   | ["gir-validate", path] => withModule path Goose.Lower.Commands.girValidateBytes
   | "gir-run" :: path :: opts =>
-    match parseRunOptions {} opts with
+    -- Fuel counts executed instructions here, so the default budget is larger
+    -- than Core's by the factor `agree` uses.
+    let base : Goose.Core.Run.Settings :=
+      if opts.contains "--fuel" then {}
+      else { fuel := Goose.Lower.Commands.girFuelFactor * ({} : Goose.Core.Run.Settings).fuel }
+    match parseRunOptions base opts with
     | .error msg => usageError msg
     | .ok settings => withModule path (Goose.Lower.Commands.girRunBytes settings)
   | "agree" :: corePath :: girPath :: opts =>

@@ -288,7 +288,7 @@ def decScope (i : Nat) (nScopes : Nat) (j : Lean.Json) : Except String (Option S
   arity tag fs 1
   let p ← optional fs[0]! "scope parent" fun x => do checkIndex (← asNat x "scope parent") nScopes "scope"
   match p with
-  | some q => if q < i then pure p else fail s!"scope {i}: parent {q} is not an earlier scope"
+  | some q => if q < i then pure p else fail s!"parent {q} is not an earlier scope"
   | none => pure none
 
 /-- The instruction records a block record holds, as far as its shape shows. -/

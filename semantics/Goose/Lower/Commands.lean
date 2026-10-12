@@ -22,6 +22,13 @@ def lowerBytes (bs : ByteArray) : String × UInt32 :=
     | .error r => Core.Run.rejected r
     | .ok () => ((GIR.Json.write (lower m)).dropEnd 1 |>.toString, 0)
 
+/-- `gir-reencode`: read a GIR-H module and write it again, to check that the
+decoder and the writer are inverse on the bytes the writer produces. -/
+def girReencodeBytes (bs : ByteArray) : String × UInt32 :=
+  match GIR.Json.decodeBytes bs with
+  | .error msg => Core.Run.malformed msg
+  | .ok m => ((GIR.Json.write m).dropEnd 1 |>.toString, 0)
+
 def rejected (v : GIR.Violation) : String × UInt32 :=
   (s!"[\"rejected\",{Core.Run.quote v.code.tag},{Core.Run.quote v.message}]", 5)
 
@@ -49,7 +56,7 @@ def render (m : GIR.Module) : Core.Result → String × UInt32
   | .timeout out => (s!"[\"timeout\",{Core.Run.quote out}]", 3)
   | .fault k => (s!"[\"fault\",{Core.Run.quote k.tag}]", 4)
 
-/-- `gir-run`. -/
+/-- `gir-run`. The fuel counts executed instructions, not Core evaluation steps. -/
 def girRunBytes (s : Core.Run.Settings) (bs : ByteArray) : String × UInt32 :=
   match GIR.Json.decodeBytes bs with
   | .error msg => Core.Run.malformed msg

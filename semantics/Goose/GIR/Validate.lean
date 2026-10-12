@@ -236,8 +236,8 @@ def reachable (f : Func) : Array Bool :=
         | some blk => blk.terms.flatMap Term.successors
         | none => []
       let (seen', new) := succs.foldl (fun (s, new) t =>
-        if t < n && !(s[t]?.getD true) then (s.set! t true, new ++ [t]) else (s, new)) (seen, [])
-      go k (rest ++ new) seen'
+        if t < n && !(s[t]?.getD true) then (s.set! t true, t :: new) else (s, new)) (seen, [])
+      go k (new ++ rest) seen'
   go (n + 1) [0] ((Array.replicate n false).set! 0 true)
 
 /-- Dominator sets as bit masks over blocks, by rounds until nothing changes. -/
@@ -308,6 +308,9 @@ along every path from the entry. -/
 structure ScopeWalk where
   storage : Option String := none
   scopes : Option String := none
+  /-- Two paths arrive at a block with different scopes entered; reported before
+  the other scope problems, which it usually causes. -/
+  join : Option String := none
 
 def ScopeWalk.noteStorage (w : ScopeWalk) (msg : String) : ScopeWalk :=
   if w.storage.isNone then { w with storage := some msg } else w
@@ -317,6 +320,9 @@ def ScopeWalk.noteScopes (w : ScopeWalk) (msg : String) : ScopeWalk :=
 
 /-- Follow one block from the scopes entered on arrival; yields the scopes
 entered at its end. -/
+def ScopeWalk.noteJoin (w : ScopeWalk) (msg : String) : ScopeWalk :=
+  if w.join.isNone then { w with join := some msg } else w
+
 def walkBlock (f : Func) (b : BlockId) (blk : Block) (start : List ScopeId) (w : ScopeWalk) :
     List ScopeId × ScopeWalk :=
   let slotIn (s : SlotId) (stack : List ScopeId) (w : ScopeWalk) : ScopeWalk :=
@@ -360,15 +366,16 @@ def walkScopes (label : String) (f : Func) : ScopeWalk :=
         let (out, w) := walkBlock f b blk st w
         let (entry, rest, w) := (blk.terms.flatMap Term.successors).foldl (fun (entry, rest, w) t =>
           match entry[t]? with
-          | some none => (entry.set! t (some out), rest ++ [t], w)
+          | some none => (entry.set! t (some out), t :: rest, w)
           | some (some st') =>
             if st' == out then (entry, rest, w)
-            else (entry, rest, w.noteScopes s!"block {t} is reached with different scopes entered")
+            else (entry, rest, w.noteJoin s!"block {t} is reached with different scopes entered")
           | none => (entry, rest, w)) (entry, rest, w)
         go k rest entry w
       | _, _ => go k rest entry w
   let w := go (n + 1) [0] ((Array.replicate n none).set! 0 (some [])) {}
-  { storage := w.storage.map (s!"{label}: " ++ ·), scopes := w.scopes.map (s!"{label}: " ++ ·) }
+  { storage := w.storage.map (s!"{label}: " ++ ·),
+    scopes := (w.join <|> w.scopes).map (s!"{label}: " ++ ·) }
 
 /-- Loads and stores of the right kind of storage, through the right kind of reference. -/
 def checkStorage (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do

@@ -1,4 +1,5 @@
 import Goose.GIR.Syntax
+import Std.Data.HashMap
 import Goose.Core.Eval
 
 /-!
@@ -11,8 +12,8 @@ result of `run` is directly comparable with a result of `Core.eval`.
   monotone in `n` and a loop is a chain of terminators that each pass the
   predecessor.
 * A frame holds the activation id, the scopes entered so far with their
-  instances, and one cell per value id. A cell that was never written is read
-  as an `unbound` fault, so a use that is not dominated by its definition is a
+  instances, and the value of each id defined so far. An id that was never
+  written is read as an `unbound` fault, so a use that is not dominated by its definition is a
   fault rather than a stale value.
 * `scope.enter` and the call of a function draw their instance ids from the same
   counters as Core's block entry and call, in the same dynamic order, so a
@@ -41,7 +42,8 @@ structure Frame where
   act : ActId
   /-- Scopes entered so far, innermost first, with their instances. -/
   scopes : List (ScopeId × ScopeInst)
-  vals : Array (Option RVal)
+  /-- The value of each id defined so far; the map is never iterated. -/
+  vals : Std.HashMap ValueId RVal
   /-- Calls between the entry and this activation. -/
   depth : Nat
 
@@ -49,8 +51,8 @@ section Helpers
 
 def getCell (fr : Frame) (v : ValueId) : M RVal :=
   match fr.vals[v]? with
-  | some (some x) => pure x
-  | _ => fault .unbound
+  | some x => pure x
+  | none => fault .unbound
 
 def getVal (fr : Frame) (v : ValueId) : M Val := do
   match (← getCell fr v) with
@@ -63,8 +65,7 @@ def getView (fr : Frame) (v : ValueId) : M ViewVal := do
   | .val _ => fault .shape
 
 def setCell (fr : Frame) (v : ValueId) (x : RVal) : M Frame :=
-  if v < fr.vals.size then pure { fr with vals := fr.vals.set! v (some x) }
-  else fault .unbound
+  pure { fr with vals := fr.vals.insert v x }
 
 def bindParams (fr : Frame) : List (ValueId × VTy) → List RVal → M Frame
   | p :: ps, a :: as => do bindParams (← setCell fr p.1 a) ps as
@@ -168,7 +169,7 @@ def enterFn : Nat → GCfg → Nat → Func → List Val → M Val
   | n + 1, cfg, depth, fn, vals => do
     if fn.params.length = vals.length then
       let act ← freshAct
-      let fr : Frame := ⟨act, [], Array.replicate fn.numValues none, depth⟩
+      let fr : Frame := ⟨act, [], {}, depth⟩
       runBlock n cfg fn fr 0 (vals.map RVal.val)
     else fault .arity
 
