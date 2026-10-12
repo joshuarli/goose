@@ -100,10 +100,12 @@ class EditTargets(Member):
     name = "edit_targets"
 
     def __init__(self, edit=None):
-        self.edit = edit_for(edit).id if edit else None
+        # One edit, or several at once: their groups never share a function.
+        ids = [edit] if isinstance(edit, str) else list(edit or ())
+        self.edits = frozenset(edit_for(i).id for i in ids)
 
     def is_(self, *ids):
-        return self.edit in ids
+        return any(i in self.edits for i in ids)
 
     def imports(self):
         return ["import ed_alt_b;" if self.is_("E09b") else "import ed_alt_a;"]
@@ -336,3 +338,274 @@ class EditTargets(Member):
         fns.append(FnExpect("ed_over", 2 if e("E09a") else 1, 2 if e("E09a") else 1,
                             2 if e("E09a") else 1, inlined_at_o2=True))
         return fns
+
+
+# ---------------------------------------------------------------------------
+# Edits made to test what a checked context depends on (deps_check.py). Each
+# changes a fact that some function's check reads without that function's own
+# text or signature changing, or leaves every result alone.
+
+@dataclass(frozen=True)
+class DepEdit:
+    id: str
+    title: str
+    # "changes": some context's checked result differs; "none": no result
+    # differs and only positions may move.
+    effect: str = "changes"
+
+
+DEPENDENCY_EDITS = {e.id: e for e in (
+    DepEdit("D01", "a declaration added in a namespace that shadows a name its function uses"),
+    DepEdit("D02", "an overload added that does not win but changes the candidate set", "none"),
+    DepEdit("D03", "two fields of a struct swapped, size unchanged"),
+    DepEdit("D04", "a constant changed that a local fixed array size names"),
+    DepEdit("D05", "a callee returns another parameter: its return roots change, its signature "
+                   "does not"),
+    DepEdit("D06", "a callee stops growing its parameter: the effect summary of a relay changes"),
+    DepEdit("D07", "a function added to a recursive cycle"),
+    DepEdit("D08", "the initializer of a var global changed", "none"),
+    DepEdit("D09", "the length of the array a constant global is initialized to changed"),
+    DepEdit("D10", "a variable captured by a nested function changed from let to var"),
+    DepEdit("D11", "the body of a block passed to a generic function changed"),
+    DepEdit("D12", "a parameter default changed"),
+    DepEdit("D13", "a struct field default changed"),
+    DepEdit("D14", "a type alias changed to another type"),
+    DepEdit("D15", "a variant added before the others of an enum"),
+    DepEdit("D16", "two functions swapped in the file", "none"),
+    DepEdit("D17", "a function nothing called gains a caller"),
+    DepEdit("D18", "a function added that nothing calls", "none"),
+    DepEdit("D19", "a callee that could return now never does: its normal-completion fact "
+                   "changes"),
+    DepEdit("D20", "a comment added inside a function body", "none"),
+    DepEdit("D21", "a default of a function that is only passed on as a function value changed"),
+    DepEdit("D22", "a callee with an inferred result returns another type"),
+    DepEdit("D23", "a format function added for a struct that is printed"),
+    DepEdit("D24", "the declared type of a local that a block passed to a callee reads changed"),
+    DepEdit("D26", "a nested function that is passed on stops naming a variable of its parent"),
+    DepEdit("D25", "an overload added in the namespace of a caller, with the same parameter "
+                   "types as the one it called"),
+)}
+
+
+class DepTargets(Member):
+    """The functions the dependency edits are about. Without an edit it is a
+    plain program; every group below is independent of the others."""
+
+    kind = "dependency_targets"
+    name = "dependency_targets"
+
+    def __init__(self, edits=()):
+        ids = [edits] if isinstance(edits, str) else list(edits or ())
+        self.edits = frozenset(ids)
+
+    def is_(self, *ids):
+        return any(i in self.edits for i in ids)
+
+    def globals(self):
+        e = self.is_
+        out = []
+
+        # D01: a namespaced function looks a name up; the namespace may
+        # come to declare it.
+        out += ["fn dt_shadowed(x: i64) -> i64 { return x + 1; }"]
+        if e("D01"):
+            out += ["fn dtns::dt_shadowed(x: i64) -> i64 { return x + 100; }"]
+        # Another caller keeps the original called, so the edit changes
+        # nothing about the callee itself.
+        out += ["fn dtns::dt_shadow_user(x: i64) -> i64 { return dt_shadowed(x) * 2; }",
+                "fn dt_shadow_other(x: i64) -> i64 { return dt_shadowed(x) + 3; }"]
+
+        # D02: a candidate that cannot be chosen by the call.
+        out += ["fn dt_cand(x: i64) -> i64 { return x + 7; }"]
+        if e("D02"):
+            out += ["fn dt_cand(x: i64, y: i64) -> i64 { return x + y; }"]
+        out += ["fn dt_cand_user(n: i64) -> i64 { return dt_cand(n); }"]
+
+        # D03: the order of fields, which a positional literal follows.
+        if e("D03"):
+            out += ["struct DtPair { b: i64, a: i64 }"]
+        else:
+            out += ["struct DtPair { a: i64, b: i64 }"]
+        out += ["fn dt_pair_user(n: i64) -> i64 {",
+                "    let p = DtPair { 1, 2 };",
+                "    return p.a * 10 + p.b;",
+                "}"]
+
+        # D04: a constant a local array's size names.
+        out += [f"let DT_N = {5 if e('D04') else 4};",
+                "fn dt_size_user(n: i64) -> i64 {",
+                "    var buf: i64[DT_N] = [0; DT_N];",
+                "    return buf.len;",
+                "}"]
+
+        # D05: which parameter a callee hands back.
+        out += ["fn dt_pick(a: i64[:], b: i64[:]) -> i64[:] { return "
+                + ("b" if e("D05") else "a") + "; }",
+                "fn dt_pick_user(n: i64) -> i64 {",
+                "    var x: i64[>..] = [1, 2, 3];",
+                "    var y: i64[>..] = [4, 5];",
+                "    let s = dt_pick(x, y);",
+                "    return s.len;",
+                "}"]
+
+        # D06: a callee that grows its parameter, or does not; a relay
+        # passes its own parameter on.
+        out += ["fn dt_grow(a: i64[>..]&, n: i64) { "
+                + ("if n > 0 { print(n); }" if e("D06") else "if n > 0 { a.push(n); }") + " }",
+                "fn dt_relay(a: i64[>..]&, n: i64) { dt_grow(a, n); }",
+                "fn dt_grow_user(n: i64) -> i64 {",
+                "    var arr: i64[>..] = [1];",
+                "    dt_relay(arr, n);",
+                "    return arr.len;",
+                "}"]
+
+        # D07: a cycle of two, or of three.
+        pong_next = "dt_pang" if e("D07") else "dt_ping"
+        out += ["recursive fn dt_ping(n: i64) -> i64 {",
+                "    if n == 0 { return 0; }",
+                "    return dt_pong(n - 1) + 1;",
+                "}",
+                "recursive fn dt_pong(n: i64) -> i64 {",
+                "    if n == 0 { return 0; }",
+                f"    return {pong_next}(n - 1) + 2;",
+                "}"]
+        if e("D07"):
+            out += ["recursive fn dt_pang(n: i64) -> i64 {",
+                    "    if n == 0 { return 0; }",
+                    "    return dt_ping(n - 1) + 3;",
+                    "}"]
+
+        # D08, D09: globals whose initializers change; a variable's value is
+        # not read at compile time, a constant's extent is.
+        out += [f"var dt_gv: i64 = {6 if e('D08') else 5};",
+                "let DT_ARR = [1, 2, 3" + (", 4" if e("D09") else "") + "];",
+                "fn dt_global_user(n: i64) -> i64 {",
+                "    var z: i64[DT_ARR.len] = [0; DT_ARR.len];",
+                "    return z.len + dt_gv;",
+                "}"]
+
+        # D10: a nested function names a variable of its parent.
+        out += ["fn dt_capture_user(n: i64) -> i64 {",
+                f"    {'var' if e('D10') else 'let'} k = 5;",
+                "    fn inner() -> i64 { return k + 1; }",
+                "    return inner();",
+                "}"]
+
+        # D11: the body of a block the callee runs inline.
+        out += ["fn dt_apply<F>(x: i64) -> i64 { return F(x); }",
+                f"fn dt_block_user(n: i64) -> i64 {{ return dt_apply(3) {{ it + {2 if e('D11') else 1} }}; }}"]
+
+        # D12: a default a call fills in.
+        out += [f"fn dt_def(a: i64, b: i64 = {6 if e('D12') else 5}) -> i64 {{ return a + b; }}",
+                "fn dt_def_user(n: i64) -> i64 { return dt_def(1); }"]
+
+        # D13: a default a struct literal fills in.
+        out += [f"struct DtDef {{ a: i64 = {2 if e('D13') else 1}, b: i64 }}",
+                "fn dt_defstruct_user(n: i64) -> i64 {",
+                "    let d = DtDef { b: 3 };",
+                "    return d.a + d.b;",
+                "}"]
+
+        # D14: an alias a local is declared with, and a cast whose
+        # redundancy depends on it.
+        out += [f"type DtInt = {'i32' if e('D14') else 'i64'};",
+                "fn dt_alias_user(n: i64) -> i64 {",
+                "    var x: DtInt = 3;",
+                "    return x as i64;",
+                "}"]
+
+        # D15: a variant that moves the others' tags.
+        out += ["enum DtColor { Blue, Red, Green }" if e("D15") else "enum DtColor { Red, Green }",
+                "fn dt_enum_user(n: i64) -> i64 {",
+                "    let c = DtColor.Green;",
+                "    return match c { Red => 1, _ => 2 };",
+                "}"]
+
+        # D16: two functions that swap places.
+        a = "fn dt_order_a(x: i64) -> i64 { return x + 1; }"
+        b = "fn dt_order_b(x: i64) -> i64 { return x + 2; }"
+        out += [b, a] if e("D16") else [a, b]
+
+        # D17: a function that, called with an array, is a context of its
+        # own; before, only the checker's standalone check of it.
+        out += ["fn dt_late(x: i64[:]) -> i64 { return x.len; }",
+                "fn dt_late_user(n: i64) -> i64 {",
+                "    var arr: i64[>..] = [1, 2];",
+                "    return " + ("dt_late(arr)" if e("D17") else "arr.len") + ";",
+                "}"]
+
+        # D18: a function nothing calls.
+        if e("D18"):
+            out += ["fn dt_unused(x: i64) -> i64 { return x * 3; }"]
+
+        # D19: a callee that can complete, or never does.
+        out += ["fn dt_stopper(n: i64) { " + ("abort(\"stopped\");" if e("D19") else "print(n);") + " }",
+                "fn dt_noret_user(n: i64) -> i64 {",
+                "    dt_stopper(n);",
+                "    return 5;",
+                "}"]
+
+        # D20: a comment inside a body, shifting what follows it.
+        out += ["fn dt_comment_user(n: i64) -> i64 {",
+                "    let a = n + 1;"]
+        if e("D20"):
+            out += ["    // A note that moves the lines below it.", ""]
+        out += ["    return a * 2;", "}"]
+
+        # D21: the call of a named function that a callee makes through a
+        # function value.
+        out += [f"fn dt_fv(a: i64, b: i64 = {6 if e('D21') else 5}) -> i64 {{ return a + b; }}",
+                "fn dt_fv_apply<F>(x: i64) -> i64 { return F(x); }",
+                "fn dt_fv_user(n: i64) -> i64 { return dt_fv_apply(3, dt_fv); }"]
+
+        # D22: a result type nobody wrote.
+        out += ["fn dt_inferred(n: i64) { return " + ("n as f64" if e("D22") else "n + 1") + "; }",
+                "fn dt_inferred_user(n: i64) -> i64 { let v = dt_inferred(n); return v as i64; }"]
+
+        # D23: print looks for a format function of the printed type.
+        out += ["struct DtShown { v: i64 }"]
+        if e("D23"):
+            out += ["fn format(out: u8[>..]&, s: DtShown) { out.append(\"shown\"); }"]
+        out += ["fn dt_shown_user(n: i64) -> i64 { print(DtShown { v: n }); return n; }"]
+
+        # D24: a block reads a variable of the function that passes it.
+        out += ["fn dt_env_user(n: i64) -> i64 {",
+                f"    var base: {'i32' if e('D24') else 'i64'} = 10;",
+                "    return dt_apply(3) { it + base };",
+                "}"]
+
+        # D25: the same name in the caller's own namespace.
+        out += ["fn dt_twin(x: i64) -> i64 { return x + 11; }"]
+        if e("D25"):
+            out += ["fn dtns2::dt_twin(x: i64) -> i64 { return x + 22; }"]
+        out += ["fn dtns2::dt_twin_user(x: i64) -> i64 { return dt_twin(x); }",
+                "fn dt_twin_other(x: i64) -> i64 { return dt_twin(x) + 1; }"]
+
+        # D26: the parent's variable is captured only while the nested
+        # function names it; the callee that runs the function is the only
+        # one to call it.
+        out += ["fn dt_nested_user(n: i64) -> i64 {",
+                "    var k = 5;",
+                f"    fn inner(x: i64) -> i64 {{ return x + {'1' if e('D26') else 'k'}; }}",
+                "    k += n;",
+                "    return dt_fv_apply(3, inner);",
+                "}"]
+
+        # The embedded file, read in a body.
+        out += ['fn dt_embed_direct(n: i64) -> i64 { let t = embed_file("ed_embed.txt"); return t.len; }']
+        return out
+
+    CALLS = ("dtns::dt_shadow_user", "dt_shadow_other", "dt_cand_user", "dt_pair_user", "dt_size_user",
+             "dt_pick_user", "dt_grow_user", "dt_ping", "dt_global_user", "dt_capture_user",
+             "dt_block_user", "dt_def_user", "dt_defstruct_user", "dt_alias_user",
+             "dt_enum_user", "dt_order_a", "dt_order_b", "dt_late_user", "dt_noret_user",
+             "dt_comment_user", "dt_embed_direct", "dt_fv_user", "dt_inferred_user",
+             "dt_shown_user", "dt_env_user", "dtns2::dt_twin_user", "dt_twin_other",
+             "dt_nested_user")
+
+    def body(self):
+        return [f"print({name}(0));" for name in self.CALLS]
+
+    def output(self):
+        # The program is compiled, never run, by the dependency tests.
+        return []
