@@ -10,7 +10,8 @@ result of `run` is directly comparable with a result of `Core.eval`.
 * Fuel is the structural recursion argument of the mutual block. Every
   instruction, every terminator and every call consumes one unit, so `run n` is
   monotone in `n` and a loop is a chain of terminators that each pass the
-  predecessor.
+  predecessor. Running a function's blocks is one self-recursive function, so a
+  loop compiles to a jump.
 * A frame holds the activation id, the scopes entered so far with their
   instances, and the value of each id defined so far. An id that was never
   written is read as an `unbound` fault, so a use that is not dominated by its definition is a
@@ -37,6 +38,11 @@ inductive RVal
 structure GCfg where
   profile : NumProfile
   mod : Module
+
+/-- What a block runs against: the configuration and the function it belongs to. -/
+structure FnCtx where
+  cfg : GCfg
+  fn : Func
 
 structure Frame where
   act : ActId
@@ -153,6 +159,17 @@ def execEff (fn : Func) (fr : Frame) : Effect → M Frame
 
 end Helpers
 
+/-- Enter block `b` of `fn`: bind its parameters to `args` and give its
+instructions. -/
+def enterBlock (fn : Func) (fr : Frame) (b : BlockId) (args : List RVal) : M (List Inst × Frame) :=
+  match fn.blocks[b]? with
+  | none => fault .unbound
+  | some blk =>
+    if blk.params.length = args.length then do
+      let fr' ← bindParams fr blk.params args
+      pure (blk.insts, fr')
+    else fault .arity
+
 mutual
 
 /-- Call function `f` from an activation at depth `depth`. -/
@@ -170,59 +187,50 @@ def enterFn : Nat → GCfg → Nat → Func → List Val → M Val
     if fn.params.length = vals.length then
       let act ← freshAct
       let fr : Frame := ⟨act, [], {}, depth⟩
-      runBlock n cfg fn fr 0 (vals.map RVal.val)
+      let (insts, fr') ← enterBlock fn fr 0 (vals.map RVal.val)
+      exec n ⟨cfg, fn⟩ fr' insts
     else fault .arity
 
-/-- Enter block `b` with its parameters bound to `args`. -/
-def runBlock : Nat → GCfg → Func → Frame → BlockId → List RVal → M Val
-  | 0, _, _, _, _, _ => timeout
-  | n + 1, cfg, fn, fr, b, args => do
-    match fn.blocks[b]? with
-    | none => fault .unbound
-    | some blk =>
-      if blk.params.length = args.length then
-        let fr' ← bindParams fr blk.params args
-        runInsts n cfg fn fr' blk.insts
-      else fault .arity
-
-def runInsts : Nat → GCfg → Func → Frame → List Inst → M Val
-  | 0, _, _, _, _ => timeout
-  | _ + 1, _, _, _, [] => fault .flow
-  | n + 1, cfg, fn, fr, i :: rest =>
+/-- Run the instructions of the current block; a branch enters the next block
+and continues in the same call, so a loop is one tail-recursive function. -/
+def exec : Nat → FnCtx → Frame → List Inst → M Val
+  | 0, _, _, _ => timeout
+  | _ + 1, _, _, [] => fault .flow
+  | n + 1, cx, fr, i :: rest =>
     match i with
     | .def r op => do
-      let x ← execOp n cfg fn fr op
+      let x ← execOp n cx fr op
       let fr' ← setCell fr r x
-      runInsts n cfg fn fr' rest
+      exec n cx fr' rest
     | .eff e => do
-      let fr' ← execEff fn fr e
-      runInsts n cfg fn fr' rest
-    | .term t => execTerm n cfg fn fr t
-
-def execTerm : Nat → GCfg → Func → Frame → Term → M Val
-  | 0, _, _, _, _ => timeout
-  | n + 1, cfg, fn, fr, t =>
-    match t with
-    | .br b args => do
+      let fr' ← execEff cx.fn fr e
+      exec n cx fr' rest
+    | .term (.br b args) => do
       let vals ← args.mapM (getCell fr)
-      runBlock n cfg fn fr b vals
-    | .condbr c tb targs eb eargs => do
+      let (insts, fr') ← enterBlock cx.fn fr b vals
+      exec n cx fr' insts
+    | .term (.condbr c tb targs eb eargs) => do
       if (← expectBool (← getVal fr c)) then
-        runBlock n cfg fn fr tb (← targs.mapM (getCell fr))
-      else runBlock n cfg fn fr eb (← eargs.mapM (getCell fr))
-    | .ret vs _ =>
+        let vals ← targs.mapM (getCell fr)
+        let (insts, fr') ← enterBlock cx.fn fr tb vals
+        exec n cx fr' insts
+      else
+        let vals ← eargs.mapM (getCell fr)
+        let (insts, fr') ← enterBlock cx.fn fr eb vals
+        exec n cx fr' insts
+    | .term (.ret vs _) =>
       match vs with
       | [] => pure .unit
       | [v] => getVal fr v
       | _ => fault .shape
-    | .abort k org => abortAtOrg k org
-    | .exit v _ => do
+    | .term (.abort k org) => abortAtOrg k org
+    | .term (.exit v _) => do
       let (_, code) ← expectInt (← getVal fr v)
       M.stop (.exit code)
 
-def execOp : Nat → GCfg → Func → Frame → Op → M RVal
-  | 0, _, _, _, _ => timeout
-  | n + 1, cfg, fn, fr, op =>
+def execOp : Nat → FnCtx → Frame → Op → M RVal
+  | 0, _, _, _ => timeout
+  | n + 1, cx, fr, op =>
     match op with
     | .constInt t k => pure (.val (.int t k))
     | .constBool b => pure (.val (.bool b))
@@ -232,13 +240,13 @@ def execOp : Nat → GCfg → Func → Frame → Op → M RVal
       let (w, y) ← expectInt (← getVal fr b)
       expectSameTy u t
       expectSameTy w t
-      match evalBin cfg.profile o t x y with
+      match evalBin cx.cfg.profile o t x y with
       | .ok r => pure (.val (.int t r))
       | .error k => abortAtOrg (AbortKind.ofNum k) org
     | .un o t a org => do
       let (u, x) ← expectInt (← getVal fr a)
       expectSameTy u t
-      match evalUn cfg.profile o t x with
+      match evalUn cx.cfg.profile o t x with
       | .ok r => pure (.val (.int t r))
       | .error k => abortAtOrg (AbortKind.ofNum k) org
     | .cmp o t a b => do
@@ -256,7 +264,7 @@ def execOp : Nat → GCfg → Func → Frame → Op → M RVal
     | .conv k src dst a org => do
       let (u, x) ← expectInt (← getVal fr a)
       expectSameTy u src
-      match evalConv cfg.profile k src dst x with
+      match evalConv cx.cfg.profile k src dst x with
       | .ok r => pure (.val (.int dst r))
       | .error e => abortAtOrg (AbortKind.ofNum e) org
     | .next t a => do
@@ -264,7 +272,7 @@ def execOp : Nat → GCfg → Func → Frame → Op → M RVal
       expectSameTy u t
       if x < t.maxVal then pure (.val (.int t (x + 1))) else fault .shape
     | .slotAddr s => do
-      let r ← slotRoot fn fr s
+      let r ← slotRoot cx.fn fr s
       pure (.val (.ref ⟨r, []⟩))
     | .globalAddr g => pure (.val (.ref ⟨.global g, []⟩))
     | .refElem v i => do
@@ -308,7 +316,7 @@ def execOp : Nat → GCfg → Func → Frame → Op → M RVal
       pure (.val (.ref { l with path := l.path ++ [i] }))
     | .call f args _ => do
       let vals ← args.mapM (getVal fr)
-      pure (.val (← callFn n cfg fr.depth f vals))
+      pure (.val (← callFn n cx.cfg fr.depth f vals))
     | .arrLit t vs => do
       let xs ← vs.mapM (getVal fr)
       pure (.val (← expectArrayLit t xs.toArray))
