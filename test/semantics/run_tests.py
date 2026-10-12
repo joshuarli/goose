@@ -228,10 +228,19 @@ def export(goose: Path, source: Path, work: Path, timeout: float) -> tuple[Path 
 def tool_result(tool: Path, core: Path, mode: str, timeout: float) -> tuple:
     """Run the reference tool and validate its one-line answer against the contract."""
     done = run([tool, "run", core, "--numeric", mode], timeout)
-    lines = text(done.stdout).splitlines()
+    return parse_tool_answer(done.returncode, text(done.stdout), text(done.stderr))
+
+
+def parse_tool_answer(returncode: int, stdout: str, stderr: str = "") -> tuple:
+    """Validate what the tool printed and its exit status against the contract.
+
+    Returns ("done", outcome, stdout), ("timeout", stdout), ("fault", kind),
+    ("malformed", message) or ("rejected", rule, message).
+    """
+    lines = stdout.splitlines()
     if len(lines) != 1:
-        raise HarnessFailure(f"tool printed {len(lines)} lines, not one (exit {done.returncode}): "
-                             f"{text(done.stderr).strip()[:300]}")
+        raise HarnessFailure(f"tool printed {len(lines)} lines, not one (exit {returncode}): "
+                             f"{stderr.strip()[:300]}")
     try:
         answer = json.loads(lines[0])
     except ValueError as error:
@@ -239,8 +248,8 @@ def tool_result(tool: Path, core: Path, mode: str, timeout: float) -> tuple:
     if not isinstance(answer, list) or not answer or answer[0] not in TOOL_EXIT:
         raise HarnessFailure(f"unknown tool answer {lines[0][:200]}")
     tag = answer[0]
-    if done.returncode != TOOL_EXIT[tag]:
-        raise HarnessFailure(f"tool answered {tag!r} but exited {done.returncode}, "
+    if returncode != TOOL_EXIT[tag]:
+        raise HarnessFailure(f"tool answered {tag!r} but exited {returncode}, "
                              f"not {TOOL_EXIT[tag]}")
     shape = {"done": 3, "timeout": 2, "fault": 2, "malformed": 2, "rejected": 3}[tag]
     if len(answer) != shape:
