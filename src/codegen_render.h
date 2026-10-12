@@ -403,10 +403,12 @@ inline void CodeGen::EmitRenderFn(RenderFnReq r) {
     cscopes.clear();
     assert(stkmax == 0);
     auto decls = HoistAggregateDecls(body);
+    auto reportmark = code.size();
     Append(code, r.sig, " {\n");
     code += decls;
     code += body;
     code += "}\n\n";
+    ReportHelperEmitted(HelperKind::Renderer, code.size() - reportmark);
 }
 
 // Where a rendered argument lies: where GenLoc addresses it, but a call's

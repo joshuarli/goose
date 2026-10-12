@@ -6,6 +6,7 @@
 #include "flat_map.h"
 #include "lexer.h"
 #include "ast.h"
+#include "report/hooks.h"
 #include "dump.h"
 #include "clone.h"
 #include "parser.h"
@@ -37,6 +38,7 @@
 #include "codegen_stacks.h"
 #include "codegen_nodes.h"
 #include "runtime_inline.h"
+#include "report/report.h"
 #include "jit.h"
 #include "progress.h"
 #include "process.h"
@@ -660,7 +662,7 @@ int Main(int argc, char **argv) {
         printf("goose runtime %s\n", RuntimeVersion().c_str());
         return 0;
     }
-    string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile;
+    string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile;
     auto dump = false, tokens = false, parseonly = false, specs = false, nocgen = false;
     auto roundtrip = false, multitest = false;
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
@@ -697,6 +699,7 @@ int Main(int argc, char **argv) {
             cdefines.push_back(cat("GS_STACK_RESERVE=", size, "ull"));
         }
         else if (arg == "--check") nocgen = true;
+        else if (arg == "--build-report" && i + 1 < argc) reportfile = argv[++i];
         else if (arg == "--no-bce") nobce = true;
         else if (arg == "--bce-test") bcetest = true;
         else if (arg == "--bce-lines") bcelines = true;
@@ -809,6 +812,11 @@ int Main(int argc, char **argv) {
         fprintf(stderr, "multiple input files given\n");
         return 1;
     }
+    if (!reportfile.empty() && (multitest || tokens || dump || parseonly)) {
+        fprintf(stderr, "--build-report needs a program that is checked: not with --multitest, "
+                        "--tokens, --dump, --parse or fetch\n");
+        return 1;
+    }
     if (!shaderfile.empty()) {
         try {
             DumpShader(shaderfile, shadersource);
@@ -884,6 +892,8 @@ int Main(int argc, char **argv) {
             DumpTokens(filename);
             return 0;
         }
+        if (!reportfile.empty())
+            BuildReportStart(reportfile, filename, optlevel, nocgen && !stacks);
         astp = make_unique<Ast>();
         auto &ast = *astp;
         auto stdlibdirs = StdlibDirs(stdlibdir, exe);
@@ -919,7 +929,9 @@ int Main(int argc, char **argv) {
             fprintf(msgs, "roundtrip ok: %d bytes of dump\n", (int)dumped.size());
         }
         if (parseonly) return 0;
+        if (g_build_report) BuildReportPhase(Phase::CheckSpecialize);
         TypeCheckProgram(ast, library, nullptr, nocgen);
+        if (g_build_report) BuildReportAfterCheck(ast);
         Optimizer opt(ast, optlevel);
         if (specs) {
             string s;
@@ -932,6 +944,7 @@ int Main(int argc, char **argv) {
                 (int)ast.fnspecs.size(), (int)ast.structinsts.size(),
                 (int)ast.enuminsts.size(), optlevel, opt.inlined, opt.basecases,
                 opt.folded, opt.propagated, opt.tailloops);
+        if (g_build_report) BuildReportPhase(Phase::BoundsCheckElimination);
         BCE bce(ast);
         if (!nobce) {
             bce.RunAll();
@@ -952,6 +965,7 @@ int Main(int argc, char **argv) {
             }
             fprintf(msgs, "bce-test: all annotations verified\n");
         }
+        if (g_build_report && !g_build_report->frontend_only) BuildReportAfterOptimize(ast);
         // --stacks needs the generated program's bounds, so --check runs
         // the backend for them and writes nothing.
         if (nocgen && !stacks) return 0;
@@ -971,7 +985,9 @@ int Main(int argc, char **argv) {
         for (auto &rf : runtime_files)
             if (string_view(rf.name) == "runtime_ext.h") runtime_ext_text = rf.text;
         auto stackcfg = StackConfigOf(cdefines);
+        if (g_build_report) BuildReportPhase(Phase::CodeGeneration);
         CodeGen cg(ast, runtime_ext_text, includes, norfcheck, library, stackcfg.maxstacks);
+        if (g_build_report) BuildReportAfterCodegen(cg);
         if (stacks) cg.StackReport(msgs, stackcfg);
         // The packages whose native parts the program needs, which a JIT
         // run takes functions from and a build links: its own, when it has
@@ -1010,11 +1026,21 @@ int Main(int argc, char **argv) {
                        cg.head, RuntimeSections({ "runtime_ext.h", "runtime_os.h" }), cg.result);
             return out;
         };
+        if (g_build_report) BuildReportPhase(Phase::WriteOutput);
         if (!outfile.empty() && !nocgen) {
             auto out = assemble(!standalone);
             if (!WriteFileMakingDirs(outfile, out))
                 throw CompileError { cat("cannot write output file: ", outfile) };
             fprintf(msgs, "wrote %s (%d bytes)\n", outfile.c_str(), (int)out.size());
+            if (g_build_report)
+                BuildReportOutput(cg, outfile, out.size(),
+                                  standalone ? RuntimeSections({ "runtime.h", "runtime_impl.h",
+                                                                 "runtime_threads.h",
+                                                                 "runtime_ext.h",
+                                                                 "runtime_os.h" }).size()
+                                             : RuntimeSections({ "runtime.h",
+                                                                 "runtime_ext.h" }).size(),
+                                  standalone ? 5 : 2);
         }
         if (!headername.empty()) {
             auto header = cg.ExportHeader();
@@ -1082,6 +1108,7 @@ int Main(int argc, char **argv) {
             // (CMakeLists.txt).
             auto code = RunOnCompilerStack(compile);
             if (code) return code;
+            if (g_build_report) BuildReportWrite();
             if (verb == "build") {
                 if (nocgen) return 0;
                 // The native parts first, so that the link can take their
