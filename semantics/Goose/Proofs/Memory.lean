@@ -12,7 +12,7 @@ open Goose.Core
 
 /-- Typing of a flat value, which holds no reference and needs no store. -/
 def FlatTy : Ty → Val → Prop
-  | .int t, .int u n => t = u ∧ t.inRange n = true
+  | .int t, .int u _ => t = u
   | .bool, .bool _ => True
   | .arr E k, .fixed es => es.size = k ∧ ∀ (i : Nat) (e : Val), es[i]? = some e → FlatTy E e
   | .grow E, .resizable E' es => E = E' ∧ ∀ (i : Nat) (e : Val), es[i]? = some e → FlatTy E e
@@ -291,11 +291,7 @@ theorem flat_swap : ∀ (T : Ty), T.flat = true → ∀ (x y : Val) (T' : Ty),
   | .int t, _, x, y, T', hx, hy, hx' => by
     cases x <;> cases y <;> simp only [FlatTy] at hx hy
     cases T' <;> simp only [FlatTy] at hx' ⊢
-    obtain ⟨a1, _⟩ := hx
-    obtain ⟨a2, b2⟩ := hy
-    obtain ⟨a3, _⟩ := hx'
-    subst a1; subst a2; subst a3
-    exact ⟨rfl, b2⟩
+    subst hx; subst hy; exact hx'
   | .bool, _, x, y, T', hx, hy, hx' => by
     cases x <;> cases y <;> simp only [FlatTy] at hx hy
     cases T' <;> simp only [FlatTy] at hx' ⊢
