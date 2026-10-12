@@ -93,14 +93,14 @@ The executor decides within the bound, takes the smallest reversible option, and
 | Fact | Value |
 |---|---|
 | Host | Alpine Linux, musl, x86_64, 32 cores, 60 GB; Clang 23.1.3, GCC 15.2.0, CMake 4.3.4; Lean 4.34.1. |
-| Known failures | Baseline suite: 8 failing checks, all the same cause. `native_stack_overflow` and `render_reference_cycle` do not print the expected native-stack-overflow diagnostic on this host, at `-O0` and `-O2`, native and JIT. Skips: 31 audio, gfx, physics and ui fixtures and 5 such samples (layers not built), 17 fixtures and one sample the JIT cannot run. Linter suite and the fuzz self-tests (89) pass. |
+| Known failures | None since `2de048a`. Before it — Baseline suite: 8 failing checks, all the same cause. `native_stack_overflow` and `render_reference_cycle` do not print the expected native-stack-overflow diagnostic on this host, at `-O0` and `-O2`, native and JIT. Skips: 31 audio, gfx, physics and ui fixtures and 5 such samples (layers not built), 17 fixtures and one sample the JIT cannot run. Linter suite and the fuzz self-tests (89) pass. |
 | Loop timings | **perf gate deferred: host busy.** On the busy host, as orders of magnitude only: one fixture with `--only` about 2 s; the full baseline suite about 37 s; the linter suite about 5 s; a clean `lake build` of the skeleton a few seconds. No loop command is near the 5-minute threshold. |
 | Compiler build peak memory | About 2 GB for the largest process of a Debug build. |
 | Phase timing in the compiler | None exists. |
 | Single-fixture filter in `test/run_tests.py` | `--only GLOB` (fixtures by `category/stem`, extras as `extra/NAME`) and `--goose-arg ARG` (every fixture and sample compile; not the bootstrap, the emitted-C shape checks, or the lexer and shader probes). |
 | Aincrad3 | Available. Commit `ef1e1ef33b96fa68748e4ecf3cad37153a4de59c`, extracted to `.work/aincrad3`; its one generated source file is copied from the checkout's own staged build output. Entry point `src/world-core-continue.goose`. `goose --check` (Debug compiler, `-O1`) reports 14,642 specializations, 8,861 inlined calls, and a 1.5 GB compiler peak. Not a timing baseline. |
 | Historical figures (issue #9, 2026-10-11) | 14,575 specializations typechecked; 66,026,053 bytes of C; standalone emission median 43.150 s. Emission only: not native compilation, linking or runtime. Not a baseline; `B1` remeasures. |
-| Parity reference | `.work/build/base2/goose`: `master` with the same upstream commits merged, built from a scratch checkout. `.work/build/base/goose` is the pre-merge base and is kept only until lanes started before the merge have reported. |
+| Parity reference | `.work/build/base3/goose`: `master` with the same upstream commits merged and the same runtime fix cherry-picked, built from a scratch checkout. `base2` (without the runtime fix) and `base` (pre-merge) are kept only until lanes started against them have reported. |
 | Frozen budgets | The proposed values of validation plan §11, to be replaced here by `B1`. |
 
 Checks already run are listed in validation plan §1. The code facts the design rests on are in specification §14.
@@ -214,7 +214,7 @@ The full baseline suite runs at `G-PILOT`, `G-SHARE`, `G-UNITS`, `G-GIR` and the
 | 7 | `G-UNITS`. |
 | 8 | `python3 test/scale/edit_matrix.py --workload synthetic` with every structural gate; `H2`. |
 | 9 | `G-BCE`. |
-| 10 | `H3`; `python3 test/scale/parity.py --goose <candidate> --baseline .work/build/base2/goose`. |
+| 10 | `H3`; `python3 test/scale/parity.py --goose <candidate> --baseline .work/build/base3/goose`. |
 | 11 | §11 filled from the validation plan's template. |
 
 ## 7. Contract changes
@@ -375,6 +375,8 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 
 *(append-only; one line per gate or phase end)*
 
+- `U1`, first defect: the two baseline reds are a genuine runtime defect. On musl the main thread's native stack range comes back as only what is mapped so far, so a real overflow falls outside it and the diagnostic is never printed. Fix `7cd7526` on branch `upstream-pr/native-stack-bounds-main-thread-musl` (from upstream `master`), cherry-picked here as `2de048a`. The baseline suite is now fully green on this host. Verified on Alpine in Docker (base fails with status 139, fix prints the diagnostic) and on Debian sid with Clang 23.1.3 and GCC 16.2.0 (unchanged). The draft pull request is not opened yet: the before/after measurement the guidelines require needs a quiet host, and the fix branch has to be pushed to the fork before the exact Docker reproducer can be run.
+- `S7` merged: Lean GIR-H with its interpreter, validator, decoder and writer, the reference lowering, the `gir-h/0.2` tag table (specification §12.2), 26 goldens and 37 invalid modules. The compiler's own exports of 52 pilot programs lower and agree between Core and GIR-H.
 - `T1`, first attempt: `TH-FUEL-01` and `TH-MEM-01` audited; `TH-MEM-02` only per memory operation; `TH-CORE-01` only for the entry's shape; `TH-SAFE-01` not proved. `G-PILOT` not reached. The lane changed `Val.resizable` to carry its element type, which broke the sharing proofs; they are being repaired before either merges.
 - `T2` merged: `TH-ERASE-01`, `TH-SHARE-01`, `TH-SHARE-02`, `TH-REUSE-01` and the quotient checker's soundness pass the audit (58 theorems audited in all, three allowed axioms only). **`G-SHARE` reached.** The proved quotient renames contexts per implementation rather than implementation indices, because bodies name contexts; it does not claim the shared module itself validates, only that it never faults when the unshared one does not.
 - `S2` follow-up merged: exporter and validator agree on all pilot fixtures (54 agree, 4 unsupported, 0 mismatch); 300 seeded cases each of `scalar` and `numeric` agree; `order` is 298 of 300 unsupported until `S4`.
