@@ -45,6 +45,30 @@ abbrev Check := Except Violation
 
 def violation (c : Code) (msg : String) : Check α := .error ⟨c, msg⟩
 
+/-- Run a check on every element of a list, stopping at the first failure. -/
+def checkAll {ε : Type} (xs : List α) (f : α → Except ε Unit) : Except ε Unit :=
+  match xs with
+  | [] => pure ()
+  | x :: rest => do
+    f x
+    checkAll rest f
+
+theorem checkAll_ok {ε : Type} {xs : List α} {f : α → Except ε Unit}
+    (h : checkAll xs f = .ok ()) : ∀ x ∈ xs, f x = .ok () := by
+  induction xs with
+  | nil => simp
+  | cons a as ih =>
+    intro x hx
+    simp only [checkAll] at h
+    cases hf : f a with
+    | error e => rw [hf] at h; simp [bind, Except.bind] at h
+    | ok u =>
+      rw [hf] at h
+      simp only [bind, Except.bind, pure, Except.pure] at h
+      rcases List.mem_cons.mp hx with rfl | hx
+      · rw [hf]
+      · exact ih h x hx
+
 /-- A typing failure reported under `c`, naming the function. -/
 def asCheck (c : Code) (label : String) (r : Except String α) : Check α :=
   match r with
@@ -194,24 +218,24 @@ def checkTermTypes (f : Func) (env : TyEnv) : Term → TyR Unit
     let _ ← env.intTy v
   | .br .. | .abort .. => pure ()
 
+def checkInstTypes (f : Func) (env : TyEnv) (vt : Array (Option VTy)) : Inst → Except String Unit
+  | .def r op => do
+    let t ← op.resultTy env
+    unless vt[r]? == some (some t) do throw s!"value %{r} has two types"
+  | .eff e => checkEffectTypes env e
+  | .term t => checkTermTypes f env t
+
 def checkTypes (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do
   let env : TyEnv := { m.tyEnv f with vals := vt }
   asCheck .v010 label (do
+    checkAll f.slots.toList fun sl => do
+      unless sl.ty.storable do throw s!"the slot of variable {sl.var} has a type no variable may have"
+    checkAll f.blocks.toList fun b => checkAll b.insts (checkInstTypes f env vt)
     match f.blocks[0]? with
     | some b =>
       unless b.params.map (·.2) == f.params.map VTy.data do
         throw "the parameters of block 0 are not the function's parameters"
-    | none => throw "no blocks"
-    for sl in f.slots do
-      unless sl.ty.storable do throw s!"the slot of variable {sl.var} has a type no variable may have"
-    for b in f.blocks do
-      for i in b.insts do
-        match i with
-        | .def r op =>
-          let t ← op.resultTy env
-          unless vt[r]? == some (some t) do throw s!"value %{r} has two types"
-        | .eff e => checkEffectTypes env e
-        | .term t => checkTermTypes f env t)
+    | none => throw "no blocks")
 
 /-! ### GIR-V020 -/
 
@@ -258,8 +282,7 @@ def dominators (f : Func) (preds : Array (List BlockId)) : Array Nat :=
 
 def checkCfg (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do
   let n := f.blocks.size
-  for h : b in [0:n] do
-    let blk := f.blocks[b]
+  checkAll f.blocks.toList.zipIdx fun (blk, b) => do
     let terms := blk.terms
     unless terms.length = 1 do
       violation .v020 s!"{label}: block {b} has {terms.length} terminators, expected one"
@@ -404,11 +427,13 @@ def checkStorage (label : String) (f : Func) (vt : Array (Option VTy)) : Check U
 
 /-! ### GIR-V050 and GIR-V100 -/
 
-def checkOrigins (label : String) (f : Func) : Check Unit := do
-  for b in f.blocks do
-    for i in b.insts do
-      if i.needsOrigin && i.origin.isNone then
-        violation .v100 s!"{label}: an operation that can abort or stands for a statement has no origin"
+def checkOrigin (label : String) (i : Inst) : Check Unit :=
+  if i.needsOrigin && i.origin.isNone then
+    violation .v100 s!"{label}: an operation that can abort or stands for a statement has no origin"
+  else pure ()
+
+def checkOrigins (label : String) (f : Func) : Check Unit :=
+  checkAll f.blocks.toList fun b => checkAll b.insts (checkOrigin label)
 
 /-! ### The module -/
 
@@ -417,30 +442,45 @@ structure FnInfo where
   f : Func
   vt : Array (Option VTy)
 
+/-- The summary of function `k` closes over the effects of its body. -/
+def checkSummaryOf (m : Module) (vts : Array (Array (Option VTy))) (res : Array (List RootRef))
+    (nRoots : Nat) (k : Nat) : Check Unit :=
+  match m.funcs[k]? with
+  | none => pure ()
+  | some f =>
+    let vt := vts[k]?.getD #[]
+    asCheck .v050 s!"function {f.name}" (f.summaryClosed (f.effects m (f.provenance res vt nRoots)))
+
+/-- Every function of the module with the name the diagnostics use: the
+implementations, then the initializers. -/
+def Module.labelled (m : Module) : List (String × Func) :=
+  (m.funcs.toList.map fun f => (s!"function {f.name}", f)) ++
+  (m.globals.toList.map fun g => (s!"initializer of global {g.name}", g.init))
+
+def Module.infos (m : Module) : List FnInfo :=
+  m.labelled.map fun (l, f) => FnInfo.mk l f (f.valueTypes m)
+
+/-- The value types of the implementations, in order. -/
+def Module.implTypes (m : Module) : Array (Array (Option VTy)) :=
+  (m.infos.take m.funcs.size).map (·.vt) |>.toArray
+
+def Module.rootCount (m : Module) : Nat :=
+  m.globals.size + m.funcs.foldl (fun n f => n + f.params.length + f.slots.size) 0
+
 def validate (m : Module) : Check Unit := do
   checkEntryAndGlobals m
-  let all : List (String × Func) :=
-    (m.funcs.toList.map fun f => (s!"function {f.name}", f)) ++
-    (m.globals.toList.map fun g => (s!"initializer of global {g.name}", g.init))
-  for (l, f) in all do checkSymbols m l f
-  let infos := all.map fun (l, f) => FnInfo.mk l f (f.valueTypes m)
-  for i in infos do checkTypes m i.label i.f i.vt
-  for i in infos do checkCfg i.label i.f i.vt
-  let walks := infos.map fun i => walkScopes i.label i.f
-  for i in infos, w in walks do
+  checkAll m.labelled fun (l, f) => checkSymbols m l f
+  checkAll m.infos fun i => checkTypes m i.label i.f i.vt
+  checkAll m.infos fun i => checkCfg i.label i.f i.vt
+  let walks := m.infos.map fun i => walkScopes i.label i.f
+  checkAll (m.infos.zip walks) fun (i, w) => do
     if let some msg := w.storage then violation .v030 msg
     checkStorage i.label i.f i.vt
-  for w in walks do
+  checkAll walks fun w => do
     if let some msg := w.scopes then violation .v040 msg
   -- Summaries are closed over what each body does, with each callee's own summary.
-  let vts := (infos.take m.funcs.size).map (·.vt) |>.toArray
-  let res := resultRoots m vts
-  let nRoots := m.globals.size + m.funcs.foldl (fun n f => n + f.params.length + f.slots.size) 0
-  for h : k in [0:m.funcs.size] do
-    let f := m.funcs[k]
-    let vt := vts[k]?.getD #[]
-    let eff := f.effects m (f.provenance res vt nRoots)
-    asCheck .v050 s!"function {f.name}" (f.summaryClosed eff)
-  for i in infos do checkOrigins i.label i.f
+  let res := resultRoots m m.implTypes
+  checkAll (List.range m.funcs.size) (checkSummaryOf m m.implTypes res m.rootCount)
+  checkAll m.infos fun i => checkOrigins i.label i.f
 
 end Goose.GIR
