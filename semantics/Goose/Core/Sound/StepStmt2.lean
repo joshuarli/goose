@@ -47,8 +47,8 @@ theorem step_stmt_b (ih : Specs m prof n) :
       · simp only [Bool.false_eq_true, if_false, sat_pure_bind, sat_pure]
         exact ⟨hF1, TSame.refl _, hX1.toS, hT.ext hX1.dom hcur, rfl⟩
       · simp only [if_true]
-        refine Sat.bind (block_of_checks ih.block hp hF1 t [] [] htt hrt hE rfl
-          (fun x v h => by cases h)) ?_
+        refine Sat.bind (block_of_checks ih.block hp hF1 t [] [] htt hrt hE rfl rfl
+          (fun k x v ty' h => by simp at h)) ?_
         rintro fl s2 ⟨hF2, hX2, hfl⟩
         have hX := hX1.trans hX2
         cases fl with
@@ -78,8 +78,8 @@ theorem step_stmt_b (ih : Specs m prof n) :
       simp only [expectBool, sat_pure_bind]
       cases x
       · simp only [Bool.false_eq_true, if_false]
-        refine Sat.bind (block_of_checks ih.block hp hF1 fb [] [] htf hrf hE rfl
-          (fun x v h => by cases h)) ?_
+        refine Sat.bind (block_of_checks ih.block hp hF1 fb [] [] htf hrf hE rfl rfl
+          (fun k x v ty' h => by simp at h)) ?_
         rintro fl s2 ⟨hF2, hX2, hfl⟩
         have hX := hX1.trans hX2
         cases fl with
@@ -96,8 +96,8 @@ theorem step_stmt_b (ih : Specs m prof n) :
           simp only [sat_pure]
           exact ⟨hF2, TSame.refl _, hX.toS, hT.ext hX.dom hcur, hfl⟩
       · simp only [if_true]
-        refine Sat.bind (block_of_checks ih.block hp hF1 t [] [] htt hrt hE2 rfl
-          (fun x v h => by cases h)) ?_
+        refine Sat.bind (block_of_checks ih.block hp hF1 t [] [] htt hrt hE2 rfl rfl
+          (fun k x v ty' h => by simp at h)) ?_
         rintro fl s2 ⟨hF2, hX2, hfl⟩
         have hX := hX1.trans hX2
         cases fl with

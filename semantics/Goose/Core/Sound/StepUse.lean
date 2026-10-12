@@ -14,14 +14,16 @@ variable {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
 /-- A block the typing pass and the root pass accepted, entered with values
 for the variables its construct binds. -/
 theorem block_of_checks (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m W tenv penv env s)
-    (b : Block) (preT : List (VarId × Ty)) (pre : List (VarId × Val))
+    (b : Block) (preT : List (VarId × Ty)) (pre : List (VarId × Val)) {preV : List VarId}
     {tn tn' : Nat} {ty : Ty} {rst rst' : RState} {rho : List RootRef} {rng : Nat × Nat}
     (ht : tyBlock tenv preT b tn = .ok (ty, tn'))
-    (hr : rpBlockValue penv (preT.map Prod.fst) b rst = .ok ((rho, rng), rst'))
-    (hE : EffLe rst'.eff W.E) (hpre : pre.map Prod.fst = preT.map Prod.fst)
-    (hvals : ∀ x v, (x, v) ∈ pre → ∀ lv, env.vars[x]? = some lv →
+    (hr : rpBlockValue penv preV b rst = .ok ((rho, rng), rst'))
+    (hE : EffLe rst'.eff W.E) (hpreV : preT.map Prod.fst = preV)
+    (hpre : pre.map Prod.fst = preT.map Prod.fst)
+    (hvals : ∀ (k : Nat) (x : VarId) (v : Val) (ty' : Ty), pre[k]? = some (x, v) →
+      preT[k]? = some (x, ty') → ∀ lv, env.vars[x]? = some lv → lv.ty = ty' →
       HasTy m W.G s.store v lv.ty ∧ ∀ r, Targets v r → ∃ ann, penv.ann x = some ann ∧
-        Gam { env with scopes := (b.scope, s.nextScope) :: env.scopes } W.P ann r) :
+        Gam env W.P ann r) :
     Sat (execBlock n ⟨prof, m⟩ env pre b) s (fun fl s' =>
       Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧
       match fl with
@@ -30,6 +32,7 @@ theorem block_of_checks (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m 
       | .brk => tenv.loops ≠ 0 ∧ b.hasBreak = true
       | .cont => tenv.loops ≠ 0
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) := by
+  subst hpreV
   obtain ⟨sc, stmts, value⟩ := b
   obtain ⟨hsc, env1, tn1, env2, tn2, hd, hts, htv⟩ := tyBlock_ok _ _ _ _ _ _ _ _ ht
   obtain ⟨hsame, hvis, hrows, hrange⟩ := declarePre_ok _ _ _ _ _ _ hd
@@ -43,11 +46,22 @@ theorem block_of_checks (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m 
     have hx : x ∈ preT.map Prod.fst := by
       rw [← hpre]; exact List.mem_map.2 ⟨(x, v), hxv, rfl⟩
     obtain ⟨h1, h2⟩ := hpr x hx
-    obtain ⟨⟨x', ty'⟩, hmem, rfl⟩ := List.mem_map.1 hx
-    obtain ⟨lv, g1, g2, g3, _⟩ := hrows _ hmem
-    have g1' : env.vars[x']? = some lv := by rw [← hF.vars_t]; exact g1
-    obtain ⟨k1, k2⟩ := hvals x' v hxv lv g1'
-    exact ⟨h1, h2, lv, g1', g2, g3, k1, k2⟩
+    obtain ⟨k, hk⟩ := List.getElem?_of_mem hxv
+    have hk2 : (preT.map Prod.fst)[k]? = some x := by
+      rw [← hpre, List.getElem?_map, hk]; rfl
+    rw [List.getElem?_map] at hk2
+    cases hpk : preT[k]? with
+    | none => simp [hpk] at hk2
+    | some p =>
+      obtain ⟨x', ty'⟩ := p
+      simp only [hpk, Option.map_some, Option.some.injEq] at hk2
+      subst hk2
+      obtain ⟨lv, g1, g2, g3, g4⟩ := hrows _ (List.mem_of_getElem? hpk)
+      have g1' : env.vars[x']? = some lv := by rw [← hF.vars_t]; exact g1
+      obtain ⟨k1, k2⟩ := hvals k x' v ty' hk hpk lv g1' g4
+      refine ⟨h1, h2, lv, g1', g2, g3, k1, fun r hr' => ?_⟩
+      obtain ⟨ann, ha, hga⟩ := k2 r hr'
+      exact ⟨ann, ha, gam_push hF hsc _ hga⟩
   have hres := hB W tenv env1 env2 penv env s pre sc stmts value tn1 tn2 tn' ty
     { rst with nextVar := rst.nextVar + (preT.map Prod.fst).length } st2 rst' rho rst.nextVar
     hp hF hsc hsame hvis' hpreOk (Nat.le_add_right _ _) hts
@@ -72,8 +86,8 @@ theorem step_blockValue (ih : Specs m prof n) : BlockValueSpec m prof (n + 1) :=
   intro W tenv penv env s b tn tn' ty rst rst' rho rng hp hF ht hr hE
   simp only [blockValue]
   have hF' : Frame m W (exprEnv tenv) penv env s := hF.tenv_congr rfl rfl rfl (fun _ h => h)
-  refine Sat.bind (block_of_checks ih.block hp hF' b [] [] ht hr hE rfl
-    (fun x v h => by cases h)) ?_
+  refine Sat.bind (block_of_checks ih.block hp hF' b [] [] ht hr hE rfl rfl
+    (fun k x v ty' h => by simp at h)) ?_
   rintro fl s1 ⟨hF1, hX1, hfl⟩
   cases fl with
   | normal v =>
