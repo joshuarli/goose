@@ -1060,8 +1060,23 @@ inline void CodeGen::EmitThreadThunk(FnSpec *sp, int64_t stacks) {
     }
     assert(ki.freevars.empty() && !ki.hasrf && sp->rets.empty());
     if (ki.needssp) args.push_back("0");
-    Append(b, "    gs_gl = calloc(1, sizeof(gs_globals_t));\n"
-              "    if (!gs_gl) gs_panic(\"out of memory copying globals\");\n");
+    // Each thread has an instance of the globals it can name: the one block,
+    // or, with units, a segment of each module it names a global of.
+    set<string> segs;
+    if (emit_options.units) {
+        for (auto d : ThreadGlobals(sp)) {
+            auto g = gnames[d];
+            auto at = g.find("GS_GL->");
+            if (at == string::npos) continue;
+            segs.insert(GlobalModule(d));
+        }
+        for (auto &module : segs)
+            Append(b, "    ", SegName(module), " = calloc(1, sizeof(struct ", SegName(module), "_s));\n"
+                      "    if (!", SegName(module), ") gs_panic(\"out of memory copying globals\");\n");
+    } else {
+        Append(b, "    gs_gl = calloc(1, sizeof(gs_globals_t));\n"
+                  "    if (!gs_gl) gs_panic(\"out of memory copying globals\");\n");
+    }
     for (auto d : ThreadGlobals(sp)) {
         auto gn = gnames[d];
         Append(b, "    {\n        int64_t sz = *(int64_t *)p; p += 8; uint8_t *img = p; p += sz;\n");
@@ -1116,7 +1131,10 @@ inline void CodeGen::EmitThreadThunk(FnSpec *sp, int64_t stacks) {
     }
     string argstr;
     for (size_t i = 0; i < args.size(); i++) Append(argstr, i ? ", " : "", args[i]);
-    Append(b, "    ", ki.cname, "(", argstr, ");\n    free(gs_gl);\n}\n\n");
+    Append(b, "    ", ki.cname, "(", argstr, ");\n");
+    if (emit_options.units) for (auto &module : segs) Append(b, "    free(", SegName(module), ");\n");
+    else Append(b, "    free(gs_gl);\n");
+    Append(b, "}\n\n");
     code += b;
     ReportHelperEmitted(HelperKind::ThreadEntry, b.size());
     thunkregions[sp] = regions;

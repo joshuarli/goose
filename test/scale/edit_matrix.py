@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -46,7 +47,7 @@ FAMILY = dict(helpers=1, contexts=2, types=gen.INT_TYPES[:1], shareable=1, root_
 
 # Fields of the per-case record that need features the compiler lacks. They
 # are present so that a later change fills them in without a new layout.
-NOT_YET = ("frontend_phases", "implementation_digests_changed", "units_changed",
+NOT_YET = ("frontend_phases", "implementation_digests_changed",
            "units_per_native_invocation", "objects_reused", "objects_missed", "link_skipped",
            "native_compiler_peak_rss")
 
@@ -132,6 +133,19 @@ def function_changes(before, after):
     return changed, sorted(set(with_lines) - set(changed))
 
 
+def emitted_units(build, goose):
+    """{file name: bytes} of the units the program is emitted as, written with
+    the program's own directory as the working directory so that the paths a
+    unit holds do not depend on where it lives; None if it does not compile."""
+    if build.exit != 0:
+        return None
+    out = build.dir / "units"
+    shutil.rmtree(out, ignore_errors=True)
+    code, _, _ = tc.run_capture([str(Path(goose).resolve()), "-O2", "--emit-units", str(out.resolve()),
+                                 "main.goose"], cwd=build.dir)
+    return {p.name: p.read_bytes() for p in out.iterdir()} if code == 0 else None
+
+
 def case_edit(case):
     """The edit id a case generates, or None for the original."""
     return None if case == "E00" else case
@@ -151,6 +165,7 @@ def run_case(case, goose, cc, runtime, work):
              f"without warnings (compile exit {original.exit}, warnings {original.warnings}, "
              f"{original.build_failure or ''})")
     if case == "E00":
+        record["units_changed"] = None
         record["title"] = edits.NOT_SOURCE_EDITS["E00"]
         record.update(timing(original, None))
         return finish(record)
@@ -198,6 +213,12 @@ def run_case(case, goose, cc, runtime, work):
             fail(f"changed functions {changed}, expected {sorted(e.changed)}")
     else:
         record["functions_changed"] = record["functions_changed_by_line_numbers_only"] = None
+
+    # The units that differ between the two programs' emitted units.
+    before, after = emitted_units(original, goose), emitted_units(edited, goose)
+    record["units_changed"] = (None if before is None or after is None else
+                               sorted(n for n in before.keys() | after.keys()
+                                      if before.get(n) != after.get(n)))
 
     if e.sequence and e.outcome != "error":
         revert = Build("revert", work / case / "revert", goose, cc, runtime, None)

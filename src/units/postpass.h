@@ -364,6 +364,7 @@ inline void EmitPostPass(CodeGen &cg) {
     cg.protos = std::move(protos);
     cg.data = RenameC(cg.data, rename);
 
+    for (int c = 0; c < nclasses; c++) cg.classrep[finalname[c]] = segs[rep[c]].sp;
     // What the rest of the compiler reads of the names.
     for (auto &seg : segs) {
         auto it = rename.find(seg.name);

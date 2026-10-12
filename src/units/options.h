@@ -13,8 +13,10 @@ struct EmitOptions {
     bool stable_names = false;
     // Keep what the build report's sharing section needs.
     bool explain = false;
+    // Write one C file per unit (--emit-units); implies stable names.
+    bool units = false;
 
-    bool PostPass() const { return share || stable_names; }
+    bool PostPass() const { return share || stable_names || units; }
     // The consumed assumptions are noted for stable names, and for the
     // report's explanation of why two bodies differ.
     bool NoteAssumptions() const { return stable_names || explain; }
@@ -65,5 +67,17 @@ struct ShareStats {
     unordered_map<const SFunction *, long long> implementations;
 };
 inline ShareStats share_stats;
+
+// What the units written for a program are, for the report.
+struct UnitStats {
+    struct Unit {
+        string file, module, kind;
+        long long bytes = 0, functions = 0;
+    };
+    bool ran = false;
+    vector<Unit> units;
+    unordered_map<const SFunction *, set<string>> function_units;
+};
+inline UnitStats unit_stats;
 
 }  // namespace goose

@@ -15,6 +15,7 @@ string RuntimeVersion();
 
 // The sharing section, written by units/share_report.h.
 inline void ReportSharingJson(class JsonOut &j);
+inline void ReportUnitsJson(class JsonOut &j);
 
 constexpr const char *kBuildReportFormat = "goose-build-report/1";
 
@@ -474,6 +475,13 @@ inline void BuildReportWrite() {
             auto it = share_stats.implementations.find(f.sf);
             j.F("implementations", it == share_stats.implementations.end() ? 0LL : it->second);
         }
+        if (unit_stats.ran) {
+            j.Key("units").Arr();
+            auto it = unit_stats.function_units.find(f.sf);
+            if (it != unit_stats.function_units.end())
+                for (auto &u : it->second) j.Str(u);
+            j.EndArr();
+        }
         if (r.wrote) {
             auto it = rec.emitted.find(f.sf);
             j.F("emitted_instances", it == rec.emitted.end() ? 0LL : it->second.bodies);
@@ -537,7 +545,9 @@ inline void BuildReportWrite() {
     j.Key("extensions").Obj();
     j.Key("sharing");
     ReportSharingJson(j);
-    j.Key("units").Null().Key("native_compile").Null();
+    j.Key("units");
+    ReportUnitsJson(j);
+    j.Key("native_compile").Null();
     j.EndObj();
     j.EndObj();
 
