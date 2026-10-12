@@ -1,9 +1,130 @@
 [
-  {"feature": "eval independent of root annotations", "label": "model-proved", "id": "TH-ERASE-01", "theorem": "Goose.Proofs.Share.eval_erase_roots, Goose.Proofs.Share.eval_eraseRoots", "evidence": "For modules m, m' with equal implementation tables, globals and entry, and contexts that name the same implementation at every index, eval n p m = eval n p m' for every fuel n and numeric profile p. The erased fields are every Context field other than impl: decl, varRoots, resultRoots. eval_eraseRoots instantiates it with a module whose contexts have no declaration key and no roots.", "limits": "The target says replacing a module's context table changes no result; proved: replacing it while keeping each context's implementation index and the entry. A different implementation index is a different program (TH-SHARE-01 covers the case where it is justified). files, types and origins are not constrained because eval reads none of them; origins are read only by the tool when it prints a line number.", "assumptions": "None beyond the Core definitions of eval.", "witnesses": "Goose/Share/Examples.lean: the first golden with its root annotations erased is rejected by validate and runs to the same output."},
-  {"feature": "sharing implementations preserves eval", "label": "model-proved", "id": "TH-SHARE-01", "theorem": "Goose.Proofs.Share.share_eval (via eval_simulates, simulates_of_quotient, quotient_of_implwise)", "evidence": "If Quotient m m' q rho holds then eval n p m = eval n p m' for every n and p. Quotient: header tables, entry and globals of m' equal those of m; m' has the contexts of m at the same indices with impl mapped by q; every implementation f a context of m names is, in m, the body m' holds at q f with its callees renamed by rho f; rho f sends each context to one that m' maps to the same implementation. The proof is a simulation by induction on fuel over the evaluator's mutual definitions, so mutually recursive groups need no separate argument.", "limits": "Differs from the target in three ways. (1) Bodies name contexts, not implementations, so the renaming that makes two bodies equal acts on context indices (rename by rho f, chosen per implementation: identity or a representative map) instead of one map q on implementation indices; q maps only the implementation index of each context. (2) Nothing is demanded of implementations no context names, which a run cannot reach; quotient_of_implwise gives the plan's every-implementation form when every context names an existing one. (3) Globals, files, types and origins must be equal (no merging of global initializers).", "assumptions": "None beyond the Core definitions of eval.", "witnesses": "test/semantics/share/INDEX (checked by run_index.sh) and Goose/Share/Examples.lean: issue-9 shape, free variable bound to two locals, mutually recursive pair, merge after one round; counterexamples: bodies differing in one operation and callees that differ stay distinct, forged merges are rejected, and the forged modules behave differently."},
-  {"feature": "a quotient of a never-faulting module never faults", "label": "model-proved", "id": "TH-SHARE-02", "theorem": "Goose.Proofs.Share.share_never_faults, Goose.Proofs.Share.share_validated_never_faults", "evidence": "If Quotient m m' q rho and eval n p m is never a fault, then eval n p m' is never a fault. share_validated_never_faults takes the safety statement (validate m = ok implies no fault at any fuel and profile) as an explicit hypothesis and concludes the same for a validated m.", "limits": "The safety theorem is a hypothesis, not an import: this row says nothing until TH-SAFE-01 is proved for the same eval. The quotient m' is not claimed to validate: renaming callee contexts in a merged body can name a context whose annotations do not suit every caller context.", "assumptions": "TH-SAFE-01 (hypothesis of share_validated_never_faults).", "witnesses": "Goose/Share/Examples.lean: the proposals of the fixtures validate and run to the unshared output."},
-  {"feature": "quotient checker", "label": "model-proved", "id": "TH-SHARE-CHECK", "theorem": "Goose.Proofs.Share.checkQuotient_sound, Goose.Proofs.Share.eqImpl_sound", "evidence": "checkQuotient m m' qt rt = true implies Quotient m m' (fun f => qt.getD f f) (bodyRenaming m m' _ rt). The witnesses qt and rt are untrusted: a wrong one makes the check fail.", "limits": "Soundness only. Completeness (every quotient has witnesses the checker accepts) is not proved; goose-semantics share rebuilds the witnesses from the context tables and accepts the proposer's output and the fixtures. Bodies are compared with the implementation name, variable names and summary, so functions that differ only in a name are not merged.", "assumptions": "None.", "witnesses": "test/semantics/share/INDEX: three forged claims rejected, proposals accepted."},
-  {"feature": "quotient proposer", "label": "executable", "id": "SHARE-PROPOSE", "evidence": "goose-semantics share --propose merges implementations by structural equality of bodies, refining from one group to the coarsest self-consistent grouping, so a call cycle merges as a whole; a group whose members already agree keeps its body untouched. The result is always passed through the checker.", "limits": "Untrusted. Quadratic in call-chain depth (one round per level): 400 levels took 4 s, 3000 flat contexts 0.3 s. Not proved coarsest.", "witnesses": "test/semantics/share/INDEX"},
-  {"feature": "cached stage agrees with recomputation", "label": "model-proved", "id": "TH-REUSE-01", "theorem": "Goose.Reuse.cachedRun_result, cachedRun_consistent, cachedRuns_agree, cachedRuns_agree_from, cachedRun₂_result, cachedRuns₂_agree", "evidence": "If the key determines the result and the cache is consistent, cachedRun returns the uncached result and leaves the cache consistent; any sequence of cached runs from the empty cache (or any consistent cache) returns the uncached results; two stages in a row, the second keyed on the first's result, have the same property.", "limits": "A cache is an association list (entries are only added for absent keys). The model is independent of Core and says nothing about any real stage.", "assumptions": "KeyDetermines: key i = key j implies run i = run j, which is the completeness of dependency tracking. Assumed, not proved; see the next row.", "witnesses": "Goose.Reuse.key_omission_example, wrong_answer_without_key_determination"},
-  {"feature": "key completeness of a reuse boundary", "label": "assumed", "id": "TH-REUSE-01-KEY", "theorem": "Goose.Reuse.wrong_answer_without_key_determination, Goose.Reuse.key_omission_example", "evidence": "The hypothesis cannot be dropped: if the key does not determine the result there is a consistent cache and an input for which cachedRun answers wrongly; concretely, inputs (0,0) and (0,1) with key = first component.", "limits": "Establishing KeyDetermines for a real boundary is per-boundary work (native objects by construction; whole build through the recording reader; checked results not established)."}
+ {
+  "feature": "core-pilot evaluator (eval)",
+  "label": "executable",
+  "evidence": "Goose/Core/Eval.lean; goldens first, range_loop, sampled_extent and 40+ #guard programs in Goose/Core/Examples.lean, both numeric profiles",
+  "limits": "Fuel is evaluation depth plus loop iterations; call nesting over maxCallDepth (100000) is a timeout; storage is unbounded"
+ },
+ {
+  "feature": "core-pilot validator (validate)",
+  "label": "executable",
+  "evidence": "Goose/Core/{Typing,Roots,Validate}.lean; test/semantics/malformed/INDEX (39+ lines); about 62000 random mutants of example modules, none validated and then faulted",
+  "limits": "Not proved sound (see TH-SAFE-01); V-SUMMARY is checked but nothing proved uses it"
+ },
+ {
+  "feature": "TH-FUEL-01",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.Fuel.eval_fuel_mono",
+  "statement": "eval n p m = done o t -> n <= k -> eval k p m = done o t, for every module m and numeric profile p",
+  "differs_from_target": "No difference. Uniqueness of results is not a theorem: eval is a Lean function. The stronger fact proved internally is that every result other than a timeout at fuel n is the result at fuel k, for all fourteen evaluation functions, not only for eval.",
+  "assumptions": "None.",
+  "witnesses": "spin (timeout at every fuel), forms1 (terminating from some fuel on), rec_small, loop_small in Examples.lean",
+  "reviewer": "pending: no reviewer lane has read this theorem"
+ },
+ {
+  "feature": "TH-MEM-01",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.Memory.th_mem_01; typed form Goose.Proofs.Memory.append_le",
+  "statement": "If Store.append o vs succeeds, every location that was readable is still readable, and every readable location that is neither the grown array nor an ancestor of it reads the same value. Typed form: if o has type grow E and the new elements have type E, every typed location stays typed, o stays grow E, the new elements are read at o++[n+i], and the store refines the old one.",
+  "differs_from_target": "The target 'read (push s o v) l = read s l' is false for the grown array and its ancestors, whose content is the array, so those are excluded; the statement is about Store.append (the operation eval uses), not a separate push. Val.resizable now records its element type so that growing an empty array cannot change which array type it has.",
+  "assumptions": "Typed form assumes the elements have the element type.",
+  "witnesses": "sampled_extent golden: reference to element 0 read after a push; forms1 growing loop",
+  "reviewer": "pending"
+ },
+ {
+  "feature": "TH-MEM-02",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.Memory.liveRefs_write, liveRefs_append, liveRefs_introduce, liveRefs_release, storeLe_release, releaseScope_roots",
+  "statement": "LiveRefs s (every reference or slice held as a root's value denotes a valid typed location, or a run inside a valid array) is preserved by a type-preserving write, by growth, by binding a root that does not exist, and by releasing the roots of one scope instance of one activation provided no surviving reference targets a released root. Releasing roots that did not exist in an earlier state leaves that state refined.",
+  "differs_from_target": "WEAKER than the target. The target is that the invariant is preserved by every evaluation step including scope exit. What is proved is the memory-operation level: the four operations every evaluation rule is built from. That the premise of the release lemma holds at each block exit (no surviving reference targets the scope's roots) is what V-ROOT, V-BLOCK and V-RESULT must establish and is part of the unproved safety induction.",
+  "assumptions": "Premises named in each lemma.",
+  "witnesses": "rejected_root_forged_annotation, rejected_result_local, rejected_block_value_dangling and rejected_call_param_assumption each break the release premise and reach fault dangling_root under --no-validate",
+  "reviewer": "pending"
+ },
+ {
+  "feature": "TH-CORE-01",
+  "label": "deferred",
+  "theorem": "Goose.Proofs.Core.th_core_01_entry (partial)",
+  "statement": "validate m = ok gives an entry context whose implementation takes no parameters and returns nothing; the initial state satisfies LiveRefs.",
+  "differs_from_target": "The target is that acceptance gives a declarative invariant about stores, values and locations that the safety induction can use. Only the entry shape is derived. The invariant itself is defined (FlatTy, LocTy, HeldOk, LiveRefs in Goose/Proofs/Memory.lean) but acceptance is not shown to establish its per-form preconditions: that needs inversion of tyExpr/tyStmt and the root pass at every syntactic form. It is weaker than a full independent static semantics because the checker functions are the only statement of the typing and root rules; no relation was written that the checkers are proved to decide.",
+  "assumptions": "None.",
+  "witnesses": "INDEX fixtures for each rule",
+  "reviewer": "pending"
+ },
+ {
+  "feature": "TH-SAFE-01",
+  "label": "deferred",
+  "theorem": "none",
+  "statement": "Not proved. The target is validate m = ok -> forall n p k, eval n p m /= fault k.",
+  "differs_from_target": "No theorem about safety is claimed. Goose.Proofs.Memory proves the store-level core (typed locations survive writes, growth, binding and scope release); Goose.Core.Guarantees states FaultFree, TypeSafe and MemorySafe.",
+  "assumptions": "",
+  "witnesses": "Non-vacuity: for each rule the proof would use (V-TYPE, V-ROOT, V-BLOCK, V-RESULT, V-CALL) a module violating only that rule faults under --no-validate; V-MUT and V-SUMMARY do not affect eval and the safety argument does not need them; about 62000 random mutants validated-then-ran with no fault.",
+  "reviewer": "not applicable"
+ },
+ {
+  "feature": "eval independent of root annotations",
+  "label": "model-proved",
+  "id": "TH-ERASE-01",
+  "theorem": "Goose.Proofs.Share.eval_erase_roots, Goose.Proofs.Share.eval_eraseRoots",
+  "evidence": "For modules m, m' with equal implementation tables, globals and entry, and contexts that name the same implementation at every index, eval n p m = eval n p m' for every fuel n and numeric profile p. The erased fields are every Context field other than impl: decl, varRoots, resultRoots. eval_eraseRoots instantiates it with a module whose contexts have no declaration key and no roots.",
+  "limits": "The target says replacing a module's context table changes no result; proved: replacing it while keeping each context's implementation index and the entry. A different implementation index is a different program (TH-SHARE-01 covers the case where it is justified). files, types and origins are not constrained because eval reads none of them; origins are read only by the tool when it prints a line number.",
+  "assumptions": "None beyond the Core definitions of eval.",
+  "witnesses": "Goose/Share/Examples.lean: the first golden with its root annotations erased is rejected by validate and runs to the same output."
+ },
+ {
+  "feature": "sharing implementations preserves eval",
+  "label": "model-proved",
+  "id": "TH-SHARE-01",
+  "theorem": "Goose.Proofs.Share.share_eval (via eval_simulates, simulates_of_quotient, quotient_of_implwise)",
+  "evidence": "If Quotient m m' q rho holds then eval n p m = eval n p m' for every n and p. Quotient: header tables, entry and globals of m' equal those of m; m' has the contexts of m at the same indices with impl mapped by q; every implementation f a context of m names is, in m, the body m' holds at q f with its callees renamed by rho f; rho f sends each context to one that m' maps to the same implementation. The proof is a simulation by induction on fuel over the evaluator's mutual definitions, so mutually recursive groups need no separate argument.",
+  "limits": "Differs from the target in three ways. (1) Bodies name contexts, not implementations, so the renaming that makes two bodies equal acts on context indices (rename by rho f, chosen per implementation: identity or a representative map) instead of one map q on implementation indices; q maps only the implementation index of each context. (2) Nothing is demanded of implementations no context names, which a run cannot reach; quotient_of_implwise gives the plan's every-implementation form when every context names an existing one. (3) Globals, files, types and origins must be equal (no merging of global initializers).",
+  "assumptions": "None beyond the Core definitions of eval.",
+  "witnesses": "test/semantics/share/INDEX (checked by run_index.sh) and Goose/Share/Examples.lean: issue-9 shape, free variable bound to two locals, mutually recursive pair, merge after one round; counterexamples: bodies differing in one operation and callees that differ stay distinct, forged merges are rejected, and the forged modules behave differently."
+ },
+ {
+  "feature": "a quotient of a never-faulting module never faults",
+  "label": "model-proved",
+  "id": "TH-SHARE-02",
+  "theorem": "Goose.Proofs.Share.share_never_faults, Goose.Proofs.Share.share_validated_never_faults",
+  "evidence": "If Quotient m m' q rho and eval n p m is never a fault, then eval n p m' is never a fault. share_validated_never_faults takes the safety statement (validate m = ok implies no fault at any fuel and profile) as an explicit hypothesis and concludes the same for a validated m.",
+  "limits": "The safety theorem is a hypothesis, not an import: this row says nothing until TH-SAFE-01 is proved for the same eval. The quotient m' is not claimed to validate: renaming callee contexts in a merged body can name a context whose annotations do not suit every caller context.",
+  "assumptions": "TH-SAFE-01 (hypothesis of share_validated_never_faults).",
+  "witnesses": "Goose/Share/Examples.lean: the proposals of the fixtures validate and run to the unshared output."
+ },
+ {
+  "feature": "quotient checker",
+  "label": "model-proved",
+  "id": "TH-SHARE-CHECK",
+  "theorem": "Goose.Proofs.Share.checkQuotient_sound, Goose.Proofs.Share.eqImpl_sound",
+  "evidence": "checkQuotient m m' qt rt = true implies Quotient m m' (fun f => qt.getD f f) (bodyRenaming m m' _ rt). The witnesses qt and rt are untrusted: a wrong one makes the check fail.",
+  "limits": "Soundness only. Completeness (every quotient has witnesses the checker accepts) is not proved; goose-semantics share rebuilds the witnesses from the context tables and accepts the proposer's output and the fixtures. Bodies are compared with the implementation name, variable names and summary, so functions that differ only in a name are not merged.",
+  "assumptions": "None.",
+  "witnesses": "test/semantics/share/INDEX: three forged claims rejected, proposals accepted."
+ },
+ {
+  "feature": "quotient proposer",
+  "label": "executable",
+  "id": "SHARE-PROPOSE",
+  "evidence": "goose-semantics share --propose merges implementations by structural equality of bodies, refining from one group to the coarsest self-consistent grouping, so a call cycle merges as a whole; a group whose members already agree keeps its body untouched. The result is always passed through the checker.",
+  "limits": "Untrusted. Quadratic in call-chain depth (one round per level): 400 levels took 4 s, 3000 flat contexts 0.3 s. Not proved coarsest.",
+  "witnesses": "test/semantics/share/INDEX"
+ },
+ {
+  "feature": "cached stage agrees with recomputation",
+  "label": "model-proved",
+  "id": "TH-REUSE-01",
+  "theorem": "Goose.Reuse.cachedRun_result, cachedRun_consistent, cachedRuns_agree, cachedRuns_agree_from, cachedRun₂_result, cachedRuns₂_agree",
+  "evidence": "If the key determines the result and the cache is consistent, cachedRun returns the uncached result and leaves the cache consistent; any sequence of cached runs from the empty cache (or any consistent cache) returns the uncached results; two stages in a row, the second keyed on the first's result, have the same property.",
+  "limits": "A cache is an association list (entries are only added for absent keys). The model is independent of Core and says nothing about any real stage.",
+  "assumptions": "KeyDetermines: key i = key j implies run i = run j, which is the completeness of dependency tracking. Assumed, not proved; see the next row.",
+  "witnesses": "Goose.Reuse.key_omission_example, wrong_answer_without_key_determination"
+ },
+ {
+  "feature": "key completeness of a reuse boundary",
+  "label": "assumed",
+  "id": "TH-REUSE-01-KEY",
+  "theorem": "Goose.Reuse.wrong_answer_without_key_determination, Goose.Reuse.key_omission_example",
+  "evidence": "The hypothesis cannot be dropped: if the key does not determine the result there is a consistent cache and an input for which cachedRun answers wrongly; concretely, inputs (0,0) and (0,1) with key = first component.",
+  "limits": "Establishing KeyDetermines for a real boundary is per-boundary work (native objects by construction; whole build through the recording reader; checked results not established)."
+ }
 ]

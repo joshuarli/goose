@@ -4,6 +4,7 @@ import Goose.Proofs.Share
 import Goose.Reuse.Model
 import Goose.Proofs.Fuel
 import Goose.Proofs.Memory
+import Goose.Proofs.Core
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -150,5 +151,8 @@ end Goose.Audit
 #audit Goose.Proofs.Memory.liveRefs_release
 #audit Goose.Proofs.Memory.releaseScope_roots
 #audit Goose.Proofs.Memory.storeLe_release
+
+#audit Goose.Proofs.Core.th_core_01_entry
+#audit Goose.Proofs.Core.initial_liveRefs
 
 #audit_registry
