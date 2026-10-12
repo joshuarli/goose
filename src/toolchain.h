@@ -105,7 +105,9 @@ inline string LowerNoExe(string name) {
 
 inline bool PathExists(const string &path) {
     std::error_code ec;
-    return filesystem::exists(filesystem::path(path), ec);
+    auto exists = filesystem::exists(filesystem::path(path), ec);
+    DepNotePathProbe(path, exists);
+    return exists;
 }
 
 // Renames `from` to `to`. On Windows a scanner (Defender, the indexer) may

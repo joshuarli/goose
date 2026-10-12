@@ -27,6 +27,7 @@ add_executable(goose
     src/report/os.cpp
     src/report/hooks.h
     src/report/report.h
+    src/report/deps_report.h
     src/ident/sha256.h
     src/ident/keys.h
     src/units/options.h
@@ -34,6 +35,7 @@ add_executable(goose
     src/units/share_report.h
     src/units/emit.h
     src/runtime/runtime_units.h
+    src/ident/deps.h
     src/buildfile.h
     src/toolchain.h
     src/build.h

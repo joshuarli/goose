@@ -64,7 +64,7 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
     auto cands = LookupLocalFns(id->name, env);
     if (cands.empty()) {
         DefaultScopeName(id->name, c, false);
-        cands = ast.LookupFunctions(id->name, id->ns);
+        cands = DepLookupFunctions(ast, id->name, id->ns);
     }
     // The builtins are global: `::f` reaches one past a namespaced f, and
     // `ns::f` never names one.
@@ -215,7 +215,7 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
     auto cands = LookupLocalFns(d->name, env);
     if (cands.empty()) {
         DefaultScopeName(d->name, c, true);
-        cands = ast.LookupFunctions(d->name, d->ns);
+        cands = DepLookupFunctions(ast, d->name, d->ns);
     }
     if (!cands.empty())
         return ResolveCall(c, cands, env, d->name, &ov, d->obj, entryreach, nullptr, expected);
@@ -1613,6 +1613,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
             ReplayEnvExits(spec);
         }
         NoteCalleeEnvReads(spec);
+        DepNoteCallee(spec);
         return spec;
     }
     // The specializations in progress are the ones this call path is
@@ -1641,6 +1642,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     NoteLitArgs(spec, argvals, callnode);
     CheckSpecBody(spec, &argvals, callnode->line);
     NoteCalleeEnvReads(spec);
+    DepNoteCallee(spec);
     return spec;
 }
 
@@ -2564,6 +2566,7 @@ inline int TypeCheck::EnvReach(const MatchInfo &mi) {
 // is: nothing checked afterwards names it.
 inline void TypeCheck::CheckSpecBody(FnSpec *spec, vector<Val> *argvals, Line callline) {
     ReportCheckScope reportscope(spec);
+    DepScope depscope(spec);
     struct RoundScope {
         TypeCheck &tc;
         RoundScope(TypeCheck &t) : tc(t) { tc.cyclerounds.push_back({ tc.CurDepth(), false }); }
@@ -3029,6 +3032,13 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     RecordEnvExits(spec);
     spec->inprogress = false;
     spec->record.eventend = storeevents.size();
+    if (g_deps) {
+        // A loop's passes may have taken events back, as a call replaying
+        // the record reads it (ApplyCalleeStores).
+        auto end = min(spec->record.eventend, storeevents.size());
+        auto start = min(spec->record.eventstart, end);
+        DepNoteStoreRecord(storeevents.data() + start, end - start);
+    }
     spec->rounds++;
 }
 
@@ -3267,7 +3277,7 @@ inline void TypeCheck::CheckReturn(Return *r) {
         // function sharing the leaf name cannot catch the return.
         FnSpec *env = nullptr;
         auto targets = LookupLocalFns(r->from, env);
-        if (targets.empty()) targets = ast.LookupFunctions(r->from, r->ns);
+        if (targets.empty()) targets = DepLookupFunctions(ast, r->from, r->ns);
         if (targets.empty()) Error(r, cat("return from ", r->from, ": unknown function"));
         for (auto i = (int)frames.size() - 1; i >= 1 && tf < 0; i--) {
             if (frames[i].isfunval || !frames[i].sf) continue;
@@ -3364,7 +3374,10 @@ inline void TypeCheck::CheckReturn(Return *r) {
 // driver rather than from a call.
 
 inline FnSpec *TypeCheck::EnsureThreadSpec(SFunction *sf, Line l) {
-    if (!sf->specs.empty()) return sf->specs[0];
+    if (!sf->specs.empty()) {
+        DepNoteCallee(sf->specs[0]);
+        return sf->specs[0];
+    }
     if (!sf->generics.empty()) Error(l, cat("thread_fn ", sf->name, " cannot be generic"));
     if (sf->has_rets) Error(l, cat("thread_fn ", sf->name, " cannot return values"));
     auto spec = ast.NewFnSpec();
@@ -3384,6 +3397,7 @@ inline FnSpec *TypeCheck::EnsureThreadSpec(SFunction *sf, Line l) {
     spec->views.resize(spec->argtypes.size(), noview);
     sf->specs.push_back(spec);
     CheckSpecBody(spec, nullptr, l);
+    DepNoteCallee(spec);
     return spec;
 }
 
@@ -3401,6 +3415,7 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
                            nullptr, expected);
     }
     auto fv = fb.fv;
+    DepNoteFunVal(fv);
     auto entryreach = reachable;
     if (!c->tyargs.empty()) Error(c, "a block takes no type arguments");
     vector<Val> argvals;

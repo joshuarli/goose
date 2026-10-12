@@ -9,6 +9,7 @@
 #include "report/hooks.h"
 #include "units/options.h"
 #include "ident/keys.h"
+#include "ident/deps.h"
 #include "dump.h"
 #include "clone.h"
 #include "parser.h"
@@ -45,6 +46,7 @@
 #include "runtime_units_inline.h"
 #include "report/report.h"
 #include "units/share_report.h"
+#include "report/deps_report.h"
 #include "jit.h"
 #include "progress.h"
 #include "process.h"
@@ -80,6 +82,7 @@ int LintMain(int argc, char **argv, const string &exe);
 static bool FileExists(const string &path) {
     auto f = fopen(path.c_str(), "rb");
     if (f) fclose(f);
+    DepNotePathProbe(path, f != nullptr);
     return f != nullptr;
 }
 
@@ -249,6 +252,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
             throw CompileError { cat("cannot open file: ", path),
                                  path == rootpath ? CompileErrorKind::Source
                                                   : CompileErrorKind::MissingImport };
+        if (!(rootsource && path == rootpath)) DepNoteFileRead(path, *contents);
         auto fileidx = (int)ast.sources.size();
         ast.sources.emplace_back(path, std::move(contents));
         ast.filepkg.push_back(pkg);
@@ -954,7 +958,11 @@ int Main(int argc, char **argv) {
             fprintf(msgs, "roundtrip ok: %d bytes of dump\n", (int)dumped.size());
         }
         if (parseonly) return 0;
-        if (g_build_report) BuildReportPhase(Phase::CheckSpecialize);
+        if (g_build_report) {
+            g_build_report->rec.Enter(Phase::ReportCollection);
+            DepsBeforeCheck(ast);
+            BuildReportPhase(Phase::CheckSpecialize);
+        }
         TypeCheckProgram(ast, library, nullptr, nocgen);
         if (g_build_report) BuildReportAfterCheck(ast);
         // Before the optimizer: it rewrites the bodies this reads.

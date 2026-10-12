@@ -618,12 +618,13 @@ inline VarDef *TypeCheck::LookupVar(string_view name, string_view ns, Node *use)
         return true;
     });
     if (found) {
+        DepNoteEnvVar(found);
         if (use) NoteEnvRead(found);
         return found;
     }
     if (use) DefaultScopeName(name, use, false);
     if (ScopeNameKind(name)) return nullptr;
-    auto g = ast.LookupGlobal(name, ns);
+    auto g = DepLookupGlobal(ast, name, ns);
     return g && !g->defs.empty() ? g->defs[0] : nullptr;
 }
 
@@ -1550,7 +1551,7 @@ inline Val TypeCheck::CheckMatch(MatchExpr *m, TypeExpr *expected, bool wantvalu
             auto u = Is<Unary>(n);
             if (auto id = Is<Ident>(u ? u->child : n)) {
                 ConstName(id, "match pattern");
-                auto g = ast.LookupGlobal(id->name, id->ns);
+                auto g = DepLookupGlobal(ast, id->name, id->ns);
                 if (!g) Error(n, cat("unknown constant ", id->name, " in an integer match"));
                 if (g->isvar)
                     Error(n, cat("match pattern ", id->name, " names a var global, "

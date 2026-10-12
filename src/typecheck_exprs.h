@@ -2390,6 +2390,7 @@ inline string TypeCheck::CastReason(const CastAlt &a, TypeExpr *reach, bool byca
 inline void TypeCheck::CastVerdict(const CastAlt &a, const string &reason,
                                    const AsCast *dependson) {
     if (quiet) return;
+    DepNoteVerdict(!reason.empty(), reason);
     Warning w;
     w.cast = a.cast->Origin();
     w.code = LintWarningCode::RedundantCast;
@@ -2535,7 +2536,7 @@ inline bool TypeCheck::ConstIntValue(Node *n, Val &v, bool &literal,
         return true;
     }
     if (auto id = Is<Ident>(n)) {
-        auto g = ast.LookupGlobal(id->name, id->ns);
+        auto g = DepLookupGlobal(ast, id->name, id->ns);
         if (!g || g->isvar || g->inits.size() != 1) return false;
         if (!visiting.insert(g).second)
             Error(n, cat("cycle in constant initializer: ", id->name));
@@ -2637,7 +2638,7 @@ inline bool TypeCheck::ConstIntValue(Node *n, Val &v, bool &literal,
 // type that gives the global decides (RelyOnExtent).
 inline bool TypeCheck::ConstExtent(Ident *id, bool cap, int64_t &extent,
                                    set<VarDecl *> &visiting, ConstUse *use) {
-    auto g = ast.LookupGlobal(id->name, id->ns);
+    auto g = DepLookupGlobal(ast, id->name, id->ns);
     if (!g || g->byref || g->reusable || g->names.size() != 1 || g->inits.size() > 1)
         return false;
     if (!visiting.insert(g).second)
