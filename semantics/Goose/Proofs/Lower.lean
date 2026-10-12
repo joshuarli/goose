@@ -191,18 +191,16 @@ structure Em (b : BlockId) (ls ls' : LS) (E : List Inst) : Prop where
     else ls.blocks[i]?
   mono : ls.vals.size ≤ ls'.vals.size
   fresh : ∀ r ∈ defIds E, ls.vals.size ≤ r ∧ r < ls'.vals.size
-  stack : ls'.stack = ls.stack
 
 theorem Em.refl {b : BlockId} {ls : LS} (h : ls.cur = some b) : Em b ls ls [] := by
-  refine ⟨h, h, fun i => ?_, Nat.le_refl _, by simp [defIds], rfl⟩
+  refine ⟨h, h, fun i => ?_, Nat.le_refl _, by simp [defIds]⟩
   by_cases hi : i = b
   · subst hi; cases hb : ls.blocks[i]? <;> simp
   · simp [hi]
 
 theorem Em.trans {b : BlockId} {ls ls1 ls2 : LS} {E1 E2 : List Inst}
     (h1 : Em b ls ls1 E1) (h2 : Em b ls1 ls2 E2) : Em b ls ls2 (E1 ++ E2) := by
-  refine ⟨h1.cur, h2.cur', fun i => ?_, Nat.le_trans h1.mono h2.mono, fun r hr => ?_,
-    h2.stack.trans h1.stack⟩
+  refine ⟨h1.cur, h2.cur', fun i => ?_, Nat.le_trans h1.mono h2.mono, fun r hr => ?_⟩
   · rw [h2.blocks i, h1.blocks i]
     by_cases hi : i = b
     · subst hi
@@ -224,7 +222,7 @@ theorem emitDef_em (op : Op) (le : LEnv) {ls : LS} {b : BlockId} (h : ls.cur = s
     (emitDef op le ls).1 = ls.vals.size ∧ Em b ls (emitDef op le ls).2 [.def ls.vals.size op] := by
   unfold emitDef
   simp [h, bind, get, read, pure, modify, modifyGet, MonadStateOf.modifyGet, pushInst]
-  refine ⟨h, rfl, fun i => ?_, by simp, fun r hr => ?_, rfl⟩
+  refine ⟨h, rfl, fun i => ?_, by simp, fun r hr => ?_⟩
   · by_cases hi : i = b
     · subst hi; simp [Array.getElem?_modify]
     · simp [Array.getElem?_modify, hi, Ne.symm hi]
@@ -236,7 +234,7 @@ theorem emitEffect_em (e : Effect) (le : LEnv) {ls : LS} {b : BlockId} (h : ls.c
     Em b ls (emitEffect e le ls).2 [.eff e] := by
   unfold emitEffect
   simp [h, bind, curBlock, get, read, pure, modify, modifyGet, MonadStateOf.modifyGet, pushInst]
-  refine ⟨h, rfl, fun i => ?_, Nat.le_refl _, by simp [defIds], rfl⟩
+  refine ⟨h, rfl, fun i => ?_, Nat.le_refl _, by simp [defIds]⟩
   by_cases hi : i = b
   · subst hi; simp [Array.getElem?_modify]
   · simp [Array.getElem?_modify, hi, Ne.symm hi]
@@ -1309,5 +1307,585 @@ theorem exprClaim : ∀ (e : Expr), exprA e = true →
   | .blockE _, h => absurd h (by simp [exprA])
 
 end
+
+/-! ### Statements -/
+
+theorem Sim.render {v : Val} {f : String → M α} {g : M Frame} {p : α → Frame → Prop}
+    (h : ∀ str, (∀ s, Goose.Core.render v s = .ok str s) → Sim (f str) g p) :
+    Sim (Goose.Core.render v >>= f) g p := by
+  cases v with
+  | int t n => exact h (toString n) fun s => rfl
+  | bool b => cases b <;> exact h _ fun s => rfl
+  | _ =>
+    intro s
+    refine ⟨fun a s1 hc => ?_, fun e s1 hc hf => ?_⟩
+    · simp [Goose.Core.render, fault, M.stop, bind_apply] at hc
+    · simp [Goose.Core.render, fault, M.stop, bind_apply] at hc
+      obtain ⟨rfl, _⟩ := hc
+      exact absurd hf (by simp [IsFinal])
+
+/-- An effect that does what `c0` does and leaves the frame alone, then a Core result. -/
+theorem Sim.eff_flow {cx : FnCtx} {fr : Frame} {e : Effect} {c : M β} {c0 : M α} (a0 : β)
+    (hc : c = c0 >>= fun _ => pure a0)
+    (hx : execEff cx.fn fr e = c0 >>= fun _ => pure fr) :
+    Sim c (runS cx fr [.eff e]) (fun a fr' => a = a0 ∧ fr' = fr) := by
+  subst hc
+  intro s
+  have key : ∀ s', runS cx fr [.eff e] s' =
+      (match c0 s' with
+       | .ok _ s1 => .ok fr s1
+       | .stop e s1 => .stop e s1) := by
+    intro s'
+    simp only [runS, bind_apply, hx]
+    cases c0 s' with
+    | stop e s1 => rfl
+    | ok a s1 => rfl
+  refine ⟨fun a s1 hc => ?_, fun e s1 hc _ => ?_⟩
+  · rw [bind_apply] at hc
+    cases hc0 : c0 s with
+    | stop e s2 => rw [hc0] at hc; cases hc
+    | ok x s2 =>
+      rw [hc0] at hc
+      dsimp only at hc
+      rw [pure_apply] at hc
+      cases hc
+      exact ⟨fr, by rw [key s, hc0], rfl, rfl⟩
+  · rw [bind_apply] at hc
+    cases hc0 : c0 s with
+    | stop e2 s2 =>
+      rw [hc0] at hc
+      cases hc
+      rw [key s, hc0]
+    | ok x s2 => rw [hc0] at hc; dsimp only at hc; rw [pure_apply] at hc; cases hc
+
+def stmtA : Stmt → Bool
+  | .letS _ e _ => exprA e
+  | .assign p e _ => placeA p && exprA e
+  | .assignOp _ p e _ => placeA p && exprA e
+  | .rebind _ e _ => exprA e
+  | .expr e _ => exprA e
+  | .append p v _ => placeA p && viewA v
+  | .print args _ => printA args
+  | _ => false
+where
+  printA : List PrintArg → Bool
+    | [] => true
+    | .text _ :: rest => printA rest
+    | .expr e :: rest => exprA e && printA rest
+
+def PartsRel (fr : Frame) : List PrintPart → List String → Prop
+  | [], [] => True
+  | .text s :: ps, str :: strs => str = s ∧ PartsRel fr ps strs
+  | .val i :: ps, str :: strs =>
+    (∃ v, fr.vals[i]? = some (.val v) ∧ ∀ s, Goose.Core.render v s = .ok str s) ∧ PartsRel fr ps strs
+  | _, _ => False
+
+theorem PartsRel.ext {fr fr' : Frame} (h : Ext fr fr') :
+    ∀ {ps : List PrintPart} {strs : List String}, PartsRel fr ps strs → PartsRel fr' ps strs
+  | [], [], _ => trivial
+  | .text s :: ps, str :: strs, ⟨h1, h2⟩ => ⟨h1, PartsRel.ext h h2⟩
+  | .val i :: ps, str :: strs, ⟨⟨v, hv, hr⟩, h2⟩ => ⟨⟨v, h _ _ hv, hr⟩, PartsRel.ext h h2⟩
+  | [], _ :: _, hc => absurd hc (by simp [PartsRel])
+  | _ :: _, [], hc => absurd hc (by simp [PartsRel])
+
+theorem mapList_renderPart_of {fr : Frame} :
+    ∀ {ps : List PrintPart} {strs : List String}, PartsRel fr ps strs →
+      mapList (renderPart fr) ps = pure strs
+  | [], [], _ => rfl
+  | .text s :: ps, str :: strs, ⟨h1, h2⟩ => by
+    subst h1
+    simp only [mapList, renderPart, pure_bind, mapList_renderPart_of h2]
+  | .val i :: ps, str :: strs, ⟨⟨v, hv, hr⟩, h2⟩ => by
+    have : renderPart fr (.val i) = pure str := by
+      funext s
+      simp only [renderPart, getVal_of hv, pure_bind]
+      exact hr s
+    simp only [mapList, this, pure_bind, mapList_renderPart_of h2]
+  | [], _ :: _, hc => absurd hc (by simp [PartsRel])
+  | _ :: _, [], hc => absurd hc (by simp [PartsRel])
+
+mutual
+theorem printClaim : ∀ (args : List PrintArg), stmtA.printA args = true →
+    Claim (lowerPrintArgs args) (fun n cfg env => mapList (execPrintArg n cfg env) args)
+      (fun parts strs fr => PartsRel fr parts strs)
+  | [], _ => by
+    apply Claim.intro
+    intro le ls bb hcur
+    simp only [lowerPrintArgs, B.pure_run]
+    refine ⟨[], by simpa using Em.refl hcur, by simp [Straight], by simp [NoScope],
+      fun n cfg env cx fr hrel => ?_⟩
+    simp only [mapList]
+    exact Sim.pure' rfl trivial
+  | .text str :: rest, h => by
+    have hr := printClaim rest (by simpa [stmtA.printA] using h)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Er, hEmr, hSr, hNr, hsr⟩ := hr le ls bb hcur
+    simp only [lowerPrintArgs, B.bind_run, B.pure_run]
+    refine ⟨Er, hEmr, hSr, hNr, fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero =>
+      simp only [mapList, execPrintArg, pure_bind]
+      exact Sim.timeout
+    | succ n =>
+      simp only [mapList, execPrintArg, pure_bind]
+      refine Sim.of_bind_pure (Sim.bind (hsr (n + 1) cfg env cx fr hrel) fun strs fr1 ⟨hc, _, _⟩ => ?_)
+      exact Sim.pure' rfl ⟨rfl, hc⟩
+  | .expr e :: rest, h => by
+    have he := exprClaim e (by simp [stmtA.printA] at h; exact h.1)
+    have hr := printClaim rest (by simp [stmtA.printA] at h; exact h.2)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Ee, hEme, hSe, hNe, hse⟩ := he le ls bb hcur
+    obtain ⟨Er, hEmr, hSr, hNr, hsr⟩ := hr le (lowerExpr e le ls).2 bb hEme.cur'
+    simp only [lowerPrintArgs, B.bind_run, B.pure_run]
+    refine ⟨Ee ++ Er, hEme.trans hEmr, hSe.append hSr, hNe.append hNr, fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero =>
+      simp only [mapList, execPrintArg, bind_assoc]
+      exact Sim.timeout
+    | succ n =>
+      simp only [mapList, execPrintArg, bind_assoc, runS_append]
+      refine Sim.bind (hse n cfg env cx fr hrel) fun v fr1 ⟨hc, hrel1, hext1⟩ => ?_
+      refine Sim.render fun str hstr => ?_
+      refine Sim.of_bind_pure (Sim.bind (hsr (n + 1) cfg env cx fr1 hrel1) fun strs fr2 ⟨hcs, _, hext2⟩ => ?_)
+      exact Sim.pure' rfl ⟨⟨v, hext2 _ _ hc, hstr⟩, hcs⟩
+end
+
+theorem Sim.congr_core {c c' : M α} {g : M Frame} {p : α → Frame → Prop} (h : c = c')
+    (hs : Sim c' g p) : Sim c g p := by
+  subst h; exact hs
+
+theorem Sim.def_leaf_rel {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls ls' : LS}
+    {b : BlockId} {r : ValueId} {op : Op} {c : M α} (inj : α → RVal)
+    (hrel : Rel cfg env cx fr ls) (hem : Em b ls ls' [.def r op])
+    (hx : execPure cx fr op = c >>= fun a => pure (inj a)) :
+    Sim c (runS cx fr [.def r op]) (fun a fr' =>
+      fr'.vals[r]? = some (inj a) ∧ Rel cfg env cx fr' ls' ∧ Ext fr fr') :=
+  (Sim.def_leaf inj hx).strengthen (Q := fun fr' => Rel cfg env cx fr' ls' ∧ Ext fr fr')
+    (fun s fr' s1 hr => rel_after hrel hem (noscope_def _ _) hr)
+
+theorem Sim.eff_flow_rel {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls ls' : LS}
+    {b : BlockId} {e : Effect} {c : M β} {c0 : M α} (a0 : β) (he : EffPlain e)
+    (hrel : Rel cfg env cx fr ls) (hem : Em b ls ls' [.eff e])
+    (hc : c = c0 >>= fun _ => pure a0)
+    (hx : execEff cx.fn fr e = c0 >>= fun _ => pure fr) :
+    Sim c (runS cx fr [.eff e]) (fun a fr' => (a = a0 ∧ fr' = fr) ∧ Rel cfg env cx fr' ls' ∧ Ext fr fr') :=
+  (Sim.eff_flow a0 hc hx).strengthen (Q := fun fr' => Rel cfg env cx fr' ls' ∧ Ext fr fr')
+    (fun s fr' s1 hr => rel_after hrel hem (noscope_eff he) hr)
+
+theorem stmtClaim (lc : Option LoopCtx) : ∀ (s : Stmt), stmtA s = true →
+    Claim (lowerStmt lc s) (fun n cfg env => execStmt n cfg env s)
+      (fun _ f _ => f = Flow.normal .unit)
+  | .letS x e org, h => by
+    have he := exprClaim e (by simpa [stmtA] using h)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Ee, hEme, hSe, hNe, hse⟩ := he le ls bb hcur
+    simp only [lowerStmt, B.bind_run]
+    have hem := emitEffect_em (.slotInit x (lowerExpr e le ls).1 (some org)) le hEme.cur'
+    refine ⟨Ee ++ _, hEme.trans hem, hSe.append (straight_eff _),
+      hNe.append (noscope_eff trivial), fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmt]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmt, runS_append]
+      refine Sim.bind (hse n cfg env cx fr hrel) fun v fr1 ⟨hc, hrel1, hext1⟩ => ?_
+      refine Sim.mono (Sim.eff_flow (c0 := rootOf env x >>= fun r => bindRoot r v)
+        (Flow.normal .unit) (by simp only [bind_assoc]) ?_) (fun a fr' h => h.1)
+      simp only [execEff, slotRoot_eq hrel1, getVal_of hc, bind_assoc, pure_bind]
+  | .assign p e org, h => by
+    have hp := placeClaim p (by simp [stmtA] at h; exact h.1)
+    have he := exprClaim e (by simp [stmtA] at h; exact h.2)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Ep, hEmp, hSp, hNp, hsp⟩ := hp le ls bb hcur
+    obtain ⟨Ee, hEme, hSe, hNe, hse⟩ := he le (lowerPlace p le ls).2 bb hEmp.cur'
+    simp only [lowerStmt, B.bind_run]
+    have hem := emitEffect_em (.store (lowerPlace p le ls).1
+      (lowerExpr e le (lowerPlace p le ls).2).1 (some org)) le hEme.cur'
+    refine ⟨Ep ++ (Ee ++ _), hEmp.trans (hEme.trans hem), hSp.append (hSe.append (straight_eff _)),
+      hNp.append (hNe.append (noscope_eff trivial)), fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmt]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmt, runS_append]
+      refine Sim.bind (hsp n cfg env cx fr hrel) fun l fr1 ⟨hcp, hrel1, hext1⟩ => ?_
+      refine Sim.bind (hse n cfg env cx fr1 hrel1) fun v fr2 ⟨hce, hrel2, hext2⟩ => ?_
+      refine Sim.mono (Sim.eff_flow (c0 := writeLoc l v) (Flow.normal .unit) rfl ?_) (fun a fr' h => h.1)
+      simp only [execEff, getVal_of (hext2 _ _ hcp), getVal_of hce, Goose.Core.expectRef, bind_assoc, pure_bind]
+  | .rebind x e org, h => by
+    have he := exprClaim e (by simpa [stmtA] using h)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Ee, hEme, hSe, hNe, hse⟩ := he le ls bb hcur
+    simp only [lowerStmt, B.bind_run]
+    obtain ⟨hr, hEmr⟩ := emitDef_em (.slotAddr x) le hEme.cur'
+    have hem := emitEffect_em (.store (emitDef (.slotAddr x) le (lowerExpr e le ls).2).1
+      (lowerExpr e le ls).1 (some org)) le hEmr.cur'
+    refine ⟨Ee ++ ([.def _ (.slotAddr x)] ++ [.eff (.store (emitDef (.slotAddr x) le (lowerExpr e le ls).2).1
+      (lowerExpr e le ls).1 (some org))]), hEme.trans (hEmr.trans hem),
+      hSe.append ((straight_def _ (by simp)).append (straight_eff _)),
+      hNe.append ((noscope_def _ _).append (noscope_eff (e := .store _ _ _) trivial)), fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmt, bind_assoc]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmt, runS_append, bind_assoc]
+      refine Sim.bind (hse n cfg env cx fr hrel) fun v fr1 ⟨hc, hrel1, hext1⟩ => ?_
+      rw [show (rootOf env x >>= fun r => writeLoc ⟨r, []⟩ v >>= fun _ => pure (Flow.normal .unit)) =
+        ((rootOf env x >>= fun r => pure (Loc.mk r [])) >>= fun l => writeLoc l v >>= fun _ => pure (Flow.normal .unit))
+        by simp [bind_assoc]]
+      refine Sim.bind (Sim.def_leaf_rel (c := rootOf env x >>= fun r => pure (Loc.mk r []))
+        (fun l => RVal.val (.ref l)) hrel1 hEmr
+        (by simp only [execPure, slotRoot_eq hrel1, bind_assoc, pure_bind])) fun l fr2 ⟨hl, hrel2, hext2⟩ => ?_
+      refine Sim.mono (Sim.eff_flow_rel (c0 := writeLoc l v) (Flow.normal .unit) trivial hrel2 hem rfl ?_)
+        (fun a fr' h => h.1.1)
+      simp only [execEff, hr, getVal_of hl, getVal_of (hext2 _ _ hc), Goose.Core.expectRef, bind_assoc, pure_bind]
+  | .expr e _, h => by
+    have he := exprClaim e (by simpa [stmtA] using h)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Ee, hEme, hSe, hNe, hse⟩ := he le ls bb hcur
+    simp only [lowerStmt, B.bind_run, B.pure_run]
+    refine ⟨Ee, hEme, hSe, hNe, fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmt]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmt]
+      refine Sim.of_bind_pure (Sim.bind (hse n cfg env cx fr hrel) fun v fr1 ⟨hc, _, _⟩ => ?_)
+      exact Sim.pure' rfl rfl
+  | .append owner src org, h => by
+    have hp := placeClaim owner (by simp [stmtA] at h; exact h.1)
+    have hv := viewClaim src (by simp [stmtA] at h; exact h.2)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Ep, hEmp, hSp, hNp, hsp⟩ := hp le ls bb hcur
+    obtain ⟨Ev, hEmv, hSv, hNv, hsv⟩ := hv le (lowerPlace owner le ls).2 bb hEmp.cur'
+    simp only [lowerStmt, B.bind_run]
+    have hem := emitEffect_em (.append (lowerPlace owner le ls).1
+      (lowerView src le (lowerPlace owner le ls).2).1 (some org)) le hEmv.cur'
+    refine ⟨Ep ++ (Ev ++ _), hEmp.trans (hEmv.trans hem), hSp.append (hSv.append (straight_eff _)),
+      hNp.append (hNv.append (noscope_eff trivial)), fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmt]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmt, runS_append]
+      refine Sim.bind (hsp n cfg env cx fr hrel) fun l fr1 ⟨hcp, hrel1, hext1⟩ => ?_
+      refine Sim.bind (hsv n cfg env cx fr1 hrel1) fun vw fr2 ⟨hcv, hrel2, hext2⟩ => ?_
+      refine Sim.mono (Sim.eff_flow (c0 := readRun vw >>= fun elems => appendLoc l elems)
+        (Flow.normal .unit) (by simp only [bind_assoc]) ?_) (fun a fr' h => h.1)
+      simp only [execEff, getVal_of (hext2 _ _ hcp), getView_of hcv, Goose.Core.expectRef, bind_assoc, pure_bind]
+  | .print args org, h => by
+    have hr := printClaim args (by simpa [stmtA] using h)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Er, hEmr, hSr, hNr, hsr⟩ := hr le ls bb hcur
+    simp only [lowerStmt, B.bind_run]
+    have hem := emitEffect_em (.print (lowerPrintArgs args le ls).1 (some org)) le hEmr.cur'
+    refine ⟨Er ++ _, hEmr.trans hem, hSr.append (straight_eff _),
+      hNr.append (noscope_eff trivial), fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmt]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmt, runS_append]
+      refine Sim.bind (hsr n cfg env cx fr hrel) fun strs fr1 ⟨hc, hrel1, hext1⟩ => ?_
+      refine Sim.mono (Sim.eff_flow (c0 := emit (String.join strs ++ "\n"))
+        (Flow.normal .unit) (by simp only [bind_assoc]) ?_) (fun a fr' h => h.1)
+      simp only [execEff, mapList_renderPart_of hc, bind_assoc, pure_bind]
+  | .assignOp op p e org, h => by
+    have hp := placeClaim p (by simp [stmtA] at h; exact h.1)
+    have he := exprClaim e (by simp [stmtA] at h; exact h.2)
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Ep, hEmp, hSp, hNp, hsp⟩ := hp le ls bb hcur
+    rcases hpl : lowerPlace p le ls with ⟨r, ls1⟩
+    simp only [hpl] at hEmp hsp
+    obtain ⟨hr1, hEml⟩ := emitDef_em (.load r) le hEmp.cur'
+    rcases hl : emitDef (.load r) le ls1 with ⟨old, ls2⟩
+    simp only [hl] at hr1 hEml
+    subst hr1
+    obtain ⟨Ee, hEme, hSe, hNe, hse⟩ := he le ls2 bb hEml.cur'
+    rcases hel : lowerExpr e le ls2 with ⟨rhs, ls3⟩
+    simp only [hel] at hEme hse
+    have hty := intTyOf_state ls1.vals.size le ls3
+    simp only [lowerStmt, B.bind_run, hpl, hl, hel]
+    rw [hty]
+    generalize (intTyOf ls1.vals.size le ls3).1 = ty
+    obtain ⟨hr2, hEmb⟩ := emitDef_em (.bin op ty ls1.vals.size rhs (some org)) le hEme.cur'
+    rcases hb : emitDef (.bin op ty ls1.vals.size rhs (some org)) le ls3 with ⟨res, ls4⟩
+    simp only [hb] at hr2 hEmb ⊢
+    subst hr2
+    have hem := emitEffect_em (.store r ls3.vals.size (some org)) le hEmb.cur'
+    refine ⟨Ep ++ ([.def _ (.load r)] ++ (Ee ++ ([.def _ (.bin op ty ls1.vals.size rhs (some org))] ++ [.eff (.store r ls3.vals.size (some org))]))),
+      hEmp.trans (hEml.trans (hEme.trans (hEmb.trans hem))),
+      hSp.append ((straight_def _ (by simp)).append (hSe.append ((straight_def _ (by simp)).append (straight_eff _)))),
+      hNp.append ((noscope_def _ _).append (hNe.append ((noscope_def _ _).append (noscope_eff (e := .store _ _ _) trivial)))),
+      fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmt]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmt, runS_append]
+      refine Sim.bind (hsp n cfg env cx fr hrel) fun l fr1 ⟨hcp, hrel1, hext1⟩ => ?_
+      refine Sim.bind (Sim.def_leaf_rel (c := readLoc l) RVal.val hrel1 hEml
+        (by simp only [execPure, getVal_of hcp, Goose.Core.expectRef, bind_assoc, pure_bind]))
+        fun ov fr2 ⟨hold, hrel2, hext2⟩ => ?_
+      refine Sim.expectInt fun t x hov => ?_
+      subst hov
+      refine Sim.bind (hse n cfg env cx fr2 hrel2) fun ev fr3 ⟨hce, hrel3, hext3⟩ => ?_
+      refine Sim.expectInt fun u y hev => ?_
+      subst hev
+      refine Sim.expectSameTy fun htu => ?_
+      subst htu
+      dsimp only
+      refine Sim.congr_core (c' := (match evalBin cfg.profile op t x y with
+            | .ok r => pure (Val.int t r)
+            | .error k => abortAt (AbortKind.ofNum k) org) >>= fun v =>
+            writeLoc l v >>= fun _ => pure (Flow.normal .unit))
+        (by cases evalBin cfg.profile op t x y <;> rfl) ?_
+      refine Sim.bind (Sim.def_leaf_rel (c := _) RVal.val hrel3 hEmb
+        (execPure_bin hrel3.prof (hext3 _ _ hold) hce)) fun v fr4 ⟨hres, hrel4, hext4⟩ => ?_
+      refine Sim.mono (Sim.eff_flow_rel (c0 := writeLoc l v) (Flow.normal .unit) trivial hrel4 hem rfl ?_)
+        (fun a fr' h => h.1.1)
+      simp only [execEff, getVal_of (hext4 _ _ (hext3 _ _ (hext2 _ _ hcp))), getVal_of hres,
+        Goose.Core.expectRef, bind_assoc, pure_bind]
+  | .ifS .., h => absurd h (by simp [stmtA])
+  | .while .., h => absurd h (by simp [stmtA])
+  | .forRange .., h => absurd h (by simp [stmtA])
+  | .forEach .., h => absurd h (by simp [stmtA])
+  | .ret .., h => absurd h (by simp [stmtA])
+  | .brk _, h => absurd h (by simp [stmtA])
+  | .cont _, h => absurd h (by simp [stmtA])
+  | .assertS .., h => absurd h (by simp [stmtA])
+  | .abort .., h => absurd h (by simp [stmtA])
+  | .exit .., h => absurd h (by simp [stmtA])
+
+theorem isLive_run {ls : LS} {b : BlockId} (h : ls.cur = some b) (le : LEnv) :
+    isLive le ls = (true, ls) := by
+  simp [isLive, curBlock, bind, get, pure, h]
+
+theorem stmtsClaim (lc : Option LoopCtx) : ∀ (ss : List Stmt), (∀ s ∈ ss, stmtA s = true) →
+    Claim (lowerStmts lc ss) (fun n cfg env => execStmts n cfg env ss)
+      (fun _ f _ => f = Flow.normal .unit)
+  | [], _ => by
+    apply Claim.intro
+    intro le ls bb hcur
+    simp only [lowerStmts, B.pure_run]
+    refine ⟨[], by simpa using Em.refl hcur, by simp [Straight], by simp [NoScope],
+      fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmts]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmts]
+      exact Sim.pure' rfl rfl
+  | s :: rest, h => by
+    have hs := stmtClaim lc s (h s (by simp))
+    have hr := stmtsClaim lc rest (fun t ht => h t (by simp [ht]))
+    apply Claim.intro
+    intro le ls bb hcur
+    obtain ⟨Es, hEms, hSs, hNs, hss⟩ := hs le ls bb hcur
+    obtain ⟨Er, hEmr, hSr, hNr, hsr⟩ := hr le (lowerStmt lc s le ls).2 bb hEms.cur'
+    simp only [lowerStmts, B.bind_run, isLive_run hcur]
+    simp only [ite_true, B.bind_run]
+    refine ⟨Es ++ Er, hEms.trans hEmr, hSs.append hSr, hNs.append hNr, fun n cfg env cx fr hrel => ?_⟩
+    cases n with
+    | zero => simp only [execStmts]; exact Sim.timeout
+    | succ n =>
+      simp only [execStmts, runS_append]
+      refine Sim.bind (hss n cfg env cx fr hrel) fun f fr1 ⟨hf, hrel1, hext1⟩ => ?_
+      subst hf
+      exact (hsr n cfg env cx fr1 hrel1).mono fun a fr' h => h.1
+
+/-! ### Scopes and blocks -/
+
+theorem releaseSlots_eq {fn : Func} {vars : Array LocalVar}
+    (hs : fn.slots = vars.mapIdx fun i lv => (⟨lv.ty, lv.kind, lv.scope, i⟩ : Slot))
+    (act : ActId) (sc : Nat) (si : ScopeInst) :
+    ∀ (n : Nat) (st : Store), releaseSlots fn act sc si n st = releaseVars vars act sc si n st
+  | 0, st => rfl
+  | n + 1, st => by
+    simp only [releaseSlots, releaseVars, hs, Array.getElem?_mapIdx]
+    cases vars[n]? with
+    | none => exact releaseSlots_eq hs act sc si n st
+    | some lv => simpa using releaseSlots_eq hs act sc si n _
+
+theorem releaseScope_eq {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls : LS}
+    (hrel : Rel cfg env cx fr ls) (sc : Nat) (si : ScopeInst) :
+    GIR.releaseScope cx.fn fr.act sc si = Core.releaseScope env sc si := by
+  funext s
+  have hsz : cx.fn.slots.size = env.vars.size := by rw [hrel.slots]; simp
+  simp only [GIR.releaseScope, Core.releaseScope, hrel.act, hsz]
+  rw [releaseSlots_eq hrel.slots]
+
+theorem Sim.eff_map {cx : FnCtx} {fr : Frame} {e : Effect} {c : M α} (f : α → Frame)
+    (hx : execEff cx.fn fr e = c >>= fun a => pure (f a)) :
+    Sim c (runS cx fr [.eff e]) (fun a fr' => fr' = f a) := by
+  intro s
+  have key : ∀ s', runS cx fr [.eff e] s' =
+      (match c s' with
+       | .ok a s1 => .ok (f a) s1
+       | .stop e s1 => .stop e s1) := by
+    intro s'
+    simp only [runS, bind_apply, hx]
+    cases c s' with
+    | stop e s1 => rfl
+    | ok a s1 => rfl
+  refine ⟨fun a s1 hc => ?_, fun e s1 hc _ => ?_⟩
+  · rw [key s, hc]
+    exact ⟨_, rfl, rfl⟩
+  · rw [key s, hc]
+
+theorem Em.pushScope {b : BlockId} {ls ls' : LS} {E : List Inst} (h : Em b ls ls' E) (sc : ScopeId)
+    (le : LEnv) : Em b ls ((Lower.pushScope sc : B Unit) le ls').2 E :=
+  ⟨h.cur, h.cur', h.blocks, h.mono, h.fresh⟩
+
+theorem Em.popScope {b : BlockId} {ls ls' : LS} {E : List Inst} (h : Em b ls ls' E)
+    (le : LEnv) : Em b ls ((Lower.popScope : B Unit) le ls').2 E :=
+  ⟨h.cur, h.cur', h.blocks, h.mono, h.fresh⟩
+
+def blockA : Core.Block → Bool
+  | .mk _ ss v => ss.all stmtA && (match v with | none => true | some e => exprA e)
+
+theorem Rel.of_size {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls ls' : LS}
+    (h : Rel cfg env cx fr ls) (hs : ls.vals.size = ls'.vals.size) : Rel cfg env cx fr ls' :=
+  ⟨h.prof, h.slots, h.act, h.scopes, h.depth, fun k hk => hs ▸ h.below k hk⟩
+
+/-- Entering a scope. -/
+theorem enter_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls ls1 : LS} {b : BlockId}
+    (sc : ScopeId) (hrel : Rel cfg env cx fr ls) (hem : Em b ls ls1 [.eff (.enter sc)]) :
+    Sim freshScope (runS cx fr [.eff (.enter sc)]) (fun si fr1 =>
+      fr1 = { fr with scopes := (sc, si) :: fr.scopes } ∧
+      Rel cfg { env with scopes := (sc, si) :: env.scopes } cx fr1 ls1 ∧ Ext fr fr1) := by
+  refine (Sim.eff_map (fun si => { fr with scopes := (sc, si) :: fr.scopes }) rfl).mono ?_
+  intro si fr1 h1
+  subst h1
+  refine ⟨rfl, ⟨hrel.prof, hrel.slots, hrel.act, by simp [hrel.scopes], hrel.depth, fun k hk => ?_⟩,
+    fun k x hk => hk⟩
+  exact Nat.lt_of_lt_of_le (hrel.below k hk) hem.mono
+
+/-- Leaving the scope that was entered last. -/
+theorem leave_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls ls1 : LS} {b : BlockId}
+    (sc : ScopeId) (si : ScopeInst) {β : Type} (x : β)
+    (hrel : Rel cfg { env with scopes := (sc, si) :: env.scopes } cx fr ls)
+    (hem : Em b ls ls1 [.eff (.leave sc)]) :
+    Sim (Core.releaseScope env sc si >>= fun _ => pure x) (runS cx fr [.eff (.leave sc)])
+      (fun a fr' => a = x ∧ fr' = { fr with scopes := env.scopes } ∧ Rel cfg env cx fr' ls1 ∧ Ext fr fr') := by
+  have hsc : fr.scopes = (sc, si) :: env.scopes := hrel.scopes
+  have heq := releaseScope_eq hrel sc si
+  have hx : execEff cx.fn fr (.leave sc) =
+      Core.releaseScope env sc si >>= fun _ => pure ({ fr with scopes := env.scopes } : Frame) := by
+    simp only [execEff, hsc, ↓reduceIte]
+    rw [heq]
+    rfl
+  refine Sim.of_bind_pure ?_
+  have h1 := Sim.eff_map (cx := cx) (fr := fr) (e := .leave sc) (c := Core.releaseScope env sc si)
+    (fun _ => ({ fr with scopes := env.scopes } : Frame))
+    (by simpa using hx)
+  refine Sim.bind h1 fun u fr' h => ?_
+  subst h
+  refine Sim.pure' rfl ⟨rfl, rfl, ⟨hrel.prof, hrel.slots, hrel.act, rfl, hrel.depth, fun k hk => ?_⟩,
+    fun k x hk => hk⟩
+  exact Nat.lt_of_lt_of_le (hrel.below k hk) hem.mono
+
+theorem Sim.bind_pure_left {c : M α} {g1 : M Frame} {g2 : Frame → M Frame} {fr1 : Frame}
+    {p : α → Frame → Prop} (hg : g1 = pure fr1) (h : Sim c (g2 fr1) p) : Sim c (g1 >>= g2) p := by
+  subst hg
+  simpa using h
+
+theorem runS_constUnit (cx : FnCtx) (fr : Frame) (r : ValueId) :
+    runS cx fr [.def r .constUnit] =
+      pure ({ fr with vals := fr.vals.insert r (.val .unit) } : Frame) := by
+  simp [runS, execPure, setCell]
+
+/-- A straight-line block, entered in a fresh scope. -/
+def BlockClaim (want : Bool) (blk : Core.Block) : Prop :=
+  ∀ (le : LEnv) (ls : LS) (b : BlockId), ls.cur = some b →
+    ∃ E, Em b ls (lowerBlock none [] want blk le ls).2 E ∧ Straight E ∧
+      ∀ n cfg env cx fr, Rel cfg env cx fr ls →
+        Sim (execBlock n cfg env [] blk) (runS cx fr E)
+          (fun f fr' => ∃ v, f = Flow.normal v ∧ (blk.value.isNone → v = .unit) ∧
+            ((blk.value.isSome ∨ want = true) →
+              fr'.vals[(lowerBlock none [] want blk le ls).1]? = some (.val v)) ∧
+            Rel cfg env cx fr' (lowerBlock none [] want blk le ls).2 ∧ Ext fr fr')
+
+theorem blockClaim (want : Bool) : ∀ blk : Core.Block, blockA blk = true → BlockClaim want blk
+  | .mk sc stmts value, h => by
+    intro le ls bb hcur
+    have hall : ∀ s ∈ stmts, stmtA s = true := by
+      simp only [blockA, Bool.and_eq_true, List.all_eq_true] at h
+      exact h.1
+    have hem1 := emitEffect_em (.enter sc) le hcur
+    have hem1' := hem1.pushScope sc le
+    obtain ⟨Es, hEms, hSs, hNs, hss⟩ := stmtsClaim none stmts hall le _ bb hem1'.cur'
+    cases value with
+    | some e =>
+      have he := exprClaim e (by simp [blockA] at h; exact h.2)
+      obtain ⟨Ev, hEmv, hSv, hNv, hsv⟩ := he le _ bb hEms.cur'
+      simp only [lowerBlock, B.bind_run, B.pure_run, initSlots]
+      have hem3 := emitEffect_em (.leave sc) le hEmv.cur'
+      refine ⟨[.eff (.enter sc)] ++ (Es ++ (Ev ++ [.eff (.leave sc)])), ?_,
+        (straight_eff _).append (hSs.append (hSv.append (straight_eff _))), ?_⟩
+      · have := ((hem1'.trans hEms).trans hEmv).trans hem3
+        simpa [List.append_assoc] using this.popScope le
+      · intro n cfg env cx fr hrel
+        cases n with
+        | zero => simp only [execBlock]; exact Sim.timeout
+        | succ n =>
+          simp only [execBlock, runS_append, bindAll, pure_bind]
+          refine Sim.bind (enter_sim sc hrel hem1) fun si fr1 ⟨hfr1, hrel1, hext1⟩ => ?_
+          refine Sim.bind (hss n cfg _ cx fr1 (hrel1.of_size rfl)) fun f fr2 ⟨hf, hrel2, hext2⟩ => ?_
+          subst hf
+          simp only []
+          refine Sim.bind (hsv n cfg _ cx fr2 hrel2) fun v fr3 ⟨hc, hrel3, hext3⟩ => ?_
+          refine Sim.mono (leave_sim sc si (Flow.normal v) hrel3 hem3) ?_
+          intro a fr4 ⟨ha, hfr4, hrel4, hext4⟩
+          subst hfr4
+          exact ⟨v, ha, fun hh => by simp [Core.Block.value] at hh, fun _ => hc, hrel4.of_size rfl,
+            hext1.trans (hext2.trans (hext3.trans hext4))⟩
+    | none =>
+      simp only [lowerBlock, B.bind_run, B.pure_run, initSlots]
+      cases want with
+      | true =>
+        simp only [ite_true, B.bind_run, B.pure_run]
+        obtain ⟨hr2, hEmu⟩ := emitDef_em .constUnit le hEms.cur'
+        have hem3 := emitEffect_em (.leave sc) le hEmu.cur'
+        generalize hvid : (lowerStmts none stmts le (pushScope sc le (emitEffect (.enter sc) le ls).2).2).2.vals.size = vid at hr2 hEmu hem3
+        refine ⟨(([.eff (.enter sc)] ++ Es) ++ [.def vid .constUnit]) ++ [.eff (.leave sc)], ?_,
+          (((straight_eff _).append hSs).append (straight_def _ (by simp))).append (straight_eff _), ?_⟩
+        · exact (((hem1'.trans hEms).trans hEmu).trans hem3).popScope le
+        · intro n cfg env cx fr hrel
+          cases n with
+          | zero => simp only [execBlock]; exact Sim.timeout
+          | succ n =>
+            simp only [execBlock, List.append_assoc, runS_append, bindAll, pure_bind]
+            refine Sim.bind (enter_sim sc hrel hem1) fun si fr1 ⟨hfr1, hrel1, hext1⟩ => ?_
+            refine Sim.bind (hss n cfg _ cx fr1 (hrel1.of_size rfl)) fun f fr2 ⟨hf, hrel2, hext2⟩ => ?_
+            subst hf
+            refine Sim.bind_pure_left (runS_constUnit cx fr2 _) ?_
+            have hrel3 := rel_after (s := St.initial) hrel2 hEmu (noscope_def _ _)
+              (by rw [runS_constUnit]; rfl)
+            refine Sim.mono (leave_sim sc si (Flow.normal .unit) hrel3.1 hem3) ?_
+            intro a fr4 ⟨ha, hfr4, hrel4, hext4⟩
+            subst hfr4
+            exact ⟨.unit, ha, fun _ => rfl, fun _ => by simpa [hr2] using cell_insert fr2 _ (.val .unit),
+              hrel4.of_size rfl, hext1.trans (hext2.trans (hrel3.2.trans hext4))⟩
+      | false =>
+        simp only [Bool.false_eq_true, ite_false, B.bind_run, B.pure_run]
+        have hem3 := emitEffect_em (.leave sc) le hEms.cur'
+        refine ⟨([.eff (.enter sc)] ++ Es) ++ [.eff (.leave sc)], ?_,
+          ((straight_eff _).append hSs).append (straight_eff _), ?_⟩
+        · exact ((hem1'.trans hEms).trans hem3).popScope le
+        · intro n cfg env cx fr hrel
+          cases n with
+          | zero => simp only [execBlock]; exact Sim.timeout
+          | succ n =>
+            simp only [execBlock, List.append_assoc, runS_append, bindAll, pure_bind]
+            refine Sim.bind (enter_sim sc hrel hem1) fun si fr1 ⟨hfr1, hrel1, hext1⟩ => ?_
+            refine Sim.bind (hss n cfg _ cx fr1 (hrel1.of_size rfl)) fun f fr2 ⟨hf, hrel2, hext2⟩ => ?_
+            subst hf
+            refine Sim.mono (leave_sim sc si (Flow.normal .unit) hrel2 hem3) ?_
+            intro a fr4 ⟨ha, hfr4, hrel4, hext4⟩
+            subst hfr4
+            exact ⟨.unit, ha, fun _ => rfl, fun hh => by simp [Core.Block.value] at hh,
+              hrel4.of_size rfl, hext1.trans (hext2.trans hext4)⟩
 
 end Goose.Proofs.Lower
