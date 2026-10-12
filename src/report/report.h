@@ -74,6 +74,15 @@ public:
     const string &Text() const { return out; }
 };
 
+// Why the checker made a second specialization whose key equals an earlier
+// one's, as far as the specialization's own flags say.
+enum class DuplicateReason { StoresOutside, RecursiveCycle, FunctionValue, Unclassified, Count };
+inline const char *DuplicateReasonName(DuplicateReason r) {
+    static const char *names[] = { "stores_outside_activation", "recursive_cycle",
+                                   "function_value_environment", "unclassified" };
+    return names[(int)r];
+}
+
 // What the report knows about one source function.
 struct FunctionFacts {
     const SFunction *sf = nullptr;
@@ -82,6 +91,7 @@ struct FunctionFacts {
     vector<const FnSpec *> specs;
     long long nodes_before = 0, nodes_after = 0, live = 0;
     Digest contexts_key;
+    long long duplicates = 0;
     struct DimStat {
         long long distinct = 0, merged = 0;
     };
@@ -100,6 +110,8 @@ struct BuildReport {
     vector<FunctionFacts> functions;
 
     long long source_functions = 0, checked_contexts = 0, entry_reachable = 0;
+    long long duplicate_contexts = 0;
+    long long duplicate_reasons[(int)DuplicateReason::Count] = {};
     long long live_instances = -1;
     long long twin_instances = 0, thread_entries = 0, body_instances = 0;
     bool emitted = false;
@@ -232,29 +244,51 @@ inline void BuildReportAfterCheck(Ast &ast) {
         f.nodes_before += ReportCountNodes(spec->body);
     }
     for (auto &f : r.functions) {
+        // Contexts with equal keys are duplicates: the checker made a second
+        // specialization where the reuse test could not take the first (a
+        // body that stored into its caller's variables, say, or a member of
+        // a recursive cycle). They are counted apart and left out of the
+        // dimension counts, which are about contexts that differ.
         vector<const ContextKey *> ctx;
-        for (auto spec : f.specs) ctx.push_back(&keys.Context(spec));
+        unordered_map<Digest, const FnSpec *, DigestHash> first;
         vector<Digest> totals;
-        for (auto c : ctx) totals.push_back(c->total);
+        for (auto spec : f.specs) {
+            auto &key = keys.Context(spec);
+            totals.push_back(key.total);
+            auto [it, fresh] = first.emplace(key.total, spec);
+            if (fresh) {
+                ctx.push_back(&key);
+                continue;
+            }
+            f.duplicates++;
+            auto prior = it->second;
+            auto reason = prior->storesout || spec->storesout ? DuplicateReason::StoresOutside
+                          : prior->incycle || spec->incycle    ? DuplicateReason::RecursiveCycle
+                          : prior->isfunval || spec->isfunval  ? DuplicateReason::FunctionValue
+                                                               : DuplicateReason::Unclassified;
+            r.duplicate_reasons[(int)reason]++;
+        }
+        r.duplicate_contexts += f.duplicates;
         sort(totals.begin(), totals.end());
         Canon set;
         set.Tag('K').U(totals.size());
         for (auto &t : totals) set.Dig(t);
         f.contexts_key = set.Hash();
-        // Per dimension: how many values the function's contexts take, and by
-        // how many contexts the function would shrink if that dimension
-        // alone were ignored (contexts minus the groups that agree on all
-        // the others).
+        // Per dimension: how many values the function's distinct contexts
+        // take, and by how many contexts the function would shrink if that
+        // dimension alone were ignored (contexts minus the groups that agree
+        // on all the others). A dimension with one value merges nothing.
         for (int d = 0; d < kSpecDims; d++) {
             unordered_set<Digest, DigestHash> values, groups;
+            for (auto c : ctx) values.insert(c->dims[d]);
+            f.dims[d].distinct = (long long)values.size();
+            if (values.size() < 2) continue;
             for (auto c : ctx) {
-                values.insert(c->dims[d]);
                 Canon rest;
                 for (int j = 0; j < kSpecDims; j++)
                     if (j != d) rest.Dig(c->dims[j]);
                 groups.insert(rest.Hash());
             }
-            f.dims[d].distinct = (long long)values.size();
             f.dims[d].merged = (long long)(ctx.size() - groups.size());
         }
     }
@@ -345,6 +379,10 @@ inline void BuildReportWrite() {
     j.F("source_functions", r.source_functions);
     j.F("checked_contexts", r.checked_contexts);
     j.F("entry_reachable_contexts", r.entry_reachable);
+    j.Key("duplicate_contexts").Obj().F("count", r.duplicate_contexts);
+    for (int i = 0; i < (int)DuplicateReason::Count; i++)
+        j.F(DuplicateReasonName((DuplicateReason)i), r.duplicate_reasons[i]);
+    j.EndObj();
     j.Key("live_instances").OptInt(r.live_instances);
     j.Key("emitted_instances");
     if (!r.emitted) j.Null();
@@ -419,7 +457,8 @@ inline void BuildReportWrite() {
         }
         j.Obj();
         j.F("decl_key", f.decl.Stored()).F("name", f.name).F("module", f.module);
-        j.F("contexts", f.specs.size()).F("contexts_key", f.contexts_key.Stored());
+        j.F("contexts", f.specs.size()).F("duplicate_contexts", f.duplicates);
+        j.F("contexts_key", f.contexts_key.Stored());
         j.F("self_check_seconds", self);
         j.F("nodes_before_optimization", f.nodes_before);
         if (r.live_instances >= 0) {
