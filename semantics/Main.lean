@@ -1,6 +1,7 @@
 import Goose.Audit
 import Goose.Core.Run
 import Goose.Share.Cli
+import Goose.Lower.Commands
 
 /-- Reserved subcommands: named so scripts can already refer to them. -/
 def reserved : List String := []
@@ -10,7 +11,11 @@ def usage : String :=
   "       goose-semantics run MODULE.json [--numeric release|debug] [--fuel N] [--no-validate]\n" ++
   "       goose-semantics validate MODULE.json\n" ++
   "       goose-semantics share UNSHARED.json SHARED.json\n" ++
-  "       goose-semantics share --propose UNSHARED.json"
+  "       goose-semantics share --propose UNSHARED.json\n" ++
+  "       goose-semantics lower CORE.json\n" ++
+  "       goose-semantics gir-validate GIR.json\n" ++
+  "       goose-semantics gir-run GIR.json [--numeric release|debug] [--fuel N] [--no-validate]\n" ++
+  "       goose-semantics agree CORE.json GIR.json [--numeric release|debug] [--fuel N]"
 
 /-- Prints one JSON line per audited theorem; fails on a wrong Lean version. -/
 def runAudit : IO UInt32 := do
@@ -52,6 +57,17 @@ def withModule (path : String) (go : ByteArray → String × UInt32) : IO UInt32
   IO.println line
   return status
 
+/-- Print the single JSON line of a command over a Core module and a GIR module. -/
+def withTwoModules (corePath girPath : String) (go : ByteArray → ByteArray → String × UInt32) :
+    IO UInt32 := do
+  let (line, status) ←
+    match (← Goose.Core.Run.readModule corePath), (← Goose.Core.Run.readModule girPath) with
+    | .error msg, _ => pure (Goose.Core.Run.malformed msg)
+    | _, .error msg => pure (Goose.Core.Run.malformed msg)
+    | .ok c, .ok g => pure (go c g)
+  IO.println line
+  return status
+
 def main (args : List String) : IO UInt32 :=
   match args with
   | ["audit"] => runAudit
@@ -68,6 +84,16 @@ def main (args : List String) : IO UInt32 :=
       | .ok a, .ok b => pure (Goose.Share.Cli.checkBytes a b)
     IO.println line
     return status
+  | ["lower", path] => withModule path Goose.Lower.Commands.lowerBytes
+  | ["gir-validate", path] => withModule path Goose.Lower.Commands.girValidateBytes
+  | "gir-run" :: path :: opts =>
+    match parseRunOptions {} opts with
+    | .error msg => usageError msg
+    | .ok settings => withModule path (Goose.Lower.Commands.girRunBytes settings)
+  | "agree" :: corePath :: girPath :: opts =>
+    match parseRunOptions {} opts with
+    | .error msg => usageError msg
+    | .ok settings => withTwoModules corePath girPath (Goose.Lower.Commands.agreeBytes settings)
   | [cmd] =>
     if reserved.contains cmd then do
       IO.eprintln s!"goose-semantics {cmd}: not implemented"
