@@ -704,6 +704,35 @@ Statements:
 
 A global's initializer is a function with no parameters whose block 0 holds `⟦e⟧` and `t_ret [v]` with the global's origin. Every origin an instruction carries is the Core node's own; the prologue's `x_init` of a parameter carries the parameter variable's origin; `i_next`, `i_push`, `i_freeze`, the loop constants, `x_enter`, `x_leave`, `t_br` and `t_condbr` carry none.
 
+### 12.3 Tag table for gir-l/0.2
+
+The low stage (§11) in the same style: tagged arrays, no objects, decimal integers for every table reference, one module record and one line feed. It is written by the compiler (`--emit-gir-low`) and no reader exists, so there are no decoder rules; the compiler's own verifier (`GIR-V090`, with the checks of §9 that apply) judges the module in memory before it is written. Types are `int`, `bool`, `unit` as in §12.1 and one more, `ptr`, an address. Every value of the low stage is an integer, a boolean or an address; an array by value is the address of its bytes.
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `module` | `str` schema (`gir-l/0.2`), `str` profile, `[file]`, `[Ty]`, `[lglobal]`, `[lfunc]`, `fn` entry, `[fn]` initializers, `nat` stacks, `nat` global stacks, `[origin]` | `file` and `origin` as in §12.1. The initializers run in order before the entry. The program starts with `stacks` data stacks and `global stacks` more for resizable globals. |
+| `lglobal` | `str` name, `scalar` `ty` \| `bytes` `nat` size \| `header` | A global's storage: a scalar, a block of bytes, or a resizable's header (its elements are on a stack of its own). |
+| `lfunc` | `str` name, `[ty]` params, `[ty]` results, `nat` stacks, `[member]`, `[nat]` scope parents (`-1` for none), `[block]` | Parameter 0 is the base of the function's data stacks (`i64`). An array or multi-value result is written through an address passed as parameter 1. At most one scalar result. The function owns stacks `0..stacks-1` above its base. |
+| `m_scalar`, `m_bytes`, `m_header` | `ty` \| `nat` size \| `nat` stack, `nat` scope, `str` name | A member of the frame: a scalar variable, a block of bytes, or a header `{base, len}` whose elements are on stack `stack`. The scope bounds its life. |
+| `block`, `bp` | as in §12.2 | The same CFG. |
+
+Shared with §12.2, over integers, booleans and addresses (`i_int`, `i_bool`, `i_cmp`, `i_not`, `i_conv`, `i_call`, `t_br`, `t_condbr`, `t_ret`, `t_exit`), with these differences: `i_bin` and `i_un` carry a `flag` before their origin that is 1 where the operation is the runtime's checked one (`add sub mul div mod`, `neg`) and 0 where it wraps or is bitwise; `i_cmp` may have type `bool`; `i_call` has result `-1` when the callee has none, and its first argument is the stack base; `t_abort` is `["t_abort", AbortKind, [val], [org]?, str]` with the operands of the message (`index_oob`: the index and the length) and the text of a user abort.
+
+| Tag | Fields after the result | Meaning |
+|---|---|---|
+| `l_offset` | `val` address, `val` i64 index, `nat` element size | `address + index * size`. |
+| `l_load`, `l_store` | `ty`, `val` address (, `val`) | Load or store of a scalar or address. |
+| `l_frame` | `nat` member | The address of a frame member. |
+| `l_get`, `l_set` | `nat` member (, `val`) | Read or write a scalar member. |
+| `l_stack` | `val` base, `nat` offset | The data stack `base + offset`. |
+| `l_mark`, `l_release`, `l_bump` | `val` stack (, `val` mark) \| `val` stack, `val` bytes or `-1`, `nat` bytes | The stack's top; restoring it (only on a stack the function owns); moving it up. |
+| `l_gaddr`, `l_gstack` | `nat` global | A global's storage and its stack. |
+| `l_hbase`, `l_hlen`, `l_hinit`, `l_hsetlen` | `val` header (, `val`) | A header's base and length; setting its base with length 0; setting its length. |
+| `l_copy`, `l_move`, `l_fill` | `val` dst, `val` src, (`nat` element size,) `val` count | Bytes copied (regions do not overlap), moved (they may), or a source of `size` bytes repeated `count` times. |
+| `l_rt` | `str` entry point, `val` argument or `-1`, `str` text | A call of the closed list `out_int out_uint out_bool out_text out_nl`, which write the argument, the text, or a line feed. |
+
+Every check of §8 is a compare and a conditional branch to a block that ends in `t_abort`; no view, scope, snapshot, slot or checked index remains.
+
 ## Part B. Build representations
 
 ## 13. The four costs

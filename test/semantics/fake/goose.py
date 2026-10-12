@@ -36,9 +36,14 @@ if "--pipeline" in args:
         print("unknown option: --pipeline", file=sys.stderr)
         sys.exit(1)
     source = Path(args[-1])
-    target = Path(args[args.index("-o") + 1])
     mode = "debug" if "-DGS_DEBUG=1" in args else "release"
     run = script["gir_runs"][source.stem][mode]
+    if "--jit" in args:
+        # An in-process run: the program's streams and status are the compiler's.
+        sys.stdout.write(run.get("stdout", ""))
+        sys.stderr.write(run.get("stderr", ""))
+        sys.exit(run.get("exit", 0))
+    target = Path(args[args.index("-o") + 1])
     target.write_text(
         "#include <stdio.h>\n"
         f"int main(void) {{ fputs({json.dumps(run.get('stdout', ''))}, stdout);"
