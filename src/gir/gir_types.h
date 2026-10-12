@@ -17,6 +17,8 @@ struct GirTyEnv {
     const vector<pair<vector<GirTypeId>, vector<GirTypeId>>> &sigs;
     // The type of every value so far by id, -1 where none is known.
     const vector<GirTypeId> &vals;
+    // The frame of a low function, when typing one.
+    const vector<GirMember> *members = nullptr;
 };
 
 // A type error or the type.
@@ -134,6 +136,15 @@ public:
                 return GirTyOk(i.ty);
             }
             case GirOp::Cmp: {
+                if (m.Type(i.ty).kind == CoreType::Bool) {
+                    auto t = Data(i.a), u = Data(i.b);
+                    if (!t.ok()) return t;
+                    if (!u.ok()) return u;
+                    if (t.ty != i.ty || u.ty != i.ty) return GirTyErr("boolean comparison of non-booleans");
+                    if (i.cmp != CoreCmpOp::Eq && i.cmp != CoreCmpOp::Ne)
+                        return GirTyErr("booleans are only compared for equality");
+                    return GirTyOk(m.BoolType());
+                }
                 auto t = IntTy(i.a), u = IntTy(i.b);
                 if (!t.ok()) return t;
                 if (!u.ok()) return u;
@@ -293,6 +304,51 @@ public:
                 if (e.ty != t.elem) return GirTyErr("fill value of another type than the elements");
                 return GirTyOk(i.ty);
             }
+            // The low stage: scalars and addresses.
+            case GirOp::PtrOffset: {
+                auto p = PtrOf(i.a), n = Data(i.b);
+                if (!p.ok()) return p;
+                if (!n.ok()) return n;
+                if (n.ty != m.IntType(CoreIntTy::I64)) return GirTyErr("an index that is not an i64");
+                return GirTyOk(m.PtrType());
+            }
+            case GirOp::PLoad: {
+                auto p = PtrOf(i.a);
+                if (!p.ok()) return p;
+                auto k = m.Type(i.ty).kind;
+                if (k != CoreType::Int && k != CoreType::Bool && k != CoreType::Ptr)
+                    return GirTyErr("a load of something that is not a scalar");
+                return GirTyOk(i.ty);
+            }
+            case GirOp::FrameAddr:
+                if (!env.members || i.idx < 0 || i.idx >= (int)env.members->size())
+                    return GirTyErr(cat("frame member ", i.idx, " outside the frame"));
+                return GirTyOk(m.PtrType());
+            case GirOp::LocalGet:
+                if (!env.members || i.idx < 0 || i.idx >= (int)env.members->size() ||
+                    (*env.members)[i.idx].kind != GirMember::Scalar)
+                    return GirTyErr(cat("frame member ", i.idx, " is not a scalar of the frame"));
+                return GirTyOk((*env.members)[i.idx].ty);
+            case GirOp::StackAt: {
+                auto b = Data(i.a);
+                if (!b.ok()) return b;
+                if (b.ty != m.IntType(CoreIntTy::I64)) return GirTyErr("a stack base that is not an i64");
+                return GirTyOk(m.PtrType());
+            }
+            case GirOp::StackMark: case GirOp::HdrBase: {
+                auto p = PtrOf(i.a);
+                if (!p.ok()) return p;
+                return GirTyOk(m.PtrType());
+            }
+            case GirOp::GlobalAddr: case GirOp::GlobalStack:
+                if (i.idx < 0 || i.idx >= (int)m.lowglobals.size())
+                    return GirTyErr(cat("global ", i.idx, " outside the global table"));
+                return GirTyOk(m.PtrType());
+            case GirOp::HdrLen: {
+                auto p = PtrOf(i.a);
+                if (!p.ok()) return p;
+                return GirTyOk(m.IntType(CoreIntTy::I64));
+            }
             default: return GirTyErr("not an instruction that defines a value");
         }
     }
@@ -313,6 +369,12 @@ public:
         auto t = Data(v);
         if (!t.ok()) return t;
         if (env.m.Type(t.ty).kind != CoreType::Int) return GirTyErr(cat("value %", v, " is not an integer"));
+        return t;
+    }
+    GirTyResult PtrOf(int v) {
+        auto t = Data(v);
+        if (!t.ok()) return t;
+        if (env.m.Type(t.ty).kind != CoreType::Ptr) return GirTyErr(cat("value %", v, " is not an address"));
         return t;
     }
     GirTyResult Ref(int v) {

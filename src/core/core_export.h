@@ -115,6 +115,11 @@ private:
             }
             if (!CoreIsUtf8(path)) Fail("non-utf8-text", l);
             mod.files.push_back(path);
+            // A runtime diagnostic names the file as the compiler was given it.
+            auto diag = l.fileidx >= 0 && l.fileidx < (int)ast.sources.size()
+                            ? ast.sources[l.fileidx].first : string("?");
+            for (auto &c : diag) if (c == '\\') c = '/';
+            mod.diagfiles.push_back(diag);
             it = filemap.emplace(l.fileidx, (int)mod.files.size() - 1).first;
         }
         return CoreOrigin { it->second, l.line, kind };

@@ -30,7 +30,7 @@ struct GirViolation {
 
 class GirVerifier {
 public:
-    explicit GirVerifier(GirModule &module) : m(module) {}
+    explicit GirVerifier(GirModule &module) : m(module), m_low(module.low) {}
 
     // The first violation, or none.
     optional<GirViolation> Verify() {
@@ -44,6 +44,7 @@ public:
 
 private:
     GirModule &m;
+    bool m_low;
 
     struct Fn {
         string label;
@@ -60,7 +61,7 @@ private:
         int n = 0;
         for (auto &b : f.blocks) {
             n += (int)b.params.size();
-            for (auto &i : b.insts) n += GirDefines(i.op);
+            for (auto &i : b.insts) n += GirDefinesValue(i);
         }
         return n;
     }
@@ -72,7 +73,10 @@ private:
         auto add = [&](int v) { out.push_back(v); };
         switch (i.op) {
             case GirOp::Int: case GirOp::Bool: case GirOp::Unit: case GirOp::Slot: case GirOp::Global:
-            case GirOp::Enter: case GirOp::Leave: case GirOp::Abort:
+            case GirOp::Enter: case GirOp::Leave:
+                break;
+            case GirOp::Abort:
+                for (auto v : i.vals) add(v);
                 break;
             case GirOp::Bin: case GirOp::Cmp: case GirOp::BoolCmp: case GirOp::Elem:
             case GirOp::Index: case GirOp::Push: case GirOp::Store: case GirOp::Append:
@@ -94,6 +98,27 @@ private:
             case GirOp::Print:
                 for (auto &p : i.parts) if (!p.text) add(p.val);
                 break;
+            case GirOp::FrameAddr: case GirOp::LocalGet: case GirOp::GlobalAddr: case GirOp::GlobalStack:
+                break;
+            case GirOp::PtrOffset: case GirOp::PStore: case GirOp::StackRelease: case GirOp::HdrInit:
+            case GirOp::HdrSetLen:
+                add(i.a); add(i.b);
+                break;
+            case GirOp::PLoad: case GirOp::StackAt: case GirOp::StackMark: case GirOp::HdrBase:
+            case GirOp::HdrLen: case GirOp::LocalSet:
+                add(i.a);
+                break;
+            case GirOp::StackBump:
+                add(i.a);
+                if (i.b >= 0) add(i.b);
+                break;
+            case GirOp::BytesCopy: case GirOp::BytesMove: case GirOp::BytesFill:
+                add(i.a); add(i.b);
+                for (auto v : i.vals) add(v);
+                break;
+            case GirOp::RtCall:
+                if (i.a >= 0) add(i.a);
+                break;
             case GirOp::CondBr:
                 add(i.a);
                 for (auto v : i.vals) add(v);
@@ -109,10 +134,10 @@ private:
 
     // Instructions that can abort or that stand for a source statement must
     // say where they came from.
-    static bool NeedsOrigin(const GirInst &i) {
+    bool NeedsOrigin(const GirInst &i) const {
         switch (i.op) {
-            case GirOp::Bin: return MayAbortBin(i.bin);
-            case GirOp::Un: return i.un == CoreUnOp::Neg;
+            case GirOp::Bin: return MayAbortBin(i.bin) && (!m_low || i.flag);
+            case GirOp::Un: return i.un == CoreUnOp::Neg && (!m_low || i.flag);
             case GirOp::Conv: return i.conv == CoreConvKind::As;
             case GirOp::ViewSlice: case GirOp::Index: case GirOp::Call:
             case GirOp::Init: case GirOp::Store: case GirOp::Append: case GirOp::Print:
@@ -149,6 +174,7 @@ private:
     // ---------------------------------------------------------------------
 
     void Run() {
+        CheckStages();
         CheckEntryAndGlobals();
         for (auto &f : m.funcs) sigs.push_back({ f.params, f.results });
         for (auto &f : m.funcs) fns.push_back({ cat("function ", f.name), &f, {}, 0 });
@@ -158,6 +184,11 @@ private:
         for (auto &fn : fns) ValueTypes(fn);
         for (auto &fn : fns) CheckTypes(fn);
         for (auto &fn : fns) CheckCfg(fn);
+        if (m.low) {
+            for (auto &fn : fns) CheckPlacement(fn);
+            for (auto &fn : fns) CheckOrigins(fn);
+            return;
+        }
         vector<ScopeWalk> walks;
         for (auto &fn : fns) walks.push_back(WalkScopes(fn));
         for (size_t k = 0; k < fns.size(); k++) {
@@ -170,14 +201,88 @@ private:
         for (auto &fn : fns) CheckOrigins(fn);
     }
 
+    // --- GIR-V090 ---------------------------------------------------------
+
+    // Only the stage's operations. Read first, because a module that mixes
+    // the stages has no types to check.
+    void CheckStages() {
+        auto scan = [&](const GirFunc &f, const string &label) {
+            for (auto &b : f.blocks)
+                for (auto &i : b.insts) {
+                    if (m.low && GirHighOnly(i.op))
+                        Fail("GIR-V090", cat(label, ": an operation of the high stage in a low module"));
+                    if (!m.low && GirLowOnly(i.op))
+                        Fail("GIR-V090", cat(label, ": an operation of the low stage in a high module"));
+                }
+        };
+        for (auto &f : m.funcs) scan(f, cat("function ", f.name));
+        for (auto &g : m.globals) scan(g.init, cat("initializer of global ", g.name));
+    }
+
+    static bool ScopeWithin(const vector<int> &parents, int inner, int outer) {
+        for (auto s = inner; s >= 0 && s < (int)parents.size(); s = parents[s])
+            if (s == outer) return true;
+        return false;
+    }
+
+    // Layouts, placements and hidden parameters are all resolved, and the
+    // data stacks are used as placement promised.
+    void CheckPlacement(const Fn &fn) {
+        auto &f = *fn.f;
+        auto bad = [&](const string &msg) { Fail("GIR-V090", cat(fn.label, ": ", msg)); };
+        auto scalar = [&](GirTypeId t) {
+            auto k = m.Type(t).kind;
+            return k == CoreType::Int || k == CoreType::Bool || k == CoreType::Ptr;
+        };
+        for (auto t : f.params) if (!scalar(t)) bad("a parameter whose layout is not resolved");
+        for (auto t : f.results) if (!scalar(t)) bad("a result whose layout is not resolved");
+        if (f.params.empty() || m.Type(f.params[0]).kind != CoreType::Int || m.Type(f.params[0]).ity != CoreIntTy::I64)
+            bad("the hidden stack base parameter is missing");
+        for (auto &b : f.blocks)
+            for (auto &p : b.params) if (!scalar(p.second)) bad("a block parameter whose layout is not resolved");
+        for (auto t : fn.vt) if (t >= 0 && !scalar(t)) bad("a value whose layout is not resolved");
+        for (auto &mem : f.members) {
+            if (mem.kind == GirMember::Scalar && (mem.ty < 0 || !scalar(mem.ty)))
+                bad("a frame member whose layout is not resolved");
+            if (mem.kind == GirMember::Bytes && mem.size <= 0) bad("a block of bytes without a size");
+            if (mem.kind == GirMember::Header && (mem.stack < 0 || mem.stack >= f.stacks))
+                bad("a header whose data stack is outside the function's stacks");
+        }
+        // At most one live resizable per stack: two that share a stack have
+        // scopes that neither contains the other.
+        for (size_t a = 0; a < f.members.size(); a++)
+            for (size_t c = a + 1; c < f.members.size(); c++) {
+                auto &x = f.members[a], &y = f.members[c];
+                if (x.kind != GirMember::Header || y.kind != GirMember::Header || x.stack != y.stack) continue;
+                if (ScopeWithin(f.scopes, x.scope, y.scope) || ScopeWithin(f.scopes, y.scope, x.scope))
+                    bad(cat("two resizables live on data stack ", x.stack));
+            }
+        // Which stack each address value is: one the function owns, or not.
+        // A watermark is restored only on a stack the function owns.
+        vector<char> owned(fn.vt.size(), 0);
+        for (auto &b : f.blocks)
+            for (auto &i : b.insts) {
+                if (i.op == GirOp::StackAt && i.res >= 0 && i.res < (int)owned.size())
+                    owned[i.res] = i.idx >= 0 && i.idx < f.stacks;
+                if (i.op == GirOp::StackRelease && !(i.a >= 0 && i.a < (int)owned.size() && owned[i.a]))
+                    bad("a watermark restored on a stack the caller owns");
+                if (i.op == GirOp::StackBump && i.idx >= 0 && i.b < 0 && i.idx == 0)
+                    bad("a stack bumped by nothing");
+            }
+    }
+
     // --- GIR-V001 ---------------------------------------------------------
 
     void CheckEntryAndGlobals() {
         if (m.entry < 0 || m.entry >= (int)m.funcs.size())
             Fail("GIR-V001", cat("the entry ", m.entry, " is outside the function table"));
         auto &e = m.funcs[m.entry];
-        if (!e.params.empty() || !e.results.empty())
+        // A low function's one parameter is the base of its data stacks.
+        if (e.params.size() != (m.low ? 1u : 0u) || !e.results.empty())
             Fail("GIR-V001", cat("the entry ", e.name, " must take no parameters and return nothing"));
+        for (auto g : m.initfuncs)
+            if (g < 0 || g >= (int)m.funcs.size())
+                Fail("GIR-V001", cat("an initializer function ", g, " is outside the function table"));
         for (auto &g : m.globals) {
             if (!g.init.params.empty() || g.init.results.size() != 1 || g.init.results[0] != g.ty)
                 Fail("GIR-V001", cat("the initializer of global ", g.name,
@@ -220,7 +325,7 @@ private:
         };
         for (auto &b : f.blocks) {
             for (auto &p : b.params) define(p.first);
-            for (auto &i : b.insts) if (GirDefines(i.op)) define(i.res);
+            for (auto &i : b.insts) if (GirDefinesValue(i)) define(i.res);
             for (auto &i : b.insts) CheckInstSymbols(fn, i, n);
         }
     }
@@ -273,8 +378,8 @@ private:
             changed = false;
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
-                    if (!GirDefines(i.op) || i.res >= fn.nvalues || fn.vt[i.res] >= 0) continue;
-                    GirTyEnv env { m, f.slots, sigs, fn.vt };
+                    if (!GirDefinesValue(i) || i.res >= fn.nvalues || fn.vt[i.res] >= 0) continue;
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
                     auto r = GirTyper(env).Of(i);
                     if (r.ok()) {
                         fn.vt[i.res] = r.ty;
@@ -288,7 +393,7 @@ private:
 
     void CheckEffectTypes(const Fn &fn, const GirInst &i) {
         auto &f = *fn.f;
-        GirTyEnv env { m, f.slots, sigs, fn.vt };
+        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
         GirTyper ty(env);
         auto need = [&](GirTyResult r) {
             if (!r.ok()) TypeFail(fn, r.error);
@@ -317,6 +422,45 @@ private:
                     TypeFail(fn, "appended elements of another type than the array's");
                 break;
             }
+            case GirOp::PStore: {
+                need(ty.PtrOf(i.a));
+                auto v = need(ty.Data(i.b));
+                if (v != i.ty) TypeFail(fn, "a store of a value of another type than the one stated");
+                break;
+            }
+            case GirOp::LocalSet: {
+                if (i.idx < 0 || i.idx >= (int)f.members.size() || f.members[i.idx].kind != GirMember::Scalar)
+                    TypeFail(fn, cat("frame member ", i.idx, " is not a scalar of the frame"));
+                if (need(ty.Data(i.a)) != f.members[i.idx].ty)
+                    TypeFail(fn, "a member set to a value of another type");
+                break;
+            }
+            case GirOp::StackRelease: case GirOp::HdrInit:
+                need(ty.PtrOf(i.a));
+                need(ty.PtrOf(i.b));
+                break;
+            case GirOp::StackBump:
+                need(ty.PtrOf(i.a));
+                if (i.b >= 0) need(ty.IntTy(i.b));
+                break;
+            case GirOp::HdrSetLen:
+                need(ty.PtrOf(i.a));
+                need(ty.IntTy(i.b));
+                break;
+            case GirOp::BytesCopy: case GirOp::BytesMove: case GirOp::BytesFill:
+                need(ty.PtrOf(i.a));
+                need(ty.PtrOf(i.b));
+                if (i.vals.size() != 1) TypeFail(fn, "a byte operation without its count");
+                need(ty.IntTy(i.vals[0]));
+                break;
+            case GirOp::RtCall:
+                if (i.idx < 0 || i.idx >= (int)GirRt::Count) TypeFail(fn, "a call of an unknown runtime entry point");
+                if (i.a >= 0) {
+                    auto t = need(ty.Data(i.a));
+                    auto k = m.Type(t).kind;
+                    if (k != CoreType::Int && k != CoreType::Bool) TypeFail(fn, "a runtime call argument that is not a scalar");
+                }
+                break;
             case GirOp::Print:
                 for (auto &p : i.parts) {
                     if (p.text) continue;
@@ -332,7 +476,7 @@ private:
 
     void CheckTermTypes(const Fn &fn, const GirInst &i) {
         auto &f = *fn.f;
-        GirTyEnv env { m, f.slots, sigs, fn.vt };
+        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
         GirTyper ty(env);
         auto need = [&](GirTyResult r) {
             if (!r.ok()) TypeFail(fn, r.error);
@@ -369,11 +513,16 @@ private:
                 TypeFail(fn, cat("the slot of variable ", sl.var, " has a type no variable may have"));
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
-                if (GirDefines(i.op)) {
-                    GirTyEnv env { m, f.slots, sigs, fn.vt };
+                if (GirDefinesValue(i)) {
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
                     auto r = GirTyper(env).Of(i);
                     if (!r.ok()) TypeFail(fn, r.error);
                     if (fn.vt[i.res] != r.ty) TypeFail(fn, cat("value %", i.res, " has two types"));
+                } else if (i.op == GirOp::Call) {
+                    // A call with no result in the low stage.
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+                    auto r = GirTyper(env).Of(i);
+                    if (!r.ok()) TypeFail(fn, r.error);
                 } else if (GirIsTerminator(i.op)) {
                     CheckTermTypes(fn, i);
                 } else {
@@ -454,7 +603,7 @@ private:
         for (int b = 0; b < n; b++) {
             for (auto &p : f.blocks[b].params) defat[p.first] = { b, -1 };
             for (size_t k = 0; k < f.blocks[b].insts.size(); k++)
-                if (GirDefines(f.blocks[b].insts[k].op)) defat[f.blocks[b].insts[k].res] = { b, (int)k };
+                if (GirDefinesValue(f.blocks[b].insts[k])) defat[f.blocks[b].insts[k].res] = { b, (int)k };
         }
         for (int u = 0; u < n; u++)
             for (size_t k = 0; k < f.blocks[u].insts.size(); k++) {
@@ -654,7 +803,7 @@ private:
         };
         for (auto &blk : f.blocks)
             for (auto &i : blk.insts) {
-                if (GirDefines(i.op)) changed |= AddTo(p.vals, i.res, RootsOfDef(res, fn, p, i));
+                if (GirDefinesValue(i)) changed |= AddTo(p.vals, i.res, RootsOfDef(res, fn, p, i));
                 else if (i.op == GirOp::Init) changed |= AddTo(p.slots, i.idx, RootsAt(p.vals, i.a));
                 else if (i.op == GirOp::Store) {
                     for (auto &root : RootsAt(p.vals, i.a))
