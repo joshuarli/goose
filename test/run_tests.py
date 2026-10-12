@@ -92,7 +92,7 @@ EXTRAS = (
     "extra/guard_runs", "extra/lexer_tokens", "extra/shader", "extra/optimizer",
     "extra/stacks", "extra/loop_shapes", "extra/inline_fn_c", "extra/member_params",
     "extra/member_stores", "extra/compiler_units", "extra/runtime_lifecycle",
-    "extra/clang", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
+    "extra/clang", "extra/extern_types", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
     "extra/runtime_cache",
 )
 
@@ -1899,7 +1899,7 @@ def main():
             r.ok("extern types: unused and partially used C adapters")
         except RuntimeError as e:
             r.fail("extern types", str(e))
-    if cc or jit:
+    if (cc or jit) and wanted("extra/extern_types"):
         r.section("extern types")
         r.show_task(extern_types)
 
