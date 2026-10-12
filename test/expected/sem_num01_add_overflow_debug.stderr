@@ -1,0 +1,2 @@
+integer overflow (debug): 127 + 1 at i8
+sem_num01_add_overflow_debug.goose:7)

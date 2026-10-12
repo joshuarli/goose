@@ -1,0 +1,2 @@
+integer overflow (debug): 4294967296 * 4294967296 at i64
+sem_num01_mul_overflow_debug.goose:7)
