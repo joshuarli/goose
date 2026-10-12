@@ -2,16 +2,10 @@ import Goose.Core.Validate
 import Goose.Proofs.Memory
 
 /-!
-What acceptance by `validate` establishes, stated about the module and the
-memory model rather than about the checker's functions.
-
-Only the parts that follow from a bounded unfolding of `validate` are proved
-here. The invariant the safety induction needs for statements and expressions
-(well-typed stores, annotations that over-approximate the roots a variable can
-hold) is defined in `Goose.Proofs.Memory` as `FlatTy`, `LocTy`, `HeldOk` and
-`LiveRefs`; deriving it from acceptance needs inversion of the typing and root
-passes at every syntactic form, which is the unproved part of the safety
-theorem.
+Two facts that follow from a bounded unfolding of `validate`: the shape of the
+entry, and that a run starts in a store with no reference at all. What
+acceptance gives for every context, over stores, values and locations, is
+`Goose.Proofs.Safety.validated_context_sound`.
 -/
 
 namespace Goose.Proofs.Core

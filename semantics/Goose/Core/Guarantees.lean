@@ -2,8 +2,9 @@ import Goose.Core.Validate
 import Goose.Core.Eval
 
 /-!
-What `validate` is meant to guarantee, stated as propositions. Nothing here is
-proved; each is a target for the proofs about `eval` and `validate`.
+What `validate` guarantees, stated as propositions. `FaultFree` is proved of
+every accepted module in `Goose.Proofs.Safety`; the rule-level agreement at
+the end is a statement only.
 
 The dynamic properties speak of `eval` alone. The rule-level properties speak
 of the per-item stages `validate` is built from, collected without
