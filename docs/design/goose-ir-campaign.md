@@ -23,7 +23,7 @@
 ## 1. Charter
 
 - Decide, log the call in §10, and keep going. Never ask, never wait for approval, send no progress report. Run until every deliverable is met or every remaining item is parked.
-- Hard stops, each of which parks the item and moves on: an action outside this repository other than reading the Aincrad3 checkout; anything §7 forbids; a loop that cannot check anything. Pushing is always forbidden. So are upstream pull requests.
+- Hard stops, each of which parks the item and moves on: an action outside this repository other than reading the Aincrad3 checkout and the upstream draft pull requests of O7; anything §7 forbids; a loop that cannot check anything. Pushing is forbidden except the one fix branch each O7 pull request needs, pushed to the fork and never to upstream.
 - Fix on the way, in its own commit, what is egregious: a loop command over 5 minutes on a quiet host; a CPU-time regression over 2× against the baseline on a command whose new flags are absent; a test red on the baseline that blocks the item. Record anything else and leave it.
 - Parity before optimization. No item of phase P3 starts while a P1 item is neither done nor parked.
 - A failing item gets three attempts, each ending in a root-cause statement (`root-cause`); Tier B theorems get two. Then it is parked with a finding, and work continues with whatever does not depend on it.
@@ -48,6 +48,7 @@
 | O4 | Sharing, units and reuse land first on the legacy backend through a backend-neutral layer, so Aincrad3 benefits in this campaign. GIR-L feeds the same layer afterwards. |
 | O5 | The executor may read and build the local Aincrad3 checkout at a recorded commit. Only aggregate counts, sizes and timings enter this repository. |
 | O6 | Build scalability is a primary requirement with its own gates, not a consequence hoped for from the IR. |
+| O7 | A genuine compiler defect found along the way gets a draft pull request to upstream, following the guidelines. They are in two places: this repository's `AGENTS.md` ("Upstream pull requests") and the Aincrad3 checkout's `docs/GOOSE-WORKFLOW.md`; where they differ, the stricter applies. In short: the defect violates a supported language or runtime contract and is confirmed on the failing baseline; it is reduced to a small public fixture; the fix branch starts from upstream `master` and carries one fix, its regression test and no fork tooling; the exact Docker reproducer is run locally with Clang 23 and the current stable GCC and shows the baseline failure and the fixed result; a before/after `test/goose_in_goose` comparison and the affected normal workloads are measured on a quiet host; the title is a Conventional Commit and the body is What, Why, How, Testing, Reproduction; the pull request stays a draft and is never merged by the executor. Linter defects are fork matters and are not sent upstream. The fix is also cherry-picked onto `goose-ir`. |
 
 ### 2.2 Prescribed
 
@@ -171,6 +172,7 @@ Build track. It starts at the same time as `S1`.
 | `H1` | M | The rest of validation plan §7. | Every row fails at its named layer. |
 | `H2` | M | `E10`–`E16`, and the seeded randomized edit sequence under `--verify-reuse`. | **`L-FAIL`**; no divergence from a clean build. |
 | `H3` | M | Validation plan §8, including a `--units`-built `goose-lint` run through the linter suite. | `LINT-01`–`LINT-08`. |
+| `U1` | rolling | For each suspected compiler defect a lane or the integrator reports: confirm it against the language specification on the upstream compiler, and if it is genuine, carry out O7. A suspicion that does not survive confirmation is recorded in §12 with the reason. | The draft pull request's own reproducer and checks, quoted in §11; or the §12 line. |
 | `H4` | M | `docs/implementation.md` and `docs/testing.md` sections for the new flags, the report, sharing, units and the store, in domain terms; `semantics/decisions.md` and `trust.md` complete; §8 complete. | Every command in the docs runs. |
 
 ### 4.5 P3 — optimization and polish
@@ -218,6 +220,8 @@ The full baseline suite runs at `G-PILOT`, `G-SHARE`, `G-UNITS`, `G-GIR` and the
 ## 7. Contract changes
 
 **Pre-authorized, all additive and opt-in:** the flags `--emit-core FILE`, `--emit-gir-high FILE`, `--emit-gir-low FILE`, `--pipeline legacy|gir`, `--build-report FILE`, `--share`, `--emit-units DIR`, and for `goose build`: `--units`, `--rebuild`, `--verify-reuse`; the report format `goose-build-report/1`; the store directories under a program's existing build directory; `src/runtime/runtime_units.h`; `--only` and `--goose-arg` in `test/run_tests.py`; `--semantics` and `--pipeline` in `fuzz/driver.py`; new files in `CMakeLists.txt`'s source list; new entries in the C++ unit-test list.
+
+**Also authorized (O7):** pushing one fix branch per confirmed defect to the fork and opening a draft pull request against upstream from it.
 
 **Forbidden:** changing the behavior or default output bytes of any existing command; facts v1, diagnostics v1, contracts v1, lint configuration, baselines, lint statuses, warning text; `docs/goose_spec.md`; existing fixtures and expected outputs; the five existing runtime files; the checker's acceptance of any program; `.github/workflows`; a new dependency in C++ or Lean; making any new mode the default; `master`.
 
@@ -356,6 +360,7 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 *(append-only; one line per judgment call: the call and why)*
 
 - Aincrad3's core entry imports a source file that its build generates and does not track. Copied it from the checkout's existing staged build output instead of running its generator, which reads another private repository: reading the checkout is within O5, the generator's input is not.
+- Suspected defects so far, for `U1`: (1) `native_stack_overflow` and `render_reference_cycle` do not print the native-stack-overflow diagnostic on this musl host — under investigation; (2) `redundant_cast` lint warnings appear to carry no specialization contexts, against the facts documentation — a linter matter, so a fork issue at most, not an upstream pull request; (3) `print` writes its line after evaluating all arguments, where the language text can be read as rendering in order — recorded as a model decision, not a defect, because the text does not say when bytes reach the output. The Lean model and the compiler have disagreed on no program yet.
 - An attempt at a failing item is one lane session that ends with the acceptance check red and a root-cause account. The first session on `T1` proved fuel monotonicity, the growth theorem and the per-operation invariant lemmas, and stopped short of `TH-SAFE-01` on proof volume and architecture, with no counterexample found. The second attempt goes to a `god` lane, which the routing rules reserve for work an `expert` has failed on with evidence, and it may restructure the validator but not the evaluator.
 - Sharing classes are computed by partition refinement to a stable partition, not by ordering call-graph components as first specified. It merges a superset of what the component method would, is independent of creation order, needs no rule for unorderable components, and is exactly the congruence the sharing theorem assumes. Specification §16.2 now says so.
 - Nonlocal-target ids under stable naming come from the target's context key, not its declaration key: the legacy protocol distinguishes target specializations, and two contexts of one target need distinct ids.
