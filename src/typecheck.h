@@ -666,6 +666,7 @@ struct TypeCheck {
     bool quiet = false;
     void Warn(const Node *n, LintWarningCode code, const string &msg) {
         if (quiet) return;
+        DepNoteWarning((int)code, msg);
         Warning w;
         w.text = cat(Where(n->line), ": warning: ", msg, "\n");
         w.at = n->Origin();
@@ -2613,6 +2614,7 @@ struct TypeCheck {
                 for (auto &fld : v.fields)
                     if (fld.type) TypeParamSizes(fld.type, en->generics);
         for (auto g : ast.globals) {
+            DepScope depscope(g);
             CheckVarDecl(g, true);
             for (auto d : g->defs) d->assigned = d->maybeassigned = true;
         }

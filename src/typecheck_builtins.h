@@ -56,7 +56,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             // name hides it, as at a call (§11.1).
             auto wvd = wid ? LookupVar(wid->name, wid->ns) : nullptr;
             if (wid && !(wvd && !wvd->isglobal) && !ScopeNameKind(wid->name))
-                for (auto sf : ast.LookupFunctions(wid->name, wid->ns))
+                for (auto sf : DepLookupFunctions(ast, wid->name, wid->ns))
                     if (sf->isthread) wsf = sf;
             if (!wsf) Error(c, "thread_spawn's first argument names a thread_fn");
             wid->fnref = wsf;
@@ -785,6 +785,7 @@ inline FnSpec *TypeCheck::UserFormat(Call *c, TypeExpr *t, const Val &value, con
 
 inline FnSpec *TypeCheck::UserFormatIn(Call *c, TypeExpr *t, string_view ns,
                                       const Val &value, const Val &out, Node *arg) {
+    DepNoteLookup(DepLookup::Function, "format", ns);
     auto n = ast.FindNS(ns);
     if (!n) return nullptr;
     auto fit = n->functionmap.find("format");
@@ -856,7 +857,7 @@ inline StrLit *TypeCheck::ConstStrLit(Node *n) {
     if (auto vd = LookupVar(id->name, id->ns); !vd || !vd->isglobal) return nullptr;
     set<VarDecl *> visiting;
     for (;;) {
-        auto g = ast.LookupGlobal(id->name, id->ns);
+        auto g = DepLookupGlobal(ast, id->name, id->ns);
         if (!g || g->isvar || g->inits.size() != 1 || !visiting.insert(g).second) return nullptr;
         if (auto s = Is<StrLit>(g->inits[0])) return s;
         if (!(id = Is<Ident>(g->inits[0]))) return nullptr;
@@ -882,8 +883,10 @@ inline const string *TypeCheck::EmbedFile(Call *c, vector<Node *> &args) {
     if (it == ast.shaders.end()) {
         string bytes;
         if (!LoadFile(path, bytes)) Error(c, cat("embed_file: cannot open ", path));
+        DepNoteFileRead(path, bytes);
         it = ast.shaders.emplace(key, std::move(bytes)).first;
     }
+    DepNoteResource("embed_file", path, it->second);
     return &it->second;
 }
 
@@ -921,7 +924,9 @@ inline const string *TypeCheck::EmbedShader(Call *c, vector<Node *> &args) {
             } catch (CompileError &e) {
                 Error(c, cat("embed_shader: ", e.msg));
             }
+            DepNoteInput(path);
         }
+        DepNoteResource("embed_shader", path, it->second);
         return &it->second;
     }
     auto stage = ShaderStageNamed(lits[0]->val);

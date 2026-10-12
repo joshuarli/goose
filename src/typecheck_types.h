@@ -57,6 +57,7 @@ inline void TypeCheck::LimitNestedInsts(TypeExpr *t) {
 }
 
 inline StructInst *TypeCheck::GetStructInst(TypeExpr *t) {
+    DepNoteType(t);
     auto st = t->struc->st;
     if (t->struc->inst) return t->struc->inst;
     for (auto inst : st->insts)
@@ -117,6 +118,7 @@ inline StructInst *TypeCheck::GetStructInst(TypeExpr *t) {
 }
 
 inline EnumInst *TypeCheck::GetEnumInst(TypeExpr *t) {
+    DepNoteType(t);
     auto en = t->enu->en;
     if (t->enu->inst) return t->enu->inst;
     for (auto inst : en->insts)
@@ -928,7 +930,7 @@ inline bool TypeCheck::NamedResultKeepsLinks(TypeExpr *t) {
 inline void TypeCheck::ResolvePools() {
     for (auto t : ast.alltypes) {
         if (t->kind != TY_REF || t->ref->poolname.empty()) continue;
-        auto g = ast.LookupGlobal(t->ref->poolname, t->ref->poolns);
+        auto g = DepLookupGlobal(ast, t->ref->poolname, t->ref->poolns);
         if (!g || g->defs.empty())
             Error(t->line, cat("in ", t->ref->poolname,
                                ": a relative reference's pool must be a global variable; a "

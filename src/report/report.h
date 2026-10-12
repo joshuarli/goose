@@ -16,6 +16,8 @@ string RuntimeVersion();
 // The sharing section, written by units/share_report.h.
 inline void ReportSharingJson(class JsonOut &j);
 inline void ReportUnitsJson(class JsonOut &j);
+class JsonOut;
+inline void DepsWrite(JsonOut &j);   // deps_report.h
 
 constexpr const char *kBuildReportFormat = "goose-build-report/1";
 
@@ -212,6 +214,7 @@ inline void BuildReportStart(const string &path, const string &input, int optlev
     g_build_report->frontend_only = frontend_only;
     build_recorder = &g_build_report->rec;
     emit_options.explain = true;
+    DepsStart();
     g_build_report->rec.Enter(Phase::ParseResolve);
 }
 
@@ -297,6 +300,7 @@ inline void BuildReportAfterCheck(Ast &ast) {
             f.dims[d].merged = (long long)(ctx.size() - groups.size());
         }
     }
+    DepsAfterCheck(ast, keys);
     r.rec.Enter(Phase::Optimize);
 }
 
@@ -548,6 +552,7 @@ inline void BuildReportWrite() {
     j.Key("units");
     ReportUnitsJson(j);
     j.Key("native_compile").Null();
+    DepsWrite(j);
     j.EndObj();
     j.EndObj();
 

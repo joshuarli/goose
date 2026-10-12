@@ -159,7 +159,7 @@ inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
         v.fnv = tc.LocalFnValue(fns, env);
         return v;
     }
-    if (auto &cands = tc.ast.LookupFunctions(name, ns); !cands.empty()) {
+    if (auto &cands = DepLookupFunctions(tc.ast, name, ns); !cands.empty()) {
         fnref = cands[0];
         Val v;
         v.type = tc.fntype;
@@ -412,7 +412,7 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
     if (auto id = Is<Ident>(obj)) {
         const FnValBind *fb;
         if (!tc.LookupVar(id->name, id->ns) && !tc.LookupTypeParam(id->name, fb) && !fb)
-            if (auto en = tc.ast.LookupEnum(id->name, id->ns))
+            if (auto en = DepLookupEnum(tc.ast, id->name, id->ns))
                 return tc.CheckVariantConst(this, en);
     }
     auto ov = tc.CheckV(obj, nullptr);

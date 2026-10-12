@@ -125,6 +125,7 @@ inline string GitCacheDir(const PackageSource &s) {
 inline void LoadSidecar(Package &pkg, bool isprogram) {
     pkg.sidecar = cat(pkg.root, pkg.name, ".build");
     auto bf = LoadBuildFile(pkg.sidecar, pkg.hassidecar);
+    DepNoteInput(pkg.sidecar);
     if (!pkg.hassidecar) return;
     const char *lists[] = { "c_sources", "c_include", "c_defines", "c_flags_cc", "c_flags_msvc",
                             "c_libs" };
