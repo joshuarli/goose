@@ -1,5 +1,15 @@
 # The in-process C backend (JIT mode)
 
+<details>
+<summary>Table of contents</summary>
+
+- [What it is](#what-it-is)
+- [How it is built](#how-it-is-built)
+- [Testing](#testing)
+- [Follow-up work](#follow-up-work)
+
+</details>
+
 How the TinyCC backend works and its remaining limitations.
 
 ## What it is

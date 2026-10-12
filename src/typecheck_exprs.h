@@ -643,7 +643,7 @@ inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
 
 // References are transparent: load the pointee unless the destination
 // wants the reference itself. Optionals never decay (narrow first).
-inline Val TypeCheck::DecayRef(Val v) {
+inline Val TypeCheck::DecayRef(const Val &v) {
     if (!IsPlainRef(v.type)) return v;
     Val r;
     r.type = LoadType(v.type->ref->sub);
@@ -909,7 +909,7 @@ inline Val TypeCheck::CheckValue(Node *&n, TypeExpr *expected, bool callsite, bo
     if (auto c = Is<Call>(n); c && c->builtin == B_DEFAULT &&
         v.type->kind != TY_ARRAY && Is<StructLit>(c->defaultinit))
         n = c->defaultinit;
-    auto dt = expected && expected->kind != TY_VOID ? expected : DecayRef(v).type;
+    auto dt = expected && expected->kind != TY_VOID ? expected : DecayedType(v);
     // An argument's parameter may bind the branch by reference instead, which
     // makes the & redundant another way: the argument's check against it
     // says which (argpath, RefCopyWarnings).
@@ -961,7 +961,7 @@ inline Val TypeCheck::Operand(Node *n) {
 }
 
 inline void TypeCheck::MustFit(Val &v, Node *n, TypeExpr *dt) {
-    auto vt = DecayRef(v).type;
+    auto vt = DecayedType(v);
     if (vt->kind == TY_ARRAY && vt->arr->akind == A_FIXED)
         CheckArrayCount(n, dt, ArraySize(vt->arr));
     if (!reachable) return;  // A diverging operand fits anything.

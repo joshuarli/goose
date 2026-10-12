@@ -1,5 +1,18 @@
 # Serialization of relative-reference structures: a verified loader
 
+<details>
+<summary>Table of contents</summary>
+
+- [1. Serialization guarantees](#1-serialization-guarantees)
+- [2. Why loading requires validation](#2-why-loading-requires-validation)
+- [3. The image](#3-the-image)
+- [4. What must be verified](#4-what-must-be-verified)
+- [5. The builtins](#5-the-builtins)
+- [6. Generating the verifier per type](#6-generating-the-verifier-per-type)
+- [7. Open points](#7-open-points)
+
+</details>
+
 *Implemented. This document describes the serialization guarantees, the
 loader's validation rules, and how the implementation preserves §9's safety
 guarantees.*

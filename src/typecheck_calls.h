@@ -333,11 +333,13 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
                                   bool *nomatch, TypeExpr *expected) {
     vector<Node *> argnodes;
     vector<Val> argvals;
+    argnodes.reserve(c->args.size() + 1);
+    argvals.reserve(c->args.size() + 1);
     if (prenode) {
         auto v = *preval;
         RefArg(prenode, v);
         argnodes.push_back(prenode);
-        argvals.push_back(v);
+        argvals.push_back(std::move(v));
     }
     {
         Discovering discovering(*this, c);
@@ -357,7 +359,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
             RefArg(a, v);
             argnodes.push_back(a);
             a->exprtype = v.type;
-            argvals.push_back(v);
+            argvals.push_back(std::move(v));
         }
     }
     MatchInfo best;
@@ -3392,11 +3394,12 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
     auto entryreach = reachable;
     if (!c->tyargs.empty()) Error(c, "a block takes no type arguments");
     vector<Val> argvals;
+    argvals.reserve(c->args.size());
     for (auto a : c->args) {
         PathScope ps(*this, a);
         auto v = CheckV(a, nullptr);
         a->exprtype = v.type;
-        argvals.push_back(v);
+        argvals.push_back(std::move(v));
     }
     vector<Param> params;
     if (fv->explicit_params) {

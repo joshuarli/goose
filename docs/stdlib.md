@@ -1,5 +1,26 @@
 # The Goose standard library
 
+<details>
+<summary>Table of contents</summary>
+
+- [std](#std)
+- [exception](#exception)
+- [dictionary](#dictionary)
+- [vec](#vec)
+- [math](#math)
+- [os](#os)
+- [binary](#binary)
+- [base64](#base64)
+- [csv](#csv)
+- [json](#json)
+- [regex](#regex)
+- [gfx](#gfx)
+- [audio](#audio)
+- [physics](#physics)
+- [ui](#ui)
+
+</details>
+
 The standard library has fifteen modules under `stdlib/`: `std`,
 `dictionary`, `vec`, `math`, `os`, `binary`, `base64`, `csv`, `json`, `regex`,
 `audio`, `gfx`, `physics`, `ui`, and `exception`. Import each module by name,

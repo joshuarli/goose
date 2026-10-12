@@ -1,5 +1,16 @@
 # Building programs and using packages
 
+<details>
+<summary>Table of contents</summary>
+
+- [1. Running and building](#1-running-and-building)
+- [2. Using a package](#2-using-a-package)
+- [3. A program with C of its own](#3-a-program-with-c-of-its-own)
+- [4. Making a package](#4-making-a-package)
+- [5. The cache](#5-the-cache)
+
+</details>
+
 How to turn a Goose program into an executable, how to use libraries that
 are not part of the compiler, and how to make one. The design behind it,
 and the compiler's side of it, is in [design/packages.md](design/packages.md).

@@ -1,9 +1,23 @@
 # Compiler and runtime tests
 
+<details>
+<summary>Table of contents</summary>
+
+- [Running the suite](#running-the-suite)
+- [Fixture layout](#fixture-layout)
+- [Configurations and backends](#configurations-and-backends)
+- [Expected output and diagnostics](#expected-output-and-diagnostics)
+- [Additional compiler checks](#additional-compiler-checks)
+- [Fixture audit](#fixture-audit)
+
+</details>
+
 The bounded generated-program correctness check is documented in
 [`fuzz/README.md`](../fuzz/README.md). It compares a small independent integer/boolean model against
 native programs across independently varied Goose and C optimization levels. This is development
 testing for greenfield languages with no users or deployed programs, not software-security work.
+
+## Running the suite
 
 Run `python test/run_tests.py --profile baseline --cc native --require-clang`
 after a normal compiler build. CI runs this on Windows, macOS and Linux, and
@@ -66,6 +80,8 @@ time. `--batch N` sets how many files go to one compiler process and how
 many programs to one executable (by default a number that leaves every job
 some batches); `--batch 1` gives each a process and an executable of its own.
 
+## Fixture layout
+
 Test fixtures are grouped by category; `run_tests.py` stays at the root of `test/`:
 
 | Path under `test/` | Coverage |
@@ -98,6 +114,8 @@ bootstrap program, rather than discovering its modules as standalone fixtures.
 Keep fixture stems unique across categories,
 since expectations and generated build artifacts use those names. The runner
 rejects duplicate names.
+
+## Configurations and backends
 
 | Configuration | Purpose |
 |---|---|
@@ -228,6 +246,8 @@ skipping a backend; the math tests allow small rounding differences in
 transcendental results. See `docs/design/jit_backend.md` for the backend's remaining limitations and
 possible solutions.
 
+## Expected output and diagnostics
+
 An explicitly requested compiler must exist; CI does not silently skip it.
 Every runnable fixture requires an `expected/<name>.out`, including an empty
 file when the program should be silent. Expected aborts additionally require
@@ -285,6 +305,8 @@ stops at its error, so which warnings print first depends on how far it got.
 `cycle_local_store.goose`, for one, warns about its recursive call's
 `&local` before the error that call reveals, at the store on the line above.
 
+## Additional compiler checks
+
 The runner checks more than exit status and runtime output:
 
 | Check | Contract |
@@ -300,6 +322,8 @@ The runner checks more than exit status and runtime output:
 | `member_parameters.goose` at O1 | Read the generated C: `walk`, which takes two slices and a `T[>..]&`, has each as two scalar C parameters (data pointer and count, header pointer and stack; spec C.3, `ParamFields`). Its runs pass slices, builders and pool references through calls, a recursion, a case-function dispatch, nested functions' free variables, a `simd` function, a `format` overload and an exported wrapper. |
 | `member_stores.goose` at O1 | Read the generated C: `store_links` stores to fields reached through references that cannot be rebound, with no index on the way, as C member stores rather than through a pointer taken first (`StableDest`); its runs check the stores, and that a right side rebinding the reference on the way still stores where the destination named before it ran (`evaluation_order.goose` has a right side writing the destination itself). |
 | `optimize.goose` at O0/O1/O2 | Inspect named tail-recursion bodies in `--specs`: supported integer accumulator/plain recursion becomes loops; modulo, floating-point reassociation, nonlocal-return frames and returns inside nested loops retain self calls. Mixed operators retain the ineligible call. Leading locals prevent base-case inlining from consuming these cases first. The `gb_` functions count the copies of their first statement: guarded base-case inlining copies the body once per self-call site where the test compares unassigned parameters, UFCS-spelled self-calls included, and not where it reads a global or a node, does arithmetic, or reads an assigned parameter. |
+
+## Fixture audit
 
 The fixture audit retained the small lifetime, optional-narrowing, alias-cycle,
 dispatch and frame-layout regressions. Similar diagnostics do not make them

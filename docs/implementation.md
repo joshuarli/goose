@@ -1,5 +1,22 @@
 # The Goose compiler: implementation notes
 
+<details>
+<summary>Table of contents</summary>
+
+- [1. Pipeline](#1-pipeline)
+- [2. Front end](#2-front-end)
+- [3. The typechecker](#3-the-typechecker)
+- [4. The optimizer](#4-the-optimizer)
+- [5. Bounds-check elimination](#5-bounds-check-elimination)
+- [6. Code generation: representation](#6-code-generation-representation)
+- [7. The runtime](#7-the-runtime)
+- [8. Testing the analyses](#8-testing-the-analyses)
+- [9. Writing fast Goose](#9-writing-fast-goose)
+- [10. Where the compiler is more conservative than the specification](#10-where-the-compiler-is-more-conservative-than-the-specification)
+- [11. Audit findings and resolutions](#11-audit-findings-and-resolutions)
+
+</details>
+
 These notes explain how the compiler in `src/` implements `goose_spec.md`.
 They cover each pass, with particular attention to reference roots and
 provenance, writability, shrinking, recursion, optimization, bounds-check

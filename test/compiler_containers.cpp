@@ -30,7 +30,7 @@ template<int N> static void SmallVector() {
         small_vector<Elem, N> s;
         vector<Elem> v;
         for (int op = 0; op < 40; op++) {
-            switch (rnd(8)) {
+            switch (rnd(10)) {
                 case 0: case 1: case 2: {
                     Elem e { rnd(1000), &seed };
                     s.push_back(e);
@@ -75,6 +75,27 @@ template<int N> static void SmallVector() {
                     s = alias;
                     assert(Same(s, v));
                     s = std::move(big);
+                    break;
+                }
+                case 8: {
+                    // At any position, of an element of its own too.
+                    auto i = rnd((int)v.size() + 1);
+                    if (!v.empty() && rnd(2)) {
+                        auto k = rnd((int)v.size());
+                        s.insert(s.begin() + i, s[k]);
+                        v.insert(v.begin() + i, Elem(v[k]));
+                    } else {
+                        Elem e { rnd(1000), nullptr };
+                        s.insert(s.begin() + i, e);
+                        v.insert(v.begin() + i, e);
+                    }
+                    break;
+                }
+                case 9: {
+                    auto n = (size_t)rnd(3 * N + 2);
+                    Elem fill { rnd(1000), nullptr };
+                    s.resize(n, fill);
+                    v.resize(n, fill);
                     break;
                 }
                 case 7:

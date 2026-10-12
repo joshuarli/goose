@@ -1429,11 +1429,18 @@ inline void TypeCheck::AppendArrayElemsReached(TypeExpr *t, vector<TypeExpr *> &
         ArrayElemsReached(t, out, open);
         return;
     }
-    auto it = arrayelements.find(t);
+    // A reference or slice reaches what its pointee does, and a struct type
+    // what its instance's fields do, so every type leading to one instance
+    // shares its answer; each specialization has types of its own.
+    auto root = t;
+    while (root->kind == TY_REF || root->kind == TY_SLICE)
+        root = root->kind == TY_REF ? root->ref->sub : root->sub;
+    auto key = root->kind == TY_STRUCT ? (const void *)root->struc->inst : t;
+    auto it = arrayelements.find(key);
     if (it == arrayelements.end()) {
         vector<TypeExpr *> elems, open;
         ArrayElemsReached(t, elems, open);
-        it = arrayelements.emplace(t, std::move(elems)).first;
+        it = arrayelements.emplace(key, std::move(elems)).first;
     }
 #ifndef NDEBUG
     // Assertion builds continuously compare cached answers with the original
@@ -1442,6 +1449,11 @@ inline void TypeCheck::AppendArrayElemsReached(TypeExpr *t, vector<TypeExpr *> &
     ArrayElemsReached(t, check, open);
     assert(TypeArgsEq(check, it->second));
 #endif
+    // A list holds each type once, so it needs merging only into another.
+    if (out.empty()) {
+        out = it->second;
+        return;
+    }
     for (auto e : it->second) {
         auto found = false;
         for (auto x : out) if (TypeEq(x, e)) { found = true; break; }

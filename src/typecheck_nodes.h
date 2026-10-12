@@ -416,7 +416,7 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
                 return tc.CheckVariantConst(this, en);
     }
     auto ov = tc.CheckV(obj, nullptr);
-    tc.NoUntypedEmptyArray(ov, obj, cat(".", name));
+    if (tc.IsUntypedEmptyArray(ov.type)) tc.NoUntypedEmptyArray(ov, obj, cat(".", name));
     obj->exprtype = ov.type;
     auto t = ov.type;
     if (t->kind == TY_REF) {

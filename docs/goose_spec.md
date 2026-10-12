@@ -1,5 +1,28 @@
 # The Goose Language — Specification (v4 draft)
 
+<details>
+<summary>Table of contents</summary>
+
+- [1. Core concepts](#1-core-concepts)
+- [2. Lexical structure and syntax style](#2-lexical-structure-and-syntax-style)
+- [3. Types](#3-types)
+- [4. Values, copying, and assignment](#4-values-copying-and-assignment)
+- [5. The resizable/shrink rules](#5-the-resizableshrink-rules)
+- [6. Expressions and arithmetic](#6-expressions-and-arithmetic)
+- [7. Functions](#7-functions)
+- [8. ADTs in use](#8-adts-in-use)
+- [9. References, lifetimes, and safety](#9-references-lifetimes-and-safety)
+- [10. Compilation model](#10-compilation-model)
+- [11. Program structure](#11-program-structure)
+- [12. Builtins, the standard library, and what v1 leaves out](#12-builtins-the-standard-library-and-what-v1-leaves-out)
+- [Appendix A. Worked examples (informative)](#appendix-a-worked-examples-informative)
+- [Appendix B. TODO / open items](#appendix-b-todo--open-items)
+- [Appendix C. Representation and calling convention (normative for the C backend)](#appendix-c-representation-and-calling-convention-normative-for-the-c-backend)
+- [Appendix D. Grammar sketch (informative)](#appendix-d-grammar-sketch-informative)
+- [Appendix E. Implementation notes (informative)](#appendix-e-implementation-notes-informative)
+
+</details>
+
 This working specification defines Goose's syntax, semantics, and compilation
 model. It provides the detail needed to implement the language, without the
 formal structure of an ISO specification. Appendix B lists unresolved items.

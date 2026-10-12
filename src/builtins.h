@@ -120,9 +120,15 @@ inline const BuiltinDef builtindefs[] = {
     #undef F
 };
 
+// The first definition of that name. Every call and member access asks.
 inline const BuiltinDef *LookupBuiltin(string_view name) {
-    for (auto &d : builtindefs) if (name == d.name) return &d;
-    return nullptr;
+    static const auto byname = [] {
+        unordered_map<string_view, const BuiltinDef *> m;
+        for (auto &d : builtindefs) m.emplace(d.name, &d);
+        return m;
+    }();
+    auto it = byname.find(name);
+    return it == byname.end() ? nullptr : it->second;
 }
 
 // The definition of a kind a checked Call records (Call::builtin).

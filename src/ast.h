@@ -588,7 +588,6 @@ struct Roots {
 // holds (VarDef::ref) all carry one.
 struct Prov : Roots {
     bool writable = false;       // Writable provenance (§9.5).
-    int reusable = 0;            // Root is a reusable pool (§5.4): its RU_ kind.
     // A `bytes_of` view (docs/design/serialization.md): a u8 slice over the
     // element region of an array of some other type. The shrink scans of §5.1
     // and §5.2 otherwise dismiss a slice whose pointee the root's elements
@@ -599,6 +598,7 @@ struct Prov : Roots {
     // byte view loaded out of one never does. One not stored may cover any
     // that its roots lead to (TypeCheck::GrowShrinkTaint).
     bool freshview = false;
+    int reusable = 0;            // Root is a reusable pool (§5.4): its RU_ kind.
     // Where the path to the pointee crossed a reference or slice: the type of
     // the last one's pointee, which the fields and elements stepped into
     // after it lie in by value, as storage the root owns or bounds. Whatever

@@ -1,5 +1,21 @@
 # The Goose Standard Library — Design
 
+<details>
+<summary>Table of contents</summary>
+
+- [0. Summary](#0-summary)
+- [1. Principles](#1-principles)
+- [2. Conventions](#2-conventions)
+- [3. Module map](#3-module-map)
+- [4. `std`](#4-std)
+- [5. `dictionary`](#5-dictionary)
+- [6. `vec`](#6-vec)
+- [7. `math` and `os` (extern-backed)](#7-math-and-os-extern-backed)
+- [8. Builtins and language rules the library needed](#8-builtins-and-language-rules-the-library-needed)
+- [9. Deliberately not included](#9-deliberately-not-included)
+
+</details>
+
 This document records the original standard library design: its scope,
 conventions, and the builtins and language rules it required (§8). It
 preserves the reasoning at the time. Later changes include `const` types,

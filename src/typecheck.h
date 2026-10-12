@@ -152,7 +152,7 @@ inline bool IsBranchConstruct(const Node *n) {
 struct TypeCheck {
     Ast &ast;
     StableTypeGraph stabletypes;
-    unordered_map<TypeExpr *, vector<TypeExpr *>> arrayelements;
+    unordered_map<const void *, vector<TypeExpr *>> arrayelements;
     // CanContain's and ReachesThroughRefs' answers for complete type graphs:
     // RootCandidates asks them of every variable in scope and every global,
     // at each store and shrink it judges.
@@ -1706,7 +1706,11 @@ struct TypeCheck {
         return v;
     }
 
-    Val DecayRef(Val v);
+    Val DecayRef(const Val &v);
+    // The type DecayRef gives v.
+    TypeExpr *DecayedType(const Val &v) {
+        return IsPlainRef(v.type) ? LoadType(v.type->ref->sub) : v.type;
+    }
     bool KeepsRef(const Val &v, TypeExpr *dt);
     Node *AutoRef(Node *n, Val &v, bool writes = true);
     void SlotRoots(Val &v);
@@ -2562,6 +2566,10 @@ struct TypeCheck {
 
     TypeCheck(Ast &_ast, bool _library = false, vector<LintWarning> *_lintwarnings = nullptr)
         : ast(_ast), library(_library), lintwarnings(_lintwarnings) {
+        // A checked program records values for about two thirds as many
+        // nodes as it parsed to, clones included, so this is the size the
+        // table grows to anyway.
+        nodevals.reserve(ast.allnodes.size());
         temproot = ast.NewVarDef();
         temproot->name = "<temporary>";
         temproot->istemp = true;

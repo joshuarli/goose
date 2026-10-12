@@ -48,6 +48,10 @@ template<typename K, typename V> class flat_map {
     }
 
   public:
+    // Room for n keys without growing.
+    void reserve(size_t n) {
+        while (slots.size() < n * 2) Grow();
+    }
     size_t size() const { return count; }
     bool empty() const { return !count; }
 

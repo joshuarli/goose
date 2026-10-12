@@ -1,5 +1,19 @@
 # Independently owned dynamic data: an editor's open documents
 
+<details>
+<summary>Table of contents</summary>
+
+- [The ordinary owning representation](#the-ordinary-owning-representation)
+- [Documents as runs in a slice pool](#documents-as-runs-in-a-slice-pool)
+- [What the slice pool costs](#what-the-slice-pool-costs)
+- [The other Goose representations](#the-other-goose-representations)
+- [Future option A: bounded independent dynamic stacks](#future-option-a-bounded-independent-dynamic-stacks)
+- [Future option C: opaque API resources](#future-option-c-opaque-api-resources)
+- [Extending slice pools](#extending-slice-pools)
+- [Evaluating what remains](#evaluating-what-remains)
+
+</details>
+
 Research example. The requirement is a runtime-sized set of independently
 editable buffers, with memory reclaimed when each document closes. The
 difficulty is independent growth and release in arbitrary order, rather than

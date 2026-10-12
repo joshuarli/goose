@@ -1,5 +1,31 @@
 # Goose, by example
 
+<details>
+<summary>Table of contents</summary>
+
+- [1. The one idea](#1-the-one-idea)
+- [2. Running something](#2-running-something)
+- [3. Familiar syntax](#3-familiar-syntax)
+- [4. Where values live](#4-where-values-live)
+- [5. The array family](#5-the-array-family)
+- [6. Strings are just byte arrays](#6-strings-are-just-byte-arrays)
+- [7. Slices that cannot dangle](#7-slices-that-cannot-dangle)
+- [8. Nested data stays inline](#8-nested-data-stays-inline)
+- [9. Enums, in two sizes](#9-enums-in-two-sizes)
+- [10. Linking things without pointers](#10-linking-things-without-pointers)
+- [11. When lifetimes really are not nested](#11-when-lifetimes-really-are-not-nested)
+- [12. Errors, and `return … from`](#12-errors-and-return--from)
+- [13. Generics, and blocks that disappear](#13-generics-and-blocks-that-disappear)
+- [14. Threads that share nothing](#14-threads-that-share-nothing)
+- [15. Your data is already a file format](#15-your-data-is-already-a-file-format)
+- [16. Calling C](#16-calling-c)
+- [17. About the speed](#17-about-the-speed)
+- [18. What it costs you](#18-what-it-costs-you)
+- [19. Calling Goose from C](#19-calling-goose-from-c)
+- [20. Where to go next](#20-where-to-go-next)
+
+</details>
+
 This tutorial introduces Goose through examples. It assumes some experience
 with C, C++, Rust, Go, or a similar language and focuses on Goose's
 differences. Start here, consult [the specification](goose_spec.md) for exact

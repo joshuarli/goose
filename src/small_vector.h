@@ -41,6 +41,13 @@ template<typename T, int N> class small_vector {
         buf = Alloc(n);
         cap = n;
     }
+    // Copies all N in-place slots of o's elements at once, which takes a few
+    // moves where a copy of len elements is a call to memcpy. o has room for
+    // N elements wherever they are, and those past its len are only bytes.
+    void CopyInPlace(const small_vector &o) {
+        memcpy(inl, (const void *)o.data(), sizeof(inl));
+        len = o.len;
+    }
     void CopyFrom(const T *from, uint32_t n) {
         Reset(n);
         if (n) memcpy((void *)data(), from, n * sizeof(T));
@@ -68,16 +75,34 @@ template<typename T, int N> class small_vector {
 
     small_vector() {}
     small_vector(initializer_list<T> l) { CopyFrom(l.begin(), (uint32_t)l.size()); }
-    small_vector(const small_vector &o) { CopyFrom(o.data(), o.len); }
-    small_vector(small_vector &&o) noexcept { MoveFrom(o); }
+    small_vector(const small_vector &o) {
+        if (o.len <= N) CopyInPlace(o);
+        else CopyFrom(o.data(), o.len);
+    }
+    small_vector(small_vector &&o) noexcept {
+        if (o.OnHeap()) {
+            MoveFrom(o);
+        } else {
+            CopyInPlace(o);
+            o.len = 0;
+        }
+    }
     ~small_vector() { Free(); }
 
     small_vector &operator=(const small_vector &o) {
-        if (this != &o) CopyFrom(o.data(), o.len);
+        if (this == &o) return *this;
+        if (!OnHeap() && o.len <= N) CopyInPlace(o);
+        else CopyFrom(o.data(), o.len);
         return *this;
     }
     small_vector &operator=(small_vector &&o) noexcept {
-        if (this != &o) MoveFrom(o);
+        if (this == &o) return *this;
+        if (!OnHeap() && !o.OnHeap()) {
+            CopyInPlace(o);
+            o.len = 0;
+        } else {
+            MoveFrom(o);
+        }
         return *this;
     }
     small_vector &operator=(initializer_list<T> l) {
@@ -111,6 +136,12 @@ template<typename T, int N> class small_vector {
 
     void clear() { len = 0; }
     void reserve(size_t n) { if (n > cap) Grow((uint32_t)n); }
+    void resize(size_t n, const T &fill = T()) {
+        auto f = fill;   // Which may be one of ours, which growing frees.
+        reserve(n);
+        for (auto i = len; i < n; i++) new (data() + i) T(f);
+        len = (uint32_t)n;
+    }
 
     void push_back(const T &e) {
         if (len == cap) {
@@ -129,6 +160,16 @@ template<typename T, int N> class small_vector {
     void pop_back() {
         assert(len);
         len--;
+    }
+    T *insert(const T *pos, const T &e) {
+        auto at = (uint32_t)(pos - data());
+        assert(at <= len);
+        auto copy = e;
+        push_back(copy);
+        auto d = data();
+        memmove((void *)(d + at + 1), d + at, (len - 1 - at) * sizeof(T));
+        d[at] = copy;
+        return d + at;
     }
 
     T *erase(const T *first, const T *last) {

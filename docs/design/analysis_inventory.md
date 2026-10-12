@@ -1,5 +1,18 @@
 # Compiler analyses: inventory and simplification options
 
+<details>
+<summary>Table of contents</summary>
+
+- [1. Summary](#1-summary)
+- [2. What is tracked where](#2-what-is-tracked-where)
+- [3. Inventory](#3-inventory)
+- [4. Per-analysis notes](#4-per-analysis-notes)
+- [5. Cross-cutting findings and recommendations](#5-cross-cutting-findings-and-recommendations)
+- [6. Sequencing and validation](#6-sequencing-and-validation)
+- [7. Status](#7-status)
+
+</details>
+
 Step 1 of the effort to stop the fix-a-hole, add-a-flag cycle in the
 checker's analyses. This document inventories every analysis the compiler
 runs, what each one tracks and how, roughly how much code it is, how

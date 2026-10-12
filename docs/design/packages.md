@@ -1,5 +1,22 @@
 # Builds and packages
 
+<details>
+<summary>Table of contents</summary>
+
+- [1. Decisions](#1-decisions)
+- [2. What there is today](#2-what-there-is-today)
+- [3. The command line](#3-the-command-line)
+- [4. Packages](#4-packages)
+- [5. Native parts](#5-native-parts)
+- [6. Building programs](#6-building-programs)
+- [7. The compiler's own build](#7-the-compilers-own-build)
+- [8. Testing](#8-testing)
+- [9. Documentation](#9-documentation)
+- [10. The plan](#10-the-plan)
+- [11. Deferred and open](#11-deferred-and-open)
+
+</details>
+
 How `goose build` replaces the hand-written C compiler invocations, and how a
 program pulls in libraries, Goose or C, from git repositories. This is the
 design and the migration plan, written against the tree at `de24a156`, from

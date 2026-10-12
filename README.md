@@ -8,7 +8,7 @@ C++ and Rust while using less memory.
 
 [Tutorial](docs/tutorial.md) · [Specification](docs/goose_spec.md) ·
 [Packages](docs/packages.md) ·
-[Samples](samples/README.md) · [Benchmarks](bench/summary.md) ·
+[Samples](samples/README.md) · [Benchmarks](bench/results.md) ·
 [Standard library](docs/stdlib.md)
 
 Goose has syntax familiar to C and Rust programmers, but **there is no heap**.
@@ -21,7 +21,7 @@ language's type and lifetime rules make this memory model safe to use.
 * **Faster than C++ and than safe Rust, while memory safe.** Over sixteen
   benchmarks Goose runs at 3.3x the speed of idiomatic C++, 1.16x hand-optimized
   C++ and 1.12x the best safe Rust, on 1.9x, 1.3x and 1.2x less memory
-  ([summary](bench/summary.md), [full results](bench/results.md)). These gains
+  ([results](bench/results.md)). These gains
   come from Goose's data layouts and memory model.
 * **No allocator, no GC, no reference counting, no destructors.** Memory is a
   handful of data stacks that the compiler assigns statically. Freeing a
@@ -63,7 +63,7 @@ language's type and lifetime rules make this memory model safe to use.
 
 The [tutorial](docs/tutorial.md) walks through all of this by example, the
 [specification](docs/goose_spec.md) has the exact rules, and the
-[benchmarks](bench/summary.md) have the numbers, losses included.
+[benchmarks](bench/results.md) have the numbers, losses included.
 
 ## Features
 
