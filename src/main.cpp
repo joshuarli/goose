@@ -50,6 +50,11 @@
 #include "json.h"
 #include "native.h"
 #include "lint_facts.h"
+#include "core/core_ir.h"
+#include "core/core_json.h"
+#include "core/core_export.h"
+#include "core/core_summary.h"
+#include "core/core_emit.h"
 
 namespace goose {
 
@@ -662,7 +667,7 @@ int Main(int argc, char **argv) {
         printf("goose runtime %s\n", RuntimeVersion().c_str());
         return 0;
     }
-    string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile;
+    string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore;
     auto dump = false, tokens = false, parseonly = false, specs = false, nocgen = false;
     auto roundtrip = false, multitest = false;
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
@@ -687,6 +692,7 @@ int Main(int argc, char **argv) {
         else if (arg == "--roundtrip") roundtrip = true;
         else if (arg == "--dump-file" && i + 1 < argc) dumpfile = argv[++i];
         else if (arg == "--specs") specs = true;
+        else if (arg == "--emit-core" && i + 1 < argc) emitcore = argv[++i];
         else if (arg == "--stacks") stacks = true;
         else if (arg == "--stack-reserve" && i + 1 < argc) {
             uint64_t size;
@@ -932,6 +938,8 @@ int Main(int argc, char **argv) {
         if (g_build_report) BuildReportPhase(Phase::CheckSpecialize);
         TypeCheckProgram(ast, library, nullptr, nocgen);
         if (g_build_report) BuildReportAfterCheck(ast);
+        // Before the optimizer: it rewrites the bodies this reads.
+        if (!emitcore.empty()) EmitCore(ast, filename, emitcore);
         Optimizer opt(ast, optlevel);
         if (specs) {
             string s;
