@@ -130,4 +130,18 @@ def m_v_call : String := r##"["module","goose-core/0.2","core-pilot",[["file","c
 #guard check { validate := false } m_v_call r##"["fault","dangling_root"]"## 4
 #guard check {} m_v_call r##"["rejected","V-CALL","argument 0 of pass is rooted at {local 1}, the callee context assumes {global 0}"]"## 5
 
+/-- An initializer that dereferences a reference a callee returns to a global
+that is not initialized yet. -/
+def m_v_call_init_deref : String := r##"["module","goose-core/0.2","core-pilot",[["file","cx1.goose"]],[["int","i64"],["ref","mut",0]],[["global","a",0,"var",["e_read",["p_deref",["e_call",1,[],1]]],0]],[["impl","f",[],[1],[],["block",0,[["s_ret",[["e_ref","mut",["p_global",0]]],2]],[]],["summary",[],[],[],[],0,0]],["impl","main",[],[],[],["block",0,[],[]],["summary",[],[],[],[],0,0]]],[["context",1,"main::main()",[],[]],["context",0,"main::f()",[],[[["r_global",0]]]]],0,[["origin",0,1,"global"],["origin",0,2,"call"],["origin",0,3,"return"]]]"##
+
+#guard check {} m_v_call_init_deref r##"["rejected","V-CALL","initializer of global a reaches global 0, which is not initialized before it"]"## 5
+#guard check { validate := false } m_v_call_init_deref r##"["fault","dangling_root"]"## 4
+
+/-- An initializer whose callee reads a later global that its context lists
+among a parameter's roots, under a summary entry for the parameter. -/
+def m_v_call_init_param : String := r##"["module","goose-core/0.2","core-pilot",[["file","cx2.goose"]],[["int","i64"],["ref","mut",0]],[["global","a",0,"var",["e_lit",0,"1"],0],["global","b",0,"var",["e_call",1,[["a_ref","mut",["p_global",0]]],1],0]],[["impl","f",[["param",0,"by_ref"]],[0],[["local","p",1,"let",0,3]],["block",0,[["s_ret",[["e_read",["p_global",1]]],2]],[]],["summary",[["t_param",0]],[],[],[],0,0]],["impl","main",[],[],[],["block",0,[],[]],["summary",[],[],[],[],0,0]]],[["context",1,"main::main()",[],[]],["context",0,"main::f(i64&)",[["vr",0,[["r_global",0],["r_global",1]]]],[[]]]],0,[["origin",0,1,"global"],["origin",0,2,"call"],["origin",0,3,"return"],["origin",0,4,"param"]]]"##
+
+#guard check {} m_v_call_init_param r##"["rejected","V-CALL","initializer of global b reaches global 1, which is not initialized before it"]"## 5
+#guard check { validate := false } m_v_call_init_param r##"["fault","dangling_root"]"## 4
+
 end Goose.Core.Examples

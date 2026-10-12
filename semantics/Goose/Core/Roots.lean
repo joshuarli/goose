@@ -47,6 +47,12 @@ structure PEnv where
 
 def rejP (r : Rule) (msg : String) : P α := throw ⟨r, msg⟩
 
+/-- A check that neither reads nor changes the traversal state. -/
+def liftV (x : V α) : P α := fun s =>
+  match x with
+  | .ok a => .ok (a, s)
+  | .error e => .error e
+
 def PEnv.ann (env : PEnv) (x : VarId) : Option (List RootRef) :=
   (env.ctx.varRoots.find? (·.1 == x)).map (·.2)
 
@@ -93,55 +99,116 @@ def BinOp.mayAbort : BinOp → Bool
   | .add | .sub | .mul | .div | .mod => true
   | _ => false
 
+/-- Each local root is declared in an open scope that is the binder's scope or
+an enclosing one; `xpos` is the binder's position in `chain`. -/
+def checkOutlives (env : PEnv) (chain : List Nat) (lv : LocalVar) (xpos : Nat) : List RootRef → V Unit
+  | [] => pure ()
+  | .local y :: rest =>
+    match env.impl.vars[y]? with
+    | none => reject .root s!"root names variable {y}, outside the variable table"
+    | some ly => do
+      unless chain.contains ly.scope do
+        reject .root s!"root {ly.name} of {lv.name} is not declared in an open scope"
+      unless chain.idxOf ly.scope ≥ xpos do
+        reject .root s!"root {ly.name} ends before {lv.name}"
+      checkOutlives env chain lv xpos rest
+  | _ :: rest => checkOutlives env chain lv xpos rest
+
 /-- The roots a value bound to `x` may have must lie in `x`'s annotation, and
 each must outlive `x`: a parameter, a global, or a local of `x`'s scope or an
 enclosing one. `chain` lists the open scopes, innermost first, and holds `x`'s
 scope. -/
-def bindRoots (env : PEnv) (chain : List Nat) (x : VarId) (rho : List RootRef) : P Unit := do
-  let some lv := env.impl.vars[x]? | rejP .root s!"variable {x} outside the variable table"
-  let some ann := env.ann x | rejP .root s!"variable {x} has no root annotation"
+def bindRootsV (env : PEnv) (chain : List Nat) (x : VarId) (rho : List RootRef) : V Unit := do
+  let some lv := env.impl.vars[x]? | reject .root s!"variable {x} outside the variable table"
+  let some ann := env.ann x | reject .root s!"variable {x} has no root annotation"
   unless subsetRoots rho ann do
-    rejP .root s!"variable {lv.name} is bound to roots {showRoots rho} outside its annotation {showRoots ann}"
-  let xpos := chain.idxOf lv.scope
-  for r in rho do
-    match r with
-    | .local y =>
-      match env.impl.vars[y]? with
-      | none => rejP .root s!"root names variable {y}, outside the variable table"
-      | some ly =>
-        unless chain.contains ly.scope do
-          rejP .root s!"root {ly.name} of {lv.name} is not declared in an open scope"
-        unless chain.idxOf ly.scope ≥ xpos do
-          rejP .root s!"root {ly.name} ends before {lv.name}"
-    | _ => pure ()
+    reject .root s!"variable {lv.name} is bound to roots {showRoots rho} outside its annotation {showRoots ann}"
+  checkOutlives env chain lv (chain.idxOf lv.scope) rho
+
+def bindRoots (env : PEnv) (chain : List Nat) (x : VarId) (rho : List RootRef) : P Unit :=
+  liftV (bindRootsV env chain x rho)
+
+def checkNoLocal : List RootRef → V Unit
+  | [] => pure ()
+  | .local y :: _ => reject .result s!"a returned reference or slice is rooted at local variable {y}"
+  | _ :: rest => checkNoLocal rest
 
 /-- `V-RESULT`: what a function returns is rooted at the caller's storage, and
 within what its context declares. -/
-def checkResult (env : PEnv) (rho : List RootRef) : P Unit := do
-  for r in rho do
-    match r with
-    | .local y => rejP .result s!"a returned reference or slice is rooted at local variable {y}"
-    | _ => pure ()
+def checkResultV (env : PEnv) (rho : List RootRef) : V Unit := do
+  checkNoLocal rho
   match env.ctx.resultRoots with
   | [declared] =>
     unless subsetRoots rho declared do
-      rejP .result s!"a returned value is rooted at {showRoots rho}, the context declares {showRoots declared}"
-  | _ => rejP .result "the context does not declare roots for the single result"
+      reject .result s!"a returned value is rooted at {showRoots rho}, the context declares {showRoots declared}"
+  | _ => reject .result "the context does not declare roots for the single result"
+
+def checkResult (env : PEnv) (rho : List RootRef) : P Unit := liftV (checkResultV env rho)
 
 /-- Map a callee's root set to the caller's, given the roots of each argument. -/
-def mapCalleeRoots (argRoots : List (List RootRef)) : RootRef → P (List RootRef)
+def mapCalleeRoots (argRoots : List (List RootRef)) : RootRef → V (List RootRef)
   | .param j =>
     match argRoots[j]? with
     | some rs => pure rs
-    | none => rejP .call s!"callee result roots name parameter {j}, which has no argument"
+    | none => reject .call s!"callee result roots name parameter {j}, which has no argument"
   | .global g => pure [.global g]
-  | .local y => rejP .call s!"callee result roots name its local {y}"
+  | .local y => reject .call s!"callee result roots name its local {y}"
 
-def mapSummaryTargets (argRoots : List (List RootRef)) : List Target → List Target
+/-- The caller's roots of a result the callee declares rooted at `rs`, added to `acc`. -/
+def mapResultRoots (argRoots : List (List RootRef)) : List RootRef → List RootRef → V (List RootRef)
+  | acc, [] => pure acc
+  | acc, r :: rest => do
+    let mapped ← mapCalleeRoots argRoots r
+    mapResultRoots argRoots (unionRoots acc mapped) rest
+
+/-- The globals the callee context knows parameter `j` may be rooted at. A
+summary entry for the parameter stands for them in the callee's own check, so
+it stands for them at the call too. -/
+def paramGlobals (callee : Impl) (cctx : Context) (j : Nat) : List Target :=
+  match callee.vars[j]?, cctx.varRoots.find? (·.1 == j) with
+  | some lv, some (_, rs) =>
+    if lv.ty.isRefLike then
+      rs.filterMap fun r => match r with
+        | .global g => some (Target.global g)
+        | _ => none
+    else []
+  | _, _ => []
+
+def mapSummaryTargets (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) :
+    List Target → List Target
   | [] => []
-  | .global g :: rest => .global g :: mapSummaryTargets argRoots rest
+  | .global g :: rest => .global g :: mapSummaryTargets callee cctx argRoots rest
   | .param j :: rest =>
-    rootsTargets (argRoots[j]?.getD []) ++ mapSummaryTargets argRoots rest
+    rootsTargets (argRoots[j]?.getD []) ++ paramGlobals callee cctx j
+      ++ mapSummaryTargets callee cctx argRoots rest
+
+/-- The callee context's assumption about parameter `i` holds for its argument. -/
+def checkArgRoots (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) (i : Nat) : V Unit :=
+  match callee.params[i]? with
+  | none => pure ()
+  | some p =>
+    match callee.vars[p.var]? with
+    | some pv =>
+      if pv.ty.isRefLike then
+        match cctx.varRoots.find? (·.1 == p.var) with
+        | none => reject .call s!"callee {callee.name} has no root annotation for parameter {i}"
+        | some (_, ann) =>
+          unless ann == [.param i] do
+            let actual := argRoots[i]?.getD []
+            unless subsetRoots actual ann do
+              reject .call s!"argument {i} of {callee.name} is rooted at {showRoots actual}, the callee context assumes {showRoots ann}"
+      else pure ()
+    | none => reject .call s!"callee {callee.name} has no variable row for parameter {i}"
+
+/-- `V-BLOCK`: the value must not be rooted at a variable of the block, which
+are the variables numbered from `n0` up to `n1`. -/
+def checkBlockValue (n0 n1 : Nat) : List RootRef → V Unit
+  | [] => pure ()
+  | .local y :: rest =>
+    if n0 ≤ y ∧ y < n1 then
+      reject .block s!"the value of a block is rooted at variable {y}, declared inside it"
+    else checkBlockValue n0 n1 rest
+  | _ :: rest => checkBlockValue n0 n1 rest
 
 mutual
 
@@ -273,34 +340,21 @@ mapped to the caller's targets. -/
 def rpCall (env : PEnv) (c : ContextId) (argRoots : List (List RootRef)) : P (List RootRef) := do
   let some cctx := env.mod.contexts[c]? | rejP .call s!"call of context {c}, outside the context table"
   let some callee := env.mod.impls[cctx.impl]? | rejP .call s!"context {c} names a missing implementation"
-  for h : i in [0:callee.params.size] do
-    let p := callee.params[i]
-    match callee.vars[p.var]? with
-    | some pv =>
-      if pv.ty.isRefLike then
-        match cctx.varRoots.find? (·.1 == p.var) with
-        | none => rejP .call s!"callee {callee.name} has no root annotation for parameter {i}"
-        | some (_, ann) =>
-          unless ann == [.param i] do
-            let actual := argRoots[i]?.getD []
-            unless subsetRoots actual ann do
-              rejP .call s!"argument {i} of {callee.name} is rooted at {showRoots actual}, the callee context assumes {showRoots ann}"
-    | none => rejP .call s!"callee {callee.name} has no variable row for parameter {i}"
+  liftV (forAll (List.range callee.params.size) (checkArgRoots callee cctx argRoots))
   match callee.summary with
   | .unknown => modify fun s => { s with eff := { s.eff with unknown := true } }
   | .known sm =>
     modify fun s =>
       let e := s.eff
       { s with eff := { e with
-          reads := addTargets e.reads (mapSummaryTargets argRoots sm.reads)
-          writes := addTargets e.writes (mapSummaryTargets argRoots sm.writes)
-          grows := addTargets e.grows (mapSummaryTargets argRoots sm.grows)
+          reads := addTargets e.reads (mapSummaryTargets callee cctx argRoots sm.reads)
+          writes := addTargets e.writes (mapSummaryTargets callee cctx argRoots sm.writes)
+          grows := addTargets e.grows (mapSummaryTargets callee cctx argRoots sm.grows)
           aborts := e.aborts || sm.aborts
           outputs := e.outputs || sm.outputs } }
   match callee.results.toList, cctx.resultRoots with
   | [t], [rs] =>
-    if t.isRefLike then
-      rs.foldlM (fun acc r => do pure (unionRoots acc (← mapCalleeRoots argRoots r))) []
+    if t.isRefLike then liftV (mapResultRoots argRoots [] rs)
     else pure []
   | _, _ => pure []
 
@@ -310,19 +364,16 @@ def rpBlockValue (env : PEnv) (pre : List VarId) : Block → P (List RootRef × 
   | .mk sc stmts value => do
     let n0 := (← get).nextVar
     let env' := { env with scopes := sc :: env.scopes }
+    -- The variables a construct declares are the next ones in declaration order.
+    unless pre.all (fun x => n0 ≤ x && x < n0 + pre.length) do
+      rejP .root s!"block {sc} binds a variable out of declaration order"
     modify fun s => { s with nextVar := s.nextVar + pre.length }
     rpStmts env' stmts
     let rho ← match value with
       | none => pure []
       | some e => rpExpr env' e
     let n1 := (← get).nextVar
-    -- `V-BLOCK`: the value must not be rooted at a variable of the block.
-    for r in rho do
-      match r with
-      | .local y =>
-        if n0 ≤ y ∧ y < n1 then
-          rejP .block s!"the value of a block is rooted at variable {y}, declared inside it"
-      | _ => pure ()
+    liftV (checkBlockValue n0 n1 rho)
     pure (rho, (n0, n1))
 
 def rpStmts (env : PEnv) : List Stmt → P Unit
@@ -340,6 +391,8 @@ def rpPrintArgs (env : PEnv) : List PrintArg → P Unit
 
 def rpStmt (env : PEnv) : Stmt → P Unit
   | .letS x e _ => do
+    -- A `let` declares the next variable in declaration order.
+    unless x = (← get).nextVar do rejP .root s!"variable {x} is declared out of order"
     modify fun s => { s with nextVar := s.nextVar + 1 }
     let rho ← rpExpr env e
     match env.impl.vars[x]? with
@@ -432,11 +485,11 @@ def checkAnnotationShape (m : Module) (impl : Impl) (ctx : Context) : V Unit := 
         reject .root s!"variable {impl.vars[x].name} has {n} root annotations, expected one"
   -- A parameter is rooted at what the caller passes, or at one global the
   -- specialization knows.
-  for h : i in [0:impl.params.size] do
+  forAll (List.range impl.params.size) fun i =>
     match ctx.varRoots.find? (·.1 == i) with
     | none => pure ()
     | some (_, rs) =>
-      for r in rs do
+      forAll rs fun r =>
         match r with
         | .param j => unless j = i do reject .root s!"parameter {i} is annotated with the roots of parameter {j}"
         | .local _ => reject .root s!"parameter {i} is annotated with a local root"
@@ -501,5 +554,29 @@ def checkContext (m : Module) (ctx : Context) : V Unit := do
       let (rho, _) ← rpBlockValue env [] impl.body
       if impl.body.value.isSome then checkResult env rho : P Unit).run ⟨impl.params.size, {}⟩
   checkSummary impl ctx st.eff
+
+/-- An implementation and context with no variables, parameters or results:
+what a global initializer is checked against. -/
+def initImpl : Impl := ⟨"", #[], #[], #[], .mk 0 [] none, .unknown⟩
+
+def initContext : Context := ⟨0, "", [], []⟩
+
+/-- A global's initializer runs before the later globals exist. Its roots and
+effects are computed like a function body's, and nothing it reads, writes or
+grows, itself or through the calls it makes, may be a global that is not yet
+initialized. -/
+def checkInitRoots (m : Module) (g : GlobalId) : V Unit :=
+  match m.globals[g]? with
+  | none => pure ()
+  | some gl => do
+    let (_, st) ← (rpExpr ⟨m, initImpl, initContext, []⟩ gl.init).run ⟨0, {}⟩
+    if st.eff.unknown then
+      reject .call s!"initializer of global {gl.name} calls an implementation whose effects are unknown"
+    forAll (st.eff.reads ++ st.eff.writes ++ st.eff.grows) fun t =>
+      match t with
+      | .global h =>
+        unless h < g do
+          reject .call s!"initializer of global {gl.name} reaches global {h}, which is not initialized before it"
+      | .param _ => pure ()
 
 end Goose.Core

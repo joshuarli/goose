@@ -22,11 +22,12 @@ def checkEntry (m : Module) : V Unit := do
 
 def validate (m : Module) : V Unit := do
   checkEntry m
-  for h : g in [0:m.globals.size] do
-    checkGlobal m g m.globals[g]
-  for impl in m.impls do
-    checkImpl m impl
-  for ctx in m.contexts do
-    checkContext m ctx
+  forAll (List.range m.globals.size) fun g =>
+    match m.globals[g]? with
+    | some gl => checkGlobal m g gl
+    | none => pure ()
+  forAll m.impls.toList (checkImpl m)
+  forAll m.contexts.toList (checkContext m)
+  forAll (List.range m.globals.size) (checkInitRoots m)
 
 end Goose.Core

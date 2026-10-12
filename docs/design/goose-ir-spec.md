@@ -166,7 +166,7 @@ Abort kinds and the runtime text they correspond to: `div_zero` (`division by ze
 | `V-ROOT` | A value with root set ρ may initialize, be assigned to, or rebind variable `r` only if ρ ⊆ roots(`r`) and every member of ρ outlives `r`. `param i` and globals outlive every local. A local `y` outlives `r` when `y`'s scope is `r`'s scope or an enclosing scope in the same implementation. Declaration order within one scope does not matter: a scope's variables all end together, and the language allows a `var` reference to be rebound to a later-declared variable of its own scope. |
 | `V-BLOCK` | The value of a block or `ifE` is not rooted at a variable declared inside it. |
 | `V-RESULT` | A returned reference or slice is rooted only at `param i` or globals, within the declared result roots. |
-| `V-CALL` | At a call, each `param i` in the callee context's result roots is replaced by the actual argument's roots; the argument's mutability satisfies the parameter's. |
+| `V-CALL` | At a call, each `param i` in the callee context's result roots is replaced by the actual argument's roots; the argument's mutability satisfies the parameter's. A global's initializer is checked like a function body with no variables: nothing it reads, writes or grows, itself or through its calls, may be a global that is not initialized before it. |
 | `V-SUMMARY` | Each implementation's effect summary is closed: the effects of its body, computed with its callees' summaries, are contained in it. Recursion needs no iteration, because closure is checked, not computed. The check runs once per context: a parameter target is read through that context's root annotation, so a parameter the context knows to be rooted at a global counts as that global. |
 | `V-SHRINK` | At a shrink of the array rooted at `a`, no variable in the demand set has `a` among its roots. The demand set is every variable named in an operand evaluated later in the statement, in a later statement of an enclosing block in the same implementation, or anywhere in an enclosing loop body. |
 | `V-WHOLE` | The right side of `assignWhole p e` neither names a variable rooted at `p`'s root nor calls an implementation whose summary reads, writes or resizes that root. |
@@ -183,7 +183,7 @@ The target of an effect is the set of global and parameter roots of the place re
 | writes | `assign` and `assignOp` to a place. |
 | grows | `push` and `append` on the owner. |
 | rebinds | `rebind` of a variable that is a parameter. |
-| through a call | The callee's declared reads, writes and growth with each `param j` replaced by the targets of argument `j`'s roots. A callee whose summary is unknown makes the caller's unknown. |
+| through a call | The callee's declared reads, writes and growth with each `param j` replaced by the targets of argument `j`'s roots. Where the callee context annotates parameter `j` with globals, those globals are added: the callee's own check lets an entry for `param j` stand for them, so the call must too. A callee whose summary is unknown makes the caller's unknown. |
 
 ## 5. Numeric and failure semantics
 
