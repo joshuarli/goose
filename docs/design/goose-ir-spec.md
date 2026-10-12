@@ -534,6 +534,176 @@ A golden `NAME.goose` has `NAME.core.json` and `NAME.out`, the standard output. 
 | `aborted` | abort kind, `nat` line | The abort kind is one of `div_zero div_overflow index_oob slice_oob assert user_abort int_overflow cast_range`; the line is that of the aborting operation's origin. |
 | `exited` | `int` | `exit` was executed with that value. |
 
+### 12.2 Tag table for gir-h/0.2
+
+This subsection is the concrete encoding of §8 for profile `core-pilot`, and the reference lowering of §8.3 whose output a conforming lowering reproduces byte for byte. A tag not listed here is `malformed`. The shrink and construction instructions, `invoke`, `escape`, `array.index.proven` and the fact certificates of §10 are added with the profiles and the item that need them, and are not decoded now.
+
+#### Lexical rules
+
+The rules of §12.1 apply unchanged: one module record and one line feed, no other whitespace written, the same kinds `nat`, `flag`, `str`, `int`, `[K]`, `[K]?`, enumeration and record, the same string escapes. Table references add these kinds:
+
+| Kind | Encoding |
+|---|---|
+| `ty` | `nat`, an index into the type table. A `ty` that must be a data type (everything except a block parameter's type) must not name a `view` entry. |
+| `val` | `nat`, the id of an SSA value of the current function: a block parameter or the result of an instruction. Ids are dense from 0 within a function and each is defined once, in any order. |
+| `slot`, `scope`, `block` | `nat`, an index into the current function's slot, scope or block table. |
+| `fn`, `glob`, `org` | `nat`, an index into the function table, the global table, the origin table. |
+
+Enumerations: those of §12.1 (`IntTy`, `Mut`, `VarKind`, `UnOp`, `BinOp`, `CmpOp`, `ConvKind`); `AbortKind` is `div_zero div_overflow index_oob slice_oob assert user_abort int_overflow cast_range`.
+
+#### Numbering
+
+The file table and the origin table are those of the Core module the lowering read, unchanged, so an abort names the same origin in both representations. Functions are the implementations of the Core module in order; the initializer of a global is the function held by its `global` record. Slots, scopes and globals have the numbers of the variables, blocks and globals of Core: slot `k` is variable `k`, scope `k` is the Core block numbered `k`. The remaining tables are numbered by these rules:
+
+| Table | Order |
+|---|---|
+| Types | By first mention in document order of the globals, then the functions (each function: parameters, results, slots, then its blocks' parameters and instructions, left to right within a record); a type's components before the type. Equal types are one entry, so a type's components have smaller numbers. The file and origin tables mention none. |
+| Blocks of a function | In order of creation by the reference lowering, below. Block 0 is the entry. |
+| Values of a function | In order of creation by the reference lowering: a block's parameters when the block is created, an instruction's result when the instruction is emitted. The numbers need not follow definition order in the output. |
+| Scopes of a function | The parent of scope `k` is the Core block that encloses block `k`; the body of an implementation is scope 0 with no parent. A global initializer has no body scope: each block its expression contains is a root, so several scopes have no parent. A scope that only dead code opens is still in the table. |
+
+#### Module, functions and tables
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `module` | `str` schema (`gir-h/0.2`), `str` profile (`core-pilot`), `[file]` files, `[Ty]` types, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | `file` and `origin` are as in §12.1. The entry function has no parameters and no results. |
+| `global` | `str` name, `ty`, `VarKind`, `func` init, `org` | The initializer is a function with no parameters whose one result has the global's type; it is run in global order, in a fresh activation, before the entry. Its summary is `summary_unknown` and its origin is the global's. |
+| `func` | `str` name, `[ty]` params, `[ty]` results, `[slot]`, `[scope]`, `[block]`, `Summary`, `[org]?` origin | Block 0 is the entry and its parameters have the types `params`. The summary is the one of the Core implementation, unchanged, and is checked against the body (§9, `GIR-V050`). The origin of an implementation is that of its first variable, absent when it has none. |
+| `slot` | `ty`, `VarKind`, `scope` owner, `nat` var | Memory-resident storage of the source variable `var`. Its address is a `ref` that is `mut` exactly when the kind is `var`. |
+| `scope` | `[scope]?` parent | A parent has a smaller number. |
+| `block` | `[bp]` params, `[inst]` | One terminator is required, last. Zero or several are decoded and rejected by the verifier. |
+| `bp` | `val`, `ty` | A block parameter. |
+| `summary`, `summary_unknown`, `t_param`, `t_global` | as in §12.1 | Target indices are against this function's parameters and the globals. |
+
+Types are the Core types (`int bool unit arr grow ref slice tuple`, fields as in §12.1) and one more:
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `view` | `Mut`, `ty` element | A sampled run of elements of an array or slice: region, start and length. It is an SSA value only, and the element is a data type. |
+
+#### Instructions
+
+Each instruction record that defines a value begins with that value's `val`. The result type follows from the operand types and is not written, except where the table gives one.
+
+| Tag | Fields after the result | Result type, and what it does |
+|---|---|---|
+| `i_int` | `ty` integer, `int` | The constant, in range. |
+| `i_bool` | `flag` | `bool` |
+| `i_unit` | none | `unit` |
+| `i_bin` | `BinOp`, `ty` integer, `val` a, `val` b, `[org]?` | `T` (the stated type; both operands have it). `add sub mul div mod` can abort and need an origin. |
+| `i_un` | `UnOp`, `ty` integer, `val`, `[org]?` | `T`. `neg` can abort, needs an origin and is not applied to an unsigned type. |
+| `i_cmp` | `CmpOp`, `ty` integer, `val` a, `val` b | `bool` |
+| `i_bcmp` | `CmpOp` (`eq` or `ne`), `val` a, `val` b | `bool`; both operands are `bool`. |
+| `i_not` | `val` | `bool`; the operand is `bool`. |
+| `i_conv` | `ConvKind`, `ty` source, `ty` target, `val`, `[org]?` | The target integer type. `as` can abort and needs an origin; `widen` must preserve every value. |
+| `i_next` | `ty` integer, `val` | `T`. The operand plus one, used for a loop counter below its type's maximum; a counter at the maximum is a fault. |
+| `i_slot` | `slot` | `ref M T` for the slot's type `T` and `M` from its kind. |
+| `i_global` | `glob` | `ref M T` likewise. |
+| `i_elem` | `val` view, `val` index | `ref M T` for a view `view M T`. The address of element `index` of the run: no check and no read, so an index outside the object faults when the address is used. |
+| `i_freeze` | `val` ref | `ref const T`, the same address. |
+| `i_load` | `val` ref | `T` for `ref M T`. `T` is flat, a reference or a slice. |
+| `i_snap` | `val` ref to `arr` or `grow` | `view M E`: region and current length sampled now. |
+| `i_sview` | `val` slice | `view M E`: the slice's own run. |
+| `i_vlen` | `val` view | `i64`, the sampled length. |
+| `i_vslice` | `Mut`, `val` view, `Bound` lo, `Bound` hi, `[org]?` | `slice M E`. Aborts `slice_oob` unless `0 ≤ lo ≤ hi ≤ length`, where an omitted `lo` is 0 and an omitted `hi` the length, and `bd_end` is the length minus the value, computed on mathematical integers. Needs an origin. |
+| `i_alen` | `val` ref to `arr` or `grow` | `i64`, the length now. |
+| `i_index` | `val` view, `val` index, `[org]?` | `ref M E`. Aborts `index_oob` unless `0 ≤ index < length`, the length being the view's. Needs an origin. |
+| `i_push` | `val` ref to `grow`, `val` element, `[org]?` | `ref mut E`, to the new element. |
+| `i_call` | `fn`, `[val]` args, `[org]?` | The callee's result type, `unit` for no result. Each argument must be accepted by its parameter (a `mut` reference or slice may stand for a `const` one). Needs an origin. |
+| `i_arr` | `ty` (`arr` with that many elements, or `grow`), `[val]` | The array value; the elements have the element type. |
+| `i_fill` | `ty` (`arr`), `val` | The array whose every element is the value. |
+| `x_init` | `slot`, `val`, `[org]?` | Brings the slot's storage into existence holding the value, which has the slot's type. The slot's scope is entered. Needs an origin. |
+| `x_store` | `val` ref, `val`, `[org]?` | Stores the value at a `mut` reference to a flat, reference or slice type; the value has the pointee type. Needs an origin. |
+| `x_append` | `val` ref to `grow`, `val` view, `[org]?` | Appends the elements of the view's run to the array, copied before any is written. Needs an origin. |
+| `x_enter`, `x_leave` | `scope` | Enters, leaves a scope. |
+| `x_print` | `[PrintPart]`, `[org]?` | Writes the renderings, then a line feed. Needs an origin. |
+| `pp_text`, `pp_val` | `str`; `val` (an integer or a boolean) | A print part. |
+| `bd_none`, `bd_val`, `bd_end` | none; `val`; `val` (an integer of any type) | A bound of `i_vslice`. |
+
+| Terminator | Fields | Meaning |
+|---|---|---|
+| `t_br` | `block`, `[val]` | Arity and types equal the target's parameters. |
+| `t_condbr` | `val` (`bool`), `block`, `[val]`, `block`, `[val]` | True edge first. |
+| `t_ret` | `[val]`, `[org]?` | The values have the function's result types. |
+| `t_abort` | `AbortKind`, `[org]?` | Needs an origin. |
+| `t_exit` | `val` (an integer), `[org]?` | Needs an origin. |
+
+A non-aborting operation may carry an origin that the table does not require.
+
+#### What the reader checks by tag and arity
+
+Before verification the decoder rejects: an unknown tag or enumeration value; a wrong arity or element kind; a `ty`, `slot`, `scope`, `block`, `fn`, `glob` or `org` outside its table (a `val` only has to be below 2^31); a type whose components do not have smaller numbers, a `view` used as a component, an `arr` count below 1; an `i_int` whose type is not an integer type or whose value is outside its range; a scope whose parent is not an earlier scope; a type that is not an integer type where one is required; an unsorted or repeated summary target list or one naming a parameter or global that does not exist; trailing data, input over 64 MiB, nesting deeper than 256, more than `2^24` instructions in one function. The schema and profile strings must be exactly `gir-h/0.2` and `core-pilot`. Everything else is the verifier's.
+
+#### What the verifier checks for this profile
+
+The checks run in the order of their codes over the whole module, so a module is reported under the first code at which any function fails.
+
+| Code | Pilot checks |
+|---|---|
+| `GIR-V001` | Entry exists and takes and returns nothing; each global's initializer takes nothing and returns the global's type; every table index and origin in range; each function has a block; scope parents earlier; each value defined once with ids dense from 0; summary targets exist. |
+| `GIR-V010` | Block 0's parameters are the function's parameters; slot types are storable; every instruction's operands have the types its row requires; `x_init`, `x_store` and `x_append` types; `t_condbr`, `t_ret` and `t_exit` operands. |
+| `GIR-V020` | Exactly one terminator per block, last; edge arguments match the target's parameters in number and type; the entry has no predecessor; every block is reachable; every use is dominated by its definition (a use in the same block follows it). |
+| `GIR-V030` | `i_slot` and `x_init` only while the slot's scope is entered; `x_store`, `i_push` and `x_append` only through a `mut` reference; `i_load` and `x_store` only of a flat, reference or slice type. |
+| `GIR-V040` | `x_enter` only when the scope's parent is the innermost entered scope (or it has none and none is entered); `x_leave` only of the innermost; every path to a block enters the same scopes; `t_ret` with none entered. |
+| `GIR-V050` | The summary closes over the effects of the body (below). |
+| `GIR-V100` | Every operation marked "needs an origin" has one. |
+
+The effects of a body are computed without any root annotation. Every reference, slice or view value gets the set of roots it may have: `i_slot` gives its slot (a local), `i_global` its global, the entry block's parameter `i` the parameter `i`; `i_elem`, `i_freeze`, `i_snap`, `i_sview`, `i_vslice`, `i_index` and `i_push` keep the roots of their operand; `i_load` of a reference or slice gives the union of what was stored in the slots of its operand's roots; a block parameter gets what its incoming edges pass; a call gives its callee's returned roots with each `param j` replaced by the roots of argument `j`. A slot holds the union of what `x_init` and `x_store` put in it. The result is the least fixed point. Reads are `i_load`, `i_snap` and `i_alen` through a reference; writes are `x_store`; grows are `i_push` and `x_append`; each is attributed to the parameter and global roots of its operand and to nothing for a local. A store through the slot of a reference-typed parameter rebinds that parameter. Aborting is `i_bin` with `add sub mul div mod`, `i_un` with `neg`, `i_conv` with `as`, `i_vslice`, `i_index`, `t_abort` and `t_exit`; printing is `x_print`. A call adds its callee's summary with parameters mapped through the argument roots; a callee with an unknown summary makes this function's own summary unknown unless it is already. Each effect must be in the summary.
+
+#### The reference lowering
+
+A conforming lowering makes the same choices. The lowering emits into one current block. `newBlock(T…)` takes the next block id and then the next value ids, one per parameter type. An instruction that defines a value takes the next value id when it is emitted. A terminator closes the current block and leaves none. While no block is current nothing is emitted, no block is created, and statements are skipped, so there is no unreachable block and no instruction after a terminator. Joins are created only when some path reaches them. In the lists below a name in `⟦…⟧` means "the lowering of", values are named by the order their operands are lowered, and `[org]` is the Core node's origin.
+
+Expressions:
+
+| Core | Lowering |
+|---|---|
+| `e_lit`, `e_bool` | `i_int` `i_bool` |
+| `e_read p` | `⟦p⟧`, `i_load` |
+| `e_ref m p` | `⟦p⟧`; `i_freeze` only if `m` is `const` and the address is `mut` |
+| `e_slice m v lo hi` | `⟦v⟧`; `lo` (`⟦e⟧` then `bd_val`, `bd_end` for `b_end`, `bd_none`); `hi`; `i_vslice m` `[org]` |
+| `e_len v` | `⟦v⟧`, `i_vlen` |
+| `e_un`, `e_bin` | operands left to right; `i_un` or `i_bin` with the first operand's type and `[org]` |
+| `e_cmp` | operands; `i_cmp` with the first operand's type, `i_bcmp` for booleans |
+| `e_and a b` | `⟦a⟧` as `x`; create block `R` then block `J(bool)`; `t_condbr x R [] J [x]`; in `R`: `⟦b⟧` as `y`, `t_br J [y]`; continue in `J`, whose parameter is the result. `e_or` is `t_condbr x J [x] R []`. |
+| `e_not` | `i_not` |
+| `e_conv` | operand; `i_conv` with the operand's type and the target `[org]` |
+| `e_call c` | arguments left to right (`a_val e`: `⟦e⟧`; `a_ref m p`: `⟦p⟧`, frozen as in `e_ref`); `i_call` of the implementation context `c` names, `[org]` |
+| `e_push p e` | `⟦p⟧`, `⟦e⟧`, `i_push` with no origin |
+| `e_if c t f` | `⟦c⟧`; create `T` then `E`; `t_condbr`; lower the then block in `T` and the else block in `E` (with a unit constant for a block with no value); if some arm still has a current block, create `J(τ)` with `τ` the type of the first such arm's value and append `t_br J [v]` to each arm that has one; continue in `J` |
+| `e_block b` | the block, below |
+| `e_arr`, `e_fill` | elements or value; `i_arr`, `i_fill` |
+| `p_local x`, `p_global g` | `i_slot x`, `i_global g` |
+| `p_deref e` | `⟦e⟧`, no instruction |
+| `p_elem v i` | `⟦v⟧`, `⟦i⟧`, `i_index` `[org]` |
+| `v_of p` | `⟦p⟧`, `i_snap` |
+| `v_val e` | `⟦e⟧`, `i_sview` |
+
+A block: `x_enter` of its scope; the variables its construct declares are bound with `x_init` (a function's parameters in order, a range loop's counter, a `for` loop's element then index); the statements; the value, or a unit constant when one is wanted and absent; `x_leave`. A function body is lowered into block 0 after creating it with the parameters' types, and when the body falls through it ends with `t_ret [v]` (or `t_ret []` for no result) and no origin.
+
+Statements:
+
+| Core | Lowering |
+|---|---|
+| `s_let x e` | `⟦e⟧`, `x_init x` `[org]` |
+| `s_assign p e` | `⟦p⟧`, `⟦e⟧`, `x_store` `[org]` |
+| `s_assign_op op p e` | `⟦p⟧`, `i_load`, `⟦e⟧`, `i_bin op` `[org]`, `x_store` `[org]` |
+| `s_rebind x e` | `⟦e⟧`, `i_slot x`, `x_store` `[org]` |
+| `s_expr e` | `⟦e⟧` |
+| `s_append p v` | `⟦p⟧`, `⟦v⟧`, `x_append` `[org]` |
+| `s_if c t` | `⟦c⟧`; create `T` then `J`; `t_condbr c T [] J []`; the block in `T`; `t_br J []`; continue in `J`. With an else block: create `T` then `E`; `t_condbr`; both arms; the join `J` is created afterwards, only if an arm still has a current block, and each such arm gets `t_br J []`. |
+| `s_while c b` | create `H`; `t_br H []`; in `H`: `⟦c⟧`, create `B` then `X`, `t_condbr c B [] X []`; the body in `B` with a `continue` that branches to `H`; `t_br H []`; continue in `X` |
+| `s_for_range x lo hi b` | `⟦lo⟧` as `a`, `⟦hi⟧` as `n`; create `H(T)` with `T` the type of `a`, parameter `i`; `t_br H [a]`; in `H`: `i_cmp lt T i n`, create `B` then `X`, `t_condbr`; the body in `B` with `x_init x i` after its `x_enter`; at its end, and at each `continue` after leaving the loop's scopes, `i_next T i` then `t_br H [next]`; continue in `X` |
+| `s_for_each x j v by_ref b` | the source once: `v_of p`: `⟦p⟧` as `r`, `i_snap r` as `w`; `v_val e`: `⟦e⟧`, `i_sview` as `w`. Unless `r`'s pointee is `grow`: `i_vlen w` as `n`. Then `i_int i64 0`; create `H(i64)`, parameter `i`; `t_br H [zero]`; in `H`: for a `grow` source `i_alen r` as `n`; `i_cmp lt i64 i n`; create `B` then `X`; `t_condbr`; in `B`, before the body's scope: `i_elem w i` as `e`, then the element value: `i_load e`, or for `by_ref` the address (`i_freeze` if the loop variable's type is a `const` reference); the body with `x_init x` of that value and then `x_init j i` for an index variable; the increment and `continue` as for a range loop with type `i64`; continue in `X` |
+| `s_ret [e]` | `⟦e⟧`; `x_leave` of every entered scope, innermost first; `t_ret [v]` `[org]` |
+| `s_break`, `s_continue` | `x_leave` of the scopes entered since the loop began, innermost first; `t_br X []`, or the loop's continue step |
+| `s_print` | the `pa_expr` arguments' `⟦e⟧` in order; one `x_print` `[org]` with the parts in order |
+| `s_assert e` | `⟦e⟧`; create `P` then `F`; `t_condbr c P [] F []`; in `F`: `t_abort assert` `[org]`; continue in `P` |
+| `s_abort` | `t_abort user_abort` `[org]`; the message is not kept |
+| `s_exit e` | `⟦e⟧`, `t_exit` `[org]` |
+
+A global's initializer is a function with no parameters whose block 0 holds `⟦e⟧` and `t_ret [v]` with the global's origin. Every origin an instruction carries is the Core node's own; the prologue's `x_init` of a parameter carries the parameter variable's origin; `i_next`, `i_push`, `i_freeze`, the loop constants, `x_enter`, `x_leave`, `t_br` and `t_condbr` carry none.
+
 ## Part B. Build representations
 
 ## 13. The four costs
