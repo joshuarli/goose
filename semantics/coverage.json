@@ -126,5 +126,38 @@
   "theorem": "Goose.Reuse.wrong_answer_without_key_determination, Goose.Reuse.key_omission_example",
   "evidence": "The hypothesis cannot be dropped: if the key does not determine the result there is a consistent cache and an input for which cachedRun answers wrongly; concretely, inputs (0,0) and (0,1) with key = first component.",
   "limits": "Establishing KeyDetermines for a real boundary is per-boundary work (native objects by construction; whole build through the recording reader; checked results not established)."
+ },
+ {
+  "feature": "GIR-H interpreter, validator and Core lowering",
+  "label": "executable",
+  "evidence": "Goose/GIR/{Syntax,Eval,Validate,Json,Effects}.lean, Goose/Lower/CoreToGir.lean; test/gir/golden/check.sh (27 modules agree with Core in both numeric profiles, lower is deterministic and round-trips); test/gir/invalid/check.sh (38 modules); a one-off run of about 3000 generated Core programs agreed in both profiles (generator not committed)",
+  "limits": "core-pilot only; gir-run counts executed instructions, not Core evaluation steps, so agree reports inconclusive for long runs"
+ },
+ {
+  "feature": "TH-LOWER-01",
+  "label": "model-proved",
+  "id": "TH-LOWER-01-STRAIGHT",
+  "theorem": "Goose.Proofs.Lower.lower_correct_straight",
+  "statement": "moduleA m = true -> eval n p m = done o t -> exists k, GIR.run k p (lower m) = done o t, for every Core module m, numeric profile p, fuel n, outcome o and output t.",
+  "differs_from_target": "Only the fragment moduleA, a decidable predicate: every global initializer and the entry function's body use only these forms - expressions lit, bool, read, ref, slice, len, un, bin, cmp, not, conv, push, arrLit, fill; places var, global, deref, elem; views of and val; bounds; statements let, assign, assign-op, rebind, expr, append, print; and the entry takes no parameter. Excluded: and, or, if-expressions, block expressions, calls; if, while, for-range, for-each, return, break, continue, assert, abort and exit statements. Nothing about faults: a Core fault is not shown to lower to a fault.",
+  "assumptions": "moduleA m = true. It is decidable and checked on the goldens (Goose/Lower/Witness.lean). The interpreter takes the type of an integer operation from its operand, as Core does, so the theorem needs no typing hypothesis in the fragment.",
+  "witnesses": "Seven goldens satisfy moduleA (gir_straight, gir_div_zero, gir_div_overflow, gir_slice_oob, gir_int_overflow_debug, gir_cast_range_debug, gir_rebind_later_same_scope); four are checked to agree in Goose/Lower/Witness.lean. test/gir/golden/mutation.sh: moving the snapshot of an indexed view after its index expression is caught by agree.",
+  "reviewer": "pending"
+ },
+ {
+  "feature": "TH-LOWER-01",
+  "label": "deferred",
+  "id": "TH-LOWER-01-REST",
+  "limits": "The rest of core-pilot: calls, return, if/while/for statements, short-circuit, if-expressions, block expressions, assert, abort, exit. Their lowering spans several blocks and needs a statement of what the final block table holds for the blocks one fragment creates, a fuel-monotonicity result for the interpreter and an induction on Core's fuel through calls. A for-each over an array that is read through a reference also needs Core's type safety, since the lowering chooses to reread the length from the static type of the owner. Faults are not covered."
+ },
+ {
+  "feature": "TH-GIR-01",
+  "label": "model-proved",
+  "theorem": "Goose.GIR.validate_sound, Goose.GIR.validated_scalar_safe",
+  "statement": "validate m = ok implies, for every function: each block has exactly one terminator and it is last; every defining instruction is typed by Op.resultTy from the types of its operands and the recorded type is that type; every instruction that can abort or stands for a statement carries an origin; each implementation's summary contains the effects the provenance analysis finds. For constants, integer arithmetic, comparison, boolean negation and conversion, running on a frame whose operand cells hold the derived types finishes or aborts at an origin and never faults.",
+  "differs_from_target": "Dominance and scope balance are not proved to follow from acceptance: both checks run iterative analyses (dominator sets, the scopes entered at each block) and their soundness is not argued. Typing is semantic only for the scalar operations above; memory, call and view operations are not. Reference lifetime is not implied: test/gir/invalid/gir_accepted_dangling_reference.json is accepted and its run faults with dangling_root. Summary closure is relative to the validator's own analysis.",
+  "assumptions": "None beyond validate m = ok; the scalar theorem assumes the operand cells have the derived types.",
+  "witnesses": "38 modules in test/gir/invalid, each failing at the check its name gives, one accepted and faulting",
+  "reviewer": "pending"
  }
 ]
