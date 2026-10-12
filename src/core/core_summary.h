@@ -1,12 +1,17 @@
 // Goose compiler — Typed Goose Core, effect summaries.
 //
-// The summary of an implementation is computed from its Core body alone: the
-// storage a place or reference denotes is resolved to parameters and globals
-// by following, flow-insensitively, what each local reference or slice
-// variable was bound to; a call contributes its callee's summary with the
-// callee's parameters replaced by what this call passes. Whatever cannot be
-// resolved that way makes the summary unknown, which implies every effect.
-// Summaries are the least fixed point, so recursion needs no special case.
+// The summary of an implementation must contain the effects the validator
+// recomputes from its body in the implementation's context. Those are found
+// by one traversal that carries the set of roots of every place, view and
+// reference-typed value, taking a variable's roots from the context's
+// annotation: the storage a read, a write, a growth reaches is the global or
+// parameter roots of the place it goes through, and locals are not targets.
+// A call contributes its callee's declared summary with each callee parameter
+// replaced by the targets of the roots of the argument. This pass repeats
+// that traversal and declares what it finds, to a fixed point, so recursion
+// needs no special case; a callee with an unknown summary makes the caller's
+// unknown. Each implementation has exactly one context, so the context's
+// annotation is the one in force.
 #pragma once
 
 namespace goose {
@@ -16,15 +21,11 @@ public:
     explicit CoreSummarizer(CoreModule &module) : m(module) {}
 
     void Run() {
-        pts.resize(m.impls.size());
         for (auto changed = true; changed;) {
             changed = false;
             for (size_t i = 0; i < m.impls.size(); i++) {
-                // What a local may point at depends on what the callees do to
-                // the variables they are passed, so it is redone each round.
-                PointsTo(i);
                 auto s = Summarize(i);
-                if (!SameSummary(s, m.impls[i].summary)) {
+                if (!Same(s, m.impls[i].summary)) {
                     m.impls[i].summary = std::move(s);
                     changed = true;
                 }
@@ -35,172 +36,49 @@ public:
 private:
     CoreModule &m;
 
-    // The storage a place, view or reference may denote, as parameters and
-    // globals; locals are not targets.
-    struct Targets {
-        set<CoreTarget> set_;
-        bool unknown = false;
-        void Add(const Targets &o) {
-            set_.insert(o.set_.begin(), o.set_.end());
-            unknown |= o.unknown;
-        }
-    };
+    using Roots = vector<CoreRootRef>;
 
     struct Effects {
-        Targets reads, writes, grows, rebinds;
+        set<CoreTarget> reads, writes, grows, rebinds;
         bool aborts = false, outputs = false, unknown = false;
     };
 
-    vector<vector<Targets>> pts;   // Per implementation, per variable.
-    size_t ci = 0;                 // The implementation being walked.
+    size_t ci = 0;       // The implementation (and context) being walked.
     Effects *fx = nullptr;
 
     CoreImpl &Impl() { return m.impls[ci]; }
 
-    static bool SameSummary(const CoreSummary &a, const CoreSummary &b) {
+    static bool Same(const CoreSummary &a, const CoreSummary &b) {
         return a.unknown == b.unknown && a.reads == b.reads && a.writes == b.writes &&
                a.grows == b.grows && a.rebinds == b.rebinds && a.aborts == b.aborts &&
                a.outputs == b.outputs;
     }
 
-    static Targets Unknown() {
-        Targets t;
-        t.unknown = true;
-        return t;
+    static Roots Union(Roots a, const Roots &b) {
+        for (auto &r : b) if (find(a.begin(), a.end(), r) == a.end()) a.push_back(r);
+        return a;
+    }
+
+    static void AddTargets(set<CoreTarget> &to, const Roots &rs) {
+        for (auto &r : rs) {
+            if (r.kind == CoreRootRef::Global) to.insert(CoreTarget { true, r.index });
+            else if (r.kind == CoreRootRef::Param) to.insert(CoreTarget { false, r.index });
+        }
+    }
+
+    const Roots *Annotation(int var) {
+        for (auto &vr : m.contexts[ci].varroots)
+            if (vr.first == var) return &vr.second;
+        return nullptr;
     }
 
     // ---------------------------------------------------------------------
-    // What each reference or slice variable may point at.
 
-    void PointsTo(size_t i) {
-        ci = i;
-        auto &impl = Impl();
-        auto &p = pts[i];
-        p.assign(impl.vars.size(), Targets {});
-        for (auto &param : impl.params) {
-            if (!m.IsRefOrSlice(impl.vars[param.var].type)) continue;
-            p[param.var].set_.insert(CoreTarget { false, param.var });
-        }
-        // Bindings of locals flow into each other, so repeat until stable.
-        for (auto changed = true; changed;) {
-            changed = false;
-            auto bind = [&](int var, const Targets &t) {
-                auto &dst = p[var];
-                auto n = dst.set_.size();
-                auto u = dst.unknown;
-                dst.Add(t);
-                if (dst.set_.size() != n || dst.unknown != u) changed = true;
-            };
-            BindBlock(impl.body, bind);
-        }
-    }
-
-    template<typename F> void BindBlock(CoreBlock &b, F &bind) {
-        for (auto &s : b.stmts) BindStmt(s, bind);
-        if (b.value) BindExpr(*b.value, bind);
-    }
-
-    template<typename F> void BindStmt(CoreStmt &s, F &bind) {
-        switch (s.kind) {
-            case CoreStmtKind::Let:
-            case CoreStmtKind::Rebind:
-                if (m.IsRefOrSlice(Impl().vars[s.var].type)) bind(s.var, Ref(*s.expr));
-                break;
-            case CoreStmtKind::ForEach:
-                if (s.byRef) bind(s.var, ViewT(*s.view));
-                break;
-            default: break;
-        }
-        if (s.then) BindBlock(*s.then, bind);
-        if (s.otherwise) BindBlock(*s.otherwise, bind);
-        // Blocks nested in expressions hold statements too.
-        if (s.expr) BindExpr(*s.expr, bind);
-        if (s.expr2) BindExpr(*s.expr2, bind);
-    }
-
-    template<typename F> void BindExpr(CoreExpr &e, F &bind) {
-        if (e.kind == CoreExprKind::Call) {
-            // A callee that rebinds a slice variable it was passed leaves it
-            // pointing somewhere this implementation cannot name.
-            auto &callee = m.impls[m.contexts[e.ctx].impl].summary;
-            for (size_t j = 0; j < e.args.size(); j++) {
-                auto &a = e.args[j];
-                if (a.kind != CoreArg::Ref || a.place->kind != CorePlace::Local) continue;
-                auto var = a.place->index;
-                if (!m.IsRefOrSlice(Impl().vars[var].type)) continue;
-                auto rebound = callee.unknown;
-                for (auto &t : callee.rebinds) rebound |= !t.global && t.index == (int)j;
-                if (rebound) bind(var, Unknown());
-            }
-        }
-        if (e.then) BindBlock(*e.then, bind);
-        if (e.otherwise) BindBlock(*e.otherwise, bind);
-        if (e.a) BindExpr(*e.a, bind);
-        if (e.b) BindExpr(*e.b, bind);
-        for (auto &el : e.elems) BindExpr(*el, bind);
-        for (auto &a : e.args) if (a.expr) BindExpr(*a.expr, bind);
-    }
-
-    // ---------------------------------------------------------------------
-    // Resolving storage.
-
-    Targets PlaceT(const CorePlace &p) {
-        switch (p.kind) {
-            case CorePlace::Local: return {};
-            case CorePlace::Global: {
-                Targets t;
-                t.set_.insert(CoreTarget { true, p.index });
-                return t;
-            }
-            case CorePlace::Deref: return Ref(*p.expr);
-            case CorePlace::Elem: return ViewT(*p.view);
-        }
-        return Unknown();
-    }
-
-    Targets ViewT(const CoreView &v) {
-        return v.kind == CoreView::Of ? PlaceT(*v.place) : Ref(*v.expr);
-    }
-
-    // Where a reference- or slice-typed expression points.
-    Targets Ref(const CoreExpr &e) {
-        switch (e.kind) {
-            case CoreExprKind::Read:
-                if (e.place->kind == CorePlace::Local) return pts[ci][e.place->index];
-                return Unknown();
-            case CoreExprKind::Ref: return PlaceT(*e.place);
-            case CoreExprKind::Push: return PlaceT(*e.place);
-            case CoreExprKind::Slice: return ViewT(*e.view);
-            case CoreExprKind::Call: {
-                Targets t;
-                auto &roots = m.contexts[e.ctx].resultroots;
-                if (roots.empty()) return t;
-                for (auto &r : roots[0]) {
-                    if (r.kind == CoreRootRef::Global) t.set_.insert(CoreTarget { true, r.index });
-                    else if (r.kind == CoreRootRef::Param) t.Add(ArgT(e.args[r.index]));
-                    else return Unknown();
-                }
-                return t;
-            }
-            case CoreExprKind::If: {
-                Targets t = e.then->value ? Ref(*e.then->value) : Unknown();
-                t.Add(e.otherwise->value ? Ref(*e.otherwise->value) : Unknown());
-                return t;
-            }
-            case CoreExprKind::Block:
-                return e.then->value ? Ref(*e.then->value) : Unknown();
-            default: return Unknown();
-        }
-    }
-
-    Targets ArgT(const CoreArg &a) {
-        if (a.kind == CoreArg::Ref) return PlaceT(*a.place);
-        return m.IsRefOrSlice(a.expr->type) ? Ref(*a.expr) : Targets {};
-    }
-
-    // ---------------------------------------------------------------------
-    // Effects.
-
+    // What the traversal finds is declared in terms of the parameters where it
+    // can be: a global that a reference parameter is annotated with is declared
+    // as that parameter, which the validator expands back to the annotation.
+    // A parameter target that no parameter's annotation covers cannot be
+    // declared, and the summary is unknown.
     CoreSummary Summarize(size_t i) {
         ci = i;
         Effects e;
@@ -208,24 +86,47 @@ private:
         Block(Impl().body);
         fx = nullptr;
         CoreSummary s;
-        if (e.unknown || e.reads.unknown || e.writes.unknown || e.grows.unknown ||
-            e.rebinds.unknown) {
-            s.unknown = true;
-            return s;
-        }
-        auto vec = [](const Targets &t) { return vector<CoreTarget>(t.set_.begin(), t.set_.end()); };
-        s.reads = vec(e.reads);
-        s.writes = vec(e.writes);
-        s.grows = vec(e.grows);
-        s.rebinds = vec(e.rebinds);
+        if (e.unknown) { s.unknown = true; return s; }
+        auto &impl = Impl();
+        auto declare = [&](const set<CoreTarget> &found, vector<CoreTarget> &out) {
+            set<CoreTarget> d;
+            for (auto &t : found) {
+                if (!t.global) {
+                    // Declared as itself; the validator expands it through the
+                    // annotation, which must cover it.
+                    auto ann = t.index < (int)impl.vars.size() &&
+                                       m.IsRefOrSlice(impl.vars[t.index].type)
+                                   ? Annotation(t.index) : nullptr;
+                    if (ann && find(ann->begin(), ann->end(),
+                                    CoreRootRef { CoreRootRef::Param, t.index }) == ann->end()) {
+                        s.unknown = true;
+                        return;
+                    }
+                    d.insert(t);
+                    continue;
+                }
+                auto covered = false;
+                for (auto &p : impl.params) {
+                    auto ann = m.IsRefOrSlice(impl.vars[p.var].type) ? Annotation(p.var) : nullptr;
+                    if (ann && find(ann->begin(), ann->end(),
+                                    CoreRootRef { CoreRootRef::Global, t.index }) != ann->end()) {
+                        d.insert(CoreTarget { false, p.var });
+                        covered = true;
+                        break;
+                    }
+                }
+                if (!covered) d.insert(t);
+            }
+            out.assign(d.begin(), d.end());
+        };
+        declare(e.reads, s.reads);
+        declare(e.writes, s.writes);
+        declare(e.grows, s.grows);
+        s.rebinds.assign(e.rebinds.begin(), e.rebinds.end());
         s.aborts = e.aborts;
         s.outputs = e.outputs;
+        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, false, false };
         return s;
-    }
-
-    void Block(const CoreBlock &b) {
-        for (auto &s : b.stmts) Stmt(s);
-        if (b.value) Ex(*b.value);
     }
 
     static bool MayAbort(CoreBinOp op) {
@@ -233,39 +134,40 @@ private:
                op == CoreBinOp::Div || op == CoreBinOp::Mod;
     }
 
+    // A block's statements, then its value; the roots of the value.
+    Roots Block(const CoreBlock &b) {
+        for (auto &s : b.stmts) Stmt(s);
+        return b.value ? Ex(*b.value) : Roots {};
+    }
+
     void Stmt(const CoreStmt &s) {
         switch (s.kind) {
             case CoreStmtKind::Let: Ex(*s.expr); break;
-            case CoreStmtKind::Assign:
-                Pl(*s.place);
+            case CoreStmtKind::Assign: {
+                auto rho = Pl(*s.place);
                 Ex(*s.expr);
-                // Storing a slice through a reference rebinds the variable it
-                // refers to.
-                if (m.IsRefOrSlice(s.expr->type)) fx->rebinds.Add(PlaceT(*s.place));
-                else fx->writes.Add(PlaceT(*s.place));
+                AddTargets(fx->writes, rho);
                 break;
-            case CoreStmtKind::AssignOp:
-                Pl(*s.place);
+            }
+            case CoreStmtKind::AssignOp: {
+                auto rho = Pl(*s.place);
                 Ex(*s.expr);
-                fx->reads.Add(PlaceT(*s.place));
-                fx->writes.Add(PlaceT(*s.place));
+                AddTargets(fx->reads, rho);
+                AddTargets(fx->writes, rho);
                 if (MayAbort(s.bin)) fx->aborts = true;
                 break;
+            }
             case CoreStmtKind::Rebind:
                 Ex(*s.expr);
-                if (s.var < (int)Impl().params.size()) {
-                    Targets t;
-                    t.set_.insert(CoreTarget { false, s.var });
-                    fx->rebinds.Add(t);
-                }
+                if (s.var < (int)Impl().params.size()) fx->rebinds.insert(CoreTarget { false, s.var });
                 break;
             case CoreStmtKind::Expr: Ex(*s.expr); break;
-            case CoreStmtKind::Append:
-                Pl(*s.place);
+            case CoreStmtKind::Append: {
+                auto rho = Pl(*s.place);
                 Vw(*s.view);
-                fx->grows.Add(PlaceT(*s.place));
-                fx->reads.Add(ViewT(*s.view));
+                AddTargets(fx->grows, rho);
                 break;
+            }
             case CoreStmtKind::If:
                 Ex(*s.expr);
                 Block(*s.then);
@@ -282,7 +184,6 @@ private:
                 break;
             case CoreStmtKind::ForEach:
                 Vw(*s.view);
-                fx->reads.Add(ViewT(*s.view));
                 Block(*s.then);
                 break;
             case CoreStmtKind::Ret:
@@ -303,99 +204,115 @@ private:
         }
     }
 
-    // The sub-expressions of a place; an element access may abort.
-    void Pl(const CorePlace &p) {
+    Roots Pl(const CorePlace &p) {
         switch (p.kind) {
-            case CorePlace::Local: case CorePlace::Global: break;
-            case CorePlace::Deref: Ex(*p.expr); break;
-            case CorePlace::Elem:
-                Vw(*p.view);
+            case CorePlace::Local: return { CoreRootRef { CoreRootRef::Local, p.index } };
+            case CorePlace::Global: return { CoreRootRef { CoreRootRef::Global, p.index } };
+            case CorePlace::Deref: return Ex(*p.expr);
+            case CorePlace::Elem: {
+                auto rho = Vw(*p.view);
                 Ex(*p.expr);
                 fx->aborts = true;
-                break;
+                return rho;
+            }
         }
+        return {};
     }
 
-    void Vw(const CoreView &v) {
-        if (v.kind == CoreView::Of) Pl(*v.place);
-        else Ex(*v.expr);
+    // Sampling an owner's run reads it.
+    Roots Vw(const CoreView &v) {
+        if (v.kind == CoreView::Val) return Ex(*v.expr);
+        auto rho = Pl(*v.place);
+        AddTargets(fx->reads, rho);
+        return rho;
     }
 
-    void Ex(const CoreExpr &e) {
+    Roots Ex(const CoreExpr &e) {
         switch (e.kind) {
-            case CoreExprKind::Lit: case CoreExprKind::Bool: break;
-            case CoreExprKind::Read:
-                Pl(*e.place);
-                fx->reads.Add(PlaceT(*e.place));
-                break;
-            case CoreExprKind::Ref: Pl(*e.place); break;
-            case CoreExprKind::Slice:
-                Vw(*e.view);
+            case CoreExprKind::Lit: case CoreExprKind::Bool: return {};
+            case CoreExprKind::Read: {
+                auto rho = Pl(*e.place);
+                AddTargets(fx->reads, rho);
+                if (e.place->kind == CorePlace::Local && m.IsRefOrSlice(Impl().vars[e.place->index].type))
+                    if (auto ann = Annotation(e.place->index)) return *ann;
+                return {};
+            }
+            case CoreExprKind::Ref: return Pl(*e.place);
+            case CoreExprKind::Slice: {
+                auto rho = Vw(*e.view);
                 if (e.lo.expr) Ex(*e.lo.expr);
                 if (e.hi.expr) Ex(*e.hi.expr);
-                fx->reads.Add(ViewT(*e.view));
                 fx->aborts = true;
-                break;
-            case CoreExprKind::Len:
-                Vw(*e.view);
-                fx->reads.Add(ViewT(*e.view));
-                break;
+                return rho;
+            }
+            case CoreExprKind::Len: Vw(*e.view); return {};
             case CoreExprKind::Un:
                 Ex(*e.a);
                 if (e.un == CoreUnOp::Neg) fx->aborts = true;
-                break;
+                return {};
             case CoreExprKind::Bin:
                 Ex(*e.a);
                 Ex(*e.b);
                 if (MayAbort(e.bin)) fx->aborts = true;
-                break;
+                return {};
             case CoreExprKind::Cmp: case CoreExprKind::And: case CoreExprKind::Or:
                 Ex(*e.a);
                 Ex(*e.b);
-                break;
-            case CoreExprKind::Not: Ex(*e.a); break;
+                return {};
+            case CoreExprKind::Not: Ex(*e.a); return {};
             case CoreExprKind::Conv:
                 Ex(*e.a);
                 if (e.conv == CoreConvKind::As) fx->aborts = true;
-                break;
-            case CoreExprKind::Call: Call(e); break;
-            case CoreExprKind::Push:
-                Pl(*e.place);
+                return {};
+            case CoreExprKind::Call: return Call(e);
+            case CoreExprKind::Push: {
+                auto rho = Pl(*e.place);
                 Ex(*e.a);
-                fx->grows.Add(PlaceT(*e.place));
-                break;
-            case CoreExprKind::If:
+                AddTargets(fx->grows, rho);
+                return rho;
+            }
+            case CoreExprKind::If: {
                 Ex(*e.a);
-                Block(*e.then);
-                Block(*e.otherwise);
-                break;
-            case CoreExprKind::Block: Block(*e.then); break;
+                auto t = Block(*e.then);
+                return Union(t, Block(*e.otherwise));
+            }
+            case CoreExprKind::Block: return Block(*e.then);
             case CoreExprKind::Arr:
                 for (auto &el : e.elems) Ex(*el);
-                break;
-            case CoreExprKind::Fill: Ex(*e.a); break;
+                return {};
+            case CoreExprKind::Fill: Ex(*e.a); return {};
         }
+        return {};
     }
 
-    void Call(const CoreExpr &e) {
-        for (auto &a : e.args) {
-            if (a.kind == CoreArg::Val) Ex(*a.expr);
-            else Pl(*a.place);
+    Roots Call(const CoreExpr &e) {
+        vector<Roots> argroots;
+        for (auto &a : e.args)
+            argroots.push_back(a.kind == CoreArg::Val ? Ex(*a.expr) : Pl(*a.place));
+        auto &ctx = m.contexts[e.ctx];
+        auto &callee = m.impls[ctx.impl];
+        if (callee.summary.unknown) fx->unknown = true;
+        else {
+            auto map = [&](const vector<CoreTarget> &from, set<CoreTarget> &to) {
+                for (auto &t : from) {
+                    if (t.global) to.insert(t);
+                    else if (t.index < (int)argroots.size()) AddTargets(to, argroots[t.index]);
+                }
+            };
+            map(callee.summary.reads, fx->reads);
+            map(callee.summary.writes, fx->writes);
+            map(callee.summary.grows, fx->grows);
+            fx->aborts |= callee.summary.aborts;
+            fx->outputs |= callee.summary.outputs;
         }
-        auto &callee = m.impls[m.contexts[e.ctx].impl].summary;
-        if (callee.unknown) { fx->unknown = true; return; }
-        // The callee's parameters are what this call passes for them.
-        auto map = [&](const vector<CoreTarget> &from, Targets &to) {
-            for (auto &t : from) {
-                if (t.global) to.set_.insert(t);
-                else to.Add(ArgT(e.args[t.index]));
+        Roots out;
+        if (callee.results.size() == 1 && m.IsRefOrSlice(callee.results[0]) && ctx.resultroots.size() == 1)
+            for (auto &r : ctx.resultroots[0]) {
+                if (r.kind == CoreRootRef::Param && r.index < (int)argroots.size())
+                    out = Union(out, argroots[r.index]);
+                else if (r.kind == CoreRootRef::Global) out = Union(out, { r });
             }
-        };
-        map(callee.reads, fx->reads);
-        map(callee.writes, fx->writes);
-        map(callee.grows, fx->grows);
-        fx->aborts |= callee.aborts;
-        fx->outputs |= callee.outputs;
+        return out;
     }
 };
 
