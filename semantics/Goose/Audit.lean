@@ -1,6 +1,7 @@
 import Lean
 import Goose.Proofs.Num
 import Goose.Proofs.Share
+import Goose.Reuse.Model
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -121,7 +122,19 @@ end Goose.Audit
 #audit Goose.Proofs.Share.eval_eraseRoots
 #audit Goose.Proofs.Share.eval_simulates
 #audit Goose.Proofs.Share.share_eval
+#audit Goose.Proofs.Share.quotient_of_implwise
 #audit Goose.Proofs.Share.share_never_faults
 #audit Goose.Proofs.Share.share_validated_never_faults
+#audit Goose.Proofs.Share.checkQuotient_sound
+#audit Goose.Proofs.Share.eqImpl_sound
+
+#audit Goose.Reuse.cachedRun_result
+#audit Goose.Reuse.cachedRun_consistent
+#audit Goose.Reuse.cachedRuns_agree
+#audit Goose.Reuse.cachedRuns_agree_from
+#audit Goose.Reuse.cachedRun₂_result
+#audit Goose.Reuse.cachedRuns₂_agree
+#audit Goose.Reuse.wrong_answer_without_key_determination
+#audit Goose.Reuse.key_omission_example
 
 #audit_registry
