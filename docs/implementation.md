@@ -4637,7 +4637,7 @@ signal stack, which the runtime allocates for each such thread unless it has
 one already (ASan gives every thread its own) and releases with a worker's
 data stacks. A fault between 64 KB below the thread's stack and its top is
 that stack overflowing, by the bounds read as the thread starts
-(`pthread_getattr_np` on Linux, `pthread_get_stackaddr_np` and
+(`pthread_getattr_np` on Linux, widened on the main thread to the `RLIMIT_STACK` limit, since musl reports only the part mapped so far; `pthread_get_stackaddr_np` and
 `pthread_get_stacksize_np` on macOS; elsewhere there are none, and the
 overflow is not reported). A fault that is neither kind gets back the
 handler the runtime replaced and recurs under it: the default action, or a

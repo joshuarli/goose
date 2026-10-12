@@ -1329,7 +1329,8 @@ static void gs_regions_init(void) {
 
 /* Run by each thread program's thread as it starts. TinyCC's kernel32.def
    does not list SetThreadStackGuarantee, so a program it builds looks it up. */
-static void gs_native_stack_init(void) {
+static void gs_native_stack_init(int primordial) {
+    (void)primordial;
     ULONG room = GS_STACK_GUARANTEE;
     #ifdef __TINYC__
         BOOL (WINAPI *guarantee)(PULONG) = (BOOL (WINAPI *)(PULONG))GetProcAddress(
@@ -1366,6 +1367,7 @@ static GS_NORETURN void gs_park(void) {
 #else  /* posix */
 
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
@@ -1432,8 +1434,11 @@ static size_t gs_sigstack_size(void) {
 
 /* Run by each thread program's thread as it starts: an alternate stack for
    the fault handler, unless the thread has one (ASan gives every thread its
-   own), and the bounds of the thread's stack. */
-static void gs_native_stack_init(void) {
+   own), and the bounds of the thread's stack. The primordial thread's stack
+   grows on demand up to the stack limit, and not every libc reports that
+   limit: musl's pthread_getattr_np gives only what is mapped so far, so the
+   limit is taken from getrlimit, as glibc does. */
+static void gs_native_stack_init(int primordial) {
     stack_t ss;
     uintptr_t lo = 0, hi = 0;
     if (!sigaltstack(NULL, &ss) && (ss.ss_flags & SS_DISABLE)) {
@@ -1457,6 +1462,13 @@ R"GSRT(        lo = hi - pthread_get_stacksize_np(pthread_self());
                 hi = lo + size;
             }
             pthread_attr_destroy(&attr);
+        }
+)GSRT"
+R"GSRT(        if (primordial && hi) {
+            struct rlimit rl;
+            if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur != RLIM_INFINITY &&
+                rl.rlim_cur > hi - lo && rl.rlim_cur < hi)
+                lo = hi - (uintptr_t)rl.rlim_cur;
         }
     #endif
     if (lo > GS_NATIVE_SLOP) {
@@ -1693,7 +1705,8 @@ static int gs_sp_nextleaf(gs_sppath *p) {
 static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
     int64_t r = gs_sp_newnode(p);
     gs_spinner *rn = GS_SPINNER(p, r);
-    rn->n = 2;
+)GSRT"
+R"GSRT(    rn->n = 2;
     rn->key[0] = gs_sp_key(p, a, leaf);
     rn->max[0] = gs_sp_max(p, a, leaf);
     rn->child[0] = a;
@@ -1934,7 +1947,8 @@ GS_API void gs_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx,
     p.top = top;
     if (*n == 0) {
         gs_sphead *hd = (gs_sphead *)base;
-        *n = 1;
+)GSRT"
+R"GSRT(        *n = 1;
         *top = base + GS_SPAN_NODE;
         hd->chain = 0;
         hd->height = 0;
@@ -2122,7 +2136,8 @@ R"GSRT(    for (; i + 16 <= n; i += 16) {                                       
     int64_t i = 0;                                                                     \
     unsigned k;                                                                        \
     for (; i + 16 <= np; i += 16) {                                                    \
-        k = (unsigned)_mm_movemask_epi8(                                               \
+)GSRT"
+R"GSRT(        k = (unsigned)_mm_movemask_epi8(                                               \
             _mm_and_si128(TESTA(GS_LOAD(p + i)), TESTB(GS_LOAD(p + i + d))));          \
         if (k) return i + gs_ctz32(k);                                                 \
     }                                                                                  \
@@ -2247,7 +2262,7 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     setvbuf(stdout, NULL, _IONBF, 0);
     gs_regions_init();
     gs_regions_begin(mainregions);
-    gs_native_stack_init();
+    gs_native_stack_init(1);
     gs_scan_init();
 }
 
@@ -2313,7 +2328,8 @@ R"GSRT(GS_API int64_t gs_fmt_i64(uint8_t *dst, int64_t v) {
 
    The numbers are naturals in 32-bit limbs, least significant first. The
    denominator s stays below 2^1079 (ten times 2^1075, for the smallest
-   doubles), and the others below eleven times s. */
+)GSRT"
+R"GSRT(   doubles), and the others below eleven times s. */
 typedef struct { int n; uint32_t d[36]; } gs_big;
 
 /* a = v << sh, for v > 0. */
@@ -2538,7 +2554,8 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
 }
 
 /* stdout is unbuffered (gs_rt_start), so every piece is its own write;
-   revisit if print throughput ever matters. */
+)GSRT"
+R"GSRT(   revisit if print throughput ever matters. */
 
 GS_API void gs_out_int(int64_t v) {
     uint8_t buf[GS_FMT_MAX];
@@ -2675,7 +2692,7 @@ static void *gs_thread_main(void *p)
 {
     gs_thread *t = (gs_thread *)p;
     gs_regions_begin(gs_workerregions);
-    gs_native_stack_init();
+    gs_native_stack_init(0);
     gs_current_thread_id = t->id;
     t->run(t->entry, t->args);
     free(t->args);
