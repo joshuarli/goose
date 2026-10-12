@@ -24,6 +24,25 @@ inline void EmitCore(Ast &ast, const string &entry, const string &path) {
     }
     CoreSummarizer(mod).Run();
     auto text = CoreWriter(mod).Write();
+    // The limits of the reader: a module larger than 64 MiB, or nested more
+    // than 256 deep, would only be refused there.
+    auto where = ast.sources.empty() ? entry : cat(ast.sources[0].first, ":1");
+    constexpr size_t MAX_BYTES = size_t(64) << 20;
+    constexpr int MAX_DEPTH = 256;
+    if (text.size() > MAX_BYTES)
+        throw CompileError { cat(where, ": error: unsupported in core-pilot: module-size") };
+    int depth = 0;
+    bool instring = false;
+    for (size_t i = 0; i < text.size(); i++) {
+        auto c = text[i];
+        if (instring) {
+            if (c == '\\') i++;
+            else if (c == '"') instring = false;
+        } else if (c == '"') instring = true;
+        else if (c == '[' && ++depth > MAX_DEPTH)
+            throw CompileError { cat(where, ": error: unsupported in core-pilot: nesting-depth") };
+        else if (c == ']') depth--;
+    }
     auto f = fopen(path.c_str(), "wb");
     if (!f) throw CompileError { cat("cannot write Core file: ", path) };
     auto ok = fwrite(text.data(), 1, text.size(), f) == text.size();
