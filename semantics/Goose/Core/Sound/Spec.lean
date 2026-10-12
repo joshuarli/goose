@@ -156,6 +156,7 @@ def BlockSpec (n : Nat) : Prop :=
     TSame { tenv with scopes := sc :: tenv.scopes } tenv1 →
     (∀ y, y ∈ tenv1.visible ↔ y ∈ pre.map Prod.fst ∨ y ∈ tenv.visible) →
     PreOk m W penv { env with scopes := (sc, s.nextScope) :: env.scopes } sc lo rst1.nextVar s.store pre →
+    lo ≤ rst1.nextVar →
     tyStmts tenv1 sc stmts tn1 = .ok (tenv2, tn2) →
     (match value with
       | none => ty = .unit
@@ -179,6 +180,7 @@ def StmtsSpec (n : Nat) : Prop :=
   ∀ (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (sc : Nat) (ss : List Stmt)
     (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
     Perm m W → Frame m W tenv penv env s → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
+    lo ≤ rst.nextVar →
     tyStmts tenv sc ss tn = .ok (tenv', tn') → rpStmts penv ss rst = .ok ((), rst') →
     EffLe rst'.eff W.E →
     Sat (execStmts n ⟨prof, m⟩ env ss) s (fun fl s' =>
@@ -195,6 +197,7 @@ def StmtSpec (n : Nat) : Prop :=
   ∀ (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (sc : Nat) (st : Stmt)
     (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
     Perm m W → Frame m W tenv penv env s → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
+    lo ≤ rst.nextVar →
     tyStmt tenv sc st tn = .ok (tenv', tn') → rpStmt penv st rst = .ok ((), rst') →
     EffLe rst'.eff W.E →
     Sat (execStmt n ⟨prof, m⟩ env st) s (fun fl s' =>
