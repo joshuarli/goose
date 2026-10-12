@@ -106,6 +106,9 @@ struct ContextKey {
 
 // Makes the keys of one finished typecheck. Everything is computed on demand
 // and memoized; nothing here runs unless a caller asks for a key.
+// Reads only what the Ast owns: the checker's own tables are gone by the time
+// the keys are made, so nothing here may point into them (an overload set a
+// function value was bound from is named by its first member instead).
 class KeyMaker {
     const Ast &ast;
     unordered_map<const TypeExpr *, Digest> types;
