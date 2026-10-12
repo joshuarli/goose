@@ -25,6 +25,10 @@ digest, `positions`, holds them. So two checks are made:
   * every context whose result or positions changed is predicted by some
     dependency.
 
+An observation (a subject starting `observed:`) is what one context's check
+found of a global's provenance, which depends on what was checked before it:
+only the same context's entry in the new report can bear it out.
+
 A context that changed without being predicted is an under-approximation: a
 dependency the compiler did not record. It is listed and the exit status is 1.
 The over-approximation is the predicted contexts that did not change; a
@@ -48,27 +52,44 @@ def load(path):
     return deps
 
 
+OBSERVED = "observed:"
+
+
 def evaluate(report):
     """What the program the report describes says of each dependency
     subject: {(kind, subject): digest}. A subject's digest is a property of
     the program, whichever context asks, so two contexts must agree on it.
-    Also the disagreements found."""
+    Also the disagreements found. An observation (a subject starting
+    `observed:`) is what one context's check saw when it ran, which depends on
+    what was checked before it; it is not a fact about the program and is
+    left out."""
     value, clashes = {}, []
     for c in report["contexts"]:
         for d in c["dependencies"]:
+            if d["subject"].startswith(OBSERVED):
+                continue
             k = (d["kind"], d["subject"])
             if value.setdefault(k, d["digest"]) != d["digest"]:
                 clashes.append(f"{k[0]} {k[1]}: {c['name']} reads another digest")
     return value, clashes
 
 
-def broken(context, value, location):
-    """The dependencies of the context, as the old report recorded them, that
-    the new program does not bear out: its digest differs, or no context of
-    the new program depends on the subject at all, so it cannot be told."""
-    return {(d["kind"], d["subject"]) for d in context["dependencies"]
-            if (d["kind"] == "location") == location
-            and value.get((d["kind"], d["subject"])) != d["digest"]}
+def broken(old, new, value, location):
+    """The dependencies of the old context, as the old report recorded them,
+    that the new program does not bear out: its digest differs, or no context
+    of the new program depends on the subject at all, so it cannot be told.
+    An observation is borne out only by the new context's own: nothing but
+    checking it again says what it would see."""
+    mine = {(d["kind"], d["subject"]): d["digest"] for d in new["dependencies"]}
+    out = set()
+    for d in old["dependencies"]:
+        if (d["kind"] == "location") != location:
+            continue
+        k = (d["kind"], d["subject"])
+        now = mine.get(k) if d["subject"].startswith(OBSERVED) else value.get(k)
+        if now != d["digest"]:
+            out.add(k)
+    return out
 
 
 def compare(old, new):
@@ -81,11 +102,13 @@ def compare(old, new):
     # its subject. What the new context itself depends on is not consulted:
     # reuse would not know it without checking again.
     value, clashes = evaluate(new)
-    semantic = {k for k in common if broken(a[k], value, False)}
-    located = {k for k in common if broken(a[k], value, True)}
+    semantic = {k for k in common if broken(a[k], b[k], value, False)}
+    located = {k for k in common if broken(a[k], b[k], value, True)}
     result = {k for k in common if a[k]["result"] != b[k]["result"]}
     moved = {k for k in common if a[k]["positions"] != b[k]["positions"]}
-    gone = appeared | disappeared
+    # Contexts the key does not tell apart are reported as one. One more or
+    # one fewer of them is a context that appeared or disappeared.
+    gone = appeared | disappeared | {k for k in common if a[k]["duplicates"] != b[k]["duplicates"]}
     names = {**{k: c["name"] for k, c in a.items()}, **{k: c["name"] for k, c in b.items()}}
     # Facts that flow back from the call sites, left out of results.
     callers = {k for k in common if a[k]["callers"] != b[k]["callers"]}

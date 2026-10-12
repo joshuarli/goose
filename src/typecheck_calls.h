@@ -3032,13 +3032,6 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     RecordEnvExits(spec);
     spec->inprogress = false;
     spec->record.eventend = storeevents.size();
-    if (g_deps) {
-        // A loop's passes may have taken events back, as a call replaying
-        // the record reads it (ApplyCalleeStores).
-        auto end = min(spec->record.eventend, storeevents.size());
-        auto start = min(spec->record.eventstart, end);
-        DepNoteStoreRecord(storeevents.data() + start, end - start);
-    }
     spec->rounds++;
 }
 

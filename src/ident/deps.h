@@ -13,8 +13,14 @@
 // names are its stable keys (keys.h).
 //
 // What a dependency covers is what the checker can read; what a result
-// covers is what the checker leaves for later phases. Three things are
-// deliberately outside both:
+// covers is what the checker leaves for later phases. One thing is read that
+// is not a fact about the program: where a reference held by a global may
+// point is whatever the stores checked so far made of it, so a body that
+// names such a global found a different answer in a different checking order.
+// That is recorded as an observation (subject `observed:`), which only
+// checking the context again can confirm.
+//
+// Three things are deliberately outside dependencies and results:
 //   * Facts that flow back from the call sites, such as whether every call
 //     passed an exact array for a parameter. They are settled once all
 //     contexts are checked and kept apart as `callers`.
@@ -68,12 +74,24 @@ struct DepEvents {
     unordered_set<const TypeExpr *> types;                 // Nominal types instantiated.
     unordered_set<const FunVal *> funvals;                 // Origins of blocks checked inline.
     unordered_set<const VarDef *> envvars;                 // Variables outside the body it named.
+    // What the check found of each global it named: where a reference the
+    // global holds may point, as the stores checked so far left it. A store
+    // in another context moves it, so it depends on the order contexts were
+    // checked in. A new entry per change seen.
+    struct GlobalState {
+        Prov ref;
+        Roots contents;
+        bool refrootknown = false, slotref = false, contentbyteview = false;
+        bool operator==(const GlobalState &o) const {
+            return ref == o.ref && contents.Same(o.contents) &&
+                   refrootknown == o.refrootknown && slotref == o.slotref &&
+                   contentbyteview == o.contentbyteview;
+        }
+    };
+    unordered_map<const VarDef *, vector<GlobalState>> globalstates;
     vector<DepResource> resources;
     set<pair<int, string>> warnings;                       // (code, message), no position.
     set<pair<bool, string>> verdicts;                      // A cast judged redundant, or not.
-    // The stores the body made into storage it does not own, as the check
-    // ended: what a caller replays. The last round of a cycle stands.
-    vector<StoreEvent> storerecord;
 };
 
 // Facts about declarations taken from the tree before checking: the
@@ -218,6 +236,17 @@ inline void DepNoteEnvVar(const VarDef *v) {
     if (auto cur = g_deps->Current()) cur->envvars.insert(v);
 }
 
+// A global variable was named: its provenance as the checker has it now.
+inline void DepNoteGlobalState(const VarDef *v) {
+    if (!g_deps) return;
+    auto cur = g_deps->Current();
+    if (!cur) return;
+    DepEvents::GlobalState now { v->ref, v->contents, v->refrootknown, v->slotref,
+                                 v->contentbyteview };
+    auto &seen = cur->globalstates[v];
+    if (seen.empty() || !(seen.back() == now)) seen.push_back(std::move(now));
+}
+
 inline void DepNoteResource(string_view kind, const string &subject, const string &content) {
     if (!g_deps) return;
     auto cur = g_deps->Current();
@@ -235,12 +264,6 @@ inline void DepNoteWarning(int code, const string &message) {
 inline void DepNoteVerdict(bool redundant, const string &text) {
     if (!g_deps) return;
     if (auto cur = g_deps->Current()) cur->verdicts.insert({ redundant, text });
-}
-
-// The end of a body's check: its stores as published to callers.
-inline void DepNoteStoreRecord(const StoreEvent *first, size_t count) {
-    if (!g_deps) return;
-    if (auto cur = g_deps->Current()) cur->storerecord.assign(first, first + count);
 }
 
 inline void DepNoteFileRead(const string &path, const string &contents) {
@@ -626,9 +649,11 @@ public:
 };
 
 // The names and source-order numbers the finished checker's variables are
-// given in a report. A local is its owning context's base key and its
-// ordinal among that context's variables; a parameter class root is its
-// context's key and class number, never the call site that first made it.
+// given in a report. A local is its owning context's key and its ordinal
+// among that context's variables in declaration order; a parameter class root
+// is its context's key and class number, never the call site that first made
+// it. The full key, not its base: contexts that differ only by the blocks they
+// run each check blocks of their own, with variables of the same names.
 class DepNamer {
     KeyMaker &keys;
     DepModules &mods;
@@ -667,11 +692,11 @@ public:
         } else if (v->istemp) {
             out = "temp";
         } else if (auto cr = classroot.find(v); cr != classroot.end()) {
-            out = cat("c:", keys.BaseKey(cr->second.first).Stored(), ":", cr->second.second);
+            out = cat("c:", keys.Context(cr->second.first).total.Stored(), ":", cr->second.second);
         } else if (v->classfrom) {
             out = cat("class:", Var(v->classfrom));
         } else if (v->ownerspec) {
-            out = cat("l:", keys.BaseKey(v->ownerspec).Stored(), ":", ordinal[v]);
+            out = cat("l:", keys.Context(v->ownerspec).total.Stored(), ":", ordinal[v]);
         } else {
             out = cat("i:", mods.ModuleOf(v->line.fileidx), ":", v->name, ":", ordinal[v]);
         }
@@ -781,6 +806,9 @@ class DepFinal {
     unordered_map<const VarDecl *, Digest> globals;
     // A variant's position in its enum, which is its tag.
     unordered_map<const SVariant *, int> variantindex;
+    // A global initializer is named by its module, namespace and names; two
+    // that spell alike are told apart by order of appearance.
+    unordered_map<const VarDecl *, Digest> globalkeys;
 
     static const FnSpec *HeadOf(const FnSpec *s) {
         while (s->cyclelink) s = s->cyclelink;
@@ -862,6 +890,8 @@ class DepFinal {
         // as the check left them; any other's, a global or one of a lexical
         // parent, only as declared: how the others' code used them is theirs.
         const FnSpec *owner;
+        // The contexts the body's `return from` leaves to.
+        unordered_set<const FnSpec *> &targets;
 
         void Collect(const TypeExpr *t, int depth = 0) {
             if (!t || depth > 8) return;
@@ -917,6 +947,15 @@ class DepFinal {
             else c.Dig(f.Key(s));
         }
 
+        // The context a `return from` leaves to. What the body checked is
+        // that target's contract, which its base key says; which block it
+        // runs is for the target to answer.
+        void Target(const FnSpec *s) {
+            if (!s) { c.Tag('_'); return; }
+            targets.insert(s);
+            c.Dig(f.keys.BaseKey(s));
+        }
+
         void Decl(const SFunction *sf) {
             if (!sf) c.Tag('_');
             else c.Dig(f.keys.Decl(sf).digest);
@@ -953,8 +992,8 @@ class DepFinal {
 
     public:
         Tree(DepFinal &fin, Canon &content, Canon &positions, unordered_set<const TypeExpr *> &types,
-             const FnSpec *spec)
-            : f(fin), c(content), p(positions), used(types), owner(spec) {}
+             unordered_set<const FnSpec *> &returnsto, const FnSpec *spec)
+            : f(fin), c(content), p(positions), used(types), owner(spec), targets(returnsto) {}
 
         void Walk(const Node *n) {
             if (!n) { c.Tag('_'); return; }
@@ -1143,7 +1182,7 @@ class DepFinal {
                 case NK_Return: {
                     auto x = (const Return *)n;
                     Decl(x->target);
-                    Spec(x->targetspec);
+                    Target(x->targetspec);
                     Kids(x->vals);
                     break;
                 }
@@ -1292,11 +1331,17 @@ class DepFinal {
                 types(c, arrays);
             }
         }
-        c.U(r.classevents.size());
-        for (auto &e : r.classevents) StoreC(c, e);
-        if (auto ev = rec.specs.find(s); ev != rec.specs.end()) {
-            c.U(ev->second.storerecord.size());
-            for (auto &e : ev->second.storerecord) StoreC(c, e);
+        {
+            vector<string> stores;
+            for (auto &e : r.classevents) {
+                Canon x;
+                StoreC(x, e);
+                stores.push_back(x.Text());
+            }
+            sort(stores.begin(), stores.end());
+            stores.erase(unique(stores.begin(), stores.end()), stores.end());
+            c.U(stores.size());
+            for (auto &x : stores) c.Str(x);
         }
         for (auto *list : { &s->envreads, &s->envexits }) {
             vector<string> v;
@@ -1310,7 +1355,7 @@ class DepFinal {
             for (auto &x : v) c.Str(x);
         }
         for (auto &oe : s->outerexits) {
-            c.Dig(Key(oe.target));
+            c.Dig(keys.BaseKey(oe.target));
             for (auto *set : { &oe.assigned, &oe.maybeassigned }) {
                 vector<string> v;
                 for (auto x : *set) v.push_back(names.Var(x));
@@ -1321,7 +1366,7 @@ class DepFinal {
         }
         {
             vector<Digest> need;
-            for (auto t : s->needs) need.push_back(Key(t));
+            for (auto t : s->needs) need.push_back(keys.BaseKey(t));
             sort(need.begin(), need.end());
             c.U(need.size());
             for (auto &d : need) c.Dig(d);
@@ -1536,7 +1581,8 @@ class DepFinal {
             auto it = rec.funvals.find(fv);
             if (it == rec.funvals.end()) continue;
             auto &f = it->second;
-            string owner = f.owner ? keys.Decl(f.owner).digest.Stored() : "global";
+            string owner = f.owner ? keys.Decl(f.owner).digest.Stored()
+                                   : cat("global:", globalkeys[f.ownerglobal].Stored());
             auto subject = cat("block:", owner, "#", f.ordinal);
             Add(ctx, DepKind::Body, subject, f.text);
             Add(ctx, DepKind::Location, subject, f.loc);
@@ -1545,6 +1591,19 @@ class DepFinal {
             Canon c;
             DeclaredVarC(c, v);
             Add(ctx, DepKind::Environment, cat("variable:", names.Var(v)), c.Hash());
+        }
+        // What the check found of each global's provenance. Only this
+        // context's own check can say it again, so it is an observation, not
+        // a fact about the program: the subject is named for what was seen.
+        for (auto &[v, states] : ev.globalstates) {
+            Canon c;
+            c.U(states.size());
+            for (auto &st : states) {
+                ProvC(c, st.ref);
+                RootsC(c, st.contents);
+                c.B(st.refrootknown).B(st.slotref).B(st.contentbyteview);
+            }
+            Add(ctx, DepKind::Environment, cat("observed:", names.Var(v)), c.Hash());
         }
     }
 
@@ -1565,6 +1624,15 @@ public:
         : ast(a), keys(k), rec(r), mods(k, a.sources.size()), names(a, k, mods) {
         for (auto en : ast.enums)
             for (size_t i = 0; i < en->variants.size(); i++) variantindex[&en->variants[i]] = (int)i;
+        map<string, int> seen;
+        for (auto g : ast.globals) {
+            Canon k;
+            k.Tag('G').Str(mods.ModuleOf(g->line.fileidx)).Str(g->ns).U(g->names.size());
+            for (auto nm : g->names) k.Str(nm);
+            auto spelling = k.Text();
+            k.I(seen[spelling]++);
+            globalkeys[g] = k.Hash();
+        }
         for (auto s : ast.fnspecs) {
             if (!s->sf) continue;
             if (s->incycle) groups[HeadOf(s)].push_back(s);
@@ -1604,10 +1672,11 @@ public:
 
         Canon rc, pc;
         unordered_set<const TypeExpr *> types;
+        unordered_set<const FnSpec *> targets;
         rc.Tag('R').Dig(InterfaceOf(s, false)).Dig(SummaryOf(s));
         {
             Canon tc;
-            Tree tree(*this, tc, pc, types, s);
+            Tree tree(*this, tc, pc, types, targets, s);
             tree.Walk(s->body);
             rc.Dig(tc.Hash());
         }
@@ -1631,6 +1700,17 @@ public:
         Add(ctx, DepKind::Resource, cat("module:", mods.ModuleOf(s->sf->line.fileidx)),
             ModuleIdentity(s->sf->line.fileidx));
         EventDeps(ctx, events, types, s);
+        // The contracts of the contexts it returns to.
+        for (auto t : s->needs) targets.insert(t);
+        for (auto &oe : s->outerexits) targets.insert(oe.target);
+        targets.erase(s);
+        for (auto t : targets) {
+            if (!t->sf) continue;
+            Canon x;
+            x.Tag('K').B(t->retsknown).U(t->rets.size());
+            for (auto r : t->rets) x.Dig(TypeD(r));
+            Add(ctx, DepKind::Summary, cat("target:", keys.BaseKey(t).Stored()), x.Hash());
+        }
         if (s->incycle) {
             auto &members = groups[HeadOf(s)];
             Canon g;
@@ -1671,15 +1751,11 @@ public:
         return c.Hash();
     }
 
-    void Global(const VarDecl *g, int ordinal) {
+    void Global(const VarDecl *g) {
         DepContext ctx;
         ctx.global = true;
         ctx.name = cat("global ", g->names.empty() ? string_view("?") : g->names[0]);
-        Canon k;
-        k.Tag('G').Str(mods.ModuleOf(g->line.fileidx)).Str(g->ns).U(g->names.size());
-        for (auto nm : g->names) k.Str(nm);
-        k.I(ordinal);
-        ctx.key = ctx.decl = k.Hash();
+        ctx.key = ctx.decl = globalkeys[g];
         auto ev = rec.globals.find(g);
         static const DepEvents none;
         auto &events = ev == rec.globals.end() ? none : ev->second;
@@ -1689,13 +1765,16 @@ public:
         rc.Tag('R');
         {
             Canon tc;
-            Tree tree(*this, tc, pc, types, nullptr);
+            unordered_set<const FnSpec *> returnsto;
+            Tree tree(*this, tc, pc, types, returnsto, nullptr);
             for (auto init : g->inits) tree.Walk(init);
             rc.Dig(tc.Hash());
         }
+        // What other contexts stored into a global is theirs, so only how it
+        // was declared.
         for (auto d : g->defs) {
             Canon x;
-            VarC(x, d);
+            DeclaredVarC(x, d);
             rc.Dig(x.Hash());
         }
         rc.U(events.warnings.size());
@@ -1724,11 +1803,7 @@ inline void DepsAfterCheck(Ast &ast, KeyMaker &keys) {
     DepFinal fin(ast, keys, rec);
     for (auto s : ast.fnspecs)
         if (s->sf) fin.Function(s);
-    map<string, int> seen;
-    for (auto g : ast.globals) {
-        auto id = cat(g->line.fileidx, ":", g->ns, ":", g->names.empty() ? string_view() : g->names[0]);
-        fin.Global(g, seen[id]++);
-    }
+    for (auto g : ast.globals) fin.Global(g);
     rec.contexts = std::move(fin.out);
 }
 
