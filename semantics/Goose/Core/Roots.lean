@@ -559,6 +559,14 @@ def checkSummary (impl : Impl) (ctx : Context) (eff : Eff) : V Unit := do
   match impl.summary with
   | .unknown => pure ()
   | .known s =>
+    -- An entry for a parameter is read through that parameter's annotation, so
+    -- it must name a parameter.
+    forAll (s.reads ++ s.writes ++ s.grows) fun t =>
+      match t with
+      | .param i =>
+        unless i < impl.params.size do
+          reject .summary s!"{impl.name}: its summary names parameter {i}, which does not exist"
+      | .global _ => pure ()
     if eff.unknown then
       reject .summary s!"{impl.name} calls an implementation whose summary is unknown, so its own summary cannot be known"
     effWithin impl.name "reads" eff.reads (expandTargets impl ctx s.reads)
