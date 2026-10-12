@@ -37,9 +37,11 @@ inline int CoreIntBits(CoreIntTy t) {
 using CoreTypeId = int;
 
 // A pilot type. `elem` is the element or pointee type; `count` is an array's
-// fixed length.
+// fixed length. A View is not a Core type: it is the type of a sampled run in
+// the lowered form (`mut` and `elem` as for a slice), kept here so that both
+// share one table.
 struct CoreType {
-    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, Ref, Slice } kind = Unit;
+    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, Ref, Slice, View } kind = Unit;
     CoreIntTy ity = CoreIntTy::I64;   // Int
     CoreMut mut = CoreMut::Mut;       // Ref, Slice
     CoreTypeId elem = -1;             // Arr, Grow, Ref, Slice

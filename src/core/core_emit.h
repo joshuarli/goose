@@ -3,9 +3,11 @@
 
 namespace goose {
 
-// Exports the checked program as a Core module and writes it to `path`. A
+// Exports the checked program as a Core module and writes it to `path`, and
+// when `girpath` is given lowers it to GIR-H, verifies that and writes it
+// there. Either path may be empty. A
 // program outside the pilot profile is a compile error and no file is written.
-inline void EmitCore(Ast &ast, const string &entry, const string &path) {
+inline void EmitCore(Ast &ast, const string &entry, const string &path, const string &girpath = {}) {
     CoreModule mod;
     try {
         mod = CoreExporter(ast, entry).Export();
@@ -43,14 +45,30 @@ inline void EmitCore(Ast &ast, const string &entry, const string &path) {
             throw CompileError { cat(where, ": error: unsupported in core-pilot: nesting-depth") };
         else if (c == ']') depth--;
     }
-    auto f = fopen(path.c_str(), "wb");
-    if (!f) throw CompileError { cat("cannot write Core file: ", path) };
-    auto ok = fwrite(text.data(), 1, text.size(), f) == text.size();
-    ok = fclose(f) == 0 && ok;
-    if (!ok) {
-        remove(path.c_str());
-        throw CompileError { cat("cannot write Core file: ", path) };
+    // Lowered before anything is written, so that a module the verifier
+    // refuses leaves no file behind.
+    string girtext;
+    if (!girpath.empty()) {
+        auto numbering = [&] { CoreWriter w(mod); w.Write(); return w; }();
+        GirLowerer lowerer(mod, numbering.FileTable(), numbering.OriginTable(),
+                           [&](const CoreOrigin &o) { return numbering.OriginId(o); });
+        auto gir = lowerer.Lower();
+        if (auto v = GirVerifier(gir).Verify())
+            throw CompileError { cat("internal compiler error: ", v->code, ": ", v->message) };
+        girtext = GirWriter(gir).Write();
     }
+    auto write = [&](const string &file, const string &contents, const char *what) {
+        auto f = fopen(file.c_str(), "wb");
+        if (!f) throw CompileError { cat("cannot write ", what, " file: ", file) };
+        auto ok = fwrite(contents.data(), 1, contents.size(), f) == contents.size();
+        ok = fclose(f) == 0 && ok;
+        if (!ok) {
+            remove(file.c_str());
+            throw CompileError { cat("cannot write ", what, " file: ", file) };
+        }
+    };
+    if (!path.empty()) write(path, text, "Core");
+    if (!girpath.empty()) write(girpath, girtext, "GIR-H");
 }
 
 }  // namespace goose
