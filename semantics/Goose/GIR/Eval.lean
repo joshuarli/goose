@@ -316,15 +316,17 @@ def exec : Nat → FnCtx → Frame → List Inst → M Val
       let (_, code) ← expectInt (← getVal fr v)
       M.stop (.exit code)
 
-/-- One instruction that defines a value. A call needs fuel; every other
-operation is `execPure`. -/
+/-- One instruction that defines a value. Only a call needs fuel: every other
+operation is `execPure`, however little fuel remains. -/
 def execOp : Nat → FnCtx → Frame → Op → M RVal
-  | 0, _, _, _ => timeout
-  | n + 1, cx, fr, op =>
+  | n, cx, fr, op =>
     match op with
-    | .call f args _ => do
-      let vals ← mapList (getVal fr) args
-      pure (.val (← callFn n cx.cfg fr.depth f vals))
+    | .call f args _ =>
+      match n with
+      | 0 => timeout
+      | n + 1 => do
+        let vals ← mapList (getVal fr) args
+        pure (.val (← callFn n cx.cfg fr.depth f vals))
     | _ => execPure cx fr op
 
 end
