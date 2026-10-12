@@ -34,10 +34,10 @@ theorem th_core_01_entry (m : Module) (h : validate m = .ok ()) :
   | none => simp [h1, reject] at hc
   | some ctx =>
     cases h2 : m.impls[ctx.impl]? with
-    | none => simp [h1, h2, reject, bind, Except.bind] at hc
+    | none => simp [h1, h2, reject] at hc
     | some impl =>
       refine ⟨ctx, impl, rfl, h2, ?_⟩
-      simp [h1, h2, reject, bind, Except.bind] at hc
+      simp [h1, h2, reject] at hc
       split at hc
       · rename_i hp
         exact ⟨by simp [hp.1], by simp [hp.2]⟩
