@@ -68,6 +68,20 @@ private:
         vector<VarDef *> *free = nullptr;
     } cur;
 
+    // Control flow inside an expression block: how many such blocks are open,
+    // and how many loops are open inside the innermost one. `return` may not
+    // leave an expression block, and `break` or `continue` only a loop of the
+    // block's own.
+    int exprdepth = 0;
+    int loops = 0;
+
+    struct ExprBlockScope {
+        CoreExporter &x;
+        int savedloops;
+        explicit ExprBlockScope(CoreExporter &e) : x(e), savedloops(e.loops) { x.exprdepth++; x.loops = 0; }
+        ~ExprBlockScope() { x.exprdepth--; x.loops = savedloops; }
+    };
+
     // The construct whose operations a coercion belongs to.
     CoreOrigin coerceorg;
     Line here;
@@ -173,7 +187,8 @@ private:
                 ct.kind = CoreType::Ref;
                 ct.mut = t->cq ? CoreMut::Const : CoreMut::Mut;
                 ct.elem = Ty(t->ref->sub);
-                if (mod.Type(ct.elem).kind == CoreType::Ref) Fail("stored-reference");
+                if (mod.Type(ct.elem).kind == CoreType::Ref || mod.Type(ct.elem).kind == CoreType::Slice)
+                    Fail("reference-to-slice");
                 break;
             default: Fail("type");
         }
@@ -348,6 +363,7 @@ private:
         for (auto fv : *cur.free) {
             here = sp->sf->line;
             if (fv->type->kind == TY_REF) Fail("captured-reference");
+            if (fv->type->kind == TY_SLICE) Fail("reference-to-slice");
             CoreType rt;
             rt.kind = CoreType::Ref;
             rt.mut = fv->isvar ? CoreMut::Mut : CoreMut::Const;
@@ -467,7 +483,9 @@ private:
                 auto x = (While *)n;
                 auto s = MakeStmt(CoreStmtKind::While, n->line, CoreOriginKind::While);
                 s.expr = Value(x->cond);
+                loops++;
                 s.then = BlockOf(x->body, false);
+                loops--;
                 out.stmts.push_back(std::move(s));
                 return;
             }
@@ -475,6 +493,7 @@ private:
             case NK_Return: {
                 auto r = (Return *)n;
                 if (!r->from.empty()) Fail("return-from");
+                if (exprdepth) Fail("control-in-expression");
                 if (r->vals.size() > 1) Fail("multiple-results");
                 auto s = MakeStmt(CoreStmtKind::Ret, n->line, CoreOriginKind::Return);
                 if (r->vals.size() == 1) s.expr = Value(r->vals[0]);
@@ -483,10 +502,12 @@ private:
             }
             case NK_Break: {
                 if (((Break *)n)->val) Fail("break-value");
+                if (exprdepth && !loops) Fail("control-in-expression");
                 out.stmts.push_back(MakeStmt(CoreStmtKind::Break, n->line, CoreOriginKind::Break));
                 return;
             }
             case NK_Continue:
+                if (exprdepth && !loops) Fail("control-in-expression");
                 out.stmts.push_back(MakeStmt(CoreStmtKind::Continue, n->line, CoreOriginKind::Continue));
                 return;
             case NK_LoopExpr: Fail("loop-expression");
@@ -595,16 +616,7 @@ private:
             if (id && id->vdef && !a->pointee &&
                 (id->vdef->type->kind == TY_SLICE || id->vdef->type->kind == TY_REF)) {
                 auto v = id->vdef;
-                if (!v->isglobal && v->ownerspec != cur.spec) {
-                    // A slice variable of an enclosing function: the new slice
-                    // is stored in the variable its parameter refers to.
-                    if (v->type->kind != TY_SLICE) Fail("captured-reference");
-                    auto s = MakeStmt(CoreStmtKind::Assign, a->line, CoreOriginKind::Rebind);
-                    s.place = VarPlace(v);
-                    s.expr = Value(a->rhs);
-                    out.stmts.push_back(std::move(s));
-                    return;
-                }
+                if (!v->isglobal && v->ownerspec != cur.spec) Fail("reference-to-slice");
                 auto s = MakeStmt(CoreStmtKind::Rebind, a->line, CoreOriginKind::Rebind);
                 s.var = RebindTarget(a->lval);
                 s.expr = Value(a->rhs);
@@ -672,7 +684,9 @@ private:
                                  out.scope, org);
             s.view = ToView(f->iter);
         }
+        loops++;
         s.then = BlockOf(f->body, false);
+        loops--;
         // The loop's variables belong to its body block.
         cur.impl->vars[s.var].scope = s.then->scope;
         if (s.index >= 0) cur.impl->vars[s.index].scope = s.then->scope;
@@ -960,6 +974,7 @@ private:
                 auto x = (IfExpr *)n;
                 auto e = NewExpr(CoreExprKind::If, Ty(x->exprtype));
                 e->a = Value(x->cond);
+                ExprBlockScope inexpr(*this);
                 e->then = BlockOf(x->thenb, true);
                 if (!x->elseb) Fail("diverging-branch");
                 if (auto eb = Is<Block>(x->elseb)) e->otherwise = BlockOf(eb, true);
@@ -973,6 +988,7 @@ private:
             case NK_Block: {
                 auto b = (Block *)n;
                 auto e = NewExpr(CoreExprKind::Block, Ty(b->exprtype ? b->exprtype : ast.voidtype));
+                ExprBlockScope inexpr(*this);
                 e->then = BlockOf(b, b->exprtype && b->exprtype->kind != TY_VOID);
                 return e;
             }
