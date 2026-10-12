@@ -175,6 +175,16 @@ Abort kinds and the runtime text they correspond to: `div_zero` (`division by ze
 
 An effect summary records, over the implementation's parameters and the globals: reads, element writes, growth, shrink, reference rebinding, possible abort, output, and the set of nonlocal targets it may propagate. Unknown is a distinct value that implies every effect.
 
+The target of an effect is the set of global and parameter roots of the place reached; locals are not targets. The Lean validator's computation is the definition, and an exporter's summary must contain it:
+
+| Effect | Arises from |
+|---|---|
+| reads | `read` of a place; every `viewOf`, wherever it occurs (sampling an owner reads its length), so also under `refOf (elem …)`, `sliceOf`, `lenOf`, `append` and `forEach`; both sides of `assignOp`. |
+| writes | `assign` and `assignOp` to a place. |
+| grows | `push` and `append` on the owner. |
+| rebinds | `rebind` of a variable that is a parameter. |
+| through a call | The callee's declared reads, writes and growth with each `param j` replaced by the targets of argument `j`'s roots. A callee whose summary is unknown makes the caller's unknown. |
+
 ## 5. Numeric and failure semantics
 
 From language spec §6.2 and §6.3; the Euclidean remainder and shift masking rows were confirmed on the baseline compiler (`-5 % 3` is `1`; `(-128 as i8) >> 9` is `-64`).
