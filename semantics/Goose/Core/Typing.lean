@@ -202,6 +202,42 @@ def declarePre (env : TEnv) (sc : Nat) : List (VarId × Ty) → T TEnv
     unless lv.ty == ty do rej .type s!"variable {x} is declared with another type than the loop gives it"
     declarePre { env with visible := x :: env.visible } sc rest
 
+/-- An initializer runs before the later globals exist, so a function it calls
+must be known to leave them alone. -/
+def checkInitCall (env : TEnv) (callee : Impl) : T Unit :=
+  match env.initializing with
+  | none => pure ()
+  | some gi =>
+    match callee.summary with
+    | .unknown => rej .call s!"initializer of global {gi} calls {callee.name}, whose effects are unknown"
+    | .known s =>
+      let later (t : Target) : Bool :=
+        match t with | .global g => g ≥ gi | .param _ => false
+      if (s.reads ++ s.writes ++ s.grows).any later then
+        rej .call s!"initializer of global {gi} calls {callee.name}, which touches a later global"
+      else pure ()
+
+/-- The type of a call: the callee's one result, or unit. -/
+def callResultTy (callee : Impl) : T Ty :=
+  match callee.results.toList with
+  | [] => pure .unit
+  | [t] => pure t
+  | _ => rej .type s!"{callee.name} has several results"
+
+/-- The type of a by-reference loop variable over elements of `el`, read from
+its row: it may be read-only over a mutable run, and mutable only over a
+mutable run. -/
+def loopRefTy (env : TEnv) (x : VarId) (el : Ty) (mu : Bool) : T Ty :=
+  match env.vars[x]? with
+  | some lv =>
+    match lv.ty with
+    | .ref mx t => do
+      unless t == el do rej .type "loop variable of another type than the elements"
+      if mx == .mutable then requireWrite "a mutable loop reference" mu
+      pure lv.ty
+    | _ => rej .type "a by-reference loop variable that is not a reference"
+  | none => rej .type s!"variable {x} outside the variable table"
+
 /-- Arguments against parameters, one by one. -/
 def argMode : Arg → Mode
   | .byVal _ => .byValue
@@ -323,20 +359,8 @@ def tyExpr (env : TEnv) : Expr → T Ty
     unless callee.params.size = args.length do
       rej .type s!"call of {callee.name} with {args.length} arguments, expected {callee.params.size}"
     tyArgs env callee callee.params.toList args
-    if let some gi := env.initializing then
-      -- An initializer runs before the later globals exist, so the callee must
-      -- be known to leave them alone.
-      match callee.summary with
-      | .unknown => rej .call s!"initializer of global {gi} calls {callee.name}, whose effects are unknown"
-      | .known s =>
-        let later (t : Target) : Bool :=
-          match t with | .global g => g ≥ gi | .param _ => false
-        if (s.reads ++ s.writes ++ s.grows).any later then
-          rej .call s!"initializer of global {gi} calls {callee.name}, which touches a later global"
-    match callee.results.toList with
-    | [] => pure .unit
-    | [t] => pure t
-    | _ => rej .type s!"{callee.name} has several results"
+    checkInitCall env callee
+    callResultTy callee
   | .push owner a => do
     let (t, mu) ← tyPlace env owner
     match t with
@@ -493,20 +517,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
   | .forEach x idx v byRef b o => do
     checkOrg env o
     let (el, mu) ← tyView env v
-    -- A reference loop variable may be read-only over a mutable run, so its
-    -- mutability is read from its row; it may be mutable only over a mutable run.
-    let xty ← if byRef then
-        match env.vars[x]? with
-        | some lv =>
-          match lv.ty with
-          | .ref mx t =>
-            unless t == el do rej .type "loop variable of another type than the elements"
-            if mx == .mutable then requireWrite "a mutable loop reference" mu
-            pure lv.ty
-          | _ => rej .type "a by-reference loop variable that is not a reference"
-        | none => rej .type s!"variable {x} outside the variable table"
-      else
-        pure el
+    let xty ← if byRef then loopRefTy env x el mu else pure el
     let pre := (x, xty) :: (match idx with | some j => [(j, Ty.int .i64)] | none => [])
     let _ ← tyBlock { env with loops := env.loops + 1 } pre b
     pure env
