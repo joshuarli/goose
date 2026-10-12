@@ -127,8 +127,12 @@ structure TEnv where
   vars : Array LocalVar
   /-- Variables declared and in scope at this point. -/
   visible : List VarId
-  /-- Loops enclosing this point in the current implementation. -/
+  /-- Loops enclosing this point that `break` and `continue` may leave. -/
   loops : Nat
+  /-- Inside the block of an `if` or block expression, which must complete
+  normally: control cannot leave an expression by `return`, `break` or
+  `continue`. -/
+  inExpr : Bool
   /-- Scope numbers of the open blocks, innermost first. -/
   scopes : List Nat
   /-- Globals a place may name: all of them in an implementation, the earlier
@@ -164,6 +168,9 @@ def declare (env : TEnv) (x : VarId) (scope : Nat) : T LocalVar := do
     unless lv.ty.storable do rej .type s!"variable {x} has a type no variable may have"
     set (next + 1)
     pure lv
+
+/-- The environment of a block that is an operand. -/
+def exprEnv (env : TEnv) : TEnv := { env with loops := 0, inExpr := true }
 
 def requireInt (what : String) (t : Ty) : T IntTy :=
   match t with
@@ -324,11 +331,11 @@ def tyExpr (env : TEnv) : Expr → T Ty
     | _ => rej .type "push to something that is not a grow-only array"
   | .ifE c t f => do
     requireBool "the condition of `if`" (← tyExpr env c)
-    let tt ← tyBlock env [] t
-    let ft ← tyBlock env [] f
+    let tt ← tyBlock (exprEnv env) [] t
+    let ft ← tyBlock (exprEnv env) [] f
     unless tt == ft do rej .type "the branches of `if` have different types"
     pure tt
-  | .blockE b => tyBlock env [] b
+  | .blockE b => tyBlock (exprEnv env) [] b
   | .arrLit t es => do
     match t with
     | .arr el k =>
@@ -492,6 +499,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     pure env
   | .ret e o => do
     checkOrg env o
+    if env.inExpr then rej .type "return inside an expression block"
     match env.impl with
     | none => rej .type "return in a global initializer"
     | some impl =>
@@ -531,7 +539,7 @@ a result does not fall off its end. -/
 def checkImpl (m : Module) (impl : Impl) : V Unit := do
   let env : TEnv := {
     mod := m, impl := some impl, vars := impl.vars
-    visible := (List.range impl.params.size), loops := 0, scopes := []
+    visible := (List.range impl.params.size), loops := 0, inExpr := false, scopes := []
     globalLimit := m.globals.size, initializing := none }
   if impl.results.size > 1 then reject .type s!"{impl.name} has several results"
   for t in impl.results do
@@ -566,7 +574,7 @@ def checkGlobal (m : Module) (g : GlobalId) (gl : Global) : V Unit := do
     reject .type s!"global {gl.name} has a type no pilot global may have"
   unless gl.org < m.origins.size do reject .type s!"global {gl.name}: origin outside the origin table"
   let env : TEnv := {
-    mod := m, impl := none, vars := #[], visible := [], loops := 0, scopes := []
+    mod := m, impl := none, vars := #[], visible := [], loops := 0, inExpr := true, scopes := []
     globalLimit := g, initializing := some g }
   let (t, _) ← (tyExpr env gl.init).run 0
   unless t == gl.ty do reject .type s!"initializer of global {gl.name} has another type than the global"
