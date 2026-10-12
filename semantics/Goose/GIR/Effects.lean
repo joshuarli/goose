@@ -191,23 +191,34 @@ def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
     | .term (.abort ..) | .term (.exit ..) => { e with aborts := true }
     | _ => e) acc) {}
 
+/-- Every found target is declared. -/
+def Func.targetsWithin (f : Func) (what : String) (found declared : List Target) : Except String Unit :=
+  match found.find? (fun t => !declared.contains t) with
+  | some t => throw s!"{f.name} {what} {showTarget t}, which its summary omits"
+  | none => pure ()
+
+/-- A boolean effect that is found must be declared. -/
+def Func.flagWithin (msg : String) (found declared : Bool) : Except String Unit :=
+  if found && !declared then throw msg else pure ()
+
+/-- A callee with an unknown summary makes the function's own unknowable. -/
+def Func.noUnknownCallee (f : Func) (unknown : Bool) : Except String Unit :=
+  if unknown then
+    throw s!"{f.name} calls a function whose summary is unknown, so its own summary cannot be known"
+  else pure ()
+
 /-- The summary closes over the body's effects: each effect is declared, and no
 callee has an unknown summary unless this function's own is unknown. -/
 def Func.summaryClosed (f : Func) (e : Core.Eff) : Except String Unit :=
   match f.summary with
   | .unknown => pure ()
   | .known s => do
-    if e.unknown then
-      throw s!"{f.name} calls a function whose summary is unknown, so its own summary cannot be known"
-    let within (what : String) (found declared : List Target) : Except String Unit :=
-      match found.find? (fun t => !declared.contains t) with
-      | some t => throw s!"{f.name} {what} {showTarget t}, which its summary omits"
-      | none => pure ()
-    within "reads" e.reads s.reads
-    within "writes" e.writes s.writes
-    within "grows" e.grows s.grows
-    within "rebinds" e.rebinds s.rebinds
-    if e.aborts && !s.aborts then throw s!"{f.name} may abort, which its summary omits"
-    if e.outputs && !s.outputs then throw s!"{f.name} prints, which its summary omits"
+    f.noUnknownCallee e.unknown
+    f.targetsWithin "reads" e.reads s.reads
+    f.targetsWithin "writes" e.writes s.writes
+    f.targetsWithin "grows" e.grows s.grows
+    f.targetsWithin "rebinds" e.rebinds s.rebinds
+    Func.flagWithin s!"{f.name} may abort, which its summary omits" e.aborts s.aborts
+    Func.flagWithin s!"{f.name} prints, which its summary omits" e.outputs s.outputs
 
 end Goose.GIR

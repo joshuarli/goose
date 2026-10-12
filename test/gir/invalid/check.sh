@@ -7,6 +7,7 @@
 # status must be 0 for ok, 2 for malformed and 5 for rejected. Each module
 # differs from `gir_valid_base.json` in one thing, so a module that fails a
 # later check than its name says would show an earlier unrelated code instead.
+# `gir_accepted_*` modules pass the validator and are checked by running them.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,6 +38,14 @@ while IFS='	' read -r file expected; do
     [ "$actual" = "$expected" ] || { echo "FAIL $file: got $actual" >&2; status=1; }
     [ "$code" -eq "$want" ] || { echo "FAIL $file: exit status $code, expected $want" >&2; status=1; }
 done < "$here/INDEX"
+
+# A module can be accepted and still fault: acceptance says nothing about reference lifetime.
+set +e
+out=$("$tool" gir-run "$here/gir_accepted_dangling_reference.json")
+code=$?
+set -e
+[ "$out" = '["fault","dangling_root"]' ] && [ "$code" -eq 4 ] ||
+    { echo "FAIL gir_accepted_dangling_reference.json: run gave $out ($code)" >&2; status=1; }
 
 for f in "$here"/*.json; do
     grep -q "^$(basename "$f")	" "$here/INDEX" || { echo "FAIL $(basename "$f") is not in INDEX" >&2; status=1; }

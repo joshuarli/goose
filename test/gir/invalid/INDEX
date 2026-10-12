@@ -35,3 +35,4 @@ gir_rejected_v050_summary_omits_write.json	["rejected","GIR-V050","function main
 gir_rejected_v100_division_without_origin.json	["rejected","GIR-V100","function main: an operation that can abort or stands for a statement has no origin"]
 gir_rejected_v100_print_without_origin.json	["rejected","GIR-V100","function main: an operation that can abort or stands for a statement has no origin"]
 gir_valid_base.json	["ok"]
+gir_accepted_dangling_reference.json	["ok"]
