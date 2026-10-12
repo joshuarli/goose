@@ -64,7 +64,11 @@ def emit(exe, extra, flags, source, level, cfile):
     """(exit code, diagnostics, C bytes or None) of one compile."""
     cfile.parent.mkdir(parents=True, exist_ok=True)
     cfile.unlink(missing_ok=True)
-    argv = [exe, *extra, *["-D" + d for d in run_tests.runtime_defines(source)], *flags,
+    # Both compilers read one stdlib directory: a compiler otherwise embeds the
+    # path of the stdlib beside its own binary in runtime diagnostics, which
+    # would differ between two build directories of identical source.
+    argv = [exe, "--stdlib", ROOT / "stdlib", *extra,
+            *["-D" + d for d in run_tests.runtime_defines(source)], *flags,
             f"-O{level}", "-o", cfile, source]
     code, out, err = tc.run_capture(argv)
     return code, out + err, cfile.read_bytes() if code == 0 and cfile.is_file() else None
