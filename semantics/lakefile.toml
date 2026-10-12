@@ -1,0 +1,12 @@
+name = "goose"
+defaultTargets = ["goose-semantics", "Goose"]
+
+# Every module under Goose/ is built, imported or not, so a proof file that
+# nothing imports yet still has to compile.
+[[lean_lib]]
+name = "Goose"
+globs = ["Goose.+"]
+
+[[lean_exe]]
+name = "goose-semantics"
+root = "Main"
