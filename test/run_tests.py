@@ -64,9 +64,11 @@ their own, which report the failure as theirs. --batch 1 runs everything one
 to a process.
 
   python test/run_tests.py [--exe path/to/goose] [--nocgen] [--no-jit] [-j N] [--batch N] [-v]
+                           [--only GLOB]... [--goose-arg ARG]...
 """
 
 import argparse
+import fnmatch
 import json
 import concurrent.futures
 import os
@@ -82,6 +84,22 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "scripts"))
 import toolchain as tc
+
+
+# The checks that are not fixtures, by the name `--only` selects them with.
+EXTRAS = (
+    "extra/bootstrap", "extra/samples", "extra/call_chain", "extra/call_chain_too_deep",
+    "extra/guard_runs", "extra/lexer_tokens", "extra/shader", "extra/optimizer",
+    "extra/stacks", "extra/loop_shapes", "extra/inline_fn_c", "extra/member_params",
+    "extra/member_stores", "extra/compiler_units", "extra/runtime_lifecycle",
+    "extra/clang", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
+    "extra/runtime_cache",
+)
+
+
+def fixture_name(f):
+    """How `--only` names a fixture: its category directory and stem."""
+    return f"{f.parent.name}/{f.stem}"
 
 
 def native_modules(f, native):
@@ -334,6 +352,11 @@ class Runner:
         # Files to a `goose --multi-test` run (goose_each); 0 chooses by the
         # number of files and jobs.
         self.batch = 0
+        # Arguments every compile of a fixture is given (--goose-arg).
+        self.goose_args = []
+        # Whether a section with nothing in it is left out of the log, as it
+        # is where --only chose what runs.
+        self.hide_empty = False
         self.fronts = {}
         # Slots shown before any section print as they are.
         self.sections = [(None, [])]
@@ -447,6 +470,8 @@ class Runner:
         it is done, a section at a time (Section), and adds up their
         failures."""
         for title, slots in self.sections:
+            if title and not slots and self.hide_empty:
+                continue
             section = Section(title, self.verbose, self.github) if title else None
             for slot in slots:
                 try:
@@ -490,10 +515,20 @@ class Runner:
         what happened without having to run the compiler a second time."""
         return self.screened(args[-1], tc.run_capture(self.goose_argv(args)))
 
-    def goose_argv(self, args):
+    def goose_plain(self, *args):
+        """goose(), without the --goose-arg arguments: for the checks that
+        read the shape of the C text the compiler emits."""
+        return self.screened(args[-1], tc.run_capture(self.goose_argv(args, extra=False)))
+
+    def goose_argv(self, args, extra=True):
         # Resource-bound regressions use the same runtime configuration
-        # through generated C and TinyCC, at every optimization level.
-        return [self.exe] + ["-D" + d for d in runtime_defines(args[-1])] + [str(a) for a in args]
+        # through generated C and TinyCC, at every optimization level. The
+        # extra arguments go before the last one, the file, which a flag
+        # after it would not reach the compiler as.
+        args = [str(a) for a in args]
+        given = self.goose_args if extra else []
+        return ([self.exe] + ["-D" + d for d in runtime_defines(args[-1])] +
+                args[:-1] + given + args[-1:])
 
     def screened(self, what, result):
         """A compiler run's result, failing the current piece of work if the
@@ -532,7 +567,8 @@ class Runner:
         as theirs. A batch that exits with an error after every mark, or
         prints anything after the last one (a leak report), gets through
         none."""
-        argv = [self.exe, "--multi-test"] + [str(a) for a in args] + [str(f) for f in files]
+        argv = ([self.exe, "--multi-test"] + [str(a) for a in args] + self.goose_args +
+                [str(f) for f in files])
         code, out, err = tc.run_capture(argv)
         outs, outrest = split_multi(out, files)
         errs, errrest = split_multi(err, files)
@@ -826,7 +862,8 @@ class Runner:
                         # module, is built by the compiler, which builds or
                         # finds that C too (native.h, builtin.h).
                         argv = [efile]
-                        code, out, err = tc.run_capture([self.exe, "build", f"-O{ol}", "-o", efile, f])
+                        code, out, err = tc.run_capture([self.exe, "build", f"-O{ol}", "-o", efile,
+                                                       *self.goose_args, f])
                         if code != 0:
                             if tc.NO_TOOLCHAIN in err or tc.NO_CMAKE in err:
                                 res.nativeskips.append(f.name)
@@ -1281,6 +1318,19 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="print a line for every check that passed, not only each "
                          "section's count of them")
+    ap.add_argument("--only", action="append", default=[], metavar="GLOB",
+                    help="run only the checks whose name matches GLOB (fnmatch), and may be "
+                         "repeated: a fixture is category/stem (codegen/evaluation_order, "
+                         "errors/..., errors_tc/...), and the checks that are not fixtures "
+                         "are extra/NAME (see EXTRAS in this script, e.g. extra/bootstrap, "
+                         "extra/samples); those run only where a GLOB names them. A GLOB "
+                         "matching nothing is an error")
+    ap.add_argument("--goose-arg", action="append", default=[], metavar="ARG", dest="goose_args",
+                    help="an extra argument for every compiler run that compiles a fixture, "
+                         "and may be repeated (--goose-arg=--no-bce); not given to the checks "
+                         "that read the shape of the emitted C (loop shapes, inline fn C, "
+                         "member parameters, member stores), nor to the samples and the "
+                         "Goose-in-Goose bootstrap, so it needs --only to leave those out")
     args = ap.parse_args()
 
     if args.nocgen and (args.cc or args.require_clang or args.profile != "baseline"):
@@ -1290,6 +1340,24 @@ def main():
         ap.error("the sanitize profile requires Linux and Clang")
     if args.jobs < 1 or args.gpu_jobs < 0 or args.batch < 0:
         ap.error("--jobs must be at least 1, and --gpu-jobs and --batch at least 0")
+
+    if args.only and args.goose_in_goose_only:
+        ap.error("--only cannot be combined with --goose-in-goose-only")
+
+    # The names --only selects by: every fixture of a category directory, and
+    # the checks that are not fixtures.
+    fixture_files = [f for f in sorted(HERE.glob("*/*.goose"))
+                     if f.parent.name not in ("goose_in_goose", "lint") and f.name != "lexer_tokens.goose"]
+    names = [fixture_name(f) for f in fixture_files] + list(EXTRAS)
+    for glob in args.only:
+        if not fnmatch.filter(names, glob):
+            ap.error(f"--only {glob!r} matches no fixture or extra check")
+
+    def wanted(name):
+        return not args.only or any(fnmatch.fnmatchcase(name, g) for g in args.only)
+    if args.goose_args and (not args.only or wanted("extra/samples") or wanted("extra/bootstrap")):
+        ap.error("--goose-arg does not reach the samples and the bootstrap: select "
+                 "what runs with --only")
 
     tc.setup_console()
     # The compiler's cache (runtime objects, fetched packages) for everything
@@ -1313,10 +1381,12 @@ def main():
     r = Runner(exe, args.jobs, args.verbose)
     r.gpulock = threading.BoundedSemaphore(args.gpu_jobs) if args.gpu_jobs else None
     r.batch = args.batch
+    r.goose_args = args.goose_args
+    r.hide_empty = bool(args.only)
 
     # The bootstrap is the longest chain of work in the suite, so it starts
     # first, and the samples' runner, a process of its own, next.
-    show_goose_in_goose = r.goose_in_goose(cc, args.profile, extra, jit)
+    show_goose_in_goose = r.goose_in_goose(cc, args.profile, extra, jit) if wanted("extra/bootstrap") else None
     if args.goose_in_goose_only:
         show_goose_in_goose()
         r.flush()
@@ -1349,7 +1419,7 @@ def main():
             r.local.out.failures += max(1, sum(line.startswith("FAIL ") for line in lines))
     # On a thread of its own rather than one of the pool's, which it would
     # keep waiting the whole time.
-    samples_future = r.task(samples, alone=True)
+    samples_future = r.task(samples, alone=True) if wanted("extra/samples") else None
 
     clang = None if args.nocgen or args.profile == "sanitize" else tc.find_clang_c()
     if args.require_clang and not clang:
@@ -1376,10 +1446,10 @@ def main():
 
     # One level of category directories; nested syntax helpers and the modules
     # of the goose_in_goose bootstrap are exercised through their entry points.
-    tests = [f for f in sorted(HERE.glob("*/*.goose"))
-             if f.parent.name not in ("errors", "errors_tc", "goose_in_goose", "lint") and f.name != "lexer_tokens.goose"]
+    tests = [f for f in fixture_files if f.parent.name not in ("errors", "errors_tc")]
     if len({f.stem for f in tests}) != len(tests):
         ap.error("fixture names must be unique across categories (shared expected/ and build outputs)")
+    tests = [f for f in tests if wanted(fixture_name(f))]
     # A gfx, physics or ui fixture with error markers is a rejection test,
     # kept beside what it rejects (for gfx, shaders).
     native_errors = [f for f in tests if f.parent.name in native and error_markers(f)]
@@ -1470,8 +1540,13 @@ def main():
         else:
             r.ok(f"cgen+run -O{ol} {f.name}")
 
-    deep = [r.task(call_chain_checks), r.task(call_chain_too_deep)]
-    deep += [r.task(guard_runs_level, ol) for ol in (r.levels if cc else ())]
+    deep = []
+    if wanted("extra/call_chain"):
+        deep.append(r.task(call_chain_checks))
+    if wanted("extra/call_chain_too_deep"):
+        deep.append(r.task(call_chain_too_deep))
+    if wanted("extra/guard_runs"):
+        deep += [r.task(guard_runs_level, ol) for ol in (r.levels if cc else ())]
 
     # The fixtures' parse, roundtrip and typecheck runs, in batches by their
     # flags, start before the rest of each fixture, which waits for them.
@@ -1513,7 +1588,8 @@ def main():
             r.fail("lex lexer_tokens.goose", out + err)
         elif r.check_stdout("lexer_tokens", "lexer_tokens.goose", joined(out)):
             r.ok("lex lexer_tokens.goose")
-    r.show_task(lexer_tokens)
+    if wanted("extra/lexer_tokens"):
+        r.show_task(lexer_tokens)
 
     # The shader compiler is built into every compiler, SDL or not: a shader
     # compiles, #include included, and a binding outside SDL_GPU's sets is
@@ -1532,8 +1608,9 @@ def main():
             r.fail("compile-shader probe_badset.frag", out + err)
         else:
             r.ok("compile-shader probe_badset.frag")
-    r.show_task(shader_probe)
-    r.show_task(shader_badset)
+    if wanted("extra/shader"):
+        r.show_task(shader_probe)
+        r.show_task(shader_badset)
 
     # An error in shader source written in the program is reported at its own
     # line of the program: the one using `oops` in these fixtures.
@@ -1546,7 +1623,7 @@ def main():
             r.fail(f"shader error line {f.name}", out + err)
         else:
             r.ok(f"shader error line {f.name}")
-    for name in ("gfx_err_shader_syntax", "gfx_err_shader_part"):
+    for name in ("gfx_err_shader_syntax", "gfx_err_shader_part") if wanted("extra/shader") else ():
         r.show_task(shader_error_line, name)
 
 
@@ -1564,7 +1641,7 @@ def main():
             r.fail(f"optimize {lvl}", out + err)
         elif r.check_optimizer(lvl, out):
             r.ok(f"optimize {lvl}")
-    for lvl in ("-O0", "-O1", "-O2"):
+    for lvl in ("-O0", "-O1", "-O2") if wanted("extra/optimizer") else ():
         r.show_task(optimize, lvl)
 
     # The data stack report (--stacks): a program with a worker, whose
@@ -1582,14 +1659,15 @@ def main():
             r.fail(f"stacks {f.name}", f"missing {missing}\n{out}{err}")
         else:
             r.ok(f"stacks {f.name}")
-    r.show_task(stacks_report, HERE / "threads" / "thread_cap.goose", [
+    stacks = r.show_task if wanted("extra/stacks") else (lambda *a: None)
+    stacks(stacks_report, HERE / "threads" / "thread_cap.goose", [
         r"^data stacks: 2 GB reserved per stack, 1 MB guard gap, 4 GB budget: 1 regions, GS_MAX_STACKS 1024$",
         r"^main program: \d+ data stacks \+ 0 global stacks = \d+ regions$",
         r"^worker `worker`: [1-9]\d* data stacks \+ 0 argument and global stacks = \d+ regions$",
         r"^thread cap: 1 workers \(\(1 - \d+\) / \d+\), what hardware_threads\(\) reports at most$",
         r"^fn worker: [1-9]\d* own, \d+ with callees$",
     ])
-    r.show_task(stacks_report, HERE / "codegen" / "cycle_scratch_locals.goose", [
+    stacks(stacks_report, HERE / "codegen" / "cycle_scratch_locals.goose", [
         r"^data stacks: .*, GS_MAX_STACKS 4$",
         r"^main program: [1-4] data stacks \+ 0 global stacks = [1-4] regions$",
         r"^thread cap: none, no workers$",
@@ -1600,18 +1678,19 @@ def main():
     def loop_shapes():
         f = HERE / "optimizer" / "loop_shapes.goose"
         cfile = gendir / "loop_shapes-shapes.c"
-        code, out, err = r.goose("-O1", "-o", cfile, f)
+        code, out, err = r.goose_plain("-O1", "-o", cfile, f)
         if code != 0:
             r.fail(f"loop shapes {f.name}", out + err)
         elif r.check_loop_shapes(cfile.read_text()):
             r.ok(f"loop shapes {f.name}")
-    r.show_task(loop_shapes)
+    if wanted("extra/loop_shapes"):
+        r.show_task(loop_shapes)
     # An inline fn returning two values stays a call in Goose and is declared
     # GS_INLINE in the C, for the C compiler to inline (§7.13).
     def inline_fn_c():
         f = HERE / "optimizer" / "optimize.goose"
         cfile = gendir / "optimize-inline.c"
-        code, out, err = r.goose("-O1", "-o", cfile, f)
+        code, out, err = r.goose_plain("-O1", "-o", cfile, f)
         if code != 0:
             r.fail("inline fn C", out + err)
             return
@@ -1622,13 +1701,14 @@ def main():
             r.fail("inline fn C", f"il_pair GS_INLINE: {bool(pair)}, il_plain GS_INLINE: {bool(plain)}")
         else:
             r.ok("inline fn C")
-    r.show_task(inline_fn_c)
+    if wanted("extra/inline_fn_c"):
+        r.show_task(inline_fn_c)
     # A slice and a builder parameter are two C parameters each (spec C.3),
     # the slice's data pointer as `void *` (ParamFields).
     def member_params():
         f = HERE / "codegen" / "member_parameters.goose"
         cfile = gendir / "member_parameters-sig.c"
-        code, out, err = r.goose("-O1", "-o", cfile, f)
+        code, out, err = r.goose_plain("-O1", "-o", cfile, f)
         if code != 0:
             r.fail(f"member parameters {f.name}", out + err)
             return
@@ -1641,13 +1721,14 @@ def main():
                    f"walk's parameters: got {sig[1] if sig else None}")
         else:
             r.ok(f"member parameters {f.name}")
-    r.show_task(member_params)
+    if wanted("extra/member_params"):
+        r.show_task(member_params)
     # Fields nothing can move are member stores, not stores through a
     # pointer taken first (StableDest).
     def member_stores():
         f = HERE / "codegen" / "member_stores.goose"
         cfile = gendir / "member_stores-c.c"
-        code, out, err = r.goose("-O1", "-o", cfile, f)
+        code, out, err = r.goose_plain("-O1", "-o", cfile, f)
         if code != 0:
             r.fail(f"member stores {f.name}", out + err)
             return
@@ -1658,7 +1739,8 @@ def main():
             r.fail(f"member stores {f.name}", body[1] if body else "no store_links in the C")
         else:
             r.ok(f"member stores {f.name}")
-    r.show_task(member_stores)
+    if wanted("extra/member_stores"):
+        r.show_task(member_stores)
 
     # Every annotated regression, including the expected-abort cases. These
     # describe the default O1 pass; O0/O2 execution checks semantics.
@@ -1703,7 +1785,7 @@ def main():
                     r.fail(f"compiler {name}", out + err)
                 else:
                     r.ok(f"compiler {name}")
-        for name in ("compiler_roots", "compiler_containers"):
+        for name in ("compiler_roots", "compiler_containers") if wanted("extra/compiler_units") else ():
             r.show_task(compiler_unit, name)
 
         # Direct runtime lifecycle checks use small region limits and allocator
@@ -1722,7 +1804,8 @@ def main():
                 out = r.run_expected([out_exe], name, name)
                 if out is not None and r.check_stdout(name, name, out):
                     r.ok(f"runtime {name}")
-        r.show_task(runtime_lifecycle)
+        if wanted("extra/runtime_lifecycle"):
+            r.show_task(runtime_lifecycle)
 
         # The same coverage test through clang, release and debug. A compiler
         # that accepts more C than the standard does is not what checks the
@@ -1795,7 +1878,7 @@ def main():
                 out = r.run_expected([out_exe], name, f"clang-{label} {name}.goose")
                 if out is not None and r.check_stdout(name, f"clang-{label}", out):
                     r.ok(f"{label}-clang {name}.goose")
-        if args.profile == "sanitize":
+        if args.profile == "sanitize" or not wanted("extra/clang"):
             pass  # The full generated-C suite already ran through Clang.
         elif not clang:
             r.show_later(r.say, "skip cgen-clang (no clang found)")
@@ -1813,7 +1896,7 @@ def main():
             r.ok("resource paths: JIT/native roots, relocation and unchanged cwd")
         except RuntimeError as e:
             r.fail("resource paths", str(e))
-    if cc or jit:
+    if (cc or jit) and wanted("extra/resource_paths"):
         r.section("resource paths")
         r.show_task(resource_paths)
 
@@ -1829,7 +1912,8 @@ def main():
         except RuntimeError as e:
             r.fail("packages from git", str(e))
     r.section("packages from git")
-    r.show_task(git_packages)
+    if wanted("extra/git_packages"):
+        r.show_task(git_packages)
 
     def driver_verbs():
         """The verb forms of the command line against the flag forms they
@@ -1879,7 +1963,8 @@ def main():
             else:
                 r.fail(f"goose {what}", text)
     r.section("driver verbs")
-    r.show_task(driver_verbs)
+    if wanted("extra/driver_verbs"):
+        r.show_task(driver_verbs)
 
     def runtime_cache():
         from runtime_cache import check_runtime_cache
@@ -1888,10 +1973,11 @@ def main():
             r.ok("runtime cache: concurrent builds, failed compile, retry and reuse")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("runtime cache", str(e))
-    if cc:
+    if cc and wanted("extra/runtime_cache"):
         r.show_task(runtime_cache)
 
-    show_goose_in_goose()
+    if show_goose_in_goose:
+        show_goose_in_goose()
 
     # --- JIT: the same programs, compiled and run inside the compiler --------
     # No C file, no external toolchain: what this checks is that the generated
@@ -1913,7 +1999,7 @@ def main():
                       + ", ".join(sorted(set(skipped))))
         r.show_later(jit_skips)
 
-    parse_errors = sorted((HERE / "errors").glob("*.goose"))
+    parse_errors = [f for f in sorted((HERE / "errors").glob("*.goose")) if wanted(fixture_name(f))]
     parse_runs = r.goose_each(["--parse"], parse_errors)
 
     def parse_error(f):
@@ -1926,7 +2012,8 @@ def main():
 
     # Typecheck error tests: must parse, must fail the typechecker. One
     # compiler run tells the two apart by whether it reported the parse done.
-    tc_errors = sorted((HERE / "errors_tc").glob("*.goose")) + native_errors
+    tc_errors = [f for f in sorted((HERE / "errors_tc").glob("*.goose"))
+                 if wanted(fixture_name(f))] + native_errors
     tc_runs = r.goose_each(["--check"], tc_errors)
 
     def tc_error(f):
@@ -1944,7 +2031,8 @@ def main():
         r.show(future)
 
     r.section("samples")
-    r.show(samples_future)
+    if samples_future:
+        r.show(samples_future)
 
     r.flush()
     if r.pool:

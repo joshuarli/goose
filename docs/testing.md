@@ -80,6 +80,26 @@ time. `--batch N` sets how many files go to one compiler process and how
 many programs to one executable (by default a number that leaves every job
 some batches); `--batch 1` gives each a process and an executable of its own.
 
+`--only GLOB` restricts a run to the fixtures whose `category/stem` matches
+the glob (`fnmatch`; `codegen/evaluation_order*`, `errors_tc/*`), across the
+positive fixtures and `errors/` and `errors_tc/`. It may be repeated, and a
+glob matching nothing is an error. The checks that are not fixtures are
+skipped under `--only` unless a glob names them: `extra/bootstrap`,
+`extra/samples`, `extra/call_chain`, `extra/call_chain_too_deep`,
+`extra/guard_runs`, `extra/lexer_tokens`, `extra/shader`, `extra/optimizer`,
+`extra/stacks`, `extra/loop_shapes`, `extra/inline_fn_c`,
+`extra/member_params`, `extra/member_stores`, `extra/compiler_units`,
+`extra/runtime_lifecycle`, `extra/clang`, `extra/resource_paths`,
+`extra/git_packages`, `extra/driver_verbs` and `extra/runtime_cache`. Sections
+left empty by the filter are not printed.
+
+`--goose-arg ARG` adds an argument to every compiler run that compiles a
+fixture (also those of a `--multi-test` batch), placed before the file; repeat
+it for several, and write `--goose-arg=--no-bce` for one starting with `-`. The
+checks that read the shape of the emitted C (loop shapes, inline fn C, member
+parameters, member stores) do not get it, and neither do the samples and the
+bootstrap, which run compilers of their own: it needs `--only` to leave those out.
+
 ## Fixture layout
 
 Test fixtures are grouped by category; `run_tests.py` stays at the root of `test/`:
