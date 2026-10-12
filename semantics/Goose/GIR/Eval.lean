@@ -356,4 +356,5 @@ def run (fuel : Nat) (profile : NumProfile) (m : Module) : Result :=
   | .stop (.fault k) _ => .fault k
   | .stop .timeout s => .timeout s.trace
 
+
 end Goose.GIR
