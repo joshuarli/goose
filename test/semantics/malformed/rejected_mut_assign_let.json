@@ -1,0 +1,1 @@
+["module","goose-core/0.2","core-pilot",[["file","assign_let.goose"]],[["int","i64"]],[],[["impl","main",[],[],[["local","a",0,"let",0,0]],["block",0,[["s_let",0,["e_lit",0,"1"],0],["s_assign",["p_local",0],["e_lit",0,"5"],1]],[]],["summary",[],[],[],[],0,0]]],[["context",0,"main::main()",[],[]]],0,[["origin",0,2,"let"],["origin",0,3,"assign"]]]
