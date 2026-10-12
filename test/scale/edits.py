@@ -382,8 +382,8 @@ DEPENDENCY_EDITS = {e.id: e for e in (
     DepEdit("D23", "a format function added for a struct that is printed"),
     DepEdit("D24", "the declared type of a local that a block passed to a callee reads changed"),
     DepEdit("D26", "a nested function that is passed on stops naming a variable of its parent"),
-    DepEdit("D27", "the function a handler runs is renamed: a return from it to the handler "
-                   "must not change"),
+    DepEdit("D27", "the function a handler runs is renamed: a function that returns to the "
+                   "handler is replaced, its key naming the handler's whole context"),
     DepEdit("D28", "the call that sets a global slice is no longer made before the function "
                    "that reads it: the reader finds it unset"),
     DepEdit("D25", "an overload added in the namespace of a caller, with the same parameter "
