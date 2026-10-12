@@ -111,4 +111,23 @@ def m_forms3 : String := r##"["module","goose-core/0.2","core-pilot",[["file","f
 #guard check {} m_forms3 r##"["done",["returned"],"4\n100 4\nnot early\nend\n-5 44 true false\ninside block\n"]"## 0
 #guard check { profile := .debug } m_forms3 r##"["done",["returned"],"4\n100 4\nnot early\nend\n-5 44 true false\ninside block\n"]"## 0
 
+/-! Each rule the safety proof relies on, violated alone: the module is rejected by that rule and, run without validation, faults. -/
+
+def m_v_type : String := r##"["module","goose-core/0.2","core-pilot",[["file","type_mismatch.goose"]],[["int","i64"]],[],[["impl","main",[],[],[],["block",0,[["s_print",[["pa_expr",["e_bin","add",["e_lit",0,"1"],["e_bool",1],0]]],1]],[]],["summary",[],[],[],[],1,1]]],[["context",0,"main::main()",[],[]]],0,[["origin",0,2,"binary"],["origin",0,2,"print"]]]"##
+
+#guard check { validate := false } m_v_type r##"["fault","shape"]"## 4
+#guard check {} m_v_type r##"["rejected","V-TYPE","a binary operand is not an integer"]"## 5
+def m_v_block : String := r##"["module","goose-core/0.2","core-pilot",[["file","block_dangling.goose"]],[["int","i64"],["ref","mut",0]],[],[["impl","main",[],[],[["local","r",1,"let",0,1],["local","t",0,"var",1,0]],["block",0,[["s_let",0,["e_block",["block",1,[["s_let",1,["e_lit",0,"1"],0]],[["e_ref","mut",["p_local",1]]]]],1],["s_print",[["pa_expr",["e_read",["p_deref",["e_read",["p_local",0]]]]]],2]],[]],["summary",[],[],[],[],0,1]]],[["context",0,"main::main()",[["vr",0,[["r_local",1]]]],[]]],0,[["origin",0,3,"let"],["origin",0,2,"let"],["origin",0,4,"print"]]]"##
+
+#guard check { validate := false } m_v_block r##"["fault","dangling_root"]"## 4
+#guard check {} m_v_block r##"["rejected","V-BLOCK","the value of a block is rooted at variable 1, declared inside it"]"## 5
+def m_v_result : String := r##"["module","goose-core/0.2","core-pilot",[["file","result_local.goose"]],[["int","i64"],["ref","mut",0]],[["global","anchor",0,"var",["e_lit",0,"0"],0]],[["impl","leak",[],[1],[["local","a",0,"var",0,1],["local","r",1,"let",0,2]],["block",0,[["s_let",0,["e_lit",0,"1"],1],["s_let",1,["e_ref","mut",["p_local",0]],2],["s_ret",[["e_read",["p_local",1]]],3]],[]],["summary",[],[],[],[],0,0]],["impl","main",[],[],[],["block",0,[["s_print",[["pa_expr",["e_read",["p_deref",["e_call",1,[],4]]]]],5]],[]],["summary",[["t_global",0]],[],[],[],0,1]]],[["context",1,"main::main()",[],[]],["context",0,"main::leak()",[["vr",1,[["r_local",0]]]],[[["r_global",0]]]]],0,[["origin",0,1,"global"],["origin",0,2,"let"],["origin",0,3,"let"],["origin",0,4,"return"],["origin",0,8,"call"],["origin",0,8,"print"]]]"##
+
+#guard check { validate := false } m_v_result r##"["fault","dangling_root"]"## 4
+#guard check {} m_v_result r##"["rejected","V-RESULT","a returned reference or slice is rooted at local variable 0"]"## 5
+def m_v_call : String := r##"["module","goose-core/0.2","core-pilot",[["file","call_dangling.goose"]],[["int","i64"],["grow",0],["slice","const",0],["arr",0,2]],[["global","shared",1,"var",["e_arr",1,[["e_lit",0,"1"]]],0]],[["impl","pass",[["param",0,"by_value"]],[2],[["local","v",2,"let",0,2]],["block",0,[["s_ret",[["e_read",["p_local",0]]],1]],[]],["summary",[],[],[],[],0,0]],["impl","main",[],[],[["local","out",2,"var",0,4],["local","arr",3,"let",1,5]],["block",0,[["s_let",0,["e_slice","const",["v_of",["p_global",0]],["b_none"],["b_none"],3],4],["s_if",["e_bool",1],["block",1,[["s_let",1,["e_arr",3,[["e_lit",0,"5"],["e_lit",0,"6"]]],5],["s_rebind",0,["e_call",1,[["a_val",["e_slice","const",["v_of",["p_local",1]],["b_none"],["b_none"],6]]],7],8]],[]],[],9],["s_print",[["pa_expr",["e_read",["p_elem",["v_val",["e_read",["p_local",0]]],["e_lit",0,"0"],10]]]],11]],[]],["summary",[["t_global",0]],[],[],[],1,1]]],[["context",1,"main::main()",[["vr",0,[["r_global",0]]]],[]],["context",0,"main::pass(i64[:])",[["vr",0,[["r_global",0]]]],[[["r_global",0]]]]],0,[["origin",0,1,"global"],["origin",0,4,"return"],["origin",0,3,"let"],["origin",0,8,"slice"],["origin",0,8,"let"],["origin",0,10,"let"],["origin",0,11,"slice"],["origin",0,11,"call"],["origin",0,11,"rebind"],["origin",0,9,"if"],["origin",0,13,"index"],["origin",0,13,"print"]]]"##
+
+#guard check { validate := false } m_v_call r##"["fault","dangling_root"]"## 4
+#guard check {} m_v_call r##"["rejected","V-CALL","argument 0 of pass is rooted at {local 1}, the callee context assumes {global 0}"]"## 5
+
 end Goose.Core.Examples
