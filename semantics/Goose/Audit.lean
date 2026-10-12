@@ -2,6 +2,7 @@ import Lean
 import Goose.Proofs.Num
 import Goose.Proofs.Share
 import Goose.Reuse.Model
+import Goose.Proofs.Lower
 import Goose.Proofs.Fuel
 import Goose.Proofs.Memory
 import Goose.Proofs.Core
@@ -154,5 +155,7 @@ end Goose.Audit
 
 #audit Goose.Proofs.Core.th_core_01_entry
 #audit Goose.Proofs.Core.initial_liveRefs
+
+#audit Goose.Proofs.Lower.lower_correct_straight
 
 #audit_registry
