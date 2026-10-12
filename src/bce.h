@@ -1709,8 +1709,15 @@ struct BCE {
         for (auto x = 0; x < n; x++)
             for (auto y = 0; y < n; y++) {
                 auto cv = S.c[x * n + y];
-                if (x != y && ok[x] && ok[y] && cv != INF && cv != INT64_MIN)
+                if (x != y && ok[x] && ok[y] && cv != INF && cv != INT64_MIN) {
+                    if (emit_options.NoteAssumptions()) {
+                        auto tag = [&](int k) {
+                            return k == 0 ? string("z") : cat(bases[k].first ? "l" : "v", bases[k].second);
+                        };
+                        consumed_assumptions.entry[sp] += cat(tag(x), "<=", tag(y), "+", cv, ";");
+                    }
                     AddFactB(bs[x], bs[y], cv);
+                }
             }
     }
 

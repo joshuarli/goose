@@ -787,6 +787,7 @@ inline Node *Optimizer::TryInline(Call *c) {
     ib->exprtype = c->exprtype;
     inlined++;
     ReportInlined(K, info.nodecount);
+    NoteInlinedCallee(curspec, K);
     // Re-fold the copy so substituted constants cascade — the one re-visit
     // the single-pass design allows, and only over fresh nodes.
     OptBlock(body);

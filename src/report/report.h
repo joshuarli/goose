@@ -13,6 +13,9 @@ namespace goose {
 
 string RuntimeVersion();
 
+// The sharing section, written by units/share_report.h.
+inline void ReportSharingJson(class JsonOut &j);
+
 constexpr const char *kBuildReportFormat = "goose-build-report/1";
 
 // A JSON writer small enough to need nothing else. A comma is due before a
@@ -207,6 +210,7 @@ inline void BuildReportStart(const string &path, const string &input, int optlev
     g_build_report->optlevel = optlevel;
     g_build_report->frontend_only = frontend_only;
     build_recorder = &g_build_report->rec;
+    emit_options.explain = true;
     g_build_report->rec.Enter(Phase::ParseResolve);
 }
 
@@ -466,6 +470,10 @@ inline void BuildReportWrite() {
             auto it = rec.inlined_nodes.find(f.sf);
             j.F("nodes_inlined_elsewhere", it == rec.inlined_nodes.end() ? 0LL : it->second);
         }
+        if (emit_options.share && share_stats.ran) {
+            auto it = share_stats.implementations.find(f.sf);
+            j.F("implementations", it == share_stats.implementations.end() ? 0LL : it->second);
+        }
         if (r.wrote) {
             auto it = rec.emitted.find(f.sf);
             j.F("emitted_instances", it == rec.emitted.end() ? 0LL : it->second.bodies);
@@ -527,7 +535,9 @@ inline void BuildReportWrite() {
 
     // Reserved for the sections later work adds.
     j.Key("extensions").Obj();
-    j.Key("sharing").Null().Key("units").Null().Key("native_compile").Null();
+    j.Key("sharing");
+    ReportSharingJson(j);
+    j.Key("units").Null().Key("native_compile").Null();
     j.EndObj();
     j.EndObj();
 

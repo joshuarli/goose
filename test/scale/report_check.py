@@ -134,6 +134,19 @@ def check(report, c_file):
     if mode == "emit":
         for name in ("optimize", "bounds_check_elimination", "code_generation"):
             need(name in phases, f"phase {name} missing")
+    sharing = report.get("extensions", {}).get("sharing")
+    if sharing is not None:
+        need(sharing["functions_after"] <= sharing["functions_before"], "sharing grew the functions")
+        need(sharing["function_bytes_after"] <= sharing["function_bytes_before"],
+             "sharing grew the function bytes")
+        need(sum(f["implementations"] for f in functions) == sharing["functions_after"],
+             "per-function implementations do not sum to the functions after sharing")
+        if out is not None:
+            need(sharing["function_bytes_after"] == out["attributed"]["function_bodies"],
+                 "bytes after sharing differ from function_bodies")
+        need(sharing["functions_before"] == (emitted["bodies"] + emitted["element_run_twins"]
+                                             if out is not None else sharing["functions_before"]),
+             "functions before sharing differ from the emitted bodies and twins")
     ext = report.get("extensions")
     need(isinstance(ext, dict) and {"sharing", "units", "native_compile"} <= ext.keys(),
          "extensions section missing")
