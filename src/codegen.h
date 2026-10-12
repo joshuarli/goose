@@ -81,6 +81,8 @@ struct RelFacts {
     bool apart = false;
 };
 
+inline void EmitPostPass(CodeGen &cg);
+
 struct CodeGen {
     Ast &ast;
 
@@ -105,6 +107,15 @@ struct CodeGen {
     // them in heap-address order, which differs from run to run.
     vector<FnSpec *> usedexterns;
     string code;        // Function bodies, size/eq helpers, thunks, main.
+    // Where each specialization's body lies in `code`, kept for the
+    // post-pass that merges and renames them (units/postpass.h).
+    vector<EmitSeg> emitsegs;
+    // The stable keys of the checked program, made when a stable name is.
+    unique_ptr<KeyMaker> stablekeys;
+    KeyMaker &Keys() {
+        if (!stablekeys) stablekeys = make_unique<KeyMaker>(ast);
+        return *stablekeys;
+    }
     string exportprotos;
     bool usesthreads = false;
     bool library = false;
@@ -158,7 +169,8 @@ struct CodeGen {
             auto f = l.fileidx >= 0 && l.fileidx < (int)ast.sources.size()
                          ? ast.sources[l.fileidx].first : string("?");
             for (auto &c : f) if (c == '\\') c = '/';
-            auto name = Unique(cat("gs_file", filerefs.size()));
+            auto name = emit_options.stable_names ? StableSym("gs_file", Sha256::Of(Keys().ModuleOf(l.fileidx)))
+                                                  : Unique(cat("gs_file", filerefs.size()));
             Append(data, "static const char ", name, "[] = ", CStr(f), ";\n");
             it = filerefs.emplace(l.fileidx, name).first;
         }
@@ -271,6 +283,11 @@ struct CodeGen {
     string Sanitize(string_view name);
     string Sanitize(string_view ns, string_view name);
     string Unique(string base);
+    string StableSym(const string &base, const Digest &key);
+    bool HasNominal(TypeExpr *t);
+    bool IsInterfaceType(const string &mangle);
+    bool interfacebuilt = false;
+    unordered_set<string> interfacetypes;
 
     // ------------------------------------------------------------------
     // Mangled type identities and on-demand C type emission. The mangle keys
@@ -1337,6 +1354,7 @@ struct CodeGen {
         EmitProgramInit();
         EmitExports();
         if (!library) EmitMain();
+        if (emit_options.PostPass()) EmitPostPass(*this);
         if (usesthreads) predefs = "#define GS_NEED_THREADS 1\n";
         // The instance block: with workers each thread reaches its own
         // through gs_gl; without them there is only main's.

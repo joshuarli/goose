@@ -369,6 +369,58 @@ inline string CodeGen::Sanitize(string_view ns, string_view name) {
     return cat(ns, "_", name, "_g", ns.size());
 }
 
+// Types that a C header spells by name: those in the signature of an extern
+// function (and, through their fields, the types those hold) and of an
+// export. Their names are an interface and keep the default scheme.
+inline bool CodeGen::IsInterfaceType(const string &mangle) {
+    if (!interfacebuilt) {
+        interfacebuilt = true;
+        function<void(TypeExpr *)> add = [&](TypeExpr *t) {
+            if (!t) return;
+            switch (t->kind) {
+                case TY_ARRAY: add(t->arr->sub); return;
+                case TY_SLICE: add(t->sub); return;
+                case TY_REF: add(t->ref->sub); return;
+                case TY_STRUCT:
+                    if (!interfacetypes.insert(Mangle(t)).second) return;
+                    for (auto ft : SI(t)->ftypes) add(ft);
+                    return;
+                case TY_ENUM: case TY_VARIANT: interfacetypes.insert(Mangle(t)); return;
+                default: return;
+            }
+        };
+        for (auto sf : ast.functions) {
+            if (!sf->isextern && !sf->isexport) continue;
+            for (auto sp : sf->specs) {
+                for (auto t : sp->argtypes) add(t);
+                for (auto t : sp->rets) add(t);
+            }
+        }
+    }
+    return interfacetypes.count(mangle) != 0;
+}
+
+// Whether a declared type (a struct, an enum or one of its variants) occurs
+// anywhere in the type.
+inline bool CodeGen::HasNominal(TypeExpr *t) {
+    switch (t->kind) {
+        case TY_STRUCT: case TY_ENUM: case TY_VARIANT: return true;
+        case TY_ARRAY: return HasNominal(t->arr->sub);
+        case TY_SLICE: return HasNominal(t->sub);
+        case TY_REF: return HasNominal(t->ref->sub);
+        default: return false;
+    }
+}
+
+// A symbol named from a stable key instead of by order of arrival: the
+// readable base and 16 hex digits of the key's digest. Two entities that
+// reach the same name are an error, not a reason to renumber one.
+inline string CodeGen::StableSym(const string &base, const Digest &key) {
+    auto name = cat(base, "_", key.Short());
+    if (!used.insert(name).second) Fail(Line {}, cat("symbol collision: ", name));
+    return name;
+}
+
 inline string CodeGen::Unique(string base) {
     if (!used.count(base)) { used.insert(base); return base; }
     for (auto n = 2;; n++) {
@@ -566,7 +618,11 @@ inline string CodeGen::NameCT(TypeExpr *t) {
     auto it = ctypes.find(m);
     if (it != ctypes.end()) return it->second;
     EmitCoreTypes();
-    auto name = Unique(m);
+    // A structural type's mangle is already a function of the type alone, and
+    // the runtime names some of them (`sl_u8`); only a declaration's name
+    // needs the key.
+    auto name = emit_options.stable_names && HasNominal(t) && !IsInterfaceType(m)
+                    ? StableSym(m, Keys().Type(t).digest) : Unique(m);
     ctypes[m] = name;
     if (StructLike(t)) Append(tdecls, "typedef struct ", name, " ", name, ";\n");
     return name;

@@ -19,6 +19,9 @@ add_executable(goose
     src/report/report.h
     src/ident/sha256.h
     src/ident/keys.h
+    src/units/options.h
+    src/units/postpass.h
+    src/units/share_report.h
     src/buildfile.h
     src/toolchain.h
     src/build.h

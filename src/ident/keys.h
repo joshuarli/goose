@@ -543,10 +543,9 @@ public:
                 if (bind.fv) c.Tag('v').Str(FunValName(bind.fv));
                 if (bind.named) c.Tag('n').Dig(Decl(bind.named).digest);
                 if (bind.env) c.Tag('e').Dig(RefKey(bind.env));
-                if (bind.set) {
-                    c.Tag('s').U(bind.set->size());
-                    for (auto f : *bind.set) c.Dig(Decl(f).digest);
-                }
+                // An overload set is named by its first member, which `named`
+                // already gives.
+                if (bind.set) c.Tag('s');
             }
             k.dims[(int)SpecDim::FunctionValues] = Memo(c);
         }

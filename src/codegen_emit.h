@@ -586,6 +586,8 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     else Append(code, "static ", FnAttrs(sp), SigRet(sp), " ", name, "(", params, ") {\n", fnbody,
                 "}\n\n");
     ReportBodyEmitted(sp, er, code.size() - reportmark);
+    if (emit_options.PostPass() && !sp->sf->issimd)
+        emitsegs.push_back({ sp, er, name, reportmark, code.size() });
     curspec = nullptr;
     curinfo = nullptr;
     emiter = false;

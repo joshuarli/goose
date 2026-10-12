@@ -7,6 +7,8 @@
 #include "lexer.h"
 #include "ast.h"
 #include "report/hooks.h"
+#include "units/options.h"
+#include "ident/keys.h"
 #include "dump.h"
 #include "clone.h"
 #include "parser.h"
@@ -38,7 +40,9 @@
 #include "codegen_stacks.h"
 #include "codegen_nodes.h"
 #include "runtime_inline.h"
+#include "units/postpass.h"
 #include "report/report.h"
+#include "units/share_report.h"
 #include "jit.h"
 #include "process.h"
 #include "buildfile.h"
@@ -677,6 +681,8 @@ int Main(int argc, char **argv) {
         }
         else if (arg == "--check") nocgen = true;
         else if (arg == "--build-report" && i + 1 < argc) reportfile = argv[++i];
+        else if (arg == "--share") emit_options.share = true;
+        else if (arg == "--stable-names") emit_options.stable_names = true;
         else if (arg == "--no-bce") nobce = true;
         else if (arg == "--bce-test") bcetest = true;
         else if (arg == "--bce-lines") bcelines = true;

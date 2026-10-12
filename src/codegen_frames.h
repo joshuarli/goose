@@ -109,8 +109,21 @@ inline void CodeGen::CollectSpecs() {
         for (size_t i = 0; i < sp->rets.size(); i++)
             if (si.cret < 0 && IsFix(sp->rets[i]) && !IsLargeFixed(sp->rets[i]))
                 si.cret = (int)i;
-        for (auto t : sp->needs)
-            if (!fromids.count(t)) fromids[t] = (int)fromids.size() + 1;
+        for (auto t : sp->needs) {
+            if (fromids.count(t)) continue;
+            if (!emit_options.stable_names) {
+                fromids[t] = (int)fromids.size() + 1;
+                continue;
+            }
+            // A target's id is a positive 30-bit number from its context key;
+            // the discriminant only has to tell targets apart.
+            auto id = 1 + (int)(Keys().Context(t).total.b[0] | Keys().Context(t).total.b[1] << 8 |
+                                Keys().Context(t).total.b[2] << 16 |
+                                (Keys().Context(t).total.b[3] & 0x3f) << 24);
+            for (auto &[other, oid] : fromids)
+                if (oid == id) Fail(t->sf->line, cat("symbol collision: target id ", id));
+            fromids[t] = id;
+        }
     }
     // Scan each finished body once. The call edges are local to this
     // analysis; only the summaries needed by emission survive it. Preserve

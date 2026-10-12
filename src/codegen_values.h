@@ -1327,7 +1327,8 @@ inline string CodeGen::GenPtr(Node *n, string *stkout) {
 inline string CodeGen::StrRaw(const string &v) {
     auto it = strdata.find(v);
     if (it != strdata.end()) return it->second;
-    auto name = Unique(cat("gs_str", strdata.size()));
+    auto name = emit_options.stable_names ? StableSym("gs_str", Sha256::Of(v))
+                                          : Unique(cat("gs_str", strdata.size()));
     // The checker admits no write to a literal (§9.5), so the data is C
     // const and a hole in the analysis faults rather than corrupting; the
     // cast keeps the slice and copy sites at their plain pointer type.
@@ -1344,7 +1345,8 @@ inline string CodeGen::StrRaw(const string &v) {
 inline string CodeGen::BlobRaw(const string &v) {
     auto it = blobdata.find(v);
     if (it != blobdata.end()) return it->second;
-    auto name = Unique(cat("gs_blob", blobdata.size()));
+    auto name = emit_options.stable_names ? StableSym("gs_blob", Sha256::Of(v))
+                                          : Unique(cat("gs_blob", blobdata.size()));
     Append(pdata, "static const uint8_t ", name, "[", v.size() ? v.size() : 1, "] = {");
     for (size_t i = 0; i < v.size(); i++) {
         if (i % 24 == 0) pdata += "\n   ";
@@ -1363,7 +1365,8 @@ inline string CodeGen::GenStrBytes(StrLit *s) {
     auto it = strval.find(key);
     if (it != strval.end()) return it->second;
     auto ls = LenStore(et->arr);
-    auto name = Unique(cat("gs_strv", strval.size()));
+    auto name = emit_options.stable_names ? StableSym("gs_strv", Sha256::Of(key))
+                                          : Unique(cat("gs_strv", strval.size()));
     if (ls == IS_VARINT) {
         uint8_t lenbuf[10];
         uint64_t v = s->val.size();
