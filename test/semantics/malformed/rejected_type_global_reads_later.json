@@ -1,0 +1,1 @@
+["module","goose-core/0.2","core-pilot",[["file","g1.goose"]],[["int","i64"]],[["global","early",0,"var",["e_read",["p_global",1]],0],["global","late",0,"var",["e_lit",0,"2"],1]],[["impl","main",[],[],[],["block",0,[],[]],["summary",[],[],[],[],0,0]]],[["context",0,"main::main()",[],[]]],0,[["origin",0,1,"global"],["origin",0,2,"global"]]]
