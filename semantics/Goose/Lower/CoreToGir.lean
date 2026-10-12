@@ -49,16 +49,26 @@ in the order Core evaluates its parts:
 
 ## Expected correspondence
 
-For the simulation proof the relation between a Core state and a GIR state is:
-the store is equal; the trace is equal; the activation, scope-instance and
-fresh-id counters are equal; the GIR frame's entered scopes are the Core
-environment's open blocks in the same order with the same instances; and every
-value the lowering has defined so far holds the Core value of the
-expression it was lowered from. A lowered fragment is entered with a current
-block and ends either in a terminator that stands for the Core flow
-(`ret`, `break`, `continue`, an abort or an exit) or in the single continuation
-block the caller supplied, with the Core result in the value the fragment
-returns. The proof is by induction on Core's fuel.
+For the simulation proof, a Core state and a GIR state correspond when:
+
+* the stores are equal, with the root of a slot the root of its variable;
+* the traces are equal;
+* the activation, scope-instance and fresh-id counters are equal;
+* the GIR frame's entered scopes are the Core environment's open blocks, in the
+  same order and with the same instances;
+* every value the lowering has defined so far holds the Core value of the
+  expression it was lowered from, and the Core environment's variables are the
+  contents of their slots.
+
+A lowered statement or expression is entered with a current block and its
+values defined so far. It ends in one of three ways: in terminators that stand
+for the Core flow (`ret`, `break`, `continue`, an abort or an exit), each after
+the `scope.leave`s that Core's block exits perform; by falling through, leaving
+the current block for the next fragment, with the Core result in the value the
+fragment returns; or with no current block, when every path ended in a
+terminator. The statement is proved by induction on Core's fuel, a fragment at a
+time, from `eval n p m = done o t` to `run k p (lower m) = done o t` for some
+`k`.
 -/
 
 namespace Goose.Lower
