@@ -1,282 +1,390 @@
-# Goose semantics/GIR: proof, conformance, and qualification plan
+# Goose semantics, GIR and build scalability: proof, conformance and qualification plan
 
-**Revision:** 0.1, 2026-10-12.  
-**Status:** required future work; no results or completed proofs are asserted here.  
-**Baseline:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`.  
-**Companions:** [campaign](goose-ir-campaign.md), [provisional IR specification](goose-ir-spec.md).
+**Revision:** 0.2, 2026-10-12.
+**Status:** required work; no result or proof is asserted here except the checks listed in §1.
+**Baseline:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`.
+**Companions:** [campaign](goose-ir-campaign.md), [specification](goose-ir-spec.md).
 
-## 1. Evidence contract
+## 1. What was checked while writing this plan
 
-Every result must name the exact source/compiler/spec revision, Core/GIR schema, semantic and numeric profiles, target/runtime ABI, executable/toolchain versions, command, input/corpus identity, environment, result classification, and artifact location. A successful tool exit is insufficient when coverage is incomplete.
+Run on 2026-10-12, Alpine Linux, musl, x86_64, Clang 23.1.3, a Debug build of the baseline compiler. None of these is a timing.
 
-Use separate records for `specified`, `executable`, `model-proved`, `instance-checked`, `implementation-proved`, `differential-tested`, and `assumed/deferred/unsupported`. The same feature may have broad implementation/test coverage and narrow proof coverage. Never collapse these columns into one green badge.
+| Check | Result |
+|---|---|
+| Lean 4.34.1 with Lake 5.0.0 builds a zero-dependency library and executable on this host | Built and ran. |
+| Core-only lemmas of the kind TH-NUM-01 and TH-MEM-01 need (Euclidean remainder range, signed wrap range, push preserves an indexed read) | Proved with `omega` and core lemmas; axioms `propext`, `Classical.choice`, `Quot.sound` only. |
+| Axioms introduced by `bv_decide`, `native_decide`, `sorry` in this Lean | A per-theorem axiom `<name>._native.bv_decide.ax_*` and `<name>._native.native_decide.ax_*`; `sorryAx`. Not a single fixed axiom name. |
+| `Lean.Json.parse` on an object with a duplicate key | Accepted silently. |
+| `fuzz/driver.py smoke` for lanes `scalar`, `numeric`, `order`, `resize`, `trap`, `reference` | 8 of 8 cases each, no failure. |
+| Sampled-extent indexing, growth preserving an alias, Euclidean `%`, masked shift (specification §4.5, §5) | Baseline compiler behaves as specified. |
+| Innermost-activation target of `return … from` under recursion (specification §7.2) | Baseline compiler behaves as specified. |
 
-Every supported source fixture has a requirement ID, expected accept/reject decision, source clause, expected observable behavior or allowed behavior set, applicable profiles, and a reason for exclusions. Every theorem has a statement, assumptions, proof dependency report, witness examples, negative/mutation cases, and its production implementation connection. Every benchmark has raw samples and a declared comparison method.
+Not checked: any timing; the full baseline suite; Aincrad3; `leanchecker`'s exit status on a real project.
 
-Proposed evidence layout:
+## 2. Claim levels
+
+| Label | Meaning |
+|---|---|
+| `specified` | Prose and a formal definition exist for the stated fragment. |
+| `executable` | A reference implementation runs, with stated limits. |
+| `model-proved` | Lean checks a theorem about named definitions under stated assumptions. |
+| `instance-checked` | A checker validated this concrete artifact. |
+| `implementation-proved` | A theorem connects the production implementation to the model. Not expected in this campaign. |
+| `differential-tested` | Named configurations agree on a recorded corpus. |
+| `assumed`, `deferred`, `unsupported` | The boundary is stated; no stronger claim is made. |
+
+A feature has one row per label in `semantics/coverage.json`; labels are never merged into one status. A theorem about a Lean function is a claim about that Lean function. The C++ implementation is `differential-tested` or, where a Lean checker runs on its output, `instance-checked`.
+
+## 3. Lean project rules
+
+- Toolchain: Lean 4.34.1, found on `PATH`. `semantics/lean-toolchain` records the version, and the audit command fails if `lean --version` disagrees.
+- Dependencies: none. `lake-manifest.json` has an empty package list. Mathlib and Batteries are not used; a missing lemma is proved locally.
+- Axioms: every theorem in `Goose/Audit.lean`'s list depends only on `propext`, `Classical.choice` and `Quot.sound`. The audit is an allowlist: any other axiom fails it, which covers `sorryAx` and every `._native.` axiom without naming them. `bv_decide` and `native_decide` are therefore unavailable to listed theorems.
+- Definitions used by listed theorems are not `opaque`, `partial`, `unsafe` or `implemented_by`.
+- The executable oracle is compiled Lean and is trusted separately from kernel-checked theorems; the trust ledger has a row for each.
 
 ```text
-semantics/coverage.json
-semantics/trust.md
-semantics/decisions.md
-test/semantics/cases.json
-test/gir/cases.json
-build/evidence/<base>-<candidate>/
-  environment.json
-  commands.jsonl
-  proofs/                 # declaration list, dependency/recheck reports
-  conformance/            # outcomes, traces, minimized mismatches
-  lint/                   # facts, public findings, install/scale results
-  performance/            # raw samples, summaries, uncertainty
-  coverage.json
-  decision.md
+semantics/
+  lakefile.toml  lean-toolchain  lake-manifest.json
+  Goose/Core/{Types,Syntax,Num,Memory,Eval,Validate,Json}.lean
+  Goose/GIR/{Syntax,Eval,Validate,Json}.lean
+  Goose/Lower/CoreToGir.lean
+  Goose/Evidence/Bounds.lean
+  Goose/Share/Quotient.lean
+  Goose/Reuse/Model.lean
+  Goose/Proofs/{Num,Fuel,Core,Memory,Safety,Share,Reuse,Lower,Bounds,Exit,Construct}.lean
+  Goose/Audit.lean
+  Main.lean                      -- goose-semantics
+  coverage.json  decisions.md  trust.md
 ```
 
-Generated results live outside source control unless a deliberate, bounded report is useful. Reproducers and expectation changes belong in source control; host paths, private input content, and enormous raw logs do not.
+## 4. Theorem program
 
-## 2. Required theorem program
+Statements are targets. The Lean statement that is finally proved is recorded beside each in `coverage.json`; if it is weaker than the target, the row says how.
 
-Names below are theorem targets, not Lean declarations already present. Mathematical prose specifies intended meaning; the implementation must supply actual definitions and reviewed statements.
+**Tier A** is required for the campaign's proof deliverable. **Tier B** is attempted within the item's time-box and otherwise parked with its proved lemmas and a finding.
 
-| ID | Intended statement | Scope/assumptions and non-vacuity |
+### 4.1 Core
+
+| ID | Tier | Statement | Non-vacuity |
+|---|---|---|---|
+| `TH-FUEL-01` | A | `eval n p m = done o t → n ≤ k → eval k p m = done o t`, and `eval` is a function, so results are unique. | A looping program times out at every fuel; a terminating one is `done` from some fuel on. |
+| `TH-NUM-01` | A | Each integer primitive meets its row of specification §5, stated over mathematical integers: for `%`, `b ≠ 0 → 0 ≤ r < \|b\| ∧ ∃ q, a = q·b + r`; for wrap, the result is in range and congruent modulo `2^w`; for `/`, truncation and both abort cases; for shifts, the masked count. | Evaluated examples at every width's minimum, maximum, zero and −1. |
+| `TH-CORE-01` | A | `validate m = ok → WellFormed m`, where `WellFormed` is the conjunction of specification §4.6's rules as propositions. | Modules with a forged root annotation, a summary missing a shrink, and a mistyped store are rejected. |
+| `TH-MEM-01` | A | Growth preserves every valid location and its content: `StoreOk σ → Valid σ l → Valid (push σ o v) l ∧ read (push σ o v) l = read σ l`. | A reference taken before a push is read and written after it; an alias write changes the content while validity holds. |
+| `TH-MEM-02` | A | The live-reference invariant — every reference or slice held by a variable in the demand set denotes a valid location of its type — is preserved by every `eval` step, including scope exit and, in `core-shrink`, every shrink that `V-SHRINK` admits. | A reference to a popped limited-array slot stays valid; a reference above a resizable's new length is invalid, and the program holding it live is rejected. |
+| `TH-SAFE-01` | A | `validate m = ok → ∀ n p k, eval n p m ≠ fault k`. | The corpus's allocating, aliasing and recursive programs validate. For each rule of §4.6, a program violating only that rule faults at some fuel. |
+| `TH-EXIT-01` | A, `core-construction` | A `return … from` with target `t` is caught by the nearest activation on the call stack whose implementation is in `t`; every scope between is removed; the store restricted to roots outside those scopes is unchanged except by the returned value's construction. | Recursive target (the §1 probe); two nested targets; a target that is not active is rejected by validation. |
+| `TH-CON-01` | B, `core-construction` | The construction trace of a validated program satisfies `C-ONCE`, `C-DIRECT`, `C-RELOCATE`, `C-STAGE`, `C-NAMED` and `C-ABANDON`. | One program per rule whose mutated lowering violates it. |
+
+`TH-SAFE-01` is proved by induction on fuel over the interpreter with `TH-MEM-02`'s invariant. It is conditional on nothing but validation; finite storage is modeled as unbounded, and exhaustion is `assumed` in the trust ledger.
+
+### 4.2 Sharing and reuse
+
+| ID | Tier | Statement |
 |---|---|---|
-| `TH-EVAL-01` | A finite successful executable evaluation corresponds to the small-step relation with the same observations; every finite modeled execution can be replayed with sufficient fuel. | Supported Core profile and validated decoder. Fuel exhaustion is not divergence. Include loops and both normal/abort outcomes. |
-| `TH-CORE-01` | Acceptance by the independent Core validator establishes the stated Core well-formedness and initial invariant. | Does not prove surface parsing or elaboration. Include artifacts with forged root/effect/initialization annotations that must be rejected. |
-| `TH-NUM-01` | Each supported numeric primitive implements the Goose width/sign/profile truth table. | Guard total library operations explicitly. Exercise zero divisors, minima, negative remainder, and masked counts. |
-| `TH-MEM-01` | Executing permitted growth preserves validity and target identity of every relevant prior reference. | The growth rule's premises must follow from validation; do not assume the resulting state is valid. Include legal alias writes that change contents. |
-| `TH-MEM-02` | Lexical reclamation preserves the live-state invariant and leaves no subsequently usable reference into genuinely reclaimed/incompatibly reused storage. | Quantify over semantically live/reachable values. Do not accidentally forbid legal stale limited/reusable references. |
-| `TH-SAFE-01` | Executions of validated pilot Core cannot perform an invalid typed memory access; each reachable nonterminal state steps or has a defined external interaction/outcome. | Fixed declared environment and finite-resource policy. Not an all-Goose or all-runtime claim. Include nonempty allocating/calling programs. |
-| `TH-BCE-01` | Replacing a checked access with the proven form under its validated index, snapshot, lifetime, and effect premises preserves behavior. | Include wraparound, alias mutation, shrink and unknown-call counterexamples. A proof of the final inequality alone is insufficient. |
-| `TH-CERT-01` | If the certificate checker accepts a concrete removal proposal for the actual module/profile, the selected transformation meets the modeled preservation contract. | Reconstruct premises from the module. State whether checker execution and C++ plumbing are trusted or proved. Reject changed operands, stale snapshots, and altered effects. |
-| `TH-CON-01` | Supported construction satisfies the receiving-storage event contract, initialization/evaluation order, and publication/abandonment rules. | Explicit permitted relocation, bounded staging, returned-local exceptions. Equal stdout alone is insufficient. |
-| `TH-EXIT-01` | Nonlocal exit selects the proper active target, cleans precisely the exited scope resources, and preserves transferred result destinations. | Distinguish source function from dynamic activation, including recursive/nested cases. No assumption that cleanup was already correct. |
-| `TH-GIR-01` | The GIR validator establishes the invariants claimed for the supported stage/profile. | Specify which of types, SSA, storage, effects, construction, and exits are actually checked. Do not name a type-only verifier a memory-safety proof. |
-| `TH-LOWER-01` | The modeled Core-to-GIR lowering simulates source execution under a stated memory/control relation and preserves required observations. | Administrative stuttering is allowed but needs a progress/rank argument. Production C++ lowering remains separately classified. |
-| `TH-LOWER-02` | Supported GIR-H storage/exit lowering preserves the high-stage semantics and construction obligations. | State runtime-helper and layout assumptions. Include every exit edge of a pending construction. |
-| `TH-REP-01` | Supported abstract places/values correspond to initialized byte layouts and decoded relative-reference targets. | Later extension. Packing, overlap, null encodings, link widths, and relocation cannot be assumed from nominal typing alone. |
-| `TH-DIV-01` | The supported lowering does not introduce infinite internal-only stuttering and preserves the intended divergence/productivity relation. | Separate from termination-only equivalence. Fuel tests provide examples, not this theorem. |
+| `TH-ERASE-01` | A | `eval` does not depend on contexts: replacing a module's context table changes no result. Root annotations, and with them root class, depth and writability provenance, are the erased distinctions. |
+| `TH-SHARE-01` | A | Let `q` map implementations of `m` to implementations of `m'`. If `rename q (impl m f) = impl m' (q f)` for every `f`, globals agree and `entry m' = q (entry m)`, then `eval n p m = eval n p m'` for every `n` and `p`. |
+| `TH-SHARE-02` | A | With `TH-SAFE-01`: if every context of `m` validates and `m'` is a quotient of `m` as above, `m'` never faults. Separately validated contexts may execute one shared body. |
+| `TH-SHARE-03` | B | If a fact certificate is valid for `impl m' (q f)`, every `array.index.proven` in it is safe in every context mapped to it. |
+| `TH-REUSE-01` | A | For a stage with key function `key` and result function `run`: if `key i = key j → run i = run j`, and every cache entry `(k, a)` satisfies `∃ i, key i = k ∧ run i = a`, then a cached run returns `run i` and leaves the cache satisfying the same invariant. The composition of such stages has the same property. |
 
-For the first decision gate G2, require `TH-EVAL-01`, pilot validator/numeric obligations, `TH-MEM-01/02`, the supported safety result, and `TH-BCE-01`. Certificate integration can follow once there is a real production transformation to validate. Construction/exit/lowering/representation theorems grow with their feature gates rather than appearing as empty generic claims.
+`TH-SHARE-01` is the quotient of a function table. Its premise is the decidable check of specification §16.2: given a proposed partition, verify congruence. Nothing is concluded from printed bodies or types looking alike; the premise compares the bodies the interpreter executes, with callees mapped. The proof is by induction on fuel, which covers recursive groups without a separate argument.
 
-### Review questions for every proof
+Retained distinctions, which the premise forces to be equal: types and layouts, parameter modes and physical forms, the capture list, callees, the destination request, nonlocal target sets, and every check an operation performs.
 
-Can its assumptions be satisfied by an interesting real Goose program? Does it assume the safety/result property in a hidden predicate? Does a called function's supposedly pure summary actually follow from its body? Are source acceptance, final bytes, reference identity, mandatory failures, and construction costs confused? Does the theorem apply to the production algorithm or only a model? Could a changed typeclass, notation, imported axiom, or opaque definition alter its intended statement?
+Witnesses and counterexamples, each a Lean example and a source fixture:
 
-Maintain an allowlist for release-gating proof dependencies and a clean recheck policy for the pinned Lean version. Unsupported/native-computation trust requires a separate reviewed claim level. An optimized native oracle binary and a kernel-checked theorem are not the same trusted system. Lean's [proof-validation guidance](https://lean-lang.org/doc/reference/latest/ValidatingProofs/) is the reference for version-specific auditing mechanisms.
-
-## 3. Observation and comparison policy
-
-For the closed deterministic pilot, compare exact return values, ordered externally visible effects, mandatory failure kind and source origin, and semantic reference/layout observations. Preserve existing diagnostic wording where existing commands promise it; normalize only declared nonsemantic fields such as a relocated workspace prefix. Do not strip the operation, source location, or failure reason that would expose a regression.
-
-Maintain a second instrumented construction/resource trace: destination identity, initialization order, explicit copies, permitted intra-destination moves, bounded staging, publication, cleanup ownership, and surviving roots. Compare these against a contract, not exact counts of native helper instructions. Do not include irrelevant allocator addresses or scheduler timing in ordinary behavior equality.
-
-Profiles:
-
-| Profile | Comparison |
+| Case | Expectation |
 |---|---|
-| Release, deterministic pilot | Exact observable behavior and mandatory failure ordering. |
-| Debug, no source optimization | Exact source-operation checks for supported cases. |
-| Optimized debug | Mandatory checks exact; signed-overflow instrumentation follows the source spec's allowed transformation latitude. Record expected variation explicitly. |
-| Representation tests | Byte equality only for language-defined bytes; exclude unspecified padding. Validate relative targets and source structural equality separately. |
-| Finite storage | Same declared capacity or explicit capacity precondition. Exhaustion behavior is separate from semantic invalid access. |
-| Concurrency/FFI extensions | Reviewed environment/scheduler contract or allowed trace set, not naive equality of host interleavings. |
+| A function called with a global-rooted and a local-rooted slice | Quotient exists; both contexts validate; results equal. |
+| A free variable bound to two different outer locals | Quotient exists. |
+| Two contexts whose bodies differ in one retained bounds check | The congruence check fails; no quotient is claimed. |
+| A body that reads the first parameter's length, shrinks through the second, then indexes the first; one context passes two arrays, the other passes one array twice | With the check kept, the bodies are equal and shared. A variant that removes the check on the strength of "the parameters name different arrays" is run under the second context and faults: a fact true in one context is not evidence for a shared body. |
+| A result requested as a value and as an element run | Different bodies; no quotient. |
+| A pool-form parameter and a plain resizable reference | Different signatures; no quotient. |
+| A mutually recursive pair under two root contexts | Quotient exists. |
 
-A harness timeout, killed subprocess, malformed log, missing backend, capped output, or unsupported feature is never a pass. Report a seed, input hash, command, and preserved artifacts for each mismatch. Tests execute deliberately selected fixtures in isolated work directories; ordinary lint never runs the target program.
+`TH-REUSE-01`'s first hypothesis — the key determines the result — is the completeness of dependency tracking. The theorem does not establish it and must not be cited as if it did. It shows only that nothing else is needed: cache consistency, build order and interleaving cannot break agreement with recomputation. The hypothesis is established per boundary:
 
-## 4. Semantic regression matrix
-
-Each row is a fixture family, not just one happy-path test. Add a positive case, a boundary case, and a case that detects an incorrect transformation. Reuse existing category fixtures where they already cover the requirement.
-
-| ID | Scenario | Required observation |
+| Boundary | How `key` determines `run` is established | Level |
 |---|---|---|
-| `NUM-01` | Every integer width/sign at add/sub/mul boundaries | Exact-width wrap or applicable debug failure; no backend promotion. |
-| `NUM-02` | Zero divisor in live and discarded expressions | Mandatory abort is not dead-code-eliminated; earlier effects retain order. |
-| `NUM-03` | `i64.min / -1` and narrower minimum/-1 | i64 always aborts; narrower case follows debug/release policy. |
-| `NUM-04` | Negative dividend/divisor Euclidean remainder, including minimum%-1 | Nonnegative remainder; minimum%-1 is zero; no overflowing absolute-value intermediate. |
-| `NUM-05` | Counts -1, 0, width-1, width, width+1 at different count widths | Masked shifts and correct signed right shift. |
-| `NUM-06` | `as`/`as!`, same-width sign changes, narrowing, widening | Debug-only range checks and always-unchecked conversion distinguished. |
-| `NUM-07` | Optimization regrouping of signed arithmetic | Release identical; optimized-debug result judged under approved instrumentation policy. |
-| `NUM-08` | Later float profile: NaN, signed zero, conversion rounding, finite out-of-range values | Source-defined numeric/equality behavior; unresolved infinities handled by decision gate, not guessed. |
-| `ORD-01` | Index expression grows sampled array | Check against old sampled extent, even when new index fits current extent. |
-| `ORD-02` | Index/bounds expression mutates another object or rebinds owner variable | Original receiver retained; permitted effects occur once and in order. |
-| `ORD-03` | Value argument followed by alias mutation; reference argument followed by mutation | Earlier value is a snapshot; reference observes current allowed contents. |
-| `ORD-04` | Compound assignment with RHS changing target/value | Resolve destination and read old value before RHS. |
-| `ORD-05` | Short-circuit RHS can abort or mutate | No unauthorized speculation or extra evaluation. |
-| `ORD-06` | Counted loop versus array iteration that changes length | Preserve each source loop kind's sampling/reread semantics. |
-| `MEM-01` | Reference retained through repeated grow-only pushes | Same target remains valid, including through a permitted alias. |
-| `MEM-02` | Growth callback mutates an old element | Reference valid; value may change. Safety proof must allow this. |
-| `MEM-03` | Inner-scope storage escaping through direct and nested holders | Existing illegal cases rejected; no usable dangling reference. |
-| `MEM-04` | Grow-shrink with live slice/ref and last-use-before-shrink | Reject forbidden shrink; accept supported safe ordering without adding exclusivity. |
-| `MEM-05` | Balanced grow-shrink call versus unbalanced call, including recursive summaries | Preserve caller view validity; summary fixpoint cannot trust an unfinished body. |
-| `MEM-06` | Limited-array pop then retained-reference read then push | Legal same-typed stale reference remains valid. |
-| `MEM-07` | Reusable slot/free/reallocate, and slice-pool reuse | Source-valid stale reads and invalid free bounds distinguished. |
-| `MEM-08` | Two roots share a physical stack at disjoint lifetimes; overlapping live roots | Safe reuse only with validated placement. |
-| `MEM-09` | Multi-root reference join, field read-back, unknown alias call | No dropped alternative enables a bogus check elimination. |
-| `MEM-10` | Length/byte-size/reservation arithmetic at finite limits | Required check before out-of-range allocation/write, including release. |
-| `CON-01` | Nested function/branch returns constructing into `push` destination | No arbitrary staging; initializer executes once. |
-| `CON-02` | Variable-width length prefix changes after construction | Allowed internal movement; correct bytes and link targets. |
-| `CON-03` | Limited receiver with unknown-length result that fits/does not fit | Only authorized staging; no write beyond capacity before failure. |
-| `CON-04` | Constructor tries to grow or shrink the destination through an alias/call | Reject exact forbidden case; unrelated owner remains legal. |
-| `CON-05` | Fixed-value argument evaluation versus relative-bearing/nonfixed in-place push | No new blanket construction restriction changes valid source acceptance. |
-| `CON-06` | Whole-resizable assignment with old-owner access in RHS/global/capture | Existing rejection rules and clear-before-build semantics retained. |
-| `CON-07` | First versus alternate returned locals and abandoned partial result | Exact return-copy/destination exceptions, not universal free move. |
-| `CON-08` | Append completes earlier elements, then constructor exits nonlocally | Publication/abandonment matches reviewed operation policy; no invented all-or-nothing rollback. |
-| `CON-09` | Explicit overlapping copy | Source memmove-style result and initialization safety. |
-| `EXIT-01` | Fallthrough, break, continue, ordinary return from nested scopes | Correct reverse cleanup; no unhandled temporary root. |
-| `EXIT-02` | Nonlocal exit across multiple active constructors/calls | Intended result survives; only abandoned local storage reclaimed. |
-| `EXIT-03` | Nested targets with same function identity under recursion | Correct dynamic activation, not first matching static function ID. |
-| `EXIT-04` | Target result uses caller-owned storage while callee locals share runtime stacks | No reset past surviving result destination. |
-| `EXIT-05` | Runtime abort during construction | Defined abort; no fictional destructor/unwinding requirement. |
-| `REP-01` | Packed unaligned fields and nested variable elements | Correct offsets/alignment and traversal. |
-| `REP-02` | Fixed/variable ADT modes, payload references, variant overwrite | Source-valid reference and overwrite restrictions preserved. |
-| `REP-03` | Self-relative and pool-relative links; null and range edges | Correct scheme, root identity, representable offset, and target. |
-| `REP-04` | Permitted relocation/copy of link-bearing values | References retain intended target; forbidden copies rejected. |
-| `REP-05` | Serialization roundtrip plus hostile tags/lengths/links | Later profile validates bytes before treating them as values. |
-| `INT-01` | Globals, initialization order, imports, compile-time resources | Correct initialization/effect order and dependency identity. |
-| `INT-02` | Generics, function values, captures, specialization contexts | Same resolved semantics and warnings; no AST-origin loss. |
-| `INT-03` | FFI scalar/pointer and later aggregate ABI cases | Correct platform adapter and explicit effects. |
-| `INT-04` | Threads, queues, per-instance globals, lifecycle | Declared concurrency/runtime contract; no accidental shared mutable state. |
+| Native object | By construction: the key is the unit's whole text, the headers read and the contract. Residual assumption: the C compiler is deterministic. | `assumed`, tested by §10's verification mode |
+| Whole build | By construction through the recording reader, which makes an unrecorded read fail in the test suite. | `differential-tested` |
+| Checked result | Not established. Dependency sets are recorded and their prediction is tested (§10.3); no reuse depends on them. | `deferred` |
 
-The actual source rules for arithmetic, evaluation, arrays, construction, and returns come from [the pinned specification][R1]. Where a current behavior/spec disagreement is discovered, record a decision and reproducer before changing an expectation.
+### 4.3 GIR
 
-## 5. IR verifier and adversarial-artifact matrix
+| ID | Tier | Statement |
+|---|---|---|
+| `TH-GIR-01` | A | The Lean GIR-H validator's acceptance implies the invariants it names: typing, dominance, scope balance, summary closure. It does not imply reference lifetime. |
+| `TH-LOWER-01` | A, `core-pilot` | For the Lean lowering: `eval n p m = done o t → ∃ k, run k p (lower m) = done o t`. |
+| `TH-LOWER-02` | B | The converse with a fuel bound, giving that a diverging Core program's lowering does not terminate. |
+| `TH-BCE-01` | A | Each rule of specification §10 is sound, and a function whose fact certificate checks never fails an `array.index.proven`: replacing each by `array.index.checked` gives the same `run`. |
+| `TH-CERT-01` | A | The executable certificate checker accepts only certificates satisfying `TH-BCE-01`'s premise for the module it is given. |
+| `TH-LOW-01` | B | GIR-H to GIR-L lowering preserves `run` for `core-pilot` given a valid stack plan. |
 
-These are malformed compiler artifacts, not arbitrary new source programs. Each must fail at the appropriate validation layer without producing native code counted as successful.
+The C++ lowering and the C++ verifier are `differential-tested`. Where the Lean tool validates and runs the GIR the C++ compiler exported and compares it with Core, that program's translation is `instance-checked`.
 
-| ID | Mutation |
+### 4.4 Review standard
+
+Each Tier A theorem is read by a reviewer lane that did not write it, against six questions: can an interesting real program satisfy the assumptions; is the conclusion hidden in a predicate; does each summary follow from a body; are acceptance, final values, identity, aborts and construction cost confused; does it concern the model or the production algorithm; could a changed instance, notation or opaque definition alter the statement. The reviewer's answers go in `coverage.json` with the theorem.
+
+## 5. Observation policy
+
+| Profile | Compared |
 |---|---|
-| `VER-01` | Missing/duplicate IDs, unresolved symbols/types, unsupported opcode or feature, wrong schema/stage. |
-| `VER-02` | Non-dominating SSA use, bad block argument type/arity, branch into unentered scope, illegal backedge capability. |
-| `VER-03` | Load before initialization, wrong field type/offset, access with invented alignment, illegal copy of self-relative storage. |
-| `VER-04` | Forge disjoint roots, drop a provenance alternative, mark unknown call pure, omit shrink effect. |
-| `VER-05` | Duplicate construction token, omit finish/abandon, stage for an ordinary fresh growable result, reset a caller destination. |
-| `VER-06` | Forge target capability, match by static ID across activations, return wrong payload, bypass escape cleanup. |
-| `VER-07` | Change certificate subject/index/extent/profile after checking; move use beyond invalidating mutation. |
-| `VER-08` | Unknown/duplicate JSON key, oversized integer/record/table, excessive nesting, truncated/trailing data. |
-| `VER-09` | Source origin out of range, incorrect precision, synthetic node masquerading as a suppression statement. |
-| `VER-10` | Target/runtime ABI mismatch, unresolved high operation in low stage, unsupported raw external contract. |
+| Release | Exact standard output; exit status; for an abort, its kind and source line. |
+| Debug, unoptimized | As release, including overflow and cast aborts. |
+| Debug, optimized | Mandatory aborts and release-visible results exactly; overflow aborts may differ where the optimizer regrouped or removed the operation. |
+| Construction | The construction trace against specification §7.1's rules, not against native instruction counts. |
 
-Roundtrip tests compare canonical structured artifacts and semantics, not arbitrary whitespace in a pretty printer. Mutation tests must establish that a deliberately unsafe transform is detected by a verifier, proof checker, or independent oracle rather than simply disabled by unrelated parsing failure.
+A timeout, a killed process, a truncated log, a missing backend or an unsupported feature is never a pass. Outcomes are `agree`, `mismatch`, `unsupported`, `harness-failure`, `inconclusive`. A mismatch is stored with its seed, source and commands.
 
-## 6. Linter compatibility matrix
+## 6. Semantic fixture matrix
 
-The current implementation contract is in [docs/lint/README.md][R2], [facts v1][R3], and the [testing guide][R4]. Test producer and companion separately; the tool is not only a formatter.
+Each row is a family: a positive case, a boundary case, and a case that a wrong implementation fails. Fixtures live in `test/semantics/` as ordinary runnable fixtures with expected output, so the existing runner also checks them on the legacy pipeline in every configuration.
 
-| ID | Contract |
+| ID | Profile | Scenario | Observation |
+|---|---|---|---|
+| `NUM-01` | pilot | Every width and sign at add, subtract, multiply boundaries | Wrap, or debug abort. |
+| `NUM-02` | pilot | Zero divisor in a used and an unused expression | Abort in both; earlier effects kept. |
+| `NUM-03` | pilot | `i64.min / -1` and narrower minimum over −1 | Abort always; debug abort or release wrap. |
+| `NUM-04` | pilot | Euclidean remainder with negative operands, `min % -1` | Nonnegative; zero. |
+| `NUM-05` | pilot | Shift counts −1, 0, `w−1`, `w`, `w+1` | Masked. |
+| `NUM-06` | pilot | `as` and `as!` narrowing, widening, sign change | Debug range abort only for `as`. |
+| `ORD-01` | pilot | Index expression grows the indexed array | Checked against the sampled length. |
+| `ORD-02` | pilot | Index expression rebinds the slice variable being indexed | The original run is indexed. |
+| `ORD-03` | pilot | By-value argument then an alias write; reference argument then a write | Snapshot; current content. |
+| `ORD-04` | pilot | Compound assignment whose right side writes the target | Old value read first. |
+| `ORD-05` | pilot | Short-circuit right side that aborts or writes | Not evaluated when skipped. |
+| `ORD-06` | pilot | Range loop versus array loop while the array grows | Bounds once; length reread. |
+| `MEM-01` | pilot | Reference kept across repeated pushes | Same element. |
+| `MEM-02` | pilot | A callee writes an element the caller holds a reference to | Reference valid; value changed. |
+| `MEM-03` | pilot | Reference to an inner-scope variable stored in an outer one; returned local reference | Rejected by the frontend and by `validate`. |
+| `MEM-04` | shrink | Shrink with a live slice; last use before the shrink | Rejected; accepted. |
+| `MEM-05` | shrink | Callee that shrinks its reference parameter while the caller holds a view | Rejected through the summary. |
+| `MEM-06` | shrink | Limited array: pop, read through a kept reference, push | Valid read of the old then the new value. |
+| `MEM-07` | shrink | Capacity overflow; pop on empty; negative resize | Abort before any change. |
+| `CON-01` | construction | Nested call and branch constructing into a `push` destination | `C-DIRECT`, `C-ONCE`. |
+| `CON-03` | construction | Limited receiver of an unknown-length result that fits and that does not | `C-STAGE`; abort with nothing written outside. |
+| `CON-04` | construction | Constructor growing its destination array; growing another array | Rejected; accepted. |
+| `CON-05` | construction | Pushed fixed element whose expression pushes to the same array | Accepted; evaluated before the push. |
+| `CON-06` | construction | Whole assignment whose right side names the array, directly and through a callee | Rejected. |
+| `CON-07` | construction | One returned local; two returned locals | No event; one copy. |
+| `CON-08` | construction | `append` of several elements with a nonlocal exit during the third | Two published; the third abandoned. |
+| `EXIT-01` | pilot | Fallthrough, `break`, `continue`, `return` from nested scopes | Scopes removed in order. |
+| `EXIT-02` | construction | Nonlocal return across two intermediate calls with open scopes | Result delivered; intermediate roots gone. |
+| `EXIT-03` | construction | Recursive target | The innermost active activation returns; outer ones resume. |
+| `EXIT-04` | construction | Nonfixed result returned nonlocally into the target's destination | Result intact after intermediate watermarks restore. |
+| `EXIT-05` | pilot | Abort inside nested scopes | Program ends; no further output. |
+| `SHR-xx` | legacy backend, any feature | Specification §16.4, one member of the synthetic family per row | Asserted share or distinct. |
+
+Generated corpus: the existing lanes of `fuzz/driver.py`, extended with the Lean tool and the `gir` pipeline as additional stages. `scalar`, `numeric`, `order` and the pilot-compatible `trap` kinds belong to `core-pilot`; `resize`, `reference` and the remaining `trap` kinds to `core-shrink`. No new generator is written.
+
+A disagreement between the Lean model and the legacy compiler is resolved by the campaign's decision O2 and recorded in `semantics/decisions.md` with a minimized reproducer. Expected outputs are never regenerated to resolve one.
+
+## 7. Verifier and malformed-artifact matrix
+
+C++ verifier cases are in-memory modules in `test/compiler_gir.cpp`. Decoder cases are files fed to `goose-semantics`.
+
+| ID | Mutation | Layer |
+|---|---|---|
+| `VER-01` | Unknown tag, wrong arity, wrong schema string, wrong profile | Decoder |
+| `VER-02` | Use not dominated by its definition; wrong edge argument type; two terminators | Verifier |
+| `VER-03` | Store through `const`; slot address outside its scope; load of a resizable | Verifier |
+| `VER-04` | Summary omitting a shrink; `call` to a function that may propagate a target | Verifier, `validate` |
+| `VER-05` | Destination opened and neither published nor abandoned on one path; published twice | Verifier |
+| `VER-06` | Escape edge that leaves a scope entered; target not handled by a member | Verifier |
+| `VER-07` | Certificate fact not implied by a predecessor; proven index after a shrinking call; after a re-entered scope | Certificate checker |
+| `VER-08` | Constant out of range; index out of table; trailing data; oversize input; excessive nesting | Decoder |
+| `VER-09` | Aborting operation with no origin | Verifier |
+| `VER-10` | GIR-H operation in a GIR-L module; two live resizables on one stack; watermark restored across a caller's destination | Verifier |
+
+Each case fails at the named layer with the named diagnostic, not at an earlier unrelated one.
+
+## 8. Linter compatibility
+
+Checked facts about the baseline: twelve shipped rules and a 65-id inventory (`docs/lint/rule-inventory.md`); three compiler warning ids (`src/typecheck.h:73-78`); process statuses 0 to 4 (`docs/lint/README.md:113-117`); facts are built after typecheck with no optimizer or backend (`src/main.cpp:1430-1443`); the facts header's `compiler_revision` is the runtime text hash (`src/lint_facts.h:420-421`).
+
+| ID | Contract | Proof |
+|---|---|---|
+| `LINT-01` | Warning ids, text and consensus unchanged under ordinary commands and lint | `test/lint/run_tests.py`; the baseline suite's `// warning:` markers |
+| `LINT-02` | The twelve rules and all inventory dispositions unchanged | `test/lint/run_tests.py` |
+| `LINT-03` | `specialization_fanout` counts checked entry-reachable contexts under every pipeline and build mode | The synthetic family: fanout equals contexts while the cost report's implementations is smaller |
+| `LINT-04` | Facts bytes for the lint fixtures and the linter's own source identical to the baseline compiler's, apart from `compiler_revision` when the runtime text changed | Byte comparison in `test/scale/parity.py` |
+| `LINT-05` | Statuses, missing companion, protocol mismatch, offline imports unchanged | `test/lint/run_tests.py` |
+| `LINT-06` | `check` and `lint` compute no stable keys, run no backend, need no Lean | `goose --check --build-report` shows zero keys computed and no backend phase; `test/lint/run_tests.py` passes with Lean absent from `PATH` |
+| `LINT-07` | A units-built `goose-lint` gives the same results as the single-file one | `test/lint/run_tests.py --goose` against an install whose companion was built with `--units` |
+| `LINT-08` | Facts scale case unchanged | `test/lint/facts_scale.py` |
+
+A GIR-built companion is deferred: the linter's source uses features outside the three profiles.
+
+## 9. Workloads
+
+| Workload | Source | Use |
+|---|---|---|
+| Synthetic family | `test/scale/gen.py`, public, deterministic from its parameters | Every structural assertion; budgets; the edit matrix. |
+| Compiler corpus | Existing fixtures, samples, the linter's source | Parity of default output; sharing and units correctness. |
+| Aincrad3 | The local checkout, read-only, at a recorded commit, built in a scratch worktree | Attribution and edit-loop measurements. Only aggregate numbers enter this repository. |
+
+If Aincrad3 is absent, every Aincrad3 row is recorded `unavailable` and no number is substituted.
+
+Issue #9 reported 14,575 specializations and 66,026,053 bytes of C for an optimized Aincrad3 build, and a standalone emission median of 43.150 s. Those figures are historical, are emission-only, and are not a native compile, link or runtime measurement. They are a reason to measure, not a baseline: the campaign's first build item remeasures.
+
+### 9.1 Synthetic family
+
+Parameters: `M` shareable helper functions, each reached under `K` root contexts (globals and locals at several depths, writable and read-only), over `T` concrete element types, plus one instance of every must-stay-distinct row of specification §16.4 and one mutually recursive pair under two contexts. The generator states the expected counts for its parameters: checked contexts, entry-reachable contexts, and implementations after sharing.
+
+Assertions, exact and not statistical:
+
+- implementations after sharing equals the generator's expected count;
+- every must-stay-distinct pair remains two implementations;
+- `specialization_fanout` reports the checked contexts, unchanged by sharing;
+- the program's output is identical with sharing on and off, in units and single-file mode.
+
+The family also generates each edit of §10 as a deterministic source transformation, with the expected set of changed implementations.
+
+### 9.2 Attribution checks
+
+The cost report (specification §20) is checked for internal consistency: the per-function emitted bytes, helper, type, data and runtime bytes sum to the written output's size; contexts ≥ entry-reachable ≥ live ≥ implementations; phase times sum to the total within the unattributed remainder the report states. A report that fails these is not used.
+
+## 10. Edit-based qualification
+
+### 10.1 Matrix
+
+Each row runs on the synthetic family and, where the edit can be expressed without altering its sources permanently, on Aincrad3 in a scratch worktree.
+
+| ID | Edit | Expected locality |
+|---|---|---|
+| `E00` | Cold clean build | Everything. |
+| `E01` | Warm no-op | Nothing runs: no frontend, no native compiler, no linker. |
+| `E02` | Comment added above a function; blank line added | Frontend runs. No implementation digest changes. Only the module's locations unit recompiles. In a build with native debug information, that module's code units may also change; the report says which. |
+| `E03` | Body of a leaf that is not inlined | That declaration's implementations change; only their units, and the locations unit if lines moved, recompile. |
+| `E04` | Body of an inlined helper | Exactly the implementations in the report's inline closure of the helper change. |
+| `E05` | Signature of a function | It and its direct callers, and their inline closures. |
+| `E06` | Field added to a struct | Implementations whose layout dependencies include the type. |
+| `E07a` | A call site passes a local where it passed a global of the same type | A context is added or replaced; no implementation changes except the caller's. |
+| `E07b` | A call site passes a pool where it passed a plain array | One new instance and the caller change. |
+| `E07c` | A callee gains a shrink of its parameter | The callee changes; a caller holding a view is now rejected, with the diagnostic a clean build gives. |
+| `E08` | A specialization request added, then removed | One instance appears in one unit and disappears; no existing symbol is renamed; units not holding it or its caller keep their objects. |
+| `E09a` | An overload added that now wins at one call site | That caller changes. |
+| `E09b` | An import changed to a module providing the same name | Dependents of the name change. |
+| `E09c` | An embedded file's content changed | Its users change. |
+| `E10` | Compiler binary, C compiler, C flags, numeric profile, `-D`, target, runtime text changed, one at a time | A new contract; every unit compiles; the other contract's store is untouched and still warm when switched back. |
+| `E11` | Store deleted | As `E00`. |
+| `E12` | One object truncated; one object with a flipped byte; a completion record removed | Detected, discarded, rebuilt, reported; the result equals a clean build. The flipped byte is detected in verification mode. |
+| `E13` | Build killed during publish and during link | The next build completes and equals a clean build. |
+| `E14` | Two builds of one program started together | Both succeed; the executable equals a clean build's behavior. |
+| `E15` | An edit introducing a compile error; one introducing a new warning in a function whose units do not change | The error is reported and no executable is reported as built; the warning is printed. |
+| `E16` | An edit and its exact revert | The final state equals the initial clean build. |
+
+### 10.2 Recorded for every row
+
+Frontend phases that ran; contexts checked; implementation digests changed; units whose text changed; native compiler invocations and units per invocation; objects reused and missed; whether the link ran; wall time, CPU time and peak resident memory of the compiler and of the largest native compiler process.
+
+### 10.3 Equivalence
+
+For every row the incremental result is compared with a clean build of the same sources under the same contract:
+
+- compiler exit status and diagnostics, byte for byte;
+- every unit's text, byte for byte — unit text is a deterministic function of the inputs, and that is a contract this design owns;
+- the program's output, exit status and abort diagnostics on the workload's run inputs;
+- objects and executables are **not** required to be byte-equal; they are compared only in verification mode, as evidence about the C compiler's determinism.
+
+Verification mode (`--verify-reuse`) recompiles every reused object and compares, and recomputes after an R0 hit. It is on for the whole matrix.
+
+Shadow invalidation: for every row, the set of contexts the dependency recorder predicts invalid contains every context whose recomputed result digest changed. The size of the over-approximation is reported; an under-approximation fails the row.
+
+A randomized sequence of matrix edits, with a fixed seed, is run with verification mode on; any divergence from a clean build fails.
+
+### 10.4 Structural acceptance
+
+These gate regardless of host load, because they count events and not time.
+
+| Gate | Requirement |
 |---|---|
-| `LINT-01` | Same three existing warning IDs/text and per-source specialization consensus under ordinary compiler commands and lint mode. |
-| `LINT-02` | Same twelve shipped rule behaviors, default/opt-in selection, legitimate counterexamples, and all 65 inventory dispositions. No deferred rule silently becomes enabled. |
-| `LINT-03` | Same resolved call/result shapes, member receiver index, root-depth contexts, and incomplete-reachability treatment. |
-| `LINT-04` | Original statements/comments and exact or line-precision spans survive Core/GIR construction. Check tabs, UTF-8, CRLF, raw strings, and synthesized nodes. |
-| `LINT-05` | Suppressions bind the same statement; stale/unknown/malformed directives still diagnose; reasons and suppressed findings remain visible. |
-| `LINT-06` | Baseline fingerprints survive irrelevant compiler changes and line shifts under the existing algorithm; semantic drift is visible; writes remain explicit and atomic. |
-| `LINT-07` | Output ordering and JSONL bytes deterministic under identical sources/options; optimization must not erase source findings or alter fanout to mean emitted functions. |
-| `LINT-08` | Statuses 0/1/2/3/4, `--require-complete`, missing companion, incompatible protocol, malformed config, and error envelopes unchanged. |
-| `LINT-09` | Default offline imports; `--allow-fetch` does not execute target/native sidecars; embedded resources follow existing checking policy. |
-| `LINT-10` | Closed facts schemas, count/hash framing, limits, invalid references, temporary-file safety, and fail-closed reader remain enforced. |
-| `LINT-11` | Legacy-built and GIR/C-built companions give the same rule results; supported producer/reader versions tested explicitly. |
-| `LINT-12` | Relocated install without checkout/Python/Lean/LLVM: adjacent compiler, companion, stdlib; Unicode/spaces; concurrent runs and cleanup. |
-| `LINT-13` | Self-lint `tools/lint/main.goose` and run scale workload after changes to snapshot/producer/reader/context encoding. |
-| `LINT-14` | Normal check/lint time and RSS do not acquire unused GIR/Lean work; no dependency cycle while building the companion. |
+| `L-NOOP` | `E01`: zero native compiler processes, zero linker processes, zero frontend phases. |
+| `L-LEAF` | `E03`: native compiler input is exactly the units holding an implementation of the edited declaration, plus at most one locations unit. |
+| `L-LOC` | `E02` without native debug information: no code unit recompiles. |
+| `L-ADD` | `E08`: no existing symbol renamed; no unit recompiled that holds neither the new instance nor its caller. |
+| `L-SHARE` | §9.1's exact counts. |
+| `L-EQ` | §10.3 for every row. |
+| `L-FAIL` | `E11`–`E15` as stated. |
 
-Do not “fix” compatibility by regenerating every expected JSON file or baseline. Findings with a reviewed semantic correction get focused expectation changes with the decision ID. Preserve full source coverage information even when GIR covers only a subset.
+## 11. Budgets
 
-## 7. Execution matrix and commands
+Proposed values. They are frozen in the campaign's baseline section after the first quiet-host measurement and are then gating at the campaign's close; until then they are recorded, not enforced. Time is CPU time, minimum of at least five interleaved runs, taken only when `perf-gate-ready` exits 0 before and after. A regression counts only beyond the observed spread.
 
-### 7.1 Existing commands to retain
+| Budget | Proposed |
+|---|---|
+| Report disabled | No measurable change in `--check` or emission CPU time against the baseline compiler. |
+| Report enabled | At most 10% added CPU time. |
+| `E01` | At most the larger of 1 s and 2% of `E00`'s wall time. |
+| `E03` | Wall time minus frontend time at most 15% of `E00`'s native compile and link time. |
+| `E00` in units mode | Wall time at most the single-file build's at the host's parallelism; CPU time at most 1.3 times. |
+| Units-mode program runtime | Reported against single-file at the same C optimization level; more than 10% slower on a benchmark kernel requires a recorded tradeoff. |
+| Compiler peak memory | At most 1.1 times the baseline's on the same workload. |
+| Emitted bytes | Reported before and after sharing. Not a success criterion by itself. |
 
-The following are existing documented entry points; run them in a properly provisioned checkout and record actual results. They were not run to prepare this document.
+No speedup is claimed until measured. A reduction in emitted bytes with no reduction in a measured cost is reported as such.
+
+## 12. Commands
+
+Existing:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --parallel
-python test/run_tests.py --profile baseline --cc native --require-clang
-python test/lint/run_tests.py --goose build/goose
-python test/lint/facts_scale.py --goose build/goose
-python test/run_tests.py --goose-in-goose-only --exe build/goose --cc native
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build --parallel
+python3 test/run_tests.py --profile baseline --cc native --require-clang
+python3 test/lint/run_tests.py --goose build/goose
+python3 test/lint/facts_scale.py --goose build/goose
+python3 test/run_tests.py --goose-in-goose-only --exe build/goose --cc native
+python3 fuzz/driver.py smoke --lane scalar --exe build/goose --cc clang
 ```
 
-Adjust executable locations for multi-configuration/Windows builds according to the existing runner, and use the checked-in CI/AGENTS requirements for supported toolchains. Do not silently reuse obsolete optional-package/TinyCC CMake flags. Optional packages and sanitizer profiles must be provisioned and their skips reported using the existing testing guide.
-
-The ordinary CMake build already includes `goose-lint`; preserve that default. The scale suite is separate because it is substantially larger than the focused rule suite. Do not make every local edit run every large stress case, but require the scale evidence before changing the relevant production contracts.
-
-### 7.2 Proposed entry points to implement
-
-These commands describe deliverables, not currently available commands:
+To be delivered by the campaign:
 
 ```sh
-# After adding the Lean project and named executable:
 (cd semantics && lake build)
-(cd semantics && lake exe goose-semantics --self-test)
-
-# After implementing the campaign harnesses/selectors:
-python test/semantics/run_tests.py --goose build/goose --profile core-pilot
-python test/gir/run_tests.py --goose build/goose --pipeline gir
-python test/semantics/audit_claims.py
+semantics/.lake/build/bin/goose-semantics audit
+python3 test/semantics/run_tests.py --goose build/goose --profile core-pilot [--case NAME]
+python3 fuzz/driver.py run --lane order --exe build/goose --cc clang --count 2000 --seed 1 \
+    --semantics semantics/.lake/build/bin/goose-semantics --pipeline gir
+python3 test/scale/parity.py --goose build/goose --baseline <baseline goose>
+python3 test/scale/gen.py --contexts 64 --helpers 16 --types 4 --out <dir>
+python3 test/scale/edit_matrix.py --goose build/goose --workload synthetic [--case E03]
+python3 test/scale/edit_matrix.py --goose build/goose --workload aincrad3 --source <checkout>
 ```
 
-Choose final option names in the implementing commit and update all three documents and CI together. The harnesses must emit machine-readable coverage/results and fail on mismatches, malformed artifacts, or required unavailable configurations. A consciously excluded/deferred profile is recorded, not falsely run.
+Every harness exits nonzero on a mismatch, a malformed artifact or a required configuration that is missing, and prints a JSON summary with the outcome classes of §5.
 
-### 7.3 Required configurations
+## 13. Gates
 
-Cross independently: Goose optimization level, generated-C optimization level, runtime debug instrumentation, and legacy versus GIR pipeline. The pilot matrix includes O0 and O2, selected mixed optimization combinations, native Clang/GCC where supported, and TinyCC. A C-only bug can otherwise masquerade as Core/GIR agreement.
-
-Retain Linux/macOS/Windows product coverage and the existing sanitizer jobs. Add AOT LLVM configurations only for explicitly supported target/toolchain pairs. Compile/runtime environment, resource capacity, and external input must match when comparing behavior. Do not run a benchmark under sanitizers and compare its time to a nonsanitized baseline.
-
-### 7.4 CI layering
-
-Presubmit: document/schema consistency, changed profile proofs, small conformance and malformed-artifact suites, normal source/linter regressions. Scheduled/full qualification: clean proof recheck, broader generated corpus, sanitizers, full native/TinyCC matrix, scale test, bootstrap and installed-artifact matrix. Release: complete supported target/profile matrix and the promotion/rollback decision bundle.
-
-These are proposed CI jobs, not requests to schedule background tasks. Keep build/test permissions minimal; proof metaprograms and build inputs run in the normal restricted CI environment, not with repository secrets. Dependency changes receive review. Cache hits do not bypass semantic/version validation.
-
-## 8. Performance qualification
-
-Use the existing benchmark corpus, representative valid source programs, linter self-analysis, the documented facts-scale case, and targeted construction/BCE kernels. Pin input sizes and maintain both normal and stress cases. Do not quote historical README speedups as new measurements.
-
-For each comparison, use identical machine/toolchain/flags and workloads, warm both variants, alternate repeated runs, and publish samples, medians, dispersion, and peak memory. Choose sample count after measuring noise; record it rather than hiding it in a summary. Separate startup from steady-state work where meaningful.
-
-Measure frontend/typecheck, snapshot creation, validation, each GIR pass, C/LLVM emission, downstream compilation/linking, total build time, peak RSS, object/code size, runtime, and linter latency independently. Check that removing one C parsing stage does not simply move more work into GIR validation or LLVM optimization.
-
-The campaign's 5% time/runtime and 10% RSS review triggers are provisional budgets to calibrate at G0, not proven thresholds. A benchmark loss must be visible even when a geometric-mean summary improves. Preserve common-case measurements alongside pathological-case wins, following [AGENTS.md][R5].
-
-## 9. Go/no-go checklist by milestone
-
-| Gate | Required evidence before proceeding |
+| Gate | Evidence |
 |---|---|
-| G0 | Exact baseline and toolchain; actual existing-suite status; numeric/observation pilot decisions; linter snapshots. |
-| G1 | Executable Core, bounded decoder/evaluator, independent validation, evaluator correspondence, honest support profile. |
-| G2 | Non-vacuous growth/cleanup/safety/BCE proof package; source/C oracle comparisons; deliberately bad transform detected; relevance review. |
-| G3 | Construction and target-activation contracts exercised; original source/fact identities preserved; unsupported features listed. |
-| G4 | GIR roundtrips, negative verifier suite, representative lowering simulation/evidence, explicit cleanup and no fabricated proof flags. |
-| G5 | GIR/C supported semantic parity, linter/companion/packaging/bootstrap gates, no silent partial fallback, measured costs. |
-| G6 | Selected optimization evidence connected to actual code, effect invalidation tests, representative benefit or justified simplification. |
-| G7 | Intended release feature/target coverage, claim ledger, limitations, rollback qualification, explicit promotion or experimental-retention decision. |
-| G8 | Optional LLVM target correctness and tooling parity plus measured benefit; no presumed speedup from emitting IR directly. |
+| `G-GROUND` | Baseline suite status recorded; loop commands timed on a quiet host; Lean audit command runs; Aincrad3 availability recorded. |
+| `G-PILOT` | `TH-FUEL-01`, `TH-NUM-01`, `TH-CORE-01`, `TH-MEM-01`, `TH-MEM-02` and `TH-SAFE-01` for `core-pilot` pass the audit; pilot fixtures and lanes agree between the legacy compiler and Lean. |
+| `G-ATTR` | Cost report passes §9.2 on the synthetic family and Aincrad3; growth is attributed to dimensions; budgets frozen. |
+| `G-SHARE` | `L-SHARE`; `TH-ERASE-01`, `TH-SHARE-01`, `TH-SHARE-02` pass the audit; the full baseline suite passes with sharing on; default output byte-identical to the baseline. |
+| `G-UNITS` | `L-NOOP`, `L-LEAF`, `L-LOC`, `L-ADD`, `L-EQ`, `L-FAIL`; `TH-REUSE-01` passes the audit; the full baseline suite passes in units mode. |
+| `G-GIR` | Profile fixtures and lanes agree across legacy, Lean and `--pipeline gir`; §7 passes; `TH-GIR-01`, `TH-LOWER-01` pass the audit. |
+| `G-SHRINK`, `G-CONSTRUCT` | The profile's fixtures, lanes and Tier A theorems. |
+| `G-BCE` | `TH-BCE-01`, `TH-CERT-01`; `VER-07`; proven indexes on the pilot corpus are accepted by the Lean checker. |
+| `G-CLOSE` | §8; §11's frozen budgets; the Aincrad3 edit-loop table; the claim ledger. |
 
-## 10. Completion and result reporting template
-
-Every milestone report should contain:
+## 14. Report template
 
 ```text
-Milestone / exact base and candidate:
-Implemented features and profiles:
-Model-proved declarations and assumptions:
-Production implementation connection:
-Commands actually run and environment:
-Passed / failed / unsupported / skipped / inconclusive counts:
-Minimized discrepancies and semantic decisions:
-Linter/source compatibility changes:
-Performance samples and limitations:
-Remaining feature/proof boundaries:
-Promotion decision and rollback procedure:
+Gate, base and candidate revisions:
+Environment (compiler, libc, kernel, architecture) and host load at measurement:
+Profiles and features implemented:
+Theorems passing the audit; theorems parked, with their proved lemmas:
+Production connection (differential-tested / instance-checked) per feature:
+Commands run; agree / mismatch / unsupported / harness-failure / inconclusive counts:
+Cost attribution: counts table; top growth dimensions; sharing blockers:
+Edit matrix: per row, the §10.2 record and the §10.3 result:
+Aincrad3: available or unavailable; commit; the same tables, aggregates only:
+Budgets: proposed, frozen, measured:
+Disagreements with the legacy compiler and their resolution:
+Deferred components: boundary, reason, prerequisite, acceptance condition:
 ```
-
-A fully populated report may conclude that GIR remains experimental. That is preferable to removing unknowns from the report. The campaign succeeds by making semantic obligations executable and compiler changes accountable to evidence; it does not require claiming an end-to-end verified compiler.
-
-## Pinned repository references
-
-[R1]: https://github.com/joshuarli/goose/blob/62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a/docs/goose_spec.md
-[R2]: https://github.com/joshuarli/goose/blob/62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a/docs/lint/README.md
-[R3]: https://github.com/joshuarli/goose/blob/62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a/docs/lint/facts-v1.md
-[R4]: https://github.com/joshuarli/goose/blob/62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a/docs/testing.md
-[R5]: https://github.com/joshuarli/goose/blob/62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a/AGENTS.md
