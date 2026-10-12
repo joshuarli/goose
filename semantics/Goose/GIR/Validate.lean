@@ -1,0 +1,439 @@
+import Goose.GIR.Effects
+
+/-!
+`validate` for GIR-H: the checks that stand between an exported or lowered
+module and the interpreter, run in the order of their codes. A module is judged
+by the first code at which any function fails, so a module that fails a later
+check is known to pass every earlier one.
+
+| Code | Checks |
+|---|---|
+| `GIR-V001` | entry, global initializers, symbol and value-id tables, summaries' targets |
+| `GIR-V010` | operand and result types, arity |
+| `GIR-V020` | one terminator per block, edge arguments, reachability, dominance |
+| `GIR-V030` | slot addresses inside their scope, stores through mutable references, loadable and storable types |
+| `GIR-V040` | scope enter and leave balance on every path and nest as the scope tree; `ret` with no scope entered |
+| `GIR-V050` | summaries closed over the body |
+| `GIR-V100` | origins on every operation that can abort or stands for a statement |
+
+Acceptance does not establish that references stay valid: that is carried from
+Core by the lowering, and the checks here know nothing about it.
+-/
+
+namespace Goose.GIR
+
+open Goose.Core
+
+inductive Code
+  | v001 | v010 | v020 | v030 | v040 | v050 | v100
+  deriving DecidableEq, Repr
+
+def Code.tag : Code → String
+  | .v001 => "GIR-V001"
+  | .v010 => "GIR-V010"
+  | .v020 => "GIR-V020"
+  | .v030 => "GIR-V030"
+  | .v040 => "GIR-V040"
+  | .v050 => "GIR-V050"
+  | .v100 => "GIR-V100"
+
+structure Violation where
+  code : Code
+  message : String
+
+abbrev Check := Except Violation
+
+def violation (c : Code) (msg : String) : Check α := .error ⟨c, msg⟩
+
+/-- A typing failure reported under `c`, naming the function. -/
+def asCheck (c : Code) (label : String) (r : Except String α) : Check α :=
+  match r with
+  | .ok a => .ok a
+  | .error msg => violation c s!"{label}: {msg}"
+
+/-! ### Operations that need an origin -/
+
+/-- The origin an operation carries, if it has the field. -/
+def Op.origin : Op → Option OriginId
+  | .bin _ _ _ _ o => o
+  | .un _ _ _ o => o
+  | .conv _ _ _ _ o => o
+  | .viewSlice _ _ _ _ o => o
+  | .indexChecked _ _ o => o
+  | .push _ _ o => o
+  | .call _ _ o => o
+  | _ => none
+
+def Effect.origin : Effect → Option OriginId
+  | .slotInit _ _ o => o
+  | .store _ _ o => o
+  | .append _ _ o => o
+  | .print _ o => o
+  | _ => none
+
+def Term.origin : Term → Option OriginId
+  | .ret _ o => o
+  | .abort _ o => o
+  | .exit _ o => o
+  | _ => none
+
+def Inst.origin : Inst → Option OriginId
+  | .def _ op => op.origin
+  | .eff e => e.origin
+  | .term t => t.origin
+
+/-- Instructions that can abort or that stand for a source statement must say
+where they came from. -/
+def Inst.needsOrigin : Inst → Bool
+  | .def _ (.bin o ..) => o.mayAbort
+  | .def _ (.un o ..) => (o matches .neg)
+  | .def _ (.conv k ..) => (k matches .as)
+  | .def _ (.viewSlice ..) | .def _ (.indexChecked ..) | .def _ (.call ..) => true
+  | .eff (.slotInit ..) | .eff (.store ..) | .eff (.append ..) | .eff (.print ..) => true
+  | .term (.abort ..) | .term (.exit ..) => true
+  | _ => false
+
+/-! ### GIR-V001 -/
+
+def checkEntryAndGlobals (m : Module) : Check Unit := do
+  match m.funcs[m.entry]? with
+  | none => violation .v001 s!"the entry {m.entry} is outside the function table"
+  | some f =>
+    unless f.params.isEmpty && f.results.isEmpty do
+      violation .v001 s!"the entry {f.name} must take no parameters and return nothing"
+  for g in m.globals do
+    unless g.init.params.isEmpty && g.init.results == [g.ty] do
+      violation .v001 s!"the initializer of global {g.name} must take no parameters and return its type"
+    unless g.org < m.origins.size do violation .v001 s!"global {g.name}: origin outside the origin table"
+
+/-- Table indices an instruction names. -/
+def checkInstSymbols (m : Module) (f : Func) (n : Nat) (i : Inst) : Except String Unit := do
+  for v in i.uses do
+    unless v < n do throw s!"value %{v} is outside the value table of {n}"
+  match i.origin with
+  | some o => unless o < m.origins.size do throw s!"origin {o} is outside the origin table"
+  | none => pure ()
+  match i with
+  | .def _ (.slotAddr s) | .eff (.slotInit s _ _) =>
+    unless s < f.slots.size do throw s!"slot {s} is outside the slot table"
+  | .def _ (.globalAddr g) =>
+    unless g < m.globals.size do throw s!"global {g} is outside the global table"
+  | .def _ (.call g _ _) =>
+    unless g < m.funcs.size do throw s!"function {g} is outside the function table"
+  | .eff (.enter sc) | .eff (.leave sc) =>
+    unless sc < f.scopes.size do throw s!"scope {sc} is outside the scope table"
+  | .term t =>
+    for b in t.successors do
+      unless b < f.blocks.size do throw s!"block {b} is outside the block table"
+  | _ => pure ()
+
+def checkSymbols (m : Module) (label : String) (f : Func) : Check Unit := do
+  asCheck .v001 label (do
+    if f.blocks.isEmpty then throw "no blocks"
+    for h : i in [0:f.scopes.size] do
+      match f.scopes[i] with
+      | some p => unless p < i do throw s!"scope {i}: parent {p} is not an earlier scope"
+      | none => pure ()
+    for sl in f.slots do
+      unless sl.scope < f.scopes.size do throw s!"slot of variable {sl.var}: scope {sl.scope} is outside the scope table"
+    match f.org with
+    | some o => unless o < m.origins.size do throw s!"function origin {o} is outside the origin table"
+    | none => pure ()
+    match f.summary with
+    | .unknown => pure ()
+    | .known s =>
+      for t in s.reads ++ s.writes ++ s.grows ++ s.rebinds do
+        match t with
+        | .param i => unless i < f.params.length do throw s!"summary names parameter {i}, which does not exist"
+        | .global g => unless g < m.globals.size do throw s!"summary names global {g}, outside the global table"
+    -- Value ids are dense and each is defined once.
+    let n := f.numValues
+    let mut seen := Array.replicate n false
+    for b in f.blocks do
+      for d in b.defs do
+        unless d < n do throw s!"value %{d} is outside the value table of {n}"
+        if seen[d]! then throw s!"value %{d} is defined twice"
+        seen := seen.set! d true
+      for i in b.insts do
+        checkInstSymbols m f n i)
+
+/-! ### GIR-V010 -/
+
+def checkEffectTypes (env : TyEnv) : Effect → TyR Unit
+  | .slotInit s v _ => do
+    let some sl := env.slots[s]? | tyErr s!"slot {s} outside the slot table"
+    unless (← env.dataTy v) = sl.ty do tyErr s!"slot {s} is initialized with a value of another type"
+  | .store r v _ => do
+    let (_, t) ← env.refTy r
+    unless (← env.dataTy v) = t do tyErr "a store of a value of another type than the referent"
+  | .append r v _ => do
+    let (_, t) ← env.refTy r
+    match t with
+    | .grow e =>
+      let (_, ve) ← env.viewTy v
+      unless ve = e do tyErr "appended elements of another type than the array's"
+    | _ => tyErr "append to a reference that does not point at a grow-only array"
+  | .print parts _ => do
+    for p in parts do
+      match p with
+      | .text _ => pure ()
+      | .val v =>
+        match (← env.dataTy v) with
+        | .int _ | .bool => pure ()
+        | _ => tyErr "a printed value is neither an integer nor a boolean"
+  | .enter _ | .leave _ => pure ()
+
+def checkTermTypes (f : Func) (env : TyEnv) : Term → TyR Unit
+  | .condbr c .. => do
+    unless (← env.dataTy c) = .bool do tyErr "a branch condition that is not a boolean"
+  | .ret vs _ => do
+    unless vs.length = f.results.length do tyErr s!"return of {vs.length} values, the function has {f.results.length} results"
+    for (v, t) in vs.zip f.results do
+      unless (← env.dataTy v) = t do tyErr "a returned value of another type than the result"
+  | .exit v _ => do
+    let _ ← env.intTy v
+  | .br .. | .abort .. => pure ()
+
+def checkTypes (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do
+  let env : TyEnv := { m.tyEnv f with vals := vt }
+  asCheck .v010 label (do
+    match f.blocks[0]? with
+    | some b =>
+      unless b.params.map (·.2) == f.params.map VTy.data do
+        throw "the parameters of block 0 are not the function's parameters"
+    | none => throw "no blocks"
+    for sl in f.slots do
+      unless sl.ty.storable do throw s!"the slot of variable {sl.var} has a type no variable may have"
+    for b in f.blocks do
+      for i in b.insts do
+        match i with
+        | .def r op =>
+          let t ← op.resultTy env
+          unless vt[r]? == some (some t) do throw s!"value %{r} has two types"
+        | .eff e => checkEffectTypes env e
+        | .term t => checkTermTypes f env t)
+
+/-! ### GIR-V020 -/
+
+def predecessors (f : Func) : Array (List BlockId) :=
+  let n := f.blocks.size
+  (List.range n).foldl (fun acc b =>
+    match f.blocks[b]? with
+    | none => acc
+    | some blk =>
+      (blk.terms.flatMap Term.successors).foldl (fun acc t =>
+        if t < n then acc.modify t (b :: ·) else acc) acc)
+    (Array.replicate n [])
+
+/-- Blocks reachable from block 0. -/
+def reachable (f : Func) : Array Bool :=
+  let n := f.blocks.size
+  let rec go : Nat → List BlockId → Array Bool → Array Bool
+    | 0, _, seen => seen
+    | _, [], seen => seen
+    | k + 1, b :: rest, seen =>
+      let succs := match f.blocks[b]? with
+        | some blk => blk.terms.flatMap Term.successors
+        | none => []
+      let (seen', new) := succs.foldl (fun (s, new) t =>
+        if t < n && !(s[t]?.getD true) then (s.set! t true, new ++ [t]) else (s, new)) (seen, [])
+      go k (rest ++ new) seen'
+  go (n + 1) [0] ((Array.replicate n false).set! 0 true)
+
+/-- Dominator sets as bit masks over blocks, by rounds until nothing changes. -/
+def dominators (f : Func) (preds : Array (List BlockId)) : Array Nat :=
+  let n := f.blocks.size
+  let full := (1 <<< n) - 1
+  let rec go : Nat → Array Nat → Array Nat
+    | 0, d => d
+    | k + 1, d =>
+      let (d', ch) := (List.range n).foldl (fun (d, ch) b =>
+        if b = 0 then (d, ch)
+        else
+          let inter := (preds[b]?.getD []).foldl (fun acc p => acc &&& (d[p]?.getD 0)) full
+          let nd := inter ||| (1 <<< b)
+          if nd != (d[b]?.getD 0) then (d.set! b nd, true) else (d, ch)) (d, false)
+      if ch then go k d' else d'
+  go (n + 2) ((Array.replicate n full).set! 0 1)
+
+def checkCfg (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do
+  let n := f.blocks.size
+  for h : b in [0:n] do
+    let blk := f.blocks[b]
+    let terms := blk.terms
+    unless terms.length = 1 do
+      violation .v020 s!"{label}: block {b} has {terms.length} terminators, expected one"
+    if blk.lastTerm?.isNone then violation .v020 s!"{label}: block {b} does not end in its terminator"
+  -- Edge arguments against the parameters of the target.
+  let edgeOk (b : BlockId) (t : BlockId) (args : List ValueId) : Check Unit := do
+    let some tb := f.blocks[t]? | violation .v020 s!"{label}: block {b} branches outside the block table"
+    unless tb.params.length = args.length do
+      violation .v020 s!"{label}: the branch from block {b} to block {t} passes {args.length} arguments for {tb.params.length} parameters"
+    for (p, a) in tb.params.zip args do
+      unless vt[a]? == some (some p.2) do
+        violation .v020 s!"{label}: argument %{a} of the branch from block {b} to block {t} has another type than parameter %{p.1}"
+  for h : b in [0:n] do
+    match f.blocks[b].lastTerm? with
+    | some (.br t args) => edgeOk b t args
+    | some (.condbr _ t ta e ea) => do edgeOk b t ta; edgeOk b e ea
+    | _ => pure ()
+  let preds := predecessors f
+  unless (preds[0]?.getD []).isEmpty do
+    violation .v020 s!"{label}: the entry block has predecessors"
+  let seen := reachable f
+  for h : b in [0:n] do
+    unless seen[b]? == some true do violation .v020 s!"{label}: block {b} is not reachable from the entry"
+  -- Definitions dominate uses.
+  let dom := dominators f preds
+  let defAt := f.blocks.zipIdx.foldl (fun (acc : Array (Option (BlockId × Int))) (blk, b) =>
+    let acc := blk.params.foldl (fun acc (v, _) => acc.set! v (some (b, -1))) acc
+    (blk.insts.zipIdx).foldl (fun acc (i, k) =>
+      match i with
+      | .def r _ => acc.set! r (some (b, (k : Int)))
+      | _ => acc) acc) (Array.replicate f.numValues none)
+  for h : u in [0:n] do
+    for (i, k) in (f.blocks[u].insts).zipIdx do
+      for v in i.uses do
+        match defAt[v]? with
+        | some (some (db, dk)) =>
+          let ok := if db = u then decide (dk < (k : Int)) else (dom[u]?.getD 0).testBit db
+          unless ok do
+            violation .v020 s!"{label}: value %{v} is used in block {u} where its definition in block {db} does not dominate the use"
+        | _ => violation .v020 s!"{label}: value %{v} has no definition"
+
+/-! ### GIR-V030 and GIR-V040 -/
+
+/-- The first problem of each kind found while following the scopes entered
+along every path from the entry. -/
+structure ScopeWalk where
+  storage : Option String := none
+  scopes : Option String := none
+
+def ScopeWalk.noteStorage (w : ScopeWalk) (msg : String) : ScopeWalk :=
+  if w.storage.isNone then { w with storage := some msg } else w
+
+def ScopeWalk.noteScopes (w : ScopeWalk) (msg : String) : ScopeWalk :=
+  if w.scopes.isNone then { w with scopes := some msg } else w
+
+/-- Follow one block from the scopes entered on arrival; yields the scopes
+entered at its end. -/
+def walkBlock (f : Func) (b : BlockId) (blk : Block) (start : List ScopeId) (w : ScopeWalk) :
+    List ScopeId × ScopeWalk :=
+  let slotIn (s : SlotId) (stack : List ScopeId) (w : ScopeWalk) : ScopeWalk :=
+    match f.slots[s]? with
+    | some sl =>
+      if stack.contains sl.scope then w
+      else w.noteStorage s!"block {b}: the address of slot {s} is taken outside scope {sl.scope}"
+    | none => w
+  blk.insts.foldl (fun (stack, w) i =>
+    match i with
+    | .def _ (.slotAddr s) => (stack, slotIn s stack w)
+    | .eff (.slotInit s _ _) => (stack, slotIn s stack w)
+    | .eff (.enter sc) =>
+      let parent := f.scopes[sc]?.getD none
+      let ok := match parent, stack with
+        | some p, q :: _ => decide (p = q)
+        | none, [] => true
+        | _, _ => false
+      let w := if ok then w
+        else w.noteScopes s!"block {b}: scope {sc} is entered where its parent is not the innermost scope entered"
+      (sc :: stack, w)
+    | .eff (.leave sc) =>
+      match stack with
+      | q :: rest =>
+        if q = sc then (rest, w)
+        else (stack, w.noteScopes s!"block {b}: scope {sc} is left but scope {q} is the innermost entered")
+      | [] => (stack, w.noteScopes s!"block {b}: scope {sc} is left but none is entered")
+    | .term (.ret ..) =>
+      if stack.isEmpty then (stack, w)
+      else (stack, w.noteScopes s!"block {b}: return with scope {stack.head!} still entered")
+    | _ => (stack, w)) (start, w)
+
+def walkScopes (label : String) (f : Func) : ScopeWalk :=
+  let n := f.blocks.size
+  let rec go : Nat → List BlockId → Array (Option (List ScopeId)) → ScopeWalk → ScopeWalk
+    | 0, _, _, w => w
+    | _, [], _, w => w
+    | k + 1, b :: rest, entry, w =>
+      match f.blocks[b]?, entry[b]? with
+      | some blk, some (some st) =>
+        let (out, w) := walkBlock f b blk st w
+        let (entry, rest, w) := (blk.terms.flatMap Term.successors).foldl (fun (entry, rest, w) t =>
+          match entry[t]? with
+          | some none => (entry.set! t (some out), rest ++ [t], w)
+          | some (some st') =>
+            if st' == out then (entry, rest, w)
+            else (entry, rest, w.noteScopes s!"block {t} is reached with different scopes entered")
+          | none => (entry, rest, w)) (entry, rest, w)
+        go k rest entry w
+      | _, _ => go k rest entry w
+  let w := go (n + 1) [0] ((Array.replicate n none).set! 0 (some [])) {}
+  { storage := w.storage.map (s!"{label}: " ++ ·), scopes := w.scopes.map (s!"{label}: " ++ ·) }
+
+/-- Loads and stores of the right kind of storage, through the right kind of reference. -/
+def checkStorage (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do
+  let refOf (v : ValueId) : Option (Mutability × Ty) :=
+    match vt[v]? with
+    | some (some (.data (.ref m t))) => some (m, t)
+    | _ => none
+  for b in f.blocks do
+    for i in b.insts do
+      match i with
+      | .def _ (.load r) =>
+        match refOf r with
+        | some (_, t) => unless t.readable do violation .v030 s!"{label}: a load of a value that cannot be copied"
+        | none => pure ()
+      | .eff (.store r _ _) =>
+        match refOf r with
+        | some (m, t) =>
+          unless m == .mutable do violation .v030 s!"{label}: a store through a read-only reference"
+          unless t.readable do violation .v030 s!"{label}: a store of a value that cannot be copied"
+        | none => pure ()
+      | .def _ (.push r _ _) | .eff (.append r _ _) =>
+        match refOf r with
+        | some (m, _) => unless m == .mutable do violation .v030 s!"{label}: growth through a read-only reference"
+        | none => pure ()
+      | _ => pure ()
+
+/-! ### GIR-V050 and GIR-V100 -/
+
+def checkOrigins (label : String) (f : Func) : Check Unit := do
+  for b in f.blocks do
+    for i in b.insts do
+      if i.needsOrigin && i.origin.isNone then
+        violation .v100 s!"{label}: an operation that can abort or stands for a statement has no origin"
+
+/-! ### The module -/
+
+structure FnInfo where
+  label : String
+  f : Func
+  vt : Array (Option VTy)
+
+def validate (m : Module) : Check Unit := do
+  checkEntryAndGlobals m
+  let all : List (String × Func) :=
+    (m.funcs.toList.map fun f => (s!"function {f.name}", f)) ++
+    (m.globals.toList.map fun g => (s!"initializer of global {g.name}", g.init))
+  for (l, f) in all do checkSymbols m l f
+  let infos := all.map fun (l, f) => FnInfo.mk l f (f.valueTypes m)
+  for i in infos do checkTypes m i.label i.f i.vt
+  for i in infos do checkCfg i.label i.f i.vt
+  let walks := infos.map fun i => walkScopes i.label i.f
+  for i in infos, w in walks do
+    if let some msg := w.storage then violation .v030 msg
+    checkStorage i.label i.f i.vt
+  for w in walks do
+    if let some msg := w.scopes then violation .v040 msg
+  -- Summaries are closed over what each body does, with each callee's own summary.
+  let vts := (infos.take m.funcs.size).map (·.vt) |>.toArray
+  let res := resultRoots m vts
+  let nRoots := m.globals.size + m.funcs.foldl (fun n f => n + f.params.length + f.slots.size) 0
+  for h : k in [0:m.funcs.size] do
+    let f := m.funcs[k]
+    let vt := vts[k]?.getD #[]
+    let eff := f.effects m (f.provenance res vt nRoots)
+    asCheck .v050 s!"function {f.name}" (f.summaryClosed eff)
+  for i in infos do checkOrigins i.label i.f
+
+end Goose.GIR
