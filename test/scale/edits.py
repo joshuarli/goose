@@ -384,6 +384,8 @@ DEPENDENCY_EDITS = {e.id: e for e in (
     DepEdit("D26", "a nested function that is passed on stops naming a variable of its parent"),
     DepEdit("D27", "the function a handler runs is renamed: a return from it to the handler "
                    "must not change"),
+    DepEdit("D28", "the call that sets a global slice is no longer made before the function "
+                   "that reads it: the reader finds it unset"),
     DepEdit("D25", "an overload added in the namespace of a caller, with the same parameter "
                    "types as the one it called"),
 )}
@@ -604,12 +606,20 @@ class DepTargets(Member):
                 "    return errs.len;",
                 "}"]
 
+        # D28: a global slice points where the last store put it, as far as
+        # the checker has seen; the reader is checked after the setter only
+        # while main calls the setter first.
+        out += ["var dt_ints: i64[>..] = [258];",
+                "var dt_view: const u8[:] = \"x\";",
+                "fn dt_over(n: i64) -> i64 { dt_view = bytes_of(dt_ints); return n; }",
+                "fn dt_over_user(n: i64) -> i64 { let v = dt_view; return v.len; }"]
+
         # The embedded file, read in a body.
         out += ['fn dt_embed_direct(n: i64) -> i64 { let t = embed_file("ed_embed.txt"); return t.len; }']
         return out
 
     CALLS = ("dtns::dt_shadow_user", "dt_shadow_other", "dt_cand_user", "dt_pair_user", "dt_size_user",
-             "dt_pick_user", "dt_grow_user", "dt_handled", "dt_ping", "dt_global_user", "dt_capture_user",
+             "dt_pick_user", "dt_grow_user", "dt_handled", "dt_over", "dt_over_user", "dt_ping", "dt_global_user", "dt_capture_user",
              "dt_block_user", "dt_def_user", "dt_defstruct_user", "dt_alias_user",
              "dt_enum_user", "dt_order_a", "dt_order_b", "dt_late_user", "dt_noret_user",
              "dt_comment_user", "dt_embed_direct", "dt_fv_user", "dt_inferred_user",
@@ -617,7 +627,8 @@ class DepTargets(Member):
              "dt_nested_user")
 
     def body(self):
-        return [f"print({name}(0));" for name in self.CALLS]
+        calls = [n for n in self.CALLS if not (n == "dt_over" and self.is_("D28"))]
+        return [f"print({name}(0));" for name in calls]
 
     def output(self):
         # The program is compiled, never run, by the dependency tests.
