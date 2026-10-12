@@ -17,6 +17,12 @@ namespace Goose.Share
 
 open Goose.Core
 
+/-- The module with every context's declaration key and root annotations
+removed. -/
+def eraseRoots (m : Module) : Module :=
+  { m with contexts := m.contexts.map fun c =>
+      { impl := c.impl, decl := "", varRoots := [], resultRoots := [] } }
+
 /-- The implementation that a call naming context `c` runs. A missing context
 and a context naming a missing implementation both make the call unbound. -/
 def resolve (m : Module) (c : ContextId) : Option Impl :=
