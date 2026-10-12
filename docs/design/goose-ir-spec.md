@@ -163,7 +163,7 @@ Abort kinds and the runtime text they correspond to: `div_zero` (`division by ze
 |---|---|
 | `V-TYPE` | Every expression, place and statement is well typed; conversions are legal; arities match. |
 | `V-MUT` | Writes go through `mut` places; `let` variables are not reassigned; `rebind` targets a `var` of reference or slice type. |
-| `V-ROOT` | A value with root set ρ may initialize, be assigned to, or rebind variable `r` only if ρ ⊆ roots(`r`) and every member of ρ outlives `r`. `param i` and globals outlive every local. A local `y` outlives `r` when `y`'s scope is `r`'s scope with `y` declared first, or an enclosing scope in the same implementation. |
+| `V-ROOT` | A value with root set ρ may initialize, be assigned to, or rebind variable `r` only if ρ ⊆ roots(`r`) and every member of ρ outlives `r`. `param i` and globals outlive every local. A local `y` outlives `r` when `y`'s scope is `r`'s scope or an enclosing scope in the same implementation. Declaration order within one scope does not matter: a scope's variables all end together, and the language allows a `var` reference to be rebound to a later-declared variable of its own scope. |
 | `V-BLOCK` | The value of a block or `ifE` is not rooted at a variable declared inside it. |
 | `V-RESULT` | A returned reference or slice is rooted only at `param i` or globals, within the declared result roots. |
 | `V-CALL` | At a call, each `param i` in the callee context's result roots is replaced by the actual argument's roots; the argument's mutability satisfies the parameter's. |

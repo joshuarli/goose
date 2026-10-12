@@ -297,12 +297,17 @@ The linter builds its facts from the checked program before optimization and spa
 *(append-only; one line per judgment call: the call and why)*
 
 - Aincrad3's core entry imports a source file that its build generates and does not track. Copied it from the checkout's existing staged build output instead of running its generator, which reads another private repository: reading the checkout is within O5, the generator's input is not.
+- `V-ROOT` no longer requires a same-scope root to be declared first. The compiler accepts rebinding a reference to a later-declared variable of its own scope, and that is safe because a scope's variables end together; the stricter rule would have rejected valid programs for no safety gain.
+- Unary minus on an unsigned type is a compile error in Goose. The numeric model keeps a total definition for it; the Lean validator rejects it under `V-TYPE`.
 - The checker already groups roots into classes: one helper called with many distinct globals and many locals at different depths gets two specializations, not one per call site. The synthetic family therefore has to vary the dimensions that do multiply specializations; `B1`'s dimension attribution on Aincrad3 says which those are, and `B5` builds its members from that.
 
 ## 13. Campaign log
 
 *(append-only; one line per gate or phase end)*
 
+- `T0` merged: 41 numeric theorems pass the audit; 1,224 generated cases agree with the base compiler in release and debug.
+- `B5` part 1 merged: findings on what multiplies specializations (`test/scale/README.md`), the synthetic family, 16 source-edit cases passing on the single-file path.
+- `S3` part 1 merged: 54 runnable pilot fixtures and 7 rejections passing on the legacy pipeline; harness and fuzz-driver stages tested against fake tools only.
 - `G0` merged: runner filter and extra-argument option; default log identical to the old runner's; baseline status recorded in §3.
 - `G1` merged: Lake project with a build-time axiom audit, the `goose-core/0.2` tag table (specification §12.1), three goldens. P0 complete.
 - `G2` merged: `test/scale/gen.py` (issue #9's program, parameterized) and `test/scale/parity.py` (1,120 emissions compared; base against itself equal, `--no-bce` differs in 696).
