@@ -92,11 +92,11 @@ The executor decides within the bound, takes the smallest reversible option, and
 | Fact | Value |
 |---|---|
 | Host | Alpine Linux, musl, x86_64, 32 cores, 60 GB; Clang 23.1.3, GCC 15.2.0, CMake 4.3.4; Lean 4.34.1. |
-| Known failures | Not yet recorded; item `G0` runs the suites and writes them here. |
-| Loop timings | **perf gate deferred: host busy.** Item `G0` records them. |
+| Known failures | Baseline suite: 8 failing checks, all the same cause. `native_stack_overflow` and `render_reference_cycle` do not print the expected native-stack-overflow diagnostic on this host, at `-O0` and `-O2`, native and JIT. Skips: 31 audio, gfx, physics and ui fixtures and 5 such samples (layers not built), 17 fixtures and one sample the JIT cannot run. Linter suite and the fuzz self-tests (89) pass. |
+| Loop timings | **perf gate deferred: host busy.** On the busy host, as orders of magnitude only: one fixture with `--only` about 2 s; the full baseline suite about 37 s; the linter suite about 5 s; a clean `lake build` of the skeleton a few seconds. No loop command is near the 5-minute threshold. |
 | Compiler build peak memory | About 2 GB for the largest process of a Debug build. |
 | Phase timing in the compiler | None exists. |
-| Single-fixture filter in `test/run_tests.py` | None exists; `G0` adds it. |
+| Single-fixture filter in `test/run_tests.py` | `--only GLOB` (fixtures by `category/stem`, extras as `extra/NAME`) and `--goose-arg ARG` (every fixture and sample compile; not the bootstrap, the emitted-C shape checks, or the lexer and shader probes). |
 | Aincrad3 | Available. Commit `ef1e1ef33b96fa68748e4ecf3cad37153a4de59c`, extracted to `.work/aincrad3`; its one generated source file is copied from the checkout's own staged build output. Entry point `src/world-core-continue.goose`. `goose --check` (Debug compiler, `-O1`) reports 14,642 specializations, 8,861 inlined calls, and a 1.5 GB compiler peak. Not a timing baseline. |
 | Historical figures (issue #9, 2026-10-11) | 14,575 specializations typechecked; 66,026,053 bytes of C; standalone emission median 43.150 s. Emission only: not native compilation, linking or runtime. Not a baseline; `B1` remeasures. |
 | Frozen budgets | The proposed values of validation plan §11, to be replaced here by `B1`. |
@@ -303,6 +303,8 @@ The linter builds its facts from the checked program before optimization and spa
 
 *(append-only; one line per gate or phase end)*
 
+- `G0` merged: runner filter and extra-argument option; default log identical to the old runner's; baseline status recorded in §3.
+- `G1` merged: Lake project with a build-time axiom audit, the `goose-core/0.2` tag table (specification §12.1), three goldens. P0 complete.
 - `G2` merged: `test/scale/gen.py` (issue #9's program, parameterized) and `test/scale/parity.py` (1,120 emissions compared; base against itself equal, `--no-bce` differs in 696).
 
 ## 14. For the owner afterwards
