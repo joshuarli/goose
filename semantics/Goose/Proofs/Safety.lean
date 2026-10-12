@@ -148,8 +148,8 @@ theorem run_spec (hm : ModOk m) (prof : NumProfile) (fuel : Nat) :
   rintro v s2 ⟨hi2, _, _, _⟩
   exact hi2
 
-/-- `TH-SAFE-01`: a module `validate` accepts never faults, at any fuel and in
-either numeric profile. -/
+/-- A module `validate` accepts never faults, at any fuel and in either numeric
+profile. -/
 theorem validated_never_faults (m : Module) (h : validate m = .ok ()) :
     ∀ (fuel : Nat) (profile : NumProfile) (kind : FaultKind), eval fuel profile m ≠ .fault kind := by
   intro fuel profile kind
@@ -161,5 +161,77 @@ theorem validated_never_faults (m : Module) (h : validate m = .ok ()) :
   | stop e s =>
     rw [hr] at hs
     cases e <;> simp_all
+
+theorem validated_faultFree (m : Module) (h : validate m = .ok ()) : FaultFree m :=
+  fun n p k => validated_never_faults m h n p k
+
+/-- What acceptance means for the stores, values and locations of a run, with
+every global initialized: any context of an accepted module, entered from any
+store that satisfies the store invariant, with arguments of the parameters'
+types that point into the roots `P` gives each parameter and into the
+context's annotation of it, does not fault; it leaves the store invariant
+true, every typed location typed and every stored reference of the caller in
+place; and what it returns has the result type and points only into the roots
+the context declares for the result. -/
+theorem validated_context_sound (m : Module) (h : validate m = .ok ()) (profile : NumProfile)
+    (fuel : Nat) (P : Nat → RootInst → Prop) (depth : Nat) (c : ContextId) (vals : List Val) (s : St)
+    (ctx : Context) (impl : Impl) (hc : m.contexts[c]? = some ctx)
+    (hi : m.impls[ctx.impl]? = some impl) (hinv : StoreInv m m.globals.size s)
+    (hlen : vals.length = impl.params.size)
+    (hargs : ∀ i v, vals[i]? = some v → ∃ lv, impl.vars[i]? = some lv ∧
+      HasTy m m.globals.size s.store v lv.ty ∧
+      ∀ r, Targets v r → ∃ ann, (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann ∧
+        Gam noEnv P ann r)
+    (hage : ∀ i a si x, P i (.local a si x) → si < s.nextScope) :
+    Sat (enterCall fuel ⟨profile, m⟩ depth c vals) s (fun v s' =>
+      StoreInv m m.globals.size s' ∧ Ext [] s s' ∧
+      ((impl.results.toList = [] ∧ v = .unit) ∨
+        ∃ t, impl.results.toList = [t] ∧ HasTy m m.globals.size s'.store v t) ∧
+      ∀ r, Targets v r → ∃ declared, ctx.resultRoots = [declared] ∧ Gam noEnv P declared r) :=
+  (specs_all (validate_modOk m h) profile fuel).call _ P depth c vals s ctx impl hc hi hinv hlen
+    hargs hage (Or.inl (Nat.le_refl _))
+
+/-- The statement the safety proof inducts with: on code of an accepted
+module, each of the fourteen evaluation functions, at every fuel, does not
+fault and keeps the frame invariant, and with it the store invariant, true.
+Block exit is the `block` component: after a block's roots are released the
+frame of the code around it holds again. -/
+theorem validated_steps_keep_invariant (m : Module) (h : validate m = .ok ())
+    (profile : NumProfile) : ∀ fuel, Specs m profile fuel :=
+  specs_all (validate_modOk m h) profile
+
+/-- With every global initialized, the store invariant gives the live-reference
+invariant: every reference or slice a root holds denotes a typed location or a
+run inside a typed array. -/
+theorem liveRefs_of_storeInv {s : St} (h : StoreInv m m.globals.size s) : LiveRefs s.store := by
+  intro r v hv
+  have hh := h.live r v hv
+  cases v <;> simp only [Held, HeldOk] at hh ⊢
+  · obtain ⟨T, hT, hl⟩ := hh
+    refine ⟨T, hT, ?_⟩
+    rcases hl with hl | ⟨g, gl, hG, _, hg, _⟩
+    · exact hl
+    · have := (Array.getElem?_eq_some_iff.1 hg).1
+      omega
+  · obtain ⟨E, v0, es, hr, hes, hn, hT⟩ := hh
+    refine ⟨E, ?_⟩
+    rcases hT with hT | ⟨k, hT⟩
+    · cases v0 <;> simp only [FlatTy] at hT
+      simp only [Val.elems?, Option.some.injEq] at hes
+      subst hes
+      exact Or.inr ⟨⟨_, hr, by simpa [FlatTy] using hT⟩, _, _, hr, hn⟩
+    · cases v0 <;> simp only [FlatTy] at hT
+      simp only [Val.elems?, Option.some.injEq] at hes
+      subst hes
+      exact Or.inl ⟨k, ⟨_, hr, by simpa [FlatTy] using hT⟩, by omega⟩
+
+/-- A run of an accepted module that ends leaves every stored reference live. -/
+theorem validated_run_keeps_live_refs (m : Module) (h : validate m = .ok ()) (fuel : Nat)
+    (profile : NumProfile) (a : Unit) (s : St)
+    (hr : runModule fuel ⟨profile, m⟩ St.initial = .ok a s) : LiveRefs s.store := by
+  have hs := run_spec (validate_modOk m h) profile fuel
+  unfold Sat at hs
+  rw [hr] at hs
+  exact liveRefs_of_storeInv hs
 
 end Goose.Proofs.Safety

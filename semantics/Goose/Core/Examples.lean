@@ -144,4 +144,11 @@ def m_v_call_init_param : String := r##"["module","goose-core/0.2","core-pilot",
 #guard check {} m_v_call_init_param r##"["rejected","V-CALL","initializer of global b reaches global 1, which is not initialized before it"]"## 5
 #guard check { validate := false } m_v_call_init_param r##"["fault","dangling_root"]"## 4
 
+/-- An initializer calls a function whose summary hides a read of a later
+global: only the summary rule rejects it. -/
+def m_v_summary_init : String := r##"["module","goose-core/0.2","core-pilot",[["file","summary_hides_later_global.goose"]],[["int","i64"]],[["global","a",0,"var",["e_call",1,[],1],0],["global","b",0,"var",["e_lit",0,"1"],0]],[["impl","f",[],[0],[],["block",0,[["s_ret",[["e_read",["p_global",1]]],2]],[]],["summary",[],[],[],[],0,0]],["impl","main",[],[],[],["block",0,[],[]],["summary",[],[],[],[],0,0]]],[["context",1,"main::main()",[],[]],["context",0,"main::f()",[],[[]]]],0,[["origin",0,1,"global"],["origin",0,1,"call"],["origin",0,4,"return"]]]"##
+
+#guard check {} m_v_summary_init r##"["rejected","V-SUMMARY","f reads global 1, which its summary omits"]"## 5
+#guard check { validate := false } m_v_summary_init r##"["fault","dangling_root"]"## 4
+
 end Goose.Core.Examples

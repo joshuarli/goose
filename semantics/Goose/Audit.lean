@@ -7,6 +7,7 @@ import Goose.GIR.Sound
 import Goose.Proofs.Fuel
 import Goose.Proofs.Memory
 import Goose.Proofs.Core
+import Goose.Proofs.Safety
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -160,5 +161,13 @@ end Goose.Audit
 #audit Goose.Proofs.Lower.lower_correct_straight
 #audit Goose.GIR.validate_sound
 #audit Goose.GIR.validated_scalar_safe
+
+#audit Goose.Core.Sound.validate_modOk
+#audit Goose.Core.Sound.specs_all
+#audit Goose.Proofs.Safety.validated_context_sound
+#audit Goose.Proofs.Safety.validated_steps_keep_invariant
+#audit Goose.Proofs.Safety.validated_run_keeps_live_refs
+#audit Goose.Proofs.Safety.validated_never_faults
+#audit Goose.Proofs.Safety.validated_faultFree
 
 #audit_registry
