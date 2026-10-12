@@ -300,4 +300,54 @@ struct CoreModule {
     }
 };
 
+// Calls f on every expression of a block, outer before inner, in evaluation
+// order: those nested in places, views, bounds, arguments and arms included.
+inline void CoreVisitExprs(const CoreBlock &b, const function<void(const CoreExpr &)> &f);
+
+inline void CoreVisitExprs(const CoreExpr &e, const function<void(const CoreExpr &)> &f);
+
+inline void CoreVisitExprs(const CorePlace &p, const function<void(const CoreExpr &)> &f) {
+    if (p.kind == CorePlace::Deref) CoreVisitExprs(*p.expr, f);
+    if (p.kind == CorePlace::Elem) {
+        if (p.view->kind == CoreView::Of) CoreVisitExprs(*p.view->place, f);
+        else CoreVisitExprs(*p.view->expr, f);
+        CoreVisitExprs(*p.expr, f);
+    }
+}
+
+inline void CoreVisitExprs(const CoreView &v, const function<void(const CoreExpr &)> &f) {
+    if (v.kind == CoreView::Of) CoreVisitExprs(*v.place, f);
+    else CoreVisitExprs(*v.expr, f);
+}
+
+inline void CoreVisitExprs(const CoreExpr &e, const function<void(const CoreExpr &)> &f) {
+    f(e);
+    if (e.place) CoreVisitExprs(*e.place, f);
+    if (e.view) CoreVisitExprs(*e.view, f);
+    if (e.lo.expr) CoreVisitExprs(*e.lo.expr, f);
+    if (e.hi.expr) CoreVisitExprs(*e.hi.expr, f);
+    if (e.a) CoreVisitExprs(*e.a, f);
+    if (e.b) CoreVisitExprs(*e.b, f);
+    for (auto &a : e.args) {
+        if (a.expr) CoreVisitExprs(*a.expr, f);
+        if (a.place) CoreVisitExprs(*a.place, f);
+    }
+    for (auto &el : e.elems) CoreVisitExprs(*el, f);
+    if (e.then) CoreVisitExprs(*e.then, f);
+    if (e.otherwise) CoreVisitExprs(*e.otherwise, f);
+}
+
+inline void CoreVisitExprs(const CoreBlock &b, const function<void(const CoreExpr &)> &f) {
+    for (auto &s : b.stmts) {
+        if (s.place) CoreVisitExprs(*s.place, f);
+        if (s.view) CoreVisitExprs(*s.view, f);
+        if (s.expr) CoreVisitExprs(*s.expr, f);
+        if (s.expr2) CoreVisitExprs(*s.expr2, f);
+        for (auto &a : s.print) if (!a.text) CoreVisitExprs(*a.expr, f);
+        if (s.then) CoreVisitExprs(*s.then, f);
+        if (s.otherwise) CoreVisitExprs(*s.otherwise, f);
+    }
+    if (b.value) CoreVisitExprs(*b.value, f);
+}
+
 }  // namespace goose
