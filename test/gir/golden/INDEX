@@ -23,3 +23,4 @@ gir_rec_small	test/gir/golden/gir_rec_small.core.json	["agree",["done",["returne
 gir_slice_oob	test/gir/golden/gir_slice_oob.core.json	["agree",["done",["aborted","slice_oob",3],""]]	["agree",["done",["aborted","slice_oob",3],""]]
 gir_user_abort	test/gir/golden/gir_user_abort.core.json	["agree",["done",["aborted","user_abort",2],""]]	["agree",["done",["aborted","user_abort",2],""]]
 gir_const_refs	test/gir/golden/gir_const_refs.core.json	["agree",["done",["returned"],"6\n1\n2\n3\n6 6 2 3\n"]]	["agree",["done",["returned"],"6\n1\n2\n3\n6 6 2 3\n"]]
+gir_long_loop	test/gir/golden/gir_long_loop.core.json	["agree",["done",["returned"],"300000\n"]]	["agree",["done",["returned"],"300000\n"]]
