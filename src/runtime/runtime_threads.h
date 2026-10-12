@@ -111,7 +111,7 @@ static void *gs_thread_main(void *p)
 {
     gs_thread *t = (gs_thread *)p;
     gs_regions_begin(gs_workerregions);
-    gs_native_stack_init();
+    gs_native_stack_init(0);
     gs_current_thread_id = t->id;
     t->run(t->entry, t->args);
     free(t->args);

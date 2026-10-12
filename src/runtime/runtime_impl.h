@@ -283,7 +283,8 @@ static void gs_regions_init(void) {
 
 /* Run by each thread program's thread as it starts. TinyCC's kernel32.def
    does not list SetThreadStackGuarantee, so a program it builds looks it up. */
-static void gs_native_stack_init(void) {
+static void gs_native_stack_init(int primordial) {
+    (void)primordial;
     ULONG room = GS_STACK_GUARANTEE;
     #ifdef __TINYC__
         BOOL (WINAPI *guarantee)(PULONG) = (BOOL (WINAPI *)(PULONG))GetProcAddress(
@@ -311,6 +312,7 @@ static void gs_release_region(const gs_region *r) {
 #else  /* posix */
 
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
@@ -377,8 +379,11 @@ static size_t gs_sigstack_size(void) {
 
 /* Run by each thread program's thread as it starts: an alternate stack for
    the fault handler, unless the thread has one (ASan gives every thread its
-   own), and the bounds of the thread's stack. */
-static void gs_native_stack_init(void) {
+   own), and the bounds of the thread's stack. The primordial thread's stack
+   grows on demand up to the stack limit, and not every libc reports that
+   limit: musl's pthread_getattr_np gives only what is mapped so far, so the
+   limit is taken from getrlimit, as glibc does. */
+static void gs_native_stack_init(int primordial) {
     stack_t ss;
     uintptr_t lo = 0, hi = 0;
     if (!sigaltstack(NULL, &ss) && (ss.ss_flags & SS_DISABLE)) {
@@ -401,6 +406,12 @@ static void gs_native_stack_init(void) {
                 hi = lo + size;
             }
             pthread_attr_destroy(&attr);
+        }
+        if (primordial && hi) {
+            struct rlimit rl;
+            if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur != RLIM_INFINITY &&
+                rl.rlim_cur > hi - lo && rl.rlim_cur < hi)
+                lo = hi - (uintptr_t)rl.rlim_cur;
         }
     #endif
     if (lo > GS_NATIVE_SLOP) {
@@ -1161,7 +1172,7 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     setvbuf(stdout, NULL, _IONBF, 0);
     gs_regions_init();
     gs_regions_begin(mainregions);
-    gs_native_stack_init();
+    gs_native_stack_init(1);
     gs_scan_init();
 }
 

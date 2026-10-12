@@ -1317,7 +1317,8 @@ static void gs_regions_init(void) {
 
 /* Run by each thread program's thread as it starts. TinyCC's kernel32.def
    does not list SetThreadStackGuarantee, so a program it builds looks it up. */
-static void gs_native_stack_init(void) {
+static void gs_native_stack_init(int primordial) {
+    (void)primordial;
     ULONG room = GS_STACK_GUARANTEE;
     #ifdef __TINYC__
         BOOL (WINAPI *guarantee)(PULONG) = (BOOL (WINAPI *)(PULONG))GetProcAddress(
@@ -1345,6 +1346,7 @@ static void gs_release_region(const gs_region *r) {
 #else  /* posix */
 
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
@@ -1411,8 +1413,11 @@ static size_t gs_sigstack_size(void) {
 
 /* Run by each thread program's thread as it starts: an alternate stack for
    the fault handler, unless the thread has one (ASan gives every thread its
-   own), and the bounds of the thread's stack. */
-static void gs_native_stack_init(void) {
+   own), and the bounds of the thread's stack. The primordial thread's stack
+   grows on demand up to the stack limit, and not every libc reports that
+   limit: musl's pthread_getattr_np gives only what is mapped so far, so the
+   limit is taken from getrlimit, as glibc does. */
+static void gs_native_stack_init(int primordial) {
     stack_t ss;
     uintptr_t lo = 0, hi = 0;
     if (!sigaltstack(NULL, &ss) && (ss.ss_flags & SS_DISABLE)) {
@@ -1436,6 +1441,13 @@ static void gs_native_stack_init(void) {
             }
             pthread_attr_destroy(&attr);
         }
+)GSRT"
+R"GSRT(        if (primordial && hi) {
+            struct rlimit rl;
+            if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur != RLIM_INFINITY &&
+                rl.rlim_cur > hi - lo && rl.rlim_cur < hi)
+                lo = hi - (uintptr_t)rl.rlim_cur;
+        }
     #endif
     if (lo > GS_NATIVE_SLOP) {
         gs_native_lo = lo - GS_NATIVE_SLOP;
@@ -1449,8 +1461,7 @@ static void gs_native_stack_free(void) {
     stack_t ss;
     if (!gs_sigstack) return;
     memset(&ss, 0, sizeof(ss));
-)GSRT"
-R"GSRT(    ss.ss_flags = SS_DISABLE;
+    ss.ss_flags = SS_DISABLE;
     ss.ss_size = gs_sigstack_size();
     sigaltstack(&ss, NULL);
     free(gs_sigstack);
@@ -1644,7 +1655,8 @@ static int gs_sp_nextleaf(gs_sppath *p) {
 static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
     int64_t r = gs_sp_newnode(p);
     gs_spinner *rn = GS_SPINNER(p, r);
-    rn->n = 2;
+)GSRT"
+R"GSRT(    rn->n = 2;
     rn->key[0] = gs_sp_key(p, a, leaf);
     rn->max[0] = gs_sp_max(p, a, leaf);
     rn->child[0] = a;
@@ -1660,8 +1672,7 @@ static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
 static void gs_sp_addchild(gs_sppath *p, int64_t l, int64_t k, int64_t child, int leaf) {
     for (;;) {
         gs_spinner *in = GS_SPINNER(p, p->node[l]), *o = in;
-)GSRT"
-R"GSRT(        int64_t key = gs_sp_key(p, child, leaf), max = gs_sp_max(p, child, leaf), s = k, nn = 0;
+        int64_t key = gs_sp_key(p, child, leaf), max = gs_sp_max(p, child, leaf), s = k, nn = 0;
         if (in->n == GS_SPAN_FAN) {
             int64_t half = GS_SPAN_FAN / 2;
             gs_spinner *r;
@@ -1885,7 +1896,8 @@ GS_API void gs_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx,
     p.top = top;
     if (*n == 0) {
         gs_sphead *hd = (gs_sphead *)base;
-        *n = 1;
+)GSRT"
+R"GSRT(        *n = 1;
         *top = base + GS_SPAN_NODE;
         hd->chain = 0;
         hd->height = 0;
@@ -1900,8 +1912,7 @@ GS_API void gs_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx,
    difference or reaches the end of the array; otherwise the slice's
    elements go back on the freelist and the run goes where alloc_slice
    places one of cnt elements. The span after the slice is the one after
-)GSRT"
-R"GSRT(   the last span before it, so one descent finds both what growth takes
+   the last span before it, so one descent finds both what growth takes
    from and what the elements merge with. */
 GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t len,
                                int64_t idx, int64_t ol, int64_t cnt) {
@@ -2073,15 +2084,15 @@ static GS_SSSE3 GS_INLINE __m128i gs_bsm_tables(const gs_bsm *m, __m128i x) {
     int64_t i = 0;                                                                     \
     unsigned k;                                                                        \
     for (; i + 16 <= np; i += 16) {                                                    \
-        k = (unsigned)_mm_movemask_epi8(                                               \
+)GSRT"
+R"GSRT(        k = (unsigned)_mm_movemask_epi8(                                               \
             _mm_and_si128(TESTA(GS_LOAD(p + i)), TESTB(GS_LOAD(p + i + d))));          \
         if (k) return i + gs_ctz32(k);                                                 \
     }                                                                                  \
     if (i == np) return -1;                                                            \
     k = (unsigned)_mm_movemask_epi8(_mm_and_si128(TESTA(GS_LOAD(p + np - 16)),         \
                                                   TESTB(GS_LOAD(p + np - 16 + d))))    \
-)GSRT"
-R"GSRT(        >> (16 - (np - i));                                                            \
+        >> (16 - (np - i));                                                            \
     return k ? i + gs_ctz32(k) : -1;
 
 #define GS_TEST_S(x) gs_bsm_test(&ms, ks, x)
@@ -2199,7 +2210,7 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     setvbuf(stdout, NULL, _IONBF, 0);
     gs_regions_init();
     gs_regions_begin(mainregions);
-    gs_native_stack_init();
+    gs_native_stack_init(1);
     gs_scan_init();
 }
 
@@ -2264,7 +2275,8 @@ GS_API int64_t gs_fmt_i64(uint8_t *dst, int64_t v) {
 
    The numbers are naturals in 32-bit limbs, least significant first. The
    denominator s stays below 2^1079 (ten times 2^1075, for the smallest
-   doubles), and the others below eleven times s. */
+)GSRT"
+R"GSRT(   doubles), and the others below eleven times s. */
 typedef struct { int n; uint32_t d[36]; } gs_big;
 
 /* a = v << sh, for v > 0. */
@@ -2284,8 +2296,7 @@ static void gs_big_mul(gs_big *a, uint32_t m) {
     for (int i = 0; i < a->n; i++) {
         c += (uint64_t)a->d[i] * m;
         a->d[i] = (uint32_t)c;
-)GSRT"
-R"GSRT(        c >>= 32;
+        c >>= 32;
     }
     if (c) a->d[a->n++] = (uint32_t)c;
 }
@@ -2489,7 +2500,8 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
 }
 
 /* stdout is unbuffered (gs_rt_start), so every piece is its own write;
-   revisit if print throughput ever matters. */
+)GSRT"
+R"GSRT(   revisit if print throughput ever matters. */
 
 GS_API void gs_out_int(int64_t v) {
     uint8_t buf[GS_FMT_MAX];
@@ -2508,8 +2520,7 @@ GS_API void gs_out_f32(float v) {
     fwrite(buf, 1, (size_t)gs_fmt_f32(buf, v), stdout);
 }
 GS_API void gs_out_bool(int64_t v) { fputs(v ? "true" : "false", stdout); }
-)GSRT"
-R"GSRT(GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { fwrite(p, 1, (size_t)len, stdout); }
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { fwrite(p, 1, (size_t)len, stdout); }
 GS_API void gs_out_nl(void) { fputc('\n', stdout); }
 )GSRT"
     ) },
@@ -2627,7 +2638,7 @@ static void *gs_thread_main(void *p)
 {
     gs_thread *t = (gs_thread *)p;
     gs_regions_begin(gs_workerregions);
-    gs_native_stack_init();
+    gs_native_stack_init(0);
     gs_current_thread_id = t->id;
     t->run(t->entry, t->args);
     free(t->args);
