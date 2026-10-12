@@ -240,6 +240,20 @@ def callResultRoots (callee : Impl) (cctx : Context) (argRoots : List (List Root
     else pure []
   | _, _ => pure []
 
+/-- The roots of a value read from a place: a reference or slice variable
+yields its annotation, anything else a value that holds no reference. -/
+def readRoots (env : PEnv) : Place → P (List RootRef)
+  | .var x =>
+    match env.impl.vars[x]? with
+    | some lv =>
+      if lv.ty.isRefLike then
+        match env.ann x with
+        | some ann => pure ann
+        | none => rejP .root s!"variable {lv.name} has no root annotation"
+      else pure []
+    | none => pure []
+  | _ => pure []
+
 mutual
 
 def rpPlace (env : PEnv) : Place → P (List RootRef)
@@ -271,17 +285,7 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
   | .read p => do
     let rho ← rpPlace env p
     addReads rho
-    match p with
-    | .var x =>
-      match env.impl.vars[x]? with
-      | some lv =>
-        if lv.ty.isRefLike then
-          match env.ann x with
-          | some ann => pure ann
-          | none => rejP .root s!"variable {lv.name} has no root annotation"
-        else pure []
-      | none => pure []
-    | _ => pure []
+    readRoots env p
   | .ref _ p => rpPlace env p
   | .slice _ v lo hi _ => do
     let rho ← rpView env v

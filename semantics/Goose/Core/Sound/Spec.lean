@@ -279,4 +279,51 @@ structure Specs (n : Nat) : Prop where
 
 end Specs
 
+/-! ### What acceptance gives, per item of the module -/
+
+/-- The typing environment an implementation's body is checked in. -/
+def implEnv (m : Module) (impl : Impl) : TEnv :=
+  { mod := m, impl := some impl, vars := impl.vars, visible := List.range impl.params.size
+    loops := 0, inExpr := false, scopes := [], globalLimit := m.globals.size, initializing := none }
+
+/-- The typing environment a global's initializer is checked in. -/
+def initEnv (m : Module) (g : GlobalId) : TEnv :=
+  { mod := m, impl := none, vars := #[], visible := [], loops := 0, inExpr := true, scopes := []
+    globalLimit := g, initializing := some g }
+
+structure ImplOk (m : Module) (impl : Impl) : Prop where
+  params : ∀ (i : Nat) (p : Param), impl.params[i]? = some p → p.var = i ∧
+    ∃ lv : LocalVar, impl.vars[i]? = some lv ∧ lv.scope = 0 ∧ lv.ty.storable = true
+  bodyScope : impl.body.scope = 0
+  body : ∃ bodyTy tn, tyBlock (implEnv m impl) [] impl.body impl.params.size = .ok (bodyTy, tn) ∧
+    ((impl.results.toList = [] ∧ bodyTy = .unit) ∨
+      ∃ t, impl.results.toList = [t] ∧ (impl.body.value.isSome = true → bodyTy = t) ∧
+        (impl.body.value.isSome = false → impl.body.diverges = true))
+
+structure CtxOk (m : Module) (impl : Impl) (ctx : Context) : Prop where
+  paramAnn : ∀ (i : Nat) (ann : List RootRef), i < impl.params.size →
+    (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann →
+    ∀ q, q ∈ ann → q = .param i ∨ ∃ g, q = .global g
+  resultLen : ctx.resultRoots.length = impl.results.size
+  body : ∃ rho rng st, rpBlockValue ⟨m, impl, ctx, []⟩ [] impl.body ⟨impl.params.size, {}⟩ =
+      .ok ((rho, rng), st) ∧
+    (impl.body.value.isSome = true → checkResultV ⟨m, impl, ctx, []⟩ rho = .ok ()) ∧
+    checkSummary impl ctx st.eff = .ok ()
+
+structure GlobOk (m : Module) (g : GlobalId) (gl : Global) : Prop where
+  ty : gl.ty.storable = true ∧ gl.ty.isRefLike = false
+  init : ∃ tn, tyExpr (initEnv m g) gl.init 0 = .ok (gl.ty, tn)
+  roots : ∃ rho st, rpExpr ⟨m, initImpl, initContext, []⟩ gl.init ⟨0, {}⟩ = .ok (rho, st) ∧
+    st.eff.unknown = false ∧
+    ∀ t : Target, (t ∈ st.eff.reads ∨ t ∈ st.eff.writes ∨ t ∈ st.eff.grows) →
+      ∀ h, t = .global h → h < g
+
+/-- The facts the proof uses about an accepted module. -/
+structure ModOk (m : Module) : Prop where
+  impl : ∀ (i : Nat) (impl : Impl), m.impls[i]? = some impl → ImplOk m impl
+  ctx : ∀ (c : Nat) (ctx : Context), m.contexts[c]? = some ctx → ∃ impl, m.impls[ctx.impl]? = some impl ∧ CtxOk m impl ctx
+  glob : ∀ (g : Nat) (gl : Global), m.globals[g]? = some gl → GlobOk m g gl
+  entry : ∃ ctx impl, m.contexts[m.entry]? = some ctx ∧ m.impls[ctx.impl]? = some impl ∧
+    impl.params.size = 0 ∧ impl.results.toList = []
+
 end Goose.Core.Sound

@@ -301,4 +301,78 @@ theorem checkSummary_ok (impl : Impl) (ctx : Context) (eff : Eff)
   obtain ⟨hu, h1, h2, h3, _⟩ := h
   exact ⟨by simpa using hu, effWithin_ok _ _ _ _ h1, effWithin_ok _ _ _ _ h2, effWithin_ok _ _ _ _ h3⟩
 
+theorem checkInitCall_state (env : TEnv) (callee : Impl) (s : Nat) (r : Unit × Nat)
+    (h : checkInitCall env callee s = .ok r) : r.2 = s := by
+  unfold checkInitCall at h
+  cases hi : env.initializing with
+  | none => simp only [hi] at h; inv at h; rw [h]
+  | some gi =>
+    simp only [hi] at h
+    cases hs : callee.summary with
+    | unknown => simp only [hs] at h; inv at h
+    | known sm => simp only [hs] at h; inv at h; rw [h.2]
+
+@[chk] theorem callResultTy_ok (callee : Impl) (s : Nat) (r : Ty × Nat) :
+    callResultTy callee s = .ok r ↔
+      ((callee.results.toList = [] ∧ r.1 = .unit) ∨ callee.results.toList = [r.1]) ∧ r.2 = s := by
+  obtain ⟨t, s'⟩ := r
+  unfold callResultTy
+  generalize callee.results.toList = l
+  match l with
+  | [] => simp [st_pure_ok]
+  | [t'] =>
+    simp only [st_pure_ok, Prod.mk.injEq, List.cons.injEq, and_true, reduceCtorEq, false_and, false_or]
+    exact ⟨fun ⟨a, b⟩ => ⟨a.symm, b⟩, fun ⟨a, b⟩ => ⟨a.symm, b⟩⟩
+  | _ :: _ :: _ => simp [rej_ok]
+
+theorem loopRefTy_ok (env : TEnv) (x : VarId) (el : Ty) (mu : Bool) (s : Nat) (r : Ty × Nat)
+    (h : loopRefTy env x el mu s = .ok r) :
+    r.2 = s ∧ ∃ lv mx, env.vars[x]? = some lv ∧ lv.ty = .ref mx el ∧ r.1 = lv.ty := by
+  obtain ⟨t, s'⟩ := r
+  unfold loopRefTy at h
+  cases hv : env.vars[x]? with
+  | none => simp only [hv] at h; inv at h
+  | some lv =>
+    simp only [hv] at h
+    cases hty : lv.ty with
+    | ref mx t0 =>
+      simp only [hty] at h
+      inv at h
+      obtain ⟨he, h⟩ := h
+      have he' : t0 = el := by simpa using he
+      subst he'
+      rcases h with ⟨_, _, rfl, rfl⟩ | ⟨_, rfl, rfl⟩ <;> exact ⟨rfl, lv, mx, rfl, hty, hty.symm⟩
+    | _ => simp only [hty] at h; inv at h
+
+theorem readRoots_ok (env : PEnv) (p : Place) (s : RState) (r : List RootRef × RState)
+    (h : readRoots env p s = .ok r) :
+    r.2 = s ∧
+    ((∃ x lv, p = .var x ∧ env.impl.vars[x]? = some lv ∧ lv.ty.isRefLike = true ∧
+        env.ann x = some r.1) ∨
+      (r.1 = [] ∧ ∀ x lv, p = .var x → env.impl.vars[x]? = some lv → lv.ty.isRefLike = false)) := by
+  obtain ⟨rho, s'⟩ := r
+  cases p with
+  | var x =>
+    simp only [readRoots] at h
+    cases hv : env.impl.vars[x]? with
+    | none =>
+      simp only [hv] at h; inv at h
+      exact ⟨h.2, Or.inr ⟨h.1, fun x' lv e h' => by cases e; rw [hv] at h'; cases h'⟩⟩
+    | some lv =>
+      simp only [hv] at h
+      by_cases hr : lv.ty.isRefLike = true
+      · simp only [hr, if_true] at h
+        cases ha : env.ann x with
+        | none => simp only [ha] at h; inv at h
+        | some ann =>
+          simp only [ha] at h; inv at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨rfl, Or.inl ⟨x, lv, rfl, hv, hr, ha⟩⟩
+      · simp only [hr] at h; inv at h
+        exact ⟨h.2, Or.inr ⟨h.1, fun x' lv' e h' => by
+          cases e; rw [hv] at h'; cases h'; simpa using hr⟩⟩
+  | _ =>
+    simp only [readRoots] at h; inv at h
+    exact ⟨h.2, Or.inr ⟨h.1, fun x' lv e => by cases e⟩⟩
+
 end Goose.Core.Sound
