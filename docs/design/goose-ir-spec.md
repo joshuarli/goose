@@ -603,7 +603,9 @@ Every checked context is checked. Sharing merges emitted bodies after checking a
 
 Two instances share an implementation when their **canonical lowered bodies** are equal. The canonical lowered body is the instance's lowered form — C text on the legacy backend, GIR-L on the GIR backend — with its own symbol replaced by a placeholder and every callee named by its implementation. The check is structural equality of that form: bounded, decidable, and not an attempt at program equivalence. Two bodies that differ in one retained check, one inlined call or one source line are different.
 
-Classes are computed bottom-up over the call graph's strongly connected components. A self-call is a placeholder. For a component of several instances, members are ordered by `InstanceKey`, intra-component calls are replaced by member ordinals, and two components are equal when their ordered members are pairwise equal. A component in which two members have the same `DeclKey` and lowering key is not merged with any other.
+Classes are the coarsest partition of the instances that is **stable**: two instances are in one class only if their signatures are equal and their bodies are equal once each callee is replaced by its class. It is computed by refinement: start with instances grouped by signature, split any class whose members' bodies differ under the current classes, and repeat until nothing splits. The result does not depend on creation order, and it handles self-recursion and mutual recursion without a special case: two recursive groups merge exactly when their members correspond pairwise. A stable partition is precisely the premise of the sharing theorem (validation plan `TH-SHARE-01`).
+
+A reference from a body to anything that is per-instance and not itself merged — a helper, a thunk, a channel — is part of the body's text, which keeps such instances distinct.
 
 A class is named by the smallest link symbol among its members.
 

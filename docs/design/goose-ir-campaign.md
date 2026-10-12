@@ -227,6 +227,14 @@ Each change made is appended to §8.
 
 *(append-only; one line per change: what, where, why)*
 
+- `test/run_tests.py`: `--only GLOB` and `--goose-arg ARG`; `samples/run_samples.py`: `--goose-arg`. Loop repair and whole-suite runs under a new mode.
+- `goose --build-report FILE`: writes `goose-build-report/1`. Rejected with `--tokens`, `--dump`, `--parse`, `fetch` and `--multi-test`.
+- `goose --emit-core FILE`: writes a `goose-core/0.2` module for `core-pilot`, or fails with `error: unsupported in core-pilot: <feature-id>`.
+- `goose --share`: merges emitted functions with equal bodies. Default output unchanged without it.
+- `goose --stable-names` (hidden, not in the usage text): names emitted functions, types, literals and nonlocal-target ids from stable keys. A seam for unit output; not pre-authorized by name, added because unit output needs it testable on its own.
+- `goose-semantics` (new tool, test-time only): `audit`, `run`, `validate`.
+- `fuzz/driver.py`: `--semantics TOOL`, `--pipeline NAME`.
+
 ## 9. Non-goals and deferrals
 
 Dropped, not queued: LLVM emission; MLIR; a JIT change; memory SSA; stack sharing between slots; a C++ reader for Core or GIR; persistence of Core or GIR across compiler versions; a module or package system with separate checking; new language syntax; linter rule changes; CI changes.
@@ -321,6 +329,26 @@ What this says about the four costs:
 
 Consequences for the sequence: native-unit reuse (`B3`, `B4`) is the item that can change the edit loop most, since it applies to all 66 MB. Sharing (`B2`) is bounded at 29% of bytes on this workload. Inlining at `-O2` is a larger source of emitted code than specialization and is not addressed by sharing; a development build at a lower Goose `-O` level is the available lever and is measured in `B4`. Check time is the largest compiler phase and is multiplied about 2.3× by contexts, which is deferral `X1`'s subject.
 
+### 11.2 Sharing, first measurement
+
+Candidate `f37196b` rebased onto the upstream merge. Same environment and the same caveat: sizes and counts are exact, nothing here is a timing.
+
+Checks: the baseline suite passes with `--share`, with `--stable-names` and with both, apart from the two known reds; the synthetic families give exactly their expected implementation counts at `-O0` and `-O2` with every must-stay-distinct pair still distinct; emitted names under `--stable-names` survive an unrelated function, new specializations, a reorder, comments and a body edit; default output equals master-plus-upstream on 1,232 emissions.
+
+Aincrad3 core entry:
+
+| Goose level | Live bodies | Calls inlined | Emitted C | With `--share`: bodies | With `--share`: emitted C |
+|---|---|---|---|---|---|
+| `-O0` | 7,430 | 0 | 52.3 MB | not run | not run |
+| `-O1` | 5,213 | 8,861 | 56.3 MB | 4,438 | 47.4 MB (−15.8%) |
+| `-O2` | 4,701 | 24,307 | 66.6 MB | 4,079 | 56.5 MB (−15.2%) |
+
+- Sharing removes about 15% of emitted C on this workload, half of the 29% bound. Of the same-declaration bodies that did not merge at `-O2`, 181 differ in inlined calls, 98 in a callee, 23 otherwise, and none only in bounds-check sites. Sharing before optimization (`O2` in the sequence) would address the 181; its gate asks for 10% of emitted bytes, which the report does not yet express in bytes.
+- §11.1 overstated inlining. With no inlining at all the program is still 52 MB; inlining at `-O2` adds about 14 MB while removing 2,700 bodies. The bulk is the program itself.
+- No effect on check time, as designed: every context is still checked.
+
+Open from the first run, both resolved in `4fcc480`: the 266 indistinguishable contexts were a missing key dimension (a bound function value's environment was named by its base only), and report collection lost its repeated work. The paragraph below is kept as first written.
+
 Open from this run: 266 contexts are indistinguishable under every recorded key dimension, so the context key is not yet injective; and report collection costs more than the proposed 10%. Both go back to the `backend` lane.
 
 ## 12. Decision log
@@ -328,6 +356,8 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 *(append-only; one line per judgment call: the call and why)*
 
 - Aincrad3's core entry imports a source file that its build generates and does not track. Copied it from the checkout's existing staged build output instead of running its generator, which reads another private repository: reading the checkout is within O5, the generator's input is not.
+- Sharing classes are computed by partition refinement to a stable partition, not by ordering call-graph components as first specified. It merges a superset of what the component method would, is independent of creation order, needs no rule for unorderable components, and is exactly the congruence the sharing theorem assumes. Specification §16.2 now says so.
+- Nonlocal-target ids under stable naming come from the target's context key, not its declaration key: the legacy protocol distinguishes target specializations, and two contexts of one target need distinct ids.
 - A reference to a slice variable (a `T[:]&` parameter, or a captured slice variable after closure conversion) is outside `core-pilot` for now: the exporter reports it unsupported. Writing a slice through such a reference is a stored reference, which needs content roots in the annotation and in the safety invariant; adding that while the safety proof is in progress would move its target. It returns as item `S4` after `T1`, because the `order` fuzz lane relies on it.
 - `return`, `break` and `continue` inside an expression block are outside `core-pilot`: the Lean validator rejects them and the exporter reports them unsupported. Modelling them needs a body result threaded through expression evaluation, which the pilot's proofs do not need.
 - The GIR-H wire encoding is defined by the Lean lane, and the Lean lowering's output for each Core golden is the golden the C++ lowering must reproduce byte for byte. One reference lowering makes the C++ lowering instance-checkable by comparison instead of only by behaviour.
@@ -339,6 +369,7 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 
 *(append-only; one line per gate or phase end)*
 
+- `B2` merged: shared implementations and the stable naming seam in the legacy backend. `G-SHARE` holds except for its theorems, which lane `sem-share` is proving. Measurements in §11.2.
 - Upstream `1cfe4b6` (three commits, including the relative-reference null test fix and extern type emission) merged into the branch without touching running lanes. On the merged tree: baseline suite shows only the two known reds, linter suite passes, default output equals master-plus-upstream on 1,232 emissions.
 - `S2` merged: `--emit-core` reproduces the three goldens byte for byte. First run of the real harness: 49 fixtures agree, 8 mismatch, 1 unsupported; `scalar` and `numeric` fuzz lanes agree on 60 of 60. The mismatches are two disagreements between exporter and validator (what counts as a read in a summary; references to slice variables), sent back to the exporter lane.
 - `S1` merged: Lean Core for the pilot (decoder, interpreter, validator, `run` and `validate`); goldens agree in both numeric profiles; 39 malformed and rejected fixtures.
