@@ -46,6 +46,24 @@ private:
     size_t ci = 0;       // The implementation (and context) being walked.
     Effects *fx = nullptr;
 
+    // The lowered form of a module has no root annotations: a parameter is
+    // rooted at itself and a local at whatever flowed into it. The traversal
+    // can be run that way too (`flow`), so that the summary also contains what
+    // a validator of the lowered form finds.
+    bool flow = false;
+    vector<Roots> flowroots;
+    bool flowchanged = false;
+
+    void Bind(int var, const Roots &rho) {
+        if (!flow || !m.IsRefOrSlice(Impl().vars[var].type)) return;
+        auto &dst = flowroots[var];
+        for (auto &r : rho)
+            if (find(dst.begin(), dst.end(), r) == dst.end()) {
+                dst.push_back(r);
+                flowchanged = true;
+            }
+    }
+
     CoreImpl &Impl() { return m.impls[ci]; }
 
     static bool Same(const CoreSummary &a, const CoreSummary &b) {
@@ -67,6 +85,7 @@ private:
     }
 
     const Roots *Annotation(int var) {
+        if (flow) return &flowroots[var];
         for (auto &vr : m.contexts[ci].varroots)
             if (vr.first == var) return &vr.second;
         return nullptr;
@@ -82,11 +101,27 @@ private:
     CoreSummary Summarize(size_t i) {
         ci = i;
         Effects e;
+        flow = false;
         fx = &e;
         Block(Impl().body);
+        // Again as the lowered form is judged; what that finds is declared as
+        // found, and joins what the annotated traversal declares.
+        Effects g;
+        flow = true;
+        fx = &g;
+        flowroots.assign(Impl().vars.size(), Roots {});
+        for (auto &p : Impl().params)
+            if (m.IsRefOrSlice(Impl().vars[p.var].type))
+                flowroots[p.var] = { CoreRootRef { CoreRootRef::Param, p.var } };
+        do {
+            flowchanged = false;
+            g = Effects {};
+            Block(Impl().body);
+        } while (flowchanged);
+        flow = false;
         fx = nullptr;
         CoreSummary s;
-        if (e.unknown) { s.unknown = true; return s; }
+        if (e.unknown || g.unknown) { s.unknown = true; return s; }
         auto &impl = Impl();
         auto declare = [&](const set<CoreTarget> &found, vector<CoreTarget> &out) {
             set<CoreTarget> d;
@@ -122,9 +157,18 @@ private:
         declare(e.reads, s.reads);
         declare(e.writes, s.writes);
         declare(e.grows, s.grows);
+        auto join = [](vector<CoreTarget> &to, const set<CoreTarget> &more) {
+            set<CoreTarget> all(to.begin(), to.end());
+            all.insert(more.begin(), more.end());
+            to.assign(all.begin(), all.end());
+        };
+        join(s.reads, g.reads);
+        join(s.writes, g.writes);
+        join(s.grows, g.grows);
         s.rebinds.assign(e.rebinds.begin(), e.rebinds.end());
-        s.aborts = e.aborts;
-        s.outputs = e.outputs;
+        join(s.rebinds, g.rebinds);
+        s.aborts = e.aborts || g.aborts;
+        s.outputs = e.outputs || g.outputs;
         if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, false, false };
         return s;
     }
@@ -142,7 +186,7 @@ private:
 
     void Stmt(const CoreStmt &s) {
         switch (s.kind) {
-            case CoreStmtKind::Let: Ex(*s.expr); break;
+            case CoreStmtKind::Let: Bind(s.var, Ex(*s.expr)); break;
             case CoreStmtKind::Assign: {
                 auto rho = Pl(*s.place);
                 Ex(*s.expr);
@@ -158,7 +202,7 @@ private:
                 break;
             }
             case CoreStmtKind::Rebind:
-                Ex(*s.expr);
+                Bind(s.var, Ex(*s.expr));
                 if (s.var < (int)Impl().params.size()) fx->rebinds.insert(CoreTarget { false, s.var });
                 break;
             case CoreStmtKind::Expr: Ex(*s.expr); break;
@@ -182,10 +226,15 @@ private:
                 Ex(*s.expr2);
                 Block(*s.then);
                 break;
-            case CoreStmtKind::ForEach:
-                Vw(*s.view);
+            case CoreStmtKind::ForEach: {
+                auto rho = Vw(*s.view);
+                // Each element is copied out of the run, which reads it; an
+                // element bound by reference is not read until it is used.
+                if (s.byRef) Bind(s.var, rho);
+                else AddTargets(fx->reads, rho);
                 Block(*s.then);
                 break;
+            }
             case CoreStmtKind::Ret:
                 if (s.expr) Ex(*s.expr);
                 break;
