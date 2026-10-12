@@ -153,11 +153,99 @@ def execEff (fn : Func) (fr : Frame) : Effect → M Frame
       else fault .flow
     | [] => fault .flow
   | .print parts _ => do
-    let strs ← parts.mapM (renderPart fr)
+    let strs ← mapList (renderPart fr) parts
     emit (String.join strs ++ "\n")
     pure fr
 
 end Helpers
+
+/-- Every operation that defines a value and needs no fuel. The integer
+operations take the type of their operand, as Core's evaluator does; the type an
+instruction states is the verifier's concern. -/
+def execPure (cx : FnCtx) (fr : Frame) : Op → M RVal
+    | .constInt t k => pure (.val (.int t k))
+    | .constBool b => pure (.val (.bool b))
+    | .constUnit => pure (.val .unit)
+    | .bin o _ a b org => do
+      let (t, x) ← expectInt (← getVal fr a)
+      let (u, y) ← expectInt (← getVal fr b)
+      expectSameTy t u
+      match evalBin cx.cfg.profile o t x y with
+      | .ok r => pure (.val (.int t r))
+      | .error k => abortAtOrg (AbortKind.ofNum k) org
+    | .un o _ a org => do
+      let (t, x) ← expectInt (← getVal fr a)
+      match evalUn cx.cfg.profile o t x with
+      | .ok r => pure (.val (.int t r))
+      | .error k => abortAtOrg (AbortKind.ofNum k) org
+    | .cmp o _ a b => do
+      let (i, j) ← expectComparable (← getVal fr a) (← getVal fr b)
+      pure (.val (.bool (evalCmp o i j)))
+    | .boolCmp o a b => do
+      let (i, j) ← expectComparable (← getVal fr a) (← getVal fr b)
+      pure (.val (.bool (evalCmp o i j)))
+    | .boolNot a => do
+      pure (.val (.bool (!(← expectBool (← getVal fr a)))))
+    | .conv k _ dst a org => do
+      let (src, x) ← expectInt (← getVal fr a)
+      match evalConv cx.cfg.profile k src dst x with
+      | .ok r => pure (.val (.int dst r))
+      | .error e => abortAtOrg (AbortKind.ofNum e) org
+    | .next _ a => do
+      let (t, x) ← expectInt (← getVal fr a)
+      if x < t.maxVal then pure (.val (.int t (x + 1))) else fault .shape
+    | .slotAddr s => do
+      let r ← slotRoot cx.fn fr s
+      pure (.val (.ref ⟨r, []⟩))
+    | .globalAddr g => pure (.val (.ref ⟨.global g, []⟩))
+    | .refElem v i => do
+      let vw ← getView fr v
+      let (_, k) ← expectInt (← getVal fr i)
+      if 0 ≤ k then pure (.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩))
+      else fault .pathRange
+    | .refFreeze r => do
+      pure (.val (.ref (← expectRef (← getVal fr r))))
+    | .load r => do
+      pure (.val (← readLoc (← expectRef (← getVal fr r))))
+    | .snapshot r => do
+      let l ← expectRef (← getVal fr r)
+      let (len, resizable) ← expectArray (← readLoc l)
+      pure (.view ⟨l, 0, len, resizable⟩)
+    | .sliceView s => do
+      let (l, start, len) ← expectSlice (← getVal fr s)
+      pure (.view ⟨l, start, len, false⟩)
+    | .viewLen v => do
+      pure (.val (.int .i64 (← getView fr v).len))
+    | .viewSlice _ v lo hi org => do
+      let vw ← getView fr v
+      let lo' ← evalBnd fr vw.len 0 lo
+      let hi' ← evalBnd fr vw.len vw.len hi
+      if 0 ≤ lo' ∧ lo' ≤ hi' ∧ hi' ≤ (vw.len : Int) then
+        pure (.val (.slice vw.loc (vw.start + lo'.toNat) (hi' - lo').toNat))
+      else abortAtOrg .sliceOob org
+    | .arrayLen r => do
+      let (len, _) ← expectArray (← readLoc (← expectRef (← getVal fr r)))
+      pure (.val (.int .i64 len))
+    | .indexChecked v i org => do
+      let vw ← getView fr v
+      let (_, k) ← expectInt (← getVal fr i)
+      if 0 ≤ k ∧ k < (vw.len : Int) then
+        pure (.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩))
+      else abortAtOrg .indexOob org
+    | .push r v _ => do
+      let l ← expectRef (← getVal fr r)
+      let x ← getVal fr v
+      let i ← appendLoc l #[x]
+      pure (.val (.ref { l with path := l.path ++ [i] }))
+    | .arrLit t vs => do
+      let xs ← mapList (getVal fr) vs
+      pure (.val (← expectArrayLit t xs.toArray))
+    | .arrFill t v => do
+      let k ← expectFixedCount t
+      let x ← getVal fr v
+      pure (.val (.fixed (Array.replicate k x)))
+
+    | .call .. => fault .unbound
 
 /-- Enter block `b` of `fn`: bind its parameters to `args` and give its
 instructions. -/
@@ -206,16 +294,16 @@ def exec : Nat → FnCtx → Frame → List Inst → M Val
       let fr' ← execEff cx.fn fr e
       exec n cx fr' rest
     | .term (.br b args) => do
-      let vals ← args.mapM (getCell fr)
+      let vals ← mapList (getCell fr) args
       let (insts, fr') ← enterBlock cx.fn fr b vals
       exec n cx fr' insts
     | .term (.condbr c tb targs eb eargs) => do
       if (← expectBool (← getVal fr c)) then
-        let vals ← targs.mapM (getCell fr)
+        let vals ← mapList (getCell fr) targs
         let (insts, fr') ← enterBlock cx.fn fr tb vals
         exec n cx fr' insts
       else
-        let vals ← eargs.mapM (getCell fr)
+        let vals ← mapList (getCell fr) eargs
         let (insts, fr') ← enterBlock cx.fn fr eb vals
         exec n cx fr' insts
     | .term (.ret vs _) =>
@@ -228,112 +316,32 @@ def exec : Nat → FnCtx → Frame → List Inst → M Val
       let (_, code) ← expectInt (← getVal fr v)
       M.stop (.exit code)
 
+/-- One instruction that defines a value. A call needs fuel; every other
+operation is `execPure`. -/
 def execOp : Nat → FnCtx → Frame → Op → M RVal
   | 0, _, _, _ => timeout
   | n + 1, cx, fr, op =>
     match op with
-    | .constInt t k => pure (.val (.int t k))
-    | .constBool b => pure (.val (.bool b))
-    | .constUnit => pure (.val .unit)
-    | .bin o t a b org => do
-      let (u, x) ← expectInt (← getVal fr a)
-      let (w, y) ← expectInt (← getVal fr b)
-      expectSameTy u t
-      expectSameTy w t
-      match evalBin cx.cfg.profile o t x y with
-      | .ok r => pure (.val (.int t r))
-      | .error k => abortAtOrg (AbortKind.ofNum k) org
-    | .un o t a org => do
-      let (u, x) ← expectInt (← getVal fr a)
-      expectSameTy u t
-      match evalUn cx.cfg.profile o t x with
-      | .ok r => pure (.val (.int t r))
-      | .error k => abortAtOrg (AbortKind.ofNum k) org
-    | .cmp o t a b => do
-      let (u, x) ← expectInt (← getVal fr a)
-      let (w, y) ← expectInt (← getVal fr b)
-      expectSameTy u t
-      expectSameTy w t
-      pure (.val (.bool (evalCmp o x y)))
-    | .boolCmp o a b => do
-      let p ← expectBool (← getVal fr a)
-      let q ← expectBool (← getVal fr b)
-      pure (.val (.bool (evalCmp o (if p then 1 else 0) (if q then 1 else 0))))
-    | .boolNot a => do
-      pure (.val (.bool (!(← expectBool (← getVal fr a)))))
-    | .conv k src dst a org => do
-      let (u, x) ← expectInt (← getVal fr a)
-      expectSameTy u src
-      match evalConv cx.cfg.profile k src dst x with
-      | .ok r => pure (.val (.int dst r))
-      | .error e => abortAtOrg (AbortKind.ofNum e) org
-    | .next t a => do
-      let (u, x) ← expectInt (← getVal fr a)
-      expectSameTy u t
-      if x < t.maxVal then pure (.val (.int t (x + 1))) else fault .shape
-    | .slotAddr s => do
-      let r ← slotRoot cx.fn fr s
-      pure (.val (.ref ⟨r, []⟩))
-    | .globalAddr g => pure (.val (.ref ⟨.global g, []⟩))
-    | .refElem v i => do
-      let vw ← getView fr v
-      let (_, k) ← expectInt (← getVal fr i)
-      if 0 ≤ k then pure (.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩))
-      else fault .pathRange
-    | .refFreeze r => do
-      pure (.val (.ref (← expectRef (← getVal fr r))))
-    | .load r => do
-      pure (.val (← readLoc (← expectRef (← getVal fr r))))
-    | .snapshot r => do
-      let l ← expectRef (← getVal fr r)
-      let (len, resizable) ← expectArray (← readLoc l)
-      pure (.view ⟨l, 0, len, resizable⟩)
-    | .sliceView s => do
-      let (l, start, len) ← expectSlice (← getVal fr s)
-      pure (.view ⟨l, start, len, false⟩)
-    | .viewLen v => do
-      pure (.val (.int .i64 (← getView fr v).len))
-    | .viewSlice _ v lo hi org => do
-      let vw ← getView fr v
-      let lo' ← evalBnd fr vw.len 0 lo
-      let hi' ← evalBnd fr vw.len vw.len hi
-      if 0 ≤ lo' ∧ lo' ≤ hi' ∧ hi' ≤ (vw.len : Int) then
-        pure (.val (.slice vw.loc (vw.start + lo'.toNat) (hi' - lo').toNat))
-      else abortAtOrg .sliceOob org
-    | .arrayLen r => do
-      let (len, _) ← expectArray (← readLoc (← expectRef (← getVal fr r)))
-      pure (.val (.int .i64 len))
-    | .indexChecked v i org => do
-      let vw ← getView fr v
-      let (_, k) ← expectInt (← getVal fr i)
-      if 0 ≤ k ∧ k < (vw.len : Int) then
-        pure (.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩))
-      else abortAtOrg .indexOob org
-    | .push r v _ => do
-      let l ← expectRef (← getVal fr r)
-      let x ← getVal fr v
-      let i ← appendLoc l #[x]
-      pure (.val (.ref { l with path := l.path ++ [i] }))
     | .call f args _ => do
-      let vals ← args.mapM (getVal fr)
+      let vals ← mapList (getVal fr) args
       pure (.val (← callFn n cx.cfg fr.depth f vals))
-    | .arrLit t vs => do
-      let xs ← vs.mapM (getVal fr)
-      pure (.val (← expectArrayLit t xs.toArray))
-    | .arrFill t v => do
-      let k ← expectFixedCount t
-      let x ← getVal fr v
-      pure (.val (.fixed (Array.replicate k x)))
+    | _ => execPure cx fr op
 
 end
 
 /-- Initialize the globals in table order, each by an activation of its
-initializer function at depth 0, then run the entry at depth 1. -/
-def runModule (fuel : Nat) (cfg : GCfg) : M Unit := do
-  for g in [0:cfg.mod.globals.size] do
+initializer function at depth 0. -/
+def initGlobals (fuel : Nat) (cfg : GCfg) : List GlobalId → M Unit
+  | [] => pure ()
+  | g :: rest => do
     let init ← lookupInit cfg g
     let v ← enterFn fuel cfg 0 init []
     bindRoot (.global g) v
+    initGlobals fuel cfg rest
+
+/-- Initialize the globals, then run the entry at depth 1. -/
+def runModule (fuel : Nat) (cfg : GCfg) : M Unit := do
+  initGlobals fuel cfg (List.range cfg.mod.globals.size)
   let _ ← callFn fuel cfg 0 cfg.mod.entry []
   pure ()
 
