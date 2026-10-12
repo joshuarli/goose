@@ -59,6 +59,11 @@
 #include "core/core_json.h"
 #include "core/core_export.h"
 #include "core/core_summary.h"
+#include "gir/gir_ir.h"
+#include "gir/gir_types.h"
+#include "gir/gir_lower.h"
+#include "gir/gir_json.h"
+#include "gir/gir_verify.h"
 #include "core/core_emit.h"
 
 namespace goose {
@@ -644,7 +649,8 @@ int Main(int argc, char **argv) {
         printf("goose runtime %s\n", RuntimeVersion().c_str());
         return 0;
     }
-    string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore, unitsdir;
+    string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore, unitsdir,
+        emitgirhigh;
     auto dump = false, tokens = false, parseonly = false, specs = false, nocgen = false;
     auto roundtrip = false, multitest = false;
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
@@ -670,6 +676,7 @@ int Main(int argc, char **argv) {
         else if (arg == "--dump-file" && i + 1 < argc) dumpfile = argv[++i];
         else if (arg == "--specs") specs = true;
         else if (arg == "--emit-core" && i + 1 < argc) emitcore = argv[++i];
+        else if (arg == "--emit-gir-high" && i + 1 < argc) emitgirhigh = argv[++i];
         else if (arg == "--stacks") stacks = true;
         else if (arg == "--stack-reserve" && i + 1 < argc) {
             uint64_t size;
@@ -921,7 +928,7 @@ int Main(int argc, char **argv) {
         TypeCheckProgram(ast, library);
         if (g_build_report) BuildReportAfterCheck(ast);
         // Before the optimizer: it rewrites the bodies this reads.
-        if (!emitcore.empty()) EmitCore(ast, filename, emitcore);
+        if (!emitcore.empty() || !emitgirhigh.empty()) EmitCore(ast, filename, emitcore, emitgirhigh);
         Optimizer opt(ast, optlevel);
         if (specs) {
             string s;

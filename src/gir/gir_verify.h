@@ -1,0 +1,813 @@
+// Goose compiler — the GIR-H verifier.
+//
+// Checks that stand between a lowered module and everything that consumes it,
+// run in the order of their codes over the whole module, so a module is
+// reported under the first code at which any function fails:
+//
+//   GIR-V001  entry, global initializers, tables, value ids, summary targets
+//   GIR-V010  operand and result types, arity
+//   GIR-V020  one terminator per block, edge arguments, reachability, dominance
+//   GIR-V030  slot addresses inside their scope, stores through mutable
+//             references, loadable and storable types
+//   GIR-V040  scope enter and leave balance on every path and nest as the
+//             scope tree; `ret` with no scope entered
+//   GIR-V050  summaries closed over the body
+//   GIR-V100  origins on every operation that can abort or stands for a
+//             statement
+//
+// Acceptance does not show that references stay valid: that is carried from
+// Core by the lowering, and nothing here knows about it.
+#pragma once
+
+#include <optional>
+
+namespace goose {
+
+struct GirViolation {
+    string code;      // "GIR-V020", say.
+    string message;   // Names the function.
+};
+
+class GirVerifier {
+public:
+    explicit GirVerifier(GirModule &module) : m(module) {}
+
+    // The first violation, or none.
+    optional<GirViolation> Verify() {
+        try {
+            Run();
+        } catch (GirViolation &v) {
+            return v;
+        }
+        return nullopt;
+    }
+
+private:
+    GirModule &m;
+
+    struct Fn {
+        string label;
+        const GirFunc *f;
+        vector<GirTypeId> vt;   // Type of each value by id, -1 where unknown.
+        int nvalues = 0;
+    };
+    vector<Fn> fns;
+    vector<pair<vector<GirTypeId>, vector<GirTypeId>>> sigs;
+
+    [[noreturn]] static void Fail(const char *code, string msg) { throw GirViolation { code, std::move(msg) }; }
+
+    static int NumValues(const GirFunc &f) {
+        int n = 0;
+        for (auto &b : f.blocks) {
+            n += (int)b.params.size();
+            for (auto &i : b.insts) n += GirDefines(i.op);
+        }
+        return n;
+    }
+
+    // ---------------------------------------------------------------------
+    // Uses and origins of an instruction.
+
+    static void Uses(const GirInst &i, vector<int> &out) {
+        auto add = [&](int v) { out.push_back(v); };
+        switch (i.op) {
+            case GirOp::Int: case GirOp::Bool: case GirOp::Unit: case GirOp::Slot: case GirOp::Global:
+            case GirOp::Enter: case GirOp::Leave: case GirOp::Abort:
+                break;
+            case GirOp::Bin: case GirOp::Cmp: case GirOp::BoolCmp: case GirOp::Elem:
+            case GirOp::Index: case GirOp::Push: case GirOp::Store: case GirOp::Append:
+                add(i.a); add(i.b);
+                break;
+            case GirOp::Un: case GirOp::Not: case GirOp::Conv: case GirOp::Next: case GirOp::Freeze:
+            case GirOp::Load: case GirOp::Snap: case GirOp::SliceView: case GirOp::ViewLen:
+            case GirOp::ArrayLen: case GirOp::Fill: case GirOp::Init: case GirOp::Exit:
+                add(i.a);
+                break;
+            case GirOp::ViewSlice:
+                add(i.a);
+                if (i.lo.kind != GirBound::None) add(i.lo.val);
+                if (i.hi.kind != GirBound::None) add(i.hi.val);
+                break;
+            case GirOp::Call: case GirOp::Arr: case GirOp::Ret: case GirOp::Br:
+                for (auto v : i.vals) add(v);
+                break;
+            case GirOp::Print:
+                for (auto &p : i.parts) if (!p.text) add(p.val);
+                break;
+            case GirOp::CondBr:
+                add(i.a);
+                for (auto v : i.vals) add(v);
+                for (auto v : i.vals2) add(v);
+                break;
+        }
+    }
+
+    static bool MayAbortBin(CoreBinOp o) {
+        return o == CoreBinOp::Add || o == CoreBinOp::Sub || o == CoreBinOp::Mul ||
+               o == CoreBinOp::Div || o == CoreBinOp::Mod;
+    }
+
+    // Instructions that can abort or that stand for a source statement must
+    // say where they came from.
+    static bool NeedsOrigin(const GirInst &i) {
+        switch (i.op) {
+            case GirOp::Bin: return MayAbortBin(i.bin);
+            case GirOp::Un: return i.un == CoreUnOp::Neg;
+            case GirOp::Conv: return i.conv == CoreConvKind::As;
+            case GirOp::ViewSlice: case GirOp::Index: case GirOp::Call:
+            case GirOp::Init: case GirOp::Store: case GirOp::Append: case GirOp::Print:
+            case GirOp::Abort: case GirOp::Exit:
+                return true;
+            default: return false;
+        }
+    }
+
+    static vector<int> Successors(const GirInst &i) {
+        if (i.op == GirOp::Br) return { i.idx };
+        if (i.op == GirOp::CondBr) return { i.idx, i.idx2 };
+        return {};
+    }
+
+    static vector<int> BlockSuccessors(const GirBlock &b) {
+        vector<int> out;
+        for (auto &i : b.insts)
+            if (GirIsTerminator(i.op)) for (auto s : Successors(i)) out.push_back(s);
+        return out;
+    }
+
+    static int TermCount(const GirBlock &b) {
+        int n = 0;
+        for (auto &i : b.insts) n += GirIsTerminator(i.op);
+        return n;
+    }
+
+    static const GirInst *LastTerm(const GirBlock &b) {
+        if (!b.insts.empty() && GirIsTerminator(b.insts.back().op)) return &b.insts.back();
+        return nullptr;
+    }
+
+    // ---------------------------------------------------------------------
+
+    void Run() {
+        CheckEntryAndGlobals();
+        for (auto &f : m.funcs) sigs.push_back({ f.params, f.results });
+        for (auto &f : m.funcs) fns.push_back({ cat("function ", f.name), &f, {}, 0 });
+        for (auto &g : m.globals)
+            fns.push_back({ cat("initializer of global ", g.name), &g.init, {}, 0 });
+        for (auto &fn : fns) CheckSymbols(fn);
+        for (auto &fn : fns) ValueTypes(fn);
+        for (auto &fn : fns) CheckTypes(fn);
+        for (auto &fn : fns) CheckCfg(fn);
+        vector<ScopeWalk> walks;
+        for (auto &fn : fns) walks.push_back(WalkScopes(fn));
+        for (size_t k = 0; k < fns.size(); k++) {
+            if (!walks[k].storage.empty()) Fail("GIR-V030", walks[k].storage);
+            CheckStorage(fns[k]);
+        }
+        for (auto &w : walks)
+            if (!w.scopes.empty()) Fail("GIR-V040", w.scopes);
+        CheckEffects();
+        for (auto &fn : fns) CheckOrigins(fn);
+    }
+
+    // --- GIR-V001 ---------------------------------------------------------
+
+    void CheckEntryAndGlobals() {
+        if (m.entry < 0 || m.entry >= (int)m.funcs.size())
+            Fail("GIR-V001", cat("the entry ", m.entry, " is outside the function table"));
+        auto &e = m.funcs[m.entry];
+        if (!e.params.empty() || !e.results.empty())
+            Fail("GIR-V001", cat("the entry ", e.name, " must take no parameters and return nothing"));
+        for (auto &g : m.globals) {
+            if (!g.init.params.empty() || g.init.results.size() != 1 || g.init.results[0] != g.ty)
+                Fail("GIR-V001", cat("the initializer of global ", g.name,
+                                      " must take no parameters and return its type"));
+            if (g.org < 0 || g.org >= (int)m.origins.size())
+                Fail("GIR-V001", cat("global ", g.name, ": origin outside the origin table"));
+        }
+    }
+
+    [[noreturn]] void SymbolFail(const Fn &fn, const string &msg) { Fail("GIR-V001", cat(fn.label, ": ", msg)); }
+
+    void CheckSymbols(Fn &fn) {
+        auto &f = *fn.f;
+        if (f.blocks.empty()) SymbolFail(fn, "no blocks");
+        for (size_t i = 0; i < f.scopes.size(); i++)
+            if (f.scopes[i] >= 0 && f.scopes[i] >= (int)i)
+                SymbolFail(fn, cat("scope ", i, ": parent ", f.scopes[i], " is not an earlier scope"));
+        for (auto &sl : f.slots)
+            if (sl.scope < 0 || sl.scope >= (int)f.scopes.size())
+                SymbolFail(fn, cat("slot of variable ", sl.var, ": scope ", sl.scope,
+                                   " is outside the scope table"));
+        if (f.org >= (int)m.origins.size()) SymbolFail(fn, cat("function origin ", f.org, " is outside the origin table"));
+        if (!f.summary.unknown) {
+            for (auto *list : { &f.summary.reads, &f.summary.writes, &f.summary.grows, &f.summary.rebinds })
+                for (auto &t : *list) {
+                    if (!t.global && t.index >= (int)f.params.size())
+                        SymbolFail(fn, cat("summary names parameter ", t.index, ", which does not exist"));
+                    if (t.global && t.index >= (int)m.globals.size())
+                        SymbolFail(fn, cat("summary names global ", t.index, ", outside the global table"));
+                }
+        }
+        // Value ids are dense and each is defined once.
+        auto n = NumValues(f);
+        fn.nvalues = n;
+        vector<char> seen(n, 0);
+        auto define = [&](int d) {
+            if (d < 0 || d >= n) SymbolFail(fn, cat("value %", d, " is outside the value table of ", n));
+            if (seen[d]) SymbolFail(fn, cat("value %", d, " is defined twice"));
+            seen[d] = 1;
+        };
+        for (auto &b : f.blocks) {
+            for (auto &p : b.params) define(p.first);
+            for (auto &i : b.insts) if (GirDefines(i.op)) define(i.res);
+            for (auto &i : b.insts) CheckInstSymbols(fn, i, n);
+        }
+    }
+
+    void CheckInstSymbols(const Fn &fn, const GirInst &i, int n) {
+        auto &f = *fn.f;
+        vector<int> uses;
+        Uses(i, uses);
+        for (auto v : uses)
+            if (v < 0 || v >= n) SymbolFail(fn, cat("value %", v, " is outside the value table of ", n));
+        if (i.org >= (int)m.origins.size()) SymbolFail(fn, cat("origin ", i.org, " is outside the origin table"));
+        switch (i.op) {
+            case GirOp::Slot: case GirOp::Init:
+                if (i.idx < 0 || i.idx >= (int)f.slots.size())
+                    SymbolFail(fn, cat("slot ", i.idx, " is outside the slot table"));
+                break;
+            case GirOp::Global:
+                if (i.idx < 0 || i.idx >= (int)m.globals.size())
+                    SymbolFail(fn, cat("global ", i.idx, " is outside the global table"));
+                break;
+            case GirOp::Call:
+                if (i.idx < 0 || i.idx >= (int)m.funcs.size())
+                    SymbolFail(fn, cat("function ", i.idx, " is outside the function table"));
+                break;
+            case GirOp::Enter: case GirOp::Leave:
+                if (i.idx < 0 || i.idx >= (int)f.scopes.size())
+                    SymbolFail(fn, cat("scope ", i.idx, " is outside the scope table"));
+                break;
+            case GirOp::Br: case GirOp::CondBr:
+                for (auto b : Successors(i))
+                    if (b < 0 || b >= (int)f.blocks.size())
+                        SymbolFail(fn, cat("block ", b, " is outside the block table"));
+                break;
+            default: break;
+        }
+    }
+
+    // --- Types ------------------------------------------------------------
+
+    // The type of every value, found by typing instructions until nothing
+    // changes, so that a value used before its definition in table order still
+    // gets a type.
+    void ValueTypes(Fn &fn) {
+        auto &f = *fn.f;
+        fn.vt.assign(fn.nvalues, -1);
+        for (auto &b : f.blocks)
+            for (auto &p : b.params)
+                if (p.first < fn.nvalues) fn.vt[p.first] = p.second;
+        for (auto changed = true; changed;) {
+            changed = false;
+            for (auto &b : f.blocks)
+                for (auto &i : b.insts) {
+                    if (!GirDefines(i.op) || i.res >= fn.nvalues || fn.vt[i.res] >= 0) continue;
+                    GirTyEnv env { m, f.slots, sigs, fn.vt };
+                    auto r = GirTyper(env).Of(i);
+                    if (r.ok()) {
+                        fn.vt[i.res] = r.ty;
+                        changed = true;
+                    }
+                }
+        }
+    }
+
+    [[noreturn]] void TypeFail(const Fn &fn, const string &msg) { Fail("GIR-V010", cat(fn.label, ": ", msg)); }
+
+    void CheckEffectTypes(const Fn &fn, const GirInst &i) {
+        auto &f = *fn.f;
+        GirTyEnv env { m, f.slots, sigs, fn.vt };
+        GirTyper ty(env);
+        auto need = [&](GirTyResult r) {
+            if (!r.ok()) TypeFail(fn, r.error);
+            return r.ty;
+        };
+        switch (i.op) {
+            case GirOp::Init: {
+                auto v = need(ty.Data(i.a));
+                if (v != f.slots[i.idx].ty)
+                    TypeFail(fn, cat("slot ", i.idx, " is initialized with a value of another type"));
+                break;
+            }
+            case GirOp::Store: {
+                auto r = need(ty.Ref(i.a));
+                auto v = need(ty.Data(i.b));
+                if (v != m.Type(r).elem) TypeFail(fn, "a store of a value of another type than the referent");
+                break;
+            }
+            case GirOp::Append: {
+                auto r = need(ty.Ref(i.a));
+                auto &pointee = m.Type(m.Type(r).elem);
+                if (pointee.kind != CoreType::Grow)
+                    TypeFail(fn, "append to a reference that does not point at a grow-only array");
+                auto v = need(ty.View(i.b));
+                if (m.Type(v).elem != pointee.elem)
+                    TypeFail(fn, "appended elements of another type than the array's");
+                break;
+            }
+            case GirOp::Print:
+                for (auto &p : i.parts) {
+                    if (p.text) continue;
+                    auto t = need(ty.Data(p.val));
+                    auto k = m.Type(t).kind;
+                    if (k != CoreType::Int && k != CoreType::Bool)
+                        TypeFail(fn, "a printed value is neither an integer nor a boolean");
+                }
+                break;
+            default: break;
+        }
+    }
+
+    void CheckTermTypes(const Fn &fn, const GirInst &i) {
+        auto &f = *fn.f;
+        GirTyEnv env { m, f.slots, sigs, fn.vt };
+        GirTyper ty(env);
+        auto need = [&](GirTyResult r) {
+            if (!r.ok()) TypeFail(fn, r.error);
+            return r.ty;
+        };
+        switch (i.op) {
+            case GirOp::CondBr:
+                if (m.Type(need(ty.Data(i.a))).kind != CoreType::Bool)
+                    TypeFail(fn, "a branch condition that is not a boolean");
+                break;
+            case GirOp::Ret:
+                if (i.vals.size() != f.results.size())
+                    TypeFail(fn, cat("return of ", i.vals.size(), " values, the function has ",
+                                     f.results.size(), " results"));
+                for (size_t k = 0; k < i.vals.size(); k++)
+                    if (need(ty.Data(i.vals[k])) != f.results[k])
+                        TypeFail(fn, "a returned value of another type than the result");
+                break;
+            case GirOp::Exit: need(ty.IntTy(i.a)); break;
+            default: break;
+        }
+    }
+
+    void CheckTypes(const Fn &fn) {
+        auto &f = *fn.f;
+        {
+            auto &b0 = f.blocks[0];
+            bool same = b0.params.size() == f.params.size();
+            for (size_t k = 0; same && k < f.params.size(); k++) same = b0.params[k].second == f.params[k];
+            if (!same) TypeFail(fn, "the parameters of block 0 are not the function's parameters");
+        }
+        for (auto &sl : f.slots)
+            if (!GirStorable(m, sl.ty))
+                TypeFail(fn, cat("the slot of variable ", sl.var, " has a type no variable may have"));
+        for (auto &b : f.blocks)
+            for (auto &i : b.insts) {
+                if (GirDefines(i.op)) {
+                    GirTyEnv env { m, f.slots, sigs, fn.vt };
+                    auto r = GirTyper(env).Of(i);
+                    if (!r.ok()) TypeFail(fn, r.error);
+                    if (fn.vt[i.res] != r.ty) TypeFail(fn, cat("value %", i.res, " has two types"));
+                } else if (GirIsTerminator(i.op)) {
+                    CheckTermTypes(fn, i);
+                } else {
+                    CheckEffectTypes(fn, i);
+                }
+            }
+    }
+
+    // --- GIR-V020 ---------------------------------------------------------
+
+    [[noreturn]] void CfgFail(const Fn &fn, const string &msg) { Fail("GIR-V020", cat(fn.label, ": ", msg)); }
+
+    void CheckEdge(const Fn &fn, int from, int to, const vector<int> &args) {
+        auto &tb = fn.f->blocks[to];
+        if (tb.params.size() != args.size())
+            CfgFail(fn, cat("the branch from block ", from, " to block ", to, " passes ", args.size(),
+                            " arguments for ", tb.params.size(), " parameters"));
+        for (size_t k = 0; k < args.size(); k++)
+            if (fn.vt[args[k]] != tb.params[k].second)
+                CfgFail(fn, cat("argument %", args[k], " of the branch from block ", from, " to block ", to,
+                                " has another type than parameter %", tb.params[k].first));
+    }
+
+    void CheckCfg(const Fn &fn) {
+        auto &f = *fn.f;
+        auto n = (int)f.blocks.size();
+        for (int b = 0; b < n; b++) {
+            auto terms = TermCount(f.blocks[b]);
+            if (terms != 1) CfgFail(fn, cat("block ", b, " has ", terms, " terminators, expected one"));
+            if (!LastTerm(f.blocks[b])) CfgFail(fn, cat("block ", b, " does not end in its terminator"));
+        }
+        for (int b = 0; b < n; b++) {
+            auto t = LastTerm(f.blocks[b]);
+            if (t->op == GirOp::Br) CheckEdge(fn, b, t->idx, t->vals);
+            if (t->op == GirOp::CondBr) {
+                CheckEdge(fn, b, t->idx, t->vals);
+                CheckEdge(fn, b, t->idx2, t->vals2);
+            }
+        }
+        vector<vector<int>> preds(n);
+        for (int b = 0; b < n; b++)
+            for (auto s : BlockSuccessors(f.blocks[b])) preds[s].push_back(b);
+        if (!preds[0].empty()) CfgFail(fn, "the entry block has predecessors");
+        vector<char> seen(n, 0);
+        vector<int> work { 0 };
+        seen[0] = 1;
+        while (!work.empty()) {
+            auto b = work.back();
+            work.pop_back();
+            for (auto s : BlockSuccessors(f.blocks[b]))
+                if (!seen[s]) {
+                    seen[s] = 1;
+                    work.push_back(s);
+                }
+        }
+        for (int b = 0; b < n; b++)
+            if (!seen[b]) CfgFail(fn, cat("block ", b, " is not reachable from the entry"));
+        // Dominator sets as bit masks, by rounds until nothing changes.
+        auto words = (size_t)(n + 63) / 64;
+        vector<vector<uint64_t>> dom(n, vector<uint64_t>(words, ~uint64_t(0)));
+        dom[0].assign(words, 0);
+        dom[0][0] = 1;
+        for (auto changed = true; changed;) {
+            changed = false;
+            for (int b = 1; b < n; b++) {
+                vector<uint64_t> nd(words, ~uint64_t(0));
+                for (auto p : preds[b])
+                    for (size_t w = 0; w < words; w++) nd[w] &= dom[p][w];
+                nd[b / 64] |= uint64_t(1) << (b % 64);
+                if (nd != dom[b]) {
+                    dom[b] = std::move(nd);
+                    changed = true;
+                }
+            }
+        }
+        // Definitions dominate uses.
+        vector<pair<int, int>> defat(fn.nvalues, { -1, 0 });
+        for (int b = 0; b < n; b++) {
+            for (auto &p : f.blocks[b].params) defat[p.first] = { b, -1 };
+            for (size_t k = 0; k < f.blocks[b].insts.size(); k++)
+                if (GirDefines(f.blocks[b].insts[k].op)) defat[f.blocks[b].insts[k].res] = { b, (int)k };
+        }
+        for (int u = 0; u < n; u++)
+            for (size_t k = 0; k < f.blocks[u].insts.size(); k++) {
+                vector<int> uses;
+                Uses(f.blocks[u].insts[k], uses);
+                for (auto v : uses) {
+                    auto [db, dk] = defat[v];
+                    if (db < 0) CfgFail(fn, cat("value %", v, " has no definition"));
+                    auto ok = db == u ? dk < (int)k : (dom[u][db / 64] >> (db % 64) & 1) != 0;
+                    if (!ok)
+                        CfgFail(fn, cat("value %", v, " is used in block ", u, " where its definition in block ",
+                                        db, " does not dominate the use"));
+                }
+            }
+    }
+
+    // --- GIR-V030 and GIR-V040 -------------------------------------------
+
+    struct ScopeWalk {
+        string storage, scopes, join;
+    };
+
+    ScopeWalk WalkScopes(const Fn &fn) {
+        auto &f = *fn.f;
+        auto n = f.blocks.size();
+        ScopeWalk w;
+        auto note = [](string &slot, string msg) { if (slot.empty()) slot = std::move(msg); };
+        vector<char> have(n, 0);
+        vector<vector<int>> entry(n);
+        entry[0] = {};
+        have[0] = 1;
+        vector<int> work { 0 };
+        // A stack here is outermost first.
+        while (!work.empty()) {
+            auto b = work.back();
+            work.pop_back();
+            auto stack = entry[b];
+            for (auto &i : f.blocks[b].insts) {
+                auto slotin = [&](int s) {
+                    if (s < 0 || s >= (int)f.slots.size()) return;
+                    if (find(stack.begin(), stack.end(), f.slots[s].scope) == stack.end())
+                        note(w.storage, cat(fn.label, ": block ", b, ": the address of slot ", s,
+                                            " is taken outside scope ", f.slots[s].scope));
+                };
+                switch (i.op) {
+                    case GirOp::Slot: case GirOp::Init: slotin(i.idx); break;
+                    case GirOp::Enter: {
+                        auto parent = f.scopes[i.idx];
+                        auto ok = parent >= 0 ? !stack.empty() && stack.back() == parent : stack.empty();
+                        if (!ok)
+                            note(w.scopes, cat(fn.label, ": block ", b, ": scope ", i.idx,
+                                               " is entered where its parent is not the innermost scope entered"));
+                        stack.push_back(i.idx);
+                        break;
+                    }
+                    case GirOp::Leave:
+                        if (stack.empty())
+                            note(w.scopes, cat(fn.label, ": block ", b, ": scope ", i.idx,
+                                               " is left but none is entered"));
+                        else if (stack.back() == i.idx) stack.pop_back();
+                        else
+                            note(w.scopes, cat(fn.label, ": block ", b, ": scope ", i.idx,
+                                               " is left but scope ", stack.back(), " is the innermost entered"));
+                        break;
+                    case GirOp::Ret:
+                        if (!stack.empty())
+                            note(w.scopes, cat(fn.label, ": block ", b, ": return with scope ", stack.back(),
+                                               " still entered"));
+                        break;
+                    default: break;
+                }
+            }
+            for (auto s : BlockSuccessors(f.blocks[b])) {
+                if (!have[s]) {
+                    have[s] = 1;
+                    entry[s] = stack;
+                    work.push_back(s);
+                } else if (entry[s] != stack) {
+                    note(w.join, cat(fn.label, ": block ", s, " is reached with different scopes entered"));
+                }
+            }
+        }
+        // A join is reported before the other scope problems, which it usually causes.
+        if (!w.join.empty()) w.scopes = w.join;
+        return w;
+    }
+
+    void CheckStorage(const Fn &fn) {
+        auto &f = *fn.f;
+        auto refof = [&](int v, CoreMut &mut, GirTypeId &pointee) {
+            if (v < 0 || v >= (int)fn.vt.size() || fn.vt[v] < 0) return false;
+            auto &t = m.Type(fn.vt[v]);
+            if (t.kind != CoreType::Ref) return false;
+            mut = t.mut;
+            pointee = t.elem;
+            return true;
+        };
+        for (auto &b : f.blocks)
+            for (auto &i : b.insts) {
+                CoreMut mut;
+                GirTypeId pt;
+                if (i.op == GirOp::Load) {
+                    if (refof(i.a, mut, pt) && !GirReadable(m, pt))
+                        Fail("GIR-V030", cat(fn.label, ": a load of a value that cannot be copied"));
+                } else if (i.op == GirOp::Store) {
+                    if (refof(i.a, mut, pt)) {
+                        if (mut != CoreMut::Mut)
+                            Fail("GIR-V030", cat(fn.label, ": a store through a read-only reference"));
+                        if (!GirReadable(m, pt))
+                            Fail("GIR-V030", cat(fn.label, ": a store of a value that cannot be copied"));
+                    }
+                } else if (i.op == GirOp::Push || i.op == GirOp::Append) {
+                    if (refof(i.a, mut, pt) && mut != CoreMut::Mut)
+                        Fail("GIR-V030", cat(fn.label, ": growth through a read-only reference"));
+                }
+            }
+    }
+
+    // --- GIR-V050 ---------------------------------------------------------
+    //
+    // A module has no root annotations, so where a reference may point is
+    // computed from the body. Every reference, slice or view value gets the set
+    // of roots it may have: a slot of the function (a local), a global, or what
+    // the caller passed as a parameter. A slot holds the union of everything
+    // stored in it. The result roots of a function are the roots of what it
+    // returns, in terms of its parameters and globals, and are mapped to the
+    // arguments at each call. All of it is a least fixed point.
+
+    using Roots = vector<CoreRootRef>;
+
+    struct Prov {
+        vector<Roots> slots, vals;
+    };
+
+    static bool AddTo(vector<Roots> &a, int i, const Roots &rs) {
+        if (i < 0 || i >= (int)a.size()) return false;
+        auto changed = false;
+        for (auto &r : rs)
+            if (find(a[i].begin(), a[i].end(), r) == a[i].end()) {
+                a[i].push_back(r);
+                changed = true;
+            }
+        return changed;
+    }
+
+    static Roots RootsAt(const vector<Roots> &a, int i) {
+        return i >= 0 && i < (int)a.size() ? a[i] : Roots {};
+    }
+
+    bool ValRefLike(const Fn &fn, int v) {
+        if (v < 0 || v >= (int)fn.vt.size() || fn.vt[v] < 0) return false;
+        auto k = m.Type(fn.vt[v]).kind;
+        return k == CoreType::Ref || k == CoreType::Slice || k == CoreType::View;
+    }
+
+    Roots RootsOfDef(const vector<Roots> &res, const Fn &fn, const Prov &p, const GirInst &i) {
+        switch (i.op) {
+            case GirOp::Slot: return { CoreRootRef { CoreRootRef::Local, i.idx } };
+            case GirOp::Global: return { CoreRootRef { CoreRootRef::Global, i.idx } };
+            case GirOp::Elem: case GirOp::ViewSlice: case GirOp::Index:
+                return RootsAt(p.vals, i.a);
+            case GirOp::Freeze: case GirOp::Snap: case GirOp::SliceView: case GirOp::Push:
+                return RootsAt(p.vals, i.a);
+            case GirOp::Load: {
+                Roots out;
+                if (!ValRefLike(fn, i.res)) return out;
+                for (auto &r : RootsAt(p.vals, i.a))
+                    if (r.kind == CoreRootRef::Local)
+                        for (auto &x : RootsAt(p.slots, r.index))
+                            if (find(out.begin(), out.end(), x) == out.end()) out.push_back(x);
+                return out;
+            }
+            case GirOp::Call: {
+                Roots out;
+                for (auto &r : RootsAt(res, i.idx)) {
+                    if (r.kind == CoreRootRef::Param) {
+                        if (r.index < (int)i.vals.size())
+                            for (auto &x : RootsAt(p.vals, i.vals[r.index]))
+                                if (find(out.begin(), out.end(), x) == out.end()) out.push_back(x);
+                    } else if (r.kind == CoreRootRef::Global) {
+                        if (find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
+                    }
+                }
+                return out;
+            }
+            default: return {};
+        }
+    }
+
+    bool ProvRound(const vector<Roots> &res, const Fn &fn, Prov &p) {
+        auto &f = *fn.f;
+        auto changed = false;
+        auto edge = [&](int b, const vector<int> &args) {
+            auto &tb = f.blocks[b];
+            for (size_t k = 0; k < tb.params.size() && k < args.size(); k++)
+                changed |= AddTo(p.vals, tb.params[k].first, RootsAt(p.vals, args[k]));
+        };
+        for (auto &blk : f.blocks)
+            for (auto &i : blk.insts) {
+                if (GirDefines(i.op)) changed |= AddTo(p.vals, i.res, RootsOfDef(res, fn, p, i));
+                else if (i.op == GirOp::Init) changed |= AddTo(p.slots, i.idx, RootsAt(p.vals, i.a));
+                else if (i.op == GirOp::Store) {
+                    for (auto &root : RootsAt(p.vals, i.a))
+                        if (root.kind == CoreRootRef::Local)
+                            changed |= AddTo(p.slots, root.index, RootsAt(p.vals, i.b));
+                } else if (i.op == GirOp::Br) edge(i.idx, i.vals);
+                else if (i.op == GirOp::CondBr) {
+                    edge(i.idx, i.vals);
+                    edge(i.idx2, i.vals2);
+                }
+            }
+        return changed;
+    }
+
+    // Each reference-like parameter of the entry block is rooted at itself.
+    Prov ProvStart(const Fn &fn) {
+        auto &f = *fn.f;
+        Prov p;
+        p.slots.assign(f.slots.size(), {});
+        p.vals.assign(fn.nvalues, {});
+        auto &b0 = f.blocks[0];
+        for (size_t k = 0; k < b0.params.size(); k++)
+            if (ValRefLike(fn, b0.params[k].first) && b0.params[k].first < fn.nvalues)
+                p.vals[b0.params[k].first] = { CoreRootRef { CoreRootRef::Param, (int)k } };
+        return p;
+    }
+
+    Prov Provenance(const vector<Roots> &res, const Fn &fn) {
+        auto p = ProvStart(fn);
+        while (ProvRound(res, fn, p)) {}
+        return p;
+    }
+
+    Roots ReturnedRoots(const Fn &fn, const Prov &p) {
+        Roots out;
+        for (auto &b : fn.f->blocks)
+            for (auto &i : b.insts)
+                if (i.op == GirOp::Ret && i.vals.size() == 1)
+                    for (auto &r : RootsAt(p.vals, i.vals[0]))
+                        if (find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
+        return out;
+    }
+
+    vector<Roots> ResultRoots() {
+        vector<Roots> res(m.funcs.size());
+        for (auto changed = true; changed;) {
+            changed = false;
+            vector<Roots> next;
+            for (size_t k = 0; k < m.funcs.size(); k++)
+                next.push_back(ReturnedRoots(fns[k], Provenance(res, fns[k])));
+            for (size_t k = 0; k < next.size(); k++)
+                if (next[k].size() != res[k].size()) changed = true;
+            res = std::move(next);
+        }
+        return res;
+    }
+
+    struct Eff {
+        set<CoreTarget> reads, writes, grows, rebinds;
+        bool aborts = false, outputs = false, unknown = false;
+    };
+
+    static void AddTargets(set<CoreTarget> &to, const Roots &rs) {
+        for (auto &r : rs) {
+            if (r.kind == CoreRootRef::Global) to.insert({ true, r.index });
+            else if (r.kind == CoreRootRef::Param) to.insert({ false, r.index });
+        }
+    }
+
+    Eff Effects(const Fn &fn, const Prov &p) {
+        auto &f = *fn.f;
+        Eff e;
+        for (auto &blk : f.blocks)
+            for (auto &i : blk.insts) {
+                switch (i.op) {
+                    case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen:
+                        AddTargets(e.reads, RootsAt(p.vals, i.a));
+                        break;
+                    case GirOp::Push: AddTargets(e.grows, RootsAt(p.vals, i.a)); break;
+                    case GirOp::Bin: if (MayAbortBin(i.bin)) e.aborts = true; break;
+                    case GirOp::Un: if (i.un == CoreUnOp::Neg) e.aborts = true; break;
+                    case GirOp::Conv: if (i.conv == CoreConvKind::As) e.aborts = true; break;
+                    case GirOp::ViewSlice: case GirOp::Index: e.aborts = true; break;
+                    case GirOp::Call: {
+                        auto &callee = m.funcs[i.idx];
+                        if (callee.summary.unknown) { e.unknown = true; break; }
+                        auto map = [&](const vector<CoreTarget> &from, set<CoreTarget> &to) {
+                            for (auto &t : from) {
+                                if (t.global) to.insert(t);
+                                else if (t.index < (int)i.vals.size()) AddTargets(to, RootsAt(p.vals, i.vals[t.index]));
+                            }
+                        };
+                        map(callee.summary.reads, e.reads);
+                        map(callee.summary.writes, e.writes);
+                        map(callee.summary.grows, e.grows);
+                        e.aborts |= callee.summary.aborts;
+                        e.outputs |= callee.summary.outputs;
+                        break;
+                    }
+                    case GirOp::Store: {
+                        auto rs = RootsAt(p.vals, i.a);
+                        AddTargets(e.writes, rs);
+                        // Storing through the slot of a reference parameter
+                        // rebinds the parameter.
+                        for (auto &r : rs)
+                            if (r.kind == CoreRootRef::Local && r.index < (int)f.slots.size()) {
+                                auto &sl = f.slots[r.index];
+                                if (GirRefLike(m, sl.ty) && sl.var < (int)f.params.size())
+                                    e.rebinds.insert({ false, sl.var });
+                            }
+                        break;
+                    }
+                    case GirOp::Append: AddTargets(e.grows, RootsAt(p.vals, i.a)); break;
+                    case GirOp::Print: e.outputs = true; break;
+                    case GirOp::Abort: case GirOp::Exit: e.aborts = true; break;
+                    default: break;
+                }
+            }
+        return e;
+    }
+
+    void CheckEffects() {
+        auto res = ResultRoots();
+        for (size_t k = 0; k < m.funcs.size(); k++) {
+            auto &f = m.funcs[k];
+            if (f.summary.unknown) continue;
+            auto e = Effects(fns[k], Provenance(res, fns[k]));
+            auto name = cat("function ", f.name);
+            if (e.unknown)
+                Fail("GIR-V050", cat(name, " calls a function whose summary is unknown, so its own summary cannot be known"));
+            auto within = [&](const char *what, const set<CoreTarget> &found, const vector<CoreTarget> &declared) {
+                for (auto &t : found)
+                    if (find(declared.begin(), declared.end(), t) == declared.end())
+                        Fail("GIR-V050", cat(name, " ", what, " ", t.global ? "global " : "parameter ", t.index,
+                                              ", which its summary omits"));
+            };
+            within("reads", e.reads, f.summary.reads);
+            within("writes", e.writes, f.summary.writes);
+            within("grows", e.grows, f.summary.grows);
+            within("rebinds", e.rebinds, f.summary.rebinds);
+            if (e.aborts && !f.summary.aborts) Fail("GIR-V050", cat(name, " may abort, which its summary omits"));
+            if (e.outputs && !f.summary.outputs) Fail("GIR-V050", cat(name, " prints, which its summary omits"));
+        }
+    }
+
+    // --- GIR-V100 ---------------------------------------------------------
+
+    void CheckOrigins(const Fn &fn) {
+        for (auto &b : fn.f->blocks)
+            for (auto &i : b.insts)
+                if (NeedsOrigin(i) && i.org < 0)
+                    Fail("GIR-V100", cat(fn.label, ": an operation that can abort or stands for a statement has no origin"));
+    }
+};
+
+}  // namespace goose

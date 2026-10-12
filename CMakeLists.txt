@@ -88,6 +88,11 @@ add_executable(goose
     src/core/core_export.h
     src/core/core_summary.h
     src/core/core_emit.h
+    src/gir/gir_ir.h
+    src/gir/gir_types.h
+    src/gir/gir_lower.h
+    src/gir/gir_json.h
+    src/gir/gir_verify.h
 )
 
 # Keep argv, CRT file access, filesystem paths and Win32's narrow APIs in

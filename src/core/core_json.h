@@ -64,8 +64,8 @@ public:
         }
         objs += "]";
         // Files are numbered by first use in the origin table.
-        vector<int> filemap(m.files.size(), -1);
-        vector<int> fileorder;
+        filemap.assign(m.files.size(), -1);
+        fileorder.clear();
         for (auto &o : origins) {
             if (filemap[o.file] < 0) {
                 filemap[o.file] = (int)fileorder.size();
@@ -96,8 +96,27 @@ public:
         return out;
     }
 
+    // The numbering of files and origins the last Write() gave, which a
+    // module lowered from this one keeps.
+    vector<string> FileTable() const {
+        vector<string> out;
+        for (auto f : fileorder) out.push_back(m.files[f]);
+        return out;
+    }
+    // Each origin with its file as numbered in the output.
+    vector<CoreOrigin> OriginTable() const {
+        auto out = origins;
+        for (auto &o : out) o.file = filemap[o.file];
+        return out;
+    }
+    // The number of an origin of this module.
+    int OriginId(const CoreOrigin &o) const {
+        return originnum.at(make_tuple(o.file, o.line, (int)o.kind));
+    }
+
 private:
     const CoreModule &m;
+    vector<int> filemap, fileorder;
     unordered_map<CoreTypeId, int> typenum;
     vector<CoreTypeId> typeorder;
     vector<CoreOrigin> origins;
@@ -153,6 +172,9 @@ private:
                 break;
             case CoreType::Slice:
                 Append(out, "[\"slice\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
+                break;
+            case CoreType::View:
+                Append(out, "[\"view\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
                 break;
         }
     }
