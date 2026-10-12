@@ -238,6 +238,28 @@ def loopRefTy (env : TEnv) (x : VarId) (el : Ty) (mu : Bool) : T Ty :=
     | _ => rej .type "a by-reference loop variable that is not a reference"
   | none => rej .type s!"variable {x} outside the variable table"
 
+/-- A `return` without a value: outside expression blocks, in a function with
+no result. -/
+def retUnit (env : TEnv) : T Unit := do
+  if env.inExpr then rej .type "return inside an expression block"
+  match env.impl with
+  | none => rej .type "return in a global initializer"
+  | some impl =>
+    match impl.results.toList with
+    | [] => pure ()
+    | _ => rej .type "return does not match the function's result"
+
+/-- The type a `return` with a value must yield: outside expression blocks,
+the function's one result. -/
+def retTy (env : TEnv) : T Ty := do
+  if env.inExpr then rej .type "return inside an expression block"
+  match env.impl with
+  | none => rej .type "return in a global initializer"
+  | some impl =>
+    match impl.results.toList with
+    | [t] => pure t
+    | _ => rej .type "return does not match the function's result"
+
 /-- Arguments against parameters, one by one. -/
 def argMode : Arg → Mode
   | .byVal _ => .byValue
@@ -521,19 +543,16 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     let pre := (x, xty) :: (match idx with | some j => [(j, Ty.int .i64)] | none => [])
     let _ ← tyBlock { env with loops := env.loops + 1 } pre b
     pure env
-  | .ret e o => do
+  | .ret none o => do
     checkOrg env o
-    if env.inExpr then rej .type "return inside an expression block"
-    match env.impl with
-    | none => rej .type "return in a global initializer"
-    | some impl =>
-      match impl.results.toList, e with
-      | [], none => pure env
-      | [t], some e => do
-        let et ← tyExpr env e
-        unless et == t do rej .type "returned value of another type than the result"
-        pure env
-      | _, _ => rej .type "return does not match the function's result"
+    retUnit env
+    pure env
+  | .ret (some e) o => do
+    checkOrg env o
+    let t ← retTy env
+    let et ← tyExpr env e
+    unless et == t do rej .type "returned value of another type than the result"
+    pure env
   | .brk o => do
     checkOrg env o
     if env.loops = 0 then rej .type "break outside a loop" else pure env
