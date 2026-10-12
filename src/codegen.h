@@ -1308,6 +1308,18 @@ struct CodeGen {
     bool StaticInitX(Node *n, TypeExpr *t, string &out);
     void EmitGlobalDecls();
     void EmitGlobalInit();
+    void EmitGlobalInit(size_t from, size_t to, const string &fname);
+    // Unit mode (units/emit.h): the module of each global, the segment of a
+    // module's globals, and the initialization function of each run.
+    string SegmentId(const string &module);
+    string SegName(const string &module) { return "gs_seg_" + SegmentId(module); }
+    vector<string> SegmentModules();
+    string GlobalModule(VarDef *d);
+    unordered_map<const VarDef *, string> globalmods;
+    // The specialization whose function each emitted name is (sharing).
+    unordered_map<string, FnSpec *> classrep;
+    vector<pair<string, string>> unitinits;
+    string externtext, includetext;    // The extern prototypes and --include lines.
     string GlobalLenLv(VarDef *d);
     void InitGlobalStack(VarDef *d);
     void EmitProgramInit();
@@ -1395,6 +1407,8 @@ struct CodeGen {
             for (auto &c : inc) if (c == '\\') c = '/';
             Append(includes, "#include \"", inc, "\"\n");
         }
+        externtext = externs;
+        includetext = includes;
         Append(head, "\n/* ---- types ---- */\n#pragma pack(push, 1)\n", tdecls, pdata,
                "#pragma pack(pop)\n\n/* ---- data ---- */\n", data);
         Append(result, "\n/* ---- includes ---- */\n", includes,

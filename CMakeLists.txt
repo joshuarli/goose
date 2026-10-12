@@ -10,6 +10,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # cleanly into a plain /MT program.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
+# The runtime additions of unit output, embedded apart from the runtime
+# files so that the single-file runtime and its version are untouched.
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/runtime_units.h GS_RUNTIME_UNITS_TEXT)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/runtime_units.h)
+configure_file(cmake/runtime_units_inline.h.in
+               ${CMAKE_CURRENT_BINARY_DIR}/generated/runtime_units_inline.h @ONLY)
+
 add_executable(goose
     src/main.cpp
     src/process.cpp
@@ -24,6 +32,8 @@ add_executable(goose
     src/units/options.h
     src/units/postpass.h
     src/units/share_report.h
+    src/units/emit.h
+    src/runtime/runtime_units.h
     src/buildfile.h
     src/toolchain.h
     src/build.h
@@ -101,6 +111,7 @@ target_link_libraries(goose PRIVATE Threads::Threads)
 if(WIN32)
     target_link_libraries(goose PRIVATE advapi32 psapi)
 endif()
+target_include_directories(goose PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 # The library the process runner (process.cpp) is built on.
 target_include_directories(goose PRIVATE third_party/subprocess)
 

@@ -147,6 +147,18 @@ def check(report, c_file):
         need(sharing["functions_before"] == (emitted["bodies"] + emitted["element_run_twins"]
                                              if out is not None else sharing["functions_before"]),
              "functions before sharing differ from the emitted bodies and twins")
+    units = report.get("extensions", {}).get("units")
+    if units is not None:
+        listed = units["units"]
+        need(units["count"] == len(listed), "units count differs from the units listed")
+        sizes = sorted(u["bytes"] for u in listed)
+        need(units["bytes"] == {"min": sizes[0], "median": sizes[len(sizes) // 2], "max": sizes[-1]},
+             "unit byte statistics differ from the units listed")
+        files = {u["file"] for u in listed}
+        need(len(files) == len(listed), "two units share a file name")
+        for f in functions:
+            for u in f.get("units", []):
+                need(u in files, f"{f['name']} is placed in {u}, which is not a unit")
     ext = report.get("extensions")
     need(isinstance(ext, dict) and {"sharing", "units", "native_compile"} <= ext.keys(),
          "extensions section missing")

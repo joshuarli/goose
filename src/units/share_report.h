@@ -35,4 +35,27 @@ inline void ReportSharingJson(JsonOut &j) {
     j.EndObj();
 }
 
+// The units written for the program: how many, how big, and what each holds,
+// so that a changed unit can be attributed to the functions in it.
+inline void ReportUnitsJson(JsonOut &j) {
+    auto &s = unit_stats;
+    if (!s.ran) {
+        j.Null();
+        return;
+    }
+    vector<long long> sizes;
+    for (auto &u : s.units) sizes.push_back(u.bytes);
+    sort(sizes.begin(), sizes.end());
+    j.Obj().F("count", (long long)s.units.size());
+    j.Key("bytes").Obj();
+    j.F("min", sizes.front()).F("median", sizes[sizes.size() / 2]).F("max", sizes.back());
+    j.EndObj();
+    j.Key("units").Arr();
+    for (auto &u : s.units)
+        j.Obj().F("file", u.file).F("module", u.module).F("kind", u.kind).F("bytes", u.bytes)
+            .F("functions", u.functions).EndObj();
+    j.EndArr();
+    j.EndObj();
+}
+
 }  // namespace goose

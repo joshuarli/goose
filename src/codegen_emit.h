@@ -741,13 +741,16 @@ inline void CodeGen::EmitGlobalDecls() {
     }
 }
 
-inline void CodeGen::EmitGlobalInit() {
+// The initializers of the globals from..to, as a function of the given name.
+// Without units that is all of them, in the one function gs_init_globals.
+inline void CodeGen::EmitGlobalInit(size_t from, size_t to, const string &fname) {
     curspec = nullptr;
     curinfo = nullptr;
     ResetFnState();
     spexpr = "0";
     PushSc(SC_FN);
-    for (auto g : ast.globals) {
+    for (auto gi = from; gi < to; gi++) {
+        auto g = ast.globals[gi];
         if (g->inits.empty()) continue;
         PushSc(SC_STMT);
         if (g->defs.size() > 1 && g->inits.size() == 1) {
@@ -795,10 +798,35 @@ inline void CodeGen::EmitGlobalInit() {
     cscopes.clear();
     stackown[nullptr] = std::max(stackown[nullptr], stkmax);
     auto decls = HoistAggregateDecls(body);
-    Append(code, "static void gs_init_globals(void) {\n");
+    Append(code, "static void ", fname, "(void) {\n");
     code += decls;
     code += body;
     code += "}\n\n";
+}
+
+// One function per run of consecutive globals of a module: with units, each
+// module's initialization is its own function, in its globals unit.
+inline void CodeGen::EmitGlobalInit() {
+    if (!emit_options.units) {
+        EmitGlobalInit(0, ast.globals.size(), "gs_init_globals");
+        return;
+    }
+    auto &keys = Keys();
+    size_t from = 0;
+    unordered_map<string, int> runs;
+    while (from < ast.globals.size()) {
+        auto module = keys.ModuleOf(ast.globals[from]->line.fileidx);
+        auto to = from;
+        while (to < ast.globals.size() && keys.ModuleOf(ast.globals[to]->line.fileidx) == module) to++;
+        auto any = false;
+        for (auto i = from; i < to; i++) any = any || !ast.globals[i]->inits.empty();
+        if (any) {
+            auto name = cat("gs_init_", SegmentId(module), "_", runs[module]++);
+            unitinits.push_back({ module, name });
+            EmitGlobalInit(from, to, name);
+        }
+        from = to;
+    }
 }
 
 // A resizable global's receiving lvalue: its header's count, or the
@@ -853,7 +881,15 @@ inline void CodeGen::EmitProgramInit() {
     for (auto &[m, q] : queues) qnames.push_back(q);
     sort(qnames.begin(), qnames.end());
     for (auto &q : qnames) Append(code, "    gs_qinit(&", q, ");\n");
-    Append(code, "    gs_gl = &gs_globals_main;\n    gs_init_globals();\n");
+    if (!emit_options.units) {
+        Append(code, "    gs_gl = &gs_globals_main;\n    gs_init_globals();\n");
+    } else {
+        // Each module's segment is reached through its own thread-local
+        // pointer; main's is the one the module's globals unit defines.
+        for (auto &module : SegmentModules())
+            Append(code, "    ", SegName(module), " = &", SegName(module), "_main;\n");
+        for (auto &[module, fn] : unitinits) Append(code, "    ", fn, "();\n");
+    }
     Append(code, "    gs_program_initialized = 1;\n}\n\n");
     // A C host starts the program here: its globals, then fn main() if there
     // is one, which may call the exports and can hold the host's own setup.

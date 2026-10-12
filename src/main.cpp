@@ -41,6 +41,8 @@
 #include "codegen_nodes.h"
 #include "runtime_inline.h"
 #include "units/postpass.h"
+#include "units/emit.h"
+#include "runtime_units_inline.h"
 #include "report/report.h"
 #include "units/share_report.h"
 #include "jit.h"
@@ -671,7 +673,7 @@ int Main(int argc, char **argv) {
         printf("goose runtime %s\n", RuntimeVersion().c_str());
         return 0;
     }
-    string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore;
+    string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore, unitsdir;
     auto dump = false, tokens = false, parseonly = false, specs = false, nocgen = false;
     auto roundtrip = false, multitest = false;
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
@@ -712,6 +714,10 @@ int Main(int argc, char **argv) {
         else if (arg == "--build-report" && i + 1 < argc) reportfile = argv[++i];
         else if (arg == "--share") emit_options.share = true;
         else if (arg == "--stable-names") emit_options.stable_names = true;
+        else if (arg == "--emit-units" && i + 1 < argc) {
+            unitsdir = argv[++i];
+            emit_options.units = emit_options.stable_names = true;
+        }
         else if (arg == "--no-bce") nobce = true;
         else if (arg == "--bce-test") bcetest = true;
         else if (arg == "--bce-lines") bcelines = true;
@@ -871,7 +877,7 @@ int Main(int argc, char **argv) {
     // With no output file the program is compiled into this process and run,
     // which is what --jit asks for explicitly; a build writes the C to its
     // build directory instead.
-    auto jit = verb != "build" && (forcejit || outname.empty());
+    auto jit = verb != "build" && (forcejit || (outname.empty() && unitsdir.empty()));
     if (!headername.empty() && (jit || multitest)) {
         fprintf(stderr, "--header requires C output for a single input file\n");
         return 1;
@@ -1002,6 +1008,23 @@ int Main(int argc, char **argv) {
         if (g_build_report) BuildReportPhase(Phase::CodeGeneration);
         CodeGen cg(ast, runtime_ext_text, includes, norfcheck, library, stackcfg.maxstacks);
         if (g_build_report) BuildReportAfterCodegen(cg);
+        if (!unitsdir.empty() && !nocgen) {
+            // The units include one header, the runtime's, and link with the
+            // runtime object as separately built output does.
+            UnitInputs in;
+            in.runtime_header = UnitRuntimeHeader(RuntimeSections({ "runtime.h" }),
+                                                  runtime_units_text);
+            in.ext_text = RuntimeSections({ "runtime_ext.h" });
+            in.defines = cat("#define GS_SEPARATE_RUNTIME 1\n#define GS_RUNTIME_VERSION ",
+                             RuntimeVersion(), "\n", cg.predefs);
+            for (auto &d : cdefines) {
+                auto eq = d.find('=');
+                Append(in.defines, "#define ", eq == string::npos ? d : d.substr(0, eq), " ",
+                       eq == string::npos ? string("1") : d.substr(eq + 1), "\n");
+            }
+            WriteUnits(cg, unitsdir, in);
+            fprintf(msgs, "wrote %d unit(s) to %s\n", (int)unit_stats.units.size(), unitsdir.c_str());
+        }
         if (stacks) cg.StackReport(msgs, stackcfg);
         // The packages whose native parts the program needs, which a JIT
         // run takes functions from and a build links: its own, when it has
