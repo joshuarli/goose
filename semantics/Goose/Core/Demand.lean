@@ -1570,8 +1570,19 @@ theorem DemandNode.childFrame_future {node : DemandNode} {access : AccessEnv}
     cases h
     rfl
 
+/-- The replacement is evaluated after the old owner storage is cleared, so
+the mutation point must keep every replacement variable live for its shrink
+approval. Other phases retain the statement's continuation future. -/
+def DemandNode.phaseFuture (node : DemandNode) (phase : DemandPhase)
+    (future : List VarId) : List VarId :=
+  match node with
+  | .statement (.assignWhole _ replacement _) =>
+    if phase == .mutation then replacement.variables ++ future else future
+  | _ => future
+
 def DemandNode.phaseFrame (node : DemandNode) (access : AccessEnv)
     (path : List Nat) (frame : DemandFrame) (phase : DemandPhase) : V DemandFrame := do
+  let frame := { frame with future := node.phaseFuture phase frame.future }
   match node with
   | .expression (.call _ args _) =>
     if phase == .call || phase == .mutation then
@@ -1606,7 +1617,8 @@ theorem DemandNode.phaseFrame_active {node : DemandNode} {access : AccessEnv}
 
 theorem DemandNode.phaseFrame_future {node : DemandNode} {access : AccessEnv}
     {path : List Nat} {frame : DemandFrame} {phase : DemandPhase} {result : DemandFrame}
-    (h : node.phaseFrame access path frame phase = .ok result) : result.future = frame.future := by
+    (h : node.phaseFrame access path frame phase = .ok result) :
+    result.future = node.phaseFuture phase frame.future := by
   cases node with
   | expression expression =>
     cases expression with
@@ -1622,11 +1634,43 @@ theorem DemandNode.phaseFrame_future {node : DemandNode} {access : AccessEnv}
           simp [haliases] at h
           cases h
           rfl
-      · simp [hphase] at h
+      · simp [hphase, DemandNode.phaseFuture] at h
         cases h
         rfl
-    | _ => simp [DemandNode.phaseFrame] at h; cases h; rfl
-  | _ => simp [DemandNode.phaseFrame] at h; cases h; rfl
+    | _ =>
+      simp [DemandNode.phaseFrame, DemandNode.phaseFuture] at h
+      cases h
+      rfl
+  | place place =>
+    simp [DemandNode.phaseFrame, DemandNode.phaseFuture] at h
+    cases h
+    rfl
+  | view view =>
+    simp [DemandNode.phaseFrame, DemandNode.phaseFuture] at h
+    cases h
+    rfl
+  | bound bound =>
+    simp [DemandNode.phaseFrame, DemandNode.phaseFuture] at h
+    cases h
+    rfl
+  | statement statement =>
+    cases statement with
+    | assignWhole owner replacement origin =>
+      by_cases hphase : phase == .mutation
+      · simp [DemandNode.phaseFrame, DemandNode.phaseFuture, hphase] at h
+        cases h
+        simp [DemandNode.phaseFuture, hphase]
+      · simp [DemandNode.phaseFrame, DemandNode.phaseFuture, hphase] at h
+        cases h
+        simp [DemandNode.phaseFuture, hphase]
+    | _ =>
+      simp [DemandNode.phaseFrame, DemandNode.phaseFuture] at h
+      cases h
+      rfl
+  | block block =>
+    simp [DemandNode.phaseFrame, DemandNode.phaseFuture] at h
+    cases h
+    rfl
 
 /-- Successful call entry validates every argument alias at its original operand path. -/
 theorem DemandNode.call_phase_alias_argument
@@ -1639,7 +1683,7 @@ theorem DemandNode.call_phase_alias_argument
   have hmapped :
       (fun aliases => { frame with retained := aliases ++ frame.retained }) <$>
         access.aliasesOfArgs path args = .ok result := by
-    simpa [DemandNode.phaseFrame] using hphase
+    simpa [DemandNode.phaseFrame, DemandNode.phaseFuture] using hphase
   obtain ⟨collected, hcollected, _⟩ := except_map_ok_extract hmapped
   obtain ⟨aliases, haliases, _⟩ :=
     AccessEnv.aliasesOfArgs_index access path args hcollected index arg hindex harg
@@ -1658,7 +1702,7 @@ theorem DemandNode.call_mutation_retains_argument
   have hmapped :
       (fun aliases => { frame with retained := aliases ++ frame.retained }) <$>
         access.aliasesOfArgs path args = .ok result := by
-    simpa [DemandNode.phaseFrame] using hphase
+    simpa [DemandNode.phaseFrame, DemandNode.phaseFuture] using hphase
   obtain ⟨collected, hcollected, hresult⟩ := except_map_ok_extract hmapped
   obtain ⟨aliases, haliases, hmem⟩ :=
     AccessEnv.aliasesOfArgs_index access path args hcollected index arg hindex harg
@@ -2358,7 +2402,7 @@ private theorem DemandNode.phaseFrame_primary (node : DemandNode) (access : Acce
   | place place => rfl
   | view view => rfl
   | bound bound => rfl
-  | statement statement => rfl
+  | statement statement => cases statement <;> rfl
   | block block => rfl
 
 /-- The root expected point keeps the exact initial demand frame for its owner. -/

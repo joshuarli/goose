@@ -77,11 +77,48 @@ def clearRequestMatchesOwner : Bool :=
         | .error _ => false
         | .ok owner => point.node.isDirectShrink && point.shrinkOwners == [owner]
 
+def wholeReplacementReferenceAliasModule : Module :=
+  let elem := Ty.int .i64
+  let ownerTy := Ty.growshrink elem
+  let main : Impl := {
+    name := "wholeReplacementReferenceAlias"
+    params := #[]
+    results := #[]
+    vars := #[
+      ⟨"values", ownerTy, .mutable, 0, 0⟩,
+      ⟨"slot", .ref .mutable elem, .immutable, 0, 0⟩]
+    body := .mk 0 [
+      .letS 0 (.arrLit ownerTy [.lit .i64 10]) 0,
+      .letS 1 (.ref .mutable (.elem (.of (.var 0)) (.lit .i64 0) 0)) 0,
+      .assignWhole (.var 0)
+        (.arrLit ownerTy [.read (.deref (.read (.var 1)))]) 0] none
+    summary := .unknown }
+  { files := #["whole_replacement_reference_alias.goose"]
+    types := #[]
+    globals := #[]
+    impls := #[main]
+    contexts := #[⟨0, "main()", [(1, [.local 0])], [], []⟩]
+    entry := 0
+    origins := #[⟨0, 1, "stmt"⟩]
+    profile := .shrink }
+
+def wholeReplacementReferenceAliasIsLive : Bool :=
+  match DemandNode.expectedPoints wholeReplacementReferenceAliasModule 0 with
+  | .error _ => false
+  | .ok expected =>
+    match expected.find? (fun point => point.path == [2] && point.phase == .mutation) with
+    | none => false
+    | some point => point.frame.future.contains 1
+
 #guard runs (include_str "../../../test/semantics/golden/shrink_last_use.core.json") (returned "2\n1\n")
 #guard match validate emptyArrayAliasModule with
   | .error rejection => rejection.rule == .shrink
   | .ok _ => false
 #guard clearRequestMatchesOwner
+#guard wholeReplacementReferenceAliasIsLive
+#guard match validate wholeReplacementReferenceAliasModule with
+  | .error rejection => rejection.rule == .shrink
+  | .ok _ => false
 #guard rejects (include_str "../../../test/semantics/golden/shrink_live_slice.core.json") "V-SHRINK"
 #guard rejects (include_str "../../../test/semantics/golden/shrink_loop_alias.core.json") "V-SHRINK"
 #guard rejects (include_str "../../../test/semantics/golden/shrink_retained_destination.core.json") "V-SHRINK"

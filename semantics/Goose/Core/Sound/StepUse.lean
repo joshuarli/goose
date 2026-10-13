@@ -331,6 +331,7 @@ private theorem printExpr_shrinkOutputFuture {path : List Nat} {all : List Print
     rest.flatMap PrintArg.variables ++ context.expected.frame.future
   rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
     hfuture]
+  simp [DemandNode.phaseFuture]
 
 /-- Facts for an argument's exact source child and the checked state after it. -/
 private structure PrintArgStepContext {path : List Nat} {all : List PrintArg} {origin : OriginId}

@@ -133,6 +133,7 @@ private theorem whileCondOutputFuture {path : List Nat} {c : Expr} {body : Block
         using h
     change transition.context.expected.frame.future = _
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, hfuture]
+    simp [DemandNode.phaseFuture]
 
 private theorem whileBodyOutputFuture {path : List Nat} {c : Expr} {body : Block} {origin : OriginId}
     (ec : EvaluationContext m plans path (.statement (.while c body origin)) .statement) :
@@ -167,6 +168,7 @@ private theorem whileBodyOutputFuture {path : List Nat} {c : Expr} {body : Block
         using h
     change transition.context.expected.frame.future = _
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, hfuture]
+    simp [DemandNode.phaseFuture]
 
 private theorem whileCondInput_subset {path : List Nat} {c : Expr} {body : Block} {origin : OriginId}
     (ec : EvaluationContext m plans path (.statement (.while c body origin)) .statement) :
@@ -361,6 +363,7 @@ private theorem rangeBodyOutputFuture {path : List Nat} {x : VarId} {lower upper
         using h
     change transition.context.expected.frame.future = _
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, hfuture]
+    simp [DemandNode.phaseFuture]
 
 private theorem rangeBodyOutput_coversInput {path : List Nat} {x : VarId} {lower upper : Expr}
     {body : Block} {origin : OriginId} {tenv : TEnv}
@@ -459,6 +462,7 @@ private theorem eachBodyOutputFuture {path : List Nat} {x : VarId} {idx : Option
         DemandNode.children] using h
     change transition.context.expected.frame.future = _
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, hfuture]
+    simp [DemandNode.phaseFuture]
 
 private theorem foldVisibleMem {binders active : List VarId} {y : VarId} :
     y ∈ binders.foldl (fun active binder =>
