@@ -1151,7 +1151,12 @@ inline void TypeCheck::GrowOnlyShrinkAt(Node *c, const string &op, VarDef *vd,
             auto held = t->kind == TY_REF ? t->ref->sub : t->sub;
             auto via = !into && HoldsPlainRef(held) &&
                        HeldRefsMayPointInto(v, v->ref, t, vd, bound, true);
-            if ((!into && !via) || !UsedAfter(v)) return;
+            if (!into && !via) return;
+            if (!UsedAfter(v)) {
+                if (UsedAfter(v, ShrinkDemand::Core))
+                    NoteCoreShrinkUnsupported(CoreShrinkBoundary::ExitException, c->line);
+                return;
+            }
             if (via)
                 Error(c, cat("cannot ", op, " ", what, " while ", v->name, " is still used: ",
                              t->kind == TY_SLICE
@@ -2051,8 +2056,12 @@ inline bool TypeCheck::IsGrowOnlyRootVar(VarDef *r) {
 // (they cannot be stored), so the scan is exact, up to a `var` reference
 // the same-depth rebinding rule could have retargeted into it.
 inline void TypeCheck::CheckShrinkHolders(Node *at, const string &op, VarDef *root,
-                                          const string &what, TypeExpr *bound) {
-    CheckHeldShrinks(at, op, root, what, false, bound);
+                                          const string &what, TypeExpr *bound, ShrinkCheck check) {
+    if (check == ShrinkCheck::Source) CheckHeldShrinks(at, op, root, what, false, bound);
+    else HeldOperands([&](const Held &held) {
+        if (CoreRetainedShrinkConflict(held.v, root, bound, false))
+            NoteCoreShrinkUnsupported(CoreShrinkBoundary::BalancedCall, at->line);
+    });
     ShrinkScanVars([&](VarDef *v) {
         if (v == root || !v->type) return;
         if (!IsRefOrSlice(v->type)) return;
@@ -2078,7 +2087,22 @@ inline void TypeCheck::CheckShrinkHolders(Node *at, const string &op, VarDef *ro
         // slices are kept.
         auto via = !into && v->type->kind == TY_REF && v->type->ref->sub->kind == TY_SLICE &&
                    HeldRefsMayPointInto(v, v->ref, v->type, root, bound, false);
-        if ((!into && !via) || !UsedAfter(v)) return;
+        if (check == ShrinkCheck::CoreBalancedCall) {
+            Val value;
+            value.type = v->type;
+            value.TakeAlts(v->ref);
+            value.byteview = v->ref.byteview;
+            if ((into || via || CoreRetainedShrinkConflict(value, root, bound, false)) &&
+                UsedAfter(v, ShrinkDemand::Core))
+                NoteCoreShrinkUnsupported(CoreShrinkBoundary::BalancedCall, at->line);
+            return;
+        }
+        if (!into && !via) return;
+        if (!UsedAfter(v)) {
+            if (UsedAfter(v, ShrinkDemand::Core))
+                NoteCoreShrinkUnsupported(CoreShrinkBoundary::ExitException, at->line);
+            return;
+        }
         Error(at, cat("cannot ", op, " while ", v->name, " (bound at ", Where(v->line),
                       ") is still used: ", via ? "the slice it refers to may point into "
                                                : "it may refer into ",
@@ -2120,6 +2144,57 @@ inline void TypeCheck::NoteWritableContents(const Roots &roots) {
         NoteRootEvent(alt.root,
                       [](FnSpec *s, int i) { s->record.writeparams.insert(i); },
                       [](FnSpec *s, VarDef *r) { s->record.writeexternals.insert(r); });
+}
+
+inline void TypeCheck::NoteCoreShrinkUnsupported(CoreShrinkBoundary boundary, Line at) {
+    auto spec = CurRealFrame().spec;
+    if (!spec) return;
+    auto &reasons = spec->record.coreShrinkUnsupported;
+    for (auto &reason : reasons)
+        if (reason.boundary == boundary && reason.at.fileidx == at.fileidx && reason.at.line == at.line)
+            return;
+    reasons.push_back({ boundary, at });
+    sort(reasons.begin(), reasons.end(), [](auto &a, auto &b) {
+        return tuple(a.boundary, a.at.fileidx, a.at.line) < tuple(b.boundary, b.at.fileidx, b.at.line);
+    });
+}
+
+// Use the identities preserved by Core closure conversion, including concrete
+// global roots, rather than distinctions known only at a source call site.
+inline bool TypeCheck::CoreShrinkRootsMayOverlap(VarDef *a, VarDef *b) {
+    if (!a || !b) return false;
+    auto global = [](VarDef *v) {
+        if (v->isglobal) return v;
+        return v->depth == 0 && v->classfrom && v->classfrom->isglobal ? v->classfrom : nullptr;
+    };
+    auto ga = global(a), gb = global(b);
+    if (ga && gb) return ga == gb;
+    auto current = CurRealFrame().spec;
+    auto local = [&](VarDef *v) { return v->type && !v->isglobal && v->ownerspec == current; };
+    if (local(a) || local(b)) return a == b;
+    // Captures and parameter classes become abstract parameters unless their
+    // checked roots name concrete globals. Parameter positions prove no separation.
+    return true;
+}
+
+// Whole-owner references survive truncation. Interior references and slices
+// stay retained across a Core call even when the callee consumes them early.
+inline bool TypeCheck::CoreRetainedShrinkConflict(const Val &value, VarDef *root,
+                                                 TypeExpr *bound, bool growonly) {
+    if (!value.type || !IsRefOrSlice(value.type)) return false;
+    if (value.type->kind == TY_REF && value.type->ref->sub->kind == TY_SLICE) {
+        auto contents = SlotView(value, value.type->ref->sub);
+        Val slice;
+        slice.type = value.type->ref->sub;
+        slice.TakeAlts(contents);
+        slice.byteview = contents.byteview;
+        return CoreRetainedShrinkConflict(slice, root, bound, growonly);
+    }
+    if (value.type->kind == TY_REF && ClassOf(value.type->ref->sub) == SC_RESIZABLE) return false;
+    if (!ShrinkMayFree(root, bound, growonly, PointeeOf(value.type), value.byteview)) return false;
+    return value.Any([&](const RootAlt &alt) {
+        return CoreShrinkRootsMayOverlap(alt.root, root);
+    });
 }
 
 // Records a shrink for callers, a bound's with the type of the array
@@ -2368,7 +2443,8 @@ inline void TypeCheck::NoteLiveViews(Node *at, const string &prefix, VarDef *roo
                             .live = a.root, .liveexact = a.exact, .pointee = w.pointee,
                             .byteview = w.p.byteview, .growonly = growonly, .name = name,
                             .contents = w.contents, .inplace = w.inplace };
-            if (NoteLiveShrink(ls, current) < 0)
+            auto result = NoteLiveShrink(ls, current);
+            if (result < 0)
                 Error(at, cat(prefix, " while ", name, " is still used: it may refer into ", what,
                               growonly ? " (§5.1)" : " (§5.2)"));
         }
@@ -2382,8 +2458,18 @@ inline void TypeCheck::NoteLiveViews(Node *at, const string &prefix, VarDef *roo
                  vs.end());
         return !vs.empty();
     };
+    auto coreConflict = [&](const vector<LiveView> &views) {
+        for (auto &view : views) {
+            if (!ShrinkMayFree(root, bound, growonly, view.pointee, view.p.byteview)) continue;
+            for (auto &alt : view.p.alts)
+                if (CoreShrinkRootsMayOverlap(alt.root, root)) return true;
+        }
+        return false;
+    };
     HeldOperands([&](const Held &h) {
         auto vs = views(h.v, h.v.type, h.location || h.reread, false, h.inplace);
+        if (coreConflict(vs))
+            NoteCoreShrinkUnsupported(CoreShrinkBoundary::ParameterAlias, at->line);
         if (!judged(vs)) return;
         auto name = ExprStr(h.node);
         if (name.find('\n') != string::npos)
@@ -2404,7 +2490,15 @@ inline void TypeCheck::NoteLiveViews(Node *at, const string &prefix, VarDef *roo
             set<VarDef *> seen;
             RecordedViews(v, LiveEventBase(v), t, vs, seen);
         }
-        if (!judged(vs) || !UsedAfter(v)) return;
+        if (coreConflict(vs) && UsedAfter(v, ShrinkDemand::Core))
+            NoteCoreShrinkUnsupported(UsedAfter(v) ? CoreShrinkBoundary::ParameterAlias
+                                                   : CoreShrinkBoundary::ExitException, at->line);
+        if (!judged(vs)) return;
+        if (!UsedAfter(v)) {
+            if (UsedAfter(v, ShrinkDemand::Core))
+                NoteCoreShrinkUnsupported(CoreShrinkBoundary::ExitException, at->line);
+            return;
+        }
         for (auto &w : vs) note(w, string(v->name));
     });
 }
@@ -2829,7 +2923,18 @@ inline void TypeCheck::ApplyCalleeShrinks(Node *at, FnSpec *spec, vector<Val> &a
         } else if (judged == SB_UNBALANCED) {
             ShrinkGrowShrink(at, op, h.root, string(h.root->name), h.bound);
         } else {
+            CheckShrinkHolders(at, op, h.root, string(h.root->name), h.bound,
+                               ShrinkCheck::CoreBalancedCall);
             NoteShrink(h.root, h.bound, judged);
+        }
+        for (size_t i = 0; i < argvals.size() && i < spec->argtypes.size(); i++) {
+            auto type = spec->argtypes[i];
+            if (!IsRefOrSlice(type)) continue;
+            auto argument = argvals[i];
+            argument.type = type;
+            argument.TakeAlts(ClassArgRoots(type, argvals[i]));
+            if (CoreRetainedShrinkConflict(argument, h.root, h.bound, h.growonly))
+                NoteCoreShrinkUnsupported(CoreShrinkBoundary::Demand, at->line);
         }
         NoteShrinkEvent(at, h.root, h.bound, op);
     };

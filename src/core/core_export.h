@@ -764,6 +764,8 @@ private:
 
     void BuildImpl(int k) {
         auto sp = ctxspecs[k];
+        for (auto &unsupported : sp->record.coreShrinkUnsupported)
+            ReportOrFail(CoreShrinkBoundaryName(unsupported.boundary), unsupported.at);
         here = sp->sf->line;
         mod.impls.emplace_back();
         mod.contexts.emplace_back();

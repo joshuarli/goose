@@ -347,7 +347,8 @@ struct TypeCheck {
     void CheckStmts(Block *b);
     bool MentionsName(Node *n, string_view name, set<SFunction *> &seen);
     bool EscapingContinue(Node *n);
-    bool UsedAfter(VarDef *v);
+    enum class ShrinkDemand { Source, Core };
+    bool UsedAfter(VarDef *v, ShrinkDemand demand = ShrinkDemand::Source);
 
     // The node being checked and every node it is nested in, innermost last,
     // from the statement being checked outward (CheckStmt, CheckV,
@@ -2343,14 +2344,18 @@ struct TypeCheck {
         return s;
     }
 
+    enum class ShrinkCheck { Source, CoreBalancedCall };
     void CheckShrinkHolders(Node *at, const string &op, VarDef *root, const string &what,
-                            TypeExpr *bound = nullptr);
+                            TypeExpr *bound = nullptr, ShrinkCheck check = ShrinkCheck::Source);
     // Records an event on root for callers: globals and captured owners
     // remain external roots (`external` gets the specialization they are
     // external to), while a specialization's parameter roots map at calls
     // (`param` gets it and the parameter's index).
     template <typename P, typename X> void NoteRootEvent(VarDef *root, P param, X external);
     void NoteWritableContents(const Roots &roots);
+    void NoteCoreShrinkUnsupported(CoreShrinkBoundary boundary, Line at);
+    bool CoreShrinkRootsMayOverlap(VarDef *a, VarDef *b);
+    bool CoreRetainedShrinkConflict(const Val &value, VarDef *root, TypeExpr *bound, bool growonly);
     void NoteShrink(VarDef *root, TypeExpr *bound = nullptr,
                     ShrinkBalance balance = SB_UNBALANCED);
     void ShrinkGrowShrink(Node *at, const string &op, VarDef *root, const string &what,

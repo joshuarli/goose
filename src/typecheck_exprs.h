@@ -3147,7 +3147,7 @@ inline bool TypeCheck::ExposedLater(VarDef *v) {
 // from the shrink: the rest of that block and its tail, and for a `return`
 // everything else of this frame's body, for a `break` everything inside the
 // loop or `block` it ends, that loop's next iteration included.
-inline bool TypeCheck::UsedAfter(VarDef *v) {
+inline bool TypeCheck::UsedAfter(VarDef *v, ShrinkDemand demand) {
     set<SFunction *> seen;
     auto vframe = FrameOfScope(Depth(v) - 1);
     auto mentions = [&](Node *n, int fi) {
@@ -3173,7 +3173,9 @@ inline bool TypeCheck::UsedAfter(VarDef *v) {
                           : Is<Break>(s) ? FindBreakScope(false)
                                          : -1;
                 if (to < 0) continue;
-                cut = to;
+                // Checking removes the suffix after this unconditional exit.
+                // Core still retains enclosing continuations and loop demand.
+                if (demand == ShrinkDemand::Source) cut = to;
                 exitat = i;
                 break;
             }

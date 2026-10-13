@@ -1302,6 +1302,10 @@ class DepFinal {
                 else c.Tag('_');
             }
         }
+        c.U(r.coreShrinkUnsupported.size());
+        for (auto &unsupported : r.coreShrinkUnsupported)
+            c.Str(CoreShrinkBoundaryName(unsupported.boundary))
+                .Str(mods.ModuleOf(unsupported.at.fileidx)).I(unsupported.at.line);
         {
             vector<string> v;
             for (auto x : r.growexternals) v.push_back(names.Var(x));
