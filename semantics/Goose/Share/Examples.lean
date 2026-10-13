@@ -25,6 +25,8 @@ def mergeableJson : String := include_str "../../../test/semantics/share/mergeab
 def distinctJson : String := include_str "../../../test/semantics/share/distinct_callees.core.json"
 def forgedBodyJson : String := include_str "../../../test/semantics/share/forged_merged_body.json"
 def forgedCalleeJson : String := include_str "../../../test/semantics/share/forged_wrong_callee.json"
+def shrinkOwnerOpsJson : String := include_str "../../../test/semantics/golden/sem_core_shrink_owner_ops.core.json"
+def structJson : String := include_str "../../../test/semantics/golden/struct_local.core.json"
 
 def load (text : String) : Option Module :=
   match Decode.decodeBytes text.toUTF8 with
@@ -43,6 +45,22 @@ def accepts (unshared shared : String) : Bool :=
   | some m, some m' =>
     checkQuotient m m' (reconstructImplMap m m') (reconstructContextMap m m')
   | _, _ => false
+
+/-- Whether a module remains accepted after changing its artifact profile. -/
+def acceptsWithPilotProfile (text : String) : Bool :=
+  match load text with
+  | some m =>
+    let m' := { m with profile := .pilot }
+    checkQuotient m m' (reconstructImplMap m m') (reconstructContextMap m m')
+  | none => false
+
+/-- Whether a module remains accepted after removing its struct descriptors. -/
+def acceptsWithoutStructs (text : String) : Bool :=
+  match load text with
+  | some m =>
+    let m' := { m with structs := #[] }
+    checkQuotient m m' (reconstructImplMap m m') (reconstructContextMap m m')
+  | none => false
 
 /-- The line `run` prints for a module. -/
 def outcome (text : String) : String := (Run.runBytes {} text.toUTF8).1
@@ -91,6 +109,21 @@ def proposed (text : String) : Option String := do
 
 -- The checker accepts a module as its own quotient.
 #guard accepts differJson differJson
+
+-- Shrink operations survive proposing and running, and the checker preserves
+-- the profile and nominal struct table that give Core types their meaning.
+#guard match load shrinkOwnerOpsJson with
+  | some m => m.profile == .shrink
+  | none => false
+#guard accepts shrinkOwnerOpsJson shrinkOwnerOpsJson
+#guard !acceptsWithPilotProfile shrinkOwnerOpsJson
+#guard (proposed shrinkOwnerOpsJson).map outcome == some (outcome shrinkOwnerOpsJson)
+#guard match load structJson with
+  | some m => !m.structs.isEmpty
+  | none => false
+#guard accepts structJson structJson
+#guard !acceptsWithoutStructs structJson
+#guard (proposed structJson).map outcome == some (outcome structJson)
 
 -- Root annotations matter to validation and not to execution: with every
 -- context's annotations erased the first golden is rejected, yet it runs to the
