@@ -1055,6 +1055,12 @@ private:
             if (def && (def->op == GirOp::SliceView || def->op == GirOp::ViewSlice ||
                         def->op == GirOp::Elem || def->op == GirOp::Index))
                 return close(contentsMutable(def->a, open));
+            // The callee's return check has already established that a mutable
+            // slice result carries mutable contents.
+            if (def && def->op == GirOp::Call) {
+                auto &result = m.Type(fn.vt[v]);
+                if (result.kind == CoreType::Slice && result.mut == CoreMut::Mut) return close(true);
+            }
             if (def && def->op == GirOp::Load) {
                 auto &loaded = m.Type(fn.vt[v]);
                 if (loaded.kind == CoreType::Slice && loaded.mut == CoreMut::Mut) {
