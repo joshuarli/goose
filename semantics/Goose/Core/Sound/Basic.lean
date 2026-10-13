@@ -91,10 +91,16 @@ theorem Targets.isRef {v : Val} {r : RootInst} (h : Targets v r) : IsRef v := by
 /-- A reference to a whole global that is not initialized yet. Such a reference
 may be made and passed while earlier globals are initialized, but not used. -/
 def Unbound (m : Module) (G : Nat) (l : Loc) (T : Ty) : Prop :=
-  ∃ g gl, G ≤ g ∧ l = ⟨.global g, []⟩ ∧ m.globals[g]? = some gl ∧ gl.ty = T
+  ∃ g gl, G ≤ g ∧ l.root = .global g ∧ m.globals[g]? = some gl ∧ FieldPath gl.ty l.path T
 
 def LocOk (m : Module) (G : Nat) (s : Store) (l : Loc) (T : Ty) : Prop :=
   LocTy s l T ∨ Unbound m G l T
+
+theorem LocOk.fieldPath {m : Module} {G : Nat} {s : Store} {l : Loc} {a b : Ty} {p : List Nat}
+    (h : LocOk m G s l a) (k : FieldPath a p b) : LocOk m G s ⟨l.root, l.path ++ p⟩ b := by
+  rcases h with h | ⟨g, gl, hG, hr, hg, hp⟩
+  · exact Or.inl (h.fieldPath k)
+  · exact Or.inr ⟨g, gl, hG, hr, hg, hp.append k⟩
 
 /-- A run of `n` elements from `st` inside the array of `E` at `l`. -/
 def SliceTy (s : Store) (l : Loc) (st n : Nat) (E : Ty) : Prop :=
@@ -112,6 +118,7 @@ def HasTy (m : Module) (G : Nat) (s : Store) (v : Val) : Ty → Prop
   | .bool => FlatTy .bool v
   | .arr E k => FlatTy (.arr E k) v
   | .grow E => FlatTy (.grow E) v
+  | .structT sid ts => FlatTy (.structT sid ts) v
 
 /-- What a stored reference or slice must denote, whatever its type. -/
 def Held (m : Module) (G : Nat) (s : Store) : Val → Prop

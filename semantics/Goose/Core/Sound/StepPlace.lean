@@ -11,12 +11,12 @@ open Goose.Core Goose.Proofs.Memory
 variable {m : Module} {prof : NumProfile} {n : Nat}
 
 theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 1) := by
-  intro W tenv penv env s p tn tn' t mu rst rst' rho hp hF ht hr hE
+  intro W tenv penv env s p tn tn' t mu contents rst rst' rho hp hF ht hr hE
   cases p with
   | var x =>
     simp only [tyPlace] at ht; inv at ht
     simp only [rpPlace] at hr; inv at hr
-    obtain ⟨hx, lv0, hlv0, rfl, rfl, rfl⟩ := ht
+    obtain ⟨hx, lv0, hlv0, rfl, rfl, rfl, rfl⟩ := ht
     obtain ⟨rfl, rfl⟩ := hr
     obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := hF.vis x hx
     rw [hF.vars_t, h1] at hlv0
@@ -36,7 +36,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
     | none => simp only [hg] at ht; inv at ht
     | some gl =>
       simp only [hg] at ht; inv at ht
-      obtain ⟨rfl, rfl, rfl⟩ := ht
+      obtain ⟨rfl, rfl, rfl, rfl⟩ := ht
       rw [hF.mod_t] at hg
       have hok := hm.glob g gl hg
       simp only [evalPlace, sat_pure]
@@ -44,7 +44,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
         ⟨.global g, by simp, rfl⟩⟩
       by_cases hG : g < W.G
       · exact Or.inl (hF.inv.globals g gl hG hg)
-      · exact Or.inr ⟨g, gl, Nat.le_of_not_lt hG, rfl, hg, rfl⟩
+      · exact Or.inr ⟨g, gl, Nat.le_of_not_lt hG, rfl, hg, FieldPath.root _⟩
   | deref e =>
     simp only [rpPlace] at hr
     simp only [evalPlace]
@@ -54,7 +54,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
       obtain ⟨te, t1, ⟨te', t0, hte, hnr, rfl, rfl⟩, ht⟩ := ht
       cases te <;> inv at ht
       rename_i mm tt
-      obtain ⟨rfl, rfl, rfl⟩ := ht
+      obtain ⟨rfl, rfl, rfl, rfl⟩ := ht
       refine Sat.bind (ih.expr W tenv penv env s e _ _ _ _ _ _ hp hF hte hr hE) ?_
       rintro v s1 ⟨hF1, hX1, hv, hg⟩
       obtain ⟨l, rfl, hh⟩ := hv
@@ -66,7 +66,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
       simp only [tyPlace, hs] at ht
       obtain ⟨x, lv, mu0, mus, E, rfl, hx, hlv, hty, hfl, rfl⟩ := sliceRefTy_some hs
       rw [hty] at ht; inv at ht
-      obtain ⟨rfl, rfl, rfl⟩ := ht
+      obtain ⟨rfl, rfl, rfl, rfl⟩ := ht
       simp only [rpExpr] at hr; inv at hr
       obtain ⟨rp, r1, hrp, r2, hadd, hrr⟩ := hr
       obtain ⟨_, hroots⟩ := readRoots_ok _ _ _ _ hrr
@@ -94,10 +94,27 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
         · cases e
         · have := hnr x lv rfl (by rw [hF.vars_p]; exact hlv)
           rw [hty] at this; simp [Ty.isRefLike] at this
+  | field owner i =>
+    simp only [tyPlace] at ht; inv at ht
+    obtain ⟨ot, ob, oc, t1, howner, f, t2, hfield, rfl, rfl, rfl, rfl⟩ := ht
+    obtain ⟨sid, ts, rfl, hflat, hselector, rfl⟩ := structField_ok _ _ _ _ _ _ hfield
+    have hf : f.ty.flat = true := tyList_flat_get ts (by simpa [Ty.flat] using hflat) i f.ty hselector
+    simp only [rpPlace] at hr
+    simp only [evalPlace]
+    refine Sat.bind (ih.place W tenv penv env s owner _ _ _ _ _ _ _ _ hp hF howner hr hE) ?_
+    rintro l s1 ⟨hF1, hX1, hpl, hg⟩
+    simp only [sat_pure]
+    refine ⟨hF1, hX1, ?_, hg⟩
+    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, _, _, _, _, hty, hrl, _⟩ |
+      ⟨x, lv, mu0, mus, E, ann, _, _, _, hty, _⟩
+    · exact Or.inl ⟨flat_refTarget hf,
+        hl.fieldPath (FieldPath.field hselector (FieldPath.root _))⟩
+    · simp [Ty.isRefLike] at hrl
+    · cases hty
   | elem v i org =>
     simp only [tyPlace] at ht; inv at ht
     simp only [rpPlace] at hr; inv at hr
-    obtain ⟨_, el, b, t1, htv, ti, t2, hti, it, rfl, rfl, rfl, rfl⟩ := ht
+    obtain ⟨_, el, b, t1, htv, ti, t2, hti, it, rfl, rfl, rfl, rfl, rfl⟩ := ht
     obtain ⟨rv, r1, hrv, ri, r2, hri, r3, hna, rfl, rfl⟩ := hr
     have hE2 : EffLe r2.eff W.E := (PMono.noteAborts _ _ _ hna).2.trans hE
     simp only [evalPlace]
@@ -121,11 +138,11 @@ theorem step_view (ih : Specs m prof n) : ViewSpec m prof (n + 1) := by
   | of p =>
     simp only [tyView] at ht; inv at ht
     simp only [rpView] at hr; inv at hr
-    obtain ⟨tp, b, t1, htp, ht⟩ := ht
+    obtain ⟨tp, b, contents, t1, htp, ht⟩ := ht
     obtain ⟨rp, r1, hrp, r2, hadd, rfl, rfl⟩ := hr
     obtain ⟨_, hin⟩ := addReads_ok _ _ _ hadd
     simp only [evalView]
-    refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ hp hF htp hrp
+    refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ _ hp hF htp hrp
       ((PMono.addReads _ _ _ _ hadd).2.trans hE)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     have hacc : ∀ T, LocOk m W.G s1.store l T → LocTy s1.store l T := fun T hl =>
@@ -209,7 +226,7 @@ theorem step_arg (ih : Specs m prof n) : ArgSpec m prof (n + 1) := by
   | byRef mu p =>
     obtain ⟨t, mu', htp, hrt, rfl⟩ := ht
     simp only [evalArg]
-    refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ hp hF htp hr hE) ?_
+    refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ _ hp hF htp hr hE) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     simp only [sat_pure]
     refine ⟨hF1, hX1, ?_, fun r hr' => by cases hr'; exact hg⟩

@@ -8,6 +8,52 @@ establishes when it succeeds.
 namespace Goose.Core.Sound
 open Goose.Core
 
+theorem structDef_ok (env : TEnv) (t : Ty) (n n' : Nat) (d : StructDef)
+    (h : structDef env t n = .ok (d, n')) :
+    ∃ sid ts, t = .structT sid ts ∧ t.flat = true ∧ env.mod.structType? sid = some t ∧
+      env.mod.structs[sid]? = some d ∧ n' = n := by
+  cases t <;> simp only [structDef] at h <;> inv at h
+  rename_i sid ts
+  obtain ⟨hp, hf, hc, h⟩ := h
+  cases hd : env.mod.structs[sid]? with
+  | none => simp only [hd] at h; inv at h
+  | some found =>
+    simp only [hd] at h; inv at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨sid, ts, rfl, hf, by simpa using hc, hd, rfl⟩
+
+@[simp] theorem tyList_toList_ofList (ts : List Ty) : (TyList.ofList ts).toList = ts := by
+  induction ts with
+  | nil => rfl
+  | cons t ts ih => simp [TyList.ofList, TyList.toList, ih]
+
+theorem tyList_flat_get : ∀ (ts : TyList), ts.flat = true →
+    ∀ (i : Nat) (t : Ty), ts.toList[i]? = some t → t.flat = true
+  | .nil, h, i, t, ht => by simp [TyList.toList] at ht
+  | .cons u us, h, i, t, ht => by
+    simp only [TyList.flat, Bool.and_eq_true] at h
+    cases i with
+    | zero =>
+      simp only [TyList.toList, List.getElem?_cons_zero, Option.some.injEq] at ht
+      subst ht; exact h.1
+    | succ i => exact tyList_flat_get us h.2 i t (by simpa [TyList.toList] using ht)
+
+theorem structField_ok (env : TEnv) (t : Ty) (i n n' : Nat) (f : StructField)
+    (h : structField env t i n = .ok (f, n')) :
+    ∃ sid ts, t = .structT sid ts ∧ t.flat = true ∧ ts.toList[i]? = some f.ty ∧ n' = n := by
+  simp only [structField] at h; inv at h
+  obtain ⟨d, n1, hd, h⟩ := h
+  obtain ⟨sid, ts, rfl, hflat, hc, hdesc, rfl⟩ := structDef_ok _ _ _ _ _ hd
+  cases hf : d.fields[i]? with
+  | none => simp only [hf] at h; inv at h
+  | some found =>
+    simp only [hf] at h; inv at h
+    obtain ⟨rfl, rfl⟩ := h
+    simp only [Module.structType?, hdesc, Option.map_some, Option.some.injEq, Ty.structT.injEq] at hc
+    obtain ⟨_, rfl⟩ := hc
+    refine ⟨sid, _, rfl, hflat, ?_, rfl⟩
+    simp only [tyList_toList_ofList, List.getElem?_map, Array.getElem?_toList, hf, Option.map_some]
+
 theorem checkOutlives_ok (env : PEnv) (chain : List Nat) (lv : LocalVar) (xpos : Nat) :
     ∀ (rho : List RootRef), checkOutlives env chain lv xpos rho = .ok () →
     ∀ y, RootRef.local y ∈ rho →
@@ -447,6 +493,11 @@ theorem readRoots_ok (env : PEnv) (p : Place) (s : RState) (r : List RootRef × 
       · intro x' lv e; cases e
       · intro x' e; cases e; exact absurd ⟨_, rfl⟩ hx
   | global g =>
+    simp only [readRoots] at h; inv at h
+    refine ⟨h.2, Or.inr (Or.inr ⟨h.1, ?_, ?_⟩)⟩
+    · intro x' lv e; cases e
+    · intro x' e; cases e
+  | field p i =>
     simp only [readRoots] at h; inv at h
     refine ⟨h.2, Or.inr (Or.inr ⟨h.1, ?_, ?_⟩)⟩
     · intro x' lv e; cases e

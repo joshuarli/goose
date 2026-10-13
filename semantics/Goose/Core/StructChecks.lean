@@ -224,4 +224,27 @@ def malformed (s : String) : Bool := (Run.validateBytes s.toUTF8).2 == 2
 #guard malformed (include_str "../../../test/semantics/malformed/struct_binding.core.json")
 #guard malformed (include_str "../../../test/semantics/malformed/struct_zero_size.core.json")
 
+/-- Address formation in a called initializer does not read later global storage. -/
+def laterGlobalFieldAddress (m : Module) : Module :=
+  match m.structType? 0 with
+  | none => m
+  | some t =>
+    let addressOnly : Impl :=
+      { name := "address_only"
+        params := #[]
+        results := #[.int .i64]
+        vars := #[]
+        body := .mk 0 [.expr (.ref .mutable (.field (.global 1) 1)) 0,
+        .ret (some (.lit .i64 0)) 0] none,
+        summary := .known ⟨[], [], [], [], false, false⟩ }
+    { m with
+      globals := #[⟨"first", .int .i64, .immutable, .call 1 [] 0, 0⟩,
+        ⟨"later", t, .immutable, .structLit t [.lit .u8 1, .lit .i64 40, .lit .i16 7], 0⟩]
+      impls := m.impls.push addressOnly
+      contexts := m.contexts.push ⟨1, "address_only()", [], [[]], []⟩ }
+
+#guard checkChange laterGlobalFieldAddress "ok"
+#guard runChange laterGlobalFieldAddress .release localResult
+#guard runChange laterGlobalFieldAddress .debug localResult
+
 end Goose.Core.StructChecks

@@ -150,14 +150,14 @@ theorem args_spec (ihA : ArgSpec m prof n) (hp : Perm m W) (callee : Impl) :
         | byRef mu p' =>
           simp only [tyArgs, hv] at ht; inv at ht
           simp only [rpArgs] at hr; inv at hr
-          obtain ⟨_, t, b, t1, htp, hrt, ht⟩ := ht
+          obtain ⟨_, t, b, contents, t1, htp, hallowed, hrt, ht⟩ := ht
           obtain ⟨rho, r1, hre, ars', r2, hra, rfl, rfl⟩ := hr
           have h2 : (Ty.ref mu t).passableTo pv.ty = true ∧
               tyArgs tenv callee ps as t1 = .ok ((), tn') := by
             rcases ht with ⟨_, _, h1, h2⟩ | ⟨_, h1, h2⟩ <;> exact ⟨h1, h2⟩
           have hrt' : t.refTarget = true ∨ (t.isSlice = true ∧ b = true ∧ p'.sliceArg = true) := by
             simpa [Bool.or_eq_true, Bool.and_eq_true, and_assoc] using hrt
-          exact ⟨.ref mu t, t1, rho, r1, ars', ⟨t, b, htp, hrt', rfl⟩, h2.1, h2.2, hre, hra, rfl⟩
+          exact ⟨.ref mu t, t1, rho, r1, ars', ⟨t, (b, contents), htp, hrt', rfl⟩, h2.1, h2.2, hre, hra, rfl⟩
       obtain ⟨ty, t1, rho, r1, ars', hat, hpass, hrest, har, hra, rfl⟩ := key
       simp only [mapList]
       refine Sat.bind (ihA W tenv penv env s a _ _ _ _ _ _ hp hF hat har

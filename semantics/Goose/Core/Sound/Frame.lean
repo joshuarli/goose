@@ -117,9 +117,10 @@ theorem access {m : Module} {W : World} {env : Env} {s : Store} {l : Loc} {T : T
     {rho : List RootRef} (hp : Perm m W) (hl : LocOk m W.G s l T) (hg : Gam env W.P rho l.root)
     (hin : ∀ t, t ∈ rootsTargets rho → t ∈ W.E.reads ∨ t ∈ W.E.writes ∨ t ∈ W.E.grows) :
     LocTy s l T := by
-  rcases hl with hl | ⟨g, gl, hG, rfl, hgl, _⟩
+  rcases hl with hl | ⟨g, gl, hG, hroot, hgl, _⟩
   · exact hl
   · exfalso
+    rw [hroot] at hg
     have hlt : g < m.globals.size := (Array.getElem?_eq_some_iff.1 hgl).1
     rcases hp with hp | ⟨_, hp⟩
     · omega
@@ -285,6 +286,7 @@ theorem hasTy_step {m : Module} {G : Nat} {s s' : Store} {r : RootInst} {v : Val
   case bool => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case arr E k => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case grow E => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
+  case structT sid ts => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case ref mu T =>
     refine ⟨v, hkeep ?_, ht.mono hle⟩
     obtain ⟨l, rfl, _⟩ := ht; trivial

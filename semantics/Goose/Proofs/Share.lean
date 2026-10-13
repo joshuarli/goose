@@ -34,6 +34,7 @@ mutual
 theorem renPlace_id : ∀ p : Place, renPlace id p = p
   | .var _ => rfl
   | .global _ => rfl
+  | .field p i => by simp [renPlace, renPlace_id p]
   | .deref e => by simp [renPlace, renExpr_id e]
   | .elem v i o => by simp [renPlace, renView_id v, renExpr_id i]
 
@@ -65,6 +66,7 @@ theorem renExpr_id : ∀ e : Expr, renExpr id e = e
   | .ifE c t f => by simp [renExpr, renExpr_id c, renBlock_id t, renBlock_id f]
   | .blockE b => by simp [renExpr, renBlock_id b]
   | .arrLit _ es => by simp [renExpr, renExprs_id es]
+  | .structLit _ es => by simp [renExpr, renExprs_id es]
   | .fill _ e => by simp [renExpr, renExpr_id e]
 
 theorem renExprs_id : ∀ es : List Expr, renExprs id es = es
@@ -187,9 +189,11 @@ theorem evalExpr_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
           enterCall n ⟨p, m'⟩ depth (r c) vals :=
         fun depth c vals => enterCall_sim hρ n depth c (r c) vals (hr c)
       simp only [call]
-    | arrLit t es =>
-      simp only [evalExpr, renExpr, renExprs_eq_map]
-      rw [mapList_sim _ (evalExpr n ⟨p, m'⟩ env) (renExpr r)
+    | arrLit t es | structLit t es =>
+      cases t <;> simp only [evalExpr, renExpr, renExprs_eq_map]
+      all_goals first
+        | rfl
+        | rw [mapList_sim _ (evalExpr n ⟨p, m'⟩ env) (renExpr r)
         (fun a => evalExpr_sim hρ r hr n env a)]
     | _ => simp [evalExpr, renExpr, evalExpr_sim hρ r hr n, evalPlace_sim hρ r hr n,
         evalView_sim hρ r hr n, evalBound_sim hρ r hr n, blockValue_sim hρ r hr n]
@@ -220,7 +224,7 @@ theorem evalPlace_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     evalPlace n ⟨p, m⟩ env pl = evalPlace n ⟨p, m'⟩ env (renPlace r pl)
   | r, _, 0, env, pl => by simp [evalPlace]
   | r, hr, n + 1, env, pl => by
-    cases pl <;> simp [evalPlace, renPlace, evalExpr_sim hρ r hr n, evalView_sim hρ r hr n]
+    cases pl <;> simp [evalPlace, renPlace, evalExpr_sim hρ r hr n, evalView_sim hρ r hr n, evalPlace_sim hρ r hr n]
 
 theorem evalView_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
     ∀ (r : CtxMap) (_hr : ∀ c, Resolves m m' ρ (r c) c) (n : Nat) (env : Env) (v : View),

@@ -52,10 +52,10 @@ theorem hasTy_target_dom {G : Nat} {st : Store} {v : Val} {T : Ty} {r : RootInst
     obtain ⟨l, rfl, hh⟩ := h
     cases hr
     rcases hh with ⟨_, hl⟩ | ⟨_, _, hlive⟩
-    · rcases hl with ⟨x, hx, _⟩ | ⟨g, gl, _, rfl, _⟩
+    · rcases hl with ⟨x, hx, _⟩ | ⟨g, gl, _, hroot, _⟩
       · obtain ⟨old, ho, _⟩ := (read_ok_iff _ _ _).1 hx
         exact Or.inr (by rw [ho]; simp)
-      · exact Or.inl ⟨g, rfl⟩
+      · exact Or.inl ⟨g, hroot⟩
     · exact Or.inr hlive
   | slice mu E =>
     obtain ⟨l, a, b, rfl, _, x, es, hx, _⟩ := h
@@ -68,6 +68,7 @@ theorem hasTy_target_dom {G : Nat} {st : Store} {v : Val} {T : Ty} {r : RootInst
   | bool => exact absurd hr.isRef (flat_not_ref h)
   | arr E k => exact absurd hr.isRef (flat_not_ref h)
   | grow E => exact absurd hr.isRef (flat_not_ref h)
+  | structT sid ts => exact absurd hr.isRef (flat_not_ref h)
 
 variable {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
 

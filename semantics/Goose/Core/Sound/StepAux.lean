@@ -271,7 +271,7 @@ theorem sat_lengthLoc {l : Loc} {E : Ty} {Q : Nat → St → Prop}
     (h : LocTy s.store l (.grow E))
     (k : ∀ es, s.store.read l = .ok (.resizable E es) → Q es.size s) : Sat (lengthLoc l) s Q := by
   obtain ⟨v, hv, hT⟩ := h
-  rcases v with _|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hT
+  rcases v with _|_|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hT
   obtain ⟨rfl, _⟩ := hT
   simp only [Sat, lengthLoc, Store.length, hv]
   exact k es hv

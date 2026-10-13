@@ -147,6 +147,24 @@ end Goose.Audit
 #audit Goose.Reuse.key_omission_example
 #audit Goose.Proofs.Fuel.eval_fuel_mono
 
+#audit Goose.Proofs.Memory.fields_get
+#audit Goose.Proofs.Memory.FieldPath.get
+#audit Goose.Proofs.Memory.FieldPath.append
+#audit Goose.Proofs.Memory.LocTy.fieldPath
+#audit Goose.Proofs.Memory.fields_set
+#audit Goose.Proofs.Memory.flat_record_set
+#audit Goose.Proofs.Memory.fields_swap
+#audit Goose.Proofs.Memory.fields_refines
+#audit Goose.Proofs.Memory.get_record
+#audit Goose.Proofs.Memory.get_cons_children
+#audit Goose.Proofs.Memory.modifyAt_cons_held
+#audit Goose.Core.Sound.LocOk.fieldPath
+#audit Goose.Core.Sound.structDef_ok
+#audit Goose.Core.Sound.structField_ok
+#audit Goose.Core.Sound.struct_exprs_spec
+#audit Goose.Core.Sound.step_place
+#audit Goose.Core.Sound.step_expr_b
+
 #audit Goose.Proofs.Memory.th_mem_01
 #audit Goose.Proofs.Memory.append_le
 #audit Goose.Proofs.Memory.write_le

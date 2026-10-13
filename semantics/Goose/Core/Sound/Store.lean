@@ -39,6 +39,16 @@ theorem modifyAt_total (f : Val → Option Val) :
         obtain ⟨e', he'⟩ := ih e x y h1 h2
         refine ⟨.fixed (es.set i e'), ?_⟩
         simp only [Val.modifyAt?, hlt, dite_true, he, he']
+    | record sid es =>
+      rw [get_record] at h1
+      cases hi : es[i]? with
+      | none => simp [hi] at h1
+      | some e =>
+        simp only [hi, Option.bind_some] at h1
+        obtain ⟨hlt, he⟩ := Array.getElem?_eq_some_iff.1 hi
+        obtain ⟨e', he'⟩ := ih e x y h1 h2
+        refine ⟨.record sid (es.set i e'), ?_⟩
+        simp only [Val.modifyAt?, hlt, dite_true, he, he']
     | resizable E es =>
       rw [get_resizable] at h1
       cases hi : es[i]? with
@@ -49,7 +59,7 @@ theorem modifyAt_total (f : Val → Option Val) :
         obtain ⟨e', he'⟩ := ih e x y h1 h2
         refine ⟨.resizable E (es.set i e'), ?_⟩
         simp only [Val.modifyAt?, hlt, dite_true, he, he']
-    | _ => simp [Val.get?, Val.elems?] at h1
+    | _ => simp [Val.get?, Val.children?, Val.elems?] at h1
 
 theorem modify_total (s : Store) (l : Loc) (f : Val → Option Val) (x y : Val)
     (hr : s.read l = .ok x) (hf : f x = some y) : ∃ s', s.modify l f = .ok s' := by
@@ -70,6 +80,13 @@ theorem modifyAt_notRef (f : Val → Option Val) (p : List Nat) (v v' x : Val)
   | cons i rest =>
     cases v with
     | fixed es =>
+      simp only [Val.modifyAt?] at h
+      split at h
+      · split at h
+        · cases h; simp [IsRef]
+        · cases h
+      · cases h
+    | record sid es =>
       simp only [Val.modifyAt?] at h
       split at h
       · split at h
@@ -141,7 +158,7 @@ theorem write_flatStep (s s' : Store) (l : Loc) (v : Val) (T : Ty) (hT : T.flat 
 theorem append_total (s : Store) (l : Loc) (vs : Array Val) (E : Ty) (hl : LocTy s l (.grow E)) :
     ∃ s' n, s.append l vs = .ok (s', n) := by
   obtain ⟨x, hx, hTx⟩ := hl
-  rcases x with _|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hTx
+  rcases x with _|_|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hTx
   obtain ⟨s', hs'⟩ := modify_total s l (Val.appendAll vs) _ _ hx rfl
   exact ⟨s', es.size, by simp [Store.append, Store.length, hx, hs']⟩
 
@@ -246,7 +263,7 @@ theorem rebind_le (s : Store) (r : RootInst) (old v : Val) (ho : s.roots[r]? = s
       rw [get_nil] at hp; cases hp
       refine ⟨v, get_nil _, fun T hT => absurd hold (flat_not_ref hT), fun es hes => ?_⟩
       cases old <;> simp_all [IsRef, Val.elems?]
-    | cons i q => cases old <;> simp_all [IsRef, Val.get?, Val.elems?]
+    | cons i q => cases old <;> simp_all [IsRef, Val.get?, Val.children?, Val.elems?]
   · exact ⟨v1, by simp [get_reinsert, hr, h1], Refines.refl _⟩
 
 theorem write_root (s : Store) (r : RootInst) (old v : Val) (ho : s.roots[r]? = some old) :

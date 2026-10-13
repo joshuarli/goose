@@ -25,6 +25,34 @@ variable {σ ε α β : Type}
     · intro h'; exact ⟨a, s1, ⟨rfl, rfl⟩, h'⟩
     · rintro ⟨a', s1', ⟨rfl, rfl⟩, h'⟩; exact h'
 
+@[chk 1100] theorem st_bind_place_ok (x : T PlaceInfo) (f : PlaceInfo → T α) (s : Nat) (r : α × Nat) :
+    (x >>= f) s = .ok r ↔ ∃ t, ∃ caps : Bool × Bool, ∃ n,
+      x s = .ok (⟨t, caps.1, caps.2⟩, n) ∧ f ⟨t, caps.1, caps.2⟩ n = .ok r := by
+  rw [st_bind_ok]
+  constructor
+  · rintro ⟨⟨t, b, c⟩, n, hx, hf⟩
+    exact ⟨t, (b, c), n, hx, hf⟩
+  · rintro ⟨t, caps, n, hx, hf⟩
+    exact ⟨⟨t, caps.1, caps.2⟩, n, hx, hf⟩
+
+attribute [chk] PlaceInfo.mk.injEq
+
+@[chk] theorem checkFieldReference_ok (p : Place) (info : PlaceInfo) (n n' : Nat) :
+    checkFieldReference p info n = .ok ((), n') ↔ info.canReference p = true ∧ n' = n := by
+  cases h : info.canReference p <;> simp [checkFieldReference, h, rej, bind, Except.bind, pure, StateT.pure]
+  · intro impossible; cases impossible
+  · change Except.ok ((), n) = Except.ok ((), n') ↔ n' = n
+    simp [eq_comm]
+
+@[chk] theorem checkType_ok (env : TEnv) (t : Ty) (n n' : Nat) :
+    checkType env t n = .ok ((), n') ↔ checkResolvedType env.mod t = .ok () ∧ n' = n := by
+  cases h : checkResolvedType env.mod t with
+  | error e => simp [checkType, h, bind, Except.bind]
+  | ok u =>
+    cases u; simp [checkType, h, bind, Except.bind]
+    change Except.ok ((), n) = Except.ok ((), n') ↔ n' = n
+    simp [eq_comm]
+
 @[chk] theorem st_pure_ok (a : α) (s : σ) (r : α × σ) :
     (pure a : StateT σ (Except ε) α) s = .ok r ↔ r = (a, s) := by
   show Except.ok (a, s) = Except.ok r ↔ _
