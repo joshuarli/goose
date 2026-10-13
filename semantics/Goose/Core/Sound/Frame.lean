@@ -83,6 +83,67 @@ theorem unionRoots_right (a b : List RootRef) : ∀ q, q ∈ b → q ∈ unionRo
       simpa [unionRoots] using this
     · exact ih _ q hq
 
+/-- Roots a computation may change from its entry state: the static roots it
+names, together with local roots allocated after the entry scope counter. -/
+def MutationRoots (env : Env) (P : Nat → RootInst → Prop) (base : Nat)
+    (roots : List RootRef) (r : RootInst) : Prop :=
+  Gam env P roots r ∨ ∃ act si x, r = .local act si x ∧ base ≤ si
+
+/-- A computation with this footprint leaves every other stored root exact. -/
+def MutationFootprint (env : Env) (P : Nat → RootInst → Prop) (base : Nat)
+    (roots : List RootRef) (s s' : St) : Prop :=
+  StoreLeExcept (MutationRoots env P base roots) s.store s'.store
+
+theorem MutationFootprint.refl (env : Env) (P : Nat → RootInst → Prop)
+    (base : Nat) (roots : List RootRef) (s : St) :
+    MutationFootprint env P base roots s s :=
+  fun _ _ => rfl
+
+theorem MutationFootprint.trans {env : Env} {P : Nat → RootInst → Prop}
+    {base : Nat} {roots : List RootRef} {s₀ s₁ s₂ : St}
+    (h₁ : MutationFootprint env P base roots s₀ s₁)
+    (h₂ : MutationFootprint env P base roots s₁ s₂) :
+    MutationFootprint env P base roots s₀ s₂ :=
+  StoreLeExcept.trans h₁ h₂
+
+theorem MutationFootprint.weaken {env : Env} {P : Nat → RootInst → Prop}
+    {base : Nat} {roots roots' : List RootRef} {s s' : St}
+    (h : MutationFootprint env P base roots s s')
+    (hsubset : ∀ q, q ∈ roots → q ∈ roots') :
+    MutationFootprint env P base roots' s s' := by
+  intro r hnot
+  apply h r
+  intro hchanged
+  rcases hchanged with ⟨q, hq, hroot⟩ | ⟨act, si, x, heq, hage⟩
+  · exact hnot (Or.inl ⟨q, hsubset q hq, hroot⟩)
+  · exact hnot (Or.inr ⟨act, si, x, heq, hage⟩)
+
+theorem MutationFootprint.trans_union {env : Env} {P : Nat → RootInst → Prop}
+    {base : Nat} {roots₁ roots₂ : List RootRef} {s₀ s₁ s₂ : St}
+    (h₁ : MutationFootprint env P base roots₁ s₀ s₁)
+    (h₂ : MutationFootprint env P base roots₂ s₁ s₂) :
+    MutationFootprint env P base (unionRoots roots₁ roots₂) s₀ s₂ := by
+  intro r hnot
+  rw [h₂ r (by
+    intro h
+    apply hnot
+    rcases h with ⟨q, hq, hroot⟩ | ⟨act, si, x, heq, hage⟩
+    · exact Or.inl ⟨q, unionRoots_right roots₁ roots₂ q hq, hroot⟩
+    · exact Or.inr ⟨act, si, x, heq, hage⟩)]
+  rw [h₁ r (by
+    intro h
+    apply hnot
+    rcases h with ⟨q, hq, hroot⟩ | ⟨act, si, x, heq, hage⟩
+    · exact Or.inl ⟨q, unionRoots_left roots₁ roots₂ q hq, hroot⟩
+    · exact Or.inr ⟨act, si, x, heq, hage⟩)]
+
+theorem MutationFootprint.root_eq {env : Env} {P : Nat → RootInst → Prop}
+    {base : Nat} {roots : List RootRef} {s s' : St} {r : RootInst}
+    (footprint : MutationFootprint env P base roots s s')
+    (outside : ¬ MutationRoots env P base roots r) :
+    s'.store.roots[r]? = s.store.roots[r]? :=
+  footprint r outside
+
 /-! ### Effects an activation may have -/
 
 def TargetOk (G : Nat) (P : Nat → RootInst → Prop) : Target → Prop
