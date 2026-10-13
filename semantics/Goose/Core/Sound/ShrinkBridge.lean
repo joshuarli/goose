@@ -263,7 +263,7 @@ theorem NodeContext.clearApproval
     simpa [hnode, DemandNode.directShrinkPlace?]
   rcases planContext.approvals.directShrinkAt context.expected context.member hphase
       (by simpa [DemandNode.isDirectShrink, hdirect]) owner howner with
-    ⟨approval, hapath, howner, hphase, hframe⟩
+    ⟨approval, _, hapath, howner, hphase, hframe⟩
   exact ⟨approval, hapath.trans hpath, howner, hphase, hframe⟩
 
 end Goose.Core.Sound
