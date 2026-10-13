@@ -327,6 +327,53 @@ void RejectsUnresolvedLayout() {
     assert(Code(m) == "GIR-V090");
 }
 
+void RejectsElementsThatDoNotTopTheirStack() {
+    auto m = LowBase();
+    Main(m).stacks = 1;
+    GirMember hdr;
+    hdr.kind = GirMember::Header;
+    hdr.stack = 0;
+    hdr.scope = 0;
+    Main(m).members = { hdr };
+    GirInst at = Def(GirOp::StackAt, 1);
+    at.a = 0;
+    at.idx = 0;
+    GirInst frame = Def(GirOp::FrameAddr, 2);
+    frame.idx = 0;
+    GirInst mark = Def(GirOp::StackMark, 3);
+    mark.a = 1;
+    GirInst init;
+    init.op = GirOp::HdrInit;
+    init.a = 2;
+    init.b = 3;
+    GirInst bump;
+    bump.op = GirOp::StackBump;
+    bump.a = 1;
+    bump.b = -1;
+    bump.idx = 8;
+    // A bump the length of the header does not follow.
+    Main(m).blocks[0].insts = { at, frame, mark, init, bump, Ret() };
+    assert(Code(m) == "GIR-V090");
+    // With the length update it is the push the lowering writes.
+    auto one = Int(m, 4, "1");
+    GirInst setlen;
+    setlen.op = GirOp::HdrSetLen;
+    setlen.a = 2;
+    setlen.b = 4;
+    Main(m).blocks[0].insts = { at, frame, mark, init, bump, one, setlen, Ret() };
+    assert(Code(m) == "");
+    // A header started from a mark of another stack.
+    Main(m).stacks = 2;
+    GirInst at1 = Def(GirOp::StackAt, 3);
+    at1.a = 0;
+    at1.idx = 1;
+    GirInst mark1 = Def(GirOp::StackMark, 4);
+    mark1.a = 3;
+    init.b = 4;
+    Main(m).blocks[0].insts = { at, frame, at1, mark1, init, Ret() };
+    assert(Code(m) == "GIR-V090");
+}
+
 }  // namespace
 
 int main() {
@@ -345,6 +392,7 @@ int main() {
     RejectsTwoResizablesOnOneStack();
     RejectsWatermarkPastCallerOwnedRegion();
     RejectsUnresolvedLayout();
+    RejectsElementsThatDoNotTopTheirStack();
     puts("compiler_gir ok");
     return 0;
 }

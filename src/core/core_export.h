@@ -28,11 +28,11 @@ public:
         if (!mainsf || mainsf->specs.empty()) Fail("no-entry", Line {});
         auto mainspec = mainsf->specs[0];
         if (!mainspec->params.empty() || !mainspec->rets.empty()) Fail("entry-signature", mainsf->line);
-        FindReachable(mainspec);
-        ExportGlobals();
-        // Contexts are numbered as calls are met, so building an
-        // implementation may add contexts after it.
+        // The entry is context 0. The calls a global's initializer makes come
+        // next, since they run first; building an implementation may add more.
         ContextOf(mainspec);
+        ExportGlobals();
+        FindReachable(ctxspecs);
         for (size_t k = 0; k < ctxspecs.size(); k++) BuildImpl((int)k);
         ExpandGlobalClasses();
         mod.entry = 0;
@@ -216,9 +216,9 @@ private:
     // variables as codegen's frame pass computes them: the variables of other
     // activations its body names in order of first appearance, then those its
     // callees need, to a fixed point.
-    void FindReachable(FnSpec *root) {
-        vector<FnSpec *> order { root };
-        unordered_set<const FnSpec *> seen { root };
+    void FindReachable(const vector<FnSpec *> &roots) {
+        vector<FnSpec *> order = roots;
+        unordered_set<const FnSpec *> seen(roots.begin(), roots.end());
         unordered_map<const FnSpec *, vector<FnSpec *>> callees;
         for (size_t i = 0; i < order.size(); i++) {
             auto sp = order[i];
@@ -281,10 +281,16 @@ private:
             here = g->line;
             auto stdlib = g->line.fileidx >= 0 && g->line.fileidx < (int)ast.filepkg.size() &&
                           ast.packages[ast.filepkg[g->line.fileidx]].stdlib;
+            auto nctx = ctxspecs.size();
             try {
                 ExportGlobal(g);
             } catch (CoreUnsupported &u) {
                 if (!stdlib) throw;
+                // What it called is not part of the program.
+                while (ctxspecs.size() > nctx) {
+                    ctxof.erase(ctxspecs.back());
+                    ctxspecs.pop_back();
+                }
                 // Types interned for the failed global stay in the table; the
                 // writer numbers by mention, so they never reach the output.
                 if (g->names.size() == 1 && g->defs.size() == 1 && g->defs[0]) skipped[g->defs[0]] = u;
@@ -1209,7 +1215,6 @@ private:
         if (c->spec->isfunval || c->fvbody || c->trailing) Fail("function-value");
         if (!c->dispatch.empty()) Fail("adt");
         if (!c->fmtspecs.empty()) Fail("user-format");
-        if (!cur.spec) Fail("global-initializer-call");
         auto callee = c->spec;
         auto &rets = callee->rets;
         if (rets.size() > 1) Fail("multiple-results");
