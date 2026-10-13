@@ -329,7 +329,8 @@ def checkType (env : TEnv) (t : Ty) : T Unit := fun n => do
 def requireShrink (env : TEnv) : T Unit :=
   unless env.mod.profile == .shrink do rej .type "operation requires core-shrink"
 
-def ownerElement (t : Ty) : T Ty :=
+def ownerElement (env : TEnv) (t : Ty) : T Ty := do
+  checkType env t
   match t.ownerElem? with
   | some e => pure e
   | none => rej .type "operation requires a grow, growshrink or limited owner"
@@ -641,7 +642,7 @@ def tyExpr (env : TEnv) : Expr → T Ty
     | _, _ => rej .type "push origin does not match the artifact profile"
     let placeInfo ← tyPlace env owner
     let t := placeInfo.ty
-    let el ← ownerElement t
+    let el ← ownerElement env t
     let argTy ← tyExpr env a
     unless argTy == el do rej .type "a pushed element of another type than the array's"
     requireWrite "push" (placeInfo.ownerMutationWritable env.mod.profile)
@@ -650,7 +651,7 @@ def tyExpr (env : TEnv) : Expr → T Ty
     requireShrink env
     checkOrg env org
     let placeInfo ← tyPlace env owner
-    let el ← ownerElement placeInfo.ty
+    let el ← ownerElement env placeInfo.ty
     requireWrite "pop" placeInfo.contentsWritable
     pure el
   | .ifE c t f => do
@@ -804,7 +805,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     checkOrg env o
     let placeInfo ← tyPlace env owner
     let t := placeInfo.ty
-    let el ← ownerElement t
+    let el ← ownerElement env t
     let (sel, _) ← tyView env src
     unless sel == el do rej .type "appended elements of another type than the array's"
     requireWrite "append" (placeInfo.ownerMutationWritable env.mod.profile)
@@ -813,7 +814,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     requireShrink env
     checkOrg env org
     let info ← tyPlace env owner
-    let _ ← ownerElement info.ty
+    let _ ← ownerElement env info.ty
     let _ ← requireInt "pop_n count" (← tyExpr env count)
     requireWrite "pop_n" info.contentsWritable
     pure env
@@ -821,7 +822,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     requireShrink env
     checkOrg env org
     let info ← tyPlace env owner
-    let el ← ownerElement info.ty
+    let el ← ownerElement env info.ty
     let _ ← requireInt "resize size" (← tyExpr env size)
     match fill with
     | none => pure ()
@@ -832,7 +833,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     requireShrink env
     checkOrg env org
     let info ← tyPlace env owner
-    let _ ← ownerElement info.ty
+    let _ ← ownerElement env info.ty
     requireWrite "clear" info.contentsWritable
     pure env
   | .assignWhole owner replacement org => do

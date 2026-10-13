@@ -363,18 +363,93 @@ theorem step_expr_b (ih : Specs m prof n) :
       exact ⟨hF3, (hX1.trans hX2).trans hX3,
         ⟨_, _, _, rfl, hvw3.1, hvw3.2.1.sub (by omega)⟩, fun r hr' => by cases hr'; exact hg⟩
     · simp only [hc, if_false, sat_abort]
-  | push owner a =>
-    simp only [tyExpr] at ht; inv at ht
-    simp only [rpExpr] at hr; inv at hr
-    obtain ⟨t, b, contents, t1, htp, ht⟩ := ht
-    obtain ⟨rp, r1, hrp, ra, r2, hra, r3, hgr, rfl, rfl⟩ := hr
+  | push owner a org =>
+    have hprofileOrg :
+        (m.profile = ArtifactProfile.pilot ∧ org = none) ∨
+        (m.profile = ArtifactProfile.shrink ∧ ∃ o, org = some o) := by
+      have hprofileOrg := tyExpr_push_profileOrg_ok tenv owner a org ty tn tn' ht
+      rw [hF.mod_t] at hprofileOrg
+      exact hprofileOrg
+    simp only [tyExpr] at ht
+    rw [hF.mod_t] at ht
+    have hcore : ∃ t b contents t1,
+        tyPlace tenv owner tn = .ok ({ ty := t, bindingWritable := b, contentsWritable := contents }, t1) ∧
+          ∃ ownerEl ownerState, ownerElement tenv t t1 = .ok (ownerEl, ownerState) ∧
+            ∃ argTy argState, tyExpr tenv a ownerState = .ok (argTy, argState) ∧
+              argTy = ownerEl ∧
+                (requireWrite "push"
+                  (({ ty := t, bindingWritable := b, contentsWritable := contents } : PlaceInfo).ownerMutationWritable tenv.mod.profile) >>= fun _ => pure (.ref .mutable ownerEl)) argState =
+                  .ok (ty, tn') := by
+      rcases hprofileOrg with ⟨hprofile, horg⟩ | ⟨hprofile, ⟨origin, horg⟩⟩
+      · have hprofileT : tenv.mod.profile = ArtifactProfile.pilot :=
+          (congrArg Module.profile hF.mod_t).trans hprofile
+        simp [tyExpr, hF.mod_t, hprofile, hprofileT, horg, checkOrg] at ht
+        inv at ht
+        simpa [hprofileT] using ht
+      · have hprofileT : tenv.mod.profile = ArtifactProfile.shrink :=
+          (congrArg Module.profile hF.mod_t).trans hprofile
+        simp [tyExpr, hF.mod_t, hprofile, hprofileT, horg, checkOrg] at ht
+        inv at ht
+        simpa [hprofileT] using ht.2
+    obtain ⟨t, b, contents, t1, htp, ht⟩ := hcore
+    simp only [rpExpr] at hr
+    rw [hF.mod_p] at hr
+    rcases (st_bind_ok _ _ _ _).1 hr with ⟨rp, r1, hrp, hrest1⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest1 with ⟨ra, r2, hra, hrest2⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest2 with ⟨_, r3Eval, hgrEval, htail⟩
+    let r3 : RState := { r2 with eff := { r2.eff with grows := addTargets r2.eff.grows (rootsTargets rp) } }
+    have hgr : addGrows rp r2 = .ok ((), r3) := by
+      unfold addGrows addRoots
+      apply (st_modify_ok _ _ _).2
+      rfl
+    have hr3 : r3Eval = r3 := by
+      have hstate := congrArg Prod.snd (Except.ok.inj (hgr.symm.trans hgrEval))
+      exact hstate.symm
+    rw [hr3] at htail
+    rw [← hF.mod_p] at htail
     obtain ⟨_, hin⟩ := addGrows_ok _ _ _ hgr
-    have hE2 : EffLe r2.eff W.E := (PMono.addGrows _ _ _ _ hgr).2.trans hE
-    cases t <;> inv at ht
-    rename_i el
-    obtain ⟨ta, t2, hta, heq, _, rfl, rfl⟩ := ht
-    have : ta = el := by simpa using heq
-    subst this
+    have hE3 : EffLe r3.eff W.E :=
+      ((PMono.profileWriteAbortValue penv owner rp) r3 rho rst' htail).2.trans hE
+    have hE2 : EffLe r2.eff W.E := (PMono.addGrows _ _ _ _ hgr).2.trans hE3
+    obtain ⟨ownerEl, ownerState, hownerRun, hafterOwner⟩ := ht
+    obtain ⟨ta, t2, hta, heq, hwrite⟩ := hafterOwner
+    have hownerFacts := ownerElement_ok tenv t ownerEl t1 ownerState hownerRun
+    have hresolved : checkResolvedType m t = .ok () := by
+      rw [← hF.mod_t]
+      exact hownerFacts.1
+    have hownerType : t.ownerElem? = some ownerEl := hownerFacts.2.1
+    have htaOwner : ta = ownerEl := by simpa using heq
+    subst ta
+    have hwriteOut : (ty, tn') = (.ref .mutable ownerEl, t2) := by
+      have hwriteBind :
+          (requireWrite "push"
+            (({ ty := t, bindingWritable := b, contentsWritable := contents } : PlaceInfo).ownerMutationWritable tenv.mod.profile) >>= fun _ =>
+            pure (.ref .mutable ownerEl)) t2 = .ok (ty, tn') := by
+        simpa [Functor.map, StateT.map] using hwrite
+      obtain ⟨_, state, hreq, hmap⟩ := (st_bind_ok _ _ _ _).1 hwriteBind
+      have hstate := (requireWrite_ok "push"
+        (({ ty := t, bindingWritable := b, contentsWritable := contents } : PlaceInfo).ownerMutationWritable tenv.mod.profile)
+        t2 ((), state)).1 hreq |>.2
+      have hwritePair : (ty, tn') = (.ref .mutable ownerEl, state) :=
+        (st_pure_ok _ _ _).1 hmap
+      cases hwritePair
+      simpa [hstate]
+    have htyOut : ty = .ref .mutable ownerEl := congrArg Prod.fst hwriteOut
+    subst ty
+    have hrho : rho = rp := by
+      cases hprofile : penv.mod.profile with
+      | pilot =>
+          simp [hprofile, st_pure_ok] at htail
+          exact htail.1
+      | shrink =>
+          simp [hprofile, st_bind_ok] at htail
+          rcases htail with ⟨_, _, _, htail⟩
+          rcases htail with ⟨_, _, hpure⟩ | ⟨state, _, hmap⟩
+          · exact congrArg Prod.fst ((st_pure_ok _ _ _).1 hpure)
+          · have hmapBind : (noteAborts >>= fun _ => pure rp) state = .ok (rho, rst') := by
+              simpa [Functor.map, StateT.map] using hmap
+            obtain ⟨_, state, _, hpure⟩ := (st_bind_ok _ _ _ _).1 hmapBind
+            exact congrArg Prod.fst ((st_pure_ok _ _ _).1 hpure)
     simp only [evalExpr]
     refine Sat.bind (ih.place W tenv penv env s owner _ _ _ _ _ _ _ _ hp hF htp hrp
       ((rpExpr_mono hra).2.trans hE2)) ?_
@@ -383,24 +458,77 @@ theorem step_expr_b (ih : Specs m prof n) :
     rintro v s2 ⟨hF2, hX2, hv, _⟩
     rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
       ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
-    · have hfl : ta.flat = true := by simpa [Ty.refTarget] using hrt
+    · have hfl : ownerEl.flat = true := by
+        cases t <;> simp_all [Ty.ownerElem?, Ty.refTarget]
       have hlt := access hp (hl.mono hX2.le) hg
-        (fun t' ht' => Or.inr (Or.inr (hE.2.2.1 t' (hin t' ht'))))
-      have hvs : ∀ (i : Nat) (e : Val), (#[v] : Array Val)[i]? = some e → FlatTy ta e := by
+        (fun t' ht' => Or.inr (Or.inr (Or.inl (hE3.2.2.1 t' (hin t' ht')))))
+      have hvs : ∀ (i : Nat) (e : Val), (#[v] : Array Val)[i]? = some e → FlatTy ownerEl e := by
         intro i e he
         cases i <;> simp at he
         subst he; exact hv.flat hfl
-      refine sat_appendLoc_bind hlt (fun st' i happ => ?_)
-      simp only [sat_pure]
-      have hstep := append_flatStep _ _ _ _ _ _ hlt hvs happ
-      obtain ⟨_, _, es, hread, hi, hnew⟩ := append_le _ _ _ _ _ _ hlt hvs happ
-      refine ⟨hF2.flatStep hstep, (hX1.trans hX2).trans (Ext.of_flatStep hstep),
-        ⟨_, rfl, Or.inl ⟨flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩⟩⟩,
-        fun r hr' => by cases hr'; exact hg⟩
-      have := hnew 0 v (by simp)
-      simpa using this
+      rcases hprofileOrg with ⟨hprofile, horg⟩ | ⟨_, ⟨origin, horg⟩⟩
+      · rw [horg]
+        have hownerGrow : t = .grow ownerEl := by
+          cases t with
+          | grow el => simpa [Ty.ownerElem?] using hownerType
+          | growshrink el =>
+            have heq : el = ownerEl := by simpa [Ty.ownerElem?] using hownerType
+            subst ownerEl
+            simp [checkResolvedType, hprofile, reject, bind, Except.bind] at hresolved
+          | limited el capacity =>
+            have heq : el = ownerEl := by simpa [Ty.ownerElem?] using hownerType
+            subst ownerEl
+            simp [checkResolvedType, hprofile, reject, bind, Except.bind] at hresolved
+          | int _ | bool | unit | arr _ _ | ref _ _ | slice _ _ | tuple _ | structT _ _ =>
+            simp [Ty.ownerElem?] at hownerType
+        have hltGrow : LocTy s2.store l (.grow ownerEl) := by simpa [hownerGrow] using hlt
+        refine sat_appendLoc_bind hltGrow (fun st' i happ => ?_)
+        simp only [sat_pure]
+        obtain ⟨hle, _, _, hread, hi, hnew⟩ :=
+          append_le s2.store st' l #[v] i ownerEl hltGrow hvs happ
+        have hstep := append_flatStep _ _ _ _ _ _ hltGrow hvs happ
+        have hnew := hnew 0 v (by simp)
+        refine ⟨hF2.flatStep hstep, (hX1.trans hX2).trans (Ext.of_flatStep hstep),
+          ⟨_, rfl, Or.inl ⟨flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩⟩⟩,
+          fun r hr' => by cases hr'; simpa [hrho] using hg⟩
+        simpa using hnew
+      · rw [horg]
+        refine sat_checkedAppendLoc_bind hlt hownerType hfl hvs (fun st' i happ hstep => ?_)
+        simp only [sat_pure]
+        have happLe : StoreLe s2.store st' ∧ LocTy st' l t ∧
+            ∀ (j : Nat) (e : Val), (#[v] : Array Val)[j]? = some e →
+              st'.read ⟨l.root, l.path ++ [i + j]⟩ = .ok e := by
+          cases t with
+          | grow el =>
+            have heq : el = ownerEl := by simpa [Ty.ownerElem?] using hownerType
+            subst ownerEl
+            obtain ⟨hle, hpost, _, _, _, hnew⟩ := append_le s2.store st' l #[v] i el hlt hvs happ
+            exact ⟨hle, hpost, hnew⟩
+          | growshrink el =>
+            have heq : el = ownerEl := by simpa [Ty.ownerElem?] using hownerType
+            subst ownerEl
+            obtain ⟨hle, hpost, _, _, _, hnew⟩ :=
+              append_le_growshrink s2.store st' l #[v] i el hlt hvs happ
+            exact ⟨hle, hpost, hnew⟩
+          | limited el capacity =>
+            have heq : el = ownerEl := by simpa [Ty.ownerElem?] using hownerType
+            subst ownerEl
+            obtain ⟨hle, hpost, _, _, _, hn, _, _, hnew, _⟩ :=
+              append_le_limited s2.store st' l #[v] i el capacity hfl hlt hvs happ
+            rw [← hn] at hnew
+            exact ⟨hle, hpost, hnew⟩
+          | int _ | bool | unit | arr _ _ | ref _ _ | slice _ _ | tuple _ | structT _ _ =>
+            simp [Ty.ownerElem?] at hownerType
+        have hstep := append_flatStep_owner s2.store st' l #[v] i t ownerEl hownerType hfl hlt hvs happ
+        have hnew := happLe.2.2 0 v (by simp)
+        refine ⟨hF2.flatStep hstep, (hX1.trans hX2).trans (Ext.of_flatStep hstep),
+          ⟨_, rfl, Or.inl ⟨flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩⟩⟩,
+          fun r hr' => by cases hr'; simpa [hrho] using hg⟩
+        simpa using hnew
     · simp [Ty.isRefLike] at hrl
-    · cases h3
+      cases t <;> simp_all [Ty.isRefLike, Ty.ownerElem?]
+    · rw [h3] at hownerType
+      simp [Ty.ownerElem?] at hownerType
   | ifE c t f =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr; inv at hr
@@ -471,6 +599,33 @@ theorem step_expr_b (ih : Specs m prof n) :
       refine ⟨hF1, hX1, ⟨rfl, ?_⟩, fun r hr' => hr'.elim⟩
       intro i e he
       exact hall e (by simpa using List.mem_of_getElem? (by simpa using he))
+    · rename_i el
+      obtain ⟨hcanon, hfl, t1, hes, rfl, rfl⟩ := ht
+      refine Sat.bind (exprs_spec ih.expr hp el hfl es s _ _ _ _ hF hes hres hE) ?_
+      rintro vs s1 ⟨hF1, hX1, hl, hall⟩
+      simp only [expectArrayLit, sat_pure]
+      refine ⟨hF1, hX1, ?_, fun r hr' => hr'.elim⟩
+      change FlatTy (.growshrink el) (.resizable el vs.toArray)
+      simp only [FlatTy]
+      exact ⟨trivial, fun i e he => hall e (by simpa using List.mem_of_getElem? (by simpa using he))⟩
+    · rename_i el capacity
+      obtain ⟨hcanon, hflatCap, t1, hes, rfl, rfl⟩ := ht
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hflatCap
+      have hflat : el.flat = true := hflatCap.1
+      have hcapacity : es.length ≤ capacity := hflatCap.2
+      refine Sat.bind (exprs_spec ih.expr hp el hflat es s _ _ _ _ hF hes hres hE) ?_
+      rintro vs s1 ⟨hF1, hX1, hl, hall⟩
+      have hsize : vs.length = es.length := hl
+      have hcapacity' : vs.toArray.size ≤ capacity := by simpa [hsize] using hcapacity
+      simp only [expectArrayLit, if_pos hcapacity', sat_pure]
+      refine ⟨hF1, hX1, ?_, fun r hr' => hr'.elim⟩
+      change FlatTy (.limited el capacity) (.limited el capacity vs.toArray vs.toArray.size)
+      simp only [FlatTy]
+      refine ⟨trivial, trivial, ?_, ?_, ?_⟩
+      · exact hcapacity'
+      · exact Nat.le_refl _
+      · intro i e he
+        exact hall e (by simpa using List.mem_of_getElem? (by simpa using he))
   | fill t a =>
     simp only [tyExpr] at ht
     simp only [rpExpr] at hr; inv at hr
