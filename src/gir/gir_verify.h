@@ -729,9 +729,16 @@ private:
         for (auto result : f.results)
             if (IsRefSlice(result))
                 TypeFail(fn, "a reference-to-slice type is only valid for a parameter");
-        for (auto &sl : f.slots) {
-            bool parameterRefSliceSlot = sl.var >= 0 && sl.var < (int)f.params.size() &&
-                                         f.params[sl.var] == sl.ty && IsRefSlice(sl.ty);
+        for (size_t index = 0; index < f.slots.size(); index++) {
+            auto &sl = f.slots[index];
+            if (sl.var != (int)index)
+                TypeFail(fn, cat("slot ", index, " names variable ", sl.var,
+                                 ", expected variable ", index));
+
+            auto param = (int)index;
+            bool parameterRefSliceSlot = param >= 0 && param < (int)f.params.size() &&
+                                         f.params[param] == sl.ty &&
+                                         f.blocks[0].params[param].second == sl.ty && IsRefSlice(sl.ty);
             if (!GirStorable(m, sl.ty) && !parameterRefSliceSlot)
                 TypeFail(fn, cat("the slot of variable ", sl.var, " has a type no variable may have"));
         }
