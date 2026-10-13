@@ -114,6 +114,68 @@ theorem MutationRoots.not_of_no_overlap {m : Module} {W : World}
   · exact (Gam.root_ne_of_no_overlap frame disjoint owner ⟨q, hq, effectRoot⟩) rfl
   · exact (Nat.not_le_of_gt (oldLocal act si x heq)) hnew
 
+/-- A forbidden owner root is eligible for exact preservation only when the
+entry store actually contains its checked resizable representation. A
+parameter's abstract root relation may also denote unrelated scalar globals. -/
+def DemandOwner.resizableRootAt {m : Module} {G : Nat} {env : Env}
+    {P : Nat → RootInst → Prop} {store : Store} (owner : DemandOwner)
+    (r : RootInst) : Prop :=
+  ∃ element elements,
+    (owner.ty = some (.grow element) ∨ owner.ty = some (.growshrink element)) ∧
+      Gam env P owner.roots r ∧
+      store.roots[r]? = some (.resizable element elements)
+
+/-- Preserve the exact entry value of every forbidden root that is present as
+a value of its checked grow or growshrink type. -/
+def PreservesForbiddenOwnerRoots {m : Module} {G : Nat} {env : Env}
+    {P : Nat → RootInst → Prop} (forbidden : List DemandOwner) (s s' : St) : Prop :=
+  ∀ owner, owner ∈ forbidden → ∀ r,
+    DemandOwner.resizableRootAt (m := m) (G := G) (env := env) (P := P)
+      (store := s.store) owner r → s'.store.roots[r]? = s.store.roots[r]?
+
+private theorem Gam.local_lt_nextScope {m : Module} {W : World} {tenv : TEnv}
+    {penv : PEnv} {env : Env} {s : St} {future : List VarId} {roots : List RootRef}
+    {act : ActId} {si : ScopeInst} {x : VarId}
+    (frame : Frame m W tenv penv env s future)
+    (owner : Gam env W.P roots (.local act si x)) : si < s.nextScope := by
+  obtain ⟨reference, _, denotes⟩ := owner
+  cases reference with
+  | «local» y =>
+    rcases denotes with ⟨lv, scope, hvar, hlookup, hroot⟩
+    have hroot := RootInst.local.inj hroot
+    rcases hroot with ⟨_, rfl, _⟩
+    obtain ⟨before, after, hscopes, _⟩ := List.lookup_eq_some_iff.mp hlookup
+    have hmember : (lv.scope, si) ∈ env.scopes := by
+      rw [hscopes]
+      exact List.mem_append_right _ List.mem_cons_self
+    exact (frame.below _ hmember).2
+  | global g =>
+    change RootInst.local act si x = RootInst.global g at denotes
+    cases denotes
+  | param i =>
+    exact Nat.lt_of_lt_of_le (frame.pAge i act si x denotes) frame.base_le
+
+/-- A mutation footprint and the selected whole-root approval preserve each
+present resizable forbidden owner exactly. -/
+theorem MutationFootprint.preservesForbiddenOwnerRoots
+    {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
+    {s s' : St} {future : List VarId} {roots : List RootRef}
+    {forbidden : List DemandOwner}
+    (frame : Frame m W tenv penv env s future)
+    (footprint : MutationFootprint env W.P s.nextScope roots s s')
+    (approved : ∀ owner, owner ∈ forbidden →
+      DemandRootsDisjoint owner.roots roots) :
+    PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+      forbidden s s' := by
+  intro owner howner r sourceOwner
+  obtain ⟨element, elements, _, denotes, sourceValue⟩ := sourceOwner
+  have outside : ¬ MutationRoots env W.P s.nextScope roots r := by
+    apply MutationRoots.not_of_no_overlap frame (approved owner howner) denotes
+    intro act si x heq
+    cases heq
+    exact Gam.local_lt_nextScope frame denotes
+  exact footprint r outside
+
 /-- An approved resizable shrink excludes every retained interior alias root. -/
 theorem shrinkApproval_retainedInteriorDisjoint
     {m : Module} {owner : Nat} {plan : Array DemandPoint}
