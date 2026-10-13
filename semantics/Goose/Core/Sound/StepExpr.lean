@@ -219,7 +219,8 @@ private theorem ObservedSafe.flatStep {m : Module} {W : World} {shrinking : Root
     intro v T hv hty
     exact HasTy.mono hstep.le hty
   have htyped' := hsafe.typed.advance hroots hvalues
-  refine ⟨htyped', hsafe.rootsOlder, hsafe.valuesOlder, ?_, hsafe.valuesProtected⟩
+  refine ⟨htyped', hsafe.rootsOlder, hsafe.valuesOlder, ?_, hsafe.valuesProtected,
+    hsafe.holderTypes⟩
   intro r T v hr hv hinterior target htarget hshrink
   obtain ⟨v', hv', hty'⟩ := htyped'.roots r T hr
   have hvEq : v' = v := Option.some.inj (hv'.symm.trans hv)
