@@ -30,6 +30,22 @@ private theorem elem_index_retained_alias
   rw [transition.expectedFrameEq]
   exact DemandNode.phaseFrame_retains transition.phaseFrameEq hChild
 
+private theorem OwnerRooted.ofOwnerPlace {env : Env} {ownerP : Nat → RootInst → Prop}
+    {roots : List RootRef} {l : Loc} {mu : Mutability} {target : Ty}
+    (ownerRoot : (∃ element, target = .grow element ∨ target = .growshrink element) →
+      Gam env ownerP roots l.root) :
+    OwnerRooted env ownerP roots (.ref l) (.ref mu target) := by
+  intro referenceOwner r targetOf
+  have resizableOwner : ∃ element, target = .grow element ∨ target = .growshrink element := by
+    rcases referenceOwner with ⟨ownerMu, element, ownerGrow | ownerGrowshrink⟩
+    · cases ownerGrow
+      exact ⟨element, Or.inl rfl⟩
+    · cases ownerGrowshrink
+      exact ⟨element, Or.inr rfl⟩
+  have rootEq : l.root = r := targetOf
+  subst r
+  exact ownerRoot resizableOwner
+
 theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof plans (n + 1) := by
   intro path p ec observation W tenv penv env s tn tn' t mu contents rst rst' rho hActive hAccess hProtected hObserved hClass hp hF ht hr hE
   cases p with
@@ -42,7 +58,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
     rw [hF.vars_t, h1] at hlv0
     cases hlv0
     simp only [evalPlace, rootOf, h1, h2, sat_pure_bind, sat_pure]
-    refine ⟨hF.narrowFuture (by intro y hy; cases ec <;> simp_all [EvaluationContext.inputFuture, EvaluationContext.outputFuture, NodeContext.inputFuture, NodeContext.outputFuture, DemandNode.visibleAfter]), Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _, hObserved, RetainsAliases.refl, (fun _ => StoreLe.refl _), ?_, ⟨.local x, by simp, lv0, si, h1, h2, rfl⟩, hClass⟩
+    refine ⟨hF.narrowFuture (by intro y hy; cases ec <;> simp_all [EvaluationContext.inputFuture, EvaluationContext.outputFuture, NodeContext.inputFuture, NodeContext.outputFuture, DemandNode.visibleAfter]), Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _, hObserved, RetainsAliases.refl, (fun _ => StoreLe.refl _), ?_, ⟨.local x, by simp, lv0, si, h1, h2, rfl⟩, hClass, (fun _ => ⟨.local x, by simp, lv0, si, h1, h2, rfl⟩), PreservesForbiddenOwnerRoots.refl _, MutationFootprint.refl _ _ _ _ _⟩
     by_cases hrl : lv0.ty.isRefLike = true
     · exact Or.inr (Or.inl ⟨x, lv0, si, v, rfl, h1, h2, rfl, rfl, hrl, h4, h5⟩)
     · have hrl' : lv0.ty.isRefLike = false := by simpa using hrl
@@ -63,7 +79,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
       simp only [evalPlace, sat_pure]
       refine ⟨hF.narrowFuture (by intro y hy; cases ec <;> simp_all [EvaluationContext.inputFuture, EvaluationContext.outputFuture, NodeContext.inputFuture, NodeContext.outputFuture, DemandNode.visibleAfter]), Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _, hObserved, RetainsAliases.refl, (fun _ => StoreLe.refl _), Or.inl ⟨storable_refTarget (paramOk_of_storable hok.ty.1) hok.ty.2, ?_,
         HeaderLoc.root⟩,
-        ⟨.global g, by simp, rfl⟩, hClass⟩
+        ⟨.global g, by simp, rfl⟩, hClass, (fun _ => ⟨.global g, by simp, rfl⟩), PreservesForbiddenOwnerRoots.refl _, MutationFootprint.refl _ _ _ _ _⟩
       by_cases hG : g < W.G
       · exact Or.inl (hF.inv.globals g gl hG hg)
       · exact Or.inr ⟨g, gl, Nat.le_of_not_lt hG, rfl, hg, FieldPath.root _⟩
@@ -82,10 +98,10 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
         (by trivial) tenv tenv hActive (by intro x; rfl)
       have hChildAccess := (ec.child_accessMatches_iff rfl 0 (.expression e) .expression rfl
         (by trivial) tenv penv).mpr hAccess
-      have hChildShrink : child.mayShrink W.P observation = ec.mayShrink W.P observation := by
+      have hChildShrink : child.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
         funext r
         exact propext (ec.child_mayShrink_iff rfl 0 (.expression e) .expression rfl
-          (by trivial) W.P observation r)
+          (by trivial) W.ownerP observation r)
       have hFuture : child.outputFuture = ec.outputFuture := by
         cases ec with
         | pilot profile active => rfl
@@ -105,13 +121,14 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
       refine Sat.bind (ih.expr (path ++ [0]) e child observation W tenv penv env s _ _ _ _ _ _
         hChildActive hChildAccess (by simpa [hChildShrink] using hProtected)
         (by simpa [hChildShrink] using hObserved) hClass hp (by simpa [hInput] using hF) hte hr hE) ?_
-      rintro v s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hv, hg, _⟩
+      rintro v s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hv, hg, _, hOwner, hForbidden, hMutation⟩
+      have hForbiddenPost := hForbidden.subset (ec.child_forbidden_subset rfl 0 _ _ rfl (by trivial))
       have hClassPost : m.profile = .shrink →
           ClassifiedParameters m W.P W.D observation s1.store :=
         fun profile => hF.classifiedParameters_advance (hClass profile) hX1
       have hFrame : Frame m W tenv penv env s1 ec.outputFuture := by
         simpa [hFuture] using hF1
-      have hObservedPost : ObservedSafe m W (ec.mayShrink W.P observation) observation s1.store := by
+      have hObservedPost : ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s1.store := by
         simpa [hChildShrink] using hObserved1
       have hRetained := hRetains.subset (fun alias hmem =>
         ec.child_retained_subset rfl 0 (.expression e) .expression rfl (by trivial) hmem)
@@ -119,7 +136,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
       obtain ⟨l, rfl, hh⟩ := hv
       simp only [expectRef, sat_pure]
       rcases hh with ⟨hrt, hl, hheader⟩ | ⟨hsl, _⟩
-      · exact ⟨hFrame, hX1, hRoots, hValues, hObservedPost, hRetained, hPilotLe, Or.inl ⟨hrt, hl, hheader⟩, hg _ rfl, hClassPost⟩
+      · exact ⟨hFrame, hX1, hRoots, hValues, hObservedPost, hRetained, hPilotLe, Or.inl ⟨hrt, hl, hheader⟩, hg _ rfl, hClassPost, (fun ⟨el, he⟩ => hOwner ⟨mm, el, he.elim (fun h => Or.inl (congrArg (Ty.ref mm) h)) (fun h => Or.inr (congrArg (Ty.ref mm) h))⟩ _ rfl), hForbiddenPost, hMutation⟩
       · rw [isRefSlice_ref] at hnr; exact absurd hsl hnr
     | some ty =>
       simp only [tyPlace, hs] at ht
@@ -146,7 +163,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
         simp only [expectRef, sat_pure]
         rw [hF.vars_t] at hlv
         refine ⟨hF.narrowFuture (by intro y hy; cases ec <;> simp_all [EvaluationContext.inputFuture, EvaluationContext.outputFuture, NodeContext.inputFuture, NodeContext.outputFuture, DemandNode.visibleAfter]), Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _, hObserved, RetainsAliases.refl, (fun _ => StoreLe.refl _), Or.inr (Or.inr ⟨x, lv, mu0, mus, E, ann, rfl, hlv, hty, rfl, hfl, hpath,
-          hann, hgl, hlive⟩), ?_, hClass⟩
+          hann, hgl, hlive⟩), ?_, hClass, (by rintro ⟨el, he | he⟩ <;> cases he), PreservesForbiddenOwnerRoots.refl _, MutationFootprint.refl _ _ _ _ _⟩
         rcases hroots with ⟨x', lv', e, _, _, ha'⟩ | ⟨x', e, _⟩ | ⟨_, hnr, _⟩
         · cases e
           simp only at ha'
@@ -166,10 +183,10 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
       (by trivial) tenv tenv hActive (by intro x; rfl)
     have hChildAccess := (ec.child_accessMatches_iff rfl 0 (.place owner) .place rfl
       (by trivial) tenv penv).mpr hAccess
-    have hChildShrink : child.mayShrink W.P observation = ec.mayShrink W.P observation := by
+    have hChildShrink : child.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
       funext r
       exact propext (ec.child_mayShrink_iff rfl 0 (.place owner) .place rfl
-        (by trivial) W.P observation r)
+        (by trivial) W.ownerP observation r)
     have hFuture : child.outputFuture = ec.outputFuture := by
       cases ec with
       | pilot profile active => rfl
@@ -189,7 +206,8 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
     refine Sat.bind (ih.place (path ++ [0]) owner child observation W tenv penv env s _ _ _ _ _ _ _ _
       hChildActive hChildAccess (by simpa [hChildShrink] using hProtected)
       (by simpa [hChildShrink] using hObserved) hClass hp (by simpa [hInput] using hF) howner hr hE) ?_
-    rintro l s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hpl, hg, _⟩
+    rintro l s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hpl, hg, _, hOwner, hForbidden, hMutation⟩
+    have hForbiddenPost := hForbidden.subset (ec.child_forbidden_subset rfl 0 _ _ rfl (by trivial))
     have hClassPost : m.profile = .shrink →
         ClassifiedParameters m W.P W.D observation s1.store :=
       fun profile => hF.classifiedParameters_advance (hClass profile) hX1
@@ -197,7 +215,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
     refine ⟨by simpa [hFuture] using hF1, hX1, hRoots, hValues,
       by simpa [hChildShrink] using hObserved1,
       hRetains.subset (fun alias hmem => ec.child_retained_subset rfl 0 (.place owner)
-        .place rfl (by trivial) hmem), hPilotLe, ?_, hg, hClassPost⟩
+        .place rfl (by trivial) hmem), hPilotLe, ?_, hg, hClassPost, (by rintro ⟨el, he | he⟩ <;> rw [he] at hf <;> simp [Ty.flat] at hf), hForbiddenPost, hMutation⟩
     rcases hpl with ⟨hrt, hl, _hheader⟩ | ⟨x, lv, si, v, _, _, _, _, hty, hrl, _⟩ |
       ⟨x, lv, mu0, mus, E, ann, _, _, _, hty, _⟩
     · exact Or.inl ⟨flat_refTarget hf,
@@ -209,6 +227,10 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
     simp only [rpPlace] at hr; inv at hr
     obtain ⟨_, t, b, t1, htv, ti, t2, hti, it, rfl, rfl, rfl, rfl, rfl⟩ := ht
     obtain ⟨rv, r1, hrv, ri, r2, hri, r3, hna, rfl, rfl⟩ := hr
+    have hRebinds : RebindsLe r2.eff rst'.eff := by
+      have hstate := (st_modify_ok _ _ _).1 hna
+      cases hstate
+      exact RebindsLe.refl _
     have hE2 : EffLe r2.eff W.E := (PMono.noteAborts _ _ _ hna).2.trans hE
     simp only [evalPlace]
     let viewContext := ec.child rfl 0 (.view v) .view rfl (by trivial)
@@ -221,14 +243,14 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
       (by trivial) tenv penv).mpr hAccess
     have hIndexAccess := (ec.child_accessMatches_iff rfl 1 (.expression i) .expression rfl
       (by trivial) tenv penv).mpr hAccess
-    have hViewShrink : viewContext.mayShrink W.P observation = ec.mayShrink W.P observation := by
+    have hViewShrink : viewContext.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
       funext r
       exact propext (ec.child_mayShrink_iff rfl 0 (.view v) .view rfl
-        (by trivial) W.P observation r)
-    have hIndexShrink : indexContext.mayShrink W.P observation = ec.mayShrink W.P observation := by
+        (by trivial) W.ownerP observation r)
+    have hIndexShrink : indexContext.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
       funext r
       exact propext (ec.child_mayShrink_iff rfl 1 (.expression i) .expression rfl
-        (by trivial) W.P observation r)
+        (by trivial) W.ownerP observation r)
     have hViewFuture : m.profile = .shrink →
         viewContext.outputFuture = i.variables ++ ec.outputFuture := by
       intro hShrink
@@ -276,7 +298,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
       _ _ _ _ _ _ _ hViewActive hViewAccess (by simpa [hViewShrink] using hProtected)
       (by simpa [hViewShrink] using hObserved) hClass hp hViewFrame htv hrv
       ((rpExpr_mono hri).2.trans hE2)) ?_
-    rintro vw s1 ⟨hF1, hX1, hRoots1, hValues1, hObserved1, hRetains1, hPilot1, hvw, hg, _, _⟩
+    rintro vw s1 ⟨hF1, hX1, hRoots1, hValues1, hObserved1, hRetains1, hPilot1, hvw, hg, _, _, hForbidden1, hMutation1⟩
     have hClass1 : m.profile = .shrink →
         ClassifiedParameters m W.P W.D observation s1.store :=
       fun profile => hF.classifiedParameters_advance (hClass profile) hX1
@@ -293,7 +315,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
       _ _ _ _ _ _ hIndexActive hIndexAccess (by simpa [hIndexShrink] using hProtected)
       (by simpa [hViewShrink, hIndexShrink] using hObserved1) hClass1 hp
       hIndexFrame hti hri hE2) ?_
-    rintro vi s2 ⟨hF2, hX2, hRoots2, hValues2, hObserved2, hRetains2, hPilot2, hvi, _, _⟩
+    rintro vi s2 ⟨hF2, hX2, hRoots2, hValues2, hObserved2, hRetains2, hPilot2, hvi, _, _, _, hForbidden2, hMutation2⟩
     have hClassPost : m.profile = .shrink →
         ClassifiedParameters m W.P W.D observation s2.store :=
       fun profile => hF.classifiedParameters_advance (hClass profile) (hX1.trans hX2)
@@ -355,7 +377,13 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof plans n) : PlaceSpec m prof
         hRoots1.trans hRoots2, hValues1.trans hValues2,
         by simpa [hIndexShrink] using hObserved2, hRetained1.trans hRetained2,
         (fun profile => (hPilot1 profile).trans (hPilot2 profile)),
-        Or.inl ⟨flat_refTarget hvw.1, Or.inl ?_, HeaderLoc.ofFlat hvw.1⟩, hg, hClassPost⟩
+        Or.inl ⟨flat_refTarget hvw.1, Or.inl ?_, HeaderLoc.ofFlat hvw.1⟩, hg, hClassPost, (by rintro ⟨el, he | he⟩ <;> have hflat := hvw.1 <;> rw [he] at hflat <;> simp [Ty.flat] at hflat),
+        (hForbidden1.subset (ec.child_forbidden_subset rfl 0 _ _ rfl (by trivial))).trans
+          (hForbidden2.subset (ec.child_forbidden_subset rfl 1 _ _ rfl (by trivial))),
+        (hMutation1.weaken (effectMutationRoots.mono m penv.impl ((rpExpr_mono hri).2.trans (PMono.noteAborts _ _ _ hna).2)
+          ((rpExpr_rebinds_mono hri).trans hRebinds))).trans
+          (hMutation2.weaken (effectMutationRoots.mono m penv.impl (PMono.noteAborts _ _ _ hna).2
+            hRebinds))⟩
       exact sliceTy_elem hSlicePost (i := k.toNat) (by omega)
     · simp only [hk, if_false, sat_abort]
 
@@ -380,10 +408,10 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
       (by trivial) tenv tenv hActive (by intro x; rfl)
     have hChildAccess := (ec.child_accessMatches_iff rfl 0 (.place p) .place rfl
       (by trivial) tenv penv).mpr hAccess
-    have hChildShrink : child.mayShrink W.P observation = ec.mayShrink W.P observation := by
+    have hChildShrink : child.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
       funext r
       exact propext (ec.child_mayShrink_iff rfl 0 (.place p) .place rfl
-        (by trivial) W.P observation r)
+        (by trivial) W.ownerP observation r)
     have hFuture : child.outputFuture = ec.outputFuture := by
       cases ec with
       | pilot profile active => rfl
@@ -404,13 +432,14 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
       hChildActive hChildAccess (by simpa [hChildShrink] using hProtected)
       (by simpa [hChildShrink] using hObserved) hClass hp (by simpa [hInput] using hF) htp hrp
       ((PMono.addReads _ _ _ _ hadd).2.trans hE)) ?_
-    rintro l s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hpl, hg, _⟩
+    rintro l s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hpl, hg, _, hOwner, hForbidden, hMutation⟩
+    have hForbiddenPost := hForbidden.subset (ec.child_forbidden_subset rfl 0 _ _ rfl (by trivial))
     have hClassPost : m.profile = .shrink →
         ClassifiedParameters m W.P W.D observation s1.store :=
       fun profile => hF.classifiedParameters_advance (hClass profile) hX1
     have hFrame : Frame m W tenv penv env s1 ec.outputFuture := by
       simpa [hFuture] using hF1
-    have hObservedPost : ObservedSafe m W (ec.mayShrink W.P observation) observation s1.store := by
+    have hObservedPost : ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s1.store := by
       simpa [hChildShrink] using hObserved1
     have hRetained := hRetains.subset (fun alias hmem =>
       ec.child_retained_subset rfl 0 (.place p) .place rfl (by trivial) hmem)
@@ -437,7 +466,8 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
           rw [hT.1]
           exact sliceTy_of_arr hlt
         exact ⟨hFrame, hX1, hRoots, hValues, hObservedPost, hRetained, hPilotLe, hView, hg,
-          ViewAliases.ofFixed rfl (Or.inr ⟨p, k, rfl, hPlaceLookup⟩) hViewLookup hViewRp hView hg, hClassPost⟩
+          ViewAliases.ofFixed rfl (Or.inr ⟨p, k, rfl, hPlaceLookup⟩) hViewLookup hViewRp hView hg, hClassPost, hForbiddenPost, hMutation.weaken (effectMutationRoots.mono m penv.impl
+            (PMono.addReads _ _ _ _ hadd).2 (PMonoRebinds.addReads _ _ _ _ hadd))⟩
       · simp [Ty.isRefLike] at hrl
       · cases h3
     · rename_i el'
@@ -453,7 +483,8 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
         have hView : ViewOk s1.store ⟨l, 0, es.size, true⟩ el :=
           ⟨hFlat, sliceTy_of_grow hlt hv, fun _ => ⟨rfl, Or.inl hlt⟩⟩
         exact ⟨hFrame, hX1, hRoots, hValues, hObservedPost, hRetained, hPilotLe, hView, hg,
-          ViewAliases.ofOwner rfl hFlat (Or.inl rfl) hPlaceLookup hrp hSourcePlace hg (hBound _), hClassPost⟩
+          ViewAliases.ofOwner rfl hFlat (Or.inl rfl) hPlaceLookup hrp hSourcePlace hg (hBound _), hClassPost, hForbiddenPost, hMutation.weaken (effectMutationRoots.mono m penv.impl
+            (PMono.addReads _ _ _ _ hadd).2 (PMonoRebinds.addReads _ _ _ _ hadd))⟩
       · simp [Ty.isRefLike] at hrl
       · cases h3
     · rename_i el'
@@ -469,7 +500,8 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
         have hView : ViewOk s1.store ⟨l, 0, es.size, true⟩ el :=
           ⟨hFlat, sliceTy_of_growshrink hlt hv, fun _ => ⟨rfl, Or.inr hlt⟩⟩
         exact ⟨hFrame, hX1, hRoots, hValues, hObservedPost, hRetained, hPilotLe, hView, hg,
-          ViewAliases.ofOwner rfl hFlat (Or.inr rfl) hPlaceLookup hrp hSourcePlace hg (hBound _), hClassPost⟩
+          ViewAliases.ofOwner rfl hFlat (Or.inr rfl) hPlaceLookup hrp hSourcePlace hg (hBound _), hClassPost, hForbiddenPost, hMutation.weaken (effectMutationRoots.mono m penv.impl
+            (PMono.addReads _ _ _ _ hadd).2 (PMonoRebinds.addReads _ _ _ _ hadd))⟩
       · simp [Ty.isRefLike] at hrl
       · cases h3
     · rename_i el' capacity
@@ -489,7 +521,8 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
         have hReference : HasTy m W.G s1.store (.ref l) (.ref .mutable (.limited el capacity)) :=
           ⟨l, rfl, Or.inl ⟨hrt, hl, hHeader⟩⟩
         exact ⟨hFrame, hX1, hRoots, hValues, hObservedPost, hRetained, hPilotLe, hView, hg,
-          ViewAliases.ofLimited rfl hPlaceLookup hrp hReference hg (hBound _), hClassPost⟩
+          ViewAliases.ofLimited rfl hPlaceLookup hrp hReference hg (hBound _), hClassPost, hForbiddenPost, hMutation.weaken (effectMutationRoots.mono m penv.impl
+            (PMono.addReads _ _ _ _ hadd).2 (PMonoRebinds.addReads _ _ _ _ hadd))⟩
       · simp [Ty.isRefLike] at hrl
       · cases h3
   | val e =>
@@ -505,10 +538,10 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
       (by trivial) tenv tenv hActive (by intro x; rfl)
     have hChildAccess := (ec.child_accessMatches_iff rfl 0 (.expression e) .expression rfl
       (by trivial) tenv penv).mpr hAccess
-    have hChildShrink : child.mayShrink W.P observation = ec.mayShrink W.P observation := by
+    have hChildShrink : child.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
       funext r
       exact propext (ec.child_mayShrink_iff rfl 0 (.expression e) .expression rfl
-        (by trivial) W.P observation r)
+        (by trivial) W.ownerP observation r)
     have hFuture : child.outputFuture = ec.outputFuture := by
       cases ec with
       | pilot profile active => rfl
@@ -528,13 +561,14 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
     refine Sat.bind (ih.expr (path ++ [0]) e child observation W tenv penv env s _ _ _ _ _ _
       hChildActive hChildAccess (by simpa [hChildShrink] using hProtected)
       (by simpa [hChildShrink] using hObserved) hClass hp (by simpa [hInput] using hF) hte hr hE) ?_
-    rintro v s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hv, hg, _⟩
+    rintro v s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hv, hg, _, hOwner, hForbidden, hMutation⟩
+    have hForbiddenPost := hForbidden.subset (ec.child_forbidden_subset rfl 0 _ _ rfl (by trivial))
     have hClassPost : m.profile = .shrink →
         ClassifiedParameters m W.P W.D observation s1.store :=
       fun profile => hF.classifiedParameters_advance (hClass profile) hX1
     have hFrame : Frame m W tenv penv env s1 ec.outputFuture := by
       simpa [hFuture] using hF1
-    have hObservedPost : ObservedSafe m W (ec.mayShrink W.P observation) observation s1.store := by
+    have hObservedPost : ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s1.store := by
       simpa [hChildShrink] using hObserved1
     have hRetained := hRetains.subset (fun alias hmem =>
       ec.child_retained_subset rfl 0 (.expression e) .expression rfl (by trivial) hmem)
@@ -543,14 +577,14 @@ theorem step_view (ih : Specs m prof plans n) : ViewSpec m prof plans (n + 1) :=
     simp only [expectSlice, sat_pure_bind, sat_pure]
     have hView : ViewOk s1.store ⟨l, st, len, false⟩ el := ⟨hfl, hsl, by simp⟩
     exact ⟨hFrame, hX1, hRoots, hValues, hObservedPost, hRetained, hPilotLe, hView, hg _ rfl,
-      ViewAliases.ofFixed rfl (Or.inl ⟨e, rfl⟩) hViewLookup hViewRp hView (hg _ rfl), hClassPost⟩
+      ViewAliases.ofFixed rfl (Or.inl ⟨e, rfl⟩) hViewLookup hViewRp hView (hg _ rfl), hClassPost, hForbiddenPost, hMutation⟩
 
 theorem step_bound (ih : Specs m prof plans n) : BoundSpec m prof plans (n + 1) := by
   intro path b ec observation W tenv penv env s len d tn tn' rst rst' hActive hAccess hProtected hObserved hClass hp hF ht hr hE
   cases b with
   | omitted =>
     simp only [evalBound, sat_pure]
-    exact ⟨hF.narrowFuture (by intro y hy; cases ec <;> simp_all [EvaluationContext.inputFuture, EvaluationContext.outputFuture, NodeContext.inputFuture, NodeContext.outputFuture, DemandNode.visibleAfter]), Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _, hObserved, RetainsAliases.refl, (fun _ => StoreLe.refl _), hClass⟩
+    exact ⟨hF.narrowFuture (by intro y hy; cases ec <;> simp_all [EvaluationContext.inputFuture, EvaluationContext.outputFuture, NodeContext.inputFuture, NodeContext.outputFuture, DemandNode.visibleAfter]), Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _, hObserved, RetainsAliases.refl, (fun _ => StoreLe.refl _), hClass, PreservesForbiddenOwnerRoots.refl _, MutationFootprint.refl _ _ _ _ _⟩
   | expr e =>
     simp only [tyBound] at ht; inv at ht
     simp only [rpBound] at hr; inv at hr
@@ -562,10 +596,10 @@ theorem step_bound (ih : Specs m prof plans n) : BoundSpec m prof plans (n + 1) 
       (by trivial) tenv tenv hActive (by intro x; rfl)
     have hChildAccess := (ec.child_accessMatches_iff rfl 0 (.expression e) .expression rfl
       (by trivial) tenv penv).mpr hAccess
-    have hChildShrink : child.mayShrink W.P observation = ec.mayShrink W.P observation := by
+    have hChildShrink : child.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
       funext r
       exact propext (ec.child_mayShrink_iff rfl 0 (.expression e) .expression rfl
-        (by trivial) W.P observation r)
+        (by trivial) W.ownerP observation r)
     have hFuture : child.outputFuture = ec.outputFuture := by
       cases ec with
       | pilot profile active => rfl
@@ -585,7 +619,8 @@ theorem step_bound (ih : Specs m prof plans n) : BoundSpec m prof plans (n + 1) 
     refine Sat.bind (ih.expr (path ++ [0]) e child observation W tenv penv env s _ _ _ _ _ _
       hChildActive hChildAccess (by simpa [hChildShrink] using hProtected)
       (by simpa [hChildShrink] using hObserved) hClass hp (by simpa [hInput] using hF) hte hre hE) ?_
-    rintro v s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hv, _, _⟩
+    rintro v s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hv, _, _, _, hForbidden, hMutation⟩
+    have hForbiddenPost := hForbidden.subset (ec.child_forbidden_subset rfl 0 _ _ rfl (by trivial))
     have hClassPost : m.profile = .shrink →
         ClassifiedParameters m W.P W.D observation s1.store :=
       fun profile => hF.classifiedParameters_advance (hClass profile) hX1
@@ -594,7 +629,7 @@ theorem step_bound (ih : Specs m prof plans n) : BoundSpec m prof plans (n + 1) 
     exact ⟨by simpa [hFuture] using hF1, hX1, hRoots, hValues,
       by simpa [hChildShrink] using hObserved1,
       hRetains.subset (fun alias hmem => ec.child_retained_subset rfl 0 (.expression e)
-        .expression rfl (by trivial) hmem), hPilotLe, hClassPost⟩
+        .expression rfl (by trivial) hmem), hPilotLe, hClassPost, hForbiddenPost, hMutation⟩
   | fromEnd e =>
     simp only [tyBound] at ht; inv at ht
     simp only [rpBound] at hr; inv at hr
@@ -606,10 +641,10 @@ theorem step_bound (ih : Specs m prof plans n) : BoundSpec m prof plans (n + 1) 
       (by trivial) tenv tenv hActive (by intro x; rfl)
     have hChildAccess := (ec.child_accessMatches_iff rfl 0 (.expression e) .expression rfl
       (by trivial) tenv penv).mpr hAccess
-    have hChildShrink : child.mayShrink W.P observation = ec.mayShrink W.P observation := by
+    have hChildShrink : child.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
       funext r
       exact propext (ec.child_mayShrink_iff rfl 0 (.expression e) .expression rfl
-        (by trivial) W.P observation r)
+        (by trivial) W.ownerP observation r)
     have hFuture : child.outputFuture = ec.outputFuture := by
       cases ec with
       | pilot profile active => rfl
@@ -629,7 +664,8 @@ theorem step_bound (ih : Specs m prof plans n) : BoundSpec m prof plans (n + 1) 
     refine Sat.bind (ih.expr (path ++ [0]) e child observation W tenv penv env s _ _ _ _ _ _
       hChildActive hChildAccess (by simpa [hChildShrink] using hProtected)
       (by simpa [hChildShrink] using hObserved) hClass hp (by simpa [hInput] using hF) hte hre hE) ?_
-    rintro v s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hv, _, _⟩
+    rintro v s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hv, _, _, _, hForbidden, hMutation⟩
+    have hForbiddenPost := hForbidden.subset (ec.child_forbidden_subset rfl 0 _ _ rfl (by trivial))
     have hClassPost : m.profile = .shrink →
         ClassifiedParameters m W.P W.D observation s1.store :=
       fun profile => hF.classifiedParameters_advance (hClass profile) hX1
@@ -638,7 +674,7 @@ theorem step_bound (ih : Specs m prof plans n) : BoundSpec m prof plans (n + 1) 
     exact ⟨by simpa [hFuture] using hF1, hX1, hRoots, hValues,
       by simpa [hChildShrink] using hObserved1,
       hRetains.subset (fun alias hmem => ec.child_retained_subset rfl 0 (.expression e)
-        .expression rfl (by trivial) hmem), hPilotLe, hClassPost⟩
+        .expression rfl (by trivial) hmem), hPilotLe, hClassPost, hForbiddenPost, hMutation⟩
 
 theorem step_arg (ih : Specs m prof plans n) : ArgSpec m prof plans (n + 1) := by
   intro path a ac observation W tenv penv env s tn tn' ty rst rst' rho hActive hAccess hProtected hObserved hClass hp hF ht hr hE
@@ -652,12 +688,12 @@ theorem step_arg (ih : Specs m prof plans n) : ArgSpec m prof plans (n + 1) := b
     simp only [evalArg]
     refine Sat.bind (ih.place path _ ec observation W tenv penv env s _ _ _ _ _ _ _ _
       hActive hAccess hProtected hObserved hClass hp hF htp hr hE) ?_
-    rintro l s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hpl, hg, _⟩
+    rintro l s1 ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, hpl, hg, _, hOwner, hForbidden, hMutation⟩
     have hClassPost : m.profile = .shrink →
         ClassifiedParameters m W.P W.D observation s1.store :=
       fun profile => hF.classifiedParameters_advance (hClass profile) hX1
     simp only [sat_pure]
-    refine ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, ?_, (fun r hr' => by cases hr'; exact hg), hClassPost⟩
+    refine ⟨hF1, hX1, hRoots, hValues, hObserved1, hRetains, hPilotLe, ?_, (fun r hr' => by cases hr'; exact hg), hClassPost, OwnerRooted.ofOwnerPlace hOwner, hForbidden, hMutation⟩
     rcases hpl with ⟨hrt1, hl⟩ | ⟨x, lv, si, v, _, _, _, rfl, _, hrl, h4, h5⟩ |
       ⟨x, lv, mu0, mus, E, ann, _, hlv, hty, rfl, hfl, hpath, hann, hgl, hlive⟩
     · exact ⟨l, rfl, Or.inl ⟨hrt1, hl⟩⟩
