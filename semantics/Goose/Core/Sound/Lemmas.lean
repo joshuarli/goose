@@ -84,9 +84,12 @@ theorem sliceTy_elem {s : Store} {l : Loc} {st n i : Nat} {E : Ty} (h : SliceTy 
     cases v <;> simp only [Val.elems?, Option.some.injEq, reduceCtorEq] at hes
     · subst hes; rw [get_fixed, he]; simp [get_nil]
     · subst hes; rw [get_resizable, he]; simp [get_nil]
+    · subst hes
+      rw [get_limited, he]
+      simp [get_nil]
   have he : es[st + i]? = some es[st + i] := Array.getElem?_eq_getElem hlt
   refine ⟨es[st + i], hread _ he rfl, ?_⟩
-  rcases hT with hT | ⟨k, hT⟩
+  rcases hT with hT | hT | ⟨k, hT⟩ | ⟨capacity, hT⟩
   · cases v <;> simp only [FlatTy] at hT
     simp only [Val.elems?, Option.some.injEq] at hes
     subst hes
@@ -95,6 +98,14 @@ theorem sliceTy_elem {s : Store} {l : Loc} {st n i : Nat} {E : Ty} (h : SliceTy 
     simp only [Val.elems?, Option.some.injEq] at hes
     subst hes
     exact hT.2 _ _ he
+  · cases v <;> simp only [FlatTy] at hT
+    simp only [Val.elems?, Option.some.injEq] at hes
+    subst hes
+    exact hT.2 _ _ he
+  · cases v <;> simp only [FlatTy] at hT
+    simp only [Val.elems?, Option.some.injEq] at hes
+    subst hes
+    exact hT.2.2.2.2 _ _ he
 
 theorem SliceTy.sub {s : Store} {l : Loc} {st n st' n' : Nat} {E : Ty} (h : SliceTy s l st n E)
     (hb : st' + n' ≤ st + n) : SliceTy s l st' n' E := by
@@ -107,7 +118,8 @@ theorem sliceTy_of_arr {s : Store} {l : Loc} {E : Ty} {k : Nat} (h : LocTy s l (
   obtain ⟨v, hr, hT⟩ := h
   cases v <;> simp only [FlatTy] at hT
   rename_i es
-  exact ⟨_, es, hr, rfl, by omega, Or.inr ⟨k, by simpa [FlatTy] using hT⟩⟩
+  exact ⟨_, es, hr, rfl, by omega,
+    Or.inr (Or.inr (Or.inl ⟨k, by simpa [FlatTy] using hT⟩))⟩
 
 theorem sliceTy_of_grow {s : Store} {l : Loc} {E : Ty} {es : Array Val} {E' : Ty}
     (h : LocTy s l (.grow E)) (hr : s.read l = .ok (.resizable E' es)) :
@@ -115,6 +127,25 @@ theorem sliceTy_of_grow {s : Store} {l : Loc} {E : Ty} {es : Array Val} {E' : Ty
   obtain ⟨v, hr', hT⟩ := h
   rw [hr] at hr'; cases hr'
   exact ⟨_, es, hr, rfl, by omega, Or.inl hT⟩
+
+theorem sliceTy_of_growshrink {s : Store} {l : Loc} {E : Ty} {es : Array Val} {E' : Ty}
+    (h : LocTy s l (.growshrink E)) (hr : s.read l = .ok (.resizable E' es)) :
+    SliceTy s l 0 es.size E := by
+  obtain ⟨v, hr', hT⟩ := h
+  rw [hr] at hr'; cases hr'
+  exact ⟨_, es, hr, rfl, by omega, Or.inr (Or.inl hT)⟩
+
+theorem sliceTy_of_limited {s : Store} {l : Loc} {E : Ty} {capacity len : Nat}
+    {slots : Array Val} (h : LocTy s l (.limited E capacity))
+    (hr : s.read l = .ok (.limited E capacity slots len)) :
+    SliceTy s l 0 len E := by
+  obtain ⟨v, hr', hT⟩ := h
+  rw [hr] at hr'; cases hr'
+  have hbound : len ≤ slots.size := by
+    have h := hT
+    simp only [FlatTy] at h
+    exact h.2.2.2.1
+  exact ⟨_, slots, hr, rfl, by omega, Or.inr (Or.inr (Or.inr ⟨capacity, hT⟩))⟩
 
 /-! ### Store accessors -/
 

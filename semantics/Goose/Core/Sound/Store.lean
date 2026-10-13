@@ -59,6 +59,16 @@ theorem modifyAt_total (f : Val → Option Val) :
         obtain ⟨e', he'⟩ := ih e x y h1 h2
         refine ⟨.resizable E (es.set i e'), ?_⟩
         simp only [Val.modifyAt?, hlt, dite_true, he, he']
+    | limited E capacity slots len =>
+      rw [get_limited] at h1
+      cases hi : slots[i]? with
+      | none => simp [hi] at h1
+      | some e =>
+        simp only [hi, Option.bind_some] at h1
+        obtain ⟨hlt, he⟩ := Array.getElem?_eq_some_iff.1 hi
+        obtain ⟨e', he'⟩ := ih e x y h1 h2
+        refine ⟨.limited E capacity (slots.set i e') len, ?_⟩
+        simp only [Val.modifyAt?, hlt, dite_true, he, he']
     | _ => simp [Val.get?, Val.children?, Val.elems?] at h1
 
 theorem modify_total (s : Store) (l : Loc) (f : Val → Option Val) (x y : Val)
@@ -94,6 +104,13 @@ theorem modifyAt_notRef (f : Val → Option Val) (p : List Nat) (v v' x : Val)
         · cases h
       · cases h
     | resizable E es =>
+      simp only [Val.modifyAt?] at h
+      split at h
+      · split at h
+        · cases h; simp [IsRef]
+        · cases h
+      · cases h
+    | limited E capacity slots len =>
       simp only [Val.modifyAt?] at h
       split at h
       · split at h
@@ -165,17 +182,55 @@ theorem append_total (s : Store) (l : Loc) (vs : Array Val) (E : Ty) (hl : LocTy
 theorem append_flatStep (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat) (E : Ty)
     (hl : LocTy s l (.grow E)) (hvs : ∀ (i : Nat) (e : Val), vs[i]? = some e → FlatTy E e)
     (h : s.append l vs = .ok (s', n)) : FlatStep s s' := by
-  obtain ⟨E1, es, hr, hn, hm⟩ := append_spec s s' l vs n h
-  have hE : E = E1 := by
-    obtain ⟨x, hx, hT⟩ := hl
-    rw [hr] at hx; cases hx
-    simpa [FlatTy] using hT.1
-  subst hE
+  obtain ⟨es, hr, hn, hm⟩ := append_spec_grow s s' l vs n E hl h
   refine flatStep_modify s s' l _ _ hm hr (by simp [IsRef]) ?_
   intro y hy
   simp only [Val.appendAll, Option.some.injEq] at hy
   subst hy
   exact ⟨by simp [IsRef], refines_push E es vs hvs⟩
+
+theorem append_flatStep_growshrink (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat) (E : Ty)
+    (hl : LocTy s l (.growshrink E)) (hvs : ∀ (i : Nat) (e : Val), vs[i]? = some e → FlatTy E e)
+    (h : s.append l vs = .ok (s', n)) : FlatStep s s' := by
+  obtain ⟨es, hr, _, hm⟩ := append_spec_growshrink s s' l vs n E hl h
+  refine flatStep_modify s s' l _ _ hm hr (by simp [IsRef]) ?_
+  intro y hy
+  simp only [Val.appendAll, Option.some.injEq] at hy
+  subst hy
+  exact ⟨by simp [IsRef], refines_push E es vs hvs⟩
+
+theorem append_flatStep_limited (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat)
+    (E : Ty) (capacity : Nat) (hE : E.flat = true) (hl : LocTy s l (.limited E capacity))
+    (hvs : ∀ (i : Nat) (e : Val), vs[i]? = some e → FlatTy E e)
+    (h : s.append l vs = .ok (s', n)) : FlatStep s s' := by
+  obtain ⟨slots, len, hr, _, hlen, hslots, hcap, hm⟩ :=
+    append_spec_limited s s' l vs n E capacity hE hl hvs h
+  refine flatStep_modify s s' l (Val.appendAll vs) (.limited E capacity slots len) hm hr
+    (by simp [IsRef]) ?_
+  intro y hy
+  have hshape := appendAll_limited_shape E capacity slots vs len hlen hcap
+  rw [hshape] at hy
+  cases hy
+  exact ⟨by simp [IsRef], refines_limitedAppend E capacity slots vs len hslots hvs hlen hcap hE⟩
+
+theorem append_flatStep_owner (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat)
+    (owner E : Ty) (howner : owner.ownerElem? = some E) (hE : E.flat = true)
+    (hl : LocTy s l owner) (hvs : ∀ (i : Nat) (e : Val), vs[i]? = some e → FlatTy E e)
+    (h : s.append l vs = .ok (s', n)) : FlatStep s s' := by
+  cases owner with
+  | grow E' =>
+    have hE' : E' = E := by simpa [Ty.ownerElem?] using howner
+    subst E
+    exact append_flatStep _ _ _ _ _ _ hl hvs h
+  | growshrink E' =>
+    have hE' : E' = E := by simpa [Ty.ownerElem?] using howner
+    subst E
+    exact append_flatStep_growshrink _ _ _ _ _ _ hl hvs h
+  | limited E' capacity =>
+    have hE' : E' = E := by simpa [Ty.ownerElem?] using howner
+    subst E
+    exact append_flatStep_limited _ _ _ _ _ _ _ hE hl hvs h
+  | _ => simp [Ty.ownerElem?] at howner
 
 /-! ### The store invariant -/
 
@@ -190,18 +245,146 @@ def Older : RootInst → RootInst → Prop
 reference or slice denotes a typed location or run, it points into a root that
 ends no earlier than its holder, every scope instance in use was handed out,
 and the globals initialized so far hold values of their types. -/
-structure StoreInv (m : Module) (G : Nat) (s : St) : Prop where
-  live : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → Held m G s.store v
+structure StoreInv (m : Module) (G : Nat) (s : St)
+    (demanded : RootInst → Prop := fun _ => True) : Prop where
+  live : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → demanded r → Held m G s.store v
   age : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → ∀ r', Targets v r' → Older r' r
   fresh : ∀ (a : ActId) (si : ScopeInst) (x : VarId), s.store.roots[RootInst.local a si x]? ≠ none → si < s.nextScope
   globals : ∀ (g : Nat) (gl : Global), g < G → m.globals[g]? = some gl → LocTy s.store ⟨.global g, []⟩ gl.ty
 
-theorem StoreInv.flatStep {m : Module} {G : Nat} {s : St} {st' : Store}
-    (hi : StoreInv m G s) (h : FlatStep s.store st') : StoreInv m G { s with store := st' } := by
+/-- A local root is live at a program point only while its binding is visible
+and demanded by the remaining code. Globals stay live at every point. -/
+def DemandedRoot (env : Env) (visible future : List VarId) : RootInst → Prop
+  | .global _ => True
+  | .local a si x => a = env.act ∧ x ∈ visible ∧ x ∈ future ∧
+      ∃ lv, env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si
+
+/-- The store invariant at a validated program point. Scope age and global
+typing remain global facts; only local value validity follows demand. -/
+abbrev StoreInvAt (m : Module) (G : Nat) (env : Env) (visible future : List VarId) (s : St) : Prop :=
+  StoreInv m G s (DemandedRoot env visible future)
+
+/-- A frame may narrow demand when the next syntax node becomes active. A
+newly demanded root is harmless while it is absent from the store. -/
+theorem StoreInv.changeDemand {m : Module} {G : Nat} {s : St}
+    {oldDemand newDemand : RootInst → Prop} (hi : StoreInv m G s oldDemand)
+    (hsub : ∀ r, newDemand r → oldDemand r ∨ s.store.roots[r]? = none) :
+    StoreInv m G s newDemand := by
+  refine ⟨?_, hi.age, hi.fresh, hi.globals⟩
+  intro r v hv hnew
+  rcases hsub r hnew with hold | hfree
+  · exact hi.live r v hv hold
+  · rw [hfree] at hv
+    cases hv
+
+/-- Preserve the frame invariant across an operation that changes only roots in
+`skipped`. The operation supplies the new facts for changed roots and proves
+that references held by unchanged demanded roots remain valid. -/
+theorem StoreInv.except {m : Module} {G : Nat} {s : St} {s' : Store}
+    {demanded skipped : RootInst → Prop} (hi : StoreInv m G s demanded)
+    (hagree : StoreLeExcept skipped s.store s')
+    (hstable : ∀ r v, demanded r → ¬ skipped r → s.store.roots[r]? = some v →
+      Held m G s.store v → Held m G s' v)
+    (hnew : ∀ r v, demanded r → skipped r → s'.roots[r]? = some v → Held m G s' v)
+    (hage : ∀ r v, skipped r → s'.roots[r]? = some v →
+      ∀ r', Targets v r' → Older r' r)
+    (hfresh : ∀ a si x, skipped (RootInst.local a si x) →
+    s'.roots[RootInst.local a si x]? ≠ none → si < s.nextScope)
+    (hglobals : ∀ g gl, skipped (.global g) → g < G → m.globals[g]? = some gl →
+      LocTy s' ⟨.global g, []⟩ gl.ty) :
+    StoreInv m G { s with store := s' } demanded := by
   refine ⟨?_, ?_, ?_, ?_⟩
-  · intro r v hv
+  · intro r v hv hd
+    by_cases hs : skipped r
+    · exact hnew r v hd hs hv
+    · have hvOld : s.store.roots[r]? = some v := by
+        rw [hagree r hs] at hv
+        exact hv
+      exact hstable r v hd hs hvOld (hi.live r v hvOld hd)
+  · intro r v hv r' ht
+    by_cases hs : skipped r
+    · exact hage r v hs hv r' ht
+    · have hvOld : s.store.roots[r]? = some v := by
+        rw [hagree r hs] at hv
+        exact hv
+      exact hi.age r v hvOld r' ht
+  · intro a si x hv
+    by_cases hs : skipped (RootInst.local a si x)
+    · change s'.roots[RootInst.local a si x]? ≠ none at hv
+      exact hfresh a si x hs hv
+    · have hvOld : s.store.roots[RootInst.local a si x]? ≠ none := by
+        rw [hagree (RootInst.local a si x) hs] at hv
+        exact hv
+      exact hi.fresh a si x hvOld
+  · intro g gl hg hm
+    by_cases hs : skipped (.global g)
+    · exact hglobals g gl hs hg hm
+    · exact LocTy.mono_except (hagree := hagree) hs (hi.globals g gl hg hm)
+
+/-- A held value remains valid after truncation when every location it denotes
+lies outside the removed suffix or in a retained element. -/
+theorem Held.truncate {m : Module} {G : Nat} {s s' : Store}
+    {o : Loc} {len : Nat} {v : Val}
+    (htruncate : s.truncate o len = .ok s')
+    (hagree : StoreLeExcept (fun r => r = o.root) s s')
+    (hLoc : ∀ l T, RetainedLoc o len l → LocOk m G s l T → LocOk m G s' l T)
+    (hSlice : ∀ l start count, RetainedLoc o len l →
+      (l.root ≠ o.root ∨ l.path ≠ o.path ∨ start + count ≤ len) →
+      ∀ E, SliceTy s l start count E → SliceTy s' l start count E)
+    (hretained : RetainedHeld o len v) (h : Held m G s v) : Held m G s' v := by
+  cases v with
+  | ref l =>
+    simp only [Held, RetainedHeld] at h hretained ⊢
+    rcases h with ⟨T, htarget, hloc⟩ | ⟨hpath, hroot⟩
+    · exact Or.inl ⟨T, htarget, hLoc l T hretained hloc⟩
+    · refine Or.inr ⟨hpath, ?_⟩
+      by_cases hsame : l.root = o.root
+      · simpa [hsame] using truncate_root_exists s s' o len htruncate
+      · have hunchanged : s'.roots[l.root]? = s.roots[l.root]? :=
+          hagree l.root (by simpa using hsame)
+        rw [hunchanged]
+        exact hroot
+  | slice l start count =>
+    simp only [Held, RetainedHeld] at h hretained ⊢
+    obtain ⟨E, hslice⟩ := h
+    exact ⟨E, hSlice l start count hretained.1 hretained.2 E hslice⟩
+  | _ => simp [Held]
+
+/-- Truncation preserves demanded holders when the demand analysis proves that
+each holder remains inside the new logical extent. -/
+theorem StoreInv.truncate {m : Module} {G : Nat} {s : St} {s' : Store}
+    {demanded : RootInst → Prop} {o : Loc} {len : Nat}
+    (hi : StoreInv m G s demanded)
+    (htruncate : s.store.truncate o len = .ok s')
+    (hretain : ∀ r v, demanded r → s.store.roots[r]? = some v → RetainedHeld o len v)
+    (hLoc : ∀ l T, RetainedLoc o len l → LocOk m G s.store l T → LocOk m G s' l T)
+    (hSlice : ∀ l start count, RetainedLoc o len l →
+      (l.root ≠ o.root ∨ l.path ≠ o.path ∨ start + count ≤ len) →
+      ∀ E, SliceTy s.store l start count E → SliceTy s' l start count E)
+    (hnew : ∀ r v, demanded r → r = o.root → s'.roots[r]? = some v → Held m G s' v)
+    (hage : ∀ r v, r = o.root → s'.roots[r]? = some v →
+      ∀ r', Targets v r' → Older r' r)
+    (hfresh : ∀ a si x, RootInst.local a si x = o.root →
+      s'.roots[RootInst.local a si x]? ≠ none → si < s.nextScope)
+    (hglobals : ∀ g gl, RootInst.global g = o.root →
+      g < G → m.globals[g]? = some gl → LocTy s' ⟨.global g, []⟩ gl.ty) :
+    StoreInv m G { s with store := s' } demanded := by
+  apply StoreInv.except hi (truncate_except_owner s.store s' o len htruncate)
+  · intro r old hd hskip hold hheld
+    exact Held.truncate htruncate (truncate_except_owner s.store s' o len htruncate)
+      hLoc hSlice (hretain r old hd hold) hheld
+  · exact hnew
+  · exact hage
+  · exact hfresh
+  · exact hglobals
+
+theorem StoreInv.flatStep {m : Module} {G : Nat} {s : St} {st' : Store}
+    {demanded : RootInst → Prop} (hi : StoreInv m G s demanded) (h : FlatStep s.store st') :
+    StoreInv m G { s with store := st' } demanded := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · intro r v hv hdem
     rcases h.back r v hv with h0 | ⟨hn, _⟩
-    · exact (hi.live r v h0).mono h.le
+    · exact (hi.live r v h0 hdem).mono h.le
     · cases v <;> simp_all [Held, IsRef]
   · intro r v hv r' ht
     rcases h.back r v hv with h0 | ⟨hn, _⟩
@@ -220,19 +403,20 @@ theorem StoreInv.flatStep {m : Module} {G : Nat} {s : St} {st' : Store}
 
 /-- Binding a root that was absent. -/
 theorem StoreInv.bind {m : Module} {G : Nat} {s : St} {r : RootInst} {v : Val}
-    (hi : StoreInv m G s) (hfree : s.store.roots[r]? = none) (hv : Held m G s.store v)
+    {demanded : RootInst → Prop} (hi : StoreInv m G s demanded)
+    (hfree : s.store.roots[r]? = none) (hv : Held m G s.store v)
     (hage : ∀ r', Targets v r' → Older r' r)
     (hfr : ∀ a si x, r = .local a si x → si < s.nextScope) :
-    StoreInv m G { s with store := s.store.introduce r v } := by
+    StoreInv m G { s with store := s.store.introduce r v } demanded := by
   have hle := introduce_le s.store r v hfree
   refine ⟨?_, ?_, ?_, ?_⟩
-  · intro r1 v1 h1
+  · intro r1 v1 h1 hdem
     rw [get_introduce] at h1
     by_cases hr : r = r1
     · simp only [hr, if_true, Option.some.injEq] at h1
       subst h1; exact hv.mono hle
     · simp only [hr, if_false] at h1
-      exact (hi.live r1 v1 h1).mono hle
+      exact (hi.live r1 v1 h1 hdem).mono hle
   · intro r1 v1 h1 r' ht
     rw [get_introduce] at h1
     by_cases hr : r = r1
@@ -271,18 +455,19 @@ theorem write_root (s : Store) (r : RootInst) (old v : Val) (ho : s.roots[r]? = 
   simp [Store.write, Store.modify, ho, Val.get?, Val.modifyAt?]
 
 theorem StoreInv.rebind {m : Module} {G : Nat} {s : St} {r : RootInst} {old v : Val}
-    (hi : StoreInv m G s) (ho : s.store.roots[r]? = some old) (hold : IsRef old)
+    {demanded : RootInst → Prop} (hi : StoreInv m G s demanded)
+    (ho : s.store.roots[r]? = some old) (hold : IsRef old)
     (hv : Held m G s.store v) (hage : ∀ r', Targets v r' → Older r' r) :
-    StoreInv m G { s with store := ⟨(s.store.roots.erase r).insert r v⟩ } := by
+    StoreInv m G { s with store := ⟨(s.store.roots.erase r).insert r v⟩ } demanded := by
   have hle := rebind_le s.store r old v ho hold
   refine ⟨?_, ?_, ?_, ?_⟩
-  · intro r1 v1 h1
+  · intro r1 v1 h1 hdem
     simp only [get_reinsert] at h1
     by_cases hr : r = r1
     · simp only [hr, if_true, Option.some.injEq] at h1
       subst h1; exact hv.mono hle
     · simp only [hr, if_false] at h1
-      exact (hi.live r1 v1 h1).mono hle
+      exact (hi.live r1 v1 h1 hdem).mono hle
   · intro r1 v1 h1 r' ht
     simp only [get_reinsert] at h1
     by_cases hr : r = r1

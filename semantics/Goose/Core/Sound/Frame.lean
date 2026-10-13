@@ -85,7 +85,8 @@ def TargetOk (G : Nat) (P : Nat → RootInst → Prop) : Target → Prop
   | .param j => ∀ r, P j r → ∀ g, r = .global g → g < G
 
 def EffOk (G : Nat) (P : Nat → RootInst → Prop) (E : Eff) : Prop :=
-  E.unknown = false ∧ ∀ t, (t ∈ E.reads ∨ t ∈ E.writes ∨ t ∈ E.grows) → TargetOk G P t
+  E.unknown = false ∧
+    ∀ t, (t ∈ E.reads ∨ t ∈ E.writes ∨ t ∈ E.grows ∨ t ∈ E.shrinks) → TargetOk G P t
 
 /-- Either every global is initialized, or the body's allowed effects touch
 only initialized ones. -/
@@ -93,13 +94,17 @@ def Perm (m : Module) (W : World) : Prop := m.globals.size ≤ W.G ∨ EffOk W.G
 
 def EffLe (a b : Eff) : Prop :=
   (∀ t, t ∈ a.reads → t ∈ b.reads) ∧ (∀ t, t ∈ a.writes → t ∈ b.writes) ∧
-  (∀ t, t ∈ a.grows → t ∈ b.grows) ∧ (a.unknown = true → b.unknown = true)
+  (∀ t, t ∈ a.grows → t ∈ b.grows) ∧ (∀ t, t ∈ a.shrinks → t ∈ b.shrinks) ∧
+  (a.unknown = true → b.unknown = true)
 
-theorem EffLe.refl (a : Eff) : EffLe a a := ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩
+theorem EffLe.refl (a : Eff) : EffLe a a :=
+  ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩
 
 theorem EffLe.trans {a b c : Eff} (h1 : EffLe a b) (h2 : EffLe b c) : EffLe a c :=
   ⟨fun t h => h2.1 t (h1.1 t h), fun t h => h2.2.1 t (h1.2.1 t h),
-   fun t h => h2.2.2.1 t (h1.2.2.1 t h), fun h => h2.2.2.2 (h1.2.2.2 h)⟩
+   fun t h => h2.2.2.1 t (h1.2.2.1 t h),
+   fun t h => h2.2.2.2.1 t (h1.2.2.2.1 t h),
+   fun h => h2.2.2.2.2 (h1.2.2.2.2 h)⟩
 
 theorem mem_rootsTargets_global {rho : List RootRef} {g : GlobalId} (h : RootRef.global g ∈ rho) :
     Target.global g ∈ rootsTargets rho := by
@@ -115,7 +120,8 @@ theorem mem_rootsTargets_param {rho : List RootRef} {j : Nat} (h : RootRef.param
 as an effect: it then cannot be a global that is not initialized yet. -/
 theorem access {m : Module} {W : World} {env : Env} {s : Store} {l : Loc} {T : Ty}
     {rho : List RootRef} (hp : Perm m W) (hl : LocOk m W.G s l T) (hg : Gam env W.P rho l.root)
-    (hin : ∀ t, t ∈ rootsTargets rho → t ∈ W.E.reads ∨ t ∈ W.E.writes ∨ t ∈ W.E.grows) :
+    (hin : ∀ t, t ∈ rootsTargets rho →
+      t ∈ W.E.reads ∨ t ∈ W.E.writes ∨ t ∈ W.E.grows ∨ t ∈ W.E.shrinks) :
     LocTy s l T := by
   rcases hl with hl | ⟨g, gl, hG, hroot, hgl, _⟩
   · exact hl
@@ -240,7 +246,8 @@ def PRef (P : Nat → RootInst → Prop) (D : RootInst → Ty → Prop) (A : Roo
 store: every visible variable is bound in the instance of its block to a value
 of its type, every reference a variable of the activation holds points into
 its annotation, and the store invariant holds. -/
-structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) : Prop where
+structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St)
+    (future : List VarId := tenv.visible) : Prop where
   mod_t : tenv.mod = m
   mod_p : penv.mod = m
   vars_t : tenv.vars = env.vars
@@ -252,14 +259,14 @@ structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env)
   below : ∀ p, p ∈ env.scopes → W.base ≤ p.2 ∧ p.2 < s.nextScope
   base_le : W.base ≤ s.nextScope
   pAge : ∀ (i : Nat) (a : ActId) (si : ScopeInst) (x : VarId), W.P i (.local a si x) → si < W.base
-  vis : ∀ x, x ∈ tenv.visible → ∃ lv si v, env.vars[x]? = some lv ∧
+  vis : ∀ x, x ∈ tenv.visible → x ∈ future → ∃ lv si v, env.vars[x]? = some lv ∧
       env.scopes.lookup lv.scope = some si ∧ lv.ty.paramOk = true ∧
       s.store.roots[RootInst.local env.act si x]? = some v ∧ HasTy m W.G s.store v lv.ty
   rooted : ∀ (x : VarId) (lv : LocalVar) (si : ScopeInst) (v : Val), env.vars[x]? = some lv →
       env.scopes.lookup lv.scope = some si →
       s.store.roots[RootInst.local env.act si x]? = some v → ∀ r, Targets v r →
       ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r
-  inv : StoreInv m W.G s
+  inv : StoreInvAt m W.G env tenv.visible future s
   aOlder : ∀ r t, W.A r t → Older t r
   dOut : ∀ r E, W.D r E → ∃ a si x, r = RootInst.local a si x ∧ si < W.base
   dFun : ∀ r E E', W.D r E → W.D r E' → E = E'
@@ -269,12 +276,20 @@ structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env)
 
 /-- The typing environments agree on everything a frame reads. -/
 theorem Frame.tenv_congr {m : Module} {W : World} {t1 t2 : TEnv} {penv : PEnv} {env : Env} {s : St}
-    (h : Frame m W t1 penv env s) (h1 : t2.mod = t1.mod) (h2 : t2.vars = t1.vars)
+    {future : List VarId} (h : Frame m W t1 penv env s future)
+    (h1 : t2.mod = t1.mod) (h2 : t2.vars = t1.vars)
     (h3 : t2.scopes = t1.scopes) (h4 : ∀ x, x ∈ t2.visible → x ∈ t1.visible) :
-    Frame m W t2 penv env s :=
+    Frame m W t2 penv env s future :=
   { h with
     mod_t := h1 ▸ h.mod_t, vars_t := h2 ▸ h.vars_t, scopes_t := h3 ▸ h.scopes_t
-    vis := fun x hx => h.vis x (h4 x hx) }
+    vis := fun x hx hfuture => h.vis x (h4 x hx) hfuture
+    inv := h.inv.changeDemand (by
+      intro r hr
+      cases r with
+      | global g => exact Or.inl trivial
+      | «local» a si x =>
+        rcases hr with ⟨ha, hx, hf, lv, hvar, hlk⟩
+        exact Or.inl ⟨ha, h4 x hx, hf, lv, hvar, hlk⟩) }
 
 theorem hasTy_step {m : Module} {G : Nat} {s s' : Store} {r : RootInst} {v : Val} {T : Ty}
     (hle : StoreLe s s') (hkeep : IsRef v → s'.roots[r]? = some v) (hT : T.paramOk = true)
@@ -286,6 +301,8 @@ theorem hasTy_step {m : Module} {G : Nat} {s s' : Store} {r : RootInst} {v : Val
   case bool => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case arr E k => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case grow E => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
+  case growshrink E => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
+  case limited E capacity => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case structT sid ts => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case ref mu T =>
     refine ⟨v, hkeep ?_, ht.mono hle⟩
@@ -295,13 +312,14 @@ theorem hasTy_step {m : Module} {G : Nat} {s s' : Store} {r : RootInst} {v : Val
     obtain ⟨l, st, n, rfl, _⟩ := ht; trivial
 
 theorem Frame.flatStep {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
-    {st' : Store} (h : Frame m W tenv penv env s) (hs : FlatStep s.store st') :
-    Frame m W tenv penv env { s with store := st' } :=
+    {future : List VarId} {st' : Store} (h : Frame m W tenv penv env s future) (hs : FlatStep s.store st') :
+    Frame m W tenv penv env { s with store := st' } future :=
   { h with
     below := h.below, base_le := h.base_le
     vis := by
       intro x hx
-      obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx
+      intro hfuture
+      obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx hfuture
       obtain ⟨v', h6, h7⟩ := hasTy_step hs.le (hs.keep _ v h4) h3 h4 h5
       exact ⟨lv, si, v', h1, h2, h3, h6, h7⟩
     rooted := by
@@ -315,5 +333,39 @@ theorem Frame.flatStep {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env
       obtain ⟨v, h1, h2, h3⟩ := h.sa r E hd
       obtain ⟨l, a, b, rfl, _⟩ := h2
       exact ⟨_, hs.keep r _ h1 trivial, HasTy.mono hs.le ⟨l, a, b, rfl, by assumption⟩, h3⟩ }
+
+/-- Narrow a frame to variables that remain demanded at the next syntax point. -/
+theorem Frame.narrowFuture {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
+    {env : Env} {s : St} {future future' : List VarId}
+    (h : Frame m W tenv penv env s future)
+    (hsub : ∀ x, x ∈ future' → x ∈ future) :
+    Frame m W tenv penv env s future' := by
+  refine { h with
+    vis := ?_
+    inv := ?_ }
+  · intro x hx hfut
+    exact h.vis x hx (hsub x hfut)
+  · apply h.inv.changeDemand
+    intro r hdem
+    cases r with
+    | global g => exact Or.inl trivial
+    | «local» a si x =>
+      rcases hdem with ⟨ha, hx, hfut, lv, hvar, hlk⟩
+      exact Or.inl ⟨ha, hx, hsub x hfut, lv, hvar, hlk⟩
+
+/-- Once a node has finished, only its caller's future remains demanded. -/
+theorem Frame.afterNode {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
+    {env : Env} {s : St} {future current : List VarId}
+    (h : Frame m W tenv penv env s (future ++ current)) :
+    Frame m W tenv penv env s future :=
+  h.narrowFuture (fun _ hx => List.mem_append_left _ hx)
+
+/-- Reordering or duplicating future variables does not change a frame. -/
+theorem Frame.future_congr {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
+    {env : Env} {s : St} {future future' : List VarId}
+    (h : Frame m W tenv penv env s future)
+    (heq : ∀ x, x ∈ future' ↔ x ∈ future) :
+    Frame m W tenv penv env s future' :=
+  h.narrowFuture (fun x hx => (heq x).1 hx)
 
 end Goose.Core.Sound

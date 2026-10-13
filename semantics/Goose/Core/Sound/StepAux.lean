@@ -20,15 +20,36 @@ theorem isRef_of_refLike {G : Nat} {st : Store} {v : Val} {T : Ty} (h : HasTy m 
   · obtain ⟨l, a, b, rfl, _⟩ := h; trivial
 
 /-- A frame reads only the store and the scope counter of the state. -/
-theorem Frame.of_eq {s' : St} (h : Frame m W tenv penv env s) (h1 : s'.store = s.store)
-    (h2 : s'.nextScope = s.nextScope) : Frame m W tenv penv env s' :=
+theorem Frame.of_eq {s' : St} {future : List VarId} (h : Frame m W tenv penv env s future)
+    (h1 : s'.store = s.store) (h2 : s'.nextScope = s.nextScope) :
+    Frame m W tenv penv env s' future :=
   { h with
     below := by rw [h2]; exact h.below
     base_le := by rw [h2]; exact h.base_le
-    vis := by rw [h1]; exact h.vis
+    vis := by
+      intro x hx hf
+      obtain ⟨lv, si, v, hvar, hlk, hty, hroot, hvalue⟩ := h.vis x hx hf
+      exact ⟨lv, si, v, hvar, hlk, hty, by rw [h1]; exact hroot, by rw [h1]; exact hvalue⟩
     rooted := by rw [h1]; exact h.rooted
-    inv := ⟨by rw [h1]; exact h.inv.live, by rw [h1]; exact h.inv.age,
-      by rw [h1, h2]; exact h.inv.fresh, by rw [h1]; exact h.inv.globals⟩
+    inv := {
+      live := by
+        intro r v hr hd
+        rw [h1] at hr
+        simpa [h1] using h.inv.live r v hr hd
+      age := by
+        intro r v hr r' ht
+        rw [h1] at hr
+        exact h.inv.age r v hr r' ht
+      fresh := by
+        intro a si x hr
+        rw [h1] at hr
+        rw [h2]
+        exact h.inv.fresh a si x hr
+      globals := by
+        intro g gl hg hm
+        rw [h1]
+        exact h.inv.globals g gl hg hm
+    }
     sa := by rw [h1]; exact h.sa }
 
 theorem Ext.of_eq {is : List Nat} {D : RootInst → Prop} {s s' : St} (h1 : s'.store = s.store)
@@ -187,8 +208,23 @@ theorem sat_readRun_bind {vw : ViewVal} {el : Ty} {f : Array Val → M α} {Q : 
   obtain ⟨_, ⟨v, es, hr, hes, hn, hT⟩, _⟩ := h
   have helem : ∀ (i : Nat) (e : Val), es[i]? = some e → FlatTy el e := by
     intro i e he
-    rcases hT with hT | ⟨k', hT⟩ <;> cases v <;> simp only [FlatTy] at hT <;>
-      simp only [Val.elems?, Option.some.injEq, reduceCtorEq] at hes <;> subst hes <;> exact hT.2 i e he
+    rcases hT with hT | hT | ⟨k', hT⟩ | ⟨capacity, hT⟩
+    · cases v <;> simp only [FlatTy] at hT
+      simp only [Val.elems?, Option.some.injEq, reduceCtorEq] at hes
+      subst hes
+      exact hT.2 i e he
+    · cases v <;> simp only [FlatTy] at hT
+      simp only [Val.elems?, Option.some.injEq, reduceCtorEq] at hes
+      subst hes
+      exact hT.2 i e he
+    · cases v <;> simp only [FlatTy] at hT
+      simp only [Val.elems?, Option.some.injEq, reduceCtorEq] at hes
+      subst hes
+      exact hT.2 i e he
+    · cases v <;> simp only [FlatTy] at hT
+      simp only [Val.elems?, Option.some.injEq, reduceCtorEq] at hes
+      subst hes
+      exact hT.2.2.2.2 i e he
   have hext : ∀ (i : Nat) (e : Val),
       (es.extract vw.start (vw.start + vw.len))[i]? = some e → FlatTy el e := by
     intro i e he
@@ -238,7 +274,7 @@ theorem sat_read_var (hF : Frame m W tenv penv env s) {x : VarId} (hx : x ∈ te
     (hq : ∀ lv si v, env.vars[x]? = some lv → env.scopes.lookup lv.scope = some si →
       s.store.roots[RootInst.local env.act si x]? = some v → HasTy m W.G s.store v lv.ty → Q v s) :
     Sat (evalExpr k ⟨prof, m⟩ env (.read (.var x))) s Q := by
-  obtain ⟨lv, si, v, h1, h2, _, h4, h5⟩ := hF.vis x hx
+  obtain ⟨lv, si, v, h1, h2, _, h4, h5⟩ := hF.vis x hx hx
   cases k with
   | zero => simp only [evalExpr, sat_timeout]
   | succ k =>
@@ -270,6 +306,16 @@ theorem gam_push (hF : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv.
 theorem sat_lengthLoc {l : Loc} {E : Ty} {Q : Nat → St → Prop}
     (h : LocTy s.store l (.grow E))
     (k : ∀ es, s.store.read l = .ok (.resizable E es) → Q es.size s) : Sat (lengthLoc l) s Q := by
+  obtain ⟨v, hv, hT⟩ := h
+  rcases v with _|_|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hT
+  obtain ⟨rfl, _⟩ := hT
+  simp only [Sat, lengthLoc, Store.length, hv]
+  exact k es hv
+
+theorem sat_lengthLoc_growshrink {l : Loc} {E : Ty} {Q : Nat → St → Prop}
+    (h : LocTy s.store l (.growshrink E))
+    (k : ∀ es, s.store.read l = .ok (.resizable E es) → Q es.size s) :
+    Sat (lengthLoc l) s Q := by
   obtain ⟨v, hv, hT⟩ := h
   rcases v with _|_|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hT
   obtain ⟨rfl, _⟩ := hT

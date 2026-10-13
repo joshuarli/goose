@@ -60,13 +60,14 @@ theorem lookup_idx_le : ∀ (l : List (Nat × Nat)), l.Pairwise (fun a b => b.2 
 
 variable {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
 
-theorem Frame.inst_lt (h : Frame m W tenv penv env s) {sc si : Nat}
+theorem Frame.inst_lt {future : List VarId} (h : Frame m W tenv penv env s future) {sc si : Nat}
     (hl : env.scopes.lookup sc = some si) : W.base ≤ si ∧ si < s.nextScope :=
   h.below _ (lookup_mem _ _ _ hl)
 
 /-- What denotes a root of the activation or of a caller was handed out
 before the next scope instance. -/
-theorem Frame.gam_older (h : Frame m W tenv penv env s) {rho : List RootRef} {r : RootInst}
+theorem Frame.gam_older {future : List VarId} (h : Frame m W tenv penv env s future)
+    {rho : List RootRef} {r : RootInst}
     (hg : Gam env W.P rho r) : ∀ a si x, r = RootInst.local a si x → si < s.nextScope := by
   intro a si x hr
   obtain ⟨q, _, hq⟩ := hg
@@ -81,7 +82,8 @@ theorem Frame.gam_older (h : Frame m W tenv penv env s) {rho : List RootRef} {r 
     exact Nat.lt_of_lt_of_le (h.pAge j a si x hq) h.base_le
 
 /-- Binding a variable of an open block whose root was absent. -/
-theorem Frame.bind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {si : ScopeInst}
+theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
+    {x : VarId} {lv : LocalVar} {si : ScopeInst}
     {v : Val} (hx : env.vars[x]? = some lv) (hsi : env.scopes.lookup lv.scope = some si)
     (hst : lv.ty.paramOk = true)
     (hfree : s.store.roots[RootInst.local env.act si x]? = none)
@@ -89,13 +91,41 @@ theorem Frame.bind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {
     (hroot : ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
       Older r (.local env.act si x)) :
     Frame m W { tenv with visible := x :: tenv.visible } penv env
-      { s with store := s.store.introduce (.local env.act si x) v } := by
+      { s with store := s.store.introduce (.local env.act si x) v } (x :: future) := by
   have hle := introduce_le s.store (.local env.act si x) v hfree
+  have hInv : StoreInv m W.G s (DemandedRoot env (x :: tenv.visible) (x :: future)) := by
+    apply h.inv.changeDemand
+    intro r hdem
+    cases r with
+    | global g => exact Or.inl trivial
+    | «local» a si' x' =>
+      rcases hdem with ⟨ha, hx', hf, lv', hvar, hlk'⟩
+      by_cases hxx : x' = x
+      · subst x'
+        rw [hx] at hvar
+        have hlv : lv' = lv := Option.some.inj hvar.symm
+        have hsi' : si' = si := by
+          rw [hlv] at hlk'
+          exact (Option.some.inj (hsi.symm.trans hlk')).symm
+        subst lv'
+        subst si'
+        subst a
+        exact Or.inr hfree
+      · have hxold : x' ∈ tenv.visible := by
+          rcases List.mem_cons.1 hx' with h | h
+          · exact absurd h hxx
+          · exact h
+        have hfuture : x' ∈ future := by
+          rcases List.mem_cons.1 hf with h | h
+          · exact absurd h hxx
+          · exact h
+        exact Or.inl ⟨ha, hxold, hfuture, lv', hvar, hlk'⟩
   exact
   { h with
     below := h.below, base_le := h.base_le
     vis := by
       intro x' hx'
+      intro hfuture
       by_cases hxx : x' = x
       · subst hxx
         exact ⟨lv, si, v, hx, hsi, hst, by simp [get_introduce], hv.mono hle⟩
@@ -103,7 +133,11 @@ theorem Frame.bind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {
           rcases List.mem_cons.1 hx' with e | e
           · exact absurd e hxx
           · exact e
-        obtain ⟨lv', si', v', h1, h2, h3, h4, h5⟩ := h.vis x' hx''
+        have hfuture' : x' ∈ future := by
+          rcases List.mem_cons.1 hfuture with e | e
+          · exact absurd e hxx
+          · exact e
+        obtain ⟨lv', si', v', h1, h2, h3, h4, h5⟩ := h.vis x' hx'' hfuture'
         refine ⟨lv', si', v', h1, h2, h3, ?_, h5.mono hle⟩
         rw [get_introduce]
         have : ¬ (RootInst.local env.act si x = RootInst.local env.act si' x') := by
@@ -119,7 +153,7 @@ theorem Frame.bind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {
         exact (hroot r ht).1
       · simp only [e, if_false] at h3
         exact h.rooted x' lv' si' v' h1 h2 h3 r ht
-    inv := h.inv.bind hfree hv.held (fun r ht => (hroot r ht).2)
+    inv := hInv.bind hfree hv.held (fun r ht => (hroot r ht).2)
       (fun a si' x' e => by cases e; exact (h.inst_lt hsi).2)
     sa := by
       intro r E hd
@@ -131,21 +165,24 @@ theorem Frame.bind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {
       simp [hne, h1] }
 
 /-- Replacing the reference a visible variable holds. -/
-theorem Frame.rebind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {si : ScopeInst}
+theorem Frame.rebind {future : List VarId} (h : Frame m W tenv penv env s future)
+    {x : VarId} {lv : LocalVar} {si : ScopeInst}
     {old v : Val} (hx : env.vars[x]? = some lv) (hsi : env.scopes.lookup lv.scope = some si)
     (ho : s.store.roots[RootInst.local env.act si x]? = some old) (hold : IsRef old)
     (hv : HasTy m W.G s.store v lv.ty)
     (hroot : ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
       Older r (.local env.act si x)) :
     Frame m W tenv penv env
-      { s with store := ⟨(s.store.roots.erase (.local env.act si x)).insert (.local env.act si x) v⟩ } := by
+      { s with store := ⟨(s.store.roots.erase (.local env.act si x)).insert (.local env.act si x) v⟩ }
+      future := by
   have hle := rebind_le s.store (.local env.act si x) old v ho hold
   exact
   { h with
     below := h.below, base_le := h.base_le
     vis := by
       intro x' hx'
-      obtain ⟨lv', si', v', h1, h2, h3, h4, h5⟩ := h.vis x' hx'
+      intro hfuture
+      obtain ⟨lv', si', v', h1, h2, h3, h4, h5⟩ := h.vis x' hx' hfuture
       by_cases e : RootInst.local env.act si x = RootInst.local env.act si' x'
       · cases e
         rw [hx] at h1; cases h1
@@ -180,15 +217,17 @@ theorem hasTy_slice_mu {G : Nat} {st : Store} {v : Val} {mu mu' : Mutability} {E
 except the slices in the slice variables `D'` it was given references to, and
 those it left typed and rooted within what each variable allows. -/
 theorem Frame.outer {s' : St} {D' : RootInst → Ty → Prop} {A' : RootInst → RootInst → Prop}
-    (h : Frame m W tenv penv env s) (he : Ext [] (fun r => ∃ E, D' r E) s s')
-    (hi : StoreInv m W.G s')
+    {future future' : List VarId} (h : Frame m W tenv penv env s future)
+    (he : Ext [] (fun r => ∃ E, D' r E) s s')
+    (hi : StoreInvAt m W.G env tenv.visible future' s')
+    (hfuture : ∀ x, x ∈ future' → x ∈ future)
     (hsa : ∀ r E, D' r E → ∃ v, s'.store.roots[r]? = some v ∧
       HasTy m W.G s'.store v (.slice .mutable E) ∧ ∀ t, Targets v t → A' r t)
     (hD : ∀ r E, D' r E → (W.D r E ∧ ∀ t, A' r t → W.A r t) ∨
       (∃ x lv si mu, env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si ∧
         r = RootInst.local env.act si x ∧ lv.ty = .slice mu E ∧
         ∀ t, A' r t → ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann t))
-    (hDall : ∀ r E, W.D r E → D' r E) : Frame m W tenv penv env s' := by
+      (hDall : ∀ r E, W.D r E → D' r E) : Frame m W tenv penv env s' future' := by
   -- A root of this activation is no slice variable of a caller.
   have hfr : ∀ {x : VarId} {sc si : Nat} {E : Ty}, env.scopes.lookup sc = some si →
       ¬ W.D (RootInst.local env.act si x) E := by
@@ -202,7 +241,8 @@ theorem Frame.outer {s' : St} {D' : RootInst → Ty → Prop} {A' : RootInst →
     base_le := Nat.le_trans h.base_le he.next
     vis := by
       intro x hx
-      obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx
+      intro hfut
+      obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx (hfuture x hfut)
       by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
       · obtain ⟨E, hd⟩ := hd
         obtain ⟨v', g1, g2, _⟩ := hsa _ E hd
@@ -236,10 +276,11 @@ theorem Frame.outer {s' : St} {D' : RootInst → Ty → Prop} {A' : RootInst →
 
 /-- Replacing the slice a caller's slice variable holds, through a reference
 to it: the frame holds, and the code around sees only that variable change. -/
-theorem Frame.outwrite (h : Frame m W tenv penv env s) {r : RootInst} {E : Ty} {w : Val}
+theorem Frame.outwrite {future : List VarId} (h : Frame m W tenv penv env s future)
+    {r : RootInst} {E : Ty} {w : Val}
     (hd : W.D r E) (hw : HasTy m W.G s.store w (.slice .mutable E))
     (ht : ∀ t, Targets w t → W.A r t) :
-    Frame m W tenv penv env { s with store := ⟨(s.store.roots.erase r).insert r w⟩ } ∧
+    Frame m W tenv penv env { s with store := ⟨(s.store.roots.erase r).insert r w⟩ } future ∧
     Ext (insts env) (Dset W) s { s with store := ⟨(s.store.roots.erase r).insert r w⟩ } := by
   obtain ⟨old, ho, hot, _⟩ := h.sa r E hd
   have hold : IsRef old := by obtain ⟨l, a, b, rfl, _⟩ := hot; trivial
@@ -256,8 +297,8 @@ theorem Frame.outwrite (h : Frame m W tenv penv env s) {r : RootInst} {E : Ty} {
     { h with
       below := h.below, base_le := h.base_le
       vis := by
-        intro x hx
-        obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx
+        intro x hvisible hfuture
+        obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hvisible hfuture
         exact ⟨lv, si, v, h1, h2, h3, by simp [get_reinsert, hne h2, h4], h5.mono hle⟩
       rooted := by
         intro x lv si v h1 h2 h3 t ht'
@@ -286,10 +327,11 @@ theorem Frame.outwrite (h : Frame m W tenv penv env s) {r : RootInst} {E : Ty} {
       · simpa [get_reinsert, e] using hr
 
 /-- Entering a block: a scope instance no root has yet. -/
-theorem Frame.push (h : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv.scopes) :
+theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
+    {sc : Nat} (hsc : sc ∉ tenv.scopes) :
     Frame m W { tenv with scopes := sc :: tenv.scopes } { penv with scopes := sc :: penv.scopes }
       { env with scopes := (sc, s.nextScope) :: env.scopes }
-      { s with nextScope := s.nextScope + 1 } := by
+      { s with nextScope := s.nextScope + 1 } future := by
   have hsc' : sc ∉ env.scopes.map Prod.fst := h.scopes_t ▸ hsc
   have hlk : ∀ a b, env.scopes.lookup a = some b →
       ((sc, s.nextScope) :: env.scopes).lookup a = some b := by
@@ -307,6 +349,36 @@ theorem Frame.push (h : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv
       exact ⟨lv, si, h1, hlk _ _ h2, h3⟩
     | global g => exact hr
     | param j => exact hr
+  have hInvOld : StoreInvAt m W.G { env with scopes := (sc, s.nextScope) :: env.scopes }
+      tenv.visible future s := by
+    apply h.inv.changeDemand
+    intro r hdem
+    cases r with
+    | global g => exact Or.inl trivial
+    | «local» a si x =>
+      rcases hdem with ⟨ha, hx, hf, lv, hvar, hlk'⟩
+      have hvar' : env.vars[x]? = some lv := hvar
+      by_cases hsc' : lv.scope = sc
+      · rw [lookup_cons, hsc'] at hlk'
+        simp at hlk'
+        subst si
+        have hnone : s.store.roots[RootInst.local env.act s.nextScope x]? = none := by
+          cases hr : s.store.roots[RootInst.local env.act s.nextScope x]? with
+          | none => rfl
+          | some v =>
+            have hlt := h.inv.fresh env.act s.nextScope x (by rw [hr]; simp)
+            exact absurd hlt (Nat.not_lt.mpr (Nat.le_refl _))
+        rw [ha]
+        exact Or.inr hnone
+      · have hlk : env.scopes.lookup lv.scope = some si := by
+          rw [lookup_cons, if_neg hsc'] at hlk'
+          exact hlk'
+        exact Or.inl ⟨ha, hx, hf, lv, hvar', hlk⟩
+  have hInv : StoreInvAt m W.G { env with scopes := (sc, s.nextScope) :: env.scopes }
+      tenv.visible future { s with nextScope := s.nextScope + 1 } := by
+    refine ⟨hInvOld.live, hInvOld.age, ?_, hInvOld.globals⟩
+    intro a si x hx
+    exact Nat.lt_succ_of_lt (hInvOld.fresh a si x hx)
   exact
   { mod_t := h.mod_t, mod_p := h.mod_p, vars_t := h.vars_t, vars_p := h.vars_p
     scopes_t := by simp [h.scopes_t]
@@ -325,7 +397,8 @@ theorem Frame.push (h : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv
     pAge := h.pAge
     vis := by
       intro x hx
-      obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx
+      intro hfut
+      obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx hfut
       exact ⟨lv, si, v, h1, hlk _ _ h2, h3, h4, h5⟩
     rooted := by
       intro x lv si v h1 h2 h3 r ht
@@ -338,8 +411,7 @@ theorem Frame.push (h : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv
       · simp only [e, if_false] at h2'
         obtain ⟨ann, ha, hg⟩ := h.rooted x lv si v h1 h2' h3 r ht
         exact ⟨ann, ha, hgam _ _ hg⟩
-    inv := ⟨h.inv.live, h.inv.age, fun a si x hx => Nat.lt_succ_of_lt (h.inv.fresh a si x hx),
-      h.inv.globals⟩
+    inv := hInv
     aOlder := h.aOlder, dOut := h.dOut, dFun := h.dFun, sa := h.sa, pref := h.pref }
 
 /-! ### Leaving a block -/
@@ -384,12 +456,12 @@ theorem Held.agree {v : Val}
     exact ⟨E, h3.agree hagree (ht _ rfl)⟩
 
 /-- Releasing roots no surviving reference targets keeps the store invariant. -/
-theorem StoreInv.release {s : St} (hi : StoreInv m G s)
+theorem StoreInv.release {s : St} {demanded : RootInst → Prop} (hi : StoreInv m G s demanded)
     (hagree : ∀ r, ¬ P r → st'.roots[r]? = s.store.roots[r]?)
     (hgone : ∀ r, P r → st'.roots[r]? = none)
     (hsurv : ∀ (r : RootInst) (v : Val), ¬ P r → s.store.roots[r]? = some v →
       ∀ r', Targets v r' → ¬ P r')
-    (hglob : ∀ g, ¬ P (.global g)) : StoreInv m G { s with store := st' } := by
+    (hglob : ∀ g, ¬ P (.global g)) : StoreInv m G { s with store := st' } demanded := by
   have back : ∀ (r : RootInst) (v : Val), st'.roots[r]? = some v →
       ¬ P r ∧ s.store.roots[r]? = some v := by
     intro r v hv
@@ -397,9 +469,9 @@ theorem StoreInv.release {s : St} (hi : StoreInv m G s)
     · rw [hgone r hp] at hv; cases hv
     · exact ⟨hp, by rw [← hagree r hp]; exact hv⟩
   refine ⟨?_, ?_, ?_, ?_⟩
-  · intro r v hv
+  · intro r v hv hdem
     obtain ⟨hp, h0⟩ := back r v hv
-    exact (hi.live r v h0).agree hagree (hsurv r v hp h0)
+    exact (hi.live r v h0 hdem).agree hagree (hsurv r v hp h0)
   · intro r v hv
     exact hi.age r v (back r v hv).2
   · intro a si x hx
@@ -413,7 +485,8 @@ end Agree
 
 /-- A root that is not of the released scope instance and holds a reference
 points outside that instance, when every other root is older than it. -/
-theorem survivor_targets {G : Nat} {s2 : St} {sc : Nat} {si : ScopeInst} (hi : StoreInv m G s2)
+theorem survivor_targets {G : Nat} {s2 : St} {sc : Nat} {si : ScopeInst}
+    {demanded : RootInst → Prop} (hi : StoreInv m G s2 demanded)
     (hdom : ∀ (r : RootInst), s2.store.roots[r]? ≠ none →
       ScopeRoots env.vars env.act sc si r ∨ ∀ a si' x, r = RootInst.local a si' x → si' < si)
     (r : RootInst) (v : Val) (hp : ¬ ScopeRoots env.vars env.act sc si r)
@@ -432,16 +505,17 @@ theorem survivor_targets {G : Nat} {s2 : St} {sc : Nat} {si : ScopeInst} (hi : S
 
 /-- Leaving a block: the frame of the code around it holds once the block's
 roots are released, given that every other root is older than the block. -/
-theorem Frame.pop {tenv1 : TEnv} {s2 : St} {sc : Nat} {si : ScopeInst}
+theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : Nat} {si : ScopeInst}
     (h : Frame m W tenv1 { penv with scopes := sc :: penv.scopes }
-      { env with scopes := (sc, si) :: env.scopes } s2)
+      { env with scopes := (sc, si) :: env.scopes } s2 future)
     (hmod : tenv.mod = tenv1.mod) (hvars : tenv.vars = tenv1.vars)
     (hscs : tenv1.scopes = sc :: tenv.scopes)
     (hvis : ∀ x, x ∈ tenv.visible → x ∈ tenv1.visible ∧
       ∃ lv, env.vars[x]? = some lv ∧ lv.scope ∈ env.scopes.map Prod.fst)
+    (hfuture : ∀ x, x ∈ future' → x ∈ future)
     (hdom : ∀ (r : RootInst), s2.store.roots[r]? ≠ none →
       ScopeRoots env.vars env.act sc si r ∨ ∀ a si' x, r = RootInst.local a si' x → si' < si) :
-    Frame m W tenv penv env (relSt env sc si s2) := by
+    Frame m W tenv penv env (relSt env sc si s2) future' := by
   obtain ⟨hagree, hgone⟩ := releaseScope_roots env.vars env.act sc si s2.store
   have K := survivor_targets (env := env) h.inv hdom
   have hnd : sc ∉ env.scopes.map Prod.fst ∧ (env.scopes.map Prod.fst).Nodup := by
@@ -467,6 +541,26 @@ theorem Frame.pop {tenv1 : TEnv} {s2 : St} {sc : Nat} {si : ScopeInst}
   have sp2 : penv.scopes = env.scopes.map Prod.fst := by
     have := h.scopes_p
     simpa using this
+  have hInvReleased : StoreInv m W.G (relSt env sc si s2)
+      (DemandedRoot { env with scopes := (sc, si) :: env.scopes } tenv1.visible future) :=
+    h.inv.release hagree hgone K (by rintro g ⟨_, _, _, _, e⟩; cases e)
+  have hInv : StoreInvAt m W.G env tenv.visible future' (relSt env sc si s2) := by
+    apply hInvReleased.changeDemand
+    intro r hdem
+    cases r with
+    | global g => exact Or.inl trivial
+    | «local» a si' x =>
+      rcases hdem with ⟨ha, hx, hf, lv, hvar, hlk⟩
+      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx
+      have hvar' : env.vars[x]? = some lv := by
+        simpa using hvar
+      have hlvEq : lv = lv0 := Option.some.inj (hvar'.symm.trans hlv0)
+      subst lv0
+      have hscNe : lv.scope ≠ sc := fun heq => hnd.1 (heq ▸ hsc0)
+      have hlookupInner : ((sc, si) :: env.scopes).lookup lv.scope = some si' := by
+        rw [lookup_cons]
+        simpa [hscNe] using hlk
+      exact Or.inl ⟨ha, hx1, hfuture x hf, lv, hvar', hlookupInner⟩
   exact
   { mod_t := hmod ▸ h.mod_t, mod_p := h.mod_p, vars_t := hvars ▸ h.vars_t, vars_p := h.vars_p
     scopes_t := st2, scopes_p := sp2, nodup := hnd.2, sorted := htl
@@ -474,8 +568,9 @@ theorem Frame.pop {tenv1 : TEnv} {s2 : St} {sc : Nat} {si : ScopeInst}
     base_le := h.base_le, pAge := h.pAge
     vis := by
       intro x hx
+      intro hfut
       obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx
-      obtain ⟨lv, si', v, h1, h2, h3, h4, h5⟩ := h.vis x hx1
+      obtain ⟨lv, si', v, h1, h2, h3, h4, h5⟩ := h.vis x hx1 (hfuture x hfut)
       have h1' : env.vars[x]? = some lv := h1
       rw [hlv0] at h1'; cases h1'
       have hne : lv0.scope ≠ sc := fun e => hnd.1 (e ▸ hsc0)
@@ -507,7 +602,7 @@ theorem Frame.pop {tenv1 : TEnv} {s2 : St} {sc : Nat} {si : ScopeInst}
           exact ⟨ly, siy, g1, g2', g3⟩
       | global g => exact hr
       | param j => exact hr
-    inv := h.inv.release hagree hgone K (by rintro g ⟨_, _, _, _, e⟩; cases e)
+    inv := hInv
     aOlder := h.aOlder, dOut := h.dOut, dFun := h.dFun, pref := h.pref
     sa := by
       intro r E hd
@@ -526,7 +621,8 @@ theorem Frame.pop {tenv1 : TEnv} {s2 : St} {sc : Nat} {si : ScopeInst}
       rw [hagree r (hnp r (Or.inl rfl))]; exact h1 }
 
 /-- Leaving a block, seen from the code around it. -/
-theorem ext_block {G : Nat} {s s2 : St} {sc : Nat} {D : RootInst → Prop} (hi : StoreInv m G s)
+theorem ext_block {G : Nat} {s s2 : St} {sc : Nat} {D : RootInst → Prop}
+    {demanded : RootInst → Prop} (hi : StoreInv m G s demanded)
     (hle : StoreLe s.store s2.store) (hnext : s.nextScope ≤ s2.nextScope)
     (hkeep : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → IsRef v →
       (∀ a si' x, r = RootInst.local a si' x → si' ∉ insts env) → ¬ D r →

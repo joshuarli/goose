@@ -47,11 +47,15 @@ def PlaceOk (m : Module) (G : Nat) (P : Nat → RootInst → Prop) (penv : PEnv)
 starts at its first element. -/
 def ViewOk (s : Store) (vw : ViewVal) (el : Ty) : Prop :=
   el.flat = true ∧ SliceTy s vw.loc vw.start vw.len el ∧
-  (vw.resizable = true → vw.start = 0 ∧ LocTy s vw.loc (.grow el))
+  (vw.resizable = true → vw.start = 0 ∧
+    (LocTy s vw.loc (.grow el) ∨ LocTy s vw.loc (.growshrink el)))
 
 theorem ViewOk.mono {s s' : Store} {vw : ViewVal} {el : Ty} (hle : StoreLe s s')
     (h : ViewOk s vw el) : ViewOk s' vw el :=
-  ⟨h.1, h.2.1.mono hle, fun hr => ⟨(h.2.2 hr).1, LocTy.mono hle (h.2.2 hr).2⟩⟩
+  ⟨h.1, h.2.1.mono hle, fun hr =>
+    ⟨(h.2.2 hr).1, (h.2.2 hr).2.elim
+      (fun h => Or.inl (LocTy.mono hle h))
+      (fun h => Or.inr (LocTy.mono hle h))⟩⟩
 
 /-- The values a construct binds in its block: distinct variables of the block,
 numbered in `[lo, hi)`, each with a value of its type that points into its
@@ -67,7 +71,7 @@ def PreOk (m : Module) (W : World) (penv : PEnv) (env1 : Env) (sc lo hi : Nat) (
 def SumOk (G : Nat) (P : Nat → RootInst → Prop) (impl : Impl) (ctx : Context) : Prop :=
   ∃ sm, impl.summary = .known sm ∧
     ∀ t, (t ∈ expandTargets impl ctx sm.reads ∨ t ∈ expandTargets impl ctx sm.writes ∨
-      t ∈ expandTargets impl ctx sm.grows) → TargetOk G P t
+      t ∈ expandTargets impl ctx sm.grows ∨ t ∈ expandTargets impl ctx sm.shrinks) → TargetOk G P t
 
 /-- Each slice variable of a caller that was passed by reference holds a slice
 of its element type rooted within what the variable allows. -/
@@ -351,15 +355,19 @@ structure GlobOk (m : Module) (g : GlobalId) (gl : Global) : Prop where
   init : ∃ tn, tyExpr (initEnv m g) gl.init 0 = .ok (gl.ty, tn)
   roots : ∃ rho st, rpExpr ⟨m, initImpl, initContext, []⟩ gl.init ⟨0, {}⟩ = .ok (rho, st) ∧
     st.eff.unknown = false ∧
-    ∀ t : Target, (t ∈ st.eff.reads ∨ t ∈ st.eff.writes ∨ t ∈ st.eff.grows) →
+    ∀ t : Target,
+      (t ∈ st.eff.reads ∨ t ∈ st.eff.writes ∨ t ∈ st.eff.grows ∨ t ∈ st.eff.shrinks) →
       ∀ h, t = .global h → h < g
 
 /-- The facts the proof uses about an accepted module. -/
 structure ModOk (m : Module) : Prop where
+  structTables : checkStructTables m = .ok ()
   impl : ∀ (i : Nat) (impl : Impl), m.impls[i]? = some impl → ImplOk m impl
   ctx : ∀ (c : Nat) (ctx : Context), m.contexts[c]? = some ctx → ∃ impl, m.impls[ctx.impl]? = some impl ∧ CtxOk m impl ctx
   glob : ∀ (g : Nat) (gl : Global), m.globals[g]? = some gl → GlobOk m g gl
   entry : ∃ ctx impl, m.contexts[m.entry]? = some ctx ∧ m.impls[ctx.impl]? = some impl ∧
     impl.params.size = 0 ∧ impl.results.toList = []
+  demand : checkModuleDemand m = .ok ()
+  demandPlans : ∃ plans, deriveModuleDemand m = .ok plans ∧ PlansWellFormed m plans
 
 end Goose.Core.Sound

@@ -212,15 +212,23 @@ theorem addTargets_right (old new : List Target) : ∀ t, t ∈ new → t ∈ ad
 
 theorem PMono.addReads (rs : List RootRef) : PMono (addReads rs) := by
   unfold Goose.Core.addReads addRoots
-  exact PMono.modify _ fun s => ⟨Nat.le_refl _, addTargets_left _ _, fun _ h => h, fun _ h => h, fun h => h⟩
+  exact PMono.modify _ fun s =>
+    ⟨Nat.le_refl _, addTargets_left _ _, fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩
 
 theorem PMono.addWrites (rs : List RootRef) : PMono (addWrites rs) := by
   unfold Goose.Core.addWrites addRoots
-  exact PMono.modify _ fun s => ⟨Nat.le_refl _, fun _ h => h, addTargets_left _ _, fun _ h => h, fun h => h⟩
+  exact PMono.modify _ fun s =>
+    ⟨Nat.le_refl _, fun _ h => h, addTargets_left _ _, fun _ h => h, fun _ h => h, fun h => h⟩
 
 theorem PMono.addGrows (rs : List RootRef) : PMono (addGrows rs) := by
   unfold Goose.Core.addGrows addRoots
-  exact PMono.modify _ fun s => ⟨Nat.le_refl _, fun _ h => h, fun _ h => h, addTargets_left _ _, fun h => h⟩
+  exact PMono.modify _ fun s =>
+    ⟨Nat.le_refl _, fun _ h => h, fun _ h => h, addTargets_left _ _, fun _ h => h, fun h => h⟩
+
+theorem PMono.addShrinks (rs : List RootRef) : PMono (addShrinks rs) := by
+  unfold Goose.Core.addShrinks addRoots
+  exact PMono.modify _ fun s =>
+    ⟨Nat.le_refl _, fun _ h => h, fun _ h => h, fun _ h => h, addTargets_left _ _, fun h => h⟩
 
 theorem PMono.noteAborts : PMono noteAborts := by
   unfold Goose.Core.noteAborts
@@ -239,21 +247,129 @@ theorem PMono.rpCall (env : PEnv) (c : ContextId) (ar : List (List RootRef)) : P
   refine PMono.modify _ fun s => ⟨Nat.le_refl _, ?_⟩
   simp only [callEffects]
   split
-  · exact ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun _ => rfl⟩
-  · exact ⟨addTargets_left _ _, addTargets_left _ _, addTargets_left _ _, fun h => h⟩
+  · exact ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun _ h => h, fun _ => rfl⟩
+  · exact ⟨addTargets_left _ _, addTargets_left _ _, addTargets_left _ _, addTargets_left _ _, fun h => h⟩
 
 theorem PMono.readRoots (env : PEnv) (p : Place) : PMono (readRoots env p) := by
   unfold Goose.Core.readRoots
   repeat' (first | exact PMono.pure _ | exact PMono.rej _ _ | split)
 
+/- Keep the new operation order explicit so the mutual proof does not repeatedly
+unfold profile checks and shrink-only abort branches. -/
+theorem PMono.iteBool (c : Bool) {x y : P α} (hx : PMono x) (hy : PMono y) :
+    PMono (if c then x else y) := by
+  cases c
+  · exact hy
+  · exact hx
+
+theorem PMono.limitedAbort (env : PEnv) (owner : Place) :
+    PMono (do
+      if (← Goose.Core.liftV (env.limitedOwner owner)) then Goose.Core.noteAborts) := by
+  exact PMono.bind (PMono.liftV _) (fun limited =>
+    PMono.iteBool limited PMono.noteAborts (PMono.pure ()))
+
+theorem PMono.limitedAbortValue (env : PEnv) (owner : Place) (value : α) :
+    PMono (do
+      if (← Goose.Core.liftV (env.limitedOwner owner)) then Goose.Core.noteAborts
+      (Pure.pure value : Goose.Core.P α)) := by
+  exact PMono.bind (PMono.liftV _) (fun limited =>
+    PMono.iteBool limited (PMono.bind PMono.noteAborts (fun _ => PMono.pure value))
+      (PMono.pure value))
+
+theorem PMono.profileWriteAbort (env : PEnv) (owner : Place) (rho : List RootRef) :
+    PMono (if env.mod.profile == .shrink then do
+      Goose.Core.addWrites rho
+      if (← Goose.Core.liftV (env.limitedOwner owner)) then Goose.Core.noteAborts
+    else (Pure.pure () : Goose.Core.P Unit)) := by
+  exact PMono.iteBool (env.mod.profile == .shrink)
+    (PMono.bind (PMono.addWrites rho) (fun _ => PMono.limitedAbort env owner))
+    (PMono.pure ())
+
+theorem PMono.profileWriteAbortValue (env : PEnv) (owner : Place) (rho : List RootRef) :
+    PMono (if env.mod.profile == .shrink then do
+      Goose.Core.addWrites rho
+      if (← Goose.Core.liftV (env.limitedOwner owner)) then Goose.Core.noteAborts
+      (Pure.pure rho : Goose.Core.P (List RootRef))
+    else (Pure.pure rho : Goose.Core.P (List RootRef))) := by
+  exact PMono.iteBool (env.mod.profile == .shrink)
+    (PMono.bind (PMono.addWrites rho) (fun _ => PMono.limitedAbortValue env owner rho))
+    (PMono.pure rho)
+
+theorem PMono.rpPush (env : PEnv) (owner : Place) (a : Expr) (org : Option OriginId)
+    (howner : PMono (rpPlace env owner)) (ha : PMono (rpExpr env a)) :
+    PMono (rpExpr env (.push owner a org)) := by
+  simp only [rpExpr]
+  exact PMono.bind howner (fun rho => PMono.bind ha (fun _ =>
+    PMono.bind (PMono.addGrows rho) (fun _ => PMono.profileWriteAbortValue env owner rho)))
+
+theorem PMono.rpPop (env : PEnv) (owner : Place) (org : OriginId)
+    (howner : PMono (rpPlace env owner)) :
+    PMono (rpExpr env (.pop owner org)) := by
+  simp only [rpExpr]
+  exact PMono.bind howner (fun rho =>
+    PMono.bind (PMono.addReads rho) (fun _ =>
+      PMono.bind (PMono.addShrinks rho) (fun _ =>
+        PMono.bind PMono.noteAborts (fun _ => PMono.pure []))))
+
+theorem PMono.rpAppend (env : PEnv) (owner : Place) (src : View) (org : OriginId)
+    (howner : PMono (rpPlace env owner)) (hsrc : PMono (rpView env src)) :
+    PMono (rpStmt env (.append owner src org)) := by
+  simp only [rpStmt]
+  exact PMono.bind howner (fun rho => PMono.bind hsrc (fun run =>
+    PMono.bind (PMono.addReads run) (fun _ =>
+      PMono.bind (PMono.addGrows rho) (fun _ => PMono.profileWriteAbort env owner rho))))
+
+theorem PMono.rpPopN (env : PEnv) (owner : Place) (count : Expr) (org : OriginId)
+    (howner : PMono (rpPlace env owner)) (hcount : PMono (rpExpr env count)) :
+    PMono (rpStmt env (.popN owner count org)) := by
+  simp only [rpStmt]
+  exact PMono.bind howner (fun rho => PMono.bind hcount (fun _ =>
+    PMono.bind (PMono.addReads rho) (fun _ =>
+      PMono.bind (PMono.addShrinks rho) (fun _ => PMono.noteAborts))))
+
+theorem PMono.rpResize (env : PEnv) (owner : Place) (size : Expr) (fill : Option Expr)
+    (org : OriginId) (howner : PMono (rpPlace env owner)) (hsize : PMono (rpExpr env size))
+    (hfill : match fill with | none => True | some e => PMono (rpExpr env e)) :
+    PMono (rpStmt env (.resize owner size fill org)) := by
+  cases fill with
+  | none =>
+    simp only [rpStmt]
+    exact PMono.bind howner (fun rho => PMono.bind hsize (fun _ =>
+      PMono.bind (PMono.addReads rho) (fun _ =>
+        PMono.bind (PMono.addShrinks rho) (fun _ => PMono.noteAborts))))
+  | some e =>
+    simp only [rpStmt]
+    exact PMono.bind howner (fun rho => PMono.bind hsize (fun _ => PMono.bind hfill (fun _ =>
+      PMono.bind (PMono.addWrites rho) (fun _ => PMono.bind (PMono.addGrows rho) (fun _ =>
+        PMono.bind (PMono.addReads rho) (fun _ =>
+          PMono.bind (PMono.addShrinks rho) (fun _ => PMono.noteAborts)))))))
+
+theorem PMono.rpClear (env : PEnv) (owner : Place) (org : OriginId)
+    (howner : PMono (rpPlace env owner)) :
+    PMono (rpStmt env (.clear owner org)) := by
+  simp only [rpStmt]
+  exact PMono.bind howner (fun rho =>
+    PMono.bind (PMono.addReads rho) (fun _ => PMono.addShrinks rho))
+
+theorem PMono.rpAssignWhole (env : PEnv) (owner : Place) (replacement : Expr) (org : OriginId)
+    (howner : PMono (rpPlace env owner)) (hreplacement : PMono (rpExpr env replacement)) :
+    PMono (rpStmt env (.assignWhole owner replacement org)) := by
+  simp only [rpStmt]
+  exact PMono.bind howner (fun rho =>
+    PMono.bind (PMono.addReads rho) (fun _ =>
+      PMono.bind (PMono.addShrinks rho) (fun _ => PMono.bind hreplacement (fun _ =>
+        PMono.bind (PMono.addWrites rho) (fun _ => PMono.addGrows rho)))))
+
 macro "pm" : tactic => `(tactic| repeat' (first
     | exact PMono.pure _ | exact PMono.rej _ _ | exact PMono.liftV _ | exact PMono.get
     | exact PMono.addReads _ | exact PMono.addWrites _ | exact PMono.addGrows _
+    | exact PMono.addShrinks _
     | exact PMono.noteAborts | exact PMono.noteOutputs | exact PMono.rpCall _ _ _
     | exact PMono.readRoots _ _
     | exact PMono.modify _ (fun s => ⟨Nat.le_add_right _ _, EffLe.refl _⟩)
     | exact PMono.modify _ (fun s => ⟨Nat.le_trans (Nat.le_add_right _ 1) (Nat.le_add_right _ _), EffLe.refl _⟩)
-    | exact PMono.modify _ (fun s => ⟨Nat.le_refl _, fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩)
+    | exact PMono.modify _ (fun s =>
+        ⟨Nat.le_refl _, fun _ h => h, fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩)
     | with_reducible apply_assumption
     | refine PMono.bind ?_ (fun _ => ?_)
     | refine PMono.ite ?_ ?_
@@ -274,6 +390,27 @@ theorem rp_mono_all :
     (motive_6 := fun env ss => PMono (rpStmts env ss)) (motive_7 := fun env s => PMono (rpStmt env s))
     (motive_8 := fun env as => PMono (rpPrintArgs env as)) (motive_9 := fun env as => PMono (rpArgs env as))
     (motive_10 := fun env b => PMono (rpBound env b))
+  case case25 =>
+    intro env owner a org howner ha
+    exact PMono.rpPush env owner a org howner ha
+  case case26 =>
+    intro env owner org howner
+    exact PMono.rpPop env owner org howner
+  case case38 =>
+    intro env owner src org howner hsrc
+    exact PMono.rpAppend env owner src org howner hsrc
+  case case39 =>
+    intro env owner count org howner hcount
+    exact PMono.rpPopN env owner count org howner hcount
+  case case40 =>
+    intro env owner size fill org howner hsize hfill
+    exact PMono.rpResize env owner size fill org howner hsize hfill
+  case case41 =>
+    intro env owner org howner
+    exact PMono.rpClear env owner org howner
+  case case42 =>
+    intro env owner replacement org howner hreplacement
+    exact PMono.rpAssignWhole env owner replacement org howner hreplacement
   all_goals (intros; (try cases ‹Option Expr›); (try cases ‹Option Block›); simp only [rpPlace, rpView, rpExpr, rpExprs, rpBlockValue, rpStmts, rpStmt, rpPrintArgs, rpArgs, rpBound, bindRoots, checkResult]; pm)
 
 theorem rpPlace_mono {env : PEnv} {p : Place} {st st' : RState} {a : List RootRef}
