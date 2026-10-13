@@ -50,7 +50,9 @@ theorem checkImpl_ok (m : Module) (impl : Impl) (h : checkImpl m impl = .ok ()) 
     simp only [hscope] at h
     inv at h
     obtain ⟨_, _, hpar, _, hsc, _, bodyTy, tn, htb, hres⟩ := h
-    refine ⟨?_, hsc, bodyTy, tn, htb, ?_⟩
+    have parameterShape : ∀ i, i < impl.params.size → checkParam impl i = .ok () :=
+      fun i hlt => (forAll_ok _ _).1 hpar i (List.mem_range.2 hlt)
+    refine ⟨parameterShape, ?_, hsc, bodyTy, tn, htb, ?_⟩
     · intro i p hp
       have hlt : i < impl.params.size := (Array.getElem?_eq_some_iff.1 hp).1
       exact checkParam_ok impl i p ((forAll_ok _ _).1 hpar i (List.mem_range.2 hlt)) hp
