@@ -363,6 +363,24 @@ theorem NodeContext.wholeRootsApproval
   exact ⟨approval, hpath.trans hsourcePath, hphase.trans hsourcePhase,
     hforbidden, hroots, hframe⟩
 
+/-- A checked place occurrence is disjoint from every inherited forbidden
+owner in the access roots recorded for that exact plan. -/
+theorem NodeContext.placeWholeRootsDisjoint
+    {m : Module} {plans : Array (Array DemandPoint)}
+    {planContext : PlanContext m plans} {path : List Nat} {place : Place}
+    (context : NodeContext planContext path (.place place) .place)
+    {roots : List RootRef}
+    (placeRoots : planContext.approvals.access.placeRoots place = .ok roots) :
+    ∀ forbiddenOwner, forbiddenOwner ∈ context.expected.forbidden →
+      DemandRootsDisjoint forbiddenOwner.roots roots := by
+  intro forbiddenOwner hforbidden
+  rcases context.sourceAt.placeWholeRootsRequest
+      planContext.approvals.accessMatches placeRoots hforbidden with
+    ⟨request, hrequest, hrequestOwner, hrequestRoots⟩
+  rcases NodeContext.wholeRootsApproval context hrequest with
+    ⟨approval, _, _, howner, hroots, _⟩
+  simpa [howner, hrequestOwner, hroots, hrequestRoots] using approval.disjoint
+
 /- A clear mutation context selects the approval for its exact owner and frame. -/
 theorem NodeContext.clearApproval
     {m : Module} {plans : Array (Array DemandPoint)}

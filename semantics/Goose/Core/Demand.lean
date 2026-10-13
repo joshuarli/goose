@@ -2629,6 +2629,39 @@ theorem DemandExpectedSourceAt.sourceFacts {m owner path node phase expected}
   obtain ⟨hsource, hhasPhase⟩ := expectedPoints_evidence hwalk hmem
   exact ⟨by simpa [hpath, hnode] using hsource, by simpa [hnode, hphase] using hhasPhase⟩
 
+/-- A place occurrence carries a whole-root request for each inherited forbidden owner. -/
+theorem DemandExpectedSourceAt.placeWholeRootsRequest
+    {m owner path place expected access roots forbiddenOwner}
+    (sourceAt : DemandExpectedSourceAt m owner path (.place place) .place expected)
+    (accessMatches : demandAccess? m owner = some access)
+    (placeRoots : access.placeRoots place = .ok roots)
+    (forbidden : forbiddenOwner ∈ expected.forbidden) :
+    ∃ request, request ∈ expected.wholeChecks ∧
+      request.forbidden = forbiddenOwner ∧ request.checkedRoots = roots := by
+  rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hmemMap : expected ∈ result.entries.map fun entry => entry.expected := by
+    rw [hmap]
+    exact hmem
+  rcases List.mem_map.mp hmemMap with ⟨entry, hentry, heq⟩
+  subst expected
+  have hsetupAccess : demandAccess? m owner = some setup.access := by
+    simp [demandAccess?, hsetup]
+  have haccessEq : setup.access = access := Option.some.inj (hsetupAccess.symm.trans accessMatches)
+  have placeRoots' : setup.access.placeRoots place = .ok roots := by
+    simpa [haccessEq] using placeRoots
+  have hitemNode : entry.item.node = .place place := entry.expectedNode.symm.trans hnode
+  have hwhole := entry.wholeRequests
+  simp [DemandNode.expectedWholeChecks, hitemNode, hphase,
+    entry.expectedForbidden.symm, placeRoots'] at hwhole
+  change Except.ok (entry.expected.forbidden.map
+    (fun owner : DemandOwner => DemandWholeCheck.mk owner roots)) =
+    Except.ok entry.expected.wholeChecks at hwhole
+  have hwholeList := Except.ok.inj hwhole
+  refine ⟨⟨forbiddenOwner, roots⟩, ?_, rfl, rfl⟩
+  rw [← hwholeList]
+  exact List.mem_map.mpr ⟨forbiddenOwner, forbidden, rfl⟩
+
 /-- A validated direct mutation has a successful owner query at its exact
 source occurrence. -/
 theorem DemandExpectedSourceAt.directShrinkOwner_result
