@@ -1,6 +1,7 @@
 import Goose.Core.Validate
 import Goose.GIR.Validate
 import Goose.Lower.CoreToGir
+import Goose.Proofs.Lower
 
 namespace Goose.Lower.ValidationChecks
 
@@ -66,5 +67,67 @@ def orphanUnderstatedSummary : Core.Module :=
 #guard match GIR.validate (lower orphanUnderstatedSummary) with
   | .error ⟨.v050, _⟩ => true
   | _ => false
+
+/-- A value-returning function need not reach a return when its loop has no exit. -/
+def loopResult (body : Core.Block) : Core.Module :=
+  let spin : Core.Impl :=
+    { name := "spin", params := #[], results := #[.int .i64], vars := #[],
+      body := .mk 0 [.while (.bool true) body 0] none, summary := .unknown }
+  let main : Core.Impl :=
+    { name := "main", params := #[], results := #[], vars := #[],
+      body := .mk 0 [] none, summary := .unknown }
+  { files := #["loop_result.goose"], types := #[.int .i64], globals := #[],
+    impls := #[main, spin], contexts := #[⟨0, "main", [], [], []⟩, ⟨1, "spin", [], [[]], []⟩],
+    entry := 0, origins := #[⟨0, 1, "while"⟩], profile := .shrink, structs := #[] }
+
+def acceptsLoop (body : Core.Block) : Bool :=
+  let m := loopResult body
+  match Core.validate m, GIR.validate (lower m) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard acceptsLoop (.mk 1 [] none)
+#guard acceptsLoop (.mk 1 [.cont 0] none)
+#guard acceptsLoop (.mk 1 [.ret (some (.lit .i64 7)) 0] none)
+
+def loopVoid : Core.Module :=
+  let m := loopResult (.mk 1 [] none)
+  { m with
+    impls := m.impls.modify 1 (fun impl => { impl with results := #[] })
+    contexts := m.contexts.modify 1 (fun ctx => { ctx with resultRoots := [] }) }
+
+def tailResult : Core.Module :=
+  let m := loopResult (.mk 1 [] none)
+  { m with impls := m.impls.modify 1 (fun impl =>
+    { impl with body := .mk 0 [] (some (.lit .i64 7)) }) }
+
+def malformedResultEntry : Core.Module :=
+  let m := loopResult (.mk 1 [] none)
+  { m with entry := 1, impls := m.impls.modify 1 (fun impl =>
+    { impl with body := .mk 0 [] none }) }
+
+#guard match Core.validate loopVoid, GIR.validate (lower loopVoid) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+#guard match (lower loopVoid).funcs[1]? with
+  | some f => f.blocks.size == 4 && (match f.blocks[3]?.bind (fun block : GIR.Block => block.lastTerm?) with
+    | some (GIR.Term.ret [] none) => true | _ => false)
+  | none => false
+#guard match Core.validate tailResult, GIR.validate (lower tailResult) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+#guard match (lower tailResult).funcs[1]? with
+  | some f => f.blocks.size == 1 && (match f.blocks[0]?.bind (fun block : GIR.Block => block.lastTerm?) with
+    | some (GIR.Term.ret [0] none) => true | _ => false)
+  | none => false
+#guard Goose.Proofs.Lower.moduleOk malformedResultEntry
+#guard match (lower malformedResultEntry).funcs[1]? with
+  | some f => f.blocks.size == 1 && (match f.blocks[0]?.bind (fun block : GIR.Block => block.lastTerm?) with
+    | some (GIR.Term.ret [] none) => true | _ => false)
+  | none => false
+#guard match Core.eval 20 .release malformedResultEntry,
+    GIR.run 20 .release (lower malformedResultEntry) with
+  | .done .returned "", .done .returned "" => true
+  | _, _ => false
 
 end Goose.Lower.ValidationChecks
