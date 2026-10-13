@@ -19,7 +19,7 @@ open Goose.Core
 open Goose.GIR (ValueId BlockId SlotId ScopeId FnId VTy Bnd PrintPart Op Effect Term Inst)
 
 /-- `omega`, after exposing that block ids are natural numbers. -/
-macro "nat_omega" : tactic => `(tactic| ((try dsimp only [BlockId] at *); omega))
+macro "nat_omega" : tactic => `(tactic| ((try dsimp only [BlockId, ValueId, SlotId, ScopeId, FnId] at *); omega))
 
 /-! ### Running the primitives -/
 
@@ -126,6 +126,24 @@ theorem fork_run (cv : ValueId) (le : LEnv) {ls : LS} {b : BlockId} (h : ls.cur 
   simp only [bind_run, newBlock0_run, Array.size_push, pure_run]
   rw [emitTerm_run _ _ (by simpa using h)]
 
+/-- The terminator of a short-circuit branch. -/
+def scTerm (isAnd : Bool) (x : ValueId) (rb jb : BlockId) : Term :=
+  if isAnd then .condbr x rb [] jb [x] else .condbr x jb [x] rb []
+
+theorem scFork_run (isAnd : Bool) (x : ValueId) (le : LEnv) {ls : LS} {b : BlockId}
+    (h : ls.cur = some b) :
+    scFork isAnd x le ls = ((ls.blocks.size, ls.blocks.size + 1, ls.vals.size),
+      { ls with
+        blocks := ((ls.blocks.push ⟨[], #[]⟩).push ⟨[(ls.vals.size, .data .bool)], #[]⟩).modify b (fun blk => { blk with insts := blk.insts.push (.term (scTerm isAnd x ls.blocks.size (ls.blocks.size + 1))) })
+        vals := ls.vals.push (some (.data .bool))
+        cur := none }) := by
+  unfold scFork
+  cases isAnd <;>
+  · simp only [bind_run, newBlock0_run, newBlock1_run, Array.size_push, pure_run, ite_true, ite_false,
+      Bool.false_eq_true, ↓reduceIte, if_true, if_false]
+    rw [emitTerm_run _ _ (by simpa using h)]
+    simp [scTerm]
+
 /-! ### The relation -/
 
 /-- The blocks of `ls` as a prefix of the blocks of `ls'`: every block keeps its parameters and
@@ -153,12 +171,14 @@ structure LS.Adv (ls ls' : LS) : Prop where
   keep : ∀ (i : Nat) (blk : BlockB), ls.cur ≠ some i → ls.blocks[i]? = some blk → ls'.blocks[i]? = some blk
   cur : ls'.cur = none ∨ ls'.cur = ls.cur ∨
     ∃ c, ls'.cur = some c ∧ ls.blocks.size ≤ c ∧ c < ls'.blocks.size
+  stack : ls'.stack = ls.stack
 
 theorem LS.Adv.refl (ls : LS) : ls.Adv ls :=
-  ⟨.refl ls, Nat.le_refl _, fun _ _ _ h => h, Or.inr (Or.inl rfl)⟩
+  ⟨.refl ls, Nat.le_refl _, fun _ _ _ h => h, Or.inr (Or.inl rfl), rfl⟩
 
 theorem LS.Adv.trans {a b c : LS} (h1 : a.Adv b) (h2 : b.Adv c) : a.Adv c := by
-  refine ⟨h1.ext.trans h2.ext, Nat.le_trans h1.vals h2.vals, fun i blk hne hb => ?_, ?_⟩
+  refine ⟨h1.ext.trans h2.ext, Nat.le_trans h1.vals h2.vals, fun i blk hne hb => ?_, ?_,
+    h2.stack.trans h1.stack⟩
   · have hb1 := h1.keep i blk hne hb
     have hlt : i < a.blocks.size := (Array.getElem?_eq_some_iff.mp hb).1
     refine h2.keep i blk ?_ hb1
@@ -200,9 +220,9 @@ theorem LS.Ext.modify {ls ls' : LS} (h : ls.Ext ls') {F : BlockB → BlockB} (hF
 /-- Emitting into the current block, optionally defining a value and closing the block. -/
 theorem LS.Adv.modCur {ls : LS} {b : BlockId} (hb : ls.cur = some b) {F : BlockB → BlockB}
     (hF : Appends F) {vs : Array (Option VTy)} (hv : ls.vals.size ≤ vs.size) {c : Option BlockId}
-    (hc : c = ls.cur ∨ c = none) {st : List ScopeId} :
-    ls.Adv { ls with blocks := ls.blocks.modify b F, vals := vs, cur := c, stack := st } := by
-  refine ⟨?_, hv, fun i blk hne hi => ?_, ?_⟩
+    (hc : c = ls.cur ∨ c = none) :
+    ls.Adv { ls with blocks := ls.blocks.modify b F, vals := vs, cur := c } := by
+  refine ⟨?_, hv, fun i blk hne hi => ?_, ?_, rfl⟩
   · have := (LS.Ext.refl ls).modify hF b
     exact this
   · have hbi : b ≠ i := fun h => hne (by rw [hb, h])
@@ -215,7 +235,7 @@ theorem LS.Adv.modCur {ls : LS} {b : BlockId} (hb : ls.cur = some b) {F : BlockB
 
 theorem LS.Adv.newBlk (ls : LS) (blk : BlockB) {vs : Array (Option VTy)} (hv : ls.vals.size ≤ vs.size) :
     ls.Adv { ls with blocks := ls.blocks.push blk, vals := vs } := by
-  refine ⟨⟨by simp, fun i b hi => ?_⟩, hv, fun i b _ hi => ?_, Or.inr (Or.inl rfl)⟩
+  refine ⟨⟨by simp, fun i b hi => ?_⟩, hv, fun i b _ hi => ?_, Or.inr (Or.inl rfl), rfl⟩
   · have hlt : i < ls.blocks.size := (Array.getElem?_eq_some_iff.mp hi).1
     refine ⟨b, ?_, rfl, [], by simp⟩
     show (ls.blocks.push blk)[i]? = some b
@@ -226,14 +246,11 @@ theorem LS.Adv.newBlk (ls : LS) (blk : BlockB) {vs : Array (Option VTy)} (hv : l
     rw [Array.getElem?_push]
     simp [Nat.ne_of_lt hlt, hi]
 
-theorem LS.Adv.stack (ls : LS) (st : List ScopeId) : ls.Adv { ls with stack := st } :=
-  ⟨.refl ls, Nat.le_refl _, fun _ _ _ h => h, Or.inr (Or.inl rfl)⟩
-
 /-- Entering a block the fragment owns: the block it began in, or one created since. -/
 theorem LS.Adv.setCur {ls0 ls1 : LS} (h : ls0.Adv ls1) {b : BlockId}
     (hb : some b = ls0.cur ∨ (ls0.blocks.size ≤ b ∧ b < ls1.blocks.size)) :
     ls0.Adv { ls1 with cur := some b } := by
-  refine ⟨h.ext, h.vals, h.keep, ?_⟩
+  refine ⟨h.ext, h.vals, h.keep, ?_, h.stack⟩
   rcases hb with hb | ⟨hb1, hb2⟩
   · exact Or.inr (Or.inl hb)
   · exact Or.inr (Or.inr ⟨b, rfl, hb1, hb2⟩)
@@ -243,7 +260,7 @@ theorem LS.Adv.patch {ls0 ls1 : LS} (h : ls0.Adv ls1) (b : BlockId) (t : Term)
     (hb : some b = ls0.cur ∨ ls0.blocks.size ≤ b) :
     ls0.Adv { ls1 with
       blocks := ls1.blocks.modify b (fun blk => { blk with insts := blk.insts.push (.term t) }) } := by
-  refine ⟨h.ext.modify (appends_push _) b, h.vals, fun i blk hne hi => ?_, ?_⟩
+  refine ⟨h.ext.modify (appends_push _) b, h.vals, fun i blk hne hi => ?_, ?_, h.stack⟩
   · have hlt : i < ls0.blocks.size := (Array.getElem?_eq_some_iff.mp hi).1
     have hbi : b ≠ i := by
       rintro rfl
@@ -305,7 +322,7 @@ theorem adv_fork {cv : ValueId} {le : LEnv} {ls : LS} {b : BlockId} (hc : ls.cur
     (vs := ls.vals) (Nat.le_refl _)
   have h3 := LS.Adv.modCur (ls := { ls with blocks := (ls.blocks.push ⟨[], #[]⟩).push ⟨[], #[]⟩ })
     (b := b) hc (appends_push (.term (.condbr cv ls.blocks.size [] (ls.blocks.size + 1) [])))
-    (vs := ls.vals) (Nat.le_refl _) (c := none) (Or.inr rfl) (st := ls.stack)
+    (vs := ls.vals) (Nat.le_refl _) (c := none) (Or.inr rfl)
   exact h1.trans (h2.trans h3)
 
 /-! ### Fragments -/
@@ -330,17 +347,39 @@ theorem advB_emitTerm (t : Term) : AdvB (emitTerm t) := fun _ _ _ _ h => adv_emi
 theorem advB_newBlock0 : AdvB (newBlock []) := fun _ _ _ _ h => adv_newBlock0 h
 theorem advB_newBlock1 (t : VTy) : AdvB (newBlock [t]) := fun _ _ _ _ h => adv_newBlock1 h
 
-theorem advB_pushScope (sc : ScopeId) : AdvB (pushScope sc) := by
-  intro le ls r ls' h
-  rw [pushScope_run] at h
-  obtain ⟨-, rfl⟩ := Prod.mk.inj h
-  exact LS.Adv.stack _ _
+theorem inScope_eq {α : Type} {sc : ScopeId} {k : B α} {le : LEnv} {ls : LS} {r : α} {ls' : LS}
+    (h : inScope sc k le ls = (r, ls')) :
+    ∃ ls_k, k le { ls with stack := sc :: ls.stack } = (r, ls_k) ∧
+      ls' = { ls_k with stack := ls_k.stack.drop 1 } := by
+  unfold inScope at h
+  simp only [bind_eq] at h
+  obtain ⟨u1, ls1, h1, a, ls2, h2, u3, ls3, h3, hp⟩ := h
+  rw [pushScope_run] at h1
+  obtain ⟨-, rfl⟩ := Prod.mk.inj h1
+  rw [pure_run] at hp
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hp
+  rw [popScope_run] at h3
+  obtain ⟨-, rfl⟩ := Prod.mk.inj h3
+  exact ⟨ls2, h2, rfl⟩
 
-theorem advB_popScope : AdvB popScope := by
+theorem isLive_run {le : LEnv} {ls : LS} {b : BlockId} (h : ls.cur = some b) :
+    isLive le ls = (true, ls) := by
+  unfold isLive
+  simp [bind_run, curBlock_run, pure_run, h]
+
+theorem advB_inScope {α : Type} (sc : ScopeId) {k : B α} (hk : AdvB k) : AdvB (inScope sc k) := by
   intro le ls r ls' h
-  rw [popScope_run] at h
-  obtain ⟨-, rfl⟩ := Prod.mk.inj h
-  exact LS.Adv.stack _ _
+  unfold inScope at h
+  simp only [bind_eq] at h
+  obtain ⟨u1, ls1, h1, a, ls2, h2, u3, ls3, h3, hp⟩ := h
+  rw [pushScope_run] at h1
+  obtain ⟨-, rfl⟩ := Prod.mk.inj h1
+  rw [pure_run] at hp
+  obtain ⟨-, rfl⟩ := Prod.mk.inj hp
+  rw [popScope_run] at h3
+  obtain ⟨-, rfl⟩ := Prod.mk.inj h3
+  have a2 := hk _ _ _ _ h2
+  exact ⟨a2.ext, a2.vals, a2.keep, a2.cur, by simp [a2.stack]⟩
 
 theorem advB_curBlock : AdvB curBlock := by
   intro le ls r ls' h
@@ -459,6 +498,18 @@ theorem adv_setCur_step {ls0 ls1 ls2 : LS} {b : BlockId} {u : Unit} {le : LEnv}
   · exact h.setCur (Or.inl hb)
   · exact h.setCur (Or.inr ⟨hb, hlt⟩)
 
+theorem setCur_blocks {c : Option BlockId} {le : LEnv} {ls : LS} {u : Unit} {ls' : LS}
+    (h : setCur c le ls = (u, ls')) : ls'.blocks = ls.blocks := by
+  rw [setCur_run] at h
+  obtain ⟨-, rfl⟩ := Prod.mk.inj h
+  rfl
+
+theorem curBlock_eq {le : LEnv} {ls : LS} {c : Option BlockId} {ls' : LS}
+    (h : curBlock le ls = (c, ls')) : c = ls.cur ∧ ls' = ls := by
+  rw [curBlock_run] at h
+  obtain ⟨h1, h2⟩ := Prod.mk.inj h
+  exact ⟨h1.symm, h2.symm⟩
+
 theorem adv_patch_step {ls0 ls1 ls2 : LS} {b : BlockId} {u : Unit} {le : LEnv} {t : Term}
     (h : ls0.Adv ls1) (hb : Mine ls0 b) (hs : patchTerm b t le ls1 = (u, ls2)) : ls0.Adv ls2 := by
   rw [patchTerm_run] at hs
@@ -509,6 +560,34 @@ theorem adv_patchBrs {ls0 : LS} {jb : BlockId} : ∀ (live : List (BlockId × Va
     have a1 := adv_patch_step h (hm (b, v) (by simp)) h1
     exact adv_patchBrs rest a1 (fun p hp => hm p (by simp [hp])) h2
 
+theorem adv_patchBrs_ext {jb : BlockId} : ∀ (live : List (BlockId × ValueId)) {le : LEnv}
+    {ls1 ls2 : LS} {u : Unit}, patchBrs jb live le ls1 = (u, ls2) → ls1.Ext ls2
+  | [], le, ls1, ls2, u, hp => by
+    unfold patchBrs at hp
+    rw [pure_run] at hp
+    obtain ⟨-, rfl⟩ := Prod.mk.inj hp
+    exact LS.Ext.refl _
+  | (b, v) :: rest, le, ls1, ls2, u, hp => by
+    unfold patchBrs at hp
+    obtain ⟨u1, ls3, h1, h2⟩ := bind_eq.mp hp
+    rw [patchTerm_run] at h1
+    obtain ⟨-, rfl⟩ := Prod.mk.inj h1
+    exact ((LS.Ext.refl ls1).modify (appends_push _) b).trans (adv_patchBrs_ext rest h2)
+
+theorem adv_patchBrs0_ext {jb : BlockId} : ∀ (live : List BlockId) {le : LEnv}
+    {ls1 ls2 : LS} {u : Unit}, patchBrs0 jb live le ls1 = (u, ls2) → ls1.Ext ls2
+  | [], le, ls1, ls2, u, hp => by
+    unfold patchBrs0 at hp
+    rw [pure_run] at hp
+    obtain ⟨-, rfl⟩ := Prod.mk.inj hp
+    exact LS.Ext.refl _
+  | b :: rest, le, ls1, ls2, u, hp => by
+    unfold patchBrs0 at hp
+    obtain ⟨u1, ls3, h1, h2⟩ := bind_eq.mp hp
+    rw [patchTerm_run] at h1
+    obtain ⟨-, rfl⟩ := Prod.mk.inj h1
+    exact ((LS.Ext.refl ls1).modify (appends_push _) b).trans (adv_patchBrs0_ext rest h2)
+
 theorem adv_patchBrs0 {ls0 : LS} {jb : BlockId} : ∀ (live : List BlockId) {le : LEnv}
     {ls1 ls2 : LS} {u : Unit}, ls0.Adv ls1 → (∀ p ∈ live, Mine ls0 p) →
     patchBrs0 jb live le ls1 = (u, ls2) → ls0.Adv ls2
@@ -528,6 +607,37 @@ theorem valTy_eq {v : ValueId} {le : LEnv} {ls : LS} {t : VTy} {ls' : LS}
   have := valTy_run v le ls
   rw [h] at this
   exact this
+
+theorem intTyOf_eq {v : ValueId} {le : LEnv} {ls : LS} {t : IntTy} {ls' : LS}
+    (h : intTyOf v le ls = (t, ls')) : ls' = ls := by
+  unfold intTyOf at h
+  simp only [bind_run] at h
+  have := valTy_run v le ls
+  cases hv : valTy v le ls with
+  | mk a s1 =>
+    rw [hv] at this h
+    simp only at this h
+    subst this
+    cases a with
+    | data t' => cases t' <;> exact (Prod.mk.inj h).2.symm
+    | view _ _ => exact (Prod.mk.inj h).2.symm
+
+theorem freezeTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS} {r' : ValueId} {ls' : LS}
+    (h : freezeTo m r le ls = (r', ls')) :
+    (r' = r ∧ ls' = ls) ∨ emitDef (.refFreeze r) le ls = (r', ls') := by
+  unfold freezeTo at h
+  simp only [bind_run] at h
+  have hs := valTy_run r le ls
+  cases hv : valTy r le ls with
+  | mk a s1 =>
+    rw [hv] at hs h
+    simp only at hs h
+    subst hs
+    rcases m with _ | _ <;> rcases a with t | ⟨_, _⟩ <;>
+      (try rcases t with _ | _ | _ | _ | _ | ⟨m', _⟩ | _ | _) <;> (try rcases m' with _ | _) <;>
+      first
+        | exact Or.inl ⟨(Prod.mk.inj h).1.symm, (Prod.mk.inj h).2.symm⟩
+        | exact Or.inr h
 
 theorem adv_joinValue {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option BlockId} {vt vf : ValueId}
     (hT : ∀ b, endT = some b → Mine ls0 b) (hF : ∀ b, endF = some b → Mine ls0 b)
@@ -567,7 +677,7 @@ theorem adv_joinValue {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option Block
     obtain ⟨-, rfl⟩ := Prod.mk.inj h1
     rw [pure_run] at hj
     obtain ⟨-, rfl⟩ := Prod.mk.inj hj
-    exact ⟨h.ext, h.vals, h.keep, Or.inl rfl⟩
+    exact ⟨h.ext, h.vals, h.keep, Or.inl rfl, h.stack⟩
   · refine key (fun p hp => ?_) hj
     simp at hp; subst hp; exact hF _ rfl
   · refine key (fun p hp => ?_) hj
@@ -606,7 +716,7 @@ theorem adv_joinArms {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option BlockI
   · simp only [bind_eq] at hj
     rw [setCur_run] at hj
     obtain ⟨-, rfl⟩ := Prod.mk.inj hj
-    exact ⟨h.ext, h.vals, h.keep, Or.inl rfl⟩
+    exact ⟨h.ext, h.vals, h.keep, Or.inl rfl, h.stack⟩
   · refine key (fun p hp => ?_) hj
     simp at hp; subst hp; exact hF _ rfl
   · refine key (fun p hp => ?_) hj
@@ -617,44 +727,82 @@ theorem adv_joinArms {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option BlockI
     · exact hT _ rfl
     · exact hF _ rfl
 
+theorem adv_scFork {isAnd : Bool} {x : ValueId} {le : LEnv} {ls : LS} {b : BlockId}
+    (hc : ls.cur = some b) {r ls'} (h : scFork isAnd x le ls = (r, ls')) : ls.Adv ls' := by
+  rw [scFork_run _ _ _ hc] at h
+  obtain ⟨-, rfl⟩ := Prod.mk.inj h
+  have h1 := LS.Adv.newBlk ls ⟨[], #[]⟩ (vs := ls.vals) (Nat.le_refl _)
+  have h2 := LS.Adv.newBlk { ls with blocks := ls.blocks.push ⟨[], #[]⟩, vals := ls.vals }
+    ⟨[(ls.vals.size, .data .bool)], #[]⟩ (vs := ls.vals.push (some (.data .bool))) (by simp)
+  have h3 := LS.Adv.modCur
+    (ls := { ls with
+      blocks := (ls.blocks.push ⟨[], #[]⟩).push ⟨[(ls.vals.size, .data .bool)], #[]⟩
+      vals := ls.vals.push (some (.data .bool)) })
+    (b := b) hc (appends_push (.term (scTerm isAnd x ls.blocks.size (ls.blocks.size + 1))))
+    (vs := ls.vals.push (some (.data .bool))) (Nat.le_refl _) (c := none) (Or.inr rfl)
+  exact h1.trans (h2.trans h3)
+
+theorem scFork_ids {isAnd : Bool} {x : ValueId} {le : LEnv} {ls : LS} {r ls'}
+    (h : scFork isAnd x le ls = (r, ls')) :
+    r = (ls.blocks.size, ls.blocks.size + 1, ls.vals.size) ∧ ls'.blocks.size = ls.blocks.size + 2 := by
+  cases hc : ls.cur with
+  | some b =>
+    rw [scFork_run _ _ _ hc] at h
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj h
+    simp
+  | none =>
+    unfold scFork at h
+    cases isAnd <;>
+    · simp only [bind_run, newBlock0_run, newBlock1_run, pure_run, ite_true, ite_false,
+        Bool.false_eq_true, ↓reduceIte, if_true, if_false] at h
+      rw [emitTerm_none _ _ (by simpa using hc)] at h
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj h
+      simp
+
+theorem advB_scFork (isAnd : Bool) (x : ValueId) : AdvB (scFork isAnd x) := by
+  intro le ls r ls' h
+  cases hc : ls.cur with
+  | some b => exact adv_scFork hc h
+  | none =>
+    unfold scFork at h
+    cases isAnd <;>
+    · simp only [bind_run, newBlock0_run, newBlock1_run, pure_run, ite_true, ite_false,
+        Bool.false_eq_true, ↓reduceIte, if_true, if_false] at h
+      rw [emitTerm_none _ _ (by simpa using hc)] at h
+      obtain ⟨-, rfl⟩ := Prod.mk.inj h
+      have h1 := LS.Adv.newBlk ls ⟨[], #[]⟩ (vs := ls.vals) (Nat.le_refl _)
+      have h2 := LS.Adv.newBlk { ls with blocks := ls.blocks.push ⟨[], #[]⟩, vals := ls.vals }
+        ⟨[(ls.vals.size, .data .bool)], #[]⟩ (vs := ls.vals.push (some (.data .bool))) (by simp)
+      exact h1.trans h2
+
 theorem advB_shortCircuit (isAnd : Bool) (x : ValueId) {rhs : B ValueId} (hr : AdvB rhs) :
     AdvB (shortCircuit isAnd x rhs) := by
   unfold shortCircuit
   refine advB_whenLive _ fun b => ?_
   intro le ls0 r ls' h
   simp only [bind_eq] at h
-  obtain ⟨⟨rb, ps⟩, ls1, h1, h⟩ := h
-  obtain ⟨⟨jb, js⟩, ls2, h2, h⟩ := h
-  have a1 := adv_newBlock0 h1
-  have a2 := adv_newBlock1 h2
-  have e1 := h1
-  rw [newBlock0_run] at e1
-  obtain ⟨e1a, e1b⟩ := Prod.mk.inj e1
-  obtain ⟨hrb, -⟩ := Prod.mk.inj e1a
-  have e2 := h2
-  rw [newBlock1_run] at e2
-  obtain ⟨e2a, e2b⟩ := Prod.mk.inj e2
-  obtain ⟨hjb, -⟩ := Prod.mk.inj e2a
-  subst hrb hjb
-  have hsz1 : ls1.blocks.size = ls0.blocks.size + 1 := by rw [← e1b]; simp
-  have hsz2 : ls2.blocks.size = ls0.blocks.size + 2 := by rw [← e2b]; simp [hsz1]
-  have a12 := a1.trans a2
-  cases isAnd <;> simp only [Bool.false_eq_true, ↓reduceIte, bind_eq] at h <;>
-  · obtain ⟨u, ls3, h3, u2, ls4, h4, y, ls5, h5, u3, ls6, h6, u4, ls7, h7, h⟩ := h
-    have a3 := adv_emitTerm h3
-    have a123 := a12.trans a3
-    have hl3 : ls0.blocks.size < ls3.blocks.size := by have h33 := a3.ext.1; omega
-    have a4 := adv_setCur_step a123 (Or.inr (Nat.le_refl _)) hl3 h4
-    have hs4 : ls4.blocks.size = ls3.blocks.size := by
-      rw [setCur_run] at h4; obtain ⟨-, rfl⟩ := Prod.mk.inj h4; rfl
-    have a5 := a4.trans (hr _ _ _ _ h5)
-    have a6 := a5.trans (adv_emitTerm h6)
-    have hs : ls1.blocks.size < ls6.blocks.size := by
-      have := a3.ext.1; have := (hr _ _ _ _ h5).ext.1; have := (adv_emitTerm h6).ext.1; omega
-    have a7 := adv_setCur_step a6 (Or.inr (by omega)) hs h7
-    rw [pure_run] at h
-    obtain ⟨-, rfl⟩ := Prod.mk.inj h
-    exact a7
+  obtain ⟨⟨rb, jb, p⟩, ls1, h1, u2, ls2, h2, y, ls3, h3, u4, ls4, h4, u5, ls5, h5, hp⟩ := h
+  obtain ⟨hids, hsz⟩ := scFork_ids h1
+  obtain ⟨hrb, hr2⟩ := Prod.mk.inj hids
+  obtain ⟨hjb, hpp⟩ := Prod.mk.inj hr2
+  subst hrb hjb hpp
+  have a1 := advB_scFork _ _ _ _ _ _ h1
+  have hm : Mine ls0 ls0.blocks.size := Or.inr (Nat.le_refl _)
+  have hl : ls0.blocks.size < ls1.blocks.size := by omega
+  have a2 := adv_setCur_step a1 hm hl h2
+  have b2 := setCur_blocks h2
+  have a3x := hr _ _ _ _ h3
+  have a3 := a2.trans a3x
+  have a4x := adv_emitTerm h4
+  have a4 := a3.trans a4x
+  have s3 : ls1.blocks.size ≤ ls3.blocks.size := by
+    have := a3x.ext.1; rw [b2] at this; exact this
+  have s4 : ls3.blocks.size ≤ ls4.blocks.size := a4x.ext.1
+  have hm' : Mine ls0 (ls0.blocks.size + 1) := Or.inr (Nat.le_succ_of_le (Nat.le_refl _))
+  have hl' : ls0.blocks.size + 1 < ls4.blocks.size := by omega
+  rw [pure_run] at hp
+  obtain ⟨-, rfl⟩ := Prod.mk.inj hp
+  exact adv_setCur_step a4 hm' hl' h5
 
 theorem fork_ids {cv : ValueId} {le : LEnv} {ls : LS} {r : BlockId × BlockId} {ls' : LS}
     (h : fork cv le ls = (r, ls')) :
@@ -693,18 +841,6 @@ theorem adv_fork_step {ls0 ls1 ls2 : LS} {cv : ValueId} {le : LEnv} {tb eb : Blo
 theorem advB_isLive : AdvB isLive := by
   unfold isLive
   exact AdvB.bind advB_curBlock fun _ => AdvB.pure _
-
-theorem setCur_blocks {c : Option BlockId} {le : LEnv} {ls : LS} {u : Unit} {ls' : LS}
-    (h : setCur c le ls = (u, ls')) : ls'.blocks = ls.blocks := by
-  rw [setCur_run] at h
-  obtain ⟨-, rfl⟩ := Prod.mk.inj h
-  rfl
-
-theorem curBlock_eq {le : LEnv} {ls : LS} {c : Option BlockId} {ls' : LS}
-    (h : curBlock le ls = (c, ls')) : c = ls.cur ∧ ls' = ls := by
-  rw [curBlock_run] at h
-  obtain ⟨h1, h2⟩ := Prod.mk.inj h
-  exact ⟨h1.symm, h2.symm⟩
 
 /-- Two arms, each started in a block of its own, joined to a block that takes the arms' values. -/
 theorem advB_eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) :
@@ -1204,28 +1340,21 @@ theorem advB_lowerEachSource : ∀ v : View, AdvB (lowerEachSource v)
     simp only [lowerEachSource]
     exact AdvB.bind (advB_lowerExpr e) fun _ => AdvB.bind (advB_emitDef _) fun _ => AdvB.pure _
 
+theorem advB_lowerBlockValue (want : Bool) : ∀ v : Option Expr, AdvB (lowerBlockValue want v)
+  | some e => by simp only [lowerBlockValue]; exact advB_lowerExpr e
+  | none => by
+    cases want
+    · simp only [lowerBlockValue, Bool.false_eq_true, ↓reduceIte]; exact AdvB.pure _
+    · simp only [lowerBlockValue, ↓reduceIte]; exact advB_emitDef _
+
 theorem advB_lowerBlock (lc : Option LoopCtx) (pre : List (SlotId × ValueId × OriginId)) (want : Bool) :
     ∀ b : Block, AdvB (lowerBlock lc pre want b)
   | .mk sc stmts value => by
-    cases value with
-    | some e =>
-      simp only [lowerBlock]
-      exact AdvB.bind (advB_emitEffect _) fun _ => AdvB.bind (advB_pushScope _) fun _ =>
-        AdvB.bind (advB_initSlots _) fun _ => AdvB.bind (advB_lowerStmts lc stmts) fun _ =>
-        AdvB.bind (advB_lowerExpr e) fun _ => AdvB.bind (advB_emitEffect _) fun _ =>
-        AdvB.bind advB_popScope fun _ => AdvB.pure _
-    | none =>
-      cases want
-      · simp only [lowerBlock, Bool.false_eq_true, ↓reduceIte]
-        exact AdvB.bind (advB_emitEffect _) fun _ => AdvB.bind (advB_pushScope _) fun _ =>
-          AdvB.bind (advB_initSlots _) fun _ => AdvB.bind (advB_lowerStmts lc stmts) fun _ =>
-          AdvB.bind (AdvB.pure _) fun _ => AdvB.bind (advB_emitEffect _) fun _ =>
-          AdvB.bind advB_popScope fun _ => AdvB.pure _
-      · simp only [lowerBlock, ↓reduceIte]
-        exact AdvB.bind (advB_emitEffect _) fun _ => AdvB.bind (advB_pushScope _) fun _ =>
-          AdvB.bind (advB_initSlots _) fun _ => AdvB.bind (advB_lowerStmts lc stmts) fun _ =>
-          AdvB.bind (advB_emitDef _) fun _ => AdvB.bind (advB_emitEffect _) fun _ =>
-          AdvB.bind advB_popScope fun _ => AdvB.pure _
+    simp only [lowerBlock]
+    exact AdvB.bind (advB_emitEffect _) fun _ => advB_inScope sc
+      (AdvB.bind (advB_initSlots _) fun _ => AdvB.bind (advB_lowerStmts lc stmts) fun _ =>
+        AdvB.bind (advB_lowerBlockValue want value) fun _ => AdvB.bind (advB_emitEffect _) fun _ =>
+        AdvB.pure _)
 
 theorem advB_lowerStmts (lc : Option LoopCtx) : ∀ ss : List Stmt, AdvB (lowerStmts lc ss)
   | [] => by simp only [lowerStmts]; exact AdvB.pure _

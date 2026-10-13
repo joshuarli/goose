@@ -226,6 +226,13 @@ def pushScope (sc : ScopeId) : B Unit := modify fun s => { s with stack := sc ::
 
 def popScope : B Unit := modify fun s => { s with stack := s.stack.drop 1 }
 
+/-- Run `k` with `sc` pushed on the stack of entered scopes. -/
+def inScope (sc : ScopeId) (k : B α) : B α := do
+  pushScope sc
+  let r ← k
+  popScope
+  pure r
+
 def implOfContext (c : ContextId) : B FnId := do
   pure (((← read).mod.contexts[c]?).map (·.impl) |>.getD 0)
 
@@ -311,18 +318,25 @@ def joinArms (endT endF : Option BlockId) : B Unit := do
     patchBrs0 jb (endT.toList ++ endF.toList)
     setCur (some jb)
 
+/-- The branch of a short-circuit operator whose left value is `x`: to the block that evaluates
+the right operand, or to the join, whose one parameter is the result. Returns both blocks and the
+parameter. -/
+def scFork (isAnd : Bool) (x : ValueId) : B (BlockId × BlockId × ValueId) := do
+  let (rb, _) ← newBlock []
+  let (jb, js) ← newBlock [.data .bool]
+  if isAnd then emitTerm (.condbr x rb [] jb [x])
+  else emitTerm (.condbr x jb [x] rb [])
+  pure (rb, jb, js.headD 0)
+
 /-- The right operand of `and`/`or`, whose left value is `x`; `rhs` lowers it. -/
 def shortCircuit (isAnd : Bool) (x : ValueId) (rhs : B ValueId) : B ValueId :=
   whenLive 0 fun _ => do
-    let (rb, _) ← newBlock []
-    let (jb, js) ← newBlock [.data .bool]
-    if isAnd then emitTerm (.condbr x rb [] jb [x])
-    else emitTerm (.condbr x jb [x] rb [])
+    let (rb, jb, p) ← scFork isAnd x
     setCur (some rb)
     let y ← rhs
     emitTerm (.br jb [y])
     setCur (some jb)
-    pure (js.headD 0)
+    pure p
 
 mutual
 
@@ -452,6 +466,11 @@ def lowerEachSource : View → B (Option ValueId × ValueId)
     let vw ← emitDef (.sliceView s)
     pure (none, vw)
 
+/-- The value a block yields: its value expression, or a unit when one is wanted. -/
+def lowerBlockValue (want : Bool) : Option Expr → B ValueId
+  | some e => lowerExpr e
+  | none => if want then emitDef .constUnit else pure 0
+
 /-- A Core block: enter its scope, bind `pre`, run the statements, evaluate the
 value (a unit when one is `want`ed and the block has none) and leave the scope.
 Yields the value; 0 when nothing was produced. -/
@@ -459,15 +478,12 @@ def lowerBlock (lc : Option LoopCtx) (pre : List (SlotId × ValueId × OriginId)
     Block → B ValueId
   | .mk sc stmts value => do
     emitEffect (.enter sc)
-    pushScope sc
-    initSlots pre
-    lowerStmts lc stmts
-    let r ← match value with
-      | some e => lowerExpr e
-      | none => if want then emitDef .constUnit else pure 0
-    emitEffect (.leave sc)
-    popScope
-    pure r
+    inScope sc do
+      initSlots pre
+      lowerStmts lc stmts
+      let r ← lowerBlockValue want value
+      emitEffect (.leave sc)
+      pure r
 
 def lowerStmts (lc : Option LoopCtx) : List Stmt → B Unit
   | [] => pure ()

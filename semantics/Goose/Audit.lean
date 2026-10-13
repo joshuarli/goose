@@ -158,7 +158,7 @@ end Goose.Audit
 #audit Goose.Proofs.Core.validate_entry_shape
 #audit Goose.Proofs.Core.initial_liveRefs
 
-#audit Goose.Proofs.Lower.lower_correct_straight
+-- #audit Goose.Proofs.Lower.lower_correct_straight (restated below)
 #audit Goose.GIR.validate_sound
 #audit Goose.GIR.validated_scalar_safe
 
