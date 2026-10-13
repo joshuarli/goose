@@ -41,7 +41,7 @@ Storing references only in variables, parameters and results is the single large
 
 ## 3. Identities
 
-Module-local dense ids: `FnId`, `VarId`, `TypeId`, `ScopeId`, `BlockId`, `ValueId`, `SlotId`, `OriginId`. They are deterministic for identical input and are never used across sessions. Cross-session identities are the stable keys of Part B (§15). Native addresses, hash-map iteration order and AST allocation order are never serialized.
+Module-local dense ids: `StructId`, `FnId`, `VarId`, `TypeId`, `ScopeId`, `BlockId`, `ValueId`, `SlotId`, `OriginId`. They are deterministic for identical input and are never used across sessions. Cross-session identities are the stable keys of Part B (§15). Native addresses, hash-map iteration order and AST allocation order are never serialized.
 
 An origin names a source file, line and the source node kind of the construct an operation came from. A synthesized operation records the construct responsible for it. Origins do not decide linter finding identity; the linter's own fingerprints do.
 
@@ -63,15 +63,15 @@ Ty    ::= int IntTy | bool | unit
         | varr Ty
 ```
 
-`flat fixed` means built from `int`, `bool`, `arr` and `struct` only. `grow`, `growshrink` and `varr` types occur only as the type of a variable, a by-reference parameter's pointee, or (construction profile) a by-value parameter or result.
+`flat fixed` means built from `int`, `bool`, `arr` and `struct` only. Structs are nominal: distinct instantiated declarations remain distinct types even when their fields and layouts match. Their descriptors and field permissions are specified in §12.4. `grow`, `growshrink` and `varr` types occur only as the type of a variable, a by-reference parameter's pointee, or (construction profile) a by-value parameter or result.
 
 ### 4.2 Values and memory
 
 ```text
 RootInst ::= global VarId | local ActId ScopeInst VarId
-Obj      ::= scalar Val | fixed [Obj] | resizable [Obj] | limitedObj k [Obj] len | record [Obj]
+Obj      ::= scalar Val | fixed [Obj] | resizable [Obj] | limitedObj k [Obj] len | record StructId [Obj]
 Loc      ::= (RootInst, [Nat])              -- root and selector path
-Val      ::= int IntTy Int | bool Bool | unit | arrv [Val] | recv [Val]
+Val      ::= int IntTy Int | bool Bool | unit | arrv [Val] | recv StructId [Val]
            | ref Loc | slice Loc start len | tuple [Val]
 Store    ::= RootInst ⇀ Obj
 ```
@@ -85,13 +85,15 @@ Integers are mathematical integers with a range invariant for their type. Arithm
 ### 4.3 Program structure
 
 ```text
-Module  ::= schema, profile, numeric, sources, types, globals, impls, contexts, entry, origins
+Module  ::= schema, profile, numeric, sources, types, structs?, globals, impls, contexts, entry, origins
 Impl    ::= name, params, results, vars, body, summary          -- executable; carries no roots
 Context ::= impl ImplId, decl DeclKey, roots RootAnn             -- one checked specialization
 Param   ::= VarId, Ty, mode (byValue | byRef)
 RootAnn ::= var-roots (VarId ⇀ [RootRef]), result-roots [[RootRef]]
 RootRef ::= var VarId | param Nat
 ```
+
+`structs?` is absent in `core-pilot` and is the mandatory struct descriptor table in the flat-struct slice of `core-shrink` (§12.4). This optional field in the abstract notation is selected by the profile, never inferred from record length.
 
 The split between **implementation** and **context** is deliberate. An implementation is everything execution needs. A context is one checked specialization of the source function: it points at an implementation and carries the root annotations the validator checks for that specialization. Several contexts may point at one implementation (§16). Execution never reads a context.
 
@@ -109,6 +111,7 @@ Expr  ::= lit c | read p | refOf m p | sliceOf m v lo hi | lenOf v
         | conv kind τ e                      -- widen | as | asUnchecked
         | call ContextId [Arg]               -- Arg ::= byVal e | byRef m p
         | push p e | ifE e b b | blockE b | arrLit [e] | arrFill e k
+        | structLit StructId [e]             -- core-shrink, real fields in declaration order
 Stmt  ::= let x e | assign p e | assignOp op p e | rebind x e | expr e | append p v
         | ifS e b b? | while e b | forRange x lo hi b | forEach x idx? v byRef b
         | ret e? | break | continue | print [PrintArg] | assert e | abort msg | exit e
@@ -387,7 +390,7 @@ The schema string names the representation and revision (`goose-core/0.2`, `gir-
 
 ### 12.1 Tag table for goose-core/0.2
 
-This subsection is the concrete encoding of §4 for profile `core-pilot`. A tag not listed here is `malformed`. The `core-shrink` and `core-construction` tags are added with those profiles.
+This subsection is the concrete encoding of §4 for profile `core-pilot`. A tag not listed here is `malformed` in that profile. The flat-struct slice of `core-shrink` extends it in §12.4; the remaining shrink and construction tags are added with their slices.
 
 #### Lexical rules
 
@@ -517,7 +520,7 @@ An expression, place or view that can abort or that is a call ends with an `org`
 | `a_val` | `Expr` | |
 | `a_ref` | `Mut`, `Place` | Resolve the place and pass its reference. A slice-typed place is passed only as `p_local s` for a `var` slice variable `s` or as `p_deref(e_read(p_local q))`. |
 
-A local or global reference is distinguished by tag (`p_local`, `p_global`, `r_local`, `r_global`, `t_global`). `p_field` is absent: it needs a struct type, which is a `core-shrink` addition.
+A local or global reference is distinguished by tag (`p_local`, `p_global`, `r_local`, `r_global`, `t_global`). `p_field` is absent from `core-pilot`; the struct addition defines it in §12.4.
 
 #### What the reader checks by tag and arity
 
@@ -536,7 +539,7 @@ A golden `NAME.goose` has `NAME.core.json` and `NAME.out`, the standard output. 
 
 ### 12.2 Tag table for gir-h/0.3
 
-This subsection is the concrete encoding of §8 for profile `core-pilot`, and the reference lowering of §8.3 whose output a conforming lowering reproduces byte for byte. A tag not listed here is `malformed`. The shrink and construction instructions, `invoke`, `escape`, `array.index.proven` and the fact certificates of §10 are added with the profiles and the item that need them, and are not decoded now.
+This subsection is the concrete encoding of §8 for profile `core-pilot`, and the reference lowering of §8.3 whose output a conforming lowering reproduces byte for byte. A tag not listed here is `malformed` in that profile. The flat-struct slice of `core-shrink` extends it in §12.5. The remaining shrink and construction instructions, `invoke`, `escape`, `array.index.proven` and the fact certificates of §10 are added with the slices and items that need them, and are not decoded now.
 
 #### Lexical rules
 
@@ -735,6 +738,67 @@ Shared with §12.2, over integers, booleans and addresses (`i_int`, `i_bool`, `i
 | `l_rt` | `str` entry point, `val` argument or `-1`, `str` text | A call of the closed list `out_int out_uint out_bool out_text out_nl`, which write the argument, the text, or a line feed. |
 
 Every check of §8 is a compare and a conditional branch to a block that ends in `t_abort`; no view, scope, snapshot, slot or checked index remains.
+
+### 12.4 Flat fixed structs in goose-core/0.2, core-shrink
+
+This is the contract for the first `S8` extension, not an implemented profile or a reached gate. It adds flat fixed structs to `core-shrink`; the shrink operations require subsequent slices. The `core-pilot` module still has exactly nine fields after its tag, has no struct table, and accepts none of the tags added here. Its writer's numbering, tags and bytes are unchanged. A reader selects the module shape from the schema and profile strings before decoding its tables; it does not try both arities. All lexical limits of §12.1 apply.
+
+#### Module and nominal identity
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `module` | `str` schema (`goose-core/0.2`), `str` profile (`core-shrink`), `[file]` files, `[Ty]` types, `[struct_def]` structs, `[global]` globals, `[impl]` impls, `[context]` contexts, `ctx` entry, `[origin]` origins | Exactly ten fields after the tag. The mandatory structs table follows types, including when it is empty. All other records keep their pilot shape. |
+| `struct` | `sid` | A type entry naming one descriptor in this module's structs table. |
+| `struct_def` | `nat` byte size, `[field]` real fields | One instantiated nominal struct declaration, with positive byte size. Pads may supply that size without real fields; zero-size values remain excluded. |
+| `field` | `ty` type, `VarKind` binding, `Mut` contents, `nat` byte offset | Binding `var` permits assignment of the whole field; binding `let` does not. Contents `const` forbid writes inside the field; contents `mut` permit them subject to enclosing storage permissions. |
+
+`sid` is a JSON `nat` indexing the structs table. There is one descriptor per instantiated nominal declaration; two declarations with equal field types, permissions and layout still have different ids. Distinct generic instantiations are distinct nominal types. No declaration key, AST address or physical layout is used as structural equality of nominal types. An implementation may store the descriptor's resolved field types with its nominal id internally; the wire type remains `struct sid`.
+
+The exporter reserves a struct id at the first mention of its instantiated type in the existing type traversal, then visits its real fields in declaration order to intern their component types before interning the containing `struct` type. Thus struct ids need not follow the order of the corresponding type entries. Every descriptor has exactly one corresponding `struct` type entry. All field type indices are smaller than that containing type index, including nested struct and array types; this excludes recursive by-value nesting. Existing component-before-parent type numbering is preserved. Fields have no names on the wire: selection has already been resolved.
+
+Real fields are numbered densely from zero in declaration order. A `pad n` or bare `pad` declaration has no logical field index, no initializer, and no value in the record. The exporter maps the checked frontend field indices, which also enumerate pads, to these real-field indices. The byte gaps left by pads are retained in layout metadata. No selector can refer to padding.
+
+#### Layout and permissions
+
+The descriptor's byte size and field offsets come from the existing packed layout of the instantiated frontend field run (`StructInst`, `FieldRun`, and the `StructLayout`/`LayoutFields` calculation). The exporter and GIR placement use that same calculation. They must not introduce a second rule for packing, bare-pad alignment or tail padding. Logical Core memory uses field indices; byte offsets are placement metadata, not logical selectors.
+
+The decoder checks descriptor arities, closed enumerations, table indices, positive size and the earlier-component rule. `V-TYPE` additionally requires flat fixed field types, increasing nonoverlapping field extents, and every field extent within the declared byte size, with checked size arithmetic. Gaps and trailing pad bytes are allowed; a zero-size field, stored reference or slice, variable field or resizable field is outside this slice. Layout metadata is validated for bounds independently of the source exporter; equivalence to the frontend's packed layout is checked by conformance, not asserted by a Lean proof about logical memory.
+
+Binding and contents permissions are independent. `let inner: S` has binding `let` and contents `mut`; `const inner: S` has binding `let` and contents `const`; `outer: const S` has binding `var` and contents `const`. A scalar's contents permission is still recorded, although assigning that scalar is governed by its binding permission. Copies produce independent value snapshots; declaration-level field permissions remain in force in the copy.
+
+Place checking therefore distinguishes permission to replace the whole place from permission to mutate its contents. An unqualified local or global owns mutable contents even when its binding is `let`. For `p_field p j`, whole-field assignment requires writable contents of `p` and binding `var` of field `j`; writes inside that field require writable contents of `p` and contents `mut` of field `j`. A read-only reference forbids both. The same rule propagates through nested fields and fixed-array elements. The permissions come from declarations and reference types, not from the value currently stored there. Root identity, lifetime and read/write summary targets remain those of the containing place.
+
+#### Construction, selection and evaluation
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `e_struct` | `ty` struct type, `[Expr]` initializers | Exactly one expression per real field, in declaration order; each expression has the declared field type. |
+| `p_field` | `Place` containing storage, `nat` real-field index | A place holding that field of a nominal struct. The index is checked against its descriptor. No origin is needed: selection has no defined Goose abort. |
+
+An `e_struct` evaluates its initializers exactly once, left to right, and produces `recv sid [values]`. A checked literal includes the explicit or synthesized default initializer for every real field; the reader does not evaluate defaults or infer omitted fields. Binding `let` and contents `const` constrain later writes, not initialization. An abort or exit in an initializer ends evaluation immediately and preserves the already-produced trace. A flat record does not require the nonfixed destination protocol of §7.
+
+`p_field` evaluates its containing place once and appends the real-field index to its logical location path. Reading yields a value snapshot; writing rebuilds only the selected subvalue, preserving nominal identity and sibling fields. A record is distinct from an array: field storage traversal does not make the record itself a view, expose a length or permit indexing it as an array. An unvalidated wrong shape or invalid selector may fault; `V-TYPE` must make these faults unreachable for validated programs. This does not add a new runtime abort or change the numeric profile.
+
+The first executable slice is scalar-field struct locals with construction, field read/write, copying and printing the scalar fields. Whole-object `const` qualification, including `const` struct locals, parameters and results, is explicitly `unsupported: struct-whole-const` until its type encoding and copy rules are added. A field's contents permission is already represented by the descriptor. Projection from a temporary or returned value such as `make().field` or `S { ... }.field` is `unsupported: struct-temporary-projection` until an expression projection or a specified storage materialization is added; `p_field` never accepts an expression in place of its `Place`. Other flat-struct contexts not implemented by that slice remain `unsupported: struct`; this contract does not claim complete flat-struct support or `G-SHRINK`.
+
+### 12.5 Flat fixed structs in gir-h/0.3, core-shrink
+
+This extension is relative to the `gir-h/0.3` pilot schema of §12.2. It leaves that schema's `core-pilot` module arity of eight fields after the tag, numbering and bytes unchanged. It does not preserve the old schema string across a separate GIR-H revision change. The profile selects the additional table explicitly.
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `module` | `str` schema (`gir-h/0.3`), `str` profile (`core-shrink`), `[file]` files, `[Ty]` types, `[struct_def]` structs, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | Exactly nine fields after the tag. |
+| `struct`, `struct_def`, `field` | as in §12.4 | GIR-H retains nominal identity, logical field order, field permissions and authoritative layout. A descriptor's `ty` fields refer to the GIR-H type table and never to a `view`. |
+| `i_struct` | `val` result, `ty` struct type, `[val]` initializers | A transient by-value record. Operand count and types match the real fields. |
+| `i_field` | `val` result, `val` containing reference, `nat` real-field index | A reference to the selected field; no read, write, check, origin or runtime abort. |
+
+Core lowering retains struct ids and descriptor order, remapping their type references into GIR-H's component-before-parent type table. `e_struct` lowers each initializer in declaration order, then emits `i_struct`. `p_field` lowers its containing place once, then emits `i_field`. Record slots and globals, `i_load`, `x_init`, `x_store`, by-value arguments and results retain the nominal struct type and snapshot behavior.
+
+`GIR-V010` checks nominal type identity, flat field types, selector bounds and constructor operand arity/types. `GIR-V030` checks whole-store and contents permissions separately, including the writable contents of an unqualified `let` owner. An address's contents capability follows its owner provenance through `i_slot`, `i_global` and field/element projection; it must not be inferred from binding kind alone. A read-only reference parameter or `i_freeze` supplies no writable contents capability. A whole-field reference can be read-only for whole-store purposes while still permitting a further projection into mutable contents of an owned `let` field. The verifier must establish this distinction from provenance and descriptor permissions; an arbitrary `ref const S` is not upgraded. Scope and summary checks retain the containing root, and no instruction escapes the checks by substituting a structurally equal nominal type.
+
+GIR-L (§12.3) has no struct type, descriptor table, constructor or field operation after lowering. A flat record lives in byte storage, its by-value load takes a byte snapshot, and a field reference becomes address arithmetic using the descriptor's byte offset. Only the existing low scalar, address and byte-copy operations remain. Padding is not a logical value and must never become an operand of scalar output or field access. Whole-object equality, when implemented, compares real fields and ignores padding.
+
+The C emitter must support unaligned packed scalar accesses. A low `PLoad` or `PStore` that may address an unaligned field copies bytes between that address and a scalar temporary using the existing copy primitive or `memcpy`; it must not cast the address to an aligned scalar pointer and dereference it. The storage layout remains the frontend's authoritative packed layout.
 
 ## Part B. Build representations
 

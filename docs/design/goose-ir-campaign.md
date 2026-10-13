@@ -200,8 +200,15 @@ Semantic track.
 | `S6` | L | S5 | GIR-L, placement, the C emitter, `--pipeline gir`, `--emit-gir-low`. | Pilot fixtures and lanes agree across legacy, Lean and `gir`, release and debug, native and TinyCC. |
 | `T3` | L | S7 | `TH-GIR-01`, `TH-LOWER-01`. | **`G-GIR`** with S6. |
 | `S3b` | S | S2 | The exporter reports every unsupported feature of a program, not only the first (`--emit-core` with a report-only mode), and corpus mode prints, for each set of features, how many programs it alone would unlock. | The forecast table in §11; and for the current profile, no program whose features are all supported is left unexported without a stated reason. |
-| `S8` | L | G-PILOT, S6 | `core-shrink` through every layer, one slice per workstream; its Tier A theorems. | **`G-SHRINK`**: `MEM-04`–`MEM-07`; `resize`, `reference`, `trap` lanes agree. |
+| `S8` | L | G-PILOT, S6 | `core-shrink` through every layer, flat fixed structs first, then shrink operations and their Tier A theorems. The struct encoding contract is specification §§12.4–12.5. | First struct slice: validation `STR-01`–`STR-08`. **`G-SHRINK`** still requires `MEM-04`–`MEM-07`; `resize`, `reference`, `trap` lanes agree. |
 | `S9` | XL | S8 | `core-construction` through every layer; `TH-EXIT-01`; `TH-CON-01` as Tier B. | **`G-CONSTRUCT`**: `CON-*`, `EXIT-*`. |
+
+`S8` staging, planned and not a gate result:
+
+1. Specify the profile-selected struct tables, nominal identities, field permissions, and Core/GIR-H tags in [the struct contract](goose-ir-spec.md#124-flat-fixed-structs-in-goose-core02-core-shrink). Pilot artifacts retain their current arity and bytes; the GIR extension is relative to `gir-h/0.3`.
+2. The first implementation commit delivers the scalar-field local fixture of [validation §6](goose-ir-validation.md#6-semantic-fixture-matrix) through source export, Lean Core, GIR-H and native GIR, including safe unaligned scalar emission. It includes copying and the independent nominal/permission rejection cases, and keeps whole-object const qualification and temporary field projection explicitly unsupported.
+3. Extend to nested flat structs, array fields/elements, field references, globals, parameters/results, defaults and pads; add temporary projection and whole-object const only with their explicit contracts. Equality compares real fields and ignores pads. Repair the applicable memory, fuel, safety, sharing and lowering proof cases and audit the claims actually extended.
+4. Add shrink operations with a demand-sensitive invariant; qualify `MEM-04`–`MEM-07` and the bounded resize/reference/trap lanes. A flat-struct result does not establish shrink safety or the parked whole-profile lowering theorem.
 
 Build track. It starts at the same time as `S1`.
 
