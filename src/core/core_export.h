@@ -202,6 +202,31 @@ private:
         return mod.Intern(ct);
     }
 
+    // The same reference or slice type, read-only.
+    CoreTypeId Constify(CoreTypeId t) {
+        auto c = mod.Type(t);
+        if ((c.kind != CoreType::Ref && c.kind != CoreType::Slice) || c.mut == CoreMut::Const) return t;
+        c.mut = CoreMut::Const;
+        return mod.Intern(c);
+    }
+
+    // A parameter's type as this specialization has it: a reference or slice
+    // parameter whose arguments are all read-only is a read-only one, whatever
+    // the declaration says, since a caller could not pass it otherwise.
+    CoreTypeId ParamTy(FnSpec *sp, size_t i) {
+        auto t = Ty(sp->argtypes[i]);
+        if (i < sp->roots.size() && !sp->roots[i].writable) t = Constify(t);
+        return t;
+    }
+
+    // A result's type likewise: read-only where some return of it is.
+    CoreTypeId ResultTy(FnSpec *sp, size_t i) {
+        auto t = Ty(sp->rets[i]);
+        if (i < sp->record.retroots.size() && sp->record.retroots[i].set && !sp->record.retroots[i].writable)
+            t = Constify(t);
+        return t;
+    }
+
     CoreMut MutOf(const TypeExpr *t) { return t && t->cq ? CoreMut::Const : CoreMut::Mut; }
 
     // The value type behind a reference.
@@ -363,12 +388,12 @@ private:
         if (!CoreIsUtf8(impl.name)) Fail("non-utf8-text");
         if (sp->rets.size() > 1) Fail("multiple-results");
         if (sp->sf->isthread) Fail("thread");
-        for (auto rt : sp->rets) impl.results.push_back(Ty(rt));
+        for (size_t r = 0; r < sp->rets.size(); r++) impl.results.push_back(ResultTy(sp, r));
         auto porg = Org(sp->sf->line, CoreOriginKind::Param);
         for (size_t i = 0; i < sp->params.size(); i++) {
             auto vd = sp->params[i];
             if (vd->reusable) Fail("reusable");
-            auto ty = Ty(sp->argtypes[i]);
+            auto ty = ParamTy(sp, i);
             auto id = NewVar(vd, vd->name, ty, vd->isvar ? CoreVarKind::Var : CoreVarKind::Let, 0, porg);
             impl.params.push_back({ id, mod.Type(ty).kind == CoreType::Ref });
         }
@@ -409,7 +434,7 @@ private:
                 st.kind = CoreStmtKind::Ret;
                 st.org = Org(t->line, CoreOriginKind::Return);
                 coerceorg = st.org;
-                st.expr = Value(t);
+                st.expr = ReborrowTo(Value(t), ResultOfCurrent());
                 cb.stmts.push_back(std::move(st));
             } else {
                 Stmt(t, cb);
@@ -512,7 +537,7 @@ private:
                 if (exprdepth) Fail("control-in-expression");
                 if (r->vals.size() > 1) Fail("multiple-results");
                 auto s = MakeStmt(CoreStmtKind::Ret, n->line, CoreOriginKind::Return);
-                if (r->vals.size() == 1) s.expr = Value(r->vals[0]);
+                if (r->vals.size() == 1) s.expr = ReborrowTo(Value(r->vals[0]), ResultOfCurrent());
                 out.stmts.push_back(std::move(s));
                 return;
             }
@@ -575,7 +600,7 @@ private:
         // The variable is numbered before its initializer, as it is written.
         s.var = NewVar(vd, vd->name, VarTy(vd), vd->isvar ? CoreVarKind::Var : CoreVarKind::Let,
                        out.scope, Org(d->line, CoreOriginKind::Let));
-        s.expr = Value(d->inits[0]);
+        s.expr = ReborrowTo(Value(d->inits[0]), cur.impl->vars[s.var].type);
         out.stmts.push_back(std::move(s));
     }
 
@@ -898,6 +923,27 @@ private:
 
     // Widens an integer to the target the checker fitted the node to.
     CoreExprP Fit(CoreExprP e, TypeExpr *target, Node *n) {
+        // A mutable reference or slice where a read-only one is wanted is
+        // reborrowed read-only: its type is not the target's.
+        if (target && target->cq && (target->kind == TY_REF || target->kind == TY_SLICE)) {
+            auto &c = mod.Type(e->type);
+            if (target->kind == TY_REF && c.kind == CoreType::Ref && c.mut == CoreMut::Mut) {
+                auto r = NewExpr(CoreExprKind::Ref, Constify(e->type));
+                r->mut = CoreMut::Const;
+                r->place = DerefOf(std::move(e));
+                return r;
+            }
+            if (target->kind == TY_SLICE && c.kind == CoreType::Slice && c.mut == CoreMut::Mut) {
+                auto sl = NewExpr(CoreExprKind::Slice, Constify(e->type));
+                sl->mut = CoreMut::Const;
+                sl->view = make_unique<CoreView>();
+                sl->view->kind = CoreView::Val;
+                sl->view->expr = std::move(e);
+                sl->org = coerceorg;
+                return sl;
+            }
+            return e;
+        }
         if (!target || target->kind != TY_INT) return e;
         auto &t = mod.Type(e->type);
         if (t.kind != CoreType::Int) return e;
@@ -925,6 +971,34 @@ private:
         c->a = std::move(e);
         c->org = Org(at, CoreOriginKind::Cast);
         return c;
+    }
+
+    // A mutable reference or slice where the slot has a read-only one of the
+    // same elements: reborrowed read-only.
+    CoreTypeId ResultOfCurrent() { return cur.impl && !cur.impl->results.empty() ? cur.impl->results[0] : -1; }
+
+    CoreExprP ReborrowTo(CoreExprP e, CoreTypeId want) {
+        if (want < 0 || !e || e->type == want) return e;
+        auto &w = mod.Type(want);
+        auto et = e->type;
+        auto &c = mod.Type(et);
+        if (w.kind != c.kind || w.elem != c.elem || w.mut != CoreMut::Const || c.mut != CoreMut::Mut) return e;
+        if (c.kind == CoreType::Ref) {
+            auto r = NewExpr(CoreExprKind::Ref, want);
+            r->mut = CoreMut::Const;
+            r->place = DerefOf(std::move(e));
+            return r;
+        }
+        if (c.kind == CoreType::Slice) {
+            auto sl = NewExpr(CoreExprKind::Slice, want);
+            sl->mut = CoreMut::Const;
+            sl->view = make_unique<CoreView>();
+            sl->view->kind = CoreView::Val;
+            sl->view->expr = std::move(e);
+            sl->org = coerceorg;
+            return sl;
+        }
+        return e;
     }
 
     CoreExprP PushExpr(Call *c) {
@@ -1226,7 +1300,7 @@ private:
         auto callee = c->spec;
         auto &rets = callee->rets;
         if (rets.size() > 1) Fail("multiple-results");
-        auto e = NewExpr(CoreExprKind::Call, rets.empty() ? mod.UnitType() : Ty(rets[0]));
+        auto e = NewExpr(CoreExprKind::Call, rets.empty() ? mod.UnitType() : ResultTy(callee, 0));
         auto savedorg = coerceorg;
         coerceorg = Org(c->line, CoreOriginKind::Call);
         auto an = c->ArgNodes();
@@ -1237,7 +1311,7 @@ private:
             CoreArg arg;
             if (pt->kind == TY_REF) {
                 arg.kind = CoreArg::Ref;
-                arg.mut = MutOf(pt);
+                arg.mut = mod.Type(ParamTy(callee, i)).mut;
                 arg.place = ArgPlace(an[i]);
             } else {
                 arg.kind = CoreArg::Val;
