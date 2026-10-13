@@ -90,6 +90,7 @@ FEATURE_REPORT_EXPECTATIONS = {
     "optimizer/basecase_reference_alias": (),
     "semantics/sem_core_report_extern": ("extern-fn",),
     "semantics/sem_core_report_import_std": (),
+    "semantics/sem_core_shrink_nonflat_element": ("nonflat-element",),
 }
 LOCATION_PATTERN = re.compile(r"\.goose:(\d+)\)\s*$")
 
