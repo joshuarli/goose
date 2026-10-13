@@ -458,6 +458,40 @@ void RejectsReferenceToSliceGlobal() {
     assert(Code(m) == "GIR-V010");
 }
 
+void RejectsDuplicateVariablesForReferenceToSliceParameterSlots() {
+    auto m = Base();
+    auto slice = m.SliceType(CoreMut::Mut, m.IntType(CoreIntTy::I64));
+    auto refSlice = m.RefType(CoreMut::Mut, slice);
+    GirFunc f;
+    f.name = "take_slice_reference";
+    f.params = { refSlice };
+    f.slots = { { refSlice, CoreVarKind::Let, 0, 0 }, { refSlice, CoreVarKind::Let, 0, 0 } };
+    f.scopes = { -1 };
+    GirBlock b;
+    b.params = { { 0, refSlice } };
+    b.insts = { Ret() };
+    f.blocks = { b };
+    m.funcs.push_back(f);
+    assert(Code(m) == "GIR-V010");
+}
+
+void RejectsSlotVariableThatNamesAnotherReferenceToSliceParameter() {
+    auto m = Base();
+    auto slice = m.SliceType(CoreMut::Mut, m.IntType(CoreIntTy::I64));
+    auto refSlice = m.RefType(CoreMut::Mut, slice);
+    GirFunc f;
+    f.name = "take_two_slice_references";
+    f.params = { refSlice, refSlice };
+    f.slots = { { refSlice, CoreVarKind::Let, 0, 1 } };
+    f.scopes = { -1 };
+    GirBlock b;
+    b.params = { { 0, refSlice }, { 1, refSlice } };
+    b.insts = { Ret() };
+    f.blocks = { b };
+    m.funcs.push_back(f);
+    assert(Code(m) == "GIR-V010");
+}
+
 void RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter() {
     auto m = Base();
     auto i64 = m.IntType(CoreIntTy::I64);
@@ -1534,7 +1568,7 @@ void NestedStructAndFixedArrayFieldsUseByteStorage() {
     };
     Main(high).slots = {
         { outer, CoreVarKind::Let, 0, 0 },
-        { outer, CoreVarKind::Let, 0, 0 },
+        { outer, CoreVarKind::Let, 0, 1 },
     };
     Main(high).summary.aborts = true;
     Main(high).summary.outputs = true;
@@ -1898,6 +1932,8 @@ int main() {
     RejectsSummaryThatOmitsSliceParameterRebind();
     RejectsReferenceToSliceResult();
     RejectsReferenceToSliceGlobal();
+    RejectsDuplicateVariablesForReferenceToSliceParameterSlots();
+    RejectsSlotVariableThatNamesAnotherReferenceToSliceParameter();
     RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter();
     RejectsParameterRootUnderapproximationAtCall();
     AcceptsUnreachableAfterANonReturningCall();
