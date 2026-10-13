@@ -21,11 +21,13 @@
 
 </details>
 
-The standard library has fifteen modules under `stdlib/`: `std`,
-`dictionary`, `vec`, `math`, `os`, `binary`, `base64`, `csv`, `json`, `regex`,
-`audio`, `gfx`, `physics`, `ui`, and `exception`. Import each module by name,
-for example `import std;`. The compiler locates the library in its source
-tree; use `--stdlib <dir>` or `GOOSE_STDLIB` to select another location.
+The standard library has eleven Goose modules under `stdlib/`: `std`,
+`exception`, `dictionary`, `vec`, `math`, `os`, `binary`, `base64`, `csv`,
+`json` and `regex`. Four blessed import names are provided by external
+packages: `gfx`, `audio` and `ui` come from `goose_gfx`, and `physics` comes
+from `goose_physics`. Import a module by name, for example `import std;`. The
+compiler locates the library in its source tree; use `--stdlib <dir>` or
+`GOOSE_STDLIB` to select another location.
 Everything is written in Goose except the C behind `os`
 (`src/runtime/runtime_os.h`), the byte search behind `std`'s `find_any` and
 `find_pair` (`src/runtime/runtime_impl.h`), libm behind `math`, the graphics layer behind
@@ -33,8 +35,7 @@ Everything is written in Goose except the C behind `os`
 [goose_gfx](https://github.com/aardappel/goose_gfx) package) and the physics layer
 behind `physics` (the [goose_physics](https://github.com/aardappel/goose_physics)
 package), repositories of their own, all reached through `extern fn` (spec
-§7.10). The design and its rationale are in `design/stdlib_design.md`, and
-the packages' own [docs/gfx.md](https://github.com/aardappel/goose_gfx/blob/main/docs/gfx.md),
+§7.10). The packages' own [docs/gfx.md](https://github.com/aardappel/goose_gfx/blob/main/docs/gfx.md),
 [docs/ui.md](https://github.com/aardappel/goose_gfx/blob/main/docs/ui.md), [docs/audio.md](https://github.com/aardappel/goose_gfx/blob/main/docs/audio.md) and
 [docs/physics.md](https://github.com/aardappel/goose_physics/blob/main/docs/physics.md);
 this is the reference.
