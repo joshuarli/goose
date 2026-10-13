@@ -76,6 +76,11 @@ DIAGNOSTICS = {
     "assert": r"assert failed",
     "int_overflow": r"integer overflow \(debug\)",
     "cast_range": r"as conversion out of range \(debug\)",
+    "capacity": r"limited array capacity exceeded",
+    "resize_negative": r"resize to a negative length",
+    "resize_fill": r"resize growth requires a fill value",
+    "pop_empty": r"pop on empty array",
+    "pop_n_range": r"pop_n count negative or beyond the array's length",
 }
 ABORT_KINDS = frozenset(DIAGNOSTICS) | {"user_abort"}
 
@@ -689,6 +694,8 @@ def self_test() -> int:
              stderr="division by zero\nagree_division.goose:4)\n")
         case("agree_index", AGREE, aborts_with("index_oob", 9), out="", aborts=True,
              stderr="index 2 out of bounds (length 2)\nagree_index.goose:9)\n")
+        case("agree_pop_empty", AGREE, aborts_with("pop_empty", 5), out="", aborts=True,
+             stderr="pop on empty array\nagree_pop_empty.goose:5)\n")
         case("agree_user_abort", AGREE, aborts_with("user_abort", 3, "a\n"), out="a\n", aborts=True,
              stderr="custom message\nagree_user_abort.goose:3)\n")
         case("agree_debug_only", AGREE,

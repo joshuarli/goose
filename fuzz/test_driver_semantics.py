@@ -42,6 +42,8 @@ class FakeTools:
                 if self.export.returncode == 0:
                     Path(argv[argv.index('--emit-core') + 1]).write_text('{}')
                 return self.export
+            if '--jit' in argv:
+                return self.program
             return self.goose
         return self.program
 
@@ -165,10 +167,11 @@ class SemanticsStageTests(unittest.TestCase):
         report = self.check(tools, pipeline='gir')
         self.assertIsNone(report['failure'])
         build = [c for c in tools.commands if '--pipeline' in c]
-        self.assertEqual(len(build), 1)
-        self.assertEqual(build[0][build[0].index('--pipeline') + 1], 'gir')
+        self.assertEqual(len(build), 2)
+        self.assertTrue(all(c[c.index('--pipeline') + 1] == 'gir' for c in build))
         self.assertEqual(report['pipeline'], 'gir')
-        self.assertEqual([r['stage'] for r in report['results']][-3:], ['gir_goose', 'gir_c', 'gir_program'])
+        self.assertEqual([r['stage'] for r in report['results']][-4:],
+                         ['gir_goose', 'gir_c', 'gir_program', 'gir_jit'])
 
     def test_pipeline_failures_name_the_pipeline_stage(self):
         tools = FakeTools(self.expected)
