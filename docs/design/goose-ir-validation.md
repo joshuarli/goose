@@ -166,6 +166,14 @@ Each row is a family: a positive case, a boundary case, and a case that a wrong 
 | `MEM-05` | shrink | Callee that shrinks its reference parameter while the caller holds a view | Rejected through the summary. |
 | `MEM-06` | shrink | Limited array: pop, read through a kept reference, push | Valid read of the old then the new value. |
 | `MEM-07` | shrink | Capacity overflow; pop on empty; negative resize | Abort before any change. |
+| `STR-01` | shrink, flat structs | Construct a scalar-field struct local; mutate and print fields of a `let` owner | Core export, Lean Core, GIR-H and native GIR agree; independent field binding/contents permissions hold. |
+| `STR-02` | shrink, flat structs | Copy a local struct, then change one field of the original | The copy retains its earlier field values; sibling fields of the original are unchanged. |
+| `STR-03` | shrink, flat structs | Substitute a distinct nominal struct with identical fields/layout in a constructor or store | Rejected by Core `V-TYPE` and GIR `GIR-V010`, independent of the frontend. |
+| `STR-04` | shrink, flat structs | Wrong constructor count/type, field index outside the descriptor, store to a `let` field, or write inside a `const` field | Count/type/selector failures reach typing checks; permission failures reach `V-MUT` or `GIR-V030`. Invalid wire table indices/arity fail decoding first. |
+| `STR-05` | shrink, flat structs | Packed `u8` followed by `i64` at byte offset 1; read and write the latter | Source layout metadata is retained; native output matches Lean; generated scalar accesses pass alignment sanitization. |
+| `STR-06` | shrink, flat structs | Existing pilot artifacts, a struct tag/table under `core-pilot`, and a missing/extra struct table under `core-shrink` | Pilot bytes and module arity unchanged; wrong profile-selected shape/tag rejected as malformed. Compare GIR pilot bytes at the same `gir-h/0.3` schema revision. |
+| `STR-07` | shrink, flat structs | Whole-object `const` struct qualification or field projection from a temporary in the first slice | Explicit `unsupported: struct-whole-const` or `unsupported: struct-temporary-projection`; no partial artifact is published. |
+| `STR-08` | shrink, flat structs | Scalar field initializers with output or an abort in the middle, including checked default initializers | Field order and one evaluation each; abort keeps preceding output and skips later initializers. |
 | `CON-01` | construction | Nested call and branch constructing into a `push` destination | `C-DIRECT`, `C-ONCE`. |
 | `CON-03` | construction | Limited receiver of an unknown-length result that fits and that does not | `C-STAGE`; abort with nothing written outside. |
 | `CON-04` | construction | Constructor growing its destination array; growing another array | Rejected; accepted. |
@@ -181,6 +189,20 @@ Each row is a family: a positive case, a boundary case, and a case that a wrong 
 | `SHR-xx` | legacy backend, any feature | Specification §16.4, one member of the synthetic family per row | Asserted share or distinct. |
 
 Generated corpus: the existing lanes of `fuzz/driver.py`, extended with the Lean tool and the `gir` pipeline as additional stages. `scalar`, `numeric`, `order` and the pilot-compatible `trap` kinds belong to `core-pilot`; `resize`, `reference` and the remaining `trap` kinds to `core-shrink`. No new generator is written.
+
+`STR-01`–`STR-08` qualify the first flat-struct slice defined by [the struct encoding contract](goose-ir-spec.md#124-flat-fixed-structs-in-goose-core02-core-shrink) and [its GIR-H lowering](goose-ir-spec.md#125-flat-fixed-structs-in-gir-h03-core-shrink). They are planned checks, not results. The first end-to-end fixture is:
+
+```goose
+struct Packed { tag: u8, value: i64, const stamp: i16 }
+
+fn main() {
+    let p = Packed { tag: 1, value: 40, stamp: 7 };
+    p.value += 2;
+    print(p.tag, " ", p.value, " ", p.stamp);
+}
+```
+
+Expected output is `1 42 7\n` in both numeric profiles. Check this fixture through source export, Lean Core validation/evaluation, GIR-H validation/evaluation, and GIR-L/native execution; compare it with the legacy backend. Run alignment sanitization on its generated C. Add separate minimal malformed/permission cases for `STR-03`, `STR-04` and `STR-06` so their failure reaches the intended layer. Flat structs alone satisfy none of `MEM-04`–`MEM-07` and do not reach `G-SHRINK`.
 
 A disagreement between the Lean model and the legacy compiler is resolved by the campaign's decision O2 and recorded in `semantics/decisions.md` with a minimized reproducer. Expected outputs are never regenerated to resolve one.
 
