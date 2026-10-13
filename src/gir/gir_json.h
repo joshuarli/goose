@@ -1,4 +1,4 @@
-// Goose compiler — GIR-H, serialization (schema gir-h/0.2).
+// Goose compiler — GIR-H, serialization (schema gir-h/0.3).
 //
 // Records are tagged arrays as in the Core encoding. The file and origin
 // tables are the Core module's, unchanged; the type table is numbered by first
@@ -8,7 +8,7 @@
 
 namespace goose {
 
-inline constexpr const char *GIR_SCHEMA = "gir-h/0.2";
+inline constexpr const char *GIR_SCHEMA = "gir-h/0.3";
 
 class GirWriter {
 public:
@@ -185,6 +185,40 @@ private:
         Append(out, ",", (int)s.aborts, ",", (int)s.outputs, "]");
     }
 
+    static void Roots(string &out, const vector<CoreRootRef> &rs) {
+        out += '[';
+        for (size_t i = 0; i < rs.size(); i++) {
+            if (i) out += ',';
+            static const char *tags[] = { "r_local", "r_global", "r_param" };
+            Append(out, "[\"", tags[rs[i].kind], "\",", rs[i].index, "]");
+        }
+        out += ']';
+    }
+
+    static void RootRows(string &out, const vector<pair<int, vector<CoreRootRef>>> &rows, const char *tag) {
+        out += '[';
+        for (size_t i = 0; i < rows.size(); i++) {
+            if (i) out += ',';
+            Append(out, "[\"", tag, "\",", rows[i].first, ",");
+            Roots(out, rows[i].second);
+            out += ']';
+        }
+        out += ']';
+    }
+
+    static void RootInfo(string &out, const GirRootInfo &r) {
+        out += "[\"roots\",";
+        RootRows(out, r.params, "vr");
+        out += ',';
+        RootRows(out, r.contents, "cr");
+        out += ",[";
+        for (size_t i = 0; i < r.results.size(); i++) {
+            if (i) out += ',';
+            Roots(out, r.results[i]);
+        }
+        out += "]]";
+    }
+
     void Func(string &out, const GirFunc &f) {
         out += "[\"func\",";
         Str(out, f.name);
@@ -217,6 +251,8 @@ private:
             Block(out, f.blocks[i]);
         }
         out += "],";
+        RootInfo(out, f.roots);
+        out += ',';
         Summary(out, f.summary);
         out += ',';
         OptOrg(out, f.org);
@@ -414,7 +450,10 @@ private:
             case GirOp::Elem: def("i_elem"); Append(out, ",", i.a, ",", i.b, "]"); return;
             case GirOp::Freeze: def("i_freeze"); Append(out, ",", i.a, "]"); return;
             case GirOp::Load: def("i_load"); Append(out, ",", i.a, "]"); return;
-            case GirOp::Snap: def("i_snap"); Append(out, ",", i.a, "]"); return;
+            case GirOp::Snap:
+                def("i_snap");
+                Append(out, ",\"", i.snap == GirSnapshotMode::Owner ? "owner" : "borrowed", "\",", i.a, "]");
+                return;
             case GirOp::SliceView: def("i_sview"); Append(out, ",", i.a, "]"); return;
             case GirOp::ViewLen: def("i_vlen"); Append(out, ",", i.a, "]"); return;
             case GirOp::ViewSlice:
@@ -517,6 +556,7 @@ private:
                 OptOrg(out, i.org);
                 out += ']';
                 return;
+            case GirOp::Unreachable: out += "[\"t_unreachable\"]"; return;
             default: return;
         }
     }

@@ -1149,7 +1149,9 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
   | .call c args org => by
     simp only [lowerExpr]
     exact AdvB.bind (advB_lowerArgs args) fun _ => AdvB.bind (advB_implOfContext c) fun _ =>
-      advB_emitDef _
+      AdvB.bind (advB_emitDef _) fun r => AdvB.bind advB_read fun le => by
+        cases hnr : le.mod.noReturn c <;> simp only [hnr, Bool.false_eq_true, ↓reduceIte] <;>
+          first | exact AdvB.pure _ | exact AdvB.bind (advB_emitTerm _) fun _ => AdvB.pure _
   | .push owner e => by
     simp only [lowerExpr]
     exact AdvB.bind (advB_lowerPlace owner) fun _ => AdvB.bind (advB_lowerExpr e) fun _ =>

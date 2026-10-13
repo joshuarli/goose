@@ -43,7 +43,7 @@ for tag in $tags; do
 done
 
 # Every instruction, terminator and operand tag of the profile must occur in a golden.
-gir_tags='i_int i_bool i_unit i_bin i_un i_cmp i_bcmp i_not i_conv i_next i_slot i_global i_elem i_freeze i_load i_snap i_sview i_vlen i_vslice i_alen i_index i_push i_call i_arr i_fill x_init x_store x_append x_enter x_leave x_print t_br t_condbr t_ret t_abort t_exit pp_text pp_val bd_none bd_val bd_end'
+gir_tags='i_int i_bool i_unit i_bin i_un i_cmp i_bcmp i_not i_conv i_next i_slot i_global i_elem i_freeze i_load i_snap i_sview i_vlen i_vslice i_alen i_index i_push i_call i_arr i_fill x_init x_store x_append x_enter x_leave x_print t_br t_condbr t_ret t_abort t_exit t_unreachable pp_text pp_val bd_none bd_val bd_end'
 for tag in $gir_tags; do
     # shellcheck disable=SC2046
     grep -q "\"$tag\"" $(cut -f1 "$here/INDEX" | sed "s|\$|.gir-h.json|; s|^|$here/|") || fail "no golden uses $tag"

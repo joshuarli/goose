@@ -216,7 +216,7 @@ def execPure (cx : FnCtx) (fr : Frame) : Op → M RVal
       pure (.val (.ref (← expectRef (← getVal fr r))))
     | .load r => do
       pure (.val (← readLoc (← expectRef (← getVal fr r))))
-    | .snapshot r => do
+    | .snapshot _ r => do
       let l ← expectRef (← getVal fr r)
       let (len, resizable) ← expectArray (← readLoc l)
       pure (.view ⟨l, 0, len, resizable⟩)
@@ -324,6 +324,7 @@ def exec : Nat → FnCtx → Frame → List Inst → M Val
     | .term (.exit v _) => do
       let (_, code) ← expectInt (← getVal fr v)
       M.stop (.exit code)
+    | .term .unreachable => fault .flow
 
 /-- One instruction that defines a value. Only a call needs fuel: every other
 operation is `execPure`, however little fuel remains. -/

@@ -2,7 +2,7 @@ import Goose.Core.Json
 import Goose.GIR.Syntax
 
 /-!
-The `gir-h/0.2` encoding: a strict decoder and the deterministic writer.
+The `gir-h/0.3` encoding: a strict decoder and the deterministic writer.
 
 The encoding follows the Core one (`Goose.Core.Decode`): arrays, strings and
 unsigned integers only, a tag and a fixed arity per record, no objects. The
@@ -22,7 +22,7 @@ open Goose.Core
 open Goose.Core.Decode (fail record arity asNat asStr asArr asFlag asInt decIntTy decMut decVarKind
   decUnOp decBinOp decCmpOp decConvKind list optional checkIndex natLimit)
 
-def schemaName : String := "gir-h/0.2"
+def schemaName : String := "gir-h/0.3"
 def profileName : String := "core-pilot"
 
 /-! ### Decoder -/
@@ -127,6 +127,41 @@ def decBnd (j : Lean.Json) : Except String Bnd := do
   | "bd_end" => do arity tag fs 1; pure (.fromEnd (← decVal fs[0]!))
   | _ => fail s!"unknown bound tag {tag.quote}"
 
+def decRootRef (tb : Tables) (nParams : Nat) (j : Lean.Json) : Except String RootRef := do
+  let (tag, fs) ← record j "root reference"
+  arity tag fs 1
+  let i ← asNat fs[0]! "root reference index"
+  match tag with
+  | "r_local" => pure (.local (← checkIndex i tb.nSlots "slot"))
+  | "r_global" => pure (.global (← checkIndex i tb.nGlobals "global"))
+  | "r_param" => pure (.param (← checkIndex i nParams "parameter"))
+  | _ => fail s!"unknown root reference tag {tag.quote}"
+
+def decRootRows (tb : Tables) (nParams : Nat) (expectedTag : String) (j : Lean.Json) :
+    Except String (Array (Nat × List RootRef)) := do
+  let rows ← (← asArr j "root rows").mapM fun row => do
+    let (tag, fs) ← record row "root row"
+    unless tag == expectedTag do fail s!"expected {expectedTag}, found tag {tag.quote}"
+    arity tag fs 2
+    let i ← checkIndex (← asNat fs[0]! "root row parameter") nParams "parameter"
+    let roots ← list fs[1]! "root set" (decRootRef tb nParams)
+    pure (i, roots)
+  let rec distinct : List (Nat × List RootRef) → Bool
+    | [] => true
+    | (i, _) :: rest => !(rest.any (·.1 == i)) && distinct rest
+  unless distinct rows.toList do fail s!"{expectedTag} rows repeat a parameter"
+  pure rows
+
+def decRootInfo (tb : Tables) (nParams nResults : Nat) (j : Lean.Json) : Except String RootInfo := do
+  let (tag, fs) ← record j "root info"
+  unless tag == "roots" do fail s!"expected roots, found tag {tag.quote}"
+  arity tag fs 3
+  let params ← decRootRows tb nParams "vr" fs[0]!
+  let contents ← decRootRows tb nParams "cr" fs[1]!
+  let results ← list fs[2]! "result root rows" (fun row => list row "root set" (decRootRef tb nParams))
+  unless results.length == nResults do fail s!"root info has {results.length} result rows, expected {nResults}"
+  pure { params, contents, results := results.toArray }
+
 def decPart (j : Lean.Json) : Except String PrintPart := do
   let (tag, fs) ← record j "print part"
   match tag with
@@ -200,7 +235,12 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   | "i_elem" => do arity tag fs 3; def_ (.refElem (← v 1) (← v 2))
   | "i_freeze" => do arity tag fs 2; def_ (.refFreeze (← v 1))
   | "i_load" => do arity tag fs 2; def_ (.load (← v 1))
-  | "i_snap" => do arity tag fs 2; def_ (.snapshot (← v 1))
+  | "i_snap" => do
+    arity tag fs 3
+    let mode ← asStr fs[1]! "i_snap mode"
+    let some mode := match mode with | "owner" => some .owner | "borrowed" => some .borrowed | _ => none
+      | fail s!"unknown snapshot mode {mode.quote}"
+    def_ (.snapshot mode (← v 2))
   | "i_sview" => do arity tag fs 2; def_ (.sliceView (← v 1))
   | "i_vlen" => do arity tag fs 2; def_ (.viewLen (← v 1))
   | "i_vslice" => do
@@ -257,6 +297,7 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   | "t_exit" => do
     arity tag fs 2
     pure (.term (.exit (← decVal fs[0]!) (← decOrgOpt tb fs[1]!)))
+  | "t_unreachable" => do arity tag fs 0; pure (.term .unreachable)
   | _ => fail s!"unknown instruction tag {tag.quote}"
 
 def decBParam (tb : Tables) (j : Lean.Json) : Except String (ValueId × VTy) := do
@@ -302,7 +343,7 @@ def instCount : Lean.Json → Nat
 def decFunc (m : Tables) (j : Lean.Json) : Except String Func := do
   let (tag, fs) ← record j "func"
   unless tag == "func" do fail s!"expected a func, found tag {tag.quote}"
-  arity tag fs 8
+  arity tag fs 9
   let name ← asStr fs[0]! "func name"
   let params ← list fs[1]! "func parameters" (decTy m)
   let results ← list fs[2]! "func results" (decTy m)
@@ -316,9 +357,10 @@ def decFunc (m : Tables) (j : Lean.Json) : Except String Func := do
   if nInsts > Decode.maxNodesPerFunction then
     fail s!"more than {Decode.maxNodesPerFunction} instructions in one function"
   let blocks ← blocksJ.mapIdx (fun i b => Decode.inEntry "block" i (decBlock tb b)) |>.mapM id
-  let summary ← Decode.decSummary m.nGlobals params.length fs[6]!
-  let org ← decOrgOpt tb fs[7]!
-  pure { name, params, results, slots, scopes, blocks, summary, org }
+  let roots ← decRootInfo tb params.length results.length fs[6]!
+  let summary ← Decode.decSummary m.nGlobals params.length fs[7]!
+  let org ← decOrgOpt tb fs[8]!
+  pure { name, params, results, slots, scopes, blocks, roots, summary, org }
 
 def decGlobal (tb : Tables) (j : Lean.Json) : Except String Global := do
   let (tag, fs) ← record j "global"
@@ -494,7 +536,7 @@ def wOp (r : ValueId) : Op → W String
   | .refElem v i => pure (wRec "i_elem" [toString r, toString v, toString i])
   | .refFreeze a => pure (wRec "i_freeze" [toString r, toString a])
   | .load a => pure (wRec "i_load" [toString r, toString a])
-  | .snapshot a => pure (wRec "i_snap" [toString r, toString a])
+  | .snapshot mode a => pure (wRec "i_snap" [toString r, quote (if mode == .owner then "owner" else "borrowed"), toString a])
   | .sliceView a => pure (wRec "i_sview" [toString r, toString a])
   | .viewLen a => pure (wRec "i_vlen" [toString r, toString a])
   | .viewSlice m v lo hi org =>
@@ -519,6 +561,7 @@ def wInst : Inst → W String
   | .term (.ret vs org) => pure (wRec "t_ret" [wNats vs, wOpt org])
   | .term (.abort k org) => pure (wRec "t_abort" [quote k.tag, wOpt org])
   | .term (.exit v org) => pure (wRec "t_exit" [toString v, wOpt org])
+  | .term .unreachable => pure (wRec "t_unreachable" [])
 
 def wBlock (b : Block) : W String := do
   let ps ← wMap b.params fun (v, t) => do pure (wRec "bp" [toString v, ← wVTy t])
@@ -528,6 +571,16 @@ def wBlock (b : Block) : W String := do
 def wTarget : Target → String
   | .param i => wRec "t_param" [toString i]
   | .global g => wRec "t_global" [toString g]
+
+def wRootRef : RootRef → String
+  | .local x => wRec "r_local" [toString x]
+  | .global g => wRec "r_global" [toString g]
+  | .param i => wRec "r_param" [toString i]
+
+def wRootInfo (r : RootInfo) : String :=
+  let rows tag rs := wList (rs.toList.map fun (i, roots) => wRec tag [toString i, wList (roots.map wRootRef)])
+  wRec "roots" [rows "vr" r.params, rows "cr" r.contents,
+    wList (r.results.toList.map fun roots => wList (roots.map wRootRef))]
 
 def wSummary : SummaryAnn → String
   | .unknown => wRec "summary_unknown" []
@@ -543,7 +596,7 @@ def wFunc (f : Func) : W String := do
     pure (wRec "slot" [← wTy sl.ty, quote (kindTag sl.kind), toString sl.scope, toString sl.var])
   let scopes := wList (f.scopes.toList.map fun p => wRec "scope" [wOpt p])
   let blocks ← wMap f.blocks.toList wBlock
-  pure (wRec "func" [quote f.name, ps, rs, slots, scopes, blocks, wSummary f.summary, wOpt f.org])
+  pure (wRec "func" [quote f.name, ps, rs, slots, scopes, blocks, wRootInfo f.roots, wSummary f.summary, wOpt f.org])
 
 def wGlobal (g : Global) : W String := do
   let t ← wTy g.ty

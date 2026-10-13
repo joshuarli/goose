@@ -235,6 +235,7 @@ void RejectsCallThatPropagatesATarget() {
     poke.name = "poke";
     poke.params = { ref };
     poke.scopes = { -1 };
+    poke.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
     poke.summary.writes = { CoreTarget { false, 0 } };
     GirBlock pokeBlock;
     pokeBlock.params = { { 0, ref } };
@@ -251,6 +252,7 @@ void RejectsCallThatPropagatesATarget() {
     wrapper.name = "wrapper";
     wrapper.params = { ref };
     wrapper.scopes = { -1 };
+    wrapper.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
     GirBlock wrapperBlock;
     wrapperBlock.params = { { 0, ref } };
     GirInst call;
@@ -265,6 +267,177 @@ void RejectsCallThatPropagatesATarget() {
     assert(Code(m) == "GIR-V050");
     m.funcs[2].summary.writes = { CoreTarget { false, 0 } };
     assert(Code(m) == "");
+}
+
+void RejectsSummaryThatOmitsSliceParameterRebind() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto slice = m.SliceType(CoreMut::Mut, i64);
+    auto refSlice = m.RefType(CoreMut::Mut, slice);
+    GirFunc f;
+    f.name = "set_slice";
+    f.params = { refSlice, slice };
+    f.scopes = { -1 };
+    GirBlock b;
+    b.params = { { 0, refSlice }, { 1, slice } };
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 0;
+    store.b = 1;
+    store.org = 0;
+    b.insts = { store, Ret() };
+    f.blocks = { b };
+    f.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    f.roots.contents = { { 0, {} } };
+    f.summary.writes = { CoreTarget { false, 0 } };
+    m.funcs.push_back(f);
+    assert(Code(m) == "GIR-V050");
+    m.funcs[1].summary.rebinds = { CoreTarget { false, 0 } };
+    assert(Code(m) == "");
+}
+
+void RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ref = m.RefType(CoreMut::Mut, i64);
+    GirGlobal g;
+    g.name = "counter";
+    g.ty = i64;
+    g.kind = CoreVarKind::Var;
+    g.org = 0;
+    g.init.name = "counter";
+    g.init.results = { i64 };
+    g.init.roots.results = { {} };
+    g.init.summary.unknown = true;
+    GirBlock init;
+    init.insts = { Int(m, 0, "0"), Ret({ 0 }) };
+    g.init.blocks = { init };
+    m.globals.push_back(g);
+
+    GirFunc wrap;
+    wrap.name = "wrap";
+    wrap.params = { ref };
+    wrap.scopes = { -1 };
+    GirBlock wb;
+    wb.params = { { 0, ref } };
+    auto call = Def(GirOp::Call, 1);
+    call.idx = 2;
+    call.vals = { 0 };
+    call.org = 0;
+    wb.insts = { call, Ret() };
+    wrap.blocks = { wb };
+    wrap.roots.params = { { 0, { CoreRootRef { CoreRootRef::Global, 0 } } } };
+    wrap.summary.reads = { CoreTarget { false, 0 } };
+
+    GirFunc touch;
+    touch.name = "touch";
+    touch.params = { ref };
+    touch.scopes = { -1 };
+    GirBlock tb;
+    tb.params = { { 0, ref } };
+    auto load = Def(GirOp::Load, 1);
+    load.a = 0;
+    tb.insts = { load, Ret() };
+    touch.blocks = { tb };
+    touch.roots.params = { { 0, { CoreRootRef { CoreRootRef::Global, 0 } } } };
+    touch.summary.reads = { CoreTarget { false, 0 } };
+
+    m.funcs.push_back(wrap);
+    m.funcs.push_back(touch);
+    assert(Code(m) == "GIR-V050");
+    m.funcs[1].summary.reads.push_back(CoreTarget { true, 0 });
+    assert(Code(m) == "");
+}
+
+void RejectsParameterRootUnderapproximationAtCall() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ref = m.RefType(CoreMut::Mut, i64);
+    GirGlobal g;
+    g.name = "counter";
+    g.ty = i64;
+    g.kind = CoreVarKind::Var;
+    g.org = 0;
+    g.init.name = "counter";
+    g.init.results = { i64 };
+    g.init.roots.results = { {} };
+    g.init.summary.unknown = true;
+    GirBlock init;
+    init.insts = { Int(m, 0, "0"), Ret({ 0 }) };
+    g.init.blocks = { init };
+    m.globals.push_back(g);
+
+    auto global = Def(GirOp::Global, 0);
+    global.idx = 0;
+    auto call = Def(GirOp::Call, 1);
+    call.idx = 1;
+    call.vals = { 0 };
+    call.org = 0;
+    Main(m).blocks[0].insts = { global, call, Ret() };
+    Main(m).summary.reads = { CoreTarget { true, 0 } };
+
+    GirFunc touch;
+    touch.name = "touch";
+    touch.params = { ref };
+    touch.scopes = { -1 };
+    GirBlock body;
+    body.params = { { 0, ref } };
+    auto load = Def(GirOp::Load, 1);
+    load.a = 0;
+    body.insts = { load, Ret() };
+    touch.blocks = { body };
+    touch.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    touch.summary.reads = { CoreTarget { false, 0 } };
+    m.funcs.push_back(touch);
+
+    assert(Code(m) == "GIR-V050");
+}
+
+void AcceptsUnreachableAfterANonReturningCall() {
+    auto m = Base();
+    auto call = Def(GirOp::Call, 0);
+    call.idx = 1;
+    call.org = 0;
+    GirInst unreachable;
+    unreachable.op = GirOp::Unreachable;
+    Main(m).blocks[0].insts = { call, unreachable };
+    Main(m).summary.aborts = true;
+
+    GirFunc relay;
+    relay.name = "relay";
+    relay.scopes = { -1 };
+    GirInst relayCall = Def(GirOp::Call, 0);
+    relayCall.idx = 2;
+    relayCall.org = 0;
+    GirInst relayUnreachable;
+    relayUnreachable.op = GirOp::Unreachable;
+    GirBlock rb;
+    rb.insts = { relayCall, relayUnreachable };
+    relay.blocks = { rb };
+    relay.summary.aborts = true;
+
+    GirFunc stop;
+    stop.name = "stop";
+    stop.scopes = { -1 };
+    GirInst exit;
+    exit.op = GirOp::Exit;
+    exit.a = 0;
+    exit.org = 0;
+    GirBlock b;
+    b.insts = { Int(m, 0, "7"), exit };
+    stop.blocks = { b };
+    stop.summary.aborts = true;
+    m.funcs.push_back(relay);
+    m.funcs.push_back(stop);
+    assert(Code(m) == "");
+}
+
+void RejectsUnreachableWithoutANonReturningCall() {
+    auto m = Base();
+    GirInst unreachable;
+    unreachable.op = GirOp::Unreachable;
+    Main(m).blocks[0].insts = { unreachable };
+    assert(Code(m) == "GIR-V020");
 }
 
 void RejectsAbortingOperationWithoutOrigin() {
@@ -443,6 +616,11 @@ int main() {
     RejectsReturnInsideAnEnteredScope();
     RejectsSummaryThatOmitsAWrite();
     RejectsCallThatPropagatesATarget();
+    RejectsSummaryThatOmitsSliceParameterRebind();
+    RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter();
+    RejectsParameterRootUnderapproximationAtCall();
+    AcceptsUnreachableAfterANonReturningCall();
+    RejectsUnreachableWithoutANonReturningCall();
     RejectsAbortingOperationWithoutOrigin();
     LowAccepts();
     RejectsHighOperationInLowModule();

@@ -75,6 +75,7 @@ theorem validate_stages {m : Module} (h : validate m = .ok ()) :
   obtain ⟨_, hc, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, hs, h⟩ := bind_ok h
   exact ⟨ht, hc, hs, h⟩
 
@@ -192,6 +193,7 @@ theorem summary_of {m : Module} {res : Array (List RootRef)} {k : Nat} {f : Func
     EffectsWithin (f.effects m (f.provenance res (m.implTypes[k]?.getD #[]) m.rootCount)) f.summary := by
   unfold checkSummaryOf at h
   rw [hf] at h
+  obtain ⟨_, _, h⟩ := bind_ok h
   exact within_of_closed (asCheck_ok h)
 
 /-- **Acceptance by `validate`.** Every block of every function ends in exactly one

@@ -12,6 +12,7 @@ gir_forms1	test/gir/golden/gir_forms1.core.json	["agree",["done",["exited",3],"s
 gir_forms3	test/gir/golden/gir_forms3.core.json	["agree",["done",["returned"],"4\n100 4\nnot early\nend\n-5 44 true false\ninside block\n"]]	["agree",["done",["returned"],"4\n100 4\nnot early\nend\n-5 44 true false\ninside block\n"]]
 gir_int_overflow_debug	test/gir/golden/gir_int_overflow_debug.core.json	["agree",["done",["returned"],"-9223372036854775808\n"]]	["agree",["done",["aborted","int_overflow",3],""]]
 gir_loop_small	test/gir/golden/gir_loop_small.core.json	["agree",["done",["returned"],"199990000\n"]]	["agree",["done",["returned"],"199990000\n"]]
+gir_never_returns_exit	test/gir/golden/gir_never_returns_exit.core.json	["agree",["done",["exited",7],""]]	["agree",["done",["exited",7],""]]
 gir_loops_scopes	test/gir/golden/gir_loops_scopes.core.json	["agree",["done",["returned"],"14 1260\n0:11\n1:12\n2:13\n3:10\n5 99 1320\n8\n7 1348\n"]]	["agree",["done",["returned"],"14 1260\n0:11\n1:12\n2:13\n3:10\n5 99 1320\n8\n7 1348\n"]]
 gir_nested	test/gir/golden/gir_nested.core.json	["agree",["done",["returned"],"7,\n7,\n|\n5,\n7,\n|\n7,\n107,\n|\n2\n4\n6\n3\n"]]	["agree",["done",["returned"],"7,\n7,\n|\n5,\n7,\n|\n7,\n107,\n|\n2\n4\n6\n3\n"]]
 gir_ord02	test/gir/golden/gir_ord02.core.json	["agree",["done",["returned"],"13\n2\n"]]	["agree",["done",["returned"],"13\n2\n"]]

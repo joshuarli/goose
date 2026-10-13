@@ -73,7 +73,7 @@ private:
         auto add = [&](int v) { out.push_back(v); };
         switch (i.op) {
             case GirOp::Int: case GirOp::Bool: case GirOp::Unit: case GirOp::Slot: case GirOp::Global:
-            case GirOp::Enter: case GirOp::Leave:
+            case GirOp::Enter: case GirOp::Leave: case GirOp::Unreachable:
                 break;
             case GirOp::Abort:
                 for (auto v : i.vals) add(v);
@@ -184,6 +184,7 @@ private:
         for (auto &fn : fns) ValueTypes(fn);
         for (auto &fn : fns) CheckTypes(fn);
         for (auto &fn : fns) CheckCfg(fn);
+        CheckUnreachable();
         if (m.low) {
             for (auto &fn : fns) CheckPlacement(fn);
             for (auto &fn : fns) CheckOrigins(fn);
@@ -402,6 +403,55 @@ private:
                         SymbolFail(fn, cat("summary names global ", t.index, ", outside the global table"));
                 }
         }
+        auto checkRoots = [&](const vector<CoreRootRef> &roots, bool result) {
+            for (auto &r : roots) {
+                if (r.kind == CoreRootRef::Local) {
+                    if (result) SymbolFail(fn, "a result root names a local slot");
+                    if (r.index < 0 || r.index >= (int)f.slots.size())
+                        SymbolFail(fn, cat("root info names slot ", r.index, ", outside the slot table"));
+                } else if (r.kind == CoreRootRef::Global) {
+                    if (r.index < 0 || r.index >= (int)m.globals.size())
+                        SymbolFail(fn, cat("root info names global ", r.index, ", outside the global table"));
+                } else if (r.index < 0 || r.index >= (int)f.params.size()) {
+                    SymbolFail(fn, cat("root info names parameter ", r.index, ", which does not exist"));
+                }
+            }
+        };
+        auto checkRows = [&](const vector<pair<int, vector<CoreRootRef>>> &rows, bool contents) {
+            vector<char> seen(f.params.size(), 0);
+            for (auto &row : rows) {
+                auto i = row.first;
+                if (i < 0 || i >= (int)f.params.size())
+                    SymbolFail(fn, cat("root info names parameter ", i, ", which does not exist"));
+                if (seen[i]) SymbolFail(fn, cat("root info repeats parameter ", i));
+                seen[i] = 1;
+                auto &t = m.Type(f.params[i]);
+                if (contents) {
+                    if (t.kind != CoreType::Ref || m.Type(t.elem).kind != CoreType::Slice)
+                        SymbolFail(fn, cat("content root info annotates parameter ", i,
+                                           ", which is not a reference to a slice"));
+                } else if (t.kind != CoreType::Ref && t.kind != CoreType::Slice) {
+                    SymbolFail(fn, cat("root info annotates non-reference parameter ", i));
+                }
+                checkRoots(row.second, false);
+            }
+        };
+        checkRows(f.roots.params, false);
+        checkRows(f.roots.contents, true);
+        for (auto &row : f.roots.params)
+            for (auto &r : row.second) {
+                if (r.kind == CoreRootRef::Local)
+                    SymbolFail(fn, cat("root info for parameter ", row.first, " names a local slot"));
+                if (r.kind == CoreRootRef::Param && r.index != row.first)
+                    SymbolFail(fn, cat("root info for parameter ", row.first, " names parameter ", r.index));
+            }
+        for (auto &row : f.roots.contents)
+            for (auto &r : row.second)
+                if (r.kind == CoreRootRef::Local)
+                    SymbolFail(fn, cat("content root info for parameter ", row.first, " names a local slot"));
+        if (!f.roots.results.empty() && f.roots.results.size() != f.results.size())
+            SymbolFail(fn, "root info has another number of result rows than the function signature");
+        for (auto &roots : f.roots.results) checkRoots(roots, true);
         // Value ids are dense and each is defined once.
         auto n = NumValues(f);
         fn.nvalues = n;
@@ -634,6 +684,78 @@ private:
                                 " has another type than parameter %", tb.params[k].first));
     }
 
+    // A function can return normally when some CFG path reaches `ret` while
+    // every call on that path is to a function that may return. Start with all
+    // functions as possibly returning and remove only functions whose bodies
+    // prove otherwise. Treat `unreachable` as an unknown completion, so it can
+    // never certify itself or another function as nonreturning.
+    bool MayReturn(const GirFunc &f, const vector<char> &mayReturn) const {
+        vector<char> seen(f.blocks.size(), 0);
+        vector<int> work { 0 };
+        while (!work.empty()) {
+            auto b = work.back();
+            work.pop_back();
+            if (b < 0 || b >= (int)f.blocks.size()) return true;
+            if (seen[b]) continue;
+            seen[b] = 1;
+            bool ended = false;
+            for (auto &i : f.blocks[b].insts) {
+                if (i.op == GirOp::Call && i.idx >= 0 && i.idx < (int)mayReturn.size() && !mayReturn[i.idx]) {
+                    ended = true;
+                    break;
+                }
+                switch (i.op) {
+                    case GirOp::Ret: return true;
+                    case GirOp::Unreachable: return true;
+                    case GirOp::Br:
+                        work.push_back(i.idx);
+                        ended = true;
+                        break;
+                    case GirOp::CondBr:
+                        work.push_back(i.idx);
+                        work.push_back(i.idx2);
+                        ended = true;
+                        break;
+                    case GirOp::Abort: case GirOp::Exit:
+                        ended = true;
+                        break;
+                    default: break;
+                }
+                if (ended) break;
+            }
+            // A malformed or incomplete block cannot prove nonreturning.
+            if (!ended) return true;
+        }
+        return false;
+    }
+
+    vector<char> FunctionsMayReturn() const {
+        vector<char> current(m.funcs.size(), 1);
+        for (size_t round = 0; round <= m.funcs.size(); round++) {
+            vector<char> next(m.funcs.size(), 0);
+            for (size_t k = 0; k < m.funcs.size(); k++) next[k] = MayReturn(m.funcs[k], current);
+            if (next == current) return current;
+            current = std::move(next);
+        }
+        return current;
+    }
+
+    void CheckUnreachable() {
+        auto mayReturn = FunctionsMayReturn();
+        for (auto &fn : fns)
+            for (auto &b : fn.f->blocks)
+                for (size_t k = 0; k < b.insts.size(); k++) {
+                    if (b.insts[k].op != GirOp::Unreachable) continue;
+                    auto valid = k > 0 && b.insts[k - 1].op == GirOp::Call;
+                    if (valid) {
+                        auto callee = b.insts[k - 1].idx;
+                        valid = callee >= 0 && callee < (int)mayReturn.size() && !mayReturn[callee];
+                    }
+                    if (!valid)
+                        CfgFail(fn, "unreachable does not immediately follow a call to a function that cannot return");
+                }
+    }
+
     void CheckCfg(const Fn &fn) {
         auto &f = *fn.f;
         auto n = (int)f.blocks.size();
@@ -812,13 +934,10 @@ private:
 
     // --- GIR-V050 ---------------------------------------------------------
     //
-    // A module has no root annotations, so where a reference may point is
-    // computed from the body. Every reference, slice or view value gets the set
-    // of roots it may have: a slot of the function (a local), a global, or what
-    // the caller passed as a parameter. A slot holds the union of everything
-    // stored in it. The result roots of a function are the roots of what it
-    // returns, in terms of its parameters and globals, and are mapped to the
-    // arguments at each call. All of it is a least fixed point.
+    // Root annotations summarize specialized parameter and result roots from
+    // Core contexts. Provenance and result roots are inferred from the body;
+    // computed roots and call-site arguments must fit the annotations before
+    // those annotations can be used to attribute effects.
 
     using Roots = vector<CoreRootRef>;
 
@@ -841,6 +960,136 @@ private:
         return i >= 0 && i < (int)a.size() ? a[i] : Roots {};
     }
 
+    static void AddRoot(Roots &to, const CoreRootRef &r) {
+        if (find(to.begin(), to.end(), r) == to.end()) to.push_back(r);
+    }
+
+    static void AddRoots(Roots &to, const Roots &from) {
+        for (auto &r : from) AddRoot(to, r);
+    }
+
+    const Roots *ParamRoots(const GirFunc &f, int param) const {
+        for (auto &row : f.roots.params) if (row.first == param) return &row.second;
+        return nullptr;
+    }
+
+    const Roots *ContentRoots(const GirFunc &f, int param) const {
+        for (auto &row : f.roots.contents) if (row.first == param) return &row.second;
+        return nullptr;
+    }
+
+    Roots ExpandParameterRoots(const GirFunc &f, const Roots &roots) const {
+        Roots out;
+        for (auto &root : roots) {
+            if (root.kind != CoreRootRef::Param) {
+                AddRoot(out, root);
+                continue;
+            }
+            auto annotated = ParamRoots(f, root.index);
+            if (!annotated || annotated->empty()) AddRoot(out, root);
+            else AddRoots(out, *annotated);
+        }
+        return out;
+    }
+
+    bool IsRefSlice(GirTypeId ty) const {
+        auto &t = m.Type(ty);
+        return t.kind == CoreType::Ref && m.Type(t.elem).kind == CoreType::Slice;
+    }
+
+    Roots MapArgumentRoots(const Fn &caller, const Prov &p, int value, int calleeParam) const {
+        Roots out;
+        for (auto &r : RootsAt(p.vals, value)) {
+            if (r.kind == CoreRootRef::Global) {
+                AddRoot(out, r);
+            } else if (r.kind == CoreRootRef::Local) {
+                AddRoot(out, { CoreRootRef::Param, calleeParam });
+            } else {
+                auto annotated = ParamRoots(*caller.f, r.index);
+                if (!annotated || annotated->empty()) {
+                    AddRoot(out, { CoreRootRef::Param, calleeParam });
+                } else {
+                    for (auto &root : *annotated) {
+                        if (root.kind == CoreRootRef::Global) AddRoot(out, root);
+                        else AddRoot(out, { CoreRootRef::Param, calleeParam });
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    Roots ArgumentContents(const Fn &caller, const Prov &p, int value) const {
+        Roots out;
+        for (auto &r : RootsAt(p.vals, value)) {
+            if (r.kind == CoreRootRef::Local) {
+                AddRoots(out, RootsAt(p.slots, r.index));
+            } else if (r.kind == CoreRootRef::Global) {
+                AddRoot(out, r);
+            } else if (r.index >= 0 && r.index < (int)caller.f->params.size() &&
+                       IsRefSlice(caller.f->params[r.index])) {
+                if (auto contents = ContentRoots(*caller.f, r.index)) AddRoots(out, *contents);
+            }
+        }
+        return out;
+    }
+
+    Roots MapDeclaredContents(const Prov &p, const vector<int> &args, const Roots &declared) const {
+        Roots out;
+        for (auto &r : declared) {
+            if (r.kind == CoreRootRef::Global) {
+                AddRoot(out, r);
+            } else if (r.kind == CoreRootRef::Param && r.index >= 0 && r.index < (int)args.size()) {
+                AddRoots(out, RootsAt(p.vals, args[r.index]));
+            }
+        }
+        return out;
+    }
+
+    void CheckRootAnnotations(const vector<Roots> &res) {
+        for (size_t k = 0; k < m.funcs.size(); k++) {
+            auto &f = m.funcs[k];
+            auto name = cat("function ", f.name);
+            for (size_t r = 0; r < f.results.size(); r++) {
+                auto declared = r < f.roots.results.size() ? &f.roots.results[r] : nullptr;
+                if (r == 0) for (auto &root : RootsAt(res, (int)k))
+                    if (!declared || find(declared->begin(), declared->end(), root) == declared->end())
+                        Fail("GIR-V050", cat(name, " result ", r, " root info omits a root returned by the body"));
+            }
+        }
+
+        for (size_t callerIndex = 0; callerIndex < m.funcs.size(); callerIndex++) {
+            auto &caller = fns[callerIndex];
+            auto &f = *caller.f;
+            auto p = Provenance(res, caller);
+            for (auto &block : f.blocks)
+                for (auto &i : block.insts) {
+                    if (i.op != GirOp::Call) continue;
+                    auto &callee = m.funcs[i.idx];
+                    auto label = cat("function ", callee.name);
+                    for (size_t j = 0; j < callee.params.size(); j++) {
+                        if (GirRefLike(m, callee.params[j])) {
+                            auto expected = MapArgumentRoots(caller, p, i.vals[j], (int)j);
+                            auto declared = ParamRoots(callee, (int)j);
+                            for (auto &root : expected)
+                                if (!declared || find(declared->begin(), declared->end(), root) == declared->end())
+                                    Fail("GIR-V050", cat(label, " parameter ", j,
+                                        " root info omits a root passed at a call site"));
+                        }
+                        if (IsRefSlice(callee.params[j])) {
+                            auto actual = ArgumentContents(caller, p, i.vals[j]);
+                            auto declared = ContentRoots(callee, (int)j);
+                            auto mapped = declared ? MapDeclaredContents(p, i.vals, *declared) : Roots {};
+                            for (auto &root : actual)
+                                if (find(mapped.begin(), mapped.end(), root) == mapped.end())
+                                    Fail("GIR-V050", cat(label, " content root info for parameter ", j,
+                                        " omits a root passed at a call site"));
+                        }
+                    }
+                }
+        }
+    }
+
     bool ValRefLike(const Fn &fn, int v) {
         if (v < 0 || v >= (int)fn.vt.size() || fn.vt[v] < 0) return false;
         auto k = m.Type(fn.vt[v]).kind;
@@ -858,10 +1107,22 @@ private:
             case GirOp::Load: {
                 Roots out;
                 if (!ValRefLike(fn, i.res)) return out;
-                for (auto &r : RootsAt(p.vals, i.a))
-                    if (r.kind == CoreRootRef::Local)
+                auto resultIsSlice = m.Type(fn.vt[i.res]).kind == CoreType::Slice;
+                for (auto &r : RootsAt(p.vals, i.a)) {
+                    if (r.kind == CoreRootRef::Local) {
                         for (auto &x : RootsAt(p.slots, r.index))
                             if (find(out.begin(), out.end(), x) == out.end()) out.push_back(x);
+                    } else if (resultIsSlice && r.kind == CoreRootRef::Param &&
+                               r.index < (int)fn.f->params.size()) {
+                        auto param = fn.f->params[r.index];
+                        auto &pt = m.Type(param);
+                        if (pt.kind == CoreType::Ref && m.Type(pt.elem).kind == CoreType::Slice)
+                            for (auto &row : fn.f->roots.contents)
+                                if (row.first == r.index)
+                                    for (auto &x : row.second)
+                                        if (find(out.begin(), out.end(), x) == out.end()) out.push_back(x);
+                    }
+                }
                 return out;
             }
             case GirOp::Call: {
@@ -939,11 +1200,9 @@ private:
         vector<Roots> res(m.funcs.size());
         for (auto changed = true; changed;) {
             changed = false;
-            vector<Roots> next;
+            auto next = res;
             for (size_t k = 0; k < m.funcs.size(); k++)
-                next.push_back(ReturnedRoots(fns[k], Provenance(res, fns[k])));
-            for (size_t k = 0; k < next.size(); k++)
-                if (next[k].size() != res[k].size()) changed = true;
+                changed |= AddTo(next, (int)k, ReturnedRoots(fns[k], Provenance(res, fns[k])));
             res = std::move(next);
         }
         return res;
@@ -981,7 +1240,18 @@ private:
                         auto map = [&](const vector<CoreTarget> &from, set<CoreTarget> &to) {
                             for (auto &t : from) {
                                 if (t.global) to.insert(t);
-                                else if (t.index < (int)i.vals.size()) AddTargets(to, RootsAt(p.vals, i.vals[t.index]));
+                                else if (t.index < (int)i.vals.size()) {
+                    AddTargets(to, ExpandParameterRoots(f, RootsAt(p.vals, i.vals[t.index])));
+                                    if (t.index < (int)callee.params.size()) {
+                                        auto &pt = m.Type(callee.params[t.index]);
+                                        if (pt.kind == CoreType::Ref || pt.kind == CoreType::Slice)
+                                            for (auto &row : callee.roots.params)
+                                                if (row.first == t.index)
+                                                    for (auto &r : row.second)
+                                                        if (r.kind == CoreRootRef::Global)
+                                                            to.insert({ true, r.index });
+                                    }
+                                }
                             }
                         };
                         map(callee.summary.reads, e.reads);
@@ -994,10 +1264,14 @@ private:
                     case GirOp::Store: {
                         auto rs = RootsAt(p.vals, i.a);
                         AddTargets(e.writes, rs);
-                        // Storing through the slot of a reference parameter
-                        // rebinds the parameter.
+                        // A store through a reference-to-slice parameter replaces
+                        // the caller's slice binding.
                         for (auto &r : rs)
-                            if (r.kind == CoreRootRef::Local && r.index < (int)f.slots.size()) {
+                            if (r.kind == CoreRootRef::Param && r.index < (int)f.params.size()) {
+                                auto &pt = m.Type(f.params[r.index]);
+                                if (pt.kind == CoreType::Ref && m.Type(pt.elem).kind == CoreType::Slice)
+                                    e.rebinds.insert({ false, r.index });
+                            } else if (r.kind == CoreRootRef::Local && r.index < (int)f.slots.size()) {
                                 auto &sl = f.slots[r.index];
                                 if (GirRefLike(m, sl.ty) && sl.var < (int)f.params.size())
                                     e.rebinds.insert({ false, sl.var });
@@ -1015,6 +1289,7 @@ private:
 
     void CheckEffects() {
         auto res = ResultRoots();
+        CheckRootAnnotations(res);
         for (size_t k = 0; k < m.funcs.size(); k++) {
             auto &f = m.funcs[k];
             if (f.summary.unknown) continue;
