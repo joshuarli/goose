@@ -455,6 +455,15 @@ private:
                     case GirAbortKind::IndexOob:
                         L("gs_idxfail(", V(i.vals[0]), ", ", V(i.vals[1]), ", ", Where(i.org), ");");
                         break;
+                    case GirAbortKind::PopEmpty: L("gs_abort(GS_E_POP, ", Where(i.org), ");"); break;
+                    case GirAbortKind::PopNRange: L("gs_abort(GS_E_POPN, ", Where(i.org), ");"); break;
+                    case GirAbortKind::ResizeNegative:
+                        L("gs_abort(GS_E_RESIZENEG, ", Where(i.org), ");");
+                        break;
+                    case GirAbortKind::ResizeFill:
+                        L("gs_abort(GS_E_RESIZEFILL, ", Where(i.org), ");");
+                        break;
+                    case GirAbortKind::Capacity: L("gs_abort(GS_E_CAPACITY, ", Where(i.org), ");"); break;
                     case GirAbortKind::SliceOob: L("gs_abort(GS_E_SLICE, ", Where(i.org), ");"); break;
                     case GirAbortKind::Assert: L("gs_abort(GS_E_ASSERT, ", Where(i.org), ");"); break;
                     case GirAbortKind::UserAbort:

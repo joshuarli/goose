@@ -1105,6 +1105,268 @@ void CoreShrinkOperationsLowerToVerifiedGir() {
     for (auto tag : { "growshrink", "i_pop", "x_pop_n", "x_resize", "x_clear", "x_replace" })
         assert(json.find(tag) != string::npos);
     assert(json.find("[\"summary\",[],[],[],[],[],1,0]") != string::npos);
+    auto clearAt = -1, replaceAt = -1, replacementAt = -1;
+    for (auto &block : high.funcs[0].blocks)
+        for (size_t k = 0; k < block.insts.size(); k++) {
+            auto &inst = block.insts[k];
+            if (inst.op == GirOp::Clear) clearAt = (int)k;
+            if (inst.op == GirOp::Arr) replacementAt = (int)k;
+            if (inst.op == GirOp::Replace) replaceAt = (int)k;
+        }
+    assert(clearAt >= 0 && replacementAt > clearAt && replaceAt > replacementAt);
+    auto low = GirToLow(high).Lower();
+    if (auto violation = GirVerifier(low).Verify())
+        fprintf(stderr, "%s: %s\n", violation->code.c_str(), violation->message.c_str());
+    assert(!GirVerifier(low).Verify());
+    auto popEmpty = 0, popNRange = 0, resizeNegative = 0, resizeFill = 0;
+    for (auto &type : low.types)
+        assert(type.kind != CoreType::GrowShrink && type.kind != CoreType::Limited);
+    for (auto &function : low.funcs)
+        for (auto &block : function.blocks)
+            for (auto &inst : block.insts)
+                if (inst.op == GirOp::Abort) {
+                    popEmpty += inst.abort == GirAbortKind::PopEmpty;
+                    popNRange += inst.abort == GirAbortKind::PopNRange;
+                    resizeNegative += inst.abort == GirAbortKind::ResizeNegative;
+                    resizeFill += inst.abort == GirAbortKind::ResizeFill;
+                }
+    assert(popEmpty == 1 && popNRange == 1 && resizeNegative == 1 && resizeFill == 0);
+}
+
+GirModule ShrinkResizeModule(CoreType::Kind ownerKind, bool fillCall) {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = ownerKind;
+    owner.elem = i64;
+    if (ownerKind == CoreType::Limited) owner.count = 2;
+    auto ownerTy = m.Intern(owner);
+    auto ref = m.RefType(CoreMut::Mut, ownerTy);
+
+    GirFunc resize;
+    resize.name = "resize";
+    resize.params = { ref, i64 };
+    resize.scopes = { -1 };
+    resize.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, ref }, { 1, i64 } };
+    int fill = -1;
+    if (fillCall) {
+        fill = 2;
+        auto call = Def(GirOp::Call, fill);
+        call.idx = 2;
+        call.org = 0;
+        body.insts.push_back(call);
+    }
+    GirInst resizeInst;
+    resizeInst.op = GirOp::Resize;
+    resizeInst.a = 0;
+    resizeInst.b = 1;
+    if (fillCall) resizeInst.vals = { fill };
+    resizeInst.org = 0;
+    body.insts.push_back(resizeInst);
+    body.insts.push_back(Ret());
+    resize.blocks = { body };
+    m.funcs.push_back(std::move(resize));
+
+    if (fillCall) {
+        GirFunc fillFunction;
+        fillFunction.name = "fill";
+        fillFunction.results = { i64 };
+        fillFunction.scopes = { -1 };
+        fillFunction.summary.unknown = true;
+        GirBlock fillBody;
+        auto value = Int(m, 0, "7");
+        fillBody.insts = { value, Ret({ 0 }) };
+        fillFunction.blocks = { fillBody };
+        m.funcs.push_back(std::move(fillFunction));
+    }
+    return m;
+}
+
+vector<GirAbortKind> BranchFailureKinds(const GirFunc &function) {
+    vector<GirAbortKind> out;
+    for (auto &block : function.blocks) {
+        if (block.insts.empty() || block.insts.back().op != GirOp::CondBr) continue;
+        auto fail = block.insts.back().idx2;
+        if (fail < 0 || fail >= (int)function.blocks.size()) continue;
+        auto &target = function.blocks[fail];
+        if (!target.insts.empty() && target.insts.back().op == GirOp::Abort)
+            out.push_back(target.insts.back().abort);
+    }
+    return out;
+}
+
+void ResizeChecksFollowNegativeSizeAndEvaluateFillFirst() {
+    auto limited = ShrinkResizeModule(CoreType::Limited, true);
+    assert(Code(limited) == "");
+    auto &high = limited.funcs[1].blocks[0].insts;
+    auto callAt = -1, resizeAt = -1;
+    for (size_t k = 0; k < high.size(); k++) {
+        if (high[k].op == GirOp::Call) callAt = (int)k;
+        if (high[k].op == GirOp::Resize) resizeAt = (int)k;
+    }
+    assert(callAt >= 0 && resizeAt > callAt);
+
+    auto low = GirToLow(limited).Lower();
+    assert(!GirVerifier(low).Verify());
+    auto checks = BranchFailureKinds(low.funcs[1]);
+    assert(checks.size() >= 2 && checks[0] == GirAbortKind::ResizeNegative &&
+           checks[1] == GirAbortKind::Capacity);
+    pair<int, int> callPosition { -1, -1 }, firstCheckPosition { -1, -1 };
+    for (size_t b = 0; b < low.funcs[1].blocks.size(); b++)
+        for (size_t k = 0; k < low.funcs[1].blocks[b].insts.size(); k++) {
+            auto &inst = low.funcs[1].blocks[b].insts[k];
+            if (inst.op == GirOp::Call) callPosition = { (int)b, (int)k };
+            if (inst.op == GirOp::CondBr && firstCheckPosition.first < 0)
+                firstCheckPosition = { (int)b, (int)k };
+        }
+    assert(callPosition.first >= 0 && firstCheckPosition.first >= callPosition.first &&
+           (firstCheckPosition.first != callPosition.first || firstCheckPosition.second > callPosition.second));
+
+    auto noFill = ShrinkResizeModule(CoreType::GrowShrink, false);
+    assert(Code(noFill) == "");
+    auto noFillLow = GirToLow(noFill).Lower();
+    assert(!GirVerifier(noFillLow).Verify());
+    auto noFillChecks = BranchFailureKinds(noFillLow.funcs[1]);
+    assert(noFillChecks.size() >= 2 && noFillChecks[0] == GirAbortKind::ResizeNegative &&
+           noFillChecks[1] == GirAbortKind::ResizeFill);
+}
+
+GirModule LimitedAppendModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::Limited;
+    owner.elem = i64;
+    owner.count = 1;
+    auto ownerTy = m.Intern(owner);
+    auto ref = m.RefType(CoreMut::Mut, ownerTy);
+    auto view = m.SliceType(CoreMut::Mut, i64);
+    GirFunc append;
+    append.name = "append";
+    append.params = { ref, view };
+    append.scopes = { -1 };
+    append.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, ref }, { 1, view } };
+    auto viewValue = Def(GirOp::SliceView, 2);
+    viewValue.a = 1;
+    GirInst instruction;
+    instruction.op = GirOp::Append;
+    instruction.a = 0;
+    instruction.b = 2;
+    instruction.org = 0;
+    body.insts = { viewValue, instruction, Ret() };
+    append.blocks = { body };
+    m.funcs.push_back(std::move(append));
+    return m;
+}
+
+void LimitedAppendChecksCapacityBeforeWriting() {
+    auto high = LimitedAppendModule();
+    auto highCode = Code(high);
+    if (auto violation = GirVerifier(high).Verify())
+        fprintf(stderr, "limited append GIR: %s: %s\n", violation->code.c_str(), violation->message.c_str());
+    assert(highCode == "");
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+    bool checkedBeforeWrite = false;
+    for (auto &block : low.funcs[1].blocks) {
+        if (block.insts.empty() || block.insts.back().op != GirOp::CondBr) continue;
+        auto &branch = block.insts.back();
+        if (branch.idx2 < 0 || branch.idx2 >= (int)low.funcs[1].blocks.size()) continue;
+        auto &fail = low.funcs[1].blocks[branch.idx2];
+        if (fail.insts.empty() || fail.insts.back().op != GirOp::Abort ||
+            fail.insts.back().abort != GirAbortKind::Capacity) continue;
+        auto &success = low.funcs[1].blocks[branch.idx];
+        assert(find_if(block.insts.begin(), block.insts.end(),
+                       [](auto &i) { return i.op == GirOp::BytesMove; }) == block.insts.end());
+        checkedBeforeWrite = find_if(success.insts.begin(), success.insts.end(),
+                                     [](auto &i) { return i.op == GirOp::BytesMove; }) !=
+                             success.insts.end();
+    }
+    assert(checkedBeforeWrite);
+}
+
+void AggregatePopCopiesBeforeReleasingItsStack() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType record;
+    record.kind = CoreType::Struct;
+    record.structid = 0;
+    auto recordTy = m.Intern(record);
+    m.structs = { CoreStruct { 8, { CoreField { i64, CoreVarKind::Var, CoreMut::Mut, 0 } } } };
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = recordTy;
+    auto ownerTy = m.Intern(owner);
+    auto ref = m.RefType(CoreMut::Mut, ownerTy);
+    GirFunc pop;
+    pop.name = "pop_record";
+    pop.params = { ref };
+    pop.scopes = { -1 };
+    pop.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, ref } };
+    auto operation = Def(GirOp::Pop, 1);
+    operation.a = 0;
+    operation.org = 0;
+    body.insts = { operation, Ret() };
+    pop.blocks = { body };
+    m.funcs.push_back(std::move(pop));
+    assert(Code(m) == "");
+
+    auto low = GirToLow(m).Lower();
+    assert(!GirVerifier(low).Verify());
+    bool copiedFirst = false;
+    for (auto &block : low.funcs[1].blocks) {
+        auto copy = find_if(block.insts.begin(), block.insts.end(),
+                            [](auto &i) { return i.op == GirOp::BytesCopy; });
+        auto release = find_if(block.insts.begin(), block.insts.end(),
+                               [](auto &i) { return i.op == GirOp::StackRelease; });
+        if (copy != block.insts.end() && release != block.insts.end())
+            copiedFirst = copy < release;
+    }
+    assert(copiedFirst);
+}
+
+void LimitedClearStoresItsLengthInByteStorage() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType limited;
+    limited.kind = CoreType::Limited;
+    limited.elem = i64;
+    limited.count = 256;
+    auto owner = m.Intern(limited);
+    auto ref = m.RefType(CoreMut::Mut, owner);
+    GirFunc function;
+    function.name = "clear_limited";
+    function.params = { ref };
+    function.scopes = { -1 };
+    function.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, ref } };
+    GirInst clear;
+    clear.op = GirOp::Clear;
+    clear.a = 0;
+    clear.org = 0;
+    body.insts = { clear, Ret() };
+    function.blocks = { body };
+    m.funcs.push_back(std::move(function));
+
+    assert(Code(m) == "");
+    auto low = GirToLow(m).Lower();
+    assert(!GirVerifier(low).Verify());
+    auto byteCopies = 0;
+    for (auto &block : low.funcs[1].blocks)
+        for (auto &inst : block.insts)
+            byteCopies += inst.op == GirOp::BytesCopy;
+    assert(byteCopies == 1);
 }
 
 GirModule LetOwnerPush(CoreProfile profile, CoreType::Kind ownerKind) {
@@ -2358,6 +2620,10 @@ int main() {
     CoreShrinkPushAndSummaryCarryOriginsAndShrinks();
     CoreShrinkOperationTagsAndPlaceTypingAreCanonical();
     CoreShrinkOperationsLowerToVerifiedGir();
+    ResizeChecksFollowNegativeSizeAndEvaluateFillFirst();
+    LimitedAppendChecksCapacityBeforeWriting();
+    AggregatePopCopiesBeforeReleasingItsStack();
+    LimitedClearStoresItsLengthInByteStorage();
     PilotLetGrowPushUsesContentsPermission();
     LetLimitedOwnerSupportsDirectPushPopAndClear();
     RejectsPassingALetLimitedOwnerAsAMutableReference();

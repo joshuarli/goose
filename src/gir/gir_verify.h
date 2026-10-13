@@ -396,6 +396,8 @@ private:
                             }
                             break;
                         case GirOp::StackMark: markof[i.res] = at(stack, i.a); break;
+                        case GirOp::HdrBase: markof[i.res] = at(header, i.a); break;
+                        case GirOp::PtrOffset: markof[i.res] = at(markof, i.a); break;
                         case GirOp::FrameAddr:
                             if (i.idx >= 0 && i.idx < (int)f.members.size() &&
                                 f.members[i.idx].kind == GirMember::Header)
@@ -477,15 +479,12 @@ private:
                     bad(cat("two resizables live on data stack ", x.stack));
             }
         CheckStackDiscipline(fn);
-        // Which stack each address value is: one the function owns, or not.
-        // A watermark is restored only on a stack the function owns.
-        vector<char> owned(fn.vt.size(), 0);
+        // A caller may pass an owner header and its stack to a callee. The
+        // corresponding base is a valid restore point for that same stack.
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
-                if (i.op == GirOp::StackAt && i.res >= 0 && i.res < (int)owned.size())
-                    owned[i.res] = i.idx >= 0 && i.idx < f.stacks;
-                if (i.op == GirOp::StackRelease && !(i.a >= 0 && i.a < (int)owned.size() && owned[i.a]))
-                    bad("a watermark restored on a stack the caller owns");
+                if (i.op == GirOp::StackAt && (i.idx < 0 || i.idx >= f.stacks))
+                    bad("a stack address is outside the function's owned stacks");
                 if (i.op == GirOp::StackBump && i.idx >= 0 && i.b < 0 && i.idx == 0)
                     bad("a stack bumped by nothing");
             }

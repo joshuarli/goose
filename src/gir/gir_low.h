@@ -4,13 +4,14 @@
 //
 //   * A scalar slot (integer or boolean) is a scalar member of the frame; a
 //     fixed array slot is a block of bytes in the frame.
-//   * A grow-only slot is a header {base, len} in the frame plus its elements
-//     on a data stack of its own, numbered within the function from a hidden
-//     base argument (stack `sp + k` for the function's k-th resizable).
-//   * A reference to a resizable is two values, the header's address and the
-//     stack; any other reference is an address. A slice, and a sampled view,
-//     are a data address and a length. A slot that holds a reference or a
-//     slice is one member per value.
+//   * A grow/growshrink slot is a header {base, len} in the frame plus its
+//     elements on a data stack of its own, numbered within the function from
+//     a hidden base argument (stack `sp + k` for the function's k-th owner).
+//   * A reference to a resizable owner is two values, the header's address and
+//     the stack; a limited owner is an address of its inline length and slots.
+//     Any other reference is an address. A slice, and a sampled view, are a
+//     data address and a length. A slot that holds a reference or slice is one
+//     member per value.
 //   * A function's first parameter is the base of its data stacks. A result
 //     that is an array or more than one value is written through an address
 //     the caller passes after it, into a temporary of the caller's frame.
@@ -97,7 +98,7 @@ private:
             case CoreType::Struct: return { Ptr() };
             case CoreType::Ref: {
                 auto k = HT(c.elem).kind;
-                if (k == CoreType::Grow) return { Ptr(), Ptr() };
+                if (IsResizableKind(k)) return { Ptr(), Ptr() };
                 if (k == CoreType::Slice) return { Ptr() };  // Address of the two-word slice slot.
                 if (k == CoreType::Ref) return {};           // A slot of one.
                 return { Ptr() };
@@ -113,6 +114,14 @@ private:
             case CoreType::Int: return CoreIntBits(c.ity) / 8;
             case CoreType::Bool: return 1;
             case CoreType::Arr: return c.count * Size(c.elem);
+            case CoreType::Limited: {
+                auto prefix = IntBits(LimitedLengthStorage(c.count)) / 8;
+                auto element = Size(c.elem);
+                if (element <= 0 || c.count > (INT64_MAX - prefix) / element)
+                    throw GirLowerUnsupported { "limited-capacity", hf ? hf->name : "global",
+                                                hf ? hf->org : -1 };
+                return prefix + c.count * element;
+            }
             case CoreType::Slice: return 16;
             case CoreType::Struct: return h.structs.at(c.structid).size;
             default: return 8;
@@ -151,11 +160,11 @@ private:
         out.module = g.module;
         auto k = HT(g.ty).kind;
         out.ty = -1;
-        if (k == CoreType::Arr || k == CoreType::Struct) {
+        if (k == CoreType::Arr || k == CoreType::Struct || k == CoreType::Limited) {
             out.kind = GirMember::Bytes;
             out.size = Size(g.ty);
             gstack.push_back(-1);
-        } else if (k == CoreType::Grow) {
+        } else if (IsResizableKind(k)) {
             out.kind = GirMember::Header;
             gstack.push_back(l.globalstacks++);
         } else {
@@ -443,7 +452,11 @@ private:
 
     bool IsGrowRef(GirTypeId t) {
         auto &c = HT(t);
-        return c.kind == CoreType::Ref && HT(c.elem).kind == CoreType::Grow;
+        return c.kind == CoreType::Ref && IsResizableKind(HT(c.elem).kind);
+    }
+
+    bool IsResizableKind(CoreType::Kind kind) const {
+        return kind == CoreType::Grow || kind == CoreType::GrowShrink;
     }
 
     // Places of the slots.
@@ -472,7 +485,7 @@ private:
                 m.scope = sl.scope;
                 m.name = name;
                 p.members = { Member(std::move(m)) };
-            } else if (c.kind == CoreType::Grow) {
+            } else if (IsResizableKind(c.kind)) {
                 p.kind = Place::Header;
                 p.stack = stacks++;
                 GirMember m;
@@ -482,6 +495,14 @@ private:
                 m.name = name;
                 p.members = { Member(std::move(m)) };
                 scopeheaders[sl.scope].push_back((int)s);
+            } else if (c.kind == CoreType::Limited) {
+                p.kind = Place::Bytes;
+                GirMember m;
+                m.kind = GirMember::Bytes;
+                m.size = Size(sl.ty);
+                m.scope = sl.scope;
+                m.name = name;
+                p.members = { Member(std::move(m)) };
             } else if (c.kind == CoreType::Int || c.kind == CoreType::Bool) {
                 p.kind = Place::Scalar;
                 GirMember m;
@@ -725,11 +746,14 @@ private:
             case GirOp::ArrayLen: {
                 auto &pt = HT(HT(hvt[i.a]).elem);
                 if (pt.kind == CoreType::Arr) Define(i, { ConstI(I64(), pt.count) });
+                else if (pt.kind == CoreType::Limited)
+                    Define(i, { LimitedLength(shape[i.a].w[0], HT(hvt[i.a]).elem) });
                 else Define(i, { Simple(GirOp::HdrLen, I64(), shape[i.a].w[0]) });
                 return;
             }
             case GirOp::Index: return LowerIndex(i);
             case GirOp::Push: return LowerPush(i);
+            case GirOp::Pop: return LowerPop(i);
             case GirOp::Call: return LowerCall(i);
             case GirOp::Arr: return LowerArr(i);
             case GirOp::Struct: return LowerStruct(i);
@@ -737,6 +761,10 @@ private:
             case GirOp::Init: return LowerInit(i);
             case GirOp::Store: return LowerStore(i);
             case GirOp::Append: return LowerAppend(i);
+            case GirOp::PopN: return LowerPopN(i);
+            case GirOp::Resize: return LowerResize(i);
+            case GirOp::Clear: return LowerClear(i);
+            case GirOp::Replace: return LowerReplace(i);
             case GirOp::Enter: return LowerEnter(i);
             case GirOp::Leave: return LowerLeave(i);
             case GirOp::Print: return LowerPrint(i);
@@ -851,9 +879,12 @@ private:
     }
 
     void LowerSnap(const GirInst &i) {
-        auto &pt = HT(HT(hvt[i.a]).elem);
+        auto owner = HT(hvt[i.a]).elem;
+        auto &pt = HT(owner);
         auto r = shape[i.a].w[0];
         if (pt.kind == CoreType::Arr) Define(i, { r, ConstI(I64(), pt.count) });
+        else if (pt.kind == CoreType::Limited)
+            Define(i, { LimitedData(r, owner), LimitedLength(r, owner) });
         else Define(i, { Simple(GirOp::HdrBase, Ptr(), r), Simple(GirOp::HdrLen, I64(), r) });
     }
 
@@ -886,6 +917,48 @@ private:
         Define(i, { PtrAt(base, idx, esz) });
     }
 
+    GirTypeId LimitedLengthType(GirTypeId owner) {
+        auto storage = LimitedLengthStorage(HT(owner).count);
+        CoreIntTy kind;
+        switch (storage) {
+            case IS_U8: kind = CoreIntTy::U8; break;
+            case IS_U16: kind = CoreIntTy::U16; break;
+            case IS_U32: kind = CoreIntTy::U32; break;
+            case IS_U64: kind = CoreIntTy::U64; break;
+            default: throw CompileError { "internal compiler error: limited length is not unsigned" };
+        }
+        return l.IntType(kind);
+    }
+
+    int64_t LimitedPrefix(GirTypeId owner) {
+        return IntBits(LimitedLengthStorage(HT(owner).count)) / 8;
+    }
+
+    int LimitedData(int address, GirTypeId owner) {
+        return PtrAt(address, ConstI(I64(), LimitedPrefix(owner)), 1);
+    }
+
+    int LimitedLength(int address, GirTypeId owner) {
+        auto ty = LimitedLengthType(owner);
+        auto value = LoadScalarBytes(ty, address);
+        return Conv(value, ty, I64(), CoreConvKind::Widen);
+    }
+
+    void SetLimitedLength(int address, GirTypeId owner, int length) {
+        auto ty = LimitedLengthType(owner);
+        auto value = Conv(length, I64(), ty, CoreConvKind::AsUnchecked);
+        StoreScalarBytes(ty, address, value);
+    }
+
+    void InitLimited(int address, GirTypeId owner, const Shape &run) {
+        SetLimitedLength(address, owner, ConstI(I64(), (int64_t)run.elems.size()));
+        auto elem = HT(owner).elem;
+        auto esz = Size(elem);
+        auto data = LimitedData(address, owner);
+        for (size_t i = 0; i < run.elems.size(); i++)
+            StoreAt(elem, PtrAt(data, ConstI(I64(), (int64_t)i), esz), shape[run.elems[i]].w);
+    }
+
     // Stores the value `w` of high type `t` at `p`.
     void StoreAt(GirTypeId t, int p, const vector<int> &w) {
         auto &c = HT(t);
@@ -895,7 +968,44 @@ private:
             PStoreV(I64(), WordAt(p, 1), w[1]);
         }
         else if (c.kind == CoreType::Struct) Copy(p, w[0], Size(t));
+        else if (h.profile == CoreProfile::Shrink)
+            StoreScalarBytes(Words(t)[0], p, w[0]);
         else PStoreV(Words(t)[0], p, w[0]);
+    }
+
+    GirTypeId OwnerType(int reference) const { return HT(hvt[reference]).elem; }
+
+    GirTypeId OwnerElement(GirTypeId owner) const { return HT(owner).elem; }
+
+    int OwnerLength(int reference, GirTypeId owner) {
+        auto address = shape[reference].w[0];
+        if (HT(owner).kind == CoreType::Limited) return LimitedLength(address, owner);
+        return Simple(GirOp::HdrLen, I64(), address);
+    }
+
+    int OwnerData(int reference, GirTypeId owner) {
+        auto address = shape[reference].w[0];
+        if (HT(owner).kind == CoreType::Limited) return LimitedData(address, owner);
+        return Simple(GirOp::HdrBase, Ptr(), address);
+    }
+
+    void SetOwnerLength(int reference, GirTypeId owner, int length) {
+        auto address = shape[reference].w[0];
+        if (HT(owner).kind == CoreType::Limited) SetLimitedLength(address, owner, length);
+        else SimpleE(GirOp::HdrSetLen, address, length);
+    }
+
+    void ReleaseOwnerTo(int reference, int length, int top) {
+        auto &words = shape[reference].w;
+        SimpleE(GirOp::StackRelease, words[1], top);
+        SimpleE(GirOp::HdrSetLen, words[0], length);
+    }
+
+    int ScalarValueAddress(GirTypeId type, int value) {
+        auto tmp = FrameTemp(Size(type));
+        auto address = Simple(GirOp::FrameAddr, Ptr(), -1, -1, tmp);
+        StoreScalarBytes(Words(type)[0], address, value);
+        return address;
     }
 
     int LoadScalarBytes(GirTypeId ty, int src) {
@@ -924,41 +1034,242 @@ private:
 
     void LowerPush(const GirInst &i) {
         auto &rs = shape[i.a];
-        auto esz = Size(HT(HT(hvt[i.a]).elem).elem);
-        auto elemty = HT(HT(hvt[i.a]).elem).elem;
-        auto hdr = rs.w[0], stk = rs.w[1];
-        auto base = Simple(GirOp::HdrBase, Ptr(), hdr);
-        auto len = Simple(GirOp::HdrLen, I64(), hdr);
+        auto owner = OwnerType(i.a);
+        auto elemty = OwnerElement(owner);
+        auto esz = Size(elemty);
+        auto address = rs.w[0];
+        auto len = OwnerLength(i.a, owner);
+        auto limited = HT(owner).kind == CoreType::Limited;
+        if (limited) {
+            auto fail = AbortBlock(GirAbortKind::Capacity, {}, i.org);
+            CheckThen(CmpI(CoreCmpOp::Lt, I64(), len, ConstI(I64(), HT(owner).count)), fail);
+        }
+        auto base = OwnerData(i.a, owner);
         auto at = PtrAt(base, len, esz);
         StoreAt(elemty, at, shape[i.b].w);
-        SimpleE(GirOp::StackBump, stk, -1, (int)esz);
-        SimpleE(GirOp::HdrSetLen, hdr, BinW(CoreBinOp::Add, I64(), len, ConstI(I64(), 1)));
+        auto newLen = BinW(CoreBinOp::Add, I64(), len, ConstI(I64(), 1), true, i.org);
+        if (limited) SetLimitedLength(address, owner, newLen);
+        else {
+            SimpleE(GirOp::StackBump, rs.w[1], -1, (int)esz);
+            SimpleE(GirOp::HdrSetLen, address, newLen);
+        }
         Define(i, { at });
     }
 
     void LowerAppend(const GirInst &i) {
         auto &rs = shape[i.a];
-        auto elemty = HT(HT(hvt[i.a]).elem).elem;
+        auto owner = OwnerType(i.a);
+        auto elemty = OwnerElement(owner);
         auto esz = Size(elemty);
-        auto hdr = rs.w[0], stk = rs.w[1];
         auto src = shape[i.b].w[0], n = shape[i.b].w[1];
-        auto base = Simple(GirOp::HdrBase, Ptr(), hdr);
-        auto len = Simple(GirOp::HdrLen, I64(), hdr);
+        auto address = rs.w[0];
+        auto len = OwnerLength(i.a, owner);
+        auto limited = HT(owner).kind == CoreType::Limited;
+        if (limited) {
+            auto room = BinW(CoreBinOp::Sub, I64(), ConstI(I64(), HT(owner).count), len);
+            auto nUnsigned = Conv(n, I64(), U64(), CoreConvKind::AsUnchecked);
+            auto roomUnsigned = Conv(room, I64(), U64(), CoreConvKind::AsUnchecked);
+            auto fail = AbortBlock(GirAbortKind::Capacity, {}, i.org);
+            CheckThen(CmpI(CoreCmpOp::Le, U64(), nUnsigned, roomUnsigned), fail);
+        }
+        auto base = OwnerData(i.a, owner);
         auto at = PtrAt(base, len, esz);
-        auto bytes = BinW(CoreBinOp::Mul, I64(), n, ConstI(I64(), esz));
+        auto bytes = BinW(CoreBinOp::Mul, I64(), n, ConstI(I64(), esz), true, i.org);
         GirInst c;
         c.op = GirOp::BytesMove;
         c.a = at;
         c.b = src;
         c.vals = { bytes };
         EmitE(std::move(c));
-        SimpleE(GirOp::StackBump, stk, bytes);
-        SimpleE(GirOp::HdrSetLen, hdr, BinW(CoreBinOp::Add, I64(), len, n));
+        auto newLen = BinW(CoreBinOp::Add, I64(), len, n, true, i.org);
+        if (limited) SetLimitedLength(address, owner, newLen);
+        else {
+            SimpleE(GirOp::StackBump, rs.w[1], bytes);
+            SimpleE(GirOp::HdrSetLen, address, newLen);
+        }
+    }
+
+    void LowerPop(const GirInst &i) {
+        auto owner = OwnerType(i.a);
+        auto elem = OwnerElement(owner);
+        auto esz = Size(elem);
+        auto len = OwnerLength(i.a, owner);
+        auto fail = AbortBlock(GirAbortKind::PopEmpty, {}, i.org);
+        CheckThen(CmpI(CoreCmpOp::Lt, I64(), ConstI(I64(), 0), len), fail);
+        auto newLen = BinW(CoreBinOp::Sub, I64(), len, ConstI(I64(), 1));
+        auto base = OwnerData(i.a, owner);
+        auto at = PtrAt(base, newLen, esz);
+        vector<int> value;
+        auto &element = HT(elem);
+        if (element.kind == CoreType::Arr || element.kind == CoreType::Struct) {
+            auto tmp = FrameTemp(esz);
+            auto address = Simple(GirOp::FrameAddr, Ptr(), -1, -1, tmp);
+            Copy(address, at, esz);
+            value = { address };
+        } else {
+            value = { LoadScalarBytes(Words(elem)[0], at) };
+        }
+        if (HT(owner).kind == CoreType::Limited) SetLimitedLength(shape[i.a].w[0], owner, newLen);
+        else ReleaseOwnerTo(i.a, newLen, at);
+        Define(i, std::move(value));
+    }
+
+    void LowerPopN(const GirInst &i) {
+        auto owner = OwnerType(i.a);
+        auto len = OwnerLength(i.a, owner);
+        auto countType = l.IntType(HT(hvt[i.b]).ity);
+        auto count = W0(i.b);
+        auto countUnsigned = Conv(count, countType, U64(), CoreConvKind::AsUnchecked);
+        auto lenUnsigned = Conv(len, I64(), U64(), CoreConvKind::AsUnchecked);
+        auto fail = AbortBlock(GirAbortKind::PopNRange, {}, i.org);
+        CheckThen(CmpI(CoreCmpOp::Le, U64(), countUnsigned, lenUnsigned), fail);
+        auto countI64 = Conv(count, countType, I64(), CoreConvKind::AsUnchecked);
+        auto newLen = BinW(CoreBinOp::Sub, I64(), len, countI64);
+        if (HT(owner).kind == CoreType::Limited)
+            SetLimitedLength(shape[i.a].w[0], owner, newLen);
+        else {
+            auto top = PtrAt(OwnerData(i.a, owner), newLen, Size(OwnerElement(owner)));
+            ReleaseOwnerTo(i.a, newLen, top);
+        }
+    }
+
+    void LowerClear(const GirInst &i) {
+        auto owner = OwnerType(i.a);
+        if (HT(owner).kind == CoreType::Limited) {
+            SetLimitedLength(shape[i.a].w[0], owner, ConstI(I64(), 0));
+            return;
+        }
+        auto header = shape[i.a].w[0];
+        auto base = Simple(GirOp::HdrBase, Ptr(), header);
+        SimpleE(GirOp::StackRelease, shape[i.a].w[1], base);
+        SimpleE(GirOp::HdrSetLen, header, ConstI(I64(), 0));
+    }
+
+    void LowerResize(const GirInst &i) {
+        auto owner = OwnerType(i.a);
+        auto ownerKind = HT(owner).kind;
+        auto elem = OwnerElement(owner);
+        auto esz = Size(elem);
+        auto sourceType = HT(hvt[i.b]).ity;
+        auto inputType = l.IntType(sourceType);
+        auto input = W0(i.b);
+        auto failNegative = AbortBlock(GirAbortKind::ResizeNegative, {}, i.org);
+        if (CoreIsUnsigned(sourceType)) {
+            if (sourceType == CoreIntTy::U64)
+                CheckThen(CmpI(CoreCmpOp::Le, U64(), input, ConstI(U64(), INT64_MAX)), failNegative);
+        } else {
+            CheckThen(CmpI(CoreCmpOp::Le, inputType, ConstI(inputType, 0), input), failNegative);
+        }
+        auto newLen = Conv(input, inputType, I64(), CoreConvKind::AsUnchecked);
+        auto len = OwnerLength(i.a, owner);
+        auto isGrowing = CmpI(CoreCmpOp::Gt, I64(), newLen, len);
+        if (i.vals.empty()) {
+            auto noFill = AbortBlock(GirAbortKind::ResizeFill, {}, i.org);
+            CheckThen(CmpI(CoreCmpOp::Le, I64(), newLen, len), noFill);
+        }
+        if (ownerKind == CoreType::Limited && !i.vals.empty()) {
+            auto capacity = AbortBlock(GirAbortKind::Capacity, {}, i.org);
+            CheckThen(CmpI(CoreCmpOp::Le, I64(), newLen, ConstI(I64(), HT(owner).count)), capacity);
+        }
+
+        if (i.vals.empty()) {
+            auto shrink = NewBlockL({});
+            auto done = NewBlockL({});
+            GirInst branch;
+            branch.op = GirOp::CondBr;
+            branch.a = CmpI(CoreCmpOp::Lt, I64(), newLen, len);
+            branch.idx = shrink;
+            branch.idx2 = done;
+            Term(std::move(branch));
+            cur = shrink;
+            if (ownerKind == CoreType::Limited) SetLimitedLength(shape[i.a].w[0], owner, newLen);
+            else {
+                auto top = PtrAt(OwnerData(i.a, owner), newLen, esz);
+                ReleaseOwnerTo(i.a, newLen, top);
+            }
+            GirInst toDone;
+            toDone.op = GirOp::Br;
+            toDone.idx = done;
+            Term(std::move(toDone));
+            cur = done;
+            return;
+        }
+
+        auto shrink = NewBlockL({});
+        auto equalOrGrow = NewBlockL({});
+        auto grow = NewBlockL({});
+        auto done = NewBlockL({});
+        GirInst first;
+        first.op = GirOp::CondBr;
+        first.a = CmpI(CoreCmpOp::Lt, I64(), newLen, len);
+        first.idx = shrink;
+        first.idx2 = equalOrGrow;
+        Term(std::move(first));
+
+        cur = shrink;
+        if (ownerKind == CoreType::Limited) SetLimitedLength(shape[i.a].w[0], owner, newLen);
+        else {
+            auto top = PtrAt(OwnerData(i.a, owner), newLen, esz);
+            ReleaseOwnerTo(i.a, newLen, top);
+        }
+        GirInst shrinkDone;
+        shrinkDone.op = GirOp::Br;
+        shrinkDone.idx = done;
+        Term(std::move(shrinkDone));
+
+        cur = equalOrGrow;
+        GirInst second;
+        second.op = GirOp::CondBr;
+        second.a = isGrowing;
+        second.idx = grow;
+        second.idx2 = done;
+        Term(std::move(second));
+
+        cur = grow;
+        auto fill = i.vals[0];
+        auto &element = HT(elem);
+        int source = element.kind == CoreType::Arr || element.kind == CoreType::Struct
+                         ? shape[fill].w[0]
+                         : ScalarValueAddress(elem, shape[fill].w[0]);
+        auto delta = BinW(CoreBinOp::Sub, I64(), newLen, len);
+        auto start = PtrAt(OwnerData(i.a, owner), len, esz);
+        if (ownerKind != CoreType::Limited) {
+            auto bytes = BinW(CoreBinOp::Mul, I64(), delta, ConstI(I64(), esz), true, i.org);
+            SimpleE(GirOp::StackBump, shape[i.a].w[1], bytes);
+        }
+        GirInst repeat;
+        repeat.op = GirOp::BytesFill;
+        repeat.a = start;
+        repeat.b = source;
+        repeat.idx = (int)esz;
+        repeat.vals = { delta };
+        EmitE(std::move(repeat));
+        SetOwnerLength(i.a, owner, newLen);
+        GirInst growDone;
+        growDone.op = GirOp::Br;
+        growDone.idx = done;
+        Term(std::move(growDone));
+        cur = done;
+    }
+
+    void LowerReplace(const GirInst &i) {
+        auto owner = OwnerType(i.a);
+        auto address = shape[i.a].w[0];
+        auto stack = shape[i.a].w[1];
+        auto &run = shape[i.b];
+        auto elem = OwnerElement(owner);
+        auto esz = Size(elem);
+        auto base = Simple(GirOp::HdrBase, Ptr(), address);
+        for (size_t k = 0; k < run.elems.size(); k++)
+            StoreAt(elem, PtrAt(base, ConstI(I64(), (int64_t)k), esz), shape[run.elems[k]].w);
+        if (!run.elems.empty())
+            SimpleE(GirOp::StackBump, stack, ConstI(I64(), (int64_t)run.elems.size() * esz));
+        SimpleE(GirOp::HdrSetLen, address, ConstI(I64(), (int64_t)run.elems.size()));
     }
 
     void LowerArr(const GirInst &i) {
         auto &c = HT(i.ty);
-        if (c.kind == CoreType::Grow) {
+        if (GirOwnerKind(c.kind)) {
             shape[i.res].lit = true;
             shape[i.res].elems = i.vals;
             return;
@@ -998,7 +1309,8 @@ private:
         else {
             auto one = FrameTemp(esz);
             src = Simple(GirOp::FrameAddr, Ptr(), -1, -1, one);
-            PStoreV(Words(c.elem)[0], src, w[0]);
+            if (h.profile == CoreProfile::Shrink) StoreScalarBytes(Words(c.elem)[0], src, w[0]);
+            else PStoreV(Words(c.elem)[0], src, w[0]);
         }
         GirInst f;
         f.op = GirOp::BytesFill;
@@ -1033,7 +1345,8 @@ private:
             case Place::Scalar: SimpleE(GirOp::LocalSet, v.w[0], -1, p.members[0]); return;
             case Place::Bytes: {
                 auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, p.members[0]);
-                if (HT(t).kind == CoreType::Slice) StoreAt(t, dst, v.w);
+                if (HT(t).kind == CoreType::Limited) InitLimited(dst, t, v);
+                else if (HT(t).kind == CoreType::Slice) StoreAt(t, dst, v.w);
                 else Copy(dst, v.w[0], Size(t));
                 return;
             }
@@ -1154,6 +1467,8 @@ private:
         if (lg.kind == GirMember::Header) {
             auto stk = Simple(GirOp::GlobalStack, Ptr(), -1, -1, initglobal);
             InitGrow(addr, stk, g.ty, v);
+        } else if (HT(g.ty).kind == CoreType::Limited) {
+            InitLimited(addr, g.ty, v);
         } else {
             StoreAt(g.ty, addr, v.w);
         }
