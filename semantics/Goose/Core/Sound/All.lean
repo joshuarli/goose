@@ -4,6 +4,7 @@ import Goose.Core.Sound.StepStmt
 import Goose.Core.Sound.StepStmt2
 import Goose.Core.Sound.StepBlock2
 import Goose.Core.Sound.StepLoop
+import Goose.Core.Sound.StepCall2
 import Goose.Core.Sound.StepCall3
 import Goose.Core.Sound.Module
 import Goose.Core.Sound.ShrinkBridge
@@ -16,22 +17,25 @@ fuel, for a module whose items passed the validator's stages.
 namespace Goose.Core.Sound
 open Goose.Core Goose.Proofs.Memory
 
-variable {m : Module} {prof : NumProfile} {n : Nat}
+variable {m : Module} {prof : NumProfile} {plans : Array (Array DemandPoint)} {n : Nat}
 
-theorem step_expr (hm : ModOk m) (ih : Specs m prof n) : ExprSpec m prof (n + 1) := by
-  intro W tenv penv env s e tn tn' ty rst rst' rho hp hF ht hr hE
+theorem step_expr (hm : ModOk m) (ih : Specs m prof plans n) : ExprSpec m prof plans (n + 1) := by
+  intro path e ec observation W tenv penv env s tn tn' ty rst rst' rho hActive hAccess
+    hProtected hObserved hClass hp hF ht hr hE
   cases e <;> first
-    | exact step_expr_a ih _ _ _ _ _ _ _ _ _ _ _ _ trivial hp hF ht hr hE
-    | exact step_expr_b ih _ _ _ _ _ _ _ _ _ _ _ _ trivial hp hF ht hr hE
-    | exact step_expr_call hm ih _ _ _ _ _ _ _ _ _ _ _ _ _ _ hp hF ht hr hE
+    | apply step_expr_a ih <;> first | assumption | trivial
+    | apply step_expr_b ih <;> first | assumption | trivial
+    | apply step_expr_pop ih <;> assumption
+    | apply step_expr_call hm ih <;> assumption
 
-theorem step_stmt (ih : Specs m prof n) : StmtSpec m prof (n + 1) := by
-  intro W tenv tenv' penv env s sc st tn tn' rst rst' lo hp hF hsc hT hlo ht hr hE
+theorem step_stmt (ih : Specs m prof plans n) : StmtSpec m prof plans (n + 1) := by
+  intro path st ec observation W tenv tenv' penv env s sc tn tn' rst rst' lo hActive hAccess
+    hProtected hObserved hClass hp hF hsc hT hlo ht hr hE
   cases st <;> first
-    | exact step_stmt_a ih _ _ _ _ _ _ _ _ _ _ _ _ _ trivial hp hF hsc hT hlo ht hr hE
-    | exact step_stmt_b ih _ _ _ _ _ _ _ _ _ _ _ _ _ trivial hp hF hsc hT hlo ht hr hE
+    | apply step_stmt_a ih <;> first | assumption | trivial
+    | apply step_stmt_b ih <;> first | assumption | trivial
 
-theorem specs_zero : Specs m prof 0 where
+theorem specs_zero : Specs m prof plans 0 where
   expr := by unfold ExprSpec; intros; simp only [evalExpr, sat_timeout]
   blockValue := by unfold BlockValueSpec; intros; unfold blockValue; trivial
   arg := by unfold ArgSpec; intros; simp only [evalArg, sat_timeout]
@@ -47,7 +51,7 @@ theorem specs_zero : Specs m prof 0 where
   range := by unfold RangeSpec; intros; simp only [execRange, sat_timeout]
   each := by unfold EachSpec; intros; unfold execEach; trivial
 
-theorem specs_succ (hm : ModOk m) (ih : Specs m prof n) : Specs m prof (n + 1) where
+theorem specs_succ (hm : ModOk m) (ih : Specs m prof plans n) : Specs m prof plans (n + 1) where
   expr := step_expr hm ih
   blockValue := step_blockValue ih
   arg := step_arg ih
@@ -66,8 +70,9 @@ theorem specs_succ (hm : ModOk m) (ih : Specs m prof n) : Specs m prof (n + 1) w
 /-- Every evaluation function, at every fuel, on code of a module whose items
 the validator accepted: it does not fault, and it keeps the frame, hence the
 store invariant, true. -/
-theorem specs_all (hm : ModOk m) (prof : NumProfile) : ∀ n, Specs m prof n
+theorem specs_all (hm : ModOk m) (prof : NumProfile) (plans : Array (Array DemandPoint)) :
+    ∀ n, Specs m prof plans n
   | 0 => specs_zero
-  | n + 1 => specs_succ hm (specs_all hm prof n)
+  | n + 1 => specs_succ hm (specs_all hm prof plans n)
 
 end Goose.Core.Sound
