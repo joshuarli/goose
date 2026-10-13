@@ -50,7 +50,8 @@ def renExpr (r : CtxMap) : Expr → Expr
   | .not e => .not (renExpr r e)
   | .conv k t e o => .conv k t (renExpr r e) o
   | .call c args o => .call (r c) (renArgs r args) o
-  | .push p e => .push (renPlace r p) (renExpr r e)
+  | .push p e o => .push (renPlace r p) (renExpr r e) o
+  | .pop p o => .pop (renPlace r p) o
   | .ifE c t f => .ifE (renExpr r c) (renBlock r t) (renBlock r f)
   | .blockE b => .blockE (renBlock r b)
   | .arrLit t es => .arrLit t (renExprs r es)
@@ -95,6 +96,10 @@ def renStmt (r : CtxMap) : Stmt → Stmt
   | .rebind x e o => .rebind x (renExpr r e) o
   | .expr e o => .expr (renExpr r e) o
   | .append p v o => .append (renPlace r p) (renView r v) o
+  | .popN p e o => .popN (renPlace r p) (renExpr r e) o
+  | .resize p size fill o => .resize (renPlace r p) (renExpr r size) (renOptExpr r fill) o
+  | .clear p o => .clear (renPlace r p) o
+  | .assignWhole p e o => .assignWhole (renPlace r p) (renExpr r e) o
   | .ifS c t f o => .ifS (renExpr r c) (renBlock r t) (renOptBlock r f) o
   | .while c b o => .while (renExpr r c) (renBlock r b) o
   | .forRange x lo hi b o => .forRange x (renExpr r lo) (renExpr r hi) (renBlock r b) o

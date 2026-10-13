@@ -53,7 +53,8 @@ def eqExpr : Expr → Expr → Bool
   | .not e, .not f => eqExpr e f
   | .conv k t e o, .conv k' t' f p => k == k' && t == t' && eqExpr e f && o == p
   | .call c args o, .call d args' p => c == d && eqArgs args args' && o == p
-  | .push p e, .push q f => eqPlace p q && eqExpr e f
+  | .push p e o, .push q f p' => eqPlace p q && eqExpr e f && o == p'
+  | .pop p o, .pop q p' => eqPlace p q && o == p'
   | .ifE c t f, .ifE c' t' f' => eqExpr c c' && eqBlock t t' && eqBlock f f'
   | .blockE b, .blockE b' => eqBlock b b'
   | .structLit t es, .structLit u fs => t == u && eqExprs es fs
@@ -107,6 +108,11 @@ def eqStmt : Stmt → Stmt → Bool
   | .rebind x e o, .rebind y f p => x == y && eqExpr e f && o == p
   | .expr e o, .expr f p => eqExpr e f && o == p
   | .append q v o, .append q' w p => eqPlace q q' && eqView v w && o == p
+  | .popN q e o, .popN q' f p => eqPlace q q' && eqExpr e f && o == p
+  | .resize q size fill o, .resize q' size' fill' p =>
+    eqPlace q q' && eqExpr size size' && eqOptExpr fill fill' && o == p
+  | .clear q o, .clear q' p => eqPlace q q' && o == p
+  | .assignWhole q e o, .assignWhole q' f p => eqPlace q q' && eqExpr e f && o == p
   | .ifS c t f o, .ifS c' t' f' p => eqExpr c c' && eqBlock t t' && eqOptBlock f f' && o == p
   | .while c b o, .while c' b' p => eqExpr c c' && eqBlock b b' && o == p
   | .forRange x lo hi b o, .forRange y lo' hi' b' p =>

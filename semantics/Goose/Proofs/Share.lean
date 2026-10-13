@@ -62,7 +62,8 @@ theorem renExpr_id : ∀ e : Expr, renExpr id e = e
   | .not e => by simp [renExpr, renExpr_id e]
   | .conv _ _ e _ => by simp [renExpr, renExpr_id e]
   | .call c args _ => by simp [renExpr, renArgs_id args]
-  | .push p e => by simp [renExpr, renPlace_id p, renExpr_id e]
+  | .push p e o => by simp [renExpr, renPlace_id p, renExpr_id e]
+  | .pop p o => by simp [renExpr, renPlace_id p]
   | .ifE c t f => by simp [renExpr, renExpr_id c, renBlock_id t, renBlock_id f]
   | .blockE b => by simp [renExpr, renBlock_id b]
   | .arrLit _ es => by simp [renExpr, renExprs_id es]
@@ -107,6 +108,10 @@ theorem renStmt_id : ∀ s : Stmt, renStmt id s = s
   | .rebind _ e _ => by simp [renStmt, renExpr_id e]
   | .expr e _ => by simp [renStmt, renExpr_id e]
   | .append p v _ => by simp [renStmt, renPlace_id p, renView_id v]
+  | .popN p e _ => by simp [renStmt, renPlace_id p, renExpr_id e]
+  | .resize p size fill _ => by simp [renStmt, renPlace_id p, renExpr_id size, renOptExpr_id fill]
+  | .clear p _ => by simp [renStmt, renPlace_id p]
+  | .assignWhole p e _ => by simp [renStmt, renPlace_id p, renExpr_id e]
   | .ifS c t f _ => by simp [renStmt, renExpr_id c, renBlock_id t, renOptBlock_id f]
   | .while c b _ => by simp [renStmt, renExpr_id c, renBlock_id b]
   | .forRange _ lo hi b _ => by simp [renStmt, renExpr_id lo, renExpr_id hi, renBlock_id b]
@@ -282,6 +287,9 @@ theorem execStmt_sim (hρ : ∀ g c, Resolves m m' ρ (ρ g c) c) :
       cases f <;> simp [execStmt, renStmt, renOptBlock, evalExpr_sim hρ r hr n,
         execBlock_sim hρ r hr n]
     | ret e o => cases e <;> simp [execStmt, renStmt, renOptExpr, evalExpr_sim hρ r hr n]
+    | resize owner size fill org =>
+      cases fill <;> simp [execStmt, renStmt, renOptExpr, evalExpr_sim hρ r hr n,
+        evalPlace_sim hρ r hr n]
     | _ => simp [execStmt, renStmt, evalExpr_sim hρ r hr n, evalPlace_sim hρ r hr n,
         evalView_sim hρ r hr n, execWhile_sim hρ r hr n, execRange_sim hρ r hr n,
         execEach_sim hρ r hr n]
@@ -415,7 +423,8 @@ implementation that exists, this is the relation `Quotient` states for the
 implementations contexts name, so it implies it. -/
 theorem quotient_of_implwise {m m' : Module} {q : ImplId → ImplId} {ρ : ImplId → CtxMap}
     (files : m'.files = m.files) (types : m'.types = m.types)
-    (origins : m'.origins = m.origins) (entry : m'.entry = m.entry)
+    (origins : m'.origins = m.origins) (profile : m'.profile = m.profile)
+    (structs : m'.structs = m.structs) (entry : m'.entry = m.entry)
     (globals : m'.globals = m.globals) (contextCount : m'.contexts.size = m.contexts.size)
     (contexts : ∀ (c : ContextId) (ctx : Context), m.contexts[c]? = some ctx →
       m'.contexts[c]? = some { ctx with impl := q ctx.impl })
@@ -429,6 +438,8 @@ theorem quotient_of_implwise {m m' : Module} {q : ImplId → ImplId} {ρ : ImplI
   files := files
   types := types
   origins := origins
+  profile := profile
+  structs := structs
   entry := entry
   globals := globals
   contextCount := contextCount
@@ -541,15 +552,17 @@ theorem checkQuotient_sound {m m' : Module} {qt : Array ImplId} {rt : Array Cont
     Quotient m m' (fun f => qt.getD f f) (bodyRenaming m m' (fun f => qt.getD f f) rt) := by
   simp only [checkQuotient, headerOk, contextsOk, implsOk, calleesOk,
     Bool.and_eq_true, beq_iff_eq, and_assoc] at h
-  obtain ⟨hfiles, htypes, horigins, hentry, hglobals, hctxs, himpls, hrt, hcallees⟩ := h
+  obtain ⟨hfiles, htypes, horigins, hprofile, hstructs, hentry, hglobals,
+    hctxs, himpls, hrt, hcallees⟩ := h
   have gl := allZip_sound _ id (fun a b hab => (eqGlobal_sound hab).symm) _ _ hglobals
   have cx := allZip_sound _ (fun ctx : Context => { ctx with impl := qt.getD ctx.impl ctx.impl })
     (fun a b hab => by simpa using hab) _ _ hctxs
   have cxs : m'.contexts.toList = m.contexts.toList.map
       (fun ctx : Context => { ctx with impl := qt.getD ctx.impl ctx.impl }) := cx
   refine
-    { files := hfiles, types := htypes, origins := horigins, entry := hentry
-      globals := ?_, contextCount := ?_, contexts := ?_, impls := ?_, callees := ?_ }
+    { files := hfiles, types := htypes, origins := horigins, profile := hprofile
+      structs := hstructs, entry := hentry, globals := ?_, contextCount := ?_,
+      contexts := ?_, impls := ?_, callees := ?_ }
   · apply Array.ext'
     simpa using gl
   · have := congrArg List.length cxs
