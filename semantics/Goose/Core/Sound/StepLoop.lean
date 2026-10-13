@@ -882,25 +882,25 @@ theorem step_while (ih : Specs m prof plans n) : WhileSpec m prof plans (n + 1) 
     (ec.child_accessMatches_iff (by simp [DemandNode.primaryPhase]) 1 (.block body) .block
       (by simp [DemandNode.child?, DemandNode.children])
       (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) loopT penv).2 haccessLoop
-  have hmayCondition : ∀ r, conditionEc.mayShrink W.P observation r ↔ ec.mayShrink W.P observation r := by
+  have hmayCondition : ∀ r, conditionEc.mayShrink W.ownerP observation r ↔ ec.mayShrink W.ownerP observation r := by
     intro r
     exact ec.child_mayShrink_iff (by simp [DemandNode.primaryPhase]) 0 (.expression c) .expression
       (by simp [DemandNode.child?, DemandNode.children])
-      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.P observation r
-  have hmayBody : ∀ r, bodyEc.mayShrink W.P observation r ↔ ec.mayShrink W.P observation r := by
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.ownerP observation r
+  have hmayBody : ∀ r, bodyEc.mayShrink W.ownerP observation r ↔ ec.mayShrink W.ownerP observation r := by
     intro r
     exact ec.child_mayShrink_iff (by simp [DemandNode.primaryPhase]) 1 (.block body) .block
       (by simp [DemandNode.child?, DemandNode.children])
-      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.P observation r
-  have hprotectedCondition : ShrinkProtected W.D W.A (conditionEc.mayShrink W.P observation) :=
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.ownerP observation r
+  have hprotectedCondition : ShrinkProtected W.D W.A (conditionEc.mayShrink W.ownerP observation) :=
     ShrinkProtected.mono hprotected (fun _ _ h => h) (fun _ _ h => h)
       (fun r h => (hmayCondition r).1 h)
-  have hprotectedBody : ShrinkProtected W.D W.A (bodyEc.mayShrink W.P observation) :=
+  have hprotectedBody : ShrinkProtected W.D W.A (bodyEc.mayShrink W.ownerP observation) :=
     ShrinkProtected.mono hprotected (fun _ _ h => h) (fun _ _ h => h)
       (fun r h => (hmayBody r).1 h)
-  have hobservedCondition : ObservedSafe m W (conditionEc.mayShrink W.P observation) observation s.store :=
+  have hobservedCondition : ObservedSafe m W (conditionEc.mayShrink W.ownerP observation) observation s.store :=
     hobserved.weakenShrinking (fun r h => (hmayCondition r).1 h)
-  have hobservedBody : ObservedSafe m W (bodyEc.mayShrink W.P observation) observation s.store :=
+  have hobservedBody : ObservedSafe m W (bodyEc.mayShrink W.ownerP observation) observation s.store :=
     hobserved.weakenShrinking (fun r h => (hmayBody r).1 h)
   have hFCondition : Frame m W tenv penv env s conditionEc.inputFuture :=
     hF.narrowFuture (whileCondInput_subset ec)
@@ -920,14 +920,22 @@ theorem step_while (ih : Specs m prof plans n) : WhileSpec m prof plans (n + 1) 
       (by simp [DemandNode.child?, DemandNode.children])
       (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) tenv env1 hactive
       (by intro x; simpa [DemandNode.visibleForChild] using hvisible x)
+  have hMutationRoots : ∀ r,
+      r ∈ effectMutationRoots m penv.impl rst1.eff →
+        r ∈ effectMutationRoots m penv.impl rst2.eff :=
+    effectMutationRoots.mono m penv.impl (rpBlockValue_mono hrb).2
+      (rpBlockValue_rebinds_mono hrb)
   have body_part : ∀ (s1 : St), Frame m W loopT penv env s1 bodyEc.inputFuture →
       Footprint (insts env) (Dset W) s s1 →
       PreservesRootTypes m W.G observation.roots s.store s1.store →
       PreservesValues m W.G observation.values s.store s1.store →
-      ObservedSafe m W (ec.mayShrink W.P observation) observation s1.store →
+      ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s1.store →
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s1.store) →
       RetainsAliases m W env s.store s1.store ec.retained →
       PilotStoreLe m s s1 →
+      PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+        ec.forbiddenOwners s s1 →
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s s1 →
       Sat (execBlock n ⟨prof, m⟩ env [] body >>= fun fl =>
         match fl with
         | .normal _ => execWhile n ⟨prof, m⟩ env c body
@@ -938,19 +946,23 @@ theorem step_while (ih : Specs m prof plans n) : WhileSpec m prof plans (n + 1) 
         Footprint (insts env) (Dset W) s s' ∧
         PreservesRootTypes m W.G observation.roots s.store s'.store ∧
         PreservesValues m W.G observation.values s.store s'.store ∧
-        ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
+        ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s'.store ∧
         RetainsAliases m W env s.store s'.store ec.retained ∧
         PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl ∧
         (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true) ∧
-        (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store)) := by
-    intro s1 hF1 hFoot1 hRoots1 hValues1 hSafe1 hClass1 hRetained1 hPilot1
-    have hSafeBody1 : ObservedSafe m W (bodyEc.mayShrink W.P observation) observation s1.store :=
+        (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
+        PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+          ec.forbiddenOwners s s' ∧
+        MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s s') := by
+    intro s1 hF1 hFoot1 hRoots1 hValues1 hSafe1 hClass1 hRetained1 hPilot1 hForbidden1 hMutation1
+    have hSafeBody1 : ObservedSafe m W (bodyEc.mayShrink W.ownerP observation) observation s1.store :=
       hSafe1.weakenShrinking (fun r h => (hmayBody r).1 h)
     refine Sat.bind (block_of_checks ih.block hp body bodyEc observation [] []
       hBodyActiveAfterDeclare haccessBody hprotectedBody hSafeBody1 hClass1 hF1 htb hrb hE rfl rfl
       (fun _ _ _ _ h => by simp at h)) ?_
-    rintro fl s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2, hPilot2, hFlow, hClass2⟩
-    have hSafe2Parent : ObservedSafe m W (ec.mayShrink W.P observation) observation s2.store :=
+    rintro fl s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2, hPilot2,
+      hFlow, hClass2, hForbidden2, hMutation2⟩
+    have hSafe2Parent : ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s2.store :=
       hSafe2.weakenShrinking (fun r h => (hmayBody r).2 h)
     have hRetained2Parent : RetainsAliases m W env s1.store s2.store ec.retained :=
       hRetained2.subset (fun alias hmem =>
@@ -973,36 +985,45 @@ theorem step_while (ih : Specs m prof plans n) : WhileSpec m prof plans (n + 1) 
     have hPilot2Start : PilotStoreLe m s s2 := by
       intro hpilot
       exact (hPilot1 hpilot).trans (hPilot2 hpilot)
+    have hForbidden2Parent : PreservesForbiddenOwnerRoots (m := m) (G := W.G)
+        (env := env) (P := W.P) ec.forbiddenOwners s1 s2 :=
+      hForbidden2.subset (fun owner howner =>
+        ec.child_forbidden_subset (by simp [DemandNode.primaryPhase]) 1 (.block body) .block
+          (by simp [DemandNode.child?, DemandNode.children])
+          (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) owner howner)
+    have hForbidden2Start := hForbidden1.trans hForbidden2Parent
+    have hMutation2Start := hMutation1.trans hMutation2
     cases fl with
     | normal v =>
       have hAgain := ih.while_ path c body origin ec observation W tenv penv env s2 tn tn1 tn2 bty
         rst rst1 rst2 rhoc rb rng hactive haccess hprotected hSafe2Parent hClass2 hp hF2LoopInput
         htc htb hrc hrb hE
       exact hAgain.mono (fun fl3 s3 ⟨hF3, hFoot3, hRoots3, hValues3, hSafe3, hRetained3,
-          hPilot3, hFlow3, hBreak3, hClass3⟩ =>
+          hPilot3, hFlow3, hBreak3, hClass3, hForbidden3, hMutation3⟩ =>
         ⟨hF3, hFoot2Start.trans hFoot3, hRoots2Start.trans hRoots3,
           hValues2Start.trans hValues3, hSafe3, hRetained2Start.trans hRetained3,
           (fun hpilot => (hPilot2Start hpilot).trans (hPilot3 hpilot)), hFlow3, hBreak3,
-          hClass3⟩)
+          hClass3, hForbidden2Start.trans hForbidden3, hMutation2Start.trans hMutation3⟩)
     | cont =>
       have hAgain := ih.while_ path c body origin ec observation W tenv penv env s2 tn tn1 tn2 bty
         rst rst1 rst2 rhoc rb rng hactive haccess hprotected hSafe2Parent hClass2 hp hF2LoopInput
         htc htb hrc hrb hE
       exact hAgain.mono (fun fl3 s3 ⟨hF3, hFoot3, hRoots3, hValues3, hSafe3, hRetained3,
-          hPilot3, hFlow3, hBreak3, hClass3⟩ =>
+          hPilot3, hFlow3, hBreak3, hClass3, hForbidden3, hMutation3⟩ =>
         ⟨hF3, hFoot2Start.trans hFoot3, hRoots2Start.trans hRoots3,
           hValues2Start.trans hValues3, hSafe3, hRetained2Start.trans hRetained3,
           (fun hpilot => (hPilot2Start hpilot).trans (hPilot3 hpilot)), hFlow3, hBreak3,
-          hClass3⟩)
+          hClass3, hForbidden2Start.trans hForbidden3, hMutation2Start.trans hMutation3⟩)
     | brk =>
       simp only [sat_pure]
       exact ⟨hF2LoopOutput, hFoot2Start, hRoots2Start, hValues2Start, hSafe2Parent,
-        hRetained2Start, hPilot2Start, trivial, fun _ _ _ => hFlow.2, hClass2⟩
+        hRetained2Start, hPilot2Start, trivial, fun _ _ _ => hFlow.2, hClass2,
+        hForbidden2Start, hMutation2Start⟩
     | ret v =>
       simp only [sat_pure]
       exact ⟨hF2LoopOutput, hFoot2Start, hRoots2Start, hValues2Start, hSafe2Parent,
         hRetained2Start, hPilot2Start, ⟨hFlow.1, retOk_tenv_congr hFlow.2 rfl rfl⟩,
-        ⟨(fun v' h => by cases h), hClass2⟩⟩
+        (fun v' h => by cases h), hClass2, hForbidden2Start, hMutation2Start⟩
   by_cases hc : c = .bool true
   · subst hc
     rw [execWhile, evalExpr_bool]
@@ -1012,20 +1033,32 @@ theorem step_while (ih : Specs m prof plans n) : WhileSpec m prof plans (n + 1) 
       exact body_part s hFBody (Footprint.refl (insts env) (Dset W) s)
         (PreservesRootTypes.refl s.store) (PreservesValues.refl s.store) hobserved
         hclassified RetainsAliases.refl (by intro _; exact StoreLe.refl _)
+        (PreservesForbiddenOwnerRoots.refl s)
+        (MutationFootprint.refl env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s)
   · simp only [execWhile]
     refine Sat.bind (ih.expr (path ++ [0]) c conditionEc observation W tenv penv env s tn tn1 .bool
       rst rst1 rhoc hactiveCondition haccessCondition hprotectedCondition hobservedCondition hclassified hp hFCondition
       htc hrc
       ((rpBlockValue_mono hrb).2.trans hE)) ?_
-    rintro vc s1 ⟨hF1, hFoot1, hRoots1, hValues1, hSafe1, hRetained1, hPilot1, hv, _, hClass1⟩
+    rintro vc s1 ⟨hF1, hFoot1, hRoots1, hValues1, hSafe1, hRetained1, hPilot1,
+      hv, _, hClass1, _, hForbidden1, hMutation1⟩
     obtain ⟨x, rfl⟩ := hasTy_bool hv
-    have hSafe1Parent : ObservedSafe m W (ec.mayShrink W.P observation) observation s1.store :=
+    have hSafe1Parent : ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s1.store :=
       hSafe1.weakenShrinking (fun r h => (hmayCondition r).2 h)
     have hRetained1Parent : RetainsAliases m W env s.store s1.store ec.retained :=
       hRetained1.subset (fun alias hmem =>
         ec.child_retained_subset (by simp [DemandNode.primaryPhase]) 0 (.expression c) .expression
           (by simp [DemandNode.child?, DemandNode.children])
           (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) hmem)
+    have hForbidden1Parent : PreservesForbiddenOwnerRoots (m := m) (G := W.G)
+        (env := env) (P := W.P) ec.forbiddenOwners s s1 :=
+      hForbidden1.subset (fun owner howner =>
+        ec.child_forbidden_subset (by simp [DemandNode.primaryPhase]) 0 (.expression c) .expression
+          (by simp [DemandNode.child?, DemandNode.children])
+          (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) owner howner)
+    have hMutation1Final : MutationFootprint env W.P W.base
+        (effectMutationRoots m penv.impl rst2.eff) s s1 :=
+      MutationFootprint.weaken hMutation1 hMutationRoots
     have hF1Loop : Frame m W loopT penv env s1 conditionEc.outputFuture :=
       hF1.tenv_congr rfl rfl rfl (fun _ h => h)
     have hF1Body : Frame m W loopT penv env s1 bodyEc.inputFuture :=
@@ -1038,9 +1071,11 @@ theorem step_while (ih : Specs m prof plans n) : WhileSpec m prof plans (n + 1) 
         hF1.changeFuture (fun x hvisible hfuture =>
           whileCondOutput_coversInput ec hactive x hvisible (whileOutput_subset_input ec x hfuture))
       exact ⟨hF1Output, hFoot1, hRoots1, hValues1, hSafe1Parent, hRetained1Parent,
-        hPilot1, trivial, fun _ _ h => absurd h hc, hClass1⟩
+        hPilot1, trivial, fun _ _ h => absurd h hc, hClass1,
+        hForbidden1Parent, hMutation1Final⟩
     · simp only [if_true]
-      exact body_part s1 hF1Body hFoot1 hRoots1 hValues1 hSafe1Parent hClass1 hRetained1Parent hPilot1
+      exact body_part s1 hF1Body hFoot1 hRoots1 hValues1 hSafe1Parent hClass1
+        hRetained1Parent hPilot1 hForbidden1Parent hMutation1Final
 
 set_option maxHeartbeats 800000 in
 theorem step_range (ih : Specs m prof plans n) : RangeSpec m prof plans (n + 1) := by
@@ -1056,15 +1091,15 @@ theorem step_range (ih : Specs m prof plans n) : RangeSpec m prof plans (n + 1) 
     (ec.child_accessMatches_iff (by simp [DemandNode.primaryPhase]) 2 (.block body) .block
       (by simp [DemandNode.child?, DemandNode.children])
       (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) loopT penv).2 haccessLoop
-  have hmayBody : ∀ r, bodyEc.mayShrink W.P observation r ↔ ec.mayShrink W.P observation r := by
+  have hmayBody : ∀ r, bodyEc.mayShrink W.ownerP observation r ↔ ec.mayShrink W.ownerP observation r := by
     intro r
     exact ec.child_mayShrink_iff (by simp [DemandNode.primaryPhase]) 2 (.block body) .block
       (by simp [DemandNode.child?, DemandNode.children])
-      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.P observation r
-  have hprotectedBody : ShrinkProtected W.D W.A (bodyEc.mayShrink W.P observation) :=
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.ownerP observation r
+  have hprotectedBody : ShrinkProtected W.D W.A (bodyEc.mayShrink W.ownerP observation) :=
     ShrinkProtected.mono hprotected (fun _ _ h => h) (fun _ _ h => h)
       (fun r h => (hmayBody r).1 h)
-  have hobservedBody : ObservedSafe m W (bodyEc.mayShrink W.P observation) observation s.store :=
+  have hobservedBody : ObservedSafe m W (bodyEc.mayShrink W.ownerP observation) observation s.store :=
     hobserved.weakenShrinking (fun r h => (hmayBody r).1 h)
   have hFLoop : Frame m W loopT penv env s (body.variables ++ ec.outputFuture) :=
     hF.tenv_congr rfl rfl rfl (fun _ h => h)
@@ -1114,14 +1149,21 @@ theorem step_range (ih : Specs m prof plans n) : RangeSpec m prof plans (n + 1) 
       refine ⟨Nat.le_refl _, hlt, lv, hlv, hsc, by rw [hty]; rfl, ?_, fun r hr => hr.elim⟩
       rw [hty]
       exact hasTy_of_flat (T := .int t) (show FlatTy (.int t) (.int t i) from rfl) (Or.inl rfl)
-    · rintro fl s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2, hPilot2, hFlow, hClass2⟩
-      have hSafe2Parent : ObservedSafe m W (ec.mayShrink W.P observation) observation s2.store :=
+    · rintro fl s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2,
+          hPilot2, hFlow, hClass2, hForbidden2, hMutation2⟩
+      have hSafe2Parent : ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s2.store :=
         hSafe2.weakenShrinking (fun r h => (hmayBody r).2 h)
       have hRetained2Parent : RetainsAliases m W env s.store s2.store ec.retained :=
         hRetained2.subset (fun alias hmem =>
           ec.child_retained_subset (by simp [DemandNode.primaryPhase]) 2 (.block body) .block
             (by simp [DemandNode.child?, DemandNode.children])
             (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) hmem)
+      have hForbidden2Parent : PreservesForbiddenOwnerRoots (m := m) (G := W.G)
+          (env := env) (P := W.P) ec.forbiddenOwners s s2 :=
+        hForbidden2.subset (fun owner howner =>
+          ec.child_forbidden_subset (by simp [DemandNode.primaryPhase]) 2 (.block body) .block
+            (by simp [DemandNode.child?, DemandNode.children])
+            (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) owner howner)
       have hF2LoopInput : Frame m W tenv penv env s2 (body.variables ++ ec.outputFuture) := by
         have hF2Loop : Frame m W loopT penv env s2 (body.variables ++ ec.outputFuture) :=
           hF2.changeFuture (fun y hvisible hfuture => by
@@ -1139,32 +1181,39 @@ theorem step_range (ih : Specs m prof plans n) : RangeSpec m prof plans (n + 1) 
           (i + 1) hi tn1 tn2 bty rst1 rst2 rb rng hactive haccess hprotected hSafe2Parent hClass2 hp
           hF2LoopInput ⟨lv, hlv, hsc, hty⟩ hlt htb hrb hE hk0
         exact hAgain.mono (fun fl3 s3
-          ⟨hF3, hFoot3, hRoots3, hValues3, hSafe3, hRetained3, hPilot3, hFlow3, hClass3⟩ =>
+          ⟨hF3, hFoot3, hRoots3, hValues3, hSafe3, hRetained3, hPilot3, hFlow3,
+            hClass3, hForbidden3, hMutation3⟩ =>
             ⟨hF3, hFoot2.trans hFoot3, hRoots2.trans hRoots3, hValues2.trans hValues3,
               hSafe3, hRetained2Parent.trans hRetained3,
-              (fun hpilot => (hPilot2 hpilot).trans (hPilot3 hpilot)), hFlow3, hClass3⟩)
+              (fun hpilot => (hPilot2 hpilot).trans (hPilot3 hpilot)), hFlow3, hClass3,
+              hForbidden2Parent.trans hForbidden3, hMutation2.trans hMutation3⟩)
       | cont =>
         have hAgain := ih.range path x lower upper body origin ec observation W tenv penv env s2 t
           (i + 1) hi tn1 tn2 bty rst1 rst2 rb rng hactive haccess hprotected hSafe2Parent hClass2 hp
           hF2LoopInput ⟨lv, hlv, hsc, hty⟩ hlt htb hrb hE hk0
         exact hAgain.mono (fun fl3 s3
-          ⟨hF3, hFoot3, hRoots3, hValues3, hSafe3, hRetained3, hPilot3, hFlow3, hClass3⟩ =>
+          ⟨hF3, hFoot3, hRoots3, hValues3, hSafe3, hRetained3, hPilot3, hFlow3,
+            hClass3, hForbidden3, hMutation3⟩ =>
             ⟨hF3, hFoot2.trans hFoot3, hRoots2.trans hRoots3, hValues2.trans hValues3,
               hSafe3, hRetained2Parent.trans hRetained3,
-              (fun hpilot => (hPilot2 hpilot).trans (hPilot3 hpilot)), hFlow3, hClass3⟩)
+              (fun hpilot => (hPilot2 hpilot).trans (hPilot3 hpilot)), hFlow3, hClass3,
+              hForbidden2Parent.trans hForbidden3, hMutation2.trans hMutation3⟩)
       | brk =>
         simp only [sat_pure]
         exact ⟨hF2LoopOutput, hFoot2, hRoots2, hValues2, hSafe2Parent, hRetained2Parent,
-          hPilot2, trivial, hClass2⟩
+          hPilot2, trivial, hClass2, hForbidden2Parent, hMutation2⟩
       | ret v =>
         simp only [sat_pure]
         exact ⟨hF2LoopOutput, hFoot2, hRoots2, hValues2, hSafe2Parent, hRetained2Parent,
-          hPilot2, ⟨hFlow.1, retOk_tenv_congr hFlow.2 rfl rfl⟩, hClass2⟩
+          hPilot2, ⟨hFlow.1, retOk_tenv_congr hFlow.2 rfl rfl⟩,
+          hClass2, hForbidden2Parent, hMutation2⟩
   · simp only [h, if_false, sat_pure]
     exact ⟨hF.narrowFuture (fun _ h => List.mem_append_right _ h),
       Footprint.refl (insts env) (Dset W) s, PreservesRootTypes.refl s.store,
       PreservesValues.refl s.store, hobserved, RetainsAliases.refl,
-      (fun _ => StoreLe.refl _), trivial, hclassified⟩
+      (fun _ => StoreLe.refl _), trivial, hclassified,
+      PreservesForbiddenOwnerRoots.refl s,
+      MutationFootprint.refl env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s⟩
 
 set_option maxHeartbeats 1600000 in
 theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) := by
@@ -1182,12 +1231,12 @@ theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) :=
     (ec.child_accessMatches_iff (by simp [DemandNode.primaryPhase]) 1 (.block body) .block
       (by simp [DemandNode.child?, DemandNode.children])
       (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) loopT penv).2 haccessLoop
-  have hmayBody : ∀ r, bodyEc.mayShrink W.P observation r ↔ ec.mayShrink W.P observation r := by
+  have hmayBody : ∀ r, bodyEc.mayShrink W.ownerP observation r ↔ ec.mayShrink W.ownerP observation r := by
     intro r
     exact ec.child_mayShrink_iff (by simp [DemandNode.primaryPhase]) 1 (.block body) .block
       (by simp [DemandNode.child?, DemandNode.children])
-      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.P observation r
-  have hprotectedBody : ShrinkProtected W.D W.A (bodyEc.mayShrink W.P observation) :=
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.ownerP observation r
+  have hprotectedBody : ShrinkProtected W.D W.A (bodyEc.mayShrink W.ownerP observation) :=
     ShrinkProtected.mono hprotected (fun _ _ h => h) (fun _ _ h => h)
       (fun r h => (hmayBody r).1 h)
   have hFLoop : Frame m W loopT penv env s (body.variables ++ ec.outputFuture) :=
@@ -1240,6 +1289,21 @@ theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) :=
       have hel : LocTy s'.store ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩ el := sliceTy_elem hsl h
       have hFl : Frame m W loopT penv env s' bodyEc.inputFuture := hFBody
       obtain ⟨lv, hlv, hsc, hst, hxty⟩ := hx
+      have hnotOwnerTy : ¬ OwnerRefTy lv.ty := by
+        have hflat : el.flat = true := hvw.1
+        cases byRef with
+        | false =>
+          have hty : lv.ty = el := by simpa using hxty
+          rw [hty]
+          intro howner
+          rcases howner with ⟨mu, target, htarget | htarget⟩ <;>
+            cases htarget <;> simp [Ty.flat] at hflat
+        | true =>
+          rcases hxty with ⟨⟨mu, hty⟩, _⟩
+          rw [hty]
+          intro howner
+          rcases howner with ⟨mu', target, htarget | htarget⟩ <;>
+            cases htarget <;> simp [Ty.flat] at hflat
       have hxlt : x < rst1.nextVar := Nat.lt_of_le_of_lt (Nat.le_add_right _ _) hlt
       have hnd : (x :: idx.toList).Nodup := by
         cases idx with
@@ -1254,7 +1318,7 @@ theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) :=
       -- The rest of an iteration, for the value the loop variable gets.
       have rest : ∀ (ev : Val) (pre' : List (VarId × Val)), pre' = idxVal i idx →
           (HasTy m W.G s'.store ev lv.ty ∧ ∀ r, Targets ev r → ∃ ann, penv.ann x = some ann ∧
-              Gam env W.P ann r) →
+              Gam env W.P ann r ∧ (OwnerRefTy lv.ty → Gam env W.ownerP ann r)) →
           Sat (execBlock n ⟨prof, m⟩ env ((x, ev) :: pre') body >>= fun fl =>
             match fl with
             | .normal _ => execEach n ⟨prof, m⟩ env x idx byRef body vw (i + 1)
@@ -1265,13 +1329,16 @@ theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) :=
               Footprint (insts env) (Dset W) s' s2 ∧
               PreservesRootTypes m W.G observation.roots s'.store s2.store ∧
               PreservesValues m W.G observation.values s'.store s2.store ∧
-              ObservedSafe m W (ec.mayShrink W.P observation) observation s2.store ∧
+              ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s2.store ∧
               RetainsAliases m W env s'.store s2.store ec.retained ∧
               PilotStoreLe m s' s2 ∧ LoopFlow m W tenv penv s2 fl ∧
-              (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s2.store)) := by
+              (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s2.store) ∧
+              PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+                ec.forbiddenOwners s' s2 ∧
+              MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s' s2) := by
         intro ev pre' hpre' hev
         subst hpre'
-        have hSafeBody : ObservedSafe m W (bodyEc.mayShrink W.P observation) observation s'.store :=
+        have hSafeBody : ObservedSafe m W (bodyEc.mayShrink W.ownerP observation) observation s'.store :=
           hobserved.weakenShrinking (fun r h => (hmayBody r).1 h)
         refine Sat.bind (block_of_reserved ih.block hp body bodyEc observation
           ((x, ev) :: idxVal i idx) loopVars x hBodyActiveAfterDeclare haccessBody hprotectedBody
@@ -1292,14 +1359,21 @@ theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) :=
               rw [hljty]
               exact hasTy_of_flat (T := .int .i64) (show FlatTy (.int .i64) (.int .i64 i) from rfl)
                 (Or.inl rfl)
-        · rintro fl s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2, hPilot2, hfl, hClass2⟩
-          have hSafe2Parent : ObservedSafe m W (ec.mayShrink W.P observation) observation s2.store :=
+        · rintro fl s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2,
+            hPilot2, hfl, hClass2, hForbidden2, hMutation2⟩
+          have hSafe2Parent : ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s2.store :=
             hSafe2.weakenShrinking (fun r h => (hmayBody r).2 h)
           have hRetained2Parent : RetainsAliases m W env s'.store s2.store ec.retained :=
             hRetained2.subset (fun alias hmem =>
               ec.child_retained_subset (by simp [DemandNode.primaryPhase]) 1 (.block body) .block
                 (by simp [DemandNode.child?, DemandNode.children])
                 (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) hmem)
+          have hForbidden2Parent : PreservesForbiddenOwnerRoots (m := m) (G := W.G)
+              (env := env) (P := W.P) ec.forbiddenOwners s' s2 :=
+            hForbidden2.subset (fun owner howner =>
+              ec.child_forbidden_subset (by simp [DemandNode.primaryPhase]) 1 (.block body) .block
+                (by simp [DemandNode.child?, DemandNode.children])
+                (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) owner howner)
           have hF2LoopInput : Frame m W tenv penv env s2 (body.variables ++ ec.outputFuture) := by
             have hF2Loop : Frame m W loopT penv env s2 (body.variables ++ ec.outputFuture) :=
               hF2.changeFuture (fun y hvisible hfuture =>
@@ -1342,26 +1416,31 @@ theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) :=
               Footprint (insts env) (Dset W) s' s3 ∧
               PreservesRootTypes m W.G observation.roots s'.store s3.store ∧
               PreservesValues m W.G observation.values s'.store s3.store ∧
-              ObservedSafe m W (ec.mayShrink W.P observation) observation s3.store ∧
+              ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s3.store ∧
               RetainsAliases m W env s'.store s3.store ec.retained ∧
               PilotStoreLe m s' s3 ∧ LoopFlow m W tenv penv s3 fl ∧
-              (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s3.store))
-            (fun fl3 s3 ⟨g1, g2, g3, g4, g5, g6, g7, g8, g9⟩ =>
+              (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s3.store) ∧
+              PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+                ec.forbiddenOwners s' s3 ∧
+              MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s' s3)
+            (fun fl3 s3 ⟨g1, g2, g3, g4, g5, g6, g7, g8, g9, g10, g11⟩ =>
               ⟨g1, hFoot2.trans g2, hRoots2.trans g3, hValues2.trans g4, g5,
                 hRetained2Parent.trans g6,
-                (fun hpilot => (hPilot2 hpilot).trans (g7 hpilot)), g8, g9⟩)
+                (fun hpilot => (hPilot2 hpilot).trans (g7 hpilot)), g8, g9,
+                hForbidden2Parent.trans g10, hMutation2.trans g11⟩)
           cases fl with
           | normal v => exact hAgain
           | cont => exact hAgain
           | brk =>
             simp only [sat_pure]
             exact ⟨hF2LoopOutput, hFoot2, hRoots2, hValues2, hSafe2Parent,
-              hRetained2Parent, hPilot2, trivial, hClass2⟩
+              hRetained2Parent, hPilot2, trivial, hClass2, hForbidden2Parent, hMutation2⟩
           | ret v =>
             simp only [sat_pure]
             exact ⟨hF2LoopOutput, hFoot2, hRoots2, hValues2, hSafe2Parent,
               hRetained2Parent, hPilot2,
-              ⟨hfl.1, retOk_tenv_congr hfl.2 rfl rfl⟩, hClass2⟩
+              ⟨hfl.1, retOk_tenv_congr hfl.2 rfl rfl⟩,
+              hClass2, hForbidden2Parent, hMutation2⟩
       cases byRef with
       | true =>
         simp only [if_true, sat_pure_bind]
@@ -1372,7 +1451,7 @@ theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) :=
           exact ⟨_, rfl, Or.inl ⟨flat_refTarget hvw.1, Or.inl hel, HeaderLoc.ofFlat hvw.1⟩⟩
         · cases hr
           obtain ⟨lv', ann, _, ha, hsub, _⟩ := bindRootsV_ok _ _ _ _ hbr
-          exact ⟨ann, ha, hg.subset hsub⟩
+          exact ⟨ann, ha, hg.subset hsub, fun howner => False.elim (hnotOwnerTy howner)⟩
       | false =>
         simp only [Bool.false_eq_true, if_false]
         have hty : lv.ty = el := by simpa using hxty
@@ -1384,6 +1463,8 @@ theorem step_each (ih : Specs m prof plans n) : EachSpec m prof plans (n + 1) :=
       simp only [sat_pure]
       exact ⟨hF.narrowFuture (fun _ h => List.mem_append_right _ h),
         Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _,
-        hobserved, RetainsAliases.refl, fun _ => StoreLe.refl _, trivial, hclassified⟩
+        hobserved, RetainsAliases.refl, fun _ => StoreLe.refl _, trivial, hclassified,
+        PreservesForbiddenOwnerRoots.refl s',
+        MutationFootprint.refl env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s'⟩
 
 end Goose.Core.Sound
