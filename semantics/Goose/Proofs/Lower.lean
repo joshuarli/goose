@@ -145,14 +145,22 @@ def bodyTail (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS) : LS :=
     if (← isLive) then
       emitTerm (.ret (if impl.body.value.isSome then [v] else []) none) : B Unit) le ls1).2
 
-theorem lowerImpl_blocks (m : Core.Module) (impl : Impl) (hp : impl.params = #[]) :
-    (lowerImpl m impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars)
+theorem lowerImplAt_blocks (m : Core.Module) (implId : ImplId) (impl : Impl)
+    (hp : impl.params = #[]) :
+    (lowerImplAt m implId impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars)
       (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).1
       (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).2).blocks := by
   rcases impl with ⟨name, params, results, vars, body, summary⟩
   simp only at hp
   subst hp
   rfl
+
+theorem lowerImpl_blocks (m : Core.Module) (impl : Impl) (hp : impl.params = #[]) :
+    (lowerImpl m impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars)
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).1
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).2).blocks := by
+  unfold lowerImpl
+  exact lowerImplAt_blocks m _ impl hp
 
 theorem bodyTail_cases (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS) :
     (ls1.cur = none ∧ bodyTail impl le v ls1 = ls1) ∨
@@ -185,7 +193,8 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
       exact absurd hf (by simp [IsFinal])
   | succ n' =>
     have hent : ((m.contexts[m.entry]?).map (·.impl)).getD 0 = ctx.impl := by simp [hctx]
-    have hfn : (lower m).funcs[ctx.impl]? = some (lowerImpl m impl) := by simp [lower, himpl]
+    have hfn : (lower m).funcs[ctx.impl]? = some (lowerImplAt m ctx.impl impl) := by
+      simp [lower, himpl]
     have hmaxd : ¬ ((0 : Nat) ≥ maxCallDepth) := by simp [maxCallDepth]
     rw [hent]
     rw [enterCall_nil ⟨p, m⟩ n' m.entry ctx impl hctx himpl hp]
@@ -195,11 +204,11 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
           (lowerBlock none [] false impl.body le startLS).2) := rfl
     generalize hr : (lowerBlock none [] false impl.body le startLS).1 = r at hlow
     generalize hl1 : (lowerBlock none [] false impl.body le startLS).2 = ls1 at hlow
-    have hT : (lowerImpl m impl).blocks = finishBlocks (bodyTail impl le r ls1).blocks := by
-      rw [lowerImpl_blocks m impl hp, hr, hl1]
-    let cx : FnCtx := ⟨⟨p, lower m⟩, lowerImpl m impl⟩
+    have hT : (lowerImplAt m ctx.impl impl).blocks = finishBlocks (bodyTail impl le r ls1).blocks := by
+      rw [lowerImplAt_blocks m ctx.impl impl hp, hr, hl1]
+    let cx : FnCtx := ⟨⟨p, lower m⟩, lowerImplAt m ctx.impl impl⟩
     have hextE : ExtT (bodyTail impl le r ls1) cx.fn.blocks := by
-      show ExtT _ (lowerImpl m impl).blocks
+      show ExtT _ (lowerImplAt m ctx.impl impl).blocks
       rw [hT]; exact extT_finish _
     have hext1 : ExtT ls1 cx.fn.blocks := by
       rcases bodyTail_cases impl le r ls1 with ⟨-, h⟩ | ⟨b, -, h⟩
@@ -208,7 +217,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     have hext0 : ExtT startLS cx.fn.blocks := hext1.of_adv (advB_lowerBlock none [] false impl.body _ _ _ _ hlow)
     obtain ⟨blk0, hb0, hb0p⟩ := hext0.params (b := 0) (blk := ⟨[], #[]⟩) rfl
     have hb0p' : blk0.params = [] := hb0p
-    have hpar : (lowerImpl m impl).params = [] := by simp [lowerImpl, hp]
+    have hpar : (lowerImplAt m ctx.impl impl).params = [] := by simp [lowerImplAt, hp]
     have hrel0 : ∀ act, Rel (⟨p, m⟩ : Cfg) (⟨impl.vars, act, [], 0 + 1⟩ : Env) cx
         (⟨act, [], {}, 0 + 1⟩ : Frame) startLS := fun act => ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
     have hclaim := (claims n').block none false impl.body hb le startLS r ls1 (0, 0) ⟨p, m⟩

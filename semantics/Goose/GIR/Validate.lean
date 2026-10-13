@@ -178,6 +178,30 @@ def checkSymbols (m : Module) (label : String) (f : Func) : Check Unit := do
         match t with
         | .param i => unless i < f.params.length do throw s!"summary names parameter {i}, which does not exist"
         | .global g => unless g < m.globals.size do throw s!"summary names global {g}, outside the global table"
+    if !f.roots.results.isEmpty && f.roots.results.size != f.results.length then
+      throw s!"root info has {f.roots.results.size} result rows, expected {f.results.length}"
+    for (i, roots) in f.roots.params do
+      unless i < f.params.length do throw s!"root info names parameter {i}, which does not exist"
+      unless f.params[i]!.isRefLike do throw s!"root info annotates non-reference parameter {i}"
+      for root in roots do
+        match root with
+        | .local _ => throw s!"root info for parameter {i} names a local slot"
+        | .global g => unless g < m.globals.size do throw s!"root info names global {g}, outside the global table"
+        | .param p => unless p == i do throw s!"root info for parameter {i} names parameter {p}"
+    for (i, roots) in f.roots.contents do
+      unless i < f.params.length do throw s!"content root info names parameter {i}, which does not exist"
+      unless f.params[i]!.isRefSlice do throw s!"content root info annotates a parameter that is not a reference to a slice"
+      for root in roots do
+        match root with
+        | .local _ => throw s!"content root info for parameter {i} names a local slot"
+        | .global g => unless g < m.globals.size do throw s!"content root info names global {g}, outside the global table"
+        | .param p => unless p < f.params.length do throw s!"content root info names parameter {p}, which does not exist"
+    for roots in f.roots.results do
+      for root in roots do
+        match root with
+        | .local x => throw s!"result root info names local slot {x}"
+        | .global g => unless g < m.globals.size do throw s!"result root info names global {g}, outside the global table"
+        | .param p => unless p < f.params.length do throw s!"result root info names parameter {p}, which does not exist"
     -- Value ids are dense and each is defined once.
     let n := f.numValues
     let mut seen := Array.replicate n false
@@ -224,7 +248,7 @@ def checkTermTypes (f : Func) (env : TyEnv) : Term → TyR Unit
       unless (← env.dataTy v) = t do tyErr "a returned value of another type than the result"
   | .exit v _ => do
     let _ ← env.intTy v
-  | .br .. | .abort .. => pure ()
+  | .br .. | .abort .. | .unreachable => pure ()
 
 def checkInstTypes (f : Func) (env : TyEnv) (vt : Array (Option VTy)) : Inst → Except String Unit
   | .def r op => do
@@ -332,6 +356,69 @@ def checkCfg (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit 
             violation .v020 s!"{label}: value %{v} is used in block {u} where its definition in block {db} does not dominate the use"
         | _ => violation .v020 s!"{label}: value %{v} has no definition"
 
+inductive ReturnFlow
+  | returns
+  | stops
+  | branches (targets : List BlockId)
+
+/-- A reached unreachable term is unknown for this analysis. It cannot be used
+as evidence that the containing function cannot return. -/
+def blockReturnFlow (mayReturn : Array Bool) : List Inst → ReturnFlow
+  | [] => .returns
+  | .def _ (.call g ..) :: rest =>
+    if mayReturn[g]?.getD true then blockReturnFlow mayReturn rest else .stops
+  | .term (.ret ..) :: _ => .returns
+  | .term (.br b ..) :: _ => .branches [b]
+  | .term (.condbr _ t _ e _) :: _ => .branches [t, e]
+  | .term (.abort ..) :: _ | .term (.exit ..) :: _ => .stops
+  | .term .unreachable :: _ => .returns
+  | _ :: rest => blockReturnFlow mayReturn rest
+
+/-- Whether a function has a path to `ret` when calls to proven nonreturning
+functions stop execution. The finite worklist is conservative on exhaustion. -/
+def funcMayReturn (mayReturn : Array Bool) (f : Func) : Bool := Id.run do
+  let rec walk : Nat → List BlockId → Array Bool → Bool
+    | 0, _, _ => true
+    | fuel + 1, [], _ => false
+    | fuel + 1, b :: todo, seen =>
+      if seen[b]?.getD false then walk fuel todo seen
+      else
+        let seen := seen.set! b true
+        match f.blocks[b]? with
+        | none => true
+        | some block =>
+          match blockReturnFlow mayReturn block.insts with
+          | .returns => true
+          | .stops => walk fuel todo seen
+          | .branches targets => walk fuel (targets ++ todo) seen
+  return walk (f.blocks.size + 1) [0] (Array.replicate f.blocks.size false)
+
+/-- The greatest conservative approximation, descending from the assumption
+that every function might return. -/
+def Module.functionsMayReturn (m : Module) : Array Bool := Id.run do
+  let initial := Array.replicate m.funcs.size true
+  let rec fix : Nat → Array Bool → Array Bool
+    | 0, _ => initial
+    | fuel + 1, current =>
+      let next := m.funcs.map (funcMayReturn current)
+      if next == current then current else fix fuel next
+  return fix (m.funcs.size + 1) initial
+
+/-- `unreachable` must immediately follow a call whose body proves it has no
+normal return path. -/
+def checkUnreachableOf (mayReturn : Array Bool) (label : String) (f : Func) : Check Unit := do
+  for block in f.blocks do
+    for h : i in [0:block.insts.length] do
+      match block.insts[i] with
+      | .term .unreachable =>
+        match (block.insts.take i).getLast? with
+        | some (.def _ (.call g ..)) =>
+          if mayReturn[g]?.getD true then
+            violation .v020 s!"{label}: unreachable does not immediately follow a call to a function that cannot return"
+        | _ =>
+          violation .v020 s!"{label}: unreachable does not immediately follow a call to a function that cannot return"
+      | _ => pure ()
+
 /-! ### GIR-V030 and GIR-V040 -/
 
 /-- The first problem of each kind found while following the scopes entered
@@ -435,6 +522,43 @@ def checkStorage (label : String) (f : Func) (vt : Array (Option VTy)) : Check U
 
 /-! ### GIR-V050 and GIR-V100 -/
 
+/-- Root annotations are over-approximations. Check them at every call site and
+against values the body actually returns before using them for effect checks. -/
+def checkRootAnnotationsOf (m : Module) (vts : Array (Array (Option VTy)))
+    (res : Array (List RootRef)) (nRoots k : Nat) : Check Unit := do
+  let some f := m.funcs[k]? | pure ()
+  let vt := vts[k]?.getD #[]
+  let p := f.provenance res vt nRoots
+  let label := s!"function {f.name}"
+  if !f.results.isEmpty then
+    let declared := (f.roots.results[0]?).getD []
+    for root in rootsAt res k do
+      unless declared.contains root do
+        violation .v050 s!"{label} result 0 root info omits a root returned by the body"
+  for block in f.blocks do
+    for inst in block.insts do
+      match inst with
+      | .def _ (.call g args _) =>
+        let some callee := m.funcs[g]? | pure ()
+        let calleeLabel := s!"function {callee.name}"
+        for h : j in [0:callee.params.length] do
+          if callee.params[j].isRefLike then
+            let expected := mapArgumentRoots f p args[j]! j
+            let declared := (callee.roots.params.find? (·.1 == j)).map (·.2) |>.getD []
+            unless expected.all declared.contains do
+              violation .v050 s!"{calleeLabel} parameter {j} root info omits a root passed at a call site"
+          if callee.params[j].isRefSlice then
+            let actual := argumentContents f p args[j]!
+            let declared := (callee.roots.contents.find? (·.1 == j)).map (·.2) |>.getD []
+            let mapped := mapContentRoots f p args declared
+            unless actual.all mapped.contains do
+              violation .v050 s!"{calleeLabel} content root info for parameter {j} omits a root passed at a call site"
+      | _ => pure ()
+
+def checkRootAnnotations (m : Module) (vts : Array (Array (Option VTy)))
+    (res : Array (List RootRef)) (nRoots : Nat) : Check Unit :=
+  checkAll (List.range m.funcs.size) (checkRootAnnotationsOf m vts res nRoots)
+
 def checkOrigin (label : String) (i : Inst) : Check Unit :=
   if i.needsOrigin && i.origin.isNone then
     violation .v100 s!"{label}: an operation that can abort or stands for a statement has no origin"
@@ -455,7 +579,8 @@ def checkSummaryOf (m : Module) (vts : Array (Array (Option VTy))) (res : Array 
     (nRoots : Nat) (k : Nat) : Check Unit :=
   match m.funcs[k]? with
   | none => pure ()
-  | some f =>
+  | some f => do
+    checkRootAnnotationsOf m vts res nRoots k
     let vt := vts[k]?.getD #[]
     asCheck .v050 s!"function {f.name}" (f.summaryClosed (f.effects m (f.provenance res vt nRoots)))
 
@@ -464,6 +589,10 @@ implementations, then the initializers. -/
 def Module.labelled (m : Module) : List (String × Func) :=
   (m.funcs.toList.map fun f => (s!"function {f.name}", f)) ++
   (m.globals.toList.map fun g => (s!"initializer of global {g.name}", g.init))
+
+def checkUnreachable (m : Module) : Check Unit :=
+  let mayReturn := m.functionsMayReturn
+  checkAll m.labelled fun (label, f) => checkUnreachableOf mayReturn label f
 
 def Module.infos (m : Module) : List FnInfo :=
   m.labelled.map fun (l, f) => FnInfo.mk l f (f.valueTypes m)
@@ -480,6 +609,7 @@ def validate (m : Module) : Check Unit := do
   checkAll m.labelled fun (l, f) => checkSymbols m l f
   checkAll m.infos fun i => checkTypes m i.label i.f i.vt
   checkAll m.infos fun i => checkCfg i.label i.f i.vt
+  checkUnreachable m
   let walks := m.infos.map fun i => walkScopes i.label i.f
   checkAll (m.infos.zip walks) fun (i, w) => do
     if let some msg := w.storage then violation .v030 msg

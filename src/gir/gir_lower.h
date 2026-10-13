@@ -1,9 +1,9 @@
 // Goose compiler — lowering a Core module to GIR-H.
 //
 // Every Core form becomes a fixed sequence of instructions, and every table is
-// numbered by the order the lowering creates its entries. The lowering reads
-// implementations, never a context's root annotations; a context contributes
-// only the implementation a call or the entry names.
+// numbered by the order the lowering creates its entries. Executable code
+// comes from implementations; root annotations merge the Core contexts that
+// specialize each implementation. Contexts also name call targets and entry.
 //
 // Slots, scopes and globals keep the numbers of the Core variables, blocks and
 // globals. Blocks and values are numbered as they are created: a block takes
@@ -33,6 +33,7 @@ public:
         : core(core), files(std::move(files)), origins(std::move(origins)), originof(std::move(origin)) {}
 
     GirModule Lower() {
+        noReturn = ComputeNoReturn();
         mod.types = core.types;
         mod.files = files;
         mod.origins = origins;
@@ -44,7 +45,7 @@ public:
         }
         for (auto &g : core.globals) globaltypes.push_back({ g.type, g.kind });
         for (auto &g : core.globals) mod.globals.push_back(LowerGlobal(g));
-        for (auto &im : core.impls) mod.funcs.push_back(LowerImpl(im));
+        for (size_t i = 0; i < core.impls.size(); i++) mod.funcs.push_back(LowerImpl(core.impls[i], (int)i));
         mod.entry = core.contexts[core.entry].impl;
         return std::move(mod);
     }
@@ -57,6 +58,47 @@ private:
     GirModule mod;
     vector<pair<vector<GirTypeId>, vector<GirTypeId>>> sigs;
     vector<pair<GirTypeId, CoreVarKind>> globaltypes;
+    vector<char> noReturn;
+
+    static bool Plain(const CoreStmt &s) {
+        switch (s.kind) {
+            case CoreStmtKind::Let: case CoreStmtKind::Assign: case CoreStmtKind::AssignOp:
+            case CoreStmtKind::Rebind: case CoreStmtKind::Expr: case CoreStmtKind::Append:
+            case CoreStmtKind::Print: case CoreStmtKind::Assert:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool BlockStops(const CoreBlock &b, const vector<char> &nr) const {
+        for (auto &s : b.stmts) {
+            bool stops = s.kind == CoreStmtKind::Abort || s.kind == CoreStmtKind::Exit;
+            if (s.kind == CoreStmtKind::Expr && s.expr && s.expr->kind == CoreExprKind::Call &&
+                s.expr->ctx >= 0 && s.expr->ctx < (int)nr.size())
+                stops = nr[s.expr->ctx];
+            if (s.kind == CoreStmtKind::If && s.otherwise)
+                stops = BlockStops(*s.then, nr) && BlockStops(*s.otherwise, nr);
+            if (stops) return true;
+            if (!Plain(s)) return false;
+        }
+        return false;
+    }
+
+    vector<char> ComputeNoReturn() const {
+        vector<char> current(core.contexts.size(), 0);
+        for (size_t round = 0; round < core.contexts.size(); round++) {
+            auto next = current;
+            for (size_t c = 0; c < core.contexts.size(); c++) {
+                auto impl = core.contexts[c].impl;
+                if (impl >= 0 && impl < (int)core.impls.size())
+                    next[c] = BlockStops(core.impls[impl].body, current);
+            }
+            if (next == current) break;
+            current = std::move(next);
+        }
+        return current;
+    }
 
     // The function being lowered.
     struct Loop {
@@ -319,7 +361,13 @@ private:
                 i.idx = core.contexts[e.ctx].impl;
                 i.vals = std::move(vs);
                 i.org = Org(e.org);
-                return EmitDef(std::move(i));
+                auto v = EmitDef(std::move(i));
+                if (e.ctx >= 0 && e.ctx < (int)noReturn.size() && noReturn[e.ctx]) {
+                    GirInst end;
+                    end.op = GirOp::Unreachable;
+                    EmitTerm(std::move(end));
+                }
+                return v;
             }
             case CoreExprKind::Push: {
                 auto r = LowerPlace(*e.place);
@@ -431,7 +479,12 @@ private:
     int LowerView(const CoreView &v) {
         if (v.kind == CoreView::Of) {
             auto r = LowerPlace(*v.place);
-            return Def(GirOp::Snap, r);
+            GirInst i;
+            i.op = GirOp::Snap;
+            i.a = r;
+            i.snap = v.place->kind == CorePlace::Local || v.place->kind == CorePlace::Global
+                ? GirSnapshotMode::Owner : GirSnapshotMode::Borrowed;
+            return EmitDef(std::move(i));
         }
         auto s = LowerExpr(*v.expr);
         return Def(GirOp::SliceView, s);
@@ -724,7 +777,12 @@ private:
         int owner = -1, vw;
         if (s.view->kind == CoreView::Of) {
             owner = LowerPlace(*s.view->place);
-            vw = Def(GirOp::Snap, owner);
+            GirInst i;
+            i.op = GirOp::Snap;
+            i.a = owner;
+            i.snap = s.view->place->kind == CorePlace::Local || s.view->place->kind == CorePlace::Global
+                ? GirSnapshotMode::Owner : GirSnapshotMode::Borrowed;
+            vw = EmitDef(std::move(i));
         } else {
             auto sl = LowerExpr(*s.view->expr);
             vw = Def(GirOp::SliceView, sl);
@@ -850,7 +908,38 @@ private:
                 slots.push_back({ (*vs)[i].type, (*vs)[i].kind, (*vs)[i].scope, (int)i });
     }
 
-    GirFunc LowerImpl(const CoreImpl &impl) {
+    GirRootInfo Roots(int implIndex) const {
+        GirRootInfo out;
+        auto add = [](vector<CoreRootRef> &to, const vector<CoreRootRef> &from) {
+            for (auto &r : from)
+                if (find(to.begin(), to.end(), r) == to.end()) to.push_back(r);
+        };
+        if (implIndex < 0 || implIndex >= (int)core.impls.size()) return out;
+        auto &impl = core.impls[implIndex];
+        out.results.resize(impl.results.size());
+        for (auto &ctx : core.contexts) {
+            if (ctx.impl != implIndex) continue;
+            for (size_t i = 0; i < impl.params.size(); i++) {
+                auto var = impl.params[i].var;
+                for (auto &roots : ctx.varroots)
+                    if (roots.first == var) {
+                        auto row = find_if(out.params.begin(), out.params.end(), [&](auto &r) { return r.first == (int)i; });
+                        if (row == out.params.end()) out.params.push_back({ (int)i, {} }), row = out.params.end() - 1;
+                        add(row->second, roots.second);
+                    }
+                for (size_t j = 0; j < ctx.varroots.size() && j < ctx.hascontent.size(); j++)
+                    if (ctx.varroots[j].first == var && ctx.hascontent[j]) {
+                        auto row = find_if(out.contents.begin(), out.contents.end(), [&](auto &r) { return r.first == (int)i; });
+                        if (row == out.contents.end()) out.contents.push_back({ (int)i, {} }), row = out.contents.end() - 1;
+                        add(row->second, ctx.content[j]);
+                    }
+            }
+            for (size_t i = 0; i < ctx.resultroots.size() && i < out.results.size(); i++) add(out.results[i], ctx.resultroots[i]);
+        }
+        return out;
+    }
+
+    GirFunc LowerImpl(const CoreImpl &impl, int implIndex) {
         Begin(&impl.vars);
         vector<GirTypeId> ptys;
         for (auto &p : impl.params) ptys.push_back(impl.vars[p.var].type);
@@ -875,6 +964,7 @@ private:
         BlockScopes(-1, impl.body, pairs);
         f.scopes = ScopeTable(pairs);
         f.blocks = std::move(blocks);
+        f.roots = Roots(implIndex);
         f.summary = impl.summary;
         f.org = impl.vars.empty() ? -1 : Org(impl.vars[0].org);
         auto index = (size_t)(&impl - core.impls.data());
@@ -910,6 +1000,7 @@ private:
         ExprScopes(-1, *g.init, pairs);
         out.init.scopes = ScopeTable(pairs);
         out.init.blocks = std::move(blocks);
+        out.init.roots.results.resize(1);
         out.init.summary.unknown = true;
         out.init.org = Org(g.org);
         return out;

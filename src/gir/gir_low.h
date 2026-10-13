@@ -656,6 +656,12 @@ private:
                 Term(std::move(e));
                 return;
             }
+            case GirOp::Unreachable: {
+                GirInst end;
+                end.op = GirOp::Unreachable;
+                Term(std::move(end));
+                return;
+            }
             default: return;
         }
     }

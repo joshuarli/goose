@@ -56,6 +56,12 @@ inductive Bnd
   | fromEnd (v : ValueId)
   deriving DecidableEq, Repr
 
+/-- A sampled array view comes directly from its owner or through a reference. -/
+inductive SnapshotMode
+  | owner
+  | borrowed
+  deriving DecidableEq, Repr
+
 inductive PrintPart
   | text (s : String)
   | val (v : ValueId)
@@ -81,7 +87,7 @@ inductive Op
   /-- The same address as a read-only reference. -/
   | refFreeze (r : ValueId)
   | load (r : ValueId)
-  | snapshot (r : ValueId)
+  | snapshot (mode : SnapshotMode) (r : ValueId)
   | sliceView (s : ValueId)
   | viewLen (v : ValueId)
   | viewSlice (m : Mutability) (v : ValueId) (lo hi : Bnd) (org : Option OriginId)
@@ -110,6 +116,8 @@ inductive Term
   | ret (vs : List ValueId) (org : Option OriginId)
   | abort (k : AbortKind) (org : Option OriginId)
   | exit (v : ValueId) (org : Option OriginId)
+  /-- The preceding call is known not to return. Reaching this term is a fault. -/
+  | unreachable
 
 
 inductive Inst
@@ -130,6 +138,14 @@ structure Slot where
   scope : ScopeId
   var : VarId
 
+/-- Root annotations merged from the Core contexts that specialize this
+implementation. Rows use parameter positions; result rows align with the
+function results. -/
+structure RootInfo where
+  params : Array (Nat × List RootRef) := #[]
+  contents : Array (Nat × List RootRef) := #[]
+  results : Array (List RootRef) := #[]
+
 
 structure Func where
   name : String
@@ -140,6 +156,7 @@ structure Func where
   /-- The scope tree: the parent of each scope, if it has one. -/
   scopes : Array (Option ScopeId)
   blocks : Array Block
+  roots : RootInfo := {}
   summary : SummaryAnn
   org : Option OriginId
 
@@ -191,7 +208,8 @@ def Op.uses : Op → List ValueId
   | .bin _ _ a b _ | .cmp _ _ a b | .boolCmp _ a b => [a, b]
   | .un _ _ a _ | .boolNot a | .conv _ _ _ a _ | .next _ a => [a]
   | .refElem v i | .indexChecked v i _ => [v, i]
-  | .refFreeze r | .load r | .snapshot r | .sliceView r | .viewLen r | .arrayLen r => [r]
+  | .refFreeze r | .load r | .sliceView r | .viewLen r | .arrayLen r => [r]
+  | .snapshot _ r => [r]
   | .viewSlice _ v lo hi _ => v :: (lo.uses ++ hi.uses)
   | .push r v _ => [r, v]
   | .call _ args _ => args
@@ -212,7 +230,7 @@ def Term.uses : Term → List ValueId
   | .br _ args => args
   | .condbr c _ ta _ ea => c :: (ta ++ ea)
   | .ret vs _ => vs
-  | .abort .. => []
+  | .abort .. | .unreachable => []
   | .exit v _ => [v]
 
 def Inst.uses : Inst → List ValueId

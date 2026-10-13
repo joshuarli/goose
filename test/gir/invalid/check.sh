@@ -47,6 +47,13 @@ set -e
 [ "$out" = '["fault","dangling_root"]' ] && [ "$code" -eq 4 ] ||
     { echo "FAIL gir_accepted_dangling_reference.json: run gave $out ($code)" >&2; status=1; }
 
+set +e
+out=$("$tool" gir-run "$here/gir_accepted_unreachable.json")
+code=$?
+set -e
+[ "$out" = '["done",["exited",7],""]' ] && [ "$code" -eq 0 ] ||
+    { echo "FAIL gir_accepted_unreachable.json: run gave $out ($code)" >&2; status=1; }
+
 for f in "$here"/*.json; do
     grep -q "^$(basename "$f")	" "$here/INDEX" || { echo "FAIL $(basename "$f") is not in INDEX" >&2; status=1; }
 done

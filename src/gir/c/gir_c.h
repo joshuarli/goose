@@ -466,6 +466,7 @@ private:
                 return;
             }
             case GirOp::Exit: L("gs_exit(", V(i.a), ");"); return;
+            case GirOp::Unreachable: L("for (;;) { }"); return;
             default: L("/* unsupported operation */"); return;
         }
         (void)ty;

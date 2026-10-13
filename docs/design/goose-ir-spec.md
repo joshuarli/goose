@@ -383,7 +383,7 @@ Encoding: JSON in which every record is an **array** whose first element is a ta
 
 The decoder rejects, with `malformed`: an unknown tag, a wrong arity, a wrong element type, an out-of-range index, a constant outside its type's range, trailing data, input over 64 MiB, nesting deeper than 256, more than `2^24` nodes in one function.
 
-The schema string names the representation and revision (`goose-core/0.2`, `gir-h/0.2`, `gir-l/0.2`). A reader accepts only the exact string it implements. Artifacts are not persisted across compiler versions, so there is no migration.
+The schema string names the representation and revision (`goose-core/0.2`, `gir-h/0.3`, `gir-l/0.2`). A reader accepts only the exact string it implements. Artifacts are not persisted across compiler versions, so there is no migration.
 
 ### 12.1 Tag table for goose-core/0.2
 
@@ -534,7 +534,7 @@ A golden `NAME.goose` has `NAME.core.json` and `NAME.out`, the standard output. 
 | `aborted` | abort kind, `nat` line | The abort kind is one of `div_zero div_overflow index_oob slice_oob assert user_abort int_overflow cast_range`; the line is that of the aborting operation's origin. |
 | `exited` | `int` | `exit` was executed with that value. |
 
-### 12.2 Tag table for gir-h/0.2
+### 12.2 Tag table for gir-h/0.3
 
 This subsection is the concrete encoding of §8 for profile `core-pilot`, and the reference lowering of §8.3 whose output a conforming lowering reproduces byte for byte. A tag not listed here is `malformed`. The shrink and construction instructions, `invoke`, `escape`, `array.index.proven` and the fact certificates of §10 are added with the profiles and the item that need them, and are not decoded now.
 
@@ -566,14 +566,16 @@ The file table and the origin table are those of the Core module the lowering re
 
 | Tag | Fields | Meaning |
 |---|---|---|
-| `module` | `str` schema (`gir-h/0.2`), `str` profile (`core-pilot`), `[file]` files, `[Ty]` types, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | `file` and `origin` are as in §12.1. The entry function has no parameters and no results. |
+| `module` | `str` schema (`gir-h/0.3`), `str` profile (`core-pilot`), `[file]` files, `[Ty]` types, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | `file` and `origin` are as in §12.1. The entry function has no parameters and no results. |
 | `global` | `str` name, `ty`, `VarKind`, `func` init, `org` | The initializer is a function with no parameters whose one result has the global's type; it is run in global order, in a fresh activation, before the entry. Its summary is `summary_unknown` and its origin is the global's. |
-| `func` | `str` name, `[ty]` params, `[ty]` results, `[slot]`, `[scope]`, `[block]`, `Summary`, `[org]?` origin | Block 0 is the entry and its parameters have the types `params`. The summary is the one of the Core implementation, unchanged, and is checked against the body (§9, `GIR-V050`). The origin of an implementation is that of its first variable, absent when it has none. |
+| `func` | `str` name, `[ty]` params, `[ty]` results, `[slot]`, `[scope]`, `[block]`, `roots`, `Summary`, `[org]?` origin | Block 0 is the entry and its parameters have the types `params`. `roots` carries conservative parameter, slice-content and result roots from the Core contexts, using parameter positions and the function's slot and global numbers. The verifier checks that the body and call sites fit these annotations before using them to check effects. The summary is the one of the Core implementation, unchanged, and is checked against the body (§9, `GIR-V050`). The origin of an implementation is that of its first variable, absent when it has none. |
 | `slot` | `ty`, `VarKind`, `scope` owner, `nat` var | Memory-resident storage of the source variable `var`. Its address is a `ref` that is `mut` exactly when the kind is `var`. |
 | `scope` | `[scope]?` parent | A parent has a smaller number. |
 | `block` | `[bp]` params, `[inst]` | One terminator is required, last. Zero or several are decoded and rejected by the verifier. |
 | `bp` | `val`, `ty` | A block parameter. |
 | `summary`, `summary_unknown`, `t_param`, `t_global` | as in §12.1 | Target indices are against this function's parameters and the globals. |
+| `roots` | `[vr]`, `[cr]`, `[[RootRef]]` | Parameter roots, slice-content roots for `ref slice` parameters, and one root set per result. |
+| `vr`, `cr` | `nat` parameter position, `[RootRef]` | A row in parameter roots or content roots. A root is `r_local slot`, `r_global glob`, or `r_param` parameter position. |
 
 Types are the Core types (`int bool unit arr grow ref slice tuple`, fields as in §12.1) and one more:
 
@@ -602,7 +604,7 @@ Each instruction record that defines a value begins with that value's `val`. The
 | `i_elem` | `val` view, `val` index | `ref M T` for a view `view M T`. The address of element `index` of the run: no check and no read, so an index outside the object faults when the address is used. |
 | `i_freeze` | `val` ref | `ref const T`, the same address. |
 | `i_load` | `val` ref | `T` for `ref M T`. `T` is flat, a reference or a slice. |
-| `i_snap` | `val` ref to `arr` or `grow` | `view M E`: region and current length sampled now. |
+| `i_snap` | `SnapshotMode`, `val` ref to `arr` or `grow` | `view M E`: region and current length sampled now. `owner` keeps the array element mutability even when the binding is immutable; `borrowed` inherits the reference mutability. |
 | `i_sview` | `val` slice | `view M E`: the slice's own run. |
 | `i_vlen` | `val` view | `i64`, the sampled length. |
 | `i_vslice` | `Mut`, `val` view, `Bound` lo, `Bound` hi, `[org]?` | `slice M E`. Aborts `slice_oob` unless `0 ≤ lo ≤ hi ≤ length`, where an omitted `lo` is 0 and an omitted `hi` the length, and `bd_end` is the length minus the value, computed on mathematical integers. Needs an origin. |
@@ -627,12 +629,13 @@ Each instruction record that defines a value begins with that value's `val`. The
 | `t_ret` | `[val]`, `[org]?` | The values have the function's result types. |
 | `t_abort` | `AbortKind`, `[org]?` | Needs an origin. |
 | `t_exit` | `val` (an integer), `[org]?` | Needs an origin. |
+| `t_unreachable` | none | The previous instruction is a call to a context proven not to return. Reaching this terminator faults with `flow`. |
 
 A non-aborting operation may carry an origin that the table does not require.
 
 #### What the reader checks by tag and arity
 
-Before verification the decoder rejects: an unknown tag or enumeration value; a wrong arity or element kind; a `ty`, `slot`, `scope`, `block`, `fn`, `glob` or `org` outside its table (a `val` only has to be below 2^31); a type whose components do not have smaller numbers, a `view` used as a component, an `arr` count below 1; an `i_int` whose type is not an integer type or whose value is outside its range; a scope whose parent is not an earlier scope; a type that is not an integer type where one is required; an unsorted or repeated summary target list or one naming a parameter or global that does not exist; trailing data, input over 64 MiB, nesting deeper than 256, more than `2^24` instructions in one function. The schema and profile strings must be exactly `gir-h/0.2` and `core-pilot`. Everything else is the verifier's.
+Before verification the decoder rejects: an unknown tag or enumeration value; a wrong arity or element kind; a `ty`, `slot`, `scope`, `block`, `fn`, `glob` or `org` outside its table (a `val` only has to be below 2^31); a type whose components do not have smaller numbers, a `view` used as a component, an `arr` count below 1; an `i_int` whose type is not an integer type or whose value is outside its range; a scope whose parent is not an earlier scope; a type that is not an integer type where one is required; an unsorted or repeated summary target list or one naming a parameter or global that does not exist; trailing data, input over 64 MiB, nesting deeper than 256, more than `2^24` instructions in one function. The schema and profile strings must be exactly `gir-h/0.3` and `core-pilot`. Everything else is the verifier's.
 
 #### What the verifier checks for this profile
 
@@ -642,13 +645,13 @@ The checks run in the order of their codes over the whole module, so a module is
 |---|---|
 | `GIR-V001` | Entry exists and takes and returns nothing; each global's initializer takes nothing and returns the global's type; every table index and origin in range; each function has a block; scope parents earlier; each value defined once with ids dense from 0; summary targets exist. |
 | `GIR-V010` | Block 0's parameters are the function's parameters; slot types are storable; every instruction's operands have the types its row requires; `x_init`, `x_store` and `x_append` types; `t_condbr`, `t_ret` and `t_exit` operands. |
-| `GIR-V020` | Exactly one terminator per block, last; edge arguments match the target's parameters in number and type; the entry has no predecessor; every block is reachable; every use is dominated by its definition (a use in the same block follows it). |
+| `GIR-V020` | Exactly one terminator per block, last; edge arguments match the target's parameters in number and type; the entry has no predecessor; every block is reachable; every use is dominated by its definition (a use in the same block follows it); `t_unreachable` immediately follows a call to a function whose body proves it has no normal return path. The proof starts with every function possibly returning and removes only bodies with no reachable `t_ret`, treating a reached `t_unreachable` as unknown. |
 | `GIR-V030` | `i_slot` and `x_init` only while the slot's scope is entered; `x_store`, `i_push` and `x_append` only through a `mut` reference; `i_load` and `x_store` only of a flat, reference or slice type. |
 | `GIR-V040` | `x_enter` only when the scope's parent is the innermost entered scope (or it has none and none is entered); `x_leave` only of the innermost; every path to a block enters the same scopes; `t_ret` with none entered. |
 | `GIR-V050` | The summary closes over the effects of the body (below). |
 | `GIR-V100` | Every operation marked "needs an origin" has one. |
 
-The effects of a body are computed without any root annotation. Every reference, slice or view value gets the set of roots it may have: `i_slot` gives its slot (a local), `i_global` its global, the entry block's parameter `i` the parameter `i`; `i_elem`, `i_freeze`, `i_snap`, `i_sview`, `i_vslice`, `i_index` and `i_push` keep the roots of their operand; `i_load` of a reference or slice gives the union of what was stored in the slots of its operand's roots; a block parameter gets what its incoming edges pass; a call gives its callee's returned roots with each `param j` replaced by the roots of argument `j`. A slot holds the union of what `x_init` and `x_store` put in it. The result is the least fixed point. Reads are `i_load`, `i_snap` and `i_alen` through a reference; writes are `x_store`; grows are `i_push` and `x_append`; each is attributed to the parameter and global roots of its operand and to nothing for a local. A store through the slot of a reference-typed parameter rebinds that parameter. Aborting is `i_bin` with `add sub mul div mod`, `i_un` with `neg`, `i_conv` with `as`, `i_vslice`, `i_index`, `t_abort` and `t_exit`; printing is `x_print`. A call adds its callee's summary with parameters mapped through the argument roots; a callee with an unknown summary makes this function's own summary unknown unless it is already. Each effect must be in the summary.
+The body determines reference provenance and result roots. Every reference, slice or view value gets the set of roots it may have: `i_slot` gives its slot (a local), `i_global` its global, the entry block's parameter `i` the parameter `i`; `i_elem`, `i_freeze`, `i_snap`, `i_sview`, `i_vslice`, `i_index` and `i_push` keep the roots of their operand; `i_load` of a reference or slice gives the union of what was stored in the slots of its operand's roots and the declared content roots when loading through a `ref slice` parameter; a block parameter gets what its incoming edges pass; a call gives its callee's body-derived returned roots with each `param j` replaced by the roots of argument `j`. A slot holds the union of what `x_init` and `x_store` put in it. Result roots are the least fixed point over function bodies and recursive calls. The `roots` record is a conservative annotation: computed result roots must be included, parameter roots must cover the roots supplied at each call, and content roots must cover the backing roots passed at each call. The verifier checks these bounds before using annotations to attribute effects, so missing annotations cannot hide an effect. Reads are `i_load`, `i_snap` and `i_alen` through a reference; writes are `x_store`; grows are `i_push` and `x_append`; each is attributed to the parameter and global roots of its operand and to nothing for a local. A store through the slot of a reference-typed parameter rebinds that parameter. Aborting is `i_bin` with `add sub mul div mod`, `i_un` with `neg`, `i_conv` with `as`, `i_vslice`, `i_index`, `t_abort` and `t_exit`; printing is `x_print`. A call adds its callee's summary with parameters mapped through the argument roots and the globals listed in those parameter root annotations; a callee with an unknown summary makes this function's own summary unknown unless it is already. Each effect must be in the summary.
 
 #### The reference lowering
 

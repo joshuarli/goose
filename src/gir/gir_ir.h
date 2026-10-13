@@ -26,7 +26,7 @@ enum class GirOp : uint8_t {
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
     BytesFill, RtCall,
     // Terminators.
-    Br, CondBr, Ret, Abort, Exit,
+    Br, CondBr, Ret, Abort, Exit, Unreachable,
 };
 
 inline bool GirDefines(GirOp op) { return op <= GirOp::HdrLen; }
@@ -54,6 +54,11 @@ enum class GirAbortKind : uint8_t {
     DivZero, DivOverflow, IndexOob, SliceOob, Assert, UserAbort, IntOverflow, CastRange,
 };
 
+// An array view is either taken directly from its owner or borrowed through a
+// reference. Direct owners remain writable even when their variable binding is
+// immutable; borrowed views inherit the reference's mutability.
+enum class GirSnapshotMode : uint8_t { Owner, Borrowed };
+
 inline const char *GirAbortKindName(GirAbortKind k) {
     static const char *names[] = { "div_zero", "div_overflow", "index_oob", "slice_oob", "assert",
                                    "user_abort", "int_overflow", "cast_range" };
@@ -80,7 +85,8 @@ struct GirPart {
 //   Conv: res, conv, ty (source), ty2 (target), a, org        Next: res, ty, a
 //   Slot: res, idx (slot)         Global: res, idx (global)
 //   Elem: res, a (view), b (index)
-//   Freeze/Load/Snap/SliceView/ViewLen/ArrayLen: res, a
+//   Freeze/Load/SliceView/ViewLen/ArrayLen: res, a
+//   Snap: res, snapshot mode, a
 //   ViewSlice: res, mut, a (view), lo, hi, org
 //   Index: res, a (view), b (index), org     Push: res, a (ref), b (value), org
 //   Call: res, idx (function), vals, org     Arr: res, ty, vals      Fill: res, ty, a
@@ -113,6 +119,7 @@ struct GirInst {
     CoreCmpOp cmp = CoreCmpOp::Eq;
     CoreConvKind conv = CoreConvKind::Widen;
     CoreMut mut = CoreMut::Mut;
+    GirSnapshotMode snap = GirSnapshotMode::Borrowed;
     GirAbortKind abort = GirAbortKind::Assert;
     int idx = -1, idx2 = -1;
     int a = -1, b = -1;
@@ -140,6 +147,14 @@ struct GirSlot {
     int var = 0;
 };
 
+// Root annotations merged from every Core context that specializes this
+// implementation. Parameter indices are positional in GIR.
+struct GirRootInfo {
+    vector<pair<int, vector<CoreRootRef>>> params;
+    vector<pair<int, vector<CoreRootRef>>> contents;
+    vector<vector<CoreRootRef>> results;
+};
+
 // A member of a low function's frame: a scalar, a block of bytes, or the
 // header of a resizable. A header's elements are on the data stack
 // `stack` of the function, numbered from its hidden base argument.
@@ -156,6 +171,7 @@ struct GirFunc {
     string name;
     vector<GirTypeId> params, results;
     vector<GirSlot> slots;
+    GirRootInfo roots;
     vector<int> scopes;   // The parent of each scope, or -1.
     vector<GirBlock> blocks;
     CoreSummary summary;

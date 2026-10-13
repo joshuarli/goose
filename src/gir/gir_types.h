@@ -216,7 +216,8 @@ public:
                 auto &pointee = m.Type(m.Type(r.ty).elem);
                 if (pointee.kind != CoreType::Arr && pointee.kind != CoreType::Grow)
                     return GirTyErr("snapshot of a reference to something that is not an array");
-                return GirTyOk(m.ViewType(m.Type(r.ty).mut, pointee.elem));
+                auto mut = i.snap == GirSnapshotMode::Owner ? CoreMut::Mut : m.Type(r.ty).mut;
+                return GirTyOk(m.ViewType(mut, pointee.elem));
             }
             case GirOp::SliceView: {
                 auto s = Data(i.a);

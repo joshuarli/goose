@@ -115,10 +115,10 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
   | .load r => do
     let (_, t) ← env.refTy r
     pure (.data t)
-  | .snapshot r => do
+  | .snapshot mode r => do
     let (m, t) ← env.refTy r
     match arrayElem? t with
-    | some e => pure (.view m e)
+    | some e => pure (.view (if mode == .owner then .mutable else m) e)
     | none => tyErr "snapshot of a reference to something that is not an array"
   | .sliceView s => do
     match (← env.dataTy s) with

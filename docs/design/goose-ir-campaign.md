@@ -290,7 +290,7 @@ Each change made is appended to §8.
 - `goose --stable-names` (hidden, not in the usage text): names emitted functions, types, literals and nonlocal-target ids from stable keys. A seam for unit output; not pre-authorized by name, added because unit output needs it testable on its own.
 - `goose build --units` with `--rebuild` and `--verify-reuse`: builds through units with a persistent object store under the program's build directory; without `--units`, `goose build` is unchanged. `--pipeline gir --emit-units DIR` writes IR-built units.
 - `goose --emit-units DIR`: writes the program as C translation units, one runtime header and a link list; implies stable names; composes with `--share`.
-- `goose --emit-gir-high FILE`: writes a `gir-h/0.2` module; the verifier runs on every lowered module.
+- `goose --emit-gir-high FILE`: writes a `gir-h/0.3` module; the verifier runs on every lowered module.
 - `goose --pipeline legacy|gir` (default `legacy`): with `gir`, `-o`, `--standalone` and `--jit` produce C from the IR pipeline; features outside the profile fail with `error: unsupported in pipeline gir: <feature-id>`. `goose --emit-gir-low FILE`: writes a `gir-l/0.2` module (specification §12.3; no reader exists for it).
 - `goose-semantics` (new tool, test-time only): `audit`, `run`, `validate`, `share`, `lower`, `gir-validate`, `gir-run`, `gir-reencode`, `agree`.
 - `fuzz/driver.py`: `--semantics TOOL`, `--pipeline NAME`.

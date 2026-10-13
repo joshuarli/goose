@@ -1,11 +1,13 @@
+import Goose.Core.Roots
 import Goose.GIR.Typing
 
 /-!
 Lowering of a Core module to GIR-H: the reference for how every Core form
 becomes instructions, and for the numbering of every table.
 
-The lowering reads implementations, never a context's root annotations; a
-context contributes only the implementation index of a call and of the entry.
+The lowering reads implementations for executable code and merges the root
+annotations of every context that specializes each implementation. Contexts
+also provide the implementation index of a call and of the entry.
 
 ## Numbering
 
@@ -424,7 +426,9 @@ def lowerExpr : Expr → B ValueId
   | .call c args org => do
     let vs ← lowerArgs args
     let f ← implOfContext c
-    emitDef (.call f vs (some org))
+    let r ← emitDef (.call f vs (some org))
+    if (← read).mod.noReturn c then emitTerm .unreachable
+    pure r
   | .push owner e => do
     let r ← lowerPlace owner
     let v ← lowerExpr e
@@ -480,7 +484,7 @@ def lowerPlace : Place → B ValueId
 def lowerView : View → B ValueId
   | .of p => do
     let r ← lowerPlace p
-    emitDef (.snapshot r)
+    emitDef (.snapshot (match p with | .var _ | .global _ => .owner | _ => .borrowed) r)
   | .val e => do
     let s ← lowerExpr e
     emitDef (.sliceView s)
@@ -495,7 +499,7 @@ and the view. -/
 def lowerEachSource : View → B (Option ValueId × ValueId)
   | .of p => do
     let r ← lowerPlace p
-    let vw ← emitDef (.snapshot r)
+    let vw ← emitDef (.snapshot (match p with | .var _ | .global _ => .owner | _ => .borrowed) r)
     pure (some r, vw)
   | .val e => do
     let s ← lowerExpr e
@@ -767,8 +771,20 @@ def lowerEnv (m : Module) (vars : Array LocalVar) : LEnv :=
     globals := m.globals.map fun g => (g.ty, g.kind)
     sigs := m.impls.map fun impl => (impl.params.toList.map (tyOfVar impl ·.var), impl.results.toList) }
 
-/-- Lower an implementation. -/
-def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
+def lowerRootInfo (m : Module) (implId : ImplId) (impl : Impl) : GIR.RootInfo :=
+  let contexts := m.contexts.filter (·.impl == implId)
+  let params := impl.params.toList.zipIdx.filterMap fun (p, i) =>
+    let roots := contexts.filterMap fun c => (c.varRoots.find? (·.1 == p.var)).map (·.2)
+    if roots.isEmpty then none else some (i, roots.foldl unionRoots [])
+  let contents := impl.params.toList.zipIdx.filterMap fun (p, i) =>
+    let roots := contexts.filterMap fun c => (c.contentRoots.find? (·.1 == p.var)).map (·.2)
+    if roots.isEmpty then none else some (i, roots.foldl unionRoots [])
+  let results := (List.range impl.results.size).map fun i =>
+    (contexts.filterMap fun c => c.resultRoots[i]?).foldl unionRoots []
+  { params := params.toArray, contents := contents.toArray, results := results.toArray }
+
+/-- Lower an implementation using its position in the module as its identity. -/
+def lowerImplAt (m : Module) (implId : ImplId) (impl : Impl) : GIR.Func :=
   let env := lowerEnv m impl.vars
   let act : B Unit := do
     let (b0, ps) ← newBlock (impl.params.toList.map fun p => .data (tyOfVar impl p.var))
@@ -785,8 +801,16 @@ def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
     slots := env.slots
     scopes := scopeTable (blockScopes none impl.body)
     blocks := finishBlocks s.blocks
+    roots := lowerRootInfo m implId impl
     summary := impl.summary
     org := impl.vars[0]?.map (·.org) }
+
+/-- Lower one implementation without a supplied module index. This is used by
+the fragment proof for standalone implementations; module lowering uses
+`lowerImplAt` so same-named implementations keep distinct context metadata. -/
+def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
+  let implId := (m.impls.findIdx? (·.name == impl.name)).getD m.impls.size
+  lowerImplAt m implId impl
 
 /-- Lower a global's initializer to a function that returns the value. -/
 def lowerGlobal (m : Module) (g : Global) : GIR.Global :=
@@ -807,6 +831,7 @@ def lowerGlobal (m : Module) (g : Global) : GIR.Global :=
         slots := #[]
         scopes := scopeTable (exprScopes none g.init)
         blocks := finishBlocks s.blocks
+        roots := { results := #[[]] }
         summary := .unknown
         org := some g.org }
     org := g.org }
@@ -815,8 +840,30 @@ def lowerGlobal (m : Module) (g : Global) : GIR.Global :=
 def lower (m : Module) : GIR.Module :=
   { files := m.files
     globals := m.globals.map (lowerGlobal m)
-    funcs := m.impls.map (lowerImpl m)
+    funcs := m.impls.mapIdx fun implId impl => lowerImplAt m implId impl
     entry := ((m.contexts[m.entry]?).map (·.impl)).getD 0
     origins := m.origins }
+
+private def sameNameRootImpl : Impl :=
+  { name := "same"
+    params := #[⟨0, .byRef⟩]
+    results := #[]
+    vars := #[⟨"p", .ref .mutable (.int .i64), .immutable, 0, 0⟩]
+    body := .mk 0 [] none
+    summary := .unknown }
+
+private def sameNameRootModule : Module :=
+  { files := #[]
+    types := #[]
+    globals := #[]
+    impls := #[sameNameRootImpl, sameNameRootImpl]
+    contexts := #[
+      { impl := 0, decl := "same#0", varRoots := [(0, [.global 0])], resultRoots := [] },
+      { impl := 1, decl := "same#1", varRoots := [(0, [.global 1])], resultRoots := [] }]
+    entry := 0
+    origins := #[] }
+
+#guard (lower sameNameRootModule).funcs[0]?.map (·.roots.params) == some #[(0, [.global 0])]
+#guard (lower sameNameRootModule).funcs[1]?.map (·.roots.params) == some #[(0, [.global 1])]
 
 end Goose.Lower
