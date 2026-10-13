@@ -1,6 +1,7 @@
 import Goose.Proofs.Lower
 import Goose.Core.Run
 import Goose.Lower.Commands
+import Goose.Lower.While
 
 /-!
 Checks that the lowering theorem is not vacuous: committed goldens inside the
@@ -38,6 +39,18 @@ def userAbort : String := include_str "../../../test/gir/golden/gir_user_abort.c
 def exitCode : String := include_str "../../../test/gir/golden/gir_exit_code.core.json"
 def blockValue : String := include_str "../../../test/gir/golden/gir_ord02.core.json"
 
+/-- A short instance of the committed counting while, with the same condition and body. -/
+def countingWhile : String :=
+  (include_str "../../../test/gir/golden/gir_loop_small.core.json").replace "\"20000\"" "\"3\""
+
+/-- A statement covered by the local while theorem, irrespective of the module predicate. -/
+def hasCoveredWhile (bs : ByteArray) : Bool :=
+  match Core.Decode.decodeBytes bs with
+  | .error _ => false
+  | .ok m => m.impls.any fun impl => impl.body.stmts.any fun
+    | .while c body _ => exprOk c && blockOk body
+    | _ => false
+
 #guard covered straight.toUTF8
 #guard covered branches.toUTF8
 #guard covered assertFail.toUTF8
@@ -47,6 +60,10 @@ def blockValue : String := include_str "../../../test/gir/golden/gir_ord02.core.
 #guard covered divZero.toUTF8
 #guard covered sliceOob.toUTF8
 #guard covered intOverflow.toUTF8
+
+#guard hasCoveredWhile countingWhile.toUTF8
+#guard (agreeLine .release countingWhile.toUTF8).startsWith "[\"agree\",[\"done\",[\"returned\"],\"3\\n\"]"
+#guard (agreeLine .debug countingWhile.toUTF8).startsWith "[\"agree\",[\"done\",[\"returned\"],\"3\\n\"]"
 
 #guard (agreeLine .release straight.toUTF8).startsWith "[\"agree\""
 #guard (agreeLine .debug straight.toUTF8).startsWith "[\"agree\""
