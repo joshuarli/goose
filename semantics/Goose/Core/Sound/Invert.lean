@@ -247,6 +247,88 @@ theorem addShrinks_ok (rho : List RootRef) (s : RState) (r : Unit × RState)
   subst h
   exact ⟨rfl, addTargets_right _ _⟩
 
+/-- A direct shrinking statement records every replay root of its owner in the
+resulting shrink effect, even when later replay stages add other effects. -/
+theorem rpStmt_directShrink_targets (env : PEnv) (stmt : Stmt) (owner : Place)
+    (state state' : RState)
+    (hdirect : DemandNode.directShrinkPlace? (.statement stmt) = some owner)
+    (hreplay : rpStmt env stmt state = .ok ((), state')) :
+    ∃ roots ownerState, rpPlace env owner state = .ok (roots, ownerState) ∧
+      ∀ target, target ∈ rootsTargets roots → target ∈ state'.eff.shrinks := by
+  cases stmt <;> simp only [DemandNode.directShrinkPlace?] at hdirect
+  all_goals try cases hdirect
+  case popN count org =>
+    simp only [rpStmt] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨roots, ownerState, hplace, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, mid, hshrink, habort⟩
+    refine ⟨roots, ownerState, hplace, ?_⟩
+    intro target htarget
+    have hrecorded := (addShrinks_ok roots _ ((), mid) hshrink).2 target htarget
+    exact (PMono.noteAborts _ _ _ habort).2.2.2.2.1 target hrecorded
+  case resize size fill org =>
+    cases fill with
+    | none =>
+      simp only [rpStmt] at hreplay
+      rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨roots, ownerState, hplace, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, mid, hshrink, habort⟩
+      refine ⟨roots, ownerState, hplace, ?_⟩
+      intro target htarget
+      have hrecorded := (addShrinks_ok roots _ ((), mid) hshrink).2 target htarget
+      exact (PMono.noteAborts _ _ _ habort).2.2.2.2.1 target hrecorded
+    | some fillExpr =>
+      simp only [rpStmt] at hreplay
+      rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨roots, ownerState, hplace, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, mid, hshrink, habort⟩
+      refine ⟨roots, ownerState, hplace, ?_⟩
+      intro target htarget
+      have hrecorded := (addShrinks_ok roots _ ((), mid) hshrink).2 target htarget
+      exact (PMono.noteAborts _ _ _ habort).2.2.2.2.1 target hrecorded
+  case clear org =>
+    simp only [rpStmt] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨roots, ownerState, hplace, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hshrink⟩
+    refine ⟨roots, ownerState, hplace, ?_⟩
+    intro target htarget
+    exact (addShrinks_ok roots _ ((), state') hshrink).2 target htarget
+  case assignWhole replacement org =>
+    simp only [rpStmt] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨roots, ownerState, hplace, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, mid, hshrink, htail⟩
+    refine ⟨roots, ownerState, hplace, ?_⟩
+    intro target htarget
+    have hrecorded := (addShrinks_ok roots _ ((), mid) hshrink).2 target htarget
+    have htailMono := PMono.bind (rp_mono_all.2.2.1 env replacement) (fun _ =>
+      PMono.bind (PMono.addWrites roots) (fun _ => PMono.addGrows roots))
+    exact htailMono _ _ _ htail |>.2.2.2.2.1 target hrecorded
+
+/-- A pop expression records every replay root of its owner in the resulting
+shrink effect. -/
+theorem rpExpr_pop_targets (env : PEnv) (owner : Place) (org : OriginId)
+    (state state' : RState)
+    (hreplay : rpExpr env (.pop owner org) state = .ok ([], state')) :
+    ∃ roots ownerState, rpPlace env owner state = .ok (roots, ownerState) ∧
+      ∀ target, target ∈ rootsTargets roots → target ∈ state'.eff.shrinks := by
+  simp only [rpExpr] at hreplay
+  rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨roots, ownerState, hplace, hrest⟩
+  rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, _, _, hrest⟩
+  rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, mid, hshrink, htail⟩
+  refine ⟨roots, ownerState, hplace, ?_⟩
+  intro target htarget
+  have hrecorded := (addShrinks_ok roots _ ((), mid) hshrink).2 target htarget
+  have htailMono : PMono (do noteAborts; pure ([] : List RootRef)) :=
+    PMono.bind PMono.noteAborts (fun _ => PMono.pure [])
+  exact htailMono _ _ _ htail |>.2.2.2.2.1 target hrecorded
+
 /-! ### Blocks and calls -/
 
 theorem tyBlock_ok (env : TEnv) (pre : List (VarId × Ty)) (sc : Nat) (stmts : List Stmt)
