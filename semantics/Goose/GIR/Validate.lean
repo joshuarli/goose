@@ -731,6 +731,28 @@ def incomingValues (f : Func) (target : BlockId) (param : Nat) : List ValueId :=
     | some term => (edgeArgsTo term target).filterMap (·[param]?)
     | none => []
 
+def incomingConditions (f : Func) (target : BlockId) : List ValueId := Id.run do
+  if target >= f.blocks.size then return []
+  let mut reaches := Array.replicate f.blocks.size false
+  reaches := reaches.set! target true
+  let mut changed := true
+  let mut fuel := f.blocks.size + 1
+  while changed && fuel > 0 do
+    changed := false
+    fuel := fuel - 1
+    for h : source in [0:f.blocks.size] do
+      if !reaches[source]! then
+        if let some block := f.blocks[source]? then
+          if let some term := block.lastTerm? then
+            if term.successors.any (fun next => reaches[next]?.getD false) then
+              reaches := reaches.set! source true
+              changed := true
+  return f.blocks.toList.zipIdx.filterMap fun (block, source) =>
+    if !reaches[source]?.getD false then none else
+      match block.lastTerm? with
+      | some (.condbr condition ..) => some condition
+      | _ => none
+
 def isLiteralRunType : Ty → Bool
   | .grow _ | .growshrink _ => true
   | _ => false
@@ -755,25 +777,6 @@ def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
           valid := valid.set! v true
           changed := true
   return valid
-
-/- Repeated incoming edges do not spend the unique-value budget. If the budget is
-exhausted on an unseen value, return none so the caller rejects an incomplete proof. -/
-def valueClosure (f : Func) : Nat → List ValueId → List ValueId → Option (List ValueId)
-  | _, [], seen => some seen
-  | fuel, v :: rest, seen =>
-    if seen.contains v then valueClosure f fuel rest seen
-    else
-      match fuel with
-      | 0 => none
-      | n + 1 =>
-        let opUses := f.blocks.toList.flatMap (fun b => b.insts.filterMap fun
-          | .def r op => if r == v then some op.uses else none
-          | _ => none) |>.flatten
-        let blockInputs := f.blocks.toList.zipIdx.flatMap fun (b, target) =>
-          (b.params.zipIdx).filterMap fun ((p, _), param) => if p == v then some (incomingValues f target param) else none
-        valueClosure f n (opUses ++ blockInputs.flatten ++ rest) (v :: seen)
-termination_by fuel todo seen => (fuel, todo.length)
-decreasing_by all_goals simp_wf <;> omega
 
 def rootsOverlap (a b : List RootRef) : Bool :=
   a.isEmpty || b.isEmpty || a.any (fun x => b.any (Goose.Core.rootsMayOverlap x))
@@ -805,6 +808,53 @@ def callTouchedRoots (m : Module) (f : Func) (p : Prov) (fn : FnId) (args : List
                 | .global g => some (.global g)
                 | _ => none
               pure (unionRoots roots (actual ++ annotated))
+
+def slotStoredValues (f : Func) (p : Prov) (address : ValueId) : List ValueId :=
+  let addresses := rootsAt p.vals address
+  f.blocks.toList.flatMap fun b => b.insts.filterMap fun
+    | .eff (.slotInit slot value _) =>
+      if addresses.contains (.local slot) then some value else none
+    | .eff (.store target value _) =>
+      let targets := rootsAt p.vals target
+      if targets.any (fun targetRoot => addresses.any (Goose.Core.rootsMayOverlap targetRoot))
+      then some value else none
+    | _ => none
+
+/-- Repeated values do not spend the unique-value budget. Missing dataflow is
+treated as unknown so a run is accepted only with a complete dependency proof. -/
+def valueClosure (m : Module) (f : Func) (p : Prov) (ownerRoots : List RootRef) :
+    Nat → List ValueId → List ValueId → Option (List ValueId)
+  | _, [], seen => some seen
+  | fuel, v :: rest, seen =>
+    if seen.contains v then valueClosure m f p ownerRoots fuel rest seen
+    else
+      match fuel with
+      | 0 => none
+      | n + 1 =>
+        let definitions := f.blocks.toList.flatMap (fun b => b.insts.filterMap fun
+          | .def r op => if r == v then some op else none
+          | _ => none)
+        let callDepends := definitions.any fun
+          | .call fn args _ =>
+            match callTouchedRoots m f p fn args with
+            | none => true
+            | some [] => false
+            | some roots => rootsOverlap ownerRoots roots
+          | _ => false
+        if callDepends then none else
+          let opUses := definitions.flatMap Op.uses
+          let storedUses := definitions.flatMap fun
+            | .load address => slotStoredValues f p address
+            | _ => []
+          let blockInputs := f.blocks.toList.zipIdx.flatMap fun (b, target) =>
+            (b.params.zipIdx).filterMap fun ((parameter, _), index) =>
+              if parameter == v then some (incomingValues f target index) else none
+          let branchInputs := f.blocks.toList.zipIdx.flatMap fun (b, target) =>
+            if b.defs.contains v then incomingConditions f target else []
+          valueClosure m f p ownerRoots n
+            (opUses ++ storedUses ++ blockInputs.flatten ++ branchInputs ++ rest) (v :: seen)
+termination_by fuel todo seen => (fuel, todo.length)
+decreasing_by all_goals simp_wf <;> omega
 
 def transferEmptyInst (m : Module) (f : Func) (p : Prov) (facts : List ValueId) : Inst → List ValueId
   | .eff (.clear r _) => if facts.contains r then facts else facts ++ [r]
@@ -850,7 +900,7 @@ def emptyFactsAtBlocks (m : Module) (f : Func) (p : Prov) : Array (Option (List 
               | none => pure ()
   return states
 
-def checkReplace (f : Func) (vt : Array (Option VTy)) (p : Prov) (validRuns : Array Bool)
+def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) (validRuns : Array Bool)
     (label : String) (facts : List ValueId) (inst : Inst) : Check Unit := do
   match inst with
   | .eff (.replace owner run _) =>
@@ -862,7 +912,7 @@ def checkReplace (f : Func) (vt : Array (Option VTy)) (p : Prov) (validRuns : Ar
     unless facts.contains owner do
       violation .v060 s!"{label}: x_replace owner was not cleared on every path"
     let ownerRoots := rootsAt p.vals owner
-    let closure := valueClosure f (f.numValues + 1) [run] []
+    let closure := valueClosure m f p ownerRoots (f.numValues + 1) [run] []
     let depends := match closure with
       | none => true
       | some values => values.any fun v => v == owner ||
@@ -881,7 +931,7 @@ def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Opt
         violation .v060 s!"{label}: no clear-state proof for block {b}"
       let mut current := facts
       for inst in block.insts do
-        checkReplace f vt p validRuns label current inst
+        checkReplace m f vt p validRuns label current inst
         current := transferEmptyInst m f p current inst
 
 /-! ### The module -/
