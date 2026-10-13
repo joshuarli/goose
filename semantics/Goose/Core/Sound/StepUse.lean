@@ -67,8 +67,9 @@ theorem block_of_checks (hB : BlockSpec m prof plans n) (hp : Perm m W)
     (hpre : pre.map Prod.fst = preT.map Prod.fst)
     (hvals : ∀ (k : Nat) (x : VarId) (v : Val) (ty' : Ty), pre[k]? = some (x, v) →
       preT[k]? = some (x, ty') → ∀ lv, env.vars[x]? = some lv → lv.ty = ty' →
-      HasTy m W.G s.store v lv.ty ∧ ∃ ann, penv.ann x = some ann ∧
-        (∀ r, Targets v r → Gam env W.P ann r) ∧ OwnerRooted env W.ownerP ann v lv.ty) :
+      HasTy m W.G s.store v lv.ty ∧ ∀ r, Targets v r → ∃ ann,
+        penv.ann x = some ann ∧ Gam env W.P ann r ∧
+        (OwnerRefTy lv.ty → Gam env W.ownerP ann r)) :
     Sat (execBlock n ⟨prof, m⟩ env pre b) s (fun fl s' =>
       Frame m W tenv penv env s' ec.outputFuture ∧
       Footprint (insts env) (Dset W) s s' ∧
@@ -113,12 +114,11 @@ theorem block_of_checks (hB : BlockSpec m prof plans n) (hp : Perm m W)
       subst hk2
       obtain ⟨lv, g1, g2, g3, g4⟩ := hrows _ (List.mem_of_getElem? hpk)
       have g1' : env.vars[x']? = some lv := by rw [← hF.vars_t]; exact g1
-      obtain ⟨k1, ann, ha, k2, kOwner⟩ := hvals k x' v ty' hk hpk lv g1' g4
-      refine ⟨h1, h2, lv, g1', g2, paramOk_of_storable g3, k1, ann, ha, ?_, ?_⟩
-      · intro r hr'
-        exact gam_push_future hF hsc _ (k2 r hr')
-      · intro hty r hr'
-        exact gam_push_future hF hsc _ (kOwner hty r hr')
+      obtain ⟨k1, k2⟩ := hvals k x' v ty' hk hpk lv g1' g4
+      refine ⟨h1, h2, lv, g1', g2, paramOk_of_storable g3, k1, fun r hr' => ?_⟩
+      obtain ⟨ann, ha, hgam, howner⟩ := k2 r hr'
+      exact ⟨ann, ha, gam_push_future hF hsc _ hgam,
+        fun hty => gam_push_future hF hsc _ (howner hty)⟩
   have hres := hB path sc stmts value ec observation W tenv env1 env2 penv env s pre tn1 tn2 tn' ty
     { rst with nextVar := rst.nextVar + (preT.map Prod.fst).length } st2 rst' rho rst.nextVar
     (hactive env1 tn1 hd) haccess hprotected hobserved hclassified hp hF hsc hsame hvis' hpreOk
@@ -160,8 +160,8 @@ theorem block_of_reserved (hB : BlockSpec m prof plans n) (hp : Perm m W)
     (hE : EffLe rst'.eff W.E) (hxs : pre.map Prod.fst = xs) (hnd : xs.Nodup)
     (hvals : ∀ x v, (x, v) ∈ pre → lo0 ≤ x ∧ x < rst.nextVar ∧ ∃ lv, env.vars[x]? = some lv ∧
       lv.scope = b.scope ∧ lv.ty.paramOk = true ∧ HasTy m W.G s.store v lv.ty ∧
-      ∃ ann, penv.ann x = some ann ∧ (∀ r, Targets v r → Gam env W.P ann r) ∧
-        OwnerRooted env W.ownerP ann v lv.ty)
+      ∀ r, Targets v r → ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r ∧
+        (OwnerRefTy lv.ty → Gam env W.ownerP ann r))
     (hlo : lo0 ≤ rst.nextVar)
     (hkeep0 : ∀ y, RootRef.local y ∈ rho → ¬ (lo0 ≤ y ∧ y < rst.nextVar)) :
     Sat (execBlock n ⟨prof, m⟩ env pre b) s (fun fl s' =>
@@ -191,12 +191,11 @@ theorem block_of_reserved (hB : BlockSpec m prof plans n) (hp : Perm m W)
       (rst.nextVar + ([] : List VarId).length) s.store pre := by
     refine ⟨hnd, ?_⟩
     intro x v hxv
-    obtain ⟨h1, h2, lv, g1, g2, g3, k1, ann, ha, k2, kOwner⟩ := hvals x v hxv
-    refine ⟨h1, h2, lv, g1, g2, g3, k1, ann, ha, ?_, ?_⟩
-    · intro r hr'
-      exact gam_push_future hF hsc _ (k2 r hr')
-    · intro hty r hr'
-      exact gam_push_future hF hsc _ (kOwner hty r hr')
+    obtain ⟨h1, h2, lv, g1, g2, g3, k1, k2⟩ := hvals x v hxv
+    refine ⟨h1, h2, lv, g1, g2, g3, k1, fun r hr' => ?_⟩
+    obtain ⟨ann, ha, hgam, howner⟩ := k2 r hr'
+    exact ⟨ann, ha, gam_push_future hF hsc _ hgam,
+      fun hty => gam_push_future hF hsc _ (howner hty)⟩
   have hres := hB path sc stmts value ec observation W tenv env1 env2 penv env s pre tn1 tn2 tn' ty
     { rst with nextVar := rst.nextVar + ([] : List VarId).length } st2 rst' rho lo0
     (hactive env1 tn1 hd) haccess hprotected hobserved hclassified hp hF hsc
