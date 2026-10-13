@@ -287,7 +287,7 @@ theorem PMono.rpCall (env : PEnv) (c : ContextId) (ar : List (List RootRef)) : P
   refine PMono.modify _ fun s => ⟨Nat.le_refl _, ?_⟩
   simp only [callEffects]
   split
-  · exact ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun _ h => h, fun _ => rfl⟩
+  · exact ⟨fun _ h => h, addTargets_left _ _, fun _ h => h, fun _ h => h, fun _ => rfl⟩
   · exact ⟨addTargets_left _ _, addTargets_left _ _, addTargets_left _ _, addTargets_left _ _, fun h => h⟩
 
 theorem PMono.readRoots (env : PEnv) (p : Place) : PMono (readRoots env p) := by

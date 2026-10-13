@@ -2794,13 +2794,17 @@ theorem rpCall_ok (env : PEnv) (c : ContextId) (ar : List (List RootRef)) (st : 
 
 theorem callEffects_ok (callee : Impl) (cctx : Context) (ar : List (List RootRef)) (e : Eff) :
     match callee.summary with
-    | .unknown => (callEffects callee cctx ar e).unknown = true
+    | .unknown =>
+      (callEffects callee cctx ar e).unknown = true ∧
+      ∀ t, t ∈ rootsTargets ar.flatten → t ∈ (callEffects callee cctx ar e).writes
     | .known sm =>
       (∀ t, t ∈ mapCallTargets callee cctx ar sm.reads → t ∈ (callEffects callee cctx ar e).reads) ∧
       (∀ t, t ∈ mapCallTargets callee cctx ar sm.writes → t ∈ (callEffects callee cctx ar e).writes) ∧
       (∀ t, t ∈ mapCallTargets callee cctx ar sm.grows → t ∈ (callEffects callee cctx ar e).grows) := by
   cases h : callee.summary with
-  | unknown => simp only [callEffects, h]
+  | unknown =>
+    simp only [callEffects, h]
+    exact ⟨trivial, addTargets_right _ _⟩
   | known sm =>
     simp only [callEffects, h]
     exact ⟨addTargets_right _ _, addTargets_right _ _, addTargets_right _ _⟩
