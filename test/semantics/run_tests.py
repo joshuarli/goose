@@ -25,8 +25,10 @@ The tool prints exactly one JSON line and exits:
     ["rejected",RULE,MESSAGE]               exit 5
 
 With `--corpus` the same checks run over every positive fixture of the main
-runner and every sample instead (see `discover_corpus`): a program the exporter
-refuses is counted by feature id and not listed, and exit status 0 means no
+runner and every sample instead (see `discover_corpus`): report-only Core
+export supplies each program's complete unsupported feature set. The summary
+groups programs by that set and shows how many a single feature would unlock.
+A program the exporter refuses is not listed, and exit status 0 means no
 exported program mismatched, failed or ran out of time.
 
 Run `python3 test/semantics/run_tests.py --self-test` to check the harness
@@ -81,6 +83,7 @@ ABORT_KINDS = frozenset(DIAGNOSTICS) | {"user_abort"}
 TOOL_EXIT = {"done": 0, "timeout": 3, "fault": 4, "malformed": 2, "rejected": 5}
 
 UNSUPPORTED_PATTERN = re.compile(r"unsupported in core-pilot: (\S+)")
+FEATURE_REPORT_EXPECTATIONS = {"core/core_export_report": ("float", "struct")}
 LOCATION_PATTERN = re.compile(r"\.goose:(\d+)\)\s*$")
 
 
@@ -128,6 +131,7 @@ class Verdict:
     cls: str
     detail: str = ""
     exported: bool = False
+    features: tuple[str, ...] = ()
 
 
 def joined(text: str) -> str:
@@ -310,6 +314,24 @@ def export(goose: Path, fixture: Fixture, work: Path, timeout: float) -> tuple[P
     if not core.is_file():
         raise HarnessFailure("export succeeded but wrote no file")
     return core, None
+
+
+def feature_report(goose: Path, fixture: Fixture, timeout: float) -> tuple[str, ...]:
+    """Ask the report-only exporter for the complete sorted feature set."""
+    done = run([goose, *fixture.args, *map("-D{}".format, fixture.defines), "--emit-core-report",
+                "--check", fixture.source], timeout)
+    if done.returncode != 0:
+        raise HarnessFailure(f"feature report failed (exit {done.returncode}): "
+                             f"{text(done.stderr).strip()[:300]}")
+    try:
+        report = json.loads(text(done.stdout))
+    except json.JSONDecodeError as error:
+        raise HarnessFailure(f"feature report is not JSON: {text(done.stdout).strip()[:300]}") from error
+    features = report.get("unsupported") if isinstance(report, dict) else None
+    if (not isinstance(features, list) or any(not isinstance(feature, str) for feature in features)
+            or features != sorted(set(features))):
+        raise HarnessFailure(f"feature report has invalid unsupported set: {report!r}")
+    return tuple(features)
 
 
 def tool_result(tool: Path, core: Path, mode: str, timeout: float) -> tuple:
@@ -498,12 +520,26 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
     if expectation is None:
         return verdicts[0]
     outcome, stdout = expectation
+    reported = None
+    if fixture.corpus:
+        reported = guarded(lambda: feature_report(goose, fixture, timeout))
+        if reported is None:
+            return verdicts[0]
+        expected_features = FEATURE_REPORT_EXPECTATIONS.get(fixture.name)
+        if expected_features is not None and reported != expected_features:
+            return Verdict(HARNESS_FAILURE, f"feature report for {fixture.name} was {reported!r}, "
+                                             f"expected {expected_features!r}")
     core = guarded(lambda: export(goose, fixture, work, timeout))
     if core is None:
         return verdicts[0]
     core_file, feature = core
     if feature is not None:
-        return Verdict(UNSUPPORTED, feature)
+        if reported is not None and feature not in reported:
+            return Verdict(HARNESS_FAILURE,
+                           f"export rejected {feature}, absent from feature report {reported!r}")
+        return Verdict(UNSUPPORTED, ",".join(reported or (feature,)), features=reported or (feature,))
+    if reported:
+        return Verdict(HARNESS_FAILURE, f"export succeeded with unsupported features reported: {reported!r}")
     for mode in fixture.modes:
         def check_validation():
             answer = validate_result(tool, core_file, timeout)
@@ -542,6 +578,7 @@ def run_all(fixtures: list[Fixture], goose: Path, tool: Path, cc: str, pipeline:
     scratch_root.mkdir(parents=True, exist_ok=True)
     counts = dict.fromkeys(CLASSES, 0)
     features: Counter = Counter()
+    feature_sets: Counter = Counter()
     with tempfile.TemporaryDirectory(prefix="run-", dir=scratch_root) as scratch:
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             verdicts = list(pool.map(
@@ -550,13 +587,26 @@ def run_all(fixtures: list[Fixture], goose: Path, tool: Path, cc: str, pipeline:
     for fixture, verdict in zip(fixtures, verdicts):
         counts[verdict.cls] += 1
         if verdict.cls == UNSUPPORTED:
-            features[verdict.detail] += 1
+            group = tuple(sorted(verdict.features or (verdict.detail,)))
+            feature_sets[group] += 1
+            features.update(group)
         if verdict.cls != AGREE and not (corpus and verdict.cls == UNSUPPORTED):
             print(f"{verdict.cls} {fixture.name}: {verdict.detail}")
     summary = dict(counts)
     if corpus:
         summary["exported"] = sum(verdict.exported for verdict in verdicts)
-        summary["unsupported_features"] = dict(features.most_common())
+        summary["unsupported_features"] = dict(sorted(features.items()))
+        summary["forecast"] = {
+            "feature_sets": [
+                {"features": list(group), "programs": count}
+                for group, count in sorted(feature_sets.items())
+            ],
+            "single_feature_unlocks": {
+                group[0]: count for group, count in sorted(feature_sets.items()) if len(group) == 1
+            },
+        }
+        for group, count in sorted(feature_sets.items()):
+            print(f"forecast features={'+'.join(group)} unlocks={count}")
     print(json.dumps(summary))
     return summary
 
@@ -774,7 +824,8 @@ def self_test() -> int:
         corpus_validate["invalid_export"] = {"rejected": ["V-TYPE", "bad"]}
         program("test/core", "out_of_fuel", INCONCLUSIVE, {RELEASE: answer(["timeout", ""], 3)})
         for name, feature in (("uses_struct", "struct"), ("uses_struct_again", "struct"),
-                              ("uses_float", "float")):
+                              ("uses_float", "float"),
+                              ("core_export_report", ["struct", "float"])):
             program("test/core", name, UNSUPPORTED, {})
             corpus_exports[name] = {"unsupported": feature}
         # Skipped before anything runs: a call to the fake tools would be a failure.
@@ -796,14 +847,23 @@ def self_test() -> int:
                            "--corpus"], root=tree / "semantics", repo=repo)
         report = stdout.getvalue().splitlines()
         summary = json.loads(report[-1])
-        listed = {line.split(" ", 2)[1].rstrip(":"): line.split(" ", 1)[0] for line in report[:-1]}
+        listed = {line.split(" ", 2)[1].rstrip(":"): line.split(" ", 1)[0]
+                  for line in report[:-1] if line.split(" ", 1)[0] in CLASSES}
         for cls in (MISMATCH, INCONCLUSIVE):
             check(f"corpus {cls} count",
                   summary[cls] == sum(1 for v in corpus_class.values() if v == cls))
         check("corpus agree count", summary[AGREE] == 6)
-        check("corpus unsupported count", summary[UNSUPPORTED] == 3)
+        check("corpus unsupported count", summary[UNSUPPORTED] == 4)
         check("corpus exported count", summary["exported"] == 10)
-        check("corpus feature histogram", summary["unsupported_features"] == {"struct": 2, "float": 1})
+        check("corpus feature histogram", summary["unsupported_features"] == {"float": 2, "struct": 3})
+        check("corpus exact feature-set forecast",
+              summary["forecast"]["feature_sets"] == [
+                  {"features": ["float"], "programs": 1},
+                  {"features": ["float", "struct"], "programs": 1},
+                  {"features": ["struct"], "programs": 2},
+              ])
+        check("corpus single-feature unlock forecast",
+              summary["forecast"]["single_feature_unlocks"] == {"float": 1, "struct": 2})
         check("corpus lists no unsupported program", UNSUPPORTED not in listed.values())
         check("corpus lists each non-agreeing exported program",
               sorted(listed) == ["core/abort_wrong_kind", "core/invalid_export", "core/out_of_fuel",

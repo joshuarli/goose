@@ -702,6 +702,9 @@ int Main(int argc, char **argv) {
     }
     string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore, unitsdir,
         emitgirhigh, emitgirlow, pipeline = "legacy";
+    auto emitcorereport = false;
+    for (int i = firstarg; i < argc && string_view(argv[i]) != "--"; i++)
+        if (string_view(argv[i]) == "--emit-core-report") emitcorereport = true;
     auto unitsbuild = false, rebuildflag = false, verifyflag = false;
     auto dump = false, tokens = false, parseonly = false, specs = false, nocgen = false;
     auto roundtrip = false, multitest = false;
@@ -728,6 +731,7 @@ int Main(int argc, char **argv) {
         else if (arg == "--dump-file" && i + 1 < argc) dumpfile = argv[++i];
         else if (arg == "--specs") specs = true;
         else if (arg == "--emit-core" && i + 1 < argc) emitcore = argv[++i];
+        else if (arg == "--emit-core-report") emitcorereport = true;
         else if (arg == "--emit-gir-high" && i + 1 < argc) emitgirhigh = argv[++i];
         else if (arg == "--emit-gir-low" && i + 1 < argc) emitgirlow = argv[++i];
         else if (arg == "--pipeline" && i + 1 < argc) {
@@ -768,8 +772,19 @@ int Main(int argc, char **argv) {
         else if (arg == "--jit") forcejit = true;
         else if (arg == "--standalone") standalone = true;
         else if (arg == "--multi-test") multitest = true;
-        else if (arg == "--gen-runtime-header") { GenRuntimeHeader(exe.c_str()); return 0; }
+        else if (arg == "--gen-runtime-header") {
+            if (emitcorereport) {
+                fprintf(stderr, "--emit-core-report cannot be combined with runtime output\n");
+                return 1;
+            }
+            GenRuntimeHeader(exe.c_str());
+            return 0;
+        }
         else if (arg == "--emit-runtime" && i + 1 < argc) {
+            if (emitcorereport) {
+                fprintf(stderr, "--emit-core-report cannot be combined with runtime output\n");
+                return 1;
+            }
             auto path = argv[++i];
             auto src = RuntimeObjectSource();
             auto f = fopen(path, "wb");
@@ -789,6 +804,10 @@ int Main(int argc, char **argv) {
         // compiled into this compiler (builtin.h).
         else if (arg.size() > 7 && arg.rfind("--", 0) == 0 &&
                  arg.compare(arg.size() - 5, 5, "-link") == 0 && i + 1 < argc) {
+            if (emitcorereport) {
+                fprintf(stderr, "--emit-core-report cannot be combined with package-link output\n");
+                return 1;
+            }
             try {
                 auto style = argv[++i];
                 auto path = BuiltinLinkFile(arg.substr(2, arg.size() - 7), style, DirOf(exe));
@@ -891,6 +910,16 @@ int Main(int argc, char **argv) {
         fprintf(stderr, "--rebuild and --verify-reuse need --units\n");
         return 1;
     }
+    if (emitcorereport && (verb == "run" || verb == "build" || verb == "fetch" ||
+                           tokens || dump || parseonly || roundtrip || multitest || stacks || specs ||
+                           !dumpfile.empty() || !reportfile.empty() || !emitcore.empty() ||
+                           !emitgirhigh.empty() || !emitgirlow.empty() || pipeline == "gir" ||
+                           !outname.empty() || !headername.empty() || !unitsdir.empty() ||
+                           unitsbuild || rebuildflag || verifyflag || report_dependencies ||
+                           !shaderfile.empty() || forcejit || standalone)) {
+        fprintf(stderr, "--emit-core-report requires a checked source and cannot be combined with parsing, C, or build output\n");
+        return 1;
+    }
     if (files.size() > 1 && !multitest) {
         fprintf(stderr, "multiple input files given\n");
         return 1;
@@ -921,7 +950,7 @@ int Main(int argc, char **argv) {
                         "[--cc name|path] [-v] [--dry-run] [--units [--rebuild] [--verify-reuse]] |\n"
                         "       goose toolchain [--cc name|path] [--json] [--refresh]\n");
         fprintf(stderr, "   or: goose [--dump] [--parse] [--tokens] [--roundtrip] "
-                        "[--dump-file out.goose] [--specs] [--stacks] [--check] "
+                        "[--dump-file out.goose] [--specs] [--stacks] [--check] [--emit-core-report] "
                         "[--no-bce] [--bce-test] [--bce-lines] [--unsafe-no-rf-check] [-O0|-O1|-O2] "
                         "[-o out.c [--standalone]] [--jit] [-DNAME=VALUE]... [--stack-reserve size] "
                         "[--include header.h]... "
@@ -963,7 +992,7 @@ int Main(int argc, char **argv) {
         return 1;
     }
     // The program shares stdout in JIT mode; progress goes to stderr.
-    auto msgs = jit ? stderr : stdout;
+    auto msgs = jit || emitcorereport ? stderr : stdout;
     // The file being compiled, the C file it goes to, if any, and the
     // --include headers as that C file names them.
     string filename, outfile;
@@ -1025,6 +1054,10 @@ int Main(int argc, char **argv) {
         }
         TypeCheckProgram(ast, library, nullptr, nocgen);
         if (g_build_report) BuildReportAfterCheck(ast);
+        if (emitcorereport) {
+            EmitCoreReport(ast, filename);
+            return 0;
+        }
         // Before the optimizer: it rewrites the bodies this reads.
         if (!emitcore.empty() || !emitgirhigh.empty() || !emitgirlow.empty() || pipeline == "gir")
             EmitCore(ast, filename, emitcore, emitgirhigh, emitgirlow,
