@@ -703,6 +703,53 @@ theorem callObservation_retainsAliases {W : World} {tenv : TEnv} {env : Env}
     exact physical
 
 
+/-- Adding the caller's current bindings cannot give an older root a new owner
+capability. The inherited mutable slice arm also grants no owner capability. -/
+theorem OwnerCap.callObservation_beforeBase {W : World} {tenv : TEnv} {penv : PEnv}
+    {env : Env} {s : St} {future continuation : List VarId}
+    {retained : List RetainedAlias} {inherited : Observation} {root : RootInst}
+    (frame : Frame m W tenv penv env s future)
+    (before : BeforeBase W.base root)
+    (capability : OwnerCap m
+      (callObservation (m := m) inherited W tenv env continuation retained s.store) root) :
+    OwnerCap m inherited root := by
+  have scopeLower {sc si : Nat} (lookup : env.scopes.lookup sc = some si) : W.base ≤ si := by
+    obtain ⟨earlier, later, equal, _⟩ := List.lookup_eq_some_iff.mp lookup
+    apply (frame.below (sc, si) _).1
+    rw [equal]
+    exact List.mem_append_right _ List.mem_cons_self
+  cases root with
+  | global _ => exact capability
+  | «local» a si x =>
+    obtain ⟨T, observed, element, ownerType⟩ := capability
+    rcases observed with inheritedRoot | callerRoot
+    · exact ⟨T, inheritedRoot, element, ownerType⟩
+    · rcases callerRoot with
+        (⟨y, lv, instanceId, _, _, _, scope, equal, _⟩ |
+          ⟨⟨y, lv, instanceId, _, scope, equal, _, _⟩, _⟩) | ⟨E, _, typeEq⟩
+      · cases equal
+        exact False.elim ((Nat.not_le_of_gt before) (scopeLower scope))
+      · cases equal
+        exact False.elim ((Nat.not_le_of_gt before) (scopeLower scope))
+      · rw [typeEq] at ownerType
+        rcases ownerType with ownerType | ownerType <;> cases ownerType
+
+/-- An inherited mutable slice's allowed targets are older than the caller's
+own active scope instances. -/
+theorem Frame.allowed_beforeBase {W : World} {tenv : TEnv} {penv : PEnv}
+    {env : Env} {s : St} {future : List VarId} {holder target : RootInst} {element : Ty}
+    (frame : Frame m W tenv penv env s future)
+    (slice : W.D holder element) (allowed : W.A holder target) :
+    BeforeBase W.base target := by
+  obtain ⟨activation, instanceId, variableId, equal, before⟩ := frame.dOut holder element slice
+  have older := frame.aOlder holder target allowed
+  rw [equal] at older
+  cases target with
+  | global _ => trivial
+  | «local» _ scope _ =>
+    change scope ≤ instanceId at older
+    exact Nat.lt_of_le_of_lt older before
+
 end CallObservations
 
 end Goose.Core.Sound
