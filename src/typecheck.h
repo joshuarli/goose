@@ -2369,6 +2369,7 @@ struct TypeCheck {
     // external to), while a specialization's parameter roots map at calls
     // (`param` gets it and the parameter's index).
     template <typename P, typename X> void NoteRootEvent(VarDef *root, P param, X external);
+    void NoteWritableContents(const Roots &roots);
     void NoteShrink(VarDef *root, TypeExpr *bound = nullptr,
                     ShrinkBalance balance = SB_UNBALANCED);
     void ShrinkGrowShrink(Node *at, const string &op, VarDef *root, const string &what,
@@ -2538,6 +2539,7 @@ struct TypeCheck {
     // there is none, or a variable ADT's variants hold different ones.
     TypeExpr *SoleResizableIn(TypeExpr *t);
     void ApplyCalleeGrows(Node *at, FnSpec *spec, vector<Val> &argvals, string_view name);
+    void ApplyCalleeWritableContents(FnSpec *spec, vector<Val> &argvals);
     // Whether an element pushed into, or allocated in, an array of `elem`
     // is built in place at its slot: a variable-size one, or a fixed one
     // holding relative references of either form, which codegen writes

@@ -1942,11 +1942,15 @@ struct FnRecord {
     vector<LiveShrink> liveshrinks;
     // Arrays the body may grow -- push, append, a pool allocation, format,
     // resize, a whole assignment -- itself or through its callees
-    //), in the same form, each with the types of the resizable
+    // in the same form, each with the types of the resizable
     // arrays grown, null for one the checker cannot tell
     // (TypeCheck::GrowEvent::arr).
     map<VarDef *, vector<TypeExpr *>> growexternals;
     map<int, vector<TypeExpr *>> growparams;
+    // Storage the body may write through, itself or through its callees:
+    // external owners and the parameter roots the caller maps onto them.
+    set<VarDef *> writeexternals;
+    set<int> writeparams;
     // Stores into the caller's storage, through reference parameters'
     // class roots: the call sites map them onto their arguments.
     vector<StoreEvent> classevents;

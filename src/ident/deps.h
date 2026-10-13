@@ -1269,8 +1269,9 @@ class DepFinal {
     }
 
     // What a call to the context can come to know of it besides its
-    // signature: what it shrinks, grows, rebinds and stores, what it reads of
-    // and leaves in the variables around it, and where its returns point.
+    // signature: what it shrinks, grows, writes through, rebinds and stores,
+    // what it reads of and leaves in the variables around it, and where its
+    // returns point.
     Digest SummaryOf(const FnSpec *s) {
         auto it = summaries.find(s);
         if (it != summaries.end()) return it->second;
@@ -1330,6 +1331,15 @@ class DepFinal {
                 c.I(i);
                 types(c, arrays);
             }
+        }
+        {
+            vector<string> v;
+            for (auto x : r.writeexternals) v.push_back(names.Var(x));
+            sort(v.begin(), v.end());
+            c.U(v.size());
+            for (auto &x : v) c.Str(x);
+            c.U(r.writeparams.size());
+            for (auto i : r.writeparams) c.I(i);
         }
         {
             vector<string> stores;

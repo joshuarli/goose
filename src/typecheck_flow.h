@@ -2486,7 +2486,10 @@ inline void TypeCheck::CheckAssign(Assign *a) {
     // writes the pointee; rebinding is `.=`.
     if (IsPlainRef(lv.type)) {
         if (a->op == T_ASSIGN) PointeeAssign(a, lv, held);
-        else CompoundAssign(a, lv.type->ref->sub, PointeeWritable(lv, a));
+        else {
+            CompoundAssign(a, lv.type->ref->sub, PointeeWritable(lv, a));
+            NoteWritableContents(held);
+        }
         a->pointee = true;
         return;
     }
@@ -2497,6 +2500,7 @@ inline void TypeCheck::CheckAssign(Assign *a) {
         NoCopyWrite(a, lv);
         NoLetAssign(a, lv);
         CompoundAssign(a, lv.type, WholeWritable(lv));
+        NoteWritableContents(lv);
         if (lv.var) RequireAssigned(lv.var, a);
         return;
     }
@@ -2530,6 +2534,7 @@ inline void TypeCheck::CheckAssign(Assign *a) {
     }
     auto v = CheckAssignedValue(a, target, arr, built,
                                 Dest(lv, lv.var && IsRefOrSlice(target), lv.reached));
+    NoteWritableContents(lv);
     if (lv.var) {
         NoLetReassign(a, lv.var, "assign to", "assigned");
         // Slice variables carry their value's provenance (refs use .=).
@@ -2572,6 +2577,7 @@ inline void TypeCheck::CheckRebind(Assign *a, LVal &lv) {
             Error(a, "cannot assign through this path (const, or a read-only "
                      "instantiation, §9.5)");
     }
+    NoteWritableContents(lv);
     Val v;
     bool wasplain;
     {
@@ -2623,6 +2629,7 @@ inline void TypeCheck::PointeeAssign(Assign *a, LVal &lv, const LVal &at) {
     auto pt = lv.type->ref->sub;
     if (!PointeeWritable(lv, a))
         Error(a, "cannot write through this reference: non-writable provenance (§9.5)");
+    NoteWritableContents(at);
     if (pt->kind == TY_INT && pt->intstorage == IS_VARINT)
         Error(a, "varint fields are written only at construction (§3.6)");
     AssignableClassCheck(pt, a);
@@ -2848,6 +2855,13 @@ inline void TypeCheck::CheckIncDec(IncDec *x) {
                             "instantiation, §9.5)");
     if (!IsIntT(st))
         Error(x, cat(TName(x->op), " requires an integer lvalue, got ", TypeStr(st)));
+    if (IsPlainRef(lv.type)) {
+        auto pointee = lv;
+        DerefLValue(pointee, x->lval);
+        NoteWritableContents(pointee);
+    } else {
+        NoteWritableContents(lv);
+    }
 }
 
 }  // namespace goose

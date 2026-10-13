@@ -4,6 +4,9 @@ fn main() {
     clear_grow();
 
     let growshrink: i64[>..<] = [3, 4];
+    fn write_growshrink() { growshrink[0] = 8; }
+    write_growshrink();
+    print(growshrink[0]);
     fn clear_growshrink() { growshrink.clear(); }
     clear_growshrink();
 
