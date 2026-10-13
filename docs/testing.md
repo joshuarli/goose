@@ -177,6 +177,19 @@ the GCC 16.2 toolchain job.
 It also checks CRLF/UTF-8/tab source ranges, raw-string directive text, and
 concurrent runs.
 
+To qualify the same suite with a units-built companion while comparing it to
+the CMake-built single-file companion, run:
+
+```sh
+python test/scale/lint_units.py --goose build/goose --baseline build/goose
+```
+
+The script copies the candidate compiler into a sibling install, builds
+`goose-lint` there with `goose build --units`, compares lint output with the
+baseline companion, then runs `test/lint/run_tests.py` against that install.
+Use `--subset` for a shorter comparison of representative text and JSONL
+results without the full parity checks or linter suite.
+
 Run the separately measured facts-scale regression when changing the private
 facts producer, transport, or reader:
 
