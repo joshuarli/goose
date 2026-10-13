@@ -1843,7 +1843,7 @@ private theorem NodeContext.callInherited_observed {plans : Array (Array DemandP
     exact ⟨PlanMayShrink.ofExpected context.callMutationContext.member phaseEq ownerAt
       ⟨invalidates, frame.gam_noEnv_of_beforeBase older ownerIn⟩,
       OwnerCap.callObservation_beforeBase frame older (capabilities root shrink)⟩
-  refine ⟨safe.typed, ?_, ?_, ?_, ?_⟩
+  refine ⟨safe.typed, ?_, ?_, ?_, ?_, safe.holderTypes⟩
   · exact (safe.base_mono frame.base_le).rootsOlder
   · exact (safe.base_mono frame.base_le).valuesOlder
   · intro holder type value rootObserved present interior target targeted shrink
@@ -2326,6 +2326,40 @@ private theorem callBody_spec {plans path c args origin} (ihCall : CallSpec m pr
   exact ⟨callerFrame, callerFootprint, callerRoots, callerValues, callerSafe, callerRetained,
     pilot, typed, roots, callerClassified, ownerRooted, mutation⟩
 
+private theorem callObservation_callD_holderTypes
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
+    {future continuation : List VarId} {args : List Arg} {retained : List RetainedAlias}
+    {observation : Observation} {sourceShrinking observedShrinking : RootInst → Prop}
+    (frame : Frame m W tenv penv env s future)
+    (source : ObservedSafe m W sourceShrinking observation s.store)
+    (observed : ObservedSafe m { W with base := s.nextScope } observedShrinking
+      (callObservation (m := m) observation W tenv env continuation retained s.store)
+      s.store) :
+    ∀ r T E,
+      (callObservation (m := m) observation W tenv env continuation retained s.store).roots r T →
+      callD W tenv env continuation args r E → ∃ mu, T = .slice mu E := by
+  intro r T E rootObserved demanded
+  rcases demanded with inherited | ⟨x, lv, si, mu, variableAt, scopeAt, rfl, variableType,
+      _, _⟩
+  · exact observed.holderTypes r T E rootObserved inherited
+  · rcases rootObserved with inheritedObserved |
+      ((⟨x', lv', si', _, _, variableAt', scopeAt', rootEq, typeEq⟩ |
+        ⟨⟨x', lv', si', variableAt', scopeAt', rootEq, _, typeEq⟩, _⟩) |
+        ⟨element, inheritedDemand, typeEq⟩)
+    · have older := source.rootsOlder _ _ inheritedObserved
+      exact False.elim ((Nat.not_le_of_gt older) (frame.inst_lt scopeAt).1)
+    · cases rootEq
+      rw [variableAt] at variableAt'
+      cases variableAt'
+      rw [variableType] at typeEq
+      exact ⟨mu, typeEq⟩
+    · cases rootEq
+      rw [variableAt] at variableAt'
+      cases variableAt'
+      rw [variableType] at typeEq
+      exact ⟨mu, typeEq⟩
+    · exact False.elim (frame.not_outer scopeAt ⟨element, inheritedDemand⟩)
+
 /-- Pilot calls observe the caller's active bindings. Their callee context
 has no shrink authority, so owner protection and classification are vacuous. -/
 private theorem callBody_pilot_observed {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
@@ -2344,7 +2378,8 @@ private theorem callBody_pilot_observed {W : World} {tenv : TEnv} {penv : PEnv} 
     (fun _ _ _ _ _ _ _ _ hFalse => False.elim hFalse)
     (fun _ _ _ _ _ _ hFalse => False.elim hFalse)
   exact ⟨observed.typed, observed.rootsOlder, observed.valuesOlder,
-    observed.rootsProtected, observed.valuesProtected⟩
+    observed.rootsProtected, observed.valuesProtected,
+    callObservation_callD_holderTypes frame source observed⟩
 
 set_option maxHeartbeats 1600000 in
  private theorem step_expr_call_pilot {plans : Array (Array DemandPoint)} {path : List Nat}
@@ -2533,7 +2568,8 @@ private theorem step_expr_call_shrink {plans : Array (Array DemandPoint)} {path 
     active access protectedSlices source1 class1 permission frame1 size length argumentCheck contents sampled
     resultType resultReplay charged (fun _ member => member)
   refine (body (by exact ⟨boundaryObserved.typed, boundaryObserved.rootsOlder,
-    boundaryObserved.valuesOlder, boundaryObserved.rootsProtected, boundaryObserved.valuesProtected⟩)
+    boundaryObserved.valuesOlder, boundaryObserved.rootsProtected, boundaryObserved.valuesProtected,
+    callObservation_callD_holderTypes frame1 source1 boundaryObserved⟩)
     (fun _ => boundaryClass) protectedBoundary).mono ?_
   intro value final post
   obtain ⟨frame2, footprint2, roots2, values2, safe2, retained2, pilot2, typed, targets,
