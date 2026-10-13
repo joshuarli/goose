@@ -769,7 +769,7 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
       { env with scopes := (sc, si) :: env.scopes } s2 future)
     (hmod : tenv.mod = tenv1.mod) (hvars : tenv.vars = tenv1.vars)
     (hscs : tenv1.scopes = sc :: tenv.scopes)
-    (hvis : ∀ x, x ∈ tenv.visible → x ∈ tenv1.visible ∧
+    (hvis : ∀ x, x ∈ tenv.visible → x ∈ future' → x ∈ tenv1.visible ∧
       ∃ lv, env.vars[x]? = some lv ∧ lv.scope ∈ env.scopes.map Prod.fst)
     (hfuture : ∀ x, x ∈ future' → x ∈ future)
     (hdom : ∀ (r : RootInst), s2.store.roots[r]? ≠ none →
@@ -810,7 +810,7 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
     | global g => exact Or.inl trivial
     | «local» a si' x =>
       rcases hdem with ⟨ha, hx, hf, lv, hvar, hlk⟩
-      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx
+      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx hf
       have hvar' : env.vars[x]? = some lv := by
         simpa using hvar
       have hlvEq : lv = lv0 := Option.some.inj (hvar'.symm.trans hlv0)
@@ -828,7 +828,7 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
     vis := by
       intro x hx
       intro hfut
-      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx
+      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx hfut
       obtain ⟨lv, si', v, h1, h2, h3, h4, h5⟩ := h.vis x hx1 (hfuture x hfut)
       have h1' : env.vars[x]? = some lv := h1
       rw [hlv0] at h1'; cases h1'
