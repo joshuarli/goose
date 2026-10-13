@@ -951,6 +951,10 @@ def checkImpl (m : Module) (impl : Impl) : V Unit := do
   unless impl.body.scope = 0 do reject .type s!"{impl.name}: the body block is not scope 0"
   if let some message := scopeOrderError (blockScopes none impl.body) 0 then
     reject .type s!"{impl.name}: {message}"
+  let scopeCount := (blockScopes none impl.body).length
+  forAll impl.vars.toList fun lv =>
+    unless lv.scope < scopeCount do
+      reject .type s!"{impl.name}: scope of variable {lv.name} is outside the body scope table"
   let (bodyTy, _) ← (tyBlock env [] impl.body).run impl.params.size
   match impl.results.toList with
   | [] =>

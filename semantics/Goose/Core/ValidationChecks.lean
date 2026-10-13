@@ -57,6 +57,9 @@ def badLocalOrigin : Module :=
   module (impl (.mk 0 [.letS 0 (.lit .i64 1) 0] none)
     #[⟨"x", .int .i64, .immutable, 0, 7⟩])
 
+def badUnusedLocalScope : Module :=
+  module (impl (.mk 0 [] none) #[⟨"unused", .int .i64, .immutable, 1, 0⟩])
+
 def orphanWithUnderstatedSummary : Module :=
   let entry := impl (.mk 0 [] none)
   let orphan :=
@@ -74,6 +77,10 @@ def orphanWithUnderstatedSummary : Module :=
   | _ => false
 
 #guard match validate badLocalOrigin with
+  | .error ⟨.type, _⟩ => true
+  | _ => false
+
+#guard match validate badUnusedLocalScope with
   | .error ⟨.type, _⟩ => true
   | _ => false
 
