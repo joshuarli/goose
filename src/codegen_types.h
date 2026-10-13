@@ -241,23 +241,24 @@ inline const char *CodeGen::RelCT(TypeExpr *rt) {
 
 // StructInst / (EnumInst, variant).
 
-// The alignment `pad` (bare form) gives the next field: its scalar width.
-inline int64_t CodeGen::PadAlign(TypeExpr *t) {
+inline int64_t PackedPadAlign(TypeExpr *t) {
     switch (t->kind) {
-        case TY_INT: return t->intstorage == IS_VARINT ? 1 : IntSize(t->intstorage);
+        case TY_INT: return t->intstorage == IS_VARINT ? 1 : IntBits(t->intstorage) / 8;
         case TY_FLT: return t->fltstorage == FS_F32 ? 4 : 8;
-        case TY_REF: return t->ref->lenstorage >= 0 ?
-                            (t->ref->lenstorage == IS_VARINT ? 1
-                                                             : IntSize((IntStorage)t->ref->lenstorage))
+        case TY_REF: return t->ref->lenstorage >= 0
+                            ? (t->ref->lenstorage == IS_VARINT ? 1
+                                                               : IntBits((IntStorage)t->ref->lenstorage) / 8)
                             : 8;
         case TY_SLICE: return 8;
         default: return 1;
     }
 }
 
-inline CodeGen::Layout CodeGen::LayoutFields(const vector<Field> &fields,
-                                             const vector<TypeExpr *> &ftypes) {
-    Layout lo;
+template<typename FixedSize, typename PadAlign>
+inline CodeGen::Layout PackedFieldLayout(const vector<Field> &fields,
+                                         const vector<TypeExpr *> &ftypes,
+                                         FixedSize fixedsize, PadAlign padalign) {
+    CodeGen::Layout lo;
     int64_t off = 0;
     for (size_t i = 0; i < fields.size(); i++) {
         auto &f = fields[i];
@@ -270,16 +271,28 @@ inline CodeGen::Layout CodeGen::LayoutFields(const vector<Field> &fields,
                 TypeExpr *nt = nullptr;
                 for (auto j = i + 1; j < fields.size(); j++)
                     if (!fields[j].ispad) { nt = ftypes[j]; break; }
-                auto a = nt ? PadAlign(nt) : 1;
+                auto a = nt ? padalign(nt) : 1;
                 off = (off + a - 1) / a * a;
             }
             continue;
         }
         lo.offs.push_back(off);
-        off += FixedSize(ftypes[i]);
+        off += fixedsize(ftypes[i]);
     }
     lo.size = off;
     return lo;
+}
+
+// The alignment `pad` (bare form) gives the next field: its scalar width.
+inline int64_t CodeGen::PadAlign(TypeExpr *t) {
+    return PackedPadAlign(t);
+}
+
+inline CodeGen::Layout CodeGen::LayoutFields(const vector<Field> &fields,
+                                             const vector<TypeExpr *> &ftypes) {
+    return PackedFieldLayout(fields, ftypes,
+                             [&](TypeExpr *t) { return FixedSize(t); },
+                             [&](TypeExpr *t) { return PadAlign(t); });
 }
 
 inline const CodeGen::Layout &CodeGen::StructLayout(StructInst *si) {

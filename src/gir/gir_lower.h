@@ -35,6 +35,8 @@ public:
     GirModule Lower() {
         noReturn = ComputeNoReturn();
         mod.types = core.types;
+        mod.profile = core.profile;
+        mod.structs = core.structs;
         mod.files = files;
         mod.origins = origins;
         for (auto &im : core.impls) {
@@ -410,6 +412,13 @@ private:
                 i.a = v;
                 return EmitDef(std::move(i));
             }
+            case CoreExprKind::Struct: {
+                GirInst i;
+                i.op = GirOp::Struct;
+                i.ty = e.type;
+                i.vals = LowerExprs(e.elems);
+                return EmitDef(std::move(i));
+            }
         }
         return 0;
     }
@@ -470,6 +479,13 @@ private:
                 i.a = vw;
                 i.b = iv;
                 i.org = Org(p.org);
+                return EmitDef(std::move(i));
+            }
+            case CorePlace::Field: {
+                GirInst i;
+                i.op = GirOp::Field;
+                i.a = LowerPlace(*p.base);
+                i.idx = p.index;
                 return EmitDef(std::move(i));
             }
         }

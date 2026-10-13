@@ -10,10 +10,12 @@
 #include "../src/small_vector.h"
 #include "../src/lexer.h"
 #include "../src/ast.h"
+#include "../src/ident/sha256.h"
 #include "../src/core/core_ir.h"
 #include "../src/core/core_json.h"
 #include "../src/gir/gir_ir.h"
 #include "../src/gir/gir_types.h"
+#include "../src/gir/gir_lower.h"
 #include "../src/gir/gir_low.h"
 #include "../src/gir/gir_json.h"
 #include "../src/gir/gir_verify.h"
@@ -638,6 +640,197 @@ void RejectsElementsThatDoNotTopTheirStack() {
     assert(Code(m) == "GIR-V090");
 }
 
+GirTypeId StructType(GirModule &m, int sid) {
+    CoreType t;
+    t.kind = CoreType::Struct;
+    t.structid = sid;
+    return m.Intern(t);
+}
+
+GirModule ScalarStruct() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    m.diagfiles = { "t.goose" };
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto i64 = m.IntType(CoreIntTy::I64);
+    m.structs = {
+        CoreStruct { 9, {
+            CoreField { u8, CoreVarKind::Var, CoreMut::Mut, 0 },
+            CoreField { i64, CoreVarKind::Var, CoreMut::Mut, 1 },
+        } },
+        CoreStruct { 9, {
+            CoreField { u8, CoreVarKind::Var, CoreMut::Mut, 0 },
+            CoreField { i64, CoreVarKind::Var, CoreMut::Mut, 1 },
+        } },
+    };
+    auto record = StructType(m, 0);
+    (void)StructType(m, 1);
+    Main(m).slots = { { record, CoreVarKind::Let, 0, 0 } };
+    Main(m).summary.outputs = true;
+
+    auto one = Int(m, 0, "5");
+    one.ty = u8;
+    auto two = Int(m, 1, "7");
+    GirInst make = Def(GirOp::Struct, 2);
+    make.ty = record;
+    make.vals = { 0, 1 };
+    GirInst init = Init(0, 2);
+    GirInst owner = Def(GirOp::Slot, 3);
+    owner.idx = 0;
+    GirInst first = Def(GirOp::Field, 4);
+    first.a = 3;
+    first.idx = 0;
+    auto replacement = Int(m, 5, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 4;
+    store.b = 5;
+    store.org = 0;
+    GirInst second = Def(GirOp::Field, 6);
+    second.a = 3;
+    second.idx = 1;
+    GirInst read = Def(GirOp::Load, 7);
+    read.a = 6;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, "", 7 } };
+    print.org = 0;
+    Main(m).blocks[0].insts = {
+        Enter(0), one, two, make, init, owner, first, replacement, store, second, read, print,
+        Leave(0), Ret(),
+    };
+    return m;
+}
+
+void PilotAndShrinkModuleShapesStayDistinct() {
+    CoreModule pilot;
+    assert(CoreWriter(pilot).Write() ==
+           "[\"module\",\"goose-core/0.2\",\"core-pilot\",[],[],[],[],[],0,[]]\n");
+    pilot.profile = CoreProfile::Shrink;
+    assert(CoreWriter(pilot).Write() ==
+           "[\"module\",\"goose-core/0.2\",\"core-shrink\",[],[],[],[],[],[],0,[]]\n");
+}
+
+void AcceptsScalarStructFieldsOnAnImmutableBinding() {
+    auto m = ScalarStruct();
+    assert(Code(m) == "");
+    auto json = GirWriter(m).Write();
+    assert(json.find("\"core-shrink\"") != string::npos);
+    assert(json.find("[\"struct_def\",9,") != string::npos);
+    assert(json.find("[\"i_struct\"") != string::npos);
+    assert(json.find("[\"i_field\"") != string::npos);
+}
+
+void RejectsStructsInThePilotProfile() {
+    auto m = ScalarStruct();
+    m.profile = CoreProfile::Pilot;
+    assert(Code(m) == "GIR-V010");
+}
+
+void RejectsAStoreToALetField() {
+    auto m = ScalarStruct();
+    m.structs[0].fields[0].binding = CoreVarKind::Let;
+    assert(Code(m) == "GIR-V030");
+}
+
+void RejectsAWriteThroughConstFieldContents() {
+    auto m = ScalarStruct();
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto inner = StructType(m, 0);
+    auto outer = StructType(m, 1);
+    m.structs = {
+        CoreStruct { 1, { CoreField { u8, CoreVarKind::Var, CoreMut::Mut, 0 } } },
+        CoreStruct { 1, { CoreField { inner, CoreVarKind::Var, CoreMut::Const, 0 } } },
+    };
+    Main(m).slots[0].ty = outer;
+    auto owner = Def(GirOp::Slot, 0);
+    owner.idx = 0;
+    auto innerfield = Def(GirOp::Field, 1);
+    innerfield.a = 0;
+    innerfield.idx = 0;
+    auto scalarfield = Def(GirOp::Field, 2);
+    scalarfield.a = 1;
+    scalarfield.idx = 0;
+    auto value = Int(m, 3, "9");
+    value.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 2;
+    store.b = 3;
+    store.org = 0;
+    Main(m).blocks[0].insts = { Enter(0), owner, innerfield, scalarfield, value, store, Leave(0), Ret() };
+    assert(Code(m) == "GIR-V030");
+}
+
+void RejectsAConstructorWithAnotherNominalType() {
+    auto m = ScalarStruct();
+    auto wrong = StructType(m, 1);
+    auto &insts = Main(m).blocks[0].insts;
+    for (auto &i : insts)
+        if (i.op == GirOp::Struct) i.ty = wrong;
+    assert(Code(m) == "GIR-V010");
+
+    auto count = ScalarStruct();
+    for (auto &i : Main(count).blocks[0].insts)
+        if (i.op == GirOp::Struct) i.vals.pop_back();
+    assert(Code(count) == "GIR-V010");
+
+    auto fieldType = ScalarStruct();
+    for (auto &i : Main(fieldType).blocks[0].insts)
+        if (i.op == GirOp::Struct) i.vals[0] = i.vals[1];
+    assert(Code(fieldType) == "GIR-V010");
+
+    auto fieldIndex = ScalarStruct();
+    for (auto &i : Main(fieldIndex).blocks[0].insts)
+        if (i.op == GirOp::Field) i.idx = 2;
+    assert(Code(fieldIndex) == "GIR-V010");
+}
+
+void RejectsAFieldComponentAfterItsStructType() {
+    auto m = ScalarStruct();
+    auto record = Main(m).slots[0].ty;
+    m.structs[0].fields[0].type = record;
+    assert(Code(m) == "GIR-V010");
+}
+
+void RejectsAnInvalidStructLayout() {
+    auto overlapping = ScalarStruct();
+    overlapping.structs[0].fields[1].offset = 0;
+    assert(Code(overlapping) == "GIR-V010");
+
+    auto truncated = ScalarStruct();
+    truncated.structs[0].size = 8;
+    assert(Code(truncated) == "GIR-V010");
+}
+
+void LowStructUsesByteStorageAndUnalignedSafeAccess() {
+    auto high = ScalarStruct();
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+    auto json = GirWriter(low).WriteLow();
+    assert(json.find("\"core-shrink\"") != string::npos);
+    assert(json.find("struct_def") == string::npos);
+    auto byteCopies = 0;
+    auto scalarLoads = 0;
+    auto scalarStores = 0;
+    unordered_map<int, string> integerValues;
+    vector<string> copySizes;
+    for (auto &block : low.funcs[0].blocks)
+        for (auto &inst : block.insts) {
+            byteCopies += inst.op == GirOp::BytesCopy;
+            scalarLoads += inst.op == GirOp::PLoad;
+            scalarStores += inst.op == GirOp::PStore;
+            if (inst.op == GirOp::Int) integerValues[inst.res] = inst.text;
+            if (inst.op == GirOp::BytesCopy) copySizes.push_back(integerValues[inst.vals[0]]);
+        }
+    assert(byteCopies >= 4);
+    assert(scalarLoads == 0);
+    assert(scalarStores == 0);
+    assert((copySizes == vector<string>{ "1", "8", "9", "1", "8" }));
+}
+
 }  // namespace
 
 int main() {
@@ -666,6 +859,15 @@ int main() {
     RejectsWatermarkPastCallerOwnedRegion();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
+    PilotAndShrinkModuleShapesStayDistinct();
+    AcceptsScalarStructFieldsOnAnImmutableBinding();
+    RejectsStructsInThePilotProfile();
+    RejectsAStoreToALetField();
+    RejectsAWriteThroughConstFieldContents();
+    RejectsAConstructorWithAnotherNominalType();
+    RejectsAFieldComponentAfterItsStructType();
+    RejectsAnInvalidStructLayout();
+    LowStructUsesByteStorageAndUnalignedSafeAccess();
     puts("compiler_gir ok");
     return 0;
 }

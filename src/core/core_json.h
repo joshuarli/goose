@@ -11,7 +11,6 @@
 namespace goose {
 
 inline constexpr const char *CORE_SCHEMA = "goose-core/0.2";
-inline constexpr const char *CORE_PROFILE = "core-pilot";
 
 // Whether the text is well-formed UTF-8 (no overlong forms, surrogates or
 // values above U+10FFFF): the wire format carries text verbatim.
@@ -45,6 +44,10 @@ public:
     explicit CoreWriter(const CoreModule &mod) : m(mod) {}
 
     string Write() {
+        typenum.clear();
+        typeorder.clear();
+        origins.clear();
+        originnum.clear();
         // The globals and implementations first: they are what mentions types
         // and origins.
         string objs = "[";
@@ -63,6 +66,9 @@ public:
             Context(objs, m.contexts[i]);
         }
         objs += "]";
+        if (m.profile == CoreProfile::Shrink)
+            for (size_t i = 0; i < m.types.size(); i++)
+                if (m.types[i].kind == CoreType::Struct) T((int)i);
         // Files are numbered by first use in the origin table.
         filemap.assign(m.files.size(), -1);
         fileorder.clear();
@@ -72,7 +78,7 @@ public:
                 fileorder.push_back(o.file);
             }
         }
-        string out = cat("[\"module\",\"", CORE_SCHEMA, "\",\"", CORE_PROFILE, "\",[");
+        string out = cat("[\"module\",\"", CORE_SCHEMA, "\",\"", CoreProfileName(m.profile), "\",[");
         for (size_t i = 0; i < fileorder.size(); i++) {
             if (i) out += ',';
             out += "[\"file\",";
@@ -84,7 +90,16 @@ public:
             if (i) out += ',';
             TypeRecord(out, m.types[typeorder[i]]);
         }
-        out += "],";
+        out += ']';
+        if (m.profile == CoreProfile::Shrink) {
+            out += ",[";
+            for (size_t i = 0; i < m.structs.size(); i++) {
+                if (i) out += ',';
+                StructRecord(out, m.structs[i]);
+            }
+            out += ']';
+        }
+        out += ',';
         out += objs;
         Append(out, ",", m.entry, ",[");
         for (size_t i = 0; i < origins.size(); i++) {
@@ -138,7 +153,11 @@ private:
     int T(CoreTypeId id) {
         if (auto it = typenum.find(id); it != typenum.end()) return it->second;
         auto &t = m.types[id];
-        if (t.elem >= 0) T(t.elem);
+        if (t.kind == CoreType::Struct) {
+            for (auto &field : m.structs[t.structid].fields) T(field.type);
+        } else if (t.elem >= 0) {
+            T(t.elem);
+        }
         auto n = (int)typeorder.size();
         typenum[id] = n;
         typeorder.push_back(id);
@@ -188,7 +207,20 @@ private:
                 Append(out, "[\"view\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
                 break;
             case CoreType::Ptr: out += "[\"ptr\"]"; break;
+            case CoreType::Struct: Append(out, "[\"struct\",", t.structid, "]"); break;
         }
+    }
+
+    void StructRecord(string &out, const CoreStruct &s) {
+        Append(out, "[\"struct_def\",", s.size, ",[" );
+        for (size_t i = 0; i < s.fields.size(); i++) {
+            if (i) out += ',';
+            auto &field = s.fields[i];
+            Append(out, "[\"field\",", typenum.at(field.type), ",\"",
+                   field.binding == CoreVarKind::Var ? "var" : "let", "\",\"",
+                   CoreMutName(field.contents), "\",", field.offset, "]");
+        }
+        out += "]]";
     }
 
     void Global(string &out, const CoreGlobal &g) {
@@ -401,6 +433,11 @@ private:
                 Expr(out, *p.expr);
                 Append(out, ",", O(p.org), "]");
                 break;
+            case CorePlace::Field:
+                out += "[\"p_field\",";
+                Place(out, *p.base);
+                Append(out, ",", p.index, "]");
+                break;
         }
     }
 
@@ -533,6 +570,14 @@ private:
                 Append(out, "[\"e_fill\",", T(e.type), ",");
                 Expr(out, *e.a);
                 out += ']';
+                break;
+            case CoreExprKind::Struct:
+                Append(out, "[\"e_struct\",", T(e.type), ",[" );
+                for (size_t i = 0; i < e.elems.size(); i++) {
+                    if (i) out += ',';
+                    Expr(out, *e.elems[i]);
+                }
+                out += "]]";
                 break;
         }
     }

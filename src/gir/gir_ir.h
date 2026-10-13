@@ -16,7 +16,7 @@ using GirTypeId = CoreTypeId;
 enum class GirOp : uint8_t {
     // Instructions that define a value, high stage.
     Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, Load,
-    Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, Push, Call, Arr, Fill,
+    Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, Push, Call, Arr, Fill, Struct, Field,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
     HdrLen,
@@ -39,7 +39,8 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::BoolCmp: case GirOp::Next: case GirOp::Slot: case GirOp::Global: case GirOp::Elem:
         case GirOp::Freeze: case GirOp::Load: case GirOp::Snap: case GirOp::SliceView:
         case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::ArrayLen: case GirOp::Index:
-        case GirOp::Push: case GirOp::Arr: case GirOp::Fill: case GirOp::Unit: case GirOp::Init:
+        case GirOp::Push: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
+        case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::Enter: case GirOp::Leave: case GirOp::Print:
             return true;
         default: return false;
@@ -90,6 +91,7 @@ struct GirPart {
 //   ViewSlice: res, mut, a (view), lo, hi, org
 //   Index: res, a (view), b (index), org     Push: res, a (ref), b (value), org
 //   Call: res, idx (function), vals, org     Arr: res, ty, vals      Fill: res, ty, a
+//   Struct: res, ty, vals                    Field: res, a (reference), idx (real field)
 //   Init: idx (slot), a, org      Store/Append: a (ref), b, org
 //   Enter/Leave: idx (scope)      Print: parts, org
 //   Br: idx (block), vals         CondBr: a, idx (true block), vals, idx2, vals2
@@ -207,6 +209,8 @@ struct GirModule {
     vector<string> diagfiles;   // As the compiler writes them in a runtime diagnostic.
     vector<string> filemodules; // The module of each file.
     vector<CoreType> types;
+    CoreProfile profile = CoreProfile::Pilot;
+    vector<CoreStruct> structs;
     vector<GirGlobal> globals;
     vector<GirFunc> funcs;
     int entry = 0;

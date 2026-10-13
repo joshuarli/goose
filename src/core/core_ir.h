@@ -18,6 +18,11 @@ namespace goose {
 enum class CoreIntTy : uint8_t { I8, I16, I32, I64, U8, U16, U32, U64 };
 enum class CoreMut : uint8_t { Mut, Const };
 enum class CoreVarKind : uint8_t { Let, Var };
+enum class CoreProfile : uint8_t { Pilot, Shrink };
+
+inline const char *CoreProfileName(CoreProfile profile) {
+    return profile == CoreProfile::Pilot ? "core-pilot" : "core-shrink";
+}
 
 inline const char *CoreIntName(CoreIntTy t) {
     static const char *names[] = { "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64" };
@@ -41,12 +46,27 @@ using CoreTypeId = int;
 // the lowered form (`mut` and `elem` as for a slice), kept here so that both
 // share one table. A Ptr is an address, a type of the low stage only.
 struct CoreType {
-    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, Ref, Slice, View, Ptr } kind = Unit;
+    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, Ref, Slice, View, Ptr, Struct } kind = Unit;
     CoreIntTy ity = CoreIntTy::I64;   // Int
     CoreMut mut = CoreMut::Mut;       // Ref, Slice
     CoreTypeId elem = -1;             // Arr, Grow, Ref, Slice
     int64_t count = 0;                // Arr
+    int structid = -1;                // Struct: nominal descriptor table entry.
     bool operator==(const CoreType &) const = default;
+};
+
+// Layout and permissions for one real field of a nominal flat fixed struct.
+// Pads have byte offsets but never become fields here.
+struct CoreField {
+    CoreTypeId type = -1;
+    CoreVarKind binding = CoreVarKind::Let;
+    CoreMut contents = CoreMut::Mut;
+    int64_t offset = 0;
+};
+
+struct CoreStruct {
+    int64_t size = 0;
+    vector<CoreField> fields;
 };
 
 enum class CoreOriginKind : uint8_t {
@@ -112,10 +132,11 @@ struct CoreBlock {
 // A location: a variable, a global, what a reference points to, or an element
 // of a view.
 struct CorePlace {
-    enum Kind : uint8_t { Local, Global, Deref, Elem } kind = Local;
+    enum Kind : uint8_t { Local, Global, Deref, Elem, Field } kind = Local;
     int index = 0;           // Local: variable; Global: global.
     CoreExprP expr;          // Deref: an expression of reference type; Elem: the index.
     CoreViewP view;          // Elem
+    CorePlaceP base;          // Field: containing storage.
     CoreOrigin org;          // Elem
 };
 
@@ -141,7 +162,7 @@ struct CoreArg {
 
 enum class CoreExprKind : uint8_t {
     Lit, Bool, Read, Ref, Slice, Len, Un, Bin, Cmp, And, Or, Not, Conv, Call, Push, If, Block,
-    Arr, Fill,
+    Arr, Fill, Struct,
 };
 
 // One expression. `type` is the expression's own Core type for every kind
@@ -154,7 +175,7 @@ enum class CoreExprKind : uint8_t {
 //   Cmp: cmp, a, b            And/Or: a, b             Not: a
 //   Conv: conv, a, org        Call: ctx, args, org     Push: place, a
 //   If: a, then, else         Block: then              Arr: elems, type
-//   Fill: a, type
+//   Fill: a, type          Struct: elems, type
 struct CoreExpr {
     CoreExprKind kind = CoreExprKind::Bool;
     CoreTypeId type = -1;
@@ -293,6 +314,8 @@ struct CoreModule {
     vector<string> diagfiles;
     vector<string> filemodules;   // The module of each file, aligned with `files`.
     vector<CoreType> types;
+    CoreProfile profile = CoreProfile::Pilot;
+    vector<CoreStruct> structs;
     vector<CoreGlobal> globals;
     vector<CoreImpl> impls;
     vector<CoreContext> contexts;
@@ -329,6 +352,7 @@ inline void CoreVisitExprs(const CorePlace &p, const function<void(const CoreExp
         else CoreVisitExprs(*p.view->expr, f);
         CoreVisitExprs(*p.expr, f);
     }
+    if (p.kind == CorePlace::Field) CoreVisitExprs(*p.base, f);
 }
 
 inline void CoreVisitExprs(const CoreView &v, const function<void(const CoreExpr &)> &f) {

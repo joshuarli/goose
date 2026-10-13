@@ -278,6 +278,7 @@ private:
                 fx->aborts = true;
                 return rho;
             }
+            case CorePlace::Field: return Pl(*p.base);
         }
         return {};
     }
@@ -346,6 +347,7 @@ private:
             }
             case CoreExprKind::Block: return Block(*e.then);
             case CoreExprKind::Arr:
+            case CoreExprKind::Struct:
                 for (auto &el : e.elems) Ex(*el);
                 return {};
             case CoreExprKind::Fill: Ex(*e.a); return {};
