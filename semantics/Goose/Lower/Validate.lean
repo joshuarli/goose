@@ -1136,4 +1136,234 @@ theorem finishBlocks_defs (blocks : Array BlockB) :
   simp only [finishBlocks, Array.toList_map, List.flatMap_map]
   rfl
 
+/-! Successful Core place typing certifies the source table indices that lowering emits. -/
+theorem Core.tyPlace_var_success_bound {env : Core.TEnv} {x : Core.VarId}
+    {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
+    (h : (Core.tyPlace env (.var x)).run fuel = .ok (info, fuel')) :
+    x < env.vars.size := by
+  cases hvar : env.vars[x]? with
+  | none =>
+    cases hv : env.visible.contains x
+    · have hnot : x ∉ env.visible := by
+        intro hm
+        have hc : env.visible.contains x = true := List.contains_iff_mem.mpr hm
+        rw [hv] at hc
+        contradiction
+      simp [Core.tyPlace, Core.varOf, hnot, Core.rej] at h
+      change (Except.error _ : Core.V (Core.PlaceInfo × Nat)) = .ok _ at h
+      cases h
+    · have hm : x ∈ env.visible := List.contains_iff_mem.mp hv
+      simp [Core.tyPlace, Core.varOf, hvar, hm, Core.rej] at h
+      change (Except.error _ : Core.V (Core.PlaceInfo × Nat)) = .ok _ at h
+      cases h
+  | some lv => exact (Array.getElem?_eq_some_iff.mp hvar).1
+
+theorem Core.tyPlace_global_success_bound {env : Core.TEnv} {g : Core.GlobalId}
+    {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
+    (h : (Core.tyPlace env (.global g)).run fuel = .ok (info, fuel')) :
+    g < env.globalLimit := by
+  by_cases hlimit : g < env.globalLimit
+  · exact hlimit
+  · simp [Core.tyPlace, hlimit, Core.rej] at h
+    change (Except.error _ : Core.V (Core.PlaceInfo × Nat)) = .ok _ at h
+    cases h
+
+theorem Core.tyPlace_elem_success_origin_bound {env : Core.TEnv} {v : Core.View}
+    {i : Core.Expr} {org : Core.OriginId} {fuel : Nat}
+    {info : Core.PlaceInfo} {fuel' : Nat}
+    (h : (Core.tyPlace env (.elem v i org)).run fuel = .ok (info, fuel')) :
+    org < env.mod.origins.size := by
+  by_cases horg : org < env.mod.origins.size
+  · exact horg
+  · simp [Core.tyPlace, Core.checkOrg, Core.rej, horg] at h
+    change (Except.error _ : Core.V (Core.PlaceInfo × Nat)) = .ok _ at h
+    cases h
+
+theorem lowerEnv_slots_size (m : Core.Module) (vars : Array Core.LocalVar) :
+    (lowerEnv m vars).slots.size = vars.size := by
+  simp [lowerEnv]
+
+theorem lowerEnv_globals_size (m : Core.Module) (vars : Array Core.LocalVar) :
+    (lowerEnv m vars).globals.size = m.globals.size := by
+  simp [lowerEnv]
+
+theorem lowerEnv_sigs_size (m : Core.Module) (vars : Array Core.LocalVar) :
+    (lowerEnv m vars).sigs.size = m.impls.size := by
+  simp [lowerEnv]
+
+theorem lowerPlace_var_symbolRun_of_tyPlace {le : LEnv} {scopeCount : Nat}
+    {env : Core.TEnv} {x : Core.VarId} {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
+    (h : (Core.tyPlace env (.var x)).run fuel = .ok (info, fuel'))
+    (hslots : env.vars.size = le.slots.size) {ls : LS} :
+    LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace (.var x)) := by
+  apply lowerPlace_var_symbolRun
+  rw [← hslots]
+  exact Core.tyPlace_var_success_bound h
+
+theorem lowerPlace_var_symbolRun_of_tyPlace_lowerEnv {m : Core.Module}
+    {vars : Array Core.LocalVar} {scopeCount : Nat} {env : Core.TEnv}
+    {x : Core.VarId} {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
+    (hvars : env.vars = vars)
+    (h : (Core.tyPlace env (.var x)).run fuel = .ok (info, fuel')) {ls : LS} :
+    LS.SymbolRun (lowerEnv m vars) scopeCount ls (fun v => [v]) (lowerPlace (.var x)) := by
+  apply lowerPlace_var_symbolRun_of_tyPlace h
+  simp [lowerEnv, hvars]
+
+theorem lowerPlace_global_symbolRun_of_tyPlace {le : LEnv} {scopeCount : Nat}
+    {env : Core.TEnv} {g : Core.GlobalId} {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
+    (h : (Core.tyPlace env (.global g)).run fuel = .ok (info, fuel'))
+    (hglobals : env.globalLimit ≤ le.globals.size) {ls : LS} :
+    LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace (.global g)) := by
+  apply lowerPlace_global_symbolRun
+  exact Nat.lt_of_lt_of_le (Core.tyPlace_global_success_bound h) hglobals
+
+theorem lowerPlace_global_symbolRun_of_tyPlace_lowerEnv {m : Core.Module}
+    {vars : Array Core.LocalVar} {scopeCount : Nat} {env : Core.TEnv}
+    {g : Core.GlobalId} {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
+    (hlimit : env.globalLimit ≤ m.globals.size)
+    (h : (Core.tyPlace env (.global g)).run fuel = .ok (info, fuel')) {ls : LS} :
+    LS.SymbolRun (lowerEnv m vars) scopeCount ls (fun v => [v]) (lowerPlace (.global g)) := by
+  apply lowerPlace_global_symbolRun_of_tyPlace h
+  simpa [lowerEnv] using hlimit
+
+theorem lowerPlace_deref_symbolRun_of {le : LEnv} {scopeCount : Nat}
+    {e : Core.Expr} (hexpr : ∀ ls,
+      LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr e)) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace (.deref e)) := by
+  intro ls
+  simpa [lowerPlace] using hexpr ls
+
+theorem lowerPlace_snapshot_symbolRun_of {le : LEnv} {scopeCount : Nat}
+    {p : Core.Place} (mode : Goose.GIR.SnapshotMode) (hplace : ∀ ls,
+      LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace p)) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v])
+      (do let r ← lowerPlace p; emitDef (.snapshot mode r)) := by
+  intro ls
+  have hrunAt : LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun v => [v])
+      (do let r ← lowerPlace p; emitDef (.snapshot mode r)) := by
+    change LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun v => [v])
+      (do let r ← lowerPlace p
+          emitDef (.snapshot mode r))
+    apply LS.SymbolRunAt.bind ((hplace ls).toSymbolRunAt (advB_lowerPlace p))
+    intro r mid hmid hcur hrefs hadv hdead
+    apply LS.SymbolRunAt.emitDef
+    · intro live v hv
+      simp [Op.uses] at hv
+      subst v
+      have hmem : SymbolRef.value r ∈ LS.valueRefs (fun v : ValueId => [v]) r mid := by
+        simp [LS.valueRefs, live]
+      have hbound := hrefs (.value r) hmem
+      change r < mid.vals.size at hbound
+      exact hbound
+    · intro o ho
+      simp [Op.origin] at ho
+    · simp [Op.SymbolRefsValid]
+  exact hrunAt.toSymbolRun
+
+theorem lowerView_of_symbolRun_of {le : LEnv} {scopeCount : Nat}
+    {p : Core.Place} (hplace : ∀ ls,
+      LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace p)) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerView (.of p)) := by
+  cases p with
+  | var x =>
+    intro ls
+    simpa [lowerView] using lowerPlace_snapshot_symbolRun_of .owner hplace ls
+  | global g =>
+    intro ls
+    simpa [lowerView] using lowerPlace_snapshot_symbolRun_of .owner hplace ls
+  | deref e =>
+    intro ls
+    simpa [lowerView] using lowerPlace_snapshot_symbolRun_of .borrowed hplace ls
+  | elem v i o =>
+    intro ls
+    simpa [lowerView] using lowerPlace_snapshot_symbolRun_of .borrowed hplace ls
+  | field owner i =>
+    intro ls
+    simpa [lowerView] using lowerPlace_snapshot_symbolRun_of .borrowed hplace ls
+
+theorem lowerView_val_symbolRun_of {le : LEnv} {scopeCount : Nat}
+    {e : Core.Expr} (hexpr : ∀ ls,
+      LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr e)) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerView (.val e)) := by
+  intro ls
+  have hrunAt : LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun v => [v])
+      (lowerView (.val e)) := by
+    change LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun v => [v])
+      (do let s ← lowerExpr e; emitDef (.sliceView s))
+    apply LS.SymbolRunAt.bind ((hexpr ls).toSymbolRunAt (advB_lowerExpr e))
+    intro s mid hmid hcur hrefs hadv hdead
+    apply LS.SymbolRunAt.emitDef
+    · intro live v hv
+      simp [Op.uses] at hv
+      subst v
+      have hmem : SymbolRef.value s ∈ LS.valueRefs (fun v : ValueId => [v]) s mid := by
+        simp [LS.valueRefs, live]
+      have hbound := hrefs (.value s) hmem
+      change s < mid.vals.size at hbound
+      exact hbound
+    · intro o ho
+      simp [Op.origin] at ho
+    · simp [Op.SymbolRefsValid]
+  exact hrunAt.toSymbolRun
+
+theorem lowerPlace_elem_symbolRun_of {le : LEnv} {scopeCount : Nat}
+    {v : Core.View} {i : Core.Expr} {org : Core.OriginId}
+    (hview : ∀ ls, LS.SymbolRun le scopeCount ls (fun x => [x]) (lowerView v))
+    (hindex : ∀ ls, LS.SymbolRun le scopeCount ls (fun x => [x]) (lowerExpr i))
+    (horg : org < le.mod.origins.size) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun x => [x]) (lowerPlace (.elem v i org)) := by
+  intro ls
+  have hrunAt : LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun x => [x])
+      (lowerPlace (.elem v i org)) := by
+    change LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun x => [x])
+      (do let vw ← lowerView v
+          let iv ← lowerExpr i
+          emitDef (.indexChecked vw iv (some org)))
+    apply LS.SymbolRunAt.bind ((hview ls).toSymbolRunAt (advB_lowerView v))
+    intro vw mid hmid hcur hrefsView hadvView hdeadView
+    apply LS.SymbolRunAt.bind ((hindex mid).toSymbolRunAt (advB_lowerExpr i))
+    intro iv mid2 hmid2 hcur2 hrefsIndex hadvIndex hdeadIndex
+    apply LS.SymbolRunAt.emitDef
+    · intro live x hx
+      simp [Op.uses] at hx
+      rcases hx with hxvw | hxiv
+      · subst x
+        have hmidLive : mid.cur.isSome := by
+          cases hcurMid : mid.cur with
+          | none =>
+            have hclosed := hdeadIndex hcurMid
+            simp [hclosed] at live
+          | some _ => simp
+        have hmem : SymbolRef.value vw ∈ LS.valueRefs
+            (fun x : ValueId => [x]) vw mid := by
+          simp [LS.valueRefs, hmidLive]
+        have hbound := hrefsView (.value vw) hmem
+        change vw < mid.vals.size at hbound
+        exact Nat.lt_of_lt_of_le hbound hadvIndex.vals
+      · subst x
+        have hmem : SymbolRef.value iv ∈ LS.valueRefs
+            (fun x : ValueId => [x]) iv mid2 := by
+          simp [LS.valueRefs, live]
+        have hbound := hrefsIndex (.value iv) hmem
+        change iv < mid2.vals.size at hbound
+        exact hbound
+    · intro o ho
+      simp [Op.origin] at ho
+      subst o
+      exact horg
+    · simp [Op.SymbolRefsValid]
+  exact hrunAt.toSymbolRun
+
+theorem lowerPlace_elem_symbolRun_of_tyPlace {le : LEnv} {scopeCount : Nat}
+    {env : Core.TEnv} {v : Core.View} {i : Core.Expr} {org : Core.OriginId}
+    {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
+    (hty : (Core.tyPlace env (.elem v i org)).run fuel = .ok (info, fuel'))
+    (hview : ∀ ls, LS.SymbolRun le scopeCount ls (fun x => [x]) (lowerView v))
+    (hindex : ∀ ls, LS.SymbolRun le scopeCount ls (fun x => [x]) (lowerExpr i))
+    (horigins : le.mod.origins.size = env.mod.origins.size) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun x => [x]) (lowerPlace (.elem v i org)) := by
+  apply lowerPlace_elem_symbolRun_of hview hindex
+  rw [horigins]
+  exact Core.tyPlace_elem_success_origin_bound hty
+
 end Goose.Lower
