@@ -66,6 +66,11 @@ private:
 
     CoreImpl &Impl() { return m.impls[ci]; }
 
+    bool IsLimitedOwner(const CorePlace &place) const {
+        auto type = m.PlaceType((int)ci, place);
+        return type && m.Type(*type).kind == CoreType::Limited;
+    }
+
     static bool Same(const CoreSummary &a, const CoreSummary &b) {
         return a.unknown == b.unknown && a.reads == b.reads && a.writes == b.writes &&
                a.grows == b.grows && a.shrinks == b.shrinks && a.rebinds == b.rebinds &&
@@ -228,6 +233,43 @@ private:
                 Vw(*s.view);
                 if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
+                if (IsLimitedOwner(*s.place)) fx->aborts = true;
+                break;
+            }
+            case CoreStmtKind::AssignWhole: {
+                auto rho = Pl(*s.place);
+                Ex(*s.expr);
+                AddTargets(fx->reads, rho);
+                AddTargets(fx->shrinks, rho);
+                AddTargets(fx->writes, rho);
+                AddTargets(fx->grows, rho);
+                break;
+            }
+            case CoreStmtKind::PopN: {
+                auto rho = Pl(*s.place);
+                Ex(*s.expr);
+                AddTargets(fx->reads, rho);
+                AddTargets(fx->shrinks, rho);
+                fx->aborts = true;
+                break;
+            }
+            case CoreStmtKind::Resize: {
+                auto rho = Pl(*s.place);
+                Ex(*s.expr);
+                if (s.expr2) Ex(*s.expr2);
+                AddTargets(fx->reads, rho);
+                AddTargets(fx->shrinks, rho);
+                fx->aborts = true;
+                if (s.expr2) {
+                    AddTargets(fx->writes, rho);
+                    AddTargets(fx->grows, rho);
+                }
+                break;
+            }
+            case CoreStmtKind::Clear: {
+                auto rho = Pl(*s.place);
+                AddTargets(fx->reads, rho);
+                AddTargets(fx->shrinks, rho);
                 break;
             }
             case CoreStmtKind::If:
@@ -343,7 +385,15 @@ private:
                 Ex(*e.a);
                 if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
+                if (IsLimitedOwner(*e.place)) fx->aborts = true;
                 return rho;
+            }
+            case CoreExprKind::Pop: {
+                auto rho = Pl(*e.place);
+                AddTargets(fx->reads, rho);
+                AddTargets(fx->shrinks, rho);
+                fx->aborts = true;
+                return {};
             }
             case CoreExprKind::If: {
                 Ex(*e.a);

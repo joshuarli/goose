@@ -997,6 +997,99 @@ void CoreShrinkPushAndSummaryCarryOriginsAndShrinks() {
            string::npos);
 }
 
+CoreModule CoreShrinkOperations() {
+    CoreModule m;
+    m.files = { "t.goose" };
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+    CoreImpl impl;
+    impl.name = "main";
+    impl.vars = { CoreVar { "values", ownerTy, CoreVarKind::Var, 0,
+                            CoreOrigin { 0, 1, CoreOriginKind::Let } } };
+    impl.body.scope = 0;
+
+    auto pop = make_unique<CoreExpr>();
+    pop->kind = CoreExprKind::Pop;
+    pop->type = i64;
+    pop->place = CoreLocal(0);
+    pop->org = CoreOrigin { 0, 2, CoreOriginKind::Expr };
+    CoreStmt popStmt;
+    popStmt.kind = CoreStmtKind::Expr;
+    popStmt.expr = std::move(pop);
+    popStmt.org = CoreOrigin { 0, 2, CoreOriginKind::Expr };
+    impl.body.stmts.push_back(std::move(popStmt));
+
+    CoreStmt popn;
+    popn.kind = CoreStmtKind::PopN;
+    popn.place = CoreLocal(0);
+    popn.expr = CoreInt(i64, "1");
+    popn.org = CoreOrigin { 0, 3, CoreOriginKind::Expr };
+    impl.body.stmts.push_back(std::move(popn));
+
+    CoreStmt resize;
+    resize.kind = CoreStmtKind::Resize;
+    resize.place = CoreLocal(0);
+    resize.expr = CoreInt(i64, "2");
+    resize.expr2 = CoreInt(i64, "40");
+    resize.org = CoreOrigin { 0, 4, CoreOriginKind::Expr };
+    impl.body.stmts.push_back(std::move(resize));
+
+    CoreStmt clear;
+    clear.kind = CoreStmtKind::Clear;
+    clear.place = CoreLocal(0);
+    clear.org = CoreOrigin { 0, 5, CoreOriginKind::Expr };
+    impl.body.stmts.push_back(std::move(clear));
+
+    auto replacement = make_unique<CoreExpr>();
+    replacement->kind = CoreExprKind::Arr;
+    replacement->type = ownerTy;
+    replacement->elems.push_back(CoreInt(i64, "7"));
+    CoreStmt assign;
+    assign.kind = CoreStmtKind::AssignWhole;
+    assign.place = CoreLocal(0);
+    assign.expr = std::move(replacement);
+    assign.org = CoreOrigin { 0, 6, CoreOriginKind::Assign };
+    impl.body.stmts.push_back(std::move(assign));
+
+    m.impls.push_back(std::move(impl));
+    m.entry = 0;
+    return m;
+}
+
+void CoreShrinkOperationTagsAndPlaceTypingAreCanonical() {
+    auto m = CoreShrinkOperations();
+    auto json = CoreWriter(m).Write();
+    assert(json.find("[\"growshrink\",0]") != string::npos);
+    assert(json.find("[\"e_pop\",[\"p_local\",0],1]") != string::npos);
+    assert(json.find("[\"s_pop_n\",[\"p_local\",0],[\"e_lit\",0,\"1\"],2]") !=
+           string::npos);
+    assert(json.find("[\"s_resize\",[\"p_local\",0],[\"e_lit\",0,\"2\"],[[\"e_lit\",0,\"40\"]],3]") !=
+           string::npos);
+    assert(json.find("[\"s_clear\",[\"p_local\",0],4]") != string::npos);
+    assert(json.find("[\"s_assign_whole\",[\"p_local\",0],[\"e_arr\",1,[") !=
+           string::npos);
+    CoreSummarizer(m).Run();
+    assert(m.impls[0].summary.aborts);
+    assert(CoreWriter(m).Write().find("[\"summary\",[],[],[],[],[],1,0]") != string::npos);
+
+    auto limited = CorePushShape(CoreProfile::Shrink);
+    CoreType bounded;
+    bounded.kind = CoreType::Limited;
+    bounded.elem = limited.IntType(CoreIntTy::I64);
+    bounded.count = 3;
+    auto boundedTy = limited.Intern(bounded);
+    limited.impls[0].vars[0].type = boundedTy;
+    auto &push = *limited.impls[0].body.stmts[0].expr;
+    auto actual = limited.PlaceType(0, *push.place);
+    assert(actual && *actual == boundedTy);
+    CoreSummarizer(limited).Run();
+    assert(limited.impls[0].summary.aborts);
+}
+
 void AcceptsScalarStructFieldsOnAnImmutableBinding() {
     auto m = ScalarStruct();
     assert(Code(m) == "");
@@ -2067,6 +2160,7 @@ int main() {
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
     CoreShrinkPushAndSummaryCarryOriginsAndShrinks();
+    CoreShrinkOperationTagsAndPlaceTypingAreCanonical();
     AcceptsScalarStructFieldsOnAnImmutableBinding();
     RejectsStructsInThePilotProfile();
     RejectsAStoreToALetField();

@@ -197,6 +197,8 @@ private:
             case CoreType::Unit: out += "[\"unit\"]"; break;
             case CoreType::Arr: Append(out, "[\"arr\",", typenum.at(t.elem), ",", t.count, "]"); break;
             case CoreType::Grow: Append(out, "[\"grow\",", typenum.at(t.elem), "]"); break;
+            case CoreType::GrowShrink: Append(out, "[\"growshrink\",", typenum.at(t.elem), "]"); break;
+            case CoreType::Limited: Append(out, "[\"limited\",", typenum.at(t.elem), ",", t.count, "]"); break;
             case CoreType::Ref:
                 Append(out, "[\"ref\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
                 break;
@@ -355,6 +357,27 @@ private:
                 out += "[\"s_append\",";
                 Place(out, *s.place); out += ',';
                 View(out, *s.view);
+                break;
+            case CoreStmtKind::AssignWhole:
+                out += "[\"s_assign_whole\",";
+                Place(out, *s.place); out += ',';
+                Expr(out, *s.expr);
+                break;
+            case CoreStmtKind::PopN:
+                out += "[\"s_pop_n\",";
+                Place(out, *s.place); out += ',';
+                Expr(out, *s.expr);
+                break;
+            case CoreStmtKind::Resize:
+                out += "[\"s_resize\",";
+                Place(out, *s.place); out += ',';
+                Expr(out, *s.expr); out += ",[";
+                if (s.expr2) Expr(out, *s.expr2);
+                out += ']';
+                break;
+            case CoreStmtKind::Clear:
+                out += "[\"s_clear\",";
+                Place(out, *s.place);
                 break;
             case CoreStmtKind::If:
                 out += "[\"s_if\",";
@@ -549,6 +572,11 @@ private:
                 Expr(out, *e.a);
                 if (m.profile == CoreProfile::Shrink) Append(out, ",", O(e.org));
                 out += ']';
+                break;
+            case CoreExprKind::Pop:
+                out += "[\"e_pop\",";
+                Place(out, *e.place);
+                Append(out, ",", O(e.org), "]");
                 break;
             case CoreExprKind::If:
                 out += "[\"e_if\",";

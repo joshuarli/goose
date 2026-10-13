@@ -244,6 +244,17 @@ private:
         }
     }
 
+    CoreTypeId OwnerElementTy(TypeExpr *t) {
+        unordered_set<const StructInst *> open;
+        if (!t || t->cq || !FlatFixedField(t, open)) Fail("nonflat-element", t ? t->line : here);
+        auto id = Ty(t);
+        switch (mod.Type(id).kind) {
+            case CoreType::Int: case CoreType::Bool: case CoreType::Arr: case CoreType::Struct:
+                return id;
+            default: Fail("nonflat-element");
+        }
+    }
+
     bool FlatFixedField(TypeExpr *t, unordered_set<const StructInst *> &open) {
         if (!t) return false;
         switch (t->kind) {
@@ -265,6 +276,28 @@ private:
             }
             default: return false;
         }
+    }
+
+    string AggregateBoundary(TypeExpr *t, unordered_set<const StructInst *> &seen) {
+        if (!t) return "";
+        if (t->kind == TY_ARRAY) {
+            switch (t->arr->akind) {
+                case A_GROW: case A_GROWSHRINK: return "resizable-field";
+                case A_LIMITED: return "limited-value";
+                case A_FIXED: return AggregateBoundary(t->arr->sub, seen);
+                case A_VAR: return "resizable-field";
+            }
+        }
+        if (t->kind != TY_STRUCT || !t->struc || !t->struc->inst) return "";
+        auto inst = t->struc->inst;
+        if (!seen.insert(inst).second || !inst->st || inst->ftypes.size() != inst->st->fields.size()) return "";
+        for (size_t i = 0; i < inst->st->fields.size(); i++) {
+            if (inst->st->fields[i].ispad) continue;
+            auto why = AggregateBoundary(inst->ftypes[i], seen);
+            if (!why.empty()) { seen.erase(inst); return why; }
+        }
+        seen.erase(inst);
+        return "";
     }
 
     int64_t FlatFieldSize(TypeExpr *t) {
@@ -318,6 +351,8 @@ private:
         if (t->cq && !fieldtype) Fail("struct-whole-const", t->line);
         if (!t->struc) Fail("struct", t->line);
         auto inst = t->struc->inst;
+        unordered_set<const StructInst *> seen;
+        if (auto why = AggregateBoundary(t, seen); !why.empty()) Fail(why.c_str(), t->line);
         if (!inst || !inst->validated || !inst->flat || inst->sclass != SC_FIXED)
             Fail("struct", t->line);
         if (auto it = structid.find(inst); it != structid.end()) return it->second;
@@ -403,12 +438,28 @@ private:
                         ct.kind = CoreType::Arr;
                         ct.count = a->size;
                         break;
-                    case A_GROW: ct.kind = CoreType::Grow; break;
+                    case A_GROW:
+                        if (position == TypePosition::Parameter) Fail("nonfixed-construction", t->line);
+                        ct.kind = CoreType::Grow;
+                        break;
                     case A_VAR: Fail("variable-array");
-                    case A_LIMITED: Fail("limited-array");
-                    case A_GROWSHRINK: Fail("grow-shrink-array");
+                    case A_LIMITED:
+                        if (position == TypePosition::Parameter) Fail("limited-value", t->line);
+                        if (!a->sizeexpr) Fail("runtime-capacity", t->line);
+                        if (a->size <= 0) Fail("zero-size", t->line);
+                        if (a->size > INT32_MAX) Fail("capacity-limit", t->line);
+                        ct.kind = CoreType::Limited;
+                        ct.count = a->size;
+                        mod.profile = CoreProfile::Shrink;
+                        break;
+                    case A_GROWSHRINK:
+                        if (position == TypePosition::Parameter) Fail("nonfixed-construction", t->line);
+                        ct.kind = CoreType::GrowShrink;
+                        mod.profile = CoreProfile::Shrink;
+                        break;
                 }
-                ct.elem = ElementTy(a->sub);
+                ct.elem = (a->akind == A_GROW || a->akind == A_GROWSHRINK || a->akind == A_LIMITED)
+                              ? OwnerElementTy(a->sub) : ElementTy(a->sub);
                 break;
             }
             case TY_SLICE:
@@ -456,10 +507,52 @@ private:
 
     // A result's type likewise: read-only where some return of it is.
     CoreTypeId ResultTy(FnSpec *sp, size_t i) {
+        if (sp->rets[i] && sp->rets[i]->kind == TY_ARRAY && sp->rets[i]->arr->akind != A_FIXED)
+            Fail(sp->rets[i]->arr->akind == A_LIMITED ? "limited-value" : "nonfixed-construction",
+                 sp->rets[i]->line);
         auto t = Ty(sp->rets[i]);
         if (i < sp->record.retroots.size() && sp->record.retroots[i].set && !sp->record.retroots[i].writable)
             t = Constify(t);
         return t;
+    }
+
+    bool OwnerLiteralRun(Node *n) const {
+        if (!n) return false;
+        if (Is<ArrayLit>(n)) {
+            auto a = (ArrayLit *)n;
+            return !a->fillval && !a->capexpr;
+        }
+        if (auto x = Is<IfExpr>(n)) {
+            if (!OwnerLiteralRun(x->thenb)) return false;
+            return x->elseb && OwnerLiteralRun(x->elseb);
+        }
+        if (auto b = Is<Block>(n)) return b->tail && OwnerLiteralRun(b->tail);
+        return false;
+    }
+
+    bool OwnerFillLiteral(Node *n) const {
+        if (auto a = Is<ArrayLit>(n)) return a->fillval != nullptr;
+        if (auto x = Is<IfExpr>(n)) return OwnerFillLiteral(x->thenb) || OwnerFillLiteral(x->elseb);
+        if (auto b = Is<Block>(n)) return OwnerFillLiteral(b->tail);
+        return false;
+    }
+
+    void RequireOwnerLiteralRun(Node *n, TypeExpr *owner) {
+        if (OwnerFillLiteral(n)) Fail("owner-fill-literal", n->line);
+        if (auto a = Is<ArrayLit>(n); a && a->capexpr) Fail("runtime-capacity", n->line);
+        if (!OwnerLiteralRun(n))
+            Fail(owner->arr->akind == A_LIMITED ? "limited-initializer" : "nonfixed-construction",
+                 n ? n->line : owner->line);
+        if (owner->arr->akind == A_LIMITED) {
+            if (auto a = Is<ArrayLit>(n); a && (int64_t)a->elems.size() > owner->arr->size)
+                Fail("limited-initializer", n->line);
+            if (auto x = Is<IfExpr>(n)) {
+                RequireOwnerLiteralRun(x->thenb, owner);
+                RequireOwnerLiteralRun(x->elseb, owner);
+            } else if (auto b = Is<Block>(n)) {
+                RequireOwnerLiteralRun(b->tail, owner);
+            }
+        }
     }
 
     CoreMut MutOf(const TypeExpr *t) { return t && t->cq ? CoreMut::Const : CoreMut::Mut; }
@@ -609,6 +702,8 @@ private:
         cg.org = Org(g->line, CoreOriginKind::Global);
         cg.module = keys.ModuleOf(g->line.fileidx);
         coerceorg = cg.org;
+        if (v->type->kind == TY_ARRAY && v->type->arr->akind != A_FIXED)
+            RequireOwnerLiteralRun(g->inits[0], v->type);
         cg.init = Value(g->inits[0]);
         globalindex[v] = (int)mod.globals.size();
         mod.globals.push_back(std::move(cg));
@@ -899,6 +994,8 @@ private:
         // The variable is numbered before its initializer, as it is written.
         s.var = NewVar(vd, vd->name, VarTy(vd), vd->isvar ? CoreVarKind::Var : CoreVarKind::Let,
                        out.scope, Org(d->line, CoreOriginKind::Let));
+        if (vd->type->kind == TY_ARRAY && vd->type->arr->akind != A_FIXED)
+            RequireOwnerLiteralRun(d->inits[0], vd->type);
         s.expr = ReborrowTo(Value(d->inits[0]), cur.impl->vars[s.var].type);
         out.stmts.push_back(std::move(s));
     }
@@ -968,6 +1065,19 @@ private:
                 }
                 auto s = MakeStmt(CoreStmtKind::Rebind, a->line, CoreOriginKind::Rebind);
                 s.var = RebindTarget(a->lval);
+                s.expr = Value(a->rhs);
+                out.stmts.push_back(std::move(s));
+                return;
+            }
+            auto *assigned = a->lval->exprtype ? Pointee(a->lval->exprtype) : nullptr;
+            if (IsArrayTE(assigned) && assigned->arr->akind == A_LIMITED)
+                Fail("limited-value", a->line);
+            if (IsArrayTE(assigned) &&
+                (assigned->arr->akind == A_GROW || assigned->arr->akind == A_GROWSHRINK)) {
+                auto s = MakeStmt(CoreStmtKind::AssignWhole, a->line, CoreOriginKind::Assign);
+                mod.profile = CoreProfile::Shrink;
+                s.place = ToPlace(a->lval, true);
+                RequireOwnerLiteralRun(a->rhs, assigned);
                 s.expr = Value(a->rhs);
                 out.stmts.push_back(std::move(s));
                 return;
@@ -1094,6 +1204,33 @@ private:
                 out.stmts.push_back(std::move(s));
                 return;
             }
+            case B_POP_N: {
+                auto an = c->ArgNodes();
+                auto s = MakeStmt(CoreStmtKind::PopN, c->line, CoreOriginKind::Expr);
+                mod.profile = CoreProfile::Shrink;
+                s.place = OwnerPlace(an[0]);
+                s.expr = Value(an[1]);
+                out.stmts.push_back(std::move(s));
+                return;
+            }
+            case B_RESIZE: {
+                auto an = c->ArgNodes();
+                auto s = MakeStmt(CoreStmtKind::Resize, c->line, CoreOriginKind::Expr);
+                mod.profile = CoreProfile::Shrink;
+                s.place = OwnerPlace(an[0]);
+                s.expr = Value(an[1]);
+                if (an.size() == 3) s.expr2 = Value(an[2]);
+                out.stmts.push_back(std::move(s));
+                return;
+            }
+            case B_CLEAR: {
+                auto an = c->ArgNodes();
+                auto s = MakeStmt(CoreStmtKind::Clear, c->line, CoreOriginKind::Expr);
+                mod.profile = CoreProfile::Shrink;
+                s.place = OwnerPlace(an[0]);
+                out.stmts.push_back(std::move(s));
+                return;
+            }
             case B_PUSH: {
                 // The statement form keeps the reference push yields.
                 auto s = MakeStmt(CoreStmtKind::Expr, c->line, CoreOriginKind::Expr);
@@ -1216,7 +1353,9 @@ private:
     CorePlaceP OwnerPlace(Node *recv) {
         if (!recv->exprtype) Fail("temporary-place");
         auto vt = Pointee(recv->exprtype);
-        if (!IsArrayTE(vt) || vt->arr->akind != A_GROW) Fail("growth-receiver");
+        if (!IsArrayTE(vt) || (vt->arr->akind != A_GROW && vt->arr->akind != A_GROWSHRINK &&
+                               vt->arr->akind != A_LIMITED)) Fail("growth-receiver");
+        (void)Ty(vt);
         return ToPlace(recv, true);
     }
 
@@ -1346,7 +1485,7 @@ private:
         e->place = OwnerPlace(an[0]);
         e->org = Org(c->line, CoreOriginKind::Expr);
         auto vt = Pointee(an[0]->exprtype);
-        auto elem = Ty(vt->arr->sub);
+        auto elem = OwnerElementTy(vt->arr->sub);
         e->a = Value(an[1]);
         CoreType rt;
         rt.kind = CoreType::Ref;
@@ -1465,12 +1604,14 @@ private:
             e->org = coerceorg;
             return e;
         }
+        if (IsArrayTE(inner) && inner->arr->akind != A_FIXED)
+            Fail(inner->arr->akind == A_LIMITED ? "limited-value" : "nonfixed-construction", id->line);
         auto place = ToPlace(id, true);
         return ReadOf(std::move(place), Ty(inner));
     }
 
     CoreExprP ArrayValue(ArrayLit *a) {
-        if (a->capexpr) Fail("limited-array");
+        if (a->capexpr) Fail("runtime-capacity");
         auto t = a->exprtype;
         if (!t) Fail("temporary-slice");
         if (t->kind == TY_SLICE) Fail("temporary-slice");
@@ -1478,6 +1619,8 @@ private:
         auto ty = Ty(t);
         auto &ct = mod.Type(ty);
         if (a->fillval) {
+            if (ct.kind == CoreType::Grow || ct.kind == CoreType::GrowShrink || ct.kind == CoreType::Limited)
+                Fail("owner-fill-literal", a->line);
             if (ct.kind != CoreType::Arr) Fail("fill-grow");
             auto e = NewExpr(CoreExprKind::Fill, ty);
             e->a = Value(a->fillval);
@@ -1600,6 +1743,11 @@ private:
             e->view = ToView(d->obj);
             return e;
         }
+        if (d->member == B_CAP) {
+            auto recv = d->obj->exprtype ? Pointee(d->obj->exprtype) : nullptr;
+            if (IsArrayTE(recv) && recv->arr->akind == A_LIMITED) Fail("limited-capacity", d->line);
+            Fail("builtin-call", d->line);
+        }
         if (d->member >= 0) Fail("builtin-property");
         if (!d->IsField()) Fail("struct");
         return ReadOf(ToPlace(d, true), Ty(d->exprtype));
@@ -1692,6 +1840,15 @@ private:
 
     CoreExprP BuiltinValue(Call *c) {
         switch (c->builtin) {
+            case B_POP: {
+                auto an = c->ArgNodes();
+                auto owner = Pointee(an[0]->exprtype);
+                auto e = NewExpr(CoreExprKind::Pop, OwnerElementTy(owner->arr->sub));
+                mod.profile = CoreProfile::Shrink;
+                e->place = OwnerPlace(an[0]);
+                e->org = Org(c->line, CoreOriginKind::Expr);
+                return e;
+            }
             case B_PUSH: {
                 auto e = PushExpr(c);
                 // A value-typed use reads the new element through the reference.
@@ -1704,8 +1861,14 @@ private:
             case B_PRINT: case B_ASSERT: case B_ABORT: case B_EXIT: case B_APPEND:
                 Fail("statement-as-value");
             case B_STR: case B_FORMAT: Fail("string-value");
-            case B_COPY: Fail("copy");
-            case B_POP: case B_POP_N: case B_RESIZE: case B_CLEAR: Fail("shrink-operation");
+            case B_COPY: {
+                auto an = c->ArgNodes();
+                auto t = an.empty() ? nullptr : Pointee(an[0]->exprtype);
+                if (IsArrayTE(t) && t->arr->akind != A_FIXED)
+                    Fail(t->arr->akind == A_LIMITED ? "limited-value" : "nonfixed-construction", c->line);
+                Fail("copy");
+            }
+            case B_POP_N: case B_RESIZE: case B_CLEAR: Fail("statement-as-value");
             case B_ALLOC_INDEX: case B_ALLOC_REF: case B_FREE: case B_ALLOC_SLICE:
             case B_REALLOC_SLICE: case B_FREE_SLICE:
                 Fail("reusable");
@@ -1715,8 +1878,19 @@ private:
             case B_TO_BYTES: case B_BYTES_OF: case B_FROM_BYTES: Fail("serialization");
             // A declaration with only a type gets its type's default value
             // from the checker.
-            case B_DEFAULT: Fail(c->implicit ? "uninitialized-declaration" : "default-value");
-            case B_LEN: case B_CAP: case B_INDEX_OF: Fail("builtin-call");
+            case B_DEFAULT: {
+                auto t = c->tyargs.empty() ? nullptr : c->tyargs[0];
+                if (IsArrayTE(t) && t->arr->akind != A_FIXED)
+                    Fail(t->arr->akind == A_LIMITED ? "limited-value" : "nonfixed-construction", c->line);
+                Fail(c->implicit ? "uninitialized-declaration" : "default-value");
+            }
+            case B_CAP: {
+                auto an = c->ArgNodes();
+                auto t = an.empty() || !an[0]->exprtype ? nullptr : Pointee(an[0]->exprtype);
+                if (IsArrayTE(t) && t->arr->akind == A_LIMITED) Fail("limited-capacity", c->line);
+                Fail("builtin-call");
+            }
+            case B_LEN: case B_INDEX_OF: Fail("builtin-call");
             default: Fail("builtin-call");
         }
     }

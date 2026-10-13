@@ -13,6 +13,8 @@
 // carry no meaning.
 #pragma once
 
+#include <optional>
+
 namespace goose {
 
 enum class CoreIntTy : uint8_t { I8, I16, I32, I64, U8, U16, U32, U64 };
@@ -41,16 +43,16 @@ inline int CoreIntBits(CoreIntTy t) {
 
 using CoreTypeId = int;
 
-// A pilot type. `elem` is the element or pointee type; `count` is an array's
-// fixed length. A View is not a Core type: it is the type of a sampled run in
+// `elem` is the element or pointee type; `count` is an array's fixed length
+// or a limited owner's capacity. A View is not a Core type: it is the type of a sampled run in
 // the lowered form (`mut` and `elem` as for a slice), kept here so that both
 // share one table. A Ptr is an address, a type of the low stage only.
 struct CoreType {
-    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, Ref, Slice, View, Ptr, Struct } kind = Unit;
+    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, GrowShrink, Limited, Ref, Slice, View, Ptr, Struct } kind = Unit;
     CoreIntTy ity = CoreIntTy::I64;   // Int
     CoreMut mut = CoreMut::Mut;       // Ref, Slice
-    CoreTypeId elem = -1;             // Arr, Grow, Ref, Slice
-    int64_t count = 0;                // Arr
+    CoreTypeId elem = -1;             // Arr, Grow, GrowShrink, Limited, Ref, Slice
+    int64_t count = 0;                // Arr, Limited
     int structid = -1;                // Struct: nominal descriptor table entry.
     bool operator==(const CoreType &) const = default;
 };
@@ -161,7 +163,7 @@ struct CoreArg {
 };
 
 enum class CoreExprKind : uint8_t {
-    Lit, Bool, Read, Ref, Slice, Len, Un, Bin, Cmp, And, Or, Not, Conv, Call, Push, If, Block,
+    Lit, Bool, Read, Ref, Slice, Len, Un, Bin, Cmp, And, Or, Not, Conv, Call, Push, Pop, If, Block,
     Arr, Fill, Struct,
 };
 
@@ -173,7 +175,8 @@ enum class CoreExprKind : uint8_t {
 //   Ref: mut, place           Slice: mut, view, lo, hi, org
 //   Len: view                 Un: un, a, org           Bin: bin, a, b, org
 //   Cmp: cmp, a, b            And/Or: a, b             Not: a
-//   Conv: conv, a, org        Call: ctx, args, org     Push: place, a
+//   Conv: conv, a, org        Call: ctx, args, org     Push: place, a, org
+//   Pop: place, org
 //   If: a, then, else         Block: then              Arr: elems, type
 //   Fill: a, type          Struct: elems, type
 struct CoreExpr {
@@ -204,13 +207,15 @@ struct CorePrintArg {
 };
 
 enum class CoreStmtKind : uint8_t {
-    Let, Assign, AssignOp, Rebind, Expr, Append, If, While, ForRange, ForEach, Ret, Break,
+    Let, Assign, AssignOp, AssignWhole, Rebind, Expr, Append, PopN, Resize, Clear, If, While, ForRange, ForEach, Ret, Break,
     Continue, Print, Assert, Abort, Exit,
 };
 
 // One statement. Meaningful members by kind:
 //   Let: var, expr          Assign: place, expr      AssignOp: bin, place, expr
-//   Rebind: var, expr       Expr: expr               Append: place, view
+//   AssignWhole: place, expr    Rebind: var, expr       Expr: expr
+//   Append: place, view    PopN: place, expr          Resize: place, expr (size), expr2 (optional fill)
+//   Clear: place
 //   If: expr, then, otherwise (optional)             While: expr, then
 //   ForRange: var, expr (lo), expr2 (hi), then
 //   ForEach: var, index (optional), view, byRef, then
@@ -336,6 +341,58 @@ struct CoreModule {
     const CoreType &Type(CoreTypeId id) const { return types[id]; }
     bool IsRefOrSlice(CoreTypeId id) const {
         return types[id].kind == CoreType::Ref || types[id].kind == CoreType::Slice;
+    }
+
+    // Resolve a place's type from its owning implementation and module tables.
+    // Operation classification uses this instead of carrying a second type fact
+    // beside the place that could disagree with it.
+    optional<CoreTypeId> PlaceType(int impl, const CorePlace &place) const {
+        switch (place.kind) {
+            case CorePlace::Local:
+                if (impl < 0 || impl >= (int)impls.size() || place.index < 0 ||
+                    place.index >= (int)impls[impl].vars.size()) return {};
+                return impls[impl].vars[place.index].type;
+            case CorePlace::Global:
+                if (place.index < 0 || place.index >= (int)globals.size()) return {};
+                return globals[place.index].type;
+            case CorePlace::Deref: {
+                if (!place.expr || place.expr->type < 0 || place.expr->type >= (int)types.size()) return {};
+                auto &ref = Type(place.expr->type);
+                if (ref.kind != CoreType::Ref) return {};
+                return ref.elem;
+            }
+            case CorePlace::Elem: {
+                if (!place.view) return {};
+                optional<CoreTypeId> owner;
+                if (place.view->kind == CoreView::Of) {
+                    if (!place.view->place) return {};
+                    owner = PlaceType(impl, *place.view->place);
+                } else if (place.view->expr && place.view->expr->type >= 0 &&
+                           place.view->expr->type < (int)types.size()) {
+                    auto &view = Type(place.view->expr->type);
+                    if (view.kind == CoreType::Slice || view.kind == CoreType::View) return view.elem;
+                    return {};
+                }
+                if (!owner || *owner < 0 || *owner >= (int)types.size()) return {};
+                auto &array = Type(*owner);
+                if (array.kind != CoreType::Arr && array.kind != CoreType::Grow &&
+                    array.kind != CoreType::GrowShrink && array.kind != CoreType::Limited) return {};
+                return array.elem;
+            }
+            case CorePlace::Field: {
+                if (!place.base || place.index < 0) return {};
+                auto base = PlaceType(impl, *place.base);
+                if (!base || *base < 0 || *base >= (int)types.size()) return {};
+                auto type = *base;
+                if (Type(type).kind == CoreType::Ref) type = Type(type).elem;
+                if (type < 0 || type >= (int)types.size() || Type(type).kind != CoreType::Struct) return {};
+                auto structid = Type(type).structid;
+                if (structid < 0 || structid >= (int)structs.size() ||
+                    place.index >= (int)structs[structid].fields.size()) return {};
+                return structs[structid].fields[place.index].type;
+            }
+        }
+        return {};
     }
 };
 
