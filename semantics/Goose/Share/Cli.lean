@@ -46,7 +46,7 @@ def proposeBytes (bs : ByteArray) : String × UInt32 :=
     match propose m with
     | .error msg => rejected msg
     | .ok p =>
-      if checkQuotient m p.shared p.implMap p.contextMap then (Write.module p.shared, 0)
+      if checkQuotient m p.shared p.implMap p.contextMap then (Goose.Core.Writer.module p.shared, 0)
       else rejected s!"the proposal failed the check: {explainQuotient m p.shared p.implMap p.contextMap}"
 
 end Goose.Share.Cli

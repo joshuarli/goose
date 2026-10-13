@@ -1,4 +1,4 @@
-import Goose.Core.Syntax
+import Goose.Core.Json
 
 /-!
 A writer for the Core module encoding that `Goose.Core.Decode` reads.
@@ -12,7 +12,7 @@ rejects, so a module that did not come from a decoder fails loudly instead of
 being written wrongly.
 -/
 
-namespace Goose.Share.Write
+namespace Goose.Core.Writer
 
 open Goose.Core
 
@@ -85,6 +85,7 @@ def tyEntry (types : Array Ty) : Ty → String
   | .ref m t => rec "ref" [str (mutability m), nat (tyIndex types t)]
   | .slice m e => rec "slice" [str (mutability m), nat (tyIndex types e)]
   | .tuple ps => rec "tuple" [arr ((tyParts ps).map fun t => nat (tyIndex types t))]
+  | .structT sid _ => rec "struct" [nat sid]
 
 mutual
 def place (ty : Ty → Nat) : Place → String
@@ -92,6 +93,7 @@ def place (ty : Ty → Nat) : Place → String
   | .global g => rec "p_global" [nat g]
   | .deref e => rec "p_deref" [expr ty e]
   | .elem v i o => rec "p_elem" [view ty v, expr ty i, nat o]
+  | .field p i => rec "p_field" [place ty p, nat i]
 
 def view (ty : Ty → Nat) : View → String
   | .of p => rec "v_of" [place ty p]
@@ -123,6 +125,7 @@ def expr (ty : Ty → Nat) : Expr → String
   | .blockE b => rec "e_block" [block ty b]
   | .arrLit t es => rec "e_arr" [nat (ty t), arr (exprs ty es)]
   | .fill t e => rec "e_fill" [nat (ty t), expr ty e]
+  | .structLit t es => rec "e_struct" [nat (ty t), arr (exprs ty es)]
 
 def exprs (ty : Ty → Nat) : List Expr → List String
   | [] => []
@@ -220,16 +223,21 @@ def context (c : Context) : String :=
 
 def origin (o : Origin) : String := rec "origin" [nat o.file, nat o.line, str o.kind]
 
+def structDef (ty : Ty → Nat) (d : StructDef) : String :=
+  rec "struct_def" [nat d.byteSize, arr (d.fields.toList.map fun f =>
+    rec "field" [nat (ty f.ty), str (varKind f.binding), str (mutability f.contents), nat f.byteOffset])]
+
 /-- The module as one line, without the final line feed. -/
 def module (m : Module) : String :=
   let ty := tyIndex m.types
-  rec "module" [str "goose-core/0.2", str "core-pilot",
+  rec "module" ([str Decode.schemaName, str m.profile.tag,
     arr (m.files.toList.map fun f => rec "file" [str f]),
-    arr (m.types.toList.map (tyEntry m.types)),
-    arr (m.globals.toList.map (global ty)),
+    arr (m.types.toList.map (tyEntry m.types))] ++
+    (match m.profile with | .pilot => [] | .shrink => [arr (m.structs.toList.map (structDef ty))]) ++
+    [arr (m.globals.toList.map (global ty)),
     arr (m.impls.toList.map (impl ty)),
     arr (m.contexts.toList.map context),
     nat m.entry,
-    arr (m.origins.toList.map origin)]
+    arr (m.origins.toList.map origin)])
 
-end Goose.Share.Write
+end Goose.Core.Writer

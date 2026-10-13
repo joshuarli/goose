@@ -348,6 +348,10 @@ def evalExpr : Nat → Cfg → Env → Expr → M Val
       let k ← expectFixedCount t
       let v ← evalExpr n cfg env a
       pure (.fixed (Array.replicate k v))
+    | .structLit t es => do
+      match t with
+      | .structT sid _ => pure (.record sid (← mapList (evalExpr n cfg env) es).toArray)
+      | _ => fault .shape
 
 /-- A block used as an expression yields its value; `break`, `continue` and
 `return` cannot cross an expression boundary. -/
@@ -394,6 +398,9 @@ def evalPlace : Nat → Cfg → Env → Place → M Loc
       if 0 ≤ k ∧ k < (vw.len : Int) then
         pure ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩
       else abortAt .indexOob org
+    | .field owner i => do
+      let l ← evalPlace n cfg env owner
+      pure ⟨l.root, l.path ++ [i]⟩
 
 def evalView : Nat → Cfg → Env → View → M ViewVal
   | 0, _, _, _ => timeout

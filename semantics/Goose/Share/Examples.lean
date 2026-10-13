@@ -51,7 +51,7 @@ def outcome (text : String) : String := (Run.runBytes {} text.toUTF8).1
 def proposed (text : String) : Option String := do
   let m ← load text
   let p ← (propose m).toOption
-  some (Write.module p.shared)
+  some (Goose.Core.Writer.module p.shared)
 
 -- Two contexts of one function, called with a global-rooted and a local-rooted
 -- slice, have identical implementations and merge.

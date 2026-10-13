@@ -1,11 +1,13 @@
 import Goose.Core.Num
 
 /-!
-Typed Goose Core for the pilot profile: types, syntax and module structure.
+Typed Goose Core: types, syntax and module structure for the pilot profile
+and the flat fixed-value extension.
 
 Every identifier is a dense index into a table of the module or of the
 implementation being read. Types are resolved trees: the decoder looks type
-indices up, so the evaluator and validator never consult a type table.
+indices up. Nominal struct types retain their declaration id; the validator
+checks their resolved fields against that declaration's descriptor.
 -/
 
 namespace Goose.Core
@@ -15,6 +17,21 @@ abbrev GlobalId := Nat
 abbrev ContextId := Nat
 abbrev ImplId := Nat
 abbrev OriginId := Nat
+abbrev StructId := Nat
+
+inductive ArtifactProfile
+  | pilot
+  | shrink
+  deriving DecidableEq, Repr, Inhabited
+
+def ArtifactProfile.tag : ArtifactProfile → String
+  | .pilot => "core-pilot"
+  | .shrink => "core-shrink"
+
+def ArtifactProfile.ofTag? (tag : String) : Option ArtifactProfile :=
+  if tag == ArtifactProfile.pilot.tag then some .pilot
+  else if tag == ArtifactProfile.shrink.tag then some .shrink
+  else none
 
 /-- Whether a reference or slice permits writes through it. -/
 inductive Mutability
@@ -46,6 +63,8 @@ inductive Ty
   | ref (m : Mutability) (target : Ty)
   | slice (m : Mutability) (elem : Ty)
   | tuple (parts : TyList)
+  /-- Nominal identity and resolved real-field types, excluding pads. -/
+  | structT (id : StructId) (fields : TyList)
 
 /-- The components of a tuple type. A mutual type, not `List Ty`, so that
 `Ty` has decidable equality. -/
@@ -56,6 +75,26 @@ end
 
 deriving instance DecidableEq, Repr, Inhabited for Ty, TyList
 
+def TyList.toList : TyList → List Ty
+  | .nil => []
+  | .cons t ts => t :: ts.toList
+
+def TyList.ofList : List Ty → TyList
+  | [] => .nil
+  | t :: ts => .cons t (TyList.ofList ts)
+
+structure StructField where
+  ty : Ty
+  binding : VarKind
+  contents : Mutability
+  byteOffset : Nat
+  deriving DecidableEq, Repr
+
+structure StructDef where
+  byteSize : Nat
+  fields : Array StructField
+  deriving DecidableEq, Repr
+
 mutual
 /-- A place: storage that can be read, written or referred to. -/
 inductive Place
@@ -63,6 +102,7 @@ inductive Place
   | global (g : GlobalId)
   | deref (e : Expr)
   | elem (v : View) (index : Expr) (org : OriginId)
+  | field (owner : Place) (index : Nat)
 
 /-- A sampled run of elements. `of` samples the owner's current length;
 `val` takes the run a slice value denotes. -/
@@ -95,6 +135,7 @@ inductive Expr
   | blockE (b : Block)
   | arrLit (t : Ty) (es : List Expr)
   | fill (t : Ty) (e : Expr)
+  | structLit (t : Ty) (es : List Expr)
 
 inductive Arg
   | byVal (e : Expr)
@@ -224,6 +265,11 @@ structure Module where
   contexts : Array Context
   entry : ContextId
   origins : Array Origin
+  profile : ArtifactProfile := .pilot
+  structs : Array StructDef := #[]
+
+def Module.structType? (m : Module) (sid : StructId) : Option Ty :=
+  m.structs[sid]?.map fun d => .structT sid (TyList.ofList (d.fields.toList.map (·.ty)))
 
 /-- Abort kinds of the pilot profile, in the names the encoding uses. -/
 inductive AbortKind
@@ -270,11 +316,17 @@ def originKinds : List String :=
    "for", "return", "break", "continue", "print", "assert", "abort", "exit", "call",
    "index", "slice", "binary", "unary", "cast"]
 
-/-- Types made only of integers, booleans and fixed arrays of those: the
-elements a pilot array may hold and the values that can be copied whole. -/
+mutual
+/-- Flat values contain no stored reference and can be copied as a whole. -/
 def Ty.flat : Ty → Bool
   | .int _ | .bool => true
   | .arr e _ => e.flat
+  | .structT _ fs => fs.flat
   | _ => false
+
+def TyList.flat : TyList → Bool
+  | .nil => true
+  | .cons t ts => t.flat && ts.flat
+end
 
 end Goose.Core
