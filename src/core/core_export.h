@@ -351,7 +351,6 @@ private:
         return id;
     }
 
-    bool sliceref = false;   // A reference to a slice is being typed as a parameter's.
     CoreTypeId ReportTypeFallback(TypeExpr *t) {
         if (t && t->kind == TY_BOOL) return mod.BoolType();
         if (t && t->kind == TY_VOID) return mod.UnitType();
