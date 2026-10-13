@@ -250,7 +250,8 @@ private:
             case TY_INT: return t->intstorage != IS_VARINT;
             case TY_BOOL: return true;
             case TY_ARRAY:
-                return t->arr->akind == A_FIXED && t->arr->size > 0 && FlatFixedField(t->arr->sub, open);
+                return t->arr->akind == A_FIXED && t->arr->size > 0 && t->arr->sub &&
+                       !t->arr->sub->cq && FlatFixedField(t->arr->sub, open);
             case TY_STRUCT: {
                 auto inst = t->struc ? t->struc->inst : nullptr;
                 if (!inst || !inst->validated || !inst->flat || inst->sclass != SC_FIXED || !inst->st ||
