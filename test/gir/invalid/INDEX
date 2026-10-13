@@ -13,7 +13,7 @@ gir_malformed_unknown_tag.json	["malformed","func 0: block 0: unknown instructio
 gir_malformed_view_as_component.json	["malformed","type 4: type component: a view is not a component of another type"]
 gir_malformed_wrong_arity.json	["malformed","func 0: block 0: x_enter: expected 1 fields, found 2"]
 gir_malformed_wrong_element_kind.json	["malformed","func 0: block 0: type: expected a natural number"]
-gir_malformed_wrong_profile.json	["malformed","profile \"core-shrink\": this reader implements \"core-pilot\""]
+gir_malformed_wrong_profile.json	["malformed","unknown profile \"core-future\""]
 gir_malformed_wrong_schema.json	["malformed","schema \"gir-h/0.1\": this reader implements \"gir-h/0.3\""]
 gir_rejected_v001_entry_with_parameter.json	["rejected","GIR-V001","the entry main must take no parameters and return nothing"]
 gir_rejected_v001_global_initializer_type.json	["rejected","GIR-V001","the initializer of global flag must take no parameters and return its type"]
