@@ -383,7 +383,7 @@ private theorem callArgContext_inputFuture_subset {plans path c all origin}
         EvaluationContext.child, EvaluationContext.outputFuture, DemandNode.visibleAfter,
         DemandNode.visibleForChild]
     rw [output] at member
-    simp only [callArgsFuture, List.flatMap_cons, List.flatMap_nil, List.append_nil, List.append_assoc, List.mem_append] at member ⊢
+    simp only [callArgsFuture, List.flatMap_cons, List.append_assoc, List.mem_append] at member ⊢
     rcases member with current | active
     · exact Or.inl current
     · exact Or.inr (Or.inr active)
@@ -391,7 +391,7 @@ private theorem callArgContext_inputFuture_subset {plans path c all origin}
     rw [callArgContext_shrinkOutputFuture context profile index arg rest harg hrest] at member
     have prefixEq : all.take (index + 1) = all.take index ++ [arg] := by
       simpa [harg] using (List.take_succ (l := all) (i := index))
-    simp only [callArgsFuture, prefixEq, List.flatMap_append, List.flatMap_singleton,
+    simp only [callArgsFuture, prefixEq, List.flatMap_append,
       List.flatMap_cons, List.flatMap_nil, List.append_nil, List.append_assoc, List.mem_append] at member ⊢
     rcases member with current | previous | holder | later | continuation
     · exact Or.inr (Or.inl current)
@@ -458,7 +458,7 @@ private theorem argument_sliceHeader_present {future : List VarId} {s : St}
     obtain ⟨x, sourceEq⟩ : ∃ x, e = .read (.var x) := by
       cases e <;> simp [Place.sliceArg, Place.derefVar?] at sliceArg
       rename_i source
-      cases source <;> simp [Place.sliceArg, Place.derefVar?] at sliceArg
+      cases source <;> simp at sliceArg
       exact ⟨_, rfl⟩
     subst e
     cases hs : sliceRefTy tenv (.read (.var x)) with
@@ -545,7 +545,7 @@ private theorem argument_byRef_type_preserved {future : List VarId} {source : St
     have accessType := tyPlace_accessType (frame.mod_t.trans frame.mod_p.symm)
       (frame.vars_t.trans frame.vars_p.symm) placeTy
     have placeAlias : penv.access.aliasPlace path p = .ok aliases := by
-      cases T <;> simp_all [AccessEnv.aliasArg, accessType]
+      cases T <;> simp_all [AccessEnv.aliasArg]
     have records : ((Ty.ref .mutable T).interiorTarget?.isSome || T.ownerElem?.isSome) = true := by
       cases owner : T.ownerElem?.isSome <;> simp [Ty.interiorTarget?, owner]
     simp only [AccessEnv.aliasPlace, accessType, records, ite_true] at placeAlias
@@ -590,17 +590,28 @@ private def callPrefixRetained {plans path c all origin}
       pc.approvals.access.aliasArg (path ++ [index]) arg = .ok aliases →
       RetainsAliases m W env source target aliases
 
+/-- A checked by-value parameter cannot accept a sampled reference value. -/
+theorem ImplOk.byValue_not_ref {impl : Impl} (checked : ImplOk m impl)
+    (p : Param) (membership : p ∈ impl.params.toList) (mode : p.mode = .byValue)
+    (pv : LocalVar) (mu : Mutability) (T : Ty) (variableAt : impl.vars[p.var]? = some pv) :
+    pv.ty ≠ .ref mu T := by
+  obtain ⟨index, bound, parameterEq⟩ := List.mem_iff_getElem.mp membership
+  have parameterAt : impl.params[index]? = some p := by
+    simpa using (List.getElem?_eq_some_iff.mpr ⟨bound, parameterEq⟩)
+  obtain ⟨variableEq, _⟩ := checked.params index p parameterAt
+  have shape := checked.parameterShape index (by simpa using bound)
+  intro referenceType
+  rw [variableEq] at variableAt
+  simp only [checkParam, parameterAt, variableAt, mode, referenceType] at shape
+  inv at shape
+
 set_option maxHeartbeats 1600000 in
  theorem args_spec {plans path c all origin}
     (ec : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
     (observation : Observation) (ihA : ArgSpec m prof plans n) (hp : Perm m W)
     (active : ec.ActiveMatches tenv) (access : ec.AccessMatches tenv penv)
     (protectedSlices : ShrinkProtected W.D W.A (ec.mayShrink W.P observation))
-    (callee : Impl)
-    (parameterModes : ∀ p, p ∈ callee.params.toList → p.mode = .byValue →
-      ∀ pv mu T, callee.vars[p.var]? = some pv → pv.ty ≠ .ref mu T)
-    (expressionLookup : ∀ e tn tn' T, tyExpr tenv e tn = .ok (T, tn') →
-      penv.access.exprType? e = some T) :
+    (callee : Impl) (calleeChecked : ImplOk m callee) :
     ∀ (args : List Arg) (ps : List Param) (offset : Nat) (s : St)
       (tn tn' : Nat) (rst rst' : RState) (ars : List (List RootRef)),
     args = all.drop offset → offset ≤ all.length →
@@ -712,7 +723,7 @@ set_option maxHeartbeats 1600000 in
           exact retained1.subset (fun alias member =>
             callArgContext_prefix_alias context profile offset a harg before sourceLookup aliasesLookup member)
       refine Sat.bind (args_spec ec observation ihA hp active access protectedSlices callee
-        parameterModes expressionLookup as ps (offset + 1) s1 _ _ _ _ _ hrest nextBound
+        calleeChecked as ps (offset + 1) s1 _ _ _ _ _ hrest nextBound
         (fun p hp => psSubset p (List.mem_cons_of_mem _ hp))
         (callArgFrame_rest ec offset a as harg hrest active frame1)
         observed1 classified1 hl' tailTyping hra effects) ?_
@@ -755,11 +766,12 @@ set_option maxHeartbeats 1600000 in
                   | ref mu T =>
                     cases hpv : pv.ty <;> simp only [Ty.passableTo, hpv] at hpass <;>
                       first | contradiction | skip
-                    exact False.elim (parameterModes p (psSubset p List.mem_cons_self)
+                    exact False.elim (calleeChecked.byValue_not_ref p (psSubset p List.mem_cons_self)
                       (by simpa [argMode] using modeEq.symm) pv _ _ hv hpv)
                   | slice _ _ => exact Or.inr rfl
                   | _ => exact Or.inl rfl
-                exact argument_byVal_type_preserved (expressionLookup e _ _ _ hat) copyable har
+                exact argument_byVal_type_preserved (tyExpr_accessType (frame.mod_t.trans frame.mod_p.symm)
+                  (frame.vars_t.trans frame.vars_p.symm) hat) copyable har
                   aliasLookupP retainedArg typed1 roots1
               | byRef mu place =>
                 obtain ⟨T, caps, placeTy, allowed, rfl⟩ := hat
@@ -864,7 +876,7 @@ theorem callD_back (hF : Frame m W tenv penv env s future) :
     · cases e
       exact ⟨ann, ha, hg⟩
 
-theorem footprint_of_call (hF : Frame m W tenv penv env s future) {s2 : St}
+theorem footprint_of_call (_hF : Frame m W tenv penv env s future) {s2 : St}
     (h : Footprint [] (fun r => ∃ E, callD W tenv env continuation args r E) s s2) :
     Footprint (insts env) (Dset W) s s2 := by
   refine h.weaken ?_
