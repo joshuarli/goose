@@ -76,6 +76,7 @@ private theorem readRoots_accessRoots (penv : PEnv) (p : Place) (state : RState)
     · rcases h with ⟨_, hp, _, _⟩
       cases hp
     · rcases h with ⟨hnil, _, _⟩
+      change rho = [] at hnil
       subst rho
       simp [RootsIncluded]
   | deref e =>
@@ -109,6 +110,7 @@ private theorem readRoots_accessRoots (penv : PEnv) (p : Place) (state : RState)
           intro root hroot
           simpa [hroots] using hroot
         · rcases h with ⟨hnil, _, _⟩
+          change rho = [] at hnil
           subst rho
           simp [RootsIncluded]
       | _ =>
