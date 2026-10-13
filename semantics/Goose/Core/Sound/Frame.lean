@@ -252,9 +252,6 @@ structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env)
   mod_p : penv.mod = m
   vars_t : tenv.vars = env.vars
   vars_p : penv.impl.vars = env.vars
-  /-- Every local row comes from the module's checked, nominally resolved type table. -/
-  resolved : ∀ (x : VarId) (lv : LocalVar),
-    env.vars[x]? = some lv → checkResolvedType m lv.ty = .ok ()
   scopes_t : tenv.scopes = env.scopes.map Prod.fst
   scopes_p : penv.scopes = env.scopes.map Prod.fst
   nodup : (env.scopes.map Prod.fst).Nodup
