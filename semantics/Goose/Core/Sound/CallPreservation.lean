@@ -77,6 +77,93 @@ already inherited by that caller. Both sets must remain usable. -/
 def Observation.union (a b : Observation) : Observation :=
   ⟨fun r T => a.roots r T ∨ b.roots r T, fun v T => a.values v T ∨ b.values v T⟩
 
+/-- Content annotations may include roots that cannot hold a resizable owner.
+The declaration types observed at call entry classify local storage throughout
+the call; globals use their module declarations. -/
+def OwnerCap (m : Module) (observation : Observation) : RootInst → Prop
+  | .global g => ∃ gl, m.globals[g]? = some gl ∧
+      ∃ E, gl.ty = .grow E ∨ gl.ty = .growshrink E
+  | r@(.local ..) => ∃ T, observation.roots r T ∧
+      ∃ E, T = .grow E ∨ T = .growshrink E
+
+theorem OwnerCap.mono {m : Module} {observation observation' : Observation}
+    (included : ∀ r T, observation.roots r T → observation'.roots r T)
+    {r : RootInst} (capability : OwnerCap m observation r) :
+    OwnerCap m observation' r := by
+  cases r with
+  | global g => exact capability
+  | «local» a si x =>
+    obtain ⟨T, observed, owner⟩ := capability
+    exact ⟨T, included _ T observed, owner⟩
+
+/-- Every possible parameter root has an external storage classification.
+Extra annotation roots may be absent, but cannot become new external bindings.
+Slice holders use their separate inherited slice invariant. -/
+def ClassifiedParameters (m : Module) (P : Nat → RootInst → Prop)
+    (D : RootInst → Ty → Prop) (observation : Observation) (store : Store) : Prop :=
+  ∀ i r, P i r → match r with
+    | .global g => ∃ gl, m.globals[g]? = some gl
+    | r@(.local ..) => (∃ T, observation.roots r T) ∨ (∃ E, D r E) ∨
+        store.roots[r]? = none
+
+theorem ClassifiedParameters.advance {m : Module} {P : Nat → RootInst → Prop}
+    {D : RootInst → Ty → Prop} {observation : Observation} {source target : Store}
+    (classified : ClassifiedParameters m P D observation source)
+    (domain : ∀ r : RootInst, target.roots[r]? ≠ none → source.roots[r]? ≠ none) :
+    ClassifiedParameters m P D observation target := by
+  intro i r hr
+  cases r with
+  | global g => exact classified i _ hr
+  | «local» a si x =>
+    rcases classified i _ hr with observed | slices | absent
+    · exact Or.inl observed
+    · exact Or.inr (Or.inl slices)
+    · right; right
+      cases hv : target.roots[RootInst.local a si x]? with
+      | none => rfl
+      | some v => exact False.elim ((domain _ (by simp [hv])) absent)
+
+theorem ClassifiedParameters.mono {m : Module} {P P' : Nat → RootInst → Prop}
+    {D D' : RootInst → Ty → Prop} {observation observation' : Observation} {store : Store}
+    (classified : ClassifiedParameters m P D observation store)
+    (parameters : ∀ i r, P' i r → P i r)
+    (roots : ∀ r T, observation.roots r T → observation'.roots r T)
+    (slices : ∀ r E, D r E → D' r E) :
+    ClassifiedParameters m P' D' observation' store := by
+  intro i r hr
+  cases r with
+  | global g => exact classified i _ (parameters i _ hr)
+  | «local» a si x =>
+    rcases classified i _ (parameters i _ hr) with ⟨T, observed⟩ | ⟨E, slice⟩ | absent
+    · exact Or.inl ⟨T, roots _ T observed⟩
+    · exact Or.inr (Or.inl ⟨E, slices _ E slice⟩)
+    · exact Or.inr (Or.inr absent)
+
+theorem ClassifiedParameters.advanceS {m : Module} {W : World} {tenv : TEnv}
+    {penv : PEnv} {env : Env} {s s' : St} {future : List VarId}
+    {observation : Observation}
+    (classified : ClassifiedParameters m W.P W.D observation s.store)
+    (frame : Frame m W tenv penv env s future)
+    (footprint : FootprintS env (Dset W) s s') :
+    ClassifiedParameters m W.P W.D observation s'.store := by
+  intro i r hr
+  cases r with
+  | global g => exact classified i _ hr
+  | «local» a si x =>
+    rcases classified i _ hr with observed | slices | absent
+    · exact Or.inl observed
+    · exact Or.inr (Or.inl slices)
+    · right; right
+      cases hv : s'.store.roots[RootInst.local a si x]? with
+      | none => rfl
+      | some v =>
+        have present : s'.store.roots[RootInst.local a si x]? ≠ none := by simp [hv]
+        rcases footprint.dom _ present with old | ⟨y, lv, top, rest, scopes, lookup, equal⟩
+        · exact False.elim (old absent)
+        · cases equal
+          have below := (frame.below (lv.scope, si) (by simp [scopes])).1
+          exact False.elim ((Nat.not_le_of_gt (frame.pAge i _ _ _ hr)) below)
+
 /-- An inherited observation carries full declared typing, which held-value
 validity alone cannot establish for scalars, owners or typed references. -/
 structure Observed (m : Module) (G : Nat) (observation : Observation) (s : Store) : Prop where
@@ -114,6 +201,67 @@ theorem Observed.advance {m : Module} {G : Nat} {observation : Observation} {s s
     exact hroots r T hr v hv ht
   · intro v T hv
     exact hvalues v T hv (h.values v T hv)
+
+private theorem HasTy.resizable_ownerTy {m : Module} {G : Nat} {store : Store}
+    {element : Ty} {values : Array Val} {T : Ty}
+    (typed : HasTy m G store (.resizable element values) T) :
+    ∃ E, T = .grow E ∨ T = .growshrink E := by
+  cases T <;> simp_all [HasTy, FlatTy]
+
+theorem ClassifiedParameters.localOwner {m : Module} {G : Nat}
+    {P : Nat → RootInst → Prop} {D : RootInst → Ty → Prop}
+    {observation : Observation} {store : Store} {a : ActId} {si : ScopeInst}
+    {x : VarId} {i : Nat} {E : Ty}
+    (classified : ClassifiedParameters m P D observation store)
+    (observed : Observed m G observation store)
+    (slices : ∀ r E, D r E → ∃ v, store.roots[r]? = some v ∧
+      HasTy m G store v (.slice .mutable E))
+    (parameter : P i (.local a si x))
+    (owner : LocTy store ⟨.local a si x, []⟩ (.grow E)) :
+    OwnerCap m observation (.local a si x) := by
+  obtain ⟨v, hread, hflat⟩ := owner
+  obtain ⟨stored, hstored, hget⟩ := (read_ok_iff _ _ _).1 hread
+  simp only [get_nil, Option.some.injEq] at hget
+  subst v
+  cases stored <;> simp only [FlatTy] at hflat
+  rename_i element values
+  rcases classified i _ parameter with ⟨T, hT⟩ | ⟨sliceE, hD⟩ | absent
+  · obtain ⟨value, hv, ht⟩ := observed.roots _ T hT
+    rw [hstored] at hv
+    cases hv
+    exact ⟨T, hT, ht.resizable_ownerTy⟩
+  · obtain ⟨value, hv, ht⟩ := slices _ sliceE hD
+    rw [hstored] at hv
+    cases hv
+    simp [HasTy] at ht
+  · rw [hstored] at absent
+    cases absent
+
+theorem OwnerCap.globalOfLocTy {m : Module} {G : Nat} {observation : Observation}
+    {state : St} {demand : RootInst → Prop} {g : Nat} {E : Ty} {gl : Global}
+    (invariant : StoreInv m G state demand)
+    (declaration : m.globals[g]? = some gl) (initialized : g < G)
+    (owner : LocTy state.store ⟨.global g, []⟩ (.grow E)) :
+    OwnerCap m observation (.global g) := by
+  obtain ⟨v, hread, hflat⟩ := owner
+  obtain ⟨w, hread', hflat'⟩ := invariant.globals g gl initialized declaration
+  rw [hread] at hread'
+  cases hread'
+  cases v <;> simp only [FlatTy] at hflat
+  rename_i element values
+  refine ⟨gl, declaration, ?_⟩
+  cases ht : gl.ty <;> simp_all [FlatTy]
+
+theorem ClassifiedParameters.globalOwner {m : Module} {G : Nat}
+    {P : Nat → RootInst → Prop} {D : RootInst → Ty → Prop} {observation : Observation}
+    {state : St} {demand : RootInst → Prop} {i g : Nat} {E : Ty}
+    (classified : ClassifiedParameters m P D observation state.store)
+    (invariant : StoreInv m G state demand)
+    (initialized : g < G) (parameter : P i (.global g))
+    (owner : LocTy state.store ⟨.global g, []⟩ (.grow E)) :
+    OwnerCap m observation (.global g) := by
+  obtain ⟨gl, declaration⟩ := classified i _ parameter
+  exact OwnerCap.globalOfLocTy invariant declaration initialized owner
 
 /-- Inherited roots precede the callee's first scope instance. Globals survive
 every local scope, while local roots must belong to an earlier instance. -/
@@ -195,6 +343,65 @@ theorem ObservedSafe.weakenShrinking {m : Module} {W : World} {o : Observation} 
     valuesProtected := fun v T hv hi target ht hshrink =>
       h.valuesProtected v T hv hi target ht (hmay target hshrink) }
 
+private theorem HasTy.interior_isRef {m : Module} {G : Nat} {store : Store}
+    {v : Val} {T : Ty} (typed : HasTy m G store v T)
+    (interior : T.interiorTarget?.isSome = true) : IsRef v := by
+  cases T <;> simp only [Ty.interiorTarget?] at interior
+  case ref mu target =>
+    obtain ⟨location, rfl, _⟩ := typed
+    trivial
+  case slice mu element =>
+    obtain ⟨location, start, count, rfl, _⟩ := typed
+    trivial
+  all_goals cases interior
+
+theorem Frame.beforeBase_not_insts {m : Module} {W : World} {tenv : TEnv}
+    {penv : PEnv} {env : Env} {s : St} {future : List VarId}
+    (frame : Frame m W tenv penv env s future) {r : RootInst}
+    (older : BeforeBase W.base r) :
+    ∀ a si x, r = .local a si x → si ∉ insts env := by
+  intro a si x equal member
+  subst r
+  obtain ⟨scope, present, instanceEq⟩ := List.mem_map.1 member
+  have below := (frame.below scope present).1
+  change si < W.base at older
+  rw [instanceEq] at below
+  exact (Nat.not_le_of_gt older) below
+
+/-- A call may rebind inherited mutable slices, but every other older
+reference observation keeps its original value. Rebound slices stay within
+the caller's allowed content roots, which its whole computation protects. -/
+theorem Frame.observedSafe_outerPreserved {m : Module} {W : World} {tenv : TEnv}
+    {penv : PEnv} {env : Env} {s s' : St} {future : List VarId}
+    {observation : Observation} {shrinking : RootInst → Prop}
+    (frame : Frame m W tenv penv env s future)
+    (hprotected : ShrinkProtected W.D W.A shrinking)
+    (source : ObservedSafe m W shrinking observation s.store)
+    (footprint : Footprint (insts env) (Dset W) s s')
+    (roots : PreservesRootTypes m W.G observation.roots s.store s'.store)
+    (values : PreservesValues m W.G observation.values s.store s'.store)
+    (slices : ∀ r E, W.D r E → ∃ v, s'.store.roots[r]? = some v ∧
+      HasTy m W.G s'.store v (.slice .mutable E) ∧
+        ∀ target, Targets v target → W.A r target) :
+    ObservedSafe m W shrinking observation s'.store := by
+  refine ⟨source.typed.advance roots values, source.rootsOlder, source.valuesOlder, ?_,
+    source.valuesProtected⟩
+  intro r T v observed present interior target targetPresent
+  by_cases demanded : Dset W r
+  · obtain ⟨E, demanded⟩ := demanded
+    obtain ⟨slice, slicePresent, _, allowed⟩ := slices r E demanded
+    rw [present] at slicePresent
+    cases slicePresent
+    intro mayShrink
+    exact hprotected r E target demanded (allowed target targetPresent) target mayShrink rfl
+  · obtain ⟨original, originalPresent, originalTyped⟩ := source.typed.roots r T observed
+    have kept := footprint.keep r original originalPresent
+      (originalTyped.interior_isRef interior)
+      (frame.beforeBase_not_insts (source.rootsOlder r T observed)) demanded
+    rw [present] at kept
+    cases kept
+    exact source.rootsProtected r T v observed originalPresent interior target targetPresent
+
 /-- Globals, observed caller bindings and inherited mutable slice holders
 stay live while the callee's own local demand changes. -/
 def CallDemand (observation : Observation) (D : RootInst → Ty → Prop) : RootInst → Prop :=
@@ -235,14 +442,25 @@ theorem Frame.callDemand {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
     cases hv'
     exact ht.held
 
-/-- Caller demand covers visible future bindings and inherited mutable slice
-holders. The latter stay usable even when no local variable names them. -/
+/-- Caller demand covers continuation bindings, initialized value storage and
+inherited mutable slice holders. Value storage keeps its declared type even
+when later code uses it only through a reference or slice. -/
 def CallerRootTypes (W : World) (tenv : TEnv) (env : Env)
-    (future : List VarId) (r : RootInst) (T : Ty) : Prop :=
-  (∃ x lv si, x ∈ tenv.visible ∧ x ∈ future ∧
+    (source : Store) (future : List VarId) (r : RootInst) (T : Ty) : Prop :=
+  ((∃ x lv si, x ∈ tenv.visible ∧ x ∈ future ∧
     env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si ∧
     r = RootInst.local env.act si x ∧ T = lv.ty) ∨
+    (StorageRootTypes env r T ∧ source.roots[r]? ≠ none)) ∨
   (∃ E, W.D r E ∧ T = .slice .mutable E)
+
+/-- A root preservation result also covers initialized value storage. Its
+source-value premise establishes initialization without observing absent roots. -/
+theorem CallerRootTypes.preservesStorage {m : Module} {W : World} {tenv : TEnv}
+    {env : Env} {future : List VarId} {source target : Store}
+    (h : PreservesRootTypes m W.G (CallerRootTypes W tenv env source future) source target) :
+    PreservesRootTypes m W.G (StorageRootTypes env) source target := by
+  intro r T hstorage v hv ht
+  exact h r T (Or.inl (Or.inr ⟨hstorage, by simp [hv]⟩)) v hv ht
 
 /-- A completed call preserves caller observations and its root footprint.
 Typed interior locations that nobody observes may disappear during shrink. -/
