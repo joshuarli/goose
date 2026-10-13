@@ -355,6 +355,34 @@ private def pilotLetGrowPushAppend : Module :=
 #guard accepted pilotLetGrowPushAppend
 #guard returned pilotLetGrowPushAppend "4\n"
 
+private def limitedPushMissingOrigin : Module :=
+  let pushFunc : Func :=
+    { name := "limited-push"
+      params := [.ref .mutable limitedTy]
+      results := []
+      slots := #[]
+      scopes := #[]
+      blocks := #[⟨[(0, .data (.ref .mutable limitedTy))], [
+        .def 1 (.constInt .i64 7), .def 2 (.push 0 1 none), .term (.ret [] none)]⟩]
+      summary := .unknown
+      org := none }
+  let entry := { mkFunc #[] [.term (.ret [] none)] with name := "entry" }
+  { (mkModule #[] [.term (.ret [] none)]) with
+    funcs := #[entry, pushFunc]
+    profile := .shrink }
+
+#guard rejected limitedPushMissingOrigin .v100
+
+private def limitedPushAtCapacity (origin : Option OriginId) : Module :=
+  { (mkModule #[⟨limitedTy, .mutable, 0, 0⟩] [
+      .eff (.enter 0), .def 0 (.constInt .i64 1), .def 1 (.constInt .i64 2),
+      .def 2 (.arrLit limitedTy [0, 1]), .eff (.slotInit 0 2 (some 0)),
+      .def 3 (.slotAddr 0), .def 4 (.constInt .i64 3),
+      .def 5 (.push 3 4 origin), .eff (.leave 0), .term (.ret [] none)]) with
+    profile := .shrink }
+
+#guard aborted (limitedPushAtCapacity (some 1)) .capacity 1
+
 private def readonlyPop : Module :=
   let bad := { popSummaryFunc [.param 0] with
     params := [.ref .readOnly growTy]

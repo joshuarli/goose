@@ -40,8 +40,8 @@ def TypedDefs (m : Module) (f : Func) : Prop :=
     ∃ t, op.resultTy { m.tyEnv f with vals := f.valueTypes m } = .ok t ∧
       (f.valueTypes m)[r]? = some (some t)
 
-def OriginsPresent (f : Func) : Prop :=
-  ∀ b ∈ f.blocks, ∀ i ∈ b.insts, i.needsOrigin = true → i.origin.isSome = true
+def OriginsPresent (profile : ArtifactProfile) (f : Func) : Prop :=
+  ∀ b ∈ f.blocks, ∀ i ∈ b.insts, i.needsOriginIn profile = true → i.origin.isSome = true
 
 /-- The effects are within what the summary declares. -/
 def EffectsWithin (e : Core.Eff) (s : SummaryAnn) : Prop :=
@@ -82,7 +82,7 @@ theorem validate_stages {m : Module} (h : validate m = .ok ()) :
     (checkAll m.infos fun i => checkCfg i.label i.f i.vt) = .ok () ∧
     (checkAll (List.range m.funcs.size)
       (checkSummaryOf m m.implTypes (resultRoots m m.implTypes) m.rootCount)) = .ok () ∧
-    (checkAll m.infos fun i => checkOrigins i.label i.f) = .ok () := by
+    (checkAll m.infos fun i => checkOrigins m.profile i.label i.f) = .ok () := by
   unfold validate at h
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
@@ -159,7 +159,8 @@ theorem typed_of_types {m : Module} {label : String} {f : Func} {vt : Array (Opt
   · exfalso
     simp [hh, bind, Except.bind] at hrest
 
-theorem origins_of {label : String} {f : Func} (h : checkOrigins label f = .ok ()) : OriginsPresent f := by
+theorem origins_of {profile : ArtifactProfile} {label : String} {f : Func}
+    (h : checkOrigins profile label f = .ok ()) : OriginsPresent profile f := by
   unfold checkOrigins at h
   intro b hb i hi hn
   have := checkAll_mem (checkAll_mem h (Array.mem_toList_iff.mpr hb)) hi
@@ -223,7 +224,7 @@ its operands; every instruction that can abort or stands for a statement has an 
 and each implementation's summary contains the effects the analysis finds in its body.
 Dominance, scope balance and reference lifetime are not consequences proved here. -/
 theorem validate_sound (m : Module) (h : validate m = .ok ()) :
-    (∀ f ∈ m.allFuncs, TerminatedBlocks f ∧ TypedDefs m f ∧ OriginsPresent f) ∧
+    (∀ f ∈ m.allFuncs, TerminatedBlocks f ∧ TypedDefs m f ∧ OriginsPresent m.profile f) ∧
     (∀ (k : Nat) (f : Func), m.funcs[k]? = some f →
       EffectsWithin (f.effects m (f.provenance (resultRoots m m.implTypes) (m.implTypes[k]?.getD #[])
         m.rootCount)) f.summary) := by
@@ -231,7 +232,7 @@ theorem validate_sound (m : Module) (h : validate m = .ok ()) :
   refine ⟨fun f hf => ?_, fun k f hk => ?_⟩
   · obtain ⟨i, hi, rfl, hvt⟩ := mem_infos hf
     exact ⟨terminated_of_cfg (checkAll_mem hc hi), typed_of_types hvt (checkAll_mem ht hi),
-      origins_of (checkAll_mem ho hi)⟩
+      origins_of (profile := m.profile) (checkAll_mem ho hi)⟩
   · have hlt : k ∈ List.range m.funcs.size := by
       simp only [List.mem_range]
       cases Nat.lt_or_ge k m.funcs.size with
@@ -464,15 +465,24 @@ theorem validated_scalar_safe (m : Module) (h : validate m = .ok ()) :
   | constUnit => intro s; left; exact ⟨_, _, rfl⟩
   | bin o t0 a b' org =>
     exact bin_safe hrt (hty a (by simp [Op.uses])) (hty b' (by simp [Op.uses]))
-      (fun hm => by simpa [Inst.origin, Op.origin] using hnorg (by simpa [Inst.needsOrigin] using hm))
+      (fun hm => by
+        have hneeds : Inst.needsOriginIn m.profile (.def r (.bin o t0 a b' org)) = true := by
+          simpa [Inst.needsOriginIn, Inst.needsOrigin] using hm
+        simpa [Inst.origin, Op.origin] using hnorg hneeds)
   | un o t0 a org =>
     exact un_safe hrt (hty a (by simp [Op.uses]))
-      (fun hm => by simpa [Inst.origin, Op.origin] using hnorg (by simpa [Inst.needsOrigin] using hm))
+      (fun hm => by
+        have hneeds : Inst.needsOriginIn m.profile (.def r (.un o t0 a org)) = true := by
+          simpa [Inst.needsOriginIn, Inst.needsOrigin] using hm
+        simpa [Inst.origin, Op.origin] using hnorg hneeds)
   | cmp o t0 a b' => exact cmp_safe hrt (hty a (by simp [Op.uses])) (hty b' (by simp [Op.uses]))
   | boolNot a => exact boolNot_safe hrt (hty a (by simp [Op.uses]))
   | conv k s0 d a org =>
     exact conv_safe hrt (hty a (by simp [Op.uses]))
-      (fun hm => by simpa [Inst.origin, Op.origin] using hnorg (by simpa [Inst.needsOrigin] using hm))
+      (fun hm => by
+        have hneeds : Inst.needsOriginIn m.profile (.def r (.conv k s0 d a org)) = true := by
+          simpa [Inst.needsOriginIn, Inst.needsOrigin] using hm
+        simpa [Inst.origin, Op.origin] using hnorg hneeds)
   | _ => simp [scalarOp] at hsc
 
 end Goose.GIR
