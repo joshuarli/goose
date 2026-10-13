@@ -75,6 +75,13 @@ termination_by x => sizeOf x
 
 end
 
+def Arg.sliceHolderVariables (access : AccessEnv) : Arg → List VarId
+  | .byRef _ p =>
+    match access.placeType? p with
+    | some (.slice _ _) => p.variables
+    | _ => []
+  | .byVal _ => []
+
 inductive AliasSource
   | variable (id : VarId)
   | operand (path : List Nat)
@@ -477,7 +484,7 @@ structure DemandChildExpectation where
   future : List VarId
 
 /-- Future variables required after evaluating a direct child; `none` marks an absent child. -/
-def DemandNode.childFuture (node : DemandNode) (parent : DemandPoint)
+def DemandNode.childFuture (node : DemandNode) (access : AccessEnv) (parent : DemandPoint)
     (index : Nat) : Option (List VarId) :=
   let later (variables : List VarId) := variables ++ parent.future
   match node with
@@ -492,7 +499,8 @@ def DemandNode.childFuture (node : DemandNode) (parent : DemandPoint)
       else if index == 1 then some parent.future else none
     | .call _ args _ =>
       if index < args.length then
-        some (later ((args.drop (index + 1)).flatMap Arg.variables))
+        let holders := (args.take (index + 1)).flatMap (Arg.sliceHolderVariables access)
+        some (later (holders ++ (args.drop (index + 1)).flatMap Arg.variables))
       else none
     | .push _ value _ =>
       if index == 0 then some (later value.variables)
@@ -573,11 +581,53 @@ def DemandNode.childFuture (node : DemandNode) (parent : DemandPoint)
     else if index == statements.length && value.isSome then some parent.future
     else none
 
+private def callFutureRegressionArgs : List Arg :=
+  [ .byRef .mutable (.var 2)
+  , .byVal (.read (.var 3))
+  , .byRef .mutable (.var 4) ]
+
+private def callFutureRegressionNode : DemandNode :=
+  .expression (.call 0 callFutureRegressionArgs 0)
+
+private def callFutureRegressionAccess : AccessEnv :=
+  let impl : Impl := {
+    name := "call-future"
+    params := #[]
+    results := #[]
+    vars := #[
+      ⟨"unused0", .unit, .mutable, 0, 0⟩,
+      ⟨"unused1", .unit, .mutable, 0, 0⟩,
+      ⟨"slice", .slice .mutable .bool, .mutable, 0, 0⟩,
+      ⟨"scalar", .int .i64, .mutable, 0, 0⟩,
+      ⟨"reference", .ref .mutable (.int .i64), .mutable, 0, 0⟩]
+    body := .mk 0 [] none
+    summary := .unknown }
+  let ctx : Context := ⟨0, "call-future", [], [], []⟩
+  let mod : Module := {
+    files := #[]
+    types := #[]
+    globals := #[]
+    impls := #[impl]
+    contexts := #[ctx]
+    entry := 0
+    origins := #[] }
+  ⟨mod, impl, ctx⟩
+
+#guard callFutureRegressionNode.childFuture callFutureRegressionAccess
+  ⟨[], .expression, [], [9], []⟩ 0 == some [2, 3, 4, 9]
+#guard callFutureRegressionNode.childFuture callFutureRegressionAccess
+  ⟨[], .expression, [], [9], []⟩ 1 == some [2, 4, 9]
+#guard callFutureRegressionNode.childFuture callFutureRegressionAccess
+  ⟨[], .expression, [], [9], []⟩ 2 == some [2, 9]
+#guard Arg.sliceHolderVariables callFutureRegressionAccess (.byRef .mutable (.var 2)) == [2]
+#guard Arg.sliceHolderVariables callFutureRegressionAccess
+  (.byRef .mutable (.deref (.read (.var 4)))) == []
+
 /-- The expected child frame shape; list fields are consumed extensionally. -/
-def DemandNode.childExpectation? (node : DemandNode) (parent : DemandPoint)
+def DemandNode.childExpectation? (node : DemandNode) (access : AccessEnv) (parent : DemandPoint)
     (index : Nat) : Option DemandChildExpectation := do
   let _ ← node.child? index
-  let future ← node.childFuture parent index
+  let future ← node.childFuture access parent index
   pure ⟨node.visibleForChild parent.active index, future⟩
 
 def DemandPoint.sameFrameMembership (a b : DemandPoint) : Prop :=
@@ -1078,12 +1128,91 @@ def AccessEnv.aliasArg (env : AccessEnv) (path : List Nat) : Arg → V (List Ret
     | some (.slice mu e) => pure [⟨.slice mu e, ← env.exprRoots (.read p), .operand path⟩]
     | _ => env.aliasPlace path p
 
+private def AccessEnv.aliasesOfArgsFrom (env : AccessEnv) (path : List Nat)
+    (index : Nat) : List Arg → V (List RetainedAlias)
+  | [] => .ok []
+  | arg :: rest =>
+    match env.aliasArg (path ++ [index]) arg with
+    | .error err => .error err
+    | .ok aliases =>
+      match env.aliasesOfArgsFrom path (index + 1) rest with
+      | .error err => .error err
+      | .ok later => .ok (aliases ++ later)
+
+private theorem except_map_ok_extract {α β : Type} {f : α → β} {result : β}
+    {value : V α} (h : f <$> value = .ok result) :
+    ∃ item, value = .ok item ∧ f item = result := by
+  cases value with
+  | error err =>
+    change Except.error err = .ok result at h
+    cases h
+  | ok item =>
+    change Except.ok (f item) = .ok result at h
+    cases h
+    exact ⟨item, rfl, rfl⟩
+
 private def AccessEnv.aliasesOfArgs (env : AccessEnv) (path : List Nat)
-    (args : List Arg) : V (List RetainedAlias) := do
-  let mut aliases := []
-  for (arg, index) in args.zipIdx do
-    aliases := aliases ++ (← env.aliasArg (path ++ [index]) arg)
-  pure aliases
+    (args : List Arg) : V (List RetainedAlias) :=
+  env.aliasesOfArgsFrom path 0 args
+
+private theorem AccessEnv.aliasesOfArgsFrom_index
+    (env : AccessEnv) (path : List Nat) (start : Nat) (args : List Arg)
+    {collected : List RetainedAlias} (hcollected : env.aliasesOfArgsFrom path start args = .ok collected)
+    (index : Nat) (arg : Arg) (hindex : index < args.length)
+    (harg : args[index]? = some arg) :
+    ∃ aliases, env.aliasArg (path ++ [start + index]) arg = .ok aliases ∧
+      ∀ alias, alias ∈ aliases → alias ∈ collected := by
+  induction args generalizing start index collected with
+  | nil => simp at hindex
+  | cons first rest ih =>
+    cases index with
+    | zero =>
+      simp only [List.getElem?_cons_zero, Option.some.injEq] at harg
+      subst arg
+      cases hfirst : env.aliasArg (path ++ [start]) first with
+      | error err => simp [AccessEnv.aliasesOfArgsFrom, hfirst] at hcollected
+      | ok current =>
+        cases hlater : env.aliasesOfArgsFrom path (start + 1) rest with
+        | error err => simp [AccessEnv.aliasesOfArgsFrom, hfirst, hlater] at hcollected
+        | ok later =>
+          have hresult : current ++ later = collected := by
+            simpa [AccessEnv.aliasesOfArgsFrom, hfirst, hlater] using hcollected
+          refine ⟨current, ?_, ?_⟩
+          · rfl
+          · intro alias hmem
+            rw [← hresult]
+            exact List.mem_append_left _ hmem
+    | succ index =>
+      have hindex' : index < rest.length := by
+        simp only [List.length_cons, Nat.succ_lt_succ_iff] at hindex
+        exact hindex
+      have harg' : rest[index]? = some arg := by simpa using harg
+      cases hfirst : env.aliasArg (path ++ [start]) first with
+      | error err => simp [AccessEnv.aliasesOfArgsFrom, hfirst] at hcollected
+      | ok current =>
+        cases hlater : env.aliasesOfArgsFrom path (start + 1) rest with
+        | error err => simp [AccessEnv.aliasesOfArgsFrom, hfirst, hlater] at hcollected
+        | ok later =>
+          have hresult : current ++ later = collected := by
+            simpa [AccessEnv.aliasesOfArgsFrom, hfirst, hlater] using hcollected
+          obtain ⟨aliases, halias, hmem⟩ :=
+            ih (start + 1) hlater index hindex' harg'
+          have hpath : start + 1 + index = start + Nat.succ index := by omega
+          refine ⟨aliases, ?_, ?_⟩
+          · simpa only [hpath] using halias
+          · intro alias hmemAlias
+            rw [← hresult]
+            exact List.mem_append_right _ (hmem alias hmemAlias)
+
+private theorem AccessEnv.aliasesOfArgs_index
+    (env : AccessEnv) (path : List Nat) (args : List Arg)
+    {collected : List RetainedAlias} (hcollected : env.aliasesOfArgs path args = .ok collected)
+    (index : Nat) (arg : Arg) (hindex : index < args.length)
+    (harg : args[index]? = some arg) :
+    ∃ aliases, env.aliasArg (path ++ [index]) arg = .ok aliases ∧
+      ∀ alias, alias ∈ aliases → alias ∈ collected := by
+  simpa [AccessEnv.aliasesOfArgs] using
+    AccessEnv.aliasesOfArgsFrom_index env path 0 args hcollected index arg hindex harg
 
 private def AccessEnv.aliasesOfExprs (env : AccessEnv) (path : List Nat)
     (expressions : List Expr) : V (List RetainedAlias) := do
@@ -1133,7 +1262,7 @@ def DemandNode.retainedForChild (node : DemandNode) (access : AccessEnv)
 def DemandNode.childFrame (node : DemandNode) (access : AccessEnv)
     (path : List Nat) (frame : DemandFrame) (index : Nat) : V DemandFrame := do
   let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
-  let some expectation := node.childExpectation? parent index
+  let some expectation := node.childExpectation? access parent index
     | reject .block "demand traversal reached a missing child"
   let aliases ← node.retainedForChild access path index
   pure ⟨expectation.active, expectation.future, aliases ++ frame.retained⟩
@@ -1146,13 +1275,56 @@ theorem DemandNode.childFrame_newAlias {node : DemandNode} {access : AccessEnv}
     (hmem : alias ∈ aliases) : alias ∈ result.retained := by
   unfold DemandNode.childFrame at hframe
   let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
-  cases hchild : node.childExpectation? parent index with
+  cases hchild : node.childExpectation? access parent index with
   | none => simp [parent, hchild, reject] at hframe
   | some expectation =>
     rw [haliases] at hframe
     simp [parent, hchild] at hframe
     cases hframe
     exact List.mem_append_left _ hmem
+
+/-- Arguments evaluated before a call child keep their aliases live in that child's frame. -/
+theorem DemandNode.call_child_retains_argument
+    {access : AccessEnv} {path : List Nat} {frame childFrame : DemandFrame}
+    {context origin index j : Nat} {args : List Arg} {arg : Arg}
+    (hchild : (DemandNode.expression (.call context args origin)).childFrame
+      access path frame index = .ok childFrame)
+    (hji : j < index) (harg : args[j]? = some arg)
+    {aliases : List RetainedAlias} {alias : RetainedAlias}
+    (haliases : access.aliasArg (path ++ [j]) arg = .ok aliases)
+    (hmem : alias ∈ aliases) : alias ∈ childFrame.retained := by
+  unfold DemandNode.childFrame at hchild
+  let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
+  cases hexpect : (DemandNode.expression (.call context args origin)).childExpectation?
+      access parent index with
+  | none => simp [parent, hexpect, reject] at hchild
+  | some expectation =>
+    have hmapped :
+        (fun collected => DemandFrame.mk expectation.active expectation.future
+          (collected ++ frame.retained)) <$>
+            (DemandNode.expression (.call context args origin)).retainedForChild
+              access path index = .ok childFrame := by
+      simpa [parent, hexpect] using hchild
+    obtain ⟨collected, hcollectedRetained, hresult⟩ := except_map_ok_extract hmapped
+    have hcollected : access.aliasesOfArgs path (args.take index) = .ok collected := by
+      simpa [DemandNode.retainedForChild] using hcollectedRetained
+    have hchildRetained : childFrame.retained = collected ++ frame.retained := by
+      have hfields := congrArg DemandFrame.retained hresult
+      simpa using hfields.symm
+    have hargPrefix : (args.take index)[j]? = some arg := by
+      simpa [hji] using harg
+    have hargBounds : j < args.length := (List.getElem?_eq_some_iff.mp harg).1
+    have htake : j < (args.take index).length := by
+      simpa [List.length_take] using (Nat.lt_min.mpr ⟨hji, hargBounds⟩)
+    obtain ⟨indexedAliases, hindexed, hmemCollected⟩ :=
+      AccessEnv.aliasesOfArgs_index access path (args.take index) hcollected j arg htake hargPrefix
+    have hindexedEq : indexedAliases = aliases := by
+      have heq := hindexed.symm.trans haliases
+      injection heq
+    have hmemArg : alias ∈ indexedAliases := by simpa [hindexedEq] using hmem
+    have hmemPrefix : alias ∈ collected := hmemCollected alias hmemArg
+    rw [hchildRetained]
+    exact List.mem_append_left _ hmemPrefix
 
 private def addVisibleBinder (active : List VarId) (binder : VarId) : List VarId :=
   if active.contains binder then active else binder :: active
@@ -1245,7 +1417,7 @@ theorem DemandNode.childFrame_active {node : DemandNode} {access : AccessEnv}
     result.active = node.visibleForChild frame.active index := by
   unfold DemandNode.childFrame at h
   let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
-  cases hchild : node.childExpectation? parent index with
+  cases hchild : node.childExpectation? access parent index with
   | none => simp [parent, hchild, reject] at h
   | some expectation =>
     have hexpectActive : expectation.active = node.visibleForChild frame.active index := by
@@ -1253,7 +1425,7 @@ theorem DemandNode.childFrame_active {node : DemandNode} {access : AccessEnv}
       cases hnodeChild : node.child? index with
       | none => simp [hnodeChild] at hchild
       | some child =>
-        cases hfuture : node.childFuture parent index with
+        cases hfuture : node.childFuture access parent index with
         | none => simp [hnodeChild, hfuture] at hchild
         | some future =>
           simp [hnodeChild, hfuture] at hchild
@@ -1272,7 +1444,7 @@ theorem DemandNode.childFrame_future {node : DemandNode} {access : AccessEnv}
     {path : List Nat} {frame : DemandFrame} {index : Nat} {result : DemandFrame}
     {expectation : DemandChildExpectation}
     (h : node.childFrame access path frame index = .ok result)
-    (hchild : node.childExpectation?
+    (hchild : node.childExpectation? access
       ⟨path, .expression, frame.active, frame.future, frame.retained⟩ index = some expectation) :
     result.future = expectation.future := by
   let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
@@ -1349,13 +1521,30 @@ theorem DemandNode.phaseFrame_future {node : DemandNode} {access : AccessEnv}
     | _ => simp [DemandNode.phaseFrame] at h; cases h; rfl
   | _ => simp [DemandNode.phaseFrame] at h; cases h; rfl
 
+/-- Successful call entry validates every argument alias at its original operand path. -/
+theorem DemandNode.call_phase_alias_argument
+    {access : AccessEnv} {path : List Nat} {frame result : DemandFrame}
+    {context origin index : Nat} {args : List Arg} {arg : Arg}
+    (hphase : (DemandNode.expression (.call context args origin)).phaseFrame
+      access path frame .call = .ok result)
+    (hindex : index < args.length) (harg : args[index]? = some arg) :
+    ∃ aliases, access.aliasArg (path ++ [index]) arg = .ok aliases := by
+  have hmapped :
+      (fun aliases => { frame with retained := aliases ++ frame.retained }) <$>
+        access.aliasesOfArgs path args = .ok result := by
+    simpa [DemandNode.phaseFrame] using hphase
+  obtain ⟨collected, hcollected, _⟩ := except_map_ok_extract hmapped
+  obtain ⟨aliases, haliases, _⟩ :=
+    AccessEnv.aliasesOfArgs_index access path args hcollected index arg hindex harg
+  exact ⟨aliases, haliases⟩
+
 theorem DemandNode.childFrame_retains {node : DemandNode} {access : AccessEnv}
     {path : List Nat} {frame : DemandFrame} {index : Nat} {result : DemandFrame}
     (h : node.childFrame access path frame index = .ok result) {alias : RetainedAlias}
     (hmem : alias ∈ frame.retained) : alias ∈ result.retained := by
   unfold DemandNode.childFrame at h
   let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
-  cases hchild : node.childExpectation? parent index with
+  cases hchild : node.childExpectation? access parent index with
   | none => simp [parent, hchild, reject] at h
   | some expectation =>
     cases hretained : node.retainedForChild access path index with

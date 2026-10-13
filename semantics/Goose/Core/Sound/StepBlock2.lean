@@ -170,6 +170,7 @@ private theorem blockStmt_shrinkFuture {path sc all value offset st rest}
     rw [List.drop_add_one_eq_tail_drop, ← hdrop]; rfl
   have hexpectation :
       (DemandNode.block (.mk sc all value)).childExpectation?
+        pc.approvals.access
         ⟨path, .expression, context.expected.frame.active, context.expected.frame.future,
           context.expected.frame.retained⟩ offset =
         some ⟨(DemandNode.block (.mk sc all value)).visibleForChild context.expected.frame.active offset,
@@ -379,6 +380,7 @@ private theorem blockValue_shrinkFuture {path sc ss e} {pc : PlanContext m plans
   let transition := context.child rfl ss.length (.expression e) .expression blockValueChild?
     (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
   have hexpectation : (DemandNode.block (.mk sc ss (some e))).childExpectation?
+      pc.approvals.access
       ⟨path, .expression, context.expected.frame.active, context.expected.frame.future,
         context.expected.frame.retained⟩ ss.length =
       some ⟨(DemandNode.block (.mk sc ss (some e))).visibleForChild context.expected.frame.active ss.length,
