@@ -163,6 +163,9 @@ struct GirFunc {
     // The low stage: the frame, and how many data stacks the function owns.
     vector<GirMember> members;
     int stacks = 0;
+    // What names it in emitted text: the stable key of its context and the
+    // module of its declaration. Not part of the wire format.
+    string key, module;
 };
 
 struct GirGlobal {
@@ -171,6 +174,7 @@ struct GirGlobal {
     CoreVarKind kind = CoreVarKind::Let;
     GirFunc init;
     int org = 0;
+    string module;
 };
 
 // Storage of a global in the low stage.
@@ -179,11 +183,13 @@ struct GirLowGlobal {
     GirMember::Kind kind = GirMember::Scalar;
     GirTypeId ty = -1;     // Scalar
     int64_t size = 0;      // Bytes
+    string module;
 };
 
 struct GirModule {
     vector<string> files;
     vector<string> diagfiles;   // As the compiler writes them in a runtime diagnostic.
+    vector<string> filemodules; // The module of each file.
     vector<CoreType> types;
     vector<GirGlobal> globals;
     vector<GirFunc> funcs;

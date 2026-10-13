@@ -11,6 +11,13 @@ way the runner compiles single-file C (same flags, same per-fixture defines),
 the program is run, and its stdout, exit status and abort diagnostics are
 checked against the fixture's expectations exactly as the runner does.
 
+With `--pipeline gir` the programs are emitted by the IR pipeline instead
+(`--pipeline gir --emit-units`), restricted to those it supports: a program it
+reports as unsupported is skipped and counted. The pilot fixtures of
+test/semantics are built too, in release and where they have one in debug,
+and judged against their expectations as that harness judges the IR
+pipeline's programs. There is no --share variant.
+
 Skipped, and counted apart: parse-only fixtures, and programs that link a
 native layer or C of their own, which need the driver's link step, not
 written yet. Prints one line per failure and a final JSON line with the
@@ -21,6 +28,7 @@ reported as such; any other failure exits 1.
 
 import argparse
 import concurrent.futures
+import importlib.util
 import fnmatch
 import json
 import os
@@ -37,6 +45,10 @@ import run_tests  # noqa: E402  (the runner's per-fixture rules)
 import toolchain as tc  # noqa: E402
 
 EXPECTED_FAILURES = {"native_stack_overflow", "render_reference_cycle"}
+# Under --pipeline gir: programs whose lowered module the verifiers refuse because
+# the validators do not yet accept them (a mutable slice over a `let` array, a
+# function that always exits, a mutable reference bound to a read-only one).
+EXPECTED_GIR_FAILURES = {"loop_shapes_countdown_abort", "never_returns_exit", "return_const_recursion"}
 TESTS = ROOT / "test"
 SAMPLES = ROOT / "samples"
 
@@ -48,13 +60,72 @@ def fixtures():
     return [("fixture", f) for f in tests] + [("sample", f) for f in sorted(SAMPLES.glob("*.goose"))]
 
 
+def semantics_harness():
+    """The conformance harness's own module, for its fixtures and verdicts."""
+    spec = importlib.util.spec_from_file_location("semantics_harness", ROOT / "test" / "semantics" / "run_tests.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["semantics_harness"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 class Corpus:
-    def __init__(self, goose, work, cc, native):
+    def __init__(self, goose, work, cc, native, pipeline=None):
         self.goose, self.work, self.cc, self.native = goose, work, cc, native
+        self.pipeline = pipeline
         self.runtime = tc.GooseRuntime(goose, work / "runtime")
+        self.harness = semantics_harness() if pipeline else None
+
+    def supported(self, f, defines_goose):
+        """Whether the IR pipeline takes the program; None if so, else why not."""
+        code, out, err = tc.run_capture([str(self.goose), "--pipeline", self.pipeline, *defines_goose,
+                                         "--check", str(f)])
+        text = out + err
+        marker = f"unsupported in pipeline {self.pipeline}: "
+        if code != 0 and marker in text:
+            return text.split(marker, 1)[1].split()[0]
+        return None
+
+    def pilot(self, fixture):
+        """(status, detail) of a conformance-harness fixture built as units."""
+        h = self.harness
+        why = self.supported(fixture.source, [])
+        if why:
+            return "skip", f"unsupported in pipeline {self.pipeline}: {why}"
+        outcome = h.expected_outcome(fixture)
+        stdout = h.joined(fixture.out.read_text(encoding="utf-8"))
+        for mode in fixture.modes:
+            defines = ["-DGS_DEBUG=1"] if mode == h.DEBUG else []
+            ccdefs = ["GS_DEBUG=1"] if mode == h.DEBUG else []
+            for opt in (0, 2):
+                d = self.work / f"pilot-{fixture.name}-{mode}-O{opt}"
+                shutil.rmtree(d, ignore_errors=True)
+                d.mkdir(parents=True)
+                argv = [str(self.goose), "--pipeline", self.pipeline, *defines, "--emit-units",
+                        str(d / "units"), str(fixture.source)]
+                code, out, err = tc.run_capture(argv)
+                if code != 0:
+                    return "FAIL", f"emit {fixture.name} {mode}: {(out + err)[-300:]}"
+                units = sorted((d / "units").glob("*.c"))
+                exe = d / ("prog" + tc.EXE_SUFFIX)
+                ok, log = self.cc.compile(units, exe, opt=opt, defines=ccdefs, strict_decls=True,
+                                          runtime=self.runtime, extra=[f"-I{d / 'units'}"],
+                                          log=d / "cc.log")
+                if not ok:
+                    return "FAIL", f"cc {fixture.name} {mode} O{opt}: " + "\n".join(log.splitlines()[:6])
+                code, out, err = tc.run_capture([str(exe)], cwd=d)
+                verdict = h.judge_pipeline("units", fixture, mode, outcome, stdout, code, out, err)
+                if verdict.cls != h.AGREE:
+                    return "FAIL", f"{fixture.name} O{opt}: {verdict.detail}"
+        return "ok", ""
 
     def variants(self, kind, f, line):
         """(label, goose flags, cc defines, optimization) builds of a program."""
+        if self.pipeline:
+            out = [("O0", ["--pipeline", self.pipeline], [], 0), ("O2", ["--pipeline", self.pipeline], [], 2)]
+            if kind == "fixture" and run_tests.debug_fixture(f, line):
+                out.append(("O2-debug", ["--pipeline", self.pipeline], ["GS_DEBUG=1"], 2))
+            return out
         out = [("O0", ["-O0"], [], 0), ("O2", ["-O2"], [], 2), ("O2-share", ["-O2", "--share"], [], 2)]
         if kind == "fixture" and run_tests.debug_fixture(f, line):
             out.append(("O2-debug", ["-O2"], ["GS_DEBUG=1"], 2))
@@ -103,6 +174,10 @@ class Corpus:
         if modules or sidecar:
             return "skip", "links a native layer or C of its own"
         aborts = kind == "fixture" and (TESTS / "expected" / f"{name}.aborts").exists()
+        if self.pipeline:
+            why = self.supported(f, defines_goose + include)
+            if why:
+                return "skip", f"unsupported in pipeline {self.pipeline}"
         for label, flags, defines, opt in self.variants(kind, f, line):
             d = self.work / f"{kind}-{name}-{label}"
             shutil.rmtree(d, ignore_errors=True)
@@ -139,6 +214,7 @@ def main():
     ap.add_argument("--only", action="append", default=[], metavar="GLOB",
                     help="run only fixtures named category/stem or samples/name matching GLOB")
     ap.add_argument("-j", "--jobs", type=int, default=min(os.cpu_count() or 1, 16))
+    ap.add_argument("--pipeline", choices=["gir"], help="emit the units through this compiler pipeline")
     ap.add_argument("--work", help="scratch directory (default: .work/units_corpus)")
     a = ap.parse_args()
     work = Path(a.work) if a.work else ROOT / ".work" / "units_corpus"
@@ -149,12 +225,17 @@ def main():
     cc = tc.test_cc("native")
     builtin = tc.builtin_modules(goose)
     native = {m: m in builtin for m in tc.NATIVE_MODULES}
-    corpus = Corpus(goose, work, cc, native)
+    corpus = Corpus(goose, work, cc, native, a.pipeline)
     items = []
     for kind, f in fixtures():
         label = f"{f.parent.name}/{f.stem}" if kind == "fixture" else f"samples/{f.stem}"
         if not a.only or any(fnmatch.fnmatchcase(label, g) for g in a.only):
             items.append((kind, f, label))
+    if a.pipeline:
+        for fx in corpus.harness.discover(ROOT / "test" / "semantics"):
+            label = f"semantics/{fx.name}"
+            if not a.only or any(fnmatch.fnmatchcase(label, g) for g in a.only):
+                items.append(("pilot", fx, label))
     counts = {"ok": 0, "fail": 0, "expected_fail": 0, "skip": 0}
     skips = {}
     unexpected = []
@@ -162,7 +243,7 @@ def main():
     def run(item):
         kind, f, label = item
         try:
-            return item, corpus.one(kind, f)
+            return item, (corpus.pilot(f) if kind == "pilot" else corpus.one(kind, f))
         except Exception as e:  # a harness error is a failure of that program
             return item, ("FAIL", f"harness: {e!r}")
 
@@ -173,7 +254,7 @@ def main():
             elif status == "skip":
                 counts["skip"] += 1
                 skips[detail] = skips.get(detail, 0) + 1
-            elif f.stem in EXPECTED_FAILURES:
+            elif kind != "pilot" and f.stem in (EXPECTED_GIR_FAILURES if a.pipeline else EXPECTED_FAILURES):
                 counts["expected_fail"] += 1
                 print(f"expected failure {label}: {detail[:100]}")
             else:

@@ -41,6 +41,7 @@ struct GirCProgram {
     string head;      // Types, after the runtime's declarations.
     string result;    // Everything else, ending in `main`.
     vector<GirCPiece> pieces;
+    UnitSource unit;  // The same program as the unit assembler reads it.
 };
 
 class GirCEmitter {
@@ -48,36 +49,96 @@ public:
     explicit GirCEmitter(const GirModule &low) : m(low) {}
 
     GirCProgram Emit() {
+        Names();
         GirCProgram out;
-        out.head = "typedef struct { uint8_t *base; int64_t len; } gir_hdr;\n";
-        string &r = out.result;
+        for (size_t f = 0; f < m.funcs.size(); f++) out.pieces.push_back(Piece((int)f));
+        // The sections, in the conventions the unit assembler splits them by.
+        string tdecls = "typedef struct { uint8_t *base; int64_t len; } gir_hdr;\n";
+        for (auto size : blobs) Append(tdecls, "typedef struct { uint64_t w[", (size + 7) / 8, "]; } gir_blob_", size, ";\n");
+        string data;
         for (size_t i = 0; i < m.diagfiles.size(); i++)
-            Append(r, "static const char gs_file", i, "[] = ", CStr(m.diagfiles[i]), ";\n");
-        r += "\n/* ---- globals ---- */\n";
+            Append(data, "static const char ", filesym[i], "[] = ", CStr(m.diagfiles[i]), ";\n");
+        string gblock;
         for (size_t g = 0; g < m.lowglobals.size(); g++) {
             auto &lg = m.lowglobals[g];
             switch (lg.kind) {
-                case GirMember::Scalar: Append(r, "static ", CT(lg.ty), " gir_g", g, ";\n"); break;
-                case GirMember::Bytes: Append(r, "static uint64_t gir_g", g, "[", (lg.size + 7) / 8, "];\n"); break;
-                case GirMember::Header: Append(r, "static gir_hdr gir_g", g, ";\nstatic gs_stack gir_gs", g, ";\n"); break;
+                case GirMember::Scalar: Append(gblock, "    ", CT(lg.ty), " ", gsym[g], ";\n"); break;
+                case GirMember::Bytes: Append(gblock, "    gir_blob_", lg.size, " ", gsym[g], ";\n"); break;
+                case GirMember::Header: Append(gblock, "    gir_hdr ", gsym[g], ";\n    gs_stack gs_gstk_", gsym[g], ";\n"); break;
             }
         }
-        for (size_t f = 0; f < m.funcs.size(); f++) out.pieces.push_back(Piece((int)f));
-        r += "\n/* ---- prototypes ---- */\n";
-        for (auto &p : out.pieces) Append(r, p.prototype, ";\n");
-        r += "\n/* ---- code ---- */\n";
-        for (auto &p : out.pieces) Append(r, p.text, "\n");
-        r += "static int gir_program_initialized;\n\nstatic void gir_init_globals(void) {\n";
-        for (size_t g = 0; g < m.lowglobals.size(); g++)
-            if (m.lowglobals[g].kind == GirMember::Header) Append(r, "    gs_stack_init(&gir_gs", g, ");\n");
-        for (auto f : m.initfuncs) Append(r, "    ", FName(f), "(0);\n");
-        r += "}\n\nstatic void gir_program_init(int argc, char **argv) {\n"
-             "    if (gir_program_initialized) return;\n";
-        Append(r, "    gs_rt_init(argc, argv, ", m.mainstacks, ", ", m.mainstacks + m.globalstacks, ", 0);\n");
-        r += "    gir_init_globals();\n    gir_program_initialized = 1;\n}\n\n"
-             "int main(int argc, char **argv) {\n    gir_program_init(argc, argv);\n";
-        Append(r, "    ", FName(m.entry), "(0);\n");
-        r += "    gs_rt_stats();\n    return 0;\n}\n";
+        if (!m.lowglobals.empty())
+            Append(data, "typedef struct {\n", gblock, "} gs_globals_t;\nstatic gs_globals_t gs_globals_main;\n",
+                   "#define GS_GL (&gs_globals_main)\n");
+        data += "static int gs_program_initialized;\n";
+        string pdata;
+        for (auto &[text, name] : literals)
+            Append(pdata, "static const uint8_t ", name, "[", text.size() ? text.size() : 1, "] = ", CStr(text), ";\n");
+        string protos;
+        for (auto &p : out.pieces) Append(protos, p.prototype, ";\n");
+        string code;
+        for (auto &p : out.pieces) Append(code, p.text, "\n");
+        // Globals are initialized a module's run at a time, in declaration order.
+        vector<pair<string, string>> inits;
+        string initcode;
+        for (size_t g = 0; g < m.lowglobals.size();) {
+            auto module = m.lowglobals[g].module;
+            auto to = g;
+            while (to < m.lowglobals.size() && m.lowglobals[to].module == module) to++;
+            auto name = cat("gs_init_", UnitSegmentId(module), "_", runs[module]++);
+            inits.push_back({ module, name });
+            Append(initcode, "static void ", name, "(void) {\n");
+            for (auto k = g; k < to; k++) {
+                if (m.lowglobals[k].kind == GirMember::Header)
+                    Append(initcode, "    gs_stack_init(&GS_GL->gs_gstk_", gsym[k], ");\n");
+                Append(initcode, "    ", FName(m.initfuncs[k]), "(0);\n");
+            }
+            initcode += "}\n\n";
+            g = to;
+        }
+        auto program = [&](bool units) {
+            string t = "static void gs_program_init(int argc, char **argv) {\n"
+                       "    if (gs_program_initialized) return;\n";
+            Append(t, "    gs_rt_init(argc, argv, ", m.mainstacks, ", ", m.mainstacks + m.globalstacks, ", 0);\n");
+            if (units) {
+                set<string> modules;
+                for (auto &lg : m.lowglobals) modules.insert(lg.module);
+                for (auto &module : modules)
+                    Append(t, "    ", SegName(module), " = &", SegName(module), "_main;\n");
+            } else if (!m.lowglobals.empty()) {
+                t += "    gs_gl = &gs_globals_main;\n";
+            }
+            for (auto &[module, name] : inits) Append(t, "    ", name, "();\n");
+            t += "    gs_program_initialized = 1;\n}\n\n";
+            Append(t, "int main(int argc, char **argv) {\n    gs_program_init(argc, argv);\n    ", FName(m.entry),
+                   "(0);\n    gs_rt_stats();\n    return 0;\n}\n");
+            return t;
+        };
+        out.head = tdecls;
+        Append(out.result, data, "\n", pdata, "\n/* ---- prototypes ---- */\n", protos, "\n/* ---- code ---- */\n",
+               code, initcode, program(false));
+        // For the unit assembler.
+        auto &u = out.unit;
+        u.tdecls = tdecls;
+        u.data = data;
+        u.pdata = pdata;
+        u.gblock = gblock;
+        u.code = code + initcode + program(true);
+        set<string> modules;
+        for (size_t g = 0; g < m.lowglobals.size(); g++) {
+            UnitGlobalNames n;
+            n.module = m.lowglobals[g].module;
+            n.texts = { cat("GS_GL->", gsym[g]) };
+            if (m.lowglobals[g].kind == GirMember::Header) n.texts.push_back(cat("GS_GL->gs_gstk_", gsym[g]));
+            u.globals.push_back(std::move(n));
+            modules.insert(m.lowglobals[g].module);
+        }
+        u.segmodules.assign(modules.begin(), modules.end());
+        u.unitinits = inits;
+        for (size_t f = 0; f < m.funcs.size(); f++)
+            u.functions[FName((int)f)] = { m.funcs[f].module.empty() ? string("?") : m.funcs[f].module, nullptr };
+        u.segname = [](const string &module) { return SegName(module); };
+        u.fail = [](const string &message) { throw CompileError { message }; };
         return out;
     }
 
@@ -93,7 +154,48 @@ private:
         return out;
     }
 
-    string FName(int f) const { return cat("gir_f", f, "_", Sanitize(m.funcs[f].name)); }
+    // The names of what is emitted come from stable keys where the module
+    // carries them, so that nothing is named by order of arrival.
+    vector<string> fsym, gsym, filesym;
+    map<string, string> literals;          // Text -> the constant that holds it.
+    set<int64_t> blobs;                    // Sizes of the byte blocks globals take.
+    map<string, int> runs;
+
+    void Names() {
+        set<string> used;
+        auto name = [&](string n) {
+            if (!used.insert(n).second) throw CompileError { cat("symbol collision: ", n) };
+            return n;
+        };
+        for (size_t f = 0; f < m.funcs.size(); f++) {
+            auto &fn = m.funcs[f];
+            fsym.push_back(name(fn.key.empty() ? cat("gir_f", f, "_", Sanitize(fn.name))
+                                               : cat(Sanitize(fn.name), "_g_", fn.key)));
+        }
+        for (size_t g = 0; g < m.lowglobals.size(); g++) {
+            auto &lg = m.lowglobals[g];
+            gsym.push_back(lg.module.empty() ? cat(Sanitize(lg.name), "_g", g)
+                                             : cat(Sanitize(lg.name), "_g_",
+                                                   Sha256::Of(cat(lg.module, "::", lg.name)).Short()));
+            if (lg.kind == GirMember::Bytes) blobs.insert(lg.size);
+        }
+        for (size_t i = 0; i < m.diagfiles.size(); i++)
+            filesym.push_back(i < m.filemodules.size() && !m.filemodules[i].empty()
+                                  ? cat("gs_file_", Sha256::Of(m.filemodules[i]).Short())
+                                  : cat("gs_file_", i));
+        for (auto &f : m.funcs)
+            for (auto &b : f.blocks)
+                for (auto &i : b.insts) {
+                    auto text = i.op == GirOp::RtCall && (GirRt)i.idx == GirRt::OutText ? &i.text
+                                : i.op == GirOp::Abort && i.abort == GirAbortKind::UserAbort ? &i.text : nullptr;
+                    if (text && !text->empty() && !literals.count(*text))
+                        literals[*text] = cat("gs_str_", Sha256::Of(*text).Short());
+                }
+    }
+
+    static string SegName(const string &module) { return "gs_seg_" + UnitSegmentId(module); }
+
+    string FName(int f) const { return fsym[f]; }
 
     static const char *Sfx(CoreIntTy t) { return CoreIntName(t); }
 
@@ -157,8 +259,8 @@ private:
     }
 
     string Where(int org) const {
-        if (org < 0 || org >= (int)m.origins.size()) return "gs_file0, 0";
-        return cat("gs_file", m.origins[org].file, ", ", m.origins[org].line);
+        if (org < 0 || org >= (int)m.origins.size()) return cat(filesym.empty() ? string("gs_file_0") : filesym[0], ", 0");
+        return cat(filesym[m.origins[org].file], ", ", m.origins[org].line);
     }
 
     // ---------------------------------------------------------------------
@@ -316,13 +418,8 @@ private:
                 if (i.b >= 0) L("((gs_stack *)", V(i.a), ")->top += ", V(i.b), ";");
                 else L("((gs_stack *)", V(i.a), ")->top += ", i.idx, ";");
                 return;
-            case GirOp::GlobalAddr: {
-                auto &g = m.lowglobals[i.idx];
-                if (g.kind == GirMember::Bytes) L(V(i.res), " = (uint8_t *)gir_g", i.idx, ";");
-                else L(V(i.res), " = (uint8_t *)&gir_g", i.idx, ";");
-                return;
-            }
-            case GirOp::GlobalStack: L(V(i.res), " = (uint8_t *)&gir_gs", i.idx, ";"); return;
+            case GirOp::GlobalAddr: L(V(i.res), " = (uint8_t *)&GS_GL->", gsym[i.idx], ";"); return;
+            case GirOp::GlobalStack: L(V(i.res), " = (uint8_t *)&GS_GL->gs_gstk_", gsym[i.idx], ";"); return;
             case GirOp::HdrBase: L(V(i.res), " = ((gir_hdr *)", V(i.a), ")->base;"); return;
             case GirOp::HdrLen: L(V(i.res), " = ((gir_hdr *)", V(i.a), ")->len;"); return;
             case GirOp::HdrInit:
@@ -361,7 +458,8 @@ private:
                     case GirAbortKind::SliceOob: L("gs_abort(GS_E_SLICE, ", Where(i.org), ");"); break;
                     case GirAbortKind::Assert: L("gs_abort(GS_E_ASSERT, ", Where(i.org), ");"); break;
                     case GirAbortKind::UserAbort:
-                        L("gs_abort_msg((const uint8_t *)", CStr(i.text), ", ", i.text.size(), ", ", Where(i.org), ");");
+                        L("gs_abort_msg(", i.text.empty() ? string("(const uint8_t *)\"\"") : literals.at(i.text), ", ",
+                          i.text.size(), ", ", Where(i.org), ");");
                         break;
                     default: L("gs_abort(GS_E_ASSERT, ", Where(i.org), ");"); break;
                 }
@@ -435,7 +533,7 @@ private:
             case GirRt::OutUint: L("gs_out_uint((uint64_t)", V(i.a), ");"); break;
             case GirRt::OutBool: L("gs_out_bool((int64_t)", V(i.a), ");"); break;
             case GirRt::OutText:
-                if (!i.text.empty()) L("gs_out_bytes((const uint8_t *)", CStr(i.text), ", ", i.text.size(), ");");
+                if (!i.text.empty()) L("gs_out_bytes(", literals.at(i.text), ", ", i.text.size(), ");");
                 break;
             case GirRt::OutNl: L("gs_out_nl();"); break;
             default: break;
