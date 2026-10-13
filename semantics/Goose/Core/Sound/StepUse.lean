@@ -302,7 +302,8 @@ private theorem printExpr_shrinkOutputFuture {path : List Nat} {all : List Print
       context.expected.frame.retained⟩
   have hoffset : offset < all.length := (List.getElem?_eq_some_iff.mp harg).1
   have hexpectation :
-      (DemandNode.statement (.print all origin)).childExpectation? parent offset =
+      (DemandNode.statement (.print all origin)).childExpectation?
+          pc.approvals.access parent offset =
         some ⟨(DemandNode.statement (.print all origin)).visibleForChild
             context.expected.frame.active offset,
           rest.flatMap PrintArg.variables ++ context.expected.frame.future⟩ := by
