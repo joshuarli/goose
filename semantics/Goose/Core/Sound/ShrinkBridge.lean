@@ -91,7 +91,7 @@ theorem shrinkApproval_retainedInteriorDisjoint
   have hinvalidates : approval.shrinkOwner.invalidates = true := by
     simp [DemandOwner.invalidates, howner]
   exact DemandOwner.conflicts_false_disjoint hinvalidates hinterior
-    (approval.safe.2 alias hmem)
+    (approval.safe.1.2 alias hmem)
 
 theorem shrinkApproval_retainedInteriorHeld
     {m : Module} {owner : Nat} {plan : Array DemandPoint}
