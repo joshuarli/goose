@@ -197,6 +197,26 @@ def m_const_ref_let : String := r##"["module","goose-core/0.2","core-pilot",[["f
 
 #guard check {} m_const_ref_let r##"["done",["returned"],"7\n5\n"]"## 0
 
+/-- A grow owner declared with `let` still permits changes to its contents. -/
+def m_let_grow_push : String := r##"["module","goose-core/0.2","core-pilot",[["file","let_grow_push.goose"]],[["int","i64"],["grow",0]],[],[["impl","main",[],[],[["local","xs",1,"let",0,0]],["block",0,[["s_let",0,["e_arr",1,[["e_lit",0,"10"]]],0],["s_expr",["e_push",["p_local",0],["e_lit",0,"20"]],1],["s_print",[["pa_expr",["e_len",["v_of",["p_local",0]]]]],2]],[]],["summary",[],[],[],[],1,1]]],[["context",0,"main::main()",[],[]]],0,[["origin",0,1,"let"],["origin",0,2,"expr"],["origin",0,3,"print"]]]"##
+
+#guard check {} m_let_grow_push r##"["done",["returned"],"2\n"]"## 0
+
+/-- Appending and borrowing a `let` grow owner preserve contents authority. -/
+def m_let_grow_append_ref : String := r##"["module","goose-core/0.2","core-pilot",[["file","let_grow_append_ref.goose"]],[["int","i64"],["grow",0],["arr",0,1],["ref","mut",1]],[],[["impl","main",[],[],[["local","xs",1,"let",0,0],["local","suffix",2,"let",0,1],["local","alias",3,"let",0,4]],["block",0,[["s_let",0,["e_arr",1,[["e_lit",0,"10"]]],0],["s_let",1,["e_arr",2,[["e_lit",0,"20"]]],1],["s_expr",["e_push",["p_local",0],["e_lit",0,"30"]],2],["s_append",["p_local",0],["v_of",["p_local",1]],3],["s_let",2,["e_ref","mut",["p_local",0]],4],["s_expr",["e_push",["p_deref",["e_read",["p_local",2]]],["e_lit",0,"40"]],5],["s_print",[["pa_expr",["e_len",["v_of",["p_local",0]]]], ["pa_text"," "],["pa_expr",["e_read",["p_elem",["v_of",["p_local",0]],["e_lit",0,"3"],6]]]],6]],[]],["summary",[],[],[],[],1,1]]],[["context",0,"main::main()",[["vr",2,[["r_local",0]]]],[]]],0,[["origin",0,1,"let"],["origin",0,2,"let"],["origin",0,3,"expr"],["origin",0,4,"expr"],["origin",0,5,"let"],["origin",0,6,"expr"],["origin",0,7,"print"]]]"##
+
+#guard check {} m_let_grow_append_ref r##"["done",["returned"],"4 40\n"]"## 0
+
+/-- A `let` grow owner can be passed as a mutable whole-owner reference. -/
+def m_let_grow_mut_arg : String := r##"["module","goose-core/0.2","core-pilot",[["file","let_grow_mut_arg.goose"]],[["int","i64"],["grow",0],["ref","mut",1]],[],[["impl","main",[],[],[["local","xs",1,"let",0,0]],["block",0,[["s_let",0,["e_arr",1,[["e_lit",0,"10"]]],0],["s_expr",["e_call",1,[["a_ref","mut",["p_local",0]]],1],1],["s_print",[["pa_expr",["e_len",["v_of",["p_local",0]]]]],2]],[]],["summary",[],[],[],[],1,1]],["impl","push_one",[["param",0,"by_ref"]],[],[["local","owner",2,"let",0,3]],["block",0,[["s_expr",["e_push",["p_deref",["e_read",["p_local",0]]],["e_lit",0,"20"]],4]],[]],["summary",[["t_param",0]],[],[["t_param",0]],[],0,0]]],[["context",0,"main()",[],[]],["context",1,"push_one(i64[>..]&)",[["vr",0,[["r_param",0]]]],[]]],0,[["origin",0,1,"let"],["origin",0,2,"call"],["origin",0,3,"print"],["origin",0,1,"param"],["origin",0,2,"expr"]]]"##
+
+#guard check {} m_let_grow_mut_arg r##"["done",["returned"],"2\n"]"## 0
+
+/-- A scalar binding still cannot be made mutable through a `let` reference. -/
+def m_let_scalar_mut_ref : String := r##"["module","goose-core/0.2","core-pilot",[["file","let_scalar_mut_ref.goose"]],[["int","i64"],["ref","mut",0]],[],[["impl","main",[],[],[["local","value",0,"let",0,0],["local","alias",1,"let",0,1]],["block",0,[["s_let",0,["e_lit",0,"7"],0],["s_let",1,["e_ref","mut",["p_local",0]],1],["s_print",[["pa_expr",["e_read",["p_deref",["e_read",["p_local",1]]]]]],2]],[]],["summary",[],[],[],[],1,1]]],[["context",0,"main::main()",[],[]]],0,[["origin",0,1,"let"],["origin",0,2,"let"],["origin",0,3,"print"]]]"##
+
+#guard check {} m_let_scalar_mut_ref r##"["rejected","V-MUT","a mutable reference writes through a place that is not mutable"]"## 5
+
 /-- A range loop whose bound declares a variable: the loop variable is numbered first. -/
 def m_range_bound_let : String := r##"["module","goose-core/0.2","core-pilot",[["file","rb.goose"]],[["int","i64"]],[],[["impl","main",[],[],[["local","total",0,"var",0,0],["local","i",0,"let",2,1],["local","n",0,"let",1,2]],["block",0,[["s_let",0,["e_lit",0,"0"],0],["s_for_range",1,["e_lit",0,"0"],["e_block",["block",1,[["s_let",2,["e_lit",0,"3"],2]],[["e_bin","add",["e_read",["p_local",2]],["e_lit",0,"1"],3]]]],["block",2,[["s_assign_op","add",["p_local",0],["e_read",["p_local",1]],4]],[]],1],["s_print",[["pa_expr",["e_read",["p_local",0]]]],5]],[]],["summary",[],[],[],[],1,1]]],[["context",0,"main::main()",[],[]]],0,[["origin",0,2,"let"],["origin",0,3,"for"],["origin",0,3,"let"],["origin",0,3,"binary"],["origin",0,4,"assign_op"],["origin",0,6,"print"]]]"##
 

@@ -336,11 +336,17 @@ def ownerElement (t : Ty) : T Ty :=
 
 /-- A mutable resizable-owner reference carries contents authority into its callee. -/
 def PlaceInfo.referenceWritable (info : PlaceInfo) (profile : ArtifactProfile) : Bool :=
-  if profile == .shrink then
-    match info.ty with
-    | .grow _ | .growshrink _ => info.contentsWritable
+  match info.ty with
+  | .grow _ => info.contentsWritable
+  | .growshrink _ => if profile == .shrink then info.contentsWritable else info.bindingWritable
+  | _ => info.bindingWritable
+
+/-- Pilot uses contents permission for grow owners; shrink uses it for every owner kind. -/
+def PlaceInfo.ownerMutationWritable (info : PlaceInfo) (profile : ArtifactProfile) : Bool :=
+  if profile == .shrink then info.contentsWritable
+  else match info.ty with
+    | .grow _ => info.contentsWritable
     | _ => info.bindingWritable
-  else info.bindingWritable
 
 def checkOwnerRun (env : TEnv) (e : Expr) (t : Ty) : T Unit :=
   if env.mod.profile == .shrink && t.ownerElem?.isSome && !e.freshOwner then
@@ -638,8 +644,7 @@ def tyExpr (env : TEnv) : Expr → T Ty
     let el ← ownerElement t
     let argTy ← tyExpr env a
     unless argTy == el do rej .type "a pushed element of another type than the array's"
-    let writable := if env.mod.profile == .pilot then placeInfo.bindingWritable else placeInfo.contentsWritable
-    requireWrite "push" writable
+    requireWrite "push" (placeInfo.ownerMutationWritable env.mod.profile)
     pure (.ref .mutable el)
   | .pop owner org => do
     requireShrink env
@@ -802,8 +807,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     let el ← ownerElement t
     let (sel, _) ← tyView env src
     unless sel == el do rej .type "appended elements of another type than the array's"
-    let writable := if env.mod.profile == .pilot then placeInfo.bindingWritable else placeInfo.contentsWritable
-    requireWrite "append" writable
+    requireWrite "append" (placeInfo.ownerMutationWritable env.mod.profile)
     pure env
   | .popN owner count org => do
     requireShrink env
