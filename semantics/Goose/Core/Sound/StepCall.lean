@@ -199,6 +199,23 @@ theorem callArgContext_mayShrink_iff {plans path c all origin}
       (by simp [DemandNode.child?, DemandNode.children, harg])
       (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) P observation r
 
+private theorem callArgContext_forbidden_subset {plans path c all origin}
+    (context : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
+    (index : Nat) (arg : Arg) (harg : all[index]? = some arg) :
+    ∀ owner, owner ∈ context.forbiddenOwners →
+      owner ∈ (callArgContext context index arg harg).forbiddenOwners := by
+  cases arg with
+  | byVal e =>
+    simpa only [callArgContext, ArgContext.forbiddenOwners] using
+      context.child_forbidden_subset rfl index (.expression e) .expression
+      (by simp [DemandNode.child?, DemandNode.children, harg])
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
+  | byRef mu p =>
+    simpa only [callArgContext, ArgContext.forbiddenOwners] using
+      context.child_forbidden_subset rfl index (.place p) .place
+      (by simp [DemandNode.child?, DemandNode.children, harg])
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
+
 theorem callArgContext_retained_subset {plans path c all origin}
     (context : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
     (index : Nat) (arg : Arg) (harg : all[index]? = some arg)
@@ -581,6 +598,40 @@ private theorem argument_byVal_type_preserved {source target : Store}
       ⟨typed, fun root target => (roots root target).subset included⟩
     exact ((retained _ List.mem_cons_self).typed v realized).1
 
+/- A by-value argument can weaken reference mutability, but it cannot change the
+underlying resizable owner type that justifies owner authority. -/
+private theorem OwnerRefTy.of_passable {source target : Ty}
+    (passable : source.passableTo target = true) (targetOwner : OwnerRefTy target) :
+    OwnerRefTy source := by
+  cases target with
+  | ref targetMu targetType =>
+    rcases targetOwner with ⟨ownerMu, element, ownerGrow | ownerGrowshrink⟩
+    · cases ownerGrow
+      cases source with
+      | ref sourceMu sourceType =>
+        simp only [Ty.passableTo, Bool.and_eq_true, beq_iff_eq] at passable
+        obtain ⟨sourceEq, _⟩ := passable
+        subst sourceType
+        exact ⟨sourceMu, element, Or.inl rfl⟩
+      | _ => simp [Ty.passableTo] at passable
+    · cases ownerGrowshrink
+      cases source with
+      | ref sourceMu sourceType =>
+        simp only [Ty.passableTo, Bool.and_eq_true, beq_iff_eq] at passable
+        obtain ⟨sourceEq, _⟩ := passable
+        subst sourceType
+        exact ⟨sourceMu, element, Or.inr rfl⟩
+      | _ => simp [Ty.passableTo] at passable
+  | _ => simp [OwnerRefTy] at targetOwner
+
+private theorem OwnerRooted.passable {env : Env} {ownerP : Nat → RootInst → Prop}
+    {roots : List RootRef} {v : Val} {source target : Ty}
+    (rooted : OwnerRooted env ownerP roots v source)
+    (passable : source.passableTo target = true) :
+    OwnerRooted env ownerP roots v target := by
+  intro targetOwner r targetOf
+  exact rooted (OwnerRefTy.of_passable passable targetOwner) r targetOf
+
 private def callPrefixRetained {plans path c all origin}
     (context : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
     (offset : Nat) (source target : Store) : Prop :=
@@ -610,14 +661,14 @@ set_option maxHeartbeats 1600000 in
     (ec : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
     (observation : Observation) (ihA : ArgSpec m prof plans n) (hp : Perm m W)
     (active : ec.ActiveMatches tenv) (access : ec.AccessMatches tenv penv)
-    (protectedSlices : ShrinkProtected W.D W.A (ec.mayShrink W.P observation))
+    (protectedSlices : ShrinkProtected W.D W.A (ec.mayShrink W.ownerP observation))
     (callee : Impl) (calleeChecked : ImplOk m callee) :
     ∀ (args : List Arg) (ps : List Param) (offset : Nat) (s : St)
       (tn tn' : Nat) (rst rst' : RState) (ars : List (List RootRef)),
     args = all.drop offset → offset ≤ all.length →
     (∀ p, p ∈ ps → p ∈ callee.params.toList) →
     Frame m W tenv penv env s (callArgsFuture ec offset args) →
-    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s.store →
     (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     ps.length = args.length →
     tyArgs tenv callee ps args tn = .ok ((), tn') →
@@ -627,7 +678,7 @@ set_option maxHeartbeats 1600000 in
       Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧ callPrefixRetained (W := W) (env := env) ec offset s.store s'.store ∧
       vals.length = args.length ∧
@@ -635,9 +686,13 @@ set_option maxHeartbeats 1600000 in
           (ar : List RootRef) (a : Arg) (ty : Ty) (tn0 tn1 : Nat) (rst0 rst1 : RState),
         ps[i]? = some p ∧ callee.vars[p.var]? = some pv ∧
         ars[i]? = some ar ∧ HasTy m W.G s'.store v pv.ty ∧
-        (∀ r, Targets v r → Gam env W.P ar r) ∧ args[i]? = some a ∧
+        (∀ r, Targets v r → Gam env W.P ar r) ∧ OwnerRooted env W.ownerP ar v pv.ty ∧
+        args[i]? = some a ∧
         ArgTy tenv a tn0 ty tn1 ∧ ty.passableTo pv.ty = true ∧ ArgRp penv a rst0 ar rst1) ∧
-      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
+      PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
   | [], ps, offset, s, tn, tn', rst, rst', ars, sourceEq, bound, _, frame, observed, classified,
       _, _, _, _ => by
     have offsetEq : offset = all.length := by
@@ -646,7 +701,8 @@ set_option maxHeartbeats 1600000 in
     simp only [mapList, sat_pure]
     refine ⟨by simpa [offsetEq] using frame, Footprint.refl _ _ _,
       PreservesRootTypes.refl _, PreservesValues.refl _, observed, RetainsAliases.refl,
-      fun _ => StoreLe.refl _, ?_, rfl, fun i v lookup => by simp at lookup, classified⟩
+      fun _ => StoreLe.refl _, ?_, rfl, fun i v lookup => by simp at lookup, classified,
+      PreservesForbiddenOwnerRoots.refl _, MutationFootprint.refl _ _ _ _ _⟩
     cases ec with
     | pilot _ _ => trivial
     | shrink _ _ => exact fun _ _ _ _ _ _ => RetainsAliases.refl
@@ -692,16 +748,16 @@ set_option maxHeartbeats 1600000 in
       obtain ⟨ty, t1, rho, r1, ars', modeEq, hat, hpass, tailTyping, har, hra, rfl⟩ := key
 
       let ac := callArgContext ec offset a harg
-      have shrinkEq : ac.mayShrink W.P observation = ec.mayShrink W.P observation := by
+      have shrinkEq : ac.mayShrink W.ownerP observation = ec.mayShrink W.ownerP observation := by
         funext root
-        exact propext (callArgContext_mayShrink_iff ec offset a harg W.P observation root)
+        exact propext (callArgContext_mayShrink_iff ec offset a harg W.ownerP observation root)
       have childFrame : Frame m W tenv penv env s ac.inputFuture :=
         frame.changeFuture (fun x _ member =>
           callArgContext_inputFuture_subset ec offset a as harg hrest member)
-      have childProtected : ShrinkProtected W.D W.A (ac.mayShrink W.P observation) := by
+      have childProtected : ShrinkProtected W.D W.A (ac.mayShrink W.ownerP observation) := by
         rw [shrinkEq]
         exact protectedSlices
-      have childObserved : ObservedSafe m W (ac.mayShrink W.P observation) observation s.store := by
+      have childObserved : ObservedSafe m W (ac.mayShrink W.ownerP observation) observation s.store := by
         rw [shrinkEq]
         exact observed
       simp only [mapList]
@@ -711,8 +767,12 @@ set_option maxHeartbeats 1600000 in
         childProtected childObserved classified hp childFrame hat har
         ((rpArgs_mono hra).2.trans effects)) ?_
       rintro v s1 ⟨frame1, footprint1, types1, values1, observed1, retained1, pilot1,
-        typed1, roots1, classified1⟩
+        typed1, roots1, classified1, ownerRooted1, forbidden1, mutations1⟩
       rw [shrinkEq] at observed1
+      have parentForbidden1 : PreservesForbiddenOwnerRoots (m := m) (G := W.G)
+          (env := env) (P := W.P) ec.forbiddenOwners s s1 :=
+        forbidden1.subset (fun owner member =>
+          callArgContext_forbidden_subset ec offset a harg owner member)
       have parentRetained1 := retained1.subset (fun alias member =>
         callArgContext_retained_subset ec offset a harg member)
       have prefix1 : callPrefixRetained (W := W) (env := env) ec offset s.store s1.store := by
@@ -728,11 +788,13 @@ set_option maxHeartbeats 1600000 in
         (callArgFrame_rest ec offset a as harg hrest active frame1)
         observed1 classified1 hl' tailTyping hra effects) ?_
       rintro vals s2 ⟨frame2, footprint2, types2, values2, observed2, retained2, pilot2,
-        prefix2, length2, hall, classified2⟩
+        prefix2, length2, hall, classified2, forbidden2, mutations2⟩
       simp only [sat_pure]
       refine ⟨frame2, footprint1.trans footprint2, types1.trans types2, values1.trans values2,
         observed2, parentRetained1.trans retained2, fun hpilot => (pilot1 hpilot).trans (pilot2 hpilot),
-        ?_, by simp [length2], ?_, classified2⟩
+        ?_, by simp [length2], ?_, classified2, parentForbidden1.trans forbidden2,
+        (mutations1.weaken (effectMutationRoots.mono m penv.impl
+          (rpArgs_mono hra).2 (rpArgs_rebinds_mono hra))).trans mutations2⟩
       · cases ec with
         | pilot _ _ => trivial
         | shrink _ _ =>
@@ -778,13 +840,15 @@ set_option maxHeartbeats 1600000 in
                 exact argument_byRef_type_preserved frame2 ⟨T, caps, placeTy, allowed, rfl⟩
                   har aliasLookupP retainedArg typed1 roots1
           exact ⟨p, pv, rho, a, ty, _, _, _, _, rfl, hv, rfl,
-            hasTy_passable typed2 hpass, roots1, rfl, hat, hpass, har⟩
+            hasTy_passable typed2 hpass, roots1, ownerRooted1.passable hpass,
+            rfl, hat, hpass, har⟩
         | succ i =>
           simp only [List.getElem?_cons_succ] at valueLookup
-          obtain ⟨p', pv', ar, a', ty', n0, n1, q0, q1, g1, g2, g3, g4, g5, g6, g7, g8, g9⟩ :=
+          obtain ⟨p', pv', ar, a', ty', n0, n1, q0, q1,
+            g1, g2, g3, g4, g5, g6, g7, g8, g9, g10⟩ :=
             hall i value valueLookup
           exact ⟨p', pv', ar, a', ty', n0, n1, q0, q1, by simpa using g1, g2, by simpa using g3,
-            g4, g5, by simpa using g6, g7, g8, g9⟩
+            g4, g5, g6, by simpa using g7, g8, g9, g10⟩
 
 /-! ### The caller's slice variables, as the callee sees them -/
 
