@@ -200,7 +200,8 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
     subst offset
     refine ⟨⟨tenv', TSame.refl _, hF, fun _ _ => rfl⟩,
       FootprintS.refl env (Dset W) s, PreservesRootTypes.refl s.store,
-      PreservesValues.refl s.store, hObserved, RetainsAliases.refl, ?_, hT, ?_, hClass⟩
+      PreservesValues.refl s.store, hObserved, RetainsAliases.refl, ?_, hT, ?_, hClass, PreservesForbiddenOwnerRoots.refl _,
+      MutationFootprint.refl _ _ _ _ _⟩
     · intro _
       exact StoreLe.refl _
     · exact ⟨trivial, rfl⟩
@@ -219,10 +220,10 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
       have hlen := congrArg List.length hDrop
       simp only [List.length_cons, List.length_drop] at hlen
       omega
-    have hmay : statementContext.mayShrink W.P observation = bc.mayShrink W.P observation := by
+    have hmay : statementContext.mayShrink W.ownerP observation = bc.mayShrink W.ownerP observation := by
       funext r
       exact propext (bc.child_mayShrink_iff rfl offset (.statement st) .statement hchild
-        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.P observation r)
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.ownerP observation r)
     have haccess : statementContext.AccessMatches tenv penv :=
       (bc.child_accessMatches_iff rfl offset (.statement st) .statement hchild
         (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) tenv penv).2 hAccess
@@ -265,10 +266,15 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
     refine Sat.bind (ih.stmt (path ++ [offset]) st statementContext observation W tenv tenv1
       penv env s sc tn t1 rst r1 lo hactive haccess (hmay ▸ hProtected)
       (hmay ▸ hObserved) hClass hp hinput hsc hT hlo hts hrs (hm2.2.trans hE)) ?_
-    rintro fl s1 ⟨hF1, hX1, hRoots1, hValues1, hSafe1, hRet1, hPilot1, hS1, hT1, hfl, hClass1⟩
+    rintro fl s1 ⟨hF1, hX1, hRoots1, hValues1, hSafe1, hRet1, hPilot1, hS1, hT1, hfl, hClass1, hForbidden1, hMutation1⟩
     rw [hout] at hF1
     rw [hmay] at hSafe1
     have hRet1' := hRet1.subset hretSubset
+    have hForbidden1' := hForbidden1.subset
+      (bc.child_forbidden_subset rfl offset (.statement st) .statement hchild
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
+    have hMutation1' := hMutation1.weaken
+      (effectMutationRoots.mono m penv.impl hm2.2 (rpStmts_rebinds_mono hrr))
     have hActive1 : ∀ x, x ∈ blockSuffixActive bc (offset + 1) ↔ x ∈ tenv1.visible := by
       rw [blockSuffixActive_succ bc hDrop]
       intro x
@@ -294,10 +300,10 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
           hS1.mod, hS1.vars] using hAccess) hProtected hSafe1 hClass1 hp hF1
         (by rw [hS1.scopes]; exact hsc) hT1 (Nat.le_trans hlo hm1.1) htr hrr hE).mono ?_
       rintro fl2 s2 ⟨⟨tenv2, hS2, hF2, hn2⟩, hX2, hRoots2, hValues2, hSafe2,
-        hRet2, hPilot2, hT2, hfl2, hClass2⟩
+        hRet2, hPilot2, hT2, hfl2, hClass2, hForbidden2, hMutation2⟩
       refine ⟨⟨tenv2, hS1.trans hS2, hF2, hn2⟩, hX1.trans hX2,
         hRoots1.trans hRoots2, hValues1.trans hValues2, hSafe2, hRet1'.trans hRet2,
-        fun h => (hPilot1 h).trans (hPilot2 h), hT2, ?_, hClass2⟩
+        fun h => (hPilot1 h).trans (hPilot2 h), hT2, ?_, hClass2, hForbidden1'.trans hForbidden2, hMutation1'.trans hMutation2⟩
       cases fl2 with
       | normal v2 => exact ⟨hfl2.1, by simp [stmtsDiverge, hfl, hfl2.2]⟩
       | brk => exact ⟨by rw [← hS1.loops]; exact hfl2.1, by simp [stmtsHaveBreak, hfl2.2]⟩
@@ -307,15 +313,15 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
       simp only [sat_pure]
       exact ⟨⟨tenv1, hS1, hFinal, fun v h => by cases h⟩, hX1, hRoots1, hValues1,
         hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1,
-        ⟨hfl.1, by simp [stmtsHaveBreak, hfl.2]⟩, hClass1⟩
+        ⟨hfl.1, by simp [stmtsHaveBreak, hfl.2]⟩, hClass1, hForbidden1', hMutation1'⟩
     | cont =>
       simp only [sat_pure]
       exact ⟨⟨tenv1, hS1, hFinal, fun v h => by cases h⟩, hX1, hRoots1, hValues1,
-        hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1, hfl, hClass1⟩
+        hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1, hfl, hClass1, hForbidden1', hMutation1'⟩
     | ret v =>
       simp only [sat_pure]
       exact ⟨⟨tenv1, hS1, hFinal, fun v h => by cases h⟩, hX1, hRoots1, hValues1,
-        hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1, hfl, hClass1⟩
+        hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1, hfl, hClass1, hForbidden1', hMutation1'⟩
 
 private theorem blockFold_sub (active : List VarId) (ss : List Stmt) :
     ∀ x, x ∈ active → x ∈ ss.foldl (fun active statement =>
@@ -408,12 +414,18 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
       rfl pre _ { s with nextScope := s.nextScope + 1 } hF0 hnd (by
         intro x v hm
         obtain ⟨_, _, lv, g1, g2, g3, g4, g5⟩ := hpreAll x v hm
-        refine ⟨hfreshAll x, lv, g1, g2, g3, g4, fun r hr => ⟨g5 r hr, ?_⟩⟩
-        rcases hasTy_target_dom g4 hr with ⟨g, rfl⟩ | hd
-        · trivial
-        · cases r with
-          | global g => trivial
-          | «local» a si' x' => exact Nat.le_of_lt (hF.inv.fresh _ _ _ hd))
+        refine ⟨hfreshAll x, lv, g1, g2, g3, g4, ?_, ?_⟩
+        · intro r hr
+          obtain ⟨ann, ha, hg, _⟩ := g5 r hr
+          refine ⟨⟨ann, ha, hg⟩, ?_⟩
+          rcases hasTy_target_dom g4 hr with ⟨g, rfl⟩ | hd
+          · trivial
+          · cases r with
+            | global g => trivial
+            | «local» a si' x' => exact Nat.le_of_lt (hF.inv.fresh _ _ _ hd)
+        · intro hty r hr
+          obtain ⟨ann, ha, _, howner⟩ := g5 r hr
+          exact ⟨ann, ha, howner hty⟩)
   have hF1 := hFb.tenv_congr (t2 := tenv1) (hsame.mod.trans hSb.mod.symm)
     (hsame.vars.trans hSb.vars.symm) (hsame.scopes.trans hSb.scopes.symm)
     (fun y hy => (hvisb y).2 ((hvis y).1 hy))
@@ -455,7 +467,7 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
           subst x'
           obtain ⟨_, _, lv, hlv, hlsc, _⟩ := hpreAll _ _ hm
           exact Or.inr ⟨x, lv, s.nextScope, env.scopes, by simp [inner, hlsc], hlv, rfl⟩
-  have hSafeB : ObservedSafe m W (bc.mayShrink W.P observation) observation bound.store := by
+  have hSafeB : ObservedSafe m W (bc.mayShrink W.ownerP observation) observation bound.store := by
     refine { hObserved with typed := ⟨?_, ?_⟩, rootsProtected := ?_ }
     · intro r T hobs
       obtain ⟨v, hv, hty⟩ := hObserved.typed.roots r T hobs
@@ -493,6 +505,39 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
       exact ⟨lv, si, hv, by simp [inner, lookup_cons, hne, hlk], hroot⟩
     | global g => exact hr
     | param i => exact hr
+  have hGamPopOutside : ∀ roots r,
+      ¬ MutationRoots env W.P W.base roots r → Gam inner W.P roots r →
+      Gam env W.P roots r := by
+    rintro roots r hout ⟨q, hq, hr⟩
+    refine ⟨q, hq, ?_⟩
+    cases q with
+    | «local» x =>
+      obtain ⟨lv, si, hv, hlk, rfl⟩ := hr
+      change ((sc, s.nextScope) :: env.scopes).lookup lv.scope = some si at hlk
+      rw [lookup_cons] at hlk
+      by_cases he : lv.scope = sc
+      · simp only [he, if_true, Option.some.injEq] at hlk
+        subst si
+        exact False.elim (hout (Or.inr ⟨env.act, s.nextScope, x, rfl, hF.base_le⟩))
+      · exact ⟨lv, si, hv, by simpa [he] using hlk, rfl⟩
+    | global _ => exact hr
+    | param _ => exact hr
+  have hNotScope : ∀ roots r, ¬ MutationRoots env W.P W.base roots r →
+      ¬ ScopeRoots env.vars env.act sc s.nextScope r := by
+    rintro roots r hout ⟨x, lv, _, _, rfl⟩
+    exact hout (Or.inr ⟨env.act, s.nextScope, x, rfl, hF.base_le⟩)
+  have hBoundExact : ∀ roots r, ¬ MutationRoots env W.P W.base roots r →
+      bound.store.roots[r]? = s.store.roots[r]? := by
+    intro roots r hout
+    cases hb : bound.store.roots[r]? with
+    | none =>
+      cases hs : s.store.roots[r]? with
+      | none => rfl
+      | some v => have hk := hkeepb r v hs; rw [hb] at hk; cases hk
+    | some v =>
+      rcases hbackb r v hb with hs | ⟨x, _, he⟩
+      · exact hs.symm
+      · exact False.elim (hout (Or.inr ⟨env.act, s.nextScope, x, he, hF.base_le⟩))
   have hClassBound : m.profile = .shrink →
       ClassifiedParameters m W.P W.D observation bound.store := by
     intro hshrink
@@ -501,19 +546,26 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
   have exit : ∀ (s2 : St) (tf : TEnv),
       Frame m W tf { penv with scopes := sc :: penv.scopes } inner s2 bc.outputFuture →
       TSame tenv1 tf → FootprintS inner (Dset W) bound s2 →
-      ObservedSafe m W (bc.mayShrink W.P observation) observation s2.store →
+      ObservedSafe m W (bc.mayShrink W.ownerP observation) observation s2.store →
       RetainsAliases m W inner bound.store s2.store bc.retained →
       PilotStoreLe m bound s2 →
+      PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := inner) (P := W.P)
+        bc.forbiddenOwners bound s2 →
+      MutationFootprint inner W.P W.base (effectMutationRoots m penv.impl rst3.eff) bound s2 →
       Frame m W tenv penv env (relSt env sc s.nextScope s2) bc.outputFuture ∧
       Footprint (insts env) (Dset W) s (relSt env sc s.nextScope s2) ∧
       PreservesRootTypes m W.G observation.roots s.store (relSt env sc s.nextScope s2).store ∧
       PreservesValues m W.G observation.values s.store (relSt env sc s.nextScope s2).store ∧
-      ObservedSafe m W (bc.mayShrink W.P observation) observation (relSt env sc s.nextScope s2).store ∧
+      ObservedSafe m W (bc.mayShrink W.ownerP observation) observation (relSt env sc s.nextScope s2).store ∧
       RetainsAliases m W env s.store (relSt env sc s.nextScope s2).store bc.retained ∧
       PilotStoreLe m s (relSt env sc s.nextScope s2) ∧
       (m.profile = .shrink →
-        ClassifiedParameters m W.P W.D observation (relSt env sc s.nextScope s2).store) := by
-    intro s2 tf hFf hSf hXf hSafe hRet hPilot
+        ClassifiedParameters m W.P W.D observation (relSt env sc s.nextScope s2).store) ∧
+      PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+        bc.forbiddenOwners s (relSt env sc s.nextScope s2) ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst3.eff)
+        s (relSt env sc s.nextScope s2) := by
+    intro s2 tf hFf hSf hXf hSafe hRet hPilot hForbidden hMutation
     have hAllFoot := hPreFoot.trans hXf
     have hdom : ∀ r, s2.store.roots[r]? ≠ none →
         s.store.roots[r]? ≠ none ∨ ScopeRoots env.vars env.act sc s.nextScope r := by
@@ -539,7 +591,7 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
         ClassifiedParameters m W.P W.D observation (relSt env sc s.nextScope s2).store := by
       intro hshrink
       exact hF.classifiedParameters_advance (hClass hshrink) (hAllFoot.releaseBlock hF)
-    refine ⟨hPop, hAllFoot.releaseBlock hF, ?_, ?_, hSafeOut, ?_, ?_, hClassOut⟩
+    refine ⟨hPop, hAllFoot.releaseBlock hF, ?_, ?_, hSafeOut, ?_, ?_, hClassOut, ?_, ?_⟩
     · intro r T hr v hv ht
       exact hSafeOut.typed.roots r T hr
     · intro v T hv ht
@@ -565,6 +617,26 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
     · apply PilotStoreLe.releaseScope hF (Nat.le_refl _)
       intro hpilot
       exact hleb.trans (hPilot hpilot)
+    · intro owner howner r hroot
+      obtain ⟨el, elements, hty, hgam, hv⟩ := hroot
+      have hBound := hkeepb r (.resizable el elements) hv
+      have hAfter := hForbidden owner howner r
+        ⟨el, elements, hty, hGamPush _ _ hgam, hBound⟩
+      have houtside : ¬ ScopeRoots env.vars env.act sc s.nextScope r := by
+        rintro ⟨x, lv, _, _, he⟩
+        rw [he, hfreshAll x] at hv
+        cases hv
+      exact ((releaseScope_roots env.vars env.act sc s.nextScope s2.store).1 r houtside).trans
+        (hAfter.trans (by rw [hBound, hv]))
+    · intro r hout
+      have hinner : ¬ MutationRoots inner W.P W.base
+          (effectMutationRoots m penv.impl rst3.eff) r := by
+        intro hc
+        rcases hc with hg | hfresh
+        · exact hout (Or.inl (hGamPopOutside _ _ hout hg))
+        · exact hout (Or.inr hfresh)
+      exact ((releaseScope_roots env.vars env.act sc s.nextScope s2.store).1 r
+        (hNotScope _ _ hout)).trans ((hMutation r hinner).trans (hBoundExact _ _ hout))
   refine Sat.bind (ih.stmts path sc stmts value bc 0 stmts observation W tenv1 tenv2
     { penv with scopes := sc :: penv.scopes } inner bound tn1 tn2 rst1 rst2 lo
     (Nat.zero_le _) rfl (by cases bc <;> simpa [blockSuffixActive, DemandNode.visibleForChild,
@@ -573,7 +645,14 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
       hsame.mod, hsame.vars] using hAccess) hProtected hSafeB hClassBound hp hStart
     (by rw [hsame.scopes]; rfl) hTop hlo hts hrs hE2) ?_
   rintro fl s1 ⟨⟨tenv'', hS'', hF'', hnorm⟩, hXS, hRootsS, hValuesS, hSafeS,
-    hRetS, hPilotS, hT1, hfl, hClassS⟩
+    hRetS, hPilotS, hT1, hfl, hClassS, hForbiddenS, hMutationS⟩
+  have hMutationS' := hMutationS.weaken (effectMutationRoots.mono m penv.impl
+    (by cases value with
+        | none => rw [← hrv.2]; exact EffLe.refl _
+        | some e => exact (rpExpr_mono hrv).2)
+    (by cases value with
+        | none => rw [← hrv.2]; exact fun _ h => h
+        | some e => exact rpExpr_rebinds_mono hrv))
   have hOuter : Frame m W tenv'' { penv with scopes := sc :: penv.scopes } inner s1 bc.outputFuture :=
     hF''.narrowFuture (blockSuffixFuture_outer bc stmts.length)
   cases fl with
@@ -586,10 +665,11 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
       obtain ⟨rfl, rfl⟩ := hrv
       subst htv
       simp only [m_pure_bind, sat_release_bind, sat_pure]
-      obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ :=
-        exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS
+      obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass, gForbidden, gMutation⟩ :=
+        exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS hForbiddenS hMutationS'
       exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
-        ⟨rfl, fun r hr => hr.elim, hdv⟩, gClass⟩
+        ⟨rfl, fun r hr => hr.elim, hdv, by simp [OwnerRooted, OwnerRefTy]⟩,
+        gClass, gForbidden, gMutation⟩
     | some e =>
       simp only [m_bind_assoc, m_pure_bind]
       have hchild : (DemandNode.block (.mk sc stmts (some e))).child? stmts.length =
@@ -605,10 +685,10 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
           hchild hphase _ _).2
         cases bc <;> simpa [EvaluationContext.AccessMatches, NodeContext.AccessMatches,
           hS''.mod, hsame.mod, hS''.vars, hsame.vars] using hAccess
-      have hMay : ec.mayShrink W.P observation = bc.mayShrink W.P observation := by
+      have hMay : ec.mayShrink W.ownerP observation = bc.mayShrink W.ownerP observation := by
         funext r
         exact propext (bc.child_mayShrink_iff rfl stmts.length (.expression e) .expression
-          hchild hphase W.P observation r)
+          hchild hphase W.ownerP observation r)
       have hInput : Frame m W tenv2 { penv with scopes := sc :: penv.scopes } inner s1 ec.inputFuture := by
         apply hF''.changeFuture
         intro x hx hf
@@ -624,7 +704,7 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
         { penv with scopes := sc :: penv.scopes } inner s1 tn2 tn3 ty rst2 rst3 rho
         hAct hAcc (by rw [hMay]; exact hProtected) (by rw [hMay]; exact hSafeS)
         hClassS hp hInput htv hrv hE) ?_
-      rintro v' s2 ⟨hF2, hX2, hRoots2, hValues2, hSafe2, hRet2, hPilot2, hv2, hg2, hClass2⟩
+      rintro v' s2 ⟨hF2, hX2, hRoots2, hValues2, hSafe2, hRet2, hPilot2, hv2, hg2, hClass2, hOwner2, hForbidden2, hMutation2⟩
       rw [hMay] at hSafe2
       have hFrameOut : Frame m W tenv2 { penv with scopes := sc :: penv.scopes }
           inner s2 bc.outputFuture := by
@@ -642,9 +722,12 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
         hRet2.subset (fun alias hmem => bc.child_retained_subset rfl stmts.length
           (.expression e) .expression hchild hphase hmem)
       simp only [sat_release_bind, sat_pure]
-      obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ := exit s2 _ hFrameOut hS''
+      obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass, gForbidden, gMutation⟩ := exit s2 _ hFrameOut hS''
         (hXS.trans hX2.toS) hSafe2 (hRetS.trans hRet2')
         (fun h => (hPilotS h).trans (hPilot2 h))
+        (hForbiddenS.trans (hForbidden2.subset
+          (bc.child_forbidden_subset rfl stmts.length (.expression e) .expression hchild hphase)))
+        (hMutationS'.trans hMutation2)
       have hT2 := hT1.ext hX2.dom (rpExpr_mono hrv).1
       have hsurv : ∀ r, Targets v' r →
           ¬ ScopeRoots env.vars env.act sc s.nextScope r ∧ Gam env W.P rho r := by
@@ -674,29 +757,44 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
           refine ⟨?_, ⟨.param j, hq, hrq⟩⟩
           rintro ⟨x', lv', _, _, rfl⟩
           exact absurd (Nat.lt_of_lt_of_le (hF.pAge j _ _ _ hrq) hF.base_le) (Nat.lt_irrefl _)
-      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
+      refine ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
         ⟨hv2.releaseScope (fun r hr => (hsurv r hr).1),
-          fun r hr => (hsurv r hr).2, hdv⟩, gClass⟩
+          fun r hr => (hsurv r hr).2, hdv, ?_⟩, gClass, gForbidden, gMutation⟩
+      intro hty r hr
+      obtain ⟨q, hq, hg⟩ := hOwner2 hty r hr
+      refine ⟨q, hq, ?_⟩
+      cases q with
+      | «local» x =>
+        obtain ⟨lv, si, hv, hlk, rfl⟩ := hg
+        change ((sc, s.nextScope) :: env.scopes).lookup lv.scope = some si at hlk
+        rw [lookup_cons] at hlk
+        by_cases he : lv.scope = sc
+        · simp only [he, if_true, Option.some.injEq] at hlk
+          subst si
+          exact False.elim ((hsurv _ hr).1 ⟨x, lv, hv, he, rfl⟩)
+        · exact ⟨lv, si, hv, by simpa [he] using hlk, rfl⟩
+      | global _ => exact hg
+      | param _ => exact hg
   | brk =>
-    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ :=
-        exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS
+    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass, gForbidden, gMutation⟩ :=
+        exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS hForbiddenS hMutationS'
     cases value <;> simp only [m_pure_bind, sat_release_bind, sat_pure] <;>
       exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
-        ⟨by rw [← hsame.loops]; exact hfl.1, hfl.2⟩, gClass⟩
+        ⟨by rw [← hsame.loops]; exact hfl.1, hfl.2⟩, gClass, gForbidden, gMutation⟩
   | cont =>
-    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ :=
-        exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS
+    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass, gForbidden, gMutation⟩ :=
+        exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS hForbiddenS hMutationS'
     cases value <;> simp only [m_pure_bind, sat_release_bind, sat_pure] <;>
       exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
-        by rw [← hsame.loops]; exact hfl, gClass⟩
+        by rw [← hsame.loops]; exact hfl, gClass, gForbidden, gMutation⟩
   | ret v =>
-    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ :=
-        exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS
+    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass, gForbidden, gMutation⟩ :=
+        exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS hForbiddenS hMutationS'
     have hret : RetOk m W tenv penv (relSt env sc s.nextScope s1) v :=
       RetOk.release hF (Nat.le_trans (Nat.le_succ _) hXS.next) hF.base_le
         (hfl.2.tsame hsame.impl rfl)
     cases value <;> simp only [m_pure_bind, sat_release_bind, sat_pure] <;>
       exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
-        ⟨by rw [← hsame.inExpr]; exact hfl.1, hret⟩, gClass⟩
+        ⟨by rw [← hsame.inExpr]; exact hfl.1, hret⟩, gClass, gForbidden, gMutation⟩
 
 end Goose.Core.Sound
