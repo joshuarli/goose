@@ -1,4 +1,5 @@
 import Goose.Core.Sound.Protection
+import Goose.Core.Sound.Retain
 
 /-!
 Calls preserve the caller's demanded bindings and the values already sampled
@@ -569,5 +570,139 @@ theorem CallTransition.restrict {m : Module} {G : Nat}
     (hv : ∀ v T, values' v T → values v T) :
     CallTransition m G roots' values' mutableSlices s s' :=
   ⟨h.footprint, h.rootsTyped.restrict hr, h.valuesTyped.restrict hv⟩
+
+section CallObservations
+variable {m : Module}
+
+private theorem AliasAt.limited_slice {W : World} {env : Env} {store : Store}
+    {alias : RetainedAlias} {mu : Mutability} {element : Ty} {capacity : Nat}
+    {location : Loc} {start len : Nat}
+    (aliasType : alias.ty = .ref mu (.limited element capacity))
+    (realized : AliasAt m W env store alias (.ref location))
+    (physical : SliceTy store location start len element) :
+    HasTy m W.G store (.slice location start len) (.slice .readOnly element) := by
+  have typed := realized.1
+  rw [aliasType] at typed
+  obtain ⟨target, equal, ordinary | header⟩ := typed
+  · have flat : element.flat = true := by
+      simpa [Ty.refTarget, Ty.storable] using ordinary.1
+    exact ⟨location, start, len, rfl, flat, physical⟩
+  · simp [Ty.isSlice] at header
+
+/-- Limited-owner aliases also retain physical runs sampled before their
+visible length changes. These values are tied to the alias's declared element
+type and its actual header realization. -/
+def callRetainedValues (W : World) (env : Env) (retained : List RetainedAlias)
+    (store : Store) (v : Val) (T : Ty) : Prop :=
+  (∃ alias, alias ∈ retained ∧ T = alias.ty ∧ AliasAt m W env store alias v) ∨
+  (∃ alias mu element capacity location start len,
+    alias ∈ retained ∧ alias.ty = .ref mu (.limited element capacity) ∧
+    AliasAt m W env store alias (.ref location) ∧ SliceTy store location start len element ∧
+    v = .slice location start len ∧ T = .slice .readOnly element)
+
+/-- A call observes continuation bindings and the values realizing retained
+aliases at entry. Slice-reference aliases observe the stored slice contents;
+their runtime reference to the header is not an interior slice value. -/
+def callObservation (inherited : Observation) (W : World) (tenv : TEnv) (env : Env)
+    (continuation : List VarId) (retained : List RetainedAlias) (store : Store) : Observation :=
+  inherited.union ⟨CallerRootTypes W tenv env store continuation,
+    callRetainedValues (m := m) W env retained store⟩
+
+theorem callObservation_safe {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
+    {s : St} {future continuation : List VarId} {retained : List RetainedAlias}
+    {inherited : Observation} {shrinking : RootInst → Prop}
+    (frame : Frame m W tenv penv env s future)
+    (futureSubset : ∀ x, x ∈ continuation → x ∈ future)
+    (outer : ObservedSafe m { W with base := s.nextScope } shrinking inherited s.store)
+    (rootsProtected : ∀ r T v, CallerRootTypes W tenv env s.store continuation r T →
+      s.store.roots[r]? = some v → T.interiorTarget?.isSome = true →
+      ∀ target, Targets v target → ¬ shrinking target)
+    (valuesProtected : ∀ v T, callRetainedValues (m := m) W env retained s.store v T →
+      T.interiorTarget?.isSome = true → ∀ target, Targets v target → ¬ shrinking target) :
+    ObservedSafe m { W with base := s.nextScope } shrinking
+      (callObservation (m := m) inherited W tenv env continuation retained s.store) s.store := by
+  have scopeMember {sc si : Nat} (lookup : env.scopes.lookup sc = some si) :
+      (sc, si) ∈ env.scopes := by
+    obtain ⟨before, after, equal, _⟩ := List.lookup_eq_some_iff.mp lookup
+    rw [equal]
+    exact List.mem_append_right _ List.mem_cons_self
+  apply outer.union
+  constructor
+  · constructor
+    · intro r T hr
+      rcases hr with (⟨x, lv, si, hx, hf, hvar, hscope, rfl, rfl⟩ |
+        ⟨⟨x, lv, si, hvar, hscope, rfl, hnonref, rfl⟩, hinitialized⟩) |
+        ⟨element, hd, rfl⟩
+      · obtain ⟨lv', si', v, hvar', hscope', _, hv, ht⟩ :=
+          frame.vis x hx (futureSubset x hf)
+        rw [hvar] at hvar'
+        cases hvar'
+        rw [hscope] at hscope'
+        cases hscope'
+        exact ⟨v, hv, ht⟩
+      · have hstorage : StorageRootTypes env (.local env.act si x) lv.ty :=
+          ⟨x, lv, si, hvar, hscope, rfl, hnonref, rfl⟩
+        cases hv : s.store.roots[RootInst.local env.act si x]? with
+        | none => exact False.elim (hinitialized hv)
+        | some v =>
+          simpa [hv] using
+            (LocTy.hasTyRoot (m := m) (G := W.G) (frame.storage _ _ hstorage v hv) hnonref)
+      · obtain ⟨v, hv, ht, _⟩ := frame.sa r element hd
+        exact ⟨v, hv, ht⟩
+    · intro v T hvalue
+      rcases hvalue with ⟨alias, _, rfl, realized⟩ |
+        ⟨alias, mu, element, capacity, location, start, len, _, aliasType, realized, physical,
+          rfl, rfl⟩
+      · exact realized.1
+      · exact AliasAt.limited_slice aliasType realized physical
+  · intro r T hr
+    rcases hr with (⟨x, lv, si, _, _, _, hscope, rfl, _⟩ |
+      ⟨⟨x, lv, si, _, hscope, rfl, _, _⟩, _⟩) | ⟨element, hd, _⟩
+    · exact (frame.below _ (scopeMember hscope)).2
+    · exact (frame.below _ (scopeMember hscope)).2
+    · obtain ⟨a, si, x, rfl, hbefore⟩ := frame.dOut r element hd
+      exact Nat.lt_of_lt_of_le hbefore frame.base_le
+  · intro v T hvalue target htarget
+    have roots : ∃ annotation, Gam env W.P annotation target := by
+      rcases hvalue with ⟨alias, _, _, realized⟩ |
+        ⟨alias, mu, element, capacity, location, start, len, _, _, realized, _, rfl, _⟩
+      · exact ⟨alias.roots, realized.2 target htarget⟩
+      · exact ⟨alias.roots, realized.2 target htarget⟩
+    obtain ⟨annotation, roots⟩ := roots
+    cases target with
+    | global _ => trivial
+    | «local» a si x =>
+      obtain ⟨q, _, hq⟩ := roots
+      cases q with
+      | «local» y =>
+        obtain ⟨lv, scope, _, hscope, equal⟩ := hq
+        cases equal
+        exact (frame.below _ (scopeMember hscope)).2
+      | global g => cases hq
+      | param i => exact Nat.lt_of_lt_of_le (frame.pAge i a si x hq) frame.base_le
+  · exact rootsProtected
+  · exact valuesProtected
+
+theorem callObservation_retainsAliases {W : World} {tenv : TEnv} {env : Env}
+    {continuation : List VarId} {retained : List RetainedAlias} {inherited : Observation}
+    {s s' : Store}
+    (values : PreservesValues m W.G
+      (callObservation (m := m) inherited W tenv env continuation retained s).values s s') :
+    RetainsAliases m W env s s' retained := by
+  intro alias hmem
+  constructor
+  · intro v hvalue
+    exact ⟨values v alias.ty (Or.inr (Or.inl ⟨alias, hmem, rfl, hvalue⟩)) hvalue.1, hvalue.2⟩
+  · intro mu element capacity location start len aliasType realized physical
+    have sourceTyped := AliasAt.limited_slice aliasType realized physical
+    have targetTyped := values (.slice location start len) (.slice .readOnly element)
+      (Or.inr (Or.inr ⟨alias, mu, element, capacity, location, start, len, hmem, aliasType,
+        realized, physical, rfl, rfl⟩)) sourceTyped
+    obtain ⟨target, first, count, equal, _, physical⟩ := targetTyped
+    obtain ⟨rfl, rfl, rfl⟩ := Val.slice.inj equal
+    exact physical
+
+
+end CallObservations
 
 end Goose.Core.Sound
