@@ -531,6 +531,27 @@ private theorem modifyAt_nonRef {v v' : Val} {path : List Nat}
            · contradiction
          · contradiction)
 
+/-- Truncation replaces its owner root with storage, including when the owner
+is reached through an element path. -/
+theorem truncate_ownerRoot_nonRef {s s' : Store} {o : Loc} {len : Nat} {v : Val}
+    (htruncate : s.truncate o len = .ok s')
+    (hvalue : s'.roots[o.root]? = some v) : ¬ IsRef v := by
+  obtain ⟨old, x, y, new, _, _, _, hmodify, hroots⟩ :=
+    modify_spec s s' o (Val.truncate len) htruncate
+  have hnew : ¬ IsRef new := modifyAt_nonRef hmodify (by
+    intro old value hresult
+    cases old <;> simp only [Val.truncate] at hresult
+    all_goals first
+      | contradiction
+      | (split at hresult
+         · simp only [Option.some.injEq] at hresult
+           cases hresult
+           simp [IsRef]
+         · contradiction))
+  rw [hroots] at hvalue
+  have sameValue : v = new := by simpa using hvalue.symm
+  simpa [sameValue] using hnew
+
 /-- Truncation preserves demanded holders when the demand analysis proves that
 each holder remains inside the new logical extent. -/
 theorem StoreInv.truncate {m : Module} {G : Nat} {s : St} {s' : Store}
@@ -559,21 +580,7 @@ theorem StoreInv.truncate {m : Module} {G : Nat} {s : St} {s' : Store}
   · exact hfresh
   · exact hglobals
   · intro g v hroot hv
-    obtain ⟨old, x, y, new, _, _, _, hmodify, hroots⟩ :=
-      modify_spec s.store s' o (Val.truncate len) htruncate
-    have hnew : ¬ IsRef new := modifyAt_nonRef hmodify (by
-      intro old value hvalue
-      cases old <;> simp only [Val.truncate] at hvalue
-      all_goals first
-        | contradiction
-        | (split at hvalue
-           · simp only [Option.some.injEq] at hvalue
-             cases hvalue
-             simp [IsRef]
-           · contradiction))
-    rw [hroots] at hv
-    have hv' : v = new := by simpa [hroot] using hv.symm
-    simpa [hv'] using hnew
+    exact truncate_ownerRoot_nonRef htruncate (by simpa [← hroot] using hv)
 
 theorem StoreInv.flatStep {m : Module} {G : Nat} {s : St} {st' : Store}
     {demanded : RootInst → Prop} (hi : StoreInv m G s demanded) (h : FlatStep s.store st') :
