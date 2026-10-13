@@ -173,8 +173,60 @@ structure ExtS (env : Env) (D : RootInst → Prop) (s s' : St) : Prop where
     (∀ a si x, r = RootInst.local a si x → si ∉ insts env) → ¬ D r → s.store.roots[r]? = some v
   dom : ∀ (r : RootInst), s'.store.roots[r]? ≠ none → s.store.roots[r]? ≠ none ∨ TopRoot env r
 
+/-- The scope and root footprint of an execution, without asserting that typed
+locations survive changes to the store. -/
+structure Footprint (insts : List Nat) (D : RootInst → Prop) (s s' : St) : Prop where
+  next : s.nextScope ≤ s'.nextScope
+  keep : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → IsRef v →
+    (∀ a si x, r = RootInst.local a si x → si ∉ insts) → ¬ D r → s'.store.roots[r]? = some v
+  back : ∀ (r : RootInst) (v : Val), s'.store.roots[r]? = some v → IsRef v →
+    (∀ a si x, r = RootInst.local a si x → si ∉ insts) → ¬ D r → s.store.roots[r]? = some v
+  dom : ∀ (r : RootInst), s'.store.roots[r]? ≠ none → s.store.roots[r]? ≠ none
+
+/-- The statement footprint also permits roots for variables declared in the
+innermost open block. -/
+structure FootprintS (env : Env) (D : RootInst → Prop) (s s' : St) : Prop where
+  next : s.nextScope ≤ s'.nextScope
+  keep : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → IsRef v →
+    (∀ a si x, r = RootInst.local a si x → si ∉ insts env) → ¬ D r → s'.store.roots[r]? = some v
+  back : ∀ (r : RootInst) (v : Val), s'.store.roots[r]? = some v → IsRef v →
+    (∀ a si x, r = RootInst.local a si x → si ∉ insts env) → ¬ D r → s.store.roots[r]? = some v
+  dom : ∀ (r : RootInst), s'.store.roots[r]? ≠ none → s.store.roots[r]? ≠ none ∨ TopRoot env r
+
+theorem Footprint.refl (insts : List Nat) (D : RootInst → Prop) (s : St) : Footprint insts D s s :=
+  ⟨Nat.le_refl _, fun _ _ h _ _ _ => h, fun _ _ h _ _ _ => h, fun _ h => h⟩
+
+theorem Footprint.trans {insts : List Nat} {D : RootInst → Prop} {a b c : St}
+    (h1 : Footprint insts D a b) (h2 : Footprint insts D b c) : Footprint insts D a c :=
+  ⟨Nat.le_trans h1.next h2.next,
+   fun r v hv hr hn hd => h2.keep r v (h1.keep r v hv hr hn hd) hr hn hd,
+   fun r v hv hr hn hd => h1.back r v (h2.back r v hv hr hn hd) hr hn hd,
+   fun r h => h1.dom r (h2.dom r h)⟩
+
+theorem Footprint.toS {env : Env} {D : RootInst → Prop} {s s' : St}
+    (h : Footprint (insts env) D s s') : FootprintS env D s s' :=
+  ⟨h.next, h.keep, h.back, fun r hr => Or.inl (h.dom r hr)⟩
+
+theorem FootprintS.refl (env : Env) (D : RootInst → Prop) (s : St) : FootprintS env D s s :=
+  ⟨Nat.le_refl _, fun _ _ h _ _ _ => h, fun _ _ h _ _ _ => h, fun _ h => Or.inl h⟩
+
+theorem FootprintS.trans {env : Env} {D : RootInst → Prop} {a b c : St}
+    (h1 : FootprintS env D a b) (h2 : FootprintS env D b c) : FootprintS env D a c :=
+  ⟨Nat.le_trans h1.next h2.next,
+   fun r v hv hr hn hd => h2.keep r v (h1.keep r v hv hr hn hd) hr hn hd,
+   fun r v hv hr hn hd => h1.back r v (h2.back r v hv hr hn hd) hr hn hd,
+   fun r h => (h2.dom r h).elim (fun h' => h1.dom r h') Or.inr⟩
+
 theorem Ext.refl (insts : List Nat) (D : RootInst → Prop) (s : St) : Ext insts D s s :=
   ⟨StoreLe.refl _, Nat.le_refl _, fun _ _ h _ _ _ => h, fun _ _ h _ _ _ => h, fun _ h => h⟩
+
+theorem Ext.toFootprint {insts : List Nat} {D : RootInst → Prop} {s s' : St}
+    (h : Ext insts D s s') : Footprint insts D s s' :=
+  ⟨h.next, h.keep, h.back, h.dom⟩
+
+theorem ExtS.toFootprintS {env : Env} {D : RootInst → Prop} {s s' : St}
+    (h : ExtS env D s s') : FootprintS env D s s' :=
+  ⟨h.next, h.keep, h.back, h.dom⟩
 
 theorem Ext.trans {insts : List Nat} {D : RootInst → Prop} {a b c : St} (h1 : Ext insts D a b)
     (h2 : Ext insts D b c) : Ext insts D a c :=
@@ -203,9 +255,34 @@ theorem Ext.weaken {insts insts' : List Nat} {D D' : RootInst → Prop} {s s' : 
    fun r v hv hr hn hd => h.keep r v hv hr (hs r hd hn).2 (hs r hd hn).1,
    fun r v hv hr hn hd => h.back r v hv hr (hs r hd hn).2 (hs r hd hn).1, h.dom⟩
 
+/-- A computation that left more roots alone also left fewer alone. -/
+theorem Footprint.weaken {insts insts' : List Nat} {D D' : RootInst → Prop} {s s' : St}
+    (h : Footprint insts D s s')
+    (hs : ∀ (r : RootInst), ¬ D' r → (∀ a si x, r = RootInst.local a si x → si ∉ insts') →
+      ¬ D r ∧ ∀ a si x, r = RootInst.local a si x → si ∉ insts) : Footprint insts' D' s s' :=
+  ⟨h.next,
+   fun r v hv hr hn hd => h.keep r v hv hr (hs r hd hn).2 (hs r hd hn).1,
+   fun r v hv hr hn hd => h.back r v hv hr (hs r hd hn).2 (hs r hd hn).1,
+   h.dom⟩
+
 theorem Ext.of_flatStep {insts : List Nat} {D : RootInst → Prop} {s : St} {st' : Store}
     (h : FlatStep s.store st') : Ext insts D s { s with store := st' } := by
   refine ⟨h.le, Nat.le_refl _, fun r v hv hr _ _ => h.keep r v hv hr, ?_, ?_⟩
+  · intro r v hv hr _ _
+    rcases h.back r v hv with h0 | ⟨hn, _⟩
+    · exact h0
+    · exact absurd hr hn
+  · intro r hr
+    cases hv : st'.roots[r]? with
+    | none => exact absurd hv hr
+    | some v' =>
+      rcases h.back r v' hv with h0 | ⟨_, h1⟩
+      · simp [h0]
+      · exact h1
+
+theorem Footprint.of_flatStep {insts : List Nat} {D : RootInst → Prop} {s : St} {st' : Store}
+    (h : FlatStep s.store st') : Footprint insts D s { s with store := st' } := by
+  refine ⟨Nat.le_refl _, fun r v hv hr _ _ => h.keep r v hv hr, ?_, ?_⟩
   · intro r v hv hr _ _
     rcases h.back r v hv with h0 | ⟨hn, _⟩
     · exact h0
