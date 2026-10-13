@@ -101,6 +101,19 @@ theorem DemandOwner.denotesExternalShrink_mayShrinkEff
     unfold rootsTargets
     exact List.mem_filterMap.mpr ⟨.param parameter, referenceIn, rfl⟩
 
+theorem MutationRoots.not_of_no_overlap {m : Module} {W : World}
+    {tenv : TEnv} {penv : PEnv} {env : Env} {s : St} {future : List VarId}
+    {forbidden roots : List RootRef} {r : RootInst} {base : Nat}
+    (frame : Frame m W tenv penv env s future)
+    (disjoint : DemandRootsDisjoint forbidden roots)
+    (owner : Gam env W.P forbidden r)
+    (oldLocal : ∀ act si x, r = .local act si x → si < base) :
+    ¬ MutationRoots env W.P base roots r := by
+  intro changed
+  rcases changed with ⟨q, hq, effectRoot⟩ | ⟨act, si, x, heq, hnew⟩
+  · exact (Gam.root_ne_of_no_overlap frame disjoint owner ⟨q, hq, effectRoot⟩) rfl
+  · exact (Nat.not_le_of_gt (oldLocal act si x heq)) hnew
+
 /-- An approved resizable shrink excludes every retained interior alias root. -/
 theorem shrinkApproval_retainedInteriorDisjoint
     {m : Module} {owner : Nat} {plan : Array DemandPoint}
