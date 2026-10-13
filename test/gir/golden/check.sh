@@ -35,6 +35,13 @@ while IFS='	' read -r name core release debug; do
     [ "$("$tool" agree "$root/$core" "$gir" --numeric debug)" = "$debug" ] || fail "$name: agree debug"
 done < "$here/INDEX"
 
+for f in "$here"/*.gir-h.json; do
+    grep -q "^$(basename "$f" .gir-h.json)	" "$here/INDEX" || {
+        echo "FAIL $(basename "$f") is not in INDEX" >&2
+        status=1
+    }
+done
+
 tags='e_lit e_bool e_read e_ref e_slice e_len e_un e_bin e_cmp e_and e_or e_not e_conv e_call e_push e_if e_block e_arr e_fill p_local p_global p_deref p_elem v_of v_val b_expr b_end b_none a_val a_ref s_let s_assign s_assign_op s_rebind s_expr s_append s_if s_while s_for_range s_for_each s_ret s_break s_continue s_print s_assert s_abort s_exit pa_text pa_expr'
 cores=$(cut -f2 "$here/INDEX" | sed "s|^|$root/|")
 for tag in $tags; do
