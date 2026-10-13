@@ -1,4 +1,4 @@
-import Goose.Core.Sound.StepUse
+import Goose.Core.Sound.StepAux
 
 /-!
 One step of the induction on fuel for statement lists and blocks: binding the
@@ -8,7 +8,7 @@ variables a construct declares, running the body, and releasing the scope.
 namespace Goose.Core.Sound
 open Goose.Core Goose.Proofs.Memory
 
-variable {m : Module} {prof : NumProfile} {n : Nat}
+variable {m : Module} {prof : NumProfile} {plans : Array (Array DemandPoint)} {n : Nat}
 
 theorem m_bind_assoc {α β γ : Type} (x : M α) (f : α → M β) (g : β → M γ) :
     ((x >>= f) >>= g) = x >>= fun a => f a >>= g := by
@@ -76,15 +76,17 @@ variable {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
 
 /-- Binding the variables a construct declares in its block, one by one. -/
 theorem frame_pre {sc : Nat} {si : ScopeInst} {rest0 : List (Nat × ScopeInst)}
+    {future : List VarId}
     (htop : env.scopes = (sc, si) :: rest0) :
     ∀ (pre : List (VarId × Val)) (tcur : TEnv) (s : St),
-    Frame m W tcur penv env s → (pre.map Prod.fst).Nodup →
+    Frame m W tcur penv env s future → (pre.map Prod.fst).Nodup →
     (∀ x v, (x, v) ∈ pre → s.store.roots[RootInst.local env.act si x]? = none ∧
       ∃ lv, env.vars[x]? = some lv ∧ lv.scope = sc ∧ lv.ty.paramOk = true ∧
         HasTy m W.G s.store v lv.ty ∧
         ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
           Older r (.local env.act si x)) →
-    ∃ tfin, Frame m W tfin penv env { s with store := preStore env.act si pre s.store } ∧
+    ∃ tfin, Frame m W tfin penv env { s with store := preStore env.act si pre s.store }
+      (pre.map Prod.fst ++ future) ∧
       TSame tcur tfin ∧ (∀ y, y ∈ tfin.visible ↔ y ∈ pre.map Prod.fst ∨ y ∈ tcur.visible) ∧
       StoreLe s.store (preStore env.act si pre s.store) ∧
       (∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v →
@@ -110,7 +112,13 @@ theorem frame_pre {sc : Nat} {si : ScopeInst} {rest0 : List (Nat × ScopeInst)}
         intro e; cases e
         exact hnd2.1 (List.mem_map.2 ⟨(x, v'), hm, rfl⟩)
       simp [hne, hf'])
-    refine ⟨tfin, k1, (TSame.cons tcur x).trans k2, ?_, hle1.trans k4, ?_, ?_⟩
+    have k1' : Frame m W tfin penv env
+        { s with store := preStore env.act si ((x, v) :: rest) s.store }
+        (((x, v) :: rest).map Prod.fst ++ future) := by
+      apply k1.future_congr
+      intro y
+      simp [or_assoc, or_comm]
+    refine ⟨tfin, k1', (TSame.cons tcur x).trans k2, ?_, hle1.trans k4, ?_, ?_⟩
     · intro y
       rw [k3]
       simp only [List.map_cons, List.mem_cons]
@@ -147,7 +155,8 @@ theorem RetOk.tsame {a b : TEnv} {penv' : PEnv} {s' : St} {v : Val} (h : RetOk m
 
 /-- What a `return` hands over survives the release of any scope of the
 activation: it points into the caller's roots and the globals only. -/
-theorem RetOk.release {s2 : St} {sc : Nat} {v : Val} (hF : Frame m W tenv penv env s)
+theorem RetOk.release {s2 : St} {sc : Nat} {v : Val} {future : List VarId}
+    (hF : Frame m W tenv penv env s future)
     (hn : s.nextScope ≤ s2.nextScope) {si : ScopeInst} (hsi : W.base ≤ si)
     (h : RetOk m W tenv penv s2 v) : RetOk m W tenv penv (relSt env sc si s2) v := by
   obtain ⟨impl, h1, h2, h3⟩ := h
