@@ -1,6 +1,6 @@
 // error: cannot assign to let x, which may be assigned already
-// A while loop's next iteration finds x assigned by the one before (§4.4,
-// §6.5).
+// A while loop's next iteration finds x assigned by the one before.
+//
 fn run(n: i64) {
     let x: i64;
     var i = 0;

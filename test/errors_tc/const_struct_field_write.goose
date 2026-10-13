@@ -1,6 +1,6 @@
 // error: cannot assign through this path (const, or a read-only instantiation
 // A `const` field of a struct type takes a plain struct value at
-// construction, and its fields stay read-only (§3.2, §9.5).
+// construction, and its fields stay read-only.
 struct S { n: i64 }
 struct Box { const inner: S }
 fn main() {

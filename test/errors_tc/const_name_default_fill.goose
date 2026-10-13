@@ -1,5 +1,5 @@
 // error: the default of parameter a of f names parameter K
-// A default names what a top-level declaration would (§7.1): the parameter
+// A default names what a top-level declaration would: the parameter
 // K where a fill count names K, so the global K is not taken instead.
 let K = 3;
 

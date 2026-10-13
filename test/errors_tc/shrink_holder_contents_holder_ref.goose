@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while p is still used, and p may refer into buf
 // p refers to the caller's ss, which views buf: the call finds it by ss's
-// record (§5.1).
+// record.
 struct S { r: const u8[:] }
 struct P { q: S& }
 fn f(out: u8[>..]&, p: P) {

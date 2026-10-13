@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while h is still used, and h may refer into buf
-// h holds emit's words, which view names' elements, and one views buf
-// (§5.1).
+// h holds emit's words, which view names' elements, and one views buf.
+//
 struct P { words: (const u8[:])[:] }
 fn emit(out: u8[>..]&, words: (const u8[:])[:]) {
     let h = P { words: words };

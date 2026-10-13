@@ -1,7 +1,7 @@
 // error: storing a reference rooted at w, which does not outlive the destination
 // put keeps what its by-value parameter's field points at in an array of the
 // caller's: the holder class that bounds it stands for inner's y here, which
-// dies before main's a does (§9.2, §9.5).
+// dies before main's a does.
 struct H { s: const u8[:] }
 struct W { s: const u8[:] }
 fn put(h: H[>..]&, w: W) { h.push(H { s: w.s }); }

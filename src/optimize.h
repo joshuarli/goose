@@ -5,7 +5,7 @@
 // runtime (division by zero, a failed `as` range check, an out-of-bounds
 // index) is never folded into a value or folded away. Debug-build signed
 // overflow is the one detection not pinned to source order: it happens per
-// operation as it executes (§6.2), so regrouping an associative chain moves
+// operation as it executes, so regrouping an associative chain moves
 // which intermediate value can trip it.
 //
 // Shape of the pass: reachable specializations are visited once each, in
@@ -217,7 +217,7 @@ struct Optimizer {
     void Reach(FnSpec *sp) {
         if (!sp || sp->live) return;
         sp->live = true;
-        if (!sp->body) return;   // An extern fn: no body, never inlined (§7.10).
+        if (!sp->body) return;   // An extern fn: no body, never inlined.
         ReachTree(sp->body);
         postorder.push_back(sp);
     }
@@ -239,7 +239,7 @@ struct Optimizer {
                 if (c->builtin < 0) c->spec->uses++;  // thread_spawn is not a call site.
                 Reach(c->spec);
             }
-            for (auto &fs : c->fmtspecs) {   // User format overloads print reaches (§3.7).
+            for (auto &fs : c->fmtspecs) {   // User format overloads print reaches.
                 fs.second->uses++;
                 Reach(fs.second);
             }
@@ -264,7 +264,7 @@ struct Optimizer {
                 if (auto id = Is<Ident>(u->child)) if (id->vdef) facts[id->vdef].addrof++;
         } else if (auto c = Is<Call>(n)) {
             // A format overload taking by reference a variable print, str or
-            // format renders is handed the variable (§3.7), as `&x` would be.
+            // format renders is handed the variable, as `&x` would be.
             auto an = c->ArgNodes();
             for (size_t k = 0; k < an.size(); k++)
                 if (auto id = Is<Ident>(an[k]); id && id->vdef && HookedByRef(c, k))
@@ -334,13 +334,13 @@ struct Optimizer {
 
     // Whether the field or element n is viewed: it is the operand OptViewed
     // is at, or an array a slice destination takes whole, which has the
-    // slice's type (§3.10).
+    // slice's type.
     bool Viewed(Node *n) {
         return viewed == n || (n->exprtype && n->exprtype->kind == TY_SLICE);
     }
 
-    // Opt for an operand viewed where it stands rather than copied out
-    // (§9.2): sliced, iterated by a `for`, referenced, a member builtin's
+    // Opt for an operand viewed where it stands rather than copied out:
+    // sliced, iterated by a `for`, referenced, a member builtin's
     // receiver, indexed by an index that runs code, or a field or element
     // of such. The value of a call, bare block, `if` or `match` is a
     // temporary there, a copy nothing else can write or shrink while the
@@ -364,7 +364,7 @@ struct Optimizer {
     }
 
     // Opt for an argument print, str or format renders while user format
-    // overloads run (§3.7): it is read where it stands around them, and one
+    // overloads run: it is read where it stands around them, and one
     // taking it, or a part of it, by reference is handed where it lies. They
     // may write that storage, and the checker takes the value of a call,
     // bare block, `if` or `match` for a temporary there too (CheckPrintable),
@@ -478,7 +478,7 @@ struct Optimizer {
         info.nodecount = 0;
         info.nest = 0;
         info.nestedcalls = false;
-        // A simd body inlined into a caller would lose its versions (§7.12).
+        // A simd body inlined into a caller would lose its versions.
         auto noin = sp->sf->isrec || sp->incycle || sp->sf->isthread || sp->sf->isexport ||
                     sp->sf->issimd || sp->relnamedresult;
         auto multiret = sp->rets.size() > 1;
@@ -750,7 +750,7 @@ inline Node *Optimizer::TryInline(Call *c) {
         return nullptr;
     }
     // Never into a recursive cycle: the inlined body's locals would become
-    // the cycle function's own, upsetting the §7.8 stack-assignment rule.
+    // the cycle function's own, upsetting the recursive-cycle stack-assignment rule.
     if (curspec && (curspec->incycle || curspec->sf->isrec)) return nullptr;
     if (!small && K->uses == 1 && colddepth > 0) {
         K->outofline = true;
@@ -1069,7 +1069,7 @@ inline Node *Ident::Opt(Optimizer &o) {
 
 inline Node *Unary::Opt(Optimizer &o) {
     child = op == T_BITAND ? o.OptViewed(child) : o.Opt(child);
-    // - and ~ compute at their operand's type (§6.1); the node's own exprtype
+    // - and ~ compute at their operand's type; the node's own exprtype
     // is the slot the result lands in, which can be wider.
     switch (op) {
         case T_MINUS:
@@ -1167,7 +1167,7 @@ inline Node *Binary::Opt(Optimizer &o) {
     }
     auto lf = Is<FltLit>(left), rf = Is<FltLit>(right);
     if (lf && rf) {
-        // An all-f32 expression computes in 32 bits (§3.1): fold at that
+        // An all-f32 expression computes in 32 bits: fold at that
         // precision when both operands are f32-typed.
         auto f32 = IsF32(left->exprtype) && IsF32(right->exprtype);
         auto a = lf->val, b = rf->val;

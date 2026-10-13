@@ -1,6 +1,6 @@
-// A store through a reference to a slice assigns the slot it names (§3.8):
+// A store through a reference to a slice assigns the slot it names:
 // a slice variable there is bound as its own assignment would bind it, a
-// `let` included (§4.4), and a call through whose parameter the store is
+// `let` included, and a call through whose parameter the store is
 // made binds the variable the argument names. Only a slice variable a
 // reference has been made to may be the slot, and only a slot may be: a
 // slice's elements are not one, nor what a reference to one leads to.

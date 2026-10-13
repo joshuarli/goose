@@ -1,7 +1,7 @@
 // error: cannot clear related while v
 // error: is still used: it may refer into related
 // Only one branch of v is read out of a field; the other is a view of
-// related (§5.2).
+// related.
 struct Entry { text: u8[:] }
 fn main() {
     var chars: u8[>..] = [];

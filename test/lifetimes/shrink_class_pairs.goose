@@ -1,5 +1,5 @@
 // Two root classes of a function's parameters are two arrays wherever every
-// call passes two (§5.1, §5.2): a shrink of one while a reference rooted at
+// call passes two: a shrink of one while a reference rooted at
 // the other is still used stays legal when the calls say so, through a
 // function passing its own classes on, around a recursive cycle, and beside
 // temporaries or variables deeper than an inexact root.

@@ -1,5 +1,5 @@
-// Recursion deeper than the thread's native stack holds is a safe abort
-// (§9.3): the runtime reports it rather than the process dying of the fault.
+// Recursion deeper than the thread's native stack holds is a safe abort:
+// the runtime reports it rather than the process dying of the fault.
 // Expected to abort.
 //
 // No loop can take the recursion's place: the call's result indexes an array

@@ -1,6 +1,6 @@
 // error: cannot call run: it shrinks b while b is still used, and b may refer into b (§5.1)
 // What a reference the struct holds leads to may hold a view of the tail:
-// the callee reads it after the shrink (§5.1).
+// the callee reads it after the shrink.
 struct H { s: const u8[:] }
 struct B { h: H&, r: u8[>..] }
 fn run(b: B&) {

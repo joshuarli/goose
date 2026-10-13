@@ -1,6 +1,6 @@
 // error: cannot call set_g: it shrinks G while s is still used, and s may refer into G
-// The array itself passed to a slice parameter is a view of all of it
-// (§4.1, §4.4, §5.1).
+// The array itself passed to a slice parameter is a view of all of it.
+//
 var G: u8[>..] = [];
 fn collect(s: u8[:]) -> u8[>..] {
     var out: u8[>..] = [];

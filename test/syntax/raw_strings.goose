@@ -1,4 +1,4 @@
-// """ strings (§2): raw text, without escapes. Spanning lines, the text is
+// """ strings: raw text, without escapes. Spanning lines, the text is
 // the lines between the delimiters' own, each without the indentation of the
 // closing """; a line of only whitespace may have less of it.
 import std;

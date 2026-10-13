@@ -1,4 +1,4 @@
-// An array literal given to append is the run it adds (§4.2): its elements
+// An array literal given to append is the run it adds: its elements
 // are the receiver's, so they adapt to its element type as a declared
 // array's do, `[]` included, and the literal is a T[k] of them, or a T[]
 // where they are not fixed-size. Such elements, and ones holding relative

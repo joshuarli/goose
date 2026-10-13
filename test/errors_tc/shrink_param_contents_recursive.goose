@@ -1,6 +1,6 @@
 // error: cannot call walk: it shrinks a while w is still used, and w may refer into a
 // Each level hands w on as v, and the deepest clears a: the level handed
-// tt as v reads its element, a view of a, after it (§5.1).
+// tt as v reads its element, a view of a, after it.
 recursive fn walk(a: u8[>..]&, v: (const u8[:])[:], w: (const u8[:])[:], n: i64) {
     if n == 0 {
         a.clear();

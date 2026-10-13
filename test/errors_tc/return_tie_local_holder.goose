@@ -1,7 +1,7 @@
 // error: returning a reference rooted in loc, which dies with this function
 // Holder values from the two branches: the one holding a view of loc, which
 // ties with the temporary's parameter class at f's outermost depth and dies
-// first, bounds the merged value (§9.2).
+// first, bounds the merged value.
 struct H { s: const u8[:] }
 fn make() -> u8[] { return "tmp"; }
 fn f(s: const u8[:]) -> H {

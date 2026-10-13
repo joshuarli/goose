@@ -1,8 +1,8 @@
 // error: cannot call restore, which shrinks blueprints while c is still used
 // restore's body is checked inside execute's check, at its first call, and
 // execute's variables are still judged at that call, from restore's summary:
-// execute's `c` views an element of blueprints and is used after the call
-// (§5.1). restore's own scan sees only its own variables, a loop binder also
+// execute's `c` views an element of blueprints and is used after the call.
+// restore's own scan sees only its own variables, a loop binder also
 // named `c` among them.
 struct Blueprint { name: u8[..48], count: i32 }
 var blueprints: Blueprint[>..] = [];

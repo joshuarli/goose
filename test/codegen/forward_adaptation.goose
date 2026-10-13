@@ -1,5 +1,5 @@
-// A multi-value call forwarded by a return (§7.1), to the function's own
-// caller or to a function further out (`return f() from g`, §7.9), whose
+// A multi-value call forwarded by a return, to the function's own
+// caller or to a function further out (`return f() from g`), whose
 // results the checker fits to the returning function's result types one by
 // one: integers to wider integers and to floats, f32 to f64, a variant to
 // its ADT in either mode (a fixed-size, a variable-size and a resizable

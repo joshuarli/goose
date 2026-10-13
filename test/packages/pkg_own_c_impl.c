@@ -1,5 +1,5 @@
 /* The C side of pkg_own_c.goose, compiled from its sidecar. A slice crosses
-   as a data pointer and a length (spec 7.10). */
+   as a data pointer and a length. */
 #include <stdint.h>
 
 typedef struct { const uint8_t *data; int64_t len; } own_c_bytes;

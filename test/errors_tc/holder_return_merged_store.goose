@@ -1,6 +1,6 @@
 // error: returning a reference rooted in b, which dies with this function
 // A store through a reference that may name either of two holders is on
-// both their records (§9.2).
+// both their records.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 fn make(c: bool) -> N {

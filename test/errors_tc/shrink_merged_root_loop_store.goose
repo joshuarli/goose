@@ -1,7 +1,7 @@
 // error: cannot clear b (which r may point at) while h is in scope: a reference into it is stored there
 // error: , which the next iteration reaches
 // The store into h comes after the clear through r, which may clear b, so the
-// next iteration's clear would invalidate it (§5.1).
+// next iteration's clear would invalidate it.
 struct H { s: const i64[:] }
 fn main() {
     var a: i64[>..] = [1, 2, 3];

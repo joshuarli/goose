@@ -1,5 +1,5 @@
 // error: storing a reference rooted at local, which does not outlive the destination
-// Rebinding a longer-lived reference to a shorter-lived target (§9.2).
+// Rebinding a longer-lived reference to a shorter-lived target.
 struct Holder { r: i64& }
 var gx = 1;
 var gh = Holder { r: gx };

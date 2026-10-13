@@ -1,5 +1,5 @@
 // error: match pattern K names a nested function, not a constant
-// So it does in a nested function declared after it (§8.1, §11.1).
+// So it does in a nested function declared after it.
 let K = 3;
 
 fn main() {

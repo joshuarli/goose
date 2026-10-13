@@ -1,5 +1,5 @@
 // error: array size N names a type parameter, not a constant
-// So does its signature, checked where it is declared (§7.5).
+// So does its signature, checked where it is declared.
 let N = 4;
 
 fn f<N>(x: N) -> i64 {

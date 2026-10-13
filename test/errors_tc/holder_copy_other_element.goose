@@ -1,6 +1,6 @@
 // error: returning a reference rooted in b, which dies with this function
 // A copy of one element of a local array holds what was stored into any of
-// its elements: here a reference to the function's own local (§9.5).
+// its elements: here a reference to the function's own local.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 fn make() -> N {

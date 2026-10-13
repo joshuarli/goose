@@ -4,7 +4,7 @@
 // them, and a read in a loop that has the variable declared outside it,
 // whose later stores the loop feeds back. A shrink in the callee judges them
 // by what the callee stored there, and leaves the rest to each call, which
-// judges it by its record of the argument's storage (§5.1). Here none of
+// judges it by its record of the argument's storage. Here none of
 // them views the array shrunk.
 struct H { s: const u8[:] }
 struct Q { h: H, n: i64 }

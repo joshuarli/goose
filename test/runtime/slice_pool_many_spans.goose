@@ -1,4 +1,4 @@
-// runtime-debug: a slice pool with thousands of free spans at once: first fit, merging and growth stay exact (§5.4).
+// runtime-debug: a slice pool with thousands of free spans at once: first fit, merging and growth stay exact.
 // Lists grown an element at a time in a scattered order leave a free span
 // behind most moves; freeing whole lists and parts of lists, and placing
 // new runs, then works through many free spans at once. Every list keeps its

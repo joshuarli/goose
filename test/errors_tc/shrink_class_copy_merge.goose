@@ -1,7 +1,7 @@
 // error: cannot clear ns while b is still used: a reference into it was stored there
 // b keeps r, which may be h, a reference into the elements ns names, as
 // well as the node the element links to: merged with the storage's own
-// element, r is no view the storage held (§5.1).
+// element, r is no view the storage held.
 struct N { v: i64, next: N&? }
 struct B { n: N& }
 fn f(ns: N[>..]&, c: bool, keep: N&) -> B {

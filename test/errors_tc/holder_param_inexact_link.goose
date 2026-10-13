@@ -4,7 +4,7 @@
 // site's value held references into one. The first call's does, so its body
 // may link one view into the other; the second's views xs and inner's ys,
 // which dies first, and gets a body of its own, where what id(w) holds is
-// only bounded by w's class (§9.2, §3.9).
+// only bounded by w's class.
 struct N { v: i64, next: N&<u32>? }
 struct W2 { a: N[:], b: N[:] }
 fn id(w: W2) -> W2 { w }

@@ -1,6 +1,6 @@
 // error: returning a reference rooted in b, which dies with this function
 // A callee's store into the holder a reference parameter names is on the
-// holder's record, as the caller's own store would be (§9.2).
+// holder's record, as the caller's own store would be.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 fn link(n: N&, b: B&) { n.link .= b; }

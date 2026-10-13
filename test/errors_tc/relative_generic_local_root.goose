@@ -1,7 +1,7 @@
 // error: a relative reference must point within the same root as its location
 // error: this reference is rooted at src
-// A `T` local over an array of self-relative links holds the plain reference
-// (§3.9), and storing it into an element still needs it to point within that
+// A `T` local over an array of self-relative links holds the plain reference,
+// and storing it into an element still needs it to point within that
 // element's root: this one was read out of another array.
 struct Cell { v: i64, links: (Cell&<u32>)[..4] }
 fn move_first<T>(dst: T[:], src: T[:]) {

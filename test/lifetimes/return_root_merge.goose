@@ -1,4 +1,4 @@
-// A function's result is rooted as a branch's value is (§9.2): at the
+// A function's result is rooted as a branch's value is: at the
 // deepest of the roots its returns give, mapped to each call's own
 // arguments, and exact only where every return names one root exactly. So a
 // function may return a view of its input on one path and of a global arena,

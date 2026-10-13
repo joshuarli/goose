@@ -1,8 +1,8 @@
 // A value holding references, read out of a field or an element, holds
 // only references that were stored there, and none of those points into a
-// grow-shrink array's elements (§5.2). So it is stored like any other holder
+// grow-shrink array's elements. So it is stored like any other holder
 // whose references outlive the destination, its container still bounding
-// them (§9.5), and no shrink of a grow-shrink array meets what it holds.
+// them, and no shrink of a grow-shrink array meets what it holds.
 // Every use below was rejected as if what the holder holds might point into
 // the grow-shrink array it was read out of: an element bound to a global,
 // stored, bound first, copied by a for binder or out of a match's variant,

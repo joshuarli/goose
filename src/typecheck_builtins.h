@@ -1,13 +1,13 @@
 // Goose compiler — the typechecker's builtins (definitions of TypeCheck
-// members, typecheck.h): the builtin functions and array members (§3.3,
-// §3.7, §5.4, §11.2), text rendering through user `format` overloads, and
-// the shrink rules of §5.1 and §5.2.
+// members, typecheck.h): the builtin functions and array members,
+// text rendering through user `format` overloads, and
+// the shrink rules for grow-only and grow-shrink arrays.
 #pragma once
 
 namespace goose {
 
 // ------------------------------------------------------------------
-// Builtins (§3.7, §9.3, §11.2) and array members (§3.3, §5.4).
+// Builtins and array members.
 
 // One entry for every builtin (builtins.h), for both spellings — f(a, b)
 // and a.f(b) arrive with a uniform argument list (receiver first). The
@@ -29,7 +29,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             return VoidVal();
         case B_STR: {
             // str(a, b, ...): a fresh u8[>..] holding the arguments' text,
-            // built at the destination like any resizable result (§7.3).
+            // built at the destination like any resizable result.
             for (size_t i = 0; i < args.size(); i++) CheckPrintable(c, d.name, args, i);
             auto t = GrowU8Array(c->line);
             c->rettypes.push_back(t);
@@ -40,10 +40,10 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         }
         case B_ASSERT:
             CheckCond(args[0]);
-            NarrowCond(args[0], true);  // assert(r) narrows onwards (§3.8).
+            NarrowCond(args[0], true);  // assert(r) narrows onwards.
             return VoidVal();
         case B_ABORT: case B_EXIT:
-            // Both end the program (§9.3), so the code after them is
+            // Both end the program, so the code after them is
             // unreachable.
             if (d.kind == B_ABORT) CheckArg(args[0], u8slice);
             else CheckIntAny(args[0]);
@@ -53,7 +53,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             auto wid = Is<Ident>(args[0]);
             SFunction *wsf = nullptr;
             // A variable in scope, a type parameter or a nested function of the
-            // name hides it, as at a call (§11.1).
+            // name hides it, as at a call.
             auto wvd = wid ? LookupVar(wid->name, wid->ns) : nullptr;
             if (wid && !(wvd && !wvd->isglobal) && !ScopeNameKind(wid->name))
                 for (auto sf : DepLookupFunctions(ast, wid->name, wid->ns))
@@ -121,8 +121,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         case B_EMBED_SHADER:
         case B_EMBED_FILE: {
             // The shader compiled, or the file read, now, and the result a
-            // read-only view of static data, like a string literal's
-            // (stdlib/gfx.goose, docs/design/packages.md §6.5).
+            // read-only view of static data, like a string literal's.
             c->shaderblob = c->builtin == B_EMBED_FILE ? EmbedFile(c, args) : EmbedShader(c, args);
             c->rettypes.push_back(cu8slice);
             Val v;
@@ -132,7 +131,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             return v;
         }
         case B_COPY: {
-            // copy(x): a fresh value from stored one (§4.1), for the
+            // copy(x): a fresh value from stored one, for the
             // destinations that never copy implicitly.
             auto av = CheckV(args[0], nullptr);
             args[0]->exprtype = av.type;
@@ -162,9 +161,9 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         }
         case B_FROM_BYTES: {
             // from_bytes<T[>..]>(bytes): the image verified and copied into
-            // a fresh array (docs/design/serialization.md §4). The result is
-            // rooted at its own variable like any resizable one, so nothing
-            // in §9 has to know it came from outside; the bool is the
+            // a fresh array. The result is
+            // rooted at its own variable like any resizable one, so the lifetime rules
+            // need not distinguish it from other arrays; the bool is the
             // verifier's verdict, and a rejected image leaves the array empty.
             if (c->tyargs.size() != 1)
                 Error(c, "from_bytes<T[>..]>(bytes) needs exactly one explicit type argument");
@@ -199,7 +198,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         }
         case B_DEFAULT: {
             // default<T>(): the value a T has before anything is written
-            // to it, declared field defaults applied (§4.2).
+            // to it, declared field defaults applied.
             if (c->tyargs.size() != 1)
                 Error(c, "default<T>() needs exactly one explicit type argument");
             auto t = Subst(c->tyargs[0]);
@@ -227,7 +226,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                 auto v = CheckValue(c->defaultinit, t->kind == TY_ARRAY ? t->arr->sub : t);
                 v.type = t;
                 // An array is filled with its element's default in a
-                // temporary of its own, as a literal is built (§9.2).
+                // temporary of its own, as a literal is built.
                 if (t->kind == TY_ARRAY) v = TempCopy(v);
                 lastcallrets = { v };
                 return v;
@@ -235,9 +234,9 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             Val v;
             v.type = vt;
             v.Set(nullptr, true);   // A null optional or an empty slice: static.
-            v.writable = true;      // And nothing to write, so it fits any slot (§9.5).
+            v.writable = true;      // And nothing to write, so it fits any slot.
             // Any other value -- a scalar's, an empty limited array's -- is
-            // built in a temporary, as a literal is (§9.2).
+            // built in a temporary, as a literal is.
             if (!IsRefOrSlice(vt)) v = TempCopy(v);
             return v;
         }
@@ -302,7 +301,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                          notpoolref(RU_SLICES), " (§5.4)"));
     }
     // A pending `var x = []` receiver learns its element type from what
-    // is first pushed or appended into it (§4.2).
+    // is first pushed or appended into it.
     if (elem && elem->kind == TY_VOID) {
         auto rt = rv.type;
         if (IsPlainRef(rt)) rt = rt->ref->sub;
@@ -321,7 +320,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         }
         elem = rt->arr->sub;
     }
-    // The receiver grows (§1.3(4)): logged ahead of the arguments, so that
+    // The receiver grows: logged ahead of the arguments, so that
     // a value built in place among them is checked against the growths
     // within it alone.
     if (d.kind == B_PUSH || d.kind == B_APPEND || d.kind == B_ALLOC_INDEX ||
@@ -332,7 +331,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                  : "allocate in ";
         NoteGrow(c, rv, cat(how, ExprStr(args[0])), recvarr);
     }
-    // The serialization pair (docs/design/serialization.md §4). to_bytes
+    // The serialization pair. to_bytes
     // builds the image -- a varint byte count then the element region --
     // either as a fresh u8[>..] or appended to a builder the caller owns, so
     // its own header can go in front. bytes_of is the element region alone,
@@ -344,11 +343,11 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         if (d.kind == B_BYTES_OF) {
             NoTemporaryLiteral(args[0], rv.type);
             Val v;
-            v.type = cu8slice;   // A read-only view, in its type too (§9.5).
+            v.type = cu8slice;   // A read-only view, in its type too.
             v.SetProv(rv);
             // The bytes of a live structure: reading them is what they are
             // for, and writing them would forge the relative references the
-            // checker otherwise proves (§3.9), so the view is never writable.
+            // checker otherwise proves, so the view is never writable.
             v.writable = false;
             v.reusable = false;
             v.byteview = true;
@@ -381,7 +380,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         return v;
     }
     // format(out, a, b, ...): the arguments' text appended to a growable
-    // u8 array (§3.7).
+    // u8 array.
     if (d.kind == B_FORMAT) {
         if (!IsU8(elem))
             Error(c, cat(".format appends text to u8 arrays, not ", TypeStr(rv.type)));
@@ -389,7 +388,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         return VoidVal();
     }
     // A grow-only array shrinks only where nothing can still be rooted in
-    // it (§5.1); pop, pop_n and resize also need an element the shrink can
+    // it; pop, pop_n and resize also need an element the shrink can
     // find, which a sequential array has not got.
     auto shrink = d.kind == B_POP || d.kind == B_POP_N || d.kind == B_RESIZE ||
                   d.kind == B_CLEAR;
@@ -400,19 +399,19 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                          " is sequential (§3.3)"));
     }
     // A grow-shrink array shrinks from anywhere, provided nothing in scope
-    // refers into it (§5.2).
+    // refers into it.
     if (ak == A_GROWSHRINK && shrink)
         ShrinkThrough(c, d.name, ExprStr(args[0]), rv,
                       IsPlainRef(rv.type) ? rv.type->ref->sub : rv.type,
                       d.kind == B_RESIZE && ResizesToMark(args[0], args[1]) ? SB_BALANCED
                                                                             : SB_UNBALANCED);
-    // resize has two forms (§3.3); a target below zero is caught at runtime.
+    // resize has two forms; a target below zero is caught at runtime.
     if (d.kind == B_RESIZE) {
         CheckIntAny(args[1]);
         if (args.size() == 3) {
             ElemArg(args[2], elem, rv);
             // The fill value is built once and copied into every slot the
-            // resize adds, so not even a literal is built in place (§3.9).
+            // resize adds, so not even a literal is built in place.
             if (HasRelRefT(elem) && (Is<StructLit>(args[2]) || Is<ArrayLit>(args[2])))
                 Error(args[2], cat(".resize copies its fill value into every slot it adds: "
                                    "copying a value of type ", TypeStr(elem), ", which "
@@ -421,9 +420,9 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         }
         return VoidVal();
     }
-    // index_of recovers the element index a reference stands for (§3.3).
+    // index_of recovers the element index a reference stands for.
     // The reference must be an element of this very array, which is what
-    // an exact root at the receiver says (§9.2); the distance is then a
+    // an exact root at the receiver says; the distance is then a
     // whole number of elements and inside the length, so the division is
     // exact and nothing has to be bounds-checked.
     if (d.kind == B_INDEX_OF) {
@@ -443,7 +442,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                          ", got ", TypeStr(StorageType(av))));
         CheckRootedAtReceiver(c, d.name, rv, av, elem, "a reference", "§3.3");
     }
-    // A slice pool's operations (§5.4). A slice handed back must be one of
+    // A slice pool's operations. A slice handed back must be one of
     // the pool's own, by the same exact root index_of needs, so that the
     // position it starts at is a whole index inside the length; the
     // elements an operation adds are default values.
@@ -499,7 +498,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             case 'b': CheckValue(an, ast.booltype); break;
             case 'e': {
                 // An element built in place is under construction while
-                // its expression runs (§1.3(4)).
+                // its expression runs.
                 auto logbase = cur.growlog.size();
                 ElemArg(an, elem, rv);
                 if (BuiltInPlace(elem))
@@ -513,7 +512,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             case 'a': {  // An array/slice of the receiver's element type.
                 auto logbase = cur.growlog.size();
                 // An array literal is the run appended: its elements are the
-                // receiver's, constructed into its storage (§4.2).
+                // receiver's, constructed into its storage.
                 auto al = Is<ArrayLit>(an);
                 if (al && al->capexpr) al = nullptr;
                 auto av = al ? CheckValueAt(an, AppendedRun(elem, al), Dest(rv, false, rv.reached))
@@ -529,12 +528,12 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                     Error(c, cat(".", d.name, " takes an array or slice of ",
                                  TypeStr(elem), ", got ", TypeStr(av.type)));
                 if (!al) AppendedCopies(an, av, elem, rv);
-                // A call's array result is built at the receiver's top
-                // (§7.3), and a literal's run is built in place where its
+                // A call's array result is built at the receiver's top,
+                // and a literal's run is built in place where its
                 // elements are not fixed-size or hold relative references of
                 // either form (at the top, or in a limited array's free
                 // slots): under construction while the call or the elements
-                // run (§1.3(4)).
+                // run.
                 auto inplace = al ? ClassOf(elem) != SC_FIXED || HasRelRefT(elem, true)
                                   : Is<Call>(an) && ak != A_LIMITED && ClassOf(t2) != SC_FIXED;
                 if (inplace)
@@ -555,7 +554,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             v.type = LoadType(elem);
             if (IsRefOrSlice(v.type)) {
                 // A reference or slice element leaves as itself: what a
-                // temporary holds is not rooted at the temporary (§9.2), so
+                // temporary holds is not rooted at the temporary, so
                 // it points where the element did and is as writable as its
                 // slot says, as an element read is (ContainerRead).
                 LVal lv;
@@ -601,7 +600,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
     return v;
 }
 
-// An argument of print/str/format (§3.7): every value type has a text
+// An argument of print/str/format: every value type has a text
 // form -- scalars and bool as text, u8 arrays and slices as their bytes
 // (quoted inside an aggregate), other arrays as [a, b], structs and
 // variants as their positional literal, references as their pointee,
@@ -621,7 +620,7 @@ inline void TypeCheck::CheckPrintable(Call *c, const char *what, vector<Node *> 
     // A value that is no storage -- neither a variable, field or element nor
     // what a reference names -- is rendered from a temporary codegen puts it
     // in (GenLoc), which a format hook taking it by reference is handed,
-    // read-only (§3.7). A call's result, a struct or array literal and a
+    // read-only. A call's result, a struct or array literal and a
     // control construct's value are rooted at one already; any other, such
     // as an operator's result, a literal, a cast, a variant constant or a
     // literal parameter, has no roots, which every rule would take for
@@ -637,16 +636,16 @@ inline void TypeCheck::CheckPrintable(Call *c, const char *what, vector<Node *> 
     // A slice that is no storage is rendered from a temporary, one the
     // optimizer keeps where it reduces the argument to storage (OptRendered),
     // which is the slot a format hook taking it by reference is given
-    // (UserFormatIn), and read-only, as a view into a temporary is (§9.5). So
+    // (UserFormatIn), and read-only, as a view into a temporary is. So
     // is the value of a control construct or of a function value's call, a
-    // copy of what its branch gives even where that names a variable (§4.1),
+    // copy of what its branch gives even where that names a variable,
     // which keeps none of that branch's slot (TempCopy).
     if (av.type->kind == TY_SLICE && !av.hasslot) {
         av.slot = Prov {};
         av.slot.Set(TempRoot(), true);
         av.hasslot = true;
     }
-    // An i64 read out of varint storage lies in no i64 storage (§3.6): it is
+    // An i64 read out of varint storage lies in no i64 storage: it is
     // rendered from a temporary holding the i64 the varint decodes to, which
     // is what a format hook taking an i64 by reference is given
     // (EmitUserFormat), read-only.
@@ -778,7 +777,7 @@ inline void TypeCheck::CheckRenderable(Call *c, const char *what, TypeExpr *t, N
         case TY_STRUCT: case TY_ENUM: case TY_VARIANT:
             // An overload rendering one part of a fixed-mode value may
             // overwrite it with another variant, and nothing may refer into
-            // its payload meanwhile (§3.5): the parts lie in a copy codegen
+            // its payload meanwhile: the parts lie in a copy codegen
             // takes once the tag is read (RenderLoc), a read-only temporary,
             // as a construct's value is.
             if (t->kind == TY_ENUM && !t->enu->varmode) value = TempCopy(value);
@@ -793,8 +792,8 @@ inline void TypeCheck::CheckRenderable(Call *c, const char *what, TypeExpr *t, N
 // anywhere and a T by value or by reference (the two parameter shapes
 // such an overload takes), once per print call. The overloads tried are
 // those of the type's own namespace, then the global ones: rendering
-// follows the type, not the namespace of whoever prints it
-// (docs/design/namespaces.md). `arg` is the argument where the value is all
+// follows the type, not the namespace of whoever prints it.
+// `arg` is the argument where the value is all
 // of it, else null.
 inline FnSpec *TypeCheck::UserFormat(Call *c, TypeExpr *t, const Val &value, const Val &out,
                                      Node *arg) {
@@ -842,12 +841,12 @@ inline FnSpec *TypeCheck::UserFormatIn(Call *c, TypeExpr *t, string_view ns,
         if (sf->isextern && IsRefOrSlice(pt1) && !pt1->cq && !argvals[1].writable)
             Error(c, "extern format hook needs a writable value or a const parameter");
         // Given a variable argument by a writable reference, the overload may
-        // write it as a reference parameter may, a `let` included (§4.4).
+        // write it as a reference parameter may, a `let` included.
         if (auto id = Is<Ident>(arg); id && id->vdef && value.lvalue && IsPlainRef(pt1) &&
                                       !pt1->cq && argvals[1].writable)
             NoteWritableRef(id->vdef, arg);
         // The hook's copy would still measure its self-relative references
-        // from where the value lies (§3.9).
+        // from where the value lies.
         if (!IsRefOrSlice(pt1) && HasRelRefT(pt1))
             Error(c, cat("copying a value of type ", TypeStr(t), ", which contains "
                          "self-relative references, into the format overload taking it by "
@@ -864,12 +863,12 @@ inline FnSpec *TypeCheck::UserFormatIn(Call *c, TypeExpr *t, string_view ns,
 
 // The literal a compile-time string argument stands for: a string literal,
 // or a let or const global initialized with one, named directly or through
-// other such globals -- a named constant, as an array size may use (§11.1).
+// other such globals -- a named constant, as an array size may use.
 // Null for anything else, a local, type parameter or nested function of the
 // name included, which hides the global. Unlike an integer one
 // (RelyOnConstant), such a global keeps its initializer's value without a
 // mark: the slice in its slot is a literal's, read-only, so a reference to
-// the slot is read-only too (§9.5).
+// the slot is read-only too.
 inline StrLit *TypeCheck::ConstStrLit(Node *n) {
     if (auto s = Is<StrLit>(n)) return s;
     auto id = Is<Ident>(n);
@@ -985,7 +984,7 @@ inline const string *TypeCheck::EmbedShader(Call *c, vector<Node *> &args) {
     return &it->second;
 }
 
-// A shrink (`pop`, `resize` down, `clear`) of a grow-only array (§5.1).
+// A shrink (`pop`, `resize` down, `clear`) of a grow-only array.
 // Everything below the stack top belongs to the array's elements for as
 // long as it lives, so handing part of the region back is safe exactly
 // when nothing can still point into it: no value its statement evaluated
@@ -1017,10 +1016,10 @@ inline void TypeCheck::CheckGrowShrink(Node *at, const char *op, Node *recv, con
 }
 
 // A whole assignment of a grow-only array, or of a value holding one as its
-// tail (`whole` false), shrinks it (§4.4) where a `clear` of its location
+// tail (`whole` false), shrinks it where a `clear` of its location
 // would: the array's variable, a reference to it or to the value holding it,
 // or a struct's field on such a path, whose roots are those of the storage
-// it lies in (§5.1). CheckAssignedValue scans the shrink.
+// it lies in. CheckAssignedValue scans the shrink.
 inline void TypeCheck::GrowOnlyAssignKnown(Assign *a, const Roots &built, bool whole) {
     if (!ShrinkRootsKnown(built))
         Error(a, cat("cannot assign ", whole ? "a grow-only array" : "a value holding a "
@@ -1068,8 +1067,8 @@ inline void TypeCheck::CheckHeldShrinks(Node *at, const string &op, VarDef *root
                            : ShrinkMayFree(root, bound, growonly, PointeeOf(v.type), v.byteview);
         auto held = !path && mayfree &&
                     v.Any([&](const RootAlt &a) {
-                        // A slot read never points into a grow-shrink array
-                        // (§5.2), though it may into a grow-only one, where
+                        // A slot read never points into a grow-shrink array,
+                        // though it may into a grow-only one, where
                         // a view the storage of a parameter's class held
                         // points where that storage's views do; a walk's may
                         // have been reached through a slot's reference to a
@@ -1098,7 +1097,7 @@ inline void TypeCheck::CheckHeldShrinks(Node *at, const string &op, VarDef *root
         }
         if (!held) return;
         auto sec = growonly ? " (§5.1)" : " (§5.2)";
-        // A §5.1 scan's op names no array.
+        // A grow-only scan's op names no array.
         auto shrink = cat("cannot ", op, growonly ? cat(" ", what) : string(), ": ");
         auto expr = ExprStr(node);
         if (render) {
@@ -1190,8 +1189,8 @@ inline void TypeCheck::GrowOnlyShrinkAt(Node *c, const string &op, VarDef *vd,
                              " (§5.1)"));
         } else {
             // Any other value holds references only where a store put
-            // them, and every store this function can see is on record
-            // (§9.2); a type without a plain reference or slice in it
+            // them, and every store this function can see is on record;
+            // a type without a plain reference or slice in it
             // (flat, or linked by relative references only) has no room
             // for one.
             if (!HoldsPlainRef(t)) return;
@@ -1228,7 +1227,7 @@ inline void TypeCheck::GrowOnlyShrinkAt(Node *c, const string &op, VarDef *vd,
 
 // A field or element of a literal that is a reference, slice or holder:
 // its root joins the literal's. It is storage wherever the literal lands,
-// so it never points into a grow-shrink array (§5.2), even where FitsAt has
+// so it never points into a grow-shrink array, even where FitsAt has
 // no destination to check it against: in an argument, which passes none
 // since parameters die before their arguments' roots, or in a result.
 inline void TypeCheck::NoteLitElem(LitDeep &deep, Node *at, const Val &v, TypeExpr *t) {
@@ -1253,7 +1252,7 @@ inline void TypeCheck::HolderFromLit(Val &v, const LitDeep &deep) {
 
 // One store on record: program-wide, and on the specialization as well when
 // the container is storage of the caller's, which a parameter's class root
-// stands for -- the call sites map those back (§3.5).
+// stands for -- the call sites map those back.
 inline void TypeCheck::AddStoreEvent(const StoreEvent &e) {
     storeevents.push_back(e);
     madestores.push_back(e);
@@ -1280,7 +1279,7 @@ inline void TypeCheck::AddStoreEvent(const StoreEvent &e) {
 // A store that may write the slot a parameter's view stands for joins what
 // the variable standing for the slice there holds (VarDef::heldslice): a
 // store into the slot's own class, or into any other class or bound, which
-// may be that slot where some call site passes it to both (§3.4), unless it
+// may be that slot where some call site passes it to both, unless it
 // cannot hold a slice of the slot's type. The views are those of the bodies
 // whose classes the code being checked can name: its own and its lexical
 // parents', and those of the bodies its function values were written in.
@@ -1314,7 +1313,7 @@ inline void TypeCheck::NoteSlotStore(const StoreEvent &e) {
     }
 }
 
-// One store on record per place the value may point (§9.2). The container's
+// One store on record per place the value may point. The container's
 // contents grow by the same: a container that is itself a reference or a
 // slice has none -- what it points at is its binding -- and neither has a
 // parameter's class root, which stands for storage of the caller's, whose
@@ -1345,7 +1344,7 @@ inline void TypeCheck::RecordStore(VarDef *container, const Roots &roots, bool b
         // what it holds (StoreSource).
         auto copied = StoreSource(src);
         e.src = copied;
-        // A reference read back out of a container inexactly (§9.5) points
+        // A reference read back out of a container inexactly points
         // at whatever was stored into that container: its stores are the
         // precise answer, where a bound would implicate every sibling.
         if (!e.src && !a.exact) e.src = StoreSource(from);
@@ -1385,7 +1384,7 @@ inline Roots TypeCheck::ClassArgRoots(TypeExpr *pt, const Val &v) {
 // argument's slot held (Val::held). Where that argument's root only bounds
 // the storage, or the store went into storage the class only leads to, it
 // is a store into each storage there that can hold what the store reached
-// (StoreEvent::reached, ShrinkTargets), which the value must outlive (§9.2):
+// (StoreEvent::reached, ShrinkTargets), which the value must outlive:
 // the body saw only the bound. A store into the slot a reference to a slice
 // names assigns the slice variable each such storage may be (StoreIntoSlot).
 // A store into a holder grows its contents as the caller's own would, which
@@ -1735,7 +1734,7 @@ inline void TypeCheck::NoteGlobalShrink(Node *at, const string &prefix, VarDef *
 // the binding of a reference or slice global, put one there, and once every
 // function has been checked every store is on record, however late the
 // function making it was checked: a shrink of the array is an error where
-// another global may hold one (§5.1). A bound stands for every array of its
+// another global may hold one. A bound stands for every array of its
 // type the root's references may lead to, which for a global are globals.
 inline void TypeCheck::CheckGlobalShrinks() {
     if (globalshrinks.empty()) return;
@@ -1962,7 +1961,7 @@ inline bool TypeCheck::HolderMayPointInto(VarDef *holder, VarDef *arr, TypeExpr 
 // bounded by it), to a slot of type `pointee` -- null where the record keeps
 // none, as for a holder's copied contents, which may be any the holder's
 // type refers to (RefSlots) -- leads into `arr` through what that slot
-// holds: a slice's slot, or a holder (§5.1). `sliceref`: the stored
+// holds: a slice's slot, or a holder. `sliceref`: the stored
 // reference is one to a slice. Returns the slot's type where it may. A
 // holder named exactly holds what its own stores put there. So does a
 // parameter's class named so, of what the activation stored there, where
@@ -2050,7 +2049,7 @@ inline void TypeCheck::RefSlots(TypeExpr *t, vector<pair<TypeExpr *, bool>> &out
 
 // Whether a value of type t holds plain references or slices outside the
 // elements of its resizable array: in the fields before its tail, at any
-// depth of nested tails (§3.4).
+// depth of nested tails.
 inline bool TypeCheck::RefsBesideTail(TypeExpr *t) {
     if (t->kind == TY_ARRAY) return false;
     return AnyField(t, [&](TypeExpr *ft) {
@@ -2062,8 +2061,8 @@ inline bool TypeCheck::RefsBesideTail(TypeExpr *t) {
 // references, for a reference or slice into the elements of an array of
 // type arr (null: of any type), or for a byte view of one. A view derived
 // from a reference stored there is stored in such a slot too, so a holder
-// without one never refers into the array (§5.1). A reference to a whole
-// resizable value is the path to it, which no array's elements hold (§3.3).
+// without one never refers into the array. A reference to a whole
+// resizable value is the path to it, which no array's elements hold.
 inline bool TypeCheck::CanHoldViewInto(TypeExpr *t, TypeExpr *arr) {
     vector<TypeExpr *> ps;
     ReachedThroughRefs(t, ps);
@@ -2075,21 +2074,21 @@ inline bool TypeCheck::CanHoldViewInto(TypeExpr *t, TypeExpr *arr) {
 }
 
 // Whether what a shrink of storage of type t frees is a grow-only array's:
-// t is one, or holds one as its tail (§3.4).
+// t is one, or holds one as its tail.
 inline bool TypeCheck::GrowOnlyTail(TypeExpr *t) {
     auto arr = ResizableArrayIn(t);
     return arr && arr->arr->akind == A_GROW;
 }
 
 // Whether root r is (or stands for a call-site root that is) a grow-only
-// array, or holds one: the receiver of a §5.1 shrink rather than a §5.2 one.
+// array, or holds one: the receiver of a grow-only shrink rather than a grow-shrink one.
 inline bool TypeCheck::IsGrowOnlyRootVar(VarDef *r) {
     auto v = r;
     while (v && !v->type && v->classfrom) v = v->classfrom;
     return v && v->type && GrowOnlyTail(LoadType(v->type));
 }
 
-// A shrink of the grow-shrink array rooted at root (§5.2): no variable in
+// A shrink of the grow-shrink array rooted at root: no variable in
 // scope may refer into it. Such references are held only by variables
 // (they cannot be stored), so the scan is exact, up to a `var` reference
 // the same-depth rebinding rule could have retargeted into it.
@@ -2155,7 +2154,7 @@ inline void TypeCheck::NoteRootEvent(VarDef *root, P param, X external) {
     }
 }
 
-// Records a shrink for callers (§5.2), a bound's with the type of the array
+// Records a shrink for callers, a bound's with the type of the array
 // its storage leads to. An array stays balanced only while every shrink of
 // it is.
 inline void TypeCheck::NoteShrink(VarDef *root, TypeExpr *bound, ShrinkBalance balance) {
@@ -2191,12 +2190,12 @@ inline void TypeCheck::ShrinkGrowShrink(Node *at, const string &op, VarDef *root
     NoteShrink(root, bound, balance);
 }
 
-// Whether `recv.resize(len)` is a balanced shrink (§5.2): len names a `let`
+// Whether `recv.resize(len)` is a balanced shrink: len names a `let`
 // of this activation initialized to exactly `recv.len`, with recv the same
 // path there, so the resize goes back to a length recv has had since the
 // activation began. While every shrink of it is such a resize or a balanced
 // call, no such length is shorter than the one it began with. A writable
-// reference bound to the `let` may have changed it (§4.4), which makes the
+// reference bound to the `let` may have changed it, which makes the
 // resize an ordinary shrink, and one bound after the resize relied on it an
 // error (NoteWritableRef), since the balance has been recorded by then.
 inline bool TypeCheck::ResizesToMark(Node *recv, Node *len) {
@@ -2230,7 +2229,7 @@ inline bool TypeCheck::SamePath(Node *a, Node *b) {
 }
 
 // The arrays a shrink of an `arr` rooted at root may free. An exact root
-// owns the array. An inexact one only bounds its lifetime (§9.2): the array
+// owns the array. An inexact one only bounds its lifetime: the array
 // may be any `arr` owned at the root's depth or outside it, which the
 // read-back candidates for that depth stand for (RootCandidates), the
 // caller's storage behind a parameter as a bound. The root itself comes
@@ -2281,7 +2280,7 @@ inline string TypeCheck::TargetStr(const ShrinkTarget &t) {
 }
 
 // A shrink of the `arr` rooted at root, spelled `verb` on the receiver
-// `recv` (§5.1, §5.2): of every array it may free (ShrinkTargets). The
+// `recv`: of every array it may free (ShrinkTargets). The
 // diagnostics name the root's array as the receiver does, and any other by
 // its own name and the receiver's.
 inline void TypeCheck::ShrinkThrough(Node *at, const string &verb, const string &recv,
@@ -2311,7 +2310,7 @@ inline bool TypeCheck::CallersJudge(VarDef *r, VarDef *root) {
 }
 
 // What the activation still uses after a shrink of root that only its
-// callers can tell apart from the array (§5.1, §5.2): a view rooted at a
+// callers can tell apart from the array: a view rooted at a
 // parameter's class, whose argument may point into the array, or any view
 // while the array is itself a parameter's, which the argument may make the
 // array the view points into. Kept for the call sites (NoteLiveShrink).
@@ -2326,7 +2325,7 @@ inline void TypeCheck::NoteLiveViews(Node *at, const string &prefix, VarDef *roo
     if (!current || (root->type && !root->isglobal && root->ownerspec == current)) return;
     // What a reference or slice of type t with provenance p may point into:
     // its pointee, unless it is the path to a whole resizable value, and,
-    // for a reference to a slice or (§5.1) to anything else holding
+    // for a reference to a slice or to anything else holding
     // references, or a slice of those, what those point into: where the
     // slice points (SlotView, without noting a slice variable's root as
     // read), and for a slice of holders what those hold, or where the
@@ -2379,7 +2378,7 @@ inline void TypeCheck::NoteLiveViews(Node *at, const string &prefix, VarDef *roo
         return out;
     };
     // Whether the callers judge where a view may point by alternative a: a
-    // slot read points into no grow-shrink array (§5.2), as the scans say,
+    // slot read points into no grow-shrink array, as the scans say,
     // though what a reference to a slice leads to may, and so may a walk's
     // path. What a class's storage holds is theirs to judge whatever array
     // shrinks, the class's own included.
@@ -2432,7 +2431,7 @@ inline void TypeCheck::NoteLiveViews(Node *at, const string &prefix, VarDef *roo
             if (!v->refrootknown) return;
             vs = views(v->ref, t, false, v->isvar, false);
         } else if (growonly && HoldsPlainRef(t)) {
-            // A grow-only array's views may be stored (§5.1): the holder's
+            // A grow-only array's views may be stored: the holder's
             // store record says where its references lead.
             set<VarDef *> seen;
             RecordedViews(v, LiveEventBase(v), t, vs, seen);
@@ -2443,7 +2442,7 @@ inline void TypeCheck::NoteLiveViews(Node *at, const string &prefix, VarDef *roo
 }
 
 // What the stores into holder h, of type ht, from event `from` on put there,
-// as views (§5.1): each stored reference as StoredViews takes it, and what
+// as views: each stored reference as StoredViews takes it, and what
 // came out of the storage of a parameter's class alone (StoreEvent::
 // classread) as what that storage holds, which is the callers' to judge as
 // well: a view of the class's contents (LiveShrink::contents) of h's type,
@@ -2465,7 +2464,7 @@ inline void TypeCheck::RecordedViews(VarDef *h, size_t from, TypeExpr *ht,
 }
 
 // A reference stored into a holder of type ht, rooted at r (exactly, or only
-// bounded by it), as views (§5.1): where it points, and, where it refers to
+// bounded by it), as views: where it points, and, where it refers to
 // a slot holding references -- a holder, an array's elements a slice views,
 // a slice variable -- what that slot leads to, as the scan follows it
 // (StoredSlotMayPointInto): a holder named exactly by its own record, a
@@ -2508,7 +2507,7 @@ inline void TypeCheck::StoredViews(VarDef *r, bool exact, TypeExpr *pointee, boo
 }
 
 // Where the references in the holders of type `held` that p points at or
-// views may point (§5.1): for a holder of this function or a parent's that
+// views may point: for a holder of this function or a parent's that
 // the value names exactly, where its store record says, as for the holder
 // itself. A parameter's class named exactly stands for storage of the
 // caller's -- the holder a reference parameter names, the elements a slice
@@ -2728,7 +2727,7 @@ inline bool TypeCheck::MapLiveShrinks(const CallSite &site) {
         auto shrunkat = orig.shrunkexact && !orig.bound ? storage(orig.shrunk) : nullptr;
         // What is still used is the argument passed for a parameter, itself:
         // one loaded out of a field, an element or a global points into no
-        // grow-shrink array (§5.2), as the scans say of a slot read.
+        // grow-shrink array, as the scans say of a slot read.
         auto liveparam = false;
         for (size_t p = 0; p < spec->params.size(); p++)
             liveparam = liveparam || spec->params[p]->ref.Root() == orig.live;
@@ -2833,7 +2832,7 @@ inline bool TypeCheck::MapLiveShrinks(const CallSite &site) {
     return grew;
 }
 
-// The callee's shrinks of grow-shrink arrays (§5.2) are the caller's:
+// The callee's shrinks of grow-shrink arrays are the caller's:
 // nothing in scope may refer into an argument it shrinks through or a
 // external owner it shrinks, and both are recorded for the caller's callers.
 // A balanced shrink (NoteShrink) frees nothing a view the caller holds can
@@ -2843,7 +2842,7 @@ inline bool TypeCheck::MapLiveShrinks(const CallSite &site) {
 inline void TypeCheck::ApplyCalleeShrinks(Node *at, FnSpec *spec, vector<Val> &argvals,
                                           string_view name) {
     // A shrink of an array the call may free: a grow-only array takes the
-    // §5.1 scan (variables and recorded stores), a grow-shrink one the §5.2
+    // scan (variables and recorded stores), a grow-shrink one the
     // scan (variables only) and the pairs its callers judge (NoteLiveViews),
     // unless it is judged balanced.
     struct Hit {
@@ -2946,7 +2945,7 @@ inline bool TypeCheck::BuiltInPlace(TypeExpr *elem) {
 }
 
 // A T[k] of the receiver's elements, or a T[] where they are not
-// fixed-size, as only variable and grow-only arrays hold those (§3.3).
+// fixed-size, as only variable and grow-only arrays hold those.
 inline TypeExpr *TypeCheck::AppendedRun(TypeExpr *elem, ArrayLit *al) {
     if (ClassOf(elem) != SC_FIXED) return ast.ArrayOf(elem, A_VAR, al->line);
     // A negative fill count is the literal's own error to report.
@@ -2955,10 +2954,10 @@ inline TypeExpr *TypeCheck::AppendedRun(TypeExpr *elem, ArrayLit *al) {
 }
 
 // A copied element would carry self-relative offsets still measured from
-// the source (§3.9), and the references it holds are stored into the
-// receiver (§9.2): bounded as they are in a copy of a whole array, or, out
+// the source, and the references it holds are stored into the
+// receiver: bounded as they are in a copy of a whole array, or, out
 // of the storage a slice or reference views, as reading each element out of
-// it would bound them (§9.5).
+// it would bound them.
 inline void TypeCheck::AppendedCopies(Node *an, const Val &av, TypeExpr *elem, const Val &rv) {
     if (HasRelRefT(elem))
         Error(an, cat(".append copies the elements of ", ExprStr(an), ": copying a value of "
@@ -3071,12 +3070,12 @@ inline void TypeCheck::CheckGrowsSince(size_t base, const Roots &built, const st
     }
 }
 
-// The callee's growths are the caller's (§1.3(4)): an argument it grows
+// The callee's growths are the caller's: an argument it grows
 // through, and a global or captured owner it grows, are logged here for
 // the values under construction around the call and for the caller's
 // callers. A back edge's summary is incomplete, so what the callee's text
 // grows stands in for it. A C function appends to every builder it is
-// handed (§7.10).
+// handed.
 inline void TypeCheck::ApplyCalleeGrows(Node *at, FnSpec *spec, vector<Val> &argvals,
                                         string_view name) {
     // A record notes a growth of a parameter's class (ClassArgRoot).
@@ -3111,7 +3110,7 @@ inline void TypeCheck::ApplyCalleeGrows(Node *at, FnSpec *spec, vector<Val> &arg
 // one of those itself, or for a field path, storage holding the value the
 // field lies in by value. A variable lies in no other storage; the pointee
 // of a reference, which an assignment through a reference variable or field
-// writes (§3.8), may lie in anything that can hold a `target`.
+// writes, may lie in anything that can hold a `target`.
 inline bool TypeCheck::MayHoldBuilt(TypeExpr *y, Node *lval, TypeExpr *target) {
     for (auto t = target; t;) {
         if (TypeEq(y, t) || TypeEq(LoadType(y), t)) return true;
@@ -3136,7 +3135,7 @@ inline bool TypeCheck::MayHoldBuilt(TypeExpr *y, Node *lval, TypeExpr *target) {
 // is the array's variable or the value holding it, or a reference to storage
 // that can be or hold the location (MayHoldBuilt). A slice, or a reference
 // to anything else, points into the old elements, which the shrink the
-// assignment starts with keeps from being used (§5.1), or elsewhere.
+// assignment starts with keeps from being used, or elsewhere.
 inline TypeCheck::Alias TypeCheck::ReachesBuilt(VarDef *v, VarDef *built, bool exact,
                                                 Node *lval, TypeExpr *target, TypeExpr *arr,
                                                 VarDef *&root) {
@@ -3158,7 +3157,7 @@ inline TypeCheck::Alias TypeCheck::ReachesBuilt(VarDef *v, VarDef *built, bool e
 
 // The array a whole assignment replaces has no contents while the
 // right-hand side runs: the old ones are gone, and the new ones are built
-// over them (§4.4). Nothing the right-hand side runs may use it, then:
+// over them. Nothing the right-hand side runs may use it, then:
 // name the array or a reference to it, itself or in a function it calls,
 // which reaches the caller's arrays only through its arguments and what it
 // names outside its own activation. A use the checker cannot show to be of
@@ -3279,7 +3278,7 @@ template<typename F, typename G> void TypeCheck::EachUse(Node *n, F named, G cal
 // to what `lval` names: none to storage that can be or hold that location
 // (MayHoldBuilt), at any remove, and, where `lval` ends in a reference whose
 // pointee is assigned, not that location itself. A view of the old
-// elements it leads to is the shrink rule's to judge (§5.1).
+// elements it leads to is the shrink rule's to judge.
 inline bool TypeCheck::FieldsApart(Node *use, Node *lval, TypeExpr *target) {
     auto path = [](Node *n, vector<Dot *> &fields) -> VarDef * {
         for (auto d = Is<Dot>(n); d; d = Is<Dot>(n)) {
@@ -3362,7 +3361,7 @@ inline bool TypeCheck::NamedOutside(FnSpec *spec, vector<VarDef *> &out) {
 }
 
 // Element construction targets the array's storage (relative references
-// in the element must derive from the same root, §3.9).
+// in the element must derive from the same root).
 inline void TypeCheck::ElemArg(Node *&n, TypeExpr *elem, Val &rv) {
     SlotScope ss(*this, true);
     auto orig = n;

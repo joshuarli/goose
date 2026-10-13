@@ -1,6 +1,6 @@
 // error: cannot clear a while bx is still used: a reference into it was stored there
 // A holder loaded through a reference is a copy of what h1 holds, not a
-// reference into h1: h1's stores say where its slice points (§3.5, §5.1).
+// reference into h1: h1's stores say where its slice points.
 struct Box { s: u8[:] }
 fn main() {
     var a: u8[>..] = [];

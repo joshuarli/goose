@@ -1,5 +1,5 @@
 // A nested function names what is in scope where it is declared, whatever
-// is in scope where it is called (§7.5): a loop, an if or a later
+// is in scope where it is called: a loop, an if or a later
 // declaration that shadows a variable or a nested function it names changes
 // nothing, called directly or as a function value, and neither does a call
 // from inside such a scope before one outside, which reuses the

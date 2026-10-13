@@ -1,5 +1,5 @@
 // error: match does not cover variant E.C
-// ADT matches are exhaustive (§8.1).
+// ADT matches are exhaustive.
 enum E { A, B, C }
 fn main() {
     let e: E = E.A;

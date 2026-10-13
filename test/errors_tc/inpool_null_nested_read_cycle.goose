@@ -2,8 +2,8 @@
 // error: this reference is rooted at spare
 // v is one variable at every level of rec's recursion, null until a level
 // rebinds it to a recursive call's result: rec's second call pushes it at
-// the next level, where it may point into spare (§3.9). The cycle's rounds
-// go on until a round changes v no more (§7.8), and that round's push
+// the next level, where it may point into spare. The cycle's rounds
+// go on until a round changes v no more, and that round's push
 // reads it bound.
 struct Cell { key: i64, next: Cell&<u16 in cells>? }
 var cells: Cell[>..] = [Cell { key: 0 }];

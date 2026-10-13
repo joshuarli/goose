@@ -1,7 +1,7 @@
 // error: cannot call show: it shrinks G while h is still used, and h may refer into G (§5.2)
 // A function rendering what its parameter refers to passes the pair on as
-// one about what the caller's storage holds, and this caller's holds G
-// (§3.7, §4.4, §5.2).
+// one about what the caller's storage holds, and this caller's holds G.
+//
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

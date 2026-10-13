@@ -1,5 +1,5 @@
 // error: array capacity K names a local variable, not a constant
-// A limited array's capacity names constants as a size does (§3.3).
+// A limited array's capacity names constants as a size does.
 let K = 3;
 
 fn main() {

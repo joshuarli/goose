@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while t is still used, and t may refer into buf
-// The payload t copies out of the element es views holds a view of buf
-// (§5.1).
+// The payload t copies out of the element es views holds a view of buf.
+//
 enum E { Txt { s: const u8[:] }, Nothing { k: i64 } }
 fn emit(out: u8[>..]&, es: E[:]) {
     match es[0] {

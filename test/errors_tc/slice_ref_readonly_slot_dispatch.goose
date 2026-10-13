@@ -1,5 +1,5 @@
 // error: cannot write through this reference: non-writable provenance
-// A dispatched call binds its other arguments as any call does (§4.1, §7.1):
+// A dispatched call binds its other arguments as any call does:
 // a field reached through a `const S&` is a read-only reference in each case.
 enum E { A { k: i64 }, B { k: i64 } }
 struct S { f: u8[:] }

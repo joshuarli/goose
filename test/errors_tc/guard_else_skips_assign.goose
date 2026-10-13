@@ -1,6 +1,6 @@
 // error: variable n may be used before it is assigned
 // An else block that does not leave runs instead of the rest of its block,
-// where n is assigned (§4.4, §6.4).
+// where n is assigned.
 fn run(c: bool) {
     var n: i64;
     {

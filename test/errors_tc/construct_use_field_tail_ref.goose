@@ -1,6 +1,6 @@
 // error: cannot use s.other in the value assigned to s.tail
 // A field referring to an array of the tail's type may refer to the tail
-// itself, which the right-hand side would read while it is rebuilt (§4.4).
+// itself, which the right-hand side would read while it is rebuilt.
 struct D { n: i64, other: u8[>..]&, tail: u8[>..] }
 fn render(r: u8[>..]&) -> u8[>..] {
     var o: u8[>..] = [];

@@ -2,7 +2,7 @@
 // error: , which the next iteration reaches
 // The block puts what once hands it, a view of out, into h after the clear,
 // so the next iteration's clear would invalidate it: once's call stores
-// into h what it passed, which the loop's next pass sees (§5.1).
+// into h what it passed, which the loop's next pass sees.
 struct H { s: const u8[:] }
 fn put(h: H&, s: const u8[:]) { h.s = s; }
 fn once<F>(s: const u8[:]) { F(s[0..1]); }

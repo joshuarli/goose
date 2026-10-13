@@ -1,7 +1,7 @@
 // The elements append copies out of an array or slice are stored in the
-// receiver, so the references they hold must outlive it (§9.2): they do
+// receiver, so the references they hold must outlive it: they do
 // here, however short-lived the array or slice they came from. `in pool`
-// links copy anywhere (§3.9).
+// links copy anywhere.
 struct Tag { name: u8[:], weight: i64 }
 struct PN { key: i64, link: PN&<u32 in P>? }
 var P: PN[>..] = [];

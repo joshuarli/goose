@@ -1,10 +1,10 @@
 // The value of an if, match, block, loop or bare { } is a temporary copy of
 // what the branch taken produced, even where that branch names a variable,
-// and so are a function value's call and an array default<T>() (§9.2). A
+// and so are a function value's call and an array default<T>(). A
 // view of one may be passed down, and the storage it was copied from may
 // shrink and be refilled while the view lasts. What one holds points where
 // the value it copied pointed, so a slice read out of one can be kept
-// wherever that value's could (§9.5).
+// wherever that value's could.
 struct Named { name: const u8[:] }
 enum Item { Tagged { name: const u8[:] }, Blank }
 

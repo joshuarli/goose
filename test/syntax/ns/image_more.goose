@@ -1,4 +1,4 @@
-// A second file of namespace image (docs/design/namespaces.md): its
+// A second file of namespace image: its
 // declarations join image::, and the other file's are reached unqualified.
 namespace image;
 

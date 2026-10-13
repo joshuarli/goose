@@ -1,6 +1,6 @@
 // error: cannot pop g while s is still used
-// The joined slice views g (§6.4), so g may not shrink while it is used
-// (§5.1).
+// The joined slice views g, so g may not shrink while it is used.
+//
 fn main() {
     var g: u8[>..] = [];
     g.push(65);

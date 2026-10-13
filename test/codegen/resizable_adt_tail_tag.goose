@@ -1,4 +1,4 @@
-// A struct with a resizable ADT tail is not a frame object (C.2): its header's
+// A struct with a resizable ADT tail is not a frame object: its header's
 // base is the struct's start, so tag matching reads the tag at an offset from it.
 enum Value { A { items: i64[>..] }, B { n: i64 } }
 struct Tagged { id: i64, v: Value.. }

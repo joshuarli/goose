@@ -1,7 +1,7 @@
 // error: cannot clear result while dict is in scope
 // The break after the shrink does not end every path from it: the continue
-// before it leads to the next iteration, which stores into dict again
-// (§5.1).
+// before it leads to the next iteration, which stores into dict again.
+//
 fn f(data: u8[:]) -> i64 {
     var result: u8[>..] = [];
     var dict: (const u8[:])[>..] = [];

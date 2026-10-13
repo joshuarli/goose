@@ -1,7 +1,7 @@
 // error: storing a reference into G, which holds a grow-shrink array
 // What the back edge returns is a view into G, as the cycle's returns give
-// it (§7.8), so a literal may not hold it even when the literal itself is
-// only passed down (§5.2).
+// it, so a literal may not hold it even when the literal itself is
+// only passed down.
 struct H { s: const i64[:] }
 var G: i64[>..<] = [1, 2, 3];
 fn f(h: H) {

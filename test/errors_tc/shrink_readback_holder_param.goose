@@ -2,7 +2,7 @@
 // error: is still used: it may refer into b
 // A by-value holder parameter's references lead to the caller's arrays: a
 // shrink through one counts as a shrink of any array the argument's contents
-// may point at (§5.2).
+// may point at.
 struct P { x: i64[>..<]&, y: i64[>..<]& }
 fn f(p: P) { p.y.pop(); }
 fn main() {

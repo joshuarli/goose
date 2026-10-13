@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while words is still used, and words may refer into buf
 // mk's result holds a view of buf, which emit clears before it reads the
-// element (§5.1).
+// element.
 fn mk(a: u8[>..]&) -> (const u8[:])[] { [a[..], "q"] }
 fn emit(out: u8[>..]&, words: (const u8[:])[:]) {
     out.clear();

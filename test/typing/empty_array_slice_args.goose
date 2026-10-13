@@ -1,5 +1,5 @@
 // A [] passed to a slice parameter is a temporary array of the parameter's
-// elements that the slice views whole (§4.2), as a literal with elements is:
+// elements that the slice views whole, as a literal with elements is:
 // an empty one, whatever the element type, at every kind of call. Overload
 // resolution finds the parameter's type; the argument is checked at it
 // before the specialization is keyed on where the slice points.

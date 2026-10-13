@@ -1,7 +1,7 @@
 // error: cannot pop gs while r
 // error: it may refer into spare, which gs may point at
 // A pop through a global reference to a grow-shrink array frees an element
-// of whichever array it points at when it runs (§5.2): trim, checked while
+// of whichever array it points at when it runs: trim, checked while
 // gs is bound to arr, pops spare once aim has retargeted gs, with r still
 // pointing at the element that goes.
 struct Cell { v: i64 }

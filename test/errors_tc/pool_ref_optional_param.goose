@@ -1,5 +1,5 @@
 // error: .alloc_index exists on reusable pools only
-// An optional parameter given a pool is not a pool reference either (§5.4).
+// An optional parameter given a pool is not a pool reference either.
 fn f(p: i64[>..]&?) -> i64 {
     if p { return p.alloc_index(1); }
     return -1;

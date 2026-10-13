@@ -1,6 +1,6 @@
 // error: the block's value is a slice rooted at a temporary, which does not outlive it
 // At a slice parameter an array literal in a branch is a temporary of that
-// branch too, although the call views it only while it runs (§6.4, §9.2).
+// branch too, although the call views it only while it runs.
 fn total(xs: i64[:]) -> i64 {
     var t = 0;
     for x in xs { t += x; }

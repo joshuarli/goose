@@ -1,10 +1,10 @@
 // A name in a size, a capacity or a fill count is the global constant
-// wherever no local of the name hides it (§3.3, §11.1). Every size here is
+// wherever no local of the name hides it. Every size here is
 // the global K's 3, though main, filled and the block have locals or
 // parameters named K by the time they run: an alias's sizes, a field's type
 // and default and a type bound to a type parameter name what they name
 // where they are written, a parameter default names what a top-level
-// declaration would (§7.1), a local declared after a size or a nested
+// declaration would, a local declared after a size or a nested
 // function is not in scope there, and `::K` names the global past a local.
 let K = 3;
 type Three = i64[K];

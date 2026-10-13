@@ -1,5 +1,5 @@
 // Semantic checking is separate from emission. This is an experimental
-// bootstrap checker; the fixture's scope is described in README.md.
+// bootstrap checker for typed expressions, scope tracking and reference lifetimes.
 struct Value {
     ty: i64 = 0,
     root: i64 = -1,

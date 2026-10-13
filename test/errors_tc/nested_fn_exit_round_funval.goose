@@ -1,7 +1,7 @@
 // error: variable n may be used before it is assigned
 // setn's second round reuses the first round's check of each, whose block
 // returns from setn before n is assigned: the reused check takes that exit
-// again (§4.4, §7.6, §7.8).
+// again.
 fn each<F>(k: i64) { for i in k { F(i); } }
 fn run(c: bool) {
     var n: i64;

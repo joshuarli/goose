@@ -2,7 +2,7 @@
 // view named `c`, and restore's loop binder is named `c` too. Only execute's
 // own code can name its `c`, and it is judged at each of execute's calls of
 // restore -- the one in an if's condition too -- against what restore's
-// summary says it shrinks (§5.1). Reduced from a game's command loop.
+// summary says it shrinks. Reduced from a game's command loop.
 import std;
 
 struct Blueprint { name: u8[..48], xs: i32[] }

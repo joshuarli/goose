@@ -9,7 +9,7 @@
 //
 // * ForLoop::stripk: a loop whose counter starts at 0 and steps by 1 takes
 //   it modulo a small constant K. Run in blocks of K iterations whose first
-//   counter is a multiple of K, `i % K` is the position in the block (§6.2's
+//   counter is a multiple of K, `i % K` is the position in the block (Euclidean remainder's
 //   `%` is Euclidean, and the counter is never negative), which codegen
 //   writes as the inner loop's counter: with a constant there, a `T[K]`
 //   indexed by it lives in registers once the block is unrolled.

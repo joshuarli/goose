@@ -18,7 +18,7 @@
 // with one difference a debug build can observe: the regrouped chain forms
 // different intermediate values, so a signed overflow check can fire where
 // the original did not, and the other way round. Debug overflow detection
-// is per operation as it executes, not per operation as written (§6.2).
+// is per operation as it executes, not per operation as written.
 // Release builds, where signed arithmetic wraps, are bit-identical.
 #pragma once
 
@@ -78,7 +78,7 @@ struct TailRecursion {
     }
 
     // Enough of codegen's size classification to tell a reference that
-    // carries its stack (fat, §C.3) from a plain-pointer one.
+    // carries its stack (fat) from a plain-pointer one.
     static bool ReszType(TypeExpr *t) {
         switch (t->kind) {
             case TY_ARRAY:   return t->arr->akind == A_GROW || t->arr->akind == A_GROWSHRINK;
@@ -134,7 +134,7 @@ struct TailRecursion {
 
     // The parameter rebindings one tail call needs; arguments that are
     // already the parameter itself need none. Storing into a reference
-    // parameter is not something the source may write inside a cycle (§7.8),
+    // parameter is not something the source may write inside a cycle,
     // but the value stored is one the call already passed to that same
     // parameter of this same specialization, whose root class is part of the
     // specialization key — so the reference keeps the root the checker gave
@@ -350,8 +350,8 @@ struct TailRecursion {
             if (ib->sf == sp->sf) return false;   // Our own body, spliced in.
         } else if (auto c = Is<Call>(n)) {
             if (SelfCall(c)) selfcalls = true;
-            // A `return ... from` us lands in the innermost active frame
-            // (§7.9); folding frames away would move where it lands.
+            // A `return ... from` us lands in the innermost active frame;
+            // folding frames away would move where it lands.
             if (c->builtin < 0 && c->spec && c->spec->needs.count(sp)) return false;
             for (auto d : c->dispatch) if (d->needs.count(sp)) return false;
         }

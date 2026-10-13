@@ -1,6 +1,6 @@
 // error: cannot call format, which shrinks G: print runs it in the middle of rendering G[0], which may refer into G (§5.2)
 // The struct rendered lies in the array the overload clears, and its field
-// k is read after t's overload (§3.7, §5.2).
+// k is read after t's overload.
 struct T { n: i64 }
 struct W { t: T, k: i64 }
 var G: W[>..<] = [W { T { 1 }, 2 }];

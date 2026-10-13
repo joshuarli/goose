@@ -1,5 +1,5 @@
 // error: re-binding lp to a reference to a reusable[] pool, where it was bound to a reusable pool
-// A pool reference keeps its pool's kind (§5.4): a reusable[] pool's freelist
+// A pool reference keeps its pool's kind: a reusable[] pool's freelist
 // holds runs, not the single slots alloc_index takes.
 fn main() {
     reusable var pool: i64[>..] = [1, 2];

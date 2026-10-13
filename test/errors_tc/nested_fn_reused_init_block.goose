@@ -3,7 +3,7 @@
 // The block is written in a global initializer and reads v, a local of it,
 // which the rebind at the end of the loop gives spare as well as cells: the
 // next pass finds v otherwise than the first did, so apply is checked with
-// the block again rather than reused (§7.5, §7.6).
+// the block again rather than reused.
 struct Cell { key: i64, next: Cell&<u16 in cells>? }
 var cells: Cell[>..] = [Cell { key: 0 }];
 var spare: Cell[>..] = [Cell { key: 1 }];

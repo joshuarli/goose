@@ -1,6 +1,6 @@
 // error: cannot clear out while s is still used
 // The loop's next iteration reads the view of out a callee stores into h
-// later in its body, after the shrink (§5.1).
+// later in its body, after the shrink.
 struct H { s: const u8[:] }
 fn put(h: H&, s: const u8[:]) { h.s = s; }
 fn emit(out: u8[>..]&, hs: H[:]) {

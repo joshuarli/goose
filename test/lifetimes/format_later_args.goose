@@ -1,7 +1,7 @@
 // print, str and format render their arguments in order, each evaluated just
 // before its text, and run a type's format overload in the middle of that:
 // what the overload shrinks, the arguments after its own may not view. These
-// name nothing it shrinks, or render before it runs (§3.7, §5.1, §5.2).
+// name nothing it shrinks, or render before it runs.
 struct T { n: i64 }
 struct U { n: i64 }
 struct C { n: i64 }

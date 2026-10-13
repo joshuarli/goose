@@ -1,5 +1,5 @@
 // A namespaced global variable sharing its leaf name with global functions:
-// a call in the namespace names those functions (§11.1).
+// a call in the namespace names those functions.
 namespace tally;
 import std;
 

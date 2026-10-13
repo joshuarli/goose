@@ -1,6 +1,6 @@
 // error: storing a reference into gs, which holds a grow-shrink array
-// A view of a grow-shrink array lives only in variables (§5.2), whichever way
-// it is spelled (§3.10).
+// A view of a grow-shrink array lives only in variables, whichever way
+// it is spelled.
 struct H { s: const u8[:] }
 fn main() {
     var gs: u8[>..<] = [];

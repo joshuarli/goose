@@ -1,4 +1,4 @@
-// Goose compiler — `goose build` (docs/design/packages.md §6): the C the
+// Goose compiler — `goose build`: the C the
 // compiler wrote, the runtime object and the native modules' response files,
 // compiled and linked into an executable by the toolchain of toolchain.h.
 // Intermediates live under GOOSE_HOME; the executable lands beside the root

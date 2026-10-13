@@ -1,5 +1,5 @@
 // error: storing a reference rooted at mine, which does not outlive the destination
-// A function nothing calls is still checked (§3.9): whatever its parameter
+// A function nothing calls is still checked: whatever its parameter
 // points into, a link to its own local cannot go into the pool.
 struct Node {
     id: i64,

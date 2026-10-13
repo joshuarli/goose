@@ -1,7 +1,7 @@
 // error: storing a reference into p, which holds a grow-shrink array
 // A parameter bound to an explicit `&s` of a slice variable stands for the
-// slice s holds (§3.8), so where that slice views a grow-shrink array, what
-// is loaded through the parameter may not be stored either (§5.2).
+// slice s holds, so where that slice views a grow-shrink array, what
+// is loaded through the parameter may not be stored either.
 var G: u8[>..<] = "xyz";
 struct K { s: const u8[:] }
 

@@ -1,5 +1,5 @@
 // error: array capacity N names a type parameter, not a constant
-// A generic body's sizes resolve in its scope (§3.3): N is the type parameter.
+// A generic body's sizes resolve in its scope: N is the type parameter.
 let N = 4;
 
 fn f<N>(x: N) -> i64 {

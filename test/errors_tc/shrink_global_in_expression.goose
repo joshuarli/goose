@@ -1,6 +1,6 @@
 // error: cannot pop bs: global GS may hold a reference into it
 // A grow-only shrink inside a larger expression is judged against the other
-// globals once the program is checked, as one standing alone is (§5.1).
+// globals once the program is checked, as one standing alone is.
 struct B { name: u8[..8] }
 var bs: B[>..] = [];
 var GS: const u8[:][>..] = [];

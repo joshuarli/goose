@@ -1,6 +1,6 @@
-// A user format overload taking a value by reference (§3.7) is handed what a
-// reference argument names, as writable as the reference is (§9.5), as a
-// reference parameter is (§4.1): through a reference parameter, a local
+// A user format overload taking a value by reference is handed what a
+// reference argument names, as writable as the reference is, as a
+// reference parameter is: through a reference parameter, a local
 // reference, one rebound, a call's reference result, a reference read out of
 // a field -- of a `const` struct too, `const` being shallow -- or out of an
 // element, a narrowed optional and `for` binders, by print, str and format;

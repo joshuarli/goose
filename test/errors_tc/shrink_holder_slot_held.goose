@@ -1,6 +1,6 @@
 // error: cannot call clr, which shrinks a: rr, evaluated earlier in the statement, may still refer into a
 // use2 is handed a reference to rr before clr runs, and reads through rr's
-// field and s after it (§5.1).
+// field and s after it.
 struct R { r: u8[:]& }
 fn clr(a: u8[>..]&) -> i64 {
     a.clear();

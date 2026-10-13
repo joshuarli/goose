@@ -1,6 +1,6 @@
 // error: cannot assign gs while s
 // error: is still used: it may refer into gs
-// Assigning the array whole is a shrink (§5.2).
+// Assigning the array whole is a shrink.
 fn main() {
     var gs: i64[>..<] = [1, 2, 3];
     let s = gs[..];

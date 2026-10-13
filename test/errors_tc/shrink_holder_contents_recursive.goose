@@ -1,6 +1,6 @@
 // error: cannot call walk: it shrinks a while h is still used, and h may refer into a
 // Every level keeps v in a holder of its own and reads it after the
-// deepest level clears a: v views tt, whose element views a (§5.1).
+// deepest level clears a: v views tt, whose element views a.
 struct P { words: (const u8[:])[:] }
 recursive fn walk(a: u8[>..]&, v: (const u8[:])[:], n: i64) {
     let h = P { words: v };

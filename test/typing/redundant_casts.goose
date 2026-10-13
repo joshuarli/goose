@@ -11,7 +11,7 @@
 // warning: redundant `as i32`: a is already i32
 // warning: redundant `as f32`: an i64 converts to f32 implicitly here
 // warning: redundant `as f32`: an i32 converts to f32 implicitly here
-// Casts that change nothing (§6.3): deleting each leaves the program meaning
+// Casts that change nothing: deleting each leaves the program meaning
 // the same, and warns. Beside them are casts that decide a type, a value, an
 // operation's width or a float's rounding, which do not; the results show
 // the types they were computed at.

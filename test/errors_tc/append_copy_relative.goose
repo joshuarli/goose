@@ -1,5 +1,5 @@
 // error: .append copies the elements of a[1..]: copying a value of type Node, which contains self-relative references, is not supported
-// A copied self-relative offset still measures from the source (§3.9):
+// A copied self-relative offset still measures from the source:
 // b[3].next would land on b[2], not on a copy of a[0].
 struct Node { v: i64, next: Node&<u16>? }
 fn main() {

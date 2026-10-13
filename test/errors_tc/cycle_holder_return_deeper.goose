@@ -1,5 +1,5 @@
 // error: storing a reference rooted at mine, which does not outlive the destination
-// A holder result's roots are those of every return (§7.8): the first holds
+// A holder result's roots are those of every return: the first holds
 // a string literal, the second a view of `mine`, which dies with `walk`, so
 // the result may not be kept in a global.
 struct Fragment { text: const u8[:] }

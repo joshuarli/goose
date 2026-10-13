@@ -1,6 +1,6 @@
 // error: cannot pop entries while n is still used: a reference into it was stored there
-// rs refers to the text field of the element entries[1] itself (§3.8,
-// §4.1), which the pop frees and the push reuses (§5.1).
+// rs refers to the text field of the element entries[1] itself,
+// which the pop frees and the push reuses.
 struct E { text: u8[:] }
 struct Named { rs: u8[:]& }
 var src: u8[>..] = [];

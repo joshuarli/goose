@@ -1,6 +1,6 @@
 // error: a is built where the result goes only where every return of maybe gives it
 // A return of anything else leaves the function with no named result, so a
-// is copied where it is returned (§3.9, §7.3).
+// is copied where it is returned.
 struct Cell { id: i64, neighbors: (Cell&<u32>)[..4] }
 
 fn maybe(n: i64) -> Cell[>..] {

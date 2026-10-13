@@ -1,7 +1,7 @@
 // error: cannot call g: it may shrink t while x is still used, and x may refer into t (§5.2)
 // A callee's shrink of the storage a reference parameter stands for, passed
 // a reference read out of a struct, is of a value of the parameter's type
-// somewhere behind it, whose grow-shrink array can hold what x views (§5.2).
+// somewhere behind it, whose grow-shrink array can hold what x views.
 struct T { n: i64, items: i64[>..<] }
 struct B { t: T&, r: u8[>..<] }
 fn f(t: T&, x: i64&) {

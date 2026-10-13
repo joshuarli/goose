@@ -2,7 +2,7 @@
 // argument, an if's condition, an assert, both sides of && and an
 // initializer's operand -- beside a let save path and a global holding
 // views of another global array only: judged against the other globals as
-// statements are (§5.1).
+// statements are.
 struct B { name: u8[..8], v: i64 }
 let SAVE_PATH = "loot.save";
 var bs: B[>..] = [];

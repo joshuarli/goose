@@ -46,7 +46,7 @@ inline void DumpGenerics(string &s, const vector<GenericParam> &generics) {
 
 inline void TypeExpr::Dump(string &s, size_t limit) const {
     // A type shares its parts, so its text can be exponentially longer than
-    // the type itself: each round of a runaway polymorphic recursion (§7.8)
+    // the type itself: each round of a runaway polymorphic recursion
     // may double it.
     if (s.size() >= limit) return;
     // `const` binds to the first reference or slice of the chain, else to
@@ -183,9 +183,9 @@ inline bool EndsInBlock(const Node *n) {
 }
 
 // Set while a diagnostic prints an expression (TypeCheck::ExprStr), which then
-// reads as the user wrote it: an lvalue the checker bound by reference (§4.1)
+// reads as the user wrote it: an lvalue the checker bound by reference
 // prints without the `&` it inserted, an integer it converted to a float
-// (§6.3) without the conversion. --dump and --specs print every node.
+// without the conversion. --dump and --specs print every node.
 inline thread_local bool dumpwritten = false;
 
 // The node that prints for n, which is also the one an operand is grouped by:
@@ -197,7 +197,7 @@ inline const Node *Written(const Node *n) {
     return u && u->synth ? u->child : n;
 }
 
-// Control expressions need their own parens as operands (§2); the outer
+// Control expressions need their own parens as operands; the outer
 // parens around a binary expression or cast do not group either operand.
 // A postfix receiver additionally groups unary expressions so (-x).f()
 // keeps its meaning, and literals: 0x10.double() lexes as a malformed hex

@@ -2,7 +2,7 @@
 // put copies the slice in the slot its parameter names, which is s: a slice
 // variable holds what its binding says, a[..], and no store into s records
 // that, so the copy in bx is bounded by s rather than traced through s's
-// stores (§3.5, §5.1).
+// stores.
 struct Box { s: u8[:] }
 fn main() {
     var a: u8[>..] = [];

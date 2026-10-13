@@ -1,6 +1,6 @@
 // error: cannot write through this reference: non-writable provenance
 // A `for` binding of a reference element is as writable as the element's
-// type says (§9.5), however writable the array: a `const u8&` element may
+// type says, however writable the array: a `const u8&` element may
 // lead into a string literal, which the write would change.
 fn main() {
     let lit = "ab";

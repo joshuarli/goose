@@ -1,5 +1,5 @@
-// A format overload taking a variable by reference is handed the variable
-// (§3.7), one initialized with a constant and never assigned included, which
+// A format overload taking a variable by reference is handed the variable,
+// one initialized with a constant and never assigned included, which
 // the optimizer would otherwise read as that constant wherever it is named:
 // what the overload keeps points at the variable after the function that
 // printed it returns, and what it writes there the variable holds, at every

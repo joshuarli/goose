@@ -2,8 +2,8 @@
 // grows one edge pool an edge at a time and links each vertex's edges with
 // self-relative 4-byte offsets, because growth never moves anything: one
 // pass, 8 bytes per edge, no per-vertex container. The first V pool entries
-// are the per-vertex list heads. That is the same-root rule itself (spec
-// 3.9), not a rooting workaround: a head *is* a relative reference, and a
+// are the per-vertex list heads. That is the same-root rule itself:
+// a head *is* a relative reference, and a
 // relative reference and the value it points at must lie in one array, so a
 // separate head array could only hold plain 8-byte ones.
 //

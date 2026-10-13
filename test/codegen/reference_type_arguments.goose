@@ -1,4 +1,4 @@
-// There are no references to references (§3.8), whatever a type argument
+// There are no references to references, whatever a type argument
 // is: `T?` of a reference makes that reference nullable, and `T&` is the
 // reference itself, loaded where it is relative, the way `&` of a location
 // holding one gives the stored reference. So std's find and last, which

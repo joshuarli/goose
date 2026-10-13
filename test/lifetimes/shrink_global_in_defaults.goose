@@ -1,7 +1,7 @@
 // Defaults that shrink a global array, directly or through a call, beside
 // a global a default gives a view of another array only, and a let save
-// path: judged against the other globals as shrinks written at the call are
-// (§5.1, §7.1).
+// path: judged against the other globals as shrinks written at the call are.
+//
 struct B { name: u8[..8], v: i64 }
 struct H { s: const u8[:] }
 var bs: B[>..] = [];

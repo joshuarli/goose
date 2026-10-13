@@ -1,5 +1,5 @@
 // A slice parameter is threaded when every call back into the cycle passes
-// it a subslice of itself (§7.8): `src[n..]` is rooted exactly where `src`
+// it a subslice of itself: `src[n..]` is rooted exactly where `src`
 // is, so every activation's `src` views the array the entry call passed,
 // and views of it may be stored into a pool inside the cycle.
 struct Tok { text: const u8[:], rest: i64 }

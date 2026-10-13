@@ -1,6 +1,6 @@
 // error: cannot clear out while w is still used
 // w was read out of a slice itself read out of the elements wss views:
-// that slice only bounds the elements w lies in (§5.1).
+// that slice only bounds the elements w lies in.
 fn emit(out: u8[>..]&, wss: ((const u8[:])[:])[:]) {
     let ws = wss[0];
     let w = ws[0];

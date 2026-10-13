@@ -2,7 +2,7 @@
 // error: this one is rooted at s, which may hold i64 values outside that array
 // A root names a variable, not a part of it: an element of a sibling field is
 // rooted at s exactly as the receiver is, but is not one of its elements, and
-// its index would lie past the end of `a` (§3.3).
+// its index would lie past the end of `a`.
 struct S { a: i64[4], b: i64[4] }
 fn main() {
     var s = S { a: [1, 2, 3, 4], b: [5, 6, 7, 8] };

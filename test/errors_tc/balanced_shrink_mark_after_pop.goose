@@ -1,7 +1,7 @@
 // error: cannot call helper, which shrinks s while v
 // error: is still used: it may refer into s
 // A mark taken after an unbalanced shrink may be shorter than the array was
-// when the call began (§5.2): the pop already freed what v views.
+// when the call began: the pop already freed what v views.
 fn helper(s: i64[>..<]&) {
     s.pop();
     let mark = s.len;

@@ -1,5 +1,5 @@
-// Nested functions of one name declared in one scope are an overload set
-// (§7.5, §11.1), so case functions (§8.2) can be nested and reach the
+// Nested functions of one name declared in one scope are an overload set,
+// so case functions can be nested and reach the
 // enclosing function's locals.
 
 enum Op { Dec, Inc, Prev, Next, Print, Loop { body: Op[:] } }

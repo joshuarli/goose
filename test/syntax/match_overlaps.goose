@@ -1,5 +1,5 @@
 // dump-runtime: match patterns may overlap as long as each can still
-// select its arm (§8.1). An earlier arm takes special cases out of a later
+// select its arm. An earlier arm takes special cases out of a later
 // range, ranges meet end to end, a u64's largest value is matched before a
 // range below it, and a u8 match covers every value and still ends in _.
 // Within one arm, differently named constants may be one value's aliases,

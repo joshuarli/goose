@@ -1,5 +1,5 @@
 // A var global declared with only a type starts as its type's default
-// value (§11.1), taken in its place among the globals' initializers:
+// value, taken in its place among the globals' initializers:
 // integers, a struct with declared defaults (one of which runs a function
 // there), a fixed array, an enum, a null optional and a limited array; and
 // the types default<T>() does not take, whose default value is empty or
@@ -9,7 +9,7 @@
 // a grow-only array, and a variable-mode ADT. A later initializer reads
 // some, and each is then assigned, grown or allocated from as its type
 // allows: a string, the struct holding one and the ADT are frozen at
-// construction (§4.4), and stay as they started.
+// construction, and stay as they started.
 var ticks: i64 = 0;
 fn tick() -> i64 { ticks++; ticks }
 

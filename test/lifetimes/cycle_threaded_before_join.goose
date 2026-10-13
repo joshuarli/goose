@@ -2,7 +2,7 @@
 // from its first statement on, the store before that call included. The
 // store keeps a reference read through the context c, which may be stored
 // inside the cycle while every call back into it passes c on as main gave
-// it (§7.8): from g's call back on the store relies on that, and the call
+// it: from g's call back on the store relies on that, and the call
 // does pass c on.
 struct Ctx { depth: i64, trail: (i64&)[>..]& }
 

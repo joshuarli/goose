@@ -1,5 +1,5 @@
 // error: cannot clear buf while h is still used: a reference into it was stored there
-// A struct holding a reference into the buffer is live at the clear (§5.1);
+// A struct holding a reference into the buffer is live at the clear;
 // where the reference itself came from is not tracked past the store.
 struct Hold { r: u8& }
 fn main() {

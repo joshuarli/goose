@@ -1,5 +1,5 @@
 // error: cannot clear b while b is still used: a reference to what may hold a reference or slice into it was stored there
-// The same with the shrink in the function holding the struct (§5.1).
+// The same with the shrink in the function holding the struct.
 struct H { s: const u8[:] }
 struct B { h: H&, r: u8[>..] }
 fn main() {

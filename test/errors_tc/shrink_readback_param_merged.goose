@@ -1,7 +1,7 @@
 // error: cannot call f, which may shrink b while s
 // error: is still used: it may refer into b
 // r's root is z's, which bounds pp.y's array as well: popping through r may
-// shrink the caller's b, which pp leads to (§5.2, §9.2).
+// shrink the caller's b, which pp leads to.
 struct P { x: i64[>..<]&, y: i64[>..<]& }
 fn f(pp: P&, c: bool) {
     var z: i64[>..<] = [0];

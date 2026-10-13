@@ -1,6 +1,6 @@
-// A varint field is storage of type varint (§3.6), so at a destination of
+// A varint field is storage of type varint, so at a destination of
 // type varint& it binds by reference without `&`, as any lvalue does at a
-// reference to its own type (§3.8, §4.1): a parameter, a generic `T&` one,
+// reference to its own type: a parameter, a generic `T&` one,
 // one whose type argument is a reference, a result, an annotated binding,
 // a reference field, an array literal's element, a push, a `.=` binding
 // and rebind, an identity comparison, and each branch of a construct at

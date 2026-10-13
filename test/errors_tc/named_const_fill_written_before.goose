@@ -1,6 +1,6 @@
 // error: the array fill count relies on K keeping its initializer's value, but a writable reference bound to K at
 // error: named_const_fill_written_before.goose:10 may change it
-// §11.1, §4.4: the reference comes first; the fill count is still compiled
+// the reference comes first; the fill count is still compiled
 // in as K's initializer says.
 
 fn bump(r: i64&) { r += 10; }

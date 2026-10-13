@@ -1,6 +1,6 @@
 // error: cannot assign through this path (const, or a read-only instantiation
 // An array behind a reference joins as a slice where the reference points,
-// read-only where the reference is (§6.4, §9.5): a write through the slice
+// read-only where the reference is: a write through the slice
 // would reach the array a `const i64[3]&` names.
 fn zero_first(r: const i64[3]&, rest: i64[>..]&, c: bool) {
     let s = if c { r } else { rest[..] };

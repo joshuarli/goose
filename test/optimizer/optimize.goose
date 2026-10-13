@@ -379,8 +379,8 @@ recursive fn tre_flt(n: i64, x: f64) -> f64 {
     return 0.5 + tre_flt(n - 1, x);
 }
 
-// A callee that can `return ... from` us lands in the innermost active frame
-// (§7.9), so this one keeps a frame per level.
+// A callee that can `return ... from` us lands in the innermost active frame,
+// so this one keeps a frame per level.
 fn tre_leaf(n: i64) -> i64 {
     if n == 4 { return 100 from tre_from; }
     n
@@ -847,5 +847,5 @@ fn main_optimize() {
     print(100 / z);
 }
 
-// Standalone entry; ignored when this file is imported (§11.1).
+// Standalone entry; ignored when this file is imported.
 fn main() { main_optimize(); }

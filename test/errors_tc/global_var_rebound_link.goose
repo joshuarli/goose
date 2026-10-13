@@ -4,7 +4,7 @@
 // later call: link is checked while g still has only its initializer's
 // binding, into cells, but its check has to hold after rebind, checked
 // later, has bound g into nodes. So a read of g in a function's body is the
-// read-back rule's answer for a global (§9.5), which may point into either.
+// read-back rule's answer for a global, which may point into either.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [Cell { v: 1 }];
 struct S { r: Cell&<u16 in cells>?, n: i64 }

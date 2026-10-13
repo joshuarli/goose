@@ -1,6 +1,6 @@
 // error: cannot clear ps while rr is still used: a reference to a slice that may point into it was stored there
 // s is a byte view of ps's elements, which no u8 slice could otherwise view:
-// rr leads to it through s (§5.1, serialization).
+// rr leads to it through s (serialization).
 struct P { x: i64 }
 struct R { r: const (const u8[:])& }
 fn main() {

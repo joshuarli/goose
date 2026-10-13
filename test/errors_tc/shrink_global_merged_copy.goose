@@ -2,7 +2,7 @@
 // r may be W1 or ws[0], whose h.s views ws's own element; the copy of r.h
 // into G is on record as a copy of what one of them holds, and what the
 // other holds counts beside it. ws's view into its own elements is freed
-// with them; G, holding a copy of it, is what the error names (§5.1).
+// with them; G, holding a copy of it, is what the error names.
 struct H { s: const u8[:] }
 struct W { h: H, name: u8[..8] }
 var ws: W[>..] = [];

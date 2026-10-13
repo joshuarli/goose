@@ -1,6 +1,6 @@
 // error: cannot clear b while r is still used: it may hold a reference or slice into it
 // k's reference names the slot p does, main's s: the store through it puts
-// b's slice there (§9.2), so r may view b, which the clear frees (§5.1).
+// b's slice there, so r may view b, which the clear frees.
 struct K { r: u8[:]& }
 fn f(p: u8[:]&, k: K, o: u8[:]) -> u8[:] {
     k.r = o;

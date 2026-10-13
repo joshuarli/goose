@@ -1,9 +1,9 @@
-// runtime-debug: globals are declared like locals (§11.1), so an
+// runtime-debug: globals are declared like locals, so an
 // initializer's value is read as the global's type asks, also where the
 // call it makes is inlined (-O2) and the callee's `return` delivers the
-// call's own result: a reference result read as its pointee (§3.8) -- a
+// call's own result: a reference result read as its pointee -- a
 // slice, a struct, a scalar, a varint field -- and a slice copied into a
-// static-capacity limited array (§4.2); called directly, chosen by an `if`
+// static-capacity limited array; called directly, chosen by an `if`
 // or a `block`, or given by a function value's call.
 struct P { x: i64, y: i64 }
 struct V { n: varint, w: i32 }

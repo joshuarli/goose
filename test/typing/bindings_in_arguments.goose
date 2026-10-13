@@ -4,7 +4,7 @@
 // parameter types. A declaration or `for` inside an argument (in a block,
 // an if, a match or a loop) is checked with it, and binds the same both
 // times: a non-fixed lvalue by reference, which is no redundant & since
-// none was written (§4.1), and the uses read what the declaration bound.
+// none was written, and the uses read what the declaration bound.
 // A redundant & that was written warns, once.
 struct Txt { body: u8[] }
 struct Bag { items: i64[>..<] }

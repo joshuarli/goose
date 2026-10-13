@@ -1,7 +1,7 @@
 // A copy's store record names the one container it came out of, where there
 // is one, so a shrink of an array beside it passes: each of bx, by and bz
 // ends up with a view of a, copied out of h, and clearing other, at the same
-// depth, leaves them valid (§3.5, §5.1).
+// depth, leaves them valid.
 struct Box { s: u8[:] }
 fn put(p: u8[:]&, b: Box&) { b.s = p[0..1]; }
 fn take(p: Box&, b: Box&) { b = p; }

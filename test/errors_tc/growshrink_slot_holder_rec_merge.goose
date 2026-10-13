@@ -1,7 +1,7 @@
 // error: storing a reference that may point into a grow-shrink array, as <recursive result> may
-// m is a holder read out of an element of frags, which may be stored
-// (§5.2), or a back edge's holder result, which may only be passed down
-// (§7.8): what m holds may be either, so it is not stored.
+// m is a holder read out of an element of frags, which may be stored,
+// or a back edge's holder result, which may only be passed down:
+// what m holds may be either, so it is not stored.
 struct Fragment { text: const u8[:] }
 var frags: Fragment[>..<] = [];
 recursive fn pass(h: Fragment, n: i64, c: bool) -> Fragment {

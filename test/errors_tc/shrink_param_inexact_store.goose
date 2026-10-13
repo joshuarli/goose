@@ -2,7 +2,7 @@
 // g's shrink of xs is checked at f's call of g against f's holders, from g's
 // summary. The slice stored into h was read out of the holder src names,
 // which holds what f's caller stored there: f leaves that to its call,
-// which passes a view of a in src's holder and a for xs (§5.1).
+// which passes a view of a in src's holder and a for xs.
 struct H { s: const i64[:] }
 fn g(xs: i64[>..]&) {
     xs.pop();

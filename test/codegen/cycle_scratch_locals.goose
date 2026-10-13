@@ -1,6 +1,6 @@
 // runtime-define: GS_MAX_STACKS=4
 // Functions of a recursive cycle own non-fixed locals whose scope ends
-// before they call back into the cycle (§7.8). A local's data stack is free
+// before they call back into the cycle. A local's data stack is free
 // again once its block ends, so every activation reuses the same few
 // stacks: a thousand levels run within four, where a stack per level would
 // abort.

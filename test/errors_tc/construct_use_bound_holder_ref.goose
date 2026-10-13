@@ -1,5 +1,5 @@
 // error: cannot use e in the value assigned to o.s: e may refer to o.s
-// The same with the reference bound to a variable first (§4.4).
+// The same with the reference bound to a variable first.
 struct S { n: i64, items: i64[>..] }
 struct O { k: i64, inner: S&, s: S }
 fn mk(s: S&) -> S { return S { n: s.n, items: copy(s.items) }; }

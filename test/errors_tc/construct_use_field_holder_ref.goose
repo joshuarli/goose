@@ -1,6 +1,6 @@
 // error: cannot use o.inner in the value assigned to o.s
 // A field referring to a value of the type holding the array assigned may
-// refer to that value itself (§4.4).
+// refer to that value itself.
 struct S { n: i64, items: i64[>..] }
 struct O { k: i64, inner: S&, s: S }
 fn mk(s: S&) -> S { return S { n: s.n, items: copy(s.items) }; }

@@ -1,5 +1,5 @@
 // A store through a reference read out of a borrowed context goes into what
-// that reference points at, which whatever owns the slot holds (§9.2). names
+// that reference points at, which whatever owns the slot holds. names
 // can hold a const u8[:], log an Input and a const Input?, and extra views
 // Inputs, but none of them can hold what c leads to: no store into the
 // context's tables may land in them, however the destination is built or

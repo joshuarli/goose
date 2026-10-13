@@ -1,7 +1,7 @@
 // error: cannot clear a while bx is still used: a reference into it was stored there
 // bs was read out of hb, whose stores say where its slices point, not what
 // the elements they view hold: the copy in bx is bounded by arr1 and arr2,
-// the arrays bs may view (§3.5, §3.6, §5.1).
+// the arrays bs may view.
 struct Box { s: u8[:] }
 struct HB { bs: Box[:] }
 fn main() {

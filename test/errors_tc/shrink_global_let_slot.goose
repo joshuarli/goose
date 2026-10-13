@@ -1,7 +1,7 @@
 // error: cannot clear bs: global P may hold a reference into it
 // P is a `let`, but its type is not const, so a reference to its slot may
 // write it: aim, checked after reload, points P into bs, and reload's second
-// clear leaves it viewing freed elements (§5.1, §9.5).
+// clear leaves it viewing freed elements.
 struct B { name: u8[..8] }
 var arr: u8[4] = [1, 2, 3, 4];
 let P: u8[:] = arr[..];

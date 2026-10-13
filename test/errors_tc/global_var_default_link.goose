@@ -1,9 +1,9 @@
 // error: a relative reference in cells must point into cells
 // error: g is a global var, which any function may bind, and may point into cells or nodes
-// A var global declared without an initializer starts as null (§11.1), which
+// A var global declared without an initializer starts as null, which
 // link's check sees before any function has bound g, but the check serves
 // the call after rebind has bound g into nodes too: a read of g in a
-// function's body is the read-back rule's answer for a global (§9.5).
+// function's body is the read-back rule's answer for a global.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [Cell { v: 1 }];
 struct S { r: Cell&<u16 in cells>?, n: i64 }

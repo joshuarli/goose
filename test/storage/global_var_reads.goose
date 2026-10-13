@@ -1,6 +1,6 @@
 // Any function may bind a global `var` of reference or slice type, so a read
-// of one in a function's body is the read-back rule's answer for a global
-// (§9.5), whichever functions were checked first. That answer is still exact
+// of one in a function's body is the read-back rule's answer for a global,
+// whichever functions were checked first. That answer is still exact
 // for a global naming a pool, which points into that pool, and for one whose
 // pointee only one global can own, and a global `let` keeps its binding: the
 // links, index_of and the store below need no more. A global initializer
@@ -8,7 +8,7 @@
 // `var` reads as bound, or as null before any binding, so a pop through one
 // and an assignment of the array beside it see only the array it is bound
 // to, and a read-back needs no bound for the globals declared later. A read
-// is as writable as the global's type, and a slot read (§5.2): a grow-shrink
+// is as writable as the global's type, and a slot read: a grow-shrink
 // global that could own the pointee does not taint it, and a pop of one
 // leaves a byte view of another array alone.
 

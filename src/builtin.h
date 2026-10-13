@@ -1,5 +1,5 @@
-// Goose compiler — the blessed packages (docs/design/packages.md §4.5) and
-// the ones compiled into this compiler (§7.1): the table src/blessed.txt,
+// Goose compiler — the blessed packages and
+// the ones compiled into this compiler: the table src/blessed.txt,
 // embedded at the compiler's build, and what cmake/package.cmake built in,
 // each with a symbol table for JIT runs, where its sources are, and where
 // the response file a program using it links was written.

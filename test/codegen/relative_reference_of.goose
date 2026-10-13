@@ -1,5 +1,5 @@
-// `&` of a location holding a relative reference is the reference it holds
-// (§3.8), loaded (§3.9): an `in pool` field at every fixed width and the
+// `&` of a location holding a relative reference is the reference it holds,
+// loaded: an `in pool` field at every fixed width and the
 // varint one, optional or not, a self-relative field of a pool element, and
 // an element of an array of links, reached directly and through a parameter,
 // bound by `let` and `var`, passed to a block and to an untyped parameter,

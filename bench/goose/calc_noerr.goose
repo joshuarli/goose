@@ -1,6 +1,6 @@
 // The error-free twin of calc.goose: the same generator, parser, AST pool and
 // evaluator, but nothing damages the generated text, so every input parses and
-// evaluates and no `return ... from` (spec 7.9) is ever taken. The propagation
+// evaluates and no `return ... from` is ever taken. The propagation
 // machinery is still emitted -- a discriminant check after every call on the
 // path out of parse_factor and eval -- so this row prices those checks against
 // --unsafe-no-rf-check, which omits them and is therefore only correct on a

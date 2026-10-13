@@ -1,5 +1,5 @@
 // error: match pattern LIMIT names a local variable, not a constant
-// A pattern name resolves as any other name does (§8.1, §11.1): the local
+// A pattern name resolves as any other name does: the local
 // hides the global constant, and a local is no constant.
 let LIMIT = 10;
 

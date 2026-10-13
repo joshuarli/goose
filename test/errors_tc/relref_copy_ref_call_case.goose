@@ -1,6 +1,6 @@
 // error: copying a value of type Node, which contains self-relative references, is not supported; construct it in place, or bind a reference to it with .=: let n .= pick(k, ns)
-// Case functions returning a reference are a reference-returning call
-// (§8.2, §3.9).
+// Case functions returning a reference are a reference-returning call.
+//
 struct Node { next: Node&<u32>?, v: i64 }
 fn pair(ns: Node[>..]&) -> Node& {
     let a .= ns.push(Node { v: 1 });

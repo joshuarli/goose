@@ -1,6 +1,6 @@
 // error: variable n may be used before it is assigned
 // Only the break assigns n: the while also exits where its condition is
-// false (§4.4, §6.4).
+// false.
 fn run(k: i64) {
     var n: i64;
     var i = 0;

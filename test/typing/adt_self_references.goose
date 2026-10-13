@@ -1,7 +1,7 @@
 // runtime-debug: an ADT's payload may refer to the ADT itself, in fixed
 // and in variable mode, whatever the reference's spelling -- plain,
 // optional, relative, a slice -- since a reference is fixed-size whatever
-// it points at (§3.4). Only containing a type by value makes it part of
+// it points at. Only containing a type by value makes it part of
 // the type: a type reached through a reference may contain the one
 // referring to it, whichever of the two is declared first.
 
@@ -12,7 +12,7 @@ enum V { Nil, Cons { name: u8[], next: V..? } }
 enum M { Nil, Cons { v: i64, next: M? } }
 // Fixed mode linking to its variable mode.
 enum F { Nil, Cons { v: i64, next: F..? } }
-// Self-relative links, which only variable mode's payloads hold (§3.5),
+// Self-relative links, which only variable mode's payloads hold,
 // and links into a pool.
 enum SV { Nil, Cons { v: i64, next: SV..&<u32>? } }
 enum P { Nil, Cons { v: i64, next: P&<u16 in pool>? } }

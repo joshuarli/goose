@@ -1,6 +1,6 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // error: passes c rooted differently from the cycle's entry call
-// f's store relies on its context being passed on around the cycle (§7.8).
+// f's store relies on its context being passed on around the cycle.
 // g passes f its own context back, which its first call rooted where f's is,
 // but g's own call back passes g a local for it: from then on g's context
 // is whatever each activation of g was given, and so is what g gives f.

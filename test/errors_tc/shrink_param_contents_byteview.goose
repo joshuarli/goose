@@ -1,5 +1,5 @@
 // error: cannot call f: it shrinks arr while words is still used, and words may refer into arr
-// names holds a byte view of arr's elements (§5.1).
+// names holds a byte view of arr's elements.
 fn f(arr: i32[>..]&, words: (const u8[:])[:]) {
     arr.clear();
     arr.push(0x5A5A5A5A);

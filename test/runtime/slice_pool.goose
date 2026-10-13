@@ -1,4 +1,4 @@
-// runtime-debug: reusable[] slice pools: first fit, merging, growth in place and by moving (§5.4).
+// runtime-debug: reusable[] slice pools: first fit, merging, growth in place and by moving.
 struct Cell { v: i64 = -1, w: i32 = 5 }
 
 fn at(pool: i64[>..]&, s: i64[:]) -> i64 { pool.index_of(s[0]) }

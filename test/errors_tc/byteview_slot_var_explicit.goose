@@ -1,6 +1,6 @@
 // error: storing a reference into mine, which holds a grow-shrink array
 // r refers to the variable b, whose binding is the bytes of mine: the slice
-// loaded through r is that byte view, never stored (§5.2).
+// loaded through r is that byte view, never stored.
 struct Cell { v: i64 }
 struct Keep { v: const u8[:] }
 fn main() {

@@ -1,5 +1,5 @@
 // error: cannot write through this reference: non-writable provenance
-// A field reached through a `const S&` is not written (§9.5): bound by
+// A field reached through a `const S&` is not written: bound by
 // reference, as `&c.f` of it is, it is a read-only reference, however
 // writable the slice it holds.
 struct S { f: u8[:] }

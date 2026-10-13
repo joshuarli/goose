@@ -1,5 +1,5 @@
 // runtime-debug: print, str and format follow an ADT's links to the ADT
-// itself as deep as they go (§3.7), in fixed and in variable mode and from
+// itself as deep as they go, in fixed and in variable mode and from
 // one to the other, through plain, optional, self-relative and pool links
 // and slices, generic too, and through types holding the ADT that it
 // refers to: every level is rendered, a fixed-mode value overwritten in
@@ -12,7 +12,7 @@ enum V { Nil, Cons { name: u8[], next: V..? } }
 enum M { Nil, Cons { v: i64, next: M? } }
 // Fixed mode linking to its variable mode.
 enum F { Nil, Cons { v: i64, next: F..? } }
-// Self-relative links, which only variable mode's payloads hold (§3.5),
+// Self-relative links, which only variable mode's payloads hold,
 // and links into a pool.
 enum S { Nil, Cons { v: i64, next: S..&<u32>? } }
 enum P { Nil, Cons { v: i64, next: P&<u16 in pool>? } }

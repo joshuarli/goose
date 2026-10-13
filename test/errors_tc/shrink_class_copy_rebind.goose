@@ -1,6 +1,6 @@
 // error: cannot clear ns while b is still used: a reference into it was stored there
 // r, read out of the elements ns names, may be rebound to one of them
-// before b keeps it: no longer only a view the storage held (§5.1).
+// before b keeps it: no longer only a view the storage held.
 struct N { v: i64, next: N&? }
 struct B { n: N& }
 fn f(ns: N[>..]&, c: bool, keep: N&) -> B {

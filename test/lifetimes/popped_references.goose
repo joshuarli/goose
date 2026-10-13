@@ -1,6 +1,6 @@
 // A reference or slice popped out of an array leaves as itself: what a
-// temporary holds is not rooted at the temporary (§9.2), so it points where
-// the element did and is as writable as the element's slot (§9.5). It binds
+// temporary holds is not rooted at the temporary, so it points where
+// the element did and is as writable as the element's slot. It binds
 // to a variable, writes through, stays an element of its array for
 // index_of, and returns through a reference parameter's array.
 struct Cell { id: i64, neighbors: (Cell&<u32>)[..4] }

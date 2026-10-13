@@ -1,5 +1,5 @@
 // error: operator + cannot be applied to i64? and i64
-// Optionals must be narrowed before access (§3.8).
+// Optionals must be narrowed before access.
 fn f(o: i64?) -> i64 {
     o + 1
 }

@@ -1,8 +1,8 @@
 // error: a relative reference in cells must point into cells
 // error: this reference is rooted at spare
 // `v` is null on the first iteration only: the rebind after the push hands
-// every later one a reference into spare (§9.2), which no link into cells
-// encodes (§3.9).
+// every later one a reference into spare, which no link into cells
+// encodes.
 struct Cell { key: i64, next: Cell&<u16 in cells>? }
 var cells: Cell[>..] = [];
 var spare: Cell[>..] = [Cell { key: 1 }];

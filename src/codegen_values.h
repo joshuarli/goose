@@ -1,7 +1,7 @@
 // Goose compiler — codegen's values (definitions of CodeGen members,
 // codegen.h): locations (paths resolved to C lvalues or byte pointers, with
 // their data stacks), loop-invariant array views, expression values, string
-// literals, and the binary operators (§6.1, §4.5).
+// literals, and the binary operators.
 #pragma once
 
 namespace goose {
@@ -12,7 +12,7 @@ namespace goose {
 // The root's data stack (and pool freelist) ride along for growth ops.
 
 // Reference variables with reusable-pool provenance are represented as
-// gs_pref so pool operations stay available through them (§5.4). This is
+// gs_pref so pool operations stay available through them. This is
 // a property of the VarDef (provenance), shared by caller and callee.
 inline bool CodeGen::PrefVar(const VarDef *vd) {
     return vd->type && CarriesPool(vd->type) && vd->ref.reusable;
@@ -63,7 +63,7 @@ inline CodeGen::Loc CodeGen::BytesLoc(const string &ptr, TypeExpr *t, const Loc 
 // The slot's own address and the offset it holds, for a relative
 // reference loc. The stored offset is signed for the self-relative form
 // and unsigned for the `in pool` one, despite both widths being spelled
-// unsigned (§3.9); an int64 holds either.
+// unsigned; an int64 holds either.
 inline void CodeGen::RelParts(const Loc &lv, string &faddr, string &off) {
     auto &r = *lv.t->ref;
     if (r.lenstorage == IS_VARINT) {
@@ -79,7 +79,7 @@ inline void CodeGen::RelParts(const Loc &lv, string &faddr, string &off) {
     }
 }
 
-// What a relative offset is measured from (§3.9): the offset field's own
+// What a relative offset is measured from: the offset field's own
 // address, or, for an `in pool` reference, the pool's base biased by one
 // so that a target at the base still encodes non-zero and 0 stays null.
 inline string CodeGen::RelOrigin(TypeExpr *rt, const string &faddr) {
@@ -285,7 +285,7 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
     return l;
 }
 
-// The gs_rhdr lvalue of a resizable variable (frame header form, C.2).
+// The gs_rhdr lvalue of a resizable variable (frame header form).
 inline string CodeGen::HdrLv(VarDef *vd) {
     auto name = VName(vd);
     return fvptr.count(vd) ? cat("(*", name, ")") : name;
@@ -528,7 +528,7 @@ inline string CodeGen::FltStr(double v, bool f32) {
     if (v != v) return "NAN";
     if (std::isinf(v)) return v > 0 ? "INFINITY" : "(-INFINITY)";
     // An f32 constant from halfway between FLT_MAX and 2^128 up rounds to an
-    // infinity (§6.3), which C compilers reject as a literal or warn about.
+    // infinity, which C compilers reject as a literal or warn about.
     if (f32 && std::fabs(v) >= std::ldexp(2.0 - std::ldexp(1.0, -24), 127))
         return v > 0 ? "INFINITY" : "(-INFINITY)";
     string s;
@@ -847,25 +847,25 @@ inline string CodeGen::LoadLoc(Loc lv, TypeExpr *et, Line ln) {
     }
     if (lv.t->kind == TY_REF && lv.t->ref->lenstorage >= 0) {
         // Relative reference load: an ordinary (possibly fat) reference;
-        // a zero offset is the null of the optional form (§3.9).
+        // a zero offset is the null of the optional form.
         auto &r = *lv.t->ref;
         string faddr, off;
         RelParts(lv, faddr, off);
         auto org = RelOrigin(lv.t, faddr);
         auto ov = T(), p = T();
         L("int64_t ", ov, " = ", off, ";");
-        // Offset 0 is null only for the optional spelling (§3.9); a
+        // Offset 0 is null only for the optional spelling; a
         // non-optional slot holds a reference, so the address is the sum.
         if (r.optional) L("uint8_t *", p, " = ", ov, " ? ", org, " + ", ov, " : NULL;");
         else L("uint8_t *", p, " = ", org, " + ", ov, ";");
         // Relative references never point at resizables: pool elements
-        // are at most variable-class (§3.3).
+        // are at most variable-class.
         assert(!IsResz(r.sub));
         if (IsBytesT(r.sub)) return p;
         return cat("((", CT(r.sub), " *)", p, ")");
     }
     if (et && et->kind == TY_SLICE && lv.t->kind == TY_ARRAY) {
-        // A whole array at a slice destination (§3.10), any loc form
+        // A whole array at a slice destination, any loc form
         // (fixed value or bytes/resizable pointer).
         auto v = ArrayView(lv);
         auto t = T();
@@ -884,11 +884,11 @@ inline string CodeGen::LoadLoc(Loc lv, TypeExpr *et, Line ln) {
         return lv.s;   // Bytes value: the pointer is the currency.
     }
     // A slice, or an array of another kind or capacity, read as a
-    // static-capacity limited array (§4.2).
+    // static-capacity limited array.
     if (et && lv.val && IsStaticLimited(et) &&
         (lv.t->kind == TY_SLICE || (lv.t->kind == TY_ARRAY && !TEq(lv.t, et))))
         return AdaptToFixed(lv, et, ln);
-    // A variant read as its ADT (§3.5).
+    // A variant read as its ADT.
     if (et && et->kind == TY_ENUM && lv.t->kind == TY_VARIANT) return AdaptToFixed(lv, et, ln);
     if (lv.ispref && et && et->kind == TY_REF) {
         // A pool reference read as a plain reference drops the freelist.
@@ -944,7 +944,7 @@ inline string CodeGen::AdaptToFixed(Loc lv, TypeExpr *et, Line ln) {
 
 // The elements of the array or slice at `lv` copied into the
 // static-capacity limited array (type `et`) at the C lvalue `dst`, under
-// its capacity check (§4.2). The count and the elements are read before
+// its capacity check. The count and the elements are read before
 // anything is written, and with `overlap` they move as memmove moves them,
 // so the source may lie in `dst`'s own slots.
 inline void CodeGen::CopyIntoLimited(Loc lv, TypeExpr *et, Line ln, const string &dst,
@@ -960,7 +960,7 @@ inline void CodeGen::CopyIntoLimited(Loc lv, TypeExpr *et, Line ln, const string
 }
 
 // Whether `n`, for a static-capacity limited destination `want`, is an
-// array or slice of another representation that is copied in (§4.2).
+// array or slice of another representation that is copied in.
 inline bool CodeGen::AdaptsToLimited(Node *n, TypeExpr *want) {
     auto nt = n->exprtype;
     if (!want || !nt || !IsStaticLimited(want) || fillvalues.count(n)) return false;
@@ -1006,10 +1006,10 @@ inline string CodeGen::BytesAddrOf(const Loc &lv) {
     return lv.val ? cat("(uint8_t *)&", lv.s) : lv.s;
 }
 
-// &lvalue (§3.8): the reference value. On a location holding a reference,
+// &lvalue: the reference value. On a location holding a reference,
 // yields the stored reference.
 inline string CodeGen::GenRefVal(Node *child, Line ln) {
-    // A reference to a resizable value points at its frame header (C.2),
+    // A reference to a resizable value points at its frame header,
     // so it can only be taken of a whole variable.
     if (auto id = Is<Ident>(child); id && id->vdef && IsResz(id->vdef->type)) {
         auto stk = VStkOf(id->vdef);
@@ -1047,7 +1047,7 @@ inline string CodeGen::GenXD(Node *n, TypeExpr *want) {
         // Any array or slice of the element type reaching a static-capacity
         // limited destination in a representation of its own (a copy's
         // source, a spliced callee body's result): copied into the C value
-        // from wherever it lives (§4.2).
+        // from wherever it lives.
         auto lv = GenLoc(n);
         if (lv.t->kind == TY_REF) DerefLoc(lv);
         return AdaptToFixed(lv, want, n->line);
@@ -1055,7 +1055,7 @@ inline string CodeGen::GenXD(Node *n, TypeExpr *want) {
     if (NeedsDeref(n->exprtype, want)) {
         auto sub = n->exprtype->ref->sub;
         if (want->kind == TY_SLICE && sub->kind == TY_ARRAY) {
-            // The pointee array sliced whole (§3.10).
+            // The pointee array sliced whole.
             auto lv = GenLoc(n);
             if (lv.t->kind == TY_REF) DerefLoc(lv);
             return LoadLoc(lv, want, n->line);
@@ -1083,7 +1083,7 @@ inline string CodeGen::GenTruth(Node *n) {
 // and no bounds check but one the types settle or BCE found to hold without
 // the left operand's facts (`idxok`, Binary::specidx); and it reads only
 // variables, fields of fixed structs and elements, never through an optional
-// reference, which the left operand may be what narrows (§3.8). In truth
+// reference, which the left operand may be what narrows. In truth
 // position an optional variable stands for its null test, which reads the
 // reference alone. `budget` bounds the work the operand may do for nothing.
 inline bool CodeGen::Speculatable(Node *n, bool idxok, bool truth, int &budget) {
@@ -1092,7 +1092,7 @@ inline bool CodeGen::Speculatable(Node *n, bool idxok, bool truth, int &budget) 
     auto scalar = [](TypeExpr *x) {
         return x && (IsIntT(x) || x->kind == TY_FLT || x->kind == TY_BOOL);
     };
-    auto wraps = [](TypeExpr *x) {   // unsigned arithmetic wraps in every build (§6.2)
+    auto wraps = [](TypeExpr *x) {   // unsigned arithmetic wraps in every build
         return x && IsIntT(x) && IntRange(x->intstorage).first == 0;
     };
     if (Is<IntLit>(n) || Is<FltLit>(n) || Is<BoolLit>(n)) return true;
@@ -1218,7 +1218,7 @@ inline bool CodeGen::SpeculatablePlace(Node *n, bool idxok, int &budget) {
 // element) is held in its decoded i64 form, like every other varint read,
 // and a relative-reference-typed one (an `if` choosing a relative field's
 // target) as the plain reference every relative load gives and every
-// relative store encodes (§3.9).
+// relative store encodes.
 inline string CodeGen::CtlValX(Node *n) {
     auto t = T();
     auto vt = n->exprtype;
@@ -1262,7 +1262,7 @@ inline string CodeGen::GenFixedArrayLit(ArrayLit *al) {
     auto et = al->exprtype;
     if (et->kind == TY_SLICE) {
         // A literal in slice position: a temporary fixed array, sliced
-        // whole (§3.10; rooted as a temporary by the checker).
+        // whole (; rooted as a temporary by the checker).
         auto count = al->fillval ? ((IntLit *)al->fillcount)->val
                                  : (int64_t)al->elems.size();
         auto at = ast.ArrayOf(et->sub, A_FIXED, al->line, count);
@@ -1308,7 +1308,7 @@ inline string CodeGen::GenPtr(Node *n, string *stkout) {
             return lv.s;
         }
         // A slice or an array of another kind, which the checker let
-        // construct n's array type (§4.2): built as one on a temporary.
+        // construct n's array type: built as one on a temporary.
         string stk;
         auto base = BytesTemp(stk);
         ConstructFromLoc(lv, et, stk, "", n->line);
@@ -1329,7 +1329,7 @@ inline string CodeGen::StrRaw(const string &v) {
     if (it != strdata.end()) return it->second;
     auto name = emit_options.stable_names ? StableSym("gs_str", Sha256::Of(v))
                                           : Unique(cat("gs_str", strdata.size()));
-    // The checker admits no write to a literal (§9.5), so the data is C
+    // The checker admits no write to a literal, so the data is C
     // const and a hole in the analysis faults rather than corrupting; the
     // cast keeps the slice and copy sites at their plain pointer type.
     Append(pdata, "static const uint8_t ", name, "[", v.size() ? v.size() : 1, "] = ", CStr(v),
@@ -1427,7 +1427,7 @@ inline bool CodeGen::HasStmts(Node *n) {
     return found;
 }
 
-// Equality of two direct operands (§4.5): a slice compares length then
+// Equality of two direct operands: a slice compares length then
 // elements here, where as a member it compares by identity (EqX).
 inline string CodeGen::GenEquality(TypeExpr *lt, const string &l, const string &r) {
     if (lt->kind == TY_SLICE) return GenSliceEq(lt, l, r);
@@ -1439,7 +1439,7 @@ inline string CodeGen::GenSliceEq(TypeExpr *st, const string &l, const string &r
                       cat(r, ".len"));
 }
 
-// Structural equality of two element ranges (§4.5): length then elements.
+// Structural equality of two element ranges: length then elements.
 // Either range's elements may be an empty slice's null pointer, which
 // gs_memeq allows.
 inline string CodeGen::GenRangeEq(TypeExpr *elem, const string &ae, const string &an,
@@ -1474,7 +1474,7 @@ inline string CodeGen::GenRangeEq(TypeExpr *elem, const string &ae, const string
     return t;
 }
 
-// Elementwise arithmetic (§6.1), expanded member by member with direct
+// Elementwise arithmetic, expanded member by member with direct
 // loads and stores — no whole-struct temporaries, which backends fail to
 // scalarize. Member i of the result depends only on member i of each
 // operand, so writing members straight into `dst` is exact even when it
@@ -1509,7 +1509,7 @@ inline void CodeGen::GenElemwiseInto(TypeExpr *t, TType op, Line line, const str
     });
 }
 
-// Elementwise negation (§6.1), member by member as above: member i of the
+// Elementwise negation, member by member as above: member i of the
 // result reads only member i of the operand.
 inline void CodeGen::GenElemwiseNegInto(TypeExpr *t, Line line, const string &x,
                                         const string &dst) {
@@ -1556,7 +1556,7 @@ inline void CodeGen::GenElemwiseLeaves(TypeExpr *t, const string &dst,
     rec(t, "");
 }
 
-// Left-to-right evaluation (§2): when the right operand needs statements,
+// Left-to-right evaluation: when the right operand needs statements,
 // the left's value must be snapshotted before they run.
 inline void CodeGen::ElemwiseOperands(Binary *b, string &l, string &r) {
     auto scalar = [&](Node *n) {

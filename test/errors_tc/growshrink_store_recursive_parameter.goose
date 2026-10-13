@@ -1,6 +1,6 @@
 // error: storing a reference into s, which holds a grow-shrink array
 // A parameter whose argument is a back edge's result views G, as the
-// cycle's returns give it (§7.8), so wrap's literal may not hold it (§5.2).
+// cycle's returns give it, so wrap's literal may not hold it.
 struct H { s: const i64[:] }
 var G: i64[>..<] = [1, 2, 3];
 fn f(h: H) {

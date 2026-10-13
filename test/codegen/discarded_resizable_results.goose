@@ -1,13 +1,13 @@
 // runtime-define: GS_STACK_RESERVE=4194304
 // Resizable values evaluated only for their effects: call statements whose
 // result is a `T[>..]`, a `T[>..<]`, a struct with a resizable tail or a
-// variable-mode ADT with a resizable payload (§7.1) -- method-style,
+// variable-mode ADT with a resizable payload -- method-style,
 // through a function value and in loops too -- and blocks, branches, loop
 // breaks, variables and variant constants whose value is one. -O2 splices
 // the callees in, so what is left to discard is the body's named result,
 // its literal tail, a folded variant constant or an early return's local.
-// Each value's storage goes with the statement or block that built it
-// (§7.3): the loops discard more than a stack of the 4 MB reservation
+// Each value's storage goes with the statement or block that built it:
+// the loops discard more than a stack of the 4 MB reservation
 // above could hold at once.
 
 struct Fo { n: i64, items: u8[>..] }     // a frame object

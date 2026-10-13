@@ -1,5 +1,5 @@
 // runtime-debug: A type that reaches itself through references renders
-// structurally only where no format overload renders a part of it (§3.7):
+// structurally only where no format overload renders a part of it:
 // one whose parts have overloads is given an overload of its own, which
 // renders the parts through theirs and the level below through itself.
 // Overloads elsewhere in the same argument apply as ever.

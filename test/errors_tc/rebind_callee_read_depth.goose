@@ -1,9 +1,9 @@
 // error: re-binding best with a reference rooted at a different scope depth is not supported
 // error: best is bound to one rooted at text, and this one is rooted at the caller's storage behind d (freq)
 // A key the dictionary's each reads out of freq is rooted at freq, which
-// each was given, whatever freq's keys view (§9.5): freq is declared inside
+// each was given, whatever freq's keys view: freq is declared inside
 // the block, deeper than text, so best cannot move from a view of text to
-// it (§9.2).
+// it.
 import std;
 import dictionary;
 

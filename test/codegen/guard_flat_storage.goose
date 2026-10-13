@@ -1,9 +1,9 @@
 // runtime-define: GS_STACK_RESERVE=4194304
 // An if ending its block whose else cannot complete normally, the shape
-// `guard c else { ... }` parses to (§6.4), is emitted with the rest of the
+// `guard c else { ... }` parses to, is emitted with the rest of the
 // block after the else, not in a C block of its own. What the else, the rest
-// and the condition take on data stacks still goes when each of them ends
-// (§7.3): every loop below takes 80 KB an iteration, and a hundred of those
+// and the condition take on data stacks still goes when each of them ends:
+// every loop below takes 80 KB an iteration, and a hundred of those
 // kept would overflow a stack of the 4 MB reservation above.
 
 fn big(k: i64) -> i64[>..] {

@@ -1,7 +1,7 @@
 // error: cannot bind the payload of fixed-mode E by reference
 // error: bind by value: A a
 // &-binders exist for variable-mode payloads only: a fixed-mode value may be
-// replaced in place, so references into its payload are illegal (§3.5, §8.1).
+// replaced in place, so references into its payload are illegal.
 enum E { A { v: i64 }, B }
 fn main() {
     var e: E = E.A { v: 1 };

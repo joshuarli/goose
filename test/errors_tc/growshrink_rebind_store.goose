@@ -1,7 +1,7 @@
 // error: storing a reference that may point into a, which holds a grow-shrink array
 // A rebind to another root at the same depth leaves a reference variable
-// rooted at the new one (§9.2), but it may still hold its first binding, an
-// element of the grow-shrink `a`, which is never stored (§5.2).
+// rooted at the new one, but it may still hold its first binding, an
+// element of the grow-shrink `a`, which is never stored.
 struct K { r: u8& }
 
 fn main() {

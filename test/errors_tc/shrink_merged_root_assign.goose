@@ -1,7 +1,7 @@
 // error: cannot assign r while s
 // error: is still used: it may refer into b, which r may point at
 // Assigning a grow-shrink array whole through a merged reference shrinks
-// whichever array it points at (§5.2).
+// whichever array it points at.
 fn main() {
     var a: i64[>..<] = [1, 2, 3];
     var b: i64[>..<] = [4, 5];

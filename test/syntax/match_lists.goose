@@ -1,5 +1,5 @@
-// dump-runtime: an integer match arm may list several values and ranges
-// (§8.1), literal or named, bare or qualified, negated, and at the top of
+// dump-runtime: an integer match arm may list several values and ranges,
+// literal or named, bare or qualified, negated, and at the top of
 // their type; any one of them selects the arm. Each is checked as a lone
 // pattern is, per specialization of a generic function. A constant
 // scrutinee selects the arm a later value names, and BCE bounds the

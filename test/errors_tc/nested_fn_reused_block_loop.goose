@@ -3,7 +3,7 @@
 // The block apply calls reads v, which points into cells alone when the
 // loop's first pass checks apply; the next pass starts from the rebind at
 // the end of the body, which has given v spare as well, and checks apply
-// with the block again rather than reusing that (§3.9, §7.6).
+// with the block again rather than reusing that.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];
 var spare: Cell[>..] = [];

@@ -3,8 +3,8 @@
 // A reference kept in a local array after it was read out of a parameter's
 // pointee may point wherever the caller's links lead, here into other: the
 // parameter's class only bounds it, so it is no identity for the relative
-// store, although pool's class is the one candidate that can hold a Node
-// (§9.5, §3.9).
+// store, although pool's class is the one candidate that can hold a Node.
+//
 struct Node { key: i32, plain: Node&?, next: Node&<u32>? }
 fn relink(pool: Node[>..]&) {
     var keep: (Node&?)[>..] = [];

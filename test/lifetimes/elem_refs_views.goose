@@ -1,5 +1,5 @@
 // A slice whose elements hold references, and a reference to a holder, lead
-// on to what those references point into (§5.1): for a holder the function
+// on to what those references point into: for a holder the function
 // names exactly, where the holder's store record says, in the scans and in
 // the pairs the callers judge; for a `var`, anything that outlives the
 // holder; for a global holder, what the judgement of the globals says. A

@@ -1,7 +1,7 @@
 // error: storing a reference rooted at c, which does not outlive the destination: it is reached through a reference that may point into table
 // The table c.inputs points at may be the one process is given, an array
 // of the type it pushes into: process cannot tell the two apart, and table
-// may be further out than the storage the pushed view is into (§9.2).
+// may be further out than the storage the pushed view is into.
 struct Context { storage: u8[>..]&, inputs: (const u8[:])[>..]& }
 
 fn save(c: Context&, s: const u8[:]) -> const u8[:] {

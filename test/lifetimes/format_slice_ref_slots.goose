@@ -1,9 +1,9 @@
-// A format hook taking a slice by reference (§3.7) takes the slot the slice
-// lies in, as a reference parameter takes a slice lvalue (§4.1): it
+// A format hook taking a slice by reference takes the slot the slice
+// lies in, as a reference parameter takes a slice lvalue: it
 // re-points a `var`, a plain `let` (written through a reference as a var
-// is, §4.4), a field or an element of a `var`, and what a writable
+// is), a field or an element of a `var`, and what a writable
 // reference names. What the slot holds as print calls the hook is what a
-// load through the parameter sees (§9.2), so a view of it may be kept
+// load through the parameter sees, so a view of it may be kept
 // wherever that slice may be.
 struct S { f: u8[:] }
 struct H { r: i64[:]& }

@@ -1,5 +1,5 @@
 // error: storing a reference rooted at s, which does not outlive the destination
-// `.=` binds s itself (§3.8), which dies at the end of its block, while o
+// `.=` binds s itself, which dies at the end of its block, while o
 // lives on.
 var g: u8[>..] = [];
 fn main() {

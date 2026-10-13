@@ -1,4 +1,4 @@
-// Comma-separated values as RFC 4180 defines them (docs/stdlib.md): a
+// Comma-separated values as RFC 4180 defines them: a
 // reader that hands each record's fields to a block as slices of the text,
 // and the quoting a writer needs.
 

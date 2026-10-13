@@ -1,4 +1,4 @@
-// A range's or count's binder can take an integer type of its own (§6.5):
+// A range's or count's binder can take an integer type of its own:
 // `for i: i32 in a..b` checks each bound against i32, a constant adapting and
 // a typed bound only widening, and counts at i32. The end may be one past the
 // type's largest value, and the loop visits every value of the type without

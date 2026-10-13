@@ -1,5 +1,5 @@
 // The entry of the package greet. The sourced import is a requirement: the
-// root of a program using greet declares tools itself (§4.3).
+// root of a program using greet declares tools itself.
 namespace greet;
 import std;
 import tools from "../tools";

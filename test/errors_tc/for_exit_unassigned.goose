@@ -1,6 +1,6 @@
 // error: variable n may be used before it is assigned
-// Only the break assigns n: the for also exits once its iterations run out
-// (§4.4, §6.5).
+// Only the break assigns n: the for also exits once its iterations run out.
+//
 fn run(k: i64) {
     var n: i64;
     for i in k {

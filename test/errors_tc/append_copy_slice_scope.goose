@@ -1,6 +1,6 @@
 // error: storing a reference rooted at buf, which does not outlive the destination
-// Elements appended out of a slice are read out of the storage it views
-// (§9.5): the slices they hold point into buf, which ends first (§9.2).
+// Elements appended out of a slice are read out of the storage it views:
+// the slices they hold point into buf, which ends first.
 fn main() {
     var words: u8[:][>..] = [];
     {

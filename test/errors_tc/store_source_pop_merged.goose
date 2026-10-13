@@ -1,6 +1,6 @@
 // error: cannot clear a while bx is still used: a reference into it was stored there
 // The element popped may be arr1's or arr2's, whichever r names, so neither
-// one's stores say what bx holds (§3.5, §5.1).
+// one's stores say what bx holds.
 struct Box { s: u8[:] }
 fn main() {
     var a: u8[>..] = [];

@@ -1,6 +1,6 @@
 // error: cannot clear bs: global P may hold a reference into it, stored at
 // aim writes the view into P's slot through a reference bound to it, which
-// assigns P (§3.8): the record says P may view bs (§5.1).
+// assigns P: the record says P may view bs.
 struct B { name: u8[..8] }
 struct H { s: const u8[:] }
 var bs: B[>..] = [];

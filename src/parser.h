@@ -1,14 +1,14 @@
-// Goose compiler — recursive descent parser. One function per grammar construct,
-// mirroring the grammar sketch in the spec (Appendix D). The parser builds AST
-// nodes and registers top-level symbols; all resolution happens in later phases.
+// Goose compiler — recursive descent parser. One function per grammar construct.
+// The parser builds AST nodes and registers top-level symbols;
+// all resolution happens in later phases.
 #pragma once
 
 namespace goose {
 
 // An `import a.b.c;` (path a/b/c.goose relative to the importing file's
-// package root, §11.1), `import .a.b;` (relative to the importing file), or
+// package root), `import .a.b;` (relative to the importing file), or
 // `import name from "source";` (a package: declared by the root file,
-// required by any other, docs/design/packages.md §4).
+// required by any other).
 struct Import {
     string path;                     // Slash-separated, no extension.
     bool relative = false;           // Leading dot form.
@@ -36,7 +36,7 @@ struct Parser {
 
     SFunction *curfn = nullptr;      // The function whose body is being parsed.
 
-    // Namespaces (docs/design/namespaces.md): the file's `namespace` directive,
+    // Namespaces: the file's `namespace` directive,
     // and the namespace of the declaration being parsed -- the file's, or the
     // one a qualified declaration name spells -- which every name reference
     // written inside it records as where it resolves first.
@@ -59,7 +59,7 @@ struct Parser {
         return true;
     }
 
-    // `inline` is a keyword only before a function declaration (§7.13): it
+    // `inline` is a keyword only before a function declaration: it
     // stays a name everywhere else.
     bool AtInline() {
         if (lex.tok != T_IDENT || lex.attr != "inline") return false;
@@ -239,7 +239,7 @@ struct Parser {
     }
 
     // A declaration's type parameters have lexical priority over every
-    // namespace (§11.1). Mark their uses before whole-program name resolution
+    // namespace. Mark their uses before whole-program name resolution
     // can mistake them for an unrelated struct, enum or alias. Do this after
     // parsing the declaration so bounds can also name later parameters, and
     // include nested functions, which inherit the enclosing type parameters.
@@ -282,7 +282,7 @@ struct Parser {
                     lex.Next();
                 }
             } else {
-                // `const f: T` is `let f: const T` (§3.2).
+                // `const f: T` is `let f: const T`.
                 auto constq = IsNext(T_CONST);
                 f.isconst = constq || IsNext(T_LET);
                 f.name = ExpectIdent(context);
@@ -398,7 +398,7 @@ struct Parser {
                 if (prev.name == p.name) Error(cat("duplicate parameter name: ", p.name));
             if (IsNext(T_COLON)) p.type = ParseType();
             if (IsNext(T_ASSIGN)) {
-                // A default is a value of the parameter's type (§7.1), which
+                // A default is a value of the parameter's type, which
                 // an untyped parameter has only from an argument.
                 if (!p.type)
                     Error(cat("parameter ", p.name, " has a default but no type: an untyped "
@@ -436,7 +436,7 @@ struct Parser {
         }
         BindGenericNames(firsttype, sf->generics);
         // Only the root file's `fn main` is the program entry; an imported
-        // file's main is ignored entirely (§11.1), letting a runnable file
+        // file's main is ignored entirely, letting a runnable file
         // double as an importable library.
         if (!nested && !(sf->name == "main" && fileidx != 0))
             ast.NS(sf->ns).functionmap[sf->name].push_back(sf);
@@ -470,7 +470,7 @@ struct Parser {
         vd->ns = curns;
         if (IsNext(T_COLON)) vd->type = ParseType();
         // `x .= e` declares a reference bound to e, where `x = e` would
-        // copy a fixed-size pointee (§3.8).
+        // copy a fixed-size pointee.
         if (IsNext(T_DOTASSIGN)) vd->byref = true;
         if (vd->byref || IsNext(T_ASSIGN)) {
             for (;;) {
@@ -479,7 +479,7 @@ struct Parser {
             }
         }
         if (isglobal) {
-            // A var global may leave its initial value to its type (§11.1);
+            // A var global may leave its initial value to its type;
             // a let or const one would keep that value for good.
             if (vd->inits.empty() && !vd->isvar)
                 Error("let and const global declarations require an initializer");
@@ -499,7 +499,7 @@ struct Parser {
 
     TypeExpr *ParseType() {
         // `const` qualifies the first reference or slice built on the base
-        // type (§9.5): `const u8[:]` is a slice of read-only bytes, `const
+        // type: `const u8[:]` is a slice of read-only bytes, `const
         // Foo&` a reference to a read-only Foo, `const (u8[:])&` a reference
         // to a read-only slice value. Where no reference or slice follows,
         // the value's contents are read-only: `const i64[3]`.
@@ -550,7 +550,7 @@ struct Parser {
                     if (IsNext(T_LT)) {
                         r->ref->lenstorage = ParseLengthStorage("relative reference width");
                         // `T&<u32 in pool>`: offsets measured from a named
-                        // global pool rather than from the field (§3.9).
+                        // global pool rather than from the field.
                         if (IsNext(T_IN)) {
                             r->ref->poolname = ParseQualifiedName("relative reference pool");
                             r->ref->poolns = curns;
@@ -867,7 +867,7 @@ struct Parser {
         for (;;) {
             p.items.push_back(ParsePatternItem());
             // A bare name is a variant or, in an integer match, a constant:
-            // the scrutinee's type decides (§8.1). Only a lone variant binds
+            // the scrutinee's type decides. Only a lone variant binds
             // its payload: listed variants' payloads differ in type.
             auto &item = p.items.back();
             auto id = Is<Ident>(item.lo);
@@ -915,7 +915,7 @@ struct Parser {
     }
 
     // Bitwise operators bind tighter than comparisons (as in Rust, unlike
-    // C), so `x & mask != 0` tests the masked bits (Appendix D).
+    // C), so `x & mask != 0` tests the masked bits.
     int BinPrec(TType t) {
         switch (t) {
             case T_MUL: case T_DIV: case T_MOD:                return 10;
@@ -932,7 +932,7 @@ struct Parser {
         }
     }
 
-    // `from` is a keyword only in `return ... from f` (§7.9): the identifier
+    // `from` is a keyword only in `return ... from f`: the identifier
     // `from` followed by another identifier. Elsewhere it is an ordinary
     // name, so `from`/`to` parameters stay available.
     bool AtReturnFrom() {
@@ -1177,7 +1177,7 @@ struct Parser {
         auto sub = Sub();
         if (lex.tok == T_DOTDOT) {
             // [..cap]: an empty limited array with a construction-time
-            // capacity (§5.3).
+            // capacity.
             lex.Next();
             a->capexpr = ParseExpr();
         } else if (lex.tok != T_RBRACKET) {
@@ -1200,7 +1200,7 @@ struct Parser {
         auto sl = New<StructLit>(line, type);
         auto sub = Sub();
         while (lex.tok != T_RCURLY) {
-            // A trailing `..` fills in every field not given (§4.2).
+            // A trailing `..` fills in every field not given.
             if (IsNext(T_DOTDOT)) {
                 sl->defaultall = true;
                 break;
@@ -1407,7 +1407,7 @@ struct Parser {
     }
 
     // `guard c; rest` is `if c { rest }`, and `guard c else { s } rest` is
-    // `if c { rest } else { s }` (§6.4), where rest is the rest of the block
+    // `if c { rest } else { s }`, where rest is the rest of the block
     // the guard is in: nothing after the parser sees a guard. The if stands
     // where the guard did, as the block's value where rest ends in one and
     // as its last statement otherwise.

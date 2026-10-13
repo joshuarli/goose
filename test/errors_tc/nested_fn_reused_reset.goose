@@ -3,8 +3,8 @@
 // iteration's loc. Its check in the loop's first pass serves the later
 // passes, which find their v as that pass found its own, and leaves v bound
 // into loc there too: from the second iteration on, h is bound, and the store
-// through it would keep a reference into a loc that ends with its iteration
-// (§7.5, §9.2).
+// through it would keep a reference into a loc that ends with its iteration.
+//
 struct Cell { key: i64 }
 struct K { r: Cell&? }
 fn pick(c: bool, a: Cell&) -> Cell&? {

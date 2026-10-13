@@ -1,5 +1,5 @@
 // error: storing a reference rooted at loc, which does not outlive the destination
-// A back edge reuses f's body whatever it passes (§7.8): the entry call gives
+// A back edge reuses f's body whatever it passes: the entry call gives
 // `a` and `b` views of the same x, so one parameter class stands for both,
 // while the back edge passes a global for `a` and its own local for `b`, the
 // one f returns. The class maps back through both arguments.

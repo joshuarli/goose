@@ -1,5 +1,5 @@
 // error: K names a nested function, not a variable
-// The nested function K hides the global variable K (§11.1).
+// The nested function K hides the global variable K.
 var K = 3;
 
 fn main() {

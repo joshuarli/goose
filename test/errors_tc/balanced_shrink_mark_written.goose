@@ -1,6 +1,6 @@
 // error: cannot call helper, which shrinks a while v
 // error: is still used: it may refer into a
-// §5.2, §4.4: a mark is a `let`, but setzero writes it through a reference,
+// a mark is a `let`, but setzero writes it through a reference,
 // after which the resize goes back to 0 rather than to the length the call
 // began with, freeing the element v views.
 

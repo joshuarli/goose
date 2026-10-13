@@ -1,7 +1,7 @@
 // A variable whose type is inferred from a reference to a non-fixed value is
-// that reference (§3.8), not a non-fixed local built in place: bound inside
+// that reference, not a non-fixed local built in place: bound inside
 // a recursive cycle, it may stay in scope and in use across the calls back
-// into the cycle (§7.8), as `let x .= r;` may. Each activation pushes
+// into the cycle, as `let x .= r;` may. Each activation pushes
 // through its own binding of the shared array before and after the call
 // back, so the pushes nest. A binding initialized by a call into the cycle
 // is a reference as well, in either function of a two-function cycle.

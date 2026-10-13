@@ -2,7 +2,7 @@
 // CgStmt virtuals): the pass reads top to bottom here; the shared machinery
 // is CodeGen's, codegen.h and the codegen_*.h it lists. CgX yields a C
 // expression for fixed-class values, CgAny routes any value to a destination
-// (all branches of a control construct reach the same one, §4.3), CgStmt
+// (all branches of a control construct reach the same one), CgStmt
 // emits statement position.
 #pragma once
 
@@ -53,7 +53,7 @@ inline string StrLit::CgX(CodeGen &cg) {
 inline string Ident::CgX(CodeGen &cg) {
     assert(vdef);   // Named-function values never reach runtime.
     auto x = cg.LoadLoc(cg.VarLoc(vdef), exprtype, line);
-    // A literal parameter (§7.7) is passed at its nominal type and read at
+    // A literal parameter is passed at its nominal type and read at
     // the type each use adapted it to; the call-site check made the
     // conversion exact. A named constant is read likewise at the type its
     // use adapted its value to.
@@ -72,8 +72,8 @@ inline string Unary::CgX(CodeGen &cg) {
     if (op == T_BITAND) {
         // Where the checker decayed the reference (an operand, a value
         // destination, a rendered value, a construct's branch with no
-        // reference destination), `&x` reads as its pointee (§3.8); a whole
-        // array's `&x` at a slice destination reads as that slice (§3.10).
+        // reference destination), `&x` reads as its pointee; a whole
+        // array's `&x` at a slice destination reads as that slice.
         if (exprtype && exprtype->kind != TY_REF)
             return cg.LoadLoc(cg.GenLoc(child), exprtype, line);
         return cg.GenRefVal(child, line);
@@ -99,7 +99,7 @@ inline string Unary::CgX(CodeGen &cg) {
             return cat("(uint8_t)(!", x, ")");
         }
         case T_BITNOT: {
-            // At the operand's type (§6.1): exprtype is the slot the result
+            // At the operand's type: exprtype is the slot the result
             // lands in, which can be wider. The cast undoes C's promotion to
             // int for the narrow types.
             auto ot = cg.OperandT(child->exprtype);
@@ -140,7 +140,7 @@ inline string Binary::CgX(CodeGen &cg) {
         // combined with & or | on the two 0/1 values: a C compiler can
         // if-convert that, and vectorize the loop, where it keeps the branch
         // of a short circuit. Elsewhere the early branch is as good, and
-        // better ahead of a branch that stays (docs/implementation.md §6.11).
+        // better ahead of a branch that stays.
         auto budget = 24;
         if (cg.InStraightLoop() && cg.Speculatable(right, specidx > 0, true, budget)) {
             auto r = cg.GenTruth(right);
@@ -162,7 +162,7 @@ inline string Binary::CgX(CodeGen &cg) {
         return t;
     }
     auto lt = cg.OperandT(left->exprtype);
-    // Null tests (§3.8).
+    // Null tests.
     if (op == T_EQ || op == T_NEQ) {
         auto lnull = Is<NullLit>(left) != nullptr, rnull = Is<NullLit>(right) != nullptr;
         if (lnull || rnull) {
@@ -177,7 +177,7 @@ inline string Binary::CgX(CodeGen &cg) {
                 ot = id->vdef->type;
                 if (ot->ref->lenstorage >= 0) {
                     // A relative reference holds an offset, 0 when null; a
-                    // varint one holds its encoding, not an address (§3.9).
+                    // varint one holds its encoding, not an address.
                     string faddr, off;
                     cg.RelParts(lv, faddr, off);
                     return cat("(", off, op == T_EQ ? " == 0)" : " != 0)");
@@ -212,7 +212,7 @@ inline string Binary::CgX(CodeGen &cg) {
         auto eq = cg.GenRangeEq(lvw.elem, lvw.elems, lvw.len, rvw.elems, rvw.len);
         return op == T_EQ ? eq : cat("(uint8_t)(!", eq, ")");
     }
-    // Order of evaluation is left-to-right (§2): the left operand lands in
+    // Order of evaluation is left-to-right: the left operand lands in
     // a temp before the right one runs.
     auto l = cg.GenPureVal(left);
     auto r = cg.GenVal(right);
@@ -263,7 +263,7 @@ inline string Binary::CgX(CodeGen &cg) {
                     }
                 }
             }
-            // Elementwise math on identical struct/fixed-array types (§6.1).
+            // Elementwise math on identical struct/fixed-array types.
             return cg.GenElemwise(this, l, r);
         }
         case T_LT: case T_GT: case T_LTEQ: case T_GTEQ: {
@@ -328,7 +328,7 @@ inline string Index::CgX(CodeGen &cg) {
 inline string SliceExpr::CgX(CodeGen &cg) {
     auto s = cg.GenSlice(this);
     if (!cg.IsStaticLimited(exprtype)) return s;
-    // The range constructing a static-capacity limited array (§4.2).
+    // The range constructing a static-capacity limited array.
     CodeGen::Loc slv;
     slv.val = true;
     slv.s = s;
@@ -338,7 +338,7 @@ inline string SliceExpr::CgX(CodeGen &cg) {
 // `as` range-checks in debug builds (GS_RANGE and friends are identity
 // casts unless the C is compiled with -DGS_DEBUG=1, and a failing check
 // names the value, the target type and the cast's location); `as!` always
-// wraps or truncates (§6.3). A conversion to a float is never checked: it
+// wraps or truncates. A conversion to a float is never checked: it
 // rounds like float arithmetic does, and beyond f32's range it is an
 // infinity.
 inline string AsCast::CgX(CodeGen &cg) {
@@ -588,7 +588,7 @@ inline void MatchExpr::CgAny(CodeGen &cg, const Dst &d) {
                                cg.Sanitize(variant->name), ")")
                          : "");
             if (arm.pat.byref) {
-                // Variable-mode payloads only (§8.1).
+                // Variable-mode payloads only.
                 if (cg.IsBytesT(vt)) cg.L("uint8_t *", bn, " = ", payload, ";");
                 else cg.L(cg.CT(vt), " *", bn, " = (", cg.CT(vt), " *)(", payload, ");");
             } else if (cg.IsBytesT(vt)) {
@@ -650,8 +650,8 @@ inline void InlineBlock::CgAny(CodeGen &cg, const Dst &d) {
         cg.GenAdtAdapted(from, exprtype, d, line, [&](const Dst &nd) { EmitBody(cg, nd); });
         return;
     }
-    // A call passed where a slice is expected was checked as that slice
-    // (§3.10), while the body returns the array itself. The array is built
+    // A call passed where a slice is expected was checked as that slice,
+    // while the body returns the array itself. The array is built
     // where the call would have put its result, a temporary of the caller's
     // scope, and sliced whole: the body's own scopes release their storage
     // when it exits, before the slice is used.
@@ -764,7 +764,7 @@ inline void Unary::CgAny(CodeGen &cg, const Dst &d) {
     cg.LeafAny(this, d);
 }
 inline void Binary::CgAny(CodeGen &cg, const Dst &d) {
-    // An elementwise result (struct/fixed-array typed, §6.1) writes its
+    // An elementwise result (struct/fixed-array typed) writes its
     // members straight into a plain destination — including one that aliases
     // an operand (see GenElemwiseInto).
     if (d.k == DK_LVALUE && exprtype &&
@@ -930,7 +930,7 @@ inline void Assign::CgStmt(CodeGen &cg) {
         }
         return;
     }
-    // Plain assignment, by the target's representation (§4.4).
+    // Plain assignment, by the target's representation.
     auto t = lv.t;
     if (t->kind == TY_REF && t->ref->lenstorage >= 0) {
         // Relative-reference slot: encode from the plain reference value.
@@ -939,7 +939,7 @@ inline void Assign::CgStmt(CodeGen &cg) {
     }
     if (cg.IsResz(t)) {
         // Whole-resizable assignment: clear (top back to the value start),
-        // then construct the new contents in place (§4.4).
+        // then construct the new contents in place.
         if (cg.IsFrameObj(t) && lv.val) {
             assert(!lv.stk.empty());
             cg.L(cg.TopW(lv.stk), " = ", cg.FoTailHdr(t, lv.s), ".base;");
@@ -1017,7 +1017,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     auto ix = idxdef ? cg.LocalName(idxdef) : "";
     if (iterkind == IK_RANGE || iterkind == IK_COUNT) {
         // The loop variable runs at the range's own type: narrow counters
-        // stay narrow through the body (§6.5). A binder whose type ends
+        // stay narrow through the body. A binder whose type ends
         // where the range does (`for i: u8 in 0..256`) is a copy of a counter
         // of the range's own, wider type, which cannot overflow at the end.
         auto r = Is<RangeExpr>(iter);
@@ -1053,7 +1053,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
         return;
     }
     // Arrays and slices. The length re-reads each iteration (growth during
-    // iteration is legal, §5.2); element access goes through the view. The
+    // iteration is legal); element access goes through the view. The
     // location's text is spelled into the loop, so the references and slices
     // on its path are loaded again each iteration and the sequence is walked
     // where it lies: the checker keeps the arrays those lie in from shrinking
@@ -1065,7 +1065,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     // loop-invariant. Only a length that is an actual memory load is worth
     // spelling as a local: that is the one the C backend cannot hoist for
     // itself, since an element store in the body might alias it. A resizable
-    // owned here keeps its length in a frame header (C.2) -- an ordinary local
+    // owned here keeps its length in a frame header -- an ordinary local
     // the backend already knows nothing aliases, and hoisting it by hand only
     // lengthens a live range.
     auto memlen = v.len.find('*') != string::npos || v.len.find("->") != string::npos;
@@ -1092,7 +1092,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     };
     auto et = vdef->type;
     // An element that is a reference binds as the reference it holds, by
-    // `&x` too (the checker's binding type), decoded if relative (§3.9).
+    // `&x` too (the checker's binding type), decoded if relative.
     auto held = v.elem->kind == TY_REF;
     auto fixedarr = lv.t->kind == TY_ARRAY && lv.t->arr->akind == A_FIXED;
     // A small constant the length never exceeds (BCE's lenbound: a limited
@@ -1181,7 +1181,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
             cg.L(cg.CT(et), " ", iv, " = &", elem, ";");
         } else if (v.elem->kind == TY_REF && v.elem->ref->lenstorage >= 0) {
             // A relative-reference element bound by value: the binding is the
-            // decoded pointer, as indexing the array would give (§3.9).
+            // decoded pointer, as indexing the array would give.
             auto fa = cg.T();
             cg.L("uint8_t *", fa, " = (uint8_t *)&", elem, ";");
             auto off = cg.T();

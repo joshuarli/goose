@@ -1,11 +1,11 @@
 // std's functions that move elements reorder an array of references
-// without writing through them (spec §3.8): they store whole elements with
-// `.=`, which generic code may use on any type (§3.8), and hold one in a
+// without writing through them: they store whole elements with
+// `.=`, which generic code may use on any type, and hold one in a
 // `T` local, which keeps the reference.
 import std;
 
 // A node holding self-relative references, which can be neither copied nor
-// assigned whole (§3.9): only references to it move.
+// assigned whole: only references to it move.
 struct Cell { id: i64, links: (Cell&<u32>)[..2] }
 
 // User generic code moves elements the same way, values and references

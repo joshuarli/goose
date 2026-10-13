@@ -1,6 +1,6 @@
 // error: returning a reference rooted in loc, which dies with this function
 // A holder variable's contents are bounded by what was stored into it that
-// dies first (§9.2): loc, which ties with the temporary's parameter class at
+// dies first: loc, which ties with the temporary's parameter class at
 // f's outermost depth.
 struct H { s: const u8[:] }
 fn make() -> u8[] { return "tmp"; }

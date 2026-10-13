@@ -1,6 +1,6 @@
 // error: cannot clear line while parts is still used: a reference into it was stored there
 // A slice of the buffer was stored into `parts`, which is still in scope
-// at the clear (§5.1).
+// at the clear.
 import std;
 fn main() {
     var line: u8[>..] = [];

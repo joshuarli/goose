@@ -16,8 +16,8 @@ fn load(bytes: const u8[:]) {
 // Each recursive frame owns its argument. Captures see that private copy,
 // not the caller's value, and a returned value survives the frame's return.
 // Inside a recursive cycle a large fixed value lives on the native stack,
-// not a data stack, so that no stack is held across the call into the cycle
-// (§7.8, §10.3): the recursion's values stay above the threshold but well
+// not a data stack, so that no stack is held across the call into the cycle:
+// the recursion's values stay above the threshold but well
 // inside a 1 MiB native stack across its four activations.
 struct Piece { blocks: u8[20000], seed: i64 }
 recursive fn alter(g: Piece, n: i64) -> Piece {

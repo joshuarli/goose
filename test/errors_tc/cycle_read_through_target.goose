@@ -1,6 +1,6 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // left_node points into the storage c leads to, but at another node in each
-// activation, so it is no storage the cycle may store into (§7.8).
+// activation, so it is no storage the cycle may store into.
 import std;
 struct Node { v: i64, left: Node?, right: Node? }
 struct Ctx { depth: i64, nodes: Node[>..]& }

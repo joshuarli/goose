@@ -1,5 +1,5 @@
 // error: cannot write through this reference: non-writable provenance
-// A field of a `const` global is not written (§9.5): bound by reference it
+// A field of a `const` global is not written: bound by reference it
 // is a read-only reference, as `&g.f` is.
 struct S { f: u8[:] }
 var buf: u8[>..] = [];

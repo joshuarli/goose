@@ -1,5 +1,5 @@
 // error: cannot call f: it shrinks arr while h is still used, and h may refer into arr
-// The caller's holder hs views holds a byte view of arr's elements (§5.1).
+// The caller's holder hs views holds a byte view of arr's elements.
 struct H { s: const u8[:] }
 fn f(arr: i32[>..]&, hs: H[:]) {
     let h = hs[0];

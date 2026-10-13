@@ -1,7 +1,7 @@
 // error: storing a reference that may point into spare, which holds a grow-shrink array
-// A back edge's result has every root the cycle's returns give (§7.8): the
+// A back edge's result has every root the cycle's returns give: the
 // second `pick` returns an element of the grow-shrink `spare`, which no
-// store may keep (§5.2).
+// store may keep.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];
 var others: Cell[>..] = [];

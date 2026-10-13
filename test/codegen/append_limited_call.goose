@@ -1,5 +1,5 @@
 // A call's runtime-capacity limited result appended to a grow-only and a
-// grow-shrink array (§3.3): only its elements join the run, not the
+// grow-shrink array: only its elements join the run, not the
 // capacity and length stored ahead of them or the unused slots behind them.
 // Calls to functions -O2 keeps (run, wide) and to one it inlines (small), a
 // case-function dispatch, and a function value given as a block and as a

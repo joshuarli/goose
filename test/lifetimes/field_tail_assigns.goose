@@ -1,9 +1,9 @@
 // A grow-only array is assigned whole through a reference wherever a clear
-// of the same location would be accepted (§4.4, §5.1): a struct's tail field
+// of the same location would be accepted: a struct's tail field
 // through a reference parameter, from [], a copy or a call's result; the
 // struct whole; the array whole through a reference to it; a nested tail and
 // the frame object holding it; a struct with a variable-size prefix; and the
-// same for a grow-shrink tail (§5.2).
+// same for a grow-shrink tail.
 import std;
 
 struct Stack { n: i64, items: i64[>..] }

@@ -1,7 +1,7 @@
 // error: cannot clear bs: global G may hold a reference into it, stored at
 // put's first call stores s while it is still a literal; the second finds s
 // viewing an element of bs, so it is checked again, and the store record
-// shows that view stored into G (§5.1, §7.5).
+// shows that view stored into G.
 struct B { name: u8[..8] }
 struct H { s: const u8[:] }
 var bs: B[>..] = [];

@@ -1,6 +1,6 @@
 // runtime-debug: a property (.len, .cap) that print, str or format renders
 // with a user format overload for i64 is a value, not a path into its
-// array (§3.7): it is read just before the overload rendering it runs,
+// array: it is read just before the overload rendering it runs,
 // after the overloads of the arguments before it, which may have grown the
 // array. The overload records every value it renders, so each line shows
 // when its properties were read.

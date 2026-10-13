@@ -1,6 +1,6 @@
 // error: cannot call b, which shrinks g: g[0], evaluated earlier in the statement
 // error: may still refer into g
-// A recursive call applies what the cycle's first round recorded (§7.8):
+// A recursive call applies what the cycle's first round recorded:
 // the back edge into b holds g[0], and a, which b calls further down,
 // clears g.
 var g: i64[>..] = [1, 2];

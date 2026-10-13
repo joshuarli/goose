@@ -1,6 +1,6 @@
 // error: cannot assign to let x, which may be assigned already
 // A block is left at its break as well as at its end: x may be assigned
-// after it (§4.4, §6.4).
+// after it.
 fn run(c: bool) {
     let x: i64;
     block {

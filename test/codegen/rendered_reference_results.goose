@@ -1,5 +1,5 @@
 // A call's reference result that print, str or format renders is read where
-// the reference points, as a reference variable is (§3.7, §3.8): a user
+// the reference points, as a reference variable is: a user
 // format overload taking the value, or a part of it, by reference is handed
 // the storage the reference names, and the parts after an overload's are
 // read from there too, from the value the rendering began with. Each

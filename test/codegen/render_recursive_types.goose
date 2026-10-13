@@ -1,5 +1,5 @@
-// runtime-debug: print, str and format follow references as deep as they go
-// (§3.7), into values of the very type holding them too: every level of a
+// runtime-debug: print, str and format follow references as deep as they go,
+// into values of the very type holding them too: every level of a
 // type that reaches itself through references or slices is rendered, each
 // by a call of its own, for plain and optional references, relative links,
 // slices, generic, resizable and ADT types, and mutual recursion.

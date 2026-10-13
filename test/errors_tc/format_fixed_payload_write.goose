@@ -1,7 +1,7 @@
 // error: cannot assign through this path
-// A fixed-mode ADT's payload is rendered from a copy (§3.7): a format hook
+// A fixed-mode ADT's payload is rendered from a copy: a format hook
 // taking a part by reference is given the copy's, read-only, as a
-// temporary's is (§9.5), however writable the value it was copied from.
+// temporary's is, however writable the value it was copied from.
 struct A { v: i64 }
 enum Shape {
     Circle { a: A, b: i64 },

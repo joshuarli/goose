@@ -1,5 +1,5 @@
 // An array, or a reference to one, meeting a destination of a slice type of
-// its element type is a whole-array slice of it (§3.10), wherever the
+// its element type is a whole-array slice of it, wherever the
 // destination is: an annotated local or global, an assignment to a slice
 // variable, a field or an element, a struct or variant literal's field, a
 // field default, an array literal's element, a return, a push. The slice

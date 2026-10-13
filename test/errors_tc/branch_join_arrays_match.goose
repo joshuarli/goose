@@ -1,6 +1,6 @@
 // error: branches have mismatched types: i64[3] vs i64[2]
 // The first arms that do not agree are the ones reported, whatever a later
-// arm is (§6.4).
+// arm is.
 fn main() {
     let a: i64[3] = [1, 2, 3];
     let b: i64[2] = [4, 5];

@@ -1,4 +1,4 @@
-// Regular expressions (docs/stdlib.md), with the syntax and the semantics of
+// Regular expressions, with the syntax and the semantics of
 // the Rust `regex` crate: leftmost-first matching (the earliest match wins,
 // and among the matches starting there the alternatives and repetitions are
 // preferred in pattern order, `*?` and friends being lazy), unanchored

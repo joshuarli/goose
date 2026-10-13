@@ -1,5 +1,5 @@
 // error: cannot call render in the value assigned to G: render uses G
-// Any case function the dispatch may run counts (§8.2).
+// Any case function the dispatch may run counts.
 enum Shape { Circle { r: i64 }, Square { s: i64 } }
 var G: u8[>..] = [];
 fn render(c: Shape.Circle) -> u8[>..] { return [65]; }

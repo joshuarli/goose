@@ -1,6 +1,6 @@
 // runtime-debug: a value choosing among pools of one kind -- an if, a match, a
 // block, what a block or a loop breaks with -- is a pool reference to the pool
-// it gives (§5.4). Passed to a parameter, bound to a variable or rebound with
+// it gives. Passed to a parameter, bound to a variable or rebound with
 // .=, it carries that pool's freelist, so an allocation through it reuses what
 // the chosen pool freed and never the other's. A run handed back to a slice
 // pool chosen so may be either pool's, and is checked when the call runs, as

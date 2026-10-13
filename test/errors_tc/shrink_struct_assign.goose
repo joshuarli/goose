@@ -1,7 +1,7 @@
 // error: cannot assign b while s
 // error: is still used: it may refer into b
 // Assigning a value that holds a resizable array whole is a shrink of that
-// array (§5.2).
+// array.
 struct Bag { tag: i64, items: i64[>..<] }
 fn fresh() -> Bag { return Bag { tag: 2, items: [9] }; }
 fn main() {

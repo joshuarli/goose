@@ -1,5 +1,5 @@
 // error: array fill count N names a type parameter, not a constant
-// A block written in f names what f's body does (§7.6): N is f's type
+// A block written in f names what f's body does: N is f's type
 // parameter, which hides the global N.
 let N = 4;
 

@@ -1,5 +1,5 @@
-// A `let` bound to a non-negative value meets a u64 in a comparison (§6.1)
-// while nothing can write it (§4.4): a read-only reference, a by-value
+// A `let` bound to a non-negative value meets a u64 in a comparison
+// while nothing can write it: a read-only reference, a by-value
 // argument and an identity comparison leave it so, and the comparison stays
 // a single unsigned one, exact above i64.max.
 

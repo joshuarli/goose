@@ -1,7 +1,7 @@
 // error: storing a reference that may point into related, which holds a grow-shrink array
-// A function's result carries what its returns may point into (§9.2): pick
+// A function's result carries what its returns may point into: pick
 // is rooted at xs, a global, but may return the view of the grow-shrink
-// `related`, which is never stored (§5.2).
+// `related`, which is never stored.
 struct H { f: u8[:] }
 var related: u8[>..<] = [];
 var xs: u8[2] = [66, 67];

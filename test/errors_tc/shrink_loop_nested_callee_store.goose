@@ -2,7 +2,7 @@
 // error: , which the next iteration reaches
 // step's call of put stores a view of out into h after the clear, so the next
 // iteration's clear would invalidate it: a store checked in a body the loop
-// calls reaches the loop's next pass as the loop's own would (§5.1).
+// calls reaches the loop's next pass as the loop's own would.
 struct H { s: const u8[:] }
 fn put(h: H&, s: const u8[:]) { h.s = s; }
 fn main() {

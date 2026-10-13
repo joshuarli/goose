@@ -6,7 +6,7 @@
 // mutated in place every frame.
 //
 // A Goose node carries its children inline as a limited array of 4-byte
-// relative references (spec 5.3, 3.9), so a node is one 117-byte record, the
+// relative references, so a node is one 117-byte record, the
 // whole scene is one contiguous pool, and a child is reached by adding an
 // offset to the address of the slot that names it. C++'s idiomatic shape is
 // a vector<unique_ptr<Node>> per node -- an allocation per child plus one

@@ -1204,7 +1204,7 @@ fn sprite_mesh(out: Vertex[>..]&) {
 
 // --- a small HUD, using the WAD's own font and weapon patches -----------------
 // These glyphs are game artwork in the sprite atlas. For ordinary fonts/text,
-// use ui's existing font and text renderer over gfx (see docs/stdlib.md).
+// use ui's existing font and text renderer over gfx.
 
 let WHITE = float4 { 1.0, 1.0, 1.0, 1.0 };
 fn hud_quad(out: HudVertex[>..]&, x: f32, y: f32, w: f32, h: f32, id: i64, color: float4) {

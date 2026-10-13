@@ -2,7 +2,7 @@
 // error: this one is rooted at s3
 // A pool reference chosen between two slice pools may be either, but not a
 // third pool this function owns: a run of that one cannot be the chosen
-// pool's (§5.4).
+// pool's.
 fn main() {
     reusable[] var s1: i64[>..] = [];
     reusable[] var s2: i64[>..] = [];

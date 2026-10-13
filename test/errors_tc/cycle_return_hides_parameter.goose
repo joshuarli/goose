@@ -1,6 +1,6 @@
 // error: storing a reference rooted at pool, which does not outlive the destination
 // The back edge's result may be x, or an element of the pool, a local of
-// run that kept outlives (§7.8): it may not be kept in kept.
+// run that kept outlives: it may not be kept in kept.
 struct Cell { v: i64 }
 var gcells: Cell[>..] = [];
 var gcells2: Cell[>..] = [];

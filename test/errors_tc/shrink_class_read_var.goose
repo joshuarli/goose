@@ -1,6 +1,6 @@
 // error: cannot clear ns while r is still used
-// r, read out of the elements ns names, may be rebound to one of them
-// (§5.1).
+// r, read out of the elements ns names, may be rebound to one of them.
+//
 struct N { v: i64, next: N&? }
 fn f(ns: N[>..]&, c: bool, keep: N&) -> N& {
     let nx = ns[1].next;

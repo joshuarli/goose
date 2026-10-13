@@ -1,6 +1,6 @@
-// A namespaced file that is also a program (docs/design/namespaces.md): the
+// A namespaced file that is also a program: the
 // entry point must be the global main, which `fn ::main()` declares from
-// inside the namespace. An importer ignores it like any imported main (§11.1).
+// inside the namespace. An importer ignores it like any imported main.
 namespace nslib;
 
 struct Counter { n: i64 }

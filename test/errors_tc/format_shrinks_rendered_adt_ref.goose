@@ -1,7 +1,7 @@
 // error: cannot call format, which shrinks G: str runs it in the middle of rendering r, which may refer into G (§5.2)
 // The same through a reference to the ADT, whose payload is rendered where
 // the reference points, and with a grow-shrink tail: the whole assignment is
-// a shrink of G all the same (§3.7, §4.4, §5.2).
+// a shrink of G all the same.
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

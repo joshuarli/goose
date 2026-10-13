@@ -1,7 +1,7 @@
 // The value of an if, match, block or loop may view what outlives the
 // construct, wherever the value goes: storage of an enclosing scope, the
 // caller's storage behind a parameter, or a temporary of the construct's own
-// statement, as a match's scrutinee is (§9.2).
+// statement, as a match's scrutinee is.
 struct View { s: i64[:] }
 enum Slot { Full { vals: i64[3] }, Empty }
 

@@ -1,6 +1,6 @@
 // runtime-debug: a variable-mode ADT's payload and an array's elements are
 // rendered where they lie, by the variant and the count read as each one's
-// rendering begins (§3.7). The overloads of their parts may grow and shrink
+// rendering begins. The overloads of their parts may grow and shrink
 // other storage, and an overload rendering a part beside them may replace
 // the variant or rebuild the array, before the rendering reaches it or after
 // it is done: the rendering reads what is there when it gets there.

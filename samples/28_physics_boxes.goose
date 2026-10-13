@@ -1,5 +1,5 @@
 // Thousands of boxes raining into a walled arena: the physics module
-// (Box3D, docs/stdlib.md) moves them, the gfx module draws them.
+// (Box3D) moves them, the gfx module draws them.
 //
 // Boxes of every size and color fall from high above the whole arena. They
 // tumble onto two pyramids and each other, and a long arm turning in the

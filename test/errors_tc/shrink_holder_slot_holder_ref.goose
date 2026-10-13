@@ -1,6 +1,6 @@
 // error: cannot clear a while rr is still used: a reference to what may hold a reference or slice into it was stored there
 // rr's field refers to bx, whose slice views a: rr leads to a's storage
-// through what bx holds (§5.1).
+// through what bx holds.
 struct B { s: u8[:] }
 struct R { r: B& }
 fn main() {

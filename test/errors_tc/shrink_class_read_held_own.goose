@@ -1,5 +1,5 @@
 // error: cannot call clr, which shrinks out: words[0], evaluated earlier in the statement, may still refer into out
-// emit stored a view of out where the held view is read from (§5.1).
+// emit stored a view of out where the held view is read from.
 fn clr(out: u8[>..]&) -> i64 {
     out.clear();
     out.append("ZZZZZZZZ");

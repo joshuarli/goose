@@ -1,4 +1,4 @@
-// A variant type with no fields is a value of its own (§3.4), though never
+// A variant type with no fields is a value of its own, though never
 // a field or an element: a global, locals, parameters and results, branch
 // values, references, case functions' parameters, and the ADT it adapts to
 // in either mode. It takes no bytes behind its ADT's tag, so a Mode.. of

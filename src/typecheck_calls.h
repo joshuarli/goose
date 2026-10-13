@@ -1,16 +1,16 @@
 // Goose compiler — the typechecker's calls (definitions of TypeCheck members,
-// typecheck.h): overload resolution with generic inference (§7.1, §7.7),
-// case-function dispatch (§8.2), specialization in call-graph order (§10.1,
-// §10.2) with the recursion rules (§7.8) and return roots (§9.2), extern
-// declarations (§7.10), thread entry points (§11.2), and function values
-// (§7.6).
+// typecheck.h): overload resolution with generic inference,
+// case-function dispatch, specialization in call-graph order
+// with the recursion rules and return roots, extern
+// declarations, thread entry points, and function values.
+//
 #pragma once
 
 namespace goose {
 
 // ------------------------------------------------------------------
 // Calls: builtin members, builtins, UFCS, overload resolution with
-// generic inference (§7.1, §7.7), and case-function tag dispatch (§8.2).
+// generic inference, and case-function tag dispatch.
 
 inline Val TypeCheck::CheckCall(Call *c, TypeExpr *expected) {
     // A node may be re-checked in argument phase 2; reset annotations.
@@ -36,8 +36,8 @@ inline Val TypeCheck::CheckCall(Call *c, TypeExpr *expected) {
         SignatureNames(fv->params, {}, {});
     }
     // Arguments construct into parameter slots, not whatever destination
-    // encloses this call, and a parameter's constness is its instantiation's
-    // (§9.5); member ops re-set both for element pushes.
+    // encloses this call, and a parameter's constness is its instantiation's;
+    // member ops re-set both for element pushes.
     DestScope ds(*this, Dest {});
     SlotScope ss(*this, false);
     if (auto d = Is<Dot>(c->callee)) return CheckUfcsCall(c, d, expected);
@@ -46,7 +46,7 @@ inline Val TypeCheck::CheckCall(Call *c, TypeExpr *expected) {
 }
 
 inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
-    // A variable in scope hides the functions of its name (§11.1). A global
+    // A variable in scope hides the functions of its name. A global
     // one does not: no variable can be called, so the call names the
     // functions the namespaces declare, which a global variable of the same
     // name is declared beside.
@@ -76,7 +76,7 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
                              "not called"));
         Node *nopre = nullptr;
         // A user function set sharing a builtin's name (a `format`
-        // overload, §3.7) takes the calls it matches; the builtin the rest.
+        // overload) takes the calls it matches; the builtin the rest.
         auto entryreach = reachable;
         auto nomatch = false;
         auto v = ResolveCall(c, cands, env, id->name, nullptr, nopre,
@@ -105,7 +105,7 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
 // declared so far in the innermost of this frame's scopes that declares one,
 // else those of the innermost scope declaring one that the body sees outside
 // them (ForOuterFns). The functions of one name in one scope are an
-// overload set (§7.5), in declaration order; empty for none. Of several
+// overload set, in declaration order; empty for none. Of several
 // with the same parameter types the one met first wins, as a later local
 // shadows an earlier one: the latest declared so far, and in a body the
 // latest declared at or before it, then the first after it.
@@ -178,10 +178,10 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
     auto rt = ov.type;
     auto optional = IsOptional(rt);
     if (rt->kind == TY_REF) rt = rt->ref->sub;
-    // Built-in members first (§7.1), then free functions, then the
+    // Built-in members first, then free functions, then the
     // remaining builtins (a.f(b) is exactly f(a, b)). Only a member needs
     // an optional receiver narrowed first: the others take it as f(a, b)
-    // takes a, so r.assert() is what narrows r (§3.8).
+    // takes a, so r.assert() is what narrows r.
     auto bd = LookupBuiltin(d->name);
     if (bd && (bd->flags & BF_MEMBER) && !(bd->flags & BF_PROPERTY) &&
         rt->kind == TY_ARRAY) {
@@ -202,7 +202,7 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
                 Error(c, cat("field ", d->name, " is not callable"));
     }
     // Past the variables, which a member call passes over, the name resolves
-    // as a call's does (§11.1): a type parameter of the name hides the
+    // as a call's does: a type parameter of the name hides the
     // functions of the name.
     const FnValBind *fb;
     if (auto t = LookupTypeParam(d->name, fb))
@@ -232,12 +232,12 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
     Error(c, cat("unknown function or member: ", d->name));
 }
 
-// A non-fixed lvalue argument passes by reference (§4.1): it becomes `&a`
+// A non-fixed lvalue argument passes by reference: it becomes `&a`
 // before any candidate sees it. The user's own `&` on one is redundant. A
 // control construct's value is no storage, even where its one branch is: a
 // reference parameter binds its branches instead (BindBranchesByRef).
 inline void TypeCheck::RefArg(Node *&a, Val &v) {
-    // A resizable without a header of its own (C.2) stays a value, which a
+    // A resizable without a header of its own stays a value, which a
     // slice parameter still takes whole.
     if (IsNonFixedLValue(v) && !v.storagebranches && Referenceable(a, v)) a = AutoRef(a, v);
     else if (UserRefOf(a) && IsNonFixedRef(v))
@@ -246,9 +246,9 @@ inline void TypeCheck::RefArg(Node *&a, Val &v) {
                     " is passed by reference without it (§4.1)"));
 }
 
-// The type bindings a parameter default sees (§7.1): the function's own, and
+// The type bindings a parameter default sees: the function's own, and
 // those of the functions a nested one is declared in that no type parameter
-// of a function inside hides (§11.1), but no function value bound to a
+// of a function inside hides, but no function value bound to a
 // generic parameter, which a default does not call.
 inline FnSpec *TypeCheck::ParamDefaultEnv(const MatchInfo &mi) {
     auto env = ast.NewFunValEnv();
@@ -283,7 +283,7 @@ void TypeCheck::InParamDefault(Call *c, const MatchInfo &mi, FnSpec *env, size_t
     f();
 }
 
-// Each parameter the call leaves out takes its default (§7.1): a fresh clone
+// Each parameter the call leaves out takes its default: a fresh clone
 // of the declaration's expression, among the arguments where the missing one
 // would be, checked as they are -- for the specialization's key here, and
 // against its parameter in phase 2 -- but in a frame of its own
@@ -368,7 +368,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     MatchCandidates(c, cands, env, argvals, tied, converting, &failures, name);
     if (!tied.empty()) best = tied[0];
     auto ambiguous = [&](const vector<MatchInfo> &set) {
-        // A default is no argument, and ranks as none (§7.1): `f(a, b = 0)`
+        // A default is no argument, and ranks as none: `f(a, b = 0)`
         // beside `f(a)` makes every `f(x)` ambiguous, which says so.
         string which;
         for (auto &mi : set) {
@@ -384,7 +384,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     if (tied.size() == 1)
         JudgeCallCasts(c, cands, env, argnodes, argvals, best, name, nomatch != nullptr);
     if (tied.empty()) {
-        // Tag dispatch (§8.2): the match-as-overload-set form.
+        // Tag dispatch: the match-as-overload-set form.
         auto v = TryDispatch(c, cands, env, argnodes, argvals, name, entryreach);
         if (v.type) return v;
         if (nomatch) {   // The caller has a builtin of this name to fall back on.
@@ -393,7 +393,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
         }
         // An overload converting an integer argument to a float is the last
         // resort, after dispatch and a builtin: a call either took before
-        // the conversion was implicit takes it still (§7.1).
+        // the conversion was implicit takes it still.
         if (converting.empty()) {
             for (auto &av : argvals) NoArrayJoin(av);
             Error(c, cat("no matching overload for call to ", name, failures));
@@ -427,9 +427,9 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
         for (size_t i = 0; i < best.paramtypes.size(); i++) {
             UnrefForValueParam(argnodes[i], best.paramtypes[i]);
             // A `&` at a parameter declared as a reference is redundant
-            // (§4.1) -- unless it picked this overload. RefArg has warned
+            // -- unless it picked this overload. RefArg has warned
             // of one to a value that is not fixed-size; a varint's is the
-            // i64 it decodes to (§3.6).
+            // i64 it decodes to.
             auto &p = best.sf->params[i];
             if (i < best.nwritten && UserRefOf(argnodes[i]) && cands.size() == 1 && p.type &&
                 !HasGenerics(p.type) && p.type->kind == TY_REF &&
@@ -441,7 +441,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
             else InParamDefault(c, best, denv, i,
                                 [&]() { CheckArg(argnodes[i], best.paramtypes[i]); });
             // A by-value non-fixed-size parameter takes a copy of its
-            // argument (§4.1), a temporary of the statement whatever the
+            // argument, a temporary of the statement whatever the
             // argument names (NoteTemp).
             if (ClassOf(best.paramtypes[i]) != SC_FIXED) argnodes[i]->nftemp = true;
             // The call's own operands are what later arguments' checks see
@@ -449,7 +449,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
             c->SetArgNode(i, argnodes[i]);
         }
     }
-    // A C function's parameters are what they say (§7.10): a read-only
+    // A C function's parameters are what they say: a read-only
     // reference or slice needs the parameter declared const.
     if (best.sf->isextern) {
         for (size_t i = 0; i < best.paramtypes.size() && i < argvals.size(); i++) {
@@ -471,9 +471,9 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
 }
 
 // A control construct whose branches are all storage, or references, binds
-// each by reference at a reference parameter (§4.1), and one whose branches
-// are arrays views each whole at a slice parameter (§6.4), as a slice
-// parameter views the temporary array a [] is there (§4.2): the argument is
+// each by reference at a reference parameter, and one whose branches
+// are arrays views each whole at a slice parameter, as a slice
+// parameter views the temporary array a [] is there: the argument is
 // checked as that reference or slice, rooted where its branches are or at
 // that temporary, before the specialization and the callee's effects are
 // keyed on it; phase 2 checks it so again, in order with the other
@@ -532,7 +532,7 @@ inline void TypeCheck::MatchCandidates(Call *c, vector<SFunction *> &cands, FnSp
 }
 
 // An f32 destination can choose the computation width of an otherwise
-// unconstrained floating generic call (§7.7). Resolve normally first: the
+// unconstrained floating generic call. Resolve normally first: the
 // context never rescues a failed/ambiguous call or selects another overload.
 // Remember eligibility even without context, so an outer call can pass its
 // eventual f32 parameter type down during phase 2. The value itself remains
@@ -593,9 +593,9 @@ inline void TypeCheck::ContextualFloatCall(Call *c, vector<SFunction *> &cands, 
     if (expected && IsF32(expected)) best = tied[0];
 }
 
-// The followed casts (§6.3) among a call's written arguments, each judged by
-// resolving the call without it (§7.1): to the same function, with the same
-// parameter types, bindings (a generic one's inference, §7.7) and literal
+// The followed casts among a call's written arguments, each judged by
+// resolving the call without it: to the same function, with the same
+// parameter types, bindings (a generic one's inference) and literal
 // parameters, as the one match that ranks best; or as the one match that
 // converts an integer to a float, where neither tag dispatch nor a builtin
 // of the name (`builtin`) comes first. The argument then meets its parameter
@@ -664,7 +664,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
     if (defaults)
         for (R = 0; R < P && !sf->params[R].defaultval;) R++;
     // The arguments bind the parameters in order, and any function values
-    // for the leftover generics come after them (§7.6), which leaves the
+    // for the leftover generics come after them, which leaves the
     // parameters from there on to their defaults.
     auto K = std::min(N, P);
     while (K > R && argvals[K - 1].type == fntype) K--;
@@ -693,7 +693,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
     ownexclude = &sf->generics;
     // A literal argument (or a literal parameter passed on) to a parameter
     // whose type is a bare type variable no typed argument binds, or that
-    // is untyped, stays a literal inside the specialization (§7.7): the
+    // is untyped, stays a literal inside the specialization: the
     // variable binds to the literal's default type, and the parameter
     // reads as a constant of unknown value that adapts where it is used.
     auto owngeneric = [&](TypeExpr *t) {
@@ -709,13 +709,13 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
     litrecord = false;
     auto paramsok = [&]() {
         // A literal argument adapts to whatever type the other arguments
-        // give a type parameter (§3.1), so they unify after the typed ones:
-        // a float one first, whose type an integer one converts to (§6.3).
+        // give a type parameter, so they unify after the typed ones:
+        // a float one first, whose type an integer one converts to.
         // A float of literals and integers adapts as a float literal does,
-        // a construct of integer constants as they do (§6.4), and an array
-        // literal of either kind as its elements do (§4.2). A [] or
+        // a construct of integer constants as they do, and an array
+        // literal of either kind as its elements do. A [] or
         // null binds nothing: it takes the type all the others give its
-        // parameter, after them (§7.7).
+        // parameter, after them.
         auto late = [&](const Val &av) {
             if (av.emptyarr || av.isnull) return 3;
             if (av.litelems) return ArrayLeaf(av.type)->kind == TY_FLT ? 1 : 2;
@@ -741,7 +741,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
             }
             if (unsized) mi.litparams.push_back((int)i);
             if (!p.type) {
-                // Untyped parameter: an anonymous type variable (§7.1),
+                // Untyped parameter: an anonymous type variable,
                 // bound to the argument's exact type — a reference
                 // argument binds as a reference, like `<T>` does.
                 if (av.type == fntype) {
@@ -777,7 +777,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
     ownexclude = saveex;
     litrecord = saverecord;
     if (!paramsok) return false;
-    // Leftover generics bind function values, in order (§7.6).
+    // Leftover generics bind function values, in order.
     vector<string_view> unbound;
     for (auto &g : sf->generics) {
         auto found = false;
@@ -785,7 +785,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
         if (!found) unbound.push_back(g.name);
     }
     // A left-out parameter has the type the arguments give it: its default
-    // is a value of that type, and decides no type variable itself (§7.1).
+    // is a value of that type, and decides no type variable itself.
     auto undecided = [&](string_view g) {
         for (auto i = K; i < P; i++) {
             if (!NamesGeneric(sf->params[i].type, g)) continue;
@@ -869,7 +869,7 @@ inline TypeExpr *TypeCheck::UnifyArgRaw(TypeExpr *pt, Val &av,
         return ct;
     }
     // A [] takes an array parameter's type, and at a slice parameter is a
-    // temporary array of its elements, viewed whole (§4.2).
+    // temporary array of its elements, viewed whole.
     if (av.emptyarr) {
         auto ct = own();
         if (!ct || HasGenerics(ct) || (ct->kind != TY_ARRAY && ct->kind != TY_SLICE))
@@ -877,7 +877,7 @@ inline TypeExpr *TypeCheck::UnifyArgRaw(TypeExpr *pt, Val &av,
         tier = std::max(tier, 2);
         return ct;
     }
-    // An lvalue meeting a reference parameter binds by reference (§4.1),
+    // An lvalue meeting a reference parameter binds by reference,
     // so a generic pointee unifies with the argument's own type. So does
     // a control construct whose branches are all storage, or references,
     // each branch binding by reference (BindBranchesByRef).
@@ -893,7 +893,7 @@ inline TypeExpr *TypeCheck::UnifyArgRaw(TypeExpr *pt, Val &av,
     if (hadgen) {
         if (!BindTypes(pt, at, b)) {
             // The one shape-changing coercion generics see through:
-            // whole-array arguments to slice parameters (§3.10).
+            // whole-array arguments to slice parameters.
             if (pt->kind == TY_SLICE && at->kind == TY_ARRAY)
                 BindTypes(pt->sub, at->arr->sub, b);
         }
@@ -915,7 +915,7 @@ inline TypeExpr *TypeCheck::UnifyArgRaw(TypeExpr *pt, Val &av,
 
 // The array type a literal of adaptable elements (Val::litelems) is at a
 // destination of type dt: its own, with the elements dt has at its depth of
-// nesting where its constants fit them, as each would there (§3.1, §6.3). An
+// nesting where its constants fit them, as each would there. An
 // integer one converting to a float sets tofloat. Null where dt has no such
 // elements, and then `why` says what does not fit.
 inline TypeExpr *TypeCheck::LitElemsAt(const Val &av, TypeExpr *dt, bool &tofloat, string *why) {
@@ -1018,7 +1018,7 @@ inline TypeExpr *TypeCheck::SubstOwn(TypeExpr *pt, vector<pair<string_view, Type
     return r;
 }
 
-// Case-function tag dispatch (§8.2): calling an overload set of variant
+// Case-function tag dispatch: calling an overload set of variant
 // types with the ADT (or a reference to it) dispatches on the tag.
 // Returns a Val with null type when no dispatch position exists.
 inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *env,
@@ -1031,7 +1031,7 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
     // Whether each variant of et, passed at pos, matches exactly one case,
     // which vm collects. A dispatched call evaluates its arguments once,
     // before the tag picks the case, so the cases get every argument
-    // written, and none of their defaults (§8.2): only `defaults` tries
+    // written, and none of their defaults: only `defaults` tries
     // with them, to say so. A case converting an integer argument to a
     // float counts only where no other matches (ResolveCall).
     auto dispatches = [&](size_t pos, TypeExpr *et, bool isref, bool defaults,
@@ -1074,7 +1074,7 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
         if (at->kind == TY_ENUM) {
             et = at;
             // A control construct whose branches are all storage passes
-            // them by reference, as that storage would be (§4.1).
+            // them by reference, as that storage would be.
             isref = argvals[pos].storagebranches;
         } else if (IsPlainRef(at) && at->ref->sub->kind == TY_ENUM) {
             et = at->ref->sub;
@@ -1082,7 +1082,7 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
         }
         if (!et) continue;
         // Fixed-mode payloads pass by copy even through a reference, for
-        // the same soundness reason as match binders (§3.5).
+        // the same soundness reason as match binders.
         isref = isref && et->enu->varmode;
         vector<MatchInfo> vm;
         if (!dispatches(pos, et, isref, false, vm)) {
@@ -1108,7 +1108,7 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
         Error(c, "dispatching a resizable ADT payload is not supported by the C backend "
                  "yet; match its tag without a payload binder, or use a standalone "
                  "resizable struct");
-    // The cases take the payload as match binders do (§8.1): a fixed-mode one
+    // The cases take the payload as match binders do: a fixed-mode one
     // by value only, and one holding self-relative references by reference.
     auto en = enumtype->enu->en;
     for (size_t vi = 0; vi < en->variants.size(); vi++) {
@@ -1223,8 +1223,8 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
     return results.empty() ? VoidVal() : results[0];
 }
 
-// A slice parameter takes a copy of the slice a reference argument points at
-// (§4.1), so the argument's provenance is that slice's (SlotView), however the
+// A slice parameter takes a copy of the slice a reference argument points at,
+// so the argument's provenance is that slice's (SlotView), however the
 // reference names the variable holding it.
 inline void TypeCheck::LoadSliceArgs(vector<Val> &argvals, const vector<TypeExpr *> &ptypes) {
     for (size_t i = 0; i < argvals.size() && i < ptypes.size(); i++) {
@@ -1235,8 +1235,8 @@ inline void TypeCheck::LoadSliceArgs(vector<Val> &argvals, const vector<TypeExpr
     }
 }
 
-// A slice lvalue passed to a reference-to-slice parameter binds by reference
-// (§4.1): the specialization and the callee's effects are keyed on the
+// A slice lvalue passed to a reference-to-slice parameter binds by reference:
+// the specialization and the callee's effects are keyed on the
 // reference phase 2's AutoRef makes of it, rooted at the slot. What the slot
 // holds as the call is made is what a view of it stands for (NoteHeld).
 inline void TypeCheck::RefSliceArgs(vector<Val> &argvals, const vector<TypeExpr *> &ptypes,
@@ -1291,7 +1291,7 @@ inline bool TypeCheck::HasView(Val &av, TypeExpr *pt, int reach, SFunction *sf) 
 
 inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, Node *callnode) {
     auto sf = mi.sf;
-    // A nested function is specialized where it is declared (§7.5). A call
+    // A nested function is specialized where it is declared. A call
     // that reaches the declaration ahead of the declaring body (a nested
     // function declared earlier calling it) would have it name variables
     // not bound yet; one after its declaring scope ended is keyed apart.
@@ -1323,7 +1323,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         // Sharing a class says the two arguments point into the same
         // storage, which an inexactly rooted one does not establish: it
         // names a scope its pointee outlives, not the storage that
-        // owns it (§9.5). Such an argument gets a class to itself, one
+        // owns it. Such an argument gets a class to itself, one
         // an exact argument with the same root does not join either, so
         // a class is always one root's storage whatever the call site.
         // Which arrays in it the arguments lie in, the class does not say
@@ -1346,7 +1346,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     for (size_t i = 0; i < mi.paramtypes.size(); i++) {
         auto pt = mi.paramtypes[i];
         auto isrs = IsRefOrSlice(pt);
-        // A by-value parameter holding references (§9.2's holder values)
+        // A by-value parameter holding references ('s holder values)
         // is keyed by the root bounding its contents, as the spec's
         // "implicitly generic over those fields' roots" says.
         auto holder = !isrs && HoldsPlainRef(pt);
@@ -1360,9 +1360,9 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         // A reference that points nowhere yet, or a holder whose contents
         // do (Roots::unknown): no class.
         ra.unknown = isrs ? ar.None() : ar.Unknown();
-        // A `const` parameter is read-only whatever the argument (§9.5).
+        // A `const` parameter is read-only whatever the argument.
         ra.writable = argvals[i].writable && !pt->cq;
-        // A pool reference only where the parameter can carry the freelist (§5.4).
+        // A pool reference only where the parameter can carry the freelist.
         ra.reusable = CarriesPool(pt) ? argvals[i].reusable : 0;
         ra.exact = ar.Exact();
         ra.heldexact = holder && ra.exact && !sf->isrec;
@@ -1540,7 +1540,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
                       TypeArgsEq(spec->views[i].gselems, views[i].gselems) &&
                       TypeArgsEq(spec->roots[i].onearray, roots[i].onearray);
         // Even a back edge passes only arrays whose element types its body
-        // may take a reference to be an element of (§3.3), so one whose
+        // may take a reference to be an element of, so one whose
         // classes say that of fewer types is checked as a call of its own.
         auto onearrayok = true;
         for (size_t i = 0; i < roots.size() && i < spec->roots.size(); i++)
@@ -1554,8 +1554,8 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         for (size_t i = 0; depthsok && i < roots.size(); i++)
             depthsok = spec->roots[i].depthkey == roots[i].depthkey &&
                        spec->views[i].depthkey == views[i].depthkey;
-        // A back edge must reuse the in-progress spec whatever the roots
-        // (§7.8): inside a cycle, references rooted at cycle locals may
+        // A back edge must reuse the in-progress spec whatever the roots:
+        // inside a cycle, references rooted at cycle locals may
         // not be stored or returned, so their identity is irrelevant, and
         // the pool parameters that may be stored are checked below to be
         // the same ones the entry call passed.
@@ -1710,7 +1710,7 @@ inline void TypeCheck::NoteCalleeEnvReads(FnSpec *callee) {
 // Whether vd is as r found it: the same roots, the same contents, assigned
 // or not as it was, a slot a reference has been made to or not
 // (StoreIntoSlot), and for a `let`, which is assigned only where it cannot
-// be already (§4.4), maybe assigned or not as it was.
+// be already, maybe assigned or not as it was.
 inline bool TypeCheck::EnvIs(const VarDef *vd, const EnvRead &r) {
     return vd->assigned == r.assigned &&
            (vd->isvar || vd->maybeassigned == r.maybeassigned) &&
@@ -1761,7 +1761,7 @@ inline void TypeCheck::ReplayEnvExits(FnSpec *spec) {
 
 // An exit of the body that frame tf checks, reached here: its caller finds a
 // variable outside it assigned where every exit does, and maybe assigned
-// where any may be (§4.4). `added`: those a reused callee's activation had
+// where any may be. `added`: those a reused callee's activation had
 // assigned when it took the exit, where they were unassigned when it began,
 // and those it may have assigned, where none could be (FnSpec::outerexits).
 // The exit leaves the bodies checked in the frames above tf too, each of
@@ -1850,7 +1850,7 @@ inline void TypeCheck::ApplyCalleeRebinds(FnSpec *spec) {
     }
 }
 
-// A literal parameter's adaptation to a type (§7.7), recorded on the
+// A literal parameter's adaptation to a type, recorded on the
 // specialization that owns the parameter.
 inline void TypeCheck::RecordLitAdapt(const Val &v, TypeExpr *t, Line at) {
     if (!litrecord || !v.unsizedparam) return;
@@ -1932,7 +1932,7 @@ inline FnSpec *TypeCheck::CycleHead(FnSpec *s) {
     return s;
 }
 
-// A call into the recursive cycle spec belongs to (§7.8): a back edge, or a
+// A call into the recursive cycle spec belongs to: a back edge, or a
 // call reaching a finished member of a cycle whose outermost member is still
 // in progress. Every frame from that member inward is inside a call into the
 // cycle, or is making this one, so it joins the cycle. A non-fixed-size
@@ -1990,8 +1990,8 @@ inline void TypeCheck::JoinCycle(FnSpec *spec, Node *callnode) {
 // The value of n, just checked by the innermost frame (CheckV). One of
 // non-fixed-size class that is no storage -- a call's result, a copy, a
 // str, a literal, a construct's value -- is a temporary of its statement,
-// held on a data stack of the activation until the statement ends (§9.2),
-// which no call into the recursive cycle may be made across (§7.8). A
+// held on a data stack of the activation until the statement ends,
+// which no call into the recursive cycle may be made across. A
 // non-fixed-size value the check itself built -- an array or struct
 // literal, or the text print or str renders -- was under construction while
 // its parts were checked, on such a stack, so a call into the cycle among
@@ -2047,9 +2047,9 @@ inline Node *TypeCheck::FindTemp(Node *n, bool self) {
 // the head of a construct the path enters a branch or body of -- an if's
 // condition, a match's scrutinee, a while's condition, a for's sequence --
 // which codegen evaluates in the scope around the construct. A non-fixed-
-// size temporary among them lives to the end of the statement (§9.2), on a
+// size temporary among them lives to the end of the statement, on a
 // data stack of the calling activation, so the call would take a stack per
-// activation for it (§7.8). An operand its parent builds in place -- a
+// activation for it. An operand its parent builds in place -- a
 // returned value, a local's initializer, an assigned value, a pushed or
 // appended element -- is no temporary itself, though what it evaluated may
 // be.
@@ -2105,15 +2105,15 @@ inline void TypeCheck::CycleCallTemps(int fi, Node *callnode) {
 // The result of each frame's call into the cycle (JoinCycle), where it is
 // of non-fixed-size class: it is built where the call's destination is,
 // which is a temporary of the statement -- a data stack taken before the
-// call and held across it (§7.8) -- unless the destination is the caller's,
+// call and held across it -- unless the destination is the caller's,
 // where the call is the whole value of a return of the same result types
 // (forwarded, codegen GenNormalReturn), reached through the constructs
 // whose value it is (a block's tail, a branch, a break's value); resizable
 // storage the value is pushed or appended into, built in place at its top
-// (which §1.3(4) then rejects where the callee grows that storage, as every
+// (which the construction check rejects where the callee grows that storage, as every
 // function of a cycle appending into it does); or a local being
 // initialized, which CheckCycleInit reports. An assignment's value is one
-// whose callee may use the target, rejected by §4.4 before this. A frame's
+// whose callee may use the target, rejected by the assignment check before this. A frame's
 // call is the innermost call on its path, whose callee's body the next
 // frame checks.
 inline void TypeCheck::CycleCallResult(FnSpec *spec, Node *callnode) {
@@ -2135,7 +2135,7 @@ inline void TypeCheck::CycleCallResult(FnSpec *spec, Node *callnode) {
         auto returned = [&](FnSpec *target, size_t at, size_t count) {
             if (!target || !target->retsknown) return false;
             if (count == 1 && callee->rets.size() > 1) {
-                // A single call forwarding every result (§7.1).
+                // A single call forwarding every result.
                 if (target->rets.size() != callee->rets.size()) return false;
                 for (size_t r = 0; r < callee->rets.size(); r++)
                     if (!TypeEq(callee->rets[r], target->rets[r])) return false;
@@ -2187,7 +2187,7 @@ inline void TypeCheck::CycleCallResult(FnSpec *spec, Node *callnode) {
 }
 
 // A cycle's back edges take the roots of its functions' results before their
-// returns are checked (§7.8): a function in one declares a reference result
+// returns are checked: a function in one declares a reference result
 // rather than inferring it from a return.
 inline void TypeCheck::NoInferredRefResult(FnSpec *spec, Line at) {
     if (!spec->sf || spec->sf->has_rets) return;
@@ -2329,7 +2329,7 @@ inline void TypeCheck::Unthread(VarDef *cls, const string &why) {
     for (size_t k = 0; k < tc.heirs.size(); k++) Unthread(tc.heirs[k], why);
 }
 
-// The cycle store rule's diagnostic (§7.8), with what broke the threaded
+// The cycle store rule's diagnostic, with what broke the threaded
 // class the stored reference is rooted at, where it is one, and `more`.
 inline string TypeCheck::CycleStoreError(VarDef *root, const string &more) {
     string s = "references may only be passed down, not stored, inside a recursive cycle (§7.8)";
@@ -2343,7 +2343,7 @@ inline string TypeCheck::CycleStoreError(VarDef *root, const string &more) {
 }
 
 // `return from` targets recorded by a callee must be live on every
-// compile-time call path (§7.9); cached reuse re-validates here.
+// compile-time call path; cached reuse re-validates here.
 inline void TypeCheck::ValidateNeeds(FnSpec *spec, Node *callnode) {
     for (auto t : spec->needs) {
         auto found = -1;
@@ -2379,7 +2379,7 @@ inline void TypeCheck::AddNeed(FnSpec *s, FnSpec *t) {
     }
 }
 
-// A fixed-size value C takes by value (§7.10): a scalar, bool, or a flat
+// A fixed-size value C takes by value: a scalar, bool, or a flat
 // fixed struct or array (packed, no references).
 inline bool TypeCheck::ExternValueOk(TypeExpr *t, string &why) {
     switch (t->kind) {
@@ -2409,7 +2409,7 @@ inline bool TypeCheck::ExternParamOk(TypeExpr *t, string &why) {
     return ExternValueOk(t, why);
 }
 
-// An extern declaration (§7.10) has typed parameters of C-crossing
+// An extern declaration has typed parameters of C-crossing
 // shapes, at most one fixed-size return, and no body to check.
 inline void TypeCheck::CheckExternSpec(FnSpec *spec) {
     auto sf = spec->sf;
@@ -2745,7 +2745,7 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     // Whatever the call's result is for -- the slot it lands in, the return
     // it is a value of -- is the caller's business: this body's own
     // statements say where their values go, and its tail is a return of its
-    // own, whose constness is inferred (§9.5).
+    // own, whose constness is inferred.
     SlotScope ss(*this, false);
     FlagScope rs(inreturn, false);
     reachable = true;
@@ -2863,7 +2863,7 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     // depth, outside every loop of the body. Stores into the slot join it
     // (NoteSlotStore); each round of a cycle starts it afresh. A view is no
     // pool and is never threaded: what a slice points into outlives its
-    // slot, which no call back into a cycle passes on (§7.8).
+    // slot, which no call back into a cycle passes on.
     set<VarDef *> heldset;
     for (size_t i = 0; i < sf->params.size() && i < spec->views.size(); i++) {
         auto &va = spec->views[i];
@@ -2911,7 +2911,7 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     }
     // A class whose arguments were each read through one parameter class,
     // a pool class or one threaded exactly, points into the storage that
-    // class leads to, outside the cycle, as long as it stays so (§7.8).
+    // class leads to, outside the cycle, as long as it stays so.
     auto readthrough = [&](size_t k) {
         if (!argvals) return false;
         auto any = false;
@@ -2945,7 +2945,7 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     if (sf->has_rets && !spec->retsknown) {
         for (auto rt : sf->rets) {
             auto ct = Subst(rt);
-            // A result is a value, which is never relative (§3.9): written so,
+            // A result is a value, which is never relative: written so,
             // it is an error, and one a type argument makes relative is the
             // plain reference a load of it gives.
             if (rt->kind == TY_REF && rt->ref->lenstorage >= 0)
@@ -3036,7 +3036,7 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
 }
 
 // A local a function returns is built at the result's destination, so that
-// returning it costs nothing (§7.3), unless another return stands in the way
+// returning it costs nothing, unless another return stands in the way
 // (NamedResultOf): then it is built on a stack of its own and copied, which
 // may be a large copy nothing in the source shows.
 inline void TypeCheck::NamedResultCopyWarning(FnSpec *spec) {
@@ -3053,7 +3053,7 @@ inline void TypeCheck::NamedResultCopyWarning(FnSpec *spec) {
 
 // Shared by `return` statements and body tails: agree the values with
 // the target's return types (setting them on first sight), and record
-// reference roots for the caller to map (§9.2).
+// reference roots for the caller to map.
 inline void TypeCheck::RecordReturn(FnSpec *tspec, vector<Val> &vals, Node *at) {
     // A single call forwards all its return values.
     vector<TypeExpr *> types;
@@ -3125,7 +3125,7 @@ inline void TypeCheck::RecordReturn(FnSpec *tspec, vector<Val> &vals, Node *at) 
 // maps back to the argument's roots, a view's to the slice its argument's
 // slot held (Val::held), as bounds where the class only bounds the result
 // (Bounds) -- at a back edge, which reuses the body whatever it
-// passes (§7.8), to every argument the class's parameters get, merged;
+// passes, to every argument the class's parameters get, merged;
 // anything else is itself. A view the storage of the parameter's class held
 // is one the storage an argument names exactly holds, which for a class of
 // the caller's is a view that class's storage held (RootAlt::classread).
@@ -3170,7 +3170,7 @@ inline Val TypeCheck::CallResult(Call *c, FnSpec *spec, vector<Val> &argvals) {
     lastcallrets.clear();
     // The record read: the callee's own, or a back edge's the round before's
     // (RecordOf) -- none in a cycle's first round, whose result then points
-    // nowhere yet. A back edge reuses the body whatever it passes (§7.8), and
+    // nowhere yet. A back edge reuses the body whatever it passes, and
     // a parameter the key gave static data has no class for a record to
     // name, so no mapping reaches what a back edge passes it instead: a
     // holder result such a back edge gets outlives nothing and may point
@@ -3205,7 +3205,7 @@ inline Val TypeCheck::CallResult(Call *c, FnSpec *spec, vector<Val> &argvals) {
                 t->growshrink = true;
                 v.Set(t, false);
             } else {
-                // Each root a return gives, merged as branches are (§9.2).
+                // Each root a return gives, merged as branches are.
                 auto first = true;
                 for (auto &alt : ri.alts.alts) {
                     auto m = RetAltVal(spec, alt, argvals, v.type, c);
@@ -3260,12 +3260,12 @@ inline void TypeCheck::CheckReturn(Return *r) {
     if (frames.back().isdefault) Error(r, "return outside of a function");
     // Which function does this exit? `from f` names one on the current
     // compile-time path; a plain return inside a function value exits the
-    // lexically enclosing named function (§7.6, §7.9).
+    // lexically enclosing named function.
     auto tf = -1;
     if (!r->from.empty()) {
         // `f` resolves in this function's definition context: a nested
         // function in scope, else the overload set the name reaches from
-        // here (docs/design/namespaces.md). The target is the innermost
+        // here. The target is the innermost
         // enclosing call of any of those declarations, so an unrelated
         // function sharing the leaf name cannot catch the return.
         FnSpec *env = nullptr;
@@ -3298,7 +3298,7 @@ inline void TypeCheck::CheckReturn(Return *r) {
     auto expectone = [&](size_t i) -> TypeExpr * {
         return tspec->retsknown && i < tspec->rets.size() ? tspec->rets[i] : nullptr;
     };
-    SlotScope ss(*this, false);   // A result's constness is the returns' (§9.5).
+    SlotScope ss(*this, false);   // A result's constness is the returns'.
     {
         FlagScope rs(inreturn, true);
         if (r->vals.size() == 1) {
@@ -3362,7 +3362,7 @@ inline void TypeCheck::CheckReturn(Return *r) {
 }
 
 // ------------------------------------------------------------------
-// Thread entry points (§11.2): one specialization per thread_fn, whose
+// Thread entry points: one specialization per thread_fn, whose
 // body is checked like any other, reached from a spawn or from the
 // driver rather than from a call.
 
@@ -3396,7 +3396,7 @@ inline FnSpec *TypeCheck::EnsureThreadSpec(SFunction *sf, Line l) {
 
 // ------------------------------------------------------------------
 // Calling a function value F(a): the body is cloned and checked inline
-// in the lexical environment it was written in (§7.6).
+// in the lexical environment it was written in.
 
 inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *expected) {
     if (c->trailing)
@@ -3519,7 +3519,7 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
     PopScope();
     frames.pop_back();
     // The call's value is a copy of the body's, a temporary of the calling
-    // statement as any call's result is (§9.2): no storage to bind by
+    // statement as any call's result is: no storage to bind by
     // reference, even where the body's value names a variable.
     return TempCopy(v);
 }

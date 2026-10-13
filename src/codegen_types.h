@@ -1,7 +1,7 @@
 // Goose compiler — codegen's types (definitions of CodeGen members,
-// codegen.h): type utilities and packed layouts (C.2), C naming, mangled
+// codegen.h): type utilities and packed layouts, C naming, mangled
 // type identities with on-demand typedefs, the per-type size walkers of
-// bytes values, default values (§4.2) and structural equality (§4.5).
+// bytes values, default values and structural equality.
 #pragma once
 
 namespace goose {
@@ -225,7 +225,7 @@ inline const char *CodeGen::IntSfx(IntStorage s) {
 // The C type behind a relative reference's unsigned width spelling:
 // signed for a self-relative offset, which runs both ways from its own
 // field, unsigned for an `in pool` one, which is a distance from the
-// pool's base (§3.9).
+// pool's base.
 inline const char *CodeGen::RelCT(IntStorage s, bool uns) {
     switch (IntSize(s)) {
         case 1: return uns ? "uint8_t" : "int8_t";
@@ -362,7 +362,7 @@ inline string CodeGen::Sanitize(string_view name) {
     return s + "_g";
 }
 
-// A namespaced declaration (docs/design/namespaces.md): the namespace, the
+// A namespaced declaration: the namespace, the
 // leaf, the suffix above, then the namespace's length. The digits are what
 // keep the mapping injective -- `a::b_c` and `a_b::c` differ in them, and no
 // global name's C form ends in a digit -- without a list of characters to
@@ -508,7 +508,7 @@ inline string CodeGen::Mangle(TypeExpr *t) {
 inline void CodeGen::EmitCoreTypes() {
     if (corebuiltins) return;
     corebuiltins = true;
-    // A resizable value is a frame header (C.2): the data pointer (element
+    // A resizable value is a frame header: the data pointer (element
     // region for arrays, struct start for resizable-tailed structs) plus
     // the tail element count. A reference to one points at the header.
     tdecls +=
@@ -774,7 +774,7 @@ inline void CodeGen::EmitSizeWalk(string &b, TypeExpr *t, const string &q) {
                     return;
                 default:
                     // Resizable values never nest inside bytes values;
-                    // their length lives in a frame header (C.2).
+                    // their length lives in a frame header.
                     assert(false);
                     return;
             }
@@ -879,8 +879,7 @@ inline int64_t CodeGen::MinBytes(TypeExpr *t) {
 }
 
 // ------------------------------------------------------------------
-// The verifier from_bytes runs over an untrusted image
-// (docs/design/serialization.md §5).
+// The verifier from_bytes runs over an untrusted image.
 
 // Does a value of this type hold a relative reference at any depth? Unlike
 // HasRelRef this looks through variable-size types too, since an image's
@@ -916,7 +915,7 @@ inline void CodeGen::VNeed(string &b, const string &q, const string &bytes) {
 }
 
 // gs_verify_<T>(p, n, bm): the element count of the image at p, or -1 if
-// those bytes are not one (serialization.md §3). Fixed elements start at
+// those bytes are not one. Fixed elements start at
 // multiples of their size, so their links are checked in the same pass that
 // frames them; variable ones need the framing pass to record the starts in
 // `bm` before a second pass can check a link against them.
@@ -962,8 +961,9 @@ inline string CodeGen::VerifyFn(TypeExpr *elem) {
 
 // One self-relative reference at field offset `q` holding `off`: the target
 // must be the start of an element of the image, and, where the reference is
-// typed at a variant of the element ADT, an element carrying that tag (§3
-// step 3). Offset 0 is null, and only an optional reference may hold it.
+// typed at a variant of the element ADT, an element carrying that tag.
+// Framing records variable-element starts before links are checked against them.
+// Offset 0 is null, and only an optional reference may hold it.
 inline void CodeGen::EmitVerifyLink(string &b, TypeExpr *rt, TypeExpr *elem, const string &q,
                                     const string &off) {
     auto v = VTmp();
@@ -1122,7 +1122,7 @@ inline void CodeGen::EmitVerifyWalk(string &b, TypeExpr *t, TypeExpr *elem, cons
                     return;
                 }
                 case A_LIMITED: {
-                    // Slots past the length were never written (§5.3), so
+                    // Slots past the length were never written, so
                     // only the live ones are walked; the cursor still skips
                     // the whole capacity.
                     auto v = VTmp();
@@ -1218,7 +1218,7 @@ inline void CodeGen::EmitVerifyWalk(string &b, TypeExpr *t, TypeExpr *elem, cons
 }
 
 // ------------------------------------------------------------------
-// default<T>() (§4.2): all-zero bytes are the default of every fixed type
+// default<T>(): all-zero bytes are the default of every fixed type
 // -- numbers, false, null, empty slices and limited arrays, variant 0 --
 // except where a field declares its own default, which the checker
 // builds as a literal of the call's own (Call::defaultinit).
@@ -1255,7 +1255,7 @@ inline void CodeGen::EmitDefaultInto(const string &lv, TypeExpr *t) {
 }
 
 // ------------------------------------------------------------------
-// Structural equality (§4.5): gs_eq_<mangle>. Fixed values pass by value,
+// Structural equality: gs_eq_<mangle>. Fixed values pass by value,
 // bytes values as pointers. Gap-free fixed types without floats of more
 // than a few scalars shortcut to memcmp.
 

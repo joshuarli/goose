@@ -1,5 +1,5 @@
 // error: cannot clear result while dict is still used
-// The return after the shrink reads dict itself (§5.1).
+// The return after the shrink reads dict itself.
 fn g() -> i64 {
     var result: u8[>..] = [];
     var dict: (const u8[:])[>..] = [];

@@ -1,6 +1,6 @@
 // error: storing a reference rooted at x, which does not outlive the destination
 // The elements an array appends are copies stored in the receiver, so the
-// references they hold must outlive it (§9.2), as an appended literal's do.
+// references they hold must outlive it, as an appended literal's do.
 fn main() {
     var refs: (i64&)[>..] = [];
     {

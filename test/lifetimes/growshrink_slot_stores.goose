@@ -1,6 +1,6 @@
 // A reference or slice read out of a field, an element or a global never
-// points into a grow-shrink array's elements, since none is ever stored there
-// (§5.2). So the read-back rule (§9.5) leaves every variable whose
+// points into a grow-shrink array's elements, since none is ever stored there.
+// So the read-back rule leaves every variable whose
 // grow-shrink array could hold the pointee out of such a read's candidates,
 // and the store rule passes over the read where what is left only bounds it.
 // Every use below was rejected as if the read might point into the
@@ -11,7 +11,7 @@
 // kept from outliving it; a call shrinking the array while the read is live;
 // a read through a parameter whose argument is such an array's element; a
 // view out of a for binder; and a slice in a field, named by a reference. A
-// global var's read, which any function may bind (§9.5), leaves the same
+// global var's read, which any function may bind, leaves the same
 // arrays out: the link and index_of need that too.
 
 struct Cell { v: i64 }

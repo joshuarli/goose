@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks nodes while n is still used, and n may refer into nodes
 // n is a copy of an element of the array ns names, which the caller linked
-// to another of them (§5.1).
+// to another of them.
 struct N { v: i64, next: N&? }
 fn f(ns: N[>..]&) -> N {
     let n = ns[1];

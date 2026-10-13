@@ -1,7 +1,7 @@
 // error: cannot call f: it may shrink mine while c is still used, and c may refer into mine
 // shrink frees an element of the array it is given while its copy of c is
 // still used. From f the array is t.a, bounded by the caller's storage
-// behind t, which leads to mine (§5.2).
+// behind t, which leads to mine.
 struct Cell { v: i64 }
 struct Top { a: Cell[>..<]& }
 fn shrink(arr: Cell[>..<]&, c: Cell&) {

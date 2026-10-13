@@ -1,6 +1,6 @@
 // error: ambiguous call to set: multiple overloads match equally well
 // A construct whose branches all name storage matches a reference parameter
-// as that storage does (§4.1), so where a value and a reference overload
+// as that storage does, so where a value and a reference overload
 // both take a variable, they both take the construct.
 fn set(v: i64&) { v = 7; }
 fn set(v: i64) { print(v); }

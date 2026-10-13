@@ -2,8 +2,8 @@
 // error: last is a global var, which any function may bind, and may point into cells or spare
 // Any function may bind a global `var`, and a body checked once serves every
 // later call: link's check has to hold after rebind has bound `last` into
-// spare, so a read of it is the read-back rule's answer for a global (§9.5),
-// which may point into cells or spare, not a null (§3.9).
+// spare, so a read of it is the read-back rule's answer for a global,
+// which may point into cells or spare, not a null.
 struct Cell { key: i64, next: Cell&<u16 in cells>? }
 var cells: Cell[>..] = [];
 var spare: Cell[>..] = [Cell { key: 1 }];

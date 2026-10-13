@@ -1,10 +1,10 @@
 // What a value holding self-relative references may still do without being
-// copied out of the storage its links point within (§3.9): a reference
+// copied out of the storage its links point within: a reference
 // result bound with `.=`, passed to a reference or untyped parameter or read
 // through; a by-value result, built where it is received, and a default;
 // a construct whose branches a reference parameter binds by reference; a
 // popped element that is discarded or whose scalar field is read; a named
-// result whose type is inferred (§7.3); and a value linked only `in pool`,
+// result whose type is inferred; and a value linked only `in pool`,
 // which copies like any other.
 struct TreeNode { left: TreeNode&<u32>?, right: TreeNode&<u32>?, item: i32 }
 

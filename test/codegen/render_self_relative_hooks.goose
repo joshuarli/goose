@@ -1,6 +1,6 @@
 // runtime-debug: A format overload for a type holding self-relative
-// references takes it by reference (§3.7): it is given the storage the value
-// lies in, from which its offsets are measured (§3.9), wherever the value
+// references takes it by reference: it is given the storage the value
+// lies in, from which its offsets are measured, wherever the value
 // lies: a field, an element, behind a reference.
 struct T { x: i64 }
 struct S { t: T&<u8>?, k: i64 }

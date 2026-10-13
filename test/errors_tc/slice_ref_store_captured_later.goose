@@ -1,8 +1,8 @@
 // error: cannot clear g while t is still used: it may hold a reference or slice into it
 // set's first call names s, which already views g; its second names t, to
 // which no reference had been made when the first was checked: that call
-// checks set again, since the store may now assign the t its body reads
-// (§3.8, §7.5), which then views g when the clear frees it (§5.1).
+// checks set again, since the store may now assign the t its body reads,
+// which then views g when the clear frees it.
 fn main() {
     var g: u8[>..] = [];
     g.append("xyz");

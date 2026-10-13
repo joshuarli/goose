@@ -1,6 +1,6 @@
 // error: array size K names a local variable, not a constant
 // A nested function's signature is written in the scope it is declared in,
-// where K is main's local (§3.3, §7.5).
+// where K is main's local.
 let K = 3;
 
 fn main() {

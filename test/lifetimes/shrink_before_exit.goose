@@ -2,7 +2,7 @@
 // before it can skip with a `continue` runs nothing after it again: neither
 // the rest of the function or of the loop, nor the loop's next iteration.
 // So a holder of views into the array that only those name is not live at
-// the shrink (§5.1): the decoder's result is cleared on an invalid code
+// the shrink: the decoder's result is cleared on an invalid code
 // while its dictionary of views into it is still in scope.
 fn decode(data: u8[:]) -> u8[>..] {
     var result: u8[>..] = [];

@@ -1,7 +1,7 @@
 // error: cannot call walk, which shrinks scratch while held
 // error: is still used: the slice it refers to may point into scratch
 // A reference to the slice variable holding an activation's view keeps the
-// view in use across the call back into the cycle (§5.2); the pop after the
+// view in use across the call back into the cycle; the pop after the
 // resize makes walk unbalanced, so the scan the call back skipped reports it
 // once the cycle is checked.
 recursive fn walk(scratch: i64[>..<]&, depth: i64) -> i64 {

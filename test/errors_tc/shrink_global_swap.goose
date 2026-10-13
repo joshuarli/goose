@@ -1,6 +1,6 @@
 // error: cannot clear bs: global G may hold a reference into it
 // A swap through references moves what G2 held, the view, into G, whose store
-// record says it took a copy of what G2 holds (§3.5).
+// record says it took a copy of what G2 holds.
 struct B { name: u8[..8] }
 struct H { s: const u8[:] }
 var bs: B[>..] = [];

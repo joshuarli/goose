@@ -1,4 +1,4 @@
-// dump-runtime: parameter defaults (§7.1). A call leaves out trailing
+// dump-runtime: parameter defaults. A call leaves out trailing
 // parameters that declare a default, and each gets its default evaluated at
 // that call, after the written arguments, as a value of the parameter's type
 // there. A default names what a top-level declaration would, in the

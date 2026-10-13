@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while words is still used, and words may refer into buf
 // show clears out while it uses the view emit read out of the elements
-// words views and handed it, and names holds a view of buf there (§5.1).
+// words views and handed it, and names holds a view of buf there.
 fn show(out: u8[>..]&, w: const u8[:]) {
     out.clear();
     out.append("ZZZZZZZZ");

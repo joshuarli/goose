@@ -1,6 +1,6 @@
 // Views of static data stay static data through call results and through
 // the arrays that hold only them, so a shrink of a global array whose
-// elements could hold the bytes leaves them alone (§5.1).
+// elements could hold the bytes leaves them alone.
 import std;
 
 struct Item { pos: i32, id: u8 }

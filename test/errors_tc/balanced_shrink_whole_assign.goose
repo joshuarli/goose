@@ -1,7 +1,7 @@
 // error: cannot call helper, which shrinks s while v
 // error: is still used: it may refer into s
-// Assigning the array whole releases every element before rebuilding it
-// (§5.2, §4.4), whatever the resize after it restores.
+// Assigning the array whole releases every element before rebuilding it,
+// whatever the resize after it restores.
 fn helper(s: i64[>..<]&) {
     let mark = s.len;
     s = [1];

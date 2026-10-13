@@ -1,9 +1,9 @@
 // error: a relative reference in cells must point into cells
 // error: this reference is rooted at spare
 // A block written in a global initializer reads v, a local of it, as the
-// null it is on the loop's first iteration (§9.5); the rebind at the end of
+// null it is on the loop's first iteration; the rebind at the end of
 // the loop points it into spare, so apply is checked with the block again
-// for the next pass, where no link into cells encodes v (§3.9, §7.6).
+// for the next pass, where no link into cells encodes v.
 struct Cell { key: i64, next: Cell&<u16 in cells>? }
 var cells: Cell[>..] = [Cell { key: 0 }];
 var spare: Cell[>..] = [Cell { key: 1 }];

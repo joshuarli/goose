@@ -1,5 +1,5 @@
 // A literal of variable-size elements is a T[], and == and != compare it with
-// any array or slice of its element type (§4.5): with a T[] directly, and as
+// any array or slice of its element type: with a T[] directly, and as
 // a slice with a grow-only array, a slice parameter or a generic one, on
 // either side, inside && and ||, in a loop condition, and with copies for
 // elements. The comparison views the literal only while it runs.

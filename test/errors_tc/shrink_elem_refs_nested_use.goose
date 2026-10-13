@@ -1,6 +1,6 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
 // g shrinks its parent's a and then reads its parent's v, whose elements
-// view a (§5.1).
+// view a.
 fn main() {
     var a: u8[>..] = [];
     a.append("abc");

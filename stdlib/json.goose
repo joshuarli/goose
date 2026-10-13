@@ -1,4 +1,4 @@
-// JSON (RFC 8259; docs/stdlib.md): a writer that appends values to a byte
+// JSON (RFC 8259): a writer that appends values to a byte
 // builder, a parser that builds a document tree, and a reader that parses
 // straight into the caller's own types, the way a serde derive does.
 

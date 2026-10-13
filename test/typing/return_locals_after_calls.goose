@@ -1,4 +1,4 @@
-// A `return` moves the function's own non-fixed locals (§4.1) in whichever
+// A `return` moves the function's own non-fixed locals in whichever
 // position they take among the values: a call checked earlier in the same
 // return list, and the returns inside its body, leave this return's context
 // in force for the values that follow it.

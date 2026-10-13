@@ -1,4 +1,4 @@
-// Equality and copies of short element runs (§4.5, §4.2), whose code
+// Equality and copies of short element runs, whose code
 // compares and copies whole words: static-capacity limited arrays of every
 // capacity around a word boundary compared at each length and with each
 // element differing, slices of every short length, and copies of every

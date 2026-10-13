@@ -1,7 +1,7 @@
-// The Goose standard library: `math` (docs/stdlib.md): libm, declared once
-// per function and float width (spec §7.10), plus the constants and
+// The Goose standard library: `math`: libm, declared once
+// per function and float width, plus the constants and
 // conversions that need no C. floor/ceil/round/trunc return floats, as in C;
-// `as i64` converts. Float `%` is already fmod (§6.1). sqrt is the runtime's
+// `as i64` converts. Float `%` is already fmod. sqrt is the runtime's
 // (runtime_ext.h), which has no errno to set and so compiles to the bare
 // square root instruction where the C compiler allows. The functions C has
 // set errno are libm's under the runtime's names, which tell the C compiler

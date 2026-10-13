@@ -1,7 +1,7 @@
 // error: storing a reference rooted at loc, which does not outlive the destination
 // apply's body calls put, handed to it by name, and stands on what put's
 // check found of v: the second apply(put), where v points into loc, checks
-// both again (§7.5, §7.6).
+// both again.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];
 struct K { r: Cell&?, n: i64 }

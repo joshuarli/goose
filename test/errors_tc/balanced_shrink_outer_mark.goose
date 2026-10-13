@@ -1,6 +1,6 @@
 // error: cannot call inner, which shrinks s: s[mark..], evaluated earlier in the statement
 // error: may still refer into s
-// A mark is a `let` of the activation that resizes (§5.2): outer's mark is
+// A mark is a `let` of the activation that resizes: outer's mark is
 // shorter than s is when inner starts, so inner frees the element the held
 // slice views.
 fn first(v: i64[:], unused: i64) -> i64 { v[0] }

@@ -4,7 +4,7 @@
    stack). The runtime object has no generated types, and lays out the ones
    it uses here as codegen does (CodeGen::EmitCoreTypes, CT). An --include
    header follows this and may use what it defines. The generated program
-   calls the OS primitives behind stdlib/os.goose (spec §7.10, defined in
+   calls the OS primitives behind stdlib/os.goose (defined in
    runtime_os.h) and std's byte search directly from `extern "gs_..." fn`
    declarations; no prototype is emitted for a function declared here. */
 

@@ -1,6 +1,6 @@
 // error: cannot pop a while w (bound at
 // error: is still used: it may refer into a
-// The same for an else-if's condition and body (§5.2).
+// The same for an else-if's condition and body.
 fn main() {
     var a: i64[>..<] = [1, 2, 3];
     let w = a[1..];

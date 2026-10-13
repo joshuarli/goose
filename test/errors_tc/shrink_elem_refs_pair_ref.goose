@@ -1,7 +1,7 @@
 // error: cannot call f: it shrinks a while r is still used, and r may refer into a
 // r refers to h, whose field views ss's elements, which view the array b
 // names: f tells it apart from a's only as its callers do, and this call
-// may pass a for both (§5.1).
+// may pass a for both.
 struct R2 { v: (u8[:])[:] }
 fn f(a: u8[>..]&, b: u8[>..]&) {
     var ss: (u8[:])[>..] = [];

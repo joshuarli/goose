@@ -1,7 +1,7 @@
 // error: cannot call grow, which grows spare
 // error: the growth would land inside it
-// A value assigned to an array is built over its old contents (§4.4), so
-// nothing may grow the array meanwhile (§1.3): grow, checked while gs is
+// A value assigned to an array is built over its old contents, so
+// nothing may grow the array meanwhile: grow, checked while gs is
 // bound to arr, grows spare once aim has retargeted gs.
 struct Cell { v: i64 }
 var arr: Cell[>..<] = [Cell { v: 1 }];

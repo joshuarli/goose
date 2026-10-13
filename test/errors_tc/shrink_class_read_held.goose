@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while words[0] is still used, and words[0] may refer into buf
 // The view read out of the elements words views is held while clr clears
-// out, and names holds a view of buf there (§5.1).
+// out, and names holds a view of buf there.
 fn clr(out: u8[>..]&) -> i64 {
     out.clear();
     out.append("ZZZZZZZZ");

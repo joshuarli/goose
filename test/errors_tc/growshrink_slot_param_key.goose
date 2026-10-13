@@ -1,6 +1,6 @@
 // error: storing a reference into x, which holds a grow-shrink array
 // keep_cell is checked first for e.r, a slot read that never points into a
-// grow-shrink array (§5.2), which it may store; given an element of
+// grow-shrink array, which it may store; given an element of
 // scratch, whose argument does, it is checked again, and may not.
 struct Cell { v: i64 }
 struct Row { r: Cell&, c: Cell }

@@ -1,5 +1,5 @@
 // calc.goose with the input text in a grow-only local instead of a global
-// grow-shrink array: the buffer is cleared per input (spec 5.1) and the
+// grow-shrink array: the buffer is cleared per input and the
 // parser reads it through a `u8[:]` slice rather than indexing a global by
 // position. Same work, same output; what it demonstrates is that "scratch I
 // refill every iteration" and "structure I can point into" are now the same

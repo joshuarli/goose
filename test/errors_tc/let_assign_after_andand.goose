@@ -1,6 +1,6 @@
 // error: cannot assign to let x, which may be assigned already
 // The right operand of && may run: after the condition, what it assigns may
-// be assigned (§4.4, §6.2).
+// be assigned.
 fn run(c: bool) {
     let x: i64;
     fn setx() -> bool {

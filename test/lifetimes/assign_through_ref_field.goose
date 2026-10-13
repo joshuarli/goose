@@ -1,5 +1,5 @@
-// Assigning through a reference field writes the array the field refers to
-// (§3.8, §4.4). The right-hand side may read the struct's fields that
+// Assigning through a reference field writes the array the field refers to.
+// The right-hand side may read the struct's fields that
 // cannot be or hold that array: flat ones, and arrays of another type; and
 // on a local whose record shows the field refers elsewhere, an array of the
 // same type too.

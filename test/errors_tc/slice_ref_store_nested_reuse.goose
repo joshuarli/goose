@@ -1,8 +1,8 @@
 // error: cannot clear b while s is still used: it may hold a reference or slice into it
-// inner's body names s by storing into it through r (§3.8): the second
+// inner's body names s by storing into it through r: the second
 // pass's call reuses the body checked for the first pass's s, and leaves s
-// as that check did (§7.5), viewing b, which o names from the second pass
-// on (§5.1).
+// as that check did, viewing b, which o names from the second pass
+// on.
 fn main() {
     var b: u8[>..] = [];
     b.append("xyz");

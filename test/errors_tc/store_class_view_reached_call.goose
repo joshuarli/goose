@@ -1,5 +1,5 @@
 // error: call process stores a reference rooted at storage into what its parameter c leads to, which may be outer, which storage does not outlive (§9.2)
-// The same with the store made by a callee (§9.2).
+// The same with the store made by a callee.
 struct Context { storage: u8[>..]&, inputs: (const u8[:])[>..]& }
 fn key(storage: u8[>..]&) -> const u8[:] {
     let b = storage.len;

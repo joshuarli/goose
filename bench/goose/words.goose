@@ -1,5 +1,5 @@
 // Word frequency counting: split a text into words, then count them in an
-// open-addressed map (spec A.3). Two Goose properties are on trial here --
+// open-addressed map. Two Goose properties are on trial here --
 // the word list is one contiguous block of variable-size strings, and the map
 // grows in place with slice keys pointing straight into the text, so no key
 // is ever copied or allocated. The idiomatic C++ row copies every key into a

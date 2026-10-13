@@ -1,7 +1,7 @@
 // error: variable n may be used before it is assigned
 // A break with a value leaves the block as a bare one does: the second
-// break leaves it with n unassigned, however the others leave it (§4.4,
-// §6.4).
+// break leaves it with n unassigned, however the others leave it.
+//
 fn run(c: i64) -> i64 {
     var n: i64;
     let v = block {

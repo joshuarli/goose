@@ -1,5 +1,5 @@
 // A global's `.len`, and `.cap`, is a constant a size, capacity or fill
-// count may use where its declaration fixes it (§3.3): by its written fixed
+// count may use where its declaration fixes it: by its written fixed
 // or limited array type, or by the array, fill or string literal, or other
 // such global, it is initialized to; a `var`'s where its type fixes it too.
 // Elsewhere it is an i64 like any other `.len`.

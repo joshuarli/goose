@@ -1,6 +1,6 @@
 // error: storing a reference that may point into a grow-shrink array reached through the caller's storage behind t
 // same hands back the byte view it was given, which no slot has held: the
-// bytes of the grow-shrink array t.a leads to (§5.2).
+// bytes of the grow-shrink array t.a leads to.
 struct Cell { v: i64 }
 struct Top { a: Cell[>..<]& }
 struct Keep { v: const u8[:] }

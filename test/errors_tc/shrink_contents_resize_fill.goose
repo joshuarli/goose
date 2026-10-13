@@ -1,5 +1,5 @@
 // error: cannot clear items while n is still used: it may hold a reference or slice into it; it was read out of h and may point into buf or items
-// The elements resize adds hold the fill, a view of items (§5.1, §9.5).
+// The elements resize adds hold the fill, a view of items.
 var items: u8[>..];
 fn main() {
     items.append("abcd");

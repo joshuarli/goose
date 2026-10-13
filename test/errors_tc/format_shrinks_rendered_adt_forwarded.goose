@@ -1,7 +1,7 @@
 // error: cannot call show2: it shrinks G while h is still used, and h may refer into G (§5.2)
 // show's pair reaches show2 about what show2's caller's storage holds,
 // where show2 passed the reference it read out of that storage, and main's
-// holds G (§3.7, §4.4, §5.2).
+// holds G.
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

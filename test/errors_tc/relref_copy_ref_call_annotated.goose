@@ -1,6 +1,6 @@
 // error: copying a value of type Node, which contains self-relative references, is not supported; construct it in place
 // A declaration annotated with the pointee type asks for the copy, which the
-// links do not survive (§3.9).
+// links do not survive.
 struct Node { next: Node&<u32>?, v: i64 }
 fn pair(ns: Node[>..]&) -> Node& {
     let a .= ns.push(Node { v: 1 });

@@ -48,7 +48,7 @@ inline Val SelfRef::Check(TypeCheck &tc, TypeExpr *) {
                    "relative-reference field of the literal containing it (§3.9)");
 }
 
-// A string literal is a `const u8[:]` into static data (§3.7), copyable
+// A string literal is a `const u8[:]` into static data, copyable
 // into any u8 array type.
 inline Val StrLit::Check(TypeCheck &tc, TypeExpr *expected) {
     Val v;
@@ -56,7 +56,7 @@ inline Val StrLit::Check(TypeCheck &tc, TypeExpr *expected) {
     v.Set(nullptr, true);   // Static data owns what it holds.
     v.writable = false;
     if (expected) {
-        // A string literal constructs any u8-element array type (§3.7).
+        // A string literal constructs any u8-element array type.
         if (expected->kind == TY_ARRAY && IsU8(expected->arr->sub)) {
             tc.CheckArrayCount(this, expected, (int64_t)val.size());
             if (expected->arr->akind == A_FIXED &&
@@ -96,7 +96,7 @@ inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
                 v.hasslot = true;
             }
         } else if (vd->unsized) {
-            // A literal parameter (§7.7): a constant of unknown value, no
+            // A literal parameter: a constant of unknown value, no
             // storage, adapting where it is used.
             v.unsized = true;
             v.unsizedparam = vd->unsizedorigin ? vd->unsizedorigin : vd;
@@ -140,7 +140,7 @@ inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
         return v;
     }
     // A type parameter bound to a function value, or a named function: a
-    // compile-time function value (§7.6). One bound to a type is no value.
+    // compile-time function value. One bound to a type is no value.
     const FnValBind *fb;
     if (auto t = tc.LookupTypeParam(name, fb))
         tc.Error(this, cat("type parameter ", name, " is bound to the type ", tc.TypeStr(t),
@@ -174,7 +174,7 @@ inline Val ArrayLit::Check(TypeCheck &tc, TypeExpr *expected) {
     Val v;
     TypeCheck::LitDeep deep;
     if (capexpr) {
-        // [..cap]: an empty limited array with a runtime capacity (§5.3).
+        // [..cap]: an empty limited array with a runtime capacity.
         tc.CheckIntAny(capexpr);
         if (!expected || expected->kind != TY_ARRAY ||
             expected->arr->akind != A_LIMITED || expected->arr->sizeexpr)
@@ -203,7 +203,7 @@ inline Val ArrayLit::Check(TypeCheck &tc, TypeExpr *expected) {
     int64_t capacity = -1;   // A limited array's static capacity, which the literal must fit.
     // The array a literal is where the destination names no array type: a
     // fixed one, or a T[] when the elements are not fixed-size, since only
-    // variable and grow-only arrays hold those (§3.3).
+    // variable and grow-only arrays hold those.
     auto natural = [&](int64_t count) {
         if (elem == tc.fntype) tc.Error(this, "function values cannot be stored in arrays (§7.6)");
         tc.NoZeroSizeElement(elem, line);
@@ -227,7 +227,7 @@ inline Val ArrayLit::Check(TypeCheck &tc, TypeExpr *expected) {
         tc.CheckArrayCount(this, expected, cnt);
         // Later passes consume the evaluated count, not its unchecked source
         // expression. In particular every construction path expects IntLit,
-        // even when the source used arithmetic or a named constant (§4.2).
+        // even when the source used arithmetic or a named constant.
         fillcount = tc.ast.New<IntLit>(fillcount->line, cnt);
         fillcount->exprtype = tc.ast.inttypes[IS_I64];
         TypeCheck::SlotScope ss(tc, true);
@@ -259,7 +259,7 @@ inline Val ArrayLit::Check(TypeCheck &tc, TypeExpr *expected) {
     }
     tc.CheckArrayCount(this, expected, (int64_t)elems.size());
     for (auto &e : elems) {
-        TypeCheck::SlotScope ss(tc, true);   // An element is a slot (§9.5).
+        TypeCheck::SlotScope ss(tc, true);   // An element is a slot.
         auto ev = tc.CheckValue(e, elem);
         if (!elem) {
             tc.NoUntypedEmptyArray(ev, e, "the array literal around it");
@@ -282,7 +282,7 @@ inline Val ArrayLit::Check(TypeCheck &tc, TypeExpr *expected) {
         tc.NoTemporaryLiteral(this, v.type);
     }
     // Anything that views the literal rather than building a destination
-    // from it views a temporary (§9.2), whose elements point where its
+    // from it views a temporary, whose elements point where its
     // holder root says.
     v.Set(tc.TempRoot(), false);
     tc.HolderFromLit(v, deep);
@@ -306,8 +306,8 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
         einst = ei;
         variant = var;
         Val v;
-        // The mode comes from the receiving declaration (§3.5); a literal
-        // adapts to either, or stands as a first-class variant value (§8.2).
+        // The mode comes from the receiving declaration; a literal
+        // adapts to either, or stands as a first-class variant value.
         // Which it is decides what `self` inside it denotes, so settle the
         // type before the initializers are checked.
         v.type = expected && expected->kind == TY_ENUM && expected->enu->en == ei->en &&
@@ -345,7 +345,7 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
                 auto nt = tc.NaturalType(av);
                 // The shape-changing coercion generics see through, as a
                 // call's do: an array, or a reference to one, meeting a
-                // slice field is a slice of its elements (§3.10).
+                // slice field is a slice of its elements.
                 if (nt && !tc.BindTypes(field->type, nt, b) && field->type->kind == TY_SLICE) {
                     auto at = IsPlainRef(nt) ? nt->ref->sub : nt;
                     if (at->kind == TY_ARRAY) tc.BindTypes(field->type->sub, at->arr->sub, b);
@@ -381,7 +381,7 @@ inline Val Unary::Check(TypeCheck &tc, TypeExpr *) {
     if (op == T_BITAND) return tc.CheckRefOf(this);
     auto v = tc.Operand(child);
     if (op == T_NOT) {
-        // Optionals are testable like conditions (§3.8 truthiness).
+        // Optionals are testable like conditions.
         auto t = tc.LoadType(v.type);
         if (t->kind != TY_BOOL && !IsOptional(t))
             tc.Error(this, cat("! requires bool, got ", tc.TypeStr(t)));
@@ -408,7 +408,7 @@ inline Val Binary::Check(TypeCheck &tc, TypeExpr *) {
 }
 
 inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
-    // EnumName.Variant: a payload-less variant constant (§3.5).
+    // EnumName.Variant: a payload-less variant constant.
     if (auto id = Is<Ident>(obj)) {
         const FnValBind *fb;
         if (!tc.LookupVar(id->name, id->ns) && !tc.LookupTypeParam(id->name, fb) && !fb)
@@ -434,7 +434,7 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
             Val v;
             assert(bd->rets[0] == 'i');
             v.type = tc.ast.inttypes[IS_I64];
-            v.nonneg = true;   // A length or capacity is in [0, 2^48] (§10.4).
+            v.nonneg = true;   // A length or capacity is in [0, 2^48].
             return v;
         }
         if (t->kind == TY_ARRAY || t->kind == TY_SLICE)
@@ -473,7 +473,7 @@ inline Val SliceExpr::Check(TypeCheck &tc, TypeExpr *) {
     } else {
         tc.Error(this, cat("cannot slice a value of type ", tc.TypeStr(lv.type)));
     }
-    // A comparison's view reads no link out of what it compares (§4.5).
+    // A comparison's view reads no link out of what it compares.
     if (lv.intemp && !cmpview) tc.NoRelRefTempRead(obj, lv.type, elem);
     if (lo) tc.CheckIntAny(lo);
     if (hi) tc.CheckIntAny(hi);
@@ -482,7 +482,7 @@ inline Val SliceExpr::Check(TypeCheck &tc, TypeExpr *) {
     v.SetProv(lv);
     v.reusable = false;   // A view of a pool is not the pool.
     if (lv.type->cq) v.writable = false;   // A const field's or element's, as a variable's.
-    v.type->cq = !v.writable;   // A slice of read-only storage is a `const T[:]` (§9.5).
+    v.type->cq = !v.writable;   // A slice of read-only storage is a `const T[:]`.
     return v;
 }
 

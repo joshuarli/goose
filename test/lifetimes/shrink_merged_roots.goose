@@ -1,5 +1,5 @@
 // A shrink through a reference whose root only bounds its array counts as a
-// shrink of every array that root bounds (§5.2, §9.2), and of no other: not
+// shrink of every array that root bounds, and of no other: not
 // one declared further in, not one whose elements a live view's pointee
 // cannot be, and nothing once the views are dead.
 struct P { x: i64[>..<]&, y: i64[>..<]&, name: const u8[:] }

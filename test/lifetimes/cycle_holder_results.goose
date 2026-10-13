@@ -1,8 +1,8 @@
-// A recursive cycle's result may hold references (§7.8, §9.2): a struct with
+// A recursive cycle's result may hold references: a struct with
 // slice fields is predicted and checked by the roots of what it holds, as a
 // returned reference is. The first return checked stands in for the
 // prediction, inexact: a field read out of a back edge's holder re-derives
-// its root (§9.5), and the returns built from it are no more exact than that.
+// its root, and the returns built from it are no more exact than that.
 
 struct Fragment { text: const u8[:] }
 

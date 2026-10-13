@@ -1,8 +1,8 @@
 // error: cannot call drop, which may shrink a: a[..], evaluated earlier in the statement
 // error: may still refer into a
-// An if passed to a reference parameter binds the branch taken by reference
-// (§4.1), so the callee pops `a` or `b` while the slice of `a` taken before
-// the call is still held (§5.2).
+// An if passed to a reference parameter binds the branch taken by reference,
+// so the callee pops `a` or `b` while the slice of `a` taken before
+// the call is still held.
 fn total(s: const i64[:], n: i64) -> i64 { s.len + n }
 fn drop(xs: i64[>..<]&) -> i64 { xs.pop() }
 fn main() {

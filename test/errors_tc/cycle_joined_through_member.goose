@@ -1,7 +1,7 @@
 // error: f calls into its recursive cycle while non-fixed-size local scratch
 // f reaches a's cycle only through g, whose check has finished by then:
 // calling g still leads back into the cycle, so f joins it, with scratch in
-// scope (§7.8).
+// scope.
 recursive fn a(n: i64) -> i64 {
     if n <= 0 { return 0; }
     let x = h(n);

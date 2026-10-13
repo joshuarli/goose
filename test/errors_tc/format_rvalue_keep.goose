@@ -1,6 +1,6 @@
 // error: storing a reference rooted at v, which does not outlive the destination
 // An operator's result is no storage: print renders it from a temporary,
-// which a format hook taking it by reference is given (§3.7), and which a
+// which a format hook taking it by reference is given, and which a
 // reference the hook keeps outlives once the printing function returns.
 var g1: i64 = 5;
 var keep: (const i64&)? = null;

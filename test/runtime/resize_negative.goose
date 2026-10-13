@@ -1,4 +1,4 @@
-// Resize to a negative length is a runtime abort (§9.3): it shrinks past
+// Resize to a negative length is a runtime abort: it shrinks past
 // empty, corrupting a grow-shrink array's stack top or a limited array's
 // stored length exactly as an unchecked pop on empty would.
 

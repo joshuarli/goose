@@ -1,6 +1,6 @@
 // A callee that shrinks through one parameter while it still uses a view
-// passed as another is judged at each call by what the call passes (§5.2,
-// §9.2): a merged reference beside a view of one of its arms is accepted where
+// passed as another is judged at each call by what the call passes:
+// a merged reference beside a view of one of its arms is accepted where
 // the callee is done with the view before the shrink, or where the view is of
 // an array declared further in, which the merge cannot point at.
 struct Rec { name: u8[], items: (const u8[:])[>..<] }

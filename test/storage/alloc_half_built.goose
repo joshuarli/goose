@@ -1,6 +1,6 @@
 // runtime-debug: an element allocated at a pool's top joins it only once it is written.
 // An allocated literal holding relative references of either form is built
-// in its slot (§3.9). At the top of the pool that slot is counted only once
+// in its slot. At the top of the pool that slot is counted only once
 // the literal is complete, so what its initializers call reads the pool as
 // it was before the allocation, and an initializer that leaves the function
 // leaves the pool as it was. A slot off the freelist is taken before the

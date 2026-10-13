@@ -11,9 +11,9 @@
 // Every link is a 4-byte self-relative offset into the pool, including the
 // sentinel end of a sibling chain: a null relative reference is the zero
 // offset, which needs no root, so a chain that ends in null is still
-// relative throughout (spec 3.9).
+// relative throughout.
 //
-// The parser carries a `return from` error path (spec 7.9) it never takes on
+// The parser carries a `return from` error path it never takes on
 // this input, which is the honest thing to measure: real parsers have one,
 // and it costs a discriminant check on every return in the cycle.
 
@@ -116,11 +116,11 @@ fn nextof(n: Sexp.Num&)  -> Sexp..? { n.next }
 fn nextof(n: Sexp.List&) -> Sexp..? { n.next }
 
 // The sibling chain is walked by passing the next link down: inside a
-// recursive cycle a reference may be passed as an argument but not stored
-// (spec 7.8), so the loop form with `.=` is not available here.
+// recursive cycle a reference may be passed as an argument but not stored,
+// so the loop form with `.=` is not available here.
 // The pass index rides along so the four walks are four different
 // computations, which stops a backend that can see the walk is pure from
-// hoisting it out of the loop (see bench/notes.md).
+// hoisting it out of the loop.
 recursive fn walk(n: Sexp.Sym&, p: i64) -> i64 { n.name.len + n.name[0] + p }
 recursive fn walk(n: Sexp.Num&, p: i64) -> i64 { n.v ^ p }
 recursive fn walk(n: Sexp.List&, p: i64) -> i64 { 1 + walk_chain(n.first, p) }

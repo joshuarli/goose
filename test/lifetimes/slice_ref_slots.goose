@@ -2,7 +2,7 @@
 // warning: redundant &: entries[0].text is passed by reference without it
 // A reference to a slice names the slot holding it -- a slice variable, a
 // field, an element -- whether it binds the slot by reference or is taken
-// with an explicit `&` (§3.8, §4.1): a load through it sees what the slot
+// with an explicit `&`: a load through it sees what the slot
 // holds then, a write through it assigns the slot, and it lives as long as
 // the slot does.
 struct E { text: u8[:] }

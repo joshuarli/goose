@@ -2,7 +2,7 @@
 // members, codegen.h): the static count of data stacks the main program and
 // each worker can have in use at once, which the generated program hands the
 // runtime to reserve as each thread program starts and for the cap on
-// hardware_threads() (gs_rt_init, goose_spec.md 11.2), and the --stacks
+// hardware_threads() (gs_rt_init), and the --stacks
 // report of it.
 #pragma once
 
@@ -12,7 +12,7 @@ namespace goose {
 // count, and a callee's index starts above what the caller has in use at the
 // call (SpTop), so a function's count is the larger of its own and, over its
 // calls, the index handed on plus the callee's count. A call into a
-// recursive cycle is made with nothing in use (§7.8, NoStackAcrossCycleCall),
+// recursive cycle is made with nothing in use (NoStackAcrossCycleCall),
 // so the members of a cycle share one count, the largest of their own and of
 // what they hand to callees outside it, and the count is a constant.
 

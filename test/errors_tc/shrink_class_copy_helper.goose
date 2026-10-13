@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while h is still used, and h may refer into buf
 // clr clears out while emit's copy of the element hs views is still used,
-// and that element views buf (§5.1).
+// and that element views buf.
 struct H { s: const u8[:] }
 fn clr(out: u8[>..]&) {
     out.clear();

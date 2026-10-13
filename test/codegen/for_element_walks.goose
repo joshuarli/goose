@@ -1,5 +1,5 @@
 // runtime-debug: a `for` over a slice or limited array that an element of an
-// array holds loads it again on every iteration (§6.5): a body that stores
+// array holds loads it again on every iteration: a body that stores
 // another slice into that element, grows it, or calls a function that does
 // either moves the walk on with it, at the next index. A body that writes
 // only other storage keeps walking what it started with, which the compiler

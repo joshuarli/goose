@@ -1,6 +1,6 @@
 // error: cannot call run: it shrinks d while h is still used, and h may refer into d (§5.1)
-// The same where the assignment is through a reference parameter (§4.4,
-// §5.1).
+// The same where the assignment is through a reference parameter.
+//
 struct D { n: i64, tail: u8[>..] }
 struct H { n: i64, d: D& }
 fn total(d: D&) -> u8[>..] {

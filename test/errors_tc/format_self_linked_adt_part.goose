@@ -1,6 +1,6 @@
 // error: print cannot render K.., which reaches itself through references, around the format overload for M
-// An ADT linking to itself (§3.4) is rendered level by level, which runs
-// no format overload for a part of it (§3.7), here behind a self-relative
+// An ADT linking to itself is rendered level by level, which runs
+// no format overload for a part of it, here behind a self-relative
 // link.
 struct M { v: i64 }
 fn format(out: u8[>..]&, m: M) { format(out, "M", m.v); }

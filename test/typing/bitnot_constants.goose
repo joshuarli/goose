@@ -1,6 +1,6 @@
 // runtime-debug: `~c` of a constant c >= 0 takes the integer type its
-// destination or other operand has where c fits it, computed at that type
-// (§6.1): ~4 is 251 as a u8 and -5 as an i8 or where nothing gives it a
+// destination or other operand has where c fits it, computed at that type:
+// ~4 is 251 as a u8 and -5 as an i8 or where nothing gives it a
 // type. Named constants clear flags in narrow fields, a named constant `~c`
 // adapts the same way, and `-~c` is a constant again.
 

@@ -1,5 +1,5 @@
 // error: cannot write through this reference: non-writable provenance
-// A variable of a `const` type is assigned by its own name alone (§9.5):
+// A variable of a `const` type is assigned by its own name alone:
 // `&t` is a read-only reference, and so is t bound by reference, whatever
 // slice it was assigned.
 var buf: u8[>..] = [];

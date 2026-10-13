@@ -1,7 +1,7 @@
 // error: storing a reference rooted at out, which does not outlive the destination
 // A format overload taking a value by reference writes what a reference
-// argument names (§3.7), so what it stores there must outlive that storage
-// (§9.2): a view of the text str builds, a temporary, may not be kept in
+// argument names, so what it stores there must outlive that storage:
+// a view of the text str builds, a temporary, may not be kept in
 // the struct the reference names.
 struct H { s: u8[:] }
 var keep: u8[>..] = [];

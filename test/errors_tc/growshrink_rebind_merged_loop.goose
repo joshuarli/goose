@@ -1,7 +1,7 @@
 // error: re-binding s to a reference that may point into a grow-shrink array (related), where it pointed into none
 // The shrink at the top of the loop was checked while s pointed into no
 // grow-shrink array, and a loop body is checked once: the next round's
-// shrink would leave s viewing the cleared array (§5.2).
+// shrink would leave s viewing the cleared array.
 var related: u8[>..<] = [];
 fn main() {
     related.push(67);

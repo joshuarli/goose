@@ -1,7 +1,7 @@
 // The elements a slice parameter views, and the holder a reference
 // parameter names, hold what the caller stored there: a shrink in the
 // callee leaves them to each call, which judges them by its record of the
-// argument's storage (§5.1). Here none of them views the array shrunk.
+// argument's storage. Here none of them views the array shrunk.
 struct H { s: const u8[:] }
 var TABLE: (const u8[:])[>..] = [];
 

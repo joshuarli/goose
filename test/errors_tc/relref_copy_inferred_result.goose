@@ -1,7 +1,7 @@
 // error: copying a value of type Node, which contains self-relative references, is not supported; construct it in place
 // A result type inferred from a return takes it as an un-annotated `let`
-// does (§7.1): an element of a fixed-size type is copied out of its array
-// (§3.9).
+// does: an element of a fixed-size type is copied out of its array.
+//
 struct Node { next: Node&<u32>?, v: i64 }
 fn pair(ns: Node[>..]&) -> Node& {
     let a .= ns.push(Node { v: 1 });

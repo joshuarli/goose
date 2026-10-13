@@ -1,4 +1,4 @@
-// Named constants in integer match patterns (§8.1): let and const globals,
+// Named constants in integer match patterns: let and const globals,
 // bare or qualified (terrain::, ::), alone, as range bounds and negated,
 // beside literals, and at the top of their type. A bare name is a constant
 // or a variant as the scrutinee's type says, so a generic function's match

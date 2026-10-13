@@ -1,4 +1,4 @@
-"""Packages from git sources (docs/design/packages.md §4.6), offline: a bare
+"""Packages from git sources, offline: a bare
 repository this runner makes, declared by its file:// URL at a tag and at a
 commit, fetched into GOOSE_HOME (which run_tests.py points under build/),
 fetched again by `goose fetch --update` after the tag moved, and a library

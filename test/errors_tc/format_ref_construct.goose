@@ -1,7 +1,7 @@
 // error: cannot assign through this path (const, or a read-only instantiation
-// An `if` with no destination type gives a copy of the branch taken (§4.1),
+// An `if` with no destination type gives a copy of the branch taken,
 // even where the branches are references: a format overload taking the
-// value by reference is handed that temporary, read-only (§3.7, §9.5), not
+// value by reference is handed that temporary, read-only, not
 // what the references name.
 struct S { x: i64 }
 fn format(out: u8[>..]&, v: S&) { v.x = 7; out.append("S"); }

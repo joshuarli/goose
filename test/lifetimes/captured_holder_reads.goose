@@ -1,7 +1,7 @@
 // A reference read out of a holder of the function a nested function's or
 // a function value's body is written in points where that holder's stores
-// put it, as in the declaring body itself (§9.5): the body is checked again
-// for a call that finds the holder holding something else (§7.5), so the
+// put it, as in the declaring body itself: the body is checked again
+// for a call that finds the holder holding something else, so the
 // links it stores into the caller's pool are rooted there.
 struct Node { v: i64, first: Node? }
 struct Cur { first: Node?, count: i64 }

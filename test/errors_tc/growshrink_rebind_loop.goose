@@ -1,7 +1,7 @@
 // error: re-binding s to a reference that may point into a grow-shrink array (related), where it pointed into none
 // The store of s into h was checked while s pointed into no grow-shrink array;
 // the loop's next round stores it again after the rebind, which may not
-// start pointing into one (§5.2).
+// start pointing into one.
 struct H { f: u8[:] }
 fn main() {
     var related: u8[>..<] = [];

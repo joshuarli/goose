@@ -344,7 +344,7 @@ theorem runModule_agree (m : Core.Module) (hm : moduleOk m = true) (p : NumProfi
         Agree.bind (entry_agree m ctx impl hctx himpl hp hb p n s1) fun _ s2 _ =>
           Agree.refl _ s2
 
-/-- Stage one: the lowering preserves the meaning of the modules whose initializers and entry
+/-- The lowering preserves the meaning of the modules whose initializers and entry
 use structured control (conditionals, short-circuit operators and block values among them), but no
 loop, call or return. -/
 theorem lower_correct_ctl (m : Core.Module) (hm : moduleOk m = true) (n : Nat) (p : NumProfile)

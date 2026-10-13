@@ -1,7 +1,7 @@
-// The Goose standard library: `vec` (docs/stdlib.md): small vectors as
-// plain structs. Elementwise + - * / are the language's (§6.1); the
+// The Goose standard library: `vec`: small vectors as
+// plain structs. Elementwise + - * / are the language's; the
 // scalar * / broadcast too. The functions here combine components. The int aliases are
-// i32 because vectors are data (§3.1), and an i32 component widens into an
+// i32 because vectors are data, and an i32 component widens into an
 // i64 index implicitly.
 
 import math;

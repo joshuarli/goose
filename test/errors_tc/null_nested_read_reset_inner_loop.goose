@@ -3,9 +3,9 @@
 // loop's store stores v through h, then bind points v into loc, so its
 // second iteration would store a reference into a loc that ends with the
 // outer iteration. store reads h as the null it is in the outer loop's
-// first pass (§9.5). The second pass, where h is bound, shares bind's check,
+// first pass. The second pass, where h is bound, shares bind's check,
 // which leaves v bound there as the first pass's did, and the inner loop's
-// next pass sees that as it would the check's own rebind (§7.5, §9.2).
+// next pass sees that as it would the check's own rebind.
 struct Cell { key: i64 }
 struct K { r: Cell&? }
 fn pick(c: bool, a: Cell&) -> Cell&? {

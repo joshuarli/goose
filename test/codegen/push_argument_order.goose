@@ -1,5 +1,5 @@
-// A push evaluates its receiver, then its argument, then adds the element
-// (§2): an argument that itself grows the array pushes first, the element
+// A push evaluates its receiver, then its argument, then adds the element:
+// an argument that itself grows the array pushes first, the element
 // follows what it pushed, and the returned reference names the element. A
 // literal holding a relative reference is built in its slot, whichever array
 // kind the slot belongs to.

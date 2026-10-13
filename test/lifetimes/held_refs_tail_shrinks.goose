@@ -1,6 +1,6 @@
 // A struct's grow-only tail shrinks through a reference to the struct while
-// the struct is still used, where nothing it holds can refer into the tail
-// (§5.1): its references are paths to whole arrays or tables, point at
+// the struct is still used, where nothing it holds can refer into the tail:
+// its references are paths to whole arrays or tables, point at
 // storage of a type the tail's elements cannot hold, or were stored with
 // views of other arrays only.
 import std;

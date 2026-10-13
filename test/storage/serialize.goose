@@ -1,4 +1,4 @@
-// to_bytes / bytes_of / from_bytes (docs/design/serialization.md): an array
+// to_bytes / bytes_of / from_bytes: an array
 // of self-relative structure written out as bytes, and verified back in.
 //
 // The point of the verifier is that a *hostile* image can never produce a
@@ -47,7 +47,7 @@ fn fixed_elements() {
     print(ok, " ", back.len, " ", tsum(back) == tsum(pool));   // true 4 true
 
     // The result is an ordinary array rooted at its own variable: it grows,
-    // and a relative store into it works like any other (§3.9).
+    // and a relative store into it works like any other.
     let n: Tree& = back.push(Tree { v: 55, l: back[0] });
     let nl = n.l;
     guard nl else { print("unreachable"); return; }
@@ -142,7 +142,7 @@ fn adt_elements() {
 }
 
 // --- limited arrays inside an element ---------------------------------------
-// Slots past the length were never written (§5.3), so the walk checks the
+// Slots past the length were never written, so the walk checks the
 // links in the live ones only.
 
 struct Cell { k: u16, kids: (Cell&<u16>)[..3] }
@@ -360,7 +360,7 @@ fn framing() {
 }
 
 // --- destinations -----------------------------------------------------------
-// The image is an ordinary resizable result (§7.3), so it lands wherever one
+// The image is an ordinary resizable result, so it lands wherever one
 // does: a value slot with a length prefix, a field, a temporary, a return.
 
 struct Saved { name: u8[], blob: u8[] }

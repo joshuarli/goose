@@ -1,4 +1,4 @@
-// An operation computes and wraps at its operands' type (§6.2), whatever
+// An operation computes and wraps at its operands' type, whatever
 // wider slot its value lands in: an i8 `k + 1` bounds nothing about k = 127,
 // where a release build computes -128.
 import std;

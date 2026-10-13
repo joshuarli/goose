@@ -1,7 +1,7 @@
 // error: cannot clear nodes while boxes is still used: a reference into it was stored there
 // put stores r, which may be h, a reference into the elements ns names, as
 // well as what an element holds: r was read out of ns's storage only in
-// part, so what boxes holds is not only what nodes' elements do (§5.1).
+// part, so what boxes holds is not only what nodes' elements do.
 struct N { v: i64, next: N&? }
 struct Box { n: N& }
 fn put(dst: Box[:], ns: N[>..]&, c: bool) {

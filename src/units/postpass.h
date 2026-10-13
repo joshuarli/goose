@@ -91,7 +91,7 @@ struct PostPassFn {
 };
 
 // The lowering key of an emitted function: what can change its body or its
-// signature (spec §15), with the context-dependent facts the optimizing
+// signature, with the context-dependent facts the optimizing
 // passes used. Facts available but unused are not recorded by the passes and
 // so are not in it; a fact recorded and not used only makes the key finer.
 inline Digest LoweringInstanceKey(CodeGen &cg, const EmitSeg &seg) {

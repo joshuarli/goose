@@ -1,6 +1,6 @@
 // error: cannot clear b while s is still used: it may hold a reference or slice into it
-// The block's parameter is run's, which names main's s (§3.8, §7.6): the
-// store through it assigns s, which views b when the clear frees it (§5.1).
+// The block's parameter is run's, which names main's s: the
+// store through it assigns s, which views b when the clear frees it.
 fn run<F>(s: u8[:]&) { F(s); }
 fn main() {
     var a: u8[>..] = [];

@@ -1,4 +1,4 @@
-// Stores into optional self-relative fields (§3.9) whose null encoding the
+// Stores into optional self-relative fields whose null encoding the
 // compiler can rule out or must still check: a link that is not its
 // struct's first field never encodes a target as offset zero, whatever it
 // points at -- another element, a part of one, its own holder -- and a

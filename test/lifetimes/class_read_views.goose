@@ -2,7 +2,7 @@
 // elements a slice parameter views, the holder a reference parameter names --
 // is one of the views that storage holds: a shrink in the callee judges it
 // by what the callee stored there, and leaves the rest to each call, which
-// judges it by its record of the argument's storage (§5.1). Here none of
+// judges it by its record of the argument's storage. Here none of
 // them views the array shrunk.
 struct H { s: const u8[:] }
 struct N { v: i64, next: N&? }

@@ -1,8 +1,8 @@
 // error: cannot pop xs while w is still used
-// A recursive function's back edges reuse its body whatever they pass (§7.8),
+// A recursive function's back edges reuse its body whatever they pass,
 // so what its by-value parameter holds is never one array there: the entry
 // call's w views ys alone, but the back edge's views xs, which the body pops
-// while w is still used (§9.2, §5.1).
+// while w is still used.
 struct W { s: i64[:] }
 recursive fn walk(xs: i64[>..]&, w: W, n: i64) {
     if n == 0 { return; }

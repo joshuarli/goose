@@ -1,5 +1,5 @@
 // error: cannot call format, which shrinks G: print runs it in the middle of rendering r, which may refer into G (§5.2)
-// A reference argument renders its pointee where it lies: in G (§3.7, §5.2).
+// A reference argument renders its pointee where it lies: in G.
 struct T { n: i64 }
 struct W { t: T, k: i64 }
 var G: W[>..<] = [W { T { 1 }, 2 }];

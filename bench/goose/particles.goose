@@ -1,5 +1,5 @@
 // A float kernel over an array-of-structs, written the idiomatic way: the
-// update is elementwise struct math (spec 6.1), so `p.vel = p.vel + G` adds
+// update is elementwise struct math, so `p.vel = p.vel + G` adds
 // all three components even though gravity only acts on one. particles_scalar
 // .goose is the same simulation with the components written out, and the C++
 // rows come in both shapes too, so the four of them separate what the style

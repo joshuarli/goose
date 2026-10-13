@@ -9,7 +9,7 @@ checker creates for the function, how many of their printed bodies (`--specs`
 at -O0) differ, and how many distinct implementations the emitted C holds
 (callees compared by class, numbering and source lines masked). The expected
 values were read from the compiler; the run fails if it no longer agrees.
-The README table is these rows.
+The optional Markdown table contains these rows.
 """
 
 import argparse

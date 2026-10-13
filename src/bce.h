@@ -54,7 +54,7 @@
 // `a * b` takes the extremes of the four corner products and `a ± b` the sum
 // of the two ranges, on a one-shot base. That is what proves a row-major
 // index — `y * W + x` against a `W * H` length — and the interval is only
-// stated when it fits the expression's own width, since §6.2 arithmetic wraps
+// stated when it fits the expression's own width, since integer arithmetic wraps
 // there in release builds.
 //
 // Aliasing uses the checker's reference provenance (VarDef::ref.root chains):
@@ -197,7 +197,7 @@ struct BCE {
     int nextgen = 0;
 
     static constexpr int64_t INF = INT64_MAX;
-    // §10.4: a data stack reserves at most 2^48 bytes, so no value is larger
+    // A data stack reserves at most 2^48 bytes, so no value is larger
     // and no array longer than that. Guaranteed rather than assumed, and the
     // 15 bits of headroom below i64 are what make size arithmetic (i + 1,
     // len - 1, len + len) provably free of overflow.
@@ -235,7 +235,7 @@ struct BCE {
     }
     static Base Zero() { return Base { BK_ZERO, 0, 0 }; }
     // An anonymous base for one evaluation of an expression whose value range
-    // the operation itself bounds (§6.2 modulo and mask). A fresh base per
+    // the operation itself bounds (modulo and mask). A fresh base per
     // evaluation, so a later evaluation of the same node never inherits the
     // earlier one's facts.
     int nexttmp = 0;
@@ -288,11 +288,11 @@ struct BCE {
 
     // Follows reference/slice provenance to the storage-owning variable.
     // A synthetic parameter root class (typeless VarDef) is opaque, but two
-    // references in distinct classes are known-distinct roots (§10.2). An
-    // inexact root names a scope the pointee outlives rather than its owner
-    // (§9.5), so it says nothing about which storage this is. With `slot`,
+    // references in distinct classes are known-distinct roots. An
+    // inexact root names a scope the pointee outlives rather than its owner,
+    // so it says nothing about which storage this is. With `slot`,
     // what is sought is the slot a slice's length lives in, which a
-    // reference to a slice is rooted at (§9.2): the chain stops at a slice
+    // reference to a slice is rooted at: the chain stops at a slice
     // variable rather than following it on to the array it views.
     pair<int, VarDef *> UltOf(VarDef *v, bool slot = false) {
         for (auto guard = 0; guard < 16; guard++) {
@@ -651,7 +651,7 @@ struct BCE {
             auto &b = nodes[i];
             if (b.kind == BK_LEN) {
                 edges.push_back({ 0, (int)i, 0 });         // 0 <= len.
-                // len <= 2^48 (§10.4), or a limited array's capacity.
+                // len <= 2^48, or a limited array's capacity.
                 auto cap = places[b.id].cap;
                 edges.push_back({ (int)i, 0, cap >= 0 && cap < LENMAX ? cap : LENMAX });
             } else if (b.kind == BK_TMP) {
@@ -730,14 +730,14 @@ struct BCE {
         return true;
     }
 
-    // The integer type binary operation b computes and wraps at (§6.2): its
+    // The integer type binary operation b computes and wraps at: its
     // operands', which the checker unified. b's own exprtype is the slot its
     // value lands in, which can be wider (an i8 sum stored into an i64).
     static TypeExpr *OpType(Binary *b) { return b->left->exprtype; }
 
     // A one-shot base carrying [lo, hi], for a value the operation computes
     // but the domain cannot relate to anything else. The interval is only
-    // stated when the machine's own arithmetic agrees with it: §6.2 wraps at
+    // stated when the machine's own arithmetic agrees with it: arithmetic wraps at
     // the operation's width in release builds, so a result the facts place
     // outside that width is not the value the program computed.
     Term IvalTerm(TypeExpr *t, int64_t lo, int64_t hi) {
@@ -858,7 +858,7 @@ struct BCE {
         return {};
     }
 
-    // The storage range of a value of a sub-64-bit integer type (§6.2: every
+    // The storage range of a value of a sub-64-bit integer type (every
     // operation computes at its type, so no such value lies outside it).
     Term TypeRangeTerm(Node *n) {
         if (mode == M_KILLS) return {};
@@ -906,7 +906,7 @@ struct BCE {
         return t;
     }
 
-    // `a % b` and `a & b` bound their result by b (§6.2): a Euclidean
+    // `a % b` and `a & b` bound their result by b: a Euclidean
     // remainder lies in [0, |b|) whatever the dividend's sign, and a mask can
     // only pass bits the mask has. Both yield a fresh base carrying the
     // resulting facts.
@@ -919,7 +919,7 @@ struct BCE {
         auto m = TmpBase();
         if (b->op == T_MOD) {
             AddFactB(Zero(), m, 0);   // Euclidean remainder is nonnegative.
-            // A zero divisor aborts (§6.2), so a completed modulo has b != 0.
+            // A zero divisor aborts, so a completed modulo has b != 0.
             // The upper bound is |b|, which is a term only when the divisor
             // is provably nonnegative or is a negative constant.
             if (Query(Zero(), rt.b, rt.off)) AddFactB(m, rt.b, SatSub(rt.off, 1));
@@ -936,7 +936,7 @@ struct BCE {
     }
 
     // `x / k` for a constant k >= 1 and `x >> k` for a constant count, which
-    // is masked to the operation's width (§6.2). The shift is monotone, so it
+    // is masked to the operation's width. The shift is monotone, so it
     // maps the dividend's constant bounds to the quotient's. For a dividend
     // the facts place at or above zero, truncating division and either shift
     // agree, the dividend's constant bounds carry over divided, and the
@@ -947,7 +947,7 @@ struct BCE {
     //
     // [0, x] also holds for any other shift count, and for a division by any
     // divisor the facts place at or above zero, unwrapped as well: a
-    // completed division had one of at least 1 (§6.2).
+    // completed division had one of at least 1.
     Term QuotTerm(Binary *b) {
         if (mode == M_KILLS) return {};
         auto t = OpType(b);
@@ -989,7 +989,7 @@ struct BCE {
     // Whether an integer expression is provably nonnegative: its term, or a
     // difference `a - b` the facts order (`b <= a`) with `b >= 0`, which
     // then lies in [0, a] and cannot have wrapped. Every term must be the
-    // value the machine computed, not one a release build wrapped (§6.2).
+    // value the machine computed, not one a release build wrapped.
     bool NonNeg(Node *n) {
         auto t = TermOf(n);
         if (t.ok && CmpAdmissible(t) && Query(Zero(), t.b, t.off)) return true;
@@ -1021,7 +1021,7 @@ struct BCE {
     }
 
     // A numeric cast whose value is inside the target's range is the
-    // identity, so it carries its operand's term across (§6.3). Each side is
+    // identity, so it carries its operand's term across. Each side is
     // checked only where the source type does not already guarantee it.
     Term CastTerm(AsCast *ac) {
         if (mode == M_KILLS) return {};
@@ -1375,7 +1375,7 @@ struct BCE {
     // A write into the elements of storage tu owns (tk == UK_OWNED), or of
     // storage unknown here. No place lies in an element, but a reference to
     // one, or into one, measures the slice or array it holds -- which is
-    // never a resizable array (§3.4).
+    // never a resizable array.
     void ElementWriteKill(int tk, VarDef *tu) {
         if (tk == UK_STATIC) return;   // Static data is never writable.
         NoteStorage(UltTarget(tk, tu));
@@ -2382,7 +2382,7 @@ struct BCE {
     // Which of the reference variables a loop indexes keep the same array,
     // base and length throughout: an array behind a reference has both halves
     // of its view in memory the C backend must reload after every byte store
-    // (§6.5 also makes growth during iteration legal), and only a grow, a
+    // (growth during iteration is also legal), and only a grow, a
     // shrink, a whole-value write or a call that can reach the array changes
     // them -- exactly what the kill summary reports. Codegen reads the view of
     // each variable named here once, before the loop. The same holds for the
@@ -2530,7 +2530,7 @@ struct BCE {
     }
 
     void RunSpec(FnSpec *sp) {
-        if (!sp->body) return;   // An extern fn (§7.10).
+        if (!sp->body) return;   // An extern fn.
         SetupSpec(sp);
         for (auto &[v, ok] : gge0) if (ok) ge0.insert(v);
         // Whole-body kill summary: which places and variables any path can
@@ -2652,7 +2652,7 @@ struct BCE {
     // Effect summaries for every live specialization, to a fixpoint: a
     // body's summary only grows as its callees' do, so a round that changes
     // nothing is the answer, and recursion converges the same way from
-    // empty. An extern fn (§7.10) has no body to walk: it may resize or
+    // empty. An extern fn has no body to walk: it may resize or
     // write whatever it is handed by reference, and reaches nothing else.
     void ComputeEffects() {
         for (auto sp : ast.fnspecs) {
@@ -3063,7 +3063,7 @@ inline bool Call::BceWalk(BCE &b) {
                 break;
             case B_POP: {
                 // A pop that returns proves its own precondition: popping an
-                // empty array aborts (§9.3), so the length was at least one
+                // empty array aborts, so the length was at least one
                 // and the new one is exactly one less.
                 auto lt = b.mode == BCE::M_KILLS || !rn ? BCE::Term {} : b.LenTermOf(rn);
                 b.GrowShrinkKill(rn, -1, -1);
@@ -3107,7 +3107,7 @@ inline bool Call::BceWalk(BCE &b) {
                 break;
             }
             case B_ABORT: case B_EXIT:
-                return false;   // The program ends here (§9.3).
+                return false;   // The program ends here.
             default:
                 break;   // len/cap/print/free/queues/threads: no tracked effect.
         }
@@ -3325,7 +3325,7 @@ inline bool ForLoop::BceWalk(BCE &b) {
                 prelens.push_back(BCE::Term { true, b.LenBase(pid), 0 });
             }
     }
-    // Growth during iteration is legal (§6.5), so the length is re-read every
+    // Growth during iteration is legal, so the length is re-read every
     // iteration unless nothing in the body can change it -- which is what the
     // kill summary answers, calls included.
     if (b.mode == BCE::M_JUDGE && (iterkind == IK_ARRAY || iterkind == IK_SLICE)) {

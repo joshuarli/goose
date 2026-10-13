@@ -1,8 +1,8 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // error: passes p rooted differently from the cycle's entry call
 // A function value's body runs inside the call that calls it, so its store
-// is apply's, which the block's call back into f makes a member of f's cycle
-// (§7.8): that the block is written in f makes no difference. The store
+// is apply's, which the block's call back into f makes a member of f's cycle:
+// that the block is written in f makes no difference. The store
 // relies on p being passed on around the cycle, and the call back passes f's
 // local instead.
 struct Cell { v: i64, link: Cell&? }

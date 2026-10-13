@@ -2,7 +2,7 @@
 // put reads bx's slice out of an element of arr, which the argument, read out
 // of hb, views: the store bx's contents record is bounded by arr, not read out
 // of hb, whose stores say where its slices point. A copy of bx merged with
-// bz, which names no one container, is bounded the same way (§3.5, §5.1).
+// bz, which names no one container, is bounded the same way.
 struct Box { s: u8[:] }
 struct HB { bs: Box[:] }
 fn put(p: Box[:], b: Box&) { b.s = p[0].s; }

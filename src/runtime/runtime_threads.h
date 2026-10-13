@@ -1,4 +1,4 @@
-/* Goose runtime — threads and typed queues (§11.2), as runtime.h declares
+/* Goose runtime — threads and typed queues, as runtime.h declares
    them. Follows runtime_impl.h. A standalone program's unit compiles only
    hardware_threads() unless the program uses threads or queues (the compiler
    defines GS_NEED_THREADS 1 before the runtime paste); the runtime object
@@ -88,7 +88,7 @@ typedef pthread_cond_t gs_cond;
    a compiler-generated entry thunk. Only active workers have records. IDs
    increase monotonically, so an issued ID absent from the active list has
    completed; neither repeated waits nor unjoined workers retain resources.
-   Workers still running at process exit are killed by teardown (§11.2). */
+   Workers still running at process exit are killed by teardown. */
 
 typedef struct gs_thread {
     struct gs_thread *next;

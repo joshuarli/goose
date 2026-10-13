@@ -1,6 +1,6 @@
 // error: cannot assign through this path
 // A path through a reference field of a `const` value writes what the
-// reference reaches (§9.5), but the field itself is the const value's
+// reference reaches, but the field itself is the const value's
 // contents: it is not rebound.
 struct S { n: i64 }
 struct H { r: S& }

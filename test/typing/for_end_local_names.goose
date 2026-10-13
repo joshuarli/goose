@@ -1,6 +1,6 @@
 // A typed for loop's range end or count is one past its binder type's
-// largest value only as a literal (§6.5), and a name in it is the local of
-// the name wherever one is in scope (§11.1), whatever the global it hides
+// largest value only as a literal, and a name in it is the local of
+// the name wherever one is in scope, whatever the global it hides
 // holds. Each end here names locals whose globals would not compute in
 // its place: -K would negate a u8, M * M and -N overflow, N / -1 divide
 // the least i64 by -1, 10 / Z and 12 / Z divide by zero, and W + V add a

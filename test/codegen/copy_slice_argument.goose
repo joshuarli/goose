@@ -1,5 +1,5 @@
 // runtime-debug: copy(x) passed where a slice is expected is a fresh copy of
-// x (§4.1, §4.2), sliced whole (§3.10). The callee's view keeps the value x
+// x, sliced whole. The callee's view keeps the value x
 // had when the argument was evaluated, whatever happens to x after: the
 // callee writing it, a later argument writing it, or x, an element, popped
 // and its slot pushed over. Through each call form, from fixed, limited,
@@ -40,7 +40,7 @@ fn churn() -> i64 {
 // At -O1 and above the self-call's base case is inlined in its place, with
 // the argument bound in front of it. The copy the next level reads is made
 // in scratch owned outside the cycle, since no temporary may be live at a
-// call into it (§7.8), and released after the call.
+// call into it, and released after the call.
 recursive fn spell(s: const u8[:], n: i64, scratch: u8[>..<]&) {
     if n == 0 { return; }
     letter[0] = letter[0] + 1;

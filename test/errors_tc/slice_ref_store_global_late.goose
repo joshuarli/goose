@@ -1,7 +1,7 @@
 // error: cannot clear bs: global gs may hold a reference into it, stored at
 // use stores through the reference GH holds, which setup, checked after use,
 // points at gs's slot: any global slice variable is what such a reference
-// may name, whenever the reference to it is made (§3.8, §5.1).
+// may name, whenever the reference to it is made.
 struct H { r: u8[:]& }
 var arr: u8[>..] = [];
 var bs: u8[>..] = [];

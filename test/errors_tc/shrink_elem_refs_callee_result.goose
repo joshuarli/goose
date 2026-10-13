@@ -1,5 +1,5 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
-// view returns a slice of its argument's elements: v views ss's (§5.1).
+// view returns a slice of its argument's elements: v views ss's.
 fn view(xs: (u8[:])[>..]&) -> (u8[:])[:] {
     return xs[..];
 }

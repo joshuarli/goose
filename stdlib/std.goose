@@ -1,8 +1,7 @@
-// The Goose standard library: `std` (docs/stdlib.md; the design is
-// docs/design/stdlib_design.md).
+// The Goose standard library: `std`.
 // Functions over the language's own types; nothing here allocates, and
-// nothing non-fixed is ever taken by value (spec §4.1). Fresh arrays come
-// back as T[>..] and land in the caller's destination (§7.3); "maybe an
+// nothing non-fixed is ever taken by value. Fresh arrays come
+// back as T[>..] and land in the caller's destination; "maybe an
 // element" is a T? into the input; positions are i64 with -1 for none.
 
 // ---- scalars and bits --------------------------------------------------
@@ -51,8 +50,8 @@ extern "gs_popcount" fn popcount(x: u64) -> i64;
 extern "gs_clz" fn clz(x: u64) -> i64;
 extern "gs_ctz" fn ctz(x: u64) -> i64;
 
-// The values a and b refer to. `T&` of a reference type is that reference
-// (spec §3.8), so for two elements of an array of references this swaps
+// The values a and b refer to. `T&` of a reference type is that reference,
+// so for two elements of an array of references this swaps
 // what they point to; swap_at swaps the elements themselves.
 fn swap<T>(a: T&, b: T&) {
     let t = a;
@@ -180,9 +179,9 @@ fn rand_flt(r: rng&) -> f64 { (rand_u64(r) >> 11) * (1.0 / 9007199254740992.0) }
 
 // Fisher-Yates.
 // The functions that move elements around store whole elements with `.=`,
-// which moves a reference element itself rather than writing through it
-// (spec §3.8), and hold one in a `T` local, which keeps a reference: the
-// plain one, for relative elements, which the store back encodes (§3.9).
+// which moves a reference element itself rather than writing through it,
+// and hold one in a `T` local, which keeps a reference: the
+// plain one, for relative elements, which the store back encodes.
 fn shuffle<T>(xs: T[:], r: rng&) {
     var i = xs.len - 1;
     while i > 0 {
@@ -897,7 +896,7 @@ fn heap_pop<A, F>(xs: A&) {
     let top = xs[0];
     sift_hole(xs) { a, b => F(a, b) };
     // Popped after the sift: for an array of references the checker rejects
-    // a pop that a use of the array follows (implementation.md §10).
+    // a pop that a use of the array follows.
     xs.pop();
     return top;
 }
@@ -998,8 +997,8 @@ fn format_int<B>(out: B&, v: i64, base: i64, width: i64, padc: u8) {
     }
 }
 
-// ULEB128 (§3.6), the encoding an image's framing prefix uses
-// (docs/design/serialization.md): what to_bytes writes in front of an
+// ULEB128, the encoding an image's framing prefix uses:
+// what to_bytes writes in front of an
 // array's bytes, so that a reader of a stream or a file can size its read
 // before it has the whole image.
 fn format_uleb(out: u8[>..]&, v: i64) {
@@ -1030,7 +1029,7 @@ fn parse_uleb(s: u8[:]) -> i64, i64 {
 }
 
 // v with a fixed number of decimals, rounded half up; infinities and NaN
-// in their text form (§3.7).
+// in their text form.
 fn format_flt(out: u8[>..]&, v: f64, decimals: i64) {
     if v != v || v - v != 0.0 {
         format(out, v);
@@ -1226,7 +1225,7 @@ fn trim(s: u8[:]) -> u8[:] { trim_end(trim_start(s)) }
 
 // The parts between separators, as slices into s; empty parts are kept. The
 // parts are read-only views, so the same function serves a literal and a
-// buffer alike (§9.5).
+// buffer alike.
 fn split(s: u8[:], sep: u8) -> const u8[:][>..] {
     var out: const u8[:][>..] = [];
     var start = 0;

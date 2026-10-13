@@ -1,6 +1,6 @@
 // An array literal whose elements are not fixed-size is a T[] where nothing
-// names its type (§3.3: only variable and grow-only arrays hold such
-// elements), and is built wherever a construction context puts it (§4.2):
+// names its type (only variable and grow-only arrays hold such
+// elements), and is built wherever a construction context puts it:
 // a local or global initializer, a by-value argument of a declared, untyped
 // or generic parameter, a returned value, a field, an element of another
 // literal, an `if` value, an appended run and a pushed element. Its `.len`

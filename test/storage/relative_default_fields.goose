@@ -1,7 +1,7 @@
 // A literal's `..` fills a field holding self-relative references with the
-// field type's default (§3.2, §4.2): an empty limited array or null links,
+// field type's default: an empty limited array or null links,
 // whose bytes mean the same wherever they land, so the default is no copy
-// of offsets measured elsewhere (§3.9).
+// of offsets measured elsewhere.
 
 struct Cell { alive: bool, next_state: bool, neighbors: (Cell&<u32>)[..8] }
 struct Ring { id: i64, slots: (Ring&<u32>?)[3] }

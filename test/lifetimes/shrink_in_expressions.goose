@@ -1,4 +1,4 @@
-// runtime-debug: a grow-only array shrinks inside a larger expression wherever nothing the statement evaluated earlier, and uses later, refers into it (§5.1).
+// runtime-debug: a grow-only array shrinks inside a larger expression wherever nothing the statement evaluated earlier, and uses later, refers into it.
 struct Item { name: u8[], n: i64 }
 struct Pair { a: i64, b: i64 }
 

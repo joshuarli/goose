@@ -1,5 +1,5 @@
 // error: variable x may be used before it is assigned
-// Assigned on only one branch: not definitely assigned after (§4.4).
+// Assigned on only one branch: not definitely assigned after.
 fn main() {
     var x: i64;
     let c = true;

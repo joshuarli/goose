@@ -1,6 +1,6 @@
 // error: cannot clear b while s is still used: it may hold a reference or slice into it
-// inner stores through main's reference to s (§7.5), which assigns s (§3.8):
-// s views b when the clear frees it (§5.1).
+// inner stores through main's reference to s, which assigns s:
+// s views b when the clear frees it.
 fn main() {
     var a: u8[>..] = [];
     a.append("ab");

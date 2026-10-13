@@ -1,6 +1,6 @@
 // error: cannot clear a while rr is still used: a reference to a slice that may point into it was stored there
 // The block shrinks main's a and then reads through main's rr, which leads
-// to a through s (§5.1).
+// to a through s.
 struct R { r: u8[:]& }
 fn apply<F>() { F(); }
 fn main() {

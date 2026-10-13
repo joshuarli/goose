@@ -1,6 +1,6 @@
 // error: cannot clear a while rr is still used: a reference into it was stored there
 // rr's reference field names t, which may view a as far as its depth says,
-// but its slice field certainly does: the error names that store (§5.1).
+// but its slice field certainly does: the error names that store.
 struct R2 { r: u8[:]&, v: u8[:] }
 fn main() {
     var a: u8[>..] = [];

@@ -1,8 +1,8 @@
 // warning: redundant &: u is passed by reference without it
 // A reference to a slice variable, bound by reference or with an explicit
 // `&`, a parameter or a local, keeps the slice live only as long as it is
-// used: an array its slice views shrinks after the reference's last use
-// (§5.1, §5.2). A reference to a holder keeps what the holder's stores put
+// used: an array its slice views shrinks after the reference's last use.
+// A reference to a holder keeps what the holder's stores put
 // there live, and nothing else.
 struct Rec { name: u8[], items: (const u8[:])[>..<] }
 struct H { s: i64[:] }

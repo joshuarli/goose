@@ -1,7 +1,7 @@
 // error: .index_of takes a reference to an element of u8[:][>..], got u8[:]
 // The value of an if with one branch reaching is a copy of the element that
-// branch names, a slice as much as any other (§4.1): not the element, whose
-// index index_of could give (§3.3).
+// branch names, a slice as much as any other: not the element, whose
+// index index_of could give.
 fn main() {
     var h: u8[>..] = [];
     h.append("abcdef");

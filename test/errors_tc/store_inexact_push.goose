@@ -1,6 +1,6 @@
 // error: storing a reference rooted at x, which does not outlive the destination: it is reached through a reference that may point into b1
 // The array pushed into through r may be b1's, whose elements would then
-// outlive x (§9.2).
+// outlive x.
 struct Bag { n: i64, refs: i64&[>..] }
 
 fn main() {

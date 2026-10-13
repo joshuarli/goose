@@ -1,6 +1,6 @@
 // error: cannot call format, which shrinks G: print runs it in the middle of rendering o, which may refer into G (§5.1)
 // An optional reference argument is rendered through: its pointee's payload
-// where it lies (§3.7, §4.4, §5.1).
+// where it lies.
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

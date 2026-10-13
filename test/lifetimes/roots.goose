@@ -1,4 +1,4 @@
-// Lifetime roots and provenance through monomorphization (§9.2, §9.5, §10.2):
+// Lifetime roots and provenance through monomorphization:
 // per-call-site root identity makes same-root proofs work through parameters.
 
 struct Cell { v: i64 = 0, link: i64&<u16>? }
@@ -45,5 +45,5 @@ fn main_roots() {
     print(total("bytes") + total(buf[..]));
 }
 
-// Standalone entry; ignored when this file is imported (§11.1).
+// Standalone entry; ignored when this file is imported.
 fn main() { main_roots(); }

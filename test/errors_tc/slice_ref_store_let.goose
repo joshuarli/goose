@@ -1,7 +1,7 @@
 // error: cannot clear b while s is still used: it may hold a reference or slice into it
-// A `let` slice is written through a reference as a `var` is (§4.4): the
+// A `let` slice is written through a reference as a `var` is: the
 // store points s into b, whose root has the depth of a's, so s may view b
-// when the clear frees its elements (§5.1).
+// when the clear frees its elements.
 fn main() {
     var a: u8[>..] = [];
     a.append("ab");

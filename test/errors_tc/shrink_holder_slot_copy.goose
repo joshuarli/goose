@@ -1,5 +1,5 @@
 // error: cannot clear a while r2 is still used: a reference to a slice that may point into it was stored there
-// r2 is a copy of rr, holding the same reference to s, which views a (§5.1).
+// r2 is a copy of rr, holding the same reference to s, which views a.
 struct R { r: u8[:]& }
 fn main() {
     var a: u8[>..] = [];

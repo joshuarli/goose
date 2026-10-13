@@ -1,7 +1,7 @@
 // error: cannot assign to let x, which may be assigned already
 // The second call finds x unassigned, as the first did, but maybe assigned,
 // which the first did not: init is checked again for it, and assigns the let
-// a second time (§4.4, §7.5).
+// a second time.
 fn run(c: bool) {
     let x: i64;
     fn init() { x = 5; }

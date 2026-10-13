@@ -1,4 +1,4 @@
-// A construct whose branches are all literals is itself literal-like (§6.4):
+// A construct whose branches are all literals is itself literal-like:
 // integer constants adapt to any integer type they all fit, and floats of
 // literals, with the integers among them, to either float width, where the
 // construct meets a parameter or another operand as much as at a typed

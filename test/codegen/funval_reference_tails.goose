@@ -1,6 +1,6 @@
-// runtime-debug: a function value's call gives a copy of its body's value
-// (§4.1, §7.6), and a body whose value is a call returning a reference
-// gives that reference's pointee (§3.8), also where the call is inlined
+// runtime-debug: a function value's call gives a copy of its body's value,
+// and a body whose value is a call returning a reference
+// gives that reference's pointee, also where the call is inlined
 // (-O2) and its `return` delivers the reference itself: slice, struct,
 // fixed array and scalar pointees, a varint field's among them, read by a
 // field, an operator, an index, a render, a binding, an argument and a

@@ -2,7 +2,7 @@
 // b reads v only through a, its recursive cycle's head, whose result it
 // returns: a reads v after the call to b, so b's back edge to a finds none
 // of that, but b's check stands on a's record all the same. The call of b
-// after v points into loc checks the cycle again (§7.5, §7.8).
+// after v points into loc checks the cycle again.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];
 struct K { r: Cell&?, n: i64 }

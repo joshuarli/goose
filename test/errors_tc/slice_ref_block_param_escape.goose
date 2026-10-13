@@ -1,5 +1,5 @@
 // error: storing a reference rooted at s, which does not outlive the destination
-// The block's parameter names run's slice variable s itself (§4.1, §7.6),
+// The block's parameter names run's slice variable s itself,
 // which dies with run, while o lives on.
 var g: u8[>..] = [];
 fn run<F>() {

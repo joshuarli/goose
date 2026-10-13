@@ -1,5 +1,5 @@
 // error: cannot clear line while w is still used: it may hold a reference or slice into it
-// A nested function called after the shrink reads the slice (§5.1).
+// A nested function called after the shrink reads the slice.
 import std;
 fn main() {
     var line: u8[>..] = [];

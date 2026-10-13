@@ -1,7 +1,7 @@
 // error: call expr stores a reference rooted at c into what its parameter c leads to, which may be pa
 // The nodes read through c may lie in pb, which dies before pa, where the
 // cycle links them: the entry call judges the stores it records into
-// what c leads to (§7.8, §9.2).
+// what c leads to.
 import std;
 enum Node {
     Leaf { v: i64 },

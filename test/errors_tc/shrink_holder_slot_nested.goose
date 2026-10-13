@@ -1,6 +1,6 @@
 // error: cannot clear a while rr is still used: a reference to a slice that may point into it was stored there
 // g shrinks its parent's a and then reads through its parent's rr, which
-// leads to a through s (§5.1).
+// leads to a through s.
 struct R { r: u8[:]& }
 fn main() {
     var a: u8[>..] = [];

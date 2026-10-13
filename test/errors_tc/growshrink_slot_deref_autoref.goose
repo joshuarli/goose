@@ -1,8 +1,8 @@
 // error: cannot clear related while w
 // error: is still used: it may refer into related
-// r, bound to s by reference, refers to s itself as `&s` does (§3.8, §4.1):
+// r, bound to s by reference, refers to s itself as `&s` does:
 // a slice taken through it is of what s holds then, a view of related after
-// the rebind (§5.2), not the view read out of a field that s may have been
+// the rebind, not the view read out of a field that s may have been
 // bound to first. That binding may be a view of other as well, which lets
 // the rebind point s into a grow-shrink array.
 struct Entry { text: u8[:] }

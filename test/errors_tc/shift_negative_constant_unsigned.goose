@@ -1,5 +1,5 @@
 // error: constant -1 does not fit u64
-// §6.1: -1 << k meets a u64 operand as -1 would.
+// -1 << k meets a u64 operand as -1 would.
 
 fn main() {
     var k = 2;

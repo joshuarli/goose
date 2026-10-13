@@ -1,5 +1,5 @@
 // error: variant North is listed twice
-// A variant is named once in a match (§8.1), in a list as in its own arm.
+// A variant is named once in a match, in a list as in its own arm.
 enum Dir { North, East, South, West }
 
 fn main() {

@@ -1,6 +1,6 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
 // The first iteration stores a view of a into ss through v, and the last
-// reads it after the second has cleared a (§5.1).
+// reads it after the second has cleared a.
 fn main() {
     var a: u8[>..] = [];
     a.append("abc");

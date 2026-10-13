@@ -1,6 +1,6 @@
 // error: storing a reference into c, which holds a grow-shrink array
 // A reference argument whose pointee can lie in the elements of a
-// grow-shrink array its root holds is one the callee never stores (§5.2).
+// grow-shrink array its root holds is one the callee never stores.
 struct Cell { v: i64 }
 struct B { n: i64, cells: Cell[>..<] }
 fn keep(c: Cell&) {

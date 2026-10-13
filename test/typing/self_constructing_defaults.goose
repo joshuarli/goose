@@ -1,10 +1,10 @@
 // Defaults that construct their own type or call their own function, and
-// still take no default of theirs again before a function body (§3.2, §7.1):
+// still take no default of theirs again before a function body:
 // another type's defaults, default<T>() of another type, nested literals, one
 // default taken twice side by side, the own type with the field written, a
 // larger instantiation with the field written, and two types whose defaults
 // meet with one of them written. Through the body of a top-level function,
-// or of a function declared in one, the chain is a recursion (§7.8), here
+// or of a function declared in one, the chain is a recursion, here
 // ending when a global says so.
 var level = 0;
 var depth = 0;

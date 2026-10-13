@@ -1,7 +1,7 @@
 // error: variable n may be used before it is assigned
 // bail's check, in the branch that assigns n first, leaves setn with n
 // assigned; the other branch's call reuses that check and leaves setn the
-// same way with n unassigned (§4.4, §7.5, §7.9).
+// same way with n unassigned.
 fn run(c: bool, x: bool) {
     var n: i64;
     fn setn(d: bool) {

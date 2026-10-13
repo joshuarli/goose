@@ -1,6 +1,6 @@
 // Expression-tree evaluation: the dispatch benchmark. Goose has no vtables,
 // so a node carries no vtable pointer and `eval` is a jump table over the
-// tag with inlinable arms (spec 8.2). The nodes are variable-mode, so a leaf
+// tag with inlinable arms. The nodes are variable-mode, so a leaf
 // costs 5 bytes and a binary node 9 -- C++ pays max-payload-plus-alignment
 // for std::variant, or a vtable pointer plus a separate allocation per node
 // for the class hierarchy.
@@ -37,7 +37,7 @@ recursive fn build(depth: i64, seed: u64) -> Expr..& {
 // Case functions: the language's virtual-call idiom, dispatched on the tag.
 // The pass index enters at the leaves so the eight evaluations are eight
 // different computations; a backend that sees `eval` is pure otherwise hoists
-// the whole call out of the loop (see bench/notes.md).
+// the whole call out of the loop.
 recursive fn eval(e: Expr.Num&, p: i64) -> i64 { (e.v + p) % M }
 recursive fn eval(e: Expr.Add&, p: i64) -> i64 { (eval(e.l, p) + eval(e.r, p)) % M }
 recursive fn eval(e: Expr.Mul&, p: i64) -> i64 { (eval(e.l, p) * eval(e.r, p)) % M }

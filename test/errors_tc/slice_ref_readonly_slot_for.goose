@@ -1,6 +1,6 @@
 // error: cannot write through this reference: non-writable provenance
-// A by-value `for` binding is a copy of the element, never written (§6.5):
-// bound by reference, as `&s` of it is, it is a read-only reference (§9.5),
+// A by-value `for` binding is a copy of the element, never written:
+// bound by reference, as `&s` of it is, it is a read-only reference,
 // so set may not re-point it, however writable the slice it holds.
 var buf: u8[>..] = [];
 fn set(q: u8[:]&) { q = buf[1..]; }

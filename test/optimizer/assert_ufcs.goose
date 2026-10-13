@@ -1,7 +1,7 @@
-// x.assert() is assert(x) (§7.1) in every pass: a true receiver folds away
+// x.assert() is assert(x) in every pass: a true receiver folds away
 // as assert(true) does, bounds-check elimination takes the receiver's facts
 // and ends the path at a false one, and an optional receiver is narrowed
-// for the rest of its block (§3.8). An optional receiver reaches any other
+// for the rest of its block. An optional receiver reaches any other
 // function taking one as its first argument too.
 
 fn at(s: i64[:], k: i64) -> i64 {

@@ -3,7 +3,7 @@
 // link is first called by a global initializer, before nodes is declared,
 // but its check serves main's call too, after rebind has bound g into
 // nodes: a read of a global var in a function's body may point into any
-// global a later declaration makes (§9.5).
+// global a later declaration makes.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [Cell { v: 1 }];
 struct L { r: Cell&<u16 in cells>?, n: i64 }

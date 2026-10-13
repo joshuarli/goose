@@ -2,7 +2,7 @@
 // The views tricky reads out of s include what it stores into s itself,
 // here a reference to bx, which d's outer does not let in: the call
 // judges the reads by what s's storage holds after all of the call's
-// stores (§9.2).
+// stores.
 struct B { v: i64 }
 fn tricky(d: (B&)[:], s: (B&)[:], x: B&) {
     d[0] .= s[0];

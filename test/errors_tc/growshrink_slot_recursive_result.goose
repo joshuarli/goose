@@ -1,7 +1,7 @@
 // error: cannot clear related while v
 // error: is still used: it may refer into related
 // The back edge's result may come from a return not checked yet, here a
-// view of related (§5.2, §7.8), though the one checked so far is read out
+// view of related, though the one checked so far is read out
 // of a field.
 struct Entry { text: u8[:] }
 var related: u8[>..<] = [];

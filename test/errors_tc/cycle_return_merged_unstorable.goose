@@ -1,6 +1,6 @@
 // error: storing a reference rooted at loc, which does not outlive the destination
 // The back edge's result may be b, or `a`, which that back edge passed its
-// own local for (§7.8): it may not be kept in the global kept.
+// own local for: it may not be kept in the global kept.
 var G: u8[>..] = "ggg";
 var G2: u8[>..] = "hhh";
 var base: u8[1] = [48];

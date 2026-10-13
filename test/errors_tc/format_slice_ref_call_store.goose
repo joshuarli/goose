@@ -1,8 +1,8 @@
 // error: storing a slice rooted at g into s through format's parameter p
-// A reference a call returns renders its pointee where it lies (§3.7): a
+// A reference a call returns renders its pointee where it lies: a
 // format hook taking the slice by reference re-points the variable the
-// reference names, so it stores a view of g into s, bound to one of local
-// (§9.2).
+// reference names, so it stores a view of g into s, bound to one of local.
+//
 var g: u8[>..] = [];
 fn format(out: u8[>..]&, p: u8[:]&) { out.append("Q"); p = g[1..]; }
 fn id(r: u8[:]&) -> u8[:]& { r }

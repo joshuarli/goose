@@ -2,7 +2,7 @@
 // The block outer hands to each stores v into the H outer's parameter h
 // refers to. each's summary records the store against a class of outer's,
 // which outer's own summary carries to main's call: a store of a view of
-// bs into hh (§5.1, §7.6).
+// bs into hh.
 struct H { s: const u8[:] }
 struct B { name: u8[..8] }
 fn each<F>(n: i64) { for i in n { F(i); } }

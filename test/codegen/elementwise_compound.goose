@@ -52,7 +52,7 @@ fn aggregates() {
     ints /= Integers { 3, [4, 5] };
     assert(ints.small == 4 && ints.wide[0] == 5 && ints.wide[1] == 6);
 
-    // Const contents do not prevent replacing a var as a whole (§9.5).
+    // Const contents do not prevent replacing a var as a whole.
     var whole: const i64[2] = [1, 2];
     whole += [3, 4];
     assert(whole == [4, 6]);

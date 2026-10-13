@@ -2,7 +2,7 @@
 // error: is still used: it may refer into a
 // inner's parameter is given outer's, which names s: the slice inner loads
 // through it is s's, which views a, however many calls pass the reference
-// on (§5.2).
+// on.
 fn inner(q: i64[:]&) -> i64[:] { return q; }
 fn outer(p: i64[:]&) -> i64[:] { return inner(p); }
 fn main() {

@@ -1,5 +1,5 @@
 // Branch values that are arrays and slices of one element type join as a
-// slice (§6.4): where another branch is a slice, or the construct's
+// slice: where another branch is a slice, or the construct's
 // destination type is one, an array branch is a whole-array slice of the
 // array itself rather than a copy, read-only where any branch is.
 struct Item { name: u8[..48], count: i64 }

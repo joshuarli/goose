@@ -1,6 +1,6 @@
 // error: storing a reference rooted at s, which does not outlive the destination
-// A result merged from a global's view and a local's is rooted at the local
-// (§9.2), so a callee handed it may not keep it in a global, even though
+// A result merged from a global's view and a local's is rooted at the local,
+// so a callee handed it may not keep it in a global, even though
 // the call happens to return the global's view here.
 struct Keep { s: const u8[:] }
 var kept: Keep[>..] = [];

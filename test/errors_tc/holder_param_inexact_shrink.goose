@@ -3,7 +3,7 @@
 // value held references into one. The first call's w views inner's ys alone,
 // so its body may pop xs while w is in use; the second's views xs as well,
 // and gets a body of its own, where the pop would leave w.a viewing the slot
-// the push reuses (§9.2, §5.1).
+// the push reuses.
 struct W2 { a: i64[:], b: i64[:] }
 fn g(xs: i64[>..]&, w: W2) { xs.pop(); xs.push(77); print(w.a[w.a.len - 1]); }
 fn inner(xs: i64[>..]&) {

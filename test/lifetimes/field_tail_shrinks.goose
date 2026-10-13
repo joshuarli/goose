@@ -1,7 +1,7 @@
 // A struct's growable tail field shrinks, and resizes, where nothing still
 // refers into the storage the struct lies in: named through a local, a
-// reference parameter, a global, or a struct with a variable-size prefix
-// (§5.1).
+// reference parameter, a global, or a struct with a variable-size prefix.
+//
 import std;
 
 struct Tape { pos: i64, tape: u8[>..] }

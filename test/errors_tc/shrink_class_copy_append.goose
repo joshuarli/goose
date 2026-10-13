@@ -1,5 +1,5 @@
 // error: cannot call f: it shrinks buf while keep is still used, and keep may refer into buf
-// keep copies the holders hs views, one of which views buf (§5.1).
+// keep copies the holders hs views, one of which views buf.
 struct H { s: const u8[:] }
 fn f(out: u8[>..]&, hs: H[:]) {
     var keep: H[>..] = [];

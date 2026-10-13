@@ -1,4 +1,4 @@
-// Zero-length arrays are values of their own (§3.4): built from [] and from
+// Zero-length arrays are values of their own: built from [] and from
 // fills, copied, passed, returned, chosen by branches, compared, sliced and
 // printed. C gives each one element nothing writes, so the temporary a
 // literal is built in starts zeroed rather than copied out uninitialized;

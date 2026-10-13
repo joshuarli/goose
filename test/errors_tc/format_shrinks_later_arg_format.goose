@@ -1,6 +1,6 @@
 // error: cannot call format, which shrinks G while s (bound at
-// And in format, whose receiver comes before every argument rendered into it
-// (§3.7, §5.2).
+// And in format, whose receiver comes before every argument rendered into it.
+//
 struct T { n: i64 }
 var G: i64[>..<] = [1, 2, 3];
 fn format(out: u8[>..]&, t: T) {

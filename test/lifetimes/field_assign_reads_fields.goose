@@ -1,7 +1,7 @@
 // The right-hand side of a whole assignment of a struct's tail field reads
 // the struct's other fields, references among them, where those cannot lead
 // back to the tail being rebuilt: a reference to storage of another type, or
-// to another struct whose own tail has the tail's type (§4.4). Through a
+// to another struct whose own tail has the tail's type. Through a
 // reference parameter, in a loop, for grow-only and grow-shrink tails.
 import std;
 

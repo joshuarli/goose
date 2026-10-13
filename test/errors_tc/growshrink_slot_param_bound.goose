@@ -1,6 +1,6 @@
 // error: storing a reference rooted at p, which does not outlive the destination
 // What p.r points at is the caller's storage behind p, which a read back
-// out of loc keeps as a bound (§9.5), though the grow-shrink array in that
+// out of loc keeps as a bound, though the grow-shrink array in that
 // storage cannot own it: the bound does not outlive the global other, and
 // mine, which p.r points into here, is main's.
 struct Cell { v: i64 }

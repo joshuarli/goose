@@ -7,18 +7,18 @@
 // with its own short-lived tree, some of them bad.
 //
 // Two things are on trial. The AST pool is a local of the per-input function
-// (spec 7.8 lets a recursive cycle build into a pool it is handed by
+// (a recursive cycle may build into a pool it is handed by
 // reference), so each input's tree is torn down by a pointer reset with no
 // per-node free, where C++ and Rust destroy every node they built -- on the
 // error path too, in the middle of unwinding. And the error itself is a
-// `return ... from` (spec 7.9): a discriminant check per frame on the way
+// `return ... from`: a discriminant check per frame on the way
 // out, against C++ exceptions (idiomatic, with a full unwind) or error codes
 // threaded through every return (expert), and Rust's Result plus `?`.
 //
 // The tree keeps a Paren node for a parenthesised subexpression so that every
 // implementation builds the same nodes and the counts and checksums agree.
 // Goose no longer needs one -- a cycle's return roots are known before its
-// back edges (spec 7.8), so parse_factor can hand parse_expr's result
+// back edges, so parse_factor can hand parse_expr's result
 // straight back; `calc_noparen.goose` is that version, outside the suite.
 
 import rng;

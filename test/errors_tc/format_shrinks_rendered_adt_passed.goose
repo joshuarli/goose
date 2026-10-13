@@ -1,7 +1,7 @@
 // error: cannot call show: it shrinks G while r is still used, and r may refer into G (§5.2)
 // A function rendering its parameter's ADT around an overload that replaces
-// G's variant passes the pair to its callers, and this one passes G
-// (§3.7, §4.4, §5.2).
+// G's variant passes the pair to its callers, and this one passes G.
+//
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

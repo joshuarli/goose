@@ -2,7 +2,7 @@
 // error: h calls into its recursive cycle at
 // h reaches f's cycle only through down, whose check has finished by then:
 // the call still leads back into the cycle, so h is in it, and so is the
-// store it made before that call (§7.8).
+// store it made before that call.
 struct Cell { v: i64, link: Cell&? }
 
 recursive fn f(p: Cell&, q: Cell&, n: i64) {

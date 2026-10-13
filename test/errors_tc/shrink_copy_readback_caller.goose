@@ -1,6 +1,6 @@
 // error: cannot call follow: it shrinks nodes while nx is still used, and nx may refer into nodes
 // nx is read out of a copy of the element ns names, which the caller
-// linked to another element of nodes (§5.1).
+// linked to another element of nodes.
 struct N { v: i64, next: N&? }
 fn follow(ns: N[>..]&) {
     let n = ns[1];

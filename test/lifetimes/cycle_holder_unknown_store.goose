@@ -1,4 +1,4 @@
-// A cycle's holder result has the roots its returns give (§7.8), whatever
+// A cycle's holder result has the roots its returns give, whatever
 // the returns call: `make` is an overload set, and its result views static
 // data, so the back edge's result may be kept in a global.
 struct Fragment { text: const u8[:] }

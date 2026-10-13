@@ -1,7 +1,7 @@
 // Values holding self-relative references reach their receivers without a
-// copy (§3.9): a function's named result is built at its destination from
+// copy: a function's named result is built at its destination from
 // its declaration, whether a resizable array of linked cells or a struct
-// whose resizable tail holds them (§7.3); a call's resizable result is built
+// whose resizable tail holds them; a call's resizable result is built
 // where it is received, and a fixed-size one holds no link but `self` and
 // null, which mean the same wherever the value sits.
 struct Cell { id: i64, neighbors: (Cell&<u32>)[..4] }

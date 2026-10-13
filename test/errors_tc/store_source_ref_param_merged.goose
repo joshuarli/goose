@@ -1,7 +1,7 @@
 // error: cannot clear a while bx is still used: a reference into it was stored there
 // put copies what its parameter points at, which r may make h1 or h2: the
-// copy in bx is bounded by both, not traced through the stores of one
-// (§3.5, §5.1).
+// copy in bx is bounded by both, not traced through the stores of one.
+//
 struct Box { s: u8[:] }
 fn put(p: Box&, b: Box&) { b = p; }
 fn main() {

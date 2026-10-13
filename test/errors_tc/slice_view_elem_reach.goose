@@ -1,7 +1,7 @@
 // error: storing a reference that may point into a grow-shrink array reached through the caller's storage behind p
 // r is read out of the slice p's slot holds, which only bounds what it
 // points at: a grow-shrink array the references in that slice lead to, as
-// cells is. Its element's reference is never stored (§5.2), or the pop
+// cells is. Its element's reference is never stored, or the pop
 // frees what loc keeps.
 struct Cell { v: i64 }
 fn f(p: (Cell[>..<]&)[:]&) {

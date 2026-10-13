@@ -1,8 +1,8 @@
 // error: cannot clear related while v
 // error: is still used: it may refer into related
-// A call's result is read out of a field (§5.2) only where every return's
+// A call's result is read out of a field only where every return's
 // is: pick's first return is, but its second is a view of related, rooted
-// elsewhere, and the result may be either (§9.2).
+// elsewhere, and the result may be either.
 struct Entry { text: u8[:] }
 var related: u8[>..<] = [];
 fn pick(e: Entry[>..]&, c: bool) -> u8[:] {

@@ -1,6 +1,6 @@
 // error: cannot clear a while v is still used: a reference to a slice that may point into it was stored there
 // The binder is a copy of e's payload, whose field refers to s, which views
-// a (§5.1).
+// a.
 struct R { r: u8[:]& }
 enum E { V { x: R }, N }
 fn main() {

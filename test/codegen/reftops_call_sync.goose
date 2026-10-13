@@ -1,5 +1,5 @@
 // A function growing an array through a reference parameter keeps the
-// stack's top in a local (implementation notes §6.10). Around a call it
+// stack's top in a local (implementation notes ). Around a call it
 // writes the local back and reads it again only where the callee can reach
 // that stack: a callee that mentions no global and captures nothing cannot,
 // whatever stacks of its own it builds on, while one that pushes to a

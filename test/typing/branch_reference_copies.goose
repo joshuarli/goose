@@ -21,8 +21,8 @@
 // warning: the construct's value is a copy of a either way
 // warning: the construct's value is a copy of b either way
 // A construct whose destination names no type makes its value a copy of
-// the branch's (§4.1), and a reference a branch gives, `&x` included, is
-// copied as its pointee (§3.8): each branch loads it, and neither a later
+// the branch's, and a reference a branch gives, `&x` included, is
+// copied as its pointee: each branch loads it, and neither a later
 // write to the pointee nor a write to the copy reaches the other. The `&`
 // is redundant there, and each one warns, both of r6's; at a typed
 // destination it loads without a warning, as `&x` does wherever a reference

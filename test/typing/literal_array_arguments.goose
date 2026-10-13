@@ -1,5 +1,5 @@
 // An array literal whose elements are all integer constants, or all floats
-// of literals, meets a parameter as its elements would (§3.1, §6.3, §7.1):
+// of literals, meets a parameter as its elements would:
 // at an array or slice parameter of its shape with other integer or float
 // elements they fit, it is a value of that type, ranking as a coercion.
 fn color(c: u8[4]) -> i64 {

@@ -1,8 +1,8 @@
-// Values of no bytes (§3.4) -- a variant type with no fields, a zero-length
+// Values of no bytes -- a variant type with no fields, a zero-length
 // array -- cross queues and thread arguments as none, though C gives their
 // objects one or more: the receiver zeroes its object rather than reading
 // past the bytes sent. A struct of pads alone sends as many bytes as it
-// lays out, which its C struct holds (§3.2). Under ASan a read past the
+// lays out, which its C struct holds. Under ASan a read past the
 // arguments' image (the worker's last two, with no globals after them)
 // shows at clang -O1, and one past a queue's node at -O0, where a read of
 // bytes nothing uses is not dropped.

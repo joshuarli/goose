@@ -1,5 +1,5 @@
 // error: array size xs names a parameter, not a constant
-// A size in a signature names no parameter (§3.3, §11.1), `.len` of one
+// A size in a signature names no parameter, `.len` of one
 // included: there are no size parameters.
 let xs = [1, 2, 3];
 

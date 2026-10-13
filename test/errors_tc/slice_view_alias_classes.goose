@@ -2,7 +2,7 @@
 // f's parameters name the same slot, main's s, which f cannot tell: g's own
 // class for s has no view, s being within g's reach. The store through p
 // may be into the slot q's view stands for, so the load through q after it
-// may view b (§9.2), which the clear frees under r (§5.1).
+// may view b, which the clear frees under r.
 fn f(p: u8[:]&, q: u8[:]&, o: u8[:]) -> u8[:] {
     p = o;
     return q[0..1];

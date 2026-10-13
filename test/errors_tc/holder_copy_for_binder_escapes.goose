@@ -1,6 +1,6 @@
 // error: storing a reference rooted at b, which does not outlive the destination
 // A `for` binder's copy of an element holds what was stored into the array
-// it walks (§9.5).
+// it walks.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 fn main() {

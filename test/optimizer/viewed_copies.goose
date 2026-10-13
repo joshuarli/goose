@@ -1,7 +1,7 @@
 // warning: the construct's value is a copy of g either way
 // warning: the construct's value is a copy of g either way
 // A call's by-value result, and a bare block's, if's or match's value, is a
-// temporary copy wherever it is viewed rather than copied out (§9.2): sliced,
+// temporary copy wherever it is viewed rather than copied out: sliced,
 // indexed while the index runs, iterated, bound to a slice or reference
 // parameter, a builtin's receiver, or a field or element of one viewed so. An
 // inlined call reduced to the storage its body names, or a construct folded to

@@ -1,6 +1,6 @@
 // error: cannot clear arr while a1 is still used: a reference into it was stored there
 // f stores into what r names, which may be a1 as well as a2, the root the
-// argument kept: the call puts the store on record for both (§5.1).
+// argument kept: the call puts the store on record for both.
 struct Node { p: i64? }
 
 fn f(r: Node&, x: i64&) { r.p .= x; }

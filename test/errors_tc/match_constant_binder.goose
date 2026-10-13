@@ -1,5 +1,5 @@
 // error: constant pattern GATE has no payload to bind
-// In an integer match a bare name is a constant (§8.1), which has no payload
+// In an integer match a bare name is a constant, which has no payload
 // for a binder to take.
 let GATE = 7;
 

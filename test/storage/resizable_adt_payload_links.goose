@@ -1,7 +1,7 @@
 // runtime-debug: a resizable ADT binds its payloads by value only, a whole
-// assignment being able to replace its variant (§4.4, §8.1), so a payload
+// assignment being able to replace its variant, so a payload
 // that is not itself resizable links by plain or `in pool` references, which
-// a copy keeps (§3.5, §3.9): a binder's copy still reads them after its arm
+// a copy keeps: a binder's copy still reads them after its arm
 // has replaced the variant, and they follow what they point at across whole
 // assignments. Self-relative links in a resizable payload, which the C
 // backend does not bind at all yet, are left alone.

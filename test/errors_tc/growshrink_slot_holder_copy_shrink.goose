@@ -1,7 +1,7 @@
 // error: cannot pop cells while keep is still used: a reference into it was stored there
-// A holder read out of rows may be stored into keep (§5.2), and what it
+// A holder read out of rows may be stored into keep, and what it
 // holds points into cells, a grow-only array: the store record follows the
-// copy to what was stored into rows (§5.1).
+// copy to what was stored into rows.
 struct Cell { v: i64 }
 struct Row { r: Cell&, c: Cell }
 fn main() {

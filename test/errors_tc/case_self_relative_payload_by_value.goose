@@ -1,7 +1,7 @@
 // error: cannot copy the payload of Cons, which contains self-relative references, into a case of first taking it by value
 // error: take it by reference: S.Cons&
 // A case taking the variant by value copies the payload, whose links would
-// then be measured from the copy (§3.9, §8.2).
+// then be measured from the copy.
 enum S { Nil, Cons { v: i64, next: S..&<u32>? } }
 fn first(c: S.Cons) -> i64 {
     let n = c.next;

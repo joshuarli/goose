@@ -1,6 +1,6 @@
 // error: cannot clear a while r1 is still used: a reference to what may hold a reference or slice into it was stored there
 // The first iteration copies r1 into rr, and r1 leads to a through bx1: the
-// second one's clear frees what rr.r.s views (§5.1).
+// second one's clear frees what rr.r.s views.
 struct B { s: u8[:] }
 struct R { r: B& }
 fn main() {

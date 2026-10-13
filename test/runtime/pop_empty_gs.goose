@@ -1,4 +1,4 @@
-// Pop on an empty grow-shrink array is a runtime abort (§9.3): the array
+// Pop on an empty grow-shrink array is a runtime abort: the array
 // tops its data stack, so an unchecked pop would move the stack top below
 // the element base and hand that memory to values living underneath it.
 // The program ends in that abort, so nothing follows it.

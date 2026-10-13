@@ -1,6 +1,6 @@
 // error: cannot call mid: it shrinks buf while hs is still used, and hs may refer into buf
 // emit's pair about what the elements hs views hold passes through mid,
-// which passes its own hs, to main, where the element views buf (§5.1).
+// which passes its own hs, to main, where the element views buf.
 struct H { s: const u8[:] }
 fn emit(out: u8[>..]&, hs: H[:]) {
     let h = hs[0];

@@ -1,4 +1,4 @@
-// Namespaces (docs/design/namespaces.md): qualified names, per-namespace
+// Namespaces: qualified names, per-namespace
 // overload sets, definition-site lookup in generic bodies, shadowed globals,
 // qualified types, variants and pools, format hooks and the hash bridge
 // across namespaces, same-leaf `return from` targets, and same-leaf

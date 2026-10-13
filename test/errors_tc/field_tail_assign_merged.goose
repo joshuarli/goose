@@ -1,6 +1,6 @@
 // error: cannot assign u (which q.items may point at) while v is still used
 // Through a reference whose storage is one of two structs, the assignment
-// shrinks each of them (§5.1).
+// shrinks each of them.
 struct S { n: i64, items: i64[>..] }
 fn main() {
     var t = S { n: 1, items: [1, 2, 3] };

@@ -1,6 +1,6 @@
 // error: the default of parameter y of inner names function value F
 // outer's F, a function value, hides the global function F around inner's
-// declaration, and a default calls no function value (§7.1).
+// declaration, and a default calls no function value.
 fn F(x: i64) -> i64 { x * 100 }
 fn g(x: i64) -> i64 { x + 1 }
 

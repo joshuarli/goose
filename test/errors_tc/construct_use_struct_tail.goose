@@ -1,6 +1,6 @@
 // error: cannot call relabeled in the value assigned to b: relabeled uses b
 // Assigning a value that holds a resizable array rebuilds that array in
-// place too (§4.4).
+// place too.
 struct Box { tag: i64, items: u8[>..] }
 fn main() {
     var b = Box { tag: 1, items: [] };

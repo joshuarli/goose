@@ -1,5 +1,5 @@
-// A window with a spinning, lit cube, drawn with the gfx module
-// (docs/stdlib.md): SDL3's GPU API behind a small Goose interface.
+// A window with a spinning, lit cube, drawn with the gfx module:
+// SDL3's GPU API behind a small Goose interface.
 //
 // The shaders are GLSL, written in main as """ strings. embed_shader
 // compiles each one when this program is compiled -- to SPIR-V for Vulkan,

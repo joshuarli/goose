@@ -1,6 +1,6 @@
 // error: cannot write through this reference: non-writable provenance
-// A by-value `match` binding is a copy, never written (§6.5), and so are its
-// fields: bound by reference, one is a read-only reference (§9.5).
+// A by-value `match` binding is a copy, never written, and so are its
+// fields: bound by reference, one is a read-only reference.
 enum E { A { s: u8[:] }, B { k: i64 } }
 var buf: u8[>..] = [];
 fn set(q: u8[:]&) { q = buf[1..]; }

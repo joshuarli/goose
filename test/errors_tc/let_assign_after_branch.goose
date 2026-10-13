@@ -1,6 +1,6 @@
 // error: cannot assign to let x, which may be assigned already
 // A let declared without a value is assigned once: after an if that assigns
-// it in one branch, it may hold a value already (§4.4).
+// it in one branch, it may hold a value already.
 fn run(c: bool) {
     let x: i64;
     if c {

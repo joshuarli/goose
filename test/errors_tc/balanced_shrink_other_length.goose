@@ -1,6 +1,6 @@
 // error: cannot call helper, which shrinks s while v
 // error: is still used: it may refer into s
-// A mark is the length of the array it resizes (§5.2), not of another one.
+// A mark is the length of the array it resizes, not of another one.
 fn helper(s: i64[>..<]&, t: i64[>..<]&) {
     let mark = t.len;
     s.push(4);

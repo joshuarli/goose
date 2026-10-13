@@ -1,6 +1,6 @@
 // error: cannot clear x while rr is still used: a reference to a slice that may point into it was stored there
 // g's parameter may name any array its parent's s could view, here a: rr,
-// which g reads after the clear, leads to it through s (§5.1).
+// which g reads after the clear, leads to it through s.
 struct R { r: u8[:]& }
 fn main() {
     var a: u8[>..] = [];

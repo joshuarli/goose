@@ -1,5 +1,5 @@
 // error: cannot call format in the value assigned to G: format uses G
-// str() renders Q through the program's format overload (§3.7).
+// str() renders Q through the program's format overload.
 struct Q { n: i64 }
 var G: u8[>..] = [];
 fn format(out: u8[>..]&, q: Q) { format(out, "Q", q.n, G.len); }

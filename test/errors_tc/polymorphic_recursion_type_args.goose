@@ -1,7 +1,7 @@
 // error: instantiating grow<T = u8[2][2][2][2][2][2][2][2][2][2][2][2][2][2][2][2]>(i64) would put more than 16 specializations of grow in progress on this call path
 // error: a recursive call must reach a finite set of instantiations
 // The same through an explicit type argument no parameter mentions: each
-// round of grow<T> instantiates grow<T[2]> (§7.7, §7.8).
+// round of grow<T> instantiates grow<T[2]>.
 fn size<T>() -> i64 {
     let one: T[1] = [default<T>()];
     bytes_of(one).len

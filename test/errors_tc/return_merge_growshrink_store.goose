@@ -1,7 +1,7 @@
 // error: storing a reference that may point into G, which holds a grow-shrink array
 // A call's result is rooted at the deepest of the roots its callee's returns
-// give (§9.2), the caller's `b` here, but may still be the view of G the
-// other return gives, which is never stored (§5.2): G's clear would leave it
+// give, the caller's `b` here, but may still be the view of G the
+// other return gives, which is never stored: G's clear would leave it
 // behind in `hs`.
 var G: u8[>..<] = "xyz";
 struct K { s: const u8[:] }

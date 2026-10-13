@@ -1,7 +1,7 @@
 // error: cannot clear NODES: global G may hold a reference into it
 // put stores r, which may be h, a reference into the elements ns names, as
 // well as what an element holds, into G: r was read out of NODES only in
-// part (§5.1).
+// part.
 struct N { v: i64, next: N&? }
 struct Box { n: N& }
 var OTHER = N { v: 7, next: null };

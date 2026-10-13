@@ -1,6 +1,6 @@
 // error: cannot negate a value of type fn
 // So it is where a nested function hides the global K, whose -K a u8 could
-// not compute (§6.5, §11.1).
+// not compute.
 let K: u8 = 200;
 
 fn main() {

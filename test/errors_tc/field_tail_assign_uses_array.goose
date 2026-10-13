@@ -1,6 +1,6 @@
 // error: cannot use s.items in the value assigned to s.items
 // Through a reference as on a local, the right-hand side is built over the
-// old elements, so it may not use them (§4.4).
+// old elements, so it may not use them.
 struct S { n: i64, items: i64[>..] }
 fn twice(xs: const i64[:]) -> i64[>..] {
     var r: i64[>..] = [];

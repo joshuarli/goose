@@ -2,7 +2,7 @@
 // bodies (FnSpec::body) plus globals and emits one self-contained C file (the
 // runtime files from src/runtime/ are prepended by the driver).
 //
-// Representation (Appendix C; §10.3's hidden-stack-argument strategy):
+// Representation (hidden-stack-argument strategy):
 // * Fixed-size types become packed C types (#pragma pack(1)): scalars, packed
 //   structs, fixed/limited arrays wrapped in structs, fixed-mode ADTs as
 //   tag + union, references as pointers, slices as { data, len }. Large
@@ -10,7 +10,7 @@
 //   internal calls pass private copies by pointer and return via out-pointers.
 // * Variable values ("bytes" values) are self-describing byte images on a
 //   data stack, held as a uint8_t* to the value start. A resizable value is
-//   a header in the owning frame (gs_rhdr: element base + count, C.2) -- or a
+//   a header in the owning frame (gs_rhdr: element base + count) -- or a
 //   frame object, the C struct of a resizable-tailed struct's fixed fields
 //   with the tail's header last -- plus the elements on a data stack: growth
 //   bumps the stack top and the header's count; the base pointer never moves.
@@ -18,17 +18,17 @@
 //   references with reusable-pool provenance additionally carry the hidden
 //   freelist (gs_pref). Which form a parameter uses comes from the
 //   specialization's RootArg info, not the type.
-// * Stack assignment (§10.3) is fully dynamic: every stack-using function
+// * Stack assignment is fully dynamic: every stack-using function
 //   takes a hidden `int64_t gs_sp` argument, its nonfixed locals/temps use
 //   gs_stks[gs_sp + k] with per-function constant k, and callees get
-//   gs_sp + <locals in use>. §10.3 explicitly permits this strategy. Globals
+//   gs_sp + <locals in use>. Globals
 //   own dedicated stacks outside the sp-indexed block, so thread programs
 //   (which get a fresh block) share all generated functions.
 // * Nonfixed return values are constructed directly at a destination stack
-//   passed as a hidden gs_stack* argument (guaranteed in-place, §4.3/§7.3);
+//   passed as a hidden gs_stack* argument (guaranteed in-place/);
 //   the C function returns nothing for them. `v.append(f())` calls f at v's
 //   top and then slides the result's 8-byte length header out (see EmitCall).
-// * `return ... from` (§7.9) signals through one thread-local discriminant,
+// * `return ... from` signals through one thread-local discriminant,
 //   gs_rf, plus per-target thread-local channels for the in-flight fixed
 //   values (nonfixed ones are built on the target's destination stack,
 //   recorded thread-locally at target entry, and moved to where that
@@ -92,7 +92,7 @@ struct CodeGen {
     string tdecls;      // Packed typedefs.
     string pdata;       // Packed static data (string literals).
     string data;        // Queues, long-distance return channels, globals.
-    // The members of gs_globals_t, the program instance's globals (§11.1):
+    // The members of gs_globals_t, the program instance's globals:
     // every global that is not read-only static data, with the dedicated
     // stacks of the resizable ones. Accessed through GS_GL, main's static
     // instance directly or a worker's through the thread-local gs_gl.
@@ -180,7 +180,7 @@ struct CodeGen {
 
     // The trailing arguments of a gs_add/sub/mul/neg helper call: a signed
     // type's operation takes its location, for the debug build's overflow
-    // message (§6.2); unsigned arithmetic wraps and takes none.
+    // message; unsigned arithmetic wraps and takes none.
     string OvfLocArgs(IntStorage s, Line l) {
         return IsUnsigned(s) ? string() : cat(", ", LocArgs(l));
     }
@@ -194,7 +194,7 @@ struct CodeGen {
     // ClassOf and GetStructInst instantiate a type and validate it, which is
     // the checking half of the same questions and must not happen here.
     // TEq is not TypeEq either: it is equality of C representation, so it
-    // ignores `const`, which no C type carries (§9.5).
+    // ignores `const`, which no C type carries.
 
     int64_t ArrSize(TypeArray *a) {
         assert(a->size >= 0 || !a->sizeexpr);
@@ -226,12 +226,12 @@ struct CodeGen {
     void FixedLocal(TypeExpr *t, string &name, const string &init = "", bool forlocal = false);
     // A limited array of static capacity, `T[..k]`: a C value of a length
     // and k slots, which any other array or slice of T constructs by copy
-    // (§4.2, AdaptToFixed).
+    // (AdaptToFixed).
     bool IsStaticLimited(TypeExpr *t) {
         return t->kind == TY_ARRAY && t->arr->akind == A_LIMITED && IsFix(t);
     }
-    // A resizable-tailed struct with an all-fixed prefix is a frame object
-    // (C.2): a C struct of its fixed fields plus its tail's own gs_rhdr (or
+    // A resizable-tailed struct with an all-fixed prefix is a frame object:
+    // a C struct of its fixed fields plus its tail's own gs_rhdr (or
     // nested frame object), held in the owning frame like a fixed value;
     // only the innermost tail's elements occupy a data stack. A gs_rref to
     // one carries the object's address in `hdr`.
@@ -335,8 +335,8 @@ struct CodeGen {
     int64_t MinBytes(TypeExpr *t);
 
     // ------------------------------------------------------------------
-    // The verifier from_bytes runs over an untrusted image
-    // (docs/design/serialization.md §5): a generated per-element-type
+    // The verifier from_bytes runs over an untrusted image:
+    // a generated per-element-type
     // gs_verify_<mangle>(p, n, bm), the same walker shape as the size and
     // equality functions, returning the element count or -1.
 
@@ -356,7 +356,7 @@ struct CodeGen {
                         const string &off);
 
     // ------------------------------------------------------------------
-    // default<T>() (§4.2): all-zero bytes are the default of every fixed type
+    // default<T>(): all-zero bytes are the default of every fixed type
     // -- numbers, false, null, empty slices and limited arrays, variant 0 --
     // except where a field declares its own default, which the checker
     // builds as a literal of the call's own (Call::defaultinit).
@@ -365,7 +365,7 @@ struct CodeGen {
     void EmitDefaultInto(const string &lv, TypeExpr *t);
 
     // ------------------------------------------------------------------
-    // Structural equality (§4.5): gs_eq_<mangle>. Fixed values pass by value,
+    // Structural equality: gs_eq_<mangle>. Fixed values pass by value,
     // bytes values as pointers. Gap-free fixed types without floats of more
     // than a few scalars shortcut to memcmp.
 
@@ -379,9 +379,9 @@ struct CodeGen {
     void EmitEqWalk(string &bo, TypeExpr *t, const string &pa, const string &pb, int depth);
 
     // ------------------------------------------------------------------
-    // Per-specialization call interface. Signature shape (C.3 order):
+    // Per-specialization call interface. Signature shape:
     //   [declared params (resizable by-value ones add a gs_stack*)]
-    //   [free-variable references, §7.5]
+    //   [free-variable references]
     //   [out-pointers for fixed returns after the first]
     //   [destination stacks for nonfixed returns]
     //   [int64_t gs_sp].
@@ -413,7 +413,7 @@ struct CodeGen {
     unordered_map<FnSpec *, int> stackown;
     // The most stacks a function can have in use at once, its callees
     // included (BoundStacks): a constant, since no call into a recursive
-    // cycle is made with a stack in use (§7.8).
+    // cycle is made with a stack in use.
     unordered_map<FnSpec *, int64_t> stackneed;
     // Regions outside the indexed block: the globals' dedicated stacks
     // gs_init_globals reserves for the main program, and what each worker's
@@ -438,7 +438,7 @@ struct CodeGen {
     };
     void StackReport(FILE *out, const StackConfig &cfg);
 
-    // Long-distance return targets (§7.9): id, per-ret TLS channels.
+    // Long-distance return targets: id, per-ret TLS channels.
     unordered_map<FnSpec *, int> fromids;
     set<FnSpec *> fromemitted;
 
@@ -490,7 +490,7 @@ struct CodeGen {
     unordered_map<const VarDef *, pair<string, string>> vpool;  // fl base name, fl stack expr.
     set<const VarDef *> fvptr;           // Captured fixed vars arriving as pointers.
 
-    // A named result built at its destination (§7.3): the local's elements are
+    // A named result built at its destination: the local's elements are
     // written where the value ends up, so only its metadata travels at the
     // return. A destination that wants a length prefix in front of the
     // elements gets those bytes reserved at the declaration and patched at the
@@ -553,7 +553,7 @@ struct CodeGen {
     string SpIdx(int k) { return cat("GS(", spexpr, " + ", k, ")"); }
     string SpTop() { return cat(spexpr, " + ", stknext); }   // First free index.
     // A call into the recursive cycle the function being emitted is in
-    // (§7.8) is made with none of its stacks in use: the checker rejects
+    // is made with none of its stacks in use: the checker rejects
     // every shape that would hold one across it (TypeCheck::JoinCycle), so
     // every activation of the cycle starts its stacks at the same index and
     // a program's stack count is static. One in use here is a checker gap,
@@ -594,7 +594,7 @@ struct CodeGen {
     // call, through all of it.
     //
     // Soundness rests on one spelling per cached stack. Own stacks qualify:
-    // a callee's indices start above the caller's in-use watermark (§10.3), so
+    // a callee's indices start above the caller's in-use watermark, so
     // `GS(gs_sp + k)` names a stack no caller expression can also name, and
     // global stacks live outside the indexed block entirely. A reference to a
     // resizable carries its stack inside the reference value (`p.stk`), which
@@ -605,8 +605,8 @@ struct CodeGen {
     //
     // It caches its reference parameters' stacks instead, where RefTopsOk
     // clears it: `p.stk` is then the body's only spelling of that stack, and
-    // the checker's root classes say which parameters are distinct stacks
-    // (§10.2). That is the form a push through a reference wants -- `*(T *)top
+    // the checker's root classes say which parameters are distinct stacks.
+    // That is the form a push through a reference wants -- `*(T *)top
     // = e; top += n` with top in a register -- and the same marks carry it
     // across calls.
     vector<string> toporder;                  // Cacheable stacks, discovery order.
@@ -711,7 +711,7 @@ struct CodeGen {
     unordered_map<const VarDef *, string> gstks;
     unordered_map<const VarDef *, pair<string, string>> gpools;
 
-    // The base an `in pool` offset is measured from (§3.9), per function: the
+    // The base an `in pool` offset is measured from, per function: the
     // pool's element region, which its stack's reservation fixes once and
     // growth never moves. A byte store through a `uint8_t *` may alias the
     // header in C, so reading `pool.base` per access would reload it after
@@ -763,7 +763,7 @@ struct CodeGen {
     // function value's reference parameter -- names exactly what its
     // initializer names for its whole life. It is emitted as no C variable
     // of its own: every use reads the variable it stands for, so the stack
-    // and the header keep the one spelling top caching needs (§6.10), and a
+    // and the header keep the one spelling top caching needs, and a
     // local's header is not made to escape by a pointer nothing needs.
     unordered_map<const VarDef *, const VarDef *> refalias;
     // An alias of a frame object's tail: the field path it was bound to,
@@ -923,8 +923,8 @@ struct CodeGen {
     string GenPtr(Node *n, string *stkout = nullptr);
 
     // ------------------------------------------------------------------
-    // String literals: static byte data, C const since nothing can write it
-    // (§9.5). As a slice: { data, len }. As a u8[...] value: a static
+    // String literals: static byte data, C const since nothing can write it.
+    // As a slice: { data, len }. As a u8[...] value: a static
     // [lenfield][bytes] image.
 
     unordered_map<string, string> strdata;   // text -> raw byte array name.
@@ -957,7 +957,7 @@ struct CodeGen {
     string GenSlice(SliceExpr *se);
 
     // ------------------------------------------------------------------
-    // Construction (§4.2/§4.3): writes a value front-to-back at a stack's
+    // Construction: writes a value front-to-back at a stack's
     // top, bumping it. All branches of value-producing control constructs
     // construct to the same destination; calls pass the stack down.
 
@@ -985,7 +985,7 @@ struct CodeGen {
     bool HasUninitSlots(TypeExpr *t);
 
     // Byte span of the largest fixed value that can be a relative
-    // reference's root array (§3.9). Roots are variables, so this is the
+    // reference's root array. Roots are variables, so this is the
     // widest offset a store into a root that is *not* on a data stack can
     // produce; stack roots are bounded by GS_STACK_RESERVE instead. Both
     // bounds decide whether EmitRelStoreAt emits its range check.
@@ -1038,7 +1038,7 @@ struct CodeGen {
     // ------------------------------------------------------------------
     // Statements and control flow. GenAny routes a node's value to a Dst;
     // control constructs recurse so every branch reaches the same
-    // destination (§4.3). Scopes mirror C braces -- all but a flat if's
+    // destination. Scopes mirror C braces -- all but a flat if's
     // then-block (IfExpr::flat), which shares the C block the if is in -- so
     // watermark base variables are in C scope wherever exits may restore them.
 
@@ -1114,7 +1114,7 @@ struct CodeGen {
                     const function<void()> &bind, const string &cond);
 
     // ------------------------------------------------------------------
-    // Exits delivering a value: where the receiver expects it (§7.3, §7.9).
+    // Exits delivering a value: where the receiver expects it.
 
     void EnterDst(int si, const Dst &d);
     void DeclareTop0(size_t at, int indent, const string &name, const string &stk);
@@ -1137,7 +1137,7 @@ struct CodeGen {
 
     // ------------------------------------------------------------------
     // Returns: normal, forwarding a multi-value call, exiting an inlined
-    // body, and long-distance (§7.9).
+    // body, and long-distance.
 
     vector<string> GenForward(Call *c, const vector<TypeExpr *> &rets, const vector<Dst> &chans);
     void GenNormalReturn(const vector<Node *> &vals);
@@ -1180,7 +1180,7 @@ struct CodeGen {
     vector<string> EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst);
 
     // ------------------------------------------------------------------
-    // Builtins (§3.3, §3.7, §5.4, §9.3, §11.2). Emitted inline; only I/O, division,
+    // Builtins. Emitted inline; only I/O, division,
     // varints, and thread/queue machinery call into the runtime.
 
     unordered_map<string, string> queues;   // Element type mangle -> queue global.
@@ -1191,7 +1191,7 @@ struct CodeGen {
     vector<string> EmitBuiltin(Call *c, Dst d0);
 
     // ------------------------------------------------------------------
-    // Text forms (§3.7): print, str and format share them. A scalar's text
+    // Text forms: print, str and format share them. A scalar's text
     // comes from a gs_fmt_* runtime helper writing at most GS_FMT_MAX bytes;
     // a u8 array or slice contributes its bytes as they are, and any other
     // value renders structurally into a u8[>..] builder, or through a user
@@ -1295,11 +1295,11 @@ struct CodeGen {
                           const string &fnbody);
 
     // ------------------------------------------------------------------
-    // Globals (§11.1): C globals plus dedicated data stacks for nonfixed
+    // Globals: C globals plus dedicated data stacks for nonfixed
     // ones; initializers run in declaration order before main.
 
     // Globals whose declaration carries a C initializer, so gs_init_globals
-    // has nothing left to do for them (§11.1), with the initializer, which
+    // has nothing left to do for them, with the initializer, which
     // a later global's initializer naming one is spelled out from.
     map<const VarDef *, Node *> gstatic;
 

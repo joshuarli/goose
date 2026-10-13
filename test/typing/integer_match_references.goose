@@ -1,4 +1,4 @@
-// An integer match reads a reference scrutinee as its pointee (§3.8, §8.1)
+// An integer match reads a reference scrutinee as its pointee
 // and compares at the pointee's type: a reference variable, a written &x, a
 // narrowed optional, a reference parameter (inlined at -O2), an untyped
 // parameter bound to a reference, a const reference, a reference field, an

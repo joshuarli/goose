@@ -1,5 +1,5 @@
-// A recursive call may instantiate its callee with other types than its own
-// (§7.8), as long as the instantiations it reaches are finite: a cycle whose
+// A recursive call may instantiate its callee with other types than its own,
+// as long as the instantiations it reaches are finite: a cycle whose
 // types repeat ends in a back edge, and a descent through a nested type ends
 // at its innermost level.
 

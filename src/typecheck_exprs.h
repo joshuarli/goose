@@ -1,8 +1,8 @@
 // Goose compiler — the typechecker's expressions (definitions of TypeCheck
 // members, typecheck.h): lvalue paths, values with reference transparency
-// (§3.8) and the implicit conversions (§6.3, §3.10), the store rule (§9.2),
-// constant folding and operand unification (§6.1), and struct and variant
-// literals (§4.2).
+// and the implicit conversions, the store rule,
+// constant folding and operand unification, and struct and variant
+// literals.
 #pragma once
 
 namespace goose {
@@ -29,7 +29,7 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
             Error(n, cat("unknown variable: ", id->name));
         }
         // A local's first assignment may construct it, but a global is
-        // constructed only by its own initializer (§11.1): before that has
+        // constructed only by its own initializer: before that has
         // run, no path may start at it, whether it reads or writes.
         if (vd->isglobal) RequireAssigned(vd, n);
         id->vdef = vd;
@@ -39,8 +39,8 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
         lv.Set(vd, true);
         lv.byteview = vd->contentbyteview;
         // Contents are writable unless the type says const or the binding
-        // is a copy (§9.5). Whether the variable itself is assigned is up
-        // to its binding alone (`let`, a copy: WholeWritable, §4.4).
+        // is a copy. Whether the variable itself is assigned is up
+        // to its binding alone (`let`, a copy: WholeWritable).
         lv.writable = !vd->copybind && !(vd->type && vd->type->cq);
         lv.letbound = !vd->isvar;
         lv.letname = vd->name;
@@ -103,7 +103,7 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
 // The base of a path: itself a path, or any other expression (a call
 // result, a string literal, ...) whose value is then addressed. A null
 // root means static data; a temporary has a root of its own (TempRoot).
-// `cmpview`: the path is the slice `==` compares an operand as (§4.5),
+// `cmpview`: the path is the slice `==` compares an operand as,
 // which ends with the comparison, so it may view any temporary.
 inline TypeCheck::LVal TypeCheck::LValueBase(Node *n, bool cmpview) {
     if (Is<Ident>(n) || Is<Dot>(n) || Is<Index>(n)) return CheckLValue(n);
@@ -121,9 +121,9 @@ inline TypeCheck::LVal TypeCheck::LValueBase(Node *n, bool cmpview) {
     return lv;
 }
 
-// An array literal of variable-size elements is a T[] (§3.3), and such a
-// value comes into existence only where a construction context builds it
-// (§4.2). A statement temporary would have to hold it for a slice or
+// An array literal of variable-size elements is a T[], and such a
+// value comes into existence only where a construction context builds it.
+// A statement temporary would have to hold it for a slice or
 // reference to view, where a fixed one is a plain C temporary.
 inline void TypeCheck::NoTemporaryLiteral(Node *n, TypeExpr *t) {
     if (!Is<ArrayLit>(n) || ClassOf(t) == SC_FIXED) return;
@@ -132,7 +132,7 @@ inline void TypeCheck::NoTemporaryLiteral(Node *n, TypeExpr *t) {
                  "for a slice or reference to view; bind it to a variable first"));
 }
 
-// Crossing a reference in a path (auto-deref, §3.8): the storage owner
+// Crossing a reference in a path (auto-deref): the storage owner
 // becomes the reference's root, writability its provenance, and the rest of
 // the path lies in its pointee (Prov::reached).
 inline void TypeCheck::DerefLValue(LVal &lv, Node *at) {
@@ -146,7 +146,7 @@ inline void TypeCheck::DerefLValue(LVal &lv, Node *at) {
     } else if (lv.fromstorage) {
         // Crossing a reference the path read out of a container: it is a
         // read-back, so where it points is re-derived, and it is as writable
-        // as its slot says rather than the path to the slot (§9.5). A
+        // as its slot says rather than the path to the slot. A
         // relative one loads as an ordinary reference into the same pool,
         // so it keeps the container's root.
         ReadBackLVal(lv);
@@ -165,7 +165,7 @@ inline void TypeCheck::DerefLValue(LVal &lv, Node *at) {
 }
 
 // A global is unassigned until the driver reaches its declaration, which
-// is when its initializer runs (§11.1).
+// is when its initializer runs.
 inline void TypeCheck::RequireAssigned(VarDef *vd, Node *at) {
     if (vd->assigned) return;
     auto order = vd->isglobal
@@ -194,7 +194,7 @@ inline void TypeCheck::SliceProvenance(LVal &lv, Node *at) {
 }
 
 // A location whose own type is a reference or slice: the value loaded out
-// of it is a read-back, so its root is re-derived (§9.5). Out of a field or
+// of it is a read-back, so its root is re-derived. Out of a field or
 // an element it is as writable as the slot says (SlotLoadWritable); a slice
 // loaded through a reference is no more writable than the reference.
 inline void TypeCheck::ReadBackLVal(LVal &lv) {
@@ -202,14 +202,14 @@ inline void TypeCheck::ReadBackLVal(LVal &lv) {
     // A byte view can point at any typed storage. Its owner cannot be
     // recovered by enumerating u8 containers. Global slots may have been
     // filled by functions whose stores have not yet been checked. That
-    // matters to a grow-only array's shrink (§5.1), whose byte views are
+    // matters to a grow-only array's shrink, whose byte views are
     // stored like any other view; a grow-shrink array's shrink passes over
-    // a slot read, byte view or not (§5.2).
+    // a slot read, byte view or not.
     lv.byteview = lv.byteview || lv.Any([&](const RootAlt &a) {
         return a.root && (a.root->contentbyteview ||
                           (a.root->isglobal && lv.type->cq && IsU8(PointeeOf(lv.type))));
     });
-    // What was stored into a slot passed the store rule (§5.2) with its own
+    // What was stored into a slot passed the store rule with its own
     // provenance; the container's says nothing about it.
     auto slotread = lv.isslot && SlotReadable(lv.type);
     auto rb = ReadBackRoot(lv.type, lv, lv.byteview, lv.intemp ? &lv.contents : nullptr,
@@ -224,10 +224,10 @@ inline void TypeCheck::ReadBackLVal(LVal &lv) {
 }
 
 // How writable a reference or slice loaded out of a field or an element of
-// type t is, the path to the slot being as writable as `path` (§9.5): as the
+// type t is, the path to the slot being as writable as `path`: as the
 // slot's type says, whatever the path, since a read-only one is stored only
 // in a `const` slot, and `const` is shallow. But a self-relative reference
-// points within the value or array its slot lies in (§3.9), which is no more
+// points within the value or array its slot lies in, which is no more
 // writable through it than along the path.
 inline bool TypeCheck::SlotLoadWritable(TypeExpr *t, bool path) {
     auto selfrel = t->kind == TY_REF && t->ref->lenstorage >= 0 && !t->ref->pool;
@@ -263,11 +263,11 @@ inline Val TypeCheck::ContainerRead(LVal lv) {
         MarkClassCopy(v);
     }
     // The contents of a slot of a const type are read-only, as a variable's
-    // are (§9.5), where its value is bound by reference, taken as a slice or
-    // grown; the slot itself is assigned as a whole along its path (§4.4).
+    // are, where its value is bound by reference, taken as a slice or
+    // grown; the slot itself is assigned as a whole along its path.
     if (!IsRefOrSlice(lv.type) && lv.type->cq) v.writable = false;
     v.lvalue = v.type->kind != TY_REF;
-    // A varint is written only at construction (§3.6): a reference to one,
+    // A varint is written only at construction: a reference to one,
     // which binds as a varint& (StorageType), is read-only, as `&` makes it.
     if (IsVarintT(lv.type)) {
         v.isvarint = true;
@@ -276,7 +276,7 @@ inline Val TypeCheck::ContainerRead(LVal lv) {
     return v;
 }
 
-// The operands of n, in evaluation order (§2), each with how n consumes it
+// The operands of n, in evaluation order, each with how n consumes it
 // once its later operands have run. A call consumes its receiver and
 // arguments at the call; print, str and format render each argument just
 // before the next runs (EmitFormatInto, EmitStr), so an earlier argument is
@@ -462,7 +462,7 @@ void TypeCheck::HoldAs(Node *n, const Val &v, HoldKind kind, Node *parent, const
 }
 
 // What a `for` over an array or slice, whose sequence has the value v, reads
-// on every iteration while its body runs (§6.5). Codegen spells the path to
+// on every iteration while its body runs. Codegen spells the path to
 // the sequence into the loop (ForLoop::CgStmt, GenLoc): each reference or
 // slice the path loads out of a field or element is loaded again, from where
 // it lies, and the sequence is walked in place, as a view of its elements --
@@ -521,7 +521,7 @@ template<typename F> void TypeCheck::HoldForSequence(ForLoop *fl, const Val &v, 
 // consumes them after this point), as their parents hold them. A call at
 // the point itself, applying its callee's effects, has consumed its own
 // operands: what the callee does to them its parameters' pairs judge
-// (§5.1, NoteLiveViews). The exception is the argument print, str or format
+// (NoteLiveViews). The exception is the argument print, str or format
 // is rendering (`cur.renderarg`): its views, where a struct, enum or array
 // argument lies (`cur.renderwhere`), and the parts the rendering is walking
 // in place (`cur.renderwalks`), which an overload of a part runs in the
@@ -603,7 +603,7 @@ inline VarDef *TypeCheck::HolderRootOf(const Val &v) { return ContentsOf(v).Root
 inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
     auto t = lv.type;
     // Steps the path into the named field of a field run; a frame
-    // object's resizable tail has a header of its own to address (C.2).
+    // object's resizable tail has a header of its own to address.
     auto step = [&](const vector<Field> &fields, const vector<TypeExpr *> &ftypes,
                     bool inframe) {
         for (auto i = 0; i < (int)fields.size(); i++) {
@@ -651,10 +651,10 @@ inline Val TypeCheck::DecayRef(const Val &v) {
     // A slice is the one its slot holds, as writable as that is, and the
     // slot is where the reference points (Val::slot). Any other pointee
     // lies where the reference points, as writable as the reference, as a
-    // path crossing it is (DerefLValue, §9.5): a format hook taking it by
-    // reference is handed it there (§3.7), and a slice a construct joins an
-    // array into views it there (§6.4). But a varint, written only at
-    // construction (§3.6), loads as the i64 it decodes to, which no hook
+    // path crossing it is (DerefLValue): a format hook taking it by
+    // reference is handed it there, and a slice a construct joins an
+    // array into views it there. But a varint, written only at
+    // construction, loads as the i64 it decodes to, which no hook
     // may write. A compound pointee value keeps the container info,
     // harmless, though crossing the reference drops where the reference was
     // read out of (RootAlt::slotread, classread). A holder holds what was
@@ -688,13 +688,13 @@ inline Val TypeCheck::DecayRef(const Val &v) {
 inline bool TypeCheck::KeepsRef(const Val &v, TypeExpr *dt) {
     if (!IsPlainRef(v.type)) return true;  // Nothing to decay.
     if (dt->kind == TY_REF) return true;   // Binding (plain/optional/relative).
-    // A whole (pointee) array meeting a slice of its element type (§3.10).
+    // A whole (pointee) array meeting a slice of its element type.
     if (dt->kind == TY_SLICE && v.type->ref->sub->kind == TY_ARRAY) return true;
     return false;
 }
 
-// An lvalue of a reference destination's pointee type binds by reference
-// (§4.1): the node becomes `&node`, as if written, so every later pass
+// An lvalue of a reference destination's pointee type binds by reference:
+// the node becomes `&node`, as if written, so every later pass
 // sees an ordinary reference argument. `writes`: something may write
 // through the reference, which is not so of an identity comparison's,
 // index_of's, or one bound to a `const T&`.
@@ -713,10 +713,10 @@ inline Node *TypeCheck::AutoRef(Node *n, Val &v, bool writes) {
 }
 
 // A slice lvalue bound by reference: the reference names the slot, so it is
-// rooted where the slot lies, as `&` of it is (§3.8), not where the slice
+// rooted where the slot lies, as `&` of it is, not where the slice
 // points (Val::slot), and is as writable as `&` of it: a callee re-points no
 // slot of a by-value binder, of a `const` value or of one reached through a
-// `const T&` (§9.5). A field's or an element's slice is writable unless its
+// `const T&`. A field's or an element's slice is writable unless its
 // type says `const`, which a load through the reference sees (SlotView), so
 // there the path alone says.
 inline void TypeCheck::SlotRoots(Val &v) {
@@ -732,8 +732,8 @@ inline void TypeCheck::SlotRoots(Val &v) {
 
 // The type of the storage lvalue v denotes, or each branch of a construct v
 // does (Val::storagebranches), which a reference to it points at: its
-// value's, but for varint storage, whose value is the i64 it decodes to
-// (§3.6).
+// value's, but for varint storage, whose value is the i64 it decodes to.
+//
 inline TypeExpr *TypeCheck::StorageType(const Val &v) {
     return (v.lvalue || v.storagebranches) && v.isvarint ? ast.inttypes[IS_VARINT] : v.type;
 }
@@ -747,14 +747,14 @@ inline bool TypeCheck::IsNonFixedLValue(const Val &v) {
     return v.lvalue && !IsRefOrSlice(v.type) && ClassOf(v.type) != SC_FIXED;
 }
 
-// A reference to a non-fixed value denotes a non-fixed lvalue (§3.8). A
+// A reference to a non-fixed value denotes a non-fixed lvalue. A
 // varint pointee loads as the i64 it decodes to, a fixed-size value.
 inline bool TypeCheck::IsNonFixedRef(const Val &v) {
     return IsPlainRef(v.type) && ClassOf(LoadType(v.type->ref->sub)) != SC_FIXED;
 }
 
-// Whether a resizable-valued path has a header of its own to reference
-// (C.2): a variable, or the tail of a frame object.
+// Whether a resizable-valued path has a header of its own to reference:
+// a variable, or the tail of a frame object.
 inline bool TypeCheck::Referenceable(Node *n, const Val &v) {
     if (ClassOf(v.type) != SC_RESIZABLE) return true;
     if (Is<Ident>(n)) return true;
@@ -762,7 +762,7 @@ inline bool TypeCheck::Referenceable(Node *n, const Val &v) {
     return d && FieldsInFrame(d);
 }
 
-// Whether the struct d steps into is a frame object held as one (C.2): a
+// Whether the struct d steps into is a frame object held as one: a
 // variable, a reference's pointee, a temporary, or the tail of a frame
 // object held so in turn. As the tail of a value that is not a frame object
 // it is bytes of that value, and its own tail has no header either.
@@ -776,7 +776,7 @@ inline bool TypeCheck::FieldsInFrame(Dot *d) {
     return pointee || !od || FieldsInFrame(od);
 }
 
-// A reference to a resizable value is a reference to its header (C.2), and
+// A reference to a resizable value is a reference to its header, and
 // only a variable and a frame object's tail have one of their own.
 [[noreturn]] inline void TypeCheck::NoResizableRef(Node *at) {
     Error(at, "cannot reference a resizable value nested in a variable-size prefix "
@@ -789,7 +789,7 @@ inline bool TypeCheck::UserRefOf(Node *n) {
 }
 
 // A non-fixed value reaches a value destination only as an rvalue or an
-// explicit copy (§4.1): an lvalue, or a reference to one, is never copied
+// explicit copy: an lvalue, or a reference to one, is never copied
 // implicitly. A function's own local is moved by `return`, or as its body's
 // final expression.
 inline bool TypeCheck::ImplicitCopy(const Val &v, Node *n, TypeExpr *dt) {
@@ -797,7 +797,7 @@ inline bool TypeCheck::ImplicitCopy(const Val &v, Node *n, TypeExpr *dt) {
     if (IsRefOrSlice(dt) || dt->kind == TY_VOID) return false;
     if (ClassOf(dt) == SC_FIXED) return false;
     auto src = IsPlainRef(v.type) ? v.type->ref->sub : v.type;
-    // A varint is read as the i64 it decodes to (§3.6), like any scalar.
+    // A varint is read as the i64 it decodes to, like any scalar.
     if (ClassOf(src) == SC_FIXED || IsVarintT(src)) return false;
     if (!v.lvalue && !IsPlainRef(v.type)) return false;
     if (inreturn && v.lvalue && IsOwnLocal(n)) return false;
@@ -811,7 +811,7 @@ inline void TypeCheck::ImplicitCopyError(Node *n) {
                  what, ") for a copy, or bind it by reference"));
 }
 
-// A branch `&x` of a fixed-size x whose construct copies it (§4.1).
+// A branch `&x` of a fixed-size x whose construct copies it.
 inline void TypeCheck::RefCopyWarning(Node *n) {
     auto what = ExprStr(Is<Unary>(n)->child);
     Warn(n, LintWarningCode::AvoidableReferenceCopy,
@@ -821,8 +821,8 @@ inline void TypeCheck::RefCopyWarning(Node *n) {
 
 // A branch's value v whose construct has no destination type: the
 // construct's value is a copy of it, of type dt, which non-fixed storage, or
-// a reference to it, reaches only through copy(x), as at a value destination
-// (§4.1). On an argument's path (argpath) a reference parameter may yet bind
+// a reference to it, reaches only through copy(x), as at a value destination.
+// On an argument's path (argpath) a reference parameter may yet bind
 // the branch by reference instead, where it is storage of any size class or
 // a reference, and on a construct's first check of its branches (joinpath)
 // they may yet join as a slice; `out`, the value the branch gives its
@@ -837,14 +837,14 @@ inline void TypeCheck::CheckBranchCopy(const Val &v, Node *n, TypeExpr *dt, Val 
     if (!out.implicitcopy) out.implicitcopy = n;
 }
 
-// A local of the function being checked, which its return moves (§4.1).
+// A local of the function being checked, which its return moves.
 inline bool TypeCheck::IsOwnLocal(Node *n) {
     auto id = Is<Ident>(n);
     return id && id->vdef && !id->vdef->isglobal && id->vdef->ownerspec == frames.back().spec;
 }
 
-// A value that tspec's result type is inferred from (§7.1) is taken as an
-// un-annotated `let` takes its initializer (§3.8, §4.1): an explicit `&x`
+// A value that tspec's result type is inferred from is taken as an
+// un-annotated `let` takes its initializer: an explicit `&x`
 // keeps its reference, a reference to a non-fixed value stays that
 // reference, and a non-fixed lvalue is returned by reference, except the
 // function's own local, which the return moves. Storage that does not
@@ -883,7 +883,7 @@ inline Val TypeCheck::CheckInferredResult(Node *&n, FnSpec *tspec) {
 }
 
 // The whole of array-valued n as a slice: `n[..]`, synthesized for an
-// equality between array kinds (§4.5).
+// equality between array kinds.
 inline Node *TypeCheck::WholeSlice(Node *n) {
     auto se = ast.New<SliceExpr>(n->line, n);
     se->cmpview = true;
@@ -895,7 +895,7 @@ inline Node *TypeCheck::WholeSlice(Node *n) {
 // own resolution, where an explicit & may have picked the overload. A
 // variable whose type is `inferred` from the value is no destination type
 // either, but binds a reference to a non-fixed value rather than copying the
-// pointee (§3.8, §4.1). `branchcopy`: n is a branch's value whose construct
+// pointee. `branchcopy`: n is a branch's value whose construct
 // has no destination type, which copies it (CheckBranchCopy), and `expected`
 // at most the type an earlier break gave the construct.
 inline Val TypeCheck::CheckValue(Node *&n, TypeExpr *expected, bool callsite, bool branchcopy,
@@ -987,7 +987,7 @@ inline void TypeCheck::MustFit(Val &v, Node *n, TypeExpr *dt) {
             hint = " (f64 to f32 requires an explicit `as f32` to round the value)";
             // Context refines only unconstrained floating generic calls.
             // A typed argument, explicit type argument or overload boundary
-            // may still have committed this result to f64 (§7.7).
+            // may still have committed this result to f64.
             if (auto c = Is<Call>(n); c && c->spec && !c->spec->bindings.empty())
                 Append(hint, "; this generic call has committed to f64; choose f32 before "
                              "a typed argument, explicit type argument or overload commits "
@@ -997,16 +997,16 @@ inline void TypeCheck::MustFit(Val &v, Node *n, TypeExpr *dt) {
     }
 }
 
-// The implicit adaptations legal at construction/assignment sites (§6.3,
-// §3.1, §3.7, §3.10). On success v.type becomes dt. Also the enforcement
-// point of the store rule (§9.2): a reference/slice stored into storage
+// The implicit adaptations legal at construction/assignment sites.
+// On success v.type becomes dt. Also the enforcement
+// point of the store rule: a reference/slice stored into storage
 // owned by curdst must be rooted at least as shallow (call-site argument
 // slots pass curdst null: parameters always die before their arguments'
 // roots).
 inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
     auto t = v.type;
-    // An lvalue at a reference destination is the reference to it (§4.1),
-    // a `const T&` where the lvalue is read-only (§9.5).
+    // An lvalue at a reference destination is the reference to it,
+    // a `const T&` where the lvalue is read-only.
     if (BindsRef(v, dt)) {
         SlotRoots(v);
         t = v.type = ast.RefTo(ast.PlainOf(StorageType(v)), dt->line);
@@ -1020,9 +1020,9 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
         return false;
     }
     // An array where a slice of its element type is expected is the whole
-    // array as a slice (§3.10), where it is stored, and through a reference
+    // array as a slice, where it is stored, and through a reference
     // where the reference points: a `const` one where the array is read-only,
-    // which the rules below then judge as any slice (§9.2, §9.5).
+    // which the rules below then judge as any slice.
     if (dt->kind == TY_SLICE) {
         auto at = IsPlainRef(t) && t->ref->sub->kind == TY_ARRAY ? t->ref->sub : t;
         if (at->kind == TY_ARRAY && TypeEq(at->arr->sub, dt->sub)) {
@@ -1033,10 +1033,10 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
             v.reusable = 0;   // A view of a pool is not the pool, as a[..] is not.
         }
     }
-    // The store rule (§9.2) applies to a reference or slice, and to a value
+    // The store rule applies to a reference or slice, and to a value
     // holding references or slices by value (a struct with a slice field),
     // whose contents are bounded by its holder root.
-    // Constness (§9.5): a read-only reference or slice lands in a slot only
+    // Constness: a read-only reference or slice lands in a slot only
     // if the slot's type says `const`, which is what a later read of the
     // slot then sees; a parameter or result takes either and is read-only
     // in that instantiation.
@@ -1058,7 +1058,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
         // the slot by value, so its owner holds one too (ShrinkTargets). What
         // can hold that can hold the slot, so of the storage the slot's type
         // admits, this leaves out only what cannot be its owner. Each place
-        // the value may point must outlive each (§9.2).
+        // the value may point must outlive each.
         auto reached = curdst.reached ? curdst.reached : dt;
         auto dsts = ShrinkTargets(curdst.roots, reached, curdst.slot);
         for (auto &a : roots.alts) {
@@ -1074,8 +1074,8 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
                 return false;
             }
         }
-        // Binding a global reference or slice variable stores into a global
-        // (§5.2).
+        // Binding a global reference or slice variable stores into a global.
+        //
         if (!curdst.varbind || curdst.roots.None() || curdst.roots.Root()->isglobal) {
             auto reach = false;
             if (auto gs = StoredIntoGrowShrink(v, roots, t, holder, &reach)) {
@@ -1140,7 +1140,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
         }
     }
     // A value other than a reference or slice is stored whole, so whether
-    // its contents are read-only is for the slot's type to say (§9.5):
+    // its contents are read-only is for the slot's type to say:
     // `const` is added implicitly, and a copy of a const value is a fresh
     // one. A reference's or slice's own qualifier is about its pointee.
     if (IsRefOrSlice(dt) ? TypeEq(t, dt) : TopConstEq(t, dt)) { v.type = dt; return true; }
@@ -1148,7 +1148,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
         case TY_INT:
             if (t->kind != TY_INT) return false;
             // A literal parameter adapts to any integer type; whether the
-            // literal fits is each call site's question (§7.7).
+            // literal fits is each call site's question.
             if (v.unsized) {
                 RecordLitAdapt(v, dt, fitnode ? fitnode->line : Line {});
                 v.type = dt;
@@ -1163,7 +1163,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
                 return false;
             }
             // A constant adapts to any integer type its value fits, and a
-            // construct of constants to any type they all fit (§6.4).
+            // construct of constants to any type they all fit.
             if (v.ck == CK_INT || (v.litint && dt->intstorage != IS_VARINT)) {
                 if (v.litint ? ConstsFit(v, dt->intstorage)
                              : FitsIntStorage(v.ival, v.uns, dt->intstorage)) {
@@ -1175,7 +1175,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
             }
             if (dt->intstorage == IS_VARINT) {
                 // varint stores hold the full i64 value range: every
-                // integer type embeds except u64 (§3.6).
+                // integer type embeds except u64.
                 if (t->intstorage != IS_U64 && t->intstorage != IS_VARINT) {
                     v.type = dt;
                     return true;
@@ -1188,7 +1188,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
             }
             return false;
         case TY_FLT:
-            // Every integer converts to either float type (§6.3).
+            // Every integer converts to either float type.
             if (t->kind == TY_INT) {
                 IntToFloat(v, dt);
                 return true;
@@ -1203,7 +1203,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
             return true;
         case TY_ARRAY: {
             // Construction of an array from another array/slice of the
-            // same element type (copies, §3.7/§4.2). Fixed destinations
+            // same element type (copies/). Fixed destinations
             // need a statically known length, so only [] adapts.
             TypeExpr *selem = nullptr;
             if (t->kind == TY_ARRAY) selem = t->arr->sub;
@@ -1222,7 +1222,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
         case TY_SLICE:
             // The same slice type but for constness: adding `const` is
             // implicit, and dropping it was rejected above for a slot and
-            // is the read-only instantiation everywhere else (§9.5).
+            // is the read-only instantiation everywhere else.
             if (t->kind == TY_SLICE && TypeEq(t->sub, dt->sub)) {
                 v.type = dt;
                 return true;
@@ -1234,7 +1234,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
             if (t->ref->lenstorage >= 0) return false;  // Values are never relative.
             if (dt->ref->lenstorage >= 0) {
                 // Storing an ordinary reference into a relative reference
-                // location (§3.9). A self-relative one needs both ends in
+                // location. A self-relative one needs both ends in
                 // the same root array; an `in pool` one needs the value in
                 // the pool, and takes the destination wherever it is.
                 if (t->ref->optional && !dt->ref->optional) return false;
@@ -1244,10 +1244,10 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
                 // end does not force plain links. A null has no roots
                 // (NullLit, RefProvOf), or static data exactly
                 // (default<T>(), a parameter given one), where nothing else
-                // a writable reference is given points (§9.5), nor one to a
+                // a writable reference is given points, nor one to a
                 // type no literal supplies; a read-only u8 one may point
                 // into a string literal. As one alternative of a merged
-                // value it names no array (§9.2): the others say where the
+                // value it names no array: the others say where the
                 // value points.
                 auto nullalt = [&](const RootAlt &a) {
                     return !a.root && a.exact && t->ref->optional &&
@@ -1262,7 +1262,7 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
                     return true;
                 }
                 // The target must be the *same* array, so a root that only
-                // bounds the pointee's lifetime will not do (§9.5).
+                // bounds the pointee's lifetime will not do.
                 auto want = dt->ref->pool ? dt->ref->pool : curdst.roots.Root();
                 auto have = dt->ref->pool ? PoolOf(links.Root()) : links.Root();
                 if (!want || (!dt->ref->pool && !curdst.roots.Exact()) || !links.Exact() ||
@@ -1315,7 +1315,7 @@ inline string TypeCheck::ConstStr(const Val &v) {
     return v.uns ? cat((uint64_t)v.ival) : cat(v.ival);
 }
 
-// Conditions: bool, or an optional (§3.8 truthiness + narrowing). Plain
+// Conditions: bool, or an optional (truthiness + narrowing). Plain
 // references decay (a bool& condition reads its pointee); an already
 // narrowed optional stays a valid (trivially true) test.
 inline Val TypeCheck::CheckCond(Node *n) {
@@ -1343,7 +1343,7 @@ inline TypeExpr *TypeCheck::UnifyBranch(TypeExpr *a, TypeExpr *b, Node *at, bool
         if (ImplicitInt(b->intstorage, a->intstorage)) return a;
     }
     if (a->kind == TY_FLT && b->kind == TY_FLT) return ast.flttypes[FS_F64];
-    // An integer branch converts to the other's float type (§6.3).
+    // An integer branch converts to the other's float type.
     if (a->kind == TY_INT && b->kind == TY_FLT) return b;
     if (a->kind == TY_FLT && b->kind == TY_INT) return a;
     if (!wantvalue) return ast.voidtype;
@@ -1356,22 +1356,22 @@ inline Val TypeCheck::VoidVal() {
     return v;
 }
 
-// &lvalue: reference creation (§3.8) with its restrictions. On a location
+// &lvalue: reference creation with its restrictions. On a location
 // that itself holds a reference (a reference variable or field), yields
 // the stored reference — there are no references to references.
 inline Val TypeCheck::CheckRefOf(Unary *x) {
     auto lv = CheckLValue(x->child);
     if (lv.var) RequireAssigned(lv.var, x);
     // A resizable value has a header of its own only as a whole variable or
-    // as a frame object's tail (C.2).
+    // as a frame object's tail.
     if (!lv.var && !lv.fotail && lv.type->kind != TY_REF &&
         ClassOf(lv.type) == SC_RESIZABLE)
         NoResizableRef(x);
     if (lv.type->kind == TY_REF) {
-        // Out of a container, the stored reference is a read-back (§9.5).
+        // Out of a container, the stored reference is a read-back.
         if (!lv.var) return ContainerRead(lv);
         Val v;
-        v.type = LoadType(lv.type);  // Relative refs load as plain (§3.9).
+        v.type = LoadType(lv.type);  // Relative refs load as plain.
         v.SetProv(RefProvOf(lv.var));
         return v;
     }
@@ -1379,7 +1379,7 @@ inline Val TypeCheck::CheckRefOf(Unary *x) {
     v.type = ast.RefTo(ast.PlainOf(lv.type), x->line);
     v.SetProv(lv);
     // A field or an element of a const type is as read-only through a
-    // reference as a variable of one (§9.5); a slice's qualifier is about
+    // reference as a variable of one; a slice's qualifier is about
     // its elements, not the slot the reference names.
     v.writable = lv.writable && !lv.isvarint && (lv.type->kind == TY_SLICE || !lv.type->cq);
     // Where the variable is out of sight -- behind a parameter's class, or
@@ -1388,14 +1388,14 @@ inline Val TypeCheck::CheckRefOf(Unary *x) {
     // when it is bound by reference (AutoRef), whatever its type says.
     if (lv.var && lv.type->kind == TY_SLICE)
         v.writable = v.writable && RefProvOf(lv.var).writable;
-    v.type->cq = !v.writable;   // `&x` of a const value is a `const T&` (§9.5).
+    v.type->cq = !v.writable;   // `&x` of a const value is a `const T&`.
     if (lv.var && v.writable) NoteWritableRef(lv.var, x);
     if (auto sv = SliceVarOf(lv.var)) sv->slotref = true;
     return v;
 }
 
-// A writable reference to d is made at `at` (§4.1: `&d`, or d bound by
-// reference). A `let` is written through one as a `var` is (§4.4), before
+// A writable reference to d is made at `at` (`&d`, or d bound by
+// reference). A `let` is written through one as a `var` is, before
 // or after anything that relies on its value: the marks this, RelyOnNonneg,
 // ResizesToMark, RelyOnConstant and RelyOnExtent leave do not follow the
 // flow, so neither a loop's later pass, a cycle's later round nor a nested
@@ -1430,7 +1430,7 @@ inline void TypeCheck::NoteWritableRef(VarDef *d, Node *at) {
     }
 }
 
-// A comparison with a u64 at `at` relies on v being non-negative (§6.1),
+// A comparison with a u64 at `at` relies on v being non-negative,
 // and so on the `let`s it was read from keeping their initializers'
 // values. Returns one bound to a writable reference (NoteWritableRef),
 // which may not have.
@@ -1443,9 +1443,9 @@ inline VarDef *TypeCheck::RelyOnNonneg(const Val &v, Node *at) {
 }
 
 // A compile-time size, fill count or match pattern takes the named constant
-// d at its initializer's value (§11.1), directly or through the initializer
+// d at its initializer's value, directly or through the initializer
 // of the one it names, so relies on d keeping that value, which a writable
-// reference to d could change (§4.4). As with a comparison relying on a
+// reference to d could change. As with a comparison relying on a
 // `let` (RelyOnNonneg), whichever comes second is an error.
 inline void TypeCheck::RelyOnConstant(ConstUse &use, VarDef *d) {
     if (d->refwrite)
@@ -1462,7 +1462,7 @@ inline void TypeCheck::RelyOnConstant(ConstUse &use, VarDef *d) {
 }
 
 // A constant read from a named constant (Val::constfrom) adapts at `at` to
-// a type other than its own, as a literal would (§3.1): that relies on the
+// a type other than its own, as a literal would: that relies on the
 // named constants it was computed from keeping their initializers' values.
 // A trial relies on nothing.
 inline void TypeCheck::RelyOnNamed(const Val &v, Node *at) {
@@ -1472,7 +1472,7 @@ inline void TypeCheck::RelyOnNamed(const Val &v, Node *at) {
 }
 
 // Whether d's type fixes its length (`cap`: its capacity), which no
-// assignment or reference can then change (§3.3). Not before d is checked.
+// assignment or reference can then change. Not before d is checked.
 inline bool TypeCheck::TypeFixesExtent(VarDef *d, bool cap) {
     auto t = d->type;
     if (!t || t->kind != TY_ARRAY) return false;
@@ -1480,15 +1480,15 @@ inline bool TypeCheck::TypeFixesExtent(VarDef *d, bool cap) {
 }
 
 // A compile-time size, capacity or fill count takes the `.len` (`cap`: the
-// `.cap`) the initializer of the global d gives (§3.3), directly or through
+// `.cap`) the initializer of the global d gives, directly or through
 // the initializer of use.named. Where d's type fixes it, nothing can change
 // it. Where it does not, as a string literal's `const u8[:]` does not, a
 // `var` may be assigned another, and a `let` is relied on as a named
 // constant is (RelyOnConstant), though no reference to one holding a
-// literal's slice is writable (§9.5): whichever of the use and a writable
+// literal's slice is writable: whichever of the use and a writable
 // reference to it comes second is an error (NoteWritableRef). A reference
 // cannot come before d's declaration has been checked, naming d before its
-// initializer runs being an error (§11.1), but the use can, while d's type
+// initializer runs being an error, but the use can, while d's type
 // is unknown: a `var`'s declaration checks it then (CheckVarExtent), and a
 // writable reference to a `let` afterwards.
 inline void TypeCheck::RelyOnExtent(ConstUse &use, VarDef *d, bool cap) {
@@ -1531,7 +1531,7 @@ inline void TypeCheck::CheckVarExtent(VarDef *d, Node *at) {
 // (FoldIntOp, ast.h, which the optimizer folds with too). Operand values fit
 // out.type (the unify rules ensured it). A zero divisor aborts at run time,
 // which a constant expression need not wait for; one a named constant gives
-// is left to run time, as a division naming it is in a `for` count (§6.5).
+// is left to run time, as a division naming it is in a `for` count.
 inline void TypeCheck::FoldInt(TType op, Val &l, Val &r, Val &out, Node *at) {
     if (l.ck != CK_INT || r.ck != CK_INT) return;
     auto s = out.type->intstorage;
@@ -1553,8 +1553,8 @@ inline void TypeCheck::FoldInt(TType op, Val &l, Val &r, Val &out, Node *at) {
 
 // The operand/result type of a binary numeric operator: equal types
 // stand; a constant adapts to the other operand's type; otherwise the
-// operand that implicitly widens into the other picks the wider type
-// (§6.1). Returns null for non-numeric pairs, and where a trial finds no
+// operand that implicitly widens into the other picks the wider type.
+// Returns null for non-numeric pairs, and where a trial finds no
 // common type (unifytrial).
 inline TypeExpr *TypeCheck::UnifyNumeric(Node *at, TType op, Val &lv, Val &rv, TypeExpr *lt,
                                          TypeExpr *rt, bool cmp) {
@@ -1569,7 +1569,7 @@ inline TypeExpr *TypeCheck::UnifyNumeric(Node *at, TType op, Val &lv, Val &rv, T
         auto lconst = lv.ck == CK_INT || lv.litint || lv.flexint,
              rconst = rv.ck == CK_INT || rv.litint || rv.flexint;
         // A literal parameter adapts to a typed operand, as a constant
-        // does; meeting a constant, it stays at its own type (§7.7).
+        // does; meeting a constant, it stays at its own type.
         if (lv.unsized && !rv.unsized && !rconst) {
             RecordLitAdapt(lv, rt, at->line);
             return rt;
@@ -1607,7 +1607,7 @@ inline TypeExpr *TypeCheck::UnifyNumeric(Node *at, TType op, Val &lv, Val &rv, T
         }
         if (ImplicitInt(lt->intstorage, rt->intstorage)) return rt;
         if (ImplicitInt(rt->intstorage, lt->intstorage)) return lt;
-        // §6.1: a comparison produces bool, so it has no result type to
+        // a comparison produces bool, so it has no result type to
         // pick and the mathematical answer across signedness is never in
         // doubt. u64 is the one unsigned type with no signed supertype;
         // it may meet a signed operand the compiler knows is
@@ -1652,7 +1652,7 @@ inline TypeExpr *TypeCheck::UnifyNumeric(Node *at, TType op, Val &lv, Val &rv, T
     if (lt->kind == TY_FLT && rt->kind == TY_FLT) {
         if (TypeEq(lt, rt)) return lt;
         // One side is f32, the other f64: an f64 taking its type from its
-        // literals adapts to the typed side, otherwise f32 widens (§6.3).
+        // literals adapts to the typed side, otherwise f32 widens.
         auto &wide = IsF32(lt) ? rv : lv;
         auto narrow = IsF32(lt) ? lt : rt;
         if (LitFloat(wide)) {
@@ -1662,7 +1662,7 @@ inline TypeExpr *TypeCheck::UnifyNumeric(Node *at, TType op, Val &lv, Val &rv, T
         }
         return ast.flttypes[FS_F64];
     }
-    // An integer operand converts to the float operand's type (§6.3).
+    // An integer operand converts to the float operand's type.
     if (lt->kind == TY_FLT && IsIntT(rt)) return lt;
     if (IsIntT(lt) && rt->kind == TY_FLT) return rt;
     return nullptr;
@@ -1698,7 +1698,7 @@ inline void TypeCheck::RetypeVal(Val &v, TypeExpr *ct) {
 }
 
 inline Val TypeCheck::CheckRefIdentity(Binary *b) {
-    // Reference identity (§4.5): the addresses, never the pointees. Each
+    // Reference identity: the addresses, never the pointees. Each
     // side is a reference (plain or optional) or null, or storage taken
     // by reference as a `.=` binding takes it; the pointee types agree.
     auto lv = CheckV(b->left, nullptr);
@@ -1775,7 +1775,7 @@ inline Val TypeCheck::CheckBinaryResult(Binary *b, Val &lv, Val &rv) {
             if (lt->kind == TY_FN || lt->kind == TY_VOID)
                 Error(b, "these values cannot be compared");
             // Two arrays or slices of one element type compare as slices,
-            // whatever their kinds (§4.5): `name == "x"`, `a[..] == b`.
+            // whatever their kinds: `name == "x"`, `a[..] == b`.
             auto elemof = [](TypeExpr *t) -> TypeExpr * {
                 if (t->kind == TY_SLICE) return t->sub;
                 if (t->kind == TY_ARRAY) return t->arr->sub;
@@ -1804,7 +1804,7 @@ inline Val TypeCheck::CheckBinaryResult(Binary *b, Val &lv, Val &rv) {
     if ((b->op == T_PLUS || b->op == T_MINUS || b->op == T_MUL || b->op == T_DIV || b->op == T_MOD) &&
         (!numeric(lt) || !numeric(rt))) {
         // Elementwise math on identical struct / fixed array types whose
-        // scalar leaves are uniformly int or float (§6.1).
+        // scalar leaves are uniformly int or float.
         if (TypeEq(lt, rt) && ElementwiseOK(lt)) {
             Val v;
             v.type = lt;
@@ -1834,7 +1834,7 @@ inline Val TypeCheck::CheckBinaryResult(Binary *b, Val &lv, Val &rv) {
     return v;
 }
 
-// The value of the numeric operation b, `lv op rv` (§6.1, §6.2): the
+// The value of the numeric operation b, `lv op rv`: the
 // operands' common type `ct`, which their nodes take, and the result's type
 // and constant. A `trial` changes no node and reports no error: it gives a
 // value of no type where b would be one.
@@ -1899,7 +1899,7 @@ inline Val TypeCheck::NumericBinary(Binary *b, Val lv, Val rv, TypeExpr *&ct, bo
             return v;
         case T_SHL: case T_SHR:
             // Shifts: the left operand's type is the result type; the count
-            // may be any integer type and is masked to the width (§6.2).
+            // may be any integer type and is masked to the width.
             if (!IsIntT(lt) || !IsIntT(rt))
                 return fail(cat("shift requires integer operands, got ", TypeStr(lt), " and ",
                                 TypeStr(rt)));
@@ -1961,7 +1961,7 @@ inline Val TypeCheck::NumericBinary(Binary *b, Val lv, Val rv, TypeExpr *&ct, bo
     }
 }
 
-// The value of the unary operation u, `-v` or `~v` (§6.2), as NumericBinary's
+// The value of the unary operation u, `-v` or `~v`, as NumericBinary's
 // is of a binary one: a trial changes no node, reports no error, and gives a
 // value of no type where u would be one.
 inline Val TypeCheck::NumericUnary(Unary *u, const Val &cv, bool trial) {
@@ -2010,7 +2010,7 @@ inline Val TypeCheck::NumericUnary(Unary *u, const Val &cv, bool trial) {
                 r.constfrom = v.constfrom;
                 if (!trial) u->litfloat = r.litfloat;
             } else if (ElementwiseOK(t)) {
-                // Elementwise negation (§6.1): every leaf is a signed
+                // Elementwise negation: every leaf is a signed
                 // integer, or every leaf a float.
                 if (auto leaf = UnsignedLeaf(t))
                     return fail(cat("cannot negate a value of type ", TypeStr(t),
@@ -2059,7 +2059,7 @@ inline Val TypeCheck::NumericUnary(Unary *u, const Val &cv, bool trial) {
     }
 }
 
-// An integer value converted to the float type ft (§6.3): a constant stays
+// An integer value converted to the float type ft: a constant stays
 // one, now of the float's value; a literal parameter is one only where it
 // is an integer.
 inline void TypeCheck::IntToFloat(Val &v, TypeExpr *ft) {
@@ -2078,7 +2078,7 @@ inline void TypeCheck::IntToFloat(Val &v, TypeExpr *ft) {
     v.type = ft;
 }
 
-// An integer converted to a float (§6.3) is a node of its own, an implicit
+// An integer converted to a float is a node of its own, an implicit
 // cast, which a later check of the node retargets rather than wraps again:
 // the conversion then survives whatever the optimizer makes of the integer
 // expression, such as an inlined call or a block reduced to its value.
@@ -2132,7 +2132,7 @@ inline void TypeCheck::RetypeFlexInt(Node *n, TypeExpr *t) {
 }
 
 // ------------------------------------------------------------------
-// Redundant casts (§6.3). Where an explicit cast's operand converts to its
+// Redundant casts. Where an explicit cast's operand converts to its
 // type implicitly (Converts), the checker follows the value the node would
 // have without the cast (CastAlt::alt) up the expression, and each consumer
 // judges it: a typed destination, an operator, a call's resolution, a cast
@@ -2143,7 +2143,7 @@ inline void TypeCheck::RetypeFlexInt(Node *n, TypeExpr *t) {
 // Whether the code being checked is generic -- in a function with type
 // parameters or untyped ones, in a function value's body, or in a function
 // or default declared in one -- so that the types around a cast may differ
-// from one specialization to the next (§7.7).
+// from one specialization to the next.
 inline bool TypeCheck::InGenericCode() {
     auto generic = [](const SFunction *sf) {
         if (!sf) return false;
@@ -2164,8 +2164,8 @@ inline bool TypeCheck::InGenericCode() {
     return false;
 }
 
-// Whether the numeric value v converts to the numeric type t implicitly
-// (§6.3): FitsAt's rules for numbers, recording nothing. A literal parameter
+// Whether the numeric value v converts to the numeric type t implicitly:
+// FitsAt's rules for numbers, recording nothing. A literal parameter
 // only widens: whether its literal fits a narrower type is each call site's
 // question, which the cast answers at run time.
 inline bool TypeCheck::Converts(const Val &v, TypeExpr *t) {
@@ -2186,7 +2186,7 @@ inline bool TypeCheck::Converts(const Val &v, TypeExpr *t) {
 }
 
 // Whether two numeric values are the same to whatever consumes them: of one
-// type, the same constant or none, and adapting alike (§6.3).
+// type, the same constant or none, and adapting alike.
 inline bool TypeCheck::SameNumVal(const Val &a, const Val &b) {
     if (!a.type || !b.type || !SameNum(LoadType(a.type), LoadType(b.type))) return false;
     if (a.ck != b.ck || a.litfloat != b.litfloat || a.litint != b.litint ||
@@ -2454,9 +2454,9 @@ inline void TypeCheck::ReportRedundantCasts() {
 
 // A name in a compile-time size, capacity or fill count, or in an integer
 // match pattern, checked in the scope it is written in. It resolves as any
-// name does (§11.1): a local of the name -- a parameter, or a variable around
+// name does: a local of the name -- a parameter, or a variable around
 // a nested function or a block --, a type parameter or a nested function
-// hides the global of the name and is no constant (§3.3, §8.1).
+// hides the global of the name and is no constant.
 // ConstIntValue cannot tell, and takes the global: a size is evaluated
 // wherever its type is compared, in another scope as often as not. In a
 // parameter default, which names what a top-level declaration would, a name
@@ -2485,7 +2485,7 @@ inline void TypeCheck::ConstNamesIn(TypeExpr *t) {
 // A size in the parameter or result types of a function or a block names
 // none of its parameters or type parameters: there the name means the
 // parameter, which holds an argument, or the type parameter, which stands
-// for a type, no constant, and hides the global of the name (§3.3, §11.1).
+// for a type, no constant, and hides the global of the name.
 inline void TypeCheck::SignatureNames(const vector<Param> &params,
                                       const vector<TypeExpr *> &rets,
                                       const vector<GenericParam> &generics) {
@@ -2517,8 +2517,8 @@ inline int64_t TypeCheck::FillCount(Node *n) {
     return ConstIntOrError(n, "array fill count");
 }
 
-// Array extents and fill counts obey the same integer types as expressions
-// (§3.3, §6.1–6.2). Keep known values separate from literal adaptability:
+// Array extents and fill counts obey the same integer types as expressions.
+// Keep known values separate from literal adaptability:
 // a named u8 constant is known here, but N + 1 still computes at u8 width.
 // This runs even while type declarations are validated, before globals have
 // been checked, so resolve their initializers without evaluating runtime code
@@ -2629,7 +2629,7 @@ inline bool TypeCheck::ConstIntValue(Node *n, Val &v, bool &literal,
 }
 
 // The length (`cap`: the capacity) of the global id names, where that is
-// fixed before the program runs (§3.3): the size of its written fixed-array
+// fixed before the program runs: the size of its written fixed-array
 // type (`cap`: the capacity of its written limited one), or else the length
 // of the array literal, fill literal or string literal it is initialized to,
 // or of the global it copies. As a named constant's value is, it is read off
@@ -2759,7 +2759,7 @@ inline Val TypeCheck::CheckVariantConst(Dot *d, SEnum *en) {
 }
 
 // ------------------------------------------------------------------
-// Struct and variant literals (§4.2). The per-node entry is
+// Struct and variant literals. The per-node entry is
 // StructLit::Check in typecheck_nodes.h.
 
 // Storing a harmless read can still check a destination's capacity, length
@@ -2990,7 +2990,7 @@ inline TypeCheck::LitDeep TypeCheck::CheckInits(StructLit *sl, vector<Field> &fi
 }
 
 // `self` in a field initializer: the field must hold a non-optional
-// relative reference to the very value being constructed (§3.9), which is
+// relative reference to the very value being constructed, which is
 // the one reference to it that exists before the value does. Optional
 // relative references are excluded because offset 0 is their null.
 inline void TypeCheck::CheckSelfInit(Node *n, TypeExpr *ft, TypeExpr *selft) {
@@ -3130,8 +3130,8 @@ inline bool TypeCheck::ExposedLater(VarDef *v) {
     return exposed;
 }
 
-// Whether variable v can be read again after the shrink being checked
-// (§5.1): in the rest of its statement, later in an open block at or
+// Whether variable v can be read again after the shrink being checked:
+// in the rest of its statement, later in an open block at or
 // inside v's scope, or anywhere in a loop that contains this point and
 // that v was declared outside of, whose next iteration runs the earlier
 // part of the body again; so too anywhere in the body of a function value

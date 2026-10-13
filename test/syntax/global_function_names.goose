@@ -1,4 +1,4 @@
-// A global variable and functions may share a name (§11.1): no variable can
+// A global variable and functions may share a name: no variable can
 // be called, so a call by that name names the functions, from the module
 // declaring the variable and from every other one, and any other use of the
 // name is the variable.

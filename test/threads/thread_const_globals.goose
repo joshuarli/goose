@@ -1,6 +1,6 @@
-// A `var` global of a const type can be assigned as a whole (§9.5), so
-// every program instance has its own, copied at spawn like any var global
-// (§11.2); only `let` and `const` globals are static data all instances
+// A `var` global of a const type can be assigned as a whole, so
+// every program instance has its own, copied at spawn like any var global;
+// only `let` and `const` globals are static data all instances
 // share. Deterministic: every worker is waited for before the next spawn.
 var level: const i64 = 3;
 var table: const i64[3] = [1, 2, 3];

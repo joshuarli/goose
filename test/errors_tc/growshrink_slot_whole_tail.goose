@@ -1,7 +1,7 @@
 // error: cannot pop w.q.tail: w.q.tail, evaluated earlier in the statement
 // error: may still refer into w.q.tail
 // w.q, read out of a field, leads to a struct whose tail is a grow-shrink
-// array (§5.2): the slice of that tail passed first views what the pop
+// array: the slice of that tail passed first views what the pop
 // frees.
 struct S { n: i64, tail: i64[>..<] }
 struct W { q: S& }

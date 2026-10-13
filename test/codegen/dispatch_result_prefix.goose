@@ -1,11 +1,11 @@
 // runtime-debug: a dispatch's variable-array result takes its slot's prefix.
-// A case-function dispatch (§8.2) whose arms return a variable array has
+// A case-function dispatch whose arms return a variable array has
 // every arm write the value in the arms' own layout, and where it lands in
 // a slot of another length storage -- a struct or variant field, an element
 // of an array literal, nested or of a grow-only array, a pushed element, a
 // declared local, an argument, a dispatched call's argument, a branch's
 // value, a returned value, one returned from further in, a global -- the
-// slot's prefix replaces the arms' after the switch (§4.2, §7.3). The arms
+// slot's prefix replaces the arms' after the switch. The arms
 // return u32, varint and u8 prefixes and the slots take varint (a second
 // byte past 127 elements), u8, u16, u32 and u64 ones, so the prefix both
 // shrinks and grows; adjacent values differ in length. An append of a

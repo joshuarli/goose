@@ -1,7 +1,7 @@
 // error: cannot clear ns while r is still used
 // r may be h, a reference into the elements ns names, as well as the node
 // the element links to: merged with the storage's own element, it is no
-// view the storage held (§5.1).
+// view the storage held.
 struct N { v: i64, next: N&? }
 fn f(ns: N[>..]&, c: bool, keep: N&) -> N& {
     let h = &ns[1];

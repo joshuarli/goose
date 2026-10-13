@@ -1,4 +1,4 @@
-// runtime-debug: infinities and NaNs have one text form (§3.7) on every
+// runtime-debug: infinities and NaNs have one text form on every
 // backend and C library: inf, -inf and nan, whatever the NaN's sign bit.
 // Every value comes from an array at run time, so no C compiler folds it.
 import std;

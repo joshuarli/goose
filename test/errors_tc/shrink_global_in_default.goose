@@ -2,7 +2,7 @@
 // The default count's call takes pops bs where the call stands, and later
 // stores a view of bs's element into G: the pop is judged against the
 // other globals once the program is checked, as one written at the call
-// would be (§5.1, §7.1).
+// would be.
 struct B { name: u8[..8], v: i64 }
 struct H { s: const u8[:] }
 var bs: B[>..] = [];

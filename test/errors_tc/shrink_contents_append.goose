@@ -1,5 +1,5 @@
 // error: cannot clear items while n is still used: it may hold a reference or slice into it; it was read out of h and may point into buf or items
-// Appending o copies its views of items into h (§5.1, §9.5).
+// Appending o copies its views of items into h.
 var items: u8[>..];
 fn main() {
     items.append("abcd");

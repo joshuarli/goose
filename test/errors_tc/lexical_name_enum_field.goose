@@ -1,5 +1,5 @@
 // error: array size N names a type parameter, not a constant
-// So do a generic enum's variants' fields (§3.3).
+// So do a generic enum's variants' fields.
 let N = 2;
 
 enum E<N> { A { a: u8[N], b: N }, B }

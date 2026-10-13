@@ -1,6 +1,6 @@
 // error: returning a reference rooted in b, which dies with this function
 // An array of holders pushed with null links holds what is stored into its
-// elements afterwards, through a reference push returned too (§9.2).
+// elements afterwards, through a reference push returned too.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 fn make(n: i64) -> N[>..] {

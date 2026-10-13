@@ -1,5 +1,5 @@
 // std's functions that move elements reorder arrays of relative references
-// (§3.9) as they do arrays of plain ones (stdlib_reference_elements.goose).
+// as they do arrays of plain ones (stdlib_reference_elements.goose).
 // The `T` locals and parameters they move an element through hold the plain
 // reference, as a `T` result does, and storing it back into an element
 // encodes it again: measured from that element's slot for a self-relative

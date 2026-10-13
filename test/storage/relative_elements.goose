@@ -1,5 +1,5 @@
-// Arrays whose elements are themselves relative references (§3.9), grown by
-// resize(n, v) and shrunk by pop (§3.3). The fill is evaluated once, as the
+// Arrays whose elements are themselves relative references, grown by
+// resize(n, v) and shrunk by pop. The fill is evaluated once, as the
 // plain reference it is, and each new slot stores its offset measured from
 // that slot, so every one of them leads to the same node; pop reads the
 // offset back from the slot it leaves and hands out the plain reference.
@@ -58,7 +58,7 @@ fn main() {
     g.push(pool[1]);
     g.resize(3, pool[pick(2)]);
     for l in g { print(l.v, " at ", pool.index_of(l)); }
-    // A grow-only array pops only as a statement of its own (§5.1).
+    // A grow-only array pops only as a statement of its own.
     let r = g.pop();                        // A copy of the node it led to.
     print(r.v);                             // 9
     g.pop();

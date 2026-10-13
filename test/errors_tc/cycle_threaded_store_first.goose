@@ -1,7 +1,7 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // error: passes c rooted differently from the cycle's entry call
 // A reference rooted at a context every call back into the cycle passes on
-// may be stored inside the cycle (§7.8), and walk's first statement relies on
+// may be stored inside the cycle, and walk's first statement relies on
 // that. Its call back then passes a local of the activation instead, a
 // reference to which the next activation would store into main's trail,
 // which the local does not outlive: the error is at the store, naming the
