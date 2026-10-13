@@ -92,8 +92,10 @@ EXTRAS = (
     "extra/guard_runs", "extra/lexer_tokens", "extra/shader", "extra/optimizer",
     "extra/stacks", "extra/loop_shapes", "extra/inline_fn_c", "extra/member_params",
     "extra/member_stores", "extra/compiler_units", "extra/runtime_lifecycle",
-    "extra/clang", "extra/extern_types", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
-    "extra/runtime_cache",
+    "extra/clang", "extra/extern_types", "extra/native_rebuild", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
+    "extra/runtime_cache", "extra/s8_struct_contract",
+    "extra/cli_paths", "extra/exit_race", "extra/huge_pages",
+    "extra/native_toolchain", "extra/native_builder",
 )
 
 
@@ -2039,6 +2041,43 @@ def main():
             r.fail("native toolchain", str(e))
     if cc and wanted("extra/native_toolchain"):
         r.show_task(native_toolchain)
+    # Flat structs need a cross-layer check: exported IR shape and native field
+    # access are available here; Lean adds validation and parity when built.
+    def s8_struct_contract():
+        tool = tc.REPO_ROOT / "semantics" / ".lake" / "build" / "bin" / "goose-semantics"
+        if cc and cc.name == "clang" and cc.style == "gcc":
+            clang_driver = cc.cc
+        elif clang:
+            clang_driver = clang.cc
+        else:
+            r.fail("S8 struct contract", "requires a Clang C driver for alignment sanitization")
+            return
+
+        scratch = tc.REPO_ROOT / ".work" / "tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env["TMPDIR"] = str(scratch)
+        command = ["sh", str(HERE / "semantics" / "s8_struct_contract.sh"),
+                   str(exe), str(tool), clang_driver]
+        try:
+            result = subprocess.run(command, cwd=tc.REPO_ROOT, env=env, capture_output=True,
+                                    timeout=300)
+        except subprocess.TimeoutExpired as e:
+            r.fail("S8 struct contract", tc.decode(e.stdout or b"") +
+                   tc.decode(e.stderr or b"") + "\n300s timeout")
+            return
+        except OSError as e:
+            r.fail("S8 struct contract", str(e))
+            return
+        output = tc.decode(result.stdout) + tc.decode(result.stderr)
+        if result.returncode != 0:
+            r.fail("S8 struct contract", output)
+        else:
+            r.ok("S8 source, Core/GIR shape, and packed field sanitizer")
+
+    if cc and wanted("extra/s8_struct_contract"):
+        r.section("S8 struct contract")
+        r.show_task(s8_struct_contract)
 
     def native_rebuild():
         from native_rebuild import check_native_rebuild
