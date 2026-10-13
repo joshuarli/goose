@@ -394,11 +394,21 @@ def Older : RootInst → RootInst → Prop
   | .local _ s' _, .local _ s _ => s' ≤ s
   | .local _ _ _, .global _ => False
 
+/-- Undeclared global storage has a concrete type that cannot grant resizable
+owner authority. Primitive, fixed array, and flat record storage may remain as ghosts. -/
+def NonOwnerStorage (v : Val) : Prop :=
+  ∃ T, T.flat = true ∧ FlatTy T v
+
+theorem NonOwnerStorage.not_resizable {E : Ty} {es : Array Val} :
+    ¬ NonOwnerStorage (.resizable E es) := by
+  rintro ⟨T, flat, typed⟩
+  cases T <;> simp_all [Ty.flat, FlatTy]
+
 /-- What holds of the whole store between any two steps of a run: every stored
 reference or slice denotes a typed location or run, it points into a root that
 ends no earlier than its holder, every scope instance in use was handed out,
 and the globals initialized so far hold values of their types. Global storage
-never holds a reference, including roots outside the initialized declarations. -/
+never holds a reference. Undeclared global roots have a concrete non-owner type. -/
 structure StoreInv (m : Module) (G : Nat) (s : St)
     (demanded : RootInst → Prop := fun _ => True) : Prop where
   live : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → demanded r → Held m G s.store v
@@ -406,6 +416,32 @@ structure StoreInv (m : Module) (G : Nat) (s : St)
   fresh : ∀ (a : ActId) (si : ScopeInst) (x : VarId), s.store.roots[RootInst.local a si x]? ≠ none → si < s.nextScope
   globals : ∀ (g : Nat) (gl : Global), g < G → m.globals[g]? = some gl → LocTy s.store ⟨.global g, []⟩ gl.ty
   globalNonRefs : ∀ (g : Nat) (v : Val), s.store.roots[RootInst.global g]? = some v → ¬ IsRef v
+  globalStorageDomain : ∀ g v, s.store.roots[RootInst.global g]? = some v →
+    g < m.globals.size ∨ NonOwnerStorage v
+
+/-- Actual resizable global storage must belong to the module declarations. -/
+theorem StoreInv.globalOwner_declared {m : Module} {G : Nat} {s : St}
+    {demanded : RootInst → Prop} {g : Nat} {E : Ty} {es : Array Val}
+    (invariant : StoreInv m G s demanded)
+    (owner : s.store.roots[RootInst.global g]? = some (.resizable E es)) :
+    g < m.globals.size := by
+  rcases invariant.globalStorageDomain g _ owner with declared | ghost
+  · exact declared
+  · exact False.elim (NonOwnerStorage.not_resizable ghost)
+
+/-- A typed resizable owner at a global header has a declared root. -/
+theorem StoreInv.globalResizable_declared {m : Module} {G : Nat} {s : St}
+    {demanded : RootInst → Prop} {g : Nat} {E : Ty}
+    (invariant : StoreInv m G s demanded)
+    (owner : LocTy s.store ⟨.global g, []⟩ (.grow E) ∨
+      LocTy s.store ⟨.global g, []⟩ (.growshrink E)) :
+    g < m.globals.size := by
+  rcases owner with owner | owner <;>
+    obtain ⟨value, read, typed⟩ := owner <;>
+    obtain ⟨stored, present, atRoot⟩ := (read_ok_iff _ _ _).mp read <;>
+    simp only [get_nil, Option.some.injEq] at atRoot <;> subst value <;>
+    cases stored <;> simp only [FlatTy] at typed
+  all_goals exact invariant.globalOwner_declared present
 
 /-- A local root is live at a program point only while its binding is visible
 and demanded by the remaining code. Globals stay live at every point. -/
@@ -425,7 +461,7 @@ theorem StoreInv.changeDemand {m : Module} {G : Nat} {s : St}
     {oldDemand newDemand : RootInst → Prop} (hi : StoreInv m G s oldDemand)
     (hsub : ∀ r, newDemand r → oldDemand r ∨ s.store.roots[r]? = none) :
     StoreInv m G s newDemand := by
-  refine ⟨?_, hi.age, hi.fresh, hi.globals, hi.globalNonRefs⟩
+  refine ⟨?_, hi.age, hi.fresh, hi.globals, hi.globalNonRefs, hi.globalStorageDomain⟩
   intro r v hv hnew
   rcases hsub r hnew with hold | hfree
   · exact hi.live r v hv hold
@@ -448,9 +484,11 @@ theorem StoreInv.except {m : Module} {G : Nat} {s : St} {s' : Store}
     (hglobals : ∀ g gl, skipped (.global g) → g < G → m.globals[g]? = some gl →
       LocTy s' ⟨.global g, []⟩ gl.ty)
     (hglobalNonRefs : ∀ g v, skipped (.global g) → s'.roots[RootInst.global g]? = some v →
-      ¬ IsRef v) :
+      ¬ IsRef v)
+    (hglobalDomain : ∀ g v, skipped (.global g) → s'.roots[RootInst.global g]? = some v →
+      g < m.globals.size ∨ NonOwnerStorage v) :
     StoreInv m G { s with store := s' } demanded := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro r v hv hd
     by_cases hs : skipped r
     · exact hnew r v hd hs hv
@@ -482,6 +520,11 @@ theorem StoreInv.except {m : Module} {G : Nat} {s : St} {s' : Store}
     · exact hglobalNonRefs g v hs hv
     · rw [hagree (.global g) hs] at hv
       exact hi.globalNonRefs g v hv
+  · intro g v hv
+    by_cases hs : skipped (.global g)
+    · exact hglobalDomain g v hs hv
+    · rw [hagree (.global g) hs] at hv
+      exact hi.globalStorageDomain g v hv
 
 /-- A held value remains valid after truncation when every location it denotes
 lies outside the removed suffix or in a retained element. -/
@@ -552,6 +595,23 @@ theorem truncate_ownerRoot_nonRef {s s' : Store} {o : Loc} {len : Nat} {v : Val}
   have sameValue : v = new := by simpa using hvalue.symm
   simpa [sameValue] using hnew
 
+/-- Shortening either owner kind preserves every concrete storage type of
+its header, although removed resizable elements need not remain accessible. -/
+private theorem truncate_value_flatTy {old new : Val} {len : Nat}
+    (result : old.truncate len = some new) :
+    ∀ T, FlatTy T old → FlatTy T new := by
+  cases old <;> simp only [Val.truncate] at result
+  all_goals first
+    | contradiction
+    | (split at result
+       · simp only [Option.some.injEq] at result
+         cases result
+         intro T typed
+         first
+           | exact flat_resizable_extract T _ _ len (by assumption) typed
+           | exact flat_limited_truncate T _ _ _ _ len (by assumption) typed
+       · contradiction)
+
 /-- Truncation preserves demanded holders when the demand analysis proves that
 each holder remains inside the new logical extent. -/
 theorem StoreInv.truncate {m : Module} {G : Nat} {s : St} {s' : Store}
@@ -581,11 +641,24 @@ theorem StoreInv.truncate {m : Module} {G : Nat} {s : St} {s' : Store}
   · exact hglobals
   · intro g v hroot hv
     exact truncate_ownerRoot_nonRef htruncate (by simpa [← hroot] using hv)
+  · intro g value hroot hvalue
+    obtain ⟨old, x, y, new, hold, hget, hwrite, hmodify, hroots⟩ :=
+      modify_spec s.store s' o (Val.truncate len) htruncate
+    have hglobal : s.store.roots[RootInst.global g]? = some old := by
+      simpa [hroot] using hold
+    rcases hi.globalStorageDomain g old hglobal with declared | ⟨T, flat, typed⟩
+    · exact Or.inl declared
+    · have typedNew := flat_modifyAt_type (Val.truncate len) o.path old new x y
+        hmodify hget hwrite (truncate_value_flatTy hwrite) T typed
+      rw [hroots] at hvalue
+      have equal : value = new := by simpa [← hroot] using hvalue.symm
+      subst value
+      exact Or.inr ⟨T, flat, typedNew⟩
 
 theorem StoreInv.flatStep {m : Module} {G : Nat} {s : St} {st' : Store}
     {demanded : RootInst → Prop} (hi : StoreInv m G s demanded) (h : FlatStep s.store st') :
     StoreInv m G { s with store := st' } demanded := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro r v hv hdem
     rcases h.back r v hv with h0 | ⟨hn, _⟩
     · exact (hi.live r v h0 hdem).mono h.le
@@ -608,6 +681,21 @@ theorem StoreInv.flatStep {m : Module} {G : Nat} {s : St} {st' : Store}
     rcases h.back (.global g) v hv with old | ⟨nonref, _⟩
     · exact hi.globalNonRefs g v old
     · exact nonref
+  · intro g v hv
+    have present : s.store.roots[RootInst.global g]? ≠ none := by
+      rcases h.back (.global g) v hv with old | ⟨_, present⟩
+      · simp [old]
+      · exact present
+    obtain ⟨old, hold⟩ := Option.ne_none_iff_exists'.1 present
+    rcases hi.globalStorageDomain g old hold with declared | ⟨T, flat, typed⟩
+    · exact Or.inl declared
+    · obtain ⟨new, hnew, refined⟩ := h.le (.global g) old hold
+      rw [hv] at hnew
+      cases hnew
+      obtain ⟨value, hvalue, types, _⟩ := refined [] old (get_nil old)
+      simp only [get_nil, Option.some.injEq] at hvalue
+      subst value
+      exact Or.inr ⟨T, flat, types T typed⟩
 
 /-- Binding a root that was absent. -/
 theorem StoreInv.bind {m : Module} {G : Nat} {s : St} {r : RootInst} {v : Val}
@@ -615,10 +703,11 @@ theorem StoreInv.bind {m : Module} {G : Nat} {s : St} {r : RootInst} {v : Val}
     (hfree : s.store.roots[r]? = none) (hv : Held m G s.store v)
     (hage : ∀ r', Targets v r' → Older r' r)
     (hfr : ∀ a si x, r = .local a si x → si < s.nextScope)
-    (hglobal : ∀ g, r = .global g → ¬ IsRef v) :
+    (hglobal : ∀ g, r = .global g → ¬ IsRef v)
+    (hglobalDomain : ∀ g, r = .global g → g < m.globals.size ∨ NonOwnerStorage v) :
     StoreInv m G { s with store := s.store.introduce r v } demanded := by
   have hle := introduce_le s.store r v hfree
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro r1 v1 h1 hdem
     rw [get_introduce] at h1
     by_cases hr : r = r1
@@ -649,6 +738,14 @@ theorem StoreInv.bind {m : Module} {G : Nat} {s : St} {r : RootInst} {v : Val}
       exact hglobal g root
     · simp only [root, if_false] at present
       exact hi.globalNonRefs g value present
+  · intro g value present
+    rw [get_introduce] at present
+    by_cases root : r = .global g
+    · simp only [root, if_true, Option.some.injEq] at present
+      subst value
+      exact hglobalDomain g root
+    · simp only [root, if_false] at present
+      exact hi.globalStorageDomain g value present
 
 /-- Replacing the reference a root holds by another. -/
 theorem rebind_le (s : Store) (r : RootInst) (old v : Val) (ho : s.roots[r]? = some old)
@@ -677,7 +774,7 @@ theorem StoreInv.rebind {m : Module} {G : Nat} {s : St} {r : RootInst} {old v : 
     (hv : Held m G s.store v) (hage : ∀ r', Targets v r' → Older r' r) :
     StoreInv m G { s with store := ⟨(s.store.roots.erase r).insert r v⟩ } demanded := by
   have hle := rebind_le s.store r old v ho hold
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro r1 v1 h1 hdem
     simp only [get_reinsert] at h1
     by_cases hr : r = r1
@@ -707,5 +804,12 @@ theorem StoreInv.rebind {m : Module} {G : Nat} {s : St} {r : RootInst} {old v : 
       exact hi.globalNonRefs g old ho hold
     simp only [get_reinsert, root, if_false] at present
     exact hi.globalNonRefs g value present
+  · intro g value present
+    have root : r ≠ .global g := by
+      intro equal
+      subst r
+      exact hi.globalNonRefs g old ho hold
+    simp only [get_reinsert, root, if_false] at present
+    exact hi.globalStorageDomain g value present
 
 end Goose.Core.Sound

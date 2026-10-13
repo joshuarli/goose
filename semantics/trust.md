@@ -5,8 +5,10 @@ about the Lean definitions it names and nothing else.
 
 The core soundness store invariant requires every stored global value to be
 non-reference storage, even at roots outside the initialized declarations.
-It permits flat values at undeclared roots. This prevents an untracked global
-slice holder from surviving a backing-owner truncation with invalid bounds.
+It permits values of concrete flat fixed types at undeclared roots; resizable
+and limited owners require declared global storage. This prevents untracked
+global slice holders and owner roots from bypassing initialization and shrink
+authority.
 
 Content-root annotations may include harmless extra roots. The core soundness
 frame therefore tracks owner authority separately from content typing: only

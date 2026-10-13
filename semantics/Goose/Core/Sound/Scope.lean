@@ -88,6 +88,46 @@ theorem Frame.ownerGam_older {future : List VarId} (h : Frame m W tenv penv env 
     ∀ a si x, r = RootInst.local a si x → si < s.nextScope :=
   h.gam_older (hg.mono h.ownerSubset)
 
+/-- A global owner admitted by an owner annotation is initialized once its
+access appears in the activation's allowed effects. It also has the declared
+resizable storage capability used to protect inherited observations. -/
+theorem Frame.ownerGlobalAuthority {future : List VarId}
+    {rho : List RootRef} {o : Loc} {E : Ty} {observation : Observation}
+    (frame : Frame m W tenv penv env s future) (permission : Perm m W)
+    (owner : Gam env W.ownerP rho o.root) (header : o.path = [])
+    (typed : LocTy s.store o (.grow E) ∨ LocTy s.store o (.growshrink E))
+    (recorded : ∀ t, t ∈ rootsTargets rho →
+      t ∈ W.E.reads ∨ t ∈ W.E.writes ∨ t ∈ W.E.grows ∨ t ∈ W.E.shrinks) :
+    ∀ g, o.root = .global g → g < W.G ∧ OwnerCap m observation (.global g) := by
+  intro g root
+  have oeq : o = ⟨.global g, []⟩ := by cases o; simp_all
+  rw [oeq] at typed
+  have declared := frame.inv.globalResizable_declared typed
+  have initialized : g < W.G := by
+    rcases permission with allGlobals | ⟨_, allowed⟩
+    · exact Nat.lt_of_lt_of_le declared allGlobals
+    · obtain ⟨reference, member, denotes⟩ := owner.mono frame.ownerSubset
+      rw [root] at denotes
+      cases reference with
+      | «local» x => rcases denotes with ⟨_, _, _, _, impossible⟩; cases impossible
+      | global other =>
+        have equal : RootInst.global g = RootInst.global other := denotes
+        cases equal
+        exact allowed _ (recorded _ (mem_rootsTargets_global member))
+      | param i =>
+        exact allowed _ (recorded _ (mem_rootsTargets_param member)) _ denotes g rfl
+  have present : m.globals[g]? ≠ none := by simp [declared]
+  obtain ⟨gl, declaration⟩ := Option.ne_none_iff_exists'.1 present
+  have storage := frame.inv.globals g gl initialized declaration
+  obtain ⟨value, read, flat⟩ := storage
+  have ownerType : ∃ element, gl.ty = .grow element ∨ gl.ty = .growshrink element := by
+    rcases typed with typed | typed <;>
+      obtain ⟨other, sameRead, typed⟩ := typed <;>
+      rw [read] at sameRead <;> cases sameRead <;>
+      cases value <;> simp only [FlatTy] at typed
+    all_goals cases htype : gl.ty <;> simp_all [FlatTy]
+  exact ⟨initialized, gl, declaration, ownerType⟩
+
 /-- Binding a variable of an open block whose root was absent. -/
 theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
     {x : VarId} {lv : LocalVar} {si : ScopeInst}
@@ -193,6 +233,7 @@ theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
         exact h.rootedOwners x' lv' si' v' h1 h2 h3 howner r ht
     inv := hInv.bind hfree hv.held (fun r ht => (hroot r ht).2)
       (fun a si' x' e => by cases e; exact (h.inst_lt hsi).2)
+      (fun g equal => by cases equal)
       (fun g equal => by cases equal)
     storage := by
       intro r T hstorage v' hpost
@@ -670,7 +711,7 @@ theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
         exact Or.inl ⟨ha, hx, hf, lv, hvar', hlk⟩
   have hInv : StoreInvAt m W.G { env with scopes := (sc, s.nextScope) :: env.scopes }
       tenv.visible future { s with nextScope := s.nextScope + 1 } := by
-    refine ⟨hInvOld.live, hInvOld.age, ?_, hInvOld.globals, hInvOld.globalNonRefs⟩
+    refine ⟨hInvOld.live, hInvOld.age, ?_, hInvOld.globals, hInvOld.globalNonRefs, hInvOld.globalStorageDomain⟩
     intro a si x hx
     exact Nat.lt_succ_of_lt (hInvOld.fresh a si x hx)
   exact
@@ -1010,7 +1051,7 @@ theorem StoreInv.release {s : St} {demanded : RootInst → Prop} (hi : StoreInv 
     by_cases hp : P r
     · rw [hgone r hp] at hv; cases hv
     · exact ⟨hp, by rw [← hagree r hp]; exact hv⟩
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro r v hv hdem
     obtain ⟨hp, h0⟩ := back r v hv
     exact (hi.live r v h0 hdem).agree hagree (hsurv r v hp h0)
@@ -1024,6 +1065,8 @@ theorem StoreInv.release {s : St} {demanded : RootInst → Prop} (hi : StoreInv 
     exact locTy_agree hagree (hglob g) (hi.globals g gl hg hgl)
   · intro g v hv
     exact hi.globalNonRefs g v (back (.global g) v hv).2
+  · intro g v hv
+    exact hi.globalStorageDomain g v (back (.global g) v hv).2
 
 end Agree
 
