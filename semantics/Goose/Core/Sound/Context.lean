@@ -314,7 +314,7 @@ def EvaluationContext.inputFuture {m plans path node phase}
 def EvaluationContext.outputFuture {m plans path node phase}
     (context : EvaluationContext m plans path node phase) : List VarId :=
   match context with
-  | .pilot _ active => active
+  | .pilot _ active => node.visibleAfter active
   | .shrink _ context => context.outputFuture
 
 def EvaluationContext.retained {m plans path node phase}
@@ -369,6 +369,177 @@ noncomputable def EvaluationContext.phase {m plans path node phase}
   match parent with
   | .pilot profile active => .pilot profile active
   | .shrink profile context => .shrink profile (context.phase primary targetPhase hphase).context
+
+theorem EvaluationContext.child_inputFuture {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) :
+    (parent.child primary index child childPhase hchild hchildPhase).inputFuture =
+      match parent with
+      | .pilot _ active => child.variables ++ node.visibleForChild active index
+      | .shrink _ context =>
+        child.variables ++
+          (context.child primary index child childPhase hchild hchildPhase).childFrame.future := by
+  cases parent with
+  | pilot profile active => rfl
+  | shrink profile context =>
+    let transition := context.child primary index child childPhase hchild hchildPhase
+    change child.variables ++ transition.context.expected.frame.future =
+      child.variables ++ transition.childFrame.future
+    rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+
+theorem EvaluationContext.child_outputFuture {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) :
+    (parent.child primary index child childPhase hchild hchildPhase).outputFuture =
+      match parent with
+      | .pilot _ active => child.visibleAfter (node.visibleForChild active index)
+      | .shrink _ context =>
+        (context.child primary index child childPhase hchild hchildPhase).childFrame.future := by
+  cases parent with
+  | pilot profile active => rfl
+  | shrink profile context =>
+    let transition := context.child primary index child childPhase hchild hchildPhase
+    change transition.context.expected.frame.future = transition.childFrame.future
+    rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+
+theorem EvaluationContext.phase_inputFuture {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
+    (hphase : DemandNodeHasPhase node targetPhase) :
+    (parent.phase primary targetPhase hphase).inputFuture = parent.inputFuture := by
+  cases parent with
+  | pilot profile active => rfl
+  | shrink profile context =>
+    let transition := context.phase primary targetPhase hphase
+    change node.variables ++ transition.context.expected.frame.future =
+      node.variables ++ context.expected.frame.future
+    rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+
+theorem EvaluationContext.phase_outputFuture {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
+    (hphase : DemandNodeHasPhase node targetPhase) :
+    (parent.phase primary targetPhase hphase).outputFuture = parent.outputFuture := by
+  cases parent with
+  | pilot profile active => rfl
+  | shrink profile context =>
+    let transition := context.phase primary targetPhase hphase
+    change transition.context.expected.frame.future = context.expected.frame.future
+    rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+
+theorem EvaluationContext.child_accessMatches_iff {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) (tenv : TEnv) (penv : PEnv) :
+    (parent.child primary index child childPhase hchild hchildPhase).AccessMatches tenv penv ↔
+      parent.AccessMatches tenv penv := by
+  cases parent <;> rfl
+
+theorem EvaluationContext.phase_accessMatches_iff {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
+    (hphase : DemandNodeHasPhase node targetPhase) (tenv : TEnv) (penv : PEnv) :
+    (parent.phase primary targetPhase hphase).AccessMatches tenv penv ↔
+      parent.AccessMatches tenv penv := by
+  cases parent <;> rfl
+
+theorem EvaluationContext.child_mayShrink_iff {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) (P : Nat → RootInst → Prop) (r : RootInst) :
+    (parent.child primary index child childPhase hchild hchildPhase).mayShrink P r ↔
+      parent.mayShrink P r := by
+  cases parent <;> rfl
+
+theorem EvaluationContext.phase_mayShrink_iff {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
+    (hphase : DemandNodeHasPhase node targetPhase) (P : Nat → RootInst → Prop) (r : RootInst) :
+    (parent.phase primary targetPhase hphase).mayShrink P r ↔ parent.mayShrink P r := by
+  cases parent <;> rfl
+
+theorem EvaluationContext.child_retained_subset {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) {alias : RetainedAlias}
+    (hmem : alias ∈ parent.retained) :
+    alias ∈ (parent.child primary index child childPhase hchild hchildPhase).retained := by
+  cases parent with
+  | pilot profile active => simp [EvaluationContext.child, EvaluationContext.retained] at hmem ⊢
+  | shrink profile context =>
+    let transition := context.child primary index child childPhase hchild hchildPhase
+    change alias ∈ transition.context.expected.frame.retained
+    have hchildRetained := DemandNode.childFrame_retains transition.childFrameEq hmem
+    have hphaseRetained := DemandNode.phaseFrame_retains transition.phaseFrameEq hchildRetained
+    rw [transition.expectedFrameEq]
+    exact hphaseRetained
+
+theorem EvaluationContext.phase_retained_subset {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
+    (hphase : DemandNodeHasPhase node targetPhase) {alias : RetainedAlias}
+    (hmem : alias ∈ parent.retained) :
+    alias ∈ (parent.phase primary targetPhase hphase).retained := by
+  cases parent with
+  | pilot profile active => simp [EvaluationContext.phase, EvaluationContext.retained] at hmem ⊢
+  | shrink profile context =>
+    let transition := context.phase primary targetPhase hphase
+    change alias ∈ transition.context.expected.frame.retained
+    have hretained := DemandNode.phaseFrame_retains transition.phaseFrameEq hmem
+    rw [transition.expectedFrameEq]
+    exact hretained
+
+theorem EvaluationContext.phase_activeMatches {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
+    (hphase : DemandNodeHasPhase node targetPhase) (tenv : TEnv)
+    (hactive : parent.ActiveMatches tenv) :
+    (parent.phase primary targetPhase hphase).ActiveMatches tenv := by
+  cases parent with
+  | pilot profile active => exact hactive
+  | shrink profile context =>
+    let transition := context.phase primary targetPhase hphase
+    change transition.context.expected.toPoint.ActiveMatches tenv.visible
+    intro x
+    have hpoint : transition.context.expected.toPoint.active =
+        transition.phaseFrame.active := by
+      rw [DemandExpectedPoint.toPoint]
+      rw [transition.expectedFrameEq]
+    rw [hpoint, DemandNode.phaseFrame_active transition.phaseFrameEq]
+    exact hactive x
+
+theorem EvaluationContext.child_activeMatches {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) (tenv tenv' : TEnv)
+    (hactive : parent.ActiveMatches tenv)
+    (hvisible : ∀ x, x ∈ tenv'.visible ↔
+      x ∈ node.visibleForChild tenv.visible index) :
+    (parent.child primary index child childPhase hchild hchildPhase).ActiveMatches tenv' := by
+  cases parent with
+  | pilot profile active =>
+    change ∀ x, x ∈ node.visibleForChild active index ↔ x ∈ tenv'.visible
+    intro x
+    exact (node.visibleForChild_mem_congr index hactive x).trans (hvisible x).symm
+  | shrink profile context =>
+    let transition := context.child primary index child childPhase hchild hchildPhase
+    change transition.context.expected.toPoint.ActiveMatches tenv'.visible
+    intro x
+    have hpoint : transition.context.expected.toPoint.active =
+        transition.phaseFrame.active := by
+      rw [DemandExpectedPoint.toPoint]
+      rw [transition.expectedFrameEq]
+    rw [hpoint, DemandNode.phaseFrame_active transition.phaseFrameEq,
+      DemandNode.childFrame_active transition.childFrameEq]
+    exact (node.visibleForChild_mem_congr index hactive x).trans (hvisible x).symm
 
 /-- Select the implementation body with its exact source-node index. -/
 noncomputable def ContextPlanSelection.bodyContext {m : Module}
