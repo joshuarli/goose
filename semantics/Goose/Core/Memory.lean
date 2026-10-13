@@ -53,6 +53,8 @@ inductive Val
   /-- The element type is part of the value, so growing an empty array cannot
   change which array type it has. -/
   | resizable (elem : Ty) (elems : Array Val)
+  /-- Only written slots have values; the visible length may be below this extent. -/
+  | limited (elem : Ty) (capacity : Nat) (slots : Array Val) (len : Nat)
   | ref (l : Loc)
   /-- A run of `len` elements starting at element `start` of the array at `l`. -/
   | slice (l : Loc) (start len : Nat)
@@ -81,6 +83,7 @@ def FaultKind.tag : FaultKind → String
 def Val.elems? : Val → Option (Array Val)
   | .fixed es => some es
   | .resizable _ es => some es
+  | .limited _ _ slots _ => some slots
   | _ => none
 
 /-- Storage selectors may traverse record fields; array operations may not. -/
@@ -112,6 +115,12 @@ def Val.modifyAt? : Val → List Nat → (Val → Option Val) → Option Val
     if h : i < es.size then
       match es[i].modifyAt? rest f with
       | some e => some (.resizable E (es.set i e))
+      | none => none
+    else none
+  | .limited E capacity slots len, i :: rest, f =>
+    if h : i < slots.size then
+      match slots[i].modifyAt? rest f with
+      | some e' => some (.limited E capacity (slots.set i e' h) len)
       | none => none
     else none
   | .record sid fs, i :: rest, f =>
@@ -158,6 +167,11 @@ def Store.write (s : Store) (l : Loc) (v : Val) : Except FaultKind Store :=
 /-- Append elements to a resizable array value. -/
 def Val.appendAll (vs : Array Val) : Val → Option Val
   | .resizable E es => some (.resizable E (es ++ vs))
+  | .limited E capacity slots len =>
+    if len + vs.size ≤ capacity then
+      let written := (slots.extract 0 len) ++ vs
+      some (.limited E capacity (written ++ slots.extract written.size slots.size) written.size)
+    else none
   | _ => none
 
 /-- The length of the resizable array at `l`. -/
@@ -165,6 +179,7 @@ def Store.length (s : Store) (l : Loc) : Except FaultKind Nat :=
   match s.read l with
   | .error k => .error k
   | .ok (.resizable _ es) => .ok es.size
+  | .ok (.limited _ _ _ len) => .ok len
   | .ok _ => .error .shape
 
 /-- Append elements to the resizable array at `l`; yields the index of the first. -/
@@ -175,6 +190,16 @@ def Store.append (s : Store) (l : Loc) (vs : Array Val) : Except FaultKind (Stor
     match s.modify l (Val.appendAll vs) with
     | .ok s' => .ok (s', n)
     | .error k => .error k
+
+/-- Reduction releases resizable elements and retains every written limited slot. -/
+def Val.truncate (len : Nat) : Val → Option Val
+  | .resizable E es => if len ≤ es.size then some (.resizable E (es.extract 0 len)) else none
+  | .limited E capacity slots old =>
+    if len ≤ old then some (.limited E capacity slots len) else none
+  | _ => none
+
+def Store.truncate (s : Store) (l : Loc) (len : Nat) : Except FaultKind Store :=
+  s.modify l (Val.truncate len)
 
 /-- Bind a root to an object, replacing any earlier binding. -/
 def Store.introduce (s : Store) (r : RootInst) (v : Val) : Store :=

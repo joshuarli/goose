@@ -243,7 +243,7 @@ def laterGlobalFieldAddress (m : Module) : Module :=
         vars := #[]
         body := .mk 0 [.expr (.ref .mutable (.field (.global 1) 1)) 0,
         .ret (some (.lit .i64 0)) 0] none,
-        summary := .known ⟨[], [], [], [], false, false⟩ }
+        summary := .known ⟨[], [], [], [], [], false, false⟩ }
     { m with
       globals := #[⟨"first", .int .i64, .immutable, .call 1 [] 0, 0⟩,
         ⟨"later", t, .immutable, .structLit t [.lit .u8 1, .lit .i64 40, .lit .i16 7], 0⟩]

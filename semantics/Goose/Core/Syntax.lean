@@ -60,6 +60,8 @@ inductive Ty
   | unit
   | arr (elem : Ty) (count : Nat)
   | grow (elem : Ty)
+  | growshrink (elem : Ty)
+  | limited (elem : Ty) (capacity : Nat)
   | ref (m : Mutability) (target : Ty)
   | slice (m : Mutability) (elem : Ty)
   | tuple (parts : TyList)
@@ -130,7 +132,8 @@ inductive Expr
   | not (e : Expr)
   | conv (k : ConvKind) (target : Ty) (e : Expr) (org : OriginId)
   | call (c : ContextId) (args : List Arg) (org : OriginId)
-  | push (owner : Place) (e : Expr)
+  | push (owner : Place) (e : Expr) (org : Option OriginId := none)
+  | pop (owner : Place) (org : OriginId)
   | ifE (c : Expr) (thenB elseB : Block)
   | blockE (b : Block)
   | arrLit (t : Ty) (es : List Expr)
@@ -156,6 +159,10 @@ inductive Stmt
   | rebind (x : VarId) (e : Expr) (org : OriginId)
   | expr (e : Expr) (org : OriginId)
   | append (owner : Place) (src : View) (org : OriginId)
+  | popN (owner : Place) (count : Expr) (org : OriginId)
+  | resize (owner : Place) (size : Expr) (fill : Option Expr) (org : OriginId)
+  | clear (owner : Place) (org : OriginId)
+  | assignWhole (owner : Place) (replacement : Expr) (org : OriginId)
   | ifS (c : Expr) (thenB : Block) (elseB : Option Block) (org : OriginId)
   | while (c : Expr) (body : Block) (org : OriginId)
   | forRange (x : VarId) (lo hi : Expr) (body : Block) (org : OriginId)
@@ -204,6 +211,7 @@ structure Summary where
   reads : List Target
   writes : List Target
   grows : List Target
+  shrinks : List Target
   rebinds : List Target
   aborts : Bool
   outputs : Bool
@@ -281,6 +289,11 @@ inductive AbortKind
   | userAbort
   | intOverflow
   | castRange
+  | popEmpty
+  | popNRange
+  | resizeNegative
+  | resizeFill
+  | capacity
   deriving DecidableEq, Repr, Inhabited
 
 def AbortKind.tag : AbortKind → String
@@ -292,6 +305,11 @@ def AbortKind.tag : AbortKind → String
   | .userAbort => "user_abort"
   | .intOverflow => "int_overflow"
   | .castRange => "cast_range"
+  | .popEmpty => "pop_empty"
+  | .popNRange => "pop_n_range"
+  | .resizeNegative => "resize_negative"
+  | .resizeFill => "resize_fill"
+  | .capacity => "capacity"
 
 def AbortKind.ofTag? : String → Option AbortKind
   | "div_zero" => some .divZero
@@ -302,6 +320,11 @@ def AbortKind.ofTag? : String → Option AbortKind
   | "user_abort" => some .userAbort
   | "int_overflow" => some .intOverflow
   | "cast_range" => some .castRange
+  | "pop_empty" => some .popEmpty
+  | "pop_n_range" => some .popNRange
+  | "resize_negative" => some .resizeNegative
+  | "resize_fill" => some .resizeFill
+  | "capacity" => some .capacity
   | _ => none
 
 def AbortKind.ofNum : NumAbort → AbortKind

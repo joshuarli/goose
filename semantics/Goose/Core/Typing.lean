@@ -23,6 +23,8 @@ inductive Rule
   | result
   | call
   | summary
+  | shrink
+  | whole
   deriving DecidableEq, Repr
 
 def Rule.tag : Rule → String
@@ -33,6 +35,8 @@ def Rule.tag : Rule → String
   | .result => "V-RESULT"
   | .call => "V-CALL"
   | .summary => "V-SUMMARY"
+  | .shrink => "V-SHRINK"
+  | .whole => "V-WHOLE"
 
 structure Rejection where
   rule : Rule
@@ -59,6 +63,13 @@ def checkResolvedType (m : Module) : Ty → V Unit
       reject .type "struct type disagrees with its nominal descriptor"
     checkResolvedTypes m fs
   | .arr e _ | .grow e | .ref _ e | .slice _ e => checkResolvedType m e
+  | .growshrink e => do
+    unless m.profile == .shrink && e.flat do reject .type "growshrink requires core-shrink and flat elements"
+    checkResolvedType m e
+  | .limited e capacity => do
+    unless m.profile == .shrink && e.flat && capacity > 0 && capacity ≤ 2^31 - 1 do
+      reject .type "limited requires core-shrink, flat elements and positive wire capacity"
+    checkResolvedType m e
   | .tuple ts => checkResolvedTypes m ts
   | .int _ | .bool | .unit => pure ()
 
@@ -103,7 +114,7 @@ def checkStructTables (m : Module) : V Unit := do
 def Ty.refTarget : Ty → Bool
   | .int _ | .bool => true
   | .arr e _ => e.flat
-  | .grow e => e.flat
+  | .grow e | .growshrink e | .limited e _ => e.flat
   | .structT _ fs => fs.flat
   | _ => false
 
@@ -111,7 +122,7 @@ def Ty.refTarget : Ty → Bool
 def Ty.storable : Ty → Bool
   | .int _ | .bool => true
   | .arr e _ => e.flat
-  | .grow e => e.flat
+  | .grow e | .growshrink e | .limited e _ => e.flat
   | .structT _ fs => fs.flat
   | .ref _ t => t.refTarget
   | .slice _ e => e.flat
@@ -157,6 +168,23 @@ def Place.sliceArg : Place → Bool
 def Ty.isRefLike : Ty → Bool
   | .ref _ _ | .slice _ _ => true
   | _ => false
+
+def Ty.ownerElem? : Ty → Option Ty
+  | .grow e | .growshrink e | .limited e _ => some e
+  | _ => none
+
+mutual
+/-- Owner-valued expressions are fresh literal runs selected by structured expressions. -/
+def Expr.freshOwner : Expr → Bool
+  | .arrLit .. => true
+  | .ifE _ t f => t.freshOwner && f.freshOwner
+  | .blockE b => b.freshOwner
+  | _ => false
+
+def Block.freshOwner : Block → Bool
+  | .mk _ _ (some e) => e.freshOwner
+  | .mk _ _ none => false
+end
 
 def Mutability.atLeast : Mutability → Mutability → Bool
   | .mutable, _ => true
@@ -298,6 +326,24 @@ def checkType (env : TEnv) (t : Ty) : T Unit := fun n => do
   checkResolvedType env.mod t
   pure ((), n)
 
+def requireShrink (env : TEnv) : T Unit :=
+  unless env.mod.profile == .shrink do rej .type "operation requires core-shrink"
+
+def ownerElement (t : Ty) : T Ty :=
+  match t.ownerElem? with
+  | some e => pure e
+  | none => rej .type "operation requires a grow, growshrink or limited owner"
+
+/-- A mutable whole-owner reference carries contents authority into its callee. -/
+def PlaceInfo.referenceWritable (info : PlaceInfo) (profile : ArtifactProfile) : Bool :=
+  if profile == .shrink && info.ty.ownerElem?.isSome then info.contentsWritable
+  else info.bindingWritable
+
+def checkOwnerRun (env : TEnv) (e : Expr) (t : Ty) : T Unit :=
+  if env.mod.profile == .shrink && t.ownerElem?.isSome && !e.freshOwner then
+    rej .type "owner initializer or replacement must have fresh literal-run leaves"
+  else pure ()
+
 /-- Resolved types carry the descriptor's field types, never a second nominal definition. -/
 def structDef (env : TEnv) (t : Ty) : T StructDef := do
   unless env.mod.profile == .shrink do rej .type "structs require core-shrink"
@@ -373,7 +419,7 @@ def checkInitCall (env : TEnv) (callee : Impl) : T Unit :=
     | .known s =>
       let later (t : Target) : Bool :=
         match t with | .global g => g ≥ gi | .param _ => false
-      if (s.reads ++ s.writes ++ s.grows).any later then
+      if (s.reads ++ s.writes ++ s.grows ++ s.shrinks).any later then
         rej .call s!"initializer of global {gi} calls {callee.name}, which touches a later global"
       else pure ()
 
@@ -484,7 +530,7 @@ def tyView (env : TEnv) : View → T (Ty × Bool)
     let mu := placeInfo.contentsWritable
     match t with
     | .arr el _ => pure (el, mu)
-    | .grow el => pure (el, mu)
+    | .grow el | .growshrink el | .limited el _ => pure (el, mu)
     | _ => rej .type "a view of something that is not an array"
   | .val e => do
     match (← tyExpr env e) with
@@ -507,7 +553,7 @@ def tyExpr (env : TEnv) : Expr → T Ty
   | .ref m p => do
     let placeInfo ← tyPlace env p
     let t := placeInfo.ty
-    let mu := placeInfo.bindingWritable
+    let mu := placeInfo.referenceWritable env.mod.profile
     checkFieldReference p placeInfo
     unless t.refTarget do rej .type "a reference to a value of a type no reference may target"
     if m == .mutable then requireWrite "a mutable reference" mu
@@ -579,17 +625,26 @@ def tyExpr (env : TEnv) : Expr → T Ty
     tyArgs env callee callee.params.toList args
     checkInitCall env callee
     callResultTy callee
-  | .push owner a => do
+  | .push owner a org => do
+    match env.mod.profile, org with
+    | .pilot, none => pure ()
+    | .shrink, some o => checkOrg env o
+    | _, _ => rej .type "push origin does not match the artifact profile"
     let placeInfo ← tyPlace env owner
     let t := placeInfo.ty
-    let mu := placeInfo.bindingWritable
-    match t with
-    | .grow el =>
-      let argTy ← tyExpr env a
-      unless argTy == el do rej .type "a pushed element of another type than the array's"
-      requireWrite "push" mu
-      pure (.ref .mutable el)
-    | _ => rej .type "push to something that is not a grow-only array"
+    let el ← ownerElement t
+    let argTy ← tyExpr env a
+    unless argTy == el do rej .type "a pushed element of another type than the array's"
+    let writable := if env.mod.profile == .pilot then placeInfo.bindingWritable else placeInfo.contentsWritable
+    requireWrite "push" writable
+    pure (.ref .mutable el)
+  | .pop owner org => do
+    requireShrink env
+    checkOrg env org
+    let placeInfo ← tyPlace env owner
+    let el ← ownerElement placeInfo.ty
+    requireWrite "pop" placeInfo.contentsWritable
+    pure el
   | .ifE c t f => do
     requireBool "the condition of `if`" (← tyExpr env c)
     let tt ← tyBlock (exprEnv env) [] t
@@ -605,8 +660,12 @@ def tyExpr (env : TEnv) : Expr → T Ty
       unless es.length = k do rej .type s!"array literal of {es.length} elements for a type of {k}"
       tyExprsAs env el es
       pure t
-    | .grow el =>
+    | .grow el | .growshrink el =>
       unless el.flat do rej .type "array elements must be flat"
+      tyExprsAs env el es
+      pure t
+    | .limited el capacity =>
+      unless el.flat && es.length ≤ capacity do rej .type "limited literal exceeds capacity or has nonflat elements"
       tyExprsAs env el es
       pure t
     | _ => rej .type "array literal of a type that is not an array"
@@ -652,7 +711,7 @@ def tyArgs (env : TEnv) (callee : Impl) : List Param → List Arg → T Unit
     | .byRef m p' =>
       let placeInfo ← tyPlace env p'
       let t := placeInfo.ty
-      let mu := placeInfo.bindingWritable
+      let mu := placeInfo.referenceWritable env.mod.profile
       checkFieldReference p' placeInfo
       -- A slice may be passed by reference only from a `var` slice variable or
       -- through a reference to one.
@@ -694,6 +753,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     checkOrg env o
     let lv ← declare env x sc
     let t ← tyExpr env e
+    checkOwnerRun env e lv.ty
     -- A writable reference or slice may initialize a read-only one.
     unless t.passableTo lv.ty do rej .type s!"variable {x} is declared with another type than its initializer's"
     pure { env with visible := x :: env.visible }
@@ -736,14 +796,50 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     checkOrg env o
     let placeInfo ← tyPlace env owner
     let t := placeInfo.ty
-    let mu := placeInfo.bindingWritable
-    match t with
-    | .grow el =>
-      let (sel, _) ← tyView env src
-      unless sel == el do rej .type "appended elements of another type than the array's"
-      requireWrite "append" mu
-      pure env
-    | _ => rej .type "append to something that is not a grow-only array"
+    let el ← ownerElement t
+    let (sel, _) ← tyView env src
+    unless sel == el do rej .type "appended elements of another type than the array's"
+    let writable := if env.mod.profile == .pilot then placeInfo.bindingWritable else placeInfo.contentsWritable
+    requireWrite "append" writable
+    pure env
+  | .popN owner count org => do
+    requireShrink env
+    checkOrg env org
+    let info ← tyPlace env owner
+    let _ ← ownerElement info.ty
+    let _ ← requireInt "pop_n count" (← tyExpr env count)
+    requireWrite "pop_n" info.contentsWritable
+    pure env
+  | .resize owner size fill org => do
+    requireShrink env
+    checkOrg env org
+    let info ← tyPlace env owner
+    let el ← ownerElement info.ty
+    let _ ← requireInt "resize size" (← tyExpr env size)
+    match fill with
+    | none => pure ()
+    | some e => unless (← tyExpr env e) == el do rej .type "resize fill has another element type"
+    requireWrite "resize" info.contentsWritable
+    pure env
+  | .clear owner org => do
+    requireShrink env
+    checkOrg env org
+    let info ← tyPlace env owner
+    let _ ← ownerElement info.ty
+    requireWrite "clear" info.contentsWritable
+    pure env
+  | .assignWhole owner replacement org => do
+    requireShrink env
+    checkOrg env org
+    let info ← tyPlace env owner
+    match info.ty with
+    | .grow _ | .growshrink _ => pure ()
+    | _ => rej .type "whole replacement requires a grow or growshrink owner"
+    let rt ← tyExpr env replacement
+    unless rt == info.ty do rej .type "whole replacement has another owner type"
+    checkOwnerRun env replacement info.ty
+    requireWrite "whole replacement" (info.bindingWritable && info.contentsWritable)
+    pure env
   | .ifS c t f o => do
     checkOrg env o
     requireBool "the condition of `if`" (← tyExpr env c)
@@ -827,7 +923,8 @@ def checkParam (impl : Impl) (i : Nat) : V Unit :=
         reject .type s!"parameter {i} refers to a type no reference may target"
     | .byRef, _ => reject .type s!"by-reference parameter {i} is not of reference type"
     | .byValue, .ref _ _ => reject .type s!"by-value parameter {i} is of reference type"
-    | .byValue, .grow _ => reject .type s!"by-value parameter {i} is a growable array"
+    | .byValue, .grow _ | .byValue, .growshrink _ | .byValue, .limited _ _ =>
+      reject .type s!"by-value parameter {i} is a noncopyable owner"
     | .byValue, t => unless t.storable do reject .type s!"parameter {i} has a type no variable may have"
 
 /-- Check an implementation: its parameters, its body and that a function with
@@ -862,6 +959,7 @@ def checkGlobal (m : Module) (g : GlobalId) (gl : Global) : V Unit := do
     mod := m, impl := none, vars := #[], visible := [], loops := 0, inExpr := true, scopes := []
     globalLimit := g, initializing := some g }
   let (t, _) ← (tyExpr env gl.init).run 0
+  let _ ← (checkOwnerRun env gl.init gl.ty).run 0
   unless t == gl.ty do reject .type s!"initializer of global {gl.name} has another type than the global"
 
 end Goose.Core

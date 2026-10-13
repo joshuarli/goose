@@ -248,7 +248,7 @@ def resolveStruct (types : Array Ty) (sizes : Array Nat) (d : RawStructDef) :
 
 /-- Decode one entry of the type table; components must be earlier entries. -/
 def decTypeEntry (types : Array Ty) (sizes : Array Nat) (j : Json)
-    (structs : Array RawStructDef := #[]) :
+    (structs : Array RawStructDef := #[]) (profile : ArtifactProfile := .pilot) :
     Except String (Ty × Nat) := do
   let (tag, fs) ← record j "type"
   let comp (x : Json) : Except String (Ty × Nat) := do
@@ -293,16 +293,28 @@ def decTypeEntry (types : Array Ty) (sizes : Array Nat) (j : Json)
     let some raw := structs[sid]? | fail "struct id"
     let (d, z) ← resolveStruct types sizes raw
     pure (.structT sid (TyList.ofList (d.fields.toList.map (·.ty))), z)
+  | "growshrink" => do
+    unless profile == .shrink do fail "growshrink requires core-shrink"
+    arity tag fs 1
+    let (e, z) ← comp fs[0]!
+    pure (.growshrink e, z + 1)
+  | "limited" => do
+    unless profile == .shrink do fail "limited requires core-shrink"
+    arity tag fs 2
+    let (e, z) ← comp fs[0]!
+    let capacity ← asNat fs[1]! "limited capacity"
+    if capacity == 0 then fail "limited capacity must be positive"
+    pure (.limited e capacity, z + 1)
   | _ => fail s!"unknown type tag {tag.quote}"
 
-def decTypesWithStructs (j : Json) (rawStructs : Array RawStructDef) :
+def decTypesWithStructs (j : Json) (rawStructs : Array RawStructDef) (profile : ArtifactProfile) :
     Except String (Array Ty × Array StructDef) := do
   let entries ← asArr j "types"
   let mut types : Array Ty := #[]
   let mut sizes : Array Nat := #[]
   let mut definitions : Array (Option StructDef) := Array.replicate rawStructs.size none
   for h : i in [0:entries.size] do
-    let (t, z) ← match decTypeEntry types sizes entries[i] rawStructs with
+    let (t, z) ← match decTypeEntry types sizes entries[i] rawStructs profile with
       | .ok r => pure r
       | .error e => fail s!"type {i}: {e}"
     if z > maxTypeTreeSize then fail s!"type {i}: tree size over {maxTypeTreeSize}"
@@ -493,9 +505,17 @@ def decExpr : Nat → Ctx → Json → R Expr
       let args ← (← liftE (asArr fs[1]! "e_call arguments")).toList.mapM (decArg f cx)
       pure (.call c args (← liftE (decOrg cx fs[2]!)))
     | "e_push" => do
+      liftE (arity tag fs (if cx.profile == .shrink then 3 else 2))
+      let p ← decPlace f cx fs[0]!
+      let e ← decExpr f cx fs[1]!
+      let org ← if cx.profile == .shrink then do pure (some (← liftE (decOrg cx fs[2]!)))
+        else pure none
+      pure (.push p e org)
+    | "e_pop" => do
+      unless cx.profile == .shrink do throw "e_pop requires core-shrink"
       liftE (arity tag fs 2)
       let p ← decPlace f cx fs[0]!
-      pure (.push p (← decExpr f cx fs[1]!))
+      pure (.pop p (← liftE (decOrg cx fs[1]!)))
     | "e_if" => do
       liftE (arity tag fs 3)
       let c ← decExpr f cx fs[0]!
@@ -581,6 +601,33 @@ def decStmt : Nat → Ctx → Json → R Stmt
       let p ← decPlace f cx fs[0]!
       let v ← decView f cx fs[1]!
       pure (.append p v (← liftE (decOrg cx fs[2]!)))
+    | "s_pop_n" => do
+      unless cx.profile == .shrink do throw "s_pop_n requires core-shrink"
+      liftE (arity tag fs 3)
+      let p ← decPlace f cx fs[0]!
+      let e ← decExpr f cx fs[1]!
+      pure (.popN p e (← liftE (decOrg cx fs[2]!)))
+    | "s_resize" => do
+      unless cx.profile == .shrink do throw "s_resize requires core-shrink"
+      liftE (arity tag fs 4)
+      let p ← decPlace f cx fs[0]!
+      let size ← decExpr f cx fs[1]!
+      let fill ← match (← liftE (asArr fs[2]! "s_resize fill")).toList with
+        | [] => pure none
+        | [e] => do pure (some (← decExpr f cx e))
+        | _ => throw "s_resize: at most one fill"
+      pure (.resize p size fill (← liftE (decOrg cx fs[3]!)))
+    | "s_clear" => do
+      unless cx.profile == .shrink do throw "s_clear requires core-shrink"
+      liftE (arity tag fs 2)
+      let p ← decPlace f cx fs[0]!
+      pure (.clear p (← liftE (decOrg cx fs[1]!)))
+    | "s_assign_whole" => do
+      unless cx.profile == .shrink do throw "s_assign_whole requires core-shrink"
+      liftE (arity tag fs 3)
+      let p ← decPlace f cx fs[0]!
+      let e ← decExpr f cx fs[1]!
+      pure (.assignWhole p e (← liftE (decOrg cx fs[2]!)))
     | "s_if" => do
       liftE (arity tag fs 4)
       let c ← decExpr f cx fs[0]!
@@ -663,19 +710,22 @@ def decTargets (nGlobals nParams : Nat) (j : Json) (what : String) : Except Stri
   unless targetsSorted ts do fail s!"{what}: targets unsorted or repeated"
   pure ts
 
-def decSummary (nGlobals nParams : Nat) (j : Json) : Except String SummaryAnn := do
+def decSummary (profile : ArtifactProfile) (nGlobals nParams : Nat) (j : Json) : Except String SummaryAnn := do
   let (tag, fs) ← record j "summary"
   match tag with
   | "summary_unknown" => do arity tag fs 0; pure .unknown
   | "summary" => do
-    arity tag fs 6
+    let shrink := profile == .shrink
+    let shift := if shrink then 1 else 0
+    arity tag fs (if shrink then 7 else 6)
     pure (.known {
       reads := ← decTargets nGlobals nParams fs[0]! "summary reads"
       writes := ← decTargets nGlobals nParams fs[1]! "summary writes"
       grows := ← decTargets nGlobals nParams fs[2]! "summary grows"
-      rebinds := ← decTargets nGlobals nParams fs[3]! "summary rebinds"
-      aborts := ← asFlag fs[4]! "summary aborts"
-      outputs := ← asFlag fs[5]! "summary outputs" })
+      shrinks := ← if shrink then decTargets nGlobals nParams fs[3]! "summary shrinks" else pure []
+      rebinds := ← decTargets nGlobals nParams fs[3 + shift]! "summary rebinds"
+      aborts := ← asFlag fs[4 + shift]! "summary aborts"
+      outputs := ← asFlag fs[5 + shift]! "summary outputs" })
   | _ => fail s!"unknown summary tag {tag.quote}"
 
 def decLocal (cx : Ctx) (j : Json) : R LocalVar := do
@@ -719,7 +769,7 @@ def decImplBody (cx : Ctx) (j : Json) : R Impl := do
   for lv in locals do
     unless lv.scope < nBlocks do
       throw s!"variable {lv.name.quote}: scope {lv.scope} is not among the {nBlocks} scopes"
-  let summary ← liftE (decSummary cx.nGlobals params.size fs[5]!)
+  let summary ← liftE (decSummary cx.profile cx.nGlobals params.size fs[5]!)
   pure { name, params, results := results.toArray, vars := locals, body, summary }
 
 def decImpl (cx : Ctx) (j : Json) : Except String Impl :=
@@ -820,7 +870,7 @@ def decodeModule (j : Json) : Except String Module := do
   let files ← decodeMapped "file" fs[2]! decFile
   let origins ← decodeMapped "origin" fs[8 + shift]! (decOrigin files.size)
   let rawStructs ← if shrink then decStructDefs fs[4]! else pure #[]
-  let (types, structs) ← decTypesWithStructs fs[3]! rawStructs
+  let (types, structs) ← decTypesWithStructs fs[3]! rawStructs profile
   let nGlobals := (← asArr fs[4 + shift]! "globals").size
   let nContexts := (← asArr fs[6 + shift]! "contexts").size
   let cx : Ctx := { types, nGlobals, nContexts, nOrigins := origins.size, nVars := 0, profile }
