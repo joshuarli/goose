@@ -83,8 +83,10 @@ theorem frame_pre {sc : Nat} {si : ScopeInst} {rest0 : List (Nat × ScopeInst)}
     (∀ x v, (x, v) ∈ pre → s.store.roots[RootInst.local env.act si x]? = none ∧
       ∃ lv, env.vars[x]? = some lv ∧ lv.scope = sc ∧ lv.ty.paramOk = true ∧
         HasTy m W.G s.store v lv.ty ∧
-        ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
-          Older r (.local env.act si x)) →
+        (∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
+          Older r (.local env.act si x)) ∧
+        (OwnerRefTy lv.ty → ∀ r, Targets v r →
+          ∃ ann, penv.ann x = some ann ∧ Gam env W.ownerP ann r)) →
     ∃ tfin, Frame m W tfin penv env { s with store := preStore env.act si pre s.store }
       (pre.map Prod.fst ++ future) ∧
       TSame tcur tfin ∧ (∀ y, y ∈ tfin.visible ↔ y ∈ pre.map Prod.fst ∨ y ∈ tcur.visible) ∧
@@ -96,16 +98,16 @@ theorem frame_pre {sc : Nat} {si : ScopeInst} {rest0 : List (Nat × ScopeInst)}
   | [], tcur, s, hF, _, _ =>
     ⟨tcur, hF, TSame.refl _, by simp, StoreLe.refl _, fun _ _ h => h, fun _ _ h => Or.inl h⟩
   | (x, v) :: rest, tcur, s, hF, hnd, hall => by
-    obtain ⟨hfree, lv, hx, hsc, hst, hv, hroot⟩ := hall x v List.mem_cons_self
+    obtain ⟨hfree, lv, hx, hsc, hst, hv, hroot, howner⟩ := hall x v List.mem_cons_self
     have hlk : env.scopes.lookup lv.scope = some si := by rw [htop, hsc]; simp [lookup_cons]
-    have hF1 := hF.bind hx hlk hst hfree hv hroot
+    have hF1 := hF.bind hx hlk hst hfree hv hroot howner
     have hle1 := introduce_le s.store (.local env.act si x) v hfree
     have hnd2 : x ∉ rest.map Prod.fst ∧ (rest.map Prod.fst).Nodup := by
       simpa [List.nodup_cons] using hnd
     obtain ⟨tfin, k1, k2, k3, k4, k5, k6⟩ := frame_pre htop rest _ _ hF1 hnd2.2 (by
       intro x' v' hm
-      obtain ⟨hf', lv', g1, g2, g3, g4, g5⟩ := hall x' v' (List.mem_cons_of_mem _ hm)
-      refine ⟨?_, lv', g1, g2, g3, g4.mono hle1, g5⟩
+      obtain ⟨hf', lv', g1, g2, g3, g4, g5, g6⟩ := hall x' v' (List.mem_cons_of_mem _ hm)
+      refine ⟨?_, lv', g1, g2, g3, g4.mono hle1, g5, g6⟩
       show (s.store.introduce (.local env.act si x) v).roots[RootInst.local env.act si x']? = none
       rw [get_introduce]
       have hne : ¬ (RootInst.local env.act si x = RootInst.local env.act si x') := by
@@ -150,8 +152,8 @@ theorem frame_pre {sc : Nat} {si : ScopeInst} {rest0 : List (Nat × ScopeInst)}
 
 theorem RetOk.tsame {a b : TEnv} {penv' : PEnv} {s' : St} {v : Val} (h : RetOk m W b penv' s' v)
     (hi : b.impl = a.impl) (hc : penv'.ctx = penv.ctx) : RetOk m W a penv s' v := by
-  obtain ⟨impl, h1, h2, h3⟩ := h
-  exact ⟨impl, hi ▸ h1, h2, hc ▸ h3⟩
+  obtain ⟨impl, h1, h2, h3, h4⟩ := h
+  exact ⟨impl, hi ▸ h1, h2, hc ▸ h3, hc ▸ h4⟩
 
 /-- What a `return` hands over survives the release of any scope of the
 activation: it points into the caller's roots and the globals only. -/
@@ -159,7 +161,7 @@ theorem RetOk.release {s2 : St} {sc : Nat} {v : Val} {future : List VarId}
     (hF : Frame m W tenv penv env s future)
     (hn : s.nextScope ≤ s2.nextScope) {si : ScopeInst} (hsi : W.base ≤ si)
     (h : RetOk m W tenv penv s2 v) : RetOk m W tenv penv (relSt env sc si s2) v := by
-  obtain ⟨impl, h1, h2, h3⟩ := h
+  obtain ⟨impl, h1, h2, h3, h4⟩ := h
   obtain ⟨hagree, _⟩ := releaseScope_roots env.vars env.act sc si s2.store
   have hsurv : ∀ r, Targets v r → ¬ ScopeRoots env.vars env.act sc si r := by
     intro r hr
@@ -169,7 +171,7 @@ theorem RetOk.release {s2 : St} {sc : Nat} {v : Val} {future : List VarId}
     | «local» y => obtain ⟨ly, _, g1, _⟩ := hrq; simp [noEnv] at g1
     | global g => cases hrq
     | param j => exact absurd (hF.pAge j _ _ _ hrq) (Nat.not_lt.2 hsi)
-  refine ⟨impl, h1, ?_, h3⟩
+  refine ⟨impl, h1, ?_, h3, h4⟩
   rcases h2 with h2 | ⟨t, g1, g2⟩
   · exact Or.inl h2
   · exact Or.inr ⟨t, g1, g2.agree hagree hsurv⟩
