@@ -752,10 +752,9 @@ def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
 
 /- Repeated incoming edges do not spend the unique-value budget. If the budget is
 exhausted on an unseen value, return none so the caller rejects an incomplete proof. -/
-partial def valueClosure (f : Func) (fuel : Nat) (todo seen : List ValueId) : Option (List ValueId) :=
-  match todo with
-  | [] => some seen
-  | v :: rest =>
+def valueClosure (f : Func) : Nat → List ValueId → List ValueId → Option (List ValueId)
+  | _, [], seen => some seen
+  | fuel, v :: rest, seen =>
     if seen.contains v then valueClosure f fuel rest seen
     else
       match fuel with
@@ -767,6 +766,8 @@ partial def valueClosure (f : Func) (fuel : Nat) (todo seen : List ValueId) : Op
         let blockInputs := f.blocks.toList.zipIdx.flatMap fun (b, target) =>
           (b.params.zipIdx).filterMap fun ((p, _), param) => if p == v then some (incomingValues f target param) else none
         valueClosure f n (opUses ++ blockInputs.flatten ++ rest) (v :: seen)
+termination_by fuel todo seen => (fuel, todo.length)
+decreasing_by all_goals simp_wf <;> omega
 
 def rootsOverlap (a b : List RootRef) : Bool :=
   a.isEmpty || b.isEmpty || a.any (fun x => b.any (Goose.Core.rootsMayOverlap x))
