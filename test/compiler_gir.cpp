@@ -813,6 +813,224 @@ void RejectsPassingAReadOnlyStructFieldToAMutatingCall() {
     assert(Code(m) == "GIR-V030");
 }
 
+void OwnerArrayElementsRemainWritable() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType array;
+    array.kind = CoreType::Arr;
+    array.elem = i64;
+    array.count = 1;
+    auto arrayType = m.Intern(array);
+    Main(m).slots = { { arrayType, CoreVarKind::Let, 0, 0 } };
+
+    auto initial = Int(m, 0, "1");
+    auto values = Def(GirOp::Arr, 1);
+    values.ty = arrayType;
+    values.vals = { 0 };
+    auto init = Init(0, 1);
+    auto owner = Def(GirOp::Slot, 2);
+    owner.idx = 0;
+    auto snapshot = Def(GirOp::Snap, 3);
+    snapshot.snap = GirSnapshotMode::Owner;
+    snapshot.a = 2;
+    auto index = Int(m, 4, "0");
+    auto element = Def(GirOp::Index, 5);
+    element.a = 3;
+    element.b = 4;
+    element.org = 0;
+    auto replacement = Int(m, 6, "2");
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 5;
+    store.b = 6;
+    store.org = 0;
+    Main(m).summary.aborts = true;
+    Main(m).blocks[0].insts = {
+        Enter(0), initial, values, init, owner, snapshot, index, element, replacement, store,
+        Leave(0), Ret(),
+    };
+    assert(Code(m) == "");
+}
+
+void OwnerGrowElementsRemainWritable() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType grow;
+    grow.kind = CoreType::Grow;
+    grow.elem = i64;
+    auto growType = m.Intern(grow);
+    Main(m).slots = { { growType, CoreVarKind::Let, 0, 0 } };
+
+    auto initial = Int(m, 0, "1");
+    auto values = Def(GirOp::Arr, 1);
+    values.ty = growType;
+    values.vals = { 0 };
+    auto init = Init(0, 1);
+    auto owner = Def(GirOp::Slot, 2);
+    owner.idx = 0;
+    auto snapshot = Def(GirOp::Snap, 3);
+    snapshot.snap = GirSnapshotMode::Owner;
+    snapshot.a = 2;
+    auto index = Int(m, 4, "0");
+    index.ty = i64;
+    auto element = Def(GirOp::Index, 5);
+    element.a = 3;
+    element.b = 4;
+    element.org = 0;
+    auto replacement = Int(m, 6, "2");
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 5;
+    store.b = 6;
+    store.org = 0;
+    Main(m).summary.aborts = true;
+    Main(m).blocks[0].insts = {
+        Enter(0), initial, values, init, owner, snapshot, index, element, replacement, store,
+        Leave(0), Ret(),
+    };
+    assert(Code(m) == "");
+}
+
+void MutableSliceParametersRemainWritable() {
+    auto m = Base();
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto slice = m.SliceType(CoreMut::Mut, u8);
+    GirFunc update;
+    update.name = "update";
+    update.params = { slice };
+    update.scopes = { -1 };
+    update.summary.unknown = true;
+    update.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    GirBlock body;
+    body.params = { { 0, slice } };
+    auto snapshot = Def(GirOp::SliceView, 1);
+    snapshot.a = 0;
+    auto index = Int(m, 2, "0");
+    index.ty = m.IntType(CoreIntTy::I64);
+    auto element = Def(GirOp::Index, 3);
+    element.a = 1;
+    element.b = 2;
+    element.org = 0;
+    auto replacement = Int(m, 4, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 3;
+    store.b = 4;
+    store.org = 0;
+    body.insts = { snapshot, index, element, replacement, store, Ret() };
+    update.blocks = { body };
+    m.funcs.push_back(update);
+    assert(Code(m) == "");
+}
+
+void RejectsReturningAFieldRefFromAReadOnlyOwner() {
+    auto m = ScalarStruct();
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto record = Main(m).slots[0].ty;
+    auto readonlyRecord = m.RefType(CoreMut::Const, record);
+    auto mutableU8 = m.RefType(CoreMut::Mut, u8);
+    GirFunc leak;
+    leak.name = "leak";
+    leak.params = { readonlyRecord };
+    leak.results = { mutableU8 };
+    leak.scopes = { -1 };
+    leak.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    leak.roots.results = { { CoreRootRef { CoreRootRef::Param, 0 } } };
+    leak.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, readonlyRecord } };
+    auto field = Def(GirOp::Field, 1);
+    field.a = 0;
+    field.idx = 0;
+    body.insts = { field, Ret({ 1 }) };
+    leak.blocks = { body };
+    m.funcs.push_back(leak);
+    assert(Code(m) == "GIR-V030");
+}
+
+void RejectsMaterializingAFieldRefFromAReadOnlyOwner() {
+    auto m = ScalarStruct();
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto record = Main(m).slots[0].ty;
+    auto readonlyRecord = m.RefType(CoreMut::Const, record);
+    auto mutableU8 = m.RefType(CoreMut::Mut, u8);
+    GirFunc save;
+    save.name = "save";
+    save.params = { readonlyRecord };
+    save.slots = { { mutableU8, CoreVarKind::Let, 0, 0 } };
+    save.scopes = { -1 };
+    save.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    save.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, readonlyRecord } };
+    auto field = Def(GirOp::Field, 1);
+    field.a = 0;
+    field.idx = 0;
+    auto init = Init(0, 1);
+    body.insts = { field, init, Ret() };
+    save.blocks = { body };
+    m.funcs.push_back(save);
+    assert(Code(m) == "GIR-V030");
+}
+
+void RejectsPassingAContentsConstAggregateFieldToAMutatingCall() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto inner = StructType(m, 0);
+    auto outer = StructType(m, 1);
+    m.structs = {
+        CoreStruct { 1, { CoreField { u8, CoreVarKind::Var, CoreMut::Mut, 0 } } },
+        CoreStruct { 1, { CoreField { inner, CoreVarKind::Var, CoreMut::Const, 0 } } },
+    };
+    Main(m).slots = { { outer, CoreVarKind::Let, 0, 0 } };
+    auto refInner = m.RefType(CoreMut::Mut, inner);
+    GirFunc mutate;
+    mutate.name = "mutate";
+    mutate.params = { refInner };
+    mutate.scopes = { -1 };
+    mutate.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    mutate.summary.unknown = true;
+    GirBlock mutateBody;
+    mutateBody.params = { { 0, refInner } };
+    auto leaf = Def(GirOp::Field, 1);
+    leaf.a = 0;
+    leaf.idx = 0;
+    auto replacement = Int(m, 2, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 1;
+    store.b = 2;
+    store.org = 0;
+    mutateBody.insts = { leaf, replacement, store, Ret() };
+    mutate.blocks = { mutateBody };
+    m.funcs.push_back(mutate);
+
+    auto initial = Int(m, 0, "1");
+    initial.ty = u8;
+    auto innerValue = Def(GirOp::Struct, 1);
+    innerValue.ty = inner;
+    innerValue.vals = { 0 };
+    auto outerValue = Def(GirOp::Struct, 2);
+    outerValue.ty = outer;
+    outerValue.vals = { 1 };
+    auto init = Init(0, 2);
+    auto owner = Def(GirOp::Slot, 3);
+    owner.idx = 0;
+    auto field = Def(GirOp::Field, 4);
+    field.a = 3;
+    field.idx = 0;
+    auto call = Def(GirOp::Call, 5);
+    call.idx = 1;
+    call.vals = { 4 };
+    call.org = 0;
+    Main(m).summary.unknown = true;
+    Main(m).blocks[0].insts = { Enter(0), initial, innerValue, outerValue, init, owner, field, call, Leave(0), Ret() };
+    assert(Code(m) == "GIR-V030");
+}
+
 void AcceptsNestedFieldContentsThroughAJoin() {
     auto m = Base();
     m.profile = CoreProfile::Shrink;
@@ -1249,6 +1467,12 @@ int main() {
     FieldProjectionKeepsGlobalReadAndWriteEffects();
     FieldCallArgumentsKeepTheirOwnerRoot();
     RejectsPassingAReadOnlyStructFieldToAMutatingCall();
+    OwnerArrayElementsRemainWritable();
+    OwnerGrowElementsRemainWritable();
+    MutableSliceParametersRemainWritable();
+    RejectsReturningAFieldRefFromAReadOnlyOwner();
+    RejectsMaterializingAFieldRefFromAReadOnlyOwner();
+    RejectsPassingAContentsConstAggregateFieldToAMutatingCall();
     LowKeepsPackedFieldAlignmentAcrossCallParametersAndResults();
     puts("compiler_gir ok");
     return 0;

@@ -1026,7 +1026,9 @@ private:
             auto *def = defs[v];
             if (def && (def->op == GirOp::Slot || def->op == GirOp::Global)) {
                 auto pointee = m.Type(fn.vt[v]).elem;
-                if (m.Type(pointee).kind == CoreType::Struct) return close(true);
+                auto kind = m.Type(pointee).kind;
+                if (kind == CoreType::Struct || kind == CoreType::Arr || kind == CoreType::Grow)
+                    return close(true);
                 CoreMut mut;
                 GirTypeId ignored;
                 return close(refof(v, mut, ignored) && mut == CoreMut::Mut);
@@ -1043,14 +1045,33 @@ private:
                 if (def->idx < 0 || def->idx >= (int)fields.size()) return close(false);
                 return close(contentsMutable(def->a, open) && fields[def->idx].contents == CoreMut::Mut);
             }
-            if (def && (def->op == GirOp::Snap || def->op == GirOp::SliceView ||
+            if (def && def->op == GirOp::Snap) {
+                if (def->snap == GirSnapshotMode::Owner) return close(contentsMutable(def->a, open));
+                CoreMut mut;
+                GirTypeId pointee;
+                return close(refof(def->a, mut, pointee) && mut == CoreMut::Mut &&
+                             contentsMutable(def->a, open));
+            }
+            if (def && (def->op == GirOp::SliceView || def->op == GirOp::ViewSlice ||
                         def->op == GirOp::Elem || def->op == GirOp::Index))
                 return close(contentsMutable(def->a, open));
+            if (def && def->op == GirOp::Load) {
+                auto &loaded = m.Type(fn.vt[v]);
+                if (loaded.kind == CoreType::Slice && loaded.mut == CoreMut::Mut) {
+                    auto *address = defs[def->a];
+                    if (address && (address->op == GirOp::Slot || address->op == GirOp::Global))
+                        return close(true);
+                    return close(contentsMutable(def->a, open));
+                }
+            }
             if (!def) {
                 auto &block0 = f.blocks[0];
                 auto entryParam = find_if(block0.params.begin(), block0.params.end(),
                                           [&](auto &p) { return p.first == v; });
                 if (entryParam != block0.params.end()) {
+                    auto &t = m.Type(fn.vt[v]);
+                    if (t.kind == CoreType::Slice || t.kind == CoreType::View)
+                        return close(t.mut == CoreMut::Mut);
                     CoreMut mut;
                     GirTypeId pointee;
                     return close(refof(v, mut, pointee) && mut == CoreMut::Mut);
@@ -1104,6 +1125,23 @@ private:
             GirTypeId pointee;
             return close(refof(v, mut, pointee) && mut == CoreMut::Mut);
         };
+        auto mutableReferenceIsAuthorized = [&](int value, GirTypeId ty) {
+            auto &t = m.Type(ty);
+            if (t.kind == CoreType::Ref && t.mut == CoreMut::Mut) {
+                vector<char> open(fn.nvalues, 0);
+                if (!writable(value, open)) return false;
+                auto kind = m.Type(t.elem).kind;
+                if (kind == CoreType::Arr || kind == CoreType::Grow || kind == CoreType::Struct ||
+                    kind == CoreType::Slice) {
+                    fill(open.begin(), open.end(), 0);
+                    return contentsMutable(value, open);
+                }
+            } else if (t.kind == CoreType::Slice && t.mut == CoreMut::Mut) {
+                vector<char> open(fn.nvalues, 0);
+                return contentsMutable(value, open);
+            }
+            return true;
+        };
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
                 CoreMut mut;
@@ -1120,7 +1158,13 @@ private:
                             Fail("GIR-V030", cat(fn.label, ": a store through a value without mutable binding and contents"));
                         if (!GirReadable(m, pt))
                             Fail("GIR-V030", cat(fn.label, ": a store of a value that cannot be copied"));
+                        if (!mutableReferenceIsAuthorized(i.b, pt))
+                            Fail("GIR-V030", cat(fn.label, ": a store materializes a mutable reference without its required capabilities"));
                     }
+                } else if (i.op == GirOp::Init) {
+                    auto ty = f.slots[i.idx].ty;
+                    if (!mutableReferenceIsAuthorized(i.a, ty))
+                        Fail("GIR-V030", cat(fn.label, ": a slot initializer materializes a mutable reference without its required capabilities"));
                 } else if (i.op == GirOp::Push || i.op == GirOp::Append) {
                     if (refof(i.a, mut, pt) && mut != CoreMut::Mut)
                         Fail("GIR-V030", cat(fn.label, ": growth through a read-only reference"));
@@ -1131,11 +1175,19 @@ private:
             for (size_t j = 0; j < callee.params.size() && j < i.vals.size(); j++) {
                 auto &pt = m.Type(callee.params[j]);
                 if (pt.kind == CoreType::Ref && pt.mut == CoreMut::Mut) {
+                    if (!mutableReferenceIsAuthorized(i.vals[j], callee.params[j]))
+                        Fail("GIR-V030", cat(fn.label, ": a mutating call receives a value without its required binding and contents capabilities"));
+                } else if (pt.kind == CoreType::Slice && pt.mut == CoreMut::Mut) {
                     vector<char> open(fn.nvalues, 0);
-                    if (!writable(i.vals[j], open))
-                        Fail("GIR-V030", cat(fn.label, ": a mutating call receives a value without mutable binding and contents"));
+                    if (!contentsMutable(i.vals[j], open))
+                        Fail("GIR-V030", cat(fn.label, ": a mutating call receives a slice without mutable contents"));
                 }
             }
+        }
+        for (auto &b : f.blocks) for (auto &i : b.insts) if (i.op == GirOp::Ret) {
+            for (size_t j = 0; j < i.vals.size() && j < f.results.size(); j++)
+                if (!mutableReferenceIsAuthorized(i.vals[j], f.results[j]))
+                    Fail("GIR-V030", cat(fn.label, ": a return exposes a mutable reference without its required capabilities"));
         }
     }
 
