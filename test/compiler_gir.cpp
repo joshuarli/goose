@@ -1366,6 +1366,156 @@ void LowStructUsesByteStorageAndUnalignedSafeAccess() {
     assert((copySizes == vector<string>{ "1", "8", "9", "1", "8" }));
 }
 
+void NestedStructAndFixedArrayFieldsUseByteStorage() {
+    auto high = Base();
+    high.profile = CoreProfile::Shrink;
+    auto u8 = high.IntType(CoreIntTy::U8);
+    auto i64 = high.IntType(CoreIntTy::I64);
+    auto inner = StructType(high, 0);
+    CoreType cellArray;
+    cellArray.kind = CoreType::Arr;
+    cellArray.elem = i64;
+    cellArray.count = 2;
+    auto cells = high.Intern(cellArray);
+    CoreType nestedArray;
+    nestedArray.kind = CoreType::Arr;
+    nestedArray.elem = inner;
+    nestedArray.count = 2;
+    auto nested = high.Intern(nestedArray);
+    auto outer = StructType(high, 1);
+    high.structs = {
+        CoreStruct { 9, {
+            CoreField { u8, CoreVarKind::Var, CoreMut::Mut, 0 },
+            CoreField { i64, CoreVarKind::Var, CoreMut::Mut, 1 },
+        } },
+        CoreStruct { 43, {
+            CoreField { inner, CoreVarKind::Var, CoreMut::Mut, 0 },
+            CoreField { cells, CoreVarKind::Var, CoreMut::Mut, 9 },
+            CoreField { nested, CoreVarKind::Var, CoreMut::Mut, 25 },
+        } },
+    };
+    Main(high).slots = {
+        { outer, CoreVarKind::Let, 0, 0 },
+        { outer, CoreVarKind::Let, 0, 0 },
+    };
+    Main(high).summary.aborts = true;
+    Main(high).summary.outputs = true;
+
+    auto firstTag = Int(high, 0, "1");
+    firstTag.ty = u8;
+    auto firstValue = Int(high, 1, "2");
+    auto firstInner = Def(GirOp::Struct, 2);
+    firstInner.ty = inner;
+    firstInner.vals = { 0, 1 };
+    auto secondTag = Int(high, 3, "3");
+    secondTag.ty = u8;
+    auto secondValue = Int(high, 4, "4");
+    auto secondInner = Def(GirOp::Struct, 5);
+    secondInner.ty = inner;
+    secondInner.vals = { 3, 4 };
+    auto cellValues = Def(GirOp::Arr, 6);
+    cellValues.ty = cells;
+    cellValues.vals = { 1, 4 };
+    auto nestedValues = Def(GirOp::Arr, 7);
+    nestedValues.ty = nested;
+    nestedValues.vals = { 2, 5 };
+    auto outerValue = Def(GirOp::Struct, 8);
+    outerValue.ty = outer;
+    outerValue.vals = { 2, 6, 7 };
+    auto init = Init(0, 8);
+    auto copy = Init(1, 8);
+
+    auto owner = Def(GirOp::Slot, 9);
+    owner.idx = 0;
+    auto innerField = Def(GirOp::Field, 10);
+    innerField.a = 9;
+    innerField.idx = 0;
+    auto innerValue = Def(GirOp::Field, 11);
+    innerValue.a = 10;
+    innerValue.idx = 1;
+    auto newInnerValue = Int(high, 12, "10");
+    GirInst storeInner;
+    storeInner.op = GirOp::Store;
+    storeInner.a = 11;
+    storeInner.b = 12;
+    storeInner.org = 0;
+
+    auto cellsField = Def(GirOp::Field, 13);
+    cellsField.a = 9;
+    cellsField.idx = 1;
+    auto cellsView = Def(GirOp::Snap, 14);
+    cellsView.snap = GirSnapshotMode::Owner;
+    cellsView.a = 13;
+    auto cellIndex = Int(high, 15, "1");
+    auto cell = Def(GirOp::Index, 16);
+    cell.a = 14;
+    cell.b = 15;
+    cell.org = 0;
+    auto newCell = Int(high, 17, "11");
+    GirInst storeCell;
+    storeCell.op = GirOp::Store;
+    storeCell.a = 16;
+    storeCell.b = 17;
+    storeCell.org = 0;
+
+    auto nestedField = Def(GirOp::Field, 18);
+    nestedField.a = 9;
+    nestedField.idx = 2;
+    auto nestedView = Def(GirOp::Snap, 19);
+    nestedView.snap = GirSnapshotMode::Owner;
+    nestedView.a = 18;
+    auto nestedIndex = Int(high, 20, "1");
+    auto nestedElement = Def(GirOp::Index, 21);
+    nestedElement.a = 19;
+    nestedElement.b = 20;
+    nestedElement.org = 0;
+    auto nestedValue = Def(GirOp::Field, 22);
+    nestedValue.a = 21;
+    nestedValue.idx = 1;
+    auto newNestedValue = Int(high, 23, "12");
+    GirInst storeNested;
+    storeNested.op = GirOp::Store;
+    storeNested.a = 22;
+    storeNested.b = 23;
+    storeNested.org = 0;
+
+    auto copyOwner = Def(GirOp::Slot, 24);
+    copyOwner.idx = 1;
+    auto copyInner = Def(GirOp::Field, 25);
+    copyInner.a = 24;
+    copyInner.idx = 0;
+    auto copyValuePlace = Def(GirOp::Field, 26);
+    copyValuePlace.a = 25;
+    copyValuePlace.idx = 1;
+    auto copyValue = Def(GirOp::Load, 27);
+    copyValue.a = 26;
+    GirInst printCopy;
+    printCopy.op = GirOp::Print;
+    printCopy.parts = { { false, "", 27 } };
+    printCopy.org = 0;
+    Main(high).blocks[0].insts = {
+        Enter(0), firstTag, firstValue, firstInner, secondTag, secondValue, secondInner,
+        cellValues, nestedValues, outerValue, init, copy, owner, innerField, innerValue,
+        newInnerValue, storeInner, cellsField, cellsView, cellIndex, cell, newCell, storeCell,
+        nestedField, nestedView, nestedIndex, nestedElement, nestedValue, newNestedValue,
+        storeNested, copyOwner, copyInner, copyValuePlace, copyValue, printCopy, Leave(0), Ret(),
+    };
+
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+    assert(low.structs.empty());
+    auto copies = 0;
+    auto offsets = 0;
+    for (auto &block : low.funcs[0].blocks)
+        for (auto &inst : block.insts) {
+            copies += inst.op == GirOp::BytesCopy;
+            offsets += inst.op == GirOp::PtrOffset;
+        }
+    assert(copies >= 8);
+    assert(offsets >= 6);
+}
+
 void LowAggregateLoopParametersOwnSnapshots() {
     // The constructor runs before reading the old block value. If its frame
     // temporary aliases that value, the loop prints 0, 2 instead of 0, 1.
@@ -1631,6 +1781,7 @@ int main() {
     RejectsAFieldComponentAfterItsStructType();
     RejectsAnInvalidStructLayout();
     LowStructUsesByteStorageAndUnalignedSafeAccess();
+    NestedStructAndFixedArrayFieldsUseByteStorage();
     LowAggregateLoopParametersOwnSnapshots();
     AcceptsNestedFieldContentsThroughAJoin();
     RejectsArrayElementWriteThroughConstFieldContents();
