@@ -1,4 +1,4 @@
-import Goose.Core.Syntax
+import Goose.Core.Scopes
 
 /-!
 Static checks that need no root annotation: typing (`V-TYPE`), writes through
@@ -945,7 +945,12 @@ def checkImpl (m : Module) (impl : Impl) : V Unit := do
   forAll impl.results.toList fun t =>
     unless t.readable && t != .unit do reject .type s!"{impl.name} has a result of a type no function may return"
   forAll (List.range impl.params.size) (checkParam impl)
+  forAll impl.vars.toList fun lv =>
+    unless lv.org < m.origins.size do
+      reject .type s!"{impl.name}: origin of variable {lv.name} is outside the origin table"
   unless impl.body.scope = 0 do reject .type s!"{impl.name}: the body block is not scope 0"
+  if let some message := scopeOrderError (blockScopes none impl.body) 0 then
+    reject .type s!"{impl.name}: {message}"
   let (bodyTy, _) ← (tyBlock env [] impl.body).run impl.params.size
   match impl.results.toList with
   | [] =>
@@ -962,6 +967,8 @@ def checkGlobal (m : Module) (g : GlobalId) (gl : Global) : V Unit := do
   unless gl.ty.storable && !gl.ty.isRefLike do
     reject .type s!"global {gl.name} has a type no pilot global may have"
   unless gl.org < m.origins.size do reject .type s!"global {gl.name}: origin outside the origin table"
+  if let some message := scopeOrderError (exprScopes none gl.init) 0 then
+    reject .type s!"global {gl.name}: {message}"
   let env : TEnv := {
     mod := m, impl := none, vars := #[], visible := [], loops := 0, inExpr := true, scopes := []
     globalLimit := g, initializing := some g }
