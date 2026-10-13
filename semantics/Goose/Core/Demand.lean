@@ -1599,6 +1599,30 @@ theorem DemandNode.call_phase_alias_argument
     AccessEnv.aliasesOfArgs_index access path args hcollected index arg hindex harg
   exact ⟨aliases, haliases⟩
 
+/-- A by-reference call argument's retained aliases are present at mutation
+phase, where the call may update the argument's backing storage. -/
+theorem DemandNode.call_mutation_retains_argument
+    {access : AccessEnv} {path : List Nat} {frame result : DemandFrame}
+    {context origin index : Nat} {args : List Arg} {arg : Arg}
+    (hphase : (DemandNode.expression (.call context args origin)).phaseFrame
+      access path frame .mutation = .ok result)
+    (hindex : index < args.length) (harg : args[index]? = some arg) :
+    ∃ aliases, access.aliasArg (path ++ [index]) arg = .ok aliases ∧
+      ∀ alias, alias ∈ aliases → alias ∈ result.retained := by
+  have hmapped :
+      (fun aliases => { frame with retained := aliases ++ frame.retained }) <$>
+        access.aliasesOfArgs path args = .ok result := by
+    simpa [DemandNode.phaseFrame] using hphase
+  obtain ⟨collected, hcollected, hresult⟩ := except_map_ok_extract hmapped
+  obtain ⟨aliases, haliases, hmem⟩ :=
+    AccessEnv.aliasesOfArgs_index access path args hcollected index arg hindex harg
+  refine ⟨aliases, haliases, ?_⟩
+  intro alias halias
+  have hcollected := hmem alias halias
+  change alias ∈ result.retained
+  rw [← hresult]
+  exact List.mem_append_left _ hcollected
+
 theorem DemandNode.childFrame_retains {node : DemandNode} {access : AccessEnv}
     {path : List Nat} {frame : DemandFrame} {index : Nat} {result : DemandFrame}
     (h : node.childFrame access path frame index = .ok result) {alias : RetainedAlias}
