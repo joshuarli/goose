@@ -25,7 +25,7 @@ theorem block_of_checks (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m 
       HasTy m W.G s.store v lv.ty ∧ ∀ r, Targets v r → ∃ ann, penv.ann x = some ann ∧
         Gam env W.P ann r) :
     Sat (execBlock n ⟨prof, m⟩ env pre b) s (fun fl s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧
       match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
           b.diverges = false
@@ -59,7 +59,7 @@ theorem block_of_checks (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m 
       obtain ⟨lv, g1, g2, g3, g4⟩ := hrows _ (List.mem_of_getElem? hpk)
       have g1' : env.vars[x']? = some lv := by rw [← hF.vars_t]; exact g1
       obtain ⟨k1, k2⟩ := hvals k x' v ty' hk hpk lv g1' g4
-      refine ⟨h1, h2, lv, g1', g2, g3, k1, fun r hr' => ?_⟩
+      refine ⟨h1, h2, lv, g1', g2, paramOk_of_storable g3, k1, fun r hr' => ?_⟩
       obtain ⟨ann, ha, hga⟩ := k2 r hr'
       exact ⟨ann, ha, gam_push hF hsc _ hga⟩
   have hres := hB W tenv env1 env2 penv env s pre sc stmts value tn1 tn2 tn' ty
@@ -102,7 +102,7 @@ theorem step_printArg (ih : Specs m prof n) : PrintArgSpec m prof (n + 1) := by
   cases a with
   | text t =>
     simp only [execPrintArg, sat_pure]
-    exact ⟨hF, Ext.refl _ _⟩
+    exact ⟨hF, Ext.refl _ _ _⟩
   | expr e =>
     obtain ⟨ty, hte, hty⟩ := ht
     obtain ⟨rho, hre⟩ := hr
@@ -122,10 +122,10 @@ theorem printArgs_spec (ihP : PrintArgSpec m prof n) (hp : Perm m W) :
     Frame m W tenv penv env s → tyPrintArgs tenv args tn = .ok ((), tn') →
     rpPrintArgs penv args rst = .ok ((), rst') → EffLe rst'.eff W.E →
     Sat (mapList (execPrintArg n ⟨prof, m⟩ env) args) s (fun _ s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) s s')
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s')
   | [], s, tn, tn', rst, rst', hF, _, _, _ => by
     simp only [mapList, sat_pure]
-    exact ⟨hF, Ext.refl _ _⟩
+    exact ⟨hF, Ext.refl _ _ _⟩
   | .text t :: rest, s, tn, tn', rst, rst', hF, ht, hr, hE => by
     simp only [tyPrintArgs] at ht
     simp only [rpPrintArgs] at hr

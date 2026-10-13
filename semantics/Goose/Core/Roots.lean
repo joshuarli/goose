@@ -56,6 +56,15 @@ def liftV (x : V α) : P α := fun s =>
 def PEnv.ann (env : PEnv) (x : VarId) : Option (List RootRef) :=
   (env.ctx.varRoots.find? (·.1 == x)).map (·.2)
 
+/-- The content roots of a parameter that refers to a slice variable. -/
+def PEnv.cont (env : PEnv) (x : VarId) : Option (List RootRef) :=
+  (env.ctx.contentRoots.find? (·.1 == x)).map (·.2)
+
+def PEnv.isRefSliceVar (env : PEnv) (x : VarId) : Bool :=
+  match env.impl.vars[x]? with
+  | some lv => lv.ty.isRefSlice
+  | none => false
+
 def rootTarget : RootRef → Option Target
   | .local _ => none
   | .global g => some (.global g)
@@ -252,7 +261,72 @@ def readRoots (env : PEnv) : Place → P (List RootRef)
         | none => rejP .root s!"variable {lv.name} has no root annotation"
       else pure []
     | none => pure []
+  | .deref (.read (.var x)) =>
+    -- A slice read through a reference to a slice variable has the content roots.
+    if env.isRefSliceVar x then
+      match env.cont x with
+      | some cont => pure cont
+      | none => rejP .root s!"variable {x} has no content roots"
+    else pure []
   | _ => pure []
+
+/-- A slice stored through a reference to a slice variable is rooted within
+the content roots of that reference. -/
+def checkStore (env : PEnv) (p : Place) (rho : List RootRef) : V Unit :=
+  match p.derefVar? with
+  | some x =>
+    if env.isRefSliceVar x then
+      match env.cont x with
+      | some cont =>
+        unless subsetRoots rho cont do
+          reject .root s!"a slice rooted at {showRoots rho} is stored through variable {x}, whose content roots are {showRoots cont}"
+      | none => reject .root s!"variable {x} has no content roots"
+    else pure ()
+  | none => pure ()
+
+/-- The parameter a slice store through a reference rebinds, if any. -/
+def storeRebinds (env : PEnv) (p : Place) : List Target :=
+  match p.derefVar? with
+  | some x => if env.isRefSliceVar x && x < env.impl.params.size then [.param x] else []
+  | none => []
+
+/-- A binding check made on behalf of a call is reported as the call's. -/
+def asCall (x : V Unit) : V Unit :=
+  match x with
+  | .ok u => .ok u
+  | .error e => .error ⟨.call, e.message⟩
+
+/-- The callee context's content roots for parameter `i`, read through the
+arguments, are exactly what the slice variable passed may be rooted at: no
+more, so nothing the callee stores there breaks the variable's own rule, and no
+less, so what the callee reads from it is within what it assumes. -/
+def checkContent (env : PEnv) (cctx : Context) (args : List Arg) (argRoots : List (List RootRef))
+    (i : Nat) : V Unit :=
+  match (cctx.contentRoots.find? (·.1 == i)).map (·.2) with
+  | none => pure ()
+  | some cont => do
+    let inst ← mapResultRoots argRoots [] cont
+    match args[i]? with
+    | some (.byRef _ (.var s)) =>
+      match env.ann s with
+      | some ann => do
+        unless subsetRoots ann inst do
+          reject .call s!"argument {i}: the callee context's content roots {showRoots inst} do not cover the roots {showRoots ann} of the slice variable passed"
+        asCall (bindRootsV env env.scopes s inst)
+      | none => reject .call s!"argument {i}: the slice variable passed has no root annotation"
+    | some (.byRef _ (.deref (.read (.var q)))) =>
+      match env.cont q with
+      | some cq =>
+        unless subsetRoots inst cq && subsetRoots cq inst do
+          reject .call s!"argument {i}: the callee context's content roots {showRoots inst} differ from the content roots {showRoots cq} of the reference passed"
+      | none => reject .call s!"argument {i}: the reference passed has no content roots"
+    | _ => reject .call s!"argument {i}: the callee context declares content roots for an argument that is no slice variable"
+
+def checkContents (env : PEnv) (c : ContextId) (args : List Arg) (argRoots : List (List RootRef)) :
+    V Unit :=
+  match env.mod.contexts[c]? with
+  | none => pure ()
+  | some cctx => forAll (List.range args.length) (checkContent env cctx args argRoots)
 
 mutual
 
@@ -330,6 +404,7 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     pure []
   | .call c args _ => do
     let argRoots ← rpArgs env args
+    liftV (checkContents env c args argRoots)
     rpCall env c argRoots
   | .push owner a => do
     let rho ← rpPlace env owner
@@ -420,8 +495,11 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     | none => rejP .root s!"variable {x} outside the variable table"
   | .assign p e _ => do
     let rho ← rpPlace env p
-    let _ ← rpExpr env e
+    let stored ← rpExpr env e
+    liftV (checkStore env p stored)
     addWrites rho
+    -- Storing a slice through a reference parameter rebinds that parameter's variable.
+    modify fun s => { s with eff := { s.eff with rebinds := addTargets s.eff.rebinds (storeRebinds env p) } }
   | .assignOp op p e _ => do
     let rho ← rpPlace env p
     let _ ← rpExpr env e
@@ -517,6 +595,30 @@ def checkAnnotationShape (m : Module) (impl : Impl) (ctx : Context) : V Unit := 
         | .local _ => reject .root s!"parameter {i} is annotated with a local root"
         | .global _ => pure ()
 
+/-- Content roots are declared only for a parameter that refers to a slice
+variable, which is rooted at what the caller passes, and name parameters and
+globals only. -/
+def checkContentShape (m : Module) (impl : Impl) (ctx : Context) : V Unit :=
+  forAll ctx.contentRoots fun (x, cont) => do
+    unless x < impl.params.size do
+      reject .root s!"content roots for variable {x}, which is not a parameter"
+    match impl.vars[x]? with
+    | none => reject .root s!"content roots for variable {x}, outside the variable table"
+    | some lv => do
+      unless lv.ty.isRefSlice do
+        reject .root s!"content roots for {lv.name}, which is not a reference to a slice"
+      unless (ctx.varRoots.find? (·.1 == x)).map (·.2) == some [.param x] do
+        reject .root s!"{lv.name} refers to a slice variable and is not annotated with its own parameter root"
+      forAll cont fun r =>
+        match r with
+        | .param j =>
+          unless j < impl.params.size do
+            reject .root s!"content root of {lv.name} names parameter {j}, which does not exist"
+        | .global g =>
+          unless g < m.globals.size do
+            reject .root s!"content root of {lv.name} names global {g}, outside the global table"
+        | .local y => reject .root s!"content root of {lv.name} names local variable {y}"
+
 def checkResultShape (m : Module) (impl : Impl) (ctx : Context) : V Unit := do
   unless ctx.resultRoots.length = impl.results.size do
     reject .result s!"the context declares {ctx.resultRoots.length} result root sets for {impl.results.size} results"
@@ -581,6 +683,7 @@ def checkContext (m : Module) (ctx : Context) : V Unit := do
   let some impl := m.impls[ctx.impl]? | reject .root s!"context {ctx.decl}: no such implementation"
   checkAnnotationShape m impl ctx
   checkResultShape m impl ctx
+  checkContentShape m impl ctx
   let env : PEnv := ⟨m, impl, ctx, []⟩
   let ((), st) ← (do
       let (rho, _) ← rpBlockValue env [] impl.body
@@ -591,7 +694,7 @@ def checkContext (m : Module) (ctx : Context) : V Unit := do
 what a global initializer is checked against. -/
 def initImpl : Impl := ⟨"", #[], #[], #[], .mk 0 [] none, .unknown⟩
 
-def initContext : Context := ⟨0, "", [], []⟩
+def initContext : Context := ⟨0, "", [], [], []⟩
 
 /-- A global's initializer runs before the later globals exist. Its roots and
 effects are computed like a function body's, and nothing it reads, writes or

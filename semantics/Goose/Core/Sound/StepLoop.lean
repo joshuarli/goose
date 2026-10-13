@@ -44,14 +44,14 @@ set_option maxHeartbeats 800000 in
 theorem step_while (ih : Specs m prof n) : WhileSpec m prof (n + 1) := by
   intro W tenv penv env s c body tn tn1 tn2 bty rst rst1 rst2 rhoc rb rng hp hF htc htb hrc hrb hE
   -- One pass through the body from a state the condition was true in.
-  have body_part : ∀ (s1 : St), Frame m W tenv penv env s1 → Ext (insts env) s s1 →
+  have body_part : ∀ (s1 : St), Frame m W tenv penv env s1 → Ext (insts env) (Dset W) s s1 →
       Sat (execBlock n ⟨prof, m⟩ env [] body >>= fun fl =>
         match fl with
         | .normal _ => execWhile n ⟨prof, m⟩ env c body
         | .cont => execWhile n ⟨prof, m⟩ env c body
         | .brk => pure (.normal .unit)
         | .ret v => pure (.ret v)) s1 (fun fl s' =>
-        Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧ LoopFlow m W tenv penv s' fl ∧
+        Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ LoopFlow m W tenv penv s' fl ∧
         (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true)) := by
     intro s1 hF1 hX1
     have hFl : Frame m W { tenv with loops := tenv.loops + 1 } penv env s1 :=
@@ -62,7 +62,7 @@ theorem step_while (ih : Specs m prof n) : WhileSpec m prof (n + 1) := by
     have hF2' : Frame m W tenv penv env s2 := hF2.tenv_congr rfl rfl rfl (fun _ h => h)
     have again := (ih.while_ W tenv penv env s2 c body tn tn1 tn2 bty rst rst1 rst2 rhoc rb rng hp
       hF2' htc htb hrc hrb hE).mono (Q := fun fl s' =>
-        Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧ LoopFlow m W tenv penv s' fl ∧
+        Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ LoopFlow m W tenv penv s' fl ∧
         (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true))
       (fun fl s' ⟨g1, g2, g3, g4⟩ => ⟨g1, (hX1.trans hX2).trans g2, g3, g4⟩)
     cases fl with
@@ -80,7 +80,7 @@ theorem step_while (ih : Specs m prof n) : WhileSpec m prof (n + 1) := by
     by_cases hn : n = 0
     · rw [if_pos hn]; exact trivial
     · rw [if_neg hn]
-      exact body_part s hF (Ext.refl _ _)
+      exact body_part s hF (Ext.refl _ _ _)
   · simp only [execWhile]
     refine Sat.bind (ih.expr W tenv penv env s c _ _ _ _ _ _ hp hF htc hrc
       ((rpBlockValue_mono hrb).2.trans hE)) ?_
@@ -117,7 +117,7 @@ theorem step_range (ih : Specs m prof n) : RangeSpec m prof (n + 1) := by
       have hF2' : Frame m W tenv penv env s2 := hF2.tenv_congr rfl rfl rfl (fun _ h => h)
       have again := (ih.range W tenv penv env s2 x t (i + 1) hi body tn1 tn2 bty rst1 rst2 rb rng hp
         hF2' htb hrb hE).mono (Q := fun fl s' =>
-          Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧ LoopFlow m W tenv penv s' fl)
+          Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ LoopFlow m W tenv penv s' fl)
         (fun fl s' ⟨g1, g2, g3⟩ => ⟨g1, hX2.trans g2, g3⟩)
       cases fl with
       | normal v => exact again
@@ -129,7 +129,7 @@ theorem step_range (ih : Specs m prof n) : RangeSpec m prof (n + 1) := by
         simp only [sat_pure]
         exact ⟨hF2', hX2, hfl.1, hfl.2.tsame rfl rfl⟩
   · simp only [h, if_false, sat_pure]
-    exact ⟨hF, Ext.refl _ _, trivial⟩
+    exact ⟨hF, Ext.refl _ _ _, trivial⟩
 
 set_option maxHeartbeats 1600000 in
 theorem step_each (ih : Specs m prof n) : EachSpec m prof (n + 1) := by
@@ -164,7 +164,7 @@ theorem step_each (ih : Specs m prof n) : EachSpec m prof (n + 1) := by
             | .cont => execEach n ⟨prof, m⟩ env x idx byRef body vw (i + 1)
             | .brk => pure (.normal .unit)
             | .ret v => pure (.ret v)) s' (fun fl s2 =>
-            Frame m W tenv penv env s2 ∧ Ext (insts env) s' s2 ∧ LoopFlow m W tenv penv s2 fl) := by
+            Frame m W tenv penv env s2 ∧ Ext (insts env) (Dset W) s' s2 ∧ LoopFlow m W tenv penv s2 fl) := by
         intro ev pre' hpre' hev
         subst hpre'
         refine Sat.bind (block_of_checks ih.block hp hFl body _ ((x, ev) :: idxVal i idx)
@@ -194,7 +194,7 @@ theorem step_each (ih : Specs m prof n) : EachSpec m prof (n + 1) := by
           have hF2' : Frame m W tenv penv env s2 := hF2.tenv_congr rfl rfl rfl (fun _ h => h)
           have again := (ih.each W tenv penv env s2 x idx byRef body vw (i + 1) el xty rho tn1 tn2 bty
             rst1 rst2 rb rng hp hF2' (hvw.mono hX2.le) hg hcond htb hrb hE).mono (Q := fun fl s3 =>
-              Frame m W tenv penv env s3 ∧ Ext (insts env) s' s3 ∧ LoopFlow m W tenv penv s3 fl)
+              Frame m W tenv penv env s3 ∧ Ext (insts env) (Dset W) s' s3 ∧ LoopFlow m W tenv penv s3 fl)
             (fun fl s3 ⟨g1, g2, g3⟩ => ⟨g1, hX2.trans g2, g3⟩)
           cases fl with
           | normal v => exact again
@@ -212,7 +212,7 @@ theorem step_each (ih : Specs m prof n) : EachSpec m prof (n + 1) := by
         obtain ⟨⟨mx, hxty⟩, hbr⟩ := hcond
         refine rest _ _ (by cases idx <;> rfl) (fun lv hlv hty => ?_)
         rw [hty, hxty]
-        refine ⟨⟨_, rfl, flat_refTarget hvw.1, Or.inl hel⟩, fun r hr => ?_⟩
+        refine ⟨⟨_, rfl, Or.inl ⟨flat_refTarget hvw.1, Or.inl hel⟩⟩, fun r hr => ?_⟩
         cases hr
         obtain ⟨lv', ann, _, ha, hsub, _⟩ := bindRootsV_ok _ _ _ _ hbr
         exact ⟨ann, ha, hg.subset hsub⟩
@@ -224,6 +224,6 @@ theorem step_each (ih : Specs m prof n) : EachSpec m prof (n + 1) := by
         rw [hty, hxty]
         exact ⟨hasTy_of_flat hT (Or.inl hvw.1), flat_no_targets hT⟩
     · simp only [h, if_false, sat_pure]
-      exact ⟨hF, Ext.refl _ _, trivial⟩
+      exact ⟨hF, Ext.refl _ _ _, trivial⟩
 
 end Goose.Core.Sound

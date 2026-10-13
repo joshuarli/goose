@@ -74,6 +74,30 @@ def Ty.readable : Ty → Bool
   | .slice _ e => e.flat
   | t => t.flat
 
+/-- A reference to a slice variable. Such a reference exists only as a
+parameter: it is passed, never copied or stored. -/
+def Ty.isRefSlice : Ty → Bool
+  | .ref _ (.slice _ e) => e.flat
+  | _ => false
+
+def Ty.isSlice : Ty → Bool
+  | .slice _ e => e.flat
+  | _ => false
+
+/-- Types a parameter may have. -/
+def Ty.paramOk (t : Ty) : Bool := t.storable || t.isRefSlice
+
+/-- The variable a place dereferences directly. -/
+def Place.derefVar? : Place → Option VarId
+  | .deref (.read (.var x)) => some x
+  | _ => none
+
+/-- A place whose slice may be passed by reference: a slice variable, or the
+pointee of a reference to one. -/
+def Place.sliceArg : Place → Bool
+  | .var _ => true
+  | p => p.derefVar?.isSome
+
 def Ty.isRefLike : Ty → Bool
   | .ref _ _ | .slice _ _ => true
   | _ => false
@@ -238,6 +262,18 @@ def loopRefTy (env : TEnv) (x : VarId) (el : Ty) (mu : Bool) : T Ty :=
     | _ => rej .type "a by-reference loop variable that is not a reference"
   | none => rej .type s!"variable {x} outside the variable table"
 
+/-- The type of a visible reference-to-slice variable that is read only to be
+dereferenced. No expression yields such a reference as a value. -/
+def sliceRefTy (env : TEnv) (e : Expr) : Option Ty :=
+  match e with
+  | .read (.var x) =>
+    if env.visible.contains x then
+      match env.vars[x]? with
+      | some lv => if lv.ty.isRefSlice then some lv.ty else none
+      | none => none
+    else none
+  | _ => none
+
 /-- A `return` without a value: outside expression blocks, in a function with
 no result. -/
 def retUnit (env : TEnv) : T Unit := do
@@ -278,7 +314,12 @@ def tyPlace (env : TEnv) : Place → T (Ty × Bool)
       | none => rej .type s!"global {g} outside the global table"
     else rej .type s!"global {g} is not initialized at this point"
   | .deref e => do
-    match (← tyExpr env e) with
+    let src ← (match sliceRefTy env e with
+      | some t => pure t
+      | none => do
+        let t ← tyExpr env e
+        if t.isRefSlice then rej .type "a reference to a slice variable is not a value" else pure t)
+    match src with
     | .ref m t => pure (t, m == .mutable)
     | _ => rej .type "dereference of a value that is not a reference"
   | .elem v i o => do
@@ -439,7 +480,10 @@ def tyArgs (env : TEnv) (callee : Impl) : List Param → List Arg → T Unit
       unless argTy.passableTo pv.ty do rej .call s!"argument of a type the parameter {pv.name} does not accept"
     | .byRef m p' =>
       let (t, mu) ← tyPlace env p'
-      unless t.refTarget do rej .type "a by-reference argument of a type no reference may target"
+      -- A slice may be passed by reference only from a `var` slice variable or
+      -- through a reference to one.
+      unless t.refTarget || (t.isSlice && mu && p'.sliceArg) do
+        rej .type "a by-reference argument of a type no reference may target"
       if m == .mutable then requireWrite "a mutable argument" mu
       unless (Ty.ref m t).passableTo pv.ty do
         rej .call s!"argument of a type or mutability the parameter {pv.name} does not accept"
@@ -481,7 +525,10 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
   | .assign p e o => do
     checkOrg env o
     let (t, mu) ← tyPlace env p
-    unless t.flat do rej .type "assignment to a place that does not hold a flat value"
+    -- A slice is assigned only through a reference to a slice variable; a
+    -- slice variable itself is rebound.
+    unless t.flat || (t.isSlice && p.derefVar?.isSome) do
+      rej .type "assignment to a place that does not hold a flat value"
     let et ← tyExpr env e
     unless et == t do rej .type "assigned value of another type than the place"
     requireWrite "assignment" mu
@@ -587,7 +634,9 @@ def checkParam (impl : Impl) (i : Nat) : V Unit :=
     let some lv := impl.vars[i]? | reject .type s!"parameter {i} has no variable row"
     unless lv.scope = 0 do reject .type s!"parameter {i} is not declared in the body block"
     match p.mode, lv.ty with
-    | .byRef, .ref _ t => unless t.refTarget do reject .type s!"parameter {i} refers to a type no reference may target"
+    | .byRef, .ref _ t =>
+      unless t.refTarget || t.isSlice do
+        reject .type s!"parameter {i} refers to a type no reference may target"
     | .byRef, _ => reject .type s!"by-reference parameter {i} is not of reference type"
     | .byValue, .ref _ _ => reject .type s!"by-value parameter {i} is of reference type"
     | .byValue, .grow _ => reject .type s!"by-value parameter {i} is a growable array"

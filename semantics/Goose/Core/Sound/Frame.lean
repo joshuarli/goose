@@ -18,6 +18,13 @@ structure World where
   P : Nat → RootInst → Prop
   E : Eff
   base : Nat
+  /-- The slice variables of callers this activation was given a reference
+  to, with their element types. Their slices may be replaced from here. -/
+  D : RootInst → Ty → Prop
+  /-- The roots a slice stored in such a variable may point into. -/
+  A : RootInst → RootInst → Prop
+
+def Dset (W : World) : RootInst → Prop := fun r => ∃ E, W.D r E
 
 /-- The root instance a static root denotes in an activation. -/
 def RootIn (env : Env) (P : Nat → RootInst → Prop) (r : RootInst) : RootRef → Prop
@@ -133,13 +140,13 @@ theorem access {m : Module} {W : World} {env : Env} {s : Store} {l : Loc} {T : T
 /-- The store after a computation, seen from the code around it: typed
 locations stay typed, no scope instance is handed out twice, a stored reference
 outside the scope instances `insts` is kept, and no root is added. -/
-structure Ext (insts : List Nat) (s s' : St) : Prop where
+structure Ext (insts : List Nat) (D : RootInst → Prop) (s s' : St) : Prop where
   le : StoreLe s.store s'.store
   next : s.nextScope ≤ s'.nextScope
   keep : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → IsRef v →
-    (∀ a si x, r = RootInst.local a si x → si ∉ insts) → s'.store.roots[r]? = some v
+    (∀ a si x, r = RootInst.local a si x → si ∉ insts) → ¬ D r → s'.store.roots[r]? = some v
   back : ∀ (r : RootInst) (v : Val), s'.store.roots[r]? = some v → IsRef v →
-    (∀ a si x, r = RootInst.local a si x → si ∉ insts) → s.store.roots[r]? = some v
+    (∀ a si x, r = RootInst.local a si x → si ∉ insts) → ¬ D r → s.store.roots[r]? = some v
   dom : ∀ (r : RootInst), s'.store.roots[r]? ≠ none → s.store.roots[r]? ≠ none
 
 def insts (env : Env) : List Nat := env.scopes.map Prod.snd
@@ -150,44 +157,49 @@ def TopRoot (env : Env) (r : RootInst) : Prop :=
     r = .local env.act si x
 
 /-- As `Ext`, for statements, which may declare variables of the innermost block. -/
-structure ExtS (env : Env) (s s' : St) : Prop where
+structure ExtS (env : Env) (D : RootInst → Prop) (s s' : St) : Prop where
   le : StoreLe s.store s'.store
   next : s.nextScope ≤ s'.nextScope
   keep : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → IsRef v →
-    (∀ a si x, r = RootInst.local a si x → si ∉ insts env) → s'.store.roots[r]? = some v
+    (∀ a si x, r = RootInst.local a si x → si ∉ insts env) → ¬ D r → s'.store.roots[r]? = some v
   back : ∀ (r : RootInst) (v : Val), s'.store.roots[r]? = some v → IsRef v →
-    (∀ a si x, r = RootInst.local a si x → si ∉ insts env) → s.store.roots[r]? = some v
+    (∀ a si x, r = RootInst.local a si x → si ∉ insts env) → ¬ D r → s.store.roots[r]? = some v
   dom : ∀ (r : RootInst), s'.store.roots[r]? ≠ none → s.store.roots[r]? ≠ none ∨ TopRoot env r
 
-theorem Ext.refl (insts : List Nat) (s : St) : Ext insts s s :=
-  ⟨StoreLe.refl _, Nat.le_refl _, fun _ _ h _ _ => h, fun _ _ h _ _ => h, fun _ h => h⟩
+theorem Ext.refl (insts : List Nat) (D : RootInst → Prop) (s : St) : Ext insts D s s :=
+  ⟨StoreLe.refl _, Nat.le_refl _, fun _ _ h _ _ _ => h, fun _ _ h _ _ _ => h, fun _ h => h⟩
 
-theorem Ext.trans {insts : List Nat} {a b c : St} (h1 : Ext insts a b) (h2 : Ext insts b c) :
-    Ext insts a c :=
+theorem Ext.trans {insts : List Nat} {D : RootInst → Prop} {a b c : St} (h1 : Ext insts D a b)
+    (h2 : Ext insts D b c) : Ext insts D a c :=
   ⟨h1.le.trans h2.le, Nat.le_trans h1.next h2.next,
-   fun r v hv hr hn => h2.keep r v (h1.keep r v hv hr hn) hr hn,
-   fun r v hv hr hn => h1.back r v (h2.back r v hv hr hn) hr hn,
+   fun r v hv hr hn hd => h2.keep r v (h1.keep r v hv hr hn hd) hr hn hd,
+   fun r v hv hr hn hd => h1.back r v (h2.back r v hv hr hn hd) hr hn hd,
    fun r h => h1.dom r (h2.dom r h)⟩
 
-theorem Ext.toS {env : Env} {s s' : St} (h : Ext (insts env) s s') : ExtS env s s' :=
+theorem Ext.toS {env : Env} {D : RootInst → Prop} {s s' : St} (h : Ext (insts env) D s s') :
+    ExtS env D s s' :=
   ⟨h.le, h.next, h.keep, h.back, fun r hr => Or.inl (h.dom r hr)⟩
 
-theorem ExtS.trans {env : Env} {a b c : St} (h1 : ExtS env a b) (h2 : ExtS env b c) :
-    ExtS env a c :=
+theorem ExtS.trans {env : Env} {D : RootInst → Prop} {a b c : St} (h1 : ExtS env D a b)
+    (h2 : ExtS env D b c) : ExtS env D a c :=
   ⟨h1.le.trans h2.le, Nat.le_trans h1.next h2.next,
-   fun r v hv hr hn => h2.keep r v (h1.keep r v hv hr hn) hr hn,
-   fun r v hv hr hn => h1.back r v (h2.back r v hv hr hn) hr hn,
+   fun r v hv hr hn hd => h2.keep r v (h1.keep r v hv hr hn hd) hr hn hd,
+   fun r v hv hr hn hd => h1.back r v (h2.back r v hv hr hn hd) hr hn hd,
    fun r h => (h2.dom r h).elim (fun h' => h1.dom r h') Or.inr⟩
 
-theorem Ext.weaken {insts insts' : List Nat} {s s' : St} (h : Ext insts s s')
-    (hs : ∀ i, i ∈ insts → i ∈ insts') : Ext insts' s s' :=
-  ⟨h.le, h.next, fun r v hv hr hn => h.keep r v hv hr (fun a si x e hi => hn a si x e (hs si hi)),
-   fun r v hv hr hn => h.back r v hv hr (fun a si x e hi => hn a si x e (hs si hi)), h.dom⟩
+/-- A computation that left more roots alone also left fewer alone. -/
+theorem Ext.weaken {insts insts' : List Nat} {D D' : RootInst → Prop} {s s' : St}
+    (h : Ext insts D s s')
+    (hs : ∀ (r : RootInst), ¬ D' r → (∀ a si x, r = RootInst.local a si x → si ∉ insts') →
+      ¬ D r ∧ ∀ a si x, r = RootInst.local a si x → si ∉ insts) : Ext insts' D' s s' :=
+  ⟨h.le, h.next,
+   fun r v hv hr hn hd => h.keep r v hv hr (hs r hd hn).2 (hs r hd hn).1,
+   fun r v hv hr hn hd => h.back r v hv hr (hs r hd hn).2 (hs r hd hn).1, h.dom⟩
 
-theorem Ext.of_flatStep {insts : List Nat} {s : St} {st' : Store} (h : FlatStep s.store st') :
-    Ext insts s { s with store := st' } := by
-  refine ⟨h.le, Nat.le_refl _, fun r v hv hr _ => h.keep r v hv hr, ?_, ?_⟩
-  · intro r v hv hr _
+theorem Ext.of_flatStep {insts : List Nat} {D : RootInst → Prop} {s : St} {st' : Store}
+    (h : FlatStep s.store st') : Ext insts D s { s with store := st' } := by
+  refine ⟨h.le, Nat.le_refl _, fun r v hv hr _ _ => h.keep r v hv hr, ?_, ?_⟩
+  · intro r v hv hr _ _
     rcases h.back r v hv with h0 | ⟨hn, _⟩
     · exact h0
     · exact absurd hr hn
@@ -213,6 +225,16 @@ theorem TopB.ext {env : Env} {lo cur cur' : Nat} {s s' : St} (h : TopB env lo cu
 
 /-! ### The frame -/
 
+/-- What a parameter that refers to a slice variable is known to point at:
+a slice variable of a caller, whose slices are rooted exactly within the
+parameter's content roots. -/
+def PRef (P : Nat → RootInst → Prop) (D : RootInst → Ty → Prop) (A : RootInst → RootInst → Prop)
+    (penv : PEnv) (vars : Array LocalVar) (x : VarId) (cont : List RootRef) : Prop :=
+  (∀ y, RootRef.local y ∉ cont) ∧ penv.ann x = some [.param x] ∧
+  ∀ (lv : LocalVar) (mu mu' : Mutability) (E : Ty), vars[x]? = some lv →
+    lv.ty = .ref mu (.slice mu' E) → ∀ r, P x r →
+    D r E ∧ (∀ t, A r t → Gam noEnv P cont t) ∧ (∀ t, Gam noEnv P cont t → A r t)
+
 /-- The validator's description of a point in a function body holds of the
 store: every visible variable is bound in the instance of its block to a value
 of its type, every reference a variable of the activation holds points into
@@ -230,13 +252,19 @@ structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env)
   base_le : W.base ≤ s.nextScope
   pAge : ∀ (i : Nat) (a : ActId) (si : ScopeInst) (x : VarId), W.P i (.local a si x) → si < W.base
   vis : ∀ x, x ∈ tenv.visible → ∃ lv si v, env.vars[x]? = some lv ∧
-      env.scopes.lookup lv.scope = some si ∧ lv.ty.storable = true ∧
+      env.scopes.lookup lv.scope = some si ∧ lv.ty.paramOk = true ∧
       s.store.roots[RootInst.local env.act si x]? = some v ∧ HasTy m W.G s.store v lv.ty
   rooted : ∀ (x : VarId) (lv : LocalVar) (si : ScopeInst) (v : Val), env.vars[x]? = some lv →
       env.scopes.lookup lv.scope = some si →
       s.store.roots[RootInst.local env.act si x]? = some v → ∀ r, Targets v r →
       ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r
   inv : StoreInv m W.G s
+  aOlder : ∀ r t, W.A r t → Older t r
+  dOut : ∀ r E, W.D r E → ∃ a si x, r = RootInst.local a si x ∧ si < W.base
+  dFun : ∀ r E E', W.D r E → W.D r E' → E = E'
+  sa : ∀ r E, W.D r E → ∃ v, s.store.roots[r]? = some v ∧
+      HasTy m W.G s.store v (.slice .mutable E) ∧ ∀ t, Targets v t → W.A r t
+  pref : ∀ x cont, penv.cont x = some cont → PRef W.P W.D W.A penv env.vars x cont
 
 /-- The typing environments agree on everything a frame reads. -/
 theorem Frame.tenv_congr {m : Module} {W : World} {t1 t2 : TEnv} {penv : PEnv} {env : Env} {s : St}
@@ -248,10 +276,11 @@ theorem Frame.tenv_congr {m : Module} {W : World} {t1 t2 : TEnv} {penv : PEnv} {
     vis := fun x hx => h.vis x (h4 x hx) }
 
 theorem hasTy_step {m : Module} {G : Nat} {s s' : Store} {r : RootInst} {v : Val} {T : Ty}
-    (hle : StoreLe s s') (hkeep : IsRef v → s'.roots[r]? = some v) (hT : T.storable = true)
+    (hle : StoreLe s s') (hkeep : IsRef v → s'.roots[r]? = some v) (hT : T.paramOk = true)
     (hv : s.roots[r]? = some v) (ht : HasTy m G s v T) :
     ∃ v', s'.roots[r]? = some v' ∧ HasTy m G s' v' T := by
-  cases T <;> simp only [Ty.storable] at hT <;> try cases hT
+  cases T <;> simp only [Ty.paramOk, Ty.storable, Ty.isRefSlice, Bool.or_false, Bool.false_or,
+    reduceCtorEq] at hT
   case int t => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case bool => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
   case arr E k => simp only [HasTy] at ht ⊢; exact flat_mono hle hv ht
@@ -278,6 +307,11 @@ theorem Frame.flatStep {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env
       rcases hs.back _ v h3 with h0 | ⟨hn, _⟩
       · exact h.rooted x lv si v h1 h2 h0 r ht
       · exact absurd ht.isRef hn
-    inv := h.inv.flatStep hs }
+    inv := h.inv.flatStep hs
+    sa := by
+      intro r E hd
+      obtain ⟨v, h1, h2, h3⟩ := h.sa r E hd
+      obtain ⟨l, a, b, rfl, _⟩ := h2
+      exact ⟨_, hs.keep r _ h1 trivial, HasTy.mono hs.le ⟨l, a, b, rfl, by assumption⟩, h3⟩ }
 
 end Goose.Core.Sound

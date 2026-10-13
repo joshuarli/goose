@@ -1,4 +1,4 @@
-import Goose.Core.Sound.Lemmas
+import Goose.Core.Sound.StepAux
 
 /-!
 One step of the induction on fuel for expressions.
@@ -25,7 +25,7 @@ theorem step_expr_a (ih : Specs m prof n) :
     Perm m W → Frame m W tenv penv env s →
     tyExpr tenv e tn = .ok (ty, tn') → rpExpr penv e rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalExpr (n + 1) ⟨prof, m⟩ env e) s (fun v s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧ HasTy m W.G s'.store v ty ∧
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r) := by
   intro W tenv penv env s e tn tn' ty rst rst' rho hsel hp hF ht hr hE
   cases e with
@@ -35,14 +35,14 @@ theorem step_expr_a (ih : Specs m prof n) :
     obtain ⟨_, rfl, rfl⟩ := ht
     obtain ⟨rfl, rfl⟩ := hr
     simp only [evalExpr, sat_pure]
-    exact ⟨hF, Ext.refl _ _, rfl, noTargets_int⟩
+    exact ⟨hF, Ext.refl _ _ _, rfl, noTargets_int⟩
   | bool b =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr; inv at hr
     obtain ⟨rfl, rfl⟩ := ht
     obtain ⟨rfl, rfl⟩ := hr
     simp only [evalExpr, sat_pure]
-    exact ⟨hF, Ext.refl _ _, trivial, noTargets_bool⟩
+    exact ⟨hF, Ext.refl _ _ _, trivial, noTargets_bool⟩
   | not a =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr; inv at hr
@@ -195,11 +195,11 @@ theorem exprs_spec (ihE : ExprSpec m prof n) {W : World} {tenv : TEnv} {penv : P
     Frame m W tenv penv env s → tyExprsAs tenv el es tn = .ok ((), tn') →
     rpExprs penv es rst = .ok ((), rst') → EffLe rst'.eff W.E →
     Sat (mapList (evalExpr n ⟨prof, m⟩ env) es) s (fun vs s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧ vs.length = es.length ∧
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ vs.length = es.length ∧
       ∀ v, v ∈ vs → FlatTy el v)
   | [], s, tn, tn', rst, rst', hF, _, _, _ => by
     simp only [mapList, sat_pure]
-    exact ⟨hF, Ext.refl _ _, rfl, fun v hv => by cases hv⟩
+    exact ⟨hF, Ext.refl _ _ _, rfl, fun v hv => by cases hv⟩
   | e :: rest, s, tn, tn', rst, rst', hF, ht, hr, hE => by
     simp only [tyExprsAs] at ht; inv at ht
     simp only [rpExprs] at hr; inv at hr
@@ -230,7 +230,7 @@ theorem step_expr_b (ih : Specs m prof n) :
     Perm m W → Frame m W tenv penv env s →
     tyExpr tenv e tn = .ok (ty, tn') → rpExpr penv e rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalExpr (n + 1) ⟨prof, m⟩ env e) s (fun v s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧ HasTy m W.G s'.store v ty ∧
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r) := by
   intro W tenv penv env s e tn tn' ty rst rst' rho hsel hp hF ht hr hE
   cases e with
@@ -247,17 +247,39 @@ theorem step_expr_b (ih : Specs m prof n) :
     refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ hp hF htp hrp
       ((PMono.addReads _ _ _ _ hadd).2.trans hE)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
-    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, rfl, h1, h2, rfl, rfl, hrl, h4, h5⟩
+    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, rfl, h1, h2, rfl, rfl, hrl, h4, h5⟩ |
+      ⟨x, lv, mu0, mus, E, ann, rfl, hlv, hty, rfl, hfl, hpath, hann, hgl, hlive⟩
     · have hlt := access hp hl hg (fun t' ht' => Or.inl (hE.1 t' (hin t' ht')))
       refine sat_readLoc hlt (fun v hv hT => ?_)
       exact ⟨hF1, hX1, hasTy_of_flat hT (Or.inl (readable_flat hrd hrt)), flat_no_targets hT⟩
     · refine sat_readRoot h4 ⟨hF1, hX1, h5, ?_⟩
       intro r hr'
       obtain ⟨ann, ha, hga⟩ := hF1.rooted x lv si v h1 h2 h4 r hr'
-      rcases hroots with ⟨x', lv', e, _, _, ha'⟩ | ⟨_, hnr⟩
+      rcases hroots with ⟨x', lv', e, _, _, ha'⟩ | ⟨x', e, _⟩ | ⟨_, hnr, _⟩
       · cases e; rw [ha] at ha'; cases ha'; exact hga
+      · cases e
       · have := hnr x lv rfl (by rw [hF1.vars_p]; exact h1)
         rw [this] at hrl; cases hrl
+    · -- A slice read through a reference to a slice variable of a caller.
+      have hsv : penv.isRefSliceVar x = true := by
+        simp [PEnv.isRefSliceVar, hF1.vars_p, hlv, hty, Ty.isRefSlice, hfl]
+      rcases hroots with ⟨x', lv', e, _⟩ | ⟨x', e, _, hc⟩ | ⟨_, _, hns⟩
+      · cases e
+      · cases e
+        obtain ⟨hnl, hann', hpr⟩ := hF1.pref x _ hc
+        rw [hann] at hann'
+        cases hann'
+        obtain ⟨q, hq, hrq⟩ := hgl
+        simp only [List.mem_singleton] at hq
+        subst hq
+        obtain ⟨hD, hFR, _⟩ := hpr lv mu0 mus E hlv hty _ hrq
+        obtain ⟨v, hv1, hv2, hv3⟩ := hF1.sa _ E hD
+        have hl : l = ⟨l.root, []⟩ := by
+          cases l; simp only at hpath; simp [hpath]
+        rw [hl]
+        exact sat_readRoot hv1 ⟨hF1, hX1, hasTy_slice_mu hv2,
+          fun r hr' => gam_of_noEnv (hFR r (hv3 r hr'))⟩
+      · rw [hns x rfl] at hsv; cases hsv
   | ref mu p =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr
@@ -270,9 +292,11 @@ theorem step_expr_b (ih : Specs m prof n) :
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     simp only [sat_pure]
     refine ⟨hF1, hX1, ?_, fun r hr' => by cases hr'; exact hg⟩
-    rcases hpl with ⟨_, hl⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩
-    · exact ⟨l, rfl, hrt, hl⟩
+    rcases hpl with ⟨_, hl⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
+      ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
+    · exact ⟨l, rfl, Or.inl ⟨hrt, hl⟩⟩
     · rw [refTarget_not_refLike hrt] at hrl; cases hrl
+    · subst h3; simp [Ty.refTarget] at hrt
   | len v =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr; inv at hr
@@ -325,7 +349,8 @@ theorem step_expr_b (ih : Specs m prof n) :
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     refine Sat.bind (ih.expr W tenv penv env s1 a _ _ _ _ _ _ hp hF1 hta hra hE2) ?_
     rintro v s2 ⟨hF2, hX2, hv, _⟩
-    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩
+    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
+      ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
     · have hfl : ta.flat = true := by simpa [Ty.refTarget] using hrt
       have hlt := access hp (hl.mono hX2.le) hg
         (fun t' ht' => Or.inr (Or.inr (hE.2.2.1 t' (hin t' ht'))))
@@ -338,10 +363,12 @@ theorem step_expr_b (ih : Specs m prof n) :
       have hstep := append_flatStep _ _ _ _ _ _ hlt hvs happ
       obtain ⟨_, _, es, hread, hi, hnew⟩ := append_le _ _ _ _ _ _ hlt hvs happ
       refine ⟨hF2.flatStep hstep, (hX1.trans hX2).trans (Ext.of_flatStep hstep),
-        ⟨_, rfl, flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩⟩, fun r hr' => by cases hr'; exact hg⟩
+        ⟨_, rfl, Or.inl ⟨flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩⟩⟩,
+        fun r hr' => by cases hr'; exact hg⟩
       have := hnew 0 v (by simp)
       simpa using this
     · simp [Ty.isRefLike] at hrl
+    · cases h3
   | ifE c t f =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr; inv at hr

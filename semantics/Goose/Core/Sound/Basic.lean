@@ -92,7 +92,8 @@ def SliceTy (s : Store) (l : Loc) (st n : Nat) (E : Ty) : Prop :=
 
 /-- The value has the type in the store. Mutability is not part of it. -/
 def HasTy (m : Module) (G : Nat) (s : Store) (v : Val) : Ty → Prop
-  | .ref _ T => ∃ l, v = .ref l ∧ T.refTarget = true ∧ LocOk m G s l T
+  | .ref _ T => ∃ l, v = .ref l ∧ ((T.refTarget = true ∧ LocOk m G s l T) ∨
+      (T.isSlice = true ∧ l.path = [] ∧ s.roots[l.root]? ≠ none))
   | .slice _ E => ∃ l st n, v = .slice l st n ∧ E.flat = true ∧ SliceTy s l st n E
   | .unit => v = .unit
   | .tuple _ => False
@@ -103,9 +104,18 @@ def HasTy (m : Module) (G : Nat) (s : Store) (v : Val) : Ty → Prop
 
 /-- What a stored reference or slice must denote, whatever its type. -/
 def Held (m : Module) (G : Nat) (s : Store) : Val → Prop
-  | .ref l => ∃ T, T.refTarget = true ∧ LocOk m G s l T
+  | .ref l => (∃ T, T.refTarget = true ∧ LocOk m G s l T) ∨
+      (l.path = [] ∧ s.roots[l.root]? ≠ none)
   | .slice l st n => ∃ E, SliceTy s l st n E
   | _ => True
+
+theorem dom_mono {s s' : Store} {r : RootInst} (hle : StoreLe s s') (h : s.roots[r]? ≠ none) :
+    s'.roots[r]? ≠ none := by
+  cases hv : s.roots[r]? with
+  | none => exact absurd hv h
+  | some v =>
+    obtain ⟨v', hv', _⟩ := hle r v hv
+    rw [hv']; simp
 
 theorem flat_not_ref {T : Ty} {v : Val} (h : FlatTy T v) : ¬ IsRef v := by
   cases v <;> simp only [IsRef, not_false_eq_true, not_true_eq_false]
@@ -137,19 +147,24 @@ theorem flat_mono {s s' : Store} {r : RootInst} {T : Ty} {v : Val} (hle : StoreL
 theorem HasTy.mono {m : Module} {G : Nat} {s s' : Store} {v : Val} {T : Ty} (hle : StoreLe s s')
     (h : HasTy m G s v T) : HasTy m G s' v T := by
   cases T <;> simp only [HasTy] at h ⊢ <;> try exact h
-  · obtain ⟨l, h1, h2, h3⟩ := h; exact ⟨l, h1, h2, h3.mono hle⟩
+  · obtain ⟨l, h1, h2⟩ := h
+    exact ⟨l, h1, h2.elim (fun h => Or.inl ⟨h.1, h.2.mono hle⟩)
+      (fun h => Or.inr ⟨h.1, h.2.1, dom_mono hle h.2.2⟩)⟩
   · obtain ⟨l, st, n, h1, h2, h3⟩ := h; exact ⟨l, st, n, h1, h2, h3.mono hle⟩
 
 theorem Held.mono {m : Module} {G : Nat} {s s' : Store} {v : Val} (hle : StoreLe s s')
     (h : Held m G s v) : Held m G s' v := by
   cases v <;> simp only [Held] at h ⊢
-  · obtain ⟨T, h1, h2⟩ := h; exact ⟨T, h1, h2.mono hle⟩
+  · exact h.elim (fun ⟨T, h1, h2⟩ => Or.inl ⟨T, h1, h2.mono hle⟩)
+      (fun h => Or.inr ⟨h.1, dom_mono hle h.2⟩)
   · obtain ⟨E, h1⟩ := h; exact ⟨E, h1.mono hle⟩
 
 theorem HasTy.held {m : Module} {G : Nat} {s : Store} {v : Val} {T : Ty}
     (h : HasTy m G s v T) : Held m G s v := by
   cases T <;> simp only [HasTy] at h
-  case ref _ T => obtain ⟨l, rfl, h2, h3⟩ := h; exact ⟨T, h2, h3⟩
+  case ref _ T =>
+    obtain ⟨l, rfl, h2⟩ := h
+    exact h2.elim (fun h => Or.inl ⟨T, h.1, h.2⟩) (fun h => Or.inr ⟨h.2.1, h.2.2⟩)
   case slice _ E => obtain ⟨l, st, n, rfl, _, h3⟩ := h; exact ⟨E, h3⟩
   case unit => subst h; trivial
   all_goals (cases v <;> simp_all [Held, FlatTy])

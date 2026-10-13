@@ -49,12 +49,14 @@ theorem hasTy_target_dom {G : Nat} {st : Store} {v : Val} {T : Ty} {r : RootInst
     (h : HasTy m G st v T) (hr : Targets v r) : (∃ g, r = .global g) ∨ st.roots[r]? ≠ none := by
   cases T with
   | ref mu T' =>
-    obtain ⟨l, rfl, _, hl⟩ := h
+    obtain ⟨l, rfl, hh⟩ := h
     cases hr
-    rcases hl with ⟨x, hx, _⟩ | ⟨g, gl, _, rfl, _⟩
-    · obtain ⟨old, ho, _⟩ := (read_ok_iff _ _ _).1 hx
-      exact Or.inr (by rw [ho]; simp)
-    · exact Or.inl ⟨g, rfl⟩
+    rcases hh with ⟨_, hl⟩ | ⟨_, _, hlive⟩
+    · rcases hl with ⟨x, hx, _⟩ | ⟨g, gl, _, rfl, _⟩
+      · obtain ⟨old, ho, _⟩ := (read_ok_iff _ _ _).1 hx
+        exact Or.inr (by rw [ho]; simp)
+      · exact Or.inl ⟨g, rfl⟩
+    · exact Or.inr hlive
   | slice mu E =>
     obtain ⟨l, a, b, rfl, _, x, es, hx, _⟩ := h
     cases hr
@@ -75,7 +77,7 @@ theorem frame_pre {sc : Nat} {si : ScopeInst} {rest0 : List (Nat × ScopeInst)}
     ∀ (pre : List (VarId × Val)) (tcur : TEnv) (s : St),
     Frame m W tcur penv env s → (pre.map Prod.fst).Nodup →
     (∀ x v, (x, v) ∈ pre → s.store.roots[RootInst.local env.act si x]? = none ∧
-      ∃ lv, env.vars[x]? = some lv ∧ lv.scope = sc ∧ lv.ty.storable = true ∧
+      ∃ lv, env.vars[x]? = some lv ∧ lv.scope = sc ∧ lv.ty.paramOk = true ∧
         HasTy m W.G s.store v lv.ty ∧
         ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
           Older r (.local env.act si x)) →

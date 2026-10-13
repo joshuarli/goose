@@ -358,12 +358,21 @@ theorem loopRefTy_ok (env : TEnv) (x : VarId) (el : Ty) (mu : Bool) (s : Nat) (r
       rcases h with ⟨_, _, rfl, rfl⟩ | ⟨_, rfl, rfl⟩ <;> exact ⟨rfl, lv, mx, rfl, hty, hty.symm⟩
     | _ => simp only [hty] at h; inv at h
 
+theorem derefVar_eq {p : Place} {x : VarId} (h : p.derefVar? = some x) :
+    p = .deref (.read (.var x)) := by
+  unfold Place.derefVar? at h
+  split at h
+  · cases h; rfl
+  · cases h
+
 theorem readRoots_ok (env : PEnv) (p : Place) (s : RState) (r : List RootRef × RState)
     (h : readRoots env p s = .ok r) :
     r.2 = s ∧
     ((∃ x lv, p = .var x ∧ env.impl.vars[x]? = some lv ∧ lv.ty.isRefLike = true ∧
         env.ann x = some r.1) ∨
-      (r.1 = [] ∧ ∀ x lv, p = .var x → env.impl.vars[x]? = some lv → lv.ty.isRefLike = false)) := by
+      (∃ x, p = .deref (.read (.var x)) ∧ env.isRefSliceVar x = true ∧ env.cont x = some r.1) ∨
+      (r.1 = [] ∧ (∀ x lv, p = .var x → env.impl.vars[x]? = some lv → lv.ty.isRefLike = false) ∧
+        ∀ x, p = .deref (.read (.var x)) → env.isRefSliceVar x = false)) := by
   obtain ⟨rho, s'⟩ := r
   cases p with
   | var x =>
@@ -371,7 +380,9 @@ theorem readRoots_ok (env : PEnv) (p : Place) (s : RState) (r : List RootRef × 
     cases hv : env.impl.vars[x]? with
     | none =>
       simp only [hv] at h; inv at h
-      exact ⟨h.2, Or.inr ⟨h.1, fun x' lv e h' => by cases e; rw [hv] at h'; cases h'⟩⟩
+      refine ⟨h.2, Or.inr (Or.inr ⟨h.1, ?_, ?_⟩)⟩
+      · intro x' lv e h'; cases e; rw [hv] at h'; cases h'
+      · intro x' e; cases e
     | some lv =>
       simp only [hv] at h
       by_cases hr : lv.ty.isRefLike = true
@@ -383,11 +394,151 @@ theorem readRoots_ok (env : PEnv) (p : Place) (s : RState) (r : List RootRef × 
           obtain ⟨rfl, rfl⟩ := h
           exact ⟨rfl, Or.inl ⟨x, lv, rfl, hv, hr, ha⟩⟩
       · simp only [hr] at h; inv at h
-        exact ⟨h.2, Or.inr ⟨h.1, fun x' lv' e h' => by
-          cases e; rw [hv] at h'; cases h'; simpa using hr⟩⟩
-  | _ =>
+        refine ⟨h.2, Or.inr (Or.inr ⟨h.1, ?_, ?_⟩)⟩
+        · intro x' lv' e h'; cases e; rw [hv] at h'; cases h'; simpa using hr
+        · intro x' e; cases e
+  | deref e =>
+    by_cases hx : ∃ x, e = .read (.var x)
+    · obtain ⟨x, rfl⟩ := hx
+      simp only [readRoots] at h
+      by_cases hs : env.isRefSliceVar x = true
+      · simp only [hs, if_true] at h
+        cases hc : env.cont x with
+        | none => simp only [hc] at h; inv at h
+        | some cont =>
+          simp only [hc] at h; inv at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨rfl, Or.inr (Or.inl ⟨x, rfl, hs, hc⟩)⟩
+      · simp only [hs] at h; inv at h
+        refine ⟨h.2, Or.inr (Or.inr ⟨h.1, ?_, ?_⟩)⟩
+        · intro x' lv e; cases e
+        · intro x' e; cases e; simpa using hs
+    · have hp : readRoots env (.deref e) = pure [] := by
+        cases e <;> try rfl
+        rename_i p'
+        cases p' <;> try rfl
+        exact absurd ⟨_, rfl⟩ hx
+      rw [hp] at h; inv at h
+      refine ⟨h.2, Or.inr (Or.inr ⟨h.1, ?_, ?_⟩)⟩
+      · intro x' lv e; cases e
+      · intro x' e; cases e; exact absurd ⟨_, rfl⟩ hx
+  | global g =>
     simp only [readRoots] at h; inv at h
-    exact ⟨h.2, Or.inr ⟨h.1, fun x' lv e => by cases e⟩⟩
+    refine ⟨h.2, Or.inr (Or.inr ⟨h.1, ?_, ?_⟩)⟩
+    · intro x' lv e; cases e
+    · intro x' e; cases e
+  | elem v i o =>
+    simp only [readRoots] at h; inv at h
+    refine ⟨h.2, Or.inr (Or.inr ⟨h.1, ?_, ?_⟩)⟩
+    · intro x' lv e; cases e
+    · intro x' e; cases e
+
+theorem checkStore_ok (env : PEnv) (p : Place) (rho : List RootRef) (h : checkStore env p rho = .ok ())
+    (x : VarId) (hx : p.derefVar? = some x) (hs : env.isRefSliceVar x = true) :
+    ∃ cont, env.cont x = some cont ∧ ∀ q, q ∈ rho → q ∈ cont := by
+  unfold checkStore at h
+  simp only [hx, hs, if_true] at h
+  cases hc : env.cont x with
+  | none => simp only [hc] at h; inv at h
+  | some cont =>
+    simp only [hc] at h; inv at h
+    exact ⟨cont, rfl, subsetRoots_mem h⟩
+
+theorem unionRoots_mem (a b : List RootRef) : ∀ q, q ∈ unionRoots a b → q ∈ a ∨ q ∈ b := by
+  unfold unionRoots
+  induction b generalizing a with
+  | nil => intro q hq; exact Or.inl (by simpa using hq)
+  | cons x xs ih =>
+    intro q hq
+    simp only [List.foldl_cons] at hq
+    rcases ih _ q hq with h | h
+    · split at h
+      · exact Or.inl h
+      · rcases List.mem_append.1 h with h | h
+        · exact Or.inl h
+        · exact Or.inr (by simp at h; simp [h])
+    · exact Or.inr (List.mem_cons_of_mem _ h)
+
+/-- Where a caller root of a mapped root set comes from. -/
+def FromRoot (ar : List (List RootRef)) (q : RootRef) : RootRef → Prop
+  | .param j => ∃ a, ar[j]? = some a ∧ q ∈ a
+  | .global g => q = .global g
+  | .local _ => False
+
+theorem mapResultRoots_sub (ar : List (List RootRef)) : ∀ (rs acc out : List RootRef),
+    mapResultRoots ar acc rs = .ok out →
+    ∀ q, q ∈ out → q ∈ acc ∨ ∃ r, r ∈ rs ∧ FromRoot ar q r
+  | [], acc, out, h, q, hq => by
+    simp only [mapResultRoots, ex_pure_ok] at h
+    subst h
+    exact Or.inl hq
+  | r :: rest, acc, out, h, q, hq => by
+    simp only [mapResultRoots, ex_bind_ok] at h
+    obtain ⟨mapped, h1, h2⟩ := h
+    rcases mapResultRoots_sub ar rest _ out h2 q hq with h3 | ⟨r', hr', hf⟩
+    · rcases unionRoots_mem _ _ q h3 with h4 | h4
+      · exact Or.inl h4
+      · refine Or.inr ⟨r, List.mem_cons_self, ?_⟩
+        cases r with
+        | «local» y => simp only [mapCalleeRoots] at h1; inv at h1
+        | global g =>
+          simp only [mapCalleeRoots, ex_pure_ok] at h1
+          subst h1
+          have h5 : q = RootRef.global g := by simpa using h4
+          exact h5
+        | param j =>
+          simp only [mapCalleeRoots] at h1
+          cases ha : ar[j]? with
+          | none => simp only [ha] at h1; inv at h1
+          | some a =>
+            simp only [ha, ex_pure_ok] at h1
+            subst h1
+            exact ⟨mapped, ha, h4⟩
+    · exact Or.inr ⟨r', List.mem_cons_of_mem _ hr', hf⟩
+
+theorem checkContent_ok (env : PEnv) (cctx : Context) (args : List Arg) (ars : List (List RootRef))
+    (i : Nat) (cont : List RootRef) (h : checkContent env cctx args ars i = .ok ())
+    (hc : (cctx.contentRoots.find? (·.1 == i)).map (·.2) = some cont) :
+    ∃ inst, mapResultRoots ars [] cont = .ok inst ∧
+      ((∃ mu s ann, args[i]? = some (.byRef mu (.var s)) ∧ env.ann s = some ann ∧
+          (∀ q, q ∈ ann → q ∈ inst) ∧ bindRootsV env env.scopes s inst = .ok ()) ∨
+        (∃ mu q cq, args[i]? = some (.byRef mu (.deref (.read (.var q)))) ∧ env.cont q = some cq ∧
+          (∀ r, r ∈ inst → r ∈ cq) ∧ (∀ r, r ∈ cq → r ∈ inst))) := by
+  unfold checkContent at h
+  simp only [hc] at h
+  inv at h
+  obtain ⟨inst, h1, h2⟩ := h
+  refine ⟨inst, h1, ?_⟩
+  split at h2
+  · rename_i mu s ha
+    cases hann : env.ann s with
+    | none => simp only [hann] at h2; inv at h2
+    | some ann =>
+      simp only [hann] at h2; inv at h2
+      have hb : bindRootsV env env.scopes s inst = .ok () := by
+        have h3 := h2.2
+        unfold asCall at h3
+        split at h3
+        · assumption
+        · cases h3
+      exact Or.inl ⟨mu, s, ann, ha, hann, subsetRoots_mem h2.1, hb⟩
+  · rename_i mu q ha
+    cases hcq : env.cont q with
+    | none => simp only [hcq] at h2; inv at h2
+    | some cq =>
+      simp only [hcq] at h2; inv at h2
+      simp only [Bool.and_eq_true] at h2
+      exact Or.inr ⟨mu, q, cq, ha, hcq, subsetRoots_mem h2.1, subsetRoots_mem h2.2⟩
+  · inv at h2
+
+theorem checkContents_ok (env : PEnv) (c : ContextId) (args : List Arg) (ars : List (List RootRef))
+    (cctx : Context) (h : checkContents env c args ars = .ok ())
+    (hc : env.mod.contexts[c]? = some cctx) :
+    ∀ i, i < args.length → checkContent env cctx args ars i = .ok () := by
+  unfold checkContents at h
+  simp only [hc] at h
+  intro i hi
+  exact (forAll_ok _ _).1 h i (List.mem_range.2 hi)
 
 theorem retUnit_ok (env : TEnv) (s : Nat) (r : Unit × Nat) (h : retUnit env s = .ok r) :
     r.2 = s ∧ env.inExpr = false ∧ ∃ impl, env.impl = some impl ∧ impl.results.toList = [] := by

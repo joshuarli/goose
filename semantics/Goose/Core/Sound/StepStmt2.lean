@@ -21,7 +21,7 @@ theorem step_stmt_b (ih : Specs m prof n) :
     tyStmt tenv sc st tn = .ok (tenv', tn') → rpStmt penv st rst = .ok ((), rst') →
     EffLe rst'.eff W.E →
     Sat (execStmt (n + 1) ⟨prof, m⟩ env st) s (fun fl s' =>
-      Frame m W tenv' penv env s' ∧ TSame tenv tenv' ∧ ExtS env s s' ∧ TopB env lo rst'.nextVar s' ∧
+      Frame m W tenv' penv env s' ∧ TSame tenv tenv' ∧ ExtS env (Dset W) s s' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
       | .normal _ => st.diverges = false
       | .brk => tenv.loops ≠ 0 ∧ st.hasBreak = true
@@ -204,7 +204,7 @@ theorem step_stmt_b (ih : Specs m prof n) :
       subst hr
       obtain ⟨_, hne', impl, himpl, hres⟩ := retUnit_ok _ _ _ hru
       simp only [execStmt, sat_pure]
-      exact ⟨hF, TSame.refl _, (Ext.refl _ _).toS, hT.ext (fun _ h => h) hcur, hne',
+      exact ⟨hF, TSame.refl _, (Ext.refl _ _ _).toS, hT.ext (fun _ h => h) hcur, hne',
         impl, himpl, Or.inl ⟨hres, rfl⟩, fun r hr' => hr'.elim⟩
     | some e' =>
       simp only [tyStmt] at ht; inv at ht
@@ -230,14 +230,14 @@ theorem step_stmt_b (ih : Specs m prof n) :
     obtain ⟨_, hl, rfl, rfl⟩ := ht
     subst hr
     simp only [execStmt, sat_pure]
-    exact ⟨hF, TSame.refl _, (Ext.refl _ _).toS, hT.ext (fun _ h => h) hcur, hl, rfl⟩
+    exact ⟨hF, TSame.refl _, (Ext.refl _ _ _).toS, hT.ext (fun _ h => h) hcur, hl, rfl⟩
   | cont o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
     obtain ⟨_, hl, rfl, rfl⟩ := ht
     subst hr
     simp only [execStmt, sat_pure]
-    exact ⟨hF, TSame.refl _, (Ext.refl _ _).toS, hT.ext (fun _ h => h) hcur, hl⟩
+    exact ⟨hF, TSame.refl _, (Ext.refl _ _ _).toS, hT.ext (fun _ h => h) hcur, hl⟩
   | print args o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr

@@ -25,7 +25,7 @@ theorem checkEntry_ok (m : Module) (h : checkEntry m = .ok ()) :
 
 theorem checkParam_ok (impl : Impl) (i : Nat) (p : Param) (h : checkParam impl i = .ok ())
     (hp : impl.params[i]? = some p) :
-    p.var = i ∧ ∃ lv : LocalVar, impl.vars[i]? = some lv ∧ lv.scope = 0 ∧ lv.ty.storable = true := by
+    p.var = i ∧ ∃ lv : LocalVar, impl.vars[i]? = some lv ∧ lv.scope = 0 ∧ lv.ty.paramOk = true := by
   unfold checkParam at h
   simp only [hp] at h
   cases hv : impl.vars[i]? with
@@ -35,7 +35,10 @@ theorem checkParam_ok (impl : Impl) (i : Nat) (p : Param) (h : checkParam impl i
     obtain ⟨h1, h2, h3⟩ := h
     refine ⟨h1, lv, rfl, h2, ?_⟩
     cases hm : p.mode <;> cases hty : lv.ty <;> simp only [hm, hty] at h3 <;> inv at h3 <;>
-      simp_all [Ty.storable]
+      first
+        | (simp_all [Ty.paramOk, Ty.storable, Ty.isRefSlice, Ty.isSlice]; done)
+        | (rename_i tgt
+           cases tgt <;> simp_all [Ty.paramOk, Ty.storable, Ty.isRefSlice, Ty.isSlice, Ty.refTarget])
 
 theorem checkImpl_ok (m : Module) (impl : Impl) (h : checkImpl m impl = .ok ()) : ImplOk m impl := by
   unfold checkImpl at h
@@ -99,8 +102,8 @@ theorem checkContext_ok (m : Module) (ctx : Context) (h : checkContext m ctx = .
   | none => simp only [hi] at h; inv at h
   | some impl =>
     simp only [hi] at h; inv at h
-    obtain ⟨hann, hrs, st, ⟨rho, a, b, s1, hrb, hck⟩, hcs⟩ := h
-    refine ⟨impl, rfl, ?_, ?_, rho, (a, b), st, ?_, ?_, hcs⟩
+    obtain ⟨hann, hrs, hcont, st, ⟨rho, a, b, s1, hrb, hck⟩, hcs⟩ := h
+    refine ⟨impl, rfl, ?_, ?_, ?_, rho, (a, b), st, ?_, ?_, hcs⟩
     · intro i ann hlt hf q hq
       unfold checkAnnotationShape at hann
       simp only [ex_bind_ok] at hann
@@ -123,6 +126,30 @@ theorem checkContext_ok (m : Module) (ctx : Context) (h : checkContext m ctx = .
     · unfold checkResultShape at hrs
       inv at hrs
       exact hrs.1
+    · intro x cont hf
+      cases hfind : ctx.contentRoots.find? (·.1 == x) with
+      | none => simp [hfind] at hf
+      | some pr =>
+        obtain ⟨x', cont'⟩ := pr
+        simp only [hfind, Option.map_some, Option.some.injEq] at hf
+        subst hf
+        have hx : x' = x := by simpa using List.find?_some hfind
+        subst hx
+        unfold checkContentShape at hcont
+        have h1 := (forAll_ok _ _).1 hcont _ (List.mem_of_find?_eq_some hfind)
+        simp only at h1
+        inv at h1
+        obtain ⟨hlt, h1⟩ := h1
+        cases hv : impl.vars[x']? with
+        | none => simp only [hv] at h1; inv at h1
+        | some lv =>
+          simp only [hv] at h1; inv at h1
+          obtain ⟨_, hannx, hall⟩ := h1
+          refine ⟨hlt, by simpa using hannx, ?_⟩
+          intro y hy
+          have h2 := (forAll_ok _ _).1 hall _ hy
+          simp only at h2
+          inv at h2
     · rcases hck with ⟨_, _, rfl⟩ | ⟨_, rfl⟩ <;> exact hrb
     · intro hs
       rcases hck with ⟨_, h2, _⟩ | ⟨h1, _⟩

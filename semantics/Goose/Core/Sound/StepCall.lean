@@ -120,13 +120,16 @@ theorem args_spec (ihA : ArgSpec m prof n) (hp : Perm m W) (callee : Impl) :
     tyArgs tenv callee ps args tn = .ok ((), tn') → rpArgs penv args rst = .ok (ars, rst') →
     EffLe rst'.eff W.E →
     Sat (mapList (evalArg n ⟨prof, m⟩ env) args) s (fun vals s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧ vals.length = args.length ∧
-      ∀ (i : Nat) (v : Val), vals[i]? = some v → ∃ (p : Param) (pv : LocalVar) (ar : List RootRef),
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ vals.length = args.length ∧
+      ∀ (i : Nat) (v : Val), vals[i]? = some v → ∃ (p : Param) (pv : LocalVar) (ar : List RootRef)
+          (a : Arg) (ty : Ty) (tn0 tn1 : Nat) (rst0 rst1 : RState),
         ps[i]? = some p ∧ callee.vars[p.var]? = some pv ∧
-        ars[i]? = some ar ∧ HasTy m W.G s'.store v pv.ty ∧ ∀ r, Targets v r → Gam env W.P ar r)
+        ars[i]? = some ar ∧ HasTy m W.G s'.store v pv.ty ∧ (∀ r, Targets v r → Gam env W.P ar r) ∧
+        args[i]? = some a ∧ ArgTy tenv a tn0 ty tn1 ∧ ty.passableTo pv.ty = true ∧
+        ArgRp penv a rst0 ar rst1)
   | [], ps, s, tn, tn', rst, rst', ars, hF, _, _, _, _ => by
     simp only [mapList, sat_pure]
-    exact ⟨hF, Ext.refl _ _, rfl, fun i v h => by simp at h⟩
+    exact ⟨hF, Ext.refl _ _ _, rfl, fun i v h => by simp at h⟩
   | a :: as, [], s, tn, tn', rst, rst', ars, hF, hl, _, _, _ => by simp at hl
   | a :: as, p :: ps, s, tn, tn', rst, rst', ars, hF, hl, ht, hr, hE => by
     have hl' : ps.length = as.length := by simpa using hl
@@ -152,7 +155,9 @@ theorem args_spec (ihA : ArgSpec m prof n) (hp : Perm m W) (callee : Impl) :
           have h2 : (Ty.ref mu t).passableTo pv.ty = true ∧
               tyArgs tenv callee ps as t1 = .ok ((), tn') := by
             rcases ht with ⟨_, _, h1, h2⟩ | ⟨_, h1, h2⟩ <;> exact ⟨h1, h2⟩
-          exact ⟨.ref mu t, t1, rho, r1, ars', ⟨t, b, htp, hrt, rfl⟩, h2.1, h2.2, hre, hra, rfl⟩
+          have hrt' : t.refTarget = true ∨ (t.isSlice = true ∧ b = true ∧ p'.sliceArg = true) := by
+            simpa [Bool.or_eq_true, Bool.and_eq_true, and_assoc] using hrt
+          exact ⟨.ref mu t, t1, rho, r1, ars', ⟨t, b, htp, hrt', rfl⟩, h2.1, h2.2, hre, hra, rfl⟩
       obtain ⟨ty, t1, rho, r1, ars', hat, hpass, hrest, har, hra, rfl⟩ := key
       simp only [mapList]
       refine Sat.bind (ihA W tenv penv env s a _ _ _ _ _ _ hp hF hat har
@@ -167,10 +172,125 @@ theorem args_spec (ihA : ArgSpec m prof n) (hp : Perm m W) (callee : Impl) :
       | zero =>
         simp only [List.getElem?_cons_zero, Option.some.injEq] at hi
         subst hi
-        exact ⟨p, pv, rho, rfl, hv, rfl, hasTy_passable (hv1.mono hX2.le) hpass, hg1⟩
+        exact ⟨p, pv, rho, a, ty, _, _, _, _, rfl, hv, rfl, hasTy_passable (hv1.mono hX2.le) hpass,
+          hg1, rfl, hat, hpass, har⟩
       | succ i =>
         simp only [List.getElem?_cons_succ] at hi
-        obtain ⟨p', pv', ar, g1, g2, g3, g4, g5⟩ := hall i v' hi
-        exact ⟨p', pv', ar, by simpa using g1, g2, by simpa using g3, g4, g5⟩
+        obtain ⟨p', pv', ar, a', ty', n0, n1, q0, q1, g1, g2, g3, g4, g5, g6, g7, g8, g9⟩ := hall i v' hi
+        exact ⟨p', pv', ar, a', ty', n0, n1, q0, q1, by simpa using g1, g2, by simpa using g3, g4, g5,
+          by simpa using g6, g7, g8, g9⟩
+
+/-! ### The caller's slice variables, as the callee sees them -/
+
+variable {s : St}
+
+/-- The slice variables a callee may be given a reference to: those the
+caller itself was given, and the caller's own visible slice variables. -/
+def callD (W : World) (tenv : TEnv) (env : Env) : RootInst → Ty → Prop := fun r E =>
+  W.D r E ∨ ∃ x lv si mu, env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si ∧
+    r = RootInst.local env.act si x ∧ lv.ty = .slice mu E ∧ x ∈ tenv.visible
+
+/-- What a slice stored in such a variable may point into: for a variable of
+the caller, what its annotation denotes and outlives it. -/
+def callA (W : World) (penv : PEnv) (env : Env) : RootInst → RootInst → Prop := fun r t =>
+  (Dset W r ∧ W.A r t) ∨ ∃ x lv si ann, env.vars[x]? = some lv ∧
+    env.scopes.lookup lv.scope = some si ∧ r = RootInst.local env.act si x ∧
+    penv.ann x = some ann ∧ Gam env W.P ann t ∧ Older t r
+
+theorem Frame.not_outer (hF : Frame m W tenv penv env s) {x : VarId} {sc si : Nat}
+    (hl : env.scopes.lookup sc = some si) : ¬ Dset W (RootInst.local env.act si x) := by
+  rintro ⟨E, hd⟩
+  obtain ⟨a, si', x', e, hlt⟩ := hF.dOut _ E hd
+  cases e
+  exact absurd (hF.inst_lt hl).1 (Nat.not_le.2 hlt)
+
+theorem callA_older (hF : Frame m W tenv penv env s) :
+    ∀ r t, callA W penv env r t → Older t r := by
+  rintro r t (⟨_, h⟩ | ⟨x, lv, si, ann, _, _, _, _, _, h⟩)
+  · exact hF.aOlder r t h
+  · exact h
+
+theorem callD_out (hF : Frame m W tenv penv env s) :
+    ∀ r E, callD W tenv env r E → ∃ a si x, r = RootInst.local a si x ∧ si < s.nextScope := by
+  rintro r E (h | ⟨x, lv, si, mu, _, hl, rfl, _⟩)
+  · obtain ⟨a, si, x, e, hlt⟩ := hF.dOut r E h
+    exact ⟨a, si, x, e, Nat.lt_of_lt_of_le hlt hF.base_le⟩
+  · exact ⟨_, _, _, rfl, (hF.inst_lt hl).2⟩
+
+theorem callD_fun (hF : Frame m W tenv penv env s) :
+    ∀ r E E', callD W tenv env r E → callD W tenv env r E' → E = E' := by
+  rintro r E E' (h | ⟨x, lv, si, mu, hx, hl, rfl, hty, _⟩) (h' | ⟨x', lv', si', mu', hx', hl', e, hty', _⟩)
+  · exact hF.dFun r E E' h h'
+  · subst e; exact absurd ⟨E, h⟩ (hF.not_outer hl')
+  · exact absurd ⟨E', h'⟩ (hF.not_outer hl)
+  · cases e
+    rw [hx] at hx'; cases hx'
+    rw [hty] at hty'; cases hty'; rfl
+
+theorem callOuterOk (hF : Frame m W tenv penv env s) :
+    OuterOk m W.G (callD W tenv env) (callA W penv env) s := by
+  rintro r E (h | ⟨x, lv, si, mu, hx, hl, rfl, hty, hvis⟩)
+  · obtain ⟨v, h1, h2, h3⟩ := hF.sa r E h
+    exact ⟨v, h1, h2, fun t ht => Or.inl ⟨⟨E, h⟩, h3 t ht⟩⟩
+  · obtain ⟨lv', si', v, g1, g2, _, g4, g5⟩ := hF.vis x hvis
+    rw [hx] at g1; cases g1
+    rw [hl] at g2; cases g2
+    refine ⟨v, g4, by rw [hty] at g5; exact hasTy_slice_mu g5, fun t ht => Or.inr ?_⟩
+    obtain ⟨ann, ha, hg⟩ := hF.rooted x lv si v hx hl g4 t ht
+    exact ⟨x, lv, si, ann, hx, hl, rfl, ha, hg, hF.inv.age _ v g4 t ht⟩
+
+/-- What the callee may have done to a slice variable, read back in the caller. -/
+theorem callD_back (hF : Frame m W tenv penv env s) :
+    ∀ r E, callD W tenv env r E → (W.D r E ∧ ∀ t, callA W penv env r t → W.A r t) ∨
+      (∃ x lv si mu, env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si ∧
+        r = RootInst.local env.act si x ∧ lv.ty = .slice mu E ∧
+        ∀ t, callA W penv env r t → ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann t) := by
+  rintro r E (h | ⟨x, lv, si, mu, hx, hl, rfl, hty, _⟩)
+  · refine Or.inl ⟨h, ?_⟩
+    rintro t (⟨_, g⟩ | ⟨x, lv, si, ann, _, hl, rfl, _⟩)
+    · exact g
+    · exact absurd ⟨E, h⟩ (hF.not_outer hl)
+  · refine Or.inr ⟨x, lv, si, mu, hx, hl, rfl, hty, ?_⟩
+    rintro t (⟨g, _⟩ | ⟨x', lv', si', ann, _, _, e, ha, hg, _⟩)
+    · exact absurd g (hF.not_outer hl)
+    · cases e
+      exact ⟨ann, ha, hg⟩
+
+theorem ext_of_call (hF : Frame m W tenv penv env s) {s2 : St}
+    (h : Ext [] (fun r => ∃ E, callD W tenv env r E) s s2) : Ext (insts env) (Dset W) s s2 := by
+  refine h.weaken ?_
+  intro r hnd hn
+  refine ⟨?_, fun _ _ _ _ h' => by cases h'⟩
+  rintro ⟨E, (hd | ⟨x, lv, si, mu, _, hl, rfl, _⟩)⟩
+  · exact hnd ⟨E, hd⟩
+  · exact hn _ _ _ rfl (lookup_inst hl)
+
+/-- The callee context's content roots, read through the arguments, denote in
+the callee what their instantiation denotes in the caller. -/
+theorem gam_inst {P : Nat → RootInst → Prop} {ars : List (List RootRef)} {cont inst : List RootRef}
+    (hmap : mapResultRoots ars [] cont = .ok inst) (t : RootInst) :
+    Gam env P inst t ↔ Gam noEnv (fun j r => Gam env P (ars[j]?.getD []) r) cont t := by
+  constructor
+  · rintro ⟨q, hq, hrq⟩
+    rcases mapResultRoots_sub ars cont [] inst hmap q hq with h | ⟨r', hr', hf⟩
+    · cases h
+    · cases r' with
+      | «local» y => exact hf.elim
+      | global g =>
+        have e : q = RootRef.global g := hf
+        subst e
+        exact ⟨.global g, hr', hrq⟩
+      | param j =>
+        obtain ⟨a, ha, hqa⟩ := hf
+        exact ⟨.param j, hr', q, by simpa [ha] using hqa, hrq⟩
+  · rintro ⟨q', hq', hrq'⟩
+    have hm := (mapResultRoots_ok ars cont [] inst hmap).2 q' hq'
+    cases q' with
+    | «local» y => exact hm.elim
+    | global g => exact ⟨.global g, hm, hrq'⟩
+    | param j =>
+      obtain ⟨a, ha, hsub⟩ := hm
+      obtain ⟨q, hq, hrq⟩ := (hrq' : Gam env P (ars[j]?.getD []) t)
+      exact ⟨q, hsub q (by simpa [ha] using hq), hrq⟩
 
 end Goose.Core.Sound

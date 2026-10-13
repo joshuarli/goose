@@ -23,15 +23,16 @@ initialized points at a typed location once that global is bound. -/
 theorem held_next {G : Nat} {st : Store} {v : Val} {gl : Global} (hgl : m.globals[G]? = some gl)
     (hb : LocTy st ⟨.global G, []⟩ gl.ty) (h : Held m G st v) : Held m (G + 1) st v := by
   cases v <;> simp only [Held] at h ⊢
-  · obtain ⟨T, hT, hl⟩ := h
-    refine ⟨T, hT, ?_⟩
-    rcases hl with hl | ⟨g, gl', hG, rfl, hg, rfl⟩
-    · exact Or.inl hl
-    · by_cases e : g = G
-      · subst e
-        rw [hgl] at hg; cases hg
-        exact Or.inl hb
-      · exact Or.inr ⟨g, gl', by omega, rfl, hg, rfl⟩
+  · rcases h with ⟨T, hT, hl⟩ | h
+    · refine Or.inl ⟨T, hT, ?_⟩
+      rcases hl with hl | ⟨g, gl', hG, rfl, hg, rfl⟩
+      · exact Or.inl hl
+      · by_cases e : g = G
+        · subst e
+          rw [hgl] at hg; cases hg
+          exact Or.inl hb
+        · exact Or.inr ⟨g, gl', by omega, rfl, hg, rfl⟩
+    · exact Or.inr h
   · exact h
 
 /-- Binding the next global to the value of its initializer. -/
@@ -75,29 +76,32 @@ theorem storeInv_bindGlobal {G : Nat} {s : St} {v : Val} {gl : Global} (hi : Sto
     · exact LocTy.mono hle (hi.globals g gl' (by omega) hgl')
 
 /-- The global initializers, run in table order from a store that holds the
-first `G` globals, leave every global bound and the store invariant true. -/
+first `G` globals and nothing else, leave every global bound, nothing else in
+the store, and the store invariant true. -/
 theorem init_spec (hm : ModOk m) (prof : NumProfile) (fuel : Nat) :
     ∀ (k G : Nat) (s : St), G + k = m.globals.size → StoreInv m G s →
-    (∀ g : Nat, G ≤ g → s.store.roots[RootInst.global g]? = none) →
+    (∀ r : RootInst, s.store.roots[r]? ≠ none → ∃ g : Nat, r = .global g ∧ g < G) →
     Sat (initGlobals fuel ⟨prof, m⟩ (List.range' G k)) s (fun _ s' =>
-      StoreInv m m.globals.size s')
-  | 0, G, s, hk, hi, _ => by
+      StoreInv m m.globals.size s' ∧
+      ∀ r : RootInst, s'.store.roots[r]? ≠ none → ∃ g : Nat, r = .global g ∧ g < m.globals.size)
+  | 0, G, s, hk, hi, hdom => by
     have : G = m.globals.size := by omega
     subst this
     simp only [List.range'_zero, initGlobals, sat_pure]
-    exact hi
-  | k + 1, G, s, hk, hi, hl => by
+    exact ⟨hi, hdom⟩
+  | k + 1, G, s, hk, hi, hdom => by
     have hlt : G < m.globals.size := by omega
     have hgl : m.globals[G]? = some m.globals[G] := Array.getElem?_eq_getElem hlt
     obtain ⟨hty, ⟨tn, hte⟩, rho, st, hre, hunk, htg⟩ := hm.glob G _ hgl
     simp only [List.range'_succ, initGlobals, lookupGlobal, hgl, sat_pure_bind, sat_freshAct_bind]
-    have hp : Perm m ⟨G, fun _ _ => False, st.eff, s.nextScope⟩ :=
+    have hp : Perm m ⟨G, fun _ _ => False, st.eff, s.nextScope, fun _ _ => False, fun _ _ => False⟩ :=
       Or.inr ⟨hunk, fun t ht => by
         cases t with
         | global h => exact htg _ ht h rfl
         | param j => intro r hr; exact hr.elim⟩
-    have hF : Frame m ⟨G, fun _ _ => False, st.eff, s.nextScope⟩ (initEnv m G)
-        ⟨m, initImpl, initContext, []⟩ ⟨#[], s.nextAct, [], 0⟩ { s with nextAct := s.nextAct + 1 } :=
+    have hF : Frame m ⟨G, fun _ _ => False, st.eff, s.nextScope, fun _ _ => False, fun _ _ => False⟩
+        (initEnv m G) ⟨m, initImpl, initContext, []⟩ ⟨#[], s.nextAct, [], 0⟩
+        { s with nextAct := s.nextAct + 1 } :=
       { mod_t := rfl, mod_p := rfl, vars_t := rfl, vars_p := rfl, scopes_t := rfl, scopes_p := rfl
         nodup := List.nodup_nil, sorted := List.Pairwise.nil
         below := fun p hp => by cases hp
@@ -105,25 +109,33 @@ theorem init_spec (hm : ModOk m) (prof : NumProfile) (fuel : Nat) :
         pAge := fun _ _ _ _ h => h.elim
         vis := fun x hx => by cases hx
         rooted := fun x lv si v _ h => by simp [List.lookup] at h
-        inv := ⟨hi.live, hi.age, hi.fresh, hi.globals⟩ }
+        inv := ⟨hi.live, hi.age, hi.fresh, hi.globals⟩
+        aOlder := fun _ _ h => h.elim, dOut := fun _ _ h => h.elim, dFun := fun _ _ _ h => h.elim
+        sa := fun _ _ h => h.elim
+        pref := fun x cont h => by simp [PEnv.cont, initContext] at h }
     refine Sat.bind ((specs_all hm prof fuel).expr _ _ _ _ _ m.globals[G].init 0 tn _ ⟨0, {}⟩ st rho hp hF
       hte hre (EffLe.refl _)) ?_
     rintro v s1 ⟨hF1, hX1, hv, _⟩
     simp only [sat_bindRoot_bind]
-    have hkeep : ∀ g : Nat, G ≤ g → s1.store.roots[RootInst.global g]? = none := by
-      intro g hg
-      cases h1 : s1.store.roots[RootInst.global g]? with
+    have hdom1 : ∀ r : RootInst, s1.store.roots[r]? ≠ none → ∃ g : Nat, r = .global g ∧ g < G :=
+      fun r hr => hdom r (hX1.dom r hr)
+    have hfree : s1.store.roots[RootInst.global G]? = none := by
+      cases h1 : s1.store.roots[RootInst.global G]? with
       | none => rfl
-      | some v1 => exact absurd (hl g hg) (hX1.dom _ (by rw [h1]; simp))
+      | some v1 =>
+        obtain ⟨g, e, hg⟩ := hdom1 _ (by rw [h1]; simp)
+        cases e; omega
     refine init_spec hm prof fuel k (G + 1) _ (by omega)
-      (storeInv_bindGlobal hF1.inv (hkeep G (Nat.le_refl _)) hgl (hasTy_nonref_flat hv hty.1 hty.2)) ?_
-    intro g hg
-    show (s1.store.introduce (.global G) v).roots[RootInst.global g]? = none
-    rw [get_introduce]
-    have hne : ¬ (RootInst.global G = RootInst.global g) := by
-      intro e; cases e; omega
-    simp only [hne, if_false]
-    exact hkeep g (by omega)
+      (storeInv_bindGlobal hF1.inv hfree hgl
+        (hasTy_nonref_flat hv (paramOk_of_storable hty.1) hty.2)) ?_
+    intro r hr
+    have hr' : (s1.store.introduce (.global G) v).roots[r]? ≠ none := hr
+    rw [get_introduce] at hr'
+    by_cases e : RootInst.global G = r
+    · exact ⟨G, e.symm, Nat.lt_succ_self _⟩
+    · simp only [e, if_false] at hr'
+      obtain ⟨g, e', hg⟩ := hdom1 r hr'
+      exact ⟨g, e', Nat.lt_succ_of_lt hg⟩
 
 theorem storeInv_initial (G : Nat) (h : G = 0) : StoreInv m G St.initial := by
   subst h
@@ -134,19 +146,29 @@ theorem storeInv_initial (G : Nat) (h : G = 0) : StoreInv m G St.initial := by
   · intro g gl h; omega
 
 /-- A whole run of a module whose items the validator accepted does not fault
-and ends, if it ends, in a store that satisfies the store invariant. -/
+and ends, if it ends, in a store that holds the globals only and satisfies the
+store invariant. -/
 theorem run_spec (hm : ModOk m) (prof : NumProfile) (fuel : Nat) :
-    Sat (runModule fuel ⟨prof, m⟩) St.initial (fun _ s => StoreInv m m.globals.size s) := by
+    Sat (runModule fuel ⟨prof, m⟩) St.initial (fun _ s => StoreInv m m.globals.size s ∧
+      ∀ r : RootInst, s.store.roots[r]? ≠ none → ∃ g : Nat, r = .global g ∧ g < m.globals.size) := by
   simp only [runModule, List.range_eq_range']
   refine Sat.bind (init_spec hm prof fuel m.globals.size 0 St.initial (by omega)
-    (storeInv_initial 0 rfl) (fun g _ => by simp [St.initial, Store.empty])) ?_
-  rintro _ s1 hi1
+    (storeInv_initial 0 rfl) (fun r hr => by simp [St.initial, Store.empty] at hr)) ?_
+  rintro _ s1 ⟨hi1, hdom1⟩
   obtain ⟨ctx, impl, hc, himpl, hps, _⟩ := hm.entry
-  refine Sat.bind ((specs_all hm prof fuel).call m.globals.size (fun _ _ => False) 0 m.entry [] s1 ctx
-    impl hc himpl hi1 (by simp [hps]) (fun i v h => by simp at h) (fun i a si x h => h.elim)
+  obtain ⟨impl', himpl', hcOk⟩ := hm.ctx _ ctx hc
+  rw [himpl] at himpl'
+  cases himpl'
+  refine Sat.bind ((specs_all hm prof fuel).call m.globals.size (fun _ _ => False) (fun _ _ => False)
+    (fun _ _ => False) 0 m.entry [] s1 ctx impl hc himpl hi1 (by simp [hps])
+    (fun i v h => by simp at h) (fun i a si x h => h.elim) (fun _ _ h => h.elim)
+    (fun _ _ h => h.elim) (fun _ _ _ h => h.elim) (fun _ _ h => h.elim)
+    (fun x cont h => by
+      have := (hcOk.content x cont h).1
+      omega)
     (Or.inl (Nat.le_refl _))) ?_
-  rintro v s2 ⟨hi2, _, _, _⟩
-  exact hi2
+  rintro v s2 ⟨hi2, hX2, _, _, _⟩
+  exact ⟨hi2, fun r hr => hdom1 r (hX2.dom r hr)⟩
 
 /-- A module `validate` accepts never faults, at any fuel and in either numeric
 profile. -/
@@ -172,9 +194,15 @@ types that point into the roots `P` gives each parameter and into the
 context's annotation of it, does not fault; it leaves the store invariant
 true, every typed location typed and every stored reference of the caller in
 place; and what it returns has the result type and points only into the roots
-the context declares for the result. -/
+the context declares for the result.
+
+`D` and `A` describe the slice variables the caller passes by reference: each
+holds a slice of its element type rooted within `A`, each parameter that
+refers to one has content roots that denote exactly `A` of it, and on return
+each still holds such a slice. A caller that passes none takes both empty. -/
 theorem validated_context_sound (m : Module) (h : validate m = .ok ()) (profile : NumProfile)
-    (fuel : Nat) (P : Nat → RootInst → Prop) (depth : Nat) (c : ContextId) (vals : List Val) (s : St)
+    (fuel : Nat) (P : Nat → RootInst → Prop) (D : RootInst → Ty → Prop)
+    (A : RootInst → RootInst → Prop) (depth : Nat) (c : ContextId) (vals : List Val) (s : St)
     (ctx : Context) (impl : Impl) (hc : m.contexts[c]? = some ctx)
     (hi : m.impls[ctx.impl]? = some impl) (hinv : StoreInv m m.globals.size s)
     (hlen : vals.length = impl.params.size)
@@ -182,14 +210,21 @@ theorem validated_context_sound (m : Module) (h : validate m = .ok ()) (profile 
       HasTy m m.globals.size s.store v lv.ty ∧
       ∀ r, Targets v r → ∃ ann, (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann ∧
         Gam noEnv P ann r)
-    (hage : ∀ i a si x, P i (.local a si x) → si < s.nextScope) :
+    (hage : ∀ i a si x, P i (.local a si x) → si < s.nextScope)
+    (hAO : ∀ r t, A r t → Older t r)
+    (hDout : ∀ r E, D r E → ∃ a si x, r = RootInst.local a si x ∧ si < s.nextScope)
+    (hDfun : ∀ r E E', D r E → D r E' → E = E')
+    (hSA : OuterOk m m.globals.size D A s)
+    (hcont : ∀ x cont, (ctx.contentRoots.find? (·.1 == x)).map (·.2) = some cont →
+      PRef P D A ⟨m, impl, ctx, []⟩ impl.vars x cont) :
     Sat (enterCall fuel ⟨profile, m⟩ depth c vals) s (fun v s' =>
-      StoreInv m m.globals.size s' ∧ Ext [] s s' ∧
+      StoreInv m m.globals.size s' ∧ Ext [] (fun r => ∃ E, D r E) s s' ∧
+      OuterOk m m.globals.size D A s' ∧
       ((impl.results.toList = [] ∧ v = .unit) ∨
         ∃ t, impl.results.toList = [t] ∧ HasTy m m.globals.size s'.store v t) ∧
       ∀ r, Targets v r → ∃ declared, ctx.resultRoots = [declared] ∧ Gam noEnv P declared r) :=
-  (specs_all (validate_modOk m h) profile fuel).call _ P depth c vals s ctx impl hc hi hinv hlen
-    hargs hage (Or.inl (Nat.le_refl _))
+  (specs_all (validate_modOk m h) profile fuel).call _ P D A depth c vals s ctx impl hc hi hinv hlen
+    hargs hage hAO hDout hDfun hSA hcont (Or.inl (Nat.le_refl _))
 
 /-- The statement the safety proof inducts with: on code of an accepted
 module, each of the fourteen evaluation functions, at every fuel, does not
@@ -200,30 +235,17 @@ theorem validated_steps_keep_invariant (m : Module) (h : validate m = .ok ())
     (profile : NumProfile) : ∀ fuel, Specs m profile fuel :=
   specs_all (validate_modOk m h) profile
 
-/-- With every global initialized, the store invariant gives the live-reference
-invariant: every reference or slice a root holds denotes a typed location or a
-run inside a typed array. -/
-theorem liveRefs_of_storeInv {s : St} (h : StoreInv m m.globals.size s) : LiveRefs s.store := by
+/-- A store that holds the globals only and satisfies the store invariant
+satisfies the live-reference invariant: no global holds a reference. -/
+theorem liveRefs_of_storeInv {s : St} (h : StoreInv m m.globals.size s)
+    (hdom : ∀ r : RootInst, s.store.roots[r]? ≠ none →
+      ∃ g : Nat, r = .global g ∧ g < m.globals.size) : LiveRefs s.store := by
   intro r v hv
-  have hh := h.live r v hv
-  cases v <;> simp only [Held, HeldOk] at hh ⊢
-  · obtain ⟨T, hT, hl⟩ := hh
-    refine ⟨T, hT, ?_⟩
-    rcases hl with hl | ⟨g, gl, hG, _, hg, _⟩
-    · exact hl
-    · have := (Array.getElem?_eq_some_iff.1 hg).1
-      omega
-  · obtain ⟨E, v0, es, hr, hes, hn, hT⟩ := hh
-    refine ⟨E, ?_⟩
-    rcases hT with hT | ⟨k, hT⟩
-    · cases v0 <;> simp only [FlatTy] at hT
-      simp only [Val.elems?, Option.some.injEq] at hes
-      subst hes
-      exact Or.inr ⟨⟨_, hr, by simpa [FlatTy] using hT⟩, _, _, hr, hn⟩
-    · cases v0 <;> simp only [FlatTy] at hT
-      simp only [Val.elems?, Option.some.injEq] at hes
-      subst hes
-      exact Or.inl ⟨k, ⟨_, hr, by simpa [FlatTy] using hT⟩, by omega⟩
+  obtain ⟨g, rfl, hg⟩ := hdom r (by rw [hv]; simp)
+  obtain ⟨v', hr, hT⟩ := h.globals g m.globals[g] hg (Array.getElem?_eq_getElem hg)
+  rw [read_root hv] at hr
+  cases hr
+  exact flat_held _ _ _ hT
 
 /-- A run of an accepted module that ends leaves every stored reference live. -/
 theorem validated_run_keeps_live_refs (m : Module) (h : validate m = .ok ()) (fuel : Nat)
@@ -232,6 +254,6 @@ theorem validated_run_keeps_live_refs (m : Module) (h : validate m = .ok ()) (fu
   have hs := run_spec (validate_modOk m h) profile fuel
   unfold Sat at hs
   rw [hr] at hs
-  exact liveRefs_of_storeInv hs
+  exact liveRefs_of_storeInv hs.1 hs.2
 
 end Goose.Proofs.Safety
