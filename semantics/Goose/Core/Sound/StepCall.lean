@@ -270,6 +270,33 @@ def callArgsFuture {plans : Array (Array DemandPoint)} {path : List Nat}
     (all.take offset).flatMap (Arg.sliceHolderVariables pc.approvals.access) ++
       args.flatMap Arg.variables ++ context.outputFuture
 
+/-- The final argument frame keeps exactly the local slice headers needed by
+the continuation or passed directly by reference. -/
+theorem callArgsFuture_sliceHolder {plans path c all origin}
+    (context : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
+    (active : context.ActiveMatches tenv) (access : context.AccessMatches tenv penv)
+    (variables : tenv.vars = env.vars) {x : VarId} {lv : LocalVar}
+    {mu : Mutability} {E : Ty} (hvar : env.vars[x]? = some lv)
+    (htype : lv.ty = .slice mu E) (visible : x ∈ tenv.visible)
+    (needed : x ∈ context.outputFuture ∨ ∃ passingMu, Arg.byRef passingMu (.var x) ∈ all) :
+    x ∈ callArgsFuture context all.length [] := by
+  cases context with
+  | pilot profile activeVariables =>
+    exact (active x).2 visible
+  | @shrink pc profile context =>
+    rcases needed with continuation | ⟨passingMu, passed⟩
+    · simp only [callArgsFuture, List.flatMap_nil, List.append_nil, List.mem_append]
+      exact Or.inr continuation
+    · have haccessVar : pc.approvals.access.impl.vars[x]? = some lv := by
+        rw [access.2.1, variables]
+        exact hvar
+      have hlookup : pc.approvals.access.placeType? (.var x) = some (.slice mu E) := by
+        simp [AccessEnv.placeType?, haccessVar, htype]
+      simp only [callArgsFuture, List.take_length, List.flatMap_nil, List.append_nil,
+        List.mem_append, List.mem_flatMap]
+      exact Or.inl ⟨.byRef passingMu (.var x), passed, by
+        simp [Arg.sliceHolderVariables, hlookup, Place.variables]⟩
+
 private theorem callArgContext_input_output {plans path c all origin}
     (context : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
     (index : Nat) (arg : Arg) (harg : all[index]? = some arg) :
@@ -804,13 +831,15 @@ theorem callD_fun (hF : Frame m W tenv penv env s future) :
     rw [hty] at hty'; cases hty'; rfl
 
 theorem callOuterOk (hF : Frame m W tenv penv env s future)
-    (hdemand : ∀ x, x ∈ tenv.visible →
+    (hdemand : ∀ x lv mu E, env.vars[x]? = some lv → lv.ty = .slice mu E →
+      x ∈ tenv.visible →
       (x ∈ continuation ∨ ∃ mu, Arg.byRef mu (.var x) ∈ args) → x ∈ future) :
     OuterOk m W.G (callD W tenv env continuation args) (callA W penv env) s := by
   rintro r E (h | ⟨x, lv, si, mu, hx, hl, rfl, hty, hvis, hneeded⟩)
   · obtain ⟨v, h1, h2, h3⟩ := hF.sa r E h
     exact ⟨v, h1, h2, fun t ht => Or.inl ⟨⟨E, h⟩, h3 t ht⟩⟩
-  · obtain ⟨lv', si', v, g1, g2, _, g4, g5⟩ := hF.vis x hvis (hdemand x hvis hneeded)
+  · obtain ⟨lv', si', v, g1, g2, _, g4, g5⟩ :=
+      hF.vis x hvis (hdemand x lv mu E hx hty hvis hneeded)
     rw [hx] at g1; cases g1
     rw [hl] at g2; cases g2
     refine ⟨v, g4, by rw [hty] at g5; exact hasTy_slice_mu g5, fun t ht => Or.inr ?_⟩
