@@ -891,6 +891,68 @@ void OwnerGrowElementsRemainWritable() {
     assert(Code(m) == "");
 }
 
+void MutableSliceCallResultsRemainWritable() {
+    auto m = Base();
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto slice = m.SliceType(CoreMut::Mut, u8);
+
+    GirFunc identity;
+    identity.name = "identity";
+    identity.params = { slice };
+    identity.results = { slice };
+    identity.scopes = { -1 };
+    identity.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    identity.roots.results = { { CoreRootRef { CoreRootRef::Param, 0 } } };
+    GirBlock identityBody;
+    identityBody.params = { { 0, slice } };
+    identityBody.insts = { Ret({ 0 }) };
+    identity.blocks = { identityBody };
+    m.funcs.push_back(identity);
+
+    GirFunc update;
+    update.name = "update";
+    update.params = { slice };
+    update.slots = { { slice, CoreVarKind::Let, 0, 0 } };
+    update.scopes = { -1 };
+    update.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    update.summary.writes = { CoreTarget { false, 0 } };
+    update.summary.aborts = true;
+    GirBlock updateBody;
+    updateBody.params = { { 0, slice } };
+    auto call = Def(GirOp::Call, 1);
+    call.idx = 1;
+    call.vals = { 0 };
+    call.org = 0;
+    auto init = Init(0, 1);
+    auto slot = Def(GirOp::Slot, 2);
+    slot.idx = 0;
+    auto loaded = Def(GirOp::Load, 3);
+    loaded.a = 2;
+    auto view = Def(GirOp::SliceView, 4);
+    view.a = 3;
+    auto index = Int(m, 5, "0");
+    index.ty = i64;
+    auto element = Def(GirOp::Index, 6);
+    element.a = 4;
+    element.b = 5;
+    element.org = 0;
+    auto replacement = Int(m, 7, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 6;
+    store.b = 7;
+    store.org = 0;
+    updateBody.insts = {
+        Enter(0), call, init, slot, loaded, view, index, element, replacement, store,
+        Leave(0), Ret(),
+    };
+    update.blocks = { updateBody };
+    m.funcs.push_back(update);
+    assert(Code(m) == "");
+}
+
 void MutableSliceParametersRemainWritable() {
     auto m = Base();
     auto u8 = m.IntType(CoreIntTy::U8);
@@ -1469,6 +1531,7 @@ int main() {
     RejectsPassingAReadOnlyStructFieldToAMutatingCall();
     OwnerArrayElementsRemainWritable();
     OwnerGrowElementsRemainWritable();
+    MutableSliceCallResultsRemainWritable();
     MutableSliceParametersRemainWritable();
     RejectsReturningAFieldRefFromAReadOnlyOwner();
     RejectsMaterializingAFieldRefFromAReadOnlyOwner();
