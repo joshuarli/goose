@@ -1,5 +1,6 @@
 import Goose.Core.Sound.Retain
 import Goose.Core.Sound.Spec
+import Goose.Core.Sound.AccessReplay
 
 /-!
 Convert validated places and sampled views into the value form used by the
@@ -54,5 +55,52 @@ theorem AliasAt.ofView {m : Module} {W : World} {env : Env} {s : Store}
     change vw.loc.root = r at hr
     subst r
     exact hroot
+
+/-- A checked place alias is realized by the location from place evaluation. -/
+theorem AliasAt.ofAliasPlace {m : Module} {W : World} {penv : PEnv} {env : Env} {s : Store}
+    {alias : RetainedAlias} {path : List Nat} {p : Place} {l : Loc} {t : Ty}
+    {state : RState} {rho : List RootRef} {state' : RState}
+    (halias : penv.access.aliasPlace path p = .ok [alias])
+    (htype : penv.access.placeType? p = some t)
+    (hreplay : rpPlace penv p state = .ok (rho, state'))
+    (hplace : PlaceOk m W.G W.P penv env s p l t)
+    (hroot : Gam env W.P rho l.root)
+    (hrepresentable : t.refTarget = true ∨ t.isSlice = true) :
+    AliasAt m W env s alias (.ref l) := by
+  obtain ⟨aliasTy, roots, hlookup, hroots, haliasShape⟩ :=
+    AccessEnv.aliasPlace_singleton penv.access path p alias halias
+  have htypeEq : aliasTy = t := Option.some.inj (hlookup.symm.trans htype)
+  have hty : alias.ty = .ref .mutable t := by
+    rw [haliasShape, htypeEq]
+  have hroot' : Gam env W.P roots l.root :=
+    Gam.subset hroot (fun q hq =>
+      rpPlace_accessRoots penv p state rho state' roots hreplay hroots q hq)
+  have hrootAlias : Gam env W.P alias.roots l.root := by
+    rw [haliasShape]
+    exact hroot'
+  exact AliasAt.ofPlace hty hrepresentable hplace hrootAlias
+
+/-- A checked view alias is realized by the run returned from view evaluation. -/
+theorem AliasAt.ofAliasView {m : Module} {W : World} {penv : PEnv} {env : Env} {s : Store}
+    {alias : RetainedAlias} {path : List Nat} {view : View} {vw : ViewVal} {el : Ty}
+    {state : RState} {rho : List RootRef} {state' : RState}
+    (halias : penv.access.aliasView path view = .ok [alias])
+    (htype : penv.access.viewElement? view = some el)
+    (hreplay : rpView penv view state = .ok (rho, state'))
+    (hview : ViewOk s vw el)
+    (hroot : Gam env W.P rho vw.loc.root) :
+    AliasAt m W env s alias (.slice vw.loc vw.start vw.len) := by
+  obtain ⟨aliasEl, roots, hlookup, hroots, haliasShape⟩ :=
+    AccessEnv.aliasView_singleton penv.access path view alias halias
+  have htypeEq : aliasEl = el := Option.some.inj (hlookup.symm.trans htype)
+  have hty : alias.ty = .slice .readOnly el := by
+    rw [haliasShape, htypeEq]
+  have hroot' : Gam env W.P roots vw.loc.root :=
+    Gam.subset hroot (fun q hq =>
+      rpView_accessRoots penv view state rho state' roots hreplay hroots q hq)
+  have hrootAlias : Gam env W.P alias.roots vw.loc.root := by
+    rw [haliasShape]
+    exact hroot'
+  exact AliasAt.ofView hty hview hrootAlias
 
 end Goose.Core.Sound
