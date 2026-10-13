@@ -292,11 +292,20 @@ def _root_.Goose.Core.DemandOwner.denotesExternalShrink (P : Nat → RootInst �
     (owner : DemandOwner) (r : RootInst) : Prop :=
   owner.invalidates = true ∧ Gam noEnv P owner.roots r
 
-/-- Runtime external roots denoted by invalidating owners in the checked activation plan. -/
+/-- Runtime external roots requested by invalidating mutation owners in the checked walk. -/
 def PlanMayShrink {m : Module} {plans : Array (Array DemandPoint)}
     (pc : PlanContext m plans) (P : Nat → RootInst → Prop) (r : RootInst) : Prop :=
-  ∃ approval, approval ∈ pc.approvals.shrink ∧
-    approval.shrinkOwner.denotesExternalShrink P r
+  ∃ occurrence, occurrence ∈ pc.expected ∧ occurrence.phase = .mutation ∧
+    ∃ owner, owner ∈ occurrence.shrinkOwners ∧ owner.denotesExternalShrink P r
+
+/-- Protection covers every invalidating owner requested by the checked walk. -/
+theorem PlanMayShrink.ofExpected {m : Module} {plans : Array (Array DemandPoint)}
+    {pc : PlanContext m plans} {P : Nat → RootInst → Prop} {r : RootInst}
+    {occurrence : DemandExpectedPoint} {owner : DemandOwner}
+    (hoccurrence : occurrence ∈ pc.expected) (hphase : occurrence.phase = .mutation)
+    (howner : owner ∈ occurrence.shrinkOwners)
+    (hdenotes : owner.denotesExternalShrink P r) : PlanMayShrink pc P r := by
+  exact ⟨occurrence, hoccurrence, hphase, owner, howner, hdenotes⟩
 
 /-- Pilot uses lexical activity; shrink uses a checked source occurrence. -/
 inductive EvaluationContext (m : Module) (plans : Array (Array DemandPoint))
