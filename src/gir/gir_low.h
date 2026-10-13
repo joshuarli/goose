@@ -189,6 +189,7 @@ private:
     vector<Shape> shape;
     vector<Place> places;
     vector<int> bmap;               // High block -> its low block.
+    vector<int> blockparammembers;  // Owned byte storage for aggregate block parameters.
     vector<GirTypeId> lvals;
     int cur = -1;
     int spval = 0, outval = -1;
@@ -351,6 +352,59 @@ private:
         return Member(std::move(m));
     }
 
+    bool IsAggregate(GirTypeId ty) const {
+        auto kind = HT(ty).kind;
+        return kind == CoreType::Arr || kind == CoreType::Struct;
+    }
+
+    bool HasAggregateParams(int block) const {
+        for (auto &param : hf->blocks[block].params)
+            if (IsAggregate(param.second)) return true;
+        return false;
+    }
+
+    vector<int> BranchValues(int target, const vector<int> &values) {
+        struct PendingCopy { int scratch; int dest; int64_t size; };
+        vector<int> words;
+        vector<PendingCopy> pending;
+        auto &params = hf->blocks[target].params;
+        for (size_t k = 0; k < params.size(); k++) {
+            auto [param, ty] = params[k];
+            auto value = values[k];
+            if (IsAggregate(ty)) {
+                auto scratch = FrameTemp(Size(ty));
+                auto scratchAddress = Simple(GirOp::FrameAddr, Ptr(), -1, -1, scratch);
+                Copy(scratchAddress, shape[value].w[0], Size(ty));
+                pending.push_back({ scratch, blockparammembers[param], Size(ty) });
+            } else {
+                for (auto word : shape[value].w) words.push_back(word);
+            }
+        }
+        // Stage every source first so parallel block-parameter assignments do
+        // not overwrite an aggregate that another parameter still needs.
+        for (auto &copy : pending) {
+            auto src = Simple(GirOp::FrameAddr, Ptr(), -1, -1, copy.scratch);
+            auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, copy.dest);
+            Copy(dst, src, copy.size);
+        }
+        return words;
+    }
+
+    void LowerBranch(int target, const vector<int> &values) {
+        GirInst branch;
+        branch.op = GirOp::Br;
+        branch.idx = bmap[target];
+        branch.vals = BranchValues(target, values);
+        Term(std::move(branch));
+    }
+
+    int LowerBranchEdge(int target, const vector<int> &values) {
+        auto edge = NewBlockL({});
+        cur = edge;
+        LowerBranch(target, values);
+        return edge;
+    }
+
     int StackOf(int k) { return Simple(GirOp::StackAt, Ptr(), spval, -1, k); }
 
     // A low abort block: the checks branch to one of these.
@@ -474,6 +528,7 @@ private:
         lf.results = sig->results;
         // Blocks, parameters first.
         bmap.assign(f.blocks.size(), -1);
+        blockparammembers.assign(hvt.size(), -1);
         shape.assign(hvt.size(), {});
         // A reference to a scalar can arrive from a packed field through a
         // block parameter or a call result. The high type does not retain
@@ -486,10 +541,16 @@ private:
                     (HT(t.elem).kind == CoreType::Int || HT(t.elem).kind == CoreType::Bool))
                     shape[v].unaligned = true;
             }
+        for (auto &block : f.blocks)
+            for (auto &param : block.params)
+                if (IsAggregate(param.second))
+                    blockparammembers[param.first] = FrameTemp(Size(param.second));
         for (size_t b = 0; b < f.blocks.size(); b++) {
             vector<GirTypeId> ps;
             if (b == 0) ps = lf.params;
-            else for (auto &p : f.blocks[b].params) for (auto t : Words(p.second)) ps.push_back(t);
+            else for (auto &p : f.blocks[b].params)
+                if (!IsAggregate(p.second))
+                    for (auto t : Words(p.second)) ps.push_back(t);
             vector<int> ids;
             bmap[b] = NewBlockL(ps, &ids);
             if (b == 0) {
@@ -503,7 +564,8 @@ private:
             } else {
                 size_t k = 0;
                 for (auto &p : f.blocks[b].params)
-                    for (auto t : Words(p.second)) { (void)t; shape[p.first].w.push_back(ids[k++]); }
+                    if (!IsAggregate(p.second))
+                        for (auto t : Words(p.second)) { (void)t; shape[p.first].w.push_back(ids[k++]); }
             }
         }
         // Blocks in reverse postorder, so every definition comes before its uses.
@@ -523,11 +585,17 @@ private:
             cur = bmap[b];
             if (b == 0 && global < 0) {
                 for (auto &p : f.blocks[0].params) {
-                    if (HT(p.second).kind != CoreType::Struct) continue;
-                    auto copy = FrameTemp(Size(p.second));
+                    if (!IsAggregate(p.second)) continue;
+                    auto copy = blockparammembers[p.first];
                     auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, copy);
                     Copy(dst, shape[p.first].w[0], Size(p.second));
                     shape[p.first].w[0] = dst;
+                }
+            } else if (b > 0) {
+                for (auto &p : f.blocks[b].params) {
+                    if (!IsAggregate(p.second)) continue;
+                    shape[p.first].w = { Simple(GirOp::FrameAddr, Ptr(), -1, -1,
+                                                blockparammembers[p.first]) };
                 }
             }
             for (auto &i : f.blocks[b].insts) Lower(i);
@@ -673,21 +741,30 @@ private:
             case GirOp::Leave: return LowerLeave(i);
             case GirOp::Print: return LowerPrint(i);
             case GirOp::Br: {
-                GirInst b;
-                b.op = GirOp::Br;
-                b.idx = bmap[i.idx];
-                for (auto a : i.vals) for (auto w : shape[a].w) b.vals.push_back(w);
-                Term(std::move(b));
+                LowerBranch(i.idx, i.vals);
                 return;
             }
             case GirOp::CondBr: {
+                if (HasAggregateParams(i.idx) || HasAggregateParams(i.idx2)) {
+                    auto current = cur;
+                    auto thenEdge = LowerBranchEdge(i.idx, i.vals);
+                    auto elseEdge = LowerBranchEdge(i.idx2, i.vals2);
+                    cur = current;
+                    GirInst branch;
+                    branch.op = GirOp::CondBr;
+                    branch.a = W0(i.a);
+                    branch.idx = thenEdge;
+                    branch.idx2 = elseEdge;
+                    Term(std::move(branch));
+                    return;
+                }
                 GirInst b;
                 b.op = GirOp::CondBr;
                 b.a = W0(i.a);
                 b.idx = bmap[i.idx];
                 b.idx2 = bmap[i.idx2];
-                for (auto a : i.vals) for (auto w : shape[a].w) b.vals.push_back(w);
-                for (auto a : i.vals2) for (auto w : shape[a].w) b.vals2.push_back(w);
+                b.vals = BranchValues(i.idx, i.vals);
+                b.vals2 = BranchValues(i.idx2, i.vals2);
                 Term(std::move(b));
                 return;
             }
