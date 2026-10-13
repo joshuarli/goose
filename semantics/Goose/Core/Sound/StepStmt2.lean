@@ -344,6 +344,7 @@ private theorem statementIfBlockInputFrame
         (t.variables ++ f.toList.flatMap Block.variables) ++ context.expected.frame.future := by
       rw [condTransition.expectedFrameEq, DemandNode.phaseFrame_future condTransition.phaseFrameEq,
         hcondFuture]
+      simp [DemandNode.phaseFuture]
     have hFbranch : Frame m W tenv penv env s
         ((t.variables ++ f.toList.flatMap Block.variables) ++ context.expected.frame.future) := by
       change Frame m W tenv penv env s condTransition.context.expected.frame.future at hFcond
@@ -380,6 +381,7 @@ private theorem statementIfBlockInputFrame
         context.expected.frame.future := by
       rw [blockTransition.expectedFrameEq,
         DemandNode.phaseFrame_future blockTransition.phaseFrameEq, hblockFuture]
+      simp [DemandNode.phaseFuture]
     have hsubset : ∀ x, x ∈ b.variables ++ context.expected.frame.future →
         x ∈ (t.variables ++ f.toList.flatMap Block.variables) ++ context.expected.frame.future := by
       intro x hx
@@ -453,6 +455,7 @@ private theorem statementIfConditionInputSubset
     rw [hchildInput] at hx
     simp [parent] at hx
     rw [hfuture] at hx
+    simp [DemandNode.phaseFuture] at hx
     have hchild : x ∈ c.variables ++
         ((t.variables ++ f.toList.flatMap Block.variables) ++ context.expected.frame.future) := by
       simpa [DemandNode.variables, List.append_assoc] using hx
@@ -505,6 +508,7 @@ private theorem statementIfConditionOutputSubset
         (t.variables ++ f.toList.flatMap Block.variables) ++ context.expected.frame.future := by
       rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
         hfuture]
+      simp [DemandNode.phaseFuture]
     intro x hx
     change x ∈ context.expected.frame.future at hx
     change x ∈ transition.context.expected.frame.future
@@ -560,6 +564,7 @@ private theorem statementIfBlockOutputFuture
     change transition.context.expected.frame.future = context.expected.frame.future
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
       hblockFuture]
+    simp [DemandNode.phaseFuture]
 
 private theorem statementRangeLowerInputSubset
     {path : List Nat} {x : VarId} {lo hi : Expr} {body : Block} {o : OriginId}
@@ -609,6 +614,7 @@ private theorem statementRangeLowerInputSubset
     change y ∈ lo.variables ++ transition.context.expected.frame.future at hy
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
       hfuture] at hy
+    simp [DemandNode.phaseFuture] at hy
     have hchild : y ∈ lo.variables ++
         ((hi.variables ++ body.variables) ++ context.expected.frame.future) := by
       simpa [List.append_assoc] using hy
@@ -675,6 +681,7 @@ private theorem statementRangeUpperInputSubset
     change y ∈ hi.variables ++ transition.context.expected.frame.future at hy
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
       hfuture] at hy
+    simp [DemandNode.phaseFuture] at hy
     have hchild : y ∈ hi.variables ++ (body.variables ++ context.expected.frame.future) := by
       simpa [List.append_assoc] using hy
     have hparent : y ∈
@@ -755,10 +762,12 @@ private theorem statementRangeUpperInputFrame
         (hi.variables ++ body.variables) ++ context.expected.frame.future := by
       rw [transitionLo.expectedFrameEq,
         DemandNode.phaseFrame_future transitionLo.phaseFrameEq, hloFuture]
+      simp [DemandNode.phaseFuture]
     have hhiFutureEq : transitionHi.context.expected.frame.future =
         body.variables ++ context.expected.frame.future := by
       rw [transitionHi.expectedFrameEq,
         DemandNode.phaseFrame_future transitionHi.phaseFrameEq, hhiFuture]
+      simp [DemandNode.phaseFuture]
     have hloContext :
         ((EvaluationContext.shrink profile context).child rfl 0
           (DemandNode.expression lo) .expression hchildLo hchildPhaseLo) =
@@ -826,6 +835,7 @@ private theorem statementRangeBodyInputFrame
         body.variables ++ context.expected.frame.future
       rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
         hfuture]
+      simp [DemandNode.phaseFuture]
     rw [hfutureEq] at hFHi
     exact hFHi
 
@@ -877,6 +887,7 @@ private theorem statementForEachViewInputSubset
       change v.variables ++ transition.context.expected.frame.future = _
       rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
         hfuture]
+      simp [DemandNode.phaseFuture]
     intro y hy
     rw [hchildInput] at hy
     have hparent : y ∈ (v.variables ++ body.variables) ++ context.expected.frame.future := by
@@ -934,6 +945,7 @@ private theorem statementForEachBodyInputFrame
         body.variables ++ context.expected.frame.future
       rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
         hfuture]
+      simp [DemandNode.phaseFuture]
     rw [hfutureEq] at hFView
     exact hFView
 
@@ -1518,6 +1530,7 @@ private theorem step_stmt_b_core (ih : Specs m prof plans n) :
           change x ∈ e'.variables ++ transition.context.expected.frame.future at hx
           rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
             hfuture] at hx
+          simp [DemandNode.phaseFuture] at hx
           change x ∈ (DemandNode.statement (.ret (some e') o)).variables ++ context.expected.frame.future
           simpa [DemandNode.variables, Stmt.variables] using hx
       have hresult := statementExprChildSpec ih ec observation W tenv' penv env s 0 e' hchild
@@ -1543,6 +1556,7 @@ private theorem step_stmt_b_core (ih : Specs m prof plans n) :
           change transition.context.expected.frame.future = context.expected.frame.future
           rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
             hfuture]
+          simp [DemandNode.phaseFuture]
       refine Sat.bind hresult ?_
       rintro v s1 ⟨hF1, hfp, hroots, hvalues, hsafe, hret, hpilot, hv0, hg, howner, hforbidden, hforbiddenChild, hmutation⟩
       have hv := hasTy_passable hv0 heq
@@ -1647,6 +1661,7 @@ private theorem step_stmt_b_core (ih : Specs m prof plans n) :
         change x ∈ e.variables ++ transition.context.expected.frame.future at hx
         rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
           hfuture] at hx
+        simp [DemandNode.phaseFuture] at hx
         change x ∈ (DemandNode.statement (.assertS e o)).variables ++ context.expected.frame.future
         simpa [DemandNode.variables, Stmt.variables] using hx
     have hresult := statementExprChildSpec ih ec observation W tenv' penv env s 0 e hchild
@@ -1673,6 +1688,7 @@ private theorem step_stmt_b_core (ih : Specs m prof plans n) :
         change transition.context.expected.frame.future = context.expected.frame.future
         rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
           hfuture]
+        simp [DemandNode.phaseFuture]
     refine Sat.bind hresult ?_
     rintro v s1 ⟨hF1, hfp, hroots, hvalues, hsafe, hret, hpilot, hv, _, _, hforbidden, _, hmutation⟩
     obtain ⟨x, rfl⟩ := hasTy_bool hv
@@ -1725,6 +1741,7 @@ private theorem step_stmt_b_core (ih : Specs m prof plans n) :
         change x ∈ e.variables ++ transition.context.expected.frame.future at hx
         rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
           hfuture] at hx
+        simp [DemandNode.phaseFuture] at hx
         change x ∈ (DemandNode.statement (.exit e o)).variables ++ context.expected.frame.future
         simpa [DemandNode.variables, Stmt.variables] using hx
     have hresult := statementExprChildSpec ih ec observation W tenv' penv env s 0 e hchild
