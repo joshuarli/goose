@@ -241,7 +241,7 @@ def checkBlockValue (n0 n1 : Nat) : List RootRef → V Unit
   | _ :: rest => checkBlockValue n0 n1 rest
 
 /-- The effects of a call added to `e`: the callee's summary through the
-argument roots, or every passed root as a write when the summary is unknown. -/
+argument roots, or every passed nonlocal root as a write when unknown. -/
 def callEffects (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) (e : Eff) : Eff :=
   match callee.summary with
   | .unknown =>
