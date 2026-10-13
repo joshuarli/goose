@@ -596,7 +596,7 @@ Each instruction record that defines a value begins with that value's `val`. The
 | `i_bcmp` | `CmpOp` (`eq` or `ne`), `val` a, `val` b | `bool`; both operands are `bool`. |
 | `i_not` | `val` | `bool`; the operand is `bool`. |
 | `i_conv` | `ConvKind`, `ty` source, `ty` target, `val`, `[org]?` | The target integer type. `as` can abort and needs an origin; `widen` must preserve every value. |
-| `i_next` | `ty` integer, `val` | `T`. The operand plus one, used for a loop counter below its type's maximum; a counter at the maximum is a fault. |
+| `i_next` | `ty` integer, `val` | `T`. The operand plus one, used for a loop counter. It is total: it does not fault at the type's maximum, because Core's model lets a counter pass it (a run longer than the counter type's range), and the lowering theorem needs the two to agree at every fuel. The checker rejects such index types in source programs. |
 | `i_slot` | `slot` | `ref M T` for the slot's type `T` and `M` from its kind. |
 | `i_global` | `glob` | `ref M T` likewise. |
 | `i_elem` | `val` view, `val` index | `ref M T` for a view `view M T`. The address of element `index` of the run: no check and no read, so an index outside the object faults when the address is used. |
