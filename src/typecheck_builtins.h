@@ -2112,6 +2112,8 @@ inline void TypeCheck::CheckShrinkHolders(Node *at, const string &op, VarDef *ro
 
 template <typename P, typename X>
 inline void TypeCheck::NoteRootEvent(VarDef *root, P param, X external) {
+    // Static data has no caller storage class to record.
+    if (!root) return;
     auto current = CurRealFrame().spec;
     if (!current) return;
     if (root->type) {
