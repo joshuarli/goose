@@ -837,6 +837,96 @@ void PassedOwnerPairsKeepTheirExactIdentity() {
     assert(Code(LowPassedOwnerPairModule(false, false, true)) == "");
 }
 
+GirModule ShrinkReplaceBindingModule(bool throughPhi, bool throughCall) {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+    Main(m).slots = { { ownerTy, CoreVarKind::Let, 0, 0 } };
+    Main(m).summary.unknown = true;
+
+    if (throughCall) {
+        GirInst empty = Def(GirOp::Arr, 0);
+        empty.ty = ownerTy;
+        auto slot = Def(GirOp::Slot, 1);
+        slot.idx = 0;
+        auto call = Def(GirOp::Call, 2);
+        call.idx = 1;
+        call.vals = { 1 };
+        call.org = 0;
+        Main(m).blocks[0].insts = { Enter(0), empty, Init(0, 0), slot, call, Leave(0), Ret() };
+
+        GirFunc replacement;
+        replacement.name = "replace";
+        replacement.params = { refTy };
+        replacement.scopes = { -1 };
+        replacement.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+        replacement.summary.unknown = true;
+        GirBlock body;
+        body.params = { { 0, refTy } };
+        GirInst clear;
+        clear.op = GirOp::Clear;
+        clear.a = 0;
+        clear.org = 0;
+        auto value = Int(m, 1, "7");
+        auto run = Def(GirOp::Arr, 2);
+        run.ty = ownerTy;
+        run.vals = { 1 };
+        GirInst replace;
+        replace.op = GirOp::Replace;
+        replace.a = 0;
+        replace.b = 2;
+        replace.org = 0;
+        body.insts = { clear, value, run, replace, Ret() };
+        replacement.blocks = { body };
+        m.funcs.push_back(std::move(replacement));
+        return m;
+    }
+
+    GirInst empty = Def(GirOp::Arr, 0);
+    empty.ty = ownerTy;
+    auto slot = Def(GirOp::Slot, 1);
+    slot.idx = 0;
+    GirBlock entry;
+    if (throughPhi) {
+        auto cond = Def(GirOp::Bool, 2);
+        cond.flag = true;
+        entry.insts = { Enter(0), empty, Init(0, 0), slot, cond, CondBr(2, 1, 2) };
+        GirBlock left, right, join;
+        left.insts = { Br(3, { 1 }) };
+        right.insts = { Br(3, { 1 }) };
+        join.params = { { 3, refTy } };
+        GirInst clear;
+        clear.op = GirOp::Clear;
+        clear.a = 3;
+        clear.org = 0;
+        auto value = Int(m, 4, "7");
+        auto run = Def(GirOp::Arr, 5);
+        run.ty = ownerTy;
+        run.vals = { 4 };
+        GirInst replace;
+        replace.op = GirOp::Replace;
+        replace.a = 3;
+        replace.b = 5;
+        replace.org = 0;
+        join.insts = { clear, value, run, replace, Leave(0), Ret() };
+        Main(m).blocks = { entry, left, right, join };
+    } else {
+        slot.res = 1;
+        Main(m).blocks[0].insts = { Enter(0), empty, Init(0, 0), slot, Leave(0), Ret() };
+    }
+    return m;
+}
+
+void RejectsReplacementThroughALetOwnerPhi() {
+    assert(Code(ShrinkReplaceBindingModule(true, false)) == "GIR-V030");
+    assert(Code(ShrinkReplaceBindingModule(false, true)) == "");
+}
+
 void RejectsUnresolvedLayout() {
     auto m = LowBase();
     GirFunc f = Main(m);
@@ -2711,6 +2801,7 @@ int main() {
     RejectsTwoResizablesOnOneStack();
     RejectsWatermarkPastCallerOwnedRegion();
     PassedOwnerPairsKeepTheirExactIdentity();
+    RejectsReplacementThroughALetOwnerPhi();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
