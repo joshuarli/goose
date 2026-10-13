@@ -557,6 +557,28 @@ private:
 
     CoreMut MutOf(const TypeExpr *t) { return t && t->cq ? CoreMut::Const : CoreMut::Mut; }
 
+    // Capture mutability follows the checked effects: read-only owners stay
+    // const, while a callee that changes one needs writable contents.
+    CoreMut CaptureMut(FnSpec *sp, VarDef *v) {
+        if (v->isvar) return CoreMut::Mut;
+        auto t = v->type;
+        if (!t || t->cq || t->kind != TY_ARRAY || !t->arr) return CoreMut::Const;
+        auto grows = sp->record.growexternals.contains(v);
+        auto shrinks = sp->record.shrinkexternals.contains(v);
+        if (!grows && !shrinks) return CoreMut::Const;
+        switch (t->arr->akind) {
+            case A_GROW:
+                if (shrinks) mod.profile = CoreProfile::Shrink;
+                return CoreMut::Mut;
+            case A_GROWSHRINK:
+                mod.profile = CoreProfile::Shrink;
+                return CoreMut::Mut;
+            case A_LIMITED:
+                Fail("limited-capture-mutation", v->line);
+            default: return CoreMut::Const;
+        }
+    }
+
     // The value type behind a reference.
     static TypeExpr *Pointee(TypeExpr *t) {
         return t->kind == TY_REF && !t->ref->optional ? t->ref->sub : t;
@@ -769,7 +791,7 @@ private:
             if (fv->type->kind == TY_REF) ReportOrFail("captured-reference", sp->sf->line);
             CoreType rt;
             rt.kind = CoreType::Ref;
-            rt.mut = fv->isvar ? CoreMut::Mut : CoreMut::Const;
+            rt.mut = CaptureMut(sp, fv);
             rt.elem = Ty(fv->type);
             auto id = NewVar(nullptr, fv->name, mod.Intern(rt), CoreVarKind::Let, 0, porg);
             cur.varid[fv] = id;
@@ -1355,6 +1377,11 @@ private:
         auto vt = Pointee(recv->exprtype);
         if (!IsArrayTE(vt) || (vt->arr->akind != A_GROW && vt->arr->akind != A_GROWSHRINK &&
                                vt->arr->akind != A_LIMITED)) Fail("growth-receiver");
+        if (vt->arr->akind == A_LIMITED) {
+            if (auto id = Is<Ident>(recv); id && id->vdef && !id->vdef->isvar &&
+                id->vdef->ownerspec != cur.spec)
+                Fail("limited-capture-mutation", id->line);
+        }
         (void)Ty(vt);
         return ToPlace(recv, true);
     }
@@ -1826,7 +1853,7 @@ private:
         for (auto fv : freevars[callee]) {
             CoreArg arg;
             arg.kind = CoreArg::Ref;
-            arg.mut = fv->isvar ? CoreMut::Mut : CoreMut::Const;
+            arg.mut = CaptureMut(callee, fv);
             arg.place = VarPlace(fv);
             e->args.push_back(std::move(arg));
         }
