@@ -15,10 +15,16 @@ def AliasAt (m : Module) (W : World) (env : Env) (s : Store)
   HasTy m W.G s v alias.ty ∧
     ∀ r, Targets v r → Gam env W.P alias.roots r
 
-/-- One alias keeps the same runtime realization across a store transition. -/
-def RetainsAlias (m : Module) (W : World) (env : Env) (s s' : Store)
-    (alias : RetainedAlias) : Prop :=
-  ∀ v, AliasAt m W env s alias v → AliasAt m W env s' alias v
+/-- One alias keeps the same runtime realization across a store transition.
+A limited owner also preserves sampled physical runs beyond its visible length,
+with the element type declared by the alias. -/
+structure RetainsAlias (m : Module) (W : World) (env : Env) (s s' : Store)
+    (alias : RetainedAlias) : Prop where
+  typed : ∀ v, AliasAt m W env s alias v → AliasAt m W env s' alias v
+  physicalLimited : ∀ mu el capacity l start len,
+    alias.ty = .ref mu (.limited el capacity) →
+    AliasAt m W env s alias (.ref l) →
+    SliceTy s l start len el → SliceTy s' l start len el
 
 /-- Every alias in a list keeps its runtime realization across a transition. -/
 def RetainsAliases (m : Module) (W : World) (env : Env) (s s' : Store)
@@ -27,14 +33,22 @@ def RetainsAliases (m : Module) (W : World) (env : Env) (s s' : Store)
 
 theorem RetainsAlias.refl {m : Module} {W : World} {env : Env} {s : Store}
     {alias : RetainedAlias} : RetainsAlias m W env s s alias := by
-  intro v h
-  exact h
+  constructor
+  · intro v h
+    exact h
+  · intro mu el capacity l start len _ _ h
+    exact h
 
 theorem RetainsAlias.trans {m : Module} {W : World} {env : Env} {s s' s'' : Store}
     {alias : RetainedAlias} (h₁ : RetainsAlias m W env s s' alias)
     (h₂ : RetainsAlias m W env s' s'' alias) : RetainsAlias m W env s s'' alias := by
-  intro v h
-  exact h₂ v (h₁ v h)
+  constructor
+  · intro v h
+    exact h₂.typed v (h₁.typed v h)
+  · intro mu el capacity l start len hty halias hslice
+    exact h₂.physicalLimited mu el capacity l start len hty
+      (h₁.typed (.ref l) halias)
+      (h₁.physicalLimited mu el capacity l start len hty halias hslice)
 
 theorem RetainsAliases.refl {m : Module} {W : World} {env : Env} {s : Store}
     {aliases : List RetainedAlias} : RetainsAliases m W env s s aliases := by

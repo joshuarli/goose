@@ -234,11 +234,14 @@ theorem shrinkApproval_retainsInteriorAlias
       (l.root ≠ o.root ∨ l.path ≠ o.path ∨ start + count ≤ len) →
       ∀ E, SliceTy state.store l start count E → SliceTy s' l start count E) :
     RetainsAlias m W env state.store s' alias := by
-  intro v halias
-  have hretained := shrinkApproval_retainedInteriorHeld (len := len)
-    hownerTy hinterior hmem hframe howner halias
-  exact ⟨HasTy.truncate_growshrink htruncate hLoc hSlice hretained halias.1,
-    halias.2⟩
+  constructor
+  · intro v halias
+    have hretained := shrinkApproval_retainedInteriorHeld (len := len)
+      hownerTy hinterior hmem hframe howner halias
+    exact ⟨HasTy.truncate_growshrink htruncate hLoc hSlice hretained halias.1,
+      halias.2⟩
+  · intro mu el capacity l start count hty _ _
+    simp [hty, Ty.interiorTarget?, Ty.ownerElem?] at hinterior
 
 /-- A clear mutation context selects the approval for its exact owner and frame. -/
 theorem NodeContext.clearApproval

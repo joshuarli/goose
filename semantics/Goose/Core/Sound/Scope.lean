@@ -905,12 +905,22 @@ theorem RetainsAliases.releaseScope {future : List VarId} {sc : Nat} {si : Scope
     {s2 : St} {aliases : List RetainedAlias}
     (hframe : Frame m W tenv penv env s future) (hsi : s.nextScope ≤ si) :
     RetainsAliases m W env s2.store (relSt env sc si s2).store aliases := by
-  intro alias hmem v ⟨hty, hroots⟩
-  refine ⟨hty.releaseScope (env := env) ?_, hroots⟩
-  intro r htarget hscope
-  rcases hscope with ⟨x, lv, hvar, hdecl, rfl⟩
-  have hbefore := hframe.gam_older (hroots _ htarget) env.act si x rfl
-  exact (Nat.not_lt_of_ge hsi) hbefore
+  intro alias _
+  have notScope : ∀ v, AliasAt m W env s2.store alias v →
+      ∀ r, Targets v r → ¬ ScopeRoots env.vars env.act sc si r := by
+    intro v halias r htarget hscope
+    rcases hscope with ⟨x, lv, hvar, hdecl, rfl⟩
+    have hbefore := hframe.gam_older (halias.2 _ htarget) env.act si x rfl
+    exact (Nat.not_lt_of_ge hsi) hbefore
+  constructor
+  · intro v halias
+    exact ⟨halias.1.releaseScope (env := env) (notScope v halias), halias.2⟩
+  · intro mu el capacity l start len _ halias hslice
+    obtain ⟨hagree, _⟩ := releaseScope_roots env.vars env.act sc si s2.store
+    apply hslice.agree (P := ScopeRoots env.vars env.act sc si)
+    · intro r hnot
+      exact hagree r hnot
+    · exact notScope (.ref l) halias l.root rfl
 
 /-- Releasing roots no surviving reference targets keeps the store invariant. -/
 theorem StoreInv.release {s : St} {demanded : RootInst → Prop} (hi : StoreInv m G s demanded)
