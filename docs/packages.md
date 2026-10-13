@@ -12,8 +12,7 @@
 </details>
 
 How to turn a Goose program into an executable, how to use libraries that
-are not part of the compiler, and how to make one. The design behind it,
-and the compiler's side of it, is in [design/packages.md](design/packages.md).
+are not part of the compiler, and how to make one.
 
 ## 1. Running and building
 
@@ -57,7 +56,8 @@ plainly.
 
 A *package* is a library in a directory of its own: a module named after it,
 `name.goose`, further modules beside it, and possibly C. The packages the
-compiler knows by name are the *blessed* ones (`src/blessed.txt`): a program
+compiler knows by name are the *blessed* ones (`src/blessed.txt`; their names
+are listed in [stdlib.md](stdlib.md)): a program
 imports them like any module,
 
 ```goose

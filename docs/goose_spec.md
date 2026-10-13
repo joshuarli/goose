@@ -16,7 +16,7 @@
 - [11. Program structure](#11-program-structure)
 - [12. Builtins, the standard library, and what v1 leaves out](#12-builtins-the-standard-library-and-what-v1-leaves-out)
 - [Appendix A. Worked examples (informative)](#appendix-a-worked-examples-informative)
-- [Appendix B. TODO / open items](#appendix-b-todo--open-items)
+- [Appendix B. TODO / open items](#appendix-b-todo-open-items)
 - [Appendix C. Representation and calling convention (normative for the C backend)](#appendix-c-representation-and-calling-convention-normative-for-the-c-backend)
 - [Appendix D. Grammar sketch (informative)](#appendix-d-grammar-sketch-informative)
 - [Appendix E. Implementation notes (informative)](#appendix-e-implementation-notes-informative)
@@ -3439,19 +3439,15 @@ the caller's own facts about `src` intact.
   importing package with the name of a declared package is an error. The
   form `import .a.b;` (leading dot) resolves relative to the *importing
   file* instead.
-* **Packages** (`docs/design/packages.md`). `import name from "source";`
-  in the *root file* declares the package `name`, a directory holding its
-  entry `name.goose`, and imports that entry; the source is a path relative
-  to the root file (`"./lib"`, `"../lib"`) or a git repository at a ref
-  (`"owner/repo@v1"` on GitHub, `"host/owner/repo@commit"`, or a URL),
-  fetched by the compiler. Only the root file declares packages, so a
-  program's dependencies are flat and in one place. The same form in any
-  other file is a *requirement*: the root must declare a package of that
-  name, from the same source, or compilation fails naming the line to add;
-  a different ref is a warning. One version of a package exists in a
-  program. All declarations are public in v1; a name collision within one
-  namespace is an error, except that a global variable and functions may
-  share a name (below). Top-level declarations are order-independent.
+* **Packages** ([`packages.md`](packages.md)). `import name from "source";`
+  in the *root file* declares package `name` and imports its `name.goose`
+  entry from a path or git source. Only the root declares packages; the same
+  form elsewhere is a *requirement* that the root must declare from the same
+  source. A missing declaration is an error naming the line to add, and a
+  different ref is a warning. A program has one version of each package.
+  All declarations are public in v1; a name collision within one namespace
+  is an error, except that a global variable and functions may share a name
+  (below). Top-level declarations are order-independent.
 * **Namespaces** (docs/design/namespaces.md). `namespace image;`, at most
   once and before a file's declarations, places them in namespace `image`;
   a file without it declares into the global namespace, and several files
@@ -3649,11 +3645,12 @@ targets are currently unsupported. Failure returns an empty array and
 payload. The implementation notes, section 6.9, give the byte contract and
 current resource limits; section 11 identifies violations still to fix.
 
-Everything else is the standard library: Goose source under `stdlib/`,
-reached by `import` (§11.1) and documented in `stdlib.md` (the design it
-came from is `design/stdlib_design.md`). The math types of §6.1 are its
-`vec` module; the C behind `math` and `os` enters through `extern fn`
-(§7.10).
+The standard library modules are Goose source under `stdlib/`, reached by
+`import` (§11.1); see [`stdlib.md`](stdlib.md) for the current module
+inventory and reference. Blessed imports are described in
+[`packages.md`](packages.md).
+The math types of §6.1 are in its `vec` module; the C behind `math` and `os`
+enters through `extern fn` (§7.10).
 
 Deliberately out of scope for v1: error-value conventions (§7.9); move
 operations for resizables; multiple resizables per struct; two-way growth
