@@ -31,6 +31,7 @@ reported as such; any other failure exits 1.
 
 import argparse
 import concurrent.futures
+from dataclasses import replace
 import importlib.util
 import fnmatch
 import json
@@ -73,6 +74,28 @@ def semantics_harness():
     return module
 
 
+def expected_pilot_outcome(harness, fixture):
+    """Read abort expectations using the main test runner's stderr contract."""
+    if not fixture.aborts or fixture.stderr is None:
+        return harness.expected_outcome(fixture)
+
+    markers = [line.strip() for line in fixture.stderr.read_text(encoding="utf-8").splitlines()
+               if line.strip()]
+    locations = [marker for marker in markers if harness.LOCATION_PATTERN.search(marker)]
+    malformed_locations = [marker for marker in markers
+                           if ".goose" in marker and not harness.LOCATION_PATTERN.search(marker)]
+    if malformed_locations:
+        raise harness.HarnessFailure(f"{fixture.name}.stderr has malformed source location")
+    if not markers or all(harness.LOCATION_PATTERN.search(marker) for marker in markers):
+        raise harness.HarnessFailure(f"{fixture.name}.stderr must include an abort diagnostic")
+
+    # Main-runner expected stderr may assert the diagnostic text without naming
+    # a source line. Preserve strict location checks whenever the sidecar has one.
+    if not locations:
+        fixture = replace(fixture, corpus=True)
+    return harness.expected_outcome(fixture)
+
+
 class Corpus:
     def __init__(self, goose, work, cc, native, pipeline=None):
         self.goose, self.work, self.cc, self.native = goose, work, cc, native
@@ -96,7 +119,7 @@ class Corpus:
         why = self.supported(fixture.source, [])
         if why:
             return "skip", f"unsupported in pipeline {self.pipeline}: {why}"
-        outcome = h.expected_outcome(fixture)
+        outcome = expected_pilot_outcome(h, fixture)
         stdout = h.joined(fixture.out.read_text(encoding="utf-8"))
         for mode in fixture.modes:
             defines = ["-DGS_DEBUG=1"] if mode == h.DEBUG else []
