@@ -1,4 +1,5 @@
 import Goose.Core.Sound.Context
+import Goose.Core.Sound.Protection
 import Goose.Core.Sound.RetainSyntax
 
 /-!
@@ -7,18 +8,6 @@ Bridge one checked direct shrink point to its runtime retention obligations.
 
 namespace Goose.Core.Sound
 open Goose.Core Goose.Proofs.Memory
-
-def TargetDenotes (P : Nat → RootInst → Prop) : Target → RootInst → Prop
-  | .global g, r => r = .global g
-  | .param i, r => P i r
-
-/- Every inherited slice target is disjoint from each root in a complete shrink summary. -/
-def KnownEffectShrinkProtected (W : World) : Prop :=
-  W.E.unknown = false ∧
-    ∀ holder element target, W.D holder element → W.A holder target →
-    ∀ shrinkingTarget, shrinkingTarget ∈ W.E.shrinks →
-      ∀ shrinkingRoot, TargetDenotes W.P shrinkingTarget shrinkingRoot →
-        target ≠ shrinkingRoot
 
 theorem Frame.demandedSliceTargets_ne_of_shrinkProtected
     {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
@@ -49,14 +38,17 @@ theorem Frame.demandedSliceTargets_ne_of_shrinkProtected
   | global g =>
     have hshrinks : Target.global g ∈ W.E.shrinks :=
       ownerTargets (.global g) (mem_rootsTargets_global hownerRef)
-    have haway := hProtected.2 holder elem target hD hA (.global g) hshrinks
-      (.global g) rfl
+    have hmay : MayShrinkEff W.P W.E (.global g) :=
+      ⟨.global g, Or.inl hshrinks, rfl⟩
+    have haway := hProtected.2 holder elem target hD hA (.global g) hmay
     intro hsame
     exact haway (hsame.trans hownerRoot)
   | param i =>
     have hshrinks : Target.param i ∈ W.E.shrinks :=
       ownerTargets (.param i) (mem_rootsTargets_param hownerRef)
-    exact hProtected.2 holder elem target hD hA (.param i) hshrinks ownerRoot hownerRoot
+    have hmay : MayShrinkEff W.P W.E ownerRoot :=
+      ⟨.param i, Or.inl hshrinks, hownerRoot⟩
+    exact hProtected.2 holder elem target hD hA ownerRoot hmay
 
 theorem locTy_growshrink_root_ne_of_slice
     {m : Module} {G : Nat} {s : Store} {root : RootInst} {path : List Nat}
