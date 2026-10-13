@@ -29,7 +29,7 @@ theorem step_call (hm : ModOk m) (ih : Specs m prof n) : CallSpec m prof (n + 1)
     have hpW : Perm m ⟨G, P, st.eff, s.nextScope, D, A⟩ := by
       rcases hperm with h | ⟨sm, hs, hall⟩
       · exact Or.inl h
-      · obtain ⟨hu, h1, h2, h3, _⟩ := checkSummary_ok _ _ _ hcs sm hs
+      · obtain ⟨hu, h1, h2, h3, _⟩ := checkSummary_ok _ _ _ _ hcs sm hs
         refine Or.inr ⟨hu, fun t ht => ?_⟩
         rcases ht with ht | ht | ht
         · exact hall t (Or.inl (h1 t ht))

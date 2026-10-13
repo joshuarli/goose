@@ -348,7 +348,7 @@ structure CtxOk (m : Module) (impl : Impl) (ctx : Context) : Prop where
   body : ∃ rho rng st, rpBlockValue ⟨m, impl, ctx, []⟩ [] impl.body ⟨impl.params.size, {}⟩ =
       .ok ((rho, rng), st) ∧
     (impl.body.value.isSome = true → checkResultV ⟨m, impl, ctx, []⟩ rho = .ok ()) ∧
-    checkSummary impl ctx st.eff = .ok ()
+    checkSummary m impl ctx st.eff = .ok ()
 
 structure GlobOk (m : Module) (g : GlobalId) (gl : Global) : Prop where
   ty : gl.ty.storable = true ∧ gl.ty.isRefLike = false
