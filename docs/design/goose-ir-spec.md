@@ -854,7 +854,7 @@ The step is taken only if the cost report shows that context-dependent optimizat
 
 ### 16.6 What sharing does not do
 
-Sharing reduces emitted bodies. It does not reduce the number of contexts checked, and so does not reduce frontend cost (a). Reducing checking work needs the checker to check a body once against root parameters and each call site against the result — the structure of Core's `validate` (§4.6), which the Lean safety theorem shows sound for the profiles. Applying that structure to the production checker is deferred (campaign, deferral `X1`).
+Sharing reduces emitted bodies. It does not reduce the number of contexts checked, and so does not reduce frontend cost (a). Reducing checking work needs the checker to check a body once against root parameters and each call site against the result — the structure of Core's `validate` (§4.6), which the Lean safety theorem shows sound for `core-pilot`, the only profile the Lean model covers so far. Applying that structure to the production checker is deferred (campaign, deferral `X1`).
 
 ## 17. Code-generation units
 
