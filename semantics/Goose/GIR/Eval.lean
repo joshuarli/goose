@@ -92,6 +92,14 @@ def abortAtOrg (k : AbortKind) (org : Option OriginId) : M α :=
   | some o => abortAt k o
   | none => fault .unbound
 
+/-- Check the limited owner's static bound after operands are evaluated. -/
+def checkCapacityAtOrg (l : Loc) (count : Nat) (org : Option OriginId) : M Unit := do
+  match (← readLoc l) with
+  | .limited _ capacity _ len =>
+    if len + count > capacity then abortAtOrg .capacity org else pure ()
+  | .resizable .. => pure ()
+  | _ => fault .shape
+
 def lookupFn (cfg : GCfg) (f : FnId) : M Func :=
   match cfg.mod.funcs[f]? with
   | some fn => pure fn
@@ -145,10 +153,51 @@ def execEff (fn : Func) (fr : Frame) : Effect → M Frame
     let l ← expectRef (← getVal fr r)
     writeLoc l (← getVal fr v)
     pure fr
-  | .append r v _ => do
+  | .append r v org => do
     let l ← expectRef (← getVal fr r)
     let elems ← readRun (← getView fr v)
+    checkCapacityAtOrg l elems.size org
     let _ ← appendLoc l elems
+    pure fr
+  | .popN r count org => do
+    let l ← expectRef (← getVal fr r)
+    let (_, n) ← expectInt (← getVal fr count)
+    let len ← lengthLoc l
+    if n < 0 || n > (len : Int) then abortAtOrg .popNRange org
+    else
+      truncateLoc l (len - n.toNat)
+      pure fr
+  | .resize r size fill org => do
+    let l ← expectRef (← getVal fr r)
+    let (_, n) ← expectInt (← getVal fr size)
+    let fillValue ← match fill with
+      | none => pure none
+      | some v => do pure (some (← getVal fr v))
+    let len ← lengthLoc l
+    let n := wrap .i64 n
+    if n < 0 then abortAtOrg .resizeNegative org
+    else if n.toNat < len then
+      truncateLoc l n.toNat
+      pure fr
+    else if n.toNat == len then
+      pure fr
+    else
+      match fillValue with
+      | none => abortAtOrg .resizeFill org
+      | some value => do
+        checkCapacityAtOrg l (n.toNat - len) org
+        let _ ← appendLoc l (Array.replicate (n.toNat - len) value)
+        pure fr
+  | .clear r _ => do
+    let l ← expectRef (← getVal fr r)
+    truncateLoc l 0
+    pure fr
+  | .replace r run _ => do
+    let l ← expectRef (← getVal fr r)
+    let value ← getVal fr run
+    match value with
+    | .resizable _ _ => writeLoc l value
+    | _ => fault .shape
     pure fr
   | .enter sc => do
     let si ← freshScope
@@ -241,11 +290,22 @@ def execPure (cx : FnCtx) (fr : Frame) : Op → M RVal
       if 0 ≤ k ∧ k < (vw.len : Int) then
         pure (.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩))
       else abortAtOrg .indexOob org
-    | .push r v _ => do
+    | .push r v org => do
       let l ← expectRef (← getVal fr r)
       let x ← getVal fr v
+      match org with
+      | none => pure ()
+      | some _ => checkCapacityAtOrg l 1 org
       let i ← appendLoc l #[x]
       pure (.val (.ref { l with path := l.path ++ [i] }))
+    | .pop r org => do
+      let l ← expectRef (← getVal fr r)
+      let len ← lengthLoc l
+      if len == 0 then abortAtOrg .popEmpty org
+      else do
+        let value ← readLoc { l with path := l.path ++ [len - 1] }
+        truncateLoc l (len - 1)
+        pure (.val value)
     | .structLit t vs => do
       let .structT sid _ := t | fault .shape
       pure (.val (.record sid (← mapList (getVal fr) vs).toArray))

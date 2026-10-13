@@ -24,6 +24,9 @@ structure TyEnv where
   sigs : Array (List Ty × List Ty)
   vals : Array (Option VTy)
   structs : Array StructDef := #[]
+  /-- The profile controls whether a resizable owner can be mutably borrowed
+  through its contents even when its variable binding is immutable. -/
+  profile : ArtifactProfile := .pilot
   /-- An absent capability is used only by standalone typing environments. -/
   contentsWritable : ValueId → Option Bool := fun _ => none
 
@@ -60,14 +63,19 @@ def Mutability.ofKind : VarKind → Mutability
   | .mutable => .mutable
   | .immutable => .readOnly
 
+private def addressMutability (profile : ArtifactProfile) (kind : VarKind) (ty : Ty) : Mutability :=
+  match ty with
+  | .grow _ => .mutable
+  | .growshrink _ => if profile == .shrink then .mutable else Mutability.ofKind kind
+  | _ => Mutability.ofKind kind
+
 def TyEnv.boundTy (env : TyEnv) : Bnd → TyR Unit
   | .omitted => pure ()
   | .val v | .fromEnd v => do let _ ← env.intTy v
 
 /-- The array element type a reference to an array points at. -/
 def arrayElem? : Ty → Option Ty
-  | .arr e _ => some e
-  | .grow e => some e
+  | .arr e _ | .grow e | .growshrink e | .limited e _ => some e
   | _ => none
 
 def Op.resultTy (env : TyEnv) : Op → TyR VTy
@@ -103,11 +111,11 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     pure (.data (.int t))
   | .slotAddr s =>
     match env.slots[s]? with
-    | some sl => pure (.data (.ref (Mutability.ofKind sl.kind) sl.ty))
+    | some sl => pure (.data (.ref (addressMutability env.profile sl.kind sl.ty) sl.ty))
     | none => tyErr s!"slot {s} outside the slot table"
   | .globalAddr g =>
     match env.globals[g]? with
-    | some (t, k) => pure (.data (.ref (Mutability.ofKind k) t))
+    | some (t, k) => pure (.data (.ref (addressMutability env.profile k t) t))
     | none => tyErr s!"global {g} outside the global table"
   | .refElem v i => do
     let (m, t) ← env.viewTy v
@@ -149,11 +157,16 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     pure (.data (.ref m e))
   | .push r v _ => do
     let (_, t) ← env.refTy r
-    match t with
-    | .grow e =>
+    match t.ownerElem? with
+    | some e =>
       unless (← env.dataTy v) = e do tyErr "a pushed element of another type than the array's"
       pure (.data (.ref .mutable e))
-    | _ => tyErr "push to a reference that does not point at a grow-only array"
+    | none => tyErr "push to a reference that does not point at an owner array"
+  | .pop r _ => do
+    let (_, t) ← env.refTy r
+    match t.ownerElem? with
+    | some e => pure (.data e)
+    | none => tyErr "pop from a reference that does not point at an owner array"
   | .call f args _ => do
     let some (ps, rs) := env.sigs[f]? | tyErr s!"call of function {f}, outside the function table"
     unless ps.length = args.length do
@@ -171,7 +184,12 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
       for v in vs do
         unless (← env.dataTy v) = e do tyErr "array element of another type than the array's"
       pure (.data t)
-    | .grow e =>
+    | .grow e | .growshrink e =>
+      for v in vs do
+        unless (← env.dataTy v) = e do tyErr "array element of another type than the array's"
+      pure (.data t)
+    | .limited e capacity =>
+      unless vs.length ≤ capacity do tyErr "limited array literal exceeds its capacity"
       for v in vs do
         unless (← env.dataTy v) = e do tyErr "array element of another type than the array's"
       pure (.data t)
@@ -210,7 +228,8 @@ private def Module.baseTyEnv (m : Module) (f : Func) : TyEnv :=
     globals := m.globals.map fun g => (g.ty, g.kind)
     sigs := m.funcs.map fun h => (h.params, h.results)
     vals := #[]
-    structs := m.structs }
+    structs := m.structs
+    profile := m.profile }
 
 /-- Binding and contents capabilities are intersected over every incoming CFG
 edge. Starting at the top permits owned references through loops; entry
@@ -232,7 +251,12 @@ def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (
         match i with
         | .def v op =>
           let c := match op with
-            | .slotAddr _ | .globalAddr _ => ((typed v).1, true)
+            | .slotAddr s => match f.slots[s]? with
+              | some sl => (sl.kind == .mutable, true)
+              | none => (false, false)
+            | .globalAddr g => match m.globals[g]? with
+              | some gl => (gl.kind == .mutable, true)
+              | none => (false, false)
             | .refFreeze _ => (false, false)
             | .fieldAddr owner field =>
               match vt[owner]? with

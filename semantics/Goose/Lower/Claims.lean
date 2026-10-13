@@ -7,6 +7,16 @@ open Goose.GIR (ValueId BlockId SlotId ScopeId FnId VTy Bnd PrintPart Op Effect 
   instsAt runAt Frame FnCtx RVal Func Slot)
 open Goose.GIR
 
+theorem checkCapacityAtOrg_some (l : Loc) (count : Nat) (org : OriginId) :
+    checkCapacityAtOrg l count (some org) = checkAppendCapacity l count org := by
+  funext s
+  cases hread : readLoc l s with
+  | stop err state => simp [checkCapacityAtOrg, checkAppendCapacity, hread, bind_apply]
+  | ok value state =>
+    cases value <;>
+      simp [checkCapacityAtOrg, checkAppendCapacity, hread, abortAtOrg, abortAt,
+        M.stop, bind_apply, pure_apply, M.instMonad, M.bind', M.pure']
+
 /-! ### The fragment -/
 
 mutual
@@ -24,7 +34,8 @@ def exprOk : Expr → Bool
   | .not e => exprOk e
   | .conv _ _ e _ => exprOk e
   | .call .. | .structLit .. => false
-  | .push p e => placeOk p && exprOk e
+  | .push p e _ => placeOk p && exprOk e
+  | .pop p _ => placeOk p
   | .ifE c t f => exprOk c && blockOk t && blockOk f
   | .blockE b => blockOk b
   | .arrLit _ es => exprsOk es
@@ -67,6 +78,10 @@ def stmtOk : Stmt → Bool
   | .rebind _ e _ => exprOk e
   | .expr e _ => exprOk e
   | .append p v _ => placeOk p && viewOk v
+  | .popN p e _ => placeOk p && exprOk e
+  | .resize p e fill _ => placeOk p && exprOk e && (match fill with | none => true | some v => exprOk v)
+  | .clear p _ => placeOk p
+  | .assignWhole p e _ => placeOk p && exprOk e
   | .ifS c t f _ => exprOk c && blockOk t && (match f with | none => true | some b => blockOk b)
   | .while .. | .forRange .. | .forEach .. | .ret .. | .brk _ | .cont _ => false
   | .print args _ => printOk args
@@ -503,7 +518,7 @@ theorem exprClaim_cmp (n : Nat) (ihe : ∀ e, ExprClaim n e) (op : CmpOp) (a b :
   · exact (execPure_cmp hx hy).1 t0
 
 theorem exprClaim_push (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p) (owner : Place)
-    (a : Expr) : ExprClaim (n + 1) (.push owner a) := by
+    (a : Expr) (org : Option OriginId) : ExprClaim (n + 1) (.push owner a org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, v, ls2, h2, h3⟩ := hlow
@@ -516,7 +531,37 @@ theorem exprClaim_push (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, Plac
   have hl : fr2.vals[rp]? = some (.val (.ref l)) := P12.has (rp, _) (by simp)
   have hv : fr2.vals[v]? = some (.val va) := P12.has (v, _) (by simp)
   refine leaf_def P12 h3 hext (by simp) RVal.val ?_
-  simp only [execPure, getVal_of hl, getVal_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
+  cases org with
+  | none => simp [execPure, getVal_of hl, getVal_of hv, Goose.Core.expectRef]
+  | some origin =>
+    simp [execPure, getVal_of hl, getVal_of hv, Goose.Core.expectRef, bind_assoc, pure_bind,
+      checkCapacityAtOrg, Goose.Core.checkedAppendLoc, checkAppendCapacity, abortAtOrg, abortAt]
+    rfl
+
+theorem exprClaim_pop (n : Nat) (ihp : ∀ p, PlaceClaim n p) (owner : Place)
+    (org : OriginId) : ExprClaim (n + 1) (.pop owner org) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  simp only [lowerExpr, bind_eq] at hlow
+  obtain ⟨rp, ls1, h1, h2⟩ := hlow
+  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef h2)
+  simp only [evalExpr]
+  refine SimG.bind (ihp owner (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
+  have hl : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
+  refine leaf_def P1 h2 hext (by simp) RVal.val ?_
+  simp [execPure, getVal_of hl, Goose.Core.expectRef, abortAtOrg, abortAt]
+  funext s
+  cases hlen : lengthLoc l s with
+  | stop err state => simp [bind_apply, hlen]
+  | ok len state =>
+    by_cases hzero : len = 0
+    · simp [bind_apply, hlen, hzero, Functor.map, M.stop, M.bind', M.pure']
+    · simp only [bind_apply, hlen, if_neg hzero]
+      cases hread : readLoc { root := l.root, path := l.path ++ [len - 1] } state with
+      | stop err state' => simp [bind_apply, hread]
+      | ok value state' =>
+        cases htruncate : truncateLoc l (len - 1) state' with
+        | stop err state'' => simp [bind_apply, hread, htruncate]
+        | ok _ state'' => simp [bind_apply, hread, htruncate]
 
 /-! ### Lists of expressions -/
 
@@ -904,6 +949,246 @@ theorem stmtClaim_expr (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n
   refine SimG.bind (ihe e (by okpf) le ls v ls1 pt cfg env cx fr h1 hpp hext hrel) fun va pt1 fr1 P1 => ?_
   exact SimG.ret ⟨rfl, P1.sub (cells' := []) (by simp)⟩
 
+theorem stmtClaim_popN (n : Nat) (lc : Option LoopCtx) (ihp : ∀ p, PlaceClaim n p)
+    (ihe : ∀ e, ExprClaim n e) (owner : Place) (count : Expr) (org : OriginId) :
+    StmtClaim (n + 1) lc (.popN owner count org) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  simp only [lowerStmt, bind_eq] at hlow
+  obtain ⟨rp, ls1, h1, v, ls2, h2, h3⟩ := hlow
+  have hext2 : ExtT ls2 cx.fn.blocks := hext.of_adv (adv_emitEffect h3)
+  have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (advB_lowerExpr count _ _ _ _ h2)
+  simp only [execStmt]
+  refine SimG.bind (ihp owner (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
+  refine SimG.bind (ihe count (by okpf) le ls1 v ls2 pt1 cfg env cx fr1 h2 P1.pp hext2 P1.rel) fun va pt2 fr2 P2 => ?_
+  refine SimG.expectInt fun t k hva => ?_
+  subst hva
+  have P12 := P1.comp P2
+  have hl : fr2.vals[rp]? = some (.val (.ref l)) := P12.has (rp, _) (by simp)
+  have hc : fr2.vals[v]? = some (.val (.int t k)) := P12.has (v, _) (by simp)
+  let action : M Unit := do
+    let len ← lengthLoc l
+    if k < 0 || k > (len : Int) then abortAt .popNRange org
+    else truncateLoc l (len - k.toNat)
+  have hx : execEff cx.fn fr2 (.popN rp v (some org)) = action >>= fun _ => pure fr2 := by
+    simp [execEff, getVal_of hl, getVal_of hc, Goose.Core.expectRef, Goose.Core.expectInt,
+      abortAtOrg, abortAt, action]
+    funext s
+    cases hlen : lengthLoc l s with
+    | stop err state => simp [action, bind_apply, hlen, M.instMonad, M.bind', M.pure', Functor.map]
+    | ok len state =>
+      by_cases hbad : k < 0 ∨ (len : Int) < k
+      · simp [bind_apply, hlen, hbad, M.stop, M.bind', M.pure', Functor.map]
+      · simp [bind_apply, hlen, hbad]
+  refine leaf_eff P12 h3 hext (Flow.normal .unit) ?_ hx
+  funext s
+  cases hlen : lengthLoc l s with
+  | stop err state => simp [action, bind_apply, pure_apply, hlen, M.bind', M.pure', Functor.map]
+  | ok len state =>
+    by_cases hbad : k < 0 ∨ (len : Int) < k
+    · simp [action, bind_apply, pure_apply, hlen, hbad, abortAt, M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+    · cases htruncate : truncateLoc l (len - k.toNat) state <;>
+        simp [action, bind_apply, pure_apply, hlen, hbad, htruncate, M.instMonad, M.bind', M.pure', Functor.map]
+
+theorem stmtClaim_resize (n : Nat) (lc : Option LoopCtx) (ihp : ∀ p, PlaceClaim n p)
+    (ihe : ∀ e, ExprClaim n e) (owner : Place) (size : Expr) (fill : Option Expr)
+    (org : OriginId) : StmtClaim (n + 1) lc (.resize owner size fill org) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  cases fill with
+  | none =>
+    simp only [lowerStmt, bind_eq] at hlow
+    obtain ⟨rp, ls1, h1, v, ls2, h2, opt, ls2', hopt, h3⟩ := hlow
+    rw [pure_run] at hopt
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hopt
+    have hext2 : ExtT ls2 cx.fn.blocks := hext.of_adv (adv_emitEffect h3)
+    have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (advB_lowerExpr size _ _ _ _ h2)
+    simp only [execStmt]
+    refine SimG.bind (ihp owner (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
+    refine SimG.bind (ihe size (by okpf) le ls1 v ls2 pt1 cfg env cx fr1 h2 P1.pp hext2 P1.rel) fun va pt2 fr2 P2 => ?_
+    refine SimG.expectInt fun t k hva => ?_
+    subst hva
+    have P12 := P1.comp P2
+    have hl : fr2.vals[rp]? = some (.val (.ref l)) := P12.has (rp, _) (by simp)
+    have hv : fr2.vals[v]? = some (.val (.int t k)) := P12.has (v, _) (by simp)
+    let action : M Unit := do
+      let len ← lengthLoc l
+      let newLen := wrap .i64 k
+      if newLen < 0 then abortAt .resizeNegative org
+      else if newLen.toNat < len then truncateLoc l newLen.toNat
+      else if newLen.toNat == len then pure ()
+      else abortAt .resizeFill org
+    have hx : execEff cx.fn fr2 (.resize rp v none (some org)) = action >>= fun _ => pure fr2 := by
+      funext s
+      cases hlen : lengthLoc l s with
+      | stop err state => simp [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef,
+          Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, bind_apply, pure_apply,
+          M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+      | ok len state =>
+        by_cases hneg : wrap .i64 k < 0
+        · simp [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef,
+            Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, hneg, bind_apply, pure_apply,
+            M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+        · by_cases hshort : (wrap .i64 k).toNat < len
+          · cases htr : truncateLoc l (wrap .i64 k).toNat state <;>
+              simp [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef,
+                Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, hneg, hshort, htr,
+                bind_apply, pure_apply, M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+          · by_cases heq : (wrap .i64 k).toNat = len
+            · simp [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef,
+                Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, hneg, hshort, heq,
+                bind_apply, pure_apply, M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+            · simp [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef,
+                Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, hneg, hshort, heq,
+                bind_apply, pure_apply, M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+    apply leaf_eff P12 h3 hext (Flow.normal .unit) ?_ hx
+    funext s
+    cases hlen : lengthLoc l s with
+    | stop err state => simp [action, hlen, bind_apply, pure_apply, M.instMonad, M.bind', M.pure', Functor.map]
+    | ok len state =>
+      by_cases hneg : wrap .i64 k < 0
+      · simp [action, hlen, hneg, abortAt, bind_apply, pure_apply, M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+      · by_cases hshort : (wrap .i64 k).toNat < len
+        · cases htr : truncateLoc l (wrap .i64 k).toNat state <;>
+            simp [action, hlen, hneg, hshort, htr, bind_apply, pure_apply, M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+        · by_cases heq : (wrap .i64 k).toNat = len
+          · simp [action, hlen, hneg, hshort, heq, abortAt, bind_apply, pure_apply, M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+          · simp [action, hlen, hneg, hshort, heq, abortAt, bind_apply, pure_apply, M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+  | some fillExpr =>
+    simp only [lowerStmt, bind_eq] at hlow
+    obtain ⟨rp, ls1, h1, v, ls2, h2, fv, ls3, h3, opt, ls3', hopt, h4⟩ := hlow
+    rw [pure_run] at hopt
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hopt
+    have hext3 : ExtT ls3 cx.fn.blocks := hext.of_adv (adv_emitEffect h4)
+    have hext2 : ExtT ls2 cx.fn.blocks := hext3.of_adv (advB_lowerExpr fillExpr _ _ _ _ h3)
+    have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (advB_lowerExpr size _ _ _ _ h2)
+    simp only [execStmt]
+    refine SimG.bind (ihp owner (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
+    refine SimG.bind (ihe size (by okpf) le ls1 v ls2 pt1 cfg env cx fr1 h2 P1.pp hext2 P1.rel) fun sizeVal pt2 fr2 P2 => ?_
+    refine SimG.expectInt fun t k hsize => ?_
+    subst hsize
+    refine SimG.bind (ihe fillExpr (by okpf) le ls2 fv ls3 pt2 cfg env cx fr2 h3 P2.pp hext3 P2.rel) fun fillVal pt3 fr3 P3 => ?_
+    have P13 := P1.comp P2 |>.comp P3
+    have hl : fr3.vals[rp]? = some (.val (.ref l)) := P13.has (rp, _) (by simp)
+    have hs : fr3.vals[v]? = some (.val (.int t k)) := P13.has (v, _) (by simp)
+    have hf : fr3.vals[fv]? = some (.val fillVal) := P13.has (fv, _) (by simp)
+    let action : M Unit := do
+      let len ← lengthLoc l
+      let newLen := wrap .i64 k
+      if newLen < 0 then abortAt .resizeNegative org
+      else if newLen.toNat < len then truncateLoc l newLen.toNat
+      else if newLen.toNat == len then pure ()
+      else do
+        checkAppendCapacity l (newLen.toNat - len) org
+        let _ ← appendLoc l (Array.replicate (newLen.toNat - len) fillVal)
+        pure ()
+    have hx : execEff cx.fn fr3 (.resize rp v (some fv) (some org)) = action >>= fun _ => pure fr3 := by
+      funext s
+      cases hlen : lengthLoc l s with
+      | stop err state => simp [execEff, getVal_of hl, getVal_of hs, getVal_of hf,
+          Goose.Core.expectRef, Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen,
+          bind_apply, pure_apply, M.instMonad, M.bind', M.pure', Functor.map]
+      | ok len state =>
+        by_cases hneg : wrap .i64 k < 0
+        · simp [execEff, getVal_of hl, getVal_of hs, getVal_of hf, Goose.Core.expectRef,
+            Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, hneg, bind_apply, pure_apply,
+            M.stop, M.instMonad, M.bind', M.pure', Functor.map]
+        · by_cases hshort : (wrap .i64 k).toNat < len
+          · cases htr : truncateLoc l (wrap .i64 k).toNat state <;>
+              simp [execEff, getVal_of hl, getVal_of hs, getVal_of hf, Goose.Core.expectRef,
+                Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, hneg, hshort, htr,
+                bind_apply, pure_apply, M.instMonad, M.bind', M.pure', Functor.map]
+          · by_cases heq : (wrap .i64 k).toNat = len
+            · simp [execEff, getVal_of hl, getVal_of hs, getVal_of hf, Goose.Core.expectRef,
+                Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, hneg, hshort, heq,
+                bind_apply, pure_apply, M.instMonad, M.bind', M.pure', Functor.map]
+            · cases hcap : checkAppendCapacity l ((wrap .i64 k).toNat - len) org state with
+              | stop err state' => simp [execEff, getVal_of hl, getVal_of hs, getVal_of hf,
+                  Goose.Core.expectRef, Goose.Core.expectInt, abortAtOrg, abortAt, action,
+                  hlen, hneg, hshort, heq, hcap, checkCapacityAtOrg_some,
+                  bind_apply, pure_apply, M.instMonad, M.bind', M.pure', Functor.map]
+              | ok _ state' =>
+                cases happ : appendLoc l (Array.replicate ((wrap .i64 k).toNat - len) fillVal) state' <;>
+                  simp [execEff, getVal_of hl, getVal_of hs, getVal_of hf, Goose.Core.expectRef,
+                    Goose.Core.expectInt, abortAtOrg, abortAt, action, hlen, hneg, hshort, heq,
+                    hcap, happ, checkCapacityAtOrg_some, bind_apply, pure_apply,
+                    M.instMonad, M.bind', M.pure', Functor.map]
+    apply leaf_eff P13 h4 hext (Flow.normal .unit) ?_ hx
+    funext s
+    cases hlen : lengthLoc l s with
+    | stop err state => simp [action, hlen, bind_apply, pure_apply, M.bind', M.pure', Functor.map]
+    | ok len state =>
+      by_cases hneg : wrap .i64 k < 0
+      · simp [action, hlen, hneg, abortAt, bind_apply, pure_apply, M.stop, M.bind', M.pure', Functor.map]
+      · by_cases hshort : (wrap .i64 k).toNat < len
+        · cases htr : truncateLoc l (wrap .i64 k).toNat state <;>
+            simp [action, hlen, hneg, hshort, htr, bind_apply, pure_apply, M.bind', M.pure', Functor.map]
+        · by_cases heq : (wrap .i64 k).toNat = len
+          · simp [action, hlen, hneg, hshort, heq, abortAt, bind_apply, pure_apply, M.stop, M.bind', M.pure', Functor.map]
+          · cases hcap : checkAppendCapacity l ((wrap .i64 k).toNat - len) org state with
+            | stop err state' => simp [action, hlen, hneg, hshort, heq, hcap, bind_apply, pure_apply, M.bind', M.pure', Functor.map]
+            | ok _ state' =>
+              cases happ : appendLoc l (Array.replicate ((wrap .i64 k).toNat - len) fillVal) state' <;>
+                simp [action, hlen, hneg, hshort, heq, hcap, happ, bind_apply, pure_apply, M.bind', M.pure', Functor.map]
+
+theorem stmtClaim_clear (n : Nat) (lc : Option LoopCtx) (ihp : ∀ p, PlaceClaim n p)
+    (owner : Place) (org : OriginId) : StmtClaim (n + 1) lc (.clear owner org) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  simp only [lowerStmt, bind_eq] at hlow
+  obtain ⟨rp, ls1, h1, h2⟩ := hlow
+  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitEffect h2)
+  simp only [execStmt]
+  refine SimG.bind (ihp owner (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
+  have hl : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
+  have hx : execEff cx.fn fr1 (.clear rp (some org)) = truncateLoc l 0 >>= fun _ => pure fr1 := by
+    simp only [execEff, getVal_of hl, Goose.Core.expectRef, bind_assoc, pure_bind]
+  exact leaf_eff P1 h2 hext (Flow.normal .unit) (by simp only [bind_assoc]) hx
+
+theorem stmtClaim_assignWhole (n : Nat) (lc : Option LoopCtx) (ihp : ∀ p, PlaceClaim n p)
+    (ihe : ∀ e, ExprClaim n e) (owner : Place) (replacement : Expr) (org : OriginId) :
+    StmtClaim (n + 1) lc (.assignWhole owner replacement org) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  simp only [lowerStmt, bind_eq] at hlow
+  obtain ⟨rp, ls1, h1, u, ls2, h2, run, ls3, h3, h4⟩ := hlow
+  cases u
+  have hext3 : ExtT ls3 cx.fn.blocks := hext.of_adv (adv_emitEffect h4)
+  have hext2 : ExtT ls2 cx.fn.blocks := hext3.of_adv (advB_lowerExpr replacement _ _ _ _ h3)
+  have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (adv_emitEffect h2)
+  simp only [execStmt]
+  refine SimG.bind (ihp owner (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
+  obtain ⟨Pclear, hi⟩ := Post.eff_leaf P1 h2 hext2
+  have hrp1 : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
+  have hvals : ls2.vals.size = ls1.vals.size := (emitEffect_facts h2 P1.pp hext2).1
+  have PclearKeep : Post cfg env cx ls fr ls2 fr1 (pt1.1, pt1.2 + 1) [(rp, .val (.ref l))] := by
+    refine ⟨Pclear.pp, ?_, ?_, Pclear.mono, Pclear.same, Pclear.rel⟩
+    · intro p hp
+      simp only [List.mem_singleton] at hp
+      subst p
+      exact hrp1
+    · intro p hp
+      simp only [List.mem_singleton] at hp
+      subst p
+      rw [hvals]
+      exact P1.lt (rp, .val (.ref l)) (by simp)
+  have hclear : execEff cx.fn fr1 (.clear rp (some org)) = truncateLoc l 0 >>= fun _ => pure fr1 := by
+    simp only [execEff, getVal_of hrp1, Goose.Core.expectRef, bind_assoc, pure_bind]
+  refine SimG.bind (SimG.eff_step (fun _ => fr1) hi hclear) fun _ pt2 fr2 ⟨hpt, hfr⟩ => ?_
+  subst pt2
+  subst fr2
+  refine SimG.bind (ihe replacement (by okpf) le ls2 run ls3 (pt1.1, pt1.2 + 1) cfg env cx fr1 h3 Pclear.pp hext3 Pclear.rel)
+      fun replacementVal pt3 fr3 Preplacement => ?_
+  have P13 := PclearKeep.comp Preplacement
+  have hrp : fr3.vals[rp]? = some (.val (.ref l)) := P13.has (rp, _) (by simp)
+  have hr : fr3.vals[run]? = some (.val replacementVal) := P13.has (run, _) (by simp)
+  have hx : execEff cx.fn fr3 (.replace rp run (some org)) =
+      (match replacementVal with
+       | .resizable .. => writeLoc l replacementVal
+       | _ => fault .shape) >>= fun _ => pure fr3 := by
+    simp only [execEff, getVal_of hrp, getVal_of hr, Goose.Core.expectRef, bind_assoc, pure_bind]
+    funext s
+    cases replacementVal <;> rfl
+  apply leaf_eff P13 h4 hext (Flow.normal .unit) ?_ hx
+  funext s
+  cases replacementVal <;> rfl
+
 theorem stmtClaim_append (n : Nat) (lc : Option LoopCtx) (ihp : ∀ p, PlaceClaim n p) (ihv : ∀ v, ViewClaim n v) (owner : Place)
     (src : View) (org : OriginId) : StmtClaim (n + 1) lc (.append owner src org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
@@ -918,8 +1203,10 @@ theorem stmtClaim_append (n : Nat) (lc : Option LoopCtx) (ihp : ∀ p, PlaceClai
   have hl : fr2.vals[rp]? = some (.val (.ref l)) := P12.has (rp, _) (by simp)
   have hv : fr2.vals[vw]? = some (.view vwv) := P12.has (vw, _) (by simp)
   have hx : execEff cx.fn fr2 (.append rp vw (some org)) =
-      (readRun vwv >>= fun elems => appendLoc l elems) >>= fun _ => pure fr2 := by
-    simp only [execEff, getVal_of hl, getView_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
+      (readRun vwv >>= fun elems => checkedAppendLoc l elems org) >>= fun _ => pure fr2 := by
+    simp only [execEff, getVal_of hl, getView_of hv, Goose.Core.expectRef, bind_assoc, pure_bind,
+      Goose.Core.checkedAppendLoc, checkCapacityAtOrg, checkAppendCapacity, abortAtOrg, abortAt]
+    rfl
   exact leaf_eff P12 h3 hext (Flow.normal .unit) (by simp only [bind_assoc]) hx
 
 theorem stmtClaim_abort (n : Nat) (lc : Option LoopCtx) (msg : String) (org : OriginId) : StmtClaim (n + 1) lc (.abort msg org) := by
@@ -1766,7 +2053,8 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | conv k target a org => exact exprClaim_conv n ih.expr k target a org
     | call c args org =>
       intro hok; simp [exprOk] at hok
-    | push owner a => exact exprClaim_push n ih.expr ih.place owner a
+    | push owner a org => exact exprClaim_push n ih.expr ih.place owner a org
+    | pop owner org => exact exprClaim_pop n ih.place owner org
     | ifE c t f => exact exprClaim_ifE n ih.expr ih.blockValue c t f
     | blockE b => exact exprClaim_blockE n ih.blockValue b
     | arrLit t es => exact exprClaim_arrLit n ih.exprs t es
@@ -1799,6 +2087,10 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | rebind x e org => exact stmtClaim_rebind n lc ih.expr x e org
     | expr e org => exact stmtClaim_expr n lc ih.expr e org
     | append owner src org => exact stmtClaim_append n lc ih.place ih.view owner src org
+    | popN owner count org => exact stmtClaim_popN n lc ih.place ih.expr owner count org
+    | resize owner size fill org => exact stmtClaim_resize n lc ih.place ih.expr owner size fill org
+    | clear owner org => exact stmtClaim_clear n lc ih.place owner org
+    | assignWhole owner replacement org => exact stmtClaim_assignWhole n lc ih.place ih.expr owner replacement org
     | ifS c t f org =>
       cases f with
       | none => exact stmtClaim_ifS_none n lc ih.expr (ih.block lc) c t org
