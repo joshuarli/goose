@@ -117,4 +117,22 @@ inline void EmitCore(Ast &ast, const string &entry, const string &path, const st
     if (!lowpath.empty()) write(lowpath, lowtext, "GIR-L");
 }
 
+// Reports the complete set of Core profile features the checked program uses.
+// It writes one machine-readable JSON record and never writes a Core module.
+inline void EmitCoreReport(Ast &ast, const string &entry) {
+    CoreExporter exporter(ast, entry, CoreExportMode::Report);
+    try {
+        (void)exporter.Export();
+    } catch (CoreUnsupported &u) {
+        throw CompileError { cat("cannot complete Core feature report: ", u.feature) };
+    }
+    auto features = exporter.UnsupportedFeatures();
+    fputs("{\"unsupported\":[", stdout);
+    for (size_t i = 0; i < features.size(); i++) {
+        if (i) fputc(',', stdout);
+        fprintf(stdout, "\"%s\"", features[i].c_str());
+    }
+    fputs("]}\n", stdout);
+}
+
 }  // namespace goose

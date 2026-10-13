@@ -20,13 +20,28 @@ if args[:2] == ["toolchain", "--json"]:
     print(json.dumps({"builtin": script.get("builtin", [])}))
     sys.exit(0)
 
+if "--emit-core-report" in args:
+    source = Path(args[args.index("--check") + 1])
+    entry = script.get("export", {}).get(source.stem, "ok")
+    if isinstance(entry, dict) and "fail" in entry:
+        print(entry["fail"], file=sys.stderr)
+        sys.exit(1)
+    features = entry.get("unsupported", []) if isinstance(entry, dict) else []
+    if isinstance(features, str):
+        features = [features]
+    print(json.dumps({"unsupported": sorted(set(features))}))
+    sys.exit(0)
+
 if "--emit-core" in args:
     target = Path(args[args.index("--emit-core") + 1])
     source = Path(args[args.index("--check") + 1])
     name = source.stem
     entry = script.get("export", {}).get(name, "ok")
     if isinstance(entry, dict) and "unsupported" in entry:
-        print(f"{source}:3: unsupported in core-pilot: {entry['unsupported']}", file=sys.stderr)
+        feature = entry["unsupported"]
+        if isinstance(feature, list):
+            feature = feature[0]
+        print(f"{source}:3: unsupported in core-pilot: {feature}", file=sys.stderr)
         sys.exit(1)
     if isinstance(entry, dict) and "fail" in entry:
         print(entry["fail"], file=sys.stderr)

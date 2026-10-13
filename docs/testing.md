@@ -344,6 +344,22 @@ stops at its error, so which warnings print first depends on how far it got.
 
 ## Additional compiler checks
 
+`goose --emit-core-report --check file.goose` typechecks the source, then
+prints one JSON object on stdout with the sorted, unique Core-profile features
+the exporter does not support. It is report-only: it writes no Core module or
+C output. A parse, typecheck or report-traversal failure exits nonzero and does
+not produce a feature set. The normal `--emit-core FILE` behavior is unchanged.
+
+The semantics corpus mode checks each report against normal Core export, then
+prints exact unsupported-feature sets and the number of programs in each set;
+`single_feature_unlocks` counts programs whose only unsupported feature is
+that one feature. For example:
+
+```sh
+python3 test/semantics/run_tests.py --goose .work/build/debug/goose \
+  --semantics semantics/.lake/build/bin/goose-semantics --corpus
+```
+
 The runner checks more than exit status and runtime output:
 
 | Check | Contract |

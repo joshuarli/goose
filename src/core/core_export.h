@@ -18,26 +18,58 @@ struct CoreUnsupported {
     Line at;
 };
 
+enum class CoreExportMode { Module, Report };
+
 class CoreExporter {
 public:
-    CoreExporter(Ast &a, const string &entry)
-        : ast(a), entrypath(entry), entrydir(filesystem::path(entry).parent_path().generic_string()) {}
+    CoreExporter(Ast &a, const string &entry, CoreExportMode mode = CoreExportMode::Module)
+        : ast(a), entrypath(entry), entrydir(filesystem::path(entry).parent_path().generic_string()),
+          reportonly(mode == CoreExportMode::Report) {}
 
     CoreModule Export() {
         auto mainsf = ast.MainFunction();
-        if (!mainsf || mainsf->specs.empty()) Fail("no-entry", Line {});
+        if (!mainsf || mainsf->specs.empty()) {
+            ReportOrFail("no-entry", Line {});
+            return std::move(mod);
+        }
         auto mainspec = mainsf->specs[0];
-        if (!mainspec->params.empty() || !mainspec->rets.empty()) Fail("entry-signature", mainsf->line);
+        if (!mainspec->params.empty() || !mainspec->rets.empty())
+            ReportOrFail("entry-signature", mainsf->line);
         // The entry is context 0. The calls a global's initializer makes come
         // next, since they run first; building an implementation may add more.
         ContextOf(mainspec);
         ExportGlobals();
         FindReachable(ctxspecs);
-        for (size_t k = 0; k < ctxspecs.size(); k++) BuildImpl((int)k);
+        auto implementationscomplete = true;
+        for (size_t k = 0; k < ctxspecs.size(); k++) {
+            try {
+                BuildImpl((int)k);
+            } catch (CoreUnsupported &u) {
+                if (!reportonly) throw;
+                implementationscomplete = false;
+                Remember(u);
+                ProbeBody(ctxspecs[k]->body);
+            }
+        }
+        if (reportonly) {
+            if (implementationscomplete) {
+                try {
+                    ExpandGlobalClasses();
+                    ComputeContentRoots();
+                } catch (CoreUnsupported &u) {
+                    Remember(u);
+                }
+            }
+            return std::move(mod);
+        }
         ExpandGlobalClasses();
         ComputeContentRoots();
         mod.entry = 0;
         return std::move(mod);
+    }
+
+    vector<string> UnsupportedFeatures() const {
+        return vector<string>(unsupported.begin(), unsupported.end());
     }
 
 private:
@@ -46,6 +78,8 @@ private:
     string entrypath;
     string entrydir;
     CoreModule mod;
+    bool reportonly;
+    set<string> unsupported;
 
     unordered_map<const VarDef *, int> globalindex;
     unordered_map<const VarDef *, CoreUnsupported> skipped;   // Library globals left out, and why.
@@ -90,6 +124,55 @@ private:
 
     [[noreturn]] void Fail(const char *feature, Line at) { throw CoreUnsupported { feature, at }; }
     [[noreturn]] void Fail(const char *feature) { throw CoreUnsupported { feature, here }; }
+
+    void Remember(const CoreUnsupported &u) {
+        // These names identify damage caused by a statement omitted after an
+        // earlier unsupported construct. A checked AST cannot contain them as
+        // independent source features.
+        if (u.feature == "unknown-variable" || u.feature == "unknown-global" ||
+            u.feature == "unknown-root") return;
+        unsupported.insert(u.feature);
+    }
+
+    void ReportOrFail(const char *feature, Line at) {
+        if (!reportonly) Fail(feature, at);
+        Remember(CoreUnsupported { feature, at });
+    }
+
+    void ProbeChildren(Node *n) {
+        if (!n) return;
+        CoreBlock ignored;
+        auto probe = [&](Node *child) { Stmt(child, ignored); };
+        if (auto b = Is<Block>(n)) {
+            for (auto s : b->stmts) probe(s);
+            if (b->tail) probe(b->tail);
+            return;
+        }
+        if (auto c = Is<Call>(n)) {
+            if (c->builtin < 0 && c->spec) ContextOf(c->spec);
+            for (auto a : c->args) probe(a);
+            if (c->fvbody) probe(c->fvbody);
+            if (c->defaultinit) probe(c->defaultinit);
+            return;
+        }
+        RunChildren(n, probe);
+    }
+
+    void ProbeBody(Block *b) {
+        if (!b) return;
+        for (auto s : b->stmts) {
+            CoreBlock ignored;
+            Stmt(s, ignored);
+        }
+        if (b->tail) {
+            try {
+                (void)Value(b->tail);
+            } catch (CoreUnsupported &u) {
+                Remember(u);
+                ProbeChildren(b->tail);
+            }
+        }
+    }
 
     // ---------------------------------------------------------------------
     // Files, origins, types.
@@ -155,7 +238,26 @@ private:
 
     bool sliceref = false;   // A reference to a slice is being typed as a parameter's.
 
+    CoreTypeId ReportTypeFallback(TypeExpr *t) {
+        if (t && t->kind == TY_BOOL) return mod.BoolType();
+        if (t && t->kind == TY_VOID) return mod.UnitType();
+        if (t && t->kind == TY_INT && t->intstorage != IS_VARINT) return mod.IntType(IntTy(t->intstorage));
+        // Report mode never writes this partial module. An integer placeholder
+        // lets sibling expressions continue through the same exporter paths.
+        return mod.IntType(CoreIntTy::I64);
+    }
+
     CoreTypeId Ty(TypeExpr *t) {
+        if (!reportonly) return TyChecked(t);
+        try {
+            return TyChecked(t);
+        } catch (CoreUnsupported &u) {
+            Remember(u);
+            return ReportTypeFallback(t);
+        }
+    }
+
+    CoreTypeId TyChecked(TypeExpr *t) {
         if (!t) Fail("untyped-expression");
         CoreType ct;
         switch (t->kind) {
@@ -260,8 +362,11 @@ private:
         unordered_map<const FnSpec *, vector<FnSpec *>> callees;
         for (size_t i = 0; i < order.size(); i++) {
             auto sp = order[i];
-            if (!sp->body) Fail("extern-fn", sp->sf->line);
-            if (sp->isfunval) Fail("function-value", sp->sf->line);
+            if (!sp->body) {
+                ReportOrFail("extern-fn", sp->sf->line);
+                continue;
+            }
+            if (sp->isfunval) ReportOrFail("function-value", sp->sf->line);
             auto &fv = freevars[sp];
             unordered_set<const VarDef *> have;
             unordered_set<const FnSpec *> edge;
@@ -338,7 +443,8 @@ private:
             try {
                 ExportGlobal(g);
             } catch (CoreUnsupported &u) {
-                if (!stdlib) throw;
+                if (!stdlib && !reportonly) throw;
+                if (reportonly && !stdlib) Remember(u);
                 // What it called is not part of the program.
                 while (ctxspecs.size() > nctx) {
                     ctxof.erase(ctxspecs.back());
@@ -347,6 +453,9 @@ private:
                 // Types interned for the failed global stay in the table; the
                 // writer numbers by mention, so they never reach the output.
                 if (g->names.size() == 1 && g->defs.size() == 1 && g->defs[0]) skipped[g->defs[0]] = u;
+                if (reportonly && !stdlib)
+                    for (auto v : g->defs) if (v && v->type) (void)Ty(v->type);
+                if (reportonly && !stdlib && !g->inits.empty()) ProbeChildren(g->inits[0]);
             }
         }
     }
@@ -412,13 +521,13 @@ private:
         cur.free = &freevars[sp];
         impl.name = string(sp->sf->name);
         if (!CoreIsUtf8(impl.name)) Fail("non-utf8-text");
-        if (sp->rets.size() > 1) Fail("multiple-results");
-        if (sp->sf->isthread) Fail("thread");
+        if (sp->rets.size() > 1) ReportOrFail("multiple-results", sp->sf->line);
+        if (sp->sf->isthread) ReportOrFail("thread", sp->sf->line);
         for (size_t r = 0; r < sp->rets.size(); r++) impl.results.push_back(ResultTy(sp, r));
         auto porg = Org(sp->sf->line, CoreOriginKind::Param);
         for (size_t i = 0; i < sp->params.size(); i++) {
             auto vd = sp->params[i];
-            if (vd->reusable) Fail("reusable");
+            if (vd->reusable) ReportOrFail("reusable", vd->line);
             auto ty = ParamTy(sp, i);
             auto id = NewVar(vd, vd->name, ty, vd->isvar ? CoreVarKind::Var : CoreVarKind::Let, 0, porg);
             impl.params.push_back({ id, mod.Type(ty).kind == CoreType::Ref });
@@ -427,7 +536,7 @@ private:
         // the caller's variable, writable only where the variable is.
         for (auto fv : *cur.free) {
             here = sp->sf->line;
-            if (fv->type->kind == TY_REF) Fail("captured-reference");
+            if (fv->type->kind == TY_REF) ReportOrFail("captured-reference", sp->sf->line);
             CoreType rt;
             rt.kind = CoreType::Ref;
             rt.mut = fv->isvar ? CoreMut::Mut : CoreMut::Const;
@@ -443,7 +552,15 @@ private:
         ctx.declkey = DeclKey(sp);
         ctx.stablekey = keys.Context(sp).total.Short();
         ctx.module = keys.ModuleOf(sp->sf->line.fileidx);
-        FillRoots(sp, ctx);
+        if (!reportonly) {
+            FillRoots(sp, ctx);
+        } else {
+            try {
+                FillRoots(sp, ctx);
+            } catch (CoreUnsupported &u) {
+                Remember(u);
+            }
+        }
     }
 
     // The function body: a value-producing tail is its return.
@@ -454,15 +571,21 @@ private:
         if (b->tail) {
             here = b->tail->line;
             auto t = b->tail;
-            if (t->exprtype && t->exprtype->kind != TY_VOID && !cur.impl->results.empty()) {
-                CoreStmt st;
-                st.kind = CoreStmtKind::Ret;
-                st.org = Org(t->line, CoreOriginKind::Return);
-                coerceorg = st.org;
-                st.expr = ReborrowTo(Value(t), ResultOfCurrent());
-                cb.stmts.push_back(std::move(st));
-            } else {
-                Stmt(t, cb);
+            try {
+                if (t->exprtype && t->exprtype->kind != TY_VOID && !cur.impl->results.empty()) {
+                    CoreStmt st;
+                    st.kind = CoreStmtKind::Ret;
+                    st.org = Org(t->line, CoreOriginKind::Return);
+                    coerceorg = st.org;
+                    st.expr = ReborrowTo(Value(t), ResultOfCurrent());
+                    cb.stmts.push_back(std::move(st));
+                } else {
+                    Stmt(t, cb);
+                }
+            } catch (CoreUnsupported &u) {
+                if (!reportonly) throw;
+                Remember(u);
+                ProbeChildren(t);
             }
         }
         return cb;
@@ -477,7 +600,13 @@ private:
         if (b->tail) {
             if (valued) {
                 here = b->tail->line;
-                cb->value = Value(b->tail);
+                try {
+                    cb->value = Value(b->tail);
+                } catch (CoreUnsupported &u) {
+                    if (!reportonly) throw;
+                    Remember(u);
+                    ProbeChildren(b->tail);
+                }
             } else {
                 Stmt(b->tail, *cb);
             }
@@ -509,6 +638,16 @@ private:
     };
 
     void Stmt(Node *n, CoreBlock &out) {
+        if (!reportonly) return StmtChecked(n, out);
+        try {
+            StmtChecked(n, out);
+        } catch (CoreUnsupported &u) {
+            Remember(u);
+            ProbeChildren(n);
+        }
+    }
+
+    void StmtChecked(Node *n, CoreBlock &out) {
         OriginScope keep(*this);
         here = n->line;
         switch (n->nkind) {
