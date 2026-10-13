@@ -475,6 +475,17 @@ private:
         // Blocks, parameters first.
         bmap.assign(f.blocks.size(), -1);
         shape.assign(hvt.size(), {});
+        // A reference to a scalar can arrive from a packed field through a
+        // block parameter or a call result. The high type does not retain
+        // alignment, so keep shrink-profile scalar references byte-safe at
+        // every boundary where that provenance can be erased.
+        if (h.profile == CoreProfile::Shrink)
+            for (size_t v = 0; v < hvt.size(); v++) {
+                auto &t = HT(hvt[v]);
+                if (t.kind == CoreType::Ref &&
+                    (HT(t.elem).kind == CoreType::Int || HT(t.elem).kind == CoreType::Bool))
+                    shape[v].unaligned = true;
+            }
         for (size_t b = 0; b < f.blocks.size(); b++) {
             vector<GirTypeId> ps;
             if (b == 0) ps = lf.params;

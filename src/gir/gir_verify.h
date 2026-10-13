@@ -990,9 +990,24 @@ private:
     void CheckStorage(const Fn &fn) {
         auto &f = *fn.f;
         vector<const GirInst *> defs(fn.nvalues, nullptr);
+        vector<vector<int>> incoming(fn.nvalues);
         for (auto &b : f.blocks)
             for (auto &i : b.insts)
                 if (GirDefinesValue(i) && i.res >= 0 && i.res < fn.nvalues) defs[i.res] = &i;
+        auto addEdge = [&](int target, const vector<int> &args) {
+            if (target < 0 || target >= (int)f.blocks.size()) return;
+            auto &params = f.blocks[target].params;
+            for (size_t k = 0; k < params.size() && k < args.size(); k++)
+                if (params[k].first >= 0 && params[k].first < fn.nvalues)
+                    incoming[params[k].first].push_back(args[k]);
+        };
+        for (auto &b : f.blocks) for (auto &i : b.insts) {
+            if (i.op == GirOp::Br) addEdge(i.idx, i.vals);
+            else if (i.op == GirOp::CondBr) {
+                addEdge(i.idx, i.vals);
+                addEdge(i.idx2, i.vals2);
+            }
+        }
         auto refof = [&](int v, CoreMut &mut, GirTypeId &pointee) {
             if (v < 0 || v >= (int)fn.vt.size() || fn.vt[v] < 0) return false;
             auto &t = m.Type(fn.vt[v]);
@@ -1002,13 +1017,19 @@ private:
             return true;
         };
         function<bool(int, vector<char> &)> contentsMutable = [&](int v, vector<char> &open) {
-            if (v < 0 || v >= fn.nvalues || fn.vt[v] < 0 || open[v]) return false;
+            if (v < 0 || v >= fn.nvalues || fn.vt[v] < 0) return false;
+            // A backedge can carry the same capability as its loop input. The
+            // other incoming edges still have to prove that capability.
+            if (open[v]) return true;
             open[v] = 1;
             auto close = [&](bool result) { open[v] = 0; return result; };
             auto *def = defs[v];
             if (def && (def->op == GirOp::Slot || def->op == GirOp::Global)) {
                 auto pointee = m.Type(fn.vt[v]).elem;
-                return close(m.Type(pointee).kind == CoreType::Struct);
+                if (m.Type(pointee).kind == CoreType::Struct) return close(true);
+                CoreMut mut;
+                GirTypeId ignored;
+                return close(refof(v, mut, ignored) && mut == CoreMut::Mut);
             }
             if (def && def->op == GirOp::Freeze) return close(false);
             if (def && def->op == GirOp::Field) {
@@ -1021,6 +1042,63 @@ private:
                 auto &fields = m.structs[sid].fields;
                 if (def->idx < 0 || def->idx >= (int)fields.size()) return close(false);
                 return close(contentsMutable(def->a, open) && fields[def->idx].contents == CoreMut::Mut);
+            }
+            if (def && (def->op == GirOp::Snap || def->op == GirOp::SliceView ||
+                        def->op == GirOp::Elem || def->op == GirOp::Index))
+                return close(contentsMutable(def->a, open));
+            if (!def) {
+                auto &block0 = f.blocks[0];
+                auto entryParam = find_if(block0.params.begin(), block0.params.end(),
+                                          [&](auto &p) { return p.first == v; });
+                if (entryParam != block0.params.end()) {
+                    CoreMut mut;
+                    GirTypeId pointee;
+                    return close(refof(v, mut, pointee) && mut == CoreMut::Mut);
+                }
+                if (!incoming[v].empty()) {
+                    for (auto source : incoming[v])
+                        if (!contentsMutable(source, open)) return close(false);
+                    return close(true);
+                }
+                return close(false);
+            }
+            CoreMut mut;
+            GirTypeId pointee;
+            return close(refof(v, mut, pointee) && mut == CoreMut::Mut);
+        };
+        function<bool(int, vector<char> &)> writable = [&](int v, vector<char> &open) {
+            if (v < 0 || v >= fn.nvalues || fn.vt[v] < 0) return false;
+            if (open[v]) return true;
+            open[v] = 1;
+            auto close = [&](bool result) { open[v] = 0; return result; };
+            auto *def = defs[v];
+            if (def && def->op == GirOp::Field) {
+                auto base = fn.vt[def->a];
+                if (base < 0 || m.Type(base).kind != CoreType::Ref) return close(false);
+                auto owner = m.Type(base).elem;
+                if (m.Type(owner).kind != CoreType::Struct) return close(false);
+                auto sid = m.Type(owner).structid;
+                if (sid < 0 || sid >= (int)m.structs.size()) return close(false);
+                auto &fields = m.structs[sid].fields;
+                if (def->idx < 0 || def->idx >= (int)fields.size()) return close(false);
+                return close(contentsMutable(def->a, open) && fields[def->idx].binding == CoreVarKind::Var);
+            }
+            if (def && (def->op == GirOp::Elem || def->op == GirOp::Index))
+                return close(contentsMutable(def->a, open));
+            if (def && def->op == GirOp::Freeze) return close(false);
+            if (!def) {
+                auto &entry = f.blocks[0].params;
+                if (find_if(entry.begin(), entry.end(), [&](auto &p) { return p.first == v; }) != entry.end()) {
+                    CoreMut mut;
+                    GirTypeId pointee;
+                    return close(refof(v, mut, pointee) && mut == CoreMut::Mut);
+                }
+                if (!incoming[v].empty()) {
+                    for (auto source : incoming[v])
+                        if (!writable(source, open)) return close(false);
+                    return close(true);
+                }
+                return close(false);
             }
             CoreMut mut;
             GirTypeId pointee;
@@ -1037,12 +1115,9 @@ private:
                     if (refof(i.a, mut, pt)) {
                         if (mut != CoreMut::Mut)
                             Fail("GIR-V030", cat(fn.label, ": a store through a read-only reference"));
-                        auto *def = i.a >= 0 && i.a < fn.nvalues ? defs[i.a] : nullptr;
-                        if (def && def->op == GirOp::Field) {
-                            vector<char> open(fn.nvalues, 0);
-                            if (!contentsMutable(def->a, open))
-                                Fail("GIR-V030", cat(fn.label, ": a field store through a value without mutable contents"));
-                        }
+                        vector<char> open(fn.nvalues, 0);
+                        if (!writable(i.a, open))
+                            Fail("GIR-V030", cat(fn.label, ": a store through a value without mutable binding and contents"));
                         if (!GirReadable(m, pt))
                             Fail("GIR-V030", cat(fn.label, ": a store of a value that cannot be copied"));
                     }
@@ -1051,6 +1126,17 @@ private:
                         Fail("GIR-V030", cat(fn.label, ": growth through a read-only reference"));
                 }
             }
+        for (auto &b : f.blocks) for (auto &i : b.insts) if (i.op == GirOp::Call) {
+            auto &callee = m.funcs[i.idx];
+            for (size_t j = 0; j < callee.params.size() && j < i.vals.size(); j++) {
+                auto &pt = m.Type(callee.params[j]);
+                if (pt.kind == CoreType::Ref && pt.mut == CoreMut::Mut) {
+                    vector<char> open(fn.nvalues, 0);
+                    if (!writable(i.vals[j], open))
+                        Fail("GIR-V030", cat(fn.label, ": a mutating call receives a value without mutable binding and contents"));
+                }
+            }
+        }
     }
 
     // --- GIR-V050 ---------------------------------------------------------
@@ -1221,6 +1307,7 @@ private:
         switch (i.op) {
             case GirOp::Slot: return { CoreRootRef { CoreRootRef::Local, i.idx } };
             case GirOp::Global: return { CoreRootRef { CoreRootRef::Global, i.idx } };
+            case GirOp::Field: return RootsAt(p.vals, i.a);
             case GirOp::Elem: case GirOp::ViewSlice: case GirOp::Index:
                 return RootsAt(p.vals, i.a);
             case GirOp::Freeze: case GirOp::Snap: case GirOp::SliceView: case GirOp::Push:

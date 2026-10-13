@@ -256,15 +256,11 @@ private:
 
     int StructIdFor(TypeExpr *t) {
         if (t->cq) Fail("struct-whole-const", t->line);
+        if (!t->struc) Fail("struct", t->line);
         auto inst = t->struc->inst;
         if (!inst || !inst->validated || !inst->flat || inst->sclass != SC_FIXED)
             Fail("struct", t->line);
         if (auto it = structid.find(inst); it != structid.end()) return it->second;
-
-        auto id = (int)mod.structs.size();
-        structid.emplace(inst, id);
-        mod.profile = CoreProfile::Shrink;
-        mod.structs.emplace_back();
         if (!inst->st || inst->ftypes.size() != inst->st->fields.size()) Fail("struct", t->line);
 
         auto layout = PackedFieldLayout(inst->st->fields, inst->ftypes,
@@ -282,7 +278,13 @@ private:
                                           field.isconst ? CoreVarKind::Let : CoreVarKind::Var,
                                           MutOf(fieldtype), layout.offs[i] });
         }
-        mod.structs[id] = std::move(descriptor);
+        // Do not reserve a nominal id until every field and its packed layout
+        // have passed the profile check; skipped library globals must not
+        // leave incomplete descriptors in the module.
+        auto id = (int)mod.structs.size();
+        structid.emplace(inst, id);
+        mod.profile = CoreProfile::Shrink;
+        mod.structs.push_back(std::move(descriptor));
         return id;
     }
 

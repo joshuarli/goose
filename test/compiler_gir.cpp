@@ -763,6 +763,261 @@ void RejectsAWriteThroughConstFieldContents() {
     assert(Code(m) == "GIR-V030");
 }
 
+void RejectsPassingAReadOnlyStructFieldToAMutatingCall() {
+    auto m = ScalarStruct();
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto record = Main(m).slots[0].ty;
+    auto readonlyRecord = m.RefType(CoreMut::Const, record);
+    auto mutableU8 = m.RefType(CoreMut::Mut, u8);
+
+    GirFunc mutate;
+    mutate.name = "mutate";
+    mutate.params = { mutableU8 };
+    mutate.scopes = { -1 };
+    mutate.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    mutate.summary.writes = { CoreTarget { false, 0 } };
+    GirBlock mutateBody;
+    mutateBody.params = { { 0, mutableU8 } };
+    auto replacement = Int(m, 1, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 0;
+    store.b = 1;
+    store.org = 0;
+    mutateBody.insts = { replacement, store, Ret() };
+    mutate.blocks = { mutateBody };
+
+    GirFunc readonly;
+    readonly.name = "readonly";
+    readonly.params = { readonlyRecord };
+    readonly.scopes = { -1 };
+    readonly.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    readonly.summary.writes = { CoreTarget { false, 0 } };
+    GirBlock readonlyEntry, readonlyTarget;
+    readonlyEntry.params = { { 0, readonlyRecord } };
+    auto field = Def(GirOp::Field, 1);
+    field.a = 0;
+    field.idx = 0;
+    readonlyEntry.insts = { field, Br(1, { 1 }) };
+    readonlyTarget.params = { { 2, mutableU8 } };
+    auto call = Def(GirOp::Call, 3);
+    call.idx = 1;
+    call.vals = { 2 };
+    call.org = 0;
+    readonlyTarget.insts = { call, Ret() };
+    readonly.blocks = { readonlyEntry, readonlyTarget };
+
+    m.funcs.push_back(mutate);
+    m.funcs.push_back(readonly);
+    assert(Code(m) == "GIR-V030");
+}
+
+void AcceptsNestedFieldContentsThroughAJoin() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto inner = StructType(m, 0);
+    auto outer = StructType(m, 1);
+    m.structs = {
+        CoreStruct { 1, { CoreField { u8, CoreVarKind::Var, CoreMut::Mut, 0 } } },
+        CoreStruct { 1, { CoreField { inner, CoreVarKind::Let, CoreMut::Mut, 0 } } },
+    };
+    Main(m).slots = { { outer, CoreVarKind::Let, 0, 0 } };
+
+    auto initValue = Int(m, 0, "1");
+    initValue.ty = u8;
+    auto innerValue = Def(GirOp::Struct, 1);
+    innerValue.ty = inner;
+    innerValue.vals = { 0 };
+    auto outerValue = Def(GirOp::Struct, 2);
+    outerValue.ty = outer;
+    outerValue.vals = { 1 };
+    auto init = Init(0, 2);
+    auto owner = Def(GirOp::Slot, 3);
+    owner.idx = 0;
+    auto nested = Def(GirOp::Field, 4);
+    nested.a = 3;
+    nested.idx = 0;
+    GirBlock entry;
+    entry.insts = { Enter(0), initValue, innerValue, outerValue, init, owner, nested, Br(1, { 4 }) };
+
+    auto readonlyInner = m.RefType(CoreMut::Const, inner);
+    GirBlock join;
+    join.params = { { 5, readonlyInner } };
+    auto leaf = Def(GirOp::Field, 6);
+    leaf.a = 5;
+    leaf.idx = 0;
+    auto replacement = Int(m, 7, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 6;
+    store.b = 7;
+    store.org = 0;
+    join.insts = { leaf, replacement, store, Leave(0), Ret() };
+    Main(m).blocks = { entry, join };
+    assert(Code(m) == "");
+}
+
+void RejectsArrayElementWriteThroughConstFieldContents() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto u8 = m.IntType(CoreIntTy::U8);
+    CoreType array;
+    array.kind = CoreType::Arr;
+    array.elem = u8;
+    array.count = 2;
+    auto arrayType = m.Intern(array);
+    auto record = StructType(m, 0);
+    m.structs = { CoreStruct { 2, { CoreField { arrayType, CoreVarKind::Var, CoreMut::Const, 0 } } } };
+    Main(m).slots = { { record, CoreVarKind::Let, 0, 0 } };
+
+    auto first = Int(m, 0, "1");
+    first.ty = u8;
+    auto second = Int(m, 1, "2");
+    second.ty = u8;
+    auto elements = Def(GirOp::Arr, 2);
+    elements.ty = arrayType;
+    elements.vals = { 0, 1 };
+    auto value = Def(GirOp::Struct, 3);
+    value.ty = record;
+    value.vals = { 2 };
+    auto init = Init(0, 3);
+    auto owner = Def(GirOp::Slot, 4);
+    owner.idx = 0;
+    auto field = Def(GirOp::Field, 5);
+    field.a = 4;
+    field.idx = 0;
+    auto view = Def(GirOp::Snap, 6);
+    view.snap = GirSnapshotMode::Owner;
+    view.a = 5;
+    auto index = Int(m, 7, "0");
+    index.ty = m.IntType(CoreIntTy::I64);
+    auto element = Def(GirOp::Index, 8);
+    element.a = 6;
+    element.b = 7;
+    auto replacement = Int(m, 9, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 8;
+    store.b = 9;
+    store.org = 0;
+    Main(m).blocks[0].insts = {
+        Enter(0), first, second, elements, value, init, owner, field, view, index, element,
+        replacement, store, Leave(0), Ret(),
+    };
+    assert(Code(m) == "GIR-V030");
+}
+
+void FieldProjectionKeepsItsOwnerRoot() {
+    auto m = ScalarStruct();
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto record = Main(m).slots[0].ty;
+
+    GirFunc leak;
+    leak.name = "leak";
+    leak.results = { m.RefType(CoreMut::Mut, u8) };
+    leak.slots = { { record, CoreVarKind::Let, 0, 0 } };
+    leak.scopes = { -1 };
+    leak.roots.results = { {} };
+    leak.summary.unknown = true;
+    auto first = Int(m, 0, "5");
+    first.ty = u8;
+    auto second = Int(m, 1, "7");
+    auto make = Def(GirOp::Struct, 2);
+    make.ty = record;
+    make.vals = { 0, 1 };
+    auto init = Init(0, 2);
+    auto owner = Def(GirOp::Slot, 3);
+    owner.idx = 0;
+    auto field = Def(GirOp::Field, 4);
+    field.a = 3;
+    field.idx = 0;
+    GirBlock body;
+    body.insts = { Enter(0), first, second, make, init, owner, field, Leave(0), Ret({ 4 }) };
+    leak.blocks = { body };
+    m.funcs.push_back(leak);
+    assert(Code(m) == "GIR-V050");
+}
+
+void FieldProjectionKeepsGlobalReadAndWriteEffects() {
+    auto m = ScalarStruct();
+    auto record = Main(m).slots[0].ty;
+    auto u8 = m.IntType(CoreIntTy::U8);
+    GirGlobal global;
+    global.name = "record";
+    global.ty = record;
+    global.kind = CoreVarKind::Var;
+    global.org = 0;
+    global.init.name = "record";
+    global.init.results = { record };
+    global.init.summary.unknown = true;
+    auto first = Int(m, 0, "5");
+    first.ty = u8;
+    auto second = Int(m, 1, "7");
+    auto make = Def(GirOp::Struct, 2);
+    make.ty = record;
+    make.vals = { 0, 1 };
+    global.init.blocks = { GirBlock { {}, { first, second, make, Ret({ 2 }) } } };
+    m.globals.push_back(global);
+
+    auto address = Def(GirOp::Global, 0);
+    address.idx = 0;
+    auto field = Def(GirOp::Field, 1);
+    field.a = 0;
+    field.idx = 0;
+    auto value = Int(m, 2, "9");
+    value.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 1;
+    store.b = 2;
+    store.org = 0;
+    auto load = Def(GirOp::Load, 3);
+    load.a = 1;
+    Main(m).blocks[0].insts = { address, field, value, store, load, Ret() };
+    Main(m).summary.outputs = true;
+    assert(Code(m) == "GIR-V050");
+    Main(m).summary.writes = { CoreTarget { true, 0 } };
+    assert(Code(m) == "GIR-V050");
+    Main(m).summary.reads = { CoreTarget { true, 0 } };
+    assert(Code(m) == "");
+}
+
+void FieldCallArgumentsKeepTheirOwnerRoot() {
+    auto m = ScalarStruct();
+    auto record = Main(m).slots[0].ty;
+    auto u8 = m.IntType(CoreIntTy::U8);
+    auto refU8 = m.RefType(CoreMut::Mut, u8);
+    GirFunc callee;
+    callee.name = "read";
+    callee.params = { refU8 };
+    callee.scopes = { -1 };
+    callee.blocks = { GirBlock { { { 0, refU8 } }, { Ret() } } };
+    m.funcs.push_back(callee);
+
+    auto one = Int(m, 0, "5");
+    one.ty = u8;
+    auto two = Int(m, 1, "7");
+    auto make = Def(GirOp::Struct, 2);
+    make.ty = record;
+    make.vals = { 0, 1 };
+    auto init = Init(0, 2);
+    auto owner = Def(GirOp::Slot, 3);
+    owner.idx = 0;
+    auto field = Def(GirOp::Field, 4);
+    field.a = 3;
+    field.idx = 0;
+    auto call = Def(GirOp::Call, 5);
+    call.idx = 1;
+    call.vals = { 4 };
+    call.org = 0;
+    Main(m).blocks[0].insts = { Enter(0), one, two, make, init, owner, field, call, Leave(0), Ret() };
+    assert(Code(m) == "GIR-V050");
+}
+
 void RejectsAConstructorWithAnotherNominalType() {
     auto m = ScalarStruct();
     auto wrong = StructType(m, 1);
@@ -831,6 +1086,125 @@ void LowStructUsesByteStorageAndUnalignedSafeAccess() {
     assert((copySizes == vector<string>{ "1", "8", "9", "1", "8" }));
 }
 
+void LowKeepsPackedFieldAlignmentAcrossBlockParameters() {
+    auto high = ScalarStruct();
+    auto &f = Main(high);
+    auto u8 = high.IntType(CoreIntTy::U8);
+    auto refU8 = high.RefType(CoreMut::Mut, u8);
+
+    auto one = Int(high, 0, "5");
+    one.ty = u8;
+    auto two = Int(high, 1, "7");
+    auto make = Def(GirOp::Struct, 2);
+    make.ty = f.slots[0].ty;
+    make.vals = { 0, 1 };
+    auto init = Init(0, 2);
+    auto owner = Def(GirOp::Slot, 3);
+    owner.idx = 0;
+    auto field = Def(GirOp::Field, 4);
+    field.a = 3;
+    field.idx = 0;
+    GirBlock entry;
+    entry.insts = { Enter(0), one, two, make, init, owner, field, Br(1, { 4 }) };
+
+    GirBlock join;
+    join.params = { { 5, refU8 } };
+    auto replacement = Int(high, 6, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 5;
+    store.b = 6;
+    store.org = 0;
+    auto load = Def(GirOp::Load, 7);
+    load.a = 5;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, "", 7 } };
+    print.org = 0;
+    join.insts = { replacement, store, load, print, Leave(0), Ret() };
+    f.blocks = { entry, join };
+
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+    auto scalarLoads = 0;
+    auto scalarStores = 0;
+    for (auto &block : low.funcs[0].blocks)
+        for (auto &inst : block.insts) {
+            scalarLoads += inst.op == GirOp::PLoad;
+            scalarStores += inst.op == GirOp::PStore;
+        }
+    assert(scalarLoads == 0);
+    assert(scalarStores == 0);
+}
+
+void LowKeepsPackedFieldAlignmentAcrossCallParametersAndResults() {
+    auto high = ScalarStruct();
+    auto &f = Main(high);
+    auto u8 = high.IntType(CoreIntTy::U8);
+    auto refU8 = high.RefType(CoreMut::Mut, u8);
+
+    GirFunc relay;
+    relay.name = "relay";
+    relay.params = { refU8 };
+    relay.results = { refU8 };
+    relay.scopes = { -1 };
+    relay.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    relay.roots.results = { { CoreRootRef { CoreRootRef::Param, 0 } } };
+    relay.summary.unknown = true;
+    relay.blocks = { GirBlock { { { 0, refU8 } }, { Ret({ 0 }) } } };
+
+    auto one = Int(high, 0, "5");
+    one.ty = u8;
+    auto two = Int(high, 1, "7");
+    auto make = Def(GirOp::Struct, 2);
+    make.ty = f.slots[0].ty;
+    make.vals = { 0, 1 };
+    auto init = Init(0, 2);
+    auto owner = Def(GirOp::Slot, 3);
+    owner.idx = 0;
+    auto field = Def(GirOp::Field, 4);
+    field.a = 3;
+    field.idx = 0;
+    auto call = Def(GirOp::Call, 5);
+    call.idx = 1;
+    call.vals = { 4 };
+    call.org = 0;
+    auto replacement = Int(high, 6, "9");
+    replacement.ty = u8;
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 5;
+    store.b = 6;
+    store.org = 0;
+    auto load = Def(GirOp::Load, 7);
+    load.a = 5;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, "", 7 } };
+    print.org = 0;
+    f.summary.outputs = true;
+    f.summary.unknown = true;
+    f.blocks[0].insts = {
+        Enter(0), one, two, make, init, owner, field, call, replacement, store, load, print,
+        Leave(0), Ret(),
+    };
+    high.funcs.push_back(relay);
+
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+    auto scalarLoads = 0;
+    auto scalarStores = 0;
+    for (auto &func : low.funcs) for (auto &block : func.blocks) for (auto &inst : block.insts) {
+        scalarLoads += inst.op == GirOp::PLoad;
+        scalarStores += inst.op == GirOp::PStore;
+    }
+    assert(scalarLoads == 0);
+    assert(scalarStores == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -864,10 +1238,18 @@ int main() {
     RejectsStructsInThePilotProfile();
     RejectsAStoreToALetField();
     RejectsAWriteThroughConstFieldContents();
+    LowKeepsPackedFieldAlignmentAcrossBlockParameters();
     RejectsAConstructorWithAnotherNominalType();
     RejectsAFieldComponentAfterItsStructType();
     RejectsAnInvalidStructLayout();
     LowStructUsesByteStorageAndUnalignedSafeAccess();
+    AcceptsNestedFieldContentsThroughAJoin();
+    RejectsArrayElementWriteThroughConstFieldContents();
+    FieldProjectionKeepsItsOwnerRoot();
+    FieldProjectionKeepsGlobalReadAndWriteEffects();
+    FieldCallArgumentsKeepTheirOwnerRoot();
+    RejectsPassingAReadOnlyStructFieldToAMutatingCall();
+    LowKeepsPackedFieldAlignmentAcrossCallParametersAndResults();
     puts("compiler_gir ok");
     return 0;
 }
