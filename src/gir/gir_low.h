@@ -182,7 +182,7 @@ private:
         vector<int> w;              // The low values.
         int slot = -1;              // A reference to a slot that holds a reference or slice.
         bool unaligned = false;     // An address inside a packed struct may lack scalar alignment.
-        bool lit = false;           // A grow-only array literal, not yet in storage.
+        bool lit = false;           // A transient owner literal run, static or joined.
         vector<int> elems;          // Its high element values.
     };
 
@@ -199,6 +199,8 @@ private:
     vector<Place> places;
     vector<int> bmap;               // High block -> its low block.
     vector<int> blockparammembers;  // Owned byte storage for aggregate block parameters.
+    vector<int> blockparamrunmembers; // Byte storage for transient owner-run parameters.
+    vector<int> blockparamrunlens;  // Length members for transient owner-run parameters.
     vector<GirTypeId> lvals;
     int cur = -1;
     int spval = 0, outval = -1;
@@ -366,6 +368,40 @@ private:
         return kind == CoreType::Arr || kind == CoreType::Struct;
     }
 
+    bool IsOwnerRun(GirTypeId ty) const { return GirOwnerKind(HT(ty).kind); }
+
+    // Literal-run joins need only the largest static alternative for storage.
+    int64_t MaxOwnerRunElements(GirTypeId ty) const {
+        int64_t count = 0;
+        for (auto &block : hf->blocks)
+            for (auto &inst : block.insts)
+                if (inst.op == GirOp::Arr && inst.ty == ty)
+                    count = max(count, (int64_t)inst.vals.size());
+        return count;
+    }
+
+    int64_t OwnerRunBufferSize(GirTypeId ty) {
+        auto element = Size(HT(ty).elem);
+        auto count = MaxOwnerRunElements(ty);
+        if (element <= 0 || count > INT64_MAX / element)
+            throw GirLowerUnsupported { "owner-run", hf ? hf->name : "global", hf ? hf->org : -1 };
+        return max<int64_t>(1, count * element);
+    }
+
+    int OwnerRunBytes(GirTypeId ty, int length) {
+        return BinW(CoreBinOp::Mul, I64(), length,
+                    ConstI(I64(), Size(HT(ty).elem)));
+    }
+
+    void CopyDynamic(int dst, int src, int bytes) {
+        GirInst copy;
+        copy.op = GirOp::BytesCopy;
+        copy.a = dst;
+        copy.b = src;
+        copy.vals = { bytes };
+        EmitE(std::move(copy));
+    }
+
     bool HasAggregateParams(int block) const {
         for (auto &param : hf->blocks[block].params)
             if (IsAggregate(param.second)) return true;
@@ -373,7 +409,14 @@ private:
     }
 
     vector<int> BranchValues(int target, const vector<int> &values) {
-        struct PendingCopy { int scratch; int dest; int64_t size; };
+        struct PendingCopy {
+            int scratch;
+            int dest;
+            int64_t size;
+            int length = -1;
+            int lengthMember = -1;
+            GirTypeId runType = -1;
+        };
         vector<int> words;
         vector<PendingCopy> pending;
         auto &params = hf->blocks[target].params;
@@ -385,6 +428,25 @@ private:
                 auto scratchAddress = Simple(GirOp::FrameAddr, Ptr(), -1, -1, scratch);
                 Copy(scratchAddress, shape[value].w[0], Size(ty));
                 pending.push_back({ scratch, blockparammembers[param], Size(ty) });
+            } else if (IsOwnerRun(ty)) {
+                auto scratch = FrameTemp(OwnerRunBufferSize(ty));
+                auto scratchAddress = Simple(GirOp::FrameAddr, Ptr(), -1, -1, scratch);
+                int length;
+                if (shape[value].w.size() == 2) {
+                    length = shape[value].w[1];
+                    CopyDynamic(scratchAddress, shape[value].w[0], OwnerRunBytes(ty, length));
+                } else if (shape[value].lit) {
+                    length = ConstI(I64(), (int64_t)shape[value].elems.size());
+                    auto elem = HT(ty).elem;
+                    auto elementSize = Size(elem);
+                    for (size_t j = 0; j < shape[value].elems.size(); j++)
+                        StoreAt(elem, PtrAt(scratchAddress, ConstI(I64(), (int64_t)j), elementSize),
+                                shape[shape[value].elems[j]].w);
+                } else {
+                    throw GirLowerUnsupported { "owner-run", hf->name, hf->org };
+                }
+                pending.push_back({ scratch, blockparamrunmembers[param], 0, length,
+                                    blockparamrunlens[param], ty });
             } else {
                 for (auto word : shape[value].w) words.push_back(word);
             }
@@ -394,7 +456,12 @@ private:
         for (auto &copy : pending) {
             auto src = Simple(GirOp::FrameAddr, Ptr(), -1, -1, copy.scratch);
             auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, copy.dest);
-            Copy(dst, src, copy.size);
+            if (copy.runType >= 0) {
+                CopyDynamic(dst, src, OwnerRunBytes(copy.runType, copy.length));
+                SimpleE(GirOp::LocalSet, copy.length, -1, copy.lengthMember);
+            } else {
+                Copy(dst, src, copy.size);
+            }
         }
         return words;
     }
@@ -550,6 +617,8 @@ private:
         // Blocks, parameters first.
         bmap.assign(f.blocks.size(), -1);
         blockparammembers.assign(hvt.size(), -1);
+        blockparamrunmembers.assign(hvt.size(), -1);
+        blockparamrunlens.assign(hvt.size(), -1);
         shape.assign(hvt.size(), {});
         // A reference to a scalar can arrive from a packed field through a
         // block parameter or a call result. The high type does not retain
@@ -566,11 +635,20 @@ private:
             for (auto &param : block.params)
                 if (IsAggregate(param.second))
                     blockparammembers[param.first] = FrameTemp(Size(param.second));
+                else if (IsOwnerRun(param.second)) {
+                    blockparamrunmembers[param.first] = FrameTemp(OwnerRunBufferSize(param.second));
+                    GirMember length;
+                    length.kind = GirMember::Scalar;
+                    length.ty = I64();
+                    length.scope = 0;
+                    length.name = "owner_run_len";
+                    blockparamrunlens[param.first] = Member(std::move(length));
+                }
         for (size_t b = 0; b < f.blocks.size(); b++) {
             vector<GirTypeId> ps;
             if (b == 0) ps = lf.params;
             else for (auto &p : f.blocks[b].params)
-                if (!IsAggregate(p.second))
+                if (!IsAggregate(p.second) && !IsOwnerRun(p.second))
                     for (auto t : Words(p.second)) ps.push_back(t);
             vector<int> ids;
             bmap[b] = NewBlockL(ps, &ids);
@@ -580,12 +658,14 @@ private:
                 outval = -1;
                 if (global < 0 && sig->out) outval = ids[k++];
                 for (auto &p : f.blocks[0].params) {
+                    if (IsOwnerRun(p.second))
+                        throw GirLowerUnsupported { "owner-run-parameter", f.name, f.org };
                     for (auto t : Words(p.second)) { (void)t; shape[p.first].w.push_back(ids[k++]); }
                 }
             } else {
                 size_t k = 0;
                 for (auto &p : f.blocks[b].params)
-                    if (!IsAggregate(p.second))
+                    if (!IsAggregate(p.second) && !IsOwnerRun(p.second))
                         for (auto t : Words(p.second)) { (void)t; shape[p.first].w.push_back(ids[k++]); }
             }
         }
@@ -617,6 +697,14 @@ private:
                     if (!IsAggregate(p.second)) continue;
                     shape[p.first].w = { Simple(GirOp::FrameAddr, Ptr(), -1, -1,
                                                 blockparammembers[p.first]) };
+                }
+                for (auto &p : f.blocks[b].params) {
+                    if (!IsOwnerRun(p.second)) continue;
+                    shape[p.first].lit = true;
+                    shape[p.first].w = {
+                        Simple(GirOp::FrameAddr, Ptr(), -1, -1, blockparamrunmembers[p.first]),
+                        Simple(GirOp::LocalGet, I64(), -1, -1, blockparamrunlens[p.first]),
+                    };
                 }
             }
             for (auto &i : f.blocks[b].insts) Lower(i);
@@ -951,10 +1039,16 @@ private:
     }
 
     void InitLimited(int address, GirTypeId owner, const Shape &run) {
-        SetLimitedLength(address, owner, ConstI(I64(), (int64_t)run.elems.size()));
         auto elem = HT(owner).elem;
         auto esz = Size(elem);
         auto data = LimitedData(address, owner);
+        if (run.w.size() == 2) {
+            auto bytes = OwnerRunBytes(owner, run.w[1]);
+            CopyDynamic(data, run.w[0], bytes);
+            SetLimitedLength(address, owner, run.w[1]);
+            return;
+        }
+        SetLimitedLength(address, owner, ConstI(I64(), (int64_t)run.elems.size()));
         for (size_t i = 0; i < run.elems.size(); i++)
             StoreAt(elem, PtrAt(data, ConstI(I64(), (int64_t)i), esz), shape[run.elems[i]].w);
     }
@@ -1260,6 +1354,13 @@ private:
         auto elem = OwnerElement(owner);
         auto esz = Size(elem);
         auto base = Simple(GirOp::HdrBase, Ptr(), address);
+        if (run.w.size() == 2) {
+            auto bytes = OwnerRunBytes(owner, run.w[1]);
+            CopyDynamic(base, run.w[0], bytes);
+            SimpleE(GirOp::StackBump, stack, bytes);
+            SimpleE(GirOp::HdrSetLen, address, run.w[1]);
+            return;
+        }
         for (size_t k = 0; k < run.elems.size(); k++)
             StoreAt(elem, PtrAt(base, ConstI(I64(), (int64_t)k), esz), shape[run.elems[k]].w);
         if (!run.elems.empty())
@@ -1328,6 +1429,13 @@ private:
         auto esz = Size(elemty);
         auto base = Simple(GirOp::StackMark, Ptr(), stk);
         SimpleE(GirOp::HdrInit, hdr, base);
+        if (lit.w.size() == 2) {
+            auto bytes = OwnerRunBytes(growty, lit.w[1]);
+            CopyDynamic(base, lit.w[0], bytes);
+            SimpleE(GirOp::StackBump, stk, bytes);
+            SimpleE(GirOp::HdrSetLen, hdr, lit.w[1]);
+            return;
+        }
         auto n = (int64_t)lit.elems.size();
         for (int64_t k = 0; k < n; k++)
             StoreAt(elemty, PtrAt(base, ConstI(I64(), k), esz), shape[lit.elems[k]].w);

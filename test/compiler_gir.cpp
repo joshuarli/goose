@@ -927,6 +927,99 @@ void RejectsReplacementThroughALetOwnerPhi() {
     assert(Code(ShrinkReplaceBindingModule(false, true)) == "");
 }
 
+GirModule ShrinkReplaceRunThroughPhi() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+    Main(m).slots = { { ownerTy, CoreVarKind::Var, 0, 0 } };
+    Main(m).summary.unknown = true;
+
+    auto empty = Def(GirOp::Arr, 0);
+    empty.ty = ownerTy;
+    auto init = Init(0, 0);
+    auto slot = Def(GirOp::Slot, 1);
+    slot.idx = 0;
+    slot.ty = refTy;
+    GirInst clear;
+    clear.op = GirOp::Clear;
+    clear.a = 1;
+    clear.org = 0;
+    auto condition = Def(GirOp::Bool, 2);
+    condition.flag = true;
+    Main(m).blocks[0].insts = { Enter(0), empty, init, slot, clear, condition, CondBr(2, 1, 2) };
+
+    GirBlock shorter, longer, join;
+    auto first = Int(m, 3, "40");
+    auto shortRun = Def(GirOp::Arr, 4);
+    shortRun.ty = ownerTy;
+    shortRun.vals = { 3 };
+    shorter.insts = { first, shortRun, Br(3, { 4 }) };
+
+    auto second = Int(m, 5, "50");
+    auto third = Int(m, 6, "60");
+    auto longRun = Def(GirOp::Arr, 7);
+    longRun.ty = ownerTy;
+    longRun.vals = { 5, 6 };
+    longer.insts = { second, third, longRun, Br(3, { 7 }) };
+
+    join.params = { { 8, ownerTy } };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 1;
+    replace.b = 8;
+    replace.org = 0;
+    join.insts = { replace, Leave(0), Ret() };
+    Main(m).blocks = { Main(m).blocks[0], shorter, longer, join };
+    return m;
+}
+
+void LowPreservesOwnerLiteralRunsAcrossJoins() {
+    // Replacing from either literal arm must publish that arm's run length;
+    // the old lowering silently treated the owner block parameter as empty.
+    auto high = ShrinkReplaceRunThroughPhi();
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+
+    bool copiesSelectedRun = false;
+    bool replacementUsesSelectedLength = false;
+    int lengthMember = -1;
+    for (auto &block : low.funcs[0].blocks) {
+        for (auto &inst : block.insts) copiesSelectedRun |= inst.op == GirOp::BytesCopy;
+        for (auto &inst : block.insts) {
+            if (inst.op != GirOp::HdrSetLen) continue;
+            for (auto &definition : block.insts)
+                if (definition.op == GirOp::LocalGet && definition.res == inst.b) {
+                    replacementUsesSelectedLength = true;
+                    lengthMember = definition.idx;
+                }
+        }
+    }
+    auto lengthWrites = 0;
+    bool hasLengthOne = false;
+    bool hasLengthTwo = false;
+    for (auto &block : low.funcs[0].blocks)
+        for (auto &inst : block.insts) {
+            if (inst.op != GirOp::LocalSet || inst.idx != lengthMember) continue;
+            lengthWrites++;
+            for (auto &definitionBlock : low.funcs[0].blocks)
+                for (auto &definition : definitionBlock.insts)
+                    if (definition.op == GirOp::Int && definition.res == inst.a) {
+                        hasLengthOne |= definition.text == "1";
+                        hasLengthTwo |= definition.text == "2";
+                    }
+        }
+    assert(copiesSelectedRun);
+    assert(replacementUsesSelectedLength);
+    assert(lengthWrites == 2);
+    assert(hasLengthOne && hasLengthTwo);
+}
+
 void RejectsUnresolvedLayout() {
     auto m = LowBase();
     GirFunc f = Main(m);
@@ -2802,6 +2895,7 @@ int main() {
     RejectsWatermarkPastCallerOwnedRegion();
     PassedOwnerPairsKeepTheirExactIdentity();
     RejectsReplacementThroughALetOwnerPhi();
+    LowPreservesOwnerLiteralRunsAcrossJoins();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
