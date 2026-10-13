@@ -190,7 +190,7 @@ def render(program: ResizeProgram) -> str:
     validate(program)
     initial = ', '.join(f'({value})' for value in program.initial)
     lines = ['import std;', '', 'fn main() {', f'    var fuzz_values: i64[>..<] = [{initial}];']
-    for step in program.steps:
+    for step_index, step in enumerate(program.steps):
         if step.op == 'push':
             lines.append(f'    fuzz_values.push(({step.values[0]}));')
         elif step.op == 'pop':
@@ -204,7 +204,9 @@ def render(program: ResizeProgram) -> str:
                 lines.append(f'    fuzz_values.resize({step.count}, ({step.fill}));')
         elif step.op == 'append':
             values = ', '.join(f'({value})' for value in step.values)
-            lines.append(f'    fuzz_values.append([{values}]);')
+            name = f'fuzz_append_{step_index}'
+            lines.append(f'    let {name}: i64[{len(step.values)}] = [{values}];')
+            lines.append(f'    fuzz_values.append({name});')
         elif step.op == 'clear':
             lines.append('    fuzz_values.clear();')
         elif step.op == 'print_len':
@@ -213,8 +215,8 @@ def render(program: ResizeProgram) -> str:
             lines.append(f'    print(fuzz_values[{step.lo}]);')
         else:
             lines.append(f'    print(fuzz_values[{step.lo}..{step.hi}].len);')
-            for index in range(step.lo, step.hi):
-                lines.append(f'    print(fuzz_values[{index}]);')
+            for element_index in range(step.lo, step.hi):
+                lines.append(f'    print(fuzz_values[{element_index}]);')
     return '\n'.join(lines + ['}', ''])
 
 
