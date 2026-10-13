@@ -1625,6 +1625,18 @@ private:
                 return ReadOf(std::move(place), VarCoreType(v));
             }
         }
+        if (v->constnot && (!want || want->kind == TY_INT)) {
+            // A named `~c` takes the integer width at its use; reading its
+            // stored i64 value would turn that complement into a checked cast.
+            auto target = want ? want : vt;
+            auto ty = Ty(target);
+            auto operand = ~static_cast<uint64_t>(v->constval);
+            auto e = NewExpr(CoreExprKind::Un, ty);
+            e->un = CoreUnOp::BitNot;
+            e->a = IntLiteral(ty, false, operand);
+            e->org = Org(id->line, CoreOriginKind::Unary);
+            return e;
+        }
         auto inner = Pointee(vt);
         // An array where the checker fitted a slice: slice it whole.
         if (want && want->kind == TY_SLICE && IsArrayTE(inner)) {
