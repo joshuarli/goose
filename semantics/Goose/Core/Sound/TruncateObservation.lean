@@ -211,7 +211,7 @@ theorem shrinkApproval_retainsGrowshrinkAliases
   · intro v halias
     refine ⟨preserveProtectedType hroot hagree ?_ halias.1, halias.2⟩
     intro hi r ht
-    have hd := DemandOwner.conflicts_false_disjoint hinvalidates hi (approval.safe.1.2 alias hmem)
+    have hd := DemandOwner.conflicts_false_disjoint hinvalidates hi (approval.safe.2 alias hmem)
     exact Ne.symm (Gam.root_ne_of_no_overlap frame hd hownerRoots (halias.2 r ht))
   · intro mu el capacity l start count hty halias hslice
     have ht : HasTy m W.G s.store (.ref l) (.ref mu (.limited el capacity)) := by
