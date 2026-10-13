@@ -151,7 +151,7 @@ runs can survive changes to the owner's visible length. -/
 theorem ViewAliases.ofLimited {m : Module} {W : World} {penv : PEnv} {env : Env} {s : Store}
     {p : Place} {vw : ViewVal} {el : Ty} {capacity : Nat}
     {state state' : RState} {rho : List RootRef}
-    (hresizable : vw.resizable = false) (hflat : el.flat = true)
+    (hresizable : vw.resizable = false)
     (htype : penv.access.placeType? p = some (.limited el capacity))
     (hreplay : rpPlace penv p state = .ok (rho, state'))
     (hreference : HasTy m W.G s (.ref vw.loc) (.ref .mutable (.limited el capacity)))
@@ -166,12 +166,7 @@ theorem ViewAliases.ofLimited {m : Module} {W : World} {penv : PEnv} {env : Env}
   have hty : alias.ty = .ref .mutable (.limited el capacity) := by rw [hshape, heq]
   refine ⟨hty, ?_, ?_⟩
   · rw [hty]
-    obtain ⟨l, heq, hloc⟩ := hreference
-    cases heq
-    refine ⟨vw.loc, rfl, Or.inl ?_⟩
-    rcases hloc with ⟨_, hloc, hheader⟩ | ⟨hslice, _, _⟩
-    · exact ⟨by simpa [Ty.refTarget] using hflat, hloc, hheader⟩
-    · simp [Ty.isSlice] at hslice
+    exact hreference
   · intro r hr
     change vw.loc.root = r at hr
     subst r
