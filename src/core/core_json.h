@@ -267,6 +267,10 @@ private:
             if (i) out += ',';
             Append(out, "[\"vr\",", c.varroots[i].first, ",");
             Roots(out, c.varroots[i].second);
+            if (i < c.hascontent.size() && c.hascontent[i]) {
+                out += ',';
+                Roots(out, c.content[i]);
+            }
             out += ']';
         }
         out += "],[";

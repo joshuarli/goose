@@ -59,6 +59,16 @@ inline void EmitCore(Ast &ast, const string &entry, const string &path, const st
     // refuses leaves no file behind.
     string girtext, lowtext;
     if (!girpath.empty() || !lowpath.empty() || program) {
+        // The IR has no form for a reference to a slice variable yet.
+        for (auto &im : mod.impls)
+            for (auto &v : im.vars) {
+                auto &t = mod.Type(v.type);
+                if (t.kind != CoreType::Ref || mod.Type(t.elem).kind != CoreType::Slice) continue;
+                auto &o = v.org;
+                string where = o.file < (int)mod.diagfiles.size() ? cat(mod.diagfiles[o.file], ":", o.line) : string("?");
+                throw CompileError { cat(where, ": error: unsupported in pipeline gir: reference-to-slice (in ",
+                                         im.name, ")") };
+            }
         auto numbering = [&] { CoreWriter w(mod); w.Write(); return w; }();
         GirLowerer lowerer(mod, numbering.FileTable(), numbering.OriginTable(),
                            [&](const CoreOrigin &o) { return numbering.OriginId(o); });

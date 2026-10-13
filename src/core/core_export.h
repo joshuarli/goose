@@ -35,6 +35,7 @@ public:
         FindReachable(ctxspecs);
         for (size_t k = 0; k < ctxspecs.size(); k++) BuildImpl((int)k);
         ExpandGlobalClasses();
+        ComputeContentRoots();
         mod.entry = 0;
         return std::move(mod);
     }
@@ -152,6 +153,8 @@ private:
         }
     }
 
+    bool sliceref = false;   // A reference to a slice is being typed as a parameter's.
+
     CoreTypeId Ty(TypeExpr *t) {
         if (!t) Fail("untyped-expression");
         CoreType ct;
@@ -194,12 +197,18 @@ private:
                 ct.kind = CoreType::Ref;
                 ct.mut = t->cq ? CoreMut::Const : CoreMut::Mut;
                 ct.elem = Ty(t->ref->sub);
-                if (mod.Type(ct.elem).kind == CoreType::Ref || mod.Type(ct.elem).kind == CoreType::Slice)
-                    Fail("reference-to-slice");
+                if (mod.Type(ct.elem).kind == CoreType::Ref) Fail("reference-to-reference");
+                // A reference to a slice is a parameter's type and nothing else.
+                if (mod.Type(ct.elem).kind == CoreType::Slice && !sliceref) Fail("reference-to-slice");
                 break;
             default: Fail("type");
         }
         return mod.Intern(ct);
+    }
+
+    bool IsSliceRef(CoreTypeId t) const {
+        auto &c = mod.Type(t);
+        return c.kind == CoreType::Ref && mod.Type(c.elem).kind == CoreType::Slice;
     }
 
     // The same reference or slice type, read-only.
@@ -214,7 +223,9 @@ private:
     // parameter whose arguments are all read-only is a read-only one, whatever
     // the declaration says, since a caller could not pass it otherwise.
     CoreTypeId ParamTy(FnSpec *sp, size_t i) {
+        sliceref = true;
         auto t = Ty(sp->argtypes[i]);
+        sliceref = false;
         if (i < sp->roots.size() && !sp->roots[i].writable) t = Constify(t);
         return t;
     }
@@ -276,6 +287,21 @@ private:
             for (auto sp : order) {
                 auto &mine = freevars[sp];
                 unordered_set<const VarDef *> have(mine.begin(), mine.end());
+                // A captured slice variable's content roots must name what the
+                // slice may point into, so each local of an enclosing function
+                // that it may be rooted at is a parameter too.
+                for (size_t k = 0; k < mine.size(); k++) {
+                    auto v = mine[k];
+                    if (v->type->kind != TY_SLICE) continue;
+                    for (auto &alt : v->ref.alts) {
+                        auto r = alt.root;
+                        if (r && r->ownerspec && r->ownerspec != sp && !r->isglobal && !r->istemp &&
+                            have.insert(r).second) {
+                            mine.push_back(r);
+                            changed = true;
+                        }
+                    }
+                }
                 for (auto callee : callees[sp])
                     for (auto v : freevars[callee])
                         if (v->ownerspec != sp && have.insert(v).second) {
@@ -402,7 +428,6 @@ private:
         for (auto fv : *cur.free) {
             here = sp->sf->line;
             if (fv->type->kind == TY_REF) Fail("captured-reference");
-            if (fv->type->kind == TY_SLICE) Fail("reference-to-slice");
             CoreType rt;
             rt.kind = CoreType::Ref;
             rt.mut = fv->isvar ? CoreMut::Mut : CoreMut::Const;
@@ -657,7 +682,16 @@ private:
             if (id && id->vdef && !a->pointee &&
                 (id->vdef->type->kind == TY_SLICE || id->vdef->type->kind == TY_REF)) {
                 auto v = id->vdef;
-                if (!v->isglobal && v->ownerspec != cur.spec) Fail("reference-to-slice");
+                if (!v->isglobal && v->ownerspec != cur.spec) {
+                    // A slice variable of an enclosing function: the new slice
+                    // is stored in the variable its parameter refers to.
+                    if (v->type->kind != TY_SLICE) Fail("captured-reference");
+                    auto s = MakeStmt(CoreStmtKind::Assign, a->line, CoreOriginKind::Rebind);
+                    s.place = VarPlace(v);
+                    s.expr = Value(a->rhs);
+                    out.stmts.push_back(std::move(s));
+                    return;
+                }
                 auto s = MakeStmt(CoreStmtKind::Rebind, a->line, CoreOriginKind::Rebind);
                 s.var = RebindTarget(a->lval);
                 s.expr = Value(a->rhs);
@@ -1425,7 +1459,12 @@ private:
             if (!mod.IsRefOrSlice(impl.vars[i].type)) continue;
             vector<CoreRootRef> roots;
             vector<VarDef *> classes;
-            if (auto vd = cur.vardefs[i]) {
+            auto toslice = IsSliceRef(impl.vars[i].type);
+            if (toslice) {
+                // Rooted at what the caller passed for it; what the slice it
+                // refers to may be rooted at is the content roots, below.
+                roots.push_back({ CoreRootRef::Param, (int)i });
+            } else if (auto vd = cur.vardefs[i]) {
                 if (vd->refrootknown) roots = RootsOf(vd->ref, sp, classes);
                 // A parameter is rooted at what the caller passed for it: where
                 // the class it shares with other parameters is not a global,
@@ -1440,6 +1479,8 @@ private:
             }
             for (auto c : classes) globalclasses.push_back({ k, false, (int)ctx.varroots.size(), c });
             ctx.varroots.push_back({ (int)i, std::move(roots) });
+            ctx.content.emplace_back();
+            ctx.hascontent.push_back(toslice);
         }
         for (size_t i = 0; i < impl.results.size(); i++) {
             vector<CoreRootRef> roots;
@@ -1527,6 +1568,99 @@ private:
             default: break;
         }
         return out;
+    }
+
+    // ---------------------------------------------------------------------
+    // Content roots of a reference to a slice variable.
+    //
+    // What the slice a `T[:]&` parameter (or a captured slice variable) refers
+    // to may be rooted at is named in the callee's terms: a global as itself,
+    // and each local or parameter of the caller as the callee parameter it is
+    // passed as. At every call, with those replaced by the arguments' roots, it
+    // is exactly the root set of the slice variable passed, which is what the
+    // callers' own annotations say; so it is read off the callers, to a fixed
+    // point, since a caller may pass on a reference to a slice it was given.
+
+    vector<CoreRootRef> ContentOf(int k, int var) {
+        auto &c = mod.contexts[k];
+        for (size_t i = 0; i < c.varroots.size(); i++)
+            if (c.varroots[i].first == var && c.hascontent[i]) return c.content[i];
+        return {};
+    }
+
+    void ComputeContentRoots() {
+        using Key = pair<int, int>;   // Context and the parameter.
+        map<Key, vector<CoreRootRef>> current;
+        for (size_t round = 0; round <= mod.contexts.size() + 2; round++) {
+            map<Key, vector<CoreRootRef>> next;
+            string conflict;
+            Line conflictat;
+            for (size_t k = 0; k < mod.impls.size(); k++) {
+                CoreVisitExprs(mod.impls[k].body, [&](const CoreExpr &e) {
+                    if (e.kind != CoreExprKind::Call) return;
+                    auto &callee = mod.impls[mod.contexts[e.ctx].impl];
+                    for (size_t j = 0; j < callee.params.size() && j < e.args.size(); j++) {
+                        if (!IsSliceRef(callee.vars[callee.params[j].var].type)) continue;
+                        here = ctxspecs[e.ctx]->sf->line;
+                        // The slice variable passed, and the roots it has here.
+                        auto &a = e.args[j];
+                        if (a.kind != CoreArg::Ref) Fail("reference-to-slice");
+                        RootSet slice;
+                        auto &p = *a.place;
+                        if (p.kind == CorePlace::Local) {
+                            if (auto r = VarRoots((int)k, p.index)) slice.insert(r->begin(), r->end());
+                        } else if (p.kind == CorePlace::Deref && p.expr->kind == CoreExprKind::Read &&
+                                   p.expr->place->kind == CorePlace::Local) {
+                            auto r = round ? ContentOfRound(current, (int)k, p.expr->place->index)
+                                           : vector<CoreRootRef> {};
+                            slice.insert(r.begin(), r.end());
+                        } else {
+                            Fail("reference-to-slice");
+                        }
+                        // Each root as the callee parameter it is passed as.
+                        RootSet args, named, covered;
+                        vector<RootSet> argroots;
+                        for (size_t i = 0; i < e.args.size(); i++)
+                            argroots.push_back(i == j ? RootSet {} : ArgRoots(e.args[i], (int)k));
+                        for (auto &x : slice) {
+                            if (x.kind == CoreRootRef::Global) { named.insert(x); covered.insert(x); continue; }
+                            auto found = false;
+                            for (size_t i = 0; i < argroots.size() && !found; i++) {
+                                if (i == j || !argroots[i].count(x)) continue;
+                                if (!includes(slice.begin(), slice.end(), argroots[i].begin(), argroots[i].end()))
+                                    continue;
+                                named.insert({ CoreRootRef::Param, (int)i });
+                                covered.insert(argroots[i].begin(), argroots[i].end());
+                                found = true;
+                            }
+                            // A root no argument is passed for cannot be named.
+                            if (!found) Fail("reference-to-slice");
+                        }
+                        if (covered != slice) Fail("reference-to-slice");
+                        vector<CoreRootRef> kappa(named.begin(), named.end());
+                        Key key { e.ctx, callee.params[j].var };
+                        auto it = next.find(key);
+                        if (it != next.end() && it->second != kappa) { conflict = "x"; conflictat = here; }
+                        next[key] = std::move(kappa);
+                    }
+                });
+            }
+            if (next == current) {
+                if (!conflict.empty()) Fail("reference-to-slice", conflictat);
+                break;
+            }
+            current = std::move(next);
+        }
+        for (auto &[key, kappa] : current) {
+            auto &c = mod.contexts[key.first];
+            for (size_t i = 0; i < c.varroots.size(); i++)
+                if (c.varroots[i].first == key.second) c.content[i] = kappa;
+        }
+    }
+
+    vector<CoreRootRef> ContentOfRound(const map<pair<int, int>, vector<CoreRootRef>> &table, int k, int var) {
+        auto it = table.find({ k, var });
+        return it == table.end() ? vector<CoreRootRef> {} : it->second;
     }
 
     void ExpandGlobalClasses() {

@@ -269,6 +269,12 @@ struct CoreContext {
     // Root set of each reference- or slice-typed variable, by ascending variable.
     vector<pair<int, vector<CoreRootRef>>> varroots;
     vector<vector<CoreRootRef>> resultroots;
+    // The content roots of the variables whose type is a reference to a slice,
+    // aligned with `varroots`: what the slice the variable refers to may be
+    // rooted at, named as this implementation names it. `hascontent` is 1 for
+    // those variables and 0 for the rest.
+    vector<vector<CoreRootRef>> content;
+    vector<char> hascontent;
 };
 
 struct CoreGlobal {
