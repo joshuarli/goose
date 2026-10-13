@@ -10,6 +10,60 @@ the traversal that produced its expected demand points.
 namespace Goose.Core.Sound
 open Goose.Core
 
+/-- A forbidden owner root is eligible for exact preservation only when the
+entry store actually contains its checked resizable representation. A
+parameter's abstract root relation may also denote unrelated scalar globals. -/
+def DemandOwner.resizableRootAt {m : Module} {G : Nat} {env : Env}
+    {P : Nat → RootInst → Prop} {store : Store} (owner : DemandOwner)
+    (r : RootInst) : Prop :=
+  ∃ element elements,
+    (owner.ty = some (.grow element) ∨ owner.ty = some (.growshrink element)) ∧
+      Gam env P owner.roots r ∧
+      store.roots[r]? = some (.resizable element elements)
+
+/-- Preserve the exact entry value of every forbidden root that is present as
+a value of its checked grow or growshrink type. -/
+def PreservesForbiddenOwnerRoots {m : Module} {G : Nat} {env : Env}
+    {P : Nat → RootInst → Prop} (forbidden : List DemandOwner) (s s' : St) : Prop :=
+  ∀ owner, owner ∈ forbidden → ∀ r,
+    DemandOwner.resizableRootAt (m := m) (G := G) (env := env) (P := P)
+      (store := s.store) owner r → s'.store.roots[r]? = s.store.roots[r]?
+
+theorem PreservesForbiddenOwnerRoots.refl {m : Module} {G : Nat} {env : Env}
+    {P : Nat → RootInst → Prop} {forbidden : List DemandOwner} (s : St) :
+    PreservesForbiddenOwnerRoots (m := m) (G := G) (env := env) (P := P)
+      forbidden s s := by
+  intro owner _ r _
+  rfl
+
+theorem PreservesForbiddenOwnerRoots.trans {m : Module} {G : Nat} {env : Env}
+    {P : Nat → RootInst → Prop} {forbidden : List DemandOwner} {s₀ s₁ s₂ : St}
+    (h₁ : PreservesForbiddenOwnerRoots (m := m) (G := G) (env := env) (P := P)
+      forbidden s₀ s₁)
+    (h₂ : PreservesForbiddenOwnerRoots (m := m) (G := G) (env := env) (P := P)
+      forbidden s₁ s₂) :
+    PreservesForbiddenOwnerRoots (m := m) (G := G) (env := env) (P := P)
+      forbidden s₀ s₂ := by
+  intro owner howner r sourceOwner
+  have middleOwner :
+      DemandOwner.resizableRootAt (m := m) (G := G) (env := env) (P := P)
+        (store := s₁.store) owner r := by
+    rcases sourceOwner with ⟨element, elements, type, denotes, value⟩
+    refine ⟨element, elements, type, denotes, ?_⟩
+    rw [h₁ owner howner r ⟨element, elements, type, denotes, value⟩]
+    exact value
+  exact (h₂ owner howner r middleOwner).trans (h₁ owner howner r sourceOwner)
+
+theorem PreservesForbiddenOwnerRoots.subset {m : Module} {G : Nat} {env : Env}
+    {P : Nat → RootInst → Prop} {forbidden forbidden' : List DemandOwner} {s s' : St}
+    (preserves : PreservesForbiddenOwnerRoots (m := m) (G := G) (env := env) (P := P)
+      forbidden' s s')
+    (included : ∀ owner, owner ∈ forbidden → owner ∈ forbidden') :
+    PreservesForbiddenOwnerRoots (m := m) (G := G) (env := env) (P := P)
+      forbidden s s' := by
+  intro owner howner r sourceOwner
+  exact preserves owner (included owner howner) r sourceOwner
+
 /-- One owner's plan and replay are selected from the same successful derivation. -/
 structure PlanContext (m : Module) (plans : Array (Array DemandPoint)) where
   derived : deriveModuleDemand m = .ok plans
@@ -159,6 +213,8 @@ structure NodeChildContext {m : Module} {plans : Array (Array DemandPoint)}
   phaseFrameEq : child.phaseFrame planContext.approvals.access (path ++ [index])
     childFrame childPhase = .ok phaseFrame
   expectedFrameEq : context.expected.frame = phaseFrame
+  forbiddenSubset : ∀ owner, owner ∈ parent.expected.forbidden →
+    owner ∈ context.expected.forbidden
 
 /-- A phase context retains the exact same-node phase transition. -/
 structure NodePhaseContext {m : Module} {plans : Array (Array DemandPoint)}
@@ -262,7 +318,8 @@ noncomputable def NodeContext.child {m : Module} {plans : Array (Array DemandPoi
   let context := NodeContext.ofSource planContext childFrames.childExpected
     childFrames.childSource childMember
   exact ⟨context, childFrames.childFrame, childFrames.childFrameEq,
-    childFrames.phaseFrame, childFrames.phaseFrameEq, childFrames.expectedFrameEq⟩
+    childFrames.phaseFrame, childFrames.phaseFrameEq, childFrames.expectedFrameEq,
+    childFrames.forbiddenSubset⟩
 
 /-- The recursive constructor preserves list membership and derives both futures. -/
 theorem NodeContext.child_keeps_context {m : Module}
@@ -343,6 +400,13 @@ def EvaluationContext.retained {m plans path node phase}
   match context with
   | .pilot _ _ => []
   | .shrink _ context => context.expected.frame.retained
+
+/-- Whole-root exclusions inherited from the checked source occurrence. -/
+def EvaluationContext.forbiddenOwners {m plans path node phase}
+    (context : EvaluationContext m plans path node phase) : List DemandOwner :=
+  match context with
+  | .pilot _ _ => []
+  | .shrink _ context => context.expected.forbidden
 
 def EvaluationContext.ActiveMatches {m plans path node phase}
     (context : EvaluationContext m plans path node phase) (tenv : TEnv) : Prop :=
@@ -500,6 +564,21 @@ noncomputable def EvaluationContext.child {m plans path node phase}
   | .pilot profile active => .pilot profile (node.visibleForChild active index)
   | .shrink profile context =>
     .shrink profile (context.child primary index child childPhase hchild hchildPhase).context
+
+/-- A child inherits every whole-root exclusion checked at its parent. -/
+theorem EvaluationContext.child_forbidden_subset {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) :
+    ∀ owner, owner ∈ parent.forbiddenOwners →
+      owner ∈ (parent.child primary index child childPhase hchild hchildPhase).forbiddenOwners := by
+  cases parent with
+  | pilot profile active => simp [EvaluationContext.forbiddenOwners]
+  | shrink profile context =>
+    let transition := context.child primary index child childPhase hchild hchildPhase
+    change ∀ owner, owner ∈ context.expected.forbidden → owner ∈ transition.context.expected.forbidden
+    exact transition.forbiddenSubset
 
 /-- Same-node phases preserve pilot activity and use checked shrink transitions. -/
 noncomputable def EvaluationContext.phase {m plans path node phase}
