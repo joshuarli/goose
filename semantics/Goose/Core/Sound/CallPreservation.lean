@@ -369,11 +369,15 @@ structure ObservedSafe (m : Module) (W : World) (shrinking : RootInst → Prop)
     ∀ target, Targets v target → ¬ shrinking target
   valuesProtected : ∀ v T, o.values v T → T.interiorTarget?.isSome = true →
     ∀ target, Targets v target → ¬ shrinking target
+  /-- A mutable slice holder keeps one element type across nested calls. Empty
+  slices alone cannot determine that type from their runtime value. -/
+  holderTypes : ∀ r T E, o.roots r T → W.D r E → ∃ mu, T = .slice mu E
 
 theorem ObservedSafe.empty (m : Module) (W : World) (shrinking : RootInst → Prop) (s : Store) :
     ObservedSafe m W shrinking Observation.empty s :=
   ⟨Observed.empty _ _ _, fun _ _ h => False.elim h, fun _ _ h => False.elim h,
-    fun _ _ _ h => False.elim h, fun _ _ h => False.elim h⟩
+    fun _ _ _ h => False.elim h, fun _ _ h => False.elim h,
+    fun _ _ _ h => False.elim h⟩
 
 /-- Restriction keeps both typing and the age and protection obligations of
 the bindings and sampled operands still required by the caller. -/
@@ -385,7 +389,8 @@ theorem ObservedSafe.restrict {m : Module} {W : World} {o subset : Observation} 
     fun r T hr => h.rootsOlder r T (hroots r T hr),
     fun v T hv => h.valuesOlder v T (hvalues v T hv),
     fun r T v hr => h.rootsProtected r T v (hroots r T hr),
-    fun v T hv => h.valuesProtected v T (hvalues v T hv)⟩
+    fun v T hv => h.valuesProtected v T (hvalues v T hv),
+    fun r T E hr => h.holderTypes r T E (hroots r T hr)⟩
 
 theorem ObservedSafe.union {m : Module} {W : World} {a b : Observation} {s : Store}
     {shrinking : RootInst → Prop}
@@ -395,7 +400,8 @@ theorem ObservedSafe.union {m : Module} {W : World} {a b : Observation} {s : Sto
     fun r T hr => hr.elim (ha.rootsOlder r T) (hb.rootsOlder r T),
     fun v T hv => hv.elim (ha.valuesOlder v T) (hb.valuesOlder v T),
     fun r T v hr => hr.elim (ha.rootsProtected r T v) (hb.rootsProtected r T v),
-    fun v T hv => hv.elim (ha.valuesProtected v T) (hb.valuesProtected v T)⟩
+    fun v T hv => hv.elim (ha.valuesProtected v T) (hb.valuesProtected v T),
+    fun r T E hr => hr.elim (ha.holderTypes r T E) (hb.holderTypes r T E)⟩
 
 /-- A later activation base preserves the age of inherited observations while
 their typing and protection against the chosen shrink footprint stay fixed. -/
@@ -460,7 +466,7 @@ theorem Frame.observedSafe_outerPreserved {m : Module} {W : World} {tenv : TEnv}
         ∀ target, Targets v target → W.A r target) :
     ObservedSafe m W shrinking observation s'.store := by
   refine ⟨source.typed.advance roots values, source.rootsOlder, source.valuesOlder, ?_,
-    source.valuesProtected⟩
+    source.valuesProtected, source.holderTypes⟩
   intro r T v observed present interior target targetPresent
   by_cases demanded : Dset W r
   · obtain ⟨E, demanded⟩ := demanded
@@ -682,6 +688,20 @@ theorem callObservation_safe {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
       | param i => exact Nat.lt_of_lt_of_le (frame.pAge i a si x hq) frame.base_le
   · exact rootsProtected
   · exact valuesProtected
+  · intro r T E hroot hD
+    rcases hroot with (⟨x, lv, si, _, _, _, hscope, rfl, rfl⟩ |
+      ⟨⟨x, lv, si, _, hscope, rfl, _, rfl⟩, _⟩) | ⟨element, hD', rfl⟩
+    · obtain ⟨a, si', x', heq, hbefore⟩ := frame.dOut _ E hD
+      cases heq
+      exact False.elim ((Nat.not_le_of_gt hbefore)
+        (frame.below _ (scopeMember hscope)).1)
+    · obtain ⟨a, si', x', heq, hbefore⟩ := frame.dOut _ E hD
+      cases heq
+      exact False.elim ((Nat.not_le_of_gt hbefore)
+        (frame.below _ (scopeMember hscope)).1)
+    · have heq : element = E := frame.dFun r element E hD' hD
+      subst E
+      exact ⟨.mutable, rfl⟩
 
 theorem callObservation_retainsAliases {W : World} {tenv : TEnv} {env : Env}
     {continuation : List VarId} {retained : List RetainedAlias} {inherited : Observation}

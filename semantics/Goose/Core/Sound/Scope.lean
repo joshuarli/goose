@@ -879,7 +879,7 @@ theorem ObservedSafe.releaseScope {future : List VarId} {sc : Nat} {si : ScopeIn
       ¬ ScopeRoots env.vars env.act sc si target := by
     intro v T hobs target htarget
     exact before_notScope target (h.valuesOlder v T hobs target htarget)
-  refine ⟨?_, h.rootsOlder, h.valuesOlder, ?_, h.valuesProtected⟩
+  refine ⟨?_, h.rootsOlder, h.valuesOlder, ?_, h.valuesProtected, h.holderTypes⟩
   · constructor
     · intro r T hobs
       obtain ⟨v, hv, hty⟩ := h.typed.roots r T hobs
