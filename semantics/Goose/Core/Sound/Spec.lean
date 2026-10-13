@@ -689,6 +689,7 @@ def initEnv (m : Module) (g : GlobalId) : TEnv :=
     globalLimit := g, initializing := some g }
 
 structure ImplOk (m : Module) (impl : Impl) : Prop where
+  parameterShape : ∀ i, i < impl.params.size → checkParam impl i = .ok ()
   params : ∀ (i : Nat) (p : Param), impl.params[i]? = some p → p.var = i ∧
     ∃ lv : LocalVar, impl.vars[i]? = some lv ∧ lv.scope = 0 ∧ lv.ty.paramOk = true
   bodyScope : impl.body.scope = 0
