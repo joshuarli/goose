@@ -59,6 +59,18 @@ expected='["malformed","byte 256: nesting deeper than 256"]'
     status=1
 }
 
+# This is valid JSON at the supported nesting limit; the GIR schema rejects its
+# top-level value after the decoder has parsed it.
+awk 'BEGIN { for (i = 0; i < 256; i++) printf "["; printf "0"; for (i = 0; i < 256; i++) printf "]"; print "" }' > "$work/within_limit.json"
+set +e
+actual=$("$tool" gir-validate "$work/within_limit.json")
+code=$?
+set -e
+[ "$code" -eq 2 ] && [ "$actual" != "$expected" ] || {
+    echo "FAIL gir-validate within-limit nesting: got $actual ($code)" >&2
+    status=1
+}
+
 # A module can be accepted and still fault: acceptance says nothing about reference lifetime.
 set +e
 out=$("$tool" gir-run "$here/gir_accepted_dangling_reference.json")
