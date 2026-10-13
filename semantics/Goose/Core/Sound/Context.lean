@@ -839,6 +839,44 @@ noncomputable def GlobalPlanSelection.initializerContext {m : Module}
   rw [selection.rootNode] at context
   exact context
 
+/-- A selected initializer root starts with no lexical bindings. -/
+theorem GlobalPlanSelection.initializerContext_active {m : Module}
+    {plans : Array (Array DemandPoint)} {g : GlobalId} {global : Global}
+    (selection : GlobalPlanSelection m plans g global) :
+    selection.initializerContext.expected.frame.active = [] := by
+  rcases selection with ⟨globalAt, planContext, ownerEq, root, rootAt, rootNode⟩
+  cases rootNode
+  simp only [GlobalPlanSelection.initializerContext, GlobalPlanSelection.rootContext]
+  have active := NodeContext.atRoot_active planContext (.expression global.init) (by
+    rw [ownerEq]
+    exact rootAt)
+  simpa [ownerEq, demandInitialActive] using active
+
+/-- A selected initializer root uses the initializer replay environment. -/
+theorem GlobalPlanSelection.initializerContext_accessMatches {m : Module}
+    {plans : Array (Array DemandPoint)} {g : GlobalId} {global : Global}
+    (selection : GlobalPlanSelection m plans g global) (tenv : TEnv)
+    (moduleEq : tenv.mod = m) (variablesEq : tenv.vars = #[]) :
+    selection.initializerContext.AccessMatches tenv
+      ⟨m, initImpl, initContext, []⟩ := by
+  have planAccess : demandAccess? m (m.contexts.size + g) =
+      some selection.planContext.approvals.access := by
+    simpa [selection.ownerEq] using selection.planContext.approvals.accessMatches
+  have accessEq : selection.planContext.approvals.access =
+      (⟨m, initImpl, initContext⟩ : AccessEnv) := by
+    rcases demandAccess?_cases planAccess with
+      ⟨ctx, impl, ownerLt, contextAt, implementationAt, access⟩ |
+      ⟨otherGlobal, ownerGe, globalAt, access⟩
+    · omega
+    · exact access
+  change selection.planContext.approvals.access.mod = tenv.mod ∧
+    selection.planContext.approvals.access.impl.vars = tenv.vars ∧
+    selection.planContext.approvals.access.mod = m ∧
+    selection.planContext.approvals.access.impl = initImpl ∧
+    selection.planContext.approvals.access.ctx = initContext
+  rw [accessEq]
+  exact ⟨moduleEq.symm, by simpa [initImpl] using variablesEq.symm, rfl, rfl, rfl⟩
+
 /-- Start a body in either profile from the module's successful demand derivation. -/
 noncomputable def EvaluationContext.forContext {m : Module}
     {plans : Array (Array DemandPoint)}
@@ -868,6 +906,38 @@ noncomputable def EvaluationContext.forGlobal {m : Module}
     have notPilot : m.profile ≠ .pilot := by simp [profile]
     let selection := PlanContext.forGlobal derived wellFormed notPilot globalAt
     exact .shrink profile selection.initializerContext
+
+/-- An initializer evaluation context agrees with its empty typing environment. -/
+theorem EvaluationContext.forGlobal_activeMatches {m : Module}
+    {plans : Array (Array DemandPoint)}
+    (derived : deriveModuleDemand m = .ok plans) (wellFormed : PlansWellFormed m plans)
+    {g : GlobalId} {global : Global} (globalAt : m.globals[g]? = some global)
+    (tenv : TEnv) (visibleEq : tenv.visible = []) :
+    (EvaluationContext.forGlobal derived wellFormed globalAt).ActiveMatches tenv := by
+  unfold EvaluationContext.forGlobal
+  split
+  · simp [EvaluationContext.ActiveMatches, visibleEq]
+  · rename_i profile
+    let selection := PlanContext.forGlobal derived wellFormed (by simp [profile]) globalAt
+    change selection.initializerContext.ActiveMatches tenv
+    change ∀ x, x ∈ selection.initializerContext.expected.frame.active ↔ x ∈ tenv.visible
+    rw [selection.initializerContext_active]
+    simp [visibleEq]
+
+/-- An initializer evaluation context agrees with its empty replay environment. -/
+theorem EvaluationContext.forGlobal_accessMatches {m : Module}
+    {plans : Array (Array DemandPoint)}
+    (derived : deriveModuleDemand m = .ok plans) (wellFormed : PlansWellFormed m plans)
+    {g : GlobalId} {global : Global} (globalAt : m.globals[g]? = some global)
+    (tenv : TEnv) (moduleEq : tenv.mod = m) (variablesEq : tenv.vars = #[]) :
+    (EvaluationContext.forGlobal derived wellFormed globalAt).AccessMatches
+      tenv ⟨m, initImpl, initContext, []⟩ := by
+  unfold EvaluationContext.forGlobal
+  split
+  · trivial
+  · rename_i profile
+    let selection := PlanContext.forGlobal derived wellFormed (by simp [profile]) globalAt
+    exact selection.initializerContext_accessMatches tenv moduleEq variablesEq
 
 /-- Context roots select the plan owner belonging to the looked-up context. -/
 theorem EvaluationContext.forContext_ownerMatches {m : Module}
