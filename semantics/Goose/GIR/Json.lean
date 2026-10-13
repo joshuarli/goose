@@ -36,8 +36,23 @@ structure Tables where
   nSlots : Nat
   nScopes : Nat
   nBlocks : Nat
+  profile : ArtifactProfile := .pilot
 
-def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json) : Except String (VTy × Nat) := do
+/-- Resolve field components against earlier data types. Views are valid table
+entries but can never become a descriptor's stored field type. -/
+def resolveStruct (types : Array VTy) (sizes : Array Nat) (raw : Decode.RawStructDef) :
+    Except String (StructDef × Nat) := do
+  let mut fields := #[]
+  let mut treeSize := 1
+  for f in raw.fields do
+    let i ← checkIndex f.typeIndex types.size "struct field type component"
+    let some (.data t) := types[i]? | fail "struct field type must be an earlier data type"
+    let some z := sizes[i]? | fail "struct field type size"
+    fields := fields.push ⟨t, f.binding, f.contents, f.byteOffset⟩
+    treeSize := treeSize + z
+  pure ({ byteSize := raw.byteSize, fields }, treeSize)
+
+def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json) (structs : Array Decode.RawStructDef := #[]) : Except String (VTy × Nat) := do
   let (tag, fs) ← record j "type"
   let comp (x : Lean.Json) : Except String (Ty × Nat) := do
     let i ← checkIndex (← asNat x s!"{tag} component") types.size "type component"
@@ -76,6 +91,12 @@ def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json) : Exce
     let parts ← (← asArr fs[0]! "tuple components").toList.mapM comp
     if parts.length < 2 then fail "tuple: fewer than two components"
     pure (.data (.tuple (Decode.tyList (parts.map (·.1)))), 1 + (parts.map (·.2)).foldl (· + ·) 0)
+  | "struct" => do
+    arity tag fs 1
+    let sid ← checkIndex (← asNat fs[0]! "struct id") structs.size "struct"
+    let some raw := structs[sid]? | fail "struct id"
+    let (d, z) ← resolveStruct types sizes raw
+    pure (.data (.structT sid (TyList.ofList (d.fields.toList.map (·.ty)))), z)
   | "view" => do
     arity tag fs 2
     let m ← decMut (← asStr fs[0]! "view mutability")
@@ -83,18 +104,32 @@ def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json) : Exce
     pure (.view m t, z + 1)
   | _ => fail s!"unknown type tag {tag.quote}"
 
-def decVTypes (j : Lean.Json) : Except String (Array VTy) := do
+def decVTypesWithStructs (j : Lean.Json) (raw : Array Decode.RawStructDef) : Except String (Array VTy × Array StructDef) := do
   let entries ← asArr j "types"
   let mut types : Array VTy := #[]
   let mut sizes : Array Nat := #[]
+  let mut definitions : Array (Option StructDef) := Array.replicate raw.size none
   for h : i in [0:entries.size] do
-    let (t, z) ← match decVTypeEntry types sizes entries[i] with
+    let (t, z) ← match decVTypeEntry types sizes entries[i] raw with
       | .ok r => pure r
       | .error e => fail s!"type {i}: {e}"
     if z > Decode.maxTypeTreeSize then fail s!"type {i}: tree size over {Decode.maxTypeTreeSize}"
+    match t with
+    | .data (.structT sid _) =>
+      if (definitions[sid]?).any (·.isSome) then fail "a struct descriptor has more than one type entry"
+      let some d := raw[sid]? | fail "struct id"
+      let (resolved, _) ← resolveStruct types sizes d
+      definitions := definitions.set! sid (some resolved)
+    | _ => pure ()
     types := types.push t
     sizes := sizes.push z
-  pure types
+  let structs ← definitions.mapM fun
+    | some d => pure d
+    | none => fail "a struct descriptor has no type entry"
+  pure (types, structs)
+
+def decVTypes (j : Lean.Json) : Except String (Array VTy) := do
+  pure (← decVTypesWithStructs j #[]).1
 
 def decVTy (tb : Tables) (j : Lean.Json) : Except String VTy := do
   let i ← checkIndex (← asNat j "type") tb.types.size "type"
@@ -254,6 +289,14 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     arity tag fs 4
     let f ← checkIndex (← asNat fs[1]! "function") tb.nFuncs "function"
     def_ (.call f (← decVals fs[2]! "call arguments") (← org 3))
+  | "i_struct" => do
+    unless tb.profile == .shrink do fail "i_struct requires core-shrink"
+    arity tag fs 3
+    def_ (.structLit (← decTy tb fs[1]!) (← decVals fs[2]! "struct initializers"))
+  | "i_field" => do
+    unless tb.profile == .shrink do fail "i_field requires core-shrink"
+    arity tag fs 3
+    def_ (.fieldAddr (← v 1) (← asNat fs[2]! "field index"))
   | "i_arr" => do
     arity tag fs 3
     def_ (.arrLit (← decTy tb fs[1]!) (← decVals fs[2]! "array elements"))
@@ -375,21 +418,24 @@ def decGlobal (tb : Tables) (j : Lean.Json) : Except String Global := do
 def decodeModule (j : Lean.Json) : Except String Module := do
   let (tag, fs) ← record j "module"
   unless tag == "module" do fail s!"expected a module, found tag {tag.quote}"
-  arity tag fs 8
+  if fs.size < 2 then fail "module: missing schema or profile"
   let schema ← asStr fs[0]! "schema"
   unless schema == schemaName do fail s!"schema {schema.quote}: this reader implements {schemaName.quote}"
-  let profile ← asStr fs[1]! "profile"
-  unless profile == profileName do fail s!"profile {profile.quote}: this reader implements {profileName.quote}"
+  let profileTag ← asStr fs[1]! "profile"
+  let some profile := ArtifactProfile.ofTag? profileTag | fail s!"unknown profile {profileTag.quote}"
+  let extra := if profile == .shrink then 1 else 0
+  arity tag fs (8 + extra)
   let files ← Decode.decodeMapped "file" fs[2]! Decode.decFile
-  let origins ← Decode.decodeMapped "origin" fs[7]! (Decode.decOrigin files.size)
-  let types ← decVTypes fs[3]!
-  let nGlobals := (← asArr fs[4]! "globals").size
-  let nFuncs := (← asArr fs[5]! "functions").size
-  let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0⟩
-  let globals ← Decode.decodeMapped "global" fs[4]! (decGlobal tb)
-  let funcs ← Decode.decodeMapped "func" fs[5]! (decFunc tb)
-  let entry ← checkIndex (← asNat fs[6]! "entry") nFuncs "function"
-  pure { files, globals, funcs, entry, origins }
+  let origins ← Decode.decodeMapped "origin" fs[7 + extra]! (Decode.decOrigin files.size)
+  let raw ← if profile == .shrink then Decode.decStructDefs fs[4]! else pure #[]
+  let (types, structs) ← decVTypesWithStructs fs[3]! raw
+  let nGlobals := (← asArr fs[4 + extra]! "globals").size
+  let nFuncs := (← asArr fs[5 + extra]! "functions").size
+  let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0, profile⟩
+  let globals ← Decode.decodeMapped "global" fs[4 + extra]! (decGlobal tb)
+  let funcs ← Decode.decodeMapped "func" fs[5 + extra]! (decFunc tb)
+  let entry ← checkIndex (← asNat fs[6 + extra]! "entry") nFuncs "function"
+  pure { files, globals, funcs, entry, origins, profile, structs }
 
 /-- Decode a module from the bytes of a file. -/
 def decodeBytes (bs : ByteArray) : Except String Module := do
@@ -455,7 +501,9 @@ def addEntry (t : VTy) : W Nat := do
 mutual
 /-- The index of a data type, after the indices of its components. -/
 def internTy : Ty → W Nat
-  | .structT .. => panic! "GIR struct type writing is not implemented"
+  | .structT sid fs => do
+    internParts fs
+    addEntry (.data (.structT sid fs))
   | .int t => addEntry (.data (.int t))
   | .bool => addEntry (.data .bool)
   | .unit => addEntry (.data .unit)
@@ -546,6 +594,8 @@ def wOp (r : ValueId) : Op → W String
   | .indexChecked v i org => pure (wRec "i_index" [toString r, toString v, toString i, wOpt org])
   | .push a v org => pure (wRec "i_push" [toString r, toString a, toString v, wOpt org])
   | .call f args org => pure (wRec "i_call" [toString r, toString f, wNats args, wOpt org])
+  | .structLit t vs => do pure (wRec "i_struct" [toString r, ← wTy t, wNats vs])
+  | .fieldAddr owner i => pure (wRec "i_field" [toString r, toString owner, toString i])
   | .arrLit t vs => do pure (wRec "i_arr" [toString r, ← wTy t, wNats vs])
   | .arrFill t v => do pure (wRec "i_fill" [toString r, ← wTy t, toString v])
 
@@ -608,7 +658,7 @@ def wGlobal (g : Global) : W String := do
 def wTypeEntry (tab : Array VTy) (t : VTy) : String :=
   let ix (e : Ty) : String := toString ((tab.findIdx? (· == VTy.data e)).getD 0)
   match t with
-  | .data (.structT ..) => panic! "GIR struct type writing is not implemented"
+  | .data (.structT sid _) => wRec "struct" [toString sid]
   | .data (.int i) => wRec "int" [quote (intTyTag i)]
   | .data .bool => wRec "bool" []
   | .data .unit => wRec "unit" []
@@ -626,6 +676,9 @@ def wTypeEntry (tab : Array VTy) (t : VTy) : String :=
 /-- The module in the wire encoding, with the terminating line feed. -/
 def write (m : Module) : String :=
   let ((globals, funcs), tab) := (do
+    if m.profile == .shrink then
+      for h : sid in [0:m.structs.size] do
+        let _ ← internTy (.structT sid (TyList.ofList (m.structs[sid].fields.toList.map (·.ty))))
     let gs ← wMap m.globals.toList wGlobal
     let fs ← wMap m.funcs.toList wFunc
     pure (gs, fs) : W (String × String)).run {}
@@ -633,7 +686,12 @@ def write (m : Module) : String :=
   let origins := wList (m.origins.toList.map fun o =>
     wRec "origin" [toString o.file, toString o.line, quote o.kind])
   let types := wList (tab.entries.toList.map (wTypeEntry tab.entries))
-  wRec "module" [quote schemaName, quote profileName, files, types, globals, funcs,
-    toString m.entry, origins] ++ "\n"
+  let structs := wList (m.structs.toList.map fun d =>
+    wRec "struct_def" [toString d.byteSize, wList (d.fields.toList.map fun f =>
+      wRec "field" [toString ((tab.entries.findIdx? (· == .data f.ty)).getD 0),
+        quote (kindTag f.binding), quote (mutTag f.contents), toString f.byteOffset])])
+  wRec "module" ([quote schemaName, quote m.profile.tag, files, types] ++
+    (if m.profile == .shrink then [structs] else []) ++
+    [globals, funcs, toString m.entry, origins]) ++ "\n"
 
 end Goose.GIR.Json

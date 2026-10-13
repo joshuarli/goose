@@ -527,6 +527,82 @@ def checkStorage (label : String) (f : Func) (vt : Array (Option VTy)) : Check U
         | none => pure ()
       | _ => pure ()
 
+/-- Whole stores use binding permission; projection and array writes use
+contents permission. A read-only borrowed reference never gains either. -/
+def checkPermissions (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do
+  let caps := f.permissions m vt
+  let passable (v : ValueId) (t : Ty) := match t with
+    | .ref .mutable referent =>
+      let c := caps[v]?.getD (false, false)
+      c.1 && (match referent with | .structT .. | .arr .. | .grow .. => c.2 | _ => true)
+    | _ => true
+  for b in f.blocks do
+    for i in b.insts do
+      match i with
+      | .eff (.store r v _) =>
+        match vt[r]? with
+        | some (some (.data (.ref _ t))) =>
+          unless passable v t do violation .v030 s!"{label}: storing a mutable reference without permission"
+        | _ => pure ()
+        unless (caps[r]?.getD (false, false)).1 do
+          violation .v030 s!"{label}: a store without whole-binding permission"
+      | .def _ (.push r _ _) | .eff (.append r _ _) =>
+        unless (caps[r]?.getD (false, false)).2 do
+          violation .v030 s!"{label}: growth without contents permission"
+      | .def v (.snapshot _ _) =>
+        match vt[v]? with
+        | some (some (.view .mutable _)) =>
+          unless (caps[v]?.getD (false, false)).2 do
+            violation .v030 s!"{label}: a mutable view without contents permission"
+        | _ => pure ()
+      | .def _ (.call fn args _) =>
+        if let some callee := m.funcs[fn]? then
+          for (t, arg) in callee.params.zip args do
+            unless passable arg t do
+              violation .v030 s!"{label}: a mutable argument without binding permission"
+      | .eff (.slotInit slot v _) =>
+        if let some sl := f.slots[slot]? then
+          unless passable v sl.ty do
+            violation .v030 s!"{label}: a mutable reference binding without permission"
+      | .term (.ret vs _) =>
+        for (t, v) in f.results.zip vs do
+          unless passable v t do
+            violation .v030 s!"{label}: a mutable reference result without permission"
+      | _ => pure ()
+
+/-- Reuse Core's nominal identity and authoritative byte-layout checks against
+exactly the descriptors retained by the lowering. -/
+def checkStructTypes (m : Module) : Check Unit := do
+  let cm : Core.Module :=
+    { files := m.files
+      types := #[]
+      globals := #[]
+      impls := #[]
+      contexts := #[]
+      entry := 0
+      origins := m.origins
+      profile := m.profile
+      structs := m.structs }
+  let check (r : Core.V Unit) : Check Unit := match r with
+    | .ok _ => pure ()
+    | .error e => violation .v010 e.message
+  check (Core.checkStructTables cm)
+  for g in m.globals do check (Core.checkResolvedType cm g.ty)
+  for f in m.funcs.toList ++ m.globals.toList.map (·.init) do
+    for t in f.params ++ f.results ++ f.slots.toList.map (·.ty) do
+      check (Core.checkResolvedType cm t)
+    for b in f.blocks do
+      for (_, t) in b.params do
+        match t with
+        | .data t | .view _ t => check (Core.checkResolvedType cm t)
+      for i in b.insts do
+        match i with
+        | .def _ (.structLit t _) | .def _ (.arrLit t _) | .def _ (.arrFill t _) =>
+          check (Core.checkResolvedType cm t)
+        | .def _ (.fieldAddr ..) =>
+          unless m.profile == .shrink do violation .v010 "structs require core-shrink"
+        | _ => pure ()
+
 /-! ### GIR-V050 and GIR-V100 -/
 
 /-- Root annotations are over-approximations. Check them at every call site and
@@ -614,6 +690,7 @@ def Module.rootCount (m : Module) : Nat :=
 def validate (m : Module) : Check Unit := do
   checkEntryAndGlobals m
   checkAll m.labelled fun (l, f) => checkSymbols m l f
+  checkStructTypes m
   checkAll m.infos fun i => checkTypes m i.label i.f i.vt
   checkAll m.infos fun i => checkCfg i.label i.f i.vt
   checkUnreachable m
@@ -621,6 +698,7 @@ def validate (m : Module) : Check Unit := do
   checkAll (m.infos.zip walks) fun (i, w) => do
     if let some msg := w.storage then violation .v030 msg
     checkStorage i.label i.f i.vt
+    checkPermissions m i.label i.f i.vt
   checkAll walks fun w => do
     if let some msg := w.scopes then violation .v040 msg
   -- Summaries are closed over what each body does, with each callee's own summary.

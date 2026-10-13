@@ -1105,7 +1105,9 @@ theorem advB_header1 (ty : VTy) (a : ValueId) {tail : BlockId → ValueId → B 
 mutual
 
 theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
-  | .structLit .. => by simp only [lowerExpr]; exact AdvB.pure _
+  | .structLit t es => by
+    simp only [lowerExpr]
+    exact AdvB.bind (advB_lowerExprs es) fun _ => advB_emitDef _
   | .lit t n => by simp only [lowerExpr]; exact advB_emitDef _
   | .bool b => by simp only [lowerExpr]; exact advB_emitDef _
   | .read p => by
@@ -1190,7 +1192,9 @@ theorem advB_lowerArgs : ∀ as : List Arg, AdvB (lowerArgs as)
     exact AdvB.bind (advB_lowerArg a) fun _ => AdvB.bind (advB_lowerArgs rest) fun _ => AdvB.pure _
 
 theorem advB_lowerPlace : ∀ p : Place, AdvB (lowerPlace p)
-  | .field .. => by simp only [lowerPlace]; exact AdvB.pure _
+  | .field owner i => by
+    simp only [lowerPlace]
+    exact AdvB.bind (advB_lowerPlace owner) fun _ => advB_emitDef _
   | .var x => by simp only [lowerPlace]; exact advB_emitDef _
   | .global g => by simp only [lowerPlace]; exact advB_emitDef _
   | .deref e => by simp only [lowerPlace]; exact advB_lowerExpr e
