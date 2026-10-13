@@ -784,15 +784,15 @@ theorem leaf_eff {cfg : Cfg} {env : Env} {cx : FnCtx} {ls lsk ls1 : LS} {fr frk 
   subst hpt; subst hfr
   exact SimG.ret ⟨rfl, hP'⟩
 
-def StmtClaim (n : Nat) (s : Stmt) : Prop :=
+def StmtClaim (n : Nat) (lc : Option LoopCtx) (s : Stmt) : Prop :=
   stmtOk s = true → ∀ (le : LEnv) (ls : LS) (r : Unit) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
-    (fr : Frame), lowerStmt none s le ls = (r, ls') → ls.pp = some pt → ExtT ls' cx.fn.blocks →
+    (fr : Frame), lowerStmt lc s le ls = (r, ls') → ls.pp = some pt → ExtT ls' cx.fn.blocks →
     Rel cfg env cx fr ls →
     SimG cx pt fr (execStmt n cfg env s) (fun flow pt' fr' =>
       flow = Flow.normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' [])
 
-theorem stmtClaim_let (n : Nat) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) (.letS x e org) := by
+theorem stmtClaim_let (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Expr) (org : OriginId) :
+    StmtClaim (n + 1) lc (.letS x e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨v, ls1, h1, h2⟩ := hlow
@@ -805,8 +805,8 @@ theorem stmtClaim_let (n : Nat) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Ex
     simp only [execEff, slotRoot_eq P1.rel, getVal_of hc, bind_assoc, pure_bind]
   exact leaf_eff P1 h2 hext (Flow.normal .unit) (by simp only [bind_assoc]) hx
 
-theorem stmtClaim_assign (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p) (p : Place)
-    (e : Expr) (org : OriginId) : StmtClaim (n + 1) (.assign p e org) := by
+theorem stmtClaim_assign (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p) (p : Place)
+    (e : Expr) (org : OriginId) : StmtClaim (n + 1) lc (.assign p e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, v, ls2, h2, h3⟩ := hlow
@@ -822,8 +822,8 @@ theorem stmtClaim_assign (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, Pl
     simp only [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
   exact leaf_eff P12 h3 hext (Flow.normal .unit) rfl hx
 
-theorem stmtClaim_rebind (n : Nat) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) (.rebind x e org) := by
+theorem stmtClaim_rebind (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Expr) (org : OriginId) :
+    StmtClaim (n + 1) lc (.rebind x e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨v, ls1, h1, rs, ls2, h2, h3⟩ := hlow
@@ -843,8 +843,8 @@ theorem stmtClaim_rebind (n : Nat) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e :
     simp only [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
   exact leaf_eff P2 h3 hext (Flow.normal .unit) rfl hx
 
-theorem stmtClaim_assignOp (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p)
-    (op : BinOp) (p : Place) (e : Expr) (org : OriginId) : StmtClaim (n + 1) (.assignOp op p e org) := by
+theorem stmtClaim_assignOp (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p)
+    (op : BinOp) (p : Place) (e : Expr) (org : OriginId) : StmtClaim (n + 1) lc (.assignOp op p e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, old, ls2, h2, rhs, ls3, h3, ty, ls3', h4, res, ls4, h5, h6⟩ := hlow
@@ -892,8 +892,8 @@ theorem stmtClaim_assignOp (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, 
       simp only [execEff, getVal_of hrp, getVal_of hrs, Goose.Core.expectRef, bind_assoc, pure_bind]
     exact leaf_eff P4 h6 hext (Flow.normal .unit) rfl hx'
 
-theorem stmtClaim_expr (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) (.expr e org) := by
+theorem stmtClaim_expr (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : OriginId) :
+    StmtClaim (n + 1) lc (.expr e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨v, ls1, h1, h2⟩ := hlow
@@ -903,8 +903,8 @@ theorem stmtClaim_expr (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : 
   refine SimG.bind (ihe e (by okpf) le ls v ls1 pt cfg env cx fr h1 hpp hext hrel) fun va pt1 fr1 P1 => ?_
   exact SimG.ret ⟨rfl, P1.sub (cells' := []) (by simp)⟩
 
-theorem stmtClaim_append (n : Nat) (ihp : ∀ p, PlaceClaim n p) (ihv : ∀ v, ViewClaim n v) (owner : Place)
-    (src : View) (org : OriginId) : StmtClaim (n + 1) (.append owner src org) := by
+theorem stmtClaim_append (n : Nat) (lc : Option LoopCtx) (ihp : ∀ p, PlaceClaim n p) (ihv : ∀ v, ViewClaim n v) (owner : Place)
+    (src : View) (org : OriginId) : StmtClaim (n + 1) lc (.append owner src org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, vw, ls2, h2, h3⟩ := hlow
@@ -921,15 +921,15 @@ theorem stmtClaim_append (n : Nat) (ihp : ∀ p, PlaceClaim n p) (ihv : ∀ v, V
     simp only [execEff, getVal_of hl, getView_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
   exact leaf_eff P12 h3 hext (Flow.normal .unit) (by simp only [bind_assoc]) hx
 
-theorem stmtClaim_abort (n : Nat) (msg : String) (org : OriginId) : StmtClaim (n + 1) (.abort msg org) := by
+theorem stmtClaim_abort (n : Nat) (lc : Option LoopCtx) (msg : String) (org : OriginId) : StmtClaim (n + 1) lc (.abort msg org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt] at hlow
   obtain ⟨-, -, -, hi⟩ := emitTerm_facts hlow hpp hext
   simp only [execStmt]
   exact SimG.abort_term hi
 
-theorem stmtClaim_exit (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) (.exit e org) := by
+theorem stmtClaim_exit (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : OriginId) :
+    StmtClaim (n + 1) lc (.exit e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨v, ls1, h1, h2⟩ := hlow
@@ -1046,8 +1046,8 @@ theorem printArgsClaim (n : Nat) (ihe : ∀ m, n = m + 1 → ∀ e, ExprClaim m 
       exact SimG.of_timeout_bind
   | succ m => exact printArgsClaim_succ m (ihe m rfl)
 
-theorem stmtClaim_print (n : Nat) (ihpa : ∀ args, PrintArgsClaim n args) (args : List PrintArg)
-    (org : OriginId) : StmtClaim (n + 1) (.print args org) := by
+theorem stmtClaim_print (n : Nat) (lc : Option LoopCtx) (ihpa : ∀ args, PrintArgsClaim n args) (args : List PrintArg)
+    (org : OriginId) : StmtClaim (n + 1) lc (.print args org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨parts, ls1, h1, h2⟩ := hlow
@@ -1062,20 +1062,20 @@ theorem stmtClaim_print (n : Nat) (ihpa : ∀ args, PrintArgsClaim n args) (args
 
 /-! ### Statement lists -/
 
-def StmtsClaim (n : Nat) (ss : List Stmt) : Prop :=
+def StmtsClaim (n : Nat) (lc : Option LoopCtx) (ss : List Stmt) : Prop :=
   stmtsOk ss = true → ∀ (le : LEnv) (ls : LS) (r : Unit) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
-    (fr : Frame), lowerStmts none ss le ls = (r, ls') → ls.pp = some pt → ExtT ls' cx.fn.blocks →
+    (fr : Frame), lowerStmts lc ss le ls = (r, ls') → ls.pp = some pt → ExtT ls' cx.fn.blocks →
     Rel cfg env cx fr ls →
     SimG cx pt fr (execStmts n cfg env ss) (fun flow pt' fr' =>
       flow = Flow.normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' [])
 
-theorem stmtsClaim_zero (ss : List Stmt) : StmtsClaim 0 ss := by
+theorem stmtsClaim_zero (lc : Option LoopCtx) (ss : List Stmt) : StmtsClaim 0 lc ss := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [execStmts]
   exact SimG.of_timeout
 
-theorem stmtsClaim_succ (n : Nat) (ihs : ∀ s, StmtClaim n s) (ihss : ∀ ss, StmtsClaim n ss) :
-    ∀ ss, StmtsClaim (n + 1) ss
+theorem stmtsClaim_succ (n : Nat) (lc : Option LoopCtx) (ihs : ∀ s, StmtClaim n lc s) (ihss : ∀ ss, StmtsClaim n lc ss) :
+    ∀ ss, StmtsClaim (n + 1) lc ss
   | [] => by
     intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
     simp only [lowerStmts, pure_run] at hlow
@@ -1091,7 +1091,7 @@ theorem stmtsClaim_succ (n : Nat) (ihs : ∀ s, StmtClaim n s) (ihss : ∀ ss, S
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj h0
     simp only [ite_true, bind_eq] at hlow
     obtain ⟨u1, ls1, h1, h2⟩ := hlow
-    have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (advB_lowerStmts none rest _ _ _ _ h2)
+    have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (advB_lowerStmts lc rest _ _ _ _ h2)
     simp only [execStmts]
     refine SimG.bind (ihs s (by okpf) le ls u1 ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun flow pt1 fr1 ⟨hfl, P1⟩ => ?_
     subst hfl
@@ -1201,13 +1201,13 @@ theorem Post.rescope {cfg : Cfg} {env env' : Env} {cx : FnCtx} {ls lsp lsk ls_f 
     show fr_f.vals[i]? = fr.vals[i]?
     rw [hfr, h1, hfr0]
 
-theorem block_core {n : Nat} (ihs : ∀ ss, StmtsClaim n ss) {sc : ScopeId} {stmts : List Stmt}
+theorem block_core {n : Nat} {lc : Option LoopCtx} (ihs : ∀ ss, StmtsClaim n lc ss) {sc : ScopeId} {stmts : List Stmt}
     (hokS : stmtsOk stmts = true) {U : Val → Prop}
     {X : B ValueId} {vf : Env → Flow → M Flow} {cells : ValueId → Val → List (ValueId × RVal)}
     {le : LEnv} {ls ls1 ls_s ls_x ls_l ls' : LS} {u : Unit} {rx r : ValueId} {pt : Pt} {cfg : Cfg}
     {env : Env} {cx : FnCtx} {fr : Frame}
     (h1 : emitEffect (.enter sc) le ls = ((), ls1))
-    (h3 : lowerStmts none stmts le { ls1 with stack := sc :: ls1.stack } = (u, ls_s))
+    (h3 : lowerStmts lc stmts le { ls1 with stack := sc :: ls1.stack } = (u, ls_s))
     (h4 : X le ls_s = (rx, ls_x)) (h5 : emitEffect (.leave sc) le ls_x = ((), ls_l))
     (hls' : ls' = { ls_l with stack := ls_l.stack.drop 1 }) (hr : r = rx)
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
@@ -1223,7 +1223,7 @@ theorem block_core {n : Nat} (ihs : ∀ ss, StmtsClaim n ss) {sc : ScopeId} {stm
   have hext_x : ExtT ls_x cx.fn.blocks := hext_l.of_adv (adv_emitEffect h5)
   have hext_s : ExtT ls_s cx.fn.blocks := hext_x.of_adv (hadvX _ _ _ _ h4)
   have hext_p : ExtT { ls1 with stack := sc :: ls1.stack } cx.fn.blocks :=
-    hext_s.of_adv (advB_lowerStmts none stmts _ _ _ _ h3)
+    hext_s.of_adv (advB_lowerStmts lc stmts _ _ _ _ h3)
   have hext_1 : ExtT ls1 cx.fn.blocks := hext_p
   unfold coreBlock
   refine SimG.bind (block_enter hpp h1 hext_1 hrel) fun si pt1 fr1 ⟨hpp1, hv1, hfr1, hrel1⟩ => ?_
@@ -1240,11 +1240,11 @@ theorem block_core {n : Nat} (ihs : ∀ ss, StmtsClaim n ss) {sc : ScopeId} {stm
   · rw [hls']; exact hv4
   · rw [hls']; exact hrel4
 
-theorem block_unfold {sc : ScopeId} {stmts : List Stmt} {value : Option Expr} {want : Bool}
+theorem block_unfold {lc : Option LoopCtx} {sc : ScopeId} {stmts : List Stmt} {value : Option Expr} {want : Bool}
     {le : LEnv} {ls : LS} {r : ValueId} {ls' : LS}
-    (h : lowerBlock none [] want (.mk sc stmts value) le ls = (r, ls')) :
+    (h : lowerBlock lc [] want (.mk sc stmts value) le ls = (r, ls')) :
     ∃ ls1 ls_s ls_x ls_l u rx, emitEffect (.enter sc) le ls = ((), ls1) ∧
-      lowerStmts none stmts le { ls1 with stack := sc :: ls1.stack } = (u, ls_s) ∧
+      lowerStmts lc stmts le { ls1 with stack := sc :: ls1.stack } = (u, ls_s) ∧
       lowerBlockValue want value le ls_s = (rx, ls_x) ∧
       emitEffect (.leave sc) le ls_x = ((), ls_l) ∧
       ls' = { ls_l with stack := ls_l.stack.drop 1 } ∧ r = rx := by
@@ -1262,15 +1262,15 @@ theorem block_unfold {sc : ScopeId} {stmts : List Stmt} {value : Option Expr} {w
 def blockCells (blk : Core.Block) (want : Bool) (r : ValueId) (v : Val) : List (ValueId × RVal) :=
   if blk.value.isSome || want then [(r, .val v)] else []
 
-def BlockClaim (n : Nat) (want : Bool) (blk : Core.Block) : Prop :=
+def BlockClaim (n : Nat) (lc : Option LoopCtx) (want : Bool) (blk : Core.Block) : Prop :=
   blockOk blk = true → ∀ (le : LEnv) (ls : LS) (r : ValueId) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
-    (fr : Frame), lowerBlock none [] want blk le ls = (r, ls') → ls.pp = some pt →
+    (fr : Frame), lowerBlock lc [] want blk le ls = (r, ls') → ls.pp = some pt →
     ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
     SimG cx pt fr (execBlock n cfg env [] blk) (fun flow pt' fr' => ∃ v, flow = .normal v ∧
       (blk.value = none → v = .unit) ∧ Post cfg env cx ls fr ls' fr' pt' (blockCells blk want r v))
 
-theorem blockClaim_succ (n : Nat) (ihs : ∀ ss, StmtsClaim n ss) (ihe : ∀ e, ExprClaim n e)
-    (want : Bool) (blk : Core.Block) : BlockClaim (n + 1) want blk := by
+theorem blockClaim_succ (n : Nat) (lc : Option LoopCtx) (ihs : ∀ ss, StmtsClaim n lc ss) (ihe : ∀ e, ExprClaim n e)
+    (want : Bool) (blk : Core.Block) : BlockClaim (n + 1) lc want blk := by
   obtain ⟨sc, stmts, value⟩ := blk
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   obtain ⟨ls1, ls_s, ls_x, ls_l, u, rx, h1, h3, h4, h5, hls', hr⟩ := block_unfold hlow
@@ -1327,7 +1327,7 @@ theorem blockValueClaim_zero (blk : Core.Block) : BlockValueClaim 0 blk := by
   simp only [blockValue]
   exact SimG.of_timeout
 
-theorem blockValueClaim_succ (n : Nat) (ihb : ∀ want blk, BlockClaim n want blk) (blk : Core.Block) :
+theorem blockValueClaim_succ (n : Nat) (ihb : ∀ want blk, BlockClaim n none want blk) (blk : Core.Block) :
     BlockValueClaim (n + 1) blk := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [blockValue]
@@ -1457,8 +1457,8 @@ theorem Post.nil {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS} {fr fr' : Fr
     (hrel : Rel cfg env cx fr' ls') : Post cfg env cx ls fr ls' fr' pt' [] :=
   ⟨hpp, by simp, by simp, hmono, hsame, hrel⟩
 
-theorem stmtClaim_assert (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) (.assertS e org) := by
+theorem stmtClaim_assert (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : OriginId) :
+    StmtClaim (n + 1) lc (.assertS e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨cv, ls1, h1, hw⟩ := hlow
@@ -1518,12 +1518,12 @@ theorem stmtClaim_assert (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org 
     · exact P1.same.mono (by nat_omega)
     · exact P1.rel.stack_eq (by rw [hstl, hst1])
 
-theorem stmtClaim_ifS_none (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihb : ∀ want blk, BlockClaim n want blk)
-    (c : Expr) (t : Core.Block) (org : OriginId) : StmtClaim (n + 1) (.ifS c t none org) := by
+theorem stmtClaim_ifS_none (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (ihb : ∀ want blk, BlockClaim n lc want blk)
+    (c : Expr) (t : Core.Block) (org : OriginId) : StmtClaim (n + 1) lc (.ifS c t none org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨cv, ls1, h1, hw⟩ := hlow
-  have hadv_w : ls1.Adv ls' := advB_ifS_none_core cv (advB_lowerBlock none [] false t) _ _ _ _ hw
+  have hadv_w : ls1.Adv ls' := advB_ifS_none_core cv (advB_lowerBlock lc [] false t) _ _ _ _ hw
   have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv hadv_w
   simp only [execStmt]
   refine SimG.bind (ihe c (by okpf) le ls cv ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun va pt1 fr1 P1 => ?_
@@ -1539,7 +1539,7 @@ theorem stmtClaim_ifS_none (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihb : ∀ wan
   have e5 : ls' = { ls4 with cur := some jb } := by
     rw [setCur_run] at hs2; exact (Prod.mk.inj hs2).2.symm
   have hext4 : ExtT ls4 cx.fn.blocks := by rw [e5] at hext; exact hext
-  have hadv1 := advB_lowerBlock none [] false t _ _ _ _ ha1
+  have hadv1 := advB_lowerBlock lc [] false t _ _ _ _ ha1
   have hext3 : ExtT ls3 cx.fn.blocks := hext4.of_adv (adv_emitTerm ht)
   have hext2 : ExtT ls2 cx.fn.blocks := hext3.of_adv hadv1
   have hextf : ExtT lsf cx.fn.blocks := by rw [e2] at hext2; exact hext2
@@ -1605,13 +1605,13 @@ theorem stmtClaim_ifS_none (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihb : ∀ wan
     · exact P1.same.trans (P3.same.mono (by nat_omega)) P1.mono
     · exact P3.rel.stack_eq (by rw [hstl, hrel.stack, P3.rel.stack])
 
-theorem stmtClaim_ifS_some (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihb : ∀ want blk, BlockClaim n want blk)
-    (c : Expr) (t fb : Core.Block) (org : OriginId) : StmtClaim (n + 1) (.ifS c t (some fb) org) := by
+theorem stmtClaim_ifS_some (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (ihb : ∀ want blk, BlockClaim n lc want blk)
+    (c : Expr) (t fb : Core.Block) (org : OriginId) : StmtClaim (n + 1) lc (.ifS c t (some fb) org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerStmt, bind_eq] at hlow
   obtain ⟨cv, ls1, h1, hw⟩ := hlow
   have hadv_w : ls1.Adv ls' :=
-    advB_ifS_some_core cv (advB_lowerBlock none [] false t) (advB_lowerBlock none [] false fb)
+    advB_ifS_some_core cv (advB_lowerBlock lc [] false t) (advB_lowerBlock lc [] false fb)
       _ _ _ _ hw
   have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv hadv_w
   simp only [execStmt]
@@ -1629,8 +1629,8 @@ theorem stmtClaim_ifS_some (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihb : ∀ wan
   obtain ⟨e7c, e7⟩ := curBlock_eq hc7
   subst e7
   have hext6 : ExtT ls7 cx.fn.blocks := hext.of_ext (joinArms_ext hj)
-  have hadv1 := advB_lowerBlock none [] false t _ _ _ _ ha1
-  have hadv2 := advB_lowerBlock none [] false fb _ _ _ _ ha2
+  have hadv1 := advB_lowerBlock lc [] false t _ _ _ _ ha1
+  have hadv2 := advB_lowerBlock lc [] false fb _ _ _ _ ha2
   obtain ⟨htb, heb, hinst, ⟨Ttb, hTtb, hTtbp⟩, ⟨Teb, hTeb, hTebp⟩, hpp2, hpp5, hst2, hv2, hst3, hst6,
     hv16, hv36, hendT, hendF, hkeep, hsz36, hsz6⟩ :=
     branch_facts hf hs1 hadv1 hs2 hadv2 P1.pp hext6
@@ -1715,9 +1715,9 @@ structure Claims (n : Nat) : Prop where
   bound : ∀ b, BoundClaim n b
   exprs : ∀ es, ExprsClaim n es
   printArgs : ∀ args, PrintArgsClaim n args
-  stmt : ∀ s, StmtClaim n s
-  stmts : ∀ ss, StmtsClaim n ss
-  block : ∀ want blk, BlockClaim n want blk
+  stmt : ∀ lc s, StmtClaim n lc s
+  stmts : ∀ lc ss, StmtsClaim n lc ss
+  block : ∀ lc want blk, BlockClaim n lc want blk
   blockValue : ∀ blk, BlockValueClaim n blk
 
 theorem claims_zero : Claims 0 where
@@ -1737,11 +1737,11 @@ theorem claims_zero : Claims 0 where
     intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
     simp only [evalExpr]; exact SimG.of_timeout) es
   printArgs := fun args => printArgsClaim 0 (fun m h => absurd h (by omega)) args
-  stmt := fun s => by
+  stmt := fun lc s => by
     intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
     simp only [execStmt]; exact SimG.of_timeout
   stmts := stmtsClaim_zero
-  block := fun want blk => by
+  block := fun lc want blk => by
     intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
     simp only [execBlock]; exact SimG.of_timeout
   blockValue := blockValueClaim_zero
@@ -1788,31 +1788,31 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | omitted => exact boundClaim_omitted _
     | expr e => exact boundClaim_expr n ih.expr e
     | fromEnd e => exact boundClaim_fromEnd n ih.expr e
-  · intro s
+  · intro lc s
     cases s with
-    | letS x e org => exact stmtClaim_let n ih.expr x e org
-    | assign p e org => exact stmtClaim_assign n ih.expr ih.place p e org
-    | assignOp op p e org => exact stmtClaim_assignOp n ih.expr ih.place op p e org
-    | rebind x e org => exact stmtClaim_rebind n ih.expr x e org
-    | expr e org => exact stmtClaim_expr n ih.expr e org
-    | append owner src org => exact stmtClaim_append n ih.place ih.view owner src org
+    | letS x e org => exact stmtClaim_let n lc ih.expr x e org
+    | assign p e org => exact stmtClaim_assign n lc ih.expr ih.place p e org
+    | assignOp op p e org => exact stmtClaim_assignOp n lc ih.expr ih.place op p e org
+    | rebind x e org => exact stmtClaim_rebind n lc ih.expr x e org
+    | expr e org => exact stmtClaim_expr n lc ih.expr e org
+    | append owner src org => exact stmtClaim_append n lc ih.place ih.view owner src org
     | ifS c t f org =>
       cases f with
-      | none => exact stmtClaim_ifS_none n ih.expr ih.block c t org
-      | some fb => exact stmtClaim_ifS_some n ih.expr ih.block c t fb org
+      | none => exact stmtClaim_ifS_none n lc ih.expr (ih.block lc) c t org
+      | some fb => exact stmtClaim_ifS_some n lc ih.expr (ih.block lc) c t fb org
     | «while» c body org => intro hok; simp [stmtOk] at hok
     | forRange x lo hi body org => intro hok; simp [stmtOk] at hok
     | forEach x idx v byRef body org => intro hok; simp [stmtOk] at hok
     | ret e org => intro hok; simp [stmtOk] at hok
     | brk org => intro hok; simp [stmtOk] at hok
     | cont org => intro hok; simp [stmtOk] at hok
-    | print args org => exact stmtClaim_print n ih.printArgs args org
-    | assertS e org => exact stmtClaim_assert n ih.expr e org
-    | abort msg org => exact stmtClaim_abort n msg org
-    | exit e org => exact stmtClaim_exit n ih.expr e org
-  · exact stmtsClaim_succ n ih.stmt ih.stmts
-  · exact blockClaim_succ n ih.stmts ih.expr
-  · exact blockValueClaim_succ n ih.block
+    | print args org => exact stmtClaim_print n lc ih.printArgs args org
+    | assertS e org => exact stmtClaim_assert n lc ih.expr e org
+    | abort msg org => exact stmtClaim_abort n lc msg org
+    | exit e org => exact stmtClaim_exit n lc ih.expr e org
+  · intro lc; exact stmtsClaim_succ n lc (ih.stmt lc) (ih.stmts lc)
+  · intro lc; exact blockClaim_succ n lc (ih.stmts lc) ih.expr
+  · exact blockValueClaim_succ n (ih.block none)
 
 theorem claims (n : Nat) : Claims n := by
   induction n with

@@ -3,6 +3,9 @@ import Goose.Proofs.Num
 import Goose.Proofs.Share
 import Goose.Reuse.Model
 import Goose.Proofs.Lower
+import Goose.Lower.Loops
+import Goose.Lower.While
+import Goose.Lower.Prefix
 import Goose.GIR.Sound
 import Goose.Proofs.Fuel
 import Goose.Proofs.Memory
@@ -159,6 +162,13 @@ end Goose.Audit
 #audit Goose.Proofs.Core.initial_liveRefs
 
 #audit Goose.Proofs.Lower.lower_correct_ctl
+#audit Goose.Lower.claims
+#audit Goose.Lower.blockPreClaim
+#audit Goose.Lower.stmt_while_sim
+#audit Goose.Lower.while_sim
+#audit Goose.Lower.range_sim
+#audit Goose.Lower.range_reentry_keeps_prefix
+#audit Goose.Lower.range_reentry_changes_counter
 #audit Goose.GIR.validate_sound
 #audit Goose.GIR.validated_scalar_safe
 

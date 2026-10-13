@@ -211,7 +211,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     have hpar : (lowerImpl m impl).params = [] := by simp [lowerImpl, hp]
     have hrel0 : ∀ act, Rel (⟨p, m⟩ : Cfg) (⟨impl.vars, act, [], 0 + 1⟩ : Env) cx
         (⟨act, [], {}, 0 + 1⟩ : Frame) startLS := fun act => ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
-    have hclaim := (claims n').block false impl.body hb le startLS r ls1 (0, 0) ⟨p, m⟩
+    have hclaim := (claims n').block none false impl.body hb le startLS r ls1 (0, 0) ⟨p, m⟩
       ⟨impl.vars, s.nextAct, [], 0 + 1⟩ cx ⟨s.nextAct, [], {}, 0 + 1⟩ hlow startLS_pp hext1 (hrel0 s.nextAct)
     have hclaim' := hclaim { s with nextAct := s.nextAct + 1 }
     have hcall : ∀ k0 : Nat, callFn (k0 + 2) ⟨p, lower m⟩ 0 ctx.impl [] s =
