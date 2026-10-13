@@ -82,6 +82,8 @@ def tyEntry (types : Array Ty) : Ty → String
   | .unit => rec "unit" []
   | .arr e k => rec "arr" [nat (tyIndex types e), nat k]
   | .grow e => rec "grow" [nat (tyIndex types e)]
+  | .growshrink e => rec "growshrink" [nat (tyIndex types e)]
+  | .limited e capacity => rec "limited" [nat (tyIndex types e), nat capacity]
   | .ref m t => rec "ref" [str (mutability m), nat (tyIndex types t)]
   | .slice m e => rec "slice" [str (mutability m), nat (tyIndex types e)]
   | .tuple ps => rec "tuple" [arr ((tyParts ps).map fun t => nat (tyIndex types t))]
@@ -120,7 +122,8 @@ def expr (ty : Ty → Nat) : Expr → String
   | .not e => rec "e_not" [expr ty e]
   | .conv k t e o => rec "e_conv" [str (convKind k), nat (ty t), expr ty e, nat o]
   | .call c args o => rec "e_call" [nat c, arr (args' ty args), nat o]
-  | .push p e => rec "e_push" [place ty p, expr ty e]
+  | .push p e org => rec "e_push" ([place ty p, expr ty e] ++ org.toList.map nat)
+  | .pop p org => rec "e_pop" [place ty p, nat org]
   | .ifE c t f => rec "e_if" [expr ty c, block ty t, block ty f]
   | .blockE b => rec "e_block" [block ty b]
   | .arrLit t es => rec "e_arr" [nat (ty t), arr (exprs ty es)]
@@ -165,6 +168,10 @@ def stmt (ty : Ty → Nat) : Stmt → String
   | .rebind x e o => rec "s_rebind" [nat x, expr ty e, nat o]
   | .expr e o => rec "s_expr" [expr ty e, nat o]
   | .append p v o => rec "s_append" [place ty p, view ty v, nat o]
+  | .popN p e o => rec "s_pop_n" [place ty p, expr ty e, nat o]
+  | .resize p size fill o => rec "s_resize" [place ty p, expr ty size, arr (optExpr ty fill), nat o]
+  | .clear p o => rec "s_clear" [place ty p, nat o]
+  | .assignWhole p e o => rec "s_assign_whole" [place ty p, expr ty e, nat o]
   | .ifS c t f o => rec "s_if" [expr ty c, block ty t, arr (optBlock ty f), nat o]
   | .while c b o => rec "s_while" [expr ty c, block ty b, nat o]
   | .forRange x lo hi b o =>
@@ -188,21 +195,22 @@ def target : Target → String
   | .param i => rec "t_param" [nat i]
   | .global g => rec "t_global" [nat g]
 
-def summary : SummaryAnn → String
+def summary (profile : ArtifactProfile) : SummaryAnn → String
   | .unknown => rec "summary_unknown" []
   | .known s =>
-    rec "summary" [arr (s.reads.map target), arr (s.writes.map target),
-      arr (s.grows.map target), arr (s.rebinds.map target), flag s.aborts, flag s.outputs]
+    rec "summary" ([arr (s.reads.map target), arr (s.writes.map target), arr (s.grows.map target)] ++
+      (if profile == .shrink then [arr (s.shrinks.map target)] else []) ++
+      [arr (s.rebinds.map target), flag s.aborts, flag s.outputs])
 
 def localVar (ty : Ty → Nat) (v : LocalVar) : String :=
   rec "local" [str v.name, nat (ty v.ty), str (varKind v.kind), nat v.scope, nat v.org]
 
 def param (p : Param) : String := rec "param" [nat p.var, str (mode p.mode)]
 
-def impl (ty : Ty → Nat) (i : Impl) : String :=
+def impl (profile : ArtifactProfile) (ty : Ty → Nat) (i : Impl) : String :=
   rec "impl" [str i.name, arr (i.params.toList.map param),
     arr (i.results.toList.map fun t => nat (ty t)), arr (i.vars.toList.map (localVar ty)),
-    block ty i.body, summary i.summary]
+    block ty i.body, summary profile i.summary]
 
 def global (ty : Ty → Nat) (g : Global) : String :=
   rec "global" [str g.name, nat (ty g.ty), str (varKind g.kind), expr ty g.init, nat g.org]
@@ -235,7 +243,7 @@ def module (m : Module) : String :=
     arr (m.types.toList.map (tyEntry m.types))] ++
     (match m.profile with | .pilot => [] | .shrink => [arr (m.structs.toList.map (structDef ty))]) ++
     [arr (m.globals.toList.map (global ty)),
-    arr (m.impls.toList.map (impl ty)),
+    arr (m.impls.toList.map (impl m.profile ty)),
     arr (m.contexts.toList.map context),
     nat m.entry,
     arr (m.origins.toList.map origin)])

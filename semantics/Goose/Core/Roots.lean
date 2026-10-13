@@ -1,4 +1,4 @@
-import Goose.Core.Typing
+import Goose.Core.Access
 
 /-!
 The checks that depend on a context's root annotation: `V-ROOT`, `V-BLOCK`,
@@ -25,6 +25,7 @@ structure Eff where
   reads : List Target := []
   writes : List Target := []
   grows : List Target := []
+  shrinks : List Target := []
   rebinds : List Target := []
   aborts : Bool := false
   outputs : Bool := false
@@ -86,6 +87,17 @@ def addWrites (rs : List RootRef) : P Unit :=
 
 def addGrows (rs : List RootRef) : P Unit :=
   addRoots rs fun e ts => { e with grows := addTargets e.grows ts }
+
+def addShrinks (rs : List RootRef) : P Unit :=
+  addRoots rs fun e ts => { e with shrinks := addTargets e.shrinks ts }
+
+def PEnv.access (env : PEnv) : AccessEnv := ⟨env.mod, env.impl, env.ctx⟩
+
+def PEnv.limitedOwner (env : PEnv) (p : Place) : V Bool :=
+  match env.access.placeType? p with
+  | some (.limited ..) => pure true
+  | some _ => pure false
+  | none => reject .type "owner has no checked declaration type"
 
 def noteAborts : P Unit := modify fun s => { s with eff := { s.eff with aborts := true } }
 
@@ -238,6 +250,7 @@ def callEffects (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)
       reads := addTargets e.reads (mapCallTargets callee cctx argRoots sm.reads)
       writes := addTargets e.writes (mapCallTargets callee cctx argRoots sm.writes)
       grows := addTargets e.grows (mapCallTargets callee cctx argRoots sm.grows)
+      shrinks := addTargets e.shrinks (mapCallTargets callee cctx argRoots sm.shrinks)
       aborts := e.aborts || sm.aborts
       outputs := e.outputs || sm.outputs }
 
@@ -407,11 +420,20 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     let argRoots ← rpArgs env args
     liftV (checkContents env c args argRoots)
     rpCall env c argRoots
-  | .push owner a => do
+  | .push owner a _ => do
     let rho ← rpPlace env owner
     let _ ← rpExpr env a
     addGrows rho
+    if env.mod.profile == .shrink then
+      addWrites rho
+      if (← liftV (env.limitedOwner owner)) then noteAborts
     pure rho
+  | .pop owner _ => do
+    let rho ← rpPlace env owner
+    addReads rho
+    addShrinks rho
+    noteAborts
+    pure []
   | .ifE c t f => do
     let _ ← rpExpr env c
     let (rt, lt) ← rpBlockValue env [] t
@@ -522,6 +544,38 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     -- The appended elements are copied out of the run.
     let run ← rpView env src
     addReads run
+    addGrows rho
+    if env.mod.profile == .shrink then
+      addWrites rho
+      if (← liftV (env.limitedOwner owner)) then noteAborts
+  | .popN owner count _ => do
+    let rho ← rpPlace env owner
+    let _ ← rpExpr env count
+    addReads rho
+    addShrinks rho
+    noteAborts
+  | .resize owner size fill _ => do
+    let rho ← rpPlace env owner
+    let _ ← rpExpr env size
+    match fill with
+    | none => pure ()
+    | some e =>
+      let _ ← rpExpr env e
+      addWrites rho
+      addGrows rho
+    addReads rho
+    addShrinks rho
+    noteAborts
+  | .clear owner _ => do
+    let rho ← rpPlace env owner
+    addReads rho
+    addShrinks rho
+  | .assignWhole owner replacement _ => do
+    let rho ← rpPlace env owner
+    addReads rho
+    addShrinks rho
+    let _ ← rpExpr env replacement
+    addWrites rho
     addGrows rho
   | .ifS c t f _ => do
     let _ ← rpExpr env c
@@ -679,7 +733,7 @@ def checkSummary (impl : Impl) (ctx : Context) (eff : Eff) : V Unit := do
   | .known s =>
     -- An entry for a parameter is read through that parameter's annotation, so
     -- it must name a parameter.
-    forAll (s.reads ++ s.writes ++ s.grows) fun t =>
+    forAll (s.reads ++ s.writes ++ s.grows ++ s.shrinks) fun t =>
       match t with
       | .param i =>
         unless i < impl.params.size do
@@ -690,6 +744,7 @@ def checkSummary (impl : Impl) (ctx : Context) (eff : Eff) : V Unit := do
     effWithin impl.name "reads" eff.reads (expandTargets impl ctx s.reads)
     effWithin impl.name "writes" eff.writes (expandTargets impl ctx s.writes)
     effWithin impl.name "grows" eff.grows (expandTargets impl ctx s.grows)
+    effWithin impl.name "shrinks" eff.shrinks (expandTargets impl ctx s.shrinks)
     effWithin impl.name "rebinds" eff.rebinds s.rebinds
     if eff.aborts && !s.aborts then reject .summary s!"{impl.name} may abort, which its summary omits"
     if eff.outputs && !s.outputs then reject .summary s!"{impl.name} prints, which its summary omits"
@@ -723,7 +778,7 @@ def checkInitRoots (m : Module) (g : GlobalId) : V Unit :=
     let (_, st) ← (rpExpr ⟨m, initImpl, initContext, []⟩ gl.init).run ⟨0, {}⟩
     if st.eff.unknown then
       reject .call s!"initializer of global {gl.name} calls an implementation whose effects are unknown"
-    forAll (st.eff.reads ++ st.eff.writes ++ st.eff.grows) fun t =>
+    forAll (st.eff.reads ++ st.eff.writes ++ st.eff.grows ++ st.eff.shrinks) fun t =>
       match t with
       | .global h =>
         unless h < g do

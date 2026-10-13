@@ -138,10 +138,28 @@ def lengthLoc (l : Loc) : M Nat := fun s =>
   | .ok n => .ok n s
   | .error k => .stop (.fault k) s
 
+def truncateLoc (l : Loc) (len : Nat) : M Unit := fun s =>
+  match s.store.truncate l len with
+  | .ok st => .ok () { s with store := st }
+  | .error k => .stop (.fault k) s
+
+/-- Check before constructing a fill run as well as before receiver writes. -/
+def checkAppendCapacity (l : Loc) (count : Nat) (org : OriginId) : M Unit := do
+  match (← readLoc l) with
+  | .limited _ capacity _ len =>
+    if len + count > capacity then abortAt .capacity org else pure ()
+  | .resizable .. => pure ()
+  | _ => fault .shape
+
+/-- Capacity is checked after operand effects and before any receiver write. -/
+def checkedAppendLoc (l : Loc) (vs : Array Val) (org : OriginId) : M Nat := do
+  checkAppendCapacity l vs.size org
+  appendLoc l vs
+
 /-- The elements of a sampled run, copied. -/
 def readRun (vw : ViewVal) : M (Array Val) := do
   match (← readLoc vw.loc) with
-  | .fixed es | .resizable _ es =>
+  | .fixed es | .resizable _ es | .limited _ _ es _ =>
     if vw.start + vw.len ≤ es.size then pure (es.extract vw.start (vw.start + vw.len))
     else fault .pathRange
   | _ => fault .shape
@@ -191,6 +209,7 @@ def expectSlice : Val → M (Loc × Nat × Nat)
 def expectArray : Val → M (Nat × Bool)
   | .fixed es => pure (es.size, false)
   | .resizable _ es => pure (es.size, true)
+  | .limited _ _ _ len => pure (len, false)
   | _ => fault .shape
 
 def expectSameTy (t u : IntTy) : M Unit :=
@@ -210,7 +229,10 @@ def expectComparable : Val → Val → M (Int × Int)
 def expectArrayLit (t : Ty) (vs : Array Val) : M Val :=
   match t with
   | .arr _ _ => pure (.fixed vs)
-  | .grow E => pure (.resizable E vs)
+  | .grow E | .growshrink E => pure (.resizable E vs)
+  | .limited E capacity =>
+    if vs.size ≤ capacity then pure (.limited E capacity vs vs.size)
+    else fault .shape
   | _ => fault .shape
 
 def expectFixedCount : Ty → M Nat
@@ -332,11 +354,21 @@ def evalExpr : Nat → Cfg → Env → Expr → M Val
     | .call c args _ => do
       let vals ← mapList (evalArg n cfg env) args
       enterCall n cfg env.depth c vals
-    | .push owner a => do
+    | .push owner a org => do
       let l ← evalPlace n cfg env owner
       let v ← evalExpr n cfg env a
-      let i ← appendLoc l #[v]
+      let i ← match org with
+        | none => appendLoc l #[v]
+        | some origin => checkedAppendLoc l #[v] origin
       pure (.ref { l with path := l.path ++ [i] })
+    | .pop owner org => do
+      let l ← evalPlace n cfg env owner
+      let len ← lengthLoc l
+      if len == 0 then abortAt .popEmpty org
+      else
+        let value ← readLoc { l with path := l.path ++ [len - 1] }
+        truncateLoc l (len - 1)
+        pure value
     | .ifE c t f => do
       if (← expectBool (← evalExpr n cfg env c)) then blockValue n cfg env t
       else blockValue n cfg env f
@@ -484,11 +516,50 @@ def execStmt : Nat → Cfg → Env → Stmt → M Flow
     | .expr e _ => do
       let _ ← evalExpr n cfg env e
       pure (.normal .unit)
-    | .append owner src _ => do
+    | .append owner src org => do
       let l ← evalPlace n cfg env owner
       let vw ← evalView n cfg env src
       let elems ← readRun vw
-      let _ ← appendLoc l elems
+      let _ ← checkedAppendLoc l elems org
+      pure (.normal .unit)
+    | .popN owner count org => do
+      let l ← evalPlace n cfg env owner
+      let (_, count) ← expectInt (← evalExpr n cfg env count)
+      let len ← lengthLoc l
+      if count < 0 || count > (len : Int) then abortAt .popNRange org
+      else
+        truncateLoc l (len - count.toNat)
+        pure (.normal .unit)
+    | .resize owner size fill org => do
+      let l ← evalPlace n cfg env owner
+      let (_, size) ← expectInt (← evalExpr n cfg env size)
+      let fillValue ← match fill with
+        | none => pure none
+        | some e => do pure (some (← evalExpr n cfg env e))
+      let len ← lengthLoc l
+      let size := wrap .i64 size
+      if size < 0 then abortAt .resizeNegative org
+      else if size.toNat < len then
+        truncateLoc l size.toNat
+        pure (.normal .unit)
+      else if size.toNat == len then pure (.normal .unit)
+      else match fillValue with
+        | none => abortAt .resizeFill org
+        | some value => do
+          checkAppendCapacity l (size.toNat - len) org
+          let _ ← appendLoc l (Array.replicate (size.toNat - len) value)
+          pure (.normal .unit)
+    | .clear owner _ => do
+      let l ← evalPlace n cfg env owner
+      truncateLoc l 0
+      pure (.normal .unit)
+    | .assignWhole owner replacement _ => do
+      let l ← evalPlace n cfg env owner
+      truncateLoc l 0
+      let value ← evalExpr n cfg env replacement
+      match value with
+      | .resizable .. => writeLoc l value
+      | _ => fault .shape
       pure (.normal .unit)
     | .ifS c t f _ => do
       let branch ← expectBool (← evalExpr n cfg env c)

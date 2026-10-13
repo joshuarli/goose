@@ -67,6 +67,7 @@ def stageRejections (m : Module) : List Rejection :=
     ++ m.impls.toList.flatMap (fun i => err (checkImpl m i))
     ++ m.contexts.toList.flatMap (fun c => err (checkContext m c))
     ++ (List.range m.globals.size).flatMap (fun g => err (checkInitRoots m g))
+    ++ err (checkModuleDemand m)
 
 /-- Rule `r` holds of the module: no stage rejects it for `r`. `V-MUT` and the
 mutability half of `V-CALL` are decided inside the typing stage, the root half

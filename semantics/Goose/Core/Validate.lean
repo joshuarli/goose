@@ -1,4 +1,4 @@
-import Goose.Core.Roots
+import Goose.Core.Demand
 
 /-!
 `validate`: the independent check that a module is safe to run.
@@ -30,5 +30,6 @@ def validate (m : Module) : V Unit := do
   forAll m.impls.toList (checkImpl m)
   forAll m.contexts.toList (checkContext m)
   forAll (List.range m.globals.size) (checkInitRoots m)
+  checkModuleDemand m
 
 end Goose.Core
