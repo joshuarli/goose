@@ -29,9 +29,43 @@ def penv : PEnv := ⟨module, caller, context, [0]⟩
   | .error error => error.rule == .root
   | .ok _ => false
 
-example (env : Env) : ¬ ArgumentRootDeclarations module tenv env [[.global 0]] := by
+example (env : Env) : ¬ ArgumentRootDeclarations module caller tenv env [[.global 0]] := by
   intro declarations
   have missing := declarations 0 (.global 0) (by simp)
   simpa [module] using missing
+
+example (env : Env) : ArgumentRootDeclarations module caller tenv env [[.param 0]] := by
+  intro i q member
+  cases i with
+  | zero =>
+    have equal : q = .param 0 := by simpa using member
+    subst q
+    change 0 < caller.params.size
+    decide
+  | succ i => simp at member
+
+example (env : Env) : ¬ ArgumentRootDeclarations module caller tenv env [[.param 1]] := by
+  intro declarations
+  have bound := declarations.paramIndex (i := 0) (j := 1) (by simp)
+  simp [caller] at bound
+
+#guard match checkAnnotationShape module caller { context with varRoots := [(0, [.param 1])] } with
+  | .error error => error.rule == .root
+  | .ok _ => false
+#guard match checkContentShape module caller { context with contentRoots := [(0, [.param 0])] } with
+  | .ok _ => true
+  | .error _ => false
+#guard match checkContentShape module caller { context with contentRoots := [(0, [.param 1])] } with
+  | .error error => error.rule == .root
+  | .ok _ => false
+
+#guard match checkResultShape module { caller with results := #[.slice .mutable .bool] }
+    { context with resultRoots := [[.param 0]] } with
+  | .ok _ => true
+  | .error _ => false
+#guard match checkResultShape module { caller with results := #[.slice .mutable .bool] }
+    { context with resultRoots := [[.param 1]] } with
+  | .error error => error.rule == .result
+  | .ok _ => false
 
 end Goose.Core.Sound.ArgumentRootsChecks

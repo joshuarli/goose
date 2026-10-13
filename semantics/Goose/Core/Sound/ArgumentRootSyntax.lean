@@ -97,16 +97,16 @@ theorem checkResultShape_paramIndex {m : Module} {impl : Impl} {ctx : Context}
           dsimp [reject] at root
           cases root
 
-private def RootDeclaration (m : Module) (env : Env) (visible : List VarId) :
+private def RootDeclaration (m : Module) (impl : Impl) (env : Env) (visible : List VarId) :
     RootRef → Prop
   | .global g => ∃ gl, m.globals[g]? = some gl
   | .local x => ∀ lv si, env.vars[x]? = some lv →
       env.scopes.lookup lv.scope = some si → lv.ty.isRefLike = true → x ∈ visible
-  | .param _ => True
+  | .param j => j < impl.params.size
 
-private def RootListDeclarations (m : Module) (env : Env) (visible : List VarId)
+private def RootListDeclarations (m : Module) (impl : Impl) (env : Env) (visible : List VarId)
     (roots : List RootRef) : Prop :=
-  ∀ q, q ∈ roots → RootDeclaration m env visible q
+  ∀ q, q ∈ roots → RootDeclaration m impl env visible q
 
 private structure SourceVisibility (source : TEnv) (env : Env) (current : TEnv) : Prop where
   currentMod : current.mod = source.mod
@@ -158,11 +158,11 @@ private theorem SourceVisibility.forExprEnv {source : TEnv} {env : Env} {current
   exact ⟨view.currentMod, view.sourceVars, view.currentVars, view.sourceScopes,
     view.openScopes, view.visible⟩
 
-private theorem localRootDeclaration_ofVisible {m : Module} {source : TEnv}
+private theorem localRootDeclaration_ofVisible {m : Module} {impl : Impl} {source : TEnv}
     {env : Env} {current : TEnv} {x : VarId} {lv : LocalVar}
     (view : SourceVisibility source env current)
     (lookup : current.vars[x]? = some lv) (visible : x ∈ current.visible) :
-    RootDeclaration m env source.visible (.local x) := by
+    RootDeclaration m impl env source.visible (.local x) := by
   intro row scope rowLookup scopeLookup _
   have currentLookup : current.vars[x]? = some row := by
     simpa [view.currentVars] using rowLookup
@@ -189,7 +189,7 @@ private theorem placeVar_rootsDeclared {m : Module} {source current : TEnv} {env
     (view : SourceVisibility source env current)
     (typed : tyPlace current (.var x) n = .ok (info, n')) :
     ∃ roots, penv.access.placeRoots (.var x) = .ok roots ∧
-      RootListDeclarations m env source.visible roots := by
+      RootListDeclarations m penv.impl env source.visible roots := by
   obtain ⟨visible, lv, lookup, _⟩ := tyPlace_var_visible typed
   have currentLookup : current.vars[x]? = some lv := lookup
   refine ⟨[.local x], ?_, ?_⟩
@@ -207,7 +207,7 @@ private theorem placeGlobal_rootsDeclared {m : Module} {source current : TEnv} {
     (implVars : current.vars = penv.impl.vars)
     (typed : tyPlace current (.global g) n = .ok (info, n')) :
     ∃ roots, penv.access.placeRoots (.global g) = .ok roots ∧
-      RootListDeclarations m env source.visible roots := by
+      RootListDeclarations m penv.impl env source.visible roots := by
   have htype := tyPlace_accessType (tenv := current) (penv := penv)
     (view.currentMod.trans modP) implVars typed
   simp only [PEnv.access, AccessEnv.placeType?] at htype
@@ -270,7 +270,7 @@ private theorem readVar_rootsDeclared {m : Module} {source current : TEnv} {env 
     (typed : tyExpr current (.read (.var x)) n = .ok (ty, n'))
     (replayed : rpExpr penv (.read (.var x)) state = .ok (actual, state')) :
     ∃ roots, penv.access.exprRoots (.read (.var x)) = .ok roots ∧
-      RootListDeclarations m env source.visible roots := by
+      RootListDeclarations m penv.impl env source.visible roots := by
   have hmod : current.mod = penv.mod := view.currentMod.trans modP
   have hvars : current.vars = penv.impl.vars := view.currentVars.trans implVars.symm
   obtain ⟨lv, hvar, roots, hroots, shape⟩ :=
@@ -283,7 +283,7 @@ private theorem readVar_rootsDeclared {m : Module} {source current : TEnv} {env 
     have shapeRoot := checkAnnotationShape_rootDeclaration contextOk.annotationShape hrow member
     cases q with
     | global g => exact shapeRoot
-    | param _ => trivial
+    | param j => exact shapeRoot
     | «local» y =>
       rcases shapeRoot with ⟨target, htarget, hnonref⟩
       intro row si hrowLookup hscope reference
@@ -304,7 +304,7 @@ private theorem readDerefRoots_declared {m : Module} {source current : TEnv} {en
     (typed : tyExpr current (.read (.deref (.read (.var x)))) n = .ok (ty, n'))
     (replayed : rpExpr penv (.read (.deref (.read (.var x)))) state = .ok (actual, state')) :
     ∃ roots, penv.access.exprRoots (.read (.deref (.read (.var x)))) = .ok roots ∧
-      RootListDeclarations m env source.visible roots := by
+      RootListDeclarations m penv.impl env source.visible roots := by
   have hmod : current.mod = penv.mod := view.currentMod.trans modP
   have hvars : current.vars = penv.impl.vars := view.currentVars.trans implVars.symm
   have htype := tyExpr_accessType hmod hvars typed
@@ -334,7 +334,7 @@ private theorem readDerefRoots_declared {m : Module} {source current : TEnv} {en
         have shapeRoot := checkContentShape_rootDeclaration contextOk.contentShape hcont' member
         cases q with
         | global g => exact shapeRoot
-        | param _ => trivial
+        | param j => exact shapeRoot
         | «local» _ => exact False.elim shapeRoot
     · rcases hvalue with ⟨hempty, _, hnotSlice⟩
       have htypeNotSlice : lv.ty.isRefSlice = false := by
@@ -354,7 +354,7 @@ private theorem readExpr_rootsDeclared {m : Module} {source current : TEnv} {env
     (typed : tyExpr current (.read p) n = .ok (ty, n'))
     (replayed : rpExpr penv (.read p) state = .ok (actual, state')) :
     ∃ roots, penv.access.exprRoots (.read p) = .ok roots ∧
-      RootListDeclarations m env source.visible roots := by
+      RootListDeclarations m penv.impl env source.visible roots := by
   cases p with
   | var x =>
     exact readVar_rootsDeclared view modP implVars contextOk typed replayed
@@ -383,37 +383,37 @@ private theorem readExpr_rootsDeclared {m : Module} {source current : TEnv} {env
     · intro q member
       simp at member
 
-private theorem RootListDeclarations.included {m : Module} {env : Env} {visible : List VarId}
+private theorem RootListDeclarations.included {m : Module} {env : Env} {impl : Impl} {visible : List VarId}
     {actual expected : List RootRef}
-    (declarations : RootListDeclarations m env visible expected)
+    (declarations : RootListDeclarations m impl env visible expected)
     (included : RootsIncluded actual expected) :
-    RootListDeclarations m env visible actual := by
+    RootListDeclarations m impl env visible actual := by
   intro q member
   exact declarations q (included q member)
 
-private theorem RootListDeclarations.union {m : Module} {env : Env} {visible : List VarId}
+private theorem RootListDeclarations.union {m : Module} {env : Env} {impl : Impl} {visible : List VarId}
     {left right : List RootRef}
-    (leftDeclarations : RootListDeclarations m env visible left)
-    (rightDeclarations : RootListDeclarations m env visible right) :
-    RootListDeclarations m env visible (unionRoots left right) := by
+    (leftDeclarations : RootListDeclarations m impl env visible left)
+    (rightDeclarations : RootListDeclarations m impl env visible right) :
+    RootListDeclarations m impl env visible (unionRoots left right) := by
   intro q member
   rcases unionRoots_mem _ _ q member with inLeft | inRight
   · exact leftDeclarations q inLeft
   · exact rightDeclarations q inRight
 
-private theorem RootListDeclarations.append {m : Module} {env : Env} {visible : List VarId}
+private theorem RootListDeclarations.append {m : Module} {env : Env} {impl : Impl} {visible : List VarId}
     {left right : List RootRef}
-    (leftDeclarations : RootListDeclarations m env visible left)
-    (rightDeclarations : RootListDeclarations m env visible right) :
-    RootListDeclarations m env visible (left ++ right) := by
+    (leftDeclarations : RootListDeclarations m impl env visible left)
+    (rightDeclarations : RootListDeclarations m impl env visible right) :
+    RootListDeclarations m impl env visible (left ++ right) := by
   intro q member
   rcases List.mem_append.1 member with inLeft | inRight
   · exact leftDeclarations q inLeft
   · exact rightDeclarations q inRight
 
 private theorem RootListDeclarations.ofIncludedEmpty {m : Module} {env : Env}
-    {visible : List VarId} {actual : List RootRef}
-    (included : RootsIncluded actual []) : RootListDeclarations m env visible actual := by
+    {impl : Impl} {visible : List VarId} {actual : List RootRef}
+    (included : RootsIncluded actual []) : RootListDeclarations m impl env visible actual := by
   intro q member
   have impossible := included q member
   simp at impossible
@@ -422,21 +422,21 @@ private theorem emptyExprReplayDeclared {m : Module} {source : TEnv} {env : Env}
     {penv : PEnv} {e : Expr} {state : RState} {actual : List RootRef} {state' : RState}
     (replayed : rpExpr penv e state = .ok (actual, state'))
     (empty : penv.access.exprRoots e = .ok []) :
-    RootListDeclarations m env source.visible actual :=
+    RootListDeclarations m penv.impl env source.visible actual :=
   RootListDeclarations.ofIncludedEmpty (rpExpr_accessRoots penv e state actual state' [] replayed empty)
 
-private theorem ArgumentRootDeclarations.row {m : Module} {tenv : TEnv} {env : Env}
+private theorem ArgumentRootDeclarations.row {m : Module} {impl : Impl} {tenv : TEnv} {env : Env}
     {ars : List (List RootRef)} {i : Nat}
-    (declarations : ArgumentRootDeclarations m tenv env ars) :
-    RootListDeclarations m env tenv.visible (ars[i]?.getD []) := by
+    (declarations : ArgumentRootDeclarations m impl tenv env ars) :
+    RootListDeclarations m impl env tenv.visible (ars[i]?.getD []) := by
   intro q member
   exact declarations i q member
 
-private theorem ArgumentRootDeclarations.cons {m : Module} {tenv : TEnv} {env : Env}
+private theorem ArgumentRootDeclarations.cons {m : Module} {impl : Impl} {tenv : TEnv} {env : Env}
     {head : List RootRef} {tail : List (List RootRef)}
-    (headDeclarations : RootListDeclarations m env tenv.visible head)
-    (tailDeclarations : ArgumentRootDeclarations m tenv env tail) :
-    ArgumentRootDeclarations m tenv env (head :: tail) := by
+    (headDeclarations : RootListDeclarations m impl env tenv.visible head)
+    (tailDeclarations : ArgumentRootDeclarations m impl tenv env tail) :
+    ArgumentRootDeclarations m impl tenv env (head :: tail) := by
   intro i q member
   cases i with
   | zero => exact headDeclarations q (by simpa using member)
@@ -448,7 +448,7 @@ private theorem readVar_replayRootsDeclared {m : Module} {env : Env} {source : T
     (contextOk : CtxOk m penv.impl penv.ctx) (implVars : penv.impl.vars = env.vars)
     (lookup : penv.impl.vars[x]? = some lv) (refLike : lv.ty.isRefLike = true)
     (replayed : rpExpr penv (.read (.var x)) state = .ok (actual, state')) :
-    RootListDeclarations m env source.visible actual := by
+    RootListDeclarations m penv.impl env source.visible actual := by
   simp only [rpExpr] at replayed
   rcases (st_bind_ok _ _ _ _).1 replayed with ⟨placeRoots, state1, hplace, hrest⟩
   rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, state2, _, hread⟩
@@ -462,7 +462,7 @@ private theorem readVar_replayRootsDeclared {m : Module} {env : Env} {source : T
     have shapeRoot := checkAnnotationShape_rootDeclaration contextOk.annotationShape annotation member
     cases q with
     | global g => exact shapeRoot
-    | param _ => trivial
+    | param j => exact shapeRoot
     | «local» y =>
       rcases shapeRoot with ⟨target, targetLookup, targetNonRef⟩
       intro row si rowLookup scopeLookup reference
@@ -614,7 +614,7 @@ private theorem placeRoots_replayDeclared {m : Module} {source current : TEnv} {
     (contextOk : CtxOk m penv.impl penv.ctx) (moduleOk : ModOk m)
     (typed : tyPlace current p n = .ok (info, n'))
     (replayed : rpPlace penv p state = .ok (actual, state')) :
-    RootListDeclarations m env source.visible actual := by
+    RootListDeclarations m penv.impl env source.visible actual := by
   cases p with
   | var x =>
     obtain ⟨visible, lv, lookup, _⟩ := tyPlace_var_visible typed
@@ -705,7 +705,7 @@ private theorem viewRoots_replayDeclared {m : Module} {source current : TEnv} {e
     (contextOk : CtxOk m penv.impl penv.ctx) (moduleOk : ModOk m)
     (typed : tyView current vw n = .ok ((el, mu), n'))
     (replayed : rpView penv vw state = .ok (actual, state')) :
-    RootListDeclarations m env source.visible actual := by
+    RootListDeclarations m penv.impl env source.visible actual := by
   cases vw with
   | of p =>
     simp only [tyView, st_bind_ok] at typed
@@ -731,7 +731,7 @@ private theorem exprRoots_replayDeclared {m : Module} {source current : TEnv} {e
     (contextOk : CtxOk m penv.impl penv.ctx) (moduleOk : ModOk m)
     (typed : tyExpr current e n = .ok (ty, n'))
     (replayed : rpExpr penv e state = .ok (actual, state')) :
-    RootListDeclarations m env source.visible actual := by
+    RootListDeclarations m penv.impl env source.visible actual := by
   cases e with
   | lit _ _ =>
     exact emptyExprReplayDeclared replayed (by simp [PEnv.access, AccessEnv.exprRoots]; rfl)
@@ -913,7 +913,7 @@ private theorem blockRoots_replayDeclared {m : Module} {source current : TEnv} {
     (contextOk : CtxOk m penv.impl penv.ctx) (moduleOk : ModOk m)
     (typed : tyBlock (exprEnv current) [] block n = .ok (ty, n'))
     (replayed : rpBlockValue penv [] block state = .ok ((actual, range), state')) :
-    RootListDeclarations m env source.visible actual := by
+    RootListDeclarations m penv.impl env source.visible actual := by
   cases block with
   | mk scope stmts value =>
     cases value with
@@ -957,7 +957,7 @@ private theorem argsRoots_replayDeclared {m : Module} {source current : TEnv} {e
     (lengths : params.length = args.length)
     (typed : tyArgs current callee params args tn = .ok ((), tn'))
     (replayed : rpArgs penv args state = .ok (actual, state')) :
-    ArgumentRootDeclarations m source env actual := by
+    ArgumentRootDeclarations m penv.impl source env actual := by
   cases params with
   | nil =>
     have argsEmpty : args = [] := List.length_eq_zero_iff.mp (by simpa using lengths.symm)
@@ -1010,7 +1010,7 @@ private theorem argsRoots_replayDeclared {m : Module} {source current : TEnv} {e
 termination_by sizeOf args
 
 /-- Replayed call arguments name globals or visible reference holders in the
-caller's declaration frame. -/
+caller's declaration frame, with parameter indices bounded by its implementation. -/
 theorem ArgumentRootDeclarations.ofCallArgs
     {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
     {future : List VarId} {callee : Impl} {args : List Arg} {ars : List (List RootRef)}
@@ -1021,7 +1021,7 @@ theorem ArgumentRootDeclarations.ofCallArgs
     (size : callee.params.size = args.length)
     (typed : tyArgs tenv callee callee.params.toList args tn = .ok ((), tn'))
     (replayed : rpArgs penv args rst = .ok (ars, rst')) :
-    ArgumentRootDeclarations m tenv env ars := by
+    ArgumentRootDeclarations m penv.impl tenv env ars := by
   have view := SourceVisibility.fromFrame frame
   have modP : tenv.mod = penv.mod := frame.mod_t.trans frame.mod_p.symm
   have implVars : tenv.vars = penv.impl.vars := frame.vars_t.trans frame.vars_p.symm
