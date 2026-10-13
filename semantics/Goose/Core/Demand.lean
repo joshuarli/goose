@@ -324,6 +324,9 @@ structure DemandExpectedPoint where
   frame : DemandFrame
   shrinkOwners : List DemandOwner := []
   wholeChecks : List DemandWholeCheck := []
+  /-- Inherited whole-root exclusions for this occurrence, including owners
+  introduced by an enclosing whole assignment's replacement phase. -/
+  forbidden : List DemandOwner := []
 
 def DemandNode.directShrinkPlace? : DemandNode → Option Place
   | .expression (.pop p _) => some p
@@ -1956,7 +1959,8 @@ private def DemandNode.expectedPhase (access : AccessEnv)
         | .error error => throw error
         | .ok wholeChecks => do
           let evidence : DemandExpectedEvidence root access :=
-            ⟨⟨item.path, item.node, phase, frame, shrinkOwners, wholeChecks⟩,
+            ⟨⟨item.path, item.node, phase, frame, shrinkOwners, wholeChecks,
+                item.forbidden⟩,
               item, hphase, rfl, rfl, hframe, hshrink, hwhole⟩
           pure ⟨some evidence, by
             intro _
