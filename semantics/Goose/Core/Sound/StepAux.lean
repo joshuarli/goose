@@ -274,12 +274,13 @@ theorem sliceRefTy_some {env : TEnv} {e : Expr} {ty : Ty} (h : sliceRefTy env e 
   · cases h
 
 /-- Reading a visible variable only to dereference it. -/
-theorem sat_read_var (hF : Frame m W tenv penv env s) {x : VarId} (hx : x ∈ tenv.visible) (k : Nat)
+theorem sat_read_var {future : List VarId} (hF : Frame m W tenv penv env s future)
+    {x : VarId} (hx : x ∈ tenv.visible) (hfuture : x ∈ future) (k : Nat)
     {Q : Val → St → Prop}
     (hq : ∀ lv si v, env.vars[x]? = some lv → env.scopes.lookup lv.scope = some si →
       s.store.roots[RootInst.local env.act si x]? = some v → HasTy m W.G s.store v lv.ty → Q v s) :
     Sat (evalExpr k ⟨prof, m⟩ env (.read (.var x))) s Q := by
-  obtain ⟨lv, si, v, h1, h2, _, h4, h5⟩ := hF.vis x hx hx
+  obtain ⟨lv, si, v, h1, h2, _, h4, h5⟩ := hF.vis x hx hfuture
   cases k with
   | zero => simp only [evalExpr, sat_timeout]
   | succ k =>
