@@ -85,7 +85,8 @@ theorem gam_of_noEnv {P : Nat → RootInst → Prop} {rho : List RootRef} {r : R
 /-- What the binding rule gives: the bound value points into the variable's
 annotation, and into roots that end no earlier than the variable. `chain`
 is the open scopes, which hold the variable's scope. -/
-theorem bind_roots_sem (hF : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar}
+theorem bind_roots_sem {future : List VarId} (hF : Frame m W tenv penv env s future)
+    {x : VarId} {lv : LocalVar}
     {si : ScopeInst} {rho : List RootRef} {v : Val}
     (hb : bindRootsV penv penv.scopes x rho = .ok ()) (hx : env.vars[x]? = some lv)
     (hsi : env.scopes.lookup lv.scope = some si) (hg : ∀ r, Targets v r → Gam env W.P rho r) :
