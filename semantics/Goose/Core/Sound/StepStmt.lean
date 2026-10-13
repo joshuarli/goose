@@ -204,6 +204,208 @@ private theorem statementRebindForbidden {W : World} {env : Env} {s : St}
     cases hvalue
     cases reference
   simp [get_reinsert, hne]
+/- The variable alias and its frame annotation use the same root list, so a
+   checked conflict-free alias cannot point into the selected owner root. -/
+theorem DemandShrinkApproval.variableTarget_ne
+    {m : Module} {owner : Nat} {plan : Array DemandPoint}
+    {approval : DemandShrinkApproval m owner plan}
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
+    {future : List VarId} {o : Loc}
+    {x : VarId} {lv : LocalVar} {si : ScopeInst} {v : Val}
+    (frame : Frame m W tenv penv env s future)
+    (accessEq : approval.access = penv.access)
+    (ownerInvalidates : approval.shrinkOwner.invalidates = true)
+    (ownerRoot : Gam env W.P approval.shrinkOwner.roots o.root)
+    (needed : x ∈ approval.point.future) (active : x ∈ approval.point.active)
+    (variableAt : env.vars[x]? = some lv)
+    (scope : env.scopes.lookup lv.scope = some si)
+    (present : s.store.roots[RootInst.local env.act si x]? = some v)
+    (notSliceRef : lv.ty.isRefSlice = false)
+    (interior : lv.ty.interiorTarget?.isSome = true) :
+    ∀ target, Targets v target → target ≠ o.root := by
+  intro target targeted
+  obtain ⟨annotation, annotationAt, targetIn⟩ :=
+    frame.rooted x lv si v variableAt scope present target targeted
+  have variableP : penv.impl.vars[x]? = some lv := by
+    rw [frame.vars_p]
+    exact variableAt
+  have annotationCtx : (penv.ctx.varRoots.find? (·.1 == x)).map (·.2) = some annotation := by
+    simpa [PEnv.ann] using annotationAt
+  let alias : RetainedAlias := ⟨lv.ty, annotation, .variable x⟩
+  have aliasLookup : approval.access.aliasVariable x = .ok (some alias) := by
+    rw [accessEq]
+    simp [AccessEnv.aliasVariable, PEnv.access, variableP, notSliceRef,
+      interior, AccessEnv.variableRoots, annotationCtx, alias]
+    rfl
+  have aliasInterior : alias.ty.interiorTarget?.isSome = true := by
+    simpa [alias] using interior
+  have disjoint := DemandOwner.conflicts_false_disjoint ownerInvalidates aliasInterior
+    (approval.safe.1.1 x needed active alias aliasLookup)
+  exact (Gam.root_ne_of_no_overlap frame disjoint ownerRoot targetIn).symm
+
+/- A reference to a slice variable points at its header, while the checked
+   alias describes the slice contents. The frame's PRef relation connects
+   that header to a demanded slice holder. -/
+theorem Frame.refSliceHeader_ne_of_shrinkApproval
+    {m : Module} {owner : Nat} {plan : Array DemandPoint}
+    {approval : DemandShrinkApproval m owner plan}
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
+    {future : List VarId} {o : Loc} {element : Ty}
+    {x : VarId} {lv : LocalVar} {si : ScopeInst} {mu mu' : Mutability} {sliceElement : Ty}
+    {l : Loc}
+    (frame : Frame m W tenv penv env s future)
+    (accessEq : approval.access = penv.access)
+    (needed : x ∈ approval.point.future) (active : x ∈ approval.point.active)
+    (variableAt : env.vars[x]? = some lv)
+    (scope : env.scopes.lookup lv.scope = some si)
+    (present : s.store.roots[RootInst.local env.act si x]? = some (.ref l))
+    (typeEq : lv.ty = .ref mu (.slice mu' sliceElement))
+    (sliceFlat : sliceElement.flat = true)
+    (ownerLoc : LocTy s.store o (.growshrink element)) :
+    l.root ≠ o.root := by
+  have variableP : penv.impl.vars[x]? = some lv := by
+    rw [frame.vars_p]
+    exact variableAt
+  obtain ⟨aliases, hlookup⟩ :=
+    DemandPointShrinkSafe.aliasVariable_succeeds approval.safe needed active
+  rw [accessEq] at hlookup
+  have content : ∃ roots, penv.cont x = some roots := by
+    cases hcontent : penv.cont x with
+    | some roots => exact ⟨roots, rfl⟩
+    | none =>
+      have contentCtx :
+          (penv.ctx.contentRoots.find? (·.1 == x)).map (·.2) = none := by
+        simpa [PEnv.cont] using hcontent
+      have impossible : False := by
+        rw [PEnv.access] at hlookup
+        simp only [AccessEnv.aliasVariable, variableP, typeEq,
+          Ty.isRefSlice, sliceFlat, if_pos] at hlookup
+        simp [AccessEnv.contentRoots, contentCtx, Except.map, reject] at hlookup
+        cases hlookup
+      exact impossible.elim
+  obtain ⟨roots, contentAt⟩ := content
+  have pref := frame.pref x roots contentAt
+  have annotationAt : penv.ann x = some [.param x] := pref.2.1
+  obtain ⟨annotation, annotationFound, targetIn⟩ :=
+    frame.rooted x lv si (.ref l) variableAt scope present l.root rfl
+  rw [annotationAt] at annotationFound
+  cases annotationFound
+  have parameterTarget : W.P x l.root := by
+    obtain ⟨root, member, denotes⟩ := targetIn
+    simp only [List.mem_singleton] at member
+    cases member
+    exact denotes
+  have holderDemand : W.D l.root sliceElement :=
+    (pref.2.2 lv mu mu' sliceElement variableAt typeEq l.root parameterTarget).1
+  have holderSlice := frame.sa l.root sliceElement holderDemand
+  intro same
+  obtain ⟨value, rootPresent, sliceTy, _⟩ := holderSlice
+  exact locTy_growshrink_root_ne_of_slice (by simpa [same] using rootPresent)
+    sliceTy ownerLoc
+
+/- Typed locals outside the changed holder keep their type across truncation.
+   Interior aliases use the exact mutation approval; owner-header references
+   use preservation of whole-root types. -/
+private theorem Frame.localHasTy_afterGrowshrinkTruncate
+    {m : Module} {owner : Nat} {plan : Array DemandPoint}
+    {approval : DemandShrinkApproval m owner plan}
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
+    {future : List VarId} {o : Loc} {len : Nat} {element : Ty} {ownerType : Ty}
+    {x : VarId} {lv : LocalVar} {si : ScopeInst} {v : Val} {s' : Store}
+    (frame : Frame m W tenv penv env s future)
+    (accessEq : approval.access = penv.access)
+    (ownerTy : approval.shrinkOwner.ty = some ownerType)
+    (resizable : ownerType = .grow element ∨ ownerType = .growshrink element)
+    (ownerRoot : Gam env W.P approval.shrinkOwner.roots o.root)
+    (ownerLoc : LocTy s.store o ownerType)
+    (needed : x ∈ approval.point.future) (active : x ∈ approval.point.active)
+    (variableAt : env.vars[x]? = some lv)
+    (scope : env.scopes.lookup lv.scope = some si)
+    (present : s.store.roots[RootInst.local env.act si x]? = some v)
+    (typed : HasTy m W.G s.store v lv.ty)
+    (htruncate : s.store.truncate o len = .ok s') :
+    HasTy m W.G s' v lv.ty := by
+  have ownerLocGrowshrink : LocTy s.store o (.growshrink element) := by
+    rcases resizable with hgrow | hshrink
+    · cases hgrow
+      exact ownerLoc.grow_to_growshrink
+    · cases hshrink
+      exact ownerLoc
+  have ownerInvalidates : approval.shrinkOwner.invalidates = true := by
+    simp only [DemandOwner.invalidates]
+    rw [ownerTy]
+    rcases resizable with hgrow | hshrink
+    · rw [hgrow]
+    · rw [hshrink]
+  have rootTyLe : RootTyLe s.store s' :=
+    truncate_growshrink_rootTyLe s.store s' o len element ownerLocGrowshrink htruncate
+  have hagree := truncate_except_owner s.store s' o len htruncate
+  have preserveNonref {T : Ty} (h : HasTy m W.G s.store v T)
+      (hnonref : T.isRefLike = false) : HasTy m W.G s' v T := by
+    exact HasTy.agree (P := fun root => root = o.root) hagree
+      (by
+        intro target targeted
+        exact False.elim ((h.not_ref hnonref) (Targets.isRef targeted))) h
+  cases htype : lv.ty with
+  | ref mu target =>
+    have typedRef : HasTy m W.G s.store v (.ref mu target) := by
+      simpa [htype] using typed
+    cases target with
+    | grow _ | growshrink _ | limited _ _ =>
+      cases v with
+      | ref l => exact HasTy.owner_mono rootTyLe (by simp [Ty.ownerElem?]) typedRef
+      | _ => simp [HasTy, Ty.isSlice] at typedRef
+    | slice mu' sliceElement =>
+      cases v with
+      | ref l =>
+        have sliceFlat : sliceElement.flat = true := by
+          have typedShape := typedRef
+          simp only [HasTy] at typedShape
+          rcases typedShape with ⟨_, _, hshape⟩
+          rcases hshape with ⟨href, _, _⟩ | ⟨hslice, _, _⟩
+          · simp [Ty.refTarget] at href
+          · simpa [Ty.isSlice] using hslice
+        have rootAway := Frame.refSliceHeader_ne_of_shrinkApproval frame accessEq
+          needed active variableAt scope present htype sliceFlat ownerLocGrowshrink
+        exact HasTy.agree (P := fun root => root = o.root) hagree (by
+          intro target targeted
+          change l.root = target at targeted
+          subst target
+          exact rootAway) typedRef
+      | _ => simp [HasTy, Ty.refTarget, Ty.isSlice] at typedRef
+    | int _ | bool | arr _ _ | structT _ _ =>
+      cases v with
+      | ref l =>
+        have notSliceRef : lv.ty.isRefSlice = false := by simp [htype, Ty.isRefSlice]
+        have interior : lv.ty.interiorTarget?.isSome = true := by
+          simp [htype, Ty.interiorTarget?, Ty.ownerElem?]
+        have rootAway := DemandShrinkApproval.variableTarget_ne frame accessEq
+          ownerInvalidates ownerRoot needed active variableAt scope present notSliceRef interior
+        exact HasTy.agree hagree rootAway typedRef
+      | _ => simp [HasTy, Ty.refTarget, Ty.isSlice] at typedRef
+    | unit | tuple _ | ref _ _ => simp [HasTy, Ty.refTarget, Ty.isSlice] at typedRef
+  | slice mu elem =>
+    have typedSlice : HasTy m W.G s.store v (.slice mu elem) := by
+      simpa [htype] using typed
+    cases v with
+    | slice l start count =>
+      have notSliceRef : lv.ty.isRefSlice = false := by simp [htype, Ty.isRefSlice]
+      have interior : lv.ty.interiorTarget?.isSome = true := by simp [htype, Ty.interiorTarget?]
+      have rootAway := DemandShrinkApproval.variableTarget_ne frame accessEq
+        ownerInvalidates ownerRoot needed active variableAt scope present notSliceRef interior
+      exact HasTy.agree hagree rootAway typedSlice
+    | _ => simp [HasTy] at typedSlice
+  | unit => exact preserveNonref (by simpa [htype] using typed) (by simp [Ty.isRefLike])
+  | tuple _ =>
+    have impossible : False := by simpa [htype, HasTy] using typed
+    exact impossible.elim
+  | int _ => exact preserveNonref (by simpa [htype] using typed) (by simp [Ty.isRefLike])
+  | bool => exact preserveNonref (by simpa [htype] using typed) (by simp [Ty.isRefLike])
+  | arr _ _ => exact preserveNonref (by simpa [htype] using typed) (by simp [Ty.isRefLike])
+  | grow _ => exact preserveNonref (by simpa [htype] using typed) (by simp [Ty.isRefLike])
+  | growshrink _ => exact preserveNonref (by simpa [htype] using typed) (by simp [Ty.isRefLike])
+  | limited _ _ => exact preserveNonref (by simpa [htype] using typed) (by simp [Ty.isRefLike])
+  | structT _ _ => exact preserveNonref (by simpa [htype] using typed) (by simp [Ty.isRefLike])
 
 private theorem statementChildFacts {plans : Array (Array DemandPoint)}
     {path : List Nat} {st : Stmt}
@@ -440,6 +642,177 @@ private theorem Frame.truncateGrowshrinkSa_of_localOwner
     simpa [hv] using hvalue
   refine ⟨.slice l start count, hrootPost, hpostTy, ?_⟩
   simpa [hv] using htargets
+
+/- Exact checked aliases preserve demanded locals, while whole-root typing
+   preserves storage headers changed by truncation. -/
+theorem Frame.truncateGrowshrinkPreservation
+    {m : Module} {owner : Nat} {plan : Array DemandPoint}
+    {approval : DemandShrinkApproval m owner plan}
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {state : St}
+    {future : List VarId} {shrinking : RootInst → Prop}
+    {s' : Store} {o : Loc} {len : Nat} {element ownerType : Ty}
+    (frame : Frame m W tenv penv env state future)
+    (accessEq : approval.access = penv.access)
+    (ownerTy : approval.shrinkOwner.ty = some ownerType)
+    (resizable : ownerType = .grow element ∨ ownerType = .growshrink element)
+    (ownerRoot : Gam env W.P approval.shrinkOwner.roots o.root)
+    (ownerLoc : LocTy state.store o ownerType)
+    (visibleActive : ∀ x, x ∈ tenv.visible → x ∈ approval.point.active)
+    (futureNeeded : ∀ x, x ∈ future → x ∈ approval.point.future)
+    (profile : m.profile = .shrink)
+    (hprotected : ShrinkProtected W.D W.A shrinking)
+    (authority : shrinking o.root ∨
+      ∃ a si x, o.root = .local a si x ∧ W.base ≤ si)
+    (htruncate : state.store.truncate o len = .ok s') :
+    Frame m W tenv penv env { state with store := s' } future ∧
+      Footprint (insts env) (Dset W) state { state with store := s' } ∧
+      PilotStoreLe m state { state with store := s' } := by
+  have ownerGS : LocTy state.store o (.growshrink element) := by
+    rcases resizable with hg | hs
+    · cases hg; exact ownerLoc.grow_to_growshrink
+    · cases hs; exact ownerLoc
+  have rootTypes := truncate_growshrink_rootTyLe state.store s' o len element ownerGS htruncate
+  have agree := truncate_except_owner state.store s' o len htruncate
+  obtain ⟨oldRoot, oldValue, newValue, newRoot, oldAt, oldGet, _, _, _⟩ :=
+    modify_spec state.store s' o (Val.truncate len) htruncate
+  have oldNonref : ¬ IsRef oldRoot := by
+    obtain ⟨es, ownerRead, _⟩ := truncate_growshrink_shape state.store s' o len element ownerGS htruncate
+    obtain ⟨root, rootAt, rootGet⟩ := (read_ok_iff _ _ _).1 ownerRead
+    rw [oldAt] at rootAt
+    cases rootAt
+    cases oldRoot <;> simp only [IsRef] <;> try trivial
+    all_goals cases hpath : o.path <;> simp [Val.get?, Val.children?, Val.elems?, hpath] at rootGet
+  have newNonref : ∀ v, s'.roots[o.root]? = some v → ¬ IsRef v :=
+    fun _ hv => truncate_ownerRoot_nonRef htruncate hv
+  have domain : ∀ (r : RootInst), s'.roots[r]? ≠ none → state.store.roots[r]? ≠ none := by
+    intro r hr
+    by_cases same : r = o.root
+    · subst r; rw [oldAt]; simp
+    · rw [agree r same] at hr; exact hr
+  have localTyped : ∀ (x : VarId) (lv : LocalVar) (si : ScopeInst) (v : Val), x ∈ tenv.visible → x ∈ future →
+      env.vars[x]? = some lv → env.scopes.lookup lv.scope = some si →
+      state.store.roots[RootInst.local env.act si x]? = some v →
+      HasTy m W.G state.store v lv.ty → HasTy m W.G s' v lv.ty := by
+    intro x lv si v hv hf hvar hscope hvalue ht
+    exact Frame.localHasTy_afterGrowshrinkTruncate frame accessEq ownerTy resizable
+      ownerRoot ownerLoc (futureNeeded x hf) (visibleActive x hv) hvar hscope hvalue ht htruncate
+  have inv : StoreInvAt m W.G env tenv.visible future { state with store := s' } := by
+    apply StoreInv.except frame.inv agree
+    · intro r v hd _ hv _
+      cases r with
+      | global g =>
+        have hn := frame.inv.globalNonRefs g v hv
+        cases v <;> simp_all [Held, IsRef]
+      | «local» a si x =>
+        rcases hd with ⟨ha, hvis, hf, lv, hvar, hscope⟩
+        subst a
+        obtain ⟨lv', si', v', hvar', hscope', _, hv', ht⟩ := frame.vis x hvis hf
+        rw [hvar] at hvar'; cases hvar'
+        rw [hscope] at hscope'; cases hscope'
+        rw [hv] at hv'; cases hv'
+        exact (localTyped x lv si v hvis hf hvar hscope hv ht).held
+    · intro r v _ same hv
+      have hn := newNonref v (by simpa [same] using hv)
+      cases v <;> simp_all [Held, IsRef]
+    · intro r v same hv target ht
+      exact False.elim ((newNonref v (by simpa [same] using hv)) ht.isRef)
+    · intro a si x _ hv
+      exact frame.inv.fresh a si x (domain _ hv)
+    · intro g gl _ hg hgl
+      exact rootTypes _ _ (frame.inv.globals g gl hg hgl)
+    · intro g v same hv
+      exact newNonref v (by simpa [same] using hv)
+    · intro g v same hv
+      have source : state.store.roots[RootInst.global g]? = some oldRoot := by
+        simpa [same] using oldAt
+      rcases frame.inv.globalStorageDomain g oldRoot source with declared | ⟨T, flat, typed⟩
+      · exact Or.inl declared
+      · obtain ⟨new, hread, htyped⟩ := rootTypes (.global g) T
+          ⟨oldRoot, by simp [Store.read, source, Val.get?], typed⟩
+        have readValue : s'.read ⟨.global g, []⟩ = .ok v := by
+          simp [Store.read, hv, Val.get?]
+        rw [readValue] at hread
+        cases hread
+        exact Or.inr ⟨T, flat, htyped⟩
+  have sa : ∀ holder elem, W.D holder elem →
+      ∃ v, s'.roots[holder]? = some v ∧ HasTy m W.G s' v (.slice .mutable elem) ∧
+        ∀ target, Targets v target → W.A holder target := by
+    rcases authority with hmay | ⟨a, si, x, heq, hbase⟩
+    · exact frame.truncateGrowshrinkSa_of_mayShrink hprotected hmay ownerGS htruncate
+    · intro holder elem hd
+      obtain ⟨v, hv, ht, htargets⟩ := frame.sa holder elem hd
+      have holderNe : holder ≠ o.root := by
+        intro he; exact locTy_growshrink_root_ne_of_slice (by simpa [he] using hv) ht ownerGS
+      obtain ⟨l, start, count, rfl, hflat, hslice⟩ := ht
+      have rootNe : l.root ≠ o.root := by
+        intro he
+        obtain ⟨ha, hs, hx, hholder, hbefore⟩ := frame.dOut holder elem hd
+        have age := frame.aOlder holder l.root (htargets l.root rfl)
+        rw [he, heq, hholder] at age
+        have older : si ≤ hs := age
+        exact (Nat.not_le_of_gt hbefore) (Nat.le_trans hbase older)
+      refine ⟨.slice l start count, ?_,
+        HasTy.slice_truncate_unrelated_root htruncate rootNe ⟨l, start, count, rfl, hflat, hslice⟩,
+        htargets⟩
+      rw [agree holder holderNe]; exact hv
+  refine ⟨{ frame with
+    vis := ?_
+    bindings := ?_
+    storage := ?_
+    rooted := ?_
+    rootedOwners := ?_
+    inv := inv
+    sa := sa }, ?_, ?_⟩
+  · intro x hv hf
+    obtain ⟨lv, si, v, hvar, hscope, hp, hvalue, ht⟩ := frame.vis x hv hf
+    by_cases same : RootInst.local env.act si x = o.root
+    · have hn : lv.ty.isRefLike = false := by
+        cases hb : lv.ty.isRefLike
+        · rfl
+        · have hvo : oldRoot = v := by rw [← same, hvalue] at oldAt; exact (Option.some.inj oldAt).symm
+          exact False.elim (oldNonref (hvo.symm ▸ ht.isRef hb))
+      obtain ⟨v', hv', ht'⟩ := LocTy.hasTyRoot (rootTypes _ _
+        (frame.storage _ _ ⟨x, lv, si, hvar, hscope, rfl, hn, rfl⟩ v hvalue)) hn
+      exact ⟨lv, si, v', hvar, hscope, hp, hv', ht'⟩
+    · exact ⟨lv, si, v, hvar, hscope, hp, by rw [agree _ same]; exact hvalue,
+        localTyped x lv si v hv hf hvar hscope hvalue ht⟩
+  · intro x hv
+    obtain ⟨lv, si, v, hvar, hscope, hp, hvalue, href⟩ := frame.bindings x hv
+    by_cases same : RootInst.local env.act si x = o.root
+    · obtain ⟨v', hv'⟩ := Option.ne_none_iff_exists'.1 (truncate_root_exists _ _ _ _ htruncate)
+      refine ⟨lv, si, v', hvar, hscope, hp, by simpa [same] using hv', ?_⟩
+      intro htype
+      have hvo : oldRoot = v := by rw [← same, hvalue] at oldAt; exact (Option.some.inj oldAt).symm
+      exact False.elim (oldNonref (hvo.symm ▸ href htype))
+    · exact ⟨lv, si, v, hvar, hscope, hp, by rw [agree _ same]; exact hvalue, href⟩
+  · intro r T hs v hv
+    obtain ⟨old, ho⟩ := Option.ne_none_iff_exists'.1 (domain r (by rw [hv]; simp))
+    exact rootTypes r T (frame.storage r T hs old ho)
+  · intro x lv si v hvar hscope hv target ht
+    by_cases same : RootInst.local env.act si x = o.root
+    · exact False.elim ((newNonref v (by simpa [same] using hv)) ht.isRef)
+    · rw [agree _ same] at hv
+      exact frame.rooted x lv si v hvar hscope hv target ht
+  · intro x lv si v hvar hscope hv howner target ht
+    by_cases same : RootInst.local env.act si x = o.root
+    · exact False.elim ((newNonref v (by simpa [same] using hv)) ht.isRef)
+    · rw [agree _ same] at hv
+      exact frame.rootedOwners x lv si v hvar hscope hv howner target ht
+  · refine ⟨Nat.le_refl _, ?_, ?_, domain⟩
+    · intro r v hv href _ _
+      have ne : r ≠ o.root := by
+        intro same; subst r
+        rw [oldAt] at hv; cases hv
+        exact oldNonref href
+      rw [agree r ne]; exact hv
+    · intro r v hv href _ _
+      have ne : r ≠ o.root := by
+        intro same; subst r
+        exact newNonref v hv href
+      rw [agree r ne] at hv; exact hv
+  · intro hp
+    rw [profile] at hp
+    cases hp
 
 private theorem statementModifyPreservesRootTypes {m : Module} {G : Nat}
     {observation : Observation} {source destination : Store} {l : Loc} {target : Ty}
