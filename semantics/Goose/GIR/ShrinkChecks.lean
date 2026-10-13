@@ -183,6 +183,86 @@ private def dependentReplace : Module := mkModule
 
 #guard rejected dependentReplace .v060
 
+private def slotDependentReplace : Func :=
+  { name := "slot-dependent"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[⟨.int .i64, .mutable, 0, 0⟩]
+    scopes := #[none]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
+      .eff (.enter 0), .def 1 (.arrayLen 0), .eff (.slotInit 0 1 (some 0)),
+      .def 2 (.slotAddr 0), .def 3 (.load 2), .eff (.clear 0 (some 1)),
+      .def 4 (.arrLit growTy [3]), .eff (.replace 0 4 (some 2)),
+      .eff (.leave 0), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def slotDependentModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], slotDependentReplace] }
+
+#guard rejected slotDependentModule .v060
+
+private def branchDependentReplace : Func :=
+  { name := "branch-dependent"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[
+      ⟨[(0, .data (.ref .mutable growTy))], [
+        .def 1 (.arrayLen 0), .def 2 (.constInt .i64 0),
+        .def 3 (.cmp .eq .i64 1 2), .eff (.clear 0 (some 0)),
+        .term (.condbr 3 1 [] 2 [])]⟩,
+      ⟨[], [.def 4 (.constInt .i64 10), .def 5 (.arrLit growTy [4]), .term (.br 3 [5])]⟩,
+      ⟨[], [.def 6 (.constInt .i64 20), .def 7 (.arrLit growTy [6]), .term (.br 3 [7])]⟩,
+      ⟨[(8, .data growTy)], [.eff (.replace 0 8 (some 1)), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def branchDependentModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], branchDependentReplace] }
+
+#guard rejected branchDependentModule .v060
+
+private def callGlobalDependentModule : Module :=
+  let init : Func :=
+    { name := "global-init"
+      params := []
+      results := [.int .i64]
+      slots := #[]
+      scopes := #[]
+      blocks := #[⟨[], [.def 0 (.constInt .i64 0), .term (.ret [0] none)]⟩]
+      summary := .unknown
+      org := none }
+  let caller : Func :=
+    { name := "call-global-dependent"
+      params := [.ref .mutable growTy]
+      results := []
+      slots := #[]
+      scopes := #[]
+      blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
+        .def 1 (.call 2 [] (some 1)), .eff (.clear 0 (some 0)),
+        .def 2 (.arrLit growTy [1]), .eff (.replace 0 2 (some 2)), .term (.ret [] none)]⟩]
+      summary := .unknown
+      org := none }
+  let globalReader : Func :=
+    { name := "read-global"
+      params := []
+      results := [.int .i64]
+      slots := #[]
+      scopes := #[]
+      blocks := #[⟨[], [
+        .def 0 (.globalAddr 0), .def 1 (.load 0), .term (.ret [1] none)]⟩]
+      summary := .known ⟨[.global 0], [], [], [], [], false, false⟩
+      org := none }
+  { (mkModule #[] [.term (.ret [] none)]) with
+    globals := #[⟨"source", .int .i64, .mutable, init, 0⟩]
+    funcs := #[mkFunc #[] [.term (.ret [] none)], caller, globalReader] }
+
+#guard rejected callGlobalDependentModule .v060
+
 private def aliasedParameterReplace : Func :=
   { name := "aliased-parameters"
     params := [.ref .mutable growTy, .ref .mutable growTy]
