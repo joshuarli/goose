@@ -605,18 +605,47 @@ theorem rp_rebinds_mono_all :
     pmr
   all_goals (intros; (try cases ‹Option Expr›); (try cases ‹Option Block›); simp only [rpPlace, rpView, rpExpr, rpExprs, rpBlockValue, rpStmts, rpStmt, rpPrintArgs, rpArgs, rpBound, bindRoots, checkResult]; pmr)
 
+theorem rpPlace_rebinds_mono {env : PEnv} {p : Place} {st st' : RState} {a : List RootRef}
+    (h : rpPlace env p st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.1 env p _ _ _ h
+
+theorem rpView_rebinds_mono {env : PEnv} {v : View} {st st' : RState} {a : List RootRef}
+    (h : rpView env v st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.1 env v _ _ _ h
+
 theorem rpExpr_rebinds_mono {env : PEnv} {e : Expr} {st st' : RState} {a : List RootRef}
     (h : rpExpr env e st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
   rp_rebinds_mono_all.2.2.1 env e _ _ _ h
+
+theorem rpExprs_rebinds_mono {env : PEnv} {es : List Expr} {st st' : RState} {a : Unit}
+    (h : rpExprs env es st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.2.2.1 env es _ _ _ h
 
 theorem rpBlockValue_rebinds_mono {env : PEnv} {pre : List VarId} {b : Block}
     {st st' : RState} {a : List RootRef × (Nat × Nat)}
     (h : rpBlockValue env pre b st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
   rp_rebinds_mono_all.2.2.2.2.1 env pre b _ _ _ h
 
+theorem rpStmts_rebinds_mono {env : PEnv} {ss : List Stmt} {st st' : RState} {a : Unit}
+    (h : rpStmts env ss st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.2.2.2.2.1 env ss _ _ _ h
+
 theorem rpStmt_rebinds_mono {env : PEnv} {x : Stmt} {st st' : RState} {a : Unit}
     (h : rpStmt env x st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
   rp_rebinds_mono_all.2.2.2.2.2.2.1 env x _ _ _ h
+
+theorem rpPrintArgs_rebinds_mono {env : PEnv} {args : List PrintArg} {st st' : RState}
+    {a : Unit} (h : rpPrintArgs env args st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.2.2.2.2.2.2.1 env args _ _ _ h
+
+theorem rpArgs_rebinds_mono {env : PEnv} {args : List Arg} {st st' : RState}
+    {a : List (List RootRef)} (h : rpArgs env args st = .ok (a, st')) :
+    RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.2.2.2.2.2.2.2.1 env args _ _ _ h
+
+theorem rpBound_rebinds_mono {env : PEnv} {b : Bound} {st st' : RState} {a : Unit}
+    (h : rpBound env b st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.2.2.2.2.2.2.2.2 env b _ _ _ h
 
 /-! ### Helpers of the typing pass -/
 
