@@ -173,6 +173,74 @@ private def replaceModule (clearFirst : Bool) : Module := mkModule
 #guard returned (replaceModule true) "1\n"
 #guard rejected (replaceModule false) .v060
 
+private def phiClearReplace (mutateAlias : Bool := false) : Func :=
+  { name := "phi-clear-replace"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[
+      ⟨[(0, .data (.ref .mutable growTy))], [
+        .def 1 (.constBool true), .eff (.clear 0 (some 0)),
+        .term (.condbr 1 1 [0] 1 [0]) ]⟩,
+      ⟨[(2, .data (.ref .mutable growTy))],
+        (if mutateAlias then [
+          .def 3 (.constInt .i64 7), .def 4 (.push 2 3 (some 1)),
+          .def 5 (.arrLit growTy []), .eff (.replace 2 5 (some 2)), .term (.ret [] none)]
+        else [
+          .def 3 (.arrLit growTy []), .eff (.replace 2 3 (some 1)), .term (.ret [] none)])⟩]
+    summary := .unknown
+    org := none }
+
+private def phiClearReplaceModule (mutateAlias : Bool := false) : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], phiClearReplace mutateAlias] }
+
+#guard accepted (phiClearReplaceModule false)
+#guard rejected (phiClearReplaceModule true) .v060
+
+private def phiMixedClearReplace : Func :=
+  { name := "phi-mixed-clear-replace"
+    params := [.ref .mutable growTy, .ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[
+      ⟨[(0, .data (.ref .mutable growTy)), (2, .data (.ref .mutable growTy))], [
+        .def 1 (.constBool true), .eff (.clear 0 (some 0)),
+        .term (.condbr 1 1 [0] 1 [2]) ]⟩,
+      ⟨[(3, .data (.ref .mutable growTy))], [
+        .def 4 (.arrLit growTy []), .eff (.replace 3 4 (some 1)), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def phiMixedClearReplaceModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], phiMixedClearReplace] }
+
+#guard rejected phiMixedClearReplaceModule .v060
+
+private def loopClearReplace : Func :=
+  { name := "loop-clear-replace"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[
+      ⟨[(0, .data (.ref .mutable growTy))], [
+        .def 1 (.constBool true), .eff (.clear 0 (some 0)), .term (.br 1 [0])]⟩,
+      ⟨[(2, .data (.ref .mutable growTy))], [.term (.condbr 1 2 [2] 1 [2])]⟩,
+      ⟨[(3, .data (.ref .mutable growTy))], [
+        .def 4 (.arrLit growTy []), .eff (.replace 3 4 (some 1)), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def loopClearReplaceModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], loopClearReplace] }
+
+#guard accepted loopClearReplaceModule
+
 private def dependentReplace : Module := mkModule
   #[⟨growTy, .mutable, 0, 0⟩] [
     .eff (.enter 0), .def 0 (.constInt .i64 1), .def 1 (.arrLit growTy [0]),
