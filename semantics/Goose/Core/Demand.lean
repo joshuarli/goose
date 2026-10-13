@@ -2710,6 +2710,63 @@ theorem DemandExpectedSourceAt.placeWholeRootsRequest
   rw [← hwholeList]
   exact List.mem_map.mpr ⟨forbiddenOwner, forbidden, rfl⟩
 
+/-- A checked call occurrence records every effect owner queried for its
+inherited forbidden roots. -/
+theorem DemandExpectedSourceAt.callWholeRootsRequests
+    {m owner path callContext args origin expected access forbiddenOwner}
+    (sourceAt : DemandExpectedSourceAt m owner path
+      (.expression (.call callContext args origin)) .mutation expected)
+    (accessMatches : demandAccess? m owner = some access)
+    (forbiddenMem : forbiddenOwner ∈ expected.forbidden) :
+    ∃ effects, access.callEffectOwners callContext args = .ok effects ∧
+      ∀ effect, effect ∈ effects →
+        ({ forbidden := forbiddenOwner, checkedRoots := effect.roots } : DemandWholeCheck)
+          ∈ expected.wholeChecks := by
+  rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hmemMap : expected ∈ result.entries.map fun entry => entry.expected := by
+    rw [hmap]
+    exact hmem
+  rcases List.mem_map.mp hmemMap with ⟨entry, hentry, heq⟩
+  subst expected
+  have hsetupAccess : demandAccess? m owner = some setup.access := by
+    simp [demandAccess?, hsetup]
+  have haccessEq : setup.access = access :=
+    Option.some.inj (hsetupAccess.symm.trans accessMatches)
+  have hitemNode : entry.item.node = .expression (.call callContext args origin) :=
+    entry.expectedNode.symm.trans hnode
+  have hforbiddenItem : forbiddenOwner ∈ entry.item.forbidden := by
+    rw [← entry.expectedForbidden]
+    exact forbiddenMem
+  have hwhole := entry.wholeRequests
+  cases hforbidden : entry.item.forbidden with
+  | nil => simp [hforbidden] at hforbiddenItem
+  | cons first rest =>
+    have heffectsExists :
+        ∃ effects, setup.access.callEffectOwners callContext args = .ok effects := by
+      cases heffects : setup.access.callEffectOwners callContext args with
+      | error error =>
+        simp [DemandNode.expectedWholeChecks, hitemNode, hphase, hforbidden,
+          heffects, Functor.map, Except.map] at hwhole
+      | ok effects => exact ⟨effects, rfl⟩
+    rcases heffectsExists with ⟨effects, heffectsSetup⟩
+    have heffects : access.callEffectOwners callContext args = .ok effects := by
+      simpa [haccessEq] using heffectsSetup
+    have hwholeList :
+        entry.item.forbidden.flatMap (fun owner =>
+          effects.map fun effect =>
+            { forbidden := owner, checkedRoots := effect.roots }) = entry.expected.wholeChecks := by
+      have hwholeEq := by
+        simpa [DemandNode.expectedWholeChecks, hitemNode, hphase, hforbidden,
+          heffectsSetup, Functor.map, Except.map] using hwhole
+      simpa [hforbidden] using hwholeEq
+    refine ⟨effects, heffects, ?_⟩
+    intro effect heffect
+    rw [← hwholeList]
+    apply List.mem_flatMap.mpr
+    refine ⟨forbiddenOwner, hforbiddenItem, ?_⟩
+    exact List.mem_map.mpr ⟨effect, heffect, rfl⟩
+
 /-- A validated direct mutation has a successful owner query at its exact
 source occurrence. -/
 theorem DemandExpectedSourceAt.directShrinkOwner_result
