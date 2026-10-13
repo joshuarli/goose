@@ -644,13 +644,14 @@ theorem EvaluationContext.child_inputFuture {m plans path node phase}
       | .pilot _ active => child.variables ++ node.visibleForChild active index
       | .shrink _ context =>
         child.variables ++
-          (context.child primary index child childPhase hchild hchildPhase).childFrame.future := by
+          child.phaseFuture childPhase
+            (context.child primary index child childPhase hchild hchildPhase).childFrame.future := by
   cases parent with
   | pilot profile active => rfl
   | shrink profile context =>
     let transition := context.child primary index child childPhase hchild hchildPhase
     change child.variables ++ transition.context.expected.frame.future =
-      child.variables ++ transition.childFrame.future
+      child.variables ++ child.phaseFuture childPhase transition.childFrame.future
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
 
 theorem EvaluationContext.child_outputFuture {m plans path node phase}
@@ -662,37 +663,48 @@ theorem EvaluationContext.child_outputFuture {m plans path node phase}
       match parent with
       | .pilot _ active => child.visibleAfter (node.visibleForChild active index)
       | .shrink _ context =>
-        (context.child primary index child childPhase hchild hchildPhase).childFrame.future := by
+        child.phaseFuture childPhase
+          (context.child primary index child childPhase hchild hchildPhase).childFrame.future := by
   cases parent with
   | pilot profile active => rfl
   | shrink profile context =>
     let transition := context.child primary index child childPhase hchild hchildPhase
-    change transition.context.expected.frame.future = transition.childFrame.future
+    change transition.context.expected.frame.future =
+      child.phaseFuture childPhase transition.childFrame.future
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
 
 theorem EvaluationContext.phase_inputFuture {m plans path node phase}
     (parent : EvaluationContext m plans path node phase)
     (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
     (hphase : DemandNodeHasPhase node targetPhase) :
-    (parent.phase primary targetPhase hphase).inputFuture = parent.inputFuture := by
+    (parent.phase primary targetPhase hphase).inputFuture =
+      match parent with
+      | .pilot _ active => node.variables ++ active
+      | .shrink _ context =>
+        node.variables ++ node.phaseFuture targetPhase context.expected.frame.future := by
   cases parent with
   | pilot profile active => rfl
   | shrink profile context =>
     let transition := context.phase primary targetPhase hphase
     change node.variables ++ transition.context.expected.frame.future =
-      node.variables ++ context.expected.frame.future
+      node.variables ++ node.phaseFuture targetPhase context.expected.frame.future
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
 
 theorem EvaluationContext.phase_outputFuture {m plans path node phase}
     (parent : EvaluationContext m plans path node phase)
     (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
     (hphase : DemandNodeHasPhase node targetPhase) :
-    (parent.phase primary targetPhase hphase).outputFuture = parent.outputFuture := by
+    (parent.phase primary targetPhase hphase).outputFuture =
+      match parent with
+      | .pilot _ active => node.visibleAfter active
+      | .shrink _ context =>
+        node.phaseFuture targetPhase context.expected.frame.future := by
   cases parent with
   | pilot profile active => rfl
   | shrink profile context =>
     let transition := context.phase primary targetPhase hphase
-    change transition.context.expected.frame.future = context.expected.frame.future
+    change transition.context.expected.frame.future =
+      node.phaseFuture targetPhase context.expected.frame.future
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
 
 theorem EvaluationContext.child_accessMatches_iff {m plans path node phase}
