@@ -177,7 +177,7 @@ def ArgContext.AccessMatches {m : Module} {plans : Array (Array DemandPoint)}
 /-- Text keeps the surrounding demand and protection function because it has no child occurrence. -/
 inductive PrintArgContext (m : Module) (plans : Array (Array DemandPoint)) (path : List Nat) : PrintArg → Type
   | text {text : String} (future : List VarId) (retained : List RetainedAlias)
-      (shrinking : (Nat → RootInst → Prop) → RootInst → Prop) :
+      (shrinking : (Nat → RootInst → Prop) → Observation → RootInst → Prop) :
       PrintArgContext m plans path (.text text)
   | expr {e : Expr}
       (context : EvaluationContext m plans path (.expression e) .expression) :
@@ -220,17 +220,17 @@ def PrintArgContext.AccessMatches {m : Module} {plans : Array (Array DemandPoint
 
 def ArgContext.mayShrink {m : Module} {plans : Array (Array DemandPoint)}
     {path : List Nat} {a : Arg} (context : ArgContext m plans path a)
-    (P : Nat → RootInst → Prop) : RootInst → Prop :=
+    (P : Nat → RootInst → Prop) (observation : Observation) : RootInst → Prop :=
   match context with
-  | .byVal context => context.mayShrink P
-  | .byRef context => context.mayShrink P
+  | .byVal context => context.mayShrink P observation
+  | .byRef context => context.mayShrink P observation
 
 def PrintArgContext.mayShrink {m : Module} {plans : Array (Array DemandPoint)}
     {path : List Nat} {a : PrintArg} (context : PrintArgContext m plans path a)
-    (P : Nat → RootInst → Prop) : RootInst → Prop :=
+    (P : Nat → RootInst → Prop) (observation : Observation) : RootInst → Prop :=
   match context with
-  | .text _ _ shrinking => shrinking P
-  | .expr context => context.mayShrink P
+  | .text _ _ shrinking => shrinking P observation
+  | .expr context => context.mayShrink P observation
 
 /-- A statement suffix advances lexical activity without allocating a new path. -/
 def blockSuffixActive {m : Module} {plans : Array (Array DemandPoint)}
@@ -259,6 +259,8 @@ def ContextEff (m : Module) (impl : Impl) (ctx : Context) (E : Eff) : Prop :=
     rpBlockValue ⟨m, impl, ctx, []⟩ [] impl.body
       ⟨impl.params.size, {}⟩ = .ok ((rho, rng), rst) ∧ rst.eff = E
 
+/-! Shrink evaluation carries parameter classification across store changes so
+checked root requests remain tied to their observed owner capabilities. -/
 section Specs
 variable (m : Module) (prof : NumProfile) (plans : Array (Array DemandPoint))
 
@@ -268,18 +270,20 @@ def ExprSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (ty : Ty)
     (rst rst' : RState) (rho : List RootRef),
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyExpr tenv e tn = .ok (ty, tn') → rpExpr penv e rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalExpr n ⟨prof, m⟩ env e) s (fun v s' =>
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧ HasTy m W.G s'.store v ty ∧
-      ∀ r, Targets v r → Gam env W.P rho r)
+      (∀ r, Targets v r → Gam env W.P rho r) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 def BlockValueSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (b : Block)
@@ -287,8 +291,9 @@ def BlockValueSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (ty : Ty)
     (rst rst' : RState) (rho : List RootRef) (rng : Nat × Nat),
     ec.ActiveMatches (exprEnv tenv) → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyBlock (exprEnv tenv) [] b tn = .ok (ty, tn') →
     rpBlockValue penv [] b rst = .ok ((rho, rng), rst') → EffLe rst'.eff W.E →
@@ -296,10 +301,11 @@ def BlockValueSpec (n : Nat) : Prop :=
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧ HasTy m W.G s'.store v ty ∧
-      ∀ r, Targets v r → Gam env W.P rho r)
+      (∀ r, Targets v r → Gam env W.P rho r) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 /-- An argument is typed as the validator types it at a call. -/
 def ArgTy (tenv : TEnv) (a : Arg) (tn : Nat) (ty : Ty) (tn' : Nat) : Prop :=
@@ -318,18 +324,20 @@ def ArgSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (ty : Ty)
     (rst rst' : RState) (rho : List RootRef),
     ac.ActiveMatches tenv → ac.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ac.mayShrink W.P) →
-    ObservedSafe m W (ac.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ac.mayShrink W.P observation) →
+    ObservedSafe m W (ac.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ac.inputFuture →
     ArgTy tenv a tn ty tn' → ArgRp penv a rst rho rst' → EffLe rst'.eff W.E →
     Sat (evalArg n ⟨prof, m⟩ env a) s (fun v s' =>
       Frame m W tenv penv env s' ac.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ac.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ac.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ac.retained ∧
       PilotStoreLe m s s' ∧ HasTy m W.G s'.store v ty ∧
-      ∀ r, Targets v r → Gam env W.P rho r)
+      (∀ r, Targets v r → Gam env W.P rho r) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 def BoundSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (b : Bound)
@@ -337,17 +345,19 @@ def BoundSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (len : Nat) (d : Int)
     (tn tn' : Nat) (rst rst' : RState),
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyBound tenv b tn = .ok ((), tn') → rpBound penv b rst = .ok ((), rst') → EffLe rst'.eff W.E →
     Sat (evalBound n ⟨prof, m⟩ env len d b) s (fun _ s' =>
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
-      PilotStoreLe m s s')
+      PilotStoreLe m s s' ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 def PlaceSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (p : Place)
@@ -355,19 +365,21 @@ def PlaceSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (t : Ty)
     (mu contents : Bool) (rst rst' : RState) (rho : List RootRef),
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyPlace tenv p tn = .ok (⟨t, mu, contents⟩, tn') → rpPlace penv p rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalPlace n ⟨prof, m⟩ env p) s (fun l s' =>
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧
       PlaceOk m W.G W.P penv env s'.store p l t ∧
-      Gam env W.P rho l.root)
+      Gam env W.P rho l.root ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 def ViewSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (v : View)
@@ -375,18 +387,20 @@ def ViewSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (el : Ty)
     (mu : Bool) (rst rst' : RState) (rho : List RootRef),
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyView tenv v tn = .ok ((el, mu), tn') → rpView penv v rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalView n ⟨prof, m⟩ env v) s (fun vw s' =>
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧ ViewOk s'.store vw el ∧
-      Gam env W.P rho vw.loc.root ∧ ViewAliases m W penv env s'.store v vw el)
+      Gam env W.P rho vw.loc.root ∧ ViewAliases m W penv env s'.store v vw el ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 def CallSpec (n : Nat) : Prop :=
   ∀ (G : Nat) (P : Nat → RootInst → Prop) (D : RootInst → Ty → Prop)
@@ -396,8 +410,9 @@ def CallSpec (n : Nat) : Prop :=
     root.OwnerMatches c → ContextEff m impl ctx E →
     m.contexts[c]? = some ctx → m.impls[ctx.impl]? = some impl →
     StoreInv m G s (ObservationDemand observation) →
-    ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P) observation s.store →
-    ShrinkProtected D A (root.mayShrink P) → vals.length = impl.params.size →
+    ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m P D observation s.store) →
+    ShrinkProtected D A (root.mayShrink P observation) → vals.length = impl.params.size →
     (∀ i v, vals[i]? = some v → ∃ lv, impl.vars[i]? = some lv ∧ HasTy m G s.store v lv.ty ∧
       ∀ r, Targets v r → ∃ ann, (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann ∧
         Gam noEnv P ann r) →
@@ -413,12 +428,13 @@ def CallSpec (n : Nat) : Prop :=
       StoreInv m G s' (ObservationDemand observation) ∧
       CallTransition m G observation.roots observation.values
         (fun r => ∃ element, D r element) s s' ∧
-      ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P) observation s'.store ∧
+      ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P observation) observation s'.store ∧
       PilotStoreLe m s s' ∧
       OuterOk m G D A s' ∧
       ((impl.results.toList = [] ∧ v = .unit) ∨
         ∃ t, impl.results.toList = [t] ∧ HasTy m G s'.store v t) ∧
-      ∀ r, Targets v r → ∃ declared, ctx.resultRoots = [declared] ∧ Gam noEnv P declared r)
+      (∀ r, Targets v r → ∃ declared, ctx.resultRoots = [declared] ∧ Gam noEnv P declared r) ∧
+      (m.profile = .shrink → ClassifiedParameters m P D observation s'.store))
 
 def BlockSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (sc : Nat) (stmts : List Stmt) (value : Option Expr)
@@ -426,8 +442,9 @@ def BlockSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv tenv1 tenv2 : TEnv) (penv : PEnv) (env : Env) (s : St)
     (pre : List (VarId × Val)) (tn1 tn2 tn3 : Nat) (ty : Ty) (rst1 rst2 rst3 : RState) (rho : List RootRef) (lo : Nat),
     ec.ActiveMatches tenv1 → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ec.inputFuture → sc ∉ tenv.scopes →
     TSame { tenv with scopes := sc :: tenv.scopes } tenv1 →
     (∀ y, y ∈ tenv1.visible ↔ y ∈ pre.map Prod.fst ∨ y ∈ tenv.visible) →
@@ -447,15 +464,16 @@ def BlockSpec (n : Nat) : Prop :=
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧
-      match fl with
+      (match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
           stmtsDiverge m.noReturn stmts = false
       | .brk => tenv.loops ≠ 0 ∧ stmtsHaveBreak stmts = true
       | .cont => tenv.loops ≠ 0
-      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v)
+      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 def StmtsSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (sc : Nat) (all : List Stmt) (value : Option Expr)
@@ -465,8 +483,9 @@ def StmtsSpec (n : Nat) : Prop :=
     offset ≤ all.length → ss = all.drop offset →
     (∀ x, x ∈ blockSuffixActive bc offset ↔ x ∈ tenv.visible) →
     bc.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (bc.mayShrink W.P) →
-    ObservedSafe m W (bc.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (bc.mayShrink W.P observation) →
+    ObservedSafe m W (bc.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s (blockSuffixFuture bc offset) → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
     lo ≤ rst.nextVar →
     tyStmts tenv sc ss tn = .ok (tenv', tn') → rpStmts penv ss rst = .ok ((), rst') →
@@ -477,14 +496,15 @@ def StmtsSpec (n : Nat) : Prop :=
       FootprintS env (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (bc.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (bc.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store bc.retained ∧
       PilotStoreLe m s s' ∧ TopB env lo rst'.nextVar s' ∧
-      match fl with
+      (match fl with
       | .normal v => v = .unit ∧ stmtsDiverge m.noReturn ss = false
       | .brk => tenv.loops ≠ 0 ∧ stmtsHaveBreak ss = true
       | .cont => tenv.loops ≠ 0
-      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v)
+      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 def StmtSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (st : Stmt)
@@ -492,8 +512,9 @@ def StmtSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (sc : Nat)
     (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ec.inputFuture → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
     lo ≤ rst.nextVar →
     tyStmt tenv sc st tn = .ok (tenv', tn') → rpStmt penv st rst = .ok ((), rst') →
@@ -502,14 +523,15 @@ def StmtSpec (n : Nat) : Prop :=
       Frame m W tenv' penv env s' ec.outputFuture ∧ FootprintS env (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧ TSame tenv tenv' ∧ TopB env lo rst'.nextVar s' ∧
-      match fl with
+      (match fl with
       | .normal _ => st.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ st.hasBreak = true
       | .cont => tenv.loops ≠ 0
-      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v)
+      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 /-- A printed argument is an integer or a boolean. -/
 def PrintTy (tenv : TEnv) (a : PrintArg) (tn tn' : Nat) : Prop :=
@@ -527,25 +549,28 @@ def PrintArgSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat)
     (rst rst' : RState),
     ac.ActiveMatches tenv → ac.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ac.mayShrink W.P) →
-    ObservedSafe m W (ac.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ac.mayShrink W.P observation) →
+    ObservedSafe m W (ac.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ac.inputFuture →
     PrintTy tenv a tn tn' → PrintRp penv a rst rst' → EffLe rst'.eff W.E →
     Sat (execPrintArg n ⟨prof, m⟩ env a) s (fun _ s' =>
       Frame m W tenv penv env s' ac.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ac.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ac.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ac.retained ∧
-      PilotStoreLe m s s')
+      PilotStoreLe m s s' ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 def WhileSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (c : Expr) (body : Block) (origin : OriginId)
     (ec : EvaluationContext m plans path (.statement (.while c body origin)) .statement)
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn1 tn2 : Nat) (bty : Ty) (rst rst1 rst2 : RState) (rhoc rb : List RootRef) (rng : Nat × Nat),
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyExpr tenv c tn = .ok (.bool, tn1) →
     tyBlock { tenv with loops := tenv.loops + 1 } [] body tn1 = .ok (bty, tn2) →
@@ -555,10 +580,11 @@ def WhileSpec (n : Nat) : Prop :=
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl ∧
-      (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true))
+      (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 /-- Iteration consumes sampled bounds and retains the body and enclosing continuation. -/
 def RangeSpec (n : Nat) : Prop :=
@@ -567,8 +593,9 @@ def RangeSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (t : IntTy) (i hi : Int)
     (tn1 tn2 : Nat) (bty : Ty) (rst1 rst2 : RState) (rb : List RootRef) (rng : Nat × Nat),
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s (body.variables ++ ec.outputFuture) →
     (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope ∧ lv.ty = .int t) → x < rst1.nextVar →
     tyBlock { tenv with loops := tenv.loops + 1, visible := x :: tenv.visible } [] body tn1 =
@@ -579,9 +606,10 @@ def RangeSpec (n : Nat) : Prop :=
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
-      PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl)
+      PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 /-- The source view identifies the checked loop occurrence; the runtime view
 carries its iteration cursor and the owner's current typing. -/
@@ -592,8 +620,9 @@ def EachSpec (n : Nat) : Prop :=
     (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (vw : ViewVal) (i : Nat) (el : Ty) (rho : List RootRef)
     (tn1 tn2 : Nat) (bty : Ty) (rst1 rst2 : RState) (rb : List RootRef) (rng : Nat × Nat),
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
-    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+    ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
     Perm m W → Frame m W tenv penv env s (body.variables ++ ec.outputFuture) →
     EachViewOk s.store vw el → ViewAliases m W penv env s.store sourceView vw el →
     Gam env W.P rho vw.loc.root →
@@ -612,9 +641,10 @@ def EachSpec (n : Nat) : Prop :=
       Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
-      PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl)
+      PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
 
 /-- Every evaluation function at fuel `n` meets its statement. -/
 structure Specs (n : Nat) : Prop where
@@ -656,7 +686,9 @@ structure ImplOk (m : Module) (impl : Impl) : Prop where
       ∃ t, impl.results.toList = [t] ∧ (impl.body.value.isSome = true → bodyTy = t) ∧
         (impl.body.value.isSome = false → impl.body.diverges m.noReturn = true))
 
+/-- Accepted contexts retain the exact annotation check needed to classify call roots. -/
 structure CtxOk (m : Module) (impl : Impl) (ctx : Context) : Prop where
+  annotationShape : checkAnnotationShape m impl ctx = .ok ()
   paramAnn : ∀ (i : Nat) (ann : List RootRef), i < impl.params.size →
     (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann →
     ∀ q, q ∈ ann → q = .param i ∨ ∃ g, q = .global g
