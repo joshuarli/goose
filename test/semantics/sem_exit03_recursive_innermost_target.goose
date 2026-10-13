@@ -1,3 +1,4 @@
+// core-pilot: legacy-only
 // The helper exits from the innermost active descend call. Its caller and
 // the next outer activation resume and use their own still-live locals.
 fn leave(n: i64) {

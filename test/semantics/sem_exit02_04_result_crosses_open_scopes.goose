@@ -1,3 +1,4 @@
+// core-pilot: legacy-only
 // The two intermediate calls own live arrays when the deepest helper
 // returns a nonfixed value from target. Their scopes are removed while the
 // value is delivered into target's result destination.

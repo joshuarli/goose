@@ -8,5 +8,5 @@ fn grow_then_read(values: i64[>..]&) -> i64 {
 fn main() {
     var values: i64[>..] = [5];
     values.push(grow_then_read(values));
-    print(values);
+    print(values[0], " ", values[1], " ", values[2], " ", values.len);
 }
