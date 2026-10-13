@@ -436,8 +436,8 @@ expect_semantics_prefix gir-replace-no-clear 5 '["rejected","GIR-V060",' \
 expect_semantics_prefix gir-replace-alias-growth 5 '["rejected","GIR-V060",' \
     gir-validate "$work/gir-replace-alias-growth.json"
 
-# A literal run is still invalid when one of its values was loaded from the
-# receiver before clearing it.
+# A literal run is invalid when one of its values is loaded from the receiver
+# after clearing it.
 "$jaq" '
     (.[4] | to_entries[] |
         select(.value[0] == "int" and .value[1] == "i64") | (.key | tonumber)) as $i64
@@ -452,11 +452,11 @@ expect_semantics_prefix gir-replace-alias-growth 5 '["rejected","GIR-V060",' \
         | .[6] |= map(
             .[2] |= map(
                 if .[0] == "x_clear" then
+                    .,
                     ["i_snap",$next,"owner",$owner],
                     ["i_int",$next+1,$i64,"0"],
                     ["i_index",$next+2,$next,$next+1,$clear[2]],
-                    ["i_load",$next+3,$next+2],
-                    .
+                    ["i_load",$next+3,$next+2]
                 elif .[0] == "i_arr" and .[1] == $run then
                     .[3] = [$next+3]
                 else . end
