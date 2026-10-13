@@ -354,7 +354,7 @@ private theorem callArgContext_shrinkOutputFuture {plans : Array (Array DemandPo
     have future := DemandNode.childFrame_future transition.childFrameEq expected
     change transition.context.expected.frame.future = _
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
-    simpa [callArgsFuture, NodeContext.outputFuture] using future
+    simpa [callArgsFuture, NodeContext.outputFuture, DemandNode.phaseFuture] using future
   | byRef mu p =>
     let transition := context.child rfl index (.place p) .place
       (by simp [DemandNode.child?, DemandNode.children, harg])
@@ -374,7 +374,7 @@ private theorem callArgContext_shrinkOutputFuture {plans : Array (Array DemandPo
     have future := DemandNode.childFrame_future transition.childFrameEq expected
     change transition.context.expected.frame.future = _
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
-    simpa [callArgsFuture, NodeContext.outputFuture] using future
+    simpa [callArgsFuture, NodeContext.outputFuture, DemandNode.phaseFuture] using future
 
 private theorem sliceHolderVariables_subset (access : AccessEnv) (arg : Arg) {x : VarId}
     (member : x ∈ arg.sliceHolderVariables access) : x ∈ arg.variables := by
