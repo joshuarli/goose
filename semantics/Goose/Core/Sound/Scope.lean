@@ -376,8 +376,7 @@ theorem Frame.outerPreserved {s' : St}
     {future future' : List VarId} (h : Frame m W tenv penv env s future)
     (he : Footprint [] (fun r => ∃ E, D' r E) s s')
     (ht : PreservesRootTypes m W.G
-      (CallerRootTypes W tenv env future') s.store s'.store)
-    (hstorageTypes : PreservesRootTypes m W.G (StorageRootTypes env) s.store s'.store)
+      (CallerRootTypes W tenv env s.store future') s.store s'.store)
     (hi : StoreInvAt m W.G env tenv.visible future' s')
     (hfuture : ∀ x, x ∈ future' → x ∈ future)
     (hsa : ∀ r E, D' r E → ∃ v, s'.store.roots[r]? = some v ∧
@@ -387,6 +386,7 @@ theorem Frame.outerPreserved {s' : St}
         r = RootInst.local env.act si x ∧ lv.ty = .slice mu E ∧
         ∀ t, A' r t → ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann t))
     (hDall : ∀ r E, W.D r E → D' r E) : Frame m W tenv penv env s' future' := by
+  have hstorageTypes := CallerRootTypes.preservesStorage ht
   have hfr : ∀ {x : VarId} {sc si : Nat} {E : Ty}, env.scopes.lookup sc = some si →
       ¬ W.D (RootInst.local env.act si x) E := by
     intro x sc si E hl hd
@@ -401,7 +401,7 @@ theorem Frame.outerPreserved {s' : St}
       intro x hx hfut
       obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx (hfuture x hfut)
       obtain ⟨v', h6, h7⟩ := ht _ lv.ty
-        (Or.inl ⟨x, lv, si, hx, hfut, h1, h2, rfl, rfl⟩) v h4 h5
+        (Or.inl (Or.inl ⟨x, lv, si, hx, hfut, h1, h2, rfl, rfl⟩)) v h4 h5
       exact ⟨lv, si, v', h1, h2, h3, h6, h7⟩
     bindings := by
       intro x hx
