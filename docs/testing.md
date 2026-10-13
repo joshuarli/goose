@@ -347,6 +347,56 @@ The runner checks more than exit status and runtime output:
 | `member_stores.goose` at O1 | Read the generated C: `store_links` stores to fields reached through references that cannot be rebound, with no index on the way, as C member stores rather than through a pointer taken first (`StableDest`); its runs check the stores, and that a right side rebinding the reference on the way still stores where the destination named before it ran (`evaluation_order.goose` has a right side writing the destination itself). |
 | `optimize.goose` at O0/O1/O2 | Inspect named tail-recursion bodies in `--specs`: supported integer accumulator/plain recursion becomes loops; modulo, floating-point reassociation, nonlocal-return frames and returns inside nested loops retain self calls. Mixed operators retain the ineligible call. Leading locals prevent base-case inlining from consuming these cases first. The `gb_` functions count the copies of their first statement: guarded base-case inlining copies the body once per self-call site where the test compares unassigned parameters, UFCS-spelled self-calls included, and not where it reads a global or a node, does arithmetic, or reads an assigned parameter. |
 
+The sharing, report-dependency and units checks are scale qualifications, not
+part of the regular fixture suite. Run them from the repository root after
+building `build/goose`; their scripts keep generated inputs and build state
+under `.work/` by default:
+
+```sh
+python test/scale/share_check.py --goose build/goose
+python test/scale/deps_check.py --goose build/goose
+python test/scale/units_matrix.py --goose build/goose
+python test/scale/units_native.py --goose build/goose
+```
+
+`share_check.py` compares expected emitted implementation counts and runs the
+synthetic programs with sharing enabled. `deps_check.py` edits the synthetic
+family, compares dependency predictions with recomputed result digests, and
+fails if a changed result was not predicted. This is shadow validation; the
+compiler does not reuse checked results from those dependency sets.
+`units_matrix.py` checks object reuse and link behavior across synthetic
+source edits and store conditions. `units_native.py` checks a program with
+its own C header, including header-visible type names and header/body edit
+locality.
+
+For an end-to-end units corpus run, use:
+
+```sh
+python test/scale/units_corpus.py --goose build/goose
+```
+
+That harness emits, compiles, links and runs the eligible fixtures and
+samples in units form at O0 and O2, checks output and abort expectations, and
+also tries O2 with `--share`. It excludes sidecar C and native-layer
+programs, which require the driver's package-link path. `units_native.py`
+uses a small `--include` stand-in and exercises `goose build --units`; it does
+not qualify the package sidecars or a large external program. Those coverage
+gaps must not be inferred as passing from the unit corpus result.
+
+For a direct compiler probe, create the disposable directory first:
+
+```sh
+mkdir -p .work/tmp
+build/goose --check --build-report .work/tmp/report.json test/codegen/evaluation_order.goose
+build/goose --check --build-report .work/tmp/report-deps.json --build-report-deps test/codegen/evaluation_order.goose
+build/goose build --units --verify-reuse -o .work/tmp/evaluation_order test/codegen/evaluation_order.goose
+```
+
+The reports can be inspected as JSON; the first has cost data and no
+dependency extension, while the second includes `extensions.dependencies`.
+The final command drives object compilation, reuse verification and linking.
+These commands show the interfaces, not a measured performance result.
+
 ## Fixture audit
 
 The fixture audit retained the small lifetime, optional-narrowing, alias-cycle,
