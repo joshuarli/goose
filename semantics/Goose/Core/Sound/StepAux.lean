@@ -27,12 +27,13 @@ theorem Frame.of_eq {s' : St} (h : Frame m W tenv penv env s) (h1 : s'.store = s
     vis := by rw [h1]; exact h.vis
     rooted := by rw [h1]; exact h.rooted
     inv := ⟨by rw [h1]; exact h.inv.live, by rw [h1]; exact h.inv.age,
-      by rw [h1, h2]; exact h.inv.fresh, by rw [h1]; exact h.inv.globals⟩ }
+      by rw [h1, h2]; exact h.inv.fresh, by rw [h1]; exact h.inv.globals⟩
+    sa := by rw [h1]; exact h.sa }
 
-theorem Ext.of_eq {is : List Nat} {s s' : St} (h1 : s'.store = s.store)
-    (h2 : s'.nextScope = s.nextScope) : Ext is s s' :=
+theorem Ext.of_eq {is : List Nat} {D : RootInst → Prop} {s s' : St} (h1 : s'.store = s.store)
+    (h2 : s'.nextScope = s.nextScope) : Ext is D s s' :=
   ⟨by rw [h1]; exact StoreLe.refl _, by rw [h2]; exact Nat.le_refl _,
-   fun _ _ h _ _ => by rw [h1]; exact h, fun _ _ h _ _ => by rw [← h1]; exact h,
+   fun _ _ h _ _ _ => by rw [h1]; exact h, fun _ _ h _ _ _ => by rw [← h1]; exact h,
    fun _ h => by rw [← h1]; exact h⟩
 
 /-- A root set with no local denotes the same roots in every activation. -/
@@ -100,18 +101,18 @@ theorem Frame.top (hF : Frame m W tenv penv env s) {sc : Nat} (h : tenv.scopes.h
     exact ⟨si, rest, rfl, by simp [lookup_cons]⟩
 
 /-- Binding a variable of the innermost block, seen from the code around it. -/
-theorem extS_bind {x : VarId} {lv : LocalVar} {si : ScopeInst} {rest : List (Nat × ScopeInst)}
-    {v : Val} (htop : env.scopes = (lv.scope, si) :: rest) (hx : env.vars[x]? = some lv)
+theorem extS_bind {D : RootInst → Prop} {x : VarId} {lv : LocalVar} {si : ScopeInst}
+    {rest : List (Nat × ScopeInst)} {v : Val} (htop : env.scopes = (lv.scope, si) :: rest) (hx : env.vars[x]? = some lv)
     (hfree : s.store.roots[RootInst.local env.act si x]? = none) :
-    ExtS env s { s with store := s.store.introduce (.local env.act si x) v } := by
+    ExtS env D s { s with store := s.store.introduce (.local env.act si x) v } := by
   have hne : ∀ (r : RootInst), s.store.roots[r]? ≠ none → RootInst.local env.act si x ≠ r := by
     rintro r hr rfl; exact hr hfree
   refine ⟨introduce_le _ _ _ hfree, Nat.le_refl _, ?_, ?_, ?_⟩
-  · intro r v' hv' _ _
+  · intro r v' hv' _ _ _
     show (s.store.introduce _ v).roots[r]? = some v'
     rw [get_introduce]
     simp [hne r (by rw [hv']; simp), hv']
-  · intro r v' hv' _ hn
+  · intro r v' hv' _ hn _
     have hv'' : (s.store.introduce (.local env.act si x) v).roots[r]? = some v' := hv'
     rw [get_introduce] at hv''
     by_cases e : RootInst.local env.act si x = r
@@ -145,17 +146,17 @@ theorem topB_bind {x : VarId} {si : ScopeInst} {sc : Nat} {rest : List (Nat × S
     exact ⟨g1, Nat.lt_of_lt_of_le g2 h3⟩
 
 /-- Rebinding a variable of the activation, seen from the code around it. -/
-theorem ext_rebind {x : VarId} {si : ScopeInst} {old v : Val}
+theorem ext_rebind {D : RootInst → Prop} {x : VarId} {si : ScopeInst} {old v : Val}
     (hsi : si ∈ insts env) (ho : s.store.roots[RootInst.local env.act si x]? = some old)
     (hold : IsRef old) :
-    Ext (insts env) s
+    Ext (insts env) D s
       { s with store := ⟨(s.store.roots.erase (.local env.act si x)).insert (.local env.act si x) v⟩ } := by
   refine ⟨rebind_le _ _ old v ho hold, Nat.le_refl _, ?_, ?_, ?_⟩
-  · intro r v' hv' _ hn
+  · intro r v' hv' _ hn _
     have e : ¬ (RootInst.local env.act si x = r) := by
       rintro rfl; exact hn _ _ _ rfl hsi
     simp [get_reinsert, e, hv']
-  · intro r v' hv' _ hn
+  · intro r v' hv' _ hn _
     have e : ¬ (RootInst.local env.act si x = r) := by
       rintro rfl; exact hn _ _ _ rfl hsi
     simpa [get_reinsert, e] using hv'
@@ -203,6 +204,49 @@ theorem sat_readRun_bind {vw : ViewVal} {el : Ty} {f : Array Val → M α} {Q : 
         simp [hn, pure, M.pure']
     simp [M.bind', this]
   unfold Sat; rw [e1]; exact k _ hext
+
+theorem sliceRefTy_some {env : TEnv} {e : Expr} {ty : Ty} (h : sliceRefTy env e = some ty) :
+    ∃ x lv mu0 mu E, e = .read (.var x) ∧ x ∈ env.visible ∧ env.vars[x]? = some lv ∧
+      lv.ty = .ref mu0 (.slice mu E) ∧ E.flat = true ∧ ty = lv.ty := by
+  unfold sliceRefTy at h
+  split at h
+  · rename_i x
+    by_cases hx : x ∈ env.visible
+    · have hx' : env.visible.contains x = true := by simpa using hx
+      simp only [hx', if_true] at h
+      cases hv : env.vars[x]? with
+      | none => simp [hv] at h
+      | some lv =>
+        simp only [hv] at h
+        by_cases hr : lv.ty.isRefSlice = true
+        · simp only [hr, if_true, Option.some.injEq] at h
+          cases hty : lv.ty <;> simp only [hty, Ty.isRefSlice, reduceCtorEq] at hr
+          rename_i mu0 t
+          cases t <;> simp only [Ty.isRefSlice, reduceCtorEq] at hr
+          rename_i mu E
+          exact ⟨x, lv, mu0, mu, E, rfl, hx, hv, hty, hr, by rw [← h, hty]⟩
+        · simp [hr] at h
+    · have hx' : env.visible.contains x = false := by simpa using hx
+      simp only [hx'] at h
+      cases h
+  · cases h
+
+/-- Reading a visible variable only to dereference it. -/
+theorem sat_read_var (hF : Frame m W tenv penv env s) {x : VarId} (hx : x ∈ tenv.visible) (k : Nat)
+    {Q : Val → St → Prop}
+    (hq : ∀ lv si v, env.vars[x]? = some lv → env.scopes.lookup lv.scope = some si →
+      s.store.roots[RootInst.local env.act si x]? = some v → HasTy m W.G s.store v lv.ty → Q v s) :
+    Sat (evalExpr k ⟨prof, m⟩ env (.read (.var x))) s Q := by
+  obtain ⟨lv, si, v, h1, h2, _, h4, h5⟩ := hF.vis x hx
+  cases k with
+  | zero => simp only [evalExpr, sat_timeout]
+  | succ k =>
+    simp only [evalExpr]
+    cases k with
+    | zero => simp only [evalPlace, sat_timeout_bind]
+    | succ k =>
+      simp only [evalPlace, rootOf, h1, h2, sat_pure_bind]
+      exact sat_readRoot h4 (hq lv si v h1 h2 h4 h5)
 
 /-- Opening a block changes no root a static root denotes. -/
 theorem gam_push (hF : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv.scopes) (k : ScopeInst)

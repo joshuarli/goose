@@ -198,6 +198,9 @@ structure Context where
   varRoots : List (VarId × List RootRef)
   /-- One root set per result. -/
   resultRoots : List (List RootRef)
+  /-- For a parameter that refers to a slice variable: the roots the slice held
+  in that variable may have. -/
+  contentRoots : List (VarId × List RootRef) := []
   deriving Repr
 
 structure Global where

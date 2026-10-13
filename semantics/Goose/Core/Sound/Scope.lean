@@ -83,7 +83,7 @@ theorem Frame.gam_older (h : Frame m W tenv penv env s) {rho : List RootRef} {r 
 /-- Binding a variable of an open block whose root was absent. -/
 theorem Frame.bind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {si : ScopeInst}
     {v : Val} (hx : env.vars[x]? = some lv) (hsi : env.scopes.lookup lv.scope = some si)
-    (hst : lv.ty.storable = true)
+    (hst : lv.ty.paramOk = true)
     (hfree : s.store.roots[RootInst.local env.act si x]? = none)
     (hv : HasTy m W.G s.store v lv.ty)
     (hroot : ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
@@ -120,7 +120,15 @@ theorem Frame.bind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {
       · simp only [e, if_false] at h3
         exact h.rooted x' lv' si' v' h1 h2 h3 r ht
     inv := h.inv.bind hfree hv.held (fun r ht => (hroot r ht).2)
-      (fun a si' x' e => by cases e; exact (h.inst_lt hsi).2) }
+      (fun a si' x' e => by cases e; exact (h.inst_lt hsi).2)
+    sa := by
+      intro r E hd
+      obtain ⟨v0, h1, h2, h3⟩ := h.sa r E hd
+      refine ⟨v0, ?_, h2.mono hle, h3⟩
+      rw [get_introduce]
+      have hne : ¬ (RootInst.local env.act si x = r) := by
+        rintro rfl; rw [hfree] at h1; cases h1
+      simp [hne, h1] }
 
 /-- Replacing the reference a visible variable holds. -/
 theorem Frame.rebind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar} {si : ScopeInst}
@@ -153,23 +161,129 @@ theorem Frame.rebind (h : Frame m W tenv penv env s) {x : VarId} {lv : LocalVar}
         exact (hroot r ht).1
       · simp only [e, if_false] at h3
         exact h.rooted x' lv' si' v' h1 h2 h3 r ht
-    inv := h.inv.rebind ho hold hv.held (fun r ht => (hroot r ht).2) }
+    inv := h.inv.rebind ho hold hv.held (fun r ht => (hroot r ht).2)
+    sa := by
+      intro r E hd
+      obtain ⟨v0, h1, h2, h3⟩ := h.sa r E hd
+      refine ⟨v0, ?_, h2.mono hle, h3⟩
+      have hne : ¬ (RootInst.local env.act si x = r) := by
+        rintro rfl
+        obtain ⟨a, si', x', e, hlt⟩ := h.dOut _ E hd
+        cases e
+        exact absurd (h.inst_lt hsi).1 (Nat.not_le.2 hlt)
+      simp [get_reinsert, hne, h1] }
 
-/-- A computation that keeps every stored reference, such as a call, keeps the frame. -/
-theorem Frame.outer {s' : St} (h : Frame m W tenv penv env s) (he : Ext [] s s')
-    (hi : StoreInv m W.G s') : Frame m W tenv penv env s' :=
+theorem hasTy_slice_mu {G : Nat} {st : Store} {v : Val} {mu mu' : Mutability} {E : Ty}
+    (h : HasTy m G st v (.slice mu E)) : HasTy m G st v (.slice mu' E) := h
+
+/-- A call keeps the frame: the callee left every stored reference alone,
+except the slices in the slice variables `D'` it was given references to, and
+those it left typed and rooted within what each variable allows. -/
+theorem Frame.outer {s' : St} {D' : RootInst → Ty → Prop} {A' : RootInst → RootInst → Prop}
+    (h : Frame m W tenv penv env s) (he : Ext [] (fun r => ∃ E, D' r E) s s')
+    (hi : StoreInv m W.G s')
+    (hsa : ∀ r E, D' r E → ∃ v, s'.store.roots[r]? = some v ∧
+      HasTy m W.G s'.store v (.slice .mutable E) ∧ ∀ t, Targets v t → A' r t)
+    (hD : ∀ r E, D' r E → (W.D r E ∧ ∀ t, A' r t → W.A r t) ∨
+      (∃ x lv si mu, env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si ∧
+        r = RootInst.local env.act si x ∧ lv.ty = .slice mu E ∧
+        ∀ t, A' r t → ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann t))
+    (hDall : ∀ r E, W.D r E → D' r E) : Frame m W tenv penv env s' := by
+  -- A root of this activation is no slice variable of a caller.
+  have hfr : ∀ {x : VarId} {sc si : Nat} {E : Ty}, env.scopes.lookup sc = some si →
+      ¬ W.D (RootInst.local env.act si x) E := by
+    intro x sc si E hl hd
+    obtain ⟨a, si', x', e, hlt⟩ := h.dOut _ E hd
+    cases e
+    exact absurd (h.inst_lt hl).1 (Nat.not_le.2 hlt)
+  exact
   { h with
     below := fun p hp => ⟨(h.below p hp).1, Nat.lt_of_lt_of_le (h.below p hp).2 he.next⟩
     base_le := Nat.le_trans h.base_le he.next
     vis := by
       intro x hx
       obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx
-      obtain ⟨v', h6, h7⟩ := hasTy_step he.le (fun hr => he.keep _ v h4 hr (by simp)) h3 h4 h5
-      exact ⟨lv, si, v', h1, h2, h3, h6, h7⟩
+      by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
+      · obtain ⟨E, hd⟩ := hd
+        obtain ⟨v', g1, g2, _⟩ := hsa _ E hd
+        rcases hD _ E hd with ⟨k, _⟩ | ⟨x', lv', si', mu, k1, k2, k3, k4, _⟩
+        · exact absurd k (hfr h2)
+        · cases k3
+          rw [h1] at k1; cases k1
+          exact ⟨lv, si, v', h1, h2, h3, g1, by rw [k4]; exact hasTy_slice_mu g2⟩
+      · obtain ⟨v', h6, h7⟩ := hasTy_step he.le (fun hr => he.keep _ v h4 hr (by simp) hd) h3 h4 h5
+        exact ⟨lv, si, v', h1, h2, h3, h6, h7⟩
     rooted := by
       intro x lv si v h1 h2 h3 r ht
-      exact h.rooted x lv si v h1 h2 (he.back _ v h3 ht.isRef (by simp)) r ht
-    inv := hi }
+      by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
+      · obtain ⟨E, hd⟩ := hd
+        obtain ⟨v', g1, _, g3⟩ := hsa _ E hd
+        rw [h3] at g1; cases g1
+        rcases hD _ E hd with ⟨k, _⟩ | ⟨x', lv', si', mu, k1, k2, k3, k4, k5⟩
+        · exact absurd k (hfr h2)
+        · cases k3
+          exact k5 r (g3 r ht)
+      · exact h.rooted x lv si v h1 h2 (he.back _ v h3 ht.isRef (by simp) hd) r ht
+    inv := hi
+    sa := by
+      intro r E hd
+      have hd' := hDall r E hd
+      obtain ⟨v', g1, g2, g3⟩ := hsa r E hd'
+      refine ⟨v', g1, g2, fun t ht => ?_⟩
+      rcases hD r E hd' with ⟨_, k⟩ | ⟨x', lv', si', mu, k1, k2, k3, _⟩
+      · exact k t (g3 t ht)
+      · subst k3; exact absurd hd (hfr k2) }
+
+/-- Replacing the slice a caller's slice variable holds, through a reference
+to it: the frame holds, and the code around sees only that variable change. -/
+theorem Frame.outwrite (h : Frame m W tenv penv env s) {r : RootInst} {E : Ty} {w : Val}
+    (hd : W.D r E) (hw : HasTy m W.G s.store w (.slice .mutable E))
+    (ht : ∀ t, Targets w t → W.A r t) :
+    Frame m W tenv penv env { s with store := ⟨(s.store.roots.erase r).insert r w⟩ } ∧
+    Ext (insts env) (Dset W) s { s with store := ⟨(s.store.roots.erase r).insert r w⟩ } := by
+  obtain ⟨old, ho, hot, _⟩ := h.sa r E hd
+  have hold : IsRef old := by obtain ⟨l, a, b, rfl, _⟩ := hot; trivial
+  have hle := rebind_le s.store r old w ho hold
+  have hne : ∀ {x : VarId} {sc si : Nat}, env.scopes.lookup sc = some si →
+      ¬ (r = RootInst.local env.act si x) := by
+    intro x sc si hl e
+    obtain ⟨a, si', x', e', hlt⟩ := h.dOut r E hd
+    rw [e] at e'
+    cases e'
+    exact absurd (h.inst_lt hl).1 (Nat.not_le.2 hlt)
+  refine ⟨?_, ?_⟩
+  · exact
+    { h with
+      below := h.below, base_le := h.base_le
+      vis := by
+        intro x hx
+        obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx
+        exact ⟨lv, si, v, h1, h2, h3, by simp [get_reinsert, hne h2, h4], h5.mono hle⟩
+      rooted := by
+        intro x lv si v h1 h2 h3 t ht'
+        simp only [get_reinsert, hne h2, if_false] at h3
+        exact h.rooted x lv si v h1 h2 h3 t ht'
+      inv := h.inv.rebind ho hold hw.held (fun t ht' => h.aOlder r t (ht t ht'))
+      sa := by
+        intro r' E' hd'
+        by_cases e : r = r'
+        · subst e
+          have := h.dFun r E E' hd hd'
+          subst this
+          exact ⟨w, by simp [get_reinsert], hw.mono hle, ht⟩
+        · obtain ⟨v0, h1, h2, h3⟩ := h.sa r' E' hd'
+          exact ⟨v0, by simp [get_reinsert, e, h1], h2.mono hle, h3⟩ }
+  · refine ⟨hle, Nat.le_refl _, ?_, ?_, ?_⟩
+    · intro r0 v hv _ _ hnd
+      have e : ¬ (r = r0) := by rintro rfl; exact hnd ⟨E, hd⟩
+      simp [get_reinsert, e, hv]
+    · intro r0 v hv _ _ hnd
+      have e : ¬ (r = r0) := by rintro rfl; exact hnd ⟨E, hd⟩
+      simpa [get_reinsert, e] using hv
+    · intro r0 hr
+      by_cases e : r = r0
+      · subst e; simp [ho]
+      · simpa [get_reinsert, e] using hr
 
 /-- Entering a block: a scope instance no root has yet. -/
 theorem Frame.push (h : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv.scopes) :
@@ -225,7 +339,8 @@ theorem Frame.push (h : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv
         obtain ⟨ann, ha, hg⟩ := h.rooted x lv si v h1 h2' h3 r ht
         exact ⟨ann, ha, hgam _ _ hg⟩
     inv := ⟨h.inv.live, h.inv.age, fun a si x hx => Nat.lt_succ_of_lt (h.inv.fresh a si x hx),
-      h.inv.globals⟩ }
+      h.inv.globals⟩
+    aOlder := h.aOlder, dOut := h.dOut, dFun := h.dFun, sa := h.sa, pref := h.pref }
 
 /-! ### Leaving a block -/
 
@@ -251,8 +366,10 @@ theorem HasTy.agree {v : Val} {T : Ty}
     (hagree : ∀ r, ¬ P r → st'.roots[r]? = st.roots[r]?) (ht : ∀ r, Targets v r → ¬ P r)
     (h : HasTy m G st v T) : HasTy m G st' v T := by
   cases T <;> simp only [HasTy] at h ⊢ <;> try exact h
-  · obtain ⟨l, rfl, h2, h3⟩ := h
-    exact ⟨l, rfl, h2, h3.agree hagree (ht _ rfl)⟩
+  · obtain ⟨l, rfl, h2⟩ := h
+    refine ⟨l, rfl, h2.elim (fun h => Or.inl ⟨h.1, h.2.agree hagree (ht _ rfl)⟩)
+      (fun h => Or.inr ⟨h.1, h.2.1, ?_⟩)⟩
+    rw [hagree _ (ht _ rfl)]; exact h.2.2
   · obtain ⟨l, a, n, rfl, h2, h3⟩ := h
     exact ⟨l, a, n, rfl, h2, h3.agree hagree (ht _ rfl)⟩
 
@@ -260,8 +377,9 @@ theorem Held.agree {v : Val}
     (hagree : ∀ r, ¬ P r → st'.roots[r]? = st.roots[r]?) (ht : ∀ r, Targets v r → ¬ P r)
     (h : Held m G st v) : Held m G st' v := by
   cases v <;> simp only [Held] at h ⊢
-  · obtain ⟨T, h2, h3⟩ := h
-    exact ⟨T, h2, h3.agree hagree (ht _ rfl)⟩
+  · refine h.elim (fun ⟨T, h2, h3⟩ => Or.inl ⟨T, h2, h3.agree hagree (ht _ rfl)⟩)
+      (fun h => Or.inr ⟨h.1, ?_⟩)
+    rw [hagree _ (ht _ rfl)]; exact h.2
   · obtain ⟨E, h3⟩ := h
     exact ⟨E, h3.agree hagree (ht _ rfl)⟩
 
@@ -389,19 +507,36 @@ theorem Frame.pop {tenv1 : TEnv} {s2 : St} {sc : Nat} {si : ScopeInst}
           exact ⟨ly, siy, g1, g2', g3⟩
       | global g => exact hr
       | param j => exact hr
-    inv := h.inv.release hagree hgone K (by rintro g ⟨_, _, _, _, e⟩; cases e) }
+    inv := h.inv.release hagree hgone K (by rintro g ⟨_, _, _, _, e⟩; cases e)
+    aOlder := h.aOlder, dOut := h.dOut, dFun := h.dFun, pref := h.pref
+    sa := by
+      intro r E hd
+      obtain ⟨v0, h1, h2, h3⟩ := h.sa r E hd
+      obtain ⟨a, si', x', e, hlt⟩ := h.dOut r E hd
+      have hbase : W.base ≤ si := (h.below (sc, si) List.mem_cons_self).1
+      have hnp : ∀ (t : RootInst), (t = r ∨ Older t r) → ¬ ScopeRoots env.vars env.act sc si t := by
+        rintro t ht ⟨y, ly, _, _, rfl⟩
+        subst e
+        rcases ht with ht | ht
+        · cases ht; exact absurd hbase (Nat.not_le.2 hlt)
+        · have ht' : si ≤ si' := ht
+          exact absurd (Nat.le_trans hbase ht') (Nat.not_le.2 hlt)
+      refine ⟨v0, ?_, h2.agree hagree (fun t ht => hnp t (Or.inr (h.aOlder r t (h3 t ht)))), h3⟩
+      show (releaseVars env.vars env.act sc si env.vars.size s2.store).roots[r]? = some v0
+      rw [hagree r (hnp r (Or.inl rfl))]; exact h1 }
 
 /-- Leaving a block, seen from the code around it. -/
-theorem ext_block {G : Nat} {s s2 : St} {sc : Nat} (hi : StoreInv m G s)
+theorem ext_block {G : Nat} {s s2 : St} {sc : Nat} {D : RootInst → Prop} (hi : StoreInv m G s)
     (hle : StoreLe s.store s2.store) (hnext : s.nextScope ≤ s2.nextScope)
     (hkeep : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → IsRef v →
-      (∀ a si' x, r = RootInst.local a si' x → si' ∉ insts env) → s2.store.roots[r]? = some v)
+      (∀ a si' x, r = RootInst.local a si' x → si' ∉ insts env) → ¬ D r →
+      s2.store.roots[r]? = some v)
     (hback : ∀ (r : RootInst) (v : Val), s2.store.roots[r]? = some v → IsRef v →
-      (∀ a si' x, r = RootInst.local a si' x → si' ∉ s.nextScope :: insts env) →
+      (∀ a si' x, r = RootInst.local a si' x → si' ∉ s.nextScope :: insts env) → ¬ D r →
       s.store.roots[r]? = some v)
     (hdom : ∀ (r : RootInst), s2.store.roots[r]? ≠ none →
       s.store.roots[r]? ≠ none ∨ ScopeRoots env.vars env.act sc s.nextScope r) :
-    Ext (insts env) s (relSt env sc s.nextScope s2) := by
+    Ext (insts env) D s (relSt env sc s.nextScope s2) := by
   obtain ⟨hagree, hgone⟩ := releaseScope_roots env.vars env.act sc s.nextScope s2.store
   have hfresh : ∀ r, ScopeRoots env.vars env.act sc s.nextScope r → s.store.roots[r]? = none := by
     rintro r ⟨x, lv, _, _, rfl⟩
@@ -411,16 +546,16 @@ theorem ext_block {G : Nat} {s s2 : St} {sc : Nat} (hi : StoreInv m G s)
   have hnp : ∀ (r : RootInst), s.store.roots[r]? ≠ none →
       ¬ ScopeRoots env.vars env.act sc s.nextScope r := fun r hr hp => hr (hfresh r hp)
   refine ⟨storeLe_release _ hle hagree hfresh, hnext, ?_, ?_, ?_⟩
-  · intro r v hv hr hn
+  · intro r v hv hr hn hd
     show (releaseVars env.vars env.act sc s.nextScope env.vars.size s2.store).roots[r]? = some v
     rw [hagree r (hnp r (by rw [hv]; simp))]
-    exact hkeep r v hv hr hn
-  · intro r v hv hr hn
+    exact hkeep r v hv hr hn hd
+  · intro r v hv hr hn hd
     have hv' : (releaseVars env.vars env.act sc s.nextScope env.vars.size s2.store).roots[r]? = some v := hv
     by_cases hp : ScopeRoots env.vars env.act sc s.nextScope r
     · rw [hgone r hp] at hv'; cases hv'
     · rw [hagree r hp] at hv'
-      refine hback r v hv' hr ?_
+      refine hback r v hv' hr ?_ hd
       intro a si' x e hmem
       rcases List.mem_cons.1 hmem with e' | e'
       · subst e; subst e'

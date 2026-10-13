@@ -10,18 +10,137 @@ open Goose.Core Goose.Proofs.Memory
 variable {m : Module} {prof : NumProfile} {n : Nat}
 
 set_option maxHeartbeats 1600000 in
+/-- At a call, each parameter of the callee that refers to a slice variable
+points at a slice variable the callee may rewrite, whose slices are rooted
+exactly within the parameter's content roots as the callee reads them. -/
+theorem call_pref {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s1 : St}
+    (hF1 : Frame m W tenv penv env s1) {callee : Impl} {cctx : Context} {args : List Arg}
+    {ars : List (List RootRef)} {vals : List Val} (himplOk : ImplOk m callee)
+    (hctxOk : CtxOk m callee cctx)
+    (hcheck : ∀ i, i < args.length → checkContent penv cctx args ars i = .ok ())
+    (hsize : callee.params.size = args.length) (hlen : vals.length = args.length)
+    (hall : ∀ (i : Nat) (v : Val), vals[i]? = some v → ∃ (p : Param) (pv : LocalVar)
+        (ar : List RootRef) (a : Arg) (ty : Ty) (tn0 tn1 : Nat) (rst0 rst1 : RState),
+      callee.params.toList[i]? = some p ∧ callee.vars[p.var]? = some pv ∧
+      ars[i]? = some ar ∧ HasTy m W.G s1.store v pv.ty ∧ (∀ r, Targets v r → Gam env W.P ar r) ∧
+      args[i]? = some a ∧ ArgTy tenv a tn0 ty tn1 ∧ ty.passableTo pv.ty = true ∧
+      ArgRp penv a rst0 ar rst1) :
+    ∀ x cont, (cctx.contentRoots.find? (·.1 == x)).map (·.2) = some cont →
+      PRef (fun j r => Gam env W.P (ars[j]?.getD []) r) (callD W tenv env) (callA W penv env)
+        ⟨m, callee, cctx, []⟩ callee.vars x cont := by
+  intro x cont hfind
+  obtain ⟨hxlt, hannx, hnl⟩ := hctxOk.content x cont hfind
+  refine ⟨hnl, hannx, ?_⟩
+  intro lv mu mu' E hlv hty r hPc
+  have hxa : x < args.length := hsize ▸ hxlt
+  obtain ⟨v, hv⟩ : ∃ v, vals[x]? = some v := ⟨vals[x]'(hlen ▸ hxa), List.getElem?_eq_getElem _⟩
+  obtain ⟨p, pv, ar, a, ty, tn0, tn1, rst0, rst1, g1, g2, g3, _, _, g6, g7, g8, g9⟩ := hall x v hv
+  have hp_x : callee.params[x]? = some p := by simpa using g1
+  obtain ⟨hvar, lv', hlv', _, hlst⟩ := himplOk.params x p hp_x
+  rw [hvar, hlv] at g2
+  cases g2
+  rw [hlv] at hlv'
+  cases hlv'
+  have hEfl : E.flat = true := by
+    simpa [hty, Ty.paramOk, Ty.storable, Ty.refTarget, Ty.isRefSlice] using hlst
+  have hPc' : Gam env W.P ar r := by simpa [g3] using hPc
+  obtain ⟨inst, hmap, hcase⟩ := checkContent_ok _ _ _ _ x cont (hcheck x hxa) hfind
+  have hgi := gam_inst (env := env) (P := W.P) hmap
+  rcases hcase with ⟨mua, sv, anns, ha, hanns, hsub, hb⟩ | ⟨mua, q, cq, ha, hcq, hsub1, hsub2⟩
+  · -- A slice variable of the caller itself.
+    rw [g6] at ha
+    cases ha
+    obtain ⟨t, mub, htp, _, rfl⟩ := g7
+    simp only [tyPlace] at htp; inv at htp
+    obtain ⟨hvis, lvs, hlvs, rfl, _, _⟩ := htp
+    rw [hty] at g8
+    simp only [Ty.passableTo, Bool.and_eq_true, beq_iff_eq] at g8
+    have hts : lvs.ty = .slice mu' E := g8.1
+    have g9' : rpPlace penv (.var sv) rst0 = .ok (ar, rst1) := g9
+    simp only [rpPlace] at g9'; inv at g9'
+    obtain ⟨rfl, _⟩ := g9'
+    obtain ⟨q', hq', hrq'⟩ := hPc'
+    simp only [List.mem_singleton] at hq'
+    subst hq'
+    obtain ⟨lv2, si, k1, k2, rfl⟩ := hrq'
+    rw [hF1.vars_t] at hlvs
+    rw [hlvs] at k1
+    cases k1
+    refine ⟨Or.inr ⟨sv, lvs, si, mu', hlvs, k2, rfl, hts, hvis⟩, ?_, ?_⟩
+    · rintro t (⟨hd, _⟩ | ⟨x', lv', si', ann', _, _, e, ha', hg', _⟩)
+      · exact absurd hd (hF1.not_outer k2)
+      · cases e
+        rw [hanns] at ha'
+        cases ha'
+        exact (hgi t).1 (hg'.subset hsub)
+    · intro t ht
+      have hgt := (hgi t).2 ht
+      obtain ⟨⟨ann, ha', hga⟩, hold⟩ := bind_roots_sem hF1 hb hlvs k2 (v := .ref ⟨t, []⟩)
+        (fun r' hr' => by cases hr'; exact hgt) t rfl
+      exact Or.inr ⟨sv, lvs, si, ann, hlvs, k2, rfl, ha', hga, hold⟩
+  · -- The pointee of a reference the caller was given.
+    rw [g6] at ha
+    cases ha
+    obtain ⟨t, mub, htp, _, rfl⟩ := g7
+    rw [hty] at g8
+    simp only [Ty.passableTo, Bool.and_eq_true, beq_iff_eq] at g8
+    obtain ⟨rfl, _⟩ := g8
+    cases hs : sliceRefTy tenv (.read (.var q)) with
+    | none =>
+      simp only [tyPlace, hs] at htp; inv at htp
+      obtain ⟨te, t1', ⟨te', t0, hte, hnr, rfl, rfl⟩, htp⟩ := htp
+      cases te <;> inv at htp
+      obtain ⟨rfl, _, _⟩ := htp
+      simp [Ty.isRefSlice, hEfl] at hnr
+    | some tyq =>
+      obtain ⟨q', lvq, mu0, mus, Eq, e, hqvis, hlvq, htyq, hflq, rfl⟩ := sliceRefTy_some hs
+      cases e
+      simp only [tyPlace, hs] at htp
+      rw [htyq] at htp; inv at htp
+      obtain ⟨hts, _, _⟩ := htp
+      cases hts
+      rw [hF1.vars_t] at hlvq
+      have g9' : rpPlace penv (.deref (.read (.var q))) rst0 = .ok (ar, rst1) := g9
+      simp only [rpPlace] at g9'
+      simp only [rpExpr] at g9'; inv at g9'
+      obtain ⟨rp, r1, _, r2, _, hrr⟩ := g9'
+      obtain ⟨_, hroots⟩ := readRoots_ok _ _ _ _ hrr
+      obtain ⟨hnlq, hannq, hprq⟩ := hF1.pref q cq hcq
+      have har : ar = [.param q] := by
+        rcases hroots with ⟨x', lv', e, _, _, ha'⟩ | ⟨x', e, _⟩ | ⟨_, hnr, _⟩
+        · cases e
+          rw [hannq] at ha'
+          exact (Option.some.inj ha').symm
+        · cases e
+        · have := hnr q lvq rfl (by rw [hF1.vars_p]; exact hlvq)
+          rw [htyq] at this; simp [Ty.isRefLike] at this
+      subst har
+      obtain ⟨q', hq', hrq'⟩ := hPc'
+      simp only [List.mem_singleton] at hq'
+      subst hq'
+      obtain ⟨hD, hFRq, hFWq⟩ := hprq lvq mu0 mu' E hlvq htyq r hrq'
+      refine ⟨Or.inl hD, ?_, ?_⟩
+      · rintro t (⟨_, hA⟩ | ⟨x', lv', si', ann', _, hl', e, _⟩)
+        · exact (hgi t).1 ((gam_of_noEnv (hFRq t hA)).subset hsub2)
+        · subst e
+          exact absurd ⟨E, hD⟩ (hF1.not_outer hl')
+      · intro t ht
+        exact Or.inl ⟨⟨E, hD⟩, hFWq t (gam_noEnv (((hgi t).2 ht).subset hsub1) hnlq)⟩
+
+set_option maxHeartbeats 1600000 in
 theorem step_expr_call (hm : ModOk m) (ih : Specs m prof n) (W : World) (tenv : TEnv) (penv : PEnv)
     (env : Env) (s : St) (c : ContextId) (args : List Arg) (o : OriginId) (tn tn' : Nat) (ty : Ty)
     (rst rst' : RState) (rho : List RootRef) (hp : Perm m W) (hF : Frame m W tenv penv env s)
     (ht : tyExpr tenv (.call c args o) tn = .ok (ty, tn'))
     (hr : rpExpr penv (.call c args o) rst = .ok (rho, rst')) (hE : EffLe rst'.eff W.E) :
     Sat (evalExpr (n + 1) ⟨prof, m⟩ env (.call c args o)) s (fun v s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) s s' ∧ HasTy m W.G s'.store v ty ∧
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r) := by
   simp only [rpExpr] at hr; inv at hr
-  obtain ⟨ars, r1, hra, hrc⟩ := hr
+  obtain ⟨ars, r1, hra, hcc, hrc⟩ := hr
   have hE1 := (PMono.rpCall _ _ _ _ _ _ hrc).2.trans hE
   obtain ⟨cctx, callee, hc, hi, hchk, hst, hres⟩ := rpCall_ok _ _ _ _ _ _ hrc
+  have hcheck := checkContents_ok _ _ _ _ cctx hcc hc
   rw [hF.mod_p] at hc hi
   have hc' : tenv.mod.contexts[c]? = some cctx := by rw [hF.mod_t]; exact hc
   have hi' : tenv.mod.impls[cctx.impl]? = some callee := by rw [hF.mod_t]; exact hi
@@ -35,11 +154,12 @@ theorem step_expr_call (hm : ModOk m) (ih : Specs m prof n) (W : World) (tenv : 
   refine Sat.bind (args_spec ih.arg hp callee args callee.params.toList s _ _ _ _ _ hF
     (by simpa using hsize) hta hra hE1) ?_
   rintro vals s1 ⟨hF1, hX1, hlen, hall⟩
-  have hcall := ih.call W.G (fun j r => Gam env W.P (ars[j]?.getD []) r) env.depth c vals s1 cctx
+  have hcall := ih.call W.G (fun j r => Gam env W.P (ars[j]?.getD []) r) (callD W tenv env)
+    (callA W penv env) env.depth c vals s1 cctx
     callee hc hi hF1.inv (by rw [hlen]; exact hsize.symm)
     (by
       intro i v hi_
-      obtain ⟨p, pv, ar, g1, g2, g3, g4, g5⟩ := hall i v hi_
+      obtain ⟨p, pv, ar, _, _, _, _, _, _, g1, g2, g3, g4, g5, _⟩ := hall i v hi_
       have hp_i : callee.params[i]? = some p := by simpa using g1
       have hlt : i < callee.params.size := (Array.getElem?_eq_some_iff.1 hp_i).1
       obtain ⟨hvar, _⟩ := himplOk.params i p hp_i
@@ -65,6 +185,8 @@ theorem step_expr_call (hm : ModOk m) (ih : Specs m prof n) (W : World) (tenv : 
         · subst e; exact ⟨.param i, hq', hPc⟩
         · subst e; exact ⟨.global g, hq', hrq⟩)
     (fun i a si x h => hF1.gam_older h a si x rfl)
+    (callA_older hF1) (callD_out hF1) (callD_fun hF1) (callOuterOk hF1)
+    (call_pref hF1 himplOk hctxOk (fun i hi' => hcheck i hi') hsize hlen hall)
     (by
       rcases hp with hp | ⟨hunk, hall'⟩
       · exact Or.inl hp
@@ -92,8 +214,9 @@ theorem step_expr_call (hm : ModOk m) (ih : Specs m prof n) (W : World) (tenv : 
               (fun j hj => hpar j (Or.inr (Or.inr hj)))
               (fun t' h' => hall' t' (Or.inr (Or.inr (hE.2.2.1 t' (by rw [hst]; exact e3 t' h'))))) t ht')
   refine hcall.mono ?_
-  rintro v s2 ⟨hInv2, hX2, hresv, hroots⟩
-  refine ⟨hF1.outer hX2 hInv2, hX1.trans (hX2.weaken (fun _ h => by cases h)), ?_, ?_⟩
+  rintro v s2 ⟨hInv2, hX2, hsa2, hresv, hroots⟩
+  refine ⟨hF1.outer hX2 hInv2 hsa2 (callD_back hF1) (fun r E h => Or.inl h),
+    hX1.trans (ext_of_call hF1 hX2), ?_, ?_⟩
   · rcases hty with ⟨hnil, rfl⟩ | hone
     · rcases hresv with ⟨_, rfl⟩ | ⟨t, ht', hv⟩
       · rfl

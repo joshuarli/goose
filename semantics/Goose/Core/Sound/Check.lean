@@ -215,8 +215,8 @@ theorem PMono.rpCall (env : PEnv) (c : ContextId) (ar : List (List RootRef)) : P
   · exact ⟨addTargets_left _ _, addTargets_left _ _, addTargets_left _ _, fun h => h⟩
 
 theorem PMono.readRoots (env : PEnv) (p : Place) : PMono (readRoots env p) := by
-  cases p <;> simp only [Goose.Core.readRoots] <;>
-    repeat' (first | exact PMono.pure _ | exact PMono.rej _ _ | split)
+  unfold Goose.Core.readRoots
+  repeat' (first | exact PMono.pure _ | exact PMono.rej _ _ | split)
 
 macro "pm" : tactic => `(tactic| repeat' (first
     | exact PMono.pure _ | exact PMono.rej _ _ | exact PMono.liftV _ | exact PMono.get

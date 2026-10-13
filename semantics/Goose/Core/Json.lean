@@ -686,15 +686,20 @@ def decContext (impls : Array Impl) (nGlobals : Nat) (j : Json) : Except String 
   let vrs ← list fs[2]! "context variable roots" fun vj => do
     let (vtag, vfs) ← record vj "variable roots"
     unless vtag == "vr" do fail s!"expected vr, found tag {vtag.quote}"
-    arity vtag vfs 2
+    unless vfs.size = 2 || vfs.size = 3 do
+      fail s!"{vtag}: expected 2 or 3 fields, found {vfs.size}"
     let v ← checkIndex (← asNat vfs[0]! "vr variable") impl.vars.size "variable"
-    pure (v, ← roots vfs[1]!)
-  let rec ascending : List (VarId × List RootRef) → Bool
+    let rs ← roots vfs[1]!
+    -- The optional third field is the content roots of a reference to a slice variable.
+    let content ← if vfs.size = 3 then (do pure (some (← roots vfs[2]!))) else pure none
+    pure (v, rs, content)
+  let rec ascending : List (VarId × List RootRef × Option (List RootRef)) → Bool
     | a :: b :: rest => a.1 < b.1 && ascending (b :: rest)
     | _ => true
   unless ascending vrs do fail "context variable roots unsorted or repeated"
   let results ← list fs[3]! "context result roots" roots
-  pure { impl := i, decl, varRoots := vrs, resultRoots := results }
+  pure { impl := i, decl, varRoots := vrs.map fun (v, rs, _) => (v, rs), resultRoots := results
+         contentRoots := vrs.filterMap fun (v, _, c) => c.map fun cs => (v, cs) }
 
 def decFile (j : Json) : Except String String := do
   let (tag, fs) ← record j "file"

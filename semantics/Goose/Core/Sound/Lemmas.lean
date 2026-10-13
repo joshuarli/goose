@@ -19,9 +19,18 @@ theorem readable_flat {t : Ty} (h1 : t.readable = true) (h2 : t.refTarget = true
 theorem refTarget_not_refLike {t : Ty} (h : t.refTarget = true) : t.isRefLike = false := by
   cases t <;> simp_all [Ty.refTarget, Ty.isRefLike]
 
-theorem storable_refTarget {t : Ty} (h : t.storable = true) (h2 : t.isRefLike = false) :
+theorem paramOk_of_storable {t : Ty} (h : t.storable = true) : t.paramOk = true := by
+  simp [Ty.paramOk, h]
+
+theorem storable_refTarget {t : Ty} (h : t.paramOk = true) (h2 : t.isRefLike = false) :
     t.refTarget = true := by
-  cases t <;> simp_all [Ty.storable, Ty.refTarget, Ty.isRefLike]
+  cases t <;> simp_all [Ty.paramOk, Ty.storable, Ty.refTarget, Ty.isRefLike, Ty.isRefSlice]
+
+theorem isSlice_not_refTarget {t : Ty} (h : t.isSlice = true) : t.refTarget = false := by
+  cases t <;> simp_all [Ty.isSlice, Ty.refTarget]
+
+theorem isRefSlice_ref {mu : Mutability} {t : Ty} : (Ty.ref mu t).isRefSlice = t.isSlice := by
+  cases t <;> rfl
 
 theorem flat_no_targets {T : Ty} {v : Val} (h : FlatTy T v) {P : RootInst → Prop} :
     ∀ r, Targets v r → P r :=
@@ -45,8 +54,9 @@ theorem hasTy_passable {m : Module} {G : Nat} {s : Store} {v : Val} {a p : Ty}
     | exact h
 
 theorem hasTy_nonref_flat {m : Module} {G : Nat} {s : Store} {v : Val} {T : Ty}
-    (h : HasTy m G s v T) (h1 : T.storable = true) (h2 : T.isRefLike = false) : FlatTy T v := by
-  cases T <;> simp only [Ty.storable, Ty.isRefLike] at h1 h2 <;> first | exact h | cases h1 | cases h2
+    (h : HasTy m G s v T) (h1 : T.paramOk = true) (h2 : T.isRefLike = false) : FlatTy T v := by
+  cases T <;> simp only [Ty.paramOk, Ty.storable, Ty.isRefSlice, Ty.isRefLike, Bool.or_false,
+    Bool.false_or, reduceCtorEq] at h1 h2 <;> first | exact h | cases h1 | cases h2
 
 /-! ### Locations -/
 

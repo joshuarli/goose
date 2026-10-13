@@ -22,7 +22,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     tyStmt tenv sc st tn = .ok (tenv', tn') → rpStmt penv st rst = .ok ((), rst') →
     EffLe rst'.eff W.E →
     Sat (execStmt (n + 1) ⟨prof, m⟩ env st) s (fun fl s' =>
-      Frame m W tenv' penv env s' ∧ TSame tenv tenv' ∧ ExtS env s s' ∧ TopB env lo rst'.nextVar s' ∧
+      Frame m W tenv' penv env s' ∧ TSame tenv tenv' ∧ ExtS env (Dset W) s s' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
       | .normal _ => st.diverges = false
       | .brk => tenv.loops ≠ 0 ∧ st.hasBreak = true
@@ -72,7 +72,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
       · exact bind_roots_sem hF1 (hbr hrl) hlv hlk' hg
       · exact hasTy_no_targets hv (by simpa using hrl)
     have htop' : env.scopes = (lv.scope, si) :: rest := hlsc ▸ htop
-    refine ⟨hF1.bind hlv hlk' hst hfree hv hroot, TSame.cons _ _,
+    refine ⟨hF1.bind hlv hlk' (paramOk_of_storable hst) hfree hv hroot, TSame.cons _ _,
       hX1.toS.trans (extS_bind htop' hlv hfree), ?_, rfl⟩
     refine topB_bind htop (hT.ext hX1.dom (Nat.le_refl _)) ?_ ?_ ?_
     · rw [hxn]; exact hlo
@@ -82,26 +82,59 @@ theorem step_stmt_a (ih : Specs m prof n) :
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
     obtain ⟨_, t, b, t1, htp, hfl, te, t2, hte, heq, _, rfl, rfl⟩ := ht
-    obtain ⟨rp, r1, hrp, re, r2, hre, hw⟩ := hr
+    obtain ⟨rp, r1, hrp, re, r2, hre, hck, r3, hw, rfl⟩ := hr
     have : te = t := by simpa using heq
     subst this
-    obtain ⟨_, hin⟩ := addWrites_ok _ _ _ hw
-    have hE2 : EffLe r2.eff W.E := (PMono.addWrites _ _ _ _ hw).2.trans hE
+    obtain ⟨_, hin0⟩ := addWrites_ok _ _ _ hw
+    have hE3 : EffLe r3.eff W.E :=
+      EffLe.trans ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩ hE
+    have hin : ∀ t', t' ∈ rootsTargets rp → t' ∈ W.E.writes := fun t' ht' => hE3.2.1 t' (hin0 t' ht')
+    have hE2 : EffLe r2.eff W.E := (PMono.addWrites _ _ _ _ hw).2.trans hE3
     simp only [execStmt]
     refine Sat.bind (ih.place W tenv' penv env s p _ _ _ _ _ _ _ hp hF htp hrp
       ((rpExpr_mono hre).2.trans hE2)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     refine Sat.bind (ih.expr W tenv' penv env s1 e _ _ _ _ _ _ hp hF1 hte hre hE2) ?_
-    rintro v s2 ⟨hF2, hX2, hv, _⟩
-    rcases hpl with ⟨_, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩
-    · have hlt := access hp (hl.mono hX2.le) hg
-        (fun t' ht' => Or.inr (Or.inl (hE.2.1 t' (hin t' ht'))))
+    rintro v s2 ⟨hF2, hX2, hv, hgv⟩
+    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', hpv, _, _, _, _, hrl, _⟩ |
+      ⟨x, lv, mu0, mus, E, ann, rfl, hlv, hty, rfl, hflE, hpath, hann, hgl, hlive⟩
+    · have hfl' : te.flat = true := by
+        cases hf : te.flat with
+        | true => rfl
+        | false =>
+          simp only [hf, Bool.false_or, Bool.and_eq_true] at hfl
+          rw [isSlice_not_refTarget hfl.1] at hrt; cases hrt
+      have hlt := access hp (hl.mono hX2.le) hg (fun t' ht' => Or.inr (Or.inl (hin t' ht')))
       refine sat_writeLoc_bind hlt (fun st' hw' => ?_)
       simp only [sat_pure]
-      have hstep := write_flatStep _ _ _ _ _ hfl hlt (hv.flat hfl) hw'
+      have hstep := write_flatStep _ _ _ _ _ hfl' hlt (hv.flat hfl') hw'
       have hX := (hX1.trans hX2).trans (Ext.of_flatStep hstep)
       exact ⟨hF2.flatStep hstep, TSame.refl _, hX.toS, hT.ext hX.dom hcur, rfl⟩
-    · rw [refTarget_not_refLike (flat_refTarget hfl)] at hrl; cases hrl
+    · subst hpv
+      cases hf : te.flat with
+      | true => rw [refTarget_not_refLike (flat_refTarget hf)] at hrl; cases hrl
+      | false => simp [hf, Place.derefVar?] at hfl
+    · -- A slice stored through a reference to a slice variable of a caller.
+      have hsv : penv.isRefSliceVar x = true := by
+        simp [PEnv.isRefSliceVar, hF2.vars_p, hlv, hty, Ty.isRefSlice, hflE]
+      obtain ⟨cont, hc, hsub⟩ := checkStore_ok _ _ _ hck x rfl hsv
+      obtain ⟨hnl, hann', hpr⟩ := hF2.pref x _ hc
+      rw [hann] at hann'
+      cases hann'
+      obtain ⟨q, hq, hrq⟩ := hgl
+      simp only [List.mem_singleton] at hq
+      subst hq
+      obtain ⟨hD, _, hFW⟩ := hpr lv mu0 mus E hlv hty _ hrq
+      obtain ⟨old, ho, _, _⟩ := hF2.sa _ E hD
+      have hl : l = ⟨l.root, []⟩ := by
+        cases l; simp only at hpath; simp [hpath]
+      rw [hl]
+      refine sat_writeRoot_bind ho ?_
+      simp only [sat_pure]
+      obtain ⟨hFw, hXw⟩ := hF2.outwrite hD (hasTy_slice_mu hv)
+        (fun t ht' => hFW t (gam_noEnv ((hgv t ht').subset hsub) hnl))
+      have hX := (hX1.trans hX2).trans hXw
+      exact ⟨hFw, TSame.refl _, hX.toS, hT.ext hX.dom hcur, rfl⟩
   | assignOp op p e o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
@@ -119,7 +152,9 @@ theorem step_stmt_a (ih : Specs m prof n) :
     refine Sat.bind (ih.place W tenv' penv env s p _ _ _ _ _ _ _ hp hF htp hrp
       ((rpExpr_mono hre).2.trans hE2)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
-    rcases hpl with ⟨_, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩
+    rcases hpl with ⟨_, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
+      ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
+    case inr.inr => cases h3
     · have hlt := access hp hl hg (fun t' ht' => Or.inl (hE3.1 t' (hinr t' ht')))
       refine sat_readLoc_bind hlt (fun v0 _ hT0 => ?_)
       cases v0 <;> simp only [FlatTy] at hT0
@@ -194,7 +229,9 @@ theorem step_stmt_a (ih : Specs m prof n) :
     refine Sat.bind (ih.view W tenv' penv env s1 src _ _ _ _ _ _ _ hp hF1 htv hrv hE2) ?_
     rintro vw s2 ⟨hF2, hX2, hvw, _⟩
     refine sat_readRun_bind hvw (fun vs hvs => ?_)
-    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩
+    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
+      ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
+    case inr.inr => cases h3
     · have hlt := access hp (hl.mono hX2.le) hg
         (fun t' ht' => Or.inr (Or.inr (hE.2.2.1 t' (hin t' ht'))))
       refine sat_appendLoc_bind hlt (fun st' i happ => ?_)

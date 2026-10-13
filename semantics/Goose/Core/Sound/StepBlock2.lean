@@ -19,7 +19,7 @@ theorem step_stmts (ih : Specs m prof n) : StmtsSpec m prof (n + 1) := by
     obtain ⟨rfl, rfl⟩ := ht
     subst hr
     simp only [execStmts, sat_pure]
-    exact ⟨⟨tenv', TSame.refl _, hF, fun _ _ => rfl⟩, (Ext.refl _ _).toS, hT,
+    exact ⟨⟨tenv', TSame.refl _, hF, fun _ _ => rfl⟩, (Ext.refl _ _ _).toS, hT,
       (⟨trivial, rfl⟩ : True ∧ stmtsDiverge [] = false)⟩
   | cons st rest =>
     simp only [tyStmts] at ht; inv at ht
@@ -103,11 +103,11 @@ theorem step_block (ih : Specs m prof n) : BlockSpec m prof (n + 1) := by
       Frame m W tf { penv with scopes := sc :: penv.scopes }
         { env with scopes := (sc, s.nextScope) :: env.scopes } s2 →
       TSame tenv1 tf →
-      ExtS { env with scopes := (sc, s.nextScope) :: env.scopes }
+      ExtS { env with scopes := (sc, s.nextScope) :: env.scopes } (Dset W)
         { s with nextScope := s.nextScope + 1,
                  store := preStore env.act s.nextScope pre s.store } s2 →
       Frame m W tenv penv env (relSt env sc s.nextScope s2) ∧
-      Ext (insts env) s (relSt env sc s.nextScope s2) := by
+      Ext (insts env) (Dset W) s (relSt env sc s.nextScope s2) := by
     intro s2 tf hFf hSf hXf
     have hdom : ∀ (r : RootInst), s2.store.roots[r]? ≠ none →
         s.store.roots[r]? ≠ none ∨ ScopeRoots env.vars env.act sc s.nextScope r := by
@@ -136,15 +136,15 @@ theorem step_block (ih : Specs m prof n) : BlockSpec m prof (n + 1) := by
         · exact Or.inr (fun a si' x e => by subst e; exact hF.inv.fresh _ _ _ h0)
         · exact Or.inl h0
     · refine ext_block hF.inv (hleb.trans hXf.le) (Nat.le_trans (Nat.le_succ _) hXf.next) ?_ ?_ hdom
-      · intro r v hv hr hn
-        refine hXf.keep r v (hkeepb r v hv) hr ?_
+      · intro r v hv hr hn hd
+        refine hXf.keep r v (hkeepb r v hv) hr ?_ hd
         intro a si' x e hmem
         rcases List.mem_cons.1 hmem with e' | e'
         · subst e; subst e'
           exact absurd (hF.inv.fresh _ _ _ (by rw [hv]; simp)) (Nat.lt_irrefl _)
         · exact hn a si' x e e'
-      · intro r v hv hr hn
-        have h1 := hXf.back r v hv hr (fun a si' x e hmem => hn a si' x e hmem)
+      · intro r v hv hr hn hd
+        have h1 := hXf.back r v hv hr (fun a si' x e hmem => hn a si' x e hmem) hd
         rcases hbackb r v h1 with h2 | ⟨x, _, rfl⟩
         · exact h2
         · exact absurd List.mem_cons_self (hn _ _ _ rfl)
