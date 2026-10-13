@@ -750,18 +750,23 @@ def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
           changed := true
   return valid
 
-partial def valueClosure (f : Func) (fuel : Nat) (todo seen : List ValueId) : List ValueId :=
-  match fuel, todo with
-  | 0, _ | _, [] => seen
-  | n + 1, v :: rest =>
-    if seen.contains v then valueClosure f n rest seen
+/- Repeated incoming edges do not spend the unique-value budget. If the budget is
+exhausted on an unseen value, return none so the caller rejects an incomplete proof. -/
+partial def valueClosure (f : Func) (fuel : Nat) (todo seen : List ValueId) : Option (List ValueId) :=
+  match todo with
+  | [] => some seen
+  | v :: rest =>
+    if seen.contains v then valueClosure f fuel rest seen
     else
-      let opUses := f.blocks.toList.flatMap (fun b => b.insts.filterMap fun
-        | .def r op => if r == v then some op.uses else none
-        | _ => none) |>.flatten
-      let blockInputs := f.blocks.toList.zipIdx.flatMap fun (b, target) =>
-        (b.params.zipIdx).filterMap fun ((p, _), param) => if p == v then some (incomingValues f target param) else none
-      valueClosure f n (opUses ++ blockInputs.flatten ++ rest) (v :: seen)
+      match fuel with
+      | 0 => none
+      | n + 1 =>
+        let opUses := f.blocks.toList.flatMap (fun b => b.insts.filterMap fun
+          | .def r op => if r == v then some op.uses else none
+          | _ => none) |>.flatten
+        let blockInputs := f.blocks.toList.zipIdx.flatMap fun (b, target) =>
+          (b.params.zipIdx).filterMap fun ((p, _), param) => if p == v then some (incomingValues f target param) else none
+        valueClosure f n (opUses ++ blockInputs.flatten ++ rest) (v :: seen)
 
 def rootsOverlap (a b : List RootRef) : Bool :=
   a.isEmpty || b.isEmpty || a.any (fun x => b.any (Goose.Core.rootsMayOverlap x))
@@ -851,8 +856,10 @@ def checkReplace (f : Func) (vt : Array (Option VTy)) (p : Prov) (validRuns : Ar
       violation .v060 s!"{label}: x_replace owner was not cleared on every path"
     let ownerRoots := rootsAt p.vals owner
     let closure := valueClosure f (f.numValues + 1) [run] []
-    let depends := closure.any fun v => v == owner ||
-      (valRefLike vt v && rootsOverlap ownerRoots (rootsAt p.vals v))
+    let depends := match closure with
+      | none => true
+      | some values => values.any fun v => v == owner ||
+          (valRefLike vt v && rootsOverlap ownerRoots (rootsAt p.vals v))
     if depends then violation .v060 s!"{label}: x_replace run depends on its receiver"
   | _ => pure ()
 

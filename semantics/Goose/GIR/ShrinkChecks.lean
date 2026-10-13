@@ -202,6 +202,46 @@ private def aliasedParameterModule : Module :=
 
 #guard rejected aliasedParameterModule .v060
 
+private def duplicateFanInReplace : Func :=
+  { name := "duplicate-fan-in"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[
+      ⟨[(0, .data (.ref .mutable growTy))], [
+        .def 1 (.arrayLen 0), .def 2 (.constInt .i64 10),
+        .def 3 (.arrLit growTy [2]), .def 4 (.arrLit growTy [1]),
+        .def 5 (.constBool true), .eff (.clear 0 (some 0)),
+        .term (.condbr 5 1 [] 16 [])]⟩,
+      ⟨[], [.term (.condbr 5 2 [] 3 [])]⟩,
+      ⟨[], [.term (.condbr 5 4 [] 5 [])]⟩,
+      ⟨[], [.term (.condbr 5 6 [] 7 [])]⟩,
+      ⟨[], [.term (.condbr 5 8 [] 9 [])]⟩,
+      ⟨[], [.term (.condbr 5 10 [] 11 [])]⟩,
+      ⟨[], [.term (.condbr 5 12 [] 13 [])]⟩,
+      ⟨[], [.term (.condbr 5 14 [] 15 [])]⟩,
+      ⟨[], [.term (.br 17 [3])]⟩,
+      ⟨[], [.term (.br 17 [3])]⟩,
+      ⟨[], [.term (.br 17 [3])]⟩,
+      ⟨[], [.term (.br 17 [3])]⟩,
+      ⟨[], [.term (.br 17 [3])]⟩,
+      ⟨[], [.term (.br 17 [3])]⟩,
+      ⟨[], [.term (.br 17 [3])]⟩,
+      ⟨[], [.term (.br 17 [3])]⟩,
+      ⟨[], [.term (.br 17 [4])]⟩,
+      ⟨[(6, .data growTy)], [.term (.condbr 5 18 [6] 18 [6])]⟩,
+      ⟨[(7, .data growTy)], [
+        .eff (.replace 0 7 (some 1)), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def duplicateFanInModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], duplicateFanInReplace] }
+
+#guard rejected duplicateFanInModule .v060
+
 private def readBetweenClearAndReplace (throughCall : Bool) : Module :=
   let readFunc : Func :=
     { name := "read-owner"
