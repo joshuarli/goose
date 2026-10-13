@@ -239,6 +239,14 @@ theorem addGrows_ok (rho : List RootRef) (s : RState) (r : Unit × RState)
   subst h
   exact ⟨rfl, addTargets_right _ _⟩
 
+theorem addShrinks_ok (rho : List RootRef) (s : RState) (r : Unit × RState)
+    (h : addShrinks rho s = .ok r) :
+    r.2.nextVar = s.nextVar ∧ ∀ t, t ∈ rootsTargets rho → t ∈ r.2.eff.shrinks := by
+  unfold addShrinks addRoots at h
+  rw [st_modify_ok] at h
+  subst h
+  exact ⟨rfl, addTargets_right _ _⟩
+
 /-! ### Blocks and calls -/
 
 theorem tyBlock_ok (env : TEnv) (pre : List (VarId × Ty)) (sc : Nat) (stmts : List Stmt)
