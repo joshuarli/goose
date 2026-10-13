@@ -34,7 +34,10 @@ theorem step_stmt_a (ih : Specs m prof n) :
   | letS x e o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
-    obtain ⟨_, lv, t1, hd, te, t2, hte, heq, rfl, rfl⟩ := ht
+    obtain ⟨_, lv, t1, hd, te, t2, hte, hownerRun, heq, htenv, htn⟩ := ht
+    rcases htn with ⟨htenv', htn'⟩
+    subst tenv'
+    subst tn'
     obtain ⟨hxn, re, r1, hre, hr⟩ := hr
     obtain ⟨hxt, hlv, hlsc, hst, _⟩ := declare_ok _ _ _ _ _ hd
     simp only at hlv hlsc hst
@@ -51,7 +54,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     simp only [execStmt]
     refine Sat.bind (ih.expr W tenv penv env s e _ _ _ _ _ _ hp hF hte hre hE) ?_
     rintro v s1 ⟨hF1, hX1, hv0, hg⟩
-    have hv := hasTy_passable hv0 heq
+    have hv := hasTy_passable hv0 htenv
     have hlk' : env.scopes.lookup lv.scope = some si := hlsc ▸ hlk
     simp only [rootOf, hlv, hlk', sat_pure_bind, sat_bindRoot_bind, sat_pure]
     have hfree0 : s.store.roots[RootInst.local env.act si x]? = none := by
@@ -86,7 +89,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     subst this
     obtain ⟨_, hin0⟩ := addWrites_ok _ _ _ hw
     have hE3 : EffLe r3.eff W.E :=
-      EffLe.trans ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩ hE
+      EffLe.trans ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩ hE
     have hin : ∀ t', t' ∈ rootsTargets rp → t' ∈ W.E.writes := fun t' ht' => hE3.2.1 t' (hin0 t' ht')
     have hE2 : EffLe r2.eff W.E := (PMono.addWrites _ _ _ _ hw).2.trans hE3
     simp only [execStmt]
@@ -153,7 +156,6 @@ theorem step_stmt_a (ih : Specs m prof n) :
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     rcases hpl with ⟨_, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
       ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
-    case inr.inr => cases h3
     · have hlt := access hp hl hg (fun t' ht' => Or.inl (hE3.1 t' (hinr t' ht')))
       refine sat_readLoc_bind hlt (fun v0 _ hT0 => ?_)
       cases v0 <;> simp only [FlatTy] at hT0
@@ -173,6 +175,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
         exact ⟨hF2.flatStep hstep, TSame.refl _, hX.toS, hT.ext hX.dom hcur, rfl⟩
       · trivial
     · simp [Ty.isRefLike] at hrl
+    · cases h3
   | rebind x e o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
@@ -181,13 +184,13 @@ theorem step_stmt_a (ih : Specs m prof n) :
     have hE1 : EffLe r1.eff W.E := by
       refine EffLe.trans ?_ hE
       rcases hfin with ⟨_, rfl⟩ | ⟨_, rfl⟩
-      · exact ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩
+      · exact ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩
       · exact EffLe.refl _
     simp only [execStmt]
     refine Sat.bind (ih.expr W tenv' penv env s e _ _ _ _ _ _ hp hF hte hre hE1) ?_
     rintro v s1 ⟨hF1, hX1, hv0, hg⟩
     have hv := hasTy_passable hv0 heq
-    obtain ⟨lv1, si, old, h1, h2, h3, h4, h5⟩ := hF1.vis x hx
+    obtain ⟨lv1, si, old, h1, h2, h3, h4, h5⟩ := hF1.vis x hx hx
     rw [hF.vars_t, h1] at hlv
     cases hlv
     simp only [rootOf, h1, h2, sat_pure_bind]
@@ -220,32 +223,48 @@ theorem step_stmt_a (ih : Specs m prof n) :
     simp only [rpStmt] at hr; inv at hr
     obtain ⟨_, t, b, contents, t1, htp, ht⟩ := ht
     obtain ⟨rp, r1, hrp, rv, r2, hrv, r3, hrd, hgr⟩ := hr
-    obtain ⟨_, hin⟩ := addGrows_ok _ _ _ hgr
-    have hE3 : EffLe r3.eff W.E := (PMono.addGrows _ _ _ _ hgr).2.trans hE
-    have hE2 := (PMono.addReads _ _ _ _ hrd).2.trans hE3
-    cases t <;> inv at ht
-    rename_i el
-    obtain ⟨sel, b', t2, htv, heq, _, rfl, rfl⟩ := ht
-    have : sel = el := by simpa using heq
-    subst this
+    obtain ⟨r4, hgrows, hprofile⟩ := hgr
+    obtain ⟨_, hin⟩ := addGrows_ok _ _ _ hgrows
+    have hE3 : EffLe r4.eff W.E := by
+      rcases hprofile with ⟨_, s1, hwrite, a, ha, hrun⟩ | ⟨_, hsame⟩
+      · have hwrite' : EffLe r4.eff s1.eff := ((PMono.addWrites rp) r4 () s1 hwrite).2
+        rcases hrun with ⟨_, hnote⟩ | ⟨_, hsame⟩
+        · exact (hwrite'.trans ((PMono.noteAborts s1 () rst' hnote).2)).trans hE
+        · subst rst'
+          exact hwrite'.trans hE
+      · subst rst'
+        exact hE
+    have hE4 : EffLe r3.eff W.E := (PMono.addGrows rp _ _ _ hgrows).2.trans hE3
+    have hE2 := (PMono.addReads _ _ _ _ hrd).2.trans hE4
+    obtain ⟨el, n1, howner, hrest⟩ := ht
+    obtain ⟨sel, b', htv, hview, hsel, htenv, htn⟩ := hrest
+    have hselEl : sel = el := by simpa using hsel
+    have hownerElem : t.ownerElem? = some sel := by
+      have h := (ownerElement_ok _ t el _ _ howner).2.1
+      rw [← hselEl] at h
+      exact h
+    rcases htn with ⟨htenv', htn'⟩
+    subst tenv'
+    subst tn'
     simp only [execStmt]
-    refine Sat.bind (ih.place W tenv' penv env s owner _ _ _ _ _ _ _ _ hp hF htp hrp
+    refine Sat.bind (ih.place W tenv penv env s owner _ _ _ _ _ _ _ _ hp hF htp hrp
       ((rpView_mono hrv).2.trans hE2)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
-    refine Sat.bind (ih.view W tenv' penv env s1 src _ _ _ _ _ _ _ hp hF1 htv hrv hE2) ?_
+    refine Sat.bind (ih.view W tenv penv env s1 src _ _ _ _ _ _ _ hp hF1 hview hrv hE2) ?_
     rintro vw s2 ⟨hF2, hX2, hvw, _⟩
     refine sat_readRun_bind hvw (fun vs hvs => ?_)
     rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
       ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
-    case inr.inr => cases h3
     · have hlt := access hp (hl.mono hX2.le) hg
-        (fun t' ht' => Or.inr (Or.inr (hE.2.2.1 t' (hin t' ht'))))
-      refine sat_appendLoc_bind hlt (fun st' i happ => ?_)
+        (fun t' ht' => Or.inr (Or.inr (Or.inl (hE3.2.2.1 t' (hin t' ht')))))
+      refine sat_checkedAppendLoc_bind hlt hownerElem hvw.1 hvs (fun st' i happ hstep => ?_)
       simp only [sat_pure]
-      have hstep := append_flatStep _ _ _ _ _ _ hlt hvs happ
       have hX := (hX1.trans hX2).trans (Ext.of_flatStep hstep)
       exact ⟨hF2.flatStep hstep, TSame.refl _, hX.toS, hT.ext hX.dom hcur, rfl⟩
     · simp [Ty.isRefLike] at hrl
+      cases t <;> simp [Ty.isRefLike, Ty.ownerElem?] at hrl hownerElem
+    · rw [h3] at hownerElem
+      simp [Ty.ownerElem?] at hownerElem
   | _ => exact hsel.elim
 
 end Goose.Core.Sound

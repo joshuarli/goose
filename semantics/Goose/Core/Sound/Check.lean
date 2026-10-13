@@ -65,6 +65,46 @@ attribute [chk] PlaceInfo.mk.injEq
   show (Except.error e : Except ε (α × σ)) = Except.ok r ↔ False
   simp
 
+@[chk] theorem ownerElement_ok (env : TEnv) (t el : Ty) (n n' : Nat)
+    (h : ownerElement env t n = .ok (el, n')) :
+    checkResolvedType env.mod t = .ok () ∧ t.ownerElem? = some el ∧ n' = n := by
+  unfold ownerElement at h
+  rw [st_bind_ok] at h
+  obtain ⟨u, n1, hcheck, howner⟩ := h
+  cases u
+  have htype := (checkType_ok env t n n1).1 hcheck
+  rcases htype with ⟨hty, hstateCheck⟩
+  subst n1
+  cases ho : t.ownerElem? with
+  | none =>
+    have hf : False := (st_throw_ok _ n (el, n')).1 (by simpa [ho, rej] using howner)
+    exact False.elim hf
+  | some e =>
+    have hp : (el, n') = (e, n) := (st_pure_ok e n (el, n')).1 (by simpa [ho] using howner)
+    have hel : e = el := (congrArg Prod.fst hp).symm
+    have hstate : n' = n := congrArg Prod.snd hp
+    subst el
+    exact ⟨hty, rfl, hstate⟩
+
+@[chk] theorem tyExpr_push_profileOrg_ok (env : TEnv) (owner : Place) (a : Expr)
+    (org : Option OriginId) (ty : Ty) (n n' : Nat)
+    (h : tyExpr env (.push owner a org) n = .ok (ty, n')) :
+    (env.mod.profile = ArtifactProfile.pilot ∧ org = none) ∨
+      (env.mod.profile = ArtifactProfile.shrink ∧ ∃ o, org = some o) := by
+  cases hp : env.mod.profile <;> cases ho : org
+  · exact Or.inl ⟨rfl, rfl⟩
+  · have hf : False := by
+      simp [tyExpr, hp, ho] at h
+      obtain ⟨_, _, hrej, _⟩ := (st_bind_ok _ _ _ _).1 h
+      exact (st_throw_ok _ _ _).1 hrej
+    exact hf.elim
+  · have hf : False := by
+      simp [tyExpr, hp, ho] at h
+      obtain ⟨_, _, hrej, _⟩ := (st_bind_ok _ _ _ _).1 h
+      exact (st_throw_ok _ _ _).1 hrej
+    exact hf.elim
+  · exact Or.inr ⟨rfl, ⟨_, rfl⟩⟩
+
 @[chk] theorem st_ite_ok (c : Prop) [Decidable c] (x y : StateT σ (Except ε) α) (s : σ) (r : α × σ) :
     (if c then x else y) s = .ok r ↔ (c ∧ x s = .ok r) ∨ (¬ c ∧ y s = .ok r) := by
   by_cases h : c <;> simp [h]
