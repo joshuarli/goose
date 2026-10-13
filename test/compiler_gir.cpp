@@ -2482,6 +2482,17 @@ void PilotLetGrowPushUsesContentsPermission() {
     assert(Code(m) == "");
 }
 
+void PilotPushWithoutOriginLowersToValidLowGir() {
+    auto m = LetOwnerPush(CoreProfile::Pilot, CoreType::Grow);
+    auto &insts = Main(m).blocks[0].insts;
+    auto push = find_if(insts.begin(), insts.end(), [](const GirInst &i) { return i.op == GirOp::Push; });
+    assert(push != insts.end());
+    push->org = -1;
+    assert(Code(m) == "");
+    auto low = GirToLow(m).Lower();
+    assert(Code(low) == "");
+}
+
 void LetLimitedOwnerSupportsDirectPushPopAndClear() {
     auto m = LetOwnerPush(CoreProfile::Shrink, CoreType::Limited);
     Main(m).summary.unknown = true;
@@ -3681,6 +3692,7 @@ int main() {
     LimitedAppendChecksCapacityBeforeWriting();
     AggregatePopCopiesBeforeReleasingItsStack();
     LimitedClearStoresItsLengthInByteStorage();
+    PilotPushWithoutOriginLowersToValidLowGir();
     PilotLetGrowPushUsesContentsPermission();
     LetLimitedOwnerSupportsDirectPushPopAndClear();
     RejectsPassingALetLimitedOwnerAsAMutableReference();
