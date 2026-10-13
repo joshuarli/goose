@@ -11,6 +11,9 @@ way the runner compiles single-file C (same flags, same per-fixture defines),
 the program is run, and its stdout, exit status and abort diagnostics are
 checked against the fixture's expectations exactly as the runner does.
 
+The five test/packages entry points go through `goose build --units` so the
+driver builds and links their native package parts.
+
 With `--pipeline gir` the programs are emitted by the IR pipeline instead
 (`--pipeline gir --emit-units`), restricted to those it supports: a program it
 reports as unsupported is skipped and counted. The pilot fixtures of
@@ -18,9 +21,9 @@ test/semantics are built too, in release and where they have one in debug,
 and judged against their expectations as that harness judges the IR
 pipeline's programs. There is no --share variant.
 
-Skipped, and counted apart: parse-only fixtures, and programs that link a
-native layer or C of their own, which need the driver's link step, not
-written yet. Prints one line per failure and a final JSON line with the
+Skipped, and counted apart: parse-only fixtures, and programs outside
+test/packages that link a native layer or C of their own. Prints one line per
+failure and a final JSON line with the
 pass, fail and skip counts. The two failures that also fail in single-file
 mode (native_stack_overflow, render_reference_cycle) are expected and
 reported as such; any other failure exits 1.
@@ -34,6 +37,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -171,7 +175,8 @@ class Corpus:
             cwd = SAMPLES
             header = SAMPLES / f"{name}.h"
             include = ["--include", str(header)] if header.exists() else []
-        if modules or sidecar:
+        package_driver = kind == "fixture" and f.parent.name == "packages"
+        if (modules or sidecar) and not package_driver:
             return "skip", "links a native layer or C of its own"
         aborts = kind == "fixture" and (TESTS / "expected" / f"{name}.aborts").exists()
         if self.pipeline:
@@ -183,6 +188,27 @@ class Corpus:
             shutil.rmtree(d, ignore_errors=True)
             d.mkdir(parents=True)
             what = f"{label} {f.name}"
+            if package_driver:
+                exe = d / ("prog" + tc.EXE_SUFFIX)
+                argv = ([str(self.goose), "build", "--units"] + flags +
+                        defines_goose + ["-D" + define for define in defines] +
+                        ["--cc", self.cc.cc, "-o", str(exe), str(f)])
+                env = dict(os.environ, GOOSE_HOME=str(d / "home"))
+                built = subprocess.run(argv, capture_output=True, text=True, errors="replace", env=env)
+                code, out, err = built.returncode, built.stdout, built.stderr
+                if code != 0:
+                    return "FAIL", f"build {what}: {(out + err)[-300:]}"
+                code, out, err = tc.run_capture([str(exe)] + progargs, cwd=cwd, stdin_path=infile)
+                bad = self.check(name, aborts, code, out, err, what)
+                if bad:
+                    return "FAIL", bad
+                if expfile.exists():
+                    want = tc.decode(expfile.read_bytes())
+                    if run_tests.joined(out) != run_tests.joined(want):
+                        return "FAIL", f"expected-output {what}"
+                elif kind == "fixture":
+                    return "FAIL", f"missing expected-output {what}"
+                continue
             argv = [str(self.goose)] + defines_goose + flags + include + ["--emit-units", str(d / "units"), str(f)]
             code, out, err = tc.run_capture(argv)
             if code != 0:
@@ -221,7 +247,7 @@ def main():
     ap.add_argument("--pipeline", choices=["gir"], help="emit the units through this compiler pipeline")
     ap.add_argument("--work", help="scratch directory (default: .work/units_corpus)")
     a = ap.parse_args()
-    work = Path(a.work) if a.work else ROOT / ".work" / "units_corpus"
+    work = Path(a.work).resolve() if a.work else ROOT / ".work" / "units_corpus"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     os.environ["GOOSE_HOME"] = str(work / "home")
