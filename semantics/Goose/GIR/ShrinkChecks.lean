@@ -628,12 +628,21 @@ private def summaryModule (shrinks : List Target) : Module :=
     globals := #[]
     funcs := #[entry, popSummaryFunc shrinks]
     entry := 0
-    origins
+    origins := #[⟨0, 1, "call"⟩]
     profile := .shrink
     structs := #[] }
 
 #guard accepted (summaryModule [.param 0])
 #guard rejected (summaryModule []) .v050
+
+#guard match Json.decodeBytes (Json.write (summaryModule [.param 0])).toUTF8 with
+  | .ok m => accepted m &&
+      (m.funcs[1]?.map (fun f => f.summary == (popSummaryFunc [.param 0]).summary)).getD false
+  | .error _ => false
+
+#guard match Json.decodeBytes (Json.write (summaryModule [])).toUTF8 with
+  | .ok m => rejected m .v050
+  | .error _ => false
 
 private def pushSummaryOmittingWrites : Func :=
   { name := "push-summary"
