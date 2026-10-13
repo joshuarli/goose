@@ -350,6 +350,20 @@ the exporter does not support. It is report-only: it writes no Core module or
 C output. A parse, typecheck or report-traversal failure exits nonzero and does
 not produce a feature set. The normal `--emit-core FILE` behavior is unchanged.
 
+`--emit-core FILE` writes a Core module when the checked program uses only
+supported features. `--emit-gir-high FILE` and `--emit-gir-low FILE` write GIR-H
+and GIR-L modules. `--pipeline gir` selects GIR for C, JIT and units output;
+unsupported features are errors. The default pipeline is `legacy`. A direct
+export probe is:
+
+```sh
+mkdir -p .work/tmp
+build/goose --emit-core .work/tmp/program.core --check file.goose
+build/goose --emit-gir-high .work/tmp/program.gir-h --check file.goose
+build/goose --emit-gir-low .work/tmp/program.gir-l --check file.goose
+build/goose --pipeline gir -o .work/tmp/program.c file.goose
+```
+
 The semantics corpus mode checks each report against normal Core export, then
 prints exact unsupported-feature sets and the number of programs in each set;
 `single_feature_unlocks` counts programs whose only unsupported feature is
@@ -406,11 +420,11 @@ python test/scale/units_corpus.py --goose build/goose
 
 That harness emits, compiles, links and runs the eligible fixtures and
 samples in units form at O0 and O2, checks output and abort expectations, and
-also tries O2 with `--share`. It excludes sidecar C and native-layer
-programs, which require the driver's package-link path. `units_native.py`
-uses a small `--include` stand-in and exercises `goose build --units`; it does
-not qualify the package sidecars or a large external program. Those coverage
-gaps must not be inferred as passing from the unit corpus result.
+also tries O2 with `--share`. It routes the five `test/packages` entry points
+through `goose build --units`, which builds and links their native package
+parts. It skips programs outside `test/packages` that link a native layer or
+C of their own. `units_native.py` uses a small `--include` stand-in; it does
+not qualify package sidecars or a large external program.
 
 For a direct compiler probe, create the disposable directory first:
 

@@ -31,7 +31,9 @@ Known red on the branch: under `--pipeline gir`, corpus mode has two internal co
 | `upstream-pr/native-package-rebuild-stamp` | `U1` | parked by O8: fix `8a3637b`, cherry-picked here as `510f495`. | As above. Description: `docs/design/upstream-drafts/native-package-rebuild-stamp.md` (its Dockerfile has a placeholder for the fix commit). |
 | `goose-ir-parity-base` | — | not a lane: `master` plus upstream `1cfe4b6` plus the two fixes, the reference for default-output parity. | Rebuild as above; add any further fix cherry-picked onto `goose-ir`. |
 
-**Not started, in order.**
+**Historical pending list at pause (not current status).** The resumed work and
+latest dispositions are recorded in §13; use those entries when deciding what
+remains to do. The list below records what had not started at the pause.
 
 1. Align the IR with the Core validator's newer rules (the known red above), and add IR support for references to slice variables (the IR part of `S4`; the pipeline reports them unsupported today).
 2. `B8`, remainder: route the five `test/packages` sidecar fixtures through `goose build --units` in the units corpus; then build Aincrad3's core entry in units mode and fill §11.3's table for it. Nothing was run on the core entry after `B8` landed.
@@ -488,9 +490,11 @@ The most common exact multi-feature sets are `string-value + struct` (7 programs
 
 ## 13. Campaign log
 
-*(append-only; one line per gate or phase end)*
+*(append-only; one line per gate or phase end. Resumed entries here supersede
+the pending statuses in the paused handoff above.)*
 
 - **Resumed 2026-10-13.** Starting tree `47fa15a` is clean. Recreated isolated worktrees for IR alignment (`goose-ir-ir-align`), units validation (`goose-ir-units-finish`), corpus forecast (`goose-ir-export-forecast`), and the third and final lowering attempt (`goose-ir-sem-gir`). Upstream drafts remain deferred under O8; nothing is pushed.
+- `H4` completed: implementation and testing docs cover the Core/GIR exports, pipeline choice, units corpus package coverage and build flags; the CLI synopsis lists the public Core/GIR, report, sharing and units flags while keeping `--stable-names` hidden. The compiler usage output and `git diff --check` pass.
 - `B8` remainder merged: all five `test/packages` fixtures pass through `goose build --units` in 15 O0, O2 and O2-with-sharing builds; Aincrad3's core entry builds as 459 units and runs against its real package and schemas. `B5` now has an Aincrad3 E00–E03 runner; its real edit matrix remains to run. Timing remains deferred because the host is busy.
 - `H3` completed: a `goose-lint` companion built with `goose build --units` has zero differences across 393 parity comparisons, and the existing linter suite passes against that sibling install. `LINT-01`–`LINT-08` now hold on the merged tree.
 - `T3`, third and final attempt: `stmt_while_sim` proves the actual lowering of a nonnested while statement, and six checked subclaims cover arbitrary enclosing loop contexts, scoped block initializers and conditional loop composition. The audit now lists 88 theorems with the same three allowed axioms. Whole-profile `TH-LOWER-01` is parked: range-loop reentry changes its counter below the current protected frontier, and nested loops, calls and returns remain unproved. The checked prefix lemma records the invariant a follow-on proof would need.
