@@ -98,30 +98,40 @@ theorem OwnerCap.mono {m : Module} {observation observation' : Observation}
 
 /-- Every possible parameter root has an external storage classification.
 Extra annotation roots may be absent, but cannot become new external bindings.
-Slice holders use their separate inherited slice invariant. -/
+Inherited slice holders use their separate slice invariant; other reference
+roots may be harmless extras in a returned value's declared roots. -/
 def ClassifiedParameters (m : Module) (P : Nat → RootInst → Prop)
     (D : RootInst → Ty → Prop) (observation : Observation) (store : Store) : Prop :=
   ∀ i r, P i r → match r with
     | .global g => ∃ gl, m.globals[g]? = some gl
     | r@(.local ..) => (∃ T, observation.roots r T) ∨ (∃ E, D r E) ∨
-        store.roots[r]? = none
+        (∃ v, store.roots[r]? = some v ∧ IsRef v) ∨ store.roots[r]? = none
 
 theorem ClassifiedParameters.advance {m : Module} {P : Nat → RootInst → Prop}
-    {D : RootInst → Ty → Prop} {observation : Observation} {source target : Store}
-    (classified : ClassifiedParameters m P D observation source)
-    (domain : ∀ r : RootInst, target.roots[r]? ≠ none → source.roots[r]? ≠ none) :
-    ClassifiedParameters m P D observation target := by
+    {D : RootInst → Ty → Prop} {observation : Observation} {s s' : St}
+    {instances : List Nat}
+    (classified : ClassifiedParameters m P D observation s.store)
+    (footprint : Footprint instances (fun r => ∃ E, D r E) s s')
+    (outside : ∀ i a si x, P i (.local a si x) → si ∉ instances) :
+    ClassifiedParameters m P D observation s'.store := by
   intro i r hr
   cases r with
   | global g => exact classified i _ hr
   | «local» a si x =>
-    rcases classified i _ hr with observed | slices | absent
+    rcases classified i _ hr with observed | slices | ⟨v, present, reference⟩ | absent
     · exact Or.inl observed
     · exact Or.inr (Or.inl slices)
-    · right; right
-      cases hv : target.roots[RootInst.local a si x]? with
+    · by_cases slice : ∃ E, D (.local a si x) E
+      · exact Or.inr (Or.inl slice)
+      · refine Or.inr (Or.inr (Or.inl ⟨v, ?_, reference⟩))
+        exact footprint.keep _ v present reference (by
+          intro a' si' x' equal
+          cases equal
+          exact outside i _ _ _ hr) slice
+    · right; right; right
+      cases hv : s'.store.roots[RootInst.local a si x]? with
       | none => rfl
-      | some v => exact False.elim ((domain _ (by simp [hv])) absent)
+      | some v => exact False.elim ((footprint.dom _ (by simp [hv])) absent)
 
 theorem ClassifiedParameters.mono {m : Module} {P P' : Nat → RootInst → Prop}
     {D D' : RootInst → Ty → Prop} {observation observation' : Observation} {store : Store}
@@ -134,10 +144,25 @@ theorem ClassifiedParameters.mono {m : Module} {P P' : Nat → RootInst → Prop
   cases r with
   | global g => exact classified i _ (parameters i _ hr)
   | «local» a si x =>
-    rcases classified i _ (parameters i _ hr) with ⟨T, observed⟩ | ⟨E, slice⟩ | absent
+    rcases classified i _ (parameters i _ hr) with ⟨T, observed⟩ | ⟨E, slice⟩ | reference | absent
     · exact Or.inl ⟨T, roots _ T observed⟩
     · exact Or.inr (Or.inl ⟨E, slices _ E slice⟩)
-    · exact Or.inr (Or.inr absent)
+    · exact Or.inr (Or.inr (Or.inl reference))
+    · exact Or.inr (Or.inr (Or.inr absent))
+
+theorem Frame.classifiedParameters_advance {m : Module} {W : World} {tenv : TEnv}
+    {penv : PEnv} {env : Env} {s s' : St} {future : List VarId}
+    {observation : Observation}
+    (frame : Frame m W tenv penv env s future)
+    (classified : ClassifiedParameters m W.P W.D observation s.store)
+    (footprint : Footprint (insts env) (Dset W) s s') :
+    ClassifiedParameters m W.P W.D observation s'.store := by
+  apply classified.advance footprint
+  intro i a si x parameter member
+  obtain ⟨scope, present, instanceEq⟩ := List.mem_map.1 member
+  have below := (frame.below scope present).1
+  rw [instanceEq] at below
+  exact (Nat.not_le_of_gt (frame.pAge i a si x parameter)) below
 
 theorem ClassifiedParameters.advanceS {m : Module} {W : World} {tenv : TEnv}
     {penv : PEnv} {env : Env} {s s' : St} {future : List VarId}
@@ -150,10 +175,20 @@ theorem ClassifiedParameters.advanceS {m : Module} {W : World} {tenv : TEnv}
   cases r with
   | global g => exact classified i _ hr
   | «local» a si x =>
-    rcases classified i _ hr with observed | slices | absent
+    rcases classified i _ hr with observed | slices | ⟨v, present, reference⟩ | absent
     · exact Or.inl observed
     · exact Or.inr (Or.inl slices)
-    · right; right
+    · by_cases slice : Dset W (.local a si x)
+      · exact Or.inr (Or.inl slice)
+      · refine Or.inr (Or.inr (Or.inl ⟨v, ?_, reference⟩))
+        apply footprint.keep _ v present reference ?_ slice
+        intro a' si' x' equal member
+        cases equal
+        obtain ⟨scope, present, instanceEq⟩ := List.mem_map.1 member
+        have below := (frame.below scope present).1
+        rw [instanceEq] at below
+        exact (Nat.not_le_of_gt (frame.pAge i _ _ _ hr)) below
+    · right; right; right
       cases hv : s'.store.roots[RootInst.local a si x]? with
       | none => rfl
       | some v =>
@@ -225,7 +260,7 @@ theorem ClassifiedParameters.localOwner {m : Module} {G : Nat}
   subst v
   cases stored <;> simp only [FlatTy] at hflat
   rename_i element values
-  rcases classified i _ parameter with ⟨T, hT⟩ | ⟨sliceE, hD⟩ | absent
+  rcases classified i _ parameter with ⟨T, hT⟩ | ⟨sliceE, hD⟩ | ⟨value, hv, reference⟩ | absent
   · obtain ⟨value, hv, ht⟩ := observed.roots _ T hT
     rw [hstored] at hv
     cases hv
@@ -234,6 +269,9 @@ theorem ClassifiedParameters.localOwner {m : Module} {G : Nat}
     rw [hstored] at hv
     cases hv
     simp [HasTy] at ht
+  · rw [hstored] at hv
+    cases hv
+    simp [IsRef] at reference
   · rw [hstored] at absent
     cases absent
 
