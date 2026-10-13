@@ -82,6 +82,12 @@ theorem Frame.gam_older {future : List VarId} (h : Frame m W tenv penv env s fut
     subst hr
     exact Nat.lt_of_lt_of_le (h.pAge j a si x hq) h.base_le
 
+/-- Owner authority denotes only roots already allocated before the next scope. -/
+theorem Frame.ownerGam_older {future : List VarId} (h : Frame m W tenv penv env s future)
+    {rho : List RootRef} {r : RootInst} (hg : Gam env W.ownerP rho r) :
+    ∀ a si x, r = RootInst.local a si x → si < s.nextScope :=
+  h.gam_older (hg.mono h.ownerSubset)
+
 /-- Binding a variable of an open block whose root was absent. -/
 theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
     {x : VarId} {lv : LocalVar} {si : ScopeInst}
@@ -90,7 +96,9 @@ theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
     (hfree : s.store.roots[RootInst.local env.act si x]? = none)
     (hv : HasTy m W.G s.store v lv.ty)
     (hroot : ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
-      Older r (.local env.act si x)) :
+      Older r (.local env.act si x))
+    (hownerRoot : OwnerRefTy lv.ty → ∀ r, Targets v r →
+      ∃ ann, penv.ann x = some ann ∧ Gam env W.ownerP ann r) :
     Frame m W { tenv with visible := x :: tenv.visible } penv env
       { s with store := s.store.introduce (.local env.act si x) v } (x :: future) := by
   have hle := introduce_le s.store (.local env.act si x) v hfree
@@ -171,6 +179,18 @@ theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
         exact (hroot r ht).1
       · simp only [e, if_false] at h3
         exact h.rooted x' lv' si' v' h1 h2 h3 r ht
+    rootedOwners := by
+      intro x' lv' si' v' h1 h2 h3 howner r ht
+      rw [get_introduce] at h3
+      by_cases e : RootInst.local env.act si x = RootInst.local env.act si' x'
+      · simp only [e, if_true, Option.some.injEq] at h3
+        subst h3
+        cases e
+        rw [hx] at h1
+        cases h1
+        exact hownerRoot howner r ht
+      · simp only [e, if_false] at h3
+        exact h.rootedOwners x' lv' si' v' h1 h2 h3 howner r ht
     inv := hInv.bind hfree hv.held (fun r ht => (hroot r ht).2)
       (fun a si' x' e => by cases e; exact (h.inst_lt hsi).2)
       (fun g equal => by cases equal)
@@ -216,7 +236,9 @@ theorem Frame.rebind {future : List VarId} (h : Frame m W tenv penv env s future
     (hparam : lv.ty.paramOk = true)
     (hv : HasTy m W.G s.store v lv.ty)
     (hroot : ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
-      Older r (.local env.act si x)) :
+      Older r (.local env.act si x))
+    (hownerRoot : OwnerRefTy lv.ty → ∀ r, Targets v r →
+      ∃ ann, penv.ann x = some ann ∧ Gam env W.ownerP ann r) :
     Frame m W tenv penv env
       { s with store := ⟨(s.store.roots.erase (.local env.act si x)).insert (.local env.act si x) v⟩ }
       future := by
@@ -258,6 +280,18 @@ theorem Frame.rebind {future : List VarId} (h : Frame m W tenv penv env s future
         exact (hroot r ht).1
       · simp only [e, if_false] at h3
         exact h.rooted x' lv' si' v' h1 h2 h3 r ht
+    rootedOwners := by
+      intro x' lv' si' v' h1 h2 h3 howner r ht
+      simp only [get_reinsert] at h3
+      by_cases e : RootInst.local env.act si x = RootInst.local env.act si' x'
+      · simp only [e, if_true, Option.some.injEq] at h3
+        subst h3
+        cases e
+        rw [hx] at h1
+        cases h1
+        exact hownerRoot howner r ht
+      · simp only [e, if_false] at h3
+        exact h.rootedOwners x' lv' si' v' h1 h2 h3 howner r ht
     storage := by
       intro r' T hstorage v' hpost
       by_cases heq : r' = RootInst.local env.act si x
@@ -359,6 +393,18 @@ theorem Frame.outer {s' : St} {D' : RootInst → Ty → Prop} {A' : RootInst →
         · cases k3
           exact k5 r (g3 r ht)
       · exact h.rooted x lv si v h1 h2 (he.back _ v h3 ht.isRef (by simp) hd) r ht
+    rootedOwners := by
+      intro x lv si v h1 h2 h3 howner r ht
+      by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
+      · obtain ⟨E, hd⟩ := hd
+        rcases hD _ E hd with ⟨k, _⟩ | ⟨x', lv', si', mu, k1, k2, k3, k4, _⟩
+        · exact absurd k (hfr h2)
+        · cases k3
+          rw [h1] at k1
+          cases k1
+          rw [k4] at howner
+          obtain ⟨mu', el, impossible | impossible⟩ := howner <;> cases impossible
+      · exact h.rootedOwners x lv si v h1 h2 (he.back _ v h3 ht.isRef (by simp) hd) howner r ht
     inv := hi
     sa := by
       intro r E hd
@@ -480,6 +526,18 @@ theorem Frame.outerPreserved {s' : St}
         · cases k3
           exact k5 r (g3 r htarget)
       · exact h.rooted x lv si v h1 h2 (he.back _ v h3 htarget.isRef (by simp) hd) r htarget
+    rootedOwners := by
+      intro x lv si v h1 h2 h3 howner r htarget
+      by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
+      · obtain ⟨E, hd⟩ := hd
+        rcases hD _ E hd with ⟨k, _⟩ | ⟨x', lv', si', mu, k1, k2, k3, k4, _⟩
+        · exact absurd k (hfr h2)
+        · cases k3
+          rw [h1] at k1
+          cases k1
+          rw [k4] at howner
+          obtain ⟨mu', el, impossible | impossible⟩ := howner <;> cases impossible
+      · exact h.rootedOwners x lv si v h1 h2 (he.back _ v h3 htarget.isRef (by simp) hd) howner r htarget
     inv := hi
     sa := by
       intro r E hd
@@ -526,6 +584,10 @@ theorem Frame.outwrite {future : List VarId} (h : Frame m W tenv penv env s futu
         intro x lv si v h1 h2 h3 t ht'
         simp only [get_reinsert, hne h2, if_false] at h3
         exact h.rooted x lv si v h1 h2 h3 t ht'
+      rootedOwners := by
+        intro x lv si v h1 h2 h3 howner t ht'
+        simp only [get_reinsert, hne h2, if_false] at h3
+        exact h.rootedOwners x lv si v h1 h2 h3 howner t ht'
       storage := by
         intro r' T hstorage v' hpost
         rcases hstorage with ⟨x, lv, si', hvar, hlk, rfl, hnonref, rfl⟩
@@ -571,9 +633,9 @@ theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
     rw [lookup_cons]
     have : a ≠ sc := fun e => hsc' (e ▸ lookup_key hab)
     simp [this, hab]
-  have hgam : ∀ rho r, Gam env W.P rho r →
-      Gam { env with scopes := (sc, s.nextScope) :: env.scopes } W.P rho r := by
-    rintro rho r ⟨q, hq, hr⟩
+  have hgam : ∀ (P : Nat → RootInst → Prop) rho r, Gam env P rho r →
+      Gam { env with scopes := (sc, s.nextScope) :: env.scopes } P rho r := by
+    rintro P rho r ⟨q, hq, hr⟩
     refine ⟨q, hq, ?_⟩
     cases q with
     | «local» y =>
@@ -627,6 +689,7 @@ theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
       · exact ⟨(h.below p hp).1, Nat.lt_succ_of_lt (h.below p hp).2⟩
     base_le := Nat.le_succ_of_le h.base_le
     pAge := h.pAge
+    ownerSubset := h.ownerSubset, ownerShape := h.ownerShape
     vis := by
       intro x hx
       intro hfut
@@ -666,7 +729,18 @@ theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
         exact absurd (h.inv.fresh _ _ _ (by rw [h3]; simp)) (Nat.lt_irrefl _)
       · simp only [e, if_false] at h2'
         obtain ⟨ann, ha, hg⟩ := h.rooted x lv si v h1 h2' h3 r ht
-        exact ⟨ann, ha, hgam _ _ hg⟩
+        exact ⟨ann, ha, hgam W.P _ _ hg⟩
+    rootedOwners := by
+      intro x lv si v h1 h2 h3 howner r ht
+      have h2' : ((sc, s.nextScope) :: env.scopes).lookup lv.scope = some si := h2
+      rw [lookup_cons] at h2'
+      by_cases e : lv.scope = sc
+      · simp only [e, if_true, Option.some.injEq] at h2'
+        subst h2'
+        exact absurd (h.inv.fresh _ _ _ (by rw [h3]; simp)) (Nat.lt_irrefl _)
+      · simp only [e, if_false] at h2'
+        obtain ⟨ann, ha, hg⟩ := h.rootedOwners x lv si v h1 h2' h3 howner r ht
+        exact ⟨ann, ha, hgam W.ownerP _ _ hg⟩
     inv := hInv
     aOlder := h.aOlder, dOut := h.dOut, dFun := h.dFun, sa := h.sa, pref := h.pref }
 
@@ -1036,6 +1110,7 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
     scopes_t := st2, scopes_p := sp2, nodup := hnd.2, sorted := htl
     below := fun p hp => h.below p (List.mem_cons_of_mem _ hp)
     base_le := h.base_le, pAge := h.pAge
+    ownerSubset := h.ownerSubset, ownerShape := h.ownerShape
     vis := by
       intro x hx
       intro hfut
@@ -1111,6 +1186,26 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
       have h3' : s2.store.roots[RootInst.local env.act si' x]? = some v := by
         rw [← hagree _ hnp]; exact h3
       obtain ⟨ann, ha, q, hq, hr⟩ := h.rooted x lv si' v h1 (hlk _ _ h2).1 h3' r ht
+      refine ⟨ann, ha, q, hq, ?_⟩
+      cases q with
+      | «local» y =>
+        obtain ⟨ly, siy, g1, g2, g3⟩ := hr
+        have g2' : ((sc, si) :: env.scopes).lookup ly.scope = some siy := g2
+        rw [lookup_cons] at g2'
+        by_cases e : ly.scope = sc
+        · simp only [e, if_true, Option.some.injEq] at g2'
+          subst g2'
+          exact absurd ⟨y, ly, g1, e, g3⟩ (K _ v hnp h3' r ht)
+        · simp only [e, if_false] at g2'
+          exact ⟨ly, siy, g1, g2', g3⟩
+      | global g => exact hr
+      | param j => exact hr
+    rootedOwners := by
+      intro x lv si' v h1 h2 h3 howner r ht
+      have hnp := (hlk _ _ h2).2 x
+      have h3' : s2.store.roots[RootInst.local env.act si' x]? = some v := by
+        rw [← hagree _ hnp]; exact h3
+      obtain ⟨ann, ha, q, hq, hr⟩ := h.rootedOwners x lv si' v h1 (hlk _ _ h2).1 h3' howner r ht
       refine ⟨ann, ha, q, hq, ?_⟩
       cases q with
       | «local» y =>

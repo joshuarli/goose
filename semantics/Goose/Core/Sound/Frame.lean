@@ -21,6 +21,8 @@ every root of a caller lies. -/
 structure World where
   G : Nat
   P : Nat → RootInst → Prop
+  /-- Parameter roots authorized by references to resizable owner storage. -/
+  ownerP : Nat → RootInst → Prop
   E : Eff
   base : Nat
   /-- The slice variables of callers this activation was given a reference
@@ -41,6 +43,35 @@ def RootIn (env : Env) (P : Nat → RootInst → Prop) (r : RootInst) : RootRef 
 /-- The root instances a static root set denotes. -/
 def Gam (env : Env) (P : Nat → RootInst → Prop) (rho : List RootRef) (r : RootInst) : Prop :=
   ∃ q, q ∈ rho ∧ RootIn env P r q
+
+/-- References that can name resizable owner storage. Limited storage and
+slice headers do not grant this authority. -/
+def OwnerRefTy (T : Ty) : Prop :=
+  ∃ mu el, T = .ref mu (.grow el) ∨ T = .ref mu (.growshrink el)
+
+/-- A parameter slot whose declared reference type grants owner authority. -/
+def OwnerRefParam (impl : Impl) (i : Nat) : Prop :=
+  ∃ p lv, impl.params[i]? = some p ∧ p.mode = .byRef ∧
+    impl.vars[p.var]? = some lv ∧ OwnerRefTy lv.ty
+
+/-- Parameter owner authority is empty outside owner reference slots. -/
+def OwnerParameterShape (impl : Impl) (ownerP : Nat → RootInst → Prop) : Prop :=
+  ∀ i r, ownerP i r → OwnerRefParam impl i
+
+/-- Owner reference outputs use owner authority for their target annotations. -/
+def OwnerRooted (env : Env) (ownerP : Nat → RootInst → Prop)
+    (roots : List RootRef) (v : Val) (T : Ty) : Prop :=
+  OwnerRefTy T → ∀ r, Targets v r → Gam env ownerP roots r
+
+theorem Gam.mono {env : Env} {P P' : Nat → RootInst → Prop}
+    {rho : List RootRef} {r : RootInst}
+    (h : Gam env P rho r) (hP : ∀ i r, P i r → P' i r) : Gam env P' rho r := by
+  obtain ⟨q, hq, hr⟩ := h
+  refine ⟨q, hq, ?_⟩
+  cases q with
+  | «local» _ => exact hr
+  | global _ => exact hr
+  | param i => exact hP i r hr
 
 /-- An activation with no variables: only parameters and globals denote. -/
 def noEnv : Env := ⟨#[], 0, [], 0⟩
@@ -407,6 +438,8 @@ structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env)
   sorted : env.scopes.Pairwise (fun a b => b.2 < a.2)
   below : ∀ p, p ∈ env.scopes → W.base ≤ p.2 ∧ p.2 < s.nextScope
   base_le : W.base ≤ s.nextScope
+  ownerSubset : ∀ i r, W.ownerP i r → W.P i r
+  ownerShape : OwnerParameterShape penv.impl W.ownerP
   pAge : ∀ (i : Nat) (a : ActId) (si : ScopeInst) (x : VarId), W.P i (.local a si x) → si < W.base
   vis : ∀ x, x ∈ tenv.visible → x ∈ future → ∃ lv si v, env.vars[x]? = some lv ∧
       env.scopes.lookup lv.scope = some si ∧ lv.ty.paramOk = true ∧
@@ -422,6 +455,11 @@ structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env)
       env.scopes.lookup lv.scope = some si →
       s.store.roots[RootInst.local env.act si x]? = some v → ∀ r, Targets v r →
       ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r
+  /-- Stored owner references retain authority even outside the continuation. -/
+  rootedOwners : ∀ (x : VarId) (lv : LocalVar) (si : ScopeInst) (v : Val),
+      env.vars[x]? = some lv → env.scopes.lookup lv.scope = some si →
+      s.store.roots[RootInst.local env.act si x]? = some v → OwnerRefTy lv.ty →
+      ∀ r, Targets v r → ∃ ann, penv.ann x = some ann ∧ Gam env W.ownerP ann r
   inv : StoreInvAt m W.G env tenv.visible future s
   aOlder : ∀ r t, W.A r t → Older t r
   dOut : ∀ r E, W.D r E → ∃ a si x, r = RootInst.local a si x ∧ si < W.base
@@ -495,6 +533,11 @@ theorem Frame.flatStep {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env
       intro x lv si v h1 h2 h3 r ht
       rcases hs.back _ v h3 with h0 | ⟨hn, _⟩
       · exact h.rooted x lv si v h1 h2 h0 r ht
+      · exact absurd ht.isRef hn
+    rootedOwners := by
+      intro x lv si v h1 h2 h3 howner r ht
+      rcases hs.back _ v h3 with h0 | ⟨hn, _⟩
+      · exact h.rootedOwners x lv si v h1 h2 h0 howner r ht
       · exact absurd ht.isRef hn
     storage := by
       intro r T hstorage v' hpost
