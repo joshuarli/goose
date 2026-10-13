@@ -237,6 +237,40 @@ def growOwner (r : ValueId) : B Bool := do
   | .data (.ref _ (.grow _)) => pure true
   | _ => pure false
 
+/-- Branch on `cv` to two blocks created now, in this order; closes the current
+block. Every two-way branch of the lowering has this shape. -/
+def fork (cv : ValueId) : B (BlockId × BlockId) := do
+  let (tb, _) ← newBlock []
+  let (eb, _) ← newBlock []
+  emitTerm (.condbr cv tb [] eb [])
+  pure (tb, eb)
+
+/-- Whether the owner of a `for` loop's source is a grow-only array, whose length the loop
+reads again. -/
+def regrowOf : Option ValueId → B Bool
+  | some r => growOwner r
+  | none => pure false
+
+/-- The length a `for` loop samples before it starts; none for a grow-only owner. -/
+def eachSampled (regrow : Bool) (vw : ValueId) : B ValueId :=
+  if regrow then pure 0 else emitDef (.viewLen vw)
+
+/-- The length a `for` loop tests against: read again for a grow-only owner, else the sampled one. -/
+def eachLen (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) : B ValueId :=
+  if regrow then emitDef (.arrayLen (owner.getD 0)) else pure sampled
+
+/-- The value a `for` loop's variable receives from the element at address `elem`: the element
+itself, or its address, frozen when the variable is a read-only reference. -/
+def eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) : B ValueId := do
+  if byRef then
+    match (← read).vars[x]? with
+    | some lv =>
+      match lv.ty with
+      | .ref m _ => freezeTo m elem
+      | _ => pure elem
+    | none => pure elem
+  else emitDef (.load elem)
+
 /-- Append to each block a branch to `jb` passing its value. -/
 def patchBrs (jb : BlockId) : List (BlockId × ValueId) → B Unit
   | [] => pure ()
@@ -348,9 +382,7 @@ def lowerExpr : Expr → B ValueId
   | .ifE c t f => do
     let cv ← lowerExpr c
     whenLive 0 fun _ => do
-      let (tb, _) ← newBlock []
-      let (eb, _) ← newBlock []
-      emitTerm (.condbr cv tb [] eb [])
+      let (tb, eb) ← fork cv
       setCur (some tb)
       let vt ← lowerBlock none [] true t
       let endT ← curBlock
@@ -407,6 +439,18 @@ def lowerBound : Bound → B Bnd
   | .omitted => pure .omitted
   | .expr e => do pure (.val (← lowerExpr e))
   | .fromEnd e => do pure (.fromEnd (← lowerExpr e))
+
+/-- The source of a `for` loop, sampled once: the address of the owner when the source is a place,
+and the view. -/
+def lowerEachSource : View → B (Option ValueId × ValueId)
+  | .of p => do
+    let r ← lowerPlace p
+    let vw ← emitDef (.snapshot r)
+    pure (some r, vw)
+  | .val e => do
+    let s ← lowerExpr e
+    let vw ← emitDef (.sliceView s)
+    pure (none, vw)
 
 /-- A Core block: enter its scope, bind `pre`, run the statements, evaluate the
 value (a unit when one is `want`ed and the block has none) and leave the scope.
@@ -472,17 +516,13 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
     whenLive () fun _ => do
       match f with
       | none =>
-        let (tb, _) ← newBlock []
-        let (jb, _) ← newBlock []
-        emitTerm (.condbr cv tb [] jb [])
+        let (tb, jb) ← fork cv
         setCur (some tb)
         let _ ← lowerBlock lc [] false t
         emitTerm (.br jb [])
         setCur (some jb)
       | some fb =>
-        let (tb, _) ← newBlock []
-        let (eb, _) ← newBlock []
-        emitTerm (.condbr cv tb [] eb [])
+        let (tb, eb) ← fork cv
         setCur (some tb)
         let _ ← lowerBlock lc [] false t
         let endT ← curBlock
@@ -497,9 +537,7 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
     let cv ← lowerExpr c
     whenLive () fun _ => do
       let depth := (← get).stack.length
-      let (bb, _) ← newBlock []
-      let (xb, _) ← newBlock []
-      emitTerm (.condbr cv bb [] xb [])
+      let (bb, xb) ← fork cv
       setCur (some bb)
       let _ ← lowerBlock (some ⟨depth, xb, .jump hb⟩) [] false body
       emitTerm (.br hb [])
@@ -515,9 +553,7 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
       emitTerm (.br hb [a])
       setCur (some hb)
       let c ← emitDef (.cmp .lt t i b)
-      let (bb, _) ← newBlock []
-      let (xb, _) ← newBlock []
-      emitTerm (.condbr c bb [] xb [])
+      let (bb, xb) ← fork c
       setCur (some bb)
       let _ ← lowerBlock (some ⟨depth, xb, .next hb t i⟩) [(x, i, org)] false body
       if (← isLive) then
@@ -527,19 +563,9 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
   | .forEach x idx v byRef body org => do
     -- The source is sampled once. An owner that is a grow-only array is kept by
     -- address so that its length can be read again.
-    let (owner, vw) ← match v with
-      | .of p => do
-        let r ← lowerPlace p
-        let vw ← emitDef (.snapshot r)
-        pure (some r, vw)
-      | .val e => do
-        let s ← lowerExpr e
-        let vw ← emitDef (.sliceView s)
-        pure (none, vw)
-    let regrow ← match owner with
-      | some r => growOwner r
-      | none => pure false
-    let sampled ← if regrow then pure 0 else emitDef (.viewLen vw)
+    let (owner, vw) ← lowerEachSource v
+    let regrow ← regrowOf owner
+    let sampled ← eachSampled regrow vw
     let startAt ← emitDef (.constInt .i64 0)
     whenLive () fun _ => do
       let depth := (← get).stack.length
@@ -547,21 +573,12 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
       let i := hs.headD 0
       emitTerm (.br hb [startAt])
       setCur (some hb)
-      let n ← if regrow then emitDef (.arrayLen (owner.getD 0)) else pure sampled
+      let n ← eachLen regrow owner sampled
       let c ← emitDef (.cmp .lt .i64 i n)
-      let (bb, _) ← newBlock []
-      let (xb, _) ← newBlock []
-      emitTerm (.condbr c bb [] xb [])
+      let (bb, xb) ← fork c
       setCur (some bb)
       let elem ← emitDef (.refElem vw i)
-      let ev ← if byRef then
-          match (← read).vars[x]? with
-          | some lv =>
-            match lv.ty with
-            | .ref m _ => freezeTo m elem
-            | _ => pure elem
-          | none => pure elem
-        else emitDef (.load elem)
+      let ev ← eachElemValue x byRef elem
       let pre := (x, ev, org) :: (match idx with
         | some j => [(j, i, org)]
         | none => [])
@@ -598,9 +615,7 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
   | .assertS e org => do
     let cv ← lowerExpr e
     whenLive () fun _ => do
-      let (pb, _) ← newBlock []
-      let (fb, _) ← newBlock []
-      emitTerm (.condbr cv pb [] fb [])
+      let (pb, fb) ← fork cv
       setCur (some fb)
       emitTerm (.abort .assert (some org))
       setCur (some pb)
