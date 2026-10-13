@@ -1,5 +1,6 @@
 import Goose.Lower.Claims
 import Goose.Lower.Validate
+import Goose.Lower.IfSymbols
 import Goose.Lower.Finish
 import Goose.Core.Validate
 import Goose.GIR.Validate
