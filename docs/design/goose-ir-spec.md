@@ -167,7 +167,7 @@ Abort kinds and the runtime text they correspond to: `div_zero` (`division by ze
 
 ### 4.6 Validation
 
-`validate : Module → Except Rejection Unit` is independent of the C++ checker. It trusts no exported annotation: root annotations and effect summaries are checked, not assumed. It checks every **context** separately, including contexts that share an implementation. In-memory modules obey the same table constraints as decoded modules: every variable origin is in the origin table, every implementation has a context, and each implementation or global initializer uses dense scope ids in block-opening order. The decoder checks that order while reading; validation checks it again for modules constructed directly.
+`validate : Module → Except Rejection Unit` is independent of the C++ checker. It trusts no exported annotation: root annotations and effect summaries are checked, not assumed. It checks every **context** separately, including contexts that share an implementation. In-memory modules obey the same table constraints as decoded modules: every variable origin is in the origin table, every local variable's scope indexes the implementation's scope table, every implementation has a context, and each implementation or global initializer uses dense scope ids in block-opening order. The decoder checks that order while reading; validation checks it again for modules constructed directly.
 
 | Rule | Check |
 |---|---|
