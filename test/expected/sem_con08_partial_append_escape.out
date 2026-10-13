@@ -1,2 +1,5 @@
 begin
-["start", "one", "two"] ["escaped"]
+first
+second
+third
+["start", "one", "two"] escaped

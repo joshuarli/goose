@@ -1,3 +1,4 @@
+// core-pilot: legacy-only
 // A runtime-sized result fills the limited receiver's remaining capacity.
 fn make_values(n: i64) -> i64[] {
     var values: i64[>..] = [];

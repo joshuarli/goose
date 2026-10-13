@@ -1,14 +1,18 @@
-// Two variable-size elements finish one append before the third element's
-// call returns from append_values. The caller keeps those elements and
-// receives the nonlocal result; later appends do not run.
-fn third() -> u8[][] { return ["escaped"] from append_values; }
+// core-pilot: legacy-only
+// The two earlier appends finish before the third initializer exits from the
+// append operation. The unfinished literal contributes no elements.
 
-fn append_values(out: u8[][>..]&) -> u8[][] {
+fn first() -> u8[] { print("first"); return "pending one"; }
+fn second() -> u8[] { print("second"); return "pending two"; }
+fn third() -> u8[] { print("third"); return "escaped" from append_values; }
+
+fn append_values(out: u8[][>..]&) -> u8[] {
     print("begin");
-    out.append(["one", "two"]);
-    out.append(third());
+    out.append(["one"]);
+    out.append(["two"]);
+    out.append([first(), second(), third()]);
     out.append(["not reached"]);
-    return ["normal"];
+    return "normal";
 }
 
 fn main() {

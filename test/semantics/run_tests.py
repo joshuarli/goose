@@ -163,16 +163,22 @@ def modes_for(source: Path) -> tuple[str, ...]:
 
 
 def discover(root: Path) -> list[Fixture]:
-    """Runnable fixtures of `root` (expectations in ../expected) and its goldens."""
+    """Runnable core-pilot fixtures and goldens, excluding explicit legacy-only cases."""
     fixtures = []
     expected = root.parent / "expected"
     for source in sorted(root.glob("*.goose")):
+        with open(source, encoding="utf-8") as handle:
+            if handle.readline().strip() == "// core-pilot: legacy-only":
+                continue
         name = source.stem
         stderr = expected / f"{name}.stderr"
         fixtures.append(Fixture(
             name, source, expected / f"{name}.out", stderr if stderr.exists() else None,
             (expected / f"{name}.aborts").exists(), None, modes_for(source)))
     for source in sorted((root / "golden").glob("*.goose")):
+        with open(source, encoding="utf-8") as handle:
+            if handle.readline().strip() == "// core-pilot: legacy-only":
+                continue
         name = source.stem
         expect = source.with_suffix(".expect.json")
         fixtures.append(Fixture(
@@ -711,6 +717,9 @@ def self_test() -> int:
         case("failure_tool_crash", HARNESS_FAILURE, {}, out="")
         case("inconclusive_fuel", INCONCLUSIVE, {RELEASE: answer(["timeout", "part"], 3)}, out="")
         case("inconclusive_hang", INCONCLUSIVE, {RELEASE: {"sleep": 30}}, out="")
+        fixture("legacy_only_case", "", source="// core-pilot: legacy-only\nfn main() {}\n")
+        fixture("legacy_only_golden", None, golden=True,
+                source="// core-pilot: legacy-only\nfn main() {}\n")
 
         fake_script = Path(temporary) / "script.json"
 
@@ -725,6 +734,10 @@ def self_test() -> int:
                 print(("ok   " if condition else "FAIL ") + label)
             if not condition:
                 failures.append(label)
+
+        core_pilot_names = {fixture.name for fixture in discover(tree / "semantics")}
+        check("core-pilot discovery skips explicit legacy-only fixtures",
+              {"legacy_only_case", "legacy_only_golden"}.isdisjoint(core_pilot_names))
 
         fake_goose, fake_tool = FAKE / "goose.py", FAKE / "semantics.py"
         names = sorted(expected_class)
@@ -800,6 +813,7 @@ def self_test() -> int:
         # Corpus mode: the main runner's fixtures and the samples, with its skip rules.
         repo = Path(temporary) / "repo"
         for sub in ("test/core", "test/lint", "test/errors_tc", "test/goose_in_goose", "test/gfx",
+                    "test/semantics",
                     "test/expected", "samples/expected", "samples/data"):
             (repo / sub).mkdir(parents=True)
         corpus_runs, corpus_exports, corpus_validate = {}, {}, {}
@@ -835,6 +849,9 @@ def self_test() -> int:
                               ("core_export_report", ["struct", "float"])):
             program("test/core", name, UNSUPPORTED, {})
             corpus_exports[name] = {"unsupported": feature}
+        program("test/semantics", "legacy_only_case", UNSUPPORTED, {},
+                first="// core-pilot: legacy-only\n")
+        corpus_exports["legacy_only_case"] = {"unsupported": "construction"}
         # Skipped before anything runs: a call to the fake tools would be a failure.
         program("test/core", "parse_only_case", None, {}, first="// parse-only\n")
         program("test/core", "lexer_tokens", None, {})
@@ -860,17 +877,22 @@ def self_test() -> int:
             check(f"corpus {cls} count",
                   summary[cls] == sum(1 for v in corpus_class.values() if v == cls))
         check("corpus agree count", summary[AGREE] == 6)
-        check("corpus unsupported count", summary[UNSUPPORTED] == 4)
+        check("corpus unsupported count", summary[UNSUPPORTED] == 5)
         check("corpus exported count", summary["exported"] == 10)
-        check("corpus feature histogram", summary["unsupported_features"] == {"float": 2, "struct": 3})
+        check("corpus feature histogram", summary["unsupported_features"] == {
+            "construction": 1, "float": 2, "struct": 3})
         check("corpus exact feature-set forecast",
               summary["forecast"]["feature_sets"] == [
+                  {"features": ["construction"], "programs": 1},
                   {"features": ["float"], "programs": 1},
                   {"features": ["float", "struct"], "programs": 1},
                   {"features": ["struct"], "programs": 2},
               ])
         check("corpus single-feature unlock forecast",
-              summary["forecast"]["single_feature_unlocks"] == {"float": 1, "struct": 2})
+              summary["forecast"]["single_feature_unlocks"] == {
+                  "construction": 1, "float": 1, "struct": 2})
+        check("corpus accounts for legacy-only source",
+              summary[UNSUPPORTED] == sum(1 for v in corpus_class.values() if v == UNSUPPORTED))
         check("corpus lists no unsupported program", UNSUPPORTED not in listed.values())
         check("corpus lists each non-agreeing exported program",
               sorted(listed) == ["core/abort_wrong_kind", "core/invalid_export", "core/out_of_fuel",
