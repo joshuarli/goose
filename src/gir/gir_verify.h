@@ -55,6 +55,7 @@ private:
     };
     vector<Fn> fns;
     vector<pair<vector<GirTypeId>, vector<GirTypeId>>> sigs;
+    vector<vector<int>> lowPassedPairs;
 
     [[noreturn]] static void Fail(const char *code, string msg) { throw GirViolation { code, std::move(msg) }; }
 
@@ -200,6 +201,7 @@ private:
         for (auto &fn : fns) CheckCfg(fn);
         CheckUnreachable();
         if (m.low) {
+            lowPassedPairs = ComputePassedOwnerPairs();
             for (auto &fn : fns) CheckPlacement(fn);
             for (auto &fn : fns) CheckOrigins(fn);
             return;
@@ -361,75 +363,315 @@ private:
     // things that move a stack's top are a header's initialization from the
     // stack's own top, a bump that the same block follows with the length
     // update of that stack's header, and the restoring of a mark taken from the
-    // same stack. A bump on a stack passed in cannot be tied to a header more
-    // exactly than "a header that was passed in".
+    // same stack. Passed pairs get identities from the call edges that provide
+    // adjacent header and stack words for one owner argument.
     struct StackId {
-        int kind = 0;   // 0 none, 1 a stack the function owns, 2 a global's, 3 passed in
+        int kind = 0;   // 0 unknown, 1 a function stack, 2 a global stack, 3 a passed pair, 4 a paired phi
         int index = 0;
-        bool operator==(const StackId &o) const { return kind == o.kind && (kind == 3 || index == o.index); }
+        bool operator==(const StackId &o) const { return kind == o.kind && index == o.index; }
     };
 
-    void CheckStackDiscipline(const Fn &fn) {
-        auto &f = *fn.f;
-        auto bad = [&](const string &msg) { Fail("GIR-V090", cat(fn.label, ": ", msg)); };
-        auto n = fn.vt.size();
-        vector<StackId> stack(n), header(n), markof(n);
-        auto &entry = f.blocks[0];
-        for (size_t k = 1; k < entry.params.size(); k++) {
-            stack[entry.params[k].first] = { 3, 0 };
-            header[entry.params[k].first] = { 3, 0 };
+    struct StackFacts {
+        vector<StackId> stack, header, markof;
+    };
+
+    static StackId MergeStackFacts(const vector<StackId> &values) {
+        StackId merged;
+        bool hasKnown = false;
+        for (auto value : values) {
+            if (value.kind == -1) continue;
+            if (value.kind == 0) return {};
+            if (!hasKnown) {
+                merged = value;
+                hasKnown = true;
+            } else if (!(merged == value)) return {};
         }
-        auto at = [&](const vector<StackId> &v, int x) { return x >= 0 && x < (int)n ? v[x] : StackId {}; };
-        for (int pass = 0; pass < 2; pass++)
+        return hasKnown ? merged : StackId { -1, 0 };
+    }
+
+    StackFacts AnalyzeStackFacts(const Fn &fn, const vector<int> &passedPairs) const {
+        auto &f = *fn.f;
+        auto n = fn.vt.size();
+        StackFacts facts { vector<StackId>(n), vector<StackId>(n), vector<StackId>(n) };
+        for (size_t b = 1; b < f.blocks.size(); b++)
+            for (auto &p : f.blocks[b].params) {
+                facts.stack[p.first] = { -1, 0 };
+                facts.header[p.first] = { -1, 0 };
+            }
+        auto at = [&](const vector<StackId> &v, int x) {
+            return x >= 0 && x < (int)n ? v[x] : StackId {};
+        };
+        auto &entry = f.blocks[0];
+        for (auto pos : passedPairs) {
+            if (pos < 0 || pos + 1 >= (int)entry.params.size()) continue;
+            auto token = StackId { 3, pos };
+            facts.header[entry.params[pos].first] = token;
+            facts.stack[entry.params[pos + 1].first] = token;
+        }
+
+        struct Edge { int block; vector<int> args; };
+        vector<vector<Edge>> incoming(f.blocks.size());
+        for (size_t b = 0; b < f.blocks.size(); b++) {
+            auto *term = LastTerm(f.blocks[b]);
+            if (!term) continue;
+            auto add = [&](int target, const vector<int> &args) {
+                if (target >= 0 && target < (int)incoming.size())
+                    incoming[target].push_back({ (int)b, args });
+            };
+            if (term->op == GirOp::Br) add(term->idx, term->vals);
+            else if (term->op == GirOp::CondBr) {
+                add(term->idx, term->vals);
+                add(term->idx2, term->vals2);
+            }
+        }
+        map<pair<int, int>, int> phiTokens;
+        int nextToken = 0;
+        auto pairToken = [&](int headerValue, int stackValue) {
+            auto key = make_pair(headerValue, stackValue);
+            auto [it, inserted] = phiTokens.emplace(key, nextToken);
+            if (inserted) nextToken++;
+            return StackId { 4, it->second };
+        };
+
+        bool changed = true;
+        int rounds = 0;
+        while (changed && rounds++ < (int)n * 4 + (int)f.blocks.size() * 4 + 32) {
+            changed = false;
+            auto set = [&](vector<StackId> &v, int id, StackId value) {
+                if (id < 0 || id >= (int)v.size() || v[id] == value) return;
+                v[id] = value;
+                changed = true;
+            };
+
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
                     if (i.res < 0 || i.res >= (int)n) continue;
                     switch (i.op) {
-                        case GirOp::StackAt: stack[i.res] = { 1, i.idx }; break;
-                        case GirOp::GlobalStack: stack[i.res] = { 2, i.idx }; break;
-                        // A stack or header held in a variable or returned: it
-                        // is one passed in, as far as the block can tell.
-                        case GirOp::LocalGet: case GirOp::PLoad:
-                            if (m.Type(fn.vt[i.res]).kind == CoreType::Ptr) {
-                                stack[i.res] = { 3, 0 };
-                                header[i.res] = { 3, 0 };
-                            }
+                        case GirOp::StackAt: set(facts.stack, i.res, { 1, i.idx }); break;
+                        case GirOp::GlobalStack: set(facts.stack, i.res, { 2, i.idx }); break;
+                        case GirOp::StackMark:
+                            set(facts.markof, i.res, at(facts.stack, i.a));
                             break;
-                        case GirOp::StackMark: markof[i.res] = at(stack, i.a); break;
-                        case GirOp::HdrBase: markof[i.res] = at(header, i.a); break;
-                        case GirOp::PtrOffset: markof[i.res] = at(markof, i.a); break;
+                        case GirOp::HdrBase:
+                            set(facts.markof, i.res, at(facts.header, i.a));
+                            break;
+                        case GirOp::PtrOffset:
+                            set(facts.markof, i.res, at(facts.markof, i.a));
+                            break;
                         case GirOp::FrameAddr:
                             if (i.idx >= 0 && i.idx < (int)f.members.size() &&
                                 f.members[i.idx].kind == GirMember::Header)
-                                header[i.res] = { 1, f.members[i.idx].stack };
+                                set(facts.header, i.res, { 1, f.members[i.idx].stack });
                             break;
                         case GirOp::GlobalAddr:
                             if (i.idx >= 0 && i.idx < (int)m.lowglobals.size() &&
                                 m.lowglobals[i.idx].kind == GirMember::Header)
-                                header[i.res] = { 2, i.idx };
+                                set(facts.header, i.res, { 2, i.idx });
                             break;
+                        case GirOp::LocalGet: {
+                            vector<StackId> stacks, headers;
+                            for (auto &sourceBlock : f.blocks)
+                                for (auto &source : sourceBlock.insts)
+                                    if (source.op == GirOp::LocalSet && source.idx == i.idx) {
+                                        stacks.push_back(at(facts.stack, source.a));
+                                        headers.push_back(at(facts.header, source.a));
+                                    }
+                            set(facts.stack, i.res, MergeStackFacts(stacks));
+                            set(facts.header, i.res, MergeStackFacts(headers));
+                            break;
+                        }
                         default: break;
                     }
                 }
+
+            for (size_t b = 1; b < f.blocks.size(); b++) {
+                auto &params = f.blocks[b].params;
+                auto &edges = incoming[b];
+                for (size_t p = 0; p < params.size(); p++) {
+                    vector<StackId> stacks, headers;
+                    for (auto &edge : edges) {
+                        if (p >= edge.args.size()) continue;
+                        stacks.push_back(at(facts.stack, edge.args[p]));
+                        headers.push_back(at(facts.header, edge.args[p]));
+                    }
+                    set(facts.stack, params[p].first, MergeStackFacts(stacks));
+                    set(facts.header, params[p].first, MergeStackFacts(headers));
+                }
+                for (size_t hp = 0; hp < params.size(); hp++)
+                    for (size_t sp = 0; sp < params.size(); sp++) {
+                        bool paired = !edges.empty();
+                        bool hasKnownPair = false;
+                        StackId firstPair;
+                        bool samePair = true;
+                        for (auto &edge : edges) {
+                            if (hp >= edge.args.size() || sp >= edge.args.size()) {
+                                paired = false;
+                                break;
+                            }
+                            auto h = at(facts.header, edge.args[hp]);
+                            auto s = at(facts.stack, edge.args[sp]);
+                            if (h.kind == -1 || s.kind == -1) continue;
+                            if (h.kind == 0 || !(h == s)) { paired = false; break; }
+                            if (!hasKnownPair) firstPair = h;
+                            else if (!(firstPair == h)) samePair = false;
+                            hasKnownPair = true;
+                        }
+                        if (!paired || !hasKnownPair) continue;
+                        auto token = samePair ? firstPair : pairToken(params[hp].first, params[sp].first);
+                        set(facts.header, params[hp].first, token);
+                        set(facts.stack, params[sp].first, token);
+                    }
+            }
+        }
+        return facts;
+    }
+
+    bool LowValueDependsOn(const GirFunc &fn, int value, int parameter) const {
+        vector<vector<pair<int, vector<int>>>> incoming(fn.blocks.size());
+        for (size_t b = 0; b < fn.blocks.size(); b++) {
+            auto *term = LastTerm(fn.blocks[b]);
+            if (!term) continue;
+            auto add = [&](int target, const vector<int> &args) {
+                if (target >= 0 && target < (int)incoming.size())
+                    incoming[target].push_back({ (int)b, args });
+            };
+            if (term->op == GirOp::Br) add(term->idx, term->vals);
+            else if (term->op == GirOp::CondBr) {
+                add(term->idx, term->vals);
+                add(term->idx2, term->vals2);
+            }
+        }
+        set<int> seen;
+        function<bool(int)> visit = [&](int current) {
+            if (current == parameter) return true;
+            if (current < 0 || !seen.insert(current).second) return false;
+            for (size_t b = 1; b < fn.blocks.size(); b++)
+                for (size_t p = 0; p < fn.blocks[b].params.size(); p++)
+                    if (fn.blocks[b].params[p].first == current)
+                        for (auto &edge : incoming[b])
+                            if (p < edge.second.size() && visit(edge.second[p])) return true;
+            for (auto &b : fn.blocks)
+                for (auto &i : b.insts) {
+                    if (i.res != current) continue;
+                    if (i.op == GirOp::PtrOffset && visit(i.a)) return true;
+                    if (i.op == GirOp::LocalGet)
+                        for (auto &sourceBlock : fn.blocks)
+                            for (auto &source : sourceBlock.insts)
+                                if (source.op == GirOp::LocalSet && source.idx == i.idx && visit(source.a))
+                                    return true;
+                }
+            return false;
+        };
+        return visit(value);
+    }
+
+    bool LowEntryParamIsOwnerPair(const GirFunc &fn, size_t position) const {
+        if (position + 1 >= fn.params.size() ||
+            m.Type(fn.params[position]).kind != CoreType::Ptr ||
+            m.Type(fn.params[position + 1]).kind != CoreType::Ptr) return false;
+        auto header = fn.blocks[0].params[position].first;
+        auto stack = fn.blocks[0].params[position + 1].first;
+        bool headerUsed = false, stackUsed = false;
+        for (auto &b : fn.blocks)
+            for (auto &i : b.insts) {
+                switch (i.op) {
+                    case GirOp::HdrInit: case GirOp::HdrSetLen: case GirOp::HdrBase: case GirOp::HdrLen:
+                        headerUsed |= LowValueDependsOn(fn, i.a, header);
+                        break;
+                    case GirOp::StackMark: case GirOp::StackRelease: case GirOp::StackBump:
+                        stackUsed |= LowValueDependsOn(fn, i.a, stack);
+                        break;
+                    default: break;
+                }
+            }
+        return headerUsed && stackUsed;
+    }
+
+    vector<vector<int>> ComputePassedOwnerPairs() const {
+        vector<vector<int>> pairs(m.funcs.size());
+        bool changed = true;
+        int rounds = 0;
+        while (changed && rounds++ < (int)m.funcs.size() * 4 + 8) {
+            changed = false;
+            vector<StackFacts> facts;
+            facts.reserve(fns.size());
+            for (size_t f = 0; f < fns.size(); f++) {
+                const vector<int> empty;
+                auto args = f < pairs.size() ? pairs[f] : empty;
+                facts.push_back(AnalyzeStackFacts(fns[f], args));
+            }
+            auto at = [&](const vector<StackId> &values, int id) {
+                return id >= 0 && id < (int)values.size() ? values[id] : StackId {};
+            };
+            vector<vector<bool>> called(m.funcs.size()), valid(m.funcs.size());
+            for (size_t f = 0; f < m.funcs.size(); f++) {
+                called[f].assign(m.funcs[f].params.size(), false);
+                valid[f].assign(m.funcs[f].params.size(), true);
+            }
+            for (size_t caller = 0; caller < fns.size(); caller++) {
+                auto &function = *fns[caller].f;
+                for (auto &b : function.blocks)
+                    for (auto &i : b.insts) {
+                        if (i.op != GirOp::Call || i.idx < 0 || i.idx >= (int)m.funcs.size()) continue;
+                        auto target = i.idx;
+                        auto &callee = m.funcs[target];
+                        for (size_t p = 1; p + 1 < callee.params.size(); p++) {
+                            if (m.Type(callee.params[p]).kind != CoreType::Ptr ||
+                                m.Type(callee.params[p + 1]).kind != CoreType::Ptr) continue;
+                            called[target][p] = true;
+                            if (p + 1 >= i.vals.size()) { valid[target][p] = false; continue; }
+                            auto header = at(facts[caller].header, i.vals[p]);
+                            auto stack = at(facts[caller].stack, i.vals[p + 1]);
+                            if (header.kind <= 0 || !(header == stack)) valid[target][p] = false;
+                        }
+                    }
+            }
+            for (size_t f = 0; f < m.funcs.size(); f++)
+                for (size_t p = 1; p < called[f].size(); p++)
+                    if (((called[f][p] && valid[f][p]) ||
+                         (!called[f][p] && LowEntryParamIsOwnerPair(m.funcs[f], p))) &&
+                        find(pairs[f].begin(), pairs[f].end(), (int)p) == pairs[f].end()) {
+                        pairs[f].push_back((int)p);
+                        changed = true;
+                    }
+        }
+        return pairs;
+    }
+
+    void CheckStackDiscipline(const Fn &fn) {
+        auto &f = *fn.f;
+        auto bad = [&](const string &msg) { Fail("GIR-V090", cat(fn.label, ": ", msg)); };
+        auto passed = [&]() -> const vector<int> & {
+            for (size_t i = 0; i < m.funcs.size(); i++)
+                if (&m.funcs[i] == fn.f) return lowPassedPairs[i];
+            static const vector<int> empty;
+            return empty;
+        }();
+        auto facts = AnalyzeStackFacts(fn, passed);
+        auto &stack = facts.stack;
+        auto &header = facts.header;
+        auto &markof = facts.markof;
+        auto n = fn.vt.size();
+        auto at = [&](const vector<StackId> &v, int x) { return x >= 0 && x < (int)n ? v[x] : StackId {}; };
         for (auto &b : f.blocks) {
             vector<StackId> pending;
             for (auto &i : b.insts) {
                 switch (i.op) {
                     case GirOp::HdrInit: {
                         auto h = at(header, i.a), mk = at(markof, i.b);
-                        if (h.kind == 0 || h.kind == 3 || mk.kind == 0 || !(h == mk))
+                        if (h.kind <= 0 || h.kind == 3 || h.kind == 4 || mk.kind <= 0 || !(h == mk))
                             bad("a header initialized from something other than the top of its own stack");
                         break;
                     }
                     case GirOp::StackRelease: {
                         auto s = at(stack, i.a), mk = at(markof, i.b);
-                        if (s.kind == 0 || mk.kind == 0 || !(s == mk))
+                        if (s.kind <= 0 || mk.kind <= 0 || !(s == mk))
                             bad("a watermark restored from a mark of another stack");
                         break;
                     }
                     case GirOp::StackBump: {
                         auto s = at(stack, i.a);
-                        if (s.kind == 0) bad("a bump of a stack that is not known");
+                        if (s.kind <= 0) bad("a bump of a stack that is not known");
                         pending.push_back(s);
                         break;
                     }

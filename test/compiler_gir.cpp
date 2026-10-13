@@ -741,6 +741,102 @@ void RejectsWatermarkPastCallerOwnedRegion() {
     assert(Code(m) == "GIR-V090");
 }
 
+GirModule LowPassedOwnerPairModule(bool unrelated, bool throughLocal, bool throughBlock) {
+    auto m = LowBase();
+    auto ptr = m.PtrType();
+    Main(m).stacks = 2;
+    GirMember first, second;
+    first.kind = second.kind = GirMember::Header;
+    first.stack = 0;
+    second.stack = 1;
+    first.scope = second.scope = 0;
+    Main(m).members = { first, second };
+
+    GirFunc consume;
+    consume.name = "consume";
+    consume.params = { m.IntType(CoreIntTy::I64), ptr, ptr, ptr, ptr };
+    consume.scopes = { -1 };
+    consume.summary.unknown = true;
+    if (throughLocal) {
+        GirMember headerLocal, stackLocal;
+        headerLocal.kind = stackLocal.kind = GirMember::Scalar;
+        headerLocal.ty = stackLocal.ty = ptr;
+        headerLocal.scope = stackLocal.scope = 0;
+        consume.members = { headerLocal, stackLocal };
+    }
+    GirBlock entry;
+    entry.params = { { 0, m.IntType(CoreIntTy::I64) }, { 1, ptr }, { 2, ptr },
+                     { 3, ptr }, { 4, ptr } };
+    GirInst header, stack;
+    if (throughLocal) {
+        GirInst saveHeader, saveStack, loadHeader, loadStack;
+        saveHeader.op = saveStack.op = GirOp::LocalSet;
+        saveHeader.a = 1;
+        saveHeader.idx = 0;
+        saveStack.a = 2;
+        saveStack.idx = 1;
+        loadHeader = Def(GirOp::LocalGet, 5);
+        loadHeader.idx = 0;
+        loadStack = Def(GirOp::LocalGet, 6);
+        loadStack.idx = 1;
+        header = Def(GirOp::HdrBase, 7);
+        header.a = 5;
+        stack.op = GirOp::StackRelease;
+        stack.a = unrelated ? 4 : 6;
+        stack.b = 7;
+        entry.insts = { saveHeader, saveStack, loadHeader, loadStack, header, stack, Ret() };
+    } else if (throughBlock) {
+        GirInst branch;
+        branch.op = GirOp::Br;
+        branch.idx = 1;
+        branch.vals = { 1, 2 };
+        entry.insts = { branch };
+        GirBlock body;
+        body.params = { { 5, ptr }, { 6, ptr } };
+        header = Def(GirOp::HdrBase, 7);
+        header.a = 5;
+        stack.op = GirOp::StackRelease;
+        stack.a = unrelated ? 4 : 6;
+        stack.b = 7;
+        body.insts = { header, stack, Ret() };
+        consume.blocks = { entry, body };
+    } else {
+        header = Def(GirOp::HdrBase, 5);
+        header.a = 1;
+        stack.op = GirOp::StackRelease;
+        stack.a = unrelated ? 4 : 2;
+        stack.b = 5;
+        entry.insts = { header, stack, Ret() };
+    }
+    if (consume.blocks.empty()) consume.blocks = { entry };
+    m.funcs.push_back(std::move(consume));
+
+    GirInst firstHeader = Def(GirOp::FrameAddr, 1);
+    firstHeader.idx = 0;
+    GirInst firstStack = Def(GirOp::StackAt, 2);
+    firstStack.a = 0;
+    firstStack.idx = 0;
+    GirInst secondHeader = Def(GirOp::FrameAddr, 3);
+    secondHeader.idx = 1;
+    GirInst secondStack = Def(GirOp::StackAt, 4);
+    secondStack.a = 0;
+    secondStack.idx = 1;
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 1;
+    call.vals = { 0, 1, 2, 3, 4 };
+    call.org = 0;
+    Main(m).blocks[0].insts = { firstHeader, firstStack, secondHeader, secondStack, call, Ret() };
+    return m;
+}
+
+void PassedOwnerPairsKeepTheirExactIdentity() {
+    assert(Code(LowPassedOwnerPairModule(true, false, false)) == "GIR-V090");
+    assert(Code(LowPassedOwnerPairModule(false, false, false)) == "");
+    assert(Code(LowPassedOwnerPairModule(false, true, false)) == "");
+    assert(Code(LowPassedOwnerPairModule(false, false, true)) == "");
+}
+
 void RejectsUnresolvedLayout() {
     auto m = LowBase();
     GirFunc f = Main(m);
@@ -2614,6 +2710,7 @@ int main() {
     RejectsHighOperationInLowModule();
     RejectsTwoResizablesOnOneStack();
     RejectsWatermarkPastCallerOwnedRegion();
+    PassedOwnerPairsKeepTheirExactIdentity();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
