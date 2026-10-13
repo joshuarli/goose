@@ -136,6 +136,11 @@ struct BuildReport {
 
 inline unique_ptr<BuildReport> g_build_report;
 
+// Whether the report also records what each check consulted and digests what
+// it produced (--build-report-deps). That costs about as much as the rest of
+// the report together, and only a comparison of two reports needs it.
+inline bool report_dependencies = false;
+
 inline long long ReportCountNodes(Node *root) {
     if (!root) return 0;
     unordered_set<const Node *> seen;
@@ -175,8 +180,10 @@ inline long long ReportEntryReachable(Ast &ast) {
     };
     if (auto mainsf = ast.MainFunction())
         for (auto spec : mainsf->specs) enqueue(spec);
+    // One set for all the scans: a node met in an earlier one has already had
+    // its callees queued, and queueing is idempotent.
+    unordered_set<const Node *> seen;
     auto scan = [&](Node *root) {
-        unordered_set<const Node *> seen;
         function<void(Node *)> walk = [&](Node *node) {
             if (!node || !seen.insert(node).second) return;
             if (auto call = Is<Call>(node)) {
@@ -215,7 +222,7 @@ inline void BuildReportStart(const string &path, const string &input, int optlev
     g_build_report->frontend_only = frontend_only;
     build_recorder = &g_build_report->rec;
     emit_options.explain = true;
-    DepsStart();
+    if (report_dependencies) DepsStart();
     g_build_report->rec.Enter(Phase::ParseResolve);
 }
 
@@ -232,7 +239,16 @@ inline void BuildReportAfterCheck(Ast &ast) {
     auto &keys = *r.keys;
     r.source_functions = (long long)ast.functions.size();
     r.checked_contexts = (long long)ast.fnspecs.size();
-    r.entry_reachable = ReportEntryReachable(ast);
+    {
+        CollectionPart part("entry_reachable");
+        r.entry_reachable = ReportEntryReachable(ast);
+    }
+    auto part_start = BuildRecorder::Cpu();
+    auto part_end = [&](const char *name) {
+        auto now = BuildRecorder::Cpu();
+        r.rec.collection_cpu[name] += now - part_start;
+        part_start = now;
+    };
 
     unordered_map<const SFunction *, size_t> index;
     for (auto sf : ast.functions) {
@@ -252,6 +268,7 @@ inline void BuildReportAfterCheck(Ast &ast) {
         f.specs.push_back(spec);
         f.nodes_before += ReportCountNodes(spec->body);
     }
+    part_end("functions_and_nodes");
     for (auto &f : r.functions) {
         // Contexts with equal keys are duplicates: the checker made a second
         // specialization where the reuse test could not take the first (a
@@ -301,7 +318,9 @@ inline void BuildReportAfterCheck(Ast &ast) {
             f.dims[d].merged = (long long)(ctx.size() - groups.size());
         }
     }
-    DepsAfterCheck(ast, keys);
+    part_end("context_keys_and_dimensions");
+    if (g_deps) DepsAfterCheck(ast, keys);
+    part_end("dependencies");
     r.rec.Enter(Phase::Optimize);
 }
 
@@ -311,6 +330,7 @@ inline void BuildReportAfterOptimize(Ast &ast) {
     r.rec.Enter(Phase::ReportCollection);
     unordered_map<const SFunction *, size_t> index;
     for (size_t i = 0; i < r.functions.size(); i++) index[r.functions[i].sf] = i;
+    CollectionPart part("nodes_after_optimization");
     r.live_instances = 0;
     for (auto spec : ast.fnspecs) {
         if (!spec->live || !spec->body) continue;
@@ -347,6 +367,7 @@ inline void BuildReportOutput(CodeGen &cg, const string &file, size_t bytes, siz
                               int runtime_sections) {
     auto &r = *g_build_report;
     r.rec.Enter(Phase::ReportCollection);
+    CollectionPart part("output_accounting");
     r.wrote = true;
     r.out_path = file;
     r.out_bytes = (long long)bytes;
@@ -538,6 +559,9 @@ inline void BuildReportWrite() {
     j.EndObj();
     long long peak = -1;
     for (auto &t : rec.phase) peak = max(peak, t.peak_rss);
+    j.Key("report_collection_cpu_seconds").Obj();
+    for (auto &[name, cpu] : rec.collection_cpu) j.F(name, cpu);
+    j.EndObj();
     j.Key("total").Obj();
     j.F("wall_seconds", rec.endwall - rec.startwall).F("cpu_seconds", rec.endcpu - rec.startcpu);
     j.Key("peak_rss_bytes").OptInt(peak);

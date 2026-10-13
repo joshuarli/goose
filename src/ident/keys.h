@@ -111,6 +111,7 @@ struct ContextKey {
 // function value was bound from is named by its first member instead).
 class KeyMaker {
     const Ast &ast;
+    vector<string> modules;                               // By file, once computed.
     unordered_map<const TypeExpr *, Digest> types;
     unordered_map<const SFunction *, Digest> decls;
     unordered_map<const SFunction *, int> ordinals;       // Among same-named nested siblings, or duplicates.
@@ -370,13 +371,7 @@ class KeyMaker {
         d[(int)SpecDim::SlotViews] = Memo(views);
     }
 
-public:
-    explicit KeyMaker(const Ast &_ast) : ast(_ast) {}
-
-    // The module a file is: its package and its path within it, so the same
-    // program checked out elsewhere has the same modules.
-    string ModuleOf(int fileidx) {
-        if (fileidx < 0 || (size_t)fileidx >= ast.sources.size()) return "?";
+    string ModuleName(int fileidx) {
         auto path = Slashes(ast.sources[fileidx].first);
         string pkgname = "?";
         if ((size_t)fileidx < ast.filepkg.size() && ast.filepkg[fileidx] >= 0 &&
@@ -395,6 +390,19 @@ public:
         auto dir = slash == string::npos ? string() : base.substr(0, slash + 1);
         if (!dir.empty() && path.compare(0, dir.size(), dir) == 0) path = path.substr(dir.size());
         return cat(pkgname, ":", Normal(path));
+    }
+
+public:
+    explicit KeyMaker(const Ast &_ast) : ast(_ast) {}
+
+    // The module a file is: its package and its path within it, so the same
+    // program checked out elsewhere has the same modules.
+    const string &ModuleOf(int fileidx) {
+        static const string unknown = "?";
+        if (fileidx < 0 || (size_t)fileidx >= ast.sources.size()) return unknown;
+        if (modules.size() < ast.sources.size()) modules.resize(ast.sources.size());
+        if (modules[fileidx].empty()) modules[fileidx] = ModuleName(fileidx);
+        return modules[fileidx];
     }
 
     TypeKey Type(const TypeExpr *t) {

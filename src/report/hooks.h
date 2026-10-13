@@ -94,6 +94,10 @@ struct BuildRecorder {
         endcpu = markcpu;
     }
 
+    // What the report's own collection spent its CPU time on, by part, so that
+    // its cost can be attributed.
+    map<string, double> collection_cpu;
+
     // Self time of each body check: the time in a check excluding the checks
     // of callees reached for the first time from inside it.
     struct CheckFrame {
@@ -138,6 +142,16 @@ struct BuildRecorder {
 };
 
 inline BuildRecorder *build_recorder = nullptr;
+
+// Adds the CPU time of its scope to a named part of the report's collection.
+struct CollectionPart {
+    const char *name;
+    double start = BuildRecorder::Cpu();
+    explicit CollectionPart(const char *n) : name(n) {}
+    ~CollectionPart() {
+        if (build_recorder) build_recorder->collection_cpu[name] += BuildRecorder::Cpu() - start;
+    }
+};
 
 // Brackets the check of one specialization's body.
 struct ReportCheckScope {

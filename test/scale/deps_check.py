@@ -7,7 +7,7 @@ checked result changed was predicted invalid by what the compiler recorded.
 
 The synthetic family (gen.py) is built with each source edit of edits.py and
 each dependency edit below it, before and after, with
-`goose --check --build-report`, and predict.py compares the two reports. Each
+`goose --check --build-report FILE --build-report-deps`, and predict.py compares the two reports. Each
 edit is also run backwards, from the edited program to the original. Then a
 randomized sequence of edits, toggled one at a time from a fixed seed, is run
 step by step; with --mutants, so are random one-token mutations of the
@@ -123,7 +123,7 @@ class Builder:
         cfile.unlink(missing_ok=True)
         # The C is written at -O0, where nothing is inlined, so that what a
         # later phase read of a context can be told from the C of its function.
-        r = subprocess.run([self.goose, "-O0", "-o", str(cfile), "--build-report", str(out),
+        r = subprocess.run([self.goose, "-O0", "-o", str(cfile), "--build-report", str(out), "--build-report-deps",
                             str(directory / "main.goose")],
                            capture_output=True, text=True, errors="replace")
         if r.returncode != 0 or not out.exists() or not cfile.exists():
@@ -371,7 +371,7 @@ def mutants(run, builder, seed, per_file, work):
     def report(directory):
         out = directory / "report.json"
         out.unlink(missing_ok=True)
-        r = subprocess.run([builder.goose, "--check", "--build-report", str(out),
+        r = subprocess.run([builder.goose, "--check", "--build-report", str(out), "--build-report-deps",
                             str(directory / "main.goose")], capture_output=True, text=True,
                            errors="replace")
         return predict.load(out) if r.returncode == 0 and out.exists() else None
