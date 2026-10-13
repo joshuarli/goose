@@ -233,15 +233,36 @@ private:
         }
     }
 
-    // The element of an array or slice must be flat fixed: integers, booleans
-    // and fixed arrays of those.
+    // Array and slice elements are fixed-size scalars, flat structs, or fixed
+    // arrays composed of those values.
     CoreTypeId ElementTy(TypeExpr *t) {
         auto id = Ty(t);
         switch (mod.Type(id).kind) {
-            case CoreType::Int: case CoreType::Bool: case CoreType::Arr: return id;
+            case CoreType::Int: case CoreType::Bool: case CoreType::Arr: case CoreType::Struct: return id;
             case CoreType::Ref: case CoreType::Slice: Fail("stored-reference");
-            case CoreType::Struct: Fail("struct");
             default: Fail("variable-element");
+        }
+    }
+
+    bool FlatFixedField(TypeExpr *t, unordered_set<const StructInst *> &open) {
+        if (!t) return false;
+        switch (t->kind) {
+            case TY_INT: return t->intstorage != IS_VARINT;
+            case TY_BOOL: return true;
+            case TY_ARRAY:
+                return t->arr->akind == A_FIXED && t->arr->size > 0 && FlatFixedField(t->arr->sub, open);
+            case TY_STRUCT: {
+                auto inst = t->struc ? t->struc->inst : nullptr;
+                if (!inst || !inst->validated || !inst->flat || inst->sclass != SC_FIXED || !inst->st ||
+                    inst->ftypes.size() != inst->st->fields.size() || !open.insert(inst).second)
+                    return false;
+                auto flat = true;
+                for (size_t i = 0; i < inst->st->fields.size(); i++)
+                    if (!inst->st->fields[i].ispad) flat &= FlatFixedField(inst->ftypes[i], open);
+                open.erase(inst);
+                return flat;
+            }
+            default: return false;
         }
     }
 
@@ -251,11 +272,49 @@ private:
             return IntBits(t->intstorage) / 8;
         }
         if (t->kind == TY_BOOL) return 1;
+        if (t->kind == TY_ARRAY) {
+            if (t->arr->akind != A_FIXED || t->arr->size <= 0) Fail("struct");
+            auto element = FlatFieldSize(t->arr->sub);
+            if (t->arr->size > INT64_MAX / element) Fail("array-size");
+            return t->arr->size * element;
+        }
+        if (t->kind == TY_STRUCT) {
+            auto inst = t->struc ? t->struc->inst : nullptr;
+            if (!inst || !inst->st || inst->ftypes.size() != inst->st->fields.size()) Fail("struct");
+            auto layout = PackedFieldLayout(inst->st->fields, inst->ftypes,
+                                            [&](TypeExpr *field) { return FlatFieldSize(field); },
+                                            [&](TypeExpr *field) { return PackedPadAlign(field); });
+            if (layout.size <= 0) Fail("zero-size-value");
+            return layout.size;
+        }
         Fail("struct");
     }
 
-    int StructIdFor(TypeExpr *t) {
-        if (t->cq) Fail("struct-whole-const", t->line);
+    CoreTypeId FieldType(TypeExpr *t) {
+        if (!t) Fail("struct");
+        CoreType ct;
+        switch (t->kind) {
+            case TY_INT:
+                ct.kind = CoreType::Int;
+                ct.ity = IntTy(t->intstorage);
+                return mod.Intern(ct);
+            case TY_BOOL: return mod.BoolType();
+            case TY_ARRAY:
+                if (t->arr->akind != A_FIXED || t->arr->size <= 0) Fail("struct");
+                ct.kind = CoreType::Arr;
+                ct.count = t->arr->size;
+                ct.elem = FieldType(t->arr->sub);
+                return mod.Intern(ct);
+            case TY_STRUCT:
+                ct.kind = CoreType::Struct;
+                ct.structid = StructIdFor(t, true);
+                return mod.Intern(ct);
+            default: Fail("struct");
+        }
+    }
+
+    int StructIdFor(TypeExpr *t, bool fieldtype = false) {
+        if (t->cq && !fieldtype) Fail("struct-whole-const", t->line);
         if (!t->struc) Fail("struct", t->line);
         auto inst = t->struc->inst;
         if (!inst || !inst->validated || !inst->flat || inst->sclass != SC_FIXED)
@@ -263,28 +322,32 @@ private:
         if (auto it = structid.find(inst); it != structid.end()) return it->second;
         if (!inst->st || inst->ftypes.size() != inst->st->fields.size()) Fail("struct", t->line);
 
+        unordered_set<const StructInst *> open;
+        if (!FlatFixedField(t, open)) Fail("struct", t->line);
+
         auto layout = PackedFieldLayout(inst->st->fields, inst->ftypes,
                                         [&](TypeExpr *field) { return FlatFieldSize(field); },
                                         [&](TypeExpr *field) { return PackedPadAlign(field); });
         if (layout.size <= 0) Fail("zero-size-value", t->line);
+
+        // Reserve nominal identity before visiting components, so nested
+        // structs keep first-mention ids while the type table remains
+        // component-before-parent.
+        auto id = (int)mod.structs.size();
+        structid.emplace(inst, id);
+        mod.profile = CoreProfile::Shrink;
+        mod.structs.push_back(CoreStruct { layout.size, {} });
         CoreStruct descriptor;
         descriptor.size = layout.size;
         for (size_t i = 0; i < inst->st->fields.size(); i++) {
             auto &field = inst->st->fields[i];
             if (field.ispad) continue;
             auto *fieldtype = inst->ftypes[i];
-            if (!fieldtype || (fieldtype->kind != TY_INT && fieldtype->kind != TY_BOOL)) Fail("struct", t->line);
-            descriptor.fields.push_back({ Ty(fieldtype),
+            descriptor.fields.push_back({ FieldType(fieldtype),
                                           field.isconst ? CoreVarKind::Let : CoreVarKind::Var,
                                           MutOf(fieldtype), layout.offs[i] });
         }
-        // Do not reserve a nominal id until every field and its packed layout
-        // have passed the profile check; skipped library globals must not
-        // leave incomplete descriptors in the module.
-        auto id = (int)mod.structs.size();
-        structid.emplace(inst, id);
-        mod.profile = CoreProfile::Shrink;
-        mod.structs.push_back(std::move(descriptor));
+        mod.structs[id] = std::move(descriptor);
         return id;
     }
 
@@ -499,6 +562,9 @@ private:
             auto stdlib = g->line.fileidx >= 0 && g->line.fileidx < (int)ast.filepkg.size() &&
                           ast.packages[ast.filepkg[g->line.fileidx]].stdlib;
             auto nctx = ctxspecs.size();
+            auto ntypes = mod.types.size();
+            auto nstructs = mod.structs.size();
+            auto oldprofile = mod.profile;
             auto wasexportingstdlibglobal = exportingstdlibglobal;
             exportingstdlibglobal = stdlib;
             try {
@@ -511,8 +577,15 @@ private:
                     ctxof.erase(ctxspecs.back());
                     ctxspecs.pop_back();
                 }
-                // Types interned for the failed global stay in the table; the
-                // writer numbers by mention, so they never reach the output.
+                // A skipped initializer must not leave struct descriptors
+                // without a corresponding global or field that uses them.
+                mod.types.resize(ntypes);
+                mod.structs.resize(nstructs);
+                for (auto it = structid.begin(); it != structid.end();) {
+                    if (it->second >= (int)nstructs) it = structid.erase(it);
+                    else ++it;
+                }
+                mod.profile = oldprofile;
                 if (g->names.size() == 1 && g->defs.size() == 1 && g->defs[0]) skipped[g->defs[0]] = u;
                 if (reportonly && !stdlib)
                     for (auto v : g->defs) if (v && v->type) (void)Ty(v->type);
