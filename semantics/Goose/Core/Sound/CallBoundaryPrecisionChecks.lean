@@ -80,6 +80,28 @@ def middleAccess : AccessEnv := ⟨module, module.impls[2]'(by decide),
           match values[0]? with | some (Val.bool true) => true | _ => false
       | _ => false
   | _ => false
+
+def actualOwnerRoot : RootInst := .local 1 1 1
+def parameterRoots (index : Nat) (root : RootInst) : Prop :=
+  (index = 1 ∧ root = actualOwnerRoot) ∨
+  (index = 2 ∧ (root = .global 0 ∨ root = .global 1))
+
+example : Gam noEnv parameterRoots [.param 1, .param 2] (.global 0) :=
+  ⟨.param 2, by simp, Or.inr ⟨rfl, Or.inl rfl⟩⟩
+
+example (owners : Nat → RootInst → Prop)
+    (subset : ∀ index root, owners index root → parameterRoots index root)
+    (shape : OwnerParameterShape (module.impls[2]'(by decide)) owners) :
+    ¬ Gam noEnv owners [.param 1, .param 2] (.global 0) := by
+  have limited : ¬ OwnerRefParam (module.impls[2]'(by decide)) 2 := by
+    simp [OwnerRefParam, OwnerRefTy, module]
+  rintro ⟨reference, member, denotes⟩
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+  rcases member with rfl | rfl
+  · have broad := subset 1 (.global 0) denotes
+    simp [parameterRoots, actualOwnerRoot] at broad
+  · exact limited (shape 2 (.global 0) denotes)
+
 end Goose.Core.Sound.CallBoundaryPrecisionChecks.LimitedGhost
 
 namespace Goose.Core.Sound.CallBoundaryPrecisionChecks.Contents
