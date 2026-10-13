@@ -287,6 +287,14 @@ inductive DemandNode
   | statement (node : Stmt)
   | block (node : Block)
 
+def DemandNode.variables : DemandNode → List VarId
+  | .expression node => node.variables
+  | .place node => node.variables
+  | .view node => node.variables
+  | .bound node => node.variables
+  | .statement node => node.variables
+  | .block node => node.variables
+
 structure DemandFrame where
   active : List VarId
   future : List VarId
@@ -1176,6 +1184,15 @@ private def demandSetup? (m : Module) (owner : Nat) : Option DemandSetup := do
     let global ← m.globals[owner - m.contexts.size]?
     pure ⟨.expression global.init, ⟨m, initImpl, initContext⟩, ⟨[], [], []⟩⟩
 
+def demandAccess? (m : Module) (owner : Nat) : Option AccessEnv :=
+  (demandSetup? m owner).map DemandSetup.access
+
+private def demandSetupWitness (m : Module) (owner : Nat) :
+    V (Σ setup, PLift (demandSetup? m owner = some setup)) := do
+  match hsetup : demandSetup? m owner with
+  | none => reject .block "demand coverage has no owner access environment"
+  | some setup => pure ⟨setup, ⟨hsetup⟩⟩
+
 private def DemandPhase.all : List DemandPhase :=
   [.expression, .place, .view, .bound, .statement, .block, .mutation, .call]
 
@@ -1320,6 +1337,12 @@ private structure DemandExpectedWalkResult (root : DemandNode) (access : AccessE
     ∃ entry, entry ∈ entries ∧ entry.item.path = item.path ∧
       entry.item.node = item.node ∧ entry.item.frame = item.frame ∧
       entry.expected.phase = phase
+  phaseCoverage : ∀ entry, entry ∈ entries → ∀ phase, DemandNodeHasPhase entry.item.node phase →
+    ∃ targetEntry, targetEntry ∈ entries ∧
+      targetEntry.item.path = entry.item.path ∧
+      targetEntry.item.node = entry.item.node ∧
+      targetEntry.item.frame = entry.item.frame ∧
+      targetEntry.expected.phase = phase
   children : ∀ entry, entry ∈ entries →
     entry.expected.phase = entry.item.node.primaryPhase →
     ∀ index child, entry.item.node.child? index = some child →
@@ -1448,9 +1471,11 @@ private def DemandNode.expectedChildren (access : AccessEnv)
 private def DemandNode.expectedWork (access : AccessEnv) (root : DemandNode) : Nat →
     (work : List (DemandWorkItem root)) → V (DemandExpectedWalkResult root access work)
   | 0, [] => pure ⟨[], by intro item hmem; simp at hmem,
+    by intro entry hmem; simp at hmem,
     by intro entry hmem; simp at hmem⟩
   | 0, _ :: _ => reject .shrink "demand coverage walk exceeded the decoded syntax node limit"
   | _ + 1, [] => pure ⟨[], by intro item hmem; simp at hmem,
+    by intro entry hmem; simp at hmem,
     by intro entry hmem; simp at hmem⟩
   | fuel + 1, item :: rest => do
     let here ← DemandNode.expectedPhases access item DemandPhase.all
@@ -1466,6 +1491,22 @@ private def DemandNode.expectedWork (access : AccessEnv) (root : DemandNode) : N
       · obtain ⟨entry, hentry, hpath, hnode, hframe, hphase⟩ :=
           tail.covers candidate (List.mem_append_right _ hmem) phase hvalid
         exact ⟨entry, List.mem_append_right _ hentry, hpath, hnode, hframe, hphase⟩,
+      by
+        intro entry hmem phase hvalid
+        simp only [List.mem_append] at hmem
+        rcases hmem with hhere | htail
+        · have hitem := here.sameItem entry hhere
+          have hvalidItem : DemandNodeHasPhase item.node phase := by
+            simpa [hitem] using hvalid
+          obtain ⟨targetEntry, htargetEntry, hpath, hnode, hframe, hphase⟩ :=
+            here.covers phase (DemandPhase.mem_all phase) hvalidItem
+          exact ⟨targetEntry, List.mem_append_left _ htargetEntry,
+            hpath.trans (by rw [hitem]), hnode.trans (by rw [hitem]),
+            hframe.trans (by rw [hitem]), hphase⟩
+        · obtain ⟨targetEntry, htargetEntry, hpath, hnode, hframe, hphase⟩ :=
+            tail.phaseCoverage entry htail phase hvalid
+          exact ⟨targetEntry, List.mem_append_right _ htargetEntry,
+            hpath, hnode, hframe, hphase⟩,
       by
         intro entry hmem hprimary index child hchild childPhase hchildPhase
         simp only [List.mem_append] at hmem
@@ -1695,6 +1736,35 @@ private theorem expectedPoints_child {m owner points path parentNode parentExpec
   · simpa [hitemPath, hitemNode, hitemFrame] using hchildFrame
   · simpa [hitemPath] using hphaseFrame
 
+structure DemandExpectedChildFrame (m : Module) (owner : Nat) (path : List Nat)
+    (parentNode : DemandNode) (parentPhase : DemandPhase)
+    (parentExpected : DemandExpectedPoint) (index : Nat) (childNode : DemandNode)
+    (childPhase : DemandPhase) (access : AccessEnv) where
+  points : List DemandExpectedPoint
+  walk : DemandNode.expectedPoints m owner = .ok points
+  parentMember : parentExpected ∈ points
+  childExpected : DemandExpectedPoint
+  childSource : DemandExpectedSourceAt m owner (path ++ [index]) childNode childPhase childExpected
+  childMember : childExpected ∈ points
+  childFrame : DemandFrame
+  childFrameEq : parentNode.childFrame access path parentExpected.frame index = .ok childFrame
+  phaseFrame : DemandFrame
+  phaseFrameEq : childNode.phaseFrame access (path ++ [index]) childFrame childPhase = .ok phaseFrame
+  expectedFrameEq : childExpected.frame = phaseFrame
+
+structure DemandExpectedPhaseFrame (m : Module) (owner : Nat) (path : List Nat)
+    (node : DemandNode) (parentPhase : DemandPhase) (parentExpected : DemandExpectedPoint)
+    (targetPhase : DemandPhase) (access : AccessEnv) where
+  points : List DemandExpectedPoint
+  walk : DemandNode.expectedPoints m owner = .ok points
+  parentMember : parentExpected ∈ points
+  targetExpected : DemandExpectedPoint
+  targetSource : DemandExpectedSourceAt m owner path node targetPhase targetExpected
+  targetMember : targetExpected ∈ points
+  phaseFrame : DemandFrame
+  phaseFrameEq : node.phaseFrame access path parentExpected.frame targetPhase = .ok phaseFrame
+  expectedFrameEq : targetExpected.frame = phaseFrame
+
 private structure DemandExpectedCoverage (points : List DemandPoint)
     (expected : List DemandExpectedPoint) where
   token : Unit
@@ -1809,6 +1879,126 @@ theorem DemandExpectedSourceAt.child
     rw [hpoints]
     exact hchildMem
   exact ⟨childExpected, points, hchildSource, hwalk, hparentMem, hchildMemParent⟩
+
+/-- A source child stays in the parent's coverage walk, with the exact frames
+used by demand traversal. The access environment must be the owner's checked one. -/
+theorem DemandExpectedSourceAt.childFrame
+    {m owner path parentNode parentPhase parentExpected index childNode childPhase access}
+    (parentSource : DemandExpectedSourceAt m owner path parentNode parentPhase parentExpected)
+    (primary : parentPhase = parentNode.primaryPhase)
+    (hchild : parentNode.child? index = some childNode)
+    (hchildPhase : DemandNodeHasPhase childNode childPhase)
+    (accessMatches : demandAccess? m owner = some access) :
+    Nonempty (DemandExpectedChildFrame m owner path parentNode parentPhase parentExpected index
+      childNode childPhase access) := by
+  rcases parentSource with ⟨points, hwalk, hparentMem, hparentPath, hparentNode, hparentPhase⟩
+  have hparentPrimary : parentExpected.phase = parentNode.primaryPhase := by
+    rw [hparentPhase]
+    exact primary
+  obtain ⟨setup, childExpected, childFrame, phaseFrame, hsetup, hchildSource,
+      hchildFrame, hphaseFrame, hchildFrameEq⟩ :=
+    expectedPoints_child hwalk hparentMem hparentPath hparentNode hparentPrimary
+      hchild hchildPhase
+  have hsetupAccess : setup.access = access := by
+    simpa [demandAccess?, hsetup] using accessMatches
+  have hchildFrame' : parentNode.childFrame access path parentExpected.frame index =
+      .ok childFrame := by
+    rw [← hsetupAccess]
+    exact hchildFrame
+  have hphaseFrame' : childNode.phaseFrame access (path ++ [index]) childFrame childPhase =
+      .ok phaseFrame := by
+    rw [← hsetupAccess]
+    exact hphaseFrame
+  rcases hchildSource with ⟨childPoints, hchildWalk, hchildMem, hchildPath, hchildNode,
+    hchildSourcePhase⟩
+  have hpoints : points = childPoints := by
+    rw [hwalk] at hchildWalk
+    injection hchildWalk
+  have hchildMember : childExpected ∈ points := by
+    rw [hpoints]
+    exact hchildMem
+  exact ⟨⟨points, hwalk, hparentMem, childExpected,
+    ⟨points, hwalk, hchildMember, hchildPath, hchildNode, hchildSourcePhase⟩,
+    hchildMember, childFrame, hchildFrame', phaseFrame, hphaseFrame', hchildFrameEq⟩⟩
+
+/-- A primary point and each valid phase of that same node share one expected walk. -/
+theorem DemandExpectedSourceAt.phaseFrame
+    {m owner path node parentPhase parentExpected targetPhase access}
+    (parentSource : DemandExpectedSourceAt m owner path node parentPhase parentExpected)
+    (primary : parentPhase = node.primaryPhase)
+    (targetHasPhase : DemandNodeHasPhase node targetPhase)
+    (accessMatches : demandAccess? m owner = some access) :
+    Nonempty (DemandExpectedPhaseFrame m owner path node parentPhase parentExpected
+      targetPhase access) := by
+  rcases parentSource with ⟨points, hwalk, hparentMem, hparentPath, hparentNode, hparentPhase⟩
+  have hparentPrimary : parentExpected.phase = node.primaryPhase := by
+    rw [hparentPhase]
+    exact primary
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hparentMap : parentExpected ∈ result.entries.map fun entry => entry.expected := by
+    rw [hmap]
+    exact hparentMem
+  rcases List.mem_map.mp hparentMap with ⟨parentEntry, hparentEntry, hparentEq⟩
+  have hitemPath : parentEntry.item.path = path := by
+    calc
+      parentEntry.item.path = parentEntry.expected.path := parentEntry.expectedPath.symm
+      _ = parentExpected.path := congrArg DemandExpectedPoint.path hparentEq
+      _ = path := hparentPath
+  have hitemNode : parentEntry.item.node = node := by
+    calc
+      parentEntry.item.node = parentEntry.expected.node := parentEntry.expectedNode.symm
+      _ = parentExpected.node := congrArg DemandExpectedPoint.node hparentEq
+      _ = node := hparentNode
+  have hentryPrimary : parentEntry.expected.phase = parentEntry.item.node.primaryPhase := by
+    calc
+      parentEntry.expected.phase = parentExpected.phase := congrArg DemandExpectedPoint.phase hparentEq
+      _ = node.primaryPhase := hparentPrimary
+      _ = parentEntry.item.node.primaryPhase := by rw [hitemNode]
+  have hitemFrame : parentEntry.item.frame = parentExpected.frame := by
+    have hprimaryFrame := DemandNode.phaseFrame_primary parentEntry.item.node setup.access
+      parentEntry.item.path parentEntry.item.frame
+    have hphaseFrame := parentEntry.phaseFrame
+    rw [hentryPrimary, hprimaryFrame] at hphaseFrame
+    exact (Except.ok.inj hphaseFrame).trans
+      (congrArg DemandExpectedPoint.frame hparentEq)
+  have htargetHasPhase : DemandNodeHasPhase parentEntry.item.node targetPhase := by
+    simpa [hitemNode] using targetHasPhase
+  obtain ⟨targetEntry, htargetEntry, htargetItemPath, htargetItemNode,
+      htargetItemFrame, htargetPhase⟩ :=
+    result.phaseCoverage parentEntry hparentEntry targetPhase htargetHasPhase
+  have htargetPath : targetEntry.item.path = path := by
+    calc
+      targetEntry.item.path = parentEntry.item.path := htargetItemPath
+      _ = path := hitemPath
+  have htargetNode : targetEntry.item.node = node := by
+    calc
+      targetEntry.item.node = parentEntry.item.node := htargetItemNode
+      _ = node := hitemNode
+  have htargetFrame : targetEntry.item.frame = parentExpected.frame :=
+    htargetItemFrame.trans hitemFrame
+  have htargetMember : targetEntry.expected ∈ points := by
+    rw [← hmap]
+    exact List.mem_map.mpr ⟨targetEntry, htargetEntry, rfl⟩
+  have htargetExpectedPath : targetEntry.expected.path = path := by
+    calc
+      targetEntry.expected.path = targetEntry.item.path := targetEntry.expectedPath
+      _ = path := htargetPath
+  have htargetExpectedNode : targetEntry.expected.node = node := by
+    calc
+      targetEntry.expected.node = targetEntry.item.node := targetEntry.expectedNode
+      _ = node := htargetNode
+  have hsetupAccess : setup.access = access := by
+    simpa [demandAccess?, hsetup] using accessMatches
+  have hphaseFrame : node.phaseFrame access path parentExpected.frame targetPhase =
+      .ok targetEntry.expected.frame := by
+    rw [← hsetupAccess, ← htargetNode, ← htargetPath, ← htargetFrame, ← htargetPhase]
+    exact targetEntry.phaseFrame
+  have htargetSource : DemandExpectedSourceAt m owner path node targetPhase
+      targetEntry.expected :=
+    ⟨points, hwalk, htargetMember, htargetExpectedPath, htargetExpectedNode,
+      htargetPhase⟩
+  exact ⟨⟨points, hwalk, hparentMem, targetEntry.expected, htargetSource,
+    htargetMember, targetEntry.expected.frame, hphaseFrame, rfl⟩⟩
 
 def PlansWellFormed (m : Module) (plans : Array (Array DemandPoint)) : Prop :=
   plans.size = (if m.profile == .pilot then 0 else m.contexts.size + m.globals.size) ∧
@@ -2221,6 +2411,7 @@ private structure IndexedDemandPlan (m : Module) (owner : Nat) where
   root : DemandNode
   ownerRoot : demandRoot? m owner = some root
   access : AccessEnv
+  accessMatches : demandAccess? m owner = some access
   points : Array DemandPoint
   trace : Array (DemandTrace root)
   tracePoints : trace.map DemandTrace.point = points
@@ -2284,6 +2475,7 @@ structure DemandWholeRootsApproval (m : Module) (owner : Nat)
 structure DemandPlanApprovals (m : Module) (owner : Nat) (plan : Array DemandPoint)
     (expected : List DemandExpectedPoint) where
   access : AccessEnv
+  accessMatches : demandAccess? m owner = some access
   shrink : List (DemandShrinkApproval m owner plan)
   wholeRoots : List (DemandWholeRootsApproval m owner plan)
   directShrinkAt : ∀ occurrence, occurrence ∈ expected →
@@ -2354,7 +2546,7 @@ private def DemandWholeRootsApproval.ofEvent {m owner}
 
 private def IndexedDemandPlan.approvals {m owner} (indexed : IndexedDemandPlan m owner) :
     DemandPlanApprovals m owner indexed.points indexed.expected :=
-  ⟨indexed.access,
+  ⟨indexed.access, indexed.accessMatches,
     indexed.shrinkEvents.toList.attach.map fun event =>
       DemandShrinkApproval.ofEvent indexed event.val event.property,
     indexed.wholeRootsEvents.toList.attach.map fun event =>
@@ -2417,8 +2609,9 @@ private def mkIndexedDemandPlan (m : Module) (owner : Nat) (root : DemandNode)
       state.shrinkEvents.toList expected
     let wholeRootsRequests ← DemandExpectedPoint.verifyWholeRequests
       state.wholeRootsEvents.toList expected
-    let some setup := demandSetup? m owner
-      | reject .block "demand coverage has no owner access environment"
+    let ⟨setup, hsetup⟩ ← demandSetupWitness m owner
+    have accessMatches : demandAccess? m owner = some setup.access := by
+      simp [demandAccess?, hsetup.down]
     let sourceAndPhase : ∀ point, point ∈ points.toList →
         ∃ node, DemandSourceAt m owner point.path node ∧ DemandNodeHasPhase node point.phase := by
       intro point hpoint
@@ -2472,7 +2665,7 @@ private def mkIndexedDemandPlan (m : Module) (owner : Nat) (root : DemandNode)
       have hpoint := wholeRootsTraceCovered.down event hevent
       have hframe := frameOfPoint occurrence hoccurrence event.trace.point hpoint hpath hphase
       exact ⟨event, hevent, hpath, hphase, hforbidden, hroots, hframe⟩
-    pure ⟨root, ownerRoot, setup.access, points, trace, rfl, index,
+    pure ⟨root, ownerRoot, setup.access, accessMatches, points, trace, rfl, index,
       state.shrinkEvents, shrinkTraceCovered.down,
       state.wholeRootsEvents, wholeRootsTraceCovered.down, expected, hExpected,
       shrinkCoverage, wholeRootsCoverage,
