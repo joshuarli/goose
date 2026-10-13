@@ -24,7 +24,64 @@ def rejects (bytes rule : String) : Bool :=
     | .ok () => false
     | .error r => r.rule.tag == rule
 
+def emptyArrayAliasModule : Module :=
+  let ownerElem := Ty.arr .bool 0
+  let aliasElem := Ty.arr (.int .i64) 0
+  let ownerTy := Ty.growshrink ownerElem
+  let helper : Impl := {
+    name := "shrinkWithEmptyAlias"
+    params := #[⟨0, .byRef⟩, ⟨1, .byRef⟩]
+    results := #[]
+    vars := #[
+      ⟨"values", .ref .mutable ownerTy, .immutable, 0, 0⟩,
+      ⟨"alias", .ref .mutable aliasElem, .immutable, 0, 0⟩]
+    body := .mk 0 [
+      .clear (.deref (.read (.var 0))) 0,
+      .print [.expr (.len (.of (.deref (.read (.var 1)))))] 0] none
+    summary := .unknown }
+  let main : Impl := {
+    name := "main"
+    params := #[]
+    results := #[]
+    vars := #[
+      ⟨"values", ownerTy, .mutable, 0, 0⟩,
+      ⟨"empty", aliasElem, .mutable, 0, 0⟩]
+    body := .mk 0 [
+      .letS 0 (.arrLit ownerTy []) 0,
+      .letS 1 (.arrLit aliasElem []) 0,
+      .expr (.call 1 [.byRef .mutable (.var 0), .byRef .mutable (.var 1)] 0) 0] none
+    summary := .unknown }
+  { files := #["shrink_empty_array_alias.goose"]
+    types := #[]
+    globals := #[]
+    impls := #[main, helper]
+    contexts := #[
+      ⟨0, "main()", [], [], []⟩,
+      ⟨1, "shrinkWithEmptyAlias", [(0, [.param 0]), (1, [.param 1])], [], []⟩]
+    entry := 0
+    origins := #[⟨0, 1, "stmt"⟩]
+    profile := .shrink }
+
+def clearRequestMatchesOwner : Bool :=
+  match DemandNode.expectedPoints emptyArrayAliasModule 1 with
+  | .error _ => false
+  | .ok expected =>
+    match expected.find? (fun point => point.path == [0] && point.phase == .mutation) with
+    | none => false
+    | some point =>
+      match demandAccess? emptyArrayAliasModule 1 with
+      | none => false
+      | some access =>
+        let place := Place.deref (.read (.var 0))
+        match access.owner place with
+        | .error _ => false
+        | .ok owner => point.node.isDirectShrink && point.shrinkOwners == [owner]
+
 #guard runs (include_str "../../../test/semantics/golden/shrink_last_use.core.json") (returned "2\n1\n")
+#guard match validate emptyArrayAliasModule with
+  | .error rejection => rejection.rule == .shrink
+  | .ok _ => false
+#guard clearRequestMatchesOwner
 #guard rejects (include_str "../../../test/semantics/golden/shrink_live_slice.core.json") "V-SHRINK"
 #guard rejects (include_str "../../../test/semantics/golden/shrink_loop_alias.core.json") "V-SHRINK"
 #guard rejects (include_str "../../../test/semantics/golden/shrink_retained_destination.core.json") "V-SHRINK"
