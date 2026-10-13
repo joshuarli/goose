@@ -78,6 +78,7 @@ theorem validate_stages {m : Module} (h : validate m = .ok ()) :
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, hs, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
   exact ⟨ht, hc, hs, h⟩
 
 theorem asCheck_ok {c : Code} {label : String} {α : Type} {r : Except String α} {a : α}
@@ -129,6 +130,7 @@ theorem typed_of_types {m : Module} {label : String} {f : Func} {vt : Array (Opt
   subst hvt
   unfold checkTypes at h
   have hin := asCheck_ok h
+  obtain ⟨_, _, hin⟩ := bind_ok hin
   obtain ⟨_, _, hin⟩ := bind_ok hin
   obtain ⟨_, _, hin⟩ := bind_ok hin
   obtain ⟨_, hb, _⟩ := bind_ok hin
@@ -183,8 +185,10 @@ theorem within_of_closed {f : Func} {e : Core.Eff} (h : f.summaryClosed e = .ok 
     obtain ⟨_, h2, h⟩ := bind_ok h
     obtain ⟨_, h3, h⟩ := bind_ok h
     obtain ⟨_, h4, h⟩ := bind_ok h
-    obtain ⟨_, h5, h6⟩ := bind_ok h
-    refine ⟨?_, within_of h1, within_of h2, within_of h3, within_of h4, flag_of h5, flag_of h6⟩
+    obtain ⟨_, h5, h⟩ := bind_ok h
+    obtain ⟨_, h6, h7⟩ := bind_ok h
+    refine ⟨?_, within_of h1, within_of h2, within_of h3, within_of h5,
+      flag_of h6, flag_of h7⟩
     cases hk : e.unknown with
     | false => rfl
     | true => simp [Func.noUnknownCallee, hk, throw, throwThe, MonadExceptOf.throw] at hu

@@ -1,14 +1,14 @@
 import Goose.Core.Typing
 
 /-!
-GIR-H for the pilot and flat fixed-struct profiles: a typed control-flow graph
-over SSA temporaries and memory slots.
+GIR-H for the pilot, flat fixed-struct and owner-shrink profiles: a typed
+control-flow graph over SSA temporaries and memory slots.
 
 Design decisions that the rest of the pipeline relies on.
 
 * Data types are Core's types, unchanged. The only extra value type is the
   sampled `view`, which exists as an SSA value only. A value of aggregate type
-  (`arr`, `grow`, `structT`) is a transient: it is constructed and read by
+  (`arr`, `grow`, `growshrink`, `limited`, `structT`) is a transient: it is constructed and read by
   `load`, and it lives in a slot or in the result of a global initializer.
 * Every source variable has a slot, numbered like the variable. Parameters
   arrive as parameters of the entry block and are copied into their slots
@@ -94,6 +94,8 @@ inductive Op
   | arrayLen (r : ValueId)
   | indexChecked (v i : ValueId) (org : Option OriginId)
   | push (r v : ValueId) (org : Option OriginId)
+  /-- Copy and remove the last element of an owner. -/
+  | pop (r : ValueId) (org : Option OriginId)
   | call (f : FnId) (args : List ValueId) (org : Option OriginId)
   | arrLit (t : Ty) (vs : List ValueId)
   | arrFill (t : Ty) (v : ValueId)
@@ -107,6 +109,14 @@ inductive Effect
   | slotInit (s : SlotId) (v : ValueId) (org : Option OriginId)
   | store (r v : ValueId) (org : Option OriginId)
   | append (r v : ValueId) (org : Option OriginId)
+  /-- Reduce an owner's visible length by a checked count. -/
+  | popN (r count : ValueId) (org : Option OriginId)
+  /-- Set an owner's length; a fill is evaluated before this instruction. -/
+  | resize (r size : ValueId) (fill : Option ValueId) (org : Option OriginId)
+  /-- Reduce an owner's visible length to zero. -/
+  | clear (r : ValueId) (org : Option OriginId)
+  /-- Publish a fresh grow/growshrink run into an owner already cleared. -/
+  | replace (r run : ValueId) (org : Option OriginId)
   | enter (sc : ScopeId)
   | leave (sc : ScopeId)
   | print (parts : List PrintPart) (org : Option OriginId)
@@ -216,6 +226,7 @@ def Op.uses : Op → List ValueId
   | .snapshot _ r => [r]
   | .viewSlice _ v lo hi _ => v :: (lo.uses ++ hi.uses)
   | .push r v _ => [r, v]
+  | .pop r _ => [r]
   | .call _ args _ => args
   | .arrLit _ vs | .structLit _ vs => vs
   | .arrFill _ v | .fieldAddr v _ => [v]
@@ -227,6 +238,10 @@ def PrintPart.uses : PrintPart → List ValueId
 def Effect.uses : Effect → List ValueId
   | .slotInit _ v _ => [v]
   | .store r v _ | .append r v _ => [r, v]
+  | .popN r count _ => [r, count]
+  | .resize r size fill _ => [r, size] ++ fill.toList
+  | .clear r _ => [r]
+  | .replace r run _ => [r, run]
   | .enter _ | .leave _ => []
   | .print parts _ => parts.flatMap PrintPart.uses
 

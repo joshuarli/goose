@@ -266,10 +266,10 @@ def implOfContext (c : ContextId) : B FnId := do
 
 /-! ### Expressions, places, views and statements -/
 
-/-- Whether a view comes from a grow-only array, whose length a loop reads again. -/
+/-- Whether a view comes from a resizable owner whose length a loop reads again. -/
 def growOwner (r : ValueId) : B Bool := do
   match (← valTy r) with
-  | .data (.ref _ (.grow _)) => pure true
+  | .data (.ref _ t) => pure (match t with | .grow _ | .growshrink _ => true | _ => false)
   | _ => pure false
 
 /-- Branch on `cv` to two blocks created now, in this order; closes the current
@@ -280,8 +280,8 @@ def fork (cv : ValueId) : B (BlockId × BlockId) := do
   emitTerm (.condbr cv tb [] eb [])
   pure (tb, eb)
 
-/-- Whether the owner of a `for` loop's source is a grow-only array, whose length the loop
-reads again. -/
+/-- Whether the owner of a `for` loop's source is resizable, so its length is
+read again each time through the loop. -/
 def regrowOf : Option ValueId → B Bool
   | some r => growOwner r
   | none => pure false
@@ -458,10 +458,13 @@ def lowerExpr : Expr → B ValueId
     let r ← emitDef (.call f vs (some org))
     if (← read).mod.noReturn c then emitTerm .unreachable
     pure r
-  | .push owner e => do
+  | .push owner e org => do
     let r ← lowerPlace owner
     let v ← lowerExpr e
-    emitDef (.push r v none)
+    emitDef (.push r v org)
+  | .pop owner org => do
+    let r ← lowerPlace owner
+    emitDef (.pop r (some org))
   | .ifE c t f => do
     let cv ← lowerExpr c
     whenLive 0 fun _ => do
@@ -599,6 +602,25 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
     let r ← lowerPlace owner
     let vw ← lowerView src
     emitEffect (.append r vw (some org))
+  | .popN owner count org => do
+    let r ← lowerPlace owner
+    let n ← lowerExpr count
+    emitEffect (.popN r n (some org))
+  | .resize owner size fill org => do
+    let r ← lowerPlace owner
+    let n ← lowerExpr size
+    let fill ← match fill with
+      | none => pure none
+      | some e => pure (some (← lowerExpr e))
+    emitEffect (.resize r n fill (some org))
+  | .clear owner org => do
+    let r ← lowerPlace owner
+    emitEffect (.clear r (some org))
+  | .assignWhole owner replacement org => do
+    let r ← lowerPlace owner
+    emitEffect (.clear r (some org))
+    let run ← lowerExpr replacement
+    emitEffect (.replace r run (some org))
   | .ifS c t f _ => do
     let cv ← lowerExpr c
     whenLive () fun _ => do
@@ -711,7 +733,8 @@ def exprScopes (parent : Option Nat) : Expr → List (Nat × Option Nat)
   | .not e => exprScopes parent e
   | .conv _ _ e _ => exprScopes parent e
   | .call _ args _ => argsScopes parent args
-  | .push p e => placeScopes parent p ++ exprScopes parent e
+  | .push p e _ => placeScopes parent p ++ exprScopes parent e
+  | .pop p _ => placeScopes parent p
   | .ifE c t f => exprScopes parent c ++ blockScopes parent t ++ blockScopes parent f
   | .blockE b => blockScopes parent b
   | .arrLit _ es | .structLit _ es => exprsScopes parent es
@@ -762,6 +785,12 @@ def stmtScopes (parent : Option Nat) : Stmt → List (Nat × Option Nat)
   | .rebind _ e _ => exprScopes parent e
   | .expr e _ => exprScopes parent e
   | .append p v _ => placeScopes parent p ++ viewScopes parent v
+  | .popN p n _ => placeScopes parent p ++ exprScopes parent n
+  | .resize p n fill _ => placeScopes parent p ++ exprScopes parent n ++ (match fill with
+      | some e => exprScopes parent e
+      | none => [])
+  | .clear p _ => placeScopes parent p
+  | .assignWhole p e _ => placeScopes parent p ++ exprScopes parent e
   | .ifS c t f _ =>
     exprScopes parent c ++ blockScopes parent t ++ (match f with
       | some b => blockScopes parent b

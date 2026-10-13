@@ -638,7 +638,8 @@ theorem freezeTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS} {r' 
     simp only at hs h
     subst hs
     rcases m with _ | _ <;> rcases a with t | ⟨_, _⟩ <;>
-      (try rcases t with _ | _ | _ | _ | _ | ⟨m', _⟩ | _ | _) <;> (try rcases m' with _ | _) <;>
+      (try rcases t with _ | _ | _ | _ | _ | _ | _ | ⟨m', _⟩ | _ | _ | _) <;>
+      (try rcases m' with _ | _) <;>
       first
         | exact Or.inl ⟨(Prod.mk.inj h).1.symm, (Prod.mk.inj h).2.symm⟩
         | exact Or.inr h
@@ -1155,10 +1156,13 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
       AdvB.bind (advB_emitDef _) fun r => AdvB.bind advB_read fun le => by
         cases hnr : le.mod.noReturn c <;> simp only [hnr, Bool.false_eq_true, ↓reduceIte] <;>
           first | exact AdvB.pure _ | exact AdvB.bind (advB_emitTerm _) fun _ => AdvB.pure _
-  | .push owner e => by
+  | .push owner e org => by
     simp only [lowerExpr]
-    exact AdvB.bind (advB_lowerPlace owner) fun _ => AdvB.bind (advB_lowerExpr e) fun _ =>
-      advB_emitDef _
+    exact AdvB.bind (advB_lowerPlace owner) fun r => AdvB.bind (advB_lowerExpr e) fun v =>
+      advB_emitDef (.push r v org)
+  | .pop owner org => by
+    simp only [lowerExpr]
+    exact AdvB.bind (advB_lowerPlace owner) fun _ => advB_emitDef _
   | .ifE c t f => by
     simp only [lowerExpr]
     exact AdvB.bind (advB_lowerExpr c) fun cv =>
@@ -1283,6 +1287,28 @@ theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc 
     simp only [lowerStmt]
     exact AdvB.bind (advB_lowerPlace owner) fun _ => AdvB.bind (advB_lowerView src) fun _ =>
       advB_emitEffect _
+  | .popN owner count org => by
+    simp only [lowerStmt]
+    exact AdvB.bind (advB_lowerPlace owner) fun r => AdvB.bind (advB_lowerExpr count) fun n =>
+      advB_emitEffect (.popN r n (some org))
+  | .resize owner size none org => by
+    simp only [lowerStmt]
+    exact AdvB.bind (advB_lowerPlace owner) fun r => AdvB.bind (advB_lowerExpr size) fun n =>
+      AdvB.bind (AdvB.pure _) fun fill => advB_emitEffect (.resize r n fill (some org))
+  | .resize owner size (some fill) org => by
+    simp only [lowerStmt]
+    exact AdvB.bind (advB_lowerPlace owner) fun r => AdvB.bind (advB_lowerExpr size) fun n =>
+      AdvB.bind (advB_lowerExpr fill) fun v =>
+        advB_emitEffect (.resize r n (some v) (some org))
+  | .clear owner org => by
+    simp only [lowerStmt]
+    exact AdvB.bind (advB_lowerPlace owner) fun r => advB_emitEffect (.clear r (some org))
+  | .assignWhole owner replacement org => by
+    simp only [lowerStmt]
+    exact AdvB.bind (advB_lowerPlace owner) fun r =>
+      AdvB.bind (advB_emitEffect (.clear r (some org))) fun _ =>
+      AdvB.bind (advB_lowerExpr replacement) fun run =>
+        advB_emitEffect (.replace r run (some org))
   | .ifS c t f _ => by
     cases f with
     | none =>

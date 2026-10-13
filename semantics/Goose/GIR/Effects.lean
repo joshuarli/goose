@@ -223,7 +223,18 @@ def mapContentRoots (caller : Func) (p : Prov) (args : List ValueId) (roots : Li
 
 def targetsOf (rs : List RootRef) : List Target := rootsTargets rs
 
+def ownerTy (vt : Array (Option VTy)) (v : ValueId) : Option Ty :=
+  match vt[v]? with
+  | some (some (.data (.ref _ t))) => some t
+  | _ => none
+
+def ownerIsLimited (vt : Array (Option VTy)) (v : ValueId) : Bool :=
+  match ownerTy vt v with
+  | some (.limited ..) => true
+  | _ => false
+
 def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
+  let vt := f.valueTypes m
   let call (e : Core.Eff) (g : FnId) (args : List ValueId) : Core.Eff :=
     match m.funcs[g]? with
     | none => { e with unknown := true }
@@ -252,6 +263,7 @@ def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
           reads := addTargets e.reads (mapTargets sm.reads)
           writes := addTargets e.writes (mapTargets sm.writes)
           grows := addTargets e.grows (mapTargets sm.grows)
+          shrinks := addTargets e.shrinks (mapTargets sm.shrinks)
           aborts := e.aborts || sm.aborts
           outputs := e.outputs || sm.outputs }
   f.blocks.foldl (fun acc blk => blk.insts.foldl (fun e i =>
@@ -261,7 +273,20 @@ def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
       | .load a | .arrayLen a =>
         { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
       | .snapshot _ a => { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
-      | .push a _ _ => { e with grows := addTargets e.grows (targetsOf (rootsAt p.vals a)) }
+      | .push a _ _ =>
+        let targets := targetsOf (rootsAt p.vals a)
+        let e := { e with grows := addTargets e.grows targets }
+        if m.profile == .shrink then
+          { e with
+            writes := addTargets e.writes targets
+            aborts := e.aborts || ownerIsLimited vt a }
+        else e
+      | .pop a _ =>
+        let targets := targetsOf (rootsAt p.vals a)
+        { e with
+          reads := addTargets e.reads targets
+          shrinks := addTargets e.shrinks targets
+          aborts := true }
       | .bin o .. => if o.mayAbort then { e with aborts := true } else e
       | .un .neg .. => { e with aborts := true }
       | .conv .as .. => { e with aborts := true }
@@ -283,7 +308,46 @@ def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
           | none => none
         | .global _ => none
       { e with rebinds := addTargets e.rebinds rebound }
-    | .eff (.append r _ _) => { e with grows := addTargets e.grows (targetsOf (rootsAt p.vals r)) }
+    | .eff (.append r v _) =>
+      let targets := targetsOf (rootsAt p.vals r)
+      let sourceTargets := targetsOf (rootsAt p.vals v)
+      let e := { e with
+        reads := addTargets e.reads sourceTargets
+        grows := addTargets e.grows targets }
+      if m.profile == .shrink then
+        { e with
+          writes := addTargets e.writes targets
+          aborts := e.aborts || ownerIsLimited vt r }
+      else e
+    | .eff (.popN r _ _) =>
+      let targets := targetsOf (rootsAt p.vals r)
+      { e with
+        reads := addTargets e.reads targets
+        shrinks := addTargets e.shrinks targets
+        aborts := true }
+    | .eff (.resize r _ fill _) =>
+      let targets := targetsOf (rootsAt p.vals r)
+      let e := { e with
+        reads := addTargets e.reads targets
+        shrinks := addTargets e.shrinks targets
+        aborts := true }
+      match fill with
+      | none => e
+      | some _ => { e with
+          writes := addTargets e.writes targets
+          grows := addTargets e.grows targets }
+    | .eff (.clear r _) =>
+      let targets := targetsOf (rootsAt p.vals r)
+      { e with
+        reads := addTargets e.reads targets
+        shrinks := addTargets e.shrinks targets }
+    | .eff (.replace r _ _) =>
+      let targets := targetsOf (rootsAt p.vals r)
+      { e with
+        reads := addTargets e.reads targets
+        writes := addTargets e.writes targets
+        grows := addTargets e.grows targets
+        shrinks := addTargets e.shrinks targets }
     | .eff (.print ..) => { e with outputs := true }
     | .term (.abort ..) | .term (.exit ..) => { e with aborts := true }
     | _ => e) acc) {}
@@ -314,6 +378,7 @@ def Func.summaryClosed (f : Func) (e : Core.Eff) : Except String Unit :=
     f.targetsWithin "reads" e.reads s.reads
     f.targetsWithin "writes" e.writes s.writes
     f.targetsWithin "grows" e.grows s.grows
+    f.targetsWithin "shrinks" e.shrinks s.shrinks
     f.targetsWithin "rebinds" e.rebinds s.rebinds
     Func.flagWithin s!"{f.name} may abort, which its summary omits" e.aborts s.aborts
     Func.flagWithin s!"{f.name} prints, which its summary omits" e.outputs s.outputs

@@ -52,7 +52,8 @@ def resolveStruct (types : Array VTy) (sizes : Array Nat) (raw : Decode.RawStruc
     treeSize := treeSize + z
   pure ({ byteSize := raw.byteSize, fields }, treeSize)
 
-def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json) (structs : Array Decode.RawStructDef := #[]) : Except String (VTy × Nat) := do
+def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json)
+    (structs : Array Decode.RawStructDef := #[]) (profile : ArtifactProfile := .pilot) : Except String (VTy × Nat) := do
   let (tag, fs) ← record j "type"
   let comp (x : Lean.Json) : Except String (Ty × Nat) := do
     let i ← checkIndex (← asNat x s!"{tag} component") types.size "type component"
@@ -76,6 +77,19 @@ def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json) (struc
     arity tag fs 1
     let (t, z) ← comp fs[0]!
     pure (.data (.grow t), z + 1)
+  | "growshrink" => do
+    unless profile == .shrink do fail "growshrink requires core-shrink"
+    arity tag fs 1
+    let (t, z) ← comp fs[0]!
+    pure (.data (.growshrink t), z + 1)
+  | "limited" => do
+    unless profile == .shrink do fail "limited requires core-shrink"
+    arity tag fs 2
+    let (t, z) ← comp fs[0]!
+    let capacity ← asNat fs[1]! "limited capacity"
+    if capacity == 0 then fail "limited capacity must be positive"
+    if capacity > 2^31 - 1 then fail "limited capacity exceeds the wire limit"
+    pure (.data (.limited t capacity), z + 1)
   | "ref" => do
     arity tag fs 2
     let m ← decMut (← asStr fs[0]! "ref mutability")
@@ -104,13 +118,14 @@ def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json) (struc
     pure (.view m t, z + 1)
   | _ => fail s!"unknown type tag {tag.quote}"
 
-def decVTypesWithStructs (j : Lean.Json) (raw : Array Decode.RawStructDef) : Except String (Array VTy × Array StructDef) := do
+def decVTypesWithStructs (j : Lean.Json) (raw : Array Decode.RawStructDef)
+    (profile : ArtifactProfile := .pilot) : Except String (Array VTy × Array StructDef) := do
   let entries ← asArr j "types"
   let mut types : Array VTy := #[]
   let mut sizes : Array Nat := #[]
   let mut definitions : Array (Option StructDef) := Array.replicate raw.size none
   for h : i in [0:entries.size] do
-    let (t, z) ← match decVTypeEntry types sizes entries[i] raw with
+    let (t, z) ← match decVTypeEntry types sizes entries[i] raw profile with
       | .ok r => pure r
       | .error e => fail s!"type {i}: {e}"
     if z > Decode.maxTypeTreeSize then fail s!"type {i}: tree size over {Decode.maxTypeTreeSize}"
@@ -285,6 +300,10 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   | "i_alen" => do arity tag fs 2; def_ (.arrayLen (← v 1))
   | "i_index" => do arity tag fs 4; def_ (.indexChecked (← v 1) (← v 2) (← org 3))
   | "i_push" => do arity tag fs 4; def_ (.push (← v 1) (← v 2) (← org 3))
+  | "i_pop" => do
+    unless tb.profile == .shrink do fail "i_pop requires core-shrink"
+    arity tag fs 3
+    def_ (.pop (← v 1) (← org 2))
   | "i_call" => do
     arity tag fs 4
     let f ← checkIndex (← asNat fs[1]! "function") tb.nFuncs "function"
@@ -313,6 +332,23 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   | "x_append" => do
     arity tag fs 3
     pure (.eff (.append (← decVal fs[0]!) (← decVal fs[1]!) (← decOrgOpt tb fs[2]!)))
+  | "x_pop_n" => do
+    unless tb.profile == .shrink do fail "x_pop_n requires core-shrink"
+    arity tag fs 3
+    pure (.eff (.popN (← decVal fs[0]!) (← decVal fs[1]!) (← decOrgOpt tb fs[2]!)))
+  | "x_resize" => do
+    unless tb.profile == .shrink do fail "x_resize requires core-shrink"
+    arity tag fs 4
+    pure (.eff (.resize (← decVal fs[0]!) (← decVal fs[1]!)
+      (← optional fs[2]! "resize fill" decVal) (← decOrgOpt tb fs[3]!)))
+  | "x_clear" => do
+    unless tb.profile == .shrink do fail "x_clear requires core-shrink"
+    arity tag fs 2
+    pure (.eff (.clear (← decVal fs[0]!) (← decOrgOpt tb fs[1]!)))
+  | "x_replace" => do
+    unless tb.profile == .shrink do fail "x_replace requires core-shrink"
+    arity tag fs 3
+    pure (.eff (.replace (← decVal fs[0]!) (← decVal fs[1]!) (← decOrgOpt tb fs[2]!)))
   | "x_enter" => do
     arity tag fs 1
     pure (.eff (.enter (← checkIndex (← asNat fs[0]! "scope") tb.nScopes "scope")))
@@ -336,6 +372,8 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     arity tag fs 2
     let ks ← asStr fs[0]! "t_abort kind"
     let some k := AbortKind.ofTag? ks | fail s!"unknown abort kind {ks.quote}"
+    if tb.profile != .shrink && k ∈ [.popEmpty, .popNRange, .resizeNegative, .resizeFill, .capacity] then
+      fail s!"abort kind {ks.quote} requires core-shrink"
     pure (.term (.abort k (← decOrgOpt tb fs[1]!)))
   | "t_exit" => do
     arity tag fs 2
@@ -401,7 +439,7 @@ def decFunc (m : Tables) (j : Lean.Json) : Except String Func := do
     fail s!"more than {Decode.maxNodesPerFunction} instructions in one function"
   let blocks ← blocksJ.mapIdx (fun i b => Decode.inEntry "block" i (decBlock tb b)) |>.mapM id
   let roots ← decRootInfo tb params.length results.length fs[6]!
-  let summary ← Decode.decSummary m.nGlobals params.length fs[7]!
+  let summary ← Decode.decSummary m.profile m.nGlobals params.length fs[7]!
   let org ← decOrgOpt tb fs[8]!
   pure { name, params, results, slots, scopes, blocks, roots, summary, org }
 
@@ -428,7 +466,7 @@ def decodeModule (j : Lean.Json) : Except String Module := do
   let files ← Decode.decodeMapped "file" fs[2]! Decode.decFile
   let origins ← Decode.decodeMapped "origin" fs[7 + extra]! (Decode.decOrigin files.size)
   let raw ← if profile == .shrink then Decode.decStructDefs fs[4]! else pure #[]
-  let (types, structs) ← decVTypesWithStructs fs[3]! raw
+  let (types, structs) ← decVTypesWithStructs fs[3]! raw profile
   let nGlobals := (← asArr fs[4 + extra]! "globals").size
   let nFuncs := (← asArr fs[5 + extra]! "functions").size
   let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0, profile⟩
@@ -513,6 +551,12 @@ def internTy : Ty → W Nat
   | .grow e => do
     let _ ← internTy e
     addEntry (.data (.grow e))
+  | .growshrink e => do
+    let _ ← internTy e
+    addEntry (.data (.growshrink e))
+  | .limited e k => do
+    let _ ← internTy e
+    addEntry (.data (.limited e k))
   | .ref m e => do
     let _ ← internTy e
     addEntry (.data (.ref m e))
@@ -593,6 +637,7 @@ def wOp (r : ValueId) : Op → W String
   | .arrayLen a => pure (wRec "i_alen" [toString r, toString a])
   | .indexChecked v i org => pure (wRec "i_index" [toString r, toString v, toString i, wOpt org])
   | .push a v org => pure (wRec "i_push" [toString r, toString a, toString v, wOpt org])
+  | .pop a org => pure (wRec "i_pop" [toString r, toString a, wOpt org])
   | .call f args org => pure (wRec "i_call" [toString r, toString f, wNats args, wOpt org])
   | .structLit t vs => do pure (wRec "i_struct" [toString r, ← wTy t, wNats vs])
   | .fieldAddr owner i => pure (wRec "i_field" [toString r, toString owner, toString i])
@@ -604,6 +649,10 @@ def wInst : Inst → W String
   | .eff (.slotInit s v org) => pure (wRec "x_init" [toString s, toString v, wOpt org])
   | .eff (.store r v org) => pure (wRec "x_store" [toString r, toString v, wOpt org])
   | .eff (.append r v org) => pure (wRec "x_append" [toString r, toString v, wOpt org])
+  | .eff (.popN r n org) => pure (wRec "x_pop_n" [toString r, toString n, wOpt org])
+  | .eff (.resize r n fill org) => pure (wRec "x_resize" [toString r, toString n, wOpt fill, wOpt org])
+  | .eff (.clear r org) => pure (wRec "x_clear" [toString r, wOpt org])
+  | .eff (.replace r run org) => pure (wRec "x_replace" [toString r, toString run, wOpt org])
   | .eff (.enter sc) => pure (wRec "x_enter" [toString sc])
   | .eff (.leave sc) => pure (wRec "x_leave" [toString sc])
   | .eff (.print parts org) => pure (wRec "x_print" [wList (parts.map wPart), wOpt org])
@@ -633,25 +682,26 @@ def wRootInfo (r : RootInfo) : String :=
   wRec "roots" [rows "vr" r.params, rows "cr" r.contents,
     wList (r.results.toList.map fun roots => wList (roots.map wRootRef))]
 
-def wSummary : SummaryAnn → String
+def wSummary (profile : ArtifactProfile) : SummaryAnn → String
   | .unknown => wRec "summary_unknown" []
   | .known s =>
-    wRec "summary" [wList (s.reads.map wTarget), wList (s.writes.map wTarget),
-      wList (s.grows.map wTarget), wList (s.rebinds.map wTarget),
-      if s.aborts then "1" else "0", if s.outputs then "1" else "0"]
+    wRec "summary" ([wList (s.reads.map wTarget), wList (s.writes.map wTarget),
+      wList (s.grows.map wTarget)] ++
+      (if profile == .shrink then [wList (s.shrinks.map wTarget)] else []) ++
+      [wList (s.rebinds.map wTarget), if s.aborts then "1" else "0", if s.outputs then "1" else "0"])
 
-def wFunc (f : Func) : W String := do
+def wFunc (profile : ArtifactProfile) (f : Func) : W String := do
   let ps ← wMap f.params wTy
   let rs ← wMap f.results wTy
   let slots ← wMap f.slots.toList fun sl => do
     pure (wRec "slot" [← wTy sl.ty, quote (kindTag sl.kind), toString sl.scope, toString sl.var])
   let scopes := wList (f.scopes.toList.map fun p => wRec "scope" [wOpt p])
   let blocks ← wMap f.blocks.toList wBlock
-  pure (wRec "func" [quote f.name, ps, rs, slots, scopes, blocks, wRootInfo f.roots, wSummary f.summary, wOpt f.org])
+  pure (wRec "func" [quote f.name, ps, rs, slots, scopes, blocks, wRootInfo f.roots, wSummary profile f.summary, wOpt f.org])
 
-def wGlobal (g : Global) : W String := do
+def wGlobal (profile : ArtifactProfile) (g : Global) : W String := do
   let t ← wTy g.ty
-  let init ← wFunc g.init
+  let init ← wFunc profile g.init
   pure (wRec "global" [quote g.name, t, quote (kindTag g.kind), init, toString g.org])
 
 /-- The type table as written: the index of every component is smaller. -/
@@ -664,6 +714,8 @@ def wTypeEntry (tab : Array VTy) (t : VTy) : String :=
   | .data .unit => wRec "unit" []
   | .data (.arr e k) => wRec "arr" [ix e, toString k]
   | .data (.grow e) => wRec "grow" [ix e]
+  | .data (.growshrink e) => wRec "growshrink" [ix e]
+  | .data (.limited e k) => wRec "limited" [ix e, toString k]
   | .data (.ref m e) => wRec "ref" [quote (mutTag m), ix e]
   | .data (.slice m e) => wRec "slice" [quote (mutTag m), ix e]
   | .data (.tuple ps) =>
@@ -679,8 +731,8 @@ def write (m : Module) : String :=
     if m.profile == .shrink then
       for h : sid in [0:m.structs.size] do
         let _ ← internTy (.structT sid (TyList.ofList (m.structs[sid].fields.toList.map (·.ty))))
-    let gs ← wMap m.globals.toList wGlobal
-    let fs ← wMap m.funcs.toList wFunc
+    let gs ← wMap m.globals.toList (wGlobal m.profile)
+    let fs ← wMap m.funcs.toList (wFunc m.profile)
     pure (gs, fs) : W (String × String)).run {}
   let files := wList (m.files.toList.map fun f => wRec "file" [quote f])
   let origins := wList (m.origins.toList.map fun o =>
