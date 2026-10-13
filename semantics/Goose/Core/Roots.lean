@@ -728,18 +728,25 @@ def effWithin (name what : String) (found declared : List Target) : V Unit :=
   | some t => reject .summary s!"{name} {what} {showTarget t}, which its summary omits"
   | none => pure ()
 
-def checkSummary (impl : Impl) (ctx : Context) (eff : Eff) : V Unit := do
+def checkSummaryTargets (m : Module) (impl : Impl) (what : String) (targets : List Target) : V Unit :=
+  forAll targets fun t =>
+    match t with
+    | .param i =>
+      unless i < impl.params.size do
+        reject .summary s!"{impl.name}: its {what} summary names parameter {i}, which does not exist"
+    | .global g =>
+      unless g < m.globals.size do
+        reject .summary s!"{impl.name}: its {what} summary names global {g}, outside the global table"
+
+def checkSummary (m : Module) (impl : Impl) (ctx : Context) (eff : Eff) : V Unit := do
   match impl.summary with
   | .unknown => pure ()
   | .known s =>
-    -- An entry for a parameter is read through that parameter's annotation, so
-    -- it must name a parameter.
-    forAll (s.reads ++ s.writes ++ s.grows ++ s.shrinks) fun t =>
-      match t with
-      | .param i =>
-        unless i < impl.params.size do
-          reject .summary s!"{impl.name}: its summary names parameter {i}, which does not exist"
-      | .global _ => pure ()
+    checkSummaryTargets m impl "reads" s.reads
+    checkSummaryTargets m impl "writes" s.writes
+    checkSummaryTargets m impl "grows" s.grows
+    checkSummaryTargets m impl "shrinks" s.shrinks
+    checkSummaryTargets m impl "rebinds" s.rebinds
     if eff.unknown then
       reject .summary s!"{impl.name} calls an implementation whose summary is unknown, so its own summary cannot be known"
     effWithin impl.name "reads" eff.reads (expandTargets impl ctx s.reads)
@@ -760,7 +767,7 @@ def checkContext (m : Module) (ctx : Context) : V Unit := do
   let ((), st) ← (do
       let (rho, _) ← rpBlockValue env [] impl.body
       if impl.body.value.isSome then checkResult env rho : P Unit).run ⟨impl.params.size, {}⟩
-  checkSummary impl ctx st.eff
+  checkSummary m impl ctx st.eff
 
 /-- An implementation and context with no variables, parameters or results:
 what a global initializer is checked against. -/

@@ -20,9 +20,15 @@ def checkEntry (m : Module) : V Unit := do
   unless impl.params.isEmpty && impl.results.isEmpty do
     reject .type s!"the entry {impl.name} must take no parameters and return nothing"
 
+def checkImplementationContexts (m : Module) : V Unit :=
+  forAll (List.range m.impls.size) fun i =>
+    unless m.contexts.toList.any (fun ctx => ctx.impl == i) do
+      reject .root s!"implementation {i} has no context"
+
 def validate (m : Module) : V Unit := do
   checkStructTables m
   checkEntry m
+  checkImplementationContexts m
   forAll (List.range m.globals.size) fun g =>
     match m.globals[g]? with
     | some gl => checkGlobal m g gl
