@@ -163,10 +163,10 @@ Abort kinds and the runtime text they correspond to: `div_zero` (`division by ze
 |---|---|
 | `V-TYPE` | Every expression, place and statement is well typed; conversions are legal; arities match. |
 | `V-MUT` | Writes go through `mut` places; `let` variables are not reassigned; `rebind` targets a `var` of reference or slice type. |
-| `V-ROOT` | A value with root set ρ may initialize, be assigned to, or rebind variable `r` only if ρ ⊆ roots(`r`) and every member of ρ outlives `r`. `param i` and globals outlive every local. A local `y` outlives `r` when `y`'s scope is `r`'s scope or an enclosing scope in the same implementation. Declaration order within one scope does not matter: a scope's variables all end together, and the language allows a `var` reference to be rebound to a later-declared variable of its own scope. |
+| `V-ROOT` | A value with root set ρ may initialize, be assigned to, or rebind variable `r` only if ρ ⊆ roots(`r`) and every member of ρ outlives `r`. `param i` and globals outlive every local. A local `y` outlives `r` when `y`'s scope is `r`'s scope or an enclosing scope in the same implementation. Declaration order within one scope does not matter: a scope's variables all end together, and the language allows a `var` reference to be rebound to a later-declared variable of its own scope. A slice with root set ρ may be assigned through a reference parameter `p` to a slice variable only if ρ ⊆ content(`p`), the content roots the context declares for `p`; a slice read through `p` has the root set content(`p`). Content roots are declared only for a parameter of type `ref (slice T)`, whose root set is `[r_param p]`, and name only `r_param` and `r_global`. |
 | `V-BLOCK` | The value of a block or `ifE` is not rooted at a variable declared inside it. |
 | `V-RESULT` | A returned reference or slice is rooted only at `param i` or globals, within the declared result roots. |
-| `V-CALL` | At a call, each `param i` in the callee context's result roots is replaced by the actual argument's roots; the argument's mutability satisfies the parameter's. A global's initializer is checked like a function body with no variables: nothing it reads, writes or grows, itself or through its calls, may be a global that is not initialized before it. |
+| `V-CALL` | At a call, each `param i` in the callee context's result roots is replaced by the actual argument's roots; the argument's mutability satisfies the parameter's. A global's initializer is checked like a function body with no variables: nothing it reads, writes or grows, itself or through its calls, may be a global that is not initialized before it. Where the callee context declares content roots for parameter `i`, its argument is a `var` slice variable `s` (`a_ref` of `p_local s`) or the pointee of a reference parameter `q` of the caller (`a_ref` of `p_deref(e_read(p_local q))`). Let κ be the callee's content roots with each `r_param j` replaced by argument `j`'s roots. For `s`: roots(`s`) ⊆ κ, κ ⊆ roots(`s`), and every member of κ outlives `s`. For `q`: κ and content(`q`) are the same set. So what the callee reads from the variable is within what it assumes, and what it stores there is within what the variable allows. |
 | `V-SUMMARY` | Each implementation's effect summary is closed: the effects of its body, computed with its callees' summaries, are contained in it. Recursion needs no iteration, because closure is checked, not computed. The check runs once per context: a parameter target is read through that context's root annotation, so a parameter the context knows to be rooted at a global counts as that global. |
 | `V-SHRINK` | At a shrink of the array rooted at `a`, no variable in the demand set has `a` among its roots. The demand set is every variable named in an operand evaluated later in the statement, in a later statement of an enclosing block in the same implementation, or anywhere in an enclosing loop body. |
 | `V-WHOLE` | The right side of `assignWhole p e` neither names a variable rooted at `p`'s root nor calls an implementation whose summary reads, writes or resizes that root. |
@@ -180,9 +180,9 @@ The target of an effect is the set of global and parameter roots of the place re
 | Effect | Arises from |
 |---|---|
 | reads | `read` of a place; every `viewOf`, wherever it occurs (sampling an owner reads its length), so also under `refOf (elem …)`, `sliceOf`, `lenOf`, `append` and `forEach`; the run an `append` copies from and the run a by-value `forEach` iterates, also when the run is a slice value; both sides of `assignOp`. |
-| writes | `assign` and `assignOp` to a place. |
+| writes | `assign` and `assignOp` to a place. A slice assigned through a reference parameter is a write to that parameter's targets. |
 | grows | `push` and `append` on the owner. |
-| rebinds | `rebind` of a variable that is a parameter. |
+| rebinds | `rebind` of a variable that is a parameter. A slice assigned through a reference parameter `p` to the slice variable it refers to (`s_assign` to `p_deref(e_read(p_local p))`) is also a rebind of `param p`: one convention for replacing the slice a parameter's variable holds, whether the parameter is the slice or refers to it. |
 | through a call | The callee's declared reads, writes and growth with each `param j` replaced by the targets of argument `j`'s roots. Where the callee context annotates parameter `j` with globals, those globals are added: the callee's own check lets an entry for `param j` stand for them, so the call must too. A callee whose summary is unknown makes the caller's unknown. |
 
 ## 5. Numeric and failure semantics
@@ -431,10 +431,10 @@ All ids are dense from 0 and fixed by the rules below, so the same program gives
 | `origin` | `file`, `nat` line (from 1), `str` node kind | Node kind is one of `global param let assign assign_op rebind expr if while for return break continue print assert abort exit call index slice binary unary cast`. A synthesized operation takes the origin of the construct responsible for it (an array-to-slice coercion at a call argument takes the call's). |
 | `global` | `str` name, `ty`, `VarKind`, `Expr` initializer, `org` | Initialized in global order before the entry runs. The initializer is read as a body with an empty variable table, so it names no local. |
 | `impl` | `str` name, `[param]`, `[ty]` results, `[local]` variables, `block` body, `Summary` | Name is the source function's name for messages; it is not unique. Zero results is a unit result. |
-| `param` | `var`, `Mode` | Parameter `i` is variable `i`, in scope 0. The mode is `by_ref` exactly when the variable's type is `ref`; the corresponding argument is `a_ref`. A free variable of a nested function is a trailing `by_ref` parameter. |
+| `param` | `var`, `Mode` | Parameter `i` is variable `i`, in scope 0. The mode is `by_ref` exactly when the variable's type is `ref`; the corresponding argument is `a_ref`. A free variable of a nested function is a trailing `by_ref` parameter. A captured slice variable is such a parameter of type `ref mut (slice M T)`; every root of the captured variable that is a local of an enclosing function must itself be passed as a parameter (captured or added as a further trailing `by_ref` parameter), so that the content roots below can name it. |
 | `local` | `str` name, `ty`, `VarKind`, `scope`, `org` | One row per variable, including parameters (scope 0) and loop variables. `scope` is the block that declares it; a loop variable belongs to the loop's body block. |
 | `context` | `impl` index (`nat`), `str` declaration key, `[vr]`, `[[RootRef]]` | One checked specialization. The declaration key is opaque to the Lean tool; the goldens write it as `module::name(written parameter types)`, and a byte comparison of exporter output with a golden ignores this field until stable keys exist. The `[vr]` list has one `vr` for each variable of the implementation whose type is `ref` or `slice`, in ascending variable order. The last field has one list per result. |
-| `vr` | `var`, `[RootRef]` | Root set of that variable in this context. |
+| `vr` | `var`, `[RootRef]`, optionally a second `[RootRef]` | Root set of that variable in this context. The optional third field is the **content roots** and is written exactly for a parameter whose type is `ref M (slice M' T)`; every other `vr` has two fields. For such a parameter `p` the root set is `[r_param p]` and the content roots list what the slice held in the variable `p` refers to may be rooted at, as the callee names it: `r_param j` for a root that is the caller's argument `j` (a caller local passed as parameter `j`), `r_global g` for a global; no `r_local`, and not `r_param p` itself. For a closure-converted captured slice variable these are the captured variable's own roots seen from the callee: each caller local among them as the `r_param` of the parameter it is passed as, each global as `r_global`. For a written `T[:]&` parameter they are the roots of the slice variable the context's caller passes, named the same way. At every call they must denote exactly the root set of the variable passed (`V-CALL`). |
 | `r_local` | `var` | A local variable of this implementation. |
 | `r_global` | `glob` | A global. The specialization knows a parameter's argument is rooted there. |
 | `r_param` | `nat` index | Whatever the caller passed as parameter `i`: a caller local or an unconstrained root. |
@@ -451,7 +451,7 @@ All ids are dense from 0 and fixed by the rules below, so the same program gives
 | `bool`, `unit` | none | |
 | `arr` | `ty` element, `nat` count ≥ 1 | `T[k]` |
 | `grow` | `ty` element | `T[>..]` |
-| `ref` | `Mut`, `ty` pointee | `T&` or `const T&` |
+| `ref` | `Mut`, `ty` pointee | `T&` or `const T&` The pointee may be a `slice` of a flat element type only as the type of a `by_ref` parameter; a reference to a reference, and a reference or slice inside an array or a global, remain outside the profile. |
 | `slice` | `Mut`, `ty` element | `T[:]` |
 | `tuple` | `[ty]`, length ≥ 2 | The type of a call with several results. No pilot form builds or takes one apart, so the exporter reports `unsupported: multiple-results`. |
 
@@ -463,7 +463,7 @@ Every statement ends with an `org` field.
 |---|---|---|
 | `block` | `scope`, `[Stmt]`, `[Expr]?` value | A scope. Variables are declared by `s_let` or a loop statement inside it. The value is absent for a unit block. |
 | `s_let` | `var`, `Expr`, `org` | Initialize a variable; `VarKind` is in its row. A `ref` or `slice` variable initialized from a reference expression is the `.=` form. |
-| `s_assign` | `Place`, `Expr`, `org` | `E-ASSIGN` |
+| `s_assign` | `Place`, `Expr`, `org` | `E-ASSIGN` The place holds a flat value, or is `p_deref(e_read(p_local p))` for a parameter `p` that refers to a slice variable, which stores a slice through the reference (`V-ROOT`). A slice variable itself is changed by `s_rebind`. |
 | `s_assign_op` | `BinOp`, `Place`, `Expr`, `org` | `E-ASSIGNOP` |
 | `s_rebind` | `var`, `Expr`, `org` | Rebind a `var` of reference or slice type. |
 | `s_expr` | `Expr`, `org` | Evaluate and discard. |
@@ -507,7 +507,7 @@ An expression, place or view that can abort or that is a call ends with an `org`
 | `e_fill` | `ty` (`arr`), `Expr` | Every element is the value, evaluated once. |
 | `p_local` | `var` | A variable of this implementation. |
 | `p_global` | `glob` | A global. |
-| `p_deref` | `Expr` of `ref` type | The place it points to. |
+| `p_deref` | `Expr` of `ref` type | The place it points to. For a parameter `p` of type `ref (slice T)` the only form is `p_deref(e_read(p_local p))`: the reference is dereferenced or passed on, never copied, returned or stored. |
 | `p_elem` | `View`, `Expr` index, `org` | `E-INDEX`. |
 | `v_of` | `Place` of `arr` or `grow` type | `viewOf`: the length is sampled now. |
 | `v_val` | `Expr` of `slice` type | The slice's own run. |
@@ -515,7 +515,7 @@ An expression, place or view that can abort or that is a call ends with an `org`
 | `b_end` | `Expr` | `fromEnd`: length minus the value. |
 | `b_none` | none | `omitted`. |
 | `a_val` | `Expr` | |
-| `a_ref` | `Mut`, `Place` | Resolve the place and pass its reference. |
+| `a_ref` | `Mut`, `Place` | Resolve the place and pass its reference. A slice-typed place is passed only as `p_local s` for a `var` slice variable `s` or as `p_deref(e_read(p_local q))`. |
 
 A local or global reference is distinguished by tag (`p_local`, `p_global`, `r_local`, `r_global`, `t_global`). `p_field` is absent: it needs a struct type, which is a `core-shrink` addition.
 
