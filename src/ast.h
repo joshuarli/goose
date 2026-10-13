@@ -75,6 +75,14 @@ enum ArrayKind {
 // storage-only exception, LEB128-encoded in memory and read as i64.
 enum IntStorage { IS_I8, IS_I16, IS_I32, IS_I64, IS_U8, IS_U16, IS_U32, IS_U64, IS_VARINT };
 
+// Static limited arrays store their visible length in the smallest unsigned
+// integer that can represent the declared capacity.
+inline IntStorage LimitedLengthStorage(int64_t capacity) {
+    assert(capacity >= 0);
+    return capacity <= 255 ? IS_U8 : capacity <= 65535 ? IS_U16 :
+           capacity <= (int64_t)UINT32_MAX ? IS_U32 : IS_U64;
+}
+
 enum FltStorage { FS_F32, FS_F64 };
 
 inline const char *IntStorageName(int s) {

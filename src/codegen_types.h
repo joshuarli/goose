@@ -188,8 +188,7 @@ inline IntStorage CodeGen::LenStore(TypeArray *a) {
         case A_LIMITED: {
             auto k = ArrSize(a);
             assert(k >= 0);
-            return k <= 255 ? IS_U8 : k <= 65535 ? IS_U16 :
-                   k <= (int64_t)UINT32_MAX ? IS_U32 : IS_U64;
+            return LimitedLengthStorage(k);
         }
         default: assert(false); return IS_U32;
     }
