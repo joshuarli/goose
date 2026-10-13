@@ -201,7 +201,7 @@ theorem step_expr_call (hm : ModOk m) (ih : Specs m prof n) (W : World) (tenv : 
           rw [hs] at heff
           obtain ⟨e1, e2, e3⟩ := heff
           obtain ⟨_, _, st, _, _, hcs⟩ := hctxOk.body
-          obtain ⟨_, _, _, _, hpar⟩ := checkSummary_ok _ _ _ hcs sm hs
+          obtain ⟨_, _, _, _, hpar⟩ := checkSummary_ok _ _ _ _ hcs sm hs
           refine ⟨sm, hs, fun t ht' => ?_⟩
           rcases ht' with ht' | ht' | ht'
           · exact expand_ok (env := env) (P := W.P) (fun j r h => h) hctxOk sm.reads

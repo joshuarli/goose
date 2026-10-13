@@ -343,8 +343,18 @@ theorem effWithin_ok (name what : String) (found declared : List Target)
     have := List.find?_eq_none.1 hf t ht
     simpa using this
 
-theorem checkSummary_ok (impl : Impl) (ctx : Context) (eff : Eff)
-    (h : checkSummary impl ctx eff = .ok ()) (sm : Summary) (hs : impl.summary = .known sm) :
+theorem checkSummaryTargets_param_ok (m : Module) (impl : Impl) (what : String)
+    (targets : List Target) (h : checkSummaryTargets m impl what targets = .ok ())
+    (i : Nat) (hi : Target.param i ∈ targets) : i < impl.params.size := by
+  unfold checkSummaryTargets at h
+  have ht := (forAll_ok _ _).1 h _ hi
+  simp only at ht
+  split at ht
+  · assumption
+  · inv at ht
+
+theorem checkSummary_ok (m : Module) (impl : Impl) (ctx : Context) (eff : Eff)
+    (h : checkSummary m impl ctx eff = .ok ()) (sm : Summary) (hs : impl.summary = .known sm) :
     eff.unknown = false ∧
     (∀ t, t ∈ eff.reads → t ∈ expandTargets impl ctx sm.reads) ∧
     (∀ t, t ∈ eff.writes → t ∈ expandTargets impl ctx sm.writes) ∧
@@ -354,46 +364,33 @@ theorem checkSummary_ok (impl : Impl) (ctx : Context) (eff : Eff)
   unfold checkSummary at h
   simp only [hs] at h
   inv at h
-  obtain ⟨hpar, hu, h1, h2, h3, _⟩ := h
+  obtain ⟨hreads, hwrites, hgrows, _, _, hu, h1, h2, h3, _, _, _, _⟩ := h
   refine ⟨by simpa using hu, effWithin_ok _ _ _ _ h1, effWithin_ok _ _ _ _ h2,
     effWithin_ok _ _ _ _ h3, ?_⟩
   intro i hi
-  have hmem : Target.param i ∈ sm.reads ++ sm.writes ++ sm.grows := by
-    simp only [List.mem_append]
-    rcases hi with h | h | h
-    · exact Or.inl (Or.inl h)
-    · exact Or.inl (Or.inr h)
-    · exact Or.inr h
-  have hmemAll : Target.param i ∈ sm.reads ++ sm.writes ++ sm.grows ++ sm.shrinks :=
-    List.mem_append_left _ hmem
-  have := (forAll_ok _ _).1 hpar _ hmemAll
-  simp only at this
-  inv at this
-  exact this
+  rcases hi with hi | hi | hi
+  · exact checkSummaryTargets_param_ok m impl "reads" sm.reads hreads i hi
+  · exact checkSummaryTargets_param_ok m impl "writes" sm.writes hwrites i hi
+  · exact checkSummaryTargets_param_ok m impl "grows" sm.grows hgrows i hi
 
-theorem checkSummary_shrinks_ok (impl : Impl) (ctx : Context) (eff : Eff)
-    (h : checkSummary impl ctx eff = .ok ()) (sm : Summary) (hs : impl.summary = .known sm) :
+theorem checkSummary_shrinks_ok (m : Module) (impl : Impl) (ctx : Context) (eff : Eff)
+    (h : checkSummary m impl ctx eff = .ok ()) (sm : Summary) (hs : impl.summary = .known sm) :
     ∀ t, t ∈ eff.shrinks → t ∈ expandTargets impl ctx sm.shrinks := by
   unfold checkSummary at h
   simp only [hs] at h
   inv at h
-  obtain ⟨_, _, _, _, _, hshrinks, _⟩ := h
+  obtain ⟨_, _, _, _, _, _, _, _, _, hshrinks, _, _, _⟩ := h
   exact effWithin_ok _ _ _ _ hshrinks
 
-theorem checkSummary_shrinkParams_ok (impl : Impl) (ctx : Context) (eff : Eff)
-    (h : checkSummary impl ctx eff = .ok ()) (sm : Summary) (hs : impl.summary = .known sm) :
+theorem checkSummary_shrinkParams_ok (m : Module) (impl : Impl) (ctx : Context) (eff : Eff)
+    (h : checkSummary m impl ctx eff = .ok ()) (sm : Summary) (hs : impl.summary = .known sm) :
     ∀ i, Target.param i ∈ sm.shrinks → i < impl.params.size := by
   unfold checkSummary at h
   simp only [hs] at h
   inv at h
-  obtain ⟨hpar, _⟩ := h
+  obtain ⟨_, _, _, hshrinks, _⟩ := h
   intro i hi
-  have hmem : Target.param i ∈ sm.reads ++ sm.writes ++ sm.grows ++ sm.shrinks :=
-    List.mem_append_right _ hi
-  have hparam := (forAll_ok _ _).1 hpar (Target.param i) hmem
-  simp only at hparam
-  inv at hparam
-  exact hparam
+  exact checkSummaryTargets_param_ok m impl "shrinks" sm.shrinks hshrinks i hi
 
 theorem checkInitCall_state (env : TEnv) (callee : Impl) (s : Nat) (r : Unit × Nat)
     (h : checkInitCall env callee s = .ok r) : r.2 = s := by

@@ -42,35 +42,47 @@ theorem checkParam_ok (impl : Impl) (i : Nat) (p : Param) (h : checkParam impl i
 
 theorem checkImpl_ok (m : Module) (impl : Impl) (h : checkImpl m impl = .ok ()) : ImplOk m impl := by
   unfold checkImpl at h
-  inv at h
-  obtain ⟨_, _, hpar, hsc, bodyTy, tn, htb, hres⟩ := h
-  refine ⟨?_, hsc, bodyTy, tn, htb, ?_⟩
-  · intro i p hp
-    have hlt : i < impl.params.size := (Array.getElem?_eq_some_iff.1 hp).1
-    exact checkParam_ok impl i p ((forAll_ok _ _).1 hpar i (List.mem_range.2 hlt)) hp
-  · rcases hr : impl.results.toList with _ | ⟨t, _ | _⟩ <;> simp only [hr] at hres <;> inv at hres
-    · exact Or.inl ⟨rfl, by simpa using hres⟩
-    · refine Or.inr ⟨t, rfl, ?_, ?_⟩
-      · intro hs
-        rcases hres with ⟨_, h2⟩ | ⟨h1, _⟩
-        · simpa using h2
-        · exact absurd hs h1
-      · intro hs
-        rcases hres with ⟨h1, _⟩ | ⟨_, h2⟩
-        · rw [hs] at h1; cases h1
-        · exact h2
+  cases hscope : scopeOrderError (blockScopes none impl.body) 0 with
+  | some message =>
+    simp only [hscope] at h
+    inv at h
+  | none =>
+    simp only [hscope] at h
+    inv at h
+    obtain ⟨_, _, hpar, _, hsc, _, bodyTy, tn, htb, hres⟩ := h
+    refine ⟨?_, hsc, bodyTy, tn, htb, ?_⟩
+    · intro i p hp
+      have hlt : i < impl.params.size := (Array.getElem?_eq_some_iff.1 hp).1
+      exact checkParam_ok impl i p ((forAll_ok _ _).1 hpar i (List.mem_range.2 hlt)) hp
+    · rcases hr : impl.results.toList with _ | ⟨t, _ | _⟩ <;> simp only [hr] at hres <;> inv at hres
+      · exact Or.inl ⟨rfl, by simpa using hres⟩
+      · refine Or.inr ⟨t, rfl, ?_, ?_⟩
+        · intro hs
+          rcases hres with ⟨_, h2⟩ | ⟨h1, _⟩
+          · simpa using h2
+          · exact absurd hs h1
+        · intro hs
+          rcases hres with ⟨h1, _⟩ | ⟨_, h2⟩
+          · rw [hs] at h1; cases h1
+          · exact h2
 
 theorem checkGlobal_ok (m : Module) (g : GlobalId) (gl : Global) (h : checkGlobal m g gl = .ok ()) :
     (gl.ty.storable = true ∧ gl.ty.isRefLike = false) ∧
     ∃ tn, tyExpr (initEnv m g) gl.init 0 = .ok (gl.ty, tn) := by
   unfold checkGlobal at h
-  inv at h
-  obtain ⟨hty, _, t, tn, hte, howner⟩ := h
-  obtain ⟨_, _, hbeq⟩ := howner
-  have : t = gl.ty := eq_of_beq hbeq
-  subst this
-  simp only [Bool.and_eq_true, Bool.not_eq_true'] at hty
-  exact ⟨hty, tn, hte⟩
+  cases hscope : scopeOrderError (exprScopes none gl.init) 0 with
+  | some message =>
+    simp only [hscope] at h
+    inv at h
+  | none =>
+    simp only [hscope] at h
+    inv at h
+    obtain ⟨hty, _, t, tn, hte, howner⟩ := h
+    obtain ⟨_, _, hbeq⟩ := howner
+    have : t = gl.ty := eq_of_beq hbeq
+    subst this
+    simp only [Bool.and_eq_true, Bool.not_eq_true'] at hty
+    exact ⟨hty, tn, hte⟩
 
 theorem checkInitRoots_ok (m : Module) (g : GlobalId) (gl : Global) (hg : m.globals[g]? = some gl)
     (h : checkInitRoots m g = .ok ()) :
@@ -163,7 +175,7 @@ theorem checkContext_ok (m : Module) (ctx : Context) (h : checkContext m ctx = .
 theorem validate_modOk (m : Module) (h : validate m = .ok ()) : ModOk m := by
   unfold validate at h
   inv at h
-  obtain ⟨hstruct, hentry, hglob, himpl, hctx, hinit, hdemand⟩ := h
+  obtain ⟨hstruct, hentry, _, hglob, himpl, hctx, hinit, hdemand⟩ := h
   refine ⟨hstruct, ?_, ?_, ?_, checkEntry_ok m hentry, hdemand,
     deriveModuleDemand_ok_wellFormed m hdemand⟩
   · intro i impl hi
