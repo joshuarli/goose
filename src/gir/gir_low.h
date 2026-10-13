@@ -1141,7 +1141,10 @@ private:
         auto base = OwnerData(i.a, owner);
         auto at = PtrAt(base, len, esz);
         StoreAt(elemty, at, shape[i.b].w);
-        auto newLen = BinW(CoreBinOp::Add, I64(), len, ConstI(I64(), 1), true, i.org);
+        // Pilot push has no source-origin requirement, so keep its length increment unchecked.
+        auto newLen = h.profile == CoreProfile::Shrink
+            ? BinW(CoreBinOp::Add, I64(), len, ConstI(I64(), 1), true, i.org)
+            : BinW(CoreBinOp::Add, I64(), len, ConstI(I64(), 1));
         if (limited) SetLimitedLength(address, owner, newLen);
         else {
             SimpleE(GirOp::StackBump, rs.w[1], -1, (int)esz);
