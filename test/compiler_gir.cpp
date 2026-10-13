@@ -873,6 +873,10 @@ void PilotAndShrinkModuleShapesStayDistinct() {
     CoreModule pilot;
     assert(CoreWriter(pilot).Write() ==
            "[\"module\",\"goose-core/0.2\",\"core-pilot\",[],[],[],[],[],0,[]]\n");
+    auto highPilot = Base();
+    assert(GirWriter(highPilot).Write().find("[\"summary\",[],[],[],[],0,0]") != string::npos);
+    highPilot.profile = CoreProfile::Shrink;
+    assert(GirWriter(highPilot).Write().find("[\"summary\",[],[],[],[],[],0,0]") != string::npos);
     pilot.profile = CoreProfile::Shrink;
     assert(CoreWriter(pilot).Write() ==
            "[\"module\",\"goose-core/0.2\",\"core-shrink\",[],[],[],[],[],[],0,[]]\n");
@@ -1056,6 +1060,7 @@ CoreModule CoreShrinkOperations() {
     impl.body.stmts.push_back(std::move(assign));
 
     m.impls.push_back(std::move(impl));
+    m.contexts = { CoreContext { .impl = 0 } };
     m.entry = 0;
     return m;
 }
@@ -1088,6 +1093,115 @@ void CoreShrinkOperationTagsAndPlaceTypingAreCanonical() {
     assert(actual && *actual == boundedTy);
     CoreSummarizer(limited).Run();
     assert(limited.impls[0].summary.aborts);
+}
+
+void CoreShrinkOperationsLowerToVerifiedGir() {
+    auto core = CoreShrinkOperations();
+    CoreSummarizer(core).Run();
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+                           [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    auto json = GirWriter(high).Write();
+    for (auto tag : { "growshrink", "i_pop", "x_pop_n", "x_resize", "x_clear", "x_replace" })
+        assert(json.find(tag) != string::npos);
+    assert(json.find("[\"summary\",[],[],[],[],[],1,0]") != string::npos);
+}
+
+GirModule LetOwnerPush(CoreProfile profile, CoreType::Kind ownerKind) {
+    auto m = Base();
+    m.profile = profile;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = ownerKind;
+    owner.elem = i64;
+    if (ownerKind == CoreType::Limited) owner.count = 2;
+    auto ownerTy = m.Intern(owner);
+    Main(m).slots = { { ownerTy, CoreVarKind::Let, 0, 0 } };
+    Main(m).summary.unknown = true;
+
+    auto empty = Def(GirOp::Arr, 0);
+    empty.ty = ownerTy;
+    auto init = Init(0, 0);
+    auto slot = Def(GirOp::Slot, 1);
+    slot.idx = 0;
+    auto value = Int(m, 2, "1");
+    auto push = Def(GirOp::Push, 3);
+    push.a = 1;
+    push.b = 2;
+    push.org = 0;
+    Main(m).blocks[0].insts = { Enter(0), empty, init, slot, value, push, Leave(0), Ret() };
+    return m;
+}
+
+GirModule ShrinkSummaryModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+
+    GirFunc pop;
+    pop.name = "pop";
+    pop.params = { refTy };
+    pop.scopes = { -1 };
+    pop.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    pop.summary.reads = { CoreTarget { false, 0 } };
+    pop.summary.shrinks = { CoreTarget { false, 0 } };
+    pop.summary.aborts = true;
+    GirBlock body;
+    body.params = { { 0, refTy } };
+    auto instruction = Def(GirOp::Pop, 1);
+    instruction.a = 0;
+    instruction.org = 0;
+    body.insts = { instruction, Ret() };
+    pop.blocks = { body };
+    m.funcs.push_back(std::move(pop));
+    return m;
+}
+
+void ShrinkSummariesSerializeAndCoverPopEffects() {
+    auto m = ShrinkSummaryModule();
+    assert(Code(m) == "");
+    auto json = GirWriter(m).Write();
+    assert(json.find("[\"summary\",[[\"t_param\",0]],[],[],[[\"t_param\",0]],[],1,0]") !=
+           string::npos);
+    m.funcs[1].summary.shrinks.clear();
+    assert(Code(m) == "GIR-V050");
+}
+
+void PilotLetGrowPushUsesContentsPermission() {
+    auto m = LetOwnerPush(CoreProfile::Pilot, CoreType::Grow);
+    assert(Code(m) == "");
+}
+
+void RejectsPushThroughALetLimitedOwner() {
+    auto m = LetOwnerPush(CoreProfile::Shrink, CoreType::Limited);
+    assert(Code(m) == "GIR-V030");
+}
+
+void ShrinkOperationsAndAbortTagsStayOutOfPilotGir() {
+    auto operation = Base();
+    operation.profile = CoreProfile::Pilot;
+    auto pop = Def(GirOp::PopN, -1);
+    Main(operation).blocks[0].insts = { pop, Ret() };
+    assert(Code(operation) == "GIR-V010");
+
+    auto abort = Base();
+    abort.low = true;
+    GirInst trap;
+    trap.op = GirOp::Abort;
+    trap.abort = GirAbortKind::PopEmpty;
+    trap.org = 0;
+    Main(abort).blocks[0].insts = { trap };
+    assert(Code(abort) == "GIR-V010");
+
+    auto highAbort = Base();
+    highAbort.profile = CoreProfile::Shrink;
+    Main(highAbort).blocks[0].insts = { trap };
+    assert(Code(highAbort) == "GIR-V010");
 }
 
 void AcceptsScalarStructFieldsOnAnImmutableBinding() {
@@ -2161,6 +2275,11 @@ int main() {
     PilotAndShrinkModuleShapesStayDistinct();
     CoreShrinkPushAndSummaryCarryOriginsAndShrinks();
     CoreShrinkOperationTagsAndPlaceTypingAreCanonical();
+    CoreShrinkOperationsLowerToVerifiedGir();
+    PilotLetGrowPushUsesContentsPermission();
+    RejectsPushThroughALetLimitedOwner();
+    ShrinkSummariesSerializeAndCoverPopEffects();
+    ShrinkOperationsAndAbortTagsStayOutOfPilotGir();
     AcceptsScalarStructFieldsOnAnImmutableBinding();
     RejectsStructsInThePilotProfile();
     RejectsAStoreToALetField();

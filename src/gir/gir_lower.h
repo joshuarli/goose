@@ -378,6 +378,15 @@ private:
                 i.op = GirOp::Push;
                 i.a = r;
                 i.b = v;
+                if (core.profile == CoreProfile::Shrink) i.org = Org(e.org);
+                return EmitDef(std::move(i));
+            }
+            case CoreExprKind::Pop: {
+                auto r = LowerPlace(*e.place);
+                GirInst i;
+                i.op = GirOp::Pop;
+                i.a = r;
+                i.org = Org(e.org);
                 return EmitDef(std::move(i));
             }
             case CoreExprKind::If: {
@@ -621,6 +630,54 @@ private:
                 i.b = vw;
                 i.org = org;
                 EmitEffect(std::move(i));
+                return;
+            }
+            case CoreStmtKind::PopN: {
+                auto r = LowerPlace(*s.place);
+                auto count = LowerExpr(*s.expr);
+                GirInst i;
+                i.op = GirOp::PopN;
+                i.a = r;
+                i.b = count;
+                i.org = org;
+                EmitEffect(std::move(i));
+                return;
+            }
+            case CoreStmtKind::Resize: {
+                auto r = LowerPlace(*s.place);
+                auto size = LowerExpr(*s.expr);
+                GirInst i;
+                i.op = GirOp::Resize;
+                i.a = r;
+                i.b = size;
+                if (s.expr2) i.vals.push_back(LowerExpr(*s.expr2));
+                i.org = org;
+                EmitEffect(std::move(i));
+                return;
+            }
+            case CoreStmtKind::Clear: {
+                auto r = LowerPlace(*s.place);
+                GirInst i;
+                i.op = GirOp::Clear;
+                i.a = r;
+                i.org = org;
+                EmitEffect(std::move(i));
+                return;
+            }
+            case CoreStmtKind::AssignWhole: {
+                auto r = LowerPlace(*s.place);
+                GirInst clear;
+                clear.op = GirOp::Clear;
+                clear.a = r;
+                clear.org = org;
+                EmitEffect(std::move(clear));
+                auto replacement = LowerExpr(*s.expr);
+                GirInst replace;
+                replace.op = GirOp::Replace;
+                replace.a = r;
+                replace.b = replacement;
+                replace.org = org;
+                EmitEffect(std::move(replace));
                 return;
             }
             case CoreStmtKind::If: {

@@ -9,6 +9,18 @@
 
 namespace goose {
 
+inline bool GirOwnerKind(CoreType::Kind kind) {
+    return kind == CoreType::Grow || kind == CoreType::GrowShrink || kind == CoreType::Limited;
+}
+
+inline bool GirResizableKind(CoreType::Kind kind) {
+    return kind == CoreType::Grow || kind == CoreType::GrowShrink;
+}
+
+inline bool GirWholeOwnerBorrowUsesContents(CoreType::Kind kind) {
+    return kind == CoreType::Grow || kind == CoreType::GrowShrink;
+}
+
 // What typing an instruction may consult.
 struct GirTyEnv {
     GirModule &m;
@@ -62,7 +74,7 @@ inline bool GirRefTarget(const GirModule &m, GirTypeId t) {
     auto &c = m.Type(t);
     if (c.kind == CoreType::Int || c.kind == CoreType::Bool) return true;
     if (c.kind == CoreType::Slice) return GirFlat(m, c.elem);
-    if (c.kind == CoreType::Arr || c.kind == CoreType::Grow) return GirFlat(m, c.elem);
+    if (c.kind == CoreType::Arr || GirOwnerKind(c.kind)) return GirFlat(m, c.elem);
     return c.kind == CoreType::Struct && GirFlat(m, t);
 }
 
@@ -71,7 +83,8 @@ inline bool GirStorable(const GirModule &m, GirTypeId t) {
     auto &c = m.Type(t);
     switch (c.kind) {
         case CoreType::Int: case CoreType::Bool: return true;
-        case CoreType::Arr: case CoreType::Grow: return GirFlat(m, c.elem);
+        case CoreType::Arr: case CoreType::Grow: case CoreType::GrowShrink: case CoreType::Limited:
+            return GirFlat(m, c.elem);
         case CoreType::Struct: return GirFlat(m, t);
         case CoreType::Ref:
             // Reference-to-slice is a parameter-only type, not a general slot type.
@@ -210,12 +223,16 @@ public:
             case GirOp::Slot:
                 if (i.idx < 0 || i.idx >= (int)env.slots.size())
                     return GirTyErr(cat("slot ", i.idx, " outside the slot table"));
-                return GirTyOk(m.RefType(env.slots[i.idx].kind == CoreVarKind::Var ? CoreMut::Mut : CoreMut::Const,
+                return GirTyOk(m.RefType(env.slots[i.idx].kind == CoreVarKind::Var ||
+                                         GirWholeOwnerBorrowUsesContents(m.Type(env.slots[i.idx].ty).kind)
+                                             ? CoreMut::Mut : CoreMut::Const,
                                          env.slots[i.idx].ty));
             case GirOp::Global:
                 if (i.idx < 0 || i.idx >= (int)m.globals.size())
                     return GirTyErr(cat("global ", i.idx, " outside the global table"));
-                return GirTyOk(m.RefType(m.globals[i.idx].kind == CoreVarKind::Var ? CoreMut::Mut : CoreMut::Const,
+                return GirTyOk(m.RefType(m.globals[i.idx].kind == CoreVarKind::Var ||
+                                         GirWholeOwnerBorrowUsesContents(m.Type(m.globals[i.idx].ty).kind)
+                                             ? CoreMut::Mut : CoreMut::Const,
                                          m.globals[i.idx].ty));
             case GirOp::Elem: {
                 auto v = View(i.a);
@@ -238,7 +255,7 @@ public:
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
                 auto &pointee = m.Type(m.Type(r.ty).elem);
-                if (pointee.kind != CoreType::Arr && pointee.kind != CoreType::Grow)
+                if (pointee.kind != CoreType::Arr && !GirOwnerKind(pointee.kind))
                     return GirTyErr("snapshot of a reference to something that is not an array");
                 auto mut = i.snap == GirSnapshotMode::Owner ? CoreMut::Mut : m.Type(r.ty).mut;
                 return GirTyOk(m.ViewType(mut, pointee.elem));
@@ -269,7 +286,7 @@ public:
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
                 auto k = m.Type(m.Type(r.ty).elem).kind;
-                if (k != CoreType::Arr && k != CoreType::Grow)
+                if (k != CoreType::Arr && !GirOwnerKind(k))
                     return GirTyErr("length of a reference to something that is not an array");
                 return GirTyOk(m.IntType(CoreIntTy::I64));
             }
@@ -284,12 +301,22 @@ public:
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
                 auto &pointee = m.Type(m.Type(r.ty).elem);
-                if (pointee.kind != CoreType::Grow)
-                    return GirTyErr("push to a reference that does not point at a grow-only array");
+                if (!GirOwnerKind(pointee.kind))
+                    return GirTyErr("push to a reference that does not point at an owner array");
+                if (pointee.kind != CoreType::Grow && m.profile != CoreProfile::Shrink)
+                    return GirTyErr("shrink-profile push under core-pilot");
                 auto v = Data(i.b);
                 if (!v.ok()) return v;
                 if (v.ty != pointee.elem) return GirTyErr("a pushed element of another type than the array's");
                 return GirTyOk(m.RefType(CoreMut::Mut, pointee.elem));
+            }
+            case GirOp::Pop: {
+                auto r = Ref(i.a);
+                if (!r.ok()) return r;
+                auto &owner = m.Type(m.Type(r.ty).elem);
+                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(owner.kind))
+                    return GirTyErr("pop from a reference that does not point at a shrink-profile owner array");
+                return GirTyOk(owner.elem);
             }
             case GirOp::Call: {
                 if (i.idx < 0 || i.idx >= (int)env.sigs.size())
@@ -310,10 +337,15 @@ public:
             }
             case GirOp::Arr: {
                 auto &t = m.Type(i.ty);
-                if (t.kind != CoreType::Arr && t.kind != CoreType::Grow)
+                if (t.kind != CoreType::Arr && !GirOwnerKind(t.kind))
                     return GirTyErr("array literal of a type that is not an array");
+                if ((t.kind == CoreType::GrowShrink || t.kind == CoreType::Limited) &&
+                    m.profile != CoreProfile::Shrink)
+                    return GirTyErr("shrink-profile literal under core-pilot");
                 if (t.kind == CoreType::Arr && (int64_t)i.vals.size() != t.count)
                     return GirTyErr(cat("array literal of ", i.vals.size(), " elements for a type of ", t.count));
+                if (t.kind == CoreType::Limited && (int64_t)i.vals.size() > t.count)
+                    return GirTyErr(cat("limited literal of ", i.vals.size(), " elements exceeds capacity ", t.count));
                 for (auto v : i.vals) {
                     auto e = Data(v);
                     if (!e.ok()) return e;

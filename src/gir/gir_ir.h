@@ -16,12 +16,12 @@ using GirTypeId = CoreTypeId;
 enum class GirOp : uint8_t {
     // Instructions that define a value, high stage.
     Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, Load,
-    Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, Push, Call, Arr, Fill, Struct, Field,
+    Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, Push, Pop, Call, Arr, Fill, Struct, Field,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
     HdrLen,
     // Instructions that define none, high stage.
-    Init, Store, Append, Enter, Leave, Print,
+    Init, Store, Append, PopN, Resize, Clear, Replace, Enter, Leave, Print,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
     BytesFill, RtCall,
@@ -39,9 +39,10 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::BoolCmp: case GirOp::Next: case GirOp::Slot: case GirOp::Global: case GirOp::Elem:
         case GirOp::Freeze: case GirOp::Load: case GirOp::Snap: case GirOp::SliceView:
         case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::ArrayLen: case GirOp::Index:
-        case GirOp::Push: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
+        case GirOp::Push: case GirOp::Pop: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
         case GirOp::Unit: case GirOp::Init:
-        case GirOp::Store: case GirOp::Append: case GirOp::Enter: case GirOp::Leave: case GirOp::Print:
+        case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
+        case GirOp::Replace: case GirOp::Enter: case GirOp::Leave: case GirOp::Print:
             return true;
         default: return false;
     }
@@ -53,6 +54,7 @@ inline bool GirLowOnly(GirOp op) {
 
 enum class GirAbortKind : uint8_t {
     DivZero, DivOverflow, IndexOob, SliceOob, Assert, UserAbort, IntOverflow, CastRange,
+    PopEmpty, PopNRange, ResizeNegative, ResizeFill, Capacity,
 };
 
 // An array view is either taken directly from its owner or borrowed through a
@@ -62,7 +64,8 @@ enum class GirSnapshotMode : uint8_t { Owner, Borrowed };
 
 inline const char *GirAbortKindName(GirAbortKind k) {
     static const char *names[] = { "div_zero", "div_overflow", "index_oob", "slice_oob", "assert",
-                                   "user_abort", "int_overflow", "cast_range" };
+                                   "user_abort", "int_overflow", "cast_range", "pop_empty", "pop_n_range",
+                                   "resize_negative", "resize_fill", "capacity" };
     return names[(int)k];
 }
 
@@ -90,9 +93,12 @@ struct GirPart {
 //   Snap: res, snapshot mode, a
 //   ViewSlice: res, mut, a (view), lo, hi, org
 //   Index: res, a (view), b (index), org     Push: res, a (ref), b (value), org
+//   Pop: res, a (owner reference), org
 //   Call: res, idx (function), vals, org     Arr: res, ty, vals      Fill: res, ty, a
 //   Struct: res, ty, vals                    Field: res, a (reference), idx (real field)
 //   Init: idx (slot), a, org      Store/Append: a (ref), b, org
+//   PopN: a (owner reference), b (count), org   Resize: a, b (size), vals[0]? (fill), org
+//   Clear: a (owner reference), org             Replace: a (owner ref), b (literal run), org
 //   Enter/Leave: idx (scope)      Print: parts, org
 //   Br: idx (block), vals         CondBr: a, idx (true block), vals, idx2, vals2
 //   Ret: vals, org                Abort: abort, org        Exit: a, org
