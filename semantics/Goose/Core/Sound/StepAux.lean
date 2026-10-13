@@ -35,6 +35,7 @@ theorem Frame.of_eq {s' : St} {future : List VarId} (h : Frame m W tenv penv env
       obtain ⟨lv, si, v, hvar, hlk, hty, hroot, hshape⟩ := h.bindings x hx
       exact ⟨lv, si, v, hvar, hlk, hty, by rw [h1]; exact hroot, hshape⟩
     rooted := by rw [h1]; exact h.rooted
+    rootedOwners := by rw [h1]; exact h.rootedOwners
     storage := by
       intro r T hstorage v hv
       have hv' := hv

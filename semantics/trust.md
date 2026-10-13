@@ -8,6 +8,12 @@ non-reference storage, even at roots outside the initialized declarations.
 It permits flat values at undeclared roots. This prevents an untracked global
 slice holder from surviving a backing-owner truncation with invalid bounds.
 
+Content-root annotations may include harmless extra roots. The core soundness
+frame therefore tracks owner authority separately from content typing: only
+parameters declared as references to grow or growshrink storage grant owner
+authority, and stored references of those types retain that authority. Slice
+contents and returned slice values continue to use the broader content roots.
+
 `coverage.json` is a JSON list with one row per feature and claim label, never
 merged: `{"feature": string, "label": "specified" | "executable" |
 "model-proved" | "instance-checked" | "differential-tested" | "assumed" |
