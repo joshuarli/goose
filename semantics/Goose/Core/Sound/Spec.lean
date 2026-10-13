@@ -129,7 +129,9 @@ def PreOk (m : Module) (W : World) (penv : PEnv) (env1 : Env) (sc lo hi : Nat) (
   (pre.map Prod.fst).Nodup ∧
   ∀ x v, (x, v) ∈ pre → lo ≤ x ∧ x < hi ∧ ∃ lv, env1.vars[x]? = some lv ∧ lv.scope = sc ∧
     lv.ty.paramOk = true ∧ HasTy m W.G st v lv.ty ∧
-    ∀ r, Targets v r → ∃ ann, penv.ann x = some ann ∧ Gam env1 W.P ann r
+    ∃ ann, penv.ann x = some ann ∧
+      (∀ r, Targets v r → Gam env1 W.P ann r) ∧
+      OwnerRooted env1 W.ownerP ann v lv.ty
 
 /-- The declared effects of an implementation touch only initialized globals. -/
 def SumOk (G : Nat) (P : Nat → RootInst → Prop) (impl : Impl) (ctx : Context) : Prop :=
