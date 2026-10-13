@@ -62,7 +62,6 @@ private theorem readRoots_accessRoots (penv : PEnv) (p : Place) (state : RState)
   cases p with
   | var x =>
     have hread := readRoots_ok penv (.var x) state (rho, state') hreplay
-    simp only [Prod.fst, Prod.snd] at hread
     rcases hread.2 with h | h | h
     · rcases h with ⟨x', lv, hp, hvar, hlike, hann⟩
       cases hp
@@ -85,7 +84,6 @@ private theorem readRoots_accessRoots (penv : PEnv) (p : Place) (state : RState)
       cases p with
       | var x =>
         have hread := readRoots_ok penv (.deref (.read (.var x))) state (rho, state') hreplay
-        simp only [Prod.fst, Prod.snd] at hread
         rcases hread.2 with h | h | h
         · rcases h with ⟨_, _, hp, _, _, _⟩
           cases hp
