@@ -439,7 +439,7 @@ theorem HasTy.agree {v : Val} {T : Ty}
     (h : HasTy m G st v T) : HasTy m G st' v T := by
   cases T <;> simp only [HasTy] at h ⊢ <;> try exact h
   · obtain ⟨l, rfl, h2⟩ := h
-    refine ⟨l, rfl, h2.elim (fun h => Or.inl ⟨h.1, h.2.agree hagree (ht _ rfl)⟩)
+    refine ⟨l, rfl, h2.elim (fun h => Or.inl ⟨h.1, h.2.1.agree hagree (ht _ rfl), h.2.2⟩)
       (fun h => Or.inr ⟨h.1, h.2.1, ?_⟩)⟩
     rw [hagree _ (ht _ rfl)]; exact h.2.2
   · obtain ⟨l, a, n, rfl, h2, h3⟩ := h

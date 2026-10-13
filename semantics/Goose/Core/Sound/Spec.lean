@@ -34,7 +34,7 @@ def LoopFlow (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (s : St) : Flo
 /-- A place denotes a typed location, or is a variable that holds a reference. -/
 def PlaceOk (m : Module) (G : Nat) (P : Nat → RootInst → Prop) (penv : PEnv) (env : Env) (s : Store)
     (p : Place) (l : Loc) (t : Ty) : Prop :=
-  (t.refTarget = true ∧ LocOk m G s l t) ∨
+  (t.refTarget = true ∧ LocOk m G s l t ∧ HeaderLoc l t) ∨
   (∃ x lv si v, p = .var x ∧ env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si ∧
     l = ⟨.local env.act si x, []⟩ ∧ lv.ty = t ∧ t.isRefLike = true ∧
     s.roots[RootInst.local env.act si x]? = some v ∧ HasTy m G s v t) ∨
@@ -42,6 +42,24 @@ def PlaceOk (m : Module) (G : Nat) (P : Nat → RootInst → Prop) (penv : PEnv)
   (∃ x lv mu0 mu E ann, p = .deref (.read (.var x)) ∧ env.vars[x]? = some lv ∧
     lv.ty = .ref mu0 (.slice mu E) ∧ t = .slice mu E ∧ E.flat = true ∧ l.path = [] ∧
     penv.ann x = some ann ∧ Gam env P ann l.root ∧ s.roots[l.root]? ≠ none)
+
+theorem PlaceOk.ownerHeader {m : Module} {G : Nat} {P : Nat → RootInst → Prop} {penv : PEnv}
+    {env : Env} {s : Store} {p : Place} {l : Loc} {t : Ty}
+    (h : PlaceOk m G P penv env s p l t) (howner : t.ownerElem?.isSome = true) : l.path = [] := by
+  rcases h with ⟨_, _, hheader⟩ |
+    ⟨x, lv, si, v, _, _, _, _, ht, hrl, _, _⟩ |
+    ⟨_, _, _, _, _, _, _, _, _, ht, _, _, _, _, _⟩
+  · exact hheader howner
+  · cases t <;> simp [Ty.ownerElem?, Ty.isRefLike] at howner hrl
+  · rw [ht] at howner
+    simp [Ty.ownerElem?] at howner
+
+/-- A typed place of owner type cannot denote a nonempty path. -/
+theorem PlaceOk.ownerHeader_excludes_nonempty {m : Module} {G : Nat} {P : Nat → RootInst → Prop}
+    {penv : PEnv} {env : Env} {s : Store} {p : Place} {l : Loc} {t : Ty}
+    (h : PlaceOk m G P penv env s p l t) (howner : t.ownerElem?.isSome = true)
+    (hnonempty : l.path ≠ []) : False := by
+  exact hnonempty (h.ownerHeader howner)
 
 /-- A sampled run lies inside a typed array, and a run of a resizable owner
 starts at its first element. -/

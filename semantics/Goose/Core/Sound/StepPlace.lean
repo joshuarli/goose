@@ -26,7 +26,8 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
     by_cases hrl : lv0.ty.isRefLike = true
     · exact Or.inr (Or.inl ⟨x, lv0, si, v, rfl, h1, h2, rfl, rfl, hrl, h4, h5⟩)
     · have hrl' : lv0.ty.isRefLike = false := by simpa using hrl
-      exact Or.inl ⟨storable_refTarget h3 hrl', Or.inl (locTy_root h4 (hasTy_nonref_flat h5 h3 hrl'))⟩
+      exact Or.inl ⟨storable_refTarget h3 hrl', Or.inl (locTy_root h4 (hasTy_nonref_flat h5 h3 hrl')),
+        HeaderLoc.root⟩
   | global g =>
     simp only [tyPlace] at ht; inv at ht
     obtain ⟨_, ht⟩ := ht
@@ -40,7 +41,8 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
       rw [hF.mod_t] at hg
       have hok := hm.glob g gl hg
       simp only [evalPlace, sat_pure]
-      refine ⟨hF, Ext.refl _ _ _, Or.inl ⟨storable_refTarget (paramOk_of_storable hok.ty.1) hok.ty.2, ?_⟩,
+      refine ⟨hF, Ext.refl _ _ _, Or.inl ⟨storable_refTarget (paramOk_of_storable hok.ty.1) hok.ty.2, ?_,
+        HeaderLoc.root⟩,
         ⟨.global g, by simp, rfl⟩⟩
       by_cases hG : g < W.G
       · exact Or.inl (hF.inv.globals g gl hG hg)
@@ -59,8 +61,8 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
       rintro v s1 ⟨hF1, hX1, hv, hg⟩
       obtain ⟨l, rfl, hh⟩ := hv
       simp only [expectRef, sat_pure]
-      rcases hh with ⟨hrt, hl⟩ | ⟨hsl, _⟩
-      · exact ⟨hF1, hX1, Or.inl ⟨hrt, hl⟩, hg _ rfl⟩
+      rcases hh with ⟨hrt, hl, hheader⟩ | ⟨hsl, _⟩
+      · exact ⟨hF1, hX1, Or.inl ⟨hrt, hl, hheader⟩, hg _ rfl⟩
       · rw [isRefSlice_ref] at hnr; exact absurd hsl hnr
     | some ty =>
       simp only [tyPlace, hs] at ht
@@ -105,10 +107,10 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     simp only [sat_pure]
     refine ⟨hF1, hX1, ?_, hg⟩
-    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, _, _, _, _, hty, hrl, _⟩ |
+    rcases hpl with ⟨hrt, hl, _hheader⟩ | ⟨x, lv, si, v, _, _, _, _, hty, hrl, _⟩ |
       ⟨x, lv, mu0, mus, E, ann, _, _, _, hty, _⟩
     · exact Or.inl ⟨flat_refTarget hf,
-        hl.fieldPath (FieldPath.field hselector (FieldPath.root _))⟩
+        hl.fieldPath (FieldPath.field hselector (FieldPath.root _)), HeaderLoc.ofFlat hf⟩
     · simp [Ty.isRefLike] at hrl
     · cases hty
   | elem v i org =>
@@ -128,7 +130,8 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
     by_cases hk : 0 ≤ k ∧ k < (vw.len : Int)
     · simp only [hk, and_self, if_true, sat_pure]
       have hvw2 := hvw.mono hX2.le
-      refine ⟨hF2, hX1.trans hX2, Or.inl ⟨flat_refTarget hvw2.1, Or.inl ?_⟩, hg⟩
+      refine ⟨hF2, hX1.trans hX2, Or.inl ⟨flat_refTarget hvw2.1, Or.inl ?_,
+        HeaderLoc.ofFlat hvw2.1⟩, hg⟩
       exact sliceTy_elem hvw2.2.1 (i := k.toNat) (by omega)
     · simp only [hk, if_false, sat_abort]
 
@@ -150,7 +153,7 @@ theorem step_view (ih : Specs m prof n) : ViewSpec m prof (n + 1) := by
     cases tp <;> inv at ht
     · rename_i el' k
       obtain ⟨rfl, rfl, rfl⟩ := ht
-      rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
+      rcases hpl with ⟨hrt, hl, _⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
         ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
       · have hlt := hacc _ hl
         refine sat_readLoc_bind hlt (fun v hv hT => ?_)
@@ -163,7 +166,7 @@ theorem step_view (ih : Specs m prof n) : ViewSpec m prof (n + 1) := by
       · cases h3
     · rename_i el'
       obtain ⟨rfl, rfl, rfl⟩ := ht
-      rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
+      rcases hpl with ⟨hrt, hl, _⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
         ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
       · have hlt := hacc _ hl
         refine sat_readLoc_bind hlt (fun v hv hT => ?_)
@@ -176,7 +179,7 @@ theorem step_view (ih : Specs m prof n) : ViewSpec m prof (n + 1) := by
       · cases h3
     · rename_i el'
       obtain ⟨rfl, rfl, rfl⟩ := ht
-      rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
+      rcases hpl with ⟨hrt, hl, _⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
         ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
       · have hlt := hacc _ hl
         refine sat_readLoc_bind hlt (fun v hv hT => ?_)
@@ -189,7 +192,7 @@ theorem step_view (ih : Specs m prof n) : ViewSpec m prof (n + 1) := by
       · cases h3
     · rename_i el' capacity
       obtain ⟨rfl, rfl, rfl⟩ := ht
-      rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
+      rcases hpl with ⟨hrt, hl, _⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
         ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
       · have hlt := hacc _ hl
         refine sat_readLoc_bind hlt (fun v hv hT => ?_)

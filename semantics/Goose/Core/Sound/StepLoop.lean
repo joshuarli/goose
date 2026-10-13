@@ -221,7 +221,7 @@ theorem step_each (ih : Specs m prof n) : EachSpec m prof (n + 1) := by
         obtain ⟨⟨mx, hty⟩, hbr⟩ := hxty
         refine rest _ _ (by cases idx <;> rfl) ⟨?_, fun r hr => ?_⟩
         · rw [hty]
-          exact ⟨_, rfl, Or.inl ⟨flat_refTarget hvw.1, Or.inl hel⟩⟩
+          exact ⟨_, rfl, Or.inl ⟨flat_refTarget hvw.1, Or.inl hel, HeaderLoc.ofFlat hvw.1⟩⟩
         · cases hr
           obtain ⟨lv', ann, _, ha, hsub, _⟩ := bindRootsV_ok _ _ _ _ hbr
           exact ⟨ann, ha, hg.subset hsub⟩

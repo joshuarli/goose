@@ -143,9 +143,9 @@ theorem HasTy.truncate_growshrink {m : Module} {G : Nat} {s s' : Store}
     simp only [HasTy] at h ⊢
     obtain ⟨l, rfl, hloc⟩ := h
     refine ⟨l, rfl, ?_⟩
-    rcases hloc with ⟨htarget, hloc⟩ | ⟨hslice, hpath, hroot⟩
+    rcases hloc with ⟨htarget, hloc, hheader⟩ | ⟨hslice, hpath, hroot⟩
     · change RetainedLoc o len l at hretained
-      exact Or.inl ⟨htarget, hLoc l target hretained hloc⟩
+      exact Or.inl ⟨htarget, hLoc l target hretained hloc, hheader⟩
     · change RetainedLoc o len l at hretained
       refine Or.inr ⟨hslice, hpath, ?_⟩
       by_cases hrootOwner : l.root = o.root
