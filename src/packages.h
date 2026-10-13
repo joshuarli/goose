@@ -199,7 +199,7 @@ inline string FetchPackage(const PackageSource &s, const string &name,
                            PackageFetchPolicy policy = PackageFetchPolicy::AllowFetch) {
     auto dir = GitCacheDir(s);
     std::error_code ec;
-    auto have = filesystem::is_directory(filesystem::path(dir), ec);
+    auto have = ProbeDirectory(dir);
     auto update = have && package_update && !IsCommitHash(s.ref);
     if (policy == PackageFetchPolicy::Offline) {
         if (!have)
@@ -218,7 +218,7 @@ inline string FetchPackage(const PackageSource &s, const string &name,
         // The lock stays outside both the temporary and final checkout, so
         // cleanup and publication never remove a lock another process holds.
         FileLock lock(dir + ".lock");
-        have = filesystem::is_directory(filesystem::path(dir), ec);
+        have = ProbeDirectory(dir);
         update = have && package_update && !IsCommitHash(s.ref);
         if (have && !update) return dir + "/";
         auto git = FindOnPath("git");
@@ -275,8 +275,7 @@ inline string PackageRoot(const PackageSource &source, const string &name,
     try {
         string dir;
         if (source.ispath) {
-            std::error_code ec;
-            if (!filesystem::is_directory(filesystem::path(source.dir), ec))
+            if (!ProbeDirectory(source.dir))
                 throw CompileError { cat("the package ", name, "'s source ", source.text,
                                          " is not a directory (", source.dir, ")") };
             dir = source.dir;

@@ -8,6 +8,13 @@
 
 namespace goose {
 
+// What a process cost, where the platform can say: its CPU time and its
+// peak resident memory are -1 elsewhere.
+struct ProcessUsage {
+    double wall = 0, cpu = -1;
+    long long peak_rss = -1;
+};
+
 struct ProcessResult {
     bool started = false;   // False: the program could not be run, and `output` says why.
     int code = -1;          // Its exit code, once started.
@@ -18,7 +25,8 @@ struct ProcessResult {
 // `cwd`, or in this process's working directory when that is empty, with
 // this process's environment, and collects what it prints. With `echo` the
 // output is also written to stderr as it arrives, for -v.
-ProcessResult RunProcess(const vector<string> &argv, const string &cwd = "", bool echo = false);
+ProcessResult RunProcess(const vector<string> &argv, const string &cwd = "", bool echo = false,
+                         struct ProcessUsage *usage = nullptr);
 
 // Creates an empty temporary file with owner-only permissions where the
 // platform supports them. The caller owns removal of the returned path.

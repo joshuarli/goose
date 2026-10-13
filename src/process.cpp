@@ -26,14 +26,20 @@
     #include <fcntl.h>
     #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
 #endif
+
+#include <chrono>
 
 #include <filesystem>
 
 namespace goose {
 
-ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool echo) {
+ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool echo,
+                         ProcessUsage *usage) {
     ProcessResult r;
+    auto started = std::chrono::steady_clock::now();
     vector<const char *> args;
     for (auto &a : argv) args.push_back(a.c_str());
     args.push_back(nullptr);
@@ -60,9 +66,27 @@ ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool ech
         if (echo) fwrite(buf, 1, n, stderr);
     }
     int code = -1;
+    #ifndef _WIN32
+    if (usage) {
+        // Waiting for the child here, rather than in subprocess_join, is what
+        // gives its resource usage.
+        int status = 0;
+        struct rusage ru {};
+        if (wait4(p.child, &status, 0, &ru) >= 0 && WIFEXITED(status)) code = WEXITSTATUS(status);
+        usage->cpu = (double)(ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) +
+                     (double)(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1e6;
+        #ifdef __APPLE__
+            usage->peak_rss = (long long)ru.ru_maxrss;
+        #else
+            usage->peak_rss = (long long)ru.ru_maxrss * 1024;
+        #endif
+    } else if (subprocess_join(&p, &code)) code = -1;
+    #else
     if (subprocess_join(&p, &code)) code = -1;
+    #endif
     subprocess_destroy(&p);
     r.code = code;
+    if (usage) usage->wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     return r;
 }
 

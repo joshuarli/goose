@@ -56,6 +56,7 @@
 #include "packages.h"
 #include "json.h"
 #include "native.h"
+#include "units/build.h"
 #include "lint_facts.h"
 #include "core/core_ir.h"
 #include "core/core_json.h"
@@ -79,11 +80,14 @@ string DirOf(const string &path) {
 
 string ExePath(const char *argv0);
 int LintMain(int argc, char **argv, const string &exe);
+bool OutputCaptureStart(const string &out, const string &err);
+void OutputCaptureStop();
 
 static bool FileExists(const string &path) {
     auto f = fopen(path.c_str(), "rb");
     if (f) fclose(f);
     DepNotePathProbe(path, f != nullptr);
+    if (input_recorder) input_recorder->Probe(path, f != nullptr);
     return f != nullptr;
 }
 
@@ -635,6 +639,18 @@ CodeGen::StackConfig StackConfigOf(const vector<string> &cdefines) {
     return cfg;
 }
 
+// What `goose build --units` holds across its steps (units/build.h).
+struct UnitsRun {
+    bool active = false;
+    Toolchain tc;
+    UnitStore store;
+    UnitContract contract;
+    unique_ptr<FileLock> lock;        // The store's, for the length of the build.
+    RecordedInputs inputs;
+    string out, err;                  // What the compile printed.
+    map<string, string> before;       // The unit texts a no-op hit found, when verifying it.
+};
+
 int Main(int argc, char **argv) {
     auto exe = ExePath(argv[0]);
     if (argc > 1 && string_view(argv[1]) == "lint") return LintMain(argc - 2, argv + 2, exe);
@@ -657,6 +673,7 @@ int Main(int argc, char **argv) {
     }
     string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore, unitsdir,
         emitgirhigh, emitgirlow, pipeline = "legacy";
+    auto unitsbuild = false, rebuildflag = false, verifyflag = false;
     auto dump = false, tokens = false, parseonly = false, specs = false, nocgen = false;
     auto roundtrip = false, multitest = false;
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
@@ -704,6 +721,9 @@ int Main(int argc, char **argv) {
         }
         else if (arg == "--check") nocgen = true;
         else if (arg == "--build-report" && i + 1 < argc) reportfile = argv[++i];
+        else if (arg == "--units") unitsbuild = true;
+        else if (arg == "--rebuild") rebuildflag = true;
+        else if (arg == "--verify-reuse") verifyflag = true;
         else if (arg == "--share") emit_options.share = true;
         else if (arg == "--stable-names") emit_options.stable_names = true;
         else if (arg == "--emit-units" && i + 1 < argc) {
@@ -776,6 +796,18 @@ int Main(int argc, char **argv) {
         }
         else files.push_back(arg);
     }
+    // What shapes a unit build's output, as the command line says it: every
+    // option but the ones that only say where, how loudly or whether to reuse.
+    vector<string> contractargs;
+    for (int i = firstarg; i < argc; i++) {
+        string a = argv[i];
+        if (a == "--") break;
+        if (a == "-o" || a == "--build-report" || a == "--cc") { i++; continue; }
+        if (a == "--units" || a == "--rebuild" || a == "--verify-reuse" || a == "-v" ||
+            a == "--dry-run" || a.empty() || a[0] != '-')
+            continue;
+        contractargs.push_back(a);
+    }
     if (verb == "toolchain") {
         try {
             auto tools = FindTools(ccrequest, refresh);
@@ -815,7 +847,22 @@ int Main(int argc, char **argv) {
             return 1;
         }
         buildopts = BuildOptions { ccrequest, debug, verbose, dryrun, standalone, outname };
+        buildopts.units = unitsbuild;
+        buildopts.rebuild = rebuildflag;
+        buildopts.verify = verifyflag;
         outname.clear();
+    }
+    if ((unitsbuild || rebuildflag || verifyflag) && verb != "build") {
+        fprintf(stderr, "--units, --rebuild and --verify-reuse belong to goose build\n");
+        return 1;
+    }
+    if ((rebuildflag || verifyflag) && !unitsbuild) {
+        fprintf(stderr, "--rebuild and --verify-reuse need --units\n");
+        return 1;
+    }
+    if (unitsbuild && standalone) {
+        fprintf(stderr, "goose build --units takes no --standalone\n");
+        return 1;
     }
     if (files.size() > 1 && !multitest) {
         fprintf(stderr, "multiple input files given\n");
@@ -840,7 +887,7 @@ int Main(int argc, char **argv) {
                         "goose check file.goose [options] | goose fetch [--update] file.goose | "
                         "goose version |\n"
                         "       goose build file.goose [options] [-o exe] [--debug] [--standalone] "
-                        "[--cc name|path] [-v] [--dry-run] |\n"
+                        "[--cc name|path] [-v] [--dry-run] [--units [--rebuild] [--verify-reuse]] |\n"
                         "       goose toolchain [--cc name|path] [--json] [--refresh]\n");
         fprintf(stderr, "   or: goose [--dump] [--parse] [--tokens] [--roundtrip] "
                         "[--dump-file out.goose] [--specs] [--stacks] [--check] "
@@ -1163,15 +1210,104 @@ int Main(int argc, char **argv) {
         program.clear();
         astp.reset();
         nativepkgs.clear();
+        UnitsRun ur;
+        if (verb == "build" && buildopts.units) {
+            ur.active = true;
+            string why;
+            if (!FindToolchain(buildopts.ccrequest, ur.tc, why)) {
+                fprintf(stderr, "%s\n", why.c_str());
+                return 1;
+            }
+            Builder ub { ur.tc, buildopts, msgs };
+            ur.contract = MakeContract(contractargs, exe, ub);
+            ur.store.dir = AbsolutePath(cat(builddir, "/store/", ur.contract.digest.substr(0, 16)));
+            std::error_code ec;
+            filesystem::create_directories(filesystem::path(ur.store.Units()), ec);
+            if (ec) {
+                fprintf(stderr, "cannot create the store %s\n", ur.store.dir.c_str());
+                return 1;
+            }
+            // A second build of this program waits here, and then finds a warm store.
+            ur.lock = make_unique<FileLock>(ur.store.Lock());
+            outfile.clear();
+            auto &rep = units_build = UnitsBuildReport();
+            rep.enabled = true;
+            rep.store = ur.store.dir;
+            rep.contract = ur.contract.digest;
+            // The no-op check: every input the last successful build read, as it was.
+            string last;
+            auto hit = false;
+            if (!buildopts.rebuild && !buildopts.dryrun &&
+                UnitReadFile(ur.store.dir + "/last.rec", last)) {
+                auto lines = UnitLines(last);
+                // goose-build-record/1, cwd, exe, exe size, then the inputs.
+                if (lines.size() >= 4 && lines[0] == "goose-build-record/1" &&
+                    lines[1] == cat("cwd ", filesystem::current_path().string()) &&
+                    lines[2].compare(0, 4, "exe ") == 0 && lines[3].compare(0, 9, "exe_size ") == 0) {
+                    auto exe_path = lines[2].substr(4);
+                    vector<string> inputs(lines.begin() + 4, lines.end());
+                    // The same executable as was asked for, and as it was made.
+                    hit = (buildopts.exe.empty() || buildopts.exe == exe_path) &&
+                          UnitFileSize(exe_path) == atoll(lines[3].c_str() + 9) &&
+                          InputsUnchanged(inputs);
+                    if (hit) {
+                        string o, e;
+                        UnitReadFile(ur.store.dir + "/last.stdout", o);
+                        UnitReadFile(ur.store.dir + "/last.stderr", e);
+                        if (buildopts.verify) {
+                            // Recompute everything, and compare what it writes.
+                            for (auto &entry : filesystem::directory_iterator(
+                                     filesystem::path(ur.store.Units()), ec)) {
+                                string text;
+                                UnitReadFile(entry.path().string(), text);
+                                ur.before[entry.path().filename().string()] = text;
+                            }
+                        } else {
+                            fputs(o.c_str(), stdout);
+                            fputs(e.c_str(), stderr);
+                            fprintf(msgs, "built %s\n", exe_path.c_str());
+                            rep.no_op = true;
+                            if (!reportfile.empty()) WriteNoOpReport(reportfile, file);
+                            return 0;
+                        }
+                    }
+                }
+            }
+            emit_options.units = emit_options.stable_names = true;
+            unitsdir = ur.store.Units();
+        }
         try {
             // The compile has a thread of its own. The program a JIT run
             // starts runs back on this one, the main thread, which a window
             // on macOS has to be made on, and whose stack the link reserves
             // as large as the compile thread's where the platform lets it
             // (CMakeLists.txt).
-            auto code = RunOnCompilerStack(compile);
+            auto capturing = false;
+            if (ur.active) {
+                capturing = OutputCaptureStart(ur.store.dir + "/compile.stdout", ur.store.dir + "/compile.stderr");
+                input_recorder = &ur.inputs;
+            }
+            // What the compile printed is kept, and printed again after it.
+            auto replay = [&]() {
+                input_recorder = nullptr;
+                if (!capturing) return;
+                OutputCaptureStop();
+                capturing = false;
+                UnitReadFile(ur.store.dir + "/compile.stdout", ur.out);
+                UnitReadFile(ur.store.dir + "/compile.stderr", ur.err);
+                fputs(ur.out.c_str(), stdout);
+                fputs(ur.err.c_str(), stderr);
+            };
+            int code;
+            try {
+                code = RunOnCompilerStack(compile);
+            } catch (...) {
+                replay();
+                throw;
+            }
+            replay();
             if (code) return code;
-            if (g_build_report) BuildReportWrite();
+            if (g_build_report && !ur.active) BuildReportWrite();
             if (verb == "build") {
                 if (nocgen) return 0;
                 // The native parts first, so that the link can take their
@@ -1197,6 +1333,64 @@ int Main(int argc, char **argv) {
                         if (!BuildNativePart(*astp, pkg, filename, b, false, nb)) return 1;
                         rsps.push_back(nb.rsp);
                     }
+                }
+                if (ur.active) {
+                    auto &out = astp->packages[0].output;
+                    UnitsBuildInput in;
+                    in.tc = &ur.tc;
+                    in.opts = &buildopts;
+                    in.store = ur.store;
+                    in.contract = ur.contract.digest;
+                    in.exe = buildopts.exe;
+                    if (in.exe.empty()) {
+                        in.exe = cat(DirOf(filename), out.empty() ? PathStem(filename) : out);
+                        #ifdef _WIN32
+                            if (in.exe.size() < 4 || in.exe.compare(in.exe.size() - 4, 4, ".exe") != 0) in.exe += ".exe";
+                        #endif
+                    }
+                    in.rsps = rsps;
+                    for (auto &inc : includes)
+                        if (FileExists(inc)) in.include_headers.push_back(AbsolutePath(inc));
+                    in.rebuild = buildopts.rebuild;
+                    in.verify = buildopts.verify;
+                    in.msgs = msgs;
+                    // A no-op hit that is being verified: its units are compared.
+                    for (auto &[name, text] : unit_stats.files) {
+                        auto it = ur.before.find(name);
+                        if (!ur.before.empty() && (it == ur.before.end() || it->second != text)) {
+                            fprintf(stderr, "--verify-reuse: the unit %s differs from the last build's "
+                                            "although no input changed\n", name.c_str());
+                            return 1;
+                        }
+                    }
+                    string runtime_object;
+                    if (!buildopts.standalone) {
+                        Builder rb { ur.tc, buildopts, msgs };
+                        runtime_object = RuntimeObject(rb);
+                        if (runtime_object.empty()) return 1;
+                    }
+                    auto result = BuildUnitObjects(in, runtime_object);
+                    if (result) return result;
+                    if (!buildopts.dryrun) {
+                        fprintf(msgs, "built %s\n", in.exe.c_str());
+                        // What a build that runs nothing may replace this one with: only
+                        // where this compile read nothing a native layer builds from.
+                        auto eligible = true;
+                        for (auto pkg : nativepkgs)
+                            if (astp->packages[pkg].builtin < 0) eligible = false;
+                        if (!eligible) units_build.no_op_note = "the program has a native part built from its own C";
+                        else if (ur.out.empty()) units_build.no_op_note = "the compile's output could not be kept";
+                        else {
+                            string rec = cat("goose-build-record/1\ncwd ", filesystem::current_path().string(),
+                                             "\nexe ", in.exe, "\nexe_size ", UnitFileSize(in.exe), "\n");
+                            rec += ur.inputs.Text();
+                            UnitPublish(ur.store.dir + "/last.stdout", ur.out);
+                            UnitPublish(ur.store.dir + "/last.stderr", ur.err);
+                            UnitPublish(ur.store.dir + "/last.rec", rec);
+                        }
+                    }
+                    if (g_build_report) BuildReportWrite();
+                    return 0;
                 }
                 return BuildExecutable(filename, outfile, builddir, buildopts, DirOf(exe), msgs,
                                        rsps, astp->packages[0].output);

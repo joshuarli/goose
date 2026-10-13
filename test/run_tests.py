@@ -1788,7 +1788,7 @@ def main():
                     r.fail(f"compiler {name}", out + err)
                 else:
                     r.ok(f"compiler {name}")
-        for name in ("compiler_roots", "compiler_containers", "compiler_ident", "compiler_gir") if wanted("extra/compiler_units") else ():
+        for name in ("compiler_roots", "compiler_containers", "compiler_ident", "compiler_gir", "compiler_reader") if wanted("extra/compiler_units") else ():
             r.show_task(compiler_unit, name)
 
         # Direct runtime lifecycle checks use small region limits and allocator

@@ -19,6 +19,9 @@ struct BuildOptions {
     bool dryrun = false;      // --dry-run: print the commands and run nothing
     bool standalone = false;  // --standalone: no runtime object
     string exe;               // -o: the executable; "" puts it beside the root source
+    bool units = false;       // --units: units, with objects that persist (units/build.h)
+    bool rebuild = false;     // --rebuild: with --units, ignore what the store holds
+    bool verify = false;      // --verify-reuse: with --units, check what is reused
 };
 
 inline string AbsolutePath(const string &path) {

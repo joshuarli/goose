@@ -1,6 +1,8 @@
 // Goose compiler — project-wide utilities.
 #pragma once
 
+#include <filesystem>
+
 namespace goose {
 
 // String building: small variadic append/cat helpers, no iostreams.
@@ -81,17 +83,41 @@ inline uintptr_t StackPointer() {
 
 inline bool StackLow() { return StackPointer() < stackfloor; }
 
+// What a build that reuses its last result needs to know of a compile: every
+// file it read and every path it asked about. The compile reads files only
+// through LoadFile, PathExists, FileExists and ProbeDirectory, which tell
+// the recorder when one is set (units/build.h); test/compiler_reader.cpp
+// checks the sources keep it so.
+struct InputRecorder {
+    virtual ~InputRecorder() {}
+    virtual void Read(const string &path, const string *content) = 0;   // Null: unreadable.
+    virtual void Probe(const string &path, bool exists) = 0;
+};
+inline InputRecorder *input_recorder = nullptr;
+
 // Reads a whole file; the returned string's c_str() gives the lexer its 0 terminator.
 inline bool LoadFile(const string &path, string &dest) {
     auto f = fopen(path.c_str(), "rb");
-    if (!f) return false;
+    if (!f) {
+        if (input_recorder) input_recorder->Read(path, nullptr);
+        return false;
+    }
     fseek(f, 0, SEEK_END);
     auto len = ftell(f);
     fseek(f, 0, SEEK_SET);
     dest.resize((size_t)len);
     auto read = fread(dest.data(), 1, (size_t)len, f);
     fclose(f);
+    if (input_recorder) input_recorder->Read(path, read == (size_t)len ? &dest : nullptr);
     return read == (size_t)len;
+}
+
+// Whether `path` is a directory.
+inline bool ProbeDirectory(const string &path) {
+    std::error_code ec;
+    auto is = std::filesystem::is_directory(std::filesystem::path(path), ec);
+    if (input_recorder) input_recorder->Probe(path + "/", is);
+    return is;
 }
 
 // A path's file name without its directory and extension.
