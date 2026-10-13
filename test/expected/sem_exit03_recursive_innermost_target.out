@@ -1,0 +1,7 @@
+enter 3
+enter 2
+enter 1
+escape 1
+resume 2 20 22
+resume 3 21 24
+result 22
