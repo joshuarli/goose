@@ -92,6 +92,7 @@ FEATURE_REPORT_EXPECTATIONS = {
     "semantics/sem_core_report_import_std": (),
     "semantics/sem_core_shrink_nonflat_element": ("nonflat-element",),
     "core/core_export_report_limited_capture": ("limited-capture-mutation",),
+    "core/core_export_report_limited_element_write": ("limited-capture-mutation", "limited-value"),
 }
 LOCATION_PATTERN = re.compile(r"\.goose:(\d+)\)\s*$")
 

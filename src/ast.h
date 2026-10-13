@@ -1930,6 +1930,10 @@ struct FnRecord {
     // in the same form.
     set<VarDef *> growexternals;
     set<int> growparams;
+    // Storage the body may write through, itself or through its callees:
+    // external owners and the parameter roots the caller maps onto them.
+    set<VarDef *> writeexternals;
+    set<int> writeparams;
     // Stores into the caller's storage, through reference parameters'
     // class roots: the call sites map them onto their arguments.
     vector<StoreEvent> classevents;

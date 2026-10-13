@@ -565,7 +565,8 @@ private:
         if (!t || t->cq || t->kind != TY_ARRAY || !t->arr) return CoreMut::Const;
         auto grows = sp->record.growexternals.contains(v);
         auto shrinks = sp->record.shrinkexternals.contains(v);
-        if (!grows && !shrinks) return CoreMut::Const;
+        auto writes = sp->record.writeexternals.contains(v);
+        if (!grows && !shrinks && !writes) return CoreMut::Const;
         switch (t->arr->akind) {
             case A_GROW:
                 if (shrinks) mod.profile = CoreProfile::Shrink;

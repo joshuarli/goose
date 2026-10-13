@@ -386,6 +386,7 @@ DEPENDENCY_EDITS = {e.id: e for e in (
                    "handler is replaced, its key naming the handler's whole context"),
     DepEdit("D28", "the call that sets a global slice is no longer made before the function "
                    "that reads it: the reader finds it unset"),
+    DepEdit("D30", "a nested callee gains a writable captured-owner effect"),
     DepEdit("D25", "an overload added in the namespace of a caller, with the same parameter "
                    "types as the one it called"),
 )}
@@ -493,6 +494,17 @@ class DepTargets(Member):
                 f"    {'var' if e('D10') else 'let'} k = 5;",
                 "    fn inner() -> i64 { return k + 1; }",
                 "    return inner();",
+                "}"]
+
+        # D30: the relay's Core capture mutability follows the nested callee's
+        # write effect, which must change the relay's summary dependency.
+        out += ["fn dt_write_capture_user(n: i64) -> i64 {",
+                "    let values: i64[>..] = [n];",
+                "    fn inner() { "
+                + ("values[0] += 1;" if e("D30") else "print(values[0]);") + " }",
+                "    fn relay() { inner(); }",
+                "    relay();",
+                "    return values[0];",
                 "}"]
 
         # D11: the body of a block the callee runs inline.
@@ -624,7 +636,7 @@ class DepTargets(Member):
              "dt_enum_user", "dt_order_a", "dt_order_b", "dt_late_user", "dt_noret_user",
              "dt_comment_user", "dt_embed_direct", "dt_fv_user", "dt_inferred_user",
              "dt_shown_user", "dt_env_user", "dtns2::dt_twin_user", "dt_twin_other",
-             "dt_nested_user")
+             "dt_nested_user", "dt_write_capture_user")
 
     def body(self):
         calls = [n for n in self.CALLS if not (n == "dt_over" and self.is_("D28"))]

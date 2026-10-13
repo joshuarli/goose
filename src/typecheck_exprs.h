@@ -702,6 +702,7 @@ inline Node *TypeCheck::AutoRef(Node *n, Val &v, bool writes) {
     if (!Referenceable(n, v)) NoResizableRef(n);
     if (auto id = Is<Ident>(n); id && id->vdef && writes && v.writable)
         NoteWritableRef(id->vdef, n);
+    if (writes && v.writable) NoteWritableContents(v);
     auto u = ast.New<Unary>(n->line, T_BITAND, n);
     u->synth = true;
     SlotRoots(v);
@@ -1389,6 +1390,7 @@ inline Val TypeCheck::CheckRefOf(Unary *x) {
     if (lv.var && lv.type->kind == TY_SLICE)
         v.writable = v.writable && RefProvOf(lv.var).writable;
     v.type->cq = !v.writable;   // `&x` of a const value is a `const T&`.
+    if (v.writable) NoteWritableContents(lv);
     if (lv.var && v.writable) NoteWritableRef(lv.var, x);
     if (auto sv = SliceVarOf(lv.var)) sv->slotref = true;
     return v;

@@ -835,6 +835,7 @@ inline FnSpec *TypeCheck::UserFormatIn(Call *c, TypeExpr *t, string_view ns,
         ApplyCalleeShrinks(c, sp, argvals, "format");
         ApplyCalleeRebinds(sp);
         ApplyCalleeGrows(c, sp, argvals, "format");
+        ApplyCalleeWritableContents(sp, argvals);
         c->fmtspecs.push_back({ t, sp });
         return sp;
     }
@@ -2111,6 +2112,16 @@ inline void TypeCheck::NoteRootEvent(VarDef *root, P param, X external) {
     }
 }
 
+// A writable reference or store reaches this storage. Call sites map a
+// parameter's class back onto the caller's roots so captures keep the same
+// mutability that the checked body requires.
+inline void TypeCheck::NoteWritableContents(const Roots &roots) {
+    for (auto &alt : roots.alts)
+        NoteRootEvent(alt.root,
+                      [](FnSpec *s, int i) { s->record.writeparams.insert(i); },
+                      [](FnSpec *s, VarDef *r) { s->record.writeexternals.insert(r); });
+}
+
 // Records a shrink for callers, a bound's with the type of the array
 // its storage leads to. An array stays balanced only while every shrink of
 // it is.
@@ -3030,6 +3041,31 @@ inline void TypeCheck::ApplyCalleeGrows(Node *at, FnSpec *spec, vector<Val> &arg
     for (auto pi : rec->growparams) grows((size_t)pi, "grows");
     for (auto vd : rec->growexternals)
         NoteGrow(at, RootsOf(vd), cat("call ", name, ", which grows ", vd->name));
+}
+
+// A callee's writable references and stores reach the same roots at its
+// caller. Preserve the effect through parameter classes and nested captures.
+inline void TypeCheck::ApplyCalleeWritableContents(FnSpec *spec, vector<Val> &argvals) {
+    if (spec->sf->isextern) {
+        for (size_t i = 0; i < argvals.size() && i < spec->argtypes.size(); i++) {
+            auto pt = spec->argtypes[i];
+            if (IsRefOrSlice(pt) && !pt->cq && argvals[i].writable)
+                NoteWritableContents(ClassArgRoots(pt, argvals[i]));
+        }
+        return;
+    }
+    auto rec = RecordOf(spec);
+    if (!rec) return;
+    for (auto vd : rec->writeexternals)
+        NoteRootEvent(vd,
+                      [](FnSpec *s, int i) { s->record.writeparams.insert(i); },
+                      [](FnSpec *s, VarDef *r) { s->record.writeexternals.insert(r); });
+    for (auto pi : rec->writeparams) {
+        if (pi < 0 || (size_t)pi >= argvals.size() || (size_t)pi >= spec->argtypes.size())
+            continue;
+        auto roots = ClassArgRoots(spec->argtypes[pi], argvals[pi]);
+        NoteWritableContents(roots);
+    }
 }
 
 // Whether storage of type y can be, or hold, the location `lval` assigned,

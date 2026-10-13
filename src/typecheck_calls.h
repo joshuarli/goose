@@ -416,6 +416,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     auto spec = GetOrCreateSpec(best, argvals, c);
     ApplyCalleeShrinks(c, spec, argvals, name);
     ApplyCalleeGrows(c, spec, argvals, name);
+    ApplyCalleeWritableContents(spec, argvals);
     // Phase 2: re-check arguments against the resolved parameter types.
     // Arguments construct into fresh parameter slots, not curdst.
     // Start at the call's entry again: a later argument may have diverged
@@ -1155,6 +1156,7 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
         auto spec = GetOrCreateSpec(mi, armvals, c);
         ApplyCalleeShrinks(c, spec, armvals, name);
         ApplyCalleeGrows(c, spec, armvals, name);
+        ApplyCalleeWritableContents(spec, armvals);
         if (first) {
             if (spec->rets.size() != first->rets.size())
                 Error(c, cat("case functions of ", name, " disagree on return counts"));
@@ -2637,6 +2639,8 @@ inline bool TypeCheck::SameRecord(const FnRecord &a, const FnRecord &b, const Fn
         return why("shrinks");
     if (a.growexternals != b.growexternals || a.growparams != b.growparams)
         return why("growths");
+    if (a.writeexternals != b.writeexternals || a.writeparams != b.writeparams)
+        return why("writable contents");
     if (a.reboundoptionals != b.reboundoptionals) return why("rebinds");
     auto samebounds = [&](const auto &x, const auto &y) {
         if (x.size() != y.size()) return false;
