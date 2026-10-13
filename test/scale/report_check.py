@@ -189,7 +189,7 @@ def main():
     for line in bad:
         print(f"report_check: {line}")
     if not bad:
-        print(f"report_check: ok ({len(report['functions'])} functions)")
+        print(f"report_check: ok ({len(report.get('functions', []))} functions)")
     return 1 if bad else 0
 
 
