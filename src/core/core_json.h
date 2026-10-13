@@ -109,6 +109,11 @@ public:
         for (auto f : fileorder) out.push_back(f < (int)m.diagfiles.size() ? m.diagfiles[f] : m.files[f]);
         return out;
     }
+    vector<string> FileModuleTable() const {
+        vector<string> out;
+        for (auto f : fileorder) out.push_back(f < (int)m.filemodules.size() ? m.filemodules[f] : string());
+        return out;
+    }
     // Each origin with its file as numbered in the output.
     vector<CoreOrigin> OriginTable() const {
         auto out = origins;

@@ -12,6 +12,7 @@ namespace goose {
 // feature outside the profile then say `pipeline gir`.
 struct GirProgramText {
     string head, result;
+    UnitSource unit;
 };
 
 inline void EmitCore(Ast &ast, const string &entry, const string &path, const string &girpath = {},
@@ -63,6 +64,7 @@ inline void EmitCore(Ast &ast, const string &entry, const string &path, const st
                            [&](const CoreOrigin &o) { return numbering.OriginId(o); });
         auto gir = lowerer.Lower();
         gir.diagfiles = numbering.DiagFileTable();
+        gir.filemodules = numbering.FileModuleTable();
         if (auto v = GirVerifier(gir).Verify())
             throw CompileError { cat("internal compiler error: ", v->code, ": ", v->message) };
         if (!girpath.empty()) girtext = GirWriter(gir).Write();
@@ -86,6 +88,7 @@ inline void EmitCore(Ast &ast, const string &entry, const string &path, const st
                 auto c = GirCEmitter(low).Emit();
                 program->head = std::move(c.head);
                 program->result = std::move(c.result);
+                program->unit = std::move(c.unit);
             }
         }
     }

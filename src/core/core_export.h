@@ -41,6 +41,7 @@ public:
 
 private:
     Ast &ast;
+    KeyMaker keys { ast };
     string entrypath;
     string entrydir;
     CoreModule mod;
@@ -120,6 +121,7 @@ private:
                             ? ast.sources[l.fileidx].first : string("?");
             for (auto &c : diag) if (c == '\\') c = '/';
             mod.diagfiles.push_back(diag);
+            mod.filemodules.push_back(keys.ModuleOf(l.fileidx));
             it = filemap.emplace(l.fileidx, (int)mod.files.size() - 1).first;
         }
         return CoreOrigin { it->second, l.line, kind };
@@ -310,6 +312,7 @@ private:
         if (mod.IsRefOrSlice(cg.type)) Fail("stored-reference");
         cg.kind = v->isvar ? CoreVarKind::Var : CoreVarKind::Let;
         cg.org = Org(g->line, CoreOriginKind::Global);
+        cg.module = keys.ModuleOf(g->line.fileidx);
         coerceorg = cg.org;
         cg.init = Value(g->inits[0]);
         globalindex[v] = (int)mod.globals.size();
@@ -388,6 +391,8 @@ private:
         auto &ctx = mod.contexts.back();
         ctx.impl = k;
         ctx.declkey = DeclKey(sp);
+        ctx.stablekey = keys.Context(sp).total.Short();
+        ctx.module = keys.ModuleOf(sp->sf->line.fileidx);
         FillRoots(sp, ctx);
     }
 
@@ -1132,8 +1137,8 @@ private:
                 }
                 e->a = Value(b->left);
                 e->b = Value(b->right);
-                auto k = mod.Type(e->a->type).kind;
-                if (k != CoreType::Int && k != CoreType::Bool) Fail("elementwise-arithmetic");
+                auto k = mod.Type(e->a->type).kind, k2 = mod.Type(e->b->type).kind;
+                if ((k != CoreType::Int && k != CoreType::Bool) || k2 != k) Fail("elementwise-arithmetic");
                 return e;
             }
             default: break;
@@ -1168,7 +1173,10 @@ private:
             c->org = Org(b->right->line, CoreOriginKind::Cast);
             e->b = std::move(c);
         }
-        if (mod.Type(e->type).kind != CoreType::Int) Fail("elementwise-arithmetic");
+        // Both operands are integers: a scalar with an array or struct is
+        // elementwise arithmetic, whichever side the aggregate is on.
+        if (mod.Type(e->type).kind != CoreType::Int || mod.Type(e->b->type).kind != CoreType::Int)
+            Fail("elementwise-arithmetic");
         e->org = Org(b->line, CoreOriginKind::Binary);
         return e;
     }
