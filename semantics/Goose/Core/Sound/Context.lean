@@ -1,4 +1,5 @@
 import Goose.Core.Demand
+import Goose.Core.Sound.Frame
 
 /-!
 Checked demand contexts connect one owner's derived plan to source nodes in
@@ -285,5 +286,164 @@ theorem NodeContext.phase_keeps_context {m : Module}
         result.context.expected.frame = result.phaseFrame := by
   let result := NodeContext.phase parent primary targetPhase hphase
   exact ⟨result, result.context.member, result.phaseFrameEq, result.expectedFrameEq⟩
+
+/-- Only invalidating approved owners can shrink storage outside this activation. -/
+def _root_.Goose.Core.DemandOwner.denotesExternalShrink (P : Nat → RootInst → Prop)
+    (owner : DemandOwner) (r : RootInst) : Prop :=
+  owner.invalidates = true ∧ Gam noEnv P owner.roots r
+
+/-- Runtime external roots denoted by invalidating owners in the checked activation plan. -/
+def PlanMayShrink {m : Module} {plans : Array (Array DemandPoint)}
+    (pc : PlanContext m plans) (P : Nat → RootInst → Prop) (r : RootInst) : Prop :=
+  ∃ approval, approval ∈ pc.approvals.shrink ∧
+    approval.shrinkOwner.denotesExternalShrink P r
+
+/-- Pilot uses lexical activity; shrink uses a checked source occurrence. -/
+inductive EvaluationContext (m : Module) (plans : Array (Array DemandPoint))
+    (path : List Nat) (node : DemandNode) (phase : DemandPhase) : Type
+  | pilot (profile : m.profile = .pilot) (active : List VarId)
+  | shrink {pc : PlanContext m plans} (profile : m.profile = .shrink)
+      (context : NodeContext pc path node phase)
+
+def EvaluationContext.inputFuture {m plans path node phase}
+    (context : EvaluationContext m plans path node phase) : List VarId :=
+  match context with
+  | .pilot _ active => node.variables ++ active
+  | .shrink _ context => context.inputFuture
+
+def EvaluationContext.outputFuture {m plans path node phase}
+    (context : EvaluationContext m plans path node phase) : List VarId :=
+  match context with
+  | .pilot _ active => active
+  | .shrink _ context => context.outputFuture
+
+def EvaluationContext.retained {m plans path node phase}
+    (context : EvaluationContext m plans path node phase) : List RetainedAlias :=
+  match context with
+  | .pilot _ _ => []
+  | .shrink _ context => context.expected.frame.retained
+
+def EvaluationContext.ActiveMatches {m plans path node phase}
+    (context : EvaluationContext m plans path node phase) (tenv : TEnv) : Prop :=
+  match context with
+  | .pilot _ active => ∀ x, x ∈ active ↔ x ∈ tenv.visible
+  | .shrink _ context => context.ActiveMatches tenv
+
+def EvaluationContext.AccessMatches {m plans path node phase}
+    (context : EvaluationContext m plans path node phase) (tenv : TEnv) (penv : PEnv) : Prop :=
+  match context with
+  | .pilot _ _ => True
+  | .shrink _ context => context.AccessMatches tenv penv
+
+def EvaluationContext.OwnerMatches {m plans path node phase}
+    (context : EvaluationContext m plans path node phase) (owner : Nat) : Prop :=
+  match context with
+  | .pilot _ _ => True
+  | .shrink (pc := pc) _ _ => pc.owner = owner
+
+def EvaluationContext.mayShrink {m plans path node phase}
+    (context : EvaluationContext m plans path node phase)
+    (P : Nat → RootInst → Prop) (r : RootInst) : Prop :=
+  match context with
+  | .pilot _ _ => False
+  | .shrink (pc := pc) _ _ => PlanMayShrink pc P r
+
+/-- Children keep lexical activity or follow the checked child transition. -/
+noncomputable def EvaluationContext.child {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) :
+    EvaluationContext m plans (path ++ [index]) child childPhase :=
+  match parent with
+  | .pilot profile active => .pilot profile (node.visibleForChild active index)
+  | .shrink profile context =>
+    .shrink profile (context.child primary index child childPhase hchild hchildPhase).context
+
+/-- Same-node phases preserve pilot activity and use checked shrink transitions. -/
+noncomputable def EvaluationContext.phase {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
+    (hphase : DemandNodeHasPhase node targetPhase) :
+    EvaluationContext m plans path node targetPhase :=
+  match parent with
+  | .pilot profile active => .pilot profile active
+  | .shrink profile context => .shrink profile (context.phase primary targetPhase hphase).context
+
+/-- Select the implementation body with its exact source-node index. -/
+noncomputable def ContextPlanSelection.bodyContext {m : Module}
+    {plans : Array (Array DemandPoint)} {c : ContextId} {ctx : Context}
+    (selection : ContextPlanSelection m plans c ctx) :
+    NodeContext selection.planContext [] (.block selection.implementation.body)
+      (DemandNode.block selection.implementation.body).primaryPhase := by
+  have context := selection.rootContext
+  rw [selection.rootNode] at context
+  exact context
+
+/-- Select the initializer with its exact source-node index. -/
+noncomputable def GlobalPlanSelection.initializerContext {m : Module}
+    {plans : Array (Array DemandPoint)} {g : GlobalId} {global : Global}
+    (selection : GlobalPlanSelection m plans g global) :
+    NodeContext selection.planContext [] (.expression global.init)
+      (DemandNode.expression global.init).primaryPhase := by
+  have context := selection.rootContext
+  rw [selection.rootNode] at context
+  exact context
+
+/-- Start a body in either profile from the module's successful demand derivation. -/
+noncomputable def EvaluationContext.forContext {m : Module}
+    {plans : Array (Array DemandPoint)}
+    (derived : deriveModuleDemand m = .ok plans) (wellFormed : PlansWellFormed m plans)
+    {c : ContextId} {ctx : Context} (contextAt : m.contexts[c]? = some ctx)
+    (implementation : Impl) (implementationAt : m.impls[ctx.impl]? = some implementation) :
+    EvaluationContext m plans [] (.block implementation.body)
+      (DemandNode.block implementation.body).primaryPhase :=
+  match profile : m.profile with
+  | .pilot => .pilot profile (implementation.params.toList.map (·.var))
+  | .shrink => by
+    have notPilot : m.profile ≠ .pilot := by simp [profile]
+    let selection := PlanContext.forContext derived wellFormed notPilot contextAt
+      implementation implementationAt
+    exact .shrink profile selection.bodyContext
+
+/-- Start a global initializer in either profile from the checked derivation. -/
+noncomputable def EvaluationContext.forGlobal {m : Module}
+    {plans : Array (Array DemandPoint)}
+    (derived : deriveModuleDemand m = .ok plans) (wellFormed : PlansWellFormed m plans)
+    {g : GlobalId} {global : Global} (globalAt : m.globals[g]? = some global) :
+    EvaluationContext m plans [] (.expression global.init)
+      (DemandNode.expression global.init).primaryPhase :=
+  match profile : m.profile with
+  | .pilot => .pilot profile []
+  | .shrink => by
+    have notPilot : m.profile ≠ .pilot := by simp [profile]
+    let selection := PlanContext.forGlobal derived wellFormed notPilot globalAt
+    exact .shrink profile selection.initializerContext
+
+/-- Context roots select the plan owner belonging to the looked-up context. -/
+theorem EvaluationContext.forContext_ownerMatches {m : Module}
+    {plans : Array (Array DemandPoint)}
+    (derived : deriveModuleDemand m = .ok plans) (wellFormed : PlansWellFormed m plans)
+    {c : ContextId} {ctx : Context} (contextAt : m.contexts[c]? = some ctx)
+    (implementation : Impl) (implementationAt : m.impls[ctx.impl]? = some implementation) :
+    (EvaluationContext.forContext derived wellFormed contextAt implementation implementationAt).OwnerMatches c := by
+  unfold EvaluationContext.forContext
+  split
+  · trivial
+  · rename_i profile
+    exact (PlanContext.forContext derived wellFormed (by simp [profile]) contextAt
+      implementation implementationAt).ownerEq
+
+/-- Initializer roots select the global's owner after the context owners. -/
+theorem EvaluationContext.forGlobal_ownerMatches {m : Module}
+    {plans : Array (Array DemandPoint)}
+    (derived : deriveModuleDemand m = .ok plans) (wellFormed : PlansWellFormed m plans)
+    {g : GlobalId} {global : Global} (globalAt : m.globals[g]? = some global) :
+    (EvaluationContext.forGlobal derived wellFormed globalAt).OwnerMatches (m.contexts.size + g) := by
+  unfold EvaluationContext.forGlobal
+  split
+  · trivial
+  · rename_i profile
+    exact (PlanContext.forGlobal derived wellFormed (by simp [profile]) globalAt).ownerEq
 
 end Goose.Core.Sound
