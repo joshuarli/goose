@@ -725,6 +725,12 @@ def edgeArgsTo (t : Term) (target : BlockId) : List (List ValueId) :=
   | .condbr _ tb ta eb ea => (if tb == target then [ta] else []) ++ (if eb == target then [ea] else [])
   | _ => []
 
+def termEdges : Term → List (BlockId × List ValueId)
+  | .br target args => [(target, args)]
+  | .condbr _ thenBlock thenArgs elseBlock elseArgs =>
+    [(thenBlock, thenArgs), (elseBlock, elseArgs)]
+  | _ => []
+
 def incomingValues (f : Func) (target : BlockId) (param : Nat) : List ValueId :=
   f.blocks.toList.flatMap fun b =>
     match b.lastTerm? with
@@ -873,6 +879,18 @@ def transferEmptyInst (m : Module) (f : Func) (p : Prov) (facts : List ValueId) 
 def transferEmptyBlock (m : Module) (f : Func) (p : Prov) (facts : List ValueId) (b : Block) : List ValueId :=
   b.insts.foldl (transferEmptyInst m f p) facts
 
+/-- Carry empty-owner facts through block arguments. Source SSA values remain
+available along the edge; the target parameter gains the fact when its matching
+argument is known empty. Joins later remove facts that are not common to paths. -/
+def transferEmptyEdge (f : Func) (facts : List ValueId) (target : BlockId)
+    (args : List ValueId) : List ValueId :=
+  match f.blocks[target]? with
+  | none => facts
+  | some block =>
+    (block.params.zip args).foldl (fun current ((parameter, _), argument) =>
+      if current.contains argument && !current.contains parameter then current ++ [parameter]
+      else current) facts
+
 def emptyFactsAtBlocks (m : Module) (f : Func) (p : Prov) : Array (Option (List ValueId)) := Id.run do
   let mut states : Array (Option (List ValueId)) := Array.replicate f.blocks.size none
   if !f.blocks.isEmpty then states := states.set! 0 (some [])
@@ -886,14 +904,15 @@ def emptyFactsAtBlocks (m : Module) (f : Func) (p : Prov) : Array (Option (List 
       if let some block := f.blocks[b]? then
         if let some incoming := oldStates[b]? |>.join then
           let outgoing := transferEmptyBlock m f p incoming block
-          for target in block.terms.flatMap Term.successors do
+          for (target, args) in block.terms.flatMap termEdges do
             if target < states.size then
+              let edgeFacts := transferEmptyEdge f outgoing target args
               match states[target]? with
               | some none =>
-                states := states.set! target (some outgoing)
+                states := states.set! target (some edgeFacts)
                 changed := true
               | some (some previous) =>
-                let merged := previous.filter outgoing.contains
+                let merged := previous.filter edgeFacts.contains
                 if merged != previous then
                   states := states.set! target (some merged)
                   changed := true
