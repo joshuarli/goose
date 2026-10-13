@@ -39,6 +39,26 @@ while IFS='	' read -r file expected; do
     [ "$code" -eq "$want" ] || { echo "FAIL $file: exit status $code, expected $want" >&2; status=1; }
 done < "$here/INDEX"
 
+# Keep the nesting boundary input generated so the repository does not carry
+# another malformed JSON fixture.
+work=$root/.work/tmp/gir-invalid.$$
+mkdir -p "$work"
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+awk 'BEGIN { for (i = 0; i < 257; i++) printf "["; for (i = 0; i < 257; i++) printf "]"; print "" }' > "$work/excessive_nesting.json"
+set +e
+actual=$("$tool" gir-validate "$work/excessive_nesting.json")
+code=$?
+set -e
+expected='["malformed","byte 256: nesting deeper than 256"]'
+[ "$actual" = "$expected" ] || {
+    echo "FAIL gir-validate excessive nesting: got $actual" >&2
+    status=1
+}
+[ "$code" -eq 2 ] || {
+    echo "FAIL gir-validate excessive nesting: exit status $code, expected 2" >&2
+    status=1
+}
+
 # A module can be accepted and still fault: acceptance says nothing about reference lifetime.
 set +e
 out=$("$tool" gir-run "$here/gir_accepted_dangling_reference.json")
@@ -58,5 +78,5 @@ for f in "$here"/*.json; do
     grep -q "^$(basename "$f")	" "$here/INDEX" || { echo "FAIL $(basename "$f") is not in INDEX" >&2; status=1; }
 done
 
-[ "$status" -eq 0 ] && echo "invalid: $(wc -l < "$here/INDEX") modules ok"
+[ "$status" -eq 0 ] && echo "invalid: $(wc -l < "$here/INDEX") modules and excessive nesting ok"
 exit "$status"
