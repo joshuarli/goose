@@ -225,6 +225,17 @@ def blockSuffixActive {m : Module} {plans : Array (Array DemandPoint)}
     | .shrink _ context => context.expected.frame.active
   (DemandNode.block (.mk sc all value)).visibleForChild active offset
 
+/-- Pilot keeps every binding active at the suffix; shrink keeps variables
+used by the remaining statements, the block value and its enclosing future. -/
+def blockSuffixFuture {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {sc : Nat} {all : List Stmt} {value : Option Expr}
+    (context : EvaluationContext m plans path (.block (.mk sc all value)) .block)
+    (offset : Nat) : List VarId :=
+  match context with
+  | .pilot _ _ => blockSuffixActive context offset
+  | .shrink _ _ => (all.drop offset).flatMap Stmt.variables ++
+      value.toList.flatMap Expr.variables ++ context.outputFuture
+
 /-- Replay supplies the exact effects checked for the implementation body. -/
 def ContextEff (m : Module) (impl : Impl) (ctx : Context) (E : Eff) : Prop :=
   ∃ rho rng rst,
@@ -439,12 +450,12 @@ def StmtsSpec (n : Nat) : Prop :=
     bc.AccessMatches tenv penv →
     ShrinkProtected W.D W.A (bc.mayShrink W.P) →
     ObservedSafe m W (bc.mayShrink W.P) observation s.store →
-    Perm m W → Frame m W tenv penv env s (ss.flatMap Stmt.variables ++ value.toList.flatMap Expr.variables ++ bc.outputFuture) → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
+    Perm m W → Frame m W tenv penv env s (blockSuffixFuture bc offset) → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
     lo ≤ rst.nextVar →
     tyStmts tenv sc ss tn = .ok (tenv', tn') → rpStmts penv ss rst = .ok ((), rst') →
     EffLe rst'.eff W.E →
     Sat (execStmts n ⟨prof, m⟩ env ss) s (fun fl s' =>
-      (∃ tenv'', TSame tenv tenv'' ∧ Frame m W tenv'' penv env s' (value.toList.flatMap Expr.variables ++ bc.outputFuture) ∧
+      (∃ tenv'', TSame tenv tenv'' ∧ Frame m W tenv'' penv env s' (blockSuffixFuture bc all.length) ∧
         (∀ v, fl = .normal v → tenv'' = tenv')) ∧
       FootprintS env (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
