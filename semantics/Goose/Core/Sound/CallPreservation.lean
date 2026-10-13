@@ -263,6 +263,42 @@ theorem ClassifiedParameters.globalOwner {m : Module} {G : Nat}
   obtain ⟨gl, declaration⟩ := classified i _ parameter
   exact OwnerCap.globalOfLocTy invariant declaration initialized owner
 
+theorem OwnerCap.not_localLimited {m : Module} {G : Nat}
+    {observation : Observation} {store : Store} {a : ActId} {si : ScopeInst}
+    {x : VarId} {E : Ty} {capacity : Nat}
+    (observed : Observed m G observation store)
+    (limited : LocTy store ⟨.local a si x, []⟩ (.limited E capacity)) :
+    ¬ OwnerCap m observation (.local a si x) := by
+  obtain ⟨v, hread, hflat⟩ := limited
+  obtain ⟨stored, hstored, hget⟩ := (read_ok_iff _ _ _).1 hread
+  simp only [get_nil, Option.some.injEq] at hget
+  subst v
+  cases stored <;> simp only [FlatTy] at hflat
+  intro capability
+  obtain ⟨T, hT, element, howner⟩ := capability
+  obtain ⟨value, hv, ht⟩ := observed.roots _ T hT
+  rw [hstored] at hv
+  cases hv
+  rcases howner with rfl | rfl <;> simp [HasTy, FlatTy] at ht
+
+theorem OwnerCap.not_globalLimited {m : Module} {G : Nat} {observation : Observation}
+    {state : St} {demand : RootInst → Prop} {g : Nat} {gl : Global}
+    {E : Ty} {capacity : Nat}
+    (invariant : StoreInv m G state demand)
+    (declaration : m.globals[g]? = some gl) (initialized : g < G)
+    (limited : LocTy state.store ⟨.global g, []⟩ (.limited E capacity)) :
+    ¬ OwnerCap m observation (.global g) := by
+  obtain ⟨v, hread, hflat⟩ := limited
+  obtain ⟨w, hread', hflat'⟩ := invariant.globals g gl initialized declaration
+  rw [hread] at hread'
+  cases hread'
+  cases v <;> simp only [FlatTy] at hflat
+  intro capability
+  obtain ⟨other, hother, element, howner⟩ := capability
+  rw [declaration] at hother
+  cases hother
+  rcases howner with ht | ht <;> rw [ht] at hflat' <;> simp [FlatTy] at hflat'
+
 /-- Inherited roots precede the callee's first scope instance. Globals survive
 every local scope, while local roots must belong to an earlier instance. -/
 def BeforeBase (base : Nat) : RootInst → Prop
