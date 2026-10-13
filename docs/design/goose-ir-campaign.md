@@ -1,8 +1,53 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** winding down (2026-10-13). No new items are being started; in-flight lanes are landing.
+**Status:** paused 2026-10-13. Stopped cleanly at the owner's request; nothing is running. Resume from the handoff below.
 **Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12). `master` is not touched.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
+
+## Handoff (paused 2026-10-13)
+
+**Resume.** Prompt: `Act as integrator and resume docs/design/goose-ir-campaign.md from its handoff; never ask; stop only when every deliverable is met or parked.` First command, from the repository root: `git status --short && git log --oneline -1 goose-ir` (expect a clean tree). Everything under `.work/` is disposable; rebuild what you need:
+
+```sh
+cmake -S . -B .work/build/goose-ir -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build .work/build/goose-ir --parallel 8
+git worktree add --detach .work/wt/parity-base goose-ir-parity-base
+cmake -S .work/wt/parity-base -B .work/build/base3 -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build .work/build/base3 --parallel 8
+(cd semantics && lake build) && semantics/.lake/build/bin/goose-semantics audit
+python3 test/run_tests.py --exe .work/build/goose-ir/goose --profile baseline --cc native --require-clang
+```
+
+The Aincrad3 scratch copy, if needed: `mkdir -p .work/aincrad3 && git -C ~/d/aincrad3 archive ef1e1ef33b96fa68748e4ecf3cad37153a4de59c | tar -x -C .work/aincrad3`, then copy its one generated source from the checkout's staged build output, `~/d/aincrad3/.work/boundary-src/world-core-continue/protocol/schema_generated.goose`, to `.work/aincrad3/src/protocol/`. Build it with a scratch `GOOSE_HOME` under `.work/`.
+
+**State.** Branch `goose-ir`, not pushed by the executor. Merged this session: the ground items; the Lean model, validator and tool for `core-pilot` with 81 audited theorems (numeric rules, fuel monotonicity, growth, the live-reference invariant, the safety theorem `validated_never_faults`, sharing and reuse, the lowering theorem for structured control); an independent review and its fixes; references to slice variables in the Lean model and the exporter; Core and IR export, the IR pipeline with its own C emitter (`--pipeline gir`), and its units; the cost report, stable keys, shared implementations, code-generation units, the units build driver with its object store, dependency recording, and a native-support unit for programs with C of their own; conformance and corpus harnesses, the synthetic family, the edit matrix; linter parity; upstream `1cfe4b6`; two runtime and build fixes cherry-picked. Gates reached: `G-PILOT`, `G-SHARE`, `G-ATTR` except frozen budgets, `G-UNITS` on its structural gates.
+
+Known red on the branch: under `--pipeline gir`, corpus mode has two internal compiler errors (`GIR-V010`), on `optimizer/loop_shapes_countdown_abort` (a mutable slice over a `let` array) and `runtime/never_returns_exit` (a call that never returns). The Core validator learned both rules; the IR validator, the C++ verifier and the lowering have not. Everything else listed under Verified is green.
+
+**Open lanes.** Recreate a worktree with `git worktree add .work/wt/<lane> <branch>`.
+
+| Branch | Item | State | Next step |
+|---|---|---|---|
+| `goose-ir-sem-gir` | `T3` | wip: one commit holding `semantics/wip/Claims.stage2-partial.lean`, a non-compiling partial development outside the build. Two of three attempts used. | Stage 2 of the lowering theorem: loops (`while`, `forRange` without `break`/`continue` first), by induction on Core's fuel from the loop header, generalizing the statement and block claims over the loop context. Then calls and `ret`, then the whole profile. For-each over an array needs a typing fact from Core's validator. |
+| `upstream-pr/native-stack-bounds-main-thread-musl` | `U1` | parked by O8: fix `7cd7526`, cherry-picked here as `2de048a`. | After the campaign, on a quiet host: the before/after measurements, push to the fork, run the exact Docker reproducer against the pushed commit, open the draft. Description: `docs/design/upstream-drafts/native-stack-bounds-main-thread-musl.md`. |
+| `upstream-pr/native-package-rebuild-stamp` | `U1` | parked by O8: fix `8a3637b`, cherry-picked here as `510f495`. | As above. Description: `docs/design/upstream-drafts/native-package-rebuild-stamp.md` (its Dockerfile has a placeholder for the fix commit). |
+| `goose-ir-parity-base` | — | not a lane: `master` plus upstream `1cfe4b6` plus the two fixes, the reference for default-output parity. | Rebuild as above; add any further fix cherry-picked onto `goose-ir`. |
+
+**Not started, in order.**
+
+1. Align the IR with the Core validator's newer rules (the known red above), and add IR support for references to slice variables (the IR part of `S4`; the pipeline reports them unsupported today).
+2. `B8`, remainder: route the five `test/packages` sidecar fixtures through `goose build --units` in the units corpus; then build Aincrad3's core entry in units mode and fill §11.3's table for it. Nothing was run on the core entry after `B8` landed.
+3. `S3b`: every unsupported feature per program and the forecast table (owner decision O9 depends on it).
+4. `T3` stages 2–4 (third attempt), then `H1`.
+5. `S8` (`core-shrink`; flat structs first, they block the most corpus programs), then `S9`.
+6. `H3` remainder (`LINT-07`: the linter suite against a units-built companion), `H4` (documentation; `--build-report-deps` and the `B8` flags are not yet in §8).
+7. P3: `O1` (bounds certificates), `O2` if its gate holds (the report now gives blocked bytes per cause), `O3` (budgets; needs a quiet host), `O4`, `O5`.
+8. `B5`, remainder: the Aincrad3 mode of `test/scale/edit_matrix.py` is still a stub.
+9. P4 close.
+
+Owed by the owner: the two upstream draft pull requests (O7, O8); any corpus reach floor, after the forecast (O9); whether to file the `redundant_cast` linter inconsistency on the fork; whether units or sharing become defaults (`X4`).
+
+**Verified at the stop.** On the final tree before the last fast-forward: compiler build; Lean build and audit (81 theorems, three allowed axioms); full baseline suite (all passed); linter suite; default-output parity (1,232 equal); linter parity (0 differences); the native-support unit check; corpus conformance against the Lean model (76 agree of 77 exported, 0 mismatch, 1 inconclusive by design). Reboot audit: no campaign worktree remains; the main checkout is clean; `.work/` is ignored and on ext4; no campaign process is running; every unmerged campaign branch is in the table above; the resume commands were rehearsed from a clean environment, with the two full compiler builds and the full Lean build replaced by a configure and a one-module build.
+
+Not rerun on the final tree, last green one or two merges earlier: the units edit matrix, unit locality, the units corpus, the dependency check, the report corpus, sharing and key-stability checks, the IR golden and invalid checks, the pilot harness, the fuzz unit tests. Never run: any timed measurement on a quiet host (**perf gate deferred: host busy**), so no budget is frozen and no speedup is claimed.
 
 **Goal.** Two outcomes, pursued together. First, an executable, mechanically checked semantics for a Goose fragment and an opt-in IR pipeline that must agree with it. Second, a measurably shorter edit-build-verify loop for large programs: attribution of where build cost comes from, fewer emitted bodies with no weaker checking, and reuse of unchanged native code. A better-structured compiler that still regenerates and recompiles the whole program after a small edit does not meet the goal.
 
@@ -407,6 +452,7 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 *(append-only; one line per gate or phase end)*
 
 - `U1`, second and third suspicions: (a) order dependence of checking is **not a defect** — about 43,000 permutations of declarations, imports and files over 1,900 repository fixtures and 9,000 generated programs with reference-holding globals never changed acceptance or behaviour, only which of several correct diagnostics prints first; the language says top-level declarations are order-independent and only global initializers are ordered. (b) **A second genuine defect**: a path package's native C is not rebuilt when its source changes. The rebuild stamp's time is a maximum starting at 0 over file-clock counts that are negative on this C++ standard library, so it is always 0; editing the C source leaves a stale binary, against the package design's "rebuilds when any of its sources is newer than its build". Fix and regression test in preparation on an upstream branch; the pull request is deferred like the first.
+- **Paused 2026-10-13.** Wind-down: the lowering lane landed structured control (`lower_correct_ctl`) and kept its loop work as a wip branch; the exporter lane landed result mutability and slice references (`order` fuzz lane 300 of 300 agree; corpus 76 of 77 agree); the rebuild-stamp fix was confirmed on glibc and cherry-picked; the backend lane landed `--build-report-deps` and the native-support unit. Handoff at the top of this document.
 - `B4` and `B7` merged: `goose build --units` with the object store, link skip, no-op short-circuit, `--rebuild` and `--verify-reuse`; the IR pipeline writes units through the same assembler (52 of 56 pilot fixtures build and run from IR units; legacy unit output unchanged). **`G-UNITS` holds for its structural gates on the synthetic family and its theorem (`TH-REUSE-01`)**; its Aincrad3 table exists only for a smaller entry point (§11.3), because the core entry cannot build in units mode until `B8`.
 - Review fixes merged (`R1`): the validator accepts mutable slices over `let` arrays, writable references where read-only ones are expected, and calls to functions that never return; loop variables are numbered as the encoding says; the trivially true corollary is gone and `validated_run_keeps_globals_typed` and `noReturn_sound` are added; 81 theorems audited, the safety statement unchanged. Corpus conformance: 72 agree of 74 exported, with one exporter defect left (a result declared writable when a path returns read-only) and one fuel-bound program.
 - `S3` part 2 merged: the harness has a corpus mode over every repository fixture and sample. Today the pilot profile reaches 75 of 580 programs (13%); 70 agree, 4 mismatch (the review's four, all open with their owners), 1 inconclusive (unbounded recursion runs out of fuel). The IR pipeline shows the same four. What keeps the other 504 out, by first unsupported feature: structs 151, string values 42, stored references 40, grow-shrink arrays 36, `extern fn` 29, floats 27, variable arrays 26, ADTs 22, pools 19. Flat structs are in `core-shrink`, so `S8` should take them first.
