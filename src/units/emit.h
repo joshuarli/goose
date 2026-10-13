@@ -64,7 +64,7 @@ inline vector<string> CodeGen::SegmentModules() {
 // additions. The thread-local state runtime.h keeps as C statics of the
 // including file (the data stacks) must be one object for the whole
 // program, so it is declared extern here and defined in the program unit.
-inline string UnitRuntimeHeader(string runtime_h, string_view additions) {
+inline string UnitExternState(string runtime_h) {
     for (auto [from, to] : { pair<const char *, const char *>
              { "static GS_TLS gs_stack *gs_stks;", "extern GS_TLS gs_stack *gs_stks;" },
              { "static GS_TLS int64_t gs_nstks;", "extern GS_TLS int64_t gs_nstks;" },
@@ -74,7 +74,24 @@ inline string UnitRuntimeHeader(string runtime_h, string_view additions) {
             throw CompileError { cat("unit mode: the runtime no longer declares `", from, "`") };
         runtime_h.replace(at, strlen(from), to);
     }
-    return cat("#ifndef GOOSE_RUNTIME_H\n#define GOOSE_RUNTIME_H\n", runtime_h, additions);
+    return runtime_h;
+}
+
+inline string UnitRuntimeHeader(string runtime_h, string_view additions) {
+    return cat("#ifndef GOOSE_RUNTIME_H\n#define GOOSE_RUNTIME_H\n", UnitExternState(std::move(runtime_h)),
+               additions);
+}
+
+// runtime.h as the native-support unit holds it: the standalone form, in which
+// what the runtime defines would be static, with external linkage instead,
+// and the data stacks shared with the other units.
+inline string UnitNativeRuntime(string runtime_h) {
+    runtime_h = UnitExternState(std::move(runtime_h));
+    auto from = string_view("#define GS_API static");
+    auto at = runtime_h.find(from);
+    if (at == string::npos) throw CompileError { "unit mode: the runtime no longer defines GS_API as static" };
+    runtime_h.replace(at, from.size(), "#define GS_API extern");
+    return runtime_h;
 }
 
 struct UnitInputs {
@@ -82,6 +99,14 @@ struct UnitInputs {
     string ext_text;           // runtime_ext.h.
     string defines;            // The -D lines.
     string runtime_version;
+    // A program with C of its own (--include headers) has a native-support
+    // unit, which is also the program's runtime: the runtime's text in the
+    // standalone form those headers are written for, then the headers.
+    bool native_support = false;
+    string rt_head;            // runtime.h.
+    string rt_impl;            // runtime_impl.h and runtime_threads.h.
+    string rt_tail;            // runtime_ext.h and runtime_os.h.
+    string native_defines;     // The defines of the other units, without the separate-runtime one.
 };
 
 // One piece of text with the names it defines and the types it needs.
@@ -118,7 +143,7 @@ struct UnitEntity {
 
 struct UnitBuild {
     string file, module;
-    enum Kind { Code, Globals, Locations, Literals, Program } kind = Code;
+    enum Kind { Code, Globals, Locations, Literals, Program, Native } kind = Code;
     vector<int> chunks;
     vector<string> defs;             // Definitions of entities, in symbol order.
     set<string> roots;
@@ -266,6 +291,7 @@ struct UnitGlobalNames {
 
 struct UnitSource {
     string tdecls, data, pdata, gblock, externtext, code, includetext;
+    vector<string> interfacenames;             // The C names of the types a header may spell.
     vector<UnitGlobalNames> globals;
     vector<pair<string, string>> unitinits;    // Module and the function initializing its globals.
     unordered_set<string> exports;
@@ -298,6 +324,7 @@ inline UnitSource UnitSourceOf(CodeGen &cg) {
     src.externtext = cg.externtext;
     src.code = cg.code;
     src.includetext = cg.includetext;
+    src.interfacenames = cg.interfacenames;
     src.segmodules = cg.SegmentModules();
     for (auto g : cg.ast.globals)
         for (auto d : g->defs) {
@@ -572,6 +599,9 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
     // Extern functions of the program's C side, added once the program's own
     // functions are known: an export's name may also be declared extern.
     vector<UnitEntity> externfns;
+    unordered_map<string, string> externrename;        // Extern function -> its entry point.
+    struct ExternWrap { string name, proto, definition; };
+    vector<ExternWrap> externwraps;
     for (size_t a = 0; a < src.externtext.size();) {
         auto e = src.externtext.find('\n', a);
         auto line = src.externtext.substr(a, e - a);
@@ -581,6 +611,20 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
         ex.kind = UnitEntity::ExternFn;
         ex.name = UnitFunctionName(line);
         ex.decl = line;
+        // With C of the program's own, an extern function may be one a header
+        // defines `static`, which no other unit can name. Every unit calls it
+        // through an external constant pointer the native-support unit
+        // defines, which names it as its own text does.
+        if (in.native_support && !src.exports.count(ex.name)) {
+            auto entry = "gs_x_" + ex.name;
+            auto pos = line.find(" " + ex.name + "(");
+            if (pos == string::npos) src.Fail(cat("unit mode: unrecognized extern prototype: ", line));
+            auto pointer = line.substr(0, pos + 1) + "(*const " + entry + ")" + line.substr(pos + 1 + ex.name.size());
+            auto first = externrename.emplace(ex.name, entry).second;
+            if (first) externwraps.push_back({ ex.name, line, pointer.substr(0, pointer.size() - 1) + " = " + ex.name + ";" });
+            ex.name = entry;
+            ex.decl = "extern " + pointer;
+        }
         externfns.push_back(ex);
     }
 
@@ -700,6 +744,10 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
                 out.append(tok.data() + e, tok.size() - e);
                 st = None;
                 return;
+            }
+            if (ident && !member) {
+                auto it = externrename.find(string(tok));
+                if (it != externrename.end()) { out += it->second; return; }
             }
             if (ident && !member && tok == "GS_GL") { st = GL1; return; }
             if (ident && !member && tok.compare(0, 8, "gs_file_") == 0) {
@@ -868,45 +916,14 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
         if (providednames.count(c.name)) runtime_header += c.text + "\n";
     runtime_header += "#pragma pack(pop)\n" + in.ext_text + "\n#endif\n";
 
-    // ---- The text of each unit. ----
-    for (auto &[file, u] : units) {
-        // What the unit's definitions use, through the static helpers they
-        // copy.
-        set<string> typeset, statics;
-        set<int> used;
-        vector<string> work;
-        auto scan = [&](string_view text) {
-            UnitTokens(text, [&](string_view tok) {
-                auto it = entof.find(string(tok));
-                if (it != entof.end() && used.insert(it->second).second) work.push_back(string(tok));
-                if (typeof_.count(string(tok)) || enumof.count(string(tok))) typeset.insert(string(tok));
-            });
-        };
-        for (auto ci : u.chunks) {
-            scan(chunks[ci].text);
-            for (auto &m : chunks[ci].segbodies) scan(src.SegName(m) + "_s");
-        }
-        for (auto &d : u.defs) scan(d);
-        for (auto &r : u.roots) scan(r);
-        while (!work.empty()) {
-            auto name = work.back();
-            work.pop_back();
-            auto &e = ents[entof[name]];
-            if (e.kind == UnitEntity::StaticFn) { statics.insert(name); scan(chunks[e.chunk].text); }
-            if (e.kind == UnitEntity::SegPtr || e.kind == UnitEntity::SegMain) {
-                auto fwd = e.name.substr(0, e.kind == UnitEntity::SegMain ? e.name.size() - 5 : e.name.size()) + "_t";
-                scan(fwd);
-            }
-            if (e.kind == UnitEntity::SegBody) scan(e.decl);
-            if (e.kind == UnitEntity::Literal || e.kind == UnitEntity::Channel ||
-                e.kind == UnitEntity::StaticConst)
-                scan(e.decl);
-        }
-        // Type declarations: those the code names, and what their bodies need.
+    // The type declarations a unit needs for the names it uses: those, and
+    // what their bodies need. `with_provided` includes the core types the
+    // runtime header otherwise declares.
+    auto typesfor = [&](const set<string> &typeset, bool with_provided) {
         set<int> need, needfwd;
         function<void(const string &)> want = [&](const string &name) {
             // What the runtime header declares for every unit.
-            if (providednames.count(name)) return;
+            if (!with_provided && providednames.count(name)) return;
             auto en = enumof.find(name);
             if (en != enumof.end()) { need.insert(en->second); return; }
             for (auto ci : typeof_[name]) {
@@ -950,6 +967,44 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
             pending.erase(pick);
         }
         types += "#pragma pack(pop)\n";
+        return types;
+    };
+
+    // ---- The text of each unit. ----
+    for (auto &[file, u] : units) {
+        // What the unit's definitions use, through the static helpers they
+        // copy.
+        set<string> typeset, statics;
+        set<int> used;
+        vector<string> work;
+        auto scan = [&](string_view text) {
+            UnitTokens(text, [&](string_view tok) {
+                auto it = entof.find(string(tok));
+                if (it != entof.end() && used.insert(it->second).second) work.push_back(string(tok));
+                if (typeof_.count(string(tok)) || enumof.count(string(tok))) typeset.insert(string(tok));
+            });
+        };
+        for (auto ci : u.chunks) {
+            scan(chunks[ci].text);
+            for (auto &m : chunks[ci].segbodies) scan(src.SegName(m) + "_s");
+        }
+        for (auto &d : u.defs) scan(d);
+        for (auto &r : u.roots) scan(r);
+        while (!work.empty()) {
+            auto name = work.back();
+            work.pop_back();
+            auto &e = ents[entof[name]];
+            if (e.kind == UnitEntity::StaticFn) { statics.insert(name); scan(chunks[e.chunk].text); }
+            if (e.kind == UnitEntity::SegPtr || e.kind == UnitEntity::SegMain) {
+                auto fwd = e.name.substr(0, e.kind == UnitEntity::SegMain ? e.name.size() - 5 : e.name.size()) + "_t";
+                scan(fwd);
+            }
+            if (e.kind == UnitEntity::SegBody) scan(e.decl);
+            if (e.kind == UnitEntity::Literal || e.kind == UnitEntity::Channel ||
+                e.kind == UnitEntity::StaticConst)
+                scan(e.decl);
+        }
+        auto types = typesfor(typeset, false);
 
         // Declarations of what the unit uses and does not define.
         map<string, string> externs;
@@ -988,7 +1043,10 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
             text += types + "\n" + layoutstext;
             parts.types = (long long)types.size();
             parts.layouts = (long long)layoutstext.size();
-            if (usesextern) { text += "\n" + src.includetext; parts.includes += (long long)src.includetext.size(); }
+            if (usesextern && !in.native_support) {
+                text += "\n" + src.includetext;
+                parts.includes += (long long)src.includetext.size();
+            }
         }
         text += "\n";
         for (auto &[name, decl] : externs) {
@@ -1023,6 +1081,39 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
         u.bytes = (long long)u.text.size();
     }
 
+    // The native-support unit: the runtime in the form the program's C is
+    // written for, the generated types it can spell, its headers, and the
+    // entry points that let the other units call what the headers define.
+    if (in.native_support) {
+        auto &u = units["native.c"];
+        u.file = "native.c";
+        u.kind = UnitBuild::Native;
+        u.module = "~native";
+        set<string> roots(src.interfacenames.begin(), src.interfacenames.end());
+        for (auto n : { "gs_rhdr", "gs_rref", "gs_pref", "sl_u8" }) roots.insert(n);
+        auto types = typesfor(roots, true);
+        UnitStats::Breakdown parts;
+        string text = in.native_defines;
+        text += UnitNativeRuntime(in.rt_head) + in.rt_impl;
+        parts.header = (long long)text.size();
+        text += types;
+        parts.types = (long long)types.size();
+        text += in.rt_tail;
+        parts.includes = (long long)(in.rt_tail.size() + src.includetext.size());
+        text += src.includetext;
+        text += src.externtext;
+        parts.externs = (long long)src.externtext.size();
+        string wraps;
+        for (auto &w : externwraps) wraps += w.definition + "\n";
+        text += wraps;
+        parts.definitions = (long long)wraps.size();
+        u.parts = parts;
+        u.text = std::move(text);
+        u.bytes = (long long)u.text.size();
+    }
+
+    unit_stats.native_support = in.native_support;
+
     // ---- Write. ----
     std::error_code ec;
     filesystem::create_directories(dir, ec);
@@ -1052,7 +1143,7 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
         s.module = u.module;
         s.kind = u.kind == UnitBuild::Code ? "code" : u.kind == UnitBuild::Globals ? "globals"
                  : u.kind == UnitBuild::Locations ? "locations" : u.kind == UnitBuild::Literals ? "literals"
-                 : "program";
+                 : u.kind == UnitBuild::Native ? "native" : "program";
         s.bytes = u.bytes;
         s.functions = (long long)u.chunks.size();
         s.parts = u.parts;

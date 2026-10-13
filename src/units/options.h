@@ -86,6 +86,7 @@ struct UnitStats {
         Breakdown parts;
     };
     bool ran = false;
+    bool native_support = false;            // The program's runtime is in its native-support unit.
     long long runtime_header_bytes = 0;     // The one header every unit includes.
     // The text of each unit written, in file order, for the build that reuses
     // objects (units/build.h).

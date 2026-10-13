@@ -285,7 +285,9 @@ struct CodeGen {
     string Unique(string base);
     string StableSym(const string &base, const Digest &key);
     bool HasNominal(TypeExpr *t);
-    bool IsInterfaceType(const string &mangle);
+    bool IsInterfaceType(TypeExpr *type);
+    unordered_set<string> interfaceseen;   // Mangles of the types a signature spells.
+    vector<string> interfacenames;     // C names of the types a header may spell (units).
     bool interfacebuilt = false;
     unordered_set<string> interfacetypes;
 

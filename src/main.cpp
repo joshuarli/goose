@@ -891,16 +891,12 @@ int Main(int argc, char **argv) {
         fprintf(stderr, "--rebuild and --verify-reuse need --units\n");
         return 1;
     }
-    if (unitsbuild && standalone) {
-        fprintf(stderr, "goose build --units takes no --standalone\n");
+    if (files.size() > 1 && !multitest) {
+        fprintf(stderr, "multiple input files given\n");
         return 1;
     }
     if (report_dependencies && reportfile.empty()) {
         fprintf(stderr, "--build-report-deps needs --build-report FILE\n");
-        return 1;
-    }
-    if (files.size() > 1 && !multitest) {
-        fprintf(stderr, "multiple input files given\n");
         return 1;
     }
     if (!reportfile.empty() && (multitest || tokens || dump || parseonly)) {
@@ -1148,6 +1144,10 @@ int Main(int argc, char **argv) {
         for (auto &rf : runtime_files)
             if (string_view(rf.name) == "runtime_ext.h") runtime_ext_text = rf.text;
         auto stackcfg = StackConfigOf(cdefines);
+        // The units' headers are named by where they are, not relative to a C file.
+        if (!unitsdir.empty())
+            for (auto &inc : includes)
+                if (FileExists(inc)) inc = AbsolutePath(inc);
         if (g_build_report) BuildReportPhase(Phase::CodeGeneration);
         CodeGen cg(ast, runtime_ext_text, includes, norfcheck, library, stackcfg.maxstacks);
         if (g_build_report) BuildReportAfterCodegen(cg);
@@ -1164,6 +1164,21 @@ int Main(int argc, char **argv) {
                 auto eq = d.find('=');
                 Append(in.defines, "#define ", eq == string::npos ? d : d.substr(0, eq), " ",
                        eq == string::npos ? string("1") : d.substr(eq + 1), "\n");
+            }
+            // A program with C of its own, or asked to be standalone, has the
+            // runtime in a unit of its own program, which the headers see as
+            // the standalone runtime (docs/implementation.md, units).
+            in.native_support = !includes.empty() || standalone;
+            if (in.native_support) {
+                in.rt_head = RuntimeSections({ "runtime.h" });
+                in.rt_impl = RuntimeSections({ "runtime_impl.h", "runtime_threads.h" });
+                in.rt_tail = RuntimeSections({ "runtime_ext.h", "runtime_os.h" });
+                in.native_defines = cat("#define GS_RUNTIME_VERSION ", RuntimeVersion(), "\n", cg.predefs);
+                for (auto &d : cdefines) {
+                    auto eq = d.find('=');
+                    Append(in.native_defines, "#define ", eq == string::npos ? d : d.substr(0, eq), " ",
+                           eq == string::npos ? string("1") : d.substr(eq + 1), "\n");
+                }
             }
             WriteUnits(UnitSourceOf(cg), unitsdir, in);
             fprintf(msgs, "wrote %d unit(s) to %s\n", (int)unit_stats.units.size(), unitsdir.c_str());
@@ -1424,7 +1439,7 @@ int Main(int argc, char **argv) {
                         }
                     }
                     string runtime_object;
-                    if (!buildopts.standalone) {
+                    if (!buildopts.standalone && !unit_stats.native_support) {
                         Builder rb { ur.tc, buildopts, msgs };
                         runtime_object = RuntimeObject(rb);
                         if (runtime_object.empty()) return 1;

@@ -375,15 +375,15 @@ inline string CodeGen::Sanitize(string_view ns, string_view name) {
 // Types that a C header spells by name: those in the signature of an extern
 // function (and, through their fields, the types those hold) and of an
 // export. Their names are an interface and keep the default scheme.
-inline bool CodeGen::IsInterfaceType(const string &mangle) {
+inline bool CodeGen::IsInterfaceType(TypeExpr *type) {
     if (!interfacebuilt) {
         interfacebuilt = true;
         function<void(TypeExpr *)> add = [&](TypeExpr *t) {
             if (!t) return;
             switch (t->kind) {
-                case TY_ARRAY: add(t->arr->sub); return;
-                case TY_SLICE: add(t->sub); return;
-                case TY_REF: add(t->ref->sub); return;
+                case TY_ARRAY: interfaceseen.insert(Mangle(t)); add(t->arr->sub); return;
+                case TY_SLICE: interfaceseen.insert(Mangle(t)); add(t->sub); return;
+                case TY_REF: interfaceseen.insert(Mangle(t)); add(t->ref->sub); return;
                 case TY_STRUCT:
                     if (!interfacetypes.insert(Mangle(t)).second) return;
                     for (auto ft : SI(t)->ftypes) add(ft);
@@ -400,7 +400,28 @@ inline bool CodeGen::IsInterfaceType(const string &mangle) {
             }
         }
     }
-    return interfacetypes.count(mangle) != 0;
+    // A type is a header's to spell when it is built over one of those: the
+    // struct itself and every slice, array, reference or pool reference the
+    // backend names from it.
+    function<bool(TypeExpr *)> over = [&](TypeExpr *x) {
+        if (!x) return false;
+        switch (x->kind) {
+            case TY_ARRAY: return over(x->arr->sub);
+            case TY_SLICE: return over(x->sub);
+            case TY_REF: return over(x->ref->sub);
+            case TY_STRUCT:
+                if (interfacetypes.count(Mangle(x))) return true;
+                for (auto a : x->struc->args) if (over(a)) return true;
+                return false;
+            case TY_ENUM:
+                if (interfacetypes.count(Mangle(x))) return true;
+                for (auto a : x->enu->args) if (over(a)) return true;
+                return false;
+            case TY_VARIANT: return interfacetypes.count(Mangle(x)) != 0;
+            default: return false;
+        }
+    };
+    return over(type);
 }
 
 // Whether a declared type (a struct, an enum or one of its variants) occurs
@@ -624,9 +645,11 @@ inline string CodeGen::NameCT(TypeExpr *t) {
     // A structural type's mangle is already a function of the type alone, and
     // the runtime names some of them (`sl_u8`); only a declaration's name
     // needs the key.
-    auto name = emit_options.stable_names && HasNominal(t) && !IsInterfaceType(m)
+    auto name = emit_options.stable_names && HasNominal(t) && !IsInterfaceType(t)
                     ? StableSym(m, Keys().Type(t).digest) : Unique(m);
     ctypes[m] = name;
+    // The spelling a header may use, which units keep apart from the rest.
+    if (emit_options.units && (IsInterfaceType(t) || interfaceseen.count(m))) interfacenames.push_back(name);
     if (StructLike(t)) Append(tdecls, "typedef struct ", name, " ", name, ";\n");
     return name;
 }

@@ -5434,3 +5434,40 @@ failures.
    packed-layout changes relocate bytes there; they do not materialize a
    separate result. Spec §4.3 allows that relocation, and separately allows
    staging a result of unknown length to check a limited receiver's capacity.
+
+---
+
+## 12. Programs with C of their own, built as units
+
+`goose build --units` (and `--emit-units`) write a program as several C files.
+A program given `--include` headers, or `--standalone`, also gets a
+**native-support unit**, `native.c`, which is the program's runtime and the one
+place its C is compiled:
+
+* The runtime implementation is in that unit, in the standalone form the
+  headers are written for: neither `GS_SEPARATE_RUNTIME` nor
+  `GS_RUNTIME_OBJECT` is defined, so a header that refuses those with `#error`
+  compiles, and the implementation's internal variables and functions are
+  visible to it. What the runtime defines has external linkage instead of
+  `static` (applied at emission to `runtime.h`'s `GS_API`), so the other units
+  call it as they call the shared runtime object. That object is not linked: the
+  program has exactly one runtime.
+* The unit holds the generated types a header can spell, and nothing the other
+  units' code depends on besides: the types reachable from an `extern` or export
+  signature, and every type built over one (a slice, array or reference of the
+  struct), keep the names single-file output gives them (`Stats_g`,
+  `sl_Stats_g`). The other generated types are named from their keys.
+* The `--include` headers follow, as in the single file, and then a prototype
+  and an entry point for each `extern fn`: a constant function pointer
+  `gs_x_<name>` that every other unit calls through. A header may therefore
+  define the function `static`.
+
+A header may rely on what the single-file standalone form gives it up to the
+point it is included: the runtime's internals, the core types (`gs_rhdr`,
+`gs_rref`, `gs_pref`, `sl_u8`), the runtime extension's functions, and the
+types above. It may not rely on the program's globals (`gs_globals_t`, which
+does not exist), on a generated type that is not reachable from a signature, on
+generated functions, or on being compiled in a unit with any of them: those are
+in other units. Its object is keyed by its text, the headers it reads by content
+and the contract, so editing a header rebuilds that unit and nothing else, and
+editing a Goose function recompiles that function's unit and not this one.
