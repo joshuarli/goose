@@ -60,8 +60,12 @@ specialization parameters alone proves that two arrays cannot alias.
 
 ## 1. Pipeline
 
-`main.cpp` runs the phases in this order; each is one or more headers in a
-single translation unit, included in the order the driver lists them.
+`main.cpp` runs the default legacy pipeline in this order; each phase is one
+or more headers in a single translation unit, included in the order the
+driver lists them. The legacy path writes one C file by default. `--emit-core`
+and `--emit-gir-high`/`--emit-gir-low` write intermediate modules; `--pipeline
+gir` uses GIR for C, JIT and units output and reports unsupported features
+explicitly. The default remains the legacy pipeline.
 
 | Phase | Where | Consumes | Produces |
 |---|---|---|---|
@@ -70,7 +74,7 @@ single translation unit, included in the order the driver lists them.
 | Typecheck | `typecheck*.h` (`TypeCheckProgram`) | the `Ast` | one `FnSpec` per specialization with a cloned, annotated body; `StructInst`/`EnumInst`; `VarDef`s; the store record; every diagnostic of §3--§11; the shader blobs `embed_shader` compiles (`gfx.h`, `shaderc.c`) |
 | Optimize | `optimize.h`, `optimize_basecase.h`, `optimize_tre.h`, `optimize_loops.h` (`Optimizer`) | live specializations | bodies rewritten in place (inlined, folded, loops), liveness and use counts, loop shapes (`ForLoop::stripk`, `sumred`, `While::countdown`) |
 | BCE | `bce.h` (`BCE::RunAll`) | live specializations | `Index::nobc`, `SliceExpr::nobc`, `ForLoop::fixedlen` and `lenbound`, per-loop `hoistrefs` and `hoistfields` |
-| Codegen | `codegen*.h` (`CodeGen`) | live specializations, globals | one C file, with `src/runtime/` (or its part a program's unit holds) around it |
+| Codegen | `codegen*.h` (`CodeGen`) | live specializations, globals | one C file by default, with `src/runtime/` (or its part a program's unit holds) around it |
 | JIT | `jit.h` | the C text | the program run in-process through libtcc, when no `-o` was given |
 
 The passes are virtual methods on `Node` (`ast.h`): `Dump`, `Clone1`,
@@ -153,11 +157,15 @@ the slow steps (a line each, and on a terminal a live line below).
 | `--bce-lines` | print elided/kept counts per source line |
 | `--unsafe-no-rf-check` | omit the `return from` discriminant checks after calls: a measurement aid, unsound |
 | `-o out.c`, `--jit`, `--header`, `-D`, `--include`, `--stdlib`, `--` | output file, in-process run, a C API header for the exports (which builds the C without a `main`, for a C host), a define written into the generated C, a user header, the stdlib directory, program arguments |
+| `--emit-core FILE` | write the checked program as a Core module; unsupported Core-profile features are errors |
+| `--emit-core-report` | with `--check`, print the sorted unsupported Core-profile features as JSON without writing a module or C |
+| `--emit-gir-high FILE`, `--emit-gir-low FILE` | write the checked program as a GIR-H or GIR-L module |
+| `--pipeline legacy\|gir` | choose the C, JIT or units pipeline; `legacy` is the default, while `gir` reports unsupported features |
 | `--<name>-link msvc\|cc` | print the response file of link inputs a program using the blessed package imported as `name` (`gfx`, `audio`, `ui`, `physics`) needs, when the package is compiled into this compiler (`builtin.h`, `BuiltinLinkFile`) |
 | `--multi-test a.goose b.goose ...` | compile each file in turn with the other flags, as a process of its own on it would (an `Ast` and a compile thread each, which is all the state a compile has), each file's output on both streams ending in a line `==== goose --multi-test: exit <code> <file>`; an `-o` names each file's C with `%` for its name. It runs no programs and writes no dump files. The test runner's batches of compiler runs (`docs/testing.md`) |
 | `--compile-shader f [--shader-source msl\|hlsl]` | hidden: what a shader compiles to, without a program around it |
 | `--share` | merge identical emitted function bodies after checking, optimization and bounds-check elimination; checked contexts remain separate |
-| `--stable-names` | name emitted entities from stable keys instead of creation-order counters |
+| `--stable-names` | hidden: name emitted entities from stable keys instead of creation-order counters |
 | `--build-report FILE` | write versioned JSON with specialization, emission, sharing and phase-cost data |
 | `--build-report-deps` | add dependency and result digests to the report; requires `--build-report FILE` |
 | `--emit-units DIR` | write C code-generation units for an external compiler and linker; implies stable names |
