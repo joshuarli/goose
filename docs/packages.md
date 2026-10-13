@@ -55,19 +55,19 @@ plainly.
 ## 2. Using a package
 
 A *package* is a library in a directory of its own: a module named after it,
-`name.goose`, further modules beside it, and possibly C. The packages the
-compiler knows by name are the *blessed* ones (`src/blessed.txt`; their names
-are listed in [stdlib.md](stdlib.md)): a program
-imports them like any module,
+`name.goose`, further modules beside it, and possibly C. The compiler
+recognizes the *blessed* import names (`src/blessed.txt`; listed in
+[stdlib.md](stdlib.md)) for external packages. A program imports them like any
+module,
 
 ```goose
 import gfx;
 import physics;
 ```
 
-and the compiler fetches the package from its repository at the pinned tag
-the first time, into `~/.goose/pkg`, builds its C with cmake and the C
-compiler, and keeps both. A compiler configured with
+and, unless it was built into the compiler, the compiler fetches the package
+from its repository at the specified ref the first time, into `~/.goose/pkg`,
+and builds its native part if it has one. A compiler configured with
 `-DGOOSE_BUILTIN_LIBS=all` has the blessed packages compiled in and runs
 such a program with nothing else installed; `goose toolchain` lists what is
 built in.
@@ -95,8 +95,7 @@ writes the same `import other from "…";` line in its own files, and the
 compiler reads it as a *requirement*: if the root does not declare `other`,
 the error says exactly what line to add to the root. The root declaring the
 same package from a different ref gets a warning; from a different source,
-an error. So a program's dependencies are flat, pinned, and in one place,
-and one version of each package exists in a program.
+an error. A program has one version of each package.
 
 `goose fetch program.goose` fetches everything the root declares, for an
 offline session later. The tools involved are reported by name when they
