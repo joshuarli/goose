@@ -63,14 +63,14 @@ theorem MayShrinkEff.known_iff {P : Nat → RootInst → Prop} {E : Eff}
 
 /-- An unknown-free world protects its inherited slices against its summary. -/
 def KnownEffectShrinkProtected (W : World) : Prop :=
-  W.E.unknown = false ∧ ShrinkProtected W.D W.A (MayShrinkEff W.P W.E)
+  W.E.unknown = false ∧ ShrinkProtected W.D W.A (MayShrinkEff W.ownerP W.E)
 
 /-- Narrowing the slice facts and shrink summary preserves protection. -/
 theorem KnownEffectShrinkProtected.mono {W W' : World}
     (hProtected : KnownEffectShrinkProtected W)
     (hD : ∀ holder element, W'.D holder element → W.D holder element)
     (hA : ∀ holder target, W'.A holder target → W.A holder target)
-    (hP : ∀ i root, W'.P i root → W.P i root)
+    (hP : ∀ i root, W'.ownerP i root → W.ownerP i root)
     (hShrinks : ∀ target, target ∈ W'.E.shrinks → target ∈ W.E.shrinks)
     (hUnknown : W'.E.unknown = true → W.E.unknown = true) :
     KnownEffectShrinkProtected W' := by

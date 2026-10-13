@@ -773,10 +773,10 @@ theorem Frame.allowed_beforeBase {W : World} {tenv : TEnv} {penv : PEnv}
 /-- An older root denoted by this activation's annotations must come from a
 parameter or a global; a current local declaration cannot denote it. -/
 theorem Frame.gam_noEnv_of_beforeBase {W : World} {tenv : TEnv} {penv : PEnv}
-    {env : Env} {s : St} {future : List VarId} {roots : List RootRef} {root : RootInst}
+    {env : Env} {s : St} {future : List VarId} {P : Nat → RootInst → Prop} {roots : List RootRef} {root : RootInst}
     (frame : Frame m W tenv penv env s future)
-    (before : BeforeBase W.base root) (denoted : Gam env W.P roots root) :
-    Gam noEnv W.P roots root := by
+    (before : BeforeBase W.base root) (denoted : Gam env P roots root) :
+    Gam noEnv P roots root := by
   obtain ⟨q, membership, realization⟩ := denoted
   cases q with
   | global g => exact ⟨.global g, membership, realization⟩
