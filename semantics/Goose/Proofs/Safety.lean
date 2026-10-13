@@ -23,15 +23,19 @@ initialized points at a typed location once that global is bound. -/
 theorem held_next {G : Nat} {st : Store} {v : Val} {gl : Global} (hgl : m.globals[G]? = some gl)
     (hb : LocTy st ⟨.global G, []⟩ gl.ty) (h : Held m G st v) : Held m (G + 1) st v := by
   cases v <;> simp only [Held] at h ⊢
-  · rcases h with ⟨T, hT, hl⟩ | h
+  · rename_i l
+    rcases h with ⟨T, hT, hl⟩ | h
     · refine Or.inl ⟨T, hT, ?_⟩
-      rcases hl with hl | ⟨g, gl', hG, rfl, hg, rfl⟩
+      rcases hl with hl | ⟨g, gl', hG, hroot, hg, hpath⟩
       · exact Or.inl hl
       · by_cases e : g = G
         · subst e
           rw [hgl] at hg; cases hg
-          exact Or.inl hb
-        · exact Or.inr ⟨g, gl', by omega, rfl, hg, rfl⟩
+          apply Or.inl
+          show LocTy st ⟨l.root, l.path⟩ T
+          rw [hroot]
+          simpa using hb.fieldPath hpath
+        · exact Or.inr ⟨g, gl', by omega, hroot, hg, hpath⟩
     · exact Or.inr h
   · exact h
 

@@ -10,13 +10,63 @@ element it already held.
 namespace Goose.Proofs.Memory
 open Goose.Core
 
+mutual
 /-- Typing of a flat value, which holds no reference and needs no store. -/
 def FlatTy : Ty → Val → Prop
   | .int t, .int u _ => t = u
   | .bool, .bool _ => True
   | .arr E k, .fixed es => es.size = k ∧ ∀ (i : Nat) (e : Val), es[i]? = some e → FlatTy E e
   | .grow E, .resizable E' es => E = E' ∧ ∀ (i : Nat) (e : Val), es[i]? = some e → FlatTy E e
+  | .structT sid ts, .record sid' vs => sid = sid' ∧ FieldsTy ts vs.toList
   | _, _ => False
+
+/-- Each record field has its declaration's type, in real-field order. -/
+def FieldsTy : TyList → List Val → Prop
+  | .nil, [] => True
+  | .cons t ts, v :: vs => FlatTy t v ∧ FieldsTy ts vs
+  | _, _ => False
+end
+
+theorem fields_get : ∀ (ts : TyList) (vs : List Val), FieldsTy ts vs →
+    ∀ (i : Nat) (t : Ty), ts.toList[i]? = some t → ∃ v, vs[i]? = some v ∧ FlatTy t v
+  | .nil, vs, h, i, t, ht => by simp [TyList.toList] at ht
+  | .cons u us, vs, h, i, t, ht => by
+    cases vs with
+    | nil => simp [FieldsTy] at h
+    | cons v vs =>
+      cases i with
+      | zero =>
+        simp only [TyList.toList, List.getElem?_cons_zero, Option.some.injEq] at ht
+        subst ht
+        exact ⟨v, by simp, h.1⟩
+      | succ i => exact fields_get us vs h.2 i t (by simpa [TyList.toList] using ht)
+
+/-- A field path follows declared nominal fields; it never interprets byte offsets. -/
+inductive FieldPath : Ty → List Nat → Ty → Prop
+  | root (t : Ty) : FieldPath t [] t
+  | field {sid : StructId} {ts : TyList} {i : Nat} {p : List Nat} {t result : Ty}
+      (selector : ts.toList[i]? = some t) (rest : FieldPath t p result) :
+      FieldPath (.structT sid ts) (i :: p) result
+
+theorem FieldPath.append {a b c : Ty} {p q : List Nat} (h : FieldPath a p b)
+    (k : FieldPath b q c) : FieldPath a (p ++ q) c := by
+  induction h with
+  | root => exact k
+  | field selector rest ih => exact .field selector (ih k)
+
+theorem FieldPath.get {root result : Ty} {p : List Nat} (path : FieldPath root p result)
+    {v : Val} (h : FlatTy root v) : ∃ w, v.get? p = some w ∧ FlatTy result w := by
+  induction path generalizing v with
+  | root t => exact ⟨v, rfl, h⟩
+  | @field sid ts i p t result selector rest ih =>
+    cases v <;> simp only [FlatTy] at h
+    rename_i sid' vs
+    obtain ⟨e, he, ht⟩ := fields_get _ _ h.2 _ _ selector
+    obtain ⟨w, hw, htype⟩ := ih ht
+    refine ⟨w, ?_, htype⟩
+    simp only [Val.get?, Val.children?]
+    have he' : vs[i]? = some e := by simpa using he
+    simp only [he', Option.bind_some, hw]
 
 /-- The location holds a value of flat type `T`. -/
 def LocTy (s : Store) (l : Loc) (T : Ty) : Prop :=
@@ -91,6 +141,33 @@ theorem flat_resizable_set (T E0 : Ty) (es : Array Val) (i : Nat) (hi : i < es.s
 
 
 /-- Replacing the sub-value at a path by one that refines it refines the whole. -/
+theorem fields_set : ∀ (ts : TyList) (vs : List Val) (i : Nat) (v' : Val),
+    FieldsTy ts vs → (∀ v, vs[i]? = some v → ∀ T, FlatTy T v → FlatTy T v') →
+    FieldsTy ts (vs.set i v')
+  | .nil, vs, i, v', h, hc => by cases vs <;> simp_all [FieldsTy]
+  | .cons t ts, vs, i, v', h, hc => by
+    cases vs with
+    | nil => simp [FieldsTy] at h
+    | cons v vs =>
+      simp only [FieldsTy] at h
+      cases i with
+      | zero => exact ⟨hc v (by simp) t h.1, h.2⟩
+      | succ i =>
+        exact ⟨h.1, fields_set ts vs i v' h.2 (fun w hw => hc w (by simpa using hw))⟩
+
+theorem flat_record_set (T : Ty) (sid : StructId) (es : Array Val) (i : Nat)
+    (hi : i < es.size) (e' : Val) (h : FlatTy T (.record sid es))
+    (hc : ∀ T', FlatTy T' es[i] → FlatTy T' e') :
+    FlatTy T (.record sid (es.set i e' hi)) := by
+  cases T <;> simp only [FlatTy] at h ⊢
+  refine ⟨h.1, ?_⟩
+  rw [Array.toList_set]
+  exact fields_set _ _ i e' h.2 (fun v hv T ht => by
+    have he : es[i]? = some v := by simpa using hv
+    rw [Array.getElem?_eq_getElem hi] at he
+    cases he
+    exact hc T ht)
+
 theorem refines_modifyAt (f : Val → Option Val) :
     ∀ (p : List Nat) (v v' x y : Val), v.modifyAt? p f = some v' → v.get? p = some x →
       f x = some y → Refines x y → Refines v v' := by
@@ -160,7 +237,7 @@ theorem refines_modifyAt (f : Val → Option Val) :
           | nil =>
             rw [get_nil] at hq; cases hq
             refine ⟨_, get_nil _, ?_, ?_⟩
-            · intro T hT; cases T <;> simp [FlatTy] at hT
+            · exact fun T hT => flat_record_set T sid es i hi _ hT hT0
             · intro es' hes'; simp [Val.elems?] at hes'
           | cons j q' =>
             rw [get_record] at hq
@@ -335,6 +412,7 @@ theorem modify_le (s s' : Store) (l : Loc) (f : Val → Option Val)
     simp [Std.HashMap.getElem?_insert, Std.HashMap.getElem?_erase, this, hv]
 
 
+mutual
 /-- A flat type is determined by any value of it, so a value of the same
 flat type has every type the old value had. -/
 theorem flat_swap : ∀ (T : Ty), T.flat = true → ∀ (x y : Val) (T' : Ty),
@@ -358,12 +436,33 @@ theorem flat_swap : ∀ (T : Ty), T.flat = true → ∀ (x y : Val) (T' : Ty),
     have hfE : E.flat = true := by simpa [Ty.flat] using hf
     exact flat_swap E hfE es[i] e E' (hx.2 i _ (Array.getElem?_eq_getElem hi2))
       (hy.2 i e he) (hx'.2 i _ (Array.getElem?_eq_getElem hi2))
-  | .structT _ _, _, x, _, _, hx, _, _ => by cases x <;> simp [FlatTy] at hx
+  | .structT sid ts, hf, x, y, T', hx, hy, hx' => by
+    cases x <;> cases y <;> simp only [FlatTy] at hx hy
+    rename_i xid xs yid ys
+    cases T' <;> simp only [FlatTy] at hx' ⊢
+    exact ⟨hx'.1.trans (hx.1.symm.trans hy.1),
+      fields_swap ts (by simpa [Ty.flat] using hf) xs.toList ys.toList _ hx.2 hy.2 hx'.2⟩
   | .unit, hf, _, _, _, _, _, _ => by simp [Ty.flat] at hf
   | .grow _, hf, _, _, _, _, _, _ => by simp [Ty.flat] at hf
   | .ref _ _, hf, _, _, _, _, _, _ => by simp [Ty.flat] at hf
   | .slice _ _, hf, _, _, _, _, _, _ => by simp [Ty.flat] at hf
   | .tuple _, hf, _, _, _, _, _, _ => by simp [Ty.flat] at hf
+
+
+theorem fields_swap : ∀ (ts : TyList), ts.flat = true → ∀ (xs ys : List Val) (us : TyList),
+    FieldsTy ts xs → FieldsTy ts ys → FieldsTy us xs → FieldsTy us ys
+  | .nil, _, xs, ys, us, hx, hy, hu => by
+    cases xs <;> cases ys <;> simp only [FieldsTy] at hx hy
+    exact hu
+  | .cons t ts, hf, xs, ys, us, hx, hy, hu => by
+    cases xs <;> cases ys <;> simp only [FieldsTy] at hx hy
+    cases us <;> simp only [FieldsTy] at hu ⊢
+    simp only [TyList.flat, Bool.and_eq_true] at hf
+    exact ⟨flat_swap t hf.1 _ _ _ hx.1 hy.1 hu.1,
+      fields_swap ts hf.2 _ _ _ hx.2 hy.2 hu.2⟩
+end
+
+mutual
 
 
 /-- Overwriting a flat value with another of the same flat type refines it. -/
@@ -410,12 +509,51 @@ theorem flat_refines : ∀ (T : Ty), T.flat = true → ∀ (x y : Val),
         refine ⟨x', ?_, ht, hs⟩
         rw [get_fixed, Array.getElem?_eq_getElem hi2]
         simpa using hx'
-  | .structT _ _, _, x, _, hx, _ => by cases x <;> simp [FlatTy] at hx
+  | .structT sid ts, hf, x, y, hx, hy => by
+    cases x <;> cases y <;> simp only [FlatTy] at hx hy
+    rename_i xid xs yid ys
+    intro p x0 hp
+    cases p with
+    | nil =>
+      rw [get_nil] at hp; cases hp
+      refine ⟨_, get_nil _, fun T' h => flat_swap _ hf _ _ T' (by simpa [FlatTy] using hx) (by simpa [FlatTy] using hy) h, ?_⟩
+      intro es hes; simp [Val.elems?] at hes
+    | cons i q =>
+      rw [get_record] at hp
+      cases he : xs[i]? with
+      | none => simp [he] at hp
+      | some e =>
+        simp only [he, Option.bind_some] at hp
+        obtain ⟨e', he', hr⟩ := fields_refines ts (by simpa [Ty.flat] using hf)
+          xs.toList ys.toList hx.2 hy.2 i e (by simpa using he)
+        obtain ⟨z, hz, ht, hs⟩ := hr q x0 hp
+        refine ⟨z, ?_, ht, hs⟩
+        rw [get_record]
+        have hh : ys[i]? = some e' := by simpa using he'
+        simp only [hh, Option.bind_some]; exact hz
   | .unit, hf, _, _, _, _ => by simp [Ty.flat] at hf
   | .grow _, hf, _, _, _, _ => by simp [Ty.flat] at hf
   | .ref _ _, hf, _, _, _, _ => by simp [Ty.flat] at hf
   | .slice _ _, hf, _, _, _, _ => by simp [Ty.flat] at hf
   | .tuple _, hf, _, _, _, _ => by simp [Ty.flat] at hf
+
+
+theorem fields_refines : ∀ (ts : TyList), ts.flat = true → ∀ (xs ys : List Val),
+    FieldsTy ts xs → FieldsTy ts ys → ∀ (i : Nat) (v : Val), xs[i]? = some v →
+    ∃ w, ys[i]? = some w ∧ Refines v w
+  | .nil, _, xs, ys, hx, hy, i, v, hv => by
+    cases xs <;> simp [FieldsTy] at hx hv
+  | .cons t ts, hf, xs, ys, hx, hy, i, v, hv => by
+    cases xs <;> cases ys <;> simp only [FieldsTy] at hx hy
+    simp only [TyList.flat, Bool.and_eq_true] at hf
+    cases i with
+    | zero =>
+      simp only [List.getElem?_cons_zero, Option.some.injEq] at hv
+      subst hv
+      exact ⟨_, by simp, flat_refines t hf.1 _ _ hx.1 hy.1⟩
+    | succ i =>
+      exact fields_refines ts hf.2 _ _ hx.2 hy.2 i v (by simpa using hv)
+end
 
 /-- A write of a value of the location's flat type keeps every typed location typed. -/
 theorem write_le (s s' : Store) (l : Loc) (v : Val) (T : Ty) (hT : T.flat = true)
@@ -474,6 +612,17 @@ theorem get_append (v : Val) : ∀ (p q : List Nat), v.get? (p ++ q) = (v.get? p
     · cases es[i]? <;> simp [ih]
     · cases fields[i]? <;> simp [ih]
     · cases es[i]? <;> simp [ih]
+
+theorem LocTy.fieldPath {s : Store} {l : Loc} {a b : Ty} {p : List Nat}
+    (h : LocTy s l a) (k : FieldPath a p b) : LocTy s ⟨l.root, l.path ++ p⟩ b := by
+  obtain ⟨v, hv, ht⟩ := h
+  obtain ⟨w, hw, hb⟩ := k.get ht
+  obtain ⟨root, hr, hg⟩ := (read_ok_iff _ _ _).1 hv
+  refine ⟨w, ?_, hb⟩
+  apply (read_ok_iff _ _ _).2
+  refine ⟨root, hr, ?_⟩
+  rw [get_append, hg]
+  exact hw
 
 theorem modifyAt_get_same (f : Val → Option Val) :
     ∀ (p : List Nat) (v v' x y : Val), v.modifyAt? p f = some v' → v.get? p = some x →

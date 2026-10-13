@@ -172,7 +172,7 @@ theorem sat_lengthLoc_bind {l : Loc} {E : Ty} {s : St} {f : Nat → M α} {Q : �
     (k : ∀ es, s.store.read l = .ok (.resizable E es) → Sat (f es.size) s Q) :
     Sat (lengthLoc l >>= f) s Q := by
   obtain ⟨v, hv, hT⟩ := h
-  rcases v with _|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hT
+  rcases v with _|_|_|_|_|⟨E', es⟩|_|_ <;> simp only [FlatTy] at hT
   obtain ⟨rfl, _⟩ := hT
   have e : (lengthLoc l >>= f) s = f es.size s := by
     show M.bind' (lengthLoc l) f s = _

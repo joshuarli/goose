@@ -80,7 +80,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
   | assign p e o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
-    obtain ⟨_, t, b, t1, htp, hfl, te, t2, hte, heq, _, rfl, rfl⟩ := ht
+    obtain ⟨_, t, b, contents, t1, htp, hfl, te, t2, hte, heq, _, rfl, rfl⟩ := ht
     obtain ⟨rp, r1, hrp, re, r2, hre, hck, r3, hw, rfl⟩ := hr
     have : te = t := by simpa using heq
     subst this
@@ -90,7 +90,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     have hin : ∀ t', t' ∈ rootsTargets rp → t' ∈ W.E.writes := fun t' ht' => hE3.2.1 t' (hin0 t' ht')
     have hE2 : EffLe r2.eff W.E := (PMono.addWrites _ _ _ _ hw).2.trans hE3
     simp only [execStmt]
-    refine Sat.bind (ih.place W tenv' penv env s p _ _ _ _ _ _ _ hp hF htp hrp
+    refine Sat.bind (ih.place W tenv' penv env s p _ _ _ _ _ _ _ _ hp hF htp hrp
       ((rpExpr_mono hre).2.trans hE2)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     refine Sat.bind (ih.expr W tenv' penv env s1 e _ _ _ _ _ _ hp hF1 hte hre hE2) ?_
@@ -137,7 +137,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
   | assignOp op p e o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
-    obtain ⟨_, t, b, t1, htp, it, rfl, te, t2, hte, iu, rfl, rfl, _, rfl, rfl⟩ := ht
+    obtain ⟨_, t, b, contents, t1, htp, it, rfl, te, t2, hte, iu, rfl, rfl, _, rfl, rfl⟩ := ht
     obtain ⟨rp, r1, hrp, re, r2, hre, r3, hrd, r4, hwr, hfin⟩ := hr
     have hE4 : EffLe r4.eff W.E := by
       refine EffLe.trans ?_ hE
@@ -148,7 +148,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     have hE3 := (PMono.addWrites _ _ _ _ hwr).2.trans hE4
     have hE2 := (PMono.addReads _ _ _ _ hrd).2.trans hE3
     simp only [execStmt]
-    refine Sat.bind (ih.place W tenv' penv env s p _ _ _ _ _ _ _ hp hF htp hrp
+    refine Sat.bind (ih.place W tenv' penv env s p _ _ _ _ _ _ _ _ hp hF htp hrp
       ((rpExpr_mono hre).2.trans hE2)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     rcases hpl with ⟨_, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
@@ -218,7 +218,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
   | append owner src o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
-    obtain ⟨_, t, b, t1, htp, ht⟩ := ht
+    obtain ⟨_, t, b, contents, t1, htp, ht⟩ := ht
     obtain ⟨rp, r1, hrp, rv, r2, hrv, r3, hrd, hgr⟩ := hr
     obtain ⟨_, hin⟩ := addGrows_ok _ _ _ hgr
     have hE3 : EffLe r3.eff W.E := (PMono.addGrows _ _ _ _ hgr).2.trans hE
@@ -229,7 +229,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     have : sel = el := by simpa using heq
     subst this
     simp only [execStmt]
-    refine Sat.bind (ih.place W tenv' penv env s owner _ _ _ _ _ _ _ hp hF htp hrp
+    refine Sat.bind (ih.place W tenv' penv env s owner _ _ _ _ _ _ _ _ hp hF htp hrp
       ((rpView_mono hrv).2.trans hE2)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     refine Sat.bind (ih.view W tenv' penv env s1 src _ _ _ _ _ _ _ hp hF1 htv hrv hE2) ?_

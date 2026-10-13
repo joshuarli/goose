@@ -102,8 +102,8 @@ def BlockValueSpec (n : Nat) : Prop :=
 def ArgTy (tenv : TEnv) (a : Arg) (tn : Nat) (ty : Ty) (tn' : Nat) : Prop :=
   match a with
   | .byVal e => tyExpr tenv e tn = .ok (ty, tn')
-  | .byRef mu p => ∃ t mu', tyPlace tenv p tn = .ok ((t, mu'), tn') ∧
-      (t.refTarget = true ∨ (t.isSlice = true ∧ mu' = true ∧ p.sliceArg = true)) ∧ ty = .ref mu t
+  | .byRef mu p => ∃ t, ∃ caps : Bool × Bool, tyPlace tenv p tn = .ok (⟨t, caps.1, caps.2⟩, tn') ∧
+      (t.refTarget = true ∨ (t.isSlice = true ∧ caps.1 = true ∧ p.sliceArg = true)) ∧ ty = .ref mu t
 
 def ArgRp (penv : PEnv) (a : Arg) (rst : RState) (rho : List RootRef) (rst' : RState) : Prop :=
   match a with
@@ -129,9 +129,9 @@ def BoundSpec (n : Nat) : Prop :=
 
 def PlaceSpec (n : Nat) : Prop :=
   ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (p : Place) (tn tn' : Nat) (t : Ty)
-    (mu : Bool) (rst rst' : RState) (rho : List RootRef),
+    (mu contents : Bool) (rst rst' : RState) (rho : List RootRef),
     Perm m W → Frame m W tenv penv env s →
-    tyPlace tenv p tn = .ok ((t, mu), tn') → rpPlace penv p rst = .ok (rho, rst') → EffLe rst'.eff W.E →
+    tyPlace tenv p tn = .ok (⟨t, mu, contents⟩, tn') → rpPlace penv p rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalPlace n ⟨prof, m⟩ env p) s (fun l s' =>
       Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧
       PlaceOk m W.G W.P penv env s'.store p l t ∧

@@ -160,7 +160,7 @@ theorem checkContext_ok (m : Module) (ctx : Context) (h : checkContext m ctx = .
 theorem validate_modOk (m : Module) (h : validate m = .ok ()) : ModOk m := by
   unfold validate at h
   inv at h
-  obtain ⟨hentry, hglob, himpl, hctx, hinit⟩ := h
+  obtain ⟨hstruct, hentry, hglob, himpl, hctx, hinit⟩ := h
   refine ⟨?_, ?_, ?_, checkEntry_ok m hentry⟩
   · intro i impl hi
     exact checkImpl_ok m impl ((forAll_ok _ _).1 himpl impl

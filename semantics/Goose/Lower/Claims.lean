@@ -23,7 +23,7 @@ def exprOk : Expr → Bool
   | .and a b | .or a b => exprOk a && exprOk b
   | .not e => exprOk e
   | .conv _ _ e _ => exprOk e
-  | .call .. => false
+  | .call .. | .structLit .. => false
   | .push p e => placeOk p && exprOk e
   | .ifE c t f => exprOk c && blockOk t && blockOk f
   | .blockE b => blockOk b
@@ -35,6 +35,7 @@ def exprsOk : List Expr → Bool
   | e :: es => exprOk e && exprsOk es
 
 def placeOk : Place → Bool
+  | .field .. => false
   | .var _ | .global _ => true
   | .deref e => exprOk e
   | .elem v i _ => viewOk v && exprOk i
@@ -1770,6 +1771,7 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | blockE b => exact exprClaim_blockE n ih.blockValue b
     | arrLit t es => exact exprClaim_arrLit n ih.exprs t es
     | fill t a => exact exprClaim_fill n ih.expr t a
+    | structLit t es => intro hok; simp [exprOk] at hok
   have hprint : ∀ args, PrintArgsClaim (n + 1) args :=
     printArgsClaim (n + 1) (fun m h => by cases h; exact ih.expr)
   refine ⟨hexpr, ?_, ?_, ?_, exprsClaim (n + 1) hexpr, hprint, ?_, ?_, ?_, ?_⟩
@@ -1779,6 +1781,7 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | global g => exact placeClaim_global _ g
     | deref e => exact placeClaim_deref n ih.expr e
     | elem v i org => exact placeClaim_elem n ih.expr ih.view v i org
+    | field p i => intro hok; simp [placeOk] at hok
   · intro v
     cases v with
     | of p => exact viewClaim_of n ih.place p

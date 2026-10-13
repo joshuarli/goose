@@ -286,13 +286,13 @@ structure PlaceInfo where
 def rej (r : Rule) (msg : String) : T α := throw ⟨r, msg⟩
 
 /-- A plain reference cannot retain different whole-binding and contents capabilities. -/
-def checkFieldReference (p : Place) (info : PlaceInfo) : T Unit :=
+def PlaceInfo.canReference (info : PlaceInfo) (p : Place) : Bool :=
   match p, info.ty with
-  | .field .., .structT .. | .field .., .arr .. =>
-    if info.bindingWritable != info.contentsWritable then
-      rej .type "split aggregate field references are outside this slice"
-    else pure ()
-  | _, _ => pure ()
+  | .field .., .structT .. | .field .., .arr .. => info.bindingWritable == info.contentsWritable
+  | _, _ => true
+
+def checkFieldReference (p : Place) (info : PlaceInfo) : T Unit :=
+  unless info.canReference p do rej .type "split aggregate field references are outside this slice"
 
 def checkType (env : TEnv) (t : Ty) : T Unit := fun n => do
   checkResolvedType env.mod t
@@ -303,6 +303,7 @@ def structDef (env : TEnv) (t : Ty) : T StructDef := do
   unless env.mod.profile == .shrink do rej .type "structs require core-shrink"
   match t with
   | .structT sid _ =>
+    unless t.flat do rej .type "struct fields must be flat fixed values"
     unless env.mod.structType? sid == some t do rej .type "struct type disagrees with its nominal descriptor"
     let some d := env.mod.structs[sid]? | rej .type "struct id outside the descriptor table"
     pure d

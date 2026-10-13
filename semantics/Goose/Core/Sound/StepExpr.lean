@@ -219,13 +219,45 @@ theorem exprs_spec (ihE : ExprSpec m prof n) {W : World} {tenv : TEnv} {penv : P
     · exact hv.flat hfl
     · exact hall v' hv'
 
+/-- Initializers produce one independent, typed value per real field, in order. -/
+theorem struct_exprs_spec (ihE : ExprSpec m prof n) {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
+    (hp : Perm m W) : ∀ (ts : TyList), ts.flat = true →
+    ∀ (es : List Expr) (s : St) (tn tn' : Nat) (rst rst' : RState),
+    Frame m W tenv penv env s → tyStructExprs tenv ts.toList es tn = .ok ((), tn') →
+    rpExprs penv es rst = .ok ((), rst') → EffLe rst'.eff W.E →
+    Sat (mapList (evalExpr n ⟨prof, m⟩ env) es) s (fun vs s' =>
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ FieldsTy ts vs)
+  | .nil, hf, es, s, tn, tn', rst, rst', hF, ht, hr, hE => by
+    cases es with
+    | nil => simp only [mapList, sat_pure]; exact ⟨hF, Ext.refl _ _ _, trivial⟩
+    | cons e es => simp only [TyList.toList, tyStructExprs] at ht; inv at ht
+  | .cons t ts, hf, es, s, tn, tn', rst, rst', hF, ht, hr, hE => by
+    cases es with
+    | nil => simp only [TyList.toList, tyStructExprs] at ht; inv at ht
+    | cons e es =>
+      simp only [TyList.flat, Bool.and_eq_true] at hf
+      simp only [TyList.toList, tyStructExprs] at ht; inv at ht
+      simp only [rpExprs] at hr; inv at hr
+      obtain ⟨te, t1, hte, heq, htr⟩ := ht
+      obtain ⟨re, r1, hre, hrr⟩ := hr
+      have he : te = t := by simpa using heq
+      subst he
+      simp only [mapList]
+      refine Sat.bind (ihE W tenv penv env s e _ _ _ _ _ _ hp hF hte hre
+        ((rpExprs_mono hrr).2.trans hE)) ?_
+      rintro v s1 ⟨hF1, hX1, hv, _⟩
+      refine Sat.bind (struct_exprs_spec ihE hp ts hf.2 es s1 _ _ _ _ hF1 htr hrr hE) ?_
+      rintro vs s2 ⟨hF2, hX2, hfields⟩
+      simp only [sat_pure]
+      exact ⟨hF2, hX1.trans hX2, hv.flat hf.1, hfields⟩
+
 set_option maxHeartbeats 800000 in
 theorem step_expr_b (ih : Specs m prof n) :
     ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (e : Expr) (tn tn' : Nat) (ty : Ty)
     (rst rst' : RState) (rho : List RootRef),
     (match e with
       | .read .. | .ref .. | .slice .. | .len .. | .push .. | .ifE .. | .blockE .. | .arrLit ..
-      | .fill .. => True
+      | .fill .. | .structLit .. => True
       | _ => False) →
     Perm m W → Frame m W tenv penv env s →
     tyExpr tenv e tn = .ok (ty, tn') → rpExpr penv e rst = .ok (rho, rst') → EffLe rst'.eff W.E →
@@ -237,14 +269,14 @@ theorem step_expr_b (ih : Specs m prof n) :
   | read p =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr; inv at hr
-    obtain ⟨t, b, t1, htp, hrd, rfl, rfl⟩ := ht
+    obtain ⟨t, b, contents, t1, htp, hrd, rfl, rfl⟩ := ht
     obtain ⟨rp, r1, hrp, r2, hadd, hrr⟩ := hr
     obtain ⟨hst, hroots⟩ := readRoots_ok _ _ _ _ hrr
     simp only at hst hroots
     subst hst
     obtain ⟨_, hin⟩ := addReads_ok _ _ _ hadd
     simp only [evalExpr]
-    refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ hp hF htp hrp
+    refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ _ hp hF htp hrp
       ((PMono.addReads _ _ _ _ hadd).2.trans hE)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, rfl, h1, h2, rfl, rfl, hrl, h4, h5⟩ |
@@ -283,12 +315,12 @@ theorem step_expr_b (ih : Specs m prof n) :
   | ref mu p =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr
-    obtain ⟨t, b, t1, htp, hrt, ht⟩ := ht
+    obtain ⟨t, b, contents, t1, htp, hallowed, hrt, ht⟩ := ht
     have hty : ty = .ref mu t ∧ tn' = t1 := by
       rcases ht with ⟨_, _, h1, h2⟩ | ⟨_, h1, h2⟩ <;> exact ⟨h1, h2⟩
     obtain ⟨rfl, rfl⟩ := hty
     simp only [evalExpr]
-    refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ hp hF htp hr hE) ?_
+    refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ _ hp hF htp hr hE) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     simp only [sat_pure]
     refine ⟨hF1, hX1, ?_, fun r hr' => by cases hr'; exact hg⟩
@@ -334,7 +366,7 @@ theorem step_expr_b (ih : Specs m prof n) :
   | push owner a =>
     simp only [tyExpr] at ht; inv at ht
     simp only [rpExpr] at hr; inv at hr
-    obtain ⟨t, b, t1, htp, ht⟩ := ht
+    obtain ⟨t, b, contents, t1, htp, ht⟩ := ht
     obtain ⟨rp, r1, hrp, ra, r2, hra, r3, hgr, rfl, rfl⟩ := hr
     obtain ⟨_, hin⟩ := addGrows_ok _ _ _ hgr
     have hE2 : EffLe r2.eff W.E := (PMono.addGrows _ _ _ _ hgr).2.trans hE
@@ -344,7 +376,7 @@ theorem step_expr_b (ih : Specs m prof n) :
     have : ta = el := by simpa using heq
     subst this
     simp only [evalExpr]
-    refine Sat.bind (ih.place W tenv penv env s owner _ _ _ _ _ _ _ hp hF htp hrp
+    refine Sat.bind (ih.place W tenv penv env s owner _ _ _ _ _ _ _ _ hp hF htp hrp
       ((rpExpr_mono hra).2.trans hE2)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     refine Sat.bind (ih.expr W tenv penv env s1 a _ _ _ _ _ _ hp hF1 hta hra hE2) ?_
@@ -400,6 +432,23 @@ theorem step_expr_b (ih : Specs m prof n) :
     obtain ⟨rho', l1, l2, r1, hrb, rfl, rfl⟩ := hr
     simp only [evalExpr]
     exact ih.blockValue W tenv penv env s b _ _ _ _ _ _ _ hp hF ht hrb hE
+  | structLit t es =>
+    simp only [tyExpr] at ht; inv at ht
+    simp only [rpExpr] at hr; inv at hr
+    obtain ⟨d, t1, hdef, hlen, t2, hes, rfl, rfl⟩ := ht
+    obtain ⟨r1, hres, rfl, rfl⟩ := hr
+    obtain ⟨sid, ts, rfl, hflat, hc, hd, rfl⟩ := structDef_ok _ _ _ _ _ hdef
+    have htypes : ts.toList = d.fields.toList.map (·.ty) := by
+      simp only [Module.structType?, hd, Option.map_some, Option.some.injEq, Ty.structT.injEq] at hc
+      obtain ⟨_, rfl⟩ := hc
+      exact tyList_toList_ofList _
+    simp only [evalExpr]
+    rw [← htypes] at hes
+    refine Sat.bind (struct_exprs_spec ih.expr hp ts (by simpa [Ty.flat] using hflat)
+      es s _ _ _ _ hF hes hres hE) ?_
+    rintro vs s1 ⟨hF1, hX1, hfields⟩
+    simp only [sat_pure]
+    exact ⟨hF1, hX1, ⟨rfl, by simpa using hfields⟩, fun r h => h.elim⟩
   | arrLit t es =>
     simp only [tyExpr] at ht
     simp only [rpExpr] at hr; inv at hr
@@ -407,7 +456,7 @@ theorem step_expr_b (ih : Specs m prof n) :
     simp only [evalExpr]
     cases t <;> inv at ht
     · rename_i el k
-      obtain ⟨hfl, hlen, t1, hes, rfl, rfl⟩ := ht
+      obtain ⟨hcanon, hfl, hlen, t1, hes, rfl, rfl⟩ := ht
       refine Sat.bind (exprs_spec ih.expr hp el hfl es s _ _ _ _ hF hes hres hE) ?_
       rintro vs s1 ⟨hF1, hX1, hl, hall⟩
       simp only [expectArrayLit, sat_pure]
@@ -415,7 +464,7 @@ theorem step_expr_b (ih : Specs m prof n) :
       intro i e he
       exact hall e (by simpa using List.mem_of_getElem? (by simpa using he))
     · rename_i el
-      obtain ⟨hfl, t1, hes, rfl, rfl⟩ := ht
+      obtain ⟨hcanon, hfl, t1, hes, rfl, rfl⟩ := ht
       refine Sat.bind (exprs_spec ih.expr hp el hfl es s _ _ _ _ hF hes hres hE) ?_
       rintro vs s1 ⟨hF1, hX1, hl, hall⟩
       simp only [expectArrayLit, sat_pure]
@@ -429,7 +478,7 @@ theorem step_expr_b (ih : Specs m prof n) :
     simp only [evalExpr]
     cases t <;> inv at ht
     rename_i el k
-    obtain ⟨hfl, ta, t1, hta, heq, rfl, rfl⟩ := ht
+    obtain ⟨hcanon, hfl, ta, t1, hta, heq, rfl, rfl⟩ := ht
     have : ta = el := by simpa using heq
     subst this
     simp only [expectFixedCount, sat_pure_bind]
