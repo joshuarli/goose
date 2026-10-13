@@ -251,6 +251,7 @@ def callEffects (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)
       writes := addTargets e.writes (mapCallTargets callee cctx argRoots sm.writes)
       grows := addTargets e.grows (mapCallTargets callee cctx argRoots sm.grows)
       shrinks := addTargets e.shrinks (mapCallTargets callee cctx argRoots sm.shrinks)
+      rebinds := addTargets e.rebinds (mapCallTargets callee cctx argRoots sm.rebinds)
       aborts := e.aborts || sm.aborts
       outputs := e.outputs || sm.outputs }
 

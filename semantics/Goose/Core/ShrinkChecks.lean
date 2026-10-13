@@ -105,4 +105,14 @@ def clearedBeforeAbort : Bool :=
 
 #guard clearedBeforeAbort
 
+#guard rejects (include_str "../../../test/semantics/golden/limited_let_mutable_borrow.core.json") "V-MUT"
+#guard runs (include_str "../../../test/semantics/golden/grow_let_reference_replace.core.json") (returned "1\n")
+#guard rejects (include_str "../../../test/semantics/golden/shrink_wrapper_rebind_omission.core.json") "V-SUMMARY"
+#guard rejects (include_str "../../../test/semantics/golden/shrink_whole_transitive_rebind.core.json") "V-WHOLE"
+
+#guard [.popN (.var 0) (.lit .i64 0) 0,
+  .resize (.var 0) (.lit .i64 0) none 0, .clear (.var 0) 0,
+  .assignWhole (.var 0) (.arrLit (.growshrink (.int .i64)) []) 0].all fun stmt =>
+    stmtsStop (fun _ => false) [stmt, .abort "stop" 0]
+
 end Goose.Core.ShrinkChecks
