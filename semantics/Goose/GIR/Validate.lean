@@ -737,28 +737,6 @@ def incomingValues (f : Func) (target : BlockId) (param : Nat) : List ValueId :=
     | some term => (edgeArgsTo term target).filterMap (·[param]?)
     | none => []
 
-def incomingConditions (f : Func) (target : BlockId) : List ValueId := Id.run do
-  if target >= f.blocks.size then return []
-  let mut reaches := Array.replicate f.blocks.size false
-  reaches := reaches.set! target true
-  let mut changed := true
-  let mut fuel := f.blocks.size + 1
-  while changed && fuel > 0 do
-    changed := false
-    fuel := fuel - 1
-    for h : source in [0:f.blocks.size] do
-      if !reaches[source]! then
-        if let some block := f.blocks[source]? then
-          if let some term := block.lastTerm? then
-            if term.successors.any (fun next => reaches[next]?.getD false) then
-              reaches := reaches.set! source true
-              changed := true
-  return f.blocks.toList.zipIdx.filterMap fun (block, source) =>
-    if !reaches[source]?.getD false then none else
-      match block.lastTerm? with
-      | some (.condbr condition ..) => some condition
-      | _ => none
-
 def isLiteralRunType : Ty → Bool
   | .grow _ | .growshrink _ => true
   | _ => false
@@ -792,7 +770,7 @@ def killEmptyFacts (facts : List ValueId) (roots : List RootRef) (p : Prov) : Li
     let aliases := rootsAt p.vals fact
     !aliases.isEmpty && !rootsOverlap roots aliases
 
-def callTouchedRoots (m : Module) (f : Func) (p : Prov) (fn : FnId) (args : List ValueId) : Option (List RootRef) :=
+def callSummaryRoots (m : Module) (p : Prov) (fn : FnId) (args : List ValueId) : Option (List RootRef) :=
   match m.funcs[fn]? with
   | none => none
   | some callee =>
@@ -815,69 +793,62 @@ def callTouchedRoots (m : Module) (f : Func) (p : Prov) (fn : FnId) (args : List
                 | _ => none
               pure (unionRoots roots (actual ++ annotated))
 
-def slotStoredValues (f : Func) (p : Prov) (address : ValueId) : List ValueId :=
-  let addresses := rootsAt p.vals address
-  f.blocks.toList.flatMap fun b => b.insts.filterMap fun
-    | .eff (.slotInit slot value _) =>
-      if addresses.contains (.local slot) then some value else none
-    | .eff (.store target value _) =>
-      let targets := rootsAt p.vals target
-      if targets.any (fun targetRoot => addresses.any (Goose.Core.rootsMayOverlap targetRoot))
-      then some value else none
-    | _ => none
+def callDependencies (m : Module) (vt : Array (Option VTy)) (p : Prov)
+    (fn : FnId) (args : List ValueId) : Option (List RootRef) :=
+  let argumentRoots := args.foldlM (init := []) fun roots arg => do
+    if !valRefLike vt arg then pure roots else
+      let actual := rootsAt p.vals arg
+      if actual.isEmpty then none else pure (unionRoots roots actual)
+  argumentRoots.bind fun roots => do
+    let touched ← callSummaryRoots m p fn args
+    pure (unionRoots roots touched)
 
-/-- Repeated values do not spend the unique-value budget. Missing dataflow is
-treated as unknown so a run is accepted only with a complete dependency proof. -/
-def valueClosure (m : Module) (f : Func) (p : Prov) (ownerRoots : List RootRef) :
-    Nat → List ValueId → List ValueId → Option (List ValueId)
-  | _, [], seen => some seen
-  | fuel, v :: rest, seen =>
-    if seen.contains v then valueClosure m f p ownerRoots fuel rest seen
-    else
-      match fuel with
-      | 0 => none
-      | n + 1 =>
-        let definitions := f.blocks.toList.flatMap (fun b => b.insts.filterMap fun
-          | .def r op => if r == v then some op else none
-          | _ => none)
-        let callDepends := definitions.any fun
-          | .call fn args _ =>
-            match callTouchedRoots m f p fn args with
-            | none => true
-            | some [] => false
-            | some roots => rootsOverlap ownerRoots roots
-          | _ => false
-        if callDepends then none else
-          let opUses := definitions.flatMap Op.uses
-          let storedUses := definitions.flatMap fun
-            | .load address => slotStoredValues f p address
-            | _ => []
-          let blockInputs := f.blocks.toList.zipIdx.flatMap fun (b, target) =>
-            (b.params.zipIdx).filterMap fun ((parameter, _), index) =>
-              if parameter == v then some (incomingValues f target index) else none
-          let branchInputs := f.blocks.toList.zipIdx.flatMap fun (b, target) =>
-            if b.defs.contains v then incomingConditions f target else []
-          valueClosure m f p ownerRoots n
-            (opUses ++ storedUses ++ blockInputs.flatten ++ branchInputs ++ rest) (v :: seen)
-termination_by fuel todo seen => (fuel, todo.length)
-decreasing_by all_goals simp_wf <;> omega
+/-- Values evaluated as sources by an instruction. Mutation targets are handled
+separately, calls use their summary, and edge arguments only transport facts
+to block parameters. -/
+def emptyFactSourceOperands : Inst → List ValueId
+  | .def _ (.call ..) => []
+  | .def _ (.push _ value _) => [value]
+  | .def _ op => op.uses
+  | .eff (.slotInit _ value _) => [value]
+  | .eff (.store _ value _) | .eff (.append _ value _) | .eff (.replace _ value _) => [value]
+  | .eff (.popN _ count _) => [count]
+  | .eff (.resize _ size fill _) => size :: fill.toList
+  | .eff (.print parts _) => parts.flatMap PrintPart.uses
+  | .eff (.clear ..) | .eff (.enter ..) | .eff (.leave ..) => []
+  | .term _ => []
 
-def transferEmptyInst (m : Module) (f : Func) (p : Prov) (facts : List ValueId) : Inst → List ValueId
-  | .eff (.clear r _) => if facts.contains r then facts else facts ++ [r]
-  | .def _ (.call fn args _) =>
-    match callTouchedRoots m f p fn args with
-    | none => []
-    | some [] => facts
-    | some roots => killEmptyFacts facts roots p
-  | .def _ (.load r) | .def _ (.snapshot _ r) | .def _ (.arrayLen r)
-  | .def _ (.sliceView r) | .def _ (.viewLen r) | .def _ (.viewSlice _ r ..)
-  | .def _ (.indexChecked r ..) | .def _ (.push r ..) | .def _ (.pop r ..)
-  | .eff (.store r ..) | .eff (.append r ..) | .eff (.popN r ..)
-  | .eff (.resize r ..) | .eff (.replace r ..) => killEmptyFacts facts (rootsAt p.vals r) p
-  | _ => facts
+def killEmptyFactSources (facts : List ValueId) (operands : List ValueId)
+    (vt : Array (Option VTy)) (p : Prov) : List ValueId :=
+  operands.foldl (fun current operand =>
+    if valRefLike vt operand then killEmptyFacts current (rootsAt p.vals operand) p
+    else current) facts
 
-def transferEmptyBlock (m : Module) (f : Func) (p : Prov) (facts : List ValueId) (b : Block) : List ValueId :=
-  b.insts.foldl (transferEmptyInst m f p) facts
+def transferEmptyInst (m : Module) (vt : Array (Option VTy)) (p : Prov)
+    (facts : List ValueId) (inst : Inst) : List ValueId := Id.run do
+  let afterReceiver := match inst with
+    | .eff (.clear r _) => if facts.contains r then facts else facts ++ [r]
+    | .def _ (.call fn args _) =>
+      match callDependencies m vt p fn args with
+      | none => []
+      | some [] => facts
+      | some roots => killEmptyFacts facts roots p
+    | .def _ (.load r) | .def _ (.snapshot _ r) | .def _ (.arrayLen r)
+    | .def _ (.sliceView r) | .def _ (.viewLen r) | .def _ (.viewSlice _ r ..)
+    | .def _ (.indexChecked r ..) | .def _ (.push r ..) | .def _ (.pop r ..)
+    | .eff (.store r ..) | .eff (.append r ..) | .eff (.popN r ..)
+    | .eff (.resize r ..) | .eff (.replace r ..) => killEmptyFacts facts (rootsAt p.vals r) p
+    | _ => facts
+  let afterSources := killEmptyFactSources afterReceiver (emptyFactSourceOperands inst) vt p
+  match inst with
+  | .def res _ =>
+    if valRefLike vt res then pure (killEmptyFacts afterSources (rootsAt p.vals res) p)
+    else pure afterSources
+  | _ => pure afterSources
+
+def transferEmptyBlock (m : Module) (vt : Array (Option VTy)) (p : Prov)
+    (facts : List ValueId) (b : Block) : List ValueId :=
+  b.insts.foldl (transferEmptyInst m vt p) facts
 
 /-- Carry empty-owner facts through block arguments. Source SSA values remain
 available along the edge; the target parameter gains the fact when its matching
@@ -891,7 +862,8 @@ def transferEmptyEdge (f : Func) (facts : List ValueId) (target : BlockId)
       if current.contains argument && !current.contains parameter then current ++ [parameter]
       else current) facts
 
-def emptyFactsAtBlocks (m : Module) (f : Func) (p : Prov) : Array (Option (List ValueId)) := Id.run do
+def emptyFactsAtBlocks (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) :
+    Array (Option (List ValueId)) := Id.run do
   let mut states : Array (Option (List ValueId)) := Array.replicate f.blocks.size none
   if !f.blocks.isEmpty then states := states.set! 0 (some [])
   let mut changed := true
@@ -903,7 +875,7 @@ def emptyFactsAtBlocks (m : Module) (f : Func) (p : Prov) : Array (Option (List 
     for h : b in [0:f.blocks.size] do
       if let some block := f.blocks[b]? then
         if let some incoming := oldStates[b]? |>.join then
-          let outgoing := transferEmptyBlock m f p incoming block
+          let outgoing := transferEmptyBlock m vt p incoming block
           for (target, args) in block.terms.flatMap termEdges do
             if target < states.size then
               let edgeFacts := transferEmptyEdge f outgoing target args
@@ -930,20 +902,13 @@ def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) (v
       violation .v060 s!"{label}: x_replace run is not a fresh literal run"
     unless facts.contains owner do
       violation .v060 s!"{label}: x_replace owner was not cleared on every path"
-    let ownerRoots := rootsAt p.vals owner
-    let closure := valueClosure m f p ownerRoots (f.numValues + 1) [run] []
-    let depends := match closure with
-      | none => true
-      | some values => values.any fun v => v == owner ||
-          (valRefLike vt v && rootsOverlap ownerRoots (rootsAt p.vals v))
-    if depends then violation .v060 s!"{label}: x_replace run depends on its receiver"
   | _ => pure ()
 
 def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Option VTy))
     (p : Prov) : Check Unit := do
   if m.profile == .shrink then
     let validRuns := freshRuns f vt
-    let states := emptyFactsAtBlocks m f p
+    let states := emptyFactsAtBlocks m f vt p
     for h : b in [0:f.blocks.size] do
       let some block := f.blocks[b]? | pure ()
       let some facts := states[b]? |>.join |
@@ -951,7 +916,7 @@ def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Opt
       let mut current := facts
       for inst in block.insts do
         checkReplace m f vt p validRuns label current inst
-        current := transferEmptyInst m f p current inst
+        current := transferEmptyInst m vt p current inst
 
 /-! ### The module -/
 

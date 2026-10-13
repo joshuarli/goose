@@ -1743,7 +1743,7 @@ private:
         }
     }
 
-    bool ValRefLike(const Fn &fn, int v) {
+    bool ValRefLike(const Fn &fn, int v) const {
         if (v < 0 || v >= (int)fn.vt.size() || fn.vt[v] < 0) return false;
         auto k = m.Type(fn.vt[v]).kind;
         return k == CoreType::Ref || k == CoreType::Slice || k == CoreType::View;
@@ -2016,8 +2016,10 @@ private:
     }
 
     // --- GIR-V060 ---------------------------------------------------------
-    // Replacement is safe only when its run is constructor-only, independent
-    // of the receiver, and the receiver has remained unused since clear.
+    // Replacement requires a fresh literal run and an empty-owner fact that
+    // survives from clear through replace. Receiver accesses and ref-like
+    // source operands kill it; calls use their actual roots and summaries, with
+    // unknown calls handled conservatively.
 
     static vector<int> IncomingValues(const GirFunc &f, int target, size_t param) {
         vector<int> out;
@@ -2030,34 +2032,6 @@ private:
                 if (term->idx == target && param < term->vals.size()) out.push_back(term->vals[param]);
                 if (term->idx2 == target && param < term->vals2.size()) out.push_back(term->vals2[param]);
             }
-        }
-        return out;
-    }
-
-    vector<int> IncomingConditions(const GirFunc &f, int target) const {
-        vector<char> reaches(f.blocks.size(), 0);
-        if (target < 0 || target >= (int)f.blocks.size()) return {};
-        reaches[target] = 1;
-        bool changed = true;
-        for (size_t rounds = 0; changed && rounds <= f.blocks.size(); rounds++) {
-            changed = false;
-            for (size_t source = 0; source < f.blocks.size(); source++) {
-                if (reaches[source]) continue;
-                auto *term = LastTerm(f.blocks[source]);
-                if (!term) continue;
-                for (auto next : Successors(*term))
-                    if (next >= 0 && next < (int)reaches.size() && reaches[next]) {
-                        reaches[source] = 1;
-                        changed = true;
-                        break;
-                    }
-            }
-        }
-        vector<int> out;
-        for (size_t source = 0; source < f.blocks.size(); source++) {
-            if (!reaches[source]) continue;
-            auto *term = LastTerm(f.blocks[source]);
-            if (term && term->op == GirOp::CondBr) out.push_back(term->a);
         }
         return out;
     }
@@ -2106,11 +2080,17 @@ private:
         return false;
     }
 
-    optional<Roots> CallTouchedRoots(const Prov &p, const GirInst &call) const {
+    optional<Roots> CallDependencies(const Fn &fn, const Prov &p, const GirInst &call) const {
         if (call.idx < 0 || call.idx >= (int)m.funcs.size()) return nullopt;
         const auto &callee = m.funcs[call.idx];
         if (callee.summary.unknown) return nullopt;
         Roots out;
+        for (auto arg : call.vals) {
+            if (!ValRefLike(fn, arg)) continue;
+            auto actual = RootsAt(p.vals, arg);
+            if (actual.empty()) return nullopt;
+            AddRoots(out, actual);
+        }
         auto add = [&](const vector<CoreTarget> &targets) {
             for (auto &target : targets) {
                 if (target.global) {
@@ -2134,63 +2114,6 @@ private:
         return out;
     }
 
-    vector<int> SlotStoredValues(const GirFunc &f, const Prov &p, int address) const {
-        auto addresses = RootsAt(p.vals, address);
-        vector<int> out;
-        for (auto &block : f.blocks)
-            for (auto &inst : block.insts) {
-                if (inst.op == GirOp::Init) {
-                    Roots slot { CoreRootRef { CoreRootRef::Local, inst.idx } };
-                    if (RootsOverlap(addresses, slot)) out.push_back(inst.a);
-                } else if (inst.op == GirOp::Store) {
-                    auto targets = RootsAt(p.vals, inst.a);
-                    if (RootsOverlap(addresses, targets)) out.push_back(inst.b);
-                }
-            }
-        return out;
-    }
-
-    optional<vector<int>> ValueClosure(const Fn &fn, const Prov &p, const Roots &ownerRoots,
-                                       int root) const {
-        const auto &f = *fn.f;
-        vector<int> todo { root }, seen;
-        while (!todo.empty()) {
-            auto value = todo.back();
-            todo.pop_back();
-            if (value < 0 || value >= fn.nvalues) return nullopt;
-            if (find(seen.begin(), seen.end(), value) != seen.end()) continue;
-            if ((int)seen.size() >= fn.nvalues) return nullopt;
-            seen.push_back(value);
-            vector<const GirInst *> definitions;
-            for (auto &block : f.blocks)
-                for (auto &inst : block.insts)
-                    if (GirDefinesValue(inst) && inst.res == value) definitions.push_back(&inst);
-            for (auto *definition : definitions) {
-                if (definition->op == GirOp::Call) {
-                    auto touched = CallTouchedRoots(p, *definition);
-                    if (!touched || (!touched->empty() && RootsOverlap(ownerRoots, *touched)))
-                        return nullopt;
-                }
-                vector<int> uses;
-                Uses(*definition, uses);
-                todo.insert(todo.end(), uses.begin(), uses.end());
-                if (definition->op == GirOp::Load) {
-                    auto stored = SlotStoredValues(f, p, definition->a);
-                    todo.insert(todo.end(), stored.begin(), stored.end());
-                }
-            }
-            for (size_t target = 0; target < f.blocks.size(); target++)
-                for (size_t param = 0; param < f.blocks[target].params.size(); param++)
-                    if (f.blocks[target].params[param].first == value) {
-                        auto incoming = IncomingValues(f, (int)target, param);
-                        todo.insert(todo.end(), incoming.begin(), incoming.end());
-                        auto conditions = IncomingConditions(f, (int)target);
-                        todo.insert(todo.end(), conditions.begin(), conditions.end());
-                    }
-        }
-        return seen;
-    }
-
     vector<int> KillEmptyFacts(const vector<int> &facts, const Roots &roots, const Prov &p) const {
         if (roots.empty()) return {};
         vector<int> kept;
@@ -2199,28 +2122,63 @@ private:
         return kept;
     }
 
-    vector<int> TransferEmptyInst(const Prov &p, vector<int> facts, const GirInst &inst) const {
+    // Source values can read or expose a cleared receiver even when the
+    // instruction's destination belongs to another root. Keep mutation targets
+    // out of this list; their receiver effects are handled separately.
+    vector<int> EmptyFactSourceOperands(const GirInst &inst) const {
+        vector<int> out;
+        if (inst.op == GirOp::Call || inst.op == GirOp::Clear || GirIsTerminator(inst.op) ||
+            GirLowOnly(inst.op))
+            return out;
+        Uses(inst, out);
+        switch (inst.op) {
+            case GirOp::Push: case GirOp::Pop: case GirOp::Store: case GirOp::Append: case GirOp::PopN:
+            case GirOp::Resize: case GirOp::Replace:
+                if (!out.empty()) out.erase(out.begin());
+                break;
+            default:
+                break;
+        }
+        return out;
+    }
+
+    vector<int> TransferEmptyInst(const Fn &fn, const Prov &p, vector<int> facts,
+                                  const GirInst &inst) const {
         auto contains = [&](int value) { return find(facts.begin(), facts.end(), value) != facts.end(); };
         if (inst.op == GirOp::Clear) {
             if (!contains(inst.a)) facts.push_back(inst.a);
             return facts;
         }
         if (inst.op == GirOp::Call) {
-            auto touched = CallTouchedRoots(p, inst);
-            return touched ? KillEmptyFacts(facts, *touched, p) : vector<int> {};
+            auto dependencies = CallDependencies(fn, p, inst);
+            if (!dependencies) return {};
+            if (!dependencies->empty()) facts = KillEmptyFacts(facts, *dependencies, p);
+        } else {
+            Roots operands;
+            bool checksOperands = false;
+            switch (inst.op) {
+                case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen: case GirOp::SliceView:
+                case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::Index: case GirOp::Push:
+                case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Store:
+                case GirOp::Append: case GirOp::Replace:
+                    operands = RootsAt(p.vals, inst.a);
+                    checksOperands = true;
+                    break;
+                default:
+                    break;
+            }
+            if (checksOperands) facts = KillEmptyFacts(facts, operands, p);
         }
-        switch (inst.op) {
-            case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen: case GirOp::SliceView:
-            case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::Index: case GirOp::Push:
-            case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Store:
-            case GirOp::Append: case GirOp::Replace:
-                return KillEmptyFacts(facts, RootsAt(p.vals, inst.a), p);
-            default: return facts;
-        }
+        for (auto value : EmptyFactSourceOperands(inst))
+            if (ValRefLike(fn, value)) facts = KillEmptyFacts(facts, RootsAt(p.vals, value), p);
+        if (GirDefinesValue(inst) && ValRefLike(fn, inst.res))
+            facts = KillEmptyFacts(facts, RootsAt(p.vals, inst.res), p);
+        return facts;
     }
 
-    vector<int> TransferEmptyBlock(const Prov &p, vector<int> facts, const GirBlock &block) const {
-        for (auto &inst : block.insts) facts = TransferEmptyInst(p, std::move(facts), inst);
+    vector<int> TransferEmptyBlock(const Fn &fn, const Prov &p, vector<int> facts,
+                                   const GirBlock &block) const {
+        for (auto &inst : block.insts) facts = TransferEmptyInst(fn, p, std::move(facts), inst);
         return facts;
     }
 
@@ -2248,7 +2206,7 @@ private:
             auto old = states;
             for (size_t b = 0; b < f.blocks.size(); b++) {
                 if (!old[b]) continue;
-                auto outgoing = TransferEmptyBlock(p, *old[b], f.blocks[b]);
+                auto outgoing = TransferEmptyBlock(fn, p, *old[b], f.blocks[b]);
                 auto *term = LastTerm(f.blocks[b]);
                 if (!term) continue;
                 auto propagate = [&](int target, const vector<int> &args) {
@@ -2297,22 +2255,8 @@ private:
                         Fail("GIR-V060", cat(fn.label, ": whole replacement run is not a fresh literal run"));
                     if (find(facts.begin(), facts.end(), inst.a) == facts.end())
                         Fail("GIR-V060", cat(fn.label, ": whole replacement owner was not cleared on every path"));
-                    auto ownerRoots = RootsAt(provenance.vals, inst.a);
-                    auto closure = ValueClosure(fn, provenance, ownerRoots, inst.b);
-                    bool depends = !closure;
-                    if (closure)
-                        for (auto value : *closure) {
-                            if (value == inst.a) { depends = true; break; }
-                            if (ValRefLike(fn, value) &&
-                                RootsOverlap(ownerRoots, RootsAt(provenance.vals, value))) {
-                                depends = true;
-                                break;
-                            }
-                        }
-                    if (depends)
-                        Fail("GIR-V060", cat(fn.label, ": whole replacement run depends on its receiver"));
                 }
-                facts = TransferEmptyInst(provenance, std::move(facts), inst);
+                facts = TransferEmptyInst(fn, provenance, std::move(facts), inst);
             }
         }
     }
