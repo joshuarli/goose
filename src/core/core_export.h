@@ -1344,6 +1344,7 @@ private:
         if (an.size() != 2) Fail("push-arity");
         auto e = NewExpr(CoreExprKind::Push, 0);
         e->place = OwnerPlace(an[0]);
+        e->org = Org(c->line, CoreOriginKind::Expr);
         auto vt = Pointee(an[0]->exprtype);
         auto elem = Ty(vt->arr->sub);
         e->a = Value(an[1]);

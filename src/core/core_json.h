@@ -270,12 +270,15 @@ private:
         out += ']';
     }
 
-    static void Summary(string &out, const CoreSummary &s) {
+    void Summary(string &out, const CoreSummary &s) {
         if (s.unknown) { out += "[\"summary_unknown\"]"; return; }
         out += "[\"summary\",";
         Targets(out, s.reads); out += ',';
         Targets(out, s.writes); out += ',';
         Targets(out, s.grows); out += ',';
+        if (m.profile == CoreProfile::Shrink) {
+            Targets(out, s.shrinks); out += ',';
+        }
         Targets(out, s.rebinds);
         Append(out, ",", (int)s.aborts, ",", (int)s.outputs, "]");
     }
@@ -544,6 +547,7 @@ private:
                 out += "[\"e_push\",";
                 Place(out, *e.place); out += ',';
                 Expr(out, *e.a);
+                if (m.profile == CoreProfile::Shrink) Append(out, ",", O(e.org));
                 out += ']';
                 break;
             case CoreExprKind::If:

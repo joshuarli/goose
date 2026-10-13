@@ -13,6 +13,7 @@
 #include "../src/ident/sha256.h"
 #include "../src/core/core_ir.h"
 #include "../src/core/core_json.h"
+#include "../src/core/core_summary.h"
 #include "../src/gir/gir_ir.h"
 #include "../src/gir/gir_types.h"
 #include "../src/gir/gir_lower.h"
@@ -875,6 +876,125 @@ void PilotAndShrinkModuleShapesStayDistinct() {
     pilot.profile = CoreProfile::Shrink;
     assert(CoreWriter(pilot).Write() ==
            "[\"module\",\"goose-core/0.2\",\"core-shrink\",[],[],[],[],[],[],0,[]]\n");
+}
+
+CoreModule CorePushShape(CoreProfile profile) {
+    CoreModule m;
+    m.files = { "t.goose" };
+    m.profile = profile;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::Grow;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+
+    CoreImpl impl;
+    impl.name = "main";
+    impl.vars = { CoreVar { "values", ownerTy, CoreVarKind::Var, 0,
+                            CoreOrigin { 0, 1, CoreOriginKind::Let } } };
+    impl.body.scope = 0;
+    auto push = make_unique<CoreExpr>();
+    push->kind = CoreExprKind::Push;
+    push->type = i64;
+    push->place = CoreLocal(0);
+    push->a = CoreInt(i64, "1");
+    push->org = CoreOrigin { 0, 2, CoreOriginKind::Expr };
+    CoreStmt stmt;
+    stmt.kind = CoreStmtKind::Expr;
+    stmt.expr = std::move(push);
+    stmt.org = CoreOrigin { 0, 2, CoreOriginKind::Expr };
+    impl.body.stmts.push_back(std::move(stmt));
+    CoreStmt append;
+    append.kind = CoreStmtKind::Append;
+    append.place = CoreLocal(0);
+    append.view = CorePlaceView(CoreLocal(0));
+    append.org = CoreOrigin { 0, 3, CoreOriginKind::Expr };
+    impl.body.stmts.push_back(std::move(append));
+    impl.summary.grows = { CoreTarget { false, 0 } };
+    impl.summary.shrinks = { CoreTarget { false, 0 } };
+    m.impls.push_back(std::move(impl));
+    m.entry = 0;
+    return m;
+}
+
+CoreModule CorePushParamSummary(CoreProfile profile) {
+    CoreModule m;
+    m.files = { "t.goose" };
+    m.profile = profile;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::Grow;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+    CoreType ref;
+    ref.kind = CoreType::Ref;
+    ref.mut = CoreMut::Mut;
+    ref.elem = ownerTy;
+    auto refTy = m.Intern(ref);
+
+    CoreImpl impl;
+    impl.name = "push";
+    impl.params = { CoreParam { 0, true } };
+    impl.vars = { CoreVar { "values", refTy, CoreVarKind::Let, 0,
+                            CoreOrigin { 0, 1, CoreOriginKind::Param } } };
+    impl.body.scope = 0;
+    auto read = make_unique<CoreExpr>();
+    read->kind = CoreExprKind::Read;
+    read->type = refTy;
+    read->place = CoreLocal(0);
+    auto ownerPlace = make_unique<CorePlace>();
+    ownerPlace->kind = CorePlace::Deref;
+    ownerPlace->expr = std::move(read);
+    auto push = make_unique<CoreExpr>();
+    push->kind = CoreExprKind::Push;
+    push->type = i64;
+    push->place = std::move(ownerPlace);
+    push->a = CoreInt(i64, "1");
+    push->org = CoreOrigin { 0, 2, CoreOriginKind::Expr };
+    CoreStmt stmt;
+    stmt.kind = CoreStmtKind::Expr;
+    stmt.expr = std::move(push);
+    stmt.org = CoreOrigin { 0, 2, CoreOriginKind::Expr };
+    impl.body.stmts.push_back(std::move(stmt));
+    m.impls.push_back(std::move(impl));
+    CoreContext context;
+    context.impl = 0;
+    context.declkey = "push";
+    context.varroots = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    m.contexts.push_back(std::move(context));
+    m.entry = 0;
+    return m;
+}
+
+void CoreShrinkPushAndSummaryCarryOriginsAndShrinks() {
+    auto shrink = CoreWriter(CorePushShape(CoreProfile::Shrink)).Write();
+    assert(shrink.find("[\"grow\",0]") != string::npos);
+    assert(shrink.find("[\"e_push\",[\"p_local\",0],[\"e_lit\",0,\"1\"],1]") != string::npos);
+    assert(shrink.find("[\"s_append\",[\"p_local\",0],[\"v_of\",[\"p_local\",0]],2]") !=
+           string::npos);
+    assert(shrink.find("[\"summary\",[],[],[[\"t_param\",0]],[[\"t_param\",0]],[],0,0]") !=
+           string::npos);
+    assert(shrink.find("[\"origin\",0,2,\"expr\"]") != string::npos);
+
+    auto pilot = CoreWriter(CorePushShape(CoreProfile::Pilot)).Write();
+    assert(pilot.find("[\"grow\",0]") != string::npos);
+    assert(pilot.find("[\"e_push\",[\"p_local\",0],[\"e_lit\",0,\"1\"]]") != string::npos);
+    assert(pilot.find("[\"s_append\",[\"p_local\",0],[\"v_of\",[\"p_local\",0]],2]") !=
+           string::npos);
+    assert(pilot.find("[[\"t_param\",0]],[],0,0]") != string::npos);
+
+    auto pilotSummary = CorePushParamSummary(CoreProfile::Pilot);
+    CoreSummarizer(pilotSummary).Run();
+    auto pilotSummaryWire = CoreWriter(pilotSummary).Write();
+    assert(pilotSummaryWire.find("[\"summary\",[],[],[[\"t_param\",0]],[],0,0]") !=
+           string::npos);
+
+    auto shrinkSummary = CorePushParamSummary(CoreProfile::Shrink);
+    CoreSummarizer(shrinkSummary).Run();
+    auto shrinkSummaryWire = CoreWriter(shrinkSummary).Write();
+    assert(shrinkSummaryWire.find(
+               "[\"summary\",[],[[\"t_param\",0]],[[\"t_param\",0]],[],[],0,0]") !=
+           string::npos);
 }
 
 void AcceptsScalarStructFieldsOnAnImmutableBinding() {
@@ -1946,6 +2066,7 @@ int main() {
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
+    CoreShrinkPushAndSummaryCarryOriginsAndShrinks();
     AcceptsScalarStructFieldsOnAnImmutableBinding();
     RejectsStructsInThePilotProfile();
     RejectsAStoreToALetField();
