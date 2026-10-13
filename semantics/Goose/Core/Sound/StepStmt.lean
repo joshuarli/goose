@@ -164,6 +164,36 @@ private theorem statementPlaceForbiddenDisjoint {plans : Array (Array DemandPoin
     intro forbiddenRoot hforbiddenRoot checkedRoot hcheckedRoot
     exact disjoint forbiddenRoot hforbiddenRoot checkedRoot (included checkedRoot hcheckedRoot)
 
+private theorem statementPlaceForbiddenStaticDisjoint {plans : Array (Array DemandPoint)}
+    {path : List Nat} {st : Stmt} {tenv : TEnv} {penv : PEnv} {index : Nat}
+    {place : Place} {roots : List RootRef}
+    (ec : EvaluationContext m plans path (.statement st) .statement)
+    (access : ec.AccessMatches tenv penv)
+    (child : (DemandNode.statement st).child? index = some (.place place))
+    (checked : penv.access.placeRoots place = .ok roots) :
+    ∀ owner, owner ∈ ec.forbiddenOwners → DemandRootsDisjoint owner.roots roots := by
+  cases ec with
+  | pilot profile active => simp [EvaluationContext.forbiddenOwners]
+  | @shrink pc profile context =>
+    intro owner howner
+    let transition := context.child rfl index (.place place) .place child (by
+      simp [DemandNodeHasPhase, DemandNode.phaseMatches])
+    have hchildOwner := transition.forbiddenSubset owner howner
+    obtain ⟨checkedRoots, hchecked, hdisjoint⟩ :=
+      transition.context.placeWholeRootsChecked owner hchildOwner
+    have accessEq : pc.approvals.access = penv.access := by
+      have hAccessMod := access.2.2.1
+      have hAccessImpl := access.2.2.2.1
+      have hAccessCtx := access.2.2.2.2
+      cases hAccessValue : pc.approvals.access
+      rw [hAccessValue] at hAccessMod hAccessImpl hAccessCtx
+      unfold PEnv.access
+      congr 1
+    rw [accessEq] at hchecked
+    rw [checked] at hchecked
+    cases hchecked
+    exact hdisjoint
+
 private theorem statementStoreForbidden {W : World} {tenv : TEnv} {penv : PEnv}
     {env : Env} {s s' : St} {future : List VarId} {roots : List RootRef}
     {root : RootInst} {forbidden : List DemandOwner}
@@ -1186,12 +1216,162 @@ private theorem statementAssignWholeForbiddenRootAgreement
       simpa [heq] using hroot
   exact hforbidden owner hmem location.root ⟨element, #[], htype, hgam, hheader⟩
 
+private theorem statementAssignWholeTypeInputs
+    {tenv tenv' : TEnv} {sc tn tn' : Nat} {owner : Place} {replacement : Expr}
+    {org : OriginId}
+    (ht : tyStmt tenv sc (.assignWhole owner replacement org) tn = .ok (tenv', tn')) :
+    tenv.mod.profile = .shrink ∧ tenv' = tenv ∧
+    ∃ element target binding contents middle last,
+      (target = .grow element ∨ target = .growshrink element) ∧
+      tyPlace tenv owner tn = .ok (⟨target, binding, contents⟩, middle) ∧
+      tyExpr tenv replacement middle = .ok (target, last) ∧ tn' = last := by
+  simp only [tyStmt] at ht
+  inv at ht
+  obtain ⟨first, hshrink, _, target, binding, contents, middle, hplace, htail⟩ := ht
+  simp only [requireShrink] at hshrink
+  inv at hshrink
+  obtain ⟨hprofile, rfl⟩ := hshrink
+  have hprofile' : tenv.mod.profile = .shrink := by simpa using hprofile
+  cases target <;> simp only at htail <;> inv at htail
+  case grow element =>
+    obtain ⟨rt, last, hexpr, hsame, after, hrun, _, henv, htn⟩ := htail
+    have hsame' : rt = .grow element := by simpa using hsame
+    subst rt
+    simp only [checkOwnerRun] at hrun
+    inv at hrun
+    obtain ⟨_, hrunEq⟩ := hrun
+    exact ⟨hprofile', henv, element, .grow element, binding, contents, middle, last,
+      Or.inl rfl, hplace, hexpr, htn.trans hrunEq⟩
+  case growshrink element =>
+    obtain ⟨rt, last, hexpr, hsame, after, hrun, _, henv, htn⟩ := htail
+    have hsame' : rt = .growshrink element := by simpa using hsame
+    subst rt
+    simp only [checkOwnerRun] at hrun
+    inv at hrun
+    obtain ⟨_, hrunEq⟩ := hrun
+    exact ⟨hprofile', henv, element, .growshrink element, binding, contents, middle, last,
+      Or.inr rfl, hplace, hexpr, htn.trans hrunEq⟩
+
+private theorem statementAssignWholeCheckedOwnerFacts
+    {access : AccessEnv} {tenv : TEnv} {penv : PEnv} {p : Place} {owner : DemandOwner}
+    {target : Ty} {binding contents : Bool} {tn tn' : Nat} {rst rst' : RState}
+    {roots : List RootRef}
+    (haccess : access.mod = tenv.mod ∧ access.impl.vars = tenv.vars ∧
+      access.mod = penv.mod ∧ access.impl = penv.impl ∧ access.ctx = penv.ctx)
+    (howner : access.owner p = .ok owner)
+    (htype : tyPlace tenv p tn = .ok (⟨target, binding, contents⟩, tn'))
+    (hreplay : rpPlace penv p rst = .ok (roots, rst')) :
+    access = penv.access ∧ owner.ty = some target ∧
+      access.placeRoots p = .ok owner.roots ∧ RootsIncluded roots owner.roots := by
+  have hmod : tenv.mod = penv.mod := haccess.1.symm.trans haccess.2.2.1
+  have hvars : tenv.vars = penv.impl.vars :=
+    haccess.2.1.symm.trans (congrArg Impl.vars haccess.2.2.2.1)
+  have heq : access = penv.access := by
+    cases access
+    unfold PEnv.access
+    congr 1
+    · exact haccess.2.2.1
+    · exact haccess.2.2.2.1
+    · exact haccess.2.2.2.2
+  rw [heq] at howner ⊢
+  have hplaceType := tyPlace_accessType hmod hvars htype
+  simp only [AccessEnv.owner, hplaceType] at howner
+  cases hroots : penv.access.placeRoots p with
+  | error error => simp [hroots, Functor.map, Except.map] at howner
+  | ok staticRoots =>
+    simp [hroots, Functor.map, Except.map] at howner
+    subst owner
+    exact ⟨rfl, rfl, rfl,
+      rpPlace_accessRoots penv p rst roots rst' staticRoots hreplay hroots⟩
+
+private theorem statementAssignWholeMutationRoot
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {state : St}
+    {future : List VarId} {roots : List RootRef} {root : RootInst} {effect : Eff}
+    (frame : Frame m W tenv penv env state future)
+    (denotes : Gam env W.P roots root)
+    (recorded : ∀ target, target ∈ rootsTargets roots → target ∈ effect.shrinks) :
+    MutationRoots env W.P W.base (effectMutationRoots m penv.impl effect) root := by
+  have hknown (target : Target) (hshrink : target ∈ effect.shrinks) :
+      effectTargetRoot target ∈ effectMutationRoots m penv.impl effect := by
+    have htarget : target ∈ effectMutationTargets effect := by
+      simp only [effectMutationTargets, List.mem_append]
+      exact Or.inl (Or.inr hshrink)
+    have hroot : effectTargetRoot target ∈ effectTargetRoots (effectMutationTargets effect) :=
+      List.mem_map.mpr ⟨target, htarget, rfl⟩
+    unfold effectMutationRoots
+    split
+    · exact List.mem_append_left _ hroot
+    · exact hroot
+  obtain ⟨reference, hmem, hroot⟩ := denotes
+  cases reference with
+  | «local» x =>
+    rcases hroot with ⟨lv, si, hvar, hlookup, hroot⟩
+    obtain ⟨before, after, hscopes, _⟩ := List.lookup_eq_some_iff.mp hlookup
+    have hscope : (lv.scope, si) ∈ env.scopes := by
+      rw [hscopes]
+      exact List.mem_append_right _ List.mem_cons_self
+    exact Or.inr ⟨env.act, si, x, hroot, (frame.below _ hscope).1⟩
+  | global g =>
+    exact Or.inl ⟨.global g, hknown (.global g)
+      (recorded (.global g) (mem_rootsTargets_global hmem)), hroot⟩
+  | param i =>
+    exact Or.inl ⟨.param i, hknown (.param i)
+      (recorded (.param i) (mem_rootsTargets_param hmem)), hroot⟩
+
+private theorem statementAssignWholeTruncateBind
+    {location : Loc} {element : Ty} {state : St} {next : Unit → M α}
+    {post : α → St → Prop}
+    (hloc : LocTy state.store location (.growshrink element))
+    (hnext : ∀ destination, state.store.truncate location 0 = .ok destination →
+      Sat (next ()) { state with store := destination } post) :
+    Sat (truncateLoc location 0 >>= next) state post := by
+  obtain ⟨value, hread, hflat⟩ := hloc
+  cases value <;> simp only [FlatTy] at hflat
+  case resizable actual elements =>
+    rcases hflat with ⟨rfl, _⟩
+    obtain ⟨destination, hmodify⟩ := modify_total state.store location (Val.truncate 0)
+      (.resizable element elements) (.resizable element #[]) hread (by simp [Val.truncate])
+    have htruncate : state.store.truncate location 0 = .ok destination := by
+      simpa [Store.truncate] using hmodify
+    have heval : (truncateLoc location 0 >>= next) state =
+        next () { state with store := destination } := by
+      show M.bind' (truncateLoc location 0) next state = _
+      simp [M.bind', truncateLoc, htruncate]
+    unfold Sat
+    rw [heval]
+    exact hnext destination htruncate
+  all_goals contradiction
+
+private theorem statementAssignWholeOwnerEffects
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {source destination : St}
+    {future : List VarId} {location : Loc} {ownerRoots effectRoots : List RootRef}
+    {forbidden : List DemandOwner}
+    (hframe : Frame m W tenv penv env source future)
+    (howner : Gam env W.P ownerRoots location.root)
+    (heffect : MutationRoots env W.P W.base effectRoots location.root)
+    (hdisjoint : ∀ owner, owner ∈ forbidden →
+      DemandRootsDisjoint owner.roots ownerRoots)
+    (hagree : StoreLeExcept (fun r => r = location.root) source.store destination.store) :
+    PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+      forbidden source destination ∧
+    MutationFootprint env W.P W.base effectRoots source destination := by
+  constructor
+  · intro owner hmem r hsource
+    obtain ⟨element, elements, htype, hroot, hvalue⟩ := hsource
+    exact hagree r (Gam.root_ne_of_no_overlap hframe (hdisjoint owner hmem)
+      hroot howner)
+  · intro r hnot
+    apply hagree r
+    intro heq
+    exact hnot (heq.symm ▸ heffect)
+
 private theorem statementAssignWholeReplacement
     {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
     {before clear : St} {future : List VarId} {replacement : M Val}
     {observation : Observation} {shrinking : RootInst → Prop}
     {aliases : List RetainedAlias} {location : Loc} {element : Ty} {target : Ty}
-    {forbidden : List DemandOwner} {owner : DemandOwner}
+    {forbidden parentForbidden : List DemandOwner} {owner : DemandOwner}
+    {effectRoots : List RootRef}
     (htarget : target = .grow element ∨ target = .growshrink element)
     (hloc : LocTy before.store location target)
     (hclear : before.store.truncate location 0 = .ok clear.store)
@@ -1199,6 +1379,10 @@ private theorem statementAssignWholeReplacement
     (hmem : owner ∈ forbidden)
     (htype : owner.ty = some (.grow element) ∨ owner.ty = some (.growshrink element))
     (hgam : Gam env W.P owner.roots location.root)
+    (heffect : MutationRoots env W.P W.base effectRoots location.root)
+    (hsubset : ∀ owner, owner ∈ parentForbidden → owner ∈ forbidden)
+    (hdisjoint : ∀ excluded, excluded ∈ parentForbidden →
+      DemandRootsDisjoint excluded.roots owner.roots)
     (hrhs : Sat replacement clear (fun value evaluated =>
       Frame m W tenv penv env evaluated future ∧
       Footprint (insts env) (Dset W) clear evaluated ∧
@@ -1208,23 +1392,29 @@ private theorem statementAssignWholeReplacement
       RetainsAliases m W env clear.store evaluated.store aliases ∧
       PilotStoreLe m clear evaluated ∧ HasTy m W.G evaluated.store value target ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        forbidden clear evaluated)) :
+        forbidden clear evaluated ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation evaluated.store) ∧
+      MutationFootprint env W.P W.base effectRoots clear evaluated)) :
     Sat (do
       let value ← replacement
       match value with
       | .resizable .. => writeLoc location value
       | _ => fault .shape
-      pure (Flow.normal .unit)) clear (fun _ final =>
+      pure (Flow.normal .unit)) clear (fun flow final =>
       Frame m W tenv penv env final future ∧
       Footprint (insts env) (Dset W) clear final ∧
       PreservesRootTypes m W.G observation.roots clear.store final.store ∧
       PreservesValues m W.G observation.values clear.store final.store ∧
       ObservedSafe m W shrinking observation final.store ∧
       RetainsAliases m W env clear.store final.store aliases ∧
-      PilotStoreLe m clear final ∧ LocTy final.store location target) := by
+      PilotStoreLe m clear final ∧ LocTy final.store location target ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation final.store) ∧
+      PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
+        parentForbidden clear final ∧
+      MutationFootprint env W.P W.base effectRoots clear final ∧ flow = .normal .unit) := by
   refine Sat.bind hrhs ?_
   rintro value evaluated ⟨hframe, hfoot, hroots, hvalues, hsafe, hretained, hpilot,
-    htyped, hforbidden⟩
+    htyped, hforbidden, hclassified, hmutation⟩
   have hflat : FlatTy (.grow element) value := by
     rcases htarget with rfl | rfl
     · exact htyped
@@ -1255,9 +1445,18 @@ private theorem statementAssignWholeReplacement
   obtain ⟨hframePost, hfootPost, hrootsPost, hvaluesPost, hsafePost, hretainedPost,
       hpilotPost, hlocPost⟩ := statementAssignWholeWritePreservation
     hframe hsafe htarget hloc hclear hpath hagreement hwrite hitems
+  have hagreeWrite : StoreLeExcept (fun r => r = location.root)
+      evaluated.store destination :=
+    modify_roots_agree_except evaluated.store destination location
+      (fun _ => some (.resizable element elements)) (by simpa [Store.write] using hwrite)
+  obtain ⟨hforbiddenPost, hmutationPost⟩ := statementAssignWholeOwnerEffects
+    (destination := { evaluated with store := destination })
+    hframe hgam heffect hdisjoint hagreeWrite
   exact ⟨hframePost, hfoot.trans hfootPost, hroots.trans hrootsPost,
     hvalues.trans hvaluesPost, hsafePost, hretained.trans hretainedPost,
-    fun hprofile => StoreLe.trans (hpilot hprofile) (hpilotPost hprofile), hlocPost⟩
+    fun hprofile => StoreLe.trans (hpilot hprofile) (hpilotPost hprofile), hlocPost,
+    fun hprofile => hframe.classifiedParameters_advance (hclassified hprofile) hfootPost,
+    (hforbidden.subset hsubset).trans hforbiddenPost, hmutation.trans hmutationPost, trivial⟩
 
 private theorem statementExprChildSpec (ih : Specs m prof plans n)
     {path : List Nat} {st : Stmt}
@@ -2835,7 +3034,7 @@ private theorem step_stmt_a_core (ih : Specs m prof plans n) :
     (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
     (match st with
       | .letS .. | .assign .. | .assignOp .. | .rebind .. | .expr .. | .append ..
-        | .popN .. | .clear .. | .resize .. => True
+        | .popN .. | .clear .. | .resize .. | .assignWhole .. => True
       | _ => False) →
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
     ShrinkProtected W.D W.A (ec.mayShrink W.ownerP observation) →
@@ -5815,6 +6014,310 @@ private theorem step_stmt_a_core (ih : Specs m prof plans n) :
               hmutationPre.trans (statementSingleRootMutation
                 (append_except_owner _ _ _ _ _ happ) hchanged),
               by simp [Stmt.diverges]⟩
+  | assignWhole owner replacement org =>
+    obtain ⟨hprofile, htenv, element, target, binding, contents, middle, last,
+      htarget, hownerTy, hreplacementTy, htn⟩ := statementAssignWholeTypeInputs ht
+    subst tenv'
+    subst tn'
+    have hmProfile : m.profile = .shrink :=
+      (congrArg Module.profile hF.mod_t).symm.trans hprofile
+    rw [rpStmt] at hr
+    rcases (st_bind_ok _ _ _ _).1 hr with ⟨ownerRoots, r1, hownerRp, hrestRp⟩
+    rcases (st_bind_ok _ _ _ _).1 hrestRp with ⟨_, r2, hreads, hrestRp⟩
+    rcases (st_bind_ok _ _ _ _).1 hrestRp with ⟨_, r3, hshrinks, hrestRp⟩
+    rcases (st_bind_ok _ _ _ _).1 hrestRp with
+      ⟨replacementRoots, r4, hreplacementRp, hrestRp⟩
+    rcases (st_bind_ok _ _ _ _).1 hrestRp with ⟨_, r5, hwrites, hgrows⟩
+    have hfinal5E := (PMono.addGrows ownerRoots r5 () rst' hgrows).2
+    have hfinal4E := (PMono.addWrites ownerRoots r4 () r5 hwrites).2.trans hfinal5E
+    have hfinal3E := (rpExpr_mono hreplacementRp).2.trans hfinal4E
+    have hfinal2E := (PMono.addShrinks ownerRoots r2 () r3 hshrinks).2.trans hfinal3E
+    have hfinal1E := (PMono.addReads ownerRoots r1 () r2 hreads).2.trans hfinal2E
+    have hfinal5R := PMonoRebinds.addGrows ownerRoots r5 () rst' hgrows
+    have hfinal4R := (PMonoRebinds.addWrites ownerRoots r4 () r5 hwrites).trans hfinal5R
+    have hfinal3R := (rpExpr_rebinds_mono hreplacementRp).trans hfinal4R
+    have hfinal2R := (PMonoRebinds.addShrinks ownerRoots r2 () r3 hshrinks).trans hfinal3R
+    have hfinal1R := (PMonoRebinds.addReads ownerRoots r1 () r2 hreads).trans hfinal2R
+    have hE1 := hfinal1E.trans hE
+    have hE4 := hfinal4E.trans hE
+    obtain ⟨_, hinShrinks⟩ := statementAddShrinksOk ownerRoots r2 ((), r3) hshrinks
+    have hinShrinksFinal : ∀ t, t ∈ rootsTargets ownerRoots → t ∈ rst'.eff.shrinks := by
+      intro t ht
+      exact hfinal3E.2.2.2.1 t (hinShrinks t ht)
+    have hownerElem : target.ownerElem? = some element := by
+      rcases htarget with rfl | rfl <;> simp [Ty.ownerElem?]
+    simp only [execStmt]
+    have hchildP : (DemandNode.statement (.assignWhole owner replacement org)).child? 0 =
+        some (DemandNode.place owner) := by simp [DemandNode.child?, DemandNode.children]
+    have hphaseP : DemandNodeHasPhase (DemandNode.place owner) .place := by
+      simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+    have hvisibleP : ∀ x, x ∈ tenv.visible ↔
+        x ∈ (DemandNode.statement (.assignWhole owner replacement org)).visibleForChild
+          tenv.visible 0 := by
+      simp [DemandNode.visibleForChild]
+    have hresultP := statementPlaceChildSpec ih ec observation W tenv penv env s 0 owner
+      hchildP hactive haccess hprotected hobserved hclassified hp hF hvisibleP
+      (statementAssignWholePlaceInputSubset ec) _ _ _ _ _ _ _ _ hownerTy hownerRp hE1
+    refine Sat.bind hresultP ?_
+    rintro location sPlace ⟨hFPlace, hXPlace, hrootsPlace, hvaluesPlace, hsafePlace,
+      hretPlace, hpilotPlace, hplace, hgamPlace, hownerPlace, hforbiddenPlace,
+      hmutationPlace⟩
+    have hdisjointRuntime := statementPlaceForbiddenDisjoint ec haccess hchildP hownerRp
+    have hchildE :
+        (DemandNode.statement (.assignWhole owner replacement org)).child? 1 =
+          some (DemandNode.expression replacement) := by
+      simp [DemandNode.child?, DemandNode.children]
+    have hphaseE : DemandNodeHasPhase (DemandNode.expression replacement) .expression := by
+      simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+    let childEc := statementExprChildContext ec 1 replacement hchildE
+    have hFExprInput := statementAssignWholeExprInputFrame ec hactive hFPlace
+    have houtputE : childEc.outputFuture = ec.outputFuture := by
+      cases ec with
+      | pilot profile active =>
+        change (DemandNode.expression replacement).visibleAfter
+          ((DemandNode.statement (.assignWhole owner replacement org)).visibleForChild active 1) =
+          (DemandNode.statement (.assignWhole owner replacement org)).visibleAfter active
+        simp [DemandNode.visibleForChild, DemandNode.visibleAfter]
+      | shrink profile context =>
+        rename_i stmtPlanContext
+        let transition := context.child rfl 1 (DemandNode.expression replacement) .expression
+          hchildE hphaseE
+        have hexpectation : DemandNode.childExpectation?
+            (DemandNode.statement (.assignWhole owner replacement org))
+            stmtPlanContext.approvals.access
+            ⟨path, .statement, context.expected.frame.active, context.expected.frame.future,
+              context.expected.frame.retained⟩ 1 = some ⟨
+                (DemandNode.statement (.assignWhole owner replacement org)).visibleForChild
+                  context.expected.frame.active 1,
+                context.expected.frame.future⟩ := by
+          simp [DemandNode.childExpectation?, DemandNode.childFuture, hchildE]
+        have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
+        change transition.context.expected.frame.future = context.expected.frame.future
+        rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
+          hfuture]
+        simp [DemandNode.phaseFuture]
+    have hinputE : childEc.inputFuture = replacement.variables ++ ec.outputFuture := by
+      cases ec with
+      | pilot profile active =>
+        change replacement.variables ++
+          (DemandNode.statement (.assignWhole owner replacement org)).visibleForChild active 1 =
+          replacement.variables ++
+            (DemandNode.statement (.assignWhole owner replacement org)).visibleAfter active
+        simp [DemandNode.visibleForChild, DemandNode.visibleAfter]
+      | shrink profile context =>
+        rename_i stmtPlanContext
+        let transition := context.child rfl 1 (DemandNode.expression replacement) .expression
+          hchildE hphaseE
+        have hexpectation : DemandNode.childExpectation?
+            (DemandNode.statement (.assignWhole owner replacement org))
+            stmtPlanContext.approvals.access
+            ⟨path, .statement, context.expected.frame.active, context.expected.frame.future,
+              context.expected.frame.retained⟩ 1 = some ⟨
+                (DemandNode.statement (.assignWhole owner replacement org)).visibleForChild
+                  context.expected.frame.active 1,
+                context.expected.frame.future⟩ := by
+          simp [DemandNode.childExpectation?, DemandNode.childFuture, hchildE]
+        have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
+        change replacement.variables ++ transition.context.expected.frame.future =
+          replacement.variables ++ context.expected.frame.future
+        rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
+          hfuture]
+        simp [DemandNode.phaseFuture]
+    have hownerLoc : LocTy sPlace.store location target := by
+      rcases hplace with ⟨_, hloc, _⟩ |
+        ⟨x, lv, si, value, _, _, _, _, _, href, _⟩ |
+        ⟨_, _, _, _, _, _, _, _, _, hpath, _⟩
+      · exact access hp hloc hgamPlace (fun t ht =>
+          Or.inr (Or.inr (Or.inr (hE.2.2.2.1 t (hinShrinksFinal t ht)))))
+      · cases target <;> simp_all [Ty.ownerElem?, Ty.isRefLike]
+      · rw [hpath] at hownerElem
+        simp [Ty.ownerElem?] at hownerElem
+    have hheader : location.path = [] := hplace.ownerHeader (by simp [hownerElem])
+    have hflat : element.flat = true := statementOwnerElementFlat hplace hownerElem
+    have hownerGS : LocTy sPlace.store location (.growshrink element) := by
+      rcases htarget with rfl | rfl
+      · exact hownerLoc.grow_to_growshrink
+      · exact hownerLoc
+    have hmutationPhase : DemandNodeHasPhase
+        (DemandNode.statement (.assignWhole owner replacement org)) .mutation := by
+      simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+    let mutationEc := statementMutationContext ec hmutationPhase
+    have hmutationFuture : mutationEc.outputFuture = childEc.inputFuture := by
+      rw [hinputE]
+      cases ec with
+      | pilot pilotProfile active =>
+        have hfalse : False := by
+          rw [hmProfile] at pilotProfile
+          cases pilotProfile
+        exact hfalse.elim
+      | shrink profile context =>
+        have hout := EvaluationContext.phase_outputFuture
+          (parent := EvaluationContext.shrink profile context) rfl .mutation hmutationPhase
+        simpa [mutationEc, statementMutationContext, DemandNode.phaseFuture,
+          EvaluationContext.outputFuture, NodeContext.outputFuture] using hout
+    have haccessMutation :=
+      (ec.phase_accessMatches_iff rfl .mutation hmutationPhase tenv penv).2 haccess
+    have hactiveMutation := ec.phase_activeMatches rfl .mutation hmutationPhase tenv hactive
+    have hretainedMutation : ∀ alias, alias ∈ ec.retained → alias ∈ mutationEc.retained := by
+      intro alias hmem
+      exact ec.phase_retained_subset rfl .mutation hmutationPhase hmem
+    change mutationEc.AccessMatches tenv penv at haccessMutation
+    change mutationEc.ActiveMatches tenv at hactiveMutation
+    cases hmutation : mutationEc with
+    | pilot pilotProfile active =>
+      have hfalse : False := by
+        rw [hmProfile] at pilotProfile
+        cases pilotProfile
+      exact hfalse.elim
+    | @shrink pc profile mutationContext =>
+      rw [hmutation] at haccessMutation hactiveMutation hretainedMutation hmutationFuture
+      have hdirect :
+          (DemandNode.statement (.assignWhole owner replacement org)).directShrinkPlace? =
+            some owner := by simp [DemandNode.directShrinkPlace?]
+      obtain ⟨ownerRequest, hownerResult, _⟩ :=
+        mutationContext.sourceAt.directShrinkOwner_result rfl hdirect pc.approvals.accessMatches
+      obtain ⟨approval, _, hsameOwner, _, happrovalFrame⟩ :=
+        mutationContext.directShrinkApproval hdirect hownerResult
+      have hownerP : Gam env W.ownerP ownerRoots location.root :=
+        hownerPlace ⟨element, htarget⟩
+      have hownerFacts := statementCheckedShrinkOwnerFacts (W := W)
+        haccessMutation hownerResult hownerTy hownerRp hgamPlace
+      have hownerFactsP := statementCheckedShrinkOwnerFacts (W := W)
+        haccessMutation hownerResult hownerTy hownerRp hownerP
+      have hcheckedFacts := statementAssignWholeCheckedOwnerFacts
+        haccessMutation hownerResult hownerTy hownerRp
+      have hvisibleActive : ∀ x, x ∈ tenv.visible → x ∈ approval.point.active := by
+        intro x hx
+        exact (happrovalFrame.1 x).2 ((hactiveMutation x).2 hx)
+      have hfutureNeeded : ∀ x, x ∈ childEc.inputFuture →
+          x ∈ approval.point.future := by
+        intro x hx
+        apply (happrovalFrame.2.1 x).2
+        have hx' : x ∈ (EvaluationContext.shrink profile mutationContext).outputFuture := by
+          rw [hmutationFuture]
+          exact hx
+        exact hx'
+      have happrovalAccess : approval.access = pc.approvals.access :=
+        Option.some.inj (approval.accessMatches.symm.trans pc.approvals.accessMatches)
+      have haccessEq : approval.access = penv.access := happrovalAccess.trans hownerFacts.1
+      have happrovalTy : approval.shrinkOwner.ty = some target := by
+        rw [hsameOwner]
+        exact hownerFacts.2.1
+      have happrovalRoot : Gam env W.P approval.shrinkOwner.roots location.root := by
+        rw [hsameOwner]
+        exact hownerFacts.2.2
+      have hretainedNeeded : ∀ alias, alias ∈ ec.retained →
+          alias ∈ approval.point.retained := by
+        intro alias hmem
+        exact (happrovalFrame.2.2 alias).2 (hretainedMutation alias hmem)
+      have hclassifiedPlace := hF.classifiedParameters_advance
+        (hclassified profile) hXPlace
+      have hauthority := statementDirectShrinkAuthority mutationContext profile hdirect
+        hownerResult hownerFactsP.2.1 htarget hownerFactsP.2.2 hownerP hFExprInput hp
+        hclassifiedPlace hsafePlace.typed hheader hownerLoc
+        (fun t ht => hE.2.2.2.1 t (hinShrinksFinal t ht))
+      have hmay := ec.phase_mayShrink_iff rfl .mutation hmutationPhase
+        W.ownerP observation location.root
+      change mutationEc.mayShrink W.ownerP observation location.root ↔
+        ec.mayShrink W.ownerP observation location.root at hmay
+      rw [hmutation] at hmay
+      have hauthority' : ec.mayShrink W.ownerP observation location.root ∨
+          ∃ a si x, location.root = .local a si x ∧ W.base ≤ si :=
+        hauthority.1.elim (fun h => Or.inl (hmay.1 h)) Or.inr
+      refine statementAssignWholeTruncateBind hownerGS ?_
+      intro destination htruncate
+      obtain ⟨hFClear, hfootClear, hrootsClear, hvaluesClear, hsafeClear,
+        hretainedClear, hpilotClear⟩ :=
+        statementResizableTruncatePreservation hFExprInput haccessEq happrovalTy
+          htarget happrovalRoot hownerLoc hvisibleActive hfutureNeeded profile hprotected
+          hsafePlace hauthority' hheader hflat hauthority.2 hretainedNeeded htruncate
+      have hXClear := hXPlace.trans hfootClear
+      have hclassifiedClear : m.profile = .shrink →
+          ClassifiedParameters m W.P W.D observation destination := by
+        intro hprofile'
+        exact hF.classifiedParameters_advance (hclassified hprofile') hXClear
+      have hvisibleE : ∀ x, x ∈ tenv.visible ↔
+          x ∈ (DemandNode.statement (.assignWhole owner replacement org)).visibleForChild
+            tenv.visible 1 := by
+        simp [DemandNode.visibleForChild]
+      have hresultE := statementExprChildSpecAtFrame ih ec observation W tenv tenv penv env
+        { sPlace with store := destination } 1 replacement hchildE hactive haccess hprotected
+        hsafeClear hclassifiedClear hp childEc rfl hFClear hvisibleE ec.retained
+        (fun alias hmem => ec.child_retained_subset rfl 1
+          (DemandNode.expression replacement) .expression hchildE hphaseE hmem)
+        middle last target r3 r4 replacementRoots hreplacementTy hreplacementRp hE4
+      have haccessSome : ec.access? = some penv.access := by
+        have hphaseAccess : mutationEc.access? = ec.access? := by
+          cases ec <;> rfl
+        rw [← hphaseAccess, hmutation]
+        exact congrArg some hownerFacts.1
+      have hownerResultP : penv.access.owner owner = .ok ownerRequest := by
+        rw [← hownerFacts.1]
+        exact hownerResult
+      have hownerForbidden : ownerRequest ∈ childEc.forbiddenOwners := by
+        exact ec.child_assignWhole_owner rfl 1 (DemandNode.expression replacement)
+          .expression hchildE hphaseE penv.access haccessSome owner replacement org
+          rfl rfl ownerRequest hownerResultP
+      have hrequestType : ownerRequest.ty = some (.grow element) ∨
+          ownerRequest.ty = some (.growshrink element) := by
+        rcases htarget with rfl | rfl
+        · exact Or.inl hownerFacts.2.1
+        · exact Or.inr hownerFacts.2.1
+      have hcheckedRoots : penv.access.placeRoots owner = .ok ownerRequest.roots := by
+        rw [← hcheckedFacts.1]
+        exact hcheckedFacts.2.2.1
+      have hstaticDisjoint := statementPlaceForbiddenStaticDisjoint ec haccess hchildP
+        hcheckedRoots
+      have hparentSubset : ∀ excluded, excluded ∈ ec.forbiddenOwners →
+          excluded ∈ childEc.forbiddenOwners := by
+        exact ec.child_forbidden_subset rfl 1 (DemandNode.expression replacement)
+          .expression hchildE hphaseE
+      have hchanged := statementAssignWholeMutationRoot hFExprInput hgamPlace
+        hinShrinksFinal
+      have hforbiddenClear := statementStoreForbidden
+        (s' := { sPlace with store := destination }) hFExprInput hgamPlace
+        hdisjointRuntime (truncate_except_owner sPlace.store destination location 0 htruncate)
+      have hmutationClear := statementSingleRootMutation
+        (s := sPlace) (s' := { sPlace with store := destination })
+        (truncate_except_owner sPlace.store destination location 0 htruncate) hchanged
+      refine statementAssignWholeReplacement (m := m) (tenv := tenv) (penv := penv)
+        (observation := observation) (shrinking := ec.mayShrink W.ownerP observation)
+        (before := sPlace)
+        (clear := { sPlace with store := destination }) (future := childEc.outputFuture)
+        (aliases := ec.retained) (forbidden := childEc.forbiddenOwners)
+        (parentForbidden := ec.forbiddenOwners)
+        (effectRoots := effectMutationRoots m penv.impl rst'.eff)
+        htarget hownerLoc htruncate hheader hownerForbidden hrequestType
+        hownerFacts.2.2 hchanged hparentSubset hstaticDisjoint ?_ |>.mono ?_
+      · refine hresultE.mono ?_
+        intro value evaluated ⟨hFEvaluated, hXEvaluated, hrootsEvaluated,
+          hvaluesEvaluated, hsafeEvaluated, hretainedEvaluated, hpilotEvaluated,
+          hvalueTy, _, _, hforbiddenParentEvaluated, hforbiddenChildEvaluated,
+          hmutationEvaluated⟩
+        exact ⟨hFEvaluated, hXEvaluated, hrootsEvaluated, hvaluesEvaluated,
+          hsafeEvaluated, hretainedEvaluated, hpilotEvaluated, hvalueTy,
+          hforbiddenChildEvaluated,
+          (fun hprofile' => hFClear.classifiedParameters_advance
+            (hclassifiedClear hprofile') hXEvaluated),
+          hmutationEvaluated.weaken
+            (effectMutationRoots.mono m penv.impl hfinal4E hfinal4R)⟩
+      · intro flow final ⟨hFFinal, hXFinal, hrootsFinal, hvaluesFinal, hsafeFinal,
+          hretainedFinal, hpilotFinal, _, _, hforbiddenFinal, hmutationFinal, hflow⟩
+        have hX := hXClear.trans hXFinal
+        have hforbiddenPre := hforbiddenPlace.trans
+          (hforbiddenClear.trans hforbiddenFinal)
+        have hmutationPre :=
+          ((hmutationPlace.weaken
+            (effectMutationRoots.mono m penv.impl hfinal1E hfinal1R)).trans
+            hmutationClear).trans hmutationFinal
+        exact ⟨houtputE ▸ hFFinal, hX.toS,
+          (hrootsPlace.trans hrootsClear).trans hrootsFinal,
+          (hvaluesPlace.trans hvaluesClear).trans hvaluesFinal, hsafeFinal,
+          (hretPlace.trans hretainedClear).trans hretainedFinal,
+          fun hprofile' => StoreLe.trans (hpilotPlace hprofile')
+            (StoreLe.trans (hpilotClear hprofile') (hpilotFinal hprofile')),
+          TSame.refl _, hT.ext hX.dom hcur, hforbiddenPre, hmutationPre,
+          by subst flow; simp [Stmt.diverges]⟩
   | _ => exact hsel.elim
 
 /-- Lift the binding and write step with the shrink classification carried by
@@ -5826,7 +6329,7 @@ theorem step_stmt_a (ih : Specs m prof plans n) :
     (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
     (match st with
       | .letS .. | .assign .. | .assignOp .. | .rebind .. | .expr .. | .append ..
-        | .popN .. | .clear .. | .resize .. => True
+        | .popN .. | .clear .. | .resize .. | .assignWhole .. => True
       | _ => False) →
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
     ShrinkProtected W.D W.A (ec.mayShrink W.ownerP observation) →
