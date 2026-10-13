@@ -13,12 +13,13 @@ function, with specialization numbers and source line numbers masked, and
 the set of source functions whose code changed is compared with the set the
 edit is expected to change.
 
-Prints one JSON object per case, then a summary object. Fields that need
-code-generation units or a build store, which do not exist yet, are null so
-that later work fills them in. Exits 1 if any case fails.
+Prints one JSON object per case, then a summary object. Synthetic records leave
+the native-object reuse fields null because they use the single-file build
+path. Exits 1 if any case fails.
 
-The Aincrad3 workload is not implemented here: `--workload aincrad3
---source DIR` exits 2.
+The Aincrad3 mode builds the core entry through `goose build --units` in an
+isolated copy of the supplied checkout. It records the cold build, a no-op,
+a comment edit, and a body edit; it never writes to `--source`.
 """
 
 import argparse
@@ -52,23 +53,225 @@ NOT_YET = ("frontend_phases", "implementation_digests_changed",
            "native_compiler_peak_rss")
 
 
-def measured(argv, log_dir, name):
+def measured(argv, log_dir, name, cwd=None, env=None):
     """(exit code, stdout, stderr, wall ms, CPU ms, peak RSS bytes) of one
     process; the last three are None where the platform cannot say."""
     if tc.IS_WINDOWS:
         start = time.perf_counter()
-        code, out, err = tc.run_capture(argv)
+        p = subprocess.run([str(a) for a in argv], capture_output=True, text=True,
+                           errors="replace", cwd=cwd, env=env)
+        code, out, err = p.returncode, p.stdout, p.stderr
         return code, out, err, (time.perf_counter() - start) * 1000, None, None
     outf, errf = log_dir / f"{name}.stdout", log_dir / f"{name}.stderr"
     with open(outf, "wb") as fo, open(errf, "wb") as fe:
         start = time.perf_counter()
-        p = subprocess.Popen([str(a) for a in argv], stdout=fo, stderr=fe)
+        p = subprocess.Popen([str(a) for a in argv], stdout=fo, stderr=fe, cwd=cwd, env=env)
         _, status, usage = os.wait4(p.pid, 0)
         ms = (time.perf_counter() - start) * 1000
         p.returncode = os.waitstatus_to_exitcode(status)
     cpu = (usage.ru_utime + usage.ru_stime) * 1000
     peak = usage.ru_maxrss * (1 if tc.IS_MACOS else 1024)
     return (p.returncode, tc.decode(outf.read_bytes()), tc.decode(errf.read_bytes()), ms, cpu, peak)
+
+
+AINCRAD3_CASES = ("E00", "E01", "E02", "E03")
+AINCRAD3_ENTRY = Path("src/world-core-continue.goose")
+AINCRAD3_INCLUDES = (Path("native/world_event_storage.h"), Path("native/m4_world_metrics.h"))
+
+
+def aincrad3_edit(source, case):
+    """Apply one reviewed, output-preserving change to the core entry."""
+    text = source.read_text(encoding="utf-8")
+    if case == "E02":
+        before = "fn argument_u64("
+        after = "// Added above the entry's argument parser.\n\n" + before
+        if text.count(before) != 1:
+            raise ValueError(f"expected one occurrence of {before!r} in {source}")
+        text = text.replace(before, after, 1)
+    elif case == "E03":
+        start = text.index("fn argument_u64(")
+        end = text.index("\nfn argument_u32(", start)
+        body = text[start:end]
+        before = "result = result * 10 + digit;"
+        after = "result = digit + result * 10;"
+        if body.count(before) != 1:
+            raise ValueError(f"expected one occurrence of {before!r} in argument_u64 in {source}")
+        text = text[:start] + body.replace(before, after, 1) + text[end:]
+    else:
+        raise ValueError(f"{case} is not a source edit for the Aincrad3 core entry")
+    source.write_text(text, encoding="utf-8", newline="\n")
+
+
+def aincrad3_unit_kinds(names):
+    """Counts of changed code, locations, support and other units."""
+    kinds = {"code": 0, "globals": 0, "locations": 0, "literals": 0,
+             "program": 0, "native_support": 0, "other": 0}
+    for name in names:
+        if name == "native.c":
+            kinds["native_support"] += 1
+        elif name == "program.c":
+            kinds["program"] += 1
+        elif name.endswith(".globals.c"):
+            kinds["globals"] += 1
+        elif name.startswith("literals") and name.endswith(".c"):
+            kinds["literals"] += 1
+        elif name.endswith("_loc.c") or name.endswith(".loc.c"):
+            kinds["locations"] += 1
+        elif name.endswith(".c"):
+            kinds["code"] += 1
+        else:
+            kinds["other"] += 1
+    return kinds
+
+
+class Aincrad3Build:
+    """One core-entry build with its native-unit report."""
+
+    def __init__(self, goose, source, work, env, verify, label):
+        self.report_path = work / f"{label}.report.json"
+        self.report_path.unlink(missing_ok=True)
+        self.exe = work / ("world-core-continue" + tc.EXE_SUFFIX)
+        command = [str(goose), "build", "--units"]
+        if verify:
+            command.append("--verify-reuse")
+        command += ["-O0"]
+        for header in AINCRAD3_INCLUDES:
+            command += ["--include", str(source / header)]
+        command += ["--build-report", str(self.report_path), "-o", str(self.exe),
+                    str(source / AINCRAD3_ENTRY)]
+        (self.exit, self.stdout, self.stderr, self.wall_ms, self.cpu_ms, self.peak_rss) = measured(
+            command, work, label, cwd=source, env=env)
+        try:
+            self.report = json.loads(self.report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self.report = {}
+        self.native = (self.report.get("extensions") or {}).get("native_compile") or {}
+
+    def record(self, case, requested):
+        native = self.native
+        invocations = native.get("native_compiler_invocations", [])
+        verification = native.get("verification_invocations", [])
+        changed = aincrad3_unit_kinds(native.get("units_text_changed", []))
+        biggest = max(invocations, key=lambda x: x.get("peak_rss_bytes") or 0, default={})
+        return {
+            "case": case,
+            "workload": "aincrad3",
+            "requested": requested,
+            "ok": self.exit == 0,
+            "failures": [] if self.exit == 0 else [(self.stdout + self.stderr)[-300:]],
+            "title": {
+                "E00": "cold core-entry build",
+                "E01": "unchanged no-op build",
+                "E02": "comment and blank line above argument_u64",
+                "E03": "commute digit addition in argument_u64",
+            }[case],
+            "compiler_exit": self.exit,
+            "no_op": native.get("no_op"),
+            "frontend_phases": native.get("frontend_phases"),
+            "contexts_checked": (self.report.get("counts") or {}).get("checked_contexts"),
+            "implementation_digests_changed": None,
+            "units_text_changed": sum(changed.values()),
+            "changed_unit_kinds": changed,
+            "native_compiler_invocations": len(invocations),
+            "units_per_native_invocation": [len(item.get("units", [])) for item in invocations],
+            "verification_invocations": len(verification),
+            "objects_reused": native.get("objects_reused"),
+            "objects_missed": native.get("objects_missed"),
+            "link_skipped": (native.get("link") or {}).get("ran") is False,
+            "compiler_wall_ms": rounded(self.wall_ms),
+            "compiler_cpu_ms": rounded(self.cpu_ms),
+            "compiler_peak_rss": self.peak_rss,
+            "native_compiler_peak_rss": biggest.get("peak_rss_bytes"),
+            "native_compiler_wall_ms": rounded((biggest.get("wall_seconds") or 0) * 1000)
+            if biggest else None,
+        }
+
+
+def run_aincrad3(cases, goose, source, work):
+    """Run selected rows in one isolated source copy and one units store."""
+    if source is None:
+        print("error: --workload aincrad3 needs --source DIR", file=sys.stderr)
+        return 2
+    source = Path(source).resolve()
+    if not (source / AINCRAD3_ENTRY).is_file():
+        print(f"error: Aincrad3 core entry is missing: {source / AINCRAD3_ENTRY}", file=sys.stderr)
+        return 2
+    for header in AINCRAD3_INCLUDES:
+        if not (source / header).is_file():
+            print(f"error: Aincrad3 native header is missing: {source / header}", file=sys.stderr)
+            return 2
+    if not (source / "src/protocol/schema_generated.goose").is_file():
+        print("error: Aincrad3 generated protocol source is missing from --source; "
+              "stage the existing generated file before running the matrix", file=sys.stderr)
+        return 2
+
+    work.mkdir(parents=True, exist_ok=True)
+    session = work / "aincrad3"
+    shutil.rmtree(session, ignore_errors=True)
+    staged = session / "source"
+    session.mkdir(parents=True)
+    shutil.copytree(source, staged, ignore=shutil.ignore_patterns(".git", ".work", "build", "target"))
+    entry = staged / AINCRAD3_ENTRY
+    if not entry.is_file():
+        print(f"error: staged Aincrad3 core entry is missing: {entry}", file=sys.stderr)
+        return 2
+    home = session / "home"
+    tmp = session / "tmp"
+    home.mkdir()
+    tmp.mkdir()
+    env = dict(os.environ, GOOSE_HOME=str(home), TMPDIR=str(tmp))
+
+    ordered = [case for case in AINCRAD3_CASES if case in cases]
+    # A changed build needs a warm baseline, even when a focused invocation
+    # asks for only one edit row.
+    if "E00" not in ordered:
+        ordered.insert(0, "E00")
+    records = []
+    bad = []
+    for index, case in enumerate(ordered):
+        requested = case in cases
+        if case in ("E02", "E03"):
+            try:
+                aincrad3_edit(entry, case)
+            except (OSError, ValueError) as error:
+                print(f"error: {error}", file=sys.stderr)
+                return 2
+        # The no-op row needs the real short-circuit. Other rows check every
+        # reused object against a fresh native compilation.
+        build = Aincrad3Build(goose, staged, session, env,
+                              verify=(case != "E01"), label=f"{index:02d}-{case}")
+        record = build.record(case, requested)
+        if case == "E00" and build.exit == 0:
+            if not build.native.get("link", {}).get("ran") or not build.native.get("native_compiler_invocations"):
+                record["ok"] = False
+                record["failures"].append("cold build did not compile and link native units")
+        elif case == "E01" and build.exit == 0:
+            if (build.native.get("no_op") is not True or build.native.get("frontend_phases") or
+                    build.native.get("native_compiler_invocations") or
+                    (build.native.get("link") or {}).get("ran")):
+                record["ok"] = False
+                record["failures"].append("unchanged build did not short-circuit before frontend, compiler, and link")
+        elif case == "E02" and build.exit == 0:
+            changed = record["changed_unit_kinds"]
+            if (build.native.get("no_op") or changed["locations"] != 1 or changed["code"] or changed["globals"] or
+                    changed["literals"] or changed["program"] or changed["native_support"] or changed["other"]):
+                record["ok"] = False
+                record["failures"].append(f"comment edit did not change exactly one location unit: {changed}")
+        elif case == "E03" and build.exit == 0:
+            changed = record["changed_unit_kinds"]
+            if (build.native.get("no_op") or changed["code"] != 1 or changed["locations"] or changed["globals"] or
+                    changed["literals"] or changed["program"] or changed["native_support"] or changed["other"]):
+                record["ok"] = False
+                record["failures"].append(f"body edit did not change exactly one code unit: {changed}")
+        print(json.dumps(record))
+        records.append(record)
+        if not record["ok"]:
+            bad.append(case)
+            break
+    print(json.dumps({"summary": True, "workload": "aincrad3", "cases": len(records),
+                      "passed": sum(record["ok"] for record in records), "failed": len(bad),
+                      "source_entry": str(AINCRAD3_ENTRY), "optimization": "-O0"}))
+    return 1 if bad else 0
 
 
 class Build:
@@ -260,14 +463,20 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--goose", required=True, help="the compiler")
     ap.add_argument("--workload", required=True, choices=("synthetic", "aincrad3"))
-    ap.add_argument("--source", help="the Aincrad3 checkout (that workload only)")
+    ap.add_argument("--source", help="a read-only Aincrad3 source copy (that workload only)")
     ap.add_argument("--case", action="append", help="a matrix row; repeatable. Default: all "
                     "rows that are source edits, and E00")
     ap.add_argument("--work", default=str(ROOT / ".work" / "edit_matrix"))
     a = ap.parse_args()
+    goose = Path(a.goose).resolve()
+    work = Path(a.work).resolve()
     if a.workload == "aincrad3":
-        print("error: the aincrad3 workload is not implemented", file=sys.stderr)
-        return 2
+        cases = a.case or list(AINCRAD3_CASES)
+        unknown = sorted(set(cases) - set(AINCRAD3_CASES))
+        if unknown:
+            print(f"error: unsupported Aincrad3 matrix row(s): {', '.join(unknown)}", file=sys.stderr)
+            return 2
+        return run_aincrad3(cases, goose, a.source, work)
     known = ["E00", *edits.EDITS]
     cases = a.case or known
     for c in cases:
@@ -275,8 +484,6 @@ def main():
             why = edits.NOT_SOURCE_EDITS.get(c, "no such row")
             print(f"error: {c}: not a case this runner can generate ({why})", file=sys.stderr)
             return 2
-    goose = Path(a.goose).resolve()
-    work = Path(a.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     # The compiler's cache lives with the run, never the user's own.
     os.environ["GOOSE_HOME"] = str(work / "home")
