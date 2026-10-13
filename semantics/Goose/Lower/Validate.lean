@@ -1179,6 +1179,28 @@ theorem Core.tyPlace_elem_success_origin_bound {env : Core.TEnv} {v : Core.View}
     change (Except.error _ : Core.V (Core.PlaceInfo × Nat)) = .ok _ at h
     cases h
 
+theorem Core.tyExpr_un_success_origin_bound {env : Core.TEnv} {op : Core.UnOp}
+    {e : Core.Expr} {org : Core.OriginId} {fuel : Nat}
+    {ty : Core.Ty} {fuel' : Nat}
+    (h : (Core.tyExpr env (.un op e org)).run fuel = .ok (ty, fuel')) :
+    org < env.mod.origins.size := by
+  by_cases horg : org < env.mod.origins.size
+  · exact horg
+  · simp [Core.tyExpr, Core.checkOrg, Core.rej, horg] at h
+    change (Except.error _ : Core.V (Core.Ty × Nat)) = .ok _ at h
+    cases h
+
+theorem Core.tyExpr_bin_success_origin_bound {env : Core.TEnv} {op : Core.BinOp}
+    {a b : Core.Expr} {org : Core.OriginId} {fuel : Nat}
+    {ty : Core.Ty} {fuel' : Nat}
+    (h : (Core.tyExpr env (.bin op a b org)).run fuel = .ok (ty, fuel')) :
+    org < env.mod.origins.size := by
+  by_cases horg : org < env.mod.origins.size
+  · exact horg
+  · simp [Core.tyExpr, Core.checkOrg, Core.rej, horg] at h
+    change (Except.error _ : Core.V (Core.Ty × Nat)) = .ok _ at h
+    cases h
+
 theorem lowerEnv_slots_size (m : Core.Module) (vars : Array Core.LocalVar) :
     (lowerEnv m vars).slots.size = vars.size := by
   simp [lowerEnv]
@@ -1365,5 +1387,140 @@ theorem lowerPlace_elem_symbolRun_of_tyPlace {le : LEnv} {scopeCount : Nat}
   apply lowerPlace_elem_symbolRun_of hview hindex
   rw [horigins]
   exact Core.tyPlace_elem_success_origin_bound hty
+
+/-! These support judgments admit only the place, view, and expression forms
+whose lowerings have a SymbolRun proof. Each node carries its successful Core
+typing run; recursive constructors therefore describe a typed source tree. -/
+def HasTypedPlace (env : Core.TEnv) (p : Core.Place) : Prop :=
+  ∃ fuel info fuel', (Core.tyPlace env p).run fuel = .ok (info, fuel')
+
+def HasTypedView (env : Core.TEnv) (v : Core.View) : Prop :=
+  ∃ fuel info fuel', (Core.tyView env v).run fuel = .ok (info, fuel')
+
+def HasTypedExpr (env : Core.TEnv) (e : Core.Expr) : Prop :=
+  ∃ fuel ty fuel', (Core.tyExpr env e).run fuel = .ok (ty, fuel')
+
+mutual
+  inductive V001Place (env : Core.TEnv) : Core.Place → Prop where
+    | var {x : Core.VarId} (h : HasTypedPlace env (.var x)) : V001Place env (.var x)
+    | global {g : Core.GlobalId} (h : HasTypedPlace env (.global g)) :
+        V001Place env (.global g)
+    | field {owner : Core.Place} {index : Nat}
+        (h : HasTypedPlace env (.field owner index)) (ownerOk : V001Place env owner) :
+        V001Place env (.field owner index)
+    | deref {e : Core.Expr} (h : HasTypedPlace env (.deref e)) (exprOk : V001Expr env e) :
+        V001Place env (.deref e)
+    | elem {v : Core.View} {index : Core.Expr} {org : Core.OriginId}
+        (h : HasTypedPlace env (.elem v index org)) (viewOk : V001View env v)
+        (indexOk : V001Expr env index) : V001Place env (.elem v index org)
+
+  inductive V001View (env : Core.TEnv) : Core.View → Prop where
+    | of {p : Core.Place} (h : HasTypedView env (.of p)) (placeOk : V001Place env p) :
+        V001View env (.of p)
+    | val {e : Core.Expr} (h : HasTypedView env (.val e)) (exprOk : V001Expr env e) :
+        V001View env (.val e)
+
+  inductive V001Expr (env : Core.TEnv) : Core.Expr → Prop where
+    | lit {t : Core.IntTy} {n : Int} (h : HasTypedExpr env (.lit t n)) :
+        V001Expr env (.lit t n)
+    | bool {b : Bool} (h : HasTypedExpr env (.bool b)) : V001Expr env (.bool b)
+    | read {p : Core.Place} (h : HasTypedExpr env (.read p)) (placeOk : V001Place env p) :
+        V001Expr env (.read p)
+    | un {op : Core.UnOp} {e : Core.Expr} {org : Core.OriginId}
+        (h : HasTypedExpr env (.un op e org)) (exprOk : V001Expr env e) :
+        V001Expr env (.un op e org)
+    | bin {op : Core.BinOp} {a b : Core.Expr} {org : Core.OriginId}
+        (h : HasTypedExpr env (.bin op a b org)) (leftOk : V001Expr env a)
+        (rightOk : V001Expr env b) : V001Expr env (.bin op a b org)
+    | cmp {op : Core.CmpOp} {a b : Core.Expr}
+        (h : HasTypedExpr env (.cmp op a b)) (leftOk : V001Expr env a)
+        (rightOk : V001Expr env b) : V001Expr env (.cmp op a b)
+end
+
+mutual
+  theorem lowerPlace_v001_symbolRun {le : LEnv} {scopeCount : Nat}
+      {env : Core.TEnv} {p : Core.Place} (hshape : V001Place env p)
+      (hslots : env.vars.size = le.slots.size)
+      (hglobals : env.globalLimit ≤ le.globals.size)
+      (horigins : le.mod.origins.size = env.mod.origins.size) :
+      ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace p) := by
+    cases hshape with
+    | var hrun =>
+      rcases hrun with ⟨fuel, info, fuel', hrun⟩
+      intro ls
+      exact lowerPlace_var_symbolRun_of_tyPlace hrun hslots
+    | global hrun =>
+      rcases hrun with ⟨fuel, info, fuel', hrun⟩
+      intro ls
+      exact lowerPlace_global_symbolRun_of_tyPlace hrun hglobals
+    | field hrun ownerOk =>
+      intro ls
+      exact lowerPlace_field_symbolRun_of
+        (fun ls => lowerPlace_v001_symbolRun ownerOk hslots hglobals horigins ls) _ ls
+    | deref hrun exprOk =>
+      exact lowerPlace_deref_symbolRun_of
+        (fun ls => lowerExpr_v001_symbolRun exprOk hslots hglobals horigins ls)
+    | elem hrun viewOk indexOk =>
+      rcases hrun with ⟨fuel, info, fuel', hrun⟩
+      exact lowerPlace_elem_symbolRun_of_tyPlace hrun
+        (fun ls => lowerView_v001_symbolRun viewOk hslots hglobals horigins ls)
+        (fun ls => lowerExpr_v001_symbolRun indexOk hslots hglobals horigins ls)
+        horigins
+
+  theorem lowerView_v001_symbolRun {le : LEnv} {scopeCount : Nat}
+      {env : Core.TEnv} {v : Core.View} (hshape : V001View env v)
+      (hslots : env.vars.size = le.slots.size)
+      (hglobals : env.globalLimit ≤ le.globals.size)
+      (horigins : le.mod.origins.size = env.mod.origins.size) :
+      ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerView v) := by
+    cases hshape with
+    | of hrun placeOk =>
+      exact lowerView_of_symbolRun_of
+        (fun ls => lowerPlace_v001_symbolRun placeOk hslots hglobals horigins ls)
+    | val hrun exprOk =>
+      exact lowerView_val_symbolRun_of
+        (fun ls => lowerExpr_v001_symbolRun exprOk hslots hglobals horigins ls)
+
+  theorem lowerExpr_v001_symbolRun {le : LEnv} {scopeCount : Nat}
+      {env : Core.TEnv} {e : Core.Expr} (hshape : V001Expr env e)
+      (hslots : env.vars.size = le.slots.size)
+      (hglobals : env.globalLimit ≤ le.globals.size)
+      (horigins : le.mod.origins.size = env.mod.origins.size) :
+      ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr e) := by
+    cases hshape with
+    | lit hrun =>
+      intro ls
+      exact lowerExpr_lit_symbolRun _ _
+    | bool hrun =>
+      intro ls
+      exact lowerExpr_bool_symbolRun _
+    | read hrun placeOk =>
+      intro ls
+      exact lowerExpr_read_symbolRun_of
+        (lowerPlace_v001_symbolRun placeOk hslots hglobals horigins ls)
+    | un hrun exprOk =>
+      rcases hrun with ⟨fuel, ty, fuel', hrun⟩
+      have horg := Core.tyExpr_un_success_origin_bound hrun
+      rw [← horigins] at horg
+      intro ls
+      exact lowerExpr_un_symbolRun_of
+        (fun ls => lowerExpr_v001_symbolRun exprOk hslots hglobals horigins ls)
+        _ horg _ ls
+    | bin hrun leftOk rightOk =>
+      rcases hrun with ⟨fuel, ty, fuel', hrun⟩
+      have horg := Core.tyExpr_bin_success_origin_bound hrun
+      rw [← horigins] at horg
+      intro ls
+      exact lowerExpr_bin_symbolRun_of
+        (fun ls => lowerExpr_v001_symbolRun leftOk hslots hglobals horigins ls)
+        (fun ls => lowerExpr_v001_symbolRun rightOk hslots hglobals horigins ls)
+        _ horg _ ls
+    | cmp hrun leftOk rightOk =>
+      intro ls
+      exact lowerExpr_cmp_symbolRun_of
+        (fun ls => lowerExpr_v001_symbolRun leftOk hslots hglobals horigins ls)
+        (fun ls => lowerExpr_v001_symbolRun rightOk hslots hglobals horigins ls)
+        _ ls
+end
 
 end Goose.Lower
