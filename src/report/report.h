@@ -18,6 +18,7 @@ inline void ReportSharingJson(class JsonOut &j);
 inline void ReportUnitsJson(class JsonOut &j);
 class JsonOut;
 inline void DepsWrite(JsonOut &j);   // deps_report.h
+inline void ReportNativeCompileJson(class JsonOut &j);
 
 constexpr const char *kBuildReportFormat = "goose-build-report/1";
 
@@ -551,7 +552,8 @@ inline void BuildReportWrite() {
     ReportSharingJson(j);
     j.Key("units");
     ReportUnitsJson(j);
-    j.Key("native_compile").Null();
+    j.Key("native_compile");
+    ReportNativeCompileJson(j);
     DepsWrite(j);
     j.EndObj();
     j.EndObj();

@@ -25,6 +25,8 @@ add_executable(goose
     src/progress.cpp
     src/progress.h
     src/report/os.cpp
+    src/units/os.cpp
+    src/units/build.h
     src/report/hooks.h
     src/report/report.h
     src/report/deps_report.h

@@ -38,6 +38,15 @@ def check(report, c_file):
         if not cond:
             bad.append(message)
 
+    # A build that ran nothing: the report says so and carries nothing else.
+    if report.get("input", {}).get("mode") == "no-op":
+        need(report.get("format") == FORMAT, "format differs")
+        nc = report.get("extensions", {}).get("native_compile") or {}
+        need(nc.get("no_op") is True, "a no-op report does not say no_op")
+        need(not nc.get("frontend_phases") and not nc.get("native_compiler_invocations")
+             and not nc.get("link", {}).get("ran"), "a no-op report says something ran")
+        return bad
+
     need(report.get("format") == FORMAT, f"format is {report.get('format')!r}, not {FORMAT!r}")
     counts = report.get("counts", {})
     functions = report.get("functions", [])

@@ -107,6 +107,7 @@ inline bool PathExists(const string &path) {
     std::error_code ec;
     auto exists = filesystem::exists(filesystem::path(path), ec);
     DepNotePathProbe(path, exists);
+    if (input_recorder) input_recorder->Probe(path, exists);
     return exists;
 }
 
