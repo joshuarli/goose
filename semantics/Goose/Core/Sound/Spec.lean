@@ -90,15 +90,26 @@ theorem ViewOk.mono {s s' : Store} {vw : ViewVal} {el : Ty} (hle : StoreLe s s')
       (fun h => Or.inl (LocTy.mono hle h))
       (fun h => Or.inr (LocTy.mono hle h))⟩⟩
 
-/-- A sampled view realizes the alias chosen from its checked source. Fixed
-runs retain their sampled bounds; resizable runs retain the owner header.
-The bound-location fact makes a retained owner usable after each body. -/
+/-- A sampled view realizes the alias chosen from its checked source. Values
+and fixed arrays retain their sampled slice; limited and resizable owners retain
+their header. Static source typing chooses the alias independently of the runtime
+resize flag. The bound-location fact makes a retained owner usable after a body. -/
 inductive ViewAliases (m : Module) (W : World) (penv : PEnv) (env : Env) (s : Store)
     (source : View) (vw : ViewVal) (el : Ty) : Prop
   | fixed (resizable : vw.resizable = false)
+      (sourceClass : (∃ e, source = .val e) ∨
+        (∃ place count, source = .of place ∧
+          penv.access.placeType? place = some (.arr el count)))
       (realized : ∀ path alias, penv.access.aliasView path source = .ok [alias] →
         alias.ty = .slice .readOnly el ∧
           AliasAt m W env s alias (.slice vw.loc vw.start vw.len))
+  | limited (resizable : vw.resizable = false) (place : Place) (capacity : Nat)
+      (sourceEq : source = .of place)
+      (typeLookup : penv.access.placeType? place = some (.limited el capacity))
+      (bound : ¬ Unbound m W.G vw.loc (.limited el capacity))
+      (realized : ∀ path alias, penv.access.aliasPlace path place = .ok [alias] →
+        alias.ty = .ref .mutable (.limited el capacity) ∧
+          AliasAt m W env s alias (.ref vw.loc))
   | owner (resizable : vw.resizable = true) (place : Place) (owner : Ty)
       (sourceEq : source = .of place)
       (ownerType : owner = .grow el ∨ owner = .growshrink el)

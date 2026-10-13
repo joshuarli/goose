@@ -127,21 +127,57 @@ theorem Gam.notUnbound_of_access {m : Module} {W : World} {env : Env} {l : Loc} 
       have hbound : g < W.G := hp _ (hin _ (mem_rootsTargets_param hq)) _ hr g rfl
       omega
 
-/-- Fixed views retain the run produced by their checked evaluation. -/
+/-- Value and fixed-array views retain the run produced by checked evaluation. -/
 theorem ViewAliases.ofFixed {m : Module} {W : World} {penv : PEnv} {env : Env} {s : Store}
     {source : View} {vw : ViewVal} {el : Ty} {state state' : RState} {rho : List RootRef}
     (hresizable : vw.resizable = false)
+    (hsourceClass : (∃ e, source = .val e) ∨
+      (∃ place count, source = .of place ∧
+        penv.access.placeType? place = some (.arr el count)))
     (htype : penv.access.viewElement? source = some el)
     (hreplay : rpView penv source state = .ok (rho, state'))
     (hview : ViewOk s vw el) (hroot : Gam env W.P rho vw.loc.root) :
     ViewAliases m W penv env s source vw el := by
-  apply ViewAliases.fixed hresizable
+  apply ViewAliases.fixed hresizable hsourceClass
   intro path alias halias
   obtain ⟨aliasEl, roots, hlookup, _, hshape⟩ :=
     AccessEnv.aliasView_singleton penv.access path source alias halias
   have heq : aliasEl = el := Option.some.inj (hlookup.symm.trans htype)
   refine ⟨?_, AliasAt.ofAliasView halias htype hreplay hview hroot⟩
   rw [hshape, heq]
+
+/-- A limited view retains its checked header reference so sampled physical
+runs can survive changes to the owner's visible length. -/
+theorem ViewAliases.ofLimited {m : Module} {W : World} {penv : PEnv} {env : Env} {s : Store}
+    {p : Place} {vw : ViewVal} {el : Ty} {capacity : Nat}
+    {state state' : RState} {rho : List RootRef}
+    (hresizable : vw.resizable = false) (hflat : el.flat = true)
+    (htype : penv.access.placeType? p = some (.limited el capacity))
+    (hreplay : rpPlace penv p state = .ok (rho, state'))
+    (hreference : HasTy m W.G s (.ref vw.loc) (.ref .mutable (.limited el capacity)))
+    (hroot : Gam env W.P rho vw.loc.root)
+    (hbound : ¬ Unbound m W.G vw.loc (.limited el capacity)) :
+    ViewAliases m W penv env s (.of p) vw el := by
+  apply ViewAliases.limited hresizable p capacity rfl htype hbound
+  intro path alias halias
+  obtain ⟨aliasTy, roots, hlookup, hroots, hshape⟩ :=
+    AccessEnv.aliasPlace_singleton penv.access path p alias halias
+  have heq : aliasTy = .limited el capacity := Option.some.inj (hlookup.symm.trans htype)
+  have hty : alias.ty = .ref .mutable (.limited el capacity) := by rw [hshape, heq]
+  refine ⟨hty, ?_, ?_⟩
+  · rw [hty]
+    obtain ⟨l, heq, hloc⟩ := hreference
+    cases heq
+    refine ⟨vw.loc, rfl, Or.inl ?_⟩
+    rcases hloc with ⟨_, hloc, hheader⟩ | ⟨hslice, _, _⟩
+    · exact ⟨by simpa [Ty.refTarget] using hflat, hloc, hheader⟩
+    · simp [Ty.isSlice] at hslice
+  · intro r hr
+    change vw.loc.root = r at hr
+    subst r
+    rw [hshape]
+    exact Gam.subset hroot (fun q hq =>
+      rpPlace_accessRoots penv p state rho state' roots hreplay hroots q hq)
 
 /-- Resizable views retain the checked owner location rather than its old length. -/
 theorem ViewAliases.ofOwner {m : Module} {W : World} {penv : PEnv} {env : Env} {s : Store}
@@ -162,14 +198,19 @@ theorem ViewAliases.ofOwner {m : Module} {W : World} {penv : PEnv} {env : Env} {
   · rw [hshape, heq]
   · rcases howner with rfl | rfl <;> exact Or.inl (by simpa [Ty.refTarget] using hflat)
 
-/-- A pilot store extension preserves either kind of source realization. -/
+/-- A pilot store extension preserves each statically chosen source realization. -/
 theorem ViewAliases.mono {m : Module} {W : World} {penv : PEnv} {env : Env}
     {s s' : Store} {source : View} {vw : ViewVal} {el : Ty}
     (hle : StoreLe s s') (h : ViewAliases m W penv env s source vw el) :
     ViewAliases m W penv env s' source vw el := by
   cases h with
-  | fixed hresize hrealized =>
-    apply ViewAliases.fixed hresize
+  | fixed hresize hsource hrealized =>
+    apply ViewAliases.fixed hresize hsource
+    intro path alias halias
+    obtain ⟨hty, hvalue, hroots⟩ := hrealized path alias halias
+    exact ⟨hty, hvalue.mono hle, hroots⟩
+  | limited hresize p capacity hsource htype hbound hrealized =>
+    apply ViewAliases.limited hresize p capacity hsource htype hbound
     intro path alias halias
     obtain ⟨hty, hvalue, hroots⟩ := hrealized path alias halias
     exact ⟨hty, hvalue.mono hle, hroots⟩
@@ -193,5 +234,19 @@ theorem AliasAt.ownerLocation {m : Module} {W : World} {env : Env} {s : Store}
   rcases hloc with ⟨_, hloc, _⟩ | ⟨hslice, _, _⟩
   · exact hloc.resolve_right hbound
   · rcases howner with rfl | rfl <;> simp [Ty.isSlice] at hslice
+
+/-- A retained, bound limited reference supplies its current header typing. -/
+theorem AliasAt.limitedLocation {m : Module} {W : World} {env : Env} {s : Store}
+    {alias : RetainedAlias} {l : Loc} {el : Ty} {capacity : Nat}
+    (htype : alias.ty = .ref .mutable (.limited el capacity))
+    (hbound : ¬ Unbound m W.G l (.limited el capacity))
+    (h : AliasAt m W env s alias (.ref l)) : LocTy s l (.limited el capacity) := by
+  have htyped := h.1
+  rw [htype] at htyped
+  obtain ⟨l', heq, hloc⟩ := htyped
+  cases heq
+  rcases hloc with ⟨_, hloc, _⟩ | ⟨hslice, _, _⟩
+  · exact hloc.resolve_right hbound
+  · simp [Ty.isSlice] at hslice
 
 end Goose.Core.Sound
