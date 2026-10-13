@@ -1126,4 +1126,73 @@ theorem rpBlockValue_accessRoots_reverse {m : Module} (penv : PEnv)
 
 end
 
+/-- A successful owner query exposes the roots used by the place query. -/
+private theorem accessOwner_roots {access : AccessEnv} {place : Place} {owner : DemandOwner}
+    (ownerResult : access.owner place = .ok owner) :
+    access.placeRoots place = .ok owner.roots := by
+  unfold AccessEnv.owner at ownerResult
+  cases htype : access.placeType? place with
+  | none => simp [htype, reject] at ownerResult
+  | some ty =>
+    simp only [htype] at ownerResult
+    obtain ⟨roots, hroots, hpure⟩ := (ex_bind_ok _ _ _).1 ownerResult
+    have howner : owner = (⟨some ty, roots⟩ : DemandOwner) := (ex_pure_ok _ _).1 hpure
+    simpa only [howner] using hroots
+
+/-- Every target requested by the expected direct mutation owner is recorded by
+whole-block replay, regardless of the number or family of enclosing children. -/
+theorem DemandExpectedSourceAt.directShrink_owner_block_targets
+    {m : Module} {owner : Nat} {path : List Nat} {node : DemandNode}
+    {expected : DemandExpectedPoint} {block : Block} {ownerPlace : Place}
+    {shrinkOwner : DemandOwner}
+    (sourceAt : DemandExpectedSourceAt m owner path node .mutation expected)
+    (root : demandRoot? m owner = some (.block block))
+    (direct : node.directShrinkPlace? = some ownerPlace)
+    (env : PEnv) (moduleOk : ModOk m) (envMod : env.mod = m)
+    (accessMatches : demandAccess? m owner = some env.access)
+    (ownerResult : env.access.owner ownerPlace = .ok shrinkOwner)
+    (before after : RState) (roots : List RootRef) (range : Nat × Nat)
+    (replay : rpBlockValue env [] block before = .ok ((roots, range), after)) :
+    shrinkOwner ∈ expected.shrinkOwners ∧
+      ∀ target, target ∈ rootsTargets shrinkOwner.roots → target ∈ after.eff.shrinks := by
+  refine ⟨sourceAt.directShrinkOwner rfl direct accessMatches ownerResult, ?_⟩
+  obtain ⟨leafEnv, leafBefore, leafRoots, ownerState, hmod, himpl, hctx, howner,
+    hrecorded⟩ :=
+      DemandExpectedSourceAt.directShrink_block_replay sourceAt root direct env before after
+        roots range replay
+  have haccessEq : leafEnv.access = env.access := by
+    simp only [PEnv.access, hmod, himpl, hctx]
+  have hstatic : leafEnv.access.placeRoots ownerPlace = .ok shrinkOwner.roots := by
+    rw [haccessEq]
+    exact accessOwner_roots ownerResult
+  have hincluded : RootsIncluded shrinkOwner.roots leafRoots :=
+    rpPlace_accessRoots_reverse leafEnv moduleOk (hmod.trans envMod) ownerPlace leafBefore
+      leafRoots ownerState shrinkOwner.roots howner hstatic
+  intro target htarget
+  apply hrecorded target
+  obtain ⟨reference, hreference, htarget⟩ := List.mem_filterMap.mp htarget
+  exact List.mem_filterMap.mpr ⟨reference, hincluded reference hreference, htarget⟩
+
+/-- Expected direct owner targets are part of the context effect used by runtime
+shrink protection, including mutations nested beneath arbitrary source children. -/
+theorem DemandExpectedSourceAt.directShrink_owner_context_targets
+    {m : Module} {impl : Impl} {ctx : Context} {effect : Eff}
+    {owner : Nat} {path : List Nat} {node : DemandNode}
+    {expected : DemandExpectedPoint} {ownerPlace : Place} {shrinkOwner : DemandOwner}
+    (sourceAt : DemandExpectedSourceAt m owner path node .mutation expected)
+    (root : demandRoot? m owner = some (.block impl.body))
+    (direct : node.directShrinkPlace? = some ownerPlace)
+    (moduleOk : ModOk m)
+    (accessMatches : demandAccess? m owner = some (⟨m, impl, ctx⟩ : AccessEnv))
+    (ownerResult : (⟨m, impl, ctx⟩ : AccessEnv).owner ownerPlace = .ok shrinkOwner)
+    (contextEffect : ContextEff m impl ctx effect) :
+    shrinkOwner ∈ expected.shrinkOwners ∧
+      ∀ target, target ∈ rootsTargets shrinkOwner.roots → target ∈ effect.shrinks := by
+  obtain ⟨roots, range, after, replay, effectEq⟩ := contextEffect
+  obtain ⟨howner, htargets⟩ :=
+    DemandExpectedSourceAt.directShrink_owner_block_targets sourceAt root direct
+      ⟨m, impl, ctx, []⟩ moduleOk rfl accessMatches ownerResult
+      ⟨impl.params.size, {}⟩ after roots range replay
+  exact ⟨howner, by simpa only [effectEq] using htargets⟩
+
 end Goose.Core.Sound
