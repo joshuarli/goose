@@ -410,7 +410,16 @@ Candidate `f0aa066`. Debug compiler, busy host: counts are exact, times are one 
 
 Checks on the merged tree: the units edit matrix passes every row with reuse verification on (cold 7 units; warm no-op runs nothing; comment edit recompiles one locations unit and no code unit; leaf edit one unit; contract changes rebuild everything and return warm; damaged, truncated and half-published entries are detected and rebuilt; a failing edit reports its error and no stale success), a seeded 60-step random sequence never diverges from a clean build, 575 corpus programs build from units with none failing, locality and dependency checks pass, the full suite is green and default output equals the reference.
 
-**Aincrad3's core entry does not build in units mode**, for two reasons in its included native headers, neither a defect of the workload: they read runtime-internal state that exists only when the runtime is pasted into the same translation unit (and guard against the separate-runtime form with an `#error`), and they spell compiler-generated C type names. Stable naming kept struct names that appear in extern signatures but not a slice type derived from one. The public corpus has the same hole: the 54 corpus programs that link C of their own are skipped by the units corpus. This is item `B8`.
+Before `B8`, Aincrad3's core entry did not build in units mode for two reasons in its included native headers: they read runtime-internal state that exists only when the runtime is pasted into the same translation unit, and they spell compiler-generated C type names. The public corpus had the same unqualified boundary for programs that link C of their own.
+
+After `B8`, the core entry builds as 459 units at Goose `-O0`. A run with the real package and schemas exits successfully after one bounded step and writes its checkpoint. The first native build produced all 459 objects but its link target directory disappeared before the linker ran; repeating with the executable directly under the scratch checkout reused all 459 objects, linked, and ran. This makes the successful row a recovery build rather than a clean cold-build measurement:
+
+| Build | Frontend | Units | Native objects | Link | Result |
+|---|---|---:|---|---|---|
+| Recovery after failed link | ran | 459 | 459 reused, 0 missed | ran | executable ran one step and wrote a checkpoint |
+| Warm, nothing changed | did not run | 0 changed | 0 compiler processes | skipped | warnings replayed; executable retained |
+
+The report records 14,642 checked contexts, 7,430 emitted bodies and a 1.55 GiB compiler peak. The host was busy before the run, so its elapsed and phase times are discarded: **perf gate deferred: host busy**. Edit-locality rows follow from the `B5` Aincrad3 matrix rather than this recovery run.
 
 A smaller Aincrad3 entry point that needs no native headers (2,228 specializations) does build, as 38 units, at Goose `-O0`:
 
