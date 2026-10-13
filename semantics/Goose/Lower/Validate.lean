@@ -56,6 +56,8 @@ def Effect.SymbolRefsValid (le : LEnv) (scopeCount : Nat) : Effect → Prop
   | .enter sc | .leave sc => sc < scopeCount
   | _ => True
 
+/-! These are the GIR-V001 table-index facts for an instruction. They bound its SSA operands,
+source-table references, origins, and successor blocks; they do not establish operation typing. -/
 structure Inst.SymbolsWithin (le : LEnv) (scopeCount valueCount blockCount : Nat) (i : Inst) : Prop where
   uses : ∀ v ∈ i.uses, v < valueCount
   origin : ∀ o, i.origin = some o → o < le.mod.origins.size
@@ -115,7 +117,8 @@ theorem Inst.SymbolsWithin.term {le : LEnv} {scopeCount valueCount blockCount : 
   · simp [instScopeRefs]
   · simpa [instTargetRefs] using htargets
 
-/-- Dense definitions and in-range instruction references at every builder step. -/
+/-! The lowering state satisfies the GIR-V001 table-index invariant: definitions are dense, and
+every instruction reference names an entry in its corresponding table. This is not a type invariant. -/
 structure LS.SymbolWF (le : LEnv) (scopeCount : Nat) (ls : LS) : Prop where
   definitions : ls.DenseDefinitions
   instructions : ∀ i ∈ ls.insts, Inst.SymbolsWithin le scopeCount ls.vals.size ls.blocks.size i
@@ -807,6 +810,35 @@ theorem lowerPlace_var_symbolRun {le : LEnv} {scopeCount : Nat} (x : Goose.Core.
     simp [Op.origin] at ho
   · simpa [Op.SymbolRefsValid] using hx
 
+theorem lowerPlace_global_symbolRun {le : LEnv} {scopeCount : Nat}
+    (g : Goose.Core.GlobalId) {ls : LS} (hg : g < le.globals.size) :
+    LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace (.global g)) := by
+  change LS.SymbolRun le scopeCount ls (fun v => [v]) (emitDef (.globalAddr g))
+  apply LS.SymbolRun.emitDef
+  · intro hlive v hv
+    simp [Op.uses] at hv
+  · intro o ho
+    simp [Op.origin] at ho
+  · simpa [Op.SymbolRefsValid] using hg
+
+theorem lowerPlace_field_symbolRun_of {le : LEnv} {scopeCount : Nat}
+    {owner : Goose.Core.Place}
+    (howner : ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace owner)) :
+    ∀ i ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace (.field owner i)) := by
+  intro i ls
+  change LS.SymbolRun le scopeCount ls (fun v => [v])
+    (do let r ← lowerPlace owner; emitDef (.fieldAddr r i))
+  apply LS.SymbolRun.bind (howner ls)
+  intro r mid hmid hcMid hr
+  apply LS.SymbolRun.emitDef
+  · intro live v hv
+    simp [Op.uses] at hv
+    subst v
+    exact hr live r (by simp)
+  · intro o ho
+    simp [Op.origin] at ho
+  · simp [Op.SymbolRefsValid]
+
 theorem lowerExpr_read_var_symbolRun {le : LEnv} {scopeCount : Nat} (x : Goose.Core.VarId)
     {ls : LS} (hx : x < le.slots.size) :
     LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr (.read (.var x))) := by
@@ -824,12 +856,12 @@ theorem lowerExpr_read_var_symbolRun {le : LEnv} {scopeCount : Nat} (x : Goose.C
   · simp [Op.SymbolRefsValid]
 
 theorem lowerExpr_read_symbolRun_of {le : LEnv} {scopeCount : Nat}
-    (hplace : ∀ p ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace p)) :
-    ∀ p ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr (.read p)) := by
-  intro p ls
+    {p : Goose.Core.Place} {ls : LS}
+    (hplace : LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace p)) :
+    LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr (.read p)) := by
   change LS.SymbolRun le scopeCount ls (fun v => [v])
     (do let r ← lowerPlace p; emitDef (.load r))
-  apply LS.SymbolRun.bind (hplace p ls)
+  apply LS.SymbolRun.bind hplace
   intro r ls1 hls1 hc1 hr
   apply LS.SymbolRun.emitDef
   · intro live u hu
@@ -946,14 +978,106 @@ theorem lowerExpr_bin_symbolRun_of {le : LEnv} {scopeCount : Nat}
     · simp [Op.SymbolRefsValid]
   exact hrunAt.toSymbolRun
 
-theorem lowerExprs_symbolRun_of {le : LEnv} {scopeCount : Nat}
-    (hexpr : ∀ e ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr e)) :
-    ∀ es : List Goose.Core.Expr, ∀ ls,
+theorem lowerExpr_cmp_symbolRun_of {le : LEnv} {scopeCount : Nat}
+    {a b : Goose.Core.Expr}
+    (hleft : ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr a))
+    (hright : ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr b)) :
+    ∀ op ls,
+      LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr (.cmp op a b)) := by
+  intro op ls
+  have hrunAt : LS.SymbolRunAt le scopeCount ls
+      (LS.valueRefs fun v => [v]) (lowerExpr (.cmp op a b)) := by
+    change LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun v => [v])
+      (do let x ← lowerExpr a
+          let y ← lowerExpr b
+          match (← valTy x) with
+          | .data (.int t) => emitDef (.cmp op t x y)
+          | _ => emitDef (.boolCmp op x y))
+    apply LS.SymbolRunAt.bind ((hleft ls).toSymbolRunAt (advB_lowerExpr a))
+    intro x mid hmid hcMid hrefsX hadvX hdeadX
+    apply LS.SymbolRunAt.bind ((hright mid).toSymbolRunAt (advB_lowerExpr b))
+    intro y mid2 hmid2 hcMid2 hrefsY hadvY hdeadY
+    change LS.SymbolRunAt le scopeCount mid2 (LS.valueRefs fun v => [v])
+      (valTy x >>= fun ty =>
+        match ty with
+        | .data (.int t) => emitDef (.cmp op t x y)
+        | _ => emitDef (.boolCmp op x y))
+    have hstable : ∃ ty, valTy x le mid2 = (ty, mid2) := by
+      refine ⟨(valTy x le mid2).1, Prod.ext rfl ?_⟩
+      exact valTy_run x le mid2
+    have hty : LS.SymbolRunAt le scopeCount mid2 (fun _ _ => []) (valTy x) :=
+      LS.SymbolRunAt.stable hstable (by simp)
+    apply LS.SymbolRunAt.bind hty
+    intro ty mid3 hmid3 hcMid3 _ hadv3 hdead3
+    have hoperBound : ∀ (live : mid3.cur.isSome) (v : ValueId),
+        v ∈ [x, y] → v < mid3.vals.size := by
+      intro live v hv
+      rcases List.mem_cons.mp hv with hvx | hvy
+      · have hvxEq : v = x := by simpa using hvx
+        subst v
+        have hmidLive : mid.cur.isSome := by
+          cases hcur : mid.cur with
+          | none =>
+            have hclosed2 := hdeadY hcur
+            have hclosed3 := hdead3 hclosed2
+            simp [hclosed3] at live
+          | some _ => simp
+        have hmem : SymbolRef.value x ∈ LS.valueRefs (fun v : ValueId => [v]) x mid := by
+          simp [LS.valueRefs, hmidLive]
+        have hbound := hrefsX (.value x) hmem
+        change x < mid.vals.size at hbound
+        exact Nat.lt_of_lt_of_le hbound (Nat.le_trans hadvY.vals hadv3.vals)
+      · have hvyEq : v = y := by simpa using hvy
+        subst v
+        have hmid2Live : mid2.cur.isSome := by
+          cases hcur : mid2.cur with
+          | none =>
+            have hclosed := hdead3 hcur
+            simp [hclosed] at live
+          | some _ => simp
+        have hmem : SymbolRef.value y ∈ LS.valueRefs (fun v : ValueId => [v]) y mid2 := by
+          simp [LS.valueRefs, hmid2Live]
+        have hbound := hrefsY (.value y) hmem
+        change y < mid2.vals.size at hbound
+        exact Nat.lt_of_lt_of_le hbound hadv3.vals
+    have hrunDef (q : Op) (huses : ∀ v ∈ q.uses, v ∈ [x, y])
+        (horg : ∀ o, q.origin = some o → o < le.mod.origins.size)
+        (hrefs : Op.SymbolRefsValid le q) :
+        LS.SymbolRunAt le scopeCount mid3 (LS.valueRefs fun v => [v]) (emitDef q) := by
+      apply LS.SymbolRunAt.emitDef
+      · intro live v hv
+        exact hoperBound live v (huses v hv)
+      · exact horg
+      · exact hrefs
+    cases ty with
+    | data t =>
+      cases t with
+      | int t =>
+        change LS.SymbolRunAt le scopeCount mid3 (LS.valueRefs fun v => [v])
+          (emitDef (.cmp op t x y))
+        exact hrunDef _ (by simp [Op.uses])
+          (by intro o ho; simp [Op.origin] at ho) (by simp [Op.SymbolRefsValid])
+      | _ =>
+        change LS.SymbolRunAt le scopeCount mid3 (LS.valueRefs fun v => [v])
+          (emitDef (.boolCmp op x y))
+        exact hrunDef _ (by simp [Op.uses])
+          (by intro o ho; simp [Op.origin] at ho) (by simp [Op.SymbolRefsValid])
+    | view _ _ =>
+      change LS.SymbolRunAt le scopeCount mid3 (LS.valueRefs fun v => [v])
+        (emitDef (.boolCmp op x y))
+      exact hrunDef _ (by simp [Op.uses])
+        (by intro o ho; simp [Op.origin] at ho) (by simp [Op.SymbolRefsValid])
+  exact hrunAt.toSymbolRun
+
+theorem lowerExprs_symbolRun_of {le : LEnv} {scopeCount : Nat} :
+    ∀ es : List Goose.Core.Expr,
+      (∀ e ∈ es, ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr e)) →
+      ∀ ls,
       LS.SymbolRun le scopeCount ls (fun vs => vs) (lowerExprs es) := by
   intro es
   induction es with
   | nil =>
-    intro ls hls hcur vs ls' hrun
+    intro _ ls hls hcur vs ls' hrun
     simp only [lowerExprs, pure_run] at hrun
     rcases Prod.mk.inj hrun with ⟨rfl, rfl⟩
     refine ⟨hls, hcur, ?_, ?_⟩
@@ -961,13 +1085,16 @@ theorem lowerExprs_symbolRun_of {le : LEnv} {scopeCount : Nat}
     · intro hlive v hv
       simp at hv
   | cons e rest ih =>
-    intro ls hls hcur vs ls' hrun
+    intro hexpr ls hls hcur vs ls' hrun
     simp only [lowerExprs, bind_eq] at hrun
     obtain ⟨v, ls1, h1, vs', ls2, h2, h3⟩ := hrun
     rw [pure_run] at h3
     rcases Prod.mk.inj h3 with ⟨rfl, rfl⟩
-    obtain ⟨hls1, hc1, hdead1, hids1⟩ := hexpr e ls hls hcur v ls1 h1
-    obtain ⟨hls2, hc2, hdead2, hids2⟩ := ih ls1 hls1 hc1 vs' ls2 h2
+    obtain ⟨hls1, hc1, hdead1, hids1⟩ := hexpr e (by simp) ls hls hcur v ls1 h1
+    obtain ⟨hls2, hc2, hdead2, hids2⟩ :=
+      ih (by
+        intro e' he'
+        exact hexpr e' (by simp [he'])) ls1 hls1 hc1 vs' ls2 h2
     have hadv := advB_lowerExprs rest le ls1 vs' ls2 h2
     refine ⟨hls2, hc2, ?_, ?_⟩
     · intro hdead
