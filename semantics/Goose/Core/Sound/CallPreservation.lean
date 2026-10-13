@@ -1,4 +1,4 @@
-import Goose.Core.Sound.Frame
+import Goose.Core.Sound.Protection
 
 /-!
 Calls preserve the caller's demanded bindings and the values already sampled
@@ -68,12 +68,38 @@ structure Observation where
   roots : RootInst → Ty → Prop
   values : Val → Ty → Prop
 
+/-- A computation with no inherited caller bindings or sampled operands. -/
+def Observation.empty : Observation :=
+  ⟨fun _ _ => False, fun _ _ => False⟩
+
+/-- A nested call inherits its caller's observations as well as observations
+already inherited by that caller. Both sets must remain usable. -/
+def Observation.union (a b : Observation) : Observation :=
+  ⟨fun r T => a.roots r T ∨ b.roots r T, fun v T => a.values v T ∨ b.values v T⟩
+
 /-- An inherited observation carries full declared typing, which held-value
 validity alone cannot establish for scalars, owners or typed references. -/
 structure Observed (m : Module) (G : Nat) (observation : Observation) (s : Store) : Prop where
   roots : ∀ r T, observation.roots r T →
     ∃ v, s.roots[r]? = some v ∧ HasTy m G s v T
   values : ∀ v T, observation.values v T → HasTy m G s v T
+
+theorem Observed.empty (m : Module) (G : Nat) (s : Store) :
+    Observed m G Observation.empty s :=
+  ⟨fun _ _ h => False.elim h, fun _ _ h => False.elim h⟩
+
+/-- Dropping observations leaves the typing of all remaining observations. -/
+theorem Observed.restrict {m : Module} {G : Nat} {o subset : Observation} {s : Store}
+    (h : Observed m G o s)
+    (hroots : ∀ r T, subset.roots r T → o.roots r T)
+    (hvalues : ∀ v T, subset.values v T → o.values v T) : Observed m G subset s :=
+  ⟨fun r T hr => h.roots r T (hroots r T hr),
+    fun v T hv => h.values v T (hvalues v T hv)⟩
+
+theorem Observed.union {m : Module} {G : Nat} {a b : Observation} {s : Store}
+    (ha : Observed m G a s) (hb : Observed m G b s) : Observed m G (a.union b) s :=
+  ⟨fun r T hr => hr.elim (ha.roots r T) (hb.roots r T),
+    fun v T hv => hv.elim (ha.values v T) (hb.values v T)⟩
 
 /-- The same caller observations can be threaded through a callee's changing
 local demand when each transition preserves their bindings and operands. -/
@@ -89,11 +115,100 @@ theorem Observed.advance {m : Module} {G : Nat} {observation : Observation} {s s
   · intro v T hv
     exact hvalues v T hv (h.values v T hv)
 
+/-- Inherited roots precede the callee's first scope instance. Globals survive
+every local scope, while local roots must belong to an earlier instance. -/
+def BeforeBase (base : Nat) : RootInst → Prop
+  | .global _ => True
+  | .local _ si _ => si < base
+
+theorem BeforeBase.mono {base base' : Nat} {r : RootInst}
+    (hbase : base ≤ base') (h : BeforeBase base r) : BeforeBase base' r := by
+  cases r with
+  | global _ => trivial
+  | «local» _ si _ => exact Nat.lt_of_lt_of_le h hbase
+
+/-- Globals remain live independently of local caller demand. Observed local
+bindings are live even when the callee has no variable naming them. -/
+def ObservationDemand (o : Observation) : RootInst → Prop
+  | .global _ => True
+  | r@(.local ..) => ∃ T, o.roots r T
+
+/-- Caller observations must outlive the callee and their interior aliases
+must avoid every root that its effects may shrink. Full typing alone does not
+protect a newly rebound reference whose runtime targets have changed. -/
+structure ObservedSafe (m : Module) (W : World) (o : Observation) (s : Store) : Prop where
+  typed : Observed m W.G o s
+  rootsOlder : ∀ r T, o.roots r T → BeforeBase W.base r
+  valuesOlder : ∀ v T, o.values v T → ∀ r, Targets v r → BeforeBase W.base r
+  rootsProtected : ∀ r T v, o.roots r T → s.roots[r]? = some v →
+    T.interiorTarget?.isSome = true →
+    ∀ target, Targets v target → ¬ MayShrinkEff W.P W.E target
+  valuesProtected : ∀ v T, o.values v T → T.interiorTarget?.isSome = true →
+    ∀ target, Targets v target → ¬ MayShrinkEff W.P W.E target
+
+theorem ObservedSafe.empty (m : Module) (W : World) (s : Store) :
+    ObservedSafe m W Observation.empty s :=
+  ⟨Observed.empty _ _ _, fun _ _ h => False.elim h, fun _ _ h => False.elim h,
+    fun _ _ _ h => False.elim h, fun _ _ h => False.elim h⟩
+
+/-- Restriction keeps both typing and the age and protection obligations of
+the bindings and sampled operands still required by the caller. -/
+theorem ObservedSafe.restrict {m : Module} {W : World} {o subset : Observation} {s : Store}
+    (h : ObservedSafe m W o s)
+    (hroots : ∀ r T, subset.roots r T → o.roots r T)
+    (hvalues : ∀ v T, subset.values v T → o.values v T) : ObservedSafe m W subset s :=
+  ⟨h.typed.restrict hroots hvalues,
+    fun r T hr => h.rootsOlder r T (hroots r T hr),
+    fun v T hv => h.valuesOlder v T (hvalues v T hv),
+    fun r T v hr => h.rootsProtected r T v (hroots r T hr),
+    fun v T hv => h.valuesProtected v T (hvalues v T hv)⟩
+
+theorem ObservedSafe.union {m : Module} {W : World} {a b : Observation} {s : Store}
+    (ha : ObservedSafe m W a s) (hb : ObservedSafe m W b s) :
+    ObservedSafe m W (a.union b) s :=
+  ⟨ha.typed.union hb.typed,
+    fun r T hr => hr.elim (ha.rootsOlder r T) (hb.rootsOlder r T),
+    fun v T hv => hv.elim (ha.valuesOlder v T) (hb.valuesOlder v T),
+    fun r T v hr => hr.elim (ha.rootsProtected r T v) (hb.rootsProtected r T v),
+    fun v T hv => hv.elim (ha.valuesProtected v T) (hb.valuesProtected v T)⟩
+
+/-- Entering a later activation preserves the age of inherited observations
+when the initialized globals, parameter roots and allowed effects are fixed. -/
+theorem ObservedSafe.base_mono {m : Module} {W : World} {o : Observation} {s : Store}
+    {base : Nat} (h : ObservedSafe m W o s) (hbase : W.base ≤ base) :
+    ObservedSafe m { W with base := base } o s :=
+  { h with
+    rootsOlder := fun r T hr => BeforeBase.mono hbase (h.rootsOlder r T hr)
+    valuesOlder := fun v T hv r ht => BeforeBase.mono hbase (h.valuesOlder v T hv r ht) }
+
+/-- Protection remains valid when the new effects and parameter interpretation
+can shrink only roots already covered by the original protection obligation. -/
+theorem ObservedSafe.weakenEffects {m : Module} {W : World} {o : Observation} {s : Store}
+    {P : Nat → RootInst → Prop} {E : Eff} (h : ObservedSafe m W o s)
+    (hmay : ∀ r, MayShrinkEff P E r → MayShrinkEff W.P W.E r) :
+    ObservedSafe m { W with P := P, E := E } o s :=
+  { h with
+    rootsProtected := fun r T v hr hv hi target ht hshrink =>
+      h.rootsProtected r T v hr hv hi target ht (hmay target hshrink)
+    valuesProtected := fun v T hv hi target ht hshrink =>
+      h.valuesProtected v T hv hi target ht (hmay target hshrink) }
+
 /-- Globals, observed caller bindings and inherited mutable slice holders
 stay live while the callee's own local demand changes. -/
 def CallDemand (observation : Observation) (D : RootInst → Ty → Prop) : RootInst → Prop :=
   fun r => (∃ g, r = RootInst.global g) ∨
     (∃ T, observation.roots r T) ∨ (∃ E, D r E)
+
+/-- Removing inherited slice holders from call demand preserves the invariant
+for all globals and observed caller bindings without rebuilding store facts. -/
+theorem StoreInv.observationDemand {m : Module} {G : Nat} {s : St} {o : Observation}
+    {D : RootInst → Ty → Prop} (h : StoreInv m G s (CallDemand o D)) :
+    StoreInv m G s (ObservationDemand o) := by
+  apply h.changeDemand
+  intro r hr
+  cases r with
+  | global g => exact Or.inl (Or.inl ⟨g, rfl⟩)
+  | «local» a si x => exact Or.inl (Or.inr (Or.inl hr))
 
 /-- A caller frame already supplies global liveness and unconditional store
 age and freshness. Explicit typing supplies validity for its inherited demand. -/
