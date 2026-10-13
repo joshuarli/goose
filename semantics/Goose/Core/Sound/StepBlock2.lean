@@ -185,7 +185,7 @@ private theorem blockStmt_shrinkFuture {path sc all value offset st rest}
 set_option maxHeartbeats 800000 in
 theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) := by
   intro path sc all value bc offset ss observation W tenv tenv' penv env s tn tn' rst rst' lo
-    hOffset hDrop hActive hAccess hProtected hObserved hp hF hsc hT hlo ht hr hE
+    hOffset hDrop hActive hAccess hProtected hObserved hClass hp hF hsc hT hlo ht hr hE
   cases ss with
   | nil =>
     simp only [tyStmts] at ht; inv at ht
@@ -200,7 +200,7 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
     subst offset
     refine ⟨⟨tenv', TSame.refl _, hF, fun _ _ => rfl⟩,
       FootprintS.refl env (Dset W) s, PreservesRootTypes.refl s.store,
-      PreservesValues.refl s.store, hObserved, RetainsAliases.refl, ?_, hT, ?_⟩
+      PreservesValues.refl s.store, hObserved, RetainsAliases.refl, ?_, hT, ?_, hClass⟩
     · intro _
       exact StoreLe.refl _
     · exact ⟨trivial, rfl⟩
@@ -219,10 +219,10 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
       have hlen := congrArg List.length hDrop
       simp only [List.length_cons, List.length_drop] at hlen
       omega
-    have hmay : statementContext.mayShrink W.P = bc.mayShrink W.P := by
+    have hmay : statementContext.mayShrink W.P observation = bc.mayShrink W.P observation := by
       funext r
       exact propext (bc.child_mayShrink_iff rfl offset (.statement st) .statement hchild
-        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.P r)
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.P observation r)
     have haccess : statementContext.AccessMatches tenv penv :=
       (bc.child_accessMatches_iff rfl offset (.statement st) .statement hchild
         (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) tenv penv).2 hAccess
@@ -264,8 +264,8 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
     simp only [execStmts]
     refine Sat.bind (ih.stmt (path ++ [offset]) st statementContext observation W tenv tenv1
       penv env s sc tn t1 rst r1 lo hactive haccess (hmay ▸ hProtected)
-      (hmay ▸ hObserved) hp hinput hsc hT hlo hts hrs (hm2.2.trans hE)) ?_
-    rintro fl s1 ⟨hF1, hX1, hRoots1, hValues1, hSafe1, hRet1, hPilot1, hS1, hT1, hfl⟩
+      (hmay ▸ hObserved) hClass hp hinput hsc hT hlo hts hrs (hm2.2.trans hE)) ?_
+    rintro fl s1 ⟨hF1, hX1, hRoots1, hValues1, hSafe1, hRet1, hPilot1, hS1, hT1, hfl, hClass1⟩
     rw [hout] at hF1
     rw [hmay] at hSafe1
     have hRet1' := hRet1.subset hretSubset
@@ -291,13 +291,13 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
       refine (ih.stmts path sc all value bc (offset + 1) rest observation W tenv1 tenv' penv
         env s1 t1 tn' r1 rst' lo hnextBound hrest hActive1
         (by cases bc <;> simpa [EvaluationContext.AccessMatches, NodeContext.AccessMatches,
-          hS1.mod, hS1.vars] using hAccess) hProtected hSafe1 hp hF1
+          hS1.mod, hS1.vars] using hAccess) hProtected hSafe1 hClass1 hp hF1
         (by rw [hS1.scopes]; exact hsc) hT1 (Nat.le_trans hlo hm1.1) htr hrr hE).mono ?_
       rintro fl2 s2 ⟨⟨tenv2, hS2, hF2, hn2⟩, hX2, hRoots2, hValues2, hSafe2,
-        hRet2, hPilot2, hT2, hfl2⟩
+        hRet2, hPilot2, hT2, hfl2, hClass2⟩
       refine ⟨⟨tenv2, hS1.trans hS2, hF2, hn2⟩, hX1.trans hX2,
         hRoots1.trans hRoots2, hValues1.trans hValues2, hSafe2, hRet1'.trans hRet2,
-        fun h => (hPilot1 h).trans (hPilot2 h), hT2, ?_⟩
+        fun h => (hPilot1 h).trans (hPilot2 h), hT2, ?_, hClass2⟩
       cases fl2 with
       | normal v2 => exact ⟨hfl2.1, by simp [stmtsDiverge, hfl, hfl2.2]⟩
       | brk => exact ⟨by rw [← hS1.loops]; exact hfl2.1, by simp [stmtsHaveBreak, hfl2.2]⟩
@@ -307,15 +307,15 @@ theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) 
       simp only [sat_pure]
       exact ⟨⟨tenv1, hS1, hFinal, fun v h => by cases h⟩, hX1, hRoots1, hValues1,
         hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1,
-        hfl.1, by simp [stmtsHaveBreak, hfl.2]⟩
+        ⟨hfl.1, by simp [stmtsHaveBreak, hfl.2]⟩, hClass1⟩
     | cont =>
       simp only [sat_pure]
       exact ⟨⟨tenv1, hS1, hFinal, fun v h => by cases h⟩, hX1, hRoots1, hValues1,
-        hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1, hfl⟩
+        hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1, hfl, hClass1⟩
     | ret v =>
       simp only [sat_pure]
       exact ⟨⟨tenv1, hS1, hFinal, fun v h => by cases h⟩, hX1, hRoots1, hValues1,
-        hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1, hfl⟩
+        hSafe1, hRet1', hPilot1, hT1.ext (fun _ h => h) hm2.1, hfl, hClass1⟩
 
 private theorem blockFold_sub (active : List VarId) (ss : List Stmt) :
     ∀ x, x ∈ active → x ∈ ss.foldl (fun active statement =>
@@ -394,7 +394,7 @@ set_option maxHeartbeats 1600000 in
 theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) := by
   intro path sc stmts value bc observation W tenv tenv1 tenv2 penv env s pre
     tn1 tn2 tn3 ty rst1 rst2 rst3 rho lo hActive hAccess hProtected hObserved
-    hp hF hsc hsame hvis hpre hlo hts htv hrs hrv hE hkeep
+    hClass hp hF hsc hsame hvis hpre hlo hts htv hrs hrv hE hkeep
   simp only [execBlock, sat_freshScope_bind, sat_bindAll_bind]
   have hF0 := hF.push hsc
   have hfreshAll : ∀ x, s.store.roots[RootInst.local env.act s.nextScope x]? = none := fun x => by
@@ -403,8 +403,9 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
     | some v => exact absurd (hF.inv.fresh _ _ _ (by rw [h]; simp)) (Nat.lt_irrefl _)
   obtain ⟨hnd, hpreAll⟩ := hpre
   obtain ⟨tfin, hFb, hSb, hvisb, hleb, hkeepb, hbackb⟩ :=
-    frame_pre (env := { env with scopes := (sc, s.nextScope) :: env.scopes }) (rest0 := env.scopes)
-      rfl pre _ _ hF0 hnd (by
+    frame_pre (future := bc.inputFuture) (penv := { penv with scopes := sc :: penv.scopes })
+      (env := { env with scopes := (sc, s.nextScope) :: env.scopes }) (rest0 := env.scopes)
+      rfl pre _ { s with nextScope := s.nextScope + 1 } hF0 hnd (by
         intro x v hm
         obtain ⟨_, _, lv, g1, g2, g3, g4, g5⟩ := hpreAll x v hm
         refine ⟨hfreshAll x, lv, g1, g2, g3, g4, fun r hr => ⟨g5 r hr, ?_⟩⟩
@@ -454,7 +455,7 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
           subst x'
           obtain ⟨_, _, lv, hlv, hlsc, _⟩ := hpreAll _ _ hm
           exact Or.inr ⟨x, lv, s.nextScope, env.scopes, by simp [inner, hlsc], hlv, rfl⟩
-  have hSafeB : ObservedSafe m W (bc.mayShrink W.P) observation bound.store := by
+  have hSafeB : ObservedSafe m W (bc.mayShrink W.P observation) observation bound.store := by
     refine { hObserved with typed := ⟨?_, ?_⟩, rootsProtected := ?_ }
     · intro r T hobs
       obtain ⟨v, hv, hty⟩ := hObserved.typed.roots r T hobs
@@ -492,19 +493,26 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
       exact ⟨lv, si, hv, by simp [inner, lookup_cons, hne, hlk], hroot⟩
     | global g => exact hr
     | param i => exact hr
+  have hClassBound : m.profile = .shrink →
+      ClassifiedParameters m W.P W.D observation bound.store := by
+    intro hshrink
+    exact ClassifiedParameters.advanceS (s := { s with nextScope := s.nextScope + 1 })
+      (hClass hshrink) hF0 hPreFoot
   have exit : ∀ (s2 : St) (tf : TEnv),
       Frame m W tf { penv with scopes := sc :: penv.scopes } inner s2 bc.outputFuture →
       TSame tenv1 tf → FootprintS inner (Dset W) bound s2 →
-      ObservedSafe m W (bc.mayShrink W.P) observation s2.store →
+      ObservedSafe m W (bc.mayShrink W.P observation) observation s2.store →
       RetainsAliases m W inner bound.store s2.store bc.retained →
       PilotStoreLe m bound s2 →
       Frame m W tenv penv env (relSt env sc s.nextScope s2) bc.outputFuture ∧
       Footprint (insts env) (Dset W) s (relSt env sc s.nextScope s2) ∧
       PreservesRootTypes m W.G observation.roots s.store (relSt env sc s.nextScope s2).store ∧
       PreservesValues m W.G observation.values s.store (relSt env sc s.nextScope s2).store ∧
-      ObservedSafe m W (bc.mayShrink W.P) observation (relSt env sc s.nextScope s2).store ∧
+      ObservedSafe m W (bc.mayShrink W.P observation) observation (relSt env sc s.nextScope s2).store ∧
       RetainsAliases m W env s.store (relSt env sc s.nextScope s2).store bc.retained ∧
-      PilotStoreLe m s (relSt env sc s.nextScope s2) := by
+      PilotStoreLe m s (relSt env sc s.nextScope s2) ∧
+      (m.profile = .shrink →
+        ClassifiedParameters m W.P W.D observation (relSt env sc s.nextScope s2).store) := by
     intro s2 tf hFf hSf hXf hSafe hRet hPilot
     have hAllFoot := hPreFoot.trans hXf
     have hdom : ∀ r, s2.store.roots[r]? ≠ none →
@@ -527,17 +535,33 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
         · exact Or.inr (fun a si x e => by subst e; exact hF.inv.fresh _ _ _ h0)
         · exact Or.inl h0
     have hSafeOut := hSafe.releaseScope (sc := sc) hFf hF.base_le
-    refine ⟨hPop, hAllFoot.releaseBlock hF, ?_, ?_, hSafeOut, ?_, ?_⟩
+    have hClassOut : m.profile = .shrink →
+        ClassifiedParameters m W.P W.D observation (relSt env sc s.nextScope s2).store := by
+      intro hshrink
+      exact hF.classifiedParameters_advance (hClass hshrink) (hAllFoot.releaseBlock hF)
+    refine ⟨hPop, hAllFoot.releaseBlock hF, ?_, ?_, hSafeOut, ?_, ?_, hClassOut⟩
     · intro r T hr v hv ht
       exact hSafeOut.typed.roots r T hr
     · intro v T hv ht
       exact hSafeOut.typed.values v T hv
-    · intro alias hmem v ⟨hty, hroots⟩
-      have hin : AliasAt m W inner bound.store alias v :=
-        ⟨hty.mono hleb, fun r hr => hGamPush _ _ (hroots r hr)⟩
-      have hty2 := (hRet alias hmem v hin).1
-      exact (RetainsAliases.releaseScope (s2 := s2) (aliases := bc.retained) hF
-        (Nat.le_refl _) alias hmem v ⟨hty2, hroots⟩)
+    · intro alias hmem
+      have hReleased := RetainsAliases.releaseScope (sc := sc) (si := s.nextScope) (s2 := s2)
+        (aliases := bc.retained) hF (Nat.le_refl _)
+      constructor
+      · intro v ⟨hty, hroots⟩
+        have hin : AliasAt m W inner bound.store alias v :=
+          ⟨hty.mono hleb, fun r hr => hGamPush _ _ (hroots r hr)⟩
+        have hafter := (hRet alias hmem).typed v hin
+        exact (hReleased alias hmem).typed v ⟨hafter.1, hroots⟩
+      · intro mu el capacity l start len hty halias hslice
+        have hin : AliasAt m W inner bound.store alias (.ref l) :=
+          ⟨halias.1.mono hleb, fun r hr => hGamPush _ _ (halias.2 r hr)⟩
+        have hsliceBound := SliceTy.mono hleb hslice
+        have hsliceAfter := (hRet alias hmem).physicalLimited
+          mu el capacity l start len hty hin hsliceBound
+        have htypedAfter := (hRet alias hmem).typed (.ref l) hin
+        exact (hReleased alias hmem).physicalLimited mu el capacity l start len hty
+          ⟨htypedAfter.1, halias.2⟩ hsliceAfter
     · apply PilotStoreLe.releaseScope hF (Nat.le_refl _)
       intro hpilot
       exact hleb.trans (hPilot hpilot)
@@ -546,10 +570,10 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
     (Nat.zero_le _) rfl (by cases bc <;> simpa [blockSuffixActive, DemandNode.visibleForChild,
       EvaluationContext.ActiveMatches, NodeContext.ActiveMatches, DemandExpectedPoint.toPoint, DemandPoint.ActiveMatches] using hActive)
     (by cases bc <;> simpa [EvaluationContext.AccessMatches, NodeContext.AccessMatches,
-      hsame.mod, hsame.vars] using hAccess) hProtected hSafeB hp hStart
+      hsame.mod, hsame.vars] using hAccess) hProtected hSafeB hClassBound hp hStart
     (by rw [hsame.scopes]; rfl) hTop hlo hts hrs hE2) ?_
   rintro fl s1 ⟨⟨tenv'', hS'', hF'', hnorm⟩, hXS, hRootsS, hValuesS, hSafeS,
-    hRetS, hPilotS, hT1, hfl⟩
+    hRetS, hPilotS, hT1, hfl, hClassS⟩
   have hOuter : Frame m W tenv'' { penv with scopes := sc :: penv.scopes } inner s1 bc.outputFuture :=
     hF''.narrowFuture (blockSuffixFuture_outer bc stmts.length)
   cases fl with
@@ -562,9 +586,10 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
       obtain ⟨rfl, rfl⟩ := hrv
       subst htv
       simp only [m_pure_bind, sat_release_bind, sat_pure]
-      obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot⟩ :=
+      obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ :=
         exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS
-      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, rfl, fun r hr => hr.elim, hdv⟩
+      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
+        ⟨rfl, fun r hr => hr.elim, hdv⟩, gClass⟩
     | some e =>
       simp only [m_bind_assoc, m_pure_bind]
       have hchild : (DemandNode.block (.mk sc stmts (some e))).child? stmts.length =
@@ -580,10 +605,10 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
           hchild hphase _ _).2
         cases bc <;> simpa [EvaluationContext.AccessMatches, NodeContext.AccessMatches,
           hS''.mod, hsame.mod, hS''.vars, hsame.vars] using hAccess
-      have hMay : ec.mayShrink W.P = bc.mayShrink W.P := by
+      have hMay : ec.mayShrink W.P observation = bc.mayShrink W.P observation := by
         funext r
         exact propext (bc.child_mayShrink_iff rfl stmts.length (.expression e) .expression
-          hchild hphase W.P r)
+          hchild hphase W.P observation r)
       have hInput : Frame m W tenv2 { penv with scopes := sc :: penv.scopes } inner s1 ec.inputFuture := by
         apply hF''.changeFuture
         intro x hx hf
@@ -598,8 +623,8 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
       refine Sat.bind (ih.expr (path ++ [stmts.length]) e ec observation W tenv2
         { penv with scopes := sc :: penv.scopes } inner s1 tn2 tn3 ty rst2 rst3 rho
         hAct hAcc (by rw [hMay]; exact hProtected) (by rw [hMay]; exact hSafeS)
-        hp hInput htv hrv hE) ?_
-      rintro v' s2 ⟨hF2, hX2, hRoots2, hValues2, hSafe2, hRet2, hPilot2, hv2, hg2⟩
+        hClassS hp hInput htv hrv hE) ?_
+      rintro v' s2 ⟨hF2, hX2, hRoots2, hValues2, hSafe2, hRet2, hPilot2, hv2, hg2, hClass2⟩
       rw [hMay] at hSafe2
       have hFrameOut : Frame m W tenv2 { penv with scopes := sc :: penv.scopes }
           inner s2 bc.outputFuture := by
@@ -617,7 +642,7 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
         hRet2.subset (fun alias hmem => bc.child_retained_subset rfl stmts.length
           (.expression e) .expression hchild hphase hmem)
       simp only [sat_release_bind, sat_pure]
-      obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot⟩ := exit s2 _ hFrameOut hS''
+      obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ := exit s2 _ hFrameOut hS''
         (hXS.trans hX2.toS) hSafe2 (hRetS.trans hRet2')
         (fun h => (hPilotS h).trans (hPilot2 h))
       have hT2 := hT1.ext hX2.dom (rpExpr_mono hrv).1
@@ -650,24 +675,28 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
           rintro ⟨x', lv', _, _, rfl⟩
           exact absurd (Nat.lt_of_lt_of_le (hF.pAge j _ _ _ hrq) hF.base_le) (Nat.lt_irrefl _)
       exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
-        hv2.releaseScope (fun r hr => (hsurv r hr).1), fun r hr => (hsurv r hr).2, hdv⟩
+        ⟨hv2.releaseScope (fun r hr => (hsurv r hr).1),
+          fun r hr => (hsurv r hr).2, hdv⟩, gClass⟩
   | brk =>
-    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot⟩ :=
+    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ :=
         exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS
     cases value <;> simp only [m_pure_bind, sat_release_bind, sat_pure] <;>
-      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, by rw [← hsame.loops]; exact hfl.1, hfl.2⟩
+      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
+        ⟨by rw [← hsame.loops]; exact hfl.1, hfl.2⟩, gClass⟩
   | cont =>
-    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot⟩ :=
+    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ :=
         exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS
     cases value <;> simp only [m_pure_bind, sat_release_bind, sat_pure] <;>
-      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, by rw [← hsame.loops]; exact hfl⟩
+      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
+        by rw [← hsame.loops]; exact hfl, gClass⟩
   | ret v =>
-    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot⟩ :=
+    obtain ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, gClass⟩ :=
         exit s1 _ hOuter hS'' hXS hSafeS hRetS hPilotS
     have hret : RetOk m W tenv penv (relSt env sc s.nextScope s1) v :=
       RetOk.release hF (Nat.le_trans (Nat.le_succ _) hXS.next) hF.base_le
         (hfl.2.tsame hsame.impl rfl)
     cases value <;> simp only [m_pure_bind, sat_release_bind, sat_pure] <;>
-      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot, by rw [← hsame.inExpr]; exact hfl.1, hret⟩
+      exact ⟨g1, g2, gRoots, gValues, gSafe, gRet, gPilot,
+        ⟨by rw [← hsame.inExpr]; exact hfl.1, hret⟩, gClass⟩
 
 end Goose.Core.Sound

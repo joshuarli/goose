@@ -56,8 +56,9 @@ theorem block_of_checks (hB : BlockSpec m prof plans n) (hp : Perm m W)
       declarePre { tenv with scopes := b.scope :: tenv.scopes } b.scope preT tn = .ok (env1, tn1) →
         ec.ActiveMatches env1)
     (haccess : ec.AccessMatches tenv penv)
-    (hprotected : ShrinkProtected W.D W.A (ec.mayShrink W.P))
-    (hobserved : ObservedSafe m W (ec.mayShrink W.P) observation s.store)
+    (hprotected : ShrinkProtected W.D W.A (ec.mayShrink W.P observation))
+    (hobserved : ObservedSafe m W (ec.mayShrink W.P observation) observation s.store)
+    (hclassified : m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store)
     (hF : Frame m W tenv penv env s ec.inputFuture)
     (ht : tyBlock tenv preT b tn = .ok (ty, tn'))
     (hr : rpBlockValue penv preV b rst = .ok ((rho, rng), rst'))
@@ -72,15 +73,16 @@ theorem block_of_checks (hB : BlockSpec m prof plans n) (hp : Perm m W)
       Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧
-      match fl with
+      (match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
           b.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ b.hasBreak = true
       | .cont => tenv.loops ≠ 0
-      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) := by
+      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store)) := by
   subst hpreV
   obtain ⟨sc, stmts, value⟩ := b
   obtain ⟨hsc, env1, tn1, env2, tn2, hd, hts, htv⟩ := tyBlock_ok _ _ _ _ _ _ _ _ ht
@@ -113,7 +115,7 @@ theorem block_of_checks (hB : BlockSpec m prof plans n) (hp : Perm m W)
       exact ⟨ann, ha, gam_push_future hF hsc _ hga⟩
   have hres := hB path sc stmts value ec observation W tenv env1 env2 penv env s pre tn1 tn2 tn' ty
     { rst with nextVar := rst.nextVar + (preT.map Prod.fst).length } st2 rst' rho rst.nextVar
-    (hactive env1 tn1 hd) haccess hprotected hobserved hp hF hsc hsame hvis' hpreOk
+    (hactive env1 tn1 hd) haccess hprotected hobserved hclassified hp hF hsc hsame hvis' hpreOk
     (Nat.le_add_right _ _) hts
     (by cases value with
         | none => exact htv.1
@@ -124,8 +126,8 @@ theorem block_of_checks (hB : BlockSpec m prof plans n) (hp : Perm m W)
         | some e => exact hrv)
     hE hkeep
   refine hres.mono ?_
-  rintro fl s' ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩
-  refine ⟨h1, h2, h3, h4, h5, h6, h7, ?_⟩
+  rintro fl s' ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
+  refine ⟨h1, h2, h3, h4, h5, h6, h7, ?_, h9⟩
   cases fl with
   | normal v => exact ⟨h8.1, h8.2.1, by simpa [Block.diverges] using h8.2.2⟩
   | brk => exact ⟨h8.1, by simpa [Block.hasBreak] using h8.2⟩
@@ -143,8 +145,9 @@ theorem block_of_reserved (hB : BlockSpec m prof plans n) (hp : Perm m W)
       declarePre { { tenv with visible := xs ++ tenv.visible } with scopes := b.scope :: tenv.scopes }
         b.scope [] tn = .ok (env1, tn1) → ec.ActiveMatches env1)
     (haccess : ec.AccessMatches tenv penv)
-    (hprotected : ShrinkProtected W.D W.A (ec.mayShrink W.P))
-    (hobserved : ObservedSafe m W (ec.mayShrink W.P) observation s.store)
+    (hprotected : ShrinkProtected W.D W.A (ec.mayShrink W.P observation))
+    (hobserved : ObservedSafe m W (ec.mayShrink W.P observation) observation s.store)
+    (hclassified : m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store)
     (hF : Frame m W tenv penv env s ec.inputFuture)
     (ht : tyBlock { tenv with visible := xs ++ tenv.visible } [] b tn = .ok (ty, tn'))
     (hr : rpBlockValue penv [] b rst = .ok ((rho, rng), rst'))
@@ -159,15 +162,16 @@ theorem block_of_reserved (hB : BlockSpec m prof plans n) (hp : Perm m W)
       Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧
-      match fl with
+      (match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
           b.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ b.hasBreak = true
       | .cont => tenv.loops ≠ 0
-      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) := by
+      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store)) := by
   subst hxs
   obtain ⟨sc, stmts, value⟩ := b
   obtain ⟨hsc, env1, tn1, env2, tn2, hd, hts, htv⟩ := tyBlock_ok _ _ _ _ _ _ _ _ ht
@@ -183,7 +187,7 @@ theorem block_of_reserved (hB : BlockSpec m prof plans n) (hp : Perm m W)
     exact ⟨ann, ha, gam_push_future hF hsc _ hga⟩
   have hres := hB path sc stmts value ec observation W tenv env1 env2 penv env s pre tn1 tn2 tn' ty
     { rst with nextVar := rst.nextVar + ([] : List VarId).length } st2 rst' rho lo0
-    (hactive env1 tn1 hd) haccess hprotected hobserved hp hF hsc
+    (hactive env1 tn1 hd) haccess hprotected hobserved hclassified hp hF hsc
     ⟨hsame.mod, hsame.impl, hsame.vars, hsame.loops, hsame.inExpr, hsame.scopes,
       fun x hx => hsame.sub x (List.mem_append_right _ hx)⟩
     (fun y => by rw [hvis y]; simp)
@@ -201,8 +205,8 @@ theorem block_of_reserved (hB : BlockSpec m prof plans n) (hp : Perm m W)
       · exact hkeep0 y hy ⟨hc.1, h⟩
       · exact hkeep y hy ⟨Nat.le_of_not_lt h, hc.2⟩)
   refine hres.mono ?_
-  rintro fl s' ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩
-  refine ⟨h1, h2, h3, h4, h5, h6, h7, ?_⟩
+  rintro fl s' ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
+  refine ⟨h1, h2, h3, h4, h5, h6, h7, ?_, h9⟩
   cases fl with
   | normal v => exact ⟨h8.1, h8.2.1, by simpa [Block.diverges] using h8.2.2⟩
   | brk => exact ⟨h8.1, by simpa [Block.hasBreak] using h8.2⟩
@@ -211,7 +215,7 @@ theorem block_of_reserved (hB : BlockSpec m prof plans n) (hp : Perm m W)
 
 theorem step_blockValue (ih : Specs m prof plans n) : BlockValueSpec m prof plans (n + 1) := by
   intro path b ec observation W tenv penv env s tn tn' ty rst rst' rho rng
-    hactive haccess hprotected hobserved hp hF ht hr hE
+    hactive haccess hprotected hobserved hclassified hp hF ht hr hE
   simp only [blockValue]
   have hF' : Frame m W (exprEnv tenv) penv env s ec.inputFuture :=
     hF.tenv_congr rfl rfl rfl (fun _ h => h)
@@ -228,40 +232,40 @@ theorem step_blockValue (ih : Specs m prof plans n) : BlockValueSpec m prof plan
   have haccess' : ec.AccessMatches (exprEnv tenv) penv := by
     simpa [exprEnv, EvaluationContext.AccessMatches, NodeContext.AccessMatches] using haccess
   refine Sat.bind (block_of_checks ih.block hp b ec observation [] [] hactive' haccess'
-    hprotected hobserved hF' ht hr hE rfl rfl (fun k x v ty' h => by simp at h)) ?_
-  rintro fl s1 ⟨hF1, hFoot, hRoots, hValues, hSafe, hRetained, hPilot, hfl⟩
+    hprotected hobserved hclassified hF' ht hr hE rfl rfl (fun k x v ty' h => by simp at h)) ?_
+  rintro fl s1 ⟨hF1, hFoot, hRoots, hValues, hSafe, hRetained, hPilot, hfl, hClass⟩
   cases fl with
   | normal v =>
     simp only [expectNormal, sat_pure]
     exact ⟨hF1.tenv_congr rfl rfl rfl (fun _ h => h), hFoot, hRoots, hValues,
-      hSafe, hRetained, hPilot, hfl.1, hfl.2.1⟩
+      hSafe, hRetained, hPilot, hfl.1, hfl.2.1, hClass⟩
   | brk => exact absurd rfl hfl.1
   | cont => exact absurd rfl hfl
   | ret v => exact absurd hfl.1 (by simp [exprEnv])
 
 theorem step_printArg (ih : Specs m prof plans n) : PrintArgSpec m prof plans (n + 1) := by
   intro path a ac observation W tenv penv env s tn tn' rst rst'
-    hactive haccess hprotected hobserved hp hF ht hr hE
+    hactive haccess hprotected hobserved hclassified hp hF ht hr hE
   cases ac with
   | text future retained shrinking =>
     simp only [PrintTy, PrintRp] at ht hr
     simp only [execPrintArg, sat_pure]
     exact ⟨hF, Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _,
-      hobserved, RetainsAliases.refl, fun _ => StoreLe.refl _⟩
+      hobserved, RetainsAliases.refl, fun _ => StoreLe.refl _, hclassified⟩
   | expr ec =>
     obtain ⟨ty, hte, hty⟩ := ht
     obtain ⟨rho, hre⟩ := hr
     simp only [execPrintArg]
     refine Sat.bind (ih.expr path _ ec observation W tenv penv env s tn tn' ty rst rst' rho
-      hactive haccess hprotected hobserved hp hF hte hre hE) ?_
-    rintro v s1 ⟨hF1, hFoot, hRoots, hValues, hSafe, hRetained, hPilot, hv, _⟩
+      hactive haccess hprotected hobserved hclassified hp hF hte hre hE) ?_
+    rintro v s1 ⟨hF1, hFoot, hRoots, hValues, hSafe, hRetained, hPilot, hv, _, hClass⟩
     rcases hty with ⟨t, rfl⟩ | rfl
     · obtain ⟨k, rfl⟩ := hasTy_int hv
       simp only [render, sat_pure]
-      exact ⟨hF1, hFoot, hRoots, hValues, hSafe, hRetained, hPilot⟩
+      exact ⟨hF1, hFoot, hRoots, hValues, hSafe, hRetained, hPilot, hClass⟩
     · obtain ⟨b, rfl⟩ := hasTy_bool hv
       cases b <;> (simp only [render, sat_pure]; exact ⟨hF1, hFoot, hRoots, hValues,
-        hSafe, hRetained, hPilot⟩)
+        hSafe, hRetained, hPilot, hClass⟩)
 
 private def printArgsFuture {path : List Nat} {all : List PrintArg} {origin : OriginId}
     (ec : EvaluationContext m plans path (.statement (.print all origin)) .statement)
@@ -319,27 +323,28 @@ private theorem printExpr_shrinkOutputFuture {path : List Nat} {all : List Print
 
 /-- Facts for an argument's exact source child and the checked state after it. -/
 private structure PrintArgStepContext {path : List Nat} {all : List PrintArg} {origin : OriginId}
-    {W : World} {tenv : TEnv} {penv : PEnv}
+    {W : World} {tenv : TEnv} {penv : PEnv} {observation : Observation}
     (ec : EvaluationContext m plans path (.statement (.print all origin)) .statement)
     (offset : Nat) (a : PrintArg) (rest : List PrintArg)
     (suffix : rest = all.drop (offset + 1)) where
   child : PrintArgContext m plans (path ++ [offset]) a
   active : child.ActiveMatches tenv
   access : child.AccessMatches tenv penv
-  shrinking : ∀ r, child.mayShrink W.P r ↔ ec.mayShrink W.P r
+  shrinking : ∀ r, child.mayShrink W.P observation r ↔ ec.mayShrink W.P observation r
   retained : ∀ alias, alias ∈ ec.retained → alias ∈ child.retained
   inputFuture : ∀ x, x ∈ child.inputFuture → x ∈ printArgsFuture ec (a :: rest)
 
 private noncomputable def printArgStepContext {path : List Nat} {all : List PrintArg} {origin : OriginId}
-    {W : World} {tenv : TEnv} {penv : PEnv}
+    {W : World} {tenv : TEnv} {penv : PEnv} {observation : Observation}
     (ec : EvaluationContext m plans path (.statement (.print all origin)) .statement)
     (hactive : ec.ActiveMatches tenv) (haccess : ec.AccessMatches tenv penv)
     (offset : Nat) (a : PrintArg) (rest : List PrintArg)
     (harg : all[offset]? = some a) (hrest : rest = all.drop (offset + 1)) :
-    PrintArgStepContext (W := W) (tenv := tenv) (penv := penv) ec offset a rest hrest := by
+    PrintArgStepContext (W := W) (tenv := tenv) (penv := penv)
+      (observation := observation) ec offset a rest hrest := by
   cases a with
   | text text =>
-    refine ⟨.text (printArgsFuture ec rest) ec.retained (ec.mayShrink), trivial,
+    refine ⟨.text (printArgsFuture ec rest) ec.retained ec.mayShrink, trivial,
       trivial, ?_, ?_, ?_⟩
     · intro r
       rfl
@@ -366,7 +371,8 @@ private noncomputable def printArgStepContext {path : List Nat} {all : List Prin
       cases ec <;> rfl
     refine ⟨.expr child, hactiveChild, haccessChild, ?_, ?_, ?_⟩
     · intro r
-      exact ec.child_mayShrink_iff rfl offset (.expression e) .expression hchild hphase W.P r
+      exact ec.child_mayShrink_iff rfl offset (.expression e) .expression hchild hphase
+        W.P observation r
     · intro alias hmem
       exact ec.child_retained_subset rfl offset (.expression e) .expression hchild hphase hmem
     · intro x hx
@@ -401,8 +407,9 @@ private theorem printArgs_suffix_spec (ihP : PrintArgSpec m prof plans n) (hp : 
     (haccess : ec.AccessMatches tenv penv) :
     ∀ (offset : Nat) (args : List PrintArg), args = all.drop offset →
       ∀ (s : St) (tn tn' : Nat) (rst rst' : RState),
-      ShrinkProtected W.D W.A (ec.mayShrink W.P) →
-      ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+      ShrinkProtected W.D W.A (ec.mayShrink W.P observation) →
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s.store →
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store) →
       Frame m W tenv penv env s (printArgsFuture ec args) →
       tyPrintArgs tenv args tn = .ok ((), tn') →
       rpPrintArgs penv args rst = .ok ((), rst') → EffLe rst'.eff W.E →
@@ -411,17 +418,18 @@ private theorem printArgs_suffix_spec (ihP : PrintArgSpec m prof plans n) (hp : 
         Footprint (insts env) (Dset W) s s' ∧
         PreservesRootTypes m W.G observation.roots s.store s'.store ∧
         PreservesValues m W.G observation.values s.store s'.store ∧
-        ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+        ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
         RetainsAliases m W env s.store s'.store ec.retained ∧
-        PilotStoreLe m s s')
-  | _, [], hargs, s, tn, tn', rst, rst', hprotected, hobserved, hF, _, _, _ => by
+        PilotStoreLe m s s' ∧
+        (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
+  | _, [], hargs, s, tn, tn', rst, rst', hprotected, hobserved, hclassified, hF, _, _, _ => by
     simp only [mapList, sat_pure]
     refine ⟨?_, Footprint.refl _ _ _, PreservesRootTypes.refl _, PreservesValues.refl _,
-      hobserved, RetainsAliases.refl, fun hpilot => StoreLe.refl _⟩
+      hobserved, RetainsAliases.refl, fun hpilot => StoreLe.refl _, hclassified⟩
     cases ec with
     | pilot profile active => simpa [printArgsFuture, EvaluationContext.outputFuture] using hF
     | shrink profile context => simpa [printArgsFuture, EvaluationContext.outputFuture] using hF
-  | offset, .text t :: rest, hargs, s, tn, tn', rst, rst', hprotected, hobserved, hF, ht, hr, hE => by
+  | offset, .text t :: rest, hargs, s, tn, tn', rst, rst', hprotected, hobserved, hclassified, hF, ht, hr, hE => by
     have hdrop : all.drop offset = .text t :: rest := hargs.symm
     have harg : all[offset]? = some (.text t) := by
       have hfirst : (all.drop offset)[0]? = some (.text t) := by simp [hdrop]
@@ -430,34 +438,35 @@ private theorem printArgs_suffix_spec (ihP : PrintArgSpec m prof plans n) (hp : 
       have h := congrArg (fun xs : List PrintArg => xs.drop 1) hdrop
       have h' : all.drop (offset + 1) = rest := by simpa using h
       exact h'.symm
-    let step := printArgStepContext (W := W) ec hactive haccess offset (.text t) rest harg hargs'
+    let step := printArgStepContext (W := W) (observation := observation)
+      ec hactive haccess offset (.text t) rest harg hargs'
     simp only [tyPrintArgs] at ht
     simp only [rpPrintArgs] at hr
     simp only [mapList]
-    have hprotectedStep : ShrinkProtected W.D W.A (step.child.mayShrink W.P) :=
+    have hprotectedStep : ShrinkProtected W.D W.A (step.child.mayShrink W.P observation) :=
       ShrinkProtected.mono hprotected (fun _ _ h => h) (fun _ _ h => h)
         (fun r h => (step.shrinking r).1 h)
-    have hobservedStep : ObservedSafe m W (step.child.mayShrink W.P) observation s.store :=
+    have hobservedStep : ObservedSafe m W (step.child.mayShrink W.P observation) observation s.store :=
       hobserved.weakenShrinking (fun r h => (step.shrinking r).1 h)
     refine Sat.bind (ihP (path ++ [offset]) (.text t) step.child observation W tenv penv env s tn tn rst rst
-      step.active step.access hprotectedStep hobservedStep hp (hF.narrowFuture step.inputFuture) rfl rfl
-      ((rpPrintArgs_mono hr).2.trans hE)) ?_
-    rintro _ s1 ⟨hF1, hFoot1, hRoots1, hValues1, hSafe1, hRetained1, hPilot1⟩
+      step.active step.access hprotectedStep hobservedStep hclassified hp
+      (hF.narrowFuture step.inputFuture) rfl rfl ((rpPrintArgs_mono hr).2.trans hE)) ?_
+    rintro _ s1 ⟨hF1, hFoot1, hRoots1, hValues1, hSafe1, hRetained1, hPilot1, hClass1⟩
     have hFrest : Frame m W tenv penv env s1 (printArgsFuture ec rest) := by
       simpa [step, printArgStepContext, PrintArgContext.outputFuture] using hF1
-    have hSafe1' : ObservedSafe m W (ec.mayShrink W.P) observation s1.store :=
+    have hSafe1' : ObservedSafe m W (ec.mayShrink W.P observation) observation s1.store :=
       hSafe1.weakenShrinking (fun r h => (step.shrinking r).2 h)
     have hRetained1' : RetainsAliases m W env s.store s1.store ec.retained := by
       exact hRetained1.subset step.retained
     refine Sat.bind (printArgs_suffix_spec ihP hp ec observation hactive haccess
-      (offset + 1) rest hargs' s1 _ _ _ _ hprotected hSafe1' hFrest ht hr hE) ?_
-    rintro _ s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2, hPilot2⟩
+      (offset + 1) rest hargs' s1 _ _ _ _ hprotected hSafe1' hClass1 hFrest ht hr hE) ?_
+    rintro _ s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2, hPilot2, hClass2⟩
     simp only [sat_pure]
     refine ⟨hF2, hFoot1.trans hFoot2, hRoots1.trans hRoots2, hValues1.trans hValues2,
-      hSafe2, hRetained1'.trans hRetained2, ?_⟩
+      hSafe2, hRetained1'.trans hRetained2, ?_, hClass2⟩
     intro hpilot
     exact (hPilot1 hpilot).trans (hPilot2 hpilot)
-  | offset, .expr e :: rest, hargs, s, tn, tn', rst, rst', hprotected, hobserved, hF, ht, hr, hE => by
+  | offset, .expr e :: rest, hargs, s, tn, tn', rst, rst', hprotected, hobserved, hclassified, hF, ht, hr, hE => by
     have hdrop : all.drop offset = .expr e :: rest := hargs.symm
     have harg : all[offset]? = some (.expr e) := by
       have hfirst : (all.drop offset)[0]? = some (.expr e) := by simp [hdrop]
@@ -466,7 +475,8 @@ private theorem printArgs_suffix_spec (ihP : PrintArgSpec m prof plans n) (hp : 
       have h := congrArg (fun xs : List PrintArg => xs.drop 1) hdrop
       have h' : all.drop (offset + 1) = rest := by simpa using h
       exact h'.symm
-    let step := printArgStepContext (W := W) ec hactive haccess offset (.expr e) rest harg hargs'
+    let step := printArgStepContext (W := W) (observation := observation)
+      ec hactive haccess offset (.expr e) rest harg hargs'
     simp only [tyPrintArgs] at ht
     inv at ht
     simp only [rpPrintArgs] at hr
@@ -478,16 +488,16 @@ private theorem printArgs_suffix_spec (ihP : PrintArgSpec m prof plans n) (hp : 
         | exact ⟨Or.inl ⟨_, rfl⟩, ht⟩
         | exact ⟨Or.inr rfl, ht⟩
     simp only [mapList]
-    have hprotectedStep : ShrinkProtected W.D W.A (step.child.mayShrink W.P) :=
+    have hprotectedStep : ShrinkProtected W.D W.A (step.child.mayShrink W.P observation) :=
       ShrinkProtected.mono hprotected (fun _ _ h => h) (fun _ _ h => h)
         (fun r h => (step.shrinking r).1 h)
-    have hobservedStep : ObservedSafe m W (step.child.mayShrink W.P) observation s.store :=
+    have hobservedStep : ObservedSafe m W (step.child.mayShrink W.P observation) observation s.store :=
       hobserved.weakenShrinking (fun r h => (step.shrinking r).1 h)
     refine Sat.bind (ihP (path ++ [offset]) (.expr e) step.child observation W tenv penv env s tn t1 rst r1
-      step.active step.access hprotectedStep hobservedStep hp (hF.narrowFuture step.inputFuture)
+      step.active step.access hprotectedStep hobservedStep hclassified hp (hF.narrowFuture step.inputFuture)
       ⟨te, hte, hty.1⟩ ⟨re, hre⟩ ((rpPrintArgs_mono hrr).2.trans hE)) ?_
-    rintro _ s1 ⟨hF1, hFoot1, hRoots1, hValues1, hSafe1, hRetained1, hPilot1⟩
-    have hSafe1' : ObservedSafe m W (ec.mayShrink W.P) observation s1.store :=
+    rintro _ s1 ⟨hF1, hFoot1, hRoots1, hValues1, hSafe1, hRetained1, hPilot1, hClass1⟩
+    have hSafe1' : ObservedSafe m W (ec.mayShrink W.P observation) observation s1.store :=
       hSafe1.weakenShrinking (fun r h => (step.shrinking r).2 h)
     have hRetained1' : RetainsAliases m W env s.store s1.store ec.retained :=
       hRetained1.subset step.retained
@@ -511,11 +521,11 @@ private theorem printArgs_suffix_spec (ihP : PrintArgSpec m prof plans n) (hp : 
         have hout := printExpr_shrinkOutputFuture profile context offset e rest harg hargs'
         simpa [step, printArgStepContext, PrintArgContext.outputFuture, hout] using hF1
     refine Sat.bind (printArgs_suffix_spec ihP hp ec observation hactive haccess
-      (offset + 1) rest hargs' s1 _ _ _ _ hprotected hSafe1' hFrest hty.2 hrr hE) ?_
-    rintro _ s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2, hPilot2⟩
+      (offset + 1) rest hargs' s1 _ _ _ _ hprotected hSafe1' hClass1 hFrest hty.2 hrr hE) ?_
+    rintro _ s2 ⟨hF2, hFoot2, hRoots2, hValues2, hSafe2, hRetained2, hPilot2, hClass2⟩
     simp only [sat_pure]
     refine ⟨hF2, hFoot1.trans hFoot2, hRoots1.trans hRoots2, hValues1.trans hValues2,
-      hSafe2, hRetained1'.trans hRetained2, ?_⟩
+      hSafe2, hRetained1'.trans hRetained2, ?_, hClass2⟩
     intro hpilot
     exact (hPilot1 hpilot).trans (hPilot2 hpilot)
 
@@ -525,8 +535,9 @@ theorem printArgs_spec (ihP : PrintArgSpec m prof plans n) (hp : Perm m W)
     (ec : EvaluationContext m plans path (.statement (.print all origin)) .statement)
     (observation : Observation) (hactive : ec.ActiveMatches tenv)
     (haccess : ec.AccessMatches tenv penv)
-    (hprotected : ShrinkProtected W.D W.A (ec.mayShrink W.P))
-    (hobserved : ObservedSafe m W (ec.mayShrink W.P) observation s.store)
+    (hprotected : ShrinkProtected W.D W.A (ec.mayShrink W.P observation))
+    (hobserved : ObservedSafe m W (ec.mayShrink W.P observation) observation s.store)
+    (hclassified : m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store)
     (hF : Frame m W tenv penv env s ec.inputFuture)
     (ht : tyPrintArgs tenv all tn = .ok ((), tn'))
     (hr : rpPrintArgs penv all rst = .ok ((), rst')) (hE : EffLe rst'.eff W.E) :
@@ -535,9 +546,10 @@ theorem printArgs_spec (ihP : PrintArgSpec m prof plans n) (hp : Perm m W)
       Footprint (insts env) (Dset W) s s' ∧
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
-      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
-      PilotStoreLe m s s') := by
+      PilotStoreLe m s s' ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store)) := by
   have hFstart : Frame m W tenv penv env s (printArgsFuture ec all) := by
     cases ec with
     | pilot profile active =>
@@ -549,6 +561,6 @@ theorem printArgs_spec (ihP : PrintArgSpec m prof plans n) (hp : Perm m W)
         Stmt.variables, PrintArg.variables] using hF
   simpa [printArgsFuture] using
     (printArgs_suffix_spec ihP hp ec observation hactive haccess 0 all rfl
-      s tn tn' rst rst' hprotected hobserved hFstart ht hr hE)
+      s tn tn' rst rst' hprotected hobserved hclassified hFstart ht hr hE)
 
 end Goose.Core.Sound
