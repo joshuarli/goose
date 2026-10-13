@@ -298,12 +298,6 @@ structure DemandOwner where
   roots : List RootRef
   deriving DecidableEq, Repr
 
-private structure DemandWorkItem where
-  path : List Nat
-  node : DemandNode
-  frame : DemandFrame
-  forbidden : List DemandOwner := []
-
 structure DemandWholeCheck where
   forbidden : DemandOwner
   checkedRoots : List RootRef
@@ -590,6 +584,13 @@ theorem DemandNodeAt.snoc {root parent path} {child : DemandNode}
   | @child parent middle node firstIndex path hfirst hpath ih =>
     simpa [List.cons_append] using (DemandNodeAt.child hfirst (ih hnext))
 
+private structure DemandWorkItem (root : DemandNode) where
+  path : List Nat
+  node : DemandNode
+  frame : DemandFrame
+  forbidden : List DemandOwner := []
+  source : DemandNodeAt root path node
+
 /-- Context plans start at implementation bodies; later plan entries start at
 global initializers, matching `deriveModuleDemand`'s owner order. -/
 def demandRoot? (m : Module) (owner : Nat) : Option DemandNode :=
@@ -646,6 +647,15 @@ def DemandNode.phaseMatches (node : DemandNode) (phase : DemandPhase) : Bool :=
 
 def DemandNodeHasPhase (node : DemandNode) (phase : DemandPhase) : Prop :=
   node.phaseMatches phase = true
+
+/-- The phase used for child traversal before a node's auxiliary checks. -/
+def DemandNode.primaryPhase : DemandNode → DemandPhase
+  | .expression _ => .expression
+  | .place _ => .place
+  | .view _ => .view
+  | .bound _ => .bound
+  | .statement _ => .statement
+  | .block _ => .block
 
 private structure DemandCursor (root : DemandNode) where
   path : List Nat
@@ -1169,6 +1179,9 @@ private def demandSetup? (m : Module) (owner : Nat) : Option DemandSetup := do
 private def DemandPhase.all : List DemandPhase :=
   [.expression, .place, .view, .bound, .statement, .block, .mutation, .call]
 
+private theorem DemandPhase.mem_all (phase : DemandPhase) : phase ∈ DemandPhase.all := by
+  cases phase <;> simp [DemandPhase.all]
+
 def AccessEnv.owner (env : AccessEnv) (p : Place) : V DemandOwner := do
   let some t := env.placeType? p | reject .type "shrink owner has no checked type"
   pure ⟨some t, ← env.placeRoots p⟩
@@ -1265,42 +1278,422 @@ private def DemandNode.expectedRequests (access : AccessEnv) (_path : List Nat)
     | _, _ => pure []
   pure (shrinkOwners, wholeChecks)
 
-private def DemandNode.expectedWork (access : AccessEnv) : Nat →
-    List DemandWorkItem → List DemandExpectedPoint → V (List DemandExpectedPoint)
-  | 0, [], expected => pure expected.reverse
-  | 0, _ :: _, _ => reject .shrink "demand coverage walk exceeded the decoded syntax node limit"
-  | _ + 1, [], expected => pure expected.reverse
-  | fuel + 1, item :: rest, expected => do
-    let mut here := []
-    for phase in DemandPhase.all do
-      if item.node.phaseMatches phase then
-        let frame ← item.node.phaseFrame access item.path item.frame phase
-        let (shrinkOwners, wholeChecks) ←
-          DemandNode.expectedRequests access item.path item.forbidden item.node phase
-        here := ⟨item.path, item.node, phase, frame, shrinkOwners, wholeChecks⟩ :: here
-    let mut childrenRev := []
-    for (child?, index) in item.node.children.zipIdx do
-      match child? with
-      | none => pure ()
-      | some child =>
-        let frame ← item.node.childFrame access item.path item.frame index
-        let childForbidden ← match item.node with
+private structure DemandExpectedEvidence (root : DemandNode) (access : AccessEnv) where
+  expected : DemandExpectedPoint
+  item : DemandWorkItem root
+  phaseSource : DemandNodeHasPhase item.node expected.phase
+  expectedPath : expected.path = item.path
+  expectedNode : expected.node = item.node
+  phaseFrame : item.node.phaseFrame access item.path item.frame expected.phase =
+    .ok expected.frame
+
+private structure DemandExpectedPhaseResult (root : DemandNode) (access : AccessEnv)
+    (item : DemandWorkItem root) (phase : DemandPhase) where
+  entry : Option (DemandExpectedEvidence root access)
+  covers : DemandNodeHasPhase item.node phase →
+    ∃ evidence, entry = some evidence ∧ evidence.item.path = item.path ∧
+      evidence.item.node = item.node ∧ evidence.item.frame = item.frame ∧
+      evidence.expected.phase = phase
+  sameItem : ∀ evidence, evidence ∈ entry.toList → evidence.item = item
+
+private structure DemandExpectedPhasesResult (root : DemandNode) (access : AccessEnv)
+    (item : DemandWorkItem root) (phases : List DemandPhase) where
+  entries : List (DemandExpectedEvidence root access)
+  covers : ∀ phase, phase ∈ phases → DemandNodeHasPhase item.node phase →
+    ∃ evidence, evidence ∈ entries ∧ evidence.item.path = item.path ∧
+      evidence.item.node = item.node ∧ evidence.item.frame = item.frame ∧
+      evidence.expected.phase = phase
+  sameItem : ∀ evidence, evidence ∈ entries → evidence.item = item
+
+private structure DemandChildWorkResult (root : DemandNode) (access : AccessEnv)
+    (parent : DemandWorkItem root) (limit : Nat) where
+  items : List (DemandWorkItem root)
+  contains : ∀ index child, index < limit → parent.node.child? index = some child →
+    ∃ frame, parent.node.childFrame access parent.path parent.frame index = .ok frame ∧
+      ∃ item, item ∈ items ∧ item.path = parent.path ++ [index] ∧
+        item.node = child ∧ item.frame = frame
+
+private structure DemandExpectedWalkResult (root : DemandNode) (access : AccessEnv)
+    (work : List (DemandWorkItem root)) where
+  entries : List (DemandExpectedEvidence root access)
+  covers : ∀ item, item ∈ work → ∀ phase, DemandNodeHasPhase item.node phase →
+    ∃ entry, entry ∈ entries ∧ entry.item.path = item.path ∧
+      entry.item.node = item.node ∧ entry.item.frame = item.frame ∧
+      entry.expected.phase = phase
+  children : ∀ entry, entry ∈ entries →
+    entry.expected.phase = entry.item.node.primaryPhase →
+    ∀ index child, entry.item.node.child? index = some child →
+    ∀ childPhase, DemandNodeHasPhase child childPhase →
+      ∃ childEntry, childEntry ∈ entries ∧
+        childEntry.item.path = entry.item.path ++ [index] ∧
+        childEntry.item.node = child ∧
+        childEntry.expected.phase = childPhase ∧
+        ∃ childFrame, entry.item.node.childFrame access entry.item.path
+            entry.item.frame index = .ok childFrame ∧
+          childEntry.item.frame = childFrame ∧
+          ∃ phaseFrame, child.phaseFrame access (entry.item.path ++ [index])
+              childFrame childPhase = .ok phaseFrame ∧
+            childEntry.expected.frame = phaseFrame
+
+private def DemandNode.expectedPhase (access : AccessEnv)
+    (item : DemandWorkItem root) (phase : DemandPhase) :
+    V (DemandExpectedPhaseResult root access item phase) := do
+  if hphase : item.node.phaseMatches phase = true then
+    match hframe : item.node.phaseFrame access item.path item.frame phase with
+    | .error error => throw error
+    | .ok frame => do
+      let (shrinkOwners, wholeChecks) ←
+        DemandNode.expectedRequests access item.path item.forbidden item.node phase
+      let evidence : DemandExpectedEvidence root access :=
+        ⟨⟨item.path, item.node, phase, frame, shrinkOwners, wholeChecks⟩,
+          item, hphase, rfl, rfl, hframe⟩
+      pure ⟨some evidence, by
+        intro _
+        exact ⟨evidence, rfl, rfl, rfl, rfl, rfl⟩, by
+        intro candidate hmem
+        simp at hmem
+        subst candidate
+        rfl⟩
+  else
+    pure ⟨none, by
+      intro hvalid
+      simp [DemandNodeHasPhase, hphase] at hvalid, by
+      intro candidate hmem
+      simp at hmem⟩
+
+private def DemandNode.expectedPhases (access : AccessEnv)
+    (item : DemandWorkItem root) : (phases : List DemandPhase) →
+      V (DemandExpectedPhasesResult root access item phases)
+  | [] => pure ⟨[], by intro phase hmem; simp at hmem, by intro evidence hmem; simp at hmem⟩
+  | phase :: rest => do
+    let head ← DemandNode.expectedPhase access item phase
+    let tail ← DemandNode.expectedPhases access item rest
+    pure ⟨head.entry.toList ++ tail.entries, by
+      intro candidate hmem hvalid
+      simp only [List.mem_cons] at hmem
+      rcases hmem with rfl | hmem
+      · obtain ⟨evidence, hentry, hpath, hnode, hframe, hphase⟩ := head.covers hvalid
+        exact ⟨evidence, List.mem_append_left _ (by simp [hentry]),
+          hpath, hnode, hframe, hphase⟩
+      · obtain ⟨evidence, hentry, hpath, hnode, hframe, hphase⟩ :=
+          tail.covers candidate hmem hvalid
+        exact ⟨evidence, List.mem_append_right _ hentry, hpath, hnode, hframe, hphase⟩,
+      by
+        intro evidence hmem
+        simp only [List.mem_append] at hmem
+        rcases hmem with hhead | htail
+        · cases hopt : head.entry with
+          | none => simp [hopt] at hhead
+          | some headEntry =>
+            simp [hopt] at hhead
+            exact head.sameItem evidence (by simpa [hopt] using hhead)
+        · exact tail.sameItem evidence htail⟩
+
+private def DemandNode.expectedChildrenRev (access : AccessEnv)
+    (parent : DemandWorkItem root) : (limit : Nat) →
+      V (DemandChildWorkResult root access parent limit)
+  | 0 => pure ⟨[], by
+      intro index child hindex hchild
+      omega⟩
+  | limit + 1 => do
+    let prefixResult ← DemandNode.expectedChildrenRev access parent limit
+    match hchild : parent.node.child? limit with
+    | none =>
+      pure ⟨prefixResult.items, by
+        intro index child hindex hnext
+        by_cases heq : index = limit
+        · subst index
+          simp [hchild] at hnext
+        · exact prefixResult.contains index child (by omega) hnext⟩
+    | some child => do
+      match hframe : parent.node.childFrame access parent.path parent.frame limit with
+      | .error error => throw error
+      | .ok frame => do
+        let childForbidden ← match parent.node with
           | .statement (.assignWhole p _ _) =>
-            if index == 1 then
+            if limit == 1 then
               let owner ← access.owner p
-              pure (owner :: item.forbidden)
-            else pure item.forbidden
-          | _ => pure item.forbidden
-        childrenRev := ⟨item.path ++ [index], child, frame, childForbidden⟩ :: childrenRev
-    DemandNode.expectedWork access fuel (childrenRev.reverse ++ rest) (here ++ expected)
-termination_by fuel _ _ => fuel
+              pure (owner :: parent.forbidden)
+            else pure parent.forbidden
+          | _ => pure parent.forbidden
+        let childItem : DemandWorkItem root :=
+          ⟨parent.path ++ [limit], child, frame, childForbidden,
+            parent.source.snoc limit (by simpa [DemandNode.child?] using hchild)⟩
+        pure ⟨childItem :: prefixResult.items, by
+          intro index candidate hindex hnext
+          by_cases heq : index = limit
+          · subst index
+            have hnode : child = candidate := Option.some.inj (hchild.symm.trans hnext)
+            subst candidate
+            refine ⟨frame, ?_, childItem, ?_, rfl, rfl, rfl⟩
+            · exact hframe
+            · simp [childItem]
+          · obtain ⟨oldFrame, holdFrame, oldItem, holdItem, holdPath, holdNode, holdItemFrame⟩ :=
+              prefixResult.contains index candidate (by omega) hnext
+            exact ⟨oldFrame, holdFrame, oldItem, List.mem_cons_of_mem _ holdItem,
+              holdPath, holdNode, holdItemFrame⟩⟩
+termination_by limit => limit
+
+private def DemandNode.expectedChildren (access : AccessEnv)
+    (parent : DemandWorkItem root) (limit : Nat) :
+      V (DemandChildWorkResult root access parent limit) := do
+  let result ← DemandNode.expectedChildrenRev access parent limit
+  pure ⟨result.items.reverse, by
+    intro index child hindex hchild
+    obtain ⟨frame, hframe, item, hitem, hpath, hnode, hitemFrame⟩ :=
+      result.contains index child hindex hchild
+    exact ⟨frame, hframe, item, List.mem_reverse.mpr hitem,
+      hpath, hnode, hitemFrame⟩⟩
+
+private def DemandNode.expectedWork (access : AccessEnv) (root : DemandNode) : Nat →
+    (work : List (DemandWorkItem root)) → V (DemandExpectedWalkResult root access work)
+  | 0, [] => pure ⟨[], by intro item hmem; simp at hmem,
+    by intro entry hmem; simp at hmem⟩
+  | 0, _ :: _ => reject .shrink "demand coverage walk exceeded the decoded syntax node limit"
+  | _ + 1, [] => pure ⟨[], by intro item hmem; simp at hmem,
+    by intro entry hmem; simp at hmem⟩
+  | fuel + 1, item :: rest => do
+    let here ← DemandNode.expectedPhases access item DemandPhase.all
+    let children ← DemandNode.expectedChildren access item item.node.children.length
+    let tail ← DemandNode.expectedWork access root fuel (children.items ++ rest)
+    pure ⟨here.entries ++ tail.entries, by
+      intro candidate hmem phase hvalid
+      simp only [List.mem_cons] at hmem
+      rcases hmem with rfl | hmem
+      · obtain ⟨entry, hentry, hpath, hnode, hframe, hphase⟩ :=
+          here.covers phase (DemandPhase.mem_all phase) hvalid
+        exact ⟨entry, List.mem_append_left _ hentry, hpath, hnode, hframe, hphase⟩
+      · obtain ⟨entry, hentry, hpath, hnode, hframe, hphase⟩ :=
+          tail.covers candidate (List.mem_append_right _ hmem) phase hvalid
+        exact ⟨entry, List.mem_append_right _ hentry, hpath, hnode, hframe, hphase⟩,
+      by
+        intro entry hmem hprimary index child hchild childPhase hchildPhase
+        simp only [List.mem_append] at hmem
+        rcases hmem with hhere | htail
+        · have hentryItem := here.sameItem entry hhere
+          have hchild' : item.node.child? index = some child := by
+            rw [← hentryItem]
+            exact hchild
+          have hindex : index < item.node.children.length := by
+            have hget : (item.node.children[index]?).join = some child := by
+              simpa [DemandNode.child?] using hchild'
+            have houter : item.node.children[index]? = some (some child) := by
+              cases hopt : item.node.children[index]? with
+              | none => simp [hopt] at hget
+              | some child? =>
+                cases child? with
+                | none => simp [hopt] at hget
+                | some actual =>
+                  simp [hopt] at hget
+                  have hactual : actual = child := hget
+                  subst actual
+                  rfl
+            exact Classical.choose (List.getElem?_eq_some_iff.mp houter)
+          obtain ⟨childFrame, hchildFrame, childItem, hchildItem,
+            hchildPath, hchildNode, hitemFrame⟩ :=
+              children.contains index child hindex hchild'
+          have hchildItemPhase : DemandNodeHasPhase childItem.node childPhase := by
+            simpa [hchildNode] using hchildPhase
+          obtain ⟨childEntry, hchildEntry, hentryPath, hentryNode, hentryFrame,
+            hentryPhase⟩ := tail.covers childItem
+              (List.mem_append_left _ hchildItem) childPhase hchildItemPhase
+          have hparentPath : entry.item.path = item.path := by rw [hentryItem]
+          have hparentNode : entry.item.node = item.node := by rw [hentryItem]
+          have hparentFrame : entry.item.frame = item.frame := by rw [hentryItem]
+          refine ⟨childEntry, List.mem_append_right _ hchildEntry, ?_, ?_, hentryPhase,
+            childFrame, ?_, ?_, childEntry.expected.frame, ?_, rfl⟩
+          · calc
+              childEntry.item.path = childItem.path := hentryPath
+              _ = item.path ++ [index] := hchildPath
+              _ = entry.item.path ++ [index] := by rw [hparentPath]
+          · calc
+              childEntry.item.node = childItem.node := hentryNode
+              _ = child := hchildNode
+          · simpa [hparentPath, hparentNode, hparentFrame] using hchildFrame
+          · calc
+              childEntry.item.frame = childItem.frame := hentryFrame
+              _ = childFrame := hitemFrame
+          · simpa only [hentryNode, hentryPath, hentryFrame, hentryPhase,
+              hchildNode, hchildPath, hitemFrame, hparentNode, hparentPath, hparentFrame]
+              using childEntry.phaseFrame
+        · obtain ⟨childEntry, hchildEntry, hpath, hnode, hphase, childFrame,
+            hchildFrame, hentryFrame, phaseFrame, hphaseFrame, hexpectedFrame⟩ :=
+              tail.children entry htail hprimary index child hchild childPhase hchildPhase
+          exact ⟨childEntry, List.mem_append_right _ hchildEntry, hpath, hnode,
+            hphase, childFrame, hchildFrame, hentryFrame, phaseFrame, hphaseFrame,
+            hexpectedFrame⟩⟩
+termination_by fuel => fuel
+
+private theorem demandSetup_root {m owner setup}
+    (hsetup : demandSetup? m owner = some setup) :
+    demandRoot? m owner = some setup.root := by
+  by_cases howner : owner < m.contexts.size
+  · unfold demandSetup? at hsetup
+    simp only [ite_eq_left howner] at hsetup
+    cases hctx : m.contexts[owner]? with
+    | none => simp [hctx] at hsetup
+    | some ctx =>
+      cases himpl : m.impls[ctx.impl]? with
+      | none => simp [hctx, himpl] at hsetup
+      | some impl =>
+        simp [hctx, himpl] at hsetup
+        cases hsetup
+        simp [demandRoot?, howner]
+        refine ⟨impl, ?_, rfl⟩
+        have ⟨_, hctxValue⟩ := Array.getElem?_eq_some_iff.mp hctx
+        have hctxImpl : m.contexts[owner].impl = ctx.impl := congrArg Context.impl hctxValue
+        rw [hctxImpl]
+        exact himpl
+  · unfold demandSetup? at hsetup
+    simp only [ite_eq_right howner] at hsetup
+    cases hglobal : m.globals[owner - m.contexts.size]? with
+    | none => simp [hglobal] at hsetup
+    | some global =>
+      simp [hglobal] at hsetup
+      cases hsetup
+      simp [demandRoot?, howner, hglobal]
 
 def DemandNode.expectedPoints (m : Module) (owner : Nat) :
     V (List DemandExpectedPoint) := do
   let some setup := demandSetup? m owner
     | reject .block "demand coverage has no owner root"
-  DemandNode.expectedWork setup.access (Decode.maxNodesPerFunction + 1)
-    [⟨[], setup.root, setup.initial, []⟩] []
+  let result ← DemandNode.expectedWork setup.access setup.root
+    (Decode.maxNodesPerFunction + 1)
+    [⟨[], setup.root, setup.initial, [], DemandNodeAt.here setup.root⟩]
+  pure (result.entries.map fun entry => entry.expected)
+
+def DemandExpectedAt (m : Module) (owner : Nat)
+    (expected : DemandExpectedPoint) : Prop :=
+  ∃ points, DemandNode.expectedPoints m owner = .ok points ∧ expected ∈ points
+
+/-- A specific source node and phase occurs in the owner's replayed coverage walk. -/
+def DemandExpectedSourceAt (m : Module) (owner : Nat) (path : List Nat)
+    (node : DemandNode) (phase : DemandPhase) (expected : DemandExpectedPoint) : Prop :=
+  ∃ points, DemandNode.expectedPoints m owner = .ok points ∧ expected ∈ points ∧
+    expected.path = path ∧ expected.node = node ∧ expected.phase = phase
+
+private theorem expectedPoints_result {m owner points}
+    (hwalk : DemandNode.expectedPoints m owner = .ok points)
+    : ∃ setup result, demandSetup? m owner = some setup ∧
+      DemandNode.expectedWork setup.access setup.root (Decode.maxNodesPerFunction + 1)
+        [⟨[], setup.root, setup.initial, [], DemandNodeAt.here setup.root⟩] = .ok result ∧
+      (result.entries.map fun entry => entry.expected) = points := by
+  unfold DemandNode.expectedPoints at hwalk
+  cases hsetup : demandSetup? m owner with
+  | none =>
+    simp [hsetup] at hwalk
+    cases hwalk
+  | some setup =>
+    cases hresult : DemandNode.expectedWork setup.access setup.root
+        (Decode.maxNodesPerFunction + 1)
+        [⟨[], setup.root, setup.initial, [], DemandNodeAt.here setup.root⟩] with
+    | error error =>
+      simp [hsetup, hresult] at hwalk
+      cases hwalk
+    | ok result =>
+      simp [hsetup, hresult] at hwalk
+      have hmap : (result.entries.map fun entry => entry.expected) = points := by
+        injection hwalk
+      exact ⟨setup, result, rfl, hresult, hmap⟩
+
+private theorem expectedPoints_evidence {m owner points expected}
+    (hwalk : DemandNode.expectedPoints m owner = .ok points)
+    (hmem : expected ∈ points) :
+    DemandSourceAt m owner expected.path expected.node ∧
+      DemandNodeHasPhase expected.node expected.phase := by
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hmemMap : expected ∈ result.entries.map fun entry => entry.expected := by
+    rw [hmap]
+    exact hmem
+  rcases List.mem_map.mp hmemMap with ⟨entry, hentry, heq⟩
+  subst expected
+  have hroot := demandSetup_root hsetup
+  refine ⟨?_, ?_⟩
+  · exact ⟨setup.root, hroot, by
+      rw [entry.expectedPath, entry.expectedNode]
+      exact entry.item.source⟩
+  · simpa [entry.expectedNode] using entry.phaseSource
+
+private theorem DemandNode.phaseFrame_primary (node : DemandNode) (access : AccessEnv)
+    (path : List Nat) (frame : DemandFrame) :
+    node.phaseFrame access path frame node.primaryPhase = .ok frame := by
+  cases node with
+  | expression expression => cases expression <;> rfl
+  | place place => rfl
+  | view view => rfl
+  | bound bound => rfl
+  | statement statement => rfl
+  | block block => rfl
+
+private theorem expectedPoints_child {m owner points path parentNode parentExpected
+    index childNode childPhase}
+    (hwalk : DemandNode.expectedPoints m owner = .ok points)
+    (hparentMem : parentExpected ∈ points)
+    (hparentPath : parentExpected.path = path)
+    (hparentNode : parentExpected.node = parentNode)
+    (hparentPrimary : parentExpected.phase = parentNode.primaryPhase)
+    (hchild : parentNode.child? index = some childNode)
+    (hchildPhase : DemandNodeHasPhase childNode childPhase) :
+    ∃ setup childExpected childFrame phaseFrame,
+      demandSetup? m owner = some setup ∧
+      DemandExpectedSourceAt m owner (path ++ [index]) childNode childPhase childExpected ∧
+      parentNode.childFrame setup.access path parentExpected.frame index = .ok childFrame ∧
+      childNode.phaseFrame setup.access (path ++ [index]) childFrame childPhase = .ok phaseFrame ∧
+      childExpected.frame = phaseFrame := by
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hparentMap : parentExpected ∈ result.entries.map fun entry => entry.expected := by
+    rw [hmap]
+    exact hparentMem
+  rcases List.mem_map.mp hparentMap with ⟨parentEntry, hparentEntry, hparentEq⟩
+  have hitemPath : parentEntry.item.path = path := by
+    calc
+      parentEntry.item.path = parentEntry.expected.path := parentEntry.expectedPath.symm
+      _ = parentExpected.path := congrArg DemandExpectedPoint.path hparentEq
+      _ = path := hparentPath
+  have hitemNode : parentEntry.item.node = parentNode := by
+    calc
+      parentEntry.item.node = parentEntry.expected.node := parentEntry.expectedNode.symm
+      _ = parentExpected.node := congrArg DemandExpectedPoint.node hparentEq
+      _ = parentNode := hparentNode
+  have hentryPrimary : parentEntry.expected.phase = parentEntry.item.node.primaryPhase := by
+    calc
+      parentEntry.expected.phase = parentExpected.phase := congrArg DemandExpectedPoint.phase hparentEq
+      _ = parentNode.primaryPhase := hparentPrimary
+      _ = parentEntry.item.node.primaryPhase := by rw [hitemNode]
+  have hitemFrame : parentEntry.item.frame = parentExpected.frame := by
+    have hprimaryFrame := DemandNode.phaseFrame_primary parentEntry.item.node setup.access
+      parentEntry.item.path parentEntry.item.frame
+    have hphaseFrame := parentEntry.phaseFrame
+    rw [hentryPrimary, hprimaryFrame] at hphaseFrame
+    exact (Except.ok.inj hphaseFrame).trans
+      (congrArg DemandExpectedPoint.frame hparentEq)
+  have hentryChild : parentEntry.item.node.child? index = some childNode := by
+    rw [hitemNode]
+    exact hchild
+  obtain ⟨childEntry, hchildEntry, hchildPath, hchildNode, hchildExpectedPhase,
+      childFrame, hchildFrame, hchildItemFrame, phaseFrame, hphaseFrame, hchildFrameEq⟩ :=
+    result.children parentEntry hparentEntry hentryPrimary index childNode hentryChild
+      childPhase hchildPhase
+  have hchildMem : childEntry.expected ∈ points := by
+    rw [← hmap]
+    exact List.mem_map.mpr ⟨childEntry, hchildEntry, rfl⟩
+  have hchildExpectedPath : childEntry.expected.path = path ++ [index] := by
+    calc
+      childEntry.expected.path = childEntry.item.path := childEntry.expectedPath
+      _ = parentEntry.item.path ++ [index] := hchildPath
+      _ = path ++ [index] := by rw [hitemPath]
+  have hchildExpectedNode : childEntry.expected.node = childNode := by
+    calc
+      childEntry.expected.node = childEntry.item.node := childEntry.expectedNode
+      _ = childNode := hchildNode
+  have hchildSource : DemandExpectedSourceAt m owner (path ++ [index]) childNode
+      childPhase childEntry.expected :=
+    ⟨points, hwalk, hchildMem, hchildExpectedPath, hchildExpectedNode,
+      hchildExpectedPhase⟩
+  refine ⟨setup, childEntry.expected, childFrame, phaseFrame, hsetup, hchildSource,
+    ?_, ?_, hchildFrameEq⟩
+  · simpa [hitemPath, hitemNode, hitemFrame] using hchildFrame
+  · simpa [hitemPath] using hphaseFrame
 
 private structure DemandExpectedCoverage (points : List DemandPoint)
     (expected : List DemandExpectedPoint) where
@@ -1380,21 +1773,42 @@ private def DemandPathIndex.verifyExpected {points : List DemandPoint}
           · exact hrest.covers candidate hmem⟩
       else reject .shrink s!"demand metadata differs at path {occurrence.path} phase {repr occurrence.phase}"
 
-def DemandExpectedAt (m : Module) (owner : Nat)
-    (expected : DemandExpectedPoint) : Prop :=
-  ∃ points, DemandNode.expectedPoints m owner = .ok points ∧ expected ∈ points
-
-/-- A specific source node and phase occurs in the owner's replayed coverage walk. -/
-def DemandExpectedSourceAt (m : Module) (owner : Nat) (path : List Nat)
-    (node : DemandNode) (phase : DemandPhase) (expected : DemandExpectedPoint) : Prop :=
-  ∃ points, DemandNode.expectedPoints m owner = .ok points ∧ expected ∈ points ∧
-    expected.path = path ∧ expected.node = node ∧ expected.phase = phase
-
-theorem DemandExpectedSourceAt.toExpectedAt {m owner path node phase expected}
+theorem DemandExpectedSourceAt.sourceFacts {m owner path node phase expected}
     (sourceAt : DemandExpectedSourceAt m owner path node phase expected) :
-    DemandExpectedAt m owner expected := by
-  rcases sourceAt with ⟨points, hwalk, hmem, _, _, _⟩
-  exact ⟨points, hwalk, hmem⟩
+    DemandSourceAt m owner path node ∧ DemandNodeHasPhase node phase := by
+  rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
+  obtain ⟨hsource, hhasPhase⟩ := expectedPoints_evidence hwalk hmem
+  exact ⟨by simpa [hpath, hnode] using hsource, by simpa [hnode, hphase] using hhasPhase⟩
+
+/-- A primary source point and each valid immediate child occur in the same
+coverage walk. -/
+theorem DemandExpectedSourceAt.child
+    {m owner path parentNode parentPhase parentExpected index childNode childPhase}
+    (parentSource : DemandExpectedSourceAt m owner path parentNode parentPhase parentExpected)
+    (primary : parentPhase = parentNode.primaryPhase)
+    (hchild : parentNode.child? index = some childNode)
+    (hchildPhase : DemandNodeHasPhase childNode childPhase) :
+    ∃ childExpected points,
+      DemandExpectedSourceAt m owner (path ++ [index]) childNode childPhase childExpected ∧
+      DemandNode.expectedPoints m owner = .ok points ∧
+      parentExpected ∈ points ∧ childExpected ∈ points := by
+  rcases parentSource with ⟨points, hwalk, hparentMem, hparentPath, hparentNode, hparentPhase⟩
+  have hparentPrimary : parentExpected.phase = parentNode.primaryPhase := by
+    rw [hparentPhase]
+    exact primary
+  obtain ⟨setup, childExpected, childFrame, phaseFrame, hsetup, hchildSource,
+      hchildFrame, hphaseFrame, hchildFrameEq⟩ :=
+    expectedPoints_child hwalk hparentMem hparentPath hparentNode hparentPrimary
+      hchild hchildPhase
+  have hchildSource' := hchildSource
+  rcases hchildSource' with ⟨childPoints, hchildWalk, hchildMem, _, _, _⟩
+  have hpoints : points = childPoints := by
+    rw [hwalk] at hchildWalk
+    injection hchildWalk
+  have hchildMemParent : childExpected ∈ points := by
+    rw [hpoints]
+    exact hchildMem
+  exact ⟨childExpected, points, hchildSource, hwalk, hparentMem, hchildMemParent⟩
 
 def PlansWellFormed (m : Module) (plans : Array (Array DemandPoint)) : Prop :=
   plans.size = (if m.profile == .pilot then 0 else m.contexts.size + m.globals.size) ∧
