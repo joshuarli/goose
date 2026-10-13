@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** resumed 2026-10-13 at the owner's request. Current progress is appended to §13; the paused handoff below records the starting state.
+**Status:** resumed 2026-10-13 at the owner's request. Current progress is appended to §13; the paused handoff below records the starting state and historical status at pause.
 **Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12). `master` is not touched.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
@@ -20,7 +20,7 @@ The Aincrad3 scratch copy, if needed: `mkdir -p .work/aincrad3 && git -C ~/d/ain
 
 **State.** Branch `goose-ir`, not pushed by the executor. Merged this session: the ground items; the Lean model, validator and tool for `core-pilot` with 81 audited theorems (numeric rules, fuel monotonicity, growth, the live-reference invariant, the safety theorem `validated_never_faults`, sharing and reuse, the lowering theorem for structured control); an independent review and its fixes; references to slice variables in the Lean model and the exporter; Core and IR export, the IR pipeline with its own C emitter (`--pipeline gir`), and its units; the cost report, stable keys, shared implementations, code-generation units, the units build driver with its object store, dependency recording, and a native-support unit for programs with C of their own; conformance and corpus harnesses, the synthetic family, the edit matrix; linter parity; upstream `1cfe4b6`; two runtime and build fixes cherry-picked. Gates reached: `G-PILOT`, `G-SHARE`, `G-ATTR` except frozen budgets, `G-UNITS` on its structural gates.
 
-Known red on the branch: under `--pipeline gir`, corpus mode has two internal compiler errors (`GIR-V010`), on `optimizer/loop_shapes_countdown_abort` (a mutable slice over a `let` array) and `runtime/never_returns_exit` (a call that never returns). The Core validator learned both rules; the IR validator, the C++ verifier and the lowering have not. Everything else listed under Verified is green.
+Known red at pause (historical): under `--pipeline gir`, corpus mode had two internal compiler errors (`GIR-V010`), on `optimizer/loop_shapes_countdown_abort` (a mutable slice over a `let` array) and `runtime/never_returns_exit` (a call that never returns). The Core validator had learned both rules; the IR validator, the C++ verifier and the lowering had not. The later GIR alignment is recorded in §13. Everything else listed under Verified was green at pause.
 
 **Open lanes.** Recreate a worktree with `git worktree add .work/wt/<lane> <branch>`.
 
@@ -500,6 +500,10 @@ The most common exact multi-feature sets are `string-value + struct` (7 programs
 *(append-only; one line per gate or phase end. Resumed entries here supersede
 the pending statuses in the paused handoff above.)*
 
+- `H2` completed, as recorded in §11.3: the units edit matrix passed every row with reuse verification on; the seeded 60-step randomized edit sequence never diverged from a clean build. These are structural checks; §11.3 records that timed measurements remain deferred because the host was busy.
+- `S4` GIR alignment merged as `c4d9d8b` (`gir-h/0.3`): reference content roots and call effects now align across Core lowering, Lean GIR and the C++ verifier, including the Core validator's no-return flow. The commit's focused fixture checks are `gir_never_returns_exit.gir-h.json`, `gir_rejected_v050_root_underapprox.json`, `gir_rejected_v050_slice_content_read.json`, `gir_rejected_v050_slice_param_rebind.json`, and `gir_rejected_v050_call_parameter_global.json`, exercised by the GIR golden and invalid check scripts. No timed gate is claimed here.
+- `H4` documentation refresh completed through `21d5f41`: `00e0dd3`, `e04f2a0`, `2a5ef7a`, `0825196`, `da8377d`, and `21d5f41` route repo guidance and refresh the reference, user, compiler/testing, and source-comment documentation. Runtime comments needed special handling because runtime source text is embedded verbatim and hashed into `RuntimeVersion`; the final runtime-comment commit records that constraint.
+- `S8` contract update `ca74cc7` is documentation-only. It specifies the flat-struct encoding and first implementation slice, but reaches no gate; struct implementation remains active on its lanes.
 - **Resumed 2026-10-13.** Starting tree `47fa15a` is clean. Recreated isolated worktrees for IR alignment (`goose-ir-ir-align`), units validation (`goose-ir-units-finish`), corpus forecast (`goose-ir-export-forecast`), and the third and final lowering attempt (`goose-ir-sem-gir`). Upstream drafts remain deferred under O8; nothing is pushed.
 - `H4` completed: implementation and testing docs cover the Core/GIR exports, pipeline choice, units corpus package coverage and build flags; the CLI synopsis lists the public Core/GIR, report, sharing and units flags while keeping `--stable-names` hidden. The compiler usage output and `git diff --check` pass.
 - `B8` remainder merged: all five `test/packages` fixtures pass through `goose build --units` in 15 O0, O2 and O2-with-sharing builds; Aincrad3's core entry builds as 459 units and runs against its real package and schemas. `B5` now has an Aincrad3 E00–E03 runner; its real edit matrix remains to run. Timing remains deferred because the host is busy.
