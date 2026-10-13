@@ -90,6 +90,23 @@ theorem ViewOk.mono {s s' : Store} {vw : ViewVal} {el : Ty} (hle : StoreLe s s')
       (fun h => Or.inl (LocTy.mono hle h))
       (fun h => Or.inr (LocTy.mono hle h))⟩⟩
 
+/-- A sampled view realizes the alias chosen from its checked source. Fixed
+runs retain their sampled bounds; resizable runs retain the owner header.
+The bound-location fact makes a retained owner usable after each body. -/
+inductive ViewAliases (m : Module) (W : World) (penv : PEnv) (env : Env) (s : Store)
+    (source : View) (vw : ViewVal) (el : Ty) : Prop
+  | fixed (resizable : vw.resizable = false)
+      (realized : ∀ path alias, penv.access.aliasView path source = .ok [alias] →
+        alias.ty = .slice .readOnly el ∧
+          AliasAt m W env s alias (.slice vw.loc vw.start vw.len))
+  | owner (resizable : vw.resizable = true) (place : Place) (owner : Ty)
+      (sourceEq : source = .of place)
+      (ownerType : owner = .grow el ∨ owner = .growshrink el)
+      (typeLookup : penv.access.placeType? place = some owner)
+      (bound : ¬ Unbound m W.G vw.loc owner)
+      (realized : ∀ path alias, penv.access.aliasPlace path place = .ok [alias] →
+        alias.ty = .ref .mutable owner ∧ AliasAt m W env s alias (.ref vw.loc))
+
 /-- The values a construct binds in its block: distinct variables of the block,
 numbered in `[lo, hi)`, each with a value of its type that points into its
 annotation. -/
@@ -369,7 +386,7 @@ def ViewSpec (n : Nat) : Prop :=
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧ ViewOk s'.store vw el ∧
-      Gam env W.P rho vw.loc.root)
+      Gam env W.P rho vw.loc.root ∧ ViewAliases m W penv env s'.store v vw el)
 
 def CallSpec (n : Nat) : Prop :=
   ∀ (G : Nat) (P : Nat → RootInst → Prop) (D : RootInst → Ty → Prop)
@@ -578,7 +595,8 @@ def EachSpec (n : Nat) : Prop :=
     ShrinkProtected W.D W.A (ec.mayShrink W.P) →
     ObservedSafe m W (ec.mayShrink W.P) observation s.store →
     Perm m W → Frame m W tenv penv env s (body.variables ++ ec.outputFuture) →
-    EachViewOk s.store vw el → Gam env W.P rho vw.loc.root →
+    EachViewOk s.store vw el → ViewAliases m W penv env s.store sourceView vw el →
+    Gam env W.P rho vw.loc.root →
     (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope ∧ lv.ty.storable = true ∧
       (if byRef = true then (∃ mx, lv.ty = .ref mx el) ∧
           bindRootsV penv (body.scope :: penv.scopes) x rho = .ok ()
