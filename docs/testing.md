@@ -119,6 +119,7 @@ Test fixtures are grouped by category; `run_tests.py` stays at the root of `test
 | `stdlib/` | Standard-library modules. |
 | `goose_in_goose/` | A Goose-written compiler used as one multi-file bootstrap regression: build and run three generations, check a C fixed point and repeated self-checks of the stage-2 compiler, and compare JIT/native self-compilation. |
 | `lint/` | Dedicated semantic linter inputs and black-box CLI integration runner (`run_tests.py`), invoked with the Goose executable after its bundled companion is built. |
+| `audio/` | Audio mixer behavior and expected package diagnostics. |
 | `gfx/` | The `gfx` graphics module: headless rendering, textures, compute, frames and input, a runtime misuse, shaders from files and from the program; shader and threading rejections (fixtures with `// error:` markers). The programs hold their shaders; the shader files beside them are for the file form of `embed_shader` and `--compile-shader`. `gfx/window/` is the windowed showcase, not part of the suite. |
 | `physics/` | The `physics` module: worlds, bodies, every kind of shape and geometry, all joint kinds, queries, events, recording and replay, a runtime misuse, and the threading rejection. |
 | `ui/` | The `ui` module: fonts, windows and layout, widgets, popups and menus, text editing, style, drawing and the input queries, charts, rendering and input through headless gfx, whether the keys and the mouse are the ui's, a runtime misuse, the layer's misuse messages, and the threading rejection. |
@@ -228,35 +229,24 @@ mappings and Windows handles across worker churn, including unjoined workers,
 concurrent/repeated waits and children outliving their parents. It runs in both
 profiles. The normal suite also checks user-visible worker error diagnostics.
 
-The `gfx/` tests exercise the gfx package (https://github.com/aardappel/goose_gfx,
-its `docs/gfx.md`). They
-always parse, typecheck and generate C. When the compiler includes the gfx layer
-(configured with the package, `GOOSE_BUILTIN_LIBS`), the tests also link against the
-libraries listed by `goose --gfx-link` and run at -O0 and -O2 and through
-TinyCC. They render headless into textures and read back only pixel-aligned
-results, so their output is the same on every backend and GPU; a machine with no
-GPU device (the program prints `gfx: no GPU device`) reports them skipped, as
-does a compiler without the layer. Linux CI runs them on Mesa's lavapipe. The
-runners set `GOOSE_GFX_HEADLESS=1`, so no test or sample opens a window. The
-hidden `--compile-shader` flag is probed on `gfx/probe.frag`.
+The `gfx/` tests exercise the [gfx package](https://github.com/aardappel/goose_gfx).
+They always parse, typecheck and generate C. With the package built into the
+compiler (`GOOSE_BUILTIN_LIBS`), they link through `goose --gfx-link` and run
+at -O0, -O2 and TinyCC. They render headlessly; a missing GPU device or package
+skips runtime execution. Linux CI uses Mesa lavapipe, with
+`GOOSE_GFX_HEADLESS=1`. The hidden `--compile-shader` probe uses
+`test/gfx/probe.frag`.
 
-The `physics/` tests exercise the physics package
-(https://github.com/aardappel/goose_physics) in the same way. They always
-generate C. When the compiler was configured with the package
-(`GOOSE_BUILTIN_LIBS`), `goose build` links them and they run at -O0 and
--O2 and through TinyCC. Box3D
-is deterministic across platforms and worker counts, so they print physics
-results, rounded, and compare them exactly. Between them they call every
-function of the layer.
+The `physics/` tests exercise the
+[physics package](https://github.com/aardappel/goose_physics). They always
+generate C; with the package built in, they link and run at -O0, -O2 and
+through TinyCC. Box3D results are deterministic and compared exactly.
 
-The `ui/` tests exercise the ui module of the gfx package (its `docs/ui.md`) in the
-same way, linking `goose --ui-link` and, for the one that renders through
-gfx, `goose --gfx-link` too: a test needs the layers of its own category and
-of every module it imports, and is skipped where one is missing. They drive a
-context with input of their own and print what comes back and what was
-drawn; `ui_render` draws through headless gfx and reads back pixels only
-where the ui drew solid color. Between them they call every function of the
-layer.
+The audio and UI tests cover modules in the
+[gfx package](https://github.com/aardappel/goose_gfx). They link the required
+package libraries when available; UI tests that render also link gfx and use
+headless rendering. Tests skip execution when a required package layer is
+unavailable.
 
 Each package's own `test/api_check.py` compares the functions, structs, and
 constants in its modules with their C headers. This catches
@@ -344,24 +334,40 @@ stops at its error, so which warnings print first depends on how far it got.
 
 ## Additional compiler checks
 
-`goose --emit-core-report --check file.goose` typechecks the source, then
-prints one JSON object on stdout with the sorted, unique Core-profile features
-the exporter does not support. It is report-only: it writes no Core module or
-C output. A parse, typecheck or report-traversal failure exits nonzero and does
-not produce a feature set. The normal `--emit-core FILE` behavior is unchanged.
+`--emit-core-report --check` runs the Core exporter in report mode. It prints
+`{"unsupported":[...]}` with the complete sorted set of unsupported
+Core-profile features and writes no module or C. A parse, check or export
+error exits nonzero without a feature report. A normal export writes Core
+v0.2; GIR-H and GIR-L exports use v0.3 and v0.2 for the current `core-pilot`
+profile. `--pipeline gir` selects GIR for C, JIT and
+units output.
 
-`--emit-core FILE` writes a Core module when the checked program uses only
-supported features. `--emit-gir-high FILE` and `--emit-gir-low FILE` write GIR-H
-and GIR-L modules. `--pipeline gir` selects GIR for C, JIT and units output;
-unsupported features are errors. The default pipeline is `legacy`. A direct
-export probe is:
+A direct export probe is:
 
 ```sh
 mkdir -p .work/tmp
+build/goose --emit-core-report --check file.goose
 build/goose --emit-core .work/tmp/program.core --check file.goose
 build/goose --emit-gir-high .work/tmp/program.gir-h --check file.goose
 build/goose --emit-gir-low .work/tmp/program.gir-l --check file.goose
 build/goose --pipeline gir -o .work/tmp/program.c file.goose
+```
+
+The GIR golden check compares deterministic lowerings, validation, encoding
+round trips and agreement with Core in release and debug profiles. The invalid
+check covers malformed modules, verifier rejections and accepted executions.
+Build the semantics tool first:
+
+```sh
+(cd semantics && lake build goose-semantics)
+test/gir/golden/check.sh
+test/gir/invalid/check.sh
+```
+
+The normal compiler suite builds the C++ GIR verifier tests with:
+
+```sh
+python test/run_tests.py --only extra/compiler_units
 ```
 
 The semantics corpus mode checks each report against normal Core export, then
