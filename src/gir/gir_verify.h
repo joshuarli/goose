@@ -225,6 +225,93 @@ private:
         return false;
     }
 
+    // A resizable's elements top its data stack for its whole life: the only
+    // things that move a stack's top are a header's initialization from the
+    // stack's own top, a bump that the same block follows with the length
+    // update of that stack's header, and the restoring of a mark taken from the
+    // same stack. A bump on a stack passed in cannot be tied to a header more
+    // exactly than "a header that was passed in".
+    struct StackId {
+        int kind = 0;   // 0 none, 1 a stack the function owns, 2 a global's, 3 passed in
+        int index = 0;
+        bool operator==(const StackId &o) const { return kind == o.kind && (kind == 3 || index == o.index); }
+    };
+
+    void CheckStackDiscipline(const Fn &fn) {
+        auto &f = *fn.f;
+        auto bad = [&](const string &msg) { Fail("GIR-V090", cat(fn.label, ": ", msg)); };
+        auto n = fn.vt.size();
+        vector<StackId> stack(n), header(n), markof(n);
+        auto &entry = f.blocks[0];
+        for (size_t k = 1; k < entry.params.size(); k++) {
+            stack[entry.params[k].first] = { 3, 0 };
+            header[entry.params[k].first] = { 3, 0 };
+        }
+        auto at = [&](const vector<StackId> &v, int x) { return x >= 0 && x < (int)n ? v[x] : StackId {}; };
+        for (int pass = 0; pass < 2; pass++)
+            for (auto &b : f.blocks)
+                for (auto &i : b.insts) {
+                    if (i.res < 0 || i.res >= (int)n) continue;
+                    switch (i.op) {
+                        case GirOp::StackAt: stack[i.res] = { 1, i.idx }; break;
+                        case GirOp::GlobalStack: stack[i.res] = { 2, i.idx }; break;
+                        // A stack or header held in a variable or returned: it
+                        // is one passed in, as far as the block can tell.
+                        case GirOp::LocalGet: case GirOp::PLoad:
+                            if (m.Type(fn.vt[i.res]).kind == CoreType::Ptr) {
+                                stack[i.res] = { 3, 0 };
+                                header[i.res] = { 3, 0 };
+                            }
+                            break;
+                        case GirOp::StackMark: markof[i.res] = at(stack, i.a); break;
+                        case GirOp::FrameAddr:
+                            if (i.idx >= 0 && i.idx < (int)f.members.size() &&
+                                f.members[i.idx].kind == GirMember::Header)
+                                header[i.res] = { 1, f.members[i.idx].stack };
+                            break;
+                        case GirOp::GlobalAddr:
+                            if (i.idx >= 0 && i.idx < (int)m.lowglobals.size() &&
+                                m.lowglobals[i.idx].kind == GirMember::Header)
+                                header[i.res] = { 2, i.idx };
+                            break;
+                        default: break;
+                    }
+                }
+        for (auto &b : f.blocks) {
+            vector<StackId> pending;
+            for (auto &i : b.insts) {
+                switch (i.op) {
+                    case GirOp::HdrInit: {
+                        auto h = at(header, i.a), mk = at(markof, i.b);
+                        if (h.kind == 0 || h.kind == 3 || mk.kind == 0 || !(h == mk))
+                            bad("a header initialized from something other than the top of its own stack");
+                        break;
+                    }
+                    case GirOp::StackRelease: {
+                        auto s = at(stack, i.a), mk = at(markof, i.b);
+                        if (s.kind == 0 || mk.kind == 0 || !(s == mk))
+                            bad("a watermark restored from a mark of another stack");
+                        break;
+                    }
+                    case GirOp::StackBump: {
+                        auto s = at(stack, i.a);
+                        if (s.kind == 0) bad("a bump of a stack that is not known");
+                        pending.push_back(s);
+                        break;
+                    }
+                    case GirOp::HdrSetLen: {
+                        auto h = at(header, i.a);
+                        for (size_t k = 0; k < pending.size(); k++)
+                            if (pending[k] == h) { pending.erase(pending.begin() + k); break; }
+                        break;
+                    }
+                    default: break;
+                }
+            }
+            if (!pending.empty()) bad("a stack bumped without the length of its header following in the block");
+        }
+    }
+
     // Layouts, placements and hidden parameters are all resolved, and the
     // data stacks are used as placement promised.
     void CheckPlacement(const Fn &fn) {
@@ -257,6 +344,7 @@ private:
                 if (ScopeWithin(f.scopes, x.scope, y.scope) || ScopeWithin(f.scopes, y.scope, x.scope))
                     bad(cat("two resizables live on data stack ", x.stack));
             }
+        CheckStackDiscipline(fn);
         // Which stack each address value is: one the function owns, or not.
         // A watermark is restored only on a stack the function owns.
         vector<char> owned(fn.vt.size(), 0);

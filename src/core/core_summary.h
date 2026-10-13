@@ -345,7 +345,15 @@ private:
             auto map = [&](const vector<CoreTarget> &from, set<CoreTarget> &to) {
                 for (auto &t : from) {
                     if (t.global) to.insert(t);
-                    else if (t.index < (int)argroots.size()) AddTargets(to, argroots[t.index]);
+                    else if (t.index < (int)argroots.size()) {
+                        AddTargets(to, argroots[t.index]);
+                        // And the globals the callee's context lists for the
+                        // parameter, which an entry for it stands for there too.
+                        for (auto &vr : ctx.varroots)
+                            if (vr.first == t.index && m.IsRefOrSlice(callee.vars[t.index].type))
+                                for (auto &r : vr.second)
+                                    if (r.kind == CoreRootRef::Global) to.insert(CoreTarget { true, r.index });
+                    }
                 }
             };
             map(callee.summary.reads, fx->reads);
