@@ -55,6 +55,16 @@ def NodeContext.ActiveMatches {m : Module} {plans : Array (Array DemandPoint)}
     (tenv : TEnv) : Prop :=
   context.expected.toPoint.ActiveMatches tenv.visible
 
+def NodeContext.AccessMatches {m : Module} {plans : Array (Array DemandPoint)}
+    {planContext : PlanContext m plans} {path : List Nat} {node : DemandNode}
+    {phase : DemandPhase} (_context : NodeContext planContext path node phase)
+    (tenv : TEnv) (penv : PEnv) : Prop :=
+  planContext.approvals.access.mod = tenv.mod ∧
+    planContext.approvals.access.impl.vars = tenv.vars ∧
+    planContext.approvals.access.mod = penv.mod ∧
+    planContext.approvals.access.impl = penv.impl ∧
+    planContext.approvals.access.ctx = penv.ctx
+
 /-- Child frames retain the exact transitions used to select the child focus. -/
 structure NodeChildContext {m : Module} {plans : Array (Array DemandPoint)}
     {planContext : PlanContext m plans} {path : List Nat} {node : DemandNode}

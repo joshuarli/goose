@@ -318,12 +318,15 @@ structure DemandExpectedPoint where
   shrinkOwners : List DemandOwner := []
   wholeChecks : List DemandWholeCheck := []
 
-def DemandNode.isDirectShrink : DemandNode → Bool
-  | .expression (.pop ..) => true
+def DemandNode.directShrinkPlace? : DemandNode → Option Place
+  | .expression (.pop p _) => some p
   | .statement s => match s with
-    | .popN .. | .resize .. | .clear .. | .assignWhole .. => true
-    | _ => false
-  | _ => false
+    | .popN p _ _ | .resize p _ _ _ | .clear p _ | .assignWhole p _ _ => some p
+    | _ => none
+  | _ => none
+
+def DemandNode.isDirectShrink (node : DemandNode) : Bool :=
+  node.directShrinkPlace?.isSome
 
 def DemandNode.callInfo? : DemandNode → Option (ContextId × List Arg)
   | .expression (.call context args _) => some (context, args)
@@ -697,18 +700,6 @@ private theorem DemandTrace.sourceAt_of_root (m : Module) (owner : Nat)
 def DemandPathPhaseUnique (plan : Array DemandPoint) : Prop :=
   ∀ a b, a ∈ plan.toList → b ∈ plan.toList → a.path = b.path → a.phase = b.phase → a = b
 
-mutual
-def Ty.containsFlat (whole part : Ty) : Bool :=
-  whole == part || match whole with
-    | .arr e _ => e.containsFlat part
-    | .structT _ ts => ts.containsFlat part
-    | _ => false
-
-def TyList.containsFlat : TyList → Ty → Bool
-  | .nil, _ => false
-  | .cons t ts, part => t.containsFlat part || ts.containsFlat part
-end
-
 structure DemandEnv (root : DemandNode) where
   access : AccessEnv
   cursor : DemandCursor root
@@ -815,11 +806,8 @@ def DemandOwner.invalidates (owner : DemandOwner) : Bool :=
   | some (.grow _) | some (.growshrink _) | none => true
   | some _ => false
 
-def DemandOwner.compatible (owner : DemandOwner) (alias : RetainedAlias) : Bool :=
-  match owner.ty.bind Ty.ownerElem?, alias.ty.interiorTarget? with
-  | some e, some t => e.containsFlat t
-  | _, some _ => true
-  | _, none => false
+def DemandOwner.compatible (_owner : DemandOwner) (alias : RetainedAlias) : Bool :=
+  alias.ty.interiorTarget?.isSome
 
 def DemandOwner.conflicts (owner : DemandOwner) (alias : RetainedAlias) : Bool :=
   owner.invalidates && owner.compatible alias &&
@@ -1067,7 +1055,8 @@ def AccessEnv.aliasExpr (env : AccessEnv) (path : List Nat) (e : Expr) : V (List
 def AccessEnv.aliasPlace (env : AccessEnv) (path : List Nat) (p : Place) : V (List RetainedAlias) := do
   let some t := env.placeType? p | reject .type "retained place has no checked type"
   let rt := Ty.ref .mutable t
-  if rt.interiorTarget?.isSome then pure [⟨rt, ← env.placeRoots p, .operand path⟩]
+  if rt.interiorTarget?.isSome || t.ownerElem?.isSome then
+    pure [⟨rt, ← env.placeRoots p, .operand path⟩]
   else pure []
 
 def AccessEnv.aliasView (env : AccessEnv) (path : List Nat) (v : View) : V (List RetainedAlias) := do
@@ -1124,8 +1113,10 @@ private def DemandNode.retainedForChild (node : DemandNode) (access : AccessEnv)
           match v with
           | .of p =>
             match access.placeType? p with
-            | some (.grow _) | some (.growshrink _) => pure []
-            | _ => access.aliasView (path ++ [0]) v
+            | some ty =>
+              if ty.ownerElem?.isSome then access.aliasPlace (path ++ [0]) p
+              else access.aliasView (path ++ [0]) v
+            | none => access.aliasView (path ++ [0]) v
           | .val _ => access.aliasView (path ++ [0]) v
       | _ => pure []
     | _ => pure []
@@ -1255,27 +1246,20 @@ def AccessEnv.callEffectOwners (env : AccessEnv) (context : ContextId)
     env.targetOwners callee ctx actual
       (summary.reads ++ summary.writes ++ summary.grows ++ summary.shrinks ++ summary.rebinds)
 
-private def DemandNode.expectedRequests (access : AccessEnv) (_path : List Nat)
+private def DemandNode.expectedShrinkOwners (access : AccessEnv) (node : DemandNode)
+    (phase : DemandPhase) : V (List DemandOwner) :=
+  match phase with
+  | .mutation =>
+    match node.directShrinkPlace? with
+    | some p => (fun owner => [owner]) <$> access.owner p
+    | none => match node with
+      | .expression (.call context args _) => access.callShrinkOwners context args
+      | _ => pure []
+  | _ => pure []
+
+private def DemandNode.expectedWholeChecks (access : AccessEnv)
     (forbidden : List DemandOwner) (node : DemandNode) (phase : DemandPhase) :
-    V (List DemandOwner × List DemandWholeCheck) := do
-  let shrinkOwners ← match phase, node with
-    | .mutation, .expression (.pop p _) => do
-      let owner ← access.owner p
-      pure [owner]
-    | .mutation, .statement (.popN p _ _) => do
-      let owner ← access.owner p
-      pure [owner]
-    | .mutation, .statement (.resize p _ _ _) => do
-      let owner ← access.owner p
-      pure [owner]
-    | .mutation, .statement (.clear p _) => do
-      let owner ← access.owner p
-      pure [owner]
-    | .mutation, .statement (.assignWhole p _ _) => do
-      let owner ← access.owner p
-      pure [owner]
-    | .mutation, .expression (.call context args _) => access.callShrinkOwners context args
-    | _, _ => pure []
+    V (List DemandWholeCheck) := do
   let wholeChecks ← match phase, node with
     | .place, .place p =>
       let roots ← access.placeRoots p
@@ -1293,7 +1277,7 @@ private def DemandNode.expectedRequests (access : AccessEnv) (_path : List Nat)
         pure (forbidden.flatMap fun owner => effects.map fun effect =>
           ⟨owner, effect.roots⟩)
     | _, _ => pure []
-  pure (shrinkOwners, wholeChecks)
+  pure wholeChecks
 
 private structure DemandExpectedEvidence (root : DemandNode) (access : AccessEnv) where
   expected : DemandExpectedPoint
@@ -1303,6 +1287,10 @@ private structure DemandExpectedEvidence (root : DemandNode) (access : AccessEnv
   expectedNode : expected.node = item.node
   phaseFrame : item.node.phaseFrame access item.path item.frame expected.phase =
     .ok expected.frame
+  shrinkRequests : DemandNode.expectedShrinkOwners access item.node expected.phase =
+    .ok expected.shrinkOwners
+  wholeRequests : DemandNode.expectedWholeChecks access item.forbidden item.node expected.phase =
+    .ok expected.wholeChecks
 
 private structure DemandExpectedPhaseResult (root : DemandNode) (access : AccessEnv)
     (item : DemandWorkItem root) (phase : DemandPhase) where
@@ -1365,18 +1353,22 @@ private def DemandNode.expectedPhase (access : AccessEnv)
     match hframe : item.node.phaseFrame access item.path item.frame phase with
     | .error error => throw error
     | .ok frame => do
-      let (shrinkOwners, wholeChecks) ←
-        DemandNode.expectedRequests access item.path item.forbidden item.node phase
-      let evidence : DemandExpectedEvidence root access :=
-        ⟨⟨item.path, item.node, phase, frame, shrinkOwners, wholeChecks⟩,
-          item, hphase, rfl, rfl, hframe⟩
-      pure ⟨some evidence, by
-        intro _
-        exact ⟨evidence, rfl, rfl, rfl, rfl, rfl⟩, by
-        intro candidate hmem
-        simp at hmem
-        subst candidate
-        rfl⟩
+      match hshrink : DemandNode.expectedShrinkOwners access item.node phase with
+      | .error error => throw error
+      | .ok shrinkOwners =>
+        match hwhole : DemandNode.expectedWholeChecks access item.forbidden item.node phase with
+        | .error error => throw error
+        | .ok wholeChecks => do
+          let evidence : DemandExpectedEvidence root access :=
+            ⟨⟨item.path, item.node, phase, frame, shrinkOwners, wholeChecks⟩,
+              item, hphase, rfl, rfl, hframe, hshrink, hwhole⟩
+          pure ⟨some evidence, by
+            intro _
+            exact ⟨evidence, rfl, rfl, rfl, rfl, rfl⟩, by
+            intro candidate hmem
+            simp at hmem
+            subst candidate
+            rfl⟩
   else
     pure ⟨none, by
       intro hvalid
@@ -1849,6 +1841,46 @@ theorem DemandExpectedSourceAt.sourceFacts {m owner path node phase expected}
   rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
   obtain ⟨hsource, hhasPhase⟩ := expectedPoints_evidence hwalk hmem
   exact ⟨by simpa [hpath, hnode] using hsource, by simpa [hnode, hphase] using hhasPhase⟩
+
+/-- A direct mutation request names the canonical owner checked during replay. -/
+theorem DemandExpectedSourceAt.directShrinkOwner
+    {m owner path node phase expected place access shrinkOwner}
+    (sourceAt : DemandExpectedSourceAt m owner path node phase expected)
+    (mutation : phase = .mutation)
+    (directPlace : node.directShrinkPlace? = some place)
+    (accessMatches : demandAccess? m owner = some access)
+    (ownerResult : access.owner place = .ok shrinkOwner) :
+    shrinkOwner ∈ expected.shrinkOwners := by
+  rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hsourceMap : expected ∈ result.entries.map fun entry => entry.expected := by
+    rw [hmap]
+    exact hmem
+  rcases List.mem_map.mp hsourceMap with ⟨entry, hentry, hentryExpected⟩
+  have hentryPath : entry.item.path = path := by
+    calc
+      entry.item.path = entry.expected.path := entry.expectedPath.symm
+      _ = expected.path := congrArg DemandExpectedPoint.path hentryExpected
+      _ = path := hpath
+  have hentryNode : entry.item.node = node := by
+    calc
+      entry.item.node = entry.expected.node := entry.expectedNode.symm
+      _ = expected.node := congrArg DemandExpectedPoint.node hentryExpected
+      _ = node := hnode
+  have hphaseExpected : expected.phase = .mutation := hphase.trans mutation
+  have hsetupAccess : setup.access = access := by
+    simpa [demandAccess?, hsetup] using accessMatches
+  have hshrinkRequests : DemandNode.expectedShrinkOwners access node .mutation =
+      .ok expected.shrinkOwners := by
+    simpa [hsetupAccess, hentryNode, hphaseExpected, hentryExpected] using entry.shrinkRequests
+  have hownerList : [shrinkOwner] = expected.shrinkOwners := by
+    have hownerResult := hshrinkRequests
+    simp only [DemandNode.expectedShrinkOwners, directPlace, ownerResult] at hownerResult
+    change (Except.ok [shrinkOwner] : V (List DemandOwner)) =
+      Except.ok expected.shrinkOwners at hownerResult
+    exact Except.ok.inj hownerResult
+  rw [← hownerList]
+  simp
 
 /-- A primary source point and each valid immediate child occur in the same
 coverage walk. -/
