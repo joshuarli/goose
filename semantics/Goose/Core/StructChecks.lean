@@ -1,5 +1,6 @@
 import Goose.Core.Run
 import Goose.Core.Writer
+import Goose.Core.Guarantees
 
 namespace Goose.Core.StructChecks
 
@@ -41,6 +42,12 @@ def writeField (m : Module) (i : Nat) (t : IntTy) : Module :=
 #guard checkChange (fun m => { m with structs := m.structs.modify 0 fun d =>
   { d with byteSize := 10 } }) "V-TYPE"
 #guard checkChange (fun m => { m with profile := .pilot }) "V-TYPE"
+
+#guard match Decode.decodeBytes localStruct.toUTF8 with
+  | .error _ => false
+  | .ok m =>
+    let invalid := { m with structs := m.structs.modify 0 fun d => { d with byteSize := 10 } }
+    (stageRejections invalid).any (fun r => r.rule == .type)
 
 def constructorChange (m : Module) (type : Ty) (values : List Expr) : Module :=
   withBody m [.letS 0 (.structLit type values) 0]
