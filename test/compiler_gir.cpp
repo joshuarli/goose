@@ -169,6 +169,21 @@ void RejectsSlotAddressOutsideItsScope() {
     assert(Code(m) == "GIR-V030");
 }
 
+void RejectsLoadOfResizable() {
+    auto m = Base();
+    CoreType grow;
+    grow.kind = CoreType::Grow;
+    grow.elem = m.IntType(CoreIntTy::I64);
+    auto slotType = m.Intern(grow);
+    Main(m).slots.push_back({ slotType, CoreVarKind::Let, 0, 0 });
+    GirInst slot = Def(GirOp::Slot, 0);
+    slot.idx = 0;
+    GirInst load = Def(GirOp::Load, 1);
+    load.a = 0;
+    Main(m).blocks[0].insts = { Enter(0), slot, load, Leave(0), Ret() };
+    assert(Code(m) == "GIR-V030");
+}
+
 void RejectsUnbalancedScopesOnOnePath() {
     auto m = Base();
     auto &f = Main(m);
@@ -209,6 +224,46 @@ void RejectsSummaryThatOmitsAWrite() {
     assert(Code(m) == "GIR-V050");
     // Declared, it is accepted.
     m.funcs[1].summary.writes = { CoreTarget { false, 0 } };
+    assert(Code(m) == "");
+}
+
+void RejectsCallThatPropagatesATarget() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ref = m.RefType(CoreMut::Mut, i64);
+    GirFunc poke;
+    poke.name = "poke";
+    poke.params = { ref };
+    poke.scopes = { -1 };
+    poke.summary.writes = { CoreTarget { false, 0 } };
+    GirBlock pokeBlock;
+    pokeBlock.params = { { 0, ref } };
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 0;
+    store.b = 1;
+    store.org = 0;
+    pokeBlock.insts = { Enter(0), Int(m, 1, "1"), store, Leave(0), Ret() };
+    poke.blocks = { pokeBlock };
+    m.funcs.push_back(poke);
+
+    GirFunc wrapper;
+    wrapper.name = "wrapper";
+    wrapper.params = { ref };
+    wrapper.scopes = { -1 };
+    GirBlock wrapperBlock;
+    wrapperBlock.params = { { 0, ref } };
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 1;
+    call.vals = { 0 };
+    call.org = 0;
+    wrapperBlock.insts = { Enter(0), call, Leave(0), Ret() };
+    wrapper.blocks = { wrapperBlock };
+    m.funcs.push_back(wrapper);
+
+    assert(Code(m) == "GIR-V050");
+    m.funcs[2].summary.writes = { CoreTarget { false, 0 } };
     assert(Code(m) == "");
 }
 
@@ -383,9 +438,11 @@ int main() {
     RejectsBlockWithTwoTerminatorsOrNone();
     RejectsStoreThroughConst();
     RejectsSlotAddressOutsideItsScope();
+    RejectsLoadOfResizable();
     RejectsUnbalancedScopesOnOnePath();
     RejectsReturnInsideAnEnteredScope();
     RejectsSummaryThatOmitsAWrite();
+    RejectsCallThatPropagatesATarget();
     RejectsAbortingOperationWithoutOrigin();
     LowAccepts();
     RejectsHighOperationInLowModule();

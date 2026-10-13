@@ -218,7 +218,7 @@ Build track. It starts at the same time as `S1`.
 
 | ID | Size | Work | Acceptance |
 |---|---|---|---|
-| `H1` | M | The rest of validation plan §7. | Every row fails at its named layer. |
+| `H1` | M | The rest of validation plan §7. | Implementable cases fail under their named diagnostics. VER-04 shrink and VER-05/06/10 caller-destination cases await S8/S9; VER-07 awaits O1. |
 | `H2` | M | `E10`–`E16`, and the seeded randomized edit sequence under `--verify-reuse`. | **`L-FAIL`**; no divergence from a clean build. |
 | `H3` | M | Validation plan §8, including a `--units`-built `goose-lint` run through the linter suite. | `LINT-01`–`LINT-08`. |
 | `U1` | rolling | For each suspected compiler defect a lane or the integrator reports: confirm it against the language specification on the upstream compiler, and if it is genuine, carry out O7. A suspicion that does not survive confirmation is recorded in §12 with the reason. | The draft pull request's own reproducer and checks, quoted in §11; or the §12 line. |
