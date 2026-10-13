@@ -129,6 +129,7 @@ theorem typed_of_types {m : Module} {label : String} {f : Func} {vt : Array (Opt
   unfold checkTypes at h
   have hin := asCheck_ok h
   obtain ⟨_, _, hin⟩ := bind_ok hin
+  obtain ⟨_, _, hin⟩ := bind_ok hin
   obtain ⟨_, hb, _⟩ := bind_ok hin
   intro b hb' r op hop
   have := checkAll_mem (checkAll_mem hb (Array.mem_toList_iff.mpr hb')) hop

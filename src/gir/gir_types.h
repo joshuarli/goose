@@ -42,6 +42,7 @@ inline bool GirFlat(const GirModule &m, GirTypeId t) {
 inline bool GirRefTarget(const GirModule &m, GirTypeId t) {
     auto &c = m.Type(t);
     if (c.kind == CoreType::Int || c.kind == CoreType::Bool) return true;
+    if (c.kind == CoreType::Slice) return GirFlat(m, c.elem);
     return (c.kind == CoreType::Arr || c.kind == CoreType::Grow) && GirFlat(m, c.elem);
 }
 
@@ -51,7 +52,9 @@ inline bool GirStorable(const GirModule &m, GirTypeId t) {
     switch (c.kind) {
         case CoreType::Int: case CoreType::Bool: return true;
         case CoreType::Arr: case CoreType::Grow: return GirFlat(m, c.elem);
-        case CoreType::Ref: return GirRefTarget(m, c.elem);
+        case CoreType::Ref:
+            // Reference-to-slice is a parameter-only type, not a general slot type.
+            return m.Type(c.elem).kind != CoreType::Slice && GirRefTarget(m, c.elem);
         case CoreType::Slice: return GirFlat(m, c.elem);
         default: return false;
     }

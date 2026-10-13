@@ -243,8 +243,6 @@ private:
         }
     }
 
-    bool sliceref = false;   // A reference to a slice is being typed as a parameter's.
-
     CoreTypeId ReportTypeFallback(TypeExpr *t) {
         if (t && t->kind == TY_BOOL) return mod.BoolType();
         if (t && t->kind == TY_VOID) return mod.UnitType();
@@ -254,19 +252,23 @@ private:
         return mod.IntType(CoreIntTy::I64);
     }
 
-    CoreTypeId Ty(TypeExpr *t) {
+    enum class TypePosition { Value, Parameter };
+
+    CoreTypeId Ty(TypeExpr *t) { return TyAt(t, TypePosition::Value); }
+
+    CoreTypeId TyAt(TypeExpr *t, TypePosition position) {
         // Unsupported stdlib globals are skipped at the global boundary in
         // normal export. Let that boundary see the failure in report mode too.
-        if (!reportonly || exportingstdlibglobal) return TyChecked(t);
+        if (!reportonly || exportingstdlibglobal) return TyChecked(t, position);
         try {
-            return TyChecked(t);
+            return TyChecked(t, position);
         } catch (CoreUnsupported &u) {
             Remember(u);
             return ReportTypeFallback(t);
         }
     }
 
-    CoreTypeId TyChecked(TypeExpr *t) {
+    CoreTypeId TyChecked(TypeExpr *t, TypePosition position) {
         if (!t) Fail("untyped-expression");
         CoreType ct;
         switch (t->kind) {
@@ -310,7 +312,8 @@ private:
                 ct.elem = Ty(t->ref->sub);
                 if (mod.Type(ct.elem).kind == CoreType::Ref) Fail("reference-to-reference");
                 // A reference to a slice is a parameter's type and nothing else.
-                if (mod.Type(ct.elem).kind == CoreType::Slice && !sliceref) Fail("reference-to-slice");
+                if (mod.Type(ct.elem).kind == CoreType::Slice && position != TypePosition::Parameter)
+                    Fail("reference-to-slice");
                 break;
             default: Fail("type");
         }
@@ -334,9 +337,7 @@ private:
     // parameter whose arguments are all read-only is a read-only one, whatever
     // the declaration says, since a caller could not pass it otherwise.
     CoreTypeId ParamTy(FnSpec *sp, size_t i) {
-        sliceref = true;
-        auto t = Ty(sp->argtypes[i]);
-        sliceref = false;
+        auto t = TyAt(sp->argtypes[i], TypePosition::Parameter);
         if (i < sp->roots.size() && !sp->roots[i].writable) t = Constify(t);
         return t;
     }
@@ -1017,6 +1018,14 @@ private:
         return p;
     }
 
+    // Reuse the type established for this variable. A reference-to-slice
+    // parameter may have been made read-only by its context roots.
+    CoreTypeId VarCoreType(VarDef *v) {
+        auto it = cur.varid.find(v);
+        if (it == cur.varid.end()) Fail("unknown-variable");
+        return cur.impl->vars[it->second].type;
+    }
+
     CorePlaceP DerefOf(CoreExprP ref) {
         auto p = make_unique<CorePlace>();
         p->kind = CorePlace::Deref;
@@ -1040,7 +1049,7 @@ private:
             auto place = VarPlace(v);
             if (pointee && v->type->kind == TY_REF) {
                 if (v->type->ref->optional) Fail("optional");
-                auto ty = Ty(v->type);
+                auto ty = VarCoreType(v);
                 return DerefOf(ReadOf(std::move(place), ty));
             }
             return place;
@@ -1299,7 +1308,7 @@ private:
             if (want && want->kind == TY_REF) {
                 // The reference itself.
                 auto place = VarPlace(v);
-                return ReadOf(std::move(place), Ty(vt));
+                return ReadOf(std::move(place), VarCoreType(v));
             }
         }
         auto inner = Pointee(vt);
