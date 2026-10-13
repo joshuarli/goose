@@ -3,6 +3,7 @@ import Goose.Core.Sound.RetainSyntax
 import Goose.Core.Sound.AccessTyping
 import Goose.Core.Sound.AccessReplay
 import Goose.Core.Sound.ShrinkBridge
+import Goose.Core.Sound.TruncateObservation
 
 /-!
 One step of the induction on fuel for the statements that bind, write, rebind
@@ -1865,6 +1866,518 @@ private theorem statementAppendPlaceInputSubset
     simpa [EvaluationContext.inputFuture, NodeContext.inputFuture,
       DemandNode.variables, hvariables] using hparent
 
+private theorem statementPopNPlaceInputSubset
+    {path : List Nat} {owner : Place} {count : Expr} {org : OriginId}
+    (ec : EvaluationContext m plans path (.statement (.popN owner count org)) .statement) :
+    ∀ x, x ∈ (ec.child rfl 0 (DemandNode.place owner) .place
+      (by simp [DemandNode.child?, DemandNode.children])
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).inputFuture →
+      x ∈ ec.inputFuture := by
+  have hchild : (DemandNode.statement (.popN owner count org)).child? 0 =
+      some (DemandNode.place owner) := by simp [DemandNode.child?, DemandNode.children]
+  have hphase : DemandNodeHasPhase (DemandNode.place owner) .place := by
+    simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+  have hvariables : (Stmt.popN owner count org).variables = owner.variables ++ count.variables := by
+    simp [Stmt.variables]
+  cases ec with
+  | pilot profile active =>
+    intro x hx
+    change x ∈ owner.variables ++
+      (DemandNode.statement (.popN owner count org)).visibleForChild active 0 at hx
+    have hchild : x ∈ owner.variables ++ active := by
+      simpa [DemandNode.visibleForChild] using hx
+    have hparent : x ∈ (owner.variables ++ count.variables) ++ active := by
+      rcases List.mem_append.mp hchild with howner | hactive
+      · exact List.mem_append_left _ (List.mem_append_left _ howner)
+      · exact List.mem_append_right _ hactive
+    simpa [EvaluationContext.inputFuture, DemandNode.variables, hvariables] using hparent
+  | shrink profile context =>
+    rename_i stmtPlanContext
+    let transition := context.child rfl 0 (DemandNode.place owner) .place hchild hphase
+    have hexpectation :
+        (DemandNode.statement (.popN owner count org)).childExpectation?
+          stmtPlanContext.approvals.access
+          ⟨path, .statement, context.expected.frame.active, context.expected.frame.future,
+            context.expected.frame.retained⟩ 0 = some ⟨
+              (DemandNode.statement (.popN owner count org)).visibleForChild
+                context.expected.frame.active 0,
+              count.variables ++ context.expected.frame.future⟩ := by
+      simp [DemandNode.childExpectation?, DemandNode.childFuture, hchild]
+    have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
+    have hchildInput :
+        ((EvaluationContext.shrink profile context).child rfl 0
+          (DemandNode.place owner) .place hchild hphase).inputFuture =
+        owner.variables ++ (count.variables ++ context.expected.frame.future) := by
+      change owner.variables ++ transition.context.expected.frame.future = _
+      rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
+        hfuture]
+      simp only [DemandNode.phaseFuture]
+    intro x hx
+    rw [hchildInput] at hx
+    have hparent : x ∈ (owner.variables ++ count.variables) ++ context.expected.frame.future := by
+      rcases List.mem_append.mp hx with howner | rest
+      · exact List.mem_append_left _ (List.mem_append_left _ howner)
+      · rcases List.mem_append.mp rest with hcount | hfuture
+        · exact List.mem_append_left _ (List.mem_append_right _ hcount)
+        · exact List.mem_append_right _ hfuture
+    simpa [EvaluationContext.inputFuture, NodeContext.inputFuture,
+      DemandNode.variables, hvariables] using hparent
+
+private theorem statementPopNCountInputFrame
+    {path : List Nat} {owner : Place} {count : Expr} {org : OriginId}
+    (ec : EvaluationContext m plans path (.statement (.popN owner count org)) .statement)
+    (hactive : ec.ActiveMatches tenv)
+    (hFPlace : Frame m W tenv penv env s
+      (ec.child rfl 0 (DemandNode.place owner) .place
+        (by simp [DemandNode.child?, DemandNode.children])
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture) :
+    Frame m W tenv penv env s
+      (ec.child rfl 1 (DemandNode.expression count) .expression
+        (by simp [DemandNode.child?, DemandNode.children])
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).inputFuture := by
+  have hchildP : (DemandNode.statement (.popN owner count org)).child? 0 =
+      some (DemandNode.place owner) := by simp [DemandNode.child?, DemandNode.children]
+  have hphaseP : DemandNodeHasPhase (DemandNode.place owner) .place := by
+    simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+  have hchildC : (DemandNode.statement (.popN owner count org)).child? 1 =
+      some (DemandNode.expression count) := by simp [DemandNode.child?, DemandNode.children]
+  have hphaseC : DemandNodeHasPhase (DemandNode.expression count) .expression := by
+    simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+  cases ec with
+  | pilot profile active =>
+    have hFactive : Frame m W tenv penv env s active := by
+      change Frame m W tenv penv env s ((DemandNode.place owner).visibleAfter
+        ((DemandNode.statement (.popN owner count org)).visibleForChild active 0)) at hFPlace
+      simpa [DemandNode.visibleAfter, DemandNode.visibleForChild] using hFPlace
+    have hchanged := hFactive.changeFuture (future' := count.variables ++ active) (by
+      intro x hxvisible _
+      exact (hactive x).2 hxvisible)
+    simpa [EvaluationContext.child, EvaluationContext.inputFuture,
+      DemandNode.variables, DemandNode.visibleAfter, DemandNode.visibleForChild] using hchanged
+  | shrink profile context =>
+    rename_i stmtPlanContext
+    let transitionP := context.child rfl 0 (DemandNode.place owner) .place hchildP hphaseP
+    let transitionC := context.child rfl 1 (DemandNode.expression count) .expression hchildC hphaseC
+    have hexpectationP :
+        (DemandNode.statement (.popN owner count org)).childExpectation?
+          stmtPlanContext.approvals.access
+          ⟨path, .statement, context.expected.frame.active, context.expected.frame.future,
+            context.expected.frame.retained⟩ 0 = some ⟨
+              (DemandNode.statement (.popN owner count org)).visibleForChild
+                context.expected.frame.active 0,
+              count.variables ++ context.expected.frame.future⟩ := by
+      simp [DemandNode.childExpectation?, DemandNode.childFuture, hchildP]
+    have hexpectationC :
+        (DemandNode.statement (.popN owner count org)).childExpectation?
+          stmtPlanContext.approvals.access
+          ⟨path, .statement, context.expected.frame.active, context.expected.frame.future,
+            context.expected.frame.retained⟩ 1 = some ⟨
+              (DemandNode.statement (.popN owner count org)).visibleForChild
+                context.expected.frame.active 1,
+              context.expected.frame.future⟩ := by
+      simp [DemandNode.childExpectation?, DemandNode.childFuture, hchildC]
+    have hfutureP := DemandNode.childFrame_future transitionP.childFrameEq hexpectationP
+    have hfutureC := DemandNode.childFrame_future transitionC.childFrameEq hexpectationC
+    have houtputP :
+        ((EvaluationContext.shrink profile context).child rfl 0
+          (DemandNode.place owner) .place hchildP hphaseP).outputFuture =
+          count.variables ++ (EvaluationContext.shrink profile context).outputFuture := by
+      change transitionP.context.expected.frame.future =
+        count.variables ++ context.expected.frame.future
+      rw [transitionP.expectedFrameEq, DemandNode.phaseFrame_future transitionP.phaseFrameEq,
+        hfutureP]
+      simp only [DemandNode.phaseFuture]
+    have hinputC :
+        ((EvaluationContext.shrink profile context).child rfl 1
+          (DemandNode.expression count) .expression hchildC hphaseC).inputFuture =
+          count.variables ++ (EvaluationContext.shrink profile context).outputFuture := by
+      change count.variables ++ transitionC.context.expected.frame.future =
+        count.variables ++ context.expected.frame.future
+      rw [transitionC.expectedFrameEq, DemandNode.phaseFrame_future transitionC.phaseFrameEq,
+        hfutureC]
+      simp only [DemandNode.phaseFuture]
+    rw [houtputP] at hFPlace
+    rw [hinputC]
+    exact hFPlace
+
+private theorem statementClearPlaceInputSubset
+    {path : List Nat} {owner : Place} {org : OriginId}
+    (ec : EvaluationContext m plans path (.statement (.clear owner org)) .statement) :
+    ∀ x, x ∈ (ec.child rfl 0 (DemandNode.place owner) .place
+      (by simp [DemandNode.child?, DemandNode.children])
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).inputFuture →
+      x ∈ ec.inputFuture := by
+  intro x hx
+  cases ec with
+  | pilot profile active =>
+    change x ∈ owner.variables ++
+      (DemandNode.statement (.clear owner org)).visibleForChild active 0 at hx
+    simpa [EvaluationContext.inputFuture, DemandNode.variables,
+      DemandNode.visibleForChild, Stmt.variables] using hx
+  | shrink profile context =>
+    rename_i stmtPlanContext
+    have hchild : (DemandNode.statement (.clear owner org)).child? 0 =
+        some (DemandNode.place owner) := by simp [DemandNode.child?, DemandNode.children]
+    have hphase : DemandNodeHasPhase (DemandNode.place owner) .place := by
+      simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+    let transition := context.child rfl 0 (DemandNode.place owner) .place hchild hphase
+    have hexpectation :
+        (DemandNode.statement (.clear owner org)).childExpectation?
+          stmtPlanContext.approvals.access
+          ⟨path, .statement, context.expected.frame.active, context.expected.frame.future,
+            context.expected.frame.retained⟩ 0 = some ⟨
+              (DemandNode.statement (.clear owner org)).visibleForChild
+                context.expected.frame.active 0,
+              context.expected.frame.future⟩ := by
+      simp [DemandNode.childExpectation?, DemandNode.childFuture, hchild]
+    have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
+    have hchildInput :
+        ((EvaluationContext.shrink profile context).child rfl 0
+          (DemandNode.place owner) .place hchild hphase).inputFuture =
+        owner.variables ++ context.expected.frame.future := by
+      change owner.variables ++ transition.context.expected.frame.future = _
+      rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
+        hfuture]
+      simp only [DemandNode.phaseFuture]
+    rw [hchildInput] at hx
+    simpa [EvaluationContext.inputFuture, NodeContext.inputFuture,
+      DemandNode.variables, Stmt.variables] using hx
+
+private theorem statementAddShrinksOk (roots : List RootRef) (state : RState)
+    (result : Unit × RState) (checked : addShrinks roots state = .ok result) :
+    result.2.nextVar = state.nextVar ∧
+      ∀ target, target ∈ rootsTargets roots → target ∈ result.2.eff.shrinks := by
+  unfold addShrinks addRoots at checked
+  rw [st_modify_ok] at checked
+  subst checked
+  exact ⟨rfl, addTargets_right _ _⟩
+
+private theorem statementTruncateGrowTotal {s : Store} {l : Loc}
+    {len : Nat} {element : Ty}
+    (owner : LocTy s l (.grow element))
+    (bound : ∃ oldSize, s.length l = .ok oldSize ∧ len ≤ oldSize) :
+    ∃ s', s.truncate l len = .ok s' := by
+  obtain ⟨v, hread, hflat⟩ := owner
+  cases v with
+  | resizable storedElement values =>
+    simp only [FlatTy] at hflat
+    obtain ⟨rfl, hvalues⟩ := hflat
+    obtain ⟨oldSize, hlength, hbound⟩ := bound
+    have hlengthValues : oldSize = values.size := by
+      have hlength' : s.length l = .ok values.size := by
+        simp [Store.length, hread]
+      rw [hlength'] at hlength
+      exact (Except.ok.inj hlength).symm
+    have hsize : len ≤ values.size := by omega
+    have htruncateValue : Val.truncate len (.resizable element values) =
+        some (.resizable element (values.extract 0 len)) := by
+      simp [Val.truncate, hsize]
+    obtain ⟨s', hmodify⟩ := modify_total s l (Val.truncate len)
+      (.resizable element values) (.resizable element (values.extract 0 len)) hread htruncateValue
+    exact ⟨s', by simpa [Store.truncate] using hmodify⟩
+  | _ => simp [FlatTy] at hflat
+
+private theorem statementTruncateGrowshrinkTotal {s : Store} {l : Loc}
+    {len : Nat} {element : Ty}
+    (owner : LocTy s l (.growshrink element))
+    (bound : ∃ oldSize, s.length l = .ok oldSize ∧ len ≤ oldSize) :
+    ∃ s', s.truncate l len = .ok s' := by
+  obtain ⟨v, hread, hflat⟩ := owner
+  cases v with
+  | resizable storedElement values =>
+    simp only [FlatTy] at hflat
+    obtain ⟨rfl, hvalues⟩ := hflat
+    obtain ⟨oldSize, hlength, hbound⟩ := bound
+    have hlengthValues : oldSize = values.size := by
+      have hlength' : s.length l = .ok values.size := by
+        simp [Store.length, hread]
+      rw [hlength'] at hlength
+      exact (Except.ok.inj hlength).symm
+    have hsize : len ≤ values.size := by omega
+    have htruncateValue : Val.truncate len (.resizable element values) =
+        some (.resizable element (values.extract 0 len)) := by
+      simp [Val.truncate, hsize]
+    obtain ⟨s', hmodify⟩ := modify_total s l (Val.truncate len)
+      (.resizable element values) (.resizable element (values.extract 0 len)) hread htruncateValue
+    exact ⟨s', by simpa [Store.truncate] using hmodify⟩
+  | _ => simp [FlatTy] at hflat
+
+private theorem statementTruncateLimitedTotal {s : Store} {l : Loc}
+    {len : Nat} {element : Ty} {capacity : Nat}
+    (owner : LocTy s l (.limited element capacity))
+    (bound : ∃ oldSize, s.length l = .ok oldSize ∧ len ≤ oldSize) :
+    ∃ s', s.truncate l len = .ok s' := by
+  obtain ⟨v, hread, hflat⟩ := owner
+  cases v with
+  | limited storedElement storedCapacity slots currentLen =>
+    simp only [FlatTy] at hflat
+    obtain ⟨rfl, rfl, hcapacity, hcurrentSlots, hslots⟩ := hflat
+    obtain ⟨oldSize, hlength, hbound⟩ := bound
+    have hlengthCurrent : oldSize = currentLen := by
+      have hlength' : s.length l = .ok currentLen := by
+        simp [Store.length, hread]
+      rw [hlength'] at hlength
+      exact (Except.ok.inj hlength).symm
+    have hsize : len ≤ currentLen := by omega
+    have htruncateValue : Val.truncate len (.limited element capacity slots currentLen) =
+        some (.limited element capacity slots len) := by
+      simp [Val.truncate, hsize]
+    obtain ⟨s', hmodify⟩ := modify_total s l (Val.truncate len)
+      (.limited element capacity slots currentLen) (.limited element capacity slots len) hread htruncateValue
+    exact ⟨s', by simpa [Store.truncate] using hmodify⟩
+  | _ => simp [FlatTy] at hflat
+
+private theorem statementTruncateOwnerTotal {s : Store} {l : Loc} {t element : Ty}
+    (owner : LocTy s l t) (hasElement : t.ownerElem? = some element) :
+    ∃ s', s.truncate l 0 = .ok s' := by
+  revert owner
+  cases t with
+  | grow storedElement =>
+    intro owner
+    simp only [Ty.ownerElem?] at hasElement
+    obtain ⟨v, hread, hflat⟩ := owner
+    cases v with
+    | resizable actual values =>
+      simp only [FlatTy] at hflat
+      obtain ⟨rfl, hvalues⟩ := hflat
+      have hlength : s.length l = .ok values.size := by simp [Store.length, hread]
+      have owner' : LocTy s l (.grow storedElement) := by
+        refine ⟨.resizable storedElement values, hread, ?_⟩
+        simp only [FlatTy]
+        exact ⟨by simp, hvalues⟩
+      exact statementTruncateGrowTotal owner' ⟨values.size, hlength, Nat.zero_le _⟩
+    | _ => simp [FlatTy] at hflat
+  | growshrink storedElement =>
+    intro owner
+    simp only [Ty.ownerElem?] at hasElement
+    obtain ⟨v, hread, hflat⟩ := owner
+    cases v with
+    | resizable actual values =>
+      simp only [FlatTy] at hflat
+      obtain ⟨rfl, hvalues⟩ := hflat
+      have hlength : s.length l = .ok values.size := by simp [Store.length, hread]
+      have owner' : LocTy s l (.growshrink storedElement) := by
+        refine ⟨.resizable storedElement values, hread, ?_⟩
+        simp only [FlatTy]
+        exact ⟨by simp, hvalues⟩
+      exact statementTruncateGrowshrinkTotal owner' ⟨values.size, hlength, Nat.zero_le _⟩
+    | _ => simp [FlatTy] at hflat
+  | limited storedElement capacity =>
+    intro owner
+    simp only [Ty.ownerElem?] at hasElement
+    obtain ⟨v, hread, hflat⟩ := owner
+    cases v with
+    | limited actual actualCapacity slots currentLen =>
+      simp only [FlatTy] at hflat
+      obtain ⟨rfl, rfl, hcapacity, hcurrentSlots, hslots⟩ := hflat
+      have hlength : s.length l = .ok currentLen := by simp [Store.length, hread]
+      have owner' : LocTy s l (.limited storedElement capacity) := by
+        refine ⟨.limited storedElement capacity slots currentLen, hread, ?_⟩
+        simp only [FlatTy]
+        exact ⟨by simp, by simp, hcapacity, hcurrentSlots, hslots⟩
+      exact statementTruncateLimitedTotal owner' ⟨currentLen, hlength, Nat.zero_le _⟩
+    | _ => simp [FlatTy] at hflat
+  | _ => simp [Ty.ownerElem?] at hasElement
+
+private theorem statementDirectShrinkAuthority
+    {m : Module} {plans : Array (Array DemandPoint)} {pc : PlanContext m plans}
+    {path : List Nat} {node : DemandNode} {ownerPlace : Place} {request : DemandOwner}
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St} {future : List VarId}
+    {l : Loc} {element ownerType : Ty} {rho : List RootRef} {observation : Observation}
+    (context : NodeContext pc path node .mutation) (profile : m.profile = .shrink)
+    (direct : node.directShrinkPlace? = some ownerPlace)
+    (query : pc.approvals.access.owner ownerPlace = .ok request)
+    (requestType : request.ty = some ownerType)
+    (resizable : ownerType = .grow element ∨ ownerType = .growshrink element)
+    (requestRoot : Gam env W.ownerP request.roots l.root)
+    (ownerRoot : Gam env W.ownerP rho l.root)
+    (frame : Frame m W tenv penv env s future) (permission : Perm m W)
+    (classified : ClassifiedParameters m W.P W.D observation s.store)
+    (observed : Observed m W.G observation s.store)
+    (header : l.path = []) (typed : LocTy s.store l ownerType)
+    (recorded : ∀ t, t ∈ rootsTargets rho → t ∈ W.E.shrinks) :
+    ((EvaluationContext.shrink profile context).mayShrink W.ownerP observation l.root ∨
+      ∃ a si x, l.root = .local a si x ∧ W.base ≤ si) ∧
+      (∀ g, l.root = .global g → g < W.G) := by
+  have ownerG : LocTy s.store l (.grow element) := by
+    rcases resizable with heq | heq
+    · cases heq; exact typed
+    · cases heq; exact typed.growshrink_to_grow
+  have globals := frame.ownerGlobalAuthority (observation := observation) permission ownerRoot
+    header (Or.inl ownerG) (fun t ht => Or.inr (Or.inr (Or.inr (recorded t ht))))
+  refine ⟨?_, fun g hg => (globals g hg).1⟩
+  by_cases current : ∃ a si x, l.root = .local a si x ∧ W.base ≤ si
+  · exact Or.inr current
+  have localAge : ∀ x, RootIn env W.ownerP l.root (.local x) → False := by
+    intro x hx
+    obtain ⟨lv, si, hvar, hscope, hroot⟩ := hx
+    obtain ⟨before, after, hscopes, _⟩ := List.lookup_eq_some_iff.mp hscope
+    have hmem : (lv.scope, si) ∈ env.scopes := by
+      rw [hscopes]
+      exact List.mem_append_right _ List.mem_cons_self
+    exact current ⟨env.act, si, x, hroot, (frame.below _ hmem).1⟩
+  have external : Gam noEnv W.ownerP request.roots l.root := by
+    obtain ⟨q, hq, hroot⟩ := requestRoot
+    refine ⟨q, hq, ?_⟩
+    cases q with
+    | «local» x => exact False.elim (localAge x hroot)
+    | global g => exact hroot
+    | param i => exact hroot
+  have capability : OwnerCap m observation l.root := by
+    cases hroot : l.root with
+    | global g => exact (globals g hroot).2
+    | «local» a si x =>
+      obtain ⟨q, hq, hdenotes⟩ := ownerRoot
+      cases q with
+      | «local» y => exact False.elim (localAge y hdenotes)
+      | global g => rw [hroot] at hdenotes; cases hdenotes
+      | param i =>
+        have param : W.P i (.local a si x) := frame.ownerSubset i _ (hroot ▸ hdenotes)
+        have location : l = ⟨.local a si x, []⟩ := by cases l; simp_all
+        have localOwner : LocTy s.store ⟨.local a si x, []⟩ (.grow element) := location ▸ ownerG
+        exact ClassifiedParameters.localOwner classified observed
+          (fun r E hd => by obtain ⟨v, hv, ht, _⟩ := frame.sa r E hd; exact ⟨v, hv, ht⟩)
+          param localOwner
+  have invalidates : request.invalidates = true := by
+    rcases resizable with heq | heq <;> cases heq <;>
+      simp [DemandOwner.invalidates, requestType]
+  have requestMember : request ∈ context.expected.shrinkOwners :=
+    context.sourceAt.directShrinkOwner rfl direct pc.approvals.accessMatches query
+  have expectedPhase : context.expected.phase = .mutation := by
+    rcases context.sourceAt with ⟨_, _, _, _, _, hphase⟩
+    exact hphase
+  have may : PlanMayShrink pc W.ownerP l.root :=
+    PlanMayShrink.ofExpected context.member expectedPhase requestMember ⟨invalidates, external⟩
+  exact Or.inl ⟨may, capability⟩
+
+
+private theorem statementResizableTruncatePreservation
+    {ownerIndex : Nat} {plan : Array DemandPoint}
+    {approval : DemandShrinkApproval m ownerIndex plan}
+    {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {state : St}
+    {future : List VarId} {shrinking : RootInst → Prop} {observation : Observation}
+    {destination : Store} {l : Loc} {len : Nat} {element ownerType : Ty}
+    {aliases : List RetainedAlias}
+    (frame : Frame m W tenv penv env state future)
+    (accessEq : approval.access = penv.access)
+    (ownerTy : approval.shrinkOwner.ty = some ownerType)
+    (resizable : ownerType = .grow element ∨ ownerType = .growshrink element)
+    (ownerRoot : Gam env W.P approval.shrinkOwner.roots l.root)
+    (ownerLoc : LocTy state.store l ownerType)
+    (visibleActive : ∀ x, x ∈ tenv.visible → x ∈ approval.point.active)
+    (futureNeeded : ∀ x, x ∈ future → x ∈ approval.point.future)
+    (profile : m.profile = .shrink)
+    (hprotected : ShrinkProtected W.D W.A shrinking)
+    (observed : ObservedSafe m W shrinking observation state.store)
+    (authority : shrinking l.root ∨ ∃ a si x, l.root = .local a si x ∧ W.base ≤ si)
+    (header : l.path = []) (flat : element.flat = true)
+    (bound : ∀ g, l.root = .global g → g < W.G)
+    (retained : ∀ alias, alias ∈ aliases → alias ∈ approval.point.retained)
+    (truncate : state.store.truncate l len = .ok destination) :
+    Frame m W tenv penv env { state with store := destination } future ∧
+      Footprint (insts env) (Dset W) state { state with store := destination } ∧
+      PreservesRootTypes m W.G observation.roots state.store destination ∧
+      PreservesValues m W.G observation.values state.store destination ∧
+      ObservedSafe m W shrinking observation destination ∧
+      RetainsAliases m W env state.store destination aliases ∧
+      PilotStoreLe m state { state with store := destination } := by
+  have ownerGS : LocTy state.store l (.growshrink element) := by
+    rcases resizable with heq | heq
+    · cases heq; exact ownerLoc.grow_to_growshrink
+    · cases heq; exact ownerLoc
+  obtain ⟨postFrame, footprint, pilot⟩ := frame.truncateGrowshrinkPreservation accessEq
+    ownerTy resizable ownerRoot ownerLoc visibleActive futureNeeded profile hprotected authority truncate
+  obtain ⟨roots, values, safe⟩ := frame.truncateGrowshrinkObservations observed authority
+    header ownerGS truncate
+  have ownerApproval : approval.shrinkOwner.ty = some (.grow element) ∨
+      approval.shrinkOwner.ty = some (.growshrink element) := by
+    rcases resizable with heq | heq
+    · exact Or.inl (heq ▸ ownerTy)
+    · exact Or.inr (heq ▸ ownerTy)
+  have retains := (shrinkApproval_retainsGrowshrinkAliases frame ownerApproval ownerRoot
+    bound header flat ownerGS truncate).subset retained
+  exact ⟨postFrame, footprint, roots, values, safe, retains, pilot⟩
+
+private theorem statementOwnerElementFlat
+    {W : World} {penv : PEnv} {env : Env} {store : Store} {owner : Place}
+    {l : Loc} {t element : Ty}
+    (hplace : PlaceOk m W.G W.P penv env store owner l t)
+    (howner : t.ownerElem? = some element) : element.flat = true := by
+  rcases hplace with ⟨href, _, _⟩ |
+    ⟨_, _, _, _, _, _, _, _, _, hRefLike, _, _⟩ |
+    ⟨_, _, _, _, _, _, _, _, _, htype, _, _, _, _, _⟩
+  · cases t <;> simp_all [Ty.ownerElem?, Ty.refTarget]
+  · cases t <;> simp_all [Ty.ownerElem?, Ty.isRefLike]
+  · rw [htype] at howner
+    simp [Ty.ownerElem?] at howner
+
+private theorem statementCheckedShrinkOwnerFacts
+    {accessEnv : AccessEnv} {tenv : TEnv} {penv : PEnv} {ownerPlace : Place}
+    {owner : DemandOwner} {t : Ty} {bindingWritable contentsWritable : Bool}
+    {tn tn' : Nat} {rst rst' : RState} {rho : List RootRef}
+    {env : Env} {W : World} {P : Nat → RootInst → Prop} {root : RootInst}
+    (haccess : accessEnv.mod = tenv.mod ∧ accessEnv.impl.vars = tenv.vars ∧
+      accessEnv.mod = penv.mod ∧ accessEnv.impl = penv.impl ∧ accessEnv.ctx = penv.ctx)
+    (hquery : accessEnv.owner ownerPlace = .ok owner)
+    (ht : tyPlace tenv ownerPlace tn = .ok (⟨t, bindingWritable, contentsWritable⟩, tn'))
+    (hr : rpPlace penv ownerPlace rst = .ok (rho, rst'))
+    (hgam : Gam env P rho root) :
+    accessEnv = penv.access ∧ owner.ty = some t ∧ Gam env P owner.roots root := by
+  have hmod : tenv.mod = penv.mod := haccess.1.symm.trans haccess.2.2.1
+  have hvars : tenv.vars = penv.impl.vars :=
+    haccess.2.1.symm.trans (congrArg Impl.vars haccess.2.2.2.1)
+  have henv : accessEnv = penv.access := by
+    cases accessEnv
+    unfold PEnv.access
+    congr 1
+    · exact haccess.2.2.1
+    · exact haccess.2.2.2.1
+    · exact haccess.2.2.2.2
+  rw [henv] at hquery
+  have htype := tyPlace_accessType hmod hvars ht
+  simp only [AccessEnv.owner, htype] at hquery
+  cases hroots : penv.access.placeRoots ownerPlace with
+  | error err => simp [hroots, Functor.map, Except.map] at hquery
+  | ok roots =>
+    simp [hroots, Functor.map, Except.map] at hquery
+    subst owner
+    exact ⟨henv, rfl, hgam.subset (rpPlace_accessRoots penv ownerPlace rst rho rst' roots hr hroots)⟩
+
+private theorem statementTruncateLimitedFlatStep {s s' : Store} {l : Loc}
+    {len : Nat} {element : Ty} {capacity : Nat}
+    (owner : LocTy s l (.limited element capacity))
+    (htruncate : s.truncate l len = .ok s') : FlatStep s s' := by
+  obtain ⟨_, slots, old, hread, hlen, _, _, _, _, _⟩ :=
+    truncate_limited_step s s' l len element capacity owner htruncate
+  apply flatStep_modify s s' l (Val.truncate len)
+    (.limited element capacity slots old) htruncate hread (by simp [IsRef])
+  intro value hvalue
+  have hshape : Val.truncate len (.limited element capacity slots old) =
+      some (.limited element capacity slots len) := by simp [Val.truncate, hlen]
+  rw [hshape] at hvalue
+  cases hvalue
+  exact ⟨by simp [IsRef], refines_limitedTruncate element capacity slots old len hlen⟩
+
+private theorem sat_statementTruncateLoc {s : St} {l : Loc} {len : Nat}
+    {Q : Unit → St → Prop} {s' : Store}
+    (htruncate : s.store.truncate l len = .ok s')
+    (result : Q () { s with store := s' }) :
+    Sat (truncateLoc l len) s Q := by
+  unfold Sat truncateLoc
+  simp [htruncate, result]
+
+private theorem sat_statementTruncateLoc_bind {s : St} {l : Loc} {len : Nat}
+    {Q : α → St → Prop} {s' : Store} {f : Unit → M α}
+    (htruncate : s.store.truncate l len = .ok s')
+    (result : Sat (f ()) { s with store := s' } Q) :
+    Sat (truncateLoc l len >>= f) s Q := by
+  have heq : (truncateLoc l len >>= f) s = f () { s with store := s' } := by
+    show M.bind' (truncateLoc l len) f s = _
+    simp [M.bind', truncateLoc, htruncate]
+  unfold Sat
+  rw [heq]
+  exact result
+
 private theorem statementAppendViewInputFrame
     {path : List Nat} {p : Place} {v : View} {o : OriginId}
     (ec : EvaluationContext m plans path (.statement (.append p v o)) .statement)
@@ -1960,7 +2473,8 @@ private theorem step_stmt_a_core (ih : Specs m prof plans n) :
     (observation : Observation) (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (sc : Nat)
     (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
     (match st with
-      | .letS .. | .assign .. | .assignOp .. | .rebind .. | .expr .. | .append .. => True
+      | .letS .. | .assign .. | .assignOp .. | .rebind .. | .expr .. | .append ..
+        | .popN .. | .clear .. => True
       | _ => False) →
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
     ShrinkProtected W.D W.A (ec.mayShrink W.ownerP observation) →
@@ -3004,6 +3518,758 @@ private theorem step_stmt_a_core (ih : Specs m prof plans n) :
       cases t <;> simp [Ty.isRefLike, Ty.ownerElem?] at hrl hownerElem
     · rw [h3] at hownerElem
       simp [Ty.ownerElem?] at hownerElem
+  | popN owner count org =>
+    simp only [tyStmt] at ht; inv at ht
+    simp only [rpStmt] at hr; inv at hr
+    obtain ⟨typingStart, hrequireShrink, horg, t, bindingWritable, contentsWritable, tn1, hownerTy,
+      element, tn2, hownerElement, width, tn3, hcountTy, hcountInt, hwrite,
+      htenvEq, htnEq⟩ := ht
+    obtain ⟨rho, r1, hrpOwner, _, r2, hrpCount, r3, hreads, r4, hshrinks, haborts⟩ := hr
+    have hfinal4E := (PMono.noteAborts r4 () rst' haborts).2
+    have hfinal3E := (PMono.addShrinks rho r3 () r4 hshrinks).2.trans hfinal4E
+    have hfinalE := (PMono.addReads rho r2 () r3 hreads).2.trans hfinal3E
+    have hnoteAborts : PMonoRebinds noteAborts := by
+      unfold noteAborts
+      exact PMonoRebinds.modify _ (fun _ _ h => h)
+    have hfinal4R := hnoteAborts r4 () rst' haborts
+    have hfinal3R := (PMonoRebinds.addShrinks rho r3 () r4 hshrinks).trans hfinal4R
+    have hfinalR := (PMonoRebinds.addReads rho r2 () r3 hreads).trans hfinal3R
+    have hE4 : EffLe r4.eff W.E := (PMono.noteAborts r4 () rst' haborts).2.trans hE
+    have hE3 : EffLe r3.eff W.E := ((PMono.addShrinks rho) r3 () r4 hshrinks).2.trans hE4
+    have hE2 : EffLe r2.eff W.E := ((PMono.addReads rho) r2 () r3 hreads).2.trans hE3
+    have hE1 : EffLe r1.eff W.E := (rpExpr_mono hrpCount).2.trans hE2
+    obtain ⟨_, hinShrinks⟩ := statementAddShrinksOk _ _ _ hshrinks
+    have hownerElem : t.ownerElem? = some element := by
+      have h := (ownerElement_ok _ t element tn1 tn2 hownerElement).2.1
+      exact h
+    rcases htnEq with ⟨htenvEq', htnEq'⟩
+    subst tenv'
+    subst tn'
+    simp only [execStmt]
+    have hchildP : (DemandNode.statement (.popN owner count org)).child? 0 =
+        some (DemandNode.place owner) := by simp [DemandNode.child?, DemandNode.children]
+    have hvisibleP : ∀ x, x ∈ tenv.visible ↔
+        x ∈ (DemandNode.statement (.popN owner count org)).visibleForChild tenv.visible 0 := by
+      simp [DemandNode.visibleForChild]
+    have hresultP := statementPlaceChildSpec ih ec observation W tenv penv env s 0 owner hchildP
+      hactive haccess hprotected hobserved hclassified hp hF hvisibleP
+      (statementPopNPlaceInputSubset ec) typingStart tn1 t bindingWritable contentsWritable
+      rst r1 rho hownerTy hrpOwner hE1
+    have hchildC : (DemandNode.statement (.popN owner count org)).child? 1 =
+        some (DemandNode.expression count) := by
+      simp [DemandNode.child?, DemandNode.children]
+    have hphaseC : DemandNodeHasPhase (DemandNode.expression count) .expression := by
+      simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+    let childEc := statementExprChildContext ec 1 count hchildC
+    have hvisibleC : ∀ x, x ∈ tenv.visible ↔
+        x ∈ (DemandNode.statement (.popN owner count org)).visibleForChild tenv.visible 1 := by
+      simp [DemandNode.visibleForChild]
+    have houtputC : childEc.outputFuture = ec.outputFuture := by
+      cases ec with
+      | pilot profile active =>
+        change (DemandNode.expression count).visibleAfter
+          ((DemandNode.statement (.popN owner count org)).visibleForChild active 1) =
+          (DemandNode.statement (.popN owner count org)).visibleAfter active
+        simp [DemandNode.visibleForChild, DemandNode.visibleAfter]
+      | shrink profile context =>
+        rename_i stmtPlanContext
+        let transition := context.child rfl 1 (DemandNode.expression count) .expression
+          hchildC hphaseC
+        have hexpectation : DemandNode.childExpectation?
+            (DemandNode.statement (.popN owner count org))
+            stmtPlanContext.approvals.access
+            ⟨path, .statement, context.expected.frame.active, context.expected.frame.future,
+              context.expected.frame.retained⟩ 1 = some ⟨
+                (DemandNode.statement (.popN owner count org)).visibleForChild
+                  context.expected.frame.active 1,
+                context.expected.frame.future⟩ := by
+          simp [DemandNode.childExpectation?, DemandNode.childFuture, hchildC]
+        have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
+        change transition.context.expected.frame.future = context.expected.frame.future
+        rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
+          hfuture]
+        simp only [DemandNode.phaseFuture]
+    refine Sat.bind hresultP ?_
+    rintro l s1 ⟨hF1, hX1, hroots1, hvalues1, hsafe1, hret1, hpilot1, hpl, hg, howner1, hforbidden1, hmutation1⟩
+    have hdisjoint := statementPlaceForbiddenDisjoint ec haccess hchildP hrpOwner
+    have hinputC' := statementPopNCountInputFrame ec hactive hF1
+    have hclassified1' : m.profile = .shrink →
+        ClassifiedParameters m W.P W.D observation s1.store := by
+      intro hprofile
+      exact hF.classifiedParameters_advance (hclassified hprofile) hX1
+    have hresultC := statementExprChildSpecAtFrame ih ec observation W tenv tenv penv env s1
+      1 count hchildC hactive haccess hprotected hsafe1 hclassified1' hp childEc rfl hinputC'
+      hvisibleC childEc.retained (fun _ hmem => hmem) _ _ _ _ _ _ hcountTy hrpCount hE2
+    refine Sat.bind hresultC ?_
+    rintro countValue s2 ⟨hF2, hX2, hroots2, hvalues2, hsafe2, hret2, hpilot2, hcountValue, hcountGam, hcountOwner, hforbidden2, hforbiddenCount2, hmutation2⟩
+    have hforbiddenPre := hforbidden1.trans hforbidden2
+    have hmutationPre := ((hmutation1.weaken (effectMutationRoots.mono m penv.impl
+      (rpExpr_mono hrpCount).2 (rpExpr_rebinds_mono hrpCount))).trans hmutation2).weaken
+        (effectMutationRoots.mono m penv.impl hfinalE hfinalR)
+    have houtputF : childEc.outputFuture = ec.outputFuture := houtputC
+    rw [hwrite] at hcountValue
+    have hcountTy' : ∃ width value, countValue = .int width value := by
+      cases countValue with
+      | int width value => exact ⟨width, value, rfl⟩
+      | _ => simp [HasTy, FlatTy] at hcountValue
+    obtain ⟨width, countValueInt, rfl⟩ := hcountTy'
+    have hlengthFrame : Frame m W tenv penv env s2 ec.outputFuture := by
+      rw [← houtputF]
+      exact hF2
+    have hchanged := statementEffectMutationRoot hlengthFrame hg (effect := rst'.eff) (by
+      intro target hmem
+      simp only [effectMutationTargets, List.mem_append]
+      exact Or.inl (Or.inr (hfinal4E.2.2.2.1 target (hinShrinks target hmem))))
+    have hOwnerPlace : PlaceOk m W.G W.P penv env s1.store owner l t := hpl
+    have hinOwnerShrink : ∀ target, target ∈ rootsTargets rho →
+        target ∈ W.E.shrinks := by
+      intro target htarget
+      exact hE4.2.2.2.1 target (hinShrinks target htarget)
+    have hLoc2 : LocTy s2.store l t := by
+      rcases hpl with ⟨hrt, hloc, hheader⟩ |
+        ⟨x, lv, si, v, hplace, hvar, hscope, hloc, hty, hrl, hroot, htyped⟩ |
+        ⟨x, lv, mu0, mu, E, ann, hplace, hvar, hty, htarget, hflat, hpath, hann, hgam, hroot⟩
+      · cases ec with
+        | pilot profile active =>
+          exact access hp (hloc.mono (hpilot2 profile)) hg
+            (fun target htarget => Or.inr (Or.inr (Or.inr (hinOwnerShrink target htarget))))
+        | @shrink profileContext profile context =>
+          let transition := context.child rfl 1 (DemandNode.expression count) .expression
+            hchildC hphaseC
+          have hMod : tenv.mod = penv.mod := haccess.1.symm.trans haccess.2.2.1
+          have hVars : tenv.vars = penv.impl.vars :=
+            haccess.2.1.symm.trans (congrArg Impl.vars haccess.2.2.2.1)
+          have hEnv : profileContext.approvals.access = penv.access := by
+            have hAccessMod := haccess.2.2.1
+            have hAccessImpl := haccess.2.2.2.1
+            have hAccessCtx := haccess.2.2.2.2
+            cases hAccessValue : profileContext.approvals.access
+            rw [hAccessValue] at hAccessMod hAccessImpl hAccessCtx
+            unfold PEnv.access
+            congr 1
+          have hplaceType : penv.access.placeType? owner = some t :=
+            tyPlace_accessType hMod hVars hownerTy
+          have hOwnerRoots : ∃ roots, penv.access.placeRoots owner = .ok roots := by
+            cases hroots : penv.access.placeRoots owner with
+            | error err =>
+              have hExpectation :
+                  (DemandNode.statement (.popN owner count org)).childExpectation?
+                    penv.access
+                    ⟨path, .expression, context.expected.frame.active,
+                      context.expected.frame.future, context.expected.frame.retained⟩ 1 =
+                    some ⟨(DemandNode.statement (.popN owner count org)).visibleForChild
+                      context.expected.frame.active 1, context.expected.frame.future⟩ := by
+                simp [DemandNode.childExpectation?, DemandNode.childFuture, hchildC]
+              have hbad :
+                  (DemandNode.statement (.popN owner count org)).childFrame
+                    penv.access path context.expected.frame 1 = .error err := by
+                simp [DemandNode.childFrame, hExpectation, DemandNode.retainedForChild,
+                  AccessEnv.aliasPlace, hplaceType, hownerElem, hroots,
+                  Functor.map, Except.map]
+              have htransition := transition.childFrameEq
+              rw [hEnv] at htransition
+              rw [hbad] at htransition
+              cases htransition
+            | ok roots => exact ⟨roots, rfl⟩
+          obtain ⟨roots, hOwnerRoots⟩ := hOwnerRoots
+          let ownerAlias : RetainedAlias :=
+            ⟨.ref .mutable t, roots, .operand (path ++ [0])⟩
+          have hAliasQuery : penv.access.aliasPlace (path ++ [0]) owner = .ok [ownerAlias] := by
+            simp [AccessEnv.aliasPlace, hplaceType, hownerElem, hOwnerRoots, ownerAlias,
+              Functor.map, Except.map]
+          have hAliasQueryCtx : profileContext.approvals.access.aliasPlace
+              (path ++ [0]) owner = .ok [ownerAlias] := by
+            rw [hEnv]
+            exact hAliasQuery
+          have hnew : (DemandNode.statement (.popN owner count org)).retainedForChild
+              profileContext.approvals.access path 1 = .ok [ownerAlias] := by
+            simp [DemandNode.retainedForChild, hAliasQueryCtx]
+          have hAliasMem : ownerAlias ∈ childEc.retained := by
+            have hChild := DemandNode.childFrame_newAlias
+              (result := transition.childFrame) (aliases := [ownerAlias])
+              (alias := ownerAlias) transition.childFrameEq hnew
+              (List.mem_cons.mpr (Or.inl rfl))
+            change ownerAlias ∈ transition.context.expected.frame.retained
+            rw [transition.expectedFrameEq]
+            exact DemandNode.phaseFrame_retains transition.phaseFrameEq hChild
+          have hrepresentable : t.refTarget = true ∨ t.isSlice = true := by
+            cases t <;> simp_all [Ty.ownerElem?, Ty.refTarget, Ty.isSlice]
+          have hAliasSource : AliasAt m W env s1.store ownerAlias (.ref l) :=
+            AliasAt.ofAliasPlace hAliasQuery hplaceType hrpOwner hOwnerPlace hg hrepresentable
+          have hAliasPost := (hret2 ownerAlias hAliasMem).typed (.ref l) hAliasSource
+          have hLocOkPost : LocOk m W.G s2.store l t := by
+            rcases hAliasPost.1 with ⟨l', heq, hloc⟩
+            cases heq
+            rcases hloc with ⟨_, hloc, _⟩ | ⟨hslice, _, _⟩
+            · exact hloc
+            · cases t <;> simp_all [Ty.isSlice, Ty.ownerElem?]
+          exact access hp hLocOkPost hg
+            (fun target htarget => Or.inr (Or.inr (Or.inr (hinOwnerShrink target htarget))))
+      · cases t <;> simp_all [Ty.ownerElem?, Ty.isRefLike]
+      · rw [htarget] at hownerElem
+        simp [Ty.ownerElem?] at hownerElem
+    cases t with
+    | limited ownerElement capacity =>
+      obtain ⟨ownerValue, hread, hflat⟩ := hLoc2
+      cases ownerValue with
+      | limited actualElement actualCapacity slots oldSize =>
+        simp only [FlatTy] at hflat
+        obtain ⟨rfl, rfl, hcapacity, hslotsSize, hslots⟩ := hflat
+        have hLoc : LocTy s2.store l (.limited ownerElement capacity) :=
+          ⟨_, hread, rfl, rfl, hcapacity, hslotsSize, hslots⟩
+        simp only [expectInt, sat_pure_bind]
+        have hlength : s2.store.length l = .ok oldSize := by simp [Store.length, hread]
+        have hlengthStep : ∀ {f : Nat → M Flow} {Q : Flow → St → Prop},
+            Sat (f oldSize) s2 Q → Sat (lengthLoc l >>= f) s2 Q := by
+          intro f Q hk
+          have heq : (lengthLoc l >>= f) s2 = f oldSize s2 := by
+            show M.bind' (lengthLoc l) f s2 = _
+            simp [M.bind', lengthLoc, hlength]
+          unfold Sat
+          rw [heq]
+          exact hk
+        apply hlengthStep
+        split
+        · simp [Sat, abortAt, M.stop]
+        · obtain ⟨destination, htruncate⟩ := statementTruncateLimitedTotal hLoc
+            ⟨oldSize, hlength, Nat.sub_le _ _⟩
+          have hstep := statementTruncateLimitedFlatStep hLoc htruncate
+          apply sat_statementTruncateLoc_bind htruncate
+          simp only [sat_pure]
+          have hrootsTruncate : PreservesRootTypes m W.G observation.roots s2.store destination :=
+            statementModifyPreservesRootTypes hstep.le hLoc htruncate
+          obtain ⟨_, hvaluesTruncate, hsafeTruncate, hretainedTruncate, hpilotTruncate⟩ :=
+            statementFlatStepPreservation (s := s2) (s' := { s2 with store := destination })
+              (env := env) (aliases := childEc.retained) hsafe2 hrootsTruncate hstep
+          have hfoot : Footprint (insts env) (Dset W) s2 { s2 with store := destination } :=
+            Footprint.of_flatStep hstep
+          have hX := (hX1.trans hX2).trans hfoot
+          have hretained : RetainsAliases m W env s.store destination ec.retained :=
+            hret1.trans ((hret2.trans hretainedTruncate).subset (fun alias hmem =>
+              ec.child_retained_subset rfl 1 (DemandNode.expression count) .expression
+                hchildC hphaseC hmem))
+          exact ⟨hlengthFrame.flatStep hstep, hX.toS,
+            (hroots1.trans hroots2).trans hrootsTruncate,
+            (hvalues1.trans hvalues2).trans hvaluesTruncate, hsafeTruncate, hretained,
+            fun hprofile => StoreLe.trans (hpilot1 hprofile)
+              (StoreLe.trans (hpilot2 hprofile) (hpilotTruncate hprofile)),
+            TSame.refl _, hT.ext hX.dom hcur,
+            hforbiddenPre.trans (statementStoreForbidden hlengthFrame hg hdisjoint
+              (truncate_except_owner s2.store destination l (oldSize - countValueInt.toNat) htruncate)),
+            hmutationPre.trans (statementSingleRootMutation
+              (truncate_except_owner s2.store destination l (oldSize - countValueInt.toNat) htruncate) hchanged), rfl⟩
+      | _ => simp [FlatTy] at hflat
+    | grow ownerElement =>
+      have hLocOwner := hLoc2
+      obtain ⟨ownerValue, hread, hflat⟩ := hLoc2
+      cases ownerValue with
+      | resizable actualElement slots =>
+        simp only [FlatTy] at hflat
+        obtain ⟨rfl, hslots⟩ := hflat
+        simp only [expectInt, sat_pure_bind]
+        have hlength : s2.store.length l = .ok slots.size := by simp [Store.length, hread]
+        have hlengthStep : ∀ {f : Nat → M Flow} {Q : Flow → St → Prop},
+            Sat (f slots.size) s2 Q → Sat (lengthLoc l >>= f) s2 Q := by
+          intro f Q hk
+          have heq : (lengthLoc l >>= f) s2 = f slots.size s2 := by
+            show M.bind' (lengthLoc l) f s2 = _
+            simp [M.bind', lengthLoc, hlength]
+          unfold Sat
+          rw [heq]
+          exact hk
+        apply hlengthStep
+        split
+        · simp [Sat, abortAt, M.stop]
+        · obtain ⟨destination, htruncate⟩ := statementTruncateGrowTotal hLocOwner
+            ⟨slots.size, hlength, Nat.sub_le _ _⟩
+          apply sat_statementTruncateLoc_bind htruncate
+          simp only [sat_pure]
+          have hmutationPhase : DemandNodeHasPhase
+              (DemandNode.statement (.popN owner count org)) .mutation := by
+            simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+          have haccessMutation :=
+            (ec.phase_accessMatches_iff rfl .mutation hmutationPhase tenv penv).2 haccess
+          have hactiveMutation := ec.phase_activeMatches rfl .mutation hmutationPhase tenv hactive
+          have houtputMutation := ec.phase_outputFuture rfl .mutation hmutationPhase
+          change (statementMutationContext ec hmutationPhase).ActiveMatches tenv at hactiveMutation
+          change (statementMutationContext ec hmutationPhase).outputFuture = ec.outputFuture at houtputMutation
+          have hretainedMutation : ∀ alias, alias ∈ ec.retained →
+              alias ∈ (statementMutationContext ec hmutationPhase).retained := by
+            intro alias hmem
+            exact ec.phase_retained_subset rfl .mutation hmutationPhase hmem
+          change (statementMutationContext ec hmutationPhase).AccessMatches tenv penv at haccessMutation
+          cases hmutation : statementMutationContext ec hmutationPhase with
+          | pilot profile active =>
+            simp [requireShrink, rej, hF.mod_t, profile] at hrequireShrink
+            change Except.error _ = Except.ok _ at hrequireShrink
+            cases hrequireShrink
+          | @shrink pc profile mutationContext =>
+            have hdirect : (DemandNode.statement (.popN owner count org)).directShrinkPlace? =
+                some owner := by simp [DemandNode.directShrinkPlace?]
+            obtain ⟨ownerRequest, hownerResult, hownerRequests⟩ :=
+              mutationContext.sourceAt.directShrinkOwner_result rfl hdirect pc.approvals.accessMatches
+            obtain ⟨approval, hpath, hsameOwner, hphase, hframe⟩ :=
+              mutationContext.directShrinkApproval hdirect hownerResult
+            rw [hmutation] at haccessMutation hactiveMutation houtputMutation hretainedMutation
+            have hownerFacts := statementCheckedShrinkOwnerFacts (W := W)
+              haccessMutation hownerResult hownerTy hrpOwner hg
+            have hvisibleActive : ∀ x, x ∈ tenv.visible → x ∈ approval.point.active := by
+              intro x hx
+              exact (hframe.1 x).2 ((hactiveMutation x).2 hx)
+            have hfutureNeeded : ∀ x, x ∈ ec.outputFuture → x ∈ approval.point.future := by
+              intro x hx
+              apply (hframe.2.1 x).2
+              change x ∈ mutationContext.expected.frame.future
+              change mutationContext.expected.frame.future = ec.outputFuture at houtputMutation
+              rw [houtputMutation]
+              exact hx
+            have happrovalAccess : approval.access = pc.approvals.access :=
+              Option.some.inj (approval.accessMatches.symm.trans pc.approvals.accessMatches)
+            have haccessEq : approval.access = penv.access := happrovalAccess.trans hownerFacts.1
+            have happrovalTy := hsameOwner ▸ hownerFacts.2.1
+            have happrovalRoot := hsameOwner ▸ hownerFacts.2.2
+            have hretainedNeeded : ∀ alias, alias ∈ ec.retained → alias ∈ approval.point.retained := by
+              intro alias hmem
+              exact (hframe.2.2 alias).2 (hretainedMutation alias hmem)
+            have hheader : l.path = [] := hpl.ownerHeader (by simp [Ty.ownerElem?])
+            have hElement : ownerElement = element := by simpa [Ty.ownerElem?] using hownerElem
+            have hflat : ownerElement.flat = true := by
+              rw [hElement]
+              exact statementOwnerElementFlat hpl hownerElem
+            have hshrinkAuthority :
+                (ec.mayShrink W.ownerP observation l.root ∨
+                  ∃ a si x, l.root = .local a si x ∧ W.base ≤ si) ∧
+                (∀ g, l.root = .global g → g < W.G) := by
+              have hownerP : Gam env W.ownerP rho l.root :=
+                howner1 ⟨ownerElement, Or.inl rfl⟩
+              have hrequestFacts := statementCheckedShrinkOwnerFacts (W := W)
+                haccessMutation hownerResult hownerTy hrpOwner hownerP
+              have hclassifiedPost := hF.classifiedParameters_advance (hclassified profile) (hX1.trans hX2)
+              have authority := statementDirectShrinkAuthority mutationContext profile hdirect
+                hownerResult hrequestFacts.2.1 (Or.inl rfl)
+                hrequestFacts.2.2 hownerP hlengthFrame hp hclassifiedPost hsafe2.typed hheader hLocOwner
+                hinOwnerShrink
+              have hmay := ec.phase_mayShrink_iff rfl .mutation hmutationPhase W.ownerP observation l.root
+              change (statementMutationContext ec hmutationPhase).mayShrink W.ownerP observation l.root ↔
+                ec.mayShrink W.ownerP observation l.root at hmay
+              rw [hmutation] at hmay
+              exact ⟨authority.1.elim (fun h => Or.inl (hmay.1 h)) Or.inr, authority.2⟩
+            obtain ⟨hpostFrame, hfoot, hrootsTruncate, hvaluesTruncate, hsafeTruncate,
+                hretainedTruncate, hpilotTruncate⟩ :=
+              statementResizableTruncatePreservation hlengthFrame haccessEq happrovalTy
+                (Or.inl rfl) happrovalRoot hLocOwner hvisibleActive hfutureNeeded profile
+                hprotected hsafe2 hshrinkAuthority.1 hheader hflat hshrinkAuthority.2
+                hretainedNeeded htruncate
+            have hX := (hX1.trans hX2).trans hfoot
+            have hretained : RetainsAliases m W env s.store destination ec.retained :=
+              hret1.trans ((hret2.subset (fun alias hmem =>
+                ec.child_retained_subset rfl 1 (DemandNode.expression count) .expression
+                  hchildC hphaseC hmem)).trans hretainedTruncate)
+            exact ⟨hpostFrame, hX.toS, (hroots1.trans hroots2).trans hrootsTruncate,
+              (hvalues1.trans hvalues2).trans hvaluesTruncate, hsafeTruncate, hretained,
+              fun hprofile => StoreLe.trans (hpilot1 hprofile)
+                (StoreLe.trans (hpilot2 hprofile) (hpilotTruncate hprofile)),
+              TSame.refl _, hT.ext hX.dom hcur,
+              hforbiddenPre.trans (statementStoreForbidden hlengthFrame hg hdisjoint
+                (truncate_except_owner s2.store destination l (slots.size - countValueInt.toNat) htruncate)),
+              hmutationPre.trans (statementSingleRootMutation
+                (truncate_except_owner s2.store destination l (slots.size - countValueInt.toNat) htruncate) hchanged), rfl⟩
+      | _ => simp [FlatTy] at hflat
+    | growshrink ownerElement =>
+      have hLocOwner := hLoc2
+      obtain ⟨ownerValue, hread, hflat⟩ := hLoc2
+      cases ownerValue with
+      | resizable actualElement slots =>
+        simp only [FlatTy] at hflat
+        obtain ⟨rfl, hslots⟩ := hflat
+        simp only [expectInt, sat_pure_bind]
+        have hlength : s2.store.length l = .ok slots.size := by simp [Store.length, hread]
+        have hlengthStep : ∀ {f : Nat → M Flow} {Q : Flow → St → Prop},
+            Sat (f slots.size) s2 Q → Sat (lengthLoc l >>= f) s2 Q := by
+          intro f Q hk
+          have heq : (lengthLoc l >>= f) s2 = f slots.size s2 := by
+            show M.bind' (lengthLoc l) f s2 = _
+            simp [M.bind', lengthLoc, hlength]
+          unfold Sat
+          rw [heq]
+          exact hk
+        apply hlengthStep
+        split
+        · simp [Sat, abortAt, M.stop]
+        · obtain ⟨destination, htruncate⟩ := statementTruncateGrowshrinkTotal hLocOwner
+            ⟨slots.size, hlength, Nat.sub_le _ _⟩
+          apply sat_statementTruncateLoc_bind htruncate
+          simp only [sat_pure]
+          have hmutationPhase : DemandNodeHasPhase
+              (DemandNode.statement (.popN owner count org)) .mutation := by
+            simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+          have haccessMutation :=
+            (ec.phase_accessMatches_iff rfl .mutation hmutationPhase tenv penv).2 haccess
+          have hactiveMutation := ec.phase_activeMatches rfl .mutation hmutationPhase tenv hactive
+          have houtputMutation := ec.phase_outputFuture rfl .mutation hmutationPhase
+          change (statementMutationContext ec hmutationPhase).ActiveMatches tenv at hactiveMutation
+          change (statementMutationContext ec hmutationPhase).outputFuture = ec.outputFuture at houtputMutation
+          have hretainedMutation : ∀ alias, alias ∈ ec.retained →
+              alias ∈ (statementMutationContext ec hmutationPhase).retained := by
+            intro alias hmem
+            exact ec.phase_retained_subset rfl .mutation hmutationPhase hmem
+          change (statementMutationContext ec hmutationPhase).AccessMatches tenv penv at haccessMutation
+          cases hmutation : statementMutationContext ec hmutationPhase with
+          | pilot profile active =>
+            simp [requireShrink, rej, hF.mod_t, profile] at hrequireShrink
+            change Except.error _ = Except.ok _ at hrequireShrink
+            cases hrequireShrink
+          | @shrink pc profile mutationContext =>
+            have hdirect : (DemandNode.statement (.popN owner count org)).directShrinkPlace? =
+                some owner := by simp [DemandNode.directShrinkPlace?]
+            obtain ⟨ownerRequest, hownerResult, hownerRequests⟩ :=
+              mutationContext.sourceAt.directShrinkOwner_result rfl hdirect pc.approvals.accessMatches
+            obtain ⟨approval, hpath, hsameOwner, hphase, hframe⟩ :=
+              mutationContext.directShrinkApproval hdirect hownerResult
+            rw [hmutation] at haccessMutation hactiveMutation houtputMutation hretainedMutation
+            have hownerFacts := statementCheckedShrinkOwnerFacts (W := W)
+              haccessMutation hownerResult hownerTy hrpOwner hg
+            have hvisibleActive : ∀ x, x ∈ tenv.visible → x ∈ approval.point.active := by
+              intro x hx
+              exact (hframe.1 x).2 ((hactiveMutation x).2 hx)
+            have hfutureNeeded : ∀ x, x ∈ ec.outputFuture → x ∈ approval.point.future := by
+              intro x hx
+              apply (hframe.2.1 x).2
+              change x ∈ mutationContext.expected.frame.future
+              change mutationContext.expected.frame.future = ec.outputFuture at houtputMutation
+              rw [houtputMutation]
+              exact hx
+            have happrovalAccess : approval.access = pc.approvals.access :=
+              Option.some.inj (approval.accessMatches.symm.trans pc.approvals.accessMatches)
+            have haccessEq : approval.access = penv.access := happrovalAccess.trans hownerFacts.1
+            have happrovalTy := hsameOwner ▸ hownerFacts.2.1
+            have happrovalRoot := hsameOwner ▸ hownerFacts.2.2
+            have hretainedNeeded : ∀ alias, alias ∈ ec.retained → alias ∈ approval.point.retained := by
+              intro alias hmem
+              exact (hframe.2.2 alias).2 (hretainedMutation alias hmem)
+            have hheader : l.path = [] := hpl.ownerHeader (by simp [Ty.ownerElem?])
+            have hElement : ownerElement = element := by simpa [Ty.ownerElem?] using hownerElem
+            have hflat : ownerElement.flat = true := by
+              rw [hElement]
+              exact statementOwnerElementFlat hpl hownerElem
+            have hshrinkAuthority :
+                (ec.mayShrink W.ownerP observation l.root ∨
+                  ∃ a si x, l.root = .local a si x ∧ W.base ≤ si) ∧
+                (∀ g, l.root = .global g → g < W.G) := by
+              have hownerP : Gam env W.ownerP rho l.root :=
+                howner1 ⟨ownerElement, Or.inr rfl⟩
+              have hrequestFacts := statementCheckedShrinkOwnerFacts (W := W)
+                haccessMutation hownerResult hownerTy hrpOwner hownerP
+              have hclassifiedPost := hF.classifiedParameters_advance (hclassified profile) (hX1.trans hX2)
+              have authority := statementDirectShrinkAuthority mutationContext profile hdirect
+                hownerResult hrequestFacts.2.1 (Or.inr rfl)
+                hrequestFacts.2.2 hownerP hlengthFrame hp hclassifiedPost hsafe2.typed hheader hLocOwner
+                hinOwnerShrink
+              have hmay := ec.phase_mayShrink_iff rfl .mutation hmutationPhase W.ownerP observation l.root
+              change (statementMutationContext ec hmutationPhase).mayShrink W.ownerP observation l.root ↔
+                ec.mayShrink W.ownerP observation l.root at hmay
+              rw [hmutation] at hmay
+              exact ⟨authority.1.elim (fun h => Or.inl (hmay.1 h)) Or.inr, authority.2⟩
+            obtain ⟨hpostFrame, hfoot, hrootsTruncate, hvaluesTruncate, hsafeTruncate,
+                hretainedTruncate, hpilotTruncate⟩ :=
+              statementResizableTruncatePreservation hlengthFrame haccessEq happrovalTy
+                (Or.inr rfl) happrovalRoot hLocOwner hvisibleActive hfutureNeeded profile
+                hprotected hsafe2 hshrinkAuthority.1 hheader hflat hshrinkAuthority.2
+                hretainedNeeded htruncate
+            have hX := (hX1.trans hX2).trans hfoot
+            have hretained : RetainsAliases m W env s.store destination ec.retained :=
+              hret1.trans ((hret2.subset (fun alias hmem =>
+                ec.child_retained_subset rfl 1 (DemandNode.expression count) .expression
+                  hchildC hphaseC hmem)).trans hretainedTruncate)
+            exact ⟨hpostFrame, hX.toS, (hroots1.trans hroots2).trans hrootsTruncate,
+              (hvalues1.trans hvalues2).trans hvaluesTruncate, hsafeTruncate, hretained,
+              fun hprofile => StoreLe.trans (hpilot1 hprofile)
+                (StoreLe.trans (hpilot2 hprofile) (hpilotTruncate hprofile)),
+              TSame.refl _, hT.ext hX.dom hcur,
+              hforbiddenPre.trans (statementStoreForbidden hlengthFrame hg hdisjoint
+                (truncate_except_owner s2.store destination l (slots.size - countValueInt.toNat) htruncate)),
+              hmutationPre.trans (statementSingleRootMutation
+                (truncate_except_owner s2.store destination l (slots.size - countValueInt.toNat) htruncate) hchanged), rfl⟩
+      | _ => simp [FlatTy] at hflat
+    | _ => simp [Ty.ownerElem?] at hownerElem
+  | clear owner org =>
+    simp only [tyStmt] at ht; inv at ht
+    simp only [rpStmt] at hr; inv at hr
+    obtain ⟨_, hrequireShrink, horg, t, bindingWritable, contentsWritable, tn1, hownerTy,
+      element, tn2, hownerElement, hwrite, htenvEq, htnEq⟩ := ht
+    obtain ⟨rho, r1, hrpOwner, r2, hreads, hshrinks⟩ := hr
+    have hfinal2E := (PMono.addShrinks rho r2 () rst' hshrinks).2
+    have hfinalE := (PMono.addReads rho r1 () r2 hreads).2.trans hfinal2E
+    have hfinal2R := PMonoRebinds.addShrinks rho r2 () rst' hshrinks
+    have hfinalR := (PMonoRebinds.addReads rho r1 () r2 hreads).trans hfinal2R
+    have hE3 : EffLe rst'.eff W.E := hE
+    have hE2 : EffLe r2.eff W.E := (PMono.addShrinks rho r2 () rst' hshrinks).2.trans hE3
+    have hE1 : EffLe r1.eff W.E := (PMono.addReads rho r1 () r2 hreads).2.trans hE2
+    obtain ⟨_, hinShrinks⟩ := statementAddShrinksOk rho r2 ((), rst') hshrinks
+    have hownerElem : t.ownerElem? = some element := by
+      have h := (ownerElement_ok _ t element _ _ hownerElement).2.1
+      exact h
+    subst tenv'
+    subst tn'
+    simp only [execStmt]
+    have hchildP : (DemandNode.statement (.clear owner org)).child? 0 =
+        some (DemandNode.place owner) := by simp [DemandNode.child?, DemandNode.children]
+    have hvisibleP : ∀ x, x ∈ tenv.visible ↔
+        x ∈ (DemandNode.statement (.clear owner org)).visibleForChild tenv.visible 0 := by
+      simp [DemandNode.visibleForChild]
+    have hresultP := statementPlaceChildSpec ih ec observation W tenv penv env s 0 owner hchildP
+      hactive haccess hprotected hobserved hclassified hp hF hvisibleP
+      (statementClearPlaceInputSubset ec) _ _ _ _ _ _ _ _ hownerTy hrpOwner hE1
+    have hchildPhase : DemandNodeHasPhase (DemandNode.place owner) .place := by
+      simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+    refine Sat.bind hresultP ?_
+    rintro l s1 ⟨hF1, hX1, hroots1, hvalues1, hsafe1, hret1, hpilot1, hpl, hg, howner1, hforbidden1, hmutation1⟩
+    have hdisjoint := statementPlaceForbiddenDisjoint ec haccess hchildP hrpOwner
+    have houtputP :
+        (ec.child rfl 0 (DemandNode.place owner) .place hchildP hchildPhase).outputFuture =
+          ec.outputFuture := by
+      cases ec with
+      | pilot profile active =>
+        change (DemandNode.place owner).visibleAfter
+          ((DemandNode.statement (.clear owner org)).visibleForChild active 0) =
+          (DemandNode.statement (.clear owner org)).visibleAfter active
+        simp [DemandNode.visibleAfter, DemandNode.visibleForChild]
+      | shrink profile context =>
+        rename_i stmtPlanContext
+        let transition := context.child rfl 0 (DemandNode.place owner) .place hchildP hchildPhase
+        have hexpectation : DemandNode.childExpectation?
+            (DemandNode.statement (.clear owner org))
+            stmtPlanContext.approvals.access
+            ⟨path, .statement, context.expected.frame.active, context.expected.frame.future,
+              context.expected.frame.retained⟩ 0 = some ⟨
+                (DemandNode.statement (.clear owner org)).visibleForChild
+                  context.expected.frame.active 0,
+                context.expected.frame.future⟩ := by
+          simp [DemandNode.childExpectation?, DemandNode.childFuture, hchildP]
+        have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
+        change transition.context.expected.frame.future = context.expected.frame.future
+        rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
+          hfuture]
+        simp only [DemandNode.phaseFuture]
+    have hframe1 : Frame m W tenv penv env s1 ec.outputFuture := by
+      rw [← houtputP]
+      exact hF1
+    have hLoc : LocTy s1.store l t := by
+      rcases hpl with ⟨hrt, hloc, hheader⟩ |
+        ⟨x, lv, si, v, hplace, hvar, hscope, hloc, hty, hrl, hroot, htyped⟩ |
+        ⟨x, lv, mu0, mu, E, ann, hplace, hvar, hty, htarget, hflat, hpath, hann, hgam, hroot⟩
+      · exact access hp hloc hg (fun target htarget =>
+          Or.inr (Or.inr (Or.inr (hE3.2.2.2.1 target (hinShrinks target htarget)))))
+      · cases t <;> simp_all [Ty.ownerElem?, Ty.isRefLike]
+      · rw [htarget] at hownerElem
+        simp [Ty.ownerElem?] at hownerElem
+    have hforbiddenPre := hforbidden1
+    have hmutationPre := hmutation1.weaken (effectMutationRoots.mono m penv.impl hfinalE hfinalR)
+    have hchanged := statementEffectMutationRoot hframe1 hg (effect := rst'.eff) (by
+      intro target hmem
+      simp only [effectMutationTargets, List.mem_append]
+      exact Or.inl (Or.inr (hinShrinks target hmem)))
+    have htruncate := statementTruncateOwnerTotal hLoc hownerElem
+    obtain ⟨s2, htruncate⟩ := htruncate
+    cases t with
+    | limited ownerElement capacity =>
+      have hstep := statementTruncateLimitedFlatStep hLoc htruncate
+      apply sat_statementTruncateLoc_bind htruncate
+      simp only [sat_pure]
+      have hrootsTruncate : PreservesRootTypes m W.G observation.roots s1.store s2 :=
+        statementModifyPreservesRootTypes hstep.le hLoc htruncate
+      obtain ⟨_, hvaluesTruncate, hsafeTruncate, hretainedTruncate, hpilotTruncate⟩ :=
+        statementFlatStepPreservation (s := s1) (s' := { s1 with store := s2 })
+          (env := env) (aliases := ec.retained) hsafe1 hrootsTruncate hstep
+      have hfoot : Footprint (insts env) (Dset W) s1 { s1 with store := s2 } :=
+        Footprint.of_flatStep hstep
+      have hX := hX1.trans hfoot
+      have hretained := hret1.trans hretainedTruncate
+      exact ⟨hframe1.flatStep hstep, hX.toS, hroots1.trans hrootsTruncate,
+        hvalues1.trans hvaluesTruncate, hsafeTruncate, hretained,
+        fun hprofile => StoreLe.trans (hpilot1 hprofile) (hpilotTruncate hprofile),
+        TSame.refl _, hT.ext hX.dom hcur,
+        hforbiddenPre.trans (statementStoreForbidden hframe1 hg hdisjoint
+          (truncate_except_owner s1.store s2 l 0 htruncate)),
+        hmutationPre.trans (statementSingleRootMutation
+          (truncate_except_owner s1.store s2 l 0 htruncate) hchanged), rfl⟩
+    | grow ownerElement =>
+      have hmutationPhase : DemandNodeHasPhase
+          (DemandNode.statement (.clear owner org)) .mutation := by
+        simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+      have haccessMutation :=
+        (ec.phase_accessMatches_iff rfl .mutation hmutationPhase tenv penv).2 haccess
+      have hactiveMutation := ec.phase_activeMatches rfl .mutation hmutationPhase tenv hactive
+      have houtputMutation := ec.phase_outputFuture rfl .mutation hmutationPhase
+      change (statementMutationContext ec hmutationPhase).ActiveMatches tenv at hactiveMutation
+      change (statementMutationContext ec hmutationPhase).outputFuture = ec.outputFuture at houtputMutation
+      have hretainedMutation : ∀ alias, alias ∈ ec.retained →
+          alias ∈ (statementMutationContext ec hmutationPhase).retained := by
+        intro alias hmem
+        exact ec.phase_retained_subset rfl .mutation hmutationPhase hmem
+      change (statementMutationContext ec hmutationPhase).AccessMatches tenv penv at haccessMutation
+      cases hmutation : statementMutationContext ec hmutationPhase with
+      | pilot profile active =>
+        simp [requireShrink, rej, hF.mod_t, profile] at hrequireShrink
+        change Except.error _ = Except.ok _ at hrequireShrink
+        cases hrequireShrink
+      | @shrink pc profile mutationContext =>
+        have hdirect : (DemandNode.statement (.clear owner org)).directShrinkPlace? =
+            some owner := by simp [DemandNode.directShrinkPlace?]
+        obtain ⟨ownerRequest, hownerResult, hownerRequests⟩ :=
+          mutationContext.sourceAt.directShrinkOwner_result rfl hdirect pc.approvals.accessMatches
+        obtain ⟨approval, hpath, hsameOwner, hphase, hframe⟩ :=
+          mutationContext.directShrinkApproval hdirect hownerResult
+        rw [hmutation] at haccessMutation hactiveMutation houtputMutation hretainedMutation
+        have hownerFacts := statementCheckedShrinkOwnerFacts (W := W)
+          haccessMutation hownerResult hownerTy hrpOwner hg
+        have hvisibleActive : ∀ x, x ∈ tenv.visible → x ∈ approval.point.active := by
+          intro x hx
+          exact (hframe.1 x).2 ((hactiveMutation x).2 hx)
+        have hfutureNeeded : ∀ x, x ∈ ec.outputFuture → x ∈ approval.point.future := by
+          intro x hx
+          apply (hframe.2.1 x).2
+          change x ∈ mutationContext.expected.frame.future
+          change mutationContext.expected.frame.future = ec.outputFuture at houtputMutation
+          rw [houtputMutation]
+          exact hx
+        have happrovalAccess : approval.access = pc.approvals.access :=
+          Option.some.inj (approval.accessMatches.symm.trans pc.approvals.accessMatches)
+        have haccessEq : approval.access = penv.access := happrovalAccess.trans hownerFacts.1
+        have happrovalTy := hsameOwner ▸ hownerFacts.2.1
+        have happrovalRoot := hsameOwner ▸ hownerFacts.2.2
+        have hretainedNeeded : ∀ alias, alias ∈ ec.retained → alias ∈ approval.point.retained := by
+          intro alias hmem
+          exact (hframe.2.2 alias).2 (hretainedMutation alias hmem)
+        have hheader : l.path = [] := hpl.ownerHeader (by simp [Ty.ownerElem?])
+        have hElement : ownerElement = element := by simpa [Ty.ownerElem?] using hownerElem
+        have hflat : ownerElement.flat = true := by
+          rw [hElement]
+          exact statementOwnerElementFlat hpl hownerElem
+        have hshrinkAuthority :
+            (ec.mayShrink W.ownerP observation l.root ∨
+              ∃ a si x, l.root = .local a si x ∧ W.base ≤ si) ∧
+            (∀ g, l.root = .global g → g < W.G) := by
+          have hownerP : Gam env W.ownerP rho l.root :=
+            howner1 ⟨ownerElement, Or.inl rfl⟩
+          have hrequestFacts := statementCheckedShrinkOwnerFacts (W := W)
+            haccessMutation hownerResult hownerTy hrpOwner hownerP
+          have hclassifiedPost := hF.classifiedParameters_advance (hclassified profile) hX1
+          have authority := statementDirectShrinkAuthority mutationContext profile hdirect
+            hownerResult hrequestFacts.2.1 (Or.inl rfl)
+            hrequestFacts.2.2 hownerP hframe1 hp hclassifiedPost hsafe1.typed hheader hLoc
+            (fun target htarget => hE3.2.2.2.1 target (hinShrinks target htarget))
+          have hmay := ec.phase_mayShrink_iff rfl .mutation hmutationPhase W.ownerP observation l.root
+          change (statementMutationContext ec hmutationPhase).mayShrink W.ownerP observation l.root ↔
+            ec.mayShrink W.ownerP observation l.root at hmay
+          rw [hmutation] at hmay
+          exact ⟨authority.1.elim (fun h => Or.inl (hmay.1 h)) Or.inr, authority.2⟩
+        obtain ⟨hpostFrame, hfoot, hrootsTruncate, hvaluesTruncate, hsafeTruncate,
+            hretainedTruncate, hpilotTruncate⟩ :=
+          statementResizableTruncatePreservation hframe1 haccessEq happrovalTy
+            (Or.inl rfl) happrovalRoot hLoc hvisibleActive hfutureNeeded profile
+            hprotected hsafe1 hshrinkAuthority.1 hheader hflat hshrinkAuthority.2
+            hretainedNeeded htruncate
+        apply sat_statementTruncateLoc_bind htruncate
+        simp only [sat_pure]
+        have hX := hX1.trans hfoot
+        exact ⟨hpostFrame, hX.toS, hroots1.trans hrootsTruncate,
+          hvalues1.trans hvaluesTruncate, hsafeTruncate, hret1.trans hretainedTruncate,
+          fun hprofile => StoreLe.trans (hpilot1 hprofile) (hpilotTruncate hprofile),
+          TSame.refl _, hT.ext hX.dom hcur,
+          hforbiddenPre.trans (statementStoreForbidden hframe1 hg hdisjoint
+            (truncate_except_owner s1.store s2 l 0 htruncate)),
+          hmutationPre.trans (statementSingleRootMutation
+            (truncate_except_owner s1.store s2 l 0 htruncate) hchanged), rfl⟩
+    | growshrink ownerElement =>
+      have hmutationPhase : DemandNodeHasPhase
+          (DemandNode.statement (.clear owner org)) .mutation := by
+        simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+      have haccessMutation :=
+        (ec.phase_accessMatches_iff rfl .mutation hmutationPhase tenv penv).2 haccess
+      have hactiveMutation := ec.phase_activeMatches rfl .mutation hmutationPhase tenv hactive
+      have houtputMutation := ec.phase_outputFuture rfl .mutation hmutationPhase
+      change (statementMutationContext ec hmutationPhase).ActiveMatches tenv at hactiveMutation
+      change (statementMutationContext ec hmutationPhase).outputFuture = ec.outputFuture at houtputMutation
+      have hretainedMutation : ∀ alias, alias ∈ ec.retained →
+          alias ∈ (statementMutationContext ec hmutationPhase).retained := by
+        intro alias hmem
+        exact ec.phase_retained_subset rfl .mutation hmutationPhase hmem
+      change (statementMutationContext ec hmutationPhase).AccessMatches tenv penv at haccessMutation
+      cases hmutation : statementMutationContext ec hmutationPhase with
+      | pilot profile active =>
+        simp [requireShrink, rej, hF.mod_t, profile] at hrequireShrink
+        change Except.error _ = Except.ok _ at hrequireShrink
+        cases hrequireShrink
+      | @shrink pc profile mutationContext =>
+        have hdirect : (DemandNode.statement (.clear owner org)).directShrinkPlace? =
+            some owner := by simp [DemandNode.directShrinkPlace?]
+        obtain ⟨ownerRequest, hownerResult, hownerRequests⟩ :=
+          mutationContext.sourceAt.directShrinkOwner_result rfl hdirect pc.approvals.accessMatches
+        obtain ⟨approval, hpath, hsameOwner, hphase, hframe⟩ :=
+          mutationContext.directShrinkApproval hdirect hownerResult
+        rw [hmutation] at haccessMutation hactiveMutation houtputMutation hretainedMutation
+        have hownerFacts := statementCheckedShrinkOwnerFacts (W := W)
+          haccessMutation hownerResult hownerTy hrpOwner hg
+        have hvisibleActive : ∀ x, x ∈ tenv.visible → x ∈ approval.point.active := by
+          intro x hx
+          exact (hframe.1 x).2 ((hactiveMutation x).2 hx)
+        have hfutureNeeded : ∀ x, x ∈ ec.outputFuture → x ∈ approval.point.future := by
+          intro x hx
+          apply (hframe.2.1 x).2
+          change x ∈ mutationContext.expected.frame.future
+          change mutationContext.expected.frame.future = ec.outputFuture at houtputMutation
+          rw [houtputMutation]
+          exact hx
+        have happrovalAccess : approval.access = pc.approvals.access :=
+          Option.some.inj (approval.accessMatches.symm.trans pc.approvals.accessMatches)
+        have haccessEq : approval.access = penv.access := happrovalAccess.trans hownerFacts.1
+        have happrovalTy := hsameOwner ▸ hownerFacts.2.1
+        have happrovalRoot := hsameOwner ▸ hownerFacts.2.2
+        have hretainedNeeded : ∀ alias, alias ∈ ec.retained → alias ∈ approval.point.retained := by
+          intro alias hmem
+          exact (hframe.2.2 alias).2 (hretainedMutation alias hmem)
+        have hheader : l.path = [] := hpl.ownerHeader (by simp [Ty.ownerElem?])
+        have hElement : ownerElement = element := by simpa [Ty.ownerElem?] using hownerElem
+        have hflat : ownerElement.flat = true := by
+          rw [hElement]
+          exact statementOwnerElementFlat hpl hownerElem
+        have hshrinkAuthority :
+            (ec.mayShrink W.ownerP observation l.root ∨
+              ∃ a si x, l.root = .local a si x ∧ W.base ≤ si) ∧
+            (∀ g, l.root = .global g → g < W.G) := by
+          have hownerP : Gam env W.ownerP rho l.root :=
+            howner1 ⟨ownerElement, Or.inr rfl⟩
+          have hrequestFacts := statementCheckedShrinkOwnerFacts (W := W)
+            haccessMutation hownerResult hownerTy hrpOwner hownerP
+          have hclassifiedPost := hF.classifiedParameters_advance (hclassified profile) hX1
+          have authority := statementDirectShrinkAuthority mutationContext profile hdirect
+            hownerResult hrequestFacts.2.1 (Or.inr rfl)
+            hrequestFacts.2.2 hownerP hframe1 hp hclassifiedPost hsafe1.typed hheader hLoc
+            (fun target htarget => hE3.2.2.2.1 target (hinShrinks target htarget))
+          have hmay := ec.phase_mayShrink_iff rfl .mutation hmutationPhase W.ownerP observation l.root
+          change (statementMutationContext ec hmutationPhase).mayShrink W.ownerP observation l.root ↔
+            ec.mayShrink W.ownerP observation l.root at hmay
+          rw [hmutation] at hmay
+          exact ⟨authority.1.elim (fun h => Or.inl (hmay.1 h)) Or.inr, authority.2⟩
+        obtain ⟨hpostFrame, hfoot, hrootsTruncate, hvaluesTruncate, hsafeTruncate,
+            hretainedTruncate, hpilotTruncate⟩ :=
+          statementResizableTruncatePreservation hframe1 haccessEq happrovalTy
+            (Or.inr rfl) happrovalRoot hLoc hvisibleActive hfutureNeeded profile
+            hprotected hsafe1 hshrinkAuthority.1 hheader hflat hshrinkAuthority.2
+            hretainedNeeded htruncate
+        apply sat_statementTruncateLoc_bind htruncate
+        simp only [sat_pure]
+        have hX := hX1.trans hfoot
+        exact ⟨hpostFrame, hX.toS, hroots1.trans hrootsTruncate,
+          hvalues1.trans hvaluesTruncate, hsafeTruncate, hret1.trans hretainedTruncate,
+          fun hprofile => StoreLe.trans (hpilot1 hprofile) (hpilotTruncate hprofile),
+          TSame.refl _, hT.ext hX.dom hcur,
+          hforbiddenPre.trans (statementStoreForbidden hframe1 hg hdisjoint
+            (truncate_except_owner s1.store s2 l 0 htruncate)),
+          hmutationPre.trans (statementSingleRootMutation
+            (truncate_except_owner s1.store s2 l 0 htruncate) hchanged), rfl⟩
+    | _ => simp [Ty.ownerElem?] at hownerElem
   | _ => exact hsel.elim
 
 /-- Lift the binding and write step with the shrink classification carried by
@@ -3014,7 +4280,8 @@ theorem step_stmt_a (ih : Specs m prof plans n) :
     (observation : Observation) (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (sc : Nat)
     (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
     (match st with
-      | .letS .. | .assign .. | .assignOp .. | .rebind .. | .expr .. | .append .. => True
+      | .letS .. | .assign .. | .assignOp .. | .rebind .. | .expr .. | .append ..
+        | .popN .. | .clear .. => True
       | _ => False) →
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
     ShrinkProtected W.D W.A (ec.mayShrink W.ownerP observation) →
