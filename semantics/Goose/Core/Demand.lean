@@ -1091,7 +1091,7 @@ private def AccessEnv.aliasesOfExprs (env : AccessEnv) (path : List Nat)
     aliases := aliases ++ (← env.aliasExpr (path ++ [index]) expression)
   pure aliases
 
-private def DemandNode.retainedForChild (node : DemandNode) (access : AccessEnv)
+def DemandNode.retainedForChild (node : DemandNode) (access : AccessEnv)
     (path : List Nat) (index : Nat) : V (List RetainedAlias) := do
   let aliases ← match node with
     | .expression e =>
@@ -1137,6 +1137,22 @@ def DemandNode.childFrame (node : DemandNode) (access : AccessEnv)
   let aliases ← node.retainedForChild access path index
   pure ⟨expectation.active, expectation.future, aliases ++ frame.retained⟩
 
+theorem DemandNode.childFrame_newAlias {node : DemandNode} {access : AccessEnv}
+    {path : List Nat} {frame : DemandFrame} {index : Nat} {result : DemandFrame}
+    {aliases : List RetainedAlias} {alias : RetainedAlias}
+    (hframe : node.childFrame access path frame index = .ok result)
+    (haliases : node.retainedForChild access path index = .ok aliases)
+    (hmem : alias ∈ aliases) : alias ∈ result.retained := by
+  unfold DemandNode.childFrame at hframe
+  let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
+  cases hchild : node.childExpectation? parent index with
+  | none => simp [parent, hchild, reject] at hframe
+  | some expectation =>
+    rw [haliases] at hframe
+    simp [parent, hchild] at hframe
+    cases hframe
+    exact List.mem_append_left _ hmem
+
 private def addVisibleBinder (active : List VarId) (binder : VarId) : List VarId :=
   if active.contains binder then active else binder :: active
 
@@ -1150,10 +1166,10 @@ private theorem addVisibleBinder_mem_congr {active active' : List VarId}
   by_cases hb : binder ∈ active
   · have hb' := hmem.mp hb
     intro x
-    simp [addVisibleBinder, List.contains_iff_mem, hcontains, hb, hb', hactive]
+    simp [addVisibleBinder, hb, hb', hactive]
   · have hb' : binder ∉ active' := fun h => hb (hmem.mpr h)
     intro x
-    simp [addVisibleBinder, List.contains_iff_mem, hcontains, hb, hb', hactive]
+    simp [addVisibleBinder, hb, hb', hactive]
 
 private theorem visibleAfterBinders_mem_congr {active active' : List VarId}
     (hactive : ∀ x, x ∈ active ↔ x ∈ active') :
@@ -1244,10 +1260,10 @@ theorem DemandNode.childFrame_active {node : DemandNode} {access : AccessEnv}
           rfl
     cases hretained : node.retainedForChild access path index with
     | error err =>
-      simp [DemandNode.childFrame, parent, hchild, hretained] at h
+      simp [parent, hchild, hretained] at h
       cases h
     | ok retained =>
-      simp [DemandNode.childFrame, parent, hchild, hretained] at h
+      simp [parent, hchild, hretained] at h
       cases h
       exact hexpectActive
 
@@ -1261,13 +1277,13 @@ theorem DemandNode.childFrame_future {node : DemandNode} {access : AccessEnv}
   let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
   cases hretained : node.retainedForChild access path index with
   | error err =>
-    simp [DemandNode.childFrame, parent, hchild, hretained] at h
+    simp [DemandNode.childFrame, hchild, hretained] at h
     change Except.map (fun aliases =>
       DemandFrame.mk expectation.active expectation.future (aliases ++ frame.retained))
       (.error err) = .ok result at h
     cases h
   | ok aliases =>
-    simp [DemandNode.childFrame, parent, hchild, hretained] at h
+    simp [DemandNode.childFrame, hchild, hretained] at h
     change Except.map (fun aliases =>
       DemandFrame.mk expectation.active expectation.future (aliases ++ frame.retained))
       (.ok aliases) = .ok result at h
@@ -1296,10 +1312,10 @@ theorem DemandNode.phaseFrame_active {node : DemandNode} {access : AccessEnv}
       · simp only [hphase, ↓reduceIte] at h
         cases haliases : AccessEnv.aliasesOfArgs access path args with
         | error err =>
-          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          simp [haliases] at h
           cases h
         | ok aliases =>
-          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          simp [haliases] at h
           cases h
           rfl
       · simp [hphase] at h
@@ -1320,10 +1336,10 @@ theorem DemandNode.phaseFrame_future {node : DemandNode} {access : AccessEnv}
       · simp only [hphase, ↓reduceIte] at h
         cases haliases : AccessEnv.aliasesOfArgs access path args with
         | error err =>
-          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          simp [haliases] at h
           cases h
         | ok aliases =>
-          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          simp [haliases] at h
           cases h
           rfl
       · simp [hphase] at h
@@ -1343,10 +1359,10 @@ theorem DemandNode.childFrame_retains {node : DemandNode} {access : AccessEnv}
   | some expectation =>
     cases hretained : node.retainedForChild access path index with
     | error err =>
-      simp [DemandNode.childFrame, parent, hchild, hretained] at h
+      simp [parent, hchild, hretained] at h
       cases h
     | ok aliases =>
-      simp [DemandNode.childFrame, parent, hchild, hretained] at h
+      simp [parent, hchild, hretained] at h
       cases h
       exact List.mem_append_right _ hmem
 
@@ -1363,10 +1379,10 @@ theorem DemandNode.phaseFrame_retains {node : DemandNode} {access : AccessEnv}
       · simp only [hphase, ↓reduceIte] at h
         cases haliases : AccessEnv.aliasesOfArgs access path args with
         | error err =>
-          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          simp [haliases] at h
           cases h
         | ok aliases =>
-          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          simp [haliases] at h
           cases h
           exact List.mem_append_right _ hmem
       · simp [hphase] at h

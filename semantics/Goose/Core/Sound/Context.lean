@@ -472,7 +472,7 @@ theorem EvaluationContext.child_retained_subset {m plans path node phase}
     (hmem : alias ∈ parent.retained) :
     alias ∈ (parent.child primary index child childPhase hchild hchildPhase).retained := by
   cases parent with
-  | pilot profile active => simp [EvaluationContext.child, EvaluationContext.retained] at hmem ⊢
+  | pilot profile active => simp [EvaluationContext.retained] at hmem ⊢
   | shrink profile context =>
     let transition := context.child primary index child childPhase hchild hchildPhase
     change alias ∈ transition.context.expected.frame.retained
@@ -488,7 +488,7 @@ theorem EvaluationContext.phase_retained_subset {m plans path node phase}
     (hmem : alias ∈ parent.retained) :
     alias ∈ (parent.phase primary targetPhase hphase).retained := by
   cases parent with
-  | pilot profile active => simp [EvaluationContext.phase, EvaluationContext.retained] at hmem ⊢
+  | pilot profile active => simp [EvaluationContext.retained] at hmem ⊢
   | shrink profile context =>
     let transition := context.phase primary targetPhase hphase
     change alias ∈ transition.context.expected.frame.retained

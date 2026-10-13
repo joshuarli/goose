@@ -416,24 +416,32 @@ theorem Frame.flatStep {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env
       obtain ⟨l, a, b, rfl, _⟩ := h2
       exact ⟨_, hs.keep r _ h1 trivial, HasTy.mono hs.le ⟨l, a, b, rfl, by assumption⟩, h3⟩ }
 
-/-- Narrow a frame to variables that remain demanded at the next syntax point. -/
-theorem Frame.narrowFuture {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
+/-- Change a frame's future when every newly demanded visible variable was already framed. -/
+theorem Frame.changeFuture {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
     {env : Env} {s : St} {future future' : List VarId}
     (h : Frame m W tenv penv env s future)
-    (hsub : ∀ x, x ∈ future' → x ∈ future) :
+    (hsub : ∀ x, x ∈ tenv.visible → x ∈ future' → x ∈ future) :
     Frame m W tenv penv env s future' := by
   refine { h with
     vis := ?_
     inv := ?_ }
   · intro x hx hfut
-    exact h.vis x hx (hsub x hfut)
+    exact h.vis x hx (hsub x hx hfut)
   · apply h.inv.changeDemand
     intro r hdem
     cases r with
     | global g => exact Or.inl trivial
     | «local» a si x =>
       rcases hdem with ⟨ha, hx, hfut, lv, hvar, hlk⟩
-      exact Or.inl ⟨ha, hx, hsub x hfut, lv, hvar, hlk⟩
+      exact Or.inl ⟨ha, hx, hsub x hx hfut, lv, hvar, hlk⟩
+
+/-- Narrow a frame to variables that remain demanded at the next syntax point. -/
+theorem Frame.narrowFuture {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
+    {env : Env} {s : St} {future future' : List VarId}
+    (h : Frame m W tenv penv env s future)
+    (hsub : ∀ x, x ∈ future' → x ∈ future) :
+    Frame m W tenv penv env s future' :=
+  h.changeFuture (fun _ _ hfut => hsub _ hfut)
 
 /-- Once a node has finished, only its caller's future remains demanded. -/
 theorem Frame.afterNode {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
