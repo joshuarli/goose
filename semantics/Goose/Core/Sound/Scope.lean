@@ -173,6 +173,7 @@ theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
         exact h.rooted x' lv' si' v' h1 h2 h3 r ht
     inv := hInv.bind hfree hv.held (fun r ht => (hroot r ht).2)
       (fun a si' x' e => by cases e; exact (h.inst_lt hsi).2)
+      (fun g equal => by cases equal)
     storage := by
       intro r T hstorage v' hpost
       by_cases hnew : r = RootInst.local env.act si x
@@ -607,7 +608,7 @@ theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
         exact Or.inl ⟨ha, hx, hf, lv, hvar', hlk⟩
   have hInv : StoreInvAt m W.G { env with scopes := (sc, s.nextScope) :: env.scopes }
       tenv.visible future { s with nextScope := s.nextScope + 1 } := by
-    refine ⟨hInvOld.live, hInvOld.age, ?_, hInvOld.globals⟩
+    refine ⟨hInvOld.live, hInvOld.age, ?_, hInvOld.globals, hInvOld.globalNonRefs⟩
     intro a si x hx
     exact Nat.lt_succ_of_lt (hInvOld.fresh a si x hx)
   exact
@@ -935,7 +936,7 @@ theorem StoreInv.release {s : St} {demanded : RootInst → Prop} (hi : StoreInv 
     by_cases hp : P r
     · rw [hgone r hp] at hv; cases hv
     · exact ⟨hp, by rw [← hagree r hp]; exact hv⟩
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro r v hv hdem
     obtain ⟨hp, h0⟩ := back r v hv
     exact (hi.live r v h0 hdem).agree hagree (hsurv r v hp h0)
@@ -947,6 +948,8 @@ theorem StoreInv.release {s : St} {demanded : RootInst → Prop} (hi : StoreInv 
     | some v => exact hi.fresh a si x (by rw [(back _ v hv).2]; simp)
   · intro g gl hg hgl
     exact locTy_agree hagree (hglob g) (hi.globals g gl hg hgl)
+  · intro g v hv
+    exact hi.globalNonRefs g v (back (.global g) v hv).2
 
 end Agree
 

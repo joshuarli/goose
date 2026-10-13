@@ -510,7 +510,7 @@ theorem Frame.callDemand {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
     (slices : ∀ r E, D r E →
       ∃ v, s.store.roots[r]? = some v ∧ HasTy m W.G s.store v (.slice .mutable E)) :
     StoreInv m W.G s (CallDemand observation D) := by
-  refine ⟨?_, frame.inv.age, frame.inv.fresh, frame.inv.globals⟩
+  refine ⟨?_, frame.inv.age, frame.inv.fresh, frame.inv.globals, frame.inv.globalNonRefs⟩
   intro r v hv hd
   rcases hd with ⟨g, rfl⟩ | ⟨T, hr⟩ | ⟨E, hr⟩
   · exact frame.inv.live _ v hv trivial
