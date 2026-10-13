@@ -266,6 +266,25 @@ theorem NodeContext.directShrinkApproval
     ⟨approval, _, hapath, howner, hphase, hframe⟩
   exact ⟨approval, hapath.trans hpath, howner, hphase, hframe⟩
 
+/- A whole-root request selects evidence for its exact source occurrence. -/
+theorem NodeContext.wholeRootsApproval
+    {m : Module} {plans : Array (Array DemandPoint)}
+    {planContext : PlanContext m plans} {path : List Nat} {node : DemandNode}
+    {phase : DemandPhase}
+    (context : NodeContext planContext path node phase)
+    {request : DemandWholeCheck}
+    (requestMem : request ∈ context.expected.wholeChecks) :
+    ∃ approval : DemandWholeRootsApproval m planContext.owner planContext.plan,
+      approval.point.path = path ∧ approval.point.phase = phase ∧
+        approval.forbiddenOwner = request.forbidden ∧
+        approval.checkedRoots = request.checkedRoots ∧
+        DemandPoint.sameFrameMembership approval.point context.expected.toPoint := by
+  rcases planContext.approvals.wholeRootsAt context.expected context.member request requestMem with
+    ⟨approval, hpath, hphase, hforbidden, hroots, hframe⟩
+  rcases context.sourceAt with ⟨points, hwalk, hmem, hsourcePath, hsourceNode, hsourcePhase⟩
+  exact ⟨approval, hpath.trans hsourcePath, hphase.trans hsourcePhase,
+    hforbidden, hroots, hframe⟩
+
 /- A clear mutation context selects the approval for its exact owner and frame. -/
 theorem NodeContext.clearApproval
     {m : Module} {plans : Array (Array DemandPoint)}
