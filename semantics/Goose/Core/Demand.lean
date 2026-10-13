@@ -1417,18 +1417,71 @@ private structure DemandSetup where
   access : AccessEnv
   initial : DemandFrame
 
+/-- Lexical bindings present before an owner's root is traversed. -/
+def demandInitialActive (m : Module) (owner : Nat) : List VarId :=
+  if owner < m.contexts.size then
+    match m.contexts[owner]? with
+    | none => []
+    | some ctx =>
+      match m.impls[ctx.impl]? with
+      | none => []
+      | some impl => impl.params.toList.map (·.var)
+  else []
+
 private def demandSetup? (m : Module) (owner : Nat) : Option DemandSetup := do
   if owner < m.contexts.size then
     let ctx ← m.contexts[owner]?
     let impl ← m.impls[ctx.impl]?
     pure ⟨.block impl.body, ⟨m, impl, ctx⟩,
-      ⟨impl.params.toList.map (·.var), [], []⟩⟩
+      ⟨demandInitialActive m owner, [], []⟩⟩
   else
     let global ← m.globals[owner - m.contexts.size]?
     pure ⟨.expression global.init, ⟨m, initImpl, initContext⟩, ⟨[], [], []⟩⟩
 
 def demandAccess? (m : Module) (owner : Nat) : Option AccessEnv :=
   (demandSetup? m owner).map DemandSetup.access
+
+/-- A checked context and implementation lookup fixes the owner's body root. -/
+theorem demandRoot?_context {m : Module} {c : ContextId} {ctx : Context}
+    {impl : Impl} (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl) :
+    demandRoot? m c = some (.block impl.body) := by
+  have hc : c < m.contexts.size := (Array.getElem?_eq_some_iff.mp hctx).1
+  have hctxValue : m.contexts[c] = ctx := (Array.getElem?_eq_some_iff.mp hctx).2
+  simp [demandRoot?, hc, hctxValue, himpl]
+
+/-- A checked context lookup fixes the access environment used by its demand walk. -/
+theorem demandAccess?_context {m : Module} {c : ContextId} {ctx : Context}
+    {impl : Impl} (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl) :
+    demandAccess? m c = some ⟨m, impl, ctx⟩ := by
+  have hc : c < m.contexts.size := (Array.getElem?_eq_some_iff.mp hctx).1
+  have hctxValue : m.contexts[c] = ctx := (Array.getElem?_eq_some_iff.mp hctx).2
+  simp [demandAccess?, demandSetup?, hc, hctxValue, himpl]
+
+private theorem demandSetup_initial {m owner setup}
+    (hsetup : demandSetup? m owner = some setup) :
+    setup.initial = ⟨demandInitialActive m owner, [], []⟩ := by
+  by_cases howner : owner < m.contexts.size
+  · unfold demandSetup? at hsetup
+    simp only [ite_eq_left howner] at hsetup
+    cases hctx : m.contexts[owner]? with
+    | none => simp [hctx] at hsetup
+    | some ctx =>
+      cases himpl : m.impls[ctx.impl]? with
+      | none => simp [hctx, himpl] at hsetup
+      | some impl =>
+        simp [hctx, himpl] at hsetup
+        cases hsetup
+        simp [demandInitialActive, howner]
+  · unfold demandSetup? at hsetup
+    simp only [ite_eq_right howner] at hsetup
+    cases hglobal : m.globals[owner - m.contexts.size]? with
+    | none => simp [hglobal] at hsetup
+    | some global =>
+      simp [hglobal] at hsetup
+      cases hsetup
+      simp [demandInitialActive, howner]
 
 private def demandSetupWitness (m : Module) (owner : Nat) :
     V (Σ setup, PLift (demandSetup? m owner = some setup)) := do
@@ -1899,21 +1952,34 @@ private theorem expectedPoints_evidence {m owner points expected}
       exact entry.item.source⟩
   · simpa [entry.expectedNode] using entry.phaseSource
 
-/-- A successful expected walk contains its source root at the primary phase. -/
-theorem DemandNode.expectedPoints_root {m owner points root}
+private theorem DemandNode.phaseFrame_primary (node : DemandNode) (access : AccessEnv)
+    (path : List Nat) (frame : DemandFrame) :
+    node.phaseFrame access path frame node.primaryPhase = .ok frame := by
+  cases node with
+  | expression expression => cases expression <;> rfl
+  | place place => rfl
+  | view view => rfl
+  | bound bound => rfl
+  | statement statement => rfl
+  | block block => rfl
+
+/-- The root expected point keeps the exact initial demand frame for its owner. -/
+theorem DemandNode.expectedPoints_root_withFrame {m owner points root}
     (hwalk : DemandNode.expectedPoints m owner = .ok points)
     (hroot : demandRoot? m owner = some root) :
     ∃ expected, expected ∈ points ∧
-      DemandExpectedSourceAt m owner [] root root.primaryPhase expected := by
+      DemandExpectedSourceAt m owner [] root root.primaryPhase expected ∧
+      expected.frame = ⟨demandInitialActive m owner, [], []⟩ := by
   obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
   have hsetupRoot := demandSetup_root hsetup
   have hrootEq : setup.root = root := Option.some.inj (hsetupRoot.symm.trans hroot)
+  have hinitial := demandSetup_initial hsetup
   have hprimary : DemandNodeHasPhase setup.root setup.root.primaryPhase := by
     cases setup.root <;> simp [DemandNodeHasPhase, DemandNode.phaseMatches,
       DemandNode.primaryPhase]
   let initial : DemandWorkItem setup.root :=
     ⟨[], setup.root, setup.initial, [], DemandNodeAt.here setup.root⟩
-  obtain ⟨entry, hentry, hpath, hnode, _, hphase⟩ :=
+  obtain ⟨entry, hentry, hpath, hnode, hitemFrame, hphase⟩ :=
     result.covers initial (by simp [initial]) setup.root.primaryPhase hprimary
   have hmemMap : entry.expected ∈ result.entries.map fun item => item.expected :=
     List.mem_map.mpr ⟨entry, hentry, rfl⟩
@@ -1932,19 +1998,29 @@ theorem DemandNode.expectedPoints_root {m owner points root}
     calc
       entry.expected.phase = setup.root.primaryPhase := hphase
       _ = root.primaryPhase := congrArg DemandNode.primaryPhase hrootEq
-  refine ⟨entry.expected, hmem, ?_⟩
-  exact ⟨points, hwalk, hmem, hentryPath, hentryNode, hentryPhase⟩
+  have hframePhase := entry.phaseFrame
+  rw [← entry.expectedNode, ← entry.expectedPath] at hframePhase
+  rw [hentryNode, hentryPath, hentryPhase, DemandNode.phaseFrame_primary] at hframePhase
+  have hentryExpectedFrame : entry.expected.frame = entry.item.frame :=
+    (Except.ok.inj hframePhase).symm
+  have hentryFrame : entry.expected.frame = setup.initial := by
+    calc
+      entry.expected.frame = entry.item.frame := hentryExpectedFrame
+      _ = initial.frame := hitemFrame
+      _ = setup.initial := rfl
+  refine ⟨entry.expected, hmem, ?_, ?_⟩
+  · exact ⟨points, hwalk, hmem, hentryPath, hentryNode, hentryPhase⟩
+  · rw [hentryFrame, hinitial]
 
-private theorem DemandNode.phaseFrame_primary (node : DemandNode) (access : AccessEnv)
-    (path : List Nat) (frame : DemandFrame) :
-    node.phaseFrame access path frame node.primaryPhase = .ok frame := by
-  cases node with
-  | expression expression => cases expression <;> rfl
-  | place place => rfl
-  | view view => rfl
-  | bound bound => rfl
-  | statement statement => rfl
-  | block block => rfl
+/-- A successful expected walk contains its source root at the primary phase. -/
+theorem DemandNode.expectedPoints_root {m owner points root}
+    (hwalk : DemandNode.expectedPoints m owner = .ok points)
+    (hroot : demandRoot? m owner = some root) :
+    ∃ expected, expected ∈ points ∧
+      DemandExpectedSourceAt m owner [] root root.primaryPhase expected := by
+  obtain ⟨expected, hmem, hsource, _⟩ :=
+    DemandNode.expectedPoints_root_withFrame hwalk hroot
+  exact ⟨expected, hmem, hsource⟩
 
 private theorem expectedPoints_child {m owner points path parentNode parentExpected
     index childNode childPhase}
