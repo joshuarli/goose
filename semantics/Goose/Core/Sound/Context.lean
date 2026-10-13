@@ -215,6 +215,10 @@ structure NodeChildContext {m : Module} {plans : Array (Array DemandPoint)}
   expectedFrameEq : context.expected.frame = phaseFrame
   forbiddenSubset : ∀ owner, owner ∈ parent.expected.forbidden →
     owner ∈ context.expected.forbidden
+  assignWholeOwner : ∀ p value origin,
+    node = .statement (.assignWhole p value origin) → index = 1 →
+      ∀ owner, planContext.approvals.access.owner p = .ok owner →
+        owner ∈ context.expected.forbidden
 
 /-- A phase context retains the exact same-node phase transition. -/
 structure NodePhaseContext {m : Module} {plans : Array (Array DemandPoint)}
@@ -226,6 +230,7 @@ structure NodePhaseContext {m : Module} {plans : Array (Array DemandPoint)}
   phaseFrameEq : node.phaseFrame planContext.approvals.access path
     parent.expected.frame targetPhase = .ok phaseFrame
   expectedFrameEq : context.expected.frame = phaseFrame
+  forbiddenEq : context.expected.forbidden = parent.expected.forbidden
 
 /-- Source evidence and membership in the plan context produce a focused node. -/
 noncomputable def NodeContext.ofSource {m : Module} {plans : Array (Array DemandPoint)}
@@ -298,7 +303,7 @@ noncomputable def NodeContext.phase {m : Module} {plans : Array (Array DemandPoi
   let context := NodeContext.ofSource planContext phaseFrames.targetExpected
     phaseFrames.targetSource targetMember
   exact ⟨context, phaseFrames.phaseFrame, phaseFrames.phaseFrameEq,
-    phaseFrames.expectedFrameEq⟩
+    phaseFrames.expectedFrameEq, phaseFrames.forbiddenEq⟩
 
 /-- Move to a child using the same owner access environment and expected walk. -/
 noncomputable def NodeContext.child {m : Module} {plans : Array (Array DemandPoint)}
@@ -319,7 +324,7 @@ noncomputable def NodeContext.child {m : Module} {plans : Array (Array DemandPoi
     childFrames.childSource childMember
   exact ⟨context, childFrames.childFrame, childFrames.childFrameEq,
     childFrames.phaseFrame, childFrames.phaseFrameEq, childFrames.expectedFrameEq,
-    childFrames.forbiddenSubset⟩
+    childFrames.forbiddenSubset, childFrames.assignWholeOwner⟩
 
 /-- The recursive constructor preserves list membership and derives both futures. -/
 theorem NodeContext.child_keeps_context {m : Module}
@@ -407,6 +412,13 @@ def EvaluationContext.forbiddenOwners {m plans path node phase}
   match context with
   | .pilot _ _ => []
   | .shrink _ context => context.expected.forbidden
+
+/-- The checked access environment attached to a shrink occurrence. -/
+def EvaluationContext.access? {m plans path node phase}
+    (context : EvaluationContext m plans path node phase) : Option AccessEnv :=
+  match context with
+  | .pilot _ _ => none
+  | .shrink (pc := pc) _ _ => some pc.approvals.access
 
 def EvaluationContext.ActiveMatches {m plans path node phase}
     (context : EvaluationContext m plans path node phase) (tenv : TEnv) : Prop :=
@@ -580,6 +592,27 @@ theorem EvaluationContext.child_forbidden_subset {m plans path node phase}
     change ∀ owner, owner ∈ context.expected.forbidden → owner ∈ transition.context.expected.forbidden
     exact transition.forbiddenSubset
 
+/-- The checked child transition adds an assignWhole target to the RHS exclusions. -/
+theorem EvaluationContext.child_assignWhole_owner {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
+    (childPhase : DemandPhase) (hchild : node.child? index = some child)
+    (hchildPhase : DemandNodeHasPhase child childPhase) (access : AccessEnv)
+    (accessMatches : parent.access? = some access)
+    (p : Place) (value : Expr) (origin : OriginId)
+    (hassign : node = .statement (.assignWhole p value origin)) (hindex : index = 1)
+    (owner : DemandOwner) (ownerAt : access.owner p = .ok owner) :
+    owner ∈ (parent.child primary index child childPhase hchild hchildPhase).forbiddenOwners := by
+  cases parent with
+  | pilot profile active => simp [EvaluationContext.access?] at accessMatches
+  | shrink profile context =>
+    let transition := context.child primary index child childPhase hchild hchildPhase
+    simp [EvaluationContext.access?] at accessMatches
+    have accessEq := accessMatches
+    change owner ∈ transition.context.expected.forbidden
+    rw [← accessEq] at ownerAt
+    exact transition.assignWholeOwner p value origin hassign hindex owner ownerAt
+
 /-- Same-node phases preserve pilot activity and use checked shrink transitions. -/
 noncomputable def EvaluationContext.phase {m plans path node phase}
     (parent : EvaluationContext m plans path node phase)
@@ -589,6 +622,17 @@ noncomputable def EvaluationContext.phase {m plans path node phase}
   match parent with
   | .pilot profile active => .pilot profile active
   | .shrink profile context => .shrink profile (context.phase primary targetPhase hphase).context
+
+/-- Checked same-node phases carry exactly the same whole-root exclusions. -/
+theorem EvaluationContext.phase_forbidden_eq {m plans path node phase}
+    (parent : EvaluationContext m plans path node phase)
+    (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
+    (hphase : DemandNodeHasPhase node targetPhase) :
+    (parent.phase primary targetPhase hphase).forbiddenOwners = parent.forbiddenOwners := by
+  cases parent with
+  | pilot profile active => rfl
+  | shrink profile context =>
+    exact (context.phase primary targetPhase hphase).forbiddenEq
 
 theorem EvaluationContext.child_inputFuture {m plans path node phase}
     (parent : EvaluationContext m plans path node phase)

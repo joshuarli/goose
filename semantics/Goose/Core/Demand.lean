@@ -1910,15 +1910,6 @@ private structure DemandExpectedPhasesResult (root : DemandNode) (access : Acces
       evidence.expected.phase = phase
   sameItem : ∀ evidence, evidence ∈ entries → evidence.item = item
 
-private structure DemandChildWorkResult (root : DemandNode) (access : AccessEnv)
-    (parent : DemandWorkItem root) (limit : Nat) where
-  items : List (DemandWorkItem root)
-  contains : ∀ index child, index < limit → parent.node.child? index = some child →
-    ∃ frame, parent.node.childFrame access parent.path parent.frame index = .ok frame ∧
-      ∃ item, item ∈ items ∧ item.path = parent.path ++ [index] ∧
-        item.node = child ∧ item.frame = frame ∧
-        ∀ owner, owner ∈ parent.forbidden → owner ∈ item.forbidden
-
 private def DemandNode.childForbidden (access : AccessEnv)
     (parent : DemandWorkItem root) (index : Nat) : V (List DemandOwner) := do
   match parent.node with
@@ -1928,6 +1919,26 @@ private def DemandNode.childForbidden (access : AccessEnv)
       pure (owner :: parent.forbidden)
     else pure parent.forbidden
   | _ => pure parent.forbidden
+
+private structure DemandChildWorkResult (root : DemandNode) (access : AccessEnv)
+    (parent : DemandWorkItem root) (limit : Nat) where
+  items : List (DemandWorkItem root)
+  contains : ∀ index child, index < limit → parent.node.child? index = some child →
+    ∃ frame, parent.node.childFrame access parent.path parent.frame index = .ok frame ∧
+      ∃ item, item ∈ items ∧ item.path = parent.path ++ [index] ∧
+        item.node = child ∧ item.frame = frame ∧
+        DemandNode.childForbidden access parent index = .ok item.forbidden ∧
+        ∀ owner, owner ∈ parent.forbidden → owner ∈ item.forbidden
+
+private theorem DemandNode.childForbidden_assignWholeOwner
+    {access : AccessEnv} {parent : DemandWorkItem root} {forbidden : List DemandOwner}
+    {p : Place} {value : Expr} {origin : OriginId} {owner : DemandOwner}
+    (parentNode : parent.node = .statement (.assignWhole p value origin))
+    (result : DemandNode.childForbidden access parent 1 = .ok forbidden)
+    (ownerAt : access.owner p = .ok owner) : owner ∈ forbidden := by
+  simp [DemandNode.childForbidden, parentNode, ownerAt] at result
+  cases result
+  simp
 
 private theorem DemandNode.childForbidden_contains {access : AccessEnv}
     {parent : DemandWorkItem root} {index : Nat} {forbidden : List DemandOwner}
@@ -1975,7 +1986,8 @@ private structure DemandExpectedWalkResult (root : DemandNode) (access : AccessE
       targetEntry.item.path = entry.item.path ∧
       targetEntry.item.node = entry.item.node ∧
       targetEntry.item.frame = entry.item.frame ∧
-      targetEntry.expected.phase = phase
+      targetEntry.expected.phase = phase ∧
+      targetEntry.expected.forbidden = entry.expected.forbidden
   children : ∀ entry, entry ∈ entries →
     entry.expected.phase = entry.item.node.primaryPhase →
     ∀ index child, entry.item.node.child? index = some child →
@@ -1990,7 +2002,10 @@ private structure DemandExpectedWalkResult (root : DemandNode) (access : AccessE
           ∃ phaseFrame, child.phaseFrame access (entry.item.path ++ [index])
               childFrame childPhase = .ok phaseFrame ∧
             childEntry.expected.frame = phaseFrame ∧
-          ∀ owner, owner ∈ entry.expected.forbidden → owner ∈ childEntry.expected.forbidden
+          (∀ owner, owner ∈ entry.expected.forbidden → owner ∈ childEntry.expected.forbidden) ∧
+          (∀ p value origin, entry.item.node = .statement (.assignWhole p value origin) →
+            index = 1 → ∀ owner, access.owner p = .ok owner →
+              owner ∈ childEntry.expected.forbidden)
 
 private def DemandNode.expectedPhase (access : AccessEnv)
     (item : DemandWorkItem root) (phase : DemandPhase) :
@@ -2083,15 +2098,16 @@ private def DemandNode.expectedChildrenRev (access : AccessEnv)
             · subst index
               have hnode : child = candidate := Option.some.inj (hchild.symm.trans hnext)
               subst candidate
-              refine ⟨frame, ?_, childItem, ?_, rfl, rfl, rfl, ?_⟩
+              refine ⟨frame, ?_, childItem, ?_, rfl, rfl, rfl, ?_, ?_⟩
               · exact hframe
               · simp [childItem]
+              · exact hforbidden.trans (by simp [childItem])
               · exact DemandNode.childForbidden_contains hforbidden
             · obtain ⟨oldFrame, holdFrame, oldItem, holdItem, holdPath, holdNode,
-                holdItemFrame, holdForbidden⟩ :=
+                holdItemFrame, holdForbiddenResult, holdForbidden⟩ :=
                 prefixResult.contains index candidate (by omega) hnext
               exact ⟨oldFrame, holdFrame, oldItem, List.mem_cons_of_mem _ holdItem,
-                holdPath, holdNode, holdItemFrame, holdForbidden⟩⟩
+                holdPath, holdNode, holdItemFrame, holdForbiddenResult, holdForbidden⟩⟩
 termination_by limit => limit
 
 private def DemandNode.expectedChildren (access : AccessEnv)
@@ -2100,10 +2116,11 @@ private def DemandNode.expectedChildren (access : AccessEnv)
   let result ← DemandNode.expectedChildrenRev access parent limit
   pure ⟨result.items.reverse, by
     intro index child hindex hchild
-    obtain ⟨frame, hframe, item, hitem, hpath, hnode, hitemFrame, hforbidden⟩ :=
+    obtain ⟨frame, hframe, item, hitem, hpath, hnode, hitemFrame,
+      hforbiddenResult, hforbidden⟩ :=
       result.contains index child hindex hchild
     exact ⟨frame, hframe, item, List.mem_reverse.mpr hitem,
-      hpath, hnode, hitemFrame, hforbidden⟩⟩
+      hpath, hnode, hitemFrame, hforbiddenResult, hforbidden⟩⟩
 
 private def DemandNode.expectedWork (access : AccessEnv) (root : DemandNode) : Nat →
     (work : List (DemandWorkItem root)) → V (DemandExpectedWalkResult root access work)
@@ -2143,13 +2160,21 @@ private def DemandNode.expectedWork (access : AccessEnv) (root : DemandNode) : N
             simpa [hitem] using hvalid
           obtain ⟨targetEntry, htargetEntry, hpath, hnode, hframe, hphase⟩ :=
             here.covers phase (DemandPhase.mem_all phase) hvalidItem
+          have htargetItem := here.sameItem targetEntry htargetEntry
+          have hforbidden : targetEntry.expected.forbidden = entry.expected.forbidden := by
+            calc
+              targetEntry.expected.forbidden = targetEntry.item.forbidden :=
+                targetEntry.expectedForbidden
+              _ = item.forbidden := congrArg DemandWorkItem.forbidden htargetItem
+              _ = entry.item.forbidden := congrArg DemandWorkItem.forbidden hitem.symm
+              _ = entry.expected.forbidden := entry.expectedForbidden.symm
           exact ⟨targetEntry, List.mem_append_left _ htargetEntry,
             hpath.trans (by rw [hitem]), hnode.trans (by rw [hitem]),
-            hframe.trans (by rw [hitem]), hphase⟩
-        · obtain ⟨targetEntry, htargetEntry, hpath, hnode, hframe, hphase⟩ :=
+            hframe.trans (by rw [hitem]), hphase, hforbidden⟩
+        · obtain ⟨targetEntry, htargetEntry, hpath, hnode, hframe, hphase, hforbidden⟩ :=
             tail.phaseCoverage entry htail phase hvalid
           exact ⟨targetEntry, List.mem_append_right _ htargetEntry,
-            hpath, hnode, hframe, hphase⟩,
+            hpath, hnode, hframe, hphase, hforbidden⟩,
       by
         intro entry hmem hprimary index child hchild childPhase hchildPhase
         simp only [List.mem_append] at hmem
@@ -2174,7 +2199,8 @@ private def DemandNode.expectedWork (access : AccessEnv) (root : DemandNode) : N
                   rfl
             exact Classical.choose (List.getElem?_eq_some_iff.mp houter)
           obtain ⟨childFrame, hchildFrame, childItem, hchildItem,
-            hchildPath, hchildNode, hitemFrame, hchildForbidden⟩ :=
+            hchildPath, hchildNode, hitemFrame, hchildForbiddenResult,
+            hchildForbidden⟩ :=
               children.contains index child hindex hchild'
           have hchildItemPhase : DemandNodeHasPhase childItem.node childPhase := by
             simpa [hchildNode] using hchildPhase
@@ -2200,25 +2226,38 @@ private def DemandNode.expectedWork (access : AccessEnv) (root : DemandNode) : N
           · simpa only [hentryNode, hentryPath, hentryFrame, hentryPhase,
               hchildNode, hchildPath, hitemFrame, hparentNode, hparentPath, hparentFrame]
               using childEntry.phaseFrame
-          · intro owner howner
-            have hparentForbiddenEq : entry.expected.forbidden = item.forbidden := by
-              calc
-                entry.expected.forbidden = entry.item.forbidden := entry.expectedForbidden
-                _ = item.forbidden := congrArg DemandWorkItem.forbidden hentryItem
-            have hownerItem : owner ∈ item.forbidden := by
-              rw [← hparentForbiddenEq]
-              exact howner
-            have hownerChildItem : owner ∈ childItem.forbidden :=
-              hchildForbidden owner hownerItem
-            rw [hchildForbiddenEq]
-            exact hownerChildItem
+          · constructor
+            · intro owner howner
+              have hparentForbiddenEq : entry.expected.forbidden = item.forbidden := by
+                calc
+                  entry.expected.forbidden = entry.item.forbidden := entry.expectedForbidden
+                  _ = item.forbidden := congrArg DemandWorkItem.forbidden hentryItem
+              have hownerItem : owner ∈ item.forbidden := by
+                rw [← hparentForbiddenEq]
+                exact howner
+              have hownerChildItem : owner ∈ childItem.forbidden :=
+                hchildForbidden owner hownerItem
+              rw [hchildForbiddenEq]
+              exact hownerChildItem
+            · intro p value origin hassign hindex owner howner
+              have hassignItem : item.node = .statement (.assignWhole p value origin) := by
+                rw [← hentryItem]
+                exact hassign
+              have hresult : DemandNode.childForbidden access item index =
+                  .ok childItem.forbidden := hchildForbiddenResult
+              have hresultAtOne : DemandNode.childForbidden access item 1 =
+                  .ok childItem.forbidden := by rw [hindex] at hresult; exact hresult
+              have hownerItem := DemandNode.childForbidden_assignWholeOwner
+                hassignItem hresultAtOne howner
+              rw [hchildForbiddenEq]
+              exact hownerItem
         · obtain ⟨childEntry, hchildEntry, hpath, hnode, hphase, childFrame,
             hchildFrame, hentryFrame, phaseFrame, hphaseFrame, hexpectedFrame,
-            hforbidden⟩ :=
+            hforbidden, hassignOwner⟩ :=
               tail.children entry htail hprimary index child hchild childPhase hchildPhase
           exact ⟨childEntry, List.mem_append_right _ hchildEntry, hpath, hnode,
             hphase, childFrame, hchildFrame, hentryFrame, phaseFrame, hphaseFrame,
-            hexpectedFrame, hforbidden⟩⟩
+            hexpectedFrame, hforbidden, hassignOwner⟩⟩
 termination_by fuel => fuel
 
 private theorem demandSetup_root {m owner setup}
@@ -2396,7 +2435,10 @@ private theorem expectedPoints_child {m owner points path parentNode parentExpec
       parentNode.childFrame setup.access path parentExpected.frame index = .ok childFrame ∧
       childNode.phaseFrame setup.access (path ++ [index]) childFrame childPhase = .ok phaseFrame ∧
       childExpected.frame = phaseFrame ∧
-      ∀ owner, owner ∈ parentExpected.forbidden → owner ∈ childExpected.forbidden := by
+      (∀ owner, owner ∈ parentExpected.forbidden → owner ∈ childExpected.forbidden) ∧
+      (∀ p value origin, parentNode = .statement (.assignWhole p value origin) →
+        index = 1 → ∀ owner, setup.access.owner p = .ok owner →
+          owner ∈ childExpected.forbidden) := by
   obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
   have hparentMap : parentExpected ∈ result.entries.map fun entry => entry.expected := by
     rw [hmap]
@@ -2429,7 +2471,7 @@ private theorem expectedPoints_child {m owner points path parentNode parentExpec
     exact hchild
   obtain ⟨childEntry, hchildEntry, hchildPath, hchildNode, hchildExpectedPhase,
       childFrame, hchildFrame, hchildItemFrame, phaseFrame, hphaseFrame,
-      hchildFrameEq, hchildForbidden⟩ :=
+      hchildFrameEq, hchildForbidden, hchildAssignOwner⟩ :=
     result.children parentEntry hparentEntry hentryPrimary index childNode hentryChild
       childPhase hchildPhase
   have hchildMem : childEntry.expected ∈ points := by
@@ -2455,8 +2497,16 @@ private theorem expectedPoints_child {m owner points path parentNode parentExpec
     intro owner howner
     rw [← hparentForbidden] at howner
     exact hchildForbidden owner howner
+  have hchildAssignOwner' : ∀ p value origin,
+      parentNode = .statement (.assignWhole p value origin) → index = 1 →
+      ∀ owner, setup.access.owner p = .ok owner → owner ∈ childEntry.expected.forbidden := by
+    intro p value origin hassign hindex owner howner
+    have hassignEntry : parentEntry.item.node = .statement (.assignWhole p value origin) :=
+      hitemNode.trans hassign
+    exact hchildAssignOwner p value origin hassignEntry
+      hindex owner howner
   refine ⟨setup, childEntry.expected, childFrame, phaseFrame, hsetup, hchildSource,
-    ?_, ?_, hchildFrameEq, hchildForbidden'⟩
+    ?_, ?_, hchildFrameEq, hchildForbidden', hchildAssignOwner'⟩
   · simpa [hitemPath, hitemNode, hitemFrame] using hchildFrame
   · simpa [hitemPath] using hphaseFrame
 
@@ -2476,6 +2526,9 @@ structure DemandExpectedChildFrame (m : Module) (owner : Nat) (path : List Nat)
   phaseFrameEq : childNode.phaseFrame access (path ++ [index]) childFrame childPhase = .ok phaseFrame
   expectedFrameEq : childExpected.frame = phaseFrame
   forbiddenSubset : ∀ owner, owner ∈ parentExpected.forbidden → owner ∈ childExpected.forbidden
+  assignWholeOwner : ∀ p value origin,
+    parentNode = .statement (.assignWhole p value origin) → index = 1 →
+      ∀ owner, access.owner p = .ok owner → owner ∈ childExpected.forbidden
 
 structure DemandExpectedPhaseFrame (m : Module) (owner : Nat) (path : List Nat)
     (node : DemandNode) (parentPhase : DemandPhase) (parentExpected : DemandExpectedPoint)
@@ -2489,6 +2542,7 @@ structure DemandExpectedPhaseFrame (m : Module) (owner : Nat) (path : List Nat)
   phaseFrame : DemandFrame
   phaseFrameEq : node.phaseFrame access path parentExpected.frame targetPhase = .ok phaseFrame
   expectedFrameEq : targetExpected.frame = phaseFrame
+  forbiddenEq : targetExpected.forbidden = parentExpected.forbidden
 
 private structure DemandExpectedCoverage (points : List DemandPoint)
     (expected : List DemandExpectedPoint) where
@@ -2699,7 +2753,7 @@ theorem DemandExpectedSourceAt.child
     rw [hparentPhase]
     exact primary
   obtain ⟨setup, childExpected, childFrame, phaseFrame, hsetup, hchildSource,
-      hchildFrame, hphaseFrame, hchildFrameEq⟩ :=
+      hchildFrame, hphaseFrame, hchildFrameEq, _hforbiddenSubset, _hassignWholeOwner⟩ :=
     expectedPoints_child hwalk hparentMem hparentPath hparentNode hparentPrimary
       hchild hchildPhase
   have hchildSource' := hchildSource
@@ -2728,7 +2782,7 @@ theorem DemandExpectedSourceAt.childFrame
     rw [hparentPhase]
     exact primary
   obtain ⟨setup, childExpected, childFrame, phaseFrame, hsetup, hchildSource,
-      hchildFrame, hphaseFrame, hchildFrameEq⟩ :=
+      hchildFrame, hphaseFrame, hchildFrameEq, hforbiddenSubset, hassignWholeOwner⟩ :=
     expectedPoints_child hwalk hparentMem hparentPath hparentNode hparentPrimary
       hchild hchildPhase
   have hsetupAccess : setup.access = access := by
@@ -2741,6 +2795,14 @@ theorem DemandExpectedSourceAt.childFrame
       .ok phaseFrame := by
     rw [← hsetupAccess]
     exact hphaseFrame
+  have hassignWholeOwner' : ∀ p value origin,
+      parentNode = .statement (.assignWhole p value origin) → index = 1 →
+      ∀ owner, access.owner p = .ok owner → owner ∈ childExpected.forbidden := by
+    intro p value origin hassign hindex owner howner
+    have howner' : setup.access.owner p = .ok owner := by
+      rw [hsetupAccess]
+      exact howner
+    exact hassignWholeOwner p value origin hassign hindex owner howner'
   rcases hchildSource with ⟨childPoints, hchildWalk, hchildMem, hchildPath, hchildNode,
     hchildSourcePhase⟩
   have hpoints : points = childPoints := by
@@ -2751,8 +2813,8 @@ theorem DemandExpectedSourceAt.childFrame
     exact hchildMem
   exact ⟨⟨points, hwalk, hparentMem, childExpected,
     ⟨points, hwalk, hchildMember, hchildPath, hchildNode, hchildSourcePhase⟩,
-    hchildMember, childFrame, hchildFrame', phaseFrame, hphaseFrame', hchildFrameEq.1,
-    hchildFrameEq.2⟩⟩
+    hchildMember, childFrame, hchildFrame', phaseFrame, hphaseFrame', hchildFrameEq,
+    hforbiddenSubset, hassignWholeOwner'⟩⟩
 
 /-- A primary point and each valid phase of that same node share one expected walk. -/
 theorem DemandExpectedSourceAt.phaseFrame
@@ -2797,7 +2859,7 @@ theorem DemandExpectedSourceAt.phaseFrame
   have htargetHasPhase : DemandNodeHasPhase parentEntry.item.node targetPhase := by
     simpa [hitemNode] using targetHasPhase
   obtain ⟨targetEntry, htargetEntry, htargetItemPath, htargetItemNode,
-      htargetItemFrame, htargetPhase⟩ :=
+      htargetItemFrame, htargetPhase, htargetForbidden⟩ :=
     result.phaseCoverage parentEntry hparentEntry targetPhase htargetHasPhase
   have htargetPath : targetEntry.item.path = path := by
     calc
@@ -2830,8 +2892,12 @@ theorem DemandExpectedSourceAt.phaseFrame
       targetEntry.expected :=
     ⟨points, hwalk, htargetMember, htargetExpectedPath, htargetExpectedNode,
       htargetPhase⟩
+  have htargetForbidden' : targetEntry.expected.forbidden = parentExpected.forbidden := by
+    calc
+      targetEntry.expected.forbidden = parentEntry.expected.forbidden := htargetForbidden
+      _ = parentExpected.forbidden := congrArg DemandExpectedPoint.forbidden hparentEq
   exact ⟨⟨points, hwalk, hparentMem, targetEntry.expected, htargetSource,
-    htargetMember, targetEntry.expected.frame, hphaseFrame, rfl⟩⟩
+    htargetMember, targetEntry.expected.frame, hphaseFrame, rfl, htargetForbidden'⟩⟩
 
 def PlansWellFormed (m : Module) (plans : Array (Array DemandPoint)) : Prop :=
   plans.size = (if m.profile == .pilot then 0 else m.contexts.size + m.globals.size) ∧
