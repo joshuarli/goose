@@ -922,9 +922,18 @@ def DemandOwner.conflicts (owner : DemandOwner) (alias : RetainedAlias) : Bool :
 
 def DemandPointShrinkSafe (access : AccessEnv) (point : DemandPoint)
     (owner : DemandOwner) : Prop :=
-  (∀ x, x ∈ point.future → x ∈ point.active → ∀ alias,
-    access.aliasVariable x = .ok (some alias) → owner.conflicts alias = false) ∧
-  (∀ alias, alias ∈ point.retained → owner.conflicts alias = false)
+  ((∀ x, x ∈ point.future → x ∈ point.active → ∀ alias,
+      access.aliasVariable x = .ok (some alias) → owner.conflicts alias = false) ∧
+    (∀ alias, alias ∈ point.retained → owner.conflicts alias = false)) ∧
+  (∀ x, x ∈ point.future → x ∈ point.active →
+    ∃ aliases, access.aliasVariable x = .ok aliases)
+
+theorem DemandPointShrinkSafe.aliasVariable_succeeds
+    {access : AccessEnv} {point : DemandPoint} {owner : DemandOwner}
+    (safe : DemandPointShrinkSafe access point owner)
+    {x : VarId} (future : x ∈ point.future) (active : x ∈ point.active) :
+    ∃ aliases, access.aliasVariable x = .ok aliases :=
+  safe.2 x future active
 
 def DemandRootsDisjoint (forbiddenRoots checkedRoots : List RootRef) : Prop :=
   ∀ forbiddenRoot, forbiddenRoot ∈ forbiddenRoots → ∀ checkedRoot,
@@ -2778,19 +2787,30 @@ def DemandFocus.child {m plan owner path phase node}
 
 private def checkDemandFuture (access : AccessEnv) (point : DemandPoint)
     (owner : DemandOwner) : (variables : List VarId) →
-      V (PLift (∀ x, x ∈ variables → x ∈ point.active → ∀ alias,
-        access.aliasVariable x = .ok (some alias) → owner.conflicts alias = false))
-  | [] => pure ⟨by intro x hmem; cases hmem⟩
+      V (PLift ((∀ x, x ∈ variables → x ∈ point.active → ∀ alias,
+          access.aliasVariable x = .ok (some alias) → owner.conflicts alias = false) ∧
+        (∀ x, x ∈ variables → x ∈ point.active →
+          ∃ aliases, access.aliasVariable x = .ok aliases)))
+  | [] => pure ⟨by
+      constructor
+      · intro x hmem
+        cases hmem
+      · intro x hmem
+        cases hmem⟩
   | x :: rest => do
-    let headSafe : PLift (∀ alias, x ∈ point.active →
-        access.aliasVariable x = .ok (some alias) → owner.conflicts alias = false) ←
+    let headEvidence : PLift ((∀ alias, x ∈ point.active →
+        access.aliasVariable x = .ok (some alias) → owner.conflicts alias = false) ∧
+        (x ∈ point.active → ∃ aliases, access.aliasVariable x = .ok aliases)) ←
       if hactive : point.active.contains x then
         match halias : access.aliasVariable x with
         | .error err => throw err
         | .ok none => pure ⟨by
-            intro alias _ hlookup
-            rw [halias] at hlookup
-            cases hlookup⟩
+            constructor
+            · intro alias _ hlookup
+              rw [halias] at hlookup
+              cases hlookup
+            · intro _
+              exact ⟨none, halias⟩⟩
         | .ok (some alias) =>
           if hconflict : owner.conflicts alias then
             reject .shrink s!"shrink conflicts with demanded variable {x}"
@@ -2800,25 +2820,40 @@ private def checkDemandFuture (access : AccessEnv) (point : DemandPoint)
               | false => rfl
               | true => exact False.elim (hconflict (by simpa [hvalue]))
             pure ⟨by
-              intro candidate _ hlookup
-              rw [halias] at hlookup
-              injection hlookup with heq
-              cases heq
-              exact hsafe⟩
+              constructor
+              · intro candidate _ hlookup
+                rw [halias] at hlookup
+                injection hlookup with heq
+                cases heq
+                exact hsafe
+              · intro _
+                exact ⟨some alias, halias⟩⟩
       else
         pure ⟨by
-          intro alias hmem _
-          have hcontains : point.active.contains x = true := by
-            exact (List.contains_iff_mem).2 hmem
-          exact False.elim (hactive hcontains)⟩
-    let restSafe ← checkDemandFuture access point owner rest
+          constructor
+          · intro alias hmem _
+            have hcontains : point.active.contains x = true := by
+              exact (List.contains_iff_mem).2 hmem
+            exact False.elim (hactive hcontains)
+          · intro hmem
+            have hcontains : point.active.contains x = true := by
+              exact (List.contains_iff_mem).2 hmem
+            exact False.elim (hactive hcontains)⟩
+    let restEvidence ← checkDemandFuture access point owner rest
     pure ⟨by
-      intro candidate hmem hactive alias hlookup
-      simp only [List.mem_cons] at hmem
-      rcases hmem with hhead | htail
-      · subst candidate
-        exact headSafe.down alias hactive hlookup
-      · exact restSafe.down candidate htail hactive alias hlookup⟩
+      constructor
+      · intro candidate hmem hactive alias hlookup
+        simp only [List.mem_cons] at hmem
+        rcases hmem with hhead | htail
+        · subst candidate
+          exact headEvidence.down.1 alias hactive hlookup
+        · exact restEvidence.down.1 candidate htail hactive alias hlookup
+      · intro candidate hmem hactive
+        simp only [List.mem_cons] at hmem
+        rcases hmem with hhead | htail
+        · subst candidate
+          exact headEvidence.down.2 hactive
+        · exact restEvidence.down.2 candidate htail hactive⟩
 termination_by variables => variables.length
 
 private def checkDemandRetained (owner : DemandOwner) :
@@ -2849,7 +2884,7 @@ def checkShrinkOwner {m : Module} {planOwner : Nat} {root}
     let futureSafe ← demandLift (checkDemandFuture env.access trace.point owner trace.point.future)
     let retainedSafe ← demandLift (checkDemandRetained owner trace.point.retained)
     let safe : DemandPointShrinkSafe env.access trace.point owner :=
-      ⟨futureSafe.down, retainedSafe.down⟩
+      ⟨⟨futureSafe.down.1, retainedSafe.down⟩, futureSafe.down.2⟩
     recordShrinkEvent trace env.access env.accessMatches owner hmutation safe
   else
     demandReject .block "shrink approval is not attached to a mutation point"
