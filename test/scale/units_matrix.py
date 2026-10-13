@@ -19,7 +19,8 @@ compiler invocations and the units in each, objects reused and missed,
 whether the link ran, and the time and peak memory the compiler and the
 largest native compiler process took), then a table. With --random N runs N
 seeded random edits, contract changes and store damages with --verify-reuse,
-each compared with a clean build. Exits 1 if any row or step fails.
+each compared with a clean build. Exits 1 if any row or step fails and 2 if
+any qualification dimension is unavailable.
 """
 
 import argparse
@@ -216,10 +217,24 @@ class Matrix:
     def __init__(self, goose, work):
         self.goose, self.work = goose, work
         self.failures, self.records = [], []
+        self.unavailable = []
 
     def fail(self, row, why):
         self.failures.append(f"{row}: {why}")
         print(f"FAIL {row}: {why}")
+
+    def record_unavailable(self, row, dimensions):
+        record = {"row": row, "status": "unavailable", "dimensions": dimensions}
+        self.unavailable.append(record)
+        self.records.append(record)
+        print(json.dumps(record))
+
+    def completion(self):
+        if self.failures:
+            return "fail", 1
+        if self.unavailable:
+            return "incomplete", 2
+        return "ok", 0
 
     def equal_to_clean(self, row, s, b, flags=(), goose=None):
         """L-EQ: the incremental build `b`, against a clean build."""
@@ -461,9 +476,7 @@ class Matrix:
                 self.fail("E10", f"the {label} store was not left warm: {again.record('E10')}")
             self.equal_to_clean(f"E10 back to {label}", s, again, flags, goose)
 
-        self.records.append({"row": "E10 unavailable dimensions", "ok": True,
-                             "dimensions": E10_UNAVAILABLE})
-        print(json.dumps(self.records[-1]))
+        self.record_unavailable("E10 unavailable dimensions", E10_UNAVAILABLE)
 
     @staticmethod
     def is_warm(native):
@@ -704,16 +717,18 @@ class Matrix:
                 continue
             if s.edit == "E15b" and edits.EDITS["E15b"].message not in b.stderr:
                 self.fail(label, "the warning was not printed")
-            if self.ok_build(label, b):
-                if action == "damage" and damaged:
-                    if b.native.get("objects_missed", 0) < 1:
-                        self.fail(label, "the damaged object was not rebuilt")
-                    if not b.native.get("corrupt_entries"):
-                        self.fail(label, "the damaged cache entry was not reported")
-                self.equal_to_clean(label, s, b, flags)
-                last_successful = b
-                last_successful_flags = flags
-                last_successful_edit = s.edit
+            if b.exit != 0:
+                self.fail(label, f"unexpected build failure (exit {b.exit}): {b.stderr[-300:]}")
+                continue
+            if action == "damage" and damaged:
+                if b.native.get("objects_missed", 0) < 1:
+                    self.fail(label, "the damaged object was not rebuilt")
+                if not b.native.get("corrupt_entries"):
+                    self.fail(label, "the damaged cache entry was not reported")
+            self.equal_to_clean(label, s, b, flags)
+            last_successful = b
+            last_successful_flags = flags
+            last_successful_edit = s.edit
 
 
 def main():
@@ -735,10 +750,21 @@ def main():
         m.run_all(a.case)
     print("\nrow".ljust(34) + "exit  units compiled  reused  missed  link")
     for r in m.records:
+        if "exit" not in r:
+            print(f"{r['row']:<33} {r['status']}")
+            continue
         print(f"{r['row']:<33} {r['exit']:<5} {str(r['units_per_invocation']):<15} "
               f"{r['objects_reused']!s:<7} {r['objects_missed']!s:<7} {r['link_ran']}")
-    print(f"units_matrix: {'ok' if not m.failures else str(len(m.failures)) + ' failure(s)'}")
-    return 1 if m.failures else 0
+    status, exit_code = m.completion()
+    if status == "incomplete":
+        dimensions = sum(len(record["dimensions"]) for record in m.unavailable)
+        detail = f"incomplete ({dimensions} unavailable dimension(s))"
+    elif status == "fail":
+        detail = f"{len(m.failures)} failure(s)"
+    else:
+        detail = "ok"
+    print(f"units_matrix: {detail}")
+    return exit_code
 
 
 if __name__ == "__main__":
