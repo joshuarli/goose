@@ -195,7 +195,7 @@ theorem step_expr_call (hm : ModOk m) (ih : Specs m prof n) (W : World) (tenv : 
         cases hs : callee.summary with
         | unknown =>
           rw [hs] at heff
-          have := hE.2.2.2 (by rw [hst]; exact heff)
+          have := hE.2.2.2 (by rw [hst]; exact heff.1)
           rw [hunk] at this; cases this
         | known sm =>
           rw [hs] at heff
