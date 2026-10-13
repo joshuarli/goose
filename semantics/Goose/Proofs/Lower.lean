@@ -1,4 +1,5 @@
 import Goose.Lower.Claims
+import Goose.Lower.Validate
 import Goose.Core.Validate
 import Goose.GIR.Validate
 
@@ -113,6 +114,137 @@ theorem checkGlobal_origin {m : Core.Module} {i : Nat} {g : Core.Global}
     · simp [Core.checkGlobal, ht, ho, Core.reject, bind, Except.bind] at h
   · simp [Core.checkGlobal, ht, Core.reject, bind, Except.bind] at h
 
+theorem checkImpl_localOrigins {m : Core.Module} {impl : Core.Impl}
+    (h : Core.checkImpl m impl = .ok ()) :
+    ∀ lv ∈ impl.vars.toList, lv.org < m.origins.size := by
+  unfold Core.checkImpl at h
+  by_cases hmany : 1 < impl.results.size
+  · simp [hmany, Core.reject, bind, Except.bind] at h
+  · simp only [if_neg hmany] at h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, horigins, _⟩ := exceptBind_ok_left h
+    have hbound := coreForAll_ok impl.vars.toList (fun lv =>
+      unless lv.org < m.origins.size do
+        Core.reject .type s!"{impl.name}: origin of variable {lv.name} is outside the origin table") horigins
+    intro lv hlv
+    have hcheck := hbound lv hlv
+    by_cases hnot : lv.org < m.origins.size
+    · exact hnot
+    · simp [hnot, Core.reject] at hcheck
+
+theorem checkImpl_localScopes {m : Core.Module} {impl : Core.Impl}
+    (h : Core.checkImpl m impl = .ok ()) :
+    ∀ lv ∈ impl.vars.toList, lv.scope < (Core.blockScopes none impl.body).length := by
+  unfold Core.checkImpl at h
+  by_cases hmany : 1 < impl.results.size
+  · simp [hmany, Core.reject, bind, Except.bind] at h
+  · simp only [if_neg hmany] at h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    by_cases hbody : impl.body.scope = 0
+    · simp only [if_pos hbody] at h
+      cases horder : Core.scopeOrderError (Core.blockScopes none impl.body) 0 with
+      | some message => simp [horder, Core.reject, bind, Except.bind] at h
+      | none =>
+        simp [horder] at h
+        obtain ⟨_, hscopes, _⟩ := exceptBind_ok_left h
+        have hbound := coreForAll_ok impl.vars.toList (fun lv =>
+          unless lv.scope < (Core.blockScopes none impl.body).length do
+            Core.reject .type s!"{impl.name}: scope of variable {lv.name} is outside the body scope table") hscopes
+        intro lv hlv
+        have hcheck := hbound lv hlv
+        by_cases hnot : lv.scope < (Core.blockScopes none impl.body).length
+        · exact hnot
+        · simp [hnot, Core.reject] at hcheck
+    · simp [hbody, Core.reject, bind, Except.bind] at h
+
+theorem lowerImplAt_slotScopes {m : Core.Module} {implId : Nat} {impl : Core.Impl}
+    (hcheck : Core.checkImpl m impl = .ok ()) :
+    ∀ sl ∈ (lowerImplAt m implId impl).slots,
+      sl.scope < (lowerImplAt m implId impl).scopes.size := by
+  intro sl hsl
+  obtain ⟨i, hslot⟩ := Array.mem_iff_getElem?.mp hsl
+  change (impl.vars.mapIdx fun i lv =>
+    ({ ty := lv.ty, kind := lv.kind, scope := lv.scope, var := i } : GIR.Slot))[i]? = some sl at hslot
+  cases hvar : impl.vars[i]? with
+  | none => simp [Array.getElem?_mapIdx, hvar] at hslot
+  | some lv =>
+    simp [Array.getElem?_mapIdx, hvar] at hslot
+    subst sl
+    have hmem : lv ∈ impl.vars.toList :=
+      Array.mem_toList_iff.mpr (Array.mem_iff_getElem?.mpr ⟨i, hvar⟩)
+    have hscope := checkImpl_localScopes hcheck lv hmem
+    simpa [lowerImplAt, Core.scopeParents] using hscope
+
+/-- Lowering preserves the entry signature and global initializer headers. -/
+theorem lower_checkEntryAndGlobals (m : Core.Module) (h : Core.validate m = .ok ()) :
+    GIR.checkEntryAndGlobals (lower m) = .ok () := by
+  obtain ⟨_, hentry, _, hglobals, _, _, _, _⟩ := core_validate_stages m h
+  obtain ⟨ctx, impl, hctx, himpl, hparams, hresults⟩ := checkEntry_shape hentry
+  have hfunc : (lower m).funcs[(lower m).entry]? =
+      some (lowerImplAt m ctx.impl impl) := by
+    rw [lower_func_lookup]
+    simp [lower, hctx, himpl]
+  have hparamsList : impl.params.toList = [] := by
+    have hlen : impl.params.toList.length = 0 := by simpa using hparams
+    exact List.eq_nil_of_length_eq_zero hlen
+  have hresultsList : impl.results.toList = [] := by
+    have hlen : impl.results.toList.length = 0 := by simpa using hresults
+    exact List.eq_nil_of_length_eq_zero hlen
+  have hglobalOrg : ∀ g ∈ m.globals, g.org < m.origins.size := by
+    intro g hg
+    obtain ⟨i, hget⟩ := Array.mem_iff_getElem?.mp hg
+    exact checkGlobal_origin (hglobals i g hget)
+  have hOrigins : (lower m).origins = m.origins := rfl
+  let checkLowerGlobal := fun (g : GIR.Global) (_ : PUnit) => do
+    unless g.init.params.isEmpty && g.init.results == [g.ty] do
+      GIR.violation .v001 s!"the initializer of global {g.name} must take no parameters and return its type"
+    unless g.org < m.origins.size do
+      GIR.violation .v001 s!"global {g.name}: origin outside the origin table"
+    pure (ForInStep.yield PUnit.unit)
+  have lowerGlobals_ok : ∀ gs : List Core.Global,
+      (∀ g ∈ gs, g.org < m.origins.size) →
+      forIn (gs.map (lowerGlobal m)) PUnit.unit checkLowerGlobal = .ok () := by
+    intro gs hgs
+    induction gs with
+    | nil => rfl
+    | cons g gs ih =>
+      simp only [List.map_cons, List.forIn_cons]
+      have hg := hgs g (by simp)
+      have hp : (lowerGlobal m g).init.params = [] := rfl
+      have hr : (lowerGlobal m g).init.results = [g.ty] := rfl
+      have ho : (lowerGlobal m g).org = g.org := rfl
+      have hty : (lowerGlobal m g).ty = g.ty := rfl
+      have hstep : checkLowerGlobal (lowerGlobal m g) PUnit.unit =
+          .ok (ForInStep.yield PUnit.unit) := by
+        simp only [checkLowerGlobal, hp, hr, ho, hty, List.isEmpty_nil]
+        simp [hg, pure, Except.pure]
+      rw [hstep]
+      apply ih
+      intro g' hg'
+      exact hgs g' (by simp [hg'])
+  unfold GIR.checkEntryAndGlobals
+  simp only [bind, Except.bind]
+  have hentryShape :
+      ((lowerImplAt m ctx.impl impl).params.isEmpty &&
+        (lowerImplAt m ctx.impl impl).results.isEmpty) = true := by
+    simp [lowerImplAt, hparamsList, hresultsList]
+  simp only [hfunc, hentryShape, if_true]
+  rw [hOrigins]
+  rw [← Array.forIn_toList]
+  simp only [lower, Array.toList_map]
+  have hloop := lowerGlobals_ok m.globals.toList
+    (by
+      intro g hg
+      apply hglobalOrg
+      exact Array.mem_def.mpr hg)
+  change (forIn (List.map (lowerGlobal m) m.globals.toList) PUnit.unit checkLowerGlobal >>= fun _ =>
+    pure ()) = .ok ()
+  rw [hloop]
+  rfl
+
 /-- The computation `c` finishes in a state, or stops by an abort or an exit, and then `g k`
 does the same in the same state for every large enough `k`. -/
 def Agree (c : M α) (g : Nat → M α) (s : St) : Prop :=
@@ -184,6 +316,25 @@ theorem lowerGlobal_blocks (m : Core.Module) (g : Core.Global) :
     (lowerGlobal m g).init.blocks = finishBlocks (emitTerm
       (.ret [(lowerExpr g.init (lowerEnv m #[]) startLS).1] (some g.org)) (lowerEnv m #[])
       (lowerExpr g.init (lowerEnv m #[]) startLS).2).2.blocks := rfl
+
+theorem lowerGlobal_blocks_nonempty (m : Core.Module) (g : Core.Global) :
+    0 < (lowerGlobal m g).init.blocks.size := by
+  let le := lowerEnv m #[]
+  let run := lowerExpr g.init le startLS
+  let v := run.1
+  let ls1 := run.2
+  have hlower : lowerExpr g.init le startLS = (v, ls1) := rfl
+  have hadv1 : startLS.Adv ls1 := advB_lowerExpr g.init le startLS v ls1 hlower
+  let endRun := emitTerm (.ret [v] (some g.org)) le ls1
+  let ls2 := endRun.2
+  have hemit : emitTerm (.ret [v] (some g.org)) le ls1 = ((), ls2) := by rfl
+  have hadv2 : ls1.Adv ls2 := adv_emitTerm hemit
+  have hsize : startLS.blocks.size ≤ ls2.blocks.size := (hadv1.trans hadv2).ext.1
+  have hpos : 0 < ls2.blocks.size := Nat.lt_of_lt_of_le (by simp [startLS]) hsize
+  rw [lowerGlobal_blocks]
+  simp only [finishBlocks, Array.size_map]
+  change 0 < ls2.blocks.size
+  exact hpos
 
 theorem global_agree (m : Core.Module) (gl : Core.Global) (hg : exprOk gl.init = true) (p : NumProfile)
     (n : Nat) (s : St) :
