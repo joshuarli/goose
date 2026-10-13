@@ -15,7 +15,7 @@ theorem Frame.demandedSliceTargets_ne_of_shrinkProtected
     (frame : Frame m W tenv penv env s future)
     (hProtected : KnownEffectShrinkProtected W)
     (ownerTargets : ∀ target, target ∈ rootsTargets ownerRoots → target ∈ W.E.shrinks)
-    (owner : Gam env W.P ownerRoots ownerRoot) :
+    (owner : Gam env W.ownerP ownerRoots ownerRoot) :
     ∀ holder elem, W.D holder elem → ∀ target, W.A holder target → target ≠ ownerRoot := by
   intro holder elem hD target hA
   obtain ⟨activation, holderScope, holderVar, hholder, hbeforeBase⟩ :=
@@ -38,7 +38,7 @@ theorem Frame.demandedSliceTargets_ne_of_shrinkProtected
   | global g =>
     have hshrinks : Target.global g ∈ W.E.shrinks :=
       ownerTargets (.global g) (mem_rootsTargets_global hownerRef)
-    have hmay : MayShrinkEff W.P W.E (.global g) :=
+    have hmay : MayShrinkEff W.ownerP W.E (.global g) :=
       ⟨.global g, Or.inl hshrinks, rfl⟩
     have haway := hProtected.2 holder elem target hD hA (.global g) hmay
     intro hsame
@@ -46,7 +46,7 @@ theorem Frame.demandedSliceTargets_ne_of_shrinkProtected
   | param i =>
     have hshrinks : Target.param i ∈ W.E.shrinks :=
       ownerTargets (.param i) (mem_rootsTargets_param hownerRef)
-    have hmay : MayShrinkEff W.P W.E ownerRoot :=
+    have hmay : MayShrinkEff W.ownerP W.E ownerRoot :=
       ⟨.param i, Or.inl hshrinks, hownerRoot⟩
     exact hProtected.2 holder elem target hD hA ownerRoot hmay
 
@@ -266,7 +266,7 @@ theorem Frame.truncateGrowshrinkSa
     (frame : Frame m W tenv penv env state future)
     (hProtected : KnownEffectShrinkProtected W)
     (ownerTargets : ∀ target, target ∈ rootsTargets ownerRoots → target ∈ W.E.shrinks)
-    (owner : Gam env W.P ownerRoots o.root)
+    (owner : Gam env W.ownerP ownerRoots o.root)
     (howner : LocTy state.store o (.growshrink element))
     (htruncate : state.store.truncate o len = .ok s') :
     ∀ holder elem, W.D holder elem →
