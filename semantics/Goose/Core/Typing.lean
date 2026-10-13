@@ -242,7 +242,7 @@ end
 `return`, `break` or `continue`. -/
 def Stmt.isPlain : Stmt → Bool
   | .letS .. | .assign .. | .assignOp .. | .rebind .. | .expr .. | .append .. | .print ..
-  | .assertS .. => true
+  | .assertS .. | .popN .. | .resize .. | .clear .. | .assignWhole .. => true
   | _ => false
 
 mutual
@@ -334,9 +334,12 @@ def ownerElement (t : Ty) : T Ty :=
   | some e => pure e
   | none => rej .type "operation requires a grow, growshrink or limited owner"
 
-/-- A mutable whole-owner reference carries contents authority into its callee. -/
+/-- A mutable resizable-owner reference carries contents authority into its callee. -/
 def PlaceInfo.referenceWritable (info : PlaceInfo) (profile : ArtifactProfile) : Bool :=
-  if profile == .shrink && info.ty.ownerElem?.isSome then info.contentsWritable
+  if profile == .shrink then
+    match info.ty with
+    | .grow _ | .growshrink _ => info.contentsWritable
+    | _ => info.bindingWritable
   else info.bindingWritable
 
 def checkOwnerRun (env : TEnv) (e : Expr) (t : Ty) : T Unit :=
