@@ -140,8 +140,9 @@ private theorem RootIn.root_ne_of_no_overlap {env : Env} {P : Nat → RootInst �
 parameter cannot denote a local of the current activation because frame scopes
 start at or above the activation base, while parameter roots are older. -/
 theorem Gam.root_ne_of_no_overlap {m : Module} {W : World} {tenv : TEnv} {penv : PEnv}
-    {env : Env} {s : St} {roots roots' : List RootRef} {r r' : RootInst}
-    (hframe : Frame m W tenv penv env s)
+    {env : Env} {s : St} {future : List VarId}
+    {roots roots' : List RootRef} {r r' : RootInst}
+    (hframe : Frame m W tenv penv env s future)
     (hdisjoint : DemandRootsDisjoint roots roots')
     (h : Gam env W.P roots r) (h' : Gam env W.P roots' r') : r ≠ r' := by
   have paramAway : ∀ i x lv si, env.vars[x]? = some lv → env.scopes.lookup lv.scope = some si →
