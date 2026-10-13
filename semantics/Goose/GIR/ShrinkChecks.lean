@@ -249,7 +249,7 @@ private def dependentReplace : Module := mkModule
     .def 7 (.arrLit growTy [6]), .eff (.clear 2 (some 2)),
     .eff (.replace 2 7 (some 3)), .eff (.leave 0), .term (.ret [] none)]
 
-#guard rejected dependentReplace .v060
+#guard accepted dependentReplace
 
 private def slotDependentReplace : Func :=
   { name := "slot-dependent"
@@ -259,7 +259,7 @@ private def slotDependentReplace : Func :=
     scopes := #[none]
     blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
       .eff (.enter 0), .def 1 (.arrayLen 0), .eff (.slotInit 0 1 (some 0)),
-      .def 2 (.slotAddr 0), .def 3 (.load 2), .eff (.clear 0 (some 1)),
+      .eff (.clear 0 (some 1)), .def 2 (.slotAddr 0), .def 3 (.load 2),
       .def 4 (.arrLit growTy [3]), .eff (.replace 0 4 (some 2)),
       .eff (.leave 0), .term (.ret [] none)]⟩]
     summary := .unknown
@@ -269,7 +269,7 @@ private def slotDependentModule : Module :=
   { mkModule #[] [.term (.ret [] none)] with
     funcs := #[mkFunc #[] [.term (.ret [] none)], slotDependentReplace] }
 
-#guard rejected slotDependentModule .v060
+#guard accepted slotDependentModule
 
 private def branchDependentReplace : Func :=
   { name := "branch-dependent"
@@ -292,7 +292,7 @@ private def branchDependentModule : Module :=
   { mkModule #[] [.term (.ret [] none)] with
     funcs := #[mkFunc #[] [.term (.ret [] none)], branchDependentReplace] }
 
-#guard rejected branchDependentModule .v060
+#guard accepted branchDependentModule
 
 private def callGlobalDependentModule : Module :=
   let init : Func :=
@@ -329,7 +329,7 @@ private def callGlobalDependentModule : Module :=
     globals := #[⟨"source", .int .i64, .mutable, init, 0⟩]
     funcs := #[mkFunc #[] [.term (.ret [] none)], caller, globalReader] }
 
-#guard rejected callGlobalDependentModule .v060
+#guard accepted callGlobalDependentModule
 
 private def aliasedParameterReplace : Func :=
   { name := "aliased-parameters"
@@ -388,7 +388,197 @@ private def duplicateFanInModule : Module :=
   { mkModule #[] [.term (.ret [] none)] with
     funcs := #[mkFunc #[] [.term (.ret [] none)], duplicateFanInReplace] }
 
-#guard rejected duplicateFanInModule .v060
+#guard accepted duplicateFanInModule
+
+private def postClearReadReplace (readElement : Bool) : Func :=
+  let instructions := if readElement then [
+    .eff (.clear 0 (some 0)), .def 1 (.snapshot .owner 0),
+    .def 2 (.constInt .i64 0), .def 3 (.indexChecked 1 2 (some 1)),
+    .def 4 (.load 3), .def 5 (.arrLit growTy [4]),
+    .eff (.replace 0 5 (some 2)), .term (.ret [] none)] else [
+    .eff (.clear 0 (some 0)), .def 1 (.arrayLen 0),
+    .def 2 (.arrLit growTy [1]), .eff (.replace 0 2 (some 1)), .term (.ret [] none)]
+  { name := "post-clear-read-replace"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy))], instructions⟩]
+    summary := .unknown
+    org := none }
+
+private def postClearReadReplaceModule (readElement : Bool) : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], postClearReadReplace readElement] }
+
+#guard rejected (postClearReadReplaceModule false) .v060
+#guard rejected (postClearReadReplaceModule true) .v060
+
+private def appendSourceAliasReplace : Func :=
+  { name := "append-source-alias-replace"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[⟨growTy, .mutable, 0, 0⟩]
+    scopes := #[none]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
+      .eff (.enter 0), .def 1 (.arrLit growTy []), .eff (.slotInit 0 1 (some 0)),
+      .def 2 (.slotAddr 0), .def 3 (.snapshot .owner 0), .eff (.clear 0 (some 1)),
+      .eff (.append 2 3 (some 1)), .def 4 (.constInt .i64 7),
+      .def 5 (.arrLit growTy [4]), .eff (.replace 0 5 (some 1)),
+      .eff (.leave 0), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def appendSourceAliasModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], appendSourceAliasReplace] }
+
+#guard rejected appendSourceAliasModule .v060
+
+private def slotInitSourceAliasReplace : Func :=
+  { name := "slot-init-source-alias-replace"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[⟨.ref .mutable growTy, .mutable, 0, 0⟩]
+    scopes := #[none]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
+      .eff (.enter 0), .eff (.clear 0 (some 0)), .eff (.slotInit 0 0 (some 0)),
+      .def 1 (.arrLit growTy []), .eff (.replace 0 1 (some 0)),
+      .eff (.leave 0), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def slotInitSourceAliasModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], slotInitSourceAliasReplace] }
+
+#guard rejected slotInitSourceAliasModule .v060
+
+private def unknownTouchCallReplace : Func :=
+  { name := "unknown-touch-call-replace"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
+      .eff (.clear 0 (some 0)), .def 1 (.call 2 [] (some 1)),
+      .def 2 (.arrLit growTy []), .eff (.replace 0 2 (some 1)),
+      .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def unknownTouchCallee : Func :=
+  { name := "unknown-touch"
+    params := []
+    results := [.int .i64]
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[], [.def 0 (.constInt .i64 0), .term (.ret [0] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def unknownTouchCallModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], unknownTouchCallReplace, unknownTouchCallee] }
+
+#guard rejected unknownTouchCallModule .v060
+
+private def aliasTouchCallReplace : Func :=
+  { name := "alias-touch-call-replace"
+    params := [.ref .mutable growTy, .ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy)), (1, .data (.ref .mutable growTy))], [
+      .eff (.clear 0 (some 0)), .def 2 (.call 2 [1] (some 1)),
+      .def 3 (.arrLit growTy []), .eff (.replace 0 3 (some 1)),
+      .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def aliasTouchCallee : Func :=
+  { name := "known-touch"
+    params := [.ref .mutable growTy]
+    results := [.int .i64]
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
+      .def 1 (.arrayLen 0), .term (.ret [1] none)]⟩]
+    roots := { params := #[(0, [.param 0])] }
+    summary := .known ⟨[.param 0], [], [], [], [], false, false⟩
+    org := none }
+
+private def aliasTouchCallModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], aliasTouchCallReplace, aliasTouchCallee] }
+
+#guard rejected aliasTouchCallModule .v060
+
+private def aliasNoEffectCallReplace : Func :=
+  { name := "alias-no-effect-call-replace"
+    params := [.ref .mutable growTy, .ref .mutable growTy]
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy)), (1, .data (.ref .mutable growTy))], [
+      .eff (.clear 0 (some 0)), .def 2 (.call 2 [1] (some 1)),
+      .def 3 (.arrLit growTy []), .eff (.replace 0 3 (some 1)),
+      .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def unrelatedNoEffectCallReplace : Func :=
+  { name := "unrelated-no-effect-call-replace"
+    params := [.ref .mutable growTy]
+    results := []
+    slots := #[⟨growTy, .mutable, 0, 0⟩]
+    scopes := #[none]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
+      .eff (.enter 0), .def 1 (.arrLit growTy []), .eff (.slotInit 0 1 (some 0)),
+      .def 2 (.slotAddr 0), .eff (.clear 0 (some 1)),
+      .def 3 (.call 2 [2] (some 1)), .def 4 (.arrLit growTy []),
+      .eff (.replace 0 4 (some 2)), .eff (.leave 0), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def noEffectCallee : Func :=
+  { name := "no-effect"
+    params := [.ref .mutable growTy]
+    results := [.int .i64]
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[(0, .data (.ref .mutable growTy))], [
+      .def 1 (.constInt .i64 0), .term (.ret [1] none)]⟩]
+    roots := { params := #[(0, [.param 0])] }
+    summary := .known ⟨[], [], [], [], [], false, false⟩
+    org := none }
+
+private def noEffectCallModule (caller : Func) : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[mkFunc #[] [.term (.ret [] none)], caller, noEffectCallee] }
+
+#guard rejected (noEffectCallModule aliasNoEffectCallReplace) .v060
+#guard accepted (noEffectCallModule unrelatedNoEffectCallReplace)
+
+private def discardedSlotAddressReplace : Func :=
+  { name := "discarded-slot-address-replace"
+    params := []
+    results := []
+    slots := #[⟨growTy, .mutable, 0, 0⟩]
+    scopes := #[none]
+    blocks := #[⟨[], [
+      .eff (.enter 0), .def 0 (.arrLit growTy []), .eff (.slotInit 0 0 (some 0)),
+      .def 1 (.slotAddr 0), .eff (.clear 1 (some 0)), .def 2 (.slotAddr 0),
+      .def 3 (.arrLit growTy []), .eff (.replace 1 3 (some 1)),
+      .eff (.leave 0), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def discardedSlotAddressModule : Module :=
+  { mkModule #[] [.term (.ret [] none)] with
+    funcs := #[discardedSlotAddressReplace] }
+
+#guard rejected discardedSlotAddressModule .v060
 
 private def readBetweenClearAndReplace (throughCall : Bool) : Module :=
   let readFunc : Func :=
