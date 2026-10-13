@@ -442,4 +442,12 @@ theorem tyView_accessElement {tenv : TEnv} {penv : PEnv} {view : View}
     penv.access.viewElement? view = some el :=
   tyView_accessElement_env tenv penv.access view n n' el mu hmod hvars ht
 
+/-- Successful expression typing agrees with static result-type lookup. -/
+theorem tyExpr_accessType {tenv : TEnv} {penv : PEnv} {expr : Expr}
+    {n n' : Nat} {ty : Ty}
+    (hmod : tenv.mod = penv.mod) (hvars : tenv.vars = penv.impl.vars)
+    (ht : tyExpr tenv expr n = .ok (ty, n')) :
+    penv.access.exprType? expr = some ty :=
+  tyExpr_accessType_env tenv penv.access expr n n' ty hmod hvars ht
+
 end Goose.Core.Sound
