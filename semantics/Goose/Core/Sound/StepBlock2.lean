@@ -181,6 +181,7 @@ private theorem blockStmt_shrinkFuture {path sc all value offset st rest}
   have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
   change transition.context.expected.frame.future = _
   rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, hfuture]
+  cases st <;> rfl
 
 set_option maxHeartbeats 800000 in
 theorem step_stmts (ih : Specs m prof plans n) : StmtsSpec m prof plans (n + 1) := by
@@ -395,6 +396,7 @@ private theorem blockValue_shrinkFuture {path sc ss e} {pc : PlanContext m plans
   have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
   change transition.context.expected.frame.future = context.expected.frame.future
   rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, hfuture]
+  simp [DemandNode.phaseFuture]
 
 set_option maxHeartbeats 1600000 in
 theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) := by
