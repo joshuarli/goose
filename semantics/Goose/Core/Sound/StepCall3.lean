@@ -135,7 +135,8 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
               rcases hd with ⟨_, _, _, lv, _, hscope⟩
               simp [List.lookup] at hscope
           age := hInv.age, fresh := hInv.fresh, globals := hInv.globals
-          globalNonRefs := hInv.globalNonRefs }
+          globalNonRefs := hInv.globalNonRefs
+          globalStorageDomain := hInv.globalStorageDomain }
         aOlder := hAO, dOut := hDout, dFun := hDfun, sa := hSA
         pref := fun x cont h => hcont x cont h }
     have hpreFst := pre_fst_range (fun x => (x.fst.var, x.snd)) (fun _ _ => rfl) impl.params.toList

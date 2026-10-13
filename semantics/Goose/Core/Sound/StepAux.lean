@@ -62,6 +62,7 @@ theorem Frame.of_eq {s' : St} {future : List VarId} (h : Frame m W tenv penv env
         rw [h1]
         exact h.inv.globals g gl hg hm
       globalNonRefs := by rw [h1]; exact h.inv.globalNonRefs
+      globalStorageDomain := by rw [h1]; exact h.inv.globalStorageDomain
     }
     sa := by rw [h1]; exact h.sa }
 
