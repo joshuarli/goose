@@ -1,5 +1,6 @@
 import Goose.Core.Demand
 import Goose.Core.Sound.Frame
+import Goose.Core.Sound.CallPreservation
 
 /-!
 Checked demand contexts connect one owner's derived plan to source nodes in
@@ -361,12 +362,14 @@ def EvaluationContext.OwnerMatches {m plans path node phase}
   | .pilot _ _ => True
   | .shrink (pc := pc) _ _ => pc.owner = owner
 
+/-- Shrink authority combines the checked request with an observed owner capability.
+Pilot preservation uses store extension and grants no shrink authority. -/
 def EvaluationContext.mayShrink {m plans path node phase}
     (context : EvaluationContext m plans path node phase)
-    (P : Nat → RootInst → Prop) (r : RootInst) : Prop :=
+    (P : Nat → RootInst → Prop) (observation : Observation) (r : RootInst) : Prop :=
   match context with
   | .pilot _ _ => False
-  | .shrink (pc := pc) _ _ => PlanMayShrink pc P r
+  | .shrink (pc := pc) _ _ => PlanMayShrink pc P r ∧ OwnerCap m observation r
 
 /-- Re-select a body root from the plan's checked walk. -/
 noncomputable def NodeContext.canonicalCallBody {m plans c ctx impl}
@@ -442,8 +445,8 @@ theorem EvaluationContext.callBody_mayShrink_iff {m plans c ctx impl}
     (ownerMatch : root.OwnerMatches c)
     (hctx : m.contexts[c]? = some ctx)
     (himpl : m.impls[ctx.impl]? = some impl)
-    (P : Nat → RootInst → Prop) (r : RootInst) :
-    (root.callBody ownerMatch hctx himpl).mayShrink P r ↔ root.mayShrink P r := by
+    (P : Nat → RootInst → Prop) (observation : Observation) (r : RootInst) :
+    (root.callBody ownerMatch hctx himpl).mayShrink P observation r ↔ root.mayShrink P observation r := by
   cases root <;> simp [EvaluationContext.callBody, EvaluationContext.mayShrink,
     NodeContext.canonicalCallBody]
 
@@ -590,16 +593,18 @@ theorem EvaluationContext.child_mayShrink_iff {m plans path node phase}
     (parent : EvaluationContext m plans path node phase)
     (primary : phase = node.primaryPhase) (index : Nat) (child : DemandNode)
     (childPhase : DemandPhase) (hchild : node.child? index = some child)
-    (hchildPhase : DemandNodeHasPhase child childPhase) (P : Nat → RootInst → Prop) (r : RootInst) :
-    (parent.child primary index child childPhase hchild hchildPhase).mayShrink P r ↔
-      parent.mayShrink P r := by
+    (hchildPhase : DemandNodeHasPhase child childPhase) (P : Nat → RootInst → Prop)
+    (observation : Observation) (r : RootInst) :
+    (parent.child primary index child childPhase hchild hchildPhase).mayShrink P observation r ↔
+      parent.mayShrink P observation r := by
   cases parent <;> rfl
 
 theorem EvaluationContext.phase_mayShrink_iff {m plans path node phase}
     (parent : EvaluationContext m plans path node phase)
     (primary : phase = node.primaryPhase) (targetPhase : DemandPhase)
-    (hphase : DemandNodeHasPhase node targetPhase) (P : Nat → RootInst → Prop) (r : RootInst) :
-    (parent.phase primary targetPhase hphase).mayShrink P r ↔ parent.mayShrink P r := by
+    (hphase : DemandNodeHasPhase node targetPhase) (P : Nat → RootInst → Prop)
+    (observation : Observation) (r : RootInst) :
+    (parent.phase primary targetPhase hphase).mayShrink P observation r ↔ parent.mayShrink P observation r := by
   cases parent <;> rfl
 
 theorem EvaluationContext.child_retained_subset {m plans path node phase}
