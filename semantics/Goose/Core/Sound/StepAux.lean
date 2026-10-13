@@ -58,6 +58,11 @@ theorem Ext.of_eq {is : List Nat} {D : RootInst → Prop} {s s' : St} (h1 : s'.s
    fun _ _ h _ _ _ => by rw [h1]; exact h, fun _ _ h _ _ _ => by rw [← h1]; exact h,
    fun _ h => by rw [← h1]; exact h⟩
 
+theorem Footprint.of_eq {is : List Nat} {D : RootInst → Prop} {s s' : St}
+    (h1 : s'.store = s.store) (h2 : s'.nextScope = s.nextScope) : Footprint is D s s' :=
+  ⟨by rw [h2]; exact Nat.le_refl _, fun _ _ h _ _ _ => by rw [h1]; exact h,
+   fun _ _ h _ _ _ => by rw [← h1]; exact h, fun _ h => by rw [← h1]; exact h⟩
+
 /-- A root set with no local denotes the same roots in every activation. -/
 theorem gam_noEnv {P : Nat → RootInst → Prop} {rho : List RootRef} {r : RootInst}
     (h : Gam env P rho r) (hn : ∀ y, RootRef.local y ∉ rho) : Gam noEnv P rho r := by
