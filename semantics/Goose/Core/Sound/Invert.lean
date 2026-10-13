@@ -225,21 +225,22 @@ theorem rpBlockValue_ok (env : PEnv) (pre : List VarId) (sc : Nat) (stmts : List
       (match value with
        | none => rho = [] ∧ st' = st2
        | some e => rpExpr { env with scopes := sc :: env.scopes } e st2 = .ok (rho, st')) ∧
-      (∀ y, RootRef.local y ∈ rho → ¬ (st.nextVar ≤ y ∧ y < st'.nextVar)) := by
+      (∀ y, RootRef.local y ∈ rho → ¬ (st.nextVar ≤ y ∧ y < st'.nextVar)) ∧
+      rng.1 = st.nextVar := by
   cases value with
   | none =>
     simp only [rpBlockValue] at h
     inv at h
-    obtain ⟨hpre, st2, h2, hb, rfl, _, rfl⟩ := h
-    refine ⟨?_, _, h2, ⟨rfl, rfl⟩, checkBlockValue_ok _ _ _ hb⟩
+    obtain ⟨hpre, st2, h2, hb, rfl, hrng, rfl⟩ := h
+    refine ⟨?_, _, h2, ⟨rfl, rfl⟩, checkBlockValue_ok _ _ _ hb, by rw [hrng]⟩
     intro x hx
     have := List.all_eq_true.1 hpre x hx
     simpa using this
   | some e =>
     simp only [rpBlockValue] at h
     inv at h
-    obtain ⟨hpre, st2, h2, rho', st3, h3, hb, rfl, _, rfl⟩ := h
-    refine ⟨?_, st2, h2, h3, checkBlockValue_ok _ _ _ hb⟩
+    obtain ⟨hpre, st2, h2, rho', st3, h3, hb, rfl, hrng, rfl⟩ := h
+    refine ⟨?_, st2, h2, h3, checkBlockValue_ok _ _ _ hb, by rw [hrng]⟩
     intro x hx
     have := List.all_eq_true.1 hpre x hx
     simpa using this
@@ -339,15 +340,14 @@ theorem checkInitCall_state (env : TEnv) (callee : Impl) (s : Nat) (r : Unit × 
     exact ⟨fun ⟨a, b⟩ => ⟨a.symm, b⟩, fun ⟨a, b⟩ => ⟨a.symm, b⟩⟩
   | _ :: _ :: _ => simp [rej_ok]
 
-theorem loopRefTy_ok (env : TEnv) (x : VarId) (el : Ty) (mu : Bool) (s : Nat) (r : Ty × Nat)
-    (h : loopRefTy env x el mu s = .ok r) :
-    r.2 = s ∧ ∃ lv mx, env.vars[x]? = some lv ∧ lv.ty = .ref mx el ∧ r.1 = lv.ty := by
-  obtain ⟨t, s'⟩ := r
-  unfold loopRefTy at h
-  cases hv : env.vars[x]? with
-  | none => simp only [hv] at h; inv at h
-  | some lv =>
-    simp only [hv] at h
+theorem loopVarOk_ok (lv : LocalVar) (byRef : Bool) (el : Ty) (mu : Bool) (s : Nat) (r : Unit × Nat)
+    (h : loopVarOk lv byRef el mu s = .ok r) :
+    r.2 = s ∧ (if byRef = true then ∃ mx, lv.ty = .ref mx el else lv.ty = el) := by
+  obtain ⟨u, s'⟩ := r
+  unfold loopVarOk at h
+  cases byRef with
+  | true =>
+    simp only [if_true] at h
     cases hty : lv.ty with
     | ref mx t0 =>
       simp only [hty] at h
@@ -355,8 +355,32 @@ theorem loopRefTy_ok (env : TEnv) (x : VarId) (el : Ty) (mu : Bool) (s : Nat) (r
       obtain ⟨he, h⟩ := h
       have he' : t0 = el := by simpa using he
       subst he'
-      rcases h with ⟨_, _, rfl, rfl⟩ | ⟨_, rfl, rfl⟩ <;> exact ⟨rfl, lv, mx, rfl, hty, hty.symm⟩
+      refine ⟨?_, by simp⟩
+      rcases h with ⟨_, _, h⟩ | ⟨_, h⟩ <;> exact h
     | _ => simp only [hty] at h; inv at h
+  | false =>
+    simp only [Bool.false_eq_true, if_false] at h
+    inv at h
+    exact ⟨h.2, by simpa using h.1⟩
+
+theorem declareIndex_ok (env : TEnv) (sc : Nat) (idx : Option VarId) (s : Nat) (r : Unit × Nat)
+    (h : declareIndex env sc idx s = .ok r) :
+    r.2 = s + idx.toList.length ∧ ∀ j, idx = some j → j = s ∧ ∃ lj, env.vars[j]? = some lj ∧
+      lj.scope = sc ∧ lj.ty = .int .i64 := by
+  obtain ⟨u, s'⟩ := r
+  cases idx with
+  | none =>
+    simp only [declareIndex] at h; inv at h
+    exact ⟨by simp [h], fun j e => by cases e⟩
+  | some j =>
+    simp only [declareIndex] at h; inv at h
+    obtain ⟨lj, s1, hd, hty, rfl⟩ := h
+    obtain ⟨hj, hv, hsc, _, hs1⟩ := declare_ok _ _ _ _ _ hd
+    simp only at hv hsc hs1
+    subst hs1
+    refine ⟨by simp, fun j' e => ?_⟩
+    cases e
+    exact ⟨hj, lj, hv, hsc, by simpa using hty⟩
 
 theorem derefVar_eq {p : Place} {x : VarId} (h : p.derefVar? = some x) :
     p = .deref (.read (.var x)) := by
@@ -568,5 +592,12 @@ theorem retTy_ok (env : TEnv) (s : Nat) (r : Ty × Nat) (h : retTy env s = .ok r
       rcases hres : impl.results.toList with _ | ⟨t', _ | _⟩ <;> simp only [hres] at h <;> inv at h
       obtain ⟨rfl, rfl⟩ := h
       exact ⟨rfl, rfl, impl, rfl, hres⟩
+
+theorem rpBlockValue_rng (env : PEnv) (pre : List VarId) (b : Block) (st : RState)
+    (rho : List RootRef) (rng : Nat × Nat) (st' : RState)
+    (h : rpBlockValue env pre b st = .ok ((rho, rng), st')) : rng.1 = st.nextVar := by
+  obtain ⟨sc, stmts, value⟩ := b
+  obtain ⟨_, _, _, _, _, hr⟩ := rpBlockValue_ok _ _ _ _ _ _ _ _ _ h
+  exact hr
 
 end Goose.Core.Sound

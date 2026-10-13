@@ -264,23 +264,31 @@ def RangeSpec (n : Nat) : Prop :=
   ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (x : VarId) (t : IntTy) (i hi : Int)
     (body : Block) (tn1 tn2 : Nat) (bty : Ty) (rst1 rst2 : RState) (rb : List RootRef) (rng : Nat × Nat),
     Perm m W → Frame m W tenv penv env s →
-    tyBlock { tenv with loops := tenv.loops + 1 } [(x, .int t)] body tn1 = .ok (bty, tn2) →
-    rpBlockValue penv [x] body rst1 = .ok ((rb, rng), rst2) → EffLe rst2.eff W.E →
+    (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope ∧ lv.ty = .int t) → x < rst1.nextVar →
+    tyBlock { tenv with loops := tenv.loops + 1, visible := x :: tenv.visible } [] body tn1 =
+      .ok (bty, tn2) →
+    rpBlockValue penv [] body rst1 = .ok ((rb, rng), rst2) → EffLe rst2.eff W.E →
+    (∀ y, RootRef.local y ∈ rb → ¬ (x ≤ y ∧ y < rst1.nextVar)) →
     Sat (execRange n ⟨prof, m⟩ env x t i hi body) s (fun fl s' =>
       Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ LoopFlow m W tenv penv s' fl)
 
 def EachSpec (n : Nat) : Prop :=
   ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (x : VarId) (idx : Option VarId)
-    (byRef : Bool) (body : Block) (vw : ViewVal) (i : Nat) (el xty : Ty) (rho : List RootRef)
+    (byRef : Bool) (body : Block) (vw : ViewVal) (i : Nat) (el : Ty) (rho : List RootRef)
     (tn1 tn2 : Nat) (bty : Ty) (rst1 rst2 : RState) (rb : List RootRef) (rng : Nat × Nat),
     Perm m W → Frame m W tenv penv env s →
     ViewOk s.store vw el → Gam env W.P rho vw.loc.root →
-    (if byRef = true then (∃ mx, xty = .ref mx el) ∧
-        bindRootsV penv (body.scope :: penv.scopes) x rho = .ok ()
-      else xty = el) →
-    tyBlock { tenv with loops := tenv.loops + 1 }
-      ((x, xty) :: (match idx with | some j => [(j, Ty.int .i64)] | none => [])) body tn1 = .ok (bty, tn2) →
-    rpBlockValue penv (x :: idx.toList) body rst1 = .ok ((rb, rng), rst2) → EffLe rst2.eff W.E →
+    (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope ∧ lv.ty.storable = true ∧
+      (if byRef = true then (∃ mx, lv.ty = .ref mx el) ∧
+          bindRootsV penv (body.scope :: penv.scopes) x rho = .ok ()
+        else lv.ty = el)) →
+    (∀ j, idx = some j → j = x + 1 ∧ ∃ lj, env.vars[j]? = some lj ∧ lj.scope = body.scope ∧
+      lj.ty = .int .i64) →
+    x + idx.toList.length < rst1.nextVar →
+    tyBlock { tenv with loops := tenv.loops + 1, visible := x :: idx.toList ++ tenv.visible } [] body
+      tn1 = .ok (bty, tn2) →
+    rpBlockValue penv [] body rst1 = .ok ((rb, rng), rst2) → EffLe rst2.eff W.E →
+    (∀ y, RootRef.local y ∈ rb → ¬ (x ≤ y ∧ y < rst1.nextVar)) →
     Sat (execEach n ⟨prof, m⟩ env x idx byRef body vw i) s (fun fl s' =>
       Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ LoopFlow m W tenv penv s' fl)
 

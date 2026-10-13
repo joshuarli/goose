@@ -223,7 +223,8 @@ macro "pm" : tactic => `(tactic| repeat' (first
     | exact PMono.addReads _ | exact PMono.addWrites _ | exact PMono.addGrows _
     | exact PMono.noteAborts | exact PMono.noteOutputs | exact PMono.rpCall _ _ _
     | exact PMono.readRoots _ _
-    | exact PMono.modify _ (fun s => ⟨by simp, EffLe.refl _⟩)
+    | exact PMono.modify _ (fun s => ⟨Nat.le_add_right _ _, EffLe.refl _⟩)
+    | exact PMono.modify _ (fun s => ⟨Nat.le_trans (Nat.le_add_right _ 1) (Nat.le_add_right _ _), EffLe.refl _⟩)
     | exact PMono.modify _ (fun s => ⟨Nat.le_refl _, fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩)
     | with_reducible apply_assumption
     | refine PMono.bind ?_ (fun _ => ?_)

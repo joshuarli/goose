@@ -130,8 +130,23 @@ theorem step_stmt_b (ih : Specs m prof n) :
   | forRange x lo' hi b o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
-    obtain ⟨_, tl, t1, htl, it, rfl, th, t2, hth, iu, rfl, rfl, bt, t3, htb, rfl, rfl⟩ := ht
-    obtain ⟨rl, r1, hrl, rh, r2, hrh, rb, l1, l2, hrb⟩ := hr
+    obtain ⟨_, lv, t0, hd, tl, t1, htl, it, rfl, th, t2, hth, iu, rfl, rfl, hlty, bt, t3, htb, rfl,
+      rfl⟩ := ht
+    obtain ⟨hxn, rl, r1, hrl, rh, r2, hrh, rb, l1, l2, r3, hrb, hck, rfl⟩ := hr
+    obtain ⟨_, hlv, hlsc, _, _⟩ := declare_ok _ _ _ _ _ hd
+    simp only at hlv hlsc
+    rw [hF.vars_t] at hlv
+    have hlty' : lv.ty = .int it := by simpa using hlty
+    have hrng := rpBlockValue_rng _ _ _ _ _ _ _ hrb
+    simp only at hrng
+    have hk0 : ∀ y, RootRef.local y ∈ rb → ¬ (x ≤ y ∧ y < r2.nextVar) := by
+      intro y hy
+      have := checkBlockValue_ok _ _ _ hck y hy
+      rw [hxn, ← hrng]; exact this
+    have hxlt : x < r2.nextVar := by
+      rw [hxn]
+      exact Nat.lt_of_lt_of_le (Nat.lt_of_lt_of_le (Nat.lt_succ_self _) (rpExpr_mono hrl).1)
+        (rpExpr_mono hrh).1
     have hE2 := (rpBlockValue_mono hrb).2.trans hE
     simp only [execStmt]
     refine Sat.bind (ih.expr W tenv' penv env s lo' _ _ _ _ _ _ hp hF htl hrl
@@ -143,7 +158,8 @@ theorem step_stmt_b (ih : Specs m prof n) :
     rintro vb s2 ⟨hF2, hX2, hv2, _⟩
     obtain ⟨b', rfl⟩ := hasTy_int hv2
     simp only [expectInt, sat_pure_bind, expectSameTy, if_true]
-    refine (ih.range W tenv' penv env s2 x it _ _ b _ _ _ _ _ _ _ hp hF2 htb hrb hE).mono ?_
+    refine (ih.range W tenv' penv env s2 x it _ _ b _ _ _ _ _ _ _ hp hF2 ⟨lv, hlv, hlsc, hlty'⟩ hxlt
+      htb hrb hE hk0).mono ?_
     rintro fl s3 ⟨hF3, hX3, hfl⟩
     have hX := (hX1.trans hX2).trans hX3
     refine ⟨hF3, TSame.refl _, hX.toS, hT.ext hX.dom hcur, ?_⟩
@@ -155,46 +171,72 @@ theorem step_stmt_b (ih : Specs m prof n) :
   | forEach x idx v byRef b o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
-    obtain ⟨_, el, mu, t1, htv, ht⟩ := ht
-    obtain ⟨rv, r1, hrv, hr⟩ := hr
+    obtain ⟨_, lv, t0, hd, t1, hdi, el, mu, t2, htv, t3, hlo, bt, t4, htb, rfl, rfl⟩ := ht
+    obtain ⟨hxi, rv, r1, hrv, hr⟩ := hr
+    obtain ⟨hxt, hlv, hlsc, hst, ht0⟩ := declare_ok _ _ _ _ _ hd
+    simp only at hlv hlsc hst ht0
+    rw [hF.vars_t] at hlv
+    obtain ⟨_, hjs⟩ := declareIndex_ok _ _ _ _ _ hdi
+    obtain ⟨_, hxty⟩ := loopVarOk_ok _ _ _ _ _ _ hlo
+    have hxn : x = rst.nextVar := by
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hxi
+      exact hxi.1
+    have hj : ∀ j, idx = some j → j = x + 1 ∧ ∃ lj, env.vars[j]? = some lj ∧ lj.scope = b.scope ∧
+        lj.ty = .int .i64 := by
+      intro j e
+      obtain ⟨g1, lj, g2, g3, g4⟩ := hjs j e
+      rw [hF.vars_t] at g2
+      exact ⟨by rw [g1, ht0, hxt], lj, g2, g3, g4⟩
+    have hlt1 : x + idx.toList.length < r1.nextVar := by
+      have h2 := (rpView_mono hrv).1
+      rw [hxn]
+      exact Nat.lt_of_lt_of_le (Nat.add_lt_add_right (Nat.lt_succ_self _) _) h2
     simp only [execStmt]
-    rcases ht with ⟨hb1, xty, t2, hlr, bt, t3, htb, rfl, rfl⟩ | ⟨hb1, bt, t3, htb, rfl, rfl⟩
-    · rcases hr with ⟨_, hbr, rb, l1, l2, hrb⟩ | ⟨hb2, _⟩
-      · subst hb1
-        obtain ⟨ht2, lvx, mx, hlvx, hty, hxty⟩ := loopRefTy_ok _ _ _ _ _ _ hlr
-        simp only at ht2 hxty
-        subst ht2
-        refine Sat.bind (ih.view W tenv' penv env s v _ _ _ _ _ _ _ hp hF htv hrv
-          ((rpBlockValue_mono hrb).2.trans hE)) ?_
-        rintro vw s1 ⟨hF1, hX1, hvw, hg⟩
-        refine (ih.each W tenv' penv env s1 x idx true b vw 0 el xty rv _ _ _ _ _ _ _ hp hF1 hvw hg
-          (by rw [if_pos rfl]; exact ⟨⟨mx, hxty.trans hty⟩, hbr⟩) htb hrb hE).mono ?_
-        rintro fl s3 ⟨hF3, hX3, hfl⟩
-        have hX := hX1.trans hX3
-        refine ⟨hF3, TSame.refl _, hX.toS, hT.ext hX.dom hcur, ?_⟩
-        cases fl with
-        | normal v => rfl
-        | brk => exact hfl.elim
-        | cont => exact hfl.elim
-        | ret v => exact hfl
-      · exact absurd hb1 hb2
-    · rcases hr with ⟨hb2, _⟩ | ⟨_, r2, hrd, rb, l1, l2, hrb⟩
-      · exact absurd hb2 hb1
-      · have hbf : byRef = false := by simpa using hb1
-        subst hbf
-        refine Sat.bind (ih.view W tenv' penv env s v _ _ _ _ _ _ _ hp hF htv hrv
-          ((PMono.addReads _ _ _ _ hrd).2.trans ((rpBlockValue_mono hrb).2.trans hE))) ?_
-        rintro vw s1 ⟨hF1, hX1, hvw, hg⟩
-        refine (ih.each W tenv' penv env s1 x idx false b vw 0 el el rv _ _ _ _ _ _ _ hp hF1 hvw hg
-          (by simp) htb hrb hE).mono ?_
-        rintro fl s3 ⟨hF3, hX3, hfl⟩
-        have hX := hX1.trans hX3
-        refine ⟨hF3, TSame.refl _, hX.toS, hT.ext hX.dom hcur, ?_⟩
-        cases fl with
-        | normal v => rfl
-        | brk => exact hfl.elim
-        | cont => exact hfl.elim
-        | ret v => exact hfl
+    rcases hr with ⟨hb1, hbr, rb, l1, l2, r2, hrb, hck, rfl⟩ | ⟨hb1, r2, hrd, rb, l1, l2, r3, hrb, hck, rfl⟩
+    · subst hb1
+      have hrng := rpBlockValue_rng _ _ _ _ _ _ _ hrb
+      simp only at hrng
+      have hk0 : ∀ y, RootRef.local y ∈ rb → ¬ (x ≤ y ∧ y < r1.nextVar) := by
+        intro y hy
+        have := checkBlockValue_ok _ _ _ hck y hy
+        rw [hxn, ← hrng]; exact this
+      refine Sat.bind (ih.view W tenv' penv env s v _ _ _ _ _ _ _ hp hF htv hrv
+        ((rpBlockValue_mono hrb).2.trans hE)) ?_
+      rintro vw s1 ⟨hF1, hX1, hvw, hg⟩
+      refine (ih.each W tenv' penv env s1 x idx true b vw 0 el rv _ _ _ _ _ _ _ hp hF1 hvw hg
+        ⟨lv, hlv, hlsc, hst, by rw [if_pos rfl]; exact ⟨by simpa using hxty, hbr⟩⟩ hj hlt1 htb hrb hE
+        hk0).mono ?_
+      rintro fl s3 ⟨hF3, hX3, hfl⟩
+      have hX := hX1.trans hX3
+      refine ⟨hF3, TSame.refl _, hX.toS, hT.ext hX.dom hcur, ?_⟩
+      cases fl with
+      | normal v => rfl
+      | brk => exact hfl.elim
+      | cont => exact hfl.elim
+      | ret v => exact hfl
+    · have hbf : byRef = false := by simpa using hb1
+      subst hbf
+      have hrng := rpBlockValue_rng _ _ _ _ _ _ _ hrb
+      simp only at hrng
+      have hnv := (addReads_ok _ _ _ hrd).1
+      simp only at hnv
+      have hk0 : ∀ y, RootRef.local y ∈ rb → ¬ (x ≤ y ∧ y < r2.nextVar) := by
+        intro y hy
+        have := checkBlockValue_ok _ _ _ hck y hy
+        rw [hxn, ← hrng]; exact this
+      refine Sat.bind (ih.view W tenv' penv env s v _ _ _ _ _ _ _ hp hF htv hrv
+        ((PMono.addReads _ _ _ _ hrd).2.trans ((rpBlockValue_mono hrb).2.trans hE))) ?_
+      rintro vw s1 ⟨hF1, hX1, hvw, hg⟩
+      refine (ih.each W tenv' penv env s1 x idx false b vw 0 el rv _ _ _ _ _ _ _ hp hF1 hvw hg
+        ⟨lv, hlv, hlsc, hst, by simpa using hxty⟩ hj (by rw [hnv]; exact hlt1) htb hrb hE hk0).mono ?_
+      rintro fl s3 ⟨hF3, hX3, hfl⟩
+      have hX := hX1.trans hX3
+      refine ⟨hF3, TSame.refl _, hX.toS, hT.ext hX.dom hcur, ?_⟩
+      cases fl with
+      | normal v => rfl
+      | brk => exact hfl.elim
+      | cont => exact hfl.elim
+      | ret v => exact hfl
   | ret e o =>
     cases e with
     | none =>
@@ -214,12 +256,11 @@ theorem step_stmt_b (ih : Specs m prof n) :
       obtain ⟨ht0, hne', impl, himpl, hres⟩ := retTy_ok _ _ _ hrt
       simp only at ht0 hres
       subst ht0
-      have : te = t := by simpa using heq
-      subst this
       obtain ⟨hnl, declared, hd, hsub⟩ := checkResultV_ok _ _ hck
       simp only [execStmt]
       refine Sat.bind (ih.expr W tenv' penv env s e' _ _ _ _ _ _ hp hF hte hre hE) ?_
-      rintro v s1 ⟨hF1, hX1, hv, hg⟩
+      rintro v s1 ⟨hF1, hX1, hv0, hg⟩
+      have hv := hasTy_passable hv0 heq
       simp only [sat_pure]
       exact ⟨hF1, TSame.refl _, hX1.toS, hT.ext hX1.dom hcur, hne',
         impl, himpl, Or.inr ⟨_, hres, hv⟩,
