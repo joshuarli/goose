@@ -199,21 +199,22 @@ def argumentContents (caller : Func) (p : Prov) (value : ValueId) : List RootRef
   mapped.foldl (fun acc root => unionRoots acc [root]) []
 
 /-- Map the callee's content-root annotation through the arguments at a call.
-A forwarded reference to a slice retains the roots of its backing elements,
-rather than the roots of the variable that holds the slice. -/
+References to local slice variables and forwarded slice references retain the
+roots of their backing elements. Other arguments denote their own storage;
+global roots already have the same identity in both cases. -/
 def mapContentRoots (caller : Func) (p : Prov) (args : List ValueId) (roots : List RootRef) :
     List RootRef :=
   let mapped := roots.flatMap fun
     | .global g => [.global g]
     | .param j =>
       match args[j]? with
-      | some a => (rootsAt p.vals a).flatMap fun root =>
-          match root with
-          | .param i =>
-            if (caller.params[i]?).any Ty.isRefSlice then
-              (caller.contentRoots i).flatMap caller.expandParameterRoot
-            else caller.expandParameterRoot root
-          | _ => caller.expandParameterRoot root
+      | some a =>
+        let referencesSlice := (rootsAt p.vals a).any fun
+          | .local s => (caller.slots[s]?).any (fun slot => slot.ty.isSlice)
+          | .param i => (caller.params[i]?).any Ty.isRefSlice
+          | .global _ => false
+        if referencesSlice then argumentContents caller p a
+        else (rootsAt p.vals a).flatMap caller.expandParameterRoot
       | none => []
     | .local _ => []
   mapped.foldl (fun acc root => unionRoots acc [root]) []

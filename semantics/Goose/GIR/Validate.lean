@@ -263,7 +263,9 @@ def checkTypes (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)
     checkAll f.results fun t => do
       unless !t.isRefSlice do
         throw "a reference-to-slice type is only valid for a parameter"
-    checkAll f.slots.toList fun sl => do
+    checkAll f.slots.toList.zipIdx fun (sl, index) => do
+      unless sl.var == index do
+        throw s!"slot {index} must describe variable {index}, found variable {sl.var}"
       let parameterRefSliceSlot :=
         sl.var < f.params.length && f.params[sl.var]? == some sl.ty && sl.ty.isRefSlice
       unless sl.ty.storable || parameterRefSliceSlot do
