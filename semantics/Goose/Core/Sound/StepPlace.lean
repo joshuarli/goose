@@ -18,7 +18,7 @@ theorem step_place (hm : ModOk m) (ih : Specs m prof n) : PlaceSpec m prof (n + 
     simp only [rpPlace] at hr; inv at hr
     obtain ⟨hx, lv0, hlv0, rfl, rfl, rfl, rfl⟩ := ht
     obtain ⟨rfl, rfl⟩ := hr
-    obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := hF.vis x hx
+    obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := hF.vis x hx hx
     rw [hF.vars_t, h1] at hlv0
     cases hlv0
     simp only [evalPlace, rootOf, h1, h2, sat_pure_bind, sat_pure]
@@ -171,7 +171,36 @@ theorem step_view (ih : Specs m prof n) : ViewSpec m prof (n + 1) := by
         rename_i E' es
         simp only [expectArray, sat_pure_bind, sat_pure]
         exact ⟨hF1, hX1, ⟨by simpa [Ty.refTarget] using hrt, sliceTy_of_grow hlt hv,
-          fun _ => ⟨rfl, hlt⟩⟩, hg⟩
+          fun _ => ⟨rfl, Or.inl hlt⟩⟩, hg⟩
+      · simp [Ty.isRefLike] at hrl
+      · cases h3
+    · rename_i el'
+      obtain ⟨rfl, rfl, rfl⟩ := ht
+      rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
+        ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
+      · have hlt := hacc _ hl
+        refine sat_readLoc_bind hlt (fun v hv hT => ?_)
+        cases v <;> simp only [FlatTy] at hT
+        rename_i E' es
+        simp only [expectArray, sat_pure_bind, sat_pure]
+        exact ⟨hF1, hX1, ⟨by simpa [Ty.refTarget] using hrt, sliceTy_of_growshrink hlt hv,
+          fun _ => ⟨rfl, Or.inr hlt⟩⟩, hg⟩
+      · simp [Ty.isRefLike] at hrl
+      · cases h3
+    · rename_i el' capacity
+      obtain ⟨rfl, rfl, rfl⟩ := ht
+      rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, _, _, _, _, _, hrl, _⟩ |
+        ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
+      · have hlt := hacc _ hl
+        refine sat_readLoc_bind hlt (fun v hv hT => ?_)
+        cases v <;> simp only [FlatTy] at hT
+        rename_i E' capacity' slots len
+        have hread : s1.store.read l = .ok (.limited el capacity slots len) := by
+          rw [hT.1, hT.2.1]
+          exact hv
+        simp only [expectArray, sat_pure_bind, sat_pure]
+        exact ⟨hF1, hX1, ⟨by simpa [Ty.refTarget] using hrt,
+          sliceTy_of_limited hlt hread, by simp⟩, hg⟩
       · simp [Ty.isRefLike] at hrl
       · cases h3
   | val e =>
