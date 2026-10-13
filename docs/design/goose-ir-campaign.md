@@ -72,6 +72,7 @@ Each is settled by the code or by practice; the last column says what would reve
 | P13 | `.github/workflows` is not edited. CI wiring is listed for the owner. | The executor cannot run CI. | — |
 | P14 | Unsupported features on `--pipeline gir` are a compile error with status 1 and the prefix `error: unsupported in pipeline gir: <feature-id>`. | Existing error convention; harnesses classify by prefix. | — |
 | P15 | Aincrad3 is obtained with `git archive` of the recorded commit into `.work/aincrad3`; its repository is never written. | Read-only by construction. | — |
+| P17 | Corpus reach has no percentage target. The target is completeness within the profile: every repository program whose features all lie in the implemented profiles exports, validates and agrees, with each exception explained; the reach count is reported at each profile gate beside a forecast of what the next feature set would unlock. | The profiles were chosen for what the proofs need, not to maximize reach; a percentage would be invented. A forecast needs every blocker per program, which the exporter does not report yet. | The owner setting a reach floor, which would add profiles to the campaign. |
 | P16 | Review by a non-author is a reviewer lane answering the validation plan's six questions, plus the mechanical witnesses and counterexamples. | No person is available. | — |
 
 ### 2.3 Delegated
@@ -151,6 +152,7 @@ Semantic track.
 | `S7` | L | S1 | Lean GIR-H: syntax, `run`, validator, decoder, the Lean lowering. | The C++-exported GIR of every pilot fixture validates and runs to Core's result. |
 | `S6` | L | S5 | GIR-L, placement, the C emitter, `--pipeline gir`, `--emit-gir-low`. | Pilot fixtures and lanes agree across legacy, Lean and `gir`, release and debug, native and TinyCC. |
 | `T3` | L | S7 | `TH-GIR-01`, `TH-LOWER-01`. | **`G-GIR`** with S6. |
+| `S3b` | S | S2 | The exporter reports every unsupported feature of a program, not only the first (`--emit-core` with a report-only mode), and corpus mode prints, for each set of features, how many programs it alone would unlock. | The forecast table in §11; and for the current profile, no program whose features are all supported is left unexported without a stated reason. |
 | `S8` | L | G-PILOT, S6 | `core-shrink` through every layer, one slice per workstream; its Tier A theorems. | **`G-SHRINK`**: `MEM-04`–`MEM-07`; `resize`, `reference`, `trap` lanes agree. |
 | `S9` | XL | S8 | `core-construction` through every layer; `TH-EXIT-01`; `TH-CON-01` as Tier B. | **`G-CONSTRUCT`**: `CON-*`, `EXIT-*`. |
 
