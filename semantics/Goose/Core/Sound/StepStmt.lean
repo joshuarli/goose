@@ -38,8 +38,6 @@ theorem step_stmt_a (ih : Specs m prof n) :
     obtain ⟨hxn, re, r1, hre, hr⟩ := hr
     obtain ⟨hxt, hlv, hlsc, hst, _⟩ := declare_ok _ _ _ _ _ hd
     simp only at hlv hlsc hst
-    have hte' : lv.ty = te := by simpa using heq
-    subst hte'
     rw [hF.vars_t] at hlv
     obtain ⟨si, rest, htop, hlk⟩ := hF.top hsc
     have hpv : penv.impl.vars[x]? = some lv := by rw [hF.vars_p]; exact hlv
@@ -52,7 +50,8 @@ theorem step_stmt_a (ih : Specs m prof n) :
     obtain ⟨rfl, hbr⟩ := hb
     simp only [execStmt]
     refine Sat.bind (ih.expr W tenv penv env s e _ _ _ _ _ _ hp hF hte hre hE) ?_
-    rintro v s1 ⟨hF1, hX1, hv, hg⟩
+    rintro v s1 ⟨hF1, hX1, hv0, hg⟩
+    have hv := hasTy_passable hv0 heq
     have hlk' : env.scopes.lookup lv.scope = some si := hlsc ▸ hlk
     simp only [rootOf, hlv, hlk', sat_pure_bind, sat_bindRoot_bind, sat_pure]
     have hfree0 : s.store.roots[RootInst.local env.act si x]? = none := by
@@ -184,11 +183,10 @@ theorem step_stmt_a (ih : Specs m prof n) :
       rcases hfin with ⟨_, rfl⟩ | ⟨_, rfl⟩
       · exact ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩
       · exact EffLe.refl _
-    have : te = lv.ty := by simpa using heq
-    subst this
     simp only [execStmt]
     refine Sat.bind (ih.expr W tenv' penv env s e _ _ _ _ _ _ hp hF hte hre hE1) ?_
-    rintro v s1 ⟨hF1, hX1, hv, hg⟩
+    rintro v s1 ⟨hF1, hX1, hv0, hg⟩
+    have hv := hasTy_passable hv0 heq
     obtain ⟨lv1, si, old, h1, h2, h3, h4, h5⟩ := hF1.vis x hx
     rw [hF.vars_t, h1] at hlv
     cases hlv

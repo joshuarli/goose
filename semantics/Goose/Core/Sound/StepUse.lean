@@ -36,7 +36,7 @@ theorem block_of_checks (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m 
   obtain ⟨sc, stmts, value⟩ := b
   obtain ⟨hsc, env1, tn1, env2, tn2, hd, hts, htv⟩ := tyBlock_ok _ _ _ _ _ _ _ _ ht
   obtain ⟨hsame, hvis, hrows, hrange⟩ := declarePre_ok _ _ _ _ _ _ hd
-  obtain ⟨hpr, st2, hrs, hrv, hkeep⟩ := rpBlockValue_ok _ _ _ _ _ _ _ _ _ hr
+  obtain ⟨hpr, st2, hrs, hrv, hkeep, _⟩ := rpBlockValue_ok _ _ _ _ _ _ _ _ _ hr
   have hvis' : ∀ y, y ∈ env1.visible ↔ y ∈ pre.map Prod.fst ∨ y ∈ tenv.visible := by
     intro y; rw [hvis, hpre]
   have hpreOk : PreOk m W penv { env with scopes := (sc, s.nextScope) :: env.scopes } sc rst.nextVar
@@ -73,6 +73,68 @@ theorem block_of_checks (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m 
         | none => exact hrv
         | some e => exact hrv)
     hE hkeep
+  refine hres.mono ?_
+  rintro fl s' ⟨h1, h2, h3⟩
+  refine ⟨h1, h2, ?_⟩
+  cases fl with
+  | normal v => exact ⟨h3.1, h3.2.1, by simpa [Block.diverges] using h3.2.2⟩
+  | brk => exact ⟨h3.1, by simpa [Block.hasBreak] using h3.2⟩
+  | cont => exact h3
+  | ret v => exact h3
+
+/-- A loop body: its variables were numbered and typed by the loop before the
+body block was checked, and are bound when the block is entered. -/
+theorem block_of_reserved (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m W tenv penv env s)
+    (b : Block) (pre : List (VarId × Val)) (xs : List VarId) (lo0 : Nat)
+    {tn tn' : Nat} {ty : Ty} {rst rst' : RState} {rho : List RootRef} {rng : Nat × Nat}
+    (ht : tyBlock { tenv with visible := xs ++ tenv.visible } [] b tn = .ok (ty, tn'))
+    (hr : rpBlockValue penv [] b rst = .ok ((rho, rng), rst'))
+    (hE : EffLe rst'.eff W.E) (hxs : pre.map Prod.fst = xs) (hnd : xs.Nodup)
+    (hvals : ∀ x v, (x, v) ∈ pre → lo0 ≤ x ∧ x < rst.nextVar ∧ ∃ lv, env.vars[x]? = some lv ∧
+      lv.scope = b.scope ∧ lv.ty.paramOk = true ∧ HasTy m W.G s.store v lv.ty ∧
+      ∀ r, Targets v r → ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r)
+    (hlo : lo0 ≤ rst.nextVar)
+    (hkeep0 : ∀ y, RootRef.local y ∈ rho → ¬ (lo0 ≤ y ∧ y < rst.nextVar)) :
+    Sat (execBlock n ⟨prof, m⟩ env pre b) s (fun fl s' =>
+      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧
+      match fl with
+      | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
+          b.diverges = false
+      | .brk => tenv.loops ≠ 0 ∧ b.hasBreak = true
+      | .cont => tenv.loops ≠ 0
+      | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) := by
+  subst hxs
+  obtain ⟨sc, stmts, value⟩ := b
+  obtain ⟨hsc, env1, tn1, env2, tn2, hd, hts, htv⟩ := tyBlock_ok _ _ _ _ _ _ _ _ ht
+  obtain ⟨hsame, hvis, _, _⟩ := declarePre_ok _ _ _ _ _ _ hd
+  obtain ⟨_, st2, hrs, hrv, hkeep, _⟩ := rpBlockValue_ok _ _ _ _ _ _ _ _ _ hr
+  have hpreOk : PreOk m W penv { env with scopes := (sc, s.nextScope) :: env.scopes } sc lo0
+      (rst.nextVar + ([] : List VarId).length) s.store pre := by
+    refine ⟨hnd, ?_⟩
+    intro x v hxv
+    obtain ⟨h1, h2, lv, g1, g2, g3, k1, k2⟩ := hvals x v hxv
+    refine ⟨h1, h2, lv, g1, g2, g3, k1, fun r hr' => ?_⟩
+    obtain ⟨ann, ha, hga⟩ := k2 r hr'
+    exact ⟨ann, ha, gam_push hF hsc _ hga⟩
+  have hres := hB W tenv env1 env2 penv env s pre sc stmts value tn1 tn2 tn' ty
+    { rst with nextVar := rst.nextVar + ([] : List VarId).length } st2 rst' rho lo0
+    hp hF hsc
+    ⟨hsame.mod, hsame.impl, hsame.vars, hsame.loops, hsame.inExpr, hsame.scopes,
+      fun x hx => hsame.sub x (List.mem_append_right _ hx)⟩
+    (fun y => by rw [hvis y]; simp)
+    hpreOk hlo hts
+    (by cases value with
+        | none => exact htv.1
+        | some e => exact htv)
+    hrs
+    (by cases value with
+        | none => exact hrv
+        | some e => exact hrv)
+    hE
+    (fun y hy hc => by
+      by_cases h : y < rst.nextVar
+      · exact hkeep0 y hy ⟨hc.1, h⟩
+      · exact hkeep y hy ⟨Nat.le_of_not_lt h, hc.2⟩)
   refine hres.mono ?_
   rintro fl s' ⟨h1, h2, h3⟩
   refine ⟨h1, h2, ?_⟩

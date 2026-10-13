@@ -87,6 +87,13 @@ def Ty.isSlice : Ty → Bool
 /-- Types a parameter may have. -/
 def Ty.paramOk (t : Ty) : Bool := t.storable || t.isRefSlice
 
+/-- A variable or a global named directly: the owner of its contents. `let`
+forbids assigning the variable as a whole and nothing more, so the contents
+of an array the place owns are writable whatever the variable's kind. -/
+def Place.isOwner : Place → Bool
+  | .var _ | .global _ => true
+  | _ => false
+
 /-- The variable a place dereferences directly. -/
 def Place.derefVar? : Place → Option VarId
   | .deref (.read (.var x)) => some x
@@ -248,19 +255,27 @@ def callResultTy (callee : Impl) : T Ty :=
   | [t] => pure t
   | _ => rej .type s!"{callee.name} has several results"
 
-/-- The type of a by-reference loop variable over elements of `el`, read from
-its row: it may be read-only over a mutable run, and mutable only over a
-mutable run. -/
-def loopRefTy (env : TEnv) (x : VarId) (el : Ty) (mu : Bool) : T Ty :=
-  match env.vars[x]? with
-  | some lv =>
+/-- The loop variable of a loop over elements of `el`: a copy of an element,
+or a reference to one, which may be read-only over a mutable run and mutable
+only over a mutable run. -/
+def loopVarOk (lv : LocalVar) (byRef : Bool) (el : Ty) (mu : Bool) : T Unit :=
+  if byRef then
     match lv.ty with
     | .ref mx t => do
       unless t == el do rej .type "loop variable of another type than the elements"
-      if mx == .mutable then requireWrite "a mutable loop reference" mu
-      pure lv.ty
+      if mx == .mutable then requireWrite "a mutable loop reference" mu else pure ()
     | _ => rej .type "a by-reference loop variable that is not a reference"
-  | none => rej .type s!"variable {x} outside the variable table"
+  else
+    if lv.ty == el then pure ()
+    else rej .type s!"variable {lv.name} is declared with another type than the loop gives it"
+
+/-- The index variable of a loop over a run, declared after the element variable. -/
+def declareIndex (env : TEnv) (sc : Nat) : Option VarId → T Unit
+  | none => pure ()
+  | some j => do
+    let lj ← declare env j sc
+    if lj.ty == .int .i64 then pure ()
+    else rej .type s!"variable {j} is declared with another type than the loop gives it"
 
 /-- The type of a visible reference-to-slice variable that is read only to be
 dereferenced. No expression yields such a reference as a value. -/
@@ -332,8 +347,8 @@ def tyView (env : TEnv) : View → T (Ty × Bool)
   | .of p => do
     let (t, mu) ← tyPlace env p
     match t with
-    | .arr el _ => pure (el, mu)
-    | .grow el => pure (el, mu)
+    | .arr el _ => pure (el, mu || p.isOwner)
+    | .grow el => pure (el, mu || p.isOwner)
     | _ => rej .type "a view of something that is not an array"
   | .val e => do
     match (← tyExpr env e) with
@@ -520,7 +535,8 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     checkOrg env o
     let lv ← declare env x sc
     let t ← tyExpr env e
-    unless lv.ty == t do rej .type s!"variable {x} is declared with another type than its initializer's"
+    -- A writable reference or slice may initialize a read-only one.
+    unless t.passableTo lv.ty do rej .type s!"variable {x} is declared with another type than its initializer's"
     pure { env with visible := x :: env.visible }
   | .assign p e o => do
     checkOrg env o
@@ -547,7 +563,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     unless lv.ty.isRefLike do rej .type s!"rebind of variable {x}, which is not a reference or slice"
     unless lv.kind == .mutable do rej .mut s!"rebind of variable {x}, which is not a `var`"
     let et ← tyExpr env e
-    unless et == lv.ty do rej .type "rebound value of another type than the variable"
+    unless et.passableTo lv.ty do rej .type "rebound value of another type than the variable"
     pure env
   | .expr e o => do
     checkOrg env o
@@ -578,17 +594,24 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     pure env
   | .forRange x lo hi b o => do
     checkOrg env o
+    -- The loop variable is numbered where it is declared: before the
+    -- variables its bounds declare.
+    let lv ← declare env x b.scope
     let t ← requireInt "a range bound" (← tyExpr env lo)
     let u ← requireInt "a range bound" (← tyExpr env hi)
     unless t = u do rej .type "range bounds of different integer types"
-    let _ ← tyBlock { env with loops := env.loops + 1 } [(x, .int t)] b
+    (if lv.ty == .int t then pure ()
+      else rej .type s!"variable {x} is declared with another type than the loop gives it" : T Unit)
+    let _ ← tyBlock { env with loops := env.loops + 1, visible := x :: env.visible } [] b
     pure env
   | .forEach x idx v byRef b o => do
     checkOrg env o
+    -- The loop variables are numbered before the variables the run declares.
+    let lv ← declare env x b.scope
+    declareIndex env b.scope idx
     let (el, mu) ← tyView env v
-    let xty ← if byRef then loopRefTy env x el mu else pure el
-    let pre := (x, xty) :: (match idx with | some j => [(j, Ty.int .i64)] | none => [])
-    let _ ← tyBlock { env with loops := env.loops + 1 } pre b
+    loopVarOk lv byRef el mu
+    let _ ← tyBlock { env with loops := env.loops + 1, visible := x :: idx.toList ++ env.visible } [] b
     pure env
   | .ret none o => do
     checkOrg env o
@@ -598,7 +621,7 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     checkOrg env o
     let t ← retTy env
     let et ← tyExpr env e
-    unless et == t do rej .type "returned value of another type than the result"
+    unless et.passableTo t do rej .type "returned value of another type than the result"
     pure env
   | .brk o => do
     checkOrg env o

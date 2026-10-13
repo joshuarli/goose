@@ -529,14 +529,26 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     let _ ← rpExpr env c
     let _ ← rpBlockValue env [] b
   | .forRange x lo hi b _ => do
+    -- The loop variable is the next in declaration order, before the
+    -- variables its bounds declare.
+    let st0 ← get
+    (if x = st0.nextVar then pure () else rejP .root s!"variable {x} is declared out of order" : P Unit)
+    modify fun s => { s with nextVar := s.nextVar + 1 }
     let _ ← rpExpr env lo
     let _ ← rpExpr env hi
-    let _ ← rpBlockValue env [x] b
+    let body ← rpBlockValue env [] b
+    -- The loop's variable ends with the body block.
+    liftV (checkBlockValue st0.nextVar body.2.1 body.1)
   | .forEach x idx v byRef b _ => do
+    let st0 ← get
+    (if x = st0.nextVar && idx.all (· == st0.nextVar + 1) then pure ()
+      else rejP .root s!"variable {x} is declared out of order" : P Unit)
+    modify fun s => { s with nextVar := s.nextVar + 1 + idx.toList.length }
     let rho ← rpView env v
     -- A loop over values copies each element out of the run.
     if byRef then bindRoots env (b.scope :: env.scopes) x rho else addReads rho
-    let _ ← rpBlockValue env (x :: idx.toList) b
+    let body ← rpBlockValue env [] b
+    liftV (checkBlockValue st0.nextVar body.2.1 body.1)
   | .ret e _ => do
     match e with
     | none => pure ()
