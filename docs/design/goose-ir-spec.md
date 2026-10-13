@@ -110,13 +110,13 @@ Expr  ::= lit c | read p | refOf m p | sliceOf m v lo hi | lenOf v
         | un op e | bin op e₁ e₂ | cmp op e₁ e₂ | and e₁ e₂ | or e₁ e₂ | not e
         | conv kind τ e                      -- widen | as | asUnchecked
         | call ContextId [Arg]               -- Arg ::= byVal e | byRef m p
-        | push p e | ifE e b b | blockE b | arrLit [e] | arrFill e k
+        | push p e | pop p | ifE e b b | blockE b | arrLit [e] | arrFill e k
         | structLit StructId [e]             -- core-shrink, real fields in declaration order
 Stmt  ::= let x e | assign p e | assignOp op p e | rebind x e | expr e | append p v
         | ifS e b b? | while e b | forRange x lo hi b | forEach x idx? v byRef b
         | ret e? | break | continue | print [PrintArg] | assert e | abort msg | exit e
         -- core-shrink
-        | pop p | popN p e | resize p e fill? | clear p | assignWhole p e
+        | popN p e | resize p e fill? | clear p | assignWhole p e
 Block ::= [Stmt] then optional value Expr
 ```
 
@@ -156,7 +156,7 @@ Normative ordering rules, each of which has fixtures:
 
 `print` writes its arguments' renderings and a newline: integers in decimal, booleans as `true`/`false`, literal text verbatim.
 
-Abort kinds and the runtime text they correspond to: `div_zero` (`division by zero`), `div_overflow` (`integer overflow in division`), `index_oob` (`index I out of bounds (length N)`), `slice_oob` (`slice bounds out of range`), `assert`, `user_abort`; debug profile only: `int_overflow`, `cast_range`; `core-shrink`: `pop_empty`, `pop_n_range`, `resize_negative`, `capacity`. An abort exits with status 1 after writing `goose runtime error: <text> (<file>:<line>)` to standard error.
+Abort kinds and the runtime text they correspond to: `div_zero` (`division by zero`), `div_overflow` (`integer overflow in division`), `index_oob` (`index I out of bounds (length N)`), `slice_oob` (`slice bounds out of range`), `assert`, `user_abort`; debug profile only: `int_overflow`, `cast_range`; `core-shrink`: `pop_empty`, `pop_n_range`, `resize_negative`, `resize_fill`, `capacity` (ordering and text in §12.6). An abort exits with status 1 after writing `goose runtime error: <text> (<file>:<line>)` to standard error.
 
 ### 4.6 Validation
 
@@ -169,9 +169,9 @@ Abort kinds and the runtime text they correspond to: `div_zero` (`division by ze
 | `V-ROOT` | A value with root set ρ may initialize, be assigned to, or rebind variable `r` only if ρ ⊆ roots(`r`) and every member of ρ outlives `r`. `param i` and globals outlive every local. A local `y` outlives `r` when `y`'s scope is `r`'s scope or an enclosing scope in the same implementation. Declaration order within one scope does not matter: a scope's variables all end together, and the language allows a `var` reference to be rebound to a later-declared variable of its own scope. A slice with root set ρ may be assigned through a reference parameter `p` to a slice variable only if ρ ⊆ content(`p`), the content roots the context declares for `p`; a slice read through `p` has the root set content(`p`). Content roots are declared only for a parameter of type `ref (slice T)`, whose root set is `[r_param p]`, and name only `r_param` and `r_global`. |
 | `V-BLOCK` | The value of a block or `ifE` is not rooted at a variable declared inside it. |
 | `V-RESULT` | A returned reference or slice is rooted only at `param i` or globals, within the declared result roots. |
-| `V-CALL` | At a call, each `param i` in the callee context's result roots is replaced by the actual argument's roots; the argument's mutability satisfies the parameter's. A global's initializer is checked like a function body with no variables: nothing it reads, writes or grows, itself or through its calls, may be a global that is not initialized before it. Where the callee context declares content roots for parameter `i`, its argument is a `var` slice variable `s` (`a_ref` of `p_local s`) or the pointee of a reference parameter `q` of the caller (`a_ref` of `p_deref(e_read(p_local q))`). Let κ be the callee's content roots with each `r_param j` replaced by argument `j`'s roots. For `s`: roots(`s`) ⊆ κ, κ ⊆ roots(`s`), and every member of κ outlives `s`. For `q`: κ and content(`q`) are the same set. So what the callee reads from the variable is within what it assumes, and what it stores there is within what the variable allows. |
+| `V-CALL` | At a call, each `param i` in the callee context's result roots is replaced by the actual argument's roots; the argument's mutability satisfies the parameter's. A global's initializer is checked like a function body with no variables: nothing it reads, writes, grows or shrinks, itself or through its calls, may be a global that is not initialized before it. Where the callee context declares content roots for parameter `i`, its argument is a `var` slice variable `s` (`a_ref` of `p_local s`) or the pointee of a reference parameter `q` of the caller (`a_ref` of `p_deref(e_read(p_local q))`). Let κ be the callee's content roots with each `r_param j` replaced by argument `j`'s roots. For `s`: roots(`s`) ⊆ κ, κ ⊆ roots(`s`), and every member of κ outlives `s`. For `q`: κ and content(`q`) are the same set. So what the callee reads from the variable is within what it assumes, and what it stores there is within what the variable allows. |
 | `V-SUMMARY` | Each implementation's effect summary is closed: the effects of its body, computed with its callees' summaries, are contained in it. Recursion needs no iteration, because closure is checked, not computed. The check runs once per context: a parameter target is read through that context's root annotation, so a parameter the context knows to be rooted at a global counts as that global. |
-| `V-SHRINK` | At a shrink of the array rooted at `a`, no variable in the demand set has `a` among its roots. The demand set is every variable named in an operand evaluated later in the statement, in a later statement of an enclosing block in the same implementation, or anywhere in an enclosing loop body. |
+| `V-SHRINK` | At a possible shrink of a `grow` or `growshrink` owner, no demanded reference/slice variable, retained operand or loop run may point into its elements. References to its whole owner remain valid. Demand, possible aliasing and call substitution are defined in §12.6; reductions of a `limited` owner retain its written slots and require no such exclusion. |
 | `V-WHOLE` | The right side of `assignWhole p e` neither names a variable rooted at `p`'s root nor calls an implementation whose summary reads, writes or resizes that root. |
 
 `V-SHRINK` is at most as permissive as language spec §5.1. Where the frontend accepts a shrink through §5.1's `return`/`break` exception and the validator does not, the exporter reports `unsupported: shrink-exit-exception`.
@@ -184,9 +184,10 @@ The target of an effect is the set of global and parameter roots of the place re
 |---|---|
 | reads | `read` of a place; every `viewOf`, wherever it occurs (sampling an owner reads its length), so also under `refOf (elem …)`, `sliceOf`, `lenOf`, `append` and `forEach`; the run an `append` copies from and the run a by-value `forEach` iterates, also when the run is a slice value; both sides of `assignOp`. |
 | writes | `assign` and `assignOp` to a place. A slice assigned through a reference parameter is a write to that parameter's targets. |
-| grows | `push` and `append` on the owner. |
+| grows | `push` and `append` on the owner; `resize` with a fill; whole-resizable assignment. |
+| shrinks | `pop`, `popN`, either form of `resize`, `clear` and whole-resizable assignment, including limited-array length reductions. A possible shrink is recorded even when the count is zero or a particular run grows instead. |
 | rebinds | `rebind` of a variable that is a parameter. A slice assigned through a reference parameter `p` to the slice variable it refers to (`s_assign` to `p_deref(e_read(p_local p))`) is also a rebind of `param p`: one convention for replacing the slice a parameter's variable holds, whether the parameter is the slice or refers to it. |
-| through a call | The callee's declared reads, writes and growth with each `param j` replaced by the targets of argument `j`'s roots. Where the callee context annotates parameter `j` with globals, those globals are added: the callee's own check lets an entry for `param j` stand for them, so the call must too. A callee whose summary is unknown makes the caller's unknown. |
+| through a call | The callee's declared reads, writes, growth and shrink with each `param j` replaced by the targets of argument `j`'s roots. Where the callee context annotates parameter `j` with globals, those globals are added: the callee's own check lets an entry for `param j` stand for them, so the call must too. A callee whose summary is unknown makes the caller's unknown. |
 
 ## 5. Numeric and failure semantics
 
@@ -213,7 +214,7 @@ A mandatory abort is never removed because its result is unused.
 
 Growth never invalidates a reference or slice. A shrink removes elements above the new length of a `grow` or `growshrink` object and keeps every written slot of a `limited` object. `pop` on an empty array, `popN` with a negative count or more than the length, and `resize` to a negative length abort before changing anything. Exceeding a limited array's capacity aborts `capacity` before writing.
 
-Whole assignment is a shrink followed by construction (`E-WHOLE`, `V-WHOLE`).
+Whole assignment is a shrink followed by construction (`E-WHOLE`, `V-WHOLE`). The exact executable S8 subset, memory transitions, abort order, validation and wire additions are in §12.6.
 
 ## 7. Construction and nonlocal exits (`core-construction`)
 
@@ -276,7 +277,7 @@ A `view` is a sampled `(region, start, length)`. It is an SSA value only: it can
 | Views | `array.snapshot r`, `slice.view v`, `view.len v`, `view.slice v lo hi`, `array.len r` | `array.snapshot` samples region and length. `view.slice` aborts `slice_oob`. |
 | Indexing | `array.index.checked v i`, `array.index.proven v i` | Checked aborts `index_oob`. Proven requires evidence (§10). |
 | Growth | `array.push r v`, `array.append r v` | |
-| Shrink | `array.pop r`, `array.pop_n r n`, `array.resize r n fill?`, `array.clear r` | Abort per §6. |
+| Shrink | `array.pop r`, `array.pop_n r n`, `array.resize r n fill?`, `array.clear r` | Pop yields the removed fixed element; the others yield unit. Ordering and aborts are §12.6. |
 | Scopes | `scope.enter S`, `scope.leave S` | Slots of `S` are usable only between them. |
 | Calls | `call f(args)` | Legal only when `f`'s summary propagates no nonlocal target. |
 | Output | `print parts` | |
@@ -390,7 +391,7 @@ The schema string names the representation and revision (`goose-core/0.2`, `gir-
 
 ### 12.1 Tag table for goose-core/0.2
 
-This subsection is the concrete encoding of §4 for profile `core-pilot`. A tag not listed here is `malformed` in that profile. The flat-struct slice of `core-shrink` extends it in §12.4; the remaining shrink and construction tags are added with their slices.
+This subsection is the concrete encoding of §4 for profile `core-pilot`. A tag not listed here is `malformed` in that profile. The flat-struct slice of `core-shrink` extends it in §12.4 and the shrink slice in §12.6; construction tags are added with their slice.
 
 #### Lexical rules
 
@@ -539,7 +540,7 @@ A golden `NAME.goose` has `NAME.core.json` and `NAME.out`, the standard output. 
 
 ### 12.2 Tag table for gir-h/0.3
 
-This subsection is the concrete encoding of §8 for profile `core-pilot`, and the reference lowering of §8.3 whose output a conforming lowering reproduces byte for byte. A tag not listed here is `malformed` in that profile. The flat-struct slice of `core-shrink` extends it in §12.5. The remaining shrink and construction instructions, `invoke`, `escape`, `array.index.proven` and the fact certificates of §10 are added with the slices and items that need them, and are not decoded now.
+This subsection is the concrete encoding of §8 for profile `core-pilot`, and the reference lowering of §8.3 whose output a conforming lowering reproduces byte for byte. A tag not listed here is `malformed` in that profile. The flat-struct slice of `core-shrink` extends it in §12.5 and the shrink slice in §12.6. The construction instructions, `invoke`, `escape`, `array.index.proven` and the fact certificates of §10 are added with the slices and items that need them, and are not decoded now.
 
 #### Lexical rules
 
@@ -731,7 +732,7 @@ Shared with §12.2, over integers, booleans and addresses (`i_int`, `i_bool`, `i
 | `l_frame` | `nat` member | The address of a frame member. |
 | `l_get`, `l_set` | `nat` member (, `val`) | Read or write a scalar member. |
 | `l_stack` | `val` base, `nat` offset | The data stack `base + offset`. |
-| `l_mark`, `l_release`, `l_bump` | `val` stack (, `val` mark) \| `val` stack, `val` bytes or `-1`, `nat` bytes | The stack's top; restoring it (only on a stack the function owns); moving it up. |
+| `l_mark`, `l_release`, `l_bump` | `val` stack (, `val` mark) \| `val` stack, `val` bytes or `-1`, `nat` bytes | The stack's top; restoring it (only on a stack the function owns, or a passed resizable owner in `core-shrink`, §12.6); moving it up. |
 | `l_gaddr`, `l_gstack` | `nat` global | A global's storage and its stack. |
 | `l_hbase`, `l_hlen`, `l_hinit`, `l_hsetlen` | `val` header (, `val`) | A header's base and length; setting its base with length 0; setting its length. |
 | `l_copy`, `l_move`, `l_fill` | `val` dst, `val` src, (`nat` element size,) `val` count | Bytes copied (regions do not overlap), moved (they may), or a source of `size` bytes repeated `count` times. |
@@ -747,7 +748,7 @@ This is the contract for the first `S8` extension, not an implemented profile or
 
 | Tag | Fields | Meaning |
 |---|---|---|
-| `module` | `str` schema (`goose-core/0.2`), `str` profile (`core-shrink`), `[file]` files, `[Ty]` types, `[struct_def]` structs, `[global]` globals, `[impl]` impls, `[context]` contexts, `ctx` entry, `[origin]` origins | Exactly ten fields after the tag. The mandatory structs table follows types, including when it is empty. All other records keep their pilot shape. |
+| `module` | `str` schema (`goose-core/0.2`), `str` profile (`core-shrink`), `[file]` files, `[Ty]` types, `[struct_def]` structs, `[global]` globals, `[impl]` impls, `[context]` contexts, `ctx` entry, `[origin]` origins | Exactly ten fields after the tag. The mandatory structs table follows types, including when it is empty. Other records keep their pilot shape except the profile-selected shrink additions in §12.6. |
 | `struct` | `sid` | A type entry naming one descriptor in this module's structs table. |
 | `struct_def` | `nat` byte size, `[field]` real fields | One instantiated nominal struct declaration, with positive byte size. Pads may supply that size without real fields; zero-size values remain excluded. |
 | `field` | `ty` type, `VarKind` binding, `Mut` contents, `nat` byte offset | Binding `var` permits assignment of the whole field; binding `let` does not. Contents `const` forbid writes inside the field; contents `mut` permit them subject to enclosing storage permissions. |
@@ -799,6 +800,126 @@ Core lowering retains struct ids and descriptor order, remapping their type refe
 GIR-L (§12.3) has no struct type, descriptor table, constructor or field operation after lowering. A flat record lives in byte storage, its by-value load takes a byte snapshot, and a field reference becomes address arithmetic using the descriptor's byte offset. Only the existing low scalar, address and byte-copy operations remain. Padding is not a logical value and must never become an operand of scalar output or field access. Whole-object equality, when implemented, compares real fields and ignores padding.
 
 The C emitter must support unaligned packed scalar accesses. A low `PLoad` or `PStore` that may address an unaligned field copies bytes between that address and a scalar temporary using the existing copy primitive or `memcpy`; it must not cast the address to an aligned scalar pointer and dereference it. The storage layout remains the frontend's authoritative packed layout.
+
+### 12.6 Shrink operations in core-shrink
+
+This is the remaining S8 contract, required before its implementation and qualification. It extends §12.4–§12.5 at schemas `goose-core/0.2`, `gir-h/0.3` and `gir-l/0.2`. A schema/profile pair selects one shape; no decoder tries alternate arities. `core-pilot` retains every tag, module/summary arity, numbering and byte choice in §12.1–§12.3. The `core-shrink` Core module has ten fields after its tag and GIR-H has nine, including the mandatory struct table even when empty. Flat-struct types, descriptors and field operations retain §12.4–§12.5's shapes. The completed shrink profile changes its summary and `e_push` shapes as specified below; a pre-shrink flat-struct artifact using their pilot shapes is malformed under this contract.
+
+#### Supported types, storage and source boundary
+
+| Core/GIR-H type tag | Fields (arity after tag) | Contract |
+|---|---|---|
+| `growshrink` | `ty` element (1) | `T[>..<]`; flat fixed element type. |
+| `limited` | `ty` element, `nat` capacity (2) | `T[..k]`, `1 ≤ k ≤ 2^31−1`; flat fixed element type. |
+
+Their component type precedes the containing type. Here flat fixed elements are precisely §4.1's integers, booleans, fixed arrays and nominal flat structs: neither references/slices nor limited arrays occur inside an element. The slice supports `grow`, `growshrink` and `limited` as owned local/global arrays and as the pointee of a by-reference parameter. References to their whole owner, element references, slices, indexing, `.len`, `push`, `append`, iteration and the operations below work subject to their ordinary permission/root rules. It adds neither resizable fields nor dynamic-capacity `T[..]`. A `limited` is fixed-class in Goose, but this slice supports it only as an owner: by-value limited parameters/results, aggregate embedding, whole-object copies and whole limited-array assignment are `unsupported: limited-value`; they are not silently treated as clear-then-construct. Runtime-capacity arrays remain `unsupported: runtime-capacity`. By-value resizable arguments/results, `copy` of a nonfixed owner and nonfixed-result calls remain outside S8 (`unsupported: nonfixed-construction`). These are support boundaries, not changes to the source rules of language spec §3.4, §4.4 and §5.3.
+
+The exporter rejects the following source forms before publishing any Core/GIR artifact; a support failure includes its source location and is never represented by an opaque tag or a partially emitted module. The existing pilot/flat-struct exclusions also remain in force.
+
+| Excluded source form in this slice | Export feature id |
+|---|---|
+| Runtime-capacity `T[..]`, including `[..cap]` construction | `runtime-capacity` |
+| Static limited capacity zero, or greater than the wire `nat` limit | `zero-size`, or `capacity-limit`, respectively |
+| Limited initializer whose branches/block values are not literal runs (including array/slice variables, `copy`, `default` and limited-result calls) | `limited-initializer` |
+| `.cap`/`cap(owner)` on a limited owner | `limited-capacity` |
+| An owner fill literal `[value;count]` | `owner-fill-literal` |
+| By-value limited arguments/results, limited aggregate embedding/copy or whole limited-array assignment | `limited-value` |
+| By-value resizable arguments/results, nonfixed `copy`/result calls, or a grow/growshrink initializer/replacement with a nonliteral-run leaf | `nonfixed-construction` |
+| Resizable tail fields or a value containing a resizable tail | `resizable-field` |
+| Reference/slice/nonfixed/limited element types of a new owner | `nonflat-element` |
+| `.index_of`/`index_of(owner,ref)` | `builtin-call` |
+
+A fresh owner initializer is `e_arr` of its exact owner type, possibly chosen by `e_if` or `e_block`; each leaf is a literal run of flat fixed elements. A `limited` leaf has at most its capacity elements (`V-TYPE` rejects a forged larger literal). `e_fill` remains the fixed-array form; an owner fill literal `[value;count]` is `unsupported: owner-fill-literal` until a count-bearing owner-run form is specified. Repeating the expression in `e_arr` would violate evaluation-once, and global initializers have no local-variable table for a synthesized fill temporary. Empty owner literals are legal. An owner cannot be read as a first-class value by `e_read`/`i_load`; an owner-valued literal run is transient, usable only by initialization or the whole-resizable replacement below. No destination capability or first-class owner copy is added.
+
+`e_push` in `core-shrink` has fields `Place`, `Expr`, `org` (arity 3); its pilot form has arity 2. Resolve the owner, evaluate the element once, then read the current length and, for a limited owner, check capacity before any receiver write. It returns `ref mut E` to the written slot. This origin supplies a limited-capacity abort's source location. `s_append` keeps fields `Place`, `View`, `org` (arity 3), extending its owner type to the three supported kinds. Its source run is sampled and copied before receiver writes; the limited capacity check uses the receiver length after source evaluation and precedes every receiver write. A self-append keeps its sampled source intact. All count/size arithmetic used for checks is mathematical, with checked physical byte-size arithmetic at placement.
+
+#### Core operation tags and evaluation order
+
+| Tag | Fields (arity after tag) | Type and behavior |
+|---|---|---|
+| `e_pop` | `Place` owner, `org` (2) | Result `E`, a fixed value snapshot of the last element. Resolve the owner once, read current length, check nonempty, copy its last value, then reduce the length by one. A discarded pop is `s_expr(e_pop …)`, never a separate `s_pop`. |
+| `s_pop_n` | `Place` owner, `Expr` count, `org` (3) | Resolve owner, evaluate count once, then read current length; check `0 ≤ count ≤ len`, then reduce by count. Result unit. |
+| `s_resize` | `Place` owner, `Expr` size, `[Expr]?` fill, `org` (4) | Resolve owner; evaluate size once, then, only if size evaluation completed normally, the present fill once, even on a shrink, unchanged length or later size-check abort; only then read current length and check. Fill has type `E`. |
+| `s_clear` | `Place` owner, `org` (2) | Resolve owner once, then reduce length to zero. No defined abort of its own. |
+| `s_assign_whole` | `Place` owner, `Expr` replacement, `org` (3) | Only `grow`/`growshrink`. Resolve owner, clear its old elements, then evaluate and publish its replacement literal run once. Replacement has the exact owner type; `V-WHOLE` applies before any evaluation. |
+
+The first four operate on all three kinds. Element mutation requires writable contents; changing an owner's length also requires writable contents. Whole replacement additionally requires permission to replace its binding (`var` or a writable by-reference owner), so it cannot bypass `V-MUT` by clearing a `let`. Source `.resize(n)` and `.resize(n,v)` map to an empty/singleton fill option, never a default fill. The count or size expression may itself grow or shrink the same owner; the outer operation uses the length these effects leave. The receiver location, not its length, is retained across those operands. Pop returns the old last value, not a reference to released storage. `E-WHOLE` is clear-before-RHS, including when an RHS effect aborts; whole limited-array assignment has different source semantics and is outside this slice.
+
+The size operand is an integer of any supported width. In accordance with the legacy runtime check, its value is interpreted as an `i64` bit pattern for the negative-size check: a `u64` above `i64.max` aborts `resize_negative`, rather than allocating an enormous region or using a debug `as` check. Every smaller nonnegative value keeps its mathematical value. Pop counts use their mathematical integer value, so any negative count or count exceeding length aborts `pop_n_range` without signed conversion.
+
+#### Kept slots, truncation and aborts
+
+For `limitedObj k slots len`, `slots.length` is the number of slots ever written in this root instance, and `0 ≤ len ≤ slots.length ≤ k`. It is a high-water extent, distinct from visible length. Reducing length changes only `len`: `pop`, `pop_n`, resize-down and clear preserve every slot and its value. A retained location into index `j < slots.length` and any field/fixed-array selector inside it stays valid even if `j ≥ len`. A fresh index or slice still checks the visible sampled length, and can never expose a never-written slot. Push/resize-up/append overwrite the slots starting at `len` and extend the high-water extent only where needed. Retained references then read the newly written value. Owner scope exit invalidates all its locations as usual.
+
+For `resizable slots`, length is `slots.length`. A reduction truncates that vector: a location into a removed element becomes invalid and does not become valid merely because later growth reuses its index. The live-location theorem must prohibit observing that dead reference; it cannot use index reuse as evidence that the old lifetime survived. Owner/header references remain valid across either reduction. `pop` copies its result before truncation. Fresh initialization and whole-resizable replacement create only fully initialized element values; limited unused capacity has no logical values and is not zero-filled.
+
+Resize checks, in order after its operands, are: (1) negative interpreted size; (2) if size exceeds current length and fill is absent, `resize_fill`; (3) if growing a limited owner with fill and size exceeds capacity, `capacity`. Equal length does nothing after evaluating fill. A lower size truncates/preserves slots as above; a higher size copies the single evaluated fill into each added slot and then publishes the new length. Pop checks empty before copying; pop_n checks its range before any length/slot mutation. Capacity checks in push and append happen after operand effects and before receiver writes. An abort does not roll back output or mutations made while resolving the owner/evaluating operands; “before mutation” describes this operation's subsequent receiver mutation. No check is debug-only.
+
+| Abort kind | Runtime text | Runtime error id |
+|---|---|---|
+| `pop_empty` | `pop on empty array` | `GS_E_POP` |
+| `pop_n_range` | `pop_n count negative or beyond the array's length` | `GS_E_POPN` |
+| `resize_negative` | `resize to a negative length` | `GS_E_RESIZENEG` |
+| `resize_fill` | `resize growth requires a fill value` | `GS_E_RESIZEFILL` |
+| `capacity` | `limited array capacity exceeded` | `GS_E_CAPACITY` |
+
+Each uses the operation's origin and §4.5's status/stderr boundary. These five kinds extend `AbortKind` in Core expectation files, GIR-H `t_abort` and GIR-L `t_abort` only for `core-shrink`; the decoder rejects them under `core-pilot`. Their GIR-L message-operand list is empty. A malformed type/arity is a decoder failure; a well-decoded lifetime or permission violation is validation rejection; an unchecked access to removed/unwritten storage is a model fault, never one of these Goose aborts.
+
+#### Summary shape and shrink targets
+
+`summary` under `core-shrink` has exactly seven fields: `[Target]` reads, `[Target]` writes, `[Target]` grows, **`[Target]` shrinks**, `[Target]` rebinds, `flag` aborts, `flag` outputs. The target representation, order and duplicate checks remain §12.1's. `summary_unknown` keeps arity zero. This shape applies to both Core implementations and GIR-H functions. Six fields are malformed under this profile; seven are malformed under `core-pilot`. Adding a shrink list to an internal summary must not change its pilot serialization.
+
+Each shrink operation reads its owner's length and has a shrink effect on that owner's parameter/global targets; the local owner itself is not a summary target. `pop` also reads the removed element. Resize with fill also writes elements and grows, conservatively even if it never grows in one execution. No-fill resize cannot successfully grow: it contributes reads, shrinks and possible abort, but no own element-write or growth effect. Push/append write added elements and grow; limited push/append must set `aborts = 1` for capacity checks. Both `V-SUMMARY` and `GIR-V050` reject a summary omitting that abort flag, even when a literal/constant count would fit; receiver/operand effects are included separately. Whole replacement reads the owner's length and shrinks, writes and grows its targets, as well as including RHS effects. Pop, pop_n and resize may abort; clear has no own abort. Every operation also includes the effects of its places/operands. A limited reduction is a summary shrink because its visible length changes, although it invalidates no slot; bounds facts depending on length are still killed.
+
+At a call, map every callee shrink target through the same checked argument roots and parameter-global annotations used for reads/writes/grows in `V-CALL`/`V-SUMMARY`. Include effects of captured variables, which are ordinary trailing by-reference parameters. Unknown implies reads/writes/grows/shrinks of every reachable owner and possible abort/output; it cannot discharge a shrink safety check. Summaries conservatively cover possible successful effects and possible aborts, using the operation classes above without count-constant narrowing, optimization or execution. Thus fill-resize is always marked growing, no-fill resize never is, and every resize is marked shrinking. An abort flag describes a possible check, not a receiver mutation on its failure path. `V-SUMMARY` checks closure across all contexts and recursive calls without trusting a partially computed recursive summary.
+
+#### Demand-sensitive V-SHRINK
+
+Demand is source-syntactic future use, computed over the unoptimized structured Core separately for each context, before checking a shrink. Expand variable mentions in explicit closure-converted arguments and root/content annotations; a call that uses a captured variable thus counts as a mention. Distinguish an owner/header reference from an interior reference or slice. A flat fixed value snapshot contains no roots and cannot become a live alias merely because it was read from the owner.
+
+For a point inside an expression, the demand set includes variables named in every later operand, in the enclosing statement's remaining evaluations, in the block value and later statements of each enclosing block. Take unions at conditionals, including both branches even if a condition is constant. Leaving an inner block drops its locals from continuation demand but retains outer variables mentioned later. A completed statement does not demand a variable solely because its binding remains in scope. At declarations/rebindings retain syntactic later mentions; do not subtract a future definition as if it established a new lifetime. Thus last-use-before-shrink is accepted outside loops, but a shrink before a later rebind and use can be conservatively rejected. This is not optimizer liveness.
+
+Within a loop, add all outer variables mentioned anywhere in its condition/body and the demand after the loop; forRange bounds and forEach sources are evaluated once and are handled before entry, not reevaluated on the backedge. Body locals participate only while their own scope instance is entered. Computing unions to a fixed point over loop backedges gives the same enclosing-loop demand at every iteration; no finite unrolling is a proof. `break`, `continue` and `ret` still include syntactic enclosing continuations for this profile. The language's return/break exception, balanced-call recognition and more precise rebind analysis are not encoded: when they are needed for a frontend-accepted program, export reports `unsupported: shrink-exit-exception`, `unsupported: shrink-balanced-call` or `unsupported: shrink-demand`, respectively.
+
+The validator derives a demand set for every evaluation point as checked internal proof metadata; no new wire annotation is trusted or serialized. The canonical evaluation-step invariant and its exported preservation theorem must refer to those demand sets together with the active evaluation frames/runs. In particular, the Core step specifications' `StoreInv.live` and `Frame.vis` obligations must become demand-aware, and their exported step theorem must use that revised invariant. They must not quantify validity over every reference bit in the store or every variable visible in a scope: dead reference values may remain stored after truncation, provided no later permitted evaluation observes them. The store still meets value/type-shape invariants, and active limited slots retain their type-valid values. Extending a pilot invariant that required all stored references to be valid without this demand restriction would reject legitimate last-use-before-shrink programs.
+
+Variable demand is only one part of the invariant. An evaluation frame retains earlier reference/slice operands until their consuming operation completes: an assignment destination, earlier call argument, sampled indexing/slicing run, append source run, and iteration run of a slice/fixed/limited owner. Such a retained value is checked at every later shrink even if its source variable has no later mention. A scalar/flat record already loaded by value is not retained as a reference. A by-value iteration over a grow/growshrink owner retains the owner/header, rereads length each iteration and copies its element before running the body; that copied element alone does not prevent shrinking. A by-reference element binding participates in demand, and any retained slice iteration run prevents a resizable shrink for the duration of the loop.
+
+For each demanded variable or retained value, obtain its checked roots (and the pointee slice's content roots for a `ref slice` parameter). It can conflict only if its type/provenance may reach an element of the shrinking owner; the whole-owner reference used to shrink is not itself a conflict. Two distinct local roots, two distinct global roots, and a local root versus a global root are distinct. Abstract `r_param` identities do not establish distinctness from another compatible parameter or global. Use existing concrete root/context evidence when it establishes distinctness; otherwise compatible abstract roots may overlap. No alias annotation is added. If this conservative overlap alone prevents exporting a frontend-accepted program, report `unsupported: shrink-parameter-alias`. Calling a shrink function with one owner twice never gets a disjointness assumption from its two parameter positions.
+
+Check direct operations at the actual mutation point (after count/fill evaluation); count/fill effects receive their own checks with all retained operands. At a call, also apply its substituted may-shrink summary against caller continuation demand and caller retained values. Conservatively retain reference/slice actual arguments across a call that may shrink, except whole-owner arguments: this can require `unsupported: shrink-demand` when only a more precise callee operand lifetime would admit it. Callee contexts must independently pass their own demand checks. Globals whose references are demanded by a call count through their roots; the profile does not permit stored/global references into grow-shrink arrays. Unknown calls cannot bypass either side. Rejection uses validation's shrink reason and offending variable/value, never a runtime abort.
+
+`V-WHOLE` additionally checks all replacement operands and called summaries for any possible use of the cleared owner, its elements or an alias: reads, writes, grows, shrinks and rebinding that can reach it are forbidden. This includes the evaluation of closure-converted captured arguments and every branch/block, not just the path executed. Fixed sibling-field accesses are allowed only where existing concrete place/type evidence proves they cannot reach the owner. The fresh literal-run forms below make this restriction independently checkable without S9's destination protocol.
+
+#### GIR-H tags, reference lowering and verifier obligations
+
+| Tag | Fields after tag (including result where present) | Meaning |
+|---|---|---|
+| `i_pop` | `val` result, `val` owner reference, `[org]?` (3) | Fixed result `E`; pop check/copy/reduce in Core order. Origin required. |
+| `x_pop_n` | `val` owner reference, `val` integer count, `[org]?` (3) | Checked count reduction. Origin required. |
+| `x_resize` | `val` owner reference, `val` integer size, `[val]?` fill, `[org]?` (4) | Optional fill exactly `E`; checks and transition above. Origin required. |
+| `x_clear` | `val` owner reference, `[org]?` (2) | Reduce to zero. Origin required for reference lowering and diagnostics. |
+| `x_replace` | `val` owner reference, `val` fresh owner run, `[org]?` (3) | Only grow/growshrink of exactly the same element/owner type; publish a replacement into an owner proven empty. Origin required. |
+
+Inherited `i_snap`, `i_alen`, `i_push` and `x_append` accept the additional owner kinds with the unchanged GIR-H arities. `i_arr` accepts `growshrink` and `limited` literal-run result types; limited literal count is checked against capacity. No `load`/`store` of an owner, implicit array-kind conversion or nonfixed call is introduced.
+
+Reference lowering resolves the place once, lowers count then fill in order, then emits the respective operation. `e_pop` emits `i_pop`; `s_pop_n`, `s_resize`, `s_clear` emit their `x_` forms. Every emitted operation carries `[org]` from its Core node. `s_assign_whole` emits `x_clear` before lowering its RHS and then `x_replace`. Even an RHS that aborts/terminates sees the old owner already cleared; no replacement is emitted on that path. `e_arr` lowers elements left to right and then `i_arr`; `e_if`/`e_block` use the existing block/value lowering. No artificial slot is added merely to turn the transient run into an append view.
+
+`x_replace` accepts only a value defined by `i_arr` of the exact grow/growshrink type, or a block parameter whose every reachable incoming value recursively has that literal-run provenance. This is the least fixed point seeded by `i_arr`; an unseeded cycle, a call result, a load, an arbitrary function argument and a limited value do not qualify. Its operand evaluations must not use the receiver's may-alias roots. The verifier derives these dependencies from values, slots, calls and CFG paths, not a writer flag. Before replacement, every path must have established that receiver's emptiness by `x_clear`, with no intervening possible growth/replacement of an alias. A forward must-fact records empty receivers, intersects at joins with edge substitution, and kills emptiness on growth/replacement/unknown calls affecting any may-alias owner. Different parameter ids cannot preserve an emptiness fact across an aliased growth. The originating clear and replacement therefore cannot be detached by a forged CFG. Replacement does not itself clear; clear is the explicit shrink effect.
+
+`GIR-V010` checks owner kinds, exact element/result/fill types and literal counts; `GIR-V020` covers SSA/control flow as before. `GIR-V030` checks contents permissions for every length/element mutation and whole-binding permission for replacement; `GIR-V040` checks owner scope availability. `GIR-V050` derives and closes over reads/writes/grows/**shrinks**, recursive callees and conservative roots before trusting a summary. `GIR-V060` checks fresh-run provenance, no receiver dependency and proven emptiness for `x_replace` (not S9 destination linearity). `GIR-V100` requires the stated origins and profile-correct abort kinds. No new malformed record can bypass a check by using `x_store` on the owner.
+
+Core establishes demand and lifetime safety. GIR-H's verifier checks the operation contracts and summary annotations, but does not rederive `V-SHRINK` from arbitrary CFGs. A type-correct manually forged GIR-H module containing a live alias across a shrink can still pass those structural checks and fault on execution. Only the Core-to-GIR-H lowering theorem for validated `core-shrink`, or an independently validated instance with that provenance, supplies the lifetime claim; a standalone verifier result must not be advertised as one.
+
+#### GIR-L header and stack lowering
+
+Grow/growshrink owners use §11.1's `{base,len}` header and own data stack. With fixed element size `s` and checked new length `n`, shrink lowers to a stack release to `base + n*s` and header length publication in Core order; clear releases to base. Pop first snapshots `s` bytes at `base + (len−1)*s` before release. Resizable by-reference parameters retain their header address plus stack identity, so a callee changes the caller's same header/stack, not a copied header. The per-stack ownership and scope watermark obligations of `GIR-V090` still apply; a reduction through a by-reference owner may release only that passed owner's stack, never an unrelated caller watermark. Recursive-resizable support remains §11.1's explicit boundary.
+
+A limited owner has reserved frame/global byte storage: the frontend's authoritative length-prefix layout followed by `k` element slots. Use the existing `LenStore`/array layout calculation to choose the smallest unsigned length field fitting `k` and its byte offset/total size; do not create a second packing rule or use a resizable header. Its by-reference argument is one address, with capacity static in its type. Initialize/write only the length and provided elements; unused slots are uninitialized. Shrink emits only a length-field store, never `l_release`, zeroing, moving, or clearing retained element bytes. Growth overwrites slots starting at the old visible length. As with packed structs, potentially unaligned scalar accesses use byte-copy loads/stores.
+
+All runtime checks lower to explicit compares/branches ending in `t_abort` with the kind/origin above. Resize's size reinterpretation for the negative check uses wrap semantics in both numeric profiles; it is not a checked source cast. For resizable growth, allocate the added byte run using `l_bump`, fill/copy it and publish header length. For limited growth, branch on capacity before stores and fill/copy reserved slots. `x_replace` copies its fixed-element transient run into the cleared resizable's region and publishes length; its operands contain neither a destination handle nor a receiver construction trace. Partial-run allocation caused by an abort is terminal and does not restore or publish a later length.
+
+GIR-L adds no type/tag, descriptor table, module field, or `l_rt` entry. Limited owners are `m_bytes`/`lglobal bytes` with authoritative byte size; grow/growshrink use existing `m_header`/`lglobal header`. Existing address, scalar, copy/fill, header and stack instructions suffice. The profile gates the five abort kinds in the unchanged low `t_abort` arity. This subsection does not define the nonfixed destination, staging, result delivery or construction trace of §7: those remain the construction profile's separate contract.
 
 ## Part B. Build representations
 
