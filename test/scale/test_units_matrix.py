@@ -58,6 +58,59 @@ class UnitsMatrixTests(unittest.TestCase):
 
         self.assertTrue(units_matrix.Matrix.is_warm(native))
 
+    def test_unavailable_contract_dimensions_make_matrix_incomplete(self):
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        with contextlib.redirect_stdout(io.StringIO()):
+            matrix.record_unavailable("E10", {"target": "no target option"})
+
+        record = matrix.records[0]
+        self.assertEqual(record["status"], "unavailable")
+        self.assertNotIn("ok", record)
+        self.assertEqual(matrix.completion(), ("incomplete", 2))
+
+    def test_random_non_error_build_failure_is_reported_for_edits_and_warning(self):
+        class SequenceRng:
+            def __init__(self, seed, edit):
+                self.edit = edit
+
+            def choice(self, options):
+                return self.edit if "E02" in options else "edit"
+
+        class FakeBuild:
+            def __init__(self, exit_code):
+                self.exit = exit_code
+                self.stderr = units_matrix.edits.EDITS["E15b"].message
+                self.stdout = ""
+                self.native = {}
+
+            def record(self, row):
+                return {"row": row, "exit": self.exit}
+
+        class FakeSession:
+            def __init__(self, goose, work, name):
+                self.edit = None
+                self.calls = 0
+
+            def build(self, *flags):
+                self.calls += 1
+                return FakeBuild(0 if self.calls == 1 else 1)
+
+            def write(self, edit):
+                self.edit = edit
+
+        for edit in ("E02", "E15b"):
+            with self.subTest(edit=edit):
+                matrix = units_matrix.Matrix("unused", self.scratch)
+                with patch.object(units_matrix, "Session", FakeSession), \
+                        patch.object(units_matrix.random, "Random",
+                                     lambda seed: SequenceRng(seed, edit)), \
+                        patch.object(units_matrix.Matrix, "equal_to_clean", lambda *args, **kwargs: None), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    matrix.random_sequence(1, seed=1)
+
+                self.assertEqual(len(matrix.failures), 1)
+                self.assertIn("unexpected build failure", matrix.failures[0])
+
     def test_build_kills_only_after_predicate(self):
         with tempfile.TemporaryDirectory(dir=self.scratch) as temp:
             directory = Path(temp)

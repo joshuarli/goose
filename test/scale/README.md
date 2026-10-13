@@ -216,9 +216,13 @@ object is reported and rebuilt.
 binary-only compiler identity change. Raw independent C flags, a target-only
 change, and a runtime-text-only change are unavailable through the current
 compiler interface: `--debug` couples numeric mode with C flags, targets are
-not selectable, and runtime text is embedded in the compiler binary.
+not selectable, and runtime text is embedded in the compiler binary. Those
+dimensions have `status: unavailable`; they are not passes. An E10 run exits 2
+and reports `incomplete` while any such dimensions remain unavailable.
 
 Verification status for this harness update: targeted `E13` passed with both
 interruption points observed and recovery compared with clean builds. The
 seeded sequence's strengthened assertions were not rerun within the three
 matrix attempts; the earlier 60-step result is not evidence for this update.
+E10/H2 acceptance remains parked until the unavailable dimensions are covered
+or the acceptance contract is revised.
