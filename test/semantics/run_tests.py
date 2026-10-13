@@ -360,6 +360,10 @@ def parse_tool_answer(returncode: int, stdout: str, stderr: str = "") -> tuple:
 def outcomes_agree(got: Outcome, expected: Outcome) -> bool:
     if got[0] == "aborted" and expected[0] == "aborted" and expected[2] is None:
         return got[1] == expected[1]
+    # A fixture without an explicit expectation only says the process ends
+    # with status 0, which `exit(0)` and returning from main both do.
+    if expected == ("returned",) and got == ("exited", 0):
+        return True
     return got == expected
 
 
