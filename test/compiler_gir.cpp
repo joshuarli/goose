@@ -1366,6 +1366,114 @@ void LowStructUsesByteStorageAndUnalignedSafeAccess() {
     assert((copySizes == vector<string>{ "1", "8", "9", "1", "8" }));
 }
 
+void LowAggregateLoopParametersOwnSnapshots() {
+    // The constructor runs before reading the old block value. If its frame
+    // temporary aliases that value, the loop prints 0, 2 instead of 0, 1.
+    auto exercise = [](bool fixedArray) {
+        auto m = Base();
+        m.profile = CoreProfile::Shrink;
+        auto i64 = m.IntType(CoreIntTy::I64);
+        GirTypeId aggregate;
+        if (fixedArray) {
+            CoreType array;
+            array.kind = CoreType::Arr;
+            array.elem = i64;
+            array.count = 1;
+            aggregate = m.Intern(array);
+        } else {
+            aggregate = StructType(m, 0);
+            m.structs = { CoreStruct { 8, { CoreField { i64, CoreVarKind::Var, CoreMut::Mut, 0 } } } };
+        }
+        Main(m).scopes = { -1, 0 };
+        Main(m).slots = { { aggregate, CoreVarKind::Let, 1, 0 } };
+        Main(m).summary.aborts = true;
+        Main(m).summary.outputs = true;
+
+        GirBlock entry, loop, done;
+        auto initialField = Int(m, 0, "0");
+        auto initial = Def(fixedArray ? GirOp::Arr : GirOp::Struct, 1);
+        initial.ty = aggregate;
+        initial.vals = { 0 };
+        auto firstCount = Int(m, 2, "1");
+        entry.insts = { Enter(0), initialField, initial, firstCount, Br(1, { 1, 2 }) };
+
+        loop.params = { { 3, aggregate }, { 4, i64 } };
+        auto next = Def(fixedArray ? GirOp::Arr : GirOp::Struct, 5);
+        next.ty = aggregate;
+        next.vals = { 4 };
+        auto saveOld = Init(0, 3);
+        auto slot = Def(GirOp::Slot, 6);
+        slot.idx = 0;
+        auto nextValue = 7;
+        int oldField = -1;
+        vector<GirInst> readOld { slot };
+        if (fixedArray) {
+            auto snapshot = Def(GirOp::Snap, nextValue++);
+            snapshot.snap = GirSnapshotMode::Owner;
+            snapshot.a = 6;
+            auto index = Int(m, nextValue++, "0");
+            auto element = Def(GirOp::Index, nextValue++);
+            element.a = snapshot.res;
+            element.b = index.res;
+            element.org = 0;
+            auto load = Def(GirOp::Load, nextValue++);
+            load.a = element.res;
+            readOld.insert(readOld.end(), { snapshot, index, element, load });
+            oldField = load.res;
+        } else {
+            auto field = Def(GirOp::Field, nextValue++);
+            field.a = 6;
+            field.idx = 0;
+            auto load = Def(GirOp::Load, nextValue++);
+            load.a = field.res;
+            readOld.insert(readOld.end(), { field, load });
+            oldField = load.res;
+        }
+        GirInst print;
+        print.op = GirOp::Print;
+        print.parts = { { false, "", oldField } };
+        print.org = 0;
+        auto continueCount = Int(m, nextValue++, "1");
+        auto compare = Def(GirOp::Cmp, nextValue++);
+        compare.ty = i64;
+        compare.cmp = CoreCmpOp::Eq;
+        compare.a = 4;
+        compare.b = continueCount.res;
+        auto followingCount = Def(GirOp::Next, nextValue++);
+        followingCount.ty = i64;
+        followingCount.a = 4;
+        auto branch = CondBr(compare.res, 1, 2);
+        branch.vals = { next.res, followingCount.res };
+        loop.insts = { Enter(1), next, saveOld };
+        loop.insts.insert(loop.insts.end(), readOld.begin(), readOld.end());
+        loop.insts.insert(loop.insts.end(), { print, Leave(1), continueCount, compare, followingCount, branch });
+        done.insts = { Leave(0), Ret() };
+        Main(m).blocks = { entry, loop, done };
+
+        assert(Code(m) == "");
+        auto low = GirToLow(m).Lower();
+        assert(!GirVerifier(low).Verify());
+        auto &lowLoop = low.funcs[0].blocks[1];
+        assert(lowLoop.params.size() == 1);
+        assert(low.Type(lowLoop.params[0].second).kind == CoreType::Int);
+        bool loopEdgeCopiesAggregate = false;
+        for (auto &source : low.funcs[0].blocks) {
+            if (source.insts.empty() || source.insts.back().op != GirOp::CondBr) continue;
+            auto &branch = source.insts.back();
+            for (auto edge : { branch.idx, branch.idx2 }) {
+                auto &edgeBlock = low.funcs[0].blocks[edge];
+                auto &edgeTerm = edgeBlock.insts.back();
+                if (edgeTerm.op != GirOp::Br || edgeTerm.idx != 1) continue;
+                loopEdgeCopiesAggregate = any_of(edgeBlock.insts.begin(), edgeBlock.insts.end(),
+                                                 [](auto &i) { return i.op == GirOp::BytesCopy; });
+            }
+        }
+        assert(loopEdgeCopiesAggregate);
+    };
+    exercise(false);
+    exercise(true);
+}
+
 void LowKeepsPackedFieldAlignmentAcrossBlockParameters() {
     auto high = ScalarStruct();
     auto &f = Main(high);
@@ -1523,6 +1631,7 @@ int main() {
     RejectsAFieldComponentAfterItsStructType();
     RejectsAnInvalidStructLayout();
     LowStructUsesByteStorageAndUnalignedSafeAccess();
+    LowAggregateLoopParametersOwnSnapshots();
     AcceptsNestedFieldContentsThroughAJoin();
     RejectsArrayElementWriteThroughConstFieldContents();
     FieldProjectionKeepsItsOwnerRoot();
