@@ -186,22 +186,22 @@ A disagreement between the Lean model and the legacy compiler is resolved by the
 
 ## 7. Verifier and malformed-artifact matrix
 
-C++ verifier cases are in-memory modules in `test/compiler_gir.cpp`. Decoder cases are files fed to `goose-semantics`.
+C++ verifier cases are in-memory modules in `test/compiler_gir.cpp`. Decoder cases are files fed to `goose-semantics`; `test/semantics/malformed/check.sh` also generates the over-limit input so the repository does not carry a 64 MiB fixture.
 
-| ID | Mutation | Layer |
-|---|---|---|
-| `VER-01` | Unknown tag, wrong arity, wrong schema string, wrong profile | Decoder |
-| `VER-02` | Use not dominated by its definition; wrong edge argument type; two terminators | Verifier |
-| `VER-03` | Store through `const`; slot address outside its scope; load of a resizable | Verifier |
-| `VER-04` | Summary omitting a shrink; `call` to a function that may propagate a target | Verifier, `validate` |
-| `VER-05` | Destination opened and neither published nor abandoned on one path; published twice | Verifier |
-| `VER-06` | Escape edge that leaves a scope entered; target not handled by a member | Verifier |
-| `VER-07` | Certificate fact not implied by a predecessor; proven index after a shrinking call; after a re-entered scope | Certificate checker |
-| `VER-08` | Constant out of range; index out of table; trailing data; oversize input; excessive nesting | Decoder |
-| `VER-09` | Aborting operation with no origin | Verifier |
-| `VER-10` | GIR-H operation in a GIR-L module; two live resizables on one stack; watermark restored across a caller's destination | Verifier |
+| ID | Mutation | Layer | Evidence and status |
+|---|---|---|---|
+| `VER-01` | Unknown tag, wrong arity, wrong schema string, wrong profile | Decoder | Core and GIR malformed indexes; checked by the decoder scripts. |
+| `VER-02` | Use not dominated by its definition; wrong edge argument type; two terminators | Verifier | In-memory C++ cases and GIR invalid fixtures assert `GIR-V020`. |
+| `VER-03` | Store through `const`; slot address outside its scope; load of a resizable | Verifier | In-memory C++ cases and GIR invalid fixtures assert `GIR-V030`. |
+| `VER-04` | Summary omitting a shrink; `call` to a function that may propagate a target | Verifier, `validate` | Core `rejected_call_global_init_touches_later.json` checks `V-CALL`; the in-memory call case checks `GIR-V050`; shrink summary is gated on S8. |
+| `VER-05` | Destination opened and neither published nor abandoned on one path; published twice | Verifier | Gated on S9, which adds destination construction operations. |
+| `VER-06` | Escape edge that leaves a scope entered; target not handled by a member | Verifier | Gated on S9, which adds construction and escape operations. |
+| `VER-07` | Certificate fact not implied by a predecessor; proven index after a shrinking call; after a re-entered scope | Certificate checker | Parked until O1 adds the checker. |
+| `VER-08` | Constant out of range; index out of table; trailing data; oversize input; excessive nesting | Decoder | Malformed indexes plus a generated 64 MiB + 1 input checked through both `validate` and `gir-validate`. |
+| `VER-09` | Aborting operation with no origin | Verifier | In-memory C++ case and GIR invalid fixtures assert `GIR-V100`. |
+| `VER-10` | GIR-H operation in a GIR-L module; two live resizables on one stack; watermark restored across a caller's destination | Verifier | Stage mixing and same-stack resizables assert `GIR-V090`; caller-destination restoration is gated on S9. |
 
-Each case fails at the named layer with the named diagnostic, not at an earlier unrelated one.
+Each implemented case fails at the named layer with the named diagnostic, not at an earlier unrelated one. Gated cases remain acceptance criteria for the milestone that adds their operations or checker.
 
 ## 8. Linter compatibility
 
