@@ -88,6 +88,10 @@ class HarnessFailure(Exception):
     """A tool broke its contract, or a fixture's expectation is unusable."""
 
 
+class PipelineUnsupported(Exception):
+    """The pipeline under test names a feature outside what it supports."""
+
+
 class Inconclusive(Exception):
     """A process outran its wall-clock budget."""
 
@@ -400,6 +404,9 @@ def build_and_run_pipeline(goose: Path, cc: str, pipeline: str, fixture: Fixture
     cdefines = [*defines, *map("-D{}".format, fixture.defines)]
     built = run([goose, "--pipeline", pipeline, *extra, *defines, "--standalone", "-o", cfile,
                  fixture.source], timeout)
+    marker = f"unsupported in pipeline {pipeline}: "
+    if built.returncode == 1 and marker in text(built.stderr):
+        raise PipelineUnsupported(text(built.stderr).split(marker, 1)[1].split()[0])
     if built.returncode != 0:
         raise HarnessFailure(f"{pipeline} pipeline build failed (exit {built.returncode}): "
                              f"{text(built.stderr).strip()[:300]}")
@@ -474,6 +481,8 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
     def guarded(step):
         try:
             return step()
+        except PipelineUnsupported as error:
+            verdicts.append(Verdict(UNSUPPORTED, str(error)))
         except HarnessFailure as error:
             verdicts.append(Verdict(HARNESS_FAILURE, str(error)))
         except Inconclusive as error:

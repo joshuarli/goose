@@ -91,6 +91,14 @@ private:
         return nullptr;
     }
 
+    // The content roots the context declares for a reference to a slice.
+    Roots Content(int var) {
+        auto &c = m.contexts[ci];
+        for (size_t i = 0; i < c.varroots.size(); i++)
+            if (c.varroots[i].first == var && i < c.hascontent.size() && c.hascontent[i]) return c.content[i];
+        return {};
+    }
+
     // ---------------------------------------------------------------------
 
     // What the traversal finds is declared in terms of the parameters where it
@@ -191,6 +199,12 @@ private:
                 auto rho = Pl(*s.place);
                 Ex(*s.expr);
                 AddTargets(fx->writes, rho);
+                // A slice stored through a reference parameter replaces the
+                // slice the variable it refers to holds: a rebind of the parameter.
+                if (m.Type(s.expr->type).kind == CoreType::Slice && s.place->kind == CorePlace::Deref &&
+                    s.place->expr->kind == CoreExprKind::Read && s.place->expr->place->kind == CorePlace::Local &&
+                    s.place->expr->place->index < (int)Impl().params.size())
+                    fx->rebinds.insert(CoreTarget { false, s.place->expr->place->index });
                 break;
             }
             case CoreStmtKind::AssignOp: {
@@ -282,6 +296,11 @@ private:
             case CoreExprKind::Read: {
                 auto rho = Pl(*e.place);
                 AddTargets(fx->reads, rho);
+                // A slice read through a reference parameter is rooted where
+                // the context says what that parameter's slice may be rooted at.
+                if (m.Type(e.type).kind == CoreType::Slice && e.place->kind == CorePlace::Deref &&
+                    e.place->expr->kind == CoreExprKind::Read && e.place->expr->place->kind == CorePlace::Local)
+                    return Content(e.place->expr->place->index);
                 if (e.place->kind == CorePlace::Local && m.IsRefOrSlice(Impl().vars[e.place->index].type))
                     if (auto ann = Annotation(e.place->index)) return *ann;
                 return {};
