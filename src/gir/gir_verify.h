@@ -83,7 +83,7 @@ private:
                 add(i.a); add(i.b);
                 break;
             case GirOp::Un: case GirOp::Not: case GirOp::Conv: case GirOp::Next: case GirOp::Freeze:
-            case GirOp::Load: case GirOp::Snap: case GirOp::SliceView: case GirOp::ViewLen:
+            case GirOp::Load: case GirOp::Snap: case GirOp::SliceView: case GirOp::ViewLen: case GirOp::Field:
             case GirOp::ArrayLen: case GirOp::Fill: case GirOp::Init: case GirOp::Exit:
                 add(i.a);
                 break;
@@ -92,7 +92,7 @@ private:
                 if (i.lo.kind != GirBound::None) add(i.lo.val);
                 if (i.hi.kind != GirBound::None) add(i.hi.val);
                 break;
-            case GirOp::Call: case GirOp::Arr: case GirOp::Ret: case GirOp::Br:
+            case GirOp::Call: case GirOp::Arr: case GirOp::Struct: case GirOp::Ret: case GirOp::Br:
                 for (auto v : i.vals) add(v);
                 break;
             case GirOp::Print:
@@ -175,6 +175,7 @@ private:
 
     void Run() {
         CheckStages();
+        CheckStructTable();
         CheckEntryAndGlobals();
         for (auto &f : m.funcs) sigs.push_back({ f.params, f.results });
         for (auto &f : m.funcs) fns.push_back({ cat("function ", f.name), &f, {}, 0 });
@@ -218,6 +219,85 @@ private:
         };
         for (auto &f : m.funcs) scan(f, cat("function ", f.name));
         for (auto &g : m.globals) scan(g.init, cat("initializer of global ", g.name));
+    }
+
+    void CheckStructTable() {
+        if (m.profile != CoreProfile::Pilot && m.profile != CoreProfile::Shrink)
+            Fail("GIR-V010", "unknown Core profile");
+        auto hasStructType = false;
+        for (auto &t : m.types) hasStructType |= t.kind == CoreType::Struct;
+        auto hasStructInst = false;
+        auto scan = [&](const GirFunc &f) {
+            for (auto &b : f.blocks)
+                for (auto &i : b.insts)
+                    hasStructInst |= i.op == GirOp::Struct || i.op == GirOp::Field;
+        };
+        for (auto &f : m.funcs) scan(f);
+        for (auto &g : m.globals) scan(g.init);
+
+        if (m.low) {
+            if (hasStructType || hasStructInst || !m.structs.empty())
+                Fail("GIR-V090", "a low module retains a struct type, descriptor, or operation");
+            return;
+        }
+        if (m.profile == CoreProfile::Pilot) {
+            if (hasStructType || hasStructInst || !m.structs.empty())
+                Fail("GIR-V010", "core-pilot has no struct table or struct operations");
+            return;
+        }
+
+        vector<int> typeForStruct(m.structs.size(), -1);
+        for (size_t t = 0; t < m.types.size(); t++) {
+            auto &ty = m.types[t];
+            if (ty.kind != CoreType::Struct) continue;
+            if (ty.structid < 0 || ty.structid >= (int)m.structs.size())
+                Fail("GIR-V010", cat("struct type ", t, " names a descriptor outside the table"));
+            if (typeForStruct[ty.structid] >= 0)
+                Fail("GIR-V010", cat("struct descriptor ", ty.structid, " has more than one type entry"));
+            typeForStruct[ty.structid] = (int)t;
+        }
+        for (size_t s = 0; s < m.structs.size(); s++) {
+            auto &st = m.structs[s];
+            if (typeForStruct[s] < 0)
+                Fail("GIR-V010", cat("struct descriptor ", s, " has no nominal type entry"));
+            if (st.size <= 0) Fail("GIR-V010", cat("struct descriptor ", s, " has nonpositive size"));
+            int64_t end = 0;
+            for (size_t f = 0; f < st.fields.size(); f++) {
+                auto &field = st.fields[f];
+                if (field.type < 0 || field.type >= (int)m.types.size())
+                    Fail("GIR-V010", cat("struct ", s, " field ", f, " has a type outside the type table"));
+                if ((uint8_t)field.binding > (uint8_t)CoreVarKind::Var ||
+                    (uint8_t)field.contents > (uint8_t)CoreMut::Const)
+                    Fail("GIR-V010", cat("struct ", s, " field ", f, " has an unknown permission"));
+                if (field.type >= typeForStruct[s])
+                    Fail("GIR-V010", cat("struct ", s, " field ", f, " does not precede its containing type"));
+                if (!GirFlat(m, field.type))
+                    Fail("GIR-V010", cat("struct ", s, " field ", f, " is not flat and fixed"));
+                auto bytes = FlatSize(field.type);
+                if (bytes <= 0 || field.offset < end || field.offset < 0 ||
+                    field.offset > st.size || bytes > st.size - field.offset)
+                    Fail("GIR-V010", cat("struct ", s, " field ", f, " has an invalid byte extent"));
+                end = field.offset + bytes;
+            }
+        }
+    }
+
+    int64_t FlatSize(GirTypeId t) const {
+        if (t < 0 || t >= (int)m.types.size()) return 0;
+        auto &ty = m.Type(t);
+        switch (ty.kind) {
+            case CoreType::Int: return CoreIntBits(ty.ity) / 8;
+            case CoreType::Bool: return 1;
+            case CoreType::Arr: {
+                if (ty.count <= 0 || ty.elem < 0 || ty.elem >= (int)m.types.size()) return 0;
+                auto element = FlatSize(ty.elem);
+                if (element <= 0 || ty.count > INT64_MAX / element) return 0;
+                return ty.count * element;
+            }
+            case CoreType::Struct:
+                return ty.structid >= 0 && ty.structid < (int)m.structs.size() ? m.structs[ty.structid].size : 0;
+            default: return 0;
+        }
     }
 
     static bool ScopeWithin(const vector<int> &parents, int inner, int outer) {
@@ -909,6 +989,10 @@ private:
 
     void CheckStorage(const Fn &fn) {
         auto &f = *fn.f;
+        vector<const GirInst *> defs(fn.nvalues, nullptr);
+        for (auto &b : f.blocks)
+            for (auto &i : b.insts)
+                if (GirDefinesValue(i) && i.res >= 0 && i.res < fn.nvalues) defs[i.res] = &i;
         auto refof = [&](int v, CoreMut &mut, GirTypeId &pointee) {
             if (v < 0 || v >= (int)fn.vt.size() || fn.vt[v] < 0) return false;
             auto &t = m.Type(fn.vt[v]);
@@ -916,6 +1000,31 @@ private:
             mut = t.mut;
             pointee = t.elem;
             return true;
+        };
+        function<bool(int, vector<char> &)> contentsMutable = [&](int v, vector<char> &open) {
+            if (v < 0 || v >= fn.nvalues || fn.vt[v] < 0 || open[v]) return false;
+            open[v] = 1;
+            auto close = [&](bool result) { open[v] = 0; return result; };
+            auto *def = defs[v];
+            if (def && (def->op == GirOp::Slot || def->op == GirOp::Global)) {
+                auto pointee = m.Type(fn.vt[v]).elem;
+                return close(m.Type(pointee).kind == CoreType::Struct);
+            }
+            if (def && def->op == GirOp::Freeze) return close(false);
+            if (def && def->op == GirOp::Field) {
+                auto base = fn.vt[def->a];
+                if (base < 0 || m.Type(base).kind != CoreType::Ref) return close(false);
+                auto owner = m.Type(base).elem;
+                if (m.Type(owner).kind != CoreType::Struct) return close(false);
+                auto sid = m.Type(owner).structid;
+                if (sid < 0 || sid >= (int)m.structs.size()) return close(false);
+                auto &fields = m.structs[sid].fields;
+                if (def->idx < 0 || def->idx >= (int)fields.size()) return close(false);
+                return close(contentsMutable(def->a, open) && fields[def->idx].contents == CoreMut::Mut);
+            }
+            CoreMut mut;
+            GirTypeId pointee;
+            return close(refof(v, mut, pointee) && mut == CoreMut::Mut);
         };
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
@@ -928,6 +1037,12 @@ private:
                     if (refof(i.a, mut, pt)) {
                         if (mut != CoreMut::Mut)
                             Fail("GIR-V030", cat(fn.label, ": a store through a read-only reference"));
+                        auto *def = i.a >= 0 && i.a < fn.nvalues ? defs[i.a] : nullptr;
+                        if (def && def->op == GirOp::Field) {
+                            vector<char> open(fn.nvalues, 0);
+                            if (!contentsMutable(def->a, open))
+                                Fail("GIR-V030", cat(fn.label, ": a field store through a value without mutable contents"));
+                        }
                         if (!GirReadable(m, pt))
                             Fail("GIR-V030", cat(fn.label, ": a store of a value that cannot be copied"));
                     }

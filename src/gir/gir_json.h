@@ -15,6 +15,8 @@ public:
     explicit GirWriter(const GirModule &module) : m(module) {}
 
     string Write() {
+        typenum.clear();
+        typeorder.clear();
         string objs = "[";
         for (size_t i = 0; i < m.globals.size(); i++) {
             if (i) objs += ',';
@@ -26,7 +28,10 @@ public:
             Func(objs, m.funcs[i]);
         }
         objs += ']';
-        string out = cat("[\"module\",\"", GIR_SCHEMA, "\",\"", CORE_PROFILE, "\",[");
+        if (m.profile == CoreProfile::Shrink)
+            for (size_t i = 0; i < m.types.size(); i++)
+                if (m.types[i].kind == CoreType::Struct) T((int)i);
+        string out = cat("[\"module\",\"", GIR_SCHEMA, "\",\"", CoreProfileName(m.profile), "\",[");
         for (size_t i = 0; i < m.files.size(); i++) {
             if (i) out += ',';
             out += "[\"file\",";
@@ -38,7 +43,16 @@ public:
             if (i) out += ',';
             TypeRecord(out, m.types[typeorder[i]]);
         }
-        out += "],";
+        out += ']';
+        if (m.profile == CoreProfile::Shrink) {
+            out += ",[";
+            for (size_t i = 0; i < m.structs.size(); i++) {
+                if (i) out += ',';
+                StructRecord(out, m.structs[i]);
+            }
+            out += ']';
+        }
+        out += ',';
         out += objs;
         Append(out, ",", m.entry, ",[");
         for (size_t i = 0; i < m.origins.size(); i++) {
@@ -52,6 +66,8 @@ public:
 
     // The low stage (schema gir-l/0.2): the same style, written but not read.
     string WriteLow() {
+        typenum.clear();
+        typeorder.clear();
         string objs = "[";
         for (size_t i = 0; i < m.lowglobals.size(); i++) {
             if (i) objs += ',';
@@ -68,7 +84,7 @@ public:
             LowFunc(objs, m.funcs[i]);
         }
         objs += ']';
-        string out = "[\"module\",\"gir-l/0.2\",\"core-pilot\",[";
+        string out = cat("[\"module\",\"gir-l/0.2\",\"", CoreProfileName(m.profile), "\",[");
         for (size_t i = 0; i < m.files.size(); i++) {
             if (i) out += ',';
             out += "[\"file\",";
@@ -102,7 +118,11 @@ private:
     int T(GirTypeId id) {
         if (auto it = typenum.find(id); it != typenum.end()) return it->second;
         auto &t = m.types[id];
-        if (t.elem >= 0) T(t.elem);
+        if (t.kind == CoreType::Struct) {
+            for (auto &field : m.structs[t.structid].fields) T(field.type);
+        } else if (t.elem >= 0) {
+            T(t.elem);
+        }
         auto n = (int)typeorder.size();
         typenum[id] = n;
         typeorder.push_back(id);
@@ -141,7 +161,20 @@ private:
                 Append(out, "[\"view\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
                 break;
             case CoreType::Ptr: out += "[\"ptr\"]"; break;
+            case CoreType::Struct: Append(out, "[\"struct\",", t.structid, "]"); break;
         }
+    }
+
+    void StructRecord(string &out, const CoreStruct &s) {
+        Append(out, "[\"struct_def\",", s.size, ",[" );
+        for (size_t i = 0; i < s.fields.size(); i++) {
+            if (i) out += ',';
+            auto &field = s.fields[i];
+            Append(out, "[\"field\",", typenum.at(field.type), ",\"",
+                   field.binding == CoreVarKind::Var ? "var" : "let", "\",\"",
+                   CoreMutName(field.contents), "\",", field.offset, "]");
+        }
+        out += "]]";
     }
 
     static void Ints(string &out, const vector<int> &v) {
@@ -494,6 +527,13 @@ private:
                 out += ']';
                 return;
             case GirOp::Fill: def("i_fill"); Append(out, ",", T(i.ty), ",", i.a, "]"); return;
+            case GirOp::Struct:
+                def("i_struct");
+                Append(out, ",", T(i.ty), ",");
+                Ints(out, i.vals);
+                out += ']';
+                return;
+            case GirOp::Field: def("i_field"); Append(out, ",", i.a, ",", i.idx, "]"); return;
             case GirOp::Init:
                 Append(out, "[\"x_init\",", i.idx, ",", i.a, ",");
                 OptOrg(out, i.org);

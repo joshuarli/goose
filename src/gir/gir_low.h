@@ -47,6 +47,7 @@ public:
 
     GirModule Lower() {
         l.low = true;
+        l.profile = h.profile;
         l.files = h.files;
         l.diagfiles = h.diagfiles;
         l.filemodules = h.filemodules;
@@ -93,6 +94,7 @@ private:
             case CoreType::Int: return { l.IntType(c.ity) };
             case CoreType::Bool: return { l.BoolType() };
             case CoreType::Arr: return { Ptr() };
+            case CoreType::Struct: return { Ptr() };
             case CoreType::Ref: {
                 auto k = HT(c.elem).kind;
                 if (k == CoreType::Grow) return { Ptr(), Ptr() };
@@ -112,8 +114,16 @@ private:
             case CoreType::Bool: return 1;
             case CoreType::Arr: return c.count * Size(c.elem);
             case CoreType::Slice: return 16;
+            case CoreType::Struct: return h.structs.at(c.structid).size;
             default: return 8;
         }
+    }
+
+    int64_t LowScalarSize(GirTypeId t) const {
+        auto &c = l.Type(t);
+        if (c.kind == CoreType::Int) return CoreIntBits(c.ity) / 8;
+        if (c.kind == CoreType::Bool) return 1;
+        throw CompileError { "internal compiler error: byte access requires a scalar type" };
     }
 
     Sig Signature(const GirFunc &f) {
@@ -121,10 +131,12 @@ private:
         s.params.push_back(I64());   // The base of the data stacks.
         if (f.results.size() == 1) {
             auto w = Words(f.results[0]);
-            auto arr = HT(f.results[0]).kind == CoreType::Arr;
-            if (arr || w.size() > 1) {
+            auto kind = HT(f.results[0]).kind;
+            auto arr = kind == CoreType::Arr;
+            auto aggregate = arr || kind == CoreType::Struct;
+            if (aggregate || w.size() > 1) {
                 s.out = true;
-                s.outsize = arr ? Size(f.results[0]) : 8 * (int64_t)w.size();
+                s.outsize = aggregate ? Size(f.results[0]) : 8 * (int64_t)w.size();
                 s.params.push_back(Ptr());
             } else if (w.size() == 1) s.results = w;
         }
@@ -139,7 +151,7 @@ private:
         out.module = g.module;
         auto k = HT(g.ty).kind;
         out.ty = -1;
-        if (k == CoreType::Arr) {
+        if (k == CoreType::Arr || k == CoreType::Struct) {
             out.kind = GirMember::Bytes;
             out.size = Size(g.ty);
             gstack.push_back(-1);
@@ -160,6 +172,7 @@ private:
     struct Shape {
         vector<int> w;              // The low values.
         int slot = -1;              // A reference to a slot that holds a reference or slice.
+        bool unaligned = false;     // An address inside a packed struct may lack scalar alignment.
         bool lit = false;           // A grow-only array literal, not yet in storage.
         vector<int> elems;          // Its high element values.
     };
@@ -389,7 +402,7 @@ private:
             auto &c = HT(sl.ty);
             auto &p = places[s];
             auto name = cat("s", s);
-            if (c.kind == CoreType::Arr) {
+            if (c.kind == CoreType::Arr || c.kind == CoreType::Struct) {
                 p.kind = Place::Bytes;
                 GirMember m;
                 m.kind = GirMember::Bytes;
@@ -497,6 +510,15 @@ private:
         reverse(order.begin(), order.end());
         for (auto b : order) {
             cur = bmap[b];
+            if (b == 0 && global < 0) {
+                for (auto &p : f.blocks[0].params) {
+                    if (HT(p.second).kind != CoreType::Struct) continue;
+                    auto copy = FrameTemp(Size(p.second));
+                    auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, copy);
+                    Copy(dst, shape[p.first].w[0], Size(p.second));
+                    shape[p.first].w[0] = dst;
+                }
+            }
             for (auto &i : f.blocks[b].insts) Lower(i);
         }
         lf.slots.clear();
@@ -606,6 +628,15 @@ private:
                 Define(i, { PtrAt(shape[i.a].w[0], idx, esz) });
                 return;
             }
+            case GirOp::Field: {
+                auto ref = hvt[i.a];
+                auto owner = HT(ref).elem;
+                auto sid = HT(owner).structid;
+                auto offset = h.structs.at(sid).fields.at(i.idx).offset;
+                Define(i, { PtrAt(shape[i.a].w[0], ConstI(I64(), offset), 1) });
+                shape[i.res].unaligned = true;
+                return;
+            }
             case GirOp::Freeze: shape[i.res] = shape[i.a]; return;
             case GirOp::Load: return LowerLoad(i);
             case GirOp::Snap: return LowerSnap(i);
@@ -622,6 +653,7 @@ private:
             case GirOp::Push: return LowerPush(i);
             case GirOp::Call: return LowerCall(i);
             case GirOp::Arr: return LowerArr(i);
+            case GirOp::Struct: return LowerStruct(i);
             case GirOp::Fill: return LowerFill(i);
             case GirOp::Init: return LowerInit(i);
             case GirOp::Store: return LowerStore(i);
@@ -711,7 +743,7 @@ private:
             return;
         }
         auto &c = HT(t);
-        if (c.kind == CoreType::Arr) {
+        if (c.kind == CoreType::Arr || c.kind == CoreType::Struct) {
             auto tmp = FrameTemp(Size(t));
             auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, tmp);
             Copy(dst, rs.w[0], Size(t));
@@ -723,6 +755,10 @@ private:
             return;
         }
         auto lt = Words(t)[0];
+        if (rs.unaligned) {
+            Define(i, { LoadScalarBytes(lt, rs.w[0]) });
+            return;
+        }
         Define(i, { PLoadV(lt, rs.w[0]) });
     }
 
@@ -770,7 +806,32 @@ private:
             PStoreV(Ptr(), p, w[0]);
             PStoreV(I64(), WordAt(p, 1), w[1]);
         }
+        else if (c.kind == CoreType::Struct) Copy(p, w[0], Size(t));
         else PStoreV(Words(t)[0], p, w[0]);
+    }
+
+    int LoadScalarBytes(GirTypeId ty, int src) {
+        GirMember member;
+        member.kind = GirMember::Scalar;
+        member.ty = ty;
+        member.scope = 0;
+        member.name = "field_load";
+        auto index = Member(std::move(member));
+        auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, index);
+        Copy(dst, src, LowScalarSize(ty));
+        return Simple(GirOp::LocalGet, ty, -1, -1, index);
+    }
+
+    void StoreScalarBytes(GirTypeId ty, int dst, int value) {
+        GirMember member;
+        member.kind = GirMember::Scalar;
+        member.ty = ty;
+        member.scope = 0;
+        member.name = "field_store";
+        auto index = Member(std::move(member));
+        SimpleE(GirOp::LocalSet, value, -1, index);
+        auto src = Simple(GirOp::FrameAddr, Ptr(), -1, -1, index);
+        Copy(dst, src, LowScalarSize(ty));
     }
 
     void LowerPush(const GirInst &i) {
@@ -822,6 +883,22 @@ private:
         Define(i, { dst });
     }
 
+    void LowerStruct(const GirInst &i) {
+        auto &record = h.structs.at(HT(i.ty).structid);
+        auto tmp = FrameTemp(Size(i.ty));
+        auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, tmp);
+        for (size_t k = 0; k < i.vals.size(); k++) {
+            auto &field = record.fields[k];
+            auto at = PtrAt(dst, ConstI(I64(), field.offset), 1);
+            auto &fieldty = HT(field.type);
+            if (fieldty.kind == CoreType::Arr || fieldty.kind == CoreType::Struct)
+                StoreAt(field.type, at, shape[i.vals[k]].w);
+            else
+                StoreScalarBytes(Words(field.type)[0], at, shape[i.vals[k]].w[0]);
+        }
+        Define(i, { dst });
+    }
+
     void LowerFill(const GirInst &i) {
         auto &c = HT(i.ty);
         auto esz = Size(c.elem);
@@ -829,7 +906,7 @@ private:
         auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, tmp);
         int src;
         auto &w = shape[i.a].w;
-        if (HT(c.elem).kind == CoreType::Arr) src = w[0];
+        if (HT(c.elem).kind == CoreType::Arr || HT(c.elem).kind == CoreType::Struct) src = w[0];
         else {
             auto one = FrameTemp(esz);
             src = Simple(GirOp::FrameAddr, Ptr(), -1, -1, one);
@@ -893,7 +970,10 @@ private:
                 SimpleE(GirOp::LocalSet, v.w[k], -1, p.members[k]);
             return;
         }
-        StoreAt(hvt[i.b], rs.w[0], v.w);
+        auto &stored = HT(hvt[i.b]);
+        if (rs.unaligned && stored.kind != CoreType::Arr && stored.kind != CoreType::Struct)
+            StoreScalarBytes(Words(hvt[i.b])[0], rs.w[0], v.w[0]);
+        else StoreAt(hvt[i.b], rs.w[0], v.w);
     }
 
     void LowerEnter(const GirInst &i) {
@@ -951,7 +1031,7 @@ private:
         }
         if (!s.out) { Define(i, {}); return; }
         auto rt = g.results[0];
-        if (HT(rt).kind == CoreType::Arr) { Define(i, { tmpaddr }); return; }
+        if (HT(rt).kind == CoreType::Arr || HT(rt).kind == CoreType::Struct) { Define(i, { tmpaddr }); return; }
         vector<int> ws;
         auto words = Words(rt);
         for (size_t k = 0; k < words.size(); k++) ws.push_back(PLoadV(words[k], WordAt(tmpaddr, (int)k)));
@@ -964,7 +1044,7 @@ private:
             auto &v = shape[i.vals[0]];
             if (sig->out) {
                 auto rt = hf->results[0];
-                if (HT(rt).kind == CoreType::Arr) Copy(outval, v.w[0], Size(rt));
+                if (HT(rt).kind == CoreType::Arr || HT(rt).kind == CoreType::Struct) Copy(outval, v.w[0], Size(rt));
                 else {
                     auto words = Words(rt);
                     for (size_t k = 0; k < words.size(); k++) PStoreV(words[k], WordAt(outval, (int)k), v.w[k]);

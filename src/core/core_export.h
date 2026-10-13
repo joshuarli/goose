@@ -91,6 +91,7 @@ private:
     unordered_map<const VarDef *, int> globalindex;
     unordered_map<const VarDef *, CoreUnsupported> skipped;   // Library globals left out, and why.
     unordered_map<int, int> filemap;            // AST file index -> module file index
+    unordered_map<const StructInst *, int> structid;
 
     vector<FnSpec *> ctxspecs;
     unordered_map<const FnSpec *, int> ctxof;
@@ -239,10 +240,53 @@ private:
         switch (mod.Type(id).kind) {
             case CoreType::Int: case CoreType::Bool: case CoreType::Arr: return id;
             case CoreType::Ref: case CoreType::Slice: Fail("stored-reference");
+            case CoreType::Struct: Fail("struct");
             default: Fail("variable-element");
         }
     }
 
+    int64_t FlatFieldSize(TypeExpr *t) {
+        if (t->kind == TY_INT) {
+            if (t->intstorage == IS_VARINT) Fail("varint");
+            return IntBits(t->intstorage) / 8;
+        }
+        if (t->kind == TY_BOOL) return 1;
+        Fail("struct");
+    }
+
+    int StructIdFor(TypeExpr *t) {
+        if (t->cq) Fail("struct-whole-const", t->line);
+        auto inst = t->struc->inst;
+        if (!inst || !inst->validated || !inst->flat || inst->sclass != SC_FIXED)
+            Fail("struct", t->line);
+        if (auto it = structid.find(inst); it != structid.end()) return it->second;
+
+        auto id = (int)mod.structs.size();
+        structid.emplace(inst, id);
+        mod.profile = CoreProfile::Shrink;
+        mod.structs.emplace_back();
+        if (!inst->st || inst->ftypes.size() != inst->st->fields.size()) Fail("struct", t->line);
+
+        auto layout = PackedFieldLayout(inst->st->fields, inst->ftypes,
+                                        [&](TypeExpr *field) { return FlatFieldSize(field); },
+                                        [&](TypeExpr *field) { return PackedPadAlign(field); });
+        if (layout.size <= 0) Fail("zero-size-value", t->line);
+        CoreStruct descriptor;
+        descriptor.size = layout.size;
+        for (size_t i = 0; i < inst->st->fields.size(); i++) {
+            auto &field = inst->st->fields[i];
+            if (field.ispad) continue;
+            auto *fieldtype = inst->ftypes[i];
+            if (!fieldtype || (fieldtype->kind != TY_INT && fieldtype->kind != TY_BOOL)) Fail("struct", t->line);
+            descriptor.fields.push_back({ Ty(fieldtype),
+                                          field.isconst ? CoreVarKind::Let : CoreVarKind::Var,
+                                          MutOf(fieldtype), layout.offs[i] });
+        }
+        mod.structs[id] = std::move(descriptor);
+        return id;
+    }
+
+    bool sliceref = false;   // A reference to a slice is being typed as a parameter's.
     CoreTypeId ReportTypeFallback(TypeExpr *t) {
         if (t && t->kind == TY_BOOL) return mod.BoolType();
         if (t && t->kind == TY_VOID) return mod.UnitType();
@@ -279,7 +323,10 @@ private:
             case TY_BOOL: ct.kind = CoreType::Bool; break;
             case TY_VOID: ct.kind = CoreType::Unit; break;
             case TY_FLT: Fail("float");
-            case TY_STRUCT: Fail("struct");
+            case TY_STRUCT:
+                ct.kind = CoreType::Struct;
+                ct.structid = StructIdFor(t);
+                break;
             case TY_ENUM: case TY_VARIANT: Fail("adt");
             case TY_FN: Fail("function-value");
             case TY_ARRAY: {
@@ -1063,7 +1110,29 @@ private:
             p->org = Org(ix->line, CoreOriginKind::Index);
             return p;
         }
-        if (n->nkind == NK_Dot) Fail("struct");
+        if (auto dot = Is<Dot>(n)) {
+            if (!dot->IsField() || dot->fieldidx < 0) Fail("struct");
+            auto *owner = dot->obj->exprtype;
+            if (!owner) Fail("struct");
+            owner = Pointee(owner);
+            if (owner->kind != TY_STRUCT) Fail("struct");
+            if (dot->obj->exprtype->kind != TY_REF && !Is<Ident>(dot->obj) &&
+                !Is<Index>(dot->obj) && !Is<Dot>(dot->obj))
+                Fail("struct-temporary-projection", dot->line);
+
+            auto inst = owner->struc->inst;
+            if (!inst || !inst->st || dot->fieldidx >= (int)inst->st->fields.size()) Fail("struct");
+            auto real = 0;
+            for (auto i = 0; i < dot->fieldidx; i++)
+                if (!inst->st->fields[i].ispad) real++;
+            if (inst->st->fields[dot->fieldidx].ispad) Fail("struct");
+            (void)StructIdFor(owner);
+            auto p = make_unique<CorePlace>();
+            p->kind = CorePlace::Field;
+            p->index = real;
+            p->base = ToPlace(dot->obj, true);
+            return p;
+        }
         if (n->exprtype && n->exprtype->kind == TY_REF) return DerefOf(Value(n));
         Fail("temporary-place");
     }
@@ -1276,7 +1345,7 @@ private:
                 e->then = BlockOf(b, b->exprtype && b->exprtype->kind != TY_VOID);
                 return e;
             }
-            case NK_StructLit: Fail("struct");
+            case NK_StructLit: return StructValue((StructLit *)n);
             case NK_NullLit: Fail("optional");
             case NK_MatchExpr: Fail("match");
             case NK_LoopExpr: Fail("loop-expression");
@@ -1456,7 +1525,22 @@ private:
             return e;
         }
         if (d->member >= 0) Fail("builtin-property");
-        Fail("struct");
+        if (!d->IsField()) Fail("struct");
+        return ReadOf(ToPlace(d, true), Ty(d->exprtype));
+    }
+
+    CoreExprP StructValue(StructLit *literal) {
+        auto inst = literal->sinst;
+        if (!inst || !inst->st || literal->einst || literal->variant) Fail("struct");
+        auto type = Ty(literal->type);
+        auto e = NewExpr(CoreExprKind::Struct, type);
+        for (size_t i = 0; i < inst->st->fields.size(); i++) {
+            if (inst->st->fields[i].ispad) continue;
+            auto init = literal->InitFor((int)i);
+            if (!init) Fail("struct");
+            e->elems.push_back(Value(init));
+        }
+        return e;
     }
 
     CoreExprP SliceValue(SliceExpr *s) {
@@ -1683,6 +1767,7 @@ private:
             case CorePlace::Global: return { CoreRootRef { CoreRootRef::Global, p.index } };
             case CorePlace::Deref: return ExprRoots(*p.expr, k);
             case CorePlace::Elem: return ViewRoots(*p.view, k);
+            case CorePlace::Field: return PlaceRoots(*p.base, k);
         }
         return {};
     }

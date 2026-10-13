@@ -31,11 +31,30 @@ struct GirTyResult {
 inline GirTyResult GirTyOk(GirTypeId t) { return { t, {} }; }
 inline GirTyResult GirTyErr(string msg) { return { -1, std::move(msg) }; }
 
-// Flat fixed: integers, booleans and fixed arrays of those.
-inline bool GirFlat(const GirModule &m, GirTypeId t) {
+// Flat fixed: integers, booleans, fixed arrays and nominal structs of them.
+inline bool GirFlat(const GirModule &m, GirTypeId t, vector<char> &open) {
+    if (t < 0 || t >= (int)m.types.size() || open[t]) return false;
     auto &c = m.Type(t);
     if (c.kind == CoreType::Int || c.kind == CoreType::Bool) return true;
-    return c.kind == CoreType::Arr && GirFlat(m, c.elem);
+    if (c.kind != CoreType::Arr && c.kind != CoreType::Struct) return false;
+    open[t] = 1;
+    bool flat;
+    if (c.kind == CoreType::Arr) {
+        flat = GirFlat(m, c.elem, open);
+    } else if (c.structid < 0 || c.structid >= (int)m.structs.size()) {
+        flat = false;
+    } else {
+        flat = true;
+        for (auto &field : m.structs[c.structid].fields)
+            flat = GirFlat(m, field.type, open) && flat;
+    }
+    open[t] = 0;
+    return flat;
+}
+
+inline bool GirFlat(const GirModule &m, GirTypeId t) {
+    vector<char> open(m.types.size(), 0);
+    return GirFlat(m, t, open);
 }
 
 // What a reference may point to.
@@ -43,7 +62,8 @@ inline bool GirRefTarget(const GirModule &m, GirTypeId t) {
     auto &c = m.Type(t);
     if (c.kind == CoreType::Int || c.kind == CoreType::Bool) return true;
     if (c.kind == CoreType::Slice) return GirFlat(m, c.elem);
-    return (c.kind == CoreType::Arr || c.kind == CoreType::Grow) && GirFlat(m, c.elem);
+    if (c.kind == CoreType::Arr || c.kind == CoreType::Grow) return GirFlat(m, c.elem);
+    return c.kind == CoreType::Struct && GirFlat(m, t);
 }
 
 // Types a variable, parameter or global may have.
@@ -52,6 +72,7 @@ inline bool GirStorable(const GirModule &m, GirTypeId t) {
     switch (c.kind) {
         case CoreType::Int: case CoreType::Bool: return true;
         case CoreType::Arr: case CoreType::Grow: return GirFlat(m, c.elem);
+        case CoreType::Struct: return GirFlat(m, t);
         case CoreType::Ref:
             // Reference-to-slice is a parameter-only type, not a general slot type.
             return m.Type(c.elem).kind != CoreType::Slice && GirRefTarget(m, c.elem);
@@ -307,6 +328,37 @@ public:
                 if (!e.ok()) return e;
                 if (e.ty != t.elem) return GirTyErr("fill value of another type than the elements");
                 return GirTyOk(i.ty);
+            }
+            case GirOp::Struct: {
+                if (m.Type(i.ty).kind != CoreType::Struct)
+                    return GirTyErr("record constructor of a type that is not a struct");
+                auto sid = m.Type(i.ty).structid;
+                if (sid < 0 || sid >= (int)m.structs.size())
+                    return GirTyErr("record constructor with an unknown nominal struct id");
+                auto &fields = m.structs[sid].fields;
+                if (fields.size() != i.vals.size())
+                    return GirTyErr(cat("record constructor of ", i.vals.size(), " fields for a type with ",
+                                        fields.size()));
+                for (size_t k = 0; k < fields.size(); k++) {
+                    auto v = Data(i.vals[k]);
+                    if (!v.ok()) return v;
+                    if (v.ty != fields[k].type)
+                        return GirTyErr(cat("record field ", k, " has another type than its declaration"));
+                }
+                return GirTyOk(i.ty);
+            }
+            case GirOp::Field: {
+                auto r = Ref(i.a);
+                if (!r.ok()) return r;
+                auto &owner = m.Type(m.Type(r.ty).elem);
+                if (owner.kind != CoreType::Struct || owner.structid < 0 ||
+                    owner.structid >= (int)m.structs.size())
+                    return GirTyErr("field address through a reference that does not point at a struct");
+                auto &fields = m.structs[owner.structid].fields;
+                if (i.idx < 0 || i.idx >= (int)fields.size())
+                    return GirTyErr(cat("field ", i.idx, " outside the struct's field table"));
+                auto mut = fields[i.idx].binding == CoreVarKind::Var ? CoreMut::Mut : CoreMut::Const;
+                return GirTyOk(m.RefType(mut, fields[i.idx].type));
             }
             // The low stage: scalars and addresses.
             case GirOp::PtrOffset: {
