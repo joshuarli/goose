@@ -1290,7 +1290,7 @@ private:
                 } else if (i.op == GirOp::Push || i.op == GirOp::Append || i.op == GirOp::Pop ||
                            i.op == GirOp::PopN || i.op == GirOp::Resize || i.op == GirOp::Clear ||
                            i.op == GirOp::Replace) {
-                    if (refof(i.a, mut, pt) && mut != CoreMut::Mut)
+                    if (i.op == GirOp::Replace && refof(i.a, mut, pt) && mut != CoreMut::Mut)
                         Fail("GIR-V030", cat(fn.label, ": owner mutation through a read-only reference"));
                     vector<char> open(fn.nvalues, 0);
                     if (!contentsMutable(i.a, open))
@@ -1711,6 +1711,7 @@ private:
                         auto roots = RootsAt(p.vals, i.a);
                         AddTargets(e.grows, roots);
                         if (m.profile == CoreProfile::Shrink) AddTargets(e.writes, roots);
+                        AddTargets(e.reads, RootsAt(p.vals, i.b));
                         auto &ref = m.Type(fn.vt[i.a]);
                         if (m.Type(ref.elem).kind == CoreType::Limited) e.aborts = true;
                         break;
