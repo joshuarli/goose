@@ -232,6 +232,159 @@ theorem append_flatStep_owner (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat
     exact append_flatStep_limited _ _ _ _ _ _ _ hE hl hvs h
   | _ => simp [Ty.ownerElem?] at howner
 
+private theorem append_total_growshrink (s : Store) (l : Loc) (vs : Array Val) (E : Ty)
+    (hl : LocTy s l (.growshrink E)) : ∃ s' n, s.append l vs = .ok (s', n) := by
+  have hgrow : LocTy s l (.grow E) := by
+    rcases hl with ⟨v, hread, hflat⟩
+    cases v with
+    | resizable E' es => exact ⟨_, hread, hflat⟩
+    | _ => simp [FlatTy] at hflat
+  exact append_total s l vs E hgrow
+
+private theorem append_total_limited (s : Store) (l : Loc) (vs : Array Val) (E : Ty)
+    (capacity : Nat) (slots : Array Val) (len : Nat)
+    (hread : s.read l = .ok (.limited E capacity slots len)) (hlen : len ≤ slots.size)
+    (hcapacity : len + vs.size ≤ capacity) : ∃ s' n, s.append l vs = .ok (s', n) := by
+  let appended : Val := .limited E capacity (limitedAppendSlots slots vs len) (len + vs.size)
+  have happended : Val.appendAll vs (.limited E capacity slots len) = some appended := by
+    simpa [appended] using appendAll_limited_shape E capacity slots vs len hlen hcapacity
+  obtain ⟨s', hmodify⟩ := modify_total s l (Val.appendAll vs)
+    (.limited E capacity slots len) appended hread happended
+  have hlength : s.length l = .ok len := by simp [Store.length, hread]
+  exact ⟨s', len, by simp [Store.append, hlength, hmodify]⟩
+
+private theorem checkAppendCapacity_resizable (l : Loc) (count : Nat) (org : OriginId)
+    (s : St) (E : Ty) (es : Array Val)
+    (hread : s.store.read l = .ok (.resizable E es)) :
+    checkAppendCapacity l count org s = .ok () s := by
+  change M.bind' (readLoc l) (fun v => match v with
+    | .limited _ capacity _ len =>
+      if capacity < len + count then abortAt .capacity org else pure ()
+    | .resizable .. => pure ()
+    | _ => fault .shape) s = .ok () s
+  simp [M.bind', readLoc, hread]
+  rfl
+
+private theorem checkAppendCapacity_limited_fits (l : Loc) (count : Nat) (org : OriginId)
+    (s : St) (E : Ty) (capacity : Nat) (slots : Array Val) (len : Nat)
+    (hread : s.store.read l = .ok (.limited E capacity slots len))
+    (hfits : len + count ≤ capacity) :
+    checkAppendCapacity l count org s = .ok () s := by
+  change M.bind' (readLoc l) (fun v => match v with
+    | .limited _ cap _ n =>
+      if cap < n + count then abortAt .capacity org else pure ()
+    | .resizable .. => pure ()
+    | _ => fault .shape) s = .ok () s
+  simp [M.bind', readLoc, hread, Nat.not_lt_of_ge hfits]
+  rfl
+
+private theorem checkAppendCapacity_limited_overflow (l : Loc) (count : Nat) (org : OriginId)
+    (s : St) (E : Ty) (capacity : Nat) (slots : Array Val) (len : Nat)
+    (hread : s.store.read l = .ok (.limited E capacity slots len))
+    (hoverflow : capacity < len + count) :
+    checkAppendCapacity l count org s = .stop (.abort .capacity org) s := by
+  change M.bind' (readLoc l) (fun v => match v with
+    | .limited _ cap _ n =>
+      if cap < n + count then abortAt .capacity org else pure ()
+    | .resizable .. => pure ()
+    | _ => fault .shape) s = .stop (.abort .capacity org) s
+  simp [M.bind', readLoc, hread, hoverflow, abortAt]
+  rfl
+
+/-- A checked append either aborts at a limited owner's capacity or appends a
+flat run. On success, the callback receives the concrete append step, which
+preserves the typed store invariant for every owner kind. -/
+theorem sat_checkedAppendLoc_bind {l : Loc} {vs : Array Val} {owner E : Ty} {org : OriginId}
+    {s : St} {α : Type} {f : Nat → M α} {Q : α → St → Prop}
+    (hl : LocTy s.store l owner) (howner : owner.ownerElem? = some E) (hE : E.flat = true)
+    (hvs : ∀ (i : Nat) (e : Val), vs[i]? = some e → FlatTy E e)
+    (k : ∀ s' i, s.store.append l vs = .ok (s', i) → FlatStep s.store s' →
+      Sat (f i) { s with store := s' } Q) :
+    Sat (checkedAppendLoc l vs org >>= f) s Q := by
+  cases owner with
+  | grow E' =>
+    have hE' : E' = E := by simpa [Ty.ownerElem?] using howner
+    subst E
+    have hloc := hl
+    rcases hl with ⟨v, hread, hflat⟩
+    cases v with
+    | resizable E'' es =>
+      simp only [FlatTy] at hflat
+      obtain ⟨rfl, hitems⟩ := hflat
+      have hgrow : LocTy s.store l (.grow E') := ⟨_, hread, ⟨rfl, hitems⟩⟩
+      obtain ⟨s', i, happ⟩ := append_total s.store l vs E' hgrow
+      have hstep := append_flatStep_owner s.store s' l vs i (.grow E') E'
+        (by simp [Ty.ownerElem?]) hE hloc hvs happ
+      have hcheck := checkAppendCapacity_resizable l vs.size org s E' es hread
+      have happend : appendLoc l vs s = .ok i { s with store := s' } := by
+        simp [appendLoc, happ]
+      have hrun : (checkedAppendLoc l vs org >>= f) s = f i { s with store := s' } := by
+        change M.bind' (M.bind' (checkAppendCapacity l vs.size org)
+          (fun _ => appendLoc l vs)) f s = _
+        simp only [M.bind', hcheck, happend]
+      unfold Sat
+      rw [hrun]
+      exact k s' i happ hstep
+    | _ => simp [FlatTy] at hflat
+  | growshrink E' =>
+    have hE' : E' = E := by simpa [Ty.ownerElem?] using howner
+    subst E
+    have hloc := hl
+    rcases hl with ⟨v, hread, hflat⟩
+    cases v with
+    | resizable E'' es =>
+      simp only [FlatTy] at hflat
+      obtain ⟨rfl, hitems⟩ := hflat
+      obtain ⟨s', i, happ⟩ := append_total_growshrink s.store l vs E' hloc
+      have hstep := append_flatStep_owner s.store s' l vs i (.growshrink E') E'
+        (by simp [Ty.ownerElem?]) hE hloc hvs happ
+      have hcheck := checkAppendCapacity_resizable l vs.size org s E' es hread
+      have happend : appendLoc l vs s = .ok i { s with store := s' } := by
+        simp [appendLoc, happ]
+      have hrun : (checkedAppendLoc l vs org >>= f) s = f i { s with store := s' } := by
+        change M.bind' (M.bind' (checkAppendCapacity l vs.size org)
+          (fun _ => appendLoc l vs)) f s = _
+        simp only [M.bind', hcheck, happend]
+      unfold Sat
+      rw [hrun]
+      exact k s' i happ hstep
+    | _ => simp [FlatTy] at hflat
+  | limited E' capacity =>
+    have hE' : E' = E := by simpa [Ty.ownerElem?] using howner
+    subst E
+    have hloc := hl
+    rcases hl with ⟨v, hread, hflat⟩
+    cases v with
+    | limited E'' capacity' slots len =>
+      simp only [FlatTy] at hflat
+      obtain ⟨rfl, rfl, hlenCap, hlenSlots, hslots⟩ := hflat
+      by_cases hcapacity : len + vs.size ≤ capacity
+      · obtain ⟨s', i, happ⟩ := append_total_limited s.store l vs E' capacity
+          slots len hread hlenSlots hcapacity
+        have hstep := append_flatStep_owner s.store s' l vs i (.limited E' capacity) E'
+          (by simp [Ty.ownerElem?]) hE hloc hvs happ
+        have hcheck := checkAppendCapacity_limited_fits l vs.size org s E' capacity slots len
+          hread hcapacity
+        have happend : appendLoc l vs s = .ok i { s with store := s' } := by
+          simp [appendLoc, happ]
+        have hrun : (checkedAppendLoc l vs org >>= f) s = f i { s with store := s' } := by
+          change M.bind' (M.bind' (checkAppendCapacity l vs.size org)
+            (fun _ => appendLoc l vs)) f s = _
+          simp only [M.bind', hcheck, happend]
+        unfold Sat
+        rw [hrun]
+        exact k s' i happ hstep
+      · have hoverflow : len + vs.size > capacity := Nat.lt_of_not_ge hcapacity
+        have hcheck := checkAppendCapacity_limited_overflow l vs.size org s E' capacity slots len
+          hread hoverflow
+        have hrun : (checkedAppendLoc l vs org >>= f) s = .stop (.abort .capacity org) s := by
+          change M.bind' (M.bind' (checkAppendCapacity l vs.size org)
+            (fun _ => appendLoc l vs)) f s = _
+          simp only [M.bind', hcheck]
+        simp [Sat, hrun]
+    | _ => simp [FlatTy] at hflat
+  | _ => simp [Ty.ownerElem?] at howner
+
 /-! ### The store invariant -/
 
 /-- The first root does not end before the second: a global, or a local of a
