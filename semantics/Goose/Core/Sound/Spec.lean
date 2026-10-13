@@ -292,6 +292,65 @@ checked root requests remain tied to their observed owner capabilities. -/
 section Specs
 variable (m : Module) (prof : NumProfile) (plans : Array (Array DemandPoint))
 
+def effectMutationTargets (E : Eff) : List Target :=
+  E.writes ++ E.grows ++ E.shrinks ++ E.rebinds
+
+/-- Translate effect targets into the relative roots used by a callee frame. -/
+def effectTargetRoot : Target → RootRef
+  | .param i => .param i
+  | .global g => .global g
+
+def effectTargetRoots (targets : List Target) : List RootRef := targets.map effectTargetRoot
+
+theorem effectTargetRoots.mono {targets targets' : List Target}
+    (hsubset : ∀ t, t ∈ targets → t ∈ targets') :
+    ∀ r, r ∈ effectTargetRoots targets → r ∈ effectTargetRoots targets' := by
+  intro r hr
+  simp only [effectTargetRoots, List.mem_map] at hr ⊢
+  obtain ⟨t, ht, rfl⟩ := hr
+  exact ⟨t, hsubset t ht, rfl⟩
+
+theorem effectMutationTargets.mono {E E' : Eff}
+    (hEff : EffLe E E') (hRebinds : RebindsLe E E') :
+    ∀ t, t ∈ effectMutationTargets E → t ∈ effectMutationTargets E' := by
+  intro t ht
+  simp only [effectMutationTargets, List.mem_append] at ht ⊢
+  rcases ht with hrest | hr
+  · rcases hrest with hrest | hs
+    · rcases hrest with hw | hg
+      · exact Or.inl (Or.inl (Or.inl (hEff.2.1 t hw)))
+      · exact Or.inl (Or.inl (Or.inr (hEff.2.2.1 t hg)))
+    · exact Or.inl (Or.inr (hEff.2.2.2.1 t hs))
+  · exact Or.inr (hRebinds t hr)
+
+/-- Unknown summaries may affect every declared global and formal parameter. -/
+def effectMutationRoots (m : Module) (impl : Impl) (E : Eff) : List RootRef :=
+  let known := effectTargetRoots (effectMutationTargets E)
+  if E.unknown then
+    known ++ ((List.range m.globals.size).map RootRef.global ++
+      (List.range impl.params.size).map RootRef.param)
+  else known
+
+theorem effectMutationRoots.mono (m : Module) (impl : Impl) {E E' : Eff}
+    (hEff : EffLe E E') (hRebinds : RebindsLe E E') :
+    ∀ r, r ∈ effectMutationRoots m impl E → r ∈ effectMutationRoots m impl E' := by
+  intro r hr
+  cases hUnknown : E.unknown <;> cases hUnknown' : E'.unknown
+  · simp [effectMutationRoots, hUnknown, hUnknown'] at hr ⊢
+    exact effectTargetRoots.mono (effectMutationTargets.mono hEff hRebinds) r hr
+  · simp [effectMutationRoots, hUnknown, hUnknown'] at hr ⊢
+    exact Or.inl
+      (effectTargetRoots.mono (effectMutationTargets.mono hEff hRebinds) r hr)
+  · have hbad := hEff.2.2.2.2 hUnknown
+    simp [hUnknown'] at hbad
+  · simp [effectMutationRoots, hUnknown, hUnknown'] at hr ⊢
+    rcases hr with hknown | hglobalsParams
+    · exact Or.inl (effectTargetRoots.mono
+        (effectMutationTargets.mono hEff hRebinds) r hknown)
+    · rcases hglobalsParams with hglobals | hparams
+      · exact Or.inr (Or.inl hglobals)
+      · exact Or.inr (Or.inr hparams)
+
 def ExprSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (e : Expr)
     (ec : EvaluationContext m plans path (.expression e) .expression)
@@ -314,7 +373,8 @@ def ExprSpec (n : Nat) : Prop :=
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       OwnerRooted env W.ownerP rho v ty ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 def BlockValueSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (b : Block)
@@ -339,7 +399,8 @@ def BlockValueSpec (n : Nat) : Prop :=
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       OwnerRooted env W.ownerP rho v ty ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 /-- An argument is typed as the validator types it at a call. -/
 def ArgTy (tenv : TEnv) (a : Arg) (tn : Nat) (ty : Ty) (tn' : Nat) : Prop :=
@@ -374,7 +435,8 @@ def ArgSpec (n : Nat) : Prop :=
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       OwnerRooted env W.ownerP rho v ty ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ac.forbiddenOwners s s')
+        ac.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 def BoundSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (b : Bound)
@@ -396,7 +458,8 @@ def BoundSpec (n : Nat) : Prop :=
       PilotStoreLe m s s' ∧
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 def PlaceSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (p : Place)
@@ -421,7 +484,8 @@ def PlaceSpec (n : Nat) : Prop :=
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       ((∃ el, t = .grow el ∨ t = .growshrink el) → Gam env W.ownerP rho l.root) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 def ViewSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (v : View)
@@ -444,24 +508,8 @@ def ViewSpec (n : Nat) : Prop :=
       Gam env W.P rho vw.loc.root ∧ ViewAliases m W penv env s'.store v vw el ∧
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
-
-def effectMutationTargets (E : Eff) : List Target :=
-  E.writes ++ E.grows ++ E.shrinks ++ E.rebinds
-
-/-- Translate effect targets into the relative roots used by a callee frame. -/
-def effectTargetRoots : List Target → List RootRef
-  | [] => []
-  | .param i :: rest => .param i :: effectTargetRoots rest
-  | .global g :: rest => .global g :: effectTargetRoots rest
-
-/-- Unknown summaries may affect every declared global and formal parameter. -/
-def effectMutationRoots (m : Module) (impl : Impl) (E : Eff) : List RootRef :=
-  let known := effectTargetRoots (effectMutationTargets E)
-  if E.unknown then
-    known ++ (List.range m.globals.size).map RootRef.global ++
-      (List.range impl.params.size).map RootRef.param
-  else known
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 def CallSpec (n : Nat) : Prop :=
   ∀ (G : Nat) (P ownerP : Nat → RootInst → Prop) (D : RootInst → Ty → Prop)
@@ -542,7 +590,8 @@ def BlockSpec (n : Nat) : Prop :=
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) ∧
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst3.eff) s s')
 
 def StmtsSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (sc : Nat) (all : List Stmt) (value : Option Expr)
@@ -575,7 +624,8 @@ def StmtsSpec (n : Nat) : Prop :=
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) ∧
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        bc.forbiddenOwners s s')
+        bc.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 def StmtSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (st : Stmt)
@@ -604,7 +654,8 @@ def StmtSpec (n : Nat) : Prop :=
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) ∧
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 /-- A printed argument is an integer or a boolean. -/
 def PrintTy (tenv : TEnv) (a : PrintArg) (tn tn' : Nat) : Prop :=
@@ -636,7 +687,8 @@ def PrintArgSpec (n : Nat) : Prop :=
       PilotStoreLe m s s' ∧
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ac.forbiddenOwners s s')
+        ac.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst'.eff) s s')
 
 def WhileSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (c : Expr) (body : Block) (origin : OriginId)
@@ -661,7 +713,8 @@ def WhileSpec (n : Nat) : Prop :=
       (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true) ∧
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s s')
 
 /-- Iteration consumes sampled bounds and retains the body and enclosing continuation. -/
 def RangeSpec (n : Nat) : Prop :=
@@ -688,7 +741,8 @@ def RangeSpec (n : Nat) : Prop :=
       PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl ∧
       (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
-        ec.forbiddenOwners s s')
+        ec.forbiddenOwners s s' ∧
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s s')
 
 /-- The source view identifies the checked loop occurrence; the runtime view
 carries its iteration cursor and the owner's current typing. -/
@@ -723,9 +777,10 @@ def EachSpec (n : Nat) : Prop :=
       ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
       PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl ∧
+      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store) ∧
       PreservesForbiddenOwnerRoots (m := m) (G := W.G) (env := env) (P := W.P)
         ec.forbiddenOwners s s' ∧
-      (m.profile = .shrink → ClassifiedParameters m W.P W.D observation s'.store))
+      MutationFootprint env W.P W.base (effectMutationRoots m penv.impl rst2.eff) s s')
 
 /-- Every evaluation function at fuel `n` meets its statement. -/
 structure Specs (n : Nat) : Prop where

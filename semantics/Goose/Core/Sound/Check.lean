@@ -475,6 +475,149 @@ theorem rpArgs_mono {env : PEnv} {as : List Arg} {st st' : RState} {a : List (Li
 theorem rpBound_mono {env : PEnv} {b : Bound} {st st' : RState} {a : Unit}
     (h : rpBound env b st = .ok (a, st')) : RLe st st' := rp_mono_all.2.2.2.2.2.2.2.2.2 env b _ _ _ h
 
+/-- Rebind targets are tracked separately from the permissions in `EffLe`.
+Every replay step retains prior targets, including direct rebinds and calls. -/
+def RebindsLe (a b : Eff) : Prop := ∀ t, t ∈ a.rebinds → t ∈ b.rebinds
+
+theorem RebindsLe.refl (a : Eff) : RebindsLe a a := fun _ h => h
+
+theorem RebindsLe.trans {a b c : Eff} (h₁ : RebindsLe a b) (h₂ : RebindsLe b c) :
+    RebindsLe a c := fun _ h => h₂ _ (h₁ _ h)
+
+def PMonoRebinds (x : P α) : Prop :=
+  ∀ st a st', x st = .ok (a, st') → RebindsLe st.eff st'.eff
+
+theorem PMonoRebinds.bind {x : P α} {f : α → P β}
+    (hx : PMonoRebinds x) (hf : ∀ a, PMonoRebinds (f a)) :
+    PMonoRebinds (x >>= f) := by
+  intro st b st' h
+  obtain ⟨a, s1, h1, h2⟩ := (st_bind_ok _ _ _ _).1 h
+  exact (hx _ _ _ h1).trans (hf a _ _ _ h2)
+
+theorem PMonoRebinds.pure (a : α) : PMonoRebinds (pure a : P α) := by
+  intro st b st' h
+  have := (st_pure_ok _ _ _).1 h
+  cases this
+  exact RebindsLe.refl _
+
+theorem PMonoRebinds.rej (r : Rule) (msg : String) :
+    PMonoRebinds (rejP r msg : P α) := by
+  intro st b st' h
+  exact ((rejP_ok _ _ _ _).1 h).elim
+
+theorem PMonoRebinds.liftV (x : V α) : PMonoRebinds (liftV x) := by
+  intro st b st' h
+  obtain ⟨_, h2⟩ := (liftV_ok _ _ _).1 h
+  cases h2
+  exact RebindsLe.refl _
+
+theorem PMonoRebinds.get : PMonoRebinds (get : P RState) := by
+  intro st b st' h
+  have := (st_get_ok _ _).1 h
+  cases this
+  exact RebindsLe.refl _
+
+theorem PMonoRebinds.modify (f : RState → RState)
+    (hf : ∀ s, RebindsLe s.eff (f s).eff) : PMonoRebinds (modify f : P PUnit) := by
+  intro st b st' h
+  have := (st_modify_ok _ _ _).1 h
+  cases this
+  exact hf st
+
+theorem PMonoRebinds.ite {c : Prop} [Decidable c] {x y : P α}
+    (hx : PMonoRebinds x) (hy : PMonoRebinds y) :
+    PMonoRebinds (if c then x else y) := by
+  by_cases h : c <;> simp [h, hx, hy]
+
+theorem PMonoRebinds.addReads (rs : List RootRef) : PMonoRebinds (addReads rs) := by
+  unfold Goose.Core.addReads addRoots
+  exact PMonoRebinds.modify _ (fun _ _ h => h)
+
+theorem PMonoRebinds.addWrites (rs : List RootRef) : PMonoRebinds (addWrites rs) := by
+  unfold Goose.Core.addWrites addRoots
+  exact PMonoRebinds.modify _ (fun _ _ h => h)
+
+theorem PMonoRebinds.addGrows (rs : List RootRef) : PMonoRebinds (addGrows rs) := by
+  unfold Goose.Core.addGrows addRoots
+  exact PMonoRebinds.modify _ (fun _ _ h => h)
+
+theorem PMonoRebinds.addShrinks (rs : List RootRef) : PMonoRebinds (addShrinks rs) := by
+  unfold Goose.Core.addShrinks addRoots
+  exact PMonoRebinds.modify _ (fun _ _ h => h)
+
+theorem PMonoRebinds.rpCall (env : PEnv) (c : ContextId)
+    (ar : List (List RootRef)) : PMonoRebinds (rpCall env c ar) := by
+  unfold Goose.Core.rpCall
+  repeat' (first
+    | exact PMonoRebinds.pure _ | exact PMonoRebinds.rej _ _ | exact PMonoRebinds.liftV _
+    | refine PMonoRebinds.bind ?_ (fun _ => ?_)
+    | split)
+  refine PMonoRebinds.modify _ ?_
+  intro s
+  simp only [callEffects]
+  split
+  · exact fun _ h => h
+  · exact addTargets_left _ _
+
+theorem PMonoRebinds.readRoots (env : PEnv) (p : Place) :
+    PMonoRebinds (readRoots env p) := by
+  unfold Goose.Core.readRoots
+  repeat' (first | exact PMonoRebinds.pure _ | exact PMonoRebinds.rej _ _ | split)
+
+macro "pmr" : tactic => `(tactic| repeat' (first
+    | exact PMonoRebinds.pure _ | exact PMonoRebinds.rej _ _ | exact PMonoRebinds.liftV _ | exact PMonoRebinds.get
+    | exact PMonoRebinds.addReads _ | exact PMonoRebinds.addWrites _ | exact PMonoRebinds.addGrows _
+    | exact PMonoRebinds.addShrinks _ | exact PMonoRebinds.rpCall _ _ _
+    | exact PMonoRebinds.readRoots _ _
+    | exact PMonoRebinds.modify _ (fun s _ h => h)
+    | exact PMonoRebinds.modify _ (fun s => addTargets_left _ _)
+    | with_reducible apply_assumption
+    | refine PMonoRebinds.bind ?_ (fun _ => ?_)
+    | refine PMonoRebinds.ite ?_ ?_
+    | split))
+
+/-- Every replay operation retains its accumulated rebind targets. -/
+theorem rp_rebinds_mono_all :
+    (∀ env p, PMonoRebinds (rpPlace env p)) ∧ (∀ env v, PMonoRebinds (rpView env v)) ∧
+    (∀ env e, PMonoRebinds (rpExpr env e)) ∧ (∀ env es, PMonoRebinds (rpExprs env es)) ∧
+    (∀ env pre b, PMonoRebinds (rpBlockValue env pre b)) ∧
+    (∀ env ss, PMonoRebinds (rpStmts env ss)) ∧ (∀ env s, PMonoRebinds (rpStmt env s)) ∧
+    (∀ env as, PMonoRebinds (rpPrintArgs env as)) ∧ (∀ env as, PMonoRebinds (rpArgs env as)) ∧
+    (∀ env b, PMonoRebinds (rpBound env b)) := by
+  apply rpPlace.mutual_induct
+    (motive_1 := fun env p => PMonoRebinds (rpPlace env p))
+    (motive_2 := fun env v => PMonoRebinds (rpView env v))
+    (motive_3 := fun env e => PMonoRebinds (rpExpr env e))
+    (motive_4 := fun env es => PMonoRebinds (rpExprs env es))
+    (motive_5 := fun env pre b => PMonoRebinds (rpBlockValue env pre b))
+    (motive_6 := fun env ss => PMonoRebinds (rpStmts env ss))
+    (motive_7 := fun env s => PMonoRebinds (rpStmt env s))
+    (motive_8 := fun env as => PMonoRebinds (rpPrintArgs env as))
+    (motive_9 := fun env as => PMonoRebinds (rpArgs env as))
+    (motive_10 := fun env b => PMonoRebinds (rpBound env b))
+  case case34 =>
+    intros
+    simp only [rpStmt]
+    pmr
+  case case36 =>
+    intros
+    simp only [rpStmt]
+    pmr
+  all_goals (intros; (try cases ‹Option Expr›); (try cases ‹Option Block›); simp only [rpPlace, rpView, rpExpr, rpExprs, rpBlockValue, rpStmts, rpStmt, rpPrintArgs, rpArgs, rpBound, bindRoots, checkResult]; pmr)
+
+theorem rpExpr_rebinds_mono {env : PEnv} {e : Expr} {st st' : RState} {a : List RootRef}
+    (h : rpExpr env e st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.2.1 env e _ _ _ h
+
+theorem rpBlockValue_rebinds_mono {env : PEnv} {pre : List VarId} {b : Block}
+    {st st' : RState} {a : List RootRef × (Nat × Nat)}
+    (h : rpBlockValue env pre b st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.2.2.2.1 env pre b _ _ _ h
+
+theorem rpStmt_rebinds_mono {env : PEnv} {x : Stmt} {st st' : RState} {a : Unit}
+    (h : rpStmt env x st = .ok (a, st')) : RebindsLe st.eff st'.eff :=
+  rp_rebinds_mono_all.2.2.2.2.2.2.1 env x _ _ _ h
+
 /-! ### Helpers of the typing pass -/
 
 @[chk] theorem checkOrg_ok (env : TEnv) (o : OriginId) (s : Nat) (r : Unit × Nat) :
