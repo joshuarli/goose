@@ -155,7 +155,7 @@ end Goose.Audit
 #audit Goose.Proofs.Memory.releaseScope_roots
 #audit Goose.Proofs.Memory.storeLe_release
 
-#audit Goose.Proofs.Core.th_core_01_entry
+#audit Goose.Proofs.Core.validate_entry_shape
 #audit Goose.Proofs.Core.initial_liveRefs
 
 #audit Goose.Proofs.Lower.lower_correct_straight
@@ -166,7 +166,8 @@ end Goose.Audit
 #audit Goose.Core.Sound.specs_all
 #audit Goose.Proofs.Safety.validated_context_sound
 #audit Goose.Proofs.Safety.validated_steps_keep_invariant
-#audit Goose.Proofs.Safety.validated_run_keeps_live_refs
+#audit Goose.Proofs.Safety.validated_run_keeps_globals_typed
+#audit Goose.Core.Sound.noReturn_sound
 #audit Goose.Proofs.Safety.validated_never_faults
 #audit Goose.Proofs.Safety.validated_faultFree
 

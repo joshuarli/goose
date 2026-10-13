@@ -211,7 +211,11 @@ def rootRef : RootRef → String
 
 def context (c : Context) : String :=
   rec "context" [nat c.impl, str c.decl,
-    arr (c.varRoots.map fun (x, rs) => rec "vr" [nat x, arr (rs.map rootRef)]),
+    -- A parameter that refers to a slice variable carries its content roots as a third field.
+    arr (c.varRoots.map fun (x, rs) =>
+      match (c.contentRoots.find? (·.1 == x)).map (·.2) with
+      | some cs => rec "vr" [nat x, arr (rs.map rootRef), arr (cs.map rootRef)]
+      | none => rec "vr" [nat x, arr (rs.map rootRef)]),
     arr (c.resultRoots.map fun rs => arr (rs.map rootRef))]
 
 def origin (o : Origin) : String := rec "origin" [nat o.file, nat o.line, str o.kind]

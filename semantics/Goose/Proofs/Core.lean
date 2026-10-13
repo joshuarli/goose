@@ -19,7 +19,7 @@ theorem validate_entry_ok (m : Module) (h : validate m = .ok ()) : checkEntry m 
 
 /-- Acceptance fixes the entry: a context whose implementation takes no
 parameters and returns nothing. -/
-theorem th_core_01_entry (m : Module) (h : validate m = .ok ()) :
+theorem validate_entry_shape (m : Module) (h : validate m = .ok ()) :
     ∃ ctx impl, m.contexts[m.entry]? = some ctx ∧ m.impls[ctx.impl]? = some impl ∧
       impl.params.size = 0 ∧ impl.results.size = 0 := by
   have hc := validate_entry_ok m h

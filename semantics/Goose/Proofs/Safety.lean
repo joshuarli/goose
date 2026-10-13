@@ -171,7 +171,22 @@ theorem run_spec (hm : ModOk m) (prof : NumProfile) (fuel : Nat) :
   exact ⟨hi2, fun r hr => hdom1 r (hX2.dom r hr)⟩
 
 /-- A module `validate` accepts never faults, at any fuel and in either numeric
-profile. -/
+profile.
+
+A fault is one of six things the evaluator can meet: an access through a root
+that is gone or along a path outside its object, a value of the wrong shape
+where an operation needs an integer, a boolean, a reference, a slice or an
+array, a missing table entry, a call with the wrong number of arguments, or a
+`break`, `continue` or `return` leaving an expression or a body. Aborts, exits
+and running out of fuel are not faults.
+
+This is not type preservation: the evaluator stores any value anywhere, so an
+unchecked module can put a boolean in an integer variable and run to the end.
+That every variable of an accepted module holds a value of its type at every
+step is part of the invariant the proof carries
+(`validated_steps_keep_invariant`). And it says nothing of mutability: the
+evaluator has no read-only storage, so the rule that writes go through mutable
+places has no semantic statement here. -/
 theorem validated_never_faults (m : Module) (h : validate m = .ok ()) :
     ∀ (fuel : Nat) (profile : NumProfile) (kind : FaultKind), eval fuel profile m ≠ .fault kind := by
   intro fuel profile kind
@@ -235,25 +250,26 @@ theorem validated_steps_keep_invariant (m : Module) (h : validate m = .ok ())
     (profile : NumProfile) : ∀ fuel, Specs m profile fuel :=
   specs_all (validate_modOk m h) profile
 
-/-- A store that holds the globals only and satisfies the store invariant
-satisfies the live-reference invariant: no global holds a reference. -/
-theorem liveRefs_of_storeInv {s : St} (h : StoreInv m m.globals.size s)
-    (hdom : ∀ r : RootInst, s.store.roots[r]? ≠ none →
-      ∃ g : Nat, r = .global g ∧ g < m.globals.size) : LiveRefs s.store := by
-  intro r v hv
-  obtain ⟨g, rfl, hg⟩ := hdom r (by rw [hv]; simp)
-  obtain ⟨v', hr, hT⟩ := h.globals g m.globals[g] hg (Array.getElem?_eq_getElem hg)
-  rw [read_root hv] at hr
-  cases hr
-  exact flat_held _ _ _ hT
-
-/-- A run of an accepted module that ends leaves every stored reference live. -/
-theorem validated_run_keeps_live_refs (m : Module) (h : validate m = .ok ()) (fuel : Nat)
+/-- A run of an accepted module that returns leaves every global holding a
+value of the global's declared type. The same holds of every variable at every
+step, which is part of the frame invariant (`validated_steps_keep_invariant`):
+nothing in the evaluator checks the type of a value it stores, so this is what
+acceptance adds beyond the absence of faults. It is stated here only for the
+globals of a run that returns, where it needs no vocabulary. -/
+theorem validated_run_keeps_globals_typed (m : Module) (h : validate m = .ok ()) (fuel : Nat)
     (profile : NumProfile) (a : Unit) (s : St)
-    (hr : runModule fuel ⟨profile, m⟩ St.initial = .ok a s) : LiveRefs s.store := by
+    (hr : runModule fuel ⟨profile, m⟩ St.initial = .ok a s) :
+    ∀ (g : Nat) (gl : Global), m.globals[g]? = some gl →
+      ∃ v, s.store.roots[RootInst.global g]? = some v ∧ FlatTy gl.ty v := by
   have hs := run_spec (validate_modOk m h) profile fuel
   unfold Sat at hs
   rw [hr] at hs
-  exact liveRefs_of_storeInv hs.1 hs.2
+  intro g gl hg
+  obtain ⟨v, hv, hT⟩ := hs.1.globals g gl (Array.getElem?_eq_some_iff.1 hg).1 hg
+  obtain ⟨old, ho, hget⟩ := (read_ok_iff _ _ _).1 hv
+  rw [get_nil] at hget
+  have e : old = v := by simpa using hget
+  subst e
+  exact ⟨_, ho, hT⟩
 
 end Goose.Proofs.Safety
