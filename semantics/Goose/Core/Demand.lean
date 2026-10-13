@@ -457,6 +457,13 @@ def DemandNode.visibleForChild (node : DemandNode) (visible : List VarId)
     else visible
   | _ => visible
 
+/-- Successful statement evaluation adds a `let` binder to lexical visibility. -/
+def DemandNode.visibleAfter (node : DemandNode) (visible : List VarId) : List VarId :=
+  match node with
+  | .statement (.letS binder _ _) =>
+    if visible.contains binder then visible else binder :: visible
+  | _ => visible
+
 def DemandNode.visibleAt? (node : DemandNode) (visible : List VarId) :
     List Nat → Option (DemandNode × List VarId)
   | [] => some (node, visible)
@@ -1085,7 +1092,7 @@ private def AccessEnv.aliasesOfExprs (env : AccessEnv) (path : List Nat)
   pure aliases
 
 private def DemandNode.retainedForChild (node : DemandNode) (access : AccessEnv)
-    (path : List Nat) (index : Nat) (retained : List RetainedAlias) : V (List RetainedAlias) := do
+    (path : List Nat) (index : Nat) : V (List RetainedAlias) := do
   let aliases ← match node with
     | .expression e =>
       match e with
@@ -1120,15 +1127,152 @@ private def DemandNode.retainedForChild (node : DemandNode) (access : AccessEnv)
           | .val _ => access.aliasView (path ++ [0]) v
       | _ => pure []
     | _ => pure []
-  pure (aliases ++ retained)
+  pure aliases
 
 def DemandNode.childFrame (node : DemandNode) (access : AccessEnv)
     (path : List Nat) (frame : DemandFrame) (index : Nat) : V DemandFrame := do
   let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
   let some expectation := node.childExpectation? parent index
     | reject .block "demand traversal reached a missing child"
-  let retained ← node.retainedForChild access path index frame.retained
-  pure ⟨expectation.active, expectation.future, retained⟩
+  let aliases ← node.retainedForChild access path index
+  pure ⟨expectation.active, expectation.future, aliases ++ frame.retained⟩
+
+private def addVisibleBinder (active : List VarId) (binder : VarId) : List VarId :=
+  if active.contains binder then active else binder :: active
+
+private theorem addVisibleBinder_mem_congr {active active' : List VarId}
+    (hactive : ∀ x, x ∈ active ↔ x ∈ active') (binder : VarId) :
+    ∀ x, x ∈ addVisibleBinder active binder ↔ x ∈ addVisibleBinder active' binder := by
+  have hcontains : active.contains binder = active'.contains binder := by
+    apply Bool.eq_iff_iff.mpr
+    simpa only [List.contains_iff_mem] using hactive binder
+  have hmem : binder ∈ active ↔ binder ∈ active' := hactive binder
+  by_cases hb : binder ∈ active
+  · have hb' := hmem.mp hb
+    intro x
+    simp [addVisibleBinder, List.contains_iff_mem, hcontains, hb, hb', hactive]
+  · have hb' : binder ∉ active' := fun h => hb (hmem.mpr h)
+    intro x
+    simp [addVisibleBinder, List.contains_iff_mem, hcontains, hb, hb', hactive]
+
+private theorem visibleAfterBinders_mem_congr {active active' : List VarId}
+    (hactive : ∀ x, x ∈ active ↔ x ∈ active') :
+    ∀ (binders : List VarId) (x : VarId),
+      x ∈ binders.foldl addVisibleBinder active ↔
+        x ∈ binders.foldl addVisibleBinder active' := by
+  intro binders
+  induction binders generalizing active active' with
+  | nil => exact hactive
+  | cons binder rest ih =>
+    intro x
+    simp only [List.foldl_cons]
+    exact ih (addVisibleBinder_mem_congr hactive binder) x
+
+private def visibleAfterStatement (active : List VarId) : Stmt → List VarId
+  | .letS binder _ _ => addVisibleBinder active binder
+  | _ => active
+
+private theorem visibleAfterStatements_mem_congr {active active' : List VarId}
+    (hactive : ∀ x, x ∈ active ↔ x ∈ active') :
+    ∀ (statements : List Stmt) (x : VarId),
+      x ∈ statements.foldl visibleAfterStatement active ↔
+        x ∈ statements.foldl visibleAfterStatement active' := by
+  intro statements
+  induction statements generalizing active active' with
+  | nil => exact hactive
+  | cons statement rest ih =>
+    intro x
+    simp only [List.foldl_cons]
+    apply ih
+    intro y
+    cases statement
+    case letS binder expr origin => exact addVisibleBinder_mem_congr hactive binder y
+    all_goals exact hactive y
+
+theorem DemandNode.visibleForChild_mem_congr (node : DemandNode) (index : Nat)
+    {active active' : List VarId}
+    (hactive : ∀ x, x ∈ active ↔ x ∈ active') :
+    ∀ x, x ∈ node.visibleForChild active index ↔ x ∈ node.visibleForChild active' index := by
+  cases node with
+  | expression _ | place _ | view _ | bound _ => intro x; exact hactive x
+  | statement statement =>
+    cases statement with
+    | forRange binder lo hi body origin =>
+      intro x
+      have hcontains : active.contains binder = active'.contains binder := by
+        apply Bool.eq_iff_iff.mpr
+        simpa only [List.contains_iff_mem] using hactive binder
+      simp only [DemandNode.visibleForChild]
+      rw [hcontains]
+      by_cases hcondition : index = 2 ∧ binder ∉ active'
+      · simp [hcondition, hactive]
+      · simp [hcondition, hactive]
+    | forEach binder indexOpt view byRef body origin =>
+      intro x
+      simp only [DemandNode.visibleForChild]
+      split
+      · exact visibleAfterBinders_mem_congr hactive (binder :: indexOpt.toList) x
+      · exact hactive x
+    | _ => intro x; exact hactive x
+  | block block =>
+    cases block with
+    | mk scope statements value =>
+      intro x
+      change x ∈ (statements.take index).foldl visibleAfterStatement active ↔
+        x ∈ (statements.take index).foldl visibleAfterStatement active'
+      exact visibleAfterStatements_mem_congr hactive (statements.take index) x
+
+theorem DemandNode.childFrame_active {node : DemandNode} {access : AccessEnv}
+    {path : List Nat} {frame : DemandFrame} {index : Nat} {result : DemandFrame}
+    (h : node.childFrame access path frame index = .ok result) :
+    result.active = node.visibleForChild frame.active index := by
+  unfold DemandNode.childFrame at h
+  let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
+  cases hchild : node.childExpectation? parent index with
+  | none => simp [parent, hchild, reject] at h
+  | some expectation =>
+    have hexpectActive : expectation.active = node.visibleForChild frame.active index := by
+      unfold DemandNode.childExpectation? at hchild
+      cases hnodeChild : node.child? index with
+      | none => simp [hnodeChild] at hchild
+      | some child =>
+        cases hfuture : node.childFuture parent index with
+        | none => simp [hnodeChild, hfuture] at hchild
+        | some future =>
+          simp [hnodeChild, hfuture] at hchild
+          cases hchild
+          rfl
+    cases hretained : node.retainedForChild access path index with
+    | error err =>
+      simp [DemandNode.childFrame, parent, hchild, hretained] at h
+      cases h
+    | ok retained =>
+      simp [DemandNode.childFrame, parent, hchild, hretained] at h
+      cases h
+      exact hexpectActive
+
+theorem DemandNode.childFrame_future {node : DemandNode} {access : AccessEnv}
+    {path : List Nat} {frame : DemandFrame} {index : Nat} {result : DemandFrame}
+    {expectation : DemandChildExpectation}
+    (h : node.childFrame access path frame index = .ok result)
+    (hchild : node.childExpectation?
+      ⟨path, .expression, frame.active, frame.future, frame.retained⟩ index = some expectation) :
+    result.future = expectation.future := by
+  let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
+  cases hretained : node.retainedForChild access path index with
+  | error err =>
+    simp [DemandNode.childFrame, parent, hchild, hretained] at h
+    change Except.map (fun aliases =>
+      DemandFrame.mk expectation.active expectation.future (aliases ++ frame.retained))
+      (.error err) = .ok result at h
+    cases h
+  | ok aliases =>
+    simp [DemandNode.childFrame, parent, hchild, hretained] at h
+    change Except.map (fun aliases =>
+      DemandFrame.mk expectation.active expectation.future (aliases ++ frame.retained))
+      (.ok aliases) = .ok result at h
+    cases h
+    rfl
 
 def DemandNode.phaseFrame (node : DemandNode) (access : AccessEnv)
     (path : List Nat) (frame : DemandFrame) (phase : DemandPhase) : V DemandFrame := do
@@ -1139,6 +1283,97 @@ def DemandNode.phaseFrame (node : DemandNode) (access : AccessEnv)
       pure { frame with retained := aliases ++ frame.retained }
     else pure frame
   | _ => pure frame
+
+theorem DemandNode.phaseFrame_active {node : DemandNode} {access : AccessEnv}
+    {path : List Nat} {frame : DemandFrame} {phase : DemandPhase} {result : DemandFrame}
+    (h : node.phaseFrame access path frame phase = .ok result) : result.active = frame.active := by
+  cases node with
+  | expression expression =>
+    cases expression with
+    | call context args origin =>
+      unfold DemandNode.phaseFrame at h
+      by_cases hphase : phase == .call || phase == .mutation
+      · simp only [hphase, ↓reduceIte] at h
+        cases haliases : AccessEnv.aliasesOfArgs access path args with
+        | error err =>
+          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          cases h
+        | ok aliases =>
+          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          cases h
+          rfl
+      · simp [hphase] at h
+        cases h
+        rfl
+    | _ => simp [DemandNode.phaseFrame] at h; cases h; rfl
+  | _ => simp [DemandNode.phaseFrame] at h; cases h; rfl
+
+theorem DemandNode.phaseFrame_future {node : DemandNode} {access : AccessEnv}
+    {path : List Nat} {frame : DemandFrame} {phase : DemandPhase} {result : DemandFrame}
+    (h : node.phaseFrame access path frame phase = .ok result) : result.future = frame.future := by
+  cases node with
+  | expression expression =>
+    cases expression with
+    | call context args origin =>
+      unfold DemandNode.phaseFrame at h
+      by_cases hphase : phase == .call || phase == .mutation
+      · simp only [hphase, ↓reduceIte] at h
+        cases haliases : AccessEnv.aliasesOfArgs access path args with
+        | error err =>
+          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          cases h
+        | ok aliases =>
+          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          cases h
+          rfl
+      · simp [hphase] at h
+        cases h
+        rfl
+    | _ => simp [DemandNode.phaseFrame] at h; cases h; rfl
+  | _ => simp [DemandNode.phaseFrame] at h; cases h; rfl
+
+theorem DemandNode.childFrame_retains {node : DemandNode} {access : AccessEnv}
+    {path : List Nat} {frame : DemandFrame} {index : Nat} {result : DemandFrame}
+    (h : node.childFrame access path frame index = .ok result) {alias : RetainedAlias}
+    (hmem : alias ∈ frame.retained) : alias ∈ result.retained := by
+  unfold DemandNode.childFrame at h
+  let parent : DemandPoint := ⟨path, .expression, frame.active, frame.future, frame.retained⟩
+  cases hchild : node.childExpectation? parent index with
+  | none => simp [parent, hchild, reject] at h
+  | some expectation =>
+    cases hretained : node.retainedForChild access path index with
+    | error err =>
+      simp [DemandNode.childFrame, parent, hchild, hretained] at h
+      cases h
+    | ok aliases =>
+      simp [DemandNode.childFrame, parent, hchild, hretained] at h
+      cases h
+      exact List.mem_append_right _ hmem
+
+theorem DemandNode.phaseFrame_retains {node : DemandNode} {access : AccessEnv}
+    {path : List Nat} {frame : DemandFrame} {phase : DemandPhase} {result : DemandFrame}
+    (h : node.phaseFrame access path frame phase = .ok result) {alias : RetainedAlias}
+    (hmem : alias ∈ frame.retained) : alias ∈ result.retained := by
+  cases node with
+  | expression expression =>
+    cases expression with
+    | call context args origin =>
+      unfold DemandNode.phaseFrame at h
+      by_cases hphase : phase == .call || phase == .mutation
+      · simp only [hphase, ↓reduceIte] at h
+        cases haliases : AccessEnv.aliasesOfArgs access path args with
+        | error err =>
+          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          cases h
+        | ok aliases =>
+          simp [DemandNode.phaseFrame, hphase, haliases] at h
+          cases h
+          exact List.mem_append_right _ hmem
+      · simp [hphase] at h
+        cases h
+        exact hmem
+    | _ => simp [DemandNode.phaseFrame] at h; cases h; exact hmem
+  | _ => simp [DemandNode.phaseFrame] at h; cases h; exact hmem
 
 def DemandEnv.child {root} (env : DemandEnv root) (index : Nat) : V (DemandEnv root) := do
   let some cursor := env.cursor.child? index
