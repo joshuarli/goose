@@ -758,44 +758,82 @@ private theorem DemandTrace.sourceAt_of_root (m : Module) (owner : Nat)
 def DemandPathPhaseUnique (plan : Array DemandPoint) : Prop :=
   ∀ a b, a ∈ plan.toList → b ∈ plan.toList → a.path = b.path → a.phase = b.phase → a = b
 
-structure DemandEnv (root : DemandNode) where
+private structure DemandSetup where
+  root : DemandNode
   access : AccessEnv
+  initial : DemandFrame
+
+/-- Lexical bindings present before an owner's root is traversed. -/
+def demandInitialActive (m : Module) (owner : Nat) : List VarId :=
+  if owner < m.contexts.size then
+    match m.contexts[owner]? with
+    | none => []
+    | some ctx =>
+      match m.impls[ctx.impl]? with
+      | none => []
+      | some impl => impl.params.toList.map (·.var)
+  else []
+
+private def demandSetup? (m : Module) (owner : Nat) : Option DemandSetup := do
+  if owner < m.contexts.size then
+    let ctx ← m.contexts[owner]?
+    let impl ← m.impls[ctx.impl]?
+    pure ⟨.block impl.body, ⟨m, impl, ctx⟩,
+      ⟨demandInitialActive m owner, [], []⟩⟩
+  else
+    let global ← m.globals[owner - m.contexts.size]?
+    pure ⟨.expression global.init, ⟨m, initImpl, initContext⟩, ⟨[], [], []⟩⟩
+
+def demandAccess? (m : Module) (owner : Nat) : Option AccessEnv :=
+  (demandSetup? m owner).map DemandSetup.access
+
+structure DemandEnv (m : Module) (planOwner : Nat) (root : DemandNode) where
+  access : AccessEnv
+  accessMatches : demandAccess? m planOwner = some access
   cursor : DemandCursor root
   active : List VarId
   future : List VarId
   retained : List RetainedAlias
   forbidden : List DemandOwner := []
 
-def DemandPoint.fromEnv {root} (env : DemandEnv root) (path : List Nat)
+def DemandPoint.fromEnv {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat)
     (phase : DemandPhase) : DemandPoint :=
   ⟨path, phase, env.active, env.future, env.retained⟩
 
-@[simp] theorem DemandPoint.fromEnv_active {root} (env : DemandEnv root) (path : List Nat)
+@[simp] theorem DemandPoint.fromEnv_active {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat)
     (phase : DemandPhase) : (DemandPoint.fromEnv env path phase).active = env.active := rfl
 
-@[simp] theorem DemandPoint.fromEnv_future {root} (env : DemandEnv root) (path : List Nat)
+@[simp] theorem DemandPoint.fromEnv_future {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat)
     (phase : DemandPhase) : (DemandPoint.fromEnv env path phase).future = env.future := rfl
 
-@[simp] theorem DemandPoint.fromEnv_retained {root} (env : DemandEnv root) (path : List Nat)
+@[simp] theorem DemandPoint.fromEnv_retained {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat)
     (phase : DemandPhase) : (DemandPoint.fromEnv env path phase).retained = env.retained := rfl
 
 def DemandPoint.ActiveMatches (point : DemandPoint) (visible : List VarId) : Prop :=
   ∀ x, x ∈ point.active ↔ x ∈ visible
 
-theorem DemandPoint.activeMatches_fromEnv {root} (env : DemandEnv root) (path : List Nat)
+theorem DemandPoint.activeMatches_fromEnv {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat)
     (phase : DemandPhase) (visible : List VarId)
     (hactive : ∀ x, x ∈ env.active ↔ x ∈ visible) :
     (DemandPoint.fromEnv env path phase).ActiveMatches visible := by
   intro x
   exact hactive x
 
-def DemandEnv.withFuture {root} (env : DemandEnv root) (variables : List VarId) : DemandEnv root :=
+def DemandEnv.withFuture {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (variables : List VarId) : DemandEnv m planOwner root :=
   { env with future := variables ++ env.future }
 
-def DemandEnv.withActive {root} (env : DemandEnv root) (active : List VarId) : DemandEnv root :=
+def DemandEnv.withActive {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (active : List VarId) : DemandEnv m planOwner root :=
   { env with active }
 
-theorem DemandPoint.activeMatches_withFuture {root} (env : DemandEnv root) (path : List Nat)
+theorem DemandPoint.activeMatches_withFuture {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat)
     (phase : DemandPhase) (variables visible : List VarId)
     (hactive : ∀ x, x ∈ env.active ↔ x ∈ visible) :
     (DemandPoint.fromEnv (env.withFuture variables) path phase).ActiveMatches visible := by
@@ -803,40 +841,51 @@ theorem DemandPoint.activeMatches_withFuture {root} (env : DemandEnv root) (path
   change x ∈ env.active ↔ x ∈ visible
   exact hactive x
 
-def DemandEnv.withAliases {root} (env : DemandEnv root)
-    (aliases : List RetainedAlias) : DemandEnv root :=
+def DemandEnv.withAliases {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root)
+    (aliases : List RetainedAlias) : DemandEnv m planOwner root :=
   { env with retained := aliases ++ env.retained }
 
-def DemandEnv.activeBackedge {root} (env : DemandEnv root) (variables : List VarId) : List VarId :=
+def DemandEnv.activeBackedge {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (variables : List VarId) : List VarId :=
   variables.filter env.active.contains
 
-@[simp] theorem DemandEnv.withFuture_future {root} (env : DemandEnv root) (variables : List VarId) :
+@[simp] theorem DemandEnv.withFuture_future {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (variables : List VarId) :
     (env.withFuture variables).future = variables ++ env.future := rfl
 
-@[simp] theorem DemandEnv.withFuture_active {root} (env : DemandEnv root) (variables : List VarId) :
+@[simp] theorem DemandEnv.withFuture_active {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (variables : List VarId) :
     (env.withFuture variables).active = env.active := rfl
 
-@[simp] theorem DemandEnv.withFuture_retained {root} (env : DemandEnv root) (variables : List VarId) :
+@[simp] theorem DemandEnv.withFuture_retained {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (variables : List VarId) :
     (env.withFuture variables).retained = env.retained := rfl
 
-@[simp] theorem DemandEnv.withActive_active {root} (env : DemandEnv root) (active : List VarId) :
+@[simp] theorem DemandEnv.withActive_active {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (active : List VarId) :
     (env.withActive active).active = active := rfl
 
-@[simp] theorem DemandEnv.withActive_future {root} (env : DemandEnv root) (active : List VarId) :
+@[simp] theorem DemandEnv.withActive_future {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (active : List VarId) :
     (env.withActive active).future = env.future := rfl
 
-@[simp] theorem DemandEnv.withActive_retained {root} (env : DemandEnv root) (active : List VarId) :
+@[simp] theorem DemandEnv.withActive_retained {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (active : List VarId) :
     (env.withActive active).retained = env.retained := rfl
 
-@[simp] theorem DemandEnv.withAliases_retained {root} (env : DemandEnv root)
+@[simp] theorem DemandEnv.withAliases_retained {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root)
     (aliases : List RetainedAlias) :
     (env.withAliases aliases).retained = aliases ++ env.retained := rfl
 
-@[simp] theorem DemandEnv.withAliases_future {root} (env : DemandEnv root)
+@[simp] theorem DemandEnv.withAliases_future {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root)
     (aliases : List RetainedAlias) :
     (env.withAliases aliases).future = env.future := rfl
 
-theorem DemandEnv.withFuture_append_future {root} (env : DemandEnv root)
+theorem DemandEnv.withFuture_append_future {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root)
     (first later : List VarId) :
     (env.withFuture (first ++ later)).future = first ++ later ++ env.future := by
   simp [List.append_assoc]
@@ -881,10 +930,11 @@ def DemandRootsDisjoint (forbiddenRoots checkedRoots : List RootRef) : Prop :=
   ∀ forbiddenRoot, forbiddenRoot ∈ forbiddenRoots → ∀ checkedRoot,
     checkedRoot ∈ checkedRoots → rootsMayOverlap forbiddenRoot checkedRoot = false
 
-private structure DemandShrinkEvent (root : DemandNode) where
+private structure DemandShrinkEvent (m : Module) (planOwner : Nat) (root : DemandNode) where
   trace : DemandTrace root
   mutationPhase : trace.point.phase = .mutation
   access : AccessEnv
+  accessMatches : demandAccess? m planOwner = some access
   owner : DemandOwner
   safe : DemandPointShrinkSafe access trace.point owner
 
@@ -895,18 +945,20 @@ private structure DemandWholeRootsEvent (root : DemandNode) where
   disjoint : DemandRootsDisjoint forbidden.roots checkedRoots
 
 private structure DemandFoundShrinkOwner {root : DemandNode}
-    (events : List (DemandShrinkEvent root)) (occurrence : DemandExpectedPoint)
+    {m : Module} {planOwner : Nat}
+    (events : List (DemandShrinkEvent m planOwner root)) (occurrence : DemandExpectedPoint)
     (owner : DemandOwner) where
-  event : DemandShrinkEvent root
+  event : DemandShrinkEvent m planOwner root
   member : event ∈ events
   pathMatches : event.trace.point.path = occurrence.path
   ownerMatches : event.owner = owner
   mutationPhase : event.trace.point.phase = .mutation
 
-private def DemandShrinkEvent.findOwner {root} (occurrence : DemandExpectedPoint)
+private def DemandShrinkEvent.findOwner {m : Module} {planOwner : Nat} {root}
+    (occurrence : DemandExpectedPoint)
     (owner : DemandOwner) :
-    (events : List (DemandShrinkEvent root)) →
-      V (DemandFoundShrinkOwner events occurrence owner)
+    (events : List (DemandShrinkEvent m planOwner root)) →
+      V (DemandFoundShrinkOwner (m := m) (planOwner := planOwner) events occurrence owner)
   | [] => reject .shrink s!"demand plan has no shrink approval at {occurrence.path}"
   | event :: rest => do
     if hpath : event.trace.point.path = occurrence.path then
@@ -923,7 +975,8 @@ private def DemandShrinkEvent.findOwner {root} (occurrence : DemandExpectedPoint
 termination_by events => events.length
 
 private def DemandShrinkEvent.verifyOwnersAt {root}
-    (events : List (DemandShrinkEvent root)) (occurrence : DemandExpectedPoint) :
+    {m : Module} {planOwner : Nat}
+    (events : List (DemandShrinkEvent m planOwner root)) (occurrence : DemandExpectedPoint) :
     (owners : List DemandOwner) →
       V (PLift (∀ owner, owner ∈ owners →
         ∃ event, event ∈ events ∧ event.trace.point.path = occurrence.path ∧
@@ -943,7 +996,8 @@ private def DemandShrinkEvent.verifyOwnersAt {root}
 termination_by owners => owners.length
 
 private def DemandExpectedPoint.verifyShrinkRequests {root}
-    (events : List (DemandShrinkEvent root)) :
+    {m : Module} {planOwner : Nat}
+    (events : List (DemandShrinkEvent m planOwner root)) :
     (expected : List DemandExpectedPoint) →
       V (PLift (∀ occurrence, occurrence ∈ expected → occurrence.phase = .mutation → ∀ owner,
         owner ∈ occurrence.shrinkOwners →
@@ -1044,19 +1098,19 @@ private def DemandExpectedPoint.verifyWholeRequests {root}
       · exact later.down candidate htail request hrequest⟩
 termination_by expected => expected.length
 
-private structure DemandState (root : DemandNode) where
+private structure DemandState (m : Module) (planOwner : Nat) (root : DemandNode) where
   traces : Array (DemandTrace root)
-  shrinkEvents : Array (DemandShrinkEvent root) := #[]
+  shrinkEvents : Array (DemandShrinkEvent m planOwner root) := #[]
   wholeRootsEvents : Array (DemandWholeRootsEvent root) := #[]
 
 private def DemandPathIndex.verifyShrinkEvents {points : List DemandPoint}
-    (index : DemandPathIndex points) (root : DemandNode) :
-    (events : List (DemandShrinkEvent root)) →
+    (index : DemandPathIndex points) (m : Module) (planOwner : Nat) (root : DemandNode) :
+    (events : List (DemandShrinkEvent m planOwner root)) →
       V (PLift (∀ event, event ∈ events → event.trace.point ∈ points))
   | [] => pure ⟨by intro event hmem; simp at hmem⟩
   | event :: rest => do
     let hpoint ← index.verifyPoint event.trace.point
-    let hrest ← index.verifyShrinkEvents root rest
+    let hrest ← index.verifyShrinkEvents m planOwner root rest
     pure ⟨by
       intro candidate hmem
       have hmem' := List.mem_cons.mp hmem
@@ -1083,25 +1137,32 @@ private def DemandPathIndex.verifyWholeRootsEvents {points : List DemandPoint}
       · exact hrest.down candidate htail⟩
 termination_by events => events.length
 
-abbrev DemandCheck (root : DemandNode) := StateT (DemandState root) V
+abbrev DemandCheck (m : Module) (planOwner : Nat) (root : DemandNode) :=
+  StateT (DemandState m planOwner root) V
 
-def demandReject {root} (rule : Rule) (message : String) : DemandCheck root α :=
+def demandReject {m : Module} {planOwner : Nat} {root}
+    (rule : Rule) (message : String) : DemandCheck m planOwner root α :=
   throw ⟨rule, message⟩
 
-def demandLift {root} (check : V α) : DemandCheck root α := fun state => do
+def demandLift {m : Module} {planOwner : Nat} {root} (check : V α) : DemandCheck m planOwner root α :=
+  fun state => do
   let value ← check
   pure (value, state)
 
-private def recordShrinkEvent {root} (trace : DemandTrace root) (access : AccessEnv)
+private def recordShrinkEvent {m : Module} {planOwner : Nat} {root}
+    (trace : DemandTrace root) (access : AccessEnv)
+    (accessMatches : demandAccess? m planOwner = some access)
     (owner : DemandOwner) (mutationPhase : trace.point.phase = .mutation)
     (safe : DemandPointShrinkSafe access trace.point owner) :
-    DemandCheck root Unit :=
-  modify fun state =>
-    { state with shrinkEvents := state.shrinkEvents.push ⟨trace, mutationPhase, access, owner, safe⟩ }
+    DemandCheck m planOwner root Unit :=
+  let event : DemandShrinkEvent m planOwner root :=
+    ⟨trace, mutationPhase, access, accessMatches, owner, safe⟩
+  modify fun state => { state with shrinkEvents := state.shrinkEvents.push event }
 
-private def recordWholeRootsEvent {root} (trace : DemandTrace root) (forbidden : DemandOwner)
+private def recordWholeRootsEvent {m : Module} {planOwner : Nat} {root}
+    (trace : DemandTrace root) (forbidden : DemandOwner)
     (checkedRoots : List RootRef) (disjoint : DemandRootsDisjoint forbidden.roots checkedRoots) :
-    DemandCheck root Unit :=
+    DemandCheck m planOwner root Unit :=
   modify fun state =>
     { state with wholeRootsEvents := state.wholeRootsEvents.push ⟨trace, forbidden, checkedRoots, disjoint⟩ }
 
@@ -1581,7 +1642,9 @@ theorem DemandNode.phaseFrame_retains {node : DemandNode} {access : AccessEnv}
     | _ => simp [DemandNode.phaseFrame] at h; cases h; exact hmem
   | _ => simp [DemandNode.phaseFrame] at h; cases h; exact hmem
 
-def DemandEnv.child {root} (env : DemandEnv root) (index : Nat) : V (DemandEnv root) := do
+def DemandEnv.child {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (index : Nat) :
+    V (DemandEnv m planOwner root) := do
   let some cursor := env.cursor.child? index
     | reject .block "demand traversal reached a missing source child"
   let frame ← env.cursor.node.childFrame env.access env.cursor.path
@@ -1589,8 +1652,9 @@ def DemandEnv.child {root} (env : DemandEnv root) (index : Nat) : V (DemandEnv r
   let env := { env with cursor := cursor, active := frame.active }
   pure { env with future := frame.future, retained := frame.retained }
 
-def recordDemand {root} (env : DemandEnv root)
-    (phase : DemandPhase) : DemandCheck root (DemandTrace root) := do
+def recordDemand {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root)
+    (phase : DemandPhase) : DemandCheck m planOwner root (DemandTrace root) := do
   if hphase : env.cursor.node.phaseMatches phase = true then
     let frame ← demandLift (env.cursor.node.phaseFrame env.access env.cursor.path
       ⟨env.active, env.future, env.retained⟩ phase)
@@ -1600,35 +1664,6 @@ def recordDemand {root} (env : DemandEnv root)
     pure trace
   else
     demandReject .block "demand traversal reached a different source node"
-
-private structure DemandSetup where
-  root : DemandNode
-  access : AccessEnv
-  initial : DemandFrame
-
-/-- Lexical bindings present before an owner's root is traversed. -/
-def demandInitialActive (m : Module) (owner : Nat) : List VarId :=
-  if owner < m.contexts.size then
-    match m.contexts[owner]? with
-    | none => []
-    | some ctx =>
-      match m.impls[ctx.impl]? with
-      | none => []
-      | some impl => impl.params.toList.map (·.var)
-  else []
-
-private def demandSetup? (m : Module) (owner : Nat) : Option DemandSetup := do
-  if owner < m.contexts.size then
-    let ctx ← m.contexts[owner]?
-    let impl ← m.impls[ctx.impl]?
-    pure ⟨.block impl.body, ⟨m, impl, ctx⟩,
-      ⟨demandInitialActive m owner, [], []⟩⟩
-  else
-    let global ← m.globals[owner - m.contexts.size]?
-    pure ⟨.expression global.init, ⟨m, initImpl, initContext⟩, ⟨[], [], []⟩⟩
-
-def demandAccess? (m : Module) (owner : Nat) : Option AccessEnv :=
-  (demandSetup? m owner).map DemandSetup.access
 
 /-- A checked context and implementation lookup fixes the owner's body root. -/
 theorem demandRoot?_context {m : Module} {c : ContextId} {ctx : Context}
@@ -2435,6 +2470,56 @@ theorem DemandExpectedSourceAt.directShrinkOwner
   rw [← hownerList]
   simp
 
+/-- A call mutation occurrence reuses the checked access query for its
+arguments and for the owners requested by the callee summary. -/
+theorem DemandExpectedSourceAt.callShrinkOwners
+    {m owner path node phase expected context args origin access}
+    (sourceAt : DemandExpectedSourceAt m owner path node phase expected)
+    (mutation : phase = .mutation)
+    (callNode : node = .expression (.call context args origin))
+    (accessMatches : demandAccess? m owner = some access) :
+    ∃ actual, access.argsRoots args = .ok actual ∧
+      access.callShrinkOwners context args = .ok expected.shrinkOwners := by
+  rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hsourceMap : expected ∈ result.entries.map fun entry => entry.expected := by
+    rw [hmap]
+    exact hmem
+  rcases List.mem_map.mp hsourceMap with ⟨entry, hentry, hentryExpected⟩
+  have hentryPath : entry.item.path = path := by
+    calc
+      entry.item.path = entry.expected.path := entry.expectedPath.symm
+      _ = expected.path := congrArg DemandExpectedPoint.path hentryExpected
+      _ = path := hpath
+  have hentryNode : entry.item.node = node := by
+    calc
+      entry.item.node = entry.expected.node := entry.expectedNode.symm
+      _ = expected.node := congrArg DemandExpectedPoint.node hentryExpected
+      _ = node := hnode
+  have hphaseExpected : expected.phase = .mutation := hphase.trans mutation
+  have hsetupAccess : setup.access = access := by
+    simpa [demandAccess?, hsetup] using accessMatches
+  have hshrinkRequests : access.callShrinkOwners context args =
+      .ok expected.shrinkOwners := by
+    simpa [hsetupAccess, hentryNode, hphaseExpected, hentryExpected, callNode,
+      DemandNode.expectedShrinkOwners, DemandNode.directShrinkPlace?] using entry.shrinkRequests
+  have hargs : ∃ actual, access.argsRoots args = .ok actual := by
+    unfold AccessEnv.callShrinkOwners at hshrinkRequests
+    cases hctx : access.mod.contexts[context]? with
+    | none => simp [hctx, reject] at hshrinkRequests
+    | some ctx =>
+      simp only [hctx] at hshrinkRequests
+      cases himpl : access.mod.impls[ctx.impl]? with
+      | none => simp [himpl, reject] at hshrinkRequests
+      | some callee =>
+        simp only [himpl] at hshrinkRequests
+        cases hactual : access.argsRoots args with
+        | error error =>
+          rw [hactual] at hshrinkRequests
+          cases hshrinkRequests
+        | ok actual => exact ⟨actual, rfl⟩
+  exact ⟨hargs.choose, hargs.choose_spec, hshrinkRequests⟩
+
 /-- A primary source point and each valid immediate child occur in the same
 coverage walk. -/
 theorem DemandExpectedSourceAt.child
@@ -2733,19 +2818,21 @@ private def checkDemandRetained (owner : DemandOwner) :
         · exact restSafe.down candidate htail⟩
 termination_by aliases => aliases.length
 
-def checkShrinkOwner {root} (env : DemandEnv root) (trace : DemandTrace root)
-    (owner : DemandOwner) : DemandCheck root Unit := do
+def checkShrinkOwner {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (trace : DemandTrace root)
+    (owner : DemandOwner) : DemandCheck m planOwner root Unit := do
   if hmutation : trace.point.phase = .mutation then
     let futureSafe ← demandLift (checkDemandFuture env.access trace.point owner trace.point.future)
     let retainedSafe ← demandLift (checkDemandRetained owner trace.point.retained)
     let safe : DemandPointShrinkSafe env.access trace.point owner :=
       ⟨futureSafe.down, retainedSafe.down⟩
-    recordShrinkEvent trace env.access owner hmutation safe
+    recordShrinkEvent trace env.access env.accessMatches owner hmutation safe
   else
     demandReject .block "shrink approval is not attached to a mutation point"
 
-def checkShrinkPoint {root} (env : DemandEnv root) (_path : List Nat)
-    (owner : DemandOwner) : DemandCheck root Unit := do
+def checkShrinkPoint {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (_path : List Nat)
+    (owner : DemandOwner) : DemandCheck m planOwner root Unit := do
   let trace ← recordDemand env .mutation
   checkShrinkOwner env trace owner
 
@@ -2787,14 +2874,17 @@ private def checkRootsDisjoint : (forbiddenRoots : List RootRef) →
       · exact restDisjoint.down candidate htail checkedRoot hchecked⟩
 termination_by forbiddenRoots => forbiddenRoots.length
 
-def checkWholeRoots {root} (env : DemandEnv root) (trace : DemandTrace root)
-    (roots : List RootRef) : DemandCheck root Unit := do
+def checkWholeRoots {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (trace : DemandTrace root)
+    (roots : List RootRef) : DemandCheck m planOwner root Unit := do
   for owner in env.forbidden do
     let disjoint ← demandLift (checkRootsDisjoint owner.roots roots)
     recordWholeRootsEvent trace owner roots disjoint.down
 
-def checkCallDemand {root} (env : DemandEnv root) (_path : List Nat)
-    (context : ContextId) (args : List Arg) (aliases : List RetainedAlias) : DemandCheck root Unit := do
+def checkCallDemand {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (_path : List Nat)
+    (context : ContextId) (args : List Arg) (aliases : List RetainedAlias) :
+    DemandCheck m planOwner root Unit := do
   let _ ← recordDemand env .call
   let mutationTrace ← recordDemand env .mutation
   let callEnv := env.withAliases aliases
@@ -2806,7 +2896,9 @@ def checkCallDemand {root} (env : DemandEnv root) (_path : List Nat)
     for owner in effects do checkWholeRoots callEnv mutationTrace owner.roots
 
 mutual
-def demandPlace {root} (env : DemandEnv root) (path : List Nat) (p : Place) : DemandCheck root Unit := do
+def demandPlace {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (p : Place) :
+    DemandCheck m planOwner root Unit := do
   let trace ← recordDemand env .place
   checkWholeRoots env trace (← demandLift (env.access.placeRoots p))
   match p with
@@ -2818,21 +2910,27 @@ def demandPlace {root} (env : DemandEnv root) (path : List Nat) (p : Place) : De
     demandExpr (← demandLift (env.child 1)) (path ++ [1]) i
 termination_by sizeOf p
 
-def demandView {root} (env : DemandEnv root) (path : List Nat) (v : View) : DemandCheck root Unit := do
+def demandView {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (v : View) :
+    DemandCheck m planOwner root Unit := do
   let _ ← recordDemand env .view
   match v with
   | .of p => demandPlace (← demandLift (env.child 0)) (path ++ [0]) p
   | .val e => demandExpr (← demandLift (env.child 0)) (path ++ [0]) e
 termination_by sizeOf v
 
-def demandBound {root} (env : DemandEnv root) (path : List Nat) (b : Bound) : DemandCheck root Unit := do
+def demandBound {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (b : Bound) :
+    DemandCheck m planOwner root Unit := do
   let _ ← recordDemand env .bound
   match b with
   | .omitted => pure ()
   | .expr e | .fromEnd e => demandExpr (← demandLift (env.child 0)) (path ++ [0]) e
 termination_by sizeOf b
 
-def demandExpr {root} (env : DemandEnv root) (path : List Nat) (e : Expr) : DemandCheck root Unit := do
+def demandExpr {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (e : Expr) :
+    DemandCheck m planOwner root Unit := do
   let trace ← recordDemand env .expression
   match e with
   | .lit .. | .bool _ => pure ()
@@ -2867,8 +2965,9 @@ def demandExpr {root} (env : DemandEnv root) (path : List Nat) (e : Expr) : Dema
   | .arrLit _ es | .structLit _ es => demandExprs env path 0 es
 termination_by sizeOf e
 
-def demandExprs {root} (env : DemandEnv root) (path : List Nat) (index : Nat)
-    (es : List Expr) : DemandCheck root Unit :=
+def demandExprs {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (index : Nat)
+    (es : List Expr) : DemandCheck m planOwner root Unit :=
   match es with
   | [] => pure ()
   | e :: rest => do
@@ -2876,8 +2975,9 @@ def demandExprs {root} (env : DemandEnv root) (path : List Nat) (index : Nat)
     demandExprs env path (index + 1) rest
 termination_by sizeOf es
 
-def demandArgs {root} (env : DemandEnv root) (path : List Nat) (index : Nat)
-    (args : List Arg) : DemandCheck root (List RetainedAlias) :=
+def demandArgs {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (index : Nat)
+    (args : List Arg) : DemandCheck m planOwner root (List RetainedAlias) :=
   match args with
   | [] => pure []
   | arg :: rest => do
@@ -2889,8 +2989,9 @@ def demandArgs {root} (env : DemandEnv root) (path : List Nat) (index : Nat)
     pure (aliases ++ later)
 termination_by sizeOf args
 
-def demandPrintArgs {root} (env : DemandEnv root) (path : List Nat) (index : Nat)
-    (args : List PrintArg) : DemandCheck root Unit :=
+def demandPrintArgs {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (index : Nat)
+    (args : List PrintArg) : DemandCheck m planOwner root Unit :=
   match args with
   | [] => pure ()
   | arg :: rest => do
@@ -2901,8 +3002,9 @@ def demandPrintArgs {root} (env : DemandEnv root) (path : List Nat) (index : Nat
     demandPrintArgs env path (index + 1) rest
 termination_by sizeOf args
 
-def demandStmt {root} (env : DemandEnv root) (path : List Nat)
-    (stmt : Stmt) : DemandCheck root (DemandEnv root) := do
+def demandStmt {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat)
+    (stmt : Stmt) : DemandCheck m planOwner root (DemandEnv m planOwner root) := do
   let _ ← recordDemand env .statement
   match stmt with
   | .letS x e _ =>
@@ -2970,8 +3072,9 @@ def demandStmt {root} (env : DemandEnv root) (path : List Nat)
     pure env
 termination_by sizeOf stmt
 
-def demandStmts {root} (env : DemandEnv root) (path : List Nat) (index : Nat)
-    (ss : List Stmt) : DemandCheck root Unit :=
+def demandStmts {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (index : Nat)
+    (ss : List Stmt) : DemandCheck m planOwner root Unit :=
   match ss with
   | [] => pure ()
   | stmt :: rest => do
@@ -2979,7 +3082,9 @@ def demandStmts {root} (env : DemandEnv root) (path : List Nat) (index : Nat)
     demandStmts env path (index + 1) rest
 termination_by sizeOf ss
 
-def demandBlock {root} (env : DemandEnv root) (path : List Nat) (b : Block) : DemandCheck root Unit := do
+def demandBlock {m : Module} {planOwner : Nat} {root}
+    (env : DemandEnv m planOwner root) (path : List Nat) (b : Block) :
+    DemandCheck m planOwner root Unit := do
   let _ ← recordDemand env .block
   match b with
   | .mk _ ss value =>
@@ -3001,7 +3106,7 @@ private structure IndexedDemandPlan (m : Module) (owner : Nat) where
   trace : Array (DemandTrace root)
   tracePoints : trace.map DemandTrace.point = points
   index : DemandPathIndex points.toList
-  shrinkEvents : Array (DemandShrinkEvent root)
+  shrinkEvents : Array (DemandShrinkEvent m owner root)
   shrinkTraceCovered : ∀ event, event ∈ shrinkEvents.toList →
     event.trace.point ∈ points.toList
   wholeRootsEvents : Array (DemandWholeRootsEvent root)
@@ -3035,6 +3140,7 @@ private structure IndexedDemandPlan (m : Module) (owner : Nat) where
 structure DemandShrinkApproval (m : Module) (owner : Nat) (plan : Array DemandPoint) where
   point : DemandPoint
   access : AccessEnv
+  accessMatches : demandAccess? m owner = some access
   shrinkOwner : DemandOwner
   node : DemandNode
   pointMem : point ∈ plan.toList
@@ -3067,7 +3173,8 @@ structure DemandPlanApprovals (m : Module) (owner : Nat) (plan : Array DemandPoi
     occurrence.phase = .mutation → occurrence.node.isDirectShrink = true →
     ∀ shrinkOwner, shrinkOwner ∈ occurrence.shrinkOwners →
     ∃ approval : DemandShrinkApproval m owner plan,
-      approval.point.path = occurrence.path ∧ approval.shrinkOwner = shrinkOwner ∧
+      approval.access = access ∧ approval.point.path = occurrence.path ∧
+        approval.shrinkOwner = shrinkOwner ∧
         approval.point.phase = .mutation ∧
           DemandPoint.sameFrameMembership approval.point occurrence.toPoint
   callShrinkAt : ∀ occurrence, occurrence ∈ expected →
@@ -3075,7 +3182,8 @@ structure DemandPlanApprovals (m : Module) (owner : Nat) (plan : Array DemandPoi
     occurrence.phase = .mutation → ∀ shrinkOwner,
       shrinkOwner ∈ occurrence.shrinkOwners →
       ∃ approval : DemandShrinkApproval m owner plan,
-        approval.point.path = occurrence.path ∧ approval.shrinkOwner = shrinkOwner ∧
+        approval.access = access ∧ approval.point.path = occurrence.path ∧
+          approval.shrinkOwner = shrinkOwner ∧
           approval.point.phase = .mutation ∧
             DemandPoint.sameFrameMembership approval.point occurrence.toPoint
   wholeRootsAt : ∀ occurrence, occurrence ∈ expected → ∀ request,
@@ -3088,7 +3196,7 @@ structure DemandPlanApprovals (m : Module) (owner : Nat) (plan : Array DemandPoi
         DemandPoint.sameFrameMembership approval.point occurrence.toPoint
 
 private def DemandShrinkApproval.ofEvent {m owner} (indexed : IndexedDemandPlan m owner)
-    (event : DemandShrinkEvent indexed.root)
+    (event : DemandShrinkEvent m owner indexed.root)
     (eventMem : event ∈ indexed.shrinkEvents.toList) :
     DemandShrinkApproval m owner indexed.points := by
   let point := event.trace.point
@@ -3104,7 +3212,8 @@ private def DemandShrinkApproval.ofEvent {m owner} (indexed : IndexedDemandPlan 
   have sourceAt : DemandSourceAt m owner point.path event.trace.cursor.node := by
     refine ⟨indexed.root, indexed.ownerRoot, ?_⟩
     simpa [event.trace.pathMatches, point] using event.trace.cursor.sourceProof
-  exact ⟨point, event.access, event.owner, event.trace.cursor.node, pointMem,
+  exact ⟨point, event.access, event.accessMatches, event.owner,
+    event.trace.cursor.node, pointMem,
     pathPhaseUnique, lookup, sourceAt,
     by simpa [event.mutationPhase] using event.trace.hasPhase, event.safe⟩
 
@@ -3140,7 +3249,10 @@ private def IndexedDemandPlan.approvals {m owner} (indexed : IndexedDemandPlan m
       intro occurrence hoccurrence hphase hdirect shrinkOwner howner
       obtain ⟨event, hmem, hpath, heventOwner, hmut, hframe⟩ :=
         indexed.shrinkCoverage occurrence hoccurrence hphase shrinkOwner howner
-      refine ⟨DemandShrinkApproval.ofEvent indexed event hmem, ?_, ?_, ?_, ?_⟩
+      let approval := DemandShrinkApproval.ofEvent indexed event hmem
+      refine ⟨approval, ?_, ?_, ?_, ?_, ?_⟩
+      · have heq := approval.accessMatches.symm.trans indexed.accessMatches
+        exact Option.some.inj heq
       · change event.trace.point.path = occurrence.path
         exact hpath
       · change event.owner = shrinkOwner
@@ -3152,7 +3264,10 @@ private def IndexedDemandPlan.approvals {m owner} (indexed : IndexedDemandPlan m
       intro occurrence hoccurrence context args hcall hphase shrinkOwner howner
       obtain ⟨event, hevent, hpath, heventOwner, hmut, hframe⟩ :=
         indexed.shrinkCoverage occurrence hoccurrence hphase shrinkOwner howner
-      refine ⟨DemandShrinkApproval.ofEvent indexed event hevent, ?_, ?_, ?_, ?_⟩
+      let approval := DemandShrinkApproval.ofEvent indexed event hevent
+      refine ⟨approval, ?_, ?_, ?_, ?_, ?_⟩
+      · have heq := approval.accessMatches.symm.trans indexed.accessMatches
+        exact Option.some.inj heq
       · change event.trace.point.path = occurrence.path
         exact hpath
       · change event.owner = shrinkOwner
@@ -3177,12 +3292,13 @@ private def IndexedDemandPlan.approvals {m owner} (indexed : IndexedDemandPlan m
         exact hframe⟩
 
 private def mkIndexedDemandPlan (m : Module) (owner : Nat) (root : DemandNode)
-    (ownerRoot : demandRoot? m owner = some root) (state : DemandState root) :
+    (ownerRoot : demandRoot? m owner = some root)
+    (state : DemandState m owner root) :
     V (IndexedDemandPlan m owner) := do
   let trace := state.traces
   let points := trace.map DemandTrace.point
   let index ← DemandPathIndex.build points.toList
-  let shrinkTraceCovered ← index.verifyShrinkEvents root state.shrinkEvents.toList
+  let shrinkTraceCovered ← index.verifyShrinkEvents m owner root state.shrinkEvents.toList
   let wholeRootsTraceCovered ← index.verifyWholeRootsEvents root state.wholeRootsEvents.toList
   match hExpected : DemandNode.expectedPoints m owner with
   | .error err => throw err
@@ -3260,6 +3376,7 @@ private def mkIndexedDemandPlan (m : Module) (owner : Nat) (root : DemandNode)
 private def deriveContextDemand (m : Module) (owner : Nat) (howner : owner < m.contexts.size) :
     V (IndexedDemandPlan m owner) := do
   let ctx := m.contexts[owner]
+  have hctx : m.contexts[owner]? = some ctx := by simp [ctx, howner]
   match himpl : m.impls[ctx.impl]? with
   | none => reject .call "demand context has no implementation"
   | some impl =>
@@ -3267,7 +3384,11 @@ private def deriveContextDemand (m : Module) (owner : Nat) (howner : owner < m.c
     have hroot : demandRoot? m owner = some root := by
       simp [demandRoot?, howner, ctx, himpl, root]
     let cursor : DemandCursor root := ⟨[], root, .here root⟩
-    let env : DemandEnv root := ⟨⟨m, impl, ctx⟩, cursor, impl.params.toList.map (·.var), [], [], []⟩
+    let access : AccessEnv := ⟨m, impl, ctx⟩
+    have accessMatches : demandAccess? m owner = some access :=
+      demandAccess?_context hctx himpl
+    let env : DemandEnv m owner root :=
+      ⟨access, accessMatches, cursor, impl.params.toList.map (·.var), [], [], []⟩
     let (_, state) ← (demandBlock env [] impl.body).run { traces := #[] }
     mkIndexedDemandPlan m owner root hroot state
 
@@ -3282,7 +3403,11 @@ private def deriveGlobalDemand (m : Module) (owner : Nat)
   have hroot : demandRoot? m owner = some root := by
     simp [demandRoot?, hstart, hglobal, globalIndex, global, root]
   let cursor : DemandCursor root := ⟨[], root, .here root⟩
-  let env : DemandEnv root := ⟨⟨m, initImpl, initContext⟩, cursor, [], [], [], []⟩
+  let access : AccessEnv := ⟨m, initImpl, initContext⟩
+  have accessMatches : demandAccess? m owner = some access := by
+    simp [demandAccess?, demandSetup?, Nat.not_lt_of_ge hstart,
+      show owner - m.contexts.size = globalIndex by rfl, hglobal, access]
+  let env : DemandEnv m owner root := ⟨access, accessMatches, cursor, [], [], [], []⟩
   let (_, state) ← (demandExpr env [] global.init).run { traces := #[] }
   mkIndexedDemandPlan m owner root hroot state
 
