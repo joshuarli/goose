@@ -1,0 +1,431 @@
+[
+ {
+  "theorems": [
+   "Goose.Proofs.Num.wrap_inRange",
+   "Goose.Proofs.Num.wrap_congr",
+   "Goose.Proofs.Num.wrap_of_inRange",
+   "Goose.Proofs.Num.checked_release",
+   "Goose.Proofs.Num.checked_unsigned",
+   "Goose.Proofs.Num.checked_debug_signed",
+   "Goose.Proofs.Num.checked_inRange",
+   "Goose.Proofs.Num.add_release",
+   "Goose.Proofs.Num.sub_release",
+   "Goose.Proofs.Num.mul_release",
+   "Goose.Proofs.Num.neg_release",
+   "Goose.Proofs.Num.add_unsigned",
+   "Goose.Proofs.Num.sub_unsigned",
+   "Goose.Proofs.Num.mul_unsigned",
+   "Goose.Proofs.Num.neg_unsigned",
+   "Goose.Proofs.Num.add_debug_signed",
+   "Goose.Proofs.Num.sub_debug_signed",
+   "Goose.Proofs.Num.mul_debug_signed",
+   "Goose.Proofs.Num.neg_debug_signed"
+  ],
+  "statement": "wrap t x is in range and congruent to x modulo 2^bits (and the identity on in-range x); release +,-,*,neg give wrap of the mathematical result; unsigned give the same in every profile; signed in debug give the exact result when in range and int_overflow otherwise.",
+  "answers": {
+   "1": "Yes: these are statements about the operation tables, and every golden/fixture that adds, subtracts or multiplies exercises them (test/semantics/sem_num01_*, golden/range_loop). Hypotheses are only t.signed = true/false.",
+   "2": "No. Conclusions are stated over mathematical Int (a + b, wrap t, t.inRange) and do not mention evalBin's definition beyond rewriting it; wrap_inRange together with wrap_congr determines wrap uniquely, so wrap is not 'defined as itself'.",
+   "3": "Not applicable: no summary or annotation is involved.",
+   "4": "Aborts versus values are kept apart: the debug signed theorems return .error .intOverflow, the release/unsigned theorems return .ok; no fault, timeout or cost is involved.",
+   "5": "The Lean functions evalBin/evalUn/checked/wrap in Goose/Core/Num.lean only. Nothing here is about C++ or generated C (the C runtime helpers gs_add_i64 etc. are assumed in trust.md).",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most. Num.lean has no instances or notation; Eval.lean calls evalBin/evalUn directly (checked by reading, and by `#print`)."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [],
+  "checks": [
+   "Read statements and definitions in Num.lean and Proofs/Num.lean.",
+   "Ran an independent exhaustive/boundary evaluation (throwaway Lean file, not committed) comparing evalBin release add/sub/mul and debug add against BitVec arithmetic on every i8 and u8 pair (65,536 each) and on 16-18 boundary values for the other six types: 0 deviations.",
+   "#print axioms on wrap_inRange family via the audit list: no axiom beyond the three allowed."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Num.div_zero",
+   "Goose.Proofs.Num.div_inRange",
+   "Goose.Proofs.Num.div_i64_min",
+   "Goose.Proofs.Num.div_narrow_min_debug",
+   "Goose.Proofs.Num.div_narrow_min_release",
+   "Goose.Proofs.Num.mod_zero",
+   "Goose.Proofs.Num.mod_spec",
+   "Goose.Proofs.Num.mod_inRange"
+  ],
+  "statement": "Division or remainder by zero is div_zero at every type and profile; in-range truncating quotient is Int.tdiv; i64.min / -1 is div_overflow in both profiles; a narrower signed minimum divided by -1 is int_overflow in debug and the minimum in release; for b != 0 the remainder r satisfies 0 <= r < |b| and a = q*b + r for some q.",
+  "answers": {
+   "1": "Yes: sem_num02_*, sem_num03_*, sem_num04_* fixtures (all agree with the legacy compiler in the harness) are inhabitants; div_inRange needs only b != 0 and tdiv in range.",
+   "2": "No hidden predicate. mod_spec states the Euclidean range and the division identity over Int rather than 'a % b', so it is independent of the definition.",
+   "3": "Not applicable.",
+   "4": "The abort kinds are distinct (div_zero, div_overflow, int_overflow) and the release/debug split for narrow minimums is exactly the language rule (spec 6.2).",
+   "5": "Lean evalBin only.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Low. No theorem says that the truncating quotient of two in-range operands is out of range only at (minVal, -1); div_inRange takes 'tdiv in range' as a hypothesis, and the remaining cases are stated only at a = minVal, b = -1. The fact is true (checked by the reviewer's exhaustive evaluation) but a reader of the theorem list cannot see that the three division cases are exhaustive."
+  ],
+  "checks": [
+   "Exhaustive i8/u8 pairs and boundary pairs for the other types: div and mod agree with Int.tdiv / the Euclidean spec, div overflow occurs exactly at (i64.min, -1) for i64 and as int_overflow-or-wrap for narrower signed minimums: 0 deviations.",
+   "Read language spec 6.2 sentence by sentence: Euclidean remainder, i64.min % -1 = 0, zero divisor aborts always, i64.min / -1 aborts in every build, narrower minimum is ordinary overflow: each is a theorem above."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Num.shl_eq",
+   "Goose.Proofs.Num.shr_eq",
+   "Goose.Proofs.Num.shift_count_only",
+   "Goose.Proofs.Num.shr_inRange"
+  ],
+  "statement": "A shift by b equals the shift by b mod bits (masked count); left shift is wrap(a * 2^count); right shift is a / 2^count (floor), which is arithmetic for signed and logical for unsigned; the result of >> is in range for in-range a.",
+  "answers": {
+   "1": "Yes: sem_num05_shift_counts_signed/unsigned fixtures; shifts by -1, bits, bits+1 are in the evaluated examples in Proofs/Num.lean.",
+   "2": "Partly tautological: shl_eq is `rfl` against evalBin because `shiftCount` is defined in the proof file with the same expression `(b % bits).toNat` as evalBin uses; it states the definition over math integers rather than checking it. shift_count_only, shr_eq (floor division, proved from Int.shiftRight_eq_div_pow) and shr_inRange are not tautological.",
+   "3": "Not applicable.",
+   "4": "Not confused: shifts never abort in the model, as in the spec.",
+   "5": "Lean evalBin only; the equivalence of Euclidean `b % w` with the C `b & (w-1)` is true because w is a power of two but is not stated as a theorem.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Low. shl_eq and the definition of shiftCount are the same expression, so 'count masked to 0..w-1' is checked only by the evaluated examples and by shift_count_only, not by an independent statement such as shiftCount t b < t.bits and shiftCount = b mod 2^k."
+  ],
+  "checks": [
+   "Independent evaluation (not committed): shl and shr for counts -300..300 against BitVec <<< and sshiftRight/>>> by (count mod width) on every i8/u8 value and boundary values of the other types: 0 deviations.",
+   "Language spec 6.2 'Shift counts are masked to 0..width-1' and 'signed >> replicates the sign bit, unsigned shifts in zeroes': covered by shift_count_only, shr_eq and the examples."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Num.ofBits_inRange",
+   "Goose.Proofs.Num.bitwise_inRange",
+   "Goose.Proofs.Num.bitnot_inRange"
+  ],
+  "statement": "The result of bitand, bitor, bitxor and bitnot on any bit patterns is in the type's range.",
+  "answers": {
+   "1": "Yes (fixtures use & | ^ ~ in goldens and sem_num05), but the theorem is satisfied by any function with an in-range result.",
+   "2": "Not hidden: the statements are honest, and the file header says values are only checked by evaluated examples.",
+   "3": "Not applicable.",
+   "4": "Not confused.",
+   "5": "Lean evalBin/evalUn only.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "weaker-than-claimed",
+  "findings": [
+   "The plan's TH-NUM-01 reads 'each integer primitive meets its row of specification 5'. For & | ^ ~ no theorem relates the result to the operands: replacing bitand by bitor in evalBin would keep ofBits_inRange, bitwise_inRange and bitnot_inRange true. Value-correctness rests on a handful of evaluated examples (maxVal/minVal/0 pairs) in Proofs/Num.lean. The definitions are correct (see checks) but not proved correct."
+  ],
+  "checks": [
+   "Independent evaluation (not committed): bitand/bitor/bitxor/bitnot against BitVec &&&, |||, ^^^, ~~~ on every i8/u8 pair and boundary values for the other six types: 0 deviations."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Num.widen_id",
+   "Goose.Proofs.Num.asUnchecked_wrap",
+   "Goose.Proofs.Num.as_release_wrap",
+   "Goose.Proofs.Num.as_debug",
+   "Goose.Proofs.Num.evalConv_inRange",
+   "Goose.Proofs.Num.evalUn_inRange",
+   "Goose.Proofs.Num.evalBin_inRange"
+  ],
+  "statement": "widen keeps the value; as! wraps in every profile; as wraps in release and aborts cast_range in debug exactly when the value changes; every successful primitive result is in range given in-range operands (widen needs the value to fit).",
+  "answers": {
+   "1": "Yes: sem_num06_* fixtures; casts in goldens. evalConv_inRange has the explicit hypothesis `widen -> dst.inRange a`, which the validator's V-TYPE widening rule supplies.",
+   "2": "No hidden predicate; the widen hypothesis is stated rather than baked in.",
+   "3": "Not applicable.",
+   "4": "cast_range (debug abort) versus wrap (release) is separate as in spec 6.3.",
+   "5": "Lean evalConv/evalBin/evalUn.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Low. The per-primitive range theorems are never composed with eval: no theorem (and nothing in Core/Sound, grep for inRange finds no hit) says that every Val.int a run produces lies in its type's range, although spec 4.2 says integers carry a range invariant. By construction it is true (literals are range-checked, operators return in-range values, loop counters stay between in-range bounds), but it is unproved at eval level and HasTy/FlatTy for ints track only the type tag. Likewise comparison semantics (evalCmp, unsigned ordering), operand type unification and 'no promotion' of spec 6.2 have no numeric theorem: they hold by the typing rule and expectSameTy, and are visible only in goldens.",
+   "Out of profile: floats, float casts and the spec 6.3 float conversion sentences are not modeled; reviewers should not read the numeric group as covering spec 6.3's float bullets."
+  ],
+  "checks": [
+   "Spec 6.3 checked bullet by bullet: the implicit widening set equals the validator's value-preserving rule plus identity (reasoned by hand over the 8x8 type pairs, not mechanized); as/as!/release/debug covered; float bullets out of profile.",
+   "Independent evaluation of evalConv for every (src, dst) type pair over the same samples against BitVec.ofInt and the in-range test: 0 deviations."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Fuel.eval_fuel_mono"
+  ],
+  "statement": "If eval n p m = done o t and n <= k then eval k p m = done o t (outcome and trace both preserved).",
+  "answers": {
+   "1": "Yes: any terminating golden (range_loop, first). A looping program (m_spin_f in Core/Examples.lean) times out at fuel 2000 in both profiles, as the plan's non-vacuity asks.",
+   "2": "No: the statement is about the function eval; no predicate stands in for it.",
+   "3": "Not applicable.",
+   "4": "Only `done` is preserved; timeout is by definition not (that is the point), faults are not mentioned (the MonoM lemma does preserve them, but the final theorem does not state it). Abort and exit outcomes are preserved with their trace.",
+   "5": "Lean eval. Note eval has a call-depth cap (maxCallDepth = 100000) that turns deeper recursion into a timeout at every fuel; the monotonicity statement is true despite it, but 'a terminating program is done from some fuel on' (validation plan 4.1) is false for a program that recurses deeper than the cap.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most. eval is not partial/unsafe/implemented_by; the module doc says so and grep confirms."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Low. Documentation inconsistency: trust.md says the model has no stack exhaustion, but Core/Eval.lean converts call depth >= 100000 into a timeout. The depth cap is not load-bearing for any proof (StepCall3 handles it as one more timeout branch), but it means 'terminating program is done at some fuel' is false for deep recursion; the coverage row for TH-FUEL-01 is `model-proved` with null evidence and null limits, so the cap is not recorded beside the theorem."
+  ],
+  "checks": [
+   "#print axioms: propext, Classical.choice, Quot.sound. Read MonoAll/step: all 14 evaluation functions are covered by one induction, including enterCall's depth branch."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Memory.th_mem_01",
+   "Goose.Proofs.Memory.append_le"
+  ],
+  "statement": "If Store.append o vs succeeds with (s', n) then every location readable in s is readable in s', and unchanged unless it is the grown array or a prefix of its path; the appended element i is readable at o/[n+i]. append_le adds that StoreLe (every sub-value kept with its types, no fewer elements) holds and the grown array keeps its type.",
+  "answers": {
+   "1": "Yes: sem_mem01_* fixtures (references and slices survive pushes) and my hand module m1_ref_across_pushes (reference to element 0, two pushes, read back) validate and run correctly.",
+   "2": "No: the conclusion is about s.read and s'.read of the same location, the hypothesis is only that append succeeded. There is no StoreOk hypothesis, so it is stronger than the plan's target.",
+   "3": "Not applicable.",
+   "4": "A failed append (wrong shape or dangling root) is excluded by the hypothesis, not counted as success.",
+   "5": "Lean Store.append/Store.read, which are the functions evalExpr .push and Stmt.append call (appendLoc). The theorem says nothing about the C data stacks; that growth never moves an element is built into the model's path-based Loc.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most. The custom Hashable RootInst instance (Memory.lean) is a plain arithmetic hash with a LawfulHashable proof; it cannot change a statement."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Informational. 'Growth never invalidates a reference' is true in the model by representation (locations are root + element path, not addresses); the theorem checks the store operation preserves reads, not that the production data stacks keep elements in place. That correspondence is in the C++/C domain and untested by any theorem."
+  ],
+  "checks": [
+   "Read statements and the proof of modifyAt_preserve/appendAll_keeps; ran m1/m2/m3/m7 hand modules (refs held across pushes, callee pushes through a by-ref parameter, aliasing parameters): validate ok, run correct."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Memory.write_le",
+   "Goose.Proofs.Memory.liveRefs_write",
+   "Goose.Proofs.Memory.liveRefs_append",
+   "Goose.Proofs.Memory.liveRefs_introduce",
+   "Goose.Proofs.Memory.liveRefs_release",
+   "Goose.Proofs.Memory.releaseScope_roots",
+   "Goose.Proofs.Memory.storeLe_release"
+  ],
+  "statement": "Per-operation lemmas of the live-reference invariant: a type-preserving write, growth, binding a fresh root and releasing a scope's roots each preserve LiveRefs (every stored reference or slice denotes a valid typed location or run); release needs that no surviving reference targets a released root; releaseScope removes exactly the scope's variable roots.",
+  "answers": {
+   "1": "Yes; every one is used in the safety induction (Sound/Step*.lean) so they are inhabited by every validated run.",
+   "2": "No: liveRefs_release takes `hsurv` (no survivor targets a released root) as a hypothesis, which is exactly the non-trivial obligation discharged by V-ROOT/V-BLOCK/V-RESULT in the safety proof; it is not restated in a predicate.",
+   "3": "Not applicable here.",
+   "4": "Not confused.",
+   "5": "Lean Store operations.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Documentation: the plan's TH-MEM-02 ('preserved by every eval step, including scope exit and, in core-shrink, every shrink V-SHRINK admits') is not delivered by these lemmas, which are per operation (the first attempt's own log says so). It is delivered, for the grow-only pilot, by validated_steps_keep_invariant / validated_context_sound. There is no shrink in the Lean model at all (no pop/resize, no limited arrays, no V-SHRINK or V-WHOLE rule), so the shrink half of TH-MEM-02 is not attempted."
+  ],
+  "checks": [
+   "Read statements; confirmed liveRefs_release's hypotheses are discharged in the safety proof rather than assumed (Sound/Scope.lean)."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Core.th_core_01_entry",
+   "Goose.Proofs.Core.initial_liveRefs"
+  ],
+  "statement": "th_core_01_entry: validate m = ok gives an entry context whose implementation exists and has no parameters and no results. initial_liveRefs: the initial store holds no references.",
+  "answers": {
+   "1": "Yes: any module that validates, e.g. the three goldens.",
+   "2": "No hidden predicate, but the name over-reads: the plan's TH-CORE-01 is 'validate m = ok -> WellFormed m' (all of spec 4.6 as propositions). This theorem proves only the entry's shape by unfolding checkEntry. initial_liveRefs is a statement about the empty store and is trivial.",
+   "3": "Not applicable.",
+   "4": "Not confused.",
+   "5": "Lean validate.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "weaker-than-claimed",
+  "findings": [
+   "Naming: `th_core_01_entry` carries the TH-CORE-01 identifier but proves a small corollary. The campaign log reassigns TH-CORE-01 to validated_context_sound ('a semantic property of contexts, not a separate static judgment'); coverage.json still has a TH-CORE-01 row `model-proved` with null evidence and limits, and validation plan 4.1 still states the WellFormed form. A reader could take th_core_01_entry for the whole row.",
+   "Guarantees.lean states ValidateAgrees (validate m = ok iff every rule holds) and FuelMonotone/TypeSafe/MemorySafe/faultFree_iff but none is audited; ValidateAgrees is explicitly 'a statement only'. The comments there attribute TypeSafe to V-TYPE and the mutability half of V-CALL and MemorySafe to V-ROOT/V-BLOCK/V-RESULT/V-CALL; that rule-to-fault attribution is commentary: the theorem proved is for the whole validate, and V-MUT is not used by any proof (the requireWrite lemma is an inversion lemma whose conclusion is never consumed)."
+  ],
+  "checks": [
+   "Read Guarantees.lean and Proofs/Core.lean; grep for requireWrite / V-MUT use in Core/Sound."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Safety.validated_never_faults",
+   "Goose.Proofs.Safety.validated_faultFree"
+  ],
+  "statement": "validate m = ok implies for every fuel, numeric profile and fault kind, eval fuel profile m is not fault kind. validated_faultFree restates it as the predicate FaultFree m.",
+  "answers": {
+   "1": "Yes. The three goldens (first, range_loop, sampled_extent), all 54 pilot fixtures exported by the compiler, all 24 test/gir/golden Core modules and the 8 test/semantics/share modules (forged ones included) validate (54 + 24 + 8 of 54 + 24 + 8 ok; harness: 54 agree, 0 mismatch, 4 unsupported) and run. They allocate, alias, recurse, hold references across pushes, rebind slices and use global initializers. My hand modules m1, m2, m3, m6, m7, m8, m9, m11 (grow-only arrays across pushes, callee pushes, returned references, recursion with a by-ref parameter, aliased parameters, a global initializer calling a function that returns a reference to an earlier global, slice rebinding in a loop, by-ref for-each) all validate and run without fault.",
+   "2": "No. `validate` is the Boolean/Except checker itself (printed with #print: checkEntry, checkGlobal, checkImpl, checkContext, checkInitRoots), not a predicate assuming safety; ModOk is the literal unfolding of what those checkers returned. The conclusion mentions only eval and Result.fault.",
+   "3": "Nothing in the module is taken on faith: root annotations (varRoots/resultRoots) are recomputed and compared per context (V-ROOT, V-BLOCK, V-RESULT, V-CALL); effect summaries are recomputed per context and compared (V-SUMMARY); global initializers are checked as bodies with no variables; types come from the module's own variable rows and are checked against initializers. The two things that remain unchecked by `validate` are irrelevant to eval: Module.types and Origin tables (eval reads neither) and Context.decl. An implementation named by no context is typed but not root-checked; it cannot run because calls go through contexts. The summary is used by the proof only to keep initializers from touching later globals, which is where all three previously found unsoundness lived.",
+   "4": "Fault is a distinct Stop constructor mapped to Result.fault; aborts (index_oob, slice_oob, div_*, assert, user_abort, overflow, cast) are legitimate language outcomes and are allowed by Sat, as are exit and timeout. I found no place in Eval.lean/Memory.lean where an invalid access becomes an abort, default value, silent no-op or timeout: dangling roots and out-of-range paths come only from readLoc/writeLoc/appendLoc/lengthLoc/readRun, shape tests from expect*, table misses from rootOf/lookup*, arity from enterCall, flow from expectNormal/expectReturned. The one timeout not caused by fuel is the call-depth cap (maxCallDepth = 100000): it is not used to dodge a case (the proof, StepCall3, treats it as one more timeout branch) but it means runs deeper than the cap are not examined at any fuel.",
+   "5": "The Lean functions Goose.Core.validate and Goose.Core.eval, printed with pp.fullNames. `goose-semantics run` calls Run.runBytes, which calls exactly those two (confirmed by #print Goose.Core.Run.runBytes; no faster copy; `--no-validate` skips validate but still calls eval). None of this is about the C++ checker or the generated C: the C++ side is instance-checked by running validate on its exported Core.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most. #print axioms validated_never_faults: [propext, Classical.choice, Quot.sound]. set_option maxHeartbeats occurs only on proofs; macros pm/inv/mono are tactics."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Medium (scope of `fault`). `fault` is narrower than memory- and type-safety: Store.write/modify accept a value of any shape or type at an existing location (the model has no type check on write, no mutability tag on Val.ref, and no const check). With --no-validate, a module that stores a bool in an i64 variable and prints it runs to `done` printing `true`, not a fault (w1 in the reviewer's runs). The theorem excludes such programs only because validate rejects them; the typed-store facts live in the proved invariant (StoreInv/Frame, validated_steps_keep_invariant), not in the headline. Anyone citing 'never faults' as 'never reads or writes at a wrong type' should cite the invariant theorems; and V-MUT (writes only through mutable places) has no theorem at all.",
+   "Medium (documentation overclaim). Spec 16.6 says the Lean safety theorem 'shows sound for the profiles'; the Lean model is core-pilot only: there is no core-shrink or core-construction syntax, no shrink rule (V-SHRINK, V-WHOLE), no nonlocal return, no limited array; spec 4.6 still lists V-SHRINK and V-WHOLE as rules of validate. The headline is for the grow-only pilot, where growth cannot invalidate anything, which is the easy half of the language's reference-safety story.",
+   "Medium (validate rejects ordinary programs that the exporter emits). Over the 2,472 .goose files in test/ and samples/, the exporter accepts 82 (the rest are unsupported or deliberate error tests); validate accepts 78 of them. The four rejections are: (a) test/optimizer/loop_shapes_countdown_abort.goose: V-MUT, the exporter emits e_slice mut over a `let` array passed to a slice parameter; (b) test/runtime/never_returns_exit.goose: V-TYPE 'falls off its end', Typing.lean's diverges does not know a call to a function that always exits; (c) test/typing/return_const_recursion.goose: V-TYPE, `let c: const T& = r` with r : T& (mut-to-const reference initialization and return are typed as an exact-equality check, while call arguments use passableTo); (d) test/runtime/elementwise_scalar_zero.goose: an exporter defect (12 / values with an array operand is exported instead of reported unsupported), which validate correctly rejects. All are rejections, never acceptances, so the theorem is unaffected, but acceptance by validate is narrower than acceptance by the compiler.",
+   "Low (numbering mismatch, completeness). Typing.lean tyStmt (.forRange, .forEach) and Roots.lean rpStmt declare the loop variable after the bounds/view expressions, while spec 12.1 and the C++ exporter number it in document order, before them. A valid program such as `for i in 0..{ let n: i64 = 3; n + 1 } { ... }` is exported with i=1, n=2 and rejected by validate with 'variable 2 is declared out of order (expected 1)' (reproduced at .work/src/rb.goose; the pilot harness has no such fixture).",
+   "Low. The headline says nothing about termination, correctness of output, abort-freedom, exhaustion of storage or stack (trust.md), or programs outside core-pilot (2,390 of the repository's 2,472 Goose files do not export)."
+  ],
+  "checks": [
+   "#print axioms and #check with pp.fullNames; #print validate, #print eval, #print Goose.Core.Run.runBytes.",
+   "Read Eval.lean, Memory.lean, Typing.lean, Roots.lean, Validate.lean, Sound/{Spec,Module,Basic,Frame,Store}.lean in full for hidden defaults, silent no-ops and trust.",
+   "python3 test/semantics/run_tests.py (verify build, core-pilot): 54 agree, 0 mismatch, 4 unsupported. Exported the 54 pilot fixtures myself and validated each: 54 ok; ran each in both profiles: 35 abort-ending and 73 returned runs, 0 faults.",
+   "Hand-built 21 adversarial Core modules by JSON construction (two were mis-built by me: m13 is malformed and m8c is rejected by a different rule than intended; m10 I expected rejected but it is safe because the loop reference points into the outer array) (references into grow-only arrays across pushes and across callee pushes, returned references rooted at parameters, references to locals returned or stored in outer variables, slices escaping through block values and if-values, forged annotations, aliased by-ref parameters, recursion, slice laundering through an identity call, for-each reference escape, use before let, global initializers calling functions that reach later globals through results and through parameter annotations). Every other module that should be rejected was rejected (V-ROOT, V-BLOCK, V-RESULT, V-CALL, V-TYPE) and, with --no-validate, ten of the eleven faulted dangling_root (the eleventh, m15, runs correctly because its violated rule only constrains a callee assumption), so the rules are not vacuous; every module that should be accepted was accepted and ran without fault.",
+   "Structure-aware mutation (integer perturbation, sibling swap, delete, duplicate, same-class subtree splice, mut/let/by_ref flips, operator and type swaps) of the 54 fixtures, 27 GIR goldens, 5 sharing fixtures and of the hand modules, run through `goose-semantics run` in both profiles: 15,300 mutants (30,600 runs) in the first two batches (about 25% malformed, 22% rejected, 52% finishing or timing out, 19 harness timeouts), zero accepted-then-faulted; third batch (hand modules as seeds, biased towards annotations, summaries and initializers): 12,000 mutants (24,000 runs): 8,678 finished, 8,942 rejected, 6,228 malformed, 59 timeouts, 93 harness timeouts, 0 faults. No fourth unsoundness found. The harness 30 s timeouts (19 + 93, host load about 100-150) are slow runs, not faults: re-running one regenerated mutant shows push-in-a-loop time growing superlinearly with fuel (0.2 s, 0.5 s, 2.2 s at fuel 10k, 20k, 40k), consistent with Store.modify copying the array on every push; that is a performance defect of the oracle at large fuel, not of the theorem.",
+   "Mechanically confirmed that a final store after a successful run holds no reference (see validated_run_keeps_live_refs)."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Core.Sound.validate_modOk",
+   "Goose.Core.Sound.specs_all",
+   "Goose.Proofs.Safety.validated_context_sound",
+   "Goose.Proofs.Safety.validated_steps_keep_invariant"
+  ],
+  "statement": "validate_modOk: acceptance gives per-item facts (ImplOk, CtxOk, GlobOk, entry) that are the unfolded outputs of the checkers. specs_all / validated_steps_keep_invariant: for every fuel, each of the 14 evaluation functions, run from a Frame (typing environment, root pass state, and store invariant agreeing) on code both passes accepted, does not fault, keeps the Frame and returns a value of the checked type pointing only into the computed roots. validated_context_sound: any context of an accepted module, entered from any store satisfying StoreInv with arguments of the parameters' types pointing into the annotation, does not fault, keeps StoreInv, and returns a result of the declared type inside the declared roots (campaign's TH-CORE-01).",
+  "answers": {
+   "1": "Yes: run_spec instantiates them for the entry and the initializers, so every validated run is an instance; validated_context_sound's hypotheses (StoreInv, typed arguments inside their annotation, ages below the next scope) are exactly what a call site establishes.",
+   "2": "No. The specs are stated over `tyExpr tenv e tn = ok` and `rpExpr penv e rst = ok`, the validator's own functions, so 'accepted' is not a separate predicate. ModOk is a structure of existentials extracted from the checkers' return values. The invariant (StoreInv: every stored reference denotes a typed location, points into a root that ends no earlier than its holder, scope instances fresh, initialized globals typed) is stated over the store and does not mention safety of eval.",
+   "3": "As in the headline: annotations and summaries are consequences of body checks. SumOk/Perm make the summary matter only while globals are being initialized.",
+   "4": "Sat allows abort, exit and timeout and forbids only .stop (.fault _), the same notion as the headline.",
+   "5": "Lean validate/eval and the intermediate Lean typing/root passes.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Informational. The statement of Specs is eight screens of dependent hypotheses; its faithfulness is checkable only by reading, and the 14-way conjunction hides which parts do the work (RetOk, Gam, Perm, Ext). The audit lists it as one entry."
+  ],
+  "checks": [
+   "Read Spec.lean, Module.lean, Basic.lean, Frame.lean, Store.lean, Scope.lean headers; confirmed no hypothesis outside the validator's output (hm : ModOk m) is assumed in run_spec."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Safety.validated_run_keeps_live_refs"
+  ],
+  "statement": "If runModule at fuel and profile ends with `.ok` from the initial state, the final store satisfies LiveRefs (every stored reference or slice denotes a valid typed location or run).",
+  "answers": {
+   "1": "Yes: any validated module whose run returns normally.",
+   "2": "The conclusion is nearly vacuous rather than hidden: a normal return releases every local root, and globals cannot have reference or slice type (checkGlobal), so the final store contains only global roots holding flat values and LiveRefs holds trivially. I confirmed by running runModule on goldens and on hand modules m1, m3, m7, m9: final store 0-1 roots, 0 references, 0 locals.",
+   "3": "Not applicable.",
+   "4": "It says nothing about a run that aborts, exits or times out (those are the interesting stopping points: scopes are not released, so locals and their references remain), and nothing about intermediate states.",
+   "5": "Lean runModule.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "vacuous-in-part",
+  "findings": [
+   "The name reads as 'a run keeps the live-reference invariant (TH-MEM-02)'. As stated it is true for the trivial reason above and covers only `.ok` runs; the real TH-MEM-02 content is validated_steps_keep_invariant (the invariant at every step, in StoreInv, which is stronger than LiveRefs) and validated_context_sound."
+  ],
+  "checks": [
+   "Evaluated runModule on goldens first/range_loop and hand modules m1/m3/m7/m9 and counted roots, references and locals in the final store (throwaway Lean file)."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Share.eval_erase_roots",
+   "Goose.Proofs.Share.eval_eraseRoots"
+  ],
+  "statement": "eval does not depend on any Context field other than impl: modules with the same implementations, globals, entry and context-to-implementation table give equal results at every fuel and profile; eraseRoots (declaration keys and root annotations removed) does not change eval.",
+  "answers": {
+   "1": "Yes: every fixture; share/golden modules differ only in annotations between contexts.",
+   "2": "No: both sides are eval of concrete modules.",
+   "3": "Not applicable (it states that annotations are irrelevant to execution; their soundness is the validator's job).",
+   "4": "Not confused.",
+   "5": "Lean eval.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most. Proofs/Share.lean declares a global `instance instLawfulMonadM : LawfulMonad M`, a proof-side instance whose proof is by cases; it cannot change a statement."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [],
+  "checks": [
+   "Read statements; instantiated with eraseRoots in the row's own proof."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Share.eval_simulates",
+   "Goose.Proofs.Share.share_eval",
+   "Goose.Proofs.Share.quotient_of_implwise",
+   "Goose.Proofs.Share.share_never_faults",
+   "Goose.Proofs.Share.share_validated_never_faults"
+  ],
+  "statement": "If Quotient m m' q rho (headers, entry, globals equal; each context of m' is the context of m with implementation index mapped by q; each implementation a context of m names appears at its mapped index with callee contexts renamed by rho; renaming sends a context to one running the same implementation) then eval n p m = eval n p m' for all n, p. Corollaries: m' never faults if m never faults; if validate m = ok then m' never faults (conditional on the safety statement as an explicit hypothesis).",
+  "answers": {
+   "1": "Yes: test/semantics/share/ shows real merges (`share --propose` on first.core.json, free_variable_two_locals, mutual_pair and mergeable_callee each outputs a module that differs from its input and passes the checker, with 2, 2, 3 and 3 implementations) and refusals (differ_one_operation, distinct_callees unchanged; forged bodies rejected). run_index.sh: all 12 cases pass. The relation is neither trivial (it requires equal bodies up to callee renaming, including summaries and variable names) nor unsatisfiable.",
+   "2": "No: the conclusion is eval equality; Quotient is a structural relation on tables. share_validated_never_faults takes the safety statement as an explicit hypothesis, which is now the proved theorem; I instantiated it (composed in a throwaway file) with validated_never_faults and #print axioms shows only the three allowed axioms.",
+   "3": "Not applicable: no annotation is trusted; contexts keep their own annotations and eval ignores them.",
+   "4": "Equality is of whole Results including the trace and the abort origin, so aborts, exits, timeouts and faults are all preserved; it does not claim m' validates (it may not), only that it behaves as m.",
+   "5": "The Lean Core module and eval. The production sharing criterion (spec 16: equality of the canonical lowered C text or GIR-L body) is not modeled; these theorems concern the Core-level quotient that the Lean checker can verify on a pair of exported Core modules, and nothing connects it to the C++ backend's merge decisions.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Informational. share_never_faults is a one-line corollary of share_eval (eval equality), so it adds no independent content; share_validated_never_faults is a conditional whose hypothesis is the safety theorem for all modules.",
+   "Informational. The quotient requires `m'` to keep m's contexts, so an m' that merges to a body renamed to a context whose annotations do not suit every caller still counts; the coverage row says m' is not claimed to validate. A caller that wants `m'` itself accepted must validate it separately."
+  ],
+  "checks": [
+   "share/run_index.sh: all 12 cases pass. #print axioms for each; composed theorem built and axiom-checked."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Proofs.Share.checkQuotient_sound",
+   "Goose.Proofs.Share.eqImpl_sound"
+  ],
+  "statement": "checkQuotient m m' qt rt = true implies Quotient m m' (qt-map) (bodyRenaming ...) for any witnesses; eqImpl a b = true implies a = b.",
+  "answers": {
+   "1": "Yes: the share fixtures pass the check, forged ones fail it.",
+   "2": "No: the checker is a Boolean function and the conclusion is the relational specification.",
+   "3": "Witnesses qt, rt are untrusted (rebuilt by reconstructImplMap / reconstructContextMap from the context tables); a wrong witness can only make the check fail.",
+   "4": "Not confused.",
+   "5": "The Lean checkQuotient that `goose-semantics share UNSHARED SHARED` runs (Cli.check calls checkQuotient on the reconstructed maps; #print confirmed) and `share --propose` re-checks its own output with the same function.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Low. Soundness only: completeness (every quotient has witnesses the checker accepts) is not proved, and eqImpl compares implementation names, variable names and summaries, so two otherwise equal bodies from differently named functions are not merged. This under-merges relative to spec 16.2; it never over-merges."
+  ],
+  "checks": [
+   "Read Quotient.lean, Equal.lean, Cli.lean; #print Goose.Share.Cli.check; ran the share index script."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Reuse.cachedRun_result",
+   "Goose.Reuse.cachedRun_consistent",
+   "Goose.Reuse.cachedRuns_agree",
+   "Goose.Reuse.cachedRuns_agree_from",
+   "Goose.Reuse.cachedRun₂_result",
+   "Goose.Reuse.cachedRuns₂_agree"
+  ],
+  "statement": "Given KeyDetermines (key i = key j -> run i = run j) as an explicit hypothesis and a consistent cache (every entry is the run of some input with that key), a cached run returns run i and leaves the cache consistent; any sequence of cached runs agrees with recomputation; two stages in a row, the second keyed on the first's result, have the same property. cachedRun_consistent needs no key hypothesis.",
+  "answers": {
+   "1": "Any stage with a sound key; the model is independent of Core and instantiated only by the omitted-input counterexample.",
+   "2": "The hypothesis is the whole content and is stated as a hypothesis, never discharged: grep shows KeyDetermines only as a hypothesis of the theorems and as the negated assumption of wrong_answer_without_key_determination; no theorem or example proves it for a concrete stage. The module doc (Reuse/Model.lean) and the coverage row 'key completeness of a reuse boundary' (label assumed) say so, and the plan's paragraph says the theorem must not be cited as establishing it.",
+   "3": "Not applicable: no real key, digest or boundary is modeled, so nothing in a summary or annotation is claimed.",
+   "4": "Identity/cost: the model has pure total functions, so a cache hit returning a stored value is equal by definition; failure, partial writes, corruption, concurrency and the store protocol of spec 19.3 are not modeled.",
+   "5": "A Lean toy model (Stage, Cache as an association list). Not the compiler's reuse (R0/R1), not the C++ cache, not any production key.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most. Statements are over ordinary structures; the only classical axiom is used in the necessity theorem."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [
+   "Low. The validation plan says the model shows 'cache consistency, build order and interleaving cannot break agreement with recomputation'. The model is a single-threaded atomic sequence of cachedRun calls; it covers different inputs in any order but not concurrent builds sharing a store, non-atomic publication, or corrupt entries (spec 19.3's rename-then-completion-record protocol is outside it). KeyDetermines is also quantified over every value of the input type, not only inputs that can occur.",
+   "Low. trust.md has no row for the key-completeness assumption (only coverage.json does), although the plan says the ledger has a row for each trusted item; the C compiler determinism row is present."
+  ],
+  "checks": [
+   "Read the whole of Reuse/Model.lean; grep for KeyDetermines; #print axioms (propext only for most)."
+  ]
+ },
+ {
+  "theorems": [
+   "Goose.Reuse.wrong_answer_without_key_determination",
+   "Goose.Reuse.key_omission_example"
+  ],
+  "statement": "If the key does not determine the result there is a consistent cache and an input for which cachedRun answers wrongly; concretely key = fst, run = fst + snd, inputs (0,0) and (0,1): the second is answered 0 while run is 1.",
+  "answers": {
+   "1": "The counterexample is concrete and checked by `decide`.",
+   "2": "No hidden predicate; negation of KeyDetermines is the hypothesis.",
+   "3": "Not applicable.",
+   "4": "Not confused.",
+   "5": "Lean toy model only.",
+   "6": "No `sorry`, `native_decide`, `bv_decide`, `partial`, `unsafe`, `opaque`, `implemented_by`, `extern`, `axiom` or `@[simp]` attribute on any definition or statement in scope (grep over semantics/Goose excluding GIR/Lower); `#print axioms` run by the reviewer shows propext, Classical.choice, Quot.sound at most."
+  },
+  "verdict": "sound-and-meaningful",
+  "findings": [],
+  "checks": [
+   "Read statements; axioms: propext (and Classical.choice for the general theorem)."
+  ]
+ }
+]
