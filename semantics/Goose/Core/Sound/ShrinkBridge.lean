@@ -243,7 +243,30 @@ theorem shrinkApproval_retainsInteriorAlias
   · intro mu el capacity l start count hty _ _
     simp [hty, Ty.interiorTarget?, Ty.ownerElem?] at hinterior
 
-/-- A clear mutation context selects the approval for its exact owner and frame. -/
+/- A direct mutation context selects the approval for its exact owner and
+frame, so each mutation proof uses the checked request for that source point. -/
+theorem NodeContext.directShrinkApproval
+    {m : Module} {plans : Array (Array DemandPoint)}
+    {planContext : PlanContext m plans} {path : List Nat} {node : DemandNode}
+    (context : NodeContext planContext path node .mutation)
+    {ownerPlace : Place}
+    (directPlace : node.directShrinkPlace? = some ownerPlace)
+    {owner : DemandOwner}
+    (ownerResult : planContext.approvals.access.owner ownerPlace = .ok owner) :
+    ∃ approval : DemandShrinkApproval m planContext.owner planContext.plan,
+      approval.point.path = path ∧ approval.shrinkOwner = owner ∧
+        approval.point.phase = .mutation ∧
+          DemandPoint.sameFrameMembership approval.point context.expected.toPoint := by
+  have howner : owner ∈ context.expected.shrinkOwners :=
+    context.sourceAt.directShrinkOwner rfl directPlace
+      planContext.approvals.accessMatches ownerResult
+  rcases context.sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
+  rcases planContext.approvals.directShrinkAt context.expected context.member hphase
+      (by simpa [DemandNode.isDirectShrink, hnode, directPlace]) owner howner with
+    ⟨approval, _, hapath, howner, hphase, hframe⟩
+  exact ⟨approval, hapath.trans hpath, howner, hphase, hframe⟩
+
+/- A clear mutation context selects the approval for its exact owner and frame. -/
 theorem NodeContext.clearApproval
     {m : Module} {plans : Array (Array DemandPoint)}
     {planContext : PlanContext m plans} {path : List Nat}
@@ -255,15 +278,7 @@ theorem NodeContext.clearApproval
       approval.point.path = path ∧ approval.shrinkOwner = owner ∧
         approval.point.phase = .mutation ∧
           DemandPoint.sameFrameMembership approval.point context.expected.toPoint := by
-  have howner : owner ∈ context.expected.shrinkOwners :=
-    context.sourceAt.directShrinkOwner rfl rfl
-      planContext.approvals.accessMatches ownerResult
-  rcases context.sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
-  have hdirect : context.expected.node.directShrinkPlace? = some ownerPlace := by
-    simpa [hnode, DemandNode.directShrinkPlace?]
-  rcases planContext.approvals.directShrinkAt context.expected context.member hphase
-      (by simpa [DemandNode.isDirectShrink, hdirect]) owner howner with
-    ⟨approval, _, hapath, howner, hphase, hframe⟩
-  exact ⟨approval, hapath.trans hpath, howner, hphase, hframe⟩
+  exact context.directShrinkApproval (ownerPlace := ownerPlace)
+    (by simp [DemandNode.directShrinkPlace?]) ownerResult
 
 end Goose.Core.Sound
