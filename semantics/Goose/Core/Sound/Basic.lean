@@ -96,6 +96,18 @@ def Unbound (m : Module) (G : Nat) (l : Loc) (T : Ty) : Prop :=
 def LocOk (m : Module) (G : Nat) (s : Store) (l : Loc) (T : Ty) : Prop :=
   LocTy s l T ∨ Unbound m G l T
 
+/-- A location for an owner denotes its header, never an element path. -/
+def HeaderLoc (l : Loc) (T : Ty) : Prop :=
+  T.ownerElem?.isSome → l.path = []
+
+theorem HeaderLoc.root {r : RootInst} {T : Ty} : HeaderLoc ⟨r, []⟩ T := by
+  intro _
+  rfl
+
+theorem HeaderLoc.ofFlat {l : Loc} {T : Ty} (hflat : T.flat = true) : HeaderLoc l T := by
+  intro howner
+  cases T <;> simp [Ty.flat, Ty.ownerElem?] at hflat howner
+
 theorem LocOk.fieldPath {m : Module} {G : Nat} {s : Store} {l : Loc} {a b : Ty} {p : List Nat}
     (h : LocOk m G s l a) (k : FieldPath a p b) : LocOk m G s ⟨l.root, l.path ++ p⟩ b := by
   rcases h with h | ⟨g, gl, hG, hr, hg, hp⟩
@@ -110,7 +122,7 @@ def SliceTy (s : Store) (l : Loc) (st n : Nat) (E : Ty) : Prop :=
 
 /-- The value has the type in the store. Mutability is not part of it. -/
 def HasTy (m : Module) (G : Nat) (s : Store) (v : Val) : Ty → Prop
-  | .ref _ T => ∃ l, v = .ref l ∧ ((T.refTarget = true ∧ LocOk m G s l T) ∨
+  | .ref _ T => ∃ l, v = .ref l ∧ ((T.refTarget = true ∧ LocOk m G s l T ∧ HeaderLoc l T) ∨
       (T.isSlice = true ∧ l.path = [] ∧ s.roots[l.root]? ≠ none))
   | .slice _ E => ∃ l st n, v = .slice l st n ∧ E.flat = true ∧ SliceTy s l st n E
   | .unit => v = .unit
@@ -129,6 +141,21 @@ def Held (m : Module) (G : Nat) (s : Store) : Val → Prop
       (l.path = [] ∧ s.roots[l.root]? ≠ none)
   | .slice l st n => ∃ E, SliceTy s l st n E
   | _ => True
+
+theorem HasTy.ownerHeader {m : Module} {G : Nat} {s : Store} {l : Loc} {mu : Mutability} {T : Ty}
+    (h : HasTy m G s (.ref l) (.ref mu T)) (howner : T.ownerElem?.isSome = true) : l.path = [] := by
+  simp only [HasTy] at h
+  obtain ⟨l', hv, hloc⟩ := h
+  cases hv
+  rcases hloc with ⟨_, _, hheader⟩ | ⟨_, hpath, _⟩
+  · exact hheader howner
+  · exact hpath
+
+/-- A typed reference to an owner cannot target a nonempty path. -/
+theorem HasTy.ownerHeader_excludes_nonempty {m : Module} {G : Nat} {s : Store} {l : Loc}
+    {mu : Mutability} {T : Ty} (h : HasTy m G s (.ref l) (.ref mu T))
+    (howner : T.ownerElem?.isSome = true) (hnonempty : l.path ≠ []) : False := by
+  exact hnonempty (h.ownerHeader howner)
 
 theorem dom_mono {s s' : Store} {r : RootInst} (hle : StoreLe s s') (h : s.roots[r]? ≠ none) :
     s'.roots[r]? ≠ none := by
@@ -171,7 +198,7 @@ theorem HasTy.mono {m : Module} {G : Nat} {s s' : Store} {v : Val} {T : Ty} (hle
     (h : HasTy m G s v T) : HasTy m G s' v T := by
   cases T <;> simp only [HasTy] at h ⊢ <;> try exact h
   · obtain ⟨l, h1, h2⟩ := h
-    exact ⟨l, h1, h2.elim (fun h => Or.inl ⟨h.1, h.2.mono hle⟩)
+    exact ⟨l, h1, h2.elim (fun h => Or.inl ⟨h.1, h.2.1.mono hle, h.2.2⟩)
       (fun h => Or.inr ⟨h.1, h.2.1, dom_mono hle h.2.2⟩)⟩
   · obtain ⟨l, st, n, h1, h2, h3⟩ := h; exact ⟨l, st, n, h1, h2, h3.mono hle⟩
 
@@ -187,7 +214,7 @@ theorem HasTy.held {m : Module} {G : Nat} {s : Store} {v : Val} {T : Ty}
   cases T <;> simp only [HasTy] at h
   case ref _ T =>
     obtain ⟨l, rfl, h2⟩ := h
-    exact h2.elim (fun h => Or.inl ⟨T, h.1, h.2⟩) (fun h => Or.inr ⟨h.2.1, h.2.2⟩)
+    exact h2.elim (fun h => Or.inl ⟨T, h.1, h.2.1⟩) (fun h => Or.inr ⟨h.2.1, h.2.2⟩)
   case slice _ E => obtain ⟨l, st, n, rfl, _, h3⟩ := h; exact ⟨E, h3⟩
   case unit => subst h; trivial
   all_goals (cases v <;> simp_all [Held, FlatTy])

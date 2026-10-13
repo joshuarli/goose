@@ -98,7 +98,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     refine Sat.bind (ih.expr W tenv' penv env s1 e _ _ _ _ _ _ hp hF1 hte hre hE2) ?_
     rintro v s2 ⟨hF2, hX2, hv, hgv⟩
-    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', hpv, _, _, _, _, hrl, _⟩ |
+    rcases hpl with ⟨hrt, hl, _⟩ | ⟨x, lv, si, v', hpv, _, _, _, _, hrl, _⟩ |
       ⟨x, lv, mu0, mus, E, ann, rfl, hlv, hty, rfl, hflE, hpath, hann, hgl, hlive⟩
     · have hfl' : te.flat = true := by
         cases hf : te.flat with
@@ -154,7 +154,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     refine Sat.bind (ih.place W tenv' penv env s p _ _ _ _ _ _ _ _ hp hF htp hrp
       ((rpExpr_mono hre).2.trans hE2)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
-    rcases hpl with ⟨_, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
+    rcases hpl with ⟨_, hl, _⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
       ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
     · have hlt := access hp hl hg (fun t' ht' => Or.inl (hE3.1 t' (hinr t' ht')))
       refine sat_readLoc_bind hlt (fun v0 _ hT0 => ?_)
@@ -253,7 +253,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     refine Sat.bind (ih.view W tenv penv env s1 src _ _ _ _ _ _ _ hp hF1 hview hrv hE2) ?_
     rintro vw s2 ⟨hF2, hX2, hvw, _⟩
     refine sat_readRun_bind hvw (fun vs hvs => ?_)
-    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
+    rcases hpl with ⟨hrt, hl, _⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
       ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
     · have hlt := access hp (hl.mono hX2.le) hg
         (fun t' ht' => Or.inr (Or.inr (Or.inl (hE3.2.2.1 t' (hin t' ht')))))

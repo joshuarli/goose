@@ -279,7 +279,7 @@ theorem step_expr_b (ih : Specs m prof n) :
     refine Sat.bind (ih.place W tenv penv env s p _ _ _ _ _ _ _ _ hp hF htp hrp
       ((PMono.addReads _ _ _ _ hadd).2.trans hE)) ?_
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
-    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v, rfl, h1, h2, rfl, rfl, hrl, h4, h5⟩ |
+    rcases hpl with ⟨hrt, hl, _⟩ | ⟨x, lv, si, v, rfl, h1, h2, rfl, rfl, hrl, h4, h5⟩ |
       ⟨x, lv, mu0, mus, E, ann, rfl, hlv, hty, rfl, hfl, hpath, hann, hgl, hlive⟩
     · have hlt := access hp hl hg (fun t' ht' => Or.inl (hE.1 t' (hin t' ht')))
       refine sat_readLoc hlt (fun v hv hT => ?_)
@@ -456,7 +456,7 @@ theorem step_expr_b (ih : Specs m prof n) :
     rintro l s1 ⟨hF1, hX1, hpl, hg⟩
     refine Sat.bind (ih.expr W tenv penv env s1 a _ _ _ _ _ _ hp hF1 hta hra hE2) ?_
     rintro v s2 ⟨hF2, hX2, hv, _⟩
-    rcases hpl with ⟨hrt, hl⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
+    rcases hpl with ⟨hrt, hl, _⟩ | ⟨x, lv, si, v', _, _, _, _, _, hrl, _⟩ |
       ⟨_, _, _, _, _, _, _, _, _, h3, _⟩
     · have hfl : ownerEl.flat = true := by
         cases t <;> simp_all [Ty.ownerElem?, Ty.refTarget]
@@ -489,7 +489,8 @@ theorem step_expr_b (ih : Specs m prof n) :
         have hstep := append_flatStep _ _ _ _ _ _ hltGrow hvs happ
         have hnew := hnew 0 v (by simp)
         refine ⟨hF2.flatStep hstep, (hX1.trans hX2).trans (Ext.of_flatStep hstep),
-          ⟨_, rfl, Or.inl ⟨flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩⟩⟩,
+          ⟨_, rfl, Or.inl ⟨flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩,
+            HeaderLoc.ofFlat hfl⟩⟩,
           fun r hr' => by cases hr'; simpa [hrho] using hg⟩
         simpa using hnew
       · rw [horg]
@@ -522,7 +523,8 @@ theorem step_expr_b (ih : Specs m prof n) :
         have hstep := append_flatStep_owner s2.store st' l #[v] i t ownerEl hownerType hfl hlt hvs happ
         have hnew := happLe.2.2 0 v (by simp)
         refine ⟨hF2.flatStep hstep, (hX1.trans hX2).trans (Ext.of_flatStep hstep),
-          ⟨_, rfl, Or.inl ⟨flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩⟩⟩,
+          ⟨_, rfl, Or.inl ⟨flat_refTarget hfl, Or.inl ⟨v, ?_, hv.flat hfl⟩,
+            HeaderLoc.ofFlat hfl⟩⟩,
           fun r hr' => by cases hr'; simpa [hrho] using hg⟩
         simpa using hnew
     · simp [Ty.isRefLike] at hrl
