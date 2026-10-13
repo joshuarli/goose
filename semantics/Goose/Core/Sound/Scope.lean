@@ -1,4 +1,5 @@
 import Goose.Core.Sound.CallPreservation
+import Goose.Core.Sound.Retain
 
 /-!
 How the frame changes when a variable is bound or rebound, when a call
@@ -476,6 +477,123 @@ theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
 def relSt (env : Env) (sc : Nat) (si : ScopeInst) (s : St) : St :=
   { s with store := releaseVars env.vars env.act sc si env.vars.size s.store }
 
+/-- Releasing a block removes only its newly opened roots from the statement
+footprint. The outer frame supplies freshness for the block's scope instance. -/
+theorem FootprintS.releaseBlock {future : List VarId} {sc : Nat} {D : RootInst → Prop}
+    {s2 : St} (hframe : Frame m W tenv penv env s future)
+    (h : FootprintS { env with scopes := (sc, s.nextScope) :: env.scopes } D
+      { s with nextScope := s.nextScope + 1 } s2) :
+    Footprint (insts env) D s (relSt env sc s.nextScope s2) := by
+  let inner := { env with scopes := (sc, s.nextScope) :: env.scopes }
+  have hinsts : insts inner = s.nextScope :: insts env := by simp [insts, inner]
+  have hcurrent : ∀ a x, s.store.roots[RootInst.local a s.nextScope x]? = none := by
+    intro a x
+    cases hroot : s.store.roots[RootInst.local a s.nextScope x]? with
+    | none => rfl
+    | some v =>
+      have hlt : s.nextScope < s.nextScope :=
+        hframe.inv.fresh a s.nextScope x (by rw [hroot]; simp)
+      exact False.elim ((Nat.lt_irrefl _) hlt)
+  have htop : ∀ r, TopRoot inner r → ScopeRoots env.vars env.act sc s.nextScope r := by
+    intro r hroot
+    rcases hroot with ⟨x, lv, si, rest, hscopes, hvar, hr⟩
+    dsimp only [inner] at hscopes hr hvar
+    simp only [List.cons.injEq, Prod.mk.injEq] at hscopes
+    rcases hscopes with ⟨⟨hscope, hsi⟩, _⟩
+    subst si
+    subst r
+    exact ⟨x, lv, hvar, hscope.symm, rfl⟩
+  have hnotInner : ∀ r, s.store.roots[r]? ≠ none →
+      (∀ a si x, r = RootInst.local a si x → si ∉ insts env) →
+      ∀ a si x, r = RootInst.local a si x → si ∉ insts inner := by
+    intro r hr hn a si x heq hmem
+    by_cases hcurrentScope : si = s.nextScope
+    · have hroot : s.store.roots[RootInst.local a si x]? ≠ none := by
+        rw [← heq]
+        exact hr
+      have hroot' : s.store.roots[RootInst.local a s.nextScope x]? ≠ none := by
+        simpa [hcurrentScope] using hroot
+      exact hroot' (hcurrent a x)
+    · have htail : si ∈ insts env := by
+        have hmem' : si ∈ s.nextScope :: insts env := by simpa [hinsts] using hmem
+        exact (List.mem_cons.1 hmem').resolve_left hcurrentScope
+      exact hn a si x heq htail
+  obtain ⟨hagree, hgone⟩ := releaseScope_roots env.vars env.act sc s.nextScope s2.store
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · exact Nat.le_trans (Nat.le_succ _) h.next
+  · intro r v hv hr hn hd
+    have hnotScope : ¬ ScopeRoots env.vars env.act sc s.nextScope r := by
+      intro hp
+      rcases hp with ⟨x, lv, hvar, hscope, rfl⟩
+      have hnone := hcurrent env.act x
+      rw [hv] at hnone
+      cases hnone
+    have hkeep := h.keep r v hv hr (hnotInner r (by rw [hv]; simp) hn) hd
+    show (releaseVars env.vars env.act sc s.nextScope env.vars.size s2.store).roots[r]? = some v
+    rw [hagree r hnotScope]
+    exact hkeep
+  · intro r v hv hr hn hd
+    have hnotScope : ¬ ScopeRoots env.vars env.act sc s.nextScope r := by
+      intro hp
+      change (releaseVars env.vars env.act sc s.nextScope env.vars.size s2.store).roots[r]? = some v at hv
+      rw [hgone r hp] at hv
+      cases hv
+    have hpost : s2.store.roots[r]? = some v := by
+      change (releaseVars env.vars env.act sc s.nextScope env.vars.size s2.store).roots[r]? = some v at hv
+      rw [hagree r hnotScope] at hv
+      exact hv
+    have hnotInner : ∀ a si x, r = RootInst.local a si x → si ∉ insts inner := by
+      intro a si x heq hmem
+      by_cases hcurrentScope : si = s.nextScope
+      · have hsource : s.store.roots[r]? ≠ none := by
+          rcases h.dom r (by rw [hpost]; simp) with hsource | htop'
+          · exact hsource
+          · exact False.elim (hnotScope (htop r htop'))
+        have hsource' : s.store.roots[RootInst.local a si x]? ≠ none := by
+          rw [← heq]
+          exact hsource
+        have hsource'' : s.store.roots[RootInst.local a s.nextScope x]? ≠ none := by
+          simpa [hcurrentScope] using hsource'
+        exact hsource'' (hcurrent a x)
+      · have htail : si ∈ insts env := by
+          have hmem' : si ∈ s.nextScope :: insts env := by simpa [hinsts] using hmem
+          exact (List.mem_cons.1 hmem').resolve_left hcurrentScope
+        exact hn a si x heq htail
+    have hback := h.back r v hpost hr hnotInner hd
+    exact hback
+  · intro r hr
+    by_cases hp : ScopeRoots env.vars env.act sc s.nextScope r
+    · change (releaseVars env.vars env.act sc s.nextScope env.vars.size s2.store).roots[r]? ≠ none at hr
+      exact False.elim (hr (hgone r hp))
+    · have hpost : s2.store.roots[r]? ≠ none := by
+        change (releaseVars env.vars env.act sc s.nextScope env.vars.size s2.store).roots[r]? ≠ none at hr
+        rw [← hagree r hp]
+        exact hr
+      rcases h.dom r hpost with hsource | htop'
+      · exact hsource
+      · exact False.elim (hp (htop r htop'))
+
+/-- The pilot store-growth contract survives releasing roots newer than the
+source frame. This is separate from the profile-independent footprint proof. -/
+theorem PilotStoreLe.releaseScope {future : List VarId} {sc : Nat} {si : ScopeInst}
+    {s2 : St} (hframe : Frame m W tenv penv env s future)
+    (hsi : s.nextScope ≤ si) (hle : PilotStoreLe m s s2) :
+    PilotStoreLe m s (relSt env sc si s2) := by
+  intro hp
+  obtain ⟨hagree, _⟩ := releaseScope_roots env.vars env.act sc si s2.store
+  have hfresh : ∀ r, ScopeRoots env.vars env.act sc si r → s.store.roots[r]? = none := by
+    rintro r ⟨x, lv, hvar, hscope, rfl⟩
+    cases hroot : s.store.roots[RootInst.local env.act si x]? with
+    | none => rfl
+    | some v =>
+      have hlt : si < s.nextScope := hframe.inv.fresh env.act si x (by rw [hroot]; simp)
+      exact False.elim ((Nat.not_lt_of_ge hsi) hlt)
+  apply storeLe_release (P := ScopeRoots env.vars env.act sc si) (hle hp)
+  · intro r hnot
+    change (releaseVars env.vars env.act sc si env.vars.size s2.store).roots[r]? = s2.store.roots[r]?
+    exact hagree r hnot
+  · exact hfresh
+
 section Agree
 variable {G : Nat} {st st' : Store} {P : RootInst → Prop}
 
@@ -510,6 +628,91 @@ theorem Held.agree {v : Val}
     rw [hagree _ (ht _ rfl)]; exact h.2
   · obtain ⟨E, h3⟩ := h
     exact ⟨E, h3.agree hagree (ht _ rfl)⟩
+
+/-- A typed value remains typed after scope release when it does not target
+any root released with that scope. -/
+theorem HasTy.releaseScope {G : Nat} {s2 : St} {sc : Nat} {si : ScopeInst}
+    {v : Val} {T : Ty} (h : HasTy m G s2.store v T)
+    (hsurv : ∀ r, Targets v r → ¬ ScopeRoots env.vars env.act sc si r) :
+    HasTy m G (relSt env sc si s2).store v T := by
+  obtain ⟨hagree, _⟩ := releaseScope_roots env.vars env.act sc si s2.store
+  apply h.agree
+  · intro r hnot
+    change (releaseVars env.vars env.act sc si env.vars.size s2.store).roots[r]? = s2.store.roots[r]?
+    exact hagree r hnot
+  · exact hsurv
+
+/-- An older holder's stored references cannot target a younger scope. -/
+private theorem BeforeBase.older_target {base : Nat} {holder target : RootInst}
+    (hholder : BeforeBase base holder) (hage : Older target holder) : BeforeBase base target := by
+  cases holder with
+  | global g =>
+    cases target with
+    | global g' => trivial
+    | «local» a si x => exact False.elim (by simpa [Older] using hage)
+  | «local» a si x =>
+    cases target with
+    | global g => trivial
+    | «local» a' si' x' =>
+      have hsi : si < base := by simpa [BeforeBase] using hholder
+      have hsi' : si' ≤ si := by simpa [Older] using hage
+      exact Nat.lt_of_le_of_lt hsi' hsi
+
+/-- Caller observations survive release of a scope at or after their
+activation base. The frame age invariant excludes released roots from every
+observed value. -/
+theorem ObservedSafe.releaseScope {future : List VarId} {sc : Nat} {si : ScopeInst}
+    {shrinking : RootInst → Prop} {o : Observation} {s2 : St}
+    (h : ObservedSafe m W shrinking o s2.store)
+    (hframe : Frame m W tenv penv env s2 future) (hbase : W.base ≤ si) :
+    ObservedSafe m W shrinking o (relSt env sc si s2).store := by
+  obtain ⟨hagree, _⟩ := releaseScope_roots env.vars env.act sc si s2.store
+  have before_notScope : ∀ r, BeforeBase W.base r → ¬ ScopeRoots env.vars env.act sc si r := by
+    intro r hbefore hp
+    rcases hp with ⟨x, lv, hvar, hscope, rfl⟩
+    change si < W.base at hbefore
+    exact (Nat.not_lt_of_ge hbase) hbefore
+  have roots_notScope : ∀ r T, o.roots r T → ∀ v, s2.store.roots[r]? = some v →
+      ∀ target, Targets v target → ¬ ScopeRoots env.vars env.act sc si target := by
+    intro r T hobs v hv target htarget hscope
+    exact before_notScope target
+      (BeforeBase.older_target (h.rootsOlder r T hobs) (hframe.inv.age r v hv target htarget)) hscope
+  have values_notScope : ∀ v T, o.values v T → ∀ target, Targets v target →
+      ¬ ScopeRoots env.vars env.act sc si target := by
+    intro v T hobs target htarget
+    exact before_notScope target (h.valuesOlder v T hobs target htarget)
+  refine ⟨?_, h.rootsOlder, h.valuesOlder, ?_, h.valuesProtected⟩
+  · constructor
+    · intro r T hobs
+      obtain ⟨v, hv, hty⟩ := h.typed.roots r T hobs
+      have hnot := before_notScope r (h.rootsOlder r T hobs)
+      have hnew : (relSt env sc si s2).store.roots[r]? = some v := by
+        change (releaseVars env.vars env.act sc si env.vars.size s2.store).roots[r]? = some v
+        rw [hagree r hnot]
+        exact hv
+      exact ⟨v, hnew, hty.releaseScope (roots_notScope r T hobs v hv)⟩
+    · intro v T hobs
+      exact (h.typed.values v T hobs).releaseScope (values_notScope v T hobs)
+  · intro r T v hobs hv hinterior target htarget
+    have hnot := before_notScope r (h.rootsOlder r T hobs)
+    have hv0 : s2.store.roots[r]? = some v := by
+      change (releaseVars env.vars env.act sc si env.vars.size s2.store).roots[r]? = some v at hv
+      rw [hagree r hnot] at hv
+      exact hv
+    exact h.rootsProtected r T v hobs hv0 hinterior target htarget
+
+/-- Aliases rooted in the caller's frame keep their runtime typing when a
+younger scope is released. Their static roots still denote the same roots. -/
+theorem RetainsAliases.releaseScope {future : List VarId} {sc : Nat} {si : ScopeInst}
+    {s2 : St} {aliases : List RetainedAlias}
+    (hframe : Frame m W tenv penv env s future) (hsi : s.nextScope ≤ si) :
+    RetainsAliases m W env s2.store (relSt env sc si s2).store aliases := by
+  intro alias hmem v ⟨hty, hroots⟩
+  refine ⟨hty.releaseScope (env := env) ?_, hroots⟩
+  intro r htarget hscope
+  rcases hscope with ⟨x, lv, hvar, hdecl, rfl⟩
+  have hbefore := hframe.gam_older (hroots _ htarget) env.act si x rfl
+  exact (Nat.not_lt_of_ge hsi) hbefore
 
 /-- Releasing roots no surviving reference targets keeps the store invariant. -/
 theorem StoreInv.release {s : St} {demanded : RootInst → Prop} (hi : StoreInv m G s demanded)
