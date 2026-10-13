@@ -2631,13 +2631,13 @@ theorem DemandExpectedSourceAt.sourceFacts {m owner path node phase expected}
 
 /-- A place occurrence carries a whole-root request for each inherited forbidden owner. -/
 theorem DemandExpectedSourceAt.placeWholeRootsRequest
-    {m owner path place expected access roots forbiddenOwner}
+    {m owner path place expected access forbiddenOwner}
     (sourceAt : DemandExpectedSourceAt m owner path (.place place) .place expected)
     (accessMatches : demandAccess? m owner = some access)
-    (placeRoots : access.placeRoots place = .ok roots)
     (forbidden : forbiddenOwner ∈ expected.forbidden) :
-    ∃ request, request ∈ expected.wholeChecks ∧
-      request.forbidden = forbiddenOwner ∧ request.checkedRoots = roots := by
+    ∃ roots, access.placeRoots place = .ok roots ∧
+      ∃ request, request ∈ expected.wholeChecks ∧
+        request.forbidden = forbiddenOwner ∧ request.checkedRoots = roots := by
   rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
   obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
   have hmemMap : expected ∈ result.entries.map fun entry => entry.expected := by
@@ -2648,17 +2648,21 @@ theorem DemandExpectedSourceAt.placeWholeRootsRequest
   have hsetupAccess : demandAccess? m owner = some setup.access := by
     simp [demandAccess?, hsetup]
   have haccessEq : setup.access = access := Option.some.inj (hsetupAccess.symm.trans accessMatches)
-  have placeRoots' : setup.access.placeRoots place = .ok roots := by
-    simpa [haccessEq] using placeRoots
   have hitemNode : entry.item.node = .place place := entry.expectedNode.symm.trans hnode
   have hwhole := entry.wholeRequests
-  simp [DemandNode.expectedWholeChecks, hitemNode, hphase,
-    entry.expectedForbidden.symm, placeRoots'] at hwhole
-  change Except.ok (entry.expected.forbidden.map
-    (fun owner : DemandOwner => DemandWholeCheck.mk owner roots)) =
-    Except.ok entry.expected.wholeChecks at hwhole
-  have hwholeList := Except.ok.inj hwhole
-  refine ⟨⟨forbiddenOwner, roots⟩, ?_, rfl, rfl⟩
+  have hrootsExists : ∃ roots, setup.access.placeRoots place = .ok roots := by
+    cases hroots : setup.access.placeRoots place with
+    | error error =>
+      simp [DemandNode.expectedWholeChecks, hitemNode, hphase, hroots,
+        Functor.map, Except.map] at hwhole
+    | ok roots => exact ⟨roots, rfl⟩
+  rcases hrootsExists with ⟨roots, hrootsSetup⟩
+  have hroots : access.placeRoots place = .ok roots := by
+    simpa [haccessEq] using hrootsSetup
+  have hwholeList := Except.ok.inj (ε := Rejection) (by
+    simpa [DemandNode.expectedWholeChecks, hitemNode, hphase,
+      entry.expectedForbidden.symm, hrootsSetup, Functor.map, Except.map] using hwhole)
+  refine ⟨roots, hroots, ⟨⟨forbiddenOwner, roots⟩, ?_, rfl, rfl⟩⟩
   rw [← hwholeList]
   exact List.mem_map.mpr ⟨forbiddenOwner, forbidden, rfl⟩
 
