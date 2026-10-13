@@ -1494,16 +1494,34 @@ private:
             }
             return true;
         };
-        auto replaceBindingIsWritable = [&](int value) {
+        function<bool(int, vector<char> &)> replacementBindingWritable = [&](int value, vector<char> &open) {
             if (value < 0 || value >= (int)fn.vt.size() || fn.vt[value] < 0) return false;
+            if (open[value]) return false;
+            open[value] = 1;
+            auto close = [&](bool result) { open[value] = 0; return result; };
             auto &reference = m.Type(fn.vt[value]);
-            if (reference.kind != CoreType::Ref || reference.mut != CoreMut::Mut) return false;
             auto *def = defs[value];
             if (def && def->op == GirOp::Slot)
-                return f.slots[def->idx].kind == CoreVarKind::Var;
+                return close(f.slots[def->idx].kind == CoreVarKind::Var);
             if (def && def->op == GirOp::Global)
-                return m.globals[def->idx].kind == CoreVarKind::Var;
-            return true;
+                return close(m.globals[def->idx].kind == CoreVarKind::Var);
+            if (!def) {
+                auto &entry = f.blocks[0].params;
+                if (find_if(entry.begin(), entry.end(), [&](auto &p) { return p.first == value; }) != entry.end())
+                    return close(reference.kind == CoreType::Ref && reference.mut == CoreMut::Mut);
+                if (incoming[value].empty()) return close(false);
+                for (auto source : incoming[value])
+                    if (!replacementBindingWritable(source, open)) return close(false);
+                return close(true);
+            }
+            // A loaded or returned mutable reference carries its callee's checked
+            // permission. A CFG parameter is different: every incoming place
+            // must independently permit replacing its whole binding.
+            return close(true);
+        };
+        auto replaceBindingIsWritable = [&](int value) {
+            vector<char> open(fn.nvalues, 0);
+            return replacementBindingWritable(value, open);
         };
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
