@@ -134,29 +134,30 @@ def ObservationDemand (o : Observation) : RootInst → Prop
   | r@(.local ..) => ∃ T, o.roots r T
 
 /-- Caller observations must outlive the callee and their interior aliases
-must avoid every root that its effects may shrink. Full typing alone does not
+must avoid the explicitly chosen shrink footprint. Full typing alone does not
 protect a newly rebound reference whose runtime targets have changed. -/
-structure ObservedSafe (m : Module) (W : World) (o : Observation) (s : Store) : Prop where
+structure ObservedSafe (m : Module) (W : World) (shrinking : RootInst → Prop)
+    (o : Observation) (s : Store) : Prop where
   typed : Observed m W.G o s
   rootsOlder : ∀ r T, o.roots r T → BeforeBase W.base r
   valuesOlder : ∀ v T, o.values v T → ∀ r, Targets v r → BeforeBase W.base r
   rootsProtected : ∀ r T v, o.roots r T → s.roots[r]? = some v →
     T.interiorTarget?.isSome = true →
-    ∀ target, Targets v target → ¬ MayShrinkEff W.P W.E target
+    ∀ target, Targets v target → ¬ shrinking target
   valuesProtected : ∀ v T, o.values v T → T.interiorTarget?.isSome = true →
-    ∀ target, Targets v target → ¬ MayShrinkEff W.P W.E target
+    ∀ target, Targets v target → ¬ shrinking target
 
-theorem ObservedSafe.empty (m : Module) (W : World) (s : Store) :
-    ObservedSafe m W Observation.empty s :=
+theorem ObservedSafe.empty (m : Module) (W : World) (shrinking : RootInst → Prop) (s : Store) :
+    ObservedSafe m W shrinking Observation.empty s :=
   ⟨Observed.empty _ _ _, fun _ _ h => False.elim h, fun _ _ h => False.elim h,
     fun _ _ _ h => False.elim h, fun _ _ h => False.elim h⟩
 
 /-- Restriction keeps both typing and the age and protection obligations of
 the bindings and sampled operands still required by the caller. -/
 theorem ObservedSafe.restrict {m : Module} {W : World} {o subset : Observation} {s : Store}
-    (h : ObservedSafe m W o s)
+    {shrinking : RootInst → Prop} (h : ObservedSafe m W shrinking o s)
     (hroots : ∀ r T, subset.roots r T → o.roots r T)
-    (hvalues : ∀ v T, subset.values v T → o.values v T) : ObservedSafe m W subset s :=
+    (hvalues : ∀ v T, subset.values v T → o.values v T) : ObservedSafe m W shrinking subset s :=
   ⟨h.typed.restrict hroots hvalues,
     fun r T hr => h.rootsOlder r T (hroots r T hr),
     fun v T hv => h.valuesOlder v T (hvalues v T hv),
@@ -164,29 +165,30 @@ theorem ObservedSafe.restrict {m : Module} {W : World} {o subset : Observation} 
     fun v T hv => h.valuesProtected v T (hvalues v T hv)⟩
 
 theorem ObservedSafe.union {m : Module} {W : World} {a b : Observation} {s : Store}
-    (ha : ObservedSafe m W a s) (hb : ObservedSafe m W b s) :
-    ObservedSafe m W (a.union b) s :=
+    {shrinking : RootInst → Prop}
+    (ha : ObservedSafe m W shrinking a s) (hb : ObservedSafe m W shrinking b s) :
+    ObservedSafe m W shrinking (a.union b) s :=
   ⟨ha.typed.union hb.typed,
     fun r T hr => hr.elim (ha.rootsOlder r T) (hb.rootsOlder r T),
     fun v T hv => hv.elim (ha.valuesOlder v T) (hb.valuesOlder v T),
     fun r T v hr => hr.elim (ha.rootsProtected r T v) (hb.rootsProtected r T v),
     fun v T hv => hv.elim (ha.valuesProtected v T) (hb.valuesProtected v T)⟩
 
-/-- Entering a later activation preserves the age of inherited observations
-when the initialized globals, parameter roots and allowed effects are fixed. -/
+/-- A later activation base preserves the age of inherited observations while
+their typing and protection against the chosen shrink footprint stay fixed. -/
 theorem ObservedSafe.base_mono {m : Module} {W : World} {o : Observation} {s : Store}
-    {base : Nat} (h : ObservedSafe m W o s) (hbase : W.base ≤ base) :
-    ObservedSafe m { W with base := base } o s :=
+    {shrinking : RootInst → Prop} {base : Nat}
+    (h : ObservedSafe m W shrinking o s) (hbase : W.base ≤ base) :
+    ObservedSafe m { W with base := base } shrinking o s :=
   { h with
     rootsOlder := fun r T hr => BeforeBase.mono hbase (h.rootsOlder r T hr)
     valuesOlder := fun v T hv r ht => BeforeBase.mono hbase (h.valuesOlder v T hv r ht) }
 
-/-- Protection remains valid when the new effects and parameter interpretation
-can shrink only roots already covered by the original protection obligation. -/
-theorem ObservedSafe.weakenEffects {m : Module} {W : World} {o : Observation} {s : Store}
-    {P : Nat → RootInst → Prop} {E : Eff} (h : ObservedSafe m W o s)
-    (hmay : ∀ r, MayShrinkEff P E r → MayShrinkEff W.P W.E r) :
-    ObservedSafe m { W with P := P, E := E } o s :=
+/-- Protection against a larger shrink footprint also excludes every root in
+a narrower footprint, independently of the world's parameter interpretation. -/
+theorem ObservedSafe.weakenShrinking {m : Module} {W : World} {o : Observation} {s : Store}
+    {shrinking shrinking' : RootInst → Prop} (h : ObservedSafe m W shrinking o s)
+    (hmay : ∀ r, shrinking' r → shrinking r) : ObservedSafe m W shrinking' o s :=
   { h with
     rootsProtected := fun r T v hr hv hi target ht hshrink =>
       h.rootsProtected r T v hr hv hi target ht (hmay target hshrink)
