@@ -294,8 +294,8 @@ def execPure (cx : FnCtx) (fr : Frame) : Op → M RVal
       let l ← expectRef (← getVal fr r)
       let x ← getVal fr v
       match org with
-      | none => pure ()
       | some _ => checkCapacityAtOrg l 1 org
+      | none => pure ()
       let i ← appendLoc l #[x]
       pure (.val (.ref { l with path := l.path ++ [i] }))
     | .pop r org => do

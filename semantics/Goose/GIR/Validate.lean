@@ -131,6 +131,12 @@ def Inst.needsOrigin : Inst → Bool
   | .term (.abort ..) | .term (.exit ..) => true
   | _ => false
 
+/-- A shrink-profile push can abort on limited capacity and therefore needs an origin. -/
+def Inst.needsOriginIn (profile : ArtifactProfile) (i : Inst) : Bool :=
+  match i with
+  | .def _ (.push ..) => profile == .shrink
+  | _ => i.needsOrigin
+
 /-! ### GIR-V001 -/
 
 def checkEntryAndGlobals (m : Module) : Check Unit := do
@@ -703,13 +709,13 @@ def checkRootAnnotations (m : Module) (vts : Array (Array (Option VTy)))
     (res : Array (List RootRef)) (nRoots : Nat) : Check Unit :=
   checkAll (List.range m.funcs.size) (checkRootAnnotationsOf m vts res nRoots)
 
-def checkOrigin (label : String) (i : Inst) : Check Unit :=
-  if i.needsOrigin && i.origin.isNone then
+def checkOrigin (profile : ArtifactProfile) (label : String) (i : Inst) : Check Unit :=
+  if i.needsOriginIn profile && i.origin.isNone then
     violation .v100 s!"{label}: an operation that can abort or stands for a statement has no origin"
   else pure ()
 
-def checkOrigins (label : String) (f : Func) : Check Unit :=
-  checkAll f.blocks.toList fun b => checkAll b.insts (checkOrigin label)
+def checkOrigins (profile : ArtifactProfile) (label : String) (f : Func) : Check Unit :=
+  checkAll f.blocks.toList fun b => checkAll b.insts (checkOrigin profile label)
 
 /-! ### GIR-V060 -/
 
@@ -935,6 +941,6 @@ def validate (m : Module) : Check Unit := do
   checkAll m.infos fun i =>
     let p := i.f.provenance res i.vt m.rootCount
     checkShrinkReplace m i.label i.f i.vt p
-  checkAll m.infos fun i => checkOrigins i.label i.f
+  checkAll m.infos fun i => checkOrigins m.profile i.label i.f
 
 end Goose.GIR
