@@ -367,6 +367,10 @@ theorem isLive_run {le : LEnv} {ls : LS} {b : BlockId} (h : ls.cur = some b) :
   unfold isLive
   simp [bind_run, curBlock_run, pure_run, h]
 
+theorem isLive_none {le : LEnv} {ls : LS} (h : ls.cur = none) : isLive le ls = (false, ls) := by
+  unfold isLive
+  simp [bind_run, curBlock_run, pure_run, h]
+
 theorem advB_inScope {α : Type} (sc : ScopeId) {k : B α} (hk : AdvB k) : AdvB (inScope sc k) := by
   intro le ls r ls' h
   unfold inScope at h

@@ -518,4 +518,18 @@ theorem SimG.mono_goes {cx : FnCtx} {pt : Pt} {fr : Frame} {c : M α} {p q : α 
   refine ⟨pt'', fr'', k2 + k, hq', fun j => ?_⟩
   rw [show j + (k2 + k) = (j + k2) + k by omega, he, hk2]
 
+theorem runAt_ret1 {cx : FnCtx} {pt : Pt} {fr : Frame} {r : ValueId} {org : Option OriginId} {v : Val}
+    (hi : instAt cx.fn pt = some (.term (.ret [r] org))) (hv : fr.vals[r]? = some (.val v)) (j : Nat) :
+    runAt cx pt fr (j + 1) = pure v := by
+  unfold runAt
+  rw [instsAt_cons hi]
+  simp [exec, getVal_of hv]
+
+theorem runAt_ret0 {cx : FnCtx} {pt : Pt} {fr : Frame} {org : Option OriginId}
+    (hi : instAt cx.fn pt = some (.term (.ret [] org))) (j : Nat) :
+    runAt cx pt fr (j + 1) = pure .unit := by
+  unfold runAt
+  rw [instsAt_cons hi]
+  simp [exec]
+
 end Goose.GIR

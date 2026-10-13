@@ -25,3 +25,4 @@ gir_user_abort	test/gir/golden/gir_user_abort.core.json	["agree",["done",["abort
 gir_const_refs	test/gir/golden/gir_const_refs.core.json	["agree",["done",["returned"],"6\n1\n2\n3\n6 6 2 3\n"]]	["agree",["done",["returned"],"6\n1\n2\n3\n6 6 2 3\n"]]
 gir_long_loop	test/gir/golden/gir_long_loop.core.json	["agree",["done",["returned"],"300000\n"]]	["agree",["done",["returned"],"300000\n"]]
 gir_straight	test/gir/golden/gir_straight.core.json	["agree",["done",["aborted","index_oob",29],"32 6 6 3 43 32 true\n"]]	["agree",["done",["aborted","index_oob",29],"32 6 6 3 43 32 true\n"]]
+gir_branches	test/gir/golden/gir_branches.core.json	["agree",["done",["aborted","assert",24],"10\na\nc\nd\nblk\n8\nok\n"]]	["agree",["done",["aborted","assert",24],"10\na\nc\nd\nblk\n8\nok\n"]]
