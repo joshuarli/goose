@@ -291,14 +291,20 @@ inline bool BuildCMakePart(const Ast &ast, int pkg, const Builder &b, bool wantj
     return true;
 }
 
+// The newest modification time among `paths`, in nanoseconds of the file
+// clock, 0 when none can be read. The clock's epoch is the library's choice
+// (libstdc++'s is in 2174, so its counts are negative): times are compared
+// as times, never as counts against 0.
 inline int64_t NewestMtime(const vector<string> &paths) {
-    int64_t newest = 0;
+    filesystem::file_time_type newest;
+    bool any = false;
     for (auto &p : paths) {
         std::error_code ec;
         auto t = filesystem::last_write_time(filesystem::path(p), ec);
-        if (!ec) newest = std::max(newest, (int64_t)t.time_since_epoch().count());
+        if (!ec && (!any || t > newest)) newest = t, any = true;
     }
-    return newest;
+    if (!any) return 0;
+    return (int64_t)chrono::duration_cast<chrono::nanoseconds>(newest.time_since_epoch()).count();
 }
 
 inline string ReadStamp(const string &path) {

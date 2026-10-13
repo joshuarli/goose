@@ -92,7 +92,7 @@ EXTRAS = (
     "extra/guard_runs", "extra/lexer_tokens", "extra/shader", "extra/optimizer",
     "extra/stacks", "extra/loop_shapes", "extra/inline_fn_c", "extra/member_params",
     "extra/member_stores", "extra/compiler_units", "extra/runtime_lifecycle",
-    "extra/clang", "extra/extern_types", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
+    "extra/clang", "extra/extern_types", "extra/native_rebuild", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
     "extra/runtime_cache",
 )
 
@@ -1989,6 +1989,16 @@ def main():
             r.fail("runtime cache", str(e))
     if cc and wanted("extra/runtime_cache"):
         r.show_task(runtime_cache)
+
+    def native_rebuild():
+        from native_rebuild import check_native_rebuild
+        try:
+            check_native_rebuild(exe, gendir)
+            r.ok("native rebuild: a changed C source is rebuilt, an unchanged one is not")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("native rebuild", str(e))
+    if cc and wanted("extra/native_rebuild"):
+        r.show_task(native_rebuild)
 
     if show_goose_in_goose:
         show_goose_in_goose()
