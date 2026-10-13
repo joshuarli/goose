@@ -543,6 +543,7 @@ def WhileSpec (n : Nat) : Prop :=
       PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl ∧
       (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true))
 
+/-- Iteration consumes sampled bounds and retains the body and enclosing continuation. -/
 def RangeSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (x : VarId) (lower upper : Expr) (body : Block) (origin : OriginId)
     (ec : EvaluationContext m plans path (.statement (.forRange x lower upper body origin)) .statement)
@@ -551,7 +552,7 @@ def RangeSpec (n : Nat) : Prop :=
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
     ShrinkProtected W.D W.A (ec.mayShrink W.P) →
     ObservedSafe m W (ec.mayShrink W.P) observation s.store →
-    Perm m W → Frame m W tenv penv env s ec.inputFuture →
+    Perm m W → Frame m W tenv penv env s (body.variables ++ ec.outputFuture) →
     (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope ∧ lv.ty = .int t) → x < rst1.nextVar →
     tyBlock { tenv with loops := tenv.loops + 1, visible := x :: tenv.visible } [] body tn1 =
       .ok (bty, tn2) →
@@ -576,7 +577,7 @@ def EachSpec (n : Nat) : Prop :=
     ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
     ShrinkProtected W.D W.A (ec.mayShrink W.P) →
     ObservedSafe m W (ec.mayShrink W.P) observation s.store →
-    Perm m W → Frame m W tenv penv env s ec.inputFuture →
+    Perm m W → Frame m W tenv penv env s (body.variables ++ ec.outputFuture) →
     EachViewOk s.store vw el → Gam env W.P rho vw.loc.root →
     (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope ∧ lv.ty.storable = true ∧
       (if byRef = true then (∃ mx, lv.ty = .ref mx el) ∧
