@@ -476,7 +476,8 @@ structure DemandChildExpectation where
   active : List VarId
   future : List VarId
 
-private def DemandNode.childFuture (node : DemandNode) (parent : DemandPoint)
+/-- Future variables required after evaluating a direct child; `none` marks an absent child. -/
+def DemandNode.childFuture (node : DemandNode) (parent : DemandPoint)
     (index : Nat) : Option (List VarId) :=
   let later (variables : List VarId) := variables ++ parent.future
   match node with
