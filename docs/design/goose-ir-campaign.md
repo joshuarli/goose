@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** paused 2026-10-13. Stopped cleanly at the owner's request; nothing is running. Resume from the handoff below.
+**Status:** resumed 2026-10-13 at the owner's request. Four lanes are working from the handoff: IR alignment and slice references, units corpus and Aincrad3 runner, unsupported-feature forecast, and the third lowering-proof attempt. The paused handoff below records the starting state.
 **Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12). `master` is not touched.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
@@ -450,6 +450,8 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 ## 13. Campaign log
 
 *(append-only; one line per gate or phase end)*
+
+- **Resumed 2026-10-13.** Starting tree `47fa15a` is clean. Recreated isolated worktrees for IR alignment (`goose-ir-ir-align`), units validation (`goose-ir-units-finish`), corpus forecast (`goose-ir-export-forecast`), and the third and final lowering attempt (`goose-ir-sem-gir`). Upstream drafts remain deferred under O8; nothing is pushed.
 
 - `U1`, second and third suspicions: (a) order dependence of checking is **not a defect** — about 43,000 permutations of declarations, imports and files over 1,900 repository fixtures and 9,000 generated programs with reference-holding globals never changed acceptance or behaviour, only which of several correct diagnostics prints first; the language says top-level declarations are order-independent and only global initializers are ordered. (b) **A second genuine defect**: a path package's native C is not rebuilt when its source changes. The rebuild stamp's time is a maximum starting at 0 over file-clock counts that are negative on this C++ standard library, so it is always 0; editing the C source leaves a stale binary, against the package design's "rebuilds when any of its sources is newer than its build". Fix and regression test in preparation on an upstream branch; the pull request is deferred like the first.
 - **Paused 2026-10-13.** Wind-down: the lowering lane landed structured control (`lower_correct_ctl`) and kept its loop work as a wip branch; the exporter lane landed result mutability and slice references (`order` fuzz lane 300 of 300 agree; corpus 76 of 77 agree); the rebuild-stamp fix was confirmed on glibc and cherry-picked; the backend lane landed `--build-report-deps` and the native-support unit. Handoff at the top of this document.
