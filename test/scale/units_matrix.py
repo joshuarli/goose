@@ -27,11 +27,10 @@ import json
 import os
 import random
 import re
+import shlex
 import shutil
-import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -45,29 +44,68 @@ import gen  # noqa: E402
 FAMILY = dict(helpers=1, contexts=2, types=gen.INT_TYPES[:1], shareable=1, root_params=2, distinct=True,
               edit_targets=True)
 SOURCE_EDITS = ("E02", "E03", "E04", "E05", "E06", "E07a", "E07b", "E08", "E09a", "E09b", "E09c")
+E10_UNAVAILABLE = {
+    "independent_c_flags": "the build command exposes no raw C flag override; --debug changes numeric mode and C flags together (-D is tested separately)",
+    "target": "the compiler has no target option; a cross compiler also changes C compiler identity",
+    "runtime_text_only": "runtime text is embedded in the Goose binary, so changing it also changes compiler binary identity",
+}
+
+
+def make_compiler_variant(goose, destination):
+    """Make a new executable identity without changing its runtime text."""
+    source = Path(goose)
+    data = source.read_bytes()
+    base_version = subprocess.run([str(source), "version"], capture_output=True, text=True,
+                                  errors="replace", check=False)
+    if base_version.returncode != 0:
+        raise ValueError(f"cannot run Goose compiler {source}: {base_version.stderr.strip()}")
+    # ELF, Mach-O and PE loaders ignore bytes after the executable image.
+    data += b"\0"
+    destination = Path(destination)
+    destination.write_bytes(data)
+    shutil.copymode(source, destination)
+    variant = subprocess.run([str(destination), "version"], capture_output=True, text=True,
+                             errors="replace", check=False)
+    if variant.returncode != 0:
+        raise ValueError(f"compiler variant is not executable: {variant.stderr.strip()}")
+    if variant.stdout != base_version.stdout:
+        raise ValueError("a binary-only compiler variant changed runtime text")
+    return destination
 
 
 class Build:
     """One run of `goose build --units`."""
 
-    def __init__(self, session, flags, label, kill_after=None, verify=True):
+    def __init__(self, session, flags, label, goose=None, env_overrides=None,
+                 kill_when=None, on_kill=None, kill_timeout=30, verify=True):
         self.session, self.label = session, label
         self.exe = session.dir / f"{getattr(session, 'exe_name', 'prog')}.exe"
         self.report_path = session.dir / f"{label}.report.json"
         self.report_path.unlink(missing_ok=True)
-        argv = [session.goose, "build", "--units", *(["--verify-reuse"] if verify else []), "-O2", *flags,
+        goose = str(goose or session.goose)
+        argv = [goose, "build", "--units", *(["--verify-reuse"] if verify else []), "-O2", *flags,
                 "--build-report", str(self.report_path), "-o", str(self.exe), "main.goose"]
         env = dict(os.environ, GOOSE_HOME=str(session.home))
+        if env_overrides:
+            env.update(env_overrides)
         p = subprocess.Popen(argv, cwd=session.dir, env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, errors="replace")
         killed = False
-        if kill_after is not None:
-            timer = threading.Timer(kill_after, lambda: p.poll() is None and p.kill())
-            timer.start()
+        deadline = time.monotonic() + kill_timeout if kill_when is not None else None
+        while p.poll() is None:
+            if kill_when is not None and kill_when():
+                p.kill()
+                killed = True
+                if on_kill is not None:
+                    on_kill()
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                p.kill()
+                if on_kill is not None:
+                    on_kill()
+                break
+            time.sleep(0.005)
         out, err = p.communicate()
-        if kill_after is not None:
-            timer.cancel()
-            killed = p.returncode == -signal.SIGKILL
         self.killed = killed
         self.exit, self.stdout, self.stderr = p.returncode, out, err
         self.report = None
@@ -96,6 +134,7 @@ class Build:
         counts = (self.report or {}).get("counts", {})
         return {
             "row": row, "exit": self.exit, "no_op": n.get("no_op"),
+            "runtime_version": (self.report or {}).get("runtime_version"),
             "frontend_phases": n.get("frontend_phases"),
             "contexts_checked": counts.get("checked_contexts"),
             "implementation_digests_changed": None,
@@ -135,23 +174,25 @@ class Session:
         self.output = output
         self.edit = edit
 
-    def build(self, *flags, label=None, kill_after=None, verify=True):
+    def build(self, *flags, label=None, goose=None, env_overrides=None,
+              kill_when=None, on_kill=None, kill_timeout=30, verify=True):
         self.counter += 1
-        return Build(self, list(flags), label or f"b{self.counter}", kill_after, verify)
+        return Build(self, list(flags), label or f"b{self.counter}", goose, env_overrides,
+                     kill_when, on_kill, kill_timeout, verify)
 
     def run(self, exe):
         r = subprocess.run([str(exe)], capture_output=True, text=True, errors="replace",
                            cwd=self.dir)
         return r.returncode, r.stdout, r.stderr
 
-    def clean(self, *flags):
+    def clean(self, *flags, goose=None):
         """A build of the same sources in a store of its own."""
         other = Session.__new__(Session)
         other.goose, other.dir, other.counter = self.goose, self.dir, 0
         other.exe_name = f"clean{self.counter}"
         other.home = self.dir / f"home-clean{self.counter}"
         shutil.rmtree(other.home, ignore_errors=True)
-        b = Build(other, list(flags), f"clean{self.counter}")
+        b = Build(other, list(flags), f"clean{self.counter}", goose=goose)
         b.home = other.home
         return b
 
@@ -180,12 +221,15 @@ class Matrix:
         self.failures.append(f"{row}: {why}")
         print(f"FAIL {row}: {why}")
 
-    def equal_to_clean(self, row, s, b, flags=()):
+    def equal_to_clean(self, row, s, b, flags=(), goose=None):
         """L-EQ: the incremental build `b`, against a clean build."""
-        c = s.clean(*flags)
+        c = s.clean(*flags, goose=goose)
         if b.exit != c.exit:
             return self.fail(row, f"exit {b.exit} against a clean build's {c.exit}")
-        if normalized(b.stderr, s.home, s.dir) != normalized(c.stderr, c.home, s.dir):
+        if normalized(b.stdout, b.exe, s.home, s.dir) != normalized(c.stdout, c.exe, c.home, s.dir):
+            return self.fail(row, "stdout differs from a clean build's:\n--- incremental\n"
+                                  f"{b.stdout[-300:]}\n--- clean\n{c.stdout[-300:]}")
+        if normalized(b.stderr, b.exe, s.home, s.dir) != normalized(c.stderr, c.exe, c.home, s.dir):
             return self.fail(row, "diagnostics differ from a clean build's:\n--- incremental\n"
                                   f"{b.stderr[-300:]}\n--- clean\n{c.stderr[-300:]}")
         if b.exit != 0:
@@ -275,6 +319,11 @@ class Matrix:
             return
         if e.outcome == "warning" and e.message not in b.stderr:
             self.fail(row, "the warning is not printed")
+        if e.outcome == "warning":
+            if units_of(first.store) != units_of(b.store):
+                self.fail(row, "the warning edit changed generated unit text")
+            if b.native.get("native_compiler_invocations") or b.native.get("link", {}).get("ran"):
+                self.fail(row, "the warning edit recompiled or relinked unchanged units")
         check(s, first, b)
         self.equal_to_clean(row, s, b)
         if e.outcome == "warning":
@@ -335,13 +384,22 @@ class Matrix:
             if self.ok_build("E08", b):
                 self.check_add(s, first, b)
                 self.equal_to_clean("E08", s, b)
-        # E16: an edit and its exact revert.
+        self.row_E16()
+
+    def row_E16(self):
         s = Session(self.goose, self.work, "e-E16")
         first = s.build()
         if self.ok_build("E16", first):
             original = units_of(first.store)
             s.write("E03")
-            s.build()
+            edited = s.build()
+            self.record("E16 edit", edited)
+            if not self.ok_build("E16 edit", edited):
+                return
+            edited_units = units_of(edited.store)
+            if edited_units == original:
+                self.fail("E16", "the intermediate edit did not change any unit text")
+            self.equal_to_clean("E16 edit", s, edited)
             s.write(None)
             b = s.build()
             self.record("E16", b)
@@ -355,17 +413,26 @@ class Matrix:
         base = s.build()
         if not self.ok_build("E10", base):
             return
-        variants = [("--debug",), ("-DEXTRA=1",), ("-O1",)]
+
+        variants = [("numeric profile --debug", ("--debug",), None),
+                    ("-D define", ("-DEXTRA=1",), None),
+                    ("numeric profile -O1", ("-O1",), None)]
         for cc in ("gcc", "clang"):
-            probe = subprocess.run([self.goose, "toolchain", "--cc", cc], capture_output=True, text=True)
+            probe = subprocess.run([self.goose, "toolchain", "--cc", cc], capture_output=True,
+                                   text=True, env=dict(os.environ, GOOSE_HOME=str(s.home)))
             if probe.returncode == 0:
-                variants.append(("--cc", cc))
-        for flags in variants:
-            if flags[0] == "-O1":
-                # The Goose -O level is given by Build itself: replace it.
-                pass
-            before = s.build(*flags)
-            self.record(f"E10 {' '.join(flags)}", before)
+                variants.append((f"C compiler {cc}", ("--cc", cc), None))
+
+        try:
+            binary_variant = make_compiler_variant(
+                self.goose, self.work / f"goose-binary-variant{Path(self.goose).suffix}")
+            variants.append(("compiler binary", (), binary_variant))
+        except (OSError, ValueError) as error:
+            self.fail("E10", f"could not construct compiler contract variants: {error}")
+
+        for label, flags, goose in variants:
+            before = s.build(*flags, goose=goose)
+            self.record(f"E10 {label}", before)
             if not self.ok_build("E10", before):
                 continue
             n = before.native
@@ -374,17 +441,35 @@ class Matrix:
                 # `--cc gcc` is the default compiler under another spelling: the
                 # contract names it by what it is, so the store is the same.
                 if n["objects_missed"] != 0:
-                    self.fail("E10", f"the same compiler under another name did not reuse ({flags})")
+                    self.fail("E10", f"the same compiler under another name did not reuse ({label})")
+                self.equal_to_clean(f"E10 {label}", s, before, flags, goose)
                 continue
             if n["objects_reused"] != 0 or n["objects_missed"] != n["units_written"]:
-                self.fail("E10", f"a new contract reused objects ({flags}): {before.record('E10')}")
-            self.equal_to_clean(f"E10 {' '.join(flags)}", s, before, flags)
+                self.fail("E10", f"a new contract reused objects ({label}): {before.record('E10')}")
+            if label == "compiler binary" and n.get("runtime_version") != base.record("base").get("runtime_version"):
+                self.fail("E10", "a binary-only compiler variant changed runtime text")
+            self.equal_to_clean(f"E10 {label}", s, before, flags, goose)
             back = s.build()
-            self.record(f"E10 back from {' '.join(flags)}", back)
+            self.record(f"E10 back from {label}", back)
             n = back.native
-            if not (n.get("no_op") or (n["objects_missed"] == 0 and not n["native_compiler_invocations"])):
-                self.fail("E10", f"returning to the first contract is not warm ({flags}): {back.record('E10')}")
+            if not self.is_warm(n):
+                self.fail("E10", f"returning to the first contract is not warm ({label}): {back.record('E10')}")
             self.equal_to_clean("E10 back", s, back)
+            again = s.build(*flags, goose=goose)
+            self.record(f"E10 back to {label}", again)
+            if not self.is_warm(again.native):
+                self.fail("E10", f"the {label} store was not left warm: {again.record('E10')}")
+            self.equal_to_clean(f"E10 back to {label}", s, again, flags, goose)
+
+        self.records.append({"row": "E10 unavailable dimensions", "ok": True,
+                             "dimensions": E10_UNAVAILABLE})
+        print(json.dumps(self.records[-1]))
+
+    @staticmethod
+    def is_warm(native):
+        return bool(not native.get("native_compiler_invocations")
+                    and not (native.get("link") or {}).get("ran")
+                    and (native.get("no_op") or native.get("objects_missed") == 0))
 
     def row_E11(self):
         s = Session(self.goose, self.work, "e11")
@@ -438,30 +523,90 @@ class Matrix:
         if not self.ok_build("E13", b):
             return
         store = b.store
-        objs = self.objects(store)
-        # An interrupted publish: a temporary file left behind, and an object
-        # that never got its record.
-        (store / "obj" / "left-behind.o.tmp").write_bytes(b"partial")
-        objs[0].with_suffix(".rec").unlink()
-        (store / "tmp" / "half.o").write_bytes(b"half")
-        # An interrupted link: no record, and a truncated executable.
-        (store / "link.rec").unlink()
-        data = b.exe.read_bytes()
-        b.exe.write_bytes(data[: len(data) // 3])
-        c = s.build()
-        self.record("E13 simulated", c)
-        if self.ok_build("E13", c):
-            if not c.native["link"]["ran"]:
-                self.fail("E13", "the link was skipped after an interrupted link")
-            self.equal_to_clean("E13 simulated", s, c)
-        # Killed for real, at several moments.
-        for delay in (0.05, 0.2, 0.35, 0.5, 0.7, 0.9, 1.2):
-            s.write("E03" if delay > 0.3 else None)
-            k = s.build(kill_after=delay)
-            after = s.build()
-            self.record(f"E13 killed at {delay}s", after, killed=k.killed)
-            if self.ok_build("E13 kill", after):
-                self.equal_to_clean(f"E13 kill {delay}", s, after)
+        objects = self.objects(store)
+        if not objects:
+            self.fail("E13", "the cold build published no object to interrupt")
+            return
+
+        # Hold record publication open after the object rename. The kill must
+        # leave an object without its completion record, not an invented state.
+        obj = objects[0]
+        rec = obj.with_suffix(".rec")
+        temp = Path(str(rec) + ".tmp")
+        obj.unlink()
+        rec.unlink(missing_ok=True)
+        try:
+            os.mkfifo(temp)
+        except (AttributeError, OSError) as error:
+            self.fail("E13 publish", f"cannot create a blocking publication point: {error}")
+            return
+        killed = s.build(kill_when=lambda: obj.exists() and not rec.exists(), kill_timeout=30)
+        if not killed.killed:
+            self.fail("E13 publish", "the build did not reach and interrupt record publication")
+        if not obj.exists() or rec.exists() or not temp.exists():
+            self.fail("E13 publish", "the interruption did not leave the object-without-record state")
+        temp.unlink(missing_ok=True)
+        recovered = s.build()
+        self.record("E13 publish recovery", recovered, interrupted=killed.killed)
+        if self.ok_build("E13 publish recovery", recovered):
+            if recovered.native.get("objects_missed", 0) < 1:
+                self.fail("E13 publish", "recovery did not rebuild the interrupted object")
+            self.equal_to_clean("E13 publish recovery", s, recovered)
+
+        # Force a link and block its compiler wrapper after invocation begins.
+        real_cc = shutil.which("cc")
+        if not real_cc or os.name == "nt":
+            self.fail("E13 link", "this host has no POSIX C compiler wrapper support")
+            return
+        wrapper = self.work / "e13-cc-wrapper"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            "for arg in \"$@\"; do\n"
+            f"  case \"$arg\" in -c|--version|-dumpversion|-dumpfullversion|-dumpmachine) "
+            f"exec {shlex.quote(real_cc)} \"$@\" ;; esac\n"
+            "done\n"
+            "if [ -n \"${GOOSE_LINK_MARKER:-}\" ] && [ -n \"${GOOSE_LINK_RELEASE:-}\" ]; then\n"
+            "  : > \"$GOOSE_LINK_MARKER\"\n"
+            "  while [ ! -e \"$GOOSE_LINK_RELEASE\" ]; do sleep 0.01; done\n"
+            "  exit 99\n"
+            "fi\n"
+            f"exec {shlex.quote(real_cc)} \"$@\"\n", encoding="utf-8")
+        wrapper.chmod(0o755)
+        cc_flags = ("--cc", str(wrapper))
+        plain_env = {}
+        wrapper_prime = s.build(*cc_flags, env_overrides=plain_env)
+        self.record("E13 link wrapper prime", wrapper_prime)
+        if not self.ok_build("E13 link wrapper prime", wrapper_prime):
+            return
+        warm_wrapper = s.build(*cc_flags, env_overrides=plain_env)
+        self.record("E13 link wrapper warm", warm_wrapper)
+        if not self.ok_build("E13 link wrapper warm", warm_wrapper):
+            return
+        if warm_wrapper.native.get("objects_missed", 0) != 0:
+            self.fail("E13 link", "the wrapper contract did not leave its objects warm")
+        link_record = warm_wrapper.store / "link.rec"
+        link_record.unlink(missing_ok=True)
+        warm_wrapper.exe.write_bytes(warm_wrapper.exe.read_bytes()[:0])
+        marker = self.work / "e13-link-started"
+        release = self.work / "e13-link-release"
+        marker.unlink(missing_ok=True)
+        release.unlink(missing_ok=True)
+        blocked_env = {**plain_env, "GOOSE_LINK_MARKER": str(marker),
+                       "GOOSE_LINK_RELEASE": str(release)}
+        interrupted = s.build(*cc_flags, env_overrides=blocked_env,
+                              kill_when=marker.exists, on_kill=lambda: release.touch(),
+                              kill_timeout=30)
+        release.touch()
+        if not interrupted.killed:
+            self.fail("E13 link", "the build did not reach and interrupt the link command")
+        if link_record.exists():
+            self.fail("E13 link", "the interrupted link retained its completion record")
+        recovered = s.build(*cc_flags, env_overrides=plain_env)
+        self.record("E13 link recovery", recovered, interrupted=interrupted.killed)
+        if self.ok_build("E13 link recovery", recovered):
+            if not recovered.native.get("link", {}).get("ran"):
+                self.fail("E13 link", "recovery skipped the incomplete link")
+            self.equal_to_clean("E13 link recovery", s, recovered, cc_flags)
 
     def row_E14(self):
         s = Session(self.goose, self.work, "e14")
@@ -504,12 +649,21 @@ class Matrix:
     def random_sequence(self, steps, seed):
         rng = random.Random(seed)
         s = Session(self.goose, self.work, "random")
-        s.build()
+        initial = s.build()
+        if not self.ok_build("random initial build", initial):
+            return
+        self.equal_to_clean("random initial build", s, initial)
         flags = ()
         actions = ["edit"] * 6 + ["revert"] * 2 + ["contract", "damage", "nothing"]
+        last_successful = initial
+        last_successful_flags = flags
+        last_successful_edit = s.edit
         for step in range(steps):
-            action = rng.choice(actions)
+            damage_ready = last_successful_flags == flags and last_successful_edit == s.edit
+            available = actions if damage_ready else [a for a in actions if a != "damage"]
+            action = rng.choice(available)
             label = f"random {step} {action}"
+            damaged = False
             if action == "edit":
                 s.write(rng.choice(SOURCE_EDITS + ("E15a", "E15b", "E07c")))
             elif action == "revert":
@@ -518,8 +672,8 @@ class Matrix:
                 flags = rng.choice([(), ("--debug",), ("-DX=1",), ("-O1",)])
                 label += f" {flags}"
             elif action == "damage":
-                store = (s.home / "build" / "prog")
-                objs = sorted(store.glob("*/store/*/obj/*.o")) if store.exists() else []
+                objs = (sorted(last_successful.store.glob("obj/*.o")) +
+                        sorted(last_successful.store.glob("obj/*.obj")))
                 if objs:
                     obj = rng.choice(objs)
                     kind = rng.choice(["truncate", "flip", "record"])
@@ -531,17 +685,35 @@ class Matrix:
                         obj.write_bytes(bytes(data))
                     else:
                         obj.with_suffix(".rec").unlink(missing_ok=True)
+                    damaged = True
                     label += f" {kind}"
+                if not damaged:
+                    self.fail(label, "the damage action found no cached object to damage")
             b = s.build(*flags)
+            self.record(label, b, action=action, damage_applied=damaged)
             expected_error = s.edit in ("E15a", "E07c")
             if expected_error:
                 if b.exit == 0:
                     self.fail(label, "an error was expected")
+                edit = edits.EDITS[s.edit]
+                if edit.message not in b.stderr + b.stdout:
+                    self.fail(label, "the expected diagnostic was not printed")
+                if "built " in b.stdout:
+                    self.fail(label, "a failed build reported an executable")
                 self.equal_to_clean(label, s, b, flags)
                 continue
+            if s.edit == "E15b" and edits.EDITS["E15b"].message not in b.stderr:
+                self.fail(label, "the warning was not printed")
             if self.ok_build(label, b):
+                if action == "damage" and damaged:
+                    if b.native.get("objects_missed", 0) < 1:
+                        self.fail(label, "the damaged object was not rebuilt")
+                    if not b.native.get("corrupt_entries"):
+                        self.fail(label, "the damaged cache entry was not reported")
                 self.equal_to_clean(label, s, b, flags)
-            print(f"ok? step {step}: {label}")
+                last_successful = b
+                last_successful_flags = flags
+                last_successful_edit = s.edit
 
 
 def main():
