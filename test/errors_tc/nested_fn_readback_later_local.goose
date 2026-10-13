@@ -4,7 +4,7 @@
 // declaration does not see, here one declared further on that pick returns
 // into: a read-back in the body, out of a copy of an element of slots, which
 // holds that reference and one into spare, counts it among what the
-// reference may point into (§9.5), so the link is not one within spare (§3.9).
+// reference may point into, so the link is not one within spare.
 struct Node { key: i32, next: Node&<u32>? }
 struct S { n: Node&? }
 fn main() {

@@ -1,6 +1,6 @@
 // error: cannot clear bs: global G may hold a reference into it
 // put copies an element of what the slice in GHB.hs views, GA: GHB's stores
-// say where its slices point, not what those elements hold (§3.5, §5.1).
+// say where its slices point, not what those elements hold.
 struct B { name: u8[..8] }
 struct H { s: const u8[:] }
 struct HB { hs: H[:] }

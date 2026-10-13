@@ -1,4 +1,4 @@
-// A reference bound to a reusable pool carries the pool's freelist (§5.4), and
+// A reference bound to a reusable pool carries the pool's freelist, and
 // keeps carrying one when .= rebinds it to another pool of its kind: a local,
 // a global rebound in a function, a `var` parameter, a variable a nested
 // function rebinds to a pool it captures, a slice pool, and one alternating

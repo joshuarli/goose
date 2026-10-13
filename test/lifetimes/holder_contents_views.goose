@@ -3,7 +3,7 @@
 // caller's holder it refers to, and the same kept in a local holder --
 // holds what the activation stored there and what its callers put there:
 // a shrink in the callee leaves the second to each call, which judges it
-// by its record of the argument's storage (§5.1). Here none of them views
+// by its record of the argument's storage. Here none of them views
 // the array shrunk.
 struct P { words: (const u8[:])[:] }
 struct S { r: const u8[:] }

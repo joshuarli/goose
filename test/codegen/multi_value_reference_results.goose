@@ -1,9 +1,9 @@
-// A multi-value binding of a call's reference results (§4.1): a reference
+// A multi-value binding of a call's reference results: a reference
 // to a fixed-size value binds a copy of the value, as a single binding's
 // does, whichever result carries it -- the one C returns or one an
 // out-parameter takes -- and whatever makes the call: a function, case
-// functions dispatched on a tag (§8.2), a long-distance return forwarding
-// its callee's results (§7.9); in a body inlined at -O2 too. The pointees
+// functions dispatched on a tag, a long-distance return forwarding
+// its callee's results; in a body inlined at -O2 too. The pointees
 // are an integer, a slice, a struct and varint elements. `.=` binds the
 // references themselves, as does a reference to a non-fixed value, one
 // generic function doing either by its type argument: writes through them

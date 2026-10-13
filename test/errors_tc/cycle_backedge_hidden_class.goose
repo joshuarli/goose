@@ -1,6 +1,6 @@
 // error: storing a reference rooted at loc, which does not outlive the destination
-// The first return may be `b` or `a` (§9.2). A back edge may give `a` the
-// deeper argument (§7.8), here its own local, so its result may be rooted
+// The first return may be `b` or `a`. A back edge may give `a` the
+// deeper argument, here its own local, so its result may be rooted
 // there, which the store into the global cannot outlive.
 var G: u8[>..] = "ggg";
 struct K { s: const u8[:] }

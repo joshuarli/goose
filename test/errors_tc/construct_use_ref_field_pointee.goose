@@ -1,7 +1,7 @@
 // error: cannot use s.own in the value assigned to s.r
 // Assigning through a reference field writes the array it refers to, which
 // may be another field of the same struct: the right-hand side reading
-// that field is `x = f(x)` (§4.4).
+// that field is `x = f(x)`.
 fn twice(xs: const u8[:]) -> u8[>..<] {
     var r: u8[>..<] = [];
     r.append(xs);

@@ -1,6 +1,6 @@
 // error: thread_fn parameters must be flat
 // error: , not i64&
-// Thread arguments must be flat types (§11.2).
+// Thread arguments must be flat types.
 thread_fn worker(r: i64&) {
     print(r);
 }

@@ -1,12 +1,12 @@
 // Goose compiler — codegen's text forms (definitions of CodeGen members,
-// codegen.h): print, str and format (§3.7), rendering any value
+// codegen.h): print, str and format, rendering any value
 // structurally or through a user format overload.
 #pragma once
 
 namespace goose {
 
 // ------------------------------------------------------------------
-// Text forms (§3.7): print, str and format share them. A scalar's text
+// Text forms: print, str and format share them. A scalar's text
 // comes from a gs_fmt_* runtime helper writing at most GS_FMT_MAX bytes;
 // a u8 array or slice contributes its bytes as they are, and any other
 // value renders structurally into a u8[>..] builder, or through a user
@@ -240,11 +240,11 @@ inline void CodeGen::RenderLoc(Loc &out, Loc lv, TypeExpr *t, bool nested, Call 
                     }
                     // An overload rendering one part of a fixed-mode value
                     // may overwrite it with another variant, and nothing may
-                    // refer into its payload meanwhile (§3.5): the parts are
+                    // refer into its payload meanwhile: the parts are
                     // rendered from a copy, where the checker has them lie
                     // (CheckRenderable). No fixed-mode payload holds
-                    // self-relative references, which a copy would not keep
-                    // (§3.9).
+                    // self-relative references, which a copy would not keep.
+                    //
                     if (!varmode && c && !c->fmtspecs.empty()) {
                         auto cp = T();
                         FixedLocal(vt, cp, pl.s);
@@ -415,7 +415,7 @@ inline void CodeGen::EmitRenderFn(RenderFnReq r) {
 // reference result, which the argument decayed to its pointee, is held as
 // the reference and read where it points, as a reference variable is. A
 // format overload taking the value, or a part of it, by reference is given
-// what the reference names, which is where the checker binds it (§3.7,
+// what the reference names, which is where the checker binds it (
 // DecayRef's slot), not a copy of it. A varint pointee is rendered as the
 // i64 it decodes to, a value no storage holds.
 inline CodeGen::Loc CodeGen::RenderedLoc(Node *a) {
@@ -538,7 +538,7 @@ inline void CodeGen::EmitFormatInto(Loc lv, Node *a, Line ln, Call *c) {
 // destination. The elements go to the destination's top and the count to
 // the receiving header -- or into a length prefix reserved in front of the
 // elements when the destination is a value slot (a u8[] element or field),
-// exactly as a named result lands there (§7.3).
+// exactly as a named result lands there.
 inline vector<string> CodeGen::EmitStr(Call *c, vector<Node *> &an, Dst d0, Line ln) {
     EmitCoreTypes();
     string stk = d0.s, lenlv = d0.lenlv, pref, hdr;
@@ -595,7 +595,7 @@ inline const VarDef *CodeGen::NamedResult(Block *fnbody, SFunction *target,
     return NamedResultOf(fnbody, target, nrets, resultidx);
 }
 
-// Guaranteed NRVO (§7.3): the top-level local the returns hand back in one
+// Guaranteed NRVO: the top-level local the returns hand back in one
 // nonfixed return position is allocated at that destination; a return of any
 // other value builds it behind the local and moves it down (BindLocal marks
 // the local open there).

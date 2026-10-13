@@ -23,7 +23,7 @@ fn build(depth: i64, seed: u64) -> Box<TNode> {
 
 // The pass index is folded into every node's contribution, so the eight passes
 // are eight different computations; otherwise a backend that can see the walk
-// is pure hoists it out of the loop (see bench/notes.md).
+// is pure hoists it out of the loop.
 fn sum_tree(n: &TNode, p: i64) -> i64 {
     let mut s = (n.v as i64) ^ p;
     if let Some(l) = &n.l { s += sum_tree(l, p); }

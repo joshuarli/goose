@@ -1,6 +1,6 @@
 // runtime-debug: a signed type's minimum written as a literal is a constant,
 // never a negation left to run time. -9223372036854775808 negates the u64
-// literal 2^63, which is exactly i64.min (§6.2), where a debug build's
+// literal 2^63, which is exactly i64.min, where a debug build's
 // checked negation of the literal would abort as an overflow.
 
 struct Limits { lo: i64 = -9223372036854775808, hi: i64 = 9223372036854775807 }
@@ -45,7 +45,7 @@ fn main() {
     print(id8(-128), " ", id16(-32768), " ", id32(-2147483648));
     let n = Narrow {};
     print(n.a, " ", n.b, " ", n.c);
-    // `as` binds tighter than `-` (Appendix D): parenthesized, the cast
+    // `as` binds tighter than `-`: parenthesized, the cast
     // converts -128 rather than 128, which i8 does not hold.
     print((-128) as i8, " ", (-2147483648) as i32);
 }

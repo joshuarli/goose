@@ -1,5 +1,5 @@
 // Arrays and slices of every kind constructing a static-capacity limited
-// array (§4.2) from sources that are not plain variables -- call results,
+// array from sources that are not plain variables -- call results,
 // str(), slice expressions, copies, reference-returning calls -- in every
 // position: a local, an argument, a field of a fixed and of a variable-size
 // struct, an assignment, a return, a branch.

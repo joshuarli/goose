@@ -1,5 +1,5 @@
 // A store through a reference whose root only bounds where it points is a
-// store into every storage that root may stand for (§9.2): a value that
+// store into every storage that root may stand for: a value that
 // outlives all of them may be stored there, through a call too, and a shrink
 // is checked against each of them still used, and against no other.
 struct Node { p: i64?, name: const u8[:] }

@@ -1,6 +1,6 @@
 // A copy of a field or an element of a local holder -- a `let`, a `for`
 // binder, a popped element, a value loaded through a reference -- holds no
-// more than was stored into the local, which is on record (§9.5): views of
+// more than was stored into the local, which is on record: views of
 // a pool stored into a local stack go on into the pool, and an element
 // copied out of an array of holders with null links holds nothing.
 import std;

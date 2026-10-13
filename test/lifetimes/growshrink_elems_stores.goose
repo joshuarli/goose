@@ -1,5 +1,5 @@
 // Which elements a parameter's grow-shrink array can hold is part of its
-// class (§5.2): a reference whose root holds only arrays that cannot hold
+// class: a reference whose root holds only arrays that cannot hold
 // its pointee may be stored, at every call that gives one, in either
 // order, whichever array it is, passed on through another function, or
 // held by a value. Shrinking those arrays frees nothing loc points into.

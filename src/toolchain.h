@@ -1,4 +1,4 @@
-// Goose compiler — the tools a build calls (docs/design/packages.md §6.1): a
+// Goose compiler — the tools a build calls: a
 // C compiler with its C++ driver, cmake and git, found on this machine. A
 // toolchain has a style, msvc or cc, which decides how flags and response
 // files are spelled, and an id, which names what is built with it in the
@@ -307,9 +307,8 @@ inline Toolchain MsvcStyle(const string &name, const string &cc, const string &h
 
 // The C toolchain to build with: the one `request` asks for (a name: msvc,
 // clang-cl, clang, gcc, cc; or a path), else GOOSE_CC, else `cc` in
-// GOOSE_HOME/config, else the first found on this machine (the order in
-// docs/design/packages.md §6.1). False, with `why` saying what was looked
-// for, when there is none.
+// GOOSE_HOME/config, else the first found on this machine. False, with
+// `why` saying what was looked for, when there is none.
 inline bool FindToolchain(string request, Toolchain &out, string &why,
                           [[maybe_unused]] bool refresh = false) {
     string how = "--cc";

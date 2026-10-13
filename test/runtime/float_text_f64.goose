@@ -1,5 +1,5 @@
 // An f64's text is the fewest significant digits that read back as the same
-// f64 (§3.7): 15 or fewer where they do, else 16, else 17, and a subnormal as
+// f64: 15 or fewer where they do, else 16, else 17, and a subnormal as
 // few as it needs. The values come from an array at run time, so the
 // runtime's formatting is what prints them; the sums in the last line are
 // folded by the compiler, whose text of a double follows the same rule.

@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while h is still used, and h may refer into buf
-// h is a copy of p, whose words view names' elements, and one views buf
-// (§5.1).
+// h is a copy of p, whose words view names' elements, and one views buf.
+//
 struct P { words: (const u8[:])[:] }
 fn emit(out: u8[>..]&, p: P) {
     let h = p;

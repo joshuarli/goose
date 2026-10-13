@@ -1,6 +1,6 @@
 // runtime-debug: a function declared in a global initializer names the
 // initializer's locals in scope where it is declared, as one declared in a
-// function names the function's (§7.5, §11.1). It takes them as hidden
+// function names the function's. It takes them as hidden
 // parameters, which gs_init_globals passes, wherever it stays a call: every
 // call at -O0, and at -O2 the recursive ones and those handed to a recursive
 // function.

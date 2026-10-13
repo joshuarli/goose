@@ -1,7 +1,7 @@
 // error: storing a reference rooted at local, which does not outlive the destination
 // The loop's next iteration runs the function value with cur holding a link
-// into the local array, which may not go into the caller's pool (§7.6,
-// §9.2).
+// into the local array, which may not go into the caller's pool.
+//
 struct Node { v: i64, first: Node? }
 struct Cur { first: Node?, count: i64 }
 

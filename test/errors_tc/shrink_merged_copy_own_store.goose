@@ -1,6 +1,6 @@
 // error: cannot clear out while h is still used: a reference into it was stored there
 // emit itself stored a view of out in one of the elements h may be a copy
-// of (§5.1).
+// of.
 struct H { s: const u8[:] }
 fn emit(out: u8[>..]&, hs: H[:], c: bool) {
     hs[1] = H { s: out[..] };

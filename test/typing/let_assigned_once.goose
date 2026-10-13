@@ -2,8 +2,8 @@
 // branch of an if or a match, at a loop's break, at a block's break and at
 // its end, in a nested function before whichever exit leaves it, by a nested
 // function or a function value called once, in each iteration of a loop that
-// declares it, in each activation of a recursive function that declares it
-// (§4.4).
+// declares it, in each activation of a recursive function that declares it.
+//
 enum Shape { Circle { r: i64 }, Square { s: i64 } }
 
 fn once<F>() { F(); }

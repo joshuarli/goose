@@ -1,6 +1,6 @@
 // error: cannot call format, which shrinks s: format runs it in the middle of rendering s, which may refer into s (§5.1)
 // A resizable struct whose tail is such an ADT: assigning the tail replaces
-// its variant while its payload is rendered (§3.7, §4.4, §5.1).
+// its variant while its payload is rendered.
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

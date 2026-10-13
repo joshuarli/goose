@@ -1,6 +1,6 @@
 // error: cannot clear buf while keep is still used: a reference into it was stored there
 // hs views a1's elements or a2's: what the for binder copies out of it
-// holds what either's do, and a1's element views buf (§5.1).
+// holds what either's do, and a1's element views buf.
 struct H { s: const u8[:] }
 fn main() {
     var buf: u8[>..] = [];

@@ -1,5 +1,5 @@
 // error: variable n may be used before it is assigned
-// The bare guard skips the rest of setn, where n is assigned (§4.4, §6.4).
+// The bare guard skips the rest of setn, where n is assigned.
 fn run(c: bool) {
     var n: i64;
     fn setn(d: bool) {

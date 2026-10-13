@@ -1,5 +1,5 @@
 // runtime-debug: an f32's text is the shortest that reads back as the same
-// f32 (§3.7), laid out as f64 text is: print, str, format, format hooks,
+// f32, laid out as f64 text is: print, str, format, format hooks,
 // and f32s inside structs, arrays, ADTs, optionals and generic types.
 // Every value comes from an array at run time, so no C compiler folds it.
 import vec;

@@ -1,5 +1,5 @@
 // error: function values are compile-time only and cannot be stored
-// Function values cannot escape into data (§7.6).
+// Function values cannot escape into data.
 fn h(v: i64) { print(v) }
 fn main() {
     let g = h;

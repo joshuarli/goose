@@ -1,5 +1,5 @@
 // A queue read's runtime-capacity limited result appended to a grow-only
-// and a grow-shrink array (§3.3, §11.2): only its elements join the run, as
+// and a grow-shrink array: only its elements join the run, as
 // for the calls in append_limited_call.goose. A program of its own, since
 // TinyCC runs none that uses the queues.
 fn run(first: u8, n: i64, cap: i64) -> u8[..] {

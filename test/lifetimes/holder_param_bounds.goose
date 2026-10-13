@@ -2,7 +2,7 @@
 // several arrays is bounded by the parameter's class, the storage the
 // caller filled before the call, and by nothing of the callee's own: not by
 // its other parameters, which can hold the element type but no view the
-// caller made (§9.5). So a slice of it, cut with i32 bounds, returns.
+// caller made. So a slice of it, cut with i32 bounds, returns.
 struct Graph { edges: const i32[:], first: const i32[:] }
 
 fn sub(g: Graph, lo: i32, hi: i32) -> const i32[:] {

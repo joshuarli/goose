@@ -1,5 +1,5 @@
 // error: cannot assign through this path (const, or a read-only instantiation
-// A field of a const type bound by reference (§4.1) is read-only (§9.5).
+// A field of a const type bound by reference is read-only.
 struct Tally { counts: const i64[3] }
 fn main() {
     var t = Tally { counts: [1, 2, 3] };

@@ -2,7 +2,7 @@
 // A reference read back out of a copy of an element of hs is rooted
 // inexactly: it may point into the other parameter's array, so the two
 // classes are settled as possibly one array once every call site has been
-// seen (§1.3(4)).
+// seen.
 struct Holder { r: i64[>..]& }
 fn mk(y: i64[>..]&) -> i64[>..] { y.push(9); return [1, 2]; }
 fn f(x: i64[>..]&, y: i64[>..]&) { x.append(mk(y)); }

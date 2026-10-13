@@ -1,5 +1,5 @@
 // error: cannot call f: it shrinks buf while h is still used, and h may refer into buf
-// h was popped off the caller's array, whose element views buf (§5.1).
+// h was popped off the caller's array, whose element views buf.
 struct H { s: const u8[:] }
 fn f(out: u8[>..]&, hs: H[>..]&) {
     let h = hs.pop();

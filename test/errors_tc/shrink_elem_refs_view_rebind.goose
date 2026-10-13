@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while ws is still used, and ws may refer into buf
 // f rebinds the slot to a slice of o, whose element views the array out
-// names: the call gives buf for out (§5.1).
+// names: the call gives buf for out.
 fn f(out: u8[>..]&, ws: ((const u8[:])[:])&, others: (const u8[:])[:]) {
     ws = others;
     out.clear();

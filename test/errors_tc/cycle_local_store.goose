@@ -1,7 +1,7 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // A reference to a fixed-size value passed into a recursive cycle may be
 // rooted at another activation's local, so it may be passed down but not
-// stored (§7.8); only pool parameters (references to resizable-class values)
+// stored; only pool parameters (references to resizable-class values)
 // are exempt.
 struct Cell { v: i64, link: i64&? }
 recursive fn f(pool: Cell[>..]&, r: i64&, n: i64) {

@@ -1,7 +1,7 @@
 // warning: redundant `as u8`: SZ is 15, which fits u8 here
 // warning: redundant `as i32`: (B + 1) is 31, which fits i32 here
 // An untyped `let` or `const` global with an integer constant initializer is
-// a named constant (§3.1): each use adapts as the literal would, at a typed
+// a named constant: each use adapts as the literal would, at a typed
 // destination, as an operand, in a construct's branches and as a generic
 // argument, and is an i64 where nothing gives it a type. One named constant
 // may be computed from another. u8 arithmetic wrapping shows the type an
@@ -41,7 +41,7 @@ fn main() {
     print(pick);
 
     // An argument to an untyped parameter stays literal-like inside the
-    // instantiation (§7.7).
+    // instantiation.
     print(add(b, SZ), " ", add(b, B));
 
     // A cast that a literal would not need is redundant here too.

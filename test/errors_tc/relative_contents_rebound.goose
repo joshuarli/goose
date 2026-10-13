@@ -1,7 +1,7 @@
 // error: a relative reference must point within the same root as its location
 // error: it was read out of h and may point into pool or spare
 // h.r is rebound to a node of spare where spare is not empty, so the link
-// may leave pool (§3.9, §9.5).
+// may leave pool.
 struct Node { key: i32, next: Node&<u32>? }
 struct H { r: Node& }
 fn main() {

@@ -1,7 +1,7 @@
 // A by-value parameter whose references all point into one array holds
 // exactly that array: a link between two views read back out of it through
 // a call is a store within one root, and popping another array leaves what
-// it holds valid (§9.2, §3.9, §5.1).
+// it holds valid.
 struct N { v: i64, next: N&<u32>? }
 struct W2 { a: N[:], b: N[:] }
 struct Cur { text: const u8[:] }

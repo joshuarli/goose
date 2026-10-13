@@ -1,6 +1,6 @@
 // error: cannot pop o while v is still used
 // A tail field of a struct that is itself a tail field shrinks the
-// outermost storage (§5.1).
+// outermost storage.
 struct S { n: i64, a: u8[>..] }
 struct O { k: i64, s: S }
 fn main() {

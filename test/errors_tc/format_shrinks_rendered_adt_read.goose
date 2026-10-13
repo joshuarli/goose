@@ -1,7 +1,7 @@
 // error: cannot call format, which shrinks G: print runs it in the middle of rendering h.o, which may refer into G (§5.2)
 // A reference read out of a slot points into no grow-shrink array's
 // elements, but it may lead to a whole resizable ADT with a grow-shrink
-// tail, whose payload is rendered where it points (§3.7, §4.4, §5.2).
+// tail, whose payload is rendered where it points.
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

@@ -1,8 +1,8 @@
 // What a holder of the activation's holds is what was stored there since it
 // was made: a view or reference read out of it points where those stores
 // did, exactly, so a shrink of storage none of them points into leaves it
-// alone (§5.1), and the rules that need its identity take it as rooted
-// there (§1.3, §3.3, §3.9, §4.4, §9.5).
+// alone, and the rules that need its identity take it as rooted
+// there.
 import std;
 
 struct LaneKeep { flow: u16[60], turn: u8, feed_turn: u8, feeder: i32 }

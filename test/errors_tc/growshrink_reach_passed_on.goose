@@ -1,6 +1,6 @@
 // error: storing a reference into c, which holds a grow-shrink array
 // t.a[0], bounded by the caller's storage behind t, may lie in the
-// grow-shrink array t.a leads to, so c's class may too (§5.2): keep may not
+// grow-shrink array t.a leads to, so c's class may too: keep may not
 // store it.
 struct Cell { v: i64 }
 struct Top { a: Cell[>..<]& }

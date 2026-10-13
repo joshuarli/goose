@@ -1,7 +1,7 @@
 // error: cannot clear hs: global G may hold a reference into it
 // The view is read out of a copy of hs or of H2, chosen at run time; hs's
 // elements view hs's own. What the copy holds is known only as some
-// global's contents, which may be hs's (§5.1).
+// global's contents, which may be hs's.
 struct H { s: const u8[:], name: u8[..8] }
 var hs: H[>..] = [];
 var H2: H[>..] = [];

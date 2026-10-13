@@ -1,5 +1,5 @@
-// runtime-debug: a conversion to f32 never aborts, in a debug build either
-// (§6.3). It rounds to the nearest f32, from an f64 or from any integer, and
+// runtime-debug: a conversion to f32 never aborts, in a debug build either.
+// It rounds to the nearest f32, from an f64 or from any integer, and
 // beyond f32's range it is an infinity.
 fn main() {
     // Read from arrays, so no value is known to the optimizer.

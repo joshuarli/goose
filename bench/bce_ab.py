@@ -33,7 +33,7 @@ STACK_RESERVE = "GS_STACK_RESERVE=2147483648ull"
 
 
 def measure(exe, reps):
-    """Best of `reps`, after two discarded warm-ups (see notes.md on why)."""
+    """Best of `reps`, after two discarded warm-ups to exclude first-run effects."""
     for _ in range(2):
         tc.run_measured(exe)
     best, out = None, ""

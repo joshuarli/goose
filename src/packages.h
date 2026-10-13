@@ -1,7 +1,7 @@
-// Goose compiler — packages (docs/design/packages.md §4): what a sourced
+// Goose compiler — packages: what a sourced
 // import, `import name from "source";`, names, and where that package's
 // files are. A path source is a directory used in place, relative to the
-// file that wrote it; a git source is fetched into GOOSE_HOME (§4.6).
+// file that wrote it; a git source is fetched into GOOSE_HOME.
 #pragma once
 
 namespace goose {
@@ -76,7 +76,7 @@ inline bool SameSource(const PackageSource &a, const PackageSource &b) {
     return a.ispath ? a.dir == b.dir : a.url == b.url;
 }
 
-// --- fetching (§4.6) ------------------------------------------------------------
+// --- fetching ------------------------------------------------------------
 
 // `goose fetch --update`: refs that are not commits are fetched again.
 inline bool package_update = false;
@@ -118,7 +118,7 @@ inline string GitCacheDir(const PackageSource &s) {
 }
 
 // Reads the package's sidecar, `<name>.build` beside its entry, if there is
-// one (§4.7): the C it compiles, where to find headers, what to define and
+// one: the C it compiles, where to find headers, what to define and
 // link, or the CMake target to build; and for the program its executable's
 // name. Lists take a _windows, _linux or _macos suffix for a platform's own
 // part. Paths are relative to the package root.

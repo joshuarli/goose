@@ -2,7 +2,7 @@
 // error: is still used: it may refer into pp.y
 // pp.y is read back out of the caller's storage behind pp, which only bounds
 // the array it points at, so the rule for that array's elements applies,
-// whatever pp's own type can hold (§5.2).
+// whatever pp's own type can hold.
 struct P { x: i64[>..<]&, y: i64[>..<]& }
 fn f(pp: P&) -> i64 {
     let s = pp.y[..];

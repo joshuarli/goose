@@ -1,6 +1,6 @@
 // runtime-debug: a function value written in a global initializer names that
 // initializer's locals, which the functions it is handed to take as hidden
-// parameters, as they would a function's locals (§7.5, §7.6): every such
+// parameters, as they would a function's locals: every such
 // function at -O0, and at -O2 the recursive and the dispatched ones, which
 // stay calls there.
 struct PSlot { n: i64 = 0 }

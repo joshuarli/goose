@@ -1,6 +1,6 @@
 // error: cannot clear bs: global G may hold a reference into it
 // Each global array shrunk is judged on its own: cs's clear, checked
-// first, frees nothing G views, and bs's does (§5.1).
+// first, frees nothing G views, and bs's does.
 struct B { name: u8[..8] }
 struct H { s: const u8[:] }
 var bs: B[>..] = [];

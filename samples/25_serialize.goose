@@ -96,7 +96,7 @@ recursive fn compact(n: Node&, out: Tiny..[>..]&) -> Tiny..& {
     }
     // Both subtrees land in `out` first; `push` hands back a reference to
     // each, and both are rooted at `out`, which is what lets the parent
-    // store them as offsets (§3.9).
+    // store them as offsets.
     if l {
         let lc: Tiny..& = compact(l, out);
         if r {
@@ -167,7 +167,7 @@ fn main() {
 
     // Loading is a read, a verify and a copy. What comes back is an ordinary
     // array rooted at `loaded`: it indexes, it grows, references into it are
-    // ordinary references, and §9 needs no new rule for it.
+    // ordinary references, and the lifetime rules need no new rule for it.
     var file: u8[>..] = [];
     guard read_file("index.gsx", file) else { print("cannot re-read"); exit(1); }
     let n, k = parse_uleb(file[0..]);

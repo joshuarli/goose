@@ -1,6 +1,6 @@
 // error: cannot assign to let x, which may be assigned already
 // bail assigns x and leaves setx: after setx's call, x may be assigned as
-// that exit left it (§4.4, §7.5, §7.9).
+// that exit left it.
 fn run(c: bool) {
     let x: i64;
     fn setx(d: bool) {

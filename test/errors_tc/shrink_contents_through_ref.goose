@@ -1,6 +1,6 @@
 // error: cannot clear items while n is still used: it may hold a reference or slice into it; it was read out of h and may point into buf or items
-// put stores a view of items through the reference to h that r is
-// (§5.1, §9.5).
+// put stores a view of items through the reference to h that r is.
+//
 var items: u8[>..];
 struct H { s: const u8[:] }
 fn put(h: H&) { h.s = items[0..2]; }

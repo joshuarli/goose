@@ -1,7 +1,7 @@
 // error: cannot clear ns while h is still used: a reference into it was stored there
 // pick returns a copy of an element ns names or a node linking to one of
 // those elements: merged with a reference into the storage itself, what
-// its result holds is no view that storage held (§5.1).
+// its result holds is no view that storage held.
 struct N { v: i64, next: N&? }
 fn pick(ns: N[>..]&, c: bool) -> N {
     if c { return ns[1]; }

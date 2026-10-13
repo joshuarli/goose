@@ -1,6 +1,6 @@
 // error: cannot clear t while t is still used: a reference into it was stored there
 // A struct's field holding a reference into its own tail stops the tail's
-// shrink while the struct is used (§5.1).
+// shrink while the struct is used.
 struct B { e: u8&, r: u8[>..] }
 fn main() {
     var x: u8 = 7;

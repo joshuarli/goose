@@ -1,4 +1,4 @@
-// `let` keeps a binding from being reassigned and nothing more (§4.4): the
+// `let` keeps a binding from being reassigned and nothing more: the
 // contents of a let value, and what a reference to it reaches, are as
 // writable as the type says. `const` is what makes contents read-only.
 struct Pt { x: i64, y: i64 }

@@ -168,7 +168,7 @@ fn outer(n: i64) -> u8[][] { return [str("o"), half(n)]; }
 
 // Recursion: the innermost call catches. The text goes into a buffer owned
 // outside the cycle, since a value under construction may not be live at a
-// call into it (§7.8); the exit leaves the activation's part of it as far
+// call into it; the exit leaves the activation's part of it as far
 // as it got, inside the format rendering rbail's result.
 fn rbail(n: i64) -> i64 {
     if n == 2 { return -20 from rec; }

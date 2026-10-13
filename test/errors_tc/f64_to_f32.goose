@@ -1,5 +1,5 @@
 // error: expected a value of type f32, got f64
-// f64 never narrows to f32 implicitly (§6.3).
+// f64 never narrows to f32 implicitly.
 fn main() {
     var x: f32 = 0.5;
     var y: f64 = 1.0;

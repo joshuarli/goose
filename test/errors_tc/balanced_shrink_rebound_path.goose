@@ -1,7 +1,7 @@
 // error: cannot call helper, which shrinks s while v
 // error: is still used: it may refer into s
 // A mark read through a `var` reference is the length of whatever it was
-// bound to then (§5.2): after the rebind, the resize shrinks another array.
+// bound to then: after the rebind, the resize shrinks another array.
 fn helper(a: i64[>..<]&, b: i64[>..<]&) {
     var r: i64[>..<]& = a;
     let mark = r.len;

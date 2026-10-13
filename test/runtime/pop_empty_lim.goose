@@ -1,5 +1,5 @@
-// Pop on an empty limited array of static capacity is a runtime abort
-// (§9.3): the length is stored in the smallest int type fitting the
+// Pop on an empty limited array of static capacity is a runtime abort:
+// the length is stored in the smallest int type fitting the
 // capacity, so an unchecked pop would wrap it to that type's maximum and
 // every later bounds check would pass against garbage.
 

@@ -1,6 +1,6 @@
 // error: returning a reference rooted in b, which dies with this function
 // A function value's store into a holder of the function it is written in
-// is on the holder's record (§7.6).
+// is on the holder's record.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 fn twice<F>() { F(); F(); }

@@ -1,6 +1,6 @@
 // error: comparing u64 with i64 relies on k being non-negative, but a writable reference bound to k at
 // error: u64_cmp_let_rebound.goose:10 may make it negative
-// §6.1, §3.8, §4.4: rebinding r to k makes assigning r write k.
+// rebinding r to k makes assigning r write k.
 
 fn main() {
     var x = 7;

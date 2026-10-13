@@ -1,5 +1,5 @@
 // error: cannot call h: it shrinks G while s is still used, and s may refer into G
-// An argument is still in use while the arguments after it run (§5.2).
+// An argument is still in use while the arguments after it run.
 var G: i64[>..<] = [1, 2, 3];
 fn clear_g() -> i64 {
     G.clear();

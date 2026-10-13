@@ -1,5 +1,5 @@
 // error: cannot clear a while v is still used: what it views may hold a reference or slice into it
-// v views bs's elements, whose field the push made a view of a (§5.1).
+// v views bs's elements, whose field the push made a view of a.
 struct B { s: u8[:] }
 fn main() {
     var a: u8[>..] = [];

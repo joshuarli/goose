@@ -1,5 +1,5 @@
 // error: enum E has non-fixed-size payloads and can only be used in variable mode (E..)
-// Fixed-mode use requires all payloads fixed-size (§3.5).
+// Fixed-mode use requires all payloads fixed-size.
 enum E { A { s: u8[] }, B }
 fn main() {
     let e: E = E.B {};

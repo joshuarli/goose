@@ -1,5 +1,5 @@
 // runtime-debug: `/` and `>>` of a nonnegative value by a nonnegative divisor
-// or any count lie between 0 and that value (§6.2), so an index halved from
+// or any count lie between 0 and that value, so an index halved from
 // one in range stays in range. A signed `/`, `%` or `>>` the facts show to be
 // of a nonnegative value, by a positive divisor, is computed unsigned; the
 // others keep the signed, Euclidean and checked forms.

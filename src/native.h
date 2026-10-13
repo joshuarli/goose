@@ -1,8 +1,8 @@
-// Goose compiler — a package's native part (docs/design/packages.md §5): the
+// Goose compiler — a package's native part: the
 // C its sidecar names, built once per toolchain into what an AOT program
 // links (its objects and system libraries, in a response file) and the
 // shared library a JIT run loads, which exports one table of the functions
-// the package's extern fns name (§5.3). The program itself is package 0 and
+// the package's extern fns name. The program itself is package 0 and
 // may have a native part of its own.
 #pragma once
 
@@ -54,7 +54,7 @@ inline string NativeBuildDir(const Ast &ast, int pkg, const string &rootfile, co
 }
 
 // The C symbols a file's extern fns name: `extern "sym" fn f` gives sym,
-// `extern fn f` or `extern fn ns::f` gives the leaf name (§7.10). Read by
+// `extern fn f` or `extern fn ns::f` gives the leaf name. Read by
 // the lexer alone, since this is asked of files the program never parsed.
 inline void ExternNamesIn(const string &path, const string &text, set<string> &names) {
     Lexer lex(path, text.c_str());
@@ -129,7 +129,7 @@ inline string SymbolTableSource(const string &pkgname, const vector<string> &nam
     return s;
 }
 
-// --- CMake packages (§5.2) ----------------------------------------------------------
+// --- CMake packages ----------------------------------------------------------
 
 // A link command fragment's words, as CMake's file API gives them: several
 // libraries may share one fragment, and a quoted path holds its spaces.

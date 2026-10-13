@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while p is still used, and p may refer into buf
 // g clears f's out and reads f's holder parameter: g's pair passes through
-// f to main (§5.1).
+// f to main.
 struct P { words: (const u8[:])[:] }
 fn f(out: u8[>..]&, p: P) {
     fn g() {

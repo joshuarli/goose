@@ -1,5 +1,5 @@
 // A grow-only array shrinks after the last use of a slice, reference or
-// holder into it, without that holder's block having to end (§5.1).
+// holder into it, without that holder's block having to end.
 import std;
 
 struct Slot { s: u8[:] }

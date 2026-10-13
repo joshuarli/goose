@@ -1,5 +1,5 @@
 // error: re-binding lp to a reference that is not a pool reference, where it was bound to a reusable pool
-// A reference bound to a pool carries the pool's freelist (§5.4), which a
+// A reference bound to a pool carries the pool's freelist, which a
 // rebind to an array that is not a pool cannot give it: alloc_index below
 // would hand out pool's free slots in other.
 fn main() {

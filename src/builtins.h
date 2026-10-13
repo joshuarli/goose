@@ -1,7 +1,7 @@
 // Goose compiler — the builtin function table. Builtins are ordinary
 // functions reachable both as f(a, b) and, per UFCS, as a.f(b); the entries
-// flagged BF_MEMBER are the array operations (§3.3, §5.4), which resolution
-// tries before user functions at a.f() sites (§7.1) — their receiver is
+// flagged BF_MEMBER are the array operations, which resolution
+// tries before user functions at a.f() sites — their receiver is
 // simply the first argument. BF_PROPERTY entries (.len/.cap) are field-like
 // accesses, not calls.
 //
@@ -25,10 +25,10 @@ enum BuiltinFlags {
     BF_MEMBER    = 1 << 0,  // First argument is an array receiver.
     BF_PROPERTY  = 1 << 1,  // .name access, not a call.
     BF_TYARGS    = 1 << 2,  // Takes an explicit <T> list.
-    BF_WRITE     = 1 << 3,  // Receiver needs writable provenance (§9.5).
-    BF_REUSABLE  = 1 << 4,  // Receiver must be a reusable pool of slots (§5.4).
+    BF_WRITE     = 1 << 3,  // Receiver needs writable provenance.
+    BF_REUSABLE  = 1 << 4,  // Receiver must be a reusable pool of slots.
     BF_CUSTOM    = 1 << 5,  // Checked by dedicated code beyond the table.
-    BF_SLICEPOOL = 1 << 6,  // Receiver must be a reusable[] pool of slices (§5.4).
+    BF_SLICEPOOL = 1 << 6,  // Receiver must be a reusable[] pool of slices.
 };
 
 // Receiver kind masks (members only): which array flavors have the member.
@@ -37,11 +37,11 @@ enum BuiltinRecv {
     BR_GROW = 1 << 3, BR_GROWSHRINK = 1 << 4, BR_SLICE = 1 << 5,
     BR_ANY = BR_FIXED | BR_VAR | BR_LIMITED | BR_GROW | BR_GROWSHRINK | BR_SLICE,
     BR_GROWABLE = BR_LIMITED | BR_GROW | BR_GROWSHRINK,
-    // Array kinds `index_of` accepts (§3.3): fixed strides once the element
+    // Array kinds `index_of` accepts: fixed strides once the element
     // type is fixed-size, which the check requires on top of this.
     BR_INDEXABLE = BR_FIXED | BR_LIMITED | BR_GROW | BR_GROWSHRINK,
     // A grow-only array shrinks too, where the checker can see that nothing is
-    // rooted in it (§5.1, CheckGrowShrink in typecheck.h).
+    // rooted in it (CheckGrowShrink in typecheck.h).
     BR_SHRINKABLE = BR_LIMITED | BR_GROWSHRINK | BR_GROW,
 };
 

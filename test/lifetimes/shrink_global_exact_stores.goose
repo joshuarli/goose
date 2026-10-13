@@ -1,5 +1,5 @@
 // A global holds a reference only where a store or a binding put one, and
-// once every function has been checked all of them are on record (§5.1):
+// once every function has been checked all of them are on record:
 // clearing bs, or the builder out, needs no care for globals that view cs,
 // static data, or each other, whichever functions stored them there, and
 // through whichever calls, specializations and function values.

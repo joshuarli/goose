@@ -1,11 +1,11 @@
-// A slice lvalue bound by reference is the reference `&` of it is (§4.1,
-// §9.5): as writable as the path to its slot and, for a variable, its
+// A slice lvalue bound by reference is the reference `&` of it is:
+// as writable as the path to its slot and, for a variable, its
 // binding. So a callee re-points the slice of a `var`, of a plain `let`
-// (written through a reference as a var is, §4.4), a field or an element of
+// (written through a reference as a var is), a field or an element of
 // a `var` or of one reached through a writable reference, and a field of a
 // `const u8[:]` type in a `var` struct, whose slice stays read-only however
 // the reference is (a load through it sees the field's type). In a loop too,
-// whose later pass checks the `&` the first one wrote in (§6.5).
+// whose later pass checks the `&` the first one wrote in.
 struct B { s: const u8[:] }
 struct S { f: u8[:] }
 var buf: u8[>..] = [];

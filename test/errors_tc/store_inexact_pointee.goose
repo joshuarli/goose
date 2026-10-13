@@ -1,6 +1,6 @@
 // error: storing a reference rooted at x, which does not outlive the destination: it is reached through a reference that may point into a1
 // Assigning through r writes whichever of a1 and a2 it names, and the
-// literal holds a reference to x, which a1 would outlive (§9.2).
+// literal holds a reference to x, which a1 would outlive.
 struct Node { p: i64? }
 
 fn main() {

@@ -1,6 +1,6 @@
 // error: cannot call helper, which shrinks s while v
 // error: is still used: it may refer into s
-// A mark is a `let` (§5.2): a `var` initialized to the length can be
+// A mark is a `let`: a `var` initialized to the length can be
 // assigned anything before the resize.
 fn helper(s: i64[>..<]&) {
     var mark = s.len;

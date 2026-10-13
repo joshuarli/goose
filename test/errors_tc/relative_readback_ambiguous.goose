@@ -1,8 +1,8 @@
 // error: a relative reference must point within the same root as its location
 // error: it was read out of slots and may point into pool or spare
 // Two global containers can hold a Node, so a reference read back out of the
-// slot array is rooted at the global scope, not at one of them (§9.5), and
-// cannot be stored as a relative link (§3.9).
+// slot array is rooted at the global scope, not at one of them, and
+// cannot be stored as a relative link.
 struct Node { key: i32, next: Node&<u32>? }
 var pool: Node[>..] = [];
 var spare: Node[>..] = [];

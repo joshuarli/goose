@@ -1,7 +1,7 @@
 // error: cannot pop r: b[..], evaluated earlier in the statement
 // error: may still refer into b, which r may point at
 // The slice of b is held by the call while its next argument pops through r,
-// which may point at b (§5.2).
+// which may point at b.
 fn total(s: const i64[:], n: i64) -> i64 {
     var t = n;
     for x in s { t += x; }

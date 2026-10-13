@@ -1,7 +1,7 @@
 // error: cannot assign d while h is still used: a reference into it was stored there
 // The right-hand side reads a holder's field that refers to the struct
-// whose tail is rebuilt, and follows it into the array being built
-// (§4.4, §5.1).
+// whose tail is rebuilt, and follows it into the array being built.
+//
 struct D { n: i64, tail: u8[>..] }
 struct H { n: i64, d: D& }
 fn total(d: D&) -> u8[>..] {

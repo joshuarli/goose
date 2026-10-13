@@ -1,8 +1,8 @@
 // error: storing a reference into p, which holds a grow-shrink array
-// A parameter bound to an explicit `&s` stands for the slice s holds (§3.8),
-// which may be the view of the grow-shrink G one branch of its binding gives
-// (§9.2), although its root is `b`; `keep` may not store what it loads
-// through the parameter (§5.2).
+// A parameter bound to an explicit `&s` stands for the slice s holds,
+// which may be the view of the grow-shrink G one branch of its binding gives,
+// although its root is `b`; `keep` may not store what it loads
+// through the parameter.
 var G: u8[>..<] = "xyz";
 struct K { s: const u8[:] }
 

@@ -1,5 +1,5 @@
-// A writable slot is never given static data but a null or an empty slice
-// (§9.5), so a reference read back out of one points into the one global that
+// A writable slot is never given static data but a null or an empty slice,
+// so a reference read back out of one points into the one global that
 // can hold its pointee, although a literal could supply a u8 as well.
 struct Mark { at: u8& }
 var text: u8[>..] = [];

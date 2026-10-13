@@ -1,6 +1,6 @@
 // error: cannot call mid: it shrinks buf while p is still used, and p may refer into buf
 // emit's pair about what p's class holds passes through mid, which reads p
-// after the call, to main, where names' element views buf (§5.1).
+// after the call, to main, where names' element views buf.
 struct P { words: (const u8[:])[:] }
 fn emit(out: u8[>..]&, p: P) {
     out.clear();

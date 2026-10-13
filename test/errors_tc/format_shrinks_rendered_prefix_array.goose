@@ -2,7 +2,7 @@
 // A whole assignment rebuilds every variable-size part of a resizable
 // value, not just its tail: names, counted as four before the first
 // element's overload, holds one after it, and the rest of the count would
-// be read out of items (§3.7, §4.4, §5.1).
+// be read out of items.
 struct A { v: i64 }
 struct S { names: A[], items: i64[>..] }
 var s = S { names: [A { v: 1 }], items: [] };

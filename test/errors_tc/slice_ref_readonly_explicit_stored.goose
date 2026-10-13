@@ -1,6 +1,6 @@
 // error: storing a read-only reference of type const (u8[:])& in a slot of type u8[:]&
 // `&s` of a slice variable holding a read-only slice is a read-only
-// reference (§9.5), which only a slot declared const holds: read back out of
+// reference, which only a slot declared const holds: read back out of
 // one that is not, it would let the slice be written.
 struct H { r: u8[:]& }
 fn text(s: u8[:]) {

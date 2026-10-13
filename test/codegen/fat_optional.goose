@@ -1,4 +1,4 @@
-// An optional reference to a resizable value is a fat reference (C.2): its
+// An optional reference to a resizable value is a fat reference: its
 // null test reads the header half of the pair.
 fn main() {
     var s: u8[>..] = [];

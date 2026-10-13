@@ -1,4 +1,4 @@
-// Integer match arms at the ends of their type (§8.1): a single-value arm
+// Integer match arms at the ends of their type: a single-value arm
 // may be the type's largest value, which a range's exclusive end cannot
 // name, and one at either end matches only that value. Each function runs
 // on values read out of an array, compared at run time, and on literal

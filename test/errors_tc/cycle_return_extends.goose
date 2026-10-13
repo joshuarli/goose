@@ -1,5 +1,5 @@
 // error: storing a reference rooted at mine, which does not outlive the destination
-// A real return the cycle's scan did not predict (§7.8), checked before any
+// A real return the cycle's scan did not predict, checked before any
 // back edge has used the prediction, joins it: the scan resolves both calls
 // of `pick` to the first nested function of that name, a global's element,
 // but the second is `mine`'s, so the back edge after it is rooted at `mine`

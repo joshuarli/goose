@@ -1,12 +1,12 @@
 // Goose compiler — codegen's construction (definitions of CodeGen members,
-// codegen.h): values written front-to-back at a data stack's top (§4.2,
-// §4.3), relative-reference stores (§3.9), and the literals.
+// codegen.h): values written front-to-back at a data stack's top,
+// relative-reference stores, and the literals.
 #pragma once
 
 namespace goose {
 
 // ------------------------------------------------------------------
-// Construction (§4.2/§4.3): writes a value front-to-back at a stack's
+// Construction: writes a value front-to-back at a stack's
 // top, bumping it. All branches of value-producing control constructs
 // construct to the same destination; calls pass the stack down.
 
@@ -62,13 +62,13 @@ inline void CodeGen::EmitLenStore(const string &stk, IntStorage ls, const string
     }
 }
 
-// A varint field or element (§3.6): the i64 value `x`, zigzag-encoded.
+// A varint field or element: the i64 value `x`, zigzag-encoded.
 inline void CodeGen::EmitVarintStore(const string &stk, const string &x) {
     Bump(stk, cat("gs_zig_write(", Top(stk), ", ", x, ")"));
 }
 
 // The range check a store of `off` into a relative slot of width `w`
-// needs (§3.9). The self-relative form is signed and bounded by the span
+// needs. The self-relative form is signed and bounded by the span
 // of the root array; the `in pool` form is unsigned and bounded by the
 // pool, so its width covers 2^N - 1 bytes of one. Either way a root on a
 // data stack is inside one reservation of GS_STACK_RESERVE bytes (guard
@@ -98,7 +98,7 @@ inline void CodeGen::EmitRelRangeCheck(TypeExpr *rt, const string &off, Line ln,
     if (guarded) L("#endif");
 }
 
-// A reference of a non-optional type is never null (§3.8): the value of
+// A reference of a non-optional type is never null: the value of
 // a node typed so, of a call declared to return one, and of a block or an
 // if whose every value is one. (A node delivering to a relative slot may
 // carry the slot's own type, optional or not.)
@@ -135,7 +135,7 @@ inline bool CodeGen::RelSlotApart(TypeExpr *rt, TypeExpr *holder, int64_t off) {
 // The offset a plain reference value stores as, in a local: its distance
 // from the origin the width's form measures against (RelOrigin), and zero
 // for the null of an optional one, whose slot cannot hold a real offset of
-// zero (§3.9). A self-relative one could be zero for a target at the slot
+// zero. A self-relative one could be zero for a target at the slot
 // itself, which aborts, unless the facts rule that target out.
 inline string CodeGen::RelOffset(TypeExpr *rt, const string &org, const string &rv, Line ln,
                                  RelFacts f) {
@@ -152,7 +152,7 @@ inline string CodeGen::RelOffset(TypeExpr *rt, const string &org, const string &
 }
 
 // Writes a plain-reference value into the relative-reference slot at
-// `fa` (§3.9), range-checked. Fixed widths only; the varint form exists
+// `fa`, range-checked. Fixed widths only; the varint form exists
 // only in the stack-top variant below.
 inline void CodeGen::EmitRelStoreAt(const string &fa, TypeExpr *rt, const string &rv, Line ln,
                                     bool inroot, RelFacts f) {
@@ -179,7 +179,7 @@ inline void CodeGen::EmitRelStore(const string &stk, TypeExpr *rt, const string 
     }
 }
 
-// `self` in a literal field (§3.9): the slot at `fa` gets the offset back
+// `self` in a literal field: the slot at `fa` gets the offset back
 // to the start of the value under construction. For a self-relative field
 // that is minus its own byte offset in the value, the same wherever the
 // value lives, so unlike other relative references it survives being
@@ -215,7 +215,7 @@ inline void CodeGen::EmitRelSelfStore(const string &stk, TypeExpr *rt, int64_t f
 }
 
 // Whether a fixed value of type t can hold bytes nothing ever wrote: the
-// unused slots of a limited array (§5.3), at any depth, or the one element
+// unused slots of a limited array, at any depth, or the one element
 // C gives a zero-length array. A C temporary of such a type is
 // zero-initialized before a literal fills it, since copying a struct with
 // indeterminate bytes is what MSVC 19.51 exploits to miscompile the reads of
@@ -260,7 +260,7 @@ inline bool CodeGen::HasSelfRelRef(TypeExpr *t) {
 }
 
 // An exit's value that is a local holding self-relative references reaches
-// its destination only as the named result built there (§3.9, §7.3): the
+// its destination only as the named result built there: the
 // checker allows nothing else (TypeCheck::AllowNamedResult), and a copy
 // would keep offsets measured from the local.
 inline void CodeGen::NoSelfRelCopy(Node *val) {
@@ -334,7 +334,7 @@ inline CodeGen::SrcElems CodeGen::GenSrcElems(Node *n) {
 
 // Constructs n's value at stk's top. For resizable-class values, lenlv
 // names the receiving header's length lvalue: elements are written and
-// the count assigned there (§7.3's metadata-outside-the-data form).
+// the count assigned there (metadata-outside-the-data form).
 inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, const string &lenlv) {
     if (auto it = fillvalues.find(n); it != fillvalues.end()) {
         auto target = want ? want : it->second.t;
@@ -365,14 +365,14 @@ inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, co
     }
     // An array that is not fixed-size landing in a slot of another such array
     // type (an inlined callee's result reaching the caller's destination,
-    // typed as the callee's, say) takes the slot's layout (§4.2): the
+    // typed as the callee's, say) takes the slot's layout: the
     // length prefix, capacity or receiving count written here is the
     // destination's, whatever the expression's own type says.
     if (want && et && want->kind == TY_ARRAY && IsBytesT(want) && et->kind == TY_ARRAY &&
         IsBytesT(et) && !TEq(want, et) && TEq(want->arr->sub, et->arr->sub))
         et = want;
     // Any array or slice of the element type landing in a static-capacity
-    // limited slot is copied into the slot's C value (§4.2).
+    // limited slot is copied into the slot's C value.
     if (want && et && IsStaticLimited(want) && (et->kind == TY_ARRAY || et->kind == TY_SLICE) &&
         !TEq(et, want))
         et = want;
@@ -419,7 +419,7 @@ inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, co
     }
     // A reference landing in a relative-reference slot -- an element of a
     // `(T&<w>)[>..]`, a variable of a varint width, say -- stores the offset
-    // from that slot, not the pointer (§3.9), and null the optional's zero.
+    // from that slot, not the pointer, and null the optional's zero.
     // Reference values always reach here as plain pointers, relative ones
     // having been decoded on the read.
     if (want && want->kind == TY_REF && want->ref->lenstorage >= 0 && et->kind == TY_REF) {
@@ -585,7 +585,7 @@ inline void CodeGen::ConstructCall(Call *c, TypeExpr *et, const string &stk, Typ
                                    const string &lenlv) {
     auto rt0 = c->rettypes.empty() ? nullptr : c->rettypes[0];
     // A bytes-class result feeding a fixed-class slot (an array
-    // constructing a static-capacity limited one, §4.2), or a slot of an
+    // constructing a static-capacity limited one), or a slot of an
     // array kind it cannot be built in (CallBuildsAt), is built on a
     // temporary of its own and copied into the slot below, so the call
     // is not handed the slot's stack to build on.
@@ -593,7 +593,7 @@ inline void CodeGen::ConstructCall(Call *c, TypeExpr *et, const string &stk, Typ
     auto rets = EmitCall(c, own ? Dst {} : Dst { DK_STACK, stk, want, lenlv });
     if (rets.empty() || IsVoidT(et)) return;
     // A returned reference landing in a relative-reference slot stores the
-    // offset, as any other reference value does there (§3.9).
+    // offset, as any other reference value does there.
     auto slot = want ? want : et;
     if (slot->kind == TY_REF && slot->ref->lenstorage >= 0) {
         EmitRelStore(stk, slot, CallVal0(c, rets[0], slot), c->line);
@@ -614,7 +614,7 @@ inline void CodeGen::ConstructCall(Call *c, TypeExpr *et, const string &stk, Typ
     // slice result of another kind than the slot's -- a fixed-size one, which
     // arrives as a C value, or one built on its own temporary above: the
     // callee did not construct at the destination, so the value is
-    // constructed as the slot's type from where it lies (§4.2).
+    // constructed as the slot's type from where it lies.
     auto fixarr = rt0 && IsFix(rt0) && (rt0->kind == TY_ARRAY || rt0->kind == TY_SLICE);
     if (rt0 && IsBytesT(et) && (IsPlainRef(rt0) || fixarr || own)) {
         ConstructFromLoc(CallResLoc(c, rets[0]), et, stk, lenlv, c->line);
@@ -627,7 +627,7 @@ inline void CodeGen::ConstructCall(Call *c, TypeExpr *et, const string &stk, Typ
 
 // The type a call or an inlined call body delivers its value as, where the
 // checker adapted that value to an ADT it does not arrive as (FitsAt: a
-// variant to its ADT, or the ADT to its other mode, §3.5); null elsewhere.
+// variant to its ADT, or the ADT to its other mode); null elsewhere.
 // A reference result counts as its pointee, which the receiver loads.
 inline TypeExpr *CodeGen::AdtFrom(Node *n) {
     auto et = n->exprtype;
@@ -718,7 +718,7 @@ inline void CodeGen::GenCallAs(Call *c, TypeExpr *t, const Dst &d) {
 inline void CodeGen::GenArrayFromLoc(Loc lv, TypeExpr *et, const string &stk, Line ln,
                                      const string &lenlv) {
     if (IsStaticLimited(et)) {
-        // A static-capacity limited array is a C value (§4.2): its length
+        // A static-capacity limited array is a C value: its length
         // and slots land together.
         assert(lenlv.empty());
         EmitValStore(stk, et, AdaptToFixed(lv, et, ln));
@@ -780,7 +780,7 @@ inline void CodeGen::EmitRzCopy(Loc lv, TypeExpr *et, const string &stk, const s
 
 // Frame object `obj`'s fixed fields, at every nesting level, against the
 // bytes layout the same type takes at `p` as the tail of a value that is not
-// a frame object (C.2): stored there, explicit pads zeroed as GenFieldInits
+// a frame object: stored there, explicit pads zeroed as GenFieldInits
 // zeroes them, or (`tobytes` false) loaded back.
 inline void CodeGen::FoBytes(TypeExpr *t, const string &obj, const string &p, bool tobytes) {
     auto si = SI(t);
@@ -1183,7 +1183,7 @@ inline void CodeGen::GenArrayLit(ArrayLit *al, const string &stk, const string &
     auto elem = et->arr->sub;
     if (al->capexpr) {
         // [..cap]: capacity + zero length; the slots stay uninitialized
-        // and the runtime commits the skipped range on first touch (C.4).
+        // and the runtime commits the skipped range on first touch.
         assert(et->arr->akind == A_LIMITED);
         auto cv = GenX(al->capexpr);
         auto t = T();
@@ -1198,7 +1198,7 @@ inline void CodeGen::GenArrayLit(ArrayLit *al, const string &stk, const string &
     int64_t count = al->fillval ? -1 : (int64_t)al->elems.size();
     string cn;
     if (al->fillval) {
-        // The fill count is a constant expression (§4.2).
+        // The fill count is a constant expression.
         auto fc = Is<IntLit>(al->fillcount);
         assert(fc);
         count = fc->val;
@@ -1242,7 +1242,7 @@ inline void CodeGen::GenArrayLit(ArrayLit *al, const string &stk, const string &
             L("}");
         } else if (elem->kind == TY_REF && elem->ref->lenstorage >= 0) {
             // Each relative slot stores its own offset to the one plain
-            // reference, or the optional's zero for null (§3.9).
+            // reference, or the optional's zero for null.
             auto p = T();
             L("uint8_t *", p, " = (uint8_t *)(", GenX(al->fillval), ");");
             auto iv = T();
@@ -1275,8 +1275,8 @@ inline bool CodeGen::HasSelfInit(StructLit *sl) {
 
 // Struct/variant literal into a bytes destination: fields in layout
 // order, defaults (or a zero optional) for omitted ones. Named inits out
-// of declaration order still construct in layout order (a note against
-// §2's left-to-right rule; flagged for the spec).
+// of declaration order still construct in layout order, so their
+// evaluation order follows the layout rather than the source order.
 inline void CodeGen::GenStructLit(StructLit *sl, const string &stk, const string &lenlv) {
     auto et = sl->exprtype;
     string selfbase;
@@ -1339,7 +1339,7 @@ inline void CodeGen::GenFrameObjLit(StructLit *sl, StructInst *si, const string 
             L("memset(&", flv, ", 0, sizeof(", flv, "));");
             continue;
         }
-        // Only the `in pool` form can be a frame object's field (C.2), so
+        // Only the `in pool` form can be a frame object's field, so
         // the offset does not depend on where the object is built.
         if (ft->kind == TY_REF && ft->ref->lenstorage >= 0) {
             EmitRelStoreAt(cat("(uint8_t *)&", flv), ft, GenX(init), sl->line, true,

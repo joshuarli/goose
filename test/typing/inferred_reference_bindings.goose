@@ -1,5 +1,5 @@
-// A variable whose type is inferred binds a non-fixed lvalue by reference
-// (§4.1), and a reference to a non-fixed value denotes one (§3.8): `let x =
+// A variable whose type is inferred binds a non-fixed lvalue by reference,
+// and a reference to a non-fixed value denotes one: `let x =
 // r;` is then r itself, as `let x .= r;` is, wherever the reference comes
 // from -- a parameter, a reference field reached through one, a call
 // returning a reference, each result of a multi-value call, a narrowed

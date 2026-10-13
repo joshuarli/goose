@@ -1,4 +1,4 @@
-// A cast, `~` and unary `-` compute at their own type (§6.1–6.3) wherever
+// A cast, `~` and unary `-` compute at their own type wherever
 // their value lands: stored into a wider slot, or widened as the operand of a
 // wider operation, an i8 cast still wraps at i8 and ~ on a u8 still flips 8
 // bits. Release semantics throughout: the checked integer `as` and the `-`

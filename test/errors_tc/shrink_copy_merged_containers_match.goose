@@ -1,6 +1,6 @@
 // error: cannot clear buf while keep is still used: a reference into it was stored there
 // es views a1's elements or a2's: the payload the match binder copies out
-// of one holds what either's do, and a1's element views buf (§5.1).
+// of one holds what either's do, and a1's element views buf.
 enum E { Txt { s: const u8[:] }, Nothing { k: i64 } }
 fn main() {
     var buf: u8[>..] = [];

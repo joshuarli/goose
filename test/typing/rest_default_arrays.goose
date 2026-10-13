@@ -1,5 +1,5 @@
-// A literal ending in `..` fills an array field it does not give with `[]`
-// (§4.2): a string, one counted by a varint, an array with a u16 length,
+// A literal ending in `..` fills an array field it does not give with `[]`:
+// a string, one counted by a varint, an array with a u16 length,
 // an array of strings, limited arrays of static and of construction-time
 // capacity (the latter then with none), and a resizable last field,
 // grow-only or grow-shrink; a fixed array still gets its elements'

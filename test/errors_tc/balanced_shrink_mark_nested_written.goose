@@ -1,6 +1,6 @@
 // error: mark is bound to a writable reference here, through which it may change, while the resize at
 // error: balanced_shrink_mark_nested_written.goose:13 relies on it still holding the length it was bound to
-// §5.2, §4.4, §7.5: spoil is checked where it is first called, after the
+// spoil is checked where it is first called, after the
 // resize, and writes the mark it names through a reference; the loop's next
 // resize then goes back to 0 while v still views a.
 

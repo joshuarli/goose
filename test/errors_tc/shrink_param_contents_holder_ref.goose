@@ -1,5 +1,5 @@
 // error: cannot call f: it shrinks a while h is still used, and h may refer into a
-// The holder h refers to views a (§5.1).
+// The holder h refers to views a.
 struct H { s: u8[:] }
 fn f(a: u8[>..]&, h: H&) {
     a.clear();

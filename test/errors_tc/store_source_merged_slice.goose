@@ -1,6 +1,6 @@
 // error: cannot clear a while bx is still used: a reference into it was stored there
 // The element copied may lie in arr1 or arr2, so neither one's stores say
-// what bx holds: each only bounds it (§3.5, §5.1).
+// what bx holds: each only bounds it.
 struct Box { s: u8[:] }
 fn main() {
     var a: u8[>..] = [];

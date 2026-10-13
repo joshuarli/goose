@@ -1,6 +1,6 @@
 // error: storing a reference into a, which holds a grow-shrink array
-// a is given a reference read out of an element of tops, a slot read
-// (§5.2), but one to the whole of mine: an element of it lies in a
+// a is given a reference read out of an element of tops, a slot read,
+// but one to the whole of mine: an element of it lies in a
 // grow-shrink array, and is never stored.
 struct Cell { v: i64 }
 fn g(a: Cell[>..<]&) {

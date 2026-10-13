@@ -1,6 +1,6 @@
 // error: show calls into its recursive cycle inside the arguments of str(...), whose text is under construction
 // str renders its arguments one by one into the text it builds, so the call
-// into the cycle among them runs with that text under construction (§7.8):
+// into the cycle among them runs with that text under construction:
 // render its result in a statement of its own first, or append in place into
 // a buffer passed in from outside the cycle.
 var shown: u8[>..] = [];

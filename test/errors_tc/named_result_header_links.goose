@@ -1,7 +1,7 @@
 // error: copying a value of type M, which contains self-relative references, is not supported
 // A resizable struct's fields before its resizable tail reach the caller as
-// a copy (C.3), and a link from the tail to start would still point at the
-// callee's (§3.9, §7.3).
+// a copy, and a link from the tail to start would still point at the
+// callee's.
 struct Cell { id: i64, neighbors: (Cell&<u32>)[..4] }
 struct M { start: Cell, cells: Cell[>..] }
 

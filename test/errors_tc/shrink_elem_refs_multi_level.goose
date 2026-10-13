@@ -1,5 +1,5 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
-// v's elements view ss's elements, which view a (§5.1).
+// v's elements view ss's elements, which view a.
 fn main() {
     var a: u8[>..] = [];
     a.append("abc");

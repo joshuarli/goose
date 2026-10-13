@@ -1,7 +1,7 @@
 // error: storing a reference rooted at left_node, which does not outlive the destination
 // rest's left_node is given a node read through c on one call and a local
 // of expr, which is in the cycle, on another: what it points at is not
-// outside the cycle on every call, so it is not stored there (§7.8, §9.2).
+// outside the cycle on every call, so it is not stored there.
 import std;
 struct Node { v: i64, left: Node?, right: Node? }
 struct Ctx { depth: i64, nodes: Node[>..]& }

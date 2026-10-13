@@ -1,7 +1,7 @@
 // error: variable n may be used before it is assigned
 // once's check reuses bail's, which leaves setn before n is assigned, so
 // once's check takes that exit too; setn's second round reuses it, and takes
-// the exit again (§4.4, §7.8, §7.9).
+// the exit again.
 fn once<F>() { F(); }
 fn run(c: bool) {
     var n: i64;

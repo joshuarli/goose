@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while words is still used, and words may refer into buf
-// g clears f's out and reads f's words: g's pair passes through f to main
-// (§5.1).
+// g clears f's out and reads f's words: g's pair passes through f to main.
+//
 fn f(out: u8[>..]&, words: (u8[:])[:]) {
     fn g() {
         out.clear();

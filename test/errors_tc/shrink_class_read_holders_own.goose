@@ -1,6 +1,6 @@
 // error: cannot clear G while v is still used: what it views may hold a reference or slice into it
 // emit stored a view of G into the holders it then stored where v is read
-// from (§5.1).
+// from.
 struct H { s: const u8[:] }
 var G: u8[>..] = [];
 fn emit(wss: (H[:])[:], hs: H[:]) {

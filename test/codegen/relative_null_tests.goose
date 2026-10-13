@@ -1,4 +1,4 @@
-// An optional relative reference variable compared with null (§3.8, §3.9):
+// An optional relative reference variable compared with null:
 // it holds an offset, 0 when null, and a varint one its encoding, so the
 // test reads the offset rather than the slot's address. Every width, both
 // forms, either operand order, null and set.

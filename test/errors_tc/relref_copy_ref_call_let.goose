@@ -1,7 +1,7 @@
 // error: copying a value of type TreeNode, which contains self-relative references, is not supported; construct it in place, or bind a reference to it with .=: let root .= build(nodes, 0, 10)
-// An un-annotated `let` of a reference-returning call copies the pointee
-// (§3.8), whose offsets would then be measured from the copy: sum would
-// follow the root's links from the stack (§3.9).
+// An un-annotated `let` of a reference-returning call copies the pointee,
+// whose offsets would then be measured from the copy: sum would
+// follow the root's links from the stack.
 struct TreeNode { left: TreeNode&<u32>?, right: TreeNode&<u32>?, item: i32 }
 recursive fn build(nodes: TreeNode[>..]&, item: i32, depth: i32) -> TreeNode& {
     let node .= nodes.push(TreeNode { item: item });

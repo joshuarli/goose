@@ -1,9 +1,9 @@
-// Codegen execution test for threads and typed queues (§11.2). Deterministic:
+// Codegen execution test for threads and typed queues. Deterministic:
 // every qget blocks on exactly one qput, and joins order the rest.
 
 struct Job { id: i64, weight: i16 }
 
-// A flat resizable-tailed struct (a frame object, C.2) crosses whole.
+// A flat resizable-tailed struct (a frame object) crosses whole.
 struct Packet { id: i64, tag: u8, data: i64[>..] }
 // Behind a variable-size prefix, one is bytes of its owner.
 struct Wrapped { name: u8[], packet: Packet }
@@ -49,5 +49,5 @@ fn main_codegen_threads() {
     print(w2.name, " ", w2.packet.id, " ", w2.packet.tag, " ", w2.packet.data);   // w2 4 5 [6, 7]
 }
 
-// Standalone entry; ignored when this file is imported (§11.1).
+// Standalone entry; ignored when this file is imported.
 fn main() { main_codegen_threads(); }

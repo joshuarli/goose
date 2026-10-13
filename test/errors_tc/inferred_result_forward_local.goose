@@ -1,7 +1,7 @@
 // error: returning a reference rooted in t, which dies with this function
 // A return forwarding every result of a multi-value call keeps them as they
-// are where the result types are inferred (§7.1), so a reference rooted in
-// the function's own local is returned as one, which its root forbids (§9.2).
+// are where the result types are inferred, so a reference rooted in
+// the function's own local is returned as one, which its root forbids.
 fn both(a: i64[>..]&, b: i64[>..]&) -> i64[>..]&, i64[>..]& { return a, b; }
 fn pair() {
     var t: i64[>..] = [1];

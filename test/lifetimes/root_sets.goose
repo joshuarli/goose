@@ -1,4 +1,4 @@
-// Root sets (§9.2): a value that may point at several places points at each
+// Root sets: a value that may point at several places points at each
 // of them and at nothing else, so a shrink of an array it cannot be in
 // passes where a single root bounding a scope would have stopped it.
 struct H { s: const u8[:] }

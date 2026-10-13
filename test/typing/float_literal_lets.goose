@@ -1,6 +1,6 @@
 // warning: redundant `as f32`: K is an f32 here
 // An untyped `let`, local or global, whose initializer is a float of
-// literals and integers stays literal-like (§6.3): it holds its value as an
+// literals and integers stays literal-like: it holds its value as an
 // f64, and each use adapts to f32 as the literal written there would, at a
 // typed destination, as an operand, in a construct's branches and as a
 // generic argument beside an f32. Where nothing gives it a type it is an
@@ -55,7 +55,7 @@ fn main() {
     print(sum, " ", scaled());
 
     // Storage of its own: a reference reads the f64, and an f64& argument
-    // takes it (where no use relies on its value, §4.4). A cast it does not
+    // takes it (where no use relies on its value). A cast it does not
     // need is redundant.
     let d = 0.75;
     let p = &d;

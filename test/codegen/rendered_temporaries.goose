@@ -1,7 +1,7 @@
 // runtime-debug
 // A value that is no storage -- a literal, an operator's or a cast's result,
 // a `.len` or `.cap`, a payload-less variant, default<T>(), a part of any of
-// those -- is rendered from a temporary of the printing statement (§3.7). A
+// those -- is rendered from a temporary of the printing statement. A
 // format overload taking it by reference reads it there, the same before and
 // after calls of its own.
 struct P { a: i32, b: i32 }

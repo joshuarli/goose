@@ -1,7 +1,7 @@
 // error: cannot call mid: it shrinks buf while q is still used, and q may refer into buf
 // emit leaves what q's holder holds to mid, where hq holds mid's words:
-// mid leaves what those view to main, where names' element views buf
-// (§5.1).
+// mid leaves what those view to main, where names' element views buf.
+//
 struct P { words: (const u8[:])[:] }
 struct Q { p: P }
 fn emit(out: u8[>..]&, q: Q&) {

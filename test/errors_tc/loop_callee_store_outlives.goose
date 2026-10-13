@@ -2,7 +2,7 @@
 // put gives h a view of local after h is assigned to out, so the next
 // iteration puts a view of local into the caller's storage, which local does
 // not outlive: the loop's next pass sees the store whichever function makes
-// it (§9.2).
+// it.
 struct H { s: const u8[:] }
 fn put(h: H&, s: const u8[:]) { h.s = s; }
 fn f(out: H&) {

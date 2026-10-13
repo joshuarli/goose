@@ -1,6 +1,6 @@
 // runtime-debug: a constant shifted by a count that is no constant takes
 // the integer type its destination or other operand has, as the constant
-// would (§6.1): a u64 bit set, a u8 field, a parameter, a construct's
+// would: a u64 bit set, a u8 field, a parameter, a construct's
 // branch, a block's value, a compound assignment, a typed loop count. So
 // does integer arithmetic over such shifts and constants, computed at that
 // type throughout, which a debug build's overflow checks would tell. Where

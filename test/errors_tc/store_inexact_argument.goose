@@ -1,6 +1,6 @@
 // error: call f stores a reference rooted at x through its parameter r, whose argument may point into a1, which x does not outlive
 // f's body sees one array behind r, as deep as a2; the argument may be a1,
-// which the call checks the stored reference against (§9.2).
+// which the call checks the stored reference against.
 struct Node { p: i64? }
 
 fn f(r: Node&, x: i64&) { r.p .= x; }

@@ -1,8 +1,8 @@
 // error: storing a reference that may point into G, which holds a grow-shrink array
 // A slice loaded through a reference to a slice variable is the slice the
-// variable holds (§3.8), with everything its binding says: here that it may
-// be the view of the grow-shrink G one branch gives (§9.2), which is never
-// stored (§5.2).
+// variable holds, with everything its binding says: here that it may
+// be the view of the grow-shrink G one branch gives, which is never
+// stored.
 var G: u8[>..<] = "xyz";
 struct K { s: const u8[:] }
 

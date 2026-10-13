@@ -2,7 +2,7 @@
 // error: this one is rooted at s3
 // A pool reference a loop rebinds may be each pool it is bound to there, which
 // the loop's later passes find: judged with all of them, a run of a third pool
-// is still not its own (§5.4).
+// is still not its own.
 fn main() {
     reusable[] var s1: i64[>..] = [];
     reusable[] var s2: i64[>..] = [];

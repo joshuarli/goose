@@ -1,7 +1,7 @@
 // error: cannot call h, which shrinks gs: s, evaluated earlier in the statement
 // error: may still refer into gs
 // g's first argument, a reference to a slice of gs, is live while its
-// second argument clears gs (§5.2).
+// second argument clears gs.
 fn g(p: i64[:]&, n: i64) { print(p[0] + n); }
 fn h(gs: i64[>..<]&) -> i64 {
     gs.clear();

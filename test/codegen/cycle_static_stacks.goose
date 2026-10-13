@@ -1,5 +1,5 @@
 // runtime-debug: a call into a recursive cycle is made with no data stack of
-// the calling activation in use (§7.8), so every activation starts its
+// the calling activation in use, so every activation starts its
 // stacks at the same index and the program's stack count is static. The
 // shapes that are allowed: a non-fixed result returned whole, through
 // branches and a block's tail; text delivered through a buffer passed in by

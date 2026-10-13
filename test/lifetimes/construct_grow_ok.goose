@@ -1,4 +1,4 @@
-// Growth of other arrays while a value is built in place (§1.3(4)):
+// Growth of other arrays while a value is built in place:
 // distinct locals, distinct parameter classes, a callee's own local, and
 // the new contents of a whole assignment built from another array.
 fn mk(b: i64[>..]&) -> i64[>..] { b.push(9); return [1, 2]; }

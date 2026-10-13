@@ -1,4 +1,4 @@
-// pop_n of more elements than the array holds is a runtime abort (§9.3):
+// pop_n of more elements than the array holds is a runtime abort:
 // it shrinks past empty, as a pop on an empty array does.
 
 fn main_pop_n_past_end() {

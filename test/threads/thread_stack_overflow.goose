@@ -1,5 +1,5 @@
 // A worker's recursion deeper than its native stack holds ends the program
-// with the same diagnostic as the main thread's (§9.3): a worker sets up the
+// with the same diagnostic as the main thread's: a worker sets up the
 // runtime's fault reporting for its own stack as it starts. Expected to
 // abort.
 

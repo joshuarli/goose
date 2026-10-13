@@ -1,7 +1,7 @@
 // error: cannot clear arr while g is still used: a reference into it was stored there
 // The block stores what each hands it, a reference into each's parameter,
 // into h, which each's call makes a reference into arr: h holds what the
-// call passed, and so does a merge of it (§5.1).
+// call passed, and so does a merge of it.
 struct H { r: i64&? }
 fn each<F>(xs: i64[:]) { F(&xs[0]); }
 var K: i64 = 7;

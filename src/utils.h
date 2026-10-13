@@ -17,7 +17,7 @@ inline void CatOne(string &s, bool v)          { s += v ? "true" : "false"; }
 template<typename T> requires (is_integral_v<T> && !is_same_v<T, char> && !is_same_v<T, bool>)
 void CatOne(string &s, T v)                    { s += to_string(v); }
 inline void CatOne(string &s, double v) {
-    // The spellings Goose programs print (§3.7), whatever the C library's.
+    // The spellings Goose programs print, whatever the C library's.
     if (v != v) { s += "nan"; return; }
     if (std::isinf(v)) { s += v > 0 ? "inf" : "-inf"; return; }
     // The runtime's text (gs_fmt_f64): the fewest significant digits that
@@ -128,7 +128,7 @@ inline string PathStem(const string &path) {
 }
 
 // A Goose source file, without the UTF-8 byte-order mark many Windows
-// editors write at its start (spec §2).
+// editors write at its start.
 inline bool LoadSource(const string &path, string &dest) {
     if (!LoadFile(path, dest)) return false;
     if (dest.compare(0, 3, "\xEF\xBB\xBF") == 0) dest.erase(0, 3);

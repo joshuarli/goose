@@ -1,6 +1,6 @@
 // error: cannot call mid: it shrinks buf while words is still used, and words may refer into buf
 // mid hands its own parameters on: the pair reaches main, where names'
-// element views buf (§5.1).
+// element views buf.
 fn emit(out: u8[>..]&, words: (u8[:])[:]) {
     out.clear();
     out.append("ZZZZZZZZ");

@@ -1,5 +1,5 @@
 // error: cannot write through this reference: non-writable provenance
-// An element reached through a `const T&` is not written (§9.5): bound by
+// An element reached through a `const T&` is not written: bound by
 // reference, as `&a[0]` of it is, it is a read-only reference.
 var buf: u8[>..] = [];
 fn set(q: u8[:]&) { q = buf[1..]; }

@@ -1,5 +1,5 @@
 // error: array size K names a local variable, not a constant
-// A block's body names what is in scope where it is written (§7.6): main's
+// A block's body names what is in scope where it is written: main's
 // K, which hides the global.
 let K = 3;
 

@@ -1,6 +1,6 @@
 // runtime-debug: a user format overload taking an i64 by reference, given
 // a property (.len, .cap) print, str or format renders, refers to a
-// temporary holding the value read just before it runs (§3.7): growing the
+// temporary holding the value read just before it runs: growing the
 // array whose length it was given leaves what the reference reads as it
 // was, and an overload after it reads the new length. The overload records
 // every value it renders, and would mark one its reference no longer reads.

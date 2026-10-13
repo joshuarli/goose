@@ -1,4 +1,4 @@
-// An integer converts to a float wherever a float is expected (§6.3), and an
+// An integer converts to a float wherever a float is expected, and an
 // expression whose float-ness comes only from float literals and integers
 // adapts to its destination as a literal does: an f32 where an f32 is
 // expected, computed in 32 bits throughout, and an f64 where nothing gives it
@@ -18,7 +18,7 @@ fn dflt(x: f32 = 1) -> f32 { x }
 fn next(n: i32) -> i32 { n + 1 }
 
 // An integer argument converts to a float only where nothing else takes the
-// call (§7.1).
+// call.
 fn pick(x: i32) -> u8[:] { "i32" }
 fn pick(x: f64) -> u8[:] { "f64" }
 fn wide(x: i64) -> u8[:] { "i64" }

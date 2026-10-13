@@ -1,5 +1,5 @@
 // error: storing a reference rooted at loc, which does not outlive the destination
-// A back edge gives each parameter its own argument (§7.8): the second
+// A back edge gives each parameter its own argument: the second
 // `pick` returns `a`, which the back edge passes its own local for, so the
 // result may be rooted at loc and may not be kept in the global kept.
 struct Cell { v: i64 }

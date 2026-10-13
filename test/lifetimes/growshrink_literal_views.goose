@@ -1,4 +1,4 @@
-// What a literal may hold wherever it lands, an argument or a result (§5.2):
+// What a literal may hold wherever it lands, an argument or a result:
 // a slice read out of a grow-shrink list of strings, which points at the
 // text and not into the list, and a view of a grow-only array. A view of a
 // grow-shrink array itself is passed down and returned as it is.

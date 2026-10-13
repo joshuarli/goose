@@ -1,6 +1,6 @@
 // error: cannot call pass: it shrinks G while t is still used, and t may refer into G
 // A caller passing its own parameter on cannot tell yet; its callers can,
-// by what they pass it (§5.2).
+// by what they pass it.
 var G: i64[>..<] = [1, 2, 3];
 fn f(s: i64[:]) {
     G.clear();

@@ -1,6 +1,6 @@
 // error: storing a read-only slice of type const u8[:] in a slot of type u8[:]
-// A for's copy of an element is read-only, and so is a view of it (§6.5,
-// §9.5).
+// A for's copy of an element is read-only, and so is a view of it.
+//
 struct R { name: u8[..8] }
 fn main() {
     var rows: R[>..] = [];

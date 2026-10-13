@@ -1,6 +1,6 @@
 // index_of takes a reference rooted where its receiver is to be one of the
 // receiver's elements wherever that storage holds the element type only as
-// that array's elements (§3.3): a field of a struct, a parameter's class the
+// that array's elements: a field of a struct, a parameter's class the
 // caller's storage answers for, or a class passed on.
 struct Pile { n: u8, items: i64[>..] }
 struct Cell { v: i64 }

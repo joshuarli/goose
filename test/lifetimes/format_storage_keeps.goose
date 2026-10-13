@@ -1,5 +1,5 @@
 // A format overload taking a value by reference is handed the storage the
-// value lies in (§3.7), and may keep a reference to it wherever that storage
+// value lies in, and may keep a reference to it wherever that storage
 // outlives the kept reference: what a reference names is such storage
 // whatever roots the reference has, none yet for one bound only in a later
 // iteration or none at all, and so is a field reached through it. A variant

@@ -2,7 +2,7 @@
 // The words the lines a parameter points at list are storage of the caller's,
 // two references away, that first cannot enumerate: a word kept in a local
 // array and read back out of it is bounded by the parameter's root, which
-// maps back to mk's ls at the call (§9.5).
+// maps back to mk's ls at the call.
 struct Line { words: const u8[:][:] }
 fn first(lines: Line[:]) -> const u8[:] {
     var parts: const u8[:][>..] = [];

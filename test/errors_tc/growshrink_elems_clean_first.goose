@@ -1,7 +1,7 @@
 // error: storing a reference into x, which holds a grow-shrink array
 // k is checked first for bag.n, which bag's grow-shrink array of Pts cannot
 // hold, so it may store x there; given an element of others, whose
-// grow-shrink array holds i64s, it is checked again, and may not (§5.2):
+// grow-shrink array holds i64s, it is checked again, and may not:
 // the pop frees the slot loc[1] points into and the push reuses it.
 struct Pt { x: f64 }
 struct Other { w: i64 }

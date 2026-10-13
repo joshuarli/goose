@@ -1,5 +1,5 @@
 // A worker's program has its own copy of every global it uses, taken from
-// the spawning instance at spawn (§11.2): what a worker writes stays in the
+// the spawning instance at spawn: what a worker writes stays in the
 // worker, and what main wrote before the spawn is what the worker starts
 // from. Deterministic: every worker is waited for before the next spawn.
 struct Cfg { n: i64, name: u8[8] }

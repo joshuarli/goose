@@ -1,6 +1,6 @@
 // error: count is a variable, not a function
-// A variable in scope hides the functions of its name, a global one aside
-// (§11.1).
+// A variable in scope hides the functions of its name, a global one aside.
+//
 import std;
 fn main() {
     let xs = [1, 2, 3];

@@ -3,7 +3,7 @@
 // s is a view read out of a field or a view of other when the loop starts,
 // but the next iteration sees what the rebind at the end of the body left:
 // a value whose root is y, as deep as s's, and which may be a view of
-// related (§5.2).
+// related.
 struct Entry { text: u8[:] }
 var related: u8[>..<] = [];
 fn main() {

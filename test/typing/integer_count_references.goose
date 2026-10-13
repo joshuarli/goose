@@ -1,5 +1,5 @@
-// A for loop over an integer count reads a reference count as its pointee
-// (§3.8, §6.5), once, before the first iteration, and its variable has the
+// A for loop over an integer count reads a reference count as its pointee,
+// once, before the first iteration, and its variable has the
 // pointee's type: a reference variable, a written &x, a narrowed optional, a
 // reference parameter (inlined at -O2), an untyped parameter bound to a
 // reference, a const reference, a reference field, an element of an array of

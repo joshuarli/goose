@@ -1,8 +1,8 @@
 // error: cannot call g: it may shrink ys while r is still used, and r may refer into ys
 // The first call passes g two arrays, the second reuses its body with h.a,
-// read back out of a copy of an element of hs, which may be ys or ws (§9.5)
+// read back out of a copy of an element of hs, which may be ys or ws
 // and is ys, beside a reference into ys: what the body concluded from its
-// two root classes holds only where every call passes two arrays (§5.1).
+// two root classes holds only where every call passes two arrays.
 struct H { a: i64[>..]& }
 fn g(xs: i64[>..]&, r: i64&) { xs.pop(); xs.push(77); print(r); }
 fn main() {

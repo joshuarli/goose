@@ -1,6 +1,6 @@
 // error: cannot clear a while rr is still used: a reference to a slice that may point into it was stored there
-// rr's field refers to h's slice field (§4.1), which h's stores say views a
-// (§5.1).
+// rr's field refers to h's slice field, which h's stores say views a.
+//
 struct H { s: u8[:] }
 struct R { r: u8[:]& }
 fn main() {

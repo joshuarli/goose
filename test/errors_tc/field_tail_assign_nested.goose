@@ -1,7 +1,7 @@
 // error: cannot call reset, which shrinks o while v is still used: it may hold a reference or slice into it (§5.1)
 // A struct holding a grow-only tail, itself the tail of another, assigned
-// whole through a reference to the outer one shrinks the outermost storage
-// (§5.1).
+// whole through a reference to the outer one shrinks the outermost storage.
+//
 struct S { n: i64, items: i64[>..] }
 struct O { k: i64, s: S }
 fn reset(o: O&) { o.s = S { n: 1, items: [4] }; }

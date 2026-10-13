@@ -1,10 +1,10 @@
 // error: storing a reference rooted at loc, which does not outlive the destination
-// store reads v, which bind has pointed into loc by then (§9.5). Every
+// store reads v, which bind has pointed into loc by then. Every
 // iteration declares its own v and loc; the loop's later passes find their
 // v as the first found its own and share bind's check, which leaves v bound
 // into loc there too. So store's check for the second iteration, where h is
 // bound, finds v bound, and the reference would outlive the loc it points
-// into (§7.5, §9.2).
+// into.
 struct Cell { key: i64 }
 struct K { r: Cell&? }
 fn pick(c: bool, a: Cell&) -> Cell&? {

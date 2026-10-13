@@ -1,6 +1,6 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
 // A `var` may since have been rebound to any array of slices at ss's
-// depth, a's included, so its root only bounds what it views (§5.1).
+// depth, a's included, so its root only bounds what it views.
 fn main() {
     var a: u8[>..] = [];
     a.append("abc");

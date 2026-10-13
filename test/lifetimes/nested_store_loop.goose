@@ -1,7 +1,7 @@
 // A nested function, or a function value's block, storing what its call
 // hands it into a variable outside it, called in a loop: the variable holds
 // what each call passed, not the class the body's check saw, so the loop's
-// passes settle, and a view the loop keeps outlives nothing it frees (§7.5).
+// passes settle, and a view the loop keeps outlives nothing it frees.
 struct H { s: const u8[:] }
 fn put(h: H&, s: const u8[:]) { h.s = s; }
 fn once<F>(s: const u8[:]) { F(s[0..1]); }

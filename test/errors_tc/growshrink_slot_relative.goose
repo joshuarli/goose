@@ -1,6 +1,6 @@
 // error: cannot clear gsn while r
 // error: is still used: it may refer into gsn
-// A relative reference points within the array holding it (§3.9), which is
+// A relative reference points within the array holding it, which is
 // grow-shrink here: loaded out of a field, it still points into gsn.
 struct N { next: N&<u32>, v: i64 }
 fn main() {

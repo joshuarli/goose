@@ -1,5 +1,5 @@
 // error: cannot clear b (which r may point at) while h is still used: a reference into it was stored there
-// The store record names b, and clearing through r may clear b (§5.1).
+// The store record names b, and clearing through r may clear b.
 struct H { s: const i64[:] }
 fn main() {
     var a: i64[>..] = [1, 2, 3];

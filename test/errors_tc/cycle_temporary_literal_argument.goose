@@ -1,6 +1,6 @@
 // error: walk calls into its recursive cycle with the non-fixed-size temporary [Tag { name: str(n) }] as an argument
 // A literal of non-fixed-size class viewed by a slice parameter is a
-// temporary of the statement, held across the call into the cycle (§7.8). A
+// temporary of the statement, held across the call into the cycle. A
 // fixed-size literal is a native value, which costs no data stack.
 struct Tag { name: u8[] }
 recursive fn walk(s: const Tag[:], n: i64) -> i64 {

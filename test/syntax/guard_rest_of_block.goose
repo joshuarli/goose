@@ -1,6 +1,6 @@
 // A guard guards the rest of the block it is in, whatever kind of block that
 // is: `guard c; rest` is `if c { rest }`, and `guard c else { s } rest` is
-// `if c { rest } else { s }` (§6.4). It jumps nowhere: in a function value's
+// `if c { rest } else { s }`. It jumps nowhere: in a function value's
 // body it ends that call of the value, not the function running the value
 // nor the named function around it, and in a loop's body it goes on to the
 // next iteration. Leaving more than the block takes an else that does.

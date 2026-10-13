@@ -1,4 +1,4 @@
-// The Goose standard library: `dictionary` (docs/stdlib.md).
+// The Goose standard library: `dictionary`.
 // Open addressing with linear probing over a power-of-two slot array,
 // hash(key) & mask, backward-shift deletion (no tombstones). Keys and
 // values are fixed-size; strings are keyed as u8[:] slices into text the
@@ -14,7 +14,7 @@
 // the keys it moves). The table doubles in place at 2/3 load.
 //
 // The slot array is grow-shrink so that growth can resize it in place
-// through a reference (spec §5.2); as a consequence a reference obtained
+// through a reference; as a consequence a reference obtained
 // from get/get_or_insert, or a binder inside each, may not be in scope at
 // the next insert, update, remove or clear (the checker says so).
 
@@ -63,8 +63,7 @@ fn dict_slot<K, V>(d: dictionary<K, V>&, key: K, h: u64) -> i64 {
 // Room for one more entry: the table starts at 8 slots and doubles at 2/3
 // load. With its two calls dict_grow stays a function of its own rather than
 // being inlined into each caller, which keeps the callers small, and the
-// stack top that resize fills through stays in a register there
-// (docs/implementation.md §6.10).
+// stack top that resize fills through stays in a register there.
 fn dict_room<K, V>(d: dictionary<K, V>&) {
     if d.slots.len == 0 {
         dict_grow(d, 8);
@@ -118,7 +117,7 @@ fn insert<K, V>(d: dictionary<K, V>&, key: K, val: V) -> bool {
     let i = dict_slot(d, key, h);
     if d.slots[i].tag != 0 {
         // The whole slot, since `=` into a reference V would write its
-        // pointee (§3.8); the stored key stays.
+        // pointee; the stored key stays.
         d.slots[i] = dictionary_slot<K, V> { d.slots[i].key, val, d.slots[i].tag };
         return false;
     }

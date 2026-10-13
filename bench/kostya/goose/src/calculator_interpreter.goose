@@ -10,7 +10,7 @@ import bench;
 import calculator_ast;
 
 // Rust's wrapping_add/sub/mul: unsigned arithmetic wraps in every build,
-// where signed arithmetic wraps only in release (spec 6.2).
+// where signed arithmetic wraps only in release.
 fn wrapping_add(a: i64, b: i64) -> i64 { (a as! u64 + b as! u64) as! i64 }
 fn wrapping_sub(a: i64, b: i64) -> i64 { (a as! u64 - b as! u64) as! i64 }
 fn wrapping_mul(a: i64, b: i64) -> i64 { (a as! u64 * b as! u64) as! i64 }

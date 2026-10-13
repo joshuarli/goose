@@ -1,4 +1,4 @@
-// A function name with overloads is a function value too (§7.6): it passes
+// A function name with overloads is a function value too: it passes
 // the whole overload set, and each call of the value resolves among them as
 // a call by that name would.
 import std;

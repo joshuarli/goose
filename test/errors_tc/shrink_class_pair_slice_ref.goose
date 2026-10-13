@@ -1,7 +1,7 @@
 // error: cannot call peek: it may shrink a while pp is still used, and pp may refer into a
 // pp's slot holds s's slice, a view of a, which peek cannot tell from the
-// array gs names: this call passes a or b there (§9.2), so clearing gs may
-// free the element the slice behind pp still reads (§5.2).
+// array gs names: this call passes a or b there, so clearing gs may
+// free the element the slice behind pp still reads.
 fn peek(pp: i64[:]&, gs: i64[>..<]&) {
     gs.clear();
     gs.push(5);

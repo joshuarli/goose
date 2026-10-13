@@ -1,7 +1,7 @@
 // error: cannot clear c: the for loop at
 // error: iterates c[1..], which may refer into c
-// An enclosing loop's sequence is live throughout the loops inside it
-// (§5.2, §6.5).
+// An enclosing loop's sequence is live throughout the loops inside it.
+//
 fn main() {
     var c: i64[>..<] = [1, 2, 3];
     var d: i64[>..<] = [4, 5];

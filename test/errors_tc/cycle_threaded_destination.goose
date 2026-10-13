@@ -1,8 +1,8 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // error: passes d rooted differently from the cycle's entry call
 // A view read through a context the cycle passes on may be stored inside
-// the cycle only where every activation's store lands in the same storage
-// (§7.8). walk stores one into d's pointee, and its call back passes a
+// the cycle only where every activation's store lands in the same storage.
+// walk stores one into d's pointee, and its call back passes a
 // global for d, which outlives run's text: the error is at the store.
 struct Ctx { text: u8[>..]& }
 struct Holder { view: const u8[:] }

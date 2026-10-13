@@ -1,7 +1,7 @@
 // error: copying a value of type S, which contains self-relative references, into the format overload taking it by value is not supported
-// A format overload taking a T by value is given a copy (§3.7), whose
-// self-relative references would still be measured from where the T lies
-// (§3.9), as any other copy's: it takes such a T by reference.
+// A format overload taking a T by value is given a copy, whose
+// self-relative references would still be measured from where the T lies,
+// as any other copy's: it takes such a T by reference.
 struct T { x: i64 }
 struct S { t: T&<u8>?, k: i64 }
 struct Blob { ts: T[4], s: S }

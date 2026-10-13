@@ -1,7 +1,7 @@
 // error: cannot clear gs while v
 // error: is still used: it may refer into gs
 // The slice loaded through a reference to a slice variable points where
-// that variable's slice does (§5.2).
+// that variable's slice does.
 fn peek(p: i64[:]&, gs: i64[>..<]&) {
     let v = p;
     gs.clear();

@@ -1,7 +1,7 @@
 // error: cannot clear bs: global P may hold a reference into it, stored at
 // aim writes a view of bs's element into pick's s through a reference to
-// its slot, which assigns s (§3.8): P, bound for good to pick's result,
-// views bs (§5.1).
+// its slot, which assigns s: P, bound for good to pick's result,
+// views bs.
 struct B { name: u8[..8] }
 var arr: u8[4] = [1, 2, 3, 4];
 var bs: B[>..] = [B { name: "a" }];

@@ -1,4 +1,4 @@
-// Namespace geometry (docs/design/namespaces.md): leaf names shared with
+// Namespace geometry: leaf names shared with
 // image:: and with the root file's globals, all distinct declarations, all
 // distinct in the generated C.
 namespace geometry;

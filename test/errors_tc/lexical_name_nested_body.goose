@@ -1,5 +1,5 @@
 // error: array size N names a type parameter, not a constant
-// A nested function names what is in scope at its declaration (§7.5): f's
+// A nested function names what is in scope at its declaration: f's
 // type parameter N, which hides the global N.
 let N = 4;
 

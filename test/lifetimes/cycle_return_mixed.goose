@@ -1,4 +1,4 @@
-// A recursive cycle's returns may give different roots too (§7.8, §9.2). A
+// A recursive cycle's returns may give different roots too. A
 // back edge is checked before the returns are, so it takes the roots the
 // cycle's scan predicts they give, each mapped through its own arguments, and
 // merges them as a call merges its callee's returns: here `build`'s back edge

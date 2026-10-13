@@ -1,6 +1,6 @@
 // error: cannot assign to let x, which may be assigned already
 // Every activation of rec may assign x, which is one variable outside them
-// all (§4.4, §7.8).
+// all.
 fn run(c: bool) {
     let x: i64;
     recursive fn rec(n: i64) {

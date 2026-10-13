@@ -1,6 +1,6 @@
 // error: variable r may be used before it is assigned
 // rd's first call is where r has been assigned; its second is after the if,
-// where r may not have been, so that call is checked again (§4.4, §7.5).
+// where r may not have been, so that call is checked again.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];
 fn run(c: bool) {

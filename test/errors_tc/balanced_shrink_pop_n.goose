@@ -1,6 +1,6 @@
 // error: cannot call helper, which shrinks s while v
 // error: is still used: it may refer into s
-// A pop_n back down to a mark is not balanced (§5.2): only a resize to the
+// A pop_n back down to a mark is not balanced: only a resize to the
 // mark is, so the call frees what v views as far as the caller can tell.
 fn helper(s: i64[>..<]&) {
     let mark = s.len;

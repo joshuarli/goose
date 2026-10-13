@@ -1,6 +1,6 @@
 // error: cannot clear b while s1 is still used: it may hold a reference or slice into it
-// put's parameter names s1 or s2, whichever branch ran (§6.4): the call may
-// assign either (§3.8), so both may view b when the clear frees it (§5.1).
+// put's parameter names s1 or s2, whichever branch ran: the call may
+// assign either, so both may view b when the clear frees it.
 fn put(p: u8[:]&, q: u8[:]) { p = q; }
 fn pick(c: bool) -> bool { c }
 fn main() {

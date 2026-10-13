@@ -1,7 +1,7 @@
 // Goose compiler — codegen's function bodies (definitions of CodeGen
-// members, codegen.h): named results (§7.3), the two top-caching modes,
-// element-run twins (C.3), and the emission of every specialization, the
-// globals (§11.1) and main.
+// members, codegen.h): named results, the two top-caching modes,
+// element-run twins, and the emission of every specialization, the
+// globals and main.
 #pragma once
 
 namespace goose {
@@ -9,7 +9,7 @@ namespace goose {
 // ------------------------------------------------------------------
 // Function bodies.
 
-// §7.3 for a body the optimizer spliced in: an inlined call in a
+// Construction for a body the optimizer spliced in: an inlined call in a
 // construction context still has a destination, so bind the block's named
 // result to it rather than to a stack of its own -- its elements are then
 // written where the value has to end up, and the `return` only completes
@@ -204,7 +204,7 @@ inline void CodeGen::PlanTopClasses(FnSpec *sp) {
         else if (fv->type && IsResz(fv->type)) capresz = true;
     }
     // A return exiting this function or an inlined body stays here; any
-    // other target constructs into a gs_fdst_ channel (§7.9).
+    // other target constructs into a gs_fdst_ channel.
     set<SFunction *> localexits { sp->sf };
     auto farreturn = false;
     function<void(Node *)> ibs = [&](Node *n) {
@@ -246,9 +246,9 @@ inline void CodeGen::PlanTopClasses(FnSpec *sp) {
 //    `<p>.stk` is its one spelling and is in scope throughout. A reference
 //    from a field, an element or an `&` here has no parameter to name;
 //  * the fat parameters' root classes are distinct and every one of them
-//    was rooted exactly at its call sites, which is what §10.2 proves
+//    was rooted exactly at its call sites, so root-class comparison proves them
 //    distinct: two exact roots that differ are two variables. An inexact
-//    root only bounds a lifetime (§9.5), so two of them may still be one
+//    root only bounds a lifetime, so two of them may still be one
 //    stack, and two parameters in one class are not proven equal either;
 //    both cases would need one cache for two stacks. With more than one fat
 //    parameter every root must also be concrete (RootArg::concrete): a class
@@ -283,7 +283,7 @@ inline bool CodeGen::RefTopsOk(FnSpec *sp) {
     auto ok = true;
     // A return exiting this function or an inlined body stays here; any
     // other target constructs into a gs_fdst_ channel, which is a stack
-    // this body cannot place (§7.9).
+    // this body cannot place.
     set<SFunction *> localexits { sp->sf };
     function<void(Node *)> ibs = [&](Node *n) {
         if (!n) return;
@@ -291,7 +291,7 @@ inline bool CodeGen::RefTopsOk(FnSpec *sp) {
         RunChildren(n, ibs);
     };
     ibs(sp->body);
-    // A frame object's tail has its own addressable header (C.2), but
+    // A frame object's tail has its own addressable header, but
     // shares the owner's data stack. A parameter may therefore name the
     // whole global, any nested frame-object tail, or the final array.
     auto maybeparam = [&](TypeExpr *gt) {
@@ -366,7 +366,7 @@ inline void CodeGen::ResetFnState() {
     termjump = false;
 }
 
-// The element-run twin of a spec (C.3): same body compiled to emit raw
+// The element-run twin of a spec: same body compiled to emit raw
 // elements at the destination plus a count, instead of a [len][elems]
 // value. Returns its C name, or "" when the spec cannot have one.
 inline string CodeGen::EnsureEr(FnSpec *sp) {
@@ -451,7 +451,7 @@ inline string CodeGen::HoistAggregateDecls(string &b) {
     return decls;
 }
 
-// A simd function (§7.12): its body once per instruction-set level above
+// A simd function: its body once per instruction-set level above
 // the baseline, each under that level's target attribute and compiled where
 // the C compiler supports the level (GS_SIMD, runtime.h), then the baseline
 // under the function's own name, which starts by calling the highest
@@ -520,11 +520,11 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
             if (fv->type && IsResz(fv->type) && !fv->reusable) capstkexprs.insert(vstk[fv]);
     // In the element-run form named results are not built at the
     // destination: the callee-side copy at return is the specified cost
-    // of operating on the whole value first (§7.3).
+    // of operating on the whole value first.
     if (!er) DetectNrvo(sp);
     if (fromids.count(sp)) {
         // This is a long-distance return target with nonfixed returns:
-        // record our destinations for in-flight values (§7.9).
+        // record our destinations for in-flight values.
         EnsureFromChannels(sp);
         auto tid = fromids[sp];
         for (size_t i = 0; i < sp->rets.size(); i++) {
@@ -595,7 +595,7 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
 }
 
 // ------------------------------------------------------------------
-// Globals (§11.1): C globals plus dedicated data stacks for nonfixed
+// Globals: C globals plus dedicated data stacks for nonfixed
 // ones; initializers run in declaration order before main.
 
 // A C initializer for a compile-time constant of fixed, flat type. Fails
@@ -721,7 +721,7 @@ inline void CodeGen::EmitGlobalDecls() {
             } else {
                 string init;
                 // A `let` global of a const type with a compile-time
-                // initializer is never written (§9.5): static data every
+                // initializer is never written: static data every
                 // instance shares, const in C as well, so that the C
                 // compiler folds what it reads. Its uses spell it without
                 // the qualifier, as the pointers and slices into it that

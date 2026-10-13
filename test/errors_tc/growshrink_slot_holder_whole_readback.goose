@@ -1,5 +1,5 @@
 // error: storing a reference into scratch, which holds a grow-shrink array
-// A holder read out of tops may be stored into keep (§5.2), and the
+// A holder read out of tops may be stored into keep, and the
 // reference it holds, read back out of keep, still points at the whole of
 // scratch: an element of scratch lies in a grow-shrink array, and is never
 // stored.

@@ -2,9 +2,9 @@
 // error: this reference's root is not known exactly, only that it outlives cells
 // v is one variable at every level of rec's recursion: rebound to the result
 // of a recursive call, it may point into spare where the next level pushes
-// it (§3.9). The cycle's first round has no record of that result; the
+// it. The cycle's first round has no record of that result; the
 // second has one and pushes v before rebinding v to it, so it is the third
-// round, the first to find v changed by none, whose check stands (§7.8).
+// round, the first to find v changed by none, whose check stands.
 struct Cell { key: i64, next: Cell&<u16 in cells>? }
 var cells: Cell[>..] = [Cell { key: 0 }];
 var spare: Cell[>..] = [Cell { key: 1 }];

@@ -1,7 +1,7 @@
 // error: cannot pop a while v (bound at
 // An inferred result that is a reference to a non-fixed value is the
-// original (§7.1): popping through it shrinks the caller's array, which a
-// view into that array still in use rejects (§5.2).
+// original: popping through it shrinks the caller's array, which a
+// view into that array still in use rejects.
 struct Ctx { args: i64[>..<]& }
 fn args(c: Ctx&) { c.args }
 fn f(c: Ctx&) {

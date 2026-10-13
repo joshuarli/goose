@@ -1,7 +1,7 @@
 // error: cannot clear ns while q is still used: a reference into it was stored there
 // q holds a copy of an element ns names and a reference to another of
 // those elements: beside that reference, what q holds is no view the
-// storage held (§5.1).
+// storage held.
 struct N { v: i64, next: N&? }
 struct Q { n: N, at: N& }
 fn f(ns: N[>..]&) -> i64 {

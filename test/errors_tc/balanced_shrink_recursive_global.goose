@@ -1,7 +1,7 @@
 // error: cannot call walk, which shrinks s while mine
 // error: is still used: it may refer into s
 // walk resizes its parameter's array back to its mark but clears a global,
-// which is what main passes it (§5.2): the deepest activation frees the
+// which is what main passes it: the deepest activation frees the
 // element every shallower one views.
 var G: i64[>..<] = [];
 recursive fn walk(s: i64[>..<]&, d: i64) -> i64 {

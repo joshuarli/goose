@@ -1,5 +1,5 @@
 // error: storing a reference into G, which holds a grow-shrink array: such a reference lives in a variable, is passed down or returned, and is never stored
-// A fill literal stores its value into every element (§5.2).
+// A fill literal stores its value into every element.
 var G: i64[>..<] = [1, 2, 3];
 fn f(views: i64[:][2]) {
     G.clear();

@@ -1,5 +1,5 @@
 // error: cannot clear items while n is still used: it may hold a reference or slice into it; it was read out of h and may point into buf or items
-// Assigning h whole stores what o holds, a view of items (§5.1, §9.5).
+// Assigning h whole stores what o holds, a view of items.
 var items: u8[>..];
 struct H { s: const u8[:] }
 fn main() {

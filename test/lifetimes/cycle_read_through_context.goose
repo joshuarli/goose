@@ -1,5 +1,5 @@
-// A recursive-descent builder over a context struct of borrowed tables
-// (§7.8, A.6): `rest` is handed the node built so far, read through the
+// A recursive-descent builder over a context struct of borrowed tables:
+// `rest` is handed the node built so far, read through the
 // context, and links it under a new node after calling back into the cycle.
 // Every call gives it a node read through the context, which every call
 // passes on, so it points outside the cycle in every activation and may be

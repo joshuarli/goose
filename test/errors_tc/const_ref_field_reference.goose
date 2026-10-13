@@ -1,6 +1,6 @@
 // error: cannot write through this reference: non-writable provenance
 // `&` of a location reached through a `const T&` field is a `const` reference,
-// out of a `const` holder as out of a `var` one (§9.5).
+// out of a `const` holder as out of a `var` one.
 struct S { n: i64 }
 struct H { r: const S& }
 fn inc(p: i64&) { p = p + 1; }

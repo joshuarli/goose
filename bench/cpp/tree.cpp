@@ -4,7 +4,7 @@
 //   VARIANT 1: raw new plus an explicit recursive delete.
 // The pass index is folded into every node's contribution so the eight passes
 // are eight different computations; otherwise clang hoists the whole pure call
-// out of the loop (see bench/notes.md).
+// out of the loop.
 //   VARIANT 2: one arena vector with uint32 child indices, exactly reserved:
 //              no per-node allocation and no teardown, which is what the
 //              Goose version gets for free.

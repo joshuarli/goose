@@ -1,7 +1,7 @@
 // warning: redundant &: a binds by reference here without it
 // warning: redundant &: b binds by reference here without it
 // A reference parameter binds each branch of an if, match, block, loop or
-// bare { } by reference, whatever the branch's size class (§4.1), as an
+// bare { } by reference, whatever the branch's size class, as an
 // annotated reference `let` binds it: a fixed-size variable, field or
 // element, a slice's slot, or what a reference names. The callee writes the
 // storage the branch taken names, and a reference it returns is rooted
@@ -85,7 +85,7 @@ fn main() {
     q = 99;
     print(a, " ", b, " ", gi, " ", gj);
 
-    // A varint field binds as the varint it is (§3.6).
+    // A varint field binds as the varint it is.
     let v = V { n: 300, m: 5 };
     print(wide(if c { v.n } else { v.m }), " ", wide(block { if d { break v.n; } v.m }));
 }

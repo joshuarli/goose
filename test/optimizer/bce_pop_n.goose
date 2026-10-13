@@ -1,5 +1,5 @@
 // A completed pop_n proves 0 <= n <= the old length, as a completed pop
-// proves the array was non-empty (§9.3), and a constant n is an exact step
+// proves the array was non-empty, and a constant n is an exact step
 // down of the length. Arrays and counts come from loaded values, so each
 // function proves only what its own body states.
 

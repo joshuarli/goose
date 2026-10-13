@@ -1,5 +1,5 @@
 // runtime-debug: a call's result of one array or slice kind, checked as
-// another where it lands, constructs the slot's kind (§4.2): fixed,
+// another where it lands, constructs the slot's kind: fixed,
 // static-capacity limited and runtime-capacity limited arrays, slices,
 // variable, grow-only and grow-shrink arrays, of bytes, integers, structs and
 // variable-size elements, building variable arrays of other length storages,

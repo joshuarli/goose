@@ -1,4 +1,4 @@
-// A parameter's default that joins branches as a slice (§6.4, §7.1): a
+// A parameter's default that joins branches as a slice: a
 // literal and an array, or arrays of two types at a parameter declared a
 // slice, view the arrays themselves, as an argument's branches would.
 var gname: u8[..8] = "global";

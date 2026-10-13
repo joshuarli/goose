@@ -2,7 +2,7 @@
 struct Bag { id: i64, data: i64[>..] }
 struct Nested { tag: u8, bag: Bag }
 struct VariablePrefix { name: u8[], data: i64[>..] }
-// A frame object behind a variable-size prefix is bytes of its owner (C.2).
+// A frame object behind a variable-size prefix is bytes of its owner.
 struct PrefixedBag { name: u8[], bag: Bag }
 var generation = 3;
 

@@ -1,7 +1,7 @@
 // f's cycle calls h, which stores the reference it is given into its own
 // local and then calls count. h is in neither cycle: it never calls back into
 // f's, and count's starts at count. So its store is an ordinary one, not one
-// inside a cycle (§7.8).
+// inside a cycle.
 struct Cell { v: i64, link: Cell&? }
 
 recursive fn count(c: Cell&, n: i64) -> i64 {

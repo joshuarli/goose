@@ -1,6 +1,6 @@
 // error: cannot call format, which shrinks G: print runs it in the middle of rendering h, which may refer into G (§5.2)
 // What the caller's storage holds is the callers' to judge, but for what
-// the function itself stored there: here the path to G (§3.7, §4.4, §5.2).
+// the function itself stored there: here the path to G.
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

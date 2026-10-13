@@ -1,7 +1,7 @@
 // The same simulation as particles.goose with the vector update written out
 // component by component, which is the shape the C++ AoS row has. The two
 // Goose rows differ only in expression style, so the gap between them is what
-// elementwise struct math (spec 6.1) costs -- it adds gravity's zero x and z
+// elementwise struct math costs -- it adds gravity's zero x and z
 // components that the written-out form skips.
 //
 // All the arithmetic is exact in binary32 -- positions are integers, velocities

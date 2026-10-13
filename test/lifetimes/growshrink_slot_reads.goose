@@ -1,5 +1,5 @@
 // A reference or slice read out of a field, an element or a global never
-// points into a grow-shrink array, since none is ever stored there (§5.2),
+// points into a grow-shrink array, since none is ever stored there,
 // so a shrink of one passes over it, whatever the read-back rule says the
 // read may point into: over a view sliced or referenced from it too, a call
 // result every return of which is one, and a branch value both of whose

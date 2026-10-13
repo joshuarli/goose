@@ -1,7 +1,7 @@
 // error: cannot clear arr while a is still used: a reference into it was stored there
 // The back edge passes q, which may be r's node a or the local loc, for s,
 // which the recursive activation stores into; the call records it in both,
-// so a holds a reference into arr after f returns (§5.1, §7.8).
+// so a holds a reference into arr after f returns.
 struct Node { p: i64? }
 
 recursive fn f(pool: i64[>..]&, r: Node&, s: Node&, n: i64) {

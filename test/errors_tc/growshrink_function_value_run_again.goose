@@ -1,7 +1,7 @@
 // error: cannot pop g while w (bound at
 // error: is still used: it may refer into g
 // twice runs the block again after it pops g, and the block reads main's
-// view of g before its pop (§5.2, §7.6).
+// view of g before its pop.
 fn twice<F>() {
     F();
     F();

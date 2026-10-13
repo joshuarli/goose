@@ -3,7 +3,7 @@
 // link is first called by a global initializer, before nodes is declared,
 // but its check serves main's call too, after hold has stored a reference
 // into nodes in slots: a read out of a global in a function's body may
-// point into any global a later declaration makes (§9.5).
+// point into any global a later declaration makes.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [Cell { v: 1 }];
 struct L { r: Cell&<u16 in cells>?, n: i64 }

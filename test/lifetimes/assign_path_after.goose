@@ -1,7 +1,7 @@
 // A whole assignment of a grow-only array leaves a reference to the whole
 // array valid, as a clear does: a struct holding one, or the reference field
 // the assignment writes through, may be used after the assignment, and its
-// flat fields read by the right-hand side (§4.4, §5.1).
+// flat fields read by the right-hand side.
 import std;
 
 struct S { n: u32, r: u8[>..]& }

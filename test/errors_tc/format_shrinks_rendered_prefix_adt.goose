@@ -1,6 +1,6 @@
 // error: cannot call format, which shrinks s: print runs it in the middle of rendering s, which may refer into s (§5.1)
 // It rebuilds a variable-mode ADT in the value too, resizable or not: r's
-// variant is replaced while its payload is rendered (§3.7, §4.4, §5.1).
+// variant is replaced while its payload is rendered.
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

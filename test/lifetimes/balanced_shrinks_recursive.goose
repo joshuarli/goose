@@ -1,6 +1,6 @@
-// Recursive code keeps growable scratch outside the cycle and passes it down
-// (§7.8); with a watermark, each activation leaves it as long as it found it,
-// so the calls back into the cycle are balanced (§5.2) and a view an
+// Recursive code keeps growable scratch outside the cycle and passes it down;
+// with a watermark, each activation leaves it as long as it found it,
+// so the calls back into the cycle are balanced and a view an
 // activation took of its own part stays in use across them. The same holds
 // through a second function of the cycle, over a local of an enclosing
 // function, over a global, with two calls back per activation, with a
@@ -8,8 +8,8 @@
 // reference to the slice variable holding the view. A parameter's view of
 // the global stays in use across the calls back, directly or through a
 // finished member of the cycle, whatever the caller passes for it: once the
-// calls back are balanced they record nothing for the callers to judge
-// (§5.1).
+// calls back are balanced they record nothing for the callers to judge.
+//
 var shared: i64[>..<] = [];
 
 recursive fn walk(scratch: i64[>..<]&, depth: i64) -> i64 {

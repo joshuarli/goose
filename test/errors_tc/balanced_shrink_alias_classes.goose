@@ -2,7 +2,7 @@
 // error: is still used: it may refer into a
 // f is balanced for its first parameter's array and clears its second's;
 // two parameters of g are one array wherever a call passes it to both, as
-// main does here through r (§5.2).
+// main does here through r.
 fn f(p: i64[>..<]&, r: i64[>..<]&) {
     let mark = p.len;
     p.push(0);

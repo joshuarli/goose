@@ -1,6 +1,6 @@
 // A holder read out of a container and passed out of a block or loop by a
 // valued break still has that container's contents, so a buffer the container
-// never referred into can be cleared while the holder is live (§5.1).
+// never referred into can be cleared while the holder is live.
 struct ByteRef { r: u8& }
 fn main() {
     var buf: u8[>..] = [];

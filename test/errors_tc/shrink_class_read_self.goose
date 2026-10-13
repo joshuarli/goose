@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks nodes while n is still used, and n may refer into nodes
 // n was read out of the elements ns names, and the caller linked it to
-// another of them (§5.1).
+// another of them.
 struct N { v: i64, next: N&? }
 fn f(ns: N[>..]&, keep: N&) -> N& {
     let n = ns[1].next;

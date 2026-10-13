@@ -1,6 +1,6 @@
 // error: returning a reference rooted in local, which dies with this function
 // A slice read out of a struct literal's field points where the field's
-// initializer does, not at static data (§9.5).
+// initializer does, not at static data.
 struct Named { s: const i64[:] }
 fn name() -> const i64[:] {
     let local = [1, 2, 3];

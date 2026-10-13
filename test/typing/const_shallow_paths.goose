@@ -1,4 +1,4 @@
-// `const` is shallow (§9.5): a reference or slice read out of a field or an
+// `const` is shallow: a reference or slice read out of a field or an
 // element is as writable as the slot's type says, whatever the path to the
 // slot, so a path going on through it writes what a load of it could -- out
 // of a const local or global, a const array, a call's result, through a

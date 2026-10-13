@@ -1,7 +1,7 @@
 // error: cannot assign d while h is still used: a reference into it was stored there
 // The right-hand side of a whole assignment runs while the array is
 // rebuilt, so a holder's reference to the struct holding it, which a clear
-// would leave valid, leads into the array being built (§4.4, §5.1).
+// would leave valid, leads into the array being built.
 struct D { n: i64, tail: u8[>..] }
 struct H { d: D& }
 fn total(h: H) -> u8[>..] {

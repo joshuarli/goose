@@ -24,8 +24,8 @@ fn else_open(n: i64) { if n > 1 { print("many"); } else { if n > 0 { print("one"
 fn match_open(n: i64) { match n { 0 => print("none"), _ => if n > 1 { print("many"); } } }
 
 // A loop whose breaks carry no value is a statement too, so a grow-only
-// array may shrink inside it, as it may not inside a loop producing a value
-// (§5.1). The valued breaks in it leave the `block` and the loop nested in
+// array may shrink inside it, as it may not inside a loop producing a value.
+// The valued breaks in it leave the `block` and the loop nested in
 // it, not this loop.
 var trail: i64[>..] = [];
 fn drain(n: i64) {

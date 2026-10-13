@@ -1,5 +1,5 @@
 // runtime-debug: a call's array result passed straight to a slice parameter
-// (§3.10) is a temporary of the caller's statement, sliced whole -- also when
+// is a temporary of the caller's statement, sliced whole -- also when
 // both calls are inlined, where the result has to be built outside the body
 // producing it to outlive that body and the slice's uses. Each consumer grows
 // a scratch array before it reads its slice, over the storage an argument
@@ -113,7 +113,7 @@ recursive fn depth_fixed(n: i64) -> u8[3] {
     return r;
 }
 // A resizable result of a self-call would need a temporary of its own,
-// held across the call (§7.8): the levels build in a buffer owned outside
+// held across the call: the levels build in a buffer owned outside
 // the cycle instead, each reducing what the level below left.
 recursive fn depth_grown(out: u8[>..<]&, n: i64) {
     if n == 0 { out.append([4, 5]); return; }

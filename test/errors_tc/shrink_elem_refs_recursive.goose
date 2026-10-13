@@ -1,6 +1,6 @@
 // error: cannot call walk: it shrinks a while v is still used, and v may refer into a
 // The deepest call clears a, and every level reads v's elements, views of
-// a, after it: the first call finds them in ss's record (§5.1).
+// a, after it: the first call finds them in ss's record.
 recursive fn walk(a: u8[>..]&, v: (u8[:])[:], n: i64) {
     if n == 0 {
         a.clear();

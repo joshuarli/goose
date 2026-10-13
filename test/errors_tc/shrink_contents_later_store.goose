@@ -1,6 +1,6 @@
 // error: cannot clear items while n is still used: it may hold a reference or slice into it; it was read out of h and may point into buf or items
 // h held only a view of buf until the second push stored one of items:
-// what is read out of it after may view either (§5.1, §9.5).
+// what is read out of it after may view either.
 var items: u8[>..];
 fn main() {
     items.append("abcd");

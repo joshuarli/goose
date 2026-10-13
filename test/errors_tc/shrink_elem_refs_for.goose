@@ -1,5 +1,5 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
-// The loop's next iteration reads v's next element, a view of a (§5.1).
+// The loop's next iteration reads v's next element, a view of a.
 fn main() {
     var a: u8[>..] = [];
     a.append("abc");

@@ -1,4 +1,4 @@
-/* Goose runtime: the OS primitives behind stdlib/os.goose (spec §7.10), as
+/* Goose runtime: the OS primitives behind stdlib/os.goose, as
    runtime_ext.h declares them, which this follows. */
 
 #include <time.h>

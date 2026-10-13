@@ -1,5 +1,5 @@
 // A holder's reference to a slot that holds references leads to what the slot
-// holds (§5.1): a holder there holds what its own stores put there, a slice
+// holds: a holder there holds what its own stores put there, a slice
 // slot views only what outlives it, and a global slot only globals, which
 // the judgement of the globals follows. A shrink of anything else leaves the
 // holder in use.

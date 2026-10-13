@@ -1,6 +1,6 @@
 // `const` in a variable's type makes its contents read-only, not the
-// variable (§9.5): a `var` of a const type is assigned as a whole,
-// compound-assigned and incremented as its binding allows (§4.4), while its
+// variable: a `var` of a const type is assigned as a whole,
+// compound-assigned and incremented as its binding allows, while its
 // elements stay read-only through it. A `const u8[:]` cursor re-slices
 // itself over a string literal. A field or an element of a const type is
 // assigned as a whole along its path, and read through `&` of it, a slice

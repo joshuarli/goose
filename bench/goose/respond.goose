@@ -5,7 +5,7 @@
 // in one contiguous block: the strings are inline behind varint lengths, the
 // item list is inline in the struct, and each item's sku is inline in the
 // item. The line items are produced by a function whose result is
-// constructed straight into the field that receives it (spec 7.3), and both
+// constructed straight into the field that receives it, and both
 // the response and its rendered text are locals of the handler, released by
 // a pointer reset when it returns.
 //

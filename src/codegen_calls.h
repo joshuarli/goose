@@ -1,7 +1,7 @@
 // Goose compiler — codegen's calls (definitions of CodeGen members,
-// codegen.h): calls to specializations by the C.3 convention, extern
-// functions (§7.10), function values spliced inline (§7.6), and case-function
-// dispatch (§8.2).
+// codegen.h): calls to specializations, extern
+// functions, function values spliced inline, and case-function
+// dispatch.
 #pragma once
 
 namespace goose {
@@ -88,7 +88,7 @@ inline void CodeGen::EmitCallInto(Call *c, vector<Dst> &dsts) {
     }
 }
 
-// A call to an extern fn (§7.10): the C function directly, each argument
+// A call to an extern fn: the C function directly, each argument
 // in its C type, no calling-convention extras; a fixed result lands in
 // a temporary like any other C value.
 inline vector<string> CodeGen::EmitExternCall(Call *c, FnSpec *sp) {
@@ -121,7 +121,7 @@ inline vector<string> CodeGen::EmitExternCall(Call *c, FnSpec *sp) {
     return rets;
 }
 
-// The C prototype of an extern fn, from its Goose declaration (§7.10).
+// The C prototype of an extern fn, from its Goose declaration.
 inline string CodeGen::ExternProto(FnSpec *sp) {
     string s = sp->rets.empty() ? string("void") : CT(sp->rets[0]);
     Append(s, " ", sp->sf->cname, "(");
@@ -151,8 +151,8 @@ inline void CodeGen::EmitArg(FnSpec *sp, size_t i, Node *node, vector<string> &a
     }
     if (IsResz(pt)) {
         // By-value resizable argument: construct into a fresh slot and
-        // pass the header (or frame object) by value with its stack
-        // (§7.2, C.3).
+        // pass the header (or frame object) by value with its stack.
+        //
         string stk;
         auto h = RzTemp(pt, stk);
         GenConstruct(node, stk, pt, RzLenLv(pt, h));
@@ -161,14 +161,14 @@ inline void CodeGen::EmitArg(FnSpec *sp, size_t i, Node *node, vector<string> &a
         return;
     }
     if (IsBytesT(pt)) {
-        // By-value nonfixed argument: construct into a fresh slot (§7.2).
+        // By-value nonfixed argument: construct into a fresh slot.
         string stk;
         auto base = BytesTemp(stk);
         GenConstruct(node, stk, pt);
         args.push_back(base);
         return;
     }
-    // A relative reference parameter takes the argument's offset (§3.9). The
+    // A relative reference parameter takes the argument's offset. The
     // `in pool` form's is the same in the callee's copy; a self-relative one
     // can only be null, which is zero wherever it is.
     if (pt->kind == TY_REF && pt->ref->lenstorage >= 0) {
@@ -450,18 +450,18 @@ inline void CodeGen::EmitRfCheck(FnSpec *callee) {
     termjump = false;
 }
 
-// Calling a function value: the checked body instance is spliced inline
-// (§7.6); its parameters are ordinary locals of this function.
+// Calling a function value: the checked body instance is spliced inline;
+// its parameters are ordinary locals of this function.
 inline vector<string> CodeGen::EmitFvCall(Call *c, Dst d0) {
     auto et = c->fvbody->exprtype;
     auto wantsval = !IsVoidT(et);
     // The call was checked against its destination and the body's value
     // without one, so the two can be different array or slice types
-    // (FitsAt): an array where a slice is expected (§3.10), any array or
-    // slice constructing an array of another kind (§4.2). The body then
+    // (FitsAt): an array where a slice is expected, any array or
+    // slice constructing an array of another kind. The body then
     // builds its value as its own type in a temporary, which is sliced whole
     // or copied as the type the destination names, the call's where it names
-    // none: the call's value is a copy (§4.1), so a slice of it never points
+    // none: the call's value is a copy, so a slice of it never points
     // into a variable the body names. A bytes-class value is wanted only on
     // a stack; anywhere else it goes unused.
     auto want = d0.t ? d0.t : c->exprtype;
@@ -528,7 +528,7 @@ inline vector<string> CodeGen::EmitFvCall(Call *c, Dst d0) {
     return { rv };
 }
 
-// Case-function tag dispatch (§8.2): switch on the tag, call the matching
+// Case-function tag dispatch: switch on the tag, call the matching
 // specialization with the payload, sharing all other argument slots and
 // return channels across the arms.
 inline vector<string> CodeGen::EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst) {
@@ -613,7 +613,7 @@ inline vector<string> CodeGen::EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst
     vector<string> dststk(sp0->rets.size());
     vector<string> dstlen(sp0->rets.size());
     // Set when a T[] result lands in a slot of another length storage: tag
-    // dispatch has no element-run form (C.3), so every arm writes the value
+    // dispatch has no element-run form, so every arm writes the value
     // in its own layout, and the slot's prefix replaces the arms' after the
     // switch.
     Dst reprefix;

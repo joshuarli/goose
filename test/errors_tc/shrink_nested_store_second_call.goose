@@ -1,7 +1,7 @@
 // error: cannot clear arr2 while h is still used: a reference into it was stored there
 // The second call of keep finds h as the first one's check did, but hands
 // it a reference into arr2, which that check's calls did not store: keep's
-// body is checked again for it (§5.1).
+// body is checked again for it.
 struct H { r: i64&? }
 var K: i64 = 7;
 fn main() {

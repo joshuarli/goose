@@ -1,5 +1,5 @@
 // A slice, a reference to a resizable value and a reusable pool's reference
-// are passed as their members, a C parameter each (C.3): through calls with
+// are passed as their members, a C parameter each: through calls with
 // more of them than a convention has registers for, a recursion pushing
 // through its reference while it walks its slices, a case-function dispatch
 // sharing them between its arms, nested functions capturing a pool, a pool

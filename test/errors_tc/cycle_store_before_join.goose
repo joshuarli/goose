@@ -3,7 +3,7 @@
 // g is not recursive, but its call back into f makes it part of f's cycle
 // from its first statement on: the store before that call is as much inside
 // the cycle as one after it, and relies on d's class being passed on around
-// the cycle (§7.8). The call back passes f's local instead, which the next
+// the cycle. The call back passes f's local instead, which the next
 // activation hands g as d: b would end up linked to a dead local of f, so the
 // store is the error, naming the call.
 struct Cell { v: i64, link: Cell&? }

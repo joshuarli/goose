@@ -1,6 +1,6 @@
 // error: cannot call g: it may shrink a while ys[..] is still used, and ys[..] may refer into a
-// The same for grow-only arrays: the pair is the callers' to judge (§5.1,
-// §6.5, §9.5).
+// The same for grow-only arrays: the pair is the callers' to judge.
+//
 struct H { a: i64[>..]& }
 fn g(xs: i64[>..]&, ys: i64[>..]&) {
     for y in ys[..] {

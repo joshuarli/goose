@@ -1,5 +1,5 @@
 // error: copying a value of type Pair, which contains self-relative references, is not supported; construct it in place, or bind a reference to it with .=: let p .= last(ps)
-// A struct holding a linked value by value holds its links (§3.9).
+// A struct holding a linked value by value holds its links.
 struct Node { next: Node&<u32>?, v: i64 }
 fn pair(ns: Node[>..]&) -> Node& {
     let a .= ns.push(Node { v: 1 });

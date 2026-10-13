@@ -1,7 +1,7 @@
 // A format overload given a `let` by a `const` reference or by value, or a
-// `const` one by any reference, cannot write it (§3.7, §4.4): the `let` stays
-// known non-negative, meeting a u64 in a comparison (§6.1), and a mark stays
-// one, whose resize back to it is balanced (§5.2), so v stays in use across
+// `const` one by any reference, cannot write it: the `let` stays
+// known non-negative, meeting a u64 in a comparison, and a mark stays
+// one, whose resize back to it is balanced, so v stays in use across
 // the call. print, str and format alike.
 
 fn format(out: u8[>..]&, v: const i64&) { out.append("<"); out.format(v as u64); out.append(">"); }

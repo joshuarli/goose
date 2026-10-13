@@ -1,5 +1,5 @@
 // error: cannot write through this reference: non-writable provenance
-// A cycle's result is read-only where any of its returns is (§9.5), so the
+// A cycle's result is read-only where any of its returns is, so the
 // write through x, checked once the cycle's returns are known, is the error.
 recursive fn choose(r: i64&, depth: i64) -> i64& {
     if depth > 0 {

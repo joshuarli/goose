@@ -1,6 +1,6 @@
 // error: storing a reference that may point into a grow-shrink array reached through the caller's storage behind t
 // r refers to the variable b, whose binding is the bytes of the grow-shrink
-// array t.a leads to: the slice loaded through r is that byte view (§5.2).
+// array t.a leads to: the slice loaded through r is that byte view.
 struct Cell { v: i64 }
 struct Top { a: Cell[>..<]& }
 struct Keep { v: const u8[:] }

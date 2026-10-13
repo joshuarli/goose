@@ -1,6 +1,6 @@
 // error: cannot pop nums while refs is still used: a reference into it was stored there
-// The references an append copies are stores on record for the shrink rules
-// (§5.1): refs holds one into nums after xs is gone.
+// The references an append copies are stores on record for the shrink rules:
+// refs holds one into nums after xs is gone.
 fn main() {
     var nums: i64[>..] = [1, 2, 3];
     var refs: (i64&)[>..] = [];

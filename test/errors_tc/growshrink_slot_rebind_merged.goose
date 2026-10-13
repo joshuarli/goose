@@ -1,7 +1,7 @@
 // error: cannot clear related while s
 // error: is still used: it may refer into related
 // s was bound to a view read out of a field or a view of other, then rebound
-// to a value that may be a view of related (§5.2): what s holds is no longer
+// to a value that may be a view of related: what s holds is no longer
 // only what a field held. Pointing into other already, s may be rebound into
 // related.
 struct Entry { text: u8[:] }

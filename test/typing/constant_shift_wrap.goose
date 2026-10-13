@@ -1,4 +1,4 @@
-// A shift wraps at its operands' type in every build (§6.2: the count is
+// A shift wraps at its operands' type in every build (the count is
 // masked, and the result is truncated back to the width), so a constant one
 // folds to the value the same shift computes at run time -- including where
 // that leaves the type's range, which no shift aborts on.

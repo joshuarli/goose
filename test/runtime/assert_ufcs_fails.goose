@@ -1,4 +1,4 @@
-// x.assert() checks x at run time like assert(x) (§7.1): only a true
+// x.assert() checks x at run time like assert(x): only a true
 // receiver folds away, and a false one aborts at its own line. Expected to
 // abort.
 

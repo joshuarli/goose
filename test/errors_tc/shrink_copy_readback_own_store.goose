@@ -1,6 +1,6 @@
 // error: cannot clear ns while nx is still used
-// follow itself linked the element n is a copy of to another element
-// (§5.1).
+// follow itself linked the element n is a copy of to another element.
+//
 struct N { v: i64, next: N&? }
 fn follow(ns: N[>..]&) {
     ns[1].next .= &ns[0];

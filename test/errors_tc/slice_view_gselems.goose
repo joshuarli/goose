@@ -2,7 +2,7 @@
 // k keeps a reference to a field of the element of the slice its
 // parameter's slot holds. Where that slice's storage holds a grow-shrink
 // array of Pts, as a's does, nothing kept can lie in it; where it holds one
-// of i64s, as b's does, the field could, so it is never stored (§5.2). Each
+// of i64s, as b's does, the field could, so it is never stored. Each
 // call is checked for the arrays its own slice's storage holds, whichever
 // comes first.
 struct E { a: i64, x: f64 }

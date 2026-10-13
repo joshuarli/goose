@@ -1,7 +1,7 @@
 // error: may point into buf or log
 // Two globals can hold a u8, so index_of cannot tell which one a reference
 // read back out of `marks` points into. Static data is not among the
-// candidates: a writable slot is never given a literal (§9.5).
+// candidates: a writable slot is never given a literal.
 struct Mark { at: u8& }
 var buf: u8[>..] = [];
 var log: u8[>..] = [];

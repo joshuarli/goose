@@ -1,4 +1,4 @@
-// Float members compare as the scalars do (§4.5): -0.0 equals 0.0 and a NaN
+// Float members compare as the scalars do: -0.0 equals 0.0 and a NaN
 // equals nothing, whichever aggregate, array or slice holds them.
 import vec;
 

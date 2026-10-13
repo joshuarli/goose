@@ -2,8 +2,8 @@
 // does, the calls that share its check too: the else branch's call finds n
 // unassigned, as the then branch's did, and assigns it all the same, so n
 // is assigned after the if; each pass of the loop after its first starts
-// with n unassigned, as its first did, and the call assigns it there too
-// (§4.4, §7.5).
+// with n unassigned, as its first did, and the call assigns it there too.
+//
 struct Cell { key: i64 }
 var cells: Cell[>..] = [Cell { key: 4 }];
 

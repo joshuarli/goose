@@ -1,6 +1,6 @@
 // error: cannot write through this reference: non-writable provenance
-// A field reached through a `const S&` is not written (§9.5): a format hook
-// taking it by reference (§3.7) gets a read-only reference, as `&c.f` is.
+// A field reached through a `const S&` is not written: a format hook
+// taking it by reference gets a read-only reference, as `&c.f` is.
 struct S { f: u8[:] }
 var buf: u8[>..] = [];
 fn format(out: u8[>..]&, p: u8[:]&) { out.append("Q"); p = buf[1..]; }

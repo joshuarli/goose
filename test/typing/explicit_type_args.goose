@@ -1,4 +1,4 @@
-// Explicit type arguments for type variables no parameter mentions (§7.7):
+// Explicit type arguments for type variables no parameter mentions:
 // each distinct list is its own specialization, however the call reaches it.
 enum Shape { Circle { r: i64 }, Square { s: i64 } }
 

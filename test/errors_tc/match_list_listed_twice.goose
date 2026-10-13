@@ -1,6 +1,6 @@
 // error: match pattern LO is listed twice
 // One name listed twice in an arm is always one value, so the second adds
-// nothing (§8.1); only differently named constants may overlap.
+// nothing; only differently named constants may overlap.
 let LO = 20;
 
 fn main() {

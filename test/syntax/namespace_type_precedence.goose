@@ -1,4 +1,4 @@
-// Namespace priority applies across all type declaration kinds (§11.1).
+// Namespace priority applies across all type declaration kinds.
 struct AliasOverStruct { value: i64 }
 struct EnumOverStruct { value: i64 }
 enum AliasOverEnum { Value { value: i64 } }

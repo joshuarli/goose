@@ -1,6 +1,6 @@
 // A body that still calls a nested function is inlined all the same: the
 // copied call passes the copies of the variables the nested function
-// reaches (§7.5). The nested functions return two values, so they are never
+// reaches. The nested functions return two values, so they are never
 // inlined themselves, except `peek`, which is once its caller has been.
 
 // Used once, with a captured local, a captured parameter bound to a literal,

@@ -1,5 +1,5 @@
 // error: string literal of length 6 exceeds the capacity of u8[..4]
-// A string literal into a limited array it does not fit (§4.2).
+// A string literal into a limited array it does not fit.
 struct Player { name: u8[..4], hp: i32 = 100 }
 fn main() {
     var p = Player { name: "gustav" };

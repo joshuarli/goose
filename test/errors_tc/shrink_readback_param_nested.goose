@@ -1,7 +1,7 @@
 // error: cannot call g, which may shrink pp while s
 // error: is still used: it may refer into pp
 // g was checked at its first call, before s existed; the second call replays
-// its summary, in which the array g pops is one pp only leads to (§5.2).
+// its summary, in which the array g pops is one pp only leads to.
 struct P { x: i64[>..<]&, y: i64[>..<]& }
 fn f(pp: P&) -> i64 {
     fn g() { pp.y.pop(); }

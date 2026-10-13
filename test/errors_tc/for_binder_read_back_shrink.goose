@@ -1,7 +1,7 @@
 // error: cannot clear buf while got is still used
 // error: it was read out of refs and may point into other or buf
 // A `for` binder over an array of references points where the stores into
-// the array put them (§9.5): got may point into buf after the loop.
+// the array put them: got may point into buf after the loop.
 fn main() {
     var buf: i64[>..] = [];
     buf.push(7);

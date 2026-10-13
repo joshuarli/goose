@@ -1516,7 +1516,7 @@ def main():
         if r.check_error(f, "expected-tc-error", code, out, err):
             r.ok(f"tc-error {f.name}")
 
-    # A guard is an if over the rest of its block (§6.4), whose rest codegen
+    # A guard is an if over the rest of its block, whose rest codegen
     # emits after the else rather than in a C block of its own where the else
     # leaves, so 300 guards in a row build with MSVC, which stops at 128
     # levels of blocks, and with clang, at 256. The inliner counts no block
@@ -1689,7 +1689,7 @@ def main():
     if wanted("extra/loop_shapes"):
         r.show_task(loop_shapes)
     # An inline fn returning two values stays a call in Goose and is declared
-    # GS_INLINE in the C, for the C compiler to inline (§7.13).
+    # GS_INLINE in the C, for the C compiler to inline.
     def inline_fn_c():
         f = HERE / "optimizer" / "optimize.goose"
         cfile = gendir / "optimize-inline.c"
@@ -1706,7 +1706,7 @@ def main():
             r.ok("inline fn C")
     if wanted("extra/inline_fn_c"):
         r.show_task(inline_fn_c)
-    # A slice and a builder parameter are two C parameters each (spec C.3),
+    # A slice and a builder parameter are two C parameters each,
     # the slice's data pointer as `void *` (ParamFields).
     def member_params():
         f = HERE / "codegen" / "member_parameters.goose"
@@ -1833,7 +1833,7 @@ def main():
                 out = r.run_expected([out_exe], "codegen_exec", f"clang-{label} codegen_exec.goose")
                 if out is not None and r.check_stdout("codegen_exec", f"clang-{label}", out):
                     r.ok(f"cgen-clang-{label} codegen_exec.goose")
-        # The versions of the simd functions (spec §7.12) exist only where
+        # The versions of the simd functions exist only where
         # clang builds for x86-64: each level the C may be built for runs
         # here, at -O2 so the loops vectorize, and has to print what the
         # baseline does. On a CPU without AVX-512 or AVX2 the higher builds

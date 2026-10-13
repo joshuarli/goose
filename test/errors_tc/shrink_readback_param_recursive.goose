@@ -2,7 +2,7 @@
 // error: is still used: it may refer into pp
 // The back edge's summary is incomplete, so it counts as shrinking every
 // grow-shrink array the arguments reach, through their references too: the
-// pop below it reaches b through pp (§5.2).
+// pop below it reaches b through pp.
 struct P { x: i64[>..<]&, y: i64[>..<]& }
 recursive fn f(n: i64, pp: P&) -> i64 {
     if n > 0 {

@@ -1,8 +1,8 @@
 // runtime-debug: a function value's call checked as another array or slice
 // type than its body's value, which the body builds as its own type: an array
-// where a slice is expected (§3.10), and any array or slice constructing a
+// where a slice is expected, and any array or slice constructing a
 // static-capacity limited, variable, resizable or runtime-capacity limited
-// array (§4.2). The call's value is a copy of the body's (§4.1), so a slice
+// array. The call's value is a copy of the body's, so a slice
 // of it does not see a write to the variable the body names. The bodies give
 // fixed, limited, variable and resizable arrays, slices and references to
 // arrays, of bytes, integers, structs and variable-size elements, and another

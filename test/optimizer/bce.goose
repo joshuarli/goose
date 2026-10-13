@@ -151,7 +151,7 @@ fn slice_unknown(s: i64[:], a: i64, b: i64) -> i64 {
     return t.len;
 }
 
-// The spec's A.1 word scan: index and slice checks all disappear.
+// A word scan: index and slice checks all disappear.
 fn slice_word_scan(text: u8[:]) -> i64 {
     var chars = 0;
     var i = 0;
@@ -363,7 +363,7 @@ fn shrink_invalidates(extra: i64) -> i64 {
     return l[3];                              // bce:keep (the pop may undo the guard)
 }
 
-// A grow-only array shrinks at a `clear` (§5.1), so both its length facts and
+// A grow-only array shrinks at a `clear`, so both its length facts and
 // the `j <= len` invariant a cursor rests on die there.
 fn grow_clear_invalidates(extra: i64) -> i64 {
     var v: i64[>..] = [];
@@ -379,7 +379,7 @@ fn grow_clear_invalidates(extra: i64) -> i64 {
     return n + v[3];                          // bce:elide (four counted pushes after it)
 }
 
-// A grow-only local shrinks at a `pop` too (§5.1): a length fact from before
+// A grow-only local shrinks at a `pop` too: a length fact from before
 // it does not survive.
 fn grow_pop_invalidates(extra: i64) -> i64 {
     var v: i64[>..] = [];
@@ -405,7 +405,7 @@ fn whole_assign_kills(extra: i64) -> i64 {
 
 // --- value ranges from the operation itself --------------------------------
 
-// `%` is Euclidean (§6.2), so the reduction is in range for any dividend --
+// `%` is Euclidean, so the reduction is in range for any dividend --
 // no guard, and nothing left for a check to catch.
 fn modulo_index(s: i64[:], k: i64) -> i64 {
     guard s.len > 0 else { return 0; }
@@ -465,7 +465,7 @@ fn call_local_loop() -> i64 {
     return s;
 }
 
-// Whole assignment through a reference may empty the array (§5.1, §5.2).
+// Whole assignment through a reference may empty the array.
 fn reset_it(p: i64[>..<]&) {
     p = [];
 }

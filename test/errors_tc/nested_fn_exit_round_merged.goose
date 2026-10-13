@@ -1,7 +1,7 @@
 // error: variable n may be used before it is assigned
 // bail leaves setn twice, having assigned n before the first exit and not
 // before the second; setn's second round reuses bail's check, which takes
-// both again (§4.4, §7.8, §7.9).
+// both again.
 fn run(c: bool) {
     var n: i64;
     recursive fn setn(d: i64) {

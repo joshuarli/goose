@@ -1,5 +1,5 @@
 // A `<` before a qualified name is a comparison unless a type argument list
-// follows (docs/design/namespaces.md). The parser tries a type argument list
+// follows. The parser tries a type argument list
 // first; what it took for types there is no type when none follows, so an
 // unknown qualified type name among them is no error.
 struct lim::Pair<T> { a: T, b: T }
@@ -10,7 +10,7 @@ let ::LIMIT = 4;
 fn lim::pick<T>(p: lim::Pair<T>, first: bool) -> T { if first { p.a } else { p.b } }
 
 // Shares its name with the type parameter below, which takes priority over
-// it throughout that function's declaration (§11.1), comparisons in its body
+// it throughout that function's declaration, comparisons in its body
 // or not.
 struct Item { v: i64 }
 

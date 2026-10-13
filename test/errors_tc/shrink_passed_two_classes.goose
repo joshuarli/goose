@@ -2,7 +2,7 @@
 // A reference read back out of a copy of an element of hs only outlives
 // what may own its target, so it gets a class of its own beside values':
 // the callee cannot tell the two classes apart, and this call makes them
-// one array (§5.1).
+// one array.
 struct H { r: i64& }
 fn consume(r: i64&, a: i64[>..]&) {
     a.clear();

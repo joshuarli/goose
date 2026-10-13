@@ -1,6 +1,6 @@
 // error: storing a read-only reference of type const (u8[:])& in a slot of type
-// `.=` binds a slice lvalue by reference (§3.8), a field of a `const` value
-// as a read-only reference (§9.5), which only a slot declared const holds.
+// `.=` binds a slice lvalue by reference, a field of a `const` value
+// as a read-only reference, which only a slot declared const holds.
 struct S { f: u8[:] }
 var buf: u8[>..] = [];
 fn main() {

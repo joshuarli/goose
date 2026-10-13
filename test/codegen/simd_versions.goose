@@ -1,4 +1,4 @@
-// `simd fn` (spec §7.12): clang on x86-64 builds each of these once per
+// `simd fn`: clang on x86-64 builds each of these once per
 // instruction-set level, and the program runs the highest its CPU has;
 // elsewhere they are ordinary functions. Every version must print what the
 // baseline prints, which the runner checks by building this file with

@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while h is still used, and h may refer into buf
 // The block emit gives run copies a holder out of the elements hs views,
-// where the caller's holder views buf (§5.1).
+// where the caller's holder views buf.
 struct H { s: const u8[:] }
 fn run<F>() { F(); }
 fn emit(out: u8[>..]&, hs: H[:]) {

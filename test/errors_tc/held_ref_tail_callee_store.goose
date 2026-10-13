@@ -1,6 +1,6 @@
 // error: cannot assign b while b is still used: what it refers to may hold a reference or slice into it (§5.1)
 // A reference of the element type stored into the struct by the callee,
-// passed in pointing into the tail, stops the tail's assignment (§5.1).
+// passed in pointing into the tail, stops the tail's assignment.
 struct B { e: u8&, r: u8[>..] }
 fn f(b: B&, x: u8&) {
     b.e .= x;

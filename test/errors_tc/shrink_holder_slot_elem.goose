@@ -1,6 +1,6 @@
 // error: cannot clear a while rr is still used: a reference to a slice that may point into it was stored there
-// rr's field refers to an element of ss (§4.1), a slice the push made a
-// view of a (§5.1).
+// rr's field refers to an element of ss, a slice the push made a
+// view of a.
 struct R { r: u8[:]& }
 fn main() {
     var a: u8[>..] = [];

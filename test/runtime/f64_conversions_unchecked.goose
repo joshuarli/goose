@@ -1,5 +1,5 @@
-// runtime-debug: a conversion to f64 never aborts, in a debug build either
-// (§6.3), written with `as` or not: an integer beyond 2^53 that f64 cannot
+// runtime-debug: a conversion to f64 never aborts, in a debug build either,
+// written with `as` or not: an integer beyond 2^53 that f64 cannot
 // hold exactly rounds to the nearest f64, as float arithmetic rounds the
 // results it computes.
 fn main() {

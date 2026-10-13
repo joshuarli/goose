@@ -1,6 +1,6 @@
 // error: a is not fixed-size and is not copied implicitly
 // An untyped parameter takes the if's value as it is, a copy of the branch
-// taken, as an un-annotated let would (§4.1, §7.7).
+// taken, as an un-annotated let would.
 fn total(xs) -> i64 {
     var t = 0;
     for x in xs { t += x; }

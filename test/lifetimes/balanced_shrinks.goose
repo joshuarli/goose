@@ -1,6 +1,6 @@
 // warning: redundant &: view is passed by reference without it
 // A call that leaves a grow-shrink array no shorter than it found it at any
-// point is balanced (§5.2): every shrink of the array in it resizes it back
+// point is balanced: every shrink of the array in it resizes it back
 // to a `let` of its length taken in the same activation, or is a balanced
 // call. Views taken before such a call stay in use across it: into a
 // parameter's array, one array passed as two parameters, a struct's tail, a
@@ -10,7 +10,7 @@
 // handed to the callee: no callee can store a view of the array into that
 // variable, so it still holds the slice taken before the call. And so does a
 // parameter's view, whatever the caller passes for it: a balanced call
-// records nothing for the callers to judge (§5.1).
+// records nothing for the callers to judge.
 struct Buf { n: i64, items: i64[>..<] }
 
 var scratch: i64[>..<] = [];

@@ -1,6 +1,6 @@
 // error: cannot call format, which shrinks G while s (bound at
 // The overload runs inside a str print renders first: print's own later
-// argument s is read after it (§3.7, §5.2).
+// argument s is read after it.
 struct T { n: i64 }
 var G: i64[>..<] = [1, 2, 3];
 fn format(out: u8[>..]&, t: T) {

@@ -1,6 +1,6 @@
 // error: returning a reference rooted in b, which dies with this function
 // A return earlier in a loop body than a store into the holder sees what the
-// store put there in an earlier iteration (§9.2).
+// store put there in an earlier iteration.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 fn make() -> N {

@@ -2,7 +2,7 @@
 // k is checked first for bag.n, which bag's grow-shrink array of Pts cannot
 // hold. r may point into bag or into an element of others, so the array
 // its class may point into is not its root's own, and may hold an i64:
-// given r, k is checked again, and may not store x (§5.2).
+// given r, k is checked again, and may not store x.
 struct Pt { x: f64 }
 struct Other { w: i64 }
 struct Bag { n: i64, items: Pt[>..<] }

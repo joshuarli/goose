@@ -1,5 +1,5 @@
 // A local, global or parameter declared with a relative-reference type holds
-// the offset (§3.9), so its initializer's reference is encoded into it as a
+// the offset, so its initializer's reference is encoded into it as a
 // rebind's is, range-checked: a reference variable, an element, null, a call
 // (inlined at -O2), a relative field or element read back, an if, a match or
 // a block, at every fixed width and the varint one, `in pool` and

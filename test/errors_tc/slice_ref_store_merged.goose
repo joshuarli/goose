@@ -1,6 +1,6 @@
 // error: cannot clear b while s1 is still used: it may hold a reference or slice into it
-// r names s1 or s2, whichever branch ran (§6.4), so the store through it may
-// assign either: both may view b when the clear frees it (§5.1).
+// r names s1 or s2, whichever branch ran, so the store through it may
+// assign either: both may view b when the clear frees it.
 fn pick(c: bool) -> bool { c }
 fn main() {
     var a: u8[>..] = [];

@@ -1,4 +1,4 @@
-// pop_n of a negative count is a runtime abort (§9.3) rather than a growth:
+// pop_n of a negative count is a runtime abort rather than a growth:
 // the slots it would add have no values.
 
 fn drop(a: i64[..4]&, n: i32) { a.pop_n(n); }

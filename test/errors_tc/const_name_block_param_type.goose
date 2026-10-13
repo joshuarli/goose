@@ -1,6 +1,6 @@
 // error: array size K names a local variable, not a constant
 // A block's parameter types are written where the block is, in main's
-// scope (§3.3, §7.6).
+// scope.
 let K = 3;
 
 fn apply<F>(x: i64[3]) -> i64 { F(x) }

@@ -91,8 +91,8 @@ fn growshrink() {
     print(gs.len);                       // 0
 }
 
-// A named result cleared while it is built at the caller's destination
-// (§7.3): the reset goes to the value's own base, not the stack's.
+// A named result cleared while it is built at the caller's destination:
+// the reset goes to the value's own base, not the stack's.
 fn built_twice(n: i64) -> u8[>..] {
     var out: u8[>..] = [];
     out.append("xyz");
@@ -102,7 +102,7 @@ fn built_twice(n: i64) -> u8[>..] {
     return out;
 }
 
-// A grow-only local gives its element region back at clear (§5.1) and refills
+// A grow-only local gives its element region back at clear and refills
 // it from the base; slices taken after a clear read the new contents.
 fn growclear() {
     var scratch: u8[>..] = [];
@@ -252,7 +252,7 @@ fn relink(c: RelCell&, t: RelCell&) {
 
 // Every destination here is an element of the array the offsets range over,
 // so the stored offsets are small; measured from anywhere else they overflow
-// the u16 width and abort (§3.9).
+// the u16 width and abort.
 fn rel_inplace() {
     var a: RelCell[>..] = [];
     a.push(RelCell { v: 1 });
@@ -361,7 +361,7 @@ fn multis() {
     print(f);                            // false
 }
 
-// --- long-distance returns with values (A.5 shape) ---------------------------
+// --- long-distance returns with values ---------------------------
 
 recursive fn deep(n: i64) -> i64 {
     if n == 0 { return 99, "boom" from top; }
@@ -462,7 +462,7 @@ fn casts() {
 }
 
 // A u64 may be compared against a signed operand the compiler knows is
-// non-negative (§6.1); the comparison is unsigned, so it stays correct for
+// non-negative; the comparison is unsigned, so it stays correct for
 // values above i64.max, where a hand-written `as!` cast would not be.
 fn u64_compare() {
     var a: i64[>..] = [];
@@ -491,7 +491,7 @@ fn u64_compare() {
     print(sum);                          // 10, since a[i] == i
 }
 
-// `%` is Euclidean at every integer type (§6.2): the result is in [0, |b|)
+// `%` is Euclidean at every integer type: the result is in [0, |b|)
 // whatever the dividend's sign, so it is always a valid index into `b` slots.
 fn euclidean_mod() {
     var a = 7;
@@ -583,7 +583,7 @@ fn empties() {
     print("");                           // (empty line)
 }
 
-// --- structs with resizable tails (§3.4) -------------------------------------
+// --- structs with resizable tails -------------------------------------
 
 struct Tailed { count: i64, items: i64[>..] }
 
@@ -606,7 +606,7 @@ fn seqvar() {
     print(n + copied.len);                 // 5 + 2 = 7
 }
 
-// --- sized locals, widening, per-width arithmetic (§6.1–§6.3) ----------------
+// --- sized locals, widening, per-width arithmetic (–) ----------------
 
 fn addu8(a: u8, b: u8) -> u8 { a + b }
 
@@ -770,7 +770,7 @@ fn layouts() {
     if nx { print(nx.v + second.v); }    // 12
 }
 
-// --- data-stack tops cached across the loops that grow them (C.4) ------------
+// --- data-stack tops cached across the loops that grow them ------------
 
 // Inlined at -O2: the early return leaves the pushing loop by a jump, so the
 // cached top has to reach memory on that path too.
@@ -880,7 +880,7 @@ fn reftops() {
 // --- read-back roots: an LRU list relinked through a slot array --------------
 // The slots hold references, not indices: a reference read back out of a
 // container whose only candidate pool is `lrupool` is rooted there exactly, so
-// a node reached through the map can still be linked relatively (§9.5, §3.9).
+// a node reached through the map can still be linked relatively.
 // Only `free` still wants an index, which each node carries.
 
 struct LruNode { key: i64, idx: i32, prev: LruNode&<u32>?, next: LruNode&<u32>? }
@@ -947,7 +947,7 @@ fn lru_slots() {
     lru_front(lrupool[hi], m);
     print(lru_order());                  // 2431
     // Evict it; the freed slot comes back on the next alloc, still a valid
-    // LruNode (§5.4).
+    // LruNode.
     lru_unlink(m);
     lrupool.free(m.idx);
     lru_add(9);
@@ -955,7 +955,7 @@ fn lru_slots() {
     print(lrupool.len);                  // 6: the freed slot was reused
 }
 
-// --- relative references measured from a named pool (§3.9) ------------------
+// --- relative references measured from a named pool ------------------
 
 // A varint link: the pool's elements are variable-size, so it is walked
 // rather than indexed, and the offset is the unsigned LEB position in it.
@@ -995,7 +995,7 @@ fn inpool_wide() {
     print(wpool.index_of(n));            // 1
 }
 
-// --- index_of on plain arrays (§3.3) -----------------------------------------
+// --- index_of on plain arrays -----------------------------------------
 // Not a pool feature: any fixed-stride array converts a reference to one of
 // its own elements back into the index.
 
@@ -1045,7 +1045,7 @@ fn loopviews() {
 // --- named results of inlined bodies -----------------------------------------
 // Each builder below is used once, so from -O1 the optimizer splices it into
 // its call site; its named result is then built at the destination the value
-// lands in (§7.3), with the receiving length prefix reserved in front of the
+// lands in, with the receiving length prefix reserved in front of the
 // elements and patched at the return. At -O0 the same functions take the
 // non-inlined path, so the two levels agreeing is what this tests.
 
@@ -1207,7 +1207,7 @@ fn basecases() {
     print(rmarks);                       // Everything above the leaves: 7
 }
 
-// --- pop and resize on a grow-only local (§5.1) -------------------------------
+// --- pop and resize on a grow-only local -------------------------------
 
 // The stack is popped and resized where nothing points into it, and sliced
 // in between; the element region it gives back is reused by its own pushes.
@@ -1233,7 +1233,7 @@ fn growshrink_local() {
     print(top[0] + st[0]);               // 2
 }
 
-// --- untyped parameters bind a reference argument as a reference (§3.8) ----
+// --- untyped parameters bind a reference argument as a reference ----
 
 fn bump_any(x) { x += 1; }               // x: i64& when called with &a.
 fn first_any(xs) -> i64 { xs[0] }        // xs: i64[>..<]& when called with &q.
@@ -1248,7 +1248,7 @@ fn untyped_refs() {
     print(first_any(q) + q.len);        // 10
 }
 
-// --- default<T>(): zero values with declared field defaults applied (§4.2) --
+// --- default<T>(): zero values with declared field defaults applied --
 
 struct DefA { n: i64 = 7, f: f32, o: i64?, s: u8[:], lim: u8[..4], arr: i32[2] }
 struct DefB { a: DefA, k: u8 = 3 }
@@ -1269,7 +1269,7 @@ fn defaults_builtin() {
     print(arr[1].n);                     // 7
 }
 
-// --- print / str / format: text forms (§3.7) ---------------------------------
+// --- print / str / format: text forms ---------------------------------
 
 fn text_builtins() {
     print("x = ", 42, ", y = ", 2.5, " ", true);      // x = 42, y = 2.5 true
@@ -1411,7 +1411,7 @@ fn take_fo(b: BagFo) -> i64 { b.items.len + b.n }
 
 var gbag_fo: BagFo = BagFo { n: 1, items: [5] };
 
-// A resizable-tailed struct is a frame object (C.2): its tail has a header
+// A resizable-tailed struct is a frame object: its tail has a header
 // of its own, so the tail can be referenced, sliced, and grown through a
 // reference like a standalone resizable.
 fn frame_objects() {
@@ -1479,7 +1479,7 @@ extern fn sqrt(x: f64) -> f64;
 extern "fabs" fn abs_ex(x: f64) -> f64;
 extern "gs_os_getenv" fn getenv_ex(name: const u8[:], out: u8[>..]&) -> bool;
 
-// extern fns (§7.10): libm through the emitted prototypes, and a
+// extern fns: libm through the emitted prototypes, and a
 // runtime-defined one taking a slice and a builder reference.
 fn externs() {
     print(sqrt(16.0) == 4.0, abs_ex(-2.5) == 2.5);   // truetrue
@@ -1496,7 +1496,7 @@ struct WalletAg { owner: u8[], cash: MoneyAg }
 
 // Aggregates render as their positional literal, strings quoted inside
 // them, references as their pointee, and a type with a user format
-// overload through it wherever it occurs (§3.7).
+// overload through it wherever it occurs.
 fn aggregate_print() {
     print(PtAg { 1, 2.5 });                                   // PtAg { 1, 2.5 }
     let n = NamedAg { name: "bob", p: PtAg { 3, 4.0 }, tags: [7, 8, 9] };
@@ -1578,7 +1578,7 @@ fn main_codegen_exec() {
 }
 
 // Relative references in a grow-only array of their own, and by-value
-// iteration of one (§3.9): the element stores the offset from its own slot
+// iteration of one: the element stores the offset from its own slot
 // (here from the pool base), and binding it by value decodes it back.
 struct RRNode { id: i32, next: RRNode&<u32>? }
 var rrpool: RRNode[>..] = [];
@@ -1606,5 +1606,5 @@ fn rr_link(prev: RRNode?, id: i32) -> RRNode& {
     return rrpool.push(RRNode { id: id, next: prev });
 }
 
-// Standalone entry; ignored when this file is imported (§11.1).
+// Standalone entry; ignored when this file is imported.
 fn main() { main_codegen_exec(); }

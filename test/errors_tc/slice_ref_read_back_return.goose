@@ -1,6 +1,6 @@
 // error: returning a reference rooted in s, which dies with this function
-// h.r names f's slice variable s (§3.8, §4.1), which the read-back of it
-// counts among what it may be (§9.5), a global able to hold a slice beside:
+// h.r names f's slice variable s, which the read-back of it
+// counts among what it may be, a global able to hold a slice beside:
 // the reference dies with f.
 struct Holder { t: u8[:] }
 struct H { r: u8[:]& }

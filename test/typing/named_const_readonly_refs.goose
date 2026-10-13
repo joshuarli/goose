@@ -1,5 +1,5 @@
 // `let` globals that compile-time sizes, fill counts and match patterns take
-// at their initializers' values (§11.1), which nothing can write (§4.4): a
+// at their initializers' values, which nothing can write: a
 // read-only reference, a by-value argument, an identity comparison and a
 // writable reference bound to a copy leave them so. A `const` global, which
 // no reference can write, may meet a reference parameter too.

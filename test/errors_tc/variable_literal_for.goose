@@ -1,6 +1,6 @@
 // error: an array literal of variable-size elements is a Txt[]
-// A `for` binds references to variable-size elements (§6.5), so it would
-// view a temporary T[] the literal cannot be (§4.2).
+// A `for` binds references to variable-size elements, so it would
+// view a temporary T[] the literal cannot be.
 struct Txt { body: u8[] }
 fn main() {
     var n = 0;

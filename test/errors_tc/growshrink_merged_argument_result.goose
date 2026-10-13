@@ -1,7 +1,7 @@
 // error: storing a reference that may point into G, which holds a grow-shrink array
 // What a call returns of its parameter's pointee may point wherever the
-// argument may (§9.2): id's result may be the view of the grow-shrink G the
-// argument's other branch gives, which is never stored (§5.2).
+// argument may: id's result may be the view of the grow-shrink G the
+// argument's other branch gives, which is never stored.
 var G: u8[>..<] = "xyz";
 struct K { s: const u8[:] }
 fn id(s: const u8[:]) -> const u8[:] { return s; }

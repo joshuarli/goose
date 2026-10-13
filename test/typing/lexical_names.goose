@@ -1,4 +1,4 @@
-// An unqualified name resolves lexically first (§11.1): to a variable, then
+// An unqualified name resolves lexically first: to a variable, then
 // to a type parameter, then to a nested function, and only a name none of
 // them has to the namespace's and the global declarations. Each of K, F, G
 // and N below is also a global that the name would reach otherwise, and

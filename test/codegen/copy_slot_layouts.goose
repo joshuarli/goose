@@ -1,4 +1,4 @@
-// copy(x) is a fresh value of the slot it lands in (§4.1, §4.2), and an
+// copy(x) is a fresh value of the slot it lands in, and an
 // appended copy(x) adds x's elements, as appending x does. A returned
 // reference's pointee is built from where it lies in its slot's layout: a
 // u8[] as a u8[varint], u8[u8], u8[u16] or u8[..16] element, a varint one as

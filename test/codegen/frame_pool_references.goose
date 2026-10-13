@@ -1,6 +1,6 @@
-// A frame object (C.2) holds its fixed fields as C members, and an `in pool`
-// reference among them stores its offset from the pool's base, range-checked
-// (§3.9), however the literal building it gets the reference: directly, from
+// A frame object holds its fixed fields as C members, and an `in pool`
+// reference among them stores its offset from the pool's base, range-checked,
+// however the literal building it gets the reference: directly, from
 // an if, a match, a block or a call (inlined at -O2), in a nested frame
 // object or one behind a variable-size prefix, or inside a fixed struct or
 // array field. An if's, a match's or a call's value stores the same way into

@@ -1,6 +1,6 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
 // put stores a view of a into the elements it is given, ss's, which v
-// views (§5.1).
+// views.
 fn put(w: (u8[:])[:], a: u8[>..]&) {
     w[0] = a[..];
 }

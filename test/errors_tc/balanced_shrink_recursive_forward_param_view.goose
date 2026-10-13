@@ -1,8 +1,8 @@
 // error: cannot call down: it shrinks G while v is still used, and v may refer into G
 // The call into across, a finished member of the cycle, is judged on the
 // assumption that its call back into down is balanced, so it records no pair
-// for v; once down turns out to clear G, the pair is recorded after all
-// (§5.1, §5.2).
+// for v; once down turns out to clear G, the pair is recorded after all.
+//
 var G: i64[>..<] = [1, 2, 3];
 recursive fn down(v: i64[:], n: i64) -> i64 {
     var t = 0;

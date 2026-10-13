@@ -1,5 +1,5 @@
 // A float's text is the nearest of the fewest digits that read back as the
-// same value of its type (§3.7). Below a power of two the gap to the next
+// same value of its type. Below a power of two the gap to the next
 // float is half the gap above, so that text can lie above the value while the
 // nearest spelling of its length, below it, reads back as another float:
 // 2^89 is 618970019642690137449562112, and its text is 6.189700196426902e+26,

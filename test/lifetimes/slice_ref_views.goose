@@ -3,7 +3,7 @@
 // slice that slot held as the call was made, a class of its own: what the
 // callee returns or stores of it points where that slice did, and whether
 // an array the callee shrinks is the one that slice views is its callers' to
-// judge (§3.8, §9.2). A store into the slot while the callee runs joins it.
+// judge. A store into the slot while the callee runs joins it.
 struct Word { text: u8[:] }
 struct Pt { x: f64 }
 struct Bag { xs: i64[4], items: Pt[>..<] }

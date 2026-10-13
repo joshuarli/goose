@@ -2,7 +2,7 @@
 // pop_first pops the array a reference in the slice its parameter's slot
 // holds points at: read out of that slice, the reference names no array
 // the call can tell, only one the slot's storage outlives, so a may shrink
-// while v views it (§5.1).
+// while v views it.
 fn pop_first(p: (i64[>..]&)[:]&) {
     let r = p[0];
     r.pop();

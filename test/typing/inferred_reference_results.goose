@@ -1,6 +1,6 @@
 // warning: redundant &: c.other is returned by reference without it
 // A function whose result type is inferred takes it from its returns as an
-// un-annotated `let` takes its initializer's (§4.1, §7.1): a reference to a
+// un-annotated `let` takes its initializer's: a reference to a
 // non-fixed value is returned as that reference, and a non-fixed lvalue other
 // than the function's own local by reference, from a `return` or the body's
 // tail alike -- a reference field reached through a parameter, a frame

@@ -1,6 +1,6 @@
 // error: storing a reference rooted at x, which does not outlive the destination: it is reached through a reference that may point into a
 // In f, r may name a's or b's storage, and the caller's a1, behind a, dies
-// after x does (§9.2).
+// after x does.
 struct Node { p: i64? }
 
 fn f(a: Node&, b: Node&, x: i64&, c: bool) {

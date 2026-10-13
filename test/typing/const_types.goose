@@ -1,4 +1,4 @@
-// `const T&` and `const T[:]` (§9.5): read-only through the type. A read-only
+// `const T&` and `const T[:]`: read-only through the type. A read-only
 // reference or slice -- a literal, a slice of a const, a const slot's contents --
 // lands only in slots declared const; parameters and results take either and
 // are checked read-only per instantiation; adding const is implicit.

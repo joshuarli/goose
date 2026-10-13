@@ -1,6 +1,6 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // Inside a recursive cycle only a reference into a pool handed to it, a
-// global or static data may be stored (§7.8). A branch value that may be
+// global or static data may be stored. A branch value that may be
 // either an element of the pool or `x` is rooted at the pool, the deeper of
 // the two, but may still be `x`, which a back edge passes a local of its
 // own activation for.

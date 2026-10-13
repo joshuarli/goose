@@ -1,7 +1,7 @@
 // error: cannot clear ns while nx is still used
 // n is a copy of an element ns names, then maybe linked to another of those
-// elements: beside that link, what n holds is no view the storage held
-// (§5.1).
+// elements: beside that link, what n holds is no view the storage held.
+//
 struct N { v: i64, next: N&? }
 fn follow(ns: N[>..]&, c: bool) {
     var n = ns[1];

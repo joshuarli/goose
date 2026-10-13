@@ -1,6 +1,6 @@
 // A [] or null has no type of its own and binds no type variable: it takes
 // the type the call's other arguments give its parameter, typed ones and
-// literals alike, wherever it stands among them (§7.7), so the arguments'
+// literals alike, wherever it stands among them, so the arguments'
 // order does not decide whether a call resolves.
 struct P { x: i64, y: i64 }
 

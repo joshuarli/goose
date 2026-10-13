@@ -1,6 +1,6 @@
 // Goose compiler — codegen's statements (definitions of CodeGen members,
 // codegen.h): blocks and scopes, loops with their break and continue paths,
-// declarations and assignment, and returns (§7.3, §7.9).
+// declarations and assignment, and returns.
 #pragma once
 
 namespace goose {
@@ -184,9 +184,9 @@ inline string CodeGen::DivisorValue(Node *n, string &ok) {
 // The variables of the specialization being emitted that a reference is
 // made to anywhere in it, whose storage may then change where no assignment
 // names them: the roots of `&` paths (written, or made where an lvalue binds
-// by reference, §4.1), of `.=` bindings, of what a by-reference `for` or
+// by reference), of `.=` bindings, of what a by-reference `for` or
 // `match` binding or a function value's reference parameter is bound to,
-// and of what a user `format` overload is handed (§3.7). An operand that is
+// and of what a user `format` overload is handed. An operand that is
 // no path counts every variable it names.
 inline const set<const VarDef *> &CodeGen::RefdLocals() {
     assert(curspec);
@@ -654,7 +654,7 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         L("gs_pref ", name, " = ", GenPrefVal(init), ";");
         return;
     }
-    // A relative reference variable holds the offset (§3.9): whatever the
+    // A relative reference variable holds the offset: whatever the
     // initializer, its value is the plain reference to encode.
     if (t->kind == TY_REF && t->ref->lenstorage >= 0) {
         L(CT(t), " ", name, ";");
@@ -744,9 +744,9 @@ inline void CodeGen::GenRebind(Assign *a, Loc lv) {
 
 // ------------------------------------------------------------------
 // Returns: normal, forwarding a multi-value call, exiting an inlined
-// body, and long-distance (§7.9).
+// body, and long-distance.
 
-// A multi-value call whose results a return forwards (§7.1) into channels of
+// A multi-value call whose results a return forwards into channels of
 // the returned types `rets`: chans[i] is where result i goes -- the stack a
 // bytes-class value is built on (a resizable one's count into its lenlv), or
 // the lvalue a fixed one lands in, a temporary where it names none. A result
@@ -821,7 +821,7 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
     assert(sp);
     auto &si = *curinfo;
     string retv;
-    // A single call forwards all its return values (§7.1).
+    // A single call forwards all its return values.
     if (vals.size() == 1 && sp->rets.size() > 1) {
         if (auto c = Is<Call>(vals[0]); c && c->rettypes.size() == sp->rets.size()) {
             vector<Dst> chans(sp->rets.size());
@@ -1044,7 +1044,7 @@ inline string CodeGen::CallVal0(Call *c, const string &r0, TypeExpr *want) {
     auto st = rt && IsPlainRef(rt) ? rt->ref->sub : rt;
     if (st && st->kind == TY_ARRAY && et && et->kind == TY_SLICE) {
         // An array result, or the array a reference result points at, passed
-        // where a slice is expected (§3.10): sliced whole where it lies. A
+        // where a slice is expected: sliced whole where it lies. A
         // result lives to the end of the statement like any temporary; one
         // that arrives as a C value is held in a named temp for the slice to
         // point into.

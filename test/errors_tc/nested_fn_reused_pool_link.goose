@@ -3,7 +3,7 @@
 // put's first call finds v pointing into cells, and stores it as a link
 // within cells. pick's second result joins spare to v's roots, which the
 // optional's rebind leaves un-narrowed, so the second call is checked again:
-// its link may be to an element of spare (§3.9, §7.5).
+// its link may be to an element of spare.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];
 var spare: Cell[>..] = [];

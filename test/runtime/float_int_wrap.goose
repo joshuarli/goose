@@ -1,4 +1,4 @@
-// runtime-debug: float to integer with `as!` (§6.3) truncates toward zero
+// runtime-debug: float to integer with `as!` truncates toward zero
 // and wraps modulo 2^64 into the target's width, NaN giving 0, in every
 // build: values inside the i64 range up to its ends, and values past them
 // to beyond 2^64, into each width.

@@ -1,7 +1,7 @@
 // error: cannot clear related while w
 // error: is still used: it may refer into related
 // A slice loaded through &s is what s holds when it is loaded, a view of
-// related after the rebind (§5.2), not the view read out of a field that s
+// related after the rebind, not the view read out of a field that s
 // may have been bound to first. That binding may be a view of other as well,
 // which lets the rebind point s into a grow-shrink array.
 struct Entry { text: u8[:] }

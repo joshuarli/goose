@@ -1,5 +1,5 @@
 // A recursive function returning views into an arena it reaches through a
-// context (§7.8). The cycle's scan cannot follow a view read out of the
+// context. The cycle's scan cannot follow a view read out of the
 // context's arena, so the base case's return, checked first, stands in for
 // the prediction, and each call back into the cycle gives a result rooted at
 // the context it passed on. The context is threaded -- every call back into

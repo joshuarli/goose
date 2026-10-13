@@ -1,6 +1,6 @@
 // error: cannot clear xs while p is still used
 // error: the slice it refers to may point into it
-// p refers to the slice field of h, which views xs (§5.1).
+// p refers to the slice field of h, which views xs.
 struct H { s: i64[:] }
 fn main() {
     var xs: i64[>..] = [1, 2, 3];

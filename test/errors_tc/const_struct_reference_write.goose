@@ -1,5 +1,5 @@
 // error: cannot assign through this path (const, or a read-only instantiation
-// `&c` of a const struct is a `const S&` (§9.5), whatever c was given.
+// `&c` of a const struct is a `const S&`, whatever c was given.
 struct S { n: i64 }
 fn main() {
     let s = S { n: 1 };

@@ -1,4 +1,4 @@
-// A list of strings, the shape from spec A.1. In Goose the whole list is one
+// A list of strings. In Goose the whole list is one
 // contiguous block -- `len | (len | bytes)*` -- built with no allocations at
 // all. In C++ it is one allocation for the vector plus one per string that
 // does not fit the small-string buffer, each with its own malloc header, and

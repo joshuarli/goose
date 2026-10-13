@@ -1,6 +1,6 @@
 // error: outer calls into its recursive cycle while non-fixed-size local names
 // The back edge is in inner, but outer's call to inner is a call into the
-// cycle too, and names is in scope across it (§7.8).
+// cycle too, and names is in scope across it.
 recursive fn outer(n: i64) -> i64 {
     var names: u8[][>..] = [];
     names.push("x");

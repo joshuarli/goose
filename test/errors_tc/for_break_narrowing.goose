@@ -1,6 +1,6 @@
 // error: operator + cannot be applied to i64? and i64
 // A for exits after its last iteration and at each break: o is narrowed at
-// the one, not at the other (§3.8, §6.5).
+// the one, not at the other.
 fn run(var o: i64?, c: bool) -> i64 {
     guard o else { return 0; }
     for i in 3 {

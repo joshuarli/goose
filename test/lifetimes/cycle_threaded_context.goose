@@ -1,10 +1,10 @@
-// A context of borrowed tables (A.6): the tables are locals of the driver,
+// A context of borrowed tables: the tables are locals of the driver,
 // and the recursion reaches them through one struct of references it passes
 // on as it was given. Every call back into the cycle passes `c` on, so in
 // every activation `c` points where the driver's own does, outside the
 // cycle, and views read through it -- the names the walk copies into the
 // text arena -- may be stored into its other tables inside the cycle, as a
-// pool's elements may (§7.8). The same holds for a context passed around a
+// pool's elements may. The same holds for a context passed around a
 // cycle of two functions, for one a nested recursive function captures,
 // and inside a function value's body that calls back into its cycle.
 struct Node { name: const u8[:], depth: i64 }

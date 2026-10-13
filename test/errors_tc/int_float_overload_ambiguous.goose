@@ -1,5 +1,5 @@
 // error: ambiguous call to root: multiple overloads match equally well
-// An integer converts to either float type equally well (§7.1): which
+// An integer converts to either float type equally well: which
 // precision the call computes at is the program's to say, `root(n as f64)`.
 fn root(x: f32) -> f32 { x * 0.5 }
 fn root(x: f64) -> f64 { x * 0.5 }

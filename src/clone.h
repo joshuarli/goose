@@ -394,8 +394,8 @@ inline bool MayReachLocal(Node *n, const VarDef *v) {
     return found;
 }
 
-// The local a function or inlined body builds at its result destination
-// (§7.3): the top-level local that a `return` to `target` hands back in
+// The local a function or inlined body builds at its result destination:
+// the top-level local that a `return` to `target` hands back in
 // position `resultidx`, when no other return there hands back another one,
 // and every other value returned there is built without reaching it. That
 // value is constructed behind the local's elements and moved down over them,

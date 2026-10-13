@@ -1,6 +1,6 @@
 // error: storing a reference rooted at buf, which does not outlive the destination
 // h holds static data and, after the push, a view of buf, which the global
-// g outlives (§9.2, §9.5).
+// g outlives.
 var g: const u8[:] = "";
 fn f() {
     var buf: u8[..8] = "xy";

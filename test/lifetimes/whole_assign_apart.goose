@@ -1,5 +1,5 @@
 // Whole assignments whose right-hand side leaves the array it replaces
-// alone (§4.4): its length read first, other arrays, a slice parameter,
+// alone: its length read first, other arrays, a slice parameter,
 // the fields of the value holding it that are not rebuilt, and a rebind of
 // a reference to it.
 var G: u8[>..] = [];

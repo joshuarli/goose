@@ -1,8 +1,8 @@
-// A value constructed into a slot is built as the slot's type (§4.2, §7.3).
+// A value constructed into a slot is built as the slot's type.
 // str() has no layout of its own for a u8[] slot, so it writes its text
-// straight into the element or field behind the slot's length prefix
-// (§3.7); a call's result takes the slot's length storage; a reference
-// stores a relative slot's offset (§3.9). Every kind of slot is here: the
+// straight into the element or field behind the slot's length prefix;
+// a call's result takes the slot's length storage; a reference
+// stores a relative slot's offset. Every kind of slot is here: the
 // elements of array literals (of variable and grow-only arrays, filled,
 // nested, a field's, returned, pushed, assigned, chosen by an if or a
 // match, of other length storages), an if's or match's value in a local,

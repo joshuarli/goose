@@ -1,6 +1,6 @@
 // error: w is not fixed-size and is not copied implicitly
 // error: pass copy(w) for a copy, or bind it by reference
-// A non-fixed lvalue is not copied implicitly into an element (§4.1).
+// A non-fixed lvalue is not copied implicitly into an element.
 fn main() {
     var words: u8[][>..] = ["ab"];
     var out: u8[][>..] = [];

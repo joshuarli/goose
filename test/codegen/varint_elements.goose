@@ -1,4 +1,4 @@
-// runtime-debug: varint array elements (§3.3, §3.6) are written zigzag-
+// runtime-debug: varint array elements are written zigzag-
 // encoded wherever an element is constructed and decode to i64 wherever one
 // is read: iterated with and without an index, printed, compared, summed
 // through a slice parameter, and returned by reference from a function and

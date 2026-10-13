@@ -1,4 +1,4 @@
-// A value fits a slot of its own type made `const` (§9.5): adding `const` is
+// A value fits a slot of its own type made `const`: adding `const` is
 // implicit everywhere, and a copy of a `const` value is a fresh one. Structs,
 // variants, fixed arrays, floats and bools land in `const` locals, vars,
 // globals, fields, payloads, parameters and results as integers and enums
@@ -114,7 +114,7 @@ fn main_const_struct_slots() {
     // Globals: static data, a var of a const type, a generic one.
     advance();
     print(ORIGIN.n, " ", current.n, " ", PAIR.a + PAIR.b);
-    // A holder keeps its references' roots and their writability (§9.5:
+    // A holder keeps its references' roots and their writability (
     // `const` is shallow): a const one writes through them, a copy too.
     var x = 5;
     const h: Holder = Holder { r: x, s: "local" };

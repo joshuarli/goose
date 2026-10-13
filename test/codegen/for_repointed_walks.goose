@@ -1,5 +1,5 @@
 // runtime-debug: a `for` loads the slices and references on the path to its
-// sequence again on every iteration (§6.5), so a body that re-points one
+// sequence again on every iteration, so a body that re-points one
 // moves the walk to the elements the path leads to now, at the next index,
 // as the length read again does: a walk over variable-size elements too,
 // whose cursor walks there from their start, and one over the elements

@@ -1,10 +1,10 @@
-// Structs and variants holding only pads take what the pads insert (§3.2),
+// Structs and variants holding only pads take what the pads insert,
 // in C as in their layout. A pad with a size is that many bytes in both; a
 // bare pad, which aligns only a field after it, or `pad 0` leaves none, and
-// C, which has no empty structs, gives such a struct or variant one byte
-// (C.2). A struct takes it in its layout too, but a variant takes no bytes
+// C, which has no empty structs, gives such a struct or variant one byte.
+// A struct takes it in its layout too, but a variant takes no bytes
 // behind its ADT's tag, so a fixed-mode ADT's C union has no member for it,
-// and its variant type is never a field or an element (§3.4). Tags here is
+// and its variant type is never a field or an element. Tags here is
 // all tag: element 0's n would lose its top byte to element 1's tag, and
 // `==` would miss it, if its C struct were bigger than its layout. A Gap
 // rendered with an overload for a part (Num) renders each payload from a

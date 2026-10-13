@@ -1,6 +1,6 @@
 // error: storing a reference rooted at c, which does not outlive the destination (§9.2)
 // A reference to a struct holding an i64 by value, stored beside them, may
-// be where an i64 reference read back out of the holder points (§9.5).
+// be where an i64 reference read back out of the holder points.
 struct Cell { v: i64 }
 struct P { cell: Cell&, items: (i64&)[>..] }
 struct S { refs: (i64&)[>..] }

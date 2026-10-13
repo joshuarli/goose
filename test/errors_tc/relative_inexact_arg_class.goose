@@ -4,7 +4,7 @@
 // into xs and into ys, so it may point into either: it points into xs. The
 // exact ys[0] after it shares a root with it and still gets a class of its
 // own, since sharing one would make link's parameters one array and let a
-// link from xs into inner's ys, which dies first, compile (§9.5, §3.9).
+// link from xs into inner's ys, which dies first, compile.
 struct N { v: i64, next: N&<u32>? }
 struct H { r: N& }
 fn link(a: N&, b: N&) { a.next .= b; }

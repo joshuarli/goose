@@ -1,7 +1,7 @@
 // error: cannot call f: it may shrink ys while s is still used, and s may refer into ys
 // The nested function pops one of f's parameters while viewing the other,
 // and f is given h.a, read back out of a copy of an element of hs, which
-// may be ys (§9.5), beside ys itself (§5.1).
+// may be ys, beside ys itself.
 struct H { a: i64[>..]& }
 fn f(a: i64[>..]&, b: i64[>..]&) {
     fn g() {

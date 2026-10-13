@@ -1,4 +1,4 @@
-// Generic type parameters resolve lexically before namespace declarations (§11.1).
+// Generic type parameters resolve lexically before namespace declarations.
 struct T { value: i64 }
 enum U { Empty }
 type V = bool;

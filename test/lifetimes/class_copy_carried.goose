@@ -3,7 +3,7 @@
 // holding one and a call's result that is one, while a view read out of a
 // copy the activation keeps is one of them: a shrink in the callee judges
 // them by what the callee stored there, and leaves the rest to each call,
-// which judges it by its record of the argument's storage (§5.1). Here none
+// which judges it by its record of the argument's storage. Here none
 // of them views the array shrunk.
 struct H { s: const u8[:] }
 struct Q { h: H, n: i64 }

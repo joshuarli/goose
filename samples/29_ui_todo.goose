@@ -1,5 +1,5 @@
 // A small to-do list, and a color mixer for what lies behind it, built with
-// the ui module (docs/stdlib.md): Nuklear's immediate-mode widgets, drawn
+// the ui module: Nuklear's immediate-mode widgets, drawn
 // through gfx.
 //
 // Immediate mode means each frame the program says which windows and

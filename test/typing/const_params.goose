@@ -1,5 +1,5 @@
 // A literal argument to a generic or untyped parameter stays a literal
-// inside the specialization (§7.7): it adapts wherever the parameter is
+// inside the specialization: it adapts wherever the parameter is
 // used, so `push_n(flags, 1, n)` pushes a u8 into a u8 array. The
 // specialization does not depend on the literal's value, so every call
 // with a fitting literal shares it.

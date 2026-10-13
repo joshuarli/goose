@@ -352,7 +352,7 @@ struct Lexer {
                         Set(T_FLTLIT);
                     } else {
                         // Decimal literals cover the full u64 range; a value
-                        // above i64.max is a u64 constant (§2).
+                        // above i64.max is a u64 constant.
                         errno = 0;
                         ival = (int64_t)strtoull(text.c_str(), nullptr, 10);
                         if (errno) Error(cat("integer literal too large for 64 bits: ", text));
@@ -379,7 +379,7 @@ struct Lexer {
         }
     }
 
-    // The rest of a """ string (§2), p just past the opening """. Raw: no
+    // The rest of a """ string, p just past the opening """. Raw: no
     // escapes, and the next """ closes it. On one line, its text is what lies
     // between. Otherwise the opening """ ends its line and the closing one
     // starts its own after nothing but indentation, the margin: the text is

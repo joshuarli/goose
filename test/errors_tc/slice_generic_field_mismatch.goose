@@ -1,6 +1,6 @@
 // error: expected a value of type i64[:], got u8[2]
 // A generic struct literal infers T from its first slice field's array; the
-// second then has to be an array of that T (§3.10, §7.1).
+// second then has to be an array of that T.
 struct V<T> { s: T[:], t: T[:] }
 fn main() {
     var a: i64[2] = [1, 2];

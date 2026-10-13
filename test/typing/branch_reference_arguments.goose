@@ -1,5 +1,5 @@
 // The value of an if, match, block, loop or bare { } is a copy of the branch
-// taken, which a non-fixed variable reaches only through copy() (§4.1). A
+// taken, which a non-fixed variable reaches only through copy(). A
 // reference parameter instead binds each branch by reference, as it binds
 // the variable itself: the callee writes the array the branch names, and a
 // reference it returns is rooted where the branches are.
@@ -27,8 +27,8 @@ fn ctxbind(c: Ctx&, k: bool) {
     r.push(1);
 }
 
-// A function's own locals move out of its body's tail as out of a return
-// (§4.1), branches and breaks included.
+// A function's own locals move out of its body's tail as out of a return,
+// branches and breaks included.
 fn pick(c: bool) {
     var a: i64[>..] = [1];
     var b: i64[>..] = [2, 3];

@@ -1,5 +1,5 @@
 // runtime-debug: A type that reaches itself through references renders
-// below its first level by a function of its own (§3.7), which takes no
+// below its first level by a function of its own, which takes no
 // stack index: it opens no data stacks and runs no format overload. The
 // overloads a rendering does run, those building their text on stacks of
 // their own included, are called from the function printing, above the
@@ -19,7 +19,7 @@ struct N { v: i64, next: N? }
 
 struct Item { price: Money, next: Item? }
 // The price's text, built aside first: the overload below keeps no
-// non-fixed local of its own across the call into its cycle (§7.8).
+// non-fixed local of its own across the call into its cycle.
 fn head(out: u8[>..]&, i: Item&) {
     var text: u8[>..] = [];
     format(text, "(", i.price);

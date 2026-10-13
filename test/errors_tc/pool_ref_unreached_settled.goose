@@ -1,7 +1,7 @@
 // error: .alloc_index exists on reusable pools only
 // Checked standalone, a parameter nothing passes a pool to may be a pool
 // reference or not; rebound to an array that is not a pool, it is not one,
-// whatever a call would pass (§5.4).
+// whatever a call would pass.
 var plain: i64[>..] = [1];
 fn never(var p: i64[>..]&) {
     p .= plain;

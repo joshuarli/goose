@@ -1,7 +1,7 @@
 // References a struct holds beside its grow-shrink tail, or that lead to
 // tables with grow-shrink storage of their own, are stored and kept used
-// across a shrink where their types cannot lie in that storage's elements
-// (§5.2): a view of a grow-only key buffer stored as a dictionary key, a
+// across a shrink where their types cannot lie in that storage's elements:
+// a view of a grow-only key buffer stored as a dictionary key, a
 // value slice of static data kept while the dictionary's slots grow, a
 // reference to a cell loaded out of a struct with a tail of references.
 import std;

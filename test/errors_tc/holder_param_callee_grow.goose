@@ -2,7 +2,7 @@
 // mk's result is built in place at ws's top, and g, which it calls halfway
 // through, pushes into the array its by-value holder parameter's reference
 // points at: for mk's caller, a growth of what mk's holder points into, and
-// for main's, a growth of ws, not of the holder (§1.3(4)). The pushed string
+// for main's, a growth of ws, not of the holder. The pushed string
 // would land inside the element, and reading ws back crashes.
 struct H { r: u8[][>..]& }
 fn id(h: H) -> H { h }

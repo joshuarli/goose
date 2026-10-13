@@ -1,6 +1,6 @@
 // error: returning a reference rooted in mine, which dies with this function
 // What a by-value holder parameter holds is bounded by its class only until
-// the body stores something of its own there (§9.5): a view of the local
+// the body stores something of its own there: a view of the local
 // mine then comes out of it too.
 struct Graph { edges: const i32[:], first: const i32[:] }
 

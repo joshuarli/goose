@@ -1,6 +1,6 @@
 // error: constant integer expression expected for array size
-// A limited array's length changes as it runs; only its capacity is fixed
-// (§3.3).
+// A limited array's length changes as it runs; only its capacity is fixed.
+//
 let room: i64[..4] = [1];
 
 fn main() {

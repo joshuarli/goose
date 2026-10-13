@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks G while v is still used, and v may refer into G
 // v's elements lie in the caller's storage, which f leaves its callers to
-// judge: here ss, whose element views G (§5.1).
+// judge: here ss, whose element views G.
 var G: u8[>..] = [];
 fn f(v: (u8[:])[:]) {
     G.clear();

@@ -1,6 +1,6 @@
 // error: c.args is not fixed-size and is not copied implicitly
 // Branches giving references to non-fixed arrays are copied as their
-// pointees where the if's destination names no type (§3.8, §4.1): the push
+// pointees where the if's destination names no type: the push
 // would land in a copy. `let a = c.args;` alone binds the reference, but a
 // construct's value is no variable binding.
 struct Ctx { args: i64[>..<]&, other: i64[>..<]& }

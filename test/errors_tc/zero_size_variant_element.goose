@@ -1,5 +1,5 @@
 // error: an element cannot be a variant type with no fields: Mode.Off
-// Nor is a variant type with no fields an array's element (§3.4), here in a
+// Nor is a variant type with no fields an array's element, here in a
 // specialization whose type parameter makes it one.
 enum Mode { Off, Level { v: i64 } }
 

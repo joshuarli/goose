@@ -139,7 +139,7 @@ string RelativeTo(const string &path, const string &dir) {
     return rel;
 }
 
-// Where the standard library lives (§11.1): an explicit --stdlib or
+// Where the standard library lives: an explicit --stdlib or
 // GOOSE_STDLIB, else the `stdlib/` directory of the source tree the compiler
 // was built in, found by walking up from the executable.
 vector<string> StdlibDirs(const string &stdlibdir, const string &exe) {
@@ -155,8 +155,7 @@ vector<string> StdlibDirs(const string &stdlibdir, const string &exe) {
     return dirs;
 }
 
-// A package the root file declared with `import name from "source";`
-// (docs/design/packages.md §4.3).
+// A package the root file declared with `import name from "source";`.
 struct DeclaredPackage {
     PackageSource source;
     int pkg = 0;             // Its index in Ast::packages.
@@ -169,13 +168,13 @@ struct DeclaredPackage {
 }
 
 // Parses a root file and, transitively, everything it imports (each file once).
-// `import a.b;` resolves relative to the importing file's package root (§11.1):
+// `import a.b;` resolves relative to the importing file's package root:
 // the root file's directory for the program's own files, a library's
 // directory for its modules; then as a module of a package the root
 // declared; then in the standard library. `import .a.b;` resolves relative to
 // the importing file's directory. `import name from "source";` declares a
 // package in the root file and is a requirement anywhere else, which the
-// root's declaration must satisfy (docs/design/packages.md §4.3). A
+// root's declaration must satisfy. A
 // `rootsource` is the root file's text, which is then not read from disk.
 void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlibdirs,
                   const string *rootsource = nullptr,
@@ -192,7 +191,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
         return (int)ast.packages.size() - 1;
     };
     map<string, DeclaredPackage> declared;
-    // Loads a blessed package (§4.5) once, under its package name among the
+    // Loads a blessed package once, under its package name among the
     // declared ones: from where the compiler's build put it when it is
     // compiled in, else from its source as a declared package would be (a
     // path in the table is relative to the source tree the standard
@@ -322,7 +321,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                             it->second.source.ref.c_str());
                 }
                 imppkg = it->second.pkg;
-                // What a package requires links after it (§5.5).
+                // What a package requires links after it.
                 if (fileidx != 0 && pkg != imppkg) {
                     auto &req = ast.packages[pkg].required;
                     if (std::find(req.begin(), req.end(), imppkg) == req.end())
@@ -335,7 +334,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                 // A file under this package's root; a module of a package the
                 // root declared (`import pkg;` is its entry, `import pkg.sub;`
                 // its sub.goose); a blessed name, its package loaded as if
-                // the root had declared it (§4.5); the standard library.
+                // the root had declared it; the standard library.
                 auto local = cat(ast.packages[pkg].root, imp.path, ".goose");
                 auto first = imp.path.substr(0, imp.path.find('/'));
                 auto rest = imp.path.size() > first.size() ? imp.path.substr(first.size() + 1)
@@ -1173,7 +1172,7 @@ int Main(int argc, char **argv) {
             }
             // A program with C of its own, or asked to be standalone, has the
             // runtime in a unit of its own program, which the headers see as
-            // the standalone runtime (docs/implementation.md, units).
+            // the standalone runtime.
             in.native_support = !includes.empty() || standalone;
             if (in.native_support) {
                 in.rt_head = RuntimeSections({ "runtime.h" });

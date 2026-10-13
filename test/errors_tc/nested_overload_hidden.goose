@@ -1,6 +1,6 @@
 // error: no matching overload for call to twice
 // The nested functions of a name in an inner scope hide the outer scope's
-// set of that name entirely (§11.1).
+// set of that name entirely.
 fn main() {
     fn twice(x: i64) -> i64 { x * 2 }
     {

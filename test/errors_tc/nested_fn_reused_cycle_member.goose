@@ -3,7 +3,7 @@
 // b, a member of a's cycle, reads v; a calls it twice, and the second call
 // shares the check the first made in the same round, which found v with
 // the spare a's rebind gave it in the round before. So does the push after
-// both, which may link into spare (§3.9, §7.8).
+// both, which may link into spare.
 struct Cell { key: i64, next: Cell&<u16 in cells>? }
 var cells: Cell[>..] = [Cell { key: 0 }];
 var spare: Cell[>..] = [Cell { key: 1 }];

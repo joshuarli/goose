@@ -1,7 +1,7 @@
 // A typed for loop's range end or count is one past its binder type's
-// largest value only as literals (§6.5). An end naming constants is a value
+// largest value only as literals. An end naming constants is a value
 // of the binder's type, computed at run time as the same expression is
-// anywhere (§6.2): a signed overflow wraps in a release build, a division
+// anywhere: a signed overflow wraps in a release build, a division
 // by zero aborts. Each end here names globals whose arithmetic would fail
 // as a constant: J * J, L + L and J * 16 overflow an i8, -N negates i8.min
 // and N / -1 divides it by -1, SQ's initializer overflows an i16, ::J * ::J

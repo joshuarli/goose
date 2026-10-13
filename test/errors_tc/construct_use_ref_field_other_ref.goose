@@ -1,5 +1,5 @@
 // error: cannot use s.other in the value assigned to s.r
-// Two reference fields of one type may refer to one array (§4.4).
+// Two reference fields of one type may refer to one array.
 fn twice(xs: const u8[:]) -> u8[>..<] {
     var r: u8[>..<] = [];
     r.append(xs);

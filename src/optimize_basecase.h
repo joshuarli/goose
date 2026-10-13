@@ -56,7 +56,7 @@ struct BaseCaseInliner {
 
     BaseCaseInliner(Optimizer &_o) : o(_o), ast(_o.ast) {}
 
-    // A value of this type is fixed-size (§1.1), so binding one to a local
+    // A value of this type is fixed-size, so binding one to a local
     // adds no storage the function has to own. Conservative wherever the size
     // class needs an instantiation the checker's per-type cache does not have
     // to hand: missing one only skips a rewrite.
@@ -154,7 +154,7 @@ struct BaseCaseInliner {
         basestmts.clear();
         if (!o.caninline || !sp->sf->isrec || !sp->body) return;
         // Binding a non-fixed parameter to a temporary would give a cycle
-        // member a non-fixed local in scope at the self-call, which §7.8
+        // member a non-fixed local in scope at the self-call, which recursion
         // forbids — and copy the value at every level besides, where
         // passing it costs nothing.
         for (auto pv : sp->params) if (!FixedType(pv->type)) return;
@@ -291,7 +291,7 @@ struct BaseCaseInliner {
         auto argnodes = c->ArgNodes();
         if (argnodes.size() != K->params.size()) return nullptr;
         // Passed where a slice is expected, the call was checked as that
-        // slice (§3.10), while the arms would yield the array itself: built
+        // slice, while the arms would yield the array itself: built
         // inside an arm, it would be released before the slice is used.
         if (c->exprtype && c->exprtype->kind == TY_SLICE && K->rets.size() == 1 &&
             K->rets[0]->kind == TY_ARRAY)

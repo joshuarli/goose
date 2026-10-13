@@ -1,6 +1,6 @@
 // error: cannot call across, which shrinks s while mine
 // error: is still used: it may refer into s
-// across was checked before down turned out to pop (§5.2): the call into it
+// across was checked before down turned out to pop: the call into it
 // was judged on down's calls back being balanced, and is judged again once
 // down is checked.
 recursive fn down(s: i64[>..<]&, n: i64) -> i64 {

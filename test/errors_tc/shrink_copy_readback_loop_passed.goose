@@ -1,6 +1,6 @@
 // error: cannot clear out while s is still used
 // A nested function the loop calls after the shrink stores what it is
-// passed, a view of out, into h, which the next iteration reads (§5.1).
+// passed, a view of out, into h, which the next iteration reads.
 struct H { s: const u8[:] }
 fn emit(out: u8[>..]&, hs: H[:]) {
     var h = hs[0];

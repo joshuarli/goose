@@ -1,5 +1,5 @@
-// A call's reference result to a varint is rendered as the i64 it decodes to
-// (§3.6), a value no storage holds: a user format overload taking an i64 by
+// A call's reference result to a varint is rendered as the i64 it decodes to,
+// a value no storage holds: a user format overload taking an i64 by
 // reference is handed that value, read-only, whether the call is inlined or
 // not.
 struct V { n: varint, w: i32 }

@@ -1,6 +1,6 @@
 // error: cannot clear gs while p
 // error: is still used: the slice it refers to may point into gs
-// A local reference to a slice variable keeps its slice live (§5.2).
+// A local reference to a slice variable keeps its slice live.
 fn main() {
     var gs: i64[>..<] = [];
     gs.push(42);

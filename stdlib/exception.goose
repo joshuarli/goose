@@ -1,4 +1,4 @@
-// Exceptions built entirely on return ... from (docs/stdlib.md).
+// Exceptions built entirely on return ... from.
 // Inspired by Lobster's modules/exception.lobster. See the reference for
 // recursion and lifetime restrictions; this does not provide finally.
 namespace exception;

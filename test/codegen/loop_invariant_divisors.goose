@@ -1,4 +1,4 @@
-// Division and remainder by a variable a loop cannot change (§6.2) run as a
+// Division and remainder by a variable a loop cannot change run as a
 // multiply by a number computed before the loop: every unsigned width,
 // signed operands the analysis knows to be nonnegative, divisors of every
 // shape (one, powers of two, odd, near the top of the range), nested loops

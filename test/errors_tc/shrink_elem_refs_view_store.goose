@@ -1,6 +1,6 @@
 // error: cannot clear out while ws is still used: the slice it refers to may point into it
 // f stores a view of out into the elements the slice in ws's slot views,
-// and reads it after the clear (§5.1).
+// and reads it after the clear.
 fn f(out: u8[>..]&, ws: ((const u8[:])[:])&) {
     ws[0] = out[..];
     out.clear();

@@ -1,6 +1,6 @@
 // error: cannot clear out while w is still used
 // w is read out of ws on every iteration, and the loop stores a view of out
-// there after the shrink, which the next one reads (§5.1).
+// there after the shrink, which the next one reads.
 fn emit(out: u8[>..]&, words: (const u8[:])[:]) {
     var ws: (const u8[:])[>..] = [];
     ws.push(words[0]);

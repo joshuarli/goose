@@ -1,7 +1,7 @@
 // error: storing a reference rooted at text, which does not outlive the destination (§9.2)
 // A reference read back out of a local holder may point at anything stored
 // there whose storage can hold its pointee: here a u8 of the shorter-lived
-// text the holder also views (§9.5).
+// text the holder also views.
 struct P { input: const u8[:], items: (u8&)[>..] }
 struct S { refs: (u8&)[>..] }
 fn prep(s: S&, pool: u8[>..]&) {

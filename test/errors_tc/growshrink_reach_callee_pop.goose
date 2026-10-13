@@ -1,8 +1,8 @@
 // error: cannot pop arr while c
 // error: is still used: it may refer into arr
 // arr's argument, t.a, is a whole grow-shrink array read out of the
-// caller's storage behind t, so the pop through arr frees the slot c names
-// (§5.2).
+// caller's storage behind t, so the pop through arr frees the slot c names.
+//
 struct Cell { v: i64 }
 struct Top { a: Cell[>..<]& }
 fn shrink(arr: Cell[>..<]&) {

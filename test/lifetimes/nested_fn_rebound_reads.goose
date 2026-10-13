@@ -1,7 +1,7 @@
 // A nested function, or a function a function value is handed to, is
 // checked for what it finds of the variables outside it that it names: a
 // call finding one pointing, or holding references, elsewhere, or assigned
-// where it was not, is checked apart (§7.5). Each program here is valid at
+// where it was not, is checked apart. Each program here is valid at
 // every call, and each specialization runs.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];

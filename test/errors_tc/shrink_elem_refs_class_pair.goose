@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks a while v is still used, and v may refer into a
 // bs's elements view the array b names, which f tells apart from a's only
-// as its callers do: this call may pass a for both (§5.1).
+// as its callers do: this call may pass a for both.
 struct B { s: u8[:] }
 fn f(a: u8[>..]&, b: u8[>..]&) {
     var bs: B[>..] = [];

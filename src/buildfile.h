@@ -1,6 +1,6 @@
 // Goose compiler — build files: the compiler's settings file (GOOSE_HOME/
 // config) and, later, the sidecar beside a program or a package's entry
-// (docs/design/packages.md §4.7). Read with the Goose lexer, so they look
+// Read with the Goose lexer, so they look
 // like Goose: `//` comments, `key = value;`, strings, integers, true and
 // false, and `[a, b, c]` lists.
 #pragma once

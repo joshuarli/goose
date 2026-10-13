@@ -1,6 +1,6 @@
 // Holders that only ever held null links hold nothing: they may be
 // returned from the function declaring them, and an array may shrink while
-// they are live (§9.2, §9.5).
+// they are live.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 

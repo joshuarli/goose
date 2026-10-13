@@ -1,7 +1,7 @@
 // error: storing a reference rooted at loc, which does not outlive the destination
 // put copies h into a global: at its first call h holds a reference into
-// cells, at the second one into loc too, so that call is checked again
-// (§7.5, §9.2).
+// cells, at the second one into loc too, so that call is checked again.
+//
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];
 struct K { r: Cell&?, n: i64 }

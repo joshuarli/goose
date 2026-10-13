@@ -1,6 +1,6 @@
 // error: returning a reference rooted in buf, which dies with this function
-// take's result views what cur holds, buf's elements, which die with word
-// (§9.2).
+// take's result views what cur holds, buf's elements, which die with word.
+//
 fn take(p: u8[:]&, n: i64) -> u8[:] {
     let r = p[0..n];
     p = p[n..];

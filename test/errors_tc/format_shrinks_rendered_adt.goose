@@ -2,7 +2,7 @@
 // A variable-mode ADT is rendered where it lies, its payload by the variant
 // its tag named as the rendering began. A whole assignment of a resizable one
 // replaces the variant, so q, read after a's overload, would come out of
-// Small's bytes (§3.7, §4.4, §5.1).
+// Small's bytes.
 struct A { v: i64 }
 struct Q { x: i64, y: i64 }
 enum R {

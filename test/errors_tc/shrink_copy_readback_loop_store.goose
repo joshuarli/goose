@@ -1,6 +1,6 @@
 // error: cannot clear out while s is still used
 // The loop's next iteration reads the view of out the store later in its
-// body puts into h, after the shrink (§5.1).
+// body puts into h, after the shrink.
 struct H { s: const u8[:] }
 fn emit(out: u8[>..]&, hs: H[:]) {
     var h = hs[0];

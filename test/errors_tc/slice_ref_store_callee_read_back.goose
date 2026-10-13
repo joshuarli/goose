@@ -1,6 +1,6 @@
 // error: cannot clear b while s is still used: it may hold a reference or slice into it
 // put's argument is read back out of h, so it may name s or s2, each a slot
-// a reference has been made to (§9.5): the call may assign either (§3.8).
+// a reference has been made to: the call may assign either.
 struct H { r: u8[:]& }
 fn put(p: u8[:]&, q: u8[:]) { p = q; }
 fn main() {

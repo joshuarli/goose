@@ -1,6 +1,6 @@
 // error: storing a reference that may point into a grow-shrink array reached through the caller's storage behind t
 // t's argument lies in a grow-shrink array of Tops, which cannot hold a
-// Cell; the Cell t.a[0] names lies in the one t.a leads to (§5.2).
+// Cell; the Cell t.a[0] names lies in the one t.a leads to.
 struct Cell { v: i64 }
 struct Top { a: Cell[>..<]& }
 fn f(t: Top&) {

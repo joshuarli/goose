@@ -1,6 +1,6 @@
 // error: storing a reference rooted at b, which does not outlive the destination
 // A copy read earlier in a loop body than a store into the array holds what
-// that store put there in an earlier iteration (§9.2, §9.5).
+// that store put there in an earlier iteration.
 struct B { v: f64 }
 struct N { v: f64, link: B? }
 fn main() {

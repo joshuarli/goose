@@ -2,7 +2,7 @@
 // error: this one is rooted at r
 // The entry call passes an array and one of its elements, which share a
 // class; the recursive call passes two different arrays, so it cannot reuse
-// a body that took r to be an element of a (§3.3, §7.8).
+// a body that took r to be an element of a.
 var g1: i64[>..] = [1];
 var g2: i64[>..] = [2, 3, 4];
 recursive fn at(a: i64[>..]&, r: i64&, n: i64) -> i64 {

@@ -1,5 +1,5 @@
 // error: type parameter N is bound to the type i64, not a value
-// A default sees its function's type parameters (§7.1), which hide the
+// A default sees its function's type parameters, which hide the
 // global N.
 let N = 2;
 

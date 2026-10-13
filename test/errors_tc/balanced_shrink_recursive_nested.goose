@@ -1,7 +1,7 @@
 // error: cannot call inner, which shrinks s while mine
 // error: is still used: it may refer into s
 // inner's cycle ends inside outer's, whose calls back were only assumed
-// balanced then (§5.2): outer pops, so the call into inner is not balanced.
+// balanced then: outer pops, so the call into inner is not balanced.
 recursive fn outer(s: i64[>..<]&, n: i64) -> i64 {
     let mark = s.len;
     s.push(n);

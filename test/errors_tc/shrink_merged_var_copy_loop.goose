@@ -1,7 +1,7 @@
 // error: cannot clear out while g is still used
 // g merges h, a copy of an element hs names, but the store later in the
-// loop body puts a view of out into h, which the next iteration merges
-// (§5.1).
+// loop body puts a view of out into h, which the next iteration merges.
+//
 struct H { s: const u8[:] }
 fn emit(out: u8[>..]&, hs: H[:], c: bool) {
     var h = hs[0];

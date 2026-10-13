@@ -1,6 +1,6 @@
 // error: returning a reference rooted in st, which dies with this function
-// A slice field bound by reference names the field, which lies in st
-// (§3.8, §4.1), not what the slice in it views.
+// A slice field bound by reference names the field, which lies in st,
+// not what the slice in it views.
 struct S { f: u8[:] }
 var g: u8[>..] = [];
 fn f() -> u8[:]& {

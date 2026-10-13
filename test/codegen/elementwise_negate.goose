@@ -1,5 +1,5 @@
 // runtime-debug: unary minus negates float and signed integer aggregates
-// memberwise (§6.1).
+// memberwise.
 import vec;
 
 struct Nested { first: f32, pad, rows: float2[2], last: f32 }

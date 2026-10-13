@@ -1,6 +1,6 @@
 // error: storing a reference into s, which holds a grow-shrink array
-// A parameter given a value that may point into a grow-shrink array may too
-// (§5.2), whatever root the value kept: put may not store it.
+// A parameter given a value that may point into a grow-shrink array may too,
+// whatever root the value kept: put may not store it.
 struct H { f: u8[:] }
 var related: u8[>..<] = [];
 fn put(h: H&, s: u8[:]) { h.f = s; }

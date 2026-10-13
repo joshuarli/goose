@@ -1,6 +1,6 @@
 // error: the default of parameter y of apply names function value F
 // A member call in a default looks for a function, which the function value
-// F is, hiding the global function F (§7.1).
+// F is, hiding the global function F.
 fn F(x: i64) -> i64 { x * 100 }
 fn g(x: i64) -> i64 { x + 1 }
 let two = 2;

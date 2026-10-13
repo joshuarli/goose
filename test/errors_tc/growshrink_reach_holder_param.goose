@@ -1,8 +1,8 @@
 // error: storing a reference that may point into a grow-shrink array reached through the caller's storage behind t
 // A by-value holder parameter's references point into the caller's storage
-// behind its class (§9.2), which bounds t.a and an element of the array it
+// behind its class, which bounds t.a and an element of the array it
 // leads to: a grow-shrink array, whose slot the pop frees and the push
-// reuses (§5.2).
+// reuses.
 struct Cell { v: i64 }
 struct Top { a: Cell[>..<]& }
 fn f(t: Top) {

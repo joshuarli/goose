@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while w is still used, and w may refer into buf
 // first returns a view it read out of the elements its parameter views,
-// which words views, and names holds a view of buf there (§5.1).
+// which words views, and names holds a view of buf there.
 fn first(ws: (const u8[:])[:]) -> const u8[:] { return ws[0]; }
 fn emit(out: u8[>..]&, words: (const u8[:])[:]) {
     let w = first(words);

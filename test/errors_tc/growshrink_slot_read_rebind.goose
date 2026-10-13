@@ -1,5 +1,5 @@
 // error: re-binding s to a reference that may point into a grow-shrink array (related), where it pointed into none
-// A view read out of a field never points into a grow-shrink array (§5.2),
+// A view read out of a field never points into a grow-shrink array,
 // related included, though related is declared before the read: s, bound
 // to one, points into none, and may not start to.
 struct Entry { text: u8[:] }

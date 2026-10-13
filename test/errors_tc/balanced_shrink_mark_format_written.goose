@@ -1,6 +1,6 @@
 // error: cannot call helper, which shrinks a while v
 // error: is still used: it may refer into a
-// §5.2, §3.7, §4.4: a mark is a `let`, but print hands it to the format
+// a mark is a `let`, but print hands it to the format
 // overload taking an i64 by reference, which makes it 0, after which the
 // resize goes back to 0 rather than to the length the call began with,
 // freeing the element v views.

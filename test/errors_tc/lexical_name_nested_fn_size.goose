@@ -1,5 +1,5 @@
 // error: array size K names a nested function, not a constant
-// The nested function K hides the global K (§3.3, §11.1).
+// The nested function K hides the global K.
 let K = 3;
 
 fn main() {

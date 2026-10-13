@@ -1,7 +1,7 @@
 // error: cannot clear b while r is still used: it may hold a reference or slice into it
 // The load in the loop's third iteration follows the store its second made,
-// which puts b's slice in the caller's slot (§9.2): r may view b, which the
-// clear frees (§5.1).
+// which puts b's slice in the caller's slot: r may view b, which the
+// clear frees.
 fn f(p: u8[:]&, o: u8[:], d: u8[:]) -> u8[:] {
     var i = 0;
     while i < 3 {

@@ -1,5 +1,5 @@
 // Goose compiler — codegen's frames (definitions of CodeGen members,
-// codegen.h): each specialization's C interface (C.3), data-stack top
+// codegen.h): each specialization's C interface, data-stack top
 // caching, scopes with their watermark restores, and the naming of globals
 // and locals.
 #pragma once
@@ -7,9 +7,9 @@
 namespace goose {
 
 // ------------------------------------------------------------------
-// Per-specialization call interface. Signature shape (C.3 order):
+// Per-specialization call interface. Signature shape:
 //   [declared params (resizable by-value ones add a gs_stack*)]
-//   [free-variable references, §7.5]
+//   [free-variable references]
 //   [out-pointers for large fixed returns and additional small returns]
 //   [destination stacks for nonfixed returns]
 //   [int64_t gs_sp].
@@ -71,7 +71,7 @@ inline string CodeGen::SyncReach(FnSpec *callee, const vector<string> &args,
     // or a captured variable's stack (a named result built at its function's
     // destination), may also be the destination of a `return ... from`
     // target up the chain, whose channel a propagating callee builds its
-    // value in (§7.9). A callee with no other way to a stack than its
+    // value in. A callee with no other way to a stack than its
     // arguments (a pool or a captured reference it holds counts as passing
     // one, above) reaches none of them.
     auto &ki = sinfo[callee];
@@ -318,7 +318,7 @@ inline string CodeGen::SigParams(FnSpec *sp, bool decls, bool er) {
             addval(pt, true, "gs_pref", pn);
         } else if (IsResz(pt)) {
             // By-value resizable: the header (or frame object) by value
-            // plus its stack (C.3).
+            // plus its stack.
             EmitCoreTypes();
             add(cat(IsFrameObj(pt) ? CT(pt) : string("gs_rhdr"), " ", pn));
             add(cat("gs_stack *", pn, "_stk"));
@@ -359,7 +359,7 @@ inline string CodeGen::SigParams(FnSpec *sp, bool decls, bool er) {
     for (size_t i = 0; i < sp->rets.size(); i++) {
         if (IsResz(sp->rets[i]) || (er && i == 0)) {
             // Elements go to the destination stack; the count comes back
-            // through the length out-parameter (C.3's element-run form —
+            // through the length out-parameter (element-run form —
             // always for resizables, on demand for variable arrays), or
             // the whole frame object through its out-parameter.
             add(cat("gs_stack *gs_dst", i));
@@ -481,7 +481,7 @@ inline void CodeGen::MarkLoopEnd(int id) {
 // A value built in place at a stack's top that no class caches -- a pushed
 // literal of several fields, say -- has its fields written through a local
 // of its own all the same, and the top stored once after them: nothing may
-// grow or shrink that stack while the value is under construction (§3.10,
+// grow or shrink that stack while the value is under construction (
 // growth during construction), so no other spelling of it moves its top
 // meanwhile, and a call among the fields' initializers syncs it whatever
 // the call reaches.
@@ -806,7 +806,7 @@ inline void CodeGen::EmitExitRestores(int to) {
 // Allocates a data stack index; `forlocal` skips the statement scopes
 // inside the surrounding block so the value survives to that block's end,
 // and no further: past it the index is free for what follows, calls
-// included, which a recursive cycle's scratch locals rely on (§7.8).
+// included, which a recursive cycle's scratch locals rely on.
 // Returns the stack expression; the caller emits `uint8_t *base = X->top;`
 // and registers it via SaveBase.
 inline string CodeGen::AllocStk(bool forlocal) {

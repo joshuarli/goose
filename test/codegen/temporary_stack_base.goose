@@ -1,5 +1,5 @@
 // runtime-debug: a function that builds a value on a data stack takes its
-// stack indices above its callers' (§6.2) also where the checker fitted that
+// stack indices above its callers' also where the checker fitted that
 // value to a fixed-size slot: a str() passed as a slice or returned as a
 // u8[..16], a to_bytes() passed as a slice, a struct formatted into a limited
 // array, a payload a match arm copies out of a reference, a scrutinee copied

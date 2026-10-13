@@ -1,4 +1,4 @@
-// Pool-relative references end to end (§3.9): a global `reusable` pool, a
+// Pool-relative references end to end: a global `reusable` pool, a
 // separate slot array whose links point into it, sentinels built with `self`,
 // and `index_of` turning a link back into the index `free` wants. Every
 // offset here is measured from `kpool`'s base, so the slot array can hold

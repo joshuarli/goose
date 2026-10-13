@@ -1,5 +1,5 @@
 // error: cannot clear out while w is still used
-// emit itself stored a view of out where it reads w from (§5.1).
+// emit itself stored a view of out where it reads w from.
 fn emit(out: u8[>..]&, words: (const u8[:])[:]) {
     words[0] = out[..];
     let w = words[0];

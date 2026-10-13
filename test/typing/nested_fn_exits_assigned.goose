@@ -1,6 +1,6 @@
 // A call of a nested function leaves a variable around it assigned where
 // every exit of the body does: each return, one that a function value's body
-// or a callee's `return from` takes, and the end (§4.4, §7.5). A call reusing
+// or a callee's `return from` takes, and the end. A call reusing
 // an earlier call's check takes the same exits, having assigned what the
 // reused body had by each: the else branch's bail assigns n before it leaves
 // setn, as the then branch's did.

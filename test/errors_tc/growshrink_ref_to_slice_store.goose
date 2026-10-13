@@ -1,7 +1,7 @@
 // error: storing a reference that may point into G, which holds a grow-shrink array
 // A reference to a slice variable leads to what the slice views, the
 // grow-shrink G here: storing it keeps a way into G that no shrink of G
-// looks at (§5.2).
+// looks at.
 var G: u8[>..<] = "xyz";
 struct R { p: u8[:]& }
 fn main() {

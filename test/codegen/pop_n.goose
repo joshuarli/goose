@@ -1,5 +1,5 @@
 // pop_n(n) drops the last n elements of limited, grow-shrink and grow-only
-// arrays (§3.3): the length and, for a resizable array, the stack top move
+// arrays: the length and, for a resizable array, the stack top move
 // down by n elements at once, so what is pushed next lands where the popped
 // elements were.
 

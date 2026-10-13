@@ -1,5 +1,5 @@
 // An un-annotated variable's type is its initializer's, `const` where that
-// value is read-only (§9.5), even where the value's type does not say so: a
+// value is read-only, even where the value's type does not say so: a
 // `u8[:]` result or parameter read-only in this instantiation. So assigning
 // it another read-only slice fits, as it would for `var t: const u8[:]`; in
 // a writable instantiation the same declaration writes through.
@@ -38,7 +38,7 @@ fn split_halves(line: const u8[:]) {
 
 fn pick(xs: i64[>..]&) -> i64[>..]& { return xs; }
 
-// A reference to a non-fixed value binds as one (§4.1), read-only here.
+// A reference to a non-fixed value binds as one, read-only here.
 fn rebind(xs: i64[>..]&, ys: i64[>..]&) -> i64 {
     var r = pick(xs);
     r .= ys;

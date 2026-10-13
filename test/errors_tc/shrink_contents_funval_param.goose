@@ -1,6 +1,6 @@
 // error: cannot clear items while n is still used: it may hold a reference or slice into it; it was read out of h
 // The block stores each's parameter's elements into h, views of items as
-// this call passes them (§5.1, §7.5, §9.5).
+// this call passes them.
 var items: u8[>..];
 fn each<F>(xs: (const u8[:])[:]) { for i in xs.len { F(xs[i]); } }
 fn main() {

@@ -1,7 +1,7 @@
-// The Goose standard library: `os` (docs/stdlib.md): a thin layer over the
-// C in src/runtime/runtime_os.h (spec §7.10) -- enough to write tools and
-// benchmarks. Text goes into builders the caller passes (§2.2 of the
-// design); two-outcome calls return a trailing bool.
+// The Goose standard library: `os`: a thin layer over the
+// C in src/runtime/runtime_os.h -- enough to write tools and
+// benchmarks. Text goes into builders the caller passes;
+// two-outcome calls return a trailing bool.
 
 import std;
 

@@ -1,7 +1,7 @@
 // error: cannot call f: it may shrink a while h is still used, and h may refer into a
 // hv holds a view of a, and g's merged root only bounds what it points at,
-// which may be a, declared further out than b (§9.2): the slice h's holder
-// holds still reads a after f clears it and appends (§5.1).
+// which may be a, declared further out than b: the slice h's holder
+// holds still reads a after f clears it and appends.
 struct H { s: u8[:] }
 fn f(h: H&, xs: u8[>..]&) {
     xs.clear();

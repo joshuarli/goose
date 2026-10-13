@@ -3,7 +3,7 @@
 // The body may shrink any other array, grow the one the sequence lies in, and
 // shrink an array it iterates itself, whose length the loop reads again on
 // every iteration; iterating a copy, a temporary or a reference read out
-// first leaves every array free (§5.1, §5.2, §6.5).
+// first leaves every array free.
 struct Holder { r: i64[>..<]& }
 fn mk() -> i64[3] { [4, 5, 6] }
 fn tail(c: f64[>..<]&) -> f64[:] { c[1..] }

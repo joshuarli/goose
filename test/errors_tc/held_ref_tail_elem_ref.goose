@@ -1,6 +1,6 @@
 // error: cannot call run, which shrinks b while b is still used: a reference into it was stored there
 // A reference of the element type pointing into the tail stops the tail's
-// assignment through a reference to the struct (§5.1).
+// assignment through a reference to the struct.
 struct Pos { y: i32, x: i32 }
 struct B { p: Pos&, r: u32, path: Pos[>..] }
 fn run(s: B&) {

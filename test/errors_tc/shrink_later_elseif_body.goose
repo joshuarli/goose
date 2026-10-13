@@ -1,5 +1,5 @@
 // error: cannot call drop, which shrinks a while w is still used: it may hold a reference or slice into it
-// The same for an else-if's condition and body (§5.1).
+// The same for an else-if's condition and body.
 fn drop(a: i64[>..]&) -> i64 { a.clear(); return 0; }
 fn main() {
     var a: i64[>..] = [1, 2];

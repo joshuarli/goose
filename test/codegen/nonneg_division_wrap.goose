@@ -1,7 +1,7 @@
 // A signed `/`, `%` or `>>` the facts show to be of a nonnegative value, by
 // a positive divisor, is computed unsigned (Binary::nonneg), but only where
 // the operands are the values the machine computed: `i + 1` of an i64 known
-// only to be at least 0 wraps to i64.min in a release build (§6.2), and the
+// only to be at least 0 wraps to i64.min in a release build, and the
 // signed operations then give a negative half, a Euclidean remainder and an
 // arithmetic shift; a divisor `d + 2` wraps to a negative one.
 fn halves(i: i64) -> i64, i64, i64 {

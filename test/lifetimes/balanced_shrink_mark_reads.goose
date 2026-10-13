@@ -1,5 +1,5 @@
-// A resize back to a mark is balanced (§5.2) while nothing can write the
-// mark (§4.4): reading it, passing it by value or to a `const` reference and
+// A resize back to a mark is balanced while nothing can write the
+// mark: reading it, passing it by value or to a `const` reference and
 // binding a `const` reference to it leave it so, and v stays in use across
 // the call. A mark written through a reference makes its resize an ordinary
 // shrink, which a call with no view live across it may still make.

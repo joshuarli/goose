@@ -1,7 +1,7 @@
 // error: storing a reference into x, which holds a grow-shrink array
 // growshrink_elems_clean_first with the calls swapped: whichever call
-// checks k first, the one given an element of others may not store x
-// (§5.2).
+// checks k first, the one given an element of others may not store x.
+//
 struct Pt { x: f64 }
 struct Other { w: i64 }
 struct Bag { n: i64, items: Pt[>..<] }

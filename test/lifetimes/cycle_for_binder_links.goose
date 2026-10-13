@@ -1,8 +1,8 @@
 // A `for` binder over an array of plain references is the reference an
-// element holds, rooted where it points (§9.5), and over a local holder
+// element holds, rooted where it points, and over a local holder
 // where the stores into it put it: so a recursive walk can collect its
 // neighbours into a local array and recurse on each, every one still a link
-// into the array the cycle's entry call gave (§7.8), and a function can
+// into the array the cycle's entry call gave, and a function can
 // return a reference it collected.
 enum Kind { Wall, Space }
 struct Cell { kind: Kind, neighbors: (Cell&<u32>)[..4] }

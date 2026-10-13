@@ -1,5 +1,5 @@
 // error: storing a reference into G, which holds a grow-shrink array: such a reference lives in a variable, is passed down or returned, and is never stored
-// An array literal's elements are storage wherever it lands (§5.2).
+// An array literal's elements are storage wherever it lands.
 var G: i64[>..<] = [1, 2, 3];
 fn f(views: i64[:][2]) {
     G.clear();

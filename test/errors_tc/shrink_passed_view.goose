@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks G while s is still used, and s may refer into G
 // A callee shrinks a global and then uses its slice parameter, which a
-// caller may have given a view of that global (§5.2).
+// caller may have given a view of that global.
 var G: i64[>..<] = [1, 2, 3];
 fn f(s: i64[:]) {
     G.clear();

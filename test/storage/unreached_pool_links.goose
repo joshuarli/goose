@@ -1,5 +1,5 @@
 // A function nothing calls is checked as if called with a reference into
-// the one pool of its parameter's pointee type (§3.9), so one that links its
+// the one pool of its parameter's pointee type, so one that links its
 // parameter into the pool, or asks the pool for its index, compiles whether
 // or not a call is left to it.
 struct Node {

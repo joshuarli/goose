@@ -1,4 +1,4 @@
-// runtime-debug: an integer's text (§3.7), through print, str, format into
+// runtime-debug: an integer's text, through print, str, format into
 // a resizable and into a limited array, and std's format_int and
 // format_uint: every length from 1 to 20 digits, both ends of each width,
 // and padding. format_int takes i64.min's magnitude without overflowing.

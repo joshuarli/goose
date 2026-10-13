@@ -4,7 +4,7 @@
 // a holder of the activation's hold what that storage holds: a shrink in
 // the callee judges them by what the callee stored there, and leaves the
 // rest to each call, which judges it by its record of the argument's
-// storage (§5.1). Here none of them views the array shrunk.
+// storage. Here none of them views the array shrunk.
 struct H { s: const u8[:] }
 struct N { v: i64, next: N&? }
 enum E { Txt { s: const u8[:] }, Nothing { k: i64 } }

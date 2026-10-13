@@ -1,6 +1,6 @@
 // error: cannot clear es while s is still used
 // A view read back out of a holder parameter maps back to what the call's
-// argument viewed (§9.2): s may point into es.
+// argument viewed: s may point into es.
 struct Graph { edges: const i32[:], first: const i32[:] }
 
 fn sub(g: Graph, lo: i32, hi: i32) -> const i32[:] {

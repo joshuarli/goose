@@ -2,7 +2,7 @@
 // copy, out of a matched payload or a `for` binder, or out of a local array
 // filled from a parameter's elements -- is bounded by the parameter's class,
 // so it is returned to callers whose storage outlives it; one of a pointee
-// no literal supplies is not rooted at the callee's local copy either (§9.5).
+// no literal supplies is not rooted at the callee's local copy either.
 struct W { s: const u8[:] }
 struct N { xs: i64[:] }
 enum E { Txt { s: const u8[:] }, Nothing { k: i64 } }

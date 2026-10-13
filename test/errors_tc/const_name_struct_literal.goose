@@ -1,5 +1,5 @@
 // error: array size K names a local variable, not a constant
-// A literal's type is written where the literal is (§3.3): here the `..`
+// A literal's type is written where the literal is: here the `..`
 // would have filled a with 3 elements, the global K's.
 let K = 3;
 

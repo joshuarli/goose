@@ -1,6 +1,6 @@
 // error: cannot clear t while h is still used: a reference into it was stored there
 // A holder that a reference into a tail field was stored into stops the
-// field's shrink while it is used (§5.1).
+// field's shrink while it is used.
 struct S { n: i64, a: u8[>..] }
 struct H { r: u8& }
 fn main() {

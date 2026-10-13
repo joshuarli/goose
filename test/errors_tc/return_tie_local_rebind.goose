@@ -1,6 +1,6 @@
 // error: returning a reference rooted in loc, which dies with this function
 // A same-depth rebind leaves the variable bounded by the root that dies
-// first (§9.2): loc, which ties with the temporary's parameter class at f's
+// first: loc, which ties with the temporary's parameter class at f's
 // outermost depth, whichever binding came first.
 fn make() -> u8[] { return "tmp"; }
 fn f(s: const u8[:]) -> const u8& {

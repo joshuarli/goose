@@ -1,4 +1,4 @@
-// Variant values constructing their ADT (§3.5) from sources other than a
+// Variant values constructing their ADT from sources other than a
 // literal -- a local, a parameter, a field, an element, a global, a call's
 // result (inlined or not, a builtin's, a function value's), a branch, a
 // break -- in every position: a declaration, an assignment, an argument, a

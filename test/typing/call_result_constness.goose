@@ -1,4 +1,4 @@
-// A call's result is as writable as what the function returns (§9.5),
+// A call's result is as writable as what the function returns,
 // wherever the caller puts it: a callee is checked on its own terms, its
 // tail a return whose constness is inferred, so a read-only instantiation
 // typechecks when its result is copied into a by-value field, stored in a

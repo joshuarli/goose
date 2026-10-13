@@ -1,5 +1,5 @@
 // Views passed to functions that shrink an array while still using them,
-// where the caller passes a view of some other array (§5.1, §5.2).
+// where the caller passes a view of some other array.
 var G: i64[>..<] = [1, 2, 3];
 var B: u8[>..] = [];
 struct H { s: u8[:] }

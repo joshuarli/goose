@@ -1,5 +1,5 @@
 // A payload may hold a variant type of its own ADT by value, one declared
-// after it too, as long as no variant ends up holding itself (§3.4): a
+// after it too, as long as no variant ends up holding itself: a
 // variant's payload is validated where it is first needed.
 enum L { A { x: L.C, y: L.B }, B { y: i64 }, C { z: L.B } }
 enum G<T> { A { x: G<T>.B }, B { y: T } }

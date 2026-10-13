@@ -1,6 +1,6 @@
 // A construct whose branches each make a new array is an array, a temporary
 // of the statement around it, so a slice of the whole construct lives until
-// that statement ends (§9.2), where a slice taken in each branch would not
+// that statement ends, where a slice taken in each branch would not
 // outlive the branch (errors_tc/branch_temp_string_argument).
 import std;
 

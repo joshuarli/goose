@@ -3,11 +3,11 @@
 // cache, page table, and connection pool has one of these in it, and it is
 // the mutation-heavy shape Goose's stack discipline is worst placed for:
 // nodes are freed and reallocated in an order that has nothing to do with
-// scope. The `reusable` pool (spec 5.4) is the language's answer -- a
+// scope. The `reusable` pool is the language's answer -- a
 // freelist over a grow-only array, so a freed node's slot comes back on the
 // next alloc without an allocator, and every slot stays a valid Node forever.
 //
-// Every link here is a 4-byte offset measured from `pool`'s base (spec 3.9's
+// Every link here is a 4-byte offset measured from `pool`'s base (the
 // `in pool` form): the list links inside the nodes, and the map's links from
 // `slots` *into* the pool, which a self-relative offset cannot express at all
 // since the two ends are in different arrays. So the map holds references and

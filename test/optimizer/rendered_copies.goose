@@ -1,13 +1,13 @@
 // warning: the construct's value is a copy of gs either way
 // A call's by-value result, and a bare block's, if's or match's value, is a
 // temporary copy where print, str or format renders it around user format
-// overloads (§3.7, §9.2): an overload taking it, or a part of it, by
+// overloads: an overload taking it, or a part of it, by
 // reference is handed that part of the copy, and the parts after an
 // overload's are read from the copy too. An inlined call reduced to the
 // storage its body names, or a construct folded to its branch, must still be
 // a copy there: each overload below writes that storage before it reads its
 // parameter, and every line prints the same at every optimization level. A
-// reference parameter binds the branch itself instead (§4.1).
+// reference parameter binds the branch itself instead.
 struct S { x: i64 }
 struct W { s: u8[:] }
 struct E { k: i64 }

@@ -1,6 +1,6 @@
 // error: returning a reference rooted in buf, which dies with this function
 // h holds static data and, after the push, a view of buf, which dies with
-// f (§9.2, §9.5).
+// f.
 fn f() -> const u8[:] {
     var buf: u8[..8] = "xy";
     var h: const u8[:][>..] = ["static"];

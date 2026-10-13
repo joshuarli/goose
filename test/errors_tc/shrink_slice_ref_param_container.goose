@@ -1,6 +1,6 @@
 // error: cannot clear src while v is still used: it may hold a reference or slice into it
 // load's parameter names a field of an element of entries, whose slice the
-// callee only knows to outlive the caller's storage (§5.1, §9.5): what it
+// callee only knows to outlive the caller's storage: what it
 // loads and returns may view src.
 struct E { text: u8[:] }
 fn load(p: u8[:]&) -> u8[:] { return p; }

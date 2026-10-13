@@ -1,6 +1,6 @@
 // error: cannot clear b while s is still used: it may hold a reference or slice into it
-// The first iteration stores b's view into s through a reference (§3.8), so
-// the second finds s viewing b when it clears b (§5.1).
+// The first iteration stores b's view into s through a reference, so
+// the second finds s viewing b when it clears b.
 fn main() {
     var a: u8[>..] = [];
     a.append("ab");

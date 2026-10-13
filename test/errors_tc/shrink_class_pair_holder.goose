@@ -1,7 +1,7 @@
 // error: cannot call g: it may shrink ys while c is still used, and c may refer into ys
 // c is a copy of k, which holds a reference rooted at r's class, and this
 // call passes ys to both of g's reference parameters: h.a, read back out
-// of a copy of an element of hs, may be ys (§9.5, §5.1).
+// of a copy of an element of hs, may be ys.
 struct H { a: i64[>..]& }
 struct R { r: i64& }
 fn g(xs: i64[>..]&, r: i64&) {

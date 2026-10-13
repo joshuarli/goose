@@ -1,6 +1,6 @@
 // error: cannot call each: it shrinks buf while words is still used, and words may refer into buf
 // The block each runs stores a view of buf into names while each is
-// checked, before the call judges what names holds (§5.1).
+// checked, before the call judges what names holds.
 fn each<F>(out: u8[>..]&, words: (const u8[:])[:]) {
     F();
     out.clear();

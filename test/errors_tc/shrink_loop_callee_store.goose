@@ -2,7 +2,7 @@
 // error: , which the next iteration reaches
 // put stores a view of out into h after the clear, so the next iteration's
 // clear would invalidate it: the loop's next pass sees the store whichever
-// function makes it (§5.1).
+// function makes it.
 struct H { s: const u8[:] }
 fn put(h: H&, s: const u8[:]) { h.s = s; }
 fn main() {

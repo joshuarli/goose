@@ -1,5 +1,5 @@
 // What a root that only bounds a reference leads to may hold a grow-shrink
-// array, whose elements are never stored (§5.2). Each store below stays
+// array, whose elements are never stored. Each store below stays
 // legal beside such an array: the parameter itself, a reference to the whole
 // array, here or passed on, a reference read out of a field, bound to a
 // variable or passed on, a view of storage no grow-shrink array holds, and a
@@ -70,8 +70,8 @@ recursive fn expr(ctx: Ctx&, n: i64) -> CV {
     CV { code: code_of(ctx, original) }
 }
 
-// Views of a grow-only array are stored, and checked where it shrinks
-// (§5.1).
+// Views of a grow-only array are stored, and checked where it shrinks.
+//
 fn grow_only(t: TopG&) {
     var keep: Keep[>..] = [];
     keep.push(Keep { v: t.a.bytes_of() });

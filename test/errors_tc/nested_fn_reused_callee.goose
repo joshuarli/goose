@@ -1,7 +1,7 @@
 // error: storing a reference rooted at loc, which does not outlive the destination
 // relay's first call reuses the check of put that put's own first call made,
 // and stands on what that found of v: the second relay, where v points into
-// loc, checks both again (§7.5).
+// loc, checks both again.
 struct Cell { v: i64 }
 var cells: Cell[>..] = [];
 struct K { r: Cell&?, n: i64 }

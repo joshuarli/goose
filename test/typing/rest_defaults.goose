@@ -1,4 +1,4 @@
-// A struct or variant literal ending in `..` (§4.2): each field it does not
+// A struct or variant literal ending in `..`: each field it does not
 // give takes its declared default, else its type's default value, as
 // default<T>() gives it -- a nested struct with its own declared defaults,
 // fixed and limited arrays, an enum's first variant, a null optional. Named

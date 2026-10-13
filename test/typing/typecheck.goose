@@ -59,7 +59,7 @@ fn varints() {
     print(tiny.len);
 }
 
-// --- elementwise math (§6.1) ------------------------------------------------
+// --- elementwise math ------------------------------------------------
 
 struct Float3 { x: f64, y: f64, z: f64 }
 
@@ -130,7 +130,7 @@ fn assert_narrow(o: i64?) -> i64 {
     o
 }
 
-// abort() ends the program, so a guard's else may consist of it (§6.4, §9.3).
+// abort() ends the program, so a guard's else may consist of it.
 fn abort_narrow(o: i64?) -> i64 {
     guard o else { abort("abort_narrow needs a value"); }
     if o < 0 { exit(2); }                // exit() diverges the same way.
@@ -164,7 +164,7 @@ fn nulls(var o: i64?) -> i64 {
     o + v
 }
 
-// --- limited arrays: refs survive pops (§5.3) -------------------------------
+// --- limited arrays: refs survive pops -------------------------------
 
 fn limited() {
     var lim: i64[..4] = [1, 2, 3];
@@ -179,7 +179,7 @@ fn limited() {
     print(open.len);
 }
 
-// --- grow-only arrays: interior refs/slices stay valid (§5.1) ---------------
+// --- grow-only arrays: interior refs/slices stay valid ---------------
 
 fn growonly() {
     var g: f64[>..] = [];
@@ -200,7 +200,7 @@ fn grow_via_ref() {
 }
 
 // A grow-only local may be cleared where no reference or slice into it can
-// still be named (§5.1): the loop body's slice dies with its iteration, and
+// still be named: the loop body's slice dies with its iteration, and
 // the block's with the block.
 fn clear_scratch() -> i64 {
     var scratch: u8[>..] = [];
@@ -219,7 +219,7 @@ fn clear_scratch() -> i64 {
     return total + scratch.len;
 }
 
-// `pop` and `resize` join `clear` on a grow-only local (§5.1): the slice
+// `pop` and `resize` join `clear` on a grow-only local: the slice
 // lives in its block, and the shrinks stand between phases.
 fn pop_scratch() -> i64 {
     var st: i64[>..] = [];
@@ -237,7 +237,7 @@ fn pop_scratch() -> i64 {
     return total * 10 + st.len;          // 163
 }
 
-// --- reusable pools (§5.4) --------------------------------------------------
+// --- reusable pools --------------------------------------------------
 
 struct Slot { v: i64 = 0, next: i64 = -1 }
 
@@ -269,7 +269,7 @@ fn pools() {
     print(use_spans(gspans));            // 7
 }
 
-// --- relative references within one pool (§3.9, A.2) ------------------------
+// --- relative references within one pool ------------------------
 
 enum Sexp {
     Sym  { name: u8[varint] },
@@ -280,7 +280,7 @@ var spool: Sexp..[>..] = [];
 
 fn build_tree() {
     // push returns a reference to the new element: build children first,
-    // link parents with tiny relative references (A.2).
+    // link parents with tiny relative references.
     let leaf: Sexp..& = spool.push(Sexp.Sym { name: "leaf" });
     spool.push(Sexp.List { kid: leaf });   // Same root: relative store fits.
     for s in spool {
@@ -293,7 +293,7 @@ fn build_tree() {
     }
 }
 
-// --- relative references measured from a named pool (§3.9) -----------------
+// --- relative references measured from a named pool -----------------
 // `in ipool` puts the pool in the type: the offset spans ipool rather than the
 // distance from the field, so a link from another array into the pool is
 // expressible, a value holding only such links copies, and any load yields an
@@ -316,7 +316,7 @@ fn inpool_refs() {
     // root is irrelevant here; only where the value points is.
     islots.push(ISlot { key: 1, node: ipool[0] });
     // Two globals can hold an INode, so a plain reference read back out of
-    // islots would name neither (§9.5); an `in ipool` one names ipool.
+    // islots would name neither; an `in ipool` one names ipool.
     let n = islots[0].node;
     assert(n);
     print(n.key);                        // 1
@@ -336,7 +336,7 @@ fn inpool_refs() {
     print(ispare.index_of(ispare[0]));  // 0
 }
 
-// --- cycle return roots (§7.8) ----------------------------------------------
+// --- cycle return roots ----------------------------------------------
 // A cycle's return roots are the fixpoint over its returns, computed before
 // any body is checked, so a back edge into a function that has returned
 // nothing yet still gets a real root: the parser below hands a parenthesised
@@ -471,7 +471,7 @@ fn generic_fns() {
     forward2(7) { print(it * 3) }
 }
 
-// --- function values and HOFs (§7.6) ----------------------------------------
+// --- function values and HOFs ----------------------------------------
 
 fn repeat<F: fn(i64)>(n: i64) { for i in n { F(i); } }
 fn fold<F>(xs: i64[:], var acc: i64) -> i64 {
@@ -493,7 +493,7 @@ fn hofs() {
     print(captured);
 }
 
-// Plain return inside a function value exits the named function (§7.6).
+// Plain return inside a function value exits the named function.
 fn find_gt(xs: i64[:], limit: i64) -> i64 {
     repeat(xs.len) {
         if xs[it] > limit { return xs[it]; }
@@ -518,7 +518,7 @@ fn multi() {
     print(find_gt([a, b], 1));
 }
 
-// --- case functions with references (§8.2) ----------------------------------
+// --- case functions with references ----------------------------------
 
 enum Node { Num { v: f64 }, Neg { of: Node..&<u16>? } }
 
@@ -539,7 +539,7 @@ fn casedispatch() {
     print(total);
 }
 
-// --- fixed-mode ADTs: in-place variant replacement (§3.5) -------------------
+// --- fixed-mode ADTs: in-place variant replacement -------------------
 
 enum State { Idle, Busy { job: i64 }, Done { code: i16 } }
 
@@ -593,7 +593,7 @@ fn guards_blocks(n: i64) -> i64 {
     return blocked + i;
 }
 
-// --- long-distance returns (§7.9) -------------------------------------------
+// --- long-distance returns -------------------------------------------
 
 fn inner_fail(n: i64) -> i64 {
     if n < 0 { return -1 from process; }
@@ -646,7 +646,7 @@ struct RbNode { key: i64, next: RbNode&<u32>? }
 struct RbCell { tag: i64, n: RbNode }
 
 // One local can hold an RbNode, so a reference read out of the slot array is
-// that pool and can be linked relatively into it (§9.5).
+// that pool and can be linked relatively into it.
 fn readback_local() -> i64 {
     var pool: RbNode[>..] = [];
     var slots: (RbNode&?)[>..] = [];
@@ -751,5 +751,5 @@ fn main_typecheck() {
     shadowing(1);
 }
 
-// Standalone entry; ignored when this file is imported (§11.1).
+// Standalone entry; ignored when this file is imported.
 fn main() { main_typecheck(); }

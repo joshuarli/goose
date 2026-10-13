@@ -1,6 +1,6 @@
 // error: call tricky stores a reference rooted at bx through its parameter d, whose argument may point into outer
 // tricky moves views from t into s and from s into d: what d may get
-// includes what t's storage holds, a reference to bx (§9.2).
+// includes what t's storage holds, a reference to bx.
 struct B { v: i64 }
 fn tricky(d: (B&)[:], s: (B&)[:], t: (B&)[:]) {
     d[0] .= s[0];

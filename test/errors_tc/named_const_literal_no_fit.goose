@@ -1,5 +1,5 @@
 // error: constant 300 does not fit u8
-// §3.1: a named constant adapts only to a type its value fits, as a literal
+// a named constant adapts only to a type its value fits, as a literal
 // does.
 
 let BIG = 300;

@@ -1,7 +1,7 @@
 // error: no matching overload for call to set
-// A reference parameter binds each branch as the storage it names (§4.1):
+// A reference parameter binds each branch as the storage it names:
 // varint fields as a varint&, which an i64& parameter does not bind ("cannot
-// pass varint as i64&", §3.6), as it does not bind either field alone.
+// pass varint as i64&"), as it does not bind either field alone.
 struct V { n: varint, m: varint }
 fn set(r: i64&) { r = 7; }
 fn main() {

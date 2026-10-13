@@ -2,7 +2,7 @@
 // the stores into the holder put there whose storage can hold its pointee:
 // the i64 references a holder collects into a longer-lived pool are stored
 // on into longer-lived storage, though the holder also views a shorter-lived
-// u8 buffer (§9.5).
+// u8 buffer.
 import std;
 
 struct P { input: const u8[:], items: (i64&)[>..] }

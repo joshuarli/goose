@@ -1,7 +1,7 @@
 // error: cannot clear bs: global G may hold a reference into it
 // keep's default is a view of bs's element, which keep stores into G: the
-// call leaving it out stores that view as one passing it would (§5.1,
-// §7.1).
+// call leaving it out stores that view as one passing it would.
+//
 struct B { name: u8[..8] }
 struct H { s: const u8[:] }
 var bs: B[>..] = [];

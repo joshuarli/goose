@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while words is still used, and words may refer into buf
 // put stores a view of out through w2, which may view names too: names'
-// record says so once the call maps f's stores (§5.1).
+// record says so once the call maps f's stores.
 fn put(w2: (const u8[:])[:], x: u8[>..]&) { w2[0] = x[..]; }
 fn f(out: u8[>..]&, words: (const u8[:])[:], w2: (const u8[:])[:]) {
     put(w2, out);

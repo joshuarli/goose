@@ -1,4 +1,4 @@
-// An explicit `&x` where the reference reads as its pointee (§3.8): as the
+// An explicit `&x` where the reference reads as its pointee: as the
 // operand of an operator or a cast, as a value printed or formatted, at a
 // value-typed destination (a binding, a by-value argument, a return, a
 // literal's field or element, an assignment's right-hand side, copy()), as

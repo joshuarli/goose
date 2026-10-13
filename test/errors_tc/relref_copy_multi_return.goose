@@ -1,6 +1,6 @@
 // error: copying a value of type Node, which contains self-relative references, is not supported; construct it in place
 // Forwarding a multi-value call's reference results as values copies their
-// pointees (§7.3, §3.9).
+// pointees.
 struct Node { next: Node&<u32>?, v: i64 }
 fn pair(ns: Node[>..]&) -> Node& {
     let a .= ns.push(Node { v: 1 });

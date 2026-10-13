@@ -1,6 +1,6 @@
 // error: cannot call emit: it shrinks buf while c is still used, and c may refer into buf
 // c refers into what a view the elements words views hold views, which is
-// buf (§5.1).
+// buf.
 fn emit(out: u8[>..]&, words: (const u8[:])[:]) {
     let c = &words[0][1];
     out.clear();

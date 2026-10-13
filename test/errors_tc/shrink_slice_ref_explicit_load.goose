@@ -1,7 +1,7 @@
 // error: cannot clear gs while v
 // error: is still used: it may refer into gs
 // The slice loaded through `&s` is s's slice, rooted where s points, not at
-// the variable s (§3.8, §5.2).
+// the variable s.
 fn main() {
     var gs: i64[>..<] = [42];
     var s = gs[..];

@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while p is still used, and p may refer into buf
-// p's slice views the caller's holders, the first of which views buf
-// (§5.1).
+// p's slice views the caller's holders, the first of which views buf.
+//
 struct H { s: const u8[:] }
 struct P { hs: H[:] }
 fn f(out: u8[>..]&, p: P) {

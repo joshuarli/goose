@@ -1,7 +1,7 @@
 // error: a relative reference must point within the same root as its location
 // error: this reference is rooted at xs
 // Only a variable or parameter of type `T` holds the plain reference where T
-// is a self-relative link (§3.9): the elements of a `T[1]` are links still,
+// is a self-relative link: the elements of a `T[1]` are links still,
 // measured from slots of the local array, which a link into xs cannot be.
 struct Cell { v: i64, links: (Cell&<u32>)[..4] }
 fn keep_first<T>(xs: T[:]) {

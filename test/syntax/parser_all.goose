@@ -421,7 +421,7 @@ fn edge_cases() {
     for x in sl { print(x); }
 }
 
-// extern declarations (§7.10): with and without a C symbol.
+// extern declarations: with and without a C symbol.
 extern fn cbrt(x: f64) -> f64;
 extern "sqrtf" fn sqrt_f32(x: f32) -> f32;
 
@@ -448,5 +448,5 @@ fn main_parser_all() {
     misc();
 }
 
-// Standalone entry; ignored when this file is imported (§11.1).
+// Standalone entry; ignored when this file is imported.
 fn main() { main_parser_all(); }

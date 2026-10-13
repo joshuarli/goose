@@ -11,7 +11,7 @@
 // Build and run (from this directory):
 //   goose -o file_tree.c 26_file_tree.goose && cl file_tree.c && file_tree
 
-// A link to a node: an offset into `nodes` (§3.9). The cells a run gains start
+// A link to a node: an offset into `nodes`. The cells a run gains start
 // out as the default value, null, so the link is optional, but every link
 // inside a directory's run is set before anything reads it.
 type Link = Node&<u32 in nodes>?;

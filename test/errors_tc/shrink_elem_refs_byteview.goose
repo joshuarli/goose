@@ -1,5 +1,5 @@
 // error: cannot clear xs while v is still used: the slices it views may point into it
-// ss holds a byte view of xs's elements, which v views (§5.1).
+// ss holds a byte view of xs's elements, which v views.
 fn main() {
     var xs: i32[>..] = [];
     xs.push(1684234849);

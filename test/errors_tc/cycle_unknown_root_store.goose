@@ -1,5 +1,5 @@
 // error: storing a reference rooted at p, which does not outlive the destination
-// A cycle's result has every root its returns give (§7.8): here an element
+// A cycle's result has every root its returns give: here an element
 // pushed into p, which the global slot outlives. (Passing it down would be
 // fine.)
 struct Cell { v: i64 }

@@ -1,4 +1,4 @@
-// A result is a value, which is never relative (§3.9): a generic result a
+// A result is a value, which is never relative: a generic result a
 // relative type argument gives is the plain reference a load gives, and
 // default<T>() of one is the plain null. Both reach plain destinations (a
 // parameter, a reference variable, index_of) and relative ones of every

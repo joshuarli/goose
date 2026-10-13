@@ -1,4 +1,4 @@
-// runtime-debug: a cast wraps at its own type (§6.3), also when its value is
+// runtime-debug: a cast wraps at its own type, also when its value is
 // stored into a wider slot, so it carries its operand's bounds only where the
 // value provably fits: `k as! i8` of a k in [0, 300) is not k.
 import std;

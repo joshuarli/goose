@@ -1,6 +1,6 @@
 // error: storing a reference rooted at x, which does not outlive the destination
 // Writing a value through a reference read out of a field stores what it
-// holds where that reference points: into a, which x does not outlive (§9.2).
+// holds where that reference points: into a, which x does not outlive.
 struct Node { p: i64? }
 struct R { n: Node& }
 

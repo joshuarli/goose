@@ -3,7 +3,7 @@
 // Every instantiation of a struct checks its fields' types, so a field
 // naming the struct again with a larger type argument needs P<i64[]>, then
 // P<i64[][]>, without end, even though no value of any of them is ever
-// made (§3.2).
+// made.
 struct P<T> { v: T, next: P<T[]>? }
 fn main() {
     let p = P<i64> { v: 1, next: null };

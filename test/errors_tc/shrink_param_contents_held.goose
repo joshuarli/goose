@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while words is still used, and words may refer into buf
-// show is handed words before clr clears out, and reads its element after
-// (§5.1).
+// show is handed words before clr clears out, and reads its element after.
+//
 fn clr(a: u8[>..]&) -> i64 {
     a.clear();
     a.append("ZZZZZZZZ");

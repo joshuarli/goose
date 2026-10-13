@@ -1,7 +1,7 @@
 // error: storing a reference into p, which holds a grow-shrink array
-// stash's parameter names the field of an element of rows itself (§3.8,
-// §4.1), which the clear frees and the push reuses: a reference into a
-// grow-shrink array's elements is never stored (§5.2).
+// stash's parameter names the field of an element of rows itself,
+// which the clear frees and the push reuses: a reference into a
+// grow-shrink array's elements is never stored.
 struct Row { s: u8[:] }
 struct K { p: u8[:]& }
 var buf: u8[>..] = [];

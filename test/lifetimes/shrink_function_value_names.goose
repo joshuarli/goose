@@ -1,5 +1,5 @@
 // A function value's body runs in the middle of a statement of the function
-// calling it (§5.1, §7.6). A variable of that function, or of the one that
+// calling it. A variable of that function, or of the one that
 // wrote the value, is used after a shrink in the body only where code that
 // can name it names it again: a later variable of the same name in the
 // other function is another one.

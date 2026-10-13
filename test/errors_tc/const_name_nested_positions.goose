@@ -1,7 +1,7 @@
 // error: array size K names a local variable, not a constant
 // Wherever a size is in a written type: here in an enum's type argument, in
 // the elements of an array, of a slice, in a struct's type argument and a
-// reference's pointee, through arithmetic and negation (§3.3). Taking the
+// reference's pointee, through arithmetic and negation. Taking the
 // global K made the annotation P<E<i64[5]>[2][:]>&, which &p fits.
 let K = 3;
 

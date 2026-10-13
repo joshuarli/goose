@@ -1,4 +1,4 @@
-// dump-runtime: an ADT match arm may list several variants (§8.1), with a
+// dump-runtime: an ADT match arm may list several variants, with a
 // payload or without, any one of which selects the arm; it binds no payload,
 // but a lone variant beside it still does. Lists match fixed-mode values, a
 // reference and variable-mode elements, and a generic function's list reads

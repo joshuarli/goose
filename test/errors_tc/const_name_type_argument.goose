@@ -1,6 +1,6 @@
 // error: array size K names a local variable, not a constant
-// A type argument is written at the call, where main's K hides the global
-// (§3.3, §7.7).
+// A type argument is written at the call, where main's K hides the global.
+//
 let K = 3;
 
 fn size<T>() -> i64 {

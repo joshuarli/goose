@@ -1,4 +1,4 @@
-// Codegen execution test for the grow-only shrink rules (§5.1) as the
+// Codegen execution test for the grow-only shrink rules as the
 // checker applies them: a shrink is refused only where a reference into
 // the array is still used, or was stored into something still used -- so a
 // scratch buffer clears while unrelated containers of references exist, a

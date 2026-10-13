@@ -1,6 +1,6 @@
 // error: str cannot render A, which reaches itself through references, around the format overload for Tag: give A a format overload of its own
 // The part with an overload may lie at any depth the references of a type
-// that reaches itself through them lead to (§3.7): here in B, which A holds
+// that reaches itself through them lead to: here in B, which A holds
 // a reference to, in an ADT's payload.
 struct Tag { id: i64 }
 fn format(out: u8[>..]&, t: Tag&) { format(out, "#", t.id); }

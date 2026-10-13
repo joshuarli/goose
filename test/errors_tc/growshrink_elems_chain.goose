@@ -2,7 +2,7 @@
 // r may point into bag or into an element of others, so mid's class for x
 // may point into a grow-shrink array that is not its root's own; passed
 // on, k's class names that same array, whatever bag's can hold, and k may
-// not store x (§5.2).
+// not store x.
 struct Pt { x: f64 }
 struct Other { w: i64 }
 struct Bag { n: i64, items: Pt[>..<] }

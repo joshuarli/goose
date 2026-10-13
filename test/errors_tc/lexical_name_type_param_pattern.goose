@@ -1,5 +1,5 @@
 // error: match pattern N names a type parameter, not a constant
-// A match pattern's name resolves as any other does (§8.1, §11.1).
+// A match pattern's name resolves as any other does.
 let N = 4;
 
 fn f<N>(x: N) -> i64 {

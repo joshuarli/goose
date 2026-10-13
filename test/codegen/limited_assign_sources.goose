@@ -1,5 +1,5 @@
-// Assigning to a runtime-capacity limited array `T[..]` (§4.4) from values
-// that construct one without being one (§4.2): a slice field, variable and
+// Assigning to a runtime-capacity limited array `T[..]` from values
+// that construct one without being one: a slice field, variable and
 // reference parameter, copies of a grow-only and a variable array, a fixed
 // and a static-capacity limited array, a fixed-array element, a view into
 // the destination itself, and an empty slice whose data is null -- directly

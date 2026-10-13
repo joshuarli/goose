@@ -1,5 +1,5 @@
 // error: storing a reference rooted at mine, which does not outlive the destination
-// A back edge's result has every root the cycle's returns give (§7.8): the
+// A back edge's result has every root the cycle's returns give: the
 // first `pick` returns a global's element, the second an element of `mine`,
 // which dies with `walk`, so the result may not be kept in the global kept.
 struct Cell { v: i64 }

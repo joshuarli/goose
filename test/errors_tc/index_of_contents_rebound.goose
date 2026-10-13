@@ -1,7 +1,7 @@
 // error: .index_of needs a reference rooted at the array itself
 // error: it was read out of h and may point into a or b
 // h.r is rebound to an element of b where b is not empty, so what is read
-// out of h may be an element of either array (§3.3, §9.5).
+// out of h may be an element of either array.
 struct N { v: i64 }
 struct H { r: N& }
 fn main() {

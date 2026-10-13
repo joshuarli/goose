@@ -1,6 +1,6 @@
 // runtime-debug: print, str and format render a fixed-mode ADT's payload
-// from a copy taken once its tag is read (§3.7): an overload rendering one
-// part may overwrite the value with another variant (§3.5), and the rest of
+// from a copy taken once its tag is read: an overload rendering one
+// part may overwrite the value with another variant, and the rest of
 // the payload is still the variant the rendering began with, wherever the
 // value lies. What follows the value is read where it lies, as it is then.
 
@@ -88,7 +88,7 @@ enum Tone {
 struct Mix { t: Tone, h: Tone.Hi }
 fn format(out: u8[>..]&, h: Tone.Hi) { format(out, "hi", h.f); }
 
-// A payload with `in pool` references, which a copy keeps (§3.9), is
+// A payload with `in pool` references, which a copy keeps, is
 // rendered from the copy like any other.
 struct T { x: i64 }
 struct L { v: i64 }

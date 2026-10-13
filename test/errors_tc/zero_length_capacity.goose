@@ -1,5 +1,5 @@
 // error: field a of struct L cannot be a zero-length array: u8[..0]
-// A limited array of capacity 0 has no element slots either (§3.4).
+// A limited array of capacity 0 has no element slots either.
 struct L { a: u8[..0], b: i64 }
 
 fn main() {

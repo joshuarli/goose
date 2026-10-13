@@ -2,7 +2,7 @@
 // it reaches through outer's `c` and at `e`, read out of b's pointee: both
 // are threaded parameter classes of outer whose ultimate roots are main's
 // locals, outside every cycle, so the cycle may store what is rooted at
-// them (§7.8).
+// them.
 struct Ctx { text: u8[>..]&, keep: (const u8[:])[>..]& }
 struct Box { s: const u8[:] }
 

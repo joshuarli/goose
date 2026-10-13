@@ -1,6 +1,6 @@
 // error: .resize copies its fill value into every slot it adds: copying a value of type Node, which contains self-relative references, is not supported
 // The fill value is built once and copied, so its offset to a[0] would
-// measure from where it was built, not from each slot (§3.9).
+// measure from where it was built, not from each slot.
 struct Node { v: i64, next: Node&<u16>? }
 fn main() {
     var a: Node[..8] = [];

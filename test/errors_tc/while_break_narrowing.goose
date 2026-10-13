@@ -1,6 +1,6 @@
 // error: expected a value of type i64, got i64?
 // A while exits where its condition is false and at each break: o is
-// narrowed at the one, not at the other (§3.8, §6.4).
+// narrowed at the one, not at the other.
 fn run(var o: i64?, c: bool) -> i64 {
     guard o else { return 0; }
     var i = 0;

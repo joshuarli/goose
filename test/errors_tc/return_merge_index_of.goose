@@ -1,7 +1,7 @@
 // error: .index_of needs a reference rooted at the array itself
 // error: this one's root is not known exactly, only that it outlives p
-// A result whose returns give two roots is exact at neither (§9.2): `pick`
-// may return an element of q, so it is no index into p (§3.3), although
+// A result whose returns give two roots is exact at neither: `pick`
+// may return an element of q, so it is no index into p, although
 // the roots are merged at p here.
 struct Node { v: i64 }
 

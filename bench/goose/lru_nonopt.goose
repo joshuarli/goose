@@ -1,7 +1,7 @@
 // lru.goose with non-optional links. The sentinels are the only reason the
 // list links were `Node&<u32>?`: a non-optional relative reference needs a
 // target at construction and the first node of the pool has none. `self`
-// (spec 3.9) gives it one -- the value under construction -- so both
+// gives it one -- the value under construction -- so both
 // sentinels are built pointing at themselves and relinked afterwards, every
 // link is non-optional, and the null test and `assert` narrowing that every
 // load of a link used to need are gone. Everything else, including the key

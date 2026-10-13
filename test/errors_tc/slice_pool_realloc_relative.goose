@@ -1,7 +1,7 @@
 // error: .realloc_slice may move the slice
 // error: contains self-relative references
 // Growing a slice may move its elements, whose self-relative offsets would
-// still measure from where they were (§3.9, §5.4); allocating and freeing
+// still measure from where they were; allocating and freeing
 // never move them.
 struct Node { v: i64 = 0, next: Node&<u16>? }
 fn main() {

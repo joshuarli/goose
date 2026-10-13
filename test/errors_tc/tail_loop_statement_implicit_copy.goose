@@ -1,7 +1,7 @@
 // error: a is not fixed-size and is not copied implicitly
 // A loop that is a function's final expression gives the function's result
 // by `break`; its body's own final expression is a statement, which `a`
-// outlives, so a copy of `a` passed there takes copy() (§4.1).
+// outlives, so a copy of `a` passed there takes copy().
 fn total(xs: i64[>..]) -> i64 { xs.len }
 fn count(c: bool) -> i64 {
     var a: i64[>..] = [1];

@@ -1,6 +1,6 @@
 // error: levels calls into its recursive cycle inside a non-fixed-size array literal, which is under construction
 // The literal is built in place as its elements are evaluated, so the call
-// into the cycle among them runs with it under construction (§7.8): build
+// into the cycle among them runs with it under construction: build
 // the element in a statement of its own first.
 var all: i64[>..] = [];
 recursive fn levels(n: i64) -> i64[>..] {

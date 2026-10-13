@@ -1,5 +1,5 @@
 // error: cannot call f: it shrinks arr while w is still used, and w may refer into arr
-// names holds a byte view of arr's elements (§5.1).
+// names holds a byte view of arr's elements.
 fn f(arr: i32[>..]&, words: (const u8[:])[:]) {
     let w = words[0];
     arr.clear();

@@ -1,7 +1,7 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // What a call returns of its parameter's pointee may be whatever the argument
-// may (§9.2): id(pick) is rooted at the pool, which a cycle may store into
-// (§7.8), but may be `x`, which a back edge passes a local of its own
+// may: id(pick) is rooted at the pool, which a cycle may store into,
+// but may be `x`, which a back edge passes a local of its own
 // activation for.
 struct Cell { v: i64, prev: Cell&? }
 fn id(c: Cell&) -> Cell& { return c; }

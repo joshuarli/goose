@@ -1,5 +1,5 @@
 // error: cannot clear a while v is still used: what it views may hold a reference or slice into it
-// v's elements refer to s, which views a (§5.1).
+// v's elements refer to s, which views a.
 fn main() {
     var a: u8[>..] = [];
     a.append("abc");

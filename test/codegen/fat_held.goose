@@ -1,4 +1,4 @@
-// A fat reference (C.2) held inside another value -- a struct field, an ADT
+// A fat reference held inside another value -- a struct field, an ADT
 // payload, an array element, a captured variable, a global -- carries its
 // stack without the value's name saying which stack that is. A frame that
 // keeps a stack top cached in a local must write it back before a call that

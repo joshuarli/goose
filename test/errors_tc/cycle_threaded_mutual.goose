@@ -1,7 +1,7 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // error: passes c rooted differently from the cycle's entry call
 // f stores a reference into its context's trail, relying on every call back
-// into the cycle passing the context on (§7.8). g, the other member of the
+// into the cycle passing the context on. g, the other member of the
 // cycle, passes f a local of its own instead: the error is at f's store,
 // naming g's call.
 struct Ctx { depth: i64, trail: (i64&)[>..]& }

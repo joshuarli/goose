@@ -1,7 +1,7 @@
 // error: .index_of needs a reference rooted at the array itself
 // error: it was read out of p and may point into the caller's storage behind p
 // One call passes find a holder whose reference may point into os or ns, so
-// what is read out of p is not known to be an element of xs (§3.3, §9.5).
+// what is read out of p is not known to be an element of xs.
 struct N { v: i64 }
 struct H { r: N& }
 fn find(p: H, xs: N[>..]&) -> i64 { return xs.index_of(p.r); }

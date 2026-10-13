@@ -1,5 +1,5 @@
-// x.copy() is copy(x) (§7.1): a fresh copy of the stored value, or of a
-// reference's pointee (§4.1), wherever it stands -- at a value destination,
+// x.copy() is copy(x): a fresh copy of the stored value, or of a
+// reference's pointee, wherever it stands -- at a value destination,
 // as an argument of a builtin or a function, nested in another call's
 // argument, and as a dispatched call's other argument, receiver included.
 // Copies that are changed leave their originals as they were, so the output

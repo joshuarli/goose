@@ -1,6 +1,6 @@
 // A callee's shrinks, growths and stores through the references a by-value
 // holder parameter carries are the caller's, of the arrays those references
-// point into (§5.1, §1.3(4), §9.2), and of nothing else: a view of ys stays
+// point into, and of nothing else: a view of ys stays
 // in use across a call trimming xs, an element of notes is built around a
 // call growing xs, and xs pops while the Box a call stored a view of ys into
 // is still in use.

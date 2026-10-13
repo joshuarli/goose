@@ -7,7 +7,7 @@
 // the process can exit.
 //
 // Children are pushed before their parent, so every link is a small backward
-// offset (spec A.2).
+// offset.
 
 import rng;
 

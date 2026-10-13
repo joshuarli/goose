@@ -1,4 +1,4 @@
-// lru.goose written the way it had to be before spec 3.9's `in pool` form:
+// lru.goose written with indices instead of the `in pool` form:
 // the map slots hold i32 pool indices, and the list links inside the nodes
 // are self-relative, each store subtracting the field's own address and each
 // index-to-reference conversion an `&pool[i]`. Same workload and same output

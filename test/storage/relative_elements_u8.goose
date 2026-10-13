@@ -1,5 +1,5 @@
 // A resize fill of relative-reference elements is stored in each new slot as
-// the offset from that slot, and range-checked there (§3.3, §3.9): one node
+// the offset from that slot, and range-checked there: one node
 // linked from enough slots ends up too far from the last of them.
 
 struct Node { v: i64 }

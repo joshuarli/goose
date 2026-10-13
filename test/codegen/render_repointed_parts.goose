@@ -1,4 +1,4 @@
-// runtime-debug: print, str and format render a value where it lies (§3.7),
+// runtime-debug: print, str and format render a value where it lies,
 // and an overload rendering one part may re-point the slice holding the rest,
 // or rebind a reference on the way to them. The rest are still the parts of
 // the value the rendering began with, which the checker keeps alive: an

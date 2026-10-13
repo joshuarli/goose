@@ -1,6 +1,6 @@
 // error: storing a reference rooted at x, which does not outlive the destination: it is reached through a reference that may point into a1
 // r's root is a merge of a1's and a2's, which only bounds where it points:
-// the field it rebinds may be a1's, which x does not outlive (§9.2).
+// the field it rebinds may be a1's, which x does not outlive.
 struct Node { p: i64? }
 
 fn main() {

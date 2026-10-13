@@ -1,8 +1,8 @@
-// Base64 (RFC 4648 §4: the standard alphabet, '=' padding; docs/stdlib.md).
+// Base64 (RFC 4648 §4: the standard alphabet, '=' padding).
 //
 // The alphabet is computed rather than looked up in a table, every access in
-// the loops is proven in bounds, and encode and decode are `simd fn`s (spec
-// §7.12): the C compiler can then vectorize them, which no x86 vector unit
+// the loops is proven in bounds, and encode and decode are `simd fn`s:
+// the C compiler can then vectorize them, which no x86 vector unit
 // does well for table lookups, and where clang builds for x86-64 they run as
 // AVX2 or AVX-512 code on a CPU that has it.
 

@@ -1,6 +1,6 @@
 // error: cannot assign t while v is still used
 // Through a reference read back out of a holder, the assignment shrinks the
-// storage the reference may name (§5.1, §9.5).
+// storage the reference may name.
 struct S { n: i64, items: i64[>..] }
 struct W { q: S& }
 fn main() {

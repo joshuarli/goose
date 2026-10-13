@@ -34,9 +34,9 @@ or those rows measure an unoptimized compiler.
   python bench/run_bench.py --toolchains clang       # one toolchain
   python bench/run_bench.py --sizes small --reps 1   # a quick pass
   python bench/run_bench.py --skip-build             # re-run what is already built
-  python bench/run_bench.py --report-only            # regenerate results.md from saved
+  python bench/run_bench.py --report-only            # regenerate the report from saved
                                                      # measurements, e.g. after editing
-                                                     # notes.md
+                                                     # the accompanying commentary
 """
 
 import argparse
@@ -60,7 +60,7 @@ RUSTDIR = HERE / "rust"
 # Address space reserved per Goose data stack. The runtime default of 256 MB
 # is below what the large sizes need (up to 536 MB on one stack); 2 GB leaves
 # them 4x headroom and is the largest reservation under which a u32 relative
-# reference stores without a range check (spec 3.9).
+# reference stores without a range check.
 STACK_RESERVE = "GS_STACK_RESERVE=2147483648ull"
 
 SIZE_NAMES = ["small", "medium", "large"]
@@ -683,8 +683,8 @@ def main():
     measured = set()  # "bench/size" keys refreshed by this run
     statefile = GENDIR / "results.json"
 
-    # --report-only regenerates results.md from saved measurements, so the
-    # hand-written commentary in notes.md can be edited without a rebuild.
+    # --report-only regenerates the report from saved measurements, so the
+    # hand-written commentary can be edited without a rebuild.
     if args.report_only:
         if not statefile.exists():
             sys.exit(f"no saved measurements at {statefile}; run without --report-only first")
@@ -771,7 +771,7 @@ def main():
 
     # A partial run (--only, --sizes, --toolchains) refreshes part of the
     # picture; it merges into what previous runs measured rather than replacing
-    # it, so results.md always shows everything measured so far.
+    # it, so the report always shows everything measured so far.
     if not args.report_only:
         if statefile.exists():
             prev = json.loads(statefile.read_text(encoding="utf-8"))
@@ -1125,8 +1125,8 @@ def main():
             W("compilation, and every JIT cell above carries it.")
             W()
 
-    # The numbers above are generated; what they mean is written by hand in
-    # notes.md and carried through verbatim.
+    # The numbers above are generated; their accompanying commentary is
+    # written by hand and carried through verbatim.
     if (HERE / "notes.md").exists():
         W(tc.decode((HERE / "notes.md").read_bytes()).rstrip())
         W()

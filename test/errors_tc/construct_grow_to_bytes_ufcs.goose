@@ -1,8 +1,8 @@
 // error: cannot call wrap, which grows a: the run appended to a is still under construction
 // A callee still being checked grows what its text grows: for image, the
-// output of xs.to_bytes(a), which is to_bytes(xs, a) (§7.1). Its image
+// output of xs.to_bytes(a), which is to_bytes(xs, a). Its image
 // would land inside the run add appends to a, which wrap's result is built
-// in place as (§1.3(4)).
+// in place as.
 recursive fn image(a: u8[>..]&, n: i64) -> u8 {
     let xs: i64[2] = [1, 2];
     xs.to_bytes(a);

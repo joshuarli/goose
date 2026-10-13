@@ -1,5 +1,5 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
-// ss's literal holds a view of a, which v's elements are (§5.1).
+// ss's literal holds a view of a, which v's elements are.
 fn main() {
     var a: u8[>..] = [];
     a.append("abc");

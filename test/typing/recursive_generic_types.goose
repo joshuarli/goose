@@ -1,6 +1,6 @@
 // A generic type's fields may name it again, directly or through other
-// declarations, as long as that reaches finitely many instantiations
-// (§3.2): with the same arguments, others that name none of its
+// declarations, as long as that reaches finitely many instantiations:
+// with the same arguments, others that name none of its
 // parameters, the same ones in another order, or ones with only a
 // reference or const around them. A type nested in its own arguments
 // chains one instantiation per level.
@@ -17,7 +17,7 @@ struct R<T> { v: T, alt: R<u8[]>? }
 struct F<A, B> { a: A, b: B, flip: F<B, A>? }
 
 // A reference around the argument: W<i64> holds a W<i64&>, which holds
-// another, a reference to a reference being that reference (§3.8).
+// another, a reference to a reference being that reference.
 struct W<T> { v: T, r: W<T&>? }
 
 // const around the argument: C<i64> holds a C<const i64>, which holds

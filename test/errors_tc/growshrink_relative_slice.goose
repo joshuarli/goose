@@ -1,7 +1,7 @@
 // error: cannot pop arr while s
 // A slice of relative references is a view of the cells that hold them, so it
-// refers into the grow-shrink array it was taken from like any other slice
-// (§5.2): the pop that gives those cells back is refused while it is live.
+// refers into the grow-shrink array it was taken from like any other slice:
+// the pop that gives those cells back is refused while it is live.
 struct N { v: i64 = 0 }
 type Link = N&<u32 in gpool>?;
 var gpool: N[>..] = [];

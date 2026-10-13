@@ -1,6 +1,6 @@
 // error: cannot clear arr while n is still used: a reference into it was stored there
 // f stores into the node its holder points at, not into the holder: the call
-// puts the store on record for n, which the shrink then finds (§5.1).
+// puts the store on record for n, which the shrink then finds.
 struct Node { p: i64? }
 struct Holder { node: Node& }
 

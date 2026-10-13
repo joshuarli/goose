@@ -1,6 +1,6 @@
 // runtime-debug: base-case inlining binds a self-call's arguments in front of
 // the base case it inlines in the call's place. A slice argument views
-// scratch owned outside the cycle (§7.8), filled just before the call and
+// scratch owned outside the cycle, filled just before the call and
 // released after it: the view stays valid through the caller's statement, as
 // the call would keep it -- while the recursing arm's callee allocates, and
 // while the value the block yields still views it.

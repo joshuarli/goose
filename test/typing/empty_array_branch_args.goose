@@ -1,7 +1,7 @@
-// A construct whose branches are all [] is literal-like, as a lone [] is
-// (§6.4): an argument's first check, made before its parameter's type is
+// A construct whose branches are all [] is literal-like, as a lone [] is:
+// an argument's first check, made before its parameter's type is
 // known, leaves the element type open, and the parameter it is passed to, or
-// whose default it is, gives it one (§4.2).
+// whose default it is, gives it one.
 fn count(xs: i64[]) -> i64 { xs.len }
 fn room(xs: u8[..4]) -> i64 { xs.cap - xs.len }
 fn size<T>(xs: T) -> i64 { xs.len }

@@ -2,7 +2,7 @@
 // error: this reference is rooted at static data
 // A read-only u8 reference rooted at static data may point at a string
 // literal's byte, not only be null, so it is no link within the array the
-// slot is in (§3.9).
+// slot is in.
 struct N { b: const u8&<u16>?, n: i64 }
 fn main() {
     let lit = "abc";

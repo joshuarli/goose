@@ -1,6 +1,6 @@
 // error: cannot call mk3 in the value assigned to G: mk3 uses G
 // The second element's builder would read the elements whose bytes the
-// first element already replaced (§4.4).
+// first element already replaced.
 var G: u8[][>..] = [];
 fn mk3() -> u8[] {
     var n = 0;

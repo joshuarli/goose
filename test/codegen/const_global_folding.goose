@@ -1,4 +1,4 @@
-// Constant globals whose initializers name other constant globals (§11.1)
+// Constant globals whose initializers name other constant globals
 // are static data like literal ones: the named values are spelled out in
 // the initializer, through struct fields, array elements and fills, at an
 // integer constant's narrower type, and across a chain of such globals. A

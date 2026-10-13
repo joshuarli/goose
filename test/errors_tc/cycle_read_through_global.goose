@@ -1,5 +1,5 @@
 // error: storing a reference rooted at left_node, which does not outlive the destination
-// What is read through c outlives the cycle but not a global (§9.2).
+// What is read through c outlives the cycle but not a global.
 import std;
 enum Node {
     Leaf { v: i64 },

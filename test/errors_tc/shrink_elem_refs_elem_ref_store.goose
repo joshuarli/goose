@@ -1,6 +1,6 @@
 // error: cannot clear a while v is still used: the slices it views may point into it
 // A store through a reference to ss's first element puts a view of a
-// there, which v views (§5.1).
+// there, which v views.
 fn main() {
     var a: u8[>..] = [];
     a.append("abc");

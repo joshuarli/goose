@@ -1,5 +1,5 @@
 // A default value holds no self-relative reference but nulls, or none at
-// all in an empty limited array (§3.9): a literal ending in `..` takes one
+// all in an empty limited array: a literal ending in `..` takes one
 // for such a field, and so does an explicit default<T>().
 struct Cell {
     alive: bool,

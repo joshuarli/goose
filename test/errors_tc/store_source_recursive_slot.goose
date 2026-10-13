@@ -1,7 +1,7 @@
 // error: cannot clear a while bx is still used: a reference into it was stored there
 // A recursive function's parameter is a slot of the caller's too: the copy
 // put stores into bx comes out of s, whose binding, not its stores, says
-// it views a (§3.5, §5.1).
+// it views a.
 struct Box { s: u8[:] }
 recursive fn put(p: u8[:]&, b: Box&, n: i64) {
     if n > 0 { put(p, b, n - 1); }

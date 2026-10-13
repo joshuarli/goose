@@ -1,7 +1,7 @@
 // error: cannot pop g while w (bound at
 // error: is still used: it may refer into g
 // The same for a local of the function running the block, a view of the
-// global the block pops (§5.2, §7.6).
+// global the block pops.
 var g: i64[>..<] = [1, 2];
 fn apply<F>() -> i64 {
     let w = g[..];

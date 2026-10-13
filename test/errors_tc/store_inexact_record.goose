@@ -1,7 +1,7 @@
 // error: cannot clear arr while a1 is still used: a reference into it was stored there
 // The rebind through r may have stored into a1 as well as a2, the root it
-// kept, so a1 holds a reference into arr as far as the shrink rule knows
-// (§5.1, §9.2).
+// kept, so a1 holds a reference into arr as far as the shrink rule knows.
+//
 struct Node { p: i64? }
 
 fn main() {

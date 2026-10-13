@@ -1,7 +1,7 @@
 // error: cannot call f, which may shrink b while s
 // error: is still used: it may refer into b
 // f shrinks an array its parameter only leads to: at the call, any array the
-// argument's references may lead to counts as shrunk (§5.2).
+// argument's references may lead to counts as shrunk.
 struct P { x: i64[>..<]&, y: i64[>..<]& }
 fn f(pp: P&) -> i64 { pp.y.pop() }
 fn main() {

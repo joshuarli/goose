@@ -1,5 +1,5 @@
 // error: array size K names a local variable, not a constant
-// As is a variant literal's (§3.3, §3.5).
+// As is a variant literal's.
 let K = 3;
 
 enum E<T> { A { t: T }, B }

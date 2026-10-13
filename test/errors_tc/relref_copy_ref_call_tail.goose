@@ -1,5 +1,5 @@
 // error: copying a value of type Node, which contains self-relative references, is not supported; construct it in place
-// A body's tail is returned as a `return` is (§7.3, §3.9).
+// A body's tail is returned as a `return` is.
 struct Node { next: Node&<u32>?, v: i64 }
 fn pair(ns: Node[>..]&) -> Node& {
     let a .= ns.push(Node { v: 1 });

@@ -1,6 +1,6 @@
 // error: cannot clear result while dict is in scope
 // A break leaves only the innermost loop: the outer one runs on, and its
-// next iteration stores into dict again (§5.1).
+// next iteration stores into dict again.
 fn f(data: u8[:]) -> i64 {
     var result: u8[>..] = [];
     var dict: (const u8[:])[>..] = [];

@@ -1,6 +1,6 @@
 // error: cannot assign through this path (const, or a read-only instantiation
-// A field of a const type is assigned as a whole along its path (§4.4), but
-// `&b.inner` reaches its contents, which are read-only (§9.5).
+// A field of a const type is assigned as a whole along its path, but
+// `&b.inner` reaches its contents, which are read-only.
 struct S { n: i64 }
 struct Box { inner: const S }
 fn main() {

@@ -1,5 +1,5 @@
 // A slice loaded through a reference to a slice is the one in the slot the
-// reference names, as writable as that slice and the reference are (§9.5):
+// reference names, as writable as that slice and the reference are:
 // a slot that is not const takes it, and a write through it lands in the
 // array it views. So through a parameter (a recursive fn's included), a
 // local reference, a call's reference result or one a field holds, into a

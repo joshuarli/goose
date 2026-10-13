@@ -1,9 +1,9 @@
 // runtime-debug: an i64 read out of varint storage -- a varint field or
 // element, reached directly, through a reference to its struct, through a
 // reference to the varint itself, by a match binder or a `for` binder --
-// lies in no i64 storage (§3.6), so a user format overload taking an i64 by
+// lies in no i64 storage, so a user format overload taking an i64 by
 // reference is handed a temporary holding the value it decodes to,
-// read-only (§3.7), by print, str and format alike. A varint that is a part
+// read-only, by print, str and format alike. A varint that is a part
 // of a printed struct or array is a varint, which no i64 overload renders.
 struct V { n: varint, w: i32 }
 struct H { r: const varint& }

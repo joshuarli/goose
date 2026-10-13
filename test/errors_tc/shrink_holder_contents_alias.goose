@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while p is still used, and p may refer into buf
 // ws may name the array p's words view, and f stores a view of out through
-// it: f cannot tell, the call can by names' record (§5.1).
+// it: f cannot tell, the call can by names' record.
 struct P { words: (const u8[:])[:] }
 fn f(out: u8[>..]&, p: P, ws: (const u8[:])[:]) {
     ws[0] = out[..];

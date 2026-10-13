@@ -1,7 +1,7 @@
 // error: references may only be passed down, not stored, inside a recursive cycle
 // error: passes src rooted differently from the cycle's entry call
 // A view of a slice parameter may be stored inside the cycle while every
-// call back into it passes the parameter on (§7.8). This one passes a view
+// call back into it passes the parameter on. This one passes a view
 // of a local array of the activation instead, which the next activation
 // would store into main's tokens: the error is at the store.
 struct Tok { text: const u8[:] }

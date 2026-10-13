@@ -1,6 +1,6 @@
 // error: cannot call f: it shrinks buf while w is still used, and w may refer into buf
 // w was read out of the elements the slice in ws's slot views, where names
-// holds a view of buf (§5.1).
+// holds a view of buf.
 fn f(out: u8[>..]&, ws: ((const u8[:])[:])&) {
     let w = ws[0];
     out.clear();

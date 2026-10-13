@@ -1,7 +1,7 @@
 // error: cannot clear ns while at is still used
 // at is read out of a literal holding a copy of an element ns names and a
 // reference to another of those elements: beside that reference, what the
-// literal holds is no view the storage held (§5.1).
+// literal holds is no view the storage held.
 struct N { v: i64, next: N&? }
 struct Q { n: N, at: N& }
 fn f(ns: N[>..]&) -> i64 {

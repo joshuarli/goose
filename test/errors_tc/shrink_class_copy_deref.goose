@@ -1,5 +1,5 @@
 // error: cannot call f: it shrinks buf while h is still used, and h may refer into buf
-// h is a copy of the holder r names, which views buf (§5.1).
+// h is a copy of the holder r names, which views buf.
 struct H { s: const u8[:] }
 fn f(out: u8[>..]&, r: H&) {
     let h: H = r;

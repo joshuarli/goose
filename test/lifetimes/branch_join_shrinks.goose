@@ -1,6 +1,6 @@
-// Shrinks inside branches joined as a slice (§6.4), and after them in the
-// same statement, where nothing held points into the array shrunk (§5.1,
-// §5.2): another array popped while an element is built with a joined tag,
+// Shrinks inside branches joined as a slice, and after them in the
+// same statement, where nothing held points into the array shrunk:
+// another array popped while an element is built with a joined tag,
 // a grow-shrink pop in a joined branch, and one after a joined view of
 // another array.
 struct R { tag: const u8[:], data: u8[] }

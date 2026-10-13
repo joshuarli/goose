@@ -1,4 +1,4 @@
-// Equality of fixed values made only of integers and bools (§4.5), on both
+// Equality of fixed values made only of integers and bools, on both
 // sides of the size where the C compares the bytes as one run rather than
 // field by field: every field differing in turn, nested structs and arrays,
 // pads (never compared), operands freshly built from loads, array elements

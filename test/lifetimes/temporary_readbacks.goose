@@ -1,7 +1,7 @@
 // A literal or a call result is a temporary, and a view of it is rooted
 // there, but what it holds is not: a slice read out of one points where the
 // literal's elements or the callee's result point, here static data, so it
-// can be kept (§9.5).
+// can be kept.
 struct Named { name: const u8[:] }
 enum Item { Tagged { name: const u8[:] }, Blank }
 struct Nums { xs: const i64[:] }

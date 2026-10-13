@@ -1,9 +1,9 @@
 // runtime-debug: an ADT's payloads holding self-relative references are read
-// by reference, which only variable mode offers (§3.5, §3.9): a match binds
-// them with `&` (§8.1) and case functions take the variant by reference
-// (§8.2), in a list, in a tree whose links are never null, in a ring started
-// with `self` (§3.9), and where a struct holds its links in a variable-mode
-// field. Links `in pool` copy (§3.9), so a fixed-mode ADT holding them binds
+// by reference, which only variable mode offers: a match binds
+// them with `&` and case functions take the variant by reference,
+// in a list, in a tree whose links are never null, in a ring started
+// with `self`, and where a struct holds its links in a variable-mode
+// field. Links `in pool` copy, so a fixed-mode ADT holding them binds
 // its payloads by value, dispatches to by-value cases, is read by index and
 // is overwritten in place by another variant.
 
