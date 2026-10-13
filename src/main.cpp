@@ -721,6 +721,7 @@ int Main(int argc, char **argv) {
         }
         else if (arg == "--check") nocgen = true;
         else if (arg == "--build-report" && i + 1 < argc) reportfile = argv[++i];
+        else if (arg == "--build-report-deps") report_dependencies = true;
         else if (arg == "--units") unitsbuild = true;
         else if (arg == "--rebuild") rebuildflag = true;
         else if (arg == "--verify-reuse") verifyflag = true;
@@ -803,7 +804,7 @@ int Main(int argc, char **argv) {
         string a = argv[i];
         if (a == "--") break;
         if (a == "-o" || a == "--build-report" || a == "--cc") { i++; continue; }
-        if (a == "--units" || a == "--rebuild" || a == "--verify-reuse" || a == "-v" ||
+        if (a == "--build-report-deps" || a == "--units" || a == "--rebuild" || a == "--verify-reuse" || a == "-v" ||
             a == "--dry-run" || a.empty() || a[0] != '-')
             continue;
         contractargs.push_back(a);
@@ -862,6 +863,10 @@ int Main(int argc, char **argv) {
     }
     if (unitsbuild && standalone) {
         fprintf(stderr, "goose build --units takes no --standalone\n");
+        return 1;
+    }
+    if (report_dependencies && reportfile.empty()) {
+        fprintf(stderr, "--build-report-deps needs --build-report FILE\n");
         return 1;
     }
     if (files.size() > 1 && !multitest) {
@@ -989,7 +994,7 @@ int Main(int argc, char **argv) {
         if (parseonly) return 0;
         if (g_build_report) {
             g_build_report->rec.Enter(Phase::ReportCollection);
-            DepsBeforeCheck(ast);
+            if (g_deps) DepsBeforeCheck(ast);
             BuildReportPhase(Phase::CheckSpecialize);
         }
         TypeCheckProgram(ast, library);

@@ -3,8 +3,8 @@
 
   python test/scale/predict.py OLD.json NEW.json [--list N] [--json]
 
-OLD and NEW are `goose --build-report` files of a program before and after an
-edit (extensions.dependencies). A context is named by its key. From the two:
+OLD and NEW are `goose --build-report FILE --build-report-deps` files of a program
+before and after an edit (extensions.dependencies). A context is named by its key. From the two:
 
   predicted  the contexts present in both with a dependency of the old report
              that the new program does not bear out, and the contexts that
