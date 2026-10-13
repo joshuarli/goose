@@ -68,6 +68,8 @@ theorem hasTy_target_dom {G : Nat} {st : Store} {v : Val} {T : Ty} {r : RootInst
   | bool => exact absurd hr.isRef (flat_not_ref h)
   | arr E k => exact absurd hr.isRef (flat_not_ref h)
   | grow E => exact absurd hr.isRef (flat_not_ref h)
+  | growshrink E => exact absurd hr.isRef (flat_not_ref h)
+  | limited E capacity => exact absurd hr.isRef (flat_not_ref h)
   | structT sid ts => exact absurd hr.isRef (flat_not_ref h)
 
 variable {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
