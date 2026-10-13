@@ -21,6 +21,7 @@ def checkEntry (m : Module) : V Unit := do
     reject .type s!"the entry {impl.name} must take no parameters and return nothing"
 
 def validate (m : Module) : V Unit := do
+  checkStructTables m
   checkEntry m
   forAll (List.range m.globals.size) fun g =>
     match m.globals[g]? with

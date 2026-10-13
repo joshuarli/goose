@@ -49,6 +49,7 @@ inductive Val
   | bool (b : Bool)
   | unit
   | fixed (elems : Array Val)
+  | record (id : StructId) (fields : Array Val)
   /-- The element type is part of the value, so growing an empty array cannot
   change which array type it has. -/
   | resizable (elem : Ty) (elems : Array Val)
@@ -82,11 +83,16 @@ def Val.elems? : Val → Option (Array Val)
   | .resizable _ es => some es
   | _ => none
 
+/-- Storage selectors may traverse record fields; array operations may not. -/
+def Val.children? : Val → Option (Array Val)
+  | .record _ fs => some fs
+  | v => v.elems?
+
 /-- The value at `path` inside a value. -/
 def Val.get? : Val → List Nat → Option Val
   | v, [] => some v
   | v, i :: rest =>
-    match v.elems? with
+    match v.children? with
     | none => none
     | some es =>
       match es[i]? with
@@ -106,6 +112,12 @@ def Val.modifyAt? : Val → List Nat → (Val → Option Val) → Option Val
     if h : i < es.size then
       match es[i].modifyAt? rest f with
       | some e => some (.resizable E (es.set i e))
+      | none => none
+    else none
+  | .record sid fs, i :: rest, f =>
+    if h : i < fs.size then
+      match fs[i].modifyAt? rest f with
+      | some v => some (.record sid (fs.set i v))
       | none => none
     else none
   | _, _ :: _, _ => none

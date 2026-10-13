@@ -1,6 +1,6 @@
 import Std.Data.HashMap
 import Goose.Share.Quotient
-import Goose.Share.Writer
+import Goose.Core.Writer
 
 /-!
 Proposing a quotient, and rebuilding the witnesses of a given one.
@@ -70,7 +70,7 @@ group makes the result the coarsest grouping that is consistent with itself,
 so a call cycle through several implementations merges as a whole. -/
 def classify (m : Module) : Array Nat := Id.run do
   let n := m.impls.size
-  let ty := Write.tyIndex m.types
+  let ty := Goose.Core.Writer.tyIndex m.types
   let mut cls : Array Nat := Array.replicate n 0
   let mut count := if n == 0 then 0 else 1
   for _ in [0:n + 1] do
@@ -80,7 +80,7 @@ def classify (m : Module) : Array Nat := Id.run do
     let mut next : Array Nat := Array.mkEmpty n
     for h : f in [0:n] do
       let impl := m.impls[f]'(Membership.get_elem_helper h rfl)
-      let key := s!"{cls.getD f 0}|{Write.impl ty (renImpl r impl)}"
+      let key := s!"{cls.getD f 0}|{Goose.Core.Writer.impl ty (renImpl r impl)}"
       match ids[key]? with
       | some k => next := next.push k
       | none =>

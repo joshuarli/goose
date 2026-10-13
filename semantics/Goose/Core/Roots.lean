@@ -334,6 +334,7 @@ def rpPlace (env : PEnv) : Place → P (List RootRef)
   | .var x => pure [.local x]
   | .global g => pure [.global g]
   | .deref e => rpExpr env e
+  | .field owner _ => rpPlace env owner
   | .elem v i _ => do
     let rho ← rpView env v
     let _ ← rpExpr env i
@@ -421,6 +422,9 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     let (rho, _) ← rpBlockValue env [] b
     pure rho
   | .arrLit _ es => do
+    rpExprs env es
+    pure []
+  | .structLit _ es => do
     rpExprs env es
     pure []
   | .fill _ a => do

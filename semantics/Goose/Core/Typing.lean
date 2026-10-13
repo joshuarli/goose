@@ -50,6 +50,53 @@ def forAll (l : List α) (f : α → V Unit) : V Unit :=
     f a
     forAll rest f
 
+mutual
+/-- Nominal payloads must be the field types of this module's declaration. -/
+def checkResolvedType (m : Module) : Ty → V Unit
+  | .structT sid fs => do
+    unless m.profile == .shrink do reject .type "structs require core-shrink"
+    unless m.structType? sid == some (.structT sid fs) do
+      reject .type "struct type disagrees with its nominal descriptor"
+    checkResolvedTypes m fs
+  | .arr e _ | .grow e | .ref _ e | .slice _ e => checkResolvedType m e
+  | .tuple ts => checkResolvedTypes m ts
+  | .int _ | .bool | .unit => pure ()
+
+def checkResolvedTypes (m : Module) : TyList → V Unit
+  | .nil => pure ()
+  | .cons t ts => do checkResolvedType m t; checkResolvedTypes m ts
+end
+
+def Module.fixedByteSize? (m : Module) : Ty → Option Nat
+  | .int t => some (t.bits / 8)
+  | .bool => some 1
+  | .arr e k => (m.fixedByteSize? e).map (k * ·)
+  | .structT sid fs => do
+    if m.structType? sid != some (.structT sid fs) then none
+    else (m.structs[sid]?).map (·.byteSize)
+  | _ => none
+
+/-- Logical field types and byte extents are checked independently of the exporter. -/
+def checkStructTables (m : Module) : V Unit := do
+  if m.profile == .pilot && !m.structs.isEmpty then reject .type "core-pilot has no struct table"
+  for d in m.structs do
+    if d.byteSize == 0 then reject .type "struct byte size must be positive"
+    let mut endOffset := 0
+    for f in d.fields do
+      checkResolvedType m f.ty
+      unless f.ty.flat do reject .type "struct fields must be flat fixed values"
+      let some bytes := m.fixedByteSize? f.ty | reject .type "struct field has no fixed byte size"
+      if bytes == 0 then reject .type "zero-size struct field"
+      if f.byteOffset < endOffset then reject .type "struct fields overlap or are out of order"
+      let fieldEnd := f.byteOffset + bytes
+      if fieldEnd > d.byteSize then reject .type "struct field extends beyond its byte size"
+      endOffset := fieldEnd
+  forAll m.types.toList (checkResolvedType m)
+  for g in m.globals do checkResolvedType m g.ty
+  for impl in m.impls do
+    for v in impl.vars do checkResolvedType m v.ty
+    for r in impl.results do checkResolvedType m r
+
 /-! ### Type predicates -/
 
 /-- What a reference may point to. -/
@@ -57,6 +104,7 @@ def Ty.refTarget : Ty → Bool
   | .int _ | .bool => true
   | .arr e _ => e.flat
   | .grow e => e.flat
+  | .structT _ fs => fs.flat
   | _ => false
 
 /-- Types a variable, parameter or global may have. -/
@@ -64,6 +112,7 @@ def Ty.storable : Ty → Bool
   | .int _ | .bool => true
   | .arr e _ => e.flat
   | .grow e => e.flat
+  | .structT _ fs => fs.flat
   | .ref _ t => t.refTarget
   | .slice _ e => e.flat
   | _ => false
@@ -228,7 +277,41 @@ structure TEnv where
 /-- The state is the next variable to be declared. -/
 abbrev T := StateT Nat V
 
+/-- Effective capabilities of one place, computed while typing its owner once. -/
+structure PlaceInfo where
+  ty : Ty
+  bindingWritable : Bool
+  contentsWritable : Bool
+
 def rej (r : Rule) (msg : String) : T α := throw ⟨r, msg⟩
+
+/-- A plain reference cannot retain different whole-binding and contents capabilities. -/
+def checkFieldReference (p : Place) (info : PlaceInfo) : T Unit :=
+  match p, info.ty with
+  | .field .., .structT .. | .field .., .arr .. =>
+    if info.bindingWritable != info.contentsWritable then
+      rej .type "split aggregate field references are outside this slice"
+    else pure ()
+  | _, _ => pure ()
+
+def checkType (env : TEnv) (t : Ty) : T Unit := fun n => do
+  checkResolvedType env.mod t
+  pure ((), n)
+
+/-- Resolved types carry the descriptor's field types, never a second nominal definition. -/
+def structDef (env : TEnv) (t : Ty) : T StructDef := do
+  unless env.mod.profile == .shrink do rej .type "structs require core-shrink"
+  match t with
+  | .structT sid _ =>
+    unless env.mod.structType? sid == some t do rej .type "struct type disagrees with its nominal descriptor"
+    let some d := env.mod.structs[sid]? | rej .type "struct id outside the descriptor table"
+    pure d
+  | _ => rej .type "a struct operation on another type"
+
+def structField (env : TEnv) (t : Ty) (i : Nat) : T StructField := do
+  let d ← structDef env t
+  let some f := d.fields[i]? | rej .type "field index outside the struct descriptor"
+  pure f
 
 def checkOrg (env : TEnv) (o : OriginId) : T Unit :=
   if o < env.mod.origins.size then pure () else rej .type s!"origin {o} outside the origin table"
@@ -363,14 +446,14 @@ def argMode : Arg → Mode
 
 mutual
 
-def tyPlace (env : TEnv) : Place → T (Ty × Bool)
+def tyPlace (env : TEnv) : Place → T PlaceInfo
   | .var x => do
     let lv ← varOf env x
-    pure (lv.ty, lv.kind == .mutable)
+    pure ⟨lv.ty, lv.kind == .mutable, true⟩
   | .global g => do
     if g < env.globalLimit then
       match env.mod.globals[g]? with
-      | some gl => pure (gl.ty, gl.kind == .mutable)
+      | some gl => pure ⟨gl.ty, gl.kind == .mutable, true⟩
       | none => rej .type s!"global {g} outside the global table"
     else rej .type s!"global {g} is not initialized at this point"
   | .deref e => do
@@ -380,20 +463,27 @@ def tyPlace (env : TEnv) : Place → T (Ty × Bool)
         let t ← tyExpr env e
         if t.isRefSlice then rej .type "a reference to a slice variable is not a value" else pure t)
     match src with
-    | .ref m t => pure (t, m == .mutable)
+    | .ref m t => pure ⟨t, m == .mutable, m == .mutable⟩
     | _ => rej .type "dereference of a value that is not a reference"
   | .elem v i o => do
     checkOrg env o
     let (el, mu) ← tyView env v
     let _ ← requireInt "an index" (← tyExpr env i)
-    pure (el, mu)
+    pure ⟨el, mu, mu⟩
+  | .field owner i => do
+    let ownerInfo ← tyPlace env owner
+    let f ← structField env ownerInfo.ty i
+    pure ⟨f.ty, ownerInfo.contentsWritable && f.binding == .mutable,
+      ownerInfo.contentsWritable && f.contents == .mutable⟩
 
 def tyView (env : TEnv) : View → T (Ty × Bool)
   | .of p => do
-    let (t, mu) ← tyPlace env p
+    let placeInfo ← tyPlace env p
+    let t := placeInfo.ty
+    let mu := placeInfo.contentsWritable
     match t with
-    | .arr el _ => pure (el, mu || p.isOwner)
-    | .grow el => pure (el, mu || p.isOwner)
+    | .arr el _ => pure (el, mu)
+    | .grow el => pure (el, mu)
     | _ => rej .type "a view of something that is not an array"
   | .val e => do
     match (← tyExpr env e) with
@@ -410,10 +500,14 @@ def tyExpr (env : TEnv) : Expr → T Ty
     if t.inRange n then pure (.int t) else rej .type s!"constant {n} out of range"
   | .bool _ => pure .bool
   | .read p => do
-    let (t, _) ← tyPlace env p
+    let placeInfo ← tyPlace env p
+    let t := placeInfo.ty
     if t.readable then pure t else rej .type "a read of a value that cannot be copied"
   | .ref m p => do
-    let (t, mu) ← tyPlace env p
+    let placeInfo ← tyPlace env p
+    let t := placeInfo.ty
+    let mu := placeInfo.bindingWritable
+    checkFieldReference p placeInfo
     unless t.refTarget do rej .type "a reference to a value of a type no reference may target"
     if m == .mutable then requireWrite "a mutable reference" mu
     pure (.ref m t)
@@ -485,7 +579,9 @@ def tyExpr (env : TEnv) : Expr → T Ty
     checkInitCall env callee
     callResultTy callee
   | .push owner a => do
-    let (t, mu) ← tyPlace env owner
+    let placeInfo ← tyPlace env owner
+    let t := placeInfo.ty
+    let mu := placeInfo.bindingWritable
     match t with
     | .grow el =>
       let argTy ← tyExpr env a
@@ -501,6 +597,7 @@ def tyExpr (env : TEnv) : Expr → T Ty
     pure tt
   | .blockE b => tyBlock (exprEnv env) [] b
   | .arrLit t es => do
+    checkType env t
     match t with
     | .arr el k =>
       unless el.flat do rej .type "array elements must be flat"
@@ -513,6 +610,7 @@ def tyExpr (env : TEnv) : Expr → T Ty
       pure t
     | _ => rej .type "array literal of a type that is not an array"
   | .fill t a => do
+    checkType env t
     match t with
     | .arr el _ =>
       unless el.flat do rej .type "array elements must be flat"
@@ -520,6 +618,18 @@ def tyExpr (env : TEnv) : Expr → T Ty
       unless argTy == el do rej .type "fill value of another type than the elements"
       pure t
     | _ => rej .type "fill of a type that is not a fixed array"
+  | .structLit t es => do
+    let d ← structDef env t
+    unless d.fields.size == es.length do rej .type "struct initializer count differs from its fields"
+    tyStructExprs env (d.fields.toList.map (·.ty)) es
+    pure t
+
+def tyStructExprs (env : TEnv) : List Ty → List Expr → T Unit
+  | [], [] => pure ()
+  | t :: ts, e :: es => do
+    unless (← tyExpr env e) == t do rej .type "struct initializer has another field type"
+    tyStructExprs env ts es
+  | _, _ => rej .type "struct initializer count differs from its fields"
 
 def tyExprsAs (env : TEnv) (el : Ty) : List Expr → T Unit
   | [] => pure ()
@@ -539,7 +649,10 @@ def tyArgs (env : TEnv) (callee : Impl) : List Param → List Arg → T Unit
       let argTy ← tyExpr env e
       unless argTy.passableTo pv.ty do rej .call s!"argument of a type the parameter {pv.name} does not accept"
     | .byRef m p' =>
-      let (t, mu) ← tyPlace env p'
+      let placeInfo ← tyPlace env p'
+      let t := placeInfo.ty
+      let mu := placeInfo.bindingWritable
+      checkFieldReference p' placeInfo
       -- A slice may be passed by reference only from a `var` slice variable or
       -- through a reference to one.
       unless t.refTarget || (t.isSlice && mu && p'.sliceArg) do
@@ -585,7 +698,9 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     pure { env with visible := x :: env.visible }
   | .assign p e o => do
     checkOrg env o
-    let (t, mu) ← tyPlace env p
+    let placeInfo ← tyPlace env p
+    let t := placeInfo.ty
+    let mu := placeInfo.bindingWritable
     -- A slice is assigned only through a reference to a slice variable; a
     -- slice variable itself is rebound.
     unless t.flat || (t.isSlice && p.derefVar?.isSome) do
@@ -596,7 +711,9 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     pure env
   | .assignOp _ p e o => do
     checkOrg env o
-    let (t, mu) ← tyPlace env p
+    let placeInfo ← tyPlace env p
+    let t := placeInfo.ty
+    let mu := placeInfo.bindingWritable
     let i ← requireInt "the target of a compound assignment" t
     let u ← requireInt "the right side of a compound assignment" (← tyExpr env e)
     unless i = u do rej .type "compound assignment of another integer type"
@@ -616,7 +733,9 @@ def tyStmt (env : TEnv) (sc : Nat) : Stmt → T TEnv
     pure env
   | .append owner src o => do
     checkOrg env o
-    let (t, mu) ← tyPlace env owner
+    let placeInfo ← tyPlace env owner
+    let t := placeInfo.ty
+    let mu := placeInfo.bindingWritable
     match t with
     | .grow el =>
       let (sel, _) ← tyView env src

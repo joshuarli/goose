@@ -2,7 +2,7 @@ import Lean.Data.Json
 import Goose.Core.Syntax
 
 /-!
-Strict decoder for the `goose-core/0.2` encoding of the pilot profile.
+Strict decoder for the `goose-core/0.2` pilot and flat fixed-struct encodings.
 
 The encoding uses arrays, strings and unsigned integers only. `scan` checks
 the raw bytes for exactly that alphabet and for the size and nesting limits
@@ -205,8 +205,50 @@ def tyList : List Ty → TyList
   | [] => .nil
   | t :: ts => .cons t (tyList ts)
 
+/-- Raw field indices are resolved only when their containing type is reached. -/
+structure RawStructField where
+  typeIndex : Nat
+  binding : VarKind
+  contents : Mutability
+  byteOffset : Nat
+
+structure RawStructDef where
+  byteSize : Nat
+  fields : Array RawStructField
+
+def decStructDefs (j : Json) : Except String (Array RawStructDef) := do
+  (← asArr j "structs").mapM fun entry => do
+    let (tag, fs) ← record entry "struct descriptor"
+    unless tag == "struct_def" do fail "expected a struct_def"
+    arity tag fs 2
+    let byteSize ← asNat fs[0]! "struct byte size"
+    if byteSize == 0 then fail "struct byte size must be positive"
+    let fields ← (← asArr fs[1]! "struct fields").mapM fun entry => do
+      let (tag, fs) ← record entry "struct field"
+      unless tag == "field" do fail "expected a field"
+      arity tag fs 4
+      let typeIndex ← asNat fs[0]! "field type"
+      let binding ← decVarKind (← asStr fs[1]! "field binding")
+      let contents ← decMut (← asStr fs[2]! "field contents")
+      let byteOffset ← asNat fs[3]! "field byte offset"
+      pure ({ typeIndex, binding, contents, byteOffset } : RawStructField)
+    pure { byteSize, fields }
+
+def resolveStruct (types : Array Ty) (sizes : Array Nat) (d : RawStructDef) :
+    Except String (StructDef × Nat) := do
+  let mut fields := #[]
+  let mut treeSize := 1
+  for f in d.fields do
+    let i ← checkIndex f.typeIndex types.size "struct field type component"
+    let some t := types[i]? | fail "struct field type"
+    let some z := sizes[i]? | fail "struct field type size"
+    treeSize := treeSize + z
+    fields := fields.push { ty := t, binding := f.binding, contents := f.contents, byteOffset := f.byteOffset }
+  pure ({ byteSize := d.byteSize, fields }, treeSize)
+
 /-- Decode one entry of the type table; components must be earlier entries. -/
-def decTypeEntry (types : Array Ty) (sizes : Array Nat) (j : Json) :
+def decTypeEntry (types : Array Ty) (sizes : Array Nat) (j : Json)
+    (structs : Array RawStructDef := #[]) :
     Except String (Ty × Nat) := do
   let (tag, fs) ← record j "type"
   let comp (x : Json) : Except String (Ty × Nat) := do
@@ -245,20 +287,38 @@ def decTypeEntry (types : Array Ty) (sizes : Array Nat) (j : Json) :
     let parts ← (← asArr fs[0]! "tuple components").toList.mapM comp
     if parts.length < 2 then fail "tuple: fewer than two components"
     pure (.tuple (tyList (parts.map (·.1))), 1 + (parts.map (·.2)).foldl (· + ·) 0)
+  | "struct" => do
+    arity tag fs 1
+    let sid ← checkIndex (← asNat fs[0]! "struct id") structs.size "struct"
+    let some raw := structs[sid]? | fail "struct id"
+    let (d, z) ← resolveStruct types sizes raw
+    pure (.structT sid (TyList.ofList (d.fields.toList.map (·.ty))), z)
   | _ => fail s!"unknown type tag {tag.quote}"
 
-def decTypes (j : Json) : Except String (Array Ty) := do
+def decTypesWithStructs (j : Json) (rawStructs : Array RawStructDef) :
+    Except String (Array Ty × Array StructDef) := do
   let entries ← asArr j "types"
   let mut types : Array Ty := #[]
   let mut sizes : Array Nat := #[]
+  let mut definitions : Array (Option StructDef) := Array.replicate rawStructs.size none
   for h : i in [0:entries.size] do
-    let (t, z) ← match decTypeEntry types sizes entries[i] with
+    let (t, z) ← match decTypeEntry types sizes entries[i] rawStructs with
       | .ok r => pure r
       | .error e => fail s!"type {i}: {e}"
     if z > maxTypeTreeSize then fail s!"type {i}: tree size over {maxTypeTreeSize}"
+    match t with
+    | .structT sid _ =>
+      if (definitions[sid]?).any (·.isSome) then fail "a struct descriptor has more than one type entry"
+      let some raw := rawStructs[sid]? | fail "struct id"
+      let (d, _) ← resolveStruct types sizes raw
+      definitions := definitions.set! sid (some d)
+    | _ => pure ()
     types := types.push t
     sizes := sizes.push z
-  pure types
+  let structs ← definitions.mapM fun
+    | some d => pure d
+    | none => fail "a struct descriptor has no type entry"
+  pure (types, structs)
 
 /-! ### Function bodies -/
 
@@ -270,6 +330,7 @@ structure Ctx where
   nContexts : Nat
   nOrigins : Nat
   nVars : Nat
+  profile : ArtifactProfile := .pilot
 
 /-- Records read and blocks opened so far in the current function. -/
 structure Count where
@@ -324,6 +385,11 @@ def decPlace : Nat → Ctx → Json → R Place
       let v ← decView f cx fs[0]!
       let i ← decExpr f cx fs[1]!
       pure (.elem v i (← liftE (decOrg cx fs[2]!)))
+    | "p_field" => do
+      unless cx.profile == .shrink do throw "p_field requires core-shrink"
+      liftE (arity tag fs 2)
+      let p ← decPlace f cx fs[0]!
+      pure (.field p (← liftE (asNat fs[1]! "real field index")))
     | _ => throw s!"unknown place tag {tag.quote}"
 
 def decView : Nat → Ctx → Json → R View
@@ -444,6 +510,12 @@ def decExpr : Nat → Ctx → Json → R Expr
       liftE (arity tag fs 2)
       let t ← liftE (decTyRef cx fs[0]!)
       pure (.fill t (← decExpr f cx fs[1]!))
+    | "e_struct" => do
+      unless cx.profile == .shrink do throw "e_struct requires core-shrink"
+      liftE (arity tag fs 2)
+      let t ← liftE (decTyRef cx fs[0]!)
+      let es ← (← liftE (asArr fs[1]! "struct initializers")).toList.mapM (decExpr f cx)
+      pure (.structLit t es)
     | _ => throw s!"unknown expression tag {tag.quote}"
 
 /-- A block's number is the count of blocks opened before it in the function. -/
@@ -733,27 +805,30 @@ def decodeMapped (what : String) (j : Json) (dec : Json → Except String α) :
   pure out
 
 def schemaName : String := "goose-core/0.2"
-def profileName : String := "core-pilot"
 
 def decodeModule (j : Json) : Except String Module := do
   let (tag, fs) ← record j "module"
   unless tag == "module" do fail s!"expected a module, found tag {tag.quote}"
-  arity tag fs 9
+  let shrink := fs[1]? == some (.str ArtifactProfile.shrink.tag)
+  arity tag fs (if shrink then 10 else 9)
   let schema ← asStr fs[0]! "schema"
   unless schema == schemaName do fail s!"schema {schema.quote}: this reader implements {schemaName.quote}"
-  let profile ← asStr fs[1]! "profile"
-  unless profile == profileName do fail s!"profile {profile.quote}: this reader implements {profileName.quote}"
+  let profileTag ← asStr fs[1]! "profile"
+  let some profile := ArtifactProfile.ofTag? profileTag |
+    fail s!"profile {profileTag.quote}: this reader implements core-pilot and core-shrink"
+  let shift := if shrink then 1 else 0
   let files ← decodeMapped "file" fs[2]! decFile
-  let origins ← decodeMapped "origin" fs[8]! (decOrigin files.size)
-  let types ← decTypes fs[3]!
-  let nGlobals := (← asArr fs[4]! "globals").size
-  let nContexts := (← asArr fs[6]! "contexts").size
-  let cx : Ctx := ⟨types, nGlobals, nContexts, origins.size, 0⟩
-  let globals ← decodeMapped "global" fs[4]! (decGlobal cx)
-  let impls ← decodeMapped "impl" fs[5]! (decImpl cx)
-  let contexts ← decodeMapped "context" fs[6]! (decContext impls nGlobals)
-  let entry ← checkIndex (← asNat fs[7]! "entry") nContexts "context"
-  pure { files, types, globals, impls, contexts, entry, origins }
+  let origins ← decodeMapped "origin" fs[8 + shift]! (decOrigin files.size)
+  let rawStructs ← if shrink then decStructDefs fs[4]! else pure #[]
+  let (types, structs) ← decTypesWithStructs fs[3]! rawStructs
+  let nGlobals := (← asArr fs[4 + shift]! "globals").size
+  let nContexts := (← asArr fs[6 + shift]! "contexts").size
+  let cx : Ctx := { types, nGlobals, nContexts, nOrigins := origins.size, nVars := 0, profile }
+  let globals ← decodeMapped "global" fs[4 + shift]! (decGlobal cx)
+  let impls ← decodeMapped "impl" fs[5 + shift]! (decImpl cx)
+  let contexts ← decodeMapped "context" fs[6 + shift]! (decContext impls nGlobals)
+  let entry ← checkIndex (← asNat fs[7 + shift]! "entry") nContexts "context"
+  pure { files, types, globals, impls, contexts, entry, origins, profile, structs }
 
 /-- Decode a module from the bytes of a file. -/
 def decodeBytes (bs : ByteArray) : Except String Module := do
