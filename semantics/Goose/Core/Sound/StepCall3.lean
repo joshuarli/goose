@@ -38,7 +38,9 @@ theorem step_call (hm : ModOk m) (ih : Specs m prof n) : CallSpec m prof (n + 1)
     have hF0 : Frame m ⟨G, P, st.eff, s.nextScope, D, A⟩ { implEnv m impl with visible := [] }
         ⟨m, impl, ctx, []⟩ ⟨impl.vars, s.nextAct, [], depth + 1⟩
         { s with nextAct := s.nextAct + 1 } :=
-      { mod_t := rfl, mod_p := rfl, vars_t := rfl, vars_p := rfl, scopes_t := rfl, scopes_p := rfl
+      { mod_t := rfl, mod_p := rfl, vars_t := rfl, vars_p := rfl
+        resolved := fun x lv hv => checkStructTables_impl_var_ok m hm.structTables himpl hv
+        scopes_t := rfl, scopes_p := rfl
         nodup := List.nodup_nil, sorted := List.Pairwise.nil
         below := fun p hp => by cases hp
         base_le := Nat.le_refl _
