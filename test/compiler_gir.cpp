@@ -1162,6 +1162,43 @@ GirModule ShrinkSummaryModule() {
     return m;
 }
 
+GirModule AppendSummaryModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+    auto sliceTy = m.SliceType(CoreMut::Mut, i64);
+
+    GirFunc append;
+    append.name = "append";
+    append.params = { refTy, sliceTy };
+    append.scopes = { -1 };
+    append.roots.params = {
+        { 0, { CoreRootRef { CoreRootRef::Param, 0 } } },
+        { 1, { CoreRootRef { CoreRootRef::Param, 1 } } },
+    };
+    append.summary.reads = { CoreTarget { false, 1 } };
+    append.summary.writes = { CoreTarget { false, 0 } };
+    append.summary.grows = { CoreTarget { false, 0 } };
+    GirBlock body;
+    body.params = { { 0, refTy }, { 1, sliceTy } };
+    auto view = Def(GirOp::SliceView, 2);
+    view.a = 1;
+    GirInst instruction;
+    instruction.op = GirOp::Append;
+    instruction.a = 0;
+    instruction.b = 2;
+    instruction.org = 0;
+    body.insts = { view, instruction, Ret() };
+    append.blocks = { body };
+    m.funcs.push_back(std::move(append));
+    return m;
+}
+
 void ShrinkSummariesSerializeAndCoverPopEffects() {
     auto m = ShrinkSummaryModule();
     assert(Code(m) == "");
@@ -1172,14 +1209,59 @@ void ShrinkSummariesSerializeAndCoverPopEffects() {
     assert(Code(m) == "GIR-V050");
 }
 
+void AppendSummaryIncludesItsViewSourceRead() {
+    auto m = AppendSummaryModule();
+    assert(Code(m) == "");
+    m.funcs[1].summary.reads.clear();
+    assert(Code(m) == "GIR-V050");
+}
+
 void PilotLetGrowPushUsesContentsPermission() {
     auto m = LetOwnerPush(CoreProfile::Pilot, CoreType::Grow);
     assert(Code(m) == "");
 }
 
-void RejectsPushThroughALetLimitedOwner() {
+void LetLimitedOwnerSupportsDirectPushPopAndClear() {
     auto m = LetOwnerPush(CoreProfile::Shrink, CoreType::Limited);
-    assert(Code(m) == "GIR-V030");
+    Main(m).summary.unknown = true;
+    auto &insts = Main(m).blocks[0].insts;
+    auto slot = Def(GirOp::Slot, 4);
+    slot.idx = 0;
+    auto pop = Def(GirOp::Pop, 5);
+    pop.a = 4;
+    pop.org = 0;
+    auto slotAgain = Def(GirOp::Slot, 6);
+    slotAgain.idx = 0;
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 6;
+    clear.org = 0;
+    insts.insert(insts.end() - 2, { slot, pop, slotAgain, clear });
+    assert(Code(m) == "");
+}
+
+void RejectsPassingALetLimitedOwnerAsAMutableReference() {
+    auto m = LetOwnerPush(CoreProfile::Shrink, CoreType::Limited);
+    auto refTy = m.RefType(CoreMut::Mut, Main(m).slots[0].ty);
+    GirFunc mutate;
+    mutate.name = "mutate_limited";
+    mutate.params = { refTy };
+    mutate.scopes = { -1 };
+    GirBlock callee;
+    callee.params = { { 0, refTy } };
+    callee.insts = { Ret() };
+    mutate.blocks = { callee };
+    m.funcs.push_back(std::move(mutate));
+
+    auto &insts = Main(m).blocks[0].insts;
+    auto slot = Def(GirOp::Slot, 4);
+    slot.idx = 0;
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 1;
+    call.vals = { 4 };
+    call.org = 0;
+    insts.insert(insts.end() - 2, { slot, call });
+    assert(Code(m) == "GIR-V010");
 }
 
 void ShrinkOperationsAndAbortTagsStayOutOfPilotGir() {
@@ -2277,8 +2359,10 @@ int main() {
     CoreShrinkOperationTagsAndPlaceTypingAreCanonical();
     CoreShrinkOperationsLowerToVerifiedGir();
     PilotLetGrowPushUsesContentsPermission();
-    RejectsPushThroughALetLimitedOwner();
+    LetLimitedOwnerSupportsDirectPushPopAndClear();
+    RejectsPassingALetLimitedOwnerAsAMutableReference();
     ShrinkSummariesSerializeAndCoverPopEffects();
+    AppendSummaryIncludesItsViewSourceRead();
     ShrinkOperationsAndAbortTagsStayOutOfPilotGir();
     AcceptsScalarStructFieldsOnAnImmutableBinding();
     RejectsStructsInThePilotProfile();
