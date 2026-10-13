@@ -2,6 +2,7 @@
 """Internal consistency of a goose-build-report/1 file.
 
   python test/scale/report_check.py REPORT [--c-file FILE]
+      [--require-o2-sharing-threshold]
 
 Checks the rules a report must satisfy before anything is read from it:
 
@@ -16,6 +17,8 @@ Checks the rules a report must satisfy before anything is read from it:
     the total, and no time is negative.
 
 Prints one line per violation and exits 1 if there is any.
+The optional O2 gate requires the report to show that inlined-call and
+bounds-check blockers account for at least 10% of emitted C bytes.
 """
 
 import argparse
@@ -29,14 +32,109 @@ FORMAT = "goose-build-report/1"
 MAX_UNATTRIBUTED_BYTES = 16 * 1024
 # Times are written with six decimals.
 TIME_SLACK = 1e-4
+SHARING_BLOCKER_CAUSES = {"bounds_check_sites", "inlined_calls", "callee", "other"}
+O2_SHARING_CAUSES = ("inlined_calls", "bounds_check_sites")
 
 
-def check(report, c_file):
+def check_sharing_blockers(sharing, need):
+    # Reports written before byte attribution have no byte section. Continue
+    # checking their existing sharing fields without treating them as invalid.
+    if "not_merged_same_declaration_bytes" not in sharing:
+        return
+    counts = sharing.get("not_merged_same_declaration")
+    byte_counts = sharing["not_merged_same_declaration_bytes"]
+    if not isinstance(counts, dict):
+        need(False, "sharing blocker bytes are present without blocker counts")
+        return
+    if not isinstance(byte_counts, dict):
+        need(False, "sharing not_merged_same_declaration_bytes is not an object")
+        return
+    if set(counts) != set(byte_counts):
+        need(False, "sharing blocker count and byte causes differ")
+    if set(counts) != SHARING_BLOCKER_CAUSES:
+        need(False, "sharing blocker causes differ from the reported cause set")
+
+    valid_counts = all(type(value) is int and value >= 0 for value in counts.values())
+    valid_bytes = all(type(value) is int and value >= 0 for value in byte_counts.values())
+    need(valid_counts, "sharing blocker counts must be non-negative integers")
+    need(valid_bytes, "sharing blocker bytes must be non-negative integers")
+    if valid_counts:
+        need(sum(counts.values()) <= sharing["functions_after"],
+             "sharing blocker counts exceed functions_after")
+    if valid_bytes:
+        need(sum(byte_counts.values()) <= sharing["function_bytes_after"],
+             "sharing blocker bytes exceed function_bytes_after")
+
+
+def check_o2_sharing_threshold(report, need):
+    input_info = report.get("input")
+    level = input_info.get("optimization_level") if isinstance(input_info, dict) else None
+    need(type(level) is int and level == 2,
+         f"O2 sharing threshold requires input.optimization_level == 2 (got {level!r})")
+
+    extensions = report.get("extensions")
+    sharing = extensions.get("sharing") if isinstance(extensions, dict) else None
+    if not isinstance(sharing, dict):
+        need(False, "O2 sharing threshold requires extensions.sharing")
+        return
+    counts = sharing.get("not_merged_same_declaration")
+    byte_counts = sharing.get("not_merged_same_declaration_bytes")
+    if not isinstance(byte_counts, dict):
+        need(False,
+             "O2 sharing threshold requires extensions.sharing.not_merged_same_declaration_bytes")
+        return
+    if not isinstance(counts, dict):
+        need(False, "O2 sharing threshold requires extensions.sharing.not_merged_same_declaration")
+        return
+    if set(counts) != SHARING_BLOCKER_CAUSES or set(byte_counts) != SHARING_BLOCKER_CAUSES:
+        need(False, "O2 sharing threshold requires the complete sharing blocker cause set")
+        return
+    if set(counts) != set(byte_counts):
+        need(False, "O2 sharing threshold found inconsistent blocker causes")
+        return
+    if not all(type(value) is int and value >= 0 for value in counts.values()):
+        need(False, "O2 sharing threshold requires non-negative integer blocker counts")
+        return
+    if not all(type(value) is int and value >= 0 for value in byte_counts.values()):
+        need(False, "O2 sharing threshold requires non-negative integer blocker bytes")
+        return
+
+    function_bytes = sharing.get("function_bytes_after")
+    if type(function_bytes) is not int or function_bytes < 0:
+        need(False, "O2 sharing threshold requires non-negative integer function_bytes_after")
+        return
+    if sum(byte_counts.values()) > function_bytes:
+        need(False, "O2 sharing threshold found blocker bytes exceeding function_bytes_after")
+        return
+
+    output = report.get("output")
+    c_bytes = output.get("c_bytes") if isinstance(output, dict) else None
+    if type(c_bytes) is not int or c_bytes <= 0:
+        need(False, "O2 sharing threshold requires positive integer output.c_bytes")
+        return
+    attributed = output.get("attributed")
+    function_bodies = attributed.get("function_bodies") if isinstance(attributed, dict) else None
+    if type(function_bodies) is not int or function_bodies != function_bytes:
+        need(False,
+             "O2 sharing threshold requires function_bytes_after to equal output function_bodies")
+        return
+
+    blocked_bytes = sum(byte_counts[cause] for cause in O2_SHARING_CAUSES)
+    if blocked_bytes * 10 < c_bytes:
+        need(False,
+             f"O2 context-dependent blocker bytes {blocked_bytes} / emitted C bytes {c_bytes} "
+             "are below the 10% threshold")
+
+
+def check(report, c_file, require_o2_sharing_threshold=False):
     bad = []
 
     def need(cond, message):
         if not cond:
             bad.append(message)
+
+    if require_o2_sharing_threshold:
+        check_o2_sharing_threshold(report, need)
 
     # A build that ran nothing: the report says so and carries nothing else.
     if report.get("input", {}).get("mode") == "no-op":
@@ -156,6 +254,7 @@ def check(report, c_file):
         need(sharing["functions_before"] == (emitted["bodies"] + emitted["element_run_twins"]
                                              if out is not None else sharing["functions_before"]),
              "functions before sharing differ from the emitted bodies and twins")
+        check_sharing_blockers(sharing, need)
     units = report.get("extensions", {}).get("units")
     if units is not None:
         listed = units["units"]
@@ -179,13 +278,15 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("report")
     ap.add_argument("--c-file", help="the C file the report describes")
+    ap.add_argument("--require-o2-sharing-threshold", action="store_true",
+                    help="require O2 sharing blockers to account for at least 10%% of emitted C")
     a = ap.parse_args()
     try:
         report = json.loads(Path(a.report).read_text())
     except (OSError, ValueError) as e:
         print(f"report_check: cannot read {a.report}: {e}")
         return 1
-    bad = check(report, a.c_file)
+    bad = check(report, a.c_file, a.require_o2_sharing_threshold)
     for line in bad:
         print(f"report_check: {line}")
     if not bad:
