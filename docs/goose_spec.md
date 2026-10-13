@@ -3432,12 +3432,12 @@ the caller's own facts about `src` intact.
   importing package with the name of a declared package is an error. The
   form `import .a.b;` (leading dot) resolves relative to the *importing
   file* instead.
-* **Packages** ([`packages.md`](packages.md)). `import name from "source";`
-  in the *root file* declares package `name` and imports its `name.goose`
-  entry from a path or git source. Only the root declares packages; the same
-  form elsewhere is a *requirement* that the root must declare from the same
-  source. A missing declaration is an error naming the line to add, and a
-  different ref is a warning. A program has one version of each package.
+* **Packages** ([`packages.md`](packages.md)). Only the *root file* may
+  declare a package with `import name from "source";`; this imports its
+  `name.goose` entry. The same form elsewhere is a *requirement* that the root
+  must declare from the same source. A missing declaration is an error naming
+  the line to add; a different source is an error and a different ref is a
+  warning. A program has one version of each package.
   All declarations are public in v1; a name collision within one namespace
   is an error, except that a global variable and functions may share a name
   (below). Top-level declarations are order-independent.
@@ -3634,8 +3634,7 @@ current resource limits; section 11 identifies violations still to fix.
 
 The standard library modules are Goose source under `stdlib/`, reached by
 `import` (§11.1); see [`stdlib.md`](stdlib.md) for the current module
-inventory and reference. Blessed imports are described in
-[`packages.md`](packages.md).
+inventory, blessed import names and reference.
 The math types of §6.1 are in its `vec` module; the C behind `math` and `os`
 enters through `extern fn` (§7.10).
 
