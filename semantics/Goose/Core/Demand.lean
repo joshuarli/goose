@@ -787,6 +787,40 @@ private def demandSetup? (m : Module) (owner : Nat) : Option DemandSetup := do
 def demandAccess? (m : Module) (owner : Nat) : Option AccessEnv :=
   (demandSetup? m owner).map DemandSetup.access
 
+/-- A successful demand access belongs either to a checked context or to a
+global initializer, which reuses the initializer environment. -/
+theorem demandAccess?_cases {m : Module} {owner : Nat} {access : AccessEnv}
+    (found : demandAccess? m owner = some access) :
+    (∃ ctx impl, owner < m.contexts.size ∧ m.contexts[owner]? = some ctx ∧
+      m.impls[ctx.impl]? = some impl ∧ access = ⟨m, impl, ctx⟩) ∨
+    (∃ global, m.contexts.size ≤ owner ∧
+      m.globals[owner - m.contexts.size]? = some global ∧
+      access = ⟨m, initImpl, initContext⟩) := by
+  by_cases contextOwner : owner < m.contexts.size
+  · unfold demandAccess? demandSetup? at found
+    simp only [ite_eq_left contextOwner] at found
+    cases contextAt : m.contexts[owner]? with
+    | none => simp [contextAt] at found
+    | some ctx =>
+      cases implementationAt : m.impls[ctx.impl]? with
+      | none => simp [contextAt, implementationAt] at found
+      | some impl =>
+        left
+        refine ⟨ctx, impl, contextOwner, ?_, ?_, ?_⟩
+        · rfl
+        · rw [implementationAt]
+        simpa [contextAt, implementationAt] using found.symm
+  · have globalOwner : m.contexts.size ≤ owner := Nat.le_of_not_gt contextOwner
+    unfold demandAccess? demandSetup? at found
+    simp only [ite_eq_right contextOwner] at found
+    cases globalAt : m.globals[owner - m.contexts.size]? with
+    | none => simp [globalAt] at found
+    | some global =>
+      right
+      refine ⟨global, globalOwner, ?_, ?_⟩
+      · rfl
+      simpa [globalAt] using found.symm
+
 structure DemandEnv (m : Module) (planOwner : Nat) (root : DemandNode) where
   access : AccessEnv
   accessMatches : demandAccess? m planOwner = some access
