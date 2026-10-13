@@ -141,9 +141,13 @@ theorem step_each (ih : Specs m prof n) : EachSpec m prof (n + 1) := by
     | true =>
       rw [if_pos rfl]
       obtain ⟨hst, hlt'⟩ := hvw.2.2 hres
-      refine sat_lengthLoc hlt' (fun es hread => ⟨rfl, ?_⟩)
-      rw [hst]
-      exact sliceTy_of_grow hlt' hread
+      rcases hlt' with hgrow | hgrowshrink
+      · refine sat_lengthLoc hgrow (fun es hread => ⟨rfl, ?_⟩)
+        rw [hst]
+        exact sliceTy_of_grow hgrow hread
+      · refine sat_lengthLoc_growshrink hgrowshrink (fun es hread => ⟨rfl, ?_⟩)
+        rw [hst]
+        exact sliceTy_of_growshrink hgrowshrink hread
   · rintro len s' ⟨rfl, hsl⟩
     by_cases h : i < len
     · simp only [h, if_true]
