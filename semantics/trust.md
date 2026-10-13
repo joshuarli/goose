@@ -9,7 +9,6 @@ It permits values of concrete flat fixed types at undeclared roots; resizable
 and limited owners require declared global storage. This prevents untracked
 global slice holders and owner roots from bypassing initialization and shrink
 authority.
-
 Content-root annotations may include harmless extra roots. The core soundness
 frame therefore tracks owner authority separately from content typing: only
 parameters declared as references to grow or growshrink storage grant owner
