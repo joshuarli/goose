@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stand-in for the reference tool, used only by `run_tests.py --self-test`.
 
+`validate FILE` answers `["ok"]` unless validate[NAME] is {"rejected": [RULE, TEXT]}.
 `run FILE --numeric MODE` answers with run[NAME][MODE] from the JSON script
 named by $FAKE_SCRIPT, where NAME is the case recorded in FILE:
   {"answer": JSON, "exit": N}   print the answer as one line and exit N
@@ -16,6 +17,14 @@ import time
 
 script = json.loads(Path(os.environ["FAKE_SCRIPT"]).read_text())
 args = sys.argv[1:]
+if args[:1] == ["validate"]:
+    name = json.loads(Path(args[1]).read_text())["case"]
+    entry = script.get("validate", {}).get(name, "ok")
+    if entry == "ok":
+        print('["ok"]')
+        sys.exit(0)
+    print(json.dumps(["rejected", *entry["rejected"]]))
+    sys.exit(5)
 if args[:1] != ["run"] or "--numeric" not in args:
     print("fake semantics: unsupported arguments", file=sys.stderr)
     sys.exit(99)

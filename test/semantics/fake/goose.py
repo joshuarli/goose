@@ -5,6 +5,7 @@ Its answers come from the JSON script named by $FAKE_SCRIPT:
   export[NAME]            "ok" (default) | "nofile" | {"unsupported": ID} | {"fail": TEXT}
   gir                     "reject" makes `--pipeline` an unknown option
   gir_runs[NAME][MODE]    {"stdout": S, "stderr": S, "exit": N} of the pipeline's program
+                          (written as C by --standalone, played directly by --jit)
 """
 
 import json
@@ -14,6 +15,10 @@ import sys
 
 script = json.loads(Path(os.environ["FAKE_SCRIPT"]).read_text())
 args = sys.argv[1:]
+
+if args[:2] == ["toolchain", "--json"]:
+    print(json.dumps({"builtin": script.get("builtin", [])}))
+    sys.exit(0)
 
 if "--emit-core" in args:
     target = Path(args[args.index("--emit-core") + 1])
