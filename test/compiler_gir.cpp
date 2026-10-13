@@ -1108,6 +1108,524 @@ void LowSplitsSameTargetCondBrForOwnerRuns() {
     }
 }
 
+GirModule ShrinkReplaceReceiverViaSlotLoad() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+    Main(m).slots = { { ownerTy, CoreVarKind::Var, 0, 0 }, { i64, CoreVarKind::Var, 0, 1 } };
+    Main(m).summary.unknown = true;
+
+    auto initial = Def(GirOp::Arr, 0);
+    initial.ty = ownerTy;
+    auto ownerInit = Init(0, 0);
+    auto ownerRef = Def(GirOp::Slot, 1);
+    ownerRef.idx = 0;
+    ownerRef.ty = refTy;
+    auto savedLength = Def(GirOp::ArrayLen, 2);
+    savedLength.a = 1;
+    auto scalarInit = Init(1, 2);
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 1;
+    clear.org = 0;
+    auto scalarRef = Def(GirOp::Slot, 3);
+    scalarRef.idx = 1;
+    auto savedLengthLoad = Def(GirOp::Load, 4);
+    savedLengthLoad.a = 3;
+    auto run = Def(GirOp::Arr, 5);
+    run.ty = ownerTy;
+    run.vals = { 4 };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 1;
+    replace.b = 5;
+    replace.org = 0;
+    Main(m).blocks[0].insts = {
+        Enter(0), initial, ownerInit, ownerRef, savedLength, scalarInit, clear,
+        scalarRef, savedLengthLoad, run, replace, Leave(0), Ret(),
+    };
+    return m;
+}
+
+GirModule ShrinkBranchConditionSelectsRun() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+    GirFunc branch;
+    branch.name = "branch-dependent-run";
+    branch.params = { refTy };
+    branch.scopes = { -1 };
+    branch.summary.unknown = true;
+
+    GirBlock entry;
+    entry.params = { { 0, refTy } };
+    auto length = Def(GirOp::ArrayLen, 1);
+    length.a = 0;
+    auto zero = Int(m, 2, "0");
+    auto condition = Def(GirOp::Cmp, 3);
+    condition.ty = i64;
+    condition.a = 1;
+    condition.b = 2;
+    condition.cmp = CoreCmpOp::Eq;
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 0;
+    clear.org = 0;
+    entry.insts = { length, zero, condition, clear, CondBr(3, 1, 2) };
+
+    GirBlock left, right, join;
+    auto leftValue = Int(m, 4, "10");
+    auto leftRun = Def(GirOp::Arr, 5);
+    leftRun.ty = ownerTy;
+    leftRun.vals = { 4 };
+    left.insts = { leftValue, leftRun, Br(3, { 5 }) };
+    auto rightValue = Int(m, 6, "20");
+    auto rightRun = Def(GirOp::Arr, 7);
+    rightRun.ty = ownerTy;
+    rightRun.vals = { 6 };
+    right.insts = { rightValue, rightRun, Br(3, { 7 }) };
+    join.params = { { 8, ownerTy } };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 0;
+    replace.b = 8;
+    replace.org = 0;
+    join.insts = { replace, Ret() };
+    branch.blocks = { entry, left, right, join };
+    m.funcs.push_back(std::move(branch));
+    return m;
+}
+
+GirModule ShrinkCallResultReadsGlobalBeforeReplace(bool unknownSummary) {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+
+    GirGlobal source;
+    source.name = "source";
+    source.ty = i64;
+    source.kind = CoreVarKind::Var;
+    source.init.name = "source-init";
+    source.init.results = { i64 };
+    source.init.summary.unknown = true;
+    GirBlock init;
+    init.insts = { Int(m, 0, "0"), Ret({ 0 }) };
+    source.init.blocks = { init };
+    m.globals.push_back(source);
+
+    GirFunc caller;
+    caller.name = "call-dependent-run";
+    caller.params = { refTy };
+    caller.scopes = { -1 };
+    caller.summary.unknown = true;
+    GirBlock callerBlock;
+    callerBlock.params = { { 0, refTy } };
+    auto result = Def(GirOp::Call, 1);
+    result.idx = 2;
+    result.org = 0;
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 0;
+    clear.org = 0;
+    auto run = Def(GirOp::Arr, 2);
+    run.ty = ownerTy;
+    run.vals = { 1 };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 0;
+    replace.b = 2;
+    replace.org = 0;
+    callerBlock.insts = { result, clear, run, replace, Ret() };
+    caller.blocks = { callerBlock };
+
+    GirFunc reader;
+    reader.name = unknownSummary ? "unknown-reader" : "global-reader";
+    reader.results = { i64 };
+    reader.scopes = { -1 };
+    GirBlock readerBlock;
+    if (unknownSummary) {
+        reader.summary.unknown = true;
+        readerBlock.insts = { Int(m, 0, "0"), Ret({ 0 }) };
+    } else {
+        auto global = Def(GirOp::Global, 0);
+        global.idx = 0;
+        auto load = Def(GirOp::Load, 1);
+        load.a = 0;
+        reader.summary.reads = { CoreTarget { true, 0 } };
+        readerBlock.insts = { global, load, Ret({ 1 }) };
+    }
+    reader.blocks = { readerBlock };
+    m.funcs.push_back(std::move(caller));
+    m.funcs.push_back(std::move(reader));
+    return m;
+}
+
+GirModule ShrinkCallSummaryInvalidatesReplace(int effect) {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+
+    GirFunc caller;
+    caller.name = "call-invalidates-empty-owner";
+    caller.params = { refTy };
+    caller.scopes = { -1 };
+    caller.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, refTy } };
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 0;
+    clear.org = 0;
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 2;
+    call.vals = { 0 };
+    call.org = 0;
+    auto value = Int(m, 1, "7");
+    auto run = Def(GirOp::Arr, 2);
+    run.ty = ownerTy;
+    run.vals = { 1 };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 0;
+    replace.b = 2;
+    replace.org = 0;
+    body.insts = { clear, call, value, run, replace, Ret() };
+    caller.blocks = { body };
+
+    GirFunc touch;
+    touch.name = "touch-owner";
+    touch.params = { refTy };
+    touch.scopes = { -1 };
+    touch.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    CoreTarget target { false, 0 };
+    if (effect == 0) touch.summary.reads = { target };
+    if (effect == 1) touch.summary.shrinks = { target };
+    if (effect == 2) touch.summary.writes = { target };
+    if (effect == 3) touch.summary.grows = { target };
+    if (effect == 4) touch.summary.rebinds = { target };
+    GirBlock touchBlock;
+    touchBlock.params = { { 0, refTy } };
+    touchBlock.insts = { Ret() };
+    touch.blocks = { touchBlock };
+    m.funcs.push_back(std::move(caller));
+    m.funcs.push_back(std::move(touch));
+    return m;
+}
+
+GirModule ShrinkLocalReplacementWithUnrelatedParameterRead() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+
+    GirFunc caller;
+    caller.name = "local-owner-unrelated-parameter-read";
+    caller.params = { refTy };
+    caller.slots = { { ownerTy, CoreVarKind::Var, 0, 0 } };
+    caller.scopes = { -1 };
+    caller.summary.unknown = true;
+    GirBlock callerBlock;
+    callerBlock.params = { { 0, refTy } };
+    auto empty = Def(GirOp::Arr, 1);
+    empty.ty = ownerTy;
+    auto init = Init(0, 1);
+    auto owner = Def(GirOp::Slot, 2);
+    owner.idx = 0;
+    owner.ty = refTy;
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 2;
+    clear.org = 0;
+    auto call = Def(GirOp::Call, 3);
+    call.idx = 2;
+    call.vals = { 0 };
+    call.org = 0;
+    auto run = Def(GirOp::Arr, 4);
+    run.ty = ownerTy;
+    run.vals = { 3 };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 2;
+    replace.b = 4;
+    replace.org = 0;
+    callerBlock.insts = { Enter(0), empty, init, owner, clear, call, run,
+                          replace, Leave(0), Ret() };
+    caller.blocks = { callerBlock };
+
+    GirFunc reader;
+    reader.name = "read-unrelated-owner";
+    reader.params = { refTy };
+    reader.results = { i64 };
+    reader.scopes = { -1 };
+    reader.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    reader.summary.reads = { CoreTarget { false, 0 } };
+    GirBlock readerBlock;
+    readerBlock.params = { { 0, refTy } };
+    readerBlock.insts = { Int(m, 1, "7"), Ret({ 1 }) };
+    reader.blocks = { readerBlock };
+
+    m.funcs.push_back(std::move(caller));
+    m.funcs.push_back(std::move(reader));
+    return m;
+}
+
+enum class EmptyOwnerEffect : uint8_t {
+    Load, Snapshot, Length, SliceView, ViewLength, ViewSlice, Index, Push, Pop, PopN, Resize,
+    Store, Append, Replace,
+};
+
+GirModule ShrinkReplaceAfterAliasedEffect(EmptyOwnerEffect effect) {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+    auto sliceTy = m.SliceType(CoreMut::Mut, i64);
+    auto viewTy = m.ViewType(CoreMut::Mut, i64);
+
+    GirFunc probe;
+    probe.name = cat("empty-owner-effect-", (int)effect);
+    probe.params = { refTy, sliceTy, viewTy };
+    probe.scopes = { -1 };
+    probe.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, refTy }, { 1, sliceTy }, { 2, viewTy } };
+    auto &insts = body.insts;
+    int next = 3;
+    auto intValue = [&](const char *text) {
+        auto id = next++;
+        insts.push_back(Int(m, id, text));
+        return id;
+    };
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 0;
+    clear.org = 0;
+
+    if (effect == EmptyOwnerEffect::Load) {
+        // Hold an element address across clear so only the load can invalidate
+        // the empty fact.
+        auto snapshot = Def(GirOp::Snap, next++);
+        snapshot.a = 0;
+        snapshot.snap = GirSnapshotMode::Owner;
+        auto zero = intValue("0");
+        auto element = Def(GirOp::Index, next++);
+        element.a = snapshot.res;
+        element.b = zero;
+        element.org = 0;
+        insts.push_back(snapshot);
+        insts.push_back(element);
+        insts.push_back(clear);
+        auto load = Def(GirOp::Load, next++);
+        load.a = element.res;
+        insts.push_back(load);
+    } else {
+        insts.push_back(clear);
+        switch (effect) {
+            case EmptyOwnerEffect::Snapshot: {
+                auto snapshot = Def(GirOp::Snap, next++);
+                snapshot.a = 0;
+                snapshot.snap = GirSnapshotMode::Owner;
+                insts.push_back(snapshot);
+                break;
+            }
+            case EmptyOwnerEffect::Length: {
+                auto length = Def(GirOp::ArrayLen, next++);
+                length.a = 0;
+                insts.push_back(length);
+                break;
+            }
+            case EmptyOwnerEffect::SliceView: {
+                auto view = Def(GirOp::SliceView, next++);
+                view.a = 1;
+                insts.push_back(view);
+                break;
+            }
+            case EmptyOwnerEffect::ViewLength: {
+                auto length = Def(GirOp::ViewLen, next++);
+                length.a = 2;
+                insts.push_back(length);
+                break;
+            }
+            case EmptyOwnerEffect::ViewSlice: {
+                auto slice = Def(GirOp::ViewSlice, next++);
+                slice.a = 2;
+                insts.push_back(slice);
+                break;
+            }
+            case EmptyOwnerEffect::Index: {
+                auto zero = intValue("0");
+                auto index = Def(GirOp::Index, next++);
+                index.a = 2;
+                index.b = zero;
+                index.org = 0;
+                insts.push_back(index);
+                break;
+            }
+            case EmptyOwnerEffect::Push: {
+                auto value = intValue("7");
+                auto push = Def(GirOp::Push, next++);
+                push.a = 0;
+                push.b = value;
+                push.org = 0;
+                insts.push_back(push);
+                break;
+            }
+            case EmptyOwnerEffect::Pop: {
+                auto pop = Def(GirOp::Pop, next++);
+                pop.a = 0;
+                pop.org = 0;
+                insts.push_back(pop);
+                break;
+            }
+            case EmptyOwnerEffect::PopN: {
+                auto count = intValue("0");
+                GirInst popn;
+                popn.op = GirOp::PopN;
+                popn.a = 0;
+                popn.b = count;
+                popn.org = 0;
+                insts.push_back(popn);
+                break;
+            }
+            case EmptyOwnerEffect::Resize: {
+                auto count = intValue("0");
+                GirInst resize;
+                resize.op = GirOp::Resize;
+                resize.a = 0;
+                resize.b = count;
+                resize.org = 0;
+                insts.push_back(resize);
+                break;
+            }
+            case EmptyOwnerEffect::Store: {
+                auto zero = intValue("0");
+                auto index = Def(GirOp::Index, next++);
+                index.a = 2;
+                index.b = zero;
+                index.org = 0;
+                insts.push_back(index);
+                auto value = intValue("7");
+                GirInst store;
+                store.op = GirOp::Store;
+                store.a = index.res;
+                store.b = value;
+                store.org = 0;
+                insts.push_back(store);
+                break;
+            }
+            case EmptyOwnerEffect::Append: {
+                GirInst append;
+                append.op = GirOp::Append;
+                append.a = 0;
+                append.b = 2;
+                append.org = 0;
+                insts.push_back(append);
+                break;
+            }
+            case EmptyOwnerEffect::Replace: {
+                auto firstValue = intValue("7");
+                auto firstRun = Def(GirOp::Arr, next++);
+                firstRun.ty = ownerTy;
+                firstRun.vals = { firstValue };
+                insts.push_back(firstRun);
+                GirInst firstReplace;
+                firstReplace.op = GirOp::Replace;
+                firstReplace.a = 0;
+                firstReplace.b = firstRun.res;
+                firstReplace.org = 0;
+                insts.push_back(firstReplace);
+                break;
+            }
+            case EmptyOwnerEffect::Load: assert(false); break;
+        }
+    }
+
+    auto replacementValue = intValue("8");
+    auto run = Def(GirOp::Arr, next++);
+    run.ty = ownerTy;
+    run.vals = { replacementValue };
+    insts.push_back(run);
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 0;
+    replace.b = run.res;
+    replace.org = 0;
+    insts.push_back(replace);
+    insts.push_back(Ret());
+    probe.blocks = { body };
+    m.funcs.push_back(std::move(probe));
+    return m;
+}
+
+GirModule ShrinkReplaceClearedOnOneBranch() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+    GirFunc probe;
+    probe.name = "clear-only-on-one-branch";
+    probe.params = { refTy };
+    probe.scopes = { -1 };
+    probe.summary.unknown = true;
+    GirBlock entry, cleared, unchanged, join;
+    entry.params = { { 0, refTy } };
+    auto condition = Def(GirOp::Bool, 1);
+    condition.flag = true;
+    entry.insts = { condition, CondBr(1, 1, 2) };
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 0;
+    clear.org = 0;
+    cleared.insts = { clear, Br(3) };
+    unchanged.insts = { Br(3) };
+    auto value = Int(m, 2, "8");
+    auto run = Def(GirOp::Arr, 3);
+    run.ty = ownerTy;
+    run.vals = { 2 };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 0;
+    replace.b = 3;
+    replace.org = 0;
+    join.insts = { value, run, replace, Ret() };
+    probe.blocks = { entry, cleared, unchanged, join };
+    m.funcs.push_back(std::move(probe));
+    return m;
+}
+
+void RejectsInvalidShrinkReplacementProofs() {
+    auto uncleared = ShrinkReplaceRunThroughPhi();
+    auto &entry = Main(uncleared).blocks[0].insts;
+    entry.erase(std::remove_if(entry.begin(), entry.end(), [](const GirInst &i) {
+        return i.op == GirOp::Clear;
+    }), entry.end());
+    assert(Code(uncleared) == "GIR-V060");
+    assert(Code(ShrinkReplaceClearedOnOneBranch()) == "GIR-V060");
+    assert(Code(ShrinkReplaceReceiverViaSlotLoad()) == "GIR-V060");
+    assert(Code(ShrinkBranchConditionSelectsRun()) == "GIR-V060");
+    assert(Code(ShrinkCallResultReadsGlobalBeforeReplace(false)) == "GIR-V060");
+    assert(Code(ShrinkCallResultReadsGlobalBeforeReplace(true)) == "GIR-V060");
+    for (auto effect : { EmptyOwnerEffect::Load, EmptyOwnerEffect::Snapshot, EmptyOwnerEffect::Length,
+                         EmptyOwnerEffect::SliceView, EmptyOwnerEffect::ViewLength,
+                         EmptyOwnerEffect::ViewSlice, EmptyOwnerEffect::Index, EmptyOwnerEffect::Push,
+                         EmptyOwnerEffect::Pop, EmptyOwnerEffect::PopN, EmptyOwnerEffect::Resize,
+                         EmptyOwnerEffect::Store, EmptyOwnerEffect::Append, EmptyOwnerEffect::Replace }) {
+        auto code = Code(ShrinkReplaceAfterAliasedEffect(effect));
+        assert(code == "GIR-V060");
+    }
+    for (auto effect : { 0, 1, 2, 3, 4 })
+        assert(Code(ShrinkCallSummaryInvalidatesReplace(effect)) == "GIR-V060");
+    assert(Code(ShrinkLocalReplacementWithUnrelatedParameterRead()) == "");
+}
+
 void RejectsUnresolvedLayout() {
     auto m = LowBase();
     GirFunc f = Main(m);
@@ -2985,6 +3503,7 @@ int main() {
     RejectsReplacementThroughALetOwnerPhi();
     LowPreservesOwnerLiteralRunsAcrossJoins();
     LowSplitsSameTargetCondBrForOwnerRuns();
+    RejectsInvalidShrinkReplacementProofs();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
