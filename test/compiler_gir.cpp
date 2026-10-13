@@ -1601,6 +1601,120 @@ GirModule ShrinkReplaceClearedOnOneBranch() {
     return m;
 }
 
+GirModule ShrinkReplaceAfterClearThroughParameters(bool loop) {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+
+    GirFunc probe;
+    probe.name = "replace-after-clear-through-parameters";
+    probe.scopes = { -1 };
+    probe.params = { refTy };
+    probe.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    probe.summary.unknown = true;
+    GirBlock entry, loopBlock, exit;
+    entry.params = { { 0, refTy } };
+    GirInst clear;
+    clear.op = GirOp::Clear;
+    clear.a = 0;
+    clear.org = 0;
+    entry.insts = { clear };
+
+    if (loop) {
+        entry.insts.push_back(Br(1, { 0 }));
+        loopBlock.params = { { 1, refTy } };
+        auto condition = Def(GirOp::Bool, 2);
+        condition.flag = true;
+        auto branch = CondBr(2, 2, 1);
+        branch.vals = { 1 };
+        branch.vals2 = { 1 };
+        loopBlock.insts = { condition, branch };
+        exit.params = { { 3, refTy } };
+    } else {
+        auto condition = Def(GirOp::Bool, 1);
+        condition.flag = true;
+        auto branch = CondBr(1, 1, 1);
+        branch.vals = { 0 };
+        branch.vals2 = { 0 };
+        entry.insts.insert(entry.insts.end(), { condition, branch });
+        exit.params = { { 2, refTy } };
+    }
+
+    auto ownerParam = loop ? 3 : 2;
+    auto value = Int(m, loop ? 4 : 3, "8");
+    auto run = Def(GirOp::Arr, loop ? 5 : 4);
+    run.ty = ownerTy;
+    run.vals = { value.res };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = ownerParam;
+    replace.b = run.res;
+    replace.org = 0;
+    exit.insts = { value, run, replace, Ret() };
+    probe.blocks = loop ? vector<GirBlock> { entry, loopBlock, exit }
+                        : vector<GirBlock> { entry, exit };
+    m.funcs.push_back(std::move(probe));
+    return m;
+}
+
+GirModule ShrinkReplaceAfterMixedClearJoin() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+
+    GirFunc probe;
+    probe.name = "replace-after-mixed-clear-join";
+    probe.params = { refTy, refTy };
+    probe.scopes = { -1 };
+    probe.roots.params = {
+        { 0, { CoreRootRef { CoreRootRef::Param, 0 } } },
+        { 1, { CoreRootRef { CoreRootRef::Param, 1 } } },
+    };
+    probe.summary.unknown = true;
+
+    GirBlock entry, join;
+    entry.params = { { 0, refTy }, { 1, refTy } };
+    auto condition = Def(GirOp::Bool, 2);
+    condition.flag = true;
+    GirInst clear;
+    clear.op = GirOp::Clear;
+    clear.a = 0;
+    clear.org = 0;
+    auto branch = CondBr(2, 1, 1);
+    branch.vals = { 0 };
+    branch.vals2 = { 1 };
+    entry.insts = { condition, clear, branch };
+
+    join.params = { { 3, refTy } };
+    auto value = Int(m, 4, "8");
+    auto run = Def(GirOp::Arr, 5);
+    run.ty = ownerTy;
+    run.vals = { 4 };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 3;
+    replace.b = 5;
+    replace.org = 0;
+    join.insts = { value, run, replace, Ret() };
+    probe.blocks = { entry, join };
+    m.funcs.push_back(std::move(probe));
+    return m;
+}
+
+void AcceptsEmptyOwnerFactsThroughBlockParameters() {
+    auto direct = Code(ShrinkReplaceAfterClearThroughParameters(false));
+    assert(direct == "");
+    auto loop = ShrinkReplaceAfterClearThroughParameters(true);
+    auto violation = GirVerifier(loop).Verify();
+    if (violation) fprintf(stderr, "%s: %s\n", violation->code.c_str(), violation->message.c_str());
+    assert(!violation);
+    assert(Code(ShrinkReplaceAfterMixedClearJoin()) == "GIR-V060");
+}
+
 void RejectsInvalidShrinkReplacementProofs() {
     auto uncleared = ShrinkReplaceRunThroughPhi();
     auto &entry = Main(uncleared).blocks[0].insts;
@@ -3094,6 +3208,59 @@ void LowStructUsesByteStorageAndUnalignedSafeAccess() {
     assert((copySizes == vector<string>{ "1", "8", "9", "1", "8", "8" }));
 }
 
+void LowLimitedOwnerAccessUsesByteCopies() {
+    auto high = Base();
+    high.profile = CoreProfile::Shrink;
+    auto i64 = high.IntType(CoreIntTy::I64);
+    auto ownerTy = high.Intern(CoreType { .kind = CoreType::Limited, .elem = i64, .count = 2 });
+    auto refOwner = high.RefType(CoreMut::Mut, ownerTy);
+    auto viewTy = high.ViewType(CoreMut::Mut, i64);
+    auto refI64 = high.RefType(CoreMut::Mut, i64);
+    Main(high).slots = { { ownerTy, CoreVarKind::Var, 0, 0 } };
+    Main(high).summary.unknown = true;
+
+    auto initial = Int(high, 0, "7");
+    auto values = Def(GirOp::Arr, 1);
+    values.ty = ownerTy;
+    values.vals = { initial.res };
+    auto init = Init(0, 1);
+    auto owner = Def(GirOp::Slot, 2);
+    owner.idx = 0;
+    owner.ty = refOwner;
+    auto snapshot = Def(GirOp::Snap, 3);
+    snapshot.a = owner.res;
+    snapshot.snap = GirSnapshotMode::Owner;
+    auto zero = Int(high, 4, "0");
+    auto element = Def(GirOp::Index, 5);
+    element.a = snapshot.res;
+    element.b = zero.res;
+    element.ty = refI64;
+    element.org = 0;
+    auto firstLoad = Def(GirOp::Load, 6);
+    firstLoad.a = element.res;
+    auto replacement = Int(high, 7, "9");
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = element.res;
+    store.b = replacement.res;
+    store.org = 0;
+    auto secondLoad = Def(GirOp::Load, 8);
+    secondLoad.a = element.res;
+    auto print = Def(GirOp::Print, -1);
+    print.parts = { { false, "", firstLoad.res }, { false, " ", secondLoad.res } };
+    print.org = 0;
+    Main(high).blocks[0].insts = { Enter(0), initial, values, init, owner, snapshot, zero,
+                                   element, firstLoad, replacement, store, secondLoad, print,
+                                   Leave(0), Ret() };
+
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+    for (auto &block : low.funcs[0].blocks)
+        for (auto &inst : block.insts)
+            assert(inst.op != GirOp::PLoad && inst.op != GirOp::PStore);
+}
+
 void NestedStructAndFixedArrayFieldsUseByteStorage() {
     auto high = Base();
     high.profile = CoreProfile::Shrink;
@@ -3530,6 +3697,7 @@ int main() {
     RejectsAnInvalidStructLayout();
     LoweredFieldArrayViewsKeepOwnerContents();
     LowStructUsesByteStorageAndUnalignedSafeAccess();
+    LowLimitedOwnerAccessUsesByteCopies();
     NestedStructAndFixedArrayFieldsUseByteStorage();
     LowAggregateLoopParametersOwnSnapshots();
     AcceptsNestedFieldContentsThroughAJoin();
@@ -3537,6 +3705,7 @@ int main() {
     FieldProjectionKeepsItsOwnerRoot();
     FieldProjectionKeepsGlobalReadAndWriteEffects();
     FieldCallArgumentsKeepTheirOwnerRoot();
+    AcceptsEmptyOwnerFactsThroughBlockParameters();
     RejectsPassingAReadOnlyStructFieldToAMutatingCall();
     OwnerArrayElementsRemainWritable();
     OwnerGrowElementsRemainWritable();
