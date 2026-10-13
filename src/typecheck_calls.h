@@ -2650,6 +2650,13 @@ inline bool TypeCheck::SameRecord(const FnRecord &a, const FnRecord &b, const Fn
         return why("growths");
     if (a.writeexternals != b.writeexternals || a.writeparams != b.writeparams)
         return why("writable contents");
+    if (a.coreShrinkUnsupported.size() != b.coreShrinkUnsupported.size())
+        return why("Core shrink support");
+    for (size_t i = 0; i < a.coreShrinkUnsupported.size(); i++) {
+        auto &p = a.coreShrinkUnsupported[i], &q = b.coreShrinkUnsupported[i];
+        if (p.boundary != q.boundary || p.at.fileidx != q.at.fileidx || p.at.line != q.at.line)
+            return why("Core shrink support");
+    }
     if (a.reboundoptionals != b.reboundoptionals) return why("rebinds");
     auto samebounds = [&](const auto &x, const auto &y) {
         if (x.size() != y.size()) return false;

@@ -1779,6 +1779,23 @@ struct RootArg {
 // new elements into the caller's holders before popping them.
 enum ShrinkBalance { SB_BALANCED, SB_UNBALANCED };
 
+enum class CoreShrinkBoundary { ExitException, BalancedCall, Demand, ParameterAlias };
+
+inline const char *CoreShrinkBoundaryName(CoreShrinkBoundary boundary) {
+    switch (boundary) {
+        case CoreShrinkBoundary::ExitException: return "shrink-exit-exception";
+        case CoreShrinkBoundary::BalancedCall: return "shrink-balanced-call";
+        case CoreShrinkBoundary::Demand: return "shrink-demand";
+        case CoreShrinkBoundary::ParameterAlias: return "shrink-parameter-alias";
+    }
+    throw CompileError { "internal compiler error: invalid Core shrink boundary" };
+}
+
+struct CoreShrinkUnsupported {
+    CoreShrinkBoundary boundary;
+    Line at;
+};
+
 // A shrink a body records against what one of its parameters' or outside
 // roots' storage only leads to, through the references it holds: an array
 // of the given type (TypeCheck::ShrinkTargets).
@@ -1940,6 +1957,8 @@ struct FnRecord {
     // tell: each a parameter's class against another class, or against an
     // array or view outside the activation.
     vector<LiveShrink> liveshrinks;
+    // Source safety refinements that the conservative Core profile cannot represent.
+    vector<CoreShrinkUnsupported> coreShrinkUnsupported;
     // Arrays the body may grow -- push, append, a pool allocation, format,
     // resize, a whole assignment -- itself or through its callees
     // in the same form, each with the types of the resizable

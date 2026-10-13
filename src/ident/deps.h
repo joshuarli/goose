@@ -1302,6 +1302,10 @@ class DepFinal {
                 else c.Tag('_');
             }
         }
+        c.U(r.coreShrinkUnsupported.size());
+        for (auto &unsupported : r.coreShrinkUnsupported)
+            c.Str(CoreShrinkBoundaryName(unsupported.boundary))
+                .Str(mods.ModuleOf(unsupported.at.fileidx)).I(unsupported.at.line);
         {
             auto types = [&](Canon &out, const vector<TypeExpr *> &arrays) {
                 vector<string> v;

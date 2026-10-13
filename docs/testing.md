@@ -342,6 +342,11 @@ v0.2; GIR-H and GIR-L exports use v0.3 and v0.2 for the current `core-pilot`
 profile. `--pipeline gir` selects GIR for C, JIT and
 units output.
 
+`python test/core/check_shrink_boundaries.py build/goose` checks the conservative
+shrink support diagnostics, verifies that rejected exports leave no Core or GIR
+artifact, and keeps last-use, disjoint-owner, balanced-call and limited-slot
+counterexamples supported.
+
 A direct export probe is:
 
 ```sh

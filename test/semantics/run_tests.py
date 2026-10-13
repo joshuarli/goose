@@ -93,6 +93,15 @@ FEATURE_REPORT_EXPECTATIONS = {
     "semantics/sem_core_shrink_nonflat_element": ("nonflat-element",),
     "core/core_export_report_limited_capture": ("limited-capture-mutation",),
     "core/core_export_report_limited_element_write": ("limited-capture-mutation", "limited-value"),
+    "core/core_export_shrink_exit": ("shrink-exit-exception",),
+    "core/core_export_shrink_balanced": ("shrink-balanced-call",),
+    "core/core_export_shrink_demand": ("shrink-demand",),
+    "core/core_export_shrink_demand_recursive": ("shrink-demand",),
+    "core/core_export_shrink_demand_slice_slot": ("shrink-demand",),
+    "core/core_export_shrink_parameter": ("shrink-parameter-alias",),
+    "core/core_export_shrink_parameter_capture": ("shrink-parameter-alias",),
+    "core/core_export_shrink_supported": (),
+    "core/core_export_shrink_globals": (),
 }
 LOCATION_PATTERN = re.compile(r"\.goose:(\d+)\)\s*$")
 
