@@ -1,4 +1,6 @@
 import Goose.Lower.Claims
+import Goose.Core.Validate
+import Goose.GIR.Validate
 
 /-!
 The lowering preserves the meaning of Core modules in a fragment: every run of the Core
@@ -8,6 +10,108 @@ evaluator that finishes is matched by a run of the lowered module's interpreter 
 namespace Goose.Proofs.Lower
 
 open Goose.Core Goose.GIR Goose.Lower
+
+/-! ### Validation facts -/
+
+theorem exceptBind_ok_left {ε : Type} {α β : Type} {x : Except ε α} {f : α → Except ε β}
+    {b : β} (h : x >>= f = .ok b) : ∃ a, x = .ok a ∧ f a = .ok b := by
+  cases hx : x with
+  | error e =>
+    simp only [hx, bind, Except.bind] at h
+    cases h
+  | ok a =>
+    simp only [hx, bind, Except.bind] at h
+    exact ⟨a, rfl, h⟩
+
+theorem coreForAll_ok {α : Type} (xs : List α) (f : α → Core.V Unit)
+    (h : Core.forAll xs f = .ok ()) : ∀ x ∈ xs, f x = .ok () := by
+  induction xs with
+  | nil => simp
+  | cons a rest ih =>
+    simp only [Core.forAll] at h
+    cases hfa : f a with
+    | error e =>
+      simp only [hfa, bind, Except.bind] at h
+      cases h
+    | ok u =>
+      cases u
+      simp only [hfa, bind, Except.bind, pure, Except.pure] at h
+      intro x hx
+      rcases List.mem_cons.mp hx with rfl | hx
+      · exact hfa
+      · exact ih h x hx
+
+/-- `Core.validate` exposes each check's successful result in order. -/
+theorem core_validate_stages (m : Core.Module) (h : Core.validate m = .ok ()) :
+    Core.checkStructTables m = .ok () ∧
+    Core.checkEntry m = .ok () ∧
+    Core.checkImplementationContexts m = .ok () ∧
+    (∀ i gl, m.globals[i]? = some gl → Core.checkGlobal m i gl = .ok ()) ∧
+    (∀ impl ∈ m.impls.toList, Core.checkImpl m impl = .ok ()) ∧
+    (∀ ctx ∈ m.contexts.toList, Core.checkContext m ctx = .ok ()) ∧
+    (∀ i, i < m.globals.size → Core.checkInitRoots m i = .ok ()) ∧
+    Core.checkModuleDemand m = .ok () := by
+  unfold Core.validate at h
+  obtain ⟨_, hstruct, hrest⟩ := exceptBind_ok_left h
+  obtain ⟨_, hentry, hrest⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, himplcontexts, hrest⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, hglobals, hrest⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, himpls, hrest⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, hcontexts, hrest⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, hroots, hdemand⟩ := exceptBind_ok_left hrest
+  refine ⟨by simpa using hstruct, by simpa using hentry, by simpa using himplcontexts,
+    ?_, ?_, ?_, ?_, hdemand⟩
+  · intro i gl hgl
+    have hi : i ∈ List.range m.globals.size := List.mem_range.mpr ((Array.getElem?_eq_some_iff.mp hgl).1)
+    have hcheck := coreForAll_ok (List.range m.globals.size) (fun g =>
+      match m.globals[g]? with
+      | some gval => Core.checkGlobal m g gval
+      | none => pure ()) hglobals i hi
+    simpa [hgl] using hcheck
+  · exact coreForAll_ok m.impls.toList (Core.checkImpl m) himpls
+  · exact coreForAll_ok m.contexts.toList (Core.checkContext m) hcontexts
+  · intro i hi
+    exact coreForAll_ok (List.range m.globals.size) (Core.checkInitRoots m) hroots i (List.mem_range.mpr hi)
+
+theorem checkEntry_shape {m : Core.Module} (h : Core.checkEntry m = .ok ()) :
+    ∃ ctx impl, m.contexts[m.entry]? = some ctx ∧ m.impls[ctx.impl]? = some impl ∧
+      impl.params.size = 0 ∧ impl.results.size = 0 := by
+  unfold Core.checkEntry at h
+  cases hctx : m.contexts[m.entry]? with
+  | none => simp [hctx, Core.reject] at h
+  | some ctx =>
+    cases himpl : m.impls[ctx.impl]? with
+    | none => simp [hctx, himpl, Core.reject] at h
+    | some impl =>
+      refine ⟨ctx, impl, rfl, himpl, ?_⟩
+      simp [hctx, himpl, Core.reject] at h
+      split at h
+      · rename_i hp
+        exact ⟨by simp [hp.1], by simp [hp.2]⟩
+      · simp at h
+
+theorem lower_preserves_module_headers (m : Core.Module) :
+    (lower m).files = m.files ∧
+    (lower m).origins = m.origins ∧
+    (lower m).profile = m.profile ∧
+    (lower m).structs = m.structs := by
+  exact ⟨rfl, rfl, rfl, rfl⟩
+
+theorem lower_global_lookup (m : Core.Module) (i : Nat) :
+    (lower m).globals[i]? = (m.globals[i]?).map (lowerGlobal m) := by
+  simp [lower]
+
+theorem lower_func_lookup (m : Core.Module) (i : Nat) :
+    (lower m).funcs[i]? = (m.impls[i]?).map (fun impl => lowerImplAt m i impl) := by
+  simp [lower]
+
+theorem checkGlobal_origin {m : Core.Module} {i : Nat} {g : Core.Global}
+    (h : Core.checkGlobal m i g = .ok ()) : g.org < m.origins.size := by
+  by_cases ht : (g.ty.storable && !g.ty.isRefLike) = true
+  · by_cases ho : g.org < m.origins.size
+    · exact ho
+    · simp [Core.checkGlobal, ht, ho, Core.reject, bind, Except.bind] at h
+  · simp [Core.checkGlobal, ht, Core.reject, bind, Except.bind] at h
 
 /-- The computation `c` finishes in a state, or stops by an abort or an exit, and then `g k`
 does the same in the same state for every large enough `k`. -/

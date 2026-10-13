@@ -734,6 +734,9 @@ def lowerEnv (m : Module) (vars : Array LocalVar) : LEnv :=
     globals := m.globals.map fun g => (g.ty, g.kind)
     sigs := m.impls.map fun impl => (impl.params.toList.map (tyOfVar impl ·.var), impl.results.toList) }
 
+/- A context can replace a parameter root with its concrete caller root. Keep
+the generic parameter root too, so GIR's context-independent body metadata
+covers every parameter alias that produced a specialized result root. -/
 def lowerRootInfo (m : Module) (implId : ImplId) (impl : Impl) : GIR.RootInfo :=
   let contexts := m.contexts.filter (·.impl == implId)
   let params := impl.params.toList.zipIdx.filterMap fun (p, i) =>
@@ -743,7 +746,14 @@ def lowerRootInfo (m : Module) (implId : ImplId) (impl : Impl) : GIR.RootInfo :=
     let roots := contexts.filterMap fun c => (c.contentRoots.find? (·.1 == p.var)).map (·.2)
     if roots.isEmpty then none else some (i, roots.foldl unionRoots [])
   let results := (List.range impl.results.size).map fun i =>
-    (contexts.filterMap fun c => c.resultRoots[i]?).foldl unionRoots []
+    (contexts.filterMap fun c => do
+      let roots ← c.resultRoots[i]?
+      let parameterRoots := impl.params.toList.zipIdx.filterMap fun (p, j) =>
+        match c.varRoots.find? (·.1 == p.var) with
+        | some (_, rootsForParam) =>
+          if roots.any rootsForParam.contains then some (.param j) else none
+        | none => none
+      some (unionRoots roots parameterRoots)).foldl unionRoots []
   { params := params.toArray, contents := contents.toArray, results := results.toArray }
 
 /-- Lower an implementation using its position in the module as its identity. -/
