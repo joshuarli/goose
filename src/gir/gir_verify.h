@@ -49,6 +49,7 @@ private:
     struct Fn {
         string label;
         const GirFunc *f;
+        bool initializer = false;
         vector<GirTypeId> vt;   // Type of each value by id, -1 where unknown.
         int nvalues = 0;
     };
@@ -80,11 +81,19 @@ private:
                 break;
             case GirOp::Bin: case GirOp::Cmp: case GirOp::BoolCmp: case GirOp::Elem:
             case GirOp::Index: case GirOp::Push: case GirOp::Store: case GirOp::Append:
+            case GirOp::PopN: case GirOp::Replace:
                 add(i.a); add(i.b);
+                break;
+            case GirOp::Resize:
+                add(i.a); add(i.b);
+                for (auto v : i.vals) add(v);
                 break;
             case GirOp::Un: case GirOp::Not: case GirOp::Conv: case GirOp::Next: case GirOp::Freeze:
             case GirOp::Load: case GirOp::Snap: case GirOp::SliceView: case GirOp::ViewLen: case GirOp::Field:
             case GirOp::ArrayLen: case GirOp::Fill: case GirOp::Init: case GirOp::Exit:
+                add(i.a);
+                break;
+            case GirOp::Pop: case GirOp::Clear:
                 add(i.a);
                 break;
             case GirOp::ViewSlice:
@@ -139,6 +148,9 @@ private:
             case GirOp::Bin: return MayAbortBin(i.bin) && (!m_low || i.flag);
             case GirOp::Un: return i.un == CoreUnOp::Neg && (!m_low || i.flag);
             case GirOp::Conv: return i.conv == CoreConvKind::As;
+            case GirOp::Push: return m.profile == CoreProfile::Shrink;
+            case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear: case GirOp::Replace:
+                return true;
             case GirOp::ViewSlice: case GirOp::Index: case GirOp::Call:
             case GirOp::Init: case GirOp::Store: case GirOp::Append: case GirOp::Print:
             case GirOp::Abort: case GirOp::Exit:
@@ -176,11 +188,12 @@ private:
     void Run() {
         CheckStages();
         CheckStructTable();
+        CheckProfileTypes();
         CheckEntryAndGlobals();
         for (auto &f : m.funcs) sigs.push_back({ f.params, f.results });
-        for (auto &f : m.funcs) fns.push_back({ cat("function ", f.name), &f, {}, 0 });
+        for (auto &f : m.funcs) fns.push_back({ cat("function ", f.name), &f, false, {}, 0 });
         for (auto &g : m.globals)
-            fns.push_back({ cat("initializer of global ", g.name), &g.init, {}, 0 });
+            fns.push_back({ cat("initializer of global ", g.name), &g.init, true, {}, 0 });
         for (auto &fn : fns) CheckSymbols(fn);
         for (auto &fn : fns) ValueTypes(fn);
         for (auto &fn : fns) CheckTypes(fn);
@@ -280,6 +293,44 @@ private:
                 end = field.offset + bytes;
             }
         }
+    }
+
+    void CheckProfileTypes() {
+        auto shrinkAbort = [](GirAbortKind kind) {
+            return kind >= GirAbortKind::PopEmpty;
+        };
+        for (size_t id = 0; id < m.types.size(); id++) {
+            auto &type = m.types[id];
+            if (type.kind != CoreType::GrowShrink && type.kind != CoreType::Limited) continue;
+            if (m.low) Fail("GIR-V090", "a low module retains a shrink-profile owner type");
+            if (m.profile != CoreProfile::Shrink)
+                Fail("GIR-V010", "core-pilot has no growshrink or limited type");
+            if (type.elem < 0 || type.elem >= (int)id)
+                Fail("GIR-V010", cat("owner type ", id, " does not name an earlier element type"));
+            if (type.kind == CoreType::Limited && (type.count <= 0 || type.count > INT32_MAX))
+                Fail("GIR-V010", cat("limited type ", id, " has a capacity outside 1..2147483647"));
+            if (!GirFlat(m, type.elem))
+                Fail("GIR-V010", cat("owner type ", id, " has a non-flat element type"));
+        }
+        auto scan = [&](const GirFunc &fn) {
+            for (auto &block : fn.blocks)
+                for (auto &i : block.insts) {
+                    if (i.op == GirOp::Abort) {
+                        if ((uint8_t)i.abort > (uint8_t)GirAbortKind::Capacity)
+                            Fail("GIR-V010", cat("function ", fn.name, " uses an unknown abort kind"));
+                        if (shrinkAbort(i.abort) &&
+                            (m.profile != CoreProfile::Shrink || !m.low))
+                            Fail("GIR-V010", cat("function ", fn.name,
+                                                   " uses a shrink abort kind outside core-shrink GIR-L"));
+                    }
+                    if (m.profile == CoreProfile::Pilot &&
+                        (i.op == GirOp::Pop || i.op == GirOp::PopN || i.op == GirOp::Resize ||
+                         i.op == GirOp::Clear || i.op == GirOp::Replace))
+                        Fail("GIR-V010", cat("function ", fn.name, " uses a shrink operation under core-pilot"));
+                }
+        };
+        for (auto &fn : m.funcs) scan(fn);
+        for (auto &global : m.globals) scan(global.init);
     }
 
     int64_t FlatSize(GirTypeId t) const {
@@ -475,7 +526,10 @@ private:
                                    " is outside the scope table"));
         if (f.org >= (int)m.origins.size()) SymbolFail(fn, cat("function origin ", f.org, " is outside the origin table"));
         if (!f.summary.unknown) {
-            for (auto *list : { &f.summary.reads, &f.summary.writes, &f.summary.grows, &f.summary.rebinds })
+            if (m.profile == CoreProfile::Pilot && !f.summary.shrinks.empty())
+                SymbolFail(fn, "a core-pilot summary contains shrink targets");
+            for (auto *list : { &f.summary.reads, &f.summary.writes, &f.summary.grows,
+                                &f.summary.shrinks, &f.summary.rebinds })
                 for (auto &t : *list) {
                     if (!t.global && t.index >= (int)f.params.size())
                         SymbolFail(fn, cat("summary names parameter ", t.index, ", which does not exist"));
@@ -633,11 +687,48 @@ private:
             case GirOp::Append: {
                 auto r = need(ty.Ref(i.a));
                 auto &pointee = m.Type(m.Type(r).elem);
-                if (pointee.kind != CoreType::Grow)
-                    TypeFail(fn, "append to a reference that does not point at a grow-only array");
+                if (!GirOwnerKind(pointee.kind))
+                    TypeFail(fn, "append to a reference that does not point at an owner array");
+                if (pointee.kind != CoreType::Grow && m.profile != CoreProfile::Shrink)
+                    TypeFail(fn, "shrink-profile append under core-pilot");
                 auto v = need(ty.View(i.b));
                 if (m.Type(v).elem != pointee.elem)
                     TypeFail(fn, "appended elements of another type than the array's");
+                break;
+            }
+            case GirOp::PopN: {
+                auto r = need(ty.Ref(i.a));
+                auto kind = m.Type(m.Type(r).elem).kind;
+                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(kind))
+                    TypeFail(fn, "pop_n to a reference that does not point at a shrink-profile owner array");
+                need(ty.IntTy(i.b));
+                break;
+            }
+            case GirOp::Resize: {
+                auto r = need(ty.Ref(i.a));
+                auto &owner = m.Type(m.Type(r).elem);
+                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(owner.kind))
+                    TypeFail(fn, "resize to a reference that does not point at a shrink-profile owner array");
+                need(ty.IntTy(i.b));
+                if (i.vals.size() > 1) TypeFail(fn, "resize has more than one fill value");
+                if (!i.vals.empty() && need(ty.Data(i.vals[0])) != owner.elem)
+                    TypeFail(fn, "resize fill value has another type than the owner's elements");
+                break;
+            }
+            case GirOp::Clear: {
+                auto r = need(ty.Ref(i.a));
+                auto kind = m.Type(m.Type(r).elem).kind;
+                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(kind))
+                    TypeFail(fn, "clear to a reference that does not point at a shrink-profile owner array");
+                break;
+            }
+            case GirOp::Replace: {
+                auto r = need(ty.Ref(i.a));
+                auto &owner = m.Type(m.Type(r).elem);
+                if (m.profile != CoreProfile::Shrink || !GirResizableKind(owner.kind))
+                    TypeFail(fn, "replace to a reference that does not point at a shrink-profile resizable array");
+                if (need(ty.Data(i.b)) != m.Type(r).elem)
+                    TypeFail(fn, "replacement run has another type than the owner's");
                 break;
             }
             case GirOp::PStore: {
@@ -726,9 +817,14 @@ private:
             for (size_t k = 0; same && k < f.params.size(); k++) same = b0.params[k].second == f.params[k];
             if (!same) TypeFail(fn, "the parameters of block 0 are not the function's parameters");
         }
+        for (auto param : f.params)
+            if (GirOwnerKind(m.Type(param).kind))
+                TypeFail(fn, "a nonfixed owner is a by-value parameter");
         for (auto result : f.results)
             if (IsRefSlice(result))
                 TypeFail(fn, "a reference-to-slice type is only valid for a parameter");
+            else if (GirOwnerKind(m.Type(result).kind) && !fn.initializer)
+                TypeFail(fn, "a nonfixed owner is a by-value result");
         for (size_t index = 0; index < f.slots.size(); index++) {
             auto &sl = f.slots[index];
             if (sl.var != (int)index)
@@ -1034,7 +1130,7 @@ private:
             if (def && (def->op == GirOp::Slot || def->op == GirOp::Global)) {
                 auto pointee = m.Type(fn.vt[v]).elem;
                 auto kind = m.Type(pointee).kind;
-                if (kind == CoreType::Struct || kind == CoreType::Arr || kind == CoreType::Grow)
+                if (kind == CoreType::Struct || kind == CoreType::Arr || GirOwnerKind(kind))
                     return close(true);
                 CoreMut mut;
                 GirTypeId ignored;
@@ -1142,10 +1238,12 @@ private:
             auto &t = m.Type(ty);
             if (t.kind == CoreType::Ref && t.mut == CoreMut::Mut) {
                 vector<char> open(fn.nvalues, 0);
-                if (!writable(value, open)) return false;
                 auto kind = m.Type(t.elem).kind;
-                if (kind == CoreType::Arr || kind == CoreType::Grow || kind == CoreType::Struct ||
-                    kind == CoreType::Slice) {
+                if (GirWholeOwnerBorrowUsesContents(kind))
+                    return contentsMutable(value, open);
+                if (!writable(value, open)) return false;
+                if (kind == CoreType::Arr || kind == CoreType::Struct || kind == CoreType::Slice ||
+                    kind == CoreType::Limited) {
                     fill(open.begin(), open.end(), 0);
                     return contentsMutable(value, open);
                 }
@@ -1153,6 +1251,17 @@ private:
                 vector<char> open(fn.nvalues, 0);
                 return contentsMutable(value, open);
             }
+            return true;
+        };
+        auto replaceBindingIsWritable = [&](int value) {
+            if (value < 0 || value >= (int)fn.vt.size() || fn.vt[value] < 0) return false;
+            auto &reference = m.Type(fn.vt[value]);
+            if (reference.kind != CoreType::Ref || reference.mut != CoreMut::Mut) return false;
+            auto *def = defs[value];
+            if (def && def->op == GirOp::Slot)
+                return f.slots[def->idx].kind == CoreVarKind::Var;
+            if (def && def->op == GirOp::Global)
+                return m.globals[def->idx].kind == CoreVarKind::Var;
             return true;
         };
         for (auto &b : f.blocks)
@@ -1178,9 +1287,16 @@ private:
                     auto ty = f.slots[i.idx].ty;
                     if (!mutableReferenceIsAuthorized(i.a, ty))
                         Fail("GIR-V030", cat(fn.label, ": a slot initializer materializes a mutable reference without its required capabilities"));
-                } else if (i.op == GirOp::Push || i.op == GirOp::Append) {
+                } else if (i.op == GirOp::Push || i.op == GirOp::Append || i.op == GirOp::Pop ||
+                           i.op == GirOp::PopN || i.op == GirOp::Resize || i.op == GirOp::Clear ||
+                           i.op == GirOp::Replace) {
                     if (refof(i.a, mut, pt) && mut != CoreMut::Mut)
-                        Fail("GIR-V030", cat(fn.label, ": growth through a read-only reference"));
+                        Fail("GIR-V030", cat(fn.label, ": owner mutation through a read-only reference"));
+                    vector<char> open(fn.nvalues, 0);
+                    if (!contentsMutable(i.a, open))
+                        Fail("GIR-V030", cat(fn.label, ": owner mutation without mutable contents"));
+                    if (i.op == GirOp::Replace && !replaceBindingIsWritable(i.a))
+                        Fail("GIR-V030", cat(fn.label, ": whole replacement requires a writable owner binding"));
                 }
             }
         for (auto &b : f.blocks) for (auto &i : b.insts) if (i.op == GirOp::Call) {
@@ -1482,7 +1598,7 @@ private:
     }
 
     struct Eff {
-        set<CoreTarget> reads, writes, grows, rebinds;
+        set<CoreTarget> reads, writes, grows, shrinks, rebinds;
         bool aborts = false, outputs = false, unknown = false;
     };
 
@@ -1502,7 +1618,46 @@ private:
                     case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen:
                         AddTargets(e.reads, RootsAt(p.vals, i.a));
                         break;
-                    case GirOp::Push: AddTargets(e.grows, RootsAt(p.vals, i.a)); break;
+                    case GirOp::Push: {
+                        auto roots = RootsAt(p.vals, i.a);
+                        AddTargets(e.grows, roots);
+                        if (m.profile == CoreProfile::Shrink) AddTargets(e.writes, roots);
+                        auto &ref = m.Type(fn.vt[i.a]);
+                        if (m.Type(ref.elem).kind == CoreType::Limited) e.aborts = true;
+                        break;
+                    }
+                    case GirOp::Pop: case GirOp::PopN: {
+                        auto roots = RootsAt(p.vals, i.a);
+                        AddTargets(e.reads, roots);
+                        AddTargets(e.shrinks, roots);
+                        e.aborts = true;
+                        break;
+                    }
+                    case GirOp::Resize: {
+                        auto roots = RootsAt(p.vals, i.a);
+                        AddTargets(e.reads, roots);
+                        AddTargets(e.shrinks, roots);
+                        e.aborts = true;
+                        if (!i.vals.empty()) {
+                            AddTargets(e.writes, roots);
+                            AddTargets(e.grows, roots);
+                        }
+                        break;
+                    }
+                    case GirOp::Clear: {
+                        auto roots = RootsAt(p.vals, i.a);
+                        AddTargets(e.reads, roots);
+                        AddTargets(e.shrinks, roots);
+                        break;
+                    }
+                    case GirOp::Replace: {
+                        auto roots = RootsAt(p.vals, i.a);
+                        AddTargets(e.reads, roots);
+                        AddTargets(e.shrinks, roots);
+                        AddTargets(e.writes, roots);
+                        AddTargets(e.grows, roots);
+                        break;
+                    }
                     case GirOp::Bin: if (MayAbortBin(i.bin)) e.aborts = true; break;
                     case GirOp::Un: if (i.un == CoreUnOp::Neg) e.aborts = true; break;
                     case GirOp::Conv: if (i.conv == CoreConvKind::As) e.aborts = true; break;
@@ -1530,6 +1685,7 @@ private:
                         map(callee.summary.reads, e.reads);
                         map(callee.summary.writes, e.writes);
                         map(callee.summary.grows, e.grows);
+                        map(callee.summary.shrinks, e.shrinks);
                         e.aborts |= callee.summary.aborts;
                         e.outputs |= callee.summary.outputs;
                         break;
@@ -1551,7 +1707,14 @@ private:
                             }
                         break;
                     }
-                    case GirOp::Append: AddTargets(e.grows, RootsAt(p.vals, i.a)); break;
+                    case GirOp::Append: {
+                        auto roots = RootsAt(p.vals, i.a);
+                        AddTargets(e.grows, roots);
+                        if (m.profile == CoreProfile::Shrink) AddTargets(e.writes, roots);
+                        auto &ref = m.Type(fn.vt[i.a]);
+                        if (m.Type(ref.elem).kind == CoreType::Limited) e.aborts = true;
+                        break;
+                    }
                     case GirOp::Print: e.outputs = true; break;
                     case GirOp::Abort: case GirOp::Exit: e.aborts = true; break;
                     default: break;
@@ -1579,6 +1742,7 @@ private:
             within("reads", e.reads, f.summary.reads);
             within("writes", e.writes, f.summary.writes);
             within("grows", e.grows, f.summary.grows);
+            within("shrinks", e.shrinks, f.summary.shrinks);
             within("rebinds", e.rebinds, f.summary.rebinds);
             if (e.aborts && !f.summary.aborts) Fail("GIR-V050", cat(name, " may abort, which its summary omits"));
             if (e.outputs && !f.summary.outputs) Fail("GIR-V050", cat(name, " prints, which its summary omits"));

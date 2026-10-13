@@ -151,6 +151,8 @@ private:
             case CoreType::Unit: out += "[\"unit\"]"; break;
             case CoreType::Arr: Append(out, "[\"arr\",", typenum.at(t.elem), ",", t.count, "]"); break;
             case CoreType::Grow: Append(out, "[\"grow\",", typenum.at(t.elem), "]"); break;
+            case CoreType::GrowShrink: Append(out, "[\"growshrink\",", typenum.at(t.elem), "]"); break;
+            case CoreType::Limited: Append(out, "[\"limited\",", typenum.at(t.elem), ",", t.count, "]"); break;
             case CoreType::Ref:
                 Append(out, "[\"ref\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
                 break;
@@ -208,12 +210,15 @@ private:
         out += ']';
     }
 
-    static void Summary(string &out, const CoreSummary &s) {
+    static void Summary(string &out, const CoreSummary &s, CoreProfile profile) {
         if (s.unknown) { out += "[\"summary_unknown\"]"; return; }
         out += "[\"summary\",";
         Targets(out, s.reads); out += ',';
         Targets(out, s.writes); out += ',';
         Targets(out, s.grows); out += ',';
+        if (profile == CoreProfile::Shrink) {
+            Targets(out, s.shrinks); out += ',';
+        }
         Targets(out, s.rebinds);
         Append(out, ",", (int)s.aborts, ",", (int)s.outputs, "]");
     }
@@ -286,7 +291,7 @@ private:
         out += "],";
         RootInfo(out, f.roots);
         out += ',';
-        Summary(out, f.summary);
+        Summary(out, f.summary, m.profile);
         out += ',';
         OptOrg(out, f.org);
         out += ']';
@@ -512,6 +517,12 @@ private:
                 OptOrg(out, i.org);
                 out += ']';
                 return;
+            case GirOp::Pop:
+                def("i_pop");
+                Append(out, ",", i.a, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
             case GirOp::Call:
                 def("i_call");
                 Append(out, ",", i.idx, ",");
@@ -546,6 +557,28 @@ private:
                 return;
             case GirOp::Append:
                 Append(out, "[\"x_append\",", i.a, ",", i.b, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::PopN:
+                Append(out, "[\"x_pop_n\",", i.a, ",", i.b, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::Resize:
+                Append(out, "[\"x_resize\",", i.a, ",", i.b, ",");
+                Ints(out, i.vals);
+                out += ',';
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::Clear:
+                Append(out, "[\"x_clear\",", i.a, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::Replace:
+                Append(out, "[\"x_replace\",", i.a, ",", i.b, ",");
                 OptOrg(out, i.org);
                 out += ']';
                 return;
