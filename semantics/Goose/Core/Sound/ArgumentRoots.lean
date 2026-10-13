@@ -42,7 +42,7 @@ theorem checkResultShape_rootDeclaration {m : Module} {impl : Impl} {ctx : Conte
     match q with
     | .global g => ∃ gl, m.globals[g]? = some gl
     | .local _ => False
-    | .param _ => True := by
+    | .param j => j < impl.params.size := by
   unfold checkResultShape at checked
   inv at checked
   obtain ⟨lengths, loop⟩ := checked
@@ -80,7 +80,18 @@ theorem checkResultShape_rootDeclaration {m : Module} {impl : Impl} {ctx : Conte
         · inv at success) roots q rootMember
     cases q with
     | «local» _ => dsimp only at root; inv at root
-    | param _ => trivial
+    | param j =>
+      dsimp only at root
+      cases hvar : impl.vars[j]? with
+      | none => simp only [hvar] at root; inv at root
+      | some lv =>
+        simp only [hvar] at root
+        split at root
+        · rename_i bound
+          have valid : j < impl.params.size ∧ lv.ty.isRefLike = true := by
+            simpa using bound
+          exact valid.1
+        · inv at root
     | global g =>
       dsimp only at root
       split at root
@@ -96,7 +107,7 @@ theorem checkContentShape_rootDeclaration {m : Module} {impl : Impl} {ctx : Cont
     match q with
     | .global g => ∃ gl, m.globals[g]? = some gl
     | .local _ => False
-    | .param _ => True := by
+    | .param j => j < impl.params.size := by
   unfold checkContentShape at checked
   cases found : ctx.contentRoots.find? (·.1 == x) with
   | none => simp [found] at annotation
@@ -120,7 +131,10 @@ theorem checkContentShape_rootDeclaration {m : Module} {impl : Impl} {ctx : Cont
       have root := (forAll_ok _ _).1 loop q member
       cases q with
       | «local» _ => dsimp only at root; inv at root
-      | param _ => trivial
+      | param j =>
+        dsimp only at root
+        inv at root
+        exact root
       | global g =>
         dsimp only at root
         inv at root
@@ -134,7 +148,7 @@ theorem checkAnnotationShape_rootDeclaration {m : Module} {impl : Impl} {ctx : C
     match q with
     | .global g => ∃ gl, m.globals[g]? = some gl
     | .local y => ∃ lv, impl.vars[y]? = some lv ∧ lv.ty.isRefLike = false
-    | .param _ => True := by
+    | .param j => j < impl.params.size := by
   unfold checkAnnotationShape at checked
   simp only [ex_bind_ok] at checked
   obtain ⟨loopUnit, firstLoop, _⟩ := checked
@@ -202,30 +216,56 @@ theorem checkAnnotationShape_rootDeclaration {m : Module} {impl : Impl} {ctx : C
           · rename_i bound
             exact ⟨m.globals[g], Array.getElem?_eq_getElem bound⟩
           · inv at root
-        | param _ => trivial
+        | param j =>
+          dsimp only at root
+          split at root
+          · assumption
+          · inv at root
       · inv at row
 
-/-- Argument roots name declared globals. A reference holder in an open caller
-scope must still be visible so its binding can classify its stored value. -/
-def ArgumentRootDeclarations (m : Module) (tenv : TEnv) (env : Env)
+/-- Argument roots name declared globals and parameters of the supplied caller
+implementation. A reference holder in an open caller scope must still be visible
+so its binding can classify its stored value. -/
+def ArgumentRootDeclarations (m : Module) (impl : Impl) (tenv : TEnv) (env : Env)
     (ars : List (List RootRef)) : Prop :=
   ∀ (i : Nat) (q : RootRef), q ∈ ars[i]?.getD [] → match q with
     | .global g => ∃ gl, m.globals[g]? = some gl
     | .local x => ∀ lv si, env.vars[x]? = some lv →
         env.scopes.lookup lv.scope = some si → lv.ty.isRefLike = true → x ∈ tenv.visible
-    | .param _ => True
+    | .param j => j < impl.params.size
 
 theorem ArgumentRootDeclarations.included
-    {m : Module} {tenv : TEnv} {env : Env} {actual expected : List (List RootRef)}
-    (declarations : ArgumentRootDeclarations m tenv env expected)
+    {m : Module} {impl : Impl} {tenv : TEnv} {env : Env} {actual expected : List (List RootRef)}
+    (declarations : ArgumentRootDeclarations m impl tenv env expected)
     (included : RootListsIncluded actual expected) :
-    ArgumentRootDeclarations m tenv env actual := by
+    ArgumentRootDeclarations m impl tenv env actual := by
   intro i q member
   cases ha : actual[i]? with
   | none => simp [ha] at member
   | some roots =>
     obtain ⟨expectedRoots, he, subset⟩ := included i roots ha
     exact declarations i q (by simpa [he] using subset q (by simpa [ha] using member))
+
+theorem ArgumentRootDeclarations.globalDeclaration
+    {m : Module} {impl : Impl} {tenv : TEnv} {env : Env} {ars : List (List RootRef)} {i g : Nat}
+    (declarations : ArgumentRootDeclarations m impl tenv env ars)
+    (member : RootRef.global g ∈ ars[i]?.getD []) :
+    ∃ gl, m.globals[g]? = some gl :=
+  declarations i (.global g) member
+
+theorem ArgumentRootDeclarations.globalIndex
+    {m : Module} {impl : Impl} {tenv : TEnv} {env : Env} {ars : List (List RootRef)} {i g : Nat}
+    (declarations : ArgumentRootDeclarations m impl tenv env ars)
+    (member : RootRef.global g ∈ ars[i]?.getD []) : g < m.globals.size := by
+  obtain ⟨gl, lookup⟩ := declarations.globalDeclaration member
+  exact (Array.getElem?_eq_some_iff.1 lookup).1
+
+theorem ArgumentRootDeclarations.paramIndex
+    {m : Module} {impl : Impl} {tenv : TEnv} {env : Env} {ars : List (List RootRef)} {i j : Nat}
+    (declarations : ArgumentRootDeclarations m impl tenv env ars)
+    (member : RootRef.param j ∈ ars[i]?.getD []) :
+    j < impl.params.size :=
+  declarations i (.param j) member
 
 /-- Existing non-reference storage is observed by declaration type; visible
 reference holders are classified from the frame's stored binding. -/
@@ -234,7 +274,7 @@ theorem Frame.classifiedArgumentRoots
     {future : List VarId} {ars : List (List RootRef)}
     {oldObs newObs : Observation} {newD : RootInst → Ty → Prop}
     (frame : Frame m W tenv penv env s future)
-    (declarations : ArgumentRootDeclarations m tenv env ars)
+    (declarations : ArgumentRootDeclarations m penv.impl tenv env ars)
     (inherited : ClassifiedParameters m W.P W.D oldObs s.store)
     (roots : ∀ r T, oldObs.roots r T → newObs.roots r T)
     (storage : ∀ r T, StorageRootTypes env r T → s.store.roots[r]? ≠ none →
