@@ -196,3 +196,29 @@ Findings the harness made about the base compiler, beyond the table:
   caller's code changes with it (`E07a` changes `main`).
 - Embedded file bytes are static data; the only code that changes with them
   is the global initializer (`E09c`).
+
+## Unit cache qualification
+
+`units_matrix.py --goose GOOSE` runs the incremental unit-cache rows. It checks
+the build's stdout and diagnostics against a clean build as well as unit text,
+exit status, and executable behavior. `E16` checks the intermediate edit build
+and the exact revert.
+
+`E13` uses two observed interruption points on POSIX hosts: a FIFO blocks
+completion-record publication after the object is renamed, and a compiler
+wrapper blocks after a link invocation starts. The harness kills Goose only
+after observing each state, then checks recovery against a clean build. The
+seeded `--random N --seed S` sequence also checks expected error diagnostics,
+absence of a success line on errors, warning presence, and that a damaged
+object is reported and rebuilt.
+
+`E10` checks numeric profiles, `-D`, available C compiler identities, and a
+binary-only compiler identity change. Raw independent C flags, a target-only
+change, and a runtime-text-only change are unavailable through the current
+compiler interface: `--debug` couples numeric mode with C flags, targets are
+not selectable, and runtime text is embedded in the compiler binary.
+
+Verification status for this harness update: targeted `E13` passed with both
+interruption points observed and recovery compared with clean builds. The
+seeded sequence's strengthened assertions were not rerun within the three
+matrix attempts; the earlier 60-step result is not evidence for this update.
