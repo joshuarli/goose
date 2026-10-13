@@ -324,6 +324,13 @@ theorem callEffects_ok (callee : Impl) (cctx : Context) (ar : List (List RootRef
     simp only [callEffects, h]
     exact ⟨addTargets_right _ _, addTargets_right _ _, addTargets_right _ _⟩
 
+theorem callShrinkTargets_ok (callee : Impl) (cctx : Context) (ar : List (List RootRef)) (e : Eff)
+    (sm : Summary) (hs : callee.summary = .known sm) :
+    ∀ t, t ∈ mapCallTargets callee cctx ar sm.shrinks →
+      t ∈ (callEffects callee cctx ar e).shrinks := by
+  simp only [callEffects, hs]
+  exact addTargets_right _ _
+
 /-! ### Stages of the validator -/
 
 theorem effWithin_ok (name what : String) (found declared : List Target)
@@ -357,10 +364,36 @@ theorem checkSummary_ok (impl : Impl) (ctx : Context) (eff : Eff)
     · exact Or.inl (Or.inl h)
     · exact Or.inl (Or.inr h)
     · exact Or.inr h
-  have := (forAll_ok _ _).1 hpar _ hmem
+  have hmemAll : Target.param i ∈ sm.reads ++ sm.writes ++ sm.grows ++ sm.shrinks :=
+    List.mem_append_left _ hmem
+  have := (forAll_ok _ _).1 hpar _ hmemAll
   simp only at this
   inv at this
   exact this
+
+theorem checkSummary_shrinks_ok (impl : Impl) (ctx : Context) (eff : Eff)
+    (h : checkSummary impl ctx eff = .ok ()) (sm : Summary) (hs : impl.summary = .known sm) :
+    ∀ t, t ∈ eff.shrinks → t ∈ expandTargets impl ctx sm.shrinks := by
+  unfold checkSummary at h
+  simp only [hs] at h
+  inv at h
+  obtain ⟨_, _, _, _, _, hshrinks, _⟩ := h
+  exact effWithin_ok _ _ _ _ hshrinks
+
+theorem checkSummary_shrinkParams_ok (impl : Impl) (ctx : Context) (eff : Eff)
+    (h : checkSummary impl ctx eff = .ok ()) (sm : Summary) (hs : impl.summary = .known sm) :
+    ∀ i, Target.param i ∈ sm.shrinks → i < impl.params.size := by
+  unfold checkSummary at h
+  simp only [hs] at h
+  inv at h
+  obtain ⟨hpar, _⟩ := h
+  intro i hi
+  have hmem : Target.param i ∈ sm.reads ++ sm.writes ++ sm.grows ++ sm.shrinks :=
+    List.mem_append_right _ hi
+  have hparam := (forAll_ok _ _).1 hpar (Target.param i) hmem
+  simp only at hparam
+  inv at hparam
+  exact hparam
 
 theorem checkInitCall_state (env : TEnv) (callee : Impl) (s : Nat) (r : Unit × Nat)
     (h : checkInitCall env callee s = .ok r) : r.2 = s := by

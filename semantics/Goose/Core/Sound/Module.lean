@@ -65,8 +65,9 @@ theorem checkGlobal_ok (m : Module) (g : GlobalId) (gl : Global) (h : checkGloba
     ∃ tn, tyExpr (initEnv m g) gl.init 0 = .ok (gl.ty, tn) := by
   unfold checkGlobal at h
   inv at h
-  obtain ⟨hty, _, t, tn, hte, heq⟩ := h
-  have : t = gl.ty := by simpa using heq
+  obtain ⟨hty, _, t, tn, hte, howner⟩ := h
+  obtain ⟨_, _, hbeq⟩ := howner
+  have : t = gl.ty := eq_of_beq hbeq
   subst this
   simp only [Bool.and_eq_true, Bool.not_eq_true'] at hty
   exact ⟨hty, tn, hte⟩
@@ -75,7 +76,8 @@ theorem checkInitRoots_ok (m : Module) (g : GlobalId) (gl : Global) (hg : m.glob
     (h : checkInitRoots m g = .ok ()) :
     ∃ rho st, rpExpr ⟨m, initImpl, initContext, []⟩ gl.init ⟨0, {}⟩ = .ok (rho, st) ∧
       st.eff.unknown = false ∧
-      ∀ t : Target, (t ∈ st.eff.reads ∨ t ∈ st.eff.writes ∨ t ∈ st.eff.grows) →
+      ∀ t : Target,
+        (t ∈ st.eff.reads ∨ t ∈ st.eff.writes ∨ t ∈ st.eff.grows ∨ t ∈ st.eff.shrinks) →
         ∀ h, t = .global h → h < g := by
   unfold checkInitRoots at h
   simp only [hg] at h
@@ -84,10 +86,11 @@ theorem checkInitRoots_ok (m : Module) (g : GlobalId) (gl : Global) (hg : m.glob
   refine ⟨rho, st, hre, by simpa using hu, ?_⟩
   intro t ht k hk
   subst hk
-  have hmem : Target.global k ∈ st.eff.reads ++ st.eff.writes ++ st.eff.grows := by
+  have hmem : Target.global k ∈ st.eff.reads ++ st.eff.writes ++ st.eff.grows ++ st.eff.shrinks := by
     simp only [List.mem_append]
-    rcases ht with h | h | h
-    · exact Or.inl (Or.inl h)
+    rcases ht with h | h | h | h
+    · exact Or.inl (Or.inl (Or.inl h))
+    · exact Or.inl (Or.inl (Or.inr h))
     · exact Or.inl (Or.inr h)
     · exact Or.inr h
   have := (forAll_ok _ _).1 hall _ hmem
@@ -160,8 +163,9 @@ theorem checkContext_ok (m : Module) (ctx : Context) (h : checkContext m ctx = .
 theorem validate_modOk (m : Module) (h : validate m = .ok ()) : ModOk m := by
   unfold validate at h
   inv at h
-  obtain ⟨hstruct, hentry, hglob, himpl, hctx, hinit⟩ := h
-  refine ⟨?_, ?_, ?_, checkEntry_ok m hentry⟩
+  obtain ⟨hstruct, hentry, hglob, himpl, hctx, hinit, hdemand⟩ := h
+  refine ⟨hstruct, ?_, ?_, ?_, checkEntry_ok m hentry, hdemand,
+    deriveModuleDemand_ok_wellFormed m hdemand⟩
   · intro i impl hi
     exact checkImpl_ok m impl ((forAll_ok _ _).1 himpl impl
       (Array.mem_toList_iff.2 (Array.mem_of_getElem? hi)))

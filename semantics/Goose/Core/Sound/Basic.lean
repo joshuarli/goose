@@ -105,7 +105,8 @@ theorem LocOk.fieldPath {m : Module} {G : Nat} {s : Store} {l : Loc} {a b : Ty} 
 /-- A run of `n` elements from `st` inside the array of `E` at `l`. -/
 def SliceTy (s : Store) (l : Loc) (st n : Nat) (E : Ty) : Prop :=
   ∃ v es, s.read l = .ok v ∧ v.elems? = some es ∧ st + n ≤ es.size ∧
-    (FlatTy (.grow E) v ∨ ∃ k, FlatTy (.arr E k) v)
+    (FlatTy (.grow E) v ∨ FlatTy (.growshrink E) v ∨
+      (∃ k, FlatTy (.arr E k) v) ∨ (∃ capacity, FlatTy (.limited E capacity) v))
 
 /-- The value has the type in the store. Mutability is not part of it. -/
 def HasTy (m : Module) (G : Nat) (s : Store) (v : Val) : Ty → Prop
@@ -118,6 +119,8 @@ def HasTy (m : Module) (G : Nat) (s : Store) (v : Val) : Ty → Prop
   | .bool => FlatTy .bool v
   | .arr E k => FlatTy (.arr E k) v
   | .grow E => FlatTy (.grow E) v
+  | .growshrink E => FlatTy (.growshrink E) v
+  | .limited E capacity => FlatTy (.limited E capacity) v
   | .structT sid ts => FlatTy (.structT sid ts) v
 
 /-- What a stored reference or slice must denote, whatever its type. -/
@@ -147,9 +150,11 @@ theorem SliceTy.mono {s s' : Store} {l : Loc} {st n : Nat} {E : Ty} (hle : Store
   obtain ⟨x', hx', hT', hs⟩ := hr' _ _ hg
   obtain ⟨es', hes', hle'⟩ := hs es hes
   refine ⟨x', es', (read_ok_iff _ _ _).2 ⟨old', ho', hx'⟩, hes', by omega, ?_⟩
-  rcases hT with h | ⟨k, h⟩
+  rcases hT with h | h | ⟨k, h⟩ | ⟨capacity, h⟩
   · exact Or.inl (hT' _ h)
-  · exact Or.inr ⟨k, hT' _ h⟩
+  · exact Or.inr (Or.inl (hT' _ h))
+  · exact Or.inr (Or.inr (Or.inl ⟨k, hT' _ h⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨capacity, hT' _ h⟩))
 
 theorem LocOk.mono {m : Module} {G : Nat} {s s' : Store} {l : Loc} {T : Ty} (hle : StoreLe s s')
     (h : LocOk m G s l T) : LocOk m G s' l T :=
