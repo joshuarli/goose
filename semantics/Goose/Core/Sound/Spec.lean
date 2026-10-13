@@ -192,7 +192,7 @@ def BlockSpec (n : Nat) : Prop :=
       Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧
       match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
-          stmtsDiverge stmts = false
+          stmtsDiverge m.noReturn stmts = false
       | .brk => tenv.loops ≠ 0 ∧ stmtsHaveBreak stmts = true
       | .cont => tenv.loops ≠ 0
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v)
@@ -209,7 +209,7 @@ def StmtsSpec (n : Nat) : Prop :=
         (∀ v, fl = .normal v → tenv'' = tenv')) ∧
       ExtS env (Dset W) s s' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
-      | .normal v => v = .unit ∧ stmtsDiverge ss = false
+      | .normal v => v = .unit ∧ stmtsDiverge m.noReturn ss = false
       | .brk => tenv.loops ≠ 0 ∧ stmtsHaveBreak ss = true
       | .cont => tenv.loops ≠ 0
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v)
@@ -224,7 +224,7 @@ def StmtSpec (n : Nat) : Prop :=
     Sat (execStmt n ⟨prof, m⟩ env st) s (fun fl s' =>
       Frame m W tenv' penv env s' ∧ TSame tenv tenv' ∧ ExtS env (Dset W) s s' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
-      | .normal _ => st.diverges = false
+      | .normal _ => st.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ st.hasBreak = true
       | .cont => tenv.loops ≠ 0
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v)
@@ -330,7 +330,7 @@ structure ImplOk (m : Module) (impl : Impl) : Prop where
   body : ∃ bodyTy tn, tyBlock (implEnv m impl) [] impl.body impl.params.size = .ok (bodyTy, tn) ∧
     ((impl.results.toList = [] ∧ bodyTy = .unit) ∨
       ∃ t, impl.results.toList = [t] ∧ (impl.body.value.isSome = true → bodyTy = t) ∧
-        (impl.body.value.isSome = false → impl.body.diverges = true))
+        (impl.body.value.isSome = false → impl.body.diverges m.noReturn = true))
 
 structure CtxOk (m : Module) (impl : Impl) (ctx : Context) : Prop where
   paramAnn : ∀ (i : Nat) (ann : List RootRef), i < impl.params.size →

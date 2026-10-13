@@ -31,6 +31,17 @@ theorem Sat.bind {m : M α} {f : α → M β} {s : St} {R : α → St → Prop} 
     rw [hr] at h1
     cases e <;> simp_all
 
+/-- As `Sat.bind`, with the first computation's result in hand. -/
+theorem Sat.bind_eq {m : M α} {f : α → M β} {s : St} {R : α → St → Prop} {Q : β → St → Prop}
+    (h1 : Sat m s R) (h2 : ∀ a s', m s = .ok a s' → R a s' → Sat (f a) s' Q) : Sat (m >>= f) s Q := by
+  show Sat (M.bind' m f) s Q
+  unfold Sat M.bind' at *
+  cases hr : m s with
+  | ok a s1 => rw [hr] at h1; exact h2 a s1 hr h1
+  | stop e s1 =>
+    rw [hr] at h1
+    cases e <;> simp_all
+
 theorem Sat.mono {m : M α} {s : St} {R Q : α → St → Prop}
     (h1 : Sat m s R) (h2 : ∀ a s', R a s' → Q a s') : Sat m s Q := by
   unfold Sat at *

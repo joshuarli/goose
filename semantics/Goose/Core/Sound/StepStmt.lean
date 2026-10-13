@@ -24,7 +24,7 @@ theorem step_stmt_a (ih : Specs m prof n) :
     Sat (execStmt (n + 1) ⟨prof, m⟩ env st) s (fun fl s' =>
       Frame m W tenv' penv env s' ∧ TSame tenv tenv' ∧ ExtS env (Dset W) s s' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
-      | .normal _ => st.diverges = false
+      | .normal _ => st.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ st.hasBreak = true
       | .cont => tenv.loops ≠ 0
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) := by
@@ -203,10 +203,18 @@ theorem step_stmt_a (ih : Specs m prof n) :
     obtain ⟨_, te, t1, hte, rfl, rfl⟩ := ht
     obtain ⟨re, hre⟩ := hr
     simp only [execStmt]
-    refine Sat.bind (ih.expr W tenv' penv env s e _ _ _ _ _ _ hp hF hte hre hE) ?_
-    rintro v s1 ⟨hF1, hX1, _, _⟩
+    refine Sat.bind_eq (ih.expr W tenv' penv env s e _ _ _ _ _ _ hp hF hte hre hE) ?_
+    rintro v s1 heq ⟨hF1, hX1, _, _⟩
     simp only [sat_pure]
-    exact ⟨hF1, TSame.refl _, hX1.toS, hT.ext hX1.dom hcur, rfl⟩
+    refine ⟨hF1, TSame.refl _, hX1.toS, hT.ext hX1.dom hcur, ?_⟩
+    -- A call that returned is not a call of a function that never returns.
+    cases hdv : (Stmt.expr e o).diverges m.noReturn with
+    | false => rfl
+    | true =>
+      exact absurd heq (never_call_expr ⟨prof, m⟩ m.noReturn (noReturn_sound m prof) n env e o
+        (by cases e <;> first
+              | (simp [Stmt.diverges] at hdv; done)
+              | (simpa [Stmt.diverges] using hdv)) s v s1)
   | append owner src o =>
     simp only [tyStmt] at ht; inv at ht
     simp only [rpStmt] at hr; inv at hr
