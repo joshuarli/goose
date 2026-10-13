@@ -194,13 +194,17 @@ private def initializerCore (stop : Bool) : Core.Module :=
 private def writeSummary : Func :=
   { borrowed with
     params := [.ref .mutable recordTy]
-    summary := .known ⟨[], [], [], [], false, false⟩
+    summary := .known {
+      reads := [], writes := [], grows := [], shrinks := [],
+      rebinds := [], aborts := false, outputs := false }
     blocks := #[⟨[(0, .data (.ref .mutable recordTy))], [
       .def 1 (.fieldAddr 0 1), .def 2 (.constInt .i64 7),
       .eff (.store 1 2 (some 0)), .term (.ret [] none)]⟩] }
 
 #guard rejected (withExtra writeSummary) .v050
-#guard accepted (withExtra { writeSummary with summary := .known ⟨[], [.param 0], [], [], false, false⟩ })
+#guard accepted (withExtra { writeSummary with summary := .known {
+  reads := [], writes := [.param 0], grows := [], shrinks := [],
+  rebinds := [], aborts := false, outputs := false } })
 
 private def emptyModule (profile : ArtifactProfile) : Module :=
   { mod with
