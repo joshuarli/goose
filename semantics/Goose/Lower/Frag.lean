@@ -987,146 +987,34 @@ theorem advB_assert_core (cv : ValueId) (org : OriginId) :
   have lpb' : pb < ls3.blocks.size := Nat.lt_of_lt_of_le lpb s3
   exact adv_setCur_step a3 mpb lpb' hs2
 
-/-- A loop whose header holds `ce` and whose body is `bd`, given the number of scopes entered
-at the loop, the exit block and the header. -/
-theorem advB_while_core {ce : B ValueId} {bd : Nat → BlockId → BlockId → B ValueId}
-    (hc : AdvB ce) (hb : ∀ d x h, AdvB (bd d x h)) :
-    AdvB (do
-      let (hb, _) ← newBlock []
-      emitTerm (.br hb [])
-      setCur (some hb)
-      let cv ← ce
-      whenLive () fun _ => do
-        let depth := (← get).stack.length
-        let (bb, xb) ← fork cv
-        setCur (some bb)
-        let _ ← bd depth xb hb
-        emitTerm (.br hb [])
-        setCur (some xb)) := by
-  intro le ls0 r ls' h
-  simp only [bind_eq] at h
-  obtain ⟨⟨hb', ps⟩, ls1, h1, u1, ls2, h2, u3, ls3, h3, cv, ls4, h4, hw⟩ := h
-  have e1 := h1
-  rw [newBlock0_run] at e1
-  obtain ⟨e1a, e1b⟩ := Prod.mk.inj e1
-  obtain ⟨hh, -⟩ := Prod.mk.inj e1a
-  have s1 : ls1.blocks.size = ls0.blocks.size + 1 := by rw [← e1b]; simp
-  have a1 := adv_newBlock0 h1
-  have a2 := a1.trans (adv_emitTerm h2)
-  have s2 : ls1.blocks.size ≤ ls2.blocks.size := (adv_emitTerm h2).ext.1
-  have hm : Mine ls0 hb' := Or.inr (by rw [← hh]; exact Nat.le_refl _)
-  have hlt : hb' < ls2.blocks.size := by rw [← hh]; nat_omega
-  have a3 := adv_setCur_step a2 hm hlt h3
-  have s3 : ls3.blocks = ls2.blocks := setCur_blocks h3
-  have a4 := a3.trans (hc _ _ _ _ h4)
-  cases hcur : ls4.cur with
-  | none =>
-    rw [whenLive_none _ _ _ hcur] at hw
-    obtain ⟨-, rfl⟩ := Prod.mk.inj hw
-    exact a4
-  | some b =>
-    rw [whenLive_some _ _ _ hcur] at hw
-    simp only [bind_eq] at hw
-    obtain ⟨st, ls5, h5, ⟨bb, xb⟩, ls6, h6, u7, ls7, h7, u8, ls8, h8, u9, ls9, h9, hr⟩ := hw
-    have e5 : ls5 = ls4 := (Prod.mk.inj h5).2.symm
-    subst e5
-    obtain ⟨a6, mbb, mxb, lbb, lxb⟩ := adv_fork_step a4 h6
-    have a7 := adv_setCur_step a6 mbb lbb h7
-    have b7 := setCur_blocks h7
-    have a8x := hb _ _ _ _ _ _ _ h8
-    have a8 := a7.trans a8x
-    have a9x := adv_emitTerm h9
-    have a9 := a8.trans a9x
-    have s8 : ls6.blocks.size ≤ ls8.blocks.size := by
-      have := a8x.ext.1; rw [b7] at this; exact this
-    have s9 : ls8.blocks.size ≤ ls9.blocks.size := a9x.ext.1
-    have lxb' : xb < ls9.blocks.size := Nat.lt_of_lt_of_le lxb (Nat.le_trans s8 s9)
-    exact adv_setCur_step a9 mxb lxb' hr
+theorem advB_rangeBack (t : IntTy) (i : ValueId) (hb : BlockId) : AdvB (rangeBack t i hb) := by
+  unfold rangeBack
+  refine AdvB.bind advB_isLive fun live => ?_
+  cases live
+  · exact AdvB.pure _
+  · exact AdvB.bind (advB_emitDef _) fun _ => advB_emitTerm _
 
-theorem advB_forRange_core {ea eb : B ValueId} {bd : Nat → BlockId → BlockId → IntTy → ValueId → B ValueId}
-    (ha : AdvB ea) (hb : AdvB eb) (hbd : ∀ d x h t i, AdvB (bd d x h t i)) :
-    AdvB (do
-      let a ← ea
-      let b ← eb
-      whenLive () fun _ => do
-        let t ← intTyOf a
-        let depth := (← get).stack.length
-        let (hb, hs) ← newBlock [.data (.int t)]
-        let i := hs.headD 0
-        emitTerm (.br hb [a])
-        setCur (some hb)
-        let c ← emitDef (.cmp .lt t i b)
-        let (bb, xb) ← fork c
-        setCur (some bb)
-        let _ ← bd depth xb hb t i
-        if (← isLive) then
-          let n ← emitDef (.next t i)
-          emitTerm (.br hb [n])
-        setCur (some xb)) := by
+/-- The branch of a loop, its body and its exit. -/
+theorem advB_loopBody (cv : ValueId) {body : Nat → BlockId → B ValueId} {back : B Unit}
+    (hbody : ∀ d xb, AdvB (body d xb)) (hback : AdvB back) : AdvB (loopBody cv body back) := by
   intro le ls0 r ls' h
+  unfold loopBody at h
   simp only [bind_eq] at h
-  obtain ⟨a, ls1, h1, b, ls2, h2, hw⟩ := h
-  have a2 := (ha _ _ _ _ h1).trans (hb _ _ _ _ h2)
-  cases hcur : ls2.cur with
-  | none =>
-    rw [whenLive_none _ _ _ hcur] at hw
-    obtain ⟨-, rfl⟩ := Prod.mk.inj hw
-    exact a2
-  | some bl =>
-    rw [whenLive_some _ _ _ hcur] at hw
-    simp only [bind_eq] at hw
-    obtain ⟨t, ls3, h3, st, ls4, h4, ⟨hd, hs⟩, ls5, h5, u6, ls6, h6, u7, ls7, h7, c, ls8, h8, ⟨bb, xb⟩, ls9, h9,
-      u10, ls10, h10, u11, ls11, h11, live, ls12, h12, hr⟩ := hw
-    have a3 := a2.trans (advB_intTyOf a _ _ _ _ h3)
-    have e4 : ls4 = ls3 := (Prod.mk.inj h4).2.symm
-    subst e4
-    have a5x := adv_newBlock1 h5
-    have a5 := a3.trans a5x
-    have e5 := h5
-    rw [newBlock1_run] at e5
-    obtain ⟨e5a, e5b⟩ := Prod.mk.inj e5
-    obtain ⟨hdd, -⟩ := Prod.mk.inj e5a
-    have s5 : ls5.blocks.size = ls4.blocks.size + 1 := by rw [← e5b]; simp
-    have a6x := adv_emitTerm h6
-    have a6 := a5.trans a6x
-    have s6 : ls5.blocks.size ≤ ls6.blocks.size := a6x.ext.1
-    have s04 : ls0.blocks.size ≤ ls4.blocks.size := a3.ext.1
-    have hm7 : Mine ls0 hd := Or.inr (by rw [← hdd]; exact s04)
-    have hl7 : hd < ls6.blocks.size := by rw [← hdd]; nat_omega
-    have a7 := adv_setCur_step a6 hm7 hl7 h7
-    have s7 : ls7.blocks = ls6.blocks := setCur_blocks h7
-    have a8x := adv_emitDef h8
-    have a8 := a7.trans a8x
-    obtain ⟨a9, mbb, mxb, lbb, lxb⟩ := adv_fork_step a8 h9
-    have s8 : ls7.blocks.size ≤ ls8.blocks.size := a8x.ext.1
-    have a10 := adv_setCur_step a9 mbb lbb h10
-    have s10 : ls10.blocks = ls9.blocks := setCur_blocks h10
-    have a11x := hbd _ _ _ _ _ _ _ _ _ h11
-    have a11 := a10.trans a11x
-    have s11 : ls9.blocks.size ≤ ls11.blocks.size := by
-      have := a11x.ext.1; rw [s10] at this; exact this
-    have e12 : ls12 = ls11 := by
-      have := advB_isLive _ _ _ _ h12
-      have h12' := h12
-      unfold isLive at h12'
-      simp only [bind_run, curBlock_run, pure_run] at h12'
-      exact (Prod.mk.inj h12').2.symm
-    subst e12
-    cases live
-    · simp only [Bool.false_eq_true, ↓reduceIte] at hr
-      have lxb' : xb < ls12.blocks.size := Nat.lt_of_lt_of_le lxb s11
-      exact adv_setCur_step a11 mxb lxb' hr
-    · simp only [↓reduceIte, bind_eq] at hr
-      obtain ⟨n, ls13, h13, u14, ls14, h14, hr⟩ := hr
-      have a13x := adv_emitDef h13
-      have a13 := a11.trans a13x
-      have a14x := adv_emitTerm h14
-      have a14 := a13.trans a14x
-      have s13 : ls12.blocks.size ≤ ls13.blocks.size := a13x.ext.1
-      have s14 : ls13.blocks.size ≤ ls14.blocks.size := a14x.ext.1
-      have lxb' : xb < ls14.blocks.size :=
-        Nat.lt_of_lt_of_le lxb (Nat.le_trans s11 (Nat.le_trans s13 s14))
-      exact adv_setCur_step a14 mxb lxb' hr
+  obtain ⟨st, ls4, h4, ⟨bb, xb⟩, lsf, hf, u1, ls2, hs1, vb, ls3, ha1, u2, ls5, hb5, hs2⟩ := h
+  have e4 : ls4 = ls0 := (Prod.mk.inj h4).2.symm
+  subst e4
+  obtain ⟨a1, mbb, mxb, lbb, lxb⟩ := adv_fork_step (.refl ls4) hf
+  have a2 := adv_setCur_step a1 mbb lbb hs1
+  have b2 := setCur_blocks hs1
+  have a3x := hbody _ _ _ _ _ _ ha1
+  have a3 := a2.trans a3x
+  have a5x := hback _ _ _ _ hb5
+  have a5 := a3.trans a5x
+  have s3 : lsf.blocks.size ≤ ls3.blocks.size := by
+    have := a3x.ext.1; rw [b2] at this; exact this
+  have s5 : ls3.blocks.size ≤ ls5.blocks.size := a5x.ext.1
+  have lxb' : xb < ls5.blocks.size := Nat.lt_of_lt_of_le lxb (Nat.le_trans s3 s5)
+  exact adv_setCur_step a5 mxb lxb' hs2
 
 theorem advB_regrowOf (o : Option ValueId) : AdvB (regrowOf o) := by
   cases o with
@@ -1146,84 +1034,71 @@ theorem advB_eachLen (regrow : Bool) (owner : Option ValueId) (sampled : ValueId
   · exact AdvB.pure _
   · exact advB_emitDef _
 
-theorem advB_forEach_core (startAt sampled vw : ValueId) (regrow : Bool) (owner : Option ValueId)
-    (x : VarId) (byRef : Bool) {bd : Nat → BlockId → BlockId → ValueId → ValueId → B ValueId}
-    (hbd : ∀ d xb h i ev, AdvB (bd d xb h i ev)) :
-    AdvB (whenLive () fun _ => do
-      let depth := (← get).stack.length
-      let (hb, hs) ← newBlock [.data (.int .i64)]
-      let i := hs.headD 0
-      emitTerm (.br hb [startAt])
+theorem advB_lowerWhile (hb : BlockId) {cond : B ValueId} {body : Nat → BlockId → B ValueId}
+    (hc : AdvB cond) (hbody : ∀ d xb, AdvB (body d xb)) : AdvB (lowerWhile hb cond body) := by
+  unfold lowerWhile
+  exact AdvB.bind hc fun cv => advB_whenLive _ fun _ =>
+    advB_loopBody cv hbody (advB_emitTerm _)
+
+theorem advB_lowerRange (t : IntTy) (i b : ValueId) (hb : BlockId) {body : Nat → BlockId → B ValueId}
+    (hbody : ∀ d xb, AdvB (body d xb)) : AdvB (lowerRange t i b hb body) := by
+  unfold lowerRange
+  exact AdvB.bind (advB_emitDef _) fun c => advB_loopBody c hbody (advB_rangeBack _ _ _)
+
+theorem advB_lowerEach (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) (hb : BlockId)
+    (i : ValueId) {body : Nat → BlockId → B ValueId} (hbody : ∀ d xb, AdvB (body d xb)) :
+    AdvB (lowerEach regrow owner sampled hb i body) := by
+  unfold lowerEach
+  exact AdvB.bind (advB_eachLen _ _ _) fun n => AdvB.bind (advB_emitDef _) fun c =>
+    advB_loopBody c hbody (advB_rangeBack _ _ _)
+
+/-- A loop header with no parameter: created, jumped to, and entered. -/
+theorem advB_header0 {tail : BlockId → B Unit} (ht : ∀ h, AdvB (tail h)) :
+    AdvB (do
+      let (hb, _) ← newBlock []
+      emitTerm (.br hb [])
       setCur (some hb)
-      let n ← eachLen regrow owner sampled
-      let c ← emitDef (.cmp .lt .i64 i n)
-      let (bb, xb) ← fork c
-      setCur (some bb)
-      let elem ← emitDef (.refElem vw i)
-      let ev ← eachElemValue x byRef elem
-      let _ ← bd depth xb hb i ev
-      if (← isLive) then
-        let nx ← emitDef (.next .i64 i)
-        emitTerm (.br hb [nx])
-      setCur (some xb)) := by
-  refine advB_whenLive _ fun bl => ?_
-  intro le ls0 r ls' hw
-  simp only [bind_eq] at hw
-  obtain ⟨st, ls4, h4, ⟨hd, hs⟩, ls5, h5, u6, ls6, h6, u7, ls7, h7, n, ls8, h8, c, ls9, h9, ⟨bb, xb⟩, ls10, h10,
-    u11, ls11, h11, elem, ls12, h12, ev, ls13, h13, u14, ls14, h14, live, ls15, h15, hr⟩ := hw
-  have e4 : ls4 = ls0 := (Prod.mk.inj h4).2.symm
-  subst e4
-  have a5 := adv_newBlock1 h5
-  have e5 := h5
-  rw [newBlock1_run] at e5
-  obtain ⟨e5a, e5b⟩ := Prod.mk.inj e5
-  obtain ⟨hdd, -⟩ := Prod.mk.inj e5a
-  have s5 : ls5.blocks.size = ls4.blocks.size + 1 := by rw [← e5b]; simp
-  have a6x := adv_emitTerm h6
-  have a6 := a5.trans a6x
-  have s6 : ls5.blocks.size ≤ ls6.blocks.size := a6x.ext.1
-  have hm7 : Mine ls4 hd := Or.inr (by rw [← hdd]; exact Nat.le_refl _)
-  have hl7 : hd < ls6.blocks.size := by rw [← hdd]; nat_omega
-  have a7 := adv_setCur_step a6 hm7 hl7 h7
-  have s7 : ls7.blocks = ls6.blocks := setCur_blocks h7
-  have a8 := a7.trans (advB_eachLen _ _ _ _ _ _ _ h8)
-  have a9x := adv_emitDef h9
-  have a9 := a8.trans a9x
-  obtain ⟨a10, mbb, mxb, lbb, lxb⟩ := adv_fork_step a9 h10
-  have a11 := adv_setCur_step a10 mbb lbb h11
-  have s11 : ls11.blocks = ls10.blocks := setCur_blocks h11
-  have a12x := adv_emitDef h12
-  have a12 := a11.trans a12x
-  have a13x := advB_eachElemValue _ _ _ _ _ _ _ h13
-  have a13 := a12.trans a13x
-  have a14x := hbd _ _ _ _ _ _ _ _ _ h14
-  have a14 := a13.trans a14x
-  have s12 : ls10.blocks.size ≤ ls12.blocks.size := by
-    have := a12x.ext.1; rw [s11] at this; exact this
-  have s13 : ls12.blocks.size ≤ ls13.blocks.size := a13x.ext.1
-  have s14 : ls13.blocks.size ≤ ls14.blocks.size := a14x.ext.1
-  have e15 : ls15 = ls14 := by
-    have h15' := h15
-    unfold isLive at h15'
-    simp only [bind_run, curBlock_run, pure_run] at h15'
-    exact (Prod.mk.inj h15').2.symm
-  subst e15
-  cases live
-  · simp only [Bool.false_eq_true, ↓reduceIte] at hr
-    have lxb' : xb < ls15.blocks.size :=
-      Nat.lt_of_lt_of_le lxb (Nat.le_trans s12 (Nat.le_trans s13 s14))
-    exact adv_setCur_step a14 mxb lxb' hr
-  · simp only [↓reduceIte, bind_eq] at hr
-    obtain ⟨nx, ls16, h16, u17, ls17, h17, hr⟩ := hr
-    have a16x := adv_emitDef h16
-    have a16 := a14.trans a16x
-    have a17x := adv_emitTerm h17
-    have a17 := a16.trans a17x
-    have s16 : ls15.blocks.size ≤ ls16.blocks.size := a16x.ext.1
-    have s17 : ls16.blocks.size ≤ ls17.blocks.size := a17x.ext.1
-    have lxb' : xb < ls17.blocks.size :=
-      Nat.lt_of_lt_of_le lxb (Nat.le_trans s12 (Nat.le_trans s13 (Nat.le_trans s14 (Nat.le_trans s16 s17))))
-    exact adv_setCur_step a17 mxb lxb' hr
+      tail hb) := by
+  intro le ls0 r ls' h
+  simp only [bind_eq] at h
+  obtain ⟨⟨hb', ps⟩, ls1, h1, u1, ls2, h2, u3, ls3, h3, ht'⟩ := h
+  have e1 := h1
+  rw [newBlock0_run] at e1
+  obtain ⟨e1a, e1b⟩ := Prod.mk.inj e1
+  obtain ⟨hh, -⟩ := Prod.mk.inj e1a
+  have s1 : ls1.blocks.size = ls0.blocks.size + 1 := by rw [← e1b]; simp
+  have a1 := adv_newBlock0 h1
+  have a2 := a1.trans (adv_emitTerm h2)
+  have s2 : ls1.blocks.size ≤ ls2.blocks.size := (adv_emitTerm h2).ext.1
+  have hm : Mine ls0 hb' := Or.inr (by rw [← hh]; exact Nat.le_refl _)
+  have hlt : hb' < ls2.blocks.size := by rw [← hh]; nat_omega
+  have a3 := adv_setCur_step a2 hm hlt h3
+  exact a3.trans (ht hb' _ _ _ _ ht')
+
+/-- A loop header with one parameter, the first value of which is `a`. -/
+theorem advB_header1 (ty : VTy) (a : ValueId) {tail : BlockId → ValueId → B Unit}
+    (ht : ∀ h i, AdvB (tail h i)) :
+    AdvB (do
+      let (hb, hs) ← newBlock [ty]
+      let i := hs.headD 0
+      emitTerm (.br hb [a])
+      setCur (some hb)
+      tail hb i) := by
+  intro le ls0 r ls' h
+  simp only [bind_eq] at h
+  obtain ⟨⟨hb', hs⟩, ls1, h1, u1, ls2, h2, u3, ls3, h3, ht'⟩ := h
+  have e1 := h1
+  rw [newBlock1_run] at e1
+  obtain ⟨e1a, e1b⟩ := Prod.mk.inj e1
+  obtain ⟨hh, -⟩ := Prod.mk.inj e1a
+  have s1 : ls1.blocks.size = ls0.blocks.size + 1 := by rw [← e1b]; simp
+  have a1 := adv_newBlock1 h1
+  have a2 := a1.trans (adv_emitTerm h2)
+  have s2 : ls1.blocks.size ≤ ls2.blocks.size := (adv_emitTerm h2).ext.1
+  have hm : Mine ls0 hb' := Or.inr (by rw [← hh]; exact Nat.le_refl _)
+  have hlt : hb' < ls2.blocks.size := by rw [← hh]; nat_omega
+  have a3 := adv_setCur_step a2 hm hlt h3
+  exact a3.trans (ht hb' _ _ _ _ _ ht')
 
 /-! ### Every fragment of the lowering -/
 
@@ -1411,22 +1286,32 @@ theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc 
         advB_ifS_some_core cv (advB_lowerBlock lc [] false t) (advB_lowerBlock lc [] false fb)
   | .while c body _ => by
     simp only [lowerStmt]
-    exact advB_while_core (advB_lowerExpr c)
-      (bd := fun d xb hb => lowerBlock (some ⟨d, xb, .jump hb⟩) [] false body)
-      (fun d xb hb => advB_lowerBlock _ _ _ body)
+    exact advB_header0 (tail := fun hb => lowerWhile hb (lowerExpr c)
+        (fun d xb => lowerBlock (some ⟨d, xb, .jump hb⟩) [] false body))
+      (fun hb => advB_lowerWhile hb (advB_lowerExpr c) (fun d xb => advB_lowerBlock _ _ _ body))
   | .forRange x lo hi body org => by
     simp only [lowerStmt]
-    exact advB_forRange_core (advB_lowerExpr lo) (advB_lowerExpr hi)
-      (bd := fun d xb hb t i => lowerBlock (some ⟨d, xb, .next hb t i⟩) [(x, i, org)] false body)
-      (fun d xb hb t i => advB_lowerBlock _ _ _ body)
+    refine AdvB.bind (advB_lowerExpr lo) fun a => AdvB.bind (advB_lowerExpr hi) fun b =>
+      advB_whenLive _ fun _ => AdvB.bind (advB_intTyOf a) fun t => ?_
+    exact advB_header1 (.data (.int t)) a (tail := fun hb i => lowerRange t i b hb (fun d xb =>
+        lowerBlock (some ⟨d, xb, .next hb t i⟩) [(x, i, org)] false body))
+      (fun hb i => advB_lowerRange t i b hb (fun d xb => advB_lowerBlock _ _ _ body))
   | .forEach x idx v byRef body org => by
     simp only [lowerStmt]
     refine AdvB.bind (advB_lowerEachSource v) fun ov => AdvB.bind (advB_regrowOf _) fun regrow =>
-      AdvB.bind (advB_eachSampled _ _) fun sampled => AdvB.bind (advB_emitDef _) fun startAt => ?_
-    exact advB_forEach_core startAt sampled ov.2 regrow ov.1 x byRef
-      (bd := fun d xb hb i ev => lowerBlock (some ⟨d, xb, .next hb .i64 i⟩)
-        ((x, ev, org) :: (match idx with | some j => [(j, i, org)] | none => [])) false body)
-      (fun d xb hb i ev => advB_lowerBlock _ _ _ body)
+      AdvB.bind (advB_eachSampled _ _) fun sampled => AdvB.bind (advB_emitDef _) fun startAt =>
+      advB_whenLive _ fun _ => ?_
+    exact advB_header1 (.data (.int .i64)) startAt (tail := fun hb i =>
+        lowerEach regrow ov.1 sampled hb i (fun d xb => do
+          let elem ← emitDef (.refElem ov.2 i)
+          let ev ← eachElemValue x byRef elem
+          let pre := (x, ev, org) :: (match idx with
+            | some j => [(j, i, org)]
+            | none => [])
+          lowerBlock (some ⟨d, xb, .next hb .i64 i⟩) pre false body))
+      (fun hb i => advB_lowerEach regrow ov.1 sampled hb i (fun d xb =>
+        AdvB.bind (advB_emitDef _) fun elem => AdvB.bind (advB_eachElemValue _ _ _) fun ev =>
+          advB_lowerBlock _ _ _ body))
   | .ret e org => by
     cases e with
     | some e =>

@@ -25,6 +25,11 @@ result of `run` is directly comparable with a result of `Core.eval`.
   operation whichever of the two instructions states it.
 * A global initializer is a function activated at depth 0 and the entry at
   depth 1, as Core evaluates them.
+* `next` adds one to its operand without a range check, as Core's loops do: the
+  lowering applies it only to a counter that is below its loop bound, and a
+  bound that is an array length can lie beyond the counter type's range only
+  for an array longer than the type, which Core's model allows and a real
+  array does not.
 * Faults are raised by the same helpers as in Core (`expect*`, the store
   accessors, the table lookups) and by `flow` for a block that ends without a
   terminator or a `scope.leave` that does not match the innermost scope.
@@ -197,7 +202,7 @@ def execPure (cx : FnCtx) (fr : Frame) : Op → M RVal
       | .error e => abortAtOrg (AbortKind.ofNum e) org
     | .next _ a => do
       let (t, x) ← expectInt (← getVal fr a)
-      if x < t.maxVal then pure (.val (.int t (x + 1))) else fault .shape
+      pure (.val (.int t (x + 1)))
     | .slotAddr s => do
       let r ← slotRoot cx.fn fr s
       pure (.val (.ref ⟨r, []⟩))

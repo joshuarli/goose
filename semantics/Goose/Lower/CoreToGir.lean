@@ -338,6 +338,42 @@ def shortCircuit (isAnd : Bool) (x : ValueId) (rhs : B ValueId) : B ValueId :=
     setCur (some jb)
     pure p
 
+/-- The conditional branch of a loop header on `cv`, the body and the exit. `body` lowers the loop's
+body given the number of scopes entered at the loop and the exit block; `back` runs when the body
+falls through. -/
+def loopBody (cv : ValueId) (body : Nat → BlockId → B ValueId) (back : B Unit) : B Unit := do
+  let depth := (← get).stack.length
+  let (bb, xb) ← fork cv
+  setCur (some bb)
+  let _ ← body depth xb
+  back
+  setCur (some xb)
+
+/-- The branch back to the header of a counting loop: the counter plus one, unless every path of
+the body ended. -/
+def rangeBack (t : IntTy) (i : ValueId) (hb : BlockId) : B Unit := do
+  if (← isLive) then
+    let n ← emitDef (.next t i)
+    emitTerm (.br hb [n])
+
+/-- A `while` loop from its header, which is the current block and holds nothing yet. -/
+def lowerWhile (hb : BlockId) (cond : B ValueId) (body : Nat → BlockId → B ValueId) : B Unit := do
+  let cv ← cond
+  whenLive () fun _ => loopBody cv body (emitTerm (.br hb []))
+
+/-- A counting loop from its header, whose parameter `i` is the counter and whose bound is `b`. -/
+def lowerRange (t : IntTy) (i b : ValueId) (hb : BlockId) (body : Nat → BlockId → B ValueId) :
+    B Unit := do
+  let c ← emitDef (.cmp .lt t i b)
+  loopBody c body (rangeBack t i hb)
+
+/-- A `for` loop over a sampled run from its header, whose parameter `i` is the index. -/
+def lowerEach (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) (hb : BlockId)
+    (i : ValueId) (body : Nat → BlockId → B ValueId) : B Unit := do
+  let n ← eachLen regrow owner sampled
+  let c ← emitDef (.cmp .lt .i64 i n)
+  loopBody c body (rangeBack .i64 i hb)
+
 mutual
 
 def lowerExpr : Expr → B ValueId
@@ -550,32 +586,18 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
     let (hb, _) ← newBlock []
     emitTerm (.br hb [])
     setCur (some hb)
-    let cv ← lowerExpr c
-    whenLive () fun _ => do
-      let depth := (← get).stack.length
-      let (bb, xb) ← fork cv
-      setCur (some bb)
-      let _ ← lowerBlock (some ⟨depth, xb, .jump hb⟩) [] false body
-      emitTerm (.br hb [])
-      setCur (some xb)
+    lowerWhile hb (lowerExpr c) (fun d xb => lowerBlock (some ⟨d, xb, .jump hb⟩) [] false body)
   | .forRange x lo hi body org => do
     let a ← lowerExpr lo
     let b ← lowerExpr hi
     whenLive () fun _ => do
       let t ← intTyOf a
-      let depth := (← get).stack.length
       let (hb, hs) ← newBlock [.data (.int t)]
       let i := hs.headD 0
       emitTerm (.br hb [a])
       setCur (some hb)
-      let c ← emitDef (.cmp .lt t i b)
-      let (bb, xb) ← fork c
-      setCur (some bb)
-      let _ ← lowerBlock (some ⟨depth, xb, .next hb t i⟩) [(x, i, org)] false body
-      if (← isLive) then
-        let n ← emitDef (.next t i)
-        emitTerm (.br hb [n])
-      setCur (some xb)
+      lowerRange t i b hb (fun d xb =>
+        lowerBlock (some ⟨d, xb, .next hb t i⟩) [(x, i, org)] false body)
   | .forEach x idx v byRef body org => do
     -- The source is sampled once. An owner that is a grow-only array is kept by
     -- address so that its length can be read again.
@@ -584,25 +606,17 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
     let sampled ← eachSampled regrow vw
     let startAt ← emitDef (.constInt .i64 0)
     whenLive () fun _ => do
-      let depth := (← get).stack.length
       let (hb, hs) ← newBlock [.data (.int .i64)]
       let i := hs.headD 0
       emitTerm (.br hb [startAt])
       setCur (some hb)
-      let n ← eachLen regrow owner sampled
-      let c ← emitDef (.cmp .lt .i64 i n)
-      let (bb, xb) ← fork c
-      setCur (some bb)
-      let elem ← emitDef (.refElem vw i)
-      let ev ← eachElemValue x byRef elem
-      let pre := (x, ev, org) :: (match idx with
-        | some j => [(j, i, org)]
-        | none => [])
-      let _ ← lowerBlock (some ⟨depth, xb, .next hb .i64 i⟩) pre false body
-      if (← isLive) then
-        let nx ← emitDef (.next .i64 i)
-        emitTerm (.br hb [nx])
-      setCur (some xb)
+      lowerEach regrow owner sampled hb i (fun d xb => do
+        let elem ← emitDef (.refElem vw i)
+        let ev ← eachElemValue x byRef elem
+        let pre := (x, ev, org) :: (match idx with
+          | some j => [(j, i, org)]
+          | none => [])
+        lowerBlock (some ⟨d, xb, .next hb .i64 i⟩) pre false body)
   | .ret e org => do
     let vs ← match e with
       | some e => do pure [← lowerExpr e]
