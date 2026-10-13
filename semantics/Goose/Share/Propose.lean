@@ -80,7 +80,7 @@ def classify (m : Module) : Array Nat := Id.run do
     let mut next : Array Nat := Array.mkEmpty n
     for h : f in [0:n] do
       let impl := m.impls[f]'(Membership.get_elem_helper h rfl)
-      let key := s!"{cls.getD f 0}|{Goose.Core.Writer.impl ty (renImpl r impl)}"
+      let key := s!"{cls.getD f 0}|{Goose.Core.Writer.impl m.profile ty (renImpl r impl)}"
       match ids[key]? with
       | some k => next := next.push k
       | none =>

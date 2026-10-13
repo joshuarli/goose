@@ -50,8 +50,9 @@ structure Simulates (m m' : Module) (ρ : ImplId → CtxMap) : Prop where
 the body of implementation `f` has its callees renamed by `ρ f`.
 
 * The header tables, the entry, the globals and the contexts' indices are
-  unchanged; each context of `m'` is the context of `m` with its
-  implementation index mapped by `q`. The root annotations are kept.
+  unchanged, including the artifact profile and struct descriptors; each
+  context of `m'` is the context of `m` with its implementation index mapped
+  by `q`. The root annotations are kept.
 * Every implementation a context of `m` names is, in `m`, the body that `m'`
   holds at `q` of its index, with callees renamed by `ρ`. Two implementations
   that `q` identifies therefore have equal bodies once their callees are
@@ -62,6 +63,8 @@ structure Quotient (m m' : Module) (q : ImplId → ImplId) (ρ : ImplId → CtxM
   files : m'.files = m.files
   types : m'.types = m.types
   origins : m'.origins = m.origins
+  profile : m'.profile = m.profile
+  structs : m'.structs = m.structs
   entry : m'.entry = m.entry
   globals : m'.globals = m.globals
   contextCount : m'.contexts.size = m.contexts.size
@@ -85,9 +88,10 @@ def eqOptImpl : Option Impl → Option Impl → Bool
   | some a, some b => eqImpl a b
   | _, _ => false
 
-/-- Header tables, entry and globals: unchanged. -/
+/-- Header tables, profile, descriptors, entry and globals: unchanged. -/
 def headerOk (m m' : Module) : Bool :=
   m'.files == m.files && m'.types == m.types && m'.origins == m.origins &&
+  m'.profile == m.profile && m'.structs == m.structs &&
   m'.entry == m.entry && allZip eqGlobal m.globals.toList m'.globals.toList
 
 /-- Contexts: those of `m` with their implementation index mapped by `q`. -/
@@ -134,7 +138,7 @@ def checkQuotient (m m' : Module) (qt : Array ImplId) (rt : Array ContextId) : B
 only: nothing relies on it. -/
 def explainQuotient (m m' : Module) (qt : Array ImplId) (rt : Array ContextId) : String :=
   if !headerOk m m' then
-    "the header tables, the globals or the entry differ"
+    "the header tables, artifact profile, struct descriptors, globals or entry differ"
   else if !contextsOk m m' (fun f => qt.getD f f) then
     "a context of the shared module is not the unshared context with its implementation mapped"
   else if !calleesOk m m' rt then

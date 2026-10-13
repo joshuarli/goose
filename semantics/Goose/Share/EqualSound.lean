@@ -10,6 +10,9 @@ namespace Goose.Share
 
 open Goose.Core
 
+/- The syntax proof unfolds across the mutually recursive place, expression,
+and statement trees, so keep its reduction budget local to this block. -/
+set_option maxHeartbeats 1000000 in
 mutual
 theorem eqPlace_sound : ∀ (a b : Place), eqPlace a b = true → a = b
   | .var x, c, h => by
@@ -35,7 +38,12 @@ theorem eqPlace_sound : ∀ (a b : Place), eqPlace a b = true → a = b
     | elem w j p =>
       simp only [eqPlace, Bool.and_eq_true, beq_iff_eq, and_assoc] at h
       obtain ⟨h1, h2, h3⟩ := h
-      have := eqView_sound _ _ h1; have := eqExpr_sound _ _ h2; simp_all
+      have hv : v = w := eqView_sound _ _ h1
+      have hi : i = j := eqExpr_sound _ _ h2
+      subst w
+      subst j
+      subst p
+      rfl
     | _ => simp [eqPlace] at h
 
 theorem eqView_sound : ∀ (a b : View), eqView a b = true → a = b
@@ -144,11 +152,18 @@ theorem eqExpr_sound : ∀ (a b : Expr), eqExpr a b = true → a = b
       obtain ⟨h1, h2, h3⟩ := h
       have := eqArgs_sound _ _ h2; simp_all
     | _ => simp [eqExpr] at h
-  | .push p e, c, h => by
+  | .push p e o, c, h => by
     cases c with
-    | push q f =>
-      simp only [eqExpr, Bool.and_eq_true] at h
-      have := eqPlace_sound _ _ h.1; have := eqExpr_sound _ _ h.2; simp_all
+    | push q f p' =>
+      simp only [eqExpr, Bool.and_eq_true, beq_iff_eq, and_assoc] at h
+      obtain ⟨h1, h2, h3⟩ := h
+      have := eqPlace_sound _ _ h1; have := eqExpr_sound _ _ h2; simp_all
+    | _ => simp [eqExpr] at h
+  | .pop p o, c, h => by
+    cases c with
+    | pop q p' =>
+      simp only [eqExpr, Bool.and_eq_true, beq_iff_eq] at h
+      have := eqPlace_sound _ _ h.1; simp_all
     | _ => simp [eqExpr] at h
   | .ifE x t f, c, h => by
     cases c with
@@ -308,6 +323,34 @@ theorem eqStmt_sound : ∀ (a b : Stmt), eqStmt a b = true → a = b
       simp only [eqStmt, Bool.and_eq_true, beq_iff_eq, and_assoc] at h
       obtain ⟨h1, h2, h3⟩ := h
       have := eqPlace_sound _ _ h1; have := eqView_sound _ _ h2; simp_all
+    | _ => simp [eqStmt] at h
+  | .popN q e o, c, h => by
+    cases c with
+    | popN q' f p =>
+      simp only [eqStmt, Bool.and_eq_true, beq_iff_eq, and_assoc] at h
+      obtain ⟨h1, h2, h3⟩ := h
+      have := eqPlace_sound _ _ h1; have := eqExpr_sound _ _ h2; simp_all
+    | _ => simp [eqStmt] at h
+  | .resize q size fill o, c, h => by
+    cases c with
+    | resize q' size' fill' p =>
+      simp only [eqStmt, Bool.and_eq_true, beq_iff_eq, and_assoc] at h
+      obtain ⟨h1, h2, h3, h4⟩ := h
+      have := eqPlace_sound _ _ h1; have := eqExpr_sound _ _ h2
+      have := eqOptExpr_sound _ _ h3; simp_all
+    | _ => simp [eqStmt] at h
+  | .clear q o, c, h => by
+    cases c with
+    | clear q' p =>
+      simp only [eqStmt, Bool.and_eq_true, beq_iff_eq] at h
+      have := eqPlace_sound _ _ h.1; simp_all
+    | _ => simp [eqStmt] at h
+  | .assignWhole q e o, c, h => by
+    cases c with
+    | assignWhole q' f p =>
+      simp only [eqStmt, Bool.and_eq_true, beq_iff_eq, and_assoc] at h
+      obtain ⟨h1, h2, h3⟩ := h
+      have := eqPlace_sound _ _ h1; have := eqExpr_sound _ _ h2; simp_all
     | _ => simp [eqStmt] at h
   | .ifS x t f o, c, h => by
     cases c with
