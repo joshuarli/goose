@@ -79,6 +79,28 @@ theorem DemandOwner.conflicts_false_disjoint {owner : DemandOwner}
     hinvalidates, hinterior] at hconflicts ⊢
   exact hconflicts
 
+/-- An external demand owner contributes a shrink effect whenever replay records
+each of its externally visible root targets. -/
+theorem DemandOwner.denotesExternalShrink_mayShrinkEff
+    {P : Nat → RootInst → Prop} {E : Eff} {root : RootInst} {owner : DemandOwner}
+    (denotes : owner.denotesExternalShrink P root)
+    (recorded : ∀ target, target ∈ rootsTargets owner.roots → target ∈ E.shrinks) :
+    MayShrinkEff P E root := by
+  rcases denotes with ⟨_, rootsDenote⟩
+  obtain ⟨reference, referenceIn, rootIn⟩ := rootsDenote
+  cases reference with
+  | «local» x =>
+    rcases rootIn with ⟨lv, scope, variableAt, scopeAt, _⟩
+    simp [noEnv] at variableAt
+  | global global =>
+    refine ⟨.global global, Or.inl (recorded (.global global) ?_), rootIn⟩
+    unfold rootsTargets
+    exact List.mem_filterMap.mpr ⟨.global global, referenceIn, rfl⟩
+  | param parameter =>
+    refine ⟨.param parameter, Or.inl (recorded (.param parameter) ?_), rootIn⟩
+    unfold rootsTargets
+    exact List.mem_filterMap.mpr ⟨.param parameter, referenceIn, rfl⟩
+
 /-- An approved resizable shrink excludes every retained interior alias root. -/
 theorem shrinkApproval_retainedInteriorDisjoint
     {m : Module} {owner : Nat} {plan : Array DemandPoint}
