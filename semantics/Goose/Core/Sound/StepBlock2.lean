@@ -515,9 +515,9 @@ theorem step_block (ih : Specs m prof plans n) : BlockSpec m prof plans (n + 1) 
     have hPop : Frame m W tenv penv env (relSt env sc s.nextScope s2) bc.outputFuture := by
       apply Frame.pop (tenv := tenv) hFf (hSf.mod.trans hsame.mod).symm
         (hSf.vars.trans hsame.vars).symm (hSf.scopes.trans hsame.scopes)
-      · intro x hx hf
+      · intro x hx
         refine ⟨hSf.sub x ((hvis x).2 (Or.inr hx)), ?_⟩
-        obtain ⟨lv, si, v, hvar, hlookup, _⟩ := hF.vis x hx (blockInputFuture_sub bc x hf)
+        obtain ⟨lv, si, v, hvar, hlookup, _⟩ := hF.bindings x hx
         exact ⟨lv, hvar, lookup_key hlookup⟩
       · intro x hx; exact hx
       · intro r hr

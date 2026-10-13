@@ -324,6 +324,12 @@ def PRef (P : Nat → RootInst → Prop) (D : RootInst → Ty → Prop) (A : Roo
     lv.ty = .ref mu (.slice mu' E) → ∀ r, P x r →
     D r E ∧ (∀ t, A r t → Gam noEnv P cont t) ∧ (∀ t, Gam noEnv P cont t → A r t)
 
+/-- Declared types of non-reference local storage slots, including locals
+outside the visible continuation. -/
+def StorageRootTypes (env : Env) (r : RootInst) (T : Ty) : Prop :=
+  ∃ x lv si, env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si ∧
+    r = RootInst.local env.act si x ∧ lv.ty.isRefLike = false ∧ T = lv.ty
+
 /-- The validator's description of a point in a function body holds of the
 store: every visible variable is bound in the instance of its block to a value
 of its type, every reference a variable of the activation holds points into
@@ -344,6 +350,13 @@ structure Frame (m : Module) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env)
   vis : ∀ x, x ∈ tenv.visible → x ∈ future → ∃ lv si v, env.vars[x]? = some lv ∧
       env.scopes.lookup lv.scope = some si ∧ lv.ty.paramOk = true ∧
       s.store.roots[RootInst.local env.act si x]? = some v ∧ HasTy m W.G s.store v lv.ty
+  /-- Every visible binding stays present, even after it leaves the demanded continuation. -/
+  bindings : ∀ x, x ∈ tenv.visible → ∃ lv si v, env.vars[x]? = some lv ∧
+      env.scopes.lookup lv.scope = some si ∧ lv.ty.paramOk = true ∧
+      s.store.roots[RootInst.local env.act si x]? = some v ∧
+      (lv.ty.isRefLike = true → IsRef v)
+  storage : ∀ r T, StorageRootTypes env r T → ∀ v,
+      s.store.roots[r]? = some v → LocTy s.store ⟨r, []⟩ T
   rooted : ∀ (x : VarId) (lv : LocalVar) (si : ScopeInst) (v : Val), env.vars[x]? = some lv →
       env.scopes.lookup lv.scope = some si →
       s.store.roots[RootInst.local env.act si x]? = some v → ∀ r, Targets v r →
@@ -365,6 +378,7 @@ theorem Frame.tenv_congr {m : Module} {W : World} {t1 t2 : TEnv} {penv : PEnv} {
   { h with
     mod_t := h1 ▸ h.mod_t, vars_t := h2 ▸ h.vars_t, scopes_t := h3 ▸ h.scopes_t
     vis := fun x hx hfuture => h.vis x (h4 x hx) hfuture
+    bindings := fun x hx => h.bindings x (h4 x hx)
     inv := h.inv.changeDemand (by
       intro r hr
       cases r with
@@ -404,11 +418,32 @@ theorem Frame.flatStep {m : Module} {W : World} {tenv : TEnv} {penv : PEnv} {env
       obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx hfuture
       obtain ⟨v', h6, h7⟩ := hasTy_step hs.le (hs.keep _ v h4) h3 h4 h5
       exact ⟨lv, si, v', h1, h2, h3, h6, h7⟩
+    bindings := by
+      intro x hx
+      obtain ⟨lv, si, old, h1, h2, h3, hroot, hold⟩ := h.bindings x hx
+      have hpresent : st'.roots[RootInst.local env.act si x]? ≠ none :=
+        dom_mono hs.le (by rw [hroot]; simp)
+      obtain ⟨v, hv⟩ := Option.ne_none_iff_exists'.1 hpresent
+      refine ⟨lv, si, v, h1, h2, h3, hv, ?_⟩
+      intro href
+      have hkeep := hs.keep _ old hroot (hold href)
+      rw [hv] at hkeep
+      cases hkeep
+      exact hold href
     rooted := by
       intro x lv si v h1 h2 h3 r ht
       rcases hs.back _ v h3 with h0 | ⟨hn, _⟩
       · exact h.rooted x lv si v h1 h2 h0 r ht
       · exact absurd ht.isRef hn
+    storage := by
+      intro r T hstorage v' hpost
+      cases hroot : s.store.roots[r]? with
+      | some old => exact (h.storage r T hstorage old hroot).mono hs.le
+      | none =>
+          rcases hs.back r v' hpost with hsame | ⟨_, hdom⟩
+          · rw [hroot] at hsame
+            cases hsame
+          · exact False.elim (hdom hroot)
     inv := h.inv.flatStep hs
     sa := by
       intro r E hd

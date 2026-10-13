@@ -135,6 +135,33 @@ def HasTy (m : Module) (G : Nat) (s : Store) (v : Val) : Ty → Prop
   | .limited E capacity => FlatTy (.limited E capacity) v
   | .structT sid ts => FlatTy (.structT sid ts) v
 
+theorem HasTy.isRef {m : Module} {G : Nat} {s : Store} {v : Val} {T : Ty}
+    (h : HasTy m G s v T) (hT : T.isRefLike = true) : IsRef v := by
+  cases T <;> simp only [Ty.isRefLike] at hT <;> try cases hT
+  · obtain ⟨l, rfl, _⟩ := h; trivial
+  · obtain ⟨l, a, b, rfl, _⟩ := h; trivial
+
+/-- A typed non-reference root exposes its stored value with its declared type. -/
+theorem LocTy.hasTyRoot {m : Module} {G : Nat} {s : Store} {r : RootInst} {T : Ty}
+    (h : LocTy s ⟨r, []⟩ T) (hnonref : T.isRefLike = false) :
+    ∃ v, s.roots[r]? = some v ∧ HasTy m G s v T := by
+  obtain ⟨v, hread, hflat⟩ := h
+  obtain ⟨root, hroot, hget⟩ := (read_ok_iff _ _ _).1 hread
+  rw [get_nil] at hget
+  cases hget
+  cases T with
+  | unit => cases hflat
+  | tuple parts => cases hflat
+  | ref mu target => simp [Ty.isRefLike] at hnonref
+  | slice mu element => simp [Ty.isRefLike] at hnonref
+  | int t => exact ⟨v, hroot, hflat⟩
+  | bool => exact ⟨v, hroot, hflat⟩
+  | arr element count => exact ⟨v, hroot, hflat⟩
+  | grow element => exact ⟨v, hroot, hflat⟩
+  | growshrink element => exact ⟨v, hroot, hflat⟩
+  | limited element capacity => exact ⟨v, hroot, hflat⟩
+  | structT id fields => exact ⟨v, hroot, hflat⟩
+
 /-- What a stored reference or slice must denote, whatever its type. -/
 def Held (m : Module) (G : Nat) (s : Store) : Val → Prop
   | .ref l => (∃ T, T.refTarget = true ∧ LocOk m G s l T) ∨
@@ -252,6 +279,37 @@ theorem HasTy.not_ref {m : Module} {G : Nat} {s : Store} {v : Val} {T : Ty}
 theorem HasTy.flat {m : Module} {G : Nat} {s : Store} {v : Val} {T : Ty}
     (h : HasTy m G s v T) (hT : T.flat = true) : FlatTy T v := by
   cases T <;> simp only [HasTy, Ty.flat] at h hT <;> first | exact h | cases hT
+
+theorem HasTy.flatOfStorableNonref {m : Module} {G : Nat} {s : Store} {v : Val} {T : Ty}
+    (h : HasTy m G s v T) (hstorable : T.storable = true) (hnonref : T.isRefLike = false) :
+    FlatTy T v := by
+  cases T with
+  | int _ => exact h
+  | bool => exact h
+  | unit => simp [Ty.storable] at hstorable
+  | arr _ _ => exact h
+  | grow _ => exact h
+  | growshrink _ => exact h
+  | limited _ _ => exact h
+  | ref _ _ => simp [Ty.isRefLike] at hnonref
+  | slice _ _ => simp [Ty.isRefLike] at hnonref
+  | tuple _ => simp [Ty.storable] at hstorable
+  | structT _ _ => exact h
+
+theorem Ty.storable_of_paramOk_nonref {T : Ty} (hparam : T.paramOk = true)
+    (hnonref : T.isRefLike = false) : T.storable = true := by
+  cases T with
+  | int _ => rfl
+  | bool => rfl
+  | unit => simp [Ty.paramOk, Ty.storable, Ty.isRefSlice] at hparam
+  | arr _ _ => simpa [Ty.paramOk, Ty.storable, Ty.isRefSlice] using hparam
+  | grow _ => simpa [Ty.paramOk, Ty.storable, Ty.isRefSlice] using hparam
+  | growshrink _ => simpa [Ty.paramOk, Ty.storable, Ty.isRefSlice] using hparam
+  | limited _ _ => simpa [Ty.paramOk, Ty.storable, Ty.isRefSlice] using hparam
+  | ref _ _ => simp [Ty.isRefLike] at hnonref
+  | slice _ _ => simp [Ty.isRefLike] at hnonref
+  | tuple _ => simp [Ty.paramOk, Ty.storable, Ty.isRefSlice] at hparam
+  | structT _ _ => simpa [Ty.paramOk, Ty.storable, Ty.isRefSlice] using hparam
 
 theorem hasTy_of_flat {m : Module} {G : Nat} {s : Store} {v : Val} {T : Ty}
     (h : FlatTy T v) (hT : T.flat = true ∨ ∃ E, T = .grow E) : HasTy m G s v T := by
