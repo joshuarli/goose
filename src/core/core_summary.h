@@ -39,7 +39,7 @@ private:
     using Roots = vector<CoreRootRef>;
 
     struct Effects {
-        set<CoreTarget> reads, writes, grows, rebinds;
+        set<CoreTarget> reads, writes, grows, shrinks, rebinds;
         bool aborts = false, outputs = false, unknown = false;
     };
 
@@ -68,7 +68,8 @@ private:
 
     static bool Same(const CoreSummary &a, const CoreSummary &b) {
         return a.unknown == b.unknown && a.reads == b.reads && a.writes == b.writes &&
-               a.grows == b.grows && a.rebinds == b.rebinds && a.aborts == b.aborts &&
+               a.grows == b.grows && a.shrinks == b.shrinks && a.rebinds == b.rebinds &&
+               a.aborts == b.aborts &&
                a.outputs == b.outputs;
     }
 
@@ -165,6 +166,7 @@ private:
         declare(e.reads, s.reads);
         declare(e.writes, s.writes);
         declare(e.grows, s.grows);
+        declare(e.shrinks, s.shrinks);
         auto join = [](vector<CoreTarget> &to, const set<CoreTarget> &more) {
             set<CoreTarget> all(to.begin(), to.end());
             all.insert(more.begin(), more.end());
@@ -173,11 +175,12 @@ private:
         join(s.reads, g.reads);
         join(s.writes, g.writes);
         join(s.grows, g.grows);
+        join(s.shrinks, g.shrinks);
         s.rebinds.assign(e.rebinds.begin(), e.rebinds.end());
         join(s.rebinds, g.rebinds);
         s.aborts = e.aborts || g.aborts;
         s.outputs = e.outputs || g.outputs;
-        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, false, false };
+        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, {}, false, false };
         return s;
     }
 
@@ -223,6 +226,7 @@ private:
             case CoreStmtKind::Append: {
                 auto rho = Pl(*s.place);
                 Vw(*s.view);
+                if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
                 break;
             }
@@ -337,6 +341,7 @@ private:
             case CoreExprKind::Push: {
                 auto rho = Pl(*e.place);
                 Ex(*e.a);
+                if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
                 return rho;
             }
@@ -380,6 +385,7 @@ private:
             map(callee.summary.reads, fx->reads);
             map(callee.summary.writes, fx->writes);
             map(callee.summary.grows, fx->grows);
+            map(callee.summary.shrinks, fx->shrinks);
             fx->aborts |= callee.summary.aborts;
             fx->outputs |= callee.summary.outputs;
         }

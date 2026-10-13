@@ -253,7 +253,7 @@ struct CoreTarget {
 // implies every effect.
 struct CoreSummary {
     bool unknown = false;
-    vector<CoreTarget> reads, writes, grows, rebinds;
+    vector<CoreTarget> reads, writes, grows, shrinks, rebinds;
     bool aborts = false;
     bool outputs = false;
 };
