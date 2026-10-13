@@ -1,5 +1,6 @@
 import Goose.Lower.Claims
 import Goose.Lower.Validate
+import Goose.Lower.Finish
 import Goose.Core.Validate
 import Goose.GIR.Validate
 
@@ -394,11 +395,9 @@ theorem enterCall_nil (cfg : Cfg) (n : Nat) (c : ContextId) (ctx : Context) (imp
   have hmaxd : ¬ ((0 : Nat) ≥ maxCallDepth) := by simp [maxCallDepth]
   simp [enterCall, hmaxd, lookupContext, lookupImpl, hctx, himpl, hp]
 
-/-- What follows a function body in the lowering: a return, unless the body ended every path. -/
+/-- Finalize the body with a return or close a synthetic divergent frontier. -/
 def bodyTail (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS) : LS :=
-  ((do
-    if (← isLive) then
-      emitTerm (.ret (if impl.body.value.isSome then [v] else []) none) : B Unit) le ls1).2
+  (finishFunction impl v le ls1).2
 
 theorem lowerImplAt_blocks (m : Core.Module) (implId : ImplId) (impl : Impl)
     (hp : impl.params = #[]) :
@@ -417,7 +416,9 @@ theorem lowerImpl_blocks (m : Core.Module) (impl : Impl) (hp : impl.params = #[]
   unfold lowerImpl
   exact lowerImplAt_blocks m _ impl hp
 
-theorem bodyTail_cases (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS) :
+theorem bodyTail_cases (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS)
+    (hok : blockOk impl.body = true)
+    (hlow : lowerBlock none [] false impl.body le startLS = (v, ls1)) :
     (ls1.cur = none ∧ bodyTail impl le v ls1 = ls1) ∨
     (∃ b, ls1.cur = some b ∧
       emitTerm (.ret (if impl.body.value.isSome then [v] else []) none) le ls1 =
@@ -427,11 +428,13 @@ theorem bodyTail_cases (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS) :
     left
     refine ⟨rfl, ?_⟩
     unfold bodyTail
+    rw [finishFunction_fragment impl le startLS v ls1 hok hlow]
     simp [bind_run, isLive_none hc, pure_run]
   | some b =>
     right
     refine ⟨b, rfl, ?_⟩
     unfold bodyTail
+    rw [finishFunction_fragment impl le startLS v ls1 hok hlow]
     simp [bind_run, isLive_run hc]
 
 theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
@@ -465,10 +468,9 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     have hextE : ExtT (bodyTail impl le r ls1) cx.fn.blocks := by
       show ExtT _ (lowerImplAt m ctx.impl impl).blocks
       rw [hT]; exact extT_finish _
-    have hext1 : ExtT ls1 cx.fn.blocks := by
-      rcases bodyTail_cases impl le r ls1 with ⟨-, h⟩ | ⟨b, -, h⟩
-      · rw [h] at hextE; exact hextE
-      · exact hextE.of_adv (adv_emitTerm h)
+    have hext1 : ExtT ls1 cx.fn.blocks :=
+      hextE.of_adv (advB_finishFunction impl r le ls1
+        (finishFunction impl r le ls1).1 (bodyTail impl le r ls1) rfl)
     have hext0 : ExtT startLS cx.fn.blocks := hext1.of_adv (advB_lowerBlock none [] false impl.body _ _ _ _ hlow)
     obtain ⟨blk0, hb0, hb0p⟩ := hext0.params (b := 0) (blk := ⟨[], #[]⟩) rfl
     have hb0p' : blk0.params = [] := hb0p
@@ -496,7 +498,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
         subst hf
         simp only [expectReturned, pure_apply] at hc'
         obtain ⟨rfl, rfl⟩ := Res.ok.inj hc'
-        rcases bodyTail_cases impl le r ls1 with ⟨hnone, -⟩ | ⟨b, hcur, hemit⟩
+        rcases bodyTail_cases impl le r ls1 hb hlow with ⟨hnone, -⟩ | ⟨b, hcur, hemit⟩
         · obtain ⟨blk, hc1, -⟩ := LS.pp_some P.pp
           rw [hnone] at hc1; cases hc1
         obtain ⟨-, -, -, hinst⟩ := emitTerm_facts hemit P.pp hextE

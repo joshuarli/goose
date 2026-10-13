@@ -698,7 +698,7 @@ Expressions:
 | `v_of p` | `⟦p⟧`, `i_snap` |
 | `v_val e` | `⟦e⟧`, `i_sview` |
 
-A block: `x_enter` of its scope; the variables its construct declares are bound with `x_init` (a function's parameters in order, a range loop's counter, a `for` loop's element then index); the statements; the value, or a unit constant when one is wanted and absent; `x_leave`. A function body is lowered into block 0 after creating it with the parameters' types, and when the body falls through it ends with `t_ret [v]` (or `t_ret []` for no result) and no origin.
+A block: `x_enter` of its scope; the variables its construct declares are bound with `x_init` (a function's parameters in order, a range loop's counter, a `for` loop's element then index); the statements; the value, or a unit constant when one is wanted and absent; `x_leave`. A function body is lowered into block 0 after creating it with the parameters' types, and when the body falls through it ends with `t_ret [v]` (or `t_ret []` for no result) and no origin. A result-bearing body with no tail value must diverge under Core validation. If such a body leaves a synthetic live frontier (for example, the false edge of `while true`), after its scope leaves the lowering branches to a fresh zero-parameter sink that branches to itself, with no return or origin. This rule applies only when the body's divergence check succeeds; other finalization retains the return form above.
 
 Statements:
 

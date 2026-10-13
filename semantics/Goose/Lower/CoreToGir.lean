@@ -756,6 +756,20 @@ def lowerRootInfo (m : Module) (implId : ImplId) (impl : Impl) : GIR.RootInfo :=
       some (unionRoots roots parameterRoots)).foldl unionRoots []
   { params := params.toArray, contents := contents.toArray, results := results.toArray }
 
+/-- Core validation proves that a result-bearing body without a tail value
+cannot fall through when it diverges. A live frontier left by a constant loop
+is therefore synthetic; close it without inventing a return value. A fresh
+sink follows the body's scope leaves, so its self-loop preserves scope balance. -/
+def finishFunction (impl : Impl) (v : ValueId) : B Unit := do
+  let env ← read
+  if (← isLive) then
+    if !impl.results.isEmpty && impl.body.value.isNone && impl.body.diverges env.mod.noReturn then
+      let (sink, _) ← newBlock []
+      emitTerm (.br sink [])
+      setCur (some sink)
+      emitTerm (.br sink [])
+    else emitTerm (.ret (if impl.body.value.isSome then [v] else []) none)
+
 /-- Lower an implementation using its position in the module as its identity. -/
 def lowerImplAt (m : Module) (implId : ImplId) (impl : Impl) : GIR.Func :=
   let env := lowerEnv m impl.vars
@@ -765,8 +779,7 @@ def lowerImplAt (m : Module) (implId : ImplId) (impl : Impl) : GIR.Func :=
     let pre := (impl.params.toList.zip ps).map fun (p, v) =>
       (p.var, v, (impl.vars[p.var]?.map (·.org)).getD 0)
     let v ← lowerBlock none pre false impl.body
-    if (← isLive) then
-      emitTerm (.ret (if impl.body.value.isSome then [v] else []) none)
+    finishFunction impl v
   let ((), s) := act env initState
   { name := impl.name
     params := impl.params.toList.map fun p => tyOfVar impl p.var
