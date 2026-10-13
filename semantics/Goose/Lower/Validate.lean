@@ -723,6 +723,235 @@ theorem LS.SymbolWF.fork {cv : ValueId} {le : LEnv} {scopeCount : Nat} {ls : LS}
   rw [fork_run cv le hc]
   simpa [b1, b2, ls1, ls2, paramIds, pushParamTypes] using h3
 
+def LS.scForkRefs (r : BlockId × BlockId × ValueId) (_ : LS) : List SymbolRef :=
+  [.block r.1, .block r.2.1, .value r.2.2]
+
+theorem LS.SymbolWF.scFork_live {isAnd : Bool} {x : ValueId} {le : LEnv}
+    {scopeCount : Nat} {ls : LS} (h : LS.SymbolWF le scopeCount ls)
+    (hc : LS.CurrentBlocks ls) (hLive : ls.cur.isSome)
+    (hx : ls.cur.isSome → x < ls.vals.size) :
+    LS.SymbolWF le scopeCount (scFork isAnd x le ls).2 := by
+  cases hcur : ls.cur with
+  | none => simp [hcur] at hLive
+  | some b =>
+    have hb := hc b hcur
+    let ls1 : LS := { ls with blocks := ls.blocks.push ⟨[], #[]⟩ }
+    let ls2 : LS := { ls1 with
+      blocks := ls1.blocks.push ⟨[(ls.vals.size, .data .bool)], #[]⟩
+      vals := ls.vals.push (some (.data .bool)) }
+    have h1 : LS.SymbolWF le scopeCount ls1 := by
+      simpa [ls1, pushParamTypes] using h.newBlock (tys := [])
+    have h2 : LS.SymbolWF le scopeCount ls2 := by
+      simpa [ls1, ls2, paramIds, pushParamTypes] using
+        h1.newBlock (tys := [.data .bool])
+    have hx2 : x < ls2.vals.size := by
+      apply Nat.lt_of_lt_of_le (hx (by simp [hcur]))
+      simp [ls2]
+    have hrb : ls.blocks.size < ls2.blocks.size := by
+      simp only [ls2, ls1, Array.size_push]
+      omega
+    have hjb : ls.blocks.size + 1 < ls2.blocks.size := by
+      simp only [ls2, ls1, Array.size_push]
+      omega
+    have hterm : Inst.SymbolsWithin le scopeCount ls2.vals.size ls2.blocks.size
+        (.term (scTerm isAnd x ls.blocks.size (ls.blocks.size + 1))) := by
+      apply Inst.SymbolsWithin.term
+      · intro v hv
+        cases isAnd with
+        | false =>
+          simp [scTerm, Term.uses] at hv
+          cases hv
+          exact hx2
+        | true =>
+          simp [scTerm, Term.uses] at hv
+          cases hv
+          exact hx2
+      · intro o ho
+        cases isAnd <;> simp [scTerm, Term.origin] at ho
+      · intro target ht
+        cases isAnd with
+        | false =>
+          simp [scTerm, Term.successors] at ht
+          rcases ht with h | h
+          · cases h
+            exact hjb
+          · cases h
+            exact hrb
+        | true =>
+          simp [scTerm, Term.successors] at ht
+          rcases ht with h | h
+          · cases h
+            exact hrb
+          · cases h
+            exact hjb
+    have hb2 : b < ls2.blocks.size := by
+      apply Nat.lt_of_lt_of_le hb
+      simp only [ls2, ls1, Array.size_push]
+      omega
+    have hnext := h2.emitTerm (b := b) hb2 hterm
+    rw [scFork_run isAnd x le hcur]
+    simpa [ls1, ls2, paramIds, pushParamTypes] using hnext
+
+theorem LS.SymbolRunAt.scFork_live {isAnd : Bool} {x : ValueId} {le : LEnv}
+    {scopeCount : Nat} {ls : LS} (hLive : ls.cur.isSome)
+    (hx : ls.cur.isSome → x < ls.vals.size) :
+    LS.SymbolRunAt le scopeCount ls (LS.scForkRefs) (scFork isAnd x) := by
+  intro hls hc r ls' hrun
+  cases hcur : ls.cur with
+  | none => simp [hcur] at hLive
+  | some b =>
+    have hadv := adv_scFork hcur hrun
+    rw [scFork_run isAnd x le hcur] at hrun
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hrun
+    have hnext := hls.scFork_live (isAnd := isAnd) (x := x) (le := le)
+      (scopeCount := scopeCount) hc (by simp [hcur]) hx
+    rw [scFork_run isAnd x le hcur] at hnext
+    refine ⟨hadv, hnext, ?_, ?_, ?_⟩
+    · intro target htarget
+      simp at htarget
+    · intro hdead
+      simp at hdead
+    · intro ref href
+      cases ref with
+      | value v =>
+        simp [LS.scForkRefs, SymbolRef.Bound, Array.size_push] at href ⊢
+        rw [href]
+        exact Nat.lt_succ_self _
+      | block blockId =>
+        simp [LS.scForkRefs, SymbolRef.Bound, Array.size_modify, Array.size_push] at href ⊢
+        rcases href with h | h
+        · rw [h]
+          exact Nat.lt_trans (Nat.lt_succ_self _) (Nat.lt_succ_self _)
+        · rw [h]
+          exact Nat.lt_succ_self _
+      | function functionId => simp [LS.scForkRefs] at href
+
+theorem shortCircuit_symbolRun_of {le : LEnv} {scopeCount : Nat} {b : Core.Expr}
+    (hright : ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr b))
+    {ls : LS} {isAnd : Bool} {x : ValueId}
+    (hx : ls.cur.isSome → x < ls.vals.size) :
+    LS.SymbolRun le scopeCount ls (fun v => [v]) (shortCircuit isAnd x (lowerExpr b)) := by
+  intro hls hc result ls' hrun
+  unfold shortCircuit at hrun
+  cases hstart : ls.cur with
+  | none =>
+    rw [whenLive_none _ _ _ hstart] at hrun
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hrun
+    refine ⟨hls, hc, fun _ => hstart, ?_⟩
+    intro hlive v hv
+    simp [hstart] at hlive
+  | some startBlock =>
+    rw [whenLive_some _ _ _ hstart] at hrun
+    simp only [bind_eq] at hrun
+    obtain ⟨⟨rb, jb, p⟩, ls1, hfork, u2, ls2, hsetRhs, y, ls3, hrhs,
+      u4, ls4, hterm, u5, ls5, hsetJoin, hret⟩ := hrun
+    obtain ⟨hids, _⟩ := scFork_ids hfork
+    obtain ⟨hrb, hpair⟩ := Prod.mk.inj hids
+    obtain ⟨hjb, hp⟩ := Prod.mk.inj hpair
+    subst rb jb p
+    have hforkRun := LS.SymbolRunAt.scFork_live (le := le) (scopeCount := scopeCount)
+      (ls := ls) (isAnd := isAnd) (x := x) (by simp [hstart]) hx
+    obtain ⟨_, hls1, _, _, hrefs⟩ :=
+      hforkRun hls hc (ls.blocks.size, ls.blocks.size + 1, ls.vals.size) ls1 hfork
+    have hrbBound : ls.blocks.size < ls1.blocks.size := by
+      have hmem : SymbolRef.block ls.blocks.size ∈
+          LS.scForkRefs (ls.blocks.size, ls.blocks.size + 1, ls.vals.size) ls1 := by
+        simp [LS.scForkRefs]
+      simpa [SymbolRef.Bound] using hrefs (.block ls.blocks.size) hmem
+    have hjbBound : ls.blocks.size + 1 < ls1.blocks.size := by
+      have hmem : SymbolRef.block (ls.blocks.size + 1) ∈
+          LS.scForkRefs (ls.blocks.size, ls.blocks.size + 1, ls.vals.size) ls1 := by
+        simp [LS.scForkRefs]
+      simpa [SymbolRef.Bound] using hrefs (.block (ls.blocks.size + 1)) hmem
+    have hpBound : ls.vals.size < ls1.vals.size := by
+      have hmem : SymbolRef.value ls.vals.size ∈
+          LS.scForkRefs (ls.blocks.size, ls.blocks.size + 1, ls.vals.size) ls1 := by
+        simp [LS.scForkRefs]
+      simpa [SymbolRef.Bound] using hrefs (.value ls.vals.size) hmem
+    rw [setCur_run] at hsetRhs
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hsetRhs
+    have hls2 : LS.SymbolWF le scopeCount { ls1 with cur := some ls.blocks.size } :=
+      hls1.changeCur _
+    have hc2 : LS.CurrentBlocks { ls1 with cur := some ls.blocks.size } := by
+      intro target htarget
+      change some ls.blocks.size = some target at htarget
+      cases htarget
+      exact hrbBound
+    obtain ⟨hls3, hc3, _, hyBound⟩ :=
+      hright { ls1 with cur := some ls.blocks.size } hls2 hc2 y ls3 hrhs
+    have hadvRhs := advB_lowerExpr b le { ls1 with cur := some ls.blocks.size } y ls3 hrhs
+    have hjoinInRhs : ls.blocks.size + 1 < ls3.blocks.size := by
+      exact Nat.lt_of_lt_of_le hjbBound (by
+        exact Nat.le_trans (by simp) hadvRhs.ext.1)
+    have huses : ls3.cur.isSome → ∀ v ∈ (Term.br (ls.blocks.size + 1) [y]).uses,
+        v < ls3.vals.size := by
+      intro hlive v hv
+      simp [Term.uses] at hv
+      cases hv
+      exact hyBound hlive y (by simp)
+    have htermRun : LS.SymbolRun le scopeCount ls3 (fun _ : Unit => [])
+        (emitTerm (.br (ls.blocks.size + 1) [y])) := by
+      apply LS.SymbolRun.emitTerm
+      · exact huses
+      · intro o ho
+        simp [Term.origin] at ho
+      · intro target ht
+        simp [Term.successors] at ht
+        cases ht
+        exact hjoinInRhs
+    obtain ⟨hls4, hc4, _, _⟩ := htermRun hls3 hc3 () ls4 hterm
+    have hadvTerm := adv_emitTerm hterm
+    rw [setCur_run] at hsetJoin
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hsetJoin
+    have hls5 : LS.SymbolWF le scopeCount { ls4 with cur := some (ls.blocks.size + 1) } :=
+      hls4.changeCur _
+    have hjbFinal : ls.blocks.size + 1 < ls4.blocks.size := by
+      calc
+        ls.blocks.size + 1 < ls1.blocks.size := hjbBound
+        _ = ({ ls1 with cur := some ls.blocks.size }).blocks.size := by simp
+        _ ≤ ls3.blocks.size := hadvRhs.ext.1
+        _ ≤ ls4.blocks.size := hadvTerm.ext.1
+    have hpFinalSize : ls.vals.size < ls4.vals.size :=
+      Nat.lt_of_lt_of_le hpBound (Nat.le_trans hadvRhs.vals hadvTerm.vals)
+    have hpFinal : ls.vals.size < ({ ls4 with cur := some (ls.blocks.size + 1) }).vals.size := by
+      simpa using hpFinalSize
+    rw [pure_run] at hret
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hret
+    refine ⟨hls5, ?_, ?_, ?_⟩
+    · intro target htarget
+      change some (ls.blocks.size + 1) = some target at htarget
+      cases htarget
+      exact hjbFinal
+    · intro hdead
+      simp at hdead
+    · intro hlive v hv
+      simp at hv
+      cases hv
+      exact hpFinal
+
+theorem lowerExpr_shortCircuit_symbolRun_of {le : LEnv} {scopeCount : Nat}
+    {a b : Core.Expr}
+    (hleft : ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr a))
+    (hright : ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr b))
+    (isAnd : Bool) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v])
+      (do let x ← lowerExpr a; shortCircuit isAnd x (lowerExpr b)) := by
+  intro ls
+  have hrunAt : LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun v => [v])
+      (do let x ← lowerExpr a; shortCircuit isAnd x (lowerExpr b)) := by
+    apply LS.SymbolRunAt.bind ((hleft ls).toSymbolRunAt (advB_lowerExpr a))
+    intro x mid hmid hcur hrefs hadv hdead
+    have hx : mid.cur.isSome → x < mid.vals.size := by
+      intro hlive
+      have hmem : SymbolRef.value x ∈ LS.valueRefs (fun v : ValueId => [v]) x mid := by
+        simp [LS.valueRefs, hlive]
+      have hbound := hrefs (.value x) hmem
+      change x < mid.vals.size at hbound
+      exact hbound
+    exact (shortCircuit_symbolRun_of hright hx).toSymbolRunAt
+      (advB_shortCircuit isAnd x (advB_lowerExpr b))
+  exact hrunAt.toSymbolRun
+
 theorem LS.DenseDefinitions.patchTerm {t : Term} {le : LEnv} {ls : LS} {b : BlockId}
     (h : ls.DenseDefinitions) (hb : b < ls.blocks.size) :
     ({ ls with blocks := ls.blocks.modify b fun blk =>
@@ -1435,6 +1664,12 @@ mutual
     | cmp {op : Core.CmpOp} {a b : Core.Expr}
         (h : HasTypedExpr env (.cmp op a b)) (leftOk : V001Expr env a)
         (rightOk : V001Expr env b) : V001Expr env (.cmp op a b)
+    | and {a b : Core.Expr} (h : HasTypedExpr env (.and a b))
+        (leftOk : V001Expr env a) (rightOk : V001Expr env b) :
+        V001Expr env (.and a b)
+    | or {a b : Core.Expr} (h : HasTypedExpr env (.or a b))
+        (leftOk : V001Expr env a) (rightOk : V001Expr env b) :
+        V001Expr env (.or a b)
 end
 
 mutual
@@ -1521,6 +1756,16 @@ mutual
         (fun ls => lowerExpr_v001_symbolRun leftOk hslots hglobals horigins ls)
         (fun ls => lowerExpr_v001_symbolRun rightOk hslots hglobals horigins ls)
         _ ls
+    | and hrun leftOk rightOk =>
+      exact lowerExpr_shortCircuit_symbolRun_of
+        (fun ls => lowerExpr_v001_symbolRun leftOk hslots hglobals horigins ls)
+        (fun ls => lowerExpr_v001_symbolRun rightOk hslots hglobals horigins ls)
+        true
+    | or hrun leftOk rightOk =>
+      exact lowerExpr_shortCircuit_symbolRun_of
+        (fun ls => lowerExpr_v001_symbolRun leftOk hslots hglobals horigins ls)
+        (fun ls => lowerExpr_v001_symbolRun rightOk hslots hglobals horigins ls)
+        false
 end
 
 end Goose.Lower
