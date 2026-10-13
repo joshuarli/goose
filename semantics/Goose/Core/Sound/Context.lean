@@ -186,12 +186,23 @@ noncomputable def NodeContext.atRoot {m : Module} {plans : Array (Array DemandPo
     (planContext : PlanContext m plans) (root : DemandNode)
     (rootAt : demandRoot? m planContext.owner = some root) :
     NodeContext planContext [] root root.primaryPhase := by
-  let rootOccurrence := DemandNode.expectedPoints_root planContext.expectedWalk rootAt
+  let rootOccurrence := DemandNode.expectedPoints_root_withFrame planContext.expectedWalk rootAt
   let expected := Classical.choose rootOccurrence
   have occurrenceFacts := Classical.choose_spec rootOccurrence
   have member := occurrenceFacts.1
-  have sourceAt := occurrenceFacts.2
+  have sourceAt := occurrenceFacts.2.1
   exact NodeContext.ofSource planContext expected sourceAt member
+
+/-- A context selected at the owner root has the exact lexical entry frame. -/
+theorem NodeContext.atRoot_active {m : Module} {plans : Array (Array DemandPoint)}
+    (planContext : PlanContext m plans) (root : DemandNode)
+    (rootAt : demandRoot? m planContext.owner = some root) :
+    (NodeContext.atRoot planContext root rootAt).expected.frame.active =
+      demandInitialActive m planContext.owner := by
+  unfold NodeContext.atRoot
+  let rootOccurrence := DemandNode.expectedPoints_root_withFrame planContext.expectedWalk rootAt
+  have occurrenceFacts := Classical.choose_spec rootOccurrence
+  exact congrArg DemandFrame.active occurrenceFacts.2.2
 
 /-- Start at a context body root without rebuilding its demand walk. -/
 noncomputable def ContextPlanSelection.rootContext {m : Module}
@@ -356,6 +367,124 @@ def EvaluationContext.mayShrink {m plans path node phase}
   match context with
   | .pilot _ _ => False
   | .shrink (pc := pc) _ _ => PlanMayShrink pc P r
+
+/-- Re-select a body root from the plan's checked walk. -/
+noncomputable def NodeContext.canonicalCallBody {m plans c ctx impl}
+    {pc : PlanContext m plans}
+    (_context : NodeContext pc [] (.block impl.body) .block)
+    (ownerMatch : pc.owner = c)
+    (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl) :
+    NodeContext pc [] (.block impl.body) .block := by
+  have hrootAt : demandRoot? m pc.owner = some (.block impl.body) := by
+    rw [ownerMatch]
+    exact demandRoot?_context hctx himpl
+  exact NodeContext.atRoot pc (.block impl.body) hrootAt
+
+/-- The re-selected body context has precisely the implementation parameters active. -/
+theorem NodeContext.canonicalCallBody_active {m plans c ctx impl}
+    {pc : PlanContext m plans}
+    (context : NodeContext pc [] (.block impl.body) .block)
+    (ownerMatch : pc.owner = c)
+    (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl) :
+    (context.canonicalCallBody ownerMatch hctx himpl).expected.frame.active =
+      impl.params.toList.map (·.var) := by
+  have hrootAt : demandRoot? m pc.owner = some (.block impl.body) := by
+    rw [ownerMatch]
+    exact demandRoot?_context hctx himpl
+  change (NodeContext.atRoot pc (.block impl.body) hrootAt).expected.frame.active = _
+  rw [NodeContext.atRoot_active]
+  rw [ownerMatch]
+  have ⟨hc, hctxValue⟩ := Array.getElem?_eq_some_iff.mp hctx
+  simp [demandInitialActive, hc, hctxValue, himpl]
+
+/-- Re-selecting the root does not change the exact access environment. -/
+theorem NodeContext.canonicalCallBody_accessMatches {m plans c ctx impl}
+    {pc : PlanContext m plans}
+    (context : NodeContext pc [] (.block impl.body) .block)
+    (ownerMatch : pc.owner = c)
+    (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl)
+    (tenv : TEnv) (penv : PEnv)
+    (htmod : tenv.mod = m) (htvars : tenv.vars = impl.vars)
+    (hpmod : penv.mod = m) (hpimpl : penv.impl = impl) (hpctx : penv.ctx = ctx) :
+    (context.canonicalCallBody ownerMatch hctx himpl).AccessMatches tenv penv := by
+  have haccessPlan : demandAccess? m c = some pc.approvals.access := by
+    simpa [ownerMatch] using pc.approvals.accessMatches
+  have haccessContext := demandAccess?_context hctx himpl
+  have haccessEq : pc.approvals.access = ⟨m, impl, ctx⟩ :=
+    Option.some.inj (haccessPlan.symm.trans haccessContext)
+  change pc.approvals.access.mod = tenv.mod ∧
+    pc.approvals.access.impl.vars = tenv.vars ∧
+    pc.approvals.access.mod = penv.mod ∧
+    pc.approvals.access.impl = penv.impl ∧
+    pc.approvals.access.ctx = penv.ctx
+  rw [haccessEq]
+  exact ⟨htmod.symm, htvars.symm, hpmod.symm, hpimpl.symm, hpctx.symm⟩
+
+/-- Canonical context at a callee body entry, independent of the supplied root occurrence. -/
+noncomputable def EvaluationContext.callBody {m plans c ctx impl}
+    (root : EvaluationContext m plans [] (.block impl.body) .block)
+    (ownerMatch : root.OwnerMatches c)
+    (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl) :
+    EvaluationContext m plans [] (.block impl.body) .block := by
+  cases root with
+  | pilot profile _ =>
+    exact .pilot profile (impl.params.toList.map (·.var))
+  | shrink profile context =>
+    exact .shrink profile (context.canonicalCallBody ownerMatch hctx himpl)
+
+/-- Canonicalizing a call body preserves its checked shrink authority. -/
+theorem EvaluationContext.callBody_mayShrink_iff {m plans c ctx impl}
+    (root : EvaluationContext m plans [] (.block impl.body) .block)
+    (ownerMatch : root.OwnerMatches c)
+    (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl)
+    (P : Nat → RootInst → Prop) (r : RootInst) :
+    (root.callBody ownerMatch hctx himpl).mayShrink P r ↔ root.mayShrink P r := by
+  cases root <;> simp [EvaluationContext.callBody, EvaluationContext.mayShrink,
+    NodeContext.canonicalCallBody]
+
+/-- The canonical call body is active exactly on the implementation parameters. -/
+theorem EvaluationContext.callBody_activeMatches {m plans c ctx impl}
+    (root : EvaluationContext m plans [] (.block impl.body) .block)
+    (ownerMatch : root.OwnerMatches c)
+    (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl)
+    (tenv : TEnv)
+    (hvisible : ∀ x, x ∈ tenv.visible ↔ x ∈ impl.params.toList.map (·.var)) :
+    (root.callBody ownerMatch hctx himpl).ActiveMatches tenv := by
+  cases root with
+  | pilot profile _ =>
+    change ∀ x, x ∈ impl.params.toList.map (·.var) ↔ x ∈ tenv.visible
+    intro x
+    exact (hvisible x).symm
+  | shrink profile context =>
+    let canonical := context.canonicalCallBody ownerMatch hctx himpl
+    have hactive := NodeContext.canonicalCallBody_active context ownerMatch hctx himpl
+    change canonical.ActiveMatches tenv
+    change ∀ x, x ∈ canonical.expected.frame.active ↔ x ∈ tenv.visible
+    intro x
+    rw [hactive]
+    exact (hvisible x).symm
+
+/-- Access checks at the canonical call body use the looked up context and implementation. -/
+theorem EvaluationContext.callBody_accessMatches {m plans c ctx impl}
+    (root : EvaluationContext m plans [] (.block impl.body) .block)
+    (ownerMatch : root.OwnerMatches c)
+    (hctx : m.contexts[c]? = some ctx)
+    (himpl : m.impls[ctx.impl]? = some impl)
+    (tenv : TEnv) (penv : PEnv)
+    (htmod : tenv.mod = m) (htvars : tenv.vars = impl.vars)
+    (hpmod : penv.mod = m) (hpimpl : penv.impl = impl) (hpctx : penv.ctx = ctx) :
+    (root.callBody ownerMatch hctx himpl).AccessMatches tenv penv := by
+  cases root with
+  | pilot profile _ => simp [EvaluationContext.callBody, EvaluationContext.AccessMatches]
+  | shrink profile context =>
+    exact NodeContext.canonicalCallBody_accessMatches context ownerMatch hctx himpl
+      tenv penv htmod htvars hpmod hpimpl hpctx
 
 /-- Children keep lexical activity or follow the checked child transition. -/
 noncomputable def EvaluationContext.child {m plans path node phase}
