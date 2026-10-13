@@ -701,6 +701,7 @@ structure ImplOk (m : Module) (impl : Impl) : Prop where
 structure CtxOk (m : Module) (impl : Impl) (ctx : Context) : Prop where
   annotationShape : checkAnnotationShape m impl ctx = .ok ()
   resultShape : checkResultShape m impl ctx = .ok ()
+  contentShape : checkContentShape m impl ctx = .ok ()
   paramAnn : ∀ (i : Nat) (ann : List RootRef), i < impl.params.size →
     (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann →
     ∀ q, q ∈ ann → q = .param i ∨ ∃ g, q = .global g
