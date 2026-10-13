@@ -14,14 +14,15 @@
 - [9. Writing fast Goose](#9-writing-fast-goose)
 - [10. Where the compiler is more conservative than the specification](#10-where-the-compiler-is-more-conservative-than-the-specification)
 - [11. Audit findings and resolutions](#11-audit-findings-and-resolutions)
-- [12. Programs with C of their own, built as units](#12-programs-with-c-of-their-own-built-as-units)
+- [12. Native C integration](#12-native-c-integration)
 - [13. Sharing emitted implementations](#13-sharing-emitted-implementations)
 - [14. Build-cost and dependency reports](#14-build-cost-and-dependency-reports)
 - [15. Persistent code-generation units](#15-persistent-code-generation-units)
 
 </details>
 
-These notes explain how the compiler in `src/` implements `goose_spec.md`.
+These notes explain how the compiler in `src/` implements
+[`docs/goose_spec.md`](goose_spec.md).
 They cover each pass, with particular attention to reference roots and
 provenance, writability, shrinking, recursion, optimization, bounds-check
 elimination, and C representations. There are two intended audiences:
@@ -60,12 +61,13 @@ specialization parameters alone proves that two arrays cannot alias.
 
 ## 1. Pipeline
 
-`main.cpp` runs the default legacy pipeline in this order; each phase is one
-or more headers in a single translation unit, included in the order the
-driver lists them. The legacy path writes one C file by default. `--emit-core`
-and `--emit-gir-high`/`--emit-gir-low` write intermediate modules; `--pipeline
-gir` uses GIR for C, JIT and units output and reports unsupported features
-explicitly. The default remains the legacy pipeline.
+`main.cpp` offers two backends after parsing, resolution and typechecking. The
+default legacy backend optimizes the AST, eliminates bounds checks, and emits
+C. The opt-in `gir` backend exports typed Core, validates and lowers GIR, then
+emits C for `-o`, JIT or units output. It does not use the legacy optimizer or
+BCE to produce that output. Both backends use the same runtime. The Core and
+GIR design and wire contracts are in
+[`docs/design/goose-ir-spec.md`](design/goose-ir-spec.md).
 
 | Phase | Where | Consumes | Produces |
 |---|---|---|---|
@@ -76,6 +78,11 @@ explicitly. The default remains the legacy pipeline.
 | BCE | `bce.h` (`BCE::RunAll`) | live specializations | `Index::nobc`, `SliceExpr::nobc`, `ForLoop::fixedlen` and `lenbound`, per-loop `hoistrefs` and `hoistfields` |
 | Codegen | `codegen*.h` (`CodeGen`) | live specializations, globals | one C file by default, with `src/runtime/` (or its part a program's unit holds) around it |
 | JIT | `jit.h` | the C text | the program run in-process through libtcc, when no `-o` was given |
+
+The IR stages for the `core-pilot` profile are Core v0.2, GIR-H v0.3 and
+GIR-L v0.2. `--emit-core` writes Core; `--emit-gir-high`
+also validates and writes GIR-H; `--emit-gir-low` validates both GIR stages
+and writes GIR-L.
 
 The passes are virtual methods on `Node` (`ast.h`): `Dump`, `Clone1`,
 `Children`, `Check`, `Cp1`/`Opt`, `BceWalk`/`BceMark`, `CgX`/`CgAny`/`CgStmt`.
@@ -147,7 +154,7 @@ the slow steps (a line each, and on a terminal a live line below).
 | `--tokens`, `--dump`, `--parse` | stop after lexing, after parsing (dump is parse-level: no resolution), after resolution |
 | `--roundtrip` | after resolution, parse the dump as a program of its own and require it to dump to the same text (`CheckRoundtrip`), then go on to whatever else was asked for |
 | `--dump-file f.goose` | also write the dump to a file, and go on |
-| `--check` | stop after typecheck, optimization and BCE; no C is written |
+| `--check` | stop before C output; the legacy backend runs typechecking, optimization and BCE, while the GIR backend validates through Core/GIR lowering |
 | `-O0`, `-O1` (default), `-O2` | inlining thresholds (§4); folding and propagation run at every level; base-case inlining and tail-recursion elimination need `-O1` or above |
 | `--specs` | print every live specialization's optimized body |
 | `--stacks` | print the data stack count of the main program and of each worker, the regions they come to, the thread cap that gives `hardware_threads()`, and every function's share (`codegen_stacks.h`); with `--check` it runs the backend for the counts and writes nothing |
@@ -159,12 +166,12 @@ the slow steps (a line each, and on a terminal a live line below).
 | `-o out.c`, `--jit`, `--header`, `-D`, `--include`, `--stdlib`, `--` | output file, in-process run, a C API header for the exports (which builds the C without a `main`, for a C host), a define written into the generated C, a user header, the stdlib directory, program arguments |
 | `--emit-core FILE` | write the checked program as a Core module; unsupported Core-profile features are errors |
 | `--emit-core-report` | with `--check`, print the sorted unsupported Core-profile features as JSON without writing a module or C |
-| `--emit-gir-high FILE`, `--emit-gir-low FILE` | write the checked program as a GIR-H or GIR-L module |
-| `--pipeline legacy\|gir` | choose the C, JIT or units pipeline; `legacy` is the default, while `gir` reports unsupported features |
+| `--emit-gir-high FILE`, `--emit-gir-low FILE` | write validated GIR-H or GIR-L modules for `core-pilot` |
+| `--pipeline legacy\|gir` | choose the C, JIT or units pipeline; `legacy` is the default, while `gir` reports unsupported Core/GIR features |
 | `--<name>-link msvc\|cc` | print the response file of link inputs a program using the blessed package imported as `name` (`gfx`, `audio`, `ui`, `physics`) needs, when the package is compiled into this compiler (`builtin.h`, `BuiltinLinkFile`) |
 | `--multi-test a.goose b.goose ...` | compile each file in turn with the other flags, as a process of its own on it would (an `Ast` and a compile thread each, which is all the state a compile has), each file's output on both streams ending in a line `==== goose --multi-test: exit <code> <file>`; an `-o` names each file's C with `%` for its name. It runs no programs and writes no dump files. The test runner's batches of compiler runs (`docs/testing.md`) |
 | `--compile-shader f [--shader-source msl\|hlsl]` | hidden: what a shader compiles to, without a program around it |
-| `--share` | merge identical emitted function bodies after checking, optimization and bounds-check elimination; checked contexts remain separate |
+| `--share` | on the legacy backend, merge identical emitted function bodies after checking, optimization and bounds-check elimination; checked contexts remain separate |
 | `--stable-names` | hidden: name emitted entities from stable keys instead of creation-order counters |
 | `--build-report FILE` | write versioned JSON with specialization, emission, sharing and phase-cost data |
 | `--build-report-deps` | add dependency and result digests to the report; requires `--build-report FILE` |
@@ -2886,10 +2893,11 @@ relative to the calling file. Arguments must be string literals or chains
 of immutable global names initialized by string literals, not arbitrary
 constant expressions or locals. Compilation failure is a Goose compile
 error. The result is a static, read-only `const u8[:]` shader blob, with no
-runtime reads of the named globals. Its platform blob format and the
-native graphics library interface are separate compatibility surfaces
-(`src/gfx_blob.h`, and the gfx package's `gfx_api.h` and `docs/gfx.md`), not general Goose
-value layouts.
+runtime reads of the named globals. Its platform blob format and the native
+graphics interface are separate compatibility surfaces: the blob format is
+in `src/gfx_blob.h`, and the package API belongs to the
+[gfx package](https://github.com/aardappel/goose_gfx), not to Goose value
+layouts.
 
 A pool's kind travels with its provenance as bits, `RU_SLOTS` for `reusable`
 and `RU_SLICES` for `reusable[]` (`Prov::reusable`, `RootArg::reusable`), so
@@ -4710,19 +4718,13 @@ are chained for reuse, which keeps node numbers, and so a worker's copy,
 valid. The emitted code keeps the element region's count and top and fills
 the default values itself.
 
-**The native layers** behind `gfx`, `audio`, `ui` and `physics` are not
-part of this runtime: they are packages (`docs/design/packages.md`) in
-repositories of their own, which `src/blessed.txt` names: native C over
-SDL3 and Nuklear in the gfx package, over Box3D in the physics package,
-compiled once into static libraries
-that a program links when built from the generated C, and into the compiler
-itself when it is configured with them, for JIT runs. The generated C only
-declares the `gs_gfx_*`, `gs_audio_*`, `gs_ui_*` and `gs_phys_*` functions
-it calls; a JIT run gets their addresses from the symbol table compiled in
-with the package (`builtin.h`) or from the library the compiler builds for a
-package that is not (`native.h`), by `tcc_add_symbol`. The packages' own
-`docs/gfx.md`, `docs/audio.md`, `docs/ui.md` and `docs/physics.md` describe
-the layers.
+**Native packages.** `gfx`, `audio` and `ui` are modules of the
+[gfx package](https://github.com/aardappel/goose_gfx); `physics` belongs to
+the [physics package](https://github.com/aardappel/goose_physics). The mapping
+is in `src/blessed.txt`. Package C is separate from the Goose runtime: AOT
+builds link native libraries, while JIT runs use built-in symbols or load the
+package library. Package fetching, sidecars and native builds are described in
+[`docs/packages.md`](packages.md).
 
 **Byte search** (std's `find_any` and `find_pair`, `docs/stdlib.md`):
 `gs_scan_any` and `gs_scan_pair` in `runtime_impl.h`, which std's `extern`
@@ -5457,40 +5459,14 @@ failures.
 
 ---
 
-## 12. Programs with C of their own, built as units
+## 12. Native C integration
 
-`goose build --units` (and `--emit-units`) write a program as several C files.
-A program given `--include` headers, or `--standalone`, also gets a
-**native-support unit**, `native.c`, which is the program's runtime and the one
-place its C is compiled:
-
-* The runtime implementation is in that unit, in the standalone form the
-  headers are written for: neither `GS_SEPARATE_RUNTIME` nor
-  `GS_RUNTIME_OBJECT` is defined, so a header that refuses those with `#error`
-  compiles, and the implementation's internal variables and functions are
-  visible to it. What the runtime defines has external linkage instead of
-  `static` (applied at emission to `runtime.h`'s `GS_API`), so the other units
-  call it as they call the shared runtime object. That object is not linked: the
-  program has exactly one runtime.
-* The unit holds the generated types a header can spell, and nothing the other
-  units' code depends on besides: the types reachable from an `extern` or export
-  signature, and every type built over one (a slice, array or reference of the
-  struct), keep the names single-file output gives them (`Stats_g`,
-  `sl_Stats_g`). The other generated types are named from their keys.
-* The `--include` headers follow, as in the single file, and then a prototype
-  and an entry point for each `extern fn`: a constant function pointer
-  `gs_x_<name>` that every other unit calls through. A header may therefore
-  define the function `static`.
-
-A header may rely on what the single-file standalone form gives it up to the
-point it is included: the runtime's internals, the core types (`gs_rhdr`,
-`gs_rref`, `gs_pref`, `sl_u8`), the runtime extension's functions, and the
-types above. It may not rely on the program's globals (`gs_globals_t`, which
-does not exist), on a generated type that is not reachable from a signature, on
-generated functions, or on being compiled in a unit with any of them: those are
-in other units. Its object is keyed by its text, the headers it reads by content
-and the contract, so editing a header rebuilds that unit and nothing else, and
-editing a Goose function recompiles that function's unit and not this one.
+A program can add C through its `.build` sidecar. A package can provide plain C
+sources or a CMake target. `goose run` makes used native functions available to
+JIT; `goose build` links used native libraries into the executable. The
+compiler builds only native parts the program reaches. The sidecar format and
+package workflow are in [`docs/packages.md`](packages.md). Unit-specific C
+visibility and build behavior are in §15.
 
 ## 13. Sharing emitted implementations
 
@@ -5516,63 +5492,38 @@ compiler qualification question.
 
 ## 14. Build-cost and dependency reports
 
-`--build-report FILE` writes `goose-build-report/1` JSON for one checked
-program. It records counts from checking through emission, per-function
-context and emitted-byte counts, the specialization dimensions that multiply
-contexts, and the phases' wall and CPU time. With `--units` it also records
-unit changes, native compiler invocations, object reuse and whether linking
-ran. Reporting does not select another compiler path. Without the flag, the
-reporting timers and attribution are inactive.
+`--build-report FILE` writes `goose-build-report/1` JSON. It records checking
+and, when those phases run, optimization, emission and unit-build costs with
+wall and CPU time; it also records per-function context and emitted-byte
+counts, specialization dimensions, sharing results, native compiler
+invocations, object reuse and whether linking ran. Fields for phases that did
+not run are unavailable. With `--check`, the report contains frontend data only.
+Reporting does not select another compiler path, and its timers are inactive
+unless requested.
 
-`--build-report-deps` adds an optional `extensions.dependencies` section to
-that report. It records files read and absent paths, then groups checked
-contexts by their stable key with dependency, result, source-position and
-caller digests. The recorder observes what the checker consulted; it does
-not cause cached checking results to be reused. This data supports shadow
-invalidation prediction, where every recomputed result change must be
-predicted, before any future design could rely on it for reuse. The flag
-requires `--build-report FILE`; it is not a standalone output mode. It adds
-recording work to the check, so omit it for normal builds.
-
-Examples from the repository root, with a built compiler:
-
-```sh
-build/goose --check --build-report .work/tmp/report.json test/codegen/evaluation_order.goose
-build/goose --check --build-report .work/tmp/report-deps.json --build-report-deps test/codegen/evaluation_order.goose
-```
+`--build-report-deps` adds `extensions.dependencies` to that report. It records
+files read and absent paths, then groups checked contexts by stable key with
+dependency, result, source-position and caller digests. It observes what the
+checker consulted; it does not reuse checked results. The flag requires
+`--build-report FILE` and adds recording work. The command examples and report
+checks are in [`docs/testing.md`](testing.md).
 
 ## 15. Persistent code-generation units
 
-`--emit-units DIR` emits C as a runtime header and several translation units
-for a caller to compile and link. `goose build --units` drives the native
-compiler and linker and keeps objects in a store under the program's build
-directory, separated by the build contract. Both forms typecheck and emit the
-program; only the driver has a persistent object store. A program with
-`--include` headers or `--standalone` gets the `native.c` unit described in
-§12, which contains the runtime and the C interface the headers can see.
+`--emit-units DIR` emits a runtime header and C translation units for a caller
+to compile and link. `goose build --units` drives the native compiler and
+linker and stores reusable objects under the program's build directory. A
+program with `--include` headers or `--standalone` gets `native.c`, containing
+the standalone runtime and the C interface visible to those headers: types
+reachable from `extern` or export signatures, plus `extern` entry points.
+Other generated types and program globals remain in their own units.
 
-The object key covers the unit text, the C compiler inputs reported for that
-unit, and the build contract (including compiler identity, version, target
-and flags). A changed unit can reuse its object only when those inputs still
-match. On platforms where the native compiler supplies no dependency file,
-the driver accounts for the runtime header and explicit `--include` headers.
-Builds serialize access to one store with a lock. Object publication is
-atomic: an object is available only after its completion record is written.
-An incomplete entry is rebuilt; a detected corrupt entry is reported and
-rebuilt. `--rebuild` ignores existing objects. `--verify-reuse` recompiles
-reused units and checks the resulting objects. Neither flag changes the
-single-file `-o` output path.
-
-The store also records the frontend inputs from the last successful build.
-When they are unchanged, the driver can reuse the previous executable and
-replay its warnings without running the frontend or native compiler. When
-frontend inputs change, checking still runs, so current diagnostics are
-produced before unit objects are considered. Reusing a native object does
-not reuse a typechecked result. Dependency reports described in §14 are
-shadow data only and are not inputs to the object store's invalidation.
-
-Package sidecars and native packages follow the existing package build and
-link path; their C is not folded into `native.c`. A program with its own
-non-builtin native part cannot use the whole-build no-op shortcut, although
-its generated Goose units still use the units object store. The scale corpus
-and the `--include` stand-in do not establish package-sidecar corpus coverage.
+Object reuse requires the unit text, reported C compiler inputs and build
+contract (compiler identity, version, target and flags) to match. Builds lock
+the store and publish objects atomically. `--rebuild` replaces existing
+entries; `--verify-reuse` recompiles reused objects and compares them. When
+frontend inputs are unchanged, the driver can reuse the prior executable and
+replay warnings. A source change still runs checking before object reuse is
+considered. Native-object reuse does not reuse typechecked results, and
+`--build-report-deps` data does not affect invalidation. Package C follows the
+package build path rather than being folded into `native.c`; see §12.
