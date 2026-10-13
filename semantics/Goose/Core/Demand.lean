@@ -1647,6 +1647,42 @@ private theorem expectedPoints_evidence {m owner points expected}
       exact entry.item.source⟩
   · simpa [entry.expectedNode] using entry.phaseSource
 
+/-- A successful expected walk contains its source root at the primary phase. -/
+theorem DemandNode.expectedPoints_root {m owner points root}
+    (hwalk : DemandNode.expectedPoints m owner = .ok points)
+    (hroot : demandRoot? m owner = some root) :
+    ∃ expected, expected ∈ points ∧
+      DemandExpectedSourceAt m owner [] root root.primaryPhase expected := by
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hsetupRoot := demandSetup_root hsetup
+  have hrootEq : setup.root = root := Option.some.inj (hsetupRoot.symm.trans hroot)
+  have hprimary : DemandNodeHasPhase setup.root setup.root.primaryPhase := by
+    cases setup.root <;> simp [DemandNodeHasPhase, DemandNode.phaseMatches,
+      DemandNode.primaryPhase]
+  let initial : DemandWorkItem setup.root :=
+    ⟨[], setup.root, setup.initial, [], DemandNodeAt.here setup.root⟩
+  obtain ⟨entry, hentry, hpath, hnode, _, hphase⟩ :=
+    result.covers initial (by simp [initial]) setup.root.primaryPhase hprimary
+  have hmemMap : entry.expected ∈ result.entries.map fun item => item.expected :=
+    List.mem_map.mpr ⟨entry, hentry, rfl⟩
+  have hmem : entry.expected ∈ points := by
+    rw [← hmap]
+    exact hmemMap
+  have hentryPath : entry.expected.path = [] := by
+    rw [entry.expectedPath, hpath]
+  have hentryNode : entry.expected.node = root := by
+    calc
+      entry.expected.node = entry.item.node := entry.expectedNode
+      _ = initial.node := hnode
+      _ = setup.root := rfl
+      _ = root := hrootEq
+  have hentryPhase : entry.expected.phase = root.primaryPhase := by
+    calc
+      entry.expected.phase = setup.root.primaryPhase := hphase
+      _ = root.primaryPhase := congrArg DemandNode.primaryPhase hrootEq
+  refine ⟨entry.expected, hmem, ?_⟩
+  exact ⟨points, hwalk, hmem, hentryPath, hentryNode, hentryPhase⟩
+
 private theorem DemandNode.phaseFrame_primary (node : DemandNode) (access : AccessEnv)
     (path : List Nat) (frame : DemandFrame) :
     node.phaseFrame access path frame node.primaryPhase = .ok frame := by
