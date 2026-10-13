@@ -20,6 +20,12 @@ theorem eqPlace_sound : ∀ (a b : Place), eqPlace a b = true → a = b
     cases c with
     | global g' => simp_all [eqPlace]
     | _ => simp [eqPlace] at h
+  | .field p i, c, h => by
+    cases c with
+    | field q j =>
+      simp only [eqPlace, Bool.and_eq_true, beq_iff_eq] at h
+      have := eqPlace_sound _ _ h.1; simp_all
+    | _ => simp [eqPlace] at h
   | .deref e, c, h => by
     cases c with
     | deref f => have := eqExpr_sound _ _ (by simpa [eqPlace] using h); simp_all
@@ -155,6 +161,12 @@ theorem eqExpr_sound : ∀ (a b : Expr), eqExpr a b = true → a = b
   | .blockE b, c, h => by
     cases c with
     | blockE b' => have := eqBlock_sound _ _ (by simpa [eqExpr] using h); simp_all
+    | _ => simp [eqExpr] at h
+  | .structLit t es, c, h => by
+    cases c with
+    | structLit u fs =>
+      simp only [eqExpr, Bool.and_eq_true, beq_iff_eq] at h
+      have := eqExprs_sound _ _ h.2; simp_all
     | _ => simp [eqExpr] at h
   | .arrLit t es, c, h => by
     cases c with

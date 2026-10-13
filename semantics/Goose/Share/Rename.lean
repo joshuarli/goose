@@ -22,6 +22,7 @@ mutual
 def renPlace (r : CtxMap) : Place → Place
   | .var x => .var x
   | .global g => .global g
+  | .field p i => .field (renPlace r p) i
   | .deref e => .deref (renExpr r e)
   | .elem v i o => .elem (renView r v) (renExpr r i) o
 
@@ -53,6 +54,7 @@ def renExpr (r : CtxMap) : Expr → Expr
   | .ifE c t f => .ifE (renExpr r c) (renBlock r t) (renBlock r f)
   | .blockE b => .blockE (renBlock r b)
   | .arrLit t es => .arrLit t (renExprs r es)
+  | .structLit t es => .structLit t (renExprs r es)
   | .fill t e => .fill t (renExpr r e)
 
 def renExprs (r : CtxMap) : List Expr → List Expr

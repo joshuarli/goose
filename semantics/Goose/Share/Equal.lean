@@ -21,6 +21,7 @@ mutual
 def eqPlace : Place → Place → Bool
   | .var x, .var y => x == y
   | .global g, .global h => g == h
+  | .field p i, .field q j => eqPlace p q && i == j
   | .deref e, .deref f => eqExpr e f
   | .elem v i o, .elem w j p => eqView v w && eqExpr i j && o == p
   | _, _ => false
@@ -55,6 +56,7 @@ def eqExpr : Expr → Expr → Bool
   | .push p e, .push q f => eqPlace p q && eqExpr e f
   | .ifE c t f, .ifE c' t' f' => eqExpr c c' && eqBlock t t' && eqBlock f f'
   | .blockE b, .blockE b' => eqBlock b b'
+  | .structLit t es, .structLit u fs => t == u && eqExprs es fs
   | .arrLit t es, .arrLit u fs => t == u && eqExprs es fs
   | .fill t e, .fill u f => t == u && eqExpr e f
   | _, _ => false

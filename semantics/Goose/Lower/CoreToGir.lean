@@ -379,6 +379,7 @@ def lowerEach (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) (hb :
 mutual
 
 def lowerExpr : Expr → B ValueId
+  | .structLit .. => fun _ s => (panic! "struct construction lowering is not implemented", s)
   | .lit t n => emitDef (.constInt t n)
   | .bool b => emitDef (.constBool b)
   | .read p => do
@@ -473,6 +474,7 @@ def lowerArgs : List Arg → B (List ValueId)
     pure (v :: vs)
 
 def lowerPlace : Place → B ValueId
+  | .field .. => fun _ s => (panic! "struct field lowering is not implemented", s)
   | .var x => emitDef (.slotAddr x)
   | .global g => emitDef (.globalAddr g)
   | .deref e => lowerExpr e
@@ -682,7 +684,7 @@ def exprScopes (parent : Option Nat) : Expr → List (Nat × Option Nat)
   | .push p e => placeScopes parent p ++ exprScopes parent e
   | .ifE c t f => exprScopes parent c ++ blockScopes parent t ++ blockScopes parent f
   | .blockE b => blockScopes parent b
-  | .arrLit _ es => exprsScopes parent es
+  | .arrLit _ es | .structLit _ es => exprsScopes parent es
   | .fill _ e => exprScopes parent e
 
 def exprsScopes (parent : Option Nat) : List Expr → List (Nat × Option Nat)
@@ -696,6 +698,7 @@ def argsScopes (parent : Option Nat) : List Arg → List (Nat × Option Nat)
 
 def placeScopes (parent : Option Nat) : Place → List (Nat × Option Nat)
   | .var _ | .global _ => []
+  | .field p _ => placeScopes parent p
   | .deref e => exprScopes parent e
   | .elem v i _ => viewScopes parent v ++ exprScopes parent i
 
