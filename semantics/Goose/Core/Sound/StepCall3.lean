@@ -47,9 +47,55 @@ private theorem pre_mem (f : Param × Val → VarId × Val) (hf : ∀ p v, f (p,
     · obtain ⟨i, p', h1, h2, h3⟩ := pre_mem f hf ps vs x v h
       exact ⟨i + 1, p', by simpa using h1, by simpa using h2, h3⟩
 
+private theorem ImplOk.ownerRefParam_of_type {impl : Impl} (checked : ImplOk m impl)
+    {i : Nat} {parameter : Param} {declaration : LocalVar}
+    (parameterAt : impl.params[i]? = some parameter)
+    (variableAt : impl.vars[i]? = some declaration)
+    (ownerType : OwnerRefTy declaration.ty) : OwnerRefParam impl i := by
+  obtain ⟨parameterId, checkedDeclaration, checkedAt, declarationScope, _⟩ :=
+    checked.params i parameter parameterAt
+  rw [variableAt] at checkedAt
+  cases checkedAt
+  have parameterBound : i < impl.params.size := (Array.getElem?_eq_some_iff.1 parameterAt).1
+  have mode : parameter.mode = .byRef := by
+    cases parameterMode : parameter.mode with
+    | byRef => rfl
+    | byValue =>
+      obtain ⟨mu, element, referenceType | referenceType⟩ := ownerType
+      · have shape := checked.parameterShape i parameterBound
+        simp [checkParam, parameterAt, parameterId, variableAt, declarationScope,
+          parameterMode, referenceType] at shape
+        inv at shape
+      · have shape := checked.parameterShape i parameterBound
+        simp [checkParam, parameterAt, parameterId, variableAt, declarationScope,
+          parameterMode, referenceType] at shape
+        inv at shape
+  exact ⟨parameter, declaration, parameterAt, mode, by simpa [parameterId] using variableAt, ownerType⟩
+
+private theorem mutationFootprint_noEnv {impl : Impl} {env : Env} {P : Nat → RootInst → Prop}
+    {base : Nat} {E : Eff} {s s' : St}
+    (footprint : MutationFootprint env P base (effectMutationRoots m impl E) s s') :
+    MutationFootprint noEnv P base (effectMutationRoots m impl E) s s' := by
+  intro root outside
+  apply footprint root
+  intro changed
+  apply outside
+  rcases changed with denoted | fresh
+  · refine Or.inl (gam_noEnv denoted ?_)
+    intro variableId member
+    cases unknown : E.unknown <;>
+      simp [effectMutationRoots, unknown, effectTargetRoots, effectMutationTargets,
+        effectTargetRoot] at member
+    all_goals
+      rcases member with member | member | member | member
+      all_goals
+        obtain ⟨target, _, impossible⟩ := member
+        cases target <;> cases impossible
+  · exact Or.inr fresh
+
 set_option maxHeartbeats 1600000 in
 private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans n) :
-  ∀ (G : Nat) (P : Nat → RootInst → Prop) (D : RootInst → Ty → Prop)
+  ∀ (G : Nat) (P ownerP : Nat → RootInst → Prop) (D : RootInst → Ty → Prop)
     (A : RootInst → RootInst → Prop) (depth : Nat) (c : ContextId) (vals : List Val) (s : St)
     (ctx : Context) (impl : Impl) (E : Eff) (observation : Observation)
     (root : EvaluationContext m plans [] (.block impl.body) .block),
@@ -57,11 +103,14 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
     root.AccessMatches { implEnv m impl with visible := [] } ⟨m, impl, ctx, []⟩ →
     ContextEff m impl ctx E →
     m.contexts[c]? = some ctx → m.impls[ctx.impl]? = some impl →
+    (∀ i r, ownerP i r → P i r) → OwnerParameterShape impl ownerP →
     StoreInv m G s (ObservationDemand observation) →
-    ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P observation) observation s.store →
+    ObservedSafe m ⟨G, P, ownerP, E, s.nextScope, D, A⟩
+      (root.mayShrink ownerP observation) observation s.store →
     (m.profile = .shrink → ClassifiedParameters m P D observation s.store) →
-    ShrinkProtected D A (root.mayShrink P observation) → vals.length = impl.params.size →
+    ShrinkProtected D A (root.mayShrink ownerP observation) → vals.length = impl.params.size →
     (∀ i v, vals[i]? = some v → ∃ lv, impl.vars[i]? = some lv ∧ HasTy m G s.store v lv.ty ∧
+      (OwnerRefParam impl i → OwnerRooted noEnv ownerP [.param i] v lv.ty) ∧
       ∀ r, Targets v r → ∃ ann, (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann ∧
         Gam noEnv P ann r) →
     (∀ i a si x, P i (.local a si x) → si < s.nextScope) →
@@ -76,16 +125,21 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
       StoreInv m G s' (ObservationDemand observation) ∧
       CallTransition m G observation.roots observation.values
         (fun r => ∃ element, D r element) s s' ∧
-      ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P observation) observation s'.store ∧
+      ObservedSafe m ⟨G, P, ownerP, E, s.nextScope, D, A⟩
+        (root.mayShrink ownerP observation) observation s'.store ∧
       PilotStoreLe m s s' ∧
       OuterOk m G D A s' ∧
       ((impl.results.toList = [] ∧ v = .unit) ∨
         ∃ t, impl.results.toList = [t] ∧ HasTy m G s'.store v t) ∧
       (∀ r, Targets v r → ∃ declared, ctx.resultRoots = [declared] ∧ Gam noEnv P declared r) ∧
-      (m.profile = .shrink → ClassifiedParameters m P D observation s'.store))
+      (m.profile = .shrink → ClassifiedParameters m P D observation s'.store) ∧
+      (∀ t, impl.results.toList = [t] →
+        ∃ declared, ctx.resultRoots = [declared] ∧ OwnerRooted noEnv ownerP declared v t) ∧
+      MutationFootprint noEnv P s.nextScope (effectMutationRoots m impl E) s s')
  := by
-  intro G P D A depth c vals s ctx impl E observation root hActiveRoot hAccessRoot hEff
-    hctx himpl hInv hObserved hClass hProtected hlen hargs hPage hAO hDout hDfun hSA hcont hperm
+  intro G P ownerP D A depth c vals s ctx impl E observation root hActiveRoot hAccessRoot hEff
+    hctx himpl hOwnerSubset hOwnerShape hInv hObserved hClass hProtected hlen hargs hPage hAO
+    hDout hDfun hSA hcont hperm
   obtain ⟨impl', himpl', hcOk⟩ := hm.ctx c ctx hctx
   rw [himpl] at himpl'
   cases himpl'
@@ -101,7 +155,7 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
   · simp only [hd, if_true, sat_timeout_bind]
   · simp only [hd, if_false, lookupContext, lookupImpl, hctx, himpl, sat_pure_bind, hlen, if_true,
       sat_freshAct_bind]
-    have hpW : Perm m ⟨G, P, st.eff, s.nextScope, D, A⟩ := by
+    have hpW : Perm m ⟨G, P, ownerP, st.eff, s.nextScope, D, A⟩ := by
       rcases hperm with h | ⟨sm, hs, hall⟩
       · exact Or.inl h
       · obtain ⟨hu, h1, h2, h3, _⟩ := checkSummary_ok _ _ _ _ hcs sm hs
@@ -111,7 +165,8 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
         · exact hall t (Or.inr (Or.inl (h2 t ht)))
         · exact hall t (Or.inr (Or.inr (Or.inl (h3 t ht))))
         · exact hall t (Or.inr (Or.inr (Or.inr (checkSummary_shrinks_ok m impl ctx st.eff hcs sm hs t ht))))
-    have hF0 : Frame m ⟨G, P, st.eff, s.nextScope, D, A⟩ { implEnv m impl with visible := [] }
+    have hF0 : Frame m ⟨G, P, ownerP, st.eff, s.nextScope, D, A⟩
+        { implEnv m impl with visible := [] }
         ⟨m, impl, ctx, []⟩ ⟨impl.vars, s.nextAct, [], depth + 1⟩
         { s with nextAct := s.nextAct + 1 } root.inputFuture :=
       { mod_t := rfl, mod_p := rfl, vars_t := rfl, vars_p := rfl
@@ -119,6 +174,8 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
         nodup := List.nodup_nil, sorted := List.Pairwise.nil
         below := fun p hp => by cases hp
         base_le := Nat.le_refl _
+        ownerSubset := hOwnerSubset
+        ownerShape := hOwnerShape
         pAge := hPage
         vis := fun x hx => by cases hx
         bindings := fun x hx => by cases hx
@@ -126,6 +183,7 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
           rintro r T ⟨x, lv, si, _, hscope, _⟩ v hv
           simp [List.lookup] at hscope
         rooted := fun x lv si v _ h => by simp [List.lookup] at h
+        rootedOwners := fun x lv si v _ h => by simp [List.lookup] at h
         inv := {
           live := by
             intro r v hv hd
@@ -150,7 +208,7 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
     obtain ⟨_, env1, tn1, env2, tn2, hdp, hts, htv⟩ := tyBlock_ok _ _ _ _ _ _ _ _ htb
     obtain ⟨hsame, hvisT, _, _⟩ := declarePre_ok _ _ _ _ _ _ hdp
     obtain ⟨_, st2, hrs, hrv, _⟩ := rpBlockValue_ok _ _ _ _ _ _ _ _ _ hrb
-    have hpreOk : PreOk m ⟨G, P, st.eff, s.nextScope, D, A⟩ ⟨m, impl, ctx, []⟩
+    have hpreOk : PreOk m ⟨G, P, ownerP, st.eff, s.nextScope, D, A⟩ ⟨m, impl, ctx, []⟩
         { vars := impl.vars, act := s.nextAct, scopes := [(0, s.nextScope)], depth := depth + 1 } 0 0
         (impl.params.size + 0) s.store
         (List.map (fun x => (x.fst.var, x.snd)) (impl.params.toList.zip vals)) := by
@@ -161,13 +219,23 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
       obtain ⟨hvar, lv, hlv, hlsc, hlst⟩ := hpar i p h1'
       rw [hvar] at h3
       subst h3
-      obtain ⟨lv', hlv', hty, hroots⟩ := hargs i v h2
+      obtain ⟨lv', hlv', hty, hownerRoots, hroots⟩ := hargs i v h2
       rw [hlv] at hlv'
       cases hlv'
       refine ⟨Nat.zero_le _, by simpa using (Array.getElem?_eq_some_iff.1 h1').1, lv, hlv, hlsc, hlst,
         hty, fun r hr => ?_⟩
       obtain ⟨ann, ha, hg⟩ := hroots r hr
-      exact ⟨ann, ha, gam_of_noEnv hg⟩
+      refine ⟨ann, ha, gam_of_noEnv hg, fun howner => ?_⟩
+      have hownerSlot := hiOk.ownerRefParam_of_type h1' hlv howner
+      have hownerRoot := hownerRoots hownerSlot howner r hr
+      obtain ⟨ownerRef, hownerMember, hownerDenoted⟩ := hownerRoot
+      have hownerEq : ownerRef = .param i := by simpa using hownerMember
+      subst ownerRef
+      obtain ⟨q, hq, hdenoted⟩ := hg
+      rcases hcOk.paramAnn i ann (by simpa using (Array.getElem?_eq_some_iff.1 h1').1)
+          ha q hq with rfl | ⟨global, rfl⟩
+      · exact ⟨.param i, hq, hownerDenoted⟩
+      · exact ⟨.global global, hq, hdenoted⟩
     have hvisB : ∀ y, y ∈ env1.visible ↔
         y ∈ (List.map (fun x => (x.fst.var, x.snd)) (impl.params.toList.zip vals)).map Prod.fst ∨
           y ∈ ([] : List VarId) := by
@@ -185,7 +253,8 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
         rw [hvisB x, hpreFst]
         simp [implEnv, List.range_eq_range']
       cases root <;> intro x <;> exact (hActiveRoot x).trans (hvisible x).symm
-    refine Sat.bind (ih.block [] 0 stmts value root observation ⟨G, P, st.eff, s.nextScope, D, A⟩ { implEnv m impl with visible := [] } env1
+    refine Sat.bind (ih.block [] 0 stmts value root observation
+      ⟨G, P, ownerP, st.eff, s.nextScope, D, A⟩ { implEnv m impl with visible := [] } env1
       env2 ⟨m, impl, ctx, []⟩ ⟨impl.vars, s.nextAct, [], depth + 1⟩ { s with nextAct := s.nextAct + 1 }
       _ tn1 tn2 tnb bodyTy _ st2 st rho 0 hactive hAccessRoot hProtected hObserved hClass hpW hF0 (by simp [implEnv])
       ⟨hsame.mod, hsame.impl, hsame.vars, hsame.loops, hsame.inExpr, hsame.scopes,
@@ -198,7 +267,8 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
           | none => exact hrv
           | some e => exact hrv)
       (EffLe.refl _) hkeep) ?_
-    rintro fl s1 ⟨hF1, hX1, hRoots1, hValues1, hObserved1, hRetained1, hPilot1, hfl, hClass1⟩
+    rintro fl s1 ⟨hF1, hX1, hRoots1, hValues1, hObserved1, hRetained1, hPilot1, hfl,
+      hClass1, hForbidden1, hMutation1⟩
     have hXs : Footprint [] (fun r => ∃ E, D r E) s s1 :=
       (Footprint.of_eq (s := s) (s' := { s with nextAct := s.nextAct + 1 }) rfl rfl).trans hX1
     have hInv1 := (hF1.callDemand hObserved1.typed (fun r element hd => by
@@ -207,11 +277,15 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
     have hTransition : CallTransition m G observation.roots observation.values
         (fun r => ∃ element, D r element) s s1 :=
       ⟨hXs, hRoots1, hValues1⟩
+    have hMutationCall : MutationFootprint noEnv P s.nextScope
+        (effectMutationRoots m impl st.eff) s s1 :=
+      mutationFootprint_noEnv ((MutationFootprint.refl _ _ _ _ _).trans hMutation1)
     cases fl with
     | normal v =>
       simp only [expectReturned, sat_pure]
-      obtain ⟨hv, hg, hdv⟩ := hfl
-      refine ⟨hInv1, hTransition, hObserved1, hPilot1, hF1.sa, ?_, ?_, hClass1⟩
+      obtain ⟨hv, hg, hdv, hownerResult⟩ := hfl
+      refine ⟨hInv1, hTransition, hObserved1, hPilot1, hF1.sa, ?_, ?_, hClass1, ?_,
+        hMutationCall⟩
       · rcases hresTy with ⟨hnil, rfl⟩ | ⟨t, hone, hsome, hnone⟩
         · exact Or.inl ⟨hnil, hv⟩
         · cases value with
@@ -231,21 +305,45 @@ private theorem enterCall_of_bodyContext (hm : ModOk m) (ih : Specs m prof plans
         | some e =>
           obtain ⟨hnl, declared, hd', hsub⟩ := checkResultV_ok _ _ (hck rfl)
           exact ⟨declared, hd', (gam_noEnv (hg r hr) hnl).subset hsub⟩
+      · intro t ht
+        cases value with
+        | none =>
+          rcases hresTy with ⟨hempty, _⟩ | ⟨result, hsingle, _, hnone⟩
+          · rw [hempty] at ht
+            cases ht
+          · have hdiv := hnone rfl
+            simp only [Block.diverges] at hdiv
+            rw [hdiv] at hdv
+            cases hdv
+        | some e =>
+          have hbody : bodyTy = t := by
+            rcases hresTy with ⟨hempty, _⟩ | ⟨result, hsingle, hsome, _⟩
+            · rw [hempty] at ht
+              cases ht
+            · rw [hsingle] at ht
+              cases ht
+              exact hsome rfl
+          rw [← hbody]
+          obtain ⟨hnl, declared, hd', hsub⟩ := checkResultV_ok _ _ (hck rfl)
+          exact ⟨declared, hd', fun howner r hr =>
+            (gam_noEnv (hownerResult howner r hr) hnl).subset hsub⟩
     | brk => exact absurd rfl hfl.1
     | cont => exact absurd rfl hfl
     | ret v =>
       simp only [expectReturned, sat_pure]
-      obtain ⟨_, impl'', hi'', hres'', hroots''⟩ := hfl
+      obtain ⟨_, impl'', hi'', hres'', hroots'', hownerResult⟩ := hfl
       cases hi''
-      exact ⟨hInv1, hTransition, hObserved1, hPilot1, hF1.sa, hres'', hroots'', hClass1⟩
+      exact ⟨hInv1, hTransition, hObserved1, hPilot1, hF1.sa, hres'', hroots'', hClass1,
+        hownerResult, hMutationCall⟩
 
 
 
 set_option maxHeartbeats 1600000 in
 theorem step_call (hm : ModOk m) (ih : Specs m prof plans n) :
     CallSpec m prof plans (n + 1) := by
-  intro G P D A depth c vals s ctx impl E observation root hOwner hEff hctx himpl
-    hInv hObserved hClass hProtected hlen hargs hPage hAO hDout hDfun hSA hcont hperm
+  intro G P ownerP D A depth c vals s ctx impl E observation root hOwner hEff hctx himpl
+    hOwnerSubset hOwnerShape hInv hObserved hClass hProtected hlen hargs hPage hAO hDout hDfun
+    hSA hcont hperm
   let bodyContext := root.callBody hOwner hctx himpl
   have hvisible : ∀ x, x ∈ (implEnv m impl).visible ↔
       x ∈ impl.params.toList.map (·.var) := by
@@ -269,15 +367,18 @@ theorem step_call (hm : ModOk m) (ih : Specs m prof plans n) :
   have hActive := root.callBody_activeMatches hOwner hctx himpl (implEnv m impl) hvisible
   have hAccess := root.callBody_accessMatches hOwner hctx himpl
     { implEnv m impl with visible := [] } ⟨m, impl, ctx, []⟩ rfl rfl rfl rfl rfl
-  have hMay := root.callBody_mayShrink_iff hOwner hctx himpl P observation
+  have hMay := root.callBody_mayShrink_iff hOwner hctx himpl ownerP observation
   have hObservedBody := hObserved.weakenShrinking (fun r hr => (hMay r).mp hr)
   have hProtectedBody := hProtected.mono (fun _ _ h => h) (fun _ _ h => h)
     (fun r hr => (hMay r).mp hr)
-  refine (enterCall_of_bodyContext hm ih G P D A depth c vals s ctx impl E observation
-    bodyContext hActive hAccess hEff hctx himpl hInv hObservedBody hClass hProtectedBody hlen
+  refine (enterCall_of_bodyContext hm ih G P ownerP D A depth c vals s ctx impl E observation
+    bodyContext hActive hAccess hEff hctx himpl hOwnerSubset hOwnerShape hInv hObservedBody hClass
+    hProtectedBody hlen
     hargs hPage hAO hDout hDfun hSA hcont hperm).mono ?_
-  rintro v s' ⟨hInv', hTransition, hObserved', hPilot, hOuter, hResult, hRoots, hClass'⟩
+  rintro v s' ⟨hInv', hTransition, hObserved', hPilot, hOuter, hResult, hRoots, hClass',
+    hOwnerResult, hMutation⟩
   exact ⟨hInv', hTransition,
-    hObserved'.weakenShrinking (fun r hr => (hMay r).mpr hr), hPilot, hOuter, hResult, hRoots, hClass'⟩
+    hObserved'.weakenShrinking (fun r hr => (hMay r).mpr hr), hPilot, hOuter, hResult, hRoots,
+    hClass', hOwnerResult, hMutation⟩
 
 end Goose.Core.Sound
