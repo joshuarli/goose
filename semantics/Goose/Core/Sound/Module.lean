@@ -7,6 +7,20 @@ What `validate` establishes about each item of an accepted module.
 namespace Goose.Core.Sound
 open Goose.Core
 
+/-- The module type-table check covers every local type in every implementation. -/
+theorem checkStructTables_impl_var_ok (m : Module) (h : checkStructTables m = .ok ())
+    {i : Nat} {impl : Impl} {x : VarId} {lv : LocalVar}
+    (hi : m.impls[i]? = some impl) (hv : impl.vars[x]? = some lv) :
+    checkResolvedType m lv.ty = .ok () := by
+  unfold checkStructTables at h
+  inv at h
+  obtain ⟨_, _, _, _, himpls⟩ := h
+  have himpl := (forAll_ok _ _).1 himpls impl
+    (Array.mem_toList_iff.2 (Array.mem_of_getElem? hi))
+  obtain ⟨_, hvars, _⟩ := (ex_bind_ok _ _ _).1 himpl
+  exact (forAll_ok _ _).1 hvars lv
+    (Array.mem_toList_iff.2 (Array.mem_of_getElem? hv))
+
 theorem checkEntry_ok (m : Module) (h : checkEntry m = .ok ()) :
     ∃ ctx impl, m.contexts[m.entry]? = some ctx ∧ m.impls[ctx.impl]? = some impl ∧
       impl.params.size = 0 ∧ impl.results.toList = [] := by

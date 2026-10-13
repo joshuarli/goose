@@ -381,6 +381,7 @@ theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
     exact Nat.lt_succ_of_lt (hInvOld.fresh a si x hx)
   exact
   { mod_t := h.mod_t, mod_p := h.mod_p, vars_t := h.vars_t, vars_p := h.vars_p
+    resolved := h.resolved
     scopes_t := by simp [h.scopes_t]
     scopes_p := by simp [h.scopes_p]
     nodup := by
@@ -563,6 +564,7 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
       exact Or.inl ⟨ha, hx1, hfuture x hf, lv, hvar', hlookupInner⟩
   exact
   { mod_t := hmod ▸ h.mod_t, mod_p := h.mod_p, vars_t := hvars ▸ h.vars_t, vars_p := h.vars_p
+    resolved := h.resolved
     scopes_t := st2, scopes_p := sp2, nodup := hnd.2, sorted := htl
     below := fun p hp => h.below p (List.mem_cons_of_mem _ hp)
     base_le := h.base_le, pAge := h.pAge

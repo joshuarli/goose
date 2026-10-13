@@ -104,9 +104,9 @@ def checkStructTables (m : Module) : V Unit := do
       endOffset := fieldEnd
   forAll m.types.toList (checkResolvedType m)
   for g in m.globals do checkResolvedType m g.ty
-  for impl in m.impls do
-    for v in impl.vars do checkResolvedType m v.ty
-    for r in impl.results do checkResolvedType m r
+  forAll m.impls.toList fun impl => do
+    forAll impl.vars.toList fun v => checkResolvedType m v.ty
+    forAll impl.results.toList (checkResolvedType m)
 
 /-! ### Type predicates -/
 
