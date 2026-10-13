@@ -708,4 +708,422 @@ theorem rpBlockValue_accessRoots (penv : PEnv) (pre : List VarId) (block : Block
 
 end
 
+private theorem readRoots_accessRoots_reverse (penv : PEnv) (p : Place) (state : RState)
+    (rho : List RootRef) (state' : RState) (roots : List RootRef)
+    (hreplay : readRoots penv p state = .ok (rho, state'))
+    (haccess : penv.access.exprRoots (.read p) = .ok roots) :
+    RootsIncluded roots rho := by
+  cases p with
+  | var x =>
+    cases lookup : penv.impl.vars[x]? with
+    | none => simp [PEnv.access, AccessEnv.exprRoots, lookup, reject] at haccess
+    | some lv =>
+      cases reference : lv.ty.isRefLike with
+      | false =>
+        have empty : roots = [] := by
+          simpa [PEnv.access, AccessEnv.exprRoots, lookup, reference, ex_pure_ok] using haccess
+        simp [RootsIncluded, empty]
+      | true =>
+        simp only [readRoots, lookup, reference] at hreplay
+        cases annotation : penv.ann x with
+        | none => simp only [annotation] at hreplay; inv at hreplay
+        | some rs =>
+          simp only [PEnv.ann] at annotation
+          have actual : rho = rs := congrArg Prod.fst
+            ((st_pure_ok _ state _).1 (by simpa [PEnv.ann, PEnv.cont, annotation] using hreplay))
+          have static : roots = rs := by
+            simpa [PEnv.access, AccessEnv.exprRoots, lookup, reference,
+              AccessEnv.variableRoots, PEnv.ann, ex_pure_ok, annotation] using haccess
+          simp [RootsIncluded, actual, static]
+  | deref e =>
+    cases e with
+    | read p =>
+      cases p with
+      | var x =>
+        cases lookup : penv.impl.vars[x]? with
+        | none => simp [PEnv.access, AccessEnv.exprRoots, lookup, reject] at haccess
+        | some lv =>
+          cases reference : lv.ty.isRefSlice with
+          | false =>
+            have empty : roots = [] := by
+              simpa [PEnv.access, AccessEnv.exprRoots, lookup, reference, ex_pure_ok] using haccess
+            simp [RootsIncluded, empty]
+          | true =>
+            simp only [readRoots, PEnv.isRefSliceVar, lookup, reference] at hreplay
+            cases annotation : penv.cont x with
+            | none => simp only [annotation] at hreplay; inv at hreplay
+            | some rs =>
+              simp only [PEnv.cont] at annotation
+              have actual : rho = rs := congrArg Prod.fst
+                ((st_pure_ok _ state _).1 (by simpa [PEnv.ann, PEnv.cont, annotation] using hreplay))
+              have static : roots = rs := by
+                simpa [PEnv.access, AccessEnv.exprRoots, lookup, reference,
+                  AccessEnv.contentRoots, PEnv.cont, ex_pure_ok, annotation] using haccess
+              simp [RootsIncluded, actual, static]
+      | _ =>
+        have empty : roots = [] := by simpa [PEnv.access, AccessEnv.exprRoots, ex_pure_ok] using haccess
+        simp [RootsIncluded, empty]
+    | _ =>
+      have empty : roots = [] := by simpa [PEnv.access, AccessEnv.exprRoots, ex_pure_ok] using haccess
+      simp [RootsIncluded, empty]
+  | global _ =>
+    have empty : roots = [] := by simpa [PEnv.access, AccessEnv.exprRoots, ex_pure_ok] using haccess
+    simp [RootsIncluded, empty]
+  | elem _ _ _ =>
+    have empty : roots = [] := by simpa [PEnv.access, AccessEnv.exprRoots, ex_pure_ok] using haccess
+    simp [RootsIncluded, empty]
+  | field _ _ =>
+    have empty : roots = [] := by simpa [PEnv.access, AccessEnv.exprRoots, ex_pure_ok] using haccess
+    simp [RootsIncluded, empty]
+
+
+private theorem accessResultLoop_origin (args : List (List RootRef)) :
+    ∀ (targets : List RootRef) (acc out : List RootRef),
+      forIn targets acc (accessResultStep args) = .ok out →
+      ∀ root, root ∈ out → root ∈ acc ∨
+        ∃ target, target ∈ targets ∧ FromRoot args root target := by
+  intro targets
+  induction targets with
+  | nil =>
+    intro acc out checked root member
+    simp only [List.forIn_nil, ex_pure_ok] at checked
+    subst out
+    exact Or.inl member
+  | cons target rest ih =>
+    intro acc out checked root member
+    simp only [List.forIn_cons] at checked
+    obtain ⟨step, head, tail⟩ := (ex_bind_ok _ _ _).1 checked
+    obtain ⟨added, mapped, stepEq⟩ := accessResultStep_ok args target acc step head
+    rw [stepEq] at tail
+    have tail' : forIn rest (acc ++ added) (accessResultStep args) = .ok out := tail
+    rcases ih _ _ tail' root member with previous | ⟨later, inRest, origin⟩
+    · rcases List.mem_append.1 previous with inAcc | inAdded
+      · exact Or.inl inAcc
+      · right
+        refine ⟨target, List.mem_cons_self, ?_⟩
+        cases target with
+        | global g =>
+          simp only [callTargetRoots, Option.some.injEq] at mapped
+          subst added
+          simpa [FromRoot] using inAdded
+        | param i => exact ⟨added, mapped, inAdded⟩
+        | «local» _ => simp [callTargetRoots] at mapped
+    · exact Or.inr ⟨later, List.mem_cons_of_mem _ inRest, origin⟩
+
+private theorem checkedResult_nonrefEmpty {m : Module} {callee : Impl} {ctx : Context}
+    {t : Ty} {rs : List RootRef}
+    (checked : checkResultShape m callee ctx = .ok ())
+    (results : callee.results.toList = [t]) (roots : ctx.resultRoots = [rs])
+    (nonref : t.isRefLike = false) : rs = [] := by
+  cases rs with
+  | nil => rfl
+  | cons q rest =>
+    unfold checkResultShape at checked
+    inv at checked
+    obtain ⟨_, loop⟩ := checked
+    simp [results, roots, nonref, List.forIn_cons, reject] at loop
+    cases loop
+
+private theorem callResultRoots_reverse {m : Module} {callee : Impl} {ctx : Context}
+    (implementation : ImplOk m callee) (context : CtxOk m callee ctx)
+    (actualArgs staticArgs : List (List RootRef)) (actualRoots staticRoots : List RootRef)
+    (arguments : RootListsIncluded staticArgs actualArgs)
+    (replayed : callResultRoots callee ctx actualArgs = .ok actualRoots)
+    (queried : forIn ctx.resultRoots.flatten [] (accessResultStep staticArgs) = .ok staticRoots) :
+    RootsIncluded staticRoots actualRoots := by
+  obtain ⟨_, _, _, resultShape⟩ := implementation.body
+  rcases resultShape with ⟨noResults, _⟩ | ⟨t, singleResult, _⟩
+  · have emptyRoots : ctx.resultRoots = [] := by
+      apply List.length_eq_zero_iff.1
+      rw [context.resultLen]
+      have length := congrArg List.length noResults
+      simpa using length
+    have empty : staticRoots = [] := by simpa [emptyRoots, ex_pure_ok] using queried
+    simp [RootsIncluded, empty]
+  · have oneRoot : ∃ rs, ctx.resultRoots = [rs] := by
+      have length : ctx.resultRoots.length = 1 := by
+        rw [context.resultLen]
+        have length := congrArg List.length singleResult
+        simpa using length
+      cases roots : ctx.resultRoots with
+      | nil => simp [roots] at length
+      | cons rs rest =>
+        have empty : rest = [] := List.length_eq_zero_iff.1 (by simpa [roots] using length)
+        exact ⟨rs, by simp [empty]⟩
+    obtain ⟨rs, rootsEq⟩ := oneRoot
+    cases reference : t.isRefLike with
+    | false =>
+      have rootEmpty := checkedResult_nonrefEmpty context.resultShape singleResult rootsEq reference
+      have empty : staticRoots = [] := by simpa [rootsEq, rootEmpty, ex_pure_ok] using queried
+      simp [RootsIncluded, empty]
+    | true =>
+      have mapped : mapResultRoots actualArgs [] rs = .ok actualRoots := by
+        simpa [callResultRoots, singleResult, rootsEq, reference] using replayed
+      intro root member
+      rcases accessResultLoop_origin staticArgs ctx.resultRoots.flatten [] staticRoots queried root member with
+        empty | ⟨target, targetMember, origin⟩
+      · simp at empty
+      · have targetMember' : target ∈ rs := by simpa [rootsEq] using targetMember
+        have originActual := FromRoot.weakenArgs arguments origin
+        have targetMapped := (mapResultRoots_ok actualArgs rs [] actualRoots mapped).2 target targetMember'
+        cases target with
+        | global g =>
+          have equal : root = .global g := originActual
+          simpa [equal, MappedRoot] using targetMapped
+        | param i =>
+          obtain ⟨argument, atIndex, inArgument⟩ := originActual
+          obtain ⟨mappedArgument, mappedIndex, included⟩ := targetMapped
+          have equal : argument = mappedArgument := Option.some.inj (atIndex.symm.trans mappedIndex)
+          subst mappedArgument
+          exact included root inArgument
+        | «local» _ => exact originActual.elim
+
+private theorem RootsIncluded.append_union {a b c d : List RootRef}
+    (ha : RootsIncluded a c) (hb : RootsIncluded b d) :
+    RootsIncluded (a ++ b) (unionRoots c d) := by
+  intro root member
+  rcases List.mem_append.1 member with member | member
+  · exact unionRoots_left c d root (ha root member)
+  · exact unionRoots_right c d root (hb root member)
+
+mutual
+
+/-- Accepted callee result shapes make static access roots exact by membership,
+including ghosts mapped through arbitrarily nested calls. -/
+theorem rpPlace_accessRoots_reverse {m : Module} (penv : PEnv)
+    (moduleOk : ModOk m) (penvMod : penv.mod = m) (p : Place) (state : RState)
+    (rho : List RootRef) (state' : RState) (roots : List RootRef)
+    (hreplay : rpPlace penv p state = .ok (rho, state'))
+    (haccess : penv.access.placeRoots p = .ok roots) :
+    RootsIncluded roots rho := by
+  cases p with
+  | var x =>
+    simp only [rpPlace, AccessEnv.placeRoots] at hreplay haccess
+    have hp : (rho, state') = ([.local x], state) :=
+      (st_pure_ok _ state (rho, state')).1 hreplay
+    have hrho : rho = [.local x] := congrArg Prod.fst hp
+    have hroots : roots = [.local x] := by cases haccess; rfl
+    simp [RootsIncluded, hrho, hroots]
+  | global g =>
+    simp only [rpPlace, AccessEnv.placeRoots] at hreplay haccess
+    have hp : (rho, state') = ([.global g], state) :=
+      (st_pure_ok _ state (rho, state')).1 hreplay
+    have hrho : rho = [.global g] := congrArg Prod.fst hp
+    have hroots : roots = [.global g] := by cases haccess; rfl
+    simp [RootsIncluded, hrho, hroots]
+  | deref e =>
+    change penv.access.exprRoots e = .ok roots at haccess
+    exact rpExpr_accessRoots_reverse penv moduleOk penvMod e state rho state' roots hreplay haccess
+  | field owner index =>
+    change penv.access.placeRoots owner = .ok roots at haccess
+    exact rpPlace_accessRoots_reverse penv moduleOk penvMod owner state rho state' roots hreplay haccess
+  | elem view index org =>
+    simp only [rpPlace] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨viewRoots, state1, hview, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, state2, _, hrest⟩
+    have hrho : rho = viewRoots := bind_pure_output noteAborts viewRoots state2 rho state' hrest
+    simp only [AccessEnv.placeRoots] at haccess
+    exact (RootsIncluded.right_eq
+      (rpView_accessRoots_reverse penv moduleOk penvMod view state viewRoots state1 roots hview haccess) hrho.symm)
+
+theorem rpView_accessRoots_reverse {m : Module} (penv : PEnv)
+    (moduleOk : ModOk m) (penvMod : penv.mod = m) (view : View) (state : RState)
+    (rho : List RootRef) (state' : RState) (roots : List RootRef)
+    (hreplay : rpView penv view state = .ok (rho, state'))
+    (haccess : penv.access.viewRoots view = .ok roots) :
+    RootsIncluded roots rho := by
+  cases view with
+  | of p =>
+    simp only [rpView] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨placeRoots, state1, hplace, hrest⟩
+    have hrho : rho = placeRoots := bind_pure_output (addReads placeRoots) placeRoots state1 rho state' hrest
+    simp only [AccessEnv.viewRoots] at haccess
+    exact (RootsIncluded.right_eq
+      (rpPlace_accessRoots_reverse penv moduleOk penvMod p state placeRoots state1 roots hplace haccess) hrho.symm)
+  | val e =>
+    exact rpExpr_accessRoots_reverse penv moduleOk penvMod e state rho state' roots hreplay haccess
+
+theorem rpExpr_accessRoots_reverse {m : Module} (penv : PEnv)
+    (moduleOk : ModOk m) (penvMod : penv.mod = m) (e : Expr) (state : RState)
+    (rho : List RootRef) (state' : RState) (roots : List RootRef)
+    (hreplay : rpExpr penv e state = .ok (rho, state'))
+    (haccess : penv.access.exprRoots e = .ok roots) :
+    RootsIncluded roots rho := by
+  cases e with
+  | read p =>
+    simp only [rpExpr] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨placeRoots, state1, hplace, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, state2, _, hread⟩
+    exact readRoots_accessRoots_reverse penv p state2 rho state' roots hread haccess
+  | ref mu p =>
+    simp only [rpExpr] at hreplay
+    change penv.access.placeRoots p = .ok roots at haccess
+    exact rpPlace_accessRoots_reverse penv moduleOk penvMod p state rho state' roots hreplay haccess
+  | slice mu v lo hi org =>
+    simp only [rpExpr] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨viewRoots, state1, hview, hrest⟩
+    -- The bounds and abort marker do not change the returned owner roots.
+    change penv.access.viewRoots v = .ok roots at haccess
+    have hrho : rho = viewRoots := bind3_pure_output (rpBound penv lo) (rpBound penv hi)
+      noteAborts viewRoots state1 rho state' hrest
+    exact RootsIncluded.right_eq
+      (rpView_accessRoots_reverse penv moduleOk penvMod v state viewRoots state1 roots hview haccess) hrho.symm
+  | call c args org =>
+    simp only [rpExpr] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨actualArgs, state1, hargs, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨_, state2, _, hcall⟩
+    rcases rpCall_ok penv c actualArgs state2 rho state' hcall with
+      ⟨cctx, callee, hcctx, hcallee, _, _, hresult⟩
+    cases hc : penv.mod.contexts[c]? with
+    | none =>
+      simp [PEnv.access, AccessEnv.exprRoots, hc, reject] at haccess
+    | some staticCtx =>
+      simp only [PEnv.access, AccessEnv.exprRoots, hc, ex_bind_ok, ex_pure_ok] at haccess
+      rcases haccess with ⟨staticArgs, hstaticArgs, staticRoots, hloop, hroots⟩
+      have hctxEq : staticCtx = cctx := Option.some.inj (hc.symm.trans hcctx)
+      subst staticCtx
+      have hargsIncluded := rpArgs_accessRoots_reverse penv moduleOk penvMod args state actualArgs state1 staticArgs hargs hstaticArgs
+      have hloop' : forIn cctx.resultRoots.flatten [] (accessResultStep staticArgs) = .ok staticRoots := by
+        change forIn cctx.resultRoots.flatten [] (accessResultStep staticArgs) = .ok staticRoots at hloop
+        exact hloop
+      have contextLookup : m.contexts[c]? = some cctx := by simpa [penvMod] using hcctx
+      have implementationLookup : m.impls[cctx.impl]? = some callee := by
+        simpa [penvMod] using hcallee
+      obtain ⟨checkedCallee, checkedLookup, checkedContext⟩ := moduleOk.ctx c cctx contextLookup
+      have sameCallee : checkedCallee = callee :=
+        Option.some.inj (checkedLookup.symm.trans implementationLookup)
+      subst checkedCallee
+      have hresultIncluded := callResultRoots_reverse
+        (moduleOk.impl cctx.impl callee implementationLookup) checkedContext
+        actualArgs staticArgs rho staticRoots hargsIncluded hresult hloop'
+      exact RootsIncluded.left_eq hresultIncluded hroots
+  | push owner a org =>
+    simp only [rpExpr] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨ownerRoots, state1, howner, hrest⟩
+    have hrho : rho = ownerRoots := rpPushTail_output penv owner a ownerRoots state1 rho state' hrest
+    change penv.access.placeRoots owner = .ok roots at haccess
+    exact RootsIncluded.right_eq
+      (rpPlace_accessRoots_reverse penv moduleOk penvMod owner state ownerRoots state1 roots howner haccess) hrho.symm
+  | ifE c thenB elseB =>
+    simp only [rpExpr] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨_, state1, _, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨⟨thenRoots, thenRange⟩, state2, hthen, hrest⟩
+    rcases (st_bind_ok _ _ _ _).1 hrest with ⟨⟨elseRoots, elseRange⟩, state3, helse, hpure⟩
+    have hout : rho = unionRoots thenRoots elseRoots :=
+      congrArg Prod.fst ((st_pure_ok _ state3 (rho, state')).1 hpure)
+    simp only [AccessEnv.exprRoots, ex_bind_ok] at haccess
+    rcases haccess with ⟨thenStatic, hthenStatic, hrest⟩
+    rcases hrest with ⟨elseStatic, helseStatic, hpure⟩
+    have hstatic : roots = thenStatic ++ elseStatic := (ex_pure_ok _ _).1 hpure
+    have hthenIncluded := rpBlockValue_accessRoots_reverse penv moduleOk penvMod [] thenB state1 thenRoots thenRange state2 thenStatic hthen hthenStatic
+    have helseIncluded := rpBlockValue_accessRoots_reverse penv moduleOk penvMod [] elseB state2 elseRoots elseRange state3 elseStatic helse helseStatic
+    rw [hstatic]
+    exact RootsIncluded.right_eq (RootsIncluded.append_union hthenIncluded helseIncluded) hout.symm
+  | blockE b =>
+    simp only [rpExpr] at hreplay
+    rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨⟨blockRoots, range⟩, state1, hblock, hpure⟩
+    have hout : rho = blockRoots := congrArg Prod.fst ((st_pure_ok _ state1 (rho, state')).1 hpure)
+    change penv.access.blockRoots b = .ok roots at haccess
+    exact RootsIncluded.right_eq
+      (rpBlockValue_accessRoots_reverse penv moduleOk penvMod [] b state blockRoots range state1 roots hblock haccess) hout.symm
+  | _ =>
+    all_goals simp only [AccessEnv.exprRoots] at haccess
+    all_goals
+      have empty : roots = [] := by cases haccess; rfl
+      simp [RootsIncluded, empty]
+
+theorem rpArgs_accessRoots_reverse {m : Module} (penv : PEnv)
+    (moduleOk : ModOk m) (penvMod : penv.mod = m) (args : List Arg) (state : RState)
+    (actual : List (List RootRef)) (state' : RState) (expected : List (List RootRef))
+    (hreplay : rpArgs penv args state = .ok (actual, state'))
+    (haccess : penv.access.argsRoots args = .ok expected) :
+    RootListsIncluded expected actual := by
+  cases args with
+  | nil =>
+    simp only [rpArgs, AccessEnv.argsRoots] at hreplay haccess
+    have ha : actual = [] := congrArg Prod.fst ((st_pure_ok _ state _).1 hreplay)
+    have he : expected = [] := by cases haccess; rfl
+    subst actual
+    subst expected
+    simp [RootListsIncluded]
+  | cons arg rest =>
+    cases arg with
+    | byVal e =>
+      simp only [rpArgs] at hreplay
+      rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨head, state1, hhead, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨tail, state2, htail, hpure⟩
+      have hactual : actual = head :: tail := congrArg Prod.fst ((st_pure_ok _ state2 _).1 hpure)
+      simp only [AccessEnv.argsRoots, AccessEnv.argRoots] at haccess
+      rcases (ex_bind_ok _ _ _).1 haccess with ⟨staticHead, hstaticHead, hrest⟩
+      rcases (ex_bind_ok _ _ _).1 hrest with ⟨staticTail, hstaticTail, hpure⟩
+      have hexpected : expected = staticHead :: staticTail := (ex_pure_ok _ _).1 hpure
+      have hheadIncluded := rpExpr_accessRoots_reverse penv moduleOk penvMod e state head state1 staticHead hhead hstaticHead
+      have htailIncluded := rpArgs_accessRoots_reverse penv moduleOk penvMod rest state1 tail state2 staticTail htail hstaticTail
+      intro index roots hindex
+      cases index with
+      | zero =>
+        simp [hexpected] at hindex
+        have hr : roots = staticHead := hindex.symm
+        subst roots
+        refine ⟨head, ?_, hheadIncluded⟩
+        simp [hactual]
+      | succ index =>
+        simp [hexpected] at hindex
+        rcases htailIncluded index roots hindex with ⟨tailRoots, htailRoots, hincluded⟩
+        refine ⟨tailRoots, ?_, hincluded⟩
+        simpa [hactual] using htailRoots
+    | byRef mu p =>
+      simp only [rpArgs] at hreplay
+      rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨head, state1, hhead, hrest⟩
+      rcases (st_bind_ok _ _ _ _).1 hrest with ⟨tail, state2, htail, hpure⟩
+      have hactual : actual = head :: tail := congrArg Prod.fst ((st_pure_ok _ state2 _).1 hpure)
+      simp only [AccessEnv.argsRoots, AccessEnv.argRoots] at haccess
+      rcases (ex_bind_ok _ _ _).1 haccess with ⟨staticHead, hstaticHead, hrest⟩
+      rcases (ex_bind_ok _ _ _).1 hrest with ⟨staticTail, hstaticTail, hpure⟩
+      have hexpected : expected = staticHead :: staticTail := (ex_pure_ok _ _).1 hpure
+      have hheadIncluded := rpPlace_accessRoots_reverse penv moduleOk penvMod p state head state1 staticHead hhead hstaticHead
+      have htailIncluded := rpArgs_accessRoots_reverse penv moduleOk penvMod rest state1 tail state2 staticTail htail hstaticTail
+      intro index roots hindex
+      cases index with
+      | zero =>
+        simp [hexpected] at hindex
+        have hr : roots = staticHead := hindex.symm
+        subst roots
+        refine ⟨head, ?_, hheadIncluded⟩
+        simp [hactual]
+      | succ index =>
+        simp [hexpected] at hindex
+        rcases htailIncluded index roots hindex with ⟨tailRoots, htailRoots, hincluded⟩
+        refine ⟨tailRoots, ?_, hincluded⟩
+        simpa [hactual] using htailRoots
+
+theorem rpBlockValue_accessRoots_reverse {m : Module} (penv : PEnv)
+    (moduleOk : ModOk m) (penvMod : penv.mod = m) (pre : List VarId) (block : Block)
+    (state : RState) (rho : List RootRef) (rng : Nat × Nat) (state' : RState)
+    (roots : List RootRef)
+    (hreplay : rpBlockValue penv pre block state = .ok ((rho, rng), state'))
+    (haccess : penv.access.blockRoots block = .ok roots) :
+    RootsIncluded roots rho := by
+  cases block with
+  | mk scope stmts value =>
+    cases value with
+    | none =>
+      have hparts := rpBlockValue_ok penv pre scope stmts none state rho rng state' hreplay
+      rcases hparts with ⟨_, state1, _, hvalue, _, _⟩
+      rcases hvalue with ⟨hrho, _⟩
+      change (pure ([] : List RootRef) : V (List RootRef)) = .ok roots at haccess
+      have hroots : roots = [] := by cases haccess; rfl
+      simp [RootsIncluded, hrho, hroots]
+    | some e =>
+      have hparts := rpBlockValue_ok penv pre scope stmts (some e) state rho rng state' hreplay
+      rcases hparts with ⟨_, state1, _, hvalue, _, _⟩
+      have hvalue : rpExpr { penv with scopes := scope :: penv.scopes } e state1 = .ok (rho, state') := by
+        simpa using hvalue
+      change penv.access.exprRoots e = .ok roots at haccess
+      exact rpExpr_accessRoots_reverse { penv with scopes := scope :: penv.scopes }
+        moduleOk (by simpa using penvMod) e state1 rho state' roots
+        hvalue (by simpa [PEnv.access] using haccess)
+
+end
+
 end Goose.Core.Sound
