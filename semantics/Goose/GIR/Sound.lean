@@ -50,8 +50,23 @@ def EffectsWithin (e : Core.Eff) (s : SummaryAnn) : Prop :=
   | .known sm =>
     e.unknown = false ∧
     (∀ t ∈ e.reads, t ∈ sm.reads) ∧ (∀ t ∈ e.writes, t ∈ sm.writes) ∧
-    (∀ t ∈ e.grows, t ∈ sm.grows) ∧ (∀ t ∈ e.rebinds, t ∈ sm.rebinds) ∧
+    (∀ t ∈ e.grows, t ∈ sm.grows) ∧ (∀ t ∈ e.shrinks, t ∈ sm.shrinks) ∧
+    (∀ t ∈ e.rebinds, t ∈ sm.rebinds) ∧
     (e.aborts = true → sm.aborts = true) ∧ (e.outputs = true → sm.outputs = true)
+
+theorem omittedShrink_not_within {e : Core.Eff} {s : Summary} {t : Target}
+    (ht : t ∈ e.shrinks) (hnot : t ∉ s.shrinks) :
+    ¬ EffectsWithin e (.known s) := by
+  intro h
+  simp only [EffectsWithin] at h
+  rcases h with ⟨_, _, _, _, hshrinks, _, _, _⟩
+  exact hnot (hshrinks t ht)
+
+example : ¬ EffectsWithin ({ shrinks := [.param 0] } : Core.Eff)
+    (.known ⟨[], [], [], [], [], false, false⟩) := by
+  apply omittedShrink_not_within (t := Target.param 0)
+  · simp
+  · simp
 
 theorem bind_ok {ε α β : Type} {x : Except ε α} {f : α → Except ε β} {b : β}
     (h : (x >>= f) = .ok b) : ∃ a, x = .ok a ∧ f a = .ok b := by
@@ -187,7 +202,7 @@ theorem within_of_closed {f : Func} {e : Core.Eff} (h : f.summaryClosed e = .ok 
     obtain ⟨_, h4, h⟩ := bind_ok h
     obtain ⟨_, h5, h⟩ := bind_ok h
     obtain ⟨_, h6, h7⟩ := bind_ok h
-    refine ⟨?_, within_of h1, within_of h2, within_of h3, within_of h5,
+    refine ⟨?_, within_of h1, within_of h2, within_of h3, within_of h4, within_of h5,
       flag_of h6, flag_of h7⟩
     cases hk : e.unknown with
     | false => rfl
