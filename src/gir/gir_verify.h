@@ -1500,7 +1500,9 @@ private:
         };
         function<bool(int, vector<char> &)> replacementBindingWritable = [&](int value, vector<char> &open) {
             if (value < 0 || value >= (int)fn.vt.size() || fn.vt[value] < 0) return false;
-            if (open[value]) return false;
+            // A loop backedge preserves the capability established by its
+            // incoming path; every noncyclic predecessor is still checked.
+            if (open[value]) return true;
             open[value] = 1;
             auto close = [&](bool result) { open[value] = 0; return result; };
             auto &reference = m.Type(fn.vt[value]);
@@ -2222,6 +2224,20 @@ private:
         return facts;
     }
 
+    vector<int> TransferEmptyEdge(const GirFunc &f, const vector<int> &facts,
+                                  int target, const vector<int> &args) const {
+        auto translated = facts;
+        auto contains = [&](int value) {
+            return find(translated.begin(), translated.end(), value) != translated.end();
+        };
+        if (target < 0 || target >= (int)f.blocks.size()) return translated;
+        auto &params = f.blocks[target].params;
+        for (size_t i = 0; i < params.size() && i < args.size(); i++)
+            if (contains(args[i]) && find(translated.begin(), translated.end(), params[i].first) == translated.end())
+                translated.push_back(params[i].first);
+        return translated;
+    }
+
     vector<optional<vector<int>>> EmptyFactsAtBlocks(const Fn &fn, const Prov &p) const {
         const auto &f = *fn.f;
         vector<optional<vector<int>>> states(f.blocks.size());
@@ -2235,21 +2251,27 @@ private:
                 auto outgoing = TransferEmptyBlock(p, *old[b], f.blocks[b]);
                 auto *term = LastTerm(f.blocks[b]);
                 if (!term) continue;
-                for (auto target : Successors(*term)) {
-                    if (target < 0 || target >= (int)states.size()) continue;
+                auto propagate = [&](int target, const vector<int> &args) {
+                    if (target < 0 || target >= (int)states.size()) return;
+                    auto edgeFacts = TransferEmptyEdge(f, outgoing, target, args);
                     if (!states[target]) {
-                        states[target] = outgoing;
+                        states[target] = std::move(edgeFacts);
                         changed = true;
                     } else {
                         vector<int> intersection;
                         for (auto fact : *states[target])
-                            if (find(outgoing.begin(), outgoing.end(), fact) != outgoing.end())
+                            if (find(edgeFacts.begin(), edgeFacts.end(), fact) != edgeFacts.end())
                                 intersection.push_back(fact);
                         if (intersection != *states[target]) {
                             states[target] = std::move(intersection);
                             changed = true;
                         }
                     }
+                };
+                if (term->op == GirOp::Br) propagate(term->idx, term->vals);
+                else if (term->op == GirOp::CondBr) {
+                    propagate(term->idx, term->vals);
+                    propagate(term->idx2, term->vals2);
                 }
             }
         }
