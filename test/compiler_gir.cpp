@@ -78,6 +78,130 @@ GirModule Base() {
 
 GirFunc &Main(GirModule &m) { return m.funcs[0]; }
 
+string Code(GirModule m);
+
+CoreExprP CoreInt(CoreTypeId ty, const char *text) {
+    auto expr = make_unique<CoreExpr>();
+    expr->kind = CoreExprKind::Lit;
+    expr->type = ty;
+    expr->value = text;
+    return expr;
+}
+
+CorePlaceP CoreLocal(int index) {
+    auto place = make_unique<CorePlace>();
+    place->kind = CorePlace::Local;
+    place->index = index;
+    return place;
+}
+
+CorePlaceP CoreFieldPlace(CorePlaceP base, int index) {
+    auto place = make_unique<CorePlace>();
+    place->kind = CorePlace::Field;
+    place->base = std::move(base);
+    place->index = index;
+    return place;
+}
+
+CoreViewP CorePlaceView(CorePlaceP place) {
+    auto view = make_unique<CoreView>();
+    view->kind = CoreView::Of;
+    view->place = std::move(place);
+    return view;
+}
+
+CoreModule LetArrayFieldCase(bool byRefIteration, CoreMut contents = CoreMut::Mut) {
+    CoreModule core;
+    core.files = { "t.goose" };
+    core.profile = CoreProfile::Shrink;
+    auto i64 = core.IntType(CoreIntTy::I64);
+    CoreType array;
+    array.kind = CoreType::Arr;
+    array.elem = i64;
+    array.count = 1;
+    auto arrayTy = core.Intern(array);
+    CoreType record;
+    record.kind = CoreType::Struct;
+    record.structid = 0;
+    auto recordTy = core.Intern(record);
+    core.structs = { CoreStruct { 8, { CoreField { arrayTy, CoreVarKind::Let, contents, 0 } } } };
+    CoreType ref;
+    ref.kind = CoreType::Ref;
+    ref.mut = CoreMut::Mut;
+    ref.elem = i64;
+    auto refI64 = core.Intern(ref);
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Let };
+    CoreImpl impl;
+    impl.name = "main";
+    impl.summary.aborts = true;
+    impl.vars = { CoreVar { "record", recordTy, CoreVarKind::Let, 0, origin } };
+    impl.body.scope = 0;
+
+    auto arrayValue = make_unique<CoreExpr>();
+    arrayValue->kind = CoreExprKind::Arr;
+    arrayValue->type = arrayTy;
+    arrayValue->elems.push_back(CoreInt(i64, "1"));
+    auto recordValue = make_unique<CoreExpr>();
+    recordValue->kind = CoreExprKind::Struct;
+    recordValue->type = recordTy;
+    recordValue->elems.push_back(std::move(arrayValue));
+    CoreStmt init;
+    init.kind = CoreStmtKind::Let;
+    init.var = 0;
+    init.expr = std::move(recordValue);
+    init.org = origin;
+    impl.body.stmts.push_back(std::move(init));
+
+    if (byRefIteration) {
+        impl.vars.push_back(CoreVar { "element", refI64, CoreVarKind::Let, 1, origin });
+        CoreStmt loop;
+        loop.kind = CoreStmtKind::ForEach;
+        loop.var = 1;
+        loop.byRef = true;
+        loop.view = CorePlaceView(CoreFieldPlace(CoreLocal(0), 0));
+        loop.then = make_unique<CoreBlock>();
+        loop.then->scope = 1;
+        auto elementRef = make_unique<CoreExpr>();
+        elementRef->kind = CoreExprKind::Read;
+        elementRef->type = refI64;
+        elementRef->place = CoreLocal(1);
+        auto elementPlace = make_unique<CorePlace>();
+        elementPlace->kind = CorePlace::Deref;
+        elementPlace->expr = std::move(elementRef);
+        CoreStmt write;
+        write.kind = CoreStmtKind::Assign;
+        write.place = std::move(elementPlace);
+        write.expr = CoreInt(i64, "2");
+        write.org = origin;
+        loop.then->stmts.push_back(std::move(write));
+        loop.org = origin;
+        impl.body.stmts.push_back(std::move(loop));
+    } else {
+        auto element = make_unique<CorePlace>();
+        element->kind = CorePlace::Elem;
+        element->view = CorePlaceView(CoreFieldPlace(CoreLocal(0), 0));
+        element->expr = CoreInt(i64, "0");
+        element->org = origin;
+        CoreStmt write;
+        write.kind = CoreStmtKind::Assign;
+        write.place = std::move(element);
+        write.expr = CoreInt(i64, "2");
+        write.org = origin;
+        impl.body.stmts.push_back(std::move(write));
+    }
+
+    core.impls.push_back(std::move(impl));
+    core.contexts = { CoreContext { .impl = 0 } };
+    core.entry = 0;
+    return core;
+}
+
+string CoreLoweringCode(const CoreModule &core) {
+    auto gir = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Let } },
+                          [](const CoreOrigin &) { return 0; }).Lower();
+    return Code(std::move(gir));
+}
+
 string Code(GirModule m) {
     auto v = GirVerifier(m).Verify();
     return v ? v->code : "";
@@ -690,6 +814,12 @@ GirModule ScalarStruct() {
     GirInst second = Def(GirOp::Field, 6);
     second.a = 3;
     second.idx = 1;
+    auto replacementWide = Int(m, 8, "11");
+    GirInst storeWide;
+    storeWide.op = GirOp::Store;
+    storeWide.a = 6;
+    storeWide.b = 8;
+    storeWide.org = 0;
     GirInst read = Def(GirOp::Load, 7);
     read.a = 6;
     GirInst print;
@@ -697,7 +827,8 @@ GirModule ScalarStruct() {
     print.parts = { { false, "", 7 } };
     print.org = 0;
     Main(m).blocks[0].insts = {
-        Enter(0), one, two, make, init, owner, first, replacement, store, second, read, print,
+        Enter(0), one, two, make, init, owner, first, replacement, store, second, replacementWide,
+        storeWide, read, print,
         Leave(0), Ret(),
     };
     return m;
@@ -1339,6 +1470,13 @@ void RejectsAnInvalidStructLayout() {
     assert(Code(truncated) == "GIR-V010");
 }
 
+void LoweredFieldArrayViewsKeepOwnerContents() {
+    // A `let` field cannot be replaced, but its `mut` contents remain writable.
+    assert(CoreLoweringCode(LetArrayFieldCase(false)) == "");
+    assert(CoreLoweringCode(LetArrayFieldCase(true)) == "");
+    assert(CoreLoweringCode(LetArrayFieldCase(false, CoreMut::Const)) == "GIR-V030");
+}
+
 void LowStructUsesByteStorageAndUnalignedSafeAccess() {
     auto high = ScalarStruct();
     assert(Code(high) == "");
@@ -1363,7 +1501,7 @@ void LowStructUsesByteStorageAndUnalignedSafeAccess() {
     assert(byteCopies >= 4);
     assert(scalarLoads == 0);
     assert(scalarStores == 0);
-    assert((copySizes == vector<string>{ "1", "8", "9", "1", "8" }));
+    assert((copySizes == vector<string>{ "1", "8", "9", "1", "8", "8" }));
 }
 
 void NestedStructAndFixedArrayFieldsUseByteStorage() {
@@ -1780,6 +1918,7 @@ int main() {
     RejectsAConstructorWithAnotherNominalType();
     RejectsAFieldComponentAfterItsStructType();
     RejectsAnInvalidStructLayout();
+    LoweredFieldArrayViewsKeepOwnerContents();
     LowStructUsesByteStorageAndUnalignedSafeAccess();
     NestedStructAndFixedArrayFieldsUseByteStorage();
     LowAggregateLoopParametersOwnSnapshots();

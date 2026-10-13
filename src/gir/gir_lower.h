@@ -498,7 +498,8 @@ private:
             GirInst i;
             i.op = GirOp::Snap;
             i.a = r;
-            i.snap = v.place->kind == CorePlace::Local || v.place->kind == CorePlace::Global
+            i.snap = v.place->kind == CorePlace::Local || v.place->kind == CorePlace::Global ||
+                     v.place->kind == CorePlace::Field
                 ? GirSnapshotMode::Owner : GirSnapshotMode::Borrowed;
             return EmitDef(std::move(i));
         }
@@ -796,7 +797,8 @@ private:
             GirInst i;
             i.op = GirOp::Snap;
             i.a = owner;
-            i.snap = s.view->place->kind == CorePlace::Local || s.view->place->kind == CorePlace::Global
+            i.snap = s.view->place->kind == CorePlace::Local || s.view->place->kind == CorePlace::Global ||
+                     s.view->place->kind == CorePlace::Field
                 ? GirSnapshotMode::Owner : GirSnapshotMode::Borrowed;
             vw = EmitDef(std::move(i));
         } else {
