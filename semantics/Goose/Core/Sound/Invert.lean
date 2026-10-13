@@ -329,6 +329,28 @@ theorem rpExpr_pop_targets (env : PEnv) (owner : Place) (org : OriginId)
     PMono.bind PMono.noteAborts (fun _ => PMono.pure [])
   exact htailMono _ _ _ htail |>.2.2.2.2.1 target hrecorded
 
+private theorem rpStmts_member_replay (env : PEnv) (stmts : List Stmt)
+    (index : Nat) (stmt : Stmt) (state state' : RState)
+    (hindex : stmts[index]? = some stmt)
+    (hreplay : rpStmts env stmts state = .ok ((), state')) :
+    ∃ before after, rpStmt env stmt before = .ok ((), after) ∧ RLe after state' := by
+  induction stmts generalizing index stmt state state' with
+  | nil => simp at hindex
+  | cons head tail ih =>
+    cases index with
+    | zero =>
+      simp only [List.getElem?_cons_zero, Option.some.injEq] at hindex
+      subst stmt
+      simp only [rpStmts] at hreplay
+      rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨_, after, hstmt, htail⟩
+      refine ⟨state, after, hstmt, ?_⟩
+      exact (rp_mono_all.2.2.2.2.2.1 env tail) _ _ _ htail
+    | succ index =>
+      have htailIndex : tail[index]? = some stmt := by simpa using hindex
+      simp only [rpStmts] at hreplay
+      rcases (st_bind_ok _ _ _ _).1 hreplay with ⟨_, mid, _, htail⟩
+      exact ih index stmt mid state' htailIndex htail
+
 /-! ### Blocks and calls -/
 
 theorem tyBlock_ok (env : TEnv) (pre : List (VarId × Ty)) (sc : Nat) (stmts : List Stmt)
@@ -380,6 +402,87 @@ theorem rpBlockValue_ok (env : PEnv) (pre : List VarId) (sc : Nat) (stmts : List
     intro x hx
     have := List.all_eq_true.1 hpre x hx
     simpa using this
+
+private theorem rpBlockValue_directShrink_statement (env : PEnv) (scope : Nat)
+    (stmts : List Stmt) (value : Option Expr) (index : Nat) (stmt : Stmt)
+    (owner : Place) (state : RState) (rho : List RootRef) (range : Nat × Nat)
+    (state' : RState)
+    (hindex : stmts[index]? = some stmt)
+    (hdirect : DemandNode.directShrinkPlace? (.statement stmt) = some owner)
+    (hreplay : rpBlockValue env [] (.mk scope stmts value) state =
+      .ok ((rho, range), state')) :
+    ∃ before roots ownerState,
+      rpPlace { env with scopes := scope :: env.scopes } owner before = .ok (roots, ownerState) ∧
+      ∀ target, target ∈ rootsTargets roots → target ∈ state'.eff.shrinks := by
+  obtain ⟨_, stateAfterStmts, hstmts, hvalue, _, _⟩ :=
+    rpBlockValue_ok env [] scope stmts value state rho range state' hreplay
+  have hstmts' : rpStmts { env with scopes := scope :: env.scopes } stmts state =
+      .ok ((), stateAfterStmts) := by simpa using hstmts
+  obtain ⟨before, after, hstmt, hmonoStmts⟩ :=
+    rpStmts_member_replay { env with scopes := scope :: env.scopes }
+      stmts index stmt state stateAfterStmts hindex hstmts'
+  obtain ⟨roots, ownerState, howner, hrecorded⟩ :=
+    rpStmt_directShrink_targets { env with scopes := scope :: env.scopes }
+      stmt owner before after hdirect hstmt
+  have hmonoValue : RLe stateAfterStmts state' := by
+    cases value with
+    | none =>
+      obtain ⟨_, rfl⟩ := hvalue
+      exact RLe.refl _
+    | some expr =>
+      exact (rp_mono_all.2.2.1 { env with scopes := scope :: env.scopes } expr)
+        _ _ _ hvalue
+  refine ⟨before, roots, ownerState, howner, ?_⟩
+  intro target htarget
+  exact (hmonoStmts.trans hmonoValue).2.2.2.2.1 target (hrecorded target htarget)
+
+private theorem block_child_statement_index (scope : Nat) (stmts : List Stmt)
+    (value : Option Expr) (index : Nat) (stmt : Stmt)
+    (hchild : (DemandNode.block (.mk scope stmts value)).child? index =
+      some (.statement stmt)) :
+    stmts[index]? = some stmt := by
+  simp only [DemandNode.child?, DemandNode.children] at hchild
+  simp only [List.getElem?_append] at hchild
+  split at hchild
+  · simp only [List.getElem?_map] at hchild
+    cases hindex : stmts[index]? with
+    | none => simp [hindex] at hchild
+    | some found =>
+      simp [hindex] at hchild
+      subst found
+      rfl
+  · cases hoffset : index - stmts.length with
+    | zero => cases value <;> simp [hoffset] at hchild
+    | succ offset => simp [hoffset] at hchild
+
+theorem DemandExpectedSourceAt.directShrink_blockStatement_replay
+    {m : Module} {owner : Nat} {expected : DemandExpectedPoint}
+    {scope : Nat} {stmts : List Stmt} {value : Option Expr}
+    {index : Nat} {stmt : Stmt} (env : PEnv)
+    (sourceAt : DemandExpectedSourceAt m owner [index]
+      (.statement stmt) .mutation expected)
+    (root : demandRoot? m owner = some (.block (.mk scope stmts value)))
+    (direct : DemandNode.directShrinkPlace? (.statement stmt) = some ownerPlace)
+    (state : RState) (rho : List RootRef) (range : Nat × Nat) (state' : RState)
+    (replay : rpBlockValue env [] (.mk scope stmts value) state =
+      .ok ((rho, range), state')) :
+    ∃ before roots ownerState,
+      rpPlace { env with scopes := scope :: env.scopes } ownerPlace before =
+        .ok (roots, ownerState) ∧
+      ∀ target, target ∈ rootsTargets roots → target ∈ state'.eff.shrinks := by
+  rcases sourceAt.sourceFacts.1 with ⟨sourceRoot, sourceRootEq, path⟩
+  have rootEq : sourceRoot = .block (.mk scope stmts value) :=
+    Option.some.inj (sourceRootEq.symm.trans root)
+  subst sourceRoot
+  have child : (DemandNode.block (.mk scope stmts value)).child? index =
+      some (.statement stmt) := by
+    cases path with
+    | child hchild tail =>
+      cases tail with
+      | here _ => exact hchild
+  have indexLookup := block_child_statement_index scope stmts value index stmt child
+  exact rpBlockValue_directShrink_statement env scope stmts value index stmt ownerPlace
+    state rho range state' indexLookup direct replay
 
 theorem rpCall_ok (env : PEnv) (c : ContextId) (ar : List (List RootRef)) (st : RState)
     (rho : List RootRef) (st' : RState) (h : rpCall env c ar st = .ok (rho, st')) :
