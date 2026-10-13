@@ -47,7 +47,7 @@ theorem storeInv_bindGlobal {G : Nat} {s : St} {v : Val} {gl : Global} (hi : Sto
   have hle := introduce_le s.store (.global G) v hfree
   have hb : LocTy (s.store.introduce (.global G) v) ⟨.global G, []⟩ gl.ty :=
     locTy_root (by simp [get_introduce]) hv
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro r v1 h1
     have h1' : (s.store.introduce (.global G) v).roots[r]? = some v1 := h1
     rw [get_introduce] at h1'
@@ -78,6 +78,14 @@ theorem storeInv_bindGlobal {G : Nat} {s : St} {v : Val} {gl : Global} (hi : Sto
       rw [hgl] at hgl'; cases hgl'
       exact hb
     · exact LocTy.mono hle (hi.globals g gl' (by omega) hgl')
+  · intro g value present
+    rw [get_introduce] at present
+    by_cases equal : RootInst.global G = .global g
+    · simp only [equal, if_true, Option.some.injEq] at present
+      subst value
+      exact flat_not_ref hv
+    · simp only [equal, if_false] at present
+      exact hi.globalNonRefs g value present
 
 /-- The global initializers, run in table order from a store that holds the
 first `G` globals and nothing else, leave every global bound, nothing else in
@@ -113,7 +121,7 @@ theorem init_spec (hm : ModOk m) (prof : NumProfile) (fuel : Nat) :
         pAge := fun _ _ _ _ h => h.elim
         vis := fun x hx => by cases hx
         rooted := fun x lv si v _ h => by simp [List.lookup] at h
-        inv := ⟨hi.live, hi.age, hi.fresh, hi.globals⟩
+        inv := ⟨hi.live, hi.age, hi.fresh, hi.globals, hi.globalNonRefs⟩
         aOlder := fun _ _ h => h.elim, dOut := fun _ _ h => h.elim, dFun := fun _ _ _ h => h.elim
         sa := fun _ _ h => h.elim
         pref := fun x cont h => by simp [PEnv.cont, initContext] at h }
@@ -143,11 +151,12 @@ theorem init_spec (hm : ModOk m) (prof : NumProfile) (fuel : Nat) :
 
 theorem storeInv_initial (G : Nat) (h : G = 0) : StoreInv m G St.initial := by
   subst h
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro r v h; simp [St.initial, Store.empty] at h
   · intro r v h; simp [St.initial, Store.empty] at h
   · intro a si x h; simp [St.initial, Store.empty] at h
   · intro g gl h; omega
+  · intro g v h; simp [St.initial, Store.empty] at h
 
 /-- A whole run of a module whose items the validator accepted does not fault
 and ends, if it ends, in a store that holds the globals only and satisfies the

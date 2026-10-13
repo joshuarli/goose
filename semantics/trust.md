@@ -3,6 +3,11 @@
 What the claims in this directory rest on without proof. A theorem is a claim
 about the Lean definitions it names and nothing else.
 
+The core soundness store invariant requires every stored global value to be
+non-reference storage, even at roots outside the initialized declarations.
+It permits flat values at undeclared roots. This prevents an untracked global
+slice holder from surviving a backing-owner truncation with invalid bounds.
+
 `coverage.json` is a JSON list with one row per feature and claim label, never
 merged: `{"feature": string, "label": "specified" | "executable" |
 "model-proved" | "instance-checked" | "differential-tested" | "assumed" |

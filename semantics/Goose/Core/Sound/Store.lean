@@ -397,13 +397,15 @@ def Older : RootInst → RootInst → Prop
 /-- What holds of the whole store between any two steps of a run: every stored
 reference or slice denotes a typed location or run, it points into a root that
 ends no earlier than its holder, every scope instance in use was handed out,
-and the globals initialized so far hold values of their types. -/
+and the globals initialized so far hold values of their types. Global storage
+never holds a reference, including roots outside the initialized declarations. -/
 structure StoreInv (m : Module) (G : Nat) (s : St)
     (demanded : RootInst → Prop := fun _ => True) : Prop where
   live : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → demanded r → Held m G s.store v
   age : ∀ (r : RootInst) (v : Val), s.store.roots[r]? = some v → ∀ r', Targets v r' → Older r' r
   fresh : ∀ (a : ActId) (si : ScopeInst) (x : VarId), s.store.roots[RootInst.local a si x]? ≠ none → si < s.nextScope
   globals : ∀ (g : Nat) (gl : Global), g < G → m.globals[g]? = some gl → LocTy s.store ⟨.global g, []⟩ gl.ty
+  globalNonRefs : ∀ (g : Nat) (v : Val), s.store.roots[RootInst.global g]? = some v → ¬ IsRef v
 
 /-- A local root is live at a program point only while its binding is visible
 and demanded by the remaining code. Globals stay live at every point. -/
@@ -423,7 +425,7 @@ theorem StoreInv.changeDemand {m : Module} {G : Nat} {s : St}
     {oldDemand newDemand : RootInst → Prop} (hi : StoreInv m G s oldDemand)
     (hsub : ∀ r, newDemand r → oldDemand r ∨ s.store.roots[r]? = none) :
     StoreInv m G s newDemand := by
-  refine ⟨?_, hi.age, hi.fresh, hi.globals⟩
+  refine ⟨?_, hi.age, hi.fresh, hi.globals, hi.globalNonRefs⟩
   intro r v hv hnew
   rcases hsub r hnew with hold | hfree
   · exact hi.live r v hv hold
@@ -444,9 +446,11 @@ theorem StoreInv.except {m : Module} {G : Nat} {s : St} {s' : Store}
     (hfresh : ∀ a si x, skipped (RootInst.local a si x) →
     s'.roots[RootInst.local a si x]? ≠ none → si < s.nextScope)
     (hglobals : ∀ g gl, skipped (.global g) → g < G → m.globals[g]? = some gl →
-      LocTy s' ⟨.global g, []⟩ gl.ty) :
+      LocTy s' ⟨.global g, []⟩ gl.ty)
+    (hglobalNonRefs : ∀ g v, skipped (.global g) → s'.roots[RootInst.global g]? = some v →
+      ¬ IsRef v) :
     StoreInv m G { s with store := s' } demanded := by
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro r v hv hd
     by_cases hs : skipped r
     · exact hnew r v hd hs hv
@@ -473,6 +477,11 @@ theorem StoreInv.except {m : Module} {G : Nat} {s : St} {s' : Store}
     by_cases hs : skipped (.global g)
     · exact hglobals g gl hs hg hm
     · exact LocTy.mono_except (hagree := hagree) hs (hi.globals g gl hg hm)
+  · intro g v hv
+    by_cases hs : skipped (.global g)
+    · exact hglobalNonRefs g v hs hv
+    · rw [hagree (.global g) hs] at hv
+      exact hi.globalNonRefs g v hv
 
 /-- A held value remains valid after truncation when every location it denotes
 lies outside the removed suffix or in a retained element. -/
@@ -503,6 +512,25 @@ theorem Held.truncate {m : Module} {G : Nat} {s s' : Store}
     exact ⟨E, hSlice l start count hretained.1 hretained.2 E hslice⟩
   | _ => simp [Held]
 
+/-- Rebuilding a value keeps a non-reference root when the replacement is
+non-reference. -/
+private theorem modifyAt_nonRef {v v' : Val} {path : List Nat}
+    {f : Val → Option Val} (hmodify : v.modifyAt? path f = some v')
+    (hresult : ∀ old value, f old = some value → ¬ IsRef value) : ¬ IsRef v' := by
+  cases path with
+  | nil => exact hresult v v' hmodify
+  | cons index rest =>
+    cases v <;> simp only [Val.modifyAt?] at hmodify
+    all_goals first
+      | contradiction
+      | (split at hmodify
+         · split at hmodify
+           · simp only [Option.some.injEq] at hmodify
+             cases hmodify
+             simp [IsRef]
+           · contradiction
+         · contradiction)
+
 /-- Truncation preserves demanded holders when the demand analysis proves that
 each holder remains inside the new logical extent. -/
 theorem StoreInv.truncate {m : Module} {G : Nat} {s : St} {s' : Store}
@@ -530,11 +558,27 @@ theorem StoreInv.truncate {m : Module} {G : Nat} {s : St} {s' : Store}
   · exact hage
   · exact hfresh
   · exact hglobals
+  · intro g v hroot hv
+    obtain ⟨old, x, y, new, _, _, _, hmodify, hroots⟩ :=
+      modify_spec s.store s' o (Val.truncate len) htruncate
+    have hnew : ¬ IsRef new := modifyAt_nonRef hmodify (by
+      intro old value hvalue
+      cases old <;> simp only [Val.truncate] at hvalue
+      all_goals first
+        | contradiction
+        | (split at hvalue
+           · simp only [Option.some.injEq] at hvalue
+             cases hvalue
+             simp [IsRef]
+           · contradiction))
+    rw [hroots] at hv
+    have hv' : v = new := by simpa [hroot] using hv.symm
+    simpa [hv'] using hnew
 
 theorem StoreInv.flatStep {m : Module} {G : Nat} {s : St} {st' : Store}
     {demanded : RootInst → Prop} (hi : StoreInv m G s demanded) (h : FlatStep s.store st') :
     StoreInv m G { s with store := st' } demanded := by
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro r v hv hdem
     rcases h.back r v hv with h0 | ⟨hn, _⟩
     · exact (hi.live r v h0 hdem).mono h.le
@@ -553,16 +597,21 @@ theorem StoreInv.flatStep {m : Module} {G : Nat} {s : St} {st' : Store}
       · exact h1
   · intro g gl hg hgl
     exact LocTy.mono h.le (hi.globals g gl hg hgl)
+  · intro g v hv
+    rcases h.back (.global g) v hv with old | ⟨nonref, _⟩
+    · exact hi.globalNonRefs g v old
+    · exact nonref
 
 /-- Binding a root that was absent. -/
 theorem StoreInv.bind {m : Module} {G : Nat} {s : St} {r : RootInst} {v : Val}
     {demanded : RootInst → Prop} (hi : StoreInv m G s demanded)
     (hfree : s.store.roots[r]? = none) (hv : Held m G s.store v)
     (hage : ∀ r', Targets v r' → Older r' r)
-    (hfr : ∀ a si x, r = .local a si x → si < s.nextScope) :
+    (hfr : ∀ a si x, r = .local a si x → si < s.nextScope)
+    (hglobal : ∀ g, r = .global g → ¬ IsRef v) :
     StoreInv m G { s with store := s.store.introduce r v } demanded := by
   have hle := introduce_le s.store r v hfree
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro r1 v1 h1 hdem
     rw [get_introduce] at h1
     by_cases hr : r = r1
@@ -585,6 +634,14 @@ theorem StoreInv.bind {m : Module} {G : Nat} {s : St} {r : RootInst} {v : Val}
       exact hi.fresh a si x hx
   · intro g gl hg hgl
     exact LocTy.mono hle (hi.globals g gl hg hgl)
+  · intro g value present
+    rw [get_introduce] at present
+    by_cases root : r = .global g
+    · simp only [root, if_true, Option.some.injEq] at present
+      subst value
+      exact hglobal g root
+    · simp only [root, if_false] at present
+      exact hi.globalNonRefs g value present
 
 /-- Replacing the reference a root holds by another. -/
 theorem rebind_le (s : Store) (r : RootInst) (old v : Val) (ho : s.roots[r]? = some old)
@@ -613,7 +670,7 @@ theorem StoreInv.rebind {m : Module} {G : Nat} {s : St} {r : RootInst} {old v : 
     (hv : Held m G s.store v) (hage : ∀ r', Targets v r' → Older r' r) :
     StoreInv m G { s with store := ⟨(s.store.roots.erase r).insert r v⟩ } demanded := by
   have hle := rebind_le s.store r old v ho hold
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro r1 v1 h1 hdem
     simp only [get_reinsert] at h1
     by_cases hr : r = r1
@@ -636,5 +693,12 @@ theorem StoreInv.rebind {m : Module} {G : Nat} {s : St} {r : RootInst} {old v : 
       exact hi.fresh a si x hx
   · intro g gl hg hgl
     exact LocTy.mono hle (hi.globals g gl hg hgl)
+  · intro g value present
+    have root : r ≠ .global g := by
+      intro equal
+      subst r
+      exact hi.globalNonRefs g old ho hold
+    simp only [get_reinsert, root, if_false] at present
+    exact hi.globalNonRefs g value present
 
 end Goose.Core.Sound
