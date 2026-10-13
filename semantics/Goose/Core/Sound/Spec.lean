@@ -1,5 +1,8 @@
 import Goose.Core.Sound.Scope
 import Goose.Core.Sound.Invert
+import Goose.Core.Sound.Context
+import Goose.Core.Sound.Retain
+import Goose.Core.Sound.CallPreservation
 
 /-!
 What each evaluation function is shown to do on code the validator accepted,
@@ -68,6 +71,18 @@ def ViewOk (s : Store) (vw : ViewVal) (el : Ty) : Prop :=
   (vw.resizable = true → vw.start = 0 ∧
     (LocTy s vw.loc (.grow el) ∨ LocTy s vw.loc (.growshrink el)))
 
+/-- A resizable iteration rechecks the owner's current length rather than
+requiring the run sampled before the loop to remain within that length. -/
+def EachViewOk (s : Store) (vw : ViewVal) (el : Ty) : Prop :=
+  el.flat = true ∧
+  (vw.resizable = false → SliceTy s vw.loc vw.start vw.len el) ∧
+  (vw.resizable = true → vw.start = 0 ∧
+    (LocTy s vw.loc (.grow el) ∨ LocTy s vw.loc (.growshrink el)))
+
+theorem ViewOk.eachView {s : Store} {vw : ViewVal} {el : Ty}
+    (h : ViewOk s vw el) : EachViewOk s vw el :=
+  ⟨h.1, fun _ => h.2.1, h.2.2⟩
+
 theorem ViewOk.mono {s s' : Store} {vw : ViewVal} {el : Ty} (hle : StoreLe s s')
     (h : ViewOk s vw el) : ViewOk s' vw el :=
   ⟨h.1, h.2.1.mono hle, fun hr =>
@@ -98,26 +113,162 @@ def OuterOk (m : Module) (G : Nat) (D : RootInst → Ty → Prop) (A : RootInst 
   ∀ r E, D r E → ∃ v, s.store.roots[r]? = some v ∧
     HasTy m G s.store v (.slice .mutable E) ∧ ∀ t, Targets v t → A r t
 
+/-- Argument evaluation follows the checked expression or place occurrence. -/
+inductive ArgContext (m : Module) (plans : Array (Array DemandPoint)) (path : List Nat) : Arg → Type
+  | byVal {e : Expr}
+      (context : EvaluationContext m plans path (.expression e) .expression) :
+      ArgContext m plans path (.byVal e)
+  | byRef {mu : Mutability} {p : Place}
+      (context : EvaluationContext m plans path (.place p) .place) :
+      ArgContext m plans path (.byRef mu p)
+
+def ArgContext.inputFuture {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : Arg}
+    (context : ArgContext m plans path a) : List VarId :=
+  match context with
+  | .byVal context => context.inputFuture
+  | .byRef context => context.inputFuture
+
+def ArgContext.outputFuture {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : Arg}
+    (context : ArgContext m plans path a) : List VarId :=
+  match context with
+  | .byVal context => context.outputFuture
+  | .byRef context => context.outputFuture
+
+def ArgContext.retained {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : Arg}
+    (context : ArgContext m plans path a) : List RetainedAlias :=
+  match context with
+  | .byVal context => context.retained
+  | .byRef context => context.retained
+
+def ArgContext.ActiveMatches {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : Arg}
+    (context : ArgContext m plans path a) (tenv : TEnv) : Prop :=
+  match context with
+  | .byVal context => context.ActiveMatches tenv
+  | .byRef context => context.ActiveMatches tenv
+
+def ArgContext.AccessMatches {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : Arg}
+    (context : ArgContext m plans path a) (tenv : TEnv) (penv : PEnv) : Prop :=
+  match context with
+  | .byVal context => context.AccessMatches tenv penv
+  | .byRef context => context.AccessMatches tenv penv
+
+/-- Text keeps the surrounding demand and protection function because it has no child occurrence. -/
+inductive PrintArgContext (m : Module) (plans : Array (Array DemandPoint)) (path : List Nat) : PrintArg → Type
+  | text {text : String} (future : List VarId) (retained : List RetainedAlias)
+      (shrinking : (Nat → RootInst → Prop) → RootInst → Prop) :
+      PrintArgContext m plans path (.text text)
+  | expr {e : Expr}
+      (context : EvaluationContext m plans path (.expression e) .expression) :
+      PrintArgContext m plans path (.expr e)
+
+def PrintArgContext.inputFuture {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : PrintArg}
+    (context : PrintArgContext m plans path a) : List VarId :=
+  match context with
+  | .text future _ _ => future
+  | .expr context => context.inputFuture
+
+def PrintArgContext.outputFuture {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : PrintArg}
+    (context : PrintArgContext m plans path a) : List VarId :=
+  match context with
+  | .text future _ _ => future
+  | .expr context => context.outputFuture
+
+def PrintArgContext.retained {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : PrintArg}
+    (context : PrintArgContext m plans path a) : List RetainedAlias :=
+  match context with
+  | .text _ retained _ => retained
+  | .expr context => context.retained
+
+def PrintArgContext.ActiveMatches {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : PrintArg}
+    (context : PrintArgContext m plans path a) (tenv : TEnv) : Prop :=
+  match context with
+  | .text _ _ _ => True
+  | .expr context => context.ActiveMatches tenv
+
+def PrintArgContext.AccessMatches {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : PrintArg}
+    (context : PrintArgContext m plans path a) (tenv : TEnv) (penv : PEnv) : Prop :=
+  match context with
+  | .text _ _ _ => True
+  | .expr context => context.AccessMatches tenv penv
+
+def ArgContext.mayShrink {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : Arg} (context : ArgContext m plans path a)
+    (P : Nat → RootInst → Prop) : RootInst → Prop :=
+  match context with
+  | .byVal context => context.mayShrink P
+  | .byRef context => context.mayShrink P
+
+def PrintArgContext.mayShrink {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {a : PrintArg} (context : PrintArgContext m plans path a)
+    (P : Nat → RootInst → Prop) : RootInst → Prop :=
+  match context with
+  | .text _ _ shrinking => shrinking P
+  | .expr context => context.mayShrink P
+
+/-- A statement suffix advances lexical activity without allocating a new path. -/
+def blockSuffixActive {m : Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {sc : Nat} {all : List Stmt} {value : Option Expr}
+    (context : EvaluationContext m plans path (.block (.mk sc all value)) .block)
+    (offset : Nat) : List VarId :=
+  let active := match context with
+    | .pilot _ active => active
+    | .shrink _ context => context.expected.frame.active
+  (DemandNode.block (.mk sc all value)).visibleForChild active offset
+
+/-- Replay supplies the exact effects checked for the implementation body. -/
+def ContextEff (m : Module) (impl : Impl) (ctx : Context) (E : Eff) : Prop :=
+  ∃ rho rng rst,
+    rpBlockValue ⟨m, impl, ctx, []⟩ [] impl.body
+      ⟨impl.params.size, {}⟩ = .ok ((rho, rng), rst) ∧ rst.eff = E
+
 section Specs
-variable (m : Module) (prof : NumProfile)
+variable (m : Module) (prof : NumProfile) (plans : Array (Array DemandPoint))
 
 def ExprSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (e : Expr) (tn tn' : Nat) (ty : Ty)
+  ∀ (path : List Nat) (e : Expr)
+    (ec : EvaluationContext m plans path (.expression e) .expression)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (ty : Ty)
     (rst rst' : RState) (rho : List RootRef),
-    Perm m W → Frame m W tenv penv env s →
+    ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyExpr tenv e tn = .ok (ty, tn') → rpExpr penv e rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalExpr n ⟨prof, m⟩ env e) s (fun v s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ HasTy m W.G s'.store v ty ∧
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r)
 
 def BlockValueSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (b : Block) (tn tn' : Nat) (ty : Ty)
+  ∀ (path : List Nat) (b : Block)
+    (ec : EvaluationContext m plans path (.block b) .block)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (ty : Ty)
     (rst rst' : RState) (rho : List RootRef) (rng : Nat × Nat),
-    Perm m W → Frame m W tenv penv env s →
+    ec.ActiveMatches (exprEnv tenv) → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyBlock (exprEnv tenv) [] b tn = .ok (ty, tn') →
     rpBlockValue penv [] b rst = .ok ((rho, rng), rst') → EffLe rst'.eff W.E →
     Sat (blockValue n ⟨prof, m⟩ env b) s (fun v s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ HasTy m W.G s'.store v ty ∧
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r)
 
 /-- An argument is typed as the validator types it at a call. -/
@@ -133,47 +284,86 @@ def ArgRp (penv : PEnv) (a : Arg) (rst : RState) (rho : List RootRef) (rst' : RS
   | .byRef _ p => rpPlace penv p rst = .ok (rho, rst')
 
 def ArgSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (a : Arg) (tn tn' : Nat) (ty : Ty)
+  ∀ (path : List Nat) (a : Arg) (ac : ArgContext m plans path a)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (ty : Ty)
     (rst rst' : RState) (rho : List RootRef),
-    Perm m W → Frame m W tenv penv env s →
+    ac.ActiveMatches tenv → ac.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ac.mayShrink W.P) →
+    ObservedSafe m W (ac.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ac.inputFuture →
     ArgTy tenv a tn ty tn' → ArgRp penv a rst rho rst' → EffLe rst'.eff W.E →
     Sat (evalArg n ⟨prof, m⟩ env a) s (fun v s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ HasTy m W.G s'.store v ty ∧
+      Frame m W tenv penv env s' ac.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ac.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ac.retained ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r)
 
 def BoundSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (b : Bound) (len : Nat) (d : Int)
+  ∀ (path : List Nat) (b : Bound)
+    (ec : EvaluationContext m plans path (.bound b) .bound)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (len : Nat) (d : Int)
     (tn tn' : Nat) (rst rst' : RState),
-    Perm m W → Frame m W tenv penv env s →
+    ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyBound tenv b tn = .ok ((), tn') → rpBound penv b rst = .ok ((), rst') → EffLe rst'.eff W.E →
     Sat (evalBound n ⟨prof, m⟩ env len d b) s (fun _ s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s')
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained)
 
 def PlaceSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (p : Place) (tn tn' : Nat) (t : Ty)
+  ∀ (path : List Nat) (p : Place)
+    (ec : EvaluationContext m plans path (.place p) .place)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (t : Ty)
     (mu contents : Bool) (rst rst' : RState) (rho : List RootRef),
-    Perm m W → Frame m W tenv penv env s →
+    ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyPlace tenv p tn = .ok (⟨t, mu, contents⟩, tn') → rpPlace penv p rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalPlace n ⟨prof, m⟩ env p) s (fun l s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧
       PlaceOk m W.G W.P penv env s'.store p l t ∧
       Gam env W.P rho l.root)
 
 def ViewSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (v : View) (tn tn' : Nat) (el : Ty)
+  ∀ (path : List Nat) (v : View)
+    (ec : EvaluationContext m plans path (.view v) .view)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (el : Ty)
     (mu : Bool) (rst rst' : RState) (rho : List RootRef),
-    Perm m W → Frame m W tenv penv env s →
+    ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyView tenv v tn = .ok ((el, mu), tn') → rpView penv v rst = .ok (rho, rst') → EffLe rst'.eff W.E →
     Sat (evalView n ⟨prof, m⟩ env v) s (fun vw s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ ViewOk s'.store vw el ∧
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧ ViewOk s'.store vw el ∧
       Gam env W.P rho vw.loc.root)
 
 def CallSpec (n : Nat) : Prop :=
   ∀ (G : Nat) (P : Nat → RootInst → Prop) (D : RootInst → Ty → Prop)
     (A : RootInst → RootInst → Prop) (depth : Nat) (c : ContextId) (vals : List Val) (s : St)
-    (ctx : Context) (impl : Impl),
+    (ctx : Context) (impl : Impl) (E : Eff) (observation : Observation)
+    (root : EvaluationContext m plans [] (.block impl.body) .block),
+    root.OwnerMatches c → ContextEff m impl ctx E →
     m.contexts[c]? = some ctx → m.impls[ctx.impl]? = some impl →
-    StoreInv m G s → vals.length = impl.params.size →
+    StoreInv m G s (ObservationDemand observation) →
+    ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P) observation s.store →
+    ShrinkProtected D A (root.mayShrink P) → vals.length = impl.params.size →
     (∀ i v, vals[i]? = some v → ∃ lv, impl.vars[i]? = some lv ∧ HasTy m G s.store v lv.ty ∧
       ∀ r, Targets v r → ∃ ann, (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann ∧
         Gam noEnv P ann r) →
@@ -186,16 +376,24 @@ def CallSpec (n : Nat) : Prop :=
       PRef P D A ⟨m, impl, ctx, []⟩ impl.vars x cont) →
     (m.globals.size ≤ G ∨ SumOk G P impl ctx) →
     Sat (enterCall n ⟨prof, m⟩ depth c vals) s (fun v s' =>
-      StoreInv m G s' ∧ Ext [] (fun r => ∃ E, D r E) s s' ∧ OuterOk m G D A s' ∧
+      StoreInv m G s' (ObservationDemand observation) ∧
+      CallTransition m G observation.roots observation.values
+        (fun r => ∃ element, D r element) s s' ∧
+      ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P) observation s'.store ∧
+      OuterOk m G D A s' ∧
       ((impl.results.toList = [] ∧ v = .unit) ∨
         ∃ t, impl.results.toList = [t] ∧ HasTy m G s'.store v t) ∧
       ∀ r, Targets v r → ∃ declared, ctx.resultRoots = [declared] ∧ Gam noEnv P declared r)
 
 def BlockSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv tenv1 tenv2 : TEnv) (penv : PEnv) (env : Env) (s : St)
-    (pre : List (VarId × Val)) (sc : Nat) (stmts : List Stmt) (value : Option Expr)
-    (tn1 tn2 tn3 : Nat) (ty : Ty) (rst1 rst2 rst3 : RState) (rho : List RootRef) (lo : Nat),
-    Perm m W → Frame m W tenv penv env s → sc ∉ tenv.scopes →
+  ∀ (path : List Nat) (sc : Nat) (stmts : List Stmt) (value : Option Expr)
+    (ec : EvaluationContext m plans path (.block (.mk sc stmts value)) .block)
+    (observation : Observation) (W : World) (tenv tenv1 tenv2 : TEnv) (penv : PEnv) (env : Env) (s : St)
+    (pre : List (VarId × Val)) (tn1 tn2 tn3 : Nat) (ty : Ty) (rst1 rst2 rst3 : RState) (rho : List RootRef) (lo : Nat),
+    ec.ActiveMatches tenv1 → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture → sc ∉ tenv.scopes →
     TSame { tenv with scopes := sc :: tenv.scopes } tenv1 →
     (∀ y, y ∈ tenv1.visible ↔ y ∈ pre.map Prod.fst ∨ y ∈ tenv.visible) →
     PreOk m W penv { env with scopes := (sc, s.nextScope) :: env.scopes } sc lo rst1.nextVar s.store pre →
@@ -211,7 +409,11 @@ def BlockSpec (n : Nat) : Prop :=
     EffLe rst3.eff W.E →
     (∀ y, RootRef.local y ∈ rho → ¬ (lo ≤ y ∧ y < rst3.nextVar)) →
     Sat (execBlock n ⟨prof, m⟩ env pre (.mk sc stmts value)) s (fun fl s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧
       match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
           stmtsDiverge m.noReturn stmts = false
@@ -220,16 +422,27 @@ def BlockSpec (n : Nat) : Prop :=
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v)
 
 def StmtsSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (sc : Nat) (ss : List Stmt)
-    (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
-    Perm m W → Frame m W tenv penv env s → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
+  ∀ (path : List Nat) (sc : Nat) (all : List Stmt) (value : Option Expr)
+    (bc : EvaluationContext m plans path (.block (.mk sc all value)) .block)
+    (offset : Nat) (ss : List Stmt)
+    (observation : Observation) (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
+    offset ≤ all.length → ss = all.drop offset →
+    (∀ x, x ∈ blockSuffixActive bc offset ↔ x ∈ tenv.visible) →
+    bc.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (bc.mayShrink W.P) →
+    ObservedSafe m W (bc.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s (ss.flatMap Stmt.variables ++ value.toList.flatMap Expr.variables ++ bc.outputFuture) → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
     lo ≤ rst.nextVar →
     tyStmts tenv sc ss tn = .ok (tenv', tn') → rpStmts penv ss rst = .ok ((), rst') →
     EffLe rst'.eff W.E →
     Sat (execStmts n ⟨prof, m⟩ env ss) s (fun fl s' =>
-      (∃ tenv'', TSame tenv tenv'' ∧ Frame m W tenv'' penv env s' ∧
+      (∃ tenv'', TSame tenv tenv'' ∧ Frame m W tenv'' penv env s' (value.toList.flatMap Expr.variables ++ bc.outputFuture) ∧
         (∀ v, fl = .normal v → tenv'' = tenv')) ∧
-      ExtS env (Dset W) s s' ∧ TopB env lo rst'.nextVar s' ∧
+      FootprintS env (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (bc.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store bc.retained ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
       | .normal v => v = .unit ∧ stmtsDiverge m.noReturn ss = false
       | .brk => tenv.loops ≠ 0 ∧ stmtsHaveBreak ss = true
@@ -237,14 +450,23 @@ def StmtsSpec (n : Nat) : Prop :=
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v)
 
 def StmtSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (sc : Nat) (st : Stmt)
+  ∀ (path : List Nat) (st : Stmt)
+    (ec : EvaluationContext m plans path (.statement st) .statement)
+    (observation : Observation) (W : World) (tenv tenv' : TEnv) (penv : PEnv) (env : Env) (s : St) (sc : Nat)
     (tn tn' : Nat) (rst rst' : RState) (lo : Nat),
-    Perm m W → Frame m W tenv penv env s → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
+    ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture → tenv.scopes.head? = some sc → TopB env lo rst.nextVar s →
     lo ≤ rst.nextVar →
     tyStmt tenv sc st tn = .ok (tenv', tn') → rpStmt penv st rst = .ok ((), rst') →
     EffLe rst'.eff W.E →
     Sat (execStmt n ⟨prof, m⟩ env st) s (fun fl s' =>
-      Frame m W tenv' penv env s' ∧ TSame tenv tenv' ∧ ExtS env (Dset W) s s' ∧ TopB env lo rst'.nextVar s' ∧
+      Frame m W tenv' penv env s' ec.outputFuture ∧ FootprintS env (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧ TSame tenv tenv' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
       | .normal _ => st.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ st.hasBreak = true
@@ -263,43 +485,75 @@ def PrintRp (penv : PEnv) (a : PrintArg) (rst rst' : RState) : Prop :=
   | .expr e => ∃ rho, rpExpr penv e rst = .ok (rho, rst')
 
 def PrintArgSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (a : PrintArg) (tn tn' : Nat)
+  ∀ (path : List Nat) (a : PrintArg) (ac : PrintArgContext m plans path a)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn' : Nat)
     (rst rst' : RState),
-    Perm m W → Frame m W tenv penv env s →
+    ac.ActiveMatches tenv → ac.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ac.mayShrink W.P) →
+    ObservedSafe m W (ac.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ac.inputFuture →
     PrintTy tenv a tn tn' → PrintRp penv a rst rst' → EffLe rst'.eff W.E →
     Sat (execPrintArg n ⟨prof, m⟩ env a) s (fun _ s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s')
+      Frame m W tenv penv env s' ac.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ac.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ac.retained)
 
 def WhileSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (c : Expr) (body : Block)
-    (tn tn1 tn2 : Nat) (bty : Ty) (rst rst1 rst2 : RState) (rhoc rb : List RootRef) (rng : Nat × Nat),
-    Perm m W → Frame m W tenv penv env s →
+  ∀ (path : List Nat) (c : Expr) (body : Block) (origin : OriginId)
+    (ec : EvaluationContext m plans path (.statement (.while c body origin)) .statement)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (tn tn1 tn2 : Nat) (bty : Ty) (rst rst1 rst2 : RState) (rhoc rb : List RootRef) (rng : Nat × Nat),
+    ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture →
     tyExpr tenv c tn = .ok (.bool, tn1) →
     tyBlock { tenv with loops := tenv.loops + 1 } [] body tn1 = .ok (bty, tn2) →
     rpExpr penv c rst = .ok (rhoc, rst1) → rpBlockValue penv [] body rst1 = .ok ((rb, rng), rst2) →
     EffLe rst2.eff W.E →
     Sat (execWhile n ⟨prof, m⟩ env c body) s (fun fl s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ LoopFlow m W tenv penv s' fl ∧
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧ LoopFlow m W tenv penv s' fl ∧
       (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true))
 
 def RangeSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (x : VarId) (t : IntTy) (i hi : Int)
-    (body : Block) (tn1 tn2 : Nat) (bty : Ty) (rst1 rst2 : RState) (rb : List RootRef) (rng : Nat × Nat),
-    Perm m W → Frame m W tenv penv env s →
+  ∀ (path : List Nat) (x : VarId) (lower upper : Expr) (body : Block) (origin : OriginId)
+    (ec : EvaluationContext m plans path (.statement (.forRange x lower upper body origin)) .statement)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (t : IntTy) (i hi : Int)
+    (tn1 tn2 : Nat) (bty : Ty) (rst1 rst2 : RState) (rb : List RootRef) (rng : Nat × Nat),
+    ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture →
     (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope ∧ lv.ty = .int t) → x < rst1.nextVar →
     tyBlock { tenv with loops := tenv.loops + 1, visible := x :: tenv.visible } [] body tn1 =
       .ok (bty, tn2) →
     rpBlockValue penv [] body rst1 = .ok ((rb, rng), rst2) → EffLe rst2.eff W.E →
     (∀ y, RootRef.local y ∈ rb → ¬ (x ≤ y ∧ y < rst1.nextVar)) →
     Sat (execRange n ⟨prof, m⟩ env x t i hi body) s (fun fl s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ LoopFlow m W tenv penv s' fl)
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧ LoopFlow m W tenv penv s' fl)
 
+/-- The source view identifies the checked loop occurrence; the runtime view
+carries its iteration cursor and the owner's current typing. -/
 def EachSpec (n : Nat) : Prop :=
-  ∀ (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (x : VarId) (idx : Option VarId)
-    (byRef : Bool) (body : Block) (vw : ViewVal) (i : Nat) (el : Ty) (rho : List RootRef)
+  ∀ (path : List Nat) (x : VarId) (idx : Option VarId) (sourceView : View)
+    (byRef : Bool) (body : Block) (origin : OriginId)
+    (ec : EvaluationContext m plans path (.statement (.forEach x idx sourceView byRef body origin)) .statement)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St) (vw : ViewVal) (i : Nat) (el : Ty) (rho : List RootRef)
     (tn1 tn2 : Nat) (bty : Ty) (rst1 rst2 : RState) (rb : List RootRef) (rng : Nat × Nat),
-    Perm m W → Frame m W tenv penv env s →
-    ViewOk s.store vw el → Gam env W.P rho vw.loc.root →
+    ec.ActiveMatches tenv → ec.AccessMatches tenv penv →
+    ShrinkProtected W.D W.A (ec.mayShrink W.P) →
+    ObservedSafe m W (ec.mayShrink W.P) observation s.store →
+    Perm m W → Frame m W tenv penv env s ec.inputFuture →
+    EachViewOk s.store vw el → Gam env W.P rho vw.loc.root →
     (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope ∧ lv.ty.storable = true ∧
       (if byRef = true then (∃ mx, lv.ty = .ref mx el) ∧
           bindRootsV penv (body.scope :: penv.scopes) x rho = .ok ()
@@ -312,24 +566,28 @@ def EachSpec (n : Nat) : Prop :=
     rpBlockValue penv [] body rst1 = .ok ((rb, rng), rst2) → EffLe rst2.eff W.E →
     (∀ y, RootRef.local y ∈ rb → ¬ (x ≤ y ∧ y < rst1.nextVar)) →
     Sat (execEach n ⟨prof, m⟩ env x idx byRef body vw i) s (fun fl s' =>
-      Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧ LoopFlow m W tenv penv s' fl)
+      Frame m W tenv penv env s' ec.outputFuture ∧ Footprint (insts env) (Dset W) s s' ∧
+      PreservesRootTypes m W.G observation.roots s.store s'.store ∧
+      PreservesValues m W.G observation.values s.store s'.store ∧
+      ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧ LoopFlow m W tenv penv s' fl)
 
 /-- Every evaluation function at fuel `n` meets its statement. -/
 structure Specs (n : Nat) : Prop where
-  expr : ExprSpec m prof n
-  blockValue : BlockValueSpec m prof n
-  arg : ArgSpec m prof n
-  bound : BoundSpec m prof n
-  place : PlaceSpec m prof n
-  view : ViewSpec m prof n
-  call : CallSpec m prof n
-  block : BlockSpec m prof n
-  stmts : StmtsSpec m prof n
-  stmt : StmtSpec m prof n
-  printArg : PrintArgSpec m prof n
-  while_ : WhileSpec m prof n
-  range : RangeSpec m prof n
-  each : EachSpec m prof n
+  expr : ExprSpec m prof plans n
+  blockValue : BlockValueSpec m prof plans n
+  arg : ArgSpec m prof plans n
+  bound : BoundSpec m prof plans n
+  place : PlaceSpec m prof plans n
+  view : ViewSpec m prof plans n
+  call : CallSpec m prof plans n
+  block : BlockSpec m prof plans n
+  stmts : StmtsSpec m prof plans n
+  stmt : StmtSpec m prof plans n
+  printArg : PrintArgSpec m prof plans n
+  while_ : WhileSpec m prof plans n
+  range : RangeSpec m prof plans n
+  each : EachSpec m prof plans n
 
 end Specs
 
