@@ -141,22 +141,67 @@ def stmtsHaveBreak : List Stmt → Bool
 end
 
 mutual
-/-- The statement never completes normally: it returns, aborts, exits or loops forever. -/
-def Stmt.diverges : Stmt → Bool
+/-- The statement never completes normally: it returns, aborts, exits, loops
+forever, or calls a function that never returns. `nr` says which contexts
+never return to their caller. -/
+def Stmt.diverges (nr : ContextId → Bool) : Stmt → Bool
   | .ret _ _ => true
   | .abort _ _ => true
   | .exit _ _ => true
-  | .ifS _ t (some f) _ => t.diverges && f.diverges
+  | .expr (.call c _ _) _ => nr c
+  | .ifS _ t (some f) _ => t.diverges nr && f.diverges nr
   | .while (.bool true) b _ => !b.hasBreak
   | _ => false
 
-def Block.diverges : Block → Bool
-  | .mk _ ss _ => stmtsDiverge ss
+def Block.diverges (nr : ContextId → Bool) : Block → Bool
+  | .mk _ ss _ => stmtsDiverge nr ss
 
-def stmtsDiverge : List Stmt → Bool
+def stmtsDiverge (nr : ContextId → Bool) : List Stmt → Bool
   | [] => false
-  | s :: rest => s.diverges || stmtsDiverge rest
+  | s :: rest => s.diverges nr || stmtsDiverge nr rest
 end
+
+/-- A statement that completes normally or ends the run: it never leaves by
+`return`, `break` or `continue`. -/
+def Stmt.isPlain : Stmt → Bool
+  | .letS .. | .assign .. | .assignOp .. | .rebind .. | .expr .. | .append .. | .print ..
+  | .assertS .. => true
+  | _ => false
+
+mutual
+/-- The statement ends the run or never comes back: it aborts, exits, or calls
+a function that never returns. Unlike `diverges`, a `return` does not count. -/
+def Stmt.stops (nr : ContextId → Bool) : Stmt → Bool
+  | .abort _ _ => true
+  | .exit _ _ => true
+  | .expr (.call c _ _) _ => nr c
+  | .ifS _ t (some f) _ => t.stops nr && f.stops nr
+  | _ => false
+
+def Block.stops (nr : ContextId → Bool) : Block → Bool
+  | .mk _ ss _ => stmtsStop nr ss
+
+/-- Some statement stops, and every statement before it is plain. -/
+def stmtsStop (nr : ContextId → Bool) : List Stmt → Bool
+  | [] => false
+  | s :: rest => s.stops nr || (s.isPlain && stmtsStop nr rest)
+end
+
+/-- Contexts that never return to their caller, found in `k` rounds: the body
+stops, where a call stops if its callee was found in an earlier round. -/
+def neverReturns (m : Module) : Nat → ContextId → Bool
+  | 0, _ => false
+  | k + 1, c =>
+    match m.contexts[c]? with
+    | some ctx =>
+      match m.impls[ctx.impl]? with
+      | some impl => impl.body.stops (neverReturns m k)
+      | none => false
+    | none => false
+
+/-- The contexts of the module that never return: one round per context is
+enough for any chain of calls. -/
+def Module.noReturn (m : Module) : ContextId → Bool := neverReturns m m.contexts.size
 
 /-! ### Typing environment -/
 
@@ -685,7 +730,7 @@ def checkImpl (m : Module) (impl : Impl) : V Unit := do
     if impl.body.value.isSome then
       unless bodyTy == t do reject .type s!"{impl.name}: body value of another type than the result"
     else
-      unless impl.body.diverges do reject .type s!"{impl.name} can fall off its end without returning a value"
+      unless impl.body.diverges m.noReturn do reject .type s!"{impl.name} can fall off its end without returning a value"
   | _ => reject .type s!"{impl.name} has several results"
 
 /-- Check a global's declaration and initializer. -/

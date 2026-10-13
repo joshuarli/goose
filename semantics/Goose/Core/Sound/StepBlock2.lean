@@ -20,7 +20,7 @@ theorem step_stmts (ih : Specs m prof n) : StmtsSpec m prof (n + 1) := by
     subst hr
     simp only [execStmts, sat_pure]
     exact ⟨⟨tenv', TSame.refl _, hF, fun _ _ => rfl⟩, (Ext.refl _ _ _).toS, hT,
-      (⟨trivial, rfl⟩ : True ∧ stmtsDiverge [] = false)⟩
+      (⟨trivial, rfl⟩ : True ∧ stmtsDiverge m.noReturn [] = false)⟩
   | cons st rest =>
     simp only [tyStmts] at ht; inv at ht
     simp only [rpStmts] at hr; inv at hr

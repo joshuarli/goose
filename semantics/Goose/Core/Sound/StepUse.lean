@@ -28,7 +28,7 @@ theorem block_of_checks (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame m 
       Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧
       match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
-          b.diverges = false
+          b.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ b.hasBreak = true
       | .cont => tenv.loops ≠ 0
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) := by
@@ -99,7 +99,7 @@ theorem block_of_reserved (hB : BlockSpec m prof n) (hp : Perm m W) (hF : Frame 
       Frame m W tenv penv env s' ∧ Ext (insts env) (Dset W) s s' ∧
       match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
-          b.diverges = false
+          b.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ b.hasBreak = true
       | .cont => tenv.loops ≠ 0
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) := by

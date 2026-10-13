@@ -23,7 +23,7 @@ theorem step_stmt_b (ih : Specs m prof n) :
     Sat (execStmt (n + 1) ⟨prof, m⟩ env st) s (fun fl s' =>
       Frame m W tenv' penv env s' ∧ TSame tenv tenv' ∧ ExtS env (Dset W) s s' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
-      | .normal _ => st.diverges = false
+      | .normal _ => st.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ st.hasBreak = true
       | .cont => tenv.loops ≠ 0
       | .ret v => tenv.inExpr = false ∧ RetOk m W tenv penv s' v) := by

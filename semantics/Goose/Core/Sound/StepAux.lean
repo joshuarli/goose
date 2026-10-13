@@ -1,4 +1,5 @@
 import Goose.Core.Sound.Lemmas
+import Goose.Core.Sound.Stops
 
 /-!
 Facts shared by the statement cases: what the binding rule gives, how binding
@@ -171,7 +172,7 @@ theorem lookup_inst {l : List (Nat × Nat)} {a b : Nat} (h : l.lookup a = some b
 
 /-- A loop whose condition is the constant `true` ends normally only by `break`. -/
 theorem while_diverges (c : Expr) (b : Block) (o : OriginId)
-    (h : c = .bool true → b.hasBreak = true) : (Stmt.while c b o).diverges = false := by
+    (h : c = .bool true → b.hasBreak = true) : (Stmt.while c b o).diverges m.noReturn = false := by
   cases c <;> try rfl
   rename_i bb
   cases bb
