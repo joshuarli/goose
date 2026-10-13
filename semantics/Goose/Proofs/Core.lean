@@ -13,9 +13,13 @@ open Goose.Core Goose.Proofs.Memory
 
 theorem validate_entry_ok (m : Module) (h : validate m = .ok ()) : checkEntry m = .ok () := by
   unfold validate at h
-  cases hc : checkEntry m with
-  | error e => simp [hc, bind, Except.bind] at h
-  | ok u => cases u; rfl
+  cases ht : checkStructTables m with
+  | error e => simp [ht, bind, Except.bind] at h
+  | ok u =>
+    simp only [ht, bind, Except.bind] at h
+    cases hc : checkEntry m with
+    | error e => simp [hc, bind, Except.bind] at h
+    | ok u => cases u; rfl
 
 /-- Acceptance fixes the entry: a context whose implementation takes no
 parameters and returns nothing. -/

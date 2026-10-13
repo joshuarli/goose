@@ -100,7 +100,9 @@ theorem step (n k : Nat) (ih : MonoAll n k) : MonoAll (n + 1) (k + 1) := by
   obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _⟩ := ih
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro cfg env e
-    cases e <;> simp only [evalExpr] <;> mono
+    cases e with
+    | structLit t es => cases t <;> simp only [evalExpr] <;> mono
+    | _ => (try simp only [evalExpr]) <;> mono
   · intro cfg env b
     simp only [blockValue]; mono
   · intro cfg env a

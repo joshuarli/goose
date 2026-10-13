@@ -455,6 +455,7 @@ def addEntry (t : VTy) : W Nat := do
 mutual
 /-- The index of a data type, after the indices of its components. -/
 def internTy : Ty → W Nat
+  | .structT .. => panic! "GIR struct type writing is not implemented"
   | .int t => addEntry (.data (.int t))
   | .bool => addEntry (.data .bool)
   | .unit => addEntry (.data .unit)
@@ -607,6 +608,7 @@ def wGlobal (g : Global) : W String := do
 def wTypeEntry (tab : Array VTy) (t : VTy) : String :=
   let ix (e : Ty) : String := toString ((tab.findIdx? (· == VTy.data e)).getD 0)
   match t with
+  | .data (.structT ..) => panic! "GIR struct type writing is not implemented"
   | .data (.int i) => wRec "int" [quote (intTyTag i)]
   | .data .bool => wRec "bool" []
   | .data .unit => wRec "unit" []

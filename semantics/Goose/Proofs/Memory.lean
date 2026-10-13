@@ -46,12 +46,18 @@ theorem get_nil (v : Val) : v.get? [] = some v := by simp [Val.get?]
 
 theorem get_fixed (es : Array Val) (i : Nat) (rest : List Nat) :
     (Val.fixed es).get? (i :: rest) = (es[i]?).bind (fun e => e.get? rest) := by
-  simp [Val.get?, Val.elems?]
+  simp [Val.get?, Val.children?, Val.elems?]
   cases es[i]? <;> rfl
 
 theorem get_resizable (E : Ty) (es : Array Val) (i : Nat) (rest : List Nat) :
     (Val.resizable E es).get? (i :: rest) = (es[i]?).bind (fun e => e.get? rest) := by
-  simp [Val.get?, Val.elems?]
+  simp [Val.get?, Val.children?, Val.elems?]
+  cases es[i]? <;> rfl
+
+
+theorem get_record (sid : StructId) (es : Array Val) (i : Nat) (rest : List Nat) :
+    (Val.record sid es).get? (i :: rest) = (es[i]?).bind (fun e => e.get? rest) := by
+  simp [Val.get?, Val.children?]
   cases es[i]? <;> rfl
 
 
@@ -125,6 +131,40 @@ theorem refines_modifyAt (f : Val → Option Val) :
           | cons j q' =>
             rw [get_fixed] at hq
             rw [get_fixed]
+            by_cases hij : i = j
+            · subst hij
+              rw [Array.getElem?_eq_getElem hi] at hq
+              simp only [Option.bind_some] at hq
+              rw [Array.getElem?_set_self hi]
+              simp only [Option.bind_some]
+              exact hr q' w hq
+            · rw [Array.getElem?_set]; simp only [hij, ite_false]
+              exact ⟨w, hq, fun _ h => h, fun es h => ⟨es, h, Nat.le_refl _⟩⟩
+        · simp at h1
+      · simp at h1
+    | record sid es =>
+      simp only [Val.modifyAt?] at h1
+      split at h1
+      · rename_i hi
+        split at h1
+        · rename_i e' he'
+          cases h1
+          rw [get_record, Array.getElem?_eq_getElem hi] at h2
+          simp only [Option.bind_some] at h2
+          have hr := ih es[i] e' x y he' h2 h3 h4
+          have hr0 := hr [] es[i] (get_nil _)
+          obtain ⟨x0, hx0, hT0, hs0⟩ := hr0
+          rw [get_nil] at hx0; cases hx0
+          intro q w hq
+          cases q with
+          | nil =>
+            rw [get_nil] at hq; cases hq
+            refine ⟨_, get_nil _, ?_, ?_⟩
+            · intro T hT; cases T <;> simp [FlatTy] at hT
+            · intro es' hes'; simp [Val.elems?] at hes'
+          | cons j q' =>
+            rw [get_record] at hq
+            rw [get_record]
             by_cases hij : i = j
             · subst hij
               rw [Array.getElem?_eq_getElem hi] at hq
@@ -231,6 +271,17 @@ theorem modifyAt_spec (f : Val → Option Val) :
           exact ih es[i] e' x he' h2
         · simp at h1
       · simp at h1
+    | record sid es =>
+      simp only [Val.modifyAt?] at h1
+      split at h1
+      · rename_i hi
+        split at h1
+        · rename_i e' he'
+          rw [get_record, Array.getElem?_eq_getElem hi] at h2
+          simp only [Option.bind_some] at h2
+          exact ih es[i] e' x he' h2
+        · simp at h1
+      · simp at h1
     | resizable E0 es =>
       simp only [Val.modifyAt?] at h1
       split at h1
@@ -307,6 +358,7 @@ theorem flat_swap : ∀ (T : Ty), T.flat = true → ∀ (x y : Val) (T' : Ty),
     have hfE : E.flat = true := by simpa [Ty.flat] using hf
     exact flat_swap E hfE es[i] e E' (hx.2 i _ (Array.getElem?_eq_getElem hi2))
       (hy.2 i e he) (hx'.2 i _ (Array.getElem?_eq_getElem hi2))
+  | .structT _ _, _, x, _, _, hx, _, _ => by cases x <;> simp [FlatTy] at hx
   | .unit, hf, _, _, _, _, _, _ => by simp [Ty.flat] at hf
   | .grow _, hf, _, _, _, _, _, _ => by simp [Ty.flat] at hf
   | .ref _ _, hf, _, _, _, _, _, _ => by simp [Ty.flat] at hf
@@ -320,19 +372,19 @@ theorem flat_refines : ∀ (T : Ty), T.flat = true → ∀ (x y : Val),
   | .int t, hf, x, y, hx, hy => by
     intro p x0 hp
     cases p with
-    | cons i q => rcases x with _|_|_|_|_|_|_ <;> simp [FlatTy, Val.get?, Val.elems?] at hx hp
+    | cons i q => rcases x with _|_|_|_|_|_|_|_ <;> simp [FlatTy, Val.get?, Val.children?, Val.elems?] at hx hp
     | nil =>
       rw [get_nil] at hp; cases hp
       refine ⟨y, get_nil _, fun T' h => flat_swap _ hf _ y T' hx hy h, fun es hes => ?_⟩
-      rcases x with _|_|_|_|_|_|_ <;> simp [FlatTy, Val.elems?] at hx hes
+      rcases x with _|_|_|_|_|_|_|_ <;> simp [FlatTy, Val.elems?] at hx hes
   | .bool, hf, x, y, hx, hy => by
     intro p x0 hp
     cases p with
-    | cons i q => rcases x with _|_|_|_|_|_|_ <;> simp [FlatTy, Val.get?, Val.elems?] at hx hp
+    | cons i q => rcases x with _|_|_|_|_|_|_|_ <;> simp [FlatTy, Val.get?, Val.children?, Val.elems?] at hx hp
     | nil =>
       rw [get_nil] at hp; cases hp
       refine ⟨y, get_nil _, fun T' h => flat_swap _ hf _ y T' hx hy h, fun es hes => ?_⟩
-      rcases x with _|_|_|_|_|_|_ <;> simp [FlatTy, Val.elems?] at hx hes
+      rcases x with _|_|_|_|_|_|_|_ <;> simp [FlatTy, Val.elems?] at hx hes
   | .arr E k, hf, x, y, hx, hy => by
     have hfE : E.flat = true := by simpa [Ty.flat] using hf
     cases x <;> cases y <;> simp only [FlatTy] at hx hy
@@ -358,6 +410,7 @@ theorem flat_refines : ∀ (T : Ty), T.flat = true → ∀ (x y : Val),
         refine ⟨x', ?_, ht, hs⟩
         rw [get_fixed, Array.getElem?_eq_getElem hi2]
         simpa using hx'
+  | .structT _ _, _, x, _, hx, _ => by cases x <;> simp [FlatTy] at hx
   | .unit, hf, _, _, _, _ => by simp [Ty.flat] at hf
   | .grow _, hf, _, _, _, _ => by simp [Ty.flat] at hf
   | .ref _ _, hf, _, _, _, _ => by simp [Ty.flat] at hf
@@ -416,9 +469,10 @@ theorem get_append (v : Val) : ∀ (p q : List Nat), v.get? (p ++ q) = (v.get? p
   | nil => intro q; simp [get_nil]
   | cons i rest ih =>
     intro q
-    rcases v with _|_|_|es|⟨E, es⟩|_|_
-    all_goals simp [Val.get?, Val.elems?]
+    rcases v with _|_|_|es|⟨sid, fields⟩|⟨E, es⟩|_|_
+    all_goals simp [Val.get?, Val.children?, Val.elems?]
     · cases es[i]? <;> simp [ih]
+    · cases fields[i]? <;> simp [ih]
     · cases es[i]? <;> simp [ih]
 
 theorem modifyAt_get_same (f : Val → Option Val) :
@@ -449,6 +503,19 @@ theorem modifyAt_get_same (f : Val → Option Val) :
           simpa using ih es[i] e' x y he' h2 h3
         · simp at h1
       · simp at h1
+    | record sid es =>
+      simp only [Val.modifyAt?] at h1
+      split at h1
+      · rename_i hi
+        split at h1
+        · rename_i e' he'
+          cases h1
+          rw [get_record, Array.getElem?_eq_getElem hi] at h2
+          simp only [Option.bind_some] at h2
+          rw [get_record, Array.getElem?_set_self hi]
+          simpa using ih es[i] e' x y he' h2 h3
+        · simp at h1
+      · simp at h1
     | resizable E0 es =>
       simp only [Val.modifyAt?] at h1
       split at h1
@@ -471,7 +538,7 @@ theorem length_ok (s : Store) (l : Loc) (n : Nat) (h : s.length l = .ok n) :
   cases hr : s.read l with
   | error k => simp [hr] at h
   | ok v =>
-    rcases v with _|_|_|_|⟨E, es⟩|_|_ <;> simp [hr] at h
+    rcases v with _|_|_|_|_|⟨E, es⟩|_|_ <;> simp [hr] at h
     exact ⟨E, es, rfl, h.symm⟩
 
 theorem append_spec (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat)
@@ -576,6 +643,33 @@ theorem modifyAt_preserve (f : Val → Option Val) :
           | cons j q' =>
             rw [get_fixed] at hq
             rw [get_fixed]
+            by_cases hij : i = j
+            · subst hij
+              rw [Array.getElem?_eq_getElem hi] at hq
+              simp only [Option.bind_some] at hq
+              rw [Array.getElem?_set_self hi]
+              simp only [Option.bind_some]
+              have := ih es[i] e' x y he' h2 h3 h4 q' z hq
+              refine ⟨fun hn => this.1 (fun hp => hn (by simpa using hp)), fun hp => this.2 (by simpa using hp)⟩
+            · rw [Array.getElem?_set]; simp only [hij, ite_false]
+              exact ⟨fun _ => hq, fun hp => absurd (List.cons_prefix_cons.1 hp).1.symm hij⟩
+        · simp at h1
+      · simp at h1
+    | record sid es =>
+      simp only [Val.modifyAt?] at h1
+      split at h1
+      · rename_i hi
+        split at h1
+        · rename_i e' he'
+          cases h1
+          rw [get_record, Array.getElem?_eq_getElem hi] at h2
+          simp only [Option.bind_some] at h2
+          cases q with
+          | nil =>
+            refine ⟨fun hn => absurd (List.nil_prefix) hn, fun _ => ⟨_, get_nil _⟩⟩
+          | cons j q' =>
+            rw [get_record] at hq
+            rw [get_record]
             by_cases hij : i = j
             · subst hij
               rw [Array.getElem?_eq_getElem hi] at hq
@@ -713,7 +807,7 @@ theorem SliceOk.mono {s s' : Store} {l : Loc} {st n : Nat} (hle : StoreLe s s')
       obtain ⟨v, hv, hT0⟩ := hl
       rw [hr] at hv; cases hv; exact hT0
     have hx2 := hT _ hflat
-    rcases x' with _|_|_|_|⟨E2, es2⟩|_|_ <;> simp only [FlatTy] at hx2
+    rcases x' with _|_|_|_|_|⟨E2, es2⟩|_|_ <;> simp only [FlatTy] at hx2
     obtain ⟨es', hes', hle'⟩ := hs es (by simp [Val.elems?])
     simp only [Val.elems?, Option.some.injEq] at hes'
     exact ⟨E2, es2, (read_ok_iff _ _ _).2 ⟨old', ho', hx'⟩, by rw [hes']; omega⟩
@@ -749,9 +843,24 @@ theorem liveRefs_introduce (s : Store) (r : RootInst) (v : Val) (h : s.roots[r]?
       simpa [Store.introduce, Std.HashMap.getElem?_insert, hr] using hv'
     exact HeldOk.mono hle (hlr r' v' this)
 
-theorem get_cons_elems (v z : Val) (i : Nat) (q : List Nat) (h : v.get? (i :: q) = some z) :
-    v.elems?.isSome = true := by
-  rcases v with _|_|_|es|⟨E, es⟩|_|_ <;> simp_all [Val.get?, Val.elems?]
+/-- Updating a descendant retains a container root, which holds no direct reference. -/
+theorem modifyAt_cons_held (s : Store) (v v' : Val) (i : Nat) (q : List Nat)
+    (f : Val → Option Val) (h : v.modifyAt? (i :: q) f = some v') : HeldOk s v' := by
+  cases v <;> simp only [Val.modifyAt?] at h
+  all_goals first
+    | contradiction
+    | (split at h
+       · split at h
+         · cases h; trivial
+         · simp at h
+       · simp at h)
+
+#guard ((Val.record 0 #[Val.int .i64 1]).get? [0]).isSome = true
+#guard (Val.record 0 #[Val.int .i64 1]).elems?.isSome = false
+
+theorem get_cons_children (v z : Val) (i : Nat) (q : List Nat) (h : v.get? (i :: q) = some z) :
+    v.children?.isSome = true := by
+  rcases v with _|_|_|es|⟨sid, fields⟩|⟨E, es⟩|_|_ <;> simp_all [Val.get?, Val.children?, Val.elems?]
 
 /-- Growth keeps the live-reference invariant. -/
 theorem liveRefs_append (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat) (E : Ty)
@@ -771,26 +880,17 @@ theorem liveRefs_append (s s' : Store) (l : Loc) (vs : Array Val) (n : Nat) (E :
     rw [hroots] at hv
     simp at hv
     subst hv
-    -- the root's object is still an array: it had elements and refinement keeps them
-    have hxres : x.elems?.isSome = true := by
-      rcases x with _|_|_|_|⟨E2, es2⟩|_|_ <;> simp [Val.appendAll, Val.elems?] at hy ⊢
-    have hel : old.elems?.isSome = true := by
-      cases hp : l.path with
-      | nil =>
-        rw [hp, get_nil] at hx; cases hx; exact hxres
-      | cons i q => rw [hp] at hx; exact get_cons_elems old x i q hx
-    obtain ⟨es0, hes0⟩ := Option.isSome_iff_exists.1 hel
-    have hRef : Refines old new := by
-      obtain ⟨old1, ho1, hg1⟩ := (read_ok_iff _ _ _).1 hr
-      rw [ho] at ho1; cases ho1
-      rw [hx] at hg1; cases hg1
-      simp only [Val.appendAll, Option.some.injEq] at hy
-      subst hy
-      exact refines_modifyAt _ l.path old new _ _ hmod hx (by simp [Val.appendAll]) (refines_push E es vs hvs)
-    obtain ⟨x', hx', _, hs⟩ := hRef [] old (get_nil _)
-    rw [get_nil] at hx'; cases hx'
-    obtain ⟨es1, hes1, _⟩ := hs es0 hes0
-    exact held_of_elems _ _ (by simp [hes1])
+    cases hp : l.path with
+    | nil =>
+      rw [hp, Val.modifyAt?] at hmod
+      rw [hp, get_nil] at hx; cases hx
+      rw [hy] at hmod; cases hmod
+      cases old <;> simp [Val.appendAll] at hy
+      cases hy
+      trivial
+    | cons i q =>
+      rw [hp] at hmod
+      exact modifyAt_cons_held _ _ _ _ _ _ hmod
   · have : s.roots[r]? = some v := by
       rw [hroots] at hv
       simpa [Std.HashMap.getElem?_insert, Std.HashMap.getElem?_erase, Ne.symm hrr] using hv
@@ -822,22 +922,9 @@ theorem liveRefs_write (s s' : Store) (l : Loc) (v : Val) (T : Ty) (hT : T.flat 
       rw [hwn, ← hmod]
       exact flat_held _ T _ hv
     | cons i q =>
-      rw [hp] at hx
-      have hel := get_cons_elems old x i q hx
-      obtain ⟨es0, hes0⟩ := Option.isSome_iff_exists.1 hel
-      have hyv : y = v := by simpa using hy.symm
-      have hRef : Refines old new := by
-        obtain ⟨x1, hx1, hT1⟩ := hl
-        obtain ⟨old1, ho1, hg1⟩ := (read_ok_iff _ _ _).1 hx1
-        rw [ho] at ho1; cases ho1
-        rw [hp, hx] at hg1; cases hg1
-        rw [hp] at hmod
-        exact refines_modifyAt _ _ old new _ _ hmod hx hy (by rw [hyv]; exact flat_refines T hT _ _ hT1 hv)
-      obtain ⟨x', hx', _, hs⟩ := hRef [] old (get_nil _)
-      rw [get_nil] at hx'; cases hx'
-      obtain ⟨es1, hes1, _⟩ := hs es0 hes0
       rw [hwn]
-      exact held_of_elems _ _ (by simp [hes1])
+      rw [hp] at hmod
+      exact modifyAt_cons_held _ _ _ _ _ _ hmod
   · have h2 : s.roots[r]? = some w := by
       rw [hroots] at hw
       simpa [Std.HashMap.getElem?_insert, Std.HashMap.getElem?_erase, Ne.symm hrr] using hw
