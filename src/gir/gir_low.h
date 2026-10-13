@@ -404,7 +404,7 @@ private:
 
     bool HasAggregateParams(int block) const {
         for (auto &param : hf->blocks[block].params)
-            if (IsAggregate(param.second)) return true;
+            if (IsAggregate(param.second) || IsOwnerRun(param.second)) return true;
         return false;
     }
 

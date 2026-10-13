@@ -1020,6 +1020,94 @@ void LowPreservesOwnerLiteralRunsAcrossJoins() {
     assert(hasLengthOne && hasLengthTwo);
 }
 
+GirModule ShrinkReplaceRunThroughSameTargetCondBr(bool selectShort) {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = i64;
+    auto ownerTy = m.Intern(owner);
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+    Main(m).slots = { { ownerTy, CoreVarKind::Var, 0, 0 } };
+    Main(m).summary.unknown = true;
+
+    auto empty = Def(GirOp::Arr, 0);
+    empty.ty = ownerTy;
+    auto init = Init(0, 0);
+    auto slot = Def(GirOp::Slot, 1);
+    slot.idx = 0;
+    slot.ty = refTy;
+    GirInst clear;
+    clear.op = GirOp::Clear;
+    clear.a = 1;
+    clear.org = 0;
+    auto condition = Def(GirOp::Bool, 2);
+    condition.flag = selectShort;
+    auto first = Int(m, 3, "40");
+    auto shortRun = Def(GirOp::Arr, 4);
+    shortRun.ty = ownerTy;
+    shortRun.vals = { 3 };
+    auto second = Int(m, 5, "50");
+    auto third = Int(m, 6, "60");
+    auto longRun = Def(GirOp::Arr, 7);
+    longRun.ty = ownerTy;
+    longRun.vals = { 5, 6 };
+    GirInst branch;
+    branch.op = GirOp::CondBr;
+    branch.a = 2;
+    branch.idx = 1;
+    branch.idx2 = 1;
+    branch.vals = { 4 };
+    branch.vals2 = { 7 };
+    Main(m).blocks[0].insts = {
+        Enter(0), empty, init, slot, clear, condition, first, shortRun,
+        second, third, longRun, branch,
+    };
+
+    GirBlock join;
+    join.params = { { 8, ownerTy } };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 1;
+    replace.b = 8;
+    replace.org = 0;
+    GirInst length = Def(GirOp::ArrayLen, 9);
+    length.a = 1;
+    GirInst snapshot = Def(GirOp::Snap, 10);
+    snapshot.a = 1;
+    snapshot.snap = GirSnapshotMode::Owner;
+    auto zero = Int(m, 11, "0");
+    GirInst firstElement = Def(GirOp::Index, 12);
+    firstElement.a = 10;
+    firstElement.b = 11;
+    firstElement.org = 0;
+    GirInst load = Def(GirOp::Load, 13);
+    load.a = 12;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, "", 9 }, { true, " ", 0 }, { false, "", 13 } };
+    print.org = 0;
+    join.insts = { replace, length, snapshot, zero, firstElement, load, print, Leave(0), Ret() };
+    Main(m).blocks.push_back(join);
+    return m;
+}
+
+void LowSplitsSameTargetCondBrForOwnerRuns() {
+    for (auto selectShort : { false, true }) {
+        auto high = ShrinkReplaceRunThroughSameTargetCondBr(selectShort);
+        assert(Code(high) == "");
+        auto low = GirToLow(high).Lower();
+        assert(!GirVerifier(low).Verify());
+        bool routedThroughDistinctEdges = false;
+        for (auto &block : low.funcs[0].blocks)
+            for (auto &inst : block.insts)
+                if (inst.op == GirOp::CondBr && inst.idx != inst.idx2)
+                    routedThroughDistinctEdges = true;
+        assert(routedThroughDistinctEdges);
+    }
+}
+
 void RejectsUnresolvedLayout() {
     auto m = LowBase();
     GirFunc f = Main(m);
@@ -2896,6 +2984,7 @@ int main() {
     PassedOwnerPairsKeepTheirExactIdentity();
     RejectsReplacementThroughALetOwnerPhi();
     LowPreservesOwnerLiteralRunsAcrossJoins();
+    LowSplitsSameTargetCondBrForOwnerRuns();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
