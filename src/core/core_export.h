@@ -42,6 +42,12 @@ public:
         FindReachable(ctxspecs);
         auto implementationscomplete = true;
         for (size_t k = 0; k < ctxspecs.size(); k++) {
+            // Reachability records extern functions as unsupported, but they
+            // have no body to build. Keep the remaining contexts reportable.
+            if (reportonly && !ctxspecs[k]->body) {
+                implementationscomplete = false;
+                continue;
+            }
             try {
                 BuildImpl((int)k);
             } catch (CoreUnsupported &u) {
@@ -79,6 +85,7 @@ private:
     string entrydir;
     CoreModule mod;
     bool reportonly;
+    bool exportingstdlibglobal = false;
     set<string> unsupported;
 
     unordered_map<const VarDef *, int> globalindex;
@@ -248,7 +255,9 @@ private:
     }
 
     CoreTypeId Ty(TypeExpr *t) {
-        if (!reportonly) return TyChecked(t);
+        // Unsupported stdlib globals are skipped at the global boundary in
+        // normal export. Let that boundary see the failure in report mode too.
+        if (!reportonly || exportingstdlibglobal) return TyChecked(t);
         try {
             return TyChecked(t);
         } catch (CoreUnsupported &u) {
@@ -440,6 +449,8 @@ private:
             auto stdlib = g->line.fileidx >= 0 && g->line.fileidx < (int)ast.filepkg.size() &&
                           ast.packages[ast.filepkg[g->line.fileidx]].stdlib;
             auto nctx = ctxspecs.size();
+            auto wasexportingstdlibglobal = exportingstdlibglobal;
+            exportingstdlibglobal = stdlib;
             try {
                 ExportGlobal(g);
             } catch (CoreUnsupported &u) {
@@ -457,6 +468,7 @@ private:
                     for (auto v : g->defs) if (v && v->type) (void)Ty(v->type);
                 if (reportonly && !stdlib && !g->inits.empty()) ProbeChildren(g->inits[0]);
             }
+            exportingstdlibglobal = wasexportingstdlibglobal;
         }
     }
 

@@ -83,7 +83,14 @@ ABORT_KINDS = frozenset(DIAGNOSTICS) | {"user_abort"}
 TOOL_EXIT = {"done": 0, "timeout": 3, "fault": 4, "malformed": 2, "rejected": 5}
 
 UNSUPPORTED_PATTERN = re.compile(r"unsupported in core-pilot: (\S+)")
-FEATURE_REPORT_EXPECTATIONS = {"core/core_export_report": ("float", "struct")}
+FEATURE_REPORT_EXPECTATIONS = {
+    "core/core_export_report": ("float", "struct"),
+    "codegen/diverging_unreachable_values": ("adt", "extern-fn", "stored-reference", "struct",
+                                             "temporary-slice"),
+    "optimizer/basecase_reference_alias": (),
+    "semantics/sem_core_report_extern": ("extern-fn",),
+    "semantics/sem_core_report_import_std": (),
+}
 LOCATION_PATTERN = re.compile(r"\.goose:(\d+)\)\s*$")
 
 
