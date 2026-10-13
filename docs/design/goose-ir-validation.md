@@ -1,7 +1,7 @@
 # Goose semantics, GIR and build scalability: proof, conformance and qualification plan
 
 **Revision:** 0.2, 2026-10-12.
-**Status:** required work; no result or proof is asserted here except the checks listed in §1.
+**Status:** qualification plan. Items below are targets unless explicitly identified as recorded checks or results; this document does not claim campaign gates complete.
 **Baseline:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`.
 **Companions:** [campaign](goose-ir-campaign.md), [specification](goose-ir-spec.md).
 
@@ -144,7 +144,7 @@ A timeout, a killed process, a truncated log, a missing backend or an unsupporte
 
 ## 6. Semantic fixture matrix
 
-Each row is a family: a positive case, a boundary case, and a case that a wrong implementation fails. Fixtures live in `test/semantics/` as ordinary runnable fixtures with expected output, so the existing runner also checks them on the legacy pipeline in every configuration.
+Each row is a family: a positive case, a boundary case, and a case that a wrong implementation fails. Fixtures live in `test/semantics/` as ordinary runnable fixtures with expected output, so `test/run_tests.py` discovers them with the other `test/*/*.goose` fixtures and checks them on the legacy pipeline in its selected configuration. The semantic runner's direct fixture discovery is narrower: it reads `test/semantics/*.goose` and `test/semantics/golden/*.goose`; its current `--profile` option is `core-pilot`. `--corpus` instead selects positive fixtures from the main runner and samples, subject to the skips documented in `discover_corpus`. `--pipeline gir` adds GIR execution for the selected cases. Lean decoders and check modules accept `core-shrink`, but the corpus runner does not select that profile; C++ support currently covers the flat-struct slice, while GIR/native shrink operations remain pending.
 
 | ID | Profile | Scenario | Observation |
 |---|---|---|---|
@@ -208,9 +208,9 @@ The [S8 shrink contract](goose-ir-spec.md#126-shrink-operations-in-core-shrink) 
 
 `TH-CORE-01`, `TH-MEM-01`, `TH-MEM-02`, `TH-SAFE-01` and `TH-LOWER-03` must name the completed `core-shrink` definitions before `G-SHRINK` is reached. A pilot-only theorem does not discharge shrink obligations. State validator-derived per-point demand metadata, retained operand/run validity, limited high-water bounds and unknown/recursive summary closure as explicit invariants in the canonical evaluation step specifications and their exported theorem. Dead reference bits can remain stored; an all-stored-references or all-visible-variables invariant cannot substitute for the demand-aware one. The GIR verifier's structural acceptance alone does not prove lifetime safety: a standalone forged live-alias module is a negative control for any stronger claim. The Core-to-GIR theorem supplies that invariant for validated source artifacts.
 
-Generated corpus: the existing lanes of `fuzz/driver.py`, extended with the Lean tool and the `gir` pipeline as additional stages. `scalar`, `numeric`, `order` and the pilot-compatible `trap` kinds belong to `core-pilot`; `resize`, `reference` and the remaining `trap` kinds to `core-shrink`. No new generator is written.
+Generated corpus target: the existing lanes of `fuzz/driver.py`, extended with the Lean tool and the `gir` pipeline as additional stages. `scalar`, `numeric`, `order` and the pilot-compatible `trap` kinds target `core-pilot`; `resize`, `reference` and the remaining `trap` kinds target `core-shrink`. The current semantic runner exposes only `core-pilot`; `core-shrink` acceptance by Lean decoders/check modules does not mean these lanes are currently selected. C++ flat-struct support is integrated, while C++ source export and GIR/native execution for shrink operations remain pending. No new generator is required.
 
-`STR-01`–`STR-08` qualify the first flat-struct slice defined by [the struct encoding contract](goose-ir-spec.md#124-flat-fixed-structs-in-goose-core02-core-shrink) and [its GIR-H lowering](goose-ir-spec.md#125-flat-fixed-structs-in-gir-h03-core-shrink). They are planned checks, not results. The first end-to-end fixture is:
+The C++ Core/GIR/native path and Lean models implement the flat fixed-struct slice defined by [the struct encoding contract](goose-ir-spec.md#124-flat-fixed-structs-in-goose-core02-core-shrink) and [its GIR-H lowering](goose-ir-spec.md#125-flat-fixed-structs-in-gir-h03-core-shrink). Demand-aware safety proof and shrink operations through GIR/native remain pending. `STR-01`–`STR-08` are qualification requirements; the struct slice does not establish `G-SHRINK` or any other gate. The example below is a focused end-to-end fixture shape:
 
 ```goose
 struct Packed { tag: u8, value: i64, const stamp: i16 }
@@ -222,7 +222,7 @@ fn main() {
 }
 ```
 
-Expected output is `1 42 7\n` in both numeric profiles. Check this fixture through source export, Lean Core validation/evaluation, GIR-H validation/evaluation, and GIR-L/native execution; compare it with the legacy backend. Run alignment sanitization on its generated C. Add separate minimal malformed/permission cases for `STR-03`, `STR-04` and `STR-06` so their failure reaches the intended layer. Flat structs alone satisfy none of `MEM-04`–`MEM-07` and do not reach `G-SHRINK`.
+Expected output is `1 42 7\n` in both numeric profiles. Check the fixture through source export, Lean Core validation/evaluation, GIR-H validation/evaluation, and GIR-L/native execution; compare it with the legacy backend. Run alignment sanitization on its generated C. Keep separate minimal malformed/permission cases for `STR-03`, `STR-04` and `STR-06` so their failure reaches the intended layer. Flat structs alone satisfy none of `MEM-04`–`MEM-07` and do not reach `G-SHRINK`.
 
 A disagreement between the Lean model and the legacy compiler is resolved by the campaign's decision O2 and recorded in `semantics/decisions.md` with a minimized reproducer. Expected outputs are never regenerated to resolve one.
 

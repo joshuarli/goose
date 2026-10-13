@@ -1,7 +1,7 @@
 # Goose IR specification
 
-**Revision:** GIR 0.2, 2026-10-12.
-**Status:** design contract for the [campaign](goose-ir-campaign.md); nothing here is implemented.
+**Schemas:** Goose Core 0.2, GIR-H 0.3, GIR-L 0.2. **Revision date:** 2026-10-12.
+**Status:** Design contract for the [campaign](goose-ir-campaign.md). The C++ compiler implements `core-pilot` and the flat fixed-struct slice of `core-shrink` through Core, GIR-H and native execution. The Lean Core model also implements shrink-owner semantics, but its demand-aware safety proof and GIR/native shrink support remain pending. Broader shrink and construction contracts are prospective, and this specification does not claim their gates have passed.
 **Baseline:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`.
 **Companion:** [proof, conformance and qualification plan](goose-ir-validation.md).
 
@@ -34,6 +34,8 @@ A profile is an implementation-support boundary, not a source dialect. An artifa
 | `core-pilot` | Integer types `i8`..`u64`, `bool`; `let`/`var` locals and scalar globals; fixed arrays `T[k]` of flat fixed elements; grow-only `T[>..]` of flat fixed elements with `push`, `append`, `.len`; references `T&`/`const T&` including `.=` rebinding; slices; indexing and slicing; `if`, blocks, `while`, `for` over ranges and arrays; direct calls including recursion; nested functions with free variables; `print` of integers, booleans and string literals; `assert`, `abort`, `exit`. |
 | `core-shrink` | Grow-shrink `T[>..<]`; limited `T[..k]`; `pop`, `pop_n`, `resize`, `clear`, whole assignment of a resizable; flat fixed structs. |
 | `core-construction` | Variable arrays `T[]` and string values; grow-only arrays of variable elements; nonfixed by-value parameters and results built in the receiver's storage; `copy`; named results; `return … from`. |
+
+The current implementation boundary is narrower than the full profile definitions above. Core 0.2, GIR-H 0.3 and GIR-L support the bounded flat fixed-struct slice with scalar fields as specified in §§12.4–12.5. The Lean Core model also implements shrink-owner semantics, while the demand-aware safety proof and GIR/native shrink path remain pending. Other `core-shrink` operations and all of `core-construction` remain prospective contracts.
 
 Excluded from all three, each with its own feature id: references or slices stored in fields or elements (`stored-reference`), optionals, ADTs, relative references, pools and `reusable`, `varint`, floats, elementwise arithmetic, generics beyond what specialization already resolved, function values, threads, `extern fn`, serialization, declarations without initializers, temporaries viewed as slices, zero-size values.
 
@@ -752,7 +754,7 @@ Every check of §8 is a compare and a conditional branch to a block that ends in
 
 ### 12.4 Flat fixed structs in goose-core/0.2, core-shrink
 
-This is the contract for the first `S8` extension, not an implemented profile or a reached gate. It adds flat fixed structs to `core-shrink`; the shrink operations require subsequent slices. The `core-pilot` module still has exactly nine fields after its tag, has no struct table, and accepts none of the tags added here. Its writer's numbering, tags and bytes are unchanged. A reader selects the module shape from the schema and profile strings before decoding its tables; it does not try both arities. All lexical limits of §12.1 apply.
+This is the integrated first `S8` extension: flat fixed structs are supported through C++ Core export, GIR-H, GIR-L and native execution. This slice does not include the owner shrink operations in §12.6 or establish `G-SHRINK`. The `core-pilot` module still has exactly nine fields after its tag, has no struct table, and accepts none of the tags added here. Its writer's numbering, tags and bytes are unchanged. A reader selects the module shape from the schema and profile strings before decoding its tables; it does not try both arities. All lexical limits of §12.1 apply.
 
 #### Module and nominal identity
 
@@ -813,7 +815,7 @@ The C emitter must support unaligned packed scalar accesses. A low `PLoad` or `P
 
 ### 12.6 Shrink operations in core-shrink
 
-This is the remaining S8 contract, required before its implementation and qualification. It extends §12.4–§12.5 at schemas `goose-core/0.2`, `gir-h/0.3` and `gir-l/0.2`. A schema/profile pair selects one shape; no decoder tries alternate arities. `core-pilot` retains every tag, module/summary arity, numbering and byte choice in §12.1–§12.3. The `core-shrink` Core module has ten fields after its tag and GIR-H has nine, including the mandatory struct table even when empty. Flat-struct types, descriptors and field operations retain §12.4–§12.5's shapes. The completed shrink profile changes its summary and `e_push` shapes as specified below; a pre-shrink flat-struct artifact using their pilot shapes is malformed under this contract.
+The Lean Core model implements the shrink-owner semantics in this contract, including the follow-up permission and transitive-effect checks. The demand-aware safety proof and GIR/native shrink support remain pending, and no gate is claimed complete. This contract extends §§12.4–12.5 at schemas `goose-core/0.2`, `gir-h/0.3` and `gir-l/0.2`. A schema/profile pair selects one shape; no decoder tries alternate arities. `core-pilot` retains every tag, module/summary arity, numbering and byte choice in §§12.1–12.3. The `core-shrink` Core module has ten fields after its tag and GIR-H has nine, including the mandatory struct table even when empty. Flat-struct types, descriptors and field operations retain §§12.4–12.5's shapes. The completed shrink profile changes its summary and `e_push` shapes as specified below; a pre-shrink flat-struct artifact using their pilot shapes is malformed under this contract.
 
 #### Supported types, storage and source boundary
 
@@ -839,7 +841,7 @@ The exporter rejects the following source forms before publishing any Core/GIR a
 | Reference/slice/nonfixed/limited element types of a new owner | `nonflat-element` |
 | `.index_of`/`index_of(owner,ref)` | `builtin-call` |
 
-A fresh owner initializer is `e_arr` of its exact owner type, possibly chosen by `e_if` or `e_block`; each leaf is a literal run of flat fixed elements. A `limited` leaf has at most its capacity elements (`V-TYPE` rejects a forged larger literal). `e_fill` remains the fixed-array form; an owner fill literal `[value;count]` is `unsupported: owner-fill-literal` until a count-bearing owner-run form is specified. Repeating the expression in `e_arr` would violate evaluation-once, and global initializers have no local-variable table for a synthesized fill temporary. Empty owner literals are legal. An owner cannot be read as a first-class value by `e_read`/`i_load`; an owner-valued literal run is transient, usable only by initialization or the whole-resizable replacement below. No destination capability or first-class owner copy is added.
+A fresh owner initializer is `e_arr` of its exact owner type, possibly chosen by `e_if` or `e_block`; each leaf is a literal run of flat fixed elements. A `limited` leaf has at most its capacity elements (`V-TYPE` rejects a forged larger literal). `e_fill` remains the fixed-array form; an owner fill literal `[value;count]` is `unsupported: owner-fill-literal` until a count-bearing owner-run form is specified. Repeating the expression in `e_arr` would violate evaluation-once, and global initializers have no local-variable table for a synthesized fill temporary. Empty owner literals are legal. A direct `s_expr(e_arr …)` may evaluate a fresh owner literal run and discard it. Otherwise an owner cannot be read as a first-class value by `e_read`/`i_load`: the transient run cannot escape, initialize any other destination, or be stored or copied. Its only storage consumers are owner initialization and the whole-resizable replacement below. No destination capability or first-class owner copy is added.
 
 `e_push` in `core-shrink` has fields `Place`, `Expr`, `org` (arity 3); its pilot form has arity 2. Resolve the owner, evaluate the element once, then read the current length and, for a limited owner, check capacity before any receiver write. It returns `ref mut E` to the written slot. This origin supplies a limited-capacity abort's source location. `s_append` keeps fields `Place`, `View`, `org` (arity 3), extending its owner type to the three supported kinds. Its source run is sampled and copied before receiver writes; the limited capacity check uses the receiver length after source evaluation and precedes every receiver write. A self-append keeps its sampled source intact. All count/size arithmetic used for checks is mathematical, with checked physical byte-size arithmetic at placement.
 
