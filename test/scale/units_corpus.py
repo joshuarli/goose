@@ -189,8 +189,12 @@ class Corpus:
                 return "FAIL", f"emit {what}: {(out + err)[-300:]}"
             units = sorted((d / "units").glob("*.c"))
             exe = d / ("prog" + tc.EXE_SUFFIX)
+            # A program with C of its own has its runtime in its native-support
+            # unit and links no runtime object.
+            native = (d / "units" / "native.c").exists()
             ok, log = self.cc.compile(units, exe, opt=opt, defines=defines, strict_decls=True,
-                                      runtime=self.runtime, extra=[f"-I{d / 'units'}"],
+                                      runtime=None if native else self.runtime,
+                                      extra=[f"-I{d / 'units'}"],
                                       log=d / "cc.log")
             if not ok:
                 return "FAIL", f"cc {what}: " + "\n".join(log.splitlines()[:6])

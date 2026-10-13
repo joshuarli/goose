@@ -409,15 +409,13 @@ public:
             if (!path.empty() && path[0] != '/') path = cat(in.store.Tmp(), "/", path);
             u.rec.headers.push_back({ path, UnitFileDigest(path) });
         }
-        // The runtime header is always read; MSVC gives no dependency file.
-        auto header = in.store.Units() + "/goose_runtime.h";
-        auto has = false;
-        for (auto &[p, d] : u.rec.headers) has = has || p == header;
-        if (!has) u.rec.headers.push_back({ header, UnitFileDigest(header) });
-        for (auto &h : in.include_headers) {
-            auto h2 = false;
-            for (auto &[p, d] : u.rec.headers) h2 = h2 || p == h;
-            if (!h2) u.rec.headers.push_back({ h, UnitFileDigest(h) });
+        // Without a dependency file (MSVC gives none), the headers the build
+        // knows of: the runtime's, and the program's own. Where there is one it
+        // is the compiler's own account, which names each unit's headers only.
+        if (u.rec.headers.empty()) {
+            auto header = in.store.Units() + "/goose_runtime.h";
+            u.rec.headers.push_back({ header, UnitFileDigest(header) });
+            for (auto &h : in.include_headers) u.rec.headers.push_back({ h, UnitFileDigest(h) });
         }
         auto obj = cat(in.store.Obj(), "/", u.objbase, in.tc->style == "msvc" ? ".obj" : ".o");
         std::error_code ec;
