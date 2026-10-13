@@ -17,6 +17,7 @@ propose	mutual_pair.core.json	3	merged
 propose	mergeable_callee.core.json	3	merged
 propose	distinct_callees.core.json	5	unchanged
 propose	differ_one_operation.core.json	3	unchanged
+propose	content_roots.core.json	2	unchanged
 check	../golden/first.core.json	../golden/first.core.json	0	["ok",3]
 check	differ_one_operation.core.json	differ_one_operation.forged.json	5	["rejected","a shared implementation is not equal to the unshared implementation, kept or with its callees renamed"]
 check	mergeable_callee.core.json	forged_merged_body.json	5	["rejected","a shared implementation is not equal to the unshared implementation, kept or with its callees renamed"]
