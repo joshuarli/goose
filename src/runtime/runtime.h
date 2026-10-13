@@ -55,7 +55,7 @@
 #define GS_NEED_THREADS 0
 #endif
 #ifndef GS_DEBUG
-#define GS_DEBUG 0          /* 1: overflow, `as` range, and tag checks. */
+#define GS_DEBUG 0          /* 1: overflow, `as` range, and tag checks (§9.3). */
 #endif
 
 /* Configuration; all overridable from the compile command line. */
@@ -72,8 +72,8 @@
 #define GS_STACK_GAP (1ull << 20)   /* Unmapped tail so runaway growth aborts. */
 #endif
 /* The address space the program means to spend on data stack regions over
-   every thread program at once, which is what caps hardware_threads():
-   the regions it holds, less the main program's, divided by a
+   every thread program at once, which is what caps hardware_threads()
+   (§11.2): the regions it holds, less the main program's, divided by a
    worker's. Not enforced at reservation; what the platform refuses is
    retried smaller (gs_reserve_region). */
 #ifndef GS_STACK_BUDGET
@@ -82,7 +82,7 @@
 #ifndef GS_STACK_STATS
 #define GS_STACK_STATS 0    /* 1: each thread program reports its stack use as it ends. */
 #endif
-/* The runtime caps a stack reservation at 2^48 bytes, which is what lets the
+/* §10.4 caps a stack reservation at 2^48 bytes, which is what lets the
    compiler treat every size, count and index as fitting in 48 bits: the
    guard region enforces it, so no growth path needs its own check. */
 #if GS_STACK_RESERVE > (1ull << 48)
@@ -130,7 +130,7 @@
 #endif
 
 /* ---------------------------------------------------------------------------
-   Aborts. Not catchable; message + nonzero exit. Compiler-emitted
+   Aborts (§9.3). Not catchable; message + nonzero exit. Compiler-emitted
    checks carry an error id plus a file (a static string in the generated
    code) and line; runtime-internal failures use gs_panic. The int64_t
    returns let checks sit inside expressions. */
@@ -156,7 +156,7 @@ enum {
 
 GS_API GS_NORETURN void gs_panic(const char *msg);
 GS_API GS_NORETURN void gs_abort(int err, const char *file, int line);
-/* The program's own abort(msg): the message is Goose bytes, not a C
+/* The program's own abort(msg) (§9.3): the message is Goose bytes, not a C
    string, so it goes out with an explicit length. */
 GS_API GS_NORETURN void gs_abort_msg(const uint8_t *msg, int64_t len, const char *file,
                                      int line);
@@ -197,7 +197,7 @@ GS_API GS_NORETURN void gs_asfail_f(const char *why, double d, int f32, const ch
 #define GS_UNREACHABLE(f, l) ((void)0)
 #endif
 
-/* simd functions: the compiler writes each one's body once per
+/* simd functions (§7.12): the compiler writes each one's body once per
    instruction-set level, the baseline under the function's name, and the
    baseline calls the highest version the CPU supports. GS_SIMD is the
    highest level built: 0 just the baseline, 1 adds an AVX2 version (with
@@ -353,7 +353,7 @@ static int gs_memeq(const void *a, const void *b, size_t n) {
 }
 
 /* ---------------------------------------------------------------------------
-   Integer semantics: every operation runs at its operands' type. The
+   Integer semantics (§6.2): every operation runs at its operands' type. The
    operations compute wide (so wrap is defined in C), truncate back, and — when
    the generated C is compiled with -DGS_DEBUG=1 — abort when the wide result
    does not fit the type. Shifts mask their count to the width; division is
@@ -433,7 +433,7 @@ static T gs_shl_##SFX(T a, int64_t n) { \
 static T gs_shr_##SFX(T a, int64_t n) { \
     return (T)((int64_t)a >> (n & (BITS - 1))); }
 
-/* Unsigned types wrap modulo 2^width by definition in every build:
+/* Unsigned types wrap modulo 2^width by definition (§6.2) in every build:
    plain C unsigned arithmetic, truncated back to the width. */
 #define GS_INTOPS_U(SFX, T, MAX, BITS) \
 static T gs_add_##SFX(T a, T b) { return (T)(a + b); } \
@@ -644,7 +644,7 @@ static uint64_t gs_divu_q(uint64_t x, uint64_t magic, uint8_t more) {
 #endif
 }
 
-/* `as!` float-to-int: truncate toward zero, wrap modulo 2^64. Defined
+/* `as!` float-to-int: truncate toward zero, wrap modulo 2^64 (§6.3). Defined
    the same on every platform, unlike a raw C cast of an out-of-range value.
    A value lies in the i64 range exactly when its truncation does, and there
    the C cast truncates by itself (one hardware conversion, where trunc() is
@@ -661,7 +661,7 @@ static int64_t gs_f2iwrap(double d) {
     return gs_f2iwrap_slow(d);
 }
 
-/* `as` conversion checks: abort in debug builds whenever the
+/* `as` conversion checks (§6.3): abort in debug builds whenever the
    conversion would change the value, naming the value, the target type and
    the cast's file and line; identity/plain casts in release, which drop all
    three unevaluated. A conversion to a float is a plain C cast in every build
@@ -711,7 +711,7 @@ static uint64_t gs_f2uchk(double d, int f32, const char *file, int line) {
 #endif
 
 /* ---------------------------------------------------------------------------
-   Data stacks: large reserved regions, committed on
+   Data stacks (§1.2, Appendix C.1/C.4): large reserved regions, committed on
    use, bump-pointer allocation, watermark restore on scope exit. Emitted code
    holds them per thread program via gs_stks (index = the hidden gs_sp
    argument plus a per-function constant); globals own dedicated stacks. The
@@ -739,7 +739,7 @@ GS_API void gs_stack_stats(int64_t stacks);
 GS_API void gs_release_regions(void);
 
 /* ---------------------------------------------------------------------------
-   Threads and typed queues, runtime_threads.h. */
+   Threads and typed queues (§11.2), runtime_threads.h. */
 
 GS_API int64_t gs_hardware_threads(void);
 /* Runs run(entry, args) on a new thread, args a copy of argsize bytes, and
@@ -775,10 +775,10 @@ GS_API gs_qnode *gs_qpoll(gs_queue *q);
 static GS_TLS gs_stack *gs_stks;
 static GS_TLS int64_t gs_nstks;
 
-/* The current program instance's globals, a struct the
+/* The current program instance's globals (goose_spec.md 11.1), a struct the
    compiler lays out: main's is its one static instance, a worker's a fresh
    copy of the globals its program uses, taken from the spawning instance
-   at spawn like the arguments. No global is shared between program
+   at spawn like the arguments (11.2). No global is shared between program
    instances; the only C statics a program shares are read-only ones. */
 static GS_TLS void *gs_gl;
 
@@ -843,7 +843,7 @@ static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64
 #endif  /* GS_RUNTIME_OBJECT */
 
 /* ---------------------------------------------------------------------------
-   Slice pools (`reusable[]`). A pool's freelist is a tree of its free
+   Slice pools (§5.4, `reusable[]`). A pool's freelist is a tree of its free
    (index, count) spans, kept on a data stack of its own in nodes of
    GS_SPAN_NODE bytes (runtime_impl.h). The emitted code grows the element
    region and fills elements; these only keep the spans, and each takes the
@@ -866,7 +866,7 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
 GS_API void gs_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx, int64_t cnt);
 
 /* ---------------------------------------------------------------------------
-   varint: ULEB128; struct/payload/offset values additionally zigzag. */
+   varint (§3.6): ULEB128; struct/payload/offset values additionally zigzag. */
 
 static int64_t gs_uleb_read(const uint8_t *p) {
     uint64_t v = 0;
@@ -926,7 +926,7 @@ static int64_t gs_zig_write(uint8_t *p, int64_t v) {
 }
 
 /* ---------------------------------------------------------------------------
-   Verified loading: what the generated
+   Verified loading (docs/design/serialization.md): what the generated
    gs_verify_<T> walkers are built from. The bytes are untrusted until the
    walk finishes, so every read here is bounded by the image end and reports
    a malformed encoding instead of running past it. */
@@ -954,7 +954,7 @@ static int64_t gs_uleb_check(const uint8_t *p, const uint8_t *end, uint64_t *out
 }
 
 /* The same for a signed (zigzag) varint: a value field or a self-relative
-   offset of varint width. */
+   offset of varint width (3.6). */
 static int64_t gs_zig_check(const uint8_t *p, const uint8_t *end, int64_t *out) {
     uint64_t u = 0;
     int64_t k = gs_uleb_check(p, end, &u);
@@ -972,7 +972,7 @@ static int64_t gs_zig_check(const uint8_t *p, const uint8_t *end, int64_t *out) 
 #define GS_BM_GET(bm, i) (((bm)[(uint64_t)(i) >> 3] >> ((i) & 7)) & 1)
 #define GS_BM_MAX ((int64_t)(GS_STACK_RESERVE))
 
-/* An image is little-endian by definition, which every
+/* An image is little-endian by definition (serialization.md 7), which every
    target this compiles for is. The test is a constant to any optimizer; it is
    here so that a big-endian host fails loudly instead of writing bytes that
    only it can read back. */
@@ -982,7 +982,7 @@ static int gs_is_le(void) {
 }
 
 /* ---------------------------------------------------------------------------
-   Text forms: the gs_fmt_* functions write a value's text at dst and
+   Text forms (§3.7): the gs_fmt_* functions write a value's text at dst and
    return the byte count (at most GS_FMT_MAX); print/str/format are built on
    them. A float takes the shortest form that still round-trips. */
 
@@ -996,7 +996,7 @@ GS_API int64_t gs_fmt_bool(uint8_t *dst, int64_t v);
 /* A u8 array inside an aggregate: quoted, with the escapes Goose reads. */
 GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 
-/* print(...): each argument's text, then a newline. */
+/* print(...) (§3.7): each argument's text, then a newline. */
 GS_API void gs_out_int(int64_t v);
 GS_API void gs_out_uint(uint64_t v);
 GS_API void gs_out_flt(double v);

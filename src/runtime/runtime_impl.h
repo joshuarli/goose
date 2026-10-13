@@ -489,7 +489,7 @@ GS_API uint8_t *gs_reserve_region(void) {
 }
 
 /* ---------------------------------------------------------------------------
-   Slice pools (`reusable[]`). The freelist holds the free (index,
+   Slice pools (§5.4, `reusable[]`). The freelist holds the free (index,
    count) spans, no two of them touching, in a B+ tree ordered by index:
    leaves hold spans, and every inner entry holds the first index and the
    largest count in the subtree under it, which is what lets first fit, the
@@ -900,9 +900,9 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
 }
 
 /* ---------------------------------------------------------------------------
-   Byte search: std's find_any and find_pair. A set arrives
+   Byte search: std's find_any and find_pair (docs/stdlib.md). A set arrives
    as std's ByteSet, made by its byte_set, which gs_byteset lays out as the
-   Goose struct is (packed, in declaration order). `members` is
+   Goose struct is (spec C.2: packed, in declaration order). `members` is
    the set. `kind` says how a block of bytes is tested for it: by comparing
    with 1 to 3 of `bytes` (kinds 1-3), or as the range bytes[0] .. bytes[0] +
    bytes[1] (kind 4), both complemented where `invert` is set; kind 0 is the
@@ -1177,7 +1177,7 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
 }
 
 /* ---------------------------------------------------------------------------
-   Text forms. */
+   Text forms (§3.7). */
 
 /* Integers are written by a digit loop rather than printf, whose locale
    handling and format parsing cost several times the conversion itself:
