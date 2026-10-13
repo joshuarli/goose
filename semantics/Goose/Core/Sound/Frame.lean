@@ -9,6 +9,11 @@ the body runs.
 namespace Goose.Core.Sound
 open Goose.Core Goose.Proofs.Memory
 
+/-- Pilot evaluation preserves existing locations and sampled runs because
+its accepted operations write and grow without removing elements. -/
+def PilotStoreLe (m : Module) (s s' : St) : Prop :=
+  m.profile = .pilot → StoreLe s.store s'.store
+
 /-- What is fixed while one function body, or one global initializer, runs:
 how many globals are initialized, which roots each parameter's argument may
 point into, the effects the body is allowed, and a scope instance below which

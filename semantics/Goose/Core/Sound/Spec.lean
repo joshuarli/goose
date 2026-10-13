@@ -249,7 +249,8 @@ def ExprSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ec.retained ∧ HasTy m W.G s'.store v ty ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r)
 
 def BlockValueSpec (n : Nat) : Prop :=
@@ -268,7 +269,8 @@ def BlockValueSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ec.retained ∧ HasTy m W.G s'.store v ty ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r)
 
 /-- An argument is typed as the validator types it at a call. -/
@@ -297,7 +299,8 @@ def ArgSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ac.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ac.retained ∧ HasTy m W.G s'.store v ty ∧
+      RetainsAliases m W env s.store s'.store ac.retained ∧
+      PilotStoreLe m s s' ∧ HasTy m W.G s'.store v ty ∧
       ∀ r, Targets v r → Gam env W.P rho r)
 
 def BoundSpec (n : Nat) : Prop :=
@@ -315,7 +318,8 @@ def BoundSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ec.retained)
+      RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s')
 
 def PlaceSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (p : Place)
@@ -333,6 +337,7 @@ def PlaceSpec (n : Nat) : Prop :=
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧
       PlaceOk m W.G W.P penv env s'.store p l t ∧
       Gam env W.P rho l.root)
 
@@ -351,7 +356,8 @@ def ViewSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ec.retained ∧ ViewOk s'.store vw el ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧ ViewOk s'.store vw el ∧
       Gam env W.P rho vw.loc.root)
 
 def CallSpec (n : Nat) : Prop :=
@@ -380,6 +386,7 @@ def CallSpec (n : Nat) : Prop :=
       CallTransition m G observation.roots observation.values
         (fun r => ∃ element, D r element) s s' ∧
       ObservedSafe m ⟨G, P, E, s.nextScope, D, A⟩ (root.mayShrink P) observation s'.store ∧
+      PilotStoreLe m s s' ∧
       OuterOk m G D A s' ∧
       ((impl.results.toList = [] ∧ v = .unit) ∨
         ∃ t, impl.results.toList = [t] ∧ HasTy m G s'.store v t) ∧
@@ -414,6 +421,7 @@ def BlockSpec (n : Nat) : Prop :=
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
       RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧
       match fl with
       | .normal v => HasTy m W.G s'.store v ty ∧ (∀ r, Targets v r → Gam env W.P rho r) ∧
           stmtsDiverge m.noReturn stmts = false
@@ -442,7 +450,8 @@ def StmtsSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (bc.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store bc.retained ∧ TopB env lo rst'.nextVar s' ∧
+      RetainsAliases m W env s.store s'.store bc.retained ∧
+      PilotStoreLe m s s' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
       | .normal v => v = .unit ∧ stmtsDiverge m.noReturn ss = false
       | .brk => tenv.loops ≠ 0 ∧ stmtsHaveBreak ss = true
@@ -466,7 +475,8 @@ def StmtSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ec.retained ∧ TSame tenv tenv' ∧ TopB env lo rst'.nextVar s' ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧ TSame tenv tenv' ∧ TopB env lo rst'.nextVar s' ∧
       match fl with
       | .normal _ => st.diverges m.noReturn = false
       | .brk => tenv.loops ≠ 0 ∧ st.hasBreak = true
@@ -498,7 +508,8 @@ def PrintArgSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ac.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ac.retained)
+      RetainsAliases m W env s.store s'.store ac.retained ∧
+      PilotStoreLe m s s')
 
 def WhileSpec (n : Nat) : Prop :=
   ∀ (path : List Nat) (c : Expr) (body : Block) (origin : OriginId)
@@ -517,7 +528,8 @@ def WhileSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ec.retained ∧ LoopFlow m W tenv penv s' fl ∧
+      RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl ∧
       (∀ v, fl = .normal v → c = .bool true → body.hasBreak = true))
 
 def RangeSpec (n : Nat) : Prop :=
@@ -539,7 +551,8 @@ def RangeSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ec.retained ∧ LoopFlow m W tenv penv s' fl)
+      RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl)
 
 /-- The source view identifies the checked loop occurrence; the runtime view
 carries its iteration cursor and the owner's current typing. -/
@@ -570,7 +583,8 @@ def EachSpec (n : Nat) : Prop :=
       PreservesRootTypes m W.G observation.roots s.store s'.store ∧
       PreservesValues m W.G observation.values s.store s'.store ∧
       ObservedSafe m W (ec.mayShrink W.P) observation s'.store ∧
-      RetainsAliases m W env s.store s'.store ec.retained ∧ LoopFlow m W tenv penv s' fl)
+      RetainsAliases m W env s.store s'.store ec.retained ∧
+      PilotStoreLe m s s' ∧ LoopFlow m W tenv penv s' fl)
 
 /-- Every evaluation function at fuel `n` meets its statement. -/
 structure Specs (n : Nat) : Prop where
