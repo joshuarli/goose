@@ -58,7 +58,8 @@ def stageRejections (m : Module) : List Rejection :=
     match r with
     | .error e => [e]
     | .ok _ => []
-  err (checkEntry m)
+  err (checkStructTables m)
+    ++ err (checkEntry m)
     ++ (List.range m.globals.size).flatMap (fun g =>
         match m.globals[g]? with
         | some gl => err (checkGlobal m g gl)
