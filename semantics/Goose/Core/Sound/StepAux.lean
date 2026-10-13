@@ -30,7 +30,18 @@ theorem Frame.of_eq {s' : St} {future : List VarId} (h : Frame m W tenv penv env
       intro x hx hf
       obtain ⟨lv, si, v, hvar, hlk, hty, hroot, hvalue⟩ := h.vis x hx hf
       exact ⟨lv, si, v, hvar, hlk, hty, by rw [h1]; exact hroot, by rw [h1]; exact hvalue⟩
+    bindings := by
+      intro x hx
+      obtain ⟨lv, si, v, hvar, hlk, hty, hroot, hshape⟩ := h.bindings x hx
+      exact ⟨lv, si, v, hvar, hlk, hty, by rw [h1]; exact hroot, hshape⟩
     rooted := by rw [h1]; exact h.rooted
+    storage := by
+      intro r T hstorage v hv
+      have hv' := hv
+      rw [h1] at hv'
+      have hloc := h.storage r T hstorage v hv'
+      rw [h1]
+      exact hloc
     inv := {
       live := by
         intro r v hr hd

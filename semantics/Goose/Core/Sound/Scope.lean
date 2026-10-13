@@ -144,6 +144,23 @@ theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
         have : ¬ (RootInst.local env.act si x = RootInst.local env.act si' x') := by
           intro e; cases e; exact hxx rfl
         simp [this, h4]
+    bindings := by
+      intro x' hx'
+      by_cases hxx : x' = x
+      · subst x'
+        refine ⟨lv, si, v, hx, hsi, hst, by simp [get_introduce], ?_⟩
+        intro href
+        exact hv.isRef href
+      · have hxold : x' ∈ tenv.visible := by
+          rcases List.mem_cons.1 hx' with heq | heq
+          · exact absurd heq hxx
+          · exact heq
+        obtain ⟨lv', si', v', hvar, hlookup, hparam, hroot, hshape⟩ := h.bindings x' hxold
+        refine ⟨lv', si', v', hvar, hlookup, hparam, ?_, hshape⟩
+        rw [get_introduce]
+        have hneq : ¬ (RootInst.local env.act si x = RootInst.local env.act si' x') := by
+          intro heq; cases heq; exact hxx rfl
+        simp [hneq, hroot]
     rooted := by
       intro x' lv' si' v' h1 h2 h3 r ht
       rw [get_introduce] at h3
@@ -156,6 +173,31 @@ theorem Frame.bind {future : List VarId} (h : Frame m W tenv penv env s future)
         exact h.rooted x' lv' si' v' h1 h2 h3 r ht
     inv := hInv.bind hfree hv.held (fun r ht => (hroot r ht).2)
       (fun a si' x' e => by cases e; exact (h.inst_lt hsi).2)
+    storage := by
+      intro r T hstorage v' hpost
+      by_cases hnew : r = RootInst.local env.act si x
+      · subst r
+        obtain ⟨x', lv', si', hvar', hlk', hroot', hnonref, hT⟩ := hstorage
+        simp only [RootInst.local.injEq] at hroot'
+        rcases hroot' with ⟨_, hsiEq, hxEq⟩
+        subst x'
+        subst si'
+        have hlv : lv' = lv := Option.some.inj (hvar'.symm.trans hx)
+        subst lv'
+        subst T
+        rw [get_introduce] at hpost
+        simp at hpost
+        subst v'
+        have hstorable : lv.ty.storable = true := Ty.storable_of_paramOk_nonref hst hnonref
+        have hflat := HasTy.flatOfStorableNonref hv hstorable hnonref
+        exact ⟨v, by simp [Store.read, get_introduce, get_nil], hflat⟩
+      · have hneq : ¬ (RootInst.local env.act si x = r) := by
+          intro heq
+          exact hnew heq.symm
+        have hpre : s.store.roots[r]? = some v' := by
+          rw [get_introduce] at hpost
+          simpa [hneq] using hpost
+        exact LocTy.mono hle (h.storage r T hstorage v' hpre)
     sa := by
       intro r E hd
       obtain ⟨v0, h1, h2, h3⟩ := h.sa r E hd
@@ -170,6 +212,7 @@ theorem Frame.rebind {future : List VarId} (h : Frame m W tenv penv env s future
     {x : VarId} {lv : LocalVar} {si : ScopeInst}
     {old v : Val} (hx : env.vars[x]? = some lv) (hsi : env.scopes.lookup lv.scope = some si)
     (ho : s.store.roots[RootInst.local env.act si x]? = some old) (hold : IsRef old)
+    (hparam : lv.ty.paramOk = true)
     (hv : HasTy m W.G s.store v lv.ty)
     (hroot : ∀ r, Targets v r → (∃ ann, penv.ann x = some ann ∧ Gam env W.P ann r) ∧
       Older r (.local env.act si x)) :
@@ -189,6 +232,21 @@ theorem Frame.rebind {future : List VarId} (h : Frame m W tenv penv env s future
         rw [hx] at h1; cases h1
         exact ⟨lv, si, v, hx, hsi, h3, by simp [get_reinsert], hv.mono hle⟩
       · exact ⟨lv', si', v', h1, h2, h3, by simp [get_reinsert, e, h4], h5.mono hle⟩
+    bindings := by
+      intro x' hx'
+      obtain ⟨lv', si', old', hvar', hlk', hparam', hroot', hshape'⟩ := h.bindings x' hx'
+      by_cases heq : RootInst.local env.act si x = RootInst.local env.act si' x'
+      · simp only [RootInst.local.injEq] at heq
+        rcases heq with ⟨_, hsi', hxEq⟩
+        subst hxEq
+        subst si'
+        have hlv : lv' = lv := Option.some.inj (hvar'.symm.trans hx)
+        subst lv'
+        refine ⟨lv, si, v, hx, hsi, hparam, by simp [get_reinsert], ?_⟩
+        intro href
+        exact hv.isRef href
+      · refine ⟨lv', si', old', hvar', hlk', hparam', ?_, hshape'⟩
+        simp [get_reinsert, heq, hroot']
     rooted := by
       intro x' lv' si' v' h1 h2 h3 r ht
       simp only [get_reinsert] at h3
@@ -199,6 +257,16 @@ theorem Frame.rebind {future : List VarId} (h : Frame m W tenv penv env s future
         exact (hroot r ht).1
       · simp only [e, if_false] at h3
         exact h.rooted x' lv' si' v' h1 h2 h3 r ht
+    storage := by
+      intro r' T hstorage v' hpost
+      by_cases heq : r' = RootInst.local env.act si x
+      · subst r'
+        exact LocTy.mono hle (h.storage _ _ hstorage old ho)
+      · have hpre : s.store.roots[r']? = some v' := by
+          simp only [get_reinsert] at hpost
+          have hneq : ¬ (RootInst.local env.act si x = r') := fun e => heq e.symm
+          simpa [hneq] using hpost
+        exact LocTy.mono hle (h.storage r' T hstorage v' hpre)
     inv := h.inv.rebind ho hold hv.held (fun r ht => (hroot r ht).2)
     sa := by
       intro r E hd
@@ -254,6 +322,31 @@ theorem Frame.outer {s' : St} {D' : RootInst → Ty → Prop} {A' : RootInst →
           exact ⟨lv, si, v', h1, h2, h3, g1, by rw [k4]; exact hasTy_slice_mu g2⟩
       · obtain ⟨v', h6, h7⟩ := hasTy_step he.le (fun hr => he.keep _ v h4 hr (by simp) hd) h3 h4 h5
         exact ⟨lv, si, v', h1, h2, h3, h6, h7⟩
+    bindings := by
+      intro x hx
+      obtain ⟨lv, si, old, hvar, hlk, hparam, hroot, hshape⟩ := h.bindings x hx
+      have hpostNe : s'.store.roots[RootInst.local env.act si x]? ≠ none :=
+        dom_mono he.le (by rw [hroot]; simp)
+      obtain ⟨v, hpost⟩ := Option.ne_none_iff_exists'.1 hpostNe
+      refine ⟨lv, si, v, hvar, hlk, hparam, hpost, ?_⟩
+      intro htype
+      have hold : IsRef old := hshape htype
+      by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
+      · obtain ⟨E, hd⟩ := hd
+        obtain ⟨v', hpostSlice, htypeSlice, _⟩ := hsa _ E hd
+        have hv : v' = v := Option.some.inj (hpostSlice.symm.trans hpost)
+        subst v'
+        exact htypeSlice.isRef (by simp [Ty.isRefLike])
+      · have hkeep := he.keep _ old hroot hold (by simp) hd
+        rw [hpost] at hkeep
+        cases hkeep
+        exact hold
+    storage := by
+      intro r T hstorage v hpost
+      have hpreNe : s.store.roots[r]? ≠ none := he.dom r (by rw [hpost]; simp)
+      cases hroot : s.store.roots[r]? with
+      | none => exact False.elim (hpreNe hroot)
+      | some old => exact LocTy.mono he.le (h.storage r T hstorage old hroot)
     rooted := by
       intro x lv si v h1 h2 h3 r ht
       by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
@@ -284,6 +377,7 @@ theorem Frame.outerPreserved {s' : St}
     (he : Footprint [] (fun r => ∃ E, D' r E) s s')
     (ht : PreservesRootTypes m W.G
       (CallerRootTypes W tenv env future') s.store s'.store)
+    (hstorageTypes : PreservesRootTypes m W.G (StorageRootTypes env) s.store s'.store)
     (hi : StoreInvAt m W.G env tenv.visible future' s')
     (hfuture : ∀ x, x ∈ future' → x ∈ future)
     (hsa : ∀ r E, D' r E → ∃ v, s'.store.roots[r]? = some v ∧
@@ -309,6 +403,70 @@ theorem Frame.outerPreserved {s' : St}
       obtain ⟨v', h6, h7⟩ := ht _ lv.ty
         (Or.inl ⟨x, lv, si, hx, hfut, h1, h2, rfl, rfl⟩) v h4 h5
       exact ⟨lv, si, v', h1, h2, h3, h6, h7⟩
+    bindings := by
+      intro x hx
+      obtain ⟨lv, si, old, hvar, hlk, hparam, hroot, hshape⟩ := h.bindings x hx
+      by_cases href : lv.ty.isRefLike = true
+      · by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
+        · obtain ⟨E, hd⟩ := hd
+          obtain ⟨v, hpost, htype, _⟩ := hsa _ E hd
+          refine ⟨lv, si, v, hvar, hlk, hparam, hpost, ?_⟩
+          intro _
+          exact htype.isRef (by simp [Ty.isRefLike])
+        · have hkeep := he.keep _ old hroot (hshape href) (by simp) hd
+          exact ⟨lv, si, old, hvar, hlk, hparam, hkeep, fun _ => hshape href⟩
+      · have hnonref : lv.ty.isRefLike = false := Bool.eq_false_iff.mpr href
+        have hstorage' : StorageRootTypes env (RootInst.local env.act si x) lv.ty :=
+          ⟨x, lv, si, hvar, hlk, rfl, hnonref, rfl⟩
+        have hloc := h.storage _ _ hstorage' old hroot
+        obtain ⟨oldValue, hrootOld, htypeOld⟩ := LocTy.hasTyRoot hloc hnonref
+        obtain ⟨newValue, hrootNew, htypeNew⟩ :=
+          hstorageTypes _ lv.ty hstorage' oldValue hrootOld htypeOld
+        refine ⟨lv, si, newValue, hvar, hlk, hparam, hrootNew, ?_⟩
+        intro htype
+        rw [hnonref] at htype
+        cases htype
+    storage := by
+      intro r T hstorage v' hpost
+      have hpreNe : s.store.roots[r]? ≠ none := he.dom r (by rw [hpost]; simp)
+      cases hroot : s.store.roots[r]? with
+      | none => exact False.elim (hpreNe hroot)
+      | some old =>
+        rcases hstorage with ⟨x, lv, si, hvar, hlk, hrootType, hn, hT⟩
+        have hstorage' : StorageRootTypes env r T :=
+          ⟨x, lv, si, hvar, hlk, hrootType, hn, hT⟩
+        have hnonref : T.isRefLike = false := by rw [hT]; exact hn
+        have hsource := h.storage r T hstorage' old hroot
+        have hsourceTy : LocTy s.store ⟨r, []⟩ lv.ty := by simpa [hT] using hsource
+        obtain ⟨oldValue, hrootOld, htypeOld⟩ := LocTy.hasTyRoot hsource hnonref
+        obtain ⟨newValue, hrootNew, htypeNew⟩ :=
+          hstorageTypes r T hstorage' oldValue hrootOld htypeOld
+        have hnotUnit : T ≠ .unit := by
+          intro heq
+          have heq' : lv.ty = .unit := by simpa [hT] using heq
+          rw [heq'] at hsourceTy
+          rcases hsourceTy with ⟨_, _, hflat⟩
+          simp [FlatTy] at hflat
+        have hnotTuple : ∀ fields, T ≠ .tuple fields := by
+          intro fields heq
+          have heq' : lv.ty = .tuple fields := by simpa [hT] using heq
+          rw [heq'] at hsourceTy
+          rcases hsourceTy with ⟨_, _, hflat⟩
+          simp [FlatTy] at hflat
+        have hflatNew : FlatTy T newValue := by
+          cases T with
+          | int _ => exact htypeNew
+          | bool => exact htypeNew
+          | unit => exact False.elim (hnotUnit rfl)
+          | arr _ _ => exact htypeNew
+          | grow _ => exact htypeNew
+          | growshrink _ => exact htypeNew
+          | limited _ _ => exact htypeNew
+          | ref _ _ => simp [Ty.isRefLike] at hnonref
+          | slice _ _ => simp [Ty.isRefLike] at hnonref
+          | tuple fields => exact False.elim (hnotTuple fields rfl)
+          | structT _ _ => exact htypeNew
+        exact ⟨newValue, (read_ok_iff _ _ _).2 ⟨newValue, hrootNew, get_nil _⟩, hflatNew⟩
     rooted := by
       intro x lv si v h1 h2 h3 r htarget
       by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
@@ -357,10 +515,26 @@ theorem Frame.outwrite {future : List VarId} (h : Frame m W tenv penv env s futu
         intro x hvisible hfuture
         obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hvisible hfuture
         exact ⟨lv, si, v, h1, h2, h3, by simp [get_reinsert, hne h2, h4], h5.mono hle⟩
+      bindings := by
+        intro x hx
+        obtain ⟨lv, si, v, hvar, hlk, hparam, hroot, hshape⟩ := h.bindings x hx
+        have hnot := hne (x := x) (sc := lv.scope) (si := si) hlk
+        refine ⟨lv, si, v, hvar, hlk, hparam, ?_, hshape⟩
+        simp [get_reinsert, hnot, hroot]
       rooted := by
         intro x lv si v h1 h2 h3 t ht'
         simp only [get_reinsert, hne h2, if_false] at h3
         exact h.rooted x lv si v h1 h2 h3 t ht'
+      storage := by
+        intro r' T hstorage v' hpost
+        rcases hstorage with ⟨x, lv, si', hvar, hlk, rfl, hnonref, rfl⟩
+        have hnot : ¬ (r = RootInst.local env.act si' x) := hne hlk
+        have hpre : s.store.roots[RootInst.local env.act si' x]? = some v' := by
+          rw [get_reinsert] at hpost
+          simpa [hnot] using hpost
+        have hstorage' : StorageRootTypes env (RootInst.local env.act si' x) lv.ty :=
+          ⟨x, lv, si', hvar, hlk, rfl, hnonref, rfl⟩
+        exact LocTy.mono hle (h.storage _ _ hstorage' v' hpre)
       inv := h.inv.rebind ho hold hw.held (fun t ht' => h.aOlder r t (ht t ht'))
       sa := by
         intro r' E' hd'
@@ -457,6 +631,30 @@ theorem Frame.push {future : List VarId} (h : Frame m W tenv penv env s future)
       intro hfut
       obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx hfut
       exact ⟨lv, si, v, h1, hlk _ _ h2, h3, h4, h5⟩
+    bindings := by
+      intro x hx
+      obtain ⟨lv, si, v, hvar, hlookup, hparam, hroot, hshape⟩ := h.bindings x hx
+      exact ⟨lv, si, v, hvar, hlk _ _ hlookup, hparam, hroot, hshape⟩
+    storage := by
+      intro r T hstorage v hroot
+      rcases hstorage with ⟨x, lv, si, hvar, hlookup, rfl, hnonref, rfl⟩
+      rw [lookup_cons] at hlookup
+      by_cases hscope : lv.scope = sc
+      · simp only [hscope, if_pos, Option.some.injEq] at hlookup
+        have hnone : s.store.roots[RootInst.local env.act s.nextScope x]? = none := by
+          cases hr : s.store.roots[RootInst.local env.act s.nextScope x]? with
+          | none => rfl
+          | some old =>
+            have hlt := h.inv.fresh env.act s.nextScope x (by rw [hr]; simp)
+            exact False.elim (Nat.not_lt.mpr (Nat.le_refl _) hlt)
+        have hroot' : s.store.roots[RootInst.local env.act s.nextScope x]? = some v := by
+          simpa [hlookup] using hroot
+        rw [hroot'] at hnone
+        cases hnone
+      · simp only [hscope, if_neg] at hlookup
+        have hstorageOld : StorageRootTypes env (RootInst.local env.act si x) lv.ty :=
+          ⟨x, lv, si, hvar, hlookup, rfl, hnonref, rfl⟩
+        exact h.storage _ _ hstorageOld v hroot
     rooted := by
       intro x lv si v h1 h2 h3 r ht
       have h2' : ((sc, s.nextScope) :: env.scopes).lookup lv.scope = some si := h2
@@ -769,7 +967,7 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
       { env with scopes := (sc, si) :: env.scopes } s2 future)
     (hmod : tenv.mod = tenv1.mod) (hvars : tenv.vars = tenv1.vars)
     (hscs : tenv1.scopes = sc :: tenv.scopes)
-    (hvis : ∀ x, x ∈ tenv.visible → x ∈ future' → x ∈ tenv1.visible ∧
+    (hvis : ∀ x, x ∈ tenv.visible → x ∈ tenv1.visible ∧
       ∃ lv, env.vars[x]? = some lv ∧ lv.scope ∈ env.scopes.map Prod.fst)
     (hfuture : ∀ x, x ∈ future' → x ∈ future)
     (hdom : ∀ (r : RootInst), s2.store.roots[r]? ≠ none →
@@ -810,7 +1008,7 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
     | global g => exact Or.inl trivial
     | «local» a si' x =>
       rcases hdem with ⟨ha, hx, hf, lv, hvar, hlk⟩
-      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx hf
+      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx
       have hvar' : env.vars[x]? = some lv := by
         simpa using hvar
       have hlvEq : lv = lv0 := Option.some.inj (hvar'.symm.trans hlv0)
@@ -828,7 +1026,7 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
     vis := by
       intro x hx
       intro hfut
-      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx hfut
+      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx
       obtain ⟨lv, si', v, h1, h2, h3, h4, h5⟩ := h.vis x hx1 (hfuture x hfut)
       have h1' : env.vars[x]? = some lv := h1
       rw [hlv0] at h1'; cases h1'
@@ -841,6 +1039,59 @@ theorem Frame.pop {future future' : List VarId} {tenv1 : TEnv} {s2 : St} {sc : N
       · show (releaseVars env.vars env.act sc si env.vars.size s2.store).roots[_]? = some v
         rw [hagree _ hnp]; exact h4
       · exact h5.agree hagree (K _ v hnp h4)
+    bindings := by
+      intro x hx
+      obtain ⟨hx1, lv0, hlv0, hsc0⟩ := hvis x hx
+      obtain ⟨lv, si', v, h1, h2, h3, h4, h5⟩ := h.bindings x hx1
+      have h1' : env.vars[x]? = some lv := by simpa using h1
+      rw [hlv0] at h1'
+      cases h1'
+      have hne : lv0.scope ≠ sc := fun heq => hnd.1 (heq ▸ hsc0)
+      have h2' : ((sc, si) :: env.scopes).lookup lv0.scope = some si' := h2
+      rw [lookup_cons] at h2'
+      simp only [hne, if_false] at h2'
+      have hnp := (hlk _ _ h2').2 x
+      refine ⟨lv0, si', v, hlv0, h2', h3, ?_, h5⟩
+      show (releaseVars env.vars env.act sc si env.vars.size s2.store).roots[RootInst.local env.act si' x]? = some v
+      rw [hagree _ hnp]
+      exact h4
+    storage := by
+      intro r T hstorage v hpost
+      rcases hstorage with ⟨x, lv, si', hvar, hlookup, rfl, hnonref, rfl⟩
+      have hmemPair := lookup_mem _ _ _ hlookup
+      have hmem : lv.scope ∈ env.scopes.map Prod.fst :=
+        List.mem_map.mpr ⟨(lv.scope, si'), hmemPair, rfl⟩
+      have hscopeNe : lv.scope ≠ sc := by
+        intro heq
+        apply hnd.1
+        simpa [heq] using hmem
+      have hnp : ¬ ScopeRoots env.vars env.act sc si (.local env.act si' x) := by
+        intro hscope
+        obtain ⟨x', lv', hvar', hsc', hroot⟩ := hscope
+        have hids : True ∧ si' = si ∧ x = x' := by
+          simp only [RootInst.local.injEq] at hroot
+          exact hroot
+        rcases hids with ⟨_, _, hx⟩
+        subst x'
+        have hlv : lv' = lv := Option.some.inj (hvar'.symm.trans hvar)
+        subst lv'
+        exact hscopeNe hsc'
+      have hstorageInner :
+          StorageRootTypes { env with scopes := (sc, si) :: env.scopes }
+            (.local env.act si' x) lv.ty :=
+        ⟨x, lv, si', hvar, (hlk _ _ hlookup).1, rfl, hnonref, rfl⟩
+      have hpre : s2.store.roots[RootInst.local env.act si' x]? = some v := by
+        rw [← hagree _ hnp]
+        exact hpost
+      obtain ⟨stored, hread, hflat⟩ := h.storage _ _ hstorageInner v hpre
+      have hreadValue : s2.store.read ⟨RootInst.local env.act si' x, []⟩ = .ok v :=
+        (read_ok_iff _ _ _).2 ⟨v, hpre, get_nil v⟩
+      have hstored : stored = v := by
+        rw [hreadValue] at hread
+        cases hread
+        rfl
+      rw [hstored] at hflat
+      exact ⟨v, (read_ok_iff _ _ _).2 ⟨v, hpost, get_nil v⟩, hflat⟩
     rooted := by
       intro x lv si' v h1 h2 h3 r ht
       have hnp := (hlk _ _ h2).2 x
