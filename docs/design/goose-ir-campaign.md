@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** resumed 2026-10-13 at the owner's request. Four lanes are working from the handoff: IR alignment and slice references, units corpus and Aincrad3 runner, unsupported-feature forecast, and the third lowering-proof attempt. The paused handoff below records the starting state.
+**Status:** resumed 2026-10-13 at the owner's request. Current progress is appended to §13; the paused handoff below records the starting state.
 **Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12). `master` is not touched.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
@@ -283,6 +283,7 @@ Each change made is appended to §8.
 - `test/run_tests.py`: `--only GLOB` and `--goose-arg ARG`; `samples/run_samples.py`: `--goose-arg`. Loop repair and whole-suite runs under a new mode.
 - `goose --build-report FILE`: writes `goose-build-report/1`. Rejected with `--tokens`, `--dump`, `--parse`, `fetch` and `--multi-test`.
 - `goose --emit-core FILE`: writes a `goose-core/0.2` module for `core-pilot`, or fails with `error: unsupported in core-pilot: <feature-id>`.
+- `goose --emit-core-report --check FILE`: writes one sorted, unique JSON set of every unsupported Core-profile feature and no Core or C artifact. It is rejected with parsing, output, build and runtime modes.
 - `goose --share`: merges emitted functions with equal bodies. Default output unchanged without it.
 - `goose --stable-names` (hidden, not in the usage text): names emitted functions, types, literals and nonlocal-target ids from stable keys. A seam for unit output; not pre-authorized by name, added because unit output needs it testable on its own.
 - `goose build --units` with `--rebuild` and `--verify-reuse`: builds through units with a persistent object store under the program's build directory; without `--units`, `goose build` is unchanged. `--pipeline gir --emit-units DIR` writes IR-built units.
@@ -421,6 +422,17 @@ After `B8`, the core entry builds as 459 units at Goose `-O0`. A run with the re
 
 The report records 14,642 checked contexts, 7,430 emitted bodies and a 1.55 GiB compiler peak. The host was busy before the run, so its elapsed and phase times are discarded: **perf gate deferred: host busy**. Edit-locality rows follow from the `B5` Aincrad3 matrix rather than this recovery run.
 
+The `B5` matrix then ran the core entry at `-O0` with one immutable Debug compiler binary. Every reused object was checked against a fresh native compilation:
+
+| Row | Source change | Unit text changed | Native result | Link |
+|---|---|---:|---|---|
+| `E00` | cold build | 459 | 459 misses in 187 compiler invocations | ran |
+| `E01` | none | 0 | no compiler process; frontend did not run | skipped |
+| `E02` | comment and blank line above `argument_u64` | 1 location unit | 458 reused, 1 missed | ran |
+| `E03` | commute one addition in `argument_u64` | 1 code unit | 458 reused, 1 missed | ran |
+
+An earlier matrix attempt was discarded because its compiler executable was relinked between `E02` and `E03`. The unit contract intentionally includes the compiler binary digest, so that run correctly selected a new store. The fixed-binary run above is the locality evidence. Its times overlapped host load and are not measurements: **perf gate deferred: host busy**.
+
 A smaller Aincrad3 entry point that needs no native headers (2,228 specializations) does build, as 38 units, at Goose `-O0`:
 
 | Build | Frontend | Units with changed text | Native compiler | Objects reused | Link | Wall, one busy run |
@@ -437,6 +449,24 @@ A smaller Aincrad3 entry point that needs no native headers (2,228 specializatio
 Open from the first run, both resolved in `4fcc480`: the 266 indistinguishable contexts were a missing key dimension (a bound function value's environment was named by its base only), and report collection lost its repeated work. The paragraph below is kept as first written.
 
 Open from this run: 266 contexts are indistinguishable under every recorded key dimension, so the context key is not yet injective; and report collection costs more than the proposed 10%. Both go back to the `backend` lane.
+
+### 11.4 Unsupported-feature forecast
+
+Candidate `7efc196`. `--emit-core-report` was checked against normal Core export over all 582 positive fixtures and samples. It found 77 agreements, 504 unsupported programs, no mismatch or harness failure, and the known unbounded-recursion case that exhausts Lean fuel. The 504 unsupported programs form 429 exact feature sets; corpus mode emits all of them in its JSON result.
+
+Single-feature sets give the programs one feature alone would unlock:
+
+| Feature | Programs | Feature | Programs |
+|---|---:|---|---:|
+| `string-value` | 6 | `reusable` | 4 |
+| `struct` | 4 | `elementwise-arithmetic` | 3 |
+| `float` | 3 | `extern-fn` | 2 |
+| `multiple-results` | 2 | `return-from` | 2 |
+| `captured-reference` | 1 | `fill-grow` | 1 |
+| `shrink-operation` | 1 | `thread` | 1 |
+| `variable-array` | 1 |  |  |
+
+The most common exact multi-feature sets are `string-value + struct` (7 programs), `float + string-value` (5), `shrink-operation + stored-reference + string-value + struct` (4), `print-argument + string-value` (4), `optional + rebind-target + struct` (4), `call-arity + function-value + thread` (4), and the two `adt + function-value + match + struct` sets, without and with `string-value` (4 each). The forecast replaces the earlier first-failure histogram: flat structs alone unlock four programs, while 353 other struct-using programs also need at least one more feature.
 
 ## 12. Decision log
 
@@ -464,6 +494,10 @@ Open from this run: 266 contexts are indistinguishable under every recorded key 
 - `B8` remainder merged: all five `test/packages` fixtures pass through `goose build --units` in 15 O0, O2 and O2-with-sharing builds; Aincrad3's core entry builds as 459 units and runs against its real package and schemas. `B5` now has an Aincrad3 E00–E03 runner; its real edit matrix remains to run. Timing remains deferred because the host is busy.
 - `H3` completed: a `goose-lint` companion built with `goose build --units` has zero differences across 393 parity comparisons, and the existing linter suite passes against that sibling install. `LINT-01`–`LINT-08` now hold on the merged tree.
 - `T3`, third and final attempt: `stmt_while_sim` proves the actual lowering of a nonnested while statement, and six checked subclaims cover arbitrary enclosing loop contexts, scoped block initializers and conditional loop composition. The audit now lists 88 theorems with the same three allowed axioms. Whole-profile `TH-LOWER-01` is parked: range-loop reentry changes its counter below the current protected frontier, and nested loops, calls and returns remain unproved. The checked prefix lemma records the invariant a follow-on proof would need.
+- Independent `T3` review found no proof or claim defect: all seven loop claims are sound within their recorded fragment or explicit composition premises. Focused source and executable audits list 88 entries with the same three allowed axioms; mutation and concrete-instantiation probes passed. Whole-profile lowering remains parked.
+- `H1` completed for every implemented decoder and verifier operation. The remaining shrink-summary, construction/escape, caller-destination and certificate rows stay attached to `S8`, `S9` and `O1`, whose operations and checker do not exist yet.
+- `S3b` completed after the full corpus gate found and fixed two report-only boundary bugs: bodyless extern contexts were built after being reported, and unsupported standard-library globals bypassed their established skip boundary. The fixed run has 77 agreements, 504 explained unsupported programs, no mismatch or harness failure, and one known fuel exhaustion; §11.4 records the forecast.
+- `B5` completed on the real Aincrad3 core entry: `E00`–`E03` all pass, with a true no-op and one-unit locality for both the comment and body edits. The first attempt was discarded because the compiler binary changed during the matrix; the fixed run used an immutable copy. Timing remains deferred because the host is busy.
 
 - `U1`, second and third suspicions: (a) order dependence of checking is **not a defect** — about 43,000 permutations of declarations, imports and files over 1,900 repository fixtures and 9,000 generated programs with reference-holding globals never changed acceptance or behaviour, only which of several correct diagnostics prints first; the language says top-level declarations are order-independent and only global initializers are ordered. (b) **A second genuine defect**: a path package's native C is not rebuilt when its source changes. The rebuild stamp's time is a maximum starting at 0 over file-clock counts that are negative on this C++ standard library, so it is always 0; editing the C source leaves a stale binary, against the package design's "rebuilds when any of its sources is newer than its build". Fix and regression test in preparation on an upstream branch; the pull request is deferred like the first.
 - **Paused 2026-10-13.** Wind-down: the lowering lane landed structured control (`lower_correct_ctl`) and kept its loop work as a wip branch; the exporter lane landed result mutability and slice references (`order` fuzz lane 300 of 300 agree; corpus 76 of 77 agree); the rebuild-stamp fix was confirmed on glibc and cherry-picked; the backend lane landed `--build-report-deps` and the native-support unit. Handoff at the top of this document.
