@@ -24,13 +24,20 @@ The tool prints exactly one JSON line and exits:
     ["malformed",MESSAGE]                   exit 2
     ["rejected",RULE,MESSAGE]               exit 5
 
+With `--corpus` the same checks run over every positive fixture of the main
+runner and every sample instead (see `discover_corpus`): a program the exporter
+refuses is counted by feature id and not listed, and exit status 0 means no
+exported program mismatched, failed or ran out of time.
+
 Run `python3 test/semantics/run_tests.py --self-test` to check the harness
 against the fake tools in `fake/`.
 """
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -85,7 +92,10 @@ class Inconclusive(Exception):
     """A process outran its wall-clock budget."""
 
 
-Outcome = tuple  # ("returned",) | ("aborted", kind, line) | ("exited", code)
+# ("returned",) | ("aborted", kind, line) | ("exited", code). A corpus fixture
+# whose diagnostic file names no source location expects an abort at line None,
+# which agrees with an abort of that kind anywhere.
+Outcome = tuple
 
 
 @dataclass(frozen=True)
@@ -97,12 +107,23 @@ class Fixture:
     aborts: bool
     expect: Path | None
     modes: tuple[str, ...]
+    # Corpus programs are the main runner's, whose expectations were not written
+    # for this harness: extra compiler arguments, the -D defines of the fixture,
+    # whether an expected stdout exists, and whether an abort's line is known.
+    args: tuple[str, ...] = ()
+    defines: tuple[str, ...] = ()
+    corpus: bool = False
+
+    @property
+    def label(self) -> str:
+        return self.name.replace("/", "_")
 
 
 @dataclass(frozen=True)
 class Verdict:
     cls: str
     detail: str = ""
+    exported: bool = False
 
 
 def joined(text: str) -> str:
@@ -149,6 +170,65 @@ def discover(root: Path) -> list[Fixture]:
     return fixtures
 
 
+def load_main_runner(repo: Path):
+    """The main runner's module, for its first-line directives and expectation rules."""
+    spec = importlib.util.spec_from_file_location("main_runner", ROOT / "test" / "run_tests.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["main_runner"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def discover_corpus(repo: Path, builtin: list[str]) -> list[Fixture]:
+    """Every program of the main runner's positive fixtures and of `samples/`.
+
+    Skipped as the main runner skips them: the Goose-in-Goose, lint and
+    rejection directories, the lexer token fixture, `parse-only` fixtures, and
+    programs using a native module the compiler was not built with. A sample
+    that reads standard input or takes arguments is skipped too, since the
+    reference tool runs a program with neither. Expectations are the main
+    runner's: `expected/NAME.out`, `.aborts` and `.stderr`.
+    """
+    runner = load_main_runner(repo)
+    tests = repo / "test"
+    expected = tests / "expected"
+    fixtures = []
+    for source in sorted(tests.glob("*/*.goose")):
+        if (source.parent.name in ("goose_in_goose", "lint", "errors", "errors_tc")
+                or source.name == "lexer_tokens.goose"):
+            continue
+        line = runner.first_line(source)
+        modules = runner.native_modules(source, {m: True for m in runner.tc.NATIVE_MODULES})
+        if ("parse-only" in line or runner.error_markers(source)
+                or any(module not in builtin for module in modules)):
+            continue
+        name = source.stem
+        stderr = expected / f"{name}.stderr"
+        defines = tuple(d for d in runner.runtime_defines(source) if d != "GS_DEBUG=1")
+        fixtures.append(Fixture(
+            f"{source.parent.name}/{name}", source, expected / f"{name}.out",
+            stderr if stderr.exists() else None, (expected / f"{name}.aborts").exists(), None,
+            (RELEASE, DEBUG) if runner.debug_fixture(source, line) and RELEASE in modes_for(source)
+            else modes_for(source), defines=defines, corpus=True))
+    for source in sorted((repo / "samples").glob("*.goose")):
+        name = re.sub(r"^\d+_", "", source.stem)
+        data = repo / "samples" / "data"
+        modules = runner.tc.native_imports(source.read_text(encoding="utf-8"))
+        if (data / f"{name}.stdin").exists() or (data / f"{name}.args").exists() \
+                or any(module not in builtin for module in modules):
+            continue
+        header = repo / "samples" / f"{name}.h"
+        fixtures.append(Fixture(
+            f"samples/{name}", source, repo / "samples" / "expected" / f"{name}.out", None, False,
+            None, (RELEASE,), args=("--include", str(header)) if header.exists() else (),
+            corpus=True))
+    names = [fixture.name for fixture in fixtures]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise HarnessFailure(f"corpus names are not unique: {', '.join(duplicates)}")
+    return fixtures
+
+
 def abort_kind(markers: list[str]) -> str:
     for kind, pattern in DIAGNOSTICS.items():
         if any(re.match(pattern, marker) for marker in markers):
@@ -180,9 +260,10 @@ def expected_outcome(fixture: Fixture) -> Outcome:
                if line.strip()]
     lines = [int(match[1]) for marker in markers
              if (match := re.search(r"\.goose:(\d+)\)$", marker))]
-    if len(lines) != 1:
+    if len(lines) != 1 and not (fixture.corpus and not lines):
         raise HarnessFailure(f"{fixture.name}.stderr must name exactly one NAME.goose:LINE) location")
-    return ("aborted", abort_kind([m for m in markers if not LOCATION_PATTERN.search(m)]), lines[0])
+    line = lines[0] if lines else None
+    return ("aborted", abort_kind([m for m in markers if not LOCATION_PATTERN.search(m)]), line)
 
 
 def parse_outcome(value) -> Outcome:
@@ -211,10 +292,12 @@ def text(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def export(goose: Path, source: Path, work: Path, timeout: float) -> tuple[Path | None, str | None]:
+def export(goose: Path, fixture: Fixture, work: Path, timeout: float) -> tuple[Path | None, str | None]:
     """Export one program. Returns (core file, None) or (None, unsupported feature id)."""
     core = work / "program.core"
-    done = run([goose, "--emit-core", core, "--check", source], timeout)
+    source = fixture.source
+    done = run([goose, *fixture.args, *map("-D{}".format, fixture.defines), "--emit-core", core,
+                "--check", source], timeout)
     diagnostic = text(done.stderr)
     if done.returncode == 1 and (match := UNSUPPORTED_PATTERN.search(diagnostic)):
         return None, match[1]
@@ -229,6 +312,15 @@ def tool_result(tool: Path, core: Path, mode: str, timeout: float) -> tuple:
     """Run the reference tool and validate its one-line answer against the contract."""
     done = run([tool, "run", core, "--numeric", mode], timeout)
     return parse_tool_answer(done.returncode, text(done.stdout), text(done.stderr))
+
+
+def validate_result(tool: Path, core: Path, timeout: float) -> tuple:
+    """Run the tool's validator: ("valid",) for `["ok"]` with exit 0, else the tool's own answer."""
+    done = run([tool, "validate", core], timeout)
+    out = text(done.stdout)
+    if done.returncode == 0 and out.strip() == '["ok"]':
+        return ("valid",)
+    return parse_tool_answer(done.returncode, out, text(done.stderr))
 
 
 def parse_tool_answer(returncode: int, stdout: str, stderr: str = "") -> tuple:
@@ -265,6 +357,12 @@ def parse_tool_answer(returncode: int, stdout: str, stderr: str = "") -> tuple:
     return tuple(answer)
 
 
+def outcomes_agree(got: Outcome, expected: Outcome) -> bool:
+    if got[0] == "aborted" and expected[0] == "aborted" and expected[2] is None:
+        return got[1] == expected[1]
+    return got == expected
+
+
 def describe(outcome: Outcome) -> str:
     return json.dumps(list(outcome))
 
@@ -278,7 +376,7 @@ def judge_tool(fixture: Fixture, mode: str, answer: tuple, outcome: Outcome, std
         return Verdict(MISMATCH, f"[{mode}] the tool answered {json.dumps(list(answer))} "
                                  f"for a program the compiler accepts")
     problems = []
-    if answer[1] != outcome:
+    if not outcomes_agree(answer[1], outcome):
         problems.append(f"outcome {describe(answer[1])}, expected {describe(outcome)}")
     if joined(answer[2]) != stdout:
         problems.append(f"stdout {joined(answer[2])!r}, expected {stdout!r}")
@@ -294,21 +392,23 @@ def build_and_run_pipeline(goose: Path, cc: str, pipeline: str, fixture: Fixture
     run's label, exit status, standard output and standard error."""
     defines = ["-DGS_DEBUG=1"] if mode == DEBUG else []
     cfile = work / f"{pipeline}-{mode}.c"
-    built = run([goose, "--pipeline", pipeline, *defines, "--standalone", "-o", cfile, fixture.source],
-                timeout)
+    extra = [*fixture.args, *map("-D{}".format, fixture.defines)]
+    cdefines = [*defines, *map("-D{}".format, fixture.defines)]
+    built = run([goose, "--pipeline", pipeline, *extra, *defines, "--standalone", "-o", cfile,
+                 fixture.source], timeout)
     if built.returncode != 0:
         raise HarnessFailure(f"{pipeline} pipeline build failed (exit {built.returncode}): "
                              f"{text(built.stderr).strip()[:300]}")
     runs = []
     for opt in ("-O0", "-O2"):
         program = work / f"{pipeline}-{mode}{opt}"
-        compiled = run([cc, opt, *defines, cfile, "-o", program, "-lm", "-pthread"], timeout)
+        compiled = run([cc, opt, *cdefines, cfile, "-o", program, "-lm", "-pthread"], timeout)
         if compiled.returncode != 0:
             raise HarnessFailure(f"C compiler rejected the {pipeline} output at {opt}: "
                                  f"{text(compiled.stderr).strip()[:300]}")
         ran = run([program], timeout, cwd=work)
         runs.append((opt, ran.returncode, text(ran.stdout), text(ran.stderr)))
-    ran = run([goose, "--pipeline", pipeline, *defines, "--jit", fixture.source], timeout, cwd=work)
+    ran = run([goose, "--pipeline", pipeline, *extra, *defines, "--jit", fixture.source], timeout, cwd=work)
     runs.append(("jit", ran.returncode, text(ran.stdout), text(ran.stderr)))
     return runs
 
@@ -343,12 +443,16 @@ def judge_pipeline(pipeline: str, fixture: Fixture, mode: str, outcome: Outcome,
             problems.append(f"stderr lacks {missing}")
     if outcome[0] == "aborted":
         # The diagnostic names the kind of abort and the line of the operation.
-        match = re.search(r"goose runtime error: (.*) \((.*):(\d+)\)\s*$", err.strip().splitlines()[-1]
-                          if err.strip() else "")
+        # An abort of unknown line (a corpus fixture) may also lack its location,
+        # as a native stack overflow does.
+        last = err.strip().splitlines()[-1] if err.strip() else ""
+        match = re.search(r"goose runtime error: (.*) \((.*):(\d+)\)\s*$", last)
+        if match is None and outcome[2] is None:
+            match = re.search(r"goose runtime error: (.*?)()()\s*$", last)
         if match is None:
             problems.append(f"no abort diagnostic in stderr {err.strip()[-120:]!r}")
         else:
-            if int(match[3]) != outcome[2]:
+            if outcome[2] is not None and int(match[3]) != outcome[2]:
                 problems.append(f"abort at line {match[3]}, expected {outcome[2]}")
             text_of = ABORT_TEXT.get(outcome[1])
             if text_of and text_of not in match[1]:
@@ -360,7 +464,7 @@ def judge_pipeline(pipeline: str, fixture: Fixture, mode: str, outcome: Outcome,
 
 def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str | None,
              scratch: Path, timeout: float) -> Verdict:
-    work = Path(tempfile.mkdtemp(prefix=f"{fixture.name}-", dir=scratch))
+    work = Path(tempfile.mkdtemp(prefix=f"{fixture.label}-", dir=scratch))
     verdicts = []
 
     def guarded(step):
@@ -381,13 +485,21 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
     if expectation is None:
         return verdicts[0]
     outcome, stdout = expectation
-    core = guarded(lambda: export(goose, fixture.source, work, timeout))
+    core = guarded(lambda: export(goose, fixture, work, timeout))
     if core is None:
         return verdicts[0]
     core_file, feature = core
     if feature is not None:
         return Verdict(UNSUPPORTED, feature)
     for mode in fixture.modes:
+        def check_validation():
+            answer = validate_result(tool, core_file, timeout)
+            if answer[0] != "valid":
+                verdicts.append(Verdict(MISMATCH, f"[{mode}] validation answered "
+                                                  f"{json.dumps(list(answer))} for a program the compiler accepts"))
+        if mode == fixture.modes[0]:
+            guarded(check_validation)
+
         def check_tool():
             answer = tool_result(tool, core_file, mode, timeout)
             verdicts.append(judge_tool(fixture, mode, answer, outcome, stdout))
@@ -401,15 +513,22 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
             guarded(check_pipeline)
     worst = max(verdicts, key=lambda verdict: SEVERITY[verdict.cls])
     if worst.cls == AGREE:
-        return worst
-    return Verdict(worst.cls, "; ".join(v.detail for v in verdicts if v.cls == worst.cls))
+        return Verdict(AGREE, exported=True)
+    return Verdict(worst.cls, "; ".join(v.detail for v in verdicts if v.cls == worst.cls),
+                   exported=True)
 
 
 def run_all(fixtures: list[Fixture], goose: Path, tool: Path, cc: str, pipeline: str | None,
-            timeout: float, jobs: int) -> dict[str, int]:
+            timeout: float, jobs: int, corpus: bool = False) -> dict:
+    """Run every case and print the non-agreeing ones and the JSON summary line.
+
+    In corpus mode unsupported programs are not listed, and the summary adds the
+    number of exported programs and the unsupported feature ids with their counts.
+    """
     scratch_root = ROOT / "build" / "semantics"
     scratch_root.mkdir(parents=True, exist_ok=True)
     counts = dict.fromkeys(CLASSES, 0)
+    features: Counter = Counter()
     with tempfile.TemporaryDirectory(prefix="run-", dir=scratch_root) as scratch:
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             verdicts = list(pool.map(
@@ -417,10 +536,16 @@ def run_all(fixtures: list[Fixture], goose: Path, tool: Path, cc: str, pipeline:
                 fixtures))
     for fixture, verdict in zip(fixtures, verdicts):
         counts[verdict.cls] += 1
-        if verdict.cls != AGREE:
+        if verdict.cls == UNSUPPORTED:
+            features[verdict.detail] += 1
+        if verdict.cls != AGREE and not (corpus and verdict.cls == UNSUPPORTED):
             print(f"{verdict.cls} {fixture.name}: {verdict.detail}")
-    print(json.dumps(counts))
-    return counts
+    summary = dict(counts)
+    if corpus:
+        summary["exported"] = sum(verdict.exported for verdict in verdicts)
+        summary["unsupported_features"] = dict(features.most_common())
+    print(json.dumps(summary))
+    return summary
 
 
 def self_test() -> int:
@@ -601,6 +726,87 @@ def self_test() -> int:
         check("a rejected --pipeline is a harness-failure",
               status == 1 and json.loads(report[-1])[HARNESS_FAILURE] == 1
               and "unknown option" in stdout.getvalue())
+
+        # Corpus mode: the main runner's fixtures and the samples, with its skip rules.
+        repo = Path(temporary) / "repo"
+        for sub in ("test/core", "test/lint", "test/errors_tc", "test/goose_in_goose", "test/gfx",
+                    "test/expected", "samples/expected", "samples/data"):
+            (repo / sub).mkdir(parents=True)
+        corpus_runs, corpus_exports, corpus_validate = {}, {}, {}
+        corpus_class = {}
+
+        def program(path, name, cls, tool, out="", first="", **expected):
+            (repo / path / f"{name}.goose").write_text(first + "fn main() {}\n")
+            out_dir = repo / "samples" / "expected" if path == "samples" else repo / "test" / "expected"
+            stem = re.sub(r"^\d+_", "", name) if path == "samples" else name
+            if cls is not None:
+                (out_dir / f"{stem}.out").write_text(out)
+            for suffix, content in expected.items():
+                (out_dir / f"{stem}.{suffix}").write_text(content)
+            corpus_runs[name] = tool
+            if cls is not None:
+                corpus_class[name] = cls
+
+        program("test/core", "plain", AGREE, returns(""))
+        program("test/core", "debug_only", AGREE, returns("1\n", DEBUG), "1\n",
+                first="// runtime-define: GS_DEBUG=1\n")
+        program("test/core", "both_modes", AGREE, {**returns("2\n"), **returns("2\n", DEBUG)}, "2\n",
+                first="// runtime-debug\n")
+        program("test/core", "abort_without_location", AGREE, aborts_with("div_zero", 7, "a\n"), "a\n",
+                aborts="", stderr="division by zero\n")
+        program("test/core", "abort_wrong_kind", MISMATCH, aborts_with("assert", 7), "",
+                aborts="", stderr="division by zero\n")
+        program("test/core", "wrong_output", MISMATCH, returns("x\n"), "y\n")
+        program("test/core", "invalid_export", MISMATCH, returns(""))
+        corpus_validate["invalid_export"] = {"rejected": ["V-TYPE", "bad"]}
+        program("test/core", "out_of_fuel", INCONCLUSIVE, {RELEASE: answer(["timeout", ""], 3)})
+        for name, feature in (("uses_struct", "struct"), ("uses_struct_again", "struct"),
+                              ("uses_float", "float")):
+            program("test/core", name, UNSUPPORTED, {})
+            corpus_exports[name] = {"unsupported": feature}
+        # Skipped before anything runs: a call to the fake tools would be a failure.
+        program("test/core", "parse_only_case", None, {}, first="// parse-only\n")
+        program("test/core", "lexer_tokens", None, {})
+        program("test/lint", "lint_input", None, {})
+        program("test/errors_tc", "rejected_input", None, {})
+        program("test/goose_in_goose", "bootstrap_part", None, {})
+        program("test/gfx", "needs_gfx", None, {})
+        program("samples", "01_tour", AGREE, returns("tour\n"), "tour\n")
+        program("samples", "02_header", AGREE, returns(""))
+        (repo / "samples" / "header.h").write_text("")
+        program("samples", "03_calc", None, {})
+        (repo / "samples" / "data" / "calc.stdin").write_text("1\n")
+        write_script(run=corpus_runs, export=corpus_exports, validate=corpus_validate)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "5",
+                           "--corpus"], root=tree / "semantics", repo=repo)
+        report = stdout.getvalue().splitlines()
+        summary = json.loads(report[-1])
+        listed = {line.split(" ", 2)[1].rstrip(":"): line.split(" ", 1)[0] for line in report[:-1]}
+        for cls in (MISMATCH, INCONCLUSIVE):
+            check(f"corpus {cls} count",
+                  summary[cls] == sum(1 for v in corpus_class.values() if v == cls))
+        check("corpus agree count", summary[AGREE] == 6)
+        check("corpus unsupported count", summary[UNSUPPORTED] == 3)
+        check("corpus exported count", summary["exported"] == 10)
+        check("corpus feature histogram", summary["unsupported_features"] == {"struct": 2, "float": 1})
+        check("corpus lists no unsupported program", UNSUPPORTED not in listed.values())
+        check("corpus lists each non-agreeing exported program",
+              sorted(listed) == ["core/abort_wrong_kind", "core/invalid_export", "core/out_of_fuel",
+                                 "core/wrong_output"])
+        check("corpus exit status is nonzero on a mismatch", status == 1)
+        check("no skipped program was run", summary[HARNESS_FAILURE] == 0)
+
+        # Unsupported programs alone do not fail the corpus.
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "5",
+                           "--corpus", "--case", "plain", "--case", "core/uses_struct",
+                           "--case", "samples/tour"], root=tree / "semantics", repo=repo)
+        check("corpus without mismatches exits 0", status == 0)
+        check("--case selects corpus programs by stem or name",
+              json.loads(stdout.getvalue().splitlines()[-1])["exported"] == 2)
         os.environ.pop("FAKE_SCRIPT")
     for failure in failures:
         print(f"self-test FAIL: {failure}")
@@ -608,7 +814,7 @@ def self_test() -> int:
     return 1 if failures else 0
 
 
-def main(argv=None, root: Path = HERE) -> int:
+def main(argv=None, root: Path = HERE, repo: Path = ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--goose", type=Path)
     parser.add_argument("--semantics", type=Path, help="the reference tool (goose-semantics)")
@@ -619,6 +825,8 @@ def main(argv=None, root: Path = HERE) -> int:
     parser.add_argument("--cc", default="clang", help="C compiler for --pipeline builds")
     parser.add_argument("--timeout", type=float, default=120, help="seconds per process")
     parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1))
+    parser.add_argument("--corpus", action="store_true",
+                        help="check every positive fixture of the main runner and every sample")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
     if args.self_test:
@@ -630,16 +838,24 @@ def main(argv=None, root: Path = HERE) -> int:
             parser.error(f"not a file: {tool}")
     if args.pipeline and not shutil.which(args.cc):
         parser.error(f"C compiler not found: {args.cc}")
-    fixtures = discover(root)
+    goose = args.goose.resolve()
+    if args.corpus:
+        builtin = load_main_runner(repo).tc.builtin_modules(goose)
+        fixtures = discover_corpus(repo, builtin)
+    else:
+        fixtures = discover(root)
     if args.case:
-        known = {fixture.name for fixture in fixtures}
+        known = {fixture.name for fixture in fixtures} | {fixture.name.split("/")[-1] for fixture in fixtures}
         unknown = [name for name in args.case if name not in known]
         if unknown:
             parser.error(f"unknown case: {', '.join(unknown)}")
-        fixtures = [fixture for fixture in fixtures if fixture.name in args.case]
-    counts = run_all(fixtures, args.goose.resolve(), args.semantics.resolve(), args.cc,
-                     args.pipeline, args.timeout, args.jobs)
-    return 0 if counts[AGREE] == sum(counts.values()) else 1
+        fixtures = [fixture for fixture in fixtures
+                    if fixture.name in args.case or fixture.name.split("/")[-1] in args.case]
+    summary = run_all(fixtures, goose, args.semantics.resolve(), args.cc,
+                      args.pipeline, args.timeout, args.jobs, args.corpus)
+    if args.corpus:
+        return int(any(summary[cls] for cls in (MISMATCH, HARNESS_FAILURE, INCONCLUSIVE)))
+    return 0 if summary[AGREE] == sum(summary[cls] for cls in CLASSES) else 1
 
 
 if __name__ == "__main__":
