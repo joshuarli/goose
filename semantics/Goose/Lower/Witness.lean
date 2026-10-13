@@ -3,9 +3,9 @@ import Goose.Core.Run
 import Goose.Lower.Commands
 
 /-!
-Checks that the lowering theorem for the straight-line fragment is not vacuous:
-committed goldens that it covers, and the fact that the interpreter of the
-lowered module agrees with Core on each, in both numeric profiles.
+Checks that the lowering theorem is not vacuous: committed goldens inside the
+fragment it covers, and the fact that the interpreter of the lowered module
+agrees with Core on each, in both numeric profiles.
 -/
 
 namespace Goose.Lower.Witness
@@ -15,7 +15,7 @@ open Goose.Proofs.Lower
 /-- Whether a Core module, given as the bytes of its file, is in the fragment. -/
 def covered (bs : ByteArray) : Bool :=
   match Core.Decode.decodeBytes bs with
-  | .ok m => moduleA m
+  | .ok m => moduleOk m
   | .error _ => false
 
 /-- The line `agree` prints for the module and its lowering. -/
@@ -32,7 +32,18 @@ def divZero : String := include_str "../../../test/gir/golden/gir_div_zero.core.
 def sliceOob : String := include_str "../../../test/gir/golden/gir_slice_oob.core.json"
 def intOverflow : String := include_str "../../../test/gir/golden/gir_int_overflow_debug.core.json"
 
+def branches : String := include_str "../../../test/gir/golden/gir_branches.core.json"
+def assertFail : String := include_str "../../../test/gir/golden/gir_assert_fail.core.json"
+def userAbort : String := include_str "../../../test/gir/golden/gir_user_abort.core.json"
+def exitCode : String := include_str "../../../test/gir/golden/gir_exit_code.core.json"
+def blockValue : String := include_str "../../../test/gir/golden/gir_ord02.core.json"
+
 #guard covered straight.toUTF8
+#guard covered branches.toUTF8
+#guard covered assertFail.toUTF8
+#guard covered userAbort.toUTF8
+#guard covered exitCode.toUTF8
+#guard covered blockValue.toUTF8
 #guard covered divZero.toUTF8
 #guard covered sliceOob.toUTF8
 #guard covered intOverflow.toUTF8
@@ -40,6 +51,8 @@ def intOverflow : String := include_str "../../../test/gir/golden/gir_int_overfl
 #guard (agreeLine .release straight.toUTF8).startsWith "[\"agree\""
 #guard (agreeLine .debug straight.toUTF8).startsWith "[\"agree\""
 #guard (agreeLine .release sliceOob.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"slice_oob\""
+#guard (agreeLine .release branches.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"assert\""
+#guard (agreeLine .debug branches.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"assert\""
 #guard (agreeLine .debug intOverflow.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"int_overflow\""
 
 end Goose.Lower.Witness
