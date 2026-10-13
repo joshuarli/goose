@@ -1,14 +1,14 @@
 import Goose.Core.Typing
 
 /-!
-GIR-H for the pilot profile: a typed control-flow graph over scalar SSA
-temporaries and memory slots.
+GIR-H for the pilot and flat fixed-struct profiles: a typed control-flow graph
+over SSA temporaries and memory slots.
 
 Design decisions that the rest of the pipeline relies on.
 
 * Data types are Core's types, unchanged. The only extra value type is the
   sampled `view`, which exists as an SSA value only. A value of aggregate type
-  (`arr`, `grow`) is a transient: it is built by `arrLit`/`arrFill` and read by
+  (`arr`, `grow`, `structT`) is a transient: it is constructed and read by
   `load`, and it lives in a slot or in the result of a global initializer.
 * Every source variable has a slot, numbered like the variable. Parameters
   arrive as parameters of the entry block and are copied into their slots
@@ -97,6 +97,8 @@ inductive Op
   | call (f : FnId) (args : List ValueId) (org : Option OriginId)
   | arrLit (t : Ty) (vs : List ValueId)
   | arrFill (t : Ty) (v : ValueId)
+  | structLit (t : Ty) (vs : List ValueId)
+  | fieldAddr (owner : ValueId) (index : Nat)
 
 
 /-- Instructions that define no value. -/
@@ -176,6 +178,8 @@ structure Module where
   funcs : Array Func
   entry : FnId
   origins : Array Origin
+  profile : ArtifactProfile := .pilot
+  structs : Array StructDef := #[]
 
 
 /-! ### Structure queries -/
@@ -213,8 +217,8 @@ def Op.uses : Op → List ValueId
   | .viewSlice _ v lo hi _ => v :: (lo.uses ++ hi.uses)
   | .push r v _ => [r, v]
   | .call _ args _ => args
-  | .arrLit _ vs => vs
-  | .arrFill _ v => [v]
+  | .arrLit _ vs | .structLit _ vs => vs
+  | .arrFill _ v | .fieldAddr v _ => [v]
 
 def PrintPart.uses : PrintPart → List ValueId
   | .text _ => []

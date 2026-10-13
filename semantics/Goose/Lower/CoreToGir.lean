@@ -131,8 +131,34 @@ instance : MonadStateOf LS B where
   set s' := fun _ _ => ((), s')
   modifyGet f := fun _ s => f s
 
+/-- Snapshot typing consults the same contents provenance as validation. The
+capability lookup is delayed until a snapshot needs it, so scalar emission does
+not walk the accumulated CFG. -/
 def tyEnv (env : LEnv) (s : LS) : GIR.TyEnv :=
-  ⟨env.slots, env.globals, env.sigs, s.vals⟩
+  { slots := env.slots
+    globals := env.globals
+    sigs := env.sigs
+    vals := s.vals
+    structs := env.mod.structs
+    contentsWritable := fun v =>
+      let f : GIR.Func :=
+        { name := ""
+          params := []
+          results := []
+          slots := env.slots
+          scopes := #[]
+          blocks := s.blocks.map fun b => ⟨b.params, b.insts.toList⟩
+          summary := .unknown
+          org := none }
+      let m : GIR.Module :=
+        { files := env.mod.files
+          globals := #[]
+          funcs := #[]
+          entry := 0
+          origins := env.mod.origins
+          profile := env.mod.profile
+          structs := env.mod.structs }
+      (f.permissions m s.vals)[v]?.map (·.2) }
 
 def curBlock : B (Option BlockId) := do pure (← get).cur
 
@@ -379,7 +405,9 @@ def lowerEach (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) (hb :
 mutual
 
 def lowerExpr : Expr → B ValueId
-  | .structLit .. => fun _ s => (panic! "struct construction lowering is not implemented", s)
+  | .structLit t es => do
+    let vs ← lowerExprs es
+    emitDef (.structLit t vs)
   | .lit t n => emitDef (.constInt t n)
   | .bool b => emitDef (.constBool b)
   | .read p => do
@@ -474,7 +502,9 @@ def lowerArgs : List Arg → B (List ValueId)
     pure (v :: vs)
 
 def lowerPlace : Place → B ValueId
-  | .field .. => fun _ s => (panic! "struct field lowering is not implemented", s)
+  | .field owner i => do
+    let r ← lowerPlace owner
+    emitDef (.fieldAddr r i)
   | .var x => emitDef (.slotAddr x)
   | .global g => emitDef (.globalAddr g)
   | .deref e => lowerExpr e
@@ -845,7 +875,9 @@ def lower (m : Module) : GIR.Module :=
     globals := m.globals.map (lowerGlobal m)
     funcs := m.impls.mapIdx fun implId impl => lowerImplAt m implId impl
     entry := ((m.contexts[m.entry]?).map (·.impl)).getD 0
-    origins := m.origins }
+    origins := m.origins
+    profile := m.profile
+    structs := m.structs }
 
 private def sameNameRootImpl : Impl :=
   { name := "same"

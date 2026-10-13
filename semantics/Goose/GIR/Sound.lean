@@ -71,6 +71,7 @@ theorem validate_stages {m : Module} (h : validate m = .ok ()) :
   unfold validate at h
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, ht, h⟩ := bind_ok h
   obtain ⟨_, hc, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h

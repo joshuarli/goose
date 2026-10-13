@@ -246,6 +246,12 @@ def execPure (cx : FnCtx) (fr : Frame) : Op → M RVal
       let x ← getVal fr v
       let i ← appendLoc l #[x]
       pure (.val (.ref { l with path := l.path ++ [i] }))
+    | .structLit t vs => do
+      let .structT sid _ := t | fault .shape
+      pure (.val (.record sid (← mapList (getVal fr) vs).toArray))
+    | .fieldAddr owner i => do
+      let l ← expectRef (← getVal fr owner)
+      pure (.val (.ref { l with path := l.path ++ [i] }))
     | .arrLit t vs => do
       let xs ← mapList (getVal fr) vs
       pure (.val (← expectArrayLit t xs.toArray))
