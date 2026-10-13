@@ -764,6 +764,21 @@ theorem LocTy.mono {s s' : Store} {l : Loc} {T : Ty} (hle : StoreLe s s') (h : L
   obtain ⟨x', hx', hT', _⟩ := hr _ _ hg
   exact ⟨x', (read_ok_iff _ _ _).2 ⟨old', ho', hx'⟩, hT' T hT⟩
 
+/-- Whole roots keep their flat types across writes, growth and shrink. This
+does not require their old lengths or interior locations to survive. -/
+def RootTyLe (s s' : Store) : Prop :=
+  ∀ r T, LocTy s ⟨r, []⟩ T → LocTy s' ⟨r, []⟩ T
+
+theorem RootTyLe.refl (s : Store) : RootTyLe s s :=
+  fun _ _ h => h
+
+theorem RootTyLe.trans {s₀ s₁ s₂ : Store}
+    (h₁ : RootTyLe s₀ s₁) (h₂ : RootTyLe s₁ s₂) : RootTyLe s₀ s₂ :=
+  fun r T h => h₂ r T (h₁ r T h)
+
+theorem RootTyLe.of_storeLe {s s' : Store} (h : StoreLe s s') : RootTyLe s s' :=
+  fun _ _ ht => LocTy.mono h ht
+
 theorem LocTy.mono_except {s s' : Store} {l : Loc} {T : Ty} {P : RootInst → Prop}
     (hagree : StoreLeExcept P s s') (hnot : ¬ P l.root) (h : LocTy s l T) :
     LocTy s' l T := by
@@ -1934,6 +1949,17 @@ theorem truncate_growshrink_locTy (s s' : Store) (o l : Loc) (len : Nat) (E T : 
       rw [get_append, hownerGet] at hget
       simpa using hget
     exact ⟨v, hretained i q v hi hsub, hflat⟩
+
+/-- Resizable truncation preserves root typing even when its removed suffix
+contains locations that no longer exist. A root is an ancestor of the owner. -/
+theorem truncate_growshrink_rootTyLe (s s' : Store) (o : Loc) (len : Nat) (E : Ty)
+    (hl : LocTy s o (.growshrink E)) (htruncate : s.truncate o len = .ok s') :
+    RootTyLe s s' := by
+  intro r T ht
+  apply truncate_growshrink_locTy s s' o ⟨r, []⟩ len E T hl htruncate _ ht
+  by_cases hr : r = o.root
+  · exact Or.inr (Or.inl ⟨hr, by simp⟩)
+  · exact Or.inl hr
 
 theorem LocTy.grow_to_growshrink {s : Store} {l : Loc} {E : Ty}
     (h : LocTy s l (.grow E)) : LocTy s l (.growshrink E) := by

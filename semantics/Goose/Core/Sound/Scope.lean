@@ -1,4 +1,4 @@
-import Goose.Core.Sound.Frame
+import Goose.Core.Sound.CallPreservation
 
 /-!
 How the frame changes when a variable is bound or rebound, when a call
@@ -273,6 +273,62 @@ theorem Frame.outer {s' : St} {D' : RootInst → Ty → Prop} {A' : RootInst →
       rcases hD r E hd' with ⟨_, k⟩ | ⟨x', lv', si', mu, k1, k2, k3, _⟩
       · exact k t (g3 t ht)
       · subst k3; exact absurd hd (hfr k2) }
+
+/-- Reconstruct the demanded caller frame after a call that may shrink owners.
+Only demanded bindings need typed-root preservation; the footprint preserves
+annotations for unchanged references and explicit slice facts cover rebinding. -/
+theorem Frame.outerPreserved {s' : St}
+    {D' : RootInst → Ty → Prop} {A' : RootInst → RootInst → Prop}
+    {future future' : List VarId} (h : Frame m W tenv penv env s future)
+    (he : Footprint [] (fun r => ∃ E, D' r E) s s')
+    (ht : PreservesRootTypes m W.G
+      (CallerRootTypes W tenv env future') s.store s'.store)
+    (hi : StoreInvAt m W.G env tenv.visible future' s')
+    (hfuture : ∀ x, x ∈ future' → x ∈ future)
+    (hsa : ∀ r E, D' r E → ∃ v, s'.store.roots[r]? = some v ∧
+      HasTy m W.G s'.store v (.slice .mutable E) ∧ ∀ t, Targets v t → A' r t)
+    (hD : ∀ r E, D' r E → (W.D r E ∧ ∀ t, A' r t → W.A r t) ∨
+      (∃ x lv si mu, env.vars[x]? = some lv ∧ env.scopes.lookup lv.scope = some si ∧
+        r = RootInst.local env.act si x ∧ lv.ty = .slice mu E ∧
+        ∀ t, A' r t → ∃ ann, penv.ann x = some ann ∧ Gam env W.P ann t))
+    (hDall : ∀ r E, W.D r E → D' r E) : Frame m W tenv penv env s' future' := by
+  have hfr : ∀ {x : VarId} {sc si : Nat} {E : Ty}, env.scopes.lookup sc = some si →
+      ¬ W.D (RootInst.local env.act si x) E := by
+    intro x sc si E hl hd
+    obtain ⟨a, si', x', e, hlt⟩ := h.dOut _ E hd
+    cases e
+    exact absurd (h.inst_lt hl).1 (Nat.not_le.2 hlt)
+  exact
+  { h with
+    below := fun p hp => ⟨(h.below p hp).1, Nat.lt_of_lt_of_le (h.below p hp).2 he.next⟩
+    base_le := Nat.le_trans h.base_le he.next
+    vis := by
+      intro x hx hfut
+      obtain ⟨lv, si, v, h1, h2, h3, h4, h5⟩ := h.vis x hx (hfuture x hfut)
+      obtain ⟨v', h6, h7⟩ := ht _ lv.ty
+        (Or.inl ⟨x, lv, si, hx, hfut, h1, h2, rfl, rfl⟩) v h4 h5
+      exact ⟨lv, si, v', h1, h2, h3, h6, h7⟩
+    rooted := by
+      intro x lv si v h1 h2 h3 r htarget
+      by_cases hd : ∃ E, D' (RootInst.local env.act si x) E
+      · obtain ⟨E, hd⟩ := hd
+        obtain ⟨v', g1, _, g3⟩ := hsa _ E hd
+        rw [h3] at g1
+        cases g1
+        rcases hD _ E hd with ⟨k, _⟩ | ⟨x', lv', si', mu, k1, k2, k3, k4, k5⟩
+        · exact absurd k (hfr h2)
+        · cases k3
+          exact k5 r (g3 r htarget)
+      · exact h.rooted x lv si v h1 h2 (he.back _ v h3 htarget.isRef (by simp) hd) r htarget
+    inv := hi
+    sa := by
+      intro r E hd
+      obtain ⟨v', g1, g2, g3⟩ := hsa r E (hDall r E hd)
+      refine ⟨v', g1, g2, fun t htarget => ?_⟩
+      rcases hD r E (hDall r E hd) with ⟨_, k⟩ | ⟨x', lv', si', mu, k1, k2, k3, _⟩
+      · exact k t (g3 t htarget)
+      · subst k3
+        exact absurd hd (hfr k2) }
 
 /-- Replacing the slice a caller's slice variable holds, through a reference
 to it: the frame holds, and the code around sees only that variable change. -/

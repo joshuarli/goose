@@ -187,6 +187,12 @@ theorem LocOk.mono {m : Module} {G : Nat} {s s' : Store} {l : Loc} {T : Ty} (hle
     (h : LocOk m G s l T) : LocOk m G s' l T :=
   h.elim (fun h => Or.inl (LocTy.mono hle h)) Or.inr
 
+/-- Whole-root typing also preserves a declared global that is not initialized
+yet: its declaration does not depend on the current store. -/
+theorem LocOk.root_mono {m : Module} {G : Nat} {s s' : Store} {r : RootInst} {T : Ty}
+    (hle : RootTyLe s s') (h : LocOk m G s ⟨r, []⟩ T) : LocOk m G s' ⟨r, []⟩ T :=
+  h.elim (fun ht => Or.inl (hle r T ht)) Or.inr
+
 theorem flat_mono {s s' : Store} {r : RootInst} {T : Ty} {v : Val} (hle : StoreLe s s')
     (hv : s.roots[r]? = some v) (h : FlatTy T v) : ∃ v', s'.roots[r]? = some v' ∧ FlatTy T v' := by
   obtain ⟨v', hv', hr⟩ := hle r v hv
@@ -201,6 +207,23 @@ theorem HasTy.mono {m : Module} {G : Nat} {s s' : Store} {v : Val} {T : Ty} (hle
     exact ⟨l, h1, h2.elim (fun h => Or.inl ⟨h.1, h.2.1.mono hle, h.2.2⟩)
       (fun h => Or.inr ⟨h.1, h.2.1, dom_mono hle h.2.2⟩)⟩
   · obtain ⟨l, st, n, h1, h2, h3⟩ := h; exact ⟨l, st, n, h1, h2, h3.mono hle⟩
+
+/-- Owner references denote whole-root headers, so preserving root types is
+enough even when truncation invalidates some interior locations. -/
+theorem HasTy.owner_mono {m : Module} {G : Nat} {s s' : Store}
+    {l : Loc} {mu : Mutability} {T : Ty}
+    (hle : RootTyLe s s') (howner : T.ownerElem?.isSome = true)
+    (h : HasTy m G s (.ref l) (.ref mu T)) : HasTy m G s' (.ref l) (.ref mu T) := by
+  have hpath := h.ownerHeader howner
+  obtain ⟨r, path⟩ := l
+  change path = [] at hpath
+  subst path
+  obtain ⟨l', hv, hloc⟩ := h
+  cases hv
+  refine ⟨⟨r, []⟩, rfl, ?_⟩
+  rcases hloc with ⟨htarget, hloc, hheader⟩ | ⟨hslice, _, _⟩
+  · exact Or.inl ⟨htarget, hloc.root_mono hle, hheader⟩
+  · cases T <;> simp [Ty.ownerElem?, Ty.isSlice] at howner hslice
 
 theorem Held.mono {m : Module} {G : Nat} {s s' : Store} {v : Val} (hle : StoreLe s s')
     (h : Held m G s v) : Held m G s' v := by
