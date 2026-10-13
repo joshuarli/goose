@@ -6,6 +6,7 @@ import Goose.Core.Sound.StepBlock2
 import Goose.Core.Sound.StepLoop
 import Goose.Core.Sound.StepCall3
 import Goose.Core.Sound.Module
+import Goose.Core.Sound.ShrinkBridge
 
 /-!
 The induction on fuel: every evaluation function meets its statement at every
