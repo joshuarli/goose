@@ -103,4 +103,95 @@ theorem AliasAt.ofAliasView {m : Module} {W : World} {penv : PEnv} {env : Env} {
     exact hroot'
   exact AliasAt.ofView hty hview hrootAlias
 
+/-- A checked read cannot use a reference to an uninitialized global. This
+fact depends only on the declared roots and permitted effects. -/
+theorem Gam.notUnbound_of_access {m : Module} {W : World} {env : Env} {l : Loc} {t : Ty}
+    {rho : List RootRef} (hp : Perm m W) (hg : Gam env W.P rho l.root)
+    (hin : ∀ target, target ∈ rootsTargets rho →
+      target ∈ W.E.reads ∨ target ∈ W.E.writes ∨
+        target ∈ W.E.grows ∨ target ∈ W.E.shrinks) : ¬ Unbound m W.G l t := by
+  rintro ⟨g, global, hG, hroot, hglobal, _⟩
+  rw [hroot] at hg
+  have hlt : g < m.globals.size := (Array.getElem?_eq_some_iff.mp hglobal).1
+  rcases hp with hp | ⟨_, hp⟩
+  · omega
+  · obtain ⟨q, hq, hr⟩ := hg
+    cases q with
+    | «local» x => obtain ⟨_, _, _, _, h⟩ := hr; cases h
+    | global g' =>
+      have heq : RootInst.global g = RootInst.global g' := hr
+      cases heq
+      have hbound : g < W.G := hp _ (hin _ (mem_rootsTargets_global hq))
+      omega
+    | param i =>
+      have hbound : g < W.G := hp _ (hin _ (mem_rootsTargets_param hq)) _ hr g rfl
+      omega
+
+/-- Fixed views retain the run produced by their checked evaluation. -/
+theorem ViewAliases.ofFixed {m : Module} {W : World} {penv : PEnv} {env : Env} {s : Store}
+    {source : View} {vw : ViewVal} {el : Ty} {state state' : RState} {rho : List RootRef}
+    (hresizable : vw.resizable = false)
+    (htype : penv.access.viewElement? source = some el)
+    (hreplay : rpView penv source state = .ok (rho, state'))
+    (hview : ViewOk s vw el) (hroot : Gam env W.P rho vw.loc.root) :
+    ViewAliases m W penv env s source vw el := by
+  apply ViewAliases.fixed hresizable
+  intro path alias halias
+  obtain ⟨aliasEl, roots, hlookup, _, hshape⟩ :=
+    AccessEnv.aliasView_singleton penv.access path source alias halias
+  have heq : aliasEl = el := Option.some.inj (hlookup.symm.trans htype)
+  refine ⟨?_, AliasAt.ofAliasView halias htype hreplay hview hroot⟩
+  rw [hshape, heq]
+
+/-- Resizable views retain the checked owner location rather than its old length. -/
+theorem ViewAliases.ofOwner {m : Module} {W : World} {penv : PEnv} {env : Env} {s : Store}
+    {p : Place} {vw : ViewVal} {el owner : Ty} {state state' : RState} {rho : List RootRef}
+    (hresizable : vw.resizable = true) (hflat : el.flat = true)
+    (howner : owner = .grow el ∨ owner = .growshrink el)
+    (htype : penv.access.placeType? p = some owner)
+    (hreplay : rpPlace penv p state = .ok (rho, state'))
+    (hplace : PlaceOk m W.G W.P penv env s p vw.loc owner)
+    (hroot : Gam env W.P rho vw.loc.root) (hbound : ¬ Unbound m W.G vw.loc owner) :
+    ViewAliases m W penv env s (.of p) vw el := by
+  apply ViewAliases.owner hresizable p owner rfl howner htype hbound
+  intro path alias halias
+  obtain ⟨aliasTy, roots, hlookup, _, hshape⟩ :=
+    AccessEnv.aliasPlace_singleton penv.access path p alias halias
+  have heq : aliasTy = owner := Option.some.inj (hlookup.symm.trans htype)
+  refine ⟨?_, AliasAt.ofAliasPlace halias htype hreplay hplace hroot ?_⟩
+  · rw [hshape, heq]
+  · rcases howner with rfl | rfl <;> exact Or.inl (by simpa [Ty.refTarget] using hflat)
+
+/-- A pilot store extension preserves either kind of source realization. -/
+theorem ViewAliases.mono {m : Module} {W : World} {penv : PEnv} {env : Env}
+    {s s' : Store} {source : View} {vw : ViewVal} {el : Ty}
+    (hle : StoreLe s s') (h : ViewAliases m W penv env s source vw el) :
+    ViewAliases m W penv env s' source vw el := by
+  cases h with
+  | fixed hresize hrealized =>
+    apply ViewAliases.fixed hresize
+    intro path alias halias
+    obtain ⟨hty, hvalue, hroots⟩ := hrealized path alias halias
+    exact ⟨hty, hvalue.mono hle, hroots⟩
+  | owner hresize p owner hsource howner htype hbound hrealized =>
+    apply ViewAliases.owner hresize p owner hsource howner htype hbound
+    intro path alias halias
+    obtain ⟨hty, hvalue, hroots⟩ := hrealized path alias halias
+    exact ⟨hty, hvalue.mono hle, hroots⟩
+
+/-- A retained, bound owner reference supplies its current location typing. -/
+theorem AliasAt.ownerLocation {m : Module} {W : World} {env : Env} {s : Store}
+    {alias : RetainedAlias} {l : Loc} {owner el : Ty}
+    (htype : alias.ty = .ref .mutable owner)
+    (howner : owner = .grow el ∨ owner = .growshrink el)
+    (hbound : ¬ Unbound m W.G l owner)
+    (h : AliasAt m W env s alias (.ref l)) : LocTy s l owner := by
+  have htyped := h.1
+  rw [htype] at htyped
+  obtain ⟨l', heq, hloc⟩ := htyped
+  cases heq
+  rcases hloc with ⟨_, hloc, _⟩ | ⟨hslice, _, _⟩
+  · exact hloc.resolve_right hbound
+  · rcases howner with rfl | rfl <;> simp [Ty.isSlice] at hslice
+
 end Goose.Core.Sound
