@@ -14,6 +14,10 @@
 - [9. Writing fast Goose](#9-writing-fast-goose)
 - [10. Where the compiler is more conservative than the specification](#10-where-the-compiler-is-more-conservative-than-the-specification)
 - [11. Audit findings and resolutions](#11-audit-findings-and-resolutions)
+- [12. Programs with C of their own, built as units](#12-programs-with-c-of-their-own-built-as-units)
+- [13. Sharing emitted implementations](#13-sharing-emitted-implementations)
+- [14. Build-cost and dependency reports](#14-build-cost-and-dependency-reports)
+- [15. Persistent code-generation units](#15-persistent-code-generation-units)
 
 </details>
 
@@ -151,6 +155,14 @@ are started through `process.h`, a translation unit of its own over
 | `--<name>-link msvc\|cc` | print the response file of link inputs a program using the blessed package imported as `name` (`gfx`, `audio`, `ui`, `physics`) needs, when the package is compiled into this compiler (`builtin.h`, `BuiltinLinkFile`) |
 | `--multi-test a.goose b.goose ...` | compile each file in turn with the other flags, as a process of its own on it would (an `Ast` and a compile thread each, which is all the state a compile has), each file's output on both streams ending in a line `==== goose --multi-test: exit <code> <file>`; an `-o` names each file's C with `%` for its name. It runs no programs and writes no dump files. The test runner's batches of compiler runs (`docs/testing.md`) |
 | `--compile-shader f [--shader-source msl\|hlsl]` | hidden: what a shader compiles to, without a program around it |
+| `--share` | merge identical emitted function bodies after checking, optimization and bounds-check elimination; checked contexts remain separate |
+| `--stable-names` | name emitted entities from stable keys instead of creation-order counters |
+| `--build-report FILE` | write versioned JSON with specialization, emission, sharing and phase-cost data |
+| `--build-report-deps` | add dependency and result digests to the report; requires `--build-report FILE` |
+| `--emit-units DIR` | write C code-generation units for an external compiler and linker; implies stable names |
+| `goose build --units` | compile units and reuse native objects in the build store |
+| `goose build --rebuild` | with `--units`, ignore existing object entries and replace them |
+| `goose build --verify-reuse` | with `--units`, recompile reused objects and compare them |
 
 `goose lint file.goose` is a separate semantic-analysis verb. It uses the same
 parser, resolver and typechecker, then stops before optimization, code
@@ -5456,3 +5468,88 @@ generated functions, or on being compiled in a unit with any of them: those are
 in other units. Its object is keyed by its text, the headers it reads by content
 and the contract, so editing a header rebuilds that unit and nothing else, and
 editing a Goose function recompiles that function's unit and not this one.
+
+## 13. Sharing emitted implementations
+
+`--share` runs after the checker has checked every specialization and after
+optimization and bounds-check elimination have produced function text. It
+groups functions with equal emitted signatures and bodies, replacing calls
+with the corresponding shared implementation. Callee references are compared
+by their own groups, including mutually recursive functions. The comparison
+is over generated C text, not source syntax or a guessed equivalence between
+contexts. Context-dependent checks, parameter representations, result forms,
+captures and return targets therefore keep bodies separate whenever they
+change the emitted text.
+
+Sharing can reduce emitted function count and C size; it does not change which
+contexts the checker validates, the linter's specialization fanout, or the
+facts used by the checker. It is opt-in. `--stable-names` independently names
+emitted entities from their stable keys; `--emit-units` enables those names
+because the unit builder uses them to keep symbols stable across edits. A
+build report's sharing section accounts for classes merged and common
+reasons otherwise-equal candidates remain distinct. This is an account of
+the emission pass, not a proof of semantic equivalence; behavior remains a
+compiler qualification question.
+
+## 14. Build-cost and dependency reports
+
+`--build-report FILE` writes `goose-build-report/1` JSON for one checked
+program. It records counts from checking through emission, per-function
+context and emitted-byte counts, the specialization dimensions that multiply
+contexts, and the phases' wall and CPU time. With `--units` it also records
+unit changes, native compiler invocations, object reuse and whether linking
+ran. Reporting does not select another compiler path. Without the flag, the
+reporting timers and attribution are inactive.
+
+`--build-report-deps` adds an optional `extensions.dependencies` section to
+that report. It records files read and absent paths, then groups checked
+contexts by their stable key with dependency, result, source-position and
+caller digests. The recorder observes what the checker consulted; it does
+not cause cached checking results to be reused. This data supports shadow
+invalidation prediction, where every recomputed result change must be
+predicted, before any future design could rely on it for reuse. The flag
+requires `--build-report FILE`; it is not a standalone output mode. It adds
+recording work to the check, so omit it for normal builds.
+
+Examples from the repository root, with a built compiler:
+
+```sh
+build/goose --check --build-report .work/tmp/report.json test/codegen/evaluation_order.goose
+build/goose --check --build-report .work/tmp/report-deps.json --build-report-deps test/codegen/evaluation_order.goose
+```
+
+## 15. Persistent code-generation units
+
+`--emit-units DIR` emits C as a runtime header and several translation units
+for a caller to compile and link. `goose build --units` drives the native
+compiler and linker and keeps objects in a store under the program's build
+directory, separated by the build contract. Both forms typecheck and emit the
+program; only the driver has a persistent object store. A program with
+`--include` headers or `--standalone` gets the `native.c` unit described in
+§12, which contains the runtime and the C interface the headers can see.
+
+The object key covers the unit text, the C compiler inputs reported for that
+unit, and the build contract (including compiler identity, version, target
+and flags). A changed unit can reuse its object only when those inputs still
+match. On platforms where the native compiler supplies no dependency file,
+the driver accounts for the runtime header and explicit `--include` headers.
+Builds serialize access to one store with a lock. Object publication is
+atomic: an object is available only after its completion record is written.
+An incomplete entry is rebuilt; a detected corrupt entry is reported and
+rebuilt. `--rebuild` ignores existing objects. `--verify-reuse` recompiles
+reused units and checks the resulting objects. Neither flag changes the
+single-file `-o` output path.
+
+The store also records the frontend inputs from the last successful build.
+When they are unchanged, the driver can reuse the previous executable and
+replay its warnings without running the frontend or native compiler. When
+frontend inputs change, checking still runs, so current diagnostics are
+produced before unit objects are considered. Reusing a native object does
+not reuse a typechecked result. Dependency reports described in §14 are
+shadow data only and are not inputs to the object store's invalidation.
+
+Package sidecars and native packages follow the existing package build and
+link path; their C is not folded into `native.c`. A program with its own
+non-builtin native part cannot use the whole-build no-op shortcut, although
+its generated Goose units still use the units object store. The scale corpus
+and the `--include` stand-in do not establish package-sidecar corpus coverage.
