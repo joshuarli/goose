@@ -2501,26 +2501,22 @@ theorem DemandExpectedSourceAt.sourceFacts {m owner path node phase expected}
   obtain ⟨hsource, hhasPhase⟩ := expectedPoints_evidence hwalk hmem
   exact ⟨by simpa [hpath, hnode] using hsource, by simpa [hnode, hphase] using hhasPhase⟩
 
-/-- A direct mutation request names the canonical owner checked during replay. -/
-theorem DemandExpectedSourceAt.directShrinkOwner
-    {m owner path node phase expected place access shrinkOwner}
+/-- A validated direct mutation has a successful owner query at its exact
+source occurrence. -/
+theorem DemandExpectedSourceAt.directShrinkOwner_result
+    {m owner path node phase expected place access}
     (sourceAt : DemandExpectedSourceAt m owner path node phase expected)
     (mutation : phase = .mutation)
     (directPlace : node.directShrinkPlace? = some place)
-    (accessMatches : demandAccess? m owner = some access)
-    (ownerResult : access.owner place = .ok shrinkOwner) :
-    shrinkOwner ∈ expected.shrinkOwners := by
+    (accessMatches : demandAccess? m owner = some access) :
+    ∃ shrinkOwner, access.owner place = .ok shrinkOwner ∧
+      expected.shrinkOwners = [shrinkOwner] := by
   rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
   obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
   have hsourceMap : expected ∈ result.entries.map fun entry => entry.expected := by
     rw [hmap]
     exact hmem
   rcases List.mem_map.mp hsourceMap with ⟨entry, hentry, hentryExpected⟩
-  have hentryPath : entry.item.path = path := by
-    calc
-      entry.item.path = entry.expected.path := entry.expectedPath.symm
-      _ = expected.path := congrArg DemandExpectedPoint.path hentryExpected
-      _ = path := hpath
   have hentryNode : entry.item.node = node := by
     calc
       entry.item.node = entry.expected.node := entry.expectedNode.symm
@@ -2532,14 +2528,35 @@ theorem DemandExpectedSourceAt.directShrinkOwner
   have hshrinkRequests : DemandNode.expectedShrinkOwners access node .mutation =
       .ok expected.shrinkOwners := by
     simpa [hsetupAccess, hentryNode, hphaseExpected, hentryExpected] using entry.shrinkRequests
-  have hownerList : [shrinkOwner] = expected.shrinkOwners := by
-    have hownerResult := hshrinkRequests
-    simp only [DemandNode.expectedShrinkOwners, directPlace, ownerResult] at hownerResult
-    change (Except.ok [shrinkOwner] : V (List DemandOwner)) =
-      Except.ok expected.shrinkOwners at hownerResult
-    exact Except.ok.inj hownerResult
-  rw [← hownerList]
-  simp
+  simp only [DemandNode.expectedShrinkOwners, directPlace] at hshrinkRequests
+  cases ownerResult : access.owner place with
+  | error error =>
+    rw [ownerResult] at hshrinkRequests
+    change (Except.error error : V (List DemandOwner)) = .ok expected.shrinkOwners
+      at hshrinkRequests
+    cases hshrinkRequests
+  | ok shrinkOwner =>
+    refine ⟨shrinkOwner, rfl, ?_⟩
+    rw [ownerResult] at hshrinkRequests
+    change (Except.ok [shrinkOwner] : V (List DemandOwner)) = .ok expected.shrinkOwners
+      at hshrinkRequests
+    exact (Except.ok.inj hshrinkRequests).symm
+
+/-- A direct mutation request names the canonical owner checked during replay. -/
+theorem DemandExpectedSourceAt.directShrinkOwner
+    {m owner path node phase expected place access shrinkOwner}
+    (sourceAt : DemandExpectedSourceAt m owner path node phase expected)
+    (mutation : phase = .mutation)
+    (directPlace : node.directShrinkPlace? = some place)
+    (accessMatches : demandAccess? m owner = some access)
+    (ownerResult : access.owner place = .ok shrinkOwner) :
+    shrinkOwner ∈ expected.shrinkOwners := by
+  obtain ⟨selected, selectedResult, selectedOwners⟩ :=
+    sourceAt.directShrinkOwner_result mutation directPlace accessMatches
+  have sameOwner : selected = shrinkOwner :=
+    Except.ok.inj (selectedResult.symm.trans ownerResult)
+  subst selected
+  simp [selectedOwners]
 
 /-- A call mutation occurrence reuses the checked access query for its
 arguments and for the owners requested by the callee summary. -/
