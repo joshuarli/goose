@@ -119,7 +119,8 @@ theorem checkContext_ok (m : Module) (ctx : Context) (h : checkContext m ctx = .
     simp only [hi] at h; inv at h
     obtain ⟨hann, hrs, hcont, st, ⟨rho, a, b, s1, hrb, hck⟩, hcs⟩ := h
     have annotationShape := hann
-    refine ⟨impl, rfl, annotationShape, ?_, ?_, ?_, rho, (a, b), st, ?_, ?_, hcs⟩
+    have resultShape := hrs
+    refine ⟨impl, rfl, annotationShape, resultShape, ?_, ?_, ?_, rho, (a, b), st, ?_, ?_, hcs⟩
     · intro i ann hlt hf q hq
       unfold checkAnnotationShape at hann
       simp only [ex_bind_ok] at hann
