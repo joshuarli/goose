@@ -263,6 +263,9 @@ struct CoreImpl {
 struct CoreContext {
     int impl = 0;
     string declkey;
+    // The stable identity of the checked context and the module of its
+    // declaration, for naming what is emitted from it. Not part of the wire format.
+    string stablekey, module;
     // Root set of each reference- or slice-typed variable, by ascending variable.
     vector<pair<int, vector<CoreRootRef>>> varroots;
     vector<vector<CoreRootRef>> resultroots;
@@ -274,6 +277,7 @@ struct CoreGlobal {
     CoreVarKind kind = CoreVarKind::Let;
     CoreExprP init;
     CoreOrigin org;
+    string module;   // As for a context.
 };
 
 struct CoreModule {
@@ -281,6 +285,7 @@ struct CoreModule {
     // The path of each file as the compiler writes it in a runtime diagnostic,
     // aligned with `files`. Not part of the wire format.
     vector<string> diagfiles;
+    vector<string> filemodules;   // The module of each file, aligned with `files`.
     vector<CoreType> types;
     vector<CoreGlobal> globals;
     vector<CoreImpl> impls;
