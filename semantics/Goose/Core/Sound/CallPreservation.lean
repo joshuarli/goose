@@ -750,6 +750,26 @@ theorem Frame.allowed_beforeBase {W : World} {tenv : TEnv} {penv : PEnv}
     change scope ≤ instanceId at older
     exact Nat.lt_of_le_of_lt older before
 
+/-- An older root denoted by this activation's annotations must come from a
+parameter or a global; a current local declaration cannot denote it. -/
+theorem Frame.gam_noEnv_of_beforeBase {W : World} {tenv : TEnv} {penv : PEnv}
+    {env : Env} {s : St} {future : List VarId} {roots : List RootRef} {root : RootInst}
+    (frame : Frame m W tenv penv env s future)
+    (before : BeforeBase W.base root) (denoted : Gam env W.P roots root) :
+    Gam noEnv W.P roots root := by
+  obtain ⟨q, membership, realization⟩ := denoted
+  cases q with
+  | global g => exact ⟨.global g, membership, realization⟩
+  | param i => exact ⟨.param i, membership, realization⟩
+  | «local» x =>
+    obtain ⟨lv, instanceId, _, lookup, rootEq⟩ := realization
+    subst root
+    obtain ⟨earlier, later, equal, _⟩ := List.lookup_eq_some_iff.mp lookup
+    have scopeMember : (lv.scope, instanceId) ∈ env.scopes := by
+      rw [equal]
+      exact List.mem_append_right _ List.mem_cons_self
+    exact False.elim ((Nat.not_le_of_gt before) (frame.below _ scopeMember).1)
+
 end CallObservations
 
 end Goose.Core.Sound
