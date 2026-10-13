@@ -277,6 +277,7 @@ void RejectsSummaryThatOmitsSliceParameterRebind() {
     GirFunc f;
     f.name = "set_slice";
     f.params = { refSlice, slice };
+    f.slots = { { refSlice, CoreVarKind::Let, 0, 0 }, { slice, CoreVarKind::Let, 0, 1 } };
     f.scopes = { -1 };
     GirBlock b;
     b.params = { { 0, refSlice }, { 1, slice } };
@@ -292,8 +293,43 @@ void RejectsSummaryThatOmitsSliceParameterRebind() {
     f.summary.writes = { CoreTarget { false, 0 } };
     m.funcs.push_back(f);
     assert(Code(m) == "GIR-V050");
+    m.funcs[1].slots.push_back({ refSlice, CoreVarKind::Let, 0, 2 });
+    assert(Code(m) == "GIR-V010");
+    m.funcs[1].slots.pop_back();
     m.funcs[1].summary.rebinds = { CoreTarget { false, 0 } };
     assert(Code(m) == "");
+}
+
+void RejectsReferenceToSliceResult() {
+    auto m = Base();
+    auto slice = m.SliceType(CoreMut::Mut, m.IntType(CoreIntTy::I64));
+    auto refSlice = m.RefType(CoreMut::Mut, slice);
+    GirFunc f;
+    f.name = "return_slice_reference";
+    f.params = { refSlice };
+    f.results = { refSlice };
+    GirBlock b;
+    b.params = { { 0, refSlice } };
+    b.insts = { Ret({ 0 }) };
+    f.blocks = { b };
+    m.funcs.push_back(f);
+    assert(Code(m) == "GIR-V010");
+}
+
+void RejectsReferenceToSliceGlobal() {
+    auto m = Base();
+    auto slice = m.SliceType(CoreMut::Mut, m.IntType(CoreIntTy::I64));
+    auto refSlice = m.RefType(CoreMut::Mut, slice);
+    GirGlobal g;
+    g.name = "slice_reference";
+    g.ty = refSlice;
+    g.init.name = "slice_reference_init";
+    g.init.results = { refSlice };
+    GirBlock b;
+    b.insts = { Ret() };
+    g.init.blocks = { b };
+    m.globals.push_back(g);
+    assert(Code(m) == "GIR-V010");
 }
 
 void RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter() {
@@ -617,6 +653,8 @@ int main() {
     RejectsSummaryThatOmitsAWrite();
     RejectsCallThatPropagatesATarget();
     RejectsSummaryThatOmitsSliceParameterRebind();
+    RejectsReferenceToSliceResult();
+    RejectsReferenceToSliceGlobal();
     RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter();
     RejectsParameterRootUnderapproximationAtCall();
     AcceptsUnreachableAfterANonReturningCall();

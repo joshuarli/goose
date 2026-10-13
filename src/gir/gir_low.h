@@ -96,7 +96,8 @@ private:
             case CoreType::Ref: {
                 auto k = HT(c.elem).kind;
                 if (k == CoreType::Grow) return { Ptr(), Ptr() };
-                if (k == CoreType::Ref || k == CoreType::Slice) return {};   // A slot of one.
+                if (k == CoreType::Slice) return { Ptr() };  // Address of the two-word slice slot.
+                if (k == CoreType::Ref) return {};           // A slot of one.
                 return { Ptr() };
             }
             case CoreType::Slice: case CoreType::View: return { Ptr(), I64() };
@@ -110,6 +111,7 @@ private:
             case CoreType::Int: return CoreIntBits(c.ity) / 8;
             case CoreType::Bool: return 1;
             case CoreType::Arr: return c.count * Size(c.elem);
+            case CoreType::Slice: return 16;
             default: return 8;
         }
     }
@@ -388,6 +390,14 @@ private:
             auto &p = places[s];
             auto name = cat("s", s);
             if (c.kind == CoreType::Arr) {
+                p.kind = Place::Bytes;
+                GirMember m;
+                m.kind = GirMember::Bytes;
+                m.size = Size(sl.ty);
+                m.scope = sl.scope;
+                m.name = name;
+                p.members = { Member(std::move(m)) };
+            } else if (c.kind == CoreType::Slice) {
                 p.kind = Place::Bytes;
                 GirMember m;
                 m.kind = GirMember::Bytes;
@@ -708,6 +718,10 @@ private:
             Define(i, { dst });
             return;
         }
+        if (c.kind == CoreType::Slice) {
+            Define(i, { PLoadV(Ptr(), rs.w[0]), PLoadV(I64(), WordAt(rs.w[0], 1)) });
+            return;
+        }
         auto lt = Words(t)[0];
         Define(i, { PLoadV(lt, rs.w[0]) });
     }
@@ -752,6 +766,10 @@ private:
     void StoreAt(GirTypeId t, int p, const vector<int> &w) {
         auto &c = HT(t);
         if (c.kind == CoreType::Arr) Copy(p, w[0], Size(t));
+        else if (c.kind == CoreType::Slice) {
+            PStoreV(Ptr(), p, w[0]);
+            PStoreV(I64(), WordAt(p, 1), w[1]);
+        }
         else PStoreV(Words(t)[0], p, w[0]);
     }
 
@@ -850,7 +868,8 @@ private:
             case Place::Scalar: SimpleE(GirOp::LocalSet, v.w[0], -1, p.members[0]); return;
             case Place::Bytes: {
                 auto dst = Simple(GirOp::FrameAddr, Ptr(), -1, -1, p.members[0]);
-                Copy(dst, v.w[0], Size(t));
+                if (HT(t).kind == CoreType::Slice) StoreAt(t, dst, v.w);
+                else Copy(dst, v.w[0], Size(t));
                 return;
             }
             case Place::Header: {

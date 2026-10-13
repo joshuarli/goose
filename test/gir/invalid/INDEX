@@ -19,6 +19,8 @@ gir_rejected_v001_entry_with_parameter.json	["rejected","GIR-V001","the entry ma
 gir_rejected_v001_global_initializer_type.json	["rejected","GIR-V001","the initializer of global flag must take no parameters and return its type"]
 gir_rejected_v001_value_defined_twice.json	["rejected","GIR-V001","function main: value %0 is defined twice"]
 gir_rejected_v010_add_of_bool.json	["rejected","GIR-V010","function main: value %0 is not an integer"]
+gir_rejected_v010_ref_slice_global.json	["rejected","GIR-V010","initializer of global slice_reference: a reference-to-slice type is only valid for a parameter"]
+gir_rejected_v010_ref_slice_result.json	["rejected","GIR-V010","function return_slice_reference: a reference-to-slice type is only valid for a parameter"]
 gir_rejected_v020_edge_argument_type.json	["rejected","GIR-V020","function main: argument %0 of the branch from block 0 to block 1 has another type than parameter %1"]
 gir_rejected_v020_no_terminator.json	["rejected","GIR-V020","function main: block 0 has 0 terminators, expected one"]
 gir_rejected_v020_two_terminators.json	["rejected","GIR-V020","function main: block 0 has 2 terminators, expected one"]

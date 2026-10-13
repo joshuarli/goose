@@ -646,9 +646,15 @@ private:
             for (size_t k = 0; same && k < f.params.size(); k++) same = b0.params[k].second == f.params[k];
             if (!same) TypeFail(fn, "the parameters of block 0 are not the function's parameters");
         }
-        for (auto &sl : f.slots)
-            if (!GirStorable(m, sl.ty))
+        for (auto result : f.results)
+            if (IsRefSlice(result))
+                TypeFail(fn, "a reference-to-slice type is only valid for a parameter");
+        for (auto &sl : f.slots) {
+            bool parameterRefSliceSlot = sl.var >= 0 && sl.var < (int)f.params.size() &&
+                                         f.params[sl.var] == sl.ty && IsRefSlice(sl.ty);
+            if (!GirStorable(m, sl.ty) && !parameterRefSliceSlot)
                 TypeFail(fn, cat("the slot of variable ", sl.var, " has a type no variable may have"));
+        }
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
                 if (GirDefinesValue(i)) {

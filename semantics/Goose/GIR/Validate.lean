@@ -260,8 +260,14 @@ def checkInstTypes (f : Func) (env : TyEnv) (vt : Array (Option VTy)) : Inst →
 def checkTypes (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do
   let env : TyEnv := { m.tyEnv f with vals := vt }
   asCheck .v010 label (do
+    checkAll f.results fun t => do
+      unless !t.isRefSlice do
+        throw "a reference-to-slice type is only valid for a parameter"
     checkAll f.slots.toList fun sl => do
-      unless sl.ty.storable do throw s!"the slot of variable {sl.var} has a type no variable may have"
+      let parameterRefSliceSlot :=
+        sl.var < f.params.length && f.params[sl.var]? == some sl.ty && sl.ty.isRefSlice
+      unless sl.ty.storable || parameterRefSliceSlot do
+        throw s!"the slot of variable {sl.var} has a type no variable may have"
     checkAll f.blocks.toList fun b => checkAll b.insts (checkInstTypes f env vt)
     match f.blocks[0]? with
     | some b =>
@@ -506,7 +512,8 @@ def checkStorage (label : String) (f : Func) (vt : Array (Option VTy)) : Check U
       match i with
       | .def _ (.load r) =>
         match refOf r with
-        | some (_, t) => unless t.readable do violation .v030 s!"{label}: a load of a value that cannot be copied"
+        | some (_, t) => unless t.readable || t.isRefSlice do
+            violation .v030 s!"{label}: a load of a value that cannot be copied"
         | none => pure ()
       | .eff (.store r _ _) =>
         match refOf r with
