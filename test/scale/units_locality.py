@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What an edit changes among the units `--emit-units` writes.
 
-  python test/scale/units_locality.py --goose GOOSE [--work DIR]
+  python test/scale/units_locality.py --goose GOOSE [--pipeline gir] [--work DIR]
 
 Writes small multi-module programs and the synthetic family's edits, emits
 units before and after each edit, and compares the two directories file by
@@ -10,6 +10,10 @@ anything else changing is a failure, and so is a required unit that did not.
 One line per case says which units changed against which were expected. Also
 checks that two runs write identical directories, and that no function symbol
 of the original program is renamed or lost by an edit that only adds.
+
+With `--pipeline gir` the units are the IR pipeline's. The synthetic family's
+programs are outside what it supports, so only the two-module cases run, and a
+case that the pipeline refuses is skipped and said so.
 
 Prints one line per case and exits 1 if any fails.
 """
@@ -48,11 +52,14 @@ fn main() {
 """
 
 
+PIPELINE = []
+
+
 def emit(goose, source, out, *flags):
     shutil.rmtree(out, ignore_errors=True)
     # Run in the program's directory with a relative path: the paths a unit
     # holds are as the compiler was given them.
-    r = subprocess.run([str(Path(goose).resolve()), "-O0", *flags, "--emit-units", str(out.resolve()),
+    r = subprocess.run([str(Path(goose).resolve()), "-O0", *PIPELINE, *flags, "--emit-units", str(out.resolve()),
                         source.name], capture_output=True, text=True, cwd=source.parent)
     if r.returncode:
         raise RuntimeError(f"{source}: {(r.stdout + r.stderr)[-400:]}")
@@ -102,8 +109,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--goose", required=True)
+    ap.add_argument("--pipeline", choices=["gir"], help="emit the units through this compiler pipeline")
     ap.add_argument("--work")
     a = ap.parse_args()
+    if a.pipeline:
+        PIPELINE[:] = ["--pipeline", a.pipeline]
     scratch = ROOT / ".work" / "tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     bad = []
@@ -159,7 +169,10 @@ def main():
              edited("module", main=MAIN.replace("import b;", "import b;\nimport c;")
                     .replace("b_name();", "b_name();\n    print(c_one());"),
                     extra={"c.goose": "fn c_one() -> i64 { return 1; }\n"}),
-             {"main.code", "c.code", "c.loc", "units.txt"}, {"main.loc", "program"}, add_only=True)
+             # The IR pipeline gives a function a location table only if it has a
+             # check or a call to name one for.
+             {"main.code", "c.code", "units.txt"} | ({"c.loc"} if not PIPELINE else set()),
+             {"main.loc", "program"} | ({"c.loc"} if PIPELINE else set()), add_only=True)
 
         # The synthetic family's edits, each against the original program.
         def family(edit=None):
@@ -171,7 +184,16 @@ def main():
             subprocess.run(cmd, check=True, capture_output=True)
             return emit(goose, d / "main.goose", tmp / f"fam{edit or ''}_units")
 
-        orig = family()
+        orig = None
+        try:
+            orig = family()
+        except RuntimeError as error:
+            if not PIPELINE:
+                raise
+            print(f"SKIP  family and sharded cases: {str(error).strip().splitlines()[-1][:100]}")
+        if orig is None:
+            print("units_locality: " + ("ok" if not bad else f"{len(bad)} failed: {', '.join(bad)}"))
+            return 1 if bad else 0
         case("family E02 comment above a function", orig, family("E02"), {"main.loc"}, set())
         case("family E03 leaf body", orig, family("E03"), {"main.code"}, {"main.loc"})
         case("family E08 specialization request", orig, family("E08"), {"main.code"},

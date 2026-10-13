@@ -877,6 +877,11 @@ private:
         f.blocks = std::move(blocks);
         f.summary = impl.summary;
         f.org = impl.vars.empty() ? -1 : Org(impl.vars[0].org);
+        auto index = (size_t)(&impl - core.impls.data());
+        if (index < core.contexts.size() && core.contexts[index].impl == (int)index) {
+            f.key = core.contexts[index].stablekey;
+            f.module = core.contexts[index].module;
+        }
         return f;
     }
 
@@ -896,6 +901,9 @@ private:
         out.ty = g.type;
         out.kind = g.kind;
         out.org = Org(g.org);
+        out.module = g.module;
+        out.init.module = g.module;
+        out.init.key = Sha256::Of(cat(g.module, "::", g.name)).Short();
         out.init.name = g.name;
         out.init.results = { g.type };
         ScopePairs pairs;

@@ -49,6 +49,7 @@ public:
         l.low = true;
         l.files = h.files;
         l.diagfiles = h.diagfiles;
+        l.filemodules = h.filemodules;
         l.origins = h.origins;
         l.entry = h.entry;
         // Signatures first: a call needs its callee's before its body exists.
@@ -133,6 +134,7 @@ private:
     GirLowGlobal PlaceGlobal(const GirGlobal &g) {
         GirLowGlobal out;
         out.name = g.name;
+        out.module = g.module;
         auto k = HT(g.ty).kind;
         out.ty = -1;
         if (k == CoreType::Arr) {
@@ -432,6 +434,8 @@ private:
         lf = GirFunc {};
         lf.name = f.name;
         lf.org = f.org;
+        lf.key = f.key;
+        lf.module = f.module;
         lf.summary.unknown = true;   // Effects are a property of the high stage.
         lvals.clear();
         marks.clear();

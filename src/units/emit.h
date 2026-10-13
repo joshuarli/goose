@@ -39,9 +39,11 @@ inline string UnitName(const string &s) {
     return out;
 }
 
-inline string CodeGen::SegmentId(const string &module) {
+inline string UnitSegmentId(const string &module) {
     return cat(UnitName(module), "_", Sha256::Of(module).Hex(4));
 }
+
+inline string CodeGen::SegmentId(const string &module) { return UnitSegmentId(module); }
 
 inline string CodeGen::GlobalModule(VarDef *d) {
     if (globalmods.empty())
@@ -251,34 +253,91 @@ template<typename F> void UnitTokens(string_view text, F &&f) {
     });
 }
 
-inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
+// What the unit assembler reads of a finished program: the sections of C text
+// a code generator wrote, in the conventions the assembler splits them by, and
+// the few facts about modules and functions it cannot read off the text. The
+// legacy code generator fills it from itself (UnitSourceOf); the IR pipeline's
+// emitter fills it with the same conventions.
+struct UnitGlobalNames {
+    string module;
+    vector<string> texts;      // The texts that name the global: its member, its stack, its pool.
+    string name;               // The text of its name, where it is a constant of the module.
+};
+
+struct UnitSource {
+    string tdecls, data, pdata, gblock, externtext, code, includetext;
+    vector<UnitGlobalNames> globals;
+    vector<pair<string, string>> unitinits;    // Module and the function initializing its globals.
+    unordered_set<string> exports;
+    struct Fn {
+        string module;
+        FnSpec *rep = nullptr;                 // The legacy specialization behind it, if any.
+    };
+    unordered_map<string, Fn> functions;       // Emitted function name -> where it belongs.
+    vector<string> segmodules;
+    function<string(const string &)> segname;
+    function<void(const string &)> fail;
+    [[noreturn]] void Fail(const string &message) const {
+        fail(message);
+        abort();
+    }
+    string SegName(const string &module) const { return segname(module); }
+};
+
+inline UnitSource UnitSourceOf(CodeGen &cg) {
     auto &keys = cg.Keys();
     // The specialization behind each emitted function name, where sharing did
     // not say (a function it left out of its classes).
     for (auto &[sp, si] : cg.sinfo) cg.classrep.emplace(si.cname, sp);
     for (auto &[sp, name] : cg.ernames) if (!name.empty()) cg.classrep.emplace(name, sp);
-    // ---- Segments of the globals. ----
-    auto modules = cg.SegmentModules();
-    unordered_map<string, string> memberseg;           // Member name -> module.
-    unordered_map<string, string> staticmod;           // Static constant -> module.
+    UnitSource src;
+    src.tdecls = cg.tdecls;
+    src.data = cg.data;
+    src.pdata = cg.pdata;
+    src.gblock = cg.gblock;
+    src.externtext = cg.externtext;
+    src.code = cg.code;
+    src.includetext = cg.includetext;
+    src.segmodules = cg.SegmentModules();
     for (auto g : cg.ast.globals)
         for (auto d : g->defs) {
-            auto module = cg.GlobalModule(d);
-            vector<string> texts = { cg.gnames[d] };
-            if (cg.gstks.count(d)) texts.push_back(cg.gstks[d]);
-            if (cg.gpools.count(d)) { texts.push_back(cg.gpools[d].first); texts.push_back(cg.gpools[d].second); }
-            for (auto &t : texts)
-                for (auto at = t.find("GS_GL->"); at != string::npos; at = t.find("GS_GL->", at + 7)) {
-                    auto b = at + 7, e = b;
-                    while (e < t.size() && (isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
-                    memberseg[t.substr(b, e - b)] = module;
-                }
-            UnitTokens(cg.gnames[d], [&](string_view tok) { staticmod.emplace(string(tok), module); });
+            UnitGlobalNames n;
+            n.module = cg.GlobalModule(d);
+            n.texts = { cg.gnames[d] };
+            if (cg.gstks.count(d)) n.texts.push_back(cg.gstks[d]);
+            if (cg.gpools.count(d)) { n.texts.push_back(cg.gpools[d].first); n.texts.push_back(cg.gpools[d].second); }
+            n.name = cg.gnames[d];
+            src.globals.push_back(std::move(n));
         }
+    src.unitinits = cg.unitinits;
+    for (auto sf : cg.ast.functions)
+        if (sf->isexport) src.exports.insert(sf->cname);
+    for (auto &[name, sp] : cg.classrep)
+        src.functions[name] = { keys.ModuleOf(sp->sf->line.fileidx), sp };
+    src.segname = [&cg](const string &module) { return cg.SegName(module); };
+    src.fail = [&cg](const string &message) { cg.Fail(Line {}, message); };
+    return src;
+}
+
+inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInputs &in) {
+    // ---- Segments of the globals. ----
+    auto &modules = src.segmodules;
+    unordered_map<string, string> memberseg;           // Member name -> module.
+    unordered_map<string, string> staticmod;           // Static constant -> module.
+    for (auto &g : src.globals) {
+        auto &module = g.module;
+        for (auto &t : g.texts)
+            for (auto at = t.find("GS_GL->"); at != string::npos; at = t.find("GS_GL->", at + 7)) {
+                auto b = at + 7, e = b;
+                while (e < t.size() && (isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
+                memberseg[t.substr(b, e - b)] = module;
+            }
+        UnitTokens(g.name, [&](string_view tok) { staticmod.emplace(string(tok), module); });
+    }
     map<string, vector<string>> segmembers;            // Module -> member declaration lines.
-    for (size_t a = 0; a < cg.gblock.size();) {
-        auto e = cg.gblock.find('\n', a);
-        auto line = cg.gblock.substr(a, e - a);
+    for (size_t a = 0; a < src.gblock.size();) {
+        auto e = src.gblock.find('\n', a);
+        auto line = src.gblock.substr(a, e - a);
         a = e + 1;
         if (line.empty()) continue;
         auto semi = line.rfind(';');
@@ -286,7 +345,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
         while (b > 0 && (isalnum((unsigned char)line[b - 1]) || line[b - 1] == '_')) b--;
         auto member = line.substr(b, semi - b);
         auto it = memberseg.find(member);
-        if (it == memberseg.end()) cg.Fail(Line {}, cat("unit mode: global member ", member, " has no module"));
+        if (it == memberseg.end()) src.Fail(cat("unit mode: global member ", member, " has no module"));
         segmembers[it->second].push_back(line);
     }
 
@@ -294,7 +353,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
     vector<UnitEntity> ents;
     unordered_map<string, int> entof;
     auto add = [&](UnitEntity e) {
-        if (entof.count(e.name)) cg.Fail(Line {}, cat("unit mode: two entities named ", e.name));
+        if (entof.count(e.name)) src.Fail(cat("unit mode: two entities named ", e.name));
         entof[e.name] = (int)ents.size();
         ents.push_back(std::move(e));
         return (int)ents.size() - 1;
@@ -303,7 +362,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
     // Types.
     vector<UnitTypeChunk> tchunks;
     {
-        auto &t = cg.tdecls;
+        auto &t = src.tdecls;
         size_t i = 0;
         while (i < t.size()) {
             while (i < t.size() && isspace((unsigned char)t[i])) i++;
@@ -349,7 +408,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                     p = comma + 1;
                 }
             } else {
-                cg.Fail(Line {}, cat("unit mode: unrecognized type declaration: ", x.substr(0, 40)));
+                src.Fail(cat("unit mode: unrecognized type declaration: ", x.substr(0, 40)));
             }
             tchunks.push_back(std::move(c));
         }
@@ -386,7 +445,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
 
     // Segment layouts, one per module.
     for (auto &module : modules) {
-        auto seg = cg.SegName(module);
+        auto seg = src.SegName(module);
         // The type's name is declared without its fields, so a unit that only
         // names the segment does not see them.
         UnitEntity fwd;
@@ -420,9 +479,9 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
     map<string, string> filestrings;                   // File name symbol -> its literal.
     map<string, string> staticconstdefs;               // Name -> definition.
     {
-        for (size_t a = 0; a < cg.data.size();) {
-            auto e = cg.data.find('\n', a);
-            auto line = cg.data.substr(a, e - a);
+        for (size_t a = 0; a < src.data.size();) {
+            auto e = src.data.find('\n', a);
+            auto line = src.data.substr(a, e - a);
             a = e + 1;
             if (line.compare(0, 14, "static GS_TLS ") == 0) {
                 auto name = line.substr(line.rfind(' ') + 1);
@@ -454,7 +513,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                 sc.decl = "extern " + line.substr(7, eq - 7) + ";";
                 sc.def = line.substr(7) + "\n";
                 auto it = staticmod.find(name);
-                if (it == staticmod.end()) cg.Fail(Line {}, cat("unit mode: constant ", name, " has no module"));
+                if (it == staticmod.end()) src.Fail(cat("unit mode: constant ", name, " has no module"));
                 sc.home = it->second;
                 add(sc);
             } else if (line == "static int gs_program_initialized;") {
@@ -470,7 +529,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                        line.compare(0, 15, "#define GS_GL ((") == 0) {
                 continue;
             } else {
-                cg.Fail(Line {}, cat("unit mode: unrecognized data declaration: ", line.substr(0, 60)));
+                src.Fail(cat("unit mode: unrecognized data declaration: ", line.substr(0, 60)));
             }
         }
     }
@@ -478,16 +537,16 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
     // Literals.
     struct Lit { string name, decl, def; };
     vector<Lit> lits;
-    for (size_t a = 0; a < cg.pdata.size();) {
+    for (size_t a = 0; a < src.pdata.size();) {
         auto start = a;
         for (;;) {
-            auto e = cg.pdata.find('\n', a);
-            auto lineend = e == string::npos ? cg.pdata.size() : e;
-            auto last = lineend > a ? cg.pdata[lineend - 1] : ' ';
-            a = e == string::npos ? cg.pdata.size() : e + 1;
-            if (last == ';' || a >= cg.pdata.size()) break;
+            auto e = src.pdata.find('\n', a);
+            auto lineend = e == string::npos ? src.pdata.size() : e;
+            auto last = lineend > a ? src.pdata[lineend - 1] : ' ';
+            a = e == string::npos ? src.pdata.size() : e + 1;
+            if (last == ';' || a >= src.pdata.size()) break;
         }
-        auto stmt = cg.pdata.substr(start, a - start);
+        auto stmt = src.pdata.substr(start, a - start);
         if (stmt.find_first_not_of(" \n") == string::npos) continue;
         auto eq = stmt.find(" = ");
         auto b = stmt.rfind(' ', eq - 1);
@@ -513,9 +572,9 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
     // Extern functions of the program's C side, added once the program's own
     // functions are known: an export's name may also be declared extern.
     vector<UnitEntity> externfns;
-    for (size_t a = 0; a < cg.externtext.size();) {
-        auto e = cg.externtext.find('\n', a);
-        auto line = cg.externtext.substr(a, e - a);
+    for (size_t a = 0; a < src.externtext.size();) {
+        auto e = src.externtext.find('\n', a);
+        auto line = src.externtext.substr(a, e - a);
         a = e + 1;
         if (line.empty()) continue;
         UnitEntity ex;
@@ -529,11 +588,10 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
     vector<UnitChunk> chunks;
     {
         unordered_set<string> exports;
-        for (auto sf : cg.ast.functions)
-            if (sf->isexport) exports.insert(sf->cname);
+        for (auto &e : src.exports) exports.insert(e);
         unordered_map<string, string> initmod;
-        for (auto &[module, fn] : cg.unitinits) initmod[fn] = module;
-        for (auto &text : UnitSplitFunctions(cg.code)) {
+        for (auto &[module, fn] : src.unitinits) initmod[fn] = module;
+        for (auto &text : UnitSplitFunctions(src.code)) {
             UnitChunk c;
             c.text = text;
             c.name = UnitFunctionName(UnitDefinitionLine(text).substr(0, UnitDefinitionLine(text).size()));
@@ -553,11 +611,11 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                 c.kind = UnitChunk::Helper;
                 c.module = "~helpers";
             } else {
-                auto it = cg.classrep.find(n);
-                if (it == cg.classrep.end()) cg.Fail(Line {}, cat("unit mode: unplaced function ", n));
+                auto it = src.functions.find(n);
+                if (it == src.functions.end()) src.Fail(cat("unit mode: unplaced function ", n));
                 c.kind = UnitChunk::Spec;
-                c.rep = it->second;
-                c.module = keys.ModuleOf(c.rep->sf->line.fileidx);
+                c.rep = it->second.rep;
+                c.module = it->second.module;
             }
             c.isstatic = c.kind == UnitChunk::Helper && c.text.size() <= kStaticHelperBytes;
             chunks.push_back(std::move(c));
@@ -593,15 +651,15 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                 out += "GS_GL";
                 st = None;
             } else if (st == GL2) {
-                if (!ident) cg.Fail(Line {}, cat("unit mode: a global is not named in ", c.name));
+                if (!ident) src.Fail(cat("unit mode: a global is not named in ", c.name));
                 auto it = memberseg.find(string(tok));
-                if (it == memberseg.end()) cg.Fail(Line {}, cat("unit mode: global member ", tok, " has no module"));
+                if (it == memberseg.end()) src.Fail(cat("unit mode: global member ", tok, " has no module"));
                 c.segbodies.insert(it->second);
-                out += cg.SegName(it->second) + "->" + string(tok);
+                out += src.SegName(it->second) + "->" + string(tok);
                 st = None;
                 return;
             } else if (st == Cond1) {
-                if (!ident) cg.Fail(Line {}, cat("unit mode: a conditional location is not a variable in ", c.name));
+                if (!ident) src.Fail(cat("unit mode: a conditional location is not a variable in ", c.name));
                 condvar = string(tok);
                 st = Cond2;
                 return;
@@ -610,16 +668,16 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                 size_t p = 0;
                 auto expect = [&](string_view s) {
                     if (tok.compare(p, s.size(), s) != 0)
-                        cg.Fail(Line {}, cat("unit mode: unsupported conditional location in ", c.name));
+                        src.Fail(cat("unit mode: unsupported conditional location in ", c.name));
                     p += s.size();
                 };
                 auto number = [&]() {
                     auto b = p;
                     while (p < tok.size() && isdigit((unsigned char)tok[p])) p++;
-                    if (b == p) cg.Fail(Line {}, cat("unit mode: unsupported conditional location in ", c.name));
+                    if (b == p) src.Fail(cat("unit mode: unsupported conditional location in ", c.name));
                     return atoi(string(tok.substr(b, p - b)).c_str());
                 };
-                if (ident) cg.Fail(Line {}, cat("unit mode: unsupported conditional location in ", c.name));
+                if (ident) src.Fail(cat("unit mode: unsupported conditional location in ", c.name));
                 expect(") ? ");
                 auto m = number();
                 expect(" : ");
@@ -634,10 +692,10 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
             } else if (st == File) {
                 if (!ident && tok == ", (") { st = Cond1; return; }
                 if (ident || tok.compare(0, 2, ", ") != 0)
-                    cg.Fail(Line {}, cat("unit mode: a location is not a file and a line in ", c.name));
+                    src.Fail(cat("unit mode: a location is not a file and a line in ", c.name));
                 size_t d = 2, e = 2;
                 while (e < tok.size() && isdigit((unsigned char)tok[e])) e++;
-                if (e == d) cg.Fail(Line {}, cat("unit mode: a location has no line in ", c.name));
+                if (e == d) src.Fail(cat("unit mode: a location has no line in ", c.name));
                 out += tableref(file, atoi(string(tok.substr(d, e - d)).c_str()));
                 out.append(tok.data() + e, tok.size() - e);
                 st = None;
@@ -651,10 +709,10 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
             }
             out.append(tok.data(), tok.size());
         });
-        if (st != None) cg.Fail(Line {}, cat("unit mode: unfinished rewrite in ", c.name));
+        if (st != None) src.Fail(cat("unit mode: unfinished rewrite in ", c.name));
         c.text = std::move(out);
         c.head = UnitHead(c.text, c.name);
-        if (c.head.empty()) cg.Fail(Line {}, cat("unit mode: no definition line for ", c.name));
+        if (c.head.empty()) src.Fail(cat("unit mode: no definition line for ", c.name));
         c.tablesize = (int)table.entries.size();
     }
 
@@ -725,7 +783,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
     for (auto &module : modules) {
         auto file = stem(module) + ".globals.c";
         auto &u = unit(file, UnitBuild::Globals, module);
-        auto seg = cg.SegName(module);
+        auto seg = src.SegName(module);
         u.roots.insert(seg + "_t");
         u.roots.insert(seg + "_s");
         u.defs.push_back(ents[entof[seg]].def);
@@ -785,7 +843,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
             for (auto &[f, line] : tables[ci].entries) filesused.insert(f);
         for (auto &f : filesused) {
             auto it = filestrings.find(f);
-            if (it == filestrings.end()) cg.Fail(Line {}, cat("unit mode: unknown file ", f));
+            if (it == filestrings.end()) src.Fail(cat("unit mode: unknown file ", f));
             u.defs.push_back(it->second + "\n");
         }
         for (auto ci : list) {
@@ -826,7 +884,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
         };
         for (auto ci : u.chunks) {
             scan(chunks[ci].text);
-            for (auto &m : chunks[ci].segbodies) scan(cg.SegName(m) + "_s");
+            for (auto &m : chunks[ci].segbodies) scan(src.SegName(m) + "_s");
         }
         for (auto &d : u.defs) scan(d);
         for (auto &r : u.roots) scan(r);
@@ -886,7 +944,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
                         if (!tchunks[vi].forward && vi != *it && need.count(vi) && !done.count(vi)) ready = false;
                 if (ready) { pick = it; break; }
             }
-            if (pick == pending.end()) cg.Fail(Line {}, "unit mode: a type depends on itself by value");
+            if (pick == pending.end()) src.Fail("unit mode: a type depends on itself by value");
             types += tchunks[*pick].text + "\n\n";
             done.insert(*pick);
             pending.erase(pick);
@@ -930,7 +988,7 @@ inline void WriteUnits(CodeGen &cg, const string &dir, const UnitInputs &in) {
             text += types + "\n" + layoutstext;
             parts.types = (long long)types.size();
             parts.layouts = (long long)layoutstext.size();
-            if (usesextern) { text += "\n" + cg.includetext; parts.includes += (long long)cg.includetext.size(); }
+            if (usesextern) { text += "\n" + src.includetext; parts.includes += (long long)src.includetext.size(); }
         }
         text += "\n";
         for (auto &[name, decl] : externs) {
