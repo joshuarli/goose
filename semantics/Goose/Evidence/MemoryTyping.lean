@@ -201,6 +201,19 @@ theorem WeakStoreTy.read {roots : RootDeclarations} {store : Store} {location : 
   subst storedTy
   exact storedTyped.get path selected
 
+theorem WeakStoreTy.readLoc {roots : RootDeclarations} {before after : St} {location : Loc}
+    {ty : Ty} {value : Val} (typed : WeakStoreTy roots before.store)
+    (declared : DeclaredLocation roots location ty)
+    (read : Goose.Core.readLoc location before = .ok value after) :
+    WeakValueTy roots value ty ∧ after = before := by
+  unfold Goose.Core.readLoc at read
+  cases stored : before.store.read location with
+  | error fault => simp [stored] at read
+  | ok found =>
+    simp only [stored, Res.ok.injEq] at read
+    obtain ⟨rfl, rfl⟩ := read
+    exact ⟨typed.read declared stored, rfl⟩
+
 theorem WeakStoreTy.release {roots : RootDeclarations} {store : Store} {root : RootInst}
     (typed : WeakStoreTy roots store) : WeakStoreTy roots (store.release root) := by
   intro other value present
@@ -223,14 +236,15 @@ theorem WeakStoreTy.introduce {roots : RootDeclarations} {store : Store} {root :
     exact ⟨ty, declared, valueTyped⟩
   · exact typed other stored present
 
-theorem WeakStoreTy.flatStep {roots : RootDeclarations} {before after : Store}
+theorem WeakStoreTy.rootStep {roots : RootDeclarations} {before after : Store}
     (declarations : roots.Storable) (typed : WeakStoreTy roots before)
-    (transition : Goose.Core.Sound.FlatStep before after) : WeakStoreTy roots after := by
+    (rootTypes : RootTyLe before after)
+    (references : ∀ (root : RootInst) (value : Val), before.roots[root]? = some value →
+      Goose.Core.Sound.IsRef value → after.roots[root]? = some value)
+    (existing : ∀ (root : RootInst) (value : Val), after.roots[root]? = some value → before.roots[root]? ≠ none) :
+    WeakStoreTy roots after := by
   intro root value present
-  have oldPresent : before.roots[root]? ≠ none := by
-    rcases transition.back root value present with old | changed
-    · simp [old]
-    · exact changed.2
+  have oldPresent := existing root value present
   cases old : before.roots[root]? with
   | none => exact False.elim (oldPresent old)
   | some oldValue =>
@@ -240,7 +254,7 @@ theorem WeakStoreTy.flatStep {roots : RootDeclarations} {before after : Store}
     have flatTransfer (flatTyped : FlatTy ty oldValue) : WeakValueTy roots value ty := by
       have locationTyped : LocTy before ⟨root, []⟩ ty :=
         ⟨oldValue, (read_ok_iff _ _ _).mpr ⟨oldValue, old, rfl⟩, flatTyped⟩
-      obtain ⟨newValue, read, newTyped⟩ := locationTyped.mono transition.le
+      obtain ⟨newValue, read, newTyped⟩ := rootTypes root ty locationTyped
       obtain ⟨rootValue, newPresent, rootRead⟩ := (read_ok_iff _ _ _).mp read
       rw [present] at newPresent
       cases newPresent
@@ -251,7 +265,7 @@ theorem WeakStoreTy.flatStep {roots : RootDeclarations} {before after : Store}
     | unit => simp [Ty.storable, Ty.isRefSlice] at usable
     | ref permission target =>
       obtain ⟨location, same, declaredLocation⟩ := valueTyped
-      have kept := transition.keep root oldValue old (by rw [same]; trivial)
+      have kept := references root oldValue old (by rw [same]; trivial)
       rw [present] at kept
       cases kept
       exact ⟨location, same, declaredLocation⟩
@@ -260,11 +274,20 @@ theorem WeakStoreTy.flatStep {roots : RootDeclarations} {before after : Store}
         rcases valueTyped with ⟨location, start, len, arrayTy, same, rest⟩ |
           ⟨location, start, len, count, same, rest⟩
         all_goals rw [same]; trivial
-      have kept := transition.keep root oldValue old isRef
+      have kept := references root oldValue old isRef
       rw [present] at kept
       cases kept
       exact valueTyped
     | _ => exact flatTransfer valueTyped
+
+theorem WeakStoreTy.flatStep {roots : RootDeclarations} {before after : Store}
+    (declarations : roots.Storable) (typed : WeakStoreTy roots before)
+    (transition : Goose.Core.Sound.FlatStep before after) : WeakStoreTy roots after := by
+  apply typed.rootStep declarations (RootTyLe.of_storeLe transition.le) transition.keep
+  intro root value present
+  rcases transition.back root value present with old | changed
+  · simp [old]
+  · exact changed.2
 
 theorem WeakStoreTy.writeFlat {roots : RootDeclarations} {before after : Store}
     {location : Loc} {value : Val} {ty : Ty}
@@ -297,5 +320,59 @@ theorem WeakStoreTy.appendOwner {roots : RootDeclarations} {before after : Store
   exact typed.flatStep declarations (Goose.Core.Sound.append_flatStep_owner before after location
     values index owner element ownerType flat ⟨selected, read, selectedTyped⟩
     (fun i value present => (valuesTyped i value present).flat flat) appended)
+
+theorem WeakStoreTy.truncateOwner {roots : RootDeclarations} {before after : Store}
+    {location : Loc} {owner element : Ty} {len : Nat}
+    (declarations : roots.Storable) (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location owner) (ownerType : owner.ownerElem? = some element)
+    (truncated : before.truncate location len = .ok after) : WeakStoreTy roots after := by
+  obtain ⟨old, selected, new, rebuilt, rootPresent, oldRead, replaced, modified, rootMap⟩ :=
+    modify_spec before after location (Val.truncate len) truncated
+  have read : before.read location = .ok selected :=
+    (read_ok_iff _ _ _).mpr ⟨old, rootPresent, oldRead⟩
+  have selectedTyped := (typed.read target read).ownerFlat ownerType
+  have ownerTyped : LocTy before location owner := ⟨selected, read, selectedTyped⟩
+  have rootTypes : RootTyLe before after := by
+    cases owner with
+    | grow other =>
+      exact truncate_growshrink_rootTyLe before after location len other
+        ownerTyped.grow_to_growshrink truncated
+    | growshrink other =>
+      exact truncate_growshrink_rootTyLe before after location len other ownerTyped truncated
+    | limited other capacity =>
+      intro root ty locationTyped
+      apply truncate_limited_locTy before after location ⟨root, []⟩ len other capacity ty
+        ownerTyped truncated _ locationTyped
+      by_cases same : root = location.root
+      · exact Or.inr (Or.inl ⟨same, by simp⟩)
+      · exact Or.inl same
+    | _ => simp [Ty.ownerElem?] at ownerType
+  have oldNotRef : ¬ Goose.Core.Sound.IsRef old := by
+    apply (Goose.Core.Sound.modifyAt_notRef (Val.truncate len) location.path old rebuilt
+      selected modified oldRead (Goose.Core.Sound.flat_not_ref selectedTyped) _).1
+    intro value shortened
+    cases selected <;> simp only [Val.truncate] at shortened
+    all_goals first
+      | contradiction
+      | (split at shortened
+         · cases shortened; simp [Goose.Core.Sound.IsRef]
+         · contradiction)
+  apply typed.rootStep declarations rootTypes
+  · intro root value present isRef
+    by_cases same : root = location.root
+    · subst root
+      rw [rootPresent] at present
+      cases present
+      exact False.elim (oldNotRef isRef)
+    · have agree := truncate_except_owner before after location len truncated root same
+      rw [agree]
+      exact present
+  · intro root value present
+    by_cases same : root = location.root
+    · subst root
+      simp [rootPresent]
+    · have agree := truncate_except_owner before after location len truncated root same
+      rw [agree] at present
+      simp [present]
 
 end Goose.Evidence

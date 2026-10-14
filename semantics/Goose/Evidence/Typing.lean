@@ -1,4 +1,5 @@
 import Goose.Evidence.MemoryTyping
+import Goose.Evidence.Execution
 import Goose.GIR.Step
 import Goose.GIR.Typing
 
@@ -131,6 +132,44 @@ theorem execPure_load_typed {roots : RootDeclarations} {types : Array (Option VT
       simp only [stored, Res.ok.injEq] at evaluated
       obtain ⟨rfl, rfl⟩ := evaluated
       exact ⟨storeTyped.read declared stored, rfl⟩
+
+theorem execPure_pop_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {permission : Mutability} {owner element : Ty}
+    {org : Option OriginId} {before after : St} {cell : RVal}
+    (declarations : roots.Storable) (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data (.ref permission owner))))
+    (ownerType : owner.ownerElem? = some element) (storeTyped : WeakStoreTy roots before.store)
+    (evaluated : execPure cx fr (.pop id org) before = .ok cell after) :
+    WeakCellTy roots cell (.data element) ∧ WeakStoreTy roots after.store := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameReadState⟩ := frameTyped.getVal metadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := valueTyped
+  simp only [expectRef, pure_bind] at evaluated
+  obtain ⟨len, middle, measured, evaluated⟩ := m_bind_ok evaluated
+  have sameState : middle = before := by
+    unfold lengthLoc at measured
+    cases size : before.store.length location <;> simp [size] at measured
+    exact measured.2.symm
+  subst middle
+  split at evaluated
+  · cases org <;> simp [abortAtOrg, abortAt, fault, M.stop] at evaluated
+  · obtain ⟨selected, middle, loaded, evaluated⟩ := m_bind_ok evaluated
+    have elementTarget := target.ownerElement ownerType (len - 1)
+    obtain ⟨selectedTyped, sameLoadState⟩ := storeTyped.readLoc elementTarget loaded
+    subst middle
+    obtain ⟨result, finalState, shortened, evaluated⟩ := m_bind_ok evaluated
+    simp only [pure_apply, Res.ok.injEq] at evaluated
+    obtain ⟨rfl, rfl⟩ := evaluated
+    unfold truncateLoc at shortened
+    cases shrunk : before.store.truncate location (len - 1) with
+    | error fault => simp [shrunk] at shortened
+    | ok store =>
+      simp only [shrunk, Res.ok.injEq] at shortened
+      obtain ⟨_, sameState⟩ := shortened
+      subst finalState
+      exact ⟨selectedTyped, storeTyped.truncateOwner declarations target ownerType shrunk⟩
 
 inductive ParamValuesTy (roots : RootDeclarations) : List (ValueId × VTy) → List RVal → Prop
   | nil : ParamValuesTy roots [] []
