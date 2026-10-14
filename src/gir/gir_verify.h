@@ -84,7 +84,7 @@ private:
             case GirOp::Int: case GirOp::Bool: case GirOp::Unit: case GirOp::Slot: case GirOp::Global:
             case GirOp::Enter: case GirOp::Leave: case GirOp::Unreachable:
             case GirOp::Bytes: case GirOp::StaticBytes: case GirOp::ReturnFlagGet:
-            case GirOp::TargetLoad: case GirOp::TraceId: case GirOp::SourceParam: case GirOp::SourceEnter: case GirOp::SourceGlobal: case GirOp::DestNamed:
+            case GirOp::TargetLoad: case GirOp::TraceId: case GirOp::SourceParam: case GirOp::SourceEnter: case GirOp::SourceGlobal: case GirOp::SourceTargetEnter: case GirOp::DestNamed:
             case GirOp::ResultExitDest: case GirOp::TargetDest:
                 break;
             case GirOp::Abort:
@@ -94,7 +94,7 @@ private:
             case GirOp::Index: case GirOp::IndexProven: case GirOp::Push: case GirOp::Store: case GirOp::Append:
             case GirOp::PopN: case GirOp::Replace:
             case GirOp::Format: case GirOp::OutBytes: case GirOp::AppendValue:
-            case GirOp::SourceChild: case GirOp::SourceCopy: case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot:
+            case GirOp::PtrEq: case GirOp::SourceChild: case GirOp::SourceCopy: case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot:
                 add(i.a); add(i.b);
                 break;
             case GirOp::SourceNew:
@@ -112,10 +112,10 @@ private:
                 break;
             case GirOp::DestBytes: case GirOp::DestFinish: case GirOp::DestPublish:
             case GirOp::Result: case GirOp::DestChild: case GirOp::DestArg:
-            case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
+            case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
             case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestBind:
             case GirOp::DestCancel: case GirOp::ReturnFlagSet: case GirOp::TargetStore:
-            case GirOp::DestAbandonNamed: case GirOp::SourceCallGet: case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet:
+            case GirOp::DestAbandonNamed: case GirOp::SourceCallGet: case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet: case GirOp::SourceTargetLeave: case GirOp::SourceTargetResult: case GirOp::SourceTargetGet: case GirOp::DestPublishRef:
                 add(i.a);
                 break;
             case GirOp::DestWrite:
@@ -193,7 +193,7 @@ private:
             case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear: case GirOp::Replace:
                 return true;
             case GirOp::DestOpen: case GirOp::DestWrite: case GirOp::DestFinish: case GirOp::DestPublish: case GirOp::DestBytes:
-            case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render:
+            case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
             case GirOp::DestNamed: case GirOp::ResultExitDest: case GirOp::DestAbandonNamed:
             case GirOp::DestArg: case GirOp::DestAbandon: case GirOp::DestValue:
             case GirOp::DestRelocate: case GirOp::DestStage: case GirOp::DestFit:
@@ -328,6 +328,10 @@ private:
         for (auto &g : m.globals) scan(g.init);
 
         if (m.low) {
+            for (auto &function : m.funcs) for (auto &block : function.blocks) for (auto &inst : block.insts)
+                if (inst.op == GirOp::SourceTargetEnter || inst.op == GirOp::SourceTargetLeave ||
+                    inst.op == GirOp::SourceTargetResult || inst.op == GirOp::SourceTargetGet)
+                    Fail("GIR-V090", "target provenance requires a supported low target activation");
             if (hasStructType || hasStructInst || !m.structs.empty() || !m.targets.empty() ||
                 !m.lowtargets.empty())
                 Fail("GIR-V090", "a low module retains a high-stage artifact or an unsupported target table");
@@ -450,11 +454,11 @@ private:
         auto scan = [&](const GirFunc &fn) {
             for (auto &block : fn.blocks)
                 for (auto &i : block.insts) {
-                    auto constructionOp = (i.op >= GirOp::Bytes && i.op <= GirOp::Render) ||
-                                          (i.op >= GirOp::StaticBytes && i.op <= GirOp::SourceGlobal) ||
+                    auto constructionOp = (i.op >= GirOp::Bytes && i.op <= GirOp::DestAdaptFinish) ||
+                                          (i.op >= GirOp::StaticBytes && i.op <= GirOp::SourceTargetGet) ||
                                           i.op == GirOp::AppendValue ||
                                           (i.op >= GirOp::DestWrite && i.op <= GirOp::DestCancel) ||
-                                          (i.op >= GirOp::ReturnFlagSet && i.op <= GirOp::SourceGlobalSet) ||
+                                          (i.op >= GirOp::ReturnFlagSet && i.op <= GirOp::SourceTargetResult) ||
                                           i.op == GirOp::Invoke || i.op == GirOp::Escape;
                     if (constructionOp && !CoreHasConstruction(m.profile))
                         Fail("GIR-V010", cat("function ", fn.name,
@@ -755,6 +759,22 @@ private:
                     }
                 }
 
+            if (CoreHasConstruction(m.profile))
+                for (auto &block : f.blocks) for (auto &inst : block.insts) {
+                    if (inst.op != GirOp::HdrInit) continue;
+                    auto location = PointerLocationOf(fn, inst.a);
+                    if (!location || location->kind != 1 || location->offset != 0 ||
+                        f.members[location->index].kind != GirMember::Bytes || f.members[location->index].size != 16) continue;
+                    auto owner = at(facts.markof, inst.b);
+                    bool unique = owner.kind > 0;
+                    for (auto &otherBlock : f.blocks) for (auto &other : otherBlock.insts)
+                        if (other.op == GirOp::HdrInit && &other != &inst) {
+                            auto address = PointerLocationOf(fn, other.a);
+                            if (address && *address == *location) unique = false;
+                        }
+                    if (unique) set(facts.header, inst.a, owner);
+                }
+
             for (size_t b = 1; b < f.blocks.size(); b++) {
                 auto &params = f.blocks[b].params;
                 auto &edges = incoming[b];
@@ -1015,7 +1035,12 @@ private:
                 switch (i.op) {
                     case GirOp::HdrInit: {
                         auto h = at(header, i.a), mk = at(markof, i.b);
-                        if (h.kind <= 0 || h.kind == 3 || h.kind == 4 || mk.kind <= 0 || !(h == mk))
+                        auto location = PointerLocationOf(fn, i.a);
+                        bool localAliasHeader = CoreHasConstruction(m.profile) && location && location->kind == 1 &&
+                            location->offset == 0 && f.members[location->index].kind == GirMember::Bytes &&
+                            f.members[location->index].size == 16;
+                        if (h.kind <= 0 || ((h.kind == 3 || h.kind == 4) && !localAliasHeader) ||
+                            mk.kind <= 0 || !(h == mk))
                             bad("a header initialized from something other than the top of its own stack");
                         break;
                     }
@@ -1154,8 +1179,8 @@ private:
         auto &function = *fn.f;
         auto kinds = GirSourceKinds(function);
         auto bad = [&](const string &message) { Fail("GIR-V090", cat(fn.label, ": ", message)); };
-        for (auto kind : kinds.values) if (kind == 4) bad("trace metadata merges with a program value or another token kind");
-        for (auto kind : kinds.members) if (kind >= 2) bad("a frame member stores a trace token or mixed program metadata");
+        for (auto kind : kinds.values) if (kind == GirSourceKind::Mixed) bad("trace metadata merges with a program value or another token kind");
+        for (auto kind : kinds.members) if (kind >= GirSourceKind::Scope) bad("a frame member stores a trace token or mixed program metadata");
         struct Call { int token, scope, callee = -1; bool operator==(const Call &) const = default; };
         struct State {
             vector<int> scopes;
@@ -1200,7 +1225,7 @@ private:
                     bad("source descriptor used outside its live trace scope");
             };
             auto source = [&](int value) {
-                if (value < 0 || kinds.values[value] != 1) bad("trace operation consumes a program pointer instead of a source descriptor");
+                if (value < 0 || kinds.values[value] != GirSourceKind::Descriptor) bad("trace operation consumes a program pointer instead of a source descriptor");
                 live(value);
             };
             auto owner = [&](int result) {
@@ -1208,7 +1233,7 @@ private:
                 state.owners[result] = state.scopes.back();
             };
             auto call = [&](int token) -> Call & {
-                if (token < 0 || kinds.values[token] != 3 || state.calls.empty() || state.calls.back().token != token)
+                if (token < 0 || kinds.values[token] != GirSourceKind::Call || state.calls.empty() || state.calls.back().token != token)
                     bad("trace call token is dead or not the innermost call");
                 return state.calls.back();
             };
@@ -1217,15 +1242,15 @@ private:
                 Uses(inst, uses);
                 bool traceOperation = (inst.op >= GirOp::SourceNew && inst.op <= GirOp::SourceGlobal) ||
                                       (inst.op >= GirOp::SourceLeave && inst.op <= GirOp::SourceGlobalSet);
-                for (auto value : uses) if (kinds.values[value] > 0 && !traceOperation) {
-                    if (inst.op == GirOp::LocalSet && kinds.values[value] == 1) source(value);
-                    else if ((inst.op == GirOp::Br || inst.op == GirOp::CondBr) && kinds.values[value] == 1 && value != inst.a) source(value);
+                for (auto value : uses) if (kinds.values[value] > GirSourceKind::Ordinary && !traceOperation) {
+                    if (inst.op == GirOp::LocalSet && kinds.values[value] == GirSourceKind::Descriptor) source(value);
+                    else if ((inst.op == GirOp::Br || inst.op == GirOp::CondBr) && kinds.values[value] == GirSourceKind::Descriptor && value != inst.a) source(value);
                     else bad("trace metadata is used as ordinary program memory or an ABI argument");
                 }
                 switch (inst.op) {
                     case GirOp::SourceEnter: state.scopes.push_back(inst.res); break;
                     case GirOp::SourceLeave:
-                        if (inst.a < 0 || kinds.values[inst.a] != 2 || state.scopes.empty() || state.scopes.back() != inst.a)
+                        if (inst.a < 0 || kinds.values[inst.a] != GirSourceKind::Scope || state.scopes.empty() || state.scopes.back() != inst.a)
                             bad("trace scope token is dead or not the innermost scope");
                         for (auto &active : state.calls) if (active.scope == inst.a) bad("trace scope leaves before its call epilogue");
                         state.scopes.pop_back();
@@ -1236,14 +1261,14 @@ private:
                             if (GirDefinesValue(candidate) && candidate.res == inst.a) identity = &candidate;
                         if (!identity || identity->op != GirOp::TraceId || identity->trace != GirTraceKind::Storage)
                             bad("source storage identity does not come from an object creation ordinal");
-                        if (kinds.values[inst.a] != 0) bad("storage identity comes from metadata");
-                        for (auto value : inst.vals) if (kinds.values[value] != 0) bad("source path contains metadata");
+                        if (kinds.values[inst.a] != GirSourceKind::Ordinary) bad("storage identity comes from metadata");
+                        for (auto value : inst.vals) if (kinds.values[value] != GirSourceKind::Ordinary) bad("source path contains metadata");
                         owner(inst.res);
                         break;
                     }
                     case GirOp::SourceChild:
                         source(inst.a);
-                        if (kinds.values[inst.b] != 0) bad("source path index is metadata");
+                        if (kinds.values[inst.b] != GirSourceKind::Ordinary) bad("source path index is metadata");
                         owner(inst.res);
                         break;
                     case GirOp::SourceGlobal:
@@ -1309,13 +1334,13 @@ private:
                     }
                     case GirOp::SourceCopy:
                         source(inst.a);
-                        if (kinds.values[inst.b] != 0) bad("copy destination identity is metadata");
+                        if (kinds.values[inst.b] != GirSourceKind::Ordinary) bad("copy destination identity is metadata");
                         break;
                     case GirOp::LocalSet:
-                        if (kinds.members[inst.idx] == 1) { source(inst.a); state.members[inst.idx] = state.scopes.back(); }
+                        if (kinds.members[inst.idx] == GirSourceKind::Descriptor) { source(inst.a); state.members[inst.idx] = state.scopes.back(); }
                         break;
                     case GirOp::LocalGet:
-                        if (kinds.values[inst.res] == 1) {
+                        if (kinds.values[inst.res] == GirSourceKind::Descriptor) {
                             auto member = state.members.find(inst.idx);
                             if (member == state.members.end() || find(state.scopes.begin(), state.scopes.end(), member->second) == state.scopes.end())
                                 bad("source frame member is uninitialized or outside its scope");
@@ -1323,7 +1348,7 @@ private:
                         }
                         break;
                     case GirOp::FrameAddr:
-                        if (kinds.members[inst.idx] > 0) bad("program memory exposes a trace metadata member");
+                        if (kinds.members[inst.idx] > GirSourceKind::Ordinary) bad("program memory exposes a trace metadata member");
                         break;
                     case GirOp::Ret:
                         if (!state.scopes.empty() || !state.calls.empty()) bad("normal return omits trace scope or call cleanup");
@@ -1339,8 +1364,8 @@ private:
                 auto next = state;
                 for (size_t position = 0; position < values.size(); position++) {
                     auto parameter = function.blocks[target].params[position].first;
-                    if (kinds.values[parameter] == 1) next.owners[parameter] = state.owners.at(values[position]);
-                    else if (kinds.values[parameter] > 1) bad("control flow transfers a trace token");
+                    if (kinds.values[parameter] == GirSourceKind::Descriptor) next.owners[parameter] = state.owners.at(values[position]);
+                    else if (kinds.values[parameter] > GirSourceKind::Descriptor) bad("control flow transfers a trace token");
                 }
                 merge(target, std::move(next));
             };
@@ -1650,7 +1675,7 @@ private:
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
                     if (!GirDefinesValue(i) || i.res >= fn.nvalues || fn.vt[i.res] >= 0) continue;
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
                     auto r = GirTyper(env).Of(i);
                     if (r.ok()) {
                         fn.vt[i.res] = r.ty;
@@ -1664,7 +1689,7 @@ private:
 
     void CheckEffectTypes(const Fn &fn, const GirInst &i) {
         auto &f = *fn.f;
-        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
         GirTyper ty(env);
         auto need = [&](GirTyResult r) {
             if (!r.ok()) TypeFail(fn, r.error);
@@ -1947,7 +1972,7 @@ private:
 
     void CheckTermTypes(const Fn &fn, const GirInst &i) {
         auto &f = *fn.f;
-        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
         GirTyper ty(env);
         auto need = [&](GirTyResult r) {
             if (!r.ok()) TypeFail(fn, r.error);
@@ -2070,13 +2095,13 @@ private:
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
                 if (GirDefinesValue(i)) {
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
                     auto r = GirTyper(env).Of(i);
                     if (!r.ok()) TypeFail(fn, r.error);
                     if (fn.vt[i.res] != r.ty) TypeFail(fn, cat("value %", i.res, " has two types"));
                 } else if (i.op == GirOp::Call) {
                     // A call with no result in the low stage.
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
                     auto r = GirTyper(env).Of(i);
                     if (!r.ok()) TypeFail(fn, r.error);
                 } else if (GirIsTerminator(i.op)) {
@@ -2621,8 +2646,11 @@ private:
 
     using Roots = vector<CoreRootRef>;
 
+    using ResultRootInfo = vector<vector<Roots>>;
+
     struct Prov {
         vector<Roots> slots, vals;
+        vector<vector<Roots>> packs;
     };
 
     static bool AddTo(vector<Roots> &a, int i, const Roots &rs) {
@@ -2726,13 +2754,13 @@ private:
         return out;
     }
 
-    void CheckRootAnnotations(const vector<Roots> &res) {
+    void CheckRootAnnotations(const ResultRootInfo &res) {
         for (size_t k = 0; k < m.funcs.size(); k++) {
             auto &f = m.funcs[k];
             auto name = cat("function ", f.name);
             for (size_t r = 0; r < f.results.size(); r++) {
                 auto declared = r < f.roots.results.size() ? &f.roots.results[r] : nullptr;
-                if (r == 0) for (auto &root : RootsAt(res, (int)k))
+                for (auto &root : res[k][r])
                     if (!declared || find(declared->begin(), declared->end(), root) == declared->end())
                         Fail("GIR-V050", cat(name, " result ", r, " root info omits a root returned by the body"));
             }
@@ -2776,9 +2804,37 @@ private:
         return k == CoreType::Ref || k == CoreType::Slice || k == CoreType::View;
     }
 
-    Roots RootsOfDef(const vector<Roots> &res, const Fn &fn, const Prov &p, const GirInst &i) {
+    Roots RootsOfDef(const ResultRootInfo &res, const Fn &fn, const Prov &p, const GirInst &i) {
         switch (i.op) {
             case GirOp::Bytes: return { CoreRootRef { CoreRootRef::Static, 0 } };
+            case GirOp::DestOpen:
+                if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver)) return { CoreRootRef { CoreRootRef::Local, slot->slot } };
+                if (auto global = get_if<GirDestGlobalReceiver>(&i.destReceiver)) return { CoreRootRef { CoreRootRef::Global, global->global } };
+                if (auto whole = get_if<GirDestWholeReceiver>(&i.destReceiver)) return RootsAt(p.vals, whole->reference);
+                if (auto append = get_if<GirDestAppendReceiver>(&i.destReceiver)) return RootsAt(p.vals, append->reference);
+                if (auto push = get_if<GirDestPushReceiver>(&i.destReceiver)) return RootsAt(p.vals, push->reference);
+                return {};
+            case GirOp::DestFinish: case GirOp::DestAbandon: case GirOp::DestAdapt:
+            case GirOp::DestAdaptFinish: case GirOp::DestValue: case GirOp::DestRelocate:
+            case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestPublishRef:
+                return RootsAt(p.vals, i.a);
+            case GirOp::DestNamed: return { CoreRootRef { CoreRootRef::Local, i.idx } };
+            case GirOp::CallConstruct: {
+                Roots roots;
+                if (m.funcs[i.idx].results.size() == 1 && !i.vals2.empty()) return RootsAt(p.vals, i.vals2[0]);
+                return roots;
+            }
+            case GirOp::Result:
+                if (ValRefLike(fn, i.res) && i.idx < (int)p.packs[i.a].size()) return p.packs[i.a][i.idx];
+                for (auto &block : fn.f->blocks) for (auto &producer : block.insts)
+                    if (producer.res == i.a && producer.op == GirOp::CallConstruct &&
+                        GirNonfixed(m, m.funcs[producer.idx].results[i.idx])) {
+                        size_t position = 0;
+                        for (int result = 0; result < i.idx; result++)
+                            if (GirNonfixed(m, m.funcs[producer.idx].results[result])) position++;
+                        return RootsAt(p.vals, producer.vals2[position]);
+                    }
+                return {};
             case GirOp::Slot: return { CoreRootRef { CoreRootRef::Local, i.idx } };
             case GirOp::Global: return { CoreRootRef { CoreRootRef::Global, i.idx } };
             case GirOp::Field: return RootsAt(p.vals, i.a);
@@ -2809,7 +2865,8 @@ private:
             }
             case GirOp::Call: {
                 Roots out;
-                for (auto &r : RootsAt(res, i.idx)) {
+                if (!ValRefLike(fn, i.res) || res[i.idx].size() != 1) return out;
+                for (auto &r : res[i.idx][0]) {
                     if (r.kind == CoreRootRef::Param) {
                         if (r.index < (int)i.vals.size())
                             for (auto &x : RootsAt(p.vals, i.vals[r.index]))
@@ -2824,17 +2881,32 @@ private:
         }
     }
 
-    bool ProvRound(const vector<Roots> &res, const Fn &fn, Prov &p) {
+    bool ProvRound(const ResultRootInfo &res, const Fn &fn, Prov &p) {
         auto &f = *fn.f;
         auto changed = false;
         auto edge = [&](int b, const vector<int> &args) {
             auto &tb = f.blocks[b];
-            for (size_t k = 0; k < tb.params.size() && k < args.size(); k++)
+            for (size_t k = 0; k < tb.params.size() && k < args.size(); k++) {
                 changed |= AddTo(p.vals, tb.params[k].first, RootsAt(p.vals, args[k]));
+                for (size_t result = 0; result < p.packs[args[k]].size(); result++)
+                    changed |= AddTo(p.packs[tb.params[k].first], (int)result, p.packs[args[k]][result]);
+            }
         };
         for (auto &blk : f.blocks)
             for (auto &i : blk.insts) {
-                if (GirDefinesValue(i)) changed |= AddTo(p.vals, i.res, RootsOfDef(res, fn, p, i));
+                if (GirDefinesValue(i)) {
+                    changed |= AddTo(p.vals, i.res, RootsOfDef(res, fn, p, i));
+                    if ((i.op == GirOp::Call || i.op == GirOp::CallConstruct) && m.funcs[i.idx].results.size() > 1)
+                        for (size_t result = 0; result < res[i.idx].size(); result++) {
+                            Roots mapped;
+                            for (auto &root : res[i.idx][result]) {
+                                if (root.kind == CoreRootRef::Param && root.index < (int)i.vals.size())
+                                    AddRoots(mapped, RootsAt(p.vals, i.vals[root.index]));
+                                else if (root.kind == CoreRootRef::Global || root.kind == CoreRootRef::Static) AddRoot(mapped, root);
+                            }
+                            changed |= AddTo(p.packs[i.res], (int)result, mapped);
+                        }
+                }
                 else if (i.op == GirOp::Init) changed |= AddTo(p.slots, i.idx, RootsAt(p.vals, i.a));
                 else if (i.op == GirOp::Store) {
                     for (auto &root : RootsAt(p.vals, i.a))
@@ -2855,6 +2927,10 @@ private:
         Prov p;
         p.slots.assign(f.slots.size(), {});
         p.vals.assign(fn.nvalues, {});
+        p.packs.resize(fn.nvalues);
+        for (int value = 0; value < fn.nvalues; value++)
+            if (fn.vt[value] >= 0 && m.Type(fn.vt[value]).kind == CoreType::Tuple)
+                p.packs[value].resize(m.Type(fn.vt[value]).parts.size());
         auto &b0 = f.blocks[0];
         for (size_t k = 0; k < b0.params.size(); k++)
             if (ValRefLike(fn, b0.params[k].first) && b0.params[k].first < fn.nvalues) {
@@ -2868,29 +2944,31 @@ private:
         return p;
     }
 
-    Prov Provenance(const vector<Roots> &res, const Fn &fn) {
+    Prov Provenance(const ResultRootInfo &res, const Fn &fn) {
         auto p = ProvStart(fn);
         while (ProvRound(res, fn, p)) {}
         return p;
     }
 
-    Roots ReturnedRoots(const Fn &fn, const Prov &p) {
-        Roots out;
-        for (auto &b : fn.f->blocks)
-            for (auto &i : b.insts)
-                if (i.op == GirOp::Ret && i.vals.size() == 1)
-                    for (auto &r : RootsAt(p.vals, i.vals[0]))
-                        if (find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
+    vector<Roots> ReturnedRoots(const Fn &fn, const Prov &p) {
+        vector<Roots> out(fn.f->results.size());
+        for (auto &block : fn.f->blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::Ret)
+                for (size_t result = 0; result < inst.vals.size(); result++)
+                    if (GirRefLike(m, fn.f->results[result])) AddRoots(out[result], RootsAt(p.vals, inst.vals[result]));
         return out;
     }
 
-    vector<Roots> ResultRoots() {
-        vector<Roots> res(m.funcs.size());
+    ResultRootInfo ResultRoots() {
+        ResultRootInfo res(m.funcs.size());
+        for (size_t function = 0; function < m.funcs.size(); function++) res[function].resize(m.funcs[function].results.size());
         for (auto changed = true; changed;) {
             changed = false;
             auto next = res;
-            for (size_t k = 0; k < m.funcs.size(); k++)
-                changed |= AddTo(next, (int)k, ReturnedRoots(fns[k], Provenance(res, fns[k])));
+            for (size_t function = 0; function < m.funcs.size(); function++) {
+                auto roots = ReturnedRoots(fns[function], Provenance(res, fns[function]));
+                for (size_t result = 0; result < roots.size(); result++) changed |= AddTo(next[function], (int)result, roots[result]);
+            }
             res = std::move(next);
         }
         return res;
@@ -2922,6 +3000,10 @@ private:
                         break;
                     case GirOp::DestCopy:
                         AddTargets(e.reads, RootsAt(p.vals, i.b));
+                        break;
+                    case GirOp::DestPublish: case GirOp::DestPublishRef:
+                        AddTargets(e.writes, RootsAt(p.vals, i.a));
+                        AddTargets(e.grows, RootsAt(p.vals, i.a));
                         break;
                     case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen:
                         AddTargets(e.reads, RootsAt(p.vals, i.a));
@@ -3173,12 +3255,14 @@ private:
             int target = -1;
             int parent = -1;
             int slot = -1;
+            int pushReference = -1;
             int argumentFunction = -1;
             int argumentPosition = -1;
             int64_t count = 0;
             int64_t expected = -1;
             bool staged = false;
             bool valueAdapter = false;
+            GirTypeId adaptedFrom = -1;
             bool replacement = false;
             bool landed = false;
             bool operator==(const Ownership &) const = default;
@@ -3321,6 +3405,7 @@ private:
                             for (auto &[value, live] : state.live)
                                 if (live.slot == owner.slot) bad("receiver slot has another unfinished construction");
                         }
+                        if (auto push = get_if<GirDestPushReceiver>(&inst.destReceiver)) owner.pushReference = push->reference;
                         if (auto argument = get_if<GirDestArgReceiver>(&inst.destReceiver)) {
                             owner.argumentFunction = argument->function;
                             owner.argumentPosition = argument->parameter;
@@ -3379,19 +3464,25 @@ private:
                     }
                     case GirOp::DestPublish: {
                         auto owner = consume(inst.a);
-                        if (owner.channel >= 0 || owner.parent >= 0 || owner.argumentFunction >= 0 || owner.staged)
+                        if (owner.channel >= 0 || owner.parent >= 0 || owner.argumentFunction >= 0 || owner.staged || owner.adaptedFrom >= 0)
                             bad("completion published at another owning receiver");
+                        break;
+                    }
+                    case GirOp::DestPublishRef: {
+                        auto owner = consume(inst.a);
+                        if (owner.pushReference < 0 || owner.channel >= 0 || owner.parent >= 0 || owner.staged || owner.adaptedFrom >= 0)
+                            bad("reference publication does not own a completed push receiver");
                         break;
                     }
                     case GirOp::DestAbandon:
                         transfer(inst.a, inst.res);
                         break;
                     case GirOp::DestCancel:
-                        consume(inst.a);
+                        if (consume(inst.a).adaptedFrom >= 0) bad("producer cancellation has not restored its receiving protocol");
                         break;
                     case GirOp::DestBind: {
                         auto owner = consume(inst.a);
-                        if (owner.channel < 0 || f.resultProtocols[owner.channel].namedSlot != inst.idx ||
+                        if (owner.adaptedFrom >= 0 || owner.channel < 0 || f.resultProtocols[owner.channel].namedSlot != inst.idx ||
                             state.named.count(inst.idx)) bad("named local does not own its declared incoming result channel");
                         owner.slot = inst.idx;
                         state.named[inst.idx] = owner;
@@ -3423,6 +3514,25 @@ private:
                             bad("named abandonment belongs to another replacement result channel");
                         state.live[inst.res] = found->second;
                         state.named.erase(found);
+                        break;
+                    }
+                    case GirOp::DestAdapt: {
+                        auto owner = consume(inst.a);
+                        if (owner.count != 0 || owner.adaptedFrom >= 0 || owner.valueAdapter || owner.staged)
+                            bad("destination adaptation begins after writes or inside another adapter");
+                        owner.adaptedFrom = fn.vt[inst.a];
+                        state.live[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::DestAdaptFinish: {
+                        auto owner = consume(inst.a);
+                        auto &restored = m.Type(fn.vt[inst.res]);
+                        if (owner.adaptedFrom < 0 || owner.valueAdapter || owner.staged ||
+                            m.Type(owner.adaptedFrom).elem != restored.elem ||
+                            m.Type(owner.adaptedFrom).request != restored.request)
+                            bad("producer completion or cancellation restores another receiving channel");
+                        owner.adaptedFrom = -1;
+                        state.live[inst.res] = owner;
                         break;
                     }
                     case GirOp::DestValue: {
@@ -3465,7 +3575,7 @@ private:
                     }
                     case GirOp::DestArg: {
                         auto owner = consume(inst.a);
-                        if (owner.argumentFunction < 0) bad("argument completion has no reserved call parameter region");
+                        if (owner.adaptedFrom >= 0 || owner.argumentFunction < 0) bad("argument completion has no reserved call parameter region");
                         state.arguments[inst.res] = owner;
                         break;
                     }
@@ -3508,7 +3618,7 @@ private:
                             if (!carrier(inst.vals[result])) continue;
                             auto owner = consume(inst.vals[result]);
                             if (owner.channel != (int)result || (owner.target >= 0 && !handlesTarget(owner.target)) ||
-                                owner.staged || owner.valueAdapter || (owner.replacement && !owner.landed))
+                                owner.staged || owner.valueAdapter || owner.adaptedFrom >= 0 || (owner.replacement && !owner.landed))
                                 bad("returned completion belongs to another channel or an unfinished adapter");
                         }
                         if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty())
@@ -3593,7 +3703,7 @@ private:
                         for (size_t result = 0; result < inst.vals.size(); result++) {
                             if (!carrier(inst.vals[result])) continue;
                             auto owner = consume(inst.vals[result]);
-                            if (owner.target != inst.idx || owner.channel != (int)result || owner.staged || owner.valueAdapter)
+                            if (owner.target != inst.idx || owner.channel != (int)result || owner.staged || owner.valueAdapter || owner.adaptedFrom >= 0)
                                 bad("escape carrier belongs to another target or incomplete adapter");
                         }
                         {
@@ -3855,7 +3965,7 @@ private:
         return states;
     }
 
-    void CheckShrinkReplace(const Fn &fn, const vector<Roots> &resultRoots) {
+    void CheckShrinkReplace(const Fn &fn, const ResultRootInfo &resultRoots) {
         const auto &f = *fn.f;
         auto provenance = Provenance(resultRoots, fn);
         auto fresh = FreshOwnerRuns(fn);

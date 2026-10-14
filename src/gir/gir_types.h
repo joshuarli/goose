@@ -31,6 +31,7 @@ struct GirTyEnv {
     const vector<GirTypeId> &vals;
     // The frame of a low function, when typing one.
     const vector<GirMember> *members = nullptr;
+    const vector<GirBlock> *blocks = nullptr;
 };
 
 // A type error or the type.
@@ -482,6 +483,37 @@ public:
                 auto mut = fields[i.idx].binding == CoreVarKind::Var ? CoreMut::Mut : CoreMut::Const;
                 return GirTyOk(m.RefType(mut, fields[i.idx].type));
             }
+            case GirOp::DestAdapt: {
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                if (carrier.kind != CoreType::Dest || i.ty < 0 || i.ty >= (int)m.types.size() ||
+                    !GirNonfixed(m, i.ty) || !GirConstructible(m, i.ty) ||
+                    !GirArrayKind(m.Type(carrier.elem).kind) || !GirArrayKind(m.Type(i.ty).kind) ||
+                    m.Type(carrier.elem).elem != m.Type(i.ty).elem ||
+                    (i.request != CoreRequest::Value && i.request != CoreRequest::ElementRun))
+                    return GirTyErr("destination adaptation changes elements or has no receiving protocol");
+                return GirTyOk(m.CarrierType(CoreType::Dest, i.ty, i.request));
+            }
+            case GirOp::DestAdaptFinish: {
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                if (carrier.kind != CoreType::Built && carrier.kind != CoreType::Cancelled)
+                    return GirTyErr("destination adaptation restoration requires a closed producer carrier");
+                auto original = AdaptationOrigin(i.a);
+                if (!original.ok()) return original;
+                auto receiving = m.Type(original.ty);
+                return GirTyOk(m.CarrierType(carrier.kind, receiving.elem, receiving.request));
+            }
+            case GirOp::DestPublishRef: {
+                auto completed = Val(i.a);
+                if (!completed.ok()) return completed;
+                auto &carrier = m.Type(completed.ty);
+                if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value)
+                    return GirTyErr("push publication requires a completed value destination");
+                return GirTyOk(m.RefType(CoreMut::Mut, carrier.elem));
+            }
             case GirOp::DestOpen: {
                 if (m.low || m.profile != CoreProfile::Construction)
                     return GirTyErr("construction destination under an earlier profile or stage");
@@ -615,6 +647,18 @@ public:
                 return GirTyOk(m.Intern(carrier));
             }
             // The low stage: scalars and addresses.
+            case GirOp::PtrEq: {
+                auto left = PtrOf(i.a), right = PtrOf(i.b);
+                if (!left.ok()) return left;
+                if (!right.ok()) return right;
+                return GirTyOk(m.BoolType());
+            }
+            case GirOp::SourceTargetEnter: return GirTyOk(m.PtrType());
+            case GirOp::SourceTargetGet: {
+                auto token = PtrOf(i.a);
+                if (!token.ok()) return token;
+                return GirTyOk(m.PtrType());
+            }
             case GirOp::SourceNew: {
                 auto storage = IntTy(i.a);
                 if (!storage.ok()) return storage;
@@ -764,6 +808,94 @@ public:
     }
 
 private:
+    GirTyResult AdaptationOrigin(int value) const {
+        if (!env.blocks) return GirTyErr("destination adaptation has no control-flow lineage");
+        map<int, set<int>> origins;
+        map<pair<int, int>, set<int>> packed;
+        for (auto &block : *env.blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::DestAdapt) origins[inst.res].insert(inst.a);
+        bool changed = true;
+        auto merge = [&](set<int> &to, const set<int> &from) {
+            auto before = to.size();
+            to.insert(from.begin(), from.end());
+            changed |= before != to.size();
+        };
+        while (changed) {
+            changed = false;
+            for (auto &block : *env.blocks) for (auto &inst : block.insts) {
+                switch (inst.op) {
+                    case GirOp::DestFinish: case GirOp::DestAbandon: case GirOp::DestValue:
+                    case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestRelocate:
+                        merge(origins[inst.res], origins[inst.a]); break;
+                    case GirOp::CallConstruct: {
+                        auto &callee = env.m.funcs[inst.idx];
+                        size_t destination = 0;
+                        for (size_t result = 0; result < callee.results.size(); result++) {
+                            if (!GirNonfixed(env.m, callee.results[result])) continue;
+                            if (destination >= inst.vals2.size()) break;
+                            auto &from = origins[inst.vals2[destination++]];
+                            if (callee.results.size() == 1) merge(origins[inst.res], from);
+                            else merge(packed[{ inst.res, (int)result }], from);
+                        }
+                        break;
+                    }
+                    case GirOp::Result: merge(origins[inst.res], packed[{ inst.a, inst.idx }]); break;
+                    case GirOp::Br: case GirOp::CondBr: {
+                        auto edge = [&](int target, const vector<int> &values) {
+                            if (target < 0 || target >= (int)env.blocks->size()) return;
+                            auto &parameters = env.blocks->at(target).params;
+                            for (size_t position = 0; position < min(parameters.size(), values.size()); position++)
+                                merge(origins[parameters[position].first], origins[values[position]]);
+                        };
+                        edge(inst.idx, inst.vals);
+                        if (inst.op == GirOp::CondBr) edge(inst.idx2, inst.vals2);
+                        break;
+                    }
+                    case GirOp::Invoke: {
+                        auto &callee = env.m.funcs[inst.idx];
+                        size_t destination = 0;
+                        for (size_t result = 0; result < callee.results.size(); result++) {
+                            if (!GirNonfixed(env.m, callee.results[result])) continue;
+                            if (destination >= inst.vals2.size()) break;
+                            auto &from = origins[inst.vals2[destination++]];
+                            merge(origins[env.blocks->at(inst.a).params[result].first], from);
+                        }
+                        for (auto &escape : inst.escapes) {
+                            auto &target = env.m.funcs[env.m.targets[escape.target].members[0]];
+                            auto &parameters = env.blocks->at(escape.block).params;
+                            for (size_t position = 0; position < inst.vals2.size(); position++)
+                                merge(origins[parameters[target.results.size() + position].first], origins[inst.vals2[position]]);
+                        }
+                        auto forwarded = [&](int target, size_t offset, const vector<int> &values) {
+                            auto &parameters = env.blocks->at(target).params;
+                            for (size_t position = 0; position < values.size(); position++)
+                                merge(origins[parameters[offset + position].first], origins[values[position]]);
+                        };
+                        forwarded(inst.a, callee.results.size(), inst.forwarded);
+                        for (auto &escape : inst.escapes) {
+                            auto &target = env.m.funcs[env.m.targets[escape.target].members[0]];
+                            forwarded(escape.block, target.results.size() + inst.vals2.size(), escape.forwarded);
+                        }
+                        break;
+                    }
+                    default: break;
+                }
+            }
+        }
+        auto &found = origins[value];
+        GirTypeId original = -1;
+        for (auto source : found) {
+            if (source < 0 || source >= (int)env.vals.size() || env.vals[source] < 0)
+                return GirTyErr("destination adaptation lineage has no receiving type");
+            auto type = env.vals[source];
+            if (original >= 0 && original != type)
+                return GirTyErr("destination adaptation merges different receiving protocols");
+            original = type;
+        }
+        if (original < 0 || env.m.Type(original).kind != CoreType::Dest)
+            return GirTyErr("closed producer has no matching destination adaptation");
+        return GirTyOk(original);
+    }
     const GirTyEnv &env;
 };
 

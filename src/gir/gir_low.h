@@ -624,7 +624,9 @@ private:
                         for (size_t parameter = 0; parameter < hf->params.size(); parameter++)
                             if (hf->params[parameter] == sl.ty && instruction.a == hf->blocks[0].params[parameter].first)
                                 ownedParameter = true;
-            if (ownedParameter) {
+            bool namedResult = false;
+            for (auto &protocol : hf->resultProtocols) namedResult |= protocol.namedSlot == (int)s;
+            if (ownedParameter || namedResult) {
                 p.kind = Place::Alias;
                 for (int word = 0; word < 2; word++) {
                     GirMember member;
@@ -941,7 +943,7 @@ private:
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
                     if (!GirDefinesValue(i) || hvt[i.res] >= 0) continue;
-                    GirTyEnv env { mm, f.slots, hsigs, hvt };
+                    GirTyEnv env { mm, f.slots, hsigs, hvt, nullptr, &f.blocks };
                     auto r = GirTyper(env).Of(i);
                     if (r.ok()) { hvt[i.res] = r.ty; changed = true; }
                 }
@@ -978,7 +980,8 @@ private:
                         }
                 }
                 if (inst.op == GirOp::DestFinish || inst.op == GirOp::DestAbandon || inst.op == GirOp::DestValue ||
-                    inst.op == GirOp::DestStage || inst.op == GirOp::DestFit || inst.op == GirOp::DestRelocate)
+                    inst.op == GirOp::DestStage || inst.op == GirOp::DestFit || inst.op == GirOp::DestRelocate ||
+                    inst.op == GirOp::DestAdapt || inst.op == GirOp::DestAdaptFinish)
                     link(inst.a, inst.res);
                 auto edge = [&](int target, const vector<int> &values) {
                     for (size_t position = 0; position < values.size(); position++)
@@ -1238,6 +1241,37 @@ private:
         shape[inst.res] = shape[inst.a];
         auto &before = HT(hvt[inst.a]);
         auto &after = HT(hvt[inst.res]);
+        if (inst.op == GirOp::DestAdapt) {
+            auto receivingPrefix = Prefix(before.elem, before.request);
+            auto producerPrefix = Prefix(after.elem, after.request);
+            if (receivingPrefix > producerPrefix)
+                shape[inst.res].w[1] = PtrAt(shape[inst.a].w[1], ConstI(I64(), receivingPrefix - producerPrefix), 1);
+            if (producerPrefix > receivingPrefix)
+                SimpleE(GirOp::StackBump, shape[inst.a].w[0], ConstI(I64(), producerPrefix - receivingPrefix));
+            return;
+        }
+        if (inst.op == GirOp::DestAdaptFinish) {
+            auto producerPrefix = Prefix(before.elem, before.request);
+            auto receivingPrefix = Prefix(after.elem, after.request);
+            if (receivingPrefix > producerPrefix)
+                shape[inst.res].w[1] = PtrAt(shape[inst.a].w[1], ConstI(I64(), producerPrefix - receivingPrefix), 1);
+            if (before.kind == CoreType::Cancelled) return;
+            if (producerPrefix > receivingPrefix) {
+                auto start = shape[inst.a].w[1];
+                auto source = PtrAt(start, ConstI(I64(), producerPrefix - receivingPrefix), 1);
+                auto bytes = WalkElements(HT(before.elem).elem, source, DestinationCount(inst.a));
+                GirInst move;
+                move.op = GirOp::BytesMove;
+                move.a = start;
+                move.b = source;
+                move.vals = { bytes };
+                EmitE(std::move(move));
+                SimpleE(GirOp::StackRelease, shape[inst.a].w[0], PtrAt(start, bytes, 1));
+                Event(GirEventKind::Relocate, { DestinationId(inst.a) }, GirEventReason::HeaderRemoval);
+            }
+            PatchPrefix(inst.res, inst.org);
+            return;
+        }
         if (inst.op == GirOp::DestValue) {
             if (Prefix(after.elem, after.request)) StartPrefix(inst.res);
             return;
@@ -1566,6 +1600,13 @@ private:
                 return;
             }
             case GirOp::DestPublish: Publish(i.a, i.org); return;
+            case GirOp::DestPublishRef: {
+                auto destination = DestinationAt(i.a);
+                Publish(i.a, i.org);
+                Define(i, { shape[i.a].w[1] });
+                shape[i.res].source = ChildSource(shape[destination.receiverReference].source, destination.oldLength);
+                return;
+            }
             case GirOp::DestArg: {
                 auto destination = DestinationAt(i.a);
                 shape[i.res].source = destination.source;
@@ -1583,18 +1624,26 @@ private:
                 CreateObject(i.idx);
                 namedDestinations[i.idx] = destination;
                 auto &place = places[i.idx];
-                if (place.kind == Place::Dynamic) SimpleE(GirOp::LocalSet, shape[i.a].w[1], -1, place.members[0]);
-                else if (place.kind == Place::Header) {
-                    auto header = Simple(GirOp::FrameAddr, Ptr(), -1, -1, place.members[0]);
-                    SimpleE(GirOp::HdrInit, header, shape[i.a].w[1]);
-                    SimpleE(GirOp::HdrSetLen, header, DestinationCount(i.a));
+                if (place.kind != Place::Alias) throw CompileError { "named result has no alias placement" };
+                auto reference = shape[i.a].w[1];
+                if (IsResizableKind(HT(hf->slots[i.idx].ty).kind)) {
+                    reference = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(16));
+                    SimpleE(GirOp::HdrInit, reference, shape[i.a].w[1]);
+                    SimpleE(GirOp::HdrSetLen, reference, DestinationCount(i.a));
                 }
+                SimpleE(GirOp::LocalSet, reference, -1, place.members[0]);
+                SimpleE(GirOp::LocalSet, destination.stack, -1, place.members[1]);
                 return;
             }
             case GirOp::DestNamed: {
                 auto destination = namedDestinations.at(i.idx);
                 destinations[carrierRoots[i.res]] = destination;
+                if (IsResizableKind(HT(hf->slots[i.idx].ty).kind)) {
+                    auto header = Simple(GirOp::LocalGet, Ptr(), -1, -1, places[i.idx].members[0]);
+                    PStoreV(I64(), destination.metadata, Simple(GirOp::HdrLen, I64(), header));
+                }
                 Define(i, { destination.stack, destination.base, destination.metadata });
+                PatchPrefix(i.res, i.org);
                 return;
             }
             case GirOp::DestAbandon: {
@@ -1606,6 +1655,7 @@ private:
                 if (!shape[i.a].w.empty()) SimpleE(GirOp::StackRelease, shape[i.a].w[0], shape[i.a].w[1]);
                 return;
             case GirOp::DestValue: case GirOp::DestRelocate: case GirOp::DestStage: case GirOp::DestFit:
+            case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
                 return AdaptDestination(i);
             case GirOp::ResultExitDest: {
                 auto outputs = resultOutputs.at(i.idx);
@@ -1613,6 +1663,7 @@ private:
                 destination.stack = outputs[0];
                 destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
                 destination.metadata = outputs[2];
+                PStoreV(I64(), destination.metadata, ConstI(I64(), 0));
                 destination.type = i.ty;
                 destination.request = i.request;
                 destinations[carrierRoots[i.res]] = destination;

@@ -150,7 +150,7 @@ private:
 
     int EmitDef(GirInst i) {
         if (cur < 0) return 0;
-        GirTyEnv env { mod, slots, sigs, vals };
+        GirTyEnv env { mod, slots, sigs, vals, nullptr, &blocks };
         auto r = GirTyper(env).Of(i);
         if (!r.ok()) throw CompileError { cat("internal compiler error: GIR lowering type: ", r.error) };
         auto ty = r.ty;
@@ -394,6 +394,16 @@ private:
             }
             case CoreExprKind::Push: {
                 auto r = LowerPlace(*e.place);
+                if (CoreHasConstruction(core.profile) && GirNonfixed(mod, e.a->type)) {
+                    auto destination = OpenDestination(*e.a, GirDestPushReceiver { r }, CoreRequest::Value, Org(e.org));
+                    auto completed = LowerConstruct(*e.a, destination, Org(e.org));
+                    if (cur < 0) return 0;
+                    GirInst publish;
+                    publish.op = GirOp::DestPublishRef;
+                    publish.a = completed;
+                    publish.org = Org(e.org);
+                    return EmitDef(std::move(publish));
+                }
                 auto v = LowerExpr(*e.a);
                 GirInst i;
                 i.op = GirOp::Push;
@@ -631,6 +641,12 @@ private:
         open.op = GirOp::DestOpen;
         open.destReceiver = std::move(receiver);
         open.ty = expression.type;
+        if (auto slot = get_if<GirDestSlotReceiver>(&open.destReceiver)) open.ty = slots.at(slot->slot).ty;
+        if (auto global = get_if<GirDestGlobalReceiver>(&open.destReceiver)) open.ty = mod.globals.at(global->global).ty;
+        if (auto argument = get_if<GirDestArgReceiver>(&open.destReceiver)) open.ty = mod.funcs.at(argument->function).params.at(argument->parameter);
+        if (auto whole = get_if<GirDestWholeReceiver>(&open.destReceiver)) open.ty = mod.Type(ValTy(whole->reference)).elem;
+        if (auto append = get_if<GirDestAppendReceiver>(&open.destReceiver)) open.ty = mod.Type(ValTy(append->reference)).elem;
+        if (auto push = get_if<GirDestPushReceiver>(&open.destReceiver)) open.ty = mod.Type(mod.Type(ValTy(push->reference)).elem).elem;
         open.request = request;
         if (expression.kind == CoreExprKind::Bytes)
             open.knownCount = ConstInt(I64(), to_string(expression.bytes.size()));
@@ -638,6 +654,27 @@ private:
             open.knownCount = ConstInt(I64(), to_string(expression.elems.size()));
         open.org = org;
         return EmitDef(std::move(open));
+    }
+
+    pair<int, bool> AdaptProducerDestination(int destination, const CoreResultDescriptor &producer, int org) {
+        auto receiving = mod.Type(ValTy(destination));
+        if (receiving.elem == producer.type && receiving.request == producer.request) return { destination, false };
+        GirInst adapt;
+        adapt.op = GirOp::DestAdapt;
+        adapt.a = destination;
+        adapt.ty = producer.type;
+        adapt.request = producer.request;
+        adapt.org = org;
+        return { EmitDef(std::move(adapt)), true };
+    }
+
+    int RestoreProducerDestination(int closed, bool adapted, int org) {
+        if (!adapted || cur < 0) return closed;
+        GirInst restore;
+        restore.op = GirOp::DestAdaptFinish;
+        restore.a = closed;
+        restore.org = org;
+        return EmitDef(std::move(restore));
     }
 
     int FinishDestination(int destination, int org) {
@@ -786,14 +823,26 @@ private:
                 if (core.impls[callee].results.size() != 1 || !core.impls[callee].summary.escapes.empty() ||
                     core.impls[callee].summary.unknown)
                     throw CompileError { "construction call requires explicit multiple-result or escape channels" };
+                if (!GirNonfixed(mod, core.impls[callee].results[0].type)) {
+                    auto snapshot = LowerExpr(expression);
+                    if (cur < 0) return done(0);
+                    GirInst write;
+                    write.op = GirOp::DestSnapshot;
+                    write.a = destination;
+                    write.b = snapshot;
+                    write.org = org;
+                    EmitEffect(std::move(write));
+                    return done(FinishDestination(destination, org));
+                }
+                auto [producerDestination, adapted] = AdaptProducerDestination(destination, core.impls[callee].results[0], org);
                 auto arguments = LowerArgs(expression.args, callee, org);
                 GirInst call;
                 call.op = GirOp::CallConstruct;
                 call.idx = callee;
                 call.vals = std::move(arguments);
-                call.vals2 = { destination };
+                call.vals2 = { producerDestination };
                 call.org = org;
-                return done(EmitDef(std::move(call)));
+                return done(RestoreProducerDestination(EmitDef(std::move(call)), adapted, org));
             }
             case CoreExprKind::Fill: {
                 auto slot = (int)slots.size();
@@ -830,24 +879,27 @@ private:
         GirInst call;
         call.op = GirOp::Call;
         call.idx = callee;
-        call.vals = LowerArgs(expression.args, callee, org);
+        vector<bool> adapted(destinations.size(), false);
         for (size_t position = 0; position < destinations.size(); position++) {
             if (!GirNonfixed(mod, function.results[position].type)) continue;
             if (destinations[position] < 0) throw CompileError { "nonfixed call result has no receiving destination" };
             call.op = GirOp::CallConstruct;
-            call.vals2.push_back(destinations[position]);
+            auto producer = AdaptProducerDestination(destinations[position], function.results[position], org);
+            adapted[position] = producer.second;
+            call.vals2.push_back(producer.first);
         }
+        call.vals = LowerArgs(expression.args, callee, org);
         call.org = org;
         if (!function.summary.escapes.empty() || function.summary.unknown)
             throw CompileError { "escaping call requires invoke receiving edges" };
         auto pack = EmitDef(std::move(call));
-        if (destinations.size() == 1) return { pack };
+        if (destinations.size() == 1) return { RestoreProducerDestination(pack, adapted[0], org) };
         for (size_t position = 0; position < destinations.size(); position++) {
             GirInst result;
             result.op = GirOp::Result;
             result.a = pack;
             result.idx = (int)position;
-            values.push_back(EmitDef(std::move(result)));
+            values.push_back(RestoreProducerDestination(EmitDef(std::move(result)), adapted[position], org));
         }
         return values;
     }
@@ -947,7 +999,7 @@ private:
         auto org = Org(s.org);
         switch (s.kind) {
             case CoreStmtKind::Let: {
-                if (CoreHasConstruction(core.profile) && IsConstructionValue(*s.expr)) {
+                if (CoreHasConstruction(core.profile) && GirNonfixed(mod, slots.at(s.var).ty)) {
                     if (currentResults)
                         for (size_t result = 0; result < currentResults->size(); result++)
                             if ((*currentResults)[result].namedLocal == s.var) {
@@ -1051,7 +1103,7 @@ private:
             }
             case CoreStmtKind::AssignWhole: {
                 auto r = LowerPlace(*s.place);
-                if (CoreHasConstruction(core.profile) && IsConstructionValue(*s.expr)) {
+                if (CoreHasConstruction(core.profile) && GirNonfixed(mod, mod.Type(ValTy(r)).elem)) {
                     GirInst clear;
                     clear.op = GirOp::Clear;
                     clear.a = r;
