@@ -381,4 +381,19 @@ private def replacementStage : ConstructionM Unit := do
   | .fault .protocol state => state.events == [.begin 0,.begin 1] && state.storage.size == 1
   | _ => false
 
+
+private def prematureNamedFit : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestinationDirect storage capability (.limited 2 1) none
+  stageDestination destination
+  prepareNamedBinding destination (.varr (.int .u8))
+  writeElement destination (bytes [99])
+  finishDestination destination
+  fitStagedDestination destination
+
+#guard match prematureNamedFit ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0,.stage 0,.write 0 0] &&
+      (state.storage[0]?.map (·.bytes.size)) == some 0
+  | _ => false
+
 end Goose.Construct.DestinationChecks

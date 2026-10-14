@@ -248,7 +248,7 @@ def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit :
       let storage ← lookupStorage destination.storage
       if !writingAvailable destination storage (count + 1) then ConstructionM.fail .capacity
       match destination.layout, destination.backing with
-      | .limited _ slotBytes, .direct _ =>
+      | .limited _ slotBytes, _ =>
           if bytes.size != slotBytes then ConstructionM.fail .protocol
       | _, _ => pure ()
       match destination.use with
@@ -350,16 +350,19 @@ def fitStagedDestination (id : DestinationId) : ConstructionM Unit := do
   let stage ← lookupStorage stageId
   let start ← match destination.use with
     | .receiver => do
-        if !available destination.layout receiver count then ConstructionM.fail .capacity
-        pure (match destination.layout with
-          | .limited _ slotBytes => receiver.publishedCount * slotBytes
-          | _ => receiver.bytes.size)
+        match destination.layout with
+        | .limited _ slotBytes =>
+            if !available destination.layout receiver count then ConstructionM.fail .capacity
+            if stage.bytes.size != count * slotBytes then ConstructionM.fail .protocol
+            pure (receiver.publishedCount * slotBytes)
+        | _ => ConstructionM.fail .protocol
     | .child parentId => do
         let parent ← writableDestination parentId
         match parent.progress, parent.layout with
-        | .suspended parentCount expected, .limited capacity _ =>
+        | .suspended parentCount expected, .limited capacity slotBytes =>
             if expected != id || receiverId != parent.storage then ConstructionM.fail .ownership
             if parentCount + count > capacity then ConstructionM.fail .capacity
+            if stage.bytes.size != count * slotBytes then ConstructionM.fail .protocol
             pure parent.writeEnd
         | _, _ => ConstructionM.fail .protocol
     | .replacement _ => ConstructionM.fail .protocol
