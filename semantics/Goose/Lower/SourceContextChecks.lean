@@ -271,4 +271,31 @@ example (profile : NumProfile) :
   subst target
   exact ⟨child, typedImplementation, passable⟩
 
+def conditionalImplementation : Impl :=
+  { initImpl with body := .mk 0 [.ifS (.bool true) (.mk 1 [] none) none 0] none }
+
+def conditionalModule : Module :=
+  { (callModule .pilot) with globals := #[], impls := #[conditionalImplementation], contexts := #[initContext], origins := #[⟨0, 1, "expr"⟩] }
+
+#guard match Core.validate conditionalModule with | .ok _ => true | .error _ => false
+
+example (profile : NumProfile) :
+    ∃ child : BlockSource ⟨profile, conditionalModule⟩ ⟨#[], 0, [(0, 0)], 1⟩ [] (.mk 1 [] none)
+      { St.initial with nextAct := 1, nextScope := 1 },
+      child.typingEnv.impl = some conditionalImplementation := by
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, bodyTyping, _⟩ :=
+    acceptedEntryAfterGlobals (cfg := ⟨profile, conditionalModule⟩) (by cbv) 1 (by cbv)
+  have contextEq : ctx = initContext := by simpa [conditionalModule, callModule] using contextAt.symm
+  subst ctx
+  have implEq : impl = conditionalImplementation := by simpa [conditionalModule, callModule, initContext] using implementationAt.symm
+  subst impl
+  obtain ⟨statements, statementsTyping, _, _, _⟩ := source.enter
+  obtain ⟨head, headTyping, _, _⟩ := statements.split
+  obtain ⟨child, childTyping, _, _, _⟩ := head.ifThenChild 1 (by cbv)
+  refine ⟨child, ?_⟩
+  rw [childTyping, headTyping, statementsTyping]
+  have same := source.same.impl
+  rw [bodyTyping] at same
+  exact same
+
 end Goose.Lower.SourceContextChecks
