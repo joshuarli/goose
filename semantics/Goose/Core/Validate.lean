@@ -1,15 +1,5 @@
 import Goose.Core.Demand
-
-/-!
-`validate`: the independent check that a module is safe to run.
-
-It trusts nothing the exporter wrote beyond the program text itself. Typing,
-writes and call mutability are checked once per implementation and global
-(`Goose.Core.Typing`); root annotations, block values, results, call roots
-and effect summaries are checked once per context (`Goose.Core.Roots`), so two
-contexts sharing an implementation are each judged against their own
-annotation.
--/
+import Goose.Core.Origins
 
 namespace Goose.Core
 
@@ -25,6 +15,12 @@ def checkImplementationContexts (m : Module) : V Unit :=
     unless m.contexts.toList.any (fun ctx => ctx.impl == i) do
       reject .root s!"implementation {i} has no context"
 
+def checkOrigins (m : Module) : V Unit :=
+  forAll m.origins.toList fun origin =>
+    match checkOriginRecord m.files.size origin with
+    | .ok () => pure ()
+    | .error message => reject .type message
+
 def validate (m : Module) : V Unit := do
   checkStructTables m
   checkEntry m
@@ -37,5 +33,6 @@ def validate (m : Module) : V Unit := do
   forAll m.contexts.toList (checkContext m)
   forAll (List.range m.globals.size) (checkInitRoots m)
   checkModuleDemand m
+  checkOrigins m
 
 end Goose.Core

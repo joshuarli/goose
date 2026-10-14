@@ -37,7 +37,7 @@ def module : Module :=
       ⟨1, "returnSlice", [(0, [.param 0]), (1, [.param 1])],
         [[.param 0, .param 1]], [(0, [.param 1])]⟩,
       ⟨2, "consume", [(0, [.param 0])], [], []⟩]
-    entry := 0, origins := #[⟨0, 1, "stmt"⟩], profile := .shrink }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := .shrink }
 
 def outerArgument : Arg := .byVal (.call 1
   [.byRef .mutable (.var 1), .byRef .readOnly (.var 0)] 0)

@@ -62,6 +62,7 @@ structure GlobalTables (m : Module) (gl : Global) : Prop where
   scopes : DenseScopes 0 (exprScopes none gl.init)
 
 structure DeclarativeTables (m : Module) : Prop where
+  origins : ∀ origin ∈ m.origins.toList, OriginRecordValid m.files.size origin
   pilotStructs : m.profile = .pilot → m.structs = #[]
   descriptors : ∀ d ∈ m.structs.toList, 0 < d.byteSize ∧ DescriptorLayout m d.byteSize 0 d.fields.toList
   types : ∀ ty ∈ m.types.toList, ResolvedType m ty
@@ -342,10 +343,10 @@ private theorem structTables_of_check (m : Module) (h : checkStructTables m = .o
 theorem validate_declarativeTables (m : Module) (h : validate m = .ok ()) : DeclarativeTables m := by
   unfold validate at h
   inv at h
-  obtain ⟨structs, entry, coverage, globals, implementations, contexts, _, _⟩ := h
+  obtain ⟨structs, entry, coverage, globals, implementations, contexts, _, _, origins⟩ := h
   obtain ⟨pilotStructs, descriptors, types, globalTypes, variableTypes, resultTypes⟩ :=
     structTables_of_check m structs
-  refine ⟨pilotStructs, descriptors, types, globalTypes, variableTypes, resultTypes, ?_, ?_, ?_, ?_,
+  refine ⟨checkOrigins_ok m origins, pilotStructs, descriptors, types, globalTypes, variableTypes, resultTypes, ?_, ?_, ?_, ?_,
     checkEntry_ok m entry⟩
   · intro impl member
     exact implementationTables_of_check m impl ((forAll_ok _ _).1 implementations impl member)

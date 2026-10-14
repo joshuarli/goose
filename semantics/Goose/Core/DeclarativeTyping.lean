@@ -1223,7 +1223,7 @@ theorem accepted_globalTyping (m : Module) (accepted : validate m = .ok ())
     GlobalTyping m index global := by
   unfold validate at accepted
   inv at accepted
-  obtain ⟨_, _, _, globals, _, _, _, _⟩ := accepted
+  obtain ⟨_, _, _, globals, _, _, _, _, _⟩ := accepted
   have indexBound : index < m.globals.size := (Array.getElem?_eq_some_iff.mp lookup).1
   have checked := (Sound.forAll_ok _ _).mp globals index (List.mem_range.mpr indexBound)
   simp only [lookup] at checked

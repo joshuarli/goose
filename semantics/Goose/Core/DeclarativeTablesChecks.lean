@@ -8,7 +8,7 @@ private def main : Impl :=
 
 private def base : Module :=
   { files := #["tables.goose"], types := #[], globals := #[], impls := #[main],
-    contexts := #[⟨0, "main", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "test"⟩] }
+    contexts := #[⟨0, "main", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "let"⟩] }
 
 private def referenceSlice : Ty := .ref .mutable (.slice .mutable (.int .i64))
 

@@ -54,7 +54,7 @@ def module : Module :=
       ⟨2, "middle", [(0, [.param 0]), (1, [.param 1]), (2, [.param 2]),
         (3, [.param 1, .param 2])], [], [(0, [.global 0])]⟩,
       ⟨3, "shrink", [(0, [.param 0])], [], []⟩]
-    entry := 0, origins := #[⟨0, 1, "stmt"⟩], profile := .shrink }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := .shrink }
 def shrinkArgument : Arg := .byRef .mutable (.deref (.read (.var 3)))
 def middleAccess : AccessEnv := ⟨module, module.impls[2]'(by decide),
   module.contexts[2]'(by decide)⟩
@@ -139,7 +139,7 @@ def module : Module :=
     contexts := #[
       ⟨0, "main", [(2, [.local 0, .local 1]), (3, [.local 0, .local 1])], [], []⟩,
       ⟨1, "returned", [(0, [.param 0]), (1, [.param 1])], [[.param 1]], [(0, [.param 1])]⟩]
-    entry := 0, origins := #[⟨0, 1, "stmt"⟩], profile := .shrink }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := .shrink }
 #guard match validate module with
   | .ok _ => true
   | .error _ => false

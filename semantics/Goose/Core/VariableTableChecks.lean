@@ -18,7 +18,7 @@ def parameterSlice : Module :=
     impls := #[emptyEntry, sliceReceiver],
     contexts := #[⟨0, "main", [], [], []⟩,
       ⟨1, "receiver", [(0, [.param 0])], [], [(0, [.param 0])]⟩],
-    entry := 0, origins := #[⟨0, 1, "test"⟩] }
+    entry := 0, origins := #[⟨0, 1, "param"⟩] }
 
 def undeclaredSliceSlot : Module :=
   { parameterSlice with

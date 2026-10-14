@@ -918,7 +918,7 @@ theorem accepted_contextRoots (m : Module) (h : validate m = .ok ()) :
       m.impls[ctx.impl]? = some impl ∧ ContextRoots m impl ctx := by
   unfold validate at h
   inv at h
-  obtain ⟨_, _, _, _, _, contexts, _, _⟩ := h
+  obtain ⟨_, _, _, _, _, contexts, _, _, _⟩ := h
   intro c ctx hc
   exact contextRoots_sound m ctx ((forAll_ok _ _).1 contexts ctx
     (Array.mem_toList_iff.2 (Array.mem_of_getElem? hc)))
@@ -927,7 +927,7 @@ theorem accepted_globalRoots (m : Module) (h : validate m = .ok ()) :
     ∀ (g : GlobalId) gl, m.globals[g]? = some gl → GlobalRoots m g gl := by
   unfold validate at h
   inv at h
-  obtain ⟨_, _, _, _, _, _, initializers, _⟩ := h
+  obtain ⟨_, _, _, _, _, _, initializers, _, _⟩ := h
   intro g gl hg
   exact globalRoots_sound m g gl hg ((forAll_ok _ _).1 initializers g
     (List.mem_range.2 (Array.getElem?_eq_some_iff.1 hg).1))
