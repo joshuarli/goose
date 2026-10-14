@@ -1,4 +1,4 @@
-import Goose.Lower.Claims
+import Goose.Lower.Leaf
 import Goose.Proofs.Memory
 
 namespace Goose.Lower

@@ -1310,64 +1310,6 @@ theorem stmtsClaim_succ (n : Nat) (lc : Option LoopCtx) (ihs : ∀ s, StmtClaim 
 
 /-! ### Blocks -/
 
-theorem releaseSlots_eq {fn : Func} {vars : Array LocalVar}
-    (hs : fn.slots = vars.mapIdx fun i lv => (⟨lv.ty, lv.kind, lv.scope, i⟩ : Slot))
-    (act : ActId) (sc : Nat) (si : ScopeInst) :
-    ∀ (n : Nat) (st : Store), releaseSlots fn act sc si n st = releaseVars vars act sc si n st
-  | 0, st => rfl
-  | n + 1, st => by
-    simp only [releaseSlots, releaseVars, hs, Array.getElem?_mapIdx]
-    cases vars[n]? with
-    | none => exact releaseSlots_eq hs act sc si n st
-    | some lv => simpa using releaseSlots_eq hs act sc si n _
-
-theorem releaseScope_eq {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls : LS}
-    (hrel : Rel cfg env cx fr ls) (sc : Nat) (si : ScopeInst) :
-    GIR.releaseScope cx.fn fr.act sc si = Core.releaseScope env sc si := by
-  funext s
-  have hsz : cx.fn.slots.size = env.vars.size := by rw [hrel.slots]; simp
-  simp only [GIR.releaseScope, Core.releaseScope, hrel.act, hsz]
-  rw [releaseSlots_eq hrel.slots]
-
-theorem block_enter {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls1 : LS} {fr : Frame} {pt : Pt}
-    {le : LEnv} {sc : ScopeId} (hpp : ls.pp = some pt) (h : emitEffect (.enter sc) le ls = ((), ls1))
-    (hext : ExtT ls1 cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
-    SimG cx pt fr freshScope (fun si pt1 fr1 =>
-      ls1.pp = some pt1 ∧ ls1.vals.size = ls.vals.size ∧ fr1.vals = fr.vals ∧
-      Rel cfg { env with scopes := (sc, si) :: env.scopes } cx fr1 { ls1 with stack := sc :: ls1.stack }) := by
-  obtain ⟨hv, hst, hpp1, hi⟩ := emitEffect_facts h hpp hext
-  have hx : execEff cx.fn fr (.enter sc) =
-      freshScope >>= fun si => pure ({ fr with scopes := (sc, si) :: fr.scopes } : Frame) := rfl
-  refine (SimG.eff_step (fun si => { fr with scopes := (sc, si) :: fr.scopes }) hi hx).mono
-    fun si pt1 fr1 ⟨hpt, hfr⟩ => ?_
-  subst hpt; subst hfr
-  refine ⟨hpp1, hv, rfl, ?_⟩
-  exact ⟨hrel.prof, hrel.slots, hrel.act, by simp [hrel.scopes], hrel.depth, by simp [hst, hrel.stack]⟩
-
-theorem block_leave {cfg : Cfg} {env : Env} {cx : FnCtx} {lsk ls_l : LS} {frk : Frame} {ptk : Pt}
-    {le : LEnv} {sc : ScopeId} {si : ScopeInst} (hpp : lsk.pp = some ptk)
-    (h : emitEffect (.leave sc) le lsk = ((), ls_l)) (hext : ExtT ls_l cx.fn.blocks)
-    (hrel : Rel cfg { env with scopes := (sc, si) :: env.scopes } cx frk lsk) :
-    SimG cx ptk frk (Core.releaseScope env sc si) (fun _ pt' fr' =>
-      ls_l.pp = some pt' ∧ ls_l.vals.size = lsk.vals.size ∧ fr'.vals = frk.vals ∧
-      Rel cfg env cx fr' { ls_l with stack := ls_l.stack.drop 1 }) := by
-  obtain ⟨hv, hst, hpp1, hi⟩ := emitEffect_facts h hpp hext
-  have hsc : frk.scopes = (sc, si) :: env.scopes := hrel.scopes
-  have heq := releaseScope_eq hrel sc si
-  have hx : execEff cx.fn frk (.leave sc) =
-      Core.releaseScope env sc si >>= fun _ => pure ({ frk with scopes := env.scopes } : Frame) := by
-    simp only [execEff, hsc, ↓reduceIte]
-    rw [heq]
-    rfl
-  refine (SimG.eff_step (fun _ => { frk with scopes := env.scopes }) hi hx).mono
-    fun u pt1 fr1 ⟨hpt, hfr⟩ => ?_
-  subst hpt; subst hfr
-  refine ⟨hpp1, hv, rfl, ?_⟩
-  refine ⟨hrel.prof, hrel.slots, hrel.act, rfl, hrel.depth, ?_⟩
-  have := hrel.stack
-  simp only [List.map_cons] at this
-  simp [hst, this]
-
 /-- A block's own scope around its statements, and what it does with the flow that ends them. -/
 def coreBlock (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List Stmt)
     (vf : Env → Flow → M Flow) : M Flow := do
@@ -1395,21 +1337,6 @@ theorem execBlock_nil (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List
   congr 1
   funext flow'
   cases flow <;> cases value <;> simp [valueFlow]
-
-/-- A post-condition of a fragment run in an inner scope, as one of the whole block. -/
-theorem Post.rescope {cfg : Cfg} {env env' : Env} {cx : FnCtx} {ls lsp lsk ls_f : LS}
-    {fr frp frk fr_f : Frame} {ptk pt : Pt} {cells : List (ValueId × RVal)}
-    (hP : Post cfg env' cx lsp frp lsk frk ptk cells) (hv0 : lsp.vals.size = ls.vals.size)
-    (hfr0 : frp.vals = fr.vals) (hpp : ls_f.pp = some pt) (hv : ls_f.vals.size = lsk.vals.size)
-    (hfr : fr_f.vals = frk.vals) (hrel : Rel cfg env cx fr_f ls_f) :
-    Post cfg env cx ls fr ls_f fr_f pt cells := by
-  refine ⟨hpp, fun p hp => ?_, fun p hp => ?_, ?_, fun i hi => ?_, hrel⟩
-  · rw [hfr]; exact hP.has p hp
-  · rw [hv]; exact hP.lt p hp
-  · have := hP.mono; rw [hv]; omega
-  · have h1 := hP.same i (by omega)
-    show fr_f.vals[i]? = fr.vals[i]?
-    rw [hfr, h1, hfr0]
 
 theorem block_core {n : Nat} {lc : Option LoopCtx} (ihs : ∀ ss, StmtsClaim n lc ss) {sc : ScopeId} {stmts : List Stmt}
     (hokS : stmtsOk stmts = true) {U : Val → Prop}
