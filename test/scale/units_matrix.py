@@ -46,10 +46,22 @@ FAMILY = dict(helpers=1, contexts=2, types=gen.INT_TYPES[:1], shareable=1, root_
               edit_targets=True)
 SOURCE_EDITS = ("E02", "E03", "E04", "E05", "E06", "E07a", "E07b", "E08", "E09a", "E09b", "E09c")
 EDIT_CASES = set(SOURCE_EDITS) | {"E07c", "E15a", "E15b", "E16"}
-E10_UNAVAILABLE = {
-    "independent_c_flags": "the build command exposes no raw C flag override; --debug changes numeric mode and C flags together (-D is tested separately)",
-    "target": "the compiler has no target option; a cross compiler also changes C compiler identity",
-    "runtime_text_only": "runtime text is embedded in the Goose binary, so changing it also changes compiler binary identity",
+E10_UNIT_ONLY = {
+    "independent_c_flags": {
+        "field": "UnitContractValues.c_flags",
+        "proves": "the direct UnitContract and BuildUnitObjects test changes the compiler flags, compiles every controlled unit into a new store, and reuses the original objects after switching back",
+        "limit": "the build command has no independent raw C flag override, so the controlled C units do not qualify the Goose frontend build",
+    },
+    "target": {
+        "field": "UnitContractValues.target",
+        "proves": "the direct UnitContract and BuildUnitObjects test changes only target identity, compiles every controlled unit into a new store, and reuses the original objects after switching back",
+        "limit": "the build command has no target option, and both controlled builds use the host compiler",
+    },
+    "runtime_text_only": {
+        "field": "UnitContractValues.runtime_version",
+        "proves": "the direct UnitContract and BuildUnitObjects test changes only runtime identity, compiles every controlled unit into a new store, and reuses the original objects after switching back",
+        "limit": "runtime text is embedded in the Goose binary, so a production runtime-text change also changes compiler binary identity",
+    },
 }
 
 
@@ -120,6 +132,10 @@ class Build:
     @property
     def native(self):
         return (self.report or {}).get("extensions", {}).get("native_compile") or {}
+
+    @property
+    def runtime_version(self):
+        return (self.report or {}).get("runtime_version")
 
     @property
     def store(self):
@@ -243,6 +259,7 @@ class Matrix:
         self.goose, self.work = goose, work
         self.failures, self.records = [], []
         self.unavailable = []
+        self.unit_only = []
 
     def fail(self, row, why):
         self.failures.append(f"{row}: {why}")
@@ -254,10 +271,16 @@ class Matrix:
         self.records.append(record)
         print(json.dumps(record))
 
+    def record_unit_only(self, row, dimensions):
+        record = {"row": row, "status": "unit-only", "dimensions": dimensions}
+        self.unit_only.append(record)
+        self.records.append(record)
+        print(json.dumps(record))
+
     def completion(self):
         if self.failures:
             return "fail", 1
-        if self.unavailable:
+        if self.unavailable or self.unit_only:
             return "incomplete", 2
         return "ok", 0
 
@@ -501,28 +524,27 @@ class Matrix:
                 continue
             if n["objects_reused"] != 0 or n["objects_missed"] != n["units_written"]:
                 self.fail("E10", f"a new contract reused objects ({label}): {before.record('E10')}")
-            if label == "compiler binary" and n.get("runtime_version") != base.record("base").get("runtime_version"):
+            if label == "compiler binary" and before.runtime_version != base.runtime_version:
                 self.fail("E10", "a binary-only compiler variant changed runtime text")
             self.equal_to_clean(f"E10 {label}", s, before, flags, goose)
             back = s.build()
             self.record(f"E10 back from {label}", back)
             n = back.native
-            if not self.is_warm(n):
+            if not self.reuses_all_objects(n):
                 self.fail("E10", f"returning to the first contract is not warm ({label}): {back.record('E10')}")
             self.equal_to_clean("E10 back", s, back)
             again = s.build(*flags, goose=goose)
             self.record(f"E10 back to {label}", again)
-            if not self.is_warm(again.native):
+            if not self.reuses_all_objects(again.native):
                 self.fail("E10", f"the {label} store was not left warm: {again.record('E10')}")
             self.equal_to_clean(f"E10 back to {label}", s, again, flags, goose)
 
-        self.record_unavailable("E10 unavailable dimensions", E10_UNAVAILABLE)
+        self.record_unit_only("E10 contract dimensions", E10_UNIT_ONLY)
 
     @staticmethod
-    def is_warm(native):
+    def reuses_all_objects(native):
         return bool(not native.get("native_compiler_invocations")
-                    and not (native.get("link") or {}).get("ran")
-                    and (native.get("no_op") or native.get("objects_missed") == 0))
+                    and native.get("objects_missed") == 0)
 
     def row_E11(self):
         s = Session(self.goose, self.work, "e11")
@@ -798,8 +820,9 @@ def main():
               f"{r['objects_reused']!s:<7} {r['objects_missed']!s:<7} {r['link_ran']}")
     status, exit_code = m.completion()
     if status == "incomplete":
-        dimensions = sum(len(record["dimensions"]) for record in m.unavailable)
-        detail = f"incomplete ({dimensions} unavailable dimension(s))"
+        dimensions = sum(len(record["dimensions"])
+                         for record in [*m.unavailable, *m.unit_only])
+        detail = f"incomplete ({dimensions} E10 dimension(s) lack full-build coverage)"
     elif status == "fail":
         detail = f"{len(m.failures)} failure(s)"
     else:

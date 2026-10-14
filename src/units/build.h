@@ -22,6 +22,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include "contract.h"
 
 namespace goose {
 
@@ -129,46 +130,45 @@ inline vector<string> UnitLines(const string &text) {
     return out;
 }
 
-// ---- The contract. ----
+inline UnitContractTarget UnitHostTarget() {
+    string arch;
+    #if defined(__x86_64__) || defined(_M_X64)
+        arch = "x86_64";
+    #elif defined(__aarch64__) || defined(_M_ARM64)
+        arch = "aarch64";
+    #else
+        arch = "other";
+    #endif
+    string os;
+    #if defined(_WIN32)
+        os = "windows";
+    #elif defined(__APPLE__)
+        os = "macos";
+    #else
+        os = "unix";
+    #endif
+    return { arch, os, sizeof(void *) };
+}
 
-struct UnitContract {
-    string text, digest;
-};
-
-// Everything that can change what a unit compiles to or what links: this
-// compiler, the options that shape its output, the C compiler by what it is
-// and not where it is, and the flags and target the objects are built for.
 inline UnitContract MakeContract(const vector<string> &args, const string &goose_exe,
                                  const Builder &b) {
-    UnitContract c;
+    UnitContractValues values;
+    values.goose_digest = UnitBinaryDigest(goose_exe);
+    values.runtime_version = RuntimeVersion();
+    values.args = args;
     auto &tc = b.tc;
-    string args_text;
-    for (auto &a : args) args_text += a + "\x1f";
-    c.text = cat("goose-contract/1\ngoose ", UnitBinaryDigest(goose_exe),
-                 "\nruntime ", RuntimeVersion(), "\nargs ", args_text,
-                 "\ncc-digest ", UnitBinaryDigest(tc.cc), "\ncc-version ", tc.version,
-                 "\ncc-name ", tc.name, " ", tc.style, "\n");
-    for (auto &f : b.CFlags()) c.text += "cflag " + f + "\n";
-    for (auto &f : b.SystemLibs()) c.text += "lib " + f + "\n";
-    #if defined(__x86_64__) || defined(_M_X64)
-        c.text += "arch x86_64\n";
-    #elif defined(__aarch64__) || defined(_M_ARM64)
-        c.text += "arch aarch64\n";
-    #else
-        c.text += "arch other\n";
-    #endif
-    #if defined(_WIN32)
-        c.text += "os windows\n";
-    #elif defined(__APPLE__)
-        c.text += "os macos\n";
-    #else
-        c.text += "os unix\n";
-    #endif
-    c.text += cat("pointer ", sizeof(void *), "\n");
-    for (auto name : { "GOOSE_STDLIB", "GOOSE_CC", "GOOSE_RUNTIME" })
-        c.text += cat("env ", name, "=", getenv(name) ? getenv(name) : "", "\n");
-    c.digest = Sha256::Of(c.text).Hex();
-    return c;
+    values.c_compiler_digest = UnitBinaryDigest(tc.cc);
+    values.c_compiler_version = tc.version;
+    values.c_compiler_name = tc.name;
+    values.c_compiler_style = tc.style;
+    values.c_flags = b.CFlags();
+    values.system_libs = b.SystemLibs();
+    values.target = UnitHostTarget();
+    for (auto name : { "GOOSE_STDLIB", "GOOSE_CC", "GOOSE_RUNTIME" }) {
+        auto value = getenv(name);
+        values.environment.push_back({ name, value ? value : "" });
+    }
+    return MakeContract(values);
 }
 
 // ---- Recording what a compile reads, and the no-op check. ----
@@ -297,7 +297,7 @@ struct UnitsBuildInput {
     const Toolchain *tc = nullptr;
     const BuildOptions *opts = nullptr;
     UnitStore store;
-    string contract;
+    UnitContract contract;
     string exe;
     vector<string> rsps;                 // The native parts' response files.
     vector<string> include_headers;      // --include, absolute.
@@ -344,9 +344,8 @@ public:
 
     vector<string> Command(const vector<const UnitToBuild *> &batch) const {
         auto &tc = *in.tc;
-        Builder b { tc, *in.opts, in.msgs };
         vector<string> argv = { tc.cc };
-        for (auto &f : b.CFlags()) argv.push_back(f);
+        for (auto &f : in.contract.c_flags) argv.push_back(f);
         if (tc.style == "msvc") {
             argv.push_back("/c");
             argv.push_back(batch[0]->source);
@@ -470,9 +469,8 @@ inline bool LookupObject(const UnitsBuildInput &in, UnitToBuild &u) {
 inline vector<string> UnitLinkCommand(const UnitsBuildInput &in, const vector<string> &objects,
                                       const string &runtime_object) {
     auto &tc = *in.tc;
-    Builder b { tc, *in.opts, in.msgs };
     vector<string> argv = { tc.cc };
-    for (auto &f : b.CFlags()) argv.push_back(f);
+    for (auto &f : in.contract.c_flags) argv.push_back(f);
     if (tc.style == "msvc") {
         argv.push_back(cat("/Fe:", in.exe));
         argv.push_back(cat("/Fo:", in.store.Tmp(), "\\"));
@@ -485,7 +483,7 @@ inline vector<string> UnitLinkCommand(const UnitsBuildInput &in, const vector<st
         argv.push_back("-o");
         argv.push_back(in.exe);
         for (auto &r : in.rsps) argv.push_back(cat("@", r));
-        for (auto &l : b.SystemLibs()) argv.push_back(l);
+        for (auto &l : in.contract.system_libs) argv.push_back(l);
     }
     return argv;
 }
@@ -608,7 +606,7 @@ inline int BuildUnitObjects(UnitsBuildInput &in, const string &runtime_object) {
             }
         }
     }
-    for (auto &u : units) u.objkey = ObjectKeyOf(u, in.contract);
+    for (auto &u : units) u.objkey = ObjectKeyOf(u, in.contract.digest);
 
     // The link, unless what it would make is there.
     vector<string> objects;
@@ -619,17 +617,16 @@ inline int BuildUnitObjects(UnitsBuildInput &in, const string &runtime_object) {
     link.Str(runtime_object).Str(runtime_object.empty() ? "" : UnitFileDigest(runtime_object));
     for (auto &r : in.rsps) link.Str(r).Str(UnitFileDigest(r));
     auto command = UnitLinkCommand(in, objects, runtime_object);
-    // The flags, not the paths that are digested above.
-    Builder b { tc, opts, in.msgs };
-    for (auto &f : b.CFlags()) link.Str(f);
-    for (auto &f : b.SystemLibs()) link.Str(f);
+    for (auto &f : in.contract.c_flags) link.Str(f);
+    for (auto &f : in.contract.system_libs) link.Str(f);
     auto linkdigest = link.Hash().Hex();
     string linkrec;
     auto skip = false;
     if (!in.rebuild && !opts.dryrun && UnitReadFile(in.store.dir + "/link.rec", linkrec)) {
         auto lines = UnitLines(linkrec);
-        if (lines.size() >= 3 && lines[0] == linkdigest && lines[1] == in.exe &&
-            UnitFileSize(in.exe) == atoll(lines[2].c_str()))
+        if (lines.size() == 5 && lines[0] == "goose-unit-link/2" && lines[1] == linkdigest &&
+            lines[2] == in.exe && UnitFileSize(in.exe) == atoll(lines[3].c_str()) &&
+            UnitFileDigest(in.exe) == lines[4])
             skip = true;
     }
     if (opts.dryrun || opts.verbose) {
@@ -652,7 +649,8 @@ inline int BuildUnitObjects(UnitsBuildInput &in, const string &runtime_object) {
             return 1;
         }
         UnitPublish(in.store.dir + "/link.rec",
-                    cat(linkdigest, "\n", in.exe, "\n", UnitFileSize(in.exe), "\n"));
+                    cat("goose-unit-link/2\n", linkdigest, "\n", in.exe, "\n",
+                        UnitFileSize(in.exe), "\n", UnitFileDigest(in.exe), "\n"));
     }
     if (opts.dryrun) return 0;
 

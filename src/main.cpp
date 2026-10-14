@@ -1338,7 +1338,7 @@ int Main(int argc, char **argv) {
             ur.tc = tc;
             Builder ub { ur.tc, buildopts, msgs };
             ur.contract = MakeContract(contractargs, exe, ub);
-            ur.store.dir = AbsolutePath(cat(builddir, "/store/", ur.contract.digest.substr(0, 16)));
+            ur.store.dir = AbsolutePath(UnitStoreDirectory(builddir, ur.contract));
             std::error_code ec;
             filesystem::create_directories(filesystem::path(ur.store.Units()), ec);
             if (ec) {
@@ -1451,7 +1451,7 @@ int Main(int argc, char **argv) {
                     in.tc = &ur.tc;
                     in.opts = &buildopts;
                     in.store = ur.store;
-                    in.contract = ur.contract.digest;
+                    in.contract = ur.contract;
                     in.exe = buildopts.exe;
                     if (in.exe.empty()) {
                         in.exe = cat(DirOf(filename), out.empty() ? PathStem(filename) : out);

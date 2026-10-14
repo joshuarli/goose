@@ -52,12 +52,19 @@ class UnitsMatrixTests(unittest.TestCase):
 
         self.assertEqual(matrix.failures, [])
 
-    def test_warm_contract_store_allows_verified_frontend_recheck(self):
+    def test_contract_store_reuses_all_objects_even_when_it_relinks(self):
         native = {"no_op": False, "frontend_phases": ["parse"],
                   "native_compiler_invocations": [], "objects_missed": 0,
-                  "link": {"ran": False}}
+                  "link": {"ran": True}}
 
-        self.assertTrue(units_matrix.Matrix.is_warm(native))
+        self.assertTrue(units_matrix.Matrix.reuses_all_objects(native))
+
+    def test_runtime_version_is_read_from_the_build_report(self):
+        build = units_matrix.Build.__new__(units_matrix.Build)
+        build.report = {"runtime_version": "runtime-a",
+                        "extensions": {"native_compile": {}}}
+
+        self.assertEqual(build.runtime_version, "runtime-a")
 
     def test_unavailable_contract_dimensions_make_matrix_incomplete(self):
         matrix = units_matrix.Matrix("unused", self.scratch)
@@ -67,6 +74,16 @@ class UnitsMatrixTests(unittest.TestCase):
         record = matrix.records[0]
         self.assertEqual(record["status"], "unavailable")
         self.assertNotIn("ok", record)
+        self.assertEqual(matrix.completion(), ("incomplete", 2))
+
+    def test_unit_only_contract_dimensions_keep_the_matrix_incomplete(self):
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        dimensions = {"target": {"field": "target", "proves": "key changes", "limit": "no target option"}}
+        with contextlib.redirect_stdout(io.StringIO()):
+            matrix.record_unit_only("E10", dimensions)
+
+        self.assertEqual(matrix.records[0], {"row": "E10", "status": "unit-only",
+                                             "dimensions": dimensions})
         self.assertEqual(matrix.completion(), ("incomplete", 2))
 
     def test_random_non_error_build_failure_is_reported_for_edits_and_warning(self):

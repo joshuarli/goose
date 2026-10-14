@@ -1781,9 +1781,19 @@ def main():
         # its containers to compare with the standard ones directly.
         def compiler_unit(name):
             out_exe = gendir / f"{name}{tc.EXE_SUFFIX}"
-            ok, log = cc.compile(HERE / f"{name}.cpp", out_exe, cpp=True,
+            sources = [HERE / f"{name}.cpp"]
+            unit_extra = list(extra)
+            unit_libs = []
+            if name == "compiler_units_builder":
+                sources.extend((tc.REPO_ROOT / "src" / "process.cpp",
+                                tc.REPO_ROOT / "src" / "progress.cpp"))
+                unit_extra.append(f"-I{tc.REPO_ROOT / 'third_party' / 'subprocess'}")
+                if not tc.IS_WINDOWS and not tc.IS_MACOS:
+                    unit_libs.append("-ldl")
+            ok, log = cc.compile(sources, out_exe, cpp=True,
                                  opt=2 if args.profile == "baseline" else 1,
-                                 extra=extra, log=gendir / f"{name}.cc.log")
+                                 extra=unit_extra, libs=unit_libs,
+                                 log=gendir / f"{name}.cc.log")
             if not ok:
                 r.fail(f"compiler-cc {name}", log)
             else:
@@ -1792,7 +1802,8 @@ def main():
                     r.fail(f"compiler {name}", out + err)
                 else:
                     r.ok(f"compiler {name}")
-        for name in ("compiler_roots", "compiler_containers", "compiler_ident", "compiler_gir", "compiler_reader") if wanted("extra/compiler_units") else ():
+        for name in ("compiler_roots", "compiler_containers", "compiler_ident", "compiler_units",
+                     "compiler_units_builder", "compiler_gir", "compiler_reader") if wanted("extra/compiler_units") else ():
             r.show_task(compiler_unit, name)
 
         # Direct runtime lifecycle checks use small region limits and allocator
