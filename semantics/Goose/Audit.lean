@@ -190,6 +190,8 @@ end Goose.Audit
 #audit Goose.Lower.range_sim
 #audit Goose.Lower.range_reentry_keeps_prefix
 #audit Goose.Lower.range_reentry_changes_counter
+#audit Goose.Lower.lowerBlock_v001_symbolRun
+#audit Goose.Lower.lowerExpr_ifE_v001_symbolRunAt
 #audit Goose.GIR.validate_sound
 #audit Goose.GIR.validated_scalar_safe
 #audit Goose.Proofs.Bounds.checkEvidence_sound
