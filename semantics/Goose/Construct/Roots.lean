@@ -13,6 +13,7 @@ structure Eff where
   shrinks : List Target := []
   rebinds : List Target := []
   constructs : List Nat := []
+  escapeRoots : List (Nat × List (List RootRef)) := []
   aborts : Bool := false
   outputs : Bool := false
   
@@ -36,6 +37,7 @@ structure PEnv where
   ctx : Context
   
   scopes : List Nat
+  escaping : Array (List (Nat × List (List RootRef))) := #[]
 
 def rejP (r : Rule) (msg : String) : P α := throw ⟨r, msg⟩
 
@@ -267,6 +269,24 @@ def mapResultRoots (argRoots : List (List RootRef)) : List RootRef → List Root
     mapResultRoots argRoots (unionRoots acc mapped) rest
 
 
+private def joinEscapeRoots (old incoming : List (Nat × List (List RootRef))) :
+    List (Nat × List (List RootRef)) :=
+  incoming.foldl (fun accumulated (target, channels) =>
+    match accumulated.find? (fun fact => fact.1 == target) with
+    | none => accumulated ++ [(target, channels)]
+    | some (_, previous) => accumulated.map fun fact =>
+        if fact.1 == target then (target, (previous.zip channels).map fun (a,b) => unionRoots a b)
+        else fact) old
+
+private def receiveEscapeRoots (env : PEnv) (targetId : Nat) (channels : List (List RootRef)) : P Unit := do
+  let some target := env.mod.targets[targetId]? | rejP .call "escape root target outside table"
+  for roots in channels do liftV (checkNoLocal roots)
+  if target.contains env.ctx.impl then
+    liftV (checkResultChannels env channels)
+  else
+    modify fun state => { state with eff := { state.eff with
+      escapeRoots := joinEscapeRoots state.eff.escapeRoots [(targetId,channels)] } }
+
 def paramGlobals (callee : Impl) (cctx : Context) (j : Nat) : List Target :=
   match callee.vars[j]?, cctx.varRoots.find? (·.1 == j) with
   | some lv, some (_, rs) =>
@@ -337,6 +357,7 @@ private def mergeEffects (a b : Eff) : Eff := {
   shrinks := addTargets a.shrinks b.shrinks
   rebinds := addTargets a.rebinds b.rebinds
   constructs := (a.constructs ++ b.constructs).eraseDups
+  escapeRoots := joinEscapeRoots a.escapeRoots b.escapeRoots
   aborts := a.aborts || b.aborts
   outputs := a.outputs || b.outputs
   unknown := a.unknown || b.unknown
@@ -653,6 +674,9 @@ def rpCall (env : PEnv) (c : ContextId) (argRoots : List (List RootRef)) : P (Li
   let some callee := env.mod.impls[cctx.impl]? | rejP .call s!"context {c} names a missing implementation"
   liftV (forAll (List.range callee.params.size) (checkArgRoots callee cctx argRoots))
   modify fun s => { s with eff := callEffects callee cctx argRoots s.eff }
+  for (targetId, channels) in env.escaping[c]?.getD [] do
+    let mapped ← liftV (channels.mapM (mapResultRoots argRoots []))
+    receiveEscapeRoots env targetId mapped
   liftV (callResultRoots callee cctx argRoots)
 
 
@@ -842,13 +866,14 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     noteProducerCapacities env env.impl.results.toList producer
     let actual ← liftV (env.access.resultRoots producer)
     liftV (checkResultChannels env actual)
-  | .returnFrom target operands _ => do
-    let some target := env.mod.targets[target]? | rejP .call "target outside table"
+  | .returnFrom targetId operands _ => do
+    let some target := env.mod.targets[targetId]? | rejP .call "target outside table"
     let some implementation := env.mod.impls[target.first]? | rejP .call "target member outside table"
     if target.contains env.ctx.impl then noteResultConstruction env
     if operands.length != implementation.results.size then rejP .result "target result count mismatch"
     noteOperandCapacities env implementation.results.toList operands
     rpNoLocalOperands env operands
+    receiveEscapeRoots env targetId (← liftV (env.access.resultRoots (.values operands)))
   | .returnFromForward targetId producer _ => do
     let roots ← rpExpr env producer
     let some target := env.mod.targets[targetId]? | rejP .call "target outside table"
@@ -856,6 +881,7 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     if target.contains env.ctx.impl then noteResultConstruction env
     noteProducerCapacities env implementation.results.toList producer
     liftV (checkNoLocal roots)
+    receiveEscapeRoots env targetId (← liftV (env.access.resultRoots producer))
   | .breakValue expression _ => do let _ ← rpExpr env expression; pure ()
   | .ret e _ => do
     noteResultConstruction env
@@ -1016,12 +1042,13 @@ def checkSummary (m : Module) (impl : Impl) (ctx : Context) (eff : Eff) : V Unit
     if eff.outputs && !s.outputs then reject .summary s!"{impl.name} prints, which its summary omits"
 
 
-def checkContext (m : Module) (ctx : Context) : V Unit := do
+def checkContextEscapes (m : Module) (ctx : Context)
+    (escaping : Array (List (Nat × List (List RootRef)))) : V (List (Nat × List (List RootRef))) := do
   let some impl := m.impls[ctx.impl]? | reject .root s!"context {ctx.decl}: no such implementation"
   checkAnnotationShape m impl ctx
   checkResultShape m impl ctx
   checkContentShape m impl ctx
-  let env : PEnv := ⟨m, impl, ctx, []⟩
+  let env : PEnv := ⟨m, impl, ctx, [], escaping⟩
   let ((), st) ← (do
       let (_, _) ← rpBlockValue env [] impl.body
       if let some expression := impl.body.value then
@@ -1030,7 +1057,22 @@ def checkContext (m : Module) (ctx : Context) : V Unit := do
         let actual ← liftV (env.access.blockResultRoots impl.body)
         liftV (checkResultChannels env actual) : P Unit).run ⟨impl.params.size, {}⟩
   checkSummary m impl ctx st.eff
+  pure st.eff.escapeRoots
 
+def checkContext (m : Module) (ctx : Context) : V Unit := do
+  let _ ← checkContextEscapes m ctx #[]
+
+def checkModuleExitRoots (module : Module) : V Unit := do
+  let largestResults := module.impls.foldl (fun largest impl => max largest impl.results.size) 0
+  let largestParams := module.impls.foldl (fun largest impl => max largest impl.params.size) 0
+  let bound := module.contexts.size * (module.targets.size + 1) * (largestResults + 1) *
+    (module.globals.size + largestParams + 1) + 1
+  let mut escaping := Array.replicate module.contexts.size []
+  for _ in [0:bound] do
+    let next ← module.contexts.mapM fun context => checkContextEscapes module context escaping
+    if next == escaping then return ()
+    escaping := next
+  reject .root "target escape root closure did not converge"
 
 def initImpl : Impl := ⟨"", #[], #[], #[], .mk 0 [] none, .unknown⟩
 
@@ -1041,7 +1083,7 @@ def checkInitRoots (m : Module) (g : GlobalId) : V Unit :=
   match m.globals[g]? with
   | none => pure ()
   | some gl => do
-    let env : PEnv := ⟨m, initImpl, initContext, []⟩
+    let env : PEnv := ⟨m, initImpl, initContext, [], #[]⟩
     let (_, st) ← (do
       let roots ← rpExpr env gl.init
       noteReceivingCapacity env gl.ty .value gl.init
