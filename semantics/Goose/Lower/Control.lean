@@ -1,4 +1,4 @@
-import Goose.Lower.IfFlow
+import Goose.Lower.WhileFlow
 
 namespace Goose.Lower
 
@@ -8,6 +8,7 @@ mutual
 def flowStmtOk : Stmt → Bool
   | .ifS c t none _ => exprOk c && flowBlockOk t
   | .ifS c t (some block) _ => exprOk c && flowBlockOk t && flowBlockOk block
+  | .while c body _ => exprOk c && flowBlockOk body
   | stmt => stmtReturnOk stmt
 
 def flowStmtsOk : List Stmt → Bool
@@ -35,6 +36,10 @@ theorem flowStmtOk_of_stmtOk (stmt : Stmt) (hok : stmtOk stmt = true) :
       simp only [flowStmtOk, Bool.and_eq_true]
       exact ⟨⟨hok'.1.1, flowBlockOk_of_blockOk t hok'.1.2⟩,
         flowBlockOk_of_blockOk block hok'.2⟩
+  | «while» c body org =>
+    have hok' : exprOk c = true ∧ blockOk body = true := by simpa [stmtOk] using hok
+    simp only [flowStmtOk, Bool.and_eq_true]
+    exact ⟨hok'.1, flowBlockOk_of_blockOk body hok'.2⟩
   | ret expr org => simp [stmtOk] at hok
   | _ => simpa only [flowStmtOk, stmtReturnOk] using hok
 
@@ -83,6 +88,7 @@ structure FlowClaims (n : Nat) : Prop where
   stmt : ∀ lc stmt, FlowStmtClaim n lc stmt
   stmts : ∀ lc stmts, FlowStmtsClaim n lc stmts
   block : ∀ lc pre pre' want blk, FlowBlockClaim n lc pre pre' want blk
+  whileLoop : ∀ c body, exprOk c = true → flowBlockOk body = true → WhileFlowSimulation n c body
 
 theorem flowStmtsClaim_succ (n : Nat) (lc : Option LoopCtx)
     (ihs : ∀ stmt, FlowStmtClaim n lc stmt) (ihss : ∀ stmts, FlowStmtsClaim n lc stmts)
@@ -129,6 +135,7 @@ theorem flowBlockClaim_succ (n : Nat) (lc : Option LoopCtx)
 
 theorem flowStmtClaim_succ (n : Nat) (lc : Option LoopCtx)
     (ihb : ∀ pre pre' want blk, FlowBlockClaim n lc pre pre' want blk)
+    (ihw : ∀ c body, exprOk c = true → flowBlockOk body = true → WhileFlowSimulation n c body)
     (stmt : Stmt) : FlowStmtClaim (n + 1) lc stmt := by
   intro hok le ls ls' u pt cfg env cx fr hlow hpp hext hrel
   cases stmt with
@@ -154,6 +161,10 @@ theorem flowStmtClaim_succ (n : Nat) (lc : Option LoopCtx)
           le ls ls' r pt cx fr hlow hpp hext hrel trivial
       exact stmt_if_some_flow_sim n lc c t fb org hok.1.1 hthen helse
         le ls u ls' pt cfg env cx fr hlow hpp hext hrel
+  | «while» c body org =>
+    have hok' : exprOk c = true ∧ flowBlockOk body = true := by simpa [flowStmtOk] using hok
+    exact stmt_while_flow_sim n lc c body org (ihw c body hok'.1 hok'.2)
+      le ls ls' u pt cfg env cx fr hlow hpp hext hrel
   | _ =>
     simp only [flowStmtOk] at hok
     apply stmtReturnClaim (n + 1) lc _ _ le ls ls' u pt cfg env cx fr hlow hpp hext hrel
@@ -162,7 +173,7 @@ theorem flowStmtClaim_succ (n : Nat) (lc : Option LoopCtx)
 theorem flowClaims (n : Nat) : FlowClaims n := by
   induction n with
   | zero =>
-    refine ⟨?_, ?_, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_⟩
     · intro lc stmt hok le ls ls' u pt cfg env cx fr hlow hpp hext hrel
       simp only [execStmt]
       exact SimG.of_timeout_bind
@@ -172,9 +183,17 @@ theorem flowClaims (n : Nat) : FlowClaims n := by
     · intro lc pre pre' want blk hok cfg env hpre le ls ls' r pt cx fr hlow hpp hext hrel hprer
       simp only [execBlock]
       exact SimG.of_timeout_bind
+    · intro c body hokC hokB le ls ls' hb cfg env cx hlow hpp hext hheader fr hrel
+      simp only [execWhile]
+      exact SimG.of_timeout_bind
   | succ n ih =>
-    exact ⟨fun lc => flowStmtClaim_succ n lc (ih.block lc),
+    refine ⟨fun lc => flowStmtClaim_succ n lc (ih.block lc) ih.whileLoop,
       fun lc => flowStmtsClaim_succ n lc (ih.stmt lc) (ih.stmts lc),
-      fun lc pre pre' => flowBlockClaim_succ n lc (ih.stmts lc) pre pre'⟩
+      fun lc pre pre' => flowBlockClaim_succ n lc (ih.stmts lc) pre pre', ?_⟩
+    intro c body hokC hokB
+    apply whileFlowSimulation_succ n c body hokC _ (ih.whileLoop c body hokC hokB)
+    intro lc le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+    exact ih.block lc [] [] false body hokB cfg env (by simp)
+      le ls ls' r pt cx fr hlow hpp hext hrel trivial
 
 end Goose.Lower

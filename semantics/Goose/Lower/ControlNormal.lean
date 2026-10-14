@@ -79,17 +79,16 @@ private theorem normalDivergenceClaims (n : Nat) : NormalDivergenceClaims n := b
             obtain ⟨v, rfl⟩ := unitFlow_normal_source flow after s' value (by cases flow <;> exact htail)
             exact ih.block cfg env [] t hok'.2.1 hd'.1 middle after v hbranch
       | «while» c body org =>
-        have hb : blockOk body = true := by
-          simpa only [flowStmtOk, stmtReturnOk, stmtOk, Bool.and_eq_true] using
-            (show exprOk c = true ∧ blockOk body = true from by
-              simpa [flowStmtOk, stmtReturnOk, stmtOk] using hok) |>.2
+        have hb : flowBlockOk body = true := by
+          have hok' : exprOk c = true ∧ flowBlockOk body = true := by simpa [flowStmtOk] using hok
+          exact hok'.2
         cases c with
         | bool b =>
           cases b with
           | false => simp [Stmt.diverges] at hd
           | true =>
             rw [execStmt] at h
-            exact execWhile_true_never_ok n cfg env body hb s s' (.normal value) h
+            exact execWhile_true_never_normal n cfg env body hb s s' value h
         | _ => simp [Stmt.diverges] at hd
       | expr e org => cases e <;> simp_all [Stmt.diverges, flowStmtOk, stmtReturnOk, stmtOk, exprOk]
       | _ => simp_all [Stmt.diverges, flowStmtOk, stmtReturnOk, stmtOk]
