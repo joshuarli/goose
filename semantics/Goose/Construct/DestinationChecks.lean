@@ -349,4 +349,25 @@ private def abandonLimitedExtent : ConstructionM Unit := do
 #guard observe abandonLimitedExtent == some ([10,99,88], 1,
   [.begin 0,.write 0 0,.write 0 1,.write 0 2,.abandon 0])
 
+
+private def explicitStageFit : ConstructionM Unit := do
+  let storage ← reserveStorage (bytes [10,20,30]) 1
+  let destination ← openDestinationDirect storage (capability .elementRun) (.limited 4 1) none
+  stageDestination destination
+  writeElement destination (bytes [99])
+  finishDestination destination
+  fitStagedDestination destination
+
+#guard observe explicitStageFit == some ([10,99,30], 1,
+  [.begin 0,.stage 0,.write 0 0,.copy (.storage 1 []) 0])
+
+private def explicitKnownStage : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestinationDirect storage capability (.limited 4 1) (some 1)
+  stageDestination destination
+
+#guard match explicitKnownStage ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0] && state.storage.size == 1
+  | _ => false
+
 end Goose.Construct.DestinationChecks

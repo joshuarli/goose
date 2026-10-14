@@ -50,6 +50,7 @@ structure PendingDestination where
   progress : DestinationProgress
   writeEnd : Nat
   rollbackEnd : Nat
+  knownCount : Option Nat
   deriving Repr
 
 def PendingDestination.storage (destination : PendingDestination) : StorageId :=
@@ -181,7 +182,12 @@ private def active (destination : PendingDestination) : Bool :=
   | .open _ | .suspended _ _ | .built _ | .exiting _ _ => true
   | .published _ | .attached _ | .abandoned | .cancelled => false
 
-def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
+private inductive StagingPolicy
+  | automatic
+  | explicit
+  deriving DecidableEq
+
+private def openDestinationWith (policy : StagingPolicy) (storageId : StorageId) (capability : Core.Destination Ty)
     (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId := do
   let storage ← lookupStorage storageId
   let state ← ConstructionM.get
@@ -191,9 +197,9 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
     if !available layout storage count then ConstructionM.fail .capacity
   else
     pure ()
-  let backing ← match layout, knownCount with
-    | .limited _ _, none => do pure (.staged storageId (← reserveStorage))
-    | _, _ => pure (DestinationBacking.direct storageId)
+  let backing ← match policy, layout, knownCount with
+    | .automatic, .limited _ _, none => do pure (.staged storageId (← reserveStorage))
+    | _, _, _ => pure (DestinationBacking.direct storageId)
   let state ← ConstructionM.get
   let storage ← lookupStorage backing.writeStorage
   let id := state.destinations.size
@@ -204,7 +210,7 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
   let capability := { capability with id := id, start := start }
   let writeEnd := start + if hasPrefix layout capability.request then 4 else 0
   let destination : PendingDestination := ⟨capability, backing, layout, .receiver, .open 0, writeEnd,
-    match layout with | .limited _ _ => storage.bytes.size | _ => start⟩
+    (match layout with | .limited _ _ => storage.bytes.size | _ => start), knownCount⟩
   ConstructionM.set { state with destinations := state.destinations.push destination }
   if hasPrefix layout capability.request then
     replaceStorage backing.writeStorage { storage with bytes := storage.bytes ++ lengthPrefix }
@@ -213,6 +219,27 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
   | .staged _ _ => emit (.stage id)
   | .direct _ => pure ()
   pure id
+
+def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
+    (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId :=
+  openDestinationWith .automatic storageId capability layout knownCount
+
+def openDestinationDirect (storageId : StorageId) (capability : Core.Destination Ty)
+    (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId :=
+  openDestinationWith .explicit storageId capability layout knownCount
+
+def stageDestination (id : DestinationId) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  match destination.progress, destination.layout, destination.backing, destination.knownCount with
+  | .open 0, .limited _ _, .direct receiverId, none =>
+      let stageId ← reserveStorage
+      replaceDestination id { destination with
+        backing := .staged receiverId stageId
+        capability := { destination.capability with start := 0 }
+        writeEnd := 0
+        rollbackEnd := 0 }
+      emit (.stage id)
+  | _, _, _, _ => ConstructionM.fail .protocol
 
 def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit := do
   let destination ← writableDestination id
@@ -255,7 +282,7 @@ def openChild (parentId : DestinationId) (logicalType : Ty) (layout : ReceivingL
         request := .value, start := parent.writeEnd }
       let child : PendingDestination := ⟨capability, .direct parent.storage, layout, .child parentId, .open 0,
         capability.start + (if hasPrefix layout .value then 4 else 0),
-        match parent.layout with | .limited _ _ => storage.bytes.size | _ => capability.start⟩
+        (match parent.layout with | .limited _ _ => storage.bytes.size | _ => capability.start), none⟩
       ConstructionM.set { state with destinations := state.destinations.push child }
       replaceDestination parentId { parent with progress := .suspended count id }
       if hasPrefix layout .value then
@@ -310,6 +337,40 @@ def preflightPublication (state : ConstructionState) (ids : List DestinationId) 
     Except ConstructionFault Unit := do
   if ids.eraseDups != ids then throw .ownership
   for id in ids do publicationCheck state id
+
+def fitStagedDestination (id : DestinationId) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  let count ← match destination.progress with
+    | .built count => pure count
+    | _ => ConstructionM.fail .protocol
+  let (receiverId, stageId) ← match destination.backing with
+    | .staged receiverId stageId => pure (receiverId,stageId)
+    | _ => ConstructionM.fail .protocol
+  let receiver ← lookupStorage receiverId
+  let stage ← lookupStorage stageId
+  let start ← match destination.use with
+    | .receiver => do
+        if !available destination.layout receiver count then ConstructionM.fail .capacity
+        pure (match destination.layout with
+          | .limited _ slotBytes => receiver.publishedCount * slotBytes
+          | _ => receiver.bytes.size)
+    | .child parentId => do
+        let parent ← writableDestination parentId
+        match parent.progress, parent.layout with
+        | .suspended parentCount expected, .limited capacity _ =>
+            if expected != id || receiverId != parent.storage then ConstructionM.fail .ownership
+            if parentCount + count > capacity then ConstructionM.fail .capacity
+            pure parent.writeEnd
+        | _, _ => ConstructionM.fail .protocol
+    | .replacement _ => ConstructionM.fail .protocol
+  replaceStorage receiverId { receiver with bytes := overwriteBytes receiver.bytes start stage.bytes }
+  replaceStorage stageId ⟨ByteArray.empty,0⟩
+  replaceDestination id { destination with
+    backing := .direct receiverId
+    capability := { destination.capability with start := start }
+    writeEnd := start + stage.bytes.size
+    rollbackEnd := receiver.bytes.size }
+  emit (.copy (.storage stageId []) id)
 
 private def publishReady (id : DestinationId) : ConstructionM Unit := do
   let destination ← lookupDestination id
@@ -404,7 +465,7 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   let replacement : PendingDestination :=
     ⟨capability, superseded.backing, superseded.layout, .replacement supersededId, .open 0,
       capability.start + (if hasPrefix superseded.layout superseded.capability.request then 4 else 0),
-      capability.start⟩
+      capability.start, none⟩
   ConstructionM.set { state with destinations := state.destinations.push replacement }
   replaceDestination supersededId { superseded with progress := .exiting count id }
   if hasPrefix superseded.layout superseded.capability.request then
@@ -592,9 +653,9 @@ def openExtension (parentId : DestinationId) (request : ConstructionRequest)
   let capability := { parent.capability with id := id, request := request, start := start }
   let child : PendingDestination :=
     ⟨capability, backing, .elements, .child parentId, .open 0, start,
-      match backing, parent.layout with
+      (match backing, parent.layout with
       | .direct _, .limited _ _ => storage.bytes.size
-      | _, _ => start⟩
+      | _, _ => start), knownCount⟩
   ConstructionM.set { state with destinations := state.destinations.push child }
   replaceDestination parentId { parent with progress := .suspended count id }
   emit (.begin id)
