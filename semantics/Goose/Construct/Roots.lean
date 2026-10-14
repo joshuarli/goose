@@ -492,8 +492,11 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
   | .blockE b => do
     let (rho, _) ← rpBlockValue env [] b
     pure rho
-  | .arrLit _ es => do
+  | .arrLit ty es => do
     rpExprs env es
+    match ty with
+    | .limited _ capacity => if es.length > capacity then noteAborts
+    | _ => pure ()
     pure []
   | .structLit _ es => do
     rpExprs env es
@@ -501,8 +504,11 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
   | .fill _ a => do
     let _ ← rpExpr env a
     pure []
-  | .bytes ty _ _ => match ty with
+  | .bytes ty data _ => match ty with
     | .slice .. => pure [.static]
+    | .limited _ capacity => do
+        if data.length > capacity then noteAborts
+        pure []
     | _ => pure []
   | .str ty args _ => do
     rpPrintArgs env args
@@ -512,6 +518,7 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     if (match ty with | .limited .. => true | _ => false) then noteAborts
     let roots ← rpPlace env source
     addReads roots
+    addReads (← readRoots env source)
     pure []
   | .resultLocal _ _ => pure []
   | .values operands => do
