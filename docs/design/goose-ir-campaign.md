@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** active 2026-10-14; the owner requires completion of the remaining deliverables.
+**Status:** winding down 2026-10-14 at the owner’s request. No new items or lanes may start; finish or park in-flight work and commit a reboot-safe handoff.
 **Branch:** `master`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`, rebased at the owner's request on 2026-10-14. The prior fork base and upstream merge remain historical records below.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
