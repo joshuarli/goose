@@ -297,7 +297,8 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       expectBool (← one (← typeExpr fuel (ordinary env) condition))
       let a ← typeBlock fuel env left
       let b ← typeBlock fuel env right
-      if blockEscapes fuel left then pure b
+      if blockEscapes fuel left && blockEscapes fuel right then pure (env.valueBreakTypes.getD a)
+      else if blockEscapes fuel left then pure b
       else if blockEscapes fuel right then pure a
       else
         require (a == b) .type "branch result type mismatch"

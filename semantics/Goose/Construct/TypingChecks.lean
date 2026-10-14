@@ -136,4 +136,8 @@ private def valueBlock (statements : List Stmt) (tail : Option Expr := none) : E
 #guard expressionAccepts (.ifE (.bool true)
   (.mk 1 [.abort "stop" 0] none) (.mk 2 [] (some (.lit .u8 7))) 0) [.int .u8]
 
+#guard expressionAccepts (valueBlock [] (some (.ifE (.bool true)
+  (.mk 2 [.breakValue (.lit .u8 1) 0] none)
+  (.mk 3 [.breakValue (.lit .u8 2) 0] none) 0))) [.int .u8]
+
 end Goose.Construct.TypingChecks
