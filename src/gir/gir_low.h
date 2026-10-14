@@ -57,6 +57,25 @@ public:
         l.entry = h.entry;
         if (CoreHasConstruction(h.profile) && !h.targets.empty())
             throw GirLowerUnsupported { "nonlocal-target", "module", -1 };
+        if (CoreHasConstruction(h.profile)) {
+            for (size_t type = 0; type < h.types.size(); type++)
+                if (h.types[type].kind == CoreType::VarArr ||
+                    (h.types[type].kind == CoreType::Arr && GirNonfixed(h, (int)type)))
+                    throw GirLowerUnsupported { "recursive-variable-layout", "module", -1 };
+            auto channels = [&](const GirFunc &function) {
+                for (auto type : function.params)
+                    if (GirNonfixed(h, type)) throw GirLowerUnsupported { "construction-call-abi", function.name, function.org };
+                for (auto type : function.results)
+                    if (GirNonfixed(h, type)) throw GirLowerUnsupported { "construction-result-abi", function.name, function.org };
+                for (auto &block : function.blocks) for (auto &param : block.params) {
+                    auto kind = h.Type(param.second).kind;
+                    if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled)
+                        throw GirLowerUnsupported { "construction-edge-carrier", function.name, function.org };
+                }
+            };
+            for (auto &function : h.funcs) channels(function);
+            for (auto &global : h.globals) channels(global.init);
+        }
         // Signatures first: a call needs its callee's before its body exists.
         for (auto &f : h.funcs) lsigs.push_back(Signature(f));
         for (auto &g : h.globals) l.lowglobals.push_back(PlaceGlobal(g));
@@ -76,6 +95,7 @@ private:
     // The low signature of each high function: parameter and result types.
     struct Sig {
         vector<GirTypeId> params, results;
+        vector<vector<GirTypeId>> resultWords;
         bool out = false;       // The result goes through an address.
         int64_t outsize = 0;
     };
@@ -141,6 +161,16 @@ private:
     Sig Signature(const GirFunc &f) {
         Sig s;
         s.params.push_back(I64());   // The base of the data stacks.
+        if (CoreHasConstruction(h.profile)) {
+            for (auto parameter : f.params)
+                for (auto word : Words(parameter)) s.params.push_back(word);
+            for (auto result : f.results) {
+                auto words = Words(result);
+                s.resultWords.push_back(words);
+                for (size_t word = 0; word < words.size(); word++) s.params.push_back(Ptr());
+            }
+            return s;
+        }
         if (f.results.size() == 1) {
             auto w = Words(f.results[0]);
             auto kind = HT(f.results[0]).kind;
@@ -201,6 +231,7 @@ private:
         int base = -1;
         int64_t count = -1;
         GirTypeId elem = -1;
+        int traceId = -1;
     };
 
     const GirFunc *hf = nullptr;
@@ -217,6 +248,7 @@ private:
     vector<GirTypeId> lvals;
     int cur = -1;
     int spval = 0, outval = -1;
+    vector<vector<int>> resultOutputs;
     int initglobal = -1;
     const Sig *sig = nullptr;
     // Per scope, the stack tops recorded on entry, by header.
@@ -351,6 +383,22 @@ private:
         i.b = b;
         i.idx = idx;
         return Emit(std::move(i), ty);
+    }
+
+    int TraceId(GirTraceKind kind) {
+        GirInst id;
+        id.op = GirOp::TraceId;
+        id.trace = kind;
+        return Emit(std::move(id), I64());
+    }
+
+    void Event(GirEventKind kind, vector<int> operands, GirEventReason reason = GirEventReason::None) {
+        GirInst event;
+        event.op = GirOp::Event;
+        event.event = kind;
+        event.reason = reason;
+        event.vals = std::move(operands);
+        EmitE(std::move(event));
     }
 
     void SimpleE(GirOp op, int a = -1, int b = -1, int idx = -1) {
@@ -620,6 +668,7 @@ private:
         shape.clear();
         destinations.clear();
         completions.clear();
+        resultOutputs.clear();
         // Value types of the high function.
         ComputeTypes();
         PlaceSlots();
@@ -677,6 +726,12 @@ private:
                         throw GirLowerUnsupported { "owner-run-parameter", f.name, f.org };
                     for (auto t : Words(p.second)) { (void)t; shape[p.first].w.push_back(ids[k++]); }
                 }
+                if (global < 0 && CoreHasConstruction(h.profile))
+                    for (auto &result : sig->resultWords) {
+                        vector<int> outputs;
+                        for (size_t word = 0; word < result.size(); word++) outputs.push_back(ids[k++]);
+                        resultOutputs.push_back(std::move(outputs));
+                    }
             } else {
                 size_t k = 0;
                 for (auto &p : f.blocks[b].params)
@@ -699,6 +754,7 @@ private:
         reverse(order.begin(), order.end());
         for (auto b : order) {
             cur = bmap[b];
+            if (b == 0 && global >= 0 && CoreHasConstruction(h.profile)) TraceId(GirTraceKind::Storage);
             if (b == 0 && global < 0) {
                 for (auto &p : f.blocks[0].params) {
                     if (!IsAggregate(p.second)) continue;
@@ -842,6 +898,9 @@ private:
             }
             case GirOp::DestOpen: {
                 Destination destination;
+                if (holds_alternative<GirDestSlotReceiver>(i.destReceiver)) TraceId(GirTraceKind::Storage);
+                destination.traceId = TraceId(GirTraceKind::Destination);
+                Event(GirEventKind::Begin, { destination.traceId });
                 if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver)) {
                     auto &place = places.at(slot->slot);
                     if (place.kind != Place::Header || place.stack < 0 || place.members.size() != 1)
@@ -872,6 +931,7 @@ private:
                 for (size_t index = 0; index < i.bytes.size(); index++) {
                     auto at = PtrAt(destination.base, ConstI(I64(), (int64_t)index), 1);
                     PStoreV(byte, at, ConstI(byte, i.bytes[index]));
+                    Event(GirEventKind::Write, { destination.traceId, ConstI(I64(), (int64_t)index) });
                 }
                 destination.count = (int64_t)i.bytes.size();
                 return;
@@ -886,6 +946,7 @@ private:
                     throw CompileError { "internal compiler error: construction size overflow" };
                 auto at = PtrAt(destination.base, ConstI(I64(), destination.count), size);
                 StoreAt(destination.elem, at, shape[i.b].w);
+                Event(GirEventKind::Write, { destination.traceId, ConstI(I64(), destination.count) });
                 destination.count++;
                 return;
             }
@@ -906,6 +967,7 @@ private:
                 if (found == completions.end())
                     throw CompileError { "internal compiler error: publication has no completed destination" };
                 SimpleE(GirOp::HdrSetLen, found->second.header, ConstI(I64(), found->second.count));
+                Event(GirEventKind::Publish, { found->second.traceId });
                 completions.erase(found);
                 return;
             }
@@ -928,6 +990,14 @@ private:
             case GirOp::Push: return LowerPush(i);
             case GirOp::Pop: return LowerPop(i);
             case GirOp::Call: return LowerCall(i);
+            case GirOp::Result: {
+                auto &parts = HT(hvt[i.a]).parts;
+                size_t offset = 0;
+                for (int part = 0; part < i.idx; part++) offset += Words(parts[part]).size();
+                auto count = Words(parts[i.idx]).size();
+                Define(i, vector<int>(shape[i.a].w.begin() + offset, shape[i.a].w.begin() + offset + count));
+                return;
+            }
             case GirOp::Arr: return LowerArr(i);
             case GirOp::Struct: return LowerStruct(i);
             case GirOp::Fill: return LowerFill(i);
@@ -993,7 +1063,7 @@ private:
                 Term(std::move(end));
                 return;
             }
-            default: return;
+            default: throw GirLowerUnsupported { "construction-operation", hf->name, i.org };
         }
     }
 
@@ -1541,6 +1611,7 @@ private:
     }
 
     void LowerInit(const GirInst &i) {
+        if (CoreHasConstruction(h.profile)) TraceId(GirTraceKind::Storage);
         auto &p = places[i.idx];
         auto t = hf->slots[i.idx].ty;
         auto &v = shape[i.a];
@@ -1603,6 +1674,50 @@ private:
     }
 
     void LowerPrint(const GirInst &i) {
+        if (CoreHasConstruction(h.profile)) {
+            int64_t capacity = 1;
+            for (auto &part : i.parts) {
+                auto bytes = part.text ? (int64_t)part.str.size() : 32;
+                if (bytes > INT64_MAX - capacity)
+                    throw GirLowerUnsupported { "print-size", hf->name, i.org };
+                capacity += bytes;
+            }
+            TraceId(GirTraceKind::Storage);
+            auto member = FrameTemp(capacity);
+            auto base = Simple(GirOp::FrameAddr, Ptr(), -1, -1, member);
+            auto count = ConstI(I64(), 0);
+            auto text = [&](const string &bytes) {
+                GirInst literal;
+                literal.op = GirOp::StaticBytes;
+                literal.bytes.assign(bytes.begin(), bytes.end());
+                auto source = Emit(std::move(literal), Ptr());
+                auto length = ConstI(I64(), (int64_t)bytes.size());
+                CopyDynamic(PtrAt(base, count, 1), source, length);
+                count = BinW(CoreBinOp::Add, I64(), count, length);
+            };
+            for (auto &part : i.parts) {
+                if (part.text) { text(part.str); continue; }
+                auto &type = HT(hvt[part.val]);
+                if (type.kind != CoreType::Int && type.kind != CoreType::Bool)
+                    throw GirLowerUnsupported { "structural-print", hf->name, i.org };
+                GirInst format;
+                format.op = GirOp::Format;
+                format.format = type.kind == CoreType::Bool ? GirFormatKind::Bool :
+                                CoreIsUnsigned(type.ity) ? GirFormatKind::Uint : GirFormatKind::Int;
+                format.a = shape[part.val].w[0];
+                format.b = PtrAt(base, count, 1);
+                auto length = Emit(std::move(format), I64());
+                count = BinW(CoreBinOp::Add, I64(), count, length);
+            }
+            text("\n");
+            GirInst output;
+            output.op = GirOp::OutBytes;
+            output.a = base;
+            output.b = count;
+            output.org = i.org;
+            EmitE(std::move(output));
+            return;
+        }
         for (auto &p : i.parts) {
             if (p.text) { RtCall(GirRt::OutText, -1, p.str); continue; }
             auto &c = HT(hvt[p.val]);
@@ -1620,6 +1735,30 @@ private:
         c.idx = i.idx;
         c.org = i.org;
         c.vals.push_back(lf.stacks ? BinW(CoreBinOp::Add, I64(), spval, ConstI(I64(), lf.stacks)) : spval);
+        if (CoreHasConstruction(h.profile)) {
+            for (auto argument : i.vals) for (auto word : shape[argument].w) c.vals.push_back(word);
+            vector<vector<int>> addresses;
+            for (size_t result = 0; result < g.results.size(); result++) {
+                vector<int> cells;
+                for (auto wordType : s.resultWords[result]) {
+                    auto size = IsAggregate(g.results[result]) ? Size(g.results[result]) : 8;
+                    auto member = FrameTemp(size);
+                    auto pointer = Simple(GirOp::FrameAddr, Ptr(), -1, -1, member);
+                    cells.push_back(pointer);
+                    c.vals.push_back(pointer);
+                    (void)wordType;
+                }
+                addresses.push_back(std::move(cells));
+            }
+            EmitE(std::move(c));
+            vector<int> results;
+            for (size_t result = 0; result < g.results.size(); result++)
+                for (size_t word = 0; word < s.resultWords[result].size(); word++)
+                    results.push_back(IsAggregate(g.results[result]) ? addresses[result][word] :
+                                      PLoadV(s.resultWords[result][word], addresses[result][word]));
+            Define(i, std::move(results));
+            return;
+        }
         int tmp = -1, tmpaddr = -1;
         if (s.out) {
             tmp = FrameTemp(s.outsize);
@@ -1644,6 +1783,23 @@ private:
 
     void LowerRet(const GirInst &i) {
         if (initglobal >= 0) return LowerGlobalRet(i);
+        if (CoreHasConstruction(h.profile)) {
+            for (size_t result = 0; result < i.vals.size(); result++) {
+                auto &value = shape[i.vals[result]];
+                auto type = hf->results[result];
+                if (IsAggregate(type)) Copy(resultOutputs[result][0], value.w[0], Size(type));
+                else {
+                    auto words = Words(type);
+                    for (size_t word = 0; word < words.size(); word++)
+                        PStoreV(words[word], resultOutputs[result][word], value.w[word]);
+                }
+            }
+            GirInst ret;
+            ret.op = GirOp::Ret;
+            ret.org = i.org;
+            Term(std::move(ret));
+            return;
+        }
         if (!i.vals.empty()) {
             auto &v = shape[i.vals[0]];
             if (sig->out) {

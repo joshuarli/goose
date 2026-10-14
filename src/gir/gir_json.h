@@ -94,6 +94,8 @@ public:
             LowFunc(objs, m.funcs[i]);
         }
         objs += ']';
+        if (CoreHasConstruction(m.profile))
+            for (auto &target : m.lowtargets) for (auto cell : target.cells) T(cell);
         string out = cat("[\"module\",\"gir-l/0.2\",\"", CoreProfileName(m.profile), "\",[");
         for (size_t i = 0; i < m.files.size(); i++) {
             if (i) out += ',';
@@ -113,7 +115,22 @@ public:
                 if (i) out += ',';
                 out += "[\"ltarget\",";
                 Ints(out, m.lowtargets[i].members);
-                out += ",[],[]]";
+                out += ",[";
+                for (size_t cell = 0; cell < m.lowtargets[i].cells.size(); cell++) {
+                    if (cell) out += ',';
+                    Append(out, T(m.lowtargets[i].cells[cell]));
+                }
+                out += "],[";
+                for (size_t channel = 0; channel < m.lowtargets[i].channels.size(); channel++) {
+                    if (channel) out += ',';
+                    auto &c = m.lowtargets[i].channels[channel];
+                    Append(out, "[\"lchannel\",", c.position, ",");
+                    Ints(out, c.incoming);
+                    out += ',';
+                    Ints(out, c.escaped);
+                    out += ']';
+                }
+                out += "]]";
             }
             out += ']';
         }
@@ -138,6 +155,7 @@ private:
     unordered_map<GirTypeId, int> typenum;
     vector<GirTypeId> typeorder;
     const GirFunc *function = nullptr;
+    vector<GirTypeId> functionValues;
 
     int T(GirTypeId id) {
         if (auto it = typenum.find(id); it != typenum.end()) return it->second;
@@ -147,6 +165,7 @@ private:
         } else if (t.elem >= 0) {
             T(t.elem);
         }
+        for (auto part : t.parts) T(part);
         auto n = (int)typeorder.size();
         typenum[id] = n;
         typeorder.push_back(id);
@@ -174,6 +193,15 @@ private:
             case CoreType::Bool: out += "[\"bool\"]"; break;
             case CoreType::Unit: out += "[\"unit\"]"; break;
             case CoreType::Arr: Append(out, "[\"arr\",", typenum.at(t.elem), ",", t.count, "]"); break;
+            case CoreType::VarArr: Append(out, "[\"varr\",", typenum.at(t.elem), "]"); break;
+            case CoreType::Tuple:
+                out += "[\"tuple\",[";
+                for (size_t part = 0; part < t.parts.size(); part++) {
+                    if (part) out += ',';
+                    Append(out, typenum.at(t.parts[part]));
+                }
+                out += "]]";
+                break;
             case CoreType::Grow: Append(out, "[\"grow\",", typenum.at(t.elem), "]"); break;
             case CoreType::GrowShrink: Append(out, "[\"growshrink\",", typenum.at(t.elem), "]"); break;
             case CoreType::Limited: Append(out, "[\"limited\",", typenum.at(t.elem), ",", t.count, "]"); break;
@@ -266,8 +294,9 @@ private:
         out += '[';
         for (size_t i = 0; i < rs.size(); i++) {
             if (i) out += ',';
-            static const char *tags[] = { "r_local", "r_global", "r_param" };
-            Append(out, "[\"", tags[rs[i].kind], "\",", rs[i].index, "]");
+            static const char *tags[] = { "r_static", "r_local", "r_global", "r_param" };
+            if (rs[i].kind == CoreRootRef::Static) out += "[\"r_static\"]";
+            else Append(out, "[\"", tags[rs[i].kind], "\",", rs[i].index, "]");
         }
         out += ']';
     }
@@ -330,6 +359,25 @@ private:
     void Func(string &out, const GirFunc &f) {
         auto previousFunction = function;
         function = &f;
+        vector<pair<vector<GirTypeId>, vector<GirTypeId>>> signatures;
+        for (auto &callee : m.funcs) signatures.push_back({ callee.params, callee.results });
+        size_t values = 0;
+        for (auto &block : f.blocks) {
+            values += block.params.size();
+            for (auto &inst : block.insts) values += GirDefinesValue(inst);
+        }
+        functionValues.assign(values, -1);
+        for (auto &block : f.blocks) for (auto &param : block.params) functionValues[param.first] = param.second;
+        auto &module = const_cast<GirModule &>(m);
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (auto &block : f.blocks) for (auto &inst : block.insts) {
+                if (!GirDefinesValue(inst) || functionValues[inst.res] >= 0) continue;
+                GirTyEnv env { module, f.slots, signatures, functionValues, &f.members };
+                auto type = GirTyper(env).Of(inst);
+                if (type.ok()) { functionValues[inst.res] = type.ty; changed = true; }
+            }
+        }
         out += "[\"func\",";
         Str(out, f.name);
         out += ",[";
@@ -340,9 +388,13 @@ private:
         out += "],[";
         for (size_t i = 0; i < f.results.size(); i++) {
             if (i) out += ',';
-            if (CoreHasConstruction(m.profile))
-                Append(out, "[\"result\",", T(f.results[i]), ",\"register\",[]]");
-            else
+            if (CoreHasConstruction(m.profile)) {
+                auto protocol = f.resultProtocols.empty() ? GirResultProtocol {} : f.resultProtocols.at(i);
+                Append(out, "[\"result\",", T(f.results[i]), ",\"", CoreRequestName(protocol.request), "\",");
+                if (protocol.namedSlot) Append(out, "[", *protocol.namedSlot, "]");
+                else out += "[]";
+                out += ']';
+            } else
                 Append(out, T(f.results[i]));
         }
         out += "],[";
@@ -497,7 +549,30 @@ private:
                 Str(out, i.text);
                 out += ']';
                 return;
-            default: Inst(out, i); return;   // Terminators and nothing else are shared as written.
+            case GirOp::StaticBytes:
+                def("l_static");
+                out += ',';
+                Ints(out, vector<int>(i.bytes.begin(), i.bytes.end()));
+                out += ']';
+                return;
+            case GirOp::ReturnFlagGet: def("l_rf_get"); out += ']'; return;
+            case GirOp::ReturnFlagSet: Append(out, "[\"l_rf_set\",", i.a, "]"); return;
+            case GirOp::TargetLoad:
+                def("l_target_load"); Append(out, ",", i.idx, ",", i.idx2, "]"); return;
+            case GirOp::TargetStore:
+                Append(out, "[\"l_target_store\",", i.idx, ",", i.idx2, ",", i.a, "]"); return;
+            case GirOp::Format:
+                def("l_fmt"); Append(out, ",\"", GirFormatName(i.format), "\",", i.a, ",", i.b, "]"); return;
+            case GirOp::OutBytes:
+                Append(out, "[\"l_out_bytes\",", i.a, ",", i.b, ",");
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::TraceId:
+                def("l_trace_id"); Append(out, ",\"", GirTraceName(i.trace), "\"]"); return;
+            case GirOp::Event:
+                Append(out, "[\"l_event\",\"", GirEventName(i.event), "\",");
+                Ints(out, i.vals);
+                Append(out, ",\"", GirEventReasonName(i.reason), "\"]"); return;
+            default: Inst(out, i); return;
         }
     }
 
@@ -516,33 +591,14 @@ private:
         out += "]]";
     }
 
-    GirTypeId ConstructionType(CoreType::Kind kind, const GirInst &inst) const {
-        CoreType type;
-        type.kind = kind;
-        if (inst.op == GirOp::DestOpen) {
-            type.elem = inst.ty;
-            type.request = inst.request;
-        } else {
-            if (!function)
-                throw CompileError { "internal compiler error: construction result has no function" };
-            const GirInst *open = nullptr;
-            for (auto &block : function->blocks)
-                for (auto &candidate : block.insts)
-                    if (candidate.op == GirOp::DestOpen && candidate.res == inst.a) open = &candidate;
-            if (!open)
-                throw CompileError { "internal compiler error: construction completion has no destination" };
-            type.elem = open->ty;
-            type.request = open->request;
-        }
-        for (size_t id = 0; id < m.types.size(); id++)
-            if (m.types[id] == type) return (GirTypeId)id;
-        throw CompileError { "internal compiler error: construction result type was not verified" };
-    }
-
     void NoteConstructionType(const GirInst &inst) {
-        if (!CoreHasConstruction(m.profile)) return;
-        if (inst.op == GirOp::DestOpen) T(ConstructionType(CoreType::Dest, inst));
-        if (inst.op == GirOp::DestFinish) T(ConstructionType(CoreType::Built, inst));
+        if (!CoreHasConstruction(m.profile) || !GirDefinesValue(inst)) return;
+        if (inst.res < 0 || inst.res >= (int)functionValues.size() || functionValues[inst.res] < 0)
+            throw CompileError { "construction wire output requires a typed GIR-H instruction" };
+        auto type = functionValues[inst.res];
+        auto kind = m.Type(type).kind;
+        if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled ||
+            kind == CoreType::Tuple || inst.op == GirOp::Bytes) T(type);
     }
 
     static void Bound(string &out, const GirBound &b) {
@@ -662,8 +718,18 @@ private:
                 out += ',';
                 if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver))
                     Append(out, "[\"dr_slot\",", slot->slot, "]");
-                else
-                    Append(out, "[\"dr_whole\",", get<GirDestWholeReceiver>(i.destReceiver).reference, "]");
+                else if (auto whole = get_if<GirDestWholeReceiver>(&i.destReceiver))
+                    Append(out, "[\"dr_whole\",", whole->reference, "]");
+                else if (auto global = get_if<GirDestGlobalReceiver>(&i.destReceiver))
+                    Append(out, "[\"dr_global\",", global->global, "]");
+                else if (auto push = get_if<GirDestPushReceiver>(&i.destReceiver))
+                    Append(out, "[\"dr_push\",", push->reference, "]");
+                else if (auto append = get_if<GirDestAppendReceiver>(&i.destReceiver))
+                    Append(out, "[\"dr_append\",", append->reference, "]");
+                else {
+                    auto argument = get<GirDestArgReceiver>(i.destReceiver);
+                    Append(out, "[\"dr_arg\",", argument.function, ",", argument.parameter, "]");
+                }
                 Append(out, ",", T(i.ty), ",\"", CoreRequestName(i.request), "\",");
                 if (i.knownCount) Append(out, "[", *i.knownCount, "]");
                 else out += "[]";
@@ -671,12 +737,68 @@ private:
                 OptOrg(out, i.org);
                 out += ']';
                 return;
+            case GirOp::Bytes:
+                def("i_bytes"); out += ',';
+                Ints(out, vector<int>(i.bytes.begin(), i.bytes.end())); out += ',';
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::Result:
+                def("i_result"); Append(out, ",", i.a, ",", i.idx, "]"); return;
+            case GirOp::CallConstruct:
+                def("i_call_construct"); Append(out, ",", i.idx, ",");
+                Ints(out, i.vals); out += ','; Ints(out, i.vals2); out += ',';
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestChild:
+                def("i_dest_child"); Append(out, ",", i.a, ",", T(i.ty), ",");
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestNamed:
+                def("i_dest_named"); Append(out, ",", i.idx, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::ResultExitDest:
+                def("i_result_exit_dest"); Append(out, ",", i.idx, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestAbandonNamed:
+                def("i_dest_abandon_named"); Append(out, ",", i.idx, ",", i.a, ",");
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::TargetDest:
+                def("i_target_dest"); Append(out, ",", i.idx, ",", i.idx2, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestArg: case GirOp::DestValue: case GirOp::DestRelocate:
+            case GirOp::DestStage: case GirOp::DestFit:
+                def(i.op == GirOp::DestArg ? "i_dest_arg" : i.op == GirOp::DestValue ? "i_dest_value" :
+                    i.op == GirOp::DestRelocate ? "i_dest_relocate" : i.op == GirOp::DestStage ? "i_dest_stage" : "i_dest_fit");
+                Append(out, ",", i.a, ",");
+                if (i.op == GirOp::DestRelocate || i.op == GirOp::DestStage)
+                    Append(out, "\"", GirEventReasonName(i.reason), "\",");
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::AppendValue:
+                Append(out, "[\"", i.op == GirOp::DestAttach ? "x_dest_attach" :
+                       i.op == GirOp::DestText ? "x_dest_text" : i.op == GirOp::DestCopy ? "x_dest_copy" : "x_append_value",
+                       "\",", i.a, ",", i.b, ",");
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestBind:
+                Append(out, "[\"x_dest_bind\",", i.idx, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::Invoke:
+                Append(out, "[\"t_invoke\",", i.idx, ","); Ints(out, i.vals); out += ',';
+                Ints(out, i.vals2); Append(out, ",", i.a, ","); Ints(out, i.forwarded); out += ",[";
+                for (size_t edge = 0; edge < i.escapes.size(); edge++) {
+                    if (edge) out += ',';
+                    auto &escape = i.escapes[edge];
+                    Append(out, "[\"escape_edge\",", escape.target, ",", escape.block, ",");
+                    Ints(out, escape.forwarded); out += ']';
+                }
+                out += "],"; OptOrg(out, i.org); out += ']'; return;
+            case GirOp::Escape:
+                Append(out, "[\"t_escape\",", i.idx, ","); Ints(out, i.vals); out += ',';
+                Ints(out, i.vals2); out += ','; OptOrg(out, i.org); out += ']'; return;
             case GirOp::DestFinish:
                 def("i_dest_finish");
                 Append(out, ",", i.a, ",");
                 OptOrg(out, i.org);
                 out += ']';
                 return;
+            case GirOp::DestAbandon:
+                def("i_dest_abandon"); Append(out, ",", i.a, ",");
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestCancel:
+                Append(out, "[\"x_dest_cancel\",", i.a, ",");
+                OptOrg(out, i.org); out += ']'; return;
             case GirOp::Init:
                 Append(out, "[\"x_init\",", i.idx, ",", i.a, ",");
                 OptOrg(out, i.org);

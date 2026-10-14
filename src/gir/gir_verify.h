@@ -61,6 +61,7 @@ private:
     vector<pair<vector<GirTypeId>, vector<GirTypeId>>> sigs;
     vector<vector<int>> lowPassedPairs;
     vector<bool> lowReturnedOwnerPairs;
+    vector<set<int>> constructionNeeds, constructionEscapes;
 
     [[noreturn]] static void Fail(const char *code, string msg) { throw GirViolation { code, std::move(msg) }; }
 
@@ -81,6 +82,9 @@ private:
         switch (i.op) {
             case GirOp::Int: case GirOp::Bool: case GirOp::Unit: case GirOp::Slot: case GirOp::Global:
             case GirOp::Enter: case GirOp::Leave: case GirOp::Unreachable:
+            case GirOp::Bytes: case GirOp::StaticBytes: case GirOp::ReturnFlagGet:
+            case GirOp::TargetLoad: case GirOp::TraceId: case GirOp::DestNamed:
+            case GirOp::ResultExitDest: case GirOp::TargetDest:
                 break;
             case GirOp::Abort:
                 for (auto v : i.vals) add(v);
@@ -88,6 +92,8 @@ private:
             case GirOp::Bin: case GirOp::Cmp: case GirOp::BoolCmp: case GirOp::Elem:
             case GirOp::Index: case GirOp::IndexProven: case GirOp::Push: case GirOp::Store: case GirOp::Append:
             case GirOp::PopN: case GirOp::Replace:
+            case GirOp::Format: case GirOp::OutBytes: case GirOp::AppendValue:
+            case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy:
                 add(i.a); add(i.b);
                 break;
             case GirOp::Resize:
@@ -100,6 +106,11 @@ private:
                 add(i.a);
                 break;
             case GirOp::DestBytes: case GirOp::DestFinish: case GirOp::DestPublish:
+            case GirOp::Result: case GirOp::DestChild: case GirOp::DestArg:
+            case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
+            case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestBind:
+            case GirOp::DestCancel: case GirOp::ReturnFlagSet: case GirOp::TargetStore:
+            case GirOp::DestAbandonNamed:
                 add(i.a);
                 break;
             case GirOp::DestWrite:
@@ -108,6 +119,8 @@ private:
             case GirOp::DestOpen:
                 if (i.knownCount) add(*i.knownCount);
                 if (auto whole = get_if<GirDestWholeReceiver>(&i.destReceiver)) add(whole->reference);
+                if (auto push = get_if<GirDestPushReceiver>(&i.destReceiver)) add(push->reference);
+                if (auto append = get_if<GirDestAppendReceiver>(&i.destReceiver)) add(append->reference);
                 break;
             case GirOp::Pop: case GirOp::Clear:
                 add(i.a);
@@ -118,7 +131,14 @@ private:
                 if (i.hi.kind != GirBound::None) add(i.hi.val);
                 break;
             case GirOp::Call: case GirOp::Arr: case GirOp::Struct: case GirOp::Ret: case GirOp::Br:
+            case GirOp::Event:
                 for (auto v : i.vals) add(v);
+                break;
+            case GirOp::CallConstruct: case GirOp::Invoke: case GirOp::Escape:
+                for (auto v : i.vals) add(v);
+                for (auto v : i.vals2) add(v);
+                for (auto v : i.forwarded) add(v);
+                for (auto &edge : i.escapes) for (auto v : edge.forwarded) add(v);
                 break;
             case GirOp::Print:
                 for (auto &p : i.parts) if (!p.text) add(p.val);
@@ -168,6 +188,13 @@ private:
             case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear: case GirOp::Replace:
                 return true;
             case GirOp::DestOpen:
+            case GirOp::OutBytes: case GirOp::DestChild:
+            case GirOp::DestNamed: case GirOp::ResultExitDest: case GirOp::DestAbandonNamed:
+            case GirOp::DestArg: case GirOp::DestAbandon: case GirOp::DestValue:
+            case GirOp::DestRelocate: case GirOp::DestStage: case GirOp::DestFit:
+            case GirOp::CallConstruct: case GirOp::TargetDest: case GirOp::DestAttach:
+            case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestBind:
+            case GirOp::DestCancel: case GirOp::Invoke: case GirOp::Escape:
                 return true;
             case GirOp::ViewSlice: case GirOp::Index: case GirOp::Call:
             case GirOp::Init: case GirOp::Store: case GirOp::Append: case GirOp::Print:
@@ -180,6 +207,11 @@ private:
     static vector<int> Successors(const GirInst &i) {
         if (i.op == GirOp::Br) return { i.idx };
         if (i.op == GirOp::CondBr) return { i.idx, i.idx2 };
+        if (i.op == GirOp::Invoke) {
+            vector<int> out { i.a };
+            for (auto &edge : i.escapes) out.push_back(edge.block);
+            return out;
+        }
         return {};
     }
 
@@ -241,6 +273,7 @@ private:
         }
         for (auto &w : walks)
             if (!w.scopes.empty()) Fail("GIR-V040", w.scopes);
+        if (CoreHasConstruction(m.profile)) CheckConstructionTargets();
         CheckEffects();
         if (CoreHasConstruction(m.profile))
             for (auto &fn : fns) CheckConstruction(fn);
@@ -307,8 +340,9 @@ private:
                         Fail("GIR-V001", cat("construction target member ", member,
                                              " is outside the function table"));
                 auto &results = m.funcs[target.members[0]].results;
+                auto &protocols = m.funcs[target.members[0]].resultProtocols;
                 for (auto member : target.members)
-                    if (m.funcs[member].results != results)
+                    if (m.funcs[member].results != results || m.funcs[member].resultProtocols != protocols)
                         Fail("GIR-V010", "construction target members have different result types");
             }
         }
@@ -369,13 +403,26 @@ private:
                     Fail("GIR-V010", cat("construction carrier type ", id, " does not name an earlier type"));
                 if ((uint8_t)type.request > (uint8_t)CoreRequest::ElementRun)
                     Fail("GIR-V010", cat("construction carrier type ", id, " has an unknown request"));
-                auto &owner = m.Type(type.elem);
-                if (owner.kind != CoreType::Grow || owner.elem < 0 ||
-                    (m.Type(owner.elem).kind != CoreType::Int && m.Type(owner.elem).kind != CoreType::Bool) ||
-                    type.request != CoreRequest::Value)
-                    Fail("GIR-V010", cat("construction carrier type ", id,
-                                         " is outside the scalar grow-array construction slice"));
+                if (!GirNonfixed(m, type.elem) || !GirConstructible(m, type.elem) ||
+                    (type.request != CoreRequest::Value && type.request != CoreRequest::ElementRun))
+                    Fail("GIR-V010", cat("construction carrier type ", id, " has no constructible type/request"));
                 continue;
+            }
+            if (m.low && type.kind != CoreType::Int && type.kind != CoreType::Bool &&
+                type.kind != CoreType::Unit && type.kind != CoreType::Ptr)
+                Fail("GIR-V090", "a low module retains a nonprimitive type");
+            if (type.kind == CoreType::VarArr || type.kind == CoreType::Tuple) {
+                if (!CoreHasConstruction(m.profile)) Fail("GIR-V010", "construction type under an earlier profile");
+                if (type.kind == CoreType::VarArr) {
+                    if (type.elem < 0 || type.elem >= (int)id || !GirConstructible(m, (int)id))
+                        Fail("GIR-V010", "variable array has an invalid recursive element");
+                } else {
+                    if (type.parts.size() < 2) Fail("GIR-V010", "result pack has fewer than two components");
+                    for (auto part : type.parts)
+                        if (part < 0 || part >= (int)id || m.Type(part).kind == CoreType::Dest ||
+                            m.Type(part).kind == CoreType::Cancelled || m.Type(part).kind == CoreType::Tuple)
+                            Fail("GIR-V010", "result pack has an invalid component");
+                }
             }
             if (type.kind != CoreType::GrowShrink && type.kind != CoreType::Limited) continue;
             if (m.low) Fail("GIR-V090", "a low module retains a shrink-profile owner type");
@@ -391,6 +438,15 @@ private:
         auto scan = [&](const GirFunc &fn) {
             for (auto &block : fn.blocks)
                 for (auto &i : block.insts) {
+                    auto constructionOp = (i.op >= GirOp::Bytes && i.op <= GirOp::TargetDest) ||
+                                          (i.op >= GirOp::StaticBytes && i.op <= GirOp::TraceId) ||
+                                          i.op == GirOp::AppendValue ||
+                                          (i.op >= GirOp::DestWrite && i.op <= GirOp::DestCancel) ||
+                                          (i.op >= GirOp::ReturnFlagSet && i.op <= GirOp::Event) ||
+                                          i.op == GirOp::Invoke || i.op == GirOp::Escape;
+                    if (constructionOp && !CoreHasConstruction(m.profile))
+                        Fail("GIR-V010", cat("function ", fn.name,
+                                             " uses a construction operation under an earlier profile"));
                     if (i.op == GirOp::Abort) {
                         if ((uint8_t)i.abort > (uint8_t)GirAbortKind::Capacity)
                             Fail("GIR-V010", cat("function ", fn.name, " uses an unknown abort kind"));
@@ -933,8 +989,11 @@ private:
             auto k = m.Type(t).kind;
             return k == CoreType::Int || k == CoreType::Bool || k == CoreType::Ptr;
         };
+        if (CoreHasConstruction(m.profile)) CheckConstructionByteIntervals(fn);
         for (auto t : f.params) if (!scalar(t)) bad("a parameter whose layout is not resolved");
         for (auto t : f.results) if (!scalar(t)) bad("a result whose layout is not resolved");
+        if (CoreHasConstruction(m.profile) && !f.results.empty())
+            bad("construction result ABI retains a C return value");
         if (f.params.empty() || m.Type(f.params[0]).kind != CoreType::Int || m.Type(f.params[0]).ity != CoreIntTy::I64)
             bad("the hidden stack base parameter is missing");
         for (auto &b : f.blocks)
@@ -961,11 +1020,123 @@ private:
         // corresponding base is a valid restore point for that same stack.
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
+                if (i.op == GirOp::ReturnFlagSet) {
+                    const GirInst *value = nullptr;
+                    for (auto &source : f.blocks) for (auto &candidate : source.insts)
+                        if (GirDefinesValue(candidate) && candidate.res == i.a) value = &candidate;
+                    int64_t flag = -1;
+                    if (!value || value->op != GirOp::Int ||
+                        from_chars(value->text.data(), value->text.data() + value->text.size(), flag).ec != errc() ||
+                        flag < 0 || flag > (int64_t)m.lowtargets.size())
+                        bad("return discriminant is not a known target or normal return");
+                }
                 if (i.op == GirOp::StackAt && (i.idx < 0 || i.idx >= f.stacks))
                     bad("a stack address is outside the function's owned stacks");
                 if (i.op == GirOp::StackBump && i.idx >= 0 && i.b < 0 && i.idx == 0)
                     bad("a stack bumped by nothing");
             }
+    }
+
+    void CheckConstructionByteIntervals(const Fn &fn) {
+        auto &f = *fn.f;
+        vector<const GirInst *> definitions(fn.nvalues, nullptr);
+        vector<vector<int>> incoming(fn.nvalues);
+        for (auto &block : f.blocks) {
+            for (auto &param : block.params) {
+                auto blockId = (int)(&block - f.blocks.data());
+                auto position = (size_t)(&param - block.params.data());
+                incoming[param.first] = IncomingValues(f, blockId, position);
+            }
+            for (auto &inst : block.insts) if (GirDefinesValue(inst)) definitions[inst.res] = &inst;
+        }
+        vector<char> open(fn.nvalues, 0);
+        function<optional<int64_t>(int)> upper = [&](int value) -> optional<int64_t> {
+            if (value < 0 || value >= fn.nvalues || open[value]) return nullopt;
+            open[value] = 1;
+            auto done = [&](optional<int64_t> bound) { open[value] = 0; return bound; };
+            auto *definition = definitions[value];
+            if (!definition) {
+                if (incoming[value].empty()) return done(nullopt);
+                int64_t bound = 0;
+                for (auto source : incoming[value]) {
+                    auto candidate = upper(source);
+                    if (!candidate) return done(nullopt);
+                    bound = max(bound, *candidate);
+                }
+                return done(bound);
+            }
+            if (definition->op == GirOp::Int) {
+                int64_t number = -1;
+                auto &text = definition->text;
+                auto parsed = from_chars(text.data(), text.data() + text.size(), number);
+                return done(parsed.ec == errc() && parsed.ptr == text.data() + text.size() && number >= 0
+                                ? optional<int64_t>(number) : nullopt);
+            }
+            if (definition->op == GirOp::Format) return done(32);
+            if (definition->op == GirOp::Conv && m.Type(definition->ty).kind == CoreType::Int &&
+                m.Type(definition->ty2).kind == CoreType::Int &&
+                GirPreservesAll(m.Type(definition->ty).ity, m.Type(definition->ty2).ity))
+                return done(upper(definition->a));
+            if (definition->op == GirOp::Bin &&
+                (definition->bin == CoreBinOp::Add || definition->bin == CoreBinOp::Mul)) {
+                auto left = upper(definition->a), right = upper(definition->b);
+                if (!left || !right) return done(nullopt);
+                if (definition->bin == CoreBinOp::Add)
+                    return done(*left <= INT64_MAX - *right ? optional<int64_t>(*left + *right) : nullopt);
+                return done(*right == 0 || *left <= INT64_MAX / *right
+                                ? optional<int64_t>(*left * *right) : nullopt);
+            }
+            return done(nullopt);
+        };
+        struct Region { int64_t available; bool writable; };
+        vector<char> pointerOpen(fn.nvalues, 0);
+        function<optional<Region>(int)> region = [&](int value) -> optional<Region> {
+            if (value < 0 || value >= fn.nvalues || pointerOpen[value]) return nullopt;
+            pointerOpen[value] = 1;
+            auto done = [&](optional<Region> result) { pointerOpen[value] = 0; return result; };
+            auto *definition = definitions[value];
+            if (!definition) {
+                if (incoming[value].empty()) return done(nullopt);
+                optional<Region> merged;
+                for (auto source : incoming[value]) {
+                    auto next = region(source);
+                    if (!next) return done(nullopt);
+                    if (!merged) merged = next;
+                    else { merged->available = min(merged->available, next->available); merged->writable &= next->writable; }
+                }
+                return done(merged);
+            }
+            if (definition->op == GirOp::StaticBytes)
+                return done(Region { (int64_t)definition->bytes.size(), false });
+            if (definition->op == GirOp::FrameAddr) {
+                auto &member = f.members[definition->idx];
+                if (member.kind == GirMember::Bytes) return done(Region { member.size, true });
+                return done(nullopt);
+            }
+            if (definition->op == GirOp::PtrOffset && definition->idx >= 0) {
+                auto base = region(definition->a);
+                auto count = upper(definition->b);
+                if (!base || !count || (definition->idx > 0 && *count > INT64_MAX / definition->idx))
+                    return done(nullopt);
+                auto offset = *count * definition->idx;
+                return done(offset <= base->available
+                                ? optional<Region>(Region { base->available - offset, base->writable }) : nullopt);
+            }
+            return done(nullopt);
+        };
+        for (auto &block : f.blocks) for (auto &inst : block.insts) {
+            if (inst.op == GirOp::OutBytes) {
+                auto source = region(inst.a);
+                auto count = upper(inst.b);
+                if (!source || !count || *count > source->available)
+                    Fail("GIR-V090", cat(fn.label, ": byte output interval is not proven live and nonnegative"));
+            }
+            if (inst.op == GirOp::Format) {
+                auto destination = region(inst.b);
+                if (!destination || !destination->writable || destination->available < 32)
+                    Fail("GIR-V090", cat(fn.label, ": scalar formatting exceeds its writable byte interval"));
+            }
+        }
     }
 
     // --- GIR-V001 ---------------------------------------------------------
@@ -1023,7 +1194,7 @@ private:
                 } else if (r.kind == CoreRootRef::Global) {
                     if (r.index < 0 || r.index >= (int)m.globals.size())
                         SymbolFail(fn, cat("root info names global ", r.index, ", outside the global table"));
-                } else if (r.index < 0 || r.index >= (int)f.params.size()) {
+                } else if (r.kind == CoreRootRef::Param && (r.index < 0 || r.index >= (int)f.params.size())) {
                     SymbolFail(fn, cat("root info names parameter ", r.index, ", which does not exist"));
                 }
             }
@@ -1095,9 +1266,13 @@ private:
                 if (i.idx < 0 || i.idx >= (int)m.globals.size())
                     SymbolFail(fn, cat("global ", i.idx, " is outside the global table"));
                 break;
-            case GirOp::Call:
+            case GirOp::Call: case GirOp::CallConstruct: case GirOp::Invoke:
                 if (i.idx < 0 || i.idx >= (int)m.funcs.size())
                     SymbolFail(fn, cat("function ", i.idx, " is outside the function table"));
+                if (i.op == GirOp::Invoke)
+                    for (auto block : Successors(i))
+                        if (block < 0 || block >= (int)f.blocks.size())
+                            SymbolFail(fn, "invoke successor is outside the block table");
                 break;
             case GirOp::DestOpen:
                 if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver))
@@ -1218,10 +1393,10 @@ private:
                     TypeFail(fn, "byte construction outside core-construction GIR-H");
                 auto destination = need(ty.Val(i.a));
                 auto &carrier = m.Type(destination);
-                if (carrier.kind != CoreType::Dest || carrier.request != CoreRequest::Value)
-                    TypeFail(fn, "byte initialization does not use a value-form destination");
+                if (carrier.kind != CoreType::Dest)
+                    TypeFail(fn, "byte initialization does not use an open destination");
                 auto &owner = m.Type(carrier.elem);
-                if (owner.kind != CoreType::Grow || m.Type(owner.elem).kind != CoreType::Int ||
+                if (!GirArrayKind(owner.kind) || m.Type(owner.elem).kind != CoreType::Int ||
                     m.Type(owner.elem).ity != CoreIntTy::U8)
                     TypeFail(fn, "byte initialization requires a grow-only u8 array");
                 break;
@@ -1231,13 +1406,11 @@ private:
                     TypeFail(fn, "element construction outside core-construction GIR-H");
                 auto destination = need(ty.Val(i.a));
                 auto &carrier = m.Type(destination);
-                if (carrier.kind != CoreType::Dest || carrier.request != CoreRequest::Value)
-                    TypeFail(fn, "element write does not use a value-form destination");
+                if (carrier.kind != CoreType::Dest)
+                    TypeFail(fn, "element write does not use an open destination");
                 auto &owner = m.Type(carrier.elem);
-                auto elementKind = m.Type(owner.elem).kind;
-                if (owner.kind != CoreType::Grow ||
-                    (elementKind != CoreType::Int && elementKind != CoreType::Bool))
-                    TypeFail(fn, "element write requires a grow-only array of scalar elements");
+                if (!GirArrayKind(owner.kind) || !GirFlat(m, owner.elem))
+                    TypeFail(fn, "element write requires a fixed element");
                 if (need(ty.Data(i.b)) != owner.elem)
                     TypeFail(fn, "constructed element has another type than the destination element");
                 break;
@@ -1247,14 +1420,109 @@ private:
                     TypeFail(fn, "construction publication outside core-construction GIR-H");
                 auto completed = need(ty.Val(i.a));
                 auto &carrier = m.Type(completed);
-                if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value)
-                    TypeFail(fn, "publication does not consume a value-form completion");
+                if (carrier.kind != CoreType::Built)
+                    TypeFail(fn, "publication does not consume a completion");
+                break;
+            }
+            case GirOp::DestCancel:
+                if (m.low || !CoreHasConstruction(m.profile) ||
+                    m.Type(need(ty.Val(i.a))).kind != CoreType::Cancelled)
+                    TypeFail(fn, "cancellation does not consume an abandonment certificate");
+                break;
+            case GirOp::DestAttach: {
+                auto &parent = m.Type(need(ty.Val(i.a)));
+                auto &child = m.Type(need(ty.Val(i.b)));
+                if (parent.kind != CoreType::Dest || child.kind != CoreType::Built ||
+                    child.request != CoreRequest::Value || m.Type(parent.elem).elem != child.elem)
+                    TypeFail(fn, "nested completion does not match the parent element");
+                break;
+            }
+            case GirOp::DestText: {
+                auto &carrier = m.Type(need(ty.Val(i.a)));
+                if (carrier.kind != CoreType::Dest || !GirArrayKind(m.Type(carrier.elem).kind) ||
+                    m.Type(m.Type(carrier.elem).elem).kind != CoreType::Int ||
+                    m.Type(m.Type(carrier.elem).elem).ity != CoreIntTy::U8)
+                    TypeFail(fn, "text construction does not name a u8 destination");
+                auto &rendered = m.Type(need(ty.Val(i.b)));
+                if (rendered.kind != CoreType::Int && rendered.kind != CoreType::Bool &&
+                    rendered.kind != CoreType::View && !GirFlat(m, need(ty.Data(i.b))))
+                    TypeFail(fn, "text operand is not a supported scalar or sampled value");
+                break;
+            }
+            case GirOp::DestCopy: {
+                auto &carrier = m.Type(need(ty.Val(i.a)));
+                auto &source = m.Type(need(ty.Val(i.b)));
+                if (carrier.kind != CoreType::Dest || (source.kind != CoreType::Ref && source.kind != CoreType::View))
+                    TypeFail(fn, "construction copy lacks an open destination and stored source");
+                auto sourceType = source.kind == CoreType::Ref ? source.elem : -1;
+                if (sourceType != carrier.elem &&
+                    (source.kind == CoreType::View ? source.elem != m.Type(carrier.elem).elem :
+                     !GirArrayKind(m.Type(sourceType).kind) || m.Type(sourceType).elem != m.Type(carrier.elem).elem))
+                    TypeFail(fn, "construction copy changes the element type");
+                break;
+            }
+            case GirOp::DestBind: {
+                auto &carrier = m.Type(need(ty.Val(i.a)));
+                if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value || i.idx < 0 ||
+                    i.idx >= (int)f.slots.size() || f.slots[i.idx].ty != carrier.elem)
+                    TypeFail(fn, "named binding does not consume a matching value completion");
+                break;
+            }
+            case GirOp::AppendValue: {
+                auto reference = need(ty.Ref(i.a));
+                auto &owner = m.Type(m.Type(reference).elem);
+                auto snapshot = need(ty.Data(i.b));
+                if (!GirOwnerKind(owner.kind) || m.Type(snapshot).kind != CoreType::Arr ||
+                    !GirFlat(m, snapshot) || m.Type(snapshot).elem != owner.elem)
+                    TypeFail(fn, "fixed append snapshot does not match its owner elements");
                 break;
             }
             case GirOp::PStore: {
                 need(ty.PtrOf(i.a));
                 auto v = need(ty.Data(i.b));
                 if (v != i.ty) TypeFail(fn, "a store of a value of another type than the one stated");
+                break;
+            }
+            case GirOp::ReturnFlagSet:
+                if (need(ty.Data(i.a)) != m.IntType(CoreIntTy::I64))
+                    TypeFail(fn, "return discriminant is not i64");
+                break;
+            case GirOp::TargetStore:
+                if (i.idx < 0 || i.idx >= (int)m.lowtargets.size() || i.idx2 < 0 ||
+                    i.idx2 >= (int)m.lowtargets[i.idx].cells.size())
+                    TypeFail(fn, "target cell outside the target table");
+                if (need(ty.Data(i.a)) != m.lowtargets[i.idx].cells[i.idx2])
+                    TypeFail(fn, "target cell store has another primitive type");
+                break;
+            case GirOp::OutBytes:
+                need(ty.PtrOf(i.a));
+                if (need(ty.IntTy(i.b)) != m.IntType(CoreIntTy::I64))
+                    TypeFail(fn, "byte output count is not i64");
+                break;
+            case GirOp::Event: {
+                if ((uint8_t)i.event > (uint8_t)GirEventKind::Abandon ||
+                    (uint8_t)i.reason > (uint8_t)GirEventReason::CapacityCheck)
+                    TypeFail(fn, "unknown construction event or reason");
+                auto arity = i.event == GirEventKind::Write ? 2u : 1u;
+                if (i.event == GirEventKind::Copy) {
+                    if ((i.reason != GirEventReason::Storage && i.reason != GirEventReason::Repeat) ||
+                        i.vals.size() < 2 || (i.reason == GirEventReason::Repeat && i.vals.size() != 2))
+                        TypeFail(fn, "copy event has invalid source operands");
+                } else if (i.vals.size() != arity) {
+                    TypeFail(fn, "construction event has invalid operand count");
+                }
+                if (i.event == GirEventKind::Relocate) {
+                    if (i.reason != GirEventReason::HeaderRemoval && i.reason != GirEventReason::ExitValue)
+                        TypeFail(fn, "relocation event has an invalid reason");
+                } else if (i.event == GirEventKind::Stage) {
+                    if (i.reason != GirEventReason::CapacityCheck)
+                        TypeFail(fn, "stage event has an invalid reason");
+                } else if (i.event != GirEventKind::Copy && i.reason != GirEventReason::None) {
+                    TypeFail(fn, "construction event carries an unexpected reason");
+                }
+                for (auto operand : i.vals)
+                    if (need(ty.IntTy(operand)) != m.IntType(CoreIntTy::I64))
+                        TypeFail(fn, "construction event operand is not i64");
                 break;
             }
             case GirOp::LocalSet: {
@@ -1321,29 +1589,86 @@ private:
                     TypeFail(fn, cat("return of ", i.vals.size(), " values, the function has ",
                                      f.results.size(), " results"));
                 for (size_t k = 0; k < i.vals.size(); k++)
-                    if (need(ty.Data(i.vals[k])) != f.results[k])
+                    if (need(m.low || !CoreHasConstruction(m.profile) || !GirNonfixed(m, f.results[k])
+                                 ? ty.Data(i.vals[k]) : ty.Val(i.vals[k])) !=
+                        (!m.low && CoreHasConstruction(m.profile) && GirNonfixed(m, f.results[k])
+                             ? m.CarrierType(CoreType::Built, f.results[k], f.resultProtocols[k].request)
+                             : f.results[k]))
                         TypeFail(fn, "a returned value of another type than the result");
                 break;
             case GirOp::Exit: need(ty.IntTy(i.a)); break;
+            case GirOp::Invoke: {
+                auto call = i;
+                auto &callee = m.funcs[i.idx];
+                bool constructing = false;
+                for (auto result : callee.results) constructing |= GirNonfixed(m, result);
+                call.op = constructing ? GirOp::CallConstruct : GirOp::Call;
+                need(ty.Of(call));
+                break;
+            }
+            case GirOp::Escape: {
+                if (i.idx < 0 || i.idx >= (int)m.targets.size()) TypeFail(fn, "escape target is outside the table");
+                auto &target = m.funcs[m.targets[i.idx].members[0]];
+                auto types = ConstructionResultTypes(target);
+                if (i.vals.size() != types.size()) TypeFail(fn, "escape result carrier count differs from the target");
+                for (size_t result = 0; result < types.size(); result++)
+                    if (need(ty.Val(i.vals[result])) != types[result]) TypeFail(fn, "escape result type or request differs");
+                size_t cancellation = 0;
+                for (size_t result = 0; result < f.results.size(); result++) {
+                    if (!GirNonfixed(m, f.results[result])) continue;
+                    if (cancellation >= i.vals2.size() ||
+                        need(ty.Val(i.vals2[cancellation++])) !=
+                            m.CarrierType(CoreType::Cancelled, f.results[result], f.resultProtocols[result].request))
+                        TypeFail(fn, "escape cancellation does not match its normal result channel");
+                }
+                if (cancellation != i.vals2.size()) TypeFail(fn, "escape has extra normal-channel cancellations");
+                break;
+            }
             default: break;
         }
     }
 
     void CheckTypes(const Fn &fn) {
         auto &f = *fn.f;
+        if (!f.resultProtocols.empty() &&
+            (m.low || !CoreHasConstruction(m.profile) || f.resultProtocols.size() != f.results.size()))
+            TypeFail(fn, "result protocol descriptors do not match the high construction signature");
+        set<int> aliases;
+        vector<GirTypeId> entryTypes;
+        for (auto type : f.params)
+            entryTypes.push_back(!m.low && CoreHasConstruction(m.profile) && GirNonfixed(m, type)
+                                     ? m.RefType(CoreMut::Mut, type) : type);
+        for (size_t result = 0; result < f.results.size() && !m.low && CoreHasConstruction(m.profile); result++) {
+            auto type = f.results[result];
+            auto protocol = f.resultProtocols.empty() ? GirResultProtocol {} : f.resultProtocols[result];
+            if (GirNonfixed(m, type)) {
+                if (f.resultProtocols.empty() || !GirConstructible(m, type) ||
+                    (protocol.request != CoreRequest::Value && protocol.request != CoreRequest::ElementRun))
+                    TypeFail(fn, "nonfixed result omits a constructible request descriptor");
+                entryTypes.push_back(m.CarrierType(CoreType::Dest, type, protocol.request));
+            } else if (protocol.request != CoreRequest::Register || protocol.namedSlot) {
+                TypeFail(fn, "fixed result has a nonregister request or named alias");
+            }
+            if (protocol.namedSlot) {
+                auto slot = *protocol.namedSlot;
+                if (protocol.request != CoreRequest::Value || !GirNonfixed(m, type) || slot < 0 ||
+                    slot >= (int)f.slots.size() || f.slots[slot].ty != type || !aliases.insert(slot).second)
+                    TypeFail(fn, "named result slot aliases an invalid or repeated value channel");
+            }
+        }
         {
             auto &b0 = f.blocks[0];
-            bool same = b0.params.size() == f.params.size();
-            for (size_t k = 0; same && k < f.params.size(); k++) same = b0.params[k].second == f.params[k];
+            bool same = b0.params.size() == entryTypes.size();
+            for (size_t k = 0; same && k < entryTypes.size(); k++) same = b0.params[k].second == entryTypes[k];
             if (!same) TypeFail(fn, "the parameters of block 0 are not the function's parameters");
         }
         for (auto param : f.params)
-            if (GirOwnerKind(m.Type(param).kind))
+            if (GirOwnerKind(m.Type(param).kind) && !CoreHasConstruction(m.profile))
                 TypeFail(fn, "a nonfixed owner is a by-value parameter");
         for (auto result : f.results)
             if (IsRefSlice(result))
                 TypeFail(fn, "a reference-to-slice type is only valid for a parameter");
-            else if (GirOwnerKind(m.Type(result).kind) && !fn.initializer)
+            else if (GirOwnerKind(m.Type(result).kind) && !fn.initializer && !CoreHasConstruction(m.profile))
                 TypeFail(fn, "a nonfixed owner is a by-value result");
         for (size_t index = 0; index < f.slots.size(); index++) {
             auto &sl = f.slots[index];
@@ -1381,6 +1706,29 @@ private:
     // --- GIR-V020 ---------------------------------------------------------
 
     [[noreturn]] void CfgFail(const Fn &fn, const string &msg) { Fail("GIR-V020", cat(fn.label, ": ", msg)); }
+
+    vector<GirTypeId> ConstructionResultTypes(const GirFunc &function) {
+        vector<GirTypeId> types;
+        for (size_t result = 0; result < function.results.size(); result++) {
+            auto type = function.results[result];
+            types.push_back(GirNonfixed(m, type)
+                                ? m.CarrierType(CoreType::Built, type, function.resultProtocols[result].request)
+                                : type);
+        }
+        return types;
+    }
+
+    void CheckInvokeEdge(const Fn &fn, int to, const vector<GirTypeId> &leading, const vector<int> &forwarded) {
+        auto &params = fn.f->blocks[to].params;
+        if (params.size() != leading.size() + forwarded.size())
+            CfgFail(fn, "invoke successor has the wrong number of implicit and forwarded carriers");
+        for (size_t position = 0; position < leading.size(); position++)
+            if (params[position].second != leading[position])
+                CfgFail(fn, "invoke successor has another implicit carrier type or request");
+        for (size_t position = 0; position < forwarded.size(); position++)
+            if (params[leading.size() + position].second != fn.vt[forwarded[position]])
+                CfgFail(fn, "invoke successor has another forwarded operand type");
+    }
 
     void CheckEdge(const Fn &fn, int from, int to, const vector<int> &args) {
         auto &tb = fn.f->blocks[to];
@@ -1479,6 +1827,20 @@ private:
             if (t->op == GirOp::CondBr) {
                 CheckEdge(fn, b, t->idx, t->vals);
                 CheckEdge(fn, b, t->idx2, t->vals2);
+            }
+            if (t->op == GirOp::Invoke) {
+                auto &callee = m.funcs[t->idx];
+                CheckInvokeEdge(fn, t->a, ConstructionResultTypes(callee), t->forwarded);
+                for (auto &edge : t->escapes) {
+                    if (edge.target < 0 || edge.target >= (int)m.targets.size())
+                        CfgFail(fn, "invoke escape target is outside the target table");
+                    auto types = ConstructionResultTypes(m.funcs[m.targets[edge.target].members[0]]);
+                    for (size_t result = 0; result < callee.results.size(); result++)
+                        if (GirNonfixed(m, callee.results[result]))
+                            types.push_back(m.CarrierType(CoreType::Cancelled, callee.results[result],
+                                                        callee.resultProtocols[result].request));
+                    CheckInvokeEdge(fn, edge.block, types, edge.forwarded);
+                }
             }
         }
         vector<vector<int>> preds(n);
@@ -1590,7 +1952,7 @@ private:
                             note(w.scopes, cat(fn.label, ": block ", b, ": scope ", i.idx,
                                                " is left but scope ", stack.back(), " is the innermost entered"));
                         break;
-                    case GirOp::Ret:
+                    case GirOp::Ret: case GirOp::Escape:
                         if (!stack.empty())
                             note(w.scopes, cat(fn.label, ": block ", b, ": return with scope ", stack.back(),
                                                " still entered"));
@@ -1844,7 +2206,8 @@ private:
                         Fail("GIR-V030", cat(fn.label, ": whole replacement requires a writable owner binding"));
                 }
             }
-        for (auto &b : f.blocks) for (auto &i : b.insts) if (i.op == GirOp::Call) {
+        for (auto &b : f.blocks) for (auto &i : b.insts)
+            if (i.op == GirOp::Call || i.op == GirOp::CallConstruct || i.op == GirOp::Invoke) {
             auto &callee = m.funcs[i.idx];
             for (size_t j = 0; j < callee.params.size() && j < i.vals.size(); j++) {
                 auto &pt = m.Type(callee.params[j]);
@@ -1997,7 +2360,7 @@ private:
             auto p = Provenance(res, caller);
             for (auto &block : f.blocks)
                 for (auto &i : block.insts) {
-                    if (i.op != GirOp::Call) continue;
+                    if (i.op != GirOp::Call && i.op != GirOp::CallConstruct && i.op != GirOp::Invoke) continue;
                     auto &callee = m.funcs[i.idx];
                     auto label = cat("function ", callee.name);
                     for (size_t j = 0; j < callee.params.size(); j++) {
@@ -2031,6 +2394,7 @@ private:
 
     Roots RootsOfDef(const vector<Roots> &res, const Fn &fn, const Prov &p, const GirInst &i) {
         switch (i.op) {
+            case GirOp::Bytes: return { CoreRootRef { CoreRootRef::Static, 0 } };
             case GirOp::Slot: return { CoreRootRef { CoreRootRef::Local, i.idx } };
             case GirOp::Global: return { CoreRootRef { CoreRootRef::Global, i.idx } };
             case GirOp::Field: return RootsAt(p.vals, i.a);
@@ -2144,6 +2508,7 @@ private:
 
     struct Eff {
         set<CoreTarget> reads, writes, grows, shrinks, rebinds;
+        set<int> constructs;
         bool aborts = false, outputs = false, unknown = false;
     };
 
@@ -2160,6 +2525,14 @@ private:
         for (auto &blk : f.blocks)
             for (auto &i : blk.insts) {
                 switch (i.op) {
+                    case GirOp::Ret:
+                        for (size_t result = 0; result < i.vals.size(); result++)
+                            if (CoreHasConstruction(m.profile) && GirNonfixed(m, f.results[result]))
+                                e.constructs.insert((int)result);
+                        break;
+                    case GirOp::DestCopy:
+                        AddTargets(e.reads, RootsAt(p.vals, i.b));
+                        break;
                     case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen:
                         AddTargets(e.reads, RootsAt(p.vals, i.a));
                         break;
@@ -2207,7 +2580,7 @@ private:
                     case GirOp::Un: if (i.un == CoreUnOp::Neg) e.aborts = true; break;
                     case GirOp::Conv: if (i.conv == CoreConvKind::As) e.aborts = true; break;
                     case GirOp::ViewSlice: case GirOp::Index: e.aborts = true; break;
-                    case GirOp::Call: {
+                    case GirOp::Call: case GirOp::CallConstruct: case GirOp::Invoke: {
                         auto &callee = m.funcs[i.idx];
                         if (callee.summary.unknown) { e.unknown = true; break; }
                         auto map = [&](const vector<CoreTarget> &from, set<CoreTarget> &to) {
@@ -2275,10 +2648,6 @@ private:
         for (size_t k = 0; k < m.funcs.size(); k++) {
             auto &f = m.funcs[k];
             if (f.summary.unknown) continue;
-            if (CoreHasConstruction(m.profile) &&
-                (!f.summary.constructs.empty() || !f.summary.needs.empty() || !f.summary.escapes.empty()))
-                Fail("GIR-V050", cat("function ", f.name,
-                                     " has construction summary entries outside the implemented byte slice"));
             auto e = Effects(fns[k], Provenance(res, fns[k]));
             auto name = cat("function ", f.name);
             if (e.unknown)
@@ -2294,148 +2663,543 @@ private:
             within("grows", e.grows, f.summary.grows);
             within("shrinks", e.shrinks, f.summary.shrinks);
             within("rebinds", e.rebinds, f.summary.rebinds);
+            for (auto result : e.constructs)
+                if (find(f.summary.constructs.begin(), f.summary.constructs.end(), result) == f.summary.constructs.end())
+                    Fail("GIR-V050", cat(name, " completes result ", result, ", which its summary omits"));
             if (e.aborts && !f.summary.aborts) Fail("GIR-V050", cat(name, " may abort, which its summary omits"));
             if (e.outputs && !f.summary.outputs) Fail("GIR-V050", cat(name, " prints, which its summary omits"));
         }
     }
 
     // --- GIR-V060 ---------------------------------------------------------
-    // Replacement requires a fresh literal run and an empty-owner fact that
-    // survives from clear through replace. Receiver accesses and ref-like
-    // source operands kill it; calls use their actual roots and summaries, with
-    // unknown calls handled conservatively.
+    void CheckConstructionTargets() {
+        constructionNeeds.assign(fns.size(), {});
+        constructionEscapes.assign(fns.size(), {});
+        auto handles = [&](size_t function, int target) {
+            auto &members = m.targets[target].members;
+            return function < m.funcs.size() && find(members.begin(), members.end(), (int)function) != members.end();
+        };
+        for (size_t function = 0; function < fns.size(); function++) {
+            auto &f = *fns[function].f;
+            auto validate = [&](const vector<int> &targets, const char *name) {
+                if (!is_sorted(targets.begin(), targets.end()) ||
+                    adjacent_find(targets.begin(), targets.end()) != targets.end())
+                    Fail("GIR-V001", cat(fns[function].label, ": repeated or unsorted ", name));
+                for (auto target : targets)
+                    if (target < 0 || target >= (int)m.targets.size())
+                        Fail("GIR-V001", cat(fns[function].label, ": ", name, " target is outside the table"));
+            };
+            validate(f.summary.needs, "required");
+            validate(f.summary.escapes, "escape");
+            if (!is_sorted(f.summary.constructs.begin(), f.summary.constructs.end()) ||
+                adjacent_find(f.summary.constructs.begin(), f.summary.constructs.end()) != f.summary.constructs.end())
+                Fail("GIR-V001", cat(fns[function].label, ": repeated or unsorted constructed results"));
+            for (auto result : f.summary.constructs)
+                if (result < 0 || result >= (int)f.results.size() || !GirNonfixed(m, f.results[result]))
+                    Fail("GIR-V001", cat(fns[function].label, ": construction summary result is not a nonfixed channel"));
+            for (auto &block : f.blocks) for (auto &inst : block.insts) {
+                if (inst.op != GirOp::TargetDest && inst.op != GirOp::Escape) continue;
+                if (inst.idx < 0 || inst.idx >= (int)m.targets.size())
+                    Fail("GIR-V001", cat(fns[function].label, ": target operation is outside the target table"));
+                if (!handles(function, inst.idx)) constructionNeeds[function].insert(inst.idx);
+                if (inst.op == GirOp::Escape) {
+                    if (handles(function, inst.idx))
+                        Fail("GIR-V060", cat(fns[function].label, ": a target member propagates instead of catching"));
+                    constructionEscapes[function].insert(inst.idx);
+                }
+            }
+        }
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (size_t function = 0; function < fns.size(); function++)
+                for (auto &block : fns[function].f->blocks) for (auto &inst : block.insts) {
+                    if (inst.op != GirOp::Call && inst.op != GirOp::CallConstruct && inst.op != GirOp::Invoke) continue;
+                    auto needs = constructionNeeds[inst.idx];
+                    auto escapes = constructionEscapes[inst.idx];
+                    auto &callee = m.funcs[inst.idx];
+                    needs.insert(callee.summary.needs.begin(), callee.summary.needs.end());
+                    if (callee.summary.unknown)
+                        for (size_t target = 0; target < m.targets.size(); target++) {
+                            needs.insert((int)target);
+                            escapes.insert((int)target);
+                        }
+                    for (auto target : needs)
+                        if (!handles(function, target))
+                            changed |= constructionNeeds[function].insert(target).second;
+                    for (auto target : escapes)
+                        if (!handles(function, target))
+                            changed |= constructionEscapes[function].insert(target).second;
+                }
+        }
+        for (size_t function = 0; function < fns.size(); function++) {
+            auto &f = *fns[function].f;
+            if (!f.summary.unknown) {
+                for (auto target : constructionNeeds[function])
+                    if (find(f.summary.needs.begin(), f.summary.needs.end(), target) == f.summary.needs.end())
+                        Fail("GIR-V050", cat(fns[function].label, ": body requires a target omitted by its summary"));
+                for (auto target : constructionEscapes[function])
+                    if (find(f.summary.escapes.begin(), f.summary.escapes.end(), target) == f.summary.escapes.end())
+                        Fail("GIR-V050", cat(fns[function].label, ": body escapes to a target omitted by its summary"));
+            }
+            if (function == (size_t)m.entry || fns[function].initializer) {
+                if (!constructionNeeds[function].empty() || !f.summary.needs.empty())
+                    Fail("GIR-V060", cat(fns[function].label, ": external target requirement has no enclosing activation"));
+            }
+            for (auto &block : f.blocks) for (auto &inst : block.insts) {
+                if (inst.op != GirOp::Call && inst.op != GirOp::CallConstruct && inst.op != GirOp::Invoke) continue;
+                auto possible = constructionEscapes[inst.idx];
+                auto &callee = m.funcs[inst.idx];
+                possible.insert(callee.summary.escapes.begin(), callee.summary.escapes.end());
+                if (callee.summary.unknown)
+                    for (size_t target = 0; target < m.targets.size(); target++) possible.insert((int)target);
+                if (inst.op != GirOp::Invoke && !possible.empty())
+                    Fail("GIR-V060", cat(fns[function].label, ": normal-only call can propagate a target"));
+                if (inst.op == GirOp::Invoke) {
+                    vector<int> actual;
+                    for (auto &edge : inst.escapes) actual.push_back(edge.target);
+                    if (actual != vector<int>(possible.begin(), possible.end()))
+                        Fail("GIR-V060", cat(fns[function].label, ": invoke edges do not exactly cover the callee's possible targets"));
+                }
+            }
+        }
+    }
 
     void CheckConstruction(const Fn &fn) {
         auto &f = *fn.f;
+        auto bad = [&](const string &message) { Fail("GIR-V060", cat(fn.label, ": ", message)); };
+        struct Ownership {
+            int root = -1;
+            int channel = -1;
+            int target = -1;
+            int parent = -1;
+            int slot = -1;
+            int argumentFunction = -1;
+            int argumentPosition = -1;
+            int64_t count = 0;
+            int64_t expected = -1;
+            bool staged = false;
+            bool valueAdapter = false;
+            bool replacement = false;
+            bool landed = false;
+            bool operator==(const Ownership &) const = default;
+        };
+        struct State {
+            map<int, Ownership> live;
+            map<int, Ownership> named;
+            map<pair<int, int>, Ownership> packed;
+            map<int, Ownership> arguments;
+            bool operator==(const State &) const = default;
+        };
         vector<const GirInst *> definitions(fn.nvalues, nullptr);
-        vector<int> uses(fn.nvalues, 0);
-        vector<int> expectedDestinationUses(fn.nvalues, -1);
-        set<pair<int, int>> matched;
-        for (size_t block = 0; block < f.blocks.size(); block++) {
-            auto &body = f.blocks[block];
-            for (auto &param : body.params)
-                if (param.second >= 0 && param.second < (int)m.types.size()) {
-                    auto kind = m.Type(param.second).kind;
-                    if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled)
-                        Fail("GIR-V060", cat(fn.label, ": a construction carrier is a block parameter"));
+        for (auto &block : f.blocks) for (auto &inst : block.insts)
+            if (GirDefinesValue(inst)) definitions[inst.res] = &inst;
+        auto carrier = [&](int value) {
+            auto kind = m.Type(fn.vt[value]).kind;
+            return kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled;
+        };
+        auto constant = [&](int value) -> int64_t {
+            if (value < 0 || value >= fn.nvalues || !definitions[value] || definitions[value]->op != GirOp::Int)
+                return -1;
+            auto &text = definitions[value]->text;
+            int64_t n = -1;
+            auto parsed = from_chars(text.data(), text.data() + text.size(), n);
+            return parsed.ec == errc() && parsed.ptr == text.data() + text.size() ? n : -1;
+        };
+        State initial;
+        size_t channel = f.params.size();
+        for (size_t result = 0; result < f.results.size(); result++) {
+            if (!GirNonfixed(m, f.results[result])) continue;
+            auto value = f.blocks[0].params[channel++].first;
+            Ownership owner;
+            owner.root = value;
+            owner.channel = (int)result;
+            initial.live[value] = owner;
+        }
+        auto handlesTarget = [&](int target) {
+            if (target < 0 || target >= (int)m.targets.size()) return false;
+            for (auto member : m.targets[target].members) if (&m.funcs[member] == &f) return true;
+            return false;
+        };
+        auto sameChannel = [&](const Ownership &left, const Ownership &right) {
+            return left.channel >= 0 && left.channel == right.channel &&
+                   (left.target == right.target || (left.target < 0 && handlesTarget(right.target)) ||
+                    (right.target < 0 && handlesTarget(left.target)));
+        };
+        vector<optional<State>> incoming(f.blocks.size());
+        incoming[0] = initial;
+        vector<int> work { 0 };
+        auto merge = [&](int target, State next) {
+            if (!incoming[target]) {
+                incoming[target] = std::move(next);
+                work.push_back(target);
+                return;
+            }
+            auto combined = *incoming[target];
+            if (combined.live.size() != next.live.size() || combined.named.size() != next.named.size() ||
+                combined.packed.size() != next.packed.size() || combined.arguments.size() != next.arguments.size())
+                bad("control-flow merge changes outstanding destination ownership");
+            auto mergeMap = [&](auto &left, const auto &right) {
+                for (auto &[key, ownership] : left) {
+                    auto found = right.find(key);
+                    if (found == right.end()) bad("control-flow merge changes the owned carrier");
+                    auto other = found->second;
+                    if (ownership.count != other.count) ownership.count = other.count = -1;
+                    if (!(ownership == other)) bad("control-flow merge changes the receiver or result channel");
                 }
-            for (size_t index = 0; index < body.insts.size(); index++) {
-                auto &inst = body.insts[index];
-                if (GirDefinesValue(inst) && inst.res >= 0 && inst.res < fn.nvalues)
-                    definitions[inst.res] = &inst;
-                vector<int> operands;
-                Uses(inst, operands);
-                for (auto operand : operands)
-                    if (operand >= 0 && operand < fn.nvalues) uses[operand]++;
-                if (m.profile == CoreProfile::Construction &&
-                    (inst.op == GirOp::Arr || inst.op == GirOp::Fill) &&
-                    inst.ty >= 0 && inst.ty < (int)m.types.size() &&
-                    GirOwnerKind(m.Type(inst.ty).kind))
-                    Fail("GIR-V060", cat(fn.label, ": a nonfixed array is materialized as a detached aggregate"));
-                if (inst.op != GirOp::DestOpen) continue;
-                GirTypeId receiverType = -1;
-                if (auto slot = get_if<GirDestSlotReceiver>(&inst.destReceiver)) {
-                    if (slot->slot < 0 || slot->slot >= (int)f.slots.size())
-                        Fail("GIR-V060", cat(fn.label, ": a destination names an invalid receiver slot"));
-                    receiverType = f.slots[slot->slot].ty;
-                    if (inst.ty != receiverType)
-                        Fail("GIR-V060", cat(fn.label, ": a destination does not name its exact receiver slot"));
-                } else {
-                    auto whole = get<GirDestWholeReceiver>(inst.destReceiver);
-                    auto reference = fn.vt[whole.reference];
-                    if (reference < 0 || reference >= (int)m.types.size() ||
-                        m.Type(reference).kind != CoreType::Ref || m.Type(reference).mut != CoreMut::Mut)
-                        Fail("GIR-V060", cat(fn.label, ": a whole destination is not a mutable owner reference"));
-                    receiverType = m.Type(reference).elem;
+            };
+            mergeMap(combined.live, next.live);
+            mergeMap(combined.named, next.named);
+            mergeMap(combined.packed, next.packed);
+            mergeMap(combined.arguments, next.arguments);
+            if (!(combined == *incoming[target])) {
+                incoming[target] = std::move(combined);
+                work.push_back(target);
+            }
+        };
+        while (!work.empty()) {
+            auto block = work.back();
+            work.pop_back();
+            auto state = *incoming[block];
+            auto owned = [&](int value) -> Ownership & {
+                auto found = state.live.find(value);
+                if (found == state.live.end()) bad(cat("carrier %", value, " has already transferred or consumed its ownership"));
+                return found->second;
+            };
+            auto ready = [&](int value) -> Ownership & {
+                auto &ownership = owned(value);
+                for (auto &[other, child] : state.live)
+                    if (child.parent == ownership.root) bad("parent destination used while a child is incomplete");
+                for (auto &[key, child] : state.packed)
+                    if (child.parent == ownership.root) bad("parent destination used while a child completion is unprojected");
+                return ownership;
+            };
+            auto consume = [&](int value) {
+                auto ownership = ready(value);
+                state.live.erase(value);
+                return ownership;
+            };
+            auto transfer = [&](int from, int to) { auto ownership = consume(from); state.live[to] = ownership; };
+            auto edge = [&](int target, const vector<int> &values) {
+                auto next = state;
+                set<int> consumed;
+                vector<pair<int, Ownership>> translated;
+                for (size_t position = 0; position < values.size(); position++) {
+                    if (!carrier(values[position])) continue;
+                    auto found = next.live.find(values[position]);
+                    if (found == next.live.end() || !consumed.insert(values[position]).second)
+                        bad("edge duplicates or transfers an unavailable carrier");
+                    translated.push_back({ f.blocks[target].params[position].first, found->second });
                 }
-                if (!inst.knownCount)
-                    Fail("GIR-V060", cat(fn.label, ": a destination has no known element count"));
-                auto countValue = *inst.knownCount;
-                auto countDef = countValue >= 0 && countValue < fn.nvalues ? definitions[countValue] : nullptr;
-                if (!countDef || countDef->op != GirOp::Int)
-                    Fail("GIR-V060", cat(fn.label, ": a destination count is not a constant"));
-                int64_t count = -1;
-                auto [countEnd, countError] = from_chars(countDef->text.data(),
-                                                         countDef->text.data() + countDef->text.size(), count);
-                if (countError != errc() || countEnd != countDef->text.data() + countDef->text.size() || count < 0)
-                    Fail("GIR-V060", cat(fn.label, ": a destination count is invalid"));
-
-                int writes = 0;
-                int byteWrites = 0;
-                size_t byteWriteIndex = body.insts.size();
-                size_t cursor = index + 1;
-                for (; cursor < body.insts.size(); cursor++) {
-                    auto &candidate = body.insts[cursor];
-                    if (candidate.op == GirOp::DestWrite) {
-                        if (byteWrites || candidate.a != inst.res)
-                            Fail("GIR-V060", cat(fn.label, ": a destination mixes or misroutes element writes"));
-                        writes++;
-                        matched.insert({ (int)block, (int)cursor });
-                        continue;
-                    }
-                    if (candidate.op == GirOp::DestBytes) {
-                        if (byteWrites || writes || candidate.a != inst.res)
-                            Fail("GIR-V060", cat(fn.label, ": a byte destination is mixed or misrouted"));
-                        byteWrites++;
-                        byteWriteIndex = cursor;
-                        matched.insert({ (int)block, (int)cursor });
-                        continue;
-                    }
-                    if (candidate.op == GirOp::DestFinish) {
-                        if (candidate.a != inst.res) break;
-                        matched.insert({ (int)block, (int)cursor });
+                for (auto value : consumed) next.live.erase(value);
+                for (auto &entry : translated) next.live[entry.first] = entry.second;
+                merge(target, std::move(next));
+            };
+            for (auto &inst : f.blocks[block].insts) {
+                if ((inst.op == GirOp::Arr || inst.op == GirOp::Fill || inst.op == GirOp::Load) &&
+                    GirDefinesValue(inst) && GirNonfixed(m, fn.vt[inst.res]))
+                    bad("nonfixed value is materialized as a detached aggregate");
+                switch (inst.op) {
+                    case GirOp::DestOpen: {
+                        Ownership owner;
+                        owner.root = inst.res;
+                        if (inst.knownCount) {
+                            owner.expected = constant(*inst.knownCount);
+                            if (owner.expected < 0 && definitions[*inst.knownCount] &&
+                                definitions[*inst.knownCount]->op == GirOp::Int)
+                                bad("destination known count is negative or invalid");
+                        }
+                        if (auto slot = get_if<GirDestSlotReceiver>(&inst.destReceiver)) {
+                            owner.slot = slot->slot;
+                            for (auto &[value, live] : state.live)
+                                if (live.slot == owner.slot) bad("receiver slot has another unfinished construction");
+                        }
+                        if (auto argument = get_if<GirDestArgReceiver>(&inst.destReceiver)) {
+                            owner.argumentFunction = argument->function;
+                            owner.argumentPosition = argument->parameter;
+                        }
+                        state.live[inst.res] = owner;
                         break;
                     }
-                    if (candidate.op != GirOp::Int && candidate.op != GirOp::Bool)
-                        Fail("GIR-V060", cat(fn.label, ": a destination has an unsupported operation before completion"));
+                    case GirOp::DestChild: {
+                        auto &parent = ready(inst.a);
+                        Ownership child;
+                        child.root = inst.res;
+                        child.parent = parent.root;
+                        state.live[inst.res] = child;
+                        break;
+                    }
+                    case GirOp::DestWrite: {
+                        auto &owner = ready(inst.a);
+                        if (owner.count >= 0) owner.count++;
+                        break;
+                    }
+                    case GirOp::DestBytes: {
+                        auto &owner = ready(inst.a);
+                        if (owner.count >= 0) owner.count += (int64_t)inst.bytes.size();
+                        break;
+                    }
+                    case GirOp::DestText: case GirOp::DestCopy:
+                        ready(inst.a).count = -1;
+                        break;
+                    case GirOp::DestAttach: {
+                        auto child = consume(inst.b);
+                        auto &parent = ready(inst.a);
+                        if (child.parent != parent.root) bad("child completion belongs to another parent destination");
+                        if (parent.count >= 0) parent.count++;
+                        break;
+                    }
+                    case GirOp::DestFinish: {
+                        auto owner = consume(inst.a);
+                        if (owner.expected >= 0 && owner.count >= 0 && owner.count != owner.expected)
+                            bad("destination count disagrees with the initialized elements");
+                        state.live[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::DestPublish: {
+                        auto owner = consume(inst.a);
+                        if (owner.channel >= 0 || owner.parent >= 0 || owner.argumentFunction >= 0 || owner.staged)
+                            bad("completion published at another owning receiver");
+                        break;
+                    }
+                    case GirOp::DestAbandon:
+                        transfer(inst.a, inst.res);
+                        break;
+                    case GirOp::DestCancel:
+                        consume(inst.a);
+                        break;
+                    case GirOp::DestBind: {
+                        auto owner = consume(inst.a);
+                        if (owner.channel < 0 || f.resultProtocols[owner.channel].namedSlot != inst.idx ||
+                            state.named.count(inst.idx)) bad("named local does not own its declared incoming result channel");
+                        owner.slot = inst.idx;
+                        state.named[inst.idx] = owner;
+                        break;
+                    }
+                    case GirOp::DestNamed: {
+                        auto found = state.named.find(inst.idx);
+                        if (found == state.named.end()) bad("named result ownership is unavailable");
+                        state.live[inst.res] = found->second;
+                        state.named.erase(found);
+                        break;
+                    }
+                    case GirOp::ResultExitDest: {
+                        if (inst.idx < 0 || inst.idx >= (int)f.results.size() || f.results[inst.idx] != inst.ty ||
+                            f.resultProtocols[inst.idx].request != inst.request)
+                            bad("replacement does not name this activation's result channel");
+                        Ownership replacement;
+                        replacement.root = inst.res;
+                        replacement.channel = inst.idx;
+                        replacement.replacement = true;
+                        state.live[inst.res] = replacement;
+                        break;
+                    }
+                    case GirOp::DestAbandonNamed: {
+                        auto replacement = ready(inst.a);
+                        auto found = state.named.find(inst.idx);
+                        if (!replacement.replacement || found == state.named.end() ||
+                            !sameChannel(replacement, found->second))
+                            bad("named abandonment belongs to another replacement result channel");
+                        state.live[inst.res] = found->second;
+                        state.named.erase(found);
+                        break;
+                    }
+                    case GirOp::DestValue: {
+                        auto owner = consume(inst.a);
+                        if (owner.count != 0) bad("value adapter changes a destination after writing elements");
+                        owner.valueAdapter = true;
+                        state.live[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::DestRelocate: {
+                        auto owner = consume(inst.a);
+                        if (inst.reason == GirEventReason::HeaderRemoval) {
+                            if (!owner.valueAdapter) bad("header removal has no preceding value adapter");
+                            owner.valueAdapter = false;
+                        } else {
+                            if (!owner.replacement || owner.landed) bad("exit landing has no pending replacement interval");
+                            for (auto &[value, other] : state.live)
+                                if (sameChannel(other, owner)) bad("exit landing precedes cancellation of the superseded channel");
+                            for (auto &[slot, other] : state.named)
+                                if (sameChannel(other, owner)) bad("exit landing precedes abandonment of the named result");
+                            owner.landed = true;
+                        }
+                        state.live[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::DestStage: {
+                        auto owner = consume(inst.a);
+                        if (owner.staged || owner.expected >= 0 || owner.count != 0)
+                            bad("capacity stage is repeated or has a known element count");
+                        owner.staged = true;
+                        state.live[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::DestFit: {
+                        auto owner = consume(inst.a);
+                        if (!owner.staged) bad("capacity fit does not consume its private stage");
+                        owner.staged = false;
+                        state.live[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::DestArg: {
+                        auto owner = consume(inst.a);
+                        if (owner.argumentFunction < 0) bad("argument completion has no reserved call parameter region");
+                        state.arguments[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::Call: case GirOp::CallConstruct: {
+                        auto &callee = m.funcs[inst.idx];
+                        if (callee.summary.unknown || !callee.summary.escapes.empty())
+                            bad("normal-only call can propagate an unhandled target");
+                        for (size_t argument = 0; argument < inst.vals.size(); argument++) {
+                            auto found = state.arguments.find(inst.vals[argument]);
+                            if (GirNonfixed(m, callee.params[argument])) {
+                                if (found == state.arguments.end() || found->second.argumentFunction != inst.idx ||
+                                    found->second.argumentPosition != (int)argument)
+                                    bad("nonfixed parameter does not own its associated argument region");
+                                state.arguments.erase(found);
+                            } else if (found != state.arguments.end()) bad("owned argument transferred to another source parameter");
+                        }
+                        size_t destination = 0;
+                        for (size_t result = 0; result < callee.results.size(); result++) {
+                            if (!GirNonfixed(m, callee.results[result])) continue;
+                            if (inst.op != GirOp::CallConstruct) bad("ordinary call returns a detached nonfixed value");
+                            auto owner = consume(inst.vals2[destination++]);
+                            owner.count = -1;
+                            if (callee.results.size() == 1) state.live[inst.res] = owner;
+                            else state.packed[{ inst.res, (int)result }] = owner;
+                        }
+                        break;
+                    }
+                    case GirOp::Result:
+                        if (carrier(inst.res)) {
+                            auto found = state.packed.find({ inst.a, inst.idx });
+                            if (found == state.packed.end()) bad("nonfixed result pack component projected twice or unavailable");
+                            state.live[inst.res] = found->second;
+                            state.packed.erase(found);
+                        }
+                        break;
+                    case GirOp::Br: edge(inst.idx, inst.vals); break;
+                    case GirOp::CondBr: edge(inst.idx, inst.vals); edge(inst.idx2, inst.vals2); break;
+                    case GirOp::Ret:
+                        for (size_t result = 0; result < inst.vals.size(); result++) {
+                            if (!carrier(inst.vals[result])) continue;
+                            auto owner = consume(inst.vals[result]);
+                            if (owner.channel != (int)result || (owner.target >= 0 && !handlesTarget(owner.target)) ||
+                                owner.staged || owner.valueAdapter || (owner.replacement && !owner.landed))
+                                bad("returned completion belongs to another channel or an unfinished adapter");
+                        }
+                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty())
+                            bad("return leaves unfinished destination, named, argument, or pack ownership");
+                        break;
+                    case GirOp::Abort: case GirOp::Exit: case GirOp::Unreachable: break;
+                    case GirOp::TargetDest: {
+                        Ownership owner;
+                        owner.root = inst.res;
+                        owner.channel = inst.idx2;
+                        owner.target = inst.idx;
+                        owner.replacement = true;
+                        state.live[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::Invoke: {
+                        auto &callee = m.funcs[inst.idx];
+                        for (size_t argument = 0; argument < inst.vals.size(); argument++) {
+                            auto found = state.arguments.find(inst.vals[argument]);
+                            if (GirNonfixed(m, callee.params[argument])) {
+                                if (found == state.arguments.end() || found->second.argumentFunction != inst.idx ||
+                                    found->second.argumentPosition != (int)argument)
+                                    bad("invoke does not transfer its own associated argument region");
+                                state.arguments.erase(found);
+                            } else if (found != state.arguments.end()) bad("invoke transfers an argument to another parameter");
+                        }
+                        vector<Ownership> normalOwners;
+                        for (auto value : inst.vals2) normalOwners.push_back(consume(value));
+                        auto emitEdge = [&](int target, vector<pair<int, Ownership>> leading, const vector<int> &forwarded,
+                                            size_t offset) {
+                            auto next = state;
+                            vector<pair<int, Ownership>> moved;
+                            set<int> consumed;
+                            for (size_t position = 0; position < forwarded.size(); position++) {
+                                auto value = forwarded[position];
+                                if (!carrier(value)) continue;
+                                auto found = next.live.find(value);
+                                if (found == next.live.end() || !consumed.insert(value).second)
+                                    bad("invoke edge duplicates or forwards an unavailable carrier");
+                                moved.push_back({ f.blocks[target].params[offset + position].first, found->second });
+                            }
+                            for (auto value : consumed) next.live.erase(value);
+                            for (auto &entry : moved) next.live[entry.first] = entry.second;
+                            for (auto &entry : leading) {
+                                if (next.live.count(entry.first)) bad("invoke edge overwrites outstanding ownership");
+                                next.live[entry.first] = entry.second;
+                            }
+                            merge(target, std::move(next));
+                        };
+                        vector<pair<int, Ownership>> normal;
+                        size_t nonfixed = 0;
+                        for (size_t result = 0; result < callee.results.size(); result++) {
+                            if (!GirNonfixed(m, callee.results[result])) continue;
+                            auto owner = normalOwners[nonfixed++];
+                            owner.count = -1;
+                            normal.push_back({ f.blocks[inst.a].params[result].first, owner });
+                        }
+                        emitEdge(inst.a, std::move(normal), inst.forwarded, callee.results.size());
+                        for (auto &escape : inst.escapes) {
+                            auto &target = m.funcs[m.targets[escape.target].members[0]];
+                            vector<pair<int, Ownership>> escaped;
+                            for (size_t result = 0; result < target.results.size(); result++) {
+                                if (!GirNonfixed(m, target.results[result])) continue;
+                                auto value = f.blocks[escape.block].params[result].first;
+                                Ownership owner;
+                                owner.root = value;
+                                owner.channel = (int)result;
+                                owner.target = escape.target;
+                                owner.count = -1;
+                                owner.replacement = true;
+                                escaped.push_back({ value, owner });
+                            }
+                            for (size_t result = 0; result < normalOwners.size(); result++)
+                                escaped.push_back({ f.blocks[escape.block].params[target.results.size() + result].first,
+                                                    normalOwners[result] });
+                            emitEdge(escape.block, std::move(escaped), escape.forwarded,
+                                     target.results.size() + normalOwners.size());
+                        }
+                        break;
+                    }
+                    case GirOp::Escape:
+                        for (size_t result = 0; result < inst.vals.size(); result++) {
+                            if (!carrier(inst.vals[result])) continue;
+                            auto owner = consume(inst.vals[result]);
+                            if (owner.target != inst.idx || owner.channel != (int)result || owner.staged || owner.valueAdapter)
+                                bad("escape carrier belongs to another target or incomplete adapter");
+                        }
+                        {
+                            size_t cancellation = 0;
+                            for (size_t result = 0; result < f.results.size(); result++) {
+                                if (!GirNonfixed(m, f.results[result])) continue;
+                                auto owner = consume(inst.vals2[cancellation++]);
+                                if (owner.target >= 0 || owner.channel != (int)result)
+                                    bad("escape forwards another normal result channel's cancellation");
+                            }
+                        }
+                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty())
+                            bad("escape leaves unfinished local, result, argument, or pack ownership");
+                        break;
+                    case GirOp::Leave:
+                        for (auto &[value, owner] : state.live)
+                            if (owner.channel < 0 && owner.slot >= 0 && f.slots[owner.slot].scope == inst.idx)
+                                bad("receiver scope leaves before completing its construction ownership");
+                        break;
+                    default: {
+                        vector<int> uses;
+                        Uses(inst, uses);
+                        for (auto value : uses)
+                            if (carrier(value)) bad("construction carrier used as an ordinary value");
+                            else if (state.arguments.count(value)) bad("owned call argument used outside its associated transfer");
+                        break;
+                    }
                 }
-                if (cursor + 1 >= body.insts.size() || body.insts[cursor].op != GirOp::DestFinish ||
-                    body.insts[cursor].a != inst.res)
-                    Fail("GIR-V060", cat(fn.label, ": a destination does not finish in its block"));
-                auto &finish = body.insts[cursor];
-                auto publishIndex = cursor + 1;
-                auto &publish = body.insts[publishIndex];
-                if (publish.op != GirOp::DestPublish || publish.a != finish.res)
-                    Fail("GIR-V060", cat(fn.label, ": a destination is not published exactly after completion"));
-                auto owner = m.Type(inst.ty);
-                auto receiver = m.Type(receiverType);
-                if (receiver.kind != CoreType::Grow || owner.kind != CoreType::Grow ||
-                    receiver.elem != owner.elem)
-                    Fail("GIR-V060", cat(fn.label, ": a destination changes its receiver element type"));
-                if (byteWrites) {
-                    auto &write = body.insts[byteWriteIndex];
-                    if ((uint64_t)count != write.bytes.size() || owner.kind != CoreType::Grow ||
-                        m.Type(owner.elem).kind != CoreType::Int || m.Type(owner.elem).ity != CoreIntTy::U8)
-                        Fail("GIR-V060", cat(fn.label, ": a byte destination count or element type is invalid"));
-                } else if (count != writes) {
-                    Fail("GIR-V060", cat(fn.label, ": an element destination count disagrees with its writes"));
-                }
-                expectedDestinationUses[inst.res] = writes + byteWrites + 1;
-                matched.insert({ (int)block, (int)index });
-                matched.insert({ (int)block, (int)publishIndex });
-            }
-        }
-        for (size_t block = 0; block < f.blocks.size(); block++)
-            for (size_t index = 0; index < f.blocks[block].insts.size(); index++) {
-                auto &inst = f.blocks[block].insts[index];
-                if ((inst.op == GirOp::DestOpen || inst.op == GirOp::DestWrite || inst.op == GirOp::DestBytes ||
-                     inst.op == GirOp::DestFinish || inst.op == GirOp::DestPublish) &&
-                    !matched.count({ (int)block, (int)index }))
-                    Fail("GIR-V060", cat(fn.label, ": a construction operation is not part of a linear destination"));
-            }
-        for (int value = 0; value < fn.nvalues; value++) {
-            auto type = fn.vt[value];
-            if (type < 0 || type >= (int)m.types.size()) continue;
-            auto kind = m.Type(type).kind;
-            if (kind == CoreType::Dest) {
-                if (!definitions[value] || definitions[value]->op != GirOp::DestOpen ||
-                    expectedDestinationUses[value] < 1 || uses[value] != expectedDestinationUses[value])
-                    Fail("GIR-V060", cat(fn.label, ": destination value %", value, " is not consumed linearly"));
-            } else if (kind == CoreType::Built) {
-                if (!definitions[value] || definitions[value]->op != GirOp::DestFinish || uses[value] != 1)
-                    Fail("GIR-V060", cat(fn.label, ": completion value %", value, " is not published exactly once"));
-            } else if (kind == CoreType::Cancelled) {
-                Fail("GIR-V060", cat(fn.label, ": cancellation carrier %", value, " has no construction protocol"));
             }
         }
     }
@@ -2546,7 +3310,8 @@ private:
     // out of this list; their receiver effects are handled separately.
     vector<int> EmptyFactSourceOperands(const GirInst &inst) const {
         vector<int> out;
-        if (inst.op == GirOp::Call || inst.op == GirOp::Clear || GirIsTerminator(inst.op) ||
+        if (inst.op == GirOp::Call || inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke ||
+            inst.op == GirOp::Clear || GirIsTerminator(inst.op) ||
             GirLowOnly(inst.op))
             return out;
         Uses(inst, out);
@@ -2568,7 +3333,7 @@ private:
             if (!contains(inst.a)) facts.push_back(inst.a);
             return facts;
         }
-        if (inst.op == GirOp::Call) {
+        if (inst.op == GirOp::Call || inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke) {
             auto dependencies = CallDependencies(fn, p, inst);
             if (!dependencies) return {};
             if (!dependencies->empty()) facts = KillEmptyFacts(facts, *dependencies, p);
@@ -2650,6 +3415,18 @@ private:
                 else if (term->op == GirOp::CondBr) {
                     propagate(term->idx, term->vals);
                     propagate(term->idx2, term->vals2);
+                } else if (term->op == GirOp::Invoke) {
+                    auto &callee = m.funcs[term->idx];
+                    vector<int> normal(callee.results.size(), -1);
+                    normal.insert(normal.end(), term->forwarded.begin(), term->forwarded.end());
+                    propagate(term->a, normal);
+                    size_t cancelled = 0;
+                    for (auto result : callee.results) cancelled += GirNonfixed(m, result);
+                    for (auto &edge : term->escapes) {
+                        vector<int> escaped(m.funcs[m.targets[edge.target].members[0]].results.size() + cancelled, -1);
+                        escaped.insert(escaped.end(), edge.forwarded.begin(), edge.forwarded.end());
+                        propagate(edge.block, escaped);
+                    }
                 }
             }
         }

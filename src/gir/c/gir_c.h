@@ -25,7 +25,7 @@ namespace goose {
 //                   GS_RANGE, GS_RANGE_U
 inline constexpr const char *GIR_C_RUNTIME_ENTRY_POINTS =
     "gs_rt_init gs_stack_init GS gs_memcpy gs_memmove gs_rt_stats gs_out_int gs_out_uint gs_out_bool "
-    "gs_out_bytes gs_out_nl gs_abort gs_abort_msg gs_idxfail gs_exit gs_add gs_sub gs_mul gs_neg "
+    "gs_out_bytes gs_out_nl gs_fmt_i64 gs_fmt_u64 gs_fmt_bool gs_abort gs_abort_msg gs_idxfail gs_exit gs_add gs_sub gs_mul gs_neg "
     "gs_div gs_mod gs_shl gs_shr GS_RANGE GS_RANGE_U";
 
 // One function's text with what it refers to.
@@ -46,9 +46,15 @@ struct GirCProgram {
 
 class GirCEmitter {
 public:
-    explicit GirCEmitter(const GirModule &low) : m(low) {}
+    explicit GirCEmitter(const GirModule &low, optional<string> constructionTrace = nullopt)
+        : m(low), constructionTrace(std::move(constructionTrace)) {}
 
     GirCProgram Emit() {
+        if (constructionTrace && (!CoreHasConstruction(m.profile) || constructionTrace->empty() ||
+                                  constructionTrace->find('\0') != string::npos))
+            throw CompileError { "construction trace requires the construction profile and a valid file path" };
+        if (!m.lowtargets.empty())
+            throw CompileError { "GIR-L target emission requires the complete checked target protocol" };
         Names();
         GirCProgram out;
         for (size_t f = 0; f < m.funcs.size(); f++) out.pieces.push_back(Piece((int)f));
@@ -59,6 +65,17 @@ public:
                    ") ? 1 : -1];\n");
         for (auto size : blobs) Append(tdecls, "typedef struct { uint64_t w[", (size + 7) / 8, "]; } gir_blob_", size, ";\n");
         string data;
+        if (CoreHasConstruction(m.profile)) {
+            data += "static GS_TLS int64_t gir_return_flag;\n";
+            if (constructionTrace) {
+                data += "static FILE *gir_trace_file;\nstatic int gir_trace_comma;\nstatic int64_t gir_trace_storage, gir_trace_destination;\n";
+                data += "static void gir_trace_fail(void) { perror(\"construction trace\"); _Exit(74); }\n";
+                data += "static void gir_trace_close(void) { if (fclose(gir_trace_file) != 0) gir_trace_fail(); gir_trace_file = NULL; }\n";
+                Append(data, "static void gir_trace_open(void) { gir_trace_file = fopen(", CStr(*constructionTrace),
+                       ", \"wb\"); if (!gir_trace_file) gir_trace_fail(); if (atexit(gir_trace_close) != 0) gir_trace_fail(); if (fputs(\"[\\\"construction\\\",[]]\\n\", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }\n");
+                data += "static void gir_trace_record(const char *kind, const char *reason, size_t n, const int64_t *v) { if (!gir_trace_file) return; if (fseek(gir_trace_file, -3, SEEK_END) != 0) gir_trace_fail(); if (gir_trace_comma && fputc(',', gir_trace_file) == EOF) gir_trace_fail(); gir_trace_comma = 1; if (fprintf(gir_trace_file, \"[\\\"%s\\\"\", kind) < 0) gir_trace_fail(); if (strcmp(kind, \"copy\") == 0) { if (fprintf(gir_trace_file, \",[\\\"%s\\\",%lld\", reason, (long long)v[0]) < 0) gir_trace_fail(); if (strcmp(reason, \"storage\") == 0) { if (fputs(\",[\", gir_trace_file) < 0) gir_trace_fail(); for (size_t k = 1; k + 1 < n; k++) if (fprintf(gir_trace_file, \"%s%lld\", k > 1 ? \",\" : \"\", (long long)v[k]) < 0) gir_trace_fail(); if (fputc(']', gir_trace_file) == EOF) gir_trace_fail(); } if (fprintf(gir_trace_file, \"],%lld\", (long long)v[n - 1]) < 0) gir_trace_fail(); } else { for (size_t k = 0; k < n; k++) if (fprintf(gir_trace_file, \",%lld\", (long long)v[k]) < 0) gir_trace_fail(); if (*reason && fprintf(gir_trace_file, \",\\\"%s\\\"\", reason) < 0) gir_trace_fail(); } if (fputc(']', gir_trace_file) == EOF || fputs(\"]]\\n\", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }\n";
+            }
+        }
         for (size_t i = 0; i < m.diagfiles.size(); i++)
             Append(data, "static const char ", filesym[i], "[] = ", CStr(m.diagfiles[i]), ";\n");
         string gblock;
@@ -102,6 +119,7 @@ public:
         auto program = [&](bool units) {
             string t = "static void gs_program_init(int argc, char **argv) {\n"
                        "    if (gs_program_initialized) return;\n";
+            if (constructionTrace) t += "    gir_trace_open();\n";
             Append(t, "    gs_rt_init(argc, argv, ", m.mainstacks, ", ", m.mainstacks + m.globalstacks, ", 0);\n");
             if (units) {
                 set<string> modules;
@@ -147,6 +165,7 @@ public:
 
 private:
     const GirModule &m;
+    optional<string> constructionTrace;
 
     // ---------------------------------------------------------------------
     // Names and types.
@@ -189,9 +208,11 @@ private:
         for (auto &f : m.funcs)
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
-                    auto text = i.op == GirOp::RtCall && (GirRt)i.idx == GirRt::OutText ? &i.text
+                    string byteText(i.bytes.begin(), i.bytes.end());
+                    auto text = i.op == GirOp::StaticBytes ? &byteText
+                                : i.op == GirOp::RtCall && (GirRt)i.idx == GirRt::OutText ? &i.text
                                 : i.op == GirOp::Abort && i.abort == GirAbortKind::UserAbort ? &i.text : nullptr;
-                    if (text && !text->empty() && !literals.count(*text))
+                    if (text && (i.op == GirOp::StaticBytes || !text->empty()) && !literals.count(*text))
                         literals[*text] = cat("gs_str_", Sha256::Of(*text).Short());
                 }
     }
@@ -441,6 +462,29 @@ private:
                   ", ", V(i.b), ", (size_t)", i.idx, ");");
                 return;
             case GirOp::RtCall: return EmitRt(t, cx, i);
+            case GirOp::StaticBytes:
+                L(V(i.res), " = (uint8_t *)", literals.at(string(i.bytes.begin(), i.bytes.end())), ";"); return;
+            case GirOp::ReturnFlagGet: L(V(i.res), " = gir_return_flag;"); return;
+            case GirOp::ReturnFlagSet: L("gir_return_flag = ", V(i.a), ";"); return;
+            case GirOp::Format:
+                L(V(i.res), " = gs_fmt_", i.format == GirFormatKind::Int ? "i64" :
+                  i.format == GirFormatKind::Uint ? "u64" : "bool", "(", V(i.b), ", ", V(i.a), ");");
+                return;
+            case GirOp::OutBytes:
+                Mention(cx, i.org);
+                L("gs_out_bytes(", V(i.a), ", (size_t)", V(i.b), ");"); return;
+            case GirOp::TraceId:
+                if (constructionTrace) L(V(i.res), " = gir_trace_", GirTraceName(i.trace), "++;");
+                else L(V(i.res), " = 0;");
+                return;
+            case GirOp::Event:
+                if (constructionTrace) {
+                    string operands;
+                    for (auto value : i.vals) Append(operands, operands.empty() ? "" : ", ", V(value));
+                    L("gir_trace_record(\"", GirEventName(i.event), "\", \"", GirEventReasonName(i.reason),
+                      "\", ", i.vals.size(), ", (const int64_t[]){ ", operands, " });");
+                }
+                return;
             case GirOp::Br:
                 L(Assigns(cx, i.idx, i.vals), "goto b", i.idx, ";");
                 return;
@@ -479,7 +523,7 @@ private:
             }
             case GirOp::Exit: L("gs_exit(", V(i.a), ");"); return;
             case GirOp::Unreachable: L("for (;;) { }"); return;
-            default: L("/* unsupported operation */"); return;
+            default: throw CompileError { "internal compiler error: unsupported GIR-L emission operation" };
         }
         (void)ty;
     }

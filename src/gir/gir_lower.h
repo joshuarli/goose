@@ -43,12 +43,17 @@ public:
         for (auto &im : core.impls) {
             pair<vector<GirTypeId>, vector<GirTypeId>> sig;
             for (auto &p : im.params) sig.first.push_back(im.vars[p.var].type);
-            sig.second = im.results;
+            for (auto &result : im.results) sig.second.push_back(result.type);
+            GirFunc signature;
+            signature.params = sig.first;
+            signature.results = sig.second;
+            for (auto &result : im.results) signature.resultProtocols.push_back({ result.request, result.namedLocal });
+            mod.funcs.push_back(std::move(signature));
             sigs.push_back(std::move(sig));
         }
         for (auto &g : core.globals) globaltypes.push_back({ g.type, g.kind });
         for (auto &g : core.globals) mod.globals.push_back(LowerGlobal(g));
-        for (size_t i = 0; i < core.impls.size(); i++) mod.funcs.push_back(LowerImpl(core.impls[i], (int)i));
+        for (size_t i = 0; i < core.impls.size(); i++) mod.funcs[i] = LowerImpl(core.impls[i], (int)i);
         mod.entry = core.contexts[core.entry].impl;
         return std::move(mod);
     }
@@ -370,6 +375,14 @@ private:
                     end.op = GirOp::Unreachable;
                     EmitTerm(std::move(end));
                 }
+                if (cur >= 0 && mod.Type(ValTy(v)).kind == CoreType::Tuple &&
+                    mod.Type(e.type).kind != CoreType::Tuple) {
+                    GirInst result;
+                    result.op = GirOp::Result;
+                    result.a = v;
+                    result.idx = 0;
+                    return EmitDef(std::move(result));
+                }
                 return v;
             }
             case CoreExprKind::Push: {
@@ -431,8 +444,11 @@ private:
                 i.vals = LowerExprs(e.elems);
                 return EmitDef(std::move(i));
             }
+            case CoreExprKind::String: case CoreExprKind::Copy: case CoreExprKind::ResultLocal:
+            case CoreExprKind::Values:
+                throw CompileError { "construction expression requires explicit receiving channels" };
         }
-        return 0;
+        throw CompileError { "internal compiler error: unknown Core expression" };
     }
 
     // The right operand of `and`/`or`, whose left value is `x`.
@@ -459,10 +475,13 @@ private:
     vector<int> LowerArgs(const vector<CoreArg> &args) {
         vector<int> out;
         for (auto &a : args) {
-            if (a.kind == CoreArg::Val) out.push_back(LowerExpr(*a.expr));
+            if (auto value = get_if<CoreArgValue>(&a)) out.push_back(LowerExpr(*value->expr));
+            else if (get_if<CoreArgConstruct>(&a))
+                throw CompileError { "construction argument requires its call parameter destination" };
             else {
-                auto r = LowerPlace(*a.place);
-                out.push_back(FreezeTo(a.mut, r));
+                auto &reference = get<CoreArgReference>(a);
+                auto r = LowerPlace(*reference.place);
+                out.push_back(FreezeTo(reference.mut, r));
             }
         }
         return out;
@@ -929,11 +948,11 @@ private:
                 vector<GirPart> parts;
                 for (auto &a : s.print) {
                     GirPart p;
-                    if (a.text) {
+                    if (a.kind == CorePrintArg::Text) {
                         p.text = true;
                         p.str = a.str;
                     } else {
-                        p.val = LowerExpr(*a.expr);
+                        p.val = a.kind == CorePrintArg::View ? LowerView(*a.view) : LowerExpr(*a.expr);
                     }
                     parts.push_back(std::move(p));
                 }
@@ -978,6 +997,10 @@ private:
                 EmitTerm(std::move(i));
                 return;
             }
+            case CoreStmtKind::Receive: case CoreStmtKind::AppendValue: case CoreStmtKind::AppendConstruct:
+            case CoreStmtKind::RetValues: case CoreStmtKind::RetForward: case CoreStmtKind::ReturnFrom:
+            case CoreStmtKind::ReturnFromForward: case CoreStmtKind::BreakValue:
+                throw CompileError { "construction statement requires explicit receiving channels" };
         }
     }
 
@@ -1068,10 +1091,16 @@ private:
         if (e.a) ExprScopes(parent, *e.a, out);
         if (e.b) ExprScopes(parent, *e.b, out);
         for (auto &a : e.args) {
-            if (a.expr) ExprScopes(parent, *a.expr, out);
-            if (a.place) PlaceScopes(parent, *a.place, out);
+            if (auto value = get_if<CoreArgValue>(&a)) ExprScopes(parent, *value->expr, out);
+            else if (auto construct = get_if<CoreArgConstruct>(&a)) ExprScopes(parent, *construct->expr, out);
+            else PlaceScopes(parent, *get<CoreArgReference>(a).place, out);
         }
         for (auto &el : e.elems) ExprScopes(parent, *el, out);
+        for (auto &el : e.values) ExprScopes(parent, *el, out);
+        for (auto &arg : e.print) {
+            if (arg.kind == CorePrintArg::Expr) ExprScopes(parent, *arg.expr, out);
+            if (arg.kind == CorePrintArg::View) ViewScopes(parent, *arg.view, out);
+        }
         if (e.then) BlockScopes(parent, *e.then, out);
         if (e.otherwise) BlockScopes(parent, *e.otherwise, out);
     }
@@ -1102,7 +1131,11 @@ private:
         if (s.view) ViewScopes(parent, *s.view, out);
         if (s.expr) ExprScopes(parent, *s.expr, out);
         if (s.expr2) ExprScopes(parent, *s.expr2, out);
-        for (auto &a : s.print) if (!a.text) ExprScopes(parent, *a.expr, out);
+        for (auto &a : s.print) {
+            if (a.kind == CorePrintArg::Expr) ExprScopes(parent, *a.expr, out);
+            if (a.kind == CorePrintArg::View) ViewScopes(parent, *a.view, out);
+        }
+        for (auto &value : s.values) ExprScopes(parent, *value, out);
         if (s.then) BlockScopes(parent, *s.then, out);
         if (s.otherwise) BlockScopes(parent, *s.otherwise, out);
     }
@@ -1180,7 +1213,11 @@ private:
         GirFunc f;
         f.name = impl.name;
         f.params = ptys;
-        f.results = impl.results;
+        for (auto &result : impl.results) {
+            f.results.push_back(result.type);
+            if (CoreHasConstruction(core.profile))
+                f.resultProtocols.push_back({ result.request, result.namedLocal });
+        }
         f.slots = slots;
         ScopePairs pairs;
         BlockScopes(-1, impl.body, pairs);

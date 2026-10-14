@@ -17,20 +17,23 @@ enum class GirOp : uint8_t {
     // Instructions that define a value, high stage.
     Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, Load,
     Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
-    Struct, Field, DestOpen, DestFinish,
+    Struct, Field, Bytes, Result, DestOpen, DestChild, DestFinish, DestNamed, ResultExitDest,
+    DestAbandonNamed, DestArg, DestAbandon, DestValue, DestRelocate, DestStage, DestFit,
+    CallConstruct, TargetDest,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
-    HdrLen,
+    HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId,
     // Instructions that define none, high stage.
-    Init, Store, Append, PopN, Resize, Clear, Replace, DestWrite, DestBytes, DestPublish, Enter, Leave, Print,
+    Init, Store, Append, AppendValue, PopN, Resize, Clear, Replace, DestWrite, DestAttach,
+    DestBytes, DestText, DestCopy, DestBind, DestPublish, DestCancel, Enter, Leave, Print,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
-    BytesFill, RtCall,
+    BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event,
     // Terminators.
-    Br, CondBr, Ret, Abort, Exit, Unreachable,
+    Br, CondBr, Invoke, Ret, Escape, Abort, Exit, Unreachable,
 };
 
-inline bool GirDefines(GirOp op) { return op <= GirOp::HdrLen; }
+inline bool GirDefines(GirOp op) { return op <= GirOp::TraceId; }
 inline bool GirIsTerminator(GirOp op) { return op >= GirOp::Br; }
 
 // Whether an instruction belongs to the high stage only, the low stage only,
@@ -44,6 +47,13 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::Push: case GirOp::Pop: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
         case GirOp::DestOpen: case GirOp::DestFinish: case GirOp::DestWrite:
         case GirOp::DestBytes: case GirOp::DestPublish:
+        case GirOp::Bytes: case GirOp::Result: case GirOp::DestChild: case GirOp::DestNamed:
+        case GirOp::ResultExitDest: case GirOp::DestAbandonNamed: case GirOp::DestArg:
+        case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
+        case GirOp::DestStage: case GirOp::DestFit: case GirOp::CallConstruct:
+        case GirOp::TargetDest: case GirOp::AppendValue: case GirOp::DestAttach:
+        case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestBind:
+        case GirOp::DestCancel: case GirOp::Invoke: case GirOp::Escape:
         case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
         case GirOp::Replace: case GirOp::Enter: case GirOp::Leave: case GirOp::Print:
@@ -52,8 +62,8 @@ inline bool GirHighOnly(GirOp op) {
     }
 }
 inline bool GirLowOnly(GirOp op) {
-    return (op >= GirOp::PtrOffset && op <= GirOp::HdrLen) ||
-           (op >= GirOp::PStore && op <= GirOp::RtCall);
+    return (op >= GirOp::PtrOffset && op <= GirOp::TraceId) ||
+           (op >= GirOp::PStore && op <= GirOp::Event);
 }
 
 enum class GirAbortKind : uint8_t {
@@ -65,6 +75,28 @@ enum class GirAbortKind : uint8_t {
 // reference. Direct owners remain writable even when their variable binding is
 // immutable; borrowed views inherit the reference's mutability.
 enum class GirSnapshotMode : uint8_t { Owner, Borrowed };
+
+enum class GirFormatKind : uint8_t { Int, Uint, Bool };
+enum class GirTraceKind : uint8_t { Storage, Destination };
+enum class GirEventKind : uint8_t { Begin, Write, Publish, Copy, Relocate, Stage, Abandon };
+enum class GirEventReason : uint8_t { None, Storage, Repeat, HeaderRemoval, ExitValue, CapacityCheck };
+
+inline const char *GirFormatName(GirFormatKind kind) {
+    static const char *names[] = { "int", "uint", "bool" };
+    return names[(int)kind];
+}
+inline const char *GirTraceName(GirTraceKind kind) {
+    static const char *names[] = { "storage", "destination" };
+    return names[(int)kind];
+}
+inline const char *GirEventName(GirEventKind kind) {
+    static const char *names[] = { "begin", "write", "publish", "copy", "relocate", "stage", "abandon" };
+    return names[(int)kind];
+}
+inline const char *GirEventReasonName(GirEventReason reason) {
+    static const char *names[] = { "", "storage", "repeat", "header-removal", "exit-value", "capacity-check" };
+    return names[(int)reason];
+}
 
 inline const char *GirAbortKindName(GirAbortKind k) {
     static const char *names[] = { "div_zero", "div_overflow", "index_oob", "slice_oob", "assert",
@@ -93,7 +125,37 @@ struct GirDestWholeReceiver {
     int reference = -1;
 };
 
-using GirDestReceiver = variant<GirDestSlotReceiver, GirDestWholeReceiver>;
+struct GirDestGlobalReceiver { int global = -1; };
+struct GirDestPushReceiver { int reference = -1; };
+struct GirDestAppendReceiver { int reference = -1; };
+struct GirDestArgReceiver { int function = -1; int parameter = -1; };
+
+using GirDestReceiver = variant<GirDestSlotReceiver, GirDestWholeReceiver, GirDestGlobalReceiver,
+                                GirDestPushReceiver, GirDestAppendReceiver, GirDestArgReceiver>;
+
+struct GirEscapeEdge {
+    int target = -1;
+    int block = -1;
+    vector<int> forwarded;
+};
+
+struct GirResultProtocol {
+    CoreRequest request = CoreRequest::Register;
+    optional<int> namedSlot;
+    bool operator==(const GirResultProtocol &) const = default;
+};
+
+struct GirLowChannel {
+    int position = -1;
+    vector<int> incoming;
+    vector<int> escaped;
+};
+
+struct GirLowTarget {
+    vector<int> members;
+    vector<GirTypeId> cells;
+    vector<GirLowChannel> channels;
+};
 
 struct GirInst {
     GirOp op = GirOp::Unit;
@@ -109,13 +171,18 @@ struct GirInst {
     GirSnapshotMode snap = GirSnapshotMode::Borrowed;
     GirAbortKind abort = GirAbortKind::Assert;
     CoreRequest request = CoreRequest::Value;
+    GirFormatKind format = GirFormatKind::Int;
+    GirTraceKind trace = GirTraceKind::Storage;
+    GirEventKind event = GirEventKind::Begin;
+    GirEventReason reason = GirEventReason::None;
     optional<int> knownCount;
     GirDestReceiver destReceiver = GirDestSlotReceiver {};
     int idx = -1, idx2 = -1;
     int a = -1, b = -1;
     vector<uint8_t> bytes;
     GirBound lo, hi;
-    vector<int> vals, vals2;
+    vector<int> vals, vals2, forwarded;
+    vector<GirEscapeEdge> escapes;
     vector<GirPart> parts;
     int org = -1;
 };
@@ -176,6 +243,7 @@ struct GirMember {
 struct GirFunc {
     string name;
     vector<GirTypeId> params, results;
+    vector<GirResultProtocol> resultProtocols;
     vector<GirSlot> slots;
     GirRootInfo roots;
     vector<int> scopes;   // The parent of each scope, or -1.
@@ -225,7 +293,7 @@ struct GirModule {
     // order, and the data stacks the program starts with.
     bool low = false;
     vector<GirLowGlobal> lowglobals;
-    vector<CoreTargetSet> lowtargets;
+    vector<GirLowTarget> lowtargets;
     vector<int> initfuncs;
     int mainstacks = 0;
     int globalstacks = 0;
@@ -249,6 +317,19 @@ struct GirModule {
     GirTypeId PtrType() { CoreType c; c.kind = CoreType::Ptr; return Intern(c); }
     GirTypeId ViewType(CoreMut m, GirTypeId e) {
         CoreType c; c.kind = CoreType::View; c.mut = m; c.elem = e; return Intern(c);
+    }
+    GirTypeId CarrierType(CoreType::Kind kind, GirTypeId type, CoreRequest request) {
+        CoreType carrier;
+        carrier.kind = kind;
+        carrier.elem = type;
+        carrier.request = request;
+        return Intern(carrier);
+    }
+    GirTypeId TupleType(vector<GirTypeId> parts) {
+        CoreType tuple;
+        tuple.kind = CoreType::Tuple;
+        tuple.parts = std::move(parts);
+        return Intern(tuple);
     }
     const CoreType &Type(GirTypeId t) const { return types[t]; }
 };

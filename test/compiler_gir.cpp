@@ -850,7 +850,7 @@ void RejectsHighOperationInLowModule() {
 
 void RejectsConstructionTargetsInLowModule() {
     auto m = LowBase();
-    m.lowtargets = { CoreTargetSet { { 0 } } };
+    m.lowtargets = { GirLowTarget { { 0 }, {}, {} } };
     assert(Code(m) == "GIR-V090");
 }
 
@@ -4672,9 +4672,359 @@ void ConstructionTargetsRejectEmptyAndRepeatedMemberSets() {
     assert(Code(repeated) == "GIR-V001");
 }
 
+GirModule LowConstructionObservationModule() {
+    auto m = LowBase();
+    m.profile = CoreProfile::Construction;
+    auto bytes = Def(GirOp::StaticBytes, 1);
+    bytes.bytes = { 65, 0, 255, 66 };
+    auto destination = Def(GirOp::TraceId, 2);
+    destination.trace = GirTraceKind::Destination;
+    GirInst begin;
+    begin.op = GirOp::Event;
+    begin.vals = { 2 };
+    GirInst output;
+    output.op = GirOp::OutBytes;
+    output.a = 1;
+    output.b = 3;
+    output.org = 0;
+    GirInst publish = begin;
+    publish.event = GirEventKind::Publish;
+    Main(m).blocks[0].insts = { bytes, destination, begin, Int(m, 3, "4"), output, publish, Ret() };
+    return m;
+}
+
+void ConstructionLowOperationsRetainExactByteAndEventWire() {
+    auto m = LowConstructionObservationModule();
+    assert(Code(m) == "");
+    auto wire = GirWriter(m).WriteLow();
+    assert(wire.find("[\"l_static\",1,[65,0,255,66]]") != string::npos);
+    assert(wire.find("[\"l_trace_id\",2,\"destination\"]") != string::npos);
+    assert(wire.find("[\"l_event\",\"begin\",[2],\"\"]") != string::npos);
+    assert(wire.find("[\"l_out_bytes\",1,3,[0]]") != string::npos);
+
+    Main(m).blocks[0].insts[2].reason = GirEventReason::Repeat;
+    assert(Code(m) == "GIR-V010");
+    m = LowConstructionObservationModule();
+    Main(m).blocks[0].insts[2].event = GirEventKind::Write;
+    assert(Code(m) == "GIR-V010");
+    m = LowConstructionObservationModule();
+    Main(m).blocks[0].insts[1].trace = (GirTraceKind)2;
+    assert(Code(m) == "GIR-V010");
+    m = LowConstructionObservationModule();
+    Main(m).blocks[0].insts[3].text = "5";
+    assert(Code(m) == "GIR-V090");
+    m = LowConstructionObservationModule();
+    Main(m).blocks[0].insts[3].text = "-1";
+    assert(Code(m) == "GIR-V090");
+}
+
+void ConstructionLowFormattingChecksScalarKind() {
+    auto m = LowConstructionObservationModule();
+    GirMember bytes;
+    bytes.kind = GirMember::Bytes;
+    bytes.size = 32;
+    Main(m).members = { bytes };
+    auto pointer = Def(GirOp::FrameAddr, 1);
+    pointer.idx = 0;
+    auto format = Def(GirOp::Format, 3);
+    format.a = 2;
+    format.b = 1;
+    Main(m).blocks[0].insts = { pointer, Int(m, 2, "-17"), format, Ret() };
+    assert(Code(m) == "");
+    Main(m).blocks[0].insts[2].format = GirFormatKind::Uint;
+    assert(Code(m) == "GIR-V010");
+    Main(m).blocks[0].insts[2].format = GirFormatKind::Bool;
+    assert(Code(m) == "GIR-V010");
+    Main(m).blocks[0].insts[2].format = GirFormatKind::Int;
+    Main(m).members[0].size = 31;
+    assert(Code(m) == "GIR-V090");
+}
+
+void ConstructionCarrierOwnershipCrossesBranchParameters() {
+    auto m = ByteConstructionModule();
+    assert(Code(m) == "");
+    auto destination = Main(m).blocks[0].insts[2];
+    auto type = m.CarrierType(CoreType::Dest, destination.ty, CoreRequest::Value);
+    auto built = m.CarrierType(CoreType::Built, destination.ty, CoreRequest::Value);
+    auto &entry = Main(m).blocks[0];
+    entry.insts = { Enter(0), Int(m, 0, "3"), destination, Br(1, { 1 }) };
+    GirInst write;
+    write.op = GirOp::DestBytes;
+    write.a = 2;
+    write.bytes = { 65, 0, 66 };
+    auto finish = Def(GirOp::DestFinish, 3);
+    finish.a = 2;
+    GirBlock body;
+    body.params = { { 2, type } };
+    body.insts = { write, finish, Br(2, { 3 }) };
+    GirInst publish;
+    publish.op = GirOp::DestPublish;
+    publish.a = 4;
+    GirBlock exit;
+    exit.params = { { 4, built } };
+    exit.insts = { publish, Leave(0), Ret() };
+    Main(m).blocks.push_back(body);
+    Main(m).blocks.push_back(exit);
+    assert(Code(m) == "");
+
+    Main(m).blocks[2].insts.insert(Main(m).blocks[2].insts.begin() + 1, publish);
+    assert(Code(m) == "GIR-V060");
+}
+
+void ConstructionAbandonmentProducesOneCancellationCertificate() {
+    auto m = ByteConstructionModule();
+    auto &insts = Main(m).blocks[0].insts;
+    auto abandon = Def(GirOp::DestAbandon, 3);
+    abandon.a = 1;
+    abandon.org = 0;
+    GirInst cancel;
+    cancel.op = GirOp::DestCancel;
+    cancel.a = 3;
+    cancel.org = 0;
+    insts[5] = abandon;
+    insts[6] = cancel;
+    assert(Code(m) == "");
+    auto wire = GirWriter(m).Write();
+    assert(wire.find("[\"cancelled\",") != string::npos);
+    assert(wire.find("[\"i_dest_abandon\",3,1,[0]]") != string::npos);
+    insts.erase(insts.begin() + 6);
+    assert(Code(m) == "GIR-V060");
+}
+
+GirModule ConstructionCallModule() {
+    auto m = GrowArrayConstructionModule();
+    auto type = Main(m).slots[0].ty;
+    auto destinationType = m.CarrierType(CoreType::Dest, type, CoreRequest::Value);
+    GirFunc make;
+    make.name = "make";
+    make.results = { type };
+    make.resultProtocols = { { CoreRequest::Value, nullopt } };
+    make.scopes = { -1 };
+    make.summary.constructs = { 0 };
+    auto write = GirInst {};
+    write.op = GirOp::DestWrite;
+    write.a = 0;
+    write.b = 1;
+    auto finish = Def(GirOp::DestFinish, 2);
+    finish.a = 0;
+    make.blocks = { GirBlock { { { 0, destinationType } },
+                              { Enter(0), Int(m, 1, "7"), write, finish, Leave(0), Ret({ 2 }) } } };
+    m.funcs.push_back(make);
+    auto open = Main(m).blocks[0].insts[5];
+    open.res = 1;
+    auto call = Def(GirOp::CallConstruct, 2);
+    call.idx = 1;
+    call.vals2 = { 1 };
+    call.org = 0;
+    auto publish = GirInst {};
+    publish.op = GirOp::DestPublish;
+    publish.a = 2;
+    Main(m).blocks[0].insts = { Enter(0), Int(m, 0, "1"), open, call, publish, Leave(0), Ret() };
+    return m;
+}
+
+void ConstructionCallsReturnTheTransferredChannel() {
+    auto m = ConstructionCallModule();
+    assert(Code(m) == "");
+    auto wire = GirWriter(m).Write();
+    assert(wire.find("[\"i_call_construct\",2,1,[],[1],[0]]") != string::npos);
+    assert(wire.find("\"value\",[]]") != string::npos);
+    Main(m).blocks[0].insts.insert(Main(m).blocks[0].insts.begin() + 4, Main(m).blocks[0].insts[4]);
+    assert(Code(m) == "GIR-V060");
+    m = ConstructionCallModule();
+    m.funcs[1].summary.constructs.clear();
+    assert(Code(m) == "GIR-V050");
+    m = ConstructionCallModule();
+    m.funcs[1].resultProtocols[0].request = CoreRequest::ElementRun;
+    assert(Code(m) == "GIR-V010");
+}
+
+GirModule ConstructionFixedTargetModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Construction;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto call = Def(GirOp::Call, 0);
+    call.idx = 1;
+    call.org = 0;
+    Main(m).blocks[0].insts = { call, Ret() };
+    GirFunc target;
+    target.name = "target";
+    target.results = { i64 };
+    target.resultProtocols = { {} };
+    target.scopes = { -1 };
+    GirInst invoke;
+    invoke.op = GirOp::Invoke;
+    invoke.idx = 2;
+    invoke.a = 1;
+    invoke.escapes = { { 0, 2, {} } };
+    invoke.org = 0;
+    target.blocks = { GirBlock { {}, { invoke } }, GirBlock { {}, { Int(m, 0, "0"), Ret({ 0 }) } },
+                      GirBlock { { { 1, i64 } }, { Ret({ 1 }) } } };
+    GirFunc helper;
+    helper.name = "helper";
+    helper.scopes = { -1 };
+    helper.summary.needs = { 0 };
+    helper.summary.escapes = { 0 };
+    GirInst escape;
+    escape.op = GirOp::Escape;
+    escape.idx = 0;
+    escape.vals = { 0 };
+    escape.org = 0;
+    helper.blocks = { GirBlock { {}, { Int(m, 0, "7"), escape } } };
+    m.funcs.push_back(target);
+    m.funcs.push_back(helper);
+    m.targets = { CoreTargetSet { { 1 } } };
+    return m;
+}
+
+void ConstructionTargetEdgesAreTypedAndDerivedFromBodies() {
+    auto m = ConstructionFixedTargetModule();
+    assert(Code(m) == "");
+    auto wire = GirWriter(m).Write();
+    assert(wire.find("[\"t_invoke\",2,[],[],1,[],[[\"escape_edge\",0,2,[]]],[0]]") != string::npos);
+    m.funcs[2].summary.escapes.clear();
+    assert(Code(m) == "GIR-V050");
+    m = ConstructionFixedTargetModule();
+    m.funcs[1].blocks[0].insts[0].escapes.clear();
+    assert(Code(m) == "GIR-V020");
+    m = ConstructionFixedTargetModule();
+    m.funcs[1].blocks[2].params[0].second = m.BoolType();
+    assert(Code(m) == "GIR-V010");
+    m = ConstructionFixedTargetModule();
+    m.targets[0].members = { 0 };
+    assert(Code(m) == "GIR-V010");
+}
+
+GirModule ConstructionVariableTargetModule() {
+    auto m = ConstructionCallModule();
+    auto type = m.funcs[1].results[0];
+    auto dest = m.CarrierType(CoreType::Dest, type, CoreRequest::Value);
+    auto built = m.CarrierType(CoreType::Built, type, CoreRequest::Value);
+    auto cancelled = m.CarrierType(CoreType::Cancelled, type, CoreRequest::Value);
+    GirInst invoke;
+    invoke.op = GirOp::Invoke;
+    invoke.idx = 2;
+    invoke.vals2 = { 0 };
+    invoke.a = 1;
+    invoke.escapes = { { 0, 2, {} } };
+    invoke.org = 0;
+    GirInst cancel;
+    cancel.op = GirOp::DestCancel;
+    cancel.a = 3;
+    cancel.org = 0;
+    auto land = Def(GirOp::DestRelocate, 4);
+    land.a = 2;
+    land.reason = GirEventReason::ExitValue;
+    land.org = 0;
+    m.funcs[1].blocks = { GirBlock { { { 0, dest } }, { invoke } },
+                          GirBlock { { { 1, built } }, { Ret({ 1 }) } },
+                          GirBlock { { { 2, built }, { 3, cancelled } }, { cancel, land, Ret({ 4 }) } } };
+    GirFunc helper;
+    helper.name = "helper";
+    helper.results = { type };
+    helper.resultProtocols = { { CoreRequest::Value, nullopt } };
+    helper.scopes = { -1 };
+    helper.summary.needs = { 0 };
+    helper.summary.escapes = { 0 };
+    auto target = Def(GirOp::TargetDest, 1);
+    target.idx = 0;
+    target.idx2 = 0;
+    target.ty = type;
+    target.request = CoreRequest::Value;
+    target.org = 0;
+    GirInst write;
+    write.op = GirOp::DestWrite;
+    write.a = 1;
+    write.b = 2;
+    auto finish = Def(GirOp::DestFinish, 3);
+    finish.a = 1;
+    auto abandon = Def(GirOp::DestAbandon, 4);
+    abandon.a = 0;
+    abandon.org = 0;
+    GirInst escape;
+    escape.op = GirOp::Escape;
+    escape.idx = 0;
+    escape.vals = { 3 };
+    escape.vals2 = { 4 };
+    escape.org = 0;
+    helper.blocks = { GirBlock { { { 0, dest } }, { target, Int(m, 2, "7"), write, finish, abandon, escape } } };
+    m.funcs.push_back(helper);
+    m.targets = { CoreTargetSet { { 1 } } };
+    return m;
+}
+
+void ConstructionVariableExitRequiresCancellationBeforeLanding() {
+    auto m = ConstructionVariableTargetModule();
+    assert(Code(m) == "");
+    auto &catchBody = m.funcs[1].blocks[2].insts;
+    swap(catchBody[0], catchBody[1]);
+    assert(Code(m) == "GIR-V060");
+    m = ConstructionVariableTargetModule();
+    m.funcs[2].blocks[0].insts.back().vals2.clear();
+    assert(Code(m) == "GIR-V010");
+    m = ConstructionVariableTargetModule();
+    m.funcs[1].blocks[2].insts[1].reason = GirEventReason::HeaderRemoval;
+    assert(Code(m) == "GIR-V010");
+}
+
+GirModule ConstructionFixedMultiResultModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Construction;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto boolean = m.BoolType();
+    GirFunc pair;
+    pair.name = "pair";
+    pair.params = { i64 };
+    pair.results = { i64, boolean };
+    pair.resultProtocols = { {}, {} };
+    pair.scopes = { -1 };
+    auto yes = Def(GirOp::Bool, 1);
+    yes.flag = true;
+    pair.blocks = { GirBlock { { { 0, i64 } }, { yes, Ret({ 0, 1 }) } } };
+    m.funcs.push_back(pair);
+    auto call = Def(GirOp::Call, 1);
+    call.idx = 1;
+    call.vals = { 0 };
+    call.org = 0;
+    auto first = Def(GirOp::Result, 2);
+    first.a = 1;
+    first.idx = 0;
+    auto second = Def(GirOp::Result, 3);
+    second.a = 1;
+    second.idx = 1;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, "", 2 }, { true, " ", 0 }, { false, "", 3 } };
+    print.org = 0;
+    Main(m).summary.outputs = true;
+    Main(m).blocks[0].insts = { Int(m, 0, "7"), call, first, second, print, Ret() };
+    return m;
+}
+
+void ConstructionFixedResultsUseExplicitOutputChannels() {
+    auto m = ConstructionFixedMultiResultModule();
+    assert(Code(m) == "");
+    auto low = GirToLow(m).Lower();
+    assert(Code(low) == "");
+    assert(low.funcs[1].params.size() == 4);
+    for (auto &function : low.funcs) {
+        assert(function.results.empty());
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::Ret) assert(inst.vals.empty());
+    }
+}
+
 }  // namespace
 
 int main() {
+    ConstructionFixedResultsUseExplicitOutputChannels();
+    ConstructionVariableExitRequiresCancellationBeforeLanding();
+    ConstructionTargetEdgesAreTypedAndDerivedFromBodies();
+    ConstructionCallsReturnTheTransferredChannel();
+    ConstructionCarrierOwnershipCrossesBranchParameters();
+    ConstructionAbandonmentProducesOneCancellationCertificate();
+    ConstructionLowOperationsRetainExactByteAndEventWire();
+    ConstructionLowFormattingChecksScalarKind();
     Accepts();
     EvidenceProvesFixedIndexAndRejectsForgedProofs();
     RejectsUseNotDominatedByDefinition();
