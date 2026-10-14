@@ -7,6 +7,60 @@ namespace Goose.Evidence
 
 open Goose.Core Goose.GIR Goose.Proofs.Memory
 
+abbrev ActivationTypes := ActId → Option Func
+
+def runtimeDeclarations (cfg : GCfg) (activations : ActivationTypes) : RootDeclarations
+  | .global id => cfg.mod.globals[id]?.map (·.ty)
+  | .local act _ slot => (activations act).bind (fun fn => fn.slots[slot]?.map (·.ty))
+
+def ActivationTypes.Before (activations : ActivationTypes) (next : ActId) : Prop :=
+  ∀ act, next ≤ act → activations act = none
+
+def ActivationTypes.enter (activations : ActivationTypes) (act : ActId) (fn : Func) : ActivationTypes :=
+  fun other => if other = act then some fn else activations other
+
+def RuntimeStateTy (cfg : GCfg) (activations : ActivationTypes) (state : St) : Prop :=
+  activations.Before state.nextAct ∧ WeakStoreTy (runtimeDeclarations cfg activations) state.store
+
+theorem runtimeDeclarations_enter_extends {cfg : GCfg} {activations : ActivationTypes}
+    {act : ActId} {fn : Func} (fresh : activations act = none) :
+    (runtimeDeclarations cfg activations).Extends
+      (runtimeDeclarations cfg (activations.enter act fn)) := by
+  intro root ty present
+  cases root with
+  | global id => exact present
+  | «local» owner scope slot =>
+    by_cases same : owner = act
+    · subst owner
+      simp [runtimeDeclarations, fresh] at present
+    · simpa [runtimeDeclarations, ActivationTypes.enter, same] using present
+
+theorem RuntimeStateTy.initial (cfg : GCfg) : RuntimeStateTy cfg (fun _ => none) St.initial := by
+  constructor
+  · intro act bound
+    rfl
+  · intro root value present
+    simp [St.initial, Store.empty] at present
+
+theorem RuntimeStateTy.freshAct {cfg : GCfg} {activations : ActivationTypes} {before after : St}
+    {act : ActId} (typed : RuntimeStateTy cfg activations before) (fn : Func)
+    (allocated : Goose.Core.freshAct before = .ok act after) :
+    RuntimeStateTy cfg (activations.enter act fn) after ∧
+      (activations.enter act fn) act = some fn ∧
+      (runtimeDeclarations cfg activations).Extends
+        (runtimeDeclarations cfg (activations.enter act fn)) := by
+  simp only [Goose.Core.freshAct, Res.ok.injEq] at allocated
+  obtain ⟨rfl, rfl⟩ := allocated
+  have fresh := typed.1 before.nextAct (Nat.le_refl _)
+  have extension := runtimeDeclarations_enter_extends (cfg := cfg) (fn := fn) fresh
+  refine ⟨⟨?_, typed.2.mono extension⟩, ?_, extension⟩
+  · intro other bound
+    change before.nextAct + 1 ≤ other at bound
+    have different : other ≠ before.nextAct := Nat.ne_of_gt (Nat.lt_of_succ_le bound)
+    simp only [ActivationTypes.enter, different, ↓reduceIte]
+    exact typed.1 other (Nat.le_trans (Nat.le_succ _) bound)
+  · simp [ActivationTypes.enter]
+
 def WeakViewTy (roots : RootDeclarations) (view : ViewVal) (element : Ty) : Prop :=
   (∃ count, DeclaredLocation roots view.loc (.arr element count)) ∨
   DeclaredLocation roots view.loc (.grow element) ∨
@@ -109,6 +163,34 @@ theorem WeakFrameTy.mono {before after : RootDeclarations} {types : Array (Optio
     WeakFrameTy after types fr := by
   intro id cell ty metadata present
   exact (typed id cell ty metadata present).mono extension
+
+theorem execPure_slotAddr_typed {activations : ActivationTypes} {cx : FnCtx} {fr : Frame}
+    {id : SlotId} {slot : Slot} {before after : St} {cell : RVal}
+    (current : activations fr.act = some cx.fn) (lookup : cx.fn.slots[id]? = some slot)
+    (evaluated : execPure cx fr (.slotAddr id) before = .ok cell after)
+    (permission : Mutability) :
+    WeakCellTy (runtimeDeclarations cx.cfg activations) cell (.data (.ref permission slot.ty)) ∧
+      after = before := by
+  simp only [execPure, slotRoot, lookup] at evaluated
+  cases scope : fr.scopes.lookup slot.scope with
+  | none => simp [scope, bind_apply, fault, M.stop] at evaluated
+  | some scopeInstance =>
+    simp only [scope, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+    obtain ⟨rfl, rfl⟩ := evaluated
+    refine ⟨⟨_, rfl, slot.ty, ?_, .root slot.ty⟩, rfl⟩
+    simp [runtimeDeclarations, current, lookup]
+
+theorem execPure_globalAddr_typed {activations : ActivationTypes} {cx : FnCtx} {fr : Frame}
+    {id : GlobalId} {global : GIR.Global} {before after : St} {cell : RVal}
+    (lookup : cx.cfg.mod.globals[id]? = some global)
+    (evaluated : execPure cx fr (.globalAddr id) before = .ok cell after)
+    (permission : Mutability) :
+    WeakCellTy (runtimeDeclarations cx.cfg activations) cell (.data (.ref permission global.ty)) ∧
+      after = before := by
+  simp only [execPure, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  refine ⟨⟨_, rfl, global.ty, ?_, .root global.ty⟩, rfl⟩
+  simp [runtimeDeclarations, lookup]
 
 theorem execPure_load_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {id : ValueId} {permission : Mutability} {ty : Ty}
