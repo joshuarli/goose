@@ -222,11 +222,11 @@ def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit :
       match destination.use with
       | .child parentId =>
           let parent ← lookupDestination parentId
-          match parent.layout, parent.progress with
-          | .limited capacity slotBytes, .suspended parentCount _ =>
+          match parent.layout, parent.progress, parent.backing, destination.backing with
+          | .limited capacity slotBytes, .suspended parentCount _, .direct _, .direct _ =>
               if parentCount + count + 1 > capacity then ConstructionM.fail .capacity
               if bytes.size != slotBytes then ConstructionM.fail .protocol
-          | _, _ => pure ()
+          | _, _, _, _ => pure ()
       | _ => pure ()
       replaceStorage destination.storage { storage with
         bytes := overwriteBytes storage.bytes destination.writeEnd bytes }
@@ -506,21 +506,31 @@ def openExtension (parentId : DestinationId) (request : ConstructionRequest)
     | _ => ConstructionM.fail .protocol
   let _ ← lookupStorage parent.storage
   if let some additional := knownCount then
-    match parent.layout with
-    | .limited capacity _ =>
+    match parent.layout, parent.backing with
+    | .limited capacity _, .direct _ =>
         if count + additional > capacity then ConstructionM.fail .capacity
-    | .packed =>
+    | .packed, _ =>
         if count + additional ≥ 2 ^ 32 then ConstructionM.fail .capacity
-    | .fixed _ => ConstructionM.fail .protocol
-    | .elements => pure ()
+    | .fixed _, _ => ConstructionM.fail .protocol
+    | _, _ => pure ()
+  let backing ← match parent.layout, parent.backing, knownCount with
+    | .limited _ _, .direct _, none => do
+        pure (.staged parent.storage (← reserveStorage))
+    | _, _, _ => pure (.direct parent.storage)
+  let start := match backing with
+    | .staged _ _ => 0
+    | .direct _ => parent.writeEnd
   let state ← ConstructionM.get
   let id := state.destinations.size
-  let capability := { parent.capability with id := id, request := request, start := parent.writeEnd }
+  let capability := { parent.capability with id := id, request := request, start := start }
   let child : PendingDestination :=
-    ⟨capability, .direct parent.storage, .elements, .child parentId, .open 0, parent.writeEnd⟩
+    ⟨capability, backing, .elements, .child parentId, .open 0, start⟩
   ConstructionM.set { state with destinations := state.destinations.push child }
   replaceDestination parentId { parent with progress := .suspended count id }
   emit (.begin id)
+  match backing with
+  | .staged _ _ => emit (.stage id)
+  | .direct _ => pure ()
   pure id
 
 def attachExtension (parentId childId : DestinationId) : ConstructionM Unit := do
@@ -528,16 +538,28 @@ def attachExtension (parentId childId : DestinationId) : ConstructionM Unit := d
   let child ← writableDestination childId
   match parent.progress, child.progress, child.use with
   | .suspended count expected, .built childCount, .child owner =>
-      if expected != childId || owner != parentId || child.storage != parent.storage ||
+      if expected != childId || owner != parentId || child.backing.receiverStorage != parent.storage ||
           child.layout != .elements then ConstructionM.fail .ownership
-      match parent.layout with
-      | .limited capacity _ =>
+      match parent.layout, parent.backing with
+      | .limited capacity _, .direct _ =>
           if count + childCount > capacity then ConstructionM.fail .capacity
-      | .packed =>
+      | .packed, _ =>
           if count + childCount ≥ 2 ^ 32 then ConstructionM.fail .capacity
-      | .fixed _ => ConstructionM.fail .protocol
-      | .elements => pure ()
+      | .fixed _, _ => ConstructionM.fail .protocol
+      | _, _ => pure ()
       let storage ← lookupStorage parent.storage
+      let (storage, child) ← match child.backing with
+        | .direct _ => pure (storage, child)
+        | .staged _ stageId => do
+            let stage ← lookupStorage stageId
+            emit (.copy (.storage stageId []) childId)
+            replaceStorage stageId ⟨ByteArray.empty, 0⟩
+            pure ({ storage with bytes := overwriteBytes storage.bytes parent.writeEnd stage.bytes },
+              { child with
+                backing := .direct parent.storage
+                capability := { child.capability with start := parent.writeEnd }
+                writeEnd := parent.writeEnd + stage.bytes.size })
+      replaceStorage parent.storage storage
       if hasPrefix parent.layout parent.capability.request then
         replaceStorage parent.storage { storage with
           bytes := patchCount storage.bytes parent.capability.start (count + childCount) }

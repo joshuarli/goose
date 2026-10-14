@@ -279,4 +279,24 @@ private def retainedNamed : ConstructionM Unit := do
   [.begin 0, .write 0 0, .write 0 1, .write 0 2,
    .begin 1, .write 1 0, .publish 1, .publish 0])
 
+
+private def namedStageOverflow : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let parent ← openDestination storage capability (.limited 2 1) (some 1)
+  writeElement parent (bytes [10])
+  finishDestination parent
+  let child ← openExtension parent .elementRun none
+  writeElement child (bytes [20])
+  writeElement child (bytes [30])
+  appendStdout (bytes [255])
+  finishDestination child
+  attachExtension parent child
+
+#guard match namedStageOverflow ConstructionState.initial with
+  | .fault .capacity state =>
+      (state.storage[0]?.map (·.bytes.data.toList.map UInt8.toNat)) == some [10] &&
+      state.stdout.data.toList.map UInt8.toNat == [255] &&
+      state.events == [.begin 0,.write 0 0,.begin 1,.stage 1,.write 1 0,.write 1 1]
+  | _ => false
+
 end Goose.Construct.DestinationChecks
