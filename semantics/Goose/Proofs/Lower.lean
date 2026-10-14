@@ -321,12 +321,12 @@ theorem startLS_pp : startLS.pp = some (0, 0) := rfl
 
 theorem lowerGlobal_blocks (m : Core.Module) (g : Core.Global) :
     (lowerGlobal m g).init.blocks = finishBlocks (emitTerm
-      (.ret [(lowerExpr g.init (lowerEnv m #[]) startLS).1] (some g.org)) (lowerEnv m #[])
-      (lowerExpr g.init (lowerEnv m #[]) startLS).2).2.blocks := rfl
+      (.ret [(lowerExpr g.init (lowerEnv m #[] [g.ty]) startLS).1] (some g.org)) (lowerEnv m #[] [g.ty])
+      (lowerExpr g.init (lowerEnv m #[] [g.ty]) startLS).2).2.blocks := rfl
 
 theorem lowerGlobal_blocks_nonempty (m : Core.Module) (g : Core.Global) :
     0 < (lowerGlobal m g).init.blocks.size := by
-  let le := lowerEnv m #[]
+  let le := lowerEnv m #[] [g.ty]
   let run := lowerExpr g.init le startLS
   let v := run.1
   let ls1 := run.2
@@ -347,7 +347,7 @@ theorem global_agree (m : Core.Module) (gl : Core.Global) (hg : exprOk gl.init =
     (n : Nat) (s : St) :
     Agree (freshAct >>= fun act => evalExpr n ⟨p, m⟩ ⟨#[], act, [], 0⟩ gl.init)
       (fun k => enterFn k ⟨p, lower m⟩ 0 (lowerGlobal m gl).init []) s := by
-  let le := lowerEnv m #[]
+  let le := lowerEnv m #[] [gl.ty]
   have hlow : lowerExpr gl.init le startLS =
       ((lowerExpr gl.init le startLS).1, (lowerExpr gl.init le startLS).2) := rfl
   generalize hr : (lowerExpr gl.init le startLS).1 = r at hlow
@@ -407,18 +407,18 @@ def bodyTail (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS) : LS :=
 
 theorem lowerImplAt_blocks (m : Core.Module) (implId : ImplId) (impl : Impl)
     (hp : impl.params = #[]) :
-    (lowerImplAt m implId impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars)
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).1
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).2).blocks := by
+    (lowerImplAt m implId impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).1
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).2).blocks := by
   rcases impl with ⟨name, params, results, vars, body, summary⟩
   simp only at hp
   subst hp
   rfl
 
 theorem lowerImpl_blocks (m : Core.Module) (impl : Impl) (hp : impl.params = #[]) :
-    (lowerImpl m impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars)
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).1
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).2).blocks := by
+    (lowerImpl m impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).1
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).2).blocks := by
   unfold lowerImpl
   exact lowerImplAt_blocks m _ impl hp
 
@@ -461,7 +461,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     have hmaxd : ¬ ((0 : Nat) ≥ maxCallDepth) := by simp [maxCallDepth]
     rw [hent]
     rw [enterCall_nil ⟨p, m⟩ n' m.entry ctx impl hctx himpl hp]
-    let le := lowerEnv m impl.vars
+    let le := lowerEnv m impl.vars impl.results.toList
     have hlow : lowerBlock none [] false impl.body le startLS =
         ((lowerBlock none [] false impl.body le startLS).1,
           (lowerBlock none [] false impl.body le startLS).2) := rfl

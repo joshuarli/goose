@@ -8,7 +8,7 @@ open Goose.Core Goose.GIR Goose.Lower.UnwindChecks Goose.Lower.LoopExitChecks
 def breakingList : List Stmt := [.expr (.lit .i64 99) 0, .brk 0]
 
 def listBuilder (m : Core.Module) : LS :=
-  (lowerStmts (some jumpLoop) breakingList (lowerEnv m variables) jumpBuilder).2
+  (lowerStmts (some jumpLoop) breakingList (lowerEnv m variables []) jumpBuilder).2
 
 def listFunction (m : Core.Module) : Func :=
   { scopeFunction with blocks := finishBlocks (listBuilder m).blocks }
@@ -41,7 +41,7 @@ theorem concrete_breaking_list (cfg : Cfg) (fuel : Nat) :
       (execStmts fuel cfg beforeEnv breakingList >>= prepareLoopFlow beforeEnv (some jumpLoop))
       (StatementLoopPost cfg beforeEnv ⟨⟨cfg.profile, lower cfg.mod⟩, listFunction cfg.mod⟩
         jumpBuilder beforeFrame (listBuilder cfg.mod) (some jumpLoop)) := by
-  apply breaking_list_sim cfg fuel (lowerEnv cfg.mod variables) jumpBuilder (listBuilder cfg.mod)
+  apply breaking_list_sim cfg fuel (lowerEnv cfg.mod variables []) jumpBuilder (listBuilder cfg.mod)
     () (0, 0) beforeEnv ⟨⟨cfg.profile, lower cfg.mod⟩, listFunction cfg.mod⟩ beforeFrame
   · exact Prod.ext (Subsingleton.elim _ _) rfl
   · rfl
@@ -52,9 +52,9 @@ theorem concrete_breaking_list (cfg : Cfg) (fuel : Nat) :
   · change jumpLoop.depth ≤ beforeEnv.scopes.length
     decide
   · have htarget : ∃ block, (listFunction cfg.mod).blocks[1]? = some block ∧ block.params = [] := by
-      have hlow : lowerStmts (some jumpLoop) breakingList (lowerEnv cfg.mod variables)
+      have hlow : lowerStmts (some jumpLoop) breakingList (lowerEnv cfg.mod variables [])
           jumpBuilder = ((), listBuilder cfg.mod) := Prod.ext (Subsingleton.elim _ _) rfl
-      have hkeep := (advB_lowerStmts (some jumpLoop) breakingList (lowerEnv cfg.mod variables)
+      have hkeep := (advB_lowerStmts (some jumpLoop) breakingList (lowerEnv cfg.mod variables [])
         jumpBuilder () (listBuilder cfg.mod) hlow).keep 1 ⟨[], #[]⟩ (by decide) rfl
       refine ⟨⟨[], []⟩, ?_, rfl⟩
       change (finishBlocks (listBuilder cfg.mod).blocks)[1]? = _

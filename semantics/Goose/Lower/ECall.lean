@@ -10,7 +10,7 @@ theorem calleeBlockClaim_of_simulation {m : Core.Module} {i : ImplId} {impl : Im
     (hbody : ∀ pre, BlockESimulation n ⟨profile, m⟩ none (callPre impl) pre false impl.body) :
     CalleeBlockClaim n ⟨profile, m⟩ i impl := by
   intro act depth values hp
-  let le := lowerEnv m impl.vars
+  let le := lowerEnv m impl.vars impl.results.toList
   let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
   let cx : FnCtx := ⟨⟨profile, lower m⟩, lowerImplAt m i impl⟩
   let fr := callFrame impl act depth values
@@ -71,7 +71,7 @@ theorem calleeCallClaim_noResults_of_body {m : Core.Module} {c : ContextId} {ctx
       rw [hent]
       simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl, pure_bind,
         hp, ite_true]
-      let le := lowerEnv m impl.vars
+      let le := lowerEnv m impl.vars impl.results.toList
       let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
       let cx : FnCtx := ⟨⟨profile, lower m⟩, lowerImplAt m ctx.impl impl⟩
       let env : Env := ⟨impl.vars, state.nextAct, [], depth + 1⟩

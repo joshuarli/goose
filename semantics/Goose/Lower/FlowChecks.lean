@@ -8,7 +8,7 @@ open Goose.Core Goose.GIR Goose.Lower.UnwindChecks Goose.Lower.ReturnChecks
 def returningBlock : Core.Block := .mk 2 [returningStmt] none
 
 def blockBuilder (m : Core.Module) : LS :=
-  (lowerBlock none [] false returningBlock (lowerEnv m variables) scopedBuilder).2
+  (lowerBlock none [] false returningBlock (lowerEnv m variables []) scopedBuilder).2
 
 def blockFunction (m : Core.Module) : Func :=
   { scopeFunction with blocks := finishBlocks (blockBuilder m).blocks }
@@ -19,7 +19,7 @@ theorem concrete_returning_block (cfg : Cfg) (fuel : Nat) :
       (BlockFlowPost cfg beforeEnv ⟨⟨cfg.profile, lower cfg.mod⟩, blockFunction cfg.mod⟩
         scopedBuilder beforeFrame (blockBuilder cfg.mod) returningBlock false 0) := by
   apply blockReturnClaim fuel none [] [] false returningBlock rfl cfg beforeEnv
-    (by simp) (lowerEnv cfg.mod variables) scopedBuilder (blockBuilder cfg.mod) 0
+    (by simp) (lowerEnv cfg.mod variables []) scopedBuilder (blockBuilder cfg.mod) 0
     (0, 0) ⟨⟨cfg.profile, lower cfg.mod⟩, blockFunction cfg.mod⟩ beforeFrame
   · rfl
   · rfl

@@ -15,7 +15,7 @@ def beforeFrame : GIR.Frame := ⟨0, [(1, 11), (0, 10)], {}, 0⟩
 def beforeEnv : Env := ⟨variables, 0, [(1, 11), (0, 10)], 0⟩
 
 def finishedBuilder (m : Core.Module) : LS :=
-  (leaveTo 0 (lowerEnv m variables) scopedBuilder).2
+  (leaveTo 0 (lowerEnv m variables []) scopedBuilder).2
 
 def scopeFunction : Func :=
   { name := "unwind", params := [], results := [],
@@ -31,7 +31,7 @@ theorem concrete_full_unwind (cfg : Cfg) :
       (fun _ pt' fr' => UnwindPost scopedBuilder beforeFrame (finishedBuilder cfg.mod)
         fr' [] pt') := by
   apply leaveTo_sim cfg beforeEnv ⟨⟨cfg.profile, lower cfg.mod⟩, unwindFunction cfg.mod⟩
-    (lowerEnv cfg.mod variables) 0 scopedBuilder (finishedBuilder cfg.mod) () (0, 0) beforeFrame
+    (lowerEnv cfg.mod variables []) 0 scopedBuilder (finishedBuilder cfg.mod) () (0, 0) beforeFrame
   · exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
   · apply Prod.ext
     · exact Subsingleton.elim _ _

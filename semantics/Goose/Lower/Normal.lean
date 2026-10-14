@@ -31,7 +31,7 @@ theorem execBlock_fragment_normal (n : Nat) (cfg : Cfg) (env : Env) (b : Core.Bl
     (hb : blockOk b = true) (s s' : St) (flow : Flow)
     (h : execBlock n cfg env [] b s = .ok flow s') :
     ∃ v, flow = .normal v := by
-  let le := lowerEnv cfg.mod env.vars
+  let le := lowerEnv cfg.mod env.vars []
   let result := lowerBlock none [] false b le (initialBuilder env)
   have hlow : lowerBlock none [] false b le (initialBuilder env) = (result.1, result.2) := rfl
   have hsim := (claims n).block none false b hb le (initialBuilder env) result.1 result.2
@@ -43,7 +43,7 @@ theorem execBlock_fragment_normal (n : Nat) (cfg : Cfg) (env : Env) (b : Core.Bl
 theorem execStmt_fragment_normal (n : Nat) (cfg : Cfg) (env : Env) (stmt : Stmt)
     (hs : stmtOk stmt = true) (s s' : St) (flow : Flow)
     (h : execStmt n cfg env stmt s = .ok flow s') : flow = .normal .unit := by
-  let le := lowerEnv cfg.mod env.vars
+  let le := lowerEnv cfg.mod env.vars []
   let result := lowerStmt none stmt le (initialBuilder env)
   have hlow : lowerStmt none stmt le (initialBuilder env) = (result.1, result.2) := rfl
   have hsim := (claims n).stmt none stmt hs le (initialBuilder env) result.1 result.2
@@ -60,7 +60,7 @@ theorem execBlock_flow_shape (n : Nat) (cfg : Cfg) (env : Env) (block : Core.Blo
   | normal value => exact ⟨value, Or.inl rfl⟩
   | ret value => exact ⟨value, Or.inr rfl⟩
   | brk | cont =>
-    let le := lowerEnv cfg.mod env.vars
+    let le := lowerEnv cfg.mod env.vars []
     let result := lowerBlock none [] false block le (initialBuilder env)
     have hlow : lowerBlock none [] false block le (initialBuilder env) =
         (result.1, result.2) := (Prod.eta result).symm

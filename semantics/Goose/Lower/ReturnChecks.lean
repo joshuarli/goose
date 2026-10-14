@@ -8,7 +8,7 @@ open Goose.Core Goose.GIR Goose.Lower.UnwindChecks
 def returningStmt : Stmt := .ret (some (.read (.var 0))) 0
 
 def returningBuilder (m : Core.Module) : LS :=
-  (lowerStmt none returningStmt (lowerEnv m variables) scopedBuilder).2
+  (lowerStmt none returningStmt (lowerEnv m variables []) scopedBuilder).2
 
 def returningFunction (m : Core.Module) : Func :=
   { scopeFunction with blocks := finishBlocks (returningBuilder m).blocks }
@@ -19,7 +19,7 @@ theorem concrete_return_site (cfg : Cfg) (fuel : Nat) :
       (fun flow pt' fr' => ∃ value, flow = .ret value ∧
         ReturnSite ⟨⟨cfg.profile, lower cfg.mod⟩, returningFunction cfg.mod⟩ pt' fr' value 0) := by
   apply stmt_ret_prepared_sim fuel none (some (.read (.var 0))) 0 rfl
-    (lowerEnv cfg.mod variables) scopedBuilder (returningBuilder cfg.mod) () (0, 0)
+    (lowerEnv cfg.mod variables []) scopedBuilder (returningBuilder cfg.mod) () (0, 0)
     cfg beforeEnv ⟨⟨cfg.profile, lower cfg.mod⟩, returningFunction cfg.mod⟩ beforeFrame
   · apply Prod.ext
     · exact Subsingleton.elim _ _
