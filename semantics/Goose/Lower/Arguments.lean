@@ -1,4 +1,5 @@
 import Goose.Lower.Claims
+import Goose.Lower.Eventual
 
 namespace Goose.Lower
 
@@ -91,5 +92,106 @@ theorem argsClaim {n : Nat} : ∀ (args : List Arg),
     refine SimG.bind (argsClaim args (fun b hb => ha b (by simp [hb])) le ls1 rest ls2
       pt1 cfg env cx fr1 h2 P1.pp hext P1.rel) fun vas pt2 fr2 ⟨hlen, P2⟩ => ?_
     exact SimG.ret ⟨by simp [hlen], by simpa [cellsOf] using P1.comp P2⟩
+
+def ExprEClaim (n : Nat) (cfg : Cfg) (e : Expr) : Prop :=
+  ∀ (le : LEnv) (ls : LS) (r : ValueId) (ls' : LS) (pt : Pt)
+    (env : Env) (cx : FnCtx) (fr : Frame), lowerExpr e le ls = (r, ls') →
+    ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
+    le.mod = cfg.mod → cx.cfg.mod = lower cfg.mod →
+    SimE cx pt fr (evalExpr n cfg env e) (fun v pt' fr' =>
+      Post cfg env cx ls fr ls' fr' pt' [(r, .val v)])
+
+def PlaceEClaim (n : Nat) (cfg : Cfg) (p : Place) : Prop :=
+  ∀ (le : LEnv) (ls : LS) (r : ValueId) (ls' : LS) (pt : Pt)
+    (env : Env) (cx : FnCtx) (fr : Frame), lowerPlace p le ls = (r, ls') →
+    ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
+    le.mod = cfg.mod → cx.cfg.mod = lower cfg.mod →
+    SimE cx pt fr (evalPlace n cfg env p) (fun l pt' fr' =>
+      Post cfg env cx ls fr ls' fr' pt' [(r, .val (.ref l))])
+
+def ArgEClaim (n : Nat) (cfg : Cfg) (a : Arg) : Prop :=
+  ∀ (le : LEnv) (ls : LS) (r : ValueId) (ls' : LS) (pt : Pt)
+    (env : Env) (cx : FnCtx) (fr : Frame), lowerArg a le ls = (r, ls') →
+    ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
+    le.mod = cfg.mod → cx.cfg.mod = lower cfg.mod →
+    SimE cx pt fr (evalArg n cfg env a) (fun v pt' fr' =>
+      Post cfg env cx ls fr ls' fr' pt' [(r, .val v)])
+
+def ArgsEClaim (n : Nat) (cfg : Cfg) (args : List Arg) : Prop :=
+  ∀ (le : LEnv) (ls : LS) (rs : List ValueId) (ls' : LS) (pt : Pt)
+    (env : Env) (cx : FnCtx) (fr : Frame), lowerArgs args le ls = (rs, ls') →
+    ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
+    le.mod = cfg.mod → cx.cfg.mod = lower cfg.mod →
+    SimE cx pt fr (mapList (evalArg n cfg env) args) (fun vs pt' fr' =>
+      rs.length = vs.length ∧ Post cfg env cx ls fr ls' fr' pt' (cellsOf rs vs))
+
+theorem exprEClaim_zero (cfg : Cfg) (e : Expr) : ExprEClaim 0 cfg e := by
+  intro le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
+  simp only [evalExpr]
+  exact SimE.of_timeout
+
+theorem ExprLowerClaim.toEventual {n : Nat} {cfg : Cfg} {e : Expr} (h : ExprLowerClaim n e) :
+    ExprEClaim n cfg e := by
+  intro le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
+  exact SimE.of_simG (h le ls r ls' pt cfg env cx fr hlow hpp hext hrel)
+
+theorem PlaceLowerClaim.toEventual {n : Nat} {cfg : Cfg} {p : Place} (h : PlaceLowerClaim n p) :
+    PlaceEClaim n cfg p := by
+  intro le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
+  exact SimE.of_simG (h le ls r ls' pt cfg env cx fr hlow hpp hext hrel)
+
+theorem argEClaim_zero (cfg : Cfg) (a : Arg) : ArgEClaim 0 cfg a := by
+  intro le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
+  exact SimE.of_simG (argClaim_zero a le ls r ls' pt cfg env cx fr hlow hpp hext hrel)
+
+theorem argEClaim_byVal {n : Nat} {cfg : Cfg} {e : Expr} (he : ExprEClaim n cfg e) :
+    ArgEClaim (n + 1) cfg (.byVal e) := by
+  intro le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
+  simp only [lowerArg] at hlow
+  simp only [evalArg]
+  exact he le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
+
+theorem argEClaim_byRef {n : Nat} {cfg : Cfg} {p : Place} (hp : PlaceEClaim n cfg p)
+    (m : Mutability) : ArgEClaim (n + 1) cfg (.byRef m p) := by
+  intro le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
+  simp only [lowerArg, bind_eq] at hlow
+  obtain ⟨rp, ls1, h1, h2⟩ := hlow
+  rcases freezeTo_cases h2 with ⟨hr, hls⟩ | hf
+  · subst hr; subst hls
+    simp only [evalArg]
+    refine SimE.bind (hp le ls r ls' pt env cx fr h1 hpp hext hrel hmod hgir)
+      fun l pt1 fr1 P1 => ?_
+    exact SimE.ret P1
+  · have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
+    simp only [evalArg]
+    refine SimE.bind (hp le ls rp ls1 pt env cx fr h1 hpp hext1 hrel hmod hgir)
+      fun l pt1 fr1 P1 => ?_
+    have hc : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
+    apply SimE.of_simG
+    refine leaf_def P1 hf hext (by simp) RVal.val ?_
+    simp only [execPure, getVal_of hc, Goose.Core.expectRef, pure_bind]
+
+theorem argsEClaim {n : Nat} {cfg : Cfg} : ∀ (args : List Arg),
+    (∀ a ∈ args, ArgEClaim n cfg a) → ArgsEClaim n cfg args
+  | [], _ => by
+    intro le ls rs ls' pt env cx fr hlow hpp hext hrel hmod hgir
+    simp only [lowerArgs, pure_run] at hlow
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
+    simp only [mapList]
+    exact SimE.ret ⟨rfl, by simpa [cellsOf] using Post.init hrel hpp⟩
+  | a :: args, ha => by
+    intro le ls rs ls' pt env cx fr hlow hpp hext hrel hmod hgir
+    simp only [lowerArgs, bind_eq] at hlow
+    obtain ⟨r, ls1, h1, rest, ls2, h2, h3⟩ := hlow
+    rw [pure_run] at h3
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj h3
+    have hext1 : ExtT ls1 cx.fn.blocks :=
+      hext.of_adv (advB_lowerArgs args _ _ _ _ h2)
+    simp only [mapList]
+    refine SimE.bind (ha a (by simp) le ls r ls1 pt env cx fr h1 hpp hext1 hrel hmod hgir)
+      fun va pt1 fr1 P1 => ?_
+    refine SimE.bind (argsEClaim args (fun b hb => ha b (by simp [hb])) le ls1 rest ls2
+      pt1 env cx fr1 h2 P1.pp hext P1.rel hmod hgir) fun vas pt2 fr2 ⟨hlen, P2⟩ => ?_
+    exact SimE.ret ⟨by simp [hlen], by simpa [cellsOf] using P1.comp P2⟩
 
 end Goose.Lower
