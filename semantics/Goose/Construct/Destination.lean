@@ -973,7 +973,7 @@ def finishConstructionAdaptation (id : DestinationId) : ConstructionM Unit := do
             if !available receiving.layout storage count then ConstructionM.fail .capacity
         | .staged _ _ => pure ()
         pure (some count)
-    | .cancelled => pure none
+    | .abandoned | .cancelled => pure none
     | _ => ConstructionM.fail .protocol
   match count with
   | some count =>
@@ -997,7 +997,38 @@ def finishConstructionAdaptation (id : DestinationId) : ConstructionM Unit := do
 
 
 
-private def KeepsOutput (action : ConstructionM α) : Prop :=
+def normalizeProducerDestination (id : DestinationId) (producerType : Ty) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  let some receiving := destination.adaptation | ConstructionM.fail .protocol
+  let count ← match destination.progress with
+    | .built count => pure count
+    | _ => ConstructionM.fail .protocol
+  if !producerType.storageType || producerType.element?.isNone ||
+      !producerType.adaptsTo destination.capability.logicalType then ConstructionM.fail .protocol
+  let producerPrefix : Bool := match producerType with
+    | .varr _ => destination.capability.request == .value
+    | _ => false
+  let producerStart := receiving.start +
+    if hasPrefix receiving.layout receiving.request && !producerPrefix then 4 else 0
+  if destination.capability.start != producerStart then ConstructionM.fail .protocol
+  if producerPrefix then
+    if !hasPrefix destination.layout destination.capability.request then ConstructionM.fail .protocol
+    let storage ← lookupStorage destination.storage
+    if producerStart + 4 > storage.bytes.size then ConstructionM.fail .storage
+    replaceStorage destination.storage { storage with bytes := patchCount storage.bytes producerStart count }
+  else if hasPrefix destination.layout destination.capability.request then
+    removeConstructionHeader id
+  let current ← lookupDestination id
+  let layout := if producerPrefix then ReceivingLayout.packed else match receiving.layout with
+    | .packed => .elements
+    | layout => layout
+  replaceDestination id { current with
+    capability := { current.capability with logicalType := producerType, start := producerStart }
+    layout := layout }
+
+
+
+private abbrev KeepsOutput (action : ConstructionM α) : Prop :=
   ∀ state, (action state).finalState.stdout = state.stdout
 
 private theorem keepsOutput_bind (action : ConstructionM α) (remaining : α → ConstructionM β)
@@ -1986,5 +2017,101 @@ theorem finishConstructionAdaptation_events_prefix (id : DestinationId) :
     | with_reducible apply eventPrefix_if
     | split
     | intro value
+
+theorem normalizeProducerDestination_events_prefix (id : DestinationId) (ty : Ty) :
+    PreservesEventPrefix (normalizeProducerDestination id ty) := by
+  unfold normalizeProducerDestination
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact removeConstructionHeader_events_prefix _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+private theorem keepsOutput_removeHeader (id : DestinationId) : KeepsOutput (removeConstructionHeader id) :=
+  removeConstructionHeader_stdout id
+
+private theorem keepsOutput_fault_bind (reason : ConstructionFault) (next : α → ConstructionM β) :
+    KeepsOutput (ConstructionM.fail reason >>= next) := fun _ => rfl
+
+theorem adaptConstructionDestination_stdout (id : DestinationId) (ty : Ty) (request : ConstructionRequest) :
+    ∀ state, (adaptConstructionDestination id ty request state).finalState.stdout = state.stdout := by
+  change KeepsOutput (adaptConstructionDestination id ty request)
+  unfold adaptConstructionDestination
+  repeat' first
+    | with_reducible exact keepsOutput_pure _
+    | with_reducible exact keepsOutput_fault_bind _ _
+    | with_reducible exact keepsOutput_fail _
+    | with_reducible exact keepsOutput_get
+    | with_reducible exact keepsOutput_writable_destination _
+    | with_reducible exact keepsOutput_lookup_destination _
+    | with_reducible exact keepsOutput_lookup_storage _
+    | with_reducible exact keepsOutput_replace_destination _ _
+    | with_reducible exact keepsOutput_replace_storage _ _
+    | with_reducible exact keepsOutput_emit _
+    | with_reducible exact keepsOutput_removeHeader _
+    | dsimp only
+    | with_reducible apply keepsOutput_bind
+    | with_reducible apply keepsOutput_if
+    | split
+    | intro value
+
+
+theorem finishConstructionAdaptation_stdout (id : DestinationId) :
+    ∀ state, (finishConstructionAdaptation id state).finalState.stdout = state.stdout := by
+  change KeepsOutput (finishConstructionAdaptation id)
+  unfold finishConstructionAdaptation
+  repeat' first
+    | with_reducible exact keepsOutput_pure _
+    | with_reducible exact keepsOutput_fault_bind _ _
+    | with_reducible exact keepsOutput_fail _
+    | with_reducible exact keepsOutput_get
+    | with_reducible exact keepsOutput_writable_destination _
+    | with_reducible exact keepsOutput_lookup_destination _
+    | with_reducible exact keepsOutput_lookup_storage _
+    | with_reducible exact keepsOutput_replace_destination _ _
+    | with_reducible exact keepsOutput_replace_storage _ _
+    | with_reducible exact keepsOutput_emit _
+    | with_reducible exact keepsOutput_removeHeader _
+    | dsimp only
+    | with_reducible apply keepsOutput_bind
+    | with_reducible apply keepsOutput_if
+    | split
+    | intro value
+
+
+theorem normalizeProducerDestination_stdout (id : DestinationId) (ty : Ty) :
+    ∀ state, (normalizeProducerDestination id ty state).finalState.stdout = state.stdout := by
+  change KeepsOutput (normalizeProducerDestination id ty)
+  unfold normalizeProducerDestination
+  repeat' first
+    | with_reducible exact keepsOutput_pure _
+    | with_reducible exact keepsOutput_fault_bind _ _
+    | with_reducible exact keepsOutput_fail _
+    | with_reducible exact keepsOutput_get
+    | with_reducible exact keepsOutput_writable_destination _
+    | with_reducible exact keepsOutput_lookup_destination _
+    | with_reducible exact keepsOutput_lookup_storage _
+    | with_reducible exact keepsOutput_replace_destination _ _
+    | with_reducible exact keepsOutput_replace_storage _ _
+    | with_reducible exact keepsOutput_emit _
+    | with_reducible exact keepsOutput_removeHeader _
+    | dsimp only
+    | with_reducible apply keepsOutput_bind
+    | with_reducible apply keepsOutput_if
+    | split
+    | intro value
+
 
 end Goose.Construct
