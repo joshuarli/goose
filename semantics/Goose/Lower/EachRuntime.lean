@@ -84,6 +84,52 @@ theorem lowerEachSource_val_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx
     simpa only [pure_bind] using hp
   exact hs.at_state s1
 
+theorem eachIteration_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
+    (input withElem withValue output : LS) (fr : Frame) (pt : Pt) (s : St)
+    (view counter elem value result : ValueId) (vw : ViewVal) (i : Nat)
+    (x : VarId) (idx : Option VarId) (byRef : Bool) (block : Core.Block)
+    (loop : LoopCtx) (org : OriginId) (post : Flow → Pt → Frame → Prop)
+    (hElem : emitDef (.refElem view counter) le input = (elem, withElem))
+    (hValue : eachElemValue x byRef elem le withElem = (value, withValue))
+    (hBlock : lowerBlock (some loop) (eachIRPre x idx value counter org)
+      false block le withValue = (result, output))
+    (hpp : input.pp = some pt) (hext : ExtT output cx.fn.blocks)
+    (hrel : Rel cfg env cx fr input)
+    (hview : fr.vals[view]? = some (.view vw))
+    (hcounter : fr.vals[counter]? = some (.val (.int .i64 i)))
+    (hc : counter < input.vals.size)
+    (hbody : ∀ ev state pt' fr',
+      (if byRef then pure (Val.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩)
+        else readLoc ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩) s = .ok ev state →
+      Post cfg env cx input fr withValue fr' pt' [(value, .val ev)] →
+      PreRel fr' (eachIRPre x idx value counter org) (eachCorePre x idx ev i) →
+      SimEAt cx pt' fr' (execBlock n cfg env (eachCorePre x idx ev i) block >>=
+        prepareReturn env) post state) :
+    SimEAt cx pt fr (eachIterationCore n cfg env x idx byRef block vw i) post s := by
+  have aBlock := advB_lowerBlock (some loop) (eachIRPre x idx value counter org)
+    false block le withValue result output hBlock
+  have hextValue := hext.of_adv aBlock
+  have hextElem := hextValue.of_adv (advB_eachElemValue x byRef elem le withElem value withValue hValue)
+  have hop := execPure_eachElem (cx := cx) hview hcounter
+  have hElemSim := leaf_def (c := pure ()) (Post.init hrel hpp) hElem hextElem (by simp)
+    (fun _ => RVal.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩)) (by simpa using hop)
+  have hunit : eachIterationCore n cfg env x idx byRef block vw i =
+      (pure () >>= fun _ => eachIterationCore n cfg env x idx byRef block vw i) := by simp
+  rw [hunit]
+  refine SimEAt.bind (SimEAt.of_simG hElemSim s) fun _ sElem ptElem frElem hsource PElem => ?_
+  have hsElem : sElem = s := (Res.ok.inj (by simpa only [pure_apply] using hsource)).2.symm
+  subst sElem
+  unfold eachIterationCore
+  refine SimEAt.bind (SimEAt.of_simG (eachElemValue_sim PElem x byRef le hValue hextValue) s)
+    fun ev state ptValue frValue hsourceValue PValue => ?_
+  have hcounterValue : frValue.vals[counter]? = some (.val (.int .i64 i)) := by
+    rw [PValue.same counter hc]
+    exact hcounter
+  have hpre : PreRel frValue (eachIRPre x idx value counter org) (eachCorePre x idx ev i) := by
+    have hval := PValue.has (value, .val ev) (by simp)
+    cases idx <;> simp [PreRel, eachIRPre, eachCorePre, hval, hcounterValue]
+  exact hbody ev state ptValue frValue hsourceValue PValue hpre
+
 theorem eachLength_state {vw : ViewVal} {s s' : St} {len : Nat}
     (h : (if vw.resizable then lengthLoc vw.loc else pure vw.len) s = .ok len s') :
     s' = s := by
