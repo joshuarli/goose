@@ -11,6 +11,11 @@ def prepareReturn (env : Env) : Flow → M Flow
     pure (.ret value)
   | flow => pure flow
 
+theorem prepareReturn_no_scopes (env : Env) (hscopes : env.scopes = []) :
+    prepareReturn env = fun flow => pure flow := by
+  funext flow
+  cases flow <;> simp [prepareReturn, hscopes, releaseScopes, pure_bind]
+
 def preparedCoreBlock (n : Nat) (cfg : Cfg) (env : Env) (scope : ScopeId)
     (stmts : List Stmt) (value : Option Expr) (pre : List (VarId × Val)) : M Flow := do
   let scopeInstance ← freshScope
