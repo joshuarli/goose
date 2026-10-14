@@ -64,7 +64,8 @@ theorem core_validate_stages (m : Core.Module) (h : Core.validate m = .ok ()) :
   obtain ⟨_, hglobals, hrest⟩ := exceptBind_ok_left hrest
   obtain ⟨_, himpls, hrest⟩ := exceptBind_ok_left hrest
   obtain ⟨_, hcontexts, hrest⟩ := exceptBind_ok_left hrest
-  obtain ⟨_, hroots, hdemand⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, hroots, hrest⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, hdemand, _⟩ := exceptBind_ok_left hrest
   refine ⟨by simpa using hstruct, by simpa using hentry, by simpa using himplcontexts,
     ?_, ?_, ?_, ?_, hdemand⟩
   · intro i gl hgl
