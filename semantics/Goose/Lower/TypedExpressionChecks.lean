@@ -139,4 +139,39 @@ theorem reject_wrong_source_results : ¬ SourceResults typingEnv rootsEnv [.bool
   | .ok _, .ok _ => true
   | _, _ => false
 
+def sliceHeaderModule : Core.Module :=
+  let main : Impl :=
+    { name := "main", params := #[], results := #[],
+      vars := #[⟨"owner", .arr .bool 2, .immutable, 0, 0⟩,
+        ⟨"slice", .slice .readOnly .bool, .mutable, 0, 0⟩],
+      body := .mk 0 [.letS 0 (.arrLit (.arr .bool 2) [.bool true, .bool false]) 0,
+        .letS 1 (.slice .readOnly (.of (.var 0)) .omitted .omitted 0) 0,
+        .expr (.call 1 [.byRef .readOnly (.var 1), .byRef .readOnly (.var 0)] 0) 0] none,
+      summary := .unknown }
+  let callee : Impl :=
+    { name := "header", params := #[⟨0, .byRef⟩, ⟨1, .byRef⟩], results := #[],
+      vars := #[⟨"header", .ref .readOnly (.slice .readOnly .bool), .immutable, 0, 0⟩,
+        ⟨"owner", .ref .readOnly (.arr .bool 2), .immutable, 0, 0⟩],
+      body := .mk 0 [.expr (.read (.deref (.read (.var 0)))) 0] none,
+      summary := .unknown }
+  { files := #["slice-header.goose"],
+    types := #[.bool, .arr .bool 2, .slice .readOnly .bool, .ref .readOnly (.slice .readOnly .bool), .ref .readOnly (.arr .bool 2)],
+    globals := #[], impls := #[main, callee],
+    contexts := #[⟨0, "main", [(1, [.local 0])], [], []⟩,
+      ⟨1, "header", [(0, [.param 0]), (1, [.param 1])], [], [(0, [.param 1])]⟩],
+    entry := 0, origins := #[⟨0, 1, "slice-header"⟩] }
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := { sliceHeaderModule with profile := artifact }
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := { sliceHeaderModule with profile := artifact }
+  [NumProfile.release, .debug].all fun profile =>
+    match Core.eval 120 profile source, GIR.run 240 profile (lower source) with
+    | .done .returned "", .done .returned "" => true
+    | _, _ => false
+
 end Goose.Lower.TypedExpressionChecks

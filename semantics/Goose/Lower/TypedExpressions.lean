@@ -532,12 +532,72 @@ theorem typedPlace_deref_sim {n : Nat} {cfg : Cfg} {results : List Ty} {expr : E
   simp only [Goose.Core.expectRef]
   exact SimEAt.ret P
 
+theorem read_var_sim (n : Nat) (cfg : Cfg) (results : List Ty) (env : Env) (id : VarId)
+    (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame)
+    (hlow : lowerExpr (.read (.var id)) (lowerEnv cfg.mod env.vars results) ls = (r, ls'))
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
+    SimG cx pt fr (evalExpr n cfg env (.read (.var id)))
+      (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) := by
+  cases n with
+  | zero => simp only [evalExpr]; exact SimG.of_timeout
+  | succ n =>
+    simp only [lowerExpr, bind_eq] at hlow
+    obtain ⟨address, middle, hplace, hload⟩ := hlow
+    have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hload)
+    have hs : SimG cx pt fr (evalPlace n cfg env (.var id))
+        (fun location pt' fr' =>
+          Post cfg env cx ls fr middle fr' pt' [(address, .val (.ref location))]) := by
+      cases n with
+      | zero => simp only [evalPlace]; exact SimG.of_timeout
+      | succ n =>
+        simp only [lowerPlace] at hplace
+        simp only [evalPlace]
+        exact leaf_def (Post.init hrel hpp) hplace hextMiddle (by simp)
+          (fun location => RVal.val (.ref location))
+          (by simp only [execPure, slotRoot_eq hrel id, bind_assoc, pure_bind])
+    simp only [evalExpr]
+    refine SimG.bind hs fun location pt1 fr1 P => ?_
+    have hx := P.has (address, .val (.ref location)) (by simp)
+    exact leaf_def P hload hext (by simp) RVal.val
+      (by simp only [execPure, getVal_of hx, Goose.Core.expectRef, pure_bind])
+
+open Core.Sound in
+theorem typedPlaceClaim_deref {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
+    (he : TypedExprClaim n cfg results expr) : TypedPlaceClaim (n + 1) cfg results (.deref expr) := by
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  cases hslice : sliceRefTy source.typingEnv expr with
+  | none =>
+    exact typedPlace_deref_sim he env state source hslice hmetadata
+      ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  | some ty =>
+    obtain ⟨id, localDecl, mu0, mu, element, rfl, hvisible, hvariable, htype, hflat, hty⟩ :=
+      sliceRefTy_some hslice
+    have hfuture : id ∈ source.context.inputFuture := by
+      cases hc : source.context <;> simp [hc, EvaluationContext.inputFuture,
+        NodeContext.inputFuture, DemandNode.variables, Place.variables, Expr.variables]
+    have hs : Sat (evalExpr n cfg env (.read (.var id))) state
+        (fun value _ => ∃ location, value = .ref location) := by
+      apply sat_read_var source.frame hvisible hfuture n
+      intro actual scopeInst value hat _ _ hvalue
+      rw [source.frame.vars_t, hat] at hvariable
+      cases hvariable
+      rw [htype] at hvalue
+      obtain ⟨location, rfl, _⟩ := hvalue
+      exact ⟨location, rfl⟩
+    simp only [lowerPlace] at hlow
+    simp only [evalPlace]
+    refine SimEAt.bind (SimEAt.of_simG (read_var_sim n cfg results env id ls ls' r pt cx fr
+      hlow hpp hext hrel) state) fun value after pt1 fr1 hdone P => ?_
+    unfold Sat at hs
+    rw [hdone] at hs
+    obtain ⟨location, rfl⟩ := hs
+    simp only [Goose.Core.expectRef]
+    exact SimEAt.ret P
+
 theorem typedPlaceClaim_deref_ref {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) (mutability : Mutability) :
     TypedPlaceClaim (n + 2) cfg results (.deref (.ref mutability place)) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
-  exact typedPlace_deref_sim (typedExprClaim_ref hp mutability) env state source rfl
-    hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  exact typedPlaceClaim_deref (typedExprClaim_ref hp mutability)
 
 inductive ArgSource (cfg : Cfg) (env : Env) (state : St) : Arg → Type
   | byVal {expr : Expr} (source : ExprSource cfg env expr state) :
