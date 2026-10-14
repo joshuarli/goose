@@ -1,4 +1,5 @@
 import Goose.Construct.GIR.Evidence
+import Goose.Construct.GIR.Provenance
 import Goose.Construct.Layout
 
 namespace Goose.Construct.GIR
@@ -72,6 +73,13 @@ private def allTypesValid (m : Module) : Ty → Bool
     | none => false
   | .tuple _ => false
 
+private def ownedParameter (f : Func) (slot : SlotId) (value : ValueId) : Bool :=
+  match f.blocks[0]?, f.slots[slot]? with
+  | some entry, some descriptor =>
+      (entry.params.take f.params.length |>.zip f.params).any fun ((id,_),ty) =>
+        id == value && ty.nonfixed && ty == descriptor.ty
+  | _, _ => false
+
 private def checkTables (m : Module) (f : Func) : Check Unit := do
   unless f.blocks.size > 0 do violation .v001 "function has no entry block"
   let definitions := f.blocks.toList.flatMap Block.defs
@@ -98,16 +106,26 @@ private def checkTables (m : Module) (f : Func) : Check Unit := do
     unless allTypesValid m ty && ty.storable do violation .v010 "invalid parameter type"
   let some entry := f.blocks[0]? | violation .v001 "entry block missing"
   unless entry.params.map (·.2) == f.entryTypes do violation .v010 "entry carriers differ from source parameters and result channels"
+  for ((id,_),ty) in (entry.params.take f.params.length).zip f.params do
+    if ty.nonfixed then
+      let bindings := f.blocks.toList.flatMap (·.insts) |>.filterMap fun
+        | .eff (.slotInit slot value _) => if ownedParameter f slot value && value == id then some slot else none
+        | _ => none
+      unless bindings.length == 1 && entry.insts.any (fun inst => match inst with
+          | .eff (.slotInit slot value _) => value == id && bindings == [slot]
+          | _ => false) do violation .v060 "owned nonfixed parameter must bind exactly one original entry slot"
 
 private def requireVal (env : TyEnv) (value : ValueId) (expected : VTy) : Check Unit := do
   unless (← checkTypeResult (env.valTy value)) == expected do violation .v010 "operand type mismatch"
 
-private def checkEffect (env : TyEnv) : Effect → Check Unit
+private def checkEffect (f : Func) (env : TyEnv) : Effect → Check Unit
   | .enter _ | .leave _ => pure ()
-  | .slotInit slot value _ => do
-      let some slot := env.slots[slot]? | violation .v001 "initialization slot outside table"
-      if slot.ty.nonfixed then violation .v060 "nonfixed initialization requires destination publication"
-      requireVal env value (.data slot.ty)
+  | .slotInit slotId value _ => do
+      let some slot := env.slots[slotId]? | violation .v001 "initialization slot outside table"
+      if slot.ty.nonfixed then
+        unless ownedParameter f slotId value do violation .v060 "nonfixed initialization requires destination publication or corresponding owned entry parameter"
+        requireVal env value (.data (.ref .mutable slot.ty))
+      else requireVal env value (.data slot.ty)
   | .store reference value _ => do
       let (mutability, ty) ← checkTypeResult (env.refTy reference)
       unless mutability == .mutable do violation .v030 "store through read-only reference"
@@ -163,9 +181,20 @@ private def checkEffect (env : TyEnv) : Effect → Check Unit
       let (_, owner) ← checkTypeResult (env.refTy reference)
       let (_, element) ← checkTypeResult (env.viewTy view)
       unless owner.growing && owner.element? == some element do violation .v010 "append types differ"
-  | .clear reference _ | .popN reference _ _ | .resize reference _ _ _ => do
+  | .clear reference _ => do
       let (_, owner) ← checkTypeResult (env.refTy reference)
       unless owner.growing && !((owner matches .grow _)) do violation .v010 "shrink operation requires growshrink or limited"
+  | .popN reference count _ => do
+      let (_, owner) ← checkTypeResult (env.refTy reference)
+      unless owner matches .growshrink _ | .limited .. do violation .v010 "pop_n requires shrinkable owner"
+      let _ ← checkTypeResult (env.intTy count)
+  | .resize reference size fill _ => do
+      let (_, owner) ← checkTypeResult (env.refTy reference)
+      unless owner matches .growshrink _ | .limited .. do violation .v010 "resize requires shrinkable owner"
+      let _ ← checkTypeResult (env.intTy size)
+      if let some value := fill then
+        let some element := owner.element? | violation .v010 "resize receiver has no element"
+        requireVal env value (.data element)
   | .replace reference run _ => do
       let (_, owner) ← checkTypeResult (env.refTy reference)
       requireVal env run (.data owner)
@@ -195,7 +224,7 @@ private def checkTypesAndEdges (m : Module) (f : Func) : Check Unit := do
       | .def result op =>
           let ty ← checkTypeResult (op.resultTy env)
           requireVal env result ty
-      | .eff effect => checkEffect env effect
+      | .eff effect => checkEffect f env effect
       | .term term =>
           match term with
           | .ret results _ =>
@@ -290,7 +319,10 @@ private def valueRoots (m : Module) (f : Func) (returns : Array (List (List Root
   let mut slots := Array.replicate f.slots.size []
   if let some entry := f.blocks[0]? then
     for ((id,_), ty, position) in (entry.params.take f.params.length |>.zip f.params |>.zipIdx).map (fun ((id,ty),position) => (id,ty,position)) do
-      roots := roots.set! id (if ty.nonfixed then [.local position] else if ty matches .ref .. | .slice .. then [.param position] else [])
+      let boundSlot := entry.insts.findSome? fun
+        | .eff (.slotInit slot value _) => if value == id then some slot else none
+        | _ => none
+      roots := roots.set! id (if ty.nonfixed then [.local (boundSlot.getD position)] else if ty matches .ref .. | .slice .. then [.param position] else [])
   for _ in [0:f.numValues + f.slots.size + 1] do
     for block in f.blocks do
       for inst in block.insts do
@@ -350,6 +382,37 @@ private def resultRoots (m : Module) : Array (List (List RootRef)) := Id.run do
       returns := returns.set! fi found
   return returns
 
+private def checkLifetimes (m : Module) (f : Func) (returns : Array (List (List RootRef))) : Check Unit := do
+  let roots := valueRoots m f returns
+  let types := f.valueTypes m
+  let mut entries : Array (Option (List Nat)) := Array.replicate f.blocks.size none
+  entries := entries.set! 0 (some [])
+  for _ in [0:f.blocks.size + 1] do
+    for h : bi in [0:f.blocks.size] do
+      if let some initial := (entries[bi]?).bind (fun value => value) then
+        let mut scopes := initial
+        for inst in f.blocks[bi].insts do
+          for id in inst.uses do
+            if ((types[id]?).bind (fun value => value)).any (fun type => type matches .data (.ref ..) | .data (.slice ..) | .view ..) then
+              for root in roots[id]?.getD [] do
+                if let .local slot := root then
+                  let some slot := f.slots[slot]? | violation .v040 "reference root names missing local slot"
+                  unless scopes.contains slot.scope do violation .v040 "reference/view use reaches storage outside its owning scope"
+          match inst with
+          | .eff (.enter scope) => scopes := scope :: scopes
+          | .eff (.leave _) => scopes := scopes.tail
+          | .term term =>
+              for target in term.successors do
+                entries := entries.set! target (some scopes)
+              if let .escape target values _ _ := term then
+                let some target := m.targets[target]? | violation .v001 "escape target missing"
+                let some member := m.funcs[target.first]? | violation .v001 "escape target member missing"
+                for (id,descriptor) in values.zip member.results do
+                  if descriptor.ty matches .ref .. | .slice .. then
+                    unless (roots[id]?.getD []).all (fun root => !(root matches .local _)) do
+                      violation .v040 "nonlocal reference result reaches helper-local storage"
+          | _ => pure ()
+
 private def emptySummary : Summary := ⟨[],[],[],[],[],[],[],[],false,false⟩
 
 private def unionSummary (left right : Summary) : Summary :=
@@ -369,12 +432,61 @@ private def mapTargets (roots : Array (List RootRef)) (args : List ValueId) (tar
     | .global id => [.global id]
     | .param i => rootsTargets (roots[(args[i]?.getD roots.size)]?.getD [])
 
+private def receiverType? (m : Module) (f : Func) (receiver : DestReceiver) : Option Ty :=
+  match receiver with
+  | .slot id => (f.slots[id]?).map (·.ty)
+  | .global id => (m.globals[id]?).map (·.ty)
+  | .arg callee position => (m.funcs[callee]?).bind fun f => f.params[position]?
+  | .push reference => (m.environment f |>.refTy reference).toOption.bind fun (_,ty) => ty.element?
+  | .append reference | .whole reference => (m.environment f |>.refTy reference).toOption.map (·.2)
+
+private def constructionMaximum (m : Module) (f : Func) (provenance : Provenance) (id : ValueId) : Option Nat := Id.run do
+  let owner := provenance.values[id]?.getD []
+  let same (id : ValueId) := provenance.values[id]?.getD [] == owner
+  let cyclic (start : Nat) := Id.run do
+    let mut reached := ((f.blocks[start]?).bind Block.lastTerm?).map Term.successors |>.getD []
+    for _ in [0:f.blocks.size] do
+      for id in reached do
+        reached := (reached ++ (((f.blocks[id]?).bind Block.lastTerm?).map Term.successors |>.getD [])).eraseDups
+    return reached.contains start
+  let writes (inst : Inst) := match inst with
+    | .eff (.destBytes destination ..) | .eff (.destWrite destination ..) | .eff (.destAttach destination ..) |
+        .eff (.destText destination ..) | .eff (.destCopy destination ..) => same destination
+    | .def _ (.callConstruct _ _ destinations _) | .term (.invoke _ _ destinations _ _ _ _) => destinations.any same
+    | _ => false
+  let mut count := 0
+  for (block,index) in f.blocks.toList.zipIdx do
+    if block.insts.any writes && cyclic index then return none
+    for inst in block.insts do
+      match inst with
+      | .eff (.destBytes destination bytes _) => if same destination then count := count + bytes.length
+      | .eff (.destWrite destination _ _) | .eff (.destAttach destination _ _) => if same destination then count := count + 1
+      | .eff (.destText destination _ _) | .eff (.destCopy destination _ _) => if same destination then return none
+      | .def _ (.callConstruct callee _ destinations _) | .term (.invoke callee _ destinations _ _ _ _) =>
+          let some callee := m.funcs[callee]? | return none
+          let results := callee.results.filter (·.ty.nonfixed)
+          for (destination,result) in destinations.zip results do
+            if same destination then
+              match result.ty with
+              | .arr _ length => count := count + length
+              | .limited _ capacity => count := count + capacity
+              | .varr _ => count := count + (2^32 - 1)
+              | _ => return none
+      | _ => pure ()
+  return some count
+
 private def deriveEffects (m : Module) (returns : Array (List (List RootRef))) : Array Summary := Id.run do
   let mut summaries := m.funcs.map fun _ => emptySummary
   for _ in [0:m.funcs.size * (m.globals.size + m.targets.size + 10) + 1] do
     for h : fi in [0:m.funcs.size] do
       let f := m.funcs[fi]
       let roots := valueRoots m f returns
+      let provenance := f.provenance m fi
+      let capacityAbort (id : ValueId) (ty : Ty) (request : Core.ConstructionRequest) := match ty with
+        | .limited _ capacity => (constructionMaximum m f provenance id).all (· > capacity)
+        | .varr _ => request == .value && (constructionMaximum m f provenance id).all (· >= 2^32)
+        | _ => false
+      let limited (id : ValueId) := ((m.environment f).refTy id).toOption.any (fun (_,ty) => ty matches .limited ..)
       let get (id : ValueId) := rootsTargets (roots[id]?.getD [])
       let mut summary := emptySummary
       let addCall (summary : Summary) (callee : FnId) (args : List ValueId) :=
@@ -389,22 +501,35 @@ private def deriveEffects (m : Module) (returns : Array (List (List RootRef))) :
           | .def _ (.load reference) | .def _ (.snapshot _ reference) | .def _ (.arrayLen reference) =>
               summary := unionSummary summary { emptySummary with reads := get reference }
           | .def _ (.push reference _ _) =>
-              summary := unionSummary summary { emptySummary with grows := get reference, aborts := true }
+              summary := unionSummary summary { emptySummary with grows := get reference, writes := get reference, aborts := limited reference }
           | .def _ (.pop reference _) =>
               summary := unionSummary summary { emptySummary with shrinks := get reference, reads := get reference, aborts := true }
           | .def _ (.call callee args _) | .def _ (.callConstruct callee args _ _) |
               .term (.invoke callee args _ _ _ _ _) => summary := addCall summary callee args
           | .def _ (.targetDest target _ _) | .term (.escape target _ _ _) =>
               summary := unionSummary summary { emptySummary with needs := [target], escapes := [target] }
-          | .def _ (.bin ..) | .def _ (.un ..) | .def _ (.conv ..) | .def _ (.viewSlice ..) |
-              .def _ (.indexChecked ..) | .def _ (.destOpen ..) | .def _ (.destChild ..) | .def _ (.destFit ..) =>
-              summary := { summary with aborts := true }
+          | .def id (.destOpen receiver logical request _ _) =>
+              let receiving := (receiverType? m f receiver).getD logical
+              let aborts := match receiver with
+                | .append reference | .push reference => limited reference
+                | _ => capacityAbort id receiving request
+              let effect := match receiver with
+                | .push reference | .append reference => { emptySummary with grows := get reference, writes := get reference, aborts }
+                | .whole reference => { emptySummary with reads := get reference, grows := get reference, shrinks := get reference, writes := get reference, aborts }
+                | _ => { emptySummary with aborts }
+              summary := unionSummary summary effect
+          | .def id (.destChild _ ty _) => summary := { summary with aborts := summary.aborts || capacityAbort id ty .value }
+          | .def _ (.destFit ..) => pure ()
+          | .def _ (.bin op ..) =>
+              if op matches .add | .sub | .mul | .div | .mod then summary := { summary with aborts := true }
+          | .def _ (.un .neg ..) | .def _ (.conv .as ..) | .def _ (.viewSlice ..) | .def _ (.indexChecked ..) => summary := { summary with aborts := true }
           | .eff (.store reference _ _) => summary := unionSummary summary { emptySummary with writes := get reference }
-          | .eff (.destCopy _ source _) => summary := unionSummary summary { emptySummary with reads := get source, aborts := true }
-          | .eff (.append reference source _) => summary := unionSummary summary { emptySummary with grows := get reference, reads := get source, aborts := true }
-          | .eff (.appendValue reference _ _) => summary := unionSummary summary { emptySummary with grows := get reference, aborts := true }
-          | .eff (.popN reference _ _) | .eff (.clear reference _) => summary := unionSummary summary { emptySummary with shrinks := get reference, aborts := true }
-          | .eff (.resize reference _ _ _) => summary := unionSummary summary { emptySummary with grows := get reference, shrinks := get reference, aborts := true }
+          | .eff (.destCopy _ source _) => summary := unionSummary summary { emptySummary with reads := get source }
+          | .eff (.append reference source _) => summary := unionSummary summary { emptySummary with grows := get reference, writes := get reference, reads := get source, aborts := limited reference }
+          | .eff (.appendValue reference _ _) => summary := unionSummary summary { emptySummary with grows := get reference, writes := get reference, aborts := limited reference }
+          | .eff (.popN reference _ _) => summary := unionSummary summary { emptySummary with reads := get reference, shrinks := get reference, aborts := true }
+          | .eff (.clear reference _) => summary := unionSummary summary { emptySummary with reads := get reference, shrinks := get reference }
+          | .eff (.resize reference _ fill _) => summary := unionSummary summary { emptySummary with reads := get reference, writes := if fill.isSome then get reference else [], grows := if fill.isSome then get reference else [], shrinks := get reference, aborts := true }
           | .eff (.print ..) => summary := { summary with outputs := true }
           | .term (.abort ..) => summary := { summary with aborts := true }
           | .term (.ret _ _) => summary := { summary with constructs := f.results.zipIdx |>.filterMap fun (r,i) => if r.ty.nonfixed then some i else none }
@@ -421,6 +546,13 @@ private def checkSummaries (m : Module) (returns : Array (List (List RootRef))) 
     let f := m.funcs[fi]
     let actual := derived[fi]?.getD emptySummary
     if let .known declared := f.summary then
+      for block in f.blocks do
+        for inst in block.insts do
+          let callee? := match inst with
+            | .def _ (.call callee ..) | .def _ (.callConstruct callee ..) | .term (.invoke callee ..) => some callee
+            | _ => none
+          if let some callee := callee? then
+            unless (m.funcs[callee]?).any (fun f => f.summary matches .known _) do violation .v050 "known summary calls unknown callee summary"
       unless included actual.reads declared.reads && included actual.writes declared.writes &&
           included actual.grows declared.grows && included actual.shrinks declared.shrinks &&
           included actual.rebinds declared.rebinds && included actual.constructs declared.constructs &&
@@ -461,8 +593,11 @@ private def remapOwnership (state : Ownership) (params : List (ValueId × VTy)) 
     projections := state.projections.map (fun (a,b) => (rename a,b))
     arguments := state.arguments.map (fun (a,b,c) => (rename a,b,c)) }
 
-private def checkOwnership (m : Module) (f : Func) : Check Unit := do
+private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns : Array (List (List RootRef))) (derived : Array Summary) : Check Unit := do
   let types := f.valueTypes m
+  let roots := valueRoots m f returns
+  let provenance := f.provenance m functionId
+  let getRoots (id : ValueId) := roots[id]?.getD []
   let typeOf (id : ValueId) := ((types[id]?).bind (fun value => value)).getD (.data .unit)
   let mut entries : Array (Option Ownership) := Array.replicate f.blocks.size none
   let some entry := f.blocks[0]? | violation .v001 "ownership entry missing"
@@ -478,7 +613,38 @@ private def checkOwnership (m : Module) (f : Func) : Check Unit := do
             if state.arguments.any (fun (argument,_,_) => argument == id) then
               unless inst matches .def _ (.call ..) | .def _ (.callConstruct ..) | .term (.invoke ..) do
                 violation .v060 "owned constructed argument has a use outside its associated call"
+          let changed : List RootRef := match inst with
+            | .def _ (.push receiver ..) | .def _ (.pop receiver ..) | .eff (.append receiver ..) |
+              .eff (.appendValue receiver ..) | .eff (.popN receiver ..) | .eff (.resize receiver ..) |
+              .eff (.clear receiver ..) => getRoots receiver
+            | .def _ (.call callee args _) | .def _ (.callConstruct callee args _ _) | .term (.invoke callee args _ _ _ _ _) =>
+                let summary := derived[callee]?.getD emptySummary
+                (summary.grows ++ summary.shrinks ++ summary.rebinds).flatMap fun
+                  | Target.global global => [RootRef.global global]
+                  | Target.param position => getRoots (args[position]?.getD roots.size)
+            | _ => []
+          let accessed : List RootRef := match inst with
+            | .def _ (.load reference) | .def _ (.snapshot _ reference) | .def _ (.arrayLen reference) |
+                .def _ (.fieldAddr reference _) | .eff (.store reference ..) | .eff (.destCopy _ reference _) => getRoots reference
+            | .def _ (.call callee args _) | .def _ (.callConstruct callee args _ _) | .term (.invoke callee args _ _ _ _ _) =>
+                let summary := derived[callee]?.getD emptySummary
+                (summary.reads ++ summary.writes ++ summary.grows ++ summary.shrinks ++ summary.rebinds).flatMap fun
+                  | Target.global global => [RootRef.global global]
+                  | Target.param position => getRoots (args[position]?.getD roots.size)
+            | _ => changed
+          for live in state.live do
+            for owner in provenance.values[live]?.getD [] do
+              let receivingRoots := match owner with
+                | .receiver (.push reference) | .receiver (.append reference) | .receiver (.whole reference) => getRoots reference
+                | _ => []
+              unless !(changed.any receivingRoots.contains) do violation .v060 "C-NOGROW: mutation reaches active receiving storage"
+              if owner matches .receiver (.whole _) then
+                unless !(accessed.any receivingRoots.contains) do violation .v060 "whole replacement operand reaches cleared receiver"
           let consumeCall (state : Ownership) (callee : FnId) (args destinations : List ValueId) : Check Ownership := do
+            let some calleeDef := m.funcs[callee]? | violation .v001 "callee missing for argument ownership"
+            for (parameter,arg) in calleeDef.params.zip args do
+              if parameter.nonfixed then
+                unless state.arguments.any (fun (id,_,_) => id == arg) do violation .v060 "nonfixed by-value call argument lacks exactly associated owned completion"
             let mut state := state
             for (arg,position) in args.zipIdx do
               if let some (_,expected,expectedPosition) := state.arguments.find? (fun (id,_,_) => id == arg) then
@@ -521,7 +687,9 @@ private def checkOwnership (m : Module) (f : Func) : Check Unit := do
                     state := { state with projections := (pack,position) :: state.projections }
                     if let .pack descriptors := typeOf pack then
                       let required := descriptors.zipIdx |>.filterMap fun (r,i) => if r.ty.nonfixed then some i else none
-                      if required.all (fun i => state.projections.contains (pack,i)) then state ← consume state pack
+                      if required.all (fun i => state.projections.contains (pack,i)) then
+                        state ← consume state pack
+                        state := { state with projections := state.projections.filter (fun (id,_) => id != pack) }
               | .callConstruct callee args destinations _ => state ← consumeCall state callee args destinations
               | .call callee args _ => state ← consumeCall state callee args []
               | _ => pure ()
@@ -608,6 +776,90 @@ private def checkTargets (m : Module) (derived : Array Summary) (initializers : 
                 unless active.contains target && !handled.contains target do violation .v070 "escape must propagate to an enclosing target member"
             | _ => pure ()
 
+private def checkPermissions (m : Module) (f : Func) : Check Unit := do
+  let env := m.environment f
+  let permissions := f.permissions m env.vals
+  let binding (id : ValueId) : Check Unit :=
+    unless (permissions[id]?.getD (false,false)).1 do violation .v030 "mutation requires writable binding provenance"
+  let contents (id : ValueId) : Check Unit :=
+    unless (permissions[id]?.getD (false,false)).2 do violation .v030 "mutation requires writable contents provenance"
+  for block in f.blocks do
+    for inst in block.insts do
+      match inst with
+      | .eff (.store reference ..) => binding reference
+      | .eff (.append reference ..) | .eff (.appendValue reference ..) | .eff (.popN reference ..) |
+          .eff (.resize reference ..) | .eff (.clear reference ..) | .def _ (.push reference ..) | .def _ (.pop reference ..) => contents reference
+      | .def _ (.destOpen (.append reference) ..) | .def _ (.destOpen (.push reference) ..) => contents reference
+      | .def _ (.destOpen (.whole reference) ..) => binding reference
+      | _ => pure ()
+
+private def checkChannelOwners (m : Module) (functionId : FnId) (f : Func) : Check Unit := do
+  let provenance := f.provenance m functionId
+  let owners (id : ValueId) := provenance.values[id]?.getD []
+  let requireOwner (id : ValueId) (owner : DestinationOwner) : Check Unit :=
+    unless owners id == [owner] do violation .v060 "carrier does not belong to the exact receiving channel"
+  let env := m.environment f
+  let receiverType (owner : DestinationOwner) : Option Ty := match owner with
+    | .receiver (.slot slot) => (f.slots[slot]?).map (·.ty)
+    | .receiver (.global global) => (m.globals[global]?).map (·.ty)
+    | .receiver (.arg callee position) => (m.funcs[callee]?).bind fun f => f.params[position]?
+    | .receiver (.append reference) | .receiver (.whole reference) => (env.refTy reference).toOption.map (·.2)
+    | .receiver (.push reference) => (env.refTy reference).toOption.bind fun (_,ty) => ty.element?
+    | .result position => (f.results[position]?).map (·.ty)
+    | .target target position => ((m.targets[target]?).bind fun t => m.funcs[t.first]?).bind fun f => (f.results[position]?).map (·.ty)
+    | .child _ => none
+  let rec sourceOp : Nat → ValueId → (Op → Bool) → Bool
+    | 0, _, _ => false
+    | fuel + 1, id, predicate =>
+        match f.defOp? id with
+        | some op =>
+            if predicate op then true else match op with
+            | .destFinish input _ | .destValue input _ | .destStage input _ | .destFit input _ |
+                .destRelocate input _ _ => sourceOp fuel input predicate
+            | _ => false
+        | none => false
+  for block in f.blocks do
+    for inst in block.insts do
+      match inst with
+      | .term (.ret operands _) =>
+          for ((id,descriptor),position) in (operands.zip f.results).zipIdx do
+            if descriptor.ty.nonfixed then requireOwner id (.result position)
+      | .term (.escape target operands cancellations _) =>
+          let some targetDef := m.targets[target]? | violation .v001 "escape target missing"
+          let some member := m.funcs[targetDef.first]? | violation .v001 "target member missing"
+          for ((id,descriptor),position) in (operands.zip member.results).zipIdx do
+            if descriptor.ty.nonfixed then requireOwner id (.target target position)
+          let positions := f.results.zipIdx |>.filterMap fun (r,i) => if r.ty.nonfixed then some i else none
+          for (id,position) in cancellations.zip positions do requireOwner id (.result position)
+      | .eff (.destPublish id _) =>
+          let [.receiver receiver] := owners id | violation .v060 "publication requires owning source receiver"
+          if receiver matches .arg .. then violation .v060 "argument completion requires dest_arg transfer"
+      | .eff (.destBind slot id _) =>
+          let some position := f.results.findIdx? (·.namedLocal == some slot) | violation .v060 "binding slot is not named result"
+          requireOwner id (.result position)
+      | .def _ (.destArg id _) =>
+          unless (owners id).all (fun owner => owner matches .receiver (.arg ..)) && !(owners id).isEmpty do
+            violation .v060 "constructed argument lacks associated parameter receiving storage"
+      | .def _ (.destAbandonNamed slot replacement _) =>
+          let some position := f.results.findIdx? (·.namedLocal == some slot) | violation .v060 "named abandonment alias missing"
+          requireOwner replacement (.result position)
+          unless sourceOp f.numValues replacement (fun op => op matches .resultExitDest ..) do
+            violation .v060 "named replacement does not originate at this activation result exit destination"
+      | .def _ (.destRelocate id reason _) =>
+          match reason with
+          | .headerRemoval =>
+              unless sourceOp f.numValues id (fun op => op matches .destValue ..) do violation .v060 "header removal lacks element_run to value adaptation"
+          | .exitValue =>
+              unless sourceOp f.numValues id (fun op => op matches .resultExitDest .. | .targetDest ..) ||
+                (owners id).any (fun owner => owner matches .target ..) do violation .v060 "exit relocation lacks saved replacement channel/start"
+      | .def _ (.destStage id _) =>
+          unless (owners id).any (fun owner => (receiverType owner).any (fun ty => ty matches .limited ..)) do violation .v060 "stage does not receive into limited storage"
+          unless sourceOp f.numValues id (fun op => match op with | .destOpen _ _ _ none _ => true | _ => false) do
+            violation .v060 "stage requires unknown length at receiving open"
+      | .def _ (.destFit id _) =>
+          unless sourceOp f.numValues id (fun op => op matches .destStage ..) do violation .v060 "fit requires completed private stage"
+      | _ => pure ()
+
 private def checkOrigins (m : Module) (f : Func) : Check Unit := do
   for block in f.blocks do
     for inst in block.insts do
@@ -622,6 +874,16 @@ namespace Validate
 
 def validate (m : Module) : Check Unit := do
   unless m.entry < m.funcs.size do violation .v001 "entry outside function table"
+  for type in m.types do
+    match type with
+    | .data ty => unless allTypesValid m ty do violation .v010 "invalid data type table entry"
+    | .view _ element => unless (element.flat || element.variableElement) && allTypesValid m element do violation .v010 "invalid sampled view element"
+    | .dest ty _ | .built ty _ | .cancelled ty _ => unless ty.nonfixed && allTypesValid m ty do violation .v010 "invalid protocol receiving type"
+    | .pack descriptors =>
+        unless descriptors.length >= 2 do violation .v010 "result pack requires several positions"
+        for descriptor in descriptors do
+          unless allTypesValid m descriptor.ty && descriptor.namedLocal.isNone &&
+              descriptor.ty.nonfixed == (descriptor.request != .register) do violation .v010 "invalid result pack component"
   let some entry := m.funcs[m.entry]? | violation .v001 "entry missing"
   unless entry.params.isEmpty && entry.results.isEmpty do violation .v001 "entry must have no source parameters or results"
   for global in m.globals do
@@ -630,6 +892,7 @@ def validate (m : Module) : Check Unit := do
     let some result := global.init.results.head? | violation .v001 "global initializer has no result"
     unless result.ty == global.ty && result.namedLocal.isNone do violation .v010 "global initializer result differs from global"
   for descriptor in m.structs do
+    unless !descriptor.displayName.isEmpty do violation .v010 "struct display name is empty"
     let mut occupied : List Nat := []
     for field in descriptor.fields do
       let some width := fixedByteSize? ⟨m.structs⟩ field.ty | violation .v010 "struct field is not flat fixed"
@@ -642,11 +905,14 @@ def validate (m : Module) : Check Unit := do
   for f in all.funcs do checkTables all f
   for f in all.funcs do checkTypesAndEdges all f
   for f in all.funcs do checkDominance f
+  for f in all.funcs do checkPermissions all f
   for f in all.funcs do checkScopes f
   let returns := resultRoots all
+  for f in all.funcs do checkLifetimes all f returns
   let effects := deriveEffects all returns
   checkSummaries all returns effects
-  for f in all.funcs do checkOwnership all f
+  for (f,index) in all.funcs.toList.zipIdx do checkOwnership all index f returns effects
+  for (f,index) in all.funcs.toList.zipIdx do checkChannelOwners all index f
   checkTargets all effects initializers
   for f in all.funcs do checkCertificates all f
   for f in all.funcs do checkOrigins all f

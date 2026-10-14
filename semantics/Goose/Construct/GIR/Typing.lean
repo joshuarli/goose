@@ -195,11 +195,9 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     else pure (.built ty request)
   | .destStage destination _ => do
     let (ty, request) ← env.destTy destination
-    unless ty matches .limited .. do tyErr "staging requires limited receiver"
     pure (.dest ty request)
   | .destFit built _ => do
     let (ty, request) ← env.builtTy built
-    unless ty matches .limited .. do tyErr "fit requires limited receiver"
     pure (.built ty request)
   | .constInt t n =>
     if t.inRange n then pure (.data (.int t)) else tyErr s!"constant {n} out of range for its type"
@@ -282,11 +280,13 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     let (_, t) ← env.refTy r
     match t.element? with
     | some e =>
+      unless e.flat do tyErr "nonfixed push requires destination protocol"
       unless (← env.dataTy v) = e do tyErr "a pushed element of another type than the array's"
       pure (.data (.ref .mutable e))
     | none => tyErr "push to a reference that does not point at an owner array"
   | .pop r _ => do
     let (_, t) ← env.refTy r
+    unless t matches .growshrink _ | .limited .. do tyErr "pop requires shrinkable owner"
     match t.element? with
     | some e => pure (.data e)
     | none => tyErr "pop from a reference that does not point at an owner array"
