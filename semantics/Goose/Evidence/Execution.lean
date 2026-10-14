@@ -359,4 +359,78 @@ theorem RuntimeStepsAvoid.protect {cfg : GCfg} {fn : Func} {ids guarded : List V
         (ih history edgeProtected (path.trans (.next transition.control unwritten .refl)))
   exact lift .refl history
 
+theorem enterBlock_instructions {fn : Func} {fr result : Frame} {st final : St}
+    {target : BlockId} {args : List RVal} {insts : List Inst}
+    (success : enterBlock fn fr target args st = .ok (insts, result) final) :
+    insts = instsAt fn (target, 0) := by
+  unfold enterBlock at success
+  cases lookup : fn.blocks[target]? with
+  | none => simp [lookup, fault, M.stop] at success
+  | some block =>
+    simp only [lookup] at success
+    split at success
+    · obtain ⟨bound, middle, binding, finished⟩ := m_bind_ok success
+      simp only [pure_apply, Res.ok.injEq, Prod.mk.injEq] at finished
+      simpa [instsAt, lookup] using finished.1.1.symm
+    · simp [fault, M.stop] at success
+
+theorem enterFn_success_entry {cfg : GCfg} {fn : Func} {depth fuel : Nat} {args : List Val}
+    {before final : St} {value : Val}
+    (success : Goose.GIR.enterFn fuel cfg depth fn args before = .ok value final) :
+    ∃ remaining fr entered,
+      fuel = remaining + 1 ∧ FunctionEntry fn depth args before fr entered ∧
+      exec remaining ⟨cfg, fn⟩ fr (instsAt fn (0, 0)) entered = .ok value final := by
+  cases fuel with
+  | zero => simp [Goose.GIR.enterFn, timeout, M.stop] at success
+  | succ remaining =>
+    simp only [Goose.GIR.enterFn] at success
+    split at success
+    · rename_i arity
+      obtain ⟨act, fresh, allocated, afterAllocation⟩ := m_bind_ok success
+      obtain ⟨pair, entered, enteredBlock, executed⟩ := m_bind_ok afterAllocation
+      obtain ⟨insts, fr⟩ := pair
+      have instructions := enterBlock_instructions enteredBlock
+      rw [instructions] at enteredBlock executed
+      exact ⟨remaining, fr, entered, rfl, ⟨arity, act, fresh, allocated, enteredBlock⟩, executed⟩
+    · simp [fault, M.stop] at success
+
+theorem lookupFn_success {cfg : GCfg} {id : FnId} {before final : St} {fn : Func}
+    (success : lookupFn cfg id before = .ok fn final) :
+    cfg.mod.funcs[id]? = some fn ∧ final = before := by
+  unfold lookupFn at success
+  cases lookup : cfg.mod.funcs[id]? with
+  | none => simp [lookup, fault, M.stop] at success
+  | some found =>
+    simp only [lookup, pure_apply, Res.ok.injEq] at success
+    exact ⟨by simp [success.1], success.2.symm⟩
+
+theorem callFn_success_entry {cfg : GCfg} {id : FnId} {depth fuel : Nat} {args : List Val}
+    {before final : St} {value : Val}
+    (success : callFn fuel cfg depth id args before = .ok value final) :
+    ∃ remaining fn,
+      fuel = remaining + 1 ∧ depth < maxCallDepth ∧ cfg.mod.funcs[id]? = some fn ∧
+      Goose.GIR.enterFn remaining cfg (depth + 1) fn args before = .ok value final := by
+  cases fuel with
+  | zero => simp [callFn, timeout, M.stop] at success
+  | succ remaining =>
+    by_cases cap : depth ≥ maxCallDepth
+    · simp [callFn, cap, timeout, M.stop, bind_apply] at success
+    · simp only [callFn, cap, ↓reduceIte] at success
+      obtain ⟨fn, middle, lookedUp, entered⟩ := m_bind_ok success
+      obtain ⟨lookup, unchanged⟩ := lookupFn_success lookedUp
+      rw [unchanged] at entered
+      exact ⟨remaining, fn, rfl, Nat.lt_of_not_ge cap, lookup, entered⟩
+
+theorem runModule_success_entry {cfg : GCfg} {fuel : Nat} {final : St}
+    (success : Goose.GIR.runModule fuel cfg St.initial = .ok () final) :
+    ∃ fn fr entered, RuntimePoint cfg fn (0, 0) fr entered := by
+  unfold Goose.GIR.runModule at success
+  obtain ⟨initializedValue, before, initialized, afterGlobals⟩ := m_bind_ok success
+  cases initializedValue
+  obtain ⟨result, returned, called, finished⟩ := m_bind_ok afterGlobals
+  obtain ⟨remaining, fn, fuelEq, depth, lookup, entered⟩ := callFn_success_entry called
+  obtain ⟨bodyFuel, fr, afterEntry, remainingEq, entry, executed⟩ := enterFn_success_entry entered
+  refine ⟨fn, fr, afterEntry, .entry ?_ initialized lookup entry⟩
+  omega
+
 end Goose.Evidence

@@ -357,4 +357,27 @@ theorem RuntimePoint.def_cell_sample {cfg : GCfg} {fn : Func} {pt : Pt} {fr : Fr
     exact False.elim (notParameter block member parameter)
   · exact sample
 
+theorem sampled_cmp_current_lt {cfg : GCfg} {fn : Func}
+    {sourcePt currentPt : Pt} {sourceFrame currentFrame : Frame}
+    {sourceState writtenState currentState : St} {condition left right : ValueId}
+    {fuel : Nat} {a b : Int}
+    (evaluated : execOp fuel ⟨cfg, fn⟩ sourceFrame (.cmp .lt .i64 left right) sourceState =
+      .ok (.val (.bool true)) writtenState)
+    (distinct : condition ≠ left ∧ condition ≠ right)
+    (leftCell : sourceFrame.vals[left]? = some (.val (.int .i64 a)))
+    (rightCell : sourceFrame.vals[right]? = some (.val (.int .i64 b)))
+    (history : RuntimeStepsAvoid cfg fn [left, right] (sourcePt.1, sourcePt.2 + 1)
+      (sourceFrame.set condition (.val (.bool true))) writtenState currentPt currentFrame currentState) :
+    currentFrame.vals[left]? = some (.val (.int .i64 a)) ∧
+    currentFrame.vals[right]? = some (.val (.int .i64 b)) ∧ a < b := by
+  have leftPreserved := history.preserves_cell (id := left) (by simp)
+  have rightPreserved := history.preserves_cell (id := right) (by simp)
+  simp only [Frame.set, Std.HashMap.getElem?_insert] at leftPreserved rightPreserved
+  have differentLeft : (condition == left) = false := by simpa using distinct.1
+  have differentRight : (condition == right) = false := by simpa using distinct.2
+  simp only [differentLeft, Bool.false_eq_true, ↓reduceIte] at leftPreserved
+  simp only [differentRight, Bool.false_eq_true, ↓reduceIte] at rightPreserved
+  exact ⟨leftPreserved.trans leftCell, rightPreserved.trans rightCell,
+    cmp_true_i64 evaluated leftCell rightCell⟩
+
 end Goose.Evidence
