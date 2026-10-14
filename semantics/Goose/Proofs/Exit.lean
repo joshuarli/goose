@@ -1,4 +1,5 @@
 import Goose.Construct.Exit
+import Goose.Construct.Eval
 import Goose.Proofs.Memory
 
 namespace Goose.Proofs.Exit
@@ -166,5 +167,53 @@ theorem unwind_removes (plan : ExitPlan) (store : Store) (root : RootInst)
 
 theorem unwind_preserves_output (plan : ExitPlan) (state : St) :
     (unwindState plan state).trace = state.trace := rfl
+
+
+def runtimeScopeRoots (activation : RuntimeActivation) (scope : Nat) (scopeInst : ScopeInst) : List RootInst :=
+  (activation.vars.toList.zipIdx).filterMap fun (localVar, index) =>
+    if localVar.scope == scope then some (.local activation.act scopeInst index) else none
+
+theorem runtime_select_nearest (target : NonlocalTarget) (stack : List RuntimeActivation)
+    (catcher : RuntimeActivation) (found : selectTarget? target stack = some catcher) :
+    ∃ discarded outer, stack = discarded ++ catcher :: outer ∧
+      target.contains catcher.implementation = true ∧
+      ∀ activation ∈ discarded, target.contains activation.implementation = false := by
+  induction stack with
+  | nil => simp [selectTarget?] at found
+  | cons activation rest ih =>
+      simp only [selectTarget?, List.find?_cons] at found
+      split at found
+      · cases found
+        exact ⟨[], rest, rfl, by assumption, by simp⟩
+      · rename_i excluded
+        obtain ⟨discarded, outer, shape, member, earlier⟩ := ih found
+        refine ⟨activation :: discarded, outer, by simp [shape], member, ?_⟩
+        intro frame inDiscarded
+        rcases List.mem_cons.mp inDiscarded with equal | inDiscarded
+        · subst frame; exact excluded
+        · exact earlier frame inDiscarded
+
+theorem runtime_release_scope_members (activation : RuntimeActivation) (scope : Nat)
+    (scopeInst : ScopeInst) (state : ExecutionState) (entry : RootInst × Value) :
+    entry ∈ (releaseScopeState activation scope scopeInst state).objects ↔
+      entry ∈ state.objects ∧ (runtimeScopeRoots activation scope scopeInst).contains entry.1 = false := by
+  simp [releaseScopeState, runtimeScopeRoots, List.mem_filter]
+
+theorem runtime_release_scope_outside (activation : RuntimeActivation) (scope : Nat)
+    (scopeInst : ScopeInst) (state : ExecutionState) (entry : RootInst × Value)
+    (outside : (runtimeScopeRoots activation scope scopeInst).contains entry.1 = false) :
+    entry ∈ (releaseScopeState activation scope scopeInst state).objects ↔ entry ∈ state.objects := by
+  rw [runtime_release_scope_members]
+  constructor
+  · exact And.left
+  · intro member; exact ⟨member, outside⟩
+
+theorem runtime_release_scope_construction (activation : RuntimeActivation) (scope : Nat)
+    (scopeInst : ScopeInst) (state : ExecutionState) :
+    (releaseScopeState activation scope scopeInst state).construction = state.construction := rfl
+
+theorem runtime_release_scope_stdout (activation : RuntimeActivation) (scope : Nat)
+    (scopeInst : ScopeInst) (state : ExecutionState) :
+    (releaseScopeState activation scope scopeInst state).construction.stdout = state.construction.stdout := rfl
 
 end Goose.Proofs.Exit
