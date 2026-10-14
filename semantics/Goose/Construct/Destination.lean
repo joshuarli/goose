@@ -590,6 +590,28 @@ def landReceivingStorage (storageId : StorageId) (receivingStart payloadStart : 
           storage := state.storage.set! storageId (storage.landExit receivingStart payloadStart) }
       else .fault .ownership state
 
+private def landCompletedReplacement (replacementId supersededId : DestinationId) (count : Nat)
+    (replacement superseded : PendingDestination)
+    (parentUpdate : Option (DestinationId × PendingDestination)) : ConstructionM Unit := do
+  let _ ← lookupStorage replacement.storage
+  if replacement.capability.start < superseded.capability.start then ConstructionM.fail .ownership
+  let state ← ConstructionM.get
+  let discarded := state.destinations.toList.reverse.filter fun destination =>
+    destination.capability.id != replacementId &&
+      descendantOf state.destinations supersededId destination.capability.id && active destination
+  protectedAbandonment discarded
+  landReceivingStorage replacement.storage superseded.capability.start replacement.capability.start
+  replaceDestination replacementId { replacement with
+    capability := { replacement.capability with start := superseded.capability.start }
+    use := superseded.use
+    progress := .built count
+    writeEnd := replacement.writeEnd - (replacement.capability.start - superseded.capability.start)
+    rollbackEnd := superseded.rollbackEnd }
+  if let some (parentId, parent) := parentUpdate then
+    replaceDestination parentId parent
+  if superseded.capability.start < replacement.capability.start then
+    emit (.relocate replacementId .exitValue)
+
 def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := do
   let replacement ← lookupDestination replacementId
   let (supersededId, count) ← match replacement.use, replacement.progress with
@@ -613,24 +635,7 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
             pure (some (parentId, { parent with progress := .suspended parentCount replacementId }))
         | _ => ConstructionM.fail .protocol
     | .replacement _ => ConstructionM.fail .protocol
-  let _ ← lookupStorage replacement.storage
-  if replacement.capability.start < superseded.capability.start then ConstructionM.fail .ownership
-  let state ← ConstructionM.get
-  let discarded := state.destinations.toList.reverse.filter fun destination =>
-    destination.capability.id != replacementId &&
-      descendantOf state.destinations supersededId destination.capability.id && active destination
-  protectedAbandonment discarded
-  landReceivingStorage replacement.storage superseded.capability.start replacement.capability.start
-  replaceDestination replacementId { replacement with
-    capability := { replacement.capability with start := superseded.capability.start }
-    use := superseded.use
-    progress := .built count
-    writeEnd := replacement.writeEnd - (replacement.capability.start - superseded.capability.start)
-    rollbackEnd := superseded.rollbackEnd }
-  if let some (parentId, parent) := parentUpdate then
-    replaceDestination parentId parent
-  if superseded.capability.start < replacement.capability.start then
-    emit (.relocate replacementId .exitValue)
+  landCompletedReplacement replacementId supersededId count replacement superseded parentUpdate
 
 
 def recordCopy (source : CopySource) (id : DestinationId) : ConstructionM Unit := do
@@ -1008,5 +1013,83 @@ theorem removeConstructionHeader_stdout (id : DestinationId) (state : Constructi
             apply keepsOutput_bind (replaceDestination id _)
             · exact keepsOutput_replace_destination _ _
             · intro _; exact keepsOutput_emit _
+
+
+
+private theorem keepsOutput_land_receiving (storageId : StorageId) (receivingStart payloadStart : Nat) :
+    KeepsOutput (landReceivingStorage storageId receivingStart payloadStart) := by
+  intro state
+  cases present : state.storage[storageId]? with
+  | none => simp [landReceivingStorage,present,ConstructionResult.finalState]
+  | some storage =>
+      simp only [landReceivingStorage,present]
+      split <;> rfl
+
+private theorem keepsOutput_completed_landing (replacementId supersededId : DestinationId) (count : Nat)
+    (replacement superseded : PendingDestination)
+    (parentUpdate : Option (DestinationId × PendingDestination)) :
+    KeepsOutput (landCompletedReplacement replacementId supersededId count replacement superseded parentUpdate) := by
+  apply keepsOutput_bind (lookupStorage replacement.storage)
+  · exact keepsOutput_lookup_storage _
+  · intro _
+    apply keepsOutput_if
+    · exact fun _ => rfl
+    · apply keepsOutput_bind ConstructionM.get
+      · exact keepsOutput_get
+      · intro state
+        apply keepsOutput_bind (protectedAbandonment _)
+        · exact protectedAbandonment_stdout _
+        · intro _
+          apply keepsOutput_bind (landReceivingStorage _ _ _)
+          · exact keepsOutput_land_receiving _ _ _
+          · intro _
+            apply keepsOutput_bind (replaceDestination replacementId _)
+            · exact keepsOutput_replace_destination _ _
+            · intro _
+              cases parentUpdate with
+              | none =>
+                  apply keepsOutput_if
+                  · exact keepsOutput_emit _
+                  · exact keepsOutput_pure ()
+              | some parent =>
+                  apply keepsOutput_bind (replaceDestination parent.1 parent.2)
+                  · exact keepsOutput_replace_destination _ _
+                  · intro _
+                    apply keepsOutput_if
+                    · exact keepsOutput_emit _
+                    · exact keepsOutput_pure ()
+
+theorem landExitReplacement_stdout (replacementId : DestinationId) (state : ConstructionState) :
+    (landExitReplacement replacementId state).finalState.stdout = state.stdout := by
+  apply keepsOutput_bind (lookupDestination replacementId)
+  · exact keepsOutput_lookup_destination replacementId
+  · intro replacement
+    cases replacement.use with
+    | receiver => exact fun _ => rfl
+    | child parentId => exact fun _ => rfl
+    | replacement supersededId =>
+      cases replacement.progress
+      all_goals try exact fun _ => rfl
+      rename_i count
+      apply keepsOutput_bind (lookupDestination supersededId)
+      · exact keepsOutput_lookup_destination supersededId
+      · intro superseded
+        cases superseded.progress
+        all_goals try exact fun _ => rfl
+        all_goals
+          apply keepsOutput_if
+          · exact fun _ => rfl
+          · cases superseded.use with
+            | receiver => exact keepsOutput_completed_landing _ _ _ _ _ _
+            | replacement _ => exact fun _ => rfl
+            | child parentId =>
+                apply keepsOutput_bind (lookupDestination parentId)
+                · exact keepsOutput_lookup_destination _
+                · intro parent
+                  cases parent.progress
+                  all_goals try exact fun _ => rfl
+                  apply keepsOutput_if
+                  · exact fun _ => rfl
+                  · exact keepsOutput_completed_landing _ _ _ _ _ _
 
 end Goose.Construct
