@@ -9,6 +9,16 @@ open Goose.Core Goose.GIR Goose.Proofs.Memory
 
 abbrev ActivationTypes := ActId → Option Func
 
+def ActivationTypes.Extends (before after : ActivationTypes) : Prop :=
+  ∀ act fn, before act = some fn → after act = some fn
+
+theorem ActivationTypes.Extends.refl (activations : ActivationTypes) : activations.Extends activations :=
+  fun _ _ present => present
+
+theorem ActivationTypes.Extends.trans {first second third : ActivationTypes}
+    (left : first.Extends second) (right : second.Extends third) : first.Extends third :=
+  fun act fn present => right act fn (left act fn present)
+
 def runtimeDeclarations (cfg : GCfg) (activations : ActivationTypes) : RootDeclarations
   | .global id => cfg.mod.globals[id]?.map (·.ty)
   | .local act _ slot => (activations act).bind (fun fn => fn.slots[slot]?.map (·.ty))
@@ -18,6 +28,28 @@ def ActivationTypes.Before (activations : ActivationTypes) (next : ActId) : Prop
 
 def ActivationTypes.enter (activations : ActivationTypes) (act : ActId) (fn : Func) : ActivationTypes :=
   fun other => if other = act then some fn else activations other
+
+theorem ActivationTypes.enter_extends {activations : ActivationTypes} {act : ActId} {fn : Func}
+    (fresh : activations act = none) : activations.Extends (activations.enter act fn) := by
+  intro other owner present
+  by_cases same : other = act
+  · subst other
+    rw [fresh] at present
+    contradiction
+  · simpa only [ActivationTypes.enter, same, ↓reduceIte] using present
+
+theorem runtimeDeclarations_extends {cfg : GCfg} {before after : ActivationTypes}
+    (extension : before.Extends after) :
+    (runtimeDeclarations cfg before).Extends (runtimeDeclarations cfg after) := by
+  intro root ty present
+  cases root with
+  | global id => exact present
+  | «local» act scope slot =>
+    cases allocated : before act with
+    | none => simp [runtimeDeclarations, allocated] at present
+    | some fn =>
+      have kept := extension act fn allocated
+      simpa only [runtimeDeclarations, allocated, kept] using present
 
 def RuntimeStateTy (cfg : GCfg) (activations : ActivationTypes) (state : St) : Prop :=
   activations.Before state.nextAct ∧ WeakStoreTy (runtimeDeclarations cfg activations) state.store
@@ -48,12 +80,13 @@ theorem RuntimeStateTy.freshAct {cfg : GCfg} {activations : ActivationTypes} {be
     RuntimeStateTy cfg (activations.enter act fn) after ∧
       (activations.enter act fn) act = some fn ∧
       (runtimeDeclarations cfg activations).Extends
-        (runtimeDeclarations cfg (activations.enter act fn)) := by
+        (runtimeDeclarations cfg (activations.enter act fn)) ∧
+      activations.Extends (activations.enter act fn) := by
   simp only [Goose.Core.freshAct, Res.ok.injEq] at allocated
   obtain ⟨rfl, rfl⟩ := allocated
   have fresh := typed.1 before.nextAct (Nat.le_refl _)
   have extension := runtimeDeclarations_enter_extends (cfg := cfg) (fn := fn) fresh
-  refine ⟨⟨?_, typed.2.mono extension⟩, ?_, extension⟩
+  refine ⟨⟨?_, typed.2.mono extension⟩, ?_, extension, ActivationTypes.enter_extends fresh⟩
   · intro other bound
     change before.nextAct + 1 ≤ other at bound
     have different : other ≠ before.nextAct := Nat.ne_of_gt (Nat.lt_of_succ_le bound)
@@ -80,6 +113,7 @@ def RuntimeFrameTy (cfg : GCfg) (fn : Func) (activations : ActivationTypes)
     (fr : Frame) (state : St) : Prop :=
   RuntimeStateTy cfg activations state ∧ activations fr.act = some fn ∧
     WeakFrameTy (runtimeDeclarations cfg activations) (fn.valueTypes cfg.mod) fr
+
 
 theorem WeakFrameTy.empty (roots : RootDeclarations) (types : Array (Option VTy))
     (act depth : Nat) : WeakFrameTy roots types ⟨act, [], {}, depth⟩ := by
@@ -276,6 +310,15 @@ theorem WeakFrameTy.mono {before after : RootDeclarations} {types : Array (Optio
     WeakFrameTy after types fr := by
   intro id cell ty metadata present
   exact (typed id cell ty metadata present).mono extension
+
+theorem RuntimeFrameTy.transfer {cfg : GCfg} {fn : Func} {before after : ActivationTypes}
+    {fr : Frame} {oldState newState : St} (typed : RuntimeFrameTy cfg fn before fr oldState)
+    (extension : before.Extends after) (stateTyped : RuntimeStateTy cfg after newState) :
+    RuntimeFrameTy cfg fn after fr newState := by
+  refine ⟨stateTyped, extension fr.act fn typed.2.1, ?_⟩
+  intro id cell ty metadata present
+  exact (typed.2.2 id cell ty metadata present).mono (runtimeDeclarations_extends extension)
+
 
 theorem execPure_slotAddr_typed {activations : ActivationTypes} {cx : FnCtx} {fr : Frame}
     {id : SlotId} {slot : Slot} {before after : St} {cell : RVal}
@@ -1357,14 +1400,14 @@ theorem FunctionEntry.typed {cfg : GCfg} {activations : ActivationTypes} {fn : F
       (args.map RVal.val))
     (entry : FunctionEntry fn depth args before fr after) :
     ∃ extended, (runtimeDeclarations cfg activations).Extends (runtimeDeclarations cfg extended) ∧
-      RuntimeFrameTy cfg fn extended fr after := by
+      activations.Extends extended ∧ RuntimeFrameTy cfg fn extended fr after := by
   obtain ⟨arity, act, fresh, allocated, entered⟩ := entry
-  obtain ⟨freshTyped, owner, extension⟩ := stateTyped.freshAct fn allocated
+  obtain ⟨freshTyped, owner, extension, activationExtension⟩ := stateTyped.freshAct fn allocated
   obtain ⟨frameTyped, sameState⟩ := enterBlock_typed lookup
     (WeakFrameTy.empty _ _ act depth) metadata (argsTyped.mono extension) entered
   have current := enterBlock_act entered
   change fr.act = act at current
-  refine ⟨activations.enter act fn, extension, ?_⟩
+  refine ⟨activations.enter act fn, extension, activationExtension, ?_⟩
   refine ⟨sameState ▸ freshTyped, ?_, frameTyped⟩
   rw [current]
   exact owner

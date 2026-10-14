@@ -435,7 +435,7 @@ theorem RuntimePoint.call_entry_typed {cfg : GCfg} {activations : ActivationType
     (lookup : cfg.mod.funcs[callee]? = some fn)
     (entry : FunctionEntry fn (fr.depth + 1) values readState fr' after) :
     ∃ extended, (runtimeDeclarations cfg activations).Extends (runtimeDeclarations cfg extended) ∧
-      RuntimeFrameTy cfg fn extended fr' after := by
+      activations.Extends extended ∧ RuntimeFrameTy cfg fn extended fr' after := by
   obtain ⟨block, blockMember, instructionMember⟩ := instAt_member instruction
   obtain ⟨checkedFn, checkedLookup, arity, operands, resultMetadata⟩ :=
     validated_call_operands accepted reachable.function_mem blockMember instructionMember
