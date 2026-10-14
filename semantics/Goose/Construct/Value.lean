@@ -12,6 +12,7 @@ structure StoredValue where
   count : Nat
   destination : Option DestinationId := none
   object : Option StorageId := none
+  path : List Nat := []
   deriving Repr
 
 inductive Value

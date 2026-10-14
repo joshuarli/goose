@@ -7,10 +7,10 @@ private def fault (kind : FaultKind) : EvalM α := EvalM.stop (.fault kind)
 private def timeout : EvalM α := EvalM.stop .timeout
 private def abortAt (kind : AbortKind) (origin : OriginId) : EvalM α := EvalM.stop (.abort kind origin)
 
-private def liftExcept (action : Except FaultKind α) : EvalM α :=
+private def liftExcept (action : Except Core.Stop α) : EvalM α :=
   match action with
   | .ok value => pure value
-  | .error kind => fault kind
+  | .error reason => EvalM.stop reason
 
 private def liftLayout (action : Except LayoutFault α) : EvalM α :=
   match action with
@@ -41,7 +41,7 @@ private def storedDestination (id : DestinationId) : EvalM StoredValue := do
     | .published _ => destination.backing.receiverStorage
     | _ => destination.storage
   pure ⟨storage, destination.capability.start,
-    destination.capability.logicalType, count, some id, none⟩
+    destination.capability.logicalType, count, some id, none, []⟩
 
 private def elementType : Ty → Option Ty
   | .arr element _ | .varr element | .grow element | .growshrink element | .limited element _ => some element
@@ -72,50 +72,50 @@ private def bytesInt (ty : IntTy) (bytes : ByteArray) (start : Nat) : Except Fau
     bits := bits + byte.toNat * 2 ^ (8 * index)
   pure (Core.ofBits ty bits)
 
-private def fixedBytes : Nat → Module → Ty → Value → Except FaultKind ByteArray
-  | 0, _, _, _ => .error .flow
+private def fixedBytes : Nat → Module → Ty → Value → Except Core.Stop ByteArray
+  | 0, _, _, _ => .error .timeout
   | fuel + 1, module, ty, value => do
     match ty, value with
     | .int ty, .int actual value =>
-        if ty == actual then .ok (intBytes ty value) else .error .shape
+        if ty == actual then .ok (intBytes ty value) else .error (.fault .shape)
     | .bool, .bool value => .ok ⟨#[if value then 1 else 0]⟩
     | .arr element count, .fixed elements => do
-        if elements.size != count then throw .shape
+        if elements.size != count then throw (.fault .shape)
         let parts ← elements.toList.mapM (fixedBytes fuel module element)
         pure (parts.foldl (· ++ ·) ByteArray.empty)
     | .structT id _, .record actual fields => do
-        if id != actual then throw .shape
-        let some descriptor := module.structs[id]? | throw .unbound
-        if descriptor.fields.size != fields.size then throw .shape
+        if id != actual then throw (.fault .shape)
+        let some descriptor := module.structs[id]? | throw (.fault .unbound)
+        if descriptor.fields.size != fields.size then throw (.fault .shape)
         let mut bytes : ByteArray := ⟨Array.replicate descriptor.byteSize 0⟩
         for (field, value) in descriptor.fields.toList.zip fields.toList do
           let part ← fixedBytes fuel module field.ty value
-          if field.byteOffset + part.size > bytes.size then throw .pathRange
+          if field.byteOffset + part.size > bytes.size then throw (.fault .pathRange)
           for index in [0:part.size] do
-            let some byte := part.data[index]? | throw .pathRange
+            let some byte := part.data[index]? | throw (.fault .pathRange)
             bytes := bytes.set! (field.byteOffset + index) byte
         pure bytes
-    | _, _ => .error .shape
+    | _, _ => .error (.fault .shape)
   
 
-private def fixedValue (fuel : Nat) (module : Module) (ty : Ty) (bytes : ByteArray) (start : Nat) : Except FaultKind Value :=
+private def fixedValue (fuel : Nat) (module : Module) (ty : Ty) (bytes : ByteArray) (start : Nat) : Except Core.Stop Value :=
   match fuel with
-  | 0 => .error .flow
+  | 0 => .error .timeout
   | fuel + 1 => do
       match ty with
-      | .int ty => pure (.int ty (← bytesInt ty bytes start))
+      | .int ty => pure (.int ty (← (bytesInt ty bytes start).mapError Core.Stop.fault))
       | .bool =>
-          let some byte := bytes.data[start]? | throw .pathRange
+          let some byte := bytes.data[start]? | throw (.fault .pathRange)
           pure (.bool (byte != 0))
       | .arr element count =>
-          let some width := fixedByteSize? module element | throw .shape
+          let some width := fixedByteSize? module element | throw (.fault .shape)
           let elements ← (List.range count).mapM fun index => fixedValue fuel module element bytes (start + index * width)
           pure (.fixed elements.toArray)
       | .structT id _ =>
-          let some descriptor := module.structs[id]? | throw .unbound
+          let some descriptor := module.structs[id]? | throw (.fault .unbound)
           let fields ← descriptor.fields.toList.mapM fun field => fixedValue fuel module field.ty bytes (start + field.byteOffset)
           pure (.record id fields.toArray)
-      | _ => throw .shape
+      | _ => throw (.fault .shape)
 
 private def sampledStored (stored : StoredValue) : EvalM (ByteArray × SampledRun) := do
   let bytes := (← getStorage stored.storage).bytes
@@ -141,7 +141,7 @@ private def readStoredElement (fuel : Nat) (module : Module) (stored : StoredVal
   let (start, _) ← liftLayout (elementInterval fuel module bytes run index)
   if run.element.nonfixed then
     let sampled ← liftLayout (samplePacked run.element bytes start)
-    pure (.stored ⟨stored.storage, start, run.element, sampled.count, none, none⟩)
+    pure (.stored ⟨stored.storage, start, run.element, sampled.count, none, some (stored.object.getD stored.storage), stored.path ++ [index]⟩)
   else liftExcept (fixedValue fuel module run.element bytes start)
 
 private def readValuePath : Nat → Module → Value → List Nat → EvalM Value
@@ -240,13 +240,16 @@ private def rootOf (environment : RuntimeActivation) (localVar : VarId) : EvalM 
   let some (_, scopeInst) := environment.scopes.find? (fun entry => entry.1 == descriptor.scope) | fault .unbound
   pure (.local environment.act scopeInst localVar)
 
-private def releaseScope (environment : RuntimeActivation) (scope : Nat) (scopeInst : ScopeInst) : EvalM Unit := do
-  let state ← EvalM.get
+def releaseScopeState (environment : RuntimeActivation) (scope : Nat) (scopeInst : ScopeInst)
+    (state : ExecutionState) : ExecutionState :=
   let roots := (environment.vars.toList.zipIdx).filterMap fun (localVar, index) =>
     if localVar.scope == scope then some (RootInst.local environment.act scopeInst index) else none
-  EvalM.set { state with
+  { state with
     objects := state.objects.filter (fun entry => !roots.contains entry.1)
     activations := state.activations.map (fun current => if current.act == environment.act then { current with scopes := environment.scopes } else current) }
+
+private def releaseScope (environment : RuntimeActivation) (scope : Nat) (scopeInst : ScopeInst) : EvalM Unit := do
+  EvalM.set (releaseScopeState environment scope scopeInst (← EvalM.get))
 
 private def bindAll (act : ActId) (scopeInst : ScopeInst) (values : List (VarId × Value)) : EvalM Unit := do
   for (localVar, value) in values do bindRoot (.local act scopeInst localVar) value
@@ -448,9 +451,12 @@ private def enclosingActivation (environment : RuntimeActivation) : EvalM Runtim
   let some activation := (← EvalM.get).activations.find? (fun activation => activation.act == environment.act) | fault .flow
   pure { activation with scopes := environment.scopes }
 
+def selectTarget? (target : Core.NonlocalTarget) (activations : List RuntimeActivation) : Option RuntimeActivation :=
+  activations.find? (fun activation => target.contains activation.implementation)
+
 private def targetActivation (config : EvalConfig) (target : Nat) : EvalM RuntimeActivation := do
   let some target := config.module.targets[target]? | fault .unbound
-  let some activation := (← EvalM.get).activations.find? (fun activation => target.contains activation.implementation) | fault .flow
+  let some activation := selectTarget? target (← EvalM.get).activations | fault .flow
   pure activation
 
 private def exitChannels (activation : RuntimeActivation) (operands : List Expr) (origin : OriginId) : EvalM (List Channel) := do
@@ -482,6 +488,38 @@ private def landCarriers (origin : OriginId) (carriers : List Carrier) : EvalM U
         match destination.use with
         | .replacement _ => liftConstruction origin (landExitReplacement id)
         | _ => pure ()
+
+private def finishChannels (config : EvalConfig) (activation : RuntimeActivation)
+    (carriers : List Carrier) : EvalM Unit := do
+  landCarriers 0 carriers
+  let some implementation := config.module.impls[activation.implementation]? | fault .unbound
+  if carriers.length != implementation.results.size then fault .arity
+  for (carrier, result) in carriers.zip implementation.results.toList do
+    match carrier with
+    | .register _ => pure ()
+    | .completed id =>
+        let destination ← getDestination id
+        let receivingPacked := match destination.capability.layout with | .varr _ => true | _ => false
+        if destination.layout == .packed && destination.capability.request == .value && !receivingPacked then
+          liftConstruction 0 (removeConstructionHeader id)
+          liftConstruction 0 (restoreReceivingLayout id (← receivingLayout config.module destination.capability.layout))
+        liftConstruction 0 (adaptDestinationType id result.ty)
+
+private def joinBytes (separator : ByteArray) : List ByteArray → ByteArray
+  | [] => ByteArray.empty
+  | first :: rest => rest.foldl (fun bytes part => bytes ++ separator ++ part) first
+
+private def quoteBytes (bytes : ByteArray) : ByteArray := Id.run do
+  let mut result := "\"".toUTF8
+  for byte in bytes.data do
+    result := result ++ match byte.toNat with
+      | 34 => "\\\"".toUTF8
+      | 92 => "\\\\".toUTF8
+      | 10 => "\\n".toUTF8
+      | 13 => "\\r".toUTF8
+      | 9 => "\\t".toUTF8
+      | _ => ⟨#[byte]⟩
+  return result ++ "\"".toUTF8
 
 mutual
 private def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → EvalM Value
@@ -581,13 +619,36 @@ private def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → Ev
           let .structT id _ := ty | fault .shape
           pure (.record id (← operands.mapM (evalValue fuel config environment)).toArray)
       | .bytes ty bytes origin =>
-          if ty.nonfixed then
+          if let .slice _ (.int .u8) := ty then
+            let index ← freshScope
+            let root := RootInst.global (config.module.globals.size + index)
+            bindRoot root (.fixed (bytes.map (fun byte => Value.int .u8 byte.toNat)).toArray)
+            pure (.slice ⟨root, []⟩ 0 bytes.length)
+          else if ty.nonfixed then
             carrierValue (← constructLocal config.module environment.act ty origin expression
               (fun destination => buildExpr fuel config environment destination expression))
           else pure (.fixed (bytes.map (fun byte => Value.int .u8 byte.toNat)).toArray)
-      | .str ty _ origin | .copy ty _ origin =>
-          carrierValue (← constructLocal config.module environment.act ty origin expression
-            (fun destination => buildExpr fuel config environment destination expression))
+      | .str ty _ origin =>
+          let carrier ← constructLocal config.module environment.act ty origin expression
+            (fun destination => buildExpr fuel config environment destination expression)
+          let value ← carrierValue carrier
+          if ty.nonfixed then pure value
+          else
+            let .stored stored := value | fault .shape
+            let storage ← getStorage stored.storage
+            liftExcept (fixedValue fuel config.module ty storage.bytes stored.start)
+      | .copy ty source origin =>
+          if ty.nonfixed then
+            carrierValue (← constructLocal config.module environment.act ty origin expression
+              (fun destination => buildExpr fuel config environment destination expression))
+          else
+            let value ← readLoc fuel config.module (← evalPlace fuel config environment source)
+            match ty, value with
+            | .arr _ count, .stored stored =>
+                let (_, run) ← sampledStored stored
+                if count != run.count then fault .shape
+                pure (.fixed (← (List.range count).mapM (readStoredElement fuel config.module stored)).toArray)
+            | _, value => pure value
       | .resultLocal localVar _ => readLoc fuel config.module ⟨← rootOf environment localVar, []⟩
       | .values operands =>
           match operands with
@@ -784,6 +845,10 @@ private def invokeCall : Nat → EvalConfig → RuntimeActivation → ContextId 
   | fuel + 1, config, environment, context, arguments, channels => do
       let (id, implementation) ← getImplementation config context
       if channels.length != implementation.results.size then fault .arity
+      for (channel, result) in channels.zip implementation.results.toList do
+        match channel with
+        | .register _ => pure ()
+        | .construct destination => liftConstruction 0 (adaptDestinationType destination result.ty)
       let values ← evalArguments fuel config environment implementation.vars implementation.params.toList arguments
       let state ← EvalM.get
       if state.activations.length ≥ Core.maxCallDepth then timeout
@@ -804,7 +869,7 @@ private def enterActivation : Nat → EvalConfig → RuntimeActivation → List 
         | _ => fault .flow
       let finish := fun carriers state' =>
         let state' := { state' with activations := state'.activations.filter (fun current => current.act != activation.act) }
-        match landCarriers 0 carriers state' with
+        match finishChannels config activation carriers state' with
         | .ok () state'' => ExecutionStep.ok carriers state''
         | .stop reason state'' => ExecutionStep.stop reason state''
         | .escape target escaped state'' => ExecutionStep.escape target escaped state''
@@ -875,7 +940,15 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
           let value ←
             if descriptor.ty.nonfixed then
               let some implementation := config.module.impls[environment.implementation]? | fault .unbound
-              let named := implementation.results.toList.zipIdx |>.find? (fun (result, _) => result.namedLocal == some localVar)
+              let namedCandidate := implementation.results.toList.zipIdx |>.find? (fun (result, _) => result.namedLocal == some localVar)
+              let named ← match namedCandidate with
+                | some (result, index) =>
+                    match environment.channels[index]? with
+                    | some (.construct destination) => do
+                        let destination ← getDestination destination
+                        pure (if destination.capability.request == .value then some (result, index) else none)
+                    | _ => fault .flow
+                | none => pure none
               let object ← if named.isSome then do pure (some (← liftConstruction origin reserveStorage)) else pure none
               let destination ← match named with
                 | some (_, index) =>
@@ -883,6 +956,7 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
                     | some (.construct destination) => pure destination
                     | _ => fault .flow
                 | none => newDestination config.module environment.act descriptor.ty .value origin none (literalCount expression)
+              if named.isSome then liftConstruction origin (prepareNamedBinding destination descriptor.ty)
               buildExpr fuel config environment destination expression
               let destination ← completedDestination destination
               if named.isNone then publishCarriers origin [.completed destination]
@@ -1037,18 +1111,32 @@ private def evalPrintArg : Nat → EvalConfig → RuntimeActivation → PrintArg
   | fuel + 1, config, environment, argument => do
       match argument with
       | .text text => pure text.toUTF8
-      | .expr expression =>
-          let value ← evalValue fuel config environment expression
-          match value with
-          | .stored stored => renderStored fuel config stored
-          | .slice location start count => renderView fuel config ⟨location, start, count, false⟩
-          | .fixed elements =>
-              let parts ← elements.toList.mapM fun value => do
-                let (.u8, byte) ← expectInt value | fault .shape
-                pure (UInt8.ofNat byte.toNat)
-              pure ⟨parts.toArray⟩
-          | _ => renderValue value
-      | .view view => renderView fuel config (← evalView fuel config environment view)
+      | .expr expression => renderAny fuel config false (← evalValue fuel config environment expression)
+      | .view view => renderView fuel config false (← evalView fuel config environment view)
+
+private def renderAny : Nat → EvalConfig → Bool → Value → EvalM ByteArray
+  | 0, _, _, _ => timeout
+  | fuel + 1, config, nested, value => do
+      match value with
+      | .int _ _ | .bool _ => renderValue value
+      | .unit => pure "()".toUTF8
+      | .ref location => renderAny fuel config nested (← readLoc fuel config.module location)
+      | .slice location start count => renderView fuel config nested ⟨location, start, count, false⟩
+      | .stored stored => renderStored fuel config nested stored
+      | .fixed values =>
+          if values.all (fun value => match value with | .int .u8 _ => true | _ => false) then
+            let bytes ← values.toList.mapM fun value => do
+              let (_, byte) ← expectInt value
+              pure (UInt8.ofNat byte.toNat)
+            pure (if nested then quoteBytes ⟨bytes.toArray⟩ else ⟨bytes.toArray⟩)
+          else renderElements fuel config values.toList
+      | .record _ _ => fault .shape
+
+private def renderElements : Nat → EvalConfig → List Value → EvalM ByteArray
+  | 0, _, _ => timeout
+  | fuel + 1, config, values => do
+      let parts ← values.mapM (renderAny fuel config true)
+      pure ("[".toUTF8 ++ joinBytes ", ".toUTF8 parts ++ "]".toUTF8)
 
 private def execWhile : Nat → EvalConfig → RuntimeActivation → Expr → Block → EvalM Flow
   | 0, _, _, _, _ => timeout
@@ -1092,23 +1180,35 @@ private def loopBody : Nat → EvalConfig → RuntimeActivation → List (VarId 
           | .breakValue [] => pure (.breaking none)
           | .breakValue carriers => pure (.breaking (some (← carrierValue (← singleCarrier carriers)))))
 
-private def renderStored : Nat → EvalConfig → StoredValue → EvalM ByteArray
-  | 0, _, _ => timeout
-  | fuel + 1, config, stored => do
+private def renderStored : Nat → EvalConfig → Bool → StoredValue → EvalM ByteArray
+  | 0, _, _, _ => timeout
+  | fuel + 1, config, nested, stored => do
       let (bytes, run) ← sampledStored stored
-      if run.element != .int .u8 then fault .shape
-      let (start, finish) ← liftLayout (sampledInterval fuel config.module bytes run)
-      pure (bytes.extract start finish)
+      if run.element == .int .u8 then
+        let (start, finish) ← liftLayout (sampledInterval fuel config.module bytes run)
+        let bytes := bytes.extract start finish
+        pure (if nested then quoteBytes bytes else bytes)
+      else
+        let values ← (List.range run.count).mapM (readStoredElement fuel config.module stored)
+        renderElements fuel config values
 
-private def renderView : Nat → EvalConfig → RuntimeView → EvalM ByteArray
-  | 0, _, _ => timeout
-  | fuel + 1, config, view => do
+private def renderView : Nat → EvalConfig → Bool → RuntimeView → EvalM ByteArray
+  | 0, _, _, _ => timeout
+  | fuel + 1, config, nested, view => do
+      let value ← readLoc fuel config.module view.location
+      let rawBytes ← match value with
+        | .stored stored => do pure ((← sampledStored stored).2.element == .int .u8)
+        | .fixed values => pure (values.all (fun value => match value with | .int .u8 _ => true | _ => false))
+        | _ => fault .shape
       let values ← readRun fuel config.module view
-      let bytes ← values.mapM fun value => do
-        let (ty, byte) ← expectInt value
-        if ty != .u8 then fault .shape
-        pure (UInt8.ofNat byte.toNat)
-      pure ⟨bytes.toArray⟩
+      if rawBytes then
+        let bytes ← values.mapM fun value => do
+          let (ty, byte) ← expectInt value
+          if ty != .u8 then fault .shape
+          pure (UInt8.ofNat byte.toNat)
+        let bytes : ByteArray := ⟨bytes.toArray⟩
+        pure (if nested then quoteBytes bytes else bytes)
+      else renderElements fuel config values
 
 private def copyValue : Nat → EvalConfig → DestinationId → Value → OriginId → EvalM Unit
   | 0, _, _, _, _ => timeout
@@ -1119,7 +1219,7 @@ private def copyValue : Nat → EvalConfig → DestinationId → Value → Origi
       | .stored stored =>
           let (bytes, run) ← sampledStored stored
           if run.element != element then fault .shape
-          liftConstruction origin (recordCopy (.storage (stored.object.getD stored.storage) []) destination)
+          liftConstruction origin (recordCopy (.storage (stored.object.getD stored.storage) stored.path) destination)
           for index in [0:run.count] do
             let (start, finish) ← liftLayout (elementInterval fuel config.module bytes run index)
             liftConstruction origin (writeElement destination (bytes.extract start finish))
@@ -1199,7 +1299,7 @@ private def appendRun : Nat → EvalConfig → RuntimeActivation → Loc → Run
       match source with
       | .stored source =>
           let (bytes, run) ← sampledStored source
-          liftConstruction origin (recordCopy (.storage (source.object.getD source.storage) view.location.path) destination)
+          liftConstruction origin (recordCopy (.storage (source.object.getD source.storage) source.path) destination)
           for index in [0:view.count] do
             let (start, finish) ← liftLayout (elementInterval fuel config.module bytes run (view.start + index))
             liftConstruction origin (writeElement destination (bytes.extract start finish))
