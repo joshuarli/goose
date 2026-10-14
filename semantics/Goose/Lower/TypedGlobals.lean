@@ -61,4 +61,49 @@ theorem typedGlobal_simulation {cfg : Cfg} {globalId : GlobalId} {global : Core.
     rw [enterFn_nil _ _ _ _ _ rfl entryAt entryParams]
     exact run remaining (by omega)
 
+theorem typedInitializers_simulation {cfg : Cfg} (n : Nat)
+    (accepted : Core.validate cfg.mod = .ok ())
+    (hexpr : ∀ (id : GlobalId) (global : Core.Global), cfg.mod.globals[id]? = some global →
+      TypedExprClaim n cfg [global.ty] global.init) (count : Nat) :
+    ∀ first state, first + count ≤ cfg.mod.globals.size →
+      InitializedGlobals cfg.mod first state →
+      EventualM (Core.initGlobals n cfg (List.range' first count))
+        (fun fuel => GIR.initGlobals fuel ⟨cfg.profile, lower cfg.mod⟩ (List.range' first count)) state := by
+  induction count with
+  | zero =>
+    intro first state bounded initialized
+    simp only [List.range'_zero, Core.initGlobals, GIR.initGlobals]
+    exact EventualM.refl _ _
+  | succ count previous =>
+    intro first state bounded initialized
+    have present : first < cfg.mod.globals.size := by omega
+    let global := cfg.mod.globals[first]
+    have globalAt : cfg.mod.globals[first]? = some global := by simp [global, present]
+    have loweredAt : (lower cfg.mod).globals[first]? = some (lowerGlobal cfg.mod global) := by
+      simp [lower, Array.getElem?_map, globalAt]
+    simp only [List.range'_succ, Core.initGlobals, GIR.initGlobals, Core.lookupGlobal,
+      GIR.lookupInit, globalAt, loweredAt, pure_bind, bind_assoc]
+    refine EventualM.bind (typedGlobal_simulation accepted globalAt initialized.invariant
+      (hexpr first global globalAt)) fun value after evaluated => ?_
+    have nextInitialized := initialized.afterInitializer accepted globalAt n evaluated
+    refine EventualM.bind (EventualM.refl (bindRoot (.global first) value) after)
+      fun unit next bound => ?_
+    have nextEq : next = { after with store := after.store.introduce (.global first) value } := by
+      exact (Res.ok.inj bound).2.symm
+    subst next
+    exact previous (first + 1) _ (by omega) nextInitialized
+
+
+theorem typedGlobals_simulation {cfg : Cfg} (n : Nat)
+    (accepted : Core.validate cfg.mod = .ok ())
+    (hexpr : ∀ (id : GlobalId) (global : Core.Global), cfg.mod.globals[id]? = some global →
+      TypedExprClaim n cfg [global.ty] global.init) :
+    EventualM (Core.initGlobals n cfg (List.range cfg.mod.globals.size))
+      (fun fuel => GIR.initGlobals fuel ⟨cfg.profile, lower cfg.mod⟩
+        (List.range cfg.mod.globals.size)) St.initial := by
+  simpa only [List.range_eq_range'] using
+    typedInitializers_simulation n accepted hexpr cfg.mod.globals.size 0 St.initial
+      (by omega) (InitializedGlobals.initial _)
+
+
 end Goose.Lower
