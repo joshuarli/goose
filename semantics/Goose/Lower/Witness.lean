@@ -43,6 +43,10 @@ def blockValue : String := include_str "../../../test/gir/golden/gir_ord02.core.
 def countingWhile : String :=
   (include_str "../../../test/gir/golden/gir_loop_small.core.json").replace "\"20000\"" "\"3\""
 
+def nestedWhile : String :=
+  countingWhile.replace "[\"block\",1,[[\"s_assign_op\""
+    "[\"block\",1,[[\"s_while\",[\"e_bool\",0],[\"block\",2,[],[]],4],[\"s_assign_op\""
+
 /-- A statement covered by the local while theorem, irrespective of the module predicate. -/
 def hasCoveredWhile (bs : ByteArray) : Bool :=
   match Core.Decode.decodeBytes bs with
@@ -61,6 +65,10 @@ def hasCoveredWhile (bs : ByteArray) : Bool :=
 #guard covered sliceOob.toUTF8
 #guard covered intOverflow.toUTF8
 
+#guard covered countingWhile.toUTF8
+#guard covered nestedWhile.toUTF8
+#guard (agreeLine .release nestedWhile.toUTF8).startsWith "[\"agree\",[\"done\",[\"returned\"],\"3\\n\"]"
+#guard (agreeLine .debug nestedWhile.toUTF8).startsWith "[\"agree\",[\"done\",[\"returned\"],\"3\\n\"]"
 #guard hasCoveredWhile countingWhile.toUTF8
 #guard (agreeLine .release countingWhile.toUTF8).startsWith "[\"agree\",[\"done\",[\"returned\"],\"3\\n\"]"
 #guard (agreeLine .debug countingWhile.toUTF8).startsWith "[\"agree\",[\"done\",[\"returned\"],\"3\\n\"]"

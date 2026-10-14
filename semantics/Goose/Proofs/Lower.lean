@@ -3,6 +3,7 @@ import Goose.Lower.Range
 import Goose.Lower.Validate
 import Goose.Lower.IfSymbols
 import Goose.Lower.Finish
+import Goose.Lower.Normal
 import Goose.Core.Validate
 import Goose.GIR.Validate
 
@@ -419,8 +420,7 @@ theorem lowerImpl_blocks (m : Core.Module) (impl : Impl) (hp : impl.params = #[]
   exact lowerImplAt_blocks m _ impl hp
 
 theorem bodyTail_cases (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS)
-    (hok : blockOk impl.body = true)
-    (hlow : lowerBlock none [] false impl.body le startLS = (v, ls1)) :
+    (hd : impl.body.diverges le.mod.noReturn = false) :
     (ls1.cur = none ∧ bodyTail impl le v ls1 = ls1) ∨
     (∃ b, ls1.cur = some b ∧
       emitTerm (.ret (if impl.body.value.isSome then [v] else []) none) le ls1 =
@@ -430,13 +430,13 @@ theorem bodyTail_cases (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS)
     left
     refine ⟨rfl, ?_⟩
     unfold bodyTail
-    rw [finishFunction_fragment impl le startLS v ls1 hok hlow]
+    rw [finishFunction_nondivergent impl le ls1 v hd]
     simp [bind_run, isLive_none hc, pure_run]
   | some b =>
     right
     refine ⟨b, rfl, ?_⟩
     unfold bodyTail
-    rw [finishFunction_fragment impl le startLS v ls1 hok hlow]
+    rw [finishFunction_nondivergent impl le ls1 v hd]
     simp [bind_run, isLive_run hc]
 
 theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
@@ -500,7 +500,10 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
         subst hf
         simp only [expectReturned, pure_apply] at hc'
         obtain ⟨rfl, rfl⟩ := Res.ok.inj hc'
-        rcases bodyTail_cases impl le r ls1 hb hlow with ⟨hnone, -⟩ | ⟨b, hcur, hemit⟩
+        have hdiv := execBlock_success_not_divergent n' ⟨p, m⟩
+          ⟨impl.vars, s.nextAct, [], 0 + 1⟩ impl.body hb
+          { s with nextAct := s.nextAct + 1 } s2 (.normal v) hcb
+        rcases bodyTail_cases impl le r ls1 hdiv with ⟨hnone, -⟩ | ⟨b, hcur, hemit⟩
         · obtain ⟨blk, hc1, -⟩ := LS.pp_some P.pp
           rw [hnone] at hc1; cases hc1
         obtain ⟨-, -, -, hinst⟩ := emitTerm_facts hemit P.pp hextE
@@ -603,9 +606,6 @@ theorem runModule_agree (m : Core.Module) (hm : moduleOk m = true) (p : NumProfi
         Agree.bind (entry_agree m ctx impl hctx himpl hp hb p n s1) fun _ s2 _ =>
           Agree.refl _ s2
 
-/-- The lowering preserves the meaning of the modules whose initializers and entry
-use structured control (conditionals, short-circuit operators and block values among them), but no
-loop, call or return. -/
 theorem lower_correct_ctl (m : Core.Module) (hm : moduleOk m = true) (n : Nat) (p : NumProfile)
     (o : Outcome) (t : String) (h : eval n p m = .done o t) :
     ∃ k, GIR.run k p (lower m) = .done o t := by
