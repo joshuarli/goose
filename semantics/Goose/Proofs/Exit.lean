@@ -395,4 +395,37 @@ theorem runtime_nearest_activation_dispatch (layout : LayoutEnv) (results : Impl
     catcher.act carriers escaped different
   simp only [finishActivation, forwarded]
 
+
+theorem runtime_nearest_scope_dispatch (layout : LayoutEnv)
+    (results : ImplId → List Goose.Construct.Ty) (origin : OriginId)
+    (target : NonlocalTarget) (stack : List RuntimeActivation) (catcher : RuntimeActivation)
+    (distinct : (stack.map (·.act)).Nodup) (selected : selectTarget? target stack = some catcher)
+    (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (action : EvalM (List Goose.Construct.Carrier)) (state afterOperands : ExecutionState)
+    (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape catcher.act carriers afterOperands) :
+    ∃ discarded outer, stack = discarded ++ catcher :: outer ∧
+      target.contains catcher.implementation = true ∧
+      (∀ activation ∈ discarded, target.contains activation.implementation = false) ∧
+      finishActivation layout catcher (results catcher.implementation) origin
+        (runtimeDiscardHandlers layout results origin discarded (runtimeWithScopes scopes action)) state =
+      finishActivation layout catcher (results catcher.implementation) origin
+        (fun _ => .escape catcher.act carriers
+          (runtimeDropActivations discarded (runtimeReleaseScopes scopes afterOperands))) state ∧
+      (runtimeReleaseScopes scopes afterOperands).construction = afterOperands.construction ∧
+      (∀ entry : RootInst × Value,
+        (∀ scope ∈ scopes, (runtimeScopeRoots scope.1 scope.2.1 scope.2.2).contains entry.1 = false) →
+        (entry ∈ (runtimeReleaseScopes scopes afterOperands).objects ↔ entry ∈ afterOperands.objects)) ∧
+      (∀ entry : RootInst × Value,
+        (∃ scope ∈ scopes, (runtimeScopeRoots scope.1 scope.2.1 scope.2.2).contains entry.1 = true) →
+        entry ∉ (runtimeReleaseScopes scopes afterOperands).objects) := by
+  have unwound := runtime_with_scopes_escape scopes action state afterOperands catcher.act carriers escaped
+  obtain ⟨discarded, outer, shape, member, excluded, dispatched⟩ :=
+    runtime_nearest_activation_dispatch layout results origin target stack catcher distinct selected
+      (runtimeWithScopes scopes action) state (runtimeReleaseScopes scopes afterOperands) carriers unwound
+  exact ⟨discarded,outer,shape,member,excluded,dispatched,
+    runtime_unwind_construction scopes afterOperands,
+    fun entry outside => runtime_unwind_outside scopes afterOperands entry outside,
+    fun entry owned => runtime_unwind_removes scopes afterOperands entry owned⟩
+
 end Goose.Proofs.Exit
