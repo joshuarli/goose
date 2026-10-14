@@ -4,6 +4,25 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 
+def BndSpec (len : Nat) (dflt : Int) : Bnd → Int → List (ValueId × RVal) → Prop
+  | .omitted, k, cells => k = dflt ∧ cells = []
+  | .val v, k, cells => ∃ t, cells = [(v, .val (.int t k))]
+  | .fromEnd v, k, cells => ∃ t kk, k = (len : Int) - kk ∧ cells = [(v, .val (.int t kk))]
+
+theorem evalBnd_of_spec {fr : Frame} {len : Nat} {dflt : Int} {bnd : Bnd} {k : Int}
+    {cells : List (ValueId × RVal)} (hs : BndSpec len dflt bnd k cells)
+    (hc : ∀ p ∈ cells, fr.vals[p.1]? = some p.2) : evalBnd fr len dflt bnd = pure k := by
+  cases bnd with
+  | omitted => obtain ⟨rfl, -⟩ := hs; rfl
+  | val v =>
+    obtain ⟨t, rfl⟩ := hs
+    have := hc (v, .val (.int t k)) (by simp)
+    simp only [evalBnd, getVal_of this, Goose.Core.expectInt, pure_bind]
+  | fromEnd v =>
+    obtain ⟨t, kk, rfl, rfl⟩ := hs
+    have := hc (v, .val (.int t kk)) (by simp)
+    simp only [evalBnd, getVal_of this, Goose.Core.expectInt, pure_bind]
+
 theorem Post.init {cfg : Cfg} {env : Env} {cx : FnCtx} {ls : LS} {fr : Frame} {pt : Pt}
     (hrel : Rel cfg env cx fr ls) (hpp : ls.pp = some pt) : Post cfg env cx ls fr ls fr pt [] :=
   ⟨hpp, by simp, by simp, Nat.le_refl _, Same.refl _ _, hrel⟩

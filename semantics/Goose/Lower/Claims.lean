@@ -122,11 +122,6 @@ def ViewClaim (n : Nat) (v : View) : Prop :=
       Post cfg env cx ls fr ls' fr' pt' [(r, .view vw)])
 
 /-- What a lowered bound stands for. -/
-def BndSpec (len : Nat) (dflt : Int) : Bnd → Int → List (ValueId × RVal) → Prop
-  | .omitted, k, cells => k = dflt ∧ cells = []
-  | .val v, k, cells => ∃ t, cells = [(v, .val (.int t k))]
-  | .fromEnd v, k, cells => ∃ t kk, k = (len : Int) - kk ∧ cells = [(v, .val (.int t kk))]
-
 def BoundClaim (n : Nat) (bd : Bound) : Prop :=
   boundOk bd = true → ∀ (le : LEnv) (ls : LS) (bnd : Bnd) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (fr : Frame) (len : Nat) (dflt : Int), lowerBound bd le ls = (bnd, ls') → ls.pp = some pt →
@@ -310,20 +305,6 @@ theorem viewClaim_val (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) : ViewCl
   have hc : fr1.vals[rp]? = some (.val (.slice l st len)) := P1.has (rp, _) (by simp)
   refine leaf_def P1 h2 hext (by simp) RVal.view ?_
   simp only [execPure, getVal_of hc, Goose.Core.expectSlice, bind_assoc, pure_bind]
-
-theorem evalBnd_of_spec {fr : Frame} {len : Nat} {dflt : Int} {bnd : Bnd} {k : Int}
-    {cells : List (ValueId × RVal)} (hs : BndSpec len dflt bnd k cells)
-    (hc : ∀ p ∈ cells, fr.vals[p.1]? = some p.2) : evalBnd fr len dflt bnd = pure k := by
-  cases bnd with
-  | omitted => obtain ⟨rfl, -⟩ := hs; rfl
-  | val v =>
-    obtain ⟨t, rfl⟩ := hs
-    have := hc (v, .val (.int t k)) (by simp)
-    simp only [evalBnd, getVal_of this, Goose.Core.expectInt, pure_bind]
-  | fromEnd v =>
-    obtain ⟨t, kk, rfl, rfl⟩ := hs
-    have := hc (v, .val (.int t kk)) (by simp)
-    simp only [evalBnd, getVal_of this, Goose.Core.expectInt, pure_bind]
 
 theorem boundClaim_omitted (n : Nat) : BoundClaim n .omitted := by
   intro hok le ls bnd ls' pt cfg env cx fr len dflt hlow hpp hext hrel
