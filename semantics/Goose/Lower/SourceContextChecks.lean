@@ -375,4 +375,34 @@ example (profile : NumProfile) :
   subst integer
   exact ⟨child, typeEq⟩
 
+def assignmentImplementation : Impl :=
+  { initImpl with body := .mk 0 [.assign (.global 0) (.bool false) 0] none }
+
+def assignmentModule : Module :=
+  { (callModule .pilot) with impls := #[assignmentImplementation, callee] }
+
+#guard match Core.validate assignmentModule with | .ok _ => true | .error _ => false
+
+example (profile : NumProfile) :
+    ∃ destination : PlaceSource ⟨profile, assignmentModule⟩ ⟨#[], 2, [(0, 1)], 1⟩ (.global 0)
+      { afterEffectfulGlobals with nextAct := 3, nextScope := 2 },
+      ∃ child : ExprSource ⟨profile, assignmentModule⟩ ⟨#[], 2, [(0, 1)], 1⟩ (.bool false)
+        { afterEffectfulGlobals with nextAct := 3, nextScope := 2 },
+        child.ty = destination.ty ∧ child.ty = .bool := by
+  have globalDone : initGlobals 8 ⟨profile, assignmentModule⟩ [0] St.initial = .ok () afterEffectfulGlobals := by cbv
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _⟩ :=
+    acceptedEntryAfterGlobals (cfg := ⟨profile, assignmentModule⟩) (by cbv) 8 globalDone
+  have contextEq : ctx = initContext := by simpa [assignmentModule, callModule] using contextAt.symm
+  subst ctx
+  have implEq : impl = assignmentImplementation := by simpa [assignmentModule, callModule, initContext] using implementationAt.symm
+  subst impl
+  obtain ⟨statements, _, _, _, _⟩ := source.enter
+  obtain ⟨head, _, _, _⟩ := statements.split
+  obtain ⟨destination, _, _, _, _, children⟩ := head.assignChildren
+  obtain ⟨child, _, _, _, _, typeEq⟩ := children 1 ⟨.global 0, []⟩ _ (by cbv)
+  refine ⟨destination, child, typeEq, ?_⟩
+  have typed := child.typed
+  change Except.ok (.bool, child.typingStart) = Except.ok (child.ty, child.typingEnd) at typed
+  exact (congrArg Prod.fst (Except.ok.inj typed)).symm
+
 end Goose.Lower.SourceContextChecks
