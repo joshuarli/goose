@@ -1,4 +1,5 @@
 import Goose.Proofs.Memory
+import Goose.Core.Sound.Store
 
 namespace Goose.Evidence
 
@@ -8,6 +9,9 @@ abbrev RootDeclarations := RootInst → Option Ty
 
 def RootDeclarations.Extends (before after : RootDeclarations) : Prop :=
   ∀ root ty, before root = some ty → after root = some ty
+
+def RootDeclarations.Storable (roots : RootDeclarations) : Prop :=
+  ∀ root ty, roots root = some ty → ty.storable = true ∨ ty.isRefSlice = true
 
 inductive StoragePath : Ty → List Nat → Ty → Prop
   | root (ty : Ty) : StoragePath ty [] ty
@@ -64,6 +68,11 @@ theorem WeakValueTy.ofFlat {roots : RootDeclarations} {value : Val} {ty : Ty}
     (typed : FlatTy ty value) : WeakValueTy roots value ty := by
   cases ty <;> try exact typed
   all_goals cases value <;> simp_all [FlatTy]
+
+theorem WeakValueTy.flat {roots : RootDeclarations} {value : Val} {ty : Ty}
+    (flat : ty.flat = true) (typed : WeakValueTy roots value ty) : FlatTy ty value := by
+  cases ty <;> try exact typed
+  all_goals simp [Ty.flat] at flat
 
 theorem DeclaredLocation.mono {before after : RootDeclarations} {location : Loc} {ty : Ty}
     (extension : before.Extends after) (declared : DeclaredLocation before location ty) :
@@ -182,5 +191,62 @@ theorem WeakStoreTy.introduce {roots : RootDeclarations} {store : Store} {root :
     cases present
     exact ⟨ty, declared, valueTyped⟩
   · exact typed other stored present
+
+theorem WeakStoreTy.flatStep {roots : RootDeclarations} {before after : Store}
+    (declarations : roots.Storable) (typed : WeakStoreTy roots before)
+    (transition : Goose.Core.Sound.FlatStep before after) : WeakStoreTy roots after := by
+  intro root value present
+  have oldPresent : before.roots[root]? ≠ none := by
+    rcases transition.back root value present with old | changed
+    · simp [old]
+    · exact changed.2
+  cases old : before.roots[root]? with
+  | none => exact False.elim (oldPresent old)
+  | some oldValue =>
+    obtain ⟨ty, declared, valueTyped⟩ := typed root oldValue old
+    refine ⟨ty, declared, ?_⟩
+    have usable := declarations root ty declared
+    have flatTransfer (flatTyped : FlatTy ty oldValue) : WeakValueTy roots value ty := by
+      have locationTyped : LocTy before ⟨root, []⟩ ty :=
+        ⟨oldValue, (read_ok_iff _ _ _).mpr ⟨oldValue, old, rfl⟩, flatTyped⟩
+      obtain ⟨newValue, read, newTyped⟩ := locationTyped.mono transition.le
+      obtain ⟨rootValue, newPresent, rootRead⟩ := (read_ok_iff _ _ _).mp read
+      rw [present] at newPresent
+      cases newPresent
+      simp only [Val.get?, Option.some.injEq] at rootRead
+      subst newValue
+      exact .ofFlat newTyped
+    cases ty with
+    | unit => simp [Ty.storable, Ty.isRefSlice] at usable
+    | ref permission target =>
+      obtain ⟨location, same, declaredLocation⟩ := valueTyped
+      have kept := transition.keep root oldValue old (by rw [same]; trivial)
+      rw [present] at kept
+      cases kept
+      exact ⟨location, same, declaredLocation⟩
+    | slice permission element =>
+      have isRef : Goose.Core.Sound.IsRef oldValue := by
+        rcases valueTyped with ⟨location, start, len, arrayTy, same, rest⟩ |
+          ⟨location, start, len, count, same, rest⟩
+        all_goals rw [same]; trivial
+      have kept := transition.keep root oldValue old isRef
+      rw [present] at kept
+      cases kept
+      exact valueTyped
+    | _ => exact flatTransfer valueTyped
+
+theorem WeakStoreTy.writeFlat {roots : RootDeclarations} {before after : Store}
+    {location : Loc} {value : Val} {ty : Ty}
+    (declarations : roots.Storable) (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location ty) (flat : ty.flat = true)
+    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
+    WeakStoreTy roots after := by
+  obtain ⟨old, selected, new, rebuilt, rootPresent, oldRead, replaced, modified, roots⟩ :=
+    modify_spec before after location (fun _ => some value) written
+  have read : before.read location = .ok selected :=
+    (read_ok_iff _ _ _).mpr ⟨old, rootPresent, oldRead⟩
+  have selectedTyped := (typed.read target read).flat flat
+  exact typed.flatStep declarations (Goose.Core.Sound.write_flatStep before after location value ty
+    flat ⟨selected, read, selectedTyped⟩ (valueTyped.flat flat) written)
 
 end Goose.Evidence
