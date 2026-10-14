@@ -1,5 +1,5 @@
 import Goose.Construct.Exit
-import Goose.Construct.Runtime
+import Goose.Construct.Eval
 import Goose.Proofs.Memory
 
 namespace Goose.Proofs.Exit
@@ -427,5 +427,53 @@ theorem runtime_nearest_scope_dispatch (layout : LayoutEnv)
     runtime_unwind_construction scopes afterOperands,
     fun entry outside => runtime_unwind_outside scopes afterOperands entry outside,
     fun entry owned => runtime_unwind_removes scopes afterOperands entry owned⟩
+
+
+theorem target_activation_success (config : EvalConfig) (targetId : Nat) (target : NonlocalTarget)
+    (activation : RuntimeActivation) (state : ExecutionState)
+    (present : config.module.targets[targetId]? = some target)
+    (selected : selectTarget? target state.activations = some activation) :
+    targetActivation config targetId state = .ok activation state := by
+  simp [targetActivation, present, selected, EvalM.get, bind, pure]
+
+theorem return_from_after_operands (fuel : Nat) (config : EvalConfig)
+    (environment activation : RuntimeActivation) (targetId : Nat) (target : NonlocalTarget)
+    (operands : List Goose.Construct.Expr) (origin : OriginId) (channels : List Channel) (carriers : List Goose.Construct.Carrier)
+    (state prepared afterOperands : ExecutionState)
+    (present : config.module.targets[targetId]? = some target)
+    (selected : selectTarget? target state.activations = some activation)
+    (preparedChannels : exitChannels activation operands origin state = .ok channels prepared)
+    (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands) :
+    Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) state =
+      .escape activation.act carriers afterOperands := by
+  simp [Goose.Construct.execStmt, target_activation_success config targetId target activation state present selected,
+    preparedChannels, evaluated, returned, bind]
+
+theorem return_from_nearest_scope_dispatch (fuel : Nat) (config : EvalConfig)
+    (environment catcher : RuntimeActivation) (targetId : Nat) (target : NonlocalTarget)
+    (results : ImplId → List Goose.Construct.Ty) (operands : List Goose.Construct.Expr) (origin : OriginId)
+    (channels : List Channel) (carriers : List Goose.Construct.Carrier)
+    (state prepared afterOperands : ExecutionState) (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (present : config.module.targets[targetId]? = some target)
+    (selected : selectTarget? target state.activations = some catcher)
+    (distinct : (state.activations.map (·.act)).Nodup)
+    (preparedChannels : exitChannels catcher operands origin state = .ok channels prepared)
+    (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands) :
+    ∃ discarded outer, state.activations = discarded ++ catcher :: outer ∧
+      target.contains catcher.implementation = true ∧
+      (∀ activation ∈ discarded, target.contains activation.implementation = false) ∧
+      finishActivation config.layout catcher (results catcher.implementation) origin
+        (runtimeDiscardHandlers config.layout results origin discarded
+          (runtimeWithScopes scopes (Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) >>= fun _ => pure []))) state =
+      finishActivation config.layout catcher (results catcher.implementation) origin
+        (fun _ => .escape catcher.act carriers
+          (runtimeDropActivations discarded (runtimeReleaseScopes scopes afterOperands))) state := by
+  have returned := return_from_after_operands fuel config environment catcher targetId target operands origin
+    channels carriers state prepared afterOperands present selected preparedChannels evaluated
+  obtain ⟨discarded,outer,shape,member,excluded,dispatched,_,_,_⟩ :=
+    runtime_nearest_scope_dispatch config.layout results origin target state.activations catcher distinct selected
+      scopes (Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) >>= fun _ => pure [])
+      state afterOperands carriers (by simp [returned, bind])
+  exact ⟨discarded,outer,shape,member,excluded,dispatched⟩
 
 end Goose.Proofs.Exit
