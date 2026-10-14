@@ -169,14 +169,14 @@ theorem fixture_comparisons (variant : Variant) (placement : Placement) (profile
 
 theorem fixture_run_replacement (variant : Variant) (placement : Placement) (profile : NumProfile) (fuel : Nat) :
     run fuel profile (checkedModule (fixture variant placement)) = run fuel profile (fixture variant placement) :=
-  checked_run (fixture_accepted variant placement) profile (fixture_comparisons variant placement profile) fuel
+  checked_run (fixture_accepted variant placement) profile fuel
 
 theorem fixture_reachable_facts (variant : Variant) (placement : Placement) (profile : NumProfile)
     {fn : Func} {point : Pt} {fr : Frame} {state : St}
     (reachable : RuntimePoint ⟨profile, fixture variant placement⟩ fn point fr state)
     (certificate : FactCertificate) (present : fn.certificate = some certificate) :
     PointFactsHold ⟨⟨profile, fixture variant placement⟩, fn⟩ certificate point fr state :=
-  reachable_facts (fixture_accepted variant placement) (fixture_comparisons variant placement profile)
+  reachable_facts (fixture_accepted variant placement)
     reachable certificate present
 
 def expectedResult (variant : Variant) : Result → Bool
