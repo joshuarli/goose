@@ -321,6 +321,34 @@ private def fixedParameterOrdinal : Module := moduleOf #[
 #guard observes fixedParameterOrdinal == some ([65, 10],
   [.begin 0, .copy (.storage 1 []) 0, .write 0 0, .publish 0])
 
+private def nestedInitializerOrdinal : Module := moduleOf #[
+  implementation "entry" #[localVar "source" (.arr (.int .u8) 1),
+    localVar "copy" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0,
+      .letS 1 (.copy (.varr (.int .u8)) (.var 0) 0) 0,
+      .print [.view (.of (.var 1))] 0] none),
+  implementation "fixed" #[localVar "effect" (.int .i64)]
+    (.mk 0 [.letS 0 (.lit .i64 7) 0]
+      (some (.arrLit (.arr (.int .u8) 1) [.lit .u8 65] 0)))
+    #[⟨.arr (.int .u8) 1, .register, none⟩]]
+
+#guard observes nestedInitializerOrdinal == some ([65, 10],
+  [.begin 0, .copy (.storage 1 []) 0, .write 0 0, .publish 0])
+
+private def effectfulArgumentOrdinal : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8)), localVar "effect" (.int .i64) 1]
+    (.mk 0 [.letS 0 (.call 1 [
+      .byVal (.arrLit (.arr (.int .u8) 1) [.lit .u8 65] 0),
+      .byVal (.blockE (.mk 1 [.letS 1 (.lit .i64 7) 0]
+        (some (.arrLit (.arr (.int .u8) 1) [.lit .u8 66] 0))) 0)] 0) 0,
+      .print [.view (.of (.var 0))] 0] none),
+  implementation "copy" #[localVar "first" (.arr (.int .u8) 1), localVar "second" (.arr (.int .u8) 1)]
+    (.mk 0 [] (some (.copy (.varr (.int .u8)) (.var 0) 0)))
+    #[⟨.varr (.int .u8), .value, none⟩] #[⟨0, .byValue⟩, ⟨1, .byValue⟩]]
+
+#guard observes effectfulArgumentOrdinal == some ([65, 10],
+  [.begin 0, .copy (.storage 2 []) 0, .write 0 0, .publish 0])
+
 private def inheritedOperations : Module := moduleOf #[implementation "entry"
   #[localVar "owner" (.growshrink (.int .i64)), localVar "slice" (.slice .mutable (.int .i64)),
     localVar "sum" (.int .i64), localVar "index" (.int .i64) 1]

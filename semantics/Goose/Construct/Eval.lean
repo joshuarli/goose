@@ -381,24 +381,18 @@ def buildElement : Nat → EvalConfig → RuntimeActivation → DestinationId �
         let bytes ← liftExcept (fixedBytes fuel config.layout element value)
         liftConstruction (expressionOrigin operand) (writeElement parent bytes)
 
-def evalArguments : Nat → EvalConfig → RuntimeActivation → Array LocalVar → List Param → List Arg → EvalM (List (Value × StorageId))
+def evalArguments : Nat → EvalConfig → RuntimeActivation → Array LocalVar → List Param → List Arg → EvalM (List Value)
   | 0, _, _, _, _, _ => timeout
   | _ + 1, _, _, _, [], [] => pure []
   | fuel + 1, config, environment, parameterVars, parameter :: parameters, argument :: arguments => do
-      let (value, ordinal) ← match argument with
-        | .byRef _ place => do
-            let ordinal ← liftConstruction 0 reserveStorage
-            pure (.ref (← evalPlace fuel config environment place), ordinal)
-        | .byVal operand => do
-            let ordinal ← liftConstruction 0 reserveStorage
-            pure (← evalValue fuel config environment operand, ordinal)
+      let value ← match argument with
+        | .byRef _ place => do pure (.ref (← evalPlace fuel config environment place))
+        | .byVal operand => evalValue fuel config environment operand
         | .construct operand =>
             let some localVar := parameterVars[parameter.var]? | fault .unbound
-            let value ← carrierValue (← constructLocal config.module environment.act localVar.ty (expressionOrigin operand) operand
+            carrierValue (← constructLocal config.module environment.act localVar.ty (expressionOrigin operand) operand
               (fun destination => buildExpr fuel config environment destination operand))
-            let .stored stored := value | fault .shape
-            pure (value, stored.object.getD stored.storage)
-      pure ((value, ordinal) :: (← evalArguments fuel config environment parameterVars parameters arguments))
+      pure (value :: (← evalArguments fuel config environment parameterVars parameters arguments))
   | _ + 1, _, _, _, _, _ => fault .arity
 
 def invokeCall : Nat → EvalConfig → RuntimeActivation → ContextId → List Arg → List Channel → OriginId → EvalM (List Carrier)
@@ -420,10 +414,7 @@ def invokeCall : Nat → EvalConfig → RuntimeActivation → ContextId → List
       let activation : RuntimeActivation := ⟨id, act, implementation.vars, [], callableChannels⟩
       let state ← EvalM.get
       EvalM.set { state with activations := activation :: state.activations }
-      let pre := (implementation.params.toList.zip values).map fun (parameter, value) => (parameter.var, value.1)
-      let scopeInst := (← EvalM.get).nextScope
-      for (parameter, value) in implementation.params.toList.zip values do
-        setObjectOrdinal (.local act scopeInst parameter.var) value.2
+      let pre := (implementation.params.toList.zip values).map fun (parameter, value) => (parameter.var, value)
       let carriers ← enterActivation fuel config activation pre implementation.body origin
       deliverCarriers fuel config.layout channels carriers origin
 
@@ -496,7 +487,6 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
       | .letS localVar expression origin =>
           let some descriptor := environment.vars[localVar]? | fault .unbound
           let root ← rootOf environment localVar
-          if !descriptor.ty.nonfixed then let _ ← reserveRootObject root; pure ()
           let value ←
             if descriptor.ty.nonfixed then
               let some implementation := config.module.impls[environment.implementation]? | fault .unbound
@@ -509,7 +499,6 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
                         pure (if destination.capability.request == .value then some (result, index) else none)
                     | _ => fault .flow
                 | none => pure none
-              let object ← if named.isSome then do pure (some (← liftConstruction origin reserveStorage)) else pure none
               let destination ← match named with
                 | some (_, index) =>
                     match environment.channels[index]? with
@@ -521,6 +510,7 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
               let destination ← completedDestination destination
               if named.isNone then publishCarriers origin [.completed destination]
               let stored ← storedDestination destination
+              let object ← if named.isSome then do pure (some (← liftConstruction origin reserveStorage)) else pure none
               pure (.stored { stored with ty := descriptor.ty, object := object })
             else evalValue fuel config environment expression
           bindRoot root value
@@ -601,9 +591,7 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
             let some descriptor := environment.vars[localVar]? | fault .unbound
             if descriptor.ty.nonfixed then
               pure (Channel.construct (← newDestination config.layout environment.act descriptor.ty .value origin))
-            else
-              let _ ← reserveRootObject (← rootOf environment localVar)
-              pure (.register descriptor.ty)
+            else pure (.register descriptor.ty)
           let carriers ← evalProduce fuel config environment channels producer
           if carriers.length != localVars.length then fault .arity
           publishCarriers origin carriers
@@ -750,7 +738,6 @@ def initGlobals (fuel : Nat) (config : EvalConfig) : List GlobalId → EvalM Uni
       let some descriptor := config.module.globals[global]? | fault .unbound
       let act ← freshAct
       let environment : RuntimeActivation := ⟨0, act, #[], [], []⟩
-      if !descriptor.ty.nonfixed then let _ ← reserveRootObject (.global global); pure ()
       let value ← if descriptor.ty.nonfixed then
         carrierValue (← constructLocal config.module act descriptor.ty descriptor.org descriptor.init
           (fun destination => buildExpr fuel config environment destination descriptor.init))
