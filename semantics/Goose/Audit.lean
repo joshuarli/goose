@@ -19,6 +19,8 @@ import Goose.Lower.Unwind
 import Goose.Evidence.Provenance
 import Goose.Evidence.SSA
 import Goose.Evidence.Simulation
+import Goose.Proofs.Construct
+import Goose.Proofs.Exit
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -243,5 +245,16 @@ end Goose.Audit
 #audit Goose.Proofs.Bounds.reachable_index
 #audit Goose.Proofs.Bounds.checked_runModule
 #audit Goose.Proofs.Bounds.checked_run
+
+#audit Goose.Proofs.Exit.plan_nearest
+#audit Goose.Proofs.Exit.unwind_frame
+#audit Goose.Proofs.Exit.unwind_removes
+#audit Goose.Proofs.Exit.unwind_preserves_output
+#audit Goose.Proofs.Construct.landing_preserves_prefix
+#audit Goose.Proofs.Construct.landing_preserves_payload
+#audit Goose.Proofs.Construct.landing_top
+#audit Goose.Proofs.Construct.terminal_keeps_prefix
+#audit Goose.Proofs.Construct.terminal_skips_remaining
+#audit Goose.Evidence.validated_cell_definition
 
 #audit_registry

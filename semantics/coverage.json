@@ -372,5 +372,15 @@
   "limits": "TrueComparisonFacts is not yet derived from validation. G-BCE remains open. checked-module validation, C++ parity and native performance are not proved.",
   "reviewer": "Independent review at 3493a99e answered six statement questions and found no defect in the conditional claims. Runtime typing, SSA uniqueness and dynamic dominance must discharge the comparison premise.",
   "evidence": "Goose/Evidence/{Bounds,Replay,Checked,Reachable,Simulation}.lean; registered axiom audit."
+ },
+ {
+  "feature": "Construction unwind, landing and terminal-prefix stages",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.Exit.plan_nearest; Goose.Proofs.Exit.unwind_frame; Goose.Proofs.Exit.unwind_removes; Goose.Proofs.Construct.landing_preserves_prefix; Goose.Proofs.Construct.landing_preserves_payload; Goose.Proofs.Construct.landing_top; Goose.Proofs.Construct.terminal_keeps_prefix; Goose.Proofs.Construct.terminal_skips_remaining",
+  "statement": "Exit planning selects the nearest member activation; unwind removes its and intermediate roots while preserving outside roots/output. The actual landing byte splice preserves the receiving prefix and extracted payload suffix. Terminal faults skip later monadic work.",
+  "assumptions": "Successful exit plan and explicit outside-root condition. Landing assumes receivingStart≤bytes.size.",
+  "limits": "Byte splicing does not prove the extracted suffix is a completed logical value or that protocol ownership preserves its interval. Full TH-CON-01 and TH-EXIT-01 remain open pending evaluator and protocol proofs.",
+  "reviewer": "Independent six-question review through ac7f9e64 and defect-fix review through08c39176. Reachable protected-descendant and effect omissions were reproduced and fixed before integration; no new P1/P2 in bounded follow-up.",
+  "evidence": "Goose/Proofs/{Construct,Exit}.lean; Goose/Construct guard modules pass on merged source; registered axiom audit."
  }
 ]
