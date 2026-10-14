@@ -1,6 +1,7 @@
 import Goose.Construct.Eval
 import Goose.Proofs.Exit
 import Init.Data.List.Monadic
+import Init.Data.Range.Lemmas
 
 namespace Goose.Proofs.ExitExecution
 open Goose.Construct
@@ -467,6 +468,19 @@ theorem preservesFresh_listForIn (action : α → β → EvalM (ForInStep β)) (
         | done value => exact preservesFresh_pure _
         | yield value => exact ih value
 
+theorem preservesFresh_arrayForIn (action : α → β → EvalM (ForInStep β)) (items : Array α)
+    (initial : β) (preserved : ∀ item value, PreservesFresh (action item value)) :
+    PreservesFresh (forIn items initial action) := by
+  rw [← Array.forIn_toList]
+  exact preservesFresh_listForIn action items.toList initial preserved
+
+theorem preservesFresh_rangeForIn (action : Nat → β → EvalM (ForInStep β))
+    (range : Std.Legacy.Range) (initial : β)
+    (preserved : ∀ index value, PreservesFresh (action index value)) :
+    PreservesFresh (forIn range initial action) := by
+  rw [Std.Legacy.Range.forIn_eq_forIn_range']
+  exact preservesFresh_listForIn action _ initial preserved
+
 theorem preservesFresh_lift (origin : Goose.Core.OriginId) (action : ConstructionM α) :
     PreservesFresh (liftConstruction origin action) := by
   intro state fresh
@@ -627,6 +641,222 @@ theorem preservesFresh_channelsFor (layout : LayoutEnv) (owner : Goose.Core.ActI
       apply preservesFresh_bind
       · exact preservesFresh_newDestination _ _ _ _ _ _ _
       · intro destination; exact preservesFresh_pure _
+
+theorem stateQuery_completedDestination (id : Goose.Core.DestinationId) : StateQuery (completedDestination id) := by
+  unfold completedDestination
+  apply stateQuery_bind
+  · exact stateQuery_getDestination id
+  · intro destination
+    cases destination.progress <;> first
+      | exact stateQuery_pure _
+      | (apply stateQuery_bind
+         · exact stateQuery_get
+         · intro state
+           split <;> first | exact stateQuery_pure _ | exact stateQuery_stop _)
+
+theorem stateQuery_carrierValue (carrier : Carrier) : StateQuery (carrierValue carrier) := by
+  cases carrier with
+  | register value => exact stateQuery_pure _
+  | completed id =>
+      unfold carrierValue
+      apply stateQuery_bind
+      · exact stateQuery_storedDestination id
+      · intro stored; exact stateQuery_pure _
+
+theorem stateQuery_singleCarrier (carriers : List Carrier) : StateQuery (singleCarrier carriers) := by
+  unfold singleCarrier
+  split <;> first | exact stateQuery_pure _ | exact stateQuery_stop _
+
+theorem preservesFresh_publishCarriers (origin : Goose.Core.OriginId) (carriers : List Carrier) :
+    PreservesFresh (publishCarriers origin carriers) := preservesFresh_lift _ _
+
+theorem preservesFresh_ownerDestination (layout : LayoutEnv) (stored : StoredValue)
+    (request : Goose.Core.ConstructionRequest) (count : Option Nat) (origin : Goose.Core.OriginId) :
+    PreservesFresh (ownerDestination layout stored request count origin) := by
+  unfold ownerDestination
+  cases stored.destination with
+  | none => exact preservesFresh_newDestination _ _ _ _ _ _ _
+  | some id =>
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
+      · intro destination
+        cases destination.progress <;> first
+          | exact preservesFresh_lift _ _
+          | exact preservesFresh_newDestination _ _ _ _ _ _ _
+          | exact preservesFresh_stop _
+
+theorem preservesFresh_publishOwner (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
+    (stored : StoredValue) (id : Goose.Core.DestinationId) (origin : Goose.Core.OriginId) :
+    PreservesFresh (publishOwner fuel layout location stored id origin) := by
+  cases fuel with
+  | zero => exact preservesFresh_stop _
+  | succ fuel =>
+      unfold publishOwner
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
+      · intro destination
+        cases destination.use with
+        | replacement old => exact preservesFresh_stop _
+        | child parent =>
+            apply preservesFresh_bind
+            · exact preservesFresh_lift _ _
+            · intro _
+              apply preservesFresh_bind
+              · exact stateQuery_preservesFresh _ (stateQuery_storedDestination parent)
+              · intro value; exact preservesFresh_writeLoc fuel layout location _
+        | receiver =>
+            apply preservesFresh_bind
+            · exact preservesFresh_publishCarriers _ _
+            · intro _
+              apply preservesFresh_bind
+              · exact stateQuery_preservesFresh _ (stateQuery_getStorage stored.storage)
+              · intro receiving; exact preservesFresh_writeLoc fuel layout location _
+
+theorem preservesFresh_repeatElement (fuel : Nat) (layout : LayoutEnv) (parent : Goose.Core.DestinationId)
+    (element : Ty) (source : Goose.Core.DestinationId) (origin : Goose.Core.OriginId) :
+    PreservesFresh (repeatElement fuel layout parent element source origin) := by
+  cases fuel with
+  | zero => exact preservesFresh_stop _
+  | succ fuel =>
+      unfold repeatElement
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_storedDestination source)
+      · intro stored
+        apply preservesFresh_bind
+        · exact stateQuery_preservesFresh _ (stateQuery_getStorage stored.storage)
+        · intro receiving
+          apply preservesFresh_bind
+          · exact stateQuery_preservesFresh _ (stateQuery_liftLayout _)
+          · intro finish
+            apply preservesFresh_bind
+            · exact preservesFresh_lift _ _
+            · intro _; exact preservesFresh_lift _ _
+
+theorem fixed_writes_preserveFresh (fuel : Nat) (layout : LayoutEnv) (destination : Goose.Core.DestinationId)
+    (element : Ty) (origin : Goose.Core.OriginId) (values : Array Value) :
+    PreservesFresh (forIn values PUnit.unit fun value _ => do
+      let bytes ← liftExcept (fixedBytes fuel layout element value)
+      liftConstruction origin (writeElement destination bytes)
+      pure (.yield PUnit.unit)) := by
+  apply preservesFresh_arrayForIn
+  intro value _
+  apply preservesFresh_bind
+  · exact stateQuery_preservesFresh _ (stateQuery_liftExcept _)
+  · intro bytes
+    apply preservesFresh_bind
+    · exact preservesFresh_lift _ _
+    · intro _; exact preservesFresh_pure _
+
+theorem packed_writes_preserveFresh (fuel : Nat) (layout : LayoutEnv) (destination : Goose.Core.DestinationId)
+    (bytes : ByteArray) (run : SampledRun) (start count : Nat) (origin : Goose.Core.OriginId) :
+    PreservesFresh (forIn ([0:count] : Std.Legacy.Range) PUnit.unit fun index _ => do
+      let (low, high) ← liftLayout (elementInterval fuel layout bytes run (start + index))
+      liftConstruction origin (writeElement destination (bytes.extract low high))
+      pure (.yield PUnit.unit)) := by
+  apply preservesFresh_rangeForIn
+  intro index _
+  apply preservesFresh_bind
+  · exact stateQuery_preservesFresh _ (stateQuery_liftLayout _)
+  · intro interval
+    rcases interval with ⟨low, high⟩
+    simp only
+    apply preservesFresh_bind
+    · exact preservesFresh_lift _ _
+    · intro _; exact preservesFresh_pure _
+
+theorem preservesFresh_copyValue (fuel : Nat) (layout : LayoutEnv) (destination : Goose.Core.DestinationId)
+    (value : Value) (origin : Goose.Core.OriginId) (source : Option Goose.Core.CopySource) :
+    PreservesFresh (copyValue fuel layout destination value origin source) := by
+  cases fuel with
+  | zero => exact preservesFresh_stop _
+  | succ fuel =>
+      unfold copyValue
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_getDestination destination)
+      · intro pending
+        cases elementFound : elementType pending.capability.logicalType with
+        | none => exact preservesFresh_stop _
+        | some element =>
+            cases value with
+            | int _ _ | bool _ | unit | record _ _ | ref _ => exact preservesFresh_stop _
+            | stored stored =>
+                apply preservesFresh_bind
+                · exact stateQuery_preservesFresh _ (stateQuery_sampledStored stored)
+                · intro sampled
+                  rcases sampled with ⟨bytes, run⟩
+                  simp only
+                  split
+                  · exact preservesFresh_stop _
+                  · apply preservesFresh_bind
+                    · exact preservesFresh_lift _ _
+                    · intro _
+                      apply preservesFresh_bind
+                      · simpa only [Nat.zero_add] using packed_writes_preserveFresh fuel layout destination bytes run 0 run.count origin
+                      · intro _; exact preservesFresh_lift _ _
+            | fixed values =>
+                cases source with
+                | none =>
+                    apply preservesFresh_bind
+                    · exact fixed_writes_preserveFresh fuel layout destination element origin values
+                    · intro _; exact preservesFresh_lift _ _
+                | some source =>
+                    apply preservesFresh_bind
+                    · exact preservesFresh_lift _ _
+                    · intro _
+                      apply preservesFresh_bind
+                      · exact fixed_writes_preserveFresh fuel layout destination element origin values
+                      · intro _; exact preservesFresh_lift _ _
+            | slice location start count =>
+                apply preservesFresh_bind
+                · exact stateQuery_preservesFresh _ (stateQuery_readLoc fuel layout location)
+                · intro backing
+                  cases source with
+                  | none => exact preservesFresh_stop _
+                  | some source =>
+                      cases backing with
+                      | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ => exact preservesFresh_stop _
+                      | stored stored =>
+                          apply preservesFresh_bind
+                          · exact stateQuery_preservesFresh _ (stateQuery_storedPathRun stored)
+                          · intro sampled
+                            rcases sampled with ⟨bytes, run⟩
+                            simp only
+                            split
+                            · exact preservesFresh_stop _
+                            · split
+                              · exact preservesFresh_stop _
+                              · apply preservesFresh_bind
+                                · exact preservesFresh_lift _ _
+                                · intro _
+                                  apply preservesFresh_bind
+                                  · exact packed_writes_preserveFresh fuel layout destination bytes run start count origin
+                                  · intro _; exact preservesFresh_lift _ _
+                      | fixed values =>
+                          simp only
+                          split
+                          · exact preservesFresh_stop _
+                          · apply preservesFresh_bind
+                            · exact preservesFresh_lift _ _
+                            · intro _
+                              apply preservesFresh_bind
+                              · exact fixed_writes_preserveFresh fuel layout destination element origin (values.extract start (start + count))
+                              · intro _; exact preservesFresh_lift _ _
+
+theorem preservesFresh_deliverCarriers (fuel : Nat) (layout : LayoutEnv) (channels : List Channel)
+    (carriers : List Carrier) (origin : Goose.Core.OriginId) :
+    PreservesFresh (deliverCarriers fuel layout channels carriers origin) := by
+  unfold deliverCarriers
+  split
+  · exact preservesFresh_stop _
+  · apply preservesFresh_listMapM
+    intro item
+    rcases item with ⟨channel, carrier⟩
+    cases channel <;> cases carrier <;> first
+      | exact preservesFresh_pure _
+      | exact preservesFresh_stop _
+      | (apply preservesFresh_bind
+         · exact preservesFresh_copyValue _ _ _ _ _ _
+         · intro _; exact preservesFresh_pure _)
 
 theorem preservesFresh_cleanupDestination (origin : Goose.Core.OriginId)
     (id : Goose.Core.DestinationId) (carriers : List Carrier) :
@@ -900,5 +1130,172 @@ theorem preservesFresh_withBreakTarget (act : Goose.Core.ActId) (scope : BreakSc
           Goose.Proofs.Exit.stepState] using received kind removed removedFresh
       · simpa [withBreakTarget, installed, target, result, caught, removed, mapStepState,
           Goose.Proofs.Exit.stepState] using removedFresh
+
+theorem stateQuery_currentBreak (act : Goose.Core.ActId) (scope : Option BreakScope) :
+    StateQuery (currentBreak act scope) := by
+  unfold currentBreak
+  apply stateQuery_bind
+  · exact stateQuery_get
+  · intro state
+    split
+    · exact stateQuery_pure _
+    · exact stateQuery_stop _
+
+theorem preservesFresh_jump (target : Nat) (kind : JumpKind) :
+    PreservesFresh (jump (α := α) target kind) := by
+  intro state fresh
+  exact fresh
+
+theorem preservesFresh_emitStdout (bytes : ByteArray) : PreservesFresh (emitStdout bytes) :=
+  preservesFresh_lift _ _
+
+theorem preservesFresh_truncateOwner (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
+    (count : Nat) (origin : Goose.Core.OriginId) :
+    PreservesFresh (truncateOwner fuel layout location count origin) := by
+  cases fuel with
+  | zero => exact preservesFresh_stop _
+  | succ fuel =>
+      unfold truncateOwner
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_readLoc fuel layout location)
+      · intro value
+        cases value with
+        | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ | fixed _ => exact preservesFresh_stop _
+        | stored stored =>
+            apply preservesFresh_bind
+            · exact stateQuery_preservesFresh _ (stateQuery_sampledStored stored)
+            · intro sampled
+              rcases sampled with ⟨bytes, run⟩
+              simp only
+              split
+              · exact preservesFresh_stop _
+              · apply preservesFresh_bind
+                · exact stateQuery_preservesFresh _ (stateQuery_liftLayout _)
+                · intro finish
+                  cases stored.destination with
+                  | none =>
+                      apply preservesFresh_bind
+                      · exact preservesFresh_pure _
+                      · intro owner
+                        apply preservesFresh_bind
+                        · exact preservesFresh_lift _ _
+                        · intro _; exact preservesFresh_writeLoc _ _ _ _
+                  | some id =>
+                      apply preservesFresh_bind
+                      · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
+                      · intro pending
+                        apply preservesFresh_bind
+                        · exact preservesFresh_pure _
+                        · intro owner
+                          apply preservesFresh_bind
+                          · exact preservesFresh_lift _ _
+                          · intro _; exact preservesFresh_writeLoc _ _ _ _
+
+theorem preservesFresh_appendFixedValues (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
+    (values : List Value) (origin : Goose.Core.OriginId) :
+    PreservesFresh (appendFixedValues fuel layout location values origin) := by
+  cases fuel with
+  | zero => exact preservesFresh_stop _
+  | succ fuel =>
+      unfold appendFixedValues
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_readLoc fuel layout location)
+      · intro value
+        cases value with
+        | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ | fixed _ => exact preservesFresh_stop _
+        | stored stored =>
+            simp only
+            cases elementFound : elementType stored.ty with
+            | none => exact preservesFresh_stop _
+            | some element =>
+                apply preservesFresh_bind
+                · apply preservesFresh_listMapM
+                  intro value; exact stateQuery_preservesFresh _ (stateQuery_liftExcept _)
+                · intro parts
+                  apply preservesFresh_bind
+                  · exact preservesFresh_ownerDestination _ _ _ _ _
+                  · intro destination
+                    apply preservesFresh_bind
+                    · apply preservesFresh_listForIn
+                      intro bytes state
+                      apply preservesFresh_bind
+                      · exact preservesFresh_lift _ _
+                      · intro _; exact preservesFresh_pure _
+                    · intro _
+                      apply preservesFresh_bind
+                      · exact preservesFresh_lift _ _
+                      · intro _
+                        apply preservesFresh_bind
+                        · exact stateQuery_preservesFresh _ (stateQuery_completedDestination destination)
+                        · intro completed; exact preservesFresh_publishOwner _ _ _ _ _ _
+
+theorem preservesFresh_appendRun (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
+    (view : RuntimeView) (origin : Goose.Core.OriginId) :
+    PreservesFresh (appendRun fuel layout location view origin) := by
+  cases fuel with
+  | zero => exact preservesFresh_stop _
+  | succ fuel =>
+      unfold appendRun
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_readLoc fuel layout location)
+      · intro value
+        cases value with
+        | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ | fixed _ => exact preservesFresh_stop _
+        | stored stored =>
+            apply preservesFresh_bind
+            · exact stateQuery_preservesFresh _ (stateQuery_readLoc fuel layout view.location)
+            · intro source
+              apply preservesFresh_bind
+              · exact preservesFresh_ownerDestination _ _ _ _ _
+              · intro destination
+                have finish : PreservesFresh (do
+                    liftConstruction origin (finishDestination destination)
+                    let completed ← completedDestination destination
+                    publishOwner fuel layout location stored completed origin) := by
+                  apply preservesFresh_bind
+                  · exact preservesFresh_lift _ _
+                  · intro _
+                    apply preservesFresh_bind
+                    · exact stateQuery_preservesFresh _ (stateQuery_completedDestination destination)
+                    · intro completed; exact preservesFresh_publishOwner _ _ _ _ _ _
+                cases source with
+                | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ =>
+                    apply preservesFresh_bind
+                    · exact preservesFresh_stop _
+                    · intro _; exact finish
+                | stored source =>
+                      apply preservesFresh_bind
+                      · exact stateQuery_preservesFresh _ (stateQuery_sampledStored source)
+                      · intro sampled
+                        rcases sampled with ⟨bytes, run⟩
+                        apply preservesFresh_bind
+                        · exact preservesFresh_lift _ _
+                        · intro _
+                          apply preservesFresh_bind
+                          · exact packed_writes_preserveFresh fuel layout destination bytes run view.start view.count origin
+                          · intro _; exact finish
+                | fixed values =>
+                      simp only
+                      cases elementFound : elementType stored.ty with
+                      | none =>
+                          apply preservesFresh_bind
+                          · exact preservesFresh_stop _
+                          · intro _; exact finish
+                      | some element =>
+                        apply preservesFresh_bind
+                        ·
+                          apply preservesFresh_rangeForIn
+                          intro index current
+                          split
+                          · apply preservesFresh_bind
+                            · exact stateQuery_preservesFresh _ (stateQuery_liftExcept _)
+                            · intro bytes
+                              apply preservesFresh_bind
+                              · exact preservesFresh_lift _ _
+                              · intro _; exact preservesFresh_pure _
+                          · apply preservesFresh_bind
+                            · exact preservesFresh_stop _
+                            · intro _; exact preservesFresh_pure _
+                        · intro _; exact finish
 
 end Goose.Proofs.ExitExecution

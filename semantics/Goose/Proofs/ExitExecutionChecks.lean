@@ -40,5 +40,10 @@ theorem recursiveDestinations_execution :
 
 #print axioms recursiveDestinations_validated
 #print axioms recursiveDestinations_execution
+#print axioms Goose.Proofs.ExitExecution.preservesFresh_copyValue
+#print axioms Goose.Proofs.ExitExecution.preservesFresh_deliverCarriers
+#print axioms Goose.Proofs.ExitExecution.preservesFresh_truncateOwner
+#print axioms Goose.Proofs.ExitExecution.preservesFresh_appendFixedValues
+#print axioms Goose.Proofs.ExitExecution.preservesFresh_appendRun
 
 end Goose.Proofs.ExitExecutionChecks
