@@ -65,4 +65,41 @@ Deleted 24 inactive branches whose branch-only commits all have patch-equivalent
 - `upstream-pr/parse-int-overflow`
 - `upstream-pr/serialized-offset-overflow`
 
+Retired 32 parked historical S8 branch refs as lightweight tags under `archive/retired/`. Each tag points directly to the original commit, so its full history remains reachable. This preserves the parked candidates without claiming their changes are merged.
+
+| Former branch | Retained tag |
+| --- | --- |
+| `campaign/s8-argument-root-syntax` | `archive/retired/campaign/s8-argument-root-syntax` |
+| `campaign/s8-call-effect-bridge` | `archive/retired/campaign/s8-call-effect-bridge` |
+| `campaign/s8-expr-final` | `archive/retired/campaign/s8-expr-final` |
+| `campaign/s8-global-domain` | `archive/retired/campaign/s8-global-domain` |
+| `campaign/s8-loop-final` | `archive/retired/campaign/s8-loop-final` |
+| `campaign/s8-loop-owner-final` | `archive/retired/campaign/s8-loop-owner-final` |
+| `campaign/s8-lower-helper-wip` | `archive/retired/campaign/s8-lower-helper-wip` |
+| `campaign/s8-owner-authority` | `archive/retired/campaign/s8-owner-authority` |
+| `campaign/s8-owner-call-args` | `archive/retired/campaign/s8-owner-call-args` |
+| `campaign/s8-place-final` | `archive/retired/campaign/s8-place-final` |
+| `campaign/s8-proof-composition` | `archive/retired/campaign/s8-proof-composition` |
+| `campaign/s8-shrink-owner-contract` | `archive/retired/campaign/s8-shrink-owner-contract` |
+| `campaign/s8-stmt-assign-whole` | `archive/retired/campaign/s8-stmt-assign-whole` |
+| `campaign/s8-stmt-assignwhole-case-prep` | `archive/retired/campaign/s8-stmt-assignwhole-case-prep` |
+| `campaign/s8-stmt-assignwhole-final` | `archive/retired/campaign/s8-stmt-assignwhole-final` |
+| `campaign/s8-stmt-final` | `archive/retired/campaign/s8-stmt-final` |
+| `campaign/s8-stmt-popn-clear` | `archive/retired/campaign/s8-stmt-popn-clear` |
+| `campaign/s8-stmt-resize-main` | `archive/retired/campaign/s8-stmt-resize-main` |
+| `campaign/s8-stmt-resize-next-wip` | `archive/retired/campaign/s8-stmt-resize-next-wip` |
+| `campaign/s8-stmt-resize-wip` | `archive/retired/campaign/s8-stmt-resize-wip` |
+| `campaign/whole-root-effect-footprint` | `archive/retired/campaign/whole-root-effect-footprint` |
+| `goose-ir-s8-contract` | `archive/retired/goose-ir-s8-contract` |
+| `goose-ir-s8-fixtures` | `archive/retired/goose-ir-s8-fixtures` |
+| `goose-ir-s8-lower-next` | `archive/retired/goose-ir-s8-lower-next` |
+| `goose-ir-s8-proof-block` | `archive/retired/goose-ir-s8-proof-block` |
+| `goose-ir-s8-proof-call` | `archive/retired/goose-ir-s8-proof-call` |
+| `goose-ir-s8-proof-expr` | `archive/retired/goose-ir-s8-proof-expr` |
+| `goose-ir-s8-proof-foundation` | `archive/retired/goose-ir-s8-proof-foundation` |
+| `goose-ir-s8-proof-stmt` | `archive/retired/goose-ir-s8-proof-stmt` |
+| `goose-ir-s8-step-stmt` | `archive/retired/goose-ir-s8-step-stmt` |
+| `goose-ir-s8-storage-foundation` | `archive/retired/goose-ir-s8-storage-foundation` |
+| `goose-ir-sem-gir` | `archive/retired/goose-ir-sem-gir` |
+
 Removed two clean inactive historical baseline checkouts after confirming their commits remain reachable and no process referenced their paths. Ten clean worktrees under `.work/wt` remain for baseline and expensive artifact reuse, named in the campaign handoff. No registered external worktree remains.
