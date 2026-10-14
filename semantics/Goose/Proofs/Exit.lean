@@ -324,4 +324,23 @@ theorem runtime_unwind_removes (scopes : List (RuntimeActivation × Nat × Scope
         cases impossible
       · exact ih (releaseScopeState scope.1 scope.2.1 scope.2.2 state) ⟨owner,member,owns⟩
 
+
+theorem runtime_activation_propagates (layout : LayoutEnv) (activation : RuntimeActivation)
+    (resultTypes : List Goose.Construct.Ty) (origin : OriginId) (action : EvalM (List Goose.Construct.Carrier))
+    (state afterOperands : ExecutionState) (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape target carriers afterOperands) (other : target ≠ activation.act) :
+    finishActivation layout activation resultTypes origin action state =
+      .escape target carriers { afterOperands with
+        activations := afterOperands.activations.filter (fun current => current.act != activation.act) } := by
+  simp [finishActivation, escaped, other]
+
+theorem runtime_activation_catches (layout : LayoutEnv) (activation : RuntimeActivation)
+    (resultTypes : List Goose.Construct.Ty) (origin : OriginId) (action : EvalM (List Goose.Construct.Carrier))
+    (state afterOperands landed : ExecutionState) (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape activation.act carriers afterOperands)
+    (completed : finishChannels layout resultTypes carriers origin { afterOperands with
+      activations := afterOperands.activations.filter (fun current => current.act != activation.act) } = .ok () landed) :
+    finishActivation layout activation resultTypes origin action state = .ok carriers landed := by
+  simp [finishActivation, escaped, completed]
+
 end Goose.Proofs.Exit
