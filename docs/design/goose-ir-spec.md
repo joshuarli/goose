@@ -35,7 +35,7 @@ A profile is an implementation-support boundary, not a source dialect. An artifa
 | `core-shrink` | Grow-shrink `T[>..<]`; limited `T[..k]`; `pop`, `pop_n`, `resize`, `clear`, whole assignment of a resizable; flat fixed structs. |
 | `core-construction` | Variable arrays `T[]` and string values; grow-only arrays of variable elements; nonfixed by-value parameters and results built in the receiver's storage; `copy`; named results; `return … from`. |
 
-The current implementation boundary is narrower than the full profile definitions above. Core 0.2, GIR-H 0.3 and GIR-L support the bounded flat fixed-struct slice with scalar fields as specified in §§12.4–12.5. The Lean Core model also implements shrink-owner semantics, while the demand-aware safety proof and GIR/native shrink path remain pending. Other `core-shrink` operations and all of `core-construction` remain prospective contracts.
+The current implementation boundary is narrower than the full profile definitions above. Core 0.2, GIR-H 0.4 and GIR-L support the bounded flat fixed-struct slice with scalar fields as specified in §§12.4–12.5. The Lean Core model also implements shrink-owner semantics, while the demand-aware safety proof and GIR/native shrink path remain pending. Other `core-shrink` operations and all of `core-construction` remain prospective contracts.
 
 Excluded from all three, each with its own feature id: references or slices stored in fields or elements (`stored-reference`), optionals, ADTs, relative references, pools and `reusable`, `varint`, floats, elementwise arithmetic, generics beyond what specialization already resolved, function values, threads, `extern fn`, serialization, declarations without initializers, temporaries viewed as slices, zero-size values.
 
@@ -336,8 +336,7 @@ Reference lifetime is not re-derived on GIR. It is established on Core by `valid
 `array.index.proven v i` is legal only if the function carries a **fact certificate**: a set of facts for the entry of every block. The checker makes one pass and accepts if every block-entry set follows from its predecessors.
 
 ```text
-Fact ::= ge0 %i | lt %i %n | lenGe Owner %n | viewLenGe %v %n
-Owner ::= slot SlotId | global GlobalId
+Fact ::= ge0 %i | lt %i %n | lenGe %r %n | viewLenGe %v %n
 ```
 
 Generation, each with a soundness lemma in Lean:
@@ -346,17 +345,12 @@ Generation, each with a soundness lemma in Lean:
 |---|---|---|
 | `F-CONST` | `%c = const i64 k`, `k ≥ 0` | `ge0 %c` |
 | `F-CMP` | true edge of `condbr` on `int.cmp slt i64 %a %b` | `lt %a %b` |
-| `F-GE` | true edge of `condbr` on `int.cmp sge i64 %a %z`, `%z` a zero constant | `ge0 %a` |
-| `F-NEXT` | `%j = int.add i64 %i %one`, `%one` the constant 1, with `ge0 %i` and `lt %i %n` | `ge0 %j` |
-| `F-LEN` | `%n = array.len r`, `r` the address of owner `O` | `lenGe O %n`, `ge0 %n` |
-| `F-SNAP` | `%v = array.snapshot r`, `r` the address of `O`, with `lenGe O %n` | `viewLenGe %v %n` |
-| `F-FIXED` | `%v = array.snapshot r`, `r : ref (arr T k)`, `%c = const i64 k'`, `k' ≤ k` | `viewLenGe %v %c` |
+| `F-LEN` | `%n = array.len %r` | `lenGe %r %n`, `ge0 %n` |
+| `F-SNAP` | `%v = array.snapshot %r`, with `lenGe %r %n` | `viewLenGe %v %n` |
 
-`F-NEXT` is sound without a separate overflow premise because `%i < %n ≤ i64.max`.
+Kills: an instruction defining a value removes every fact that mentions it; entering a block removes facts about that block's parameters. A call, scope transition, initialization, store, push, append or shrink operation removes every `lenGe` fact. Facts are not substituted through block parameters in this first rule set; a later extension may add that rule with its proof.
 
-Kills: an instruction defining a value removes every fact that mentions it; entering a block removes facts about that block's parameters before the edge's substituted facts are added; an instruction or call whose effect may shrink `O`, and `scope.enter` of `O`'s scope, remove every `lenGe O _`. An unknown effect shrinks everything.
-
-`array.index.proven %v %i` requires `ge0 %i`, `lt %i %n` and `viewLenGe %v %n` for one `%n` at that instruction. This is the rule that a bound on a grow-only array's length holds across every push (language spec §5.1), stated so that a shrink, an unknown call or a re-entered scope visibly breaks it.
+`array.index.proven %v %i` requires `ge0 %i`, `lt %i %n` and `viewLenGe %v %n` for one `%n` at that instruction. The first rule set deliberately drops length facts at every mutation. Retaining them across grow-only push or append is a later rule and requires its own soundness proof.
 
 A certificate holds within one implementation. It uses no fact about callers. An implementation shared by several contexts (§16) therefore needs no per-context evidence. A pass that wants entry facts derived from call sites MUST derive them from every call site of the implementation, not of one context.
 
@@ -399,7 +393,7 @@ Encoding: JSON in which every record is an **array** whose first element is a ta
 
 The decoder rejects, with `malformed`: an unknown tag, a wrong arity, a wrong element type, an out-of-range index, a constant outside its type's range, trailing data, input over 64 MiB, nesting deeper than 256, more than `2^24` nodes in one function.
 
-The schema string names the representation and revision (`goose-core/0.2`, `gir-h/0.3`, `gir-l/0.2`). A reader accepts only the exact string it implements. Artifacts are not persisted across compiler versions, so there is no migration.
+The schema string names the representation and revision (`goose-core/0.2`, `gir-h/0.4`, `gir-l/0.2`). A reader accepts only the exact string it implements. Artifacts are not persisted across compiler versions, so there is no migration.
 
 ### 12.1 Tag table for goose-core/0.2
 
@@ -550,9 +544,9 @@ A golden `NAME.goose` has `NAME.core.json` and `NAME.out`, the standard output. 
 | `aborted` | abort kind, `nat` line | The abort kind is one of `div_zero div_overflow index_oob slice_oob assert user_abort int_overflow cast_range`; the line is that of the aborting operation's origin. |
 | `exited` | `int` | `exit` was executed with that value. |
 
-### 12.2 Tag table for gir-h/0.3
+### 12.2 Tag table for gir-h/0.4
 
-This subsection is the concrete encoding of §8 for profile `core-pilot`, and the reference lowering of §8.3 whose output a conforming lowering reproduces byte for byte. A tag not listed here is `malformed` in that profile. The flat-struct slice of `core-shrink` extends it in §12.5 and the shrink slice in §12.6. Construction, `invoke` and `escape` extend the completed shrink profile in §12.9. `array.index.proven` and the fact certificates of §10 are added with their own item and are not decoded by this table.
+This subsection is the concrete encoding of §§8 and 10 for profile `core-pilot`, and the reference lowering of §8.3 whose output a conforming lowering reproduces byte for byte. A tag not listed here is `malformed` in that profile. The flat-struct slice of `core-shrink` extends it in §12.5 and the shrink slice in §12.6. Construction, `invoke` and `escape` extend the completed shrink profile in §12.9.
 
 #### Lexical rules
 
@@ -582,9 +576,9 @@ The file table and the origin table are those of the Core module the lowering re
 
 | Tag | Fields | Meaning |
 |---|---|---|
-| `module` | `str` schema (`gir-h/0.3`), `str` profile (`core-pilot`), `[file]` files, `[Ty]` types, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | `file` and `origin` are as in §12.1. The entry function has no parameters and no results. |
+| `module` | `str` schema (`gir-h/0.4`), `str` profile (`core-pilot`), `[file]` files, `[Ty]` types, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | `file` and `origin` are as in §12.1. The entry function has no parameters and no results. |
 | `global` | `str` name, `ty`, `VarKind`, `func` init, `org` | The initializer is a function with no parameters whose one result has the global's type; it is run in global order, in a fresh activation, before the entry. Its summary is `summary_unknown` and its origin is the global's. |
-| `func` | `str` name, `[ty]` params, `[ty]` results, `[slot]`, `[scope]`, `[block]`, `roots`, `Summary`, `[org]?` origin | Block 0 is the entry and its parameters have the types `params`. `roots` carries conservative parameter, slice-content and result roots from the Core contexts, using parameter positions and the function's slot and global numbers. The verifier checks that the body and call sites fit these annotations before using them to check effects. The summary is the one of the Core implementation, unchanged, and is checked against the body (§9, `GIR-V050`). The origin of an implementation is that of its first variable, absent when it has none. |
+| `func` | `str` name, `[ty]` params, `[ty]` results, `[slot]`, `[scope]`, `[block]`, `roots`, `Summary`, `[org]?` origin, `[certificate]?` | Block 0 is the entry and its parameters have the types `params`. `roots` carries conservative parameter, slice-content and result roots from the Core contexts, using parameter positions and the function's slot and global numbers. The verifier checks that the body and call sites fit these annotations before using them to check effects. The summary is the one of the Core implementation, unchanged, and is checked against the body (§9, `GIR-V050`). The origin of an implementation is that of its first variable, absent when it has none. The optional certificate has one fact set per block and is required exactly when the function contains `i_index_proven`. |
 | `slot` | `ty`, `VarKind`, `scope` owner, `nat` var | Memory-resident storage of the source variable `var`. Its address is a `ref` that is `mut` exactly when the kind is `var`. |
 | `scope` | `[scope]?` parent | A parent has a smaller number. |
 | `block` | `[bp]` params, `[inst]` | One terminator is required, last. Zero or several are decoded and rejected by the verifier. |
@@ -626,6 +620,7 @@ Each instruction record that defines a value begins with that value's `val`. The
 | `i_vslice` | `Mut`, `val` view, `Bound` lo, `Bound` hi, `[org]?` | `slice M E`. Aborts `slice_oob` unless `0 ≤ lo ≤ hi ≤ length`, where an omitted `lo` is 0 and an omitted `hi` the length, and `bd_end` is the length minus the value, computed on mathematical integers. Needs an origin. |
 | `i_alen` | `val` ref to `arr` or `grow` | `i64`, the length now. |
 | `i_index` | `val` view, `val` index, `[org]?` | `ref M E`. Aborts `index_oob` unless `0 ≤ index < length`, the length being the view's. Needs an origin. |
+| `i_index_proven` | `val` view, `val` index | `ref M E`. The fact certificate proves `0 ≤ index < length`; execution performs no bounds branch and this instruction needs no origin. |
 | `i_push` | `val` ref to `grow`, `val` element, `[org]?` | `ref mut E`, to the new element. |
 | `i_call` | `fn`, `[val]` args, `[org]?` | The callee's result type, `unit` for no result. Each argument must be accepted by its parameter (a `mut` reference or slice may stand for a `const` one). Needs an origin. |
 | `i_arr` | `ty` (`arr` with that many elements, or `grow`), `[val]` | The array value; the elements have the element type. |
@@ -649,9 +644,20 @@ Each instruction record that defines a value begins with that value's `val`. The
 
 A non-aborting operation may carry an origin that the table does not require.
 
+#### Evidence records
+
+The optional function field is `[]` for no certificate and `[["certificate", BlockFacts]]` when present. `BlockFacts` is a list in block order; each entry is a list of the facts asserted at that block's entry. The writer sorts and removes duplicate facts. The checker rejects duplicates, ill-typed facts, a nonempty entry set, a block-count mismatch, a fact not implied by every predecessor, and an unjustified `i_index_proven`.
+
+| Tag | Fields | Meaning |
+|---|---|---|
+| `f_ge0` | `val` integer | `ge0` |
+| `f_lt` | `val` integer, `val` integer | `lt` |
+| `f_len_ge` | `val` reference, `val` integer | `lenGe` |
+| `f_view_len_ge` | `val` view, `val` integer | `viewLenGe` |
+
 #### What the reader checks by tag and arity
 
-Before verification the decoder rejects: an unknown tag or enumeration value; a wrong arity or element kind; a `ty`, `slot`, `scope`, `block`, `fn`, `glob` or `org` outside its table (a `val` only has to be below 2^31); a type whose components do not have smaller numbers, a `view` used as a component, an `arr` count below 1; an `i_int` whose type is not an integer type or whose value is outside its range; a scope whose parent is not an earlier scope; a type that is not an integer type where one is required; an unsorted or repeated summary target list or one naming a parameter or global that does not exist; trailing data, input over 64 MiB, nesting deeper than 256, more than `2^24` instructions in one function. The schema and profile strings must be exactly `gir-h/0.3` and `core-pilot`. Everything else is the verifier's.
+Before verification the decoder rejects: an unknown tag or enumeration value; a wrong arity or element kind; a `ty`, `slot`, `scope`, `block`, `fn`, `glob` or `org` outside its table (a `val` only has to be below 2^31); a type whose components do not have smaller numbers, a `view` used as a component, an `arr` count below 1; an `i_int` whose type is not an integer type or whose value is outside its range; a scope whose parent is not an earlier scope; a type that is not an integer type where one is required; an unsorted or repeated summary target list or one naming a parameter or global that does not exist; trailing data, input over 64 MiB, nesting deeper than 256, more than `2^24` instructions in one function. The schema and profile strings must be exactly `gir-h/0.4` and `core-pilot`. Everything else is the verifier's.
 
 #### What the verifier checks for this profile
 
@@ -665,9 +671,10 @@ The checks run in the order of their codes over the whole module, so a module is
 | `GIR-V030` | `i_slot` and `x_init` only while the slot's scope is entered; `x_store`, `i_push` and `x_append` only through a `mut` reference; `i_load` and `x_store` only of a flat, reference or slice type. |
 | `GIR-V040` | `x_enter` only when the scope's parent is the innermost entered scope (or it has none and none is entered); `x_leave` only of the innermost; every path to a block enters the same scopes; `t_ret` with none entered. |
 | `GIR-V050` | The summary closes over the effects of the body (below). |
+| `GIR-V080` | Every certificate has the shape and typing above; replay of §10's rules implies every block-entry fact and justifies every `i_index_proven`. |
 | `GIR-V100` | Every operation marked "needs an origin" has one. |
 
-The body determines reference provenance and result roots. Every reference, slice or view value gets the set of roots it may have: `i_slot` gives its slot (a local), `i_global` its global, the entry block's parameter `i` the parameter `i`; `i_elem`, `i_freeze`, `i_snap`, `i_sview`, `i_vslice`, `i_index` and `i_push` keep the roots of their operand; `i_load` of a reference or slice gives the union of what was stored in the slots of its operand's roots and the declared content roots when loading through a `ref slice` parameter; a block parameter gets what its incoming edges pass; a call gives its callee's body-derived returned roots with each `param j` replaced by the roots of argument `j`. A slot holds the union of what `x_init` and `x_store` put in it. Result roots are the least fixed point over function bodies and recursive calls. The `roots` record is a conservative annotation: computed result roots must be included, parameter roots must cover the roots supplied at each call, and content roots must cover the backing roots passed at each call. The verifier checks these bounds before using annotations to attribute effects, so missing annotations cannot hide an effect. Reads are `i_load`, `i_snap` and `i_alen` through a reference; writes are `x_store`; grows are `i_push` and `x_append`; each is attributed to the parameter and global roots of its operand and to nothing for a local. A store through the slot of a reference-typed parameter rebinds that parameter. Aborting is `i_bin` with `add sub mul div mod`, `i_un` with `neg`, `i_conv` with `as`, `i_vslice`, `i_index`, `t_abort` and `t_exit`; printing is `x_print`. A call adds its callee's summary with parameters mapped through the argument roots and the globals listed in those parameter root annotations; a callee with an unknown summary makes this function's own summary unknown unless it is already. Each effect must be in the summary.
+The body determines reference provenance and result roots. Every reference, slice or view value gets the set of roots it may have: `i_slot` gives its slot (a local), `i_global` its global, the entry block's parameter `i` the parameter `i`; `i_elem`, `i_freeze`, `i_snap`, `i_sview`, `i_vslice`, `i_index`, `i_index_proven` and `i_push` keep the roots of their operand; `i_load` of a reference or slice gives the union of what was stored in the slots of its operand's roots and the declared content roots when loading through a `ref slice` parameter; a block parameter gets what its incoming edges pass; a call gives its callee's body-derived returned roots with each `param j` replaced by the roots of argument `j`. A slot holds the union of what `x_init` and `x_store` put in it. Result roots are the least fixed point over function bodies and recursive calls. The `roots` record is a conservative annotation: computed result roots must be included, parameter roots must cover the roots supplied at each call, and content roots must cover the backing roots passed at each call. The verifier checks these bounds before using annotations to check effects, so missing annotations cannot hide an effect. Reads are `i_load`, `i_snap` and `i_alen` through a reference; writes are `x_store`; grows are `i_push` and `x_append`; each is attributed to the parameter and global roots of its operand and to nothing for a local. A store through the slot of a reference-typed parameter rebinds that parameter. Aborting is `i_bin` with `add sub mul div mod`, `i_un` with `neg`, `i_conv` with `as`, `i_vslice`, `i_index`, `t_abort` and `t_exit`; `i_index_proven` is non-aborting. Printing is `x_print`. A call adds its callee's summary with parameters mapped through the argument roots and the globals listed in those parameter root annotations; a callee with an unknown summary makes this function's own summary unknown unless it is already. Each effect must be in the summary.
 
 #### The reference lowering
 
@@ -794,13 +801,13 @@ An `e_struct` evaluates its initializers exactly once, left to right, and produc
 
 The first executable slice is scalar-field struct locals with construction, field read/write, copying and printing the scalar fields. Whole-object `const` qualification, including `const` struct locals, parameters and results, is explicitly `unsupported: struct-whole-const` until its type encoding and copy rules are added. A field's contents permission is already represented by the descriptor. Forming or passing a reference to an aggregate field whose effective whole-binding and contents capabilities differ is outside this first executable slice: plain `ref Mut T` cannot retain both. The Core validator rejects that reference formation; direct field/element selection still retains both capabilities. The later field-reference extension must preserve split provenance as required by §12.5, rather than keeping this conservative rejection as its final contract. Projection from a temporary or returned value such as `make().field` or `S { ... }.field` is `unsupported: struct-temporary-projection` until an expression projection or a specified storage materialization is added; `p_field` never accepts an expression in place of its `Place`. Other flat-struct contexts not implemented by that slice remain `unsupported: struct`; this contract does not claim complete flat-struct support or `G-SHRINK`.
 
-### 12.5 Flat fixed structs in gir-h/0.3, core-shrink
+### 12.5 Flat fixed structs in gir-h/0.4, core-shrink
 
-This extension is relative to the `gir-h/0.3` pilot schema of §12.2. It leaves that schema's `core-pilot` module arity of eight fields after the tag, numbering and bytes unchanged. It does not preserve the old schema string across a separate GIR-H revision change. The profile selects the additional table explicitly.
+This extension is relative to the `gir-h/0.4` pilot schema of §12.2. It leaves that schema's `core-pilot` module arity of eight fields after the tag, numbering and bytes unchanged. The profile selects the additional table explicitly.
 
 | Tag | Fields | Meaning |
 |---|---|---|
-| `module` | `str` schema (`gir-h/0.3`), `str` profile (`core-shrink`), `[file]` files, `[Ty]` types, `[struct_def]` structs, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | Exactly nine fields after the tag. |
+| `module` | `str` schema (`gir-h/0.4`), `str` profile (`core-shrink`), `[file]` files, `[Ty]` types, `[struct_def]` structs, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | Exactly nine fields after the tag. |
 | `struct`, `struct_def`, `field` | as in §12.4 | GIR-H retains nominal identity, logical field order, field permissions and authoritative layout. A descriptor's `ty` fields refer to the GIR-H type table and never to a `view`. |
 | `i_struct` | `val` result, `ty` struct type, `[val]` initializers | A transient by-value record. Operand count and types match the real fields. |
 | `i_field` | `val` result, `val` containing reference, `nat` real-field index | A reference to the selected field; no read, write, check, origin or runtime abort. |
@@ -815,7 +822,7 @@ The C emitter must support unaligned packed scalar accesses. A low `PLoad` or `P
 
 ### 12.6 Shrink operations in core-shrink
 
-The Lean Core model implements the shrink-owner semantics in this contract, including the follow-up permission and transitive-effect checks. The demand-aware safety proof and GIR/native shrink support remain pending, and no gate is claimed complete. This contract extends §§12.4–12.5 at schemas `goose-core/0.2`, `gir-h/0.3` and `gir-l/0.2`. A schema/profile pair selects one shape; no decoder tries alternate arities. `core-pilot` retains every tag, module/summary arity, numbering and byte choice in §§12.1–12.3. The `core-shrink` Core module has ten fields after its tag and GIR-H has nine, including the mandatory struct table even when empty. Flat-struct types, descriptors and field operations retain §§12.4–12.5's shapes. The completed shrink profile changes its summary and `e_push` shapes as specified below; a pre-shrink flat-struct artifact using their pilot shapes is malformed under this contract.
+The Lean Core model implements the shrink-owner semantics in this contract, including the follow-up permission and transitive-effect checks. The demand-aware safety proof and GIR/native shrink support remain pending, and no gate is claimed complete. This contract extends §§12.4–12.5 at schemas `goose-core/0.2`, `gir-h/0.4` and `gir-l/0.2`. A schema/profile pair selects one shape; no decoder tries alternate arities. `core-pilot` retains every tag, module/summary arity, numbering and byte choice in §§12.1–12.3. The `core-shrink` Core module has ten fields after its tag and GIR-H has nine, including the mandatory struct table even when empty. Flat-struct types, descriptors and field operations retain §§12.4–12.5's shapes. The completed shrink profile changes its summary and `e_push` shapes as specified below; a pre-shrink flat-struct artifact using their pilot shapes is malformed under this contract.
 
 #### Supported types, storage and source boundary
 
@@ -1000,15 +1007,15 @@ A return-from adds its target to `needs` and `escapes` unless this implementatio
 
 Decoding rejects profile-selected arity/tag errors, byte values above 255, empty/repeated/unsorted target sets, target/member/result/alias indices outside tables, wrong enumeration values and unsorted summary lists. Type/permission errors, invalid aliases, missing target availability, incomplete result lists and forged effects are validation failures (`V-TYPE`, `V-MUT`, `V-RESULT`, `V-CALL`, `V-SUMMARY` or construction/exit rules), not malformed JSON.
 
-### 12.9 Construction in gir-h/0.3, core-construction
+### 12.9 Construction in gir-h/0.4, core-construction
 
 This profile inherits the completed GIR-H shrink contract and selects the following module/signature shapes. Core target ids, member order, result positions, scopes and slots are retained; member implementation ids become the corresponding function ids. Global initializer functions appended by the lowering are never target members. The same lexical and size limits apply. `dest`, `built` and `cancelled` are SSA-only protocol types, never data types, slot types, struct components, stored values, source arguments or source results.
 
 | Tag | Fields | Meaning |
 |---|---|---|
-| `module` | `str` schema (`gir-h/0.3`), `str` profile (`core-construction`), `[file]`, `[Ty]`, `[struct_def]`, `[target]`, `[global]`, `[func]`, `fn` entry, `[origin]` | Exactly ten fields after the tag. |
+| `module` | `str` schema (`gir-h/0.4`), `str` profile (`core-construction`), `[file]`, `[Ty]`, `[struct_def]`, `[target]`, `[global]`, `[func]`, `fn` entry, `[origin]` | Exactly ten fields after the tag. |
 | `target` | `[fn]` members | The Core set renamed through lowering. |
-| `func` | `str` name, `[ty]` source params, `[result]`, `[slot]`, `[scope]`, `[block]`, `roots`, `Summary`, `[org]?` | Same nine-field arity; the profile selects descriptors instead of bare result types. `result` has Core's fields with a named `slot` instead of `var`. |
+| `func` | `str` name, `[ty]` source params, `[result]`, `[slot]`, `[scope]`, `[block]`, `roots`, `Summary`, `[org]?`, `[certificate]?` | Same ten-field arity as §12.2; the profile selects descriptors instead of bare result types. `result` has Core's fields with a named `slot` instead of `var`. |
 | `dest`, `built`, `cancelled` | `ty` nonfixed receiving type, `Request` (`value` or `element_run`) | An open linear destination, a completed value awaiting publication/return, or a linear certificate that the pending normal destination was abandoned on an escape path. |
 | `i_bytes` | `val` result, `[nat]` bytes, `[org]?` | Static `slice const u8`; byte range and static roots as in Core. |
 | `i_result` | `val` result, `val` call result pack, `nat` result position | Project one carrier; a nonfixed component is projected exactly once. The pack is SSA-only; it has tuple carrier types and cannot be stored. |

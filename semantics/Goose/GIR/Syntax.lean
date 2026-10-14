@@ -93,6 +93,8 @@ inductive Op
   | viewSlice (m : Mutability) (v : ValueId) (lo hi : Bnd) (org : Option OriginId)
   | arrayLen (r : ValueId)
   | indexChecked (v i : ValueId) (org : Option OriginId)
+  /-- Element address whose bounds are established by the function certificate. -/
+  | indexProven (v i : ValueId)
   | push (r v : ValueId) (org : Option OriginId)
   /-- Copy and remove the last element of an owner. -/
   | pop (r : ValueId) (org : Option OriginId)
@@ -158,6 +160,15 @@ structure RootInfo where
   contents : Array (Nat × List RootRef) := #[]
   results : Array (List RootRef) := #[]
 
+inductive Fact
+  | ge0 (i : ValueId)
+  | lt (i n : ValueId)
+  | lenGe (reference n : ValueId)
+  | viewLenGe (v n : ValueId)
+  deriving DecidableEq, Repr
+
+abbrev FactCertificate := Array (List Fact)
+
 
 structure Func where
   name : String
@@ -171,6 +182,7 @@ structure Func where
   roots : RootInfo := {}
   summary : SummaryAnn
   org : Option OriginId
+  certificate : Option FactCertificate := none
 
 
 structure Global where
@@ -221,7 +233,7 @@ def Op.uses : Op → List ValueId
   | .constInt .. | .constBool _ | .constUnit | .slotAddr _ | .globalAddr _ => []
   | .bin _ _ a b _ | .cmp _ _ a b | .boolCmp _ a b => [a, b]
   | .un _ _ a _ | .boolNot a | .conv _ _ _ a _ | .next _ a => [a]
-  | .refElem v i | .indexChecked v i _ => [v, i]
+  | .refElem v i | .indexChecked v i _ | .indexProven v i => [v, i]
   | .refFreeze r | .load r | .sliceView r | .viewLen r | .arrayLen r => [r]
   | .snapshot _ r => [r]
   | .viewSlice _ v lo hi _ => v :: (lo.uses ++ hi.uses)

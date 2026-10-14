@@ -53,7 +53,8 @@ def rootsOfDef (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func)
     (r : ValueId) : Op → List RootRef
   | .slotAddr s => [.local s]
   | .globalAddr g => [.global g]
-  | .fieldAddr v _ | .refElem v _ | .viewSlice _ v _ _ _ | .indexChecked v _ _ => rootsAt p.vals v
+  | .fieldAddr v _ | .refElem v _ | .viewSlice _ v _ _ _
+  | .indexChecked v _ _ | .indexProven v _ => rootsAt p.vals v
   | .refFreeze a | .sliceView a | .push a _ _ => rootsAt p.vals a
   | .snapshot _ a => rootsAt p.vals a
   | .load a =>

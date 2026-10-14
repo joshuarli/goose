@@ -290,6 +290,10 @@ def execPure (cx : FnCtx) (fr : Frame) : Op → M RVal
       if 0 ≤ k ∧ k < (vw.len : Int) then
         pure (.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩))
       else abortAtOrg .indexOob org
+    | .indexProven v i => do
+      let vw ← getView fr v
+      let (_, k) ← expectInt (← getVal fr i)
+      pure (.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩))
     | .push r v org => do
       let l ← expectRef (← getVal fr r)
       let x ← getVal fr v

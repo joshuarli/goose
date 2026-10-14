@@ -17,6 +17,7 @@
 #include "../src/gir/gir_ir.h"
 #include "../src/gir/gir_types.h"
 #include "../src/gir/gir_lower.h"
+#include "../src/gir/gir_evidence.h"
 #include "../src/gir/gir_low.h"
 #include "../src/gir/gir_json.h"
 #include "../src/gir/gir_verify.h"
@@ -80,6 +81,144 @@ GirModule Base() {
 GirFunc &Main(GirModule &m) { return m.funcs[0]; }
 
 string Code(GirModule m);
+
+GirModule FixedIndexEvidenceModule() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType array;
+    array.kind = CoreType::Arr;
+    array.elem = i64;
+    array.count = 4;
+    auto arrayTy = m.Intern(array);
+    Main(m).slots = { { arrayTy, CoreVarKind::Var, 0, 0 } };
+    Main(m).summary.unknown = true;
+
+    vector<GirInst> instructions = { Enter(0) };
+    for (int value = 0; value < 4; value++)
+        instructions.push_back(Int(m, value, to_string(value).c_str()));
+    auto literal = Def(GirOp::Arr, 4);
+    literal.ty = arrayTy;
+    literal.vals = { 0, 1, 2, 3 };
+    instructions.push_back(literal);
+    instructions.push_back(Init(0, 4));
+    auto owner = Def(GirOp::Slot, 5);
+    owner.idx = 0;
+    instructions.push_back(owner);
+    instructions.push_back(Int(m, 7, "2"));
+    auto length = Def(GirOp::ArrayLen, 8);
+    length.a = 5;
+    instructions.push_back(length);
+    auto view = Def(GirOp::Snap, 6);
+    view.snap = GirSnapshotMode::Owner;
+    view.a = 5;
+    instructions.push_back(view);
+    auto within = Def(GirOp::Cmp, 9);
+    within.cmp = CoreCmpOp::Lt;
+    within.ty = i64;
+    within.a = 7;
+    within.b = 8;
+    instructions.push_back(within);
+    instructions.push_back(CondBr(9, 1, 2));
+
+    auto index = Def(GirOp::Index, 10);
+    index.a = 6;
+    index.b = 7;
+    index.org = 0;
+    auto load = Def(GirOp::Load, 11);
+    load.a = 10;
+    GirBlock success;
+    success.insts = { index, load, Leave(0), Ret() };
+    GirBlock failure;
+    failure.insts = { Leave(0), Ret() };
+    Main(m).blocks = { { {}, std::move(instructions) }, std::move(success), std::move(failure) };
+    return m;
+}
+
+GirModule DynamicIndexEvidenceModule() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType ownerType;
+    ownerType.kind = CoreType::Grow;
+    ownerType.elem = i64;
+    auto grow = m.Intern(ownerType);
+    Main(m).slots = { { grow, CoreVarKind::Var, 0, 0 } };
+    Main(m).summary.unknown = true;
+
+    auto literal = Def(GirOp::Arr, 1);
+    literal.ty = grow;
+    literal.vals = { 0 };
+    auto owner = Def(GirOp::Slot, 2);
+    owner.idx = 0;
+    auto length = Def(GirOp::ArrayLen, 4);
+    length.a = 2;
+    auto within = Def(GirOp::Cmp, 5);
+    within.cmp = CoreCmpOp::Lt;
+    within.ty = i64;
+    within.a = 3;
+    within.b = 4;
+    GirBlock entry;
+    entry.insts = { Enter(0), Int(m, 0, "10"), literal, Init(0, 1), owner,
+        Int(m, 3, "0"), length, within, CondBr(5, 1, 2) };
+
+    auto view = Def(GirOp::Snap, 6);
+    view.snap = GirSnapshotMode::Owner;
+    view.a = 2;
+    auto index = Def(GirOp::Index, 7);
+    index.a = 6;
+    index.b = 3;
+    index.org = 0;
+    auto load = Def(GirOp::Load, 8);
+    load.a = 7;
+    GirBlock success;
+    success.insts = { view, index, load, Leave(0), Ret() };
+    GirBlock failure;
+    failure.insts = { Leave(0), Ret() };
+    Main(m).blocks = { std::move(entry), std::move(success), std::move(failure) };
+    return m;
+}
+
+void EvidenceProvesFixedIndexAndRejectsForgedProofs() {
+    auto m = FixedIndexEvidenceModule();
+    assert(Code(m) == "");
+    ProposeGirEvidence(m);
+    assert(Main(m).certificate.has_value());
+    assert(Main(m).blocks[1].insts[0].op == GirOp::IndexProven);
+    assert(Code(m) == "");
+
+    auto missing = m;
+    Main(missing).certificate.reset();
+    assert(Code(missing) == "GIR-V080");
+
+    auto falseFact = m;
+    Main(falseFact).blocks[0].insts[8].text = "-1";
+    assert(Code(falseFact) == "GIR-V080");
+
+    auto forged = m;
+    GirFact impossible;
+    impossible.kind = GirFact::Lt;
+    impossible.a = 8;
+    impossible.b = 7;
+    Main(forged).certificate->blocks[1].push_back(impossible);
+    CanonicalGirFacts(Main(forged).certificate->blocks[1]);
+    assert(Code(forged) == "GIR-V080");
+
+    auto dynamic = DynamicIndexEvidenceModule();
+    ProposeGirEvidence(dynamic);
+    assert(Main(dynamic).blocks[1].insts[1].op == GirOp::IndexProven);
+    assert(Code(dynamic) == "");
+
+    auto afterCall = dynamic;
+    GirFunc helper;
+    helper.name = "helper";
+    helper.blocks = { { {}, { Ret() } } };
+    helper.summary.unknown = true;
+    afterCall.funcs.push_back(std::move(helper));
+    auto call = Def(GirOp::Call, 9);
+    call.idx = 1;
+    call.org = 0;
+    Main(afterCall).blocks[1].insts.insert(Main(afterCall).blocks[1].insts.begin(), call);
+    assert(Code(afterCall) == "GIR-V080");
+}
 
 CoreExprP CoreInt(CoreTypeId ty, const char *text) {
     auto expr = make_unique<CoreExpr>();
@@ -4278,6 +4417,7 @@ void LowKeepsPackedFieldAlignmentAcrossCallParametersAndResults() {
 
 int main() {
     Accepts();
+    EvidenceProvesFixedIndexAndRejectsForgedProofs();
     RejectsUseNotDominatedByDefinition();
     RejectsWrongEdgeArgumentType();
     RejectsBlockWithTwoTerminatorsOrNone();

@@ -66,6 +66,7 @@
 #include "gir/gir_ir.h"
 #include "gir/gir_types.h"
 #include "gir/gir_lower.h"
+#include "gir/gir_evidence.h"
 #include "gir/gir_low.h"
 #include "gir/gir_json.h"
 #include "gir/gir_verify.h"

@@ -94,6 +94,7 @@ theorem validate_stages {m : Module} (h : validate m = .ok ()) :
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, hs, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
   exact ⟨ht, hc, hs, h⟩
 
 theorem asCheck_ok {c : Code} {label : String} {α : Type} {r : Except String α} {a : α}

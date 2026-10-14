@@ -1,4 +1,4 @@
-// Goose compiler — GIR-H, serialization (schema gir-h/0.3).
+// Goose compiler — GIR-H, serialization (schema gir-h/0.4).
 //
 // Records are tagged arrays as in the Core encoding. The file and origin
 // tables are the Core module's, unchanged; the type table is numbered by first
@@ -8,7 +8,7 @@
 
 namespace goose {
 
-inline constexpr const char *GIR_SCHEMA = "gir-h/0.3";
+inline constexpr const char *GIR_SCHEMA = "gir-h/0.4";
 
 class GirWriter {
 public:
@@ -257,6 +257,37 @@ private:
         out += "]]";
     }
 
+    static void Fact(string &out, const GirFact &fact) {
+        switch (fact.kind) {
+            case GirFact::Ge0: Append(out, "[\"f_ge0\",", fact.a, "]"); return;
+            case GirFact::Lt: Append(out, "[\"f_lt\",", fact.a, ",", fact.b, "]"); return;
+            case GirFact::LenGe:
+                Append(out, "[\"f_len_ge\",", fact.a, ",", fact.b, "]");
+                return;
+            case GirFact::ViewLenGe:
+                Append(out, "[\"f_view_len_ge\",", fact.a, ",", fact.b, "]");
+                return;
+        }
+    }
+
+    static void Certificate(string &out, const optional<GirFactCertificate> &certificate) {
+        if (!certificate) {
+            out += "[]";
+            return;
+        }
+        out += "[[\"certificate\",[";
+        for (size_t block = 0; block < certificate->blocks.size(); block++) {
+            if (block) out += ',';
+            out += '[';
+            for (size_t fact = 0; fact < certificate->blocks[block].size(); fact++) {
+                if (fact) out += ',';
+                Fact(out, certificate->blocks[block][fact]);
+            }
+            out += ']';
+        }
+        out += "]]]";
+    }
+
     void Func(string &out, const GirFunc &f) {
         out += "[\"func\",";
         Str(out, f.name);
@@ -294,6 +325,8 @@ private:
         Summary(out, f.summary, m.profile);
         out += ',';
         OptOrg(out, f.org);
+        out += ',';
+        Certificate(out, f.certificate);
         out += ']';
     }
 
@@ -510,6 +543,10 @@ private:
                 Append(out, ",", i.a, ",", i.b, ",");
                 OptOrg(out, i.org);
                 out += ']';
+                return;
+            case GirOp::IndexProven:
+                def("i_index_proven");
+                Append(out, ",", i.a, ",", i.b, "]");
                 return;
             case GirOp::Push:
                 def("i_push");
