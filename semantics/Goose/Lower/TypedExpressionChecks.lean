@@ -242,4 +242,54 @@ theorem binary_children_source (artifact : ArtifactProfile) (profile : NumProfil
       .done (.aborted .intOverflow 0) "", .done (.aborted .intOverflow 0) "" => true
   | _, _, _, _ => false
 
+def comparisonArguments (booleans : Bool) : Expr × Expr :=
+  if booleans then (.bool true, .bool true) else (.lit .i64 1, .lit .i64 1)
+
+def comparisonModule (artifact : ArtifactProfile) (booleans : Bool) : Core.Module :=
+  let arguments := comparisonArguments booleans
+  { files := #["comparison.goose"], types := #[.bool, .int .i64],
+    globals := #[⟨"equal", .bool, .mutable, .cmp .eq arguments.1 arguments.2, 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [.assertS (.read (.global 0)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := artifact }
+
+theorem comparison_claim (artifact : ArtifactProfile) (profile : NumProfile) (booleans : Bool) :
+    TypedExprClaim 5 ⟨profile, comparisonModule artifact booleans⟩ [.bool]
+      (.cmp .eq (comparisonArguments booleans).1 (comparisonArguments booleans).2) := by
+  cases booleans
+  · exact typedExprClaim_cmp (typedExprClaim_lit 4 _ _ .i64 1) (typedExprClaim_lit 4 _ _ .i64 1) .eq
+  · exact typedExprClaim_cmp (typedExprClaim_bool 4 _ _ true) (typedExprClaim_bool 4 _ _ true) .eq
+
+theorem comparison_children_source (artifact : ArtifactProfile) (profile : NumProfile) (booleans : Bool)
+    (accepted : Core.validate (comparisonModule artifact booleans) = .ok ()) :
+    ∃ left : ExprSource ⟨profile, comparisonModule artifact booleans⟩ ⟨#[], 0, [], 0⟩
+        (comparisonArguments booleans).1 { St.initial with nextAct := 1 },
+      ∃ right : ExprSource ⟨profile, comparisonModule artifact booleans⟩ ⟨#[], 0, [], 0⟩
+        (comparisonArguments booleans).2 { St.initial with nextAct := 1 },
+        left.typingEnv = right.typingEnv ∧ left.rootsEnv = right.rootsEnv := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, comparisonModule artifact booleans⟩) (state := St.initial) (g := 0)
+    (global := ⟨"equal", .bool, .mutable,
+      .cmp .eq (comparisonArguments booleans).1 (comparisonArguments booleans).2, 0⟩)
+    accepted rfl (InitializedGlobals.initial _).invariant
+  obtain ⟨left, hltyping, hlroots, next⟩ := source.cmpChildren .eq
+  obtain ⟨right, hrtyping, hrroots⟩ := next 4 (if booleans then .bool true else .int .i64 1)
+    { St.initial with nextAct := 1 } (by cases booleans <;>
+      simp [comparisonArguments, evalExpr, pure_apply, St.initial])
+  exact ⟨left, right, hltyping.trans hrtyping.symm, hlroots.trans hrroots.symm⟩
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  [false, true].all fun booleans =>
+    let source := comparisonModule artifact booleans
+    match Core.validate source, GIR.validate (lower source) with
+    | .ok _, .ok _ => true
+    | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  [false, true].all fun booleans =>
+    let source := comparisonModule artifact booleans
+    [NumProfile.release, .debug].all fun profile =>
+      match Core.eval 80 profile source, GIR.run 160 profile (lower source) with
+      | .done .returned "", .done .returned "" => true
+      | _, _ => false
+
 end Goose.Lower.TypedExpressionChecks
