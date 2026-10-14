@@ -100,7 +100,11 @@ def nestedExpressionReturns (module : Module) (implementation : ImplId) : Expr â
       nestedExpressionReturns module implementation expression
   | .bin _ left right _ | .cmp _ left right | .and left right | .or left right =>
       nestedExpressionReturns module implementation left ++ nestedExpressionReturns module implementation right
-  | .call _ arguments _ => nestedArgumentReturns module implementation arguments
+  | .call context arguments org =>
+      (arguments.flatMap fun argument => match argument with
+        | .byRef .mutable place =>
+            (placeVariables place).map fun id => .alias id (.call context arguments org)
+        | _ => []) ++ nestedArgumentReturns module implementation arguments
   | .push owner expression _ => nestedPlaceReturns module implementation owner ++ nestedExpressionReturns module implementation expression
   | .pop owner _ => nestedPlaceReturns module implementation owner
   | .ifE condition left right => nestedExpressionReturns module implementation condition ++
