@@ -10,7 +10,10 @@ structure EvalConfig where
 def EvalConfig.layout (config : EvalConfig) : LayoutEnv := LayoutEnv.ofModule config.module
 
 def returned (activation : ActId) (carriers : List Carrier) : EvalM α := fun state =>
-  .escape activation carriers state
+  .escape ⟨activation, .ordinary⟩ carriers state
+
+def escaped (address : ExitAddress) (carriers : List Carrier) : EvalM α := fun state =>
+  .escape address carriers state
 
 inductive Flow
   | normal (value : Value)
@@ -622,11 +625,11 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
       | .returnFrom target operands origin =>
           let activation ← targetActivation config target
           let channels ← exitChannels activation operands origin
-          returned activation.act (← evalOperands fuel config environment channels operands)
+          escaped ⟨activation.act, .nonlocal target⟩ (← evalOperands fuel config environment channels operands)
       | .returnFromForward target producer origin =>
           let activation ← targetActivation config target
           let channels ← exitChannels activation (List.replicate activation.channels.length producer) origin
-          returned activation.act (← evalProduce fuel config environment channels producer)
+          escaped ⟨activation.act, .nonlocal target⟩ (← evalProduce fuel config environment channels producer)
       | .breakValue expression origin =>
           let target ← currentBreak environment.act (some .block)
           let activation := { environment with channels := target.channels }

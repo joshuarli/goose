@@ -479,7 +479,7 @@ def finishActivation (layout : LayoutEnv) (activation : RuntimeActivation) (resu
   match action state with
   | .ok carriers state' => finish carriers state'
   | .escape target carriers state' =>
-      if target == activation.act then finish carriers state'
+      if target.activation == activation.act then finish carriers state'
       else .escape target carriers { state' with activations := state'.activations.filter (fun current => current.act != activation.act) }
   | .stop reason state' => .stop reason state'
   | .jump _ _ state' => .stop (.fault .flow) state'
