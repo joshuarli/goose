@@ -107,6 +107,7 @@ private:
                 break;
             case GirOp::DestOpen:
                 if (i.knownCount) add(*i.knownCount);
+                if (auto whole = get_if<GirDestWholeReceiver>(&i.destReceiver)) add(whole->reference);
                 break;
             case GirOp::Pop: case GirOp::Clear:
                 add(i.a);
@@ -286,8 +287,9 @@ private:
         for (auto &g : m.globals) scan(g.init);
 
         if (m.low) {
-            if (hasStructType || hasStructInst || !m.structs.empty() || !m.targets.empty())
-                Fail("GIR-V090", "a low module retains a struct type, descriptor, or operation");
+            if (hasStructType || hasStructInst || !m.structs.empty() || !m.targets.empty() ||
+                !m.lowtargets.empty())
+                Fail("GIR-V090", "a low module retains a high-stage artifact or an unsupported target table");
             return;
         }
         if (!CoreHasConstruction(m.profile) && !m.targets.empty())
@@ -1098,8 +1100,9 @@ private:
                     SymbolFail(fn, cat("function ", i.idx, " is outside the function table"));
                 break;
             case GirOp::DestOpen:
-                if (i.idx < 0 || i.idx >= (int)f.slots.size())
-                    SymbolFail(fn, cat("destination slot ", i.idx, " is outside the slot table"));
+                if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver))
+                    if (slot->slot < 0 || slot->slot >= (int)f.slots.size())
+                        SymbolFail(fn, cat("destination slot ", slot->slot, " is outside the slot table"));
                 break;
             case GirOp::Enter: case GirOp::Leave:
                 if (i.idx < 0 || i.idx >= (int)f.scopes.size())
@@ -1565,7 +1568,10 @@ private:
                                             " is taken outside scope ", f.slots[s].scope));
                 };
                 switch (i.op) {
-                    case GirOp::Slot: case GirOp::Init: case GirOp::DestOpen: slotin(i.idx); break;
+                    case GirOp::Slot: case GirOp::Init: slotin(i.idx); break;
+                    case GirOp::DestOpen:
+                        if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver)) slotin(slot->slot);
+                        break;
                     case GirOp::Enter: {
                         auto parent = f.scopes[i.idx];
                         auto ok = parent >= 0 ? !stack.empty() && stack.back() == parent : stack.empty();
@@ -2327,9 +2333,23 @@ private:
                     GirOwnerKind(m.Type(inst.ty).kind))
                     Fail("GIR-V060", cat(fn.label, ": a nonfixed array is materialized as a detached aggregate"));
                 if (inst.op != GirOp::DestOpen) continue;
-                if (inst.idx < 0 || inst.idx >= (int)f.slots.size() ||
-                    inst.ty != f.slots[inst.idx].ty || !inst.knownCount)
-                    Fail("GIR-V060", cat(fn.label, ": a destination does not name its exact receiver slot"));
+                GirTypeId receiverType = -1;
+                if (auto slot = get_if<GirDestSlotReceiver>(&inst.destReceiver)) {
+                    if (slot->slot < 0 || slot->slot >= (int)f.slots.size())
+                        Fail("GIR-V060", cat(fn.label, ": a destination names an invalid receiver slot"));
+                    receiverType = f.slots[slot->slot].ty;
+                    if (inst.ty != receiverType)
+                        Fail("GIR-V060", cat(fn.label, ": a destination does not name its exact receiver slot"));
+                } else {
+                    auto whole = get<GirDestWholeReceiver>(inst.destReceiver);
+                    auto reference = fn.vt[whole.reference];
+                    if (reference < 0 || reference >= (int)m.types.size() ||
+                        m.Type(reference).kind != CoreType::Ref || m.Type(reference).mut != CoreMut::Mut)
+                        Fail("GIR-V060", cat(fn.label, ": a whole destination is not a mutable owner reference"));
+                    receiverType = m.Type(reference).elem;
+                }
+                if (!inst.knownCount)
+                    Fail("GIR-V060", cat(fn.label, ": a destination has no known element count"));
                 auto countValue = *inst.knownCount;
                 auto countDef = countValue >= 0 && countValue < fn.nvalues ? definitions[countValue] : nullptr;
                 if (!countDef || countDef->op != GirOp::Int)
@@ -2342,6 +2362,7 @@ private:
 
                 int writes = 0;
                 int byteWrites = 0;
+                size_t byteWriteIndex = body.insts.size();
                 size_t cursor = index + 1;
                 for (; cursor < body.insts.size(); cursor++) {
                     auto &candidate = body.insts[cursor];
@@ -2356,6 +2377,7 @@ private:
                         if (byteWrites || writes || candidate.a != inst.res)
                             Fail("GIR-V060", cat(fn.label, ": a byte destination is mixed or misrouted"));
                         byteWrites++;
+                        byteWriteIndex = cursor;
                         matched.insert({ (int)block, (int)cursor });
                         continue;
                     }
@@ -2376,8 +2398,12 @@ private:
                 if (publish.op != GirOp::DestPublish || publish.a != finish.res)
                     Fail("GIR-V060", cat(fn.label, ": a destination is not published exactly after completion"));
                 auto owner = m.Type(inst.ty);
+                auto receiver = m.Type(receiverType);
+                if (receiver.kind != CoreType::Grow || owner.kind != CoreType::Grow ||
+                    receiver.elem != owner.elem)
+                    Fail("GIR-V060", cat(fn.label, ": a destination changes its receiver element type"));
                 if (byteWrites) {
-                    auto &write = body.insts[index + 1];
+                    auto &write = body.insts[byteWriteIndex];
                     if ((uint64_t)count != write.bytes.size() || owner.kind != CoreType::Grow ||
                         m.Type(owner.elem).kind != CoreType::Int || m.Type(owner.elem).ity != CoreIntTy::U8)
                         Fail("GIR-V060", cat(fn.label, ": a byte destination count or element type is invalid"));

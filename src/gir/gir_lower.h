@@ -601,11 +601,11 @@ private:
         return false;
     }
 
-    void LowerConstructionValue(const CoreExpr &expr, int slot, int org) {
+    void LowerConstructionValue(const CoreExpr &expr, GirDestReceiver receiver, int org) {
         if (expr.kind == CoreExprKind::Bytes) {
             GirInst open;
             open.op = GirOp::DestOpen;
-            open.idx = slot;
+            open.destReceiver = receiver;
             open.ty = expr.type;
             open.request = CoreRequest::Value;
             open.knownCount = ConstInt(I64(), to_string(expr.bytes.size()));
@@ -635,7 +635,7 @@ private:
         if (expr.kind == CoreExprKind::Arr) {
             GirInst open;
             open.op = GirOp::DestOpen;
-            open.idx = slot;
+            open.destReceiver = receiver;
             open.ty = expr.type;
             open.request = CoreRequest::Value;
             open.knownCount = ConstInt(I64(), to_string(expr.elems.size()));
@@ -667,7 +667,7 @@ private:
         if (expr.kind == CoreExprKind::Block) {
             if (!expr.then || !expr.then->value)
                 throw CompileError { "internal compiler error: construction block has no value" };
-            LowerConstructionBlock(*expr.then, slot, org);
+            LowerConstructionBlock(*expr.then, receiver, org);
             return;
         }
         if (expr.kind == CoreExprKind::If) {
@@ -681,10 +681,10 @@ private:
             (void)elseParams;
             EmitTerm(CondBr(condition, thenBlock, {}, elseBlock, {}));
             cur = thenBlock;
-            LowerConstructionBlock(*expr.then, slot, org);
+            LowerConstructionBlock(*expr.then, receiver, org);
             auto thenEnd = cur;
             cur = elseBlock;
-            LowerConstructionBlock(*expr.otherwise, slot, org);
+            LowerConstructionBlock(*expr.otherwise, receiver, org);
             auto elseEnd = cur;
             JoinArms(thenEnd, elseEnd);
             return;
@@ -692,7 +692,7 @@ private:
         throw CompileError { "internal compiler error: unsupported construction expression" };
     }
 
-    void LowerConstructionBlock(const CoreBlock &block, int slot, int org) {
+    void LowerConstructionBlock(const CoreBlock &block, GirDestReceiver receiver, int org) {
         GirInst enter;
         enter.op = GirOp::Enter;
         enter.idx = block.scope;
@@ -702,7 +702,7 @@ private:
             if (cur < 0) break;
             LowerStmt(nullptr, stmt);
         }
-        if (cur >= 0) LowerConstructionValue(*block.value, slot, org);
+        if (cur >= 0) LowerConstructionValue(*block.value, receiver, org);
         GirInst leave;
         leave.op = GirOp::Leave;
         leave.idx = block.scope;
@@ -715,7 +715,7 @@ private:
         switch (s.kind) {
             case CoreStmtKind::Let: {
                 if (CoreHasConstruction(core.profile) && IsConstructionValue(*s.expr)) {
-                    LowerConstructionValue(*s.expr, s.var, org);
+                    LowerConstructionValue(*s.expr, GirDestSlotReceiver { s.var }, org);
                     return;
                 }
                 auto v = LowerExpr(*s.expr);
@@ -803,6 +803,15 @@ private:
             }
             case CoreStmtKind::AssignWhole: {
                 auto r = LowerPlace(*s.place);
+                if (CoreHasConstruction(core.profile) && IsConstructionValue(*s.expr)) {
+                    GirInst clear;
+                    clear.op = GirOp::Clear;
+                    clear.a = r;
+                    clear.org = org;
+                    EmitEffect(std::move(clear));
+                    LowerConstructionValue(*s.expr, GirDestWholeReceiver { r }, org);
+                    return;
+                }
                 GirInst clear;
                 clear.op = GirOp::Clear;
                 clear.a = r;

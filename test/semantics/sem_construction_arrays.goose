@@ -1,6 +1,6 @@
 fn main() {
     let marker: u8[>..] = "x";
-    let values: i64[>..] = [7, 11, 13];
+    var values: i64[>..] = [7, 11, 13];
     let flags: bool[>..] = [true, false, true];
     let empty: i64[>..] = [];
     let branch: i64[>..] = if values.len == 3 {
@@ -17,4 +17,10 @@ fn main() {
     print(empty.len);
     print(branch.len, " ", branch[1]);
     print(grouped.len, " ", grouped[0]);
+    values.push(37);
+    let suffix: i64[2] = [41, 43];
+    values.append(suffix);
+    print(values.len, " ", values[3], " ", values[5]);
+    values = [47, 53];
+    print(values.len, " ", values[0], " ", values[1]);
 }

@@ -252,12 +252,13 @@ private:
         if (CoreHasShrink(profile)) {
             Targets(out, s.shrinks); out += ',';
         }
+        Targets(out, s.rebinds);
         if (CoreHasConstruction(profile)) {
+            out += ',';
             Ints(out, s.constructs); out += ',';
             Ints(out, s.needs); out += ',';
-            Ints(out, s.escapes); out += ',';
+            Ints(out, s.escapes);
         }
-        Targets(out, s.rebinds);
         Append(out, ",", (int)s.aborts, ",", (int)s.outputs, "]");
     }
 
@@ -658,7 +659,12 @@ private:
             case GirOp::Field: def("i_field"); Append(out, ",", i.a, ",", i.idx, "]"); return;
             case GirOp::DestOpen:
                 def("i_dest_open");
-                Append(out, ",[\"dr_slot\",", i.idx, "],", T(i.ty), ",\"", CoreRequestName(i.request), "\",");
+                out += ',';
+                if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver))
+                    Append(out, "[\"dr_slot\",", slot->slot, "]");
+                else
+                    Append(out, "[\"dr_whole\",", get<GirDestWholeReceiver>(i.destReceiver).reference, "]");
+                Append(out, ",", T(i.ty), ",\"", CoreRequestName(i.request), "\",");
                 if (i.knownCount) Append(out, "[", *i.knownCount, "]");
                 else out += "[]";
                 out += ',';

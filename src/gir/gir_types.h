@@ -395,11 +395,22 @@ public:
             case GirOp::DestOpen: {
                 if (m.low || m.profile != CoreProfile::Construction)
                     return GirTyErr("construction destination under an earlier profile or stage");
-                if (i.idx < 0 || i.idx >= (int)env.slots.size())
-                    return GirTyErr("destination slot outside the slot table");
                 if (i.ty < 0 || i.ty >= (int)m.types.size())
                     return GirTyErr("destination type outside the type table");
-                auto &receiver = m.Type(env.slots[i.idx].ty);
+                GirTypeId receiverType = -1;
+                if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver)) {
+                    if (slot->slot < 0 || slot->slot >= (int)env.slots.size())
+                        return GirTyErr("destination slot outside the slot table");
+                    receiverType = env.slots[slot->slot].ty;
+                } else {
+                    auto whole = get<GirDestWholeReceiver>(i.destReceiver);
+                    auto reference = Ref(whole.reference);
+                    if (!reference.ok()) return reference;
+                    receiverType = m.Type(reference.ty).elem;
+                    if (m.Type(reference.ty).mut != CoreMut::Mut)
+                        return GirTyErr("whole assignment destination is read-only");
+                }
+                auto &receiver = m.Type(receiverType);
                 auto &producer = m.Type(i.ty);
                 auto elementKind = m.Type(producer.elem).kind;
                 if (receiver.kind != CoreType::Grow || producer.kind != CoreType::Grow ||

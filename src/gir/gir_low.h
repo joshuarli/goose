@@ -841,12 +841,18 @@ private:
                 return;
             }
             case GirOp::DestOpen: {
-                auto &place = places.at(i.idx);
-                if (place.kind != Place::Header || place.stack < 0 || place.members.size() != 1)
-                    throw CompileError { "internal compiler error: byte destination has no grow-only receiver" };
                 Destination destination;
-                destination.header = Simple(GirOp::FrameAddr, Ptr(), -1, -1, place.members[0]);
-                destination.stack = StackOf(place.stack);
+                if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver)) {
+                    auto &place = places.at(slot->slot);
+                    if (place.kind != Place::Header || place.stack < 0 || place.members.size() != 1)
+                        throw CompileError { "internal compiler error: destination slot has no grow-only receiver" };
+                    destination.header = Simple(GirOp::FrameAddr, Ptr(), -1, -1, place.members[0]);
+                    destination.stack = StackOf(place.stack);
+                } else {
+                    auto reference = get<GirDestWholeReceiver>(i.destReceiver).reference;
+                    destination.header = shape[reference].w[0];
+                    destination.stack = shape[reference].w[1];
+                }
                 destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
                 destination.elem = HT(i.ty).elem;
                 destination.count = 0;

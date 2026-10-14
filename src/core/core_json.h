@@ -305,12 +305,13 @@ private:
         if (CoreHasShrink(m.profile)) {
             Targets(out, s.shrinks); out += ',';
         }
+        Targets(out, s.rebinds);
         if (CoreHasConstruction(m.profile)) {
+            out += ',';
             Ids(out, s.constructs); out += ',';
             Ids(out, s.needs); out += ',';
-            Ids(out, s.escapes); out += ',';
+            Ids(out, s.escapes);
         }
-        Targets(out, s.rebinds);
         Append(out, ",", (int)s.aborts, ",", (int)s.outputs, "]");
     }
 

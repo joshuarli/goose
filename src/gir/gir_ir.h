@@ -85,6 +85,16 @@ struct GirPart {
     int val = 0;
 };
 
+struct GirDestSlotReceiver {
+    int slot = -1;
+};
+
+struct GirDestWholeReceiver {
+    int reference = -1;
+};
+
+using GirDestReceiver = variant<GirDestSlotReceiver, GirDestWholeReceiver>;
+
 struct GirInst {
     GirOp op = GirOp::Unit;
     int res = -1;
@@ -100,6 +110,7 @@ struct GirInst {
     GirAbortKind abort = GirAbortKind::Assert;
     CoreRequest request = CoreRequest::Value;
     optional<int> knownCount;
+    GirDestReceiver destReceiver = GirDestSlotReceiver {};
     int idx = -1, idx2 = -1;
     int a = -1, b = -1;
     vector<uint8_t> bytes;

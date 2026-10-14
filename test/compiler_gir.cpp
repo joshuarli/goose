@@ -848,6 +848,12 @@ void RejectsHighOperationInLowModule() {
     assert(Code(h) == "GIR-V090");
 }
 
+void RejectsConstructionTargetsInLowModule() {
+    auto m = LowBase();
+    m.lowtargets = { CoreTargetSet { { 0 } } };
+    assert(Code(m) == "GIR-V090");
+}
+
 void RejectsTwoResizablesOnOneStack() {
     auto m = LowBase();
     Main(m).stacks = 1;
@@ -2733,6 +2739,50 @@ CoreModule CorePushParamSummary(CoreProfile profile) {
     return m;
 }
 
+CoreModule CoreWholeArrayAssignment() {
+    CoreModule m;
+    m.files = { "t.goose" };
+    m.profile = CoreProfile::Construction;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::Grow;
+    owner.elem = i64;
+    auto ownerType = m.Intern(owner);
+    auto declaration = CoreOrigin { 0, 1, CoreOriginKind::Let };
+    auto assignment = CoreOrigin { 0, 2, CoreOriginKind::Assign };
+
+    CoreImpl impl;
+    impl.name = "main";
+    impl.vars = { CoreVar { "values", ownerType, CoreVarKind::Var, 0, declaration } };
+    impl.body.scope = 0;
+    auto initial = make_unique<CoreExpr>();
+    initial->kind = CoreExprKind::Arr;
+    initial->type = ownerType;
+    initial->elems.push_back(CoreInt(i64, "7"));
+    CoreStmt let;
+    let.kind = CoreStmtKind::Let;
+    let.var = 0;
+    let.expr = std::move(initial);
+    let.org = declaration;
+    impl.body.stmts.push_back(std::move(let));
+    auto replacement = make_unique<CoreExpr>();
+    replacement->kind = CoreExprKind::Arr;
+    replacement->type = ownerType;
+    replacement->elems.push_back(CoreInt(i64, "11"));
+    replacement->elems.push_back(CoreInt(i64, "13"));
+    CoreStmt whole;
+    whole.kind = CoreStmtKind::AssignWhole;
+    whole.place = CoreLocal(0);
+    whole.expr = std::move(replacement);
+    whole.org = assignment;
+    impl.body.stmts.push_back(std::move(whole));
+
+    m.impls.push_back(std::move(impl));
+    m.contexts = { CoreContext { .impl = 0 } };
+    m.entry = 0;
+    return m;
+}
+
 void CoreShrinkPushAndSummaryCarryOriginsAndShrinks() {
     auto shrink = CoreWriter(CorePushShape(CoreProfile::Shrink)).Write();
     assert(shrink.find("[\"grow\",0]") != string::npos);
@@ -2761,6 +2811,21 @@ void CoreShrinkPushAndSummaryCarryOriginsAndShrinks() {
     auto shrinkSummaryWire = CoreWriter(shrinkSummary).Write();
     assert(shrinkSummaryWire.find(
                "[\"summary\",[],[[\"t_param\",0]],[[\"t_param\",0]],[],[],0,0]") !=
+           string::npos);
+
+    auto constructionSummary = CorePushParamSummary(CoreProfile::Construction);
+    constructionSummary.impls[0].summary.rebinds = { CoreTarget { false, 0 } };
+    auto constructionSummaryWire = CoreWriter(constructionSummary).Write();
+    assert(constructionSummaryWire.find(
+               "[\"summary\",[],[],[],[],[[\"t_param\",0]],[],[],[],0,0]") !=
+           string::npos);
+
+    auto girConstructionSummary = Base();
+    girConstructionSummary.profile = CoreProfile::Construction;
+    Main(girConstructionSummary).summary.rebinds = { CoreTarget { false, 0 } };
+    auto girConstructionSummaryWire = GirWriter(girConstructionSummary).Write();
+    assert(girConstructionSummaryWire.find(
+               "[\"summary\",[],[],[],[],[[\"t_param\",0]],[],[],[],0,0]") !=
            string::npos);
 }
 
@@ -4425,7 +4490,7 @@ GirModule ByteConstructionModule() {
 
     auto count = Int(m, 0, "3");
     GirInst open = Def(GirOp::DestOpen, 1);
-    open.idx = 0;
+    open.destReceiver = GirDestSlotReceiver { 0 };
     open.ty = ownerType;
     open.request = CoreRequest::Value;
     open.knownCount = 0;
@@ -4434,12 +4499,13 @@ GirModule ByteConstructionModule() {
     write.op = GirOp::DestBytes;
     write.a = 1;
     write.bytes = { 65, 0, 66 };
-    GirInst finish = Def(GirOp::DestFinish, 2);
+    auto interveningValue = Int(m, 2, "1");
+    GirInst finish = Def(GirOp::DestFinish, 3);
     finish.a = 1;
     GirInst publish;
     publish.op = GirOp::DestPublish;
-    publish.a = 2;
-    Main(m).blocks[0].insts = { Enter(0), count, open, write, finish, publish, Leave(0), Ret() };
+    publish.a = 3;
+    Main(m).blocks[0].insts = { Enter(0), count, open, interveningValue, write, finish, publish, Leave(0), Ret() };
     return m;
 }
 
@@ -4458,7 +4524,7 @@ GirModule GrowArrayConstructionModule() {
     auto second = Int(m, 2, "11");
     auto third = Int(m, 3, "13");
     GirInst open = Def(GirOp::DestOpen, 4);
-    open.idx = 0;
+    open.destReceiver = GirDestSlotReceiver { 0 };
     open.ty = ownerType;
     open.request = CoreRequest::Value;
     open.knownCount = 0;
@@ -4518,7 +4584,7 @@ void ConstructionBytesUseLinearDestinationProtocol() {
 
 void ConstructionBytesRejectIncompleteOrMismatchedDestinations() {
     auto missingPublish = ByteConstructionModule();
-    Main(missingPublish).blocks[0].insts.erase(Main(missingPublish).blocks[0].insts.begin() + 5);
+    Main(missingPublish).blocks[0].insts.erase(Main(missingPublish).blocks[0].insts.begin() + 6);
     assert(Code(missingPublish) == "GIR-V060");
 
     auto wrongCount = ByteConstructionModule();
@@ -4554,6 +4620,33 @@ void ConstructionGrowArrayUsesElementDestinations() {
     assert(bumps == 1);
     assert(headerInitializations == 1);
     assert(lengthUpdates == 1);
+}
+
+void ConstructionWholeAssignmentUsesOwnerDestination() {
+    auto core = CoreWholeArrayAssignment();
+    CoreSummarizer(core).Run();
+    auto numbering = [&] { CoreWriter writer(core); writer.Write(); return writer; }();
+    auto high = GirLowerer(core, numbering.FileTable(), numbering.OriginTable(),
+                           [&](const CoreOrigin &origin) { return numbering.OriginId(origin); }).Lower();
+    high.diagfiles = numbering.DiagFileTable();
+    high.filemodules = numbering.FileModuleTable();
+    assert(!GirVerifier(high).Verify());
+    auto encoded = GirWriter(high).Write();
+    assert(encoded.find("[\"dr_whole\",") != string::npos);
+
+    int clearIndex = -1;
+    int wholeOpenIndex = -1;
+    for (size_t block = 0; block < high.funcs[0].blocks.size(); block++)
+        for (size_t index = 0; index < high.funcs[0].blocks[block].insts.size(); index++) {
+            auto &inst = high.funcs[0].blocks[block].insts[index];
+            if (inst.op == GirOp::Clear) clearIndex = (int)index;
+            if (inst.op == GirOp::DestOpen && holds_alternative<GirDestWholeReceiver>(inst.destReceiver))
+                wholeOpenIndex = (int)index;
+        }
+    assert(clearIndex >= 0 && wholeOpenIndex > clearIndex);
+
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
 }
 
 void ConstructionRejectsDetachedGrowArrayAggregates() {
@@ -4606,6 +4699,7 @@ int main() {
     RejectsAbortingOperationWithoutOrigin();
     LowAccepts();
     RejectsHighOperationInLowModule();
+    RejectsConstructionTargetsInLowModule();
     RejectsTwoResizablesOnOneStack();
     RejectsWatermarkPastCallerOwnedRegion();
     PassedOwnerPairsKeepTheirExactIdentity();
@@ -4665,6 +4759,7 @@ int main() {
     ConstructionBytesUseLinearDestinationProtocol();
     ConstructionBytesRejectIncompleteOrMismatchedDestinations();
     ConstructionGrowArrayUsesElementDestinations();
+    ConstructionWholeAssignmentUsesOwnerDestination();
     ConstructionRejectsDetachedGrowArrayAggregates();
     ConstructionTargetsRejectEmptyAndRepeatedMemberSets();
     puts("compiler_gir ok");
