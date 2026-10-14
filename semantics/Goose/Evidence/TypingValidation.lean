@@ -835,4 +835,144 @@ theorem validated_entry_and_global_signatures {m : Module} (h : validate m = .ok
       · simp [hs, violation, bind, Except.bind] at checked
     simpa using hs
 
+private theorem dataType_check_metadata {env : TyEnv} {value : ValueId} {expected : Ty}
+    {message : String}
+    (h : (env.dataTy value >>= fun actual =>
+      if actual = expected then pure () else tyErr message) = .ok ()) :
+    env.vals[value]? = some (some (.data expected)) := by
+  obtain ⟨actual, ht, h⟩ := bind_ok h
+  have he : actual = expected := by
+    by_cases he : actual = expected
+    · exact he
+    · simp [he, tyErr] at h
+  subst actual
+  exact dataTy_of ht
+
+theorem slotInit_types_of {env : TyEnv} {slot : SlotId} {value : ValueId}
+    {org : Option OriginId} (h : checkEffectTypes env (.slotInit slot value org) = .ok ()) :
+    ∃ desc, env.slots[slot]? = some desc ∧
+      env.vals[value]? = some (some (.data desc.ty)) := by
+  simp only [checkEffectTypes] at h
+  cases hs : env.slots[slot]? with
+  | none => simp [hs, tyErr] at h
+  | some desc =>
+    rw [hs] at h
+    exact ⟨desc, rfl, dataType_check_metadata h⟩
+
+theorem store_types_of {env : TyEnv} {reference value : ValueId} {org : Option OriginId}
+    (h : checkEffectTypes env (.store reference value org) = .ok ()) :
+    ∃ permission ty, env.vals[reference]? = some (some (.data (.ref permission ty))) ∧
+      env.vals[value]? = some (some (.data ty)) := by
+  simp only [checkEffectTypes] at h
+  obtain ⟨⟨permission, ty⟩, hr, h⟩ := bind_ok h
+  exact ⟨permission, ty, refTy_of hr, dataType_check_metadata h⟩
+
+theorem append_types_of {env : TyEnv} {reference value : ValueId} {org : Option OriginId}
+    (h : checkEffectTypes env (.append reference value org) = .ok ()) :
+    ∃ permission owner elem viewPermission,
+      env.vals[reference]? = some (some (.data (.ref permission owner))) ∧
+      owner.ownerElem? = some elem ∧
+      env.vals[value]? = some (some (.view viewPermission elem)) := by
+  simp only [checkEffectTypes] at h
+  obtain ⟨⟨permission, owner⟩, hr, h⟩ := bind_ok h
+  cases owner with
+  | grow elem | growshrink elem | limited elem capacity =>
+    obtain ⟨⟨viewPermission, actual⟩, hv, h⟩ := bind_ok h
+    have he : actual = elem := by
+      by_cases he : actual = elem
+      · exact he
+      · simp [he, tyErr] at h
+    subst actual
+    exact ⟨permission, _, elem, viewPermission, refTy_of hr, rfl, viewTy_of hv⟩
+  | _ => simp [tyErr] at h
+
+theorem popN_types_of {env : TyEnv} {reference count : ValueId} {org : Option OriginId}
+    (h : checkEffectTypes env (.popN reference count org) = .ok ()) :
+    ∃ permission owner elem countTy,
+      env.vals[reference]? = some (some (.data (.ref permission owner))) ∧
+      owner.ownerElem? = some elem ∧
+      env.vals[count]? = some (some (.data (.int countTy))) := by
+  simp only [checkEffectTypes] at h
+  obtain ⟨⟨permission, owner⟩, hr, h⟩ := bind_ok h
+  have he : owner.ownerElem?.isSome = true := by
+    by_cases he : owner.ownerElem?.isSome = true
+    · exact he
+    · simp [he, tyErr, bind, Except.bind] at h
+  rw [ite_eq_left he] at h
+  obtain ⟨countTy, hc, _⟩ := bind_ok h
+  cases ho : owner.ownerElem? with
+  | none => simp [ho] at he
+  | some elem => exact ⟨permission, owner, elem, countTy, refTy_of hr, ho, intTy_of hc⟩
+
+theorem resize_types_of {env : TyEnv} {reference size : ValueId} {fill : Option ValueId}
+    {org : Option OriginId} (h : checkEffectTypes env (.resize reference size fill org) = .ok ()) :
+    ∃ permission owner elem sizeTy,
+      env.vals[reference]? = some (some (.data (.ref permission owner))) ∧
+      owner.ownerElem? = some elem ∧
+      env.vals[size]? = some (some (.data (.int sizeTy))) ∧
+      (∀ value, fill = some value → env.vals[value]? = some (some (.data elem))) := by
+  simp only [checkEffectTypes] at h
+  obtain ⟨⟨permission, owner⟩, hr, h⟩ := bind_ok h
+  cases ho : owner.ownerElem? with
+  | none => simp [ho, tyErr] at h
+  | some elem =>
+    rw [ho] at h
+    obtain ⟨sizeTy, hs, h⟩ := bind_ok h
+    refine ⟨permission, owner, elem, sizeTy, refTy_of hr, ho, intTy_of hs, ?_⟩
+    intro value hv
+    subst fill
+    exact dataType_check_metadata h
+
+theorem clear_types_of {env : TyEnv} {reference : ValueId} {org : Option OriginId}
+    (h : checkEffectTypes env (.clear reference org) = .ok ()) :
+    ∃ permission owner elem,
+      env.vals[reference]? = some (some (.data (.ref permission owner))) ∧
+      owner.ownerElem? = some elem := by
+  simp only [checkEffectTypes] at h
+  obtain ⟨⟨permission, owner⟩, hr, h⟩ := bind_ok h
+  have he : owner.ownerElem?.isSome = true := by
+    by_cases he : owner.ownerElem?.isSome = true
+    · exact he
+    · simp [he, tyErr] at h
+  cases ho : owner.ownerElem? with
+  | none => simp [ho] at he
+  | some elem => exact ⟨permission, owner, elem, refTy_of hr, ho⟩
+
+theorem replace_types_of {env : TyEnv} {reference run : ValueId} {org : Option OriginId}
+    (h : checkEffectTypes env (.replace reference run org) = .ok ()) :
+    ∃ permission owner elem,
+      env.vals[reference]? = some (some (.data (.ref permission owner))) ∧
+      (owner = .grow elem ∨ owner = .growshrink elem) ∧
+      env.vals[run]? = some (some (.data owner)) := by
+  simp only [checkEffectTypes] at h
+  obtain ⟨⟨permission, owner⟩, hr, h⟩ := bind_ok h
+  cases owner with
+  | grow elem => exact ⟨permission, _, elem, refTy_of hr, Or.inl rfl, dataType_check_metadata h⟩
+  | growshrink elem => exact ⟨permission, _, elem, refTy_of hr, Or.inr rfl, dataType_check_metadata h⟩
+  | _ => simp [tyErr, bind, Except.bind] at h
+
+theorem print_types_of {env : TyEnv} {parts : List PrintPart} {org : Option OriginId}
+    (h : checkEffectTypes env (.print parts org) = .ok ()) :
+    ∀ value, PrintPart.val value ∈ parts →
+      (∃ intTy, env.vals[value]? = some (some (.data (.int intTy)))) ∨
+        env.vals[value]? = some (some (.data .bool)) := by
+  simp only [checkEffectTypes] at h
+  obtain ⟨u, hloop, _⟩ := bind_ok h
+  cases u
+  have hall := forIn_unit_ok hloop (by
+    intro part u step checked
+    cases part with
+    | text text => exact (Except.ok.inj checked).symm
+    | val value =>
+      obtain ⟨ty, _, checked⟩ := bind_ok checked
+      cases ty <;> simp [pure, Except.pure, tyErr, bind, Except.bind] at checked
+      all_goals exact checked.symm)
+  intro value hv
+  have checked := hall (.val value) hv
+  obtain ⟨ty, ht, checked⟩ := bind_ok checked
+  cases ty with
+  | int t => exact Or.inl ⟨t, dataTy_of ht⟩
+  | bool => exact Or.inr (dataTy_of ht)
+  | _ => simp [tyErr, bind, Except.bind] at checked
+
 end Goose.GIR
