@@ -174,4 +174,28 @@ def sliceHeaderModule : Core.Module :=
     | .done .returned "", .done .returned "" => true
     | _, _ => false
 
+def unaryModule : Core.Module :=
+  let main : Impl :=
+    { initImpl with body := .mk 0 [
+      .expr (.conv .as (.int .i8) (.lit .i64 7) 0) 0,
+      .expr (.un .neg (.lit .i64 (-9223372036854775808)) 0) 0] none }
+  { files := #["unary.goose"], types := #[.int .i64, .int .i8], globals := #[],
+    impls := #[main], contexts := #[initContext], entry := 0,
+    origins := #[⟨0, 1, "unary"⟩] }
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := { unaryModule with profile := artifact }
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := { unaryModule with profile := artifact }
+  match Core.eval 80 .release source, GIR.run 160 .release (lower source),
+      Core.eval 80 .debug source, GIR.run 160 .debug (lower source) with
+  | .done .returned "", .done .returned "",
+      .done (.aborted coreKind coreOrigin) "", .done (.aborted girKind girOrigin) "" =>
+    coreKind == girKind && coreOrigin == girOrigin
+  | _, _, _, _ => false
+
 end Goose.Lower.TypedExpressionChecks
