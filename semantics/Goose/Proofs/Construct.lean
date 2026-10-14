@@ -102,7 +102,7 @@ theorem runtime_stop_skips_remaining (reason : Goose.Core.Stop) (state : Executi
     (remaining : Unit → EvalM Unit) :
     ((EvalM.stop reason >>= remaining) state) = .stop reason state := rfl
 
-theorem runtime_escape_skips_remaining (target : Goose.Core.ActId) (carriers : List Goose.Construct.Carrier)
+theorem runtime_escape_skips_remaining (target : Goose.Construct.ExitAddress) (carriers : List Goose.Construct.Carrier)
     (state : ExecutionState) (remaining : Unit → EvalM Unit) :
     (((fun state => ExecutionStep.escape target carriers state) >>= remaining) state) =
       .escape target carriers state := rfl

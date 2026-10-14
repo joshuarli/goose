@@ -271,7 +271,7 @@ theorem runtime_unwind_outside (scopes : List (RuntimeActivation × Nat × Scope
 
 
 theorem runtime_with_scope_escape (activation : RuntimeActivation) (scope scopeInst : Nat)
-    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress) (carriers : List Goose.Construct.Carrier)
     (escaped : action state = .escape target carriers afterOperands) :
     withScope activation scope scopeInst action state =
       .escape target carriers (releaseScopeState activation scope scopeInst afterOperands) := by
@@ -283,7 +283,7 @@ def runtimeWithScopes : List (RuntimeActivation × Nat × ScopeInst) → EvalM �
       runtimeWithScopes rest (withScope activation scope scopeInst action)
 
 theorem runtime_with_scopes_escape (scopes : List (RuntimeActivation × Nat × ScopeInst))
-    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress) (carriers : List Goose.Construct.Carrier)
     (escaped : action state = .escape target carriers afterOperands) :
     runtimeWithScopes scopes action state =
       .escape target carriers (runtimeReleaseScopes scopes afterOperands) := by
@@ -327,17 +327,17 @@ theorem runtime_unwind_removes (scopes : List (RuntimeActivation × Nat × Scope
 
 theorem runtime_activation_propagates (layout : LayoutEnv) (activation : RuntimeActivation)
     (resultTypes : List Goose.Construct.Ty) (origin : OriginId) (action : EvalM (List Goose.Construct.Carrier))
-    (state afterOperands : ExecutionState) (target : ActId) (carriers : List Goose.Construct.Carrier)
-    (escaped : action state = .escape target carriers afterOperands) (other : target ≠ activation.act) :
+    (state afterOperands : ExecutionState) (target : ExitAddress) (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape target carriers afterOperands) (other : target.activation ≠ activation.act) :
     finishActivation layout activation resultTypes origin action state =
       .escape target carriers { afterOperands with
         activations := afterOperands.activations.filter (fun current => current.act != activation.act) } := by
   simp [finishActivation, escaped, other]
 
-theorem runtime_activation_catches (layout : LayoutEnv) (activation : RuntimeActivation)
+theorem runtime_activation_catches (layout : LayoutEnv) (activation : RuntimeActivation) (exitTarget : ExitTarget)
     (resultTypes : List Goose.Construct.Ty) (origin : OriginId) (action : EvalM (List Goose.Construct.Carrier))
     (state afterOperands landed : ExecutionState) (carriers : List Goose.Construct.Carrier)
-    (escaped : action state = .escape activation.act carriers afterOperands)
+    (escaped : action state = .escape ⟨activation.act,exitTarget⟩ carriers afterOperands)
     (completed : finishChannels layout resultTypes carriers origin { afterOperands with
       activations := afterOperands.activations.filter (fun current => current.act != activation.act) } = .ok () landed) :
     finishActivation layout activation resultTypes origin action state = .ok carriers landed := by
@@ -358,9 +358,9 @@ def runtimeDiscardHandlers (layout : LayoutEnv) (results : ImplId → List Goose
 theorem runtime_discard_handlers_escape (layout : LayoutEnv) (results : ImplId → List Goose.Construct.Ty)
     (origin : OriginId) (discarded : List RuntimeActivation)
     (action : EvalM (List Goose.Construct.Carrier)) (state afterOperands : ExecutionState)
-    (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (target : ExitAddress) (carriers : List Goose.Construct.Carrier)
     (escaped : action state = .escape target carriers afterOperands)
-    (other : ∀ activation ∈ discarded, target ≠ activation.act) :
+    (other : ∀ activation ∈ discarded, target.activation ≠ activation.act) :
     runtimeDiscardHandlers layout results origin discarded action state =
       .escape target carriers (runtimeDropActivations discarded afterOperands) := by
   induction discarded generalizing action afterOperands with
@@ -372,17 +372,17 @@ theorem runtime_discard_handlers_escape (layout : LayoutEnv) (results : ImplId �
       · intro frame member; exact other frame (by simp [member])
 
 theorem runtime_nearest_activation_dispatch (layout : LayoutEnv) (results : ImplId → List Goose.Construct.Ty)
-    (origin : OriginId) (target : NonlocalTarget) (stack : List RuntimeActivation) (catcher : RuntimeActivation)
+    (origin : OriginId) (target : NonlocalTarget) (exitTarget : ExitTarget) (stack : List RuntimeActivation) (catcher : RuntimeActivation)
     (distinct : (stack.map (·.act)).Nodup) (selected : selectTarget? target stack = some catcher)
     (action : EvalM (List Goose.Construct.Carrier)) (state afterOperands : ExecutionState)
-    (carriers : List Goose.Construct.Carrier) (escaped : action state = .escape catcher.act carriers afterOperands) :
+    (carriers : List Goose.Construct.Carrier) (escaped : action state = .escape ⟨catcher.act,exitTarget⟩ carriers afterOperands) :
     ∃ discarded outer, stack = discarded ++ catcher :: outer ∧
       target.contains catcher.implementation = true ∧
       (∀ activation ∈ discarded, target.contains activation.implementation = false) ∧
       finishActivation layout catcher (results catcher.implementation) origin
         (runtimeDiscardHandlers layout results origin discarded action) state =
       finishActivation layout catcher (results catcher.implementation) origin
-        (fun _ => .escape catcher.act carriers (runtimeDropActivations discarded afterOperands)) state := by
+        (fun _ => .escape ⟨catcher.act,exitTarget⟩ carriers (runtimeDropActivations discarded afterOperands)) state := by
   obtain ⟨discarded, outer, shape, member, excluded⟩ := runtime_select_nearest target stack catcher selected
   have different : ∀ activation ∈ discarded, catcher.act ≠ activation.act := by
     intro activation inDiscarded
@@ -392,25 +392,25 @@ theorem runtime_nearest_activation_dispatch (layout : LayoutEnv) (results : Impl
       catcher.act (by simp)).symm
   refine ⟨discarded, outer, shape, member, excluded, ?_⟩
   have forwarded := runtime_discard_handlers_escape layout results origin discarded action state afterOperands
-    catcher.act carriers escaped different
+    ⟨catcher.act,exitTarget⟩ carriers escaped different
   simp only [finishActivation, forwarded]
 
 
 theorem runtime_nearest_scope_dispatch (layout : LayoutEnv)
     (results : ImplId → List Goose.Construct.Ty) (origin : OriginId)
-    (target : NonlocalTarget) (stack : List RuntimeActivation) (catcher : RuntimeActivation)
+    (target : NonlocalTarget) (exitTarget : ExitTarget) (stack : List RuntimeActivation) (catcher : RuntimeActivation)
     (distinct : (stack.map (·.act)).Nodup) (selected : selectTarget? target stack = some catcher)
     (scopes : List (RuntimeActivation × Nat × ScopeInst))
     (action : EvalM (List Goose.Construct.Carrier)) (state afterOperands : ExecutionState)
     (carriers : List Goose.Construct.Carrier)
-    (escaped : action state = .escape catcher.act carriers afterOperands) :
+    (escaped : action state = .escape ⟨catcher.act,exitTarget⟩ carriers afterOperands) :
     ∃ discarded outer, stack = discarded ++ catcher :: outer ∧
       target.contains catcher.implementation = true ∧
       (∀ activation ∈ discarded, target.contains activation.implementation = false) ∧
       finishActivation layout catcher (results catcher.implementation) origin
         (runtimeDiscardHandlers layout results origin discarded (runtimeWithScopes scopes action)) state =
       finishActivation layout catcher (results catcher.implementation) origin
-        (fun _ => .escape catcher.act carriers
+        (fun _ => .escape ⟨catcher.act,exitTarget⟩ carriers
           (runtimeDropActivations discarded (runtimeReleaseScopes scopes afterOperands))) state ∧
       (runtimeReleaseScopes scopes afterOperands).construction = afterOperands.construction ∧
       (∀ entry : RootInst × Value,
@@ -419,9 +419,9 @@ theorem runtime_nearest_scope_dispatch (layout : LayoutEnv)
       (∀ entry : RootInst × Value,
         (∃ scope ∈ scopes, (runtimeScopeRoots scope.1 scope.2.1 scope.2.2).contains entry.1 = true) →
         entry ∉ (runtimeReleaseScopes scopes afterOperands).objects) := by
-  have unwound := runtime_with_scopes_escape scopes action state afterOperands catcher.act carriers escaped
+  have unwound := runtime_with_scopes_escape scopes action state afterOperands ⟨catcher.act,exitTarget⟩ carriers escaped
   obtain ⟨discarded, outer, shape, member, excluded, dispatched⟩ :=
-    runtime_nearest_activation_dispatch layout results origin target stack catcher distinct selected
+    runtime_nearest_activation_dispatch layout results origin target exitTarget stack catcher distinct selected
       (runtimeWithScopes scopes action) state (runtimeReleaseScopes scopes afterOperands) carriers unwound
   exact ⟨discarded,outer,shape,member,excluded,dispatched,
     runtime_unwind_construction scopes afterOperands,
@@ -445,9 +445,9 @@ theorem return_from_after_operands (fuel : Nat) (config : EvalConfig)
     (preparedChannels : exitChannels activation operands origin state = .ok channels prepared)
     (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands) :
     Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) state =
-      .escape activation.act carriers afterOperands := by
+      .escape ⟨activation.act,.nonlocal targetId⟩ carriers afterOperands := by
   simp [Goose.Construct.execStmt, target_activation_success config targetId target activation state present selected,
-    preparedChannels, evaluated, returned, bind]
+    preparedChannels, evaluated, Goose.Construct.escaped, bind]
 
 theorem return_from_nearest_scope_dispatch (fuel : Nat) (config : EvalConfig)
     (environment catcher : RuntimeActivation) (targetId : Nat) (target : NonlocalTarget)
@@ -466,12 +466,12 @@ theorem return_from_nearest_scope_dispatch (fuel : Nat) (config : EvalConfig)
         (runtimeDiscardHandlers config.layout results origin discarded
           (runtimeWithScopes scopes (Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) >>= fun _ => pure []))) state =
       finishActivation config.layout catcher (results catcher.implementation) origin
-        (fun _ => .escape catcher.act carriers
+        (fun _ => .escape ⟨catcher.act,.nonlocal targetId⟩ carriers
           (runtimeDropActivations discarded (runtimeReleaseScopes scopes afterOperands))) state := by
   have returned := return_from_after_operands fuel config environment catcher targetId target operands origin
     channels carriers state prepared afterOperands present selected preparedChannels evaluated
   obtain ⟨discarded,outer,shape,member,excluded,dispatched,_,_,_⟩ :=
-    runtime_nearest_scope_dispatch config.layout results origin target state.activations catcher distinct selected
+    runtime_nearest_scope_dispatch config.layout results origin target (.nonlocal targetId) state.activations catcher distinct selected
       scopes (Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) >>= fun _ => pure [])
       state afterOperands carriers (by simp [returned, bind])
   exact ⟨discarded,outer,shape,member,excluded,dispatched⟩
@@ -488,17 +488,17 @@ theorem return_from_forward_after_producer (fuel : Nat) (config : EvalConfig)
       (List.replicate activation.channels.length producer) origin state = .ok channels prepared)
     (evaluated : evalProduce fuel config environment channels producer prepared = .ok carriers afterProducer) :
     Goose.Construct.execStmt (fuel + 1) config environment (.returnFromForward targetId producer origin) state =
-      .escape activation.act carriers afterProducer := by
+      .escape ⟨activation.act,.nonlocal targetId⟩ carriers afterProducer := by
   simp [Goose.Construct.execStmt, target_activation_success config targetId target activation state present selected,
-    preparedChannels, evaluated, returned, bind]
+    preparedChannels, evaluated, Goose.Construct.escaped, bind]
 
 theorem enter_activation_catches_body_escape (fuel : Nat) (config : EvalConfig)
-    (activation : RuntimeActivation) (implementation : Goose.Construct.Impl)
+    (activation : RuntimeActivation) (exitTarget : ExitTarget) (implementation : Goose.Construct.Impl)
     (pre : List (VarId × Value)) (body : Goose.Construct.Block) (origin : OriginId)
     (carriers : List Goose.Construct.Carrier) (state afterOperands landed : ExecutionState)
     (present : config.module.impls[activation.implementation]? = some implementation)
     (escaped : execResultBlockWith fuel config activation pre activation.channels body state =
-      .escape activation.act carriers afterOperands)
+      .escape ⟨activation.act,exitTarget⟩ carriers afterOperands)
     (completed : finishChannels config.layout (implementation.results.toList.map (·.ty)) carriers origin
       { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) } =
       .ok () landed) :
@@ -508,10 +508,10 @@ theorem enter_activation_catches_body_escape (fuel : Nat) (config : EvalConfig)
 theorem enter_activation_propagates_body_escape (fuel : Nat) (config : EvalConfig)
     (activation : RuntimeActivation) (implementation : Goose.Construct.Impl)
     (pre : List (VarId × Value)) (body : Goose.Construct.Block) (origin : OriginId)
-    (target : ActId) (carriers : List Goose.Construct.Carrier) (state afterOperands : ExecutionState)
+    (target : ExitAddress) (carriers : List Goose.Construct.Carrier) (state afterOperands : ExecutionState)
     (present : config.module.impls[activation.implementation]? = some implementation)
     (escaped : execResultBlockWith fuel config activation pre activation.channels body state =
-      .escape target carriers afterOperands) (other : target ≠ activation.act) :
+      .escape target carriers afterOperands) (other : target.activation ≠ activation.act) :
     enterActivation (fuel + 1) config activation pre body origin state =
       .escape target carriers { afterOperands with
         activations := afterOperands.activations.filter (fun current => current.act != activation.act) } := by
@@ -521,7 +521,7 @@ theorem enter_activation_propagates_body_escape (fuel : Nat) (config : EvalConfi
 theorem result_block_releases_scope_on_escape (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) (pre : List (VarId × Value)) (channels : List Channel)
     (scope : Nat) (statements : List Goose.Construct.Stmt) (tail : Option Goose.Construct.Expr)
-    (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (target : ExitAddress) (carriers : List Goose.Construct.Carrier)
     (state bound afterOperands : ExecutionState)
     (boundPre : bindAll environment.act state.nextScope pre
       { state with
@@ -551,7 +551,7 @@ theorem cleanup_replacement (origin : OriginId) (id replacementId superseded : D
     replacementPresent, replacementUse, owned]
 
 theorem protected_exit_payload_storage (origin : OriginId) (id replacementId superseded : DestinationId)
-    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress)
     (destination replacement : PendingDestination)
     (escaped : action state = .escape target [.completed replacementId] afterOperands)
     (present : afterOperands.construction.destinations[id]? = some destination)
@@ -569,7 +569,7 @@ theorem protected_exit_payload_storage (origin : OriginId) (id replacementId sup
     simpa [result, stepState] using preserved
 
 theorem protected_exit_prior_output (origin : OriginId) (id replacementId superseded : DestinationId)
-    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress)
     (destination replacement : PendingDestination)
     (escaped : action state = .escape target [.completed replacementId] afterOperands)
     (present : afterOperands.construction.destinations[id]? = some destination)
@@ -597,7 +597,7 @@ theorem cleanup_selected_replacement (origin : OriginId) (id replacementId : Des
   simp [cleanupDestination, getDestination, EvalM.get, bind, pure, present, live, selected]
 
 theorem protection_escape_state (origin : OriginId) (id : DestinationId)
-    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress)
     (carriers : List Goose.Construct.Carrier)
     (escaped : action state = .escape target carriers afterOperands) :
     stepState (protectDestination origin id action state) =
@@ -606,7 +606,7 @@ theorem protection_escape_state (origin : OriginId) (id : DestinationId)
   cases cleaned : cleanupDestination origin id carriers afterOperands <;> rfl
 
 theorem protected_exit_replacement_frame (origin : OriginId) (id replacementId : DestinationId)
-    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress)
     (destination : PendingDestination) (carriers : List Goose.Construct.Carrier)
     (escaped : action state = .escape target carriers afterOperands)
     (present : afterOperands.construction.destinations[id]? = some destination)
