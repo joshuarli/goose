@@ -47,4 +47,42 @@ theorem concrete_nested_returning_block (cfg : Cfg) (fuel : Nat) :
     (state.store.roots[RootInst.local 0 11 0]?).isNone
   | _ => false
 
+def nestedEntryBody : Core.Block :=
+  .mk 0 [.ifS (.bool true)
+    (.mk 1 [.ifS (.bool false) (.mk 2 [.ret none 0] none)
+      (some (.mk 3 [.print [.text "nested"] 0, .ret none 0] none)) 0] none)
+    (some (.mk 4 [.ret none 0] none)) 0] none
+
+def nestedModule : Core.Module :=
+  let main : Impl :=
+    { name := "main", params := #[], results := #[], vars := #[],
+      body := nestedEntryBody, summary := .unknown }
+  { files := #["control.goose"], types := #[], globals := #[], impls := #[main],
+    contexts := #[⟨0, "main", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "control"⟩] }
+
+#guard match Core.validate nestedModule, GIR.validate (lower nestedModule) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard Goose.Proofs.Lower.moduleOk nestedModule
+#guard [NumProfile.release, .debug].all fun profile =>
+  match Core.eval 30 profile nestedModule, GIR.run 100 profile (lower nestedModule) with
+  | .done .returned "nested\n", .done .returned "nested\n" => true
+  | _, _ => false
+
+theorem nested_module_correct (fuel : Nat) (profile : NumProfile) (outcome : Outcome)
+    (trace : String) (h : Core.eval fuel profile nestedModule = .done outcome trace) :
+    ∃ loweredFuel, GIR.run loweredFuel profile (lower nestedModule) = .done outcome trace :=
+  Goose.Proofs.Lower.lower_correct_ctl nestedModule (by
+    have hglobals : (#[].all fun (g : Core.Global) => exprOk g.init) = true := by
+      rw [Array.all_eq_true_iff_forall_mem]
+      intro global hglobal
+      simp at hglobal
+    simp only [Goose.Proofs.Lower.moduleOk, nestedModule, hglobals, Array.getElem?_singleton,
+      ite_true, eq_self, Bool.true_and, Array.isEmpty_empty]
+    change flowBlockOk nestedEntryBody = true
+    simp only [nestedEntryBody, flowBlockOk.eq_def, flowStmtsOk.eq_def, flowStmtOk.eq_def,
+      stmtReturnOk, stmtOk.eq_def, printOk.eq_def, exprOk.eq_def, Bool.true_and, Bool.and_true])
+    fuel profile outcome trace h
+
 end Goose.Lower.ControlChecks
