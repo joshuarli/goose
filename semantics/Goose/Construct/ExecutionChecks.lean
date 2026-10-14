@@ -452,6 +452,29 @@ private def namedSingleValuePush : Module := moduleOf #[
 #guard observes namedSingleValuePush == some ([65, 66, 10],
   [.begin 0, .begin 1, .write 1 0, .write 1 1, .publish 1, .publish 0])
 
+private def namedValueBreak : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
+  implementation "producer" #[localVar "result" (.grow (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.grow (.int .u8)) [65, 66] 0) 0]
+      (some (.blockE (.mk 1 [.breakValue (.resultLocal 0 0) 0] none) 0)))
+    #[⟨.varr (.int .u8), .value, some 0⟩]]
+
+#guard observes namedValueBreak == some ([65, 66, 10],
+  [.begin 0, .write 0 0, .write 0 1, .publish 0])
+
+private def alternateValueBreak : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
+  implementation "producer" #[localVar "result" (.grow (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.grow (.int .u8)) [65, 66] 0) 0]
+      (some (.blockE (.mk 1 [.breakValue (.bytes (.varr (.int .u8)) [67, 68] 0) 0] none) 0)))
+    #[⟨.varr (.int .u8), .value, some 0⟩]]
+
+#guard observes alternateValueBreak == some ([67, 68, 10],
+  [.begin 0, .write 0 0, .write 0 1, .begin 1, .write 1 0, .write 1 1,
+    .abandon 0, .relocate 1 .exitValue, .publish 1])
+
 private def valueBreakThroughLoop : Module := moduleOf #[implementation "entry"
   #[localVar "result" (.varr (.int .u8))]
   (.mk 0 [.letS 0 (.blockE (.mk 1
