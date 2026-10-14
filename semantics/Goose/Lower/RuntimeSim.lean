@@ -146,6 +146,15 @@ theorem SimEAt.expectBool {cx : FnCtx} {pt : Pt} {fr : Frame} {value : Val}
   | bool branch => exact h branch rfl
   | _ => exact SimEAt.of_simG (SimG.of_fault_bind fun s => ⟨_, s, rfl⟩) state
 
+theorem SimEAt.expectInt {cx : FnCtx} {pt : Pt} {fr : Frame} {value : Val}
+    {next : IntTy × Int → M α} {post : α → Pt → Frame → Prop} {state : St}
+    (h : ∀ ty number, value = .int ty number →
+      SimEAt cx pt fr (next (ty, number)) post state) :
+    SimEAt cx pt fr (Core.expectInt value >>= next) post state := by
+  cases value with
+  | int ty number => exact h ty number rfl
+  | _ => exact SimEAt.of_simG (SimG.of_fault_bind fun s => ⟨_, s, rfl⟩) state
+
 theorem SimEOn.at_state {cx : FnCtx} {pt : Pt} {fr : Frame} {c : M α}
     {post : α → Pt → Frame → Prop} {allowed : St → Prop}
     (h : SimEOn cx pt fr c post allowed) {s : St} (hs : allowed s) :

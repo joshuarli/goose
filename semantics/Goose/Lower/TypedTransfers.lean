@@ -12,6 +12,16 @@ theorem typedStatementLoopSimulation_zero (cfg : Cfg) (results : List Ty)
   simp only [execStmt]
   exact SimEAt.of_simG SimG.of_timeout_bind state
 
+theorem typedStatementLoopSimulation_abort {n : Nat} {cfg : Cfg} {results : List Ty}
+    {loop : Option LoopCtx} (message : String) (org : OriginId) :
+    TypedStatementLoopSimulation (n + 1) cfg results loop (.abort message org) := by
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
+    hgir hresults hdepth htargets hcounter
+  simp only [lowerStmt] at hlow
+  obtain ⟨_, _, _, instruction⟩ := emitTerm_facts hlow hpp hext
+  simp only [execStmt, abortAt, M.stop, bind_apply]
+  exact (SimE.abort_term instruction).at_state state
+
 theorem typedStatementLoopSimulation_return_none (n : Nat) (cfg : Cfg) (results : List Ty)
     (loop : Option LoopCtx) (org : OriginId) :
     TypedStatementLoopSimulation n cfg results loop (.ret none org) := by

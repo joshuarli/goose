@@ -54,4 +54,30 @@ theorem body_simulation (cfg : Cfg) :
     | .done .returned "", .done .returned "" => true
     | _, _ => false
 
+def abortBody : Core.Block := .mk 0 [.abort "stop" 0] none
+
+def abortModule (profile : ArtifactProfile) : Core.Module :=
+  { module profile with
+    impls := #[{ implementation with vars := #[], body := abortBody }],
+    contexts := #[⟨0, "main", [], [], []⟩] }
+
+theorem abort_simulation (cfg : Cfg) :
+    TypedBlockLoopSimulation 8 cfg [] none [] [] false abortBody := by
+  apply typedBlockLoopSimulation_succ
+  · apply typedStatementsLoopSimulation_cons
+    · exact typedStatementLoopSimulation_abort "stop" 0
+    · exact typedStatementsLoopSimulation_nil _ cfg [] none
+  · trivial
+
+#guard [ArtifactProfile.pilot, .shrink].all fun profile =>
+  match Core.validate (abortModule profile), GIR.validate (lower (abortModule profile)) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  [NumProfile.release, .debug].all fun profile =>
+    match Core.eval 30 profile (abortModule artifact), GIR.run 60 profile (lower (abortModule artifact)) with
+    | .done (.aborted .userAbort 0) "", .done (.aborted .userAbort 0) "" => true
+    | _, _ => false
+
 end Goose.Lower.TypedStatementChecks

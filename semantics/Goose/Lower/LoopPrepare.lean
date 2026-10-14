@@ -108,6 +108,26 @@ theorem preparedLoopFlow_normal_success {env : Env} {loop : Option LoopCtx}
     obtain ⟨rfl, rfl⟩ := prepareLoopFlow_normal_success h
     rfl
 
+theorem preparedReturn_nonreturn_success {env : Env} {source : M Flow}
+    {flow : Flow} {before after : St}
+    (h : (source >>= prepareReturn env) before = .ok flow after)
+    (hnonreturn : ∀ value, flow ≠ .ret value) :
+    source before = .ok flow after := by
+  rw [bind_apply] at h
+  cases hsource : source before with
+  | stop reason state => rw [hsource] at h; cases h
+  | ok result state =>
+    rw [hsource] at h
+    cases result with
+    | normal value | brk | cont =>
+      simp only [prepareReturn, pure_apply] at h
+      obtain ⟨rfl, rfl⟩ := Res.ok.inj h
+      rfl
+    | ret value =>
+      obtain ⟨middle, hrelease, _, _⟩ := releaseScopes_result env env.scopes state
+      simp only [prepareReturn, bind_apply, hrelease, pure_apply] at h
+      exact False.elim (hnonreturn value (Res.ok.inj h).1.symm)
+
 theorem prepareLoopFlow_execStmt_break (n : Nat) (cfg : Cfg) (env : Env) (loop : LoopCtx)
     (org : OriginId) :
     (execStmt n cfg env (.brk org) >>= prepareLoopFlow env (some loop)) =
