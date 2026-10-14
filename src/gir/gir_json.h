@@ -715,6 +715,11 @@ private:
                 OptOrg(out, i.org);
                 out += ']';
                 return;
+            case GirOp::DestWrite:
+                Append(out, "[\"x_dest_write\",", i.a, ",", i.b, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
             case GirOp::DestPublish:
                 Append(out, "[\"x_dest_publish\",", i.a, ",");
                 OptOrg(out, i.org);

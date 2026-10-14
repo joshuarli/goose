@@ -580,17 +580,28 @@ private:
         return i;
     }
 
-    bool IsByteConstruction(const CoreExpr &expr) const {
-        if (expr.kind == CoreExprKind::Bytes) return true;
+    bool IsConstructionArray(const CoreExpr &expr) const {
+        if (expr.kind != CoreExprKind::Arr) return false;
+        auto &owner = core.Type(expr.type);
+        if (owner.kind != CoreType::Grow) return false;
+        auto elementKind = core.Type(owner.elem).kind;
+        if (elementKind != CoreType::Int && elementKind != CoreType::Bool) return false;
+        return all_of(expr.elems.begin(), expr.elems.end(), [](const CoreExprP &element) {
+            return element && (element->kind == CoreExprKind::Lit || element->kind == CoreExprKind::Bool);
+        });
+    }
+
+    bool IsConstructionValue(const CoreExpr &expr) const {
+        if (expr.kind == CoreExprKind::Bytes || IsConstructionArray(expr)) return true;
         if (expr.kind == CoreExprKind::Block)
-            return expr.then && expr.then->value && IsByteConstruction(*expr.then->value);
+            return expr.then && expr.then->value && IsConstructionValue(*expr.then->value);
         if (expr.kind == CoreExprKind::If)
             return expr.then && expr.then->value && expr.otherwise && expr.otherwise->value &&
-                   IsByteConstruction(*expr.then->value) && IsByteConstruction(*expr.otherwise->value);
+                   IsConstructionValue(*expr.then->value) && IsConstructionValue(*expr.otherwise->value);
         return false;
     }
 
-    void LowerBytesConstruction(const CoreExpr &expr, int slot) {
+    void LowerConstructionValue(const CoreExpr &expr, int slot, int org) {
         if (expr.kind == CoreExprKind::Bytes) {
             GirInst open;
             open.op = GirOp::DestOpen;
@@ -621,15 +632,47 @@ private:
             EmitEffect(std::move(publish));
             return;
         }
+        if (expr.kind == CoreExprKind::Arr) {
+            GirInst open;
+            open.op = GirOp::DestOpen;
+            open.idx = slot;
+            open.ty = expr.type;
+            open.request = CoreRequest::Value;
+            open.knownCount = ConstInt(I64(), to_string(expr.elems.size()));
+            open.org = org;
+            auto dest = EmitDef(std::move(open));
+            for (auto &elementExpr : expr.elems) {
+                auto element = LowerExpr(*elementExpr);
+                if (cur < 0) return;
+                GirInst write;
+                write.op = GirOp::DestWrite;
+                write.a = dest;
+                write.b = element;
+                write.org = org;
+                EmitEffect(std::move(write));
+            }
+            GirInst finish;
+            finish.op = GirOp::DestFinish;
+            finish.a = dest;
+            finish.org = org;
+            auto built = EmitDef(std::move(finish));
+
+            GirInst publish;
+            publish.op = GirOp::DestPublish;
+            publish.a = built;
+            publish.org = org;
+            EmitEffect(std::move(publish));
+            return;
+        }
         if (expr.kind == CoreExprKind::Block) {
             if (!expr.then || !expr.then->value)
-                throw CompileError { "internal compiler error: byte construction block has no value" };
-            LowerConstructionBlock(*expr.then, slot);
+                throw CompileError { "internal compiler error: construction block has no value" };
+            LowerConstructionBlock(*expr.then, slot, org);
             return;
         }
         if (expr.kind == CoreExprKind::If) {
             if (!expr.then || !expr.otherwise)
-                throw CompileError { "internal compiler error: byte construction branch has no else arm" };
+                throw CompileError { "internal compiler error: construction branch has no else arm" };
             auto condition = LowerExpr(*expr.a);
             if (cur < 0) return;
             auto [thenBlock, thenParams] = NewBlock({});
@@ -638,18 +681,18 @@ private:
             (void)elseParams;
             EmitTerm(CondBr(condition, thenBlock, {}, elseBlock, {}));
             cur = thenBlock;
-            LowerConstructionBlock(*expr.then, slot);
+            LowerConstructionBlock(*expr.then, slot, org);
             auto thenEnd = cur;
             cur = elseBlock;
-            LowerConstructionBlock(*expr.otherwise, slot);
+            LowerConstructionBlock(*expr.otherwise, slot, org);
             auto elseEnd = cur;
             JoinArms(thenEnd, elseEnd);
             return;
         }
-        throw CompileError { "internal compiler error: unsupported byte construction expression" };
+        throw CompileError { "internal compiler error: unsupported construction expression" };
     }
 
-    void LowerConstructionBlock(const CoreBlock &block, int slot) {
+    void LowerConstructionBlock(const CoreBlock &block, int slot, int org) {
         GirInst enter;
         enter.op = GirOp::Enter;
         enter.idx = block.scope;
@@ -659,7 +702,7 @@ private:
             if (cur < 0) break;
             LowerStmt(nullptr, stmt);
         }
-        if (cur >= 0) LowerBytesConstruction(*block.value, slot);
+        if (cur >= 0) LowerConstructionValue(*block.value, slot, org);
         GirInst leave;
         leave.op = GirOp::Leave;
         leave.idx = block.scope;
@@ -671,8 +714,8 @@ private:
         auto org = Org(s.org);
         switch (s.kind) {
             case CoreStmtKind::Let: {
-                if (CoreHasConstruction(core.profile) && IsByteConstruction(*s.expr)) {
-                    LowerBytesConstruction(*s.expr, s.var);
+                if (CoreHasConstruction(core.profile) && IsConstructionValue(*s.expr)) {
+                    LowerConstructionValue(*s.expr, s.var, org);
                     return;
                 }
                 auto v = LowerExpr(*s.expr);

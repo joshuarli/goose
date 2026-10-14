@@ -4443,6 +4443,48 @@ GirModule ByteConstructionModule() {
     return m;
 }
 
+GirModule GrowArrayConstructionModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Construction;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::Grow;
+    owner.elem = i64;
+    auto ownerType = m.Intern(owner);
+    Main(m).slots = { { ownerType, CoreVarKind::Let, 0, 0 } };
+
+    auto count = Int(m, 0, "3");
+    auto first = Int(m, 1, "7");
+    auto second = Int(m, 2, "11");
+    auto third = Int(m, 3, "13");
+    GirInst open = Def(GirOp::DestOpen, 4);
+    open.idx = 0;
+    open.ty = ownerType;
+    open.request = CoreRequest::Value;
+    open.knownCount = 0;
+    open.org = 0;
+    auto write = [](int value) {
+        GirInst i;
+        i.op = GirOp::DestWrite;
+        i.a = 4;
+        i.b = value;
+        i.org = 0;
+        return i;
+    };
+    GirInst finish = Def(GirOp::DestFinish, 5);
+    finish.a = 4;
+    finish.org = 0;
+    GirInst publish;
+    publish.op = GirOp::DestPublish;
+    publish.a = 5;
+    publish.org = 0;
+    Main(m).blocks[0].insts = {
+        Enter(0), count, first, second, third, open, write(1), write(2), write(3),
+        finish, publish, Leave(0), Ret(),
+    };
+    return m;
+}
+
 void ConstructionBytesUseLinearDestinationProtocol() {
     auto high = ByteConstructionModule();
     assert(Code(high) == "");
@@ -4482,6 +4524,47 @@ void ConstructionBytesRejectIncompleteOrMismatchedDestinations() {
     auto wrongCount = ByteConstructionModule();
     Main(wrongCount).blocks[0].insts[1].text = "2";
     assert(Code(wrongCount) == "GIR-V060");
+}
+
+void ConstructionGrowArrayUsesElementDestinations() {
+    auto high = GrowArrayConstructionModule();
+    assert(Code(high) == "");
+    assert(!GirVerifier(high).Verify());
+    auto encoded = GirWriter(high).Write();
+    assert(encoded.find("[\"x_dest_write\",4,1,[0]]") != string::npos);
+
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+    auto stores = 0;
+    auto copies = 0;
+    auto bumps = 0;
+    auto headerInitializations = 0;
+    auto lengthUpdates = 0;
+    for (auto &func : low.funcs) for (auto &block : func.blocks) for (auto &inst : block.insts) {
+        stores += inst.op == GirOp::PStore;
+        copies += inst.op == GirOp::BytesCopy;
+        bumps += inst.op == GirOp::StackBump;
+        headerInitializations += inst.op == GirOp::HdrInit;
+        lengthUpdates += inst.op == GirOp::HdrSetLen;
+        assert(inst.op != GirOp::DestOpen && inst.op != GirOp::DestWrite &&
+               inst.op != GirOp::DestFinish && inst.op != GirOp::DestPublish);
+    }
+    assert(stores == 0);
+    assert(copies == 3);
+    assert(bumps == 1);
+    assert(headerInitializations == 1);
+    assert(lengthUpdates == 1);
+}
+
+void ConstructionRejectsDetachedGrowArrayAggregates() {
+    auto m = GrowArrayConstructionModule();
+    auto first = Int(m, 0, "7");
+    auto detached = Def(GirOp::Arr, 1);
+    detached.ty = Main(m).slots[0].ty;
+    detached.vals = { 0 };
+    auto init = Init(0, 1);
+    Main(m).blocks[0].insts = { Enter(0), first, detached, init, Leave(0), Ret() };
+    assert(Code(m) == "GIR-V060");
 }
 
 void ConstructionTargetsRejectEmptyAndRepeatedMemberSets() {
@@ -4581,6 +4664,8 @@ int main() {
     LowKeepsPackedFieldAlignmentAcrossCallParametersAndResults();
     ConstructionBytesUseLinearDestinationProtocol();
     ConstructionBytesRejectIncompleteOrMismatchedDestinations();
+    ConstructionGrowArrayUsesElementDestinations();
+    ConstructionRejectsDetachedGrowArrayAggregates();
     ConstructionTargetsRejectEmptyAndRepeatedMemberSets();
     puts("compiler_gir ok");
     return 0;

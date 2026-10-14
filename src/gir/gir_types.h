@@ -401,10 +401,12 @@ public:
                     return GirTyErr("destination type outside the type table");
                 auto &receiver = m.Type(env.slots[i.idx].ty);
                 auto &producer = m.Type(i.ty);
+                auto elementKind = m.Type(producer.elem).kind;
                 if (receiver.kind != CoreType::Grow || producer.kind != CoreType::Grow ||
-                    receiver.elem != producer.elem || m.Type(producer.elem).kind != CoreType::Int ||
-                    m.Type(producer.elem).ity != CoreIntTy::U8 || i.request != CoreRequest::Value)
-                    return GirTyErr("byte destination requires a value-form grow-only u8 array");
+                    receiver.elem != producer.elem ||
+                    (elementKind != CoreType::Int && elementKind != CoreType::Bool) ||
+                    i.request != CoreRequest::Value)
+                    return GirTyErr("destination requires a value-form grow-only array of scalar elements");
                 if (i.knownCount) {
                     auto count = IntTy(*i.knownCount);
                     if (!count.ok()) return count;

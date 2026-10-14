@@ -200,6 +200,7 @@ private:
         int stack = -1;
         int base = -1;
         int64_t count = -1;
+        GirTypeId elem = -1;
     };
 
     const GirFunc *hf = nullptr;
@@ -847,6 +848,8 @@ private:
                 destination.header = Simple(GirOp::FrameAddr, Ptr(), -1, -1, place.members[0]);
                 destination.stack = StackOf(place.stack);
                 destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
+                destination.elem = HT(i.ty).elem;
+                destination.count = 0;
                 SimpleE(GirOp::HdrInit, destination.header, destination.base);
                 destinations.emplace(i.res, destination);
                 Define(i, {});
@@ -854,7 +857,9 @@ private:
             }
             case GirOp::DestBytes: {
                 auto found = destinations.find(i.a);
-                if (found == destinations.end())
+                if (found == destinations.end() || found->second.count != 0 ||
+                    HT(found->second.elem).kind != CoreType::Int ||
+                    HT(found->second.elem).ity != CoreIntTy::U8)
                     throw CompileError { "internal compiler error: byte write has no open destination" };
                 auto &destination = found->second;
                 auto byte = l.IntType(CoreIntTy::U8);
@@ -863,14 +868,28 @@ private:
                     PStoreV(byte, at, ConstI(byte, i.bytes[index]));
                 }
                 destination.count = (int64_t)i.bytes.size();
-                if (destination.count > 0)
-                    SimpleE(GirOp::StackBump, destination.stack, ConstI(I64(), destination.count));
+                return;
+            }
+            case GirOp::DestWrite: {
+                auto found = destinations.find(i.a);
+                if (found == destinations.end() || found->second.count < 0)
+                    throw CompileError { "internal compiler error: element write has no open destination" };
+                auto &destination = found->second;
+                auto size = Size(destination.elem);
+                if (size <= 0 || destination.count > INT64_MAX / size)
+                    throw CompileError { "internal compiler error: construction size overflow" };
+                auto at = PtrAt(destination.base, ConstI(I64(), destination.count), size);
+                StoreAt(destination.elem, at, shape[i.b].w);
+                destination.count++;
                 return;
             }
             case GirOp::DestFinish: {
                 auto found = destinations.find(i.a);
                 if (found == destinations.end() || found->second.count < 0)
                     throw CompileError { "internal compiler error: completion has no initialized destination" };
+                auto bytes = found->second.count * Size(found->second.elem);
+                if (bytes > 0)
+                    SimpleE(GirOp::StackBump, found->second.stack, ConstI(I64(), bytes));
                 completions.emplace(i.res, found->second);
                 destinations.erase(found);
                 Define(i, {});

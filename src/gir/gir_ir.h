@@ -22,7 +22,7 @@ enum class GirOp : uint8_t {
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
     HdrLen,
     // Instructions that define none, high stage.
-    Init, Store, Append, PopN, Resize, Clear, Replace, DestBytes, DestPublish, Enter, Leave, Print,
+    Init, Store, Append, PopN, Resize, Clear, Replace, DestWrite, DestBytes, DestPublish, Enter, Leave, Print,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
     BytesFill, RtCall,
@@ -42,7 +42,8 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::ArrayLen: case GirOp::Index:
         case GirOp::IndexProven:
         case GirOp::Push: case GirOp::Pop: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
-        case GirOp::DestOpen: case GirOp::DestFinish: case GirOp::DestBytes: case GirOp::DestPublish:
+        case GirOp::DestOpen: case GirOp::DestFinish: case GirOp::DestWrite:
+        case GirOp::DestBytes: case GirOp::DestPublish:
         case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
         case GirOp::Replace: case GirOp::Enter: case GirOp::Leave: case GirOp::Print:

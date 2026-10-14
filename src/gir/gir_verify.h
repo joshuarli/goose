@@ -102,6 +102,9 @@ private:
             case GirOp::DestBytes: case GirOp::DestFinish: case GirOp::DestPublish:
                 add(i.a);
                 break;
+            case GirOp::DestWrite:
+                add(i.a); add(i.b);
+                break;
             case GirOp::DestOpen:
                 if (i.knownCount) add(*i.knownCount);
                 break;
@@ -366,10 +369,10 @@ private:
                     Fail("GIR-V010", cat("construction carrier type ", id, " has an unknown request"));
                 auto &owner = m.Type(type.elem);
                 if (owner.kind != CoreType::Grow || owner.elem < 0 ||
-                    m.Type(owner.elem).kind != CoreType::Int ||
-                    m.Type(owner.elem).ity != CoreIntTy::U8 || type.request != CoreRequest::Value)
+                    (m.Type(owner.elem).kind != CoreType::Int && m.Type(owner.elem).kind != CoreType::Bool) ||
+                    type.request != CoreRequest::Value)
                     Fail("GIR-V010", cat("construction carrier type ", id,
-                                         " is outside the byte-array construction slice"));
+                                         " is outside the scalar grow-array construction slice"));
                 continue;
             }
             if (type.kind != CoreType::GrowShrink && type.kind != CoreType::Limited) continue;
@@ -1218,6 +1221,22 @@ private:
                 if (owner.kind != CoreType::Grow || m.Type(owner.elem).kind != CoreType::Int ||
                     m.Type(owner.elem).ity != CoreIntTy::U8)
                     TypeFail(fn, "byte initialization requires a grow-only u8 array");
+                break;
+            }
+            case GirOp::DestWrite: {
+                if (m.low || !CoreHasConstruction(m.profile))
+                    TypeFail(fn, "element construction outside core-construction GIR-H");
+                auto destination = need(ty.Val(i.a));
+                auto &carrier = m.Type(destination);
+                if (carrier.kind != CoreType::Dest || carrier.request != CoreRequest::Value)
+                    TypeFail(fn, "element write does not use a value-form destination");
+                auto &owner = m.Type(carrier.elem);
+                auto elementKind = m.Type(owner.elem).kind;
+                if (owner.kind != CoreType::Grow ||
+                    (elementKind != CoreType::Int && elementKind != CoreType::Bool))
+                    TypeFail(fn, "element write requires a grow-only array of scalar elements");
+                if (need(ty.Data(i.b)) != owner.elem)
+                    TypeFail(fn, "constructed element has another type than the destination element");
                 break;
             }
             case GirOp::DestPublish: {
@@ -2284,6 +2303,7 @@ private:
         auto &f = *fn.f;
         vector<const GirInst *> definitions(fn.nvalues, nullptr);
         vector<int> uses(fn.nvalues, 0);
+        vector<int> expectedDestinationUses(fn.nvalues, -1);
         set<pair<int, int>> matched;
         for (size_t block = 0; block < f.blocks.size(); block++) {
             auto &body = f.blocks[block];
@@ -2301,50 +2321,90 @@ private:
                 Uses(inst, operands);
                 for (auto operand : operands)
                     if (operand >= 0 && operand < fn.nvalues) uses[operand]++;
+                if (m.profile == CoreProfile::Construction &&
+                    (inst.op == GirOp::Arr || inst.op == GirOp::Fill) &&
+                    inst.ty >= 0 && inst.ty < (int)m.types.size() &&
+                    GirOwnerKind(m.Type(inst.ty).kind))
+                    Fail("GIR-V060", cat(fn.label, ": a nonfixed array is materialized as a detached aggregate"));
                 if (inst.op != GirOp::DestOpen) continue;
-                if (index + 3 >= body.insts.size())
-                    Fail("GIR-V060", cat(fn.label, ": a byte destination does not complete in its block"));
-                auto &write = body.insts[index + 1];
-                auto &finish = body.insts[index + 2];
-                auto &publish = body.insts[index + 3];
-                if (write.op != GirOp::DestBytes || finish.op != GirOp::DestFinish ||
-                    publish.op != GirOp::DestPublish || write.a != inst.res ||
-                    finish.a != inst.res || publish.a != finish.res)
-                    Fail("GIR-V060", cat(fn.label, ": a byte destination is not completed and published linearly"));
                 if (inst.idx < 0 || inst.idx >= (int)f.slots.size() ||
                     inst.ty != f.slots[inst.idx].ty || !inst.knownCount)
-                    Fail("GIR-V060", cat(fn.label, ": a byte destination does not name its exact receiver slot"));
+                    Fail("GIR-V060", cat(fn.label, ": a destination does not name its exact receiver slot"));
                 auto countValue = *inst.knownCount;
                 auto countDef = countValue >= 0 && countValue < fn.nvalues ? definitions[countValue] : nullptr;
                 if (!countDef || countDef->op != GirOp::Int)
-                    Fail("GIR-V060", cat(fn.label, ": a byte destination count is not a constant"));
+                    Fail("GIR-V060", cat(fn.label, ": a destination count is not a constant"));
                 int64_t count = -1;
-                auto [end, error] = from_chars(countDef->text.data(),
-                                               countDef->text.data() + countDef->text.size(), count);
-                if (error != errc() || end != countDef->text.data() + countDef->text.size() ||
-                    count < 0 || (uint64_t)count != write.bytes.size())
-                    Fail("GIR-V060", cat(fn.label, ": a byte destination count disagrees with its literal"));
+                auto [countEnd, countError] = from_chars(countDef->text.data(),
+                                                         countDef->text.data() + countDef->text.size(), count);
+                if (countError != errc() || countEnd != countDef->text.data() + countDef->text.size() || count < 0)
+                    Fail("GIR-V060", cat(fn.label, ": a destination count is invalid"));
+
+                int writes = 0;
+                int byteWrites = 0;
+                size_t cursor = index + 1;
+                for (; cursor < body.insts.size(); cursor++) {
+                    auto &candidate = body.insts[cursor];
+                    if (candidate.op == GirOp::DestWrite) {
+                        if (byteWrites || candidate.a != inst.res)
+                            Fail("GIR-V060", cat(fn.label, ": a destination mixes or misroutes element writes"));
+                        writes++;
+                        matched.insert({ (int)block, (int)cursor });
+                        continue;
+                    }
+                    if (candidate.op == GirOp::DestBytes) {
+                        if (byteWrites || writes || candidate.a != inst.res)
+                            Fail("GIR-V060", cat(fn.label, ": a byte destination is mixed or misrouted"));
+                        byteWrites++;
+                        matched.insert({ (int)block, (int)cursor });
+                        continue;
+                    }
+                    if (candidate.op == GirOp::DestFinish) {
+                        if (candidate.a != inst.res) break;
+                        matched.insert({ (int)block, (int)cursor });
+                        break;
+                    }
+                    if (candidate.op != GirOp::Int && candidate.op != GirOp::Bool)
+                        Fail("GIR-V060", cat(fn.label, ": a destination has an unsupported operation before completion"));
+                }
+                if (cursor + 1 >= body.insts.size() || body.insts[cursor].op != GirOp::DestFinish ||
+                    body.insts[cursor].a != inst.res)
+                    Fail("GIR-V060", cat(fn.label, ": a destination does not finish in its block"));
+                auto &finish = body.insts[cursor];
+                auto publishIndex = cursor + 1;
+                auto &publish = body.insts[publishIndex];
+                if (publish.op != GirOp::DestPublish || publish.a != finish.res)
+                    Fail("GIR-V060", cat(fn.label, ": a destination is not published exactly after completion"));
+                auto owner = m.Type(inst.ty);
+                if (byteWrites) {
+                    auto &write = body.insts[index + 1];
+                    if ((uint64_t)count != write.bytes.size() || owner.kind != CoreType::Grow ||
+                        m.Type(owner.elem).kind != CoreType::Int || m.Type(owner.elem).ity != CoreIntTy::U8)
+                        Fail("GIR-V060", cat(fn.label, ": a byte destination count or element type is invalid"));
+                } else if (count != writes) {
+                    Fail("GIR-V060", cat(fn.label, ": an element destination count disagrees with its writes"));
+                }
+                expectedDestinationUses[inst.res] = writes + byteWrites + 1;
                 matched.insert({ (int)block, (int)index });
-                matched.insert({ (int)block, (int)index + 1 });
-                matched.insert({ (int)block, (int)index + 2 });
-                matched.insert({ (int)block, (int)index + 3 });
+                matched.insert({ (int)block, (int)publishIndex });
             }
         }
         for (size_t block = 0; block < f.blocks.size(); block++)
             for (size_t index = 0; index < f.blocks[block].insts.size(); index++) {
                 auto &inst = f.blocks[block].insts[index];
-                if ((inst.op == GirOp::DestOpen || inst.op == GirOp::DestBytes ||
+                if ((inst.op == GirOp::DestOpen || inst.op == GirOp::DestWrite || inst.op == GirOp::DestBytes ||
                      inst.op == GirOp::DestFinish || inst.op == GirOp::DestPublish) &&
                     !matched.count({ (int)block, (int)index }))
-                    Fail("GIR-V060", cat(fn.label, ": a construction operation is not part of a byte destination"));
+                    Fail("GIR-V060", cat(fn.label, ": a construction operation is not part of a linear destination"));
             }
         for (int value = 0; value < fn.nvalues; value++) {
             auto type = fn.vt[value];
             if (type < 0 || type >= (int)m.types.size()) continue;
             auto kind = m.Type(type).kind;
             if (kind == CoreType::Dest) {
-                if (!definitions[value] || definitions[value]->op != GirOp::DestOpen || uses[value] != 2)
-                    Fail("GIR-V060", cat(fn.label, ": destination value %", value, " is not consumed exactly twice"));
+                if (!definitions[value] || definitions[value]->op != GirOp::DestOpen ||
+                    expectedDestinationUses[value] < 1 || uses[value] != expectedDestinationUses[value])
+                    Fail("GIR-V060", cat(fn.label, ": destination value %", value, " is not consumed linearly"));
             } else if (kind == CoreType::Built) {
                 if (!definitions[value] || definitions[value]->op != GirOp::DestFinish || uses[value] != 1)
                     Fail("GIR-V060", cat(fn.label, ": completion value %", value, " is not published exactly once"));
