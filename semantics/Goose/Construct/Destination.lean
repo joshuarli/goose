@@ -619,9 +619,7 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
   let discarded := state.destinations.toList.reverse.filter fun destination =>
     destination.capability.id != replacementId &&
       descendantOf state.destinations supersededId destination.capability.id && active destination
-  for destination in discarded do
-    replaceDestination destination.capability.id { destination with progress := .abandoned }
-    emit (.abandon destination.capability.id)
+  protectedAbandonment discarded
   landReceivingStorage replacement.storage superseded.capability.start replacement.capability.start
   replaceDestination replacementId { replacement with
     capability := { replacement.capability with start := superseded.capability.start }
@@ -904,5 +902,111 @@ def restoreReceivingLayout (id : DestinationId) (layout : ReceivingLayout) : Con
     | _, _ => false
   if !agrees then ConstructionM.fail .protocol
   replaceDestination id { destination with layout := layout }
+
+
+private def KeepsOutput (action : ConstructionM α) : Prop :=
+  ∀ state, (action state).finalState.stdout = state.stdout
+
+private theorem keepsOutput_bind (action : ConstructionM α) (remaining : α → ConstructionM β)
+    (first : KeepsOutput action) (next : ∀ value, KeepsOutput (remaining value)) :
+    KeepsOutput (action >>= remaining) := by
+  intro state
+  have framed := first state
+  cases result : action state with
+  | ok value after =>
+      simp only [bind,result]
+      exact (next value after).trans (by simpa [result,ConstructionResult.finalState] using framed)
+  | fault reason after => simpa [bind,result,ConstructionResult.finalState] using framed
+
+private theorem keepsOutput_pure (value : α) : KeepsOutput (pure value) := fun _ => rfl
+private theorem keepsOutput_fail (reason : ConstructionFault) : KeepsOutput (ConstructionM.fail (α := α) reason) := fun _ => rfl
+private theorem keepsOutput_get : KeepsOutput ConstructionM.get := fun _ => rfl
+
+private theorem keepsOutput_lookup_destination (id : DestinationId) : KeepsOutput (lookupDestination id) := by
+  intro state
+  simp only [lookupDestination,ConstructionM.get,bind]
+  cases state.destinations[id]? <;> rfl
+
+private theorem keepsOutput_lookup_storage (id : StorageId) : KeepsOutput (lookupStorage id) := by
+  intro state
+  simp only [lookupStorage,ConstructionM.get,bind]
+  cases state.storage[id]? <;> rfl
+
+private theorem keepsOutput_replace_destination (id : DestinationId) (destination : PendingDestination) :
+    KeepsOutput (replaceDestination id destination) := by
+  intro state
+  simp only [replaceDestination,ConstructionM.get,bind]
+  split <;> rfl
+
+private theorem keepsOutput_replace_storage (id : StorageId) (storage : ReceivingStorage) :
+    KeepsOutput (replaceStorage id storage) := by
+  intro state
+  simp only [replaceStorage,ConstructionM.get,bind]
+  split <;> rfl
+
+private theorem keepsOutput_emit (event : ConstructionEvent) : KeepsOutput (emit event) := fun _ => rfl
+
+private theorem keepsOutput_writable_destination (id : DestinationId) : KeepsOutput (writableDestination id) := by
+  apply keepsOutput_bind (lookupDestination id)
+  · exact keepsOutput_lookup_destination id
+  · intro destination
+    apply keepsOutput_bind ConstructionM.get
+    · exact keepsOutput_get
+    · intro state
+      intro current
+      dsimp only
+      split <;> rfl
+
+
+private theorem keepsOutput_if (condition : Prop) [Decidable condition]
+    (yes no : ConstructionM α) (first : KeepsOutput yes) (second : KeepsOutput no) :
+    KeepsOutput (if condition then yes else no) := by
+  by_cases selected : condition
+  · simpa only [selected,↓reduceIte] using first
+  · simpa only [selected,↓reduceIte] using second
+
+theorem adaptDestinationType_stdout (id : DestinationId) (logicalType : Ty) (state : ConstructionState) :
+    (adaptDestinationType id logicalType state).finalState.stdout = state.stdout := by
+  apply keepsOutput_bind (writableDestination id)
+  · exact keepsOutput_writable_destination id
+  · intro destination
+    cases destination.progress
+    all_goals try exact fun _ => rfl
+    all_goals
+      apply keepsOutput_if
+      · exact fun _ => rfl
+      · exact keepsOutput_replace_destination _ _
+
+theorem restoreReceivingLayout_stdout (id : DestinationId) (layout : ReceivingLayout) (state : ConstructionState) :
+    (restoreReceivingLayout id layout state).finalState.stdout = state.stdout := by
+  apply keepsOutput_bind (writableDestination id)
+  · exact keepsOutput_writable_destination id
+  · intro destination
+    cases destination.progress
+    all_goals try exact fun _ => rfl
+    apply keepsOutput_if
+    · exact fun _ => rfl
+    · exact keepsOutput_replace_destination _ _
+
+theorem removeConstructionHeader_stdout (id : DestinationId) (state : ConstructionState) :
+    (removeConstructionHeader id state).finalState.stdout = state.stdout := by
+  apply keepsOutput_bind (writableDestination id)
+  · exact keepsOutput_writable_destination id
+  · intro destination
+    cases destination.progress
+    all_goals try exact keepsOutput_fail .protocol
+    apply keepsOutput_if
+    · exact keepsOutput_fail .protocol
+    · apply keepsOutput_bind (lookupStorage destination.storage)
+      · exact keepsOutput_lookup_storage _
+      · intro storage
+        apply keepsOutput_if
+        · exact keepsOutput_fail .storage
+        · apply keepsOutput_bind (replaceStorage destination.storage _)
+          · exact keepsOutput_replace_storage _ _
+          · intro _
+            apply keepsOutput_bind (replaceDestination id _)
+            · exact keepsOutput_replace_destination _ _
+            · intro _; exact keepsOutput_emit _
 
 end Goose.Construct
