@@ -410,6 +410,18 @@ theorem expectRef_state {value : Val} {before after : St} {location : Loc}
   cases value <;> simp [expectRef, fault, M.stop, pure_apply] at read
   exact read.2.symm
 
+theorem expectBool_state {value : Val} {before after : St} {result : Bool}
+    (read : expectBool value before = .ok result after) : after = before := by
+  cases value <;> simp [expectBool, fault, M.stop, pure_apply] at read
+  exact read.2.symm
+
+theorem condition_state {fr : Frame} {id : ValueId} {before after : St} {result : Bool}
+    (tested : (getVal fr id >>= expectBool) before = .ok result after) : after = before := by
+  obtain ⟨value, middle, read, tested⟩ := m_bind_ok tested
+  have sameState := (getVal_success read).2
+  subst middle
+  exact expectBool_state tested
+
 theorem expectArray_state {value : Val} {before after : St} {shape : Nat × Bool}
     (read : expectArray value before = .ok shape after) : after = before := by
   cases value <;> simp [expectArray, fault, M.stop, pure_apply] at read

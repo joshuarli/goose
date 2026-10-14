@@ -5,6 +5,74 @@ namespace Goose.Evidence
 
 open Goose.Core Goose.GIR
 
+theorem enterBranch_typed {cfg : GCfg} {activations : ActivationTypes} {fn : Func}
+    {fr fr' : Frame} {before readState after : St} {target : BlockId} {dest : GIR.Block}
+    {args : List ValueId} {values : List RVal}
+    (accepted : validate cfg.mod = .ok ()) (member : fn ∈ cfg.mod.allFuncs)
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (lookup : fn.blocks[target]? = some dest)
+    (argMetadata : args.map (fun id => (fn.valueTypes cfg.mod)[id]?) =
+      dest.params.map (fun param => some (some param.2)))
+    (read : mapList (getCell fr) args before = .ok values readState)
+    (entered : enterBlock fn fr target values readState = .ok (instsAt fn (target, 0), fr') after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  obtain ⟨argsTyped, sameReadState⟩ := frameTyped.2.2.branchArgs argMetadata read
+  subst readState
+  obtain ⟨afterTyped, sameState⟩ := enterBlock_typed lookup frameTyped.2.2
+    (fun param present => validated_block_param_metadata accepted member
+      (Array.mem_of_getElem? lookup) present) argsTyped entered
+  have sameAct := enterBlock_act entered
+  refine ⟨sameState ▸ frameTyped.1, ?_, afterTyped⟩
+  rw [sameAct]
+  exact frameTyped.2.1
+
+theorem RuntimeStep.branch_typed {cfg : GCfg} {activations : ActivationTypes} {fn : Func}
+    {point : Pt} {fr fr' : Frame} {before readState after : St} {target : BlockId}
+    {args : List ValueId} {values : List RVal}
+    (accepted : validate cfg.mod = .ok ()) (member : fn ∈ cfg.mod.allFuncs)
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (instruction : instAt fn point = some (.term (.br target args)))
+    (read : mapList (getCell fr) args before = .ok values readState)
+    (entered : enterBlock fn fr target values readState = .ok (instsAt fn (target, 0), fr') after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  obtain ⟨sourceValid, lastTerm⟩ := validated_instAt_term_last accepted member instruction
+  obtain ⟨dest, lookup, argMetadata⟩ := validated_branch_metadata accepted member sourceValid lastTerm
+  exact enterBranch_typed accepted member frameTyped lookup argMetadata read entered
+
+theorem RuntimeStep.branchTrue_typed {cfg : GCfg} {activations : ActivationTypes} {fn : Func}
+    {point : Pt} {fr fr' : Frame} {before tested readState after : St} {condition : ValueId}
+    {target other : BlockId} {args otherArgs : List ValueId} {values : List RVal}
+    (accepted : validate cfg.mod = .ok ()) (member : fn ∈ cfg.mod.allFuncs)
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (instruction : instAt fn point = some (.term (.condbr condition target args other otherArgs)))
+    (test : (getVal fr condition >>= expectBool) before = .ok true tested)
+    (read : mapList (getCell fr) args tested = .ok values readState)
+    (entered : enterBlock fn fr target values readState = .ok (instsAt fn (target, 0), fr') after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  have sameState := condition_state test
+  subst tested
+  obtain ⟨sourceValid, lastTerm⟩ := validated_instAt_term_last accepted member instruction
+  obtain ⟨dest, lookup, argMetadata⟩ :=
+    (validated_condbranch_metadata accepted member sourceValid lastTerm).1
+  exact enterBranch_typed accepted member frameTyped lookup argMetadata read entered
+
+theorem RuntimeStep.branchFalse_typed {cfg : GCfg} {activations : ActivationTypes} {fn : Func}
+    {point : Pt} {fr fr' : Frame} {before tested readState after : St} {condition : ValueId}
+    {target other : BlockId} {args otherArgs : List ValueId} {values : List RVal}
+    (accepted : validate cfg.mod = .ok ()) (member : fn ∈ cfg.mod.allFuncs)
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (instruction : instAt fn point = some (.term (.condbr condition other otherArgs target args)))
+    (test : (getVal fr condition >>= expectBool) before = .ok false tested)
+    (read : mapList (getCell fr) args tested = .ok values readState)
+    (entered : enterBlock fn fr target values readState = .ok (instsAt fn (target, 0), fr') after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  have sameState := condition_state test
+  subst tested
+  obtain ⟨sourceValid, lastTerm⟩ := validated_instAt_term_last accepted member instruction
+  obtain ⟨dest, lookup, argMetadata⟩ :=
+    (validated_condbranch_metadata accepted member sourceValid lastTerm).2
+  exact enterBranch_typed accepted member frameTyped lookup argMetadata read entered
+
 theorem RuntimePoint.call_entry_typed {cfg : GCfg} {activations : ActivationTypes}
     {caller fn : Func} {point : Pt} {fr fr' : Frame} {before readState after : St}
     {result : ValueId} {callee : FnId} {args : List ValueId} {org : Option OriginId}
