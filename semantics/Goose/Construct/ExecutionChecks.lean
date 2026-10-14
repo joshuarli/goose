@@ -1,4 +1,5 @@
-import Goose.Construct.Eval
+import Goose.Construct.Run
+import Goose.Construct.Writer
 
 namespace Goose.Construct.ExecutionChecks
 open Goose.Core (ConstructionEvent AbortKind)
@@ -144,9 +145,9 @@ private def parameter : Module := moduleOf #[
   implementation "entry" #[localVar "scalar" (.int .i64)]
     (.mk 0 [.letS 0 (.lit .i64 7) 0,
       .expr (.call 1 [.byVal (.read (.var 0)), .construct (.bytes (.varr (.int .u8)) [65] 0)] 0) 0] none),
-  implementation "parameters" #[localVar "bytes" (.varr (.int .u8)), localVar "scalar" (.int .i64)]
-    (.mk 0 [.print [.expr (.read (.var 1)), .view (.of (.var 0))] 0] none)
-    #[] #[⟨1, .byValue⟩, ⟨0, .byValue⟩]]
+  implementation "parameters" #[localVar "scalar" (.int .i64), localVar "bytes" (.varr (.int .u8))]
+    (.mk 0 [.print [.expr (.read (.var 0)), .view (.of (.var 1))] 0] none)
+    #[] #[⟨0, .byValue⟩, ⟨1, .byValue⟩]]
 
 #guard observes parameter == some ([55, 65, 10], [.begin 0, .write 0 0, .publish 0])
 
@@ -297,5 +298,54 @@ private def fixedPushReentrancy : Module := moduleOf #[implementation "entry"
     .print [.expr (.read (.deref (.read (.var 1)))), .view (.of (.var 0))] 0] none)]
 
 #guard (observes fixedPushReentrancy).map Prod.fst == some [57, 91, 55, 44, 32, 57, 93, 10]
+
+private def fixedObjectOrdinals : Module := moduleOf #[implementation "entry"
+  #[localVar "scalar" (.int .i64), localVar "source" (.arr (.int .u8) 1),
+    localVar "copy" (.varr (.int .u8))]
+  (.mk 0 [.letS 0 (.lit .i64 7) 0,
+    .letS 1 (.arrLit (.arr (.int .u8) 1) [.lit .u8 65]) 0,
+    .letS 2 (.copy (.varr (.int .u8)) (.var 1) 0) 0,
+    .print [.view (.of (.var 2))] 0] none)]
+
+#guard observes fixedObjectOrdinals == some ([65, 10],
+  [.begin 0, .copy (.storage 1 []) 0, .write 0 0, .publish 0])
+
+private def fixedParameterOrdinal : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [.byVal (.arrLit (.arr (.int .u8) 1) [.lit .u8 65])] 0) 0,
+      .print [.view (.of (.var 0))] 0] none),
+  implementation "copy" #[localVar "source" (.arr (.int .u8) 1)]
+    (.mk 0 [] (some (.copy (.varr (.int .u8)) (.var 0) 0)))
+    #[⟨.varr (.int .u8), .value, none⟩] #[⟨0, .byValue⟩]]
+
+#guard observes fixedParameterOrdinal == some ([65, 10],
+  [.begin 0, .copy (.storage 1 []) 0, .write 0 0, .publish 0])
+
+private def wireRaw : Module := {
+  rawBytes with
+  types := #[.int .u8, .varr (.int .u8)]
+  origins := #[⟨0, 17, "let"⟩] }
+
+#guard Run.validateBytes (Writer.module wireRaw).toUTF8 == ("[\"ok\"]", 0)
+#guard Run.runBytes {} (Writer.module wireRaw).toUTF8 ==
+  ("[\"done\",[\"returned\"],[65,0,255,10],[[\"begin\",0],[\"write\",0,0],[\"write\",0,1],[\"write\",0,2],[\"publish\",0]]]", 0)
+#guard Run.runBytes { fuel := 0 } (Writer.module wireRaw).toUTF8 == ("[\"timeout\",[],[]]", 3)
+
+private def wireRejected : Module := {
+  wireRaw with impls := #[implementation "entry" #[localVar "bytes" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.varr (.int .u8)) [65, 0, 255] 0) 0,
+      .assign (.var 0) (.lit .u8 66) 0, .print [.view (.of (.var 0))] 0] none)] }
+
+#guard (Run.runBytes {} (Writer.module wireRejected).toUTF8).2 == 5
+#guard (Run.runBytes {} (Writer.module wireRejected).toUTF8).1.startsWith "[\"rejected\",\"V-MUT\","
+#guard Run.runBytes { validate := false } (Writer.module wireRejected).toUTF8 == ("[\"fault\",\"shape\"]", 4)
+#guard (Run.runBytes {} (ByteArray.mk #[255])).2 == 2
+
+private def wireAborted : Module := {
+  moduleOf #[implementation "entry" #[] (.mk 0 [.print [.text "before"] 0, .abort "stop" 0] none)] with
+  origins := #[⟨0, 17, "abort"⟩] }
+
+#guard Run.runBytes {} (Writer.module wireAborted).toUTF8 ==
+  ("[\"done\",[\"aborted\",\"user_abort\",17],[98,101,102,111,114,101,10],[]]", 0)
 
 end Goose.Construct.ExecutionChecks

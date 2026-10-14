@@ -66,13 +66,14 @@ structure BreakTarget where
 
 structure ExecutionState where
   objects : List (RootInst × Value)
+  objectOrdinals : List (RootInst × StorageId)
   construction : ConstructionState
   nextAct : Nat
   nextScope : Nat
   activations : List RuntimeActivation
   breaks : List BreakTarget
 
-def ExecutionState.initial : ExecutionState := ⟨[], .initial, 0, 0, [], []⟩
+def ExecutionState.initial : ExecutionState := ⟨[], [], .initial, 0, 0, [], []⟩
 
 inductive ExecutionStep (α : Type)
   | ok (value : α) (state : ExecutionState)

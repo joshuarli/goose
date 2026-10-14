@@ -162,9 +162,29 @@ def readLoc (fuel : Nat) (module : LayoutEnv) (location : Loc) : EvalM Value := 
   | some value => readValuePath fuel module value location.path
   | none => fault .danglingRoot
 
-def bindRoot (root : RootInst) (value : Value) : EvalM Unit := do
+def setObjectOrdinal (root : RootInst) (ordinal : StorageId) : EvalM Unit := do
+  let state ← EvalM.get
+  EvalM.set { state with objectOrdinals := (root, ordinal) :: state.objectOrdinals.filter (fun entry => entry.1 != root) }
+
+def reserveRootObject (root : RootInst) : EvalM StorageId := do
+  let state ← EvalM.get
+  match state.objectOrdinals.lookup root with
+  | some ordinal => pure ordinal
+  | none =>
+      let ordinal ← liftConstruction 0 reserveStorage
+      setObjectOrdinal root ordinal
+      pure ordinal
+
+def bindStaticRoot (root : RootInst) (value : Value) : EvalM Unit := do
   let state ← EvalM.get
   EvalM.set { state with objects := (root, value) :: state.objects.filter (fun entry => entry.1 != root) }
+
+def bindRoot (root : RootInst) (value : Value) : EvalM Unit := do
+  if ((← EvalM.get).objectOrdinals.lookup root).isNone then
+    match value with
+    | .stored stored => setObjectOrdinal root (stored.object.getD stored.storage)
+    | _ => let _ ← reserveRootObject root; pure ()
+  bindStaticRoot root value
 
 def writeValuePath : Nat → LayoutEnv → Value → List Nat → Value → EvalM Value
   | 0, _, _, _, _ => timeout
@@ -254,6 +274,7 @@ def releaseScopeState (environment : RuntimeActivation) (scope : Nat) (scopeInst
     if localVar.scope == scope then some (RootInst.local environment.act scopeInst index) else none
   { state with
     objects := state.objects.filter (fun entry => !roots.contains entry.1)
+    objectOrdinals := state.objectOrdinals.filter (fun entry => !roots.contains entry.1)
     activations := state.activations.map (fun current => if current.act == environment.act then { current with scopes := environment.scopes } else current) }
 
 def releaseScope (environment : RuntimeActivation) (scope : Nat) (scopeInst : ScopeInst) : EvalM Unit := do
@@ -422,6 +443,38 @@ def landCarriers (origin : OriginId) (carriers : List Carrier) : EvalM Unit := d
         | .replacement _ => liftConstruction origin (landExitReplacement id)
         | _ => pure ()
 
+def finishChannels (layout : LayoutEnv) (resultTypes : List Ty)
+    (carriers : List Carrier) (origin : OriginId) : EvalM Unit := do
+  landCarriers origin carriers
+  if carriers.length != resultTypes.length then fault .arity
+  for (carrier, result) in carriers.zip resultTypes do
+    match carrier with
+    | .register _ => pure ()
+    | .completed id =>
+        let destination ← getDestination id
+        let receivingPacked := match destination.capability.layout with | .varr _ => true | _ => false
+        if destination.layout == .packed && destination.capability.request == .value && !receivingPacked then
+          liftConstruction origin (removeConstructionHeader id)
+          liftConstruction origin (restoreReceivingLayout id (← receivingLayout layout destination.capability.layout))
+        liftConstruction origin (adaptDestinationType id result)
+
+def finishActivation (layout : LayoutEnv) (activation : RuntimeActivation) (resultTypes : List Ty)
+    (origin : OriginId) (action : EvalM (List Carrier)) : EvalM (List Carrier) := fun state =>
+  let finish := fun carriers state' =>
+    let state' := { state' with activations := state'.activations.filter (fun current => current.act != activation.act) }
+    match finishChannels layout resultTypes carriers origin state' with
+    | .ok () state'' => ExecutionStep.ok carriers state''
+    | .stop reason state'' => ExecutionStep.stop reason state''
+    | .escape target escaped state'' => ExecutionStep.escape target escaped state''
+    | .jump target kind state'' => ExecutionStep.jump target kind state''
+  match action state with
+  | .ok carriers state' => finish carriers state'
+  | .escape target carriers state' =>
+      if target == activation.act then finish carriers state'
+      else .escape target carriers { state' with activations := state'.activations.filter (fun current => current.act != activation.act) }
+  | .stop reason state' => .stop reason state'
+  | .jump _ _ state' => .stop (.fault .flow) state'
+
 def joinBytes (separator : ByteArray) : List ByteArray → ByteArray
   | [] => ByteArray.empty
   | first :: rest => rest.foldl (fun bytes part => bytes ++ separator ++ part) first
@@ -438,9 +491,9 @@ def quoteBytes (bytes : ByteArray) : ByteArray := Id.run do
       | _ => ⟨#[byte]⟩
   return result ++ "\"".toUTF8
 
-def copyValue : Nat → LayoutEnv → DestinationId → Value → OriginId → EvalM Unit
-  | 0, _, _, _, _ => timeout
-  | fuel + 1, config, destination, value, origin => do
+def copyValue : Nat → LayoutEnv → DestinationId → Value → OriginId → Option Core.CopySource → EvalM Unit
+  | 0, _, _, _, _, _ => timeout
+  | fuel + 1, config, destination, value, origin, source => do
       let pending ← getDestination destination
       let some element := elementType pending.capability.logicalType | fault .shape
       match value with
@@ -452,6 +505,7 @@ def copyValue : Nat → LayoutEnv → DestinationId → Value → OriginId → E
             let (start, finish) ← liftLayout (elementInterval fuel config bytes run index)
             liftConstruction origin (writeElement destination (bytes.extract start finish))
       | .fixed values =>
+          if let some source := source then liftConstruction origin (recordCopy source destination)
           for value in values do
             liftConstruction origin (writeElement destination (← liftExcept (fixedBytes fuel config element value)))
       | _ => fault .shape
