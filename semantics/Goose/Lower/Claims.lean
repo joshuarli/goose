@@ -33,7 +33,8 @@ def exprOk : Expr → Bool
   | .and a b | .or a b => exprOk a && exprOk b
   | .not e => exprOk e
   | .conv _ _ e _ => exprOk e
-  | .call .. | .structLit .. => false
+  | .call .. => false
+  | .structLit _ es => exprsOk es
   | .push p e _ => placeOk p && exprOk e
   | .pop p _ => placeOk p
   | .ifE c t f => exprOk c && blockOk t && blockOk f
@@ -46,7 +47,7 @@ def exprsOk : List Expr → Bool
   | e :: es => exprOk e && exprsOk es
 
 def placeOk : Place → Bool
-  | .field .. => false
+  | .field owner _ => placeOk owner
   | .var _ | .global _ => true
   | .deref e => exprOk e
   | .elem v i _ => viewOk v && exprOk i
@@ -320,6 +321,19 @@ theorem placeClaim_deref (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) : Pla
   refine SimG.expectRef' fun l hva => ?_
   subst hva
   exact SimG.ret P1
+
+theorem placeClaim_field (n : Nat) (ihp : ∀ p, PlaceClaim n p)
+    (owner : Place) (index : Nat) : PlaceClaim (n + 1) (.field owner index) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  simp only [lowerPlace, bind_eq] at hlow
+  obtain ⟨address, middle, hplace, hfield⟩ := hlow
+  have hextMiddle := hext.of_adv (adv_emitDef hfield)
+  simp only [evalPlace]
+  refine SimG.bind (ihp owner (by okpf) le ls address middle pt cfg env cx fr
+    hplace hpp hextMiddle hrel) fun location pt' fr' P => ?_
+  have hcell : fr'.vals[address]? = some (.val (.ref location)) := P.has (address, _) (by simp)
+  refine leaf_def P hfield hext (by simp) (fun l => RVal.val (.ref l)) ?_
+  simp only [execPure, getVal_of hcell, Core.expectRef, pure_bind]
 
 theorem placeClaim_elem (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihv : ∀ v, ViewClaim n v)
     (v : View) (i : Expr) (org : OriginId) : PlaceClaim (n + 1) (.elem v i org) := by
@@ -621,6 +635,24 @@ theorem exprClaim_arrLit (n : Nat) (ihes : ∀ es, ExprsClaim n es) (t : Ty) (es
   have hc := mapList_getVal_cells (fr := fr1) hlen (fun p hp => P1.has p hp)
   refine leaf_def P1 h2 hext (by simp) RVal.val ?_
   simp only [execPure, hc, pure_bind, bind_assoc]
+
+theorem exprClaim_structLit (n : Nat) (ihes : ∀ es, ExprsClaim n es) (ty : Ty) (es : List Expr) :
+    ExprClaim (n + 1) (.structLit ty es) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  simp only [lowerExpr, bind_eq] at hlow
+  obtain ⟨ids, middle, hexprs, hrecord⟩ := hlow
+  have hextMiddle := hext.of_adv (adv_emitDef hrecord)
+  cases ty with
+  | structT id args =>
+    simp only [evalExpr]
+    refine SimG.bind (ihes es (by okpf) le ls ids middle pt cfg env cx fr
+      hexprs hpp hextMiddle hrel) fun values pt' fr' ⟨hlen, P⟩ => ?_
+    have hread := mapList_getVal_cells (fr := fr') hlen P.has
+    refine leaf_def P hrecord hext (by simp) RVal.val ?_
+    simp only [execPure, hread, pure_bind, bind_assoc]
+  | _ =>
+    simp only [evalExpr]
+    exact SimG.of_fault
 
 theorem exprClaim_fill (n : Nat) (ihe : ∀ e, ExprClaim n e) (t : Ty) (a : Expr) :
     ExprClaim (n + 1) (.fill t a) := by
@@ -2241,7 +2273,7 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | blockE b => exact exprClaim_blockE n ih.blockValue b
     | arrLit t es => exact exprClaim_arrLit n ih.exprs t es
     | fill t a => exact exprClaim_fill n ih.expr t a
-    | structLit t es => intro hok; simp [exprOk] at hok
+    | structLit t es => exact exprClaim_structLit n ih.exprs t es
   have hprint : ∀ args, PrintArgsClaim (n + 1) args :=
     printArgsClaim (n + 1) (fun m h => by cases h; exact ih.expr)
   refine ⟨hexpr, ?_, ?_, ?_, exprsClaim (n + 1) hexpr, hprint, ?_, ?_, ?_, ?_, whileClaim_succ n ih.expr ih.block ih.whileLoop⟩
@@ -2251,7 +2283,7 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | global g => exact placeClaim_global _ g
     | deref e => exact placeClaim_deref n ih.expr e
     | elem v i org => exact placeClaim_elem n ih.expr ih.view v i org
-    | field p i => intro hok; simp [placeOk] at hok
+    | field p i => exact placeClaim_field n ih.place p i
   · intro v
     cases v with
     | of p => exact viewClaim_of n ih.place p
