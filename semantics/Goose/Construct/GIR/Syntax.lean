@@ -104,6 +104,7 @@ inductive Op
   | destNamed (slot : SlotId) (org : Option OriginId)
   | resultExitDest (position : Nat) (org : Option OriginId)
   | destAbandonNamed (slot : SlotId) (replacement : ValueId) (org : Option OriginId)
+  | destPublishRef (built : ValueId) (org : Option OriginId)
   | destArg (built : ValueId) (org : Option OriginId)
   | destAbandon (carrier : ValueId) (org : Option OriginId)
   | destValue (destination : ValueId) (org : Option OriginId)
@@ -267,7 +268,7 @@ def Op.uses : Op → List ValueId
   | .bytes .. | .destNamed .. | .resultExitDest .. | .targetDest .. => []
   | .result v _ | .render v _ => [v]
   | .destOpen receiver _ _ count _ => receiver.uses ++ count.toList
-  | .destChild v _ _ | .destFinish v _ | .destArg v _ | .destAbandon v _ |
+  | .destChild v _ _ | .destFinish v _ | .destPublishRef v _ | .destArg v _ | .destAbandon v _ |
       .destValue v _ | .destRelocate v _ _ | .destStage v _ | .destFit v _ => [v]
   | .destAbandonNamed _ v _ => [v]
   | .callConstruct _ args destinations _ => args ++ destinations

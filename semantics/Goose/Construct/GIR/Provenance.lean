@@ -43,7 +43,7 @@ def Func.provenance (m : Module) (functionId : FnId) (f : Func) : Provenance := 
               | .destOpen receiver .. => [.receiver receiver]
               | .destChild parent .. => [.child parent]
               | .destFinish source _ | .destAbandon source _ | .destValue source _ |
-                  .destFit source _ | .destStage source _ | .destArg source _ => get source
+                  .destFit source _ | .destStage source _ | .destPublishRef source _ | .destArg source _ => get source
               | .destRelocate source reason _ =>
                   (get source).map fun owner => match owner with
                     | .target target position =>

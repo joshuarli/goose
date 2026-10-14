@@ -1038,3 +1038,48 @@ private def repeatedOwnedProjection : Module :=
 #guard (match Validate.validate repeatedOwnedProjection with | .error v => v.code == .v060 | _ => false)
 
 end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def publishedPushReference : Module :=
+  let owner := Ty.grow byteTy
+  moduleOf #[function "entry" #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) owner .value none (some 0)),
+    .def 1 (.destFinish 0 (some 0)),.eff (.destPublish 1 (some 0)),.def 2 (.slotAddr 0),
+    .def 3 (.destOpen (.push 2) byteTy .value none (some 0)),.eff (.destBytes 3 [65,66] (some 0)),
+    .def 4 (.destFinish 3 (some 0)),.def 5 (.destPublishRef 4 (some 0)),
+    .def 6 (.snapshot .borrowed 5),.def 7 (.constInt .i64 0),.def 8 (.indexChecked 6 7 (some 0)),
+    .def 9 (.constInt .u8 90),.eff (.store 8 9 (some 0)),
+    .def 10 (.snapshot .owner 2),.eff (.print [.val 10] (some 0)),
+    .eff (.leave 0),.term (.ret [] none)]⟩] #[⟨owner,.mutable,0,0⟩]]
+
+#guard (Validate.validate publishedPushReference).isOk
+#guard observation publishedPushReference == some ("[\"ZB\"]\n".toUTF8.data.toList,
+  [.begin 0,.publish 0,.begin 1,.write 1 0,.write 1 1,.publish 1])
+#guard roundTrip publishedPushReference
+
+private def publishOrdinaryReference : Module :=
+  { rawBytes with funcs := rawBytes.funcs.map fun f => { f with blocks := f.blocks.map fun block =>
+    { block with insts := block.insts.map fun
+      | .eff (.destPublish built org) => .def 4 (.destPublishRef built org)
+      | inst => inst } } }
+
+#guard (match Validate.validate publishOrdinaryReference with | .error v => v.code == .v060 | _ => false)
+
+private def reusedPushReference : Module :=
+  { publishedPushReference with funcs := publishedPushReference.funcs.map fun f => { f with blocks := f.blocks.map fun block =>
+    { block with insts := block.insts.flatMap fun
+      | .def 5 op => [.def 5 op,.def 11 (.destPublishRef 4 (some 0))]
+      | inst => [inst] } } }
+
+#guard (match Validate.validate reusedPushReference with | .error v => v.code == .v060 | _ => false)
+
+private def publishElementRunReference : Module :=
+  { publishedPushReference with funcs := publishedPushReference.funcs.map fun f => { f with blocks := f.blocks.map fun block =>
+    { block with insts := block.insts.map fun
+      | .def 3 (.destOpen _ ty _ count org) => .def 3 (.destOpen (.append 2) ty .elementRun count org)
+      | inst => inst } } }
+
+#guard (match Validate.validate publishElementRunReference with | .error v => v.code == .v010 | _ => false)
+
+end Goose.Construct.GIR.Checks

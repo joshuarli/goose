@@ -288,6 +288,7 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   | "i_dest_abandon_named" => do
     arity tag fs 4
     def_ (.destAbandonNamed (← checkIndex (← asNat fs[1]! "named slot") tb.nSlots "slot") (← v 2) (← org 3))
+  | "i_dest_publish_ref" => do arity tag fs 3; def_ (.destPublishRef (← v 1) (← org 2))
   | "i_dest_arg" => do arity tag fs 3; def_ (.destArg (← v 1) (← org 2))
   | "i_dest_abandon" => do arity tag fs 3; def_ (.destAbandon (← v 1) (← org 2))
   | "i_dest_value" => do arity tag fs 3; def_ (.destValue (← v 1) (← org 2))
@@ -786,6 +787,7 @@ def wOp (r : ValueId) : Op → W String
   | .destNamed slot org => pure (wRec "i_dest_named" [toString r,toString slot,wOpt org])
   | .resultExitDest position org => pure (wRec "i_result_exit_dest" [toString r,toString position,wOpt org])
   | .destAbandonNamed slot replacement org => pure (wRec "i_dest_abandon_named" [toString r,toString slot,toString replacement,wOpt org])
+  | .destPublishRef id org => pure (wRec "i_dest_publish_ref" [toString r,toString id,wOpt org])
   | .destArg id org => pure (wRec "i_dest_arg" [toString r,toString id,wOpt org])
   | .destAbandon id org => pure (wRec "i_dest_abandon" [toString r,toString id,wOpt org])
   | .destValue id org => pure (wRec "i_dest_value" [toString r,toString id,wOpt org])

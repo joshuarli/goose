@@ -39,7 +39,7 @@ def Inst.origin? : Inst → Option (Option OriginId)
     | .viewSlice _ _ _ _ o |
       .indexChecked _ _ o | .push _ _ o | .pop _ o | .call _ _ o | .bytes _ o |
       .destOpen _ _ _ _ o | .destChild _ _ o | .destFinish _ o | .destNamed _ o |
-      .resultExitDest _ o | .destAbandonNamed _ _ o | .destArg _ o | .destAbandon _ o |
+      .resultExitDest _ o | .destAbandonNamed _ _ o | .destPublishRef _ o | .destArg _ o | .destAbandon _ o |
       .destValue _ o | .destRelocate _ _ o | .destStage _ o | .destFit _ o |
       .callConstruct _ _ _ o | .targetDest _ _ o | .render _ o => some o
     | _ => none
@@ -445,7 +445,7 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
                   else []
               | .refFreeze source | .snapshot _ source | .sliceView source | .viewSlice _ source _ _ _ |
                 .refElem source _ | .indexChecked source _ _ | .indexProven source _ | .fieldAddr source _ |
-                .destFinish source _ | .destArg source _ | .destAbandon source _ | .destValue source _ |
+                .destFinish source _ | .destPublishRef source _ | .destArg source _ | .destAbandon source _ | .destValue source _ |
                 .destRelocate source _ _ | .destStage source _ | .destFit source _ | .destChild source _ _ => get source
               | .destOpen receiver _ _ _ _ => match receiver with
                 | .slot slot => [.local slot]
@@ -923,6 +923,9 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                   | _ => pure ()
                   state ← consume state id
                   state := { state with suspended := state.suspended.map fun (parent,child) => (parent,if child == id then result else child) }
+              | .destPublishRef built _ =>
+                  unless !(provenance.values[built]?.getD []).any state.stagedOwners.contains do violation .v060 "staged push publication requires fit"
+                  state ← consume state built
               | .destArg built _ =>
                   state ← consume state built
                   let rec producer : Nat → ValueId → Option (FnId × Nat)
@@ -1156,6 +1159,9 @@ private def checkChannelOwners (m : Module) (functionId : FnId) (f : Func) : Che
       | .eff (.destBind slot id _) =>
           let some position := f.results.findIdx? (·.namedLocal == some slot) | violation .v060 "binding slot is not named result"
           requireOwner id (.result position)
+      | .def _ (.destPublishRef id _) =>
+          unless (owners id).any (fun owner => owner matches .receiver (.push ..)) && (owners id).length == 1 do
+            violation .v060 "reference publication requires exact push receiving channel"
       | .def _ (.destArg id _) =>
           unless (owners id).all (fun owner => owner matches .receiver (.arg ..)) && !(owners id).isEmpty do
             violation .v060 "constructed argument lacks associated parameter receiving storage"

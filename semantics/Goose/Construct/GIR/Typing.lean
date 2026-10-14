@@ -181,6 +181,10 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     unless (← env.valTy replacement) == carrierType result do tyErr "named replacement result mismatch"
     let .built ty request := carrierType result | tyErr "named result must be nonfixed"
     pure (.cancelled ty request)
+  | .destPublishRef built _ => do
+    let (ty,request) ← env.builtTy built
+    unless request == .value do tyErr "push publication requires completed value"
+    pure (.data (.ref .mutable ty))
   | .destArg built _ => do
     let (ty, request) ← env.builtTy built
     unless request == .value do tyErr "constructed source argument must be a value"
