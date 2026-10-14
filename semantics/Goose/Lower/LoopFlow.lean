@@ -134,7 +134,7 @@ theorem StatementLoopPost.prefix {cfg : Cfg} {env : Env} {cx : FnCtx}
           simp only [LoopCounterAt, hkind] at hcounter
           exact hcounter.1
         refine ⟨runtimeTy, current, ?_, hnext.prefix P.same (Nat.le_of_lt hbound) hact hdepth⟩
-        rw [← P.same counter hbound] 
+        rw [← P.same counter hbound]
         exact hcell
 
 theorem LoopCounterAt.afterPost {cfg : Cfg} {env : Env} {cx : FnCtx}
