@@ -344,4 +344,131 @@ theorem dominators_predWalk_sound {fn : Func} {preds : Array (List BlockId)}
   obtain ⟨distance, bound, shortest⟩ := walk.short
   exact dominators_predWalk_zero shortest (by omega)
 
+def predPush (n source : Nat) (acc : Array (List Nat)) (target : Nat) : Array (List Nat) :=
+  if target < n then acc.modify target (source :: ·) else acc
+
+def predUpdate (fn : Func) (acc : Array (List Nat)) (source : Nat) : Array (List Nat) :=
+  match fn.blocks[source]? with
+  | none => acc
+  | some block => (block.terms.flatMap Term.successors).foldl (predPush fn.blocks.size source) acc
+
+theorem predPush_size (n source : Nat) (acc : Array (List Nat)) (target : Nat) :
+    (predPush n source acc target).size = acc.size := by
+  unfold predPush
+  split <;> simp
+
+theorem predPush_preserve {n source target node parent : Nat} {acc : Array (List Nat)}
+    (member : parent ∈ acc[node]?.getD []) : parent ∈ (predPush n source acc target)[node]?.getD [] := by
+  unfold predPush
+  split
+  · rw [Array.getElem?_modify]
+    split
+    · cases found : acc[node]? with
+      | none => simp [found] at member
+      | some parents =>
+        simp only [found, Option.getD_some] at member
+        simp only [Option.map_some, Option.getD_some]
+        exact List.mem_cons_of_mem _ member
+    · exact member
+  · exact member
+
+theorem predPush_add {n source target : Nat} {acc : Array (List Nat)}
+    (size : acc.size = n) (bound : target < n) : source ∈ (predPush n source acc target)[target]?.getD [] := by
+  unfold predPush
+  rw [if_pos bound, Array.getElem?_modify]
+  simp only [ite_true]
+  have inbounds : target < acc.size := by rw [size]; exact bound
+  rw [Array.getElem?_eq_some_getElem! acc target inbounds]
+  simp
+
+theorem predList_size {n source : Nat} {acc : Array (List Nat)} (targets : List Nat) :
+    (targets.foldl (predPush n source) acc).size = acc.size := by
+  induction targets generalizing acc with
+  | nil => rfl
+  | cons target targets ih =>
+    simp only [List.foldl_cons]
+    exact ih.trans (predPush_size n source acc target)
+
+theorem predList_preserve {n source node parent : Nat} {acc : Array (List Nat)} (targets : List Nat)
+    (member : parent ∈ acc[node]?.getD []) :
+    parent ∈ (targets.foldl (predPush n source) acc)[node]?.getD [] := by
+  induction targets generalizing acc with
+  | nil => exact member
+  | cons target targets ih =>
+    exact ih (predPush_preserve member)
+
+theorem predList_add {n source target : Nat} {acc : Array (List Nat)} (targets : List Nat)
+    (size : acc.size = n) (bound : target < n) (member : target ∈ targets) :
+    source ∈ (targets.foldl (predPush n source) acc)[target]?.getD [] := by
+  induction targets generalizing acc with
+  | nil => simp at member
+  | cons first targets ih =>
+    simp only [List.foldl_cons]
+    rcases List.mem_cons.mp member with equal | member
+    · subst first
+      exact predList_preserve targets (predPush_add size bound)
+    · exact ih ((predPush_size n source acc first).trans size) member
+
+theorem predUpdate_size (fn : Func) (acc : Array (List Nat)) (source : Nat) :
+    (predUpdate fn acc source).size = acc.size := by
+  unfold predUpdate
+  split
+  · rfl
+  · exact predList_size _
+
+theorem predUpdate_preserve {fn : Func} {acc : Array (List Nat)} {node parent source : Nat}
+    (member : parent ∈ acc[node]?.getD []) : parent ∈ (predUpdate fn acc source)[node]?.getD [] := by
+  unfold predUpdate
+  split
+  · exact member
+  · exact predList_preserve _ member
+
+theorem predUpdate_add {fn : Func} {acc : Array (List Nat)} {block : Goose.GIR.Block} {source target : Nat}
+    (size : acc.size = fn.blocks.size) (bound : target < fn.blocks.size)
+    (found : fn.blocks[source]? = some block) (successor : target ∈ block.terms.flatMap Term.successors) :
+    source ∈ (predUpdate fn acc source)[target]?.getD [] := by
+  unfold predUpdate
+  rw [found]
+  exact predList_add _ size bound successor
+
+theorem predScan_preserve {fn : Func} {acc : Array (List Nat)} {target parent : Nat} (sources : List Nat)
+    (member : parent ∈ acc[target]?.getD []) :
+    parent ∈ (sources.foldl (predUpdate fn) acc)[target]?.getD [] := by
+  induction sources generalizing acc with
+  | nil => exact member
+  | cons source sources ih => exact ih (predUpdate_preserve member)
+
+theorem predScan_add {fn : Func} {acc : Array (List Nat)} {block : Goose.GIR.Block} {source target : Nat}
+    (sources : List Nat) (size : acc.size = fn.blocks.size) (bound : target < fn.blocks.size)
+    (found : fn.blocks[source]? = some block) (successor : target ∈ block.terms.flatMap Term.successors)
+    (member : source ∈ sources) : source ∈ (sources.foldl (predUpdate fn) acc)[target]?.getD [] := by
+  induction sources generalizing acc with
+  | nil => simp at member
+  | cons first sources ih =>
+    simp only [List.foldl_cons]
+    rcases List.mem_cons.mp member with equal | member
+    · subst first
+      exact predScan_preserve sources (predUpdate_add size bound found successor)
+    · exact ih ((predUpdate_size fn acc first).trans size) member
+
+theorem predecessors_successor {fn : Func} {block : Goose.GIR.Block} {source target : Nat}
+    (found : fn.blocks[source]? = some block) (bound : target < fn.blocks.size)
+    (successor : target ∈ block.terms.flatMap Term.successors) :
+    source ∈ (predecessors fn)[target]?.getD [] := by
+  have sourceBound := (Array.getElem?_eq_some_iff.mp found).1
+  exact predScan_add (List.range fn.blocks.size) (by simp) bound found successor
+    (List.mem_range.mpr sourceBound)
+
+theorem predecessors_instAt {fn : Func} {pt : Pt} {term : Term} {target : Nat}
+    (instruction : instAt fn pt = some (.term term)) (bound : target < fn.blocks.size)
+    (successor : target ∈ term.successors) : pt.1 ∈ (predecessors fn)[target]?.getD [] := by
+  unfold instAt at instruction
+  cases found : fn.blocks[pt.1]? with
+  | none => simp [found] at instruction
+  | some block =>
+    simp only [found, Option.bind_some] at instruction
+    apply predecessors_successor found bound
+    exact List.mem_flatMap.mpr ⟨term,
+      List.mem_filterMap.mpr ⟨.term term, List.mem_of_getElem? instruction, rfl⟩, successor⟩
+
 end Goose.Evidence
