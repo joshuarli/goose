@@ -621,4 +621,178 @@ theorem protected_exit_replacement_frame (origin : OriginId) (id replacementId :
   exact ⟨runtime_protected_cleanup_storage origin afterOperands id replacementId,
     runtime_protected_cleanup_stdout origin afterOperands id replacementId⟩
 
+
+theorem runtime_bind_frames_objects (action : EvalM α) (remaining : α → EvalM β)
+    (first : ∀ state, (stepState (action state)).objects = state.objects)
+    (next : ∀ value state, (stepState (remaining value state)).objects = state.objects)
+    (state : ExecutionState) :
+    (stepState ((action >>= remaining) state)).objects = state.objects := by
+  have before := first state
+  cases evaluated : action state with
+  | ok value after =>
+      simp only [bind, evaluated]
+      exact (next value after).trans (by simpa [evaluated,stepState] using before)
+  | stop reason after => simpa [bind,evaluated,stepState] using before
+  | escape address values after => simpa [bind,evaluated,stepState] using before
+  | jump target kind after => simpa [bind,evaluated,stepState] using before
+
+theorem runtime_get_destination_frames_objects (id : DestinationId) (state : ExecutionState) :
+    (stepState (getDestination id state)).objects = state.objects := by
+  simp only [getDestination,EvalM.get,bind]
+  cases state.construction.destinations[id]? <;> rfl
+
+theorem runtime_receiving_layout_frames_objects (layout : LayoutEnv) (ty : Goose.Construct.Ty)
+    (state : ExecutionState) :
+    (stepState (receivingLayout layout ty state)).objects = state.objects := by
+  cases ty <;> simp only [receivingLayout]
+  all_goals try rfl
+  rename_i element capacity
+  cases fixedByteSize? layout element <;> rfl
+
+theorem runtime_land_carrier_frames_objects (origin : OriginId) (carrier : Goose.Construct.Carrier)
+    (state : ExecutionState) :
+    (stepState (landCarrier origin carrier state)).objects = state.objects := by
+  cases carrier with
+  | register value => rfl
+  | completed id =>
+      apply runtime_bind_frames_objects (getDestination id)
+      · exact runtime_get_destination_frames_objects id
+      · intro destination current
+        cases destination.use with
+        | receiver => rfl
+        | child owner => rfl
+        | replacement superseded => exact runtime_lift_frames_objects origin (landExitReplacement id) current
+
+
+
+theorem runtime_finish_channel_frames_objects (layout : LayoutEnv) (origin : OriginId)
+    (carrier : Goose.Construct.Carrier) (result : Goose.Construct.Ty) (state : ExecutionState) :
+    (stepState (finishChannel layout origin carrier result state)).objects = state.objects := by
+  cases carrier with
+  | register value => rfl
+  | completed id =>
+      apply runtime_bind_frames_objects (getDestination id)
+      · exact runtime_get_destination_frames_objects id
+      · intro destination current
+        split
+        · dsimp only
+          simpa [Bool.not_true,Bool.and_false] using
+            runtime_lift_frames_objects origin (adaptDestinationType id result) current
+        · dsimp only
+          by_cases header : (destination.layout == .packed && destination.capability.request == .value) = true
+          · simp only [Bool.not_false,Bool.and_true,header,↓reduceIte]
+            apply runtime_bind_frames_objects (liftConstruction origin (removeConstructionHeader id))
+            · exact runtime_lift_frames_objects origin (removeConstructionHeader id)
+            · intro _ middle
+              apply runtime_bind_frames_objects (receivingLayout layout destination.capability.layout)
+              · exact runtime_receiving_layout_frames_objects layout destination.capability.layout
+              · intro receiving finalState
+                apply runtime_bind_frames_objects (liftConstruction origin (restoreReceivingLayout id receiving))
+                · exact runtime_lift_frames_objects origin (restoreReceivingLayout id receiving)
+                · intro _ after
+                  exact runtime_lift_frames_objects origin (adaptDestinationType id result) after
+          · simpa [Bool.not_false,Bool.and_true,header] using
+              runtime_lift_frames_objects origin (adaptDestinationType id result) current
+
+
+private theorem runtime_forin_loop_frames_objects (values : List α)
+    (body : (value : α) → value ∈ values → β → EvalM (ForInStep β))
+    (frames : ∀ value member accumulator state,
+      (stepState (body value member accumulator state)).objects = state.objects)
+    (remaining : List α) (accumulator : β) (inside : ∃ earlier, earlier ++ remaining = values)
+    (state : ExecutionState) :
+    (stepState (List.forIn'.loop values body remaining accumulator inside state)).objects = state.objects := by
+  induction remaining generalizing accumulator state with
+  | nil => rfl
+  | cons value rest ih =>
+      simp only [List.forIn'.loop]
+      apply runtime_bind_frames_objects
+      · intro current
+        exact frames _ _ _ current
+      · intro result current
+        cases result with
+        | done accumulator => rfl
+        | yield accumulator => exact ih _ _ _
+
+theorem runtime_foreach_frames_objects (values : List α) (body : α → EvalM Unit)
+    (frames : ∀ value state, (stepState (body value state)).objects = state.objects)
+    (state : ExecutionState) :
+    (stepState ((do for value in values do body value) state)).objects = state.objects := by
+  apply runtime_bind_frames_objects
+  · intro current
+    apply runtime_forin_loop_frames_objects
+    intro value member accumulator current
+    apply runtime_bind_frames_objects (body value)
+    · exact frames value
+    · intro _ after; rfl
+  · intro _ after; rfl
+
+theorem runtime_land_carriers_frames_objects (origin : OriginId) (carriers : List Goose.Construct.Carrier)
+    (state : ExecutionState) :
+    (stepState (landCarriers origin carriers state)).objects = state.objects :=
+  runtime_foreach_frames_objects carriers (landCarrier origin) (runtime_land_carrier_frames_objects origin) state
+
+
+theorem runtime_finish_channels_frames_objects (layout : LayoutEnv) (resultTypes : List Goose.Construct.Ty)
+    (carriers : List Goose.Construct.Carrier) (origin : OriginId) (state : ExecutionState) :
+    (stepState (finishChannels layout resultTypes carriers origin state)).objects = state.objects := by
+  apply runtime_bind_frames_objects (landCarriers origin carriers)
+  · exact runtime_land_carriers_frames_objects origin carriers
+  · intro _ current
+    split
+    · rfl
+    · apply runtime_foreach_frames_objects
+      intro pair after
+      exact runtime_finish_channel_frames_objects layout origin pair.1 pair.2 after
+
+theorem runtime_activation_landing_frames_objects (layout : LayoutEnv) (activation : RuntimeActivation)
+    (exitTarget : ExitTarget) (resultTypes : List Goose.Construct.Ty) (origin : OriginId)
+    (action : EvalM (List Goose.Construct.Carrier)) (state afterOperands : ExecutionState)
+    (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape ⟨activation.act,exitTarget⟩ carriers afterOperands) :
+    (stepState (finishActivation layout activation resultTypes origin action state)).objects =
+      afterOperands.objects := by
+  have framed := runtime_finish_channels_frames_objects layout resultTypes carriers origin
+    { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) }
+  simp only [finishActivation,escaped,beq_self_eq_true,↓reduceIte]
+  cases completed : finishChannels layout resultTypes carriers origin
+    { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) } <;>
+    simpa [completed,stepState] using framed
+
+
+theorem runtime_drop_activations_frames_objects (discarded : List RuntimeActivation) (state : ExecutionState) :
+    (runtimeDropActivations discarded state).objects = state.objects := by
+  induction discarded generalizing state with
+  | nil => rfl
+  | cons activation rest ih =>
+      simpa [runtimeDropActivations,List.foldl_cons] using
+        ih { state with activations := state.activations.filter (fun current => current.act != activation.act) }
+
+theorem runtime_nearest_exit_preserves_outside (layout : LayoutEnv)
+    (results : ImplId → List Goose.Construct.Ty) (origin : OriginId)
+    (target : NonlocalTarget) (exitTarget : ExitTarget) (stack : List RuntimeActivation)
+    (catcher : RuntimeActivation) (distinct : (stack.map (·.act)).Nodup)
+    (selected : selectTarget? target stack = some catcher)
+    (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (action : EvalM (List Goose.Construct.Carrier)) (state afterOperands : ExecutionState)
+    (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape ⟨catcher.act,exitTarget⟩ carriers afterOperands) :
+    ∃ discarded outer, stack = discarded ++ catcher :: outer ∧
+      target.contains catcher.implementation = true ∧
+      (∀ activation ∈ discarded, target.contains activation.implementation = false) ∧
+      (stepState (finishActivation layout catcher (results catcher.implementation) origin
+        (runtimeDiscardHandlers layout results origin discarded (runtimeWithScopes scopes action)) state)).objects =
+      (runtimeReleaseScopes scopes afterOperands).objects := by
+  obtain ⟨discarded,outer,shape,member,excluded,dispatched,_,_,_⟩ :=
+    runtime_nearest_scope_dispatch layout results origin target exitTarget stack catcher distinct selected
+      scopes action state afterOperands carriers escaped
+  refine ⟨discarded,outer,shape,member,excluded,?_⟩
+  rw [dispatched]
+  have framed := runtime_activation_landing_frames_objects layout catcher exitTarget
+    (results catcher.implementation) origin
+    (fun _ => .escape ⟨catcher.act,exitTarget⟩ carriers
+      (runtimeDropActivations discarded (runtimeReleaseScopes scopes afterOperands)))
+    state (runtimeDropActivations discarded (runtimeReleaseScopes scopes afterOperands)) carriers rfl
+  exact framed.trans (runtime_drop_activations_frames_objects discarded (runtimeReleaseScopes scopes afterOperands))
+
 end Goose.Proofs.Exit
