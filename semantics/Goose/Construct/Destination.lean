@@ -75,6 +75,9 @@ inductive ConstructionResult (α : Type)
   | ok (value : α) (state : ConstructionState)
   | fault (kind : ConstructionFault) (state : ConstructionState)
 
+def ConstructionResult.finalState : ConstructionResult α → ConstructionState
+  | .ok _ state | .fault _ state => state
+
 abbrev ConstructionM (α : Type) := ConstructionState → ConstructionResult α
 
 namespace ConstructionM
@@ -409,27 +412,73 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   emit (.begin id)
   pure id
 
-def abandonPreservingExit (id replacementId : DestinationId) : ConstructionM Unit := do
-  let replacement ← lookupDestination replacementId
+def protectedExitDiscarded (state : ConstructionState) (id replacementId : DestinationId) :
+    Except ConstructionFault (List PendingDestination) := do
+  let some replacement := state.destinations[replacementId]? | throw .destination
   let supersededId ← match replacement.use, replacement.progress with
     | .replacement supersededId, .built _ => pure supersededId
-    | _, _ => ConstructionM.fail .protocol
-  let superseded ← lookupDestination supersededId
+    | _, _ => throw .protocol
+  let some superseded := state.destinations[supersededId]? | throw .destination
   match superseded.progress with
-  | .exiting _ expected => if expected != replacementId then ConstructionM.fail .ownership
-  | _ => ConstructionM.fail .protocol
-  let destination ← lookupDestination id
-  let state ← ConstructionM.get
+  | .exiting _ expected => if expected != replacementId then throw .ownership
+  | _ => throw .protocol
+  let some destination := state.destinations[id]? | throw .destination
   if !active destination || destination.storage != replacement.storage ||
       destination.capability.start > replacement.capability.start ||
       !descendantOf state.destinations supersededId id || id == replacementId then
-    ConstructionM.fail .ownership
-  let discarded := state.destinations.toList.reverse.filter fun destination =>
+    throw .ownership
+  pure (state.destinations.toList.reverse.filter fun destination =>
     destination.capability.id != replacementId &&
-      descendantOf state.destinations id destination.capability.id && active destination
-  for destination in discarded do
-    replaceDestination destination.capability.id { destination with progress := .abandoned }
-    emit (.abandon destination.capability.id)
+      descendantOf state.destinations id destination.capability.id && active destination)
+
+private def protectedAbandonment : List PendingDestination → ConstructionM Unit
+  | [] => pure ()
+  | destination :: rest => fun state =>
+      let id := destination.capability.id
+      if id < state.destinations.size then
+        protectedAbandonment rest { state with
+          destinations := state.destinations.set! id { destination with progress := .abandoned }
+          events := state.events ++ [.abandon id] }
+      else .fault .destination state
+
+private theorem protectedAbandonment_storage (discarded : List PendingDestination) (state : ConstructionState) :
+    (protectedAbandonment discarded state).finalState.storage = state.storage := by
+  induction discarded generalizing state with
+  | nil => rfl
+  | cons destination rest ih =>
+      simp only [protectedAbandonment]
+      split
+      · exact ih _
+      · rfl
+
+private theorem protectedAbandonment_stdout (discarded : List PendingDestination) (state : ConstructionState) :
+    (protectedAbandonment discarded state).finalState.stdout = state.stdout := by
+  induction discarded generalizing state with
+  | nil => rfl
+  | cons destination rest ih =>
+      simp only [protectedAbandonment]
+      split
+      · exact ih _
+      · rfl
+
+def abandonPreservingExit (id replacementId : DestinationId) : ConstructionM Unit := do
+  match protectedExitDiscarded (← ConstructionM.get) id replacementId with
+  | .error fault => ConstructionM.fail fault
+  | .ok discarded => protectedAbandonment discarded
+
+theorem abandonPreservingExit_storage (state : ConstructionState) (id replacementId : DestinationId) :
+    (abandonPreservingExit id replacementId state).finalState.storage = state.storage := by
+  simp only [abandonPreservingExit, ConstructionM.get, bind]
+  cases checked : protectedExitDiscarded state id replacementId with
+  | error fault => rfl
+  | ok discarded => exact protectedAbandonment_storage discarded state
+
+theorem abandonPreservingExit_stdout (state : ConstructionState) (id replacementId : DestinationId) :
+    (abandonPreservingExit id replacementId state).finalState.stdout = state.stdout := by
+  simp only [abandonPreservingExit, ConstructionM.get, bind]
+  cases checked : protectedExitDiscarded state id replacementId with
+  | error fault => rfl
+  | ok discarded => exact protectedAbandonment_stdout discarded state
 
 def acknowledgeAbandonment (id : DestinationId) : ConstructionM Unit := do
   let destination ← lookupDestination id

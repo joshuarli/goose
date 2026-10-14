@@ -1,5 +1,5 @@
 import Goose.Construct.Exit
-import Goose.Construct.Eval
+import Goose.Construct.Runtime
 import Goose.Proofs.Memory
 
 namespace Goose.Proofs.Exit
@@ -215,5 +215,58 @@ theorem runtime_release_scope_construction (activation : RuntimeActivation) (sco
 theorem runtime_release_scope_stdout (activation : RuntimeActivation) (scope : Nat)
     (scopeInst : ScopeInst) (state : ExecutionState) :
     (releaseScopeState activation scope scopeInst state).construction.stdout = state.construction.stdout := rfl
+
+
+def stepState : ExecutionStep α → ExecutionState
+  | .ok _ state | .stop _ state | .escape _ _ state | .jump _ _ state => state
+
+theorem runtime_lift_frames_objects (origin : OriginId) (action : ConstructionM α) (state : ExecutionState) :
+    (stepState (liftConstruction origin action state)).objects = state.objects := by
+  unfold liftConstruction
+  cases action state.construction <;> rfl
+
+theorem runtime_protected_cleanup_storage (origin : OriginId) (state : ExecutionState)
+    (id replacementId : DestinationId) :
+    (stepState (liftConstruction origin (abandonPreservingExit id replacementId) state)).construction.storage =
+      state.construction.storage := by
+  have preserved := abandonPreservingExit_storage state.construction id replacementId
+  unfold liftConstruction
+  cases result : abandonPreservingExit id replacementId state.construction <;>
+    simpa [result, ConstructionResult.finalState, stepState] using preserved
+
+theorem runtime_protected_cleanup_stdout (origin : OriginId) (state : ExecutionState)
+    (id replacementId : DestinationId) :
+    (stepState (liftConstruction origin (abandonPreservingExit id replacementId) state)).construction.stdout =
+      state.construction.stdout := by
+  have preserved := abandonPreservingExit_stdout state.construction id replacementId
+  unfold liftConstruction
+  cases result : abandonPreservingExit id replacementId state.construction <;>
+    simpa [result, ConstructionResult.finalState, stepState] using preserved
+
+def runtimeReleaseScopes (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (state : ExecutionState) : ExecutionState :=
+  scopes.foldl (fun current (activation,scope,scopeInst) => releaseScopeState activation scope scopeInst current) state
+
+theorem runtime_unwind_construction (scopes : List (RuntimeActivation × Nat × ScopeInst)) (state : ExecutionState) :
+    (runtimeReleaseScopes scopes state).construction = state.construction := by
+  induction scopes generalizing state with
+  | nil => rfl
+  | cons scope rest ih =>
+      simpa [runtimeReleaseScopes, List.foldl_cons, releaseScopeState] using
+        ih (releaseScopeState scope.1 scope.2.1 scope.2.2 state)
+
+theorem runtime_unwind_outside (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (state : ExecutionState) (entry : RootInst × Value)
+    (outside : ∀ scope ∈ scopes, (runtimeScopeRoots scope.1 scope.2.1 scope.2.2).contains entry.1 = false) :
+    entry ∈ (runtimeReleaseScopes scopes state).objects ↔ entry ∈ state.objects := by
+  induction scopes generalizing state with
+  | nil => rfl
+  | cons scope rest ih =>
+      change entry ∈ (runtimeReleaseScopes rest (releaseScopeState scope.1 scope.2.1 scope.2.2 state)).objects ↔
+        entry ∈ state.objects
+      rw [show entry ∈ (runtimeReleaseScopes rest (releaseScopeState scope.1 scope.2.1 scope.2.2 state)).objects ↔
+        entry ∈ (releaseScopeState scope.1 scope.2.1 scope.2.2 state).objects from
+        ih _ (fun s hs => outside s (by simp [hs]))]
+      exact runtime_release_scope_outside scope.1 scope.2.1 scope.2.2 state entry (outside scope (by simp))
 
 end Goose.Proofs.Exit
