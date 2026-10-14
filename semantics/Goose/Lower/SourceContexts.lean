@@ -2283,7 +2283,8 @@ private theorem firstPlaceSource {cfg : Cfg} {env : Env} {stmt : Stmt} {state : 
         (source.context.child rfl 0 (.place place) .place childAt
           (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
       child.context.mayShrink source.world.ownerP source.observation =
-        source.context.mayShrink source.world.ownerP source.observation := by
+        source.context.mayShrink source.world.ownerP source.observation ∧
+      child.mutable = mutable ∧ child.contents = contents := by
   let ec := source.context
   have phase : DemandNodeHasPhase (.place place) .place := by
     simp [DemandNodeHasPhase, DemandNode.phaseMatches]
@@ -2327,17 +2328,25 @@ private theorem firstPlaceSource {cfg : Cfg} {env : Env} {stmt : Stmt} {state : 
     access := (ec.child_accessMatches_iff rfl 0 (.place place) .place childAt phase _ _).mpr source.access,
     protection := may ▸ source.protection, observed := may ▸ source.observed,
     classified := source.classified, permission := source.permission, frame := input,
-    typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl, rfl, rfl, rfl, may⟩
+    typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl, rfl, rfl, rfl, may, rfl, rfl⟩
 
-private theorem assignedExpressionAt {cfg : Cfg} {env : Env} {state after : St}
-    {place : Place} {expr : Expr} {origin : OriginId}
-    (source : StmtSource cfg env (.assign place expr origin) state)
+private theorem afterPlaceExpression {cfg : Cfg} {env : Env} {state after : St}
+    {place : Place} {expr : Expr} {stmt : Stmt}
+    (source : StmtSource cfg env stmt state)
+    (placeAt : (DemandNode.statement stmt).child? 0 = some (.place place))
+    (expressionAt : (DemandNode.statement stmt).child? 1 = some (.expression expr))
+    (visible : ∀ active, (DemandNode.statement stmt).visibleForChild active 0 = active ∧
+      (DemandNode.statement stmt).visibleForChild active 1 = active)
+    (placeExpectation : ∀ access parent, (DemandNode.statement stmt).childExpectation? access parent 0 =
+      some ⟨parent.active, expr.variables ++ parent.future⟩)
+    (expressionExpectation : ∀ access parent, (DemandNode.statement stmt).childExpectation? access parent 1 =
+      some ⟨parent.active, parent.future⟩)
     (destination : PlaceSource cfg env place state)
     (typingEq : destination.typingEnv = source.typingEnv) (rootsEq : destination.rootsEnv = source.rootsEnv)
     (worldEq : destination.world = source.world) (observationEq : destination.observation = source.observation)
     (outputEq : destination.context.outputFuture =
       (source.context.child rfl 0 (.place place) .place
-        (by simp [DemandNode.child?, DemandNode.children])
+        placeAt
         (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture)
     (mayEq : destination.context.mayShrink source.world.ownerP source.observation =
       source.context.mayShrink source.world.ownerP source.observation)
@@ -2356,10 +2365,6 @@ private theorem assignedExpressionAt {cfg : Cfg} {env : Env} {state after : St}
   rw [worldEq, observationEq, mayEq] at observed
   have classified := result.classified
   rw [worldEq, observationEq] at classified
-  have placeAt : (DemandNode.statement (.assign place expr origin)).child? 0 = some (.place place) := by
-    simp [DemandNode.child?, DemandNode.children]
-  have expressionAt : (DemandNode.statement (.assign place expr origin)).child? 1 = some (.expression expr) := by
-    simp [DemandNode.child?, DemandNode.children]
   have phase : DemandNodeHasPhase (.expression expr) .expression := by simp [DemandNodeHasPhase, DemandNode.phaseMatches]
   let context := source.context.child rfl 1 (.expression expr) .expression expressionAt phase
   have input : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after context.inputFuture := by
@@ -2367,8 +2372,10 @@ private theorem assignedExpressionAt {cfg : Cfg} {env : Env} {state after : St}
     cases hcontext : source.context with
     | pilot profile active =>
       rw [hcontext] at frame
-      change Core.Sound.Frame _ _ _ _ _ _ active at frame
-      change Core.Sound.Frame _ _ _ _ _ _ (expr.variables ++ active)
+      change Core.Sound.Frame _ _ _ _ _ _ ((DemandNode.statement stmt).visibleForChild active 0) at frame
+      rw [(visible active).1] at frame
+      change Core.Sound.Frame _ _ _ _ _ _ (expr.variables ++ (DemandNode.statement stmt).visibleForChild active 1)
+      rw [(visible active).2]
       apply frame.changeFuture
       intro x member _
       have activeEq := source.active
@@ -2382,16 +2389,16 @@ private theorem assignedExpressionAt {cfg : Cfg} {env : Env} {state after : St}
       change Core.Sound.Frame _ _ _ _ _ _ (expr.variables ++ next.context.expected.frame.future)
       rw [first.expectedFrameEq, DemandNode.phaseFrame_future first.phaseFrameEq,
         DemandNode.childFrame_future first.childFrameEq (show
-          (DemandNode.statement (.assign place expr origin)).childExpectation? _
+          (DemandNode.statement stmt).childExpectation? _
             ⟨source.path, .expression, context.expected.frame.active, context.expected.frame.future, context.expected.frame.retained⟩ 0 =
             some ⟨context.expected.frame.active, expr.variables ++ context.expected.frame.future⟩ from by
-          simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.visibleForChild, placeAt])] at frame
+          exact placeExpectation _ _)] at frame
       rw [next.expectedFrameEq, DemandNode.phaseFrame_future next.phaseFrameEq,
         DemandNode.childFrame_future next.childFrameEq (show
-          (DemandNode.statement (.assign place expr origin)).childExpectation? _
+          (DemandNode.statement stmt).childExpectation? _
             ⟨source.path, .expression, context.expected.frame.active, context.expected.frame.future, context.expected.frame.retained⟩ 1 =
             some ⟨context.expected.frame.active, context.expected.frame.future⟩ from by
-          simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.visibleForChild, expressionAt])]
+          exact expressionExpectation _ _)]
       exact frame
   have may : context.mayShrink source.world.ownerP source.observation = source.context.mayShrink source.world.ownerP source.observation := by
     funext root
@@ -2402,7 +2409,7 @@ private theorem assignedExpressionAt {cfg : Cfg} {env : Env} {state after : St}
     rootsEnv := source.rootsEnv, typingStart := typingStart, typingEnd := typingEnd, ty := ty,
     rootsStart := rootsStart, rootsEnd := rootsEnd, roots := roots,
     active := source.context.child_activeMatches rfl 1 (.expression expr) .expression expressionAt phase
-      source.typingEnv source.typingEnv source.active (by simp [DemandNode.visibleForChild]),
+      source.typingEnv source.typingEnv source.active (by intro x; rw [(visible source.typingEnv.visible).2]),
     access := (source.context.child_accessMatches_iff rfl 1 (.expression expr) .expression expressionAt phase _ _).mpr source.access,
     protection := may ▸ source.protection, observed := may ▸ observed, classified := classified,
     permission := source.permission, frame := input, typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl, rfl, rfl⟩
@@ -2435,7 +2442,7 @@ theorem StmtSource.assignChildren {cfg : Cfg} {env : Env} {state : St}
     exact writeEffects.trans (finalEffects.trans source.effects)
   have placeAt : (DemandNode.statement (.assign place expr origin)).child? 0 = some (.place place) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq⟩ :=
+  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _⟩ :=
     firstPlaceSource source place placeAt (by simp [DemandNode.visibleForChild])
       (by intro x member; simp [Stmt.variables, member])
       (fun parent => expr.variables ++ parent.future)
@@ -2445,8 +2452,86 @@ theorem StmtSource.assignChildren {cfg : Cfg} {env : Env} {state : St}
       ((rpExpr_mono exprRooted).2.trans effects)
   refine ⟨destination, typingEq, rootsEq, worldEq, observationEq, ?_⟩
   intro fuel location after done
-  obtain ⟨child, childTyping, childRoots, childWorld, childObservation, childTy⟩ := assignedExpressionAt source destination
+  obtain ⟨child, childTyping, childRoots, childWorld, childObservation, childTy⟩ := afterPlaceExpression source placeAt
+    (by simp [DemandNode.child?, DemandNode.children])
+    (by intro active; simp [DemandNode.visibleForChild])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.child?, DemandNode.children, DemandNode.visibleForChild])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.child?, DemandNode.children, DemandNode.visibleForChild]) destination
     typingEq rootsEq worldEq observationEq outputEq mayEq placeEnd exprEnd ty placeFinish exprFinish exprRoots exprTyped exprRooted effects fuel location done
   exact ⟨child, childTyping, childRoots, childWorld, childObservation, childTy.trans destinationTy.symm⟩
+
+theorem StmtSource.clearChild {cfg : Cfg} {env : Env} {state : St} {place : Place} {origin : OriginId}
+    (source : StmtSource cfg env (.clear place origin) state) :
+    ∃ child : PlaceSource cfg env place state, ∃ element : Ty,
+      child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
+      child.world = source.world ∧ child.observation = source.observation ∧
+      child.ty.ownerElem? = some element ∧ child.contents = true := by
+  have typed := source.typed
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨start, _, _, ty, mutable, contents, placeEnd, placeTyped, element, elementEnd, elementTyped, writable, _, _⟩ := typed
+  have contentsEq : contents = true := by simpa using writable
+  have elementEq := (ownerElement_ok _ _ _ _ _ elementTyped).2.1
+  have rooted := source.rooted
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨roots, placeFinish, placeRooted, readFinish, reads, shrinks⟩ := rooted
+  have effects := (PMono.addReads _ _ _ _ reads).2.trans ((PMono.addShrinks _ _ _ _ shrinks).2.trans source.effects)
+  have placeAt : (DemandNode.statement (.clear place origin)).child? 0 = some (.place place) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨child, typingEq, rootsEq, typeEq, worldEq, observationEq, _, _, _, contentsEqChild⟩ :=
+    firstPlaceSource source place placeAt (by simp [DemandNode.visibleForChild])
+      (by simp [Stmt.variables]) (fun parent => parent.future)
+      (by intro parent x member; exact List.mem_append_right _ member)
+      (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, placeAt])
+      start placeEnd ty mutable contents source.rootsStart placeFinish roots placeTyped placeRooted effects
+  exact ⟨child, element, typingEq, rootsEq, worldEq, observationEq, by rw [typeEq]; exact elementEq, contentsEqChild.trans contentsEq⟩
+
+theorem StmtSource.popNChildren {cfg : Cfg} {env : Env} {state : St}
+    {place : Place} {expr : Expr} {origin : OriginId}
+    (source : StmtSource cfg env (.popN place expr origin) state) :
+    ∃ destination : PlaceSource cfg env place state, ∃ element : Ty,
+      destination.typingEnv = source.typingEnv ∧ destination.rootsEnv = source.rootsEnv ∧
+      destination.world = source.world ∧ destination.observation = source.observation ∧
+      destination.ty.ownerElem? = some element ∧ destination.contents = true ∧
+      ∀ fuel location after, evalPlace fuel cfg env place state = .ok location after →
+        ∃ child : ExprSource cfg env expr after, ∃ integer : IntTy,
+          child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
+          child.world = source.world ∧ child.observation = source.observation ∧ child.ty = .int integer := by
+  have typed := source.typed
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨start, _, _, ty, mutable, contents, placeEnd, placeTyped, element, elementEnd, elementTyped,
+    exprTy, exprEnd, exprTyped, integer, integerEq, writable, _, _⟩ := typed
+  have elementEq := (ownerElement_ok _ _ _ _ _ elementTyped).2.1
+  have contentsEq : contents = true := by simpa using writable
+  have rooted := source.rooted
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨placeRoots, placeFinish, placeRooted, exprRoots, exprFinish, exprRooted, readFinish, reads,
+    shrinkFinish, shrinks, aborts⟩ := rooted
+  have effects := (PMono.addReads _ _ _ _ reads).2.trans
+    ((PMono.addShrinks _ _ _ _ shrinks).2.trans ((PMono.noteAborts _ _ _ aborts).2.trans source.effects))
+  have placeAt : (DemandNode.statement (.popN place expr origin)).child? 0 = some (.place place) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _, destinationContents⟩ :=
+    firstPlaceSource source place placeAt (by simp [DemandNode.visibleForChild])
+      (by intro x member; simp [Stmt.variables, member])
+      (fun parent => expr.variables ++ parent.future)
+      (by intro parent x member; simpa [Stmt.variables, List.append_assoc] using List.mem_append_right place.variables member)
+      (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, placeAt])
+      start placeEnd ty mutable contents source.rootsStart placeFinish placeRoots placeTyped placeRooted
+      ((rpExpr_mono exprRooted).2.trans effects)
+  refine ⟨destination, element, typingEq, rootsEq, worldEq, observationEq,
+    by rw [destinationTy]; exact elementEq, destinationContents.trans contentsEq, ?_⟩
+  intro fuel location after done
+  obtain ⟨child, childTyping, childRoots, childWorld, childObservation, childTy⟩ := afterPlaceExpression source placeAt
+    (by simp [DemandNode.child?, DemandNode.children])
+    (by intro active; simp [DemandNode.visibleForChild])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.child?, DemandNode.children, DemandNode.visibleForChild])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.child?, DemandNode.children, DemandNode.visibleForChild])
+    destination typingEq rootsEq worldEq observationEq outputEq mayEq elementEnd exprEnd _
+    placeFinish exprFinish exprRoots exprTyped exprRooted effects fuel location done
+  exact ⟨child, _, childTyping, childRoots, childWorld, childObservation, childTy.trans integerEq⟩
 
 end Goose.Lower

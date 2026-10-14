@@ -405,4 +405,51 @@ example (profile : NumProfile) :
   change Except.ok (.bool, child.typingStart) = Except.ok (child.ty, child.typingEnd) at typed
   exact (congrArg Prod.fst (Except.ok.inj typed)).symm
 
+def ownerImplementation (statement : Stmt) : Impl :=
+  { initImpl with body := .mk 0 [statement] none }
+
+def ownerModule (statement : Stmt) : Module :=
+  { files := #["owner-source.goose"], types := #[],
+    globals := #[⟨"owner", .growshrink .bool, .mutable, .arrLit (.growshrink .bool) [.bool true], 0⟩],
+    impls := #[ownerImplementation statement], contexts := #[initContext], entry := 0,
+    origins := #[⟨0, 1, "expr"⟩], profile := .shrink }
+
+def afterOwnerGlobals : St :=
+  { St.initial with store := Store.empty.introduce (.global 0) (.resizable .bool #[.bool true]), nextAct := 1 }
+
+#guard match Core.validate (ownerModule (.clear (.global 0) 0)) with | .ok _ => true | .error _ => false
+#guard match Core.validate (ownerModule (.popN (.global 0) (.lit .i32 1) 0)) with | .ok _ => true | .error _ => false
+
+private theorem ownerStatement (profile : NumProfile) (statement : Stmt)
+    (accepted : Core.validate (ownerModule statement) = .ok ()) :
+    ∃ source : StmtSource ⟨profile, ownerModule statement⟩ ⟨#[], 1, [(0, 0)], 1⟩ statement
+      { afterOwnerGlobals with nextAct := 2, nextScope := 1 }, True := by
+  have globalsDone : initGlobals 4 ⟨profile, ownerModule statement⟩ [0] St.initial = .ok () afterOwnerGlobals := by cbv
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, body, _, _⟩ :=
+    acceptedEntryAfterGlobals (cfg := ⟨profile, ownerModule statement⟩) accepted 4 globalsDone
+  have contextEq : ctx = initContext := by simpa [ownerModule] using contextAt.symm
+  subst ctx
+  have implEq : impl = ownerImplementation statement := by simpa [ownerModule, initContext] using implementationAt.symm
+  subst impl
+  obtain ⟨statements, _, _, _, _⟩ := body.enter
+  obtain ⟨head, _, _, _⟩ := statements.split
+  exact ⟨head, trivial⟩
+
+example (profile : NumProfile)
+    (accepted : Core.validate (ownerModule (.clear (.global 0) 0)) = .ok ()) :
+    ∃ child : PlaceSource ⟨profile, ownerModule (.clear (.global 0) 0)⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.global 0)
+      { afterOwnerGlobals with nextAct := 2, nextScope := 1 }, child.contents = true := by
+  obtain ⟨source, _⟩ := ownerStatement profile (.clear (.global 0) 0) accepted
+  obtain ⟨child, element, _, _, _, _, _, contents⟩ := source.clearChild
+  exact ⟨child, contents⟩
+
+example (profile : NumProfile)
+    (accepted : Core.validate (ownerModule (.popN (.global 0) (.lit .i32 1) 0)) = .ok ()) :
+    ∃ child : ExprSource ⟨profile, ownerModule (.popN (.global 0) (.lit .i32 1) 0)⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.lit .i32 1)
+      { afterOwnerGlobals with nextAct := 2, nextScope := 1 }, ∃ integer, child.ty = .int integer := by
+  obtain ⟨source, _⟩ := ownerStatement profile (.popN (.global 0) (.lit .i32 1) 0) accepted
+  obtain ⟨destination, element, _, _, _, _, _, _, children⟩ := source.popNChildren
+  obtain ⟨child, integer, _, _, _, _, typeEq⟩ := children 1 ⟨.global 0, []⟩ _ (by cbv)
+  exact ⟨child, integer, typeEq⟩
+
 end Goose.Lower.SourceContextChecks
