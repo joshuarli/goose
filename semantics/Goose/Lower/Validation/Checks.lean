@@ -80,6 +80,29 @@ def readonlySliceLocal : Module :=
     impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
     entry := 0, origins := #[⟨0, 1, "test"⟩] }
 
+def specializedSummary : Module :=
+  let summary : SummaryAnn := .known ⟨[.global 0], [], [], [], [], false, true⟩
+  let receiver : Impl :=
+    { name := "receiver", params := #[⟨0, .byRef⟩], results := #[],
+      vars := #[⟨"p", .ref .mutable (.int .i64), .immutable, 0, 0⟩],
+      body := .mk 0 [.print [.expr (.read (.deref (.read (.var 0))))] 0] none,
+      summary }
+  let main : Impl :=
+    { emptyEntry with
+      body := .mk 0 [.expr (.call 1 [.byRef .mutable (.global 0)] 0) 0] none,
+      summary }
+  { files := #["specialized-summary.goose"], types := #[],
+    globals := #[⟨"g", .int .i64, .mutable, .lit .i64 1, 0⟩],
+    impls := #[main, receiver],
+    contexts := #[⟨0, "main", [], [], []⟩,
+      ⟨1, "receiver", [(0, [.global 0])], [], []⟩],
+    entry := 0, origins := #[⟨0, 1, "test"⟩] }
+
+def specializedParameterSummary : Module :=
+  { specializedSummary with
+    impls := specializedSummary.impls.modify 1 fun impl =>
+      { impl with summary := .known ⟨[.param 0], [], [], [], [], false, true⟩ } }
+
 #guard match Core.validate parameterSlice, GIR.validate (lower parameterSlice) with
   | .ok _, .ok _ => true
   | _, _ => false
@@ -111,6 +134,16 @@ def readonlySliceLocal : Module :=
       "function main: slot 0 is initialized with a value of another type")].all fun (module, message) =>
   match Core.validate module, GIR.validate (lower module) with
   | .ok _, .error rejection => rejection.code == .v010 && rejection.message == message
+  | _, _ => false
+
+#guard match Core.validate specializedSummary, GIR.validate (lower specializedSummary) with
+  | .ok _, .error rejection => rejection.code == .v050 &&
+      rejection.message == "function receiver: receiver reads parameter 0, which its summary omits"
+  | _, _ => false
+
+#guard match Core.validate specializedParameterSummary,
+    GIR.validate (lower specializedParameterSummary) with
+  | .ok _, .ok _ => true
   | _, _ => false
 
 end Goose.Lower.Validation.Checks
