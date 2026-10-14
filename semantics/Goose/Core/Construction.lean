@@ -76,11 +76,11 @@ def NonlocalTarget.members (target : NonlocalTarget) : List ImplId :=
 def NonlocalTarget.contains (target : NonlocalTarget) (implementation : ImplId) : Bool :=
   target.members.contains implementation
 
-structure Destination where
+structure Destination (T : Type := Ty) where
   id : DestinationId
   receiver : Loc
-  layout : Ty
-  logicalType : Ty
+  layout : T
+  logicalType : T
   request : ConstructionRequest
   start : Nat
   owner : ActId

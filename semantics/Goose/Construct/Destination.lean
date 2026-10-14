@@ -1,4 +1,4 @@
-import Goose.Core.Construction
+import Goose.Construct.Syntax
 
 namespace Goose.Construct
 open Goose.Core
@@ -18,6 +18,7 @@ inductive DestinationProgress
   | open (count : Nat)
   | suspended (count : Nat) (child : DestinationId)
   | built (count : Nat)
+  | exiting (count : Nat) (replacement : DestinationId)
   | published (count : Nat)
   | attached (count : Nat)
   | abandoned
@@ -26,10 +27,11 @@ inductive DestinationProgress
 inductive DestinationUse
   | receiver
   | child (parent : DestinationId)
+  | replacement (superseded : DestinationId)
   deriving DecidableEq, Repr
 
 structure PendingDestination where
-  capability : Destination
+  capability : Core.Destination Ty
   storage : StorageId
   layout : ReceivingLayout
   use : DestinationUse
@@ -121,10 +123,10 @@ private def available (layout : ReceivingLayout) (storage : ReceivingStorage) (c
 
 private def active (destination : PendingDestination) : Bool :=
   match destination.progress with
-  | .open _ | .suspended _ _ | .built _ => true
+  | .open _ | .suspended _ _ | .built _ | .exiting _ _ => true
   | .published _ | .attached _ | .abandoned => false
 
-def openDestination (storageId : StorageId) (capability : Destination)
+def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
     (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId := do
   let storage ← lookupStorage storageId
   let state ← ConstructionM.get
@@ -240,16 +242,32 @@ def abandonDestination (id : DestinationId) : ConstructionM Unit := do
         { storage with bytes := storage.bytes.extract 0 destination.capability.start }
       replaceDestination id { destination with progress := .abandoned }
       emit (.abandon id)
-  | .suspended _ _ => ConstructionM.fail .protocol
+  | .suspended _ _ | .exiting _ _ => ConstructionM.fail .protocol
   | .published _ | .attached _ | .abandoned => ConstructionM.fail .protocol
+
+private def descendantOf (destinations : Array PendingDestination) (ancestor : DestinationId)
+    (id : DestinationId) : Bool := Id.run do
+  let mut current := id
+  for _ in [0:destinations.size] do
+    if current == ancestor then return true
+    let some destination := destinations[current]? | return false
+    match destination.use with
+    | .receiver | .replacement _ => return false
+    | .child parent => current := parent
+  return false
 
 def abandonTree (id : DestinationId) : ConstructionM Unit := do
   let parent ← lookupDestination id
-  if !active parent then ConstructionM.fail .protocol
+  match parent.progress with
+  | .open _ | .built _ | .suspended _ _ => pure ()
+  | .exiting _ _ | .published _ | .attached _ | .abandoned => ConstructionM.fail .protocol
   let state ← ConstructionM.get
   let descendants := state.destinations.toList.reverse.filter fun destination =>
-    destination.storage == parent.storage &&
-      id ≤ destination.capability.id && active destination
+    descendantOf state.destinations id destination.capability.id && active destination
+  for destination in descendants do
+    match destination.progress with
+    | .exiting _ _ => ConstructionM.fail .protocol
+    | _ => pure ()
   for destination in descendants do
     let current ← lookupDestination destination.capability.id
     match current.progress with
@@ -257,5 +275,64 @@ def abandonTree (id : DestinationId) : ConstructionM Unit := do
         replaceDestination current.capability.id { current with progress := .open count }
     | _ => pure ()
     abandonDestination destination.capability.id
+
+def openExitReplacement (supersededId : DestinationId) : ConstructionM DestinationId := do
+  let superseded ← lookupDestination supersededId
+  let count ← match superseded.progress with
+    | .open count | .built count | .suspended count _ => pure count
+    | .exiting _ _ | .published _ | .attached _ | .abandoned => ConstructionM.fail .protocol
+  let storage ← lookupStorage superseded.storage
+  let state ← ConstructionM.get
+  let id := state.destinations.size
+  let capability := { superseded.capability with id := id, start := storage.bytes.size }
+  let replacement : PendingDestination :=
+    ⟨capability, superseded.storage, superseded.layout, .replacement supersededId, .open 0⟩
+  ConstructionM.set { state with destinations := state.destinations.push replacement }
+  replaceDestination supersededId { superseded with progress := .exiting count id }
+  if hasPrefix superseded.layout superseded.capability.request then
+    replaceStorage superseded.storage { storage with bytes := storage.bytes ++ lengthPrefix }
+  emit (.begin id)
+  pure id
+
+def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := do
+  let replacement ← lookupDestination replacementId
+  let (supersededId, count) ← match replacement.use, replacement.progress with
+    | .replacement old, .built count => pure (old, count)
+    | _, _ => ConstructionM.fail .protocol
+  let superseded ← lookupDestination supersededId
+  match superseded.progress with
+  | .exiting _ expected =>
+      if expected != replacementId || superseded.storage != replacement.storage then
+        ConstructionM.fail .ownership
+  | _ => ConstructionM.fail .protocol
+  let parentUpdate ← match superseded.use with
+    | .receiver => pure none
+    | .child parentId => do
+        let parent ← lookupDestination parentId
+        match parent.progress with
+        | .suspended parentCount expected =>
+            if expected != supersededId then ConstructionM.fail .ownership
+            pure (some (parentId, { parent with progress := .suspended parentCount replacementId }))
+        | _ => ConstructionM.fail .protocol
+    | .replacement _ => ConstructionM.fail .protocol
+  let storage ← lookupStorage replacement.storage
+  if replacement.capability.start < superseded.capability.start then ConstructionM.fail .ownership
+  let state ← ConstructionM.get
+  let discarded := state.destinations.toList.reverse.filter fun destination =>
+    descendantOf state.destinations supersededId destination.capability.id && active destination
+  for destination in discarded do
+    replaceDestination destination.capability.id { destination with progress := .abandoned }
+    emit (.abandon destination.capability.id)
+  let landed := storage.bytes.extract 0 superseded.capability.start ++
+    storage.bytes.extract replacement.capability.start storage.bytes.size
+  replaceStorage replacement.storage { storage with bytes := landed }
+  replaceDestination replacementId { replacement with
+    capability := { replacement.capability with start := superseded.capability.start }
+    use := superseded.use
+    progress := .built count }
+  if let some (parentId, parent) := parentUpdate then
+    replaceDestination parentId parent
+  if superseded.capability.start < replacement.capability.start then
+    emit (.relocate replacementId .exitValue)
 
 end Goose.Construct

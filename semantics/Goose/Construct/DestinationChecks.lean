@@ -3,7 +3,7 @@ import Goose.Construct.Destination
 namespace Goose.Construct.DestinationChecks
 open Goose.Core Goose.Construct
 
-private def capability (request : ConstructionRequest := .value) : Destination :=
+private def capability (request : ConstructionRequest := .value) : Core.Destination Goose.Construct.Ty :=
   ⟨0, ⟨.global 0, []⟩, .grow (.int .u8), .grow (.int .u8), request, 0, 0⟩
 
 private def bytes (values : List Nat) : ByteArray :=
@@ -102,6 +102,52 @@ private def staleAbandon : ConstructionM Unit := do
   | .fault .protocol state => state.events ==
       [.begin 0, .write 0 0, .publish 0, .begin 1, .write 1 0] &&
       state.storage[0]?.map (fun s => s.bytes.data.toList.map UInt8.toNat) == some [10, 20]
+  | _ => false
+
+private def replacement : ConstructionM Unit := do
+  let storage ← reserveStorage (bytes [10]) 1
+  let pending ← openDestination storage (capability .elementRun) .elements (some 2)
+  writeElement pending (bytes [20])
+  let replacement ← openExitReplacement pending
+  writeElement replacement (bytes [30])
+  finishDestination replacement
+  landExitReplacement replacement
+  publishOperation [replacement]
+
+#guard observe replacement == some ([10, 30], 2,
+  [.begin 0, .write 0 0, .begin 1, .write 1 0, .abandon 0,
+   .relocate 1 .exitValue, .publish 1])
+
+private def replacementInChild : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let parent ← openDestination storage capability .packed (some 1)
+  let child ← openChild parent (.varr (.int .u8)) .packed
+  writeElement child (bytes [20])
+  let replacement ← openExitReplacement child
+  writeElement replacement (bytes [30])
+  finishDestination replacement
+  landExitReplacement replacement
+  attachChild parent replacement
+  finishDestination parent
+  publishOperation [parent]
+
+#guard observe replacementInChild == some ([1, 0, 0, 0, 1, 0, 0, 0, 30], 1,
+  [.begin 0, .begin 1, .write 1 0, .begin 2, .write 2 0,
+   .abandon 1, .relocate 2 .exitValue, .write 0 0, .publish 0])
+
+private def protectReplacement : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let pending ← openDestination storage capability .packed (some 2)
+  writeElement pending (bytes [20])
+  let replacement ← openExitReplacement pending
+  writeElement replacement (bytes [30])
+  abandonTree pending
+
+#guard match protectReplacement ConstructionState.initial with
+  | .fault .protocol state => state.events ==
+      [.begin 0, .write 0 0, .begin 1, .write 1 0] &&
+      state.storage[0]?.map (fun s => s.bytes.data.toList.map UInt8.toNat) ==
+        some [0, 0, 0, 0, 20, 0, 0, 0, 0, 30]
   | _ => false
 
 end Goose.Construct.DestinationChecks
