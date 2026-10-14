@@ -187,23 +187,39 @@ theorem WeakFrameTy.getVals {roots : RootDeclarations} {types : Array (Option VT
     · exact headTyped
     · exact tailTyped other present
 
-inductive FlatOperands (types : Array (Option VTy)) : List ValueId → TyList → Prop
-  | nil : FlatOperands types [] .nil
+inductive FieldOperands (types : Array (Option VTy)) : List ValueId → TyList → Prop
+  | nil : FieldOperands types [] .nil
   | cons {id ty ids rest}
-      (metadata : types[id]? = some (some (.data ty))) (flat : ty.flat = true)
-      (tail : FlatOperands types ids rest) : FlatOperands types (id :: ids) (.cons ty rest)
+      (metadata : types[id]? = some (some (.data ty)))
+      (tail : FieldOperands types ids rest) : FieldOperands types (id :: ids) (.cons ty rest)
+
+theorem FieldOperands.ofMap {types : Array (Option VTy)} {ids : List ValueId} {fields : TyList}
+    (metadata : ids.map (fun id => types[id]?) = fields.toList.map (fun ty => some (some (.data ty)))) :
+    FieldOperands types ids fields := by
+  cases fields with
+  | nil =>
+    cases ids with
+    | nil => exact .nil
+    | cons id ids => simp [TyList.toList] at metadata
+  | cons ty rest =>
+    cases ids with
+    | nil => simp [TyList.toList] at metadata
+    | cons id ids =>
+      simp only [TyList.toList, List.map_cons, List.cons.injEq] at metadata
+      exact .cons metadata.1 (FieldOperands.ofMap metadata.2)
+termination_by structural fields
 
 theorem WeakFrameTy.getFields {roots : RootDeclarations} {types : Array (Option VTy)}
     {fr : Frame} {ids : List ValueId} {fields : TyList} {values : List Val} {before after : St}
-    (typed : WeakFrameTy roots types fr) (operands : FlatOperands types ids fields)
+    (typed : WeakFrameTy roots types fr) (operands : FieldOperands types ids fields)
     (read : mapList (Goose.GIR.getVal fr) ids before = .ok values after) :
-    FieldsTy fields values ∧ after = before := by
+    WeakFieldsTy roots fields values ∧ after = before := by
   induction operands generalizing values before after with
   | nil =>
     simp only [mapList, pure_apply, Res.ok.injEq] at read
     obtain ⟨rfl, rfl⟩ := read
     exact ⟨True.intro, rfl⟩
-  | cons metadata flat tail ih =>
+  | cons metadata tail ih =>
     simp only [mapList] at read
     obtain ⟨value, middle, found, read⟩ := m_bind_ok read
     obtain ⟨headTyped, sameState⟩ := typed.getVal metadata found
@@ -213,7 +229,7 @@ theorem WeakFrameTy.getFields {roots : RootDeclarations} {types : Array (Option 
     subst middle
     simp only [pure_apply, Res.ok.injEq] at read
     obtain ⟨rfl, rfl⟩ := read
-    exact ⟨⟨headTyped.flat flat, tailTyped⟩, rfl⟩
+    exact ⟨⟨headTyped, tailTyped⟩, rfl⟩
 
 theorem WeakViewTy.mono {before after : RootDeclarations} {view : ViewVal} {element : Ty}
     (extension : before.Extends after) (typed : WeakViewTy before view element) :
@@ -682,7 +698,7 @@ theorem execPure_arrLit_typed {roots : RootDeclarations} {types : Array (Option 
 theorem execPure_structLit_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {ids : List ValueId} {sid : StructId} {fields : TyList}
     {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
-    (operands : FlatOperands types ids fields)
+    (operands : FieldOperands types ids fields)
     (evaluated : execPure cx fr (.structLit (.structT sid fields) ids) before = .ok cell after) :
     WeakCellTy roots cell (.data (.structT sid fields)) ∧ after = before := by
   simp only [execPure] at evaluated
@@ -691,7 +707,7 @@ theorem execPure_structLit_typed {roots : RootDeclarations} {types : Array (Opti
   subst middle
   simp only [pure_apply, Res.ok.injEq] at evaluated
   obtain ⟨rfl, rfl⟩ := evaluated
-  exact ⟨⟨rfl, by simpa using WeakFieldsTy.ofFlat (roots := roots) fieldsTyped⟩, rfl⟩
+  exact ⟨⟨rfl, by simpa using fieldsTyped⟩, rfl⟩
 
 theorem pushAppend_typed {cfg : GCfg} {activations : ActivationTypes}
     {location : Loc} {value : Val} {owner element : Ty} {before after : St} {cell : RVal}
@@ -1132,7 +1148,7 @@ theorem execPure_pop_typed {roots : RootDeclarations} {types : Array (Option VTy
     (metadata : types[id]? = some (some (.data (.ref permission owner))))
     (ownerType : owner.ownerElem? = some element) (storeTyped : WeakStoreTy roots before.store)
     (evaluated : execPure cx fr (.pop id org) before = .ok cell after) :
-    WeakCellTy roots cell (.data element) ∧ WeakStoreTy roots after.store := by
+    WeakCellTy roots cell (.data element) ∧ WeakStoreTy roots after.store ∧ after.nextAct = before.nextAct := by
   unfold execPure at evaluated
   obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
   obtain ⟨valueTyped, sameReadState⟩ := frameTyped.getVal metadata read
@@ -1161,7 +1177,7 @@ theorem execPure_pop_typed {roots : RootDeclarations} {types : Array (Option VTy
       simp only [shrunk, Res.ok.injEq] at shortened
       obtain ⟨_, sameState⟩ := shortened
       subst finalState
-      exact ⟨selectedTyped, storeTyped.truncateOwner target ownerType shrunk⟩
+      exact ⟨selectedTyped, storeTyped.truncateOwner target ownerType shrunk, rfl⟩
 
 inductive ParamValuesTy (roots : RootDeclarations) : List (ValueId × VTy) → List RVal → Prop
   | nil : ParamValuesTy roots [] []
