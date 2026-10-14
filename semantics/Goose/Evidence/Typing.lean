@@ -1011,13 +1011,13 @@ theorem execEff_resize_typed {activations : ActivationTypes} {fn : Func} {cfg : 
   cases fillId with
   | none =>
     simp only at evaluated
-    exact resizeTail_typed frameTyped target ownerType (by simp) evaluated
+    exact resizeTail_typed (size := size) (fill := none) (org := org) frameTyped target ownerType (by simp) evaluated
   | some id =>
     simp only at evaluated
     obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
     obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal (fillMetadata id rfl) read
     subst middle
-    apply resizeTail_typed frameTyped target ownerType _ evaluated
+    apply resizeTail_typed (size := size) (fill := some value) (org := org) frameTyped target ownerType _ evaluated
     intro other same
     cases same
     exact valueTyped
