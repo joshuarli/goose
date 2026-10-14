@@ -1,5 +1,4 @@
-import Goose.Lower.Prefix
-import Goose.Lower.Validate
+import Goose.Lower.Frag
 
 namespace Goose.Lower
 
