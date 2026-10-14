@@ -13,8 +13,11 @@ def checkType (module : Module) : Ty → V Unit
   | .arr element count => do
       if count == 0 || !(element.flat || element.variableElement) then reject .type "invalid fixed-array element or count"
       checkType module element
-  | .growshrink element | .limited element _ => do
-      if !element.flat then reject .type "growshrink and limited require flat fixed elements"
+  | .growshrink element => do
+      if !element.flat then reject .type "growshrink requires flat fixed elements"
+      checkType module element
+  | .limited element capacity => do
+      if capacity == 0 || !element.flat then reject .type "limited requires positive capacity and flat fixed elements"
       checkType module element
   | .ref _ target => do
       if !target.storageType then reject .type "reference target is not storage"

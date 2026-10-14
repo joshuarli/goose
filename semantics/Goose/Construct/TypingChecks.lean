@@ -71,4 +71,9 @@ private def sliceReferenceEnv : TypingEnv := { env with
   | .error rejection => rejection.rule == .type
   | _ => false
 
+
+#guard match checkType module (.limited (.int .u8) 0) with
+  | .error rejection => rejection.rule == .type
+  | .ok _ => false
+
 end Goose.Construct.TypingChecks
