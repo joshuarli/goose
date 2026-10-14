@@ -5,6 +5,42 @@ namespace Goose.Evidence
 
 open Goose.Core Goose.GIR
 
+namespace AggregateReferences
+
+private def initializer : Func :=
+  { name := "unit-global"
+    params := []
+    results := [.unit]
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[], [.def 0 .constUnit, .term (.ret [0] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def entry : Func :=
+  { name := "reference-array"
+    params := []
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[⟨[], [.def 0 (.globalAddr 0),
+      .def 1 (.arrLit (.arr (.ref .readOnly .unit) 1) [0]), .term (.ret [] none)]⟩]
+    summary := .unknown
+    org := none }
+
+private def module : GIR.Module :=
+  { files := #["reference-array"]
+    globals := #[⟨"unit", .unit, .immutable, initializer, 0⟩]
+    funcs := #[entry]
+    entry := 0
+    origins := #[⟨0, 1, "global"⟩] }
+
+#guard match validate module with | .ok () => true | .error _ => false
+#guard match run 20 .release module with | .done .returned "" => true | _ => false
+#guard (entry.valueTypes module)[1]? == some (some (.data (.arr (.ref .readOnly .unit) 1)))
+
+end AggregateReferences
+
 theorem enterBranch_typed {cfg : GCfg} {activations : ActivationTypes} {fn : Func}
     {fr fr' : Frame} {before readState after : St} {target : BlockId} {dest : GIR.Block}
     {args : List ValueId} {values : List RVal}
