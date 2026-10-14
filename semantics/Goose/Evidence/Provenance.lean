@@ -1,5 +1,7 @@
 import Goose.Evidence.Execution
 import Goose.Evidence.SSA
+import Goose.Evidence.Dominance
+import Goose.Evidence.Typing
 
 namespace Goose.Evidence
 
@@ -373,5 +375,54 @@ theorem validated_cell_definition {cfg : GCfg} {fn : Func} {pt : Pt}
   subst sampledOperation
   exact ⟨sourcePt, sourceFrame, sourceState, fuel, writtenState,
     sampledPoint, instruction, evaluated, history⟩
+
+theorem validated_cmp_operand_history {cfg : GCfg} {fn : Func}
+    {sourcePt currentPt : Pt} {sourceFrame currentFrame : Frame}
+    {sourceState writtenState currentState : St} {condition left right : ValueId}
+    {value : RVal} {yes no : BlockId} {yesArgs noArgs : List ValueId}
+    (validated : validate cfg.mod = .ok ())
+    (sourcePoint : RuntimePoint cfg fn sourcePt sourceFrame sourceState)
+    (definition : fn.defOp? condition = some (.cmp .lt .i64 left right))
+    (instruction : instAt fn sourcePt = some (.def condition (.cmp .lt .i64 left right)))
+    (history : RuntimeStepsAvoid cfg fn [condition] (sourcePt.1, sourcePt.2 + 1)
+      (sourceFrame.set condition value) writtenState currentPt currentFrame currentState)
+    (branch : instAt fn currentPt = some (.term (.condbr condition yes yesArgs no noArgs))) :
+    RuntimeStepsAvoid cfg fn [left, right] (sourcePt.1, sourcePt.2 + 1)
+      (sourceFrame.set condition value) writtenState currentPt currentFrame currentState := by
+  apply history.protect
+  intro before after prefixPath transition excluded suffix id member
+  obtain ⟨leftUnwritten, rightUnwritten⟩ := validated_cmp_operands_unwritten
+    validated sourcePoint.function_mem definition instruction sourcePoint.control_path transition suffix branch
+  rcases List.mem_cons.mp member with rfl | remaining
+  · exact leftUnwritten
+  · have equal := List.mem_singleton.mp remaining
+    subst id
+    exact rightUnwritten
+
+theorem true_cmp_fact_of_runtime_typing {cfg : GCfg} {fn : Func} {pt : Pt}
+    {fr : Frame} {st : St} {condition left right : ValueId}
+    {yes no : BlockId} {yesArgs noArgs : List ValueId}
+    (validated : validate cfg.mod = .ok ())
+    (runtimeTyping : ∀ {function point frame state}, RuntimePoint cfg function point frame state →
+      ∃ activations, RuntimeFrameTy cfg function activations frame state)
+    (point : RuntimePoint cfg fn pt fr st)
+    (branch : instAt fn pt = some (.term (.condbr condition yes yesArgs no noArgs)))
+    (comparison : fn.defOp? condition = some (.cmp .lt .i64 left right))
+    (conditionTrue : fr.vals[condition]? = some (.val (.bool true))) :
+    ∃ a b, fr.vals[left]? = some (.val (.int .i64 a)) ∧
+      fr.vals[right]? = some (.val (.int .i64 b)) ∧ a < b := by
+  obtain ⟨sourcePt, sourceFrame, sourceState, fuel, writtenState,
+    sampledPoint, instruction, evaluated, history⟩ :=
+      validated_cell_definition validated point comparison conditionTrue
+  have protectedHistory := validated_cmp_operand_history
+    validated sampledPoint comparison instruction history branch
+  obtain ⟨leftValue, rightValue, comparable, leftPresent, rightPresent, _, _⟩ :=
+    cmp_true_cells evaluated
+  obtain ⟨leftMetadata, rightMetadata⟩ := validated_cmp_operand_types validated sampledPoint comparison
+  obtain ⟨activations, sampledTyped⟩ := runtimeTyping sampledPoint
+  obtain ⟨a, leftCell⟩ := sampledTyped.2.2.int leftMetadata leftPresent
+  obtain ⟨b, rightCell⟩ := sampledTyped.2.2.int rightMetadata rightPresent
+  exact ⟨a, b, sampled_cmp_current_lt evaluated
+    (validated_cmp_distinct validated sampledPoint comparison) leftCell rightCell protectedHistory⟩
 
 end Goose.Evidence
