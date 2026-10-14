@@ -15,7 +15,7 @@ theorem validated_checkTypes {m : Module} {fn : Func}
   have checked := checkAll_mem (validate_stages h).1 hi
   simpa only [hfn, hvt] using checked
 
-theorem checkTypes_instructions {m : Module} {fn : Func} {label : String}
+private theorem checkTypes_instructions {m : Module} {fn : Func} {label : String}
     {vt : Array (Option VTy)} (h : checkTypes m label fn vt = .ok ()) :
     (∀ block ∈ fn.blocks, ∀ inst ∈ block.insts,
       checkInstTypes fn { m.tyEnv fn with vals := vt } vt inst = .ok ()) ∧
@@ -66,7 +66,7 @@ theorem validated_entry_params {m : Module} {fn : Func}
   obtain ⟨label, checked⟩ := validated_checkTypes h hf
   exact (checkTypes_instructions checked).2
 
-theorem forIn_unit_ok {ε α : Type} {xs : List α}
+private theorem forIn_unit_ok {ε α : Type} {xs : List α}
     {f : α → PUnit.{1} → Except ε (ForInStep PUnit.{1})}
     (h : forIn xs PUnit.unit f = .ok ())
     (hy : ∀ x, ∀ u, ∀ step, f x u = .ok step → step = .yield PUnit.unit) :
@@ -97,7 +97,7 @@ theorem validated_ret_metadata {m : Module} {fn : Func}
     by_cases he : values.length = fn.results.length
     · exact he
     · simp [he, tyErr, bind, Except.bind] at ht
-  rw [if_pos hlen] at ht
+  rw [ite_eq_left hlen] at ht
   obtain ⟨u, hloop, _⟩ := bind_ok ht
   cases u
   refine ⟨hlen, ?_⟩
@@ -117,7 +117,7 @@ theorem validated_ret_metadata {m : Module} {fn : Func}
   subst ty
   exact dataTy_of hd
 
-theorem validated_checkSymbols {m : Module} {fn : Func}
+private theorem validated_checkSymbols {m : Module} {fn : Func}
     (h : validate m = .ok ()) (hf : fn ∈ m.allFuncs) :
     ∃ label, checkSymbols m label fn = .ok () := by
   unfold validate at h
@@ -137,7 +137,7 @@ theorem validated_checkSymbols {m : Module} {fn : Func}
         simp only [Module.labelled, List.mem_append]
         exact Or.inr (List.mem_map.mpr ⟨g, hg, rfl⟩))
 
-theorem symbolDef_bounds {n : Nat} {xs : List Nat} {seen out : Array Bool}
+private theorem symbolDef_bounds {n : Nat} {xs : List Nat} {seen out : Array Bool}
     (h : forIn xs seen (symbolDefStep n) = .ok out) : ∀ v ∈ xs, v < n := by
   induction xs generalizing seen out with
   | nil => simp
@@ -149,17 +149,17 @@ theorem symbolDef_bounds {n : Nat} {xs : List Nat} {seen out : Array Bool}
       by_cases hd : d < n
       · exact hd
       · simp [hd, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at hs
-    rw [if_pos hd] at hs
+    rw [ite_eq_left hd] at hs
     by_cases hseen : seen[d]! = true
     · simp [hseen, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at hs
-    · simp [hseen, pure, Except.pure, bind, Except.bind] at hs
+    · simp [hseen, pure, Except.pure] at hs
       subst step
       intro v hv
       rcases List.mem_cons.mp hv with rfl | hv
       · exact hd
       · exact ih hr v hv
 
-theorem symbolBlock_bounds {m : Module} {fn : Func} {bs : List Block}
+private theorem symbolBlock_bounds {m : Module} {fn : Func} {bs : List Block}
     {seen out : Array Bool}
     (h : forIn bs seen (symbolBlockStep m fn) = .ok out) :
     ∀ v ∈ bs.flatMap Block.defs, v < fn.numValues := by
@@ -187,7 +187,7 @@ theorem validated_definition_bounds {m : Module} {fn : Func}
   rw [← Array.forIn_toList] at hs
   exact symbolBlock_bounds hs
 
-theorem parameter_ids_sublist (blocks : List Block) :
+private theorem parameter_ids_sublist (blocks : List Block) :
     (blocks.flatMap Block.params).map Prod.fst |>.Sublist (blocks.flatMap Block.defs) := by
   induction blocks with
   | nil => simp
@@ -195,7 +195,7 @@ theorem parameter_ids_sublist (blocks : List Block) :
     simp only [List.flatMap_cons, List.map_append]
     exact (List.sublist_append_left _ _).append ih
 
-theorem parameter_eq_of_nodup_ids {params : List (ValueId × VTy)}
+private theorem parameter_eq_of_nodup_ids {params : List (ValueId × VTy)}
     (h : (params.map Prod.fst).Nodup) {a b : ValueId × VTy}
     (ha : a ∈ params) (hb : b ∈ params) (he : a.1 = b.1) : a = b := by
   induction params with
@@ -212,7 +212,7 @@ theorem parameter_eq_of_nodup_ids {params : List (ValueId × VTy)}
         exact False.elim (h.1 (List.mem_map.mpr ⟨a, ha, he⟩))
       · exact ih h.2 ha hb
 
-theorem fold_params_preserves {params : List (ValueId × VTy)} {n value : Nat}
+private theorem fold_params_preserves {params : List (ValueId × VTy)} {n value : Nat}
     {ty : VTy} {vals : Array (Option VTy)}
     (hv : vals[value]? = some (some ty))
     (hc : ∀ param ∈ params, param.1 = value → param.2 = ty) :
@@ -238,7 +238,7 @@ theorem fold_params_preserves {params : List (ValueId × VTy)} {n value : Nat}
     · intro p hp he
       exact hc p (List.mem_cons_of_mem _ hp) he
 
-theorem fold_params_sets {params : List (ValueId × VTy)} {n value : Nat}
+private theorem fold_params_sets {params : List (ValueId × VTy)} {n value : Nat}
     {ty : VTy} {vals : Array (Option VTy)} (hsize : vals.size = n) (hbound : value < n)
     (hp : (value, ty) ∈ params)
     (hc : ∀ param ∈ params, param.1 = value → param.2 = ty) :
@@ -261,7 +261,7 @@ theorem fold_params_sets {params : List (ValueId × VTy)} {n value : Nat}
       · intro p hp he
         exact hc p (List.mem_cons_of_mem _ hp) he
 
-theorem valueTypes_go_preserves {step : Array (Option VTy) → Array (Option VTy) × Bool}
+private theorem valueTypes_go_preserves {step : Array (Option VTy) → Array (Option VTy) × Bool}
     {value : ValueId} {ty : VTy}
     (hs : ∀ vals, vals[value]? = some (some ty) →
       (step vals).1[value]? = some (some ty))
@@ -370,7 +370,7 @@ private theorem checkedEdge_metadata {label : String} {fn : Func}
       by_cases he : dest.params.length = args.length
       · exact he
       · simp [he, violation, bind, Except.bind] at h
-    rw [if_pos hlen] at h
+    rw [ite_eq_left hlen] at h
     obtain ⟨u, hloop, _⟩ := bind_ok h
     cases u
     have hall := forIn_unit_ok hloop (by
@@ -422,7 +422,7 @@ private theorem cfg_branch_checks {label : String} {fn : Func} {vt : Array (Opti
   | none => trivial
   | some term =>
     simp only [ht] at checked
-    cases term <;> simp only [ht]
+    cases term <;> dsimp only
     all_goals
       first
       | trivial
@@ -518,7 +518,7 @@ theorem validated_term_last {m : Module} {fn : Func}
         obtain ⟨front, hp⟩ := List.getLast?_eq_some_iff.mp he
         simp [hp]
       have ho : other ∈ block.terms := List.mem_filterMap.mpr ⟨.term other, hmem, rfl⟩
-      simp [he, unique other ho]
+      simp [unique other ho]
 
 theorem typing_env_slots (m : Module) (fn : Func) : (m.tyEnv fn).slots = fn.slots := rfl
 
@@ -541,5 +541,165 @@ theorem typing_env_signature {m : Module} {fn callee : Func} {id : FnId}
     (m.tyEnv fn).sigs[id]? = some (callee.params, callee.results) := by
   change (m.funcs.map (fun f => (f.params, f.results)))[id]? = _
   simp [h]
+
+private def checkedStructField (m : Core.Module) (desc : StructDef)
+    (field : StructField) (endOffset : Nat) : Core.V (ForInStep Nat) := do
+  Core.checkResolvedType m field.ty
+  unless field.ty.flat do Core.reject .type "struct fields must be flat fixed values"
+  let some bytes := m.fixedByteSize? field.ty |
+    Core.reject .type "struct field has no fixed byte size"
+  if bytes == 0 then Core.reject .type "zero-size struct field"
+  if field.byteOffset < endOffset then Core.reject .type "struct fields overlap or are out of order"
+  let fieldEnd := field.byteOffset + bytes
+  if fieldEnd > desc.byteSize then Core.reject .type "struct field extends beyond its byte size"
+  pure (.yield fieldEnd)
+
+private def checkedStruct (m : Core.Module) (desc : StructDef) (_ : PUnit) :
+    Core.V (ForInStep PUnit) := do
+  if desc.byteSize == 0 then Core.reject .type "struct byte size must be positive"
+  let _ ← forIn desc.fields 0 (checkedStructField m desc)
+  pure (.yield PUnit.unit)
+
+private theorem forIn_scan {ε α σ : Type} {xs : List α} {start finish : σ}
+    {f : α → σ → Except ε (ForInStep σ)} {p : α → Prop}
+    (h : forIn xs start f = .ok finish)
+    (hs : ∀ x ∈ xs, ∀ st step, f x st = .ok step →
+      ∃ st', step = .yield st' ∧ p x) : ∀ x ∈ xs, p x := by
+  induction xs generalizing start finish with
+  | nil => simp
+  | cons x xs ih =>
+    rw [List.forIn_cons] at h
+    obtain ⟨step, hc, hr⟩ := bind_ok h
+    obtain ⟨mid, he, hp⟩ := hs x List.mem_cons_self start step hc
+    subst step
+    intro y hy
+    rcases List.mem_cons.mp hy with rfl | hy
+    · exact hp
+    · exact ih hr (fun y hy st step => hs y (List.mem_cons_of_mem _ hy) st step) y hy
+
+private theorem checkedStructField_flat {m : Core.Module} {desc : StructDef}
+    {field : StructField} {endOffset : Nat} {step : ForInStep Nat}
+    (h : checkedStructField m desc field endOffset = .ok step) :
+    ∃ offset, step = .yield offset ∧ field.ty.flat = true := by
+  unfold checkedStructField at h
+  obtain ⟨_, _, h⟩ := bind_ok h
+  have hf : field.ty.flat = true := by
+    by_cases hf : field.ty.flat = true
+    · exact hf
+    · simp [hf, Core.reject, bind, Except.bind] at h
+  repeat' first
+    | exact ⟨_, (Except.ok.inj h).symm, hf⟩
+    | obtain ⟨_, _, h⟩ := bind_ok h
+    | dsimp only at h
+    | split at h
+    | simp only [Core.reject] at h
+    | contradiction
+
+private theorem checkedStruct_flat {m : Core.Module} {desc : StructDef}
+    {u : PUnit} {step : ForInStep PUnit} (h : checkedStruct m desc u = .ok step) :
+    ∃ out, step = .yield out ∧ ∀ field ∈ desc.fields, field.ty.flat = true := by
+  unfold checkedStruct at h
+  have hn : ¬desc.byteSize == 0 := by
+    by_cases hn : desc.byteSize == 0
+    · simp [hn, Core.reject, bind, Except.bind] at h
+    · exact hn
+  simp only [hn, Bool.false_eq_true, ↓reduceIte] at h
+  obtain ⟨offset, hf, h⟩ := bind_ok h
+  refine ⟨PUnit.unit, (Except.ok.inj h).symm, ?_⟩
+  rw [← Array.forIn_toList] at hf
+  have hall := forIn_scan hf (fun _ _ _ _ checked => checkedStructField_flat checked)
+  intro field hm
+  exact hall field (Array.mem_toList_iff.mpr hm)
+
+theorem validated_struct_fields_flat {m : Module} (h : validate m = .ok ()) :
+    ∀ desc ∈ m.structs, ∀ field ∈ desc.fields, field.ty.flat = true := by
+  unfold validate at h
+  obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, hs, _⟩ := bind_ok h
+  unfold checkStructTypes at hs
+  obtain ⟨_, htables, _⟩ := bind_ok hs
+  let cm : Core.Module :=
+    { files := m.files, types := #[], globals := #[], impls := #[], contexts := #[],
+      entry := 0, origins := m.origins, profile := m.profile, structs := m.structs }
+  have hc : Core.checkStructTables cm = .ok () := by
+    cases he : Core.checkStructTables cm with
+    | ok u => cases u; rfl
+    | error err => simp [cm, he, violation] at htables
+  unfold Core.checkStructTables at hc
+  dsimp only at hc
+  have hn : ¬(cm.profile == .pilot && !cm.structs.isEmpty) = true := by
+    intro hn
+    simp [hn, Core.reject, bind, Except.bind] at hc
+  rw [ite_eq_right hn] at hc
+  obtain ⟨u, hloop, _⟩ := bind_ok hc
+  cases u
+  change forIn m.structs PUnit.unit (checkedStruct cm) = .ok PUnit.unit at hloop
+  rw [← Array.forIn_toList] at hloop
+  have hall := forIn_scan hloop (fun _ _ _ _ checked => checkedStruct_flat checked)
+  intro desc hd
+  exact hall desc (Array.mem_toList_iff.mpr hd)
+
+private theorem structLit_metadata {env : TyEnv} {ty : Ty} {values : List ValueId}
+    {result : VTy} (h : (Op.structLit ty values).resultTy env = .ok result) :
+    ∃ (sid : StructId) (desc : StructDef), env.structs[sid]? = some desc ∧
+      values.map (fun value => env.vals[value]?) =
+        desc.fields.toList.map (fun field => some (some (.data field.ty))) := by
+  cases ty with
+  | structT sid fields =>
+    simp only [Op.resultTy] at h
+    cases hd : env.structs[sid]? with
+    | none => simp [hd, tyErr] at h
+    | some desc =>
+      rw [hd] at h
+      dsimp only at h
+      have hp : fields = TyList.ofList (desc.fields.toList.map (·.ty)) := by
+        by_cases hp : fields = TyList.ofList (desc.fields.toList.map (·.ty))
+        · exact hp
+        · simp [hp, tyErr, bind, Except.bind] at h
+      simp only [hp, beq_self_eq_true, ↓reduceIte] at h
+      have hl : values.length = desc.fields.size := by
+        by_cases hl : values.length = desc.fields.size
+        · exact hl
+        · simp [hl, tyErr, bind, Except.bind] at h
+      simp only [hl, beq_self_eq_true, ↓reduceIte] at h
+      obtain ⟨u, hloop, _⟩ := bind_ok h
+      cases u
+      have hall := forIn_unit_ok hloop (by
+        intro pair u step checked
+        obtain ⟨t, _, checked⟩ := bind_ok checked
+        by_cases he : t = pair.2.ty
+        · simpa [he, pure, Except.pure] using checked.symm
+        · simp [he, tyErr, bind, Except.bind] at checked)
+      refine ⟨sid, desc, hd, ?_⟩
+      apply map_eq_of_zip (by simpa using hl)
+      intro pair hp
+      have checked := hall pair hp
+      obtain ⟨t, ht, checked⟩ := bind_ok checked
+      have he : t = pair.2.ty := by
+        by_cases he : t = pair.2.ty
+        · exact he
+        · simp [he, tyErr, bind, Except.bind] at checked
+      subst t
+      exact dataTy_of ht
+  | _ => simp [Op.resultTy, tyErr] at h
+
+theorem validated_structLit_operands {m : Module} {fn : Func}
+    (h : validate m = .ok ()) (hf : fn ∈ m.allFuncs)
+    {block : Block} (hb : block ∈ fn.blocks) {result : ValueId} {ty : Ty}
+    {values : List ValueId} (hi : Inst.def result (.structLit ty values) ∈ block.insts) :
+    ∀ value ∈ values, ∃ fieldTy,
+      (fn.valueTypes m)[value]? = some (some (.data fieldTy)) ∧ fieldTy.flat = true := by
+  obtain ⟨resultTy, checked, _⟩ := (validate_sound m h).1 fn hf |>.2.1 block hb result _ hi
+  obtain ⟨sid, desc, hd, hm⟩ := structLit_metadata checked
+  change m.structs[sid]? = some desc at hd
+  intro value hv
+  have hmem : (fn.valueTypes m)[value]? ∈
+      desc.fields.toList.map (fun field => some (some (.data field.ty))) := by
+    rw [← hm]
+    exact List.mem_map.mpr ⟨value, hv, rfl⟩
+  obtain ⟨field, hfmem, he⟩ := List.mem_map.mp hmem
+  exact ⟨field.ty, he.symm, validated_struct_fields_flat h desc
+    (Array.mem_of_getElem? hd) field (Array.mem_toList_iff.mp hfmem)⟩
 
 end Goose.GIR
