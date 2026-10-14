@@ -578,4 +578,74 @@ theorem indexed_claim (artifact : ArtifactProfile) (profile : NumProfile) (index
       .done (.aborted .indexOob 0) "", .done (.aborted .indexOob 0) "" => true
   | _, _, _, _ => false
 
+theorem view_val_claim (artifact : ArtifactProfile) (profile : NumProfile) :
+    TypedExprClaim 7 ⟨profile, viewLengthModule artifact⟩ [.int .i64]
+      (.len (.val (.slice .readOnly (.of (.global 0)) .omitted .omitted 0))) :=
+  typedExprClaim_len (typedViewClaim_val (typedExprClaim_slice
+    (typedViewClaim_of (typedPlaceClaim_global 3 _ _ 0)) (typedBoundClaim_omitted 4 _ _)
+    (typedBoundClaim_omitted 4 _ _) .readOnly 0))
+
+def boundedSlice (low : Int) : Expr :=
+  .slice .readOnly (.of (.global 0)) (.expr (.lit .i64 low)) (.fromEnd (.lit .i64 1)) 0
+
+def boundedSliceModule (artifact : ArtifactProfile) (low : Int) : Core.Module :=
+  { files := #["bounded-slice.goose"], types := #[.bool, .int .i64, .arr .bool 3, .slice .readOnly .bool],
+    globals := #[⟨"owner", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩,
+      ⟨"length", .int .i64, .mutable, .len (.val (boundedSlice low)), 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [.assertS (.cmp .eq (.read (.global 1)) (.lit .i64 1)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "slice"⟩], profile := artifact }
+
+theorem bounded_slice_prefix (artifact : ArtifactProfile) (profile : NumProfile) (low : Int)
+    (accepted : Core.validate (boundedSliceModule artifact low) = .ok ()) :
+    InitializedGlobals (boundedSliceModule artifact low) 1 viewOwnerState :=
+  InitializedGlobals.afterInitializer (cfg := ⟨profile, boundedSliceModule artifact low⟩)
+    (before := St.initial) (after := { St.initial with nextAct := 1 })
+    (value := .fixed (Array.replicate 3 (.bool true))) (g := 0)
+    (global := ⟨"owner", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩)
+    accepted rfl (InitializedGlobals.initial _) 3
+    (by simp [evalExpr, Core.expectFixedCount, pure_apply, bind_apply, St.initial])
+
+theorem bounded_slice_sources (artifact : ArtifactProfile) (profile : NumProfile) (low : Int)
+    (accepted : Core.validate (boundedSliceModule artifact low) = .ok ()) :
+    ∃ lower : BoundSource ⟨profile, boundedSliceModule artifact low⟩ ⟨#[], 1, [], 0⟩
+        (.expr (.lit .i64 low)) { viewOwnerState with nextAct := 2 },
+      ∃ upper : BoundSource ⟨profile, boundedSliceModule artifact low⟩ ⟨#[], 1, [], 0⟩
+        (.fromEnd (.lit .i64 1)) { viewOwnerState with nextAct := 2 },
+        lower.typingEnv = upper.typingEnv := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, boundedSliceModule artifact low⟩) (state := viewOwnerState) (g := 1)
+    (global := ⟨"length", .int .i64, .mutable, .len (.val (boundedSlice low)), 0⟩)
+    accepted rfl (bounded_slice_prefix artifact profile low accepted).invariant
+  obtain ⟨view, hviewTyping, hviewRoots⟩ := source.lenChild
+  obtain ⟨slice, hsliceTyping, hsliceRoots, mutable, hsliceType⟩ := view.valChild
+  obtain ⟨sampled, hsampledTyping, hsampledRoots, next⟩ := slice.sliceChildren .readOnly 0
+  obtain ⟨lower, hltyping, hlroots, nextLow⟩ := next 4 ⟨⟨.global 0, []⟩, 0, 3, false⟩
+    { viewOwnerState with nextAct := 2 } (by cbv)
+  obtain ⟨upper, hhtyping, hhroots⟩ := nextLow 4 low { viewOwnerState with nextAct := 2 }
+    (by simp [evalBound, evalExpr, Core.expectInt, bind_apply, pure_apply])
+  exact ⟨lower, upper, hltyping.trans hhtyping.symm⟩
+
+theorem bounded_slice_claim (artifact : ArtifactProfile) (profile : NumProfile) (low : Int) :
+    TypedExprClaim 7 ⟨profile, boundedSliceModule artifact low⟩ [.int .i64]
+      (.len (.val (boundedSlice low))) :=
+  typedExprClaim_len (typedViewClaim_val (typedExprClaim_slice
+    (typedViewClaim_of (typedPlaceClaim_global 3 _ _ 0))
+    (typedBoundClaim_expr (typedExprClaim_lit 3 _ _ .i64 low))
+    (typedBoundClaim_fromEnd (typedExprClaim_lit 3 _ _ .i64 1)) .readOnly 0))
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact => [1, 3].all fun low =>
+  let source := boundedSliceModule artifact low
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact => [NumProfile.release, .debug].all fun profile =>
+  let within := boundedSliceModule artifact 1
+  let outside := boundedSliceModule artifact 3
+  match Core.eval 200 profile within, GIR.run 400 profile (lower within),
+      Core.eval 200 profile outside, GIR.run 400 profile (lower outside) with
+  | .done .returned "", .done .returned "",
+      .done (.aborted .sliceOob 0) "", .done (.aborted .sliceOob 0) "" => true
+  | _, _, _, _ => false
+
 end Goose.Lower.TypedExpressionChecks

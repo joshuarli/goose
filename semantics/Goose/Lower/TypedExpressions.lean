@@ -212,6 +212,63 @@ theorem ViewSource.result {cfg : Cfg} {env : Env} {view : View} {state after : S
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13⟩ := hs
   exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13⟩
 
+structure BoundSource (cfg : Cfg) (env : Env) (bound : Bound) (state : St) where
+  accepted : Core.validate cfg.mod = .ok ()
+  plans : Array (Array DemandPoint)
+  path : List Nat
+  context : EvaluationContext cfg.mod plans path (.bound bound) .bound
+  observation : Observation
+  world : World
+  typingEnv : TEnv
+  rootsEnv : PEnv
+  typingStart : Nat
+  typingEnd : Nat
+  rootsStart : RState
+  rootsEnd : RState
+  active : context.ActiveMatches typingEnv
+  access : context.AccessMatches typingEnv rootsEnv
+  protection : ShrinkProtected world.D world.A (context.mayShrink world.ownerP observation)
+  observed : ObservedSafe cfg.mod world (context.mayShrink world.ownerP observation) observation state.store
+  classified : cfg.mod.profile = .shrink →
+    ClassifiedParameters cfg.mod world.P world.D observation state.store
+  permission : Perm cfg.mod world
+  frame : Core.Sound.Frame cfg.mod world typingEnv rootsEnv env state context.inputFuture
+  typed : tyBound typingEnv bound typingStart = .ok ((), typingEnd)
+  rooted : rpBound rootsEnv bound rootsStart = .ok ((), rootsEnd)
+  effects : EffLe rootsEnd.eff world.E
+
+structure BoundResult {cfg : Cfg} {env : Env} {bound : Bound} {state : St}
+    (source : BoundSource cfg env bound state) (after : St) : Prop where
+  frame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
+    source.context.outputFuture
+  footprint : Footprint (Core.Sound.insts env) (Dset source.world) state after
+  rootTypes : PreservesRootTypes cfg.mod source.world.G source.observation.roots state.store after.store
+  values : PreservesValues cfg.mod source.world.G source.observation.values state.store after.store
+  observed : ObservedSafe cfg.mod source.world
+    (source.context.mayShrink source.world.ownerP source.observation) source.observation after.store
+  aliases : RetainsAliases cfg.mod source.world env state.store after.store source.context.retained
+  pilotStore : PilotStoreLe cfg.mod state after
+  classified : cfg.mod.profile = .shrink →
+    ClassifiedParameters cfg.mod source.world.P source.world.D source.observation after.store
+  forbidden : PreservesForbiddenOwnerRoots (m := cfg.mod) (G := source.world.G)
+    (env := env) (P := source.world.P) source.context.forbiddenOwners state after
+  mutations : MutationFootprint env source.world.P source.world.base
+    (effectMutationRoots cfg.mod source.rootsEnv.impl source.rootsEnd.eff) state after
+
+theorem BoundSource.result {cfg : Cfg} {env : Env} {bound : Bound} {state after : St}
+    (source : BoundSource cfg env bound state) (n length : Nat) (default value : Int)
+    (h : evalBound n cfg env length default bound state = .ok value after) : BoundResult source after := by
+  have hs := (Core.Sound.specs_all (Core.Sound.validate_modOk cfg.mod source.accepted)
+    cfg.profile source.plans n).bound source.path bound source.context source.observation
+    source.world source.typingEnv source.rootsEnv env state length default source.typingStart source.typingEnd
+    source.rootsStart source.rootsEnd
+    source.active source.access source.protection source.observed source.classified source.permission
+    source.frame source.typed source.rooted source.effects
+  unfold Core.Sound.Sat at hs
+  rw [h] at hs
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩ := hs
+  exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩
+
 def SourceResults (typingEnv : TEnv) (rootsEnv : PEnv) (results : List Ty) : Prop :=
   ∀ impl, typingEnv.impl = some impl → rootsEnv.impl = impl ∧ results = impl.results.toList
 
@@ -241,6 +298,17 @@ def TypedViewClaim (n : Nat) (cfg : Cfg) (results : List Ty) (view : View) : Pro
     cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
     SimEAt cx pt fr (evalView n cfg env view)
       (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .view value)]) state
+
+def TypedBoundClaim (n : Nat) (cfg : Cfg) (results : List Ty) (bound : Bound) : Prop :=
+  ∀ (env : Env) (state : St) (source : BoundSource cfg env bound state),
+    SourceResults source.typingEnv source.rootsEnv results →
+    ∀ (ls ls' : LS) (bnd : Bnd) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame) (length : Nat) (default : Int),
+    lowerBound bound (lowerEnv cfg.mod env.vars results) ls = (bnd, ls') →
+    ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    SimEAt cx pt fr (evalBound n cfg env length default bound)
+      (fun value pt' fr' => ∃ cells, BndSpec length default bnd value cells ∧
+        Post cfg env cx ls fr ls' fr' pt' cells) state
 
 theorem ExprSource.notChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St}
     (source : ExprSource cfg env (.not expr) state) :
@@ -354,6 +422,62 @@ theorem ExprSource.unChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (o
   · simpa [hshrink] using source.observed
   · simpa [hinput] using source.frame
   · exact childEffects
+
+theorem BoundSource.expressionChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (fromEnd : Bool)
+    (source : BoundSource cfg env (if fromEnd then .fromEnd expr else .expr expr) state) :
+    ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv ∧ ∃ intTy, child.ty = .int intTy := by
+  cases fromEnd
+  all_goals (
+    have ht := source.typed
+    have hr := source.rooted
+    simp only [Bool.false_eq_true, ite_false, ite_true, tyBound] at ht
+    inv at ht
+    simp only [Bool.false_eq_true, ite_false, ite_true, rpBound] at hr
+    inv at hr
+    obtain ⟨inputTy, finish, ht, intTy, rfl, hend⟩ := ht
+    obtain ⟨roots, hr⟩ := hr
+    let ec := source.context
+    let child := ec.child rfl 0 (.expression expr) .expression rfl (by trivial)
+    have hshrink : child.mayShrink source.world.ownerP source.observation =
+        ec.mayShrink source.world.ownerP source.observation := by
+      funext root
+      exact propext (ec.child_mayShrink_iff rfl 0 (.expression expr) .expression rfl
+        (by trivial) source.world.ownerP source.observation root)
+    have hfuture : child.outputFuture = ec.outputFuture := by
+      dsimp only [child]
+      cases ec with
+      | pilot profile active => rfl
+      | shrink profile context =>
+        let transition := context.child rfl 0 (.expression expr) .expression rfl (by trivial)
+        change transition.context.expected.frame.future = context.expected.frame.future
+        rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+        exact DemandNode.childFrame_future transition.childFrameEq rfl
+    have hinputFormula : child.inputFuture = expr.variables ++ child.outputFuture := by
+      dsimp only [child]
+      cases ec <;> rfl
+    have hinput : child.inputFuture = ec.inputFuture := by
+      rw [hinputFormula, hfuture]
+      cases ec <;> simp [EvaluationContext.inputFuture, EvaluationContext.outputFuture,
+        Core.Sound.NodeContext.inputFuture, Core.Sound.NodeContext.outputFuture,
+        DemandNode.variables, DemandNode.visibleAfter, Expr.variables, Bound.variables, Bool.false_eq_true, ite_false, ite_true]
+    refine ⟨{
+      accepted := source.accepted, plans := source.plans, path := (source.path ++ [0]),
+      context := child, observation := source.observation, world := source.world,
+      typingEnv := source.typingEnv, rootsEnv := source.rootsEnv, typingStart := source.typingStart,
+      typingEnd := finish, ty := .int intTy, rootsStart := source.rootsStart, rootsEnd := source.rootsEnd,
+      roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
+      classified := source.classified, permission := source.permission, frame := ?_,
+      typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, rfl⟩
+    · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
+        source.typingEnv source.typingEnv source.active (by intro x; rfl)
+    · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
+        (by trivial) source.typingEnv source.rootsEnv).mpr source.access
+    · simpa [hshrink] using source.protection
+    · simpa [hshrink] using source.observed
+    · simpa [hinput] using source.frame
+    · exact source.effects
+  )
 
 theorem ExprSource.lenChild {cfg : Cfg} {env : Env} {view : View} {state : St} (source : ExprSource cfg env (.len view) state) :
     ∃ child : ViewSource cfg env view state, child.typingEnv = source.typingEnv ∧
@@ -1407,6 +1531,186 @@ theorem ExprSource.shortCircuitChildren {cfg : Cfg} {env : Env} {a b : Expr} {st
       typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl⟩
   )
 
+theorem ExprSource.sliceChildren {cfg : Cfg} {env : Env} {view : View} {low high : Bound}
+    {state : St} (mutability : Mutability) (origin : OriginId)
+    (source : ExprSource cfg env (.slice mutability view low high origin) state) :
+    ∃ sampled : ViewSource cfg env view state,
+      sampled.typingEnv = source.typingEnv ∧ sampled.rootsEnv = source.rootsEnv ∧
+      ∀ n value after, evalView n cfg env view state = .ok value after →
+        ∃ lower : BoundSource cfg env low after,
+          lower.typingEnv = source.typingEnv ∧ lower.rootsEnv = source.rootsEnv ∧
+          ∀ k lowerValue lowerAfter,
+            evalBound k cfg env value.len 0 low after = .ok lowerValue lowerAfter →
+            ∃ upper : BoundSource cfg env high lowerAfter,
+              upper.typingEnv = source.typingEnv ∧ upper.rootsEnv = source.rootsEnv := by
+  have ht := source.typed
+  have hr := source.rooted
+  simp only [tyExpr] at ht
+  inv at ht
+  simp only [rpExpr] at hr
+  inv at hr
+  obtain ⟨_, element, mutable, t1, hview, t2, hlow, t3, hhigh, htail⟩ := ht
+  obtain ⟨roots, r1, hrview, r2, hrlow, r3, hrhigh, r4, hnote, hroots, hrootsEnd⟩ := hr
+  have hE3 : EffLe r3.eff source.world.E :=
+    (Core.Sound.PMono.noteAborts _ _ _ hnote).2.trans (by simpa only [hrootsEnd] using source.effects)
+  have hE2 := (Core.Sound.rpBound_mono hrhigh).2.trans hE3
+  have hE1 := (Core.Sound.rpBound_mono hrlow).2.trans hE2
+  let ec := source.context
+  let vc := ec.child rfl 0 (.view view) .view rfl (by trivial)
+  let lc := ec.child rfl 1 (.bound low) .bound rfl (by trivial)
+  let hc := ec.child rfl 2 (.bound high) .bound rfl (by trivial)
+  have hFrame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env state
+      ec.inputFuture := source.frame
+  have hActive : ec.ActiveMatches source.typingEnv := source.active
+  have hVShrink : vc.mayShrink source.world.ownerP source.observation =
+      ec.mayShrink source.world.ownerP source.observation := by
+    funext root
+    exact propext (ec.child_mayShrink_iff rfl 0 (.view view) .view rfl (by trivial)
+      source.world.ownerP source.observation root)
+  have hLShrink : lc.mayShrink source.world.ownerP source.observation =
+      ec.mayShrink source.world.ownerP source.observation := by
+    funext root
+    exact propext (ec.child_mayShrink_iff rfl 1 (.bound low) .bound rfl (by trivial)
+      source.world.ownerP source.observation root)
+  have hHShrink : hc.mayShrink source.world.ownerP source.observation =
+      ec.mayShrink source.world.ownerP source.observation := by
+    funext root
+    exact propext (ec.child_mayShrink_iff rfl 2 (.bound high) .bound rfl (by trivial)
+      source.world.ownerP source.observation root)
+  have hVFuture : vc.outputFuture = match (generalizing := false) ec with
+      | .pilot _ active => active
+      | .shrink _ context => low.variables ++ high.variables ++ context.expected.frame.future := by
+    dsimp only [vc]
+    cases hec : ec with
+    | pilot profile active => rfl
+    | shrink profile context =>
+      let transition := context.child rfl 0 (.view view) .view rfl (by trivial)
+      change transition.context.expected.frame.future =
+        low.variables ++ high.variables ++ context.expected.frame.future
+      rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+      exact DemandNode.childFrame_future transition.childFrameEq rfl
+  have hLFuture : lc.outputFuture = match (generalizing := false) ec with
+      | .pilot _ active => active
+      | .shrink _ context => high.variables ++ context.expected.frame.future := by
+    dsimp only [lc]
+    cases hec : ec with
+    | pilot profile active => rfl
+    | shrink profile context =>
+      let transition := context.child rfl 1 (.bound low) .bound rfl (by trivial)
+      change transition.context.expected.frame.future = high.variables ++ context.expected.frame.future
+      rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+      exact DemandNode.childFrame_future transition.childFrameEq rfl
+  have hHFuture : hc.outputFuture = ec.outputFuture := by
+    dsimp only [hc]
+    cases ec with
+    | pilot profile active => rfl
+    | shrink profile context =>
+      let transition := context.child rfl 2 (.bound high) .bound rfl (by trivial)
+      change transition.context.expected.frame.future = context.expected.frame.future
+      rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+      exact DemandNode.childFrame_future transition.childFrameEq rfl
+  have hVInput : vc.inputFuture = view.variables ++ vc.outputFuture := by
+    dsimp only [vc]
+    cases ec <;> rfl
+  have hLInput : lc.inputFuture = low.variables ++ lc.outputFuture := by
+    dsimp only [lc]
+    cases ec <;> rfl
+  have hHInput : hc.inputFuture = high.variables ++ hc.outputFuture := by
+    dsimp only [hc]
+    cases ec <;> rfl
+  have hViewFrame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env state
+      vc.inputFuture := by
+    rw [hVInput, hVFuture]
+    cases hec : ec with
+    | pilot profile active =>
+      rw [hec] at hFrame
+      apply hFrame.narrowFuture
+      intro x hx
+      simp only [EvaluationContext.inputFuture, DemandNode.variables, Expr.variables,
+        List.mem_append] at hx ⊢
+      rcases hx with hx | hx
+      · exact Or.inl (Or.inl (Or.inl hx))
+      · exact Or.inr hx
+    | shrink profile context =>
+      rw [hec] at hFrame
+      simpa [EvaluationContext.inputFuture, Core.Sound.NodeContext.inputFuture,
+        DemandNode.variables, Expr.variables, List.append_assoc] using hFrame
+  let sampled : ViewSource cfg env view state := {
+    accepted := source.accepted, plans := source.plans, path := source.path ++ [0], context := vc,
+    observation := source.observation, world := source.world, typingEnv := source.typingEnv,
+    rootsEnv := source.rootsEnv, typingStart := source.typingStart, typingEnd := t1,
+    element := element, mutable := mutable, rootsStart := source.rootsStart, rootsEnd := r1,
+    roots := roots, active := ec.child_activeMatches rfl 0 (.view view) .view rfl (by trivial)
+      source.typingEnv source.typingEnv source.active (by intro x; rfl),
+    access := (ec.child_accessMatches_iff rfl 0 (.view view) .view rfl (by trivial)
+      source.typingEnv source.rootsEnv).mpr source.access,
+    protection := by simpa [hVShrink] using source.protection,
+    observed := by simpa [hVShrink] using source.observed,
+    classified := source.classified, permission := source.permission, frame := hViewFrame,
+    typed := hview, rooted := hrview, effects := hE1 }
+  refine ⟨sampled, rfl, rfl, ?_⟩
+  intro n value after hdone
+  have viewResult := sampled.result n value hdone
+  have hVF : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
+      vc.outputFuture := viewResult.frame
+  have hLowFrame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
+      lc.inputFuture := by
+    rw [hLInput, hLFuture]
+    cases hec : ec with
+    | pilot profile active =>
+      dsimp only [vc] at hVF
+      rw [hec] at hVF hActive
+      apply hVF.changeFuture
+      intro x hx _
+      exact (hActive x).mpr hx
+    | shrink profile context =>
+      rw [hVFuture, hec] at hVF
+      simpa [List.append_assoc] using hVF
+  let lower : BoundSource cfg env low after := {
+    accepted := source.accepted, plans := source.plans, path := source.path ++ [1], context := lc,
+    observation := source.observation, world := source.world, typingEnv := source.typingEnv,
+    rootsEnv := source.rootsEnv, typingStart := t1, typingEnd := t2,
+    rootsStart := r1, rootsEnd := r2,
+    active := ec.child_activeMatches rfl 1 (.bound low) .bound rfl (by trivial)
+      source.typingEnv source.typingEnv source.active (by intro x; rfl),
+    access := (ec.child_accessMatches_iff rfl 1 (.bound low) .bound rfl (by trivial)
+      source.typingEnv source.rootsEnv).mpr source.access,
+    protection := by simpa [hLShrink] using source.protection,
+    observed := by simpa only [sampled, hVShrink, hLShrink] using viewResult.observed,
+    classified := viewResult.classified, permission := source.permission, frame := hLowFrame,
+    typed := hlow, rooted := hrlow, effects := hE2 }
+  refine ⟨lower, rfl, rfl, ?_⟩
+  intro k lowerValue lowerAfter hlowDone
+  have lowResult := lower.result k value.len 0 lowerValue hlowDone
+  have hLF : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env lowerAfter
+      lc.outputFuture := lowResult.frame
+  have hHighFrame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env lowerAfter
+      hc.inputFuture := by
+    rw [hHInput, hHFuture]
+    cases hec : ec with
+    | pilot profile active =>
+      dsimp only [lc] at hLF
+      rw [hec] at hLF hActive
+      apply hLF.changeFuture
+      intro x hx _
+      exact (hActive x).mpr hx
+    | shrink profile context =>
+      rw [hLFuture, hec] at hLF
+      simpa [EvaluationContext.outputFuture, Core.Sound.NodeContext.outputFuture] using hLF
+  refine ⟨{
+    accepted := source.accepted, plans := source.plans, path := source.path ++ [2], context := hc,
+    observation := source.observation, world := source.world, typingEnv := source.typingEnv,
+    rootsEnv := source.rootsEnv, typingStart := t2, typingEnd := t3,
+    rootsStart := r2, rootsEnd := r3,
+    active := ec.child_activeMatches rfl 2 (.bound high) .bound rfl (by trivial)
+      source.typingEnv source.typingEnv source.active (by intro x; rfl),
+    access := (ec.child_accessMatches_iff rfl 2 (.bound high) .bound rfl (by trivial)
+      source.typingEnv source.rootsEnv).mpr source.access,
+    protection := by simpa [hHShrink] using source.protection,
+    observed := by simpa only [lower, hLShrink, hHShrink] using lowResult.observed,
+    classified := lowResult.classified, permission := source.permission, frame := hHighFrame,
+    typed := hhigh, rooted := hrhigh, effects := hE3 }, rfl, rfl⟩
+
 theorem typedExprClaim_zero (cfg : Cfg) (results : List Ty) (expr : Expr) :
     TypedExprClaim 0 cfg results expr := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
@@ -1418,6 +1722,56 @@ theorem typedPlaceClaim_zero (cfg : Cfg) (results : List Ty) (place : Place) :
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
   simp only [evalPlace]
   exact SimEAt.of_timeout state
+
+theorem typedBoundClaim_zero (cfg : Cfg) (results : List Ty) (bound : Bound) :
+    TypedBoundClaim 0 cfg results bound := by
+  intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults
+  simp only [evalBound]
+  exact SimEAt.of_timeout state
+
+theorem typedBoundClaim_omitted (n : Nat) (cfg : Cfg) (results : List Ty) :
+    TypedBoundClaim n cfg results .omitted := by
+  cases n with
+  | zero => exact typedBoundClaim_zero _ _ _
+  | succ n =>
+    intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults
+    simp only [lowerBound, pure_run] at hlow
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
+    simp only [evalBound]
+    exact SimEAt.ret ⟨[], ⟨rfl, rfl⟩, Post.init hrel hpp⟩
+
+private theorem typedBoundClaim_expression {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
+    (he : TypedExprClaim n cfg results expr) (fromEnd : Bool) :
+    TypedBoundClaim (n + 1) cfg results (if fromEnd then .fromEnd expr else .expr expr) := by
+  cases fromEnd
+  all_goals (
+    intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults
+    obtain ⟨child, htyping, hroots, intTy, htype⟩ := source.expressionChild _
+    have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
+      rw [htyping, hroots]
+      exact hmetadata
+    simp only [Bool.false_eq_true, ite_false, ite_true, lowerBound, bind_eq] at hlow
+    obtain ⟨id, middle, hchild, hpure⟩ := hlow
+    rw [pure_run] at hpure
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpure
+    simp only [Bool.false_eq_true, ite_false, ite_true, evalBound]
+    refine SimEAt.bind (he env state child hchildMetadata ls middle id pt cx fr hchild hpp hext
+      hrel hgir hresults) fun value after pt' fr' hdone P => ?_
+    have hvalue := (child.result n value hdone).typed
+    rw [htype] at hvalue
+    obtain ⟨integer, rfl⟩ := Core.Sound.hasTy_int hvalue
+    simp only [Core.expectInt, pure_bind]
+    refine SimEAt.ret ⟨[(id, .val (.int intTy integer))], ?_, P⟩
+    first | exact ⟨intTy, rfl⟩ | exact ⟨intTy, integer, rfl, rfl⟩
+  )
+
+theorem typedBoundClaim_expr {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
+    (he : TypedExprClaim n cfg results expr) : TypedBoundClaim (n + 1) cfg results (.expr expr) :=
+  typedBoundClaim_expression he false
+
+theorem typedBoundClaim_fromEnd {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
+    (he : TypedExprClaim n cfg results expr) : TypedBoundClaim (n + 1) cfg results (.fromEnd expr) :=
+  typedBoundClaim_expression he true
 
 theorem typedViewClaim_zero (cfg : Cfg) (results : List Ty) (view : View) :
     TypedViewClaim 0 cfg results view := by
@@ -1482,6 +1836,49 @@ theorem typedExprClaim_len {n : Nat} {cfg : Cfg} {results : List Ty} {view : Vie
   apply SimEAt.of_simG
   refine leaf_def P hlen hext (by simp) RVal.val ?_
   simp only [execPure, getView_of hcell, pure_bind]
+
+theorem typedExprClaim_slice {n : Nat} {cfg : Cfg} {results : List Ty} {view : View} {low high : Bound}
+    (hv : TypedViewClaim n cfg results view) (hl : TypedBoundClaim n cfg results low)
+    (hh : TypedBoundClaim n cfg results high) (mutability : Mutability) (origin : OriginId) :
+    TypedExprClaim (n + 1) cfg results (.slice mutability view low high origin) := by
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  obtain ⟨sampled, htyping, hroots, next⟩ := source.sliceChildren mutability origin
+  have hviewMetadata : SourceResults sampled.typingEnv sampled.rootsEnv results := by
+    rw [htyping, hroots]
+    exact hmetadata
+  simp only [lowerExpr, bind_eq] at hlow
+  obtain ⟨rv, first, hview, bl, second, hlower, bh, third, hupper, hdef⟩ := hlow
+  have hextThird : ExtT third cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
+  have hextSecond := hextThird.of_adv (advB_lowerBound high _ _ _ _ hupper)
+  have hextFirst := hextSecond.of_adv (advB_lowerBound low _ _ _ _ hlower)
+  simp only [evalExpr]
+  refine SimEAt.bind (hv env state sampled hviewMetadata ls first rv pt cx fr hview hpp hextFirst
+    hrel hgir hresults) fun value after pt1 fr1 hdone P1 => ?_
+  obtain ⟨lower, hltyping, hlroots, nextLow⟩ := next n value after hdone
+  have hlmetadata : SourceResults lower.typingEnv lower.rootsEnv results := by
+    rw [hltyping, hlroots]
+    exact hmetadata
+  refine SimEAt.bind (hl env after lower hlmetadata first second bl pt1 cx fr1 value.len 0
+    hlower P1.pp hextSecond P1.rel hgir hresults) fun lo after2 pt2 fr2 hdone2 ⟨cl, hsl, P2⟩ => ?_
+  obtain ⟨upper, hhtyping, hhroots⟩ := nextLow n lo after2 hdone2
+  have hhmetadata : SourceResults upper.typingEnv upper.rootsEnv results := by
+    rw [hhtyping, hhroots]
+    exact hmetadata
+  refine SimEAt.bind (hh env after2 upper hhmetadata second third bh pt2 cx fr2 value.len value.len
+    hupper P2.pp hextThird P2.rel hgir hresults) fun hi after3 pt3 fr3 hdone3 ⟨ch, hsh, P3⟩ => ?_
+  have P123 := (P1.comp P2).comp P3
+  have hviewCell := P123.has (rv, .view value) (by simp)
+  have hcl : ∀ p ∈ cl, fr3.vals[p.1]? = some p.2 := fun p hp => P123.has p (by simp [hp])
+  have hch : ∀ p ∈ ch, fr3.vals[p.1]? = some p.2 := fun p hp => P123.has p (by simp [hp])
+  have elow := evalBnd_of_spec hsl hcl
+  have ehigh := evalBnd_of_spec hsh hch
+  apply SimEAt.of_simG
+  refine leaf_def P123 hdef hext (by simp) RVal.val ?_
+  simp only [execPure, getView_of hviewCell, elow, ehigh, bind_assoc, pure_bind]
+  by_cases hbound : 0 ≤ lo ∧ lo ≤ hi ∧ hi ≤ (value.len : Int)
+  · simp [hbound]
+  · simp [hbound, abortAtOrg, abortAt, M.stop, bind_apply]
+    rfl
 
 theorem typedExprClaim_lit (n : Nat) (cfg : Cfg) (results : List Ty) (ty : IntTy) (value : Int) :
     TypedExprClaim n cfg results (.lit ty value) := by
