@@ -812,6 +812,46 @@ private:
         }
     }
 
+    vector<int> LowerProducer(const CoreExpr &expression, const vector<int> &destinations, int org) {
+        vector<int> values;
+        if (expression.kind == CoreExprKind::Values) {
+            if (expression.values.size() != destinations.size()) throw CompileError { "producer result count differs from its receiving channels" };
+            for (size_t position = 0; position < destinations.size(); position++) {
+                auto &operand = *expression.values[position];
+                values.push_back(destinations[position] >= 0 ? LowerConstruct(operand, destinations[position], org) : LowerExpr(operand));
+                if (cur < 0) return {};
+            }
+            return values;
+        }
+        if (expression.kind != CoreExprKind::Call) throw CompileError { "multiple-result producer is not values or a call" };
+        auto callee = core.contexts[expression.ctx].impl;
+        auto &function = core.impls[callee];
+        if (function.results.size() != destinations.size()) throw CompileError { "call result count differs from its receiving channels" };
+        GirInst call;
+        call.op = GirOp::Call;
+        call.idx = callee;
+        call.vals = LowerArgs(expression.args, callee, org);
+        for (size_t position = 0; position < destinations.size(); position++) {
+            if (!GirNonfixed(mod, function.results[position].type)) continue;
+            if (destinations[position] < 0) throw CompileError { "nonfixed call result has no receiving destination" };
+            call.op = GirOp::CallConstruct;
+            call.vals2.push_back(destinations[position]);
+        }
+        call.org = org;
+        if (!function.summary.escapes.empty() || function.summary.unknown)
+            throw CompileError { "escaping call requires invoke receiving edges" };
+        auto pack = EmitDef(std::move(call));
+        if (destinations.size() == 1) return { pack };
+        for (size_t position = 0; position < destinations.size(); position++) {
+            GirInst result;
+            result.op = GirOp::Result;
+            result.a = pack;
+            result.idx = (int)position;
+            values.push_back(EmitDef(std::move(result)));
+        }
+        return values;
+    }
+
     void LowerConstructionValue(const CoreExpr &expression, GirDestReceiver receiver, int org) {
         auto destination = OpenDestination(expression, std::move(receiver), CoreRequest::Value, org);
         auto completed = LowerConstruct(expression, destination, org);
@@ -1224,9 +1264,44 @@ private:
                 if (cur >= 0) PublishDestination(completed, org);
                 return;
             }
-            case CoreStmtKind::Receive: case CoreStmtKind::RetForward: case CoreStmtKind::ReturnFrom:
-            case CoreStmtKind::ReturnFromForward: case CoreStmtKind::BreakValue:
-                throw CompileError { "construction statement requires explicit receiving channels" };
+            case CoreStmtKind::Receive: {
+                vector<int> destinations(s.vars.size(), -1);
+                for (size_t position = 0; position < s.vars.size(); position++) {
+                    auto slot = s.vars[position];
+                    auto type = slots.at(slot).ty;
+                    if (!GirNonfixed(mod, type)) continue;
+                    CoreExpr receiver;
+                    receiver.type = type;
+                    destinations[position] = OpenDestination(receiver, GirDestSlotReceiver { slot }, CoreRequest::Value, org);
+                }
+                auto values = LowerProducer(*s.expr, destinations, org);
+                if (cur < 0) return;
+                for (size_t position = 0; position < values.size(); position++) {
+                    if (destinations[position] >= 0) PublishDestination(values[position], org);
+                    else { GirInst init; init.op = GirOp::Init; init.idx = s.vars[position]; init.a = values[position]; init.org = org; EmitEffect(std::move(init)); }
+                }
+                return;
+            }
+            case CoreStmtKind::RetForward: {
+                vector<int> destinations = resultDestinations;
+                for (size_t position = 0; position < destinations.size(); position++) {
+                    auto &descriptor = (*currentResults)[position];
+                    if (!GirNonfixed(mod, descriptor.type)) continue;
+                    if (destinations[position] < 0) throw CompileError { "forward return replaces an already bound named channel" };
+                }
+                auto values = LowerProducer(*s.expr, destinations, org);
+                if (cur < 0) return;
+                AbandonActiveDestinations(org);
+                LeaveTo(0);
+                GirInst ret;
+                ret.op = GirOp::Ret;
+                ret.vals = std::move(values);
+                ret.org = org;
+                EmitTerm(std::move(ret));
+                return;
+            }
+            case CoreStmtKind::ReturnFrom: case CoreStmtKind::ReturnFromForward: case CoreStmtKind::BreakValue:
+                throw CompileError { "construction statement requires explicit target receiving channels" };
         }
     }
 
@@ -1485,10 +1560,10 @@ private:
 
     GirGlobal LowerGlobal(const CoreGlobal &g) {
         Begin(nullptr);
-        auto [b0, ps] = NewBlock({});
-        (void)ps;
+        auto nonfixed = CoreHasConstruction(core.profile) && GirNonfixed(mod, g.type);
+        auto [b0, ps] = NewBlock(nonfixed ? vector<GirTypeId> { mod.CarrierType(CoreType::Dest, g.type, CoreRequest::Value) } : vector<GirTypeId> {});
         cur = b0;
-        auto v = LowerExpr(*g.init);
+        auto v = nonfixed ? LowerConstruct(*g.init, ps[0], Org(g.org)) : LowerExpr(*g.init);
         GirInst r;
         r.op = GirOp::Ret;
         r.vals = { v };
@@ -1504,6 +1579,8 @@ private:
         out.init.key = Sha256::Of(cat(g.module, "::", g.name)).Short();
         out.init.name = g.name;
         out.init.results = { g.type };
+        if (CoreHasConstruction(core.profile)) out.init.resultProtocols = { { nonfixed ? CoreRequest::Value : CoreRequest::Register, nullopt } };
+        out.init.slots = slots;
         ScopePairs pairs;
         ExprScopes(-1, *g.init, pairs);
         out.init.scopes = ScopeTable(pairs);

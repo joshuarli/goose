@@ -30,6 +30,7 @@ GirInst Def(GirOp op, int res) {
     GirInst i;
     i.op = op;
     i.res = res;
+    if (op == GirOp::DestFinish) i.org = 0;
     return i;
 }
 
@@ -42,7 +43,7 @@ GirInst Int(GirModule &m, int res, const char *text) {
 
 GirInst Enter(int scope) { GirInst i; i.op = GirOp::Enter; i.idx = scope; return i; }
 GirInst Leave(int scope) { GirInst i; i.op = GirOp::Leave; i.idx = scope; return i; }
-GirInst Ret(vector<int> vals = {}) { GirInst i; i.op = GirOp::Ret; i.vals = std::move(vals); return i; }
+GirInst Ret(vector<int> vals = {}) { GirInst i; i.op = GirOp::Ret; i.vals = std::move(vals); if (!i.vals.empty()) i.org = 0; return i; }
 GirInst Br(int block, vector<int> args = {}) { GirInst i; i.op = GirOp::Br; i.idx = block; i.vals = std::move(args); return i; }
 
 GirInst CondBr(int c, int t, int e) {
@@ -632,7 +633,7 @@ void RejectsSlotVariableThatNamesAnotherReferenceToSliceParameter() {
     assert(Code(m) == "GIR-V010");
 }
 
-void RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter() {
+void SpecializedParameterSummariesNormalizeBothCoverageSides() {
     auto m = Base();
     auto i64 = m.IntType(CoreIntTy::I64);
     auto ref = m.RefType(CoreMut::Mut, i64);
@@ -680,6 +681,8 @@ void RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter() {
 
     m.funcs.push_back(wrap);
     m.funcs.push_back(touch);
+    assert(Code(m) == "");
+    m.funcs[1].summary.reads.clear();
     assert(Code(m) == "GIR-V050");
     m.funcs[1].summary.reads.push_back(CoreTarget { true, 0 });
     assert(Code(m) == "");
@@ -4497,13 +4500,16 @@ GirModule ByteConstructionModule() {
     open.org = 0;
     GirInst write;
     write.op = GirOp::DestBytes;
+    write.org = 0;
     write.a = 1;
     write.bytes = { 65, 0, 66 };
+    write.org = 0;
     auto interveningValue = Int(m, 2, "1");
     GirInst finish = Def(GirOp::DestFinish, 3);
     finish.a = 1;
     GirInst publish;
     publish.op = GirOp::DestPublish;
+    publish.org = 0;
     publish.a = 3;
     Main(m).blocks[0].insts = { Enter(0), count, open, interveningValue, write, finish, publish, Leave(0), Ret() };
     return m;
@@ -4542,6 +4548,7 @@ GirModule GrowArrayConstructionModule() {
     finish.org = 0;
     GirInst publish;
     publish.op = GirOp::DestPublish;
+    publish.org = 0;
     publish.a = 5;
     publish.org = 0;
     Main(m).blocks[0].insts = {
@@ -4747,8 +4754,10 @@ void ConstructionCarrierOwnershipCrossesBranchParameters() {
     entry.insts = { Enter(0), Int(m, 0, "3"), destination, Br(1, { 1 }) };
     GirInst write;
     write.op = GirOp::DestBytes;
+    write.org = 0;
     write.a = 2;
     write.bytes = { 65, 0, 66 };
+    write.org = 0;
     auto finish = Def(GirOp::DestFinish, 3);
     finish.a = 2;
     GirBlock body;
@@ -4756,6 +4765,7 @@ void ConstructionCarrierOwnershipCrossesBranchParameters() {
     body.insts = { write, finish, Br(2, { 3 }) };
     GirInst publish;
     publish.op = GirOp::DestPublish;
+    publish.org = 0;
     publish.a = 4;
     GirBlock exit;
     exit.params = { { 4, built } };
@@ -4795,11 +4805,13 @@ GirModule ConstructionCallModule() {
     GirFunc make;
     make.name = "make";
     make.results = { type };
+    make.roots.results = { {} };
     make.resultProtocols = { { CoreRequest::Value, nullopt } };
     make.scopes = { -1 };
     make.summary.constructs = { 0 };
     auto write = GirInst {};
     write.op = GirOp::DestWrite;
+    write.org = 0;
     write.a = 0;
     write.b = 1;
     auto finish = Def(GirOp::DestFinish, 2);
@@ -4815,6 +4827,7 @@ GirModule ConstructionCallModule() {
     call.org = 0;
     auto publish = GirInst {};
     publish.op = GirOp::DestPublish;
+    publish.org = 0;
     publish.a = 2;
     Main(m).blocks[0].insts = { Enter(0), Int(m, 0, "1"), open, call, publish, Leave(0), Ret() };
     return m;
@@ -4847,6 +4860,7 @@ GirModule ConstructionFixedTargetModule() {
     GirFunc target;
     target.name = "target";
     target.results = { i64 };
+    target.roots.results = { {} };
     target.resultProtocols = { {} };
     target.scopes = { -1 };
     GirInst invoke;
@@ -4919,6 +4933,7 @@ GirModule ConstructionVariableTargetModule() {
     GirFunc helper;
     helper.name = "helper";
     helper.results = { type };
+    helper.roots.results = { {} };
     helper.resultProtocols = { { CoreRequest::Value, nullopt } };
     helper.scopes = { -1 };
     helper.summary.needs = { 0 };
@@ -4931,6 +4946,7 @@ GirModule ConstructionVariableTargetModule() {
     target.org = 0;
     GirInst write;
     write.op = GirOp::DestWrite;
+    write.org = 0;
     write.a = 1;
     write.b = 2;
     auto finish = Def(GirOp::DestFinish, 3);
@@ -4973,6 +4989,7 @@ GirModule ConstructionFixedMultiResultModule() {
     pair.name = "pair";
     pair.params = { i64 };
     pair.results = { i64, boolean };
+    pair.roots.results = { {}, {} };
     pair.resultProtocols = { {}, {} };
     pair.scopes = { -1 };
     auto yes = Def(GirOp::Bool, 1);
@@ -5062,6 +5079,7 @@ GirModule ConstructionRecursiveArrayModule() {
     };
     GirInst publish;
     publish.op = GirOp::DestPublish;
+    publish.org = 0;
     publish.a = 5;
     publish.org = 0;
     auto slot = Def(GirOp::Slot, 6);
@@ -5125,12 +5143,15 @@ void ConstructionCallsAndCarrierBranchesLowerToPrimitiveChannels() {
     Main(m).blocks[0].insts = { Enter(0), Int(m, 0, "3"), destination, Br(1, { 1 }) };
     GirInst write;
     write.op = GirOp::DestBytes;
+    write.org = 0;
     write.a = 2;
     write.bytes = { 65, 0, 66 };
+    write.org = 0;
     auto finish = Def(GirOp::DestFinish, 3);
     finish.a = 2;
     GirInst publish;
     publish.op = GirOp::DestPublish;
+    publish.org = 0;
     publish.a = 4;
     Main(m).blocks.push_back({ { { 2, type } }, { write, finish, Br(2, { 3 }) } });
     Main(m).blocks.push_back({ { { 4, built } }, { publish, Leave(0), Ret() } });
@@ -5138,7 +5159,210 @@ void ConstructionCallsAndCarrierBranchesLowerToPrimitiveChannels() {
     assert(Code(GirToLow(m).Lower()) == "");
 }
 
+GirModule ConstructionAliasedProvenanceModule() {
+    auto m = LowBase();
+    m.profile = CoreProfile::Construction;
+    auto integer = m.IntType(CoreIntTy::I64);
+    auto pointer = m.PtrType();
+    auto bytes = Def(GirOp::StaticBytes, 1);
+    bytes.bytes = { 65 };
+    auto scope = Def(GirOp::SourceEnter, 2);
+    auto storage0 = Def(GirOp::TraceId, 3);
+    storage0.trace = GirTraceKind::Storage;
+    auto source0 = Def(GirOp::SourceNew, 4);
+    source0.a = 3;
+    auto storage1 = Def(GirOp::TraceId, 5);
+    storage1.trace = GirTraceKind::Storage;
+    auto source1 = Def(GirOp::SourceNew, 6);
+    source1.a = 5;
+    auto destination = Def(GirOp::TraceId, 7);
+    destination.trace = GirTraceKind::Destination;
+    GirInst begin;
+    begin.op = GirOp::Event;
+    begin.vals = { 7 };
+    auto shadow = Def(GirOp::SourceCallPush, 8);
+    shadow.vals = { 4, 6, -1 };
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 1;
+    call.vals = { 0, 1, 1, 7 };
+    call.org = 0;
+    GirInst pop;
+    pop.op = GirOp::SourceCallPop;
+    pop.a = 8;
+    GirInst leave;
+    leave.op = GirOp::SourceLeave;
+    leave.a = 2;
+    Main(m).blocks[0].insts = { bytes, scope, storage0, source0, storage1, source1, destination, begin, shadow, call, pop, leave, Ret() };
+    GirFunc callee;
+    callee.name = "copy_aliases";
+    callee.params = { integer, pointer, pointer, integer };
+    callee.scopes = { -1 };
+    auto inner = Def(GirOp::SourceEnter, 4);
+    auto first = Def(GirOp::SourceParam, 5);
+    first.idx = 1;
+    auto second = Def(GirOp::SourceParam, 6);
+    second.idx = 2;
+    GirInst copyFirst;
+    copyFirst.op = GirOp::SourceCopy;
+    copyFirst.a = 5;
+    copyFirst.b = 3;
+    auto copySecond = copyFirst;
+    copySecond.a = 6;
+    auto innerLeave = leave;
+    innerLeave.a = 4;
+    callee.blocks = { { { { 0, integer }, { 1, pointer }, { 2, pointer }, { 3, integer } },
+                       { inner, first, second, copyFirst, copySecond, innerLeave, Ret() } } };
+    m.funcs.push_back(std::move(callee));
+    return m;
+}
+
+void ConstructionProvenanceShadowsDistinguishAliasedArguments() {
+    auto m = ConstructionAliasedProvenanceModule();
+    assert(Code(m) == "");
+    auto wire = GirWriter(m).WriteLow();
+    assert(wire.find("[\"l_source_call_push\",8,[[4],[6],[]]]") != string::npos);
+    auto missing = m;
+    Main(missing).blocks[0].insts[8].vals[1] = -1;
+    assert(Code(missing) == "GIR-V090");
+    auto wrongStorage = m;
+    Main(wrongStorage).blocks[0].insts[2].trace = GirTraceKind::Destination;
+    assert(Code(wrongStorage) == "GIR-V090");
+    auto wrongParameter = m;
+    wrongParameter.funcs[1].blocks[0].insts[1].idx = 3;
+    assert(Code(wrongParameter) == "GIR-V090");
+    auto unclosedCall = m;
+    Main(unclosedCall).blocks[0].insts.erase(Main(unclosedCall).blocks[0].insts.begin() + 10);
+    assert(Code(unclosedCall) == "GIR-V090");
+    auto programPointer = m;
+    Main(programPointer).blocks[0].insts[8].vals[0] = 1;
+    assert(Code(programPointer) == "GIR-V090");
+    auto deadSource = m;
+    auto &instructions = deadSource.funcs[1].blocks[0].insts;
+    swap(instructions[4], instructions[5]);
+    assert(Code(deadSource) == "GIR-V090");
+}
+
+GirModule ConstructionReturnedReferenceCopyModule() {
+    auto m = ByteConstructionModule();
+    auto grow = Main(m).slots[0].ty;
+    auto integer = m.IntType(CoreIntTy::I64);
+    auto reference = m.RefType(CoreMut::Mut, grow);
+    Main(m).slots = { { integer, CoreVarKind::Let, 0, 0 }, { grow, CoreVarKind::Let, 0, 1 }, { grow, CoreVarKind::Let, 0, 2 } };
+    auto &instructions = Main(m).blocks[0].insts;
+    get<GirDestSlotReceiver>(instructions[2].destReceiver).slot = 1;
+    instructions.insert(instructions.begin() + 2, Init(0, 0));
+    instructions.resize(instructions.size() - 2);
+    auto slot = Def(GirOp::Slot, 4);
+    slot.idx = 1;
+    auto open = Def(GirOp::DestOpen, 5);
+    open.ty = grow;
+    open.destReceiver = GirDestSlotReceiver { 2 };
+    open.org = 0;
+    auto call = Def(GirOp::Call, 6);
+    call.idx = 1;
+    call.vals = { 4 };
+    call.org = 0;
+    GirInst copy;
+    copy.op = GirOp::DestCopy;
+    copy.a = 5;
+    copy.b = 6;
+    copy.org = 0;
+    auto finish = Def(GirOp::DestFinish, 7);
+    finish.a = 5;
+    GirInst publish;
+    publish.op = GirOp::DestPublish;
+    publish.a = 7;
+    publish.org = 0;
+    for (auto &instruction : vector<GirInst> { slot, open, call, copy, finish, publish, Leave(0), Ret() }) instructions.push_back(instruction);
+    GirFunc identity;
+    identity.name = "identity";
+    identity.params = { reference };
+    identity.results = { reference };
+    identity.resultProtocols = { {} };
+    identity.slots = { { reference, CoreVarKind::Let, 0, 0 } };
+    identity.scopes = { -1 };
+    identity.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    identity.roots.results = { { CoreRootRef { CoreRootRef::Param, 0 } } };
+    identity.blocks = { { { { 0, reference } }, { Enter(0), Init(0, 0), Leave(0), Ret({ 0 }) } } };
+    m.funcs.push_back(std::move(identity));
+    return m;
+}
+
+void ConstructionReturnedReferenceRetainsCopyProvenance() {
+    auto m = ConstructionReturnedReferenceCopyModule();
+    assert(Code(m) == "");
+    auto low = GirToLow(m).Lower();
+    assert(Code(low) == "");
+    auto wire = GirWriter(low).WriteLow();
+    assert(wire.find("\"l_source_result\"") != string::npos);
+    assert(wire.find("\"l_source_call_get\"") != string::npos);
+    assert(wire.find("\"l_source_copy\"") != string::npos);
+}
+
+void StorageSummaryCoverageNormalizesSpecializedAndGenericRoots() {
+    for (auto specialized : { false, true }) {
+        auto m = Base();
+        m.profile = CoreProfile::Shrink;
+        auto integer = m.IntType(CoreIntTy::I64);
+        CoreType owner;
+        owner.kind = CoreType::Grow;
+        owner.elem = integer;
+        auto grow = m.Intern(owner);
+        auto reference = m.RefType(CoreMut::Mut, grow);
+        GirGlobal global;
+        global.name = "owner";
+        global.ty = grow;
+        global.kind = CoreVarKind::Var;
+        global.org = 0;
+        global.init.name = "owner";
+        global.init.results = { grow };
+        global.init.roots.results = { {} };
+        global.init.summary.unknown = true;
+        auto array = Def(GirOp::Arr, 0);
+        array.ty = grow;
+        global.init.blocks = { { {}, { array, Ret({ 0 }) } } };
+        m.globals.push_back(std::move(global));
+        GirFunc touch;
+        touch.name = "touch";
+        touch.params = { reference };
+        touch.scopes = { -1 };
+        touch.roots.params = { { 0, { CoreRootRef { specialized ? CoreRootRef::Global : CoreRootRef::Param, 0 } } } };
+        for (auto *targets : { &touch.summary.reads, &touch.summary.writes, &touch.summary.grows, &touch.summary.shrinks })
+            targets->push_back({ false, 0 });
+        touch.summary.aborts = true;
+        auto push = Def(GirOp::Push, 2);
+        push.a = 0;
+        push.b = 1;
+        push.org = 0;
+        auto pop = Def(GirOp::Pop, 3);
+        pop.a = 0;
+        pop.org = 0;
+        touch.blocks = { { { { 0, reference } }, { Int(m, 1, "7"), push, pop, Ret() } } };
+        GirFunc wrapper = touch;
+        wrapper.name = "wrapper";
+        auto call = Def(GirOp::Call, 1);
+        call.idx = 1;
+        call.vals = { 0 };
+        call.org = 0;
+        wrapper.blocks = { { { { 0, reference } }, { call, Ret() } } };
+        m.funcs.push_back(std::move(touch));
+        m.funcs.push_back(std::move(wrapper));
+        assert(Code(m) == "");
+        for (int field = 0; field < 4; field++) {
+            auto omitted = m;
+            auto &summary = omitted.funcs[2].summary;
+            vector<vector<CoreTarget> *> fields { &summary.reads, &summary.writes, &summary.grows, &summary.shrinks };
+            fields[field]->clear();
+            assert(Code(omitted) == "GIR-V050");
+        }
+    }
+}
+
 int main() {
+    StorageSummaryCoverageNormalizesSpecializedAndGenericRoots();
+    ConstructionReturnedReferenceRetainsCopyProvenance();
+    ConstructionProvenanceShadowsDistinguishAliasedArguments();
     ConstructionRecursiveArraysUseExplicitPackedTraversal();
     ConstructionCallsAndCarrierBranchesLowerToPrimitiveChannels();
     ConstructionFixedResultsUseExplicitOutputChannels();
@@ -5166,7 +5390,7 @@ int main() {
     RejectsReferenceToSliceGlobal();
     RejectsDuplicateVariablesForReferenceToSliceParameterSlots();
     RejectsSlotVariableThatNamesAnotherReferenceToSliceParameter();
-    RejectsSummaryThatOmitsAGlobalReachedThroughACalleeParameter();
+    SpecializedParameterSummariesNormalizeBothCoverageSides();
     RejectsParameterRootUnderapproximationAtCall();
     AcceptsUnreachableAfterANonReturningCall();
     RejectsUnreachableWithoutANonReturningCall();

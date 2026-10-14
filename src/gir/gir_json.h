@@ -556,6 +556,33 @@ private:
                 Str(out, i.text);
                 out += ']';
                 return;
+            case GirOp::SourceNew:
+                Append(out, "[\"l_source_new\",", i.res, ",", i.a, ","); Ints(out, i.vals); out += ']'; return;
+            case GirOp::SourceChild:
+                Append(out, "[\"l_source_child\",", i.res, ",", i.a, ",", i.b, "]"); return;
+            case GirOp::SourceGlobal:
+                Append(out, "[\"l_source_global\",", i.res, ",", i.idx, "]"); return;
+            case GirOp::SourceGlobalSet:
+                Append(out, "[\"l_source_global_set\",", i.idx, ",", i.a, "]"); return;
+            case GirOp::SourceParam:
+                Append(out, "[\"l_source_param\",", i.res, ",", i.idx, "]"); return;
+            case GirOp::SourceEnter:
+                Append(out, "[\"l_source_enter\",", i.res, "]"); return;
+            case GirOp::SourceCallPush:
+                Append(out, "[\"l_source_call_push\",", i.res, ",[");
+                for (size_t position = 0; position < i.vals.size(); position++) {
+                    if (position) out += ',';
+                    out += '['; if (i.vals[position] >= 0) Append(out, i.vals[position]); out += ']';
+                }
+                out += "]]"; return;
+            case GirOp::SourceCallGet:
+                Append(out, "[\"l_source_call_get\",", i.res, ",", i.a, ",", i.idx, "]"); return;
+            case GirOp::SourceLeave: case GirOp::SourceCallPop:
+                Append(out, "[\"", i.op == GirOp::SourceLeave ? "l_source_leave" : "l_source_call_pop", "\",", i.a, "]"); return;
+            case GirOp::SourceResult:
+                Append(out, "[\"l_source_result\",", i.idx, ",", i.a, "]"); return;
+            case GirOp::SourceCopy:
+                Append(out, "[\"l_source_copy\",", i.a, ",", i.b, "]"); return;
             case GirOp::StaticBytes:
                 def("l_static");
                 out += ',';

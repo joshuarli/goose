@@ -615,6 +615,33 @@ public:
                 return GirTyOk(m.Intern(carrier));
             }
             // The low stage: scalars and addresses.
+            case GirOp::SourceNew: {
+                auto storage = IntTy(i.a);
+                if (!storage.ok()) return storage;
+                if (storage.ty != m.IntType(CoreIntTy::I64)) return GirTyErr("source storage identity is not i64");
+                for (auto path : i.vals) {
+                    auto index = IntTy(path);
+                    if (!index.ok()) return index;
+                    if (index.ty != storage.ty) return GirTyErr("source path index is not i64");
+                }
+                return GirTyOk(m.PtrType());
+            }
+            case GirOp::SourceChild: {
+                auto source = PtrOf(i.a), index = IntTy(i.b);
+                if (!source.ok()) return source;
+                if (!index.ok()) return index;
+                if (index.ty != m.IntType(CoreIntTy::I64)) return GirTyErr("source child index is not i64");
+                return GirTyOk(m.PtrType());
+            }
+            case GirOp::SourceParam: case GirOp::SourceEnter: case GirOp::SourceGlobal: return GirTyOk(m.PtrType());
+            case GirOp::SourceCallPush:
+                for (auto source : i.vals) if (source >= 0) { auto pointer = PtrOf(source); if (!pointer.ok()) return pointer; }
+                return GirTyOk(m.PtrType());
+            case GirOp::SourceCallGet: {
+                auto token = PtrOf(i.a);
+                if (!token.ok()) return token;
+                return GirTyOk(m.PtrType());
+            }
             case GirOp::PtrOffset: {
                 auto p = PtrOf(i.a), n = Data(i.b);
                 if (!p.ok()) return p;

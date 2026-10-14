@@ -208,6 +208,7 @@ private:
         bool unaligned = false;     // An address inside a packed struct may lack scalar alignment.
         bool lit = false;           // A transient owner literal run, static or joined.
         vector<int> elems;          // Its high element values.
+        int source = -1;
     };
 
     struct Place {
@@ -230,6 +231,7 @@ private:
         bool push = false;
         bool append = false;
         bool privateSource = false;
+        int source = -1;
     };
 
     const GirFunc *hf = nullptr;
@@ -247,7 +249,12 @@ private:
     map<int, int> scratchStacks;
     map<const GirInst *, int> printStacks;
     map<int, Destination> namedDestinations;
-    vector<int> storageMembers;
+    map<int, pair<int, int>> ownedArguments;
+    map<int, vector<int>> callResultSources;
+    vector<int> sourceMembers, referenceSources;
+    vector<int> sourceParameterPositions;
+    vector<vector<int>> resultOutputPositions;
+    int sourceScope = -1;
     vector<GirTypeId> lvals;
     int cur = -1;
     int spval = 0, outval = -1;
@@ -527,6 +534,12 @@ private:
                 Copy(dst, src, copy.size);
             }
         }
+        if (CoreHasConstruction(h.profile))
+            for (size_t position = 0; position < params.size(); position++) if (GirRefLike(h, params[position].second)) {
+                auto source = shape[values[position]].source;
+                if (source < 0) throw CompileError { "reference branch omits its source metadata" };
+                words.push_back(source);
+            }
         return words;
     }
 
@@ -593,7 +606,8 @@ private:
     // Places of the slots.
     void PlaceSlots() {
         places.assign(hf->slots.size(), {});
-        storageMembers.assign(hf->slots.size(), -1);
+        sourceMembers.assign(hf->slots.size(), -1);
+        referenceSources.assign(hf->slots.size(), -1);
         scratchStacks.clear();
         printStacks.clear();
         scopeheaders.assign(hf->scopes.size(), {});
@@ -692,12 +706,14 @@ private:
             for (auto &block : hf->blocks) for (auto &instruction : block.insts)
                 if (instruction.op == GirOp::Print) printStacks[&instruction] = stacks++;
             for (size_t slot = 0; slot < places.size(); slot++) {
-                GirMember member;
-                member.kind = GirMember::Scalar;
-                member.ty = I64();
-                member.scope = hf->slots[slot].scope;
-                member.name = "storage_ordinal";
-                storageMembers[slot] = Member(std::move(member));
+                GirMember source;
+                source.kind = GirMember::Scalar;
+                source.ty = Ptr();
+                source.scope = hf->slots[slot].scope;
+                source.name = "source";
+                sourceMembers[slot] = Member(source);
+                source.name = "reference_source";
+                referenceSources[slot] = Member(std::move(source));
             }
         }
         set<int> scratchOwned;
@@ -729,7 +745,12 @@ private:
         destinations.clear();
         completions.clear();
         resultOutputs.clear();
+        resultOutputPositions.clear();
+        sourceParameterPositions.clear();
+        sourceScope = -1;
         namedDestinations.clear();
+        ownedArguments.clear();
+        callResultSources.clear();
         // Value types of the high function.
         ComputeTypes();
         ComputeCarrierRoots();
@@ -776,6 +797,8 @@ private:
             else for (auto &p : f.blocks[b].params)
                 if (!IsAggregate(p.second) && !IsOwnerRun(p.second))
                     for (auto t : Words(p.second)) ps.push_back(t);
+            if (b > 0 && CoreHasConstruction(h.profile))
+                for (auto &p : f.blocks[b].params) if (GirRefLike(h, p.second)) ps.push_back(Ptr());
             vector<int> ids;
             bmap[b] = NewBlockL(ps, &ids);
             if (b == 0) {
@@ -785,17 +808,19 @@ private:
                 if (global < 0 && sig->out) outval = ids[k++];
                 for (size_t parameter = 0; parameter < f.params.size(); parameter++) {
                     auto &p = f.blocks[0].params[parameter];
+                    sourceParameterPositions.push_back((int)k);
                     auto words = GirNonfixed(h, f.params[parameter]) ? vector<GirTypeId> { Ptr(), Ptr() } : Words(p.second);
                     for (auto word : words) { (void)word; shape[p.first].w.push_back(ids[k++]); }
                 }
                 if (CoreHasConstruction(h.profile)) {
                     size_t incoming = f.params.size();
                     for (size_t result = 0; result < f.results.size(); result++) {
-                        vector<int> outputs;
+                        vector<int> outputs, positions;
                         if (global >= 0) {
                             outputs = {};
-                        } else for (size_t word = 0; word < sig->resultWords[result].size(); word++) outputs.push_back(ids[k++]);
+                        } else for (size_t word = 0; word < sig->resultWords[result].size(); word++) { positions.push_back((int)k); outputs.push_back(ids[k++]); }
                         resultOutputs.push_back(outputs);
+                        resultOutputPositions.push_back(positions);
                         if (GirNonfixed(h, f.results[result]) && global < 0)
                             shape[f.blocks[0].params[incoming++].first].w = outputs;
                     }
@@ -805,6 +830,8 @@ private:
                 for (auto &p : f.blocks[b].params)
                     if (!IsAggregate(p.second) && !IsOwnerRun(p.second))
                         for (auto t : Words(p.second)) { (void)t; shape[p.first].w.push_back(ids[k++]); }
+                if (CoreHasConstruction(h.profile))
+                    for (auto &p : f.blocks[b].params) if (GirRefLike(h, p.second)) shape[p.first].source = ids[k++];
             }
         }
         // Blocks in reverse postorder, so every definition comes before its uses.
@@ -822,7 +849,14 @@ private:
         reverse(order.begin(), order.end());
         for (auto b : order) {
             cur = bmap[b];
-            if (b == 0 && global >= 0 && CoreHasConstruction(h.profile)) TraceId(GirTraceKind::Storage);
+            if (b == 0 && CoreHasConstruction(h.profile)) {
+                sourceScope = Simple(GirOp::SourceEnter, Ptr());
+                for (size_t parameter = 0; parameter < f.params.size(); parameter++) {
+                    auto type = f.params[parameter];
+                    if (HT(type).kind == CoreType::Ref || GirNonfixed(h, type))
+                        shape[f.blocks[0].params[parameter].first].source = Simple(GirOp::SourceParam, Ptr(), -1, -1, sourceParameterPositions[parameter]);
+                }
+            }
             if (b == 0 && CoreHasConstruction(h.profile)) {
                 size_t incoming = f.params.size();
                 for (size_t result = 0; result < f.results.size(); result++) {
@@ -837,6 +871,8 @@ private:
                         destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
                         destination.metadata = Metadata(TraceId(GirTraceKind::Destination));
                         destination.receiverGlobal = global;
+                        destination.source = NewSource(TraceId(GirTraceKind::Storage));
+                        SimpleE(GirOp::SourceGlobalSet, destination.source, -1, global);
                         if (receiver == GirMember::Header) destination.header = Simple(GirOp::GlobalAddr, Ptr(), -1, -1, global);
                         shape[value].w = { destination.stack, destination.base, destination.metadata };
                         destinations[carrierRoots[value]] = destination;
@@ -879,6 +915,7 @@ private:
         // The scope tree is not kept: the low stage has no scopes, but the
         // frame members keep the scope that bounds their life, as a tree.
         lf.scopes = f.scopes;
+        if (lf.scopes.empty()) lf.scopes.push_back(-1);
         lf.blocks.shrink_to_fit();
         return std::move(lf);
     }
@@ -953,6 +990,18 @@ private:
         }
     }
 
+    int NewSource(int storage) { return Simple(GirOp::SourceNew, Ptr(), storage); }
+    int ChildSource(int source, int index) {
+        if (source < 0) throw CompileError { "derived reference has no storage source" };
+        return Simple(GirOp::SourceChild, Ptr(), source, index);
+    }
+    int CreateObject(int slot) {
+        auto storage = TraceId(GirTraceKind::Storage);
+        auto source = NewSource(storage);
+        SimpleE(GirOp::LocalSet, source, -1, sourceMembers[slot]);
+        return source;
+    }
+
     int Metadata(int trace) {
         auto address = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(16));
         PStoreV(I64(), address, ConstI(I64(), 0));
@@ -1007,7 +1056,7 @@ private:
         if (auto slot = get_if<GirDestSlotReceiver>(&inst.destReceiver)) {
             destination.receiverSlot = slot->slot;
             auto &place = places.at(slot->slot);
-            SimpleE(GirOp::LocalSet, TraceId(GirTraceKind::Storage), -1, storageMembers[slot->slot]);
+            destination.source = CreateObject(slot->slot);
             destination.stack = StackOf(place.stack);
             if (place.kind == Place::Header) destination.header = Simple(GirOp::FrameAddr, Ptr(), -1, -1, place.members[0]);
         } else if (auto global = get_if<GirDestGlobalReceiver>(&inst.destReceiver)) {
@@ -1018,6 +1067,7 @@ private:
         } else if (holds_alternative<GirDestArgReceiver>(inst.destReceiver)) {
             destination.stack = StackOf(scratchStacks.at(inst.res));
             destination.privateSource = true;
+            destination.source = NewSource(TraceId(GirTraceKind::Storage));
         } else {
             int reference = -1;
             if (auto whole = get_if<GirDestWholeReceiver>(&inst.destReceiver)) reference = whole->reference;
@@ -1151,7 +1201,8 @@ private:
     void CopyDestination(const GirInst &inst) {
         auto [base, count] = Sample(inst.b);
         auto element = HT(HT(hvt[inst.a]).elem).elem;
-        Event(GirEventKind::Copy, { ConstI(I64(), 0), DestinationId(inst.a) }, GirEventReason::Storage);
+        if (shape[inst.b].source < 0) throw CompileError { "construction copy has no retained storage source" };
+        SimpleE(GirOp::SourceCopy, shape[inst.b].source, DestinationId(inst.a));
         CopyRun(inst.a, base, count, element);
     }
 
@@ -1464,6 +1515,7 @@ private:
             case GirOp::Elem: {
                 auto esz = Size(HT(hvt[i.a]).elem);
                 auto idx = ToI64(i.b);
+                if (CoreHasConstruction(h.profile)) shape[i.res].source = ChildSource(shape[i.a].source, idx);
                 Define(i, { CoreHasConstruction(h.profile) ? ElementAt(HT(hvt[i.a]).elem, shape[i.a].w[0], idx) : PtrAt(shape[i.a].w[0], idx, esz) });
                 return;
             }
@@ -1474,11 +1526,11 @@ private:
                 auto offset = h.structs.at(sid).fields.at(i.idx).offset;
                 Define(i, { PtrAt(shape[i.a].w[0], ConstI(I64(), offset), 1) });
                 shape[i.res].unaligned = true;
+                if (CoreHasConstruction(h.profile)) shape[i.res].source = ChildSource(shape[i.a].source, ConstI(I64(), i.idx));
                 return;
             }
             case GirOp::DestOpen: return Open(i);
             case GirOp::DestChild: {
-                auto parent = DestinationAt(i.a);
                 Destination child;
                 child.stack = shape[i.a].w[0];
                 child.base = Simple(GirOp::StackMark, Ptr(), child.stack);
@@ -1516,6 +1568,8 @@ private:
             case GirOp::DestPublish: Publish(i.a, i.org); return;
             case GirOp::DestArg: {
                 auto destination = DestinationAt(i.a);
+                shape[i.res].source = destination.source;
+                ownedArguments[i.res] = { shape[i.a].w[0], shape[i.a].w[1] };
                 if (IsResizableKind(HT(destination.type).kind)) {
                     auto header = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(16));
                     SimpleE(GirOp::HdrInit, header, shape[i.a].w[1]);
@@ -1526,6 +1580,7 @@ private:
             }
             case GirOp::DestBind: {
                 auto destination = DestinationAt(i.a);
+                CreateObject(i.idx);
                 namedDestinations[i.idx] = destination;
                 auto &place = places[i.idx];
                 if (place.kind == Place::Dynamic) SimpleE(GirOp::LocalSet, shape[i.a].w[1], -1, place.members[0]);
@@ -1586,7 +1641,7 @@ private:
             case GirOp::Freeze: shape[i.res] = shape[i.a]; return;
             case GirOp::Load: return LowerLoad(i);
             case GirOp::Snap: return LowerSnap(i);
-            case GirOp::SliceView: shape[i.res].w = shape[i.a].w; return;
+            case GirOp::SliceView: shape[i.res] = shape[i.a]; return;
             case GirOp::ViewLen: Define(i, { shape[i.a].w[1] }); return;
             case GirOp::ViewSlice: return LowerViewSlice(i);
             case GirOp::ArrayLen: {
@@ -1608,6 +1663,7 @@ private:
                 size_t offset = 0;
                 for (int part = 0; part < i.idx; part++) offset += Words(parts[part]).size();
                 auto count = Words(parts[i.idx]).size();
+                if (callResultSources.count(i.a)) shape[i.res].source = callResultSources.at(i.a)[i.idx];
                 Define(i, vector<int>(shape[i.a].w.begin() + offset, shape[i.a].w.begin() + offset + count));
                 return;
             }
@@ -1686,6 +1742,7 @@ private:
     }
 
     void LowerSlot(const GirInst &i) {
+        if (CoreHasConstruction(h.profile)) shape[i.res].source = Simple(GirOp::LocalGet, Ptr(), -1, -1, sourceMembers[i.idx]);
         auto &p = places[i.idx];
         switch (p.kind) {
             case Place::Alias:
@@ -1710,6 +1767,7 @@ private:
 
     void LowerGlobalAddr(const GirInst &i) {
         auto &g = l.lowglobals[i.idx];
+        if (CoreHasConstruction(h.profile)) shape[i.res].source = Simple(GirOp::SourceGlobal, Ptr(), -1, -1, i.idx);
         auto addr = Simple(GirOp::GlobalAddr, Ptr(), -1, -1, i.idx);
         if (g.kind == GirMember::Header) Define(i, { addr, Simple(GirOp::GlobalStack, Ptr(), -1, -1, i.idx) });
         else if (g.kind == GirMember::Dynamic) Define(i, { PLoadV(Ptr(), addr) });
@@ -1719,6 +1777,9 @@ private:
     void LowerLoad(const GirInst &i) {
         auto &rs = shape[i.a];
         auto t = hvt[i.res];
+        shape[i.res].source = rs.source;
+        if (CoreHasConstruction(h.profile) && rs.slot >= 0 && HT(t).kind == CoreType::Ref)
+            shape[i.res].source = Simple(GirOp::LocalGet, Ptr(), -1, -1, referenceSources[rs.slot]);
         if (rs.slot >= 0) {
             vector<int> ws;
             for (auto m : places[rs.slot].members) ws.push_back(Simple(GirOp::LocalGet, lf.members[m].ty, -1, -1, m));
@@ -1746,6 +1807,7 @@ private:
     }
 
     void LowerSnap(const GirInst &i) {
+        shape[i.res].source = shape[i.a].source;
         if (CoreHasConstruction(h.profile)) {
             auto [base, count] = Sample(i.a);
             Define(i, { base, count });
@@ -1761,6 +1823,7 @@ private:
     }
 
     void LowerViewSlice(const GirInst &i) {
+        shape[i.res].source = shape[i.a].source;
         auto esz = Size(HT(hvt[i.res]).elem);
         auto base = shape[i.a].w[0], n = shape[i.a].w[1];
         auto bound = [&](const GirBound &b, int dflt) {
@@ -1786,6 +1849,7 @@ private:
         auto idx = ToI64(i.b);
         auto fail = AbortBlock(GirAbortKind::IndexOob, { idx, n }, i.org);
         CheckThen(CmpI(CoreCmpOp::Lt, U64(), Conv(idx, I64(), U64()), Conv(n, I64(), U64())), fail);
+        if (CoreHasConstruction(h.profile)) shape[i.res].source = ChildSource(shape[i.a].source, idx);
         Define(i, { CoreHasConstruction(h.profile) ? ElementAt(HT(hvt[i.res]).elem, base, idx) : PtrAt(base, idx, esz) });
     }
 
@@ -1793,6 +1857,7 @@ private:
         auto esz = Size(HT(hvt[i.res]).elem);
         auto base = shape[i.a].w[0];
         auto idx = ToI64(i.b);
+        if (CoreHasConstruction(h.profile)) shape[i.res].source = ChildSource(shape[i.a].source, idx);
         Define(i, { CoreHasConstruction(h.profile) ? ElementAt(HT(hvt[i.res]).elem, base, idx) : PtrAt(base, idx, esz) });
     }
 
@@ -2242,11 +2307,16 @@ private:
     void LowerInit(const GirInst &i) {
         auto &p = places[i.idx];
         if (p.kind == Place::Alias) {
+            SimpleE(GirOp::LocalSet, shape[i.a].source, -1, sourceMembers[i.idx]);
             for (size_t word = 0; word < p.members.size(); word++)
                 SimpleE(GirOp::LocalSet, shape[i.a].w[word], -1, p.members[word]);
             return;
         }
-        if (CoreHasConstruction(h.profile)) SimpleE(GirOp::LocalSet, TraceId(GirTraceKind::Storage), -1, storageMembers[i.idx]);
+        if (CoreHasConstruction(h.profile)) {
+            CreateObject(i.idx);
+            if (HT(hf->slots[i.idx].ty).kind == CoreType::Ref && shape[i.a].source >= 0)
+                SimpleE(GirOp::LocalSet, shape[i.a].source, -1, referenceSources[i.idx]);
+        }
         auto t = hf->slots[i.idx].ty;
         auto &v = shape[i.a];
         switch (p.kind) {
@@ -2276,6 +2346,8 @@ private:
         auto &rs = shape[i.a];
         auto &v = shape[i.b];
         if (rs.slot >= 0) {
+            if (CoreHasConstruction(h.profile) && HT(hvt[i.b]).kind == CoreType::Ref)
+                SimpleE(GirOp::LocalSet, shape[i.b].source, -1, referenceSources[rs.slot]);
             auto &p = places[rs.slot];
             for (size_t k = 0; k < p.members.size(); k++)
                 SimpleE(GirOp::LocalSet, v.w[k], -1, p.members[k]);
@@ -2370,7 +2442,12 @@ private:
         c.org = i.org;
         c.vals.push_back(lf.stacks ? BinW(CoreBinOp::Add, I64(), spval, ConstI(I64(), lf.stacks)) : spval);
         if (CoreHasConstruction(h.profile)) {
-            for (auto argument : i.vals) for (auto word : shape[argument].w) c.vals.push_back(word);
+            for (size_t parameter = 0; parameter < i.vals.size(); parameter++) {
+                auto argument = i.vals[parameter];
+                auto count = GirNonfixed(h, g.params[parameter]) ? 2 : (int)Words(g.params[parameter]).size();
+                if ((int)shape[argument].w.size() < count) throw CompileError { "call argument omits an ABI word" };
+                for (int word = 0; word < count; word++) c.vals.push_back(shape[argument].w[word]);
+            }
             vector<vector<int>> addresses;
             size_t channel = 0;
             for (size_t result = 0; result < g.results.size(); result++) {
@@ -2385,13 +2462,41 @@ private:
                 for (auto cell : cells) c.vals.push_back(cell);
                 addresses.push_back(std::move(cells));
             }
+            GirInst shadow;
+            shadow.op = GirOp::SourceCallPush;
+            shadow.vals.assign(c.vals.size() - 1, -1);
+            size_t primitive = 1;
+            for (size_t parameter = 0; parameter < i.vals.size(); parameter++) {
+                auto type = g.params[parameter];
+                if (HT(type).kind == CoreType::Ref || GirNonfixed(h, type)) {
+                    auto source = shape[i.vals[parameter]].source;
+                    if (source < 0) throw CompileError { "borrowed call argument omits its source metadata" };
+                    shadow.vals[primitive - 1] = source;
+                }
+                primitive += GirNonfixed(h, type) ? 2 : Words(type).size();
+            }
+            auto token = Emit(std::move(shadow), Ptr());
             EmitE(std::move(c));
+            vector<int> resultSources(g.results.size(), -1);
+            for (size_t result = 0; result < g.results.size(); result++) {
+                if (HT(g.results[result]).kind == CoreType::Ref)
+                    resultSources[result] = Simple(GirOp::SourceCallGet, Ptr(), token, -1, (int)primitive);
+                primitive += s.resultWords[result].size();
+            }
+            SimpleE(GirOp::SourceCallPop, token);
+            if (g.results.size() == 1) shape[i.res].source = resultSources[0];
+            else callResultSources[i.res] = resultSources;
             vector<int> results;
             for (size_t result = 0; result < g.results.size(); result++)
                 for (size_t word = 0; word < s.resultWords[result].size(); word++)
                     results.push_back(GirNonfixed(h, g.results[result]) || IsAggregate(g.results[result]) ? addresses[result][word] :
                                       PLoadV(s.resultWords[result][word], addresses[result][word]));
             Define(i, std::move(results));
+            for (auto argument : i.vals) if (ownedArguments.count(argument)) {
+                auto [stack, start] = ownedArguments.at(argument);
+                SimpleE(GirOp::StackRelease, stack, start);
+                ownedArguments.erase(argument);
+            }
             return;
         }
         int tmp = -1, tmpaddr = -1;
@@ -2431,6 +2536,12 @@ private:
                         PStoreV(words[word], resultOutputs[result][word], value.w[word]);
                 }
             }
+            for (size_t result = 0; result < i.vals.size(); result++) {
+                auto value = i.vals[result];
+                if ((HT(hf->results[result]).kind == CoreType::Ref) && shape[value].source >= 0)
+                    SimpleE(GirOp::SourceResult, shape[value].source, -1, resultOutputPositions[result][0]);
+            }
+            SimpleE(GirOp::SourceLeave, sourceScope);
             GirInst ret;
             ret.op = GirOp::Ret;
             ret.org = i.org;
@@ -2459,7 +2570,13 @@ private:
         auto &g = h.globals[initglobal];
         if (CoreHasConstruction(h.profile) && GirNonfixed(h, g.ty)) {
             Publish(i.vals[0], i.org);
+            SimpleE(GirOp::SourceLeave, sourceScope);
             GirInst ret; ret.op = GirOp::Ret; Term(std::move(ret)); return;
+        }
+        if (CoreHasConstruction(h.profile)) {
+            auto source = NewSource(TraceId(GirTraceKind::Storage));
+            if (HT(g.ty).kind == CoreType::Ref && shape[i.vals[0]].source >= 0) source = shape[i.vals[0]].source;
+            SimpleE(GirOp::SourceGlobalSet, source, -1, initglobal);
         }
         auto &lg = l.lowglobals[initglobal];
         auto &v = shape[i.vals[0]];
@@ -2472,6 +2589,7 @@ private:
         } else {
             StoreAt(g.ty, addr, v.w);
         }
+        if (CoreHasConstruction(h.profile)) SimpleE(GirOp::SourceLeave, sourceScope);
         GirInst r;
         r.op = GirOp::Ret;
         Term(std::move(r));

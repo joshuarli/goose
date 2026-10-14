@@ -84,7 +84,7 @@ private:
             case GirOp::Int: case GirOp::Bool: case GirOp::Unit: case GirOp::Slot: case GirOp::Global:
             case GirOp::Enter: case GirOp::Leave: case GirOp::Unreachable:
             case GirOp::Bytes: case GirOp::StaticBytes: case GirOp::ReturnFlagGet:
-            case GirOp::TargetLoad: case GirOp::TraceId: case GirOp::DestNamed:
+            case GirOp::TargetLoad: case GirOp::TraceId: case GirOp::SourceParam: case GirOp::SourceEnter: case GirOp::SourceGlobal: case GirOp::DestNamed:
             case GirOp::ResultExitDest: case GirOp::TargetDest:
                 break;
             case GirOp::Abort:
@@ -94,9 +94,13 @@ private:
             case GirOp::Index: case GirOp::IndexProven: case GirOp::Push: case GirOp::Store: case GirOp::Append:
             case GirOp::PopN: case GirOp::Replace:
             case GirOp::Format: case GirOp::OutBytes: case GirOp::AppendValue:
-            case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot:
+            case GirOp::SourceChild: case GirOp::SourceCopy: case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot:
                 add(i.a); add(i.b);
                 break;
+            case GirOp::SourceNew:
+                add(i.a); for (auto path : i.vals) add(path); break;
+            case GirOp::SourceCallPush:
+                for (auto source : i.vals) if (source >= 0) add(source); break;
             case GirOp::Resize:
                 add(i.a); add(i.b);
                 for (auto v : i.vals) add(v);
@@ -111,7 +115,7 @@ private:
             case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
             case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestBind:
             case GirOp::DestCancel: case GirOp::ReturnFlagSet: case GirOp::TargetStore:
-            case GirOp::DestAbandonNamed:
+            case GirOp::DestAbandonNamed: case GirOp::SourceCallGet: case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet:
                 add(i.a);
                 break;
             case GirOp::DestWrite:
@@ -188,7 +192,7 @@ private:
             case GirOp::Push: return CoreHasShrink(m.profile);
             case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear: case GirOp::Replace:
                 return true;
-            case GirOp::DestOpen:
+            case GirOp::DestOpen: case GirOp::DestWrite: case GirOp::DestFinish: case GirOp::DestPublish: case GirOp::DestBytes:
             case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render:
             case GirOp::DestNamed: case GirOp::ResultExitDest: case GirOp::DestAbandonNamed:
             case GirOp::DestArg: case GirOp::DestAbandon: case GirOp::DestValue:
@@ -447,10 +451,10 @@ private:
             for (auto &block : fn.blocks)
                 for (auto &i : block.insts) {
                     auto constructionOp = (i.op >= GirOp::Bytes && i.op <= GirOp::Render) ||
-                                          (i.op >= GirOp::StaticBytes && i.op <= GirOp::TraceId) ||
+                                          (i.op >= GirOp::StaticBytes && i.op <= GirOp::SourceGlobal) ||
                                           i.op == GirOp::AppendValue ||
                                           (i.op >= GirOp::DestWrite && i.op <= GirOp::DestCancel) ||
-                                          (i.op >= GirOp::ReturnFlagSet && i.op <= GirOp::Event) ||
+                                          (i.op >= GirOp::ReturnFlagSet && i.op <= GirOp::SourceGlobalSet) ||
                                           i.op == GirOp::Invoke || i.op == GirOp::Escape;
                     if (constructionOp && !CoreHasConstruction(m.profile))
                         Fail("GIR-V010", cat("function ", fn.name,
@@ -1094,7 +1098,7 @@ private:
             auto k = m.Type(t).kind;
             return k == CoreType::Int || k == CoreType::Bool || k == CoreType::Ptr;
         };
-        if (CoreHasConstruction(m.profile)) CheckConstructionByteIntervals(fn);
+        if (CoreHasConstruction(m.profile)) { CheckConstructionByteIntervals(fn); CheckLowSources(fn); }
         for (auto t : f.params) if (!scalar(t)) bad("a parameter whose layout is not resolved");
         for (auto t : f.results) if (!scalar(t)) bad("a result whose layout is not resolved");
         if (CoreHasConstruction(m.profile) && !f.results.empty())
@@ -1144,6 +1148,205 @@ private:
                 if (i.op == GirOp::StackBump && i.idx >= 0 && i.b < 0 && i.idx == 0)
                     bad("a stack bumped by nothing");
             }
+    }
+
+    void CheckLowSources(const Fn &fn) {
+        auto &function = *fn.f;
+        auto kinds = GirSourceKinds(function);
+        auto bad = [&](const string &message) { Fail("GIR-V090", cat(fn.label, ": ", message)); };
+        for (auto kind : kinds.values) if (kind == 4) bad("trace metadata merges with a program value or another token kind");
+        for (auto kind : kinds.members) if (kind >= 2) bad("a frame member stores a trace token or mixed program metadata");
+        struct Call { int token, scope, callee = -1; bool operator==(const Call &) const = default; };
+        struct State {
+            vector<int> scopes;
+            vector<Call> calls;
+            map<int, int> owners, members;
+            set<int> outputs;
+            bool operator==(const State &) const = default;
+        };
+        vector<optional<State>> incoming(function.blocks.size());
+        incoming[0] = State {};
+        vector<int> work { 0 };
+        auto merge = [&](int target, State state) {
+            if (!incoming[target]) { incoming[target] = std::move(state); work.push_back(target); return; }
+            auto previous = *incoming[target];
+            auto next = previous;
+            if (next.scopes != state.scopes || next.calls != state.calls) bad("control-flow merge changes active trace scopes or calls");
+            for (auto *members : { &next.owners, &next.members }) {
+                auto &other = members == &next.owners ? state.owners : state.members;
+                for (auto iterator = members->begin(); iterator != members->end();) {
+                    auto found = other.find(iterator->first);
+                    if (found == other.end() || found->second != iterator->second) iterator = members->erase(iterator);
+                    else ++iterator;
+                }
+            }
+            set<int> outputs;
+            set_intersection(next.outputs.begin(), next.outputs.end(), state.outputs.begin(), state.outputs.end(), inserter(outputs, outputs.end()));
+            next.outputs = std::move(outputs);
+            if (!(next == previous)) { incoming[target] = std::move(next); work.push_back(target); }
+        };
+        auto sourceResults = [&](int callee) {
+            set<int> positions;
+            for (auto &block : m.funcs[callee].blocks) for (auto &inst : block.insts)
+                if (inst.op == GirOp::SourceResult) positions.insert(inst.idx);
+            return positions;
+        };
+        while (!work.empty()) {
+            auto block = work.back(); work.pop_back();
+            auto state = *incoming[block];
+            auto live = [&](int value) {
+                auto owner = state.owners.find(value);
+                if (owner == state.owners.end() || find(state.scopes.begin(), state.scopes.end(), owner->second) == state.scopes.end())
+                    bad("source descriptor used outside its live trace scope");
+            };
+            auto source = [&](int value) {
+                if (value < 0 || kinds.values[value] != 1) bad("trace operation consumes a program pointer instead of a source descriptor");
+                live(value);
+            };
+            auto owner = [&](int result) {
+                if (state.scopes.empty()) bad("source descriptor created without a trace scope");
+                state.owners[result] = state.scopes.back();
+            };
+            auto call = [&](int token) -> Call & {
+                if (token < 0 || kinds.values[token] != 3 || state.calls.empty() || state.calls.back().token != token)
+                    bad("trace call token is dead or not the innermost call");
+                return state.calls.back();
+            };
+            for (auto &inst : function.blocks[block].insts) {
+                vector<int> uses;
+                Uses(inst, uses);
+                bool traceOperation = (inst.op >= GirOp::SourceNew && inst.op <= GirOp::SourceGlobal) ||
+                                      (inst.op >= GirOp::SourceLeave && inst.op <= GirOp::SourceGlobalSet);
+                for (auto value : uses) if (kinds.values[value] > 0 && !traceOperation) {
+                    if (inst.op == GirOp::LocalSet && kinds.values[value] == 1) source(value);
+                    else if ((inst.op == GirOp::Br || inst.op == GirOp::CondBr) && kinds.values[value] == 1 && value != inst.a) source(value);
+                    else bad("trace metadata is used as ordinary program memory or an ABI argument");
+                }
+                switch (inst.op) {
+                    case GirOp::SourceEnter: state.scopes.push_back(inst.res); break;
+                    case GirOp::SourceLeave:
+                        if (inst.a < 0 || kinds.values[inst.a] != 2 || state.scopes.empty() || state.scopes.back() != inst.a)
+                            bad("trace scope token is dead or not the innermost scope");
+                        for (auto &active : state.calls) if (active.scope == inst.a) bad("trace scope leaves before its call epilogue");
+                        state.scopes.pop_back();
+                        break;
+                    case GirOp::SourceNew: {
+                        const GirInst *identity = nullptr;
+                        for (auto &identityBlock : function.blocks) for (auto &candidate : identityBlock.insts)
+                            if (GirDefinesValue(candidate) && candidate.res == inst.a) identity = &candidate;
+                        if (!identity || identity->op != GirOp::TraceId || identity->trace != GirTraceKind::Storage)
+                            bad("source storage identity does not come from an object creation ordinal");
+                        if (kinds.values[inst.a] != 0) bad("storage identity comes from metadata");
+                        for (auto value : inst.vals) if (kinds.values[value] != 0) bad("source path contains metadata");
+                        owner(inst.res);
+                        break;
+                    }
+                    case GirOp::SourceChild:
+                        source(inst.a);
+                        if (kinds.values[inst.b] != 0) bad("source path index is metadata");
+                        owner(inst.res);
+                        break;
+                    case GirOp::SourceGlobal:
+                        if (inst.idx < 0 || inst.idx >= (int)m.lowglobals.size()) bad("source global position is outside the global table");
+                        owner(inst.res);
+                        break;
+                    case GirOp::SourceGlobalSet:
+                        if (inst.idx < 0 || inst.idx >= (int)m.lowglobals.size()) bad("source global position is outside the global table");
+                        source(inst.a);
+                        break;
+                    case GirOp::SourceParam:
+                        if (inst.idx <= 0 || inst.idx >= (int)function.params.size() || m.Type(function.params[inst.idx]).kind != CoreType::Ptr)
+                            bad("source parameter is not a primitive pointer parameter");
+                        owner(inst.res);
+                        break;
+                    case GirOp::SourceCallPush:
+                        if (state.scopes.empty()) bad("trace call has no live scope");
+                        for (auto value : inst.vals) if (value >= 0) source(value);
+                        state.calls.push_back({ inst.res, state.scopes.back(), -1 });
+                        break;
+                    case GirOp::Call: {
+                        bool hasTraceParam = false;
+                        for (auto &calleeBlock : m.funcs[inst.idx].blocks) for (auto &candidate : calleeBlock.insts)
+                            hasTraceParam |= candidate.op == GirOp::SourceParam || candidate.op == GirOp::SourceResult;
+                        if (state.calls.empty() || state.calls.back().callee >= 0) {
+                            if (hasTraceParam) bad("call omits the required provenance shadow");
+                            break;
+                        }
+                        auto &active = state.calls.back();
+                        const GirInst *push = nullptr;
+                        for (auto &searchBlock : function.blocks) for (auto &candidate : searchBlock.insts)
+                            if (candidate.op == GirOp::SourceCallPush && candidate.res == active.token) push = &candidate;
+                        if (!push || push->vals.size() + 1 != m.funcs[inst.idx].params.size()) bad("trace shadow does not map every primitive argument position");
+                        for (auto &calleeBlock : m.funcs[inst.idx].blocks) for (auto &candidate : calleeBlock.insts)
+                            if (candidate.op == GirOp::SourceParam &&
+                                (candidate.idx <= 0 || candidate.idx > (int)push->vals.size() || push->vals[candidate.idx - 1] < 0))
+                                bad("trace shadow omits a borrowed parameter source");
+                        active.callee = inst.idx;
+                        break;
+                    }
+                    case GirOp::SourceCallGet: {
+                        auto &active = call(inst.a);
+                        if (active.callee < 0 || !sourceResults(active.callee).count(inst.idx)) bad("trace result does not map a produced source channel");
+                        owner(inst.res);
+                        break;
+                    }
+                    case GirOp::SourceCallPop:
+                        if (call(inst.a).callee < 0) bad("trace call token popped before the call");
+                        state.calls.pop_back();
+                        break;
+                    case GirOp::SourceResult: {
+                        source(inst.a);
+                        if (inst.idx <= 0 || inst.idx >= (int)function.params.size() || m.Type(function.params[inst.idx]).kind != CoreType::Ptr)
+                            bad("trace result does not name a primitive output pointer");
+                        auto parameter = function.blocks[0].params[inst.idx].first;
+                        bool stored = false;
+                        for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                            stored |= candidate.op == GirOp::PStore && m.Type(candidate.ty).kind == CoreType::Ptr &&
+                                      LowValueDependsOn(function, candidate.a, parameter);
+                        if (!stored) bad("trace result has no matching address output store");
+                        state.outputs.insert(inst.idx);
+                        break;
+                    }
+                    case GirOp::SourceCopy:
+                        source(inst.a);
+                        if (kinds.values[inst.b] != 0) bad("copy destination identity is metadata");
+                        break;
+                    case GirOp::LocalSet:
+                        if (kinds.members[inst.idx] == 1) { source(inst.a); state.members[inst.idx] = state.scopes.back(); }
+                        break;
+                    case GirOp::LocalGet:
+                        if (kinds.values[inst.res] == 1) {
+                            auto member = state.members.find(inst.idx);
+                            if (member == state.members.end() || find(state.scopes.begin(), state.scopes.end(), member->second) == state.scopes.end())
+                                bad("source frame member is uninitialized or outside its scope");
+                            owner(inst.res);
+                        }
+                        break;
+                    case GirOp::FrameAddr:
+                        if (kinds.members[inst.idx] > 0) bad("program memory exposes a trace metadata member");
+                        break;
+                    case GirOp::Ret:
+                        if (!state.scopes.empty() || !state.calls.empty()) bad("normal return omits trace scope or call cleanup");
+                        for (auto position : sourceResults((int)(&function - m.funcs.data())))
+                            if (!state.outputs.count(position)) bad("normal return omits a source output channel");
+                        break;
+                    default: break;
+                }
+            }
+            auto *term = LastTerm(function.blocks[block]);
+            if (!term) continue;
+            auto edge = [&](int target, const vector<int> &values) {
+                auto next = state;
+                for (size_t position = 0; position < values.size(); position++) {
+                    auto parameter = function.blocks[target].params[position].first;
+                    if (kinds.values[parameter] == 1) next.owners[parameter] = state.owners.at(values[position]);
+                    else if (kinds.values[parameter] > 1) bad("control flow transfers a trace token");
+                }
+                merge(target, std::move(next));
+            };
+            if (term->op == GirOp::Br) edge(term->idx, term->vals);
+            if (term->op == GirOp::CondBr) { edge(term->idx, term->vals); edge(term->idx2, term->vals2); }
+        }
     }
 
     void CheckConstructionByteIntervals(const Fn &fn) {
@@ -1370,7 +1573,7 @@ private:
             for (auto &r : row.second)
                 if (r.kind == CoreRootRef::Local)
                     SymbolFail(fn, cat("content root info for parameter ", row.first, " names a local slot"));
-        if (!f.roots.results.empty() && f.roots.results.size() != f.results.size())
+        if (((CoreHasConstruction(m.profile) && !m.low) || !f.roots.results.empty()) && f.roots.results.size() != f.results.size())
             SymbolFail(fn, "root info has another number of result rows than the function signature");
         for (auto &roots : f.roots.results) checkRoots(roots, true);
         // Value ids are dense and each is defined once.
@@ -1644,6 +1847,12 @@ private:
                 if (v != i.ty) TypeFail(fn, "a store of a value of another type than the one stated");
                 break;
             }
+            case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet:
+                need(ty.PtrOf(i.a)); break;
+            case GirOp::SourceCopy:
+                need(ty.PtrOf(i.a));
+                if (need(ty.IntTy(i.b)) != m.IntType(CoreIntTy::I64)) TypeFail(fn, "copy destination identity is not i64");
+                break;
             case GirOp::ReturnFlagSet:
                 if (need(ty.Data(i.a)) != m.IntType(CoreIntTy::I64))
                     TypeFail(fn, "return discriminant is not i64");
@@ -1836,6 +2045,7 @@ private:
                 int bindings = 0;
                 for (auto &inst : f.blocks[0].insts)
                     if (inst.op == GirOp::Init && inst.a == f.blocks[0].params[parameter].first &&
+                        inst.idx == (int)parameter && f.slots[inst.idx].scope == 0 &&
                         f.slots[inst.idx].ty == f.params[parameter]) bindings++;
                 if (bindings != 1) TypeFail(fn, "owned parameter does not bind exactly one local slot in block 0");
             }
@@ -2470,7 +2680,7 @@ private:
     Roots MapArgumentRoots(const Fn &caller, const Prov &p, int value, int calleeParam) const {
         Roots out;
         for (auto &r : RootsAt(p.vals, value)) {
-            if (r.kind == CoreRootRef::Global) {
+            if (r.kind == CoreRootRef::Global || r.kind == CoreRootRef::Static) {
                 AddRoot(out, r);
             } else if (r.kind == CoreRootRef::Local) {
                 AddRoot(out, { CoreRootRef::Param, calleeParam });
@@ -2480,7 +2690,7 @@ private:
                     AddRoot(out, { CoreRootRef::Param, calleeParam });
                 } else {
                     for (auto &root : *annotated) {
-                        if (root.kind == CoreRootRef::Global) AddRoot(out, root);
+                        if (root.kind == CoreRootRef::Global || root.kind == CoreRootRef::Static) AddRoot(out, root);
                         else AddRoot(out, { CoreRootRef::Param, calleeParam });
                     }
                 }
@@ -2494,7 +2704,7 @@ private:
         for (auto &r : RootsAt(p.vals, value)) {
             if (r.kind == CoreRootRef::Local) {
                 AddRoots(out, RootsAt(p.slots, r.index));
-            } else if (r.kind == CoreRootRef::Global) {
+            } else if (r.kind == CoreRootRef::Global || r.kind == CoreRootRef::Static) {
                 AddRoot(out, r);
             } else if (r.index >= 0 && r.index < (int)caller.f->params.size() &&
                        IsRefSlice(caller.f->params[r.index])) {
@@ -2507,7 +2717,7 @@ private:
     Roots MapDeclaredContents(const Prov &p, const vector<int> &args, const Roots &declared) const {
         Roots out;
         for (auto &r : declared) {
-            if (r.kind == CoreRootRef::Global) {
+            if (r.kind == CoreRootRef::Global || r.kind == CoreRootRef::Static) {
                 AddRoot(out, r);
             } else if (r.kind == CoreRootRef::Param && r.index >= 0 && r.index < (int)args.size()) {
                 AddRoots(out, RootsAt(p.vals, args[r.index]));
@@ -2604,7 +2814,7 @@ private:
                         if (r.index < (int)i.vals.size())
                             for (auto &x : RootsAt(p.vals, i.vals[r.index]))
                                 if (find(out.begin(), out.end(), x) == out.end()) out.push_back(x);
-                    } else if (r.kind == CoreRootRef::Global) {
+                    } else if (r.kind == CoreRootRef::Global || r.kind == CoreRootRef::Static) {
                         if (find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
                     }
                 }
@@ -2647,8 +2857,14 @@ private:
         p.vals.assign(fn.nvalues, {});
         auto &b0 = f.blocks[0];
         for (size_t k = 0; k < b0.params.size(); k++)
-            if (ValRefLike(fn, b0.params[k].first) && b0.params[k].first < fn.nvalues)
-                p.vals[b0.params[k].first] = { CoreRootRef { CoreRootRef::Param, (int)k } };
+            if (ValRefLike(fn, b0.params[k].first) && b0.params[k].first < fn.nvalues) {
+                CoreRootRef root { CoreRootRef::Param, (int)k };
+                if (CoreHasConstruction(m.profile) && k < f.params.size() && GirNonfixed(m, f.params[k]))
+                    for (auto &instruction : b0.insts)
+                        if (instruction.op == GirOp::Init && instruction.a == b0.params[k].first)
+                            root = { CoreRootRef::Local, instruction.idx };
+                p.vals[b0.params[k].first] = { root };
+            }
         return p;
     }
 
@@ -2826,17 +3042,27 @@ private:
             auto name = cat("function ", f.name);
             if (e.unknown)
                 Fail("GIR-V050", cat(name, " calls a function whose summary is unknown, so its own summary cannot be known"));
-            auto within = [&](const char *what, const set<CoreTarget> &found, const vector<CoreTarget> &declared) {
-                for (auto &t : found)
-                    if (find(declared.begin(), declared.end(), t) == declared.end())
-                        Fail("GIR-V050", cat(name, " ", what, " ", t.global ? "global " : "parameter ", t.index,
+            auto normalize = [&](const auto &targets, bool binding) {
+                set<CoreTarget> normalized;
+                if (binding) { normalized.insert(targets.begin(), targets.end()); return normalized; }
+                for (auto &target : targets) {
+                    if (target.global) normalized.insert(target);
+                    else AddTargets(normalized, ExpandParameterRoots(f, { CoreRootRef { CoreRootRef::Param, target.index } }));
+                }
+                return normalized;
+            };
+            auto within = [&](const char *what, const set<CoreTarget> &found, const vector<CoreTarget> &declared, bool binding = false) {
+                auto actual = normalize(found, binding), covered = normalize(declared, binding);
+                for (auto &target : actual)
+                    if (!covered.count(target))
+                        Fail("GIR-V050", cat(name, " ", what, " ", target.global ? "global " : "parameter ", target.index,
                                               ", which its summary omits"));
             };
             within("reads", e.reads, f.summary.reads);
             within("writes", e.writes, f.summary.writes);
             within("grows", e.grows, f.summary.grows);
             within("shrinks", e.shrinks, f.summary.shrinks);
-            within("rebinds", e.rebinds, f.summary.rebinds);
+            within("rebinds", e.rebinds, f.summary.rebinds, true);
             for (auto result : e.constructs)
                 if (find(f.summary.constructs.begin(), f.summary.constructs.end(), result) == f.summary.constructs.end())
                     Fail("GIR-V050", cat(name, " completes result ", result, ", which its summary omits"));

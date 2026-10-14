@@ -22,18 +22,18 @@ enum class GirOp : uint8_t {
     CallConstruct, TargetDest, Render,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
-    HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId,
+    HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId, SourceNew, SourceChild, SourceParam, SourceEnter, SourceCallPush, SourceCallGet, SourceGlobal,
     // Instructions that define none, high stage.
     Init, Store, Append, AppendValue, PopN, Resize, Clear, Replace, DestWrite, DestAttach,
     DestBytes, DestText, DestCopy, DestRepeat, DestSnapshot, DestBind, DestPublish, DestCancel, Enter, Leave, Print,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
-    BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event,
+    BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event, SourceLeave, SourceCallPop, SourceResult, SourceCopy, SourceGlobalSet,
     // Terminators.
     Br, CondBr, Invoke, Ret, Escape, Abort, Exit, Unreachable,
 };
 
-inline bool GirDefines(GirOp op) { return op <= GirOp::TraceId; }
+inline bool GirDefines(GirOp op) { return op <= GirOp::SourceGlobal; }
 inline bool GirIsTerminator(GirOp op) { return op >= GirOp::Br; }
 
 // Whether an instruction belongs to the high stage only, the low stage only,
@@ -62,8 +62,8 @@ inline bool GirHighOnly(GirOp op) {
     }
 }
 inline bool GirLowOnly(GirOp op) {
-    return (op >= GirOp::PtrOffset && op <= GirOp::TraceId) ||
-           (op >= GirOp::PStore && op <= GirOp::Event);
+    return (op >= GirOp::PtrOffset && op <= GirOp::SourceGlobal) ||
+           (op >= GirOp::PStore && op <= GirOp::SourceGlobalSet);
 }
 
 enum class GirAbortKind : uint8_t {
@@ -334,6 +334,56 @@ struct GirModule {
     }
     const CoreType &Type(GirTypeId t) const { return types[t]; }
 };
+
+struct GirSourceClassification {
+    vector<int> values, members;
+};
+
+inline GirSourceClassification GirSourceKinds(const GirFunc &function) {
+    int count = 0;
+    for (auto &block : function.blocks) {
+        count += (int)block.params.size();
+        for (auto &instruction : block.insts) count += GirDefinesValue(instruction);
+    }
+    GirSourceClassification kinds { vector<int>(count, 0), vector<int>(function.members.size(), -1) };
+    for (size_t block = 1; block < function.blocks.size(); block++)
+        for (auto &parameter : function.blocks[block].params) kinds.values[parameter.first] = -1;
+    for (auto &block : function.blocks) for (auto &instruction : block.insts) {
+        switch (instruction.op) {
+            case GirOp::SourceNew: case GirOp::SourceChild: case GirOp::SourceParam: case GirOp::SourceCallGet: case GirOp::SourceGlobal:
+                kinds.values[instruction.res] = 1; break;
+            case GirOp::SourceEnter: kinds.values[instruction.res] = 2; break;
+            case GirOp::SourceCallPush: kinds.values[instruction.res] = 3; break;
+            case GirOp::LocalGet: kinds.values[instruction.res] = -1; break;
+            default: break;
+        }
+    }
+    auto merge = [](int current, int value) {
+        if (value < 0) return current;
+        if (current < 0) return value;
+        return current == value ? current : 4;
+    };
+    for (int round = 0; round < count * 4 + 8; round++) {
+        auto previous = kinds;
+        fill(kinds.members.begin(), kinds.members.end(), -1);
+        for (auto &block : function.blocks) for (auto &instruction : block.insts)
+            if (instruction.op == GirOp::LocalSet)
+                kinds.members[instruction.idx] = merge(kinds.members[instruction.idx], kinds.values[instruction.a]);
+        for (auto &block : function.blocks) for (auto &instruction : block.insts) {
+            if (instruction.op == GirOp::LocalGet) kinds.values[instruction.res] = kinds.members[instruction.idx];
+            auto edge = [&](int target, const vector<int> &values) {
+                for (size_t position = 0; position < values.size(); position++) {
+                    auto parameter = function.blocks[target].params[position].first;
+                    kinds.values[parameter] = merge(kinds.values[parameter], kinds.values[values[position]]);
+                }
+            };
+            if (instruction.op == GirOp::Br || instruction.op == GirOp::CondBr) edge(instruction.idx, instruction.vals);
+            if (instruction.op == GirOp::CondBr) edge(instruction.idx2, instruction.vals2);
+        }
+        if (previous.values == kinds.values && previous.members == kinds.members) break;
+    }
+    return kinds;
+}
 
 inline bool GirMutAtLeast(CoreMut have, CoreMut want) {
     return have == CoreMut::Mut || want == CoreMut::Const;
