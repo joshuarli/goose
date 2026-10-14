@@ -1,4 +1,5 @@
 import Goose.Lower.Unwind
+import Goose.Lower.Scope
 import Goose.Lower.RuntimeSim
 
 namespace Goose.Lower
@@ -32,6 +33,40 @@ theorem ReturnSite.run {cx : FnCtx} {pt : Pt} {frame : GIR.Frame} {value : Val} 
     rfl
   · rw [runAt_ret1 hinst hcell extra]
     rfl
+
+
+def preparedCoreBlock (n : Nat) (cfg : Cfg) (env : Env) (scope : ScopeId)
+    (stmts : List Stmt) (value : Option Expr) (pre : List (VarId × Val)) : M Flow := do
+  let scopeInstance ← freshScope
+  let inner : Env := { env with scopes := (scope, scopeInstance) :: env.scopes }
+  bindAll env.act scopeInstance pre
+  let flow ← execStmts n cfg inner stmts >>= prepareReturn inner
+  match flow with
+  | .ret value => pure (.ret value)
+  | flow => do
+    let result ← valueFlow n cfg value inner flow
+    Core.releaseScope env scope scopeInstance
+    pure result
+
+theorem prepareReturn_execBlock (n : Nat) (cfg : Cfg) (env : Env) (scope : ScopeId)
+    (stmts : List Stmt) (value : Option Expr) (pre : List (VarId × Val)) :
+    (execBlock (n + 1) cfg env pre (.mk scope stmts value) >>= prepareReturn env) =
+      preparedCoreBlock n cfg env scope stmts value pre := by
+  rw [execBlock_pre]
+  unfold prefixCoreBlock preparedCoreBlock
+  simp only [bind_assoc]
+  congr 1
+  funext scopeInstance
+  congr 1
+  funext initialized
+  congr 1
+  funext flow
+  cases flow with
+  | normal v =>
+    cases value <;> simp [valueFlow, prepareReturn, bind_assoc, pure_bind]
+  | brk => simp [valueFlow, prepareReturn, bind_assoc, pure_bind]
+  | cont => simp [valueFlow, prepareReturn, bind_assoc, pure_bind]
+  | ret v => simp [valueFlow, prepareReturn, bind_assoc, pure_bind, releaseScopes_entered]
 
 
 end Goose.Lower

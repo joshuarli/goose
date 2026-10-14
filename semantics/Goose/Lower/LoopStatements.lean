@@ -1,26 +1,9 @@
 import Goose.Lower.LoopPrepare
+import Goose.Lower.EFlow
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR
-
-def StatementLoopPost (cfg : Cfg) (env : Env) (cx : FnCtx) (ls : LS) (fr : GIR.Frame)
-    (ls' : LS) (loop : Option LoopCtx) (flow : Flow) (pt' : Pt) (fr' : GIR.Frame) : Prop :=
-  (flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) ∨
-  ReturnedAt cx flow pt' fr' ∨
-  (∃ context, loop = some context ∧
-    ((flow = .brk ∧ ExitedAt context fr ls.vals.size
-      (env.scopes.drop (env.scopes.length - context.depth)) pt' fr') ∨
-    (flow = .cont ∧ ContinuedAt context fr ls.vals.size
-      (env.scopes.drop (env.scopes.length - context.depth)) pt' fr')))
-
-def LoopCounterAt (loop : Option LoopCtx) (ls : LS) (fr : GIR.Frame) : Prop :=
-  match loop with
-  | none => True
-  | some context => match context.cont with
-    | .jump _ => True
-    | .next _ _ counter => counter < ls.vals.size ∧
-        ∃ runtimeTy current, fr.vals[counter]? = some (.val (.int runtimeTy current))
 
 def StatementLoopSimulation (n : Nat) (cfg : Cfg) (loop : Option LoopCtx) (stmt : Stmt) : Prop :=
   ∀ (le : LEnv) (ls ls' : LS) (u : Unit) (pt : Pt)
@@ -56,56 +39,6 @@ theorem statementLoopSimulation_zero (cfg : Cfg) (loop : Option LoopCtx) (stmt :
   intro le ls ls' u pt env cx fr hlow hpp hext hrel hmod hgir hdepth htargets hcounter
   simp only [execStmt]
   exact SimE.of_simG SimG.of_timeout_bind
-
-theorem StatementLoopPost.prefix {cfg : Cfg} {env : Env} {cx : FnCtx}
-    {ls middle ls' : LS} {fr frMiddle fr' : GIR.Frame} {loop : Option LoopCtx}
-    {ptMiddle pt' : Pt} {flow : Flow}
-    (hrel : Rel cfg env cx fr ls) (P : Post cfg env cx ls fr middle frMiddle ptMiddle [])
-    (hcounter : LoopCounterAt loop ls fr)
-    (h : StatementLoopPost cfg env cx middle frMiddle ls' loop flow pt' fr') :
-    StatementLoopPost cfg env cx ls fr ls' loop flow pt' fr' := by
-  have hact : frMiddle.act = fr.act := P.rel.act.trans hrel.act.symm
-  have hdepth : frMiddle.depth = fr.depth := P.rel.depth.trans hrel.depth.symm
-  rcases h with ⟨hflow, Q⟩ | hreturned | ⟨context, hloop, htransfer⟩
-  · exact Or.inl ⟨hflow, (P.comp Q).sub (by simp)⟩
-  · exact Or.inr (Or.inl hreturned)
-  · refine Or.inr (Or.inr ⟨context, hloop, ?_⟩)
-    rcases htransfer with ⟨hflow, hpoint, hframe⟩ | ⟨hflow, hcontinue⟩
-    · exact Or.inl ⟨hflow, hpoint,
-        ⟨P.same.trans (hframe.values.mono P.mono) (Nat.le_refl _),
-          hframe.activation.trans hact, hframe.scopesEqual, hframe.depth.trans hdepth⟩⟩
-    · refine Or.inr ⟨hflow, ?_⟩
-      cases hkind : context.cont with
-      | jump header =>
-        rw [ContinuedAt, hkind] at hcontinue ⊢
-        obtain ⟨hpoint, hframe⟩ := hcontinue
-        exact ⟨hpoint, ⟨P.same.trans (hframe.values.mono P.mono) (Nat.le_refl _),
-          hframe.activation.trans hact, hframe.scopesEqual, hframe.depth.trans hdepth⟩⟩
-      | next header hint counter =>
-        rw [ContinuedAt, hkind] at hcontinue ⊢
-        obtain ⟨runtimeTy, current, hcell, hnext⟩ := hcontinue
-        have hbound : counter < ls.vals.size := by
-          rw [hloop] at hcounter
-          simp only [LoopCounterAt, hkind] at hcounter
-          exact hcounter.1
-        refine ⟨runtimeTy, current, ?_, hnext.prefix P.same (Nat.le_of_lt hbound) hact hdepth⟩
-        rw [← P.same counter hbound] 
-        exact hcell
-
-theorem LoopCounterAt.afterPost {cfg : Cfg} {env : Env} {cx : FnCtx}
-    {ls ls' : LS} {fr fr' : GIR.Frame} {loop : Option LoopCtx} {pt' : Pt}
-    (h : LoopCounterAt loop ls fr) (P : Post cfg env cx ls fr ls' fr' pt' []) :
-    LoopCounterAt loop ls' fr' := by
-  cases loop with
-  | none => trivial
-  | some context =>
-    cases hkind : context.cont with
-    | jump header => simp [LoopCounterAt, hkind]
-    | next header hint counter =>
-      simp only [LoopCounterAt, hkind] at h ⊢
-      obtain ⟨hbound, runtimeTy, current, hcell⟩ := h
-      exact ⟨Nat.lt_of_lt_of_le hbound P.mono, runtimeTy, current,
-        (P.same counter hbound).trans hcell⟩
 
 def StatementsLoopSimulation (n : Nat) (cfg : Cfg) (loop : Option LoopCtx) (stmts : List Stmt) : Prop :=
   ∀ (le : LEnv) (ls ls' : LS) (u : Unit) (pt : Pt)
