@@ -108,7 +108,8 @@ def specializedParameterSummary : Module :=
   | _, _ => false
 
 #guard match Core.validate undeclaredSliceSlot with
-  | .ok _ => true
+  | .error rejection => rejection.rule == .type &&
+      rejection.message == "main: variable p has a type no variable may have"
   | _ => false
 
 #guard match GIR.validate (lower undeclaredSliceSlot) with
