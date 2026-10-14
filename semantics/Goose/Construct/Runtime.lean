@@ -510,12 +510,42 @@ def copyValue : Nat → LayoutEnv → DestinationId → Value → OriginId → O
           for index in [0:run.count] do
             let (start, finish) ← liftLayout (elementInterval fuel config bytes run index)
             liftConstruction origin (writeElement destination (bytes.extract start finish))
+      | .slice location start count =>
+          let backing ← readLoc fuel config location
+          let some source := source | fault .unbound
+          match backing with
+          | .stored stored =>
+              let (bytes, run) ← storedPathRun stored
+              if run.element != element then fault .shape
+              if start + count > run.count then fault .pathRange
+              liftConstruction origin (recordCopy source destination)
+              for index in [0:count] do
+                let (start, finish) ← liftLayout (elementInterval fuel config bytes run (start + index))
+                liftConstruction origin (writeElement destination (bytes.extract start finish))
+          | .fixed values =>
+              if start + count > values.size then fault .pathRange
+              liftConstruction origin (recordCopy source destination)
+              for value in values.extract start (start + count) do
+                liftConstruction origin (writeElement destination (← liftExcept (fixedBytes fuel config element value)))
+          | _ => fault .shape
       | .fixed values =>
           if let some source := source then liftConstruction origin (recordCopy source destination)
           for value in values do
             liftConstruction origin (writeElement destination (← liftExcept (fixedBytes fuel config element value)))
       | _ => fault .shape
       liftConstruction origin (finishDestination destination)
+
+def deliverCarriers (fuel : Nat) (layout : LayoutEnv) (channels : List Channel)
+    (carriers : List Carrier) (origin : OriginId) : EvalM (List Carrier) := do
+  if channels.length != carriers.length then fault .arity
+  (channels.zip carriers).mapM fun (channel, carrier) => do
+    match channel, carrier with
+    | .register _, .register value => pure (.register value)
+    | .construct _, .completed destination => pure (.completed destination)
+    | .construct destination, .register value =>
+        copyValue fuel layout destination value origin none
+        pure (.completed destination)
+    | .register _, .completed _ => fault .shape
 
 def repeatElement : Nat → LayoutEnv → DestinationId → Ty → DestinationId → OriginId → EvalM Unit
   | 0, _, _, _, _, _ => timeout

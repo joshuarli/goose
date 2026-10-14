@@ -375,6 +375,61 @@ private def namedStruct : Module := {
 #guard Run.validateBytes (Writer.module namedStruct).toUTF8 == ("[\"ok\"]", 0)
 #guard (Run.runBytes {} (Writer.module namedStruct).toUTF8).2 == 0
 
+private def adaptedFixedCall : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
+  implementation "fixed" #[] (.mk 0 [.print [.text "once"] 0]
+    (some (.arrLit (.arr (.int .u8) 2) [.lit .u8 65, .lit .u8 66])))
+    #[⟨.arr (.int .u8) 2, .register, none⟩]]
+
+#guard observes adaptedFixedCall == some ("once\nAB\n".toUTF8.data.toList,
+  [.begin 0, .write 0 0, .write 0 1, .publish 0])
+
+private def adaptedFixedCallAbort : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0] none),
+  implementation "fixed" #[] (.mk 0 []
+    (some (.arrLit (.arr (.int .u8) 2) [.lit .u8 65,
+      .blockE (.mk 1 [.print [.text "effect"] 0, .abort "stop" 0] (some (.lit .u8 66)))])))
+    #[⟨.arr (.int .u8) 2, .register, none⟩]]
+
+#guard match eval 1000 .release adaptedFixedCallAbort with
+  | .done (.aborted .userAbort 0) stdout events =>
+      stdout.data.toList == "effect\n".toUTF8.data.toList && events == [.begin 0]
+  | _ => false
+
+private def sliceCopy : Module := moduleOf #[implementation "entry"
+  #[localVar "owner" (.grow (.int .u8)), localVar "slice" (.slice .readOnly (.int .u8)),
+    localVar "copy" (.varr (.int .u8))]
+  (.mk 0 [.letS 0 (.bytes (.grow (.int .u8)) [65, 0, 255] 0) 0,
+    .letS 1 (.slice .readOnly (.of (.var 0)) (.expr (.lit .i64 1)) .omitted 0) 0,
+    .letS 2 (.copy (.varr (.int .u8)) (.var 1) 0) 0,
+    .print [.view (.of (.var 2))] 0] none)]
+
+#guard observes sliceCopy == some ([0, 255, 10],
+  [.begin 0, .write 0 0, .write 0 1, .write 0 2, .publish 0,
+    .begin 1, .copy (.storage 1 []) 1, .write 1 0, .write 1 1, .publish 1])
+
+private def staticSliceCopy : Module := moduleOf #[implementation "entry"
+  #[localVar "slice" (.slice .readOnly (.int .u8)), localVar "copy" (.varr (.int .u8))]
+  (.mk 0 [.letS 0 (.bytes (.slice .readOnly (.int .u8)) [65, 0, 255] 0) 0,
+    .letS 1 (.copy (.varr (.int .u8)) (.var 0) 0) 0,
+    .print [.view (.of (.var 1))] 0] none)]
+
+#guard observes staticSliceCopy == some ([65, 0, 255, 10],
+  [.begin 0, .copy (.storage 0 []) 0, .write 0 0, .write 0 1, .write 0 2, .publish 0])
+
+private def adaptedFixedChannels : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8)), localVar "scalar" (.int .i64)]
+    (.mk 0 [.receive [0, 1] (.call 1 [] 0) 0,
+      .print [.view (.of (.var 0)), .expr (.read (.var 1))] 0] none),
+  implementation "fixed" #[] (.mk 0 [] (some (.values
+    [.arrLit (.arr (.int .u8) 1) [.lit .u8 65], .lit .i64 7])))
+    #[⟨.arr (.int .u8) 1, .register, none⟩, ⟨.int .i64, .register, none⟩]]
+
+#guard observes adaptedFixedChannels == some ("A7\n".toUTF8.data.toList,
+  [.begin 0, .write 0 0, .publish 0])
+
 private def wireRaw : Module := {
   rawBytes with
   types := #[.int .u8, .varr (.int .u8)]
