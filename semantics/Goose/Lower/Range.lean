@@ -5,26 +5,6 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 
-private theorem goes_cmp_pure {cx : FnCtx} {pt : Pt} {fr : Frame} {r : ValueId}
-    {t : IntTy} {i b : ValueId} {x : RVal}
-    (hi : instAt cx.fn pt = some (.def r (.cmp .lt t i b)))
-    (hx : execPure cx fr (.cmp .lt t i b) = pure x) :
-    Goes cx pt fr (pt.1, pt.2 + 1) (fr.set r x) := by
-  refine ⟨1, fun j => ?_⟩
-  unfold runAt
-  rw [instsAt_cons hi, exec]
-  simp only [execOp, hx, pure_bind, setCell_eq]
-
-private theorem goes_next_pure {cx : FnCtx} {pt : Pt} {fr : Frame} {r : ValueId}
-    {t : IntTy} {i : ValueId} {x : RVal}
-    (hi : instAt cx.fn pt = some (.def r (.next t i)))
-    (hx : execPure cx fr (.next t i) = pure x) :
-    Goes cx pt fr (pt.1, pt.2 + 1) (fr.set r x) := by
-  refine ⟨1, fun j => ?_⟩
-  unfold runAt
-  rw [instsAt_cons hi, exec]
-  simp only [execOp, hx, pure_bind, setCell_eq]
-
 /-! ### Builder facts for a lowered counting loop -/
 
 /-- The first instruction in a range header compares the current counter with the sampled bound. -/
@@ -159,7 +139,7 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t hint : IntTy) (counter bound : V
       have h := (execPure_cmp (cx := cx) (fr := fr) (op := .lt) hcounter hbound).1 hint
       rw [h]
       simp [expectComparable, expectSameTy, evalCmp]
-    have gcmp := goes_cmp_pure hiCmp hcmpPure
+    have gcmp := Goes.def_pure hiCmp (by simp) hcmpPure
     let frCmp := fr.set c (.val (.bool (current < upper)))
     have htest : frCmp.vals[c]? = some (.val (.bool (current < upper))) :=
       Frame.set_get _ _ _
@@ -261,7 +241,7 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t hint : IntTy) (counter bound : V
     have hnextPure : execPure cx frBody (.next hint counter) =
         pure (.val (.int t (current + 1))) := by
       simp [execPure, getVal_of hcellBody, expectInt]
-    have gnext := goes_next_pure hiNext hnextPure
+    have gnext := Goes.def_pure hiNext (by simp) hnextPure
     have hcellNext : (frBody.set next (.val (.int t (current + 1)))).vals[next]? =
         some (.val (.int t (current + 1))) := Frame.set_get _ _ _
     have hheaderBlk := hheader

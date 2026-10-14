@@ -172,7 +172,20 @@ theorem SimG.of_fault {cx : FnCtx} {pt : Pt} {fr : Frame} {k : FaultKind} {p : �
 
 /-! ### One instruction -/
 
-/-- A defining instruction whose operation computes what `c` does. -/
+theorem Goes.def_pure {cx : FnCtx} {pt : Pt} {fr : Frame} {r : ValueId} {op : Op} {value : RVal}
+    (hi : instAt cx.fn pt = some (.def r op)) (hnc : ∀ f args org, op ≠ .call f args org)
+    (hx : execPure cx fr op = pure value) :
+    Goes cx pt fr (pt.1, pt.2 + 1) (fr.set r value) := by
+  have hop : ∀ n, execOp n cx fr op = execPure cx fr op := by
+    intro n
+    cases op with
+    | call f args org => exact absurd rfl (hnc f args org)
+    | _ => unfold execOp; rfl
+  refine ⟨1, fun extra => ?_⟩
+  unfold runAt
+  rw [instsAt_cons hi, exec, hop, hx]
+  simp only [pure_bind, setCell_eq]
+
 theorem SimG.def_step {cx : FnCtx} {pt : Pt} {fr : Frame} {r : ValueId} {op : Op} {c : M α}
     (inj : α → RVal) (hi : instAt cx.fn pt = some (.def r op)) (hnc : ∀ f a o, op ≠ .call f a o)
     (hx : execPure cx fr op = c >>= fun a => pure (inj a)) :
