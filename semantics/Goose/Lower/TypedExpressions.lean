@@ -611,6 +611,186 @@ def ArgsSource.resultsMatch {n : Nat} {cfg : Cfg} {env : Env} :
   | _ :: _, _, .cons source rest, results => source.resultsMatch results ∧
       ∀ value after hdone, (rest value after hdone).resultsMatch results
 
+open Core.Sound in
+private theorem argSource_of_spec {cfg : Cfg} {env : Env} {expr : Expr} {initial state : St}
+    (root : ExprSource cfg env expr initial) {path : List Nat} (arg : Arg)
+    (ac : ArgContext cfg.mod root.plans path arg) (tn tn' : Nat) (ty : Ty)
+    (rst rst' : RState) (roots : List RootRef) (results : List Ty)
+    (active : ac.ActiveMatches root.typingEnv) (access : ac.AccessMatches root.typingEnv root.rootsEnv)
+    (protection : ShrinkProtected root.world.D root.world.A
+      (ac.mayShrink root.world.ownerP root.observation))
+    (observed : ObservedSafe cfg.mod root.world
+      (ac.mayShrink root.world.ownerP root.observation) root.observation state.store)
+    (classified : cfg.mod.profile = .shrink →
+      ClassifiedParameters cfg.mod root.world.P root.world.D root.observation state.store)
+    (frame : Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv env state ac.inputFuture)
+    (typed : ArgTy root.typingEnv arg tn ty tn') (rooted : ArgRp root.rootsEnv arg rst roots rst')
+    (effects : EffLe rst'.eff root.world.E)
+    (metadata : SourceResults root.typingEnv root.rootsEnv results) :
+    ∃ source : ArgSource cfg env state arg, source.resultsMatch results := by
+  cases arg with
+  | byVal expr =>
+    cases ac with
+    | byVal context =>
+      exact ⟨.byVal {
+        accepted := root.accepted, plans := root.plans, path := path, context := context,
+        observation := root.observation, world := root.world, typingEnv := root.typingEnv,
+        rootsEnv := root.rootsEnv, typingStart := tn, typingEnd := tn', ty := ty,
+        rootsStart := rst, rootsEnd := rst', roots := roots, active := active, access := access,
+        protection := protection, observed := observed, classified := classified,
+        permission := root.permission, frame := frame, typed := typed, rooted := rooted,
+        effects := effects }, metadata⟩
+  | byRef mutability place =>
+    cases ac with
+    | byRef context =>
+      obtain ⟨target, caps, typed, allowed, rfl⟩ := typed
+      exact ⟨.byRef mutability {
+        accepted := root.accepted, plans := root.plans, path := path, context := context,
+        observation := root.observation, world := root.world, typingEnv := root.typingEnv,
+        rootsEnv := root.rootsEnv, typingStart := tn, typingEnd := tn', ty := target,
+        mutable := caps.1, contents := caps.2, rootsStart := rst, rootsEnd := rst', roots := roots,
+        active := active, access := access, protection := protection, observed := observed,
+        classified := classified, permission := root.permission, frame := frame,
+        typed := typed, rooted := rooted, effects := effects } allowed, metadata⟩
+
+open Core.Sound in
+private theorem typedArgsSource_suffix {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
+    {c : ContextId} {all : List Arg} {origin : OriginId} {results : List Ty}
+    (root : ExprSource cfg env (.call c all origin) initial)
+    (metadata : SourceResults root.typingEnv root.rootsEnv results) (callee : Impl) :
+    ∀ (args : List Arg) (ps : List Param) (offset : Nat) (state : St)
+      (tn tn' : Nat) (rst rst' : RState) (ars : List (List RootRef)),
+    args = all.drop offset → offset ≤ all.length →
+    Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv env state
+      (callArgsFuture root.context offset args) →
+    ObservedSafe cfg.mod root.world (root.context.mayShrink root.world.ownerP root.observation)
+      root.observation state.store →
+    (cfg.mod.profile = .shrink → ClassifiedParameters cfg.mod root.world.P root.world.D
+      root.observation state.store) →
+    ps.length = args.length → tyArgs root.typingEnv callee ps args tn = .ok ((), tn') →
+    rpArgs root.rootsEnv args rst = .ok (ars, rst') → EffLe rst'.eff root.world.E →
+    ∃ source : ArgsSource n cfg env args state, source.resultsMatch results
+  | [], _, _, state, _, _, _, _, _, _, _, _, _, _, _, _, _, _ =>
+    ⟨.nil state, trivial⟩
+  | arg :: args, [], _, _, _, _, _, _, _, _, _, _, _, _, size, _, _, _ => by simp at size
+  | arg :: args, param :: params, offset, state, tn, tn', rst, rst', ars, sourceEq, bound,
+      frame, observed, classified, size, ht, hr, effects => by
+    let tenv := root.typingEnv
+    let penv := root.rootsEnv
+    let ec := root.context
+    have hl' : params.length = args.length := by simpa using size
+    have harg : all[offset]? = some arg := by
+      have first : (all.drop offset)[0]? = some arg := by rw [← sourceEq]; rfl
+      simpa using first
+    have hrest : args = all.drop (offset + 1) := by
+      rw [List.drop_add_one_eq_tail_drop, ← sourceEq]
+      rfl
+    have nextBound : offset + 1 ≤ all.length := by
+      have := (List.getElem?_eq_some_iff.mp harg).1
+      omega
+    cases hv : callee.vars[param.var]? with
+    | none => cases arg <;> (simp only [tyArgs, hv] at ht; inv at ht)
+    | some pv =>
+      have key : ∃ ty t1 rho r1 ars', argMode arg = param.mode ∧ ArgTy tenv arg tn ty t1 ∧ ty.passableTo pv.ty = true ∧
+          tyArgs tenv callee params args t1 = .ok ((), tn') ∧ ArgRp penv arg rst rho r1 ∧
+          rpArgs penv args r1 = .ok (ars', rst') ∧ ars = rho :: ars' := by
+        cases arg with
+        | byVal e =>
+          simp only [tyArgs, hv] at ht; inv at ht
+          simp only [rpArgs] at hr; inv at hr
+          obtain ⟨modeEq, te, t1, hte, hpass, tailTyping⟩ := ht
+          obtain ⟨rho, r1, hre, ars', r2, hra, rfl, rfl⟩ := hr
+          exact ⟨te, t1, rho, r1, ars', by simpa using modeEq, hte, hpass, tailTyping, hre, hra, rfl⟩
+        | byRef mu p' =>
+          simp only [tyArgs, hv] at ht; inv at ht
+          simp only [rpArgs] at hr; inv at hr
+          obtain ⟨modeEq, t, b, contents, t1, htp, hallowed, hrt, ht⟩ := ht
+          obtain ⟨rho, r1, hre, ars', r2, hra, rfl, rfl⟩ := hr
+          have h2 : (Ty.ref mu t).passableTo pv.ty = true ∧
+              tyArgs tenv callee params args t1 = .ok ((), tn') := by
+            rcases ht with ⟨_, _, h1, h2⟩ | ⟨_, h1, h2⟩ <;> exact ⟨h1, h2⟩
+          have hrt' : t.refTarget = true ∨ (t.isSlice = true ∧ b = true ∧ p'.sliceArg = true) := by
+            cases t <;> simpa [PlaceInfo.referenceWritable, Ty.refTarget, Ty.isSlice,
+              Bool.or_eq_true, Bool.and_eq_true, and_assoc] using hrt
+          exact ⟨.ref mu t, t1, rho, r1, ars', by simpa using modeEq, ⟨t, (b, contents), htp, hrt', rfl⟩, h2.1, h2.2, hre, hra, rfl⟩
+      obtain ⟨ty, t1, rho, r1, ars', modeEq, hat, hpass, tailTyping, har, hra, rfl⟩ := key
+
+
+      let ac := callArgContext ec offset arg harg
+      have shrinkEq : ac.mayShrink root.world.ownerP root.observation =
+          ec.mayShrink root.world.ownerP root.observation := by
+        funext r
+        exact propext (callArgContext_mayShrink_iff ec offset arg harg
+          root.world.ownerP root.observation r)
+      have childFrame : Core.Sound.Frame cfg.mod root.world tenv penv env state ac.inputFuture :=
+        frame.changeFuture (fun x _ member =>
+          callArgContext_inputFuture_subset ec offset arg args harg hrest member)
+      have childProtected : ShrinkProtected root.world.D root.world.A
+          (ac.mayShrink root.world.ownerP root.observation) := by
+        rw [shrinkEq]
+        exact root.protection
+      have childObserved : ObservedSafe cfg.mod root.world
+          (ac.mayShrink root.world.ownerP root.observation) root.observation state.store := by
+        rw [shrinkEq]
+        exact observed
+      have childEffects : EffLe r1.eff root.world.E := (rpArgs_mono hra).2.trans effects
+      obtain ⟨source, hmetadata⟩ := argSource_of_spec root arg ac tn t1 ty rst r1 rho results
+        (callArgContext_activeMatches ec offset arg harg root.active)
+        (callArgContext_accessMatches ec offset arg harg root.access)
+        childProtected childObserved classified childFrame hat har childEffects metadata
+      have nextReady : ∀ value after, evalArg n cfg env arg state = .ok value after →
+          ∃ source : ArgsSource n cfg env args after, source.resultsMatch results := by
+        intro value after hdone
+        have hs := (Core.Sound.specs_all (Core.Sound.validate_modOk cfg.mod root.accepted)
+          cfg.profile root.plans n).arg (root.path ++ [offset]) arg ac root.observation
+          root.world tenv penv env state tn t1 ty rst r1 rho
+          (callArgContext_activeMatches ec offset arg harg root.active)
+          (callArgContext_accessMatches ec offset arg harg root.access)
+          childProtected childObserved classified root.permission childFrame hat har childEffects
+        unfold Sat at hs
+        rw [hdone] at hs
+        obtain ⟨frame1, footprint1, types1, values1, observed1, retained1, pilot1,
+          typed1, roots1, classified1, ownerRooted1, forbidden1, mutations1⟩ := hs
+        rw [shrinkEq] at observed1
+        exact typedArgsSource_suffix root metadata callee args params (offset + 1) after
+          t1 tn' r1 rst' ars' hrest nextBound
+          (callArgFrame_rest ec offset arg args harg hrest root.active frame1)
+          observed1 classified1 hl' tailTyping hra effects
+      let rest := fun value after hdone => Classical.choose (nextReady value after hdone)
+      exact ⟨.cons source rest, hmetadata, fun value after hdone =>
+        Classical.choose_spec (nextReady value after hdone)⟩
+
+open Core.Sound in
+theorem ExprSource.callArgs {cfg : Cfg} {env : Env} {state : St} {c : ContextId}
+    {args : List Arg} {origin : OriginId} (root : ExprSource cfg env (.call c args origin) state)
+    (n : Nat) (results : List Ty) (metadata : SourceResults root.typingEnv root.rootsEnv results) :
+    ∃ source : ArgsSource n cfg env args state, source.resultsMatch results := by
+  have replay := root.rooted
+  simp only [rpExpr] at replay
+  inv at replay
+  obtain ⟨ars, middle, argumentsReplay, contentsCheck, callReplay⟩ := replay
+  have argumentsEffects := (PMono.rpCall _ _ _ _ _ _ callReplay).2.trans root.effects
+  obtain ⟨context, callee, contextAt, implementationAt, argumentCheck, effectAt, resultReplay⟩ :=
+    rpCall_ok _ _ _ _ _ _ callReplay
+  rw [root.frame.mod_p] at contextAt implementationAt
+  have contextAtT : root.typingEnv.mod.contexts[c]? = some context := by
+    rw [root.frame.mod_t]
+    exact contextAt
+  have implementationAtT : root.typingEnv.mod.impls[context.impl]? = some callee := by
+    rw [root.frame.mod_t]
+    exact implementationAt
+  have typing := root.typed
+  simp only [tyExpr, contextAtT, implementationAtT] at typing
+  inv at typing
+  obtain ⟨_, size, next, argumentTypes, _, _, resultType, _⟩ := typing
+  have suffixFuture : callArgsFuture root.context 0 args = root.context.inputFuture := by
+    cases root.context <;> simp [callArgsFuture, EvaluationContext.inputFuture,
+      NodeContext.inputFuture, NodeContext.outputFuture, DemandNode.variables, Expr.variables]
+  exact typedArgsSource_suffix root metadata callee args callee.params.toList 0 state
+    root.typingStart next root.rootsStart middle ars (by simp) (by omega)
+    (by simpa [suffixFuture] using root.frame) root.observed root.classified
+    (by simpa using size) argumentTypes argumentsReplay argumentsEffects
+
 def TypedArgsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (args : List Arg) : Prop :=
   ∀ (env : Env) (state : St) (source : ArgsSource n cfg env args state), source.resultsMatch results →
     ∀ (ls ls' : LS) (ids : List ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
@@ -706,5 +886,19 @@ theorem typed_call_sim {n : Nat} {cfg : Cfg} {results : List Ty} {c : ContextId}
   · exact hs.mono fun value afterValue pt' fr' hdoneValue ⟨hpt, hfr⟩ => by
       subst hpt; subst hfr
       exact (Post.def_leaf P hdef hext (.val value)).1
+
+theorem typedExprClaim_call {n : Nat} {cfg : Cfg} {results : List Ty} {c : ContextId}
+    {args : List Arg} {origin : OriginId} (ha : TypedArgsClaim n cfg results args)
+    (hc : ∀ env state (source : ExprSource cfg env (.call c args origin) state),
+      SourceResults source.typingEnv source.rootsEnv results → ∀ values after,
+      mapList (evalArg n cfg env) args state = .ok values after →
+      EventualM (enterCall n cfg env.depth c values)
+        (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ env.depth
+          (((cfg.mod.contexts[c]?).map (·.impl)).getD 0) values) after) :
+    TypedExprClaim (n + 1) cfg results (.call c args origin) := by
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  obtain ⟨argsSource, argsMetadata⟩ := source.callArgs n results hmetadata
+  exact typed_call_sim ha env state argsSource argsMetadata (hc env state source hmetadata)
+    ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
 
 end Goose.Lower

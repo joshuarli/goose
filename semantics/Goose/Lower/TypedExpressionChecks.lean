@@ -6,11 +6,17 @@ namespace Goose.Lower.TypedExpressionChecks
 open Goose.Core Goose.GIR Goose.Core.Sound
 
 def sourceImpl : Impl :=
-  { initImpl with body := .mk 0 [.expr (.not (.bool true)) 0] none }
+  { initImpl with body := .mk 0 [.expr (.not (.bool true)) 0,
+    .expr (.call 1 [.byVal (.bool true), .byVal (.bool false)] 0) 0] none }
+
+def boolCallee : Impl :=
+  { name := "bools", params := #[⟨0, .byValue⟩, ⟨1, .byValue⟩], results := #[],
+    vars := #[⟨"first", .bool, .immutable, 0, 0⟩, ⟨"second", .bool, .immutable, 0, 0⟩],
+    body := .mk 0 [] none, summary := .unknown }
 
 def sourceModule : Core.Module :=
-  { files := #["typed.goose"], types := #[], globals := #[], impls := #[sourceImpl],
-    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "typed"⟩] }
+  { files := #["typed.goose"], types := #[.bool], globals := #[], impls := #[sourceImpl, boolCallee],
+    contexts := #[initContext, ⟨1, "bools", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "typed"⟩] }
 
 def enteredState : St := { St.initial with nextAct := 1, nextScope := 1 }
 
@@ -43,6 +49,15 @@ theorem initial_frame : Core.Sound.Frame sourceModule sourceWorld typingEnv root
     | simp [sourceWorld, typingEnv, rootsEnv, sourceEnv, sourceImpl, initImpl, initContext,
         OwnerParameterShape, PEnv.cont, PRef, enteredState, St.initial, Store.empty]
 
+theorem call_frame : Core.Sound.Frame sourceModule { sourceWorld with E := { unknown := true } } typingEnv rootsEnv sourceEnv
+    enteredState [] := by
+  constructor
+  all_goals first
+    | rfl
+    | exact initial_store _
+    | simp [sourceWorld, typingEnv, rootsEnv, sourceEnv, sourceImpl, initImpl, initContext,
+        OwnerParameterShape, PEnv.cont, PRef, enteredState, St.initial, Store.empty]
+
 def boolSource (profile : NumProfile) : ExprSource ⟨profile, sourceModule⟩ sourceEnv (.bool true)
     enteredState :=
   { accepted := (by cbv), plans := #[], path := [], context := .pilot rfl [],
@@ -52,7 +67,20 @@ def boolSource (profile : NumProfile) : ExprSource ⟨profile, sourceModule⟩ s
     protection := by simp [ShrinkProtected, sourceWorld],
     observed := ObservedSafe.empty _ _ _ _, classified := (by intro h; cases h),
     permission := Or.inl (by exact Nat.le_refl 0),
-    frame := (by simpa [EvaluationContext.inputFuture, DemandNode.variables, Expr.variables] using initial_frame), typed := rfl, rooted := rfl,
+    frame := (by simpa [EvaluationContext.inputFuture, DemandNode.variables, Expr.variables, Arg.variables] using initial_frame), typed := rfl, rooted := rfl,
+    effects := EffLe.refl _ }
+
+def callSource (profile : NumProfile) : ExprSource ⟨profile, sourceModule⟩ sourceEnv
+    (.call 1 [.byVal (.bool true), .byVal (.bool false)] 0)
+    enteredState :=
+  { accepted := (by cbv), plans := #[], path := [], context := .pilot rfl [],
+    observation := .empty, world := { sourceWorld with E := { unknown := true } }, typingEnv := typingEnv, rootsEnv := rootsEnv,
+    typingStart := 0, typingEnd := 0, ty := .unit, rootsStart := ⟨0, {}⟩,
+    rootsEnd := ⟨0, { unknown := true }⟩, roots := [], active := by simp [typingEnv, EvaluationContext.ActiveMatches], access := trivial,
+    protection := by simp [ShrinkProtected, sourceWorld],
+    observed := ObservedSafe.empty _ _ _ _, classified := (by intro h; cases h),
+    permission := Or.inl (by exact Nat.le_refl 0),
+    frame := (by simpa [EvaluationContext.inputFuture, DemandNode.variables, Expr.variables, Arg.variables] using call_frame), typed := (by cbv), rooted := (by cbv),
     effects := EffLe.refl _ }
 
 def notSource (profile : NumProfile) : ExprSource ⟨profile, sourceModule⟩ sourceEnv (.not (.bool true))
@@ -64,7 +92,7 @@ def notSource (profile : NumProfile) : ExprSource ⟨profile, sourceModule⟩ so
     protection := by simp [ShrinkProtected, sourceWorld],
     observed := ObservedSafe.empty _ _ _ _, classified := (by intro h; cases h),
     permission := Or.inl (by exact Nat.le_refl 0),
-    frame := (by simpa [EvaluationContext.inputFuture, DemandNode.variables, Expr.variables] using initial_frame), typed := rfl, rooted := rfl,
+    frame := (by simpa [EvaluationContext.inputFuture, DemandNode.variables, Expr.variables, Arg.variables] using initial_frame), typed := rfl, rooted := rfl,
     effects := EffLe.refl _ }
 
 theorem not_source_result (profile : NumProfile) :
@@ -87,6 +115,20 @@ theorem bool_source_metadata (profile : NumProfile) :
   change some sourceImpl = some impl at hi
   cases hi
   exact ⟨rfl, rfl⟩
+
+theorem call_source_args (profile : NumProfile) :
+    ∃ source : ArgsSource 3 ⟨profile, sourceModule⟩ sourceEnv
+      [.byVal (.bool true), .byVal (.bool false)] enteredState, source.resultsMatch [] := by
+  apply (callSource profile).callArgs
+  intro impl hi
+  change some sourceImpl = some impl at hi
+  cases hi
+  exact ⟨rfl, rfl⟩
+
+#guard [NumProfile.release, .debug].all fun profile =>
+  match Core.eval 80 profile sourceModule, GIR.run 160 profile (lower sourceModule) with
+  | .done .returned "", .done .returned "" => true
+  | _, _ => false
 
 theorem reject_wrong_source_results : ¬ SourceResults typingEnv rootsEnv [.bool] := by
   intro h
