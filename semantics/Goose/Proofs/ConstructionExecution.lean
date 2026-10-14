@@ -7,6 +7,7 @@ set_option Elab.async false
 
 namespace Goose.Proofs.ConstructionExecution
 open Goose.Construct
+open Goose.Proofs.ExitExecution
 
 def EventPrefix (before after : List Goose.Core.ConstructionEvent) : Prop :=
   ∃ suffix, after = before ++ suffix
@@ -100,6 +101,194 @@ theorem wholeRun_terminal_skips_continuation (fuel : Nat) (config : EvalConfig)
     (stopped : runModule fuel config initial = .stop reason terminal) :
     (runModule fuel config >>= next) initial = .stop reason terminal := by
   simp only [bind, stopped]
+
+theorem keepsEventPrefix_liftConstruction (origin : Goose.Core.OriginId) (action : ConstructionM α)
+    (kept : ∀ state, EventPrefix state.events (action state).finalState.events) :
+    KeepsEventPrefix (liftConstruction origin action) := by
+  intro state
+  have keptEvents := kept state.construction
+  cases result : action state.construction with
+  | ok value final =>
+      simpa only [liftConstruction, result, ConstructionResult.finalState,
+        Goose.Proofs.Exit.stepState] using keptEvents
+  | fault kind final =>
+      simpa only [liftConstruction, result, ConstructionResult.finalState,
+        Goose.Proofs.Exit.stepState] using keptEvents
+
+theorem keepsEventPrefix_get_bind (next : ExecutionState → EvalM α)
+    (kept : ∀ state, EventPrefix state.construction.events
+      (Goose.Proofs.Exit.stepState (next state state)).construction.events) :
+    KeepsEventPrefix (EvalM.get >>= next) := kept
+
+theorem keepsEventPrefix_setObjectOrdinal (root : Goose.Core.RootInst) (ordinal : Goose.Core.StorageId) :
+    KeepsEventPrefix (setObjectOrdinal root ordinal) := by
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_bindStaticRoot (root : Goose.Core.RootInst) (value : Value) :
+    KeepsEventPrefix (bindStaticRoot root value) := by
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_freshAct : KeepsEventPrefix freshAct := by
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_freshScope : KeepsEventPrefix freshScope := by
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_returned (activation : Goose.Core.ActId) (carriers : List Carrier) :
+    KeepsEventPrefix (returned (α := α) activation carriers) := by
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_escaped (address : ExitAddress) (carriers : List Carrier) :
+    KeepsEventPrefix (escaped (α := α) address carriers) := by
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_jump (target : Nat) (kind : JumpKind) :
+    KeepsEventPrefix (jump (α := α) target kind) := by
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_withScope (activation : RuntimeActivation) (scope scopeInst : Nat)
+    (action : EvalM α) (kept : KeepsEventPrefix action) :
+    KeepsEventPrefix (withScope activation scope scopeInst action) := by
+  intro state
+  have keptEvents := kept state
+  cases result : action state <;>
+    simpa [withScope, result, releaseScope, EvalM.get, EvalM.set, bind, pure,
+      Goose.Proofs.Exit.stepState, releaseScopeState] using keptEvents
+
+theorem keepsEventPrefix_writeValuePath (fuel : Nat) (layout : LayoutEnv)
+    (value : Value) (path : List Nat) (replacement : Value) :
+    KeepsEventPrefix (writeValuePath fuel layout value path replacement) := by
+  induction fuel generalizing value path replacement with
+  | zero => exact keepsEventPrefix_stop _
+  | succ fuel remaining =>
+      cases path with
+      | nil => exact keepsEventPrefix_pure _
+      | cons index rest =>
+          cases value with
+          | fixed elements | record id elements =>
+              simp only [writeValuePath]
+              cases present : elements[index]? with
+              | none => exact keepsEventPrefix_stop _
+              | some child =>
+                  apply keepsEventPrefix_bind
+                  · exact remaining child rest replacement
+                  · intro written; exact keepsEventPrefix_pure _
+          | int _ _ | bool _ | unit | ref _ | slice _ _ _ => exact keepsEventPrefix_stop _
+          | stored stored =>
+              unfold writeValuePath
+              apply keepsEventPrefix_bind
+              · exact stateQuery_keepsEventPrefix _ (stateQuery_storedPathRun stored)
+              · intro sampled
+                rcases sampled with ⟨bytes, run⟩
+                simp only
+                apply keepsEventPrefix_bind
+                · exact stateQuery_keepsEventPrefix _ (stateQuery_liftLayout _)
+                · intro interval
+                  rcases interval with ⟨start, finish⟩
+                  simp only
+                  apply keepsEventPrefix_bind
+                  · exact stateQuery_keepsEventPrefix _ (stateQuery_readStoredElement fuel layout stored index)
+                  · intro child
+                    split
+                    · split
+                      · exact keepsEventPrefix_stop _
+                      · apply keepsEventPrefix_bind
+                        · exact remaining child rest replacement
+                        · intro _; exact keepsEventPrefix_pure _
+                    · apply keepsEventPrefix_bind
+                      · exact remaining child rest replacement
+                      · intro written
+                        apply keepsEventPrefix_bind
+                        · exact stateQuery_keepsEventPrefix _ (stateQuery_liftExcept _)
+                        · intro part
+                          split
+                          · exact keepsEventPrefix_stop _
+                          · apply keepsEventPrefix_get_bind
+                            intro state
+                            cases present : state.construction.storage[stored.storage]? with
+                            | none => exact eventPrefix_refl _
+                            | some receiving => exact eventPrefix_refl _
+
+theorem keepsEventPrefix_reserveStorage (origin : Goose.Core.OriginId) (bytes : ByteArray) (count : Nat) :
+    KeepsEventPrefix (liftConstruction origin (reserveStorage bytes count)) := by
+  apply keepsEventPrefix_liftConstruction
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_reserveRootObject (root : Goose.Core.RootInst) :
+    KeepsEventPrefix (reserveRootObject root) := by
+  unfold reserveRootObject
+  apply keepsEventPrefix_bind
+  · exact keepsEventPrefix_get
+  · intro state
+    split
+    · exact keepsEventPrefix_pure _
+    · apply keepsEventPrefix_bind
+      · exact keepsEventPrefix_reserveStorage _ _ _
+      · intro ordinal
+        apply keepsEventPrefix_bind
+        · exact keepsEventPrefix_setObjectOrdinal _ _
+        · intro _; exact keepsEventPrefix_pure _
+
+theorem keepsEventPrefix_bindRoot (root : Goose.Core.RootInst) (value : Value) :
+    KeepsEventPrefix (bindRoot root value) := by
+  unfold bindRoot
+  apply keepsEventPrefix_bind
+  · exact keepsEventPrefix_get
+  · intro state
+    split
+    · cases value <;> apply keepsEventPrefix_bind
+      all_goals first
+        | exact keepsEventPrefix_setObjectOrdinal _ _
+        | exact keepsEventPrefix_reserveRootObject _
+        | (intro _; exact keepsEventPrefix_bindStaticRoot _ _)
+    · exact keepsEventPrefix_bindStaticRoot _ _
+
+theorem keepsEventPrefix_writeLoc (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
+    (replacement : Value) : KeepsEventPrefix (writeLoc fuel layout location replacement) := by
+  unfold writeLoc
+  apply keepsEventPrefix_bind
+  · exact keepsEventPrefix_get
+  · intro state
+    cases present : state.objects.lookup location.root with
+    | none => exact keepsEventPrefix_stop _
+    | some value =>
+        apply keepsEventPrefix_bind
+        · exact keepsEventPrefix_writeValuePath fuel layout value location.path replacement
+        · intro written; exact keepsEventPrefix_bindRoot _ _
+
+theorem keepsEventPrefix_withBreakTarget (act : Goose.Core.ActId) (scope : BreakScope)
+    (channels : List Channel) (action : EvalM α) (receive : JumpKind → EvalM α)
+    (kept : KeepsEventPrefix action) (received : ∀ kind, KeepsEventPrefix (receive kind)) :
+    KeepsEventPrefix (withBreakTarget act scope channels action receive) := by
+  intro state
+  let target : BreakTarget := ⟨state.nextScope, act, scope, channels⟩
+  let installed : ExecutionState := { state with
+    nextScope := state.nextScope + 1, breaks := target :: state.breaks }
+  have keptEvents := kept installed
+  cases result : action installed with
+  | ok value final =>
+      simpa [withBreakTarget, installed, target, result, mapStepState, Goose.Proofs.Exit.stepState] using keptEvents
+  | stop reason final =>
+      simpa [withBreakTarget, installed, target, result, mapStepState, Goose.Proofs.Exit.stepState] using keptEvents
+  | escape address carriers final =>
+      simpa [withBreakTarget, installed, target, result, mapStepState, Goose.Proofs.Exit.stepState] using keptEvents
+  | jump actual kind final =>
+      simp only [result, Goose.Proofs.Exit.stepState] at keptEvents
+      let removed : ExecutionState := { final with breaks := final.breaks.filter (fun entry => entry.id != state.nextScope) }
+      by_cases caught : actual = state.nextScope
+      · have after := eventPrefix_trans _ _ _ keptEvents (received kind removed)
+        simpa [withBreakTarget, installed, target, result, caught, removed, mapStepState,
+          Goose.Proofs.Exit.stepState] using after
+      · simpa [withBreakTarget, installed, target, result, caught, removed, mapStepState,
+          Goose.Proofs.Exit.stepState] using keptEvents
 
 theorem rejected_publication_preserves_execution (state : ExecutionState)
     (destinations : List Goose.Core.DestinationId) (kind : ConstructionFault)
