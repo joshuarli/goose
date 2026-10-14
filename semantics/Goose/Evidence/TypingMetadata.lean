@@ -1,5 +1,6 @@
 import Goose.GIR.Validate
 import Goose.GIR.Sound
+import Goose.Core.Sound.Invert
 
 namespace Goose.GIR
 
@@ -367,5 +368,111 @@ theorem arrFill_metadata {env : TyEnv} {ty : Ty} {value : ValueId} {result : VTy
     simp only [ite_true] at typed
     exact ⟨element, count, rfl, dataTy_of operand, (Except.ok.inj typed).symm⟩
   all_goals simp [tyErr] at typed
+
+
+private theorem metadata_forIn_ok {α : Type} {values : List α}
+    {body : α → PUnit.{1} → TyR (ForInStep PUnit.{1})}
+    (typed : forIn values PUnit.unit body = .ok ())
+    (continues : ∀ value accumulator step, body value accumulator = .ok step → step = .yield PUnit.unit) :
+    ∀ value ∈ values, body value PUnit.unit = .ok (.yield PUnit.unit) := by
+  induction values with
+  | nil => simp
+  | cons head tail ih =>
+    rw [List.forIn_cons] at typed
+    obtain ⟨step, first, rest⟩ := bind_ok typed
+    have same := continues head PUnit.unit step first
+    subst step
+    intro value member
+    rcases List.mem_cons.mp member with rfl | member
+    · exact first
+    · exact ih rest value member
+
+private theorem array_literal_elements {env : TyEnv} {values : List ValueId} {element : Ty}
+    (typed : (forIn values PUnit.unit fun value _ => do
+      unless (← env.dataTy value) = element do tyErr "array element of another type than the array's"
+      pure (.yield PUnit.unit)) = .ok ()) :
+    ∀ value ∈ values, env.vals[value]? = some (some (.data element)) := by
+  have each := metadata_forIn_ok typed (by
+    intro value accumulator step checked
+    obtain ⟨ty, _, checked⟩ := bind_ok checked
+    by_cases same : ty = element
+    · simpa [same, pure, Except.pure] using checked.symm
+    · simp [same, tyErr, bind, Except.bind] at checked)
+  intro value member
+  obtain ⟨ty, operand, checked⟩ := bind_ok (each value member)
+  have same : ty = element := by
+    by_cases same : ty = element
+    · exact same
+    · simp [same, tyErr, bind, Except.bind] at checked
+  subst ty
+  exact dataTy_of operand
+
+theorem arrLit_metadata {env : TyEnv} {ty : Ty} {values : List ValueId} {result : VTy}
+    (typed : (Op.arrLit ty values).resultTy env = .ok result) :
+    ∃ element, arrayElem? ty = some element ∧
+      (∀ value ∈ values, env.vals[value]? = some (some (.data element))) ∧
+      (∀ e count, ty = .arr e count → values.length = count) ∧
+      (∀ e capacity, ty = .limited e capacity → values.length ≤ capacity) ∧
+      result = .data ty := by
+  cases ty <;> simp only [Op.resultTy] at typed
+  case arr element count =>
+    have countOk : values.length = count := by
+      by_cases countOk : values.length = count
+      · exact countOk
+      · simp [countOk, tyErr, bind, Except.bind] at typed
+    simp only [countOk, ite_true] at typed
+    obtain ⟨accumulator, elements, typed⟩ := bind_ok typed
+    cases accumulator
+    exact ⟨element, rfl, array_literal_elements elements,
+      (by intro e n equal; cases equal; exact countOk),
+      (by intro e n equal; cases equal), (Except.ok.inj typed).symm⟩
+  case grow element | growshrink element =>
+    obtain ⟨accumulator, elements, typed⟩ := bind_ok typed
+    cases accumulator
+    exact ⟨element, rfl, array_literal_elements elements,
+      (by intro e n equal; cases equal),
+      (by intro e n equal; cases equal), (Except.ok.inj typed).symm⟩
+  case limited element capacity =>
+    have capacityOk : values.length ≤ capacity := by
+      by_cases capacityOk : values.length ≤ capacity
+      · exact capacityOk
+      · simp [capacityOk, tyErr, bind, Except.bind] at typed
+    simp only [capacityOk, ite_true] at typed
+    obtain ⟨accumulator, elements, typed⟩ := bind_ok typed
+    cases accumulator
+    exact ⟨element, rfl, array_literal_elements elements,
+      (by intro e n equal; cases equal),
+      (by intro e n equal; cases equal; exact capacityOk), (Except.ok.inj typed).symm⟩
+  all_goals simp [tyErr] at typed
+
+theorem fieldAddr_metadata {env : TyEnv} {owner : ValueId} {index : Nat} {result : VTy}
+    (typed : (Op.fieldAddr owner index).resultTy env = .ok result) :
+    ∃ permission sid fields descriptor field,
+      env.vals[owner]? = some (some (.data (.ref permission (.structT sid fields)))) ∧
+      env.structs[sid]? = some descriptor ∧ descriptor.fields[index]? = some field ∧
+      fields.toList[index]? = some field.ty ∧
+      result = .data (.ref (Mutability.ofKind field.binding) field.ty) := by
+  simp only [Op.resultTy] at typed
+  obtain ⟨⟨permission, target⟩, operand, typed⟩ := bind_ok typed
+  cases target with
+  | structT sid fields =>
+    cases lookup : env.structs[sid]? with
+    | none => simp [lookup, tyErr] at typed
+    | some descriptor =>
+      simp only [lookup] at typed
+      have same : fields = TyList.ofList (descriptor.fields.toList.map (·.ty)) := by
+        by_cases same : fields = TyList.ofList (descriptor.fields.toList.map (·.ty))
+        · exact same
+        · simp [same, tyErr, bind, Except.bind] at typed
+      simp only [same, beq_self_eq_true, ite_true] at typed
+      cases selector : descriptor.fields[index]? with
+      | none => simp [selector, tyErr] at typed
+      | some field =>
+        simp only [selector] at typed
+        refine ⟨permission, sid, fields, descriptor, field, refTy_metadata operand,
+          lookup, selector, ?_, (Except.ok.inj typed).symm⟩
+        simp only [same, Goose.Core.Sound.tyList_toList_ofList, List.getElem?_map, Array.getElem?_toList,
+          selector, Option.map_some]
+  | _ => simp [tyErr] at typed
 
 end Goose.GIR
