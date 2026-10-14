@@ -15,6 +15,14 @@ def EventPrefix (before after : List Goose.Core.ConstructionEvent) : Prop :=
 theorem eventPrefix_refl (events : List Goose.Core.ConstructionEvent) : EventPrefix events events :=
   ⟨[], by simp⟩
 
+theorem eventPrefix_iff_isPrefix (before after : List Goose.Core.ConstructionEvent) :
+    EventPrefix before after ↔ before <+: after := by
+  constructor
+  · rintro ⟨suffix, equal⟩
+    exact ⟨suffix, equal.symm⟩
+  · rintro ⟨suffix, equal⟩
+    exact ⟨suffix, equal.symm⟩
+
 theorem eventPrefix_trans (before middle after : List Goose.Core.ConstructionEvent)
     (first : EventPrefix before middle) (second : EventPrefix middle after) :
     EventPrefix before after := by
@@ -119,6 +127,13 @@ theorem keepsEventPrefix_get_bind (next : ExecutionState → EvalM α)
     (kept : ∀ state, EventPrefix state.construction.events
       (Goose.Proofs.Exit.stepState (next state state)).construction.events) :
     KeepsEventPrefix (EvalM.get >>= next) := kept
+
+theorem keepsEventPrefix_liftConstruction_of_isPrefix (origin : Goose.Core.OriginId)
+    (action : ConstructionM α)
+    (kept : ∀ state, state.events <+: (action state).finalState.events) :
+    KeepsEventPrefix (liftConstruction origin action) :=
+  keepsEventPrefix_liftConstruction origin action fun state =>
+    (eventPrefix_iff_isPrefix _ _).mpr (kept state)
 
 theorem keepsEventPrefix_setObjectOrdinal (root : Goose.Core.RootInst) (ordinal : Goose.Core.StorageId) :
     KeepsEventPrefix (setObjectOrdinal root ordinal) := by
