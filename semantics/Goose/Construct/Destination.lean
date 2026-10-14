@@ -2811,4 +2811,316 @@ theorem publishOperation_destination_begins_frame (ids : List DestinationId) :
       exact beginFrame_foreach ids publishReady beginFrame_publishReady state
 
 
+private abbrev LeavesConstructionState (action : ConstructionM α) : Prop :=
+  ∀ state, (action state).finalState = state
+
+private theorem leavesState_bind (action : ConstructionM α) (next : α → ConstructionM β)
+    (first : LeavesConstructionState action) (second : ∀ value, LeavesConstructionState (next value)) :
+    LeavesConstructionState (action >>= next) := by
+  intro state
+  cases result : action state with
+  | ok value after =>
+      have same : after = state := by simpa [result,ConstructionResult.finalState] using first state
+      simpa only [bind,result,same] using second value state
+  | fault reason after => simpa only [bind,result,ConstructionResult.finalState] using first state
+
+private theorem leavesState_pure (value : α) : LeavesConstructionState (pure value) := fun _ => rfl
+private theorem leavesState_get : LeavesConstructionState ConstructionM.get := fun _ => rfl
+private theorem leavesState_fail (reason : ConstructionFault) :
+    LeavesConstructionState (ConstructionM.fail (α := α) reason) := fun _ => rfl
+private theorem leavesState_fault_bind (reason : ConstructionFault) (next : α → ConstructionM β) :
+    LeavesConstructionState (ConstructionM.fail reason >>= next) := fun _ => rfl
+private theorem leavesState_if (condition : Prop) [Decidable condition] (yes no : ConstructionM α)
+    (first : LeavesConstructionState yes) (second : LeavesConstructionState no) :
+    LeavesConstructionState (if condition then yes else no) := by
+  by_cases selected : condition
+  · simpa only [selected,↓reduceIte] using first
+  · simpa only [selected,↓reduceIte] using second
+
+private theorem leavesState_lookupDestination (id : DestinationId) : LeavesConstructionState (lookupDestination id) := by
+  intro state
+  simp only [lookupDestination,ConstructionM.get,bind,pure]
+  cases state.destinations[id]? <;> rfl
+
+private theorem writableDestination_state (id : DestinationId) : LeavesConstructionState (writableDestination id) := by
+  unfold writableDestination
+  repeat' first
+    | with_reducible exact leavesState_pure _
+    | with_reducible exact leavesState_get
+    | with_reducible exact leavesState_fail _
+    | with_reducible exact leavesState_fault_bind _ _
+    | with_reducible exact leavesState_lookupDestination _
+    | with_reducible apply leavesState_bind
+    | with_reducible apply leavesState_if
+    | intro value
+
+private theorem writableDestination_bound (id : DestinationId) (state after : ConstructionState)
+    (destination : PendingDestination) (success : writableDestination id state = .ok destination after) :
+    id < state.destinations.size := by
+  unfold writableDestination lookupDestination at success
+  simp only [ConstructionM.get,bind] at success
+  cases present : state.destinations[id]? with
+  | none => simp [present,ConstructionM.fail] at success
+  | some pending => exact (Array.getElem?_eq_some_iff.mp present).choose
+
+theorem openDestinationDirect_destination_begins (storageId : StorageId)
+    (capability : Core.Destination Ty) (layout : ReceivingLayout) (knownCount : Option Nat) :
+    PreservesDestinationBegins (openDestinationDirect storageId capability layout knownCount) := by
+  intro state valid
+  unfold DestinationBegins at valid
+  unfold openDestinationDirect openDestinationWith
+  simp only [lookupStorage,ConstructionM.get,bind,pure]
+  cases present : state.storage[storageId]? with
+  | none => simpa [ConstructionM.fail,ConstructionResult.finalState,DestinationBegins] using valid
+  | some storage =>
+      have bound := (Array.getElem?_eq_some_iff.mp present).choose
+      dsimp only
+      by_cases owned : state.destinations.any (fun d =>
+          (d.storage == storageId || d.backing.receiverStorage == storageId) && active d) = true
+      · simpa [owned,ConstructionM.fail,bind,ConstructionResult.finalState,DestinationBegins] using valid
+      · cases knownCount <;> cases layout <;> cases request : capability.request
+        all_goals
+          simp [owned,bound,hasPrefix,DestinationBacking.writeStorage,
+            ConstructionM.get,ConstructionM.set,ConstructionM.fail,replaceStorage,emit,bind,
+            ConstructionResult.finalState,DestinationBegins,destinationBeginIds,List.range_succ]
+          repeat' (split at * <;> simp_all [↓reduceIte,ConstructionM.set,
+                ConstructionResult.ok.injEq,ConstructionResult.fault.injEq,destinationBeginIds])
+          all_goals
+            first
+              | simpa [destinationBeginIds,List.range_succ] using valid
+              | rename_i completion
+                rcases completion with ⟨sizeEqual,stateEqual⟩
+                subst_vars
+                simpa [destinationBeginIds,List.range_succ] using valid
+
+theorem openChild_destination_begins (parentId : DestinationId) (ty : Ty) (layout : ReceivingLayout) :
+    PreservesDestinationBegins (openChild parentId ty layout) := by
+  intro state valid
+  unfold openChild
+  simp only [bind]
+  cases read : writableDestination parentId state with
+  | fault kind after =>
+      have same : after = state := by simpa [read,ConstructionResult.finalState] using writableDestination_state parentId state
+      subst after
+      exact valid
+  | ok parent after =>
+      have parentBound := writableDestination_bound parentId state after parent read
+      have same : after = state := by simpa [read,ConstructionResult.finalState] using writableDestination_state parentId state
+      subst after
+      dsimp only
+      cases progress : parent.progress
+      all_goals simp only []
+      all_goals try exact valid
+      rename_i count
+      simp only [lookupStorage,ConstructionM.get,bind,pure]
+      cases present : state.storage[parent.storage]? with
+      | none => simpa [ConstructionM.fail,ConstructionResult.finalState] using valid
+      | some storage =>
+          have storageBound := (Array.getElem?_eq_some_iff.mp present).choose
+          dsimp only
+          by_cases fits : (!writingAvailable parent storage (count + 1)) = true
+          · simpa only [fits,↓reduceIte,ConstructionM.fail,bind,ConstructionResult.finalState] using valid
+          · simp only [fits]
+            have extended : parentId < state.destinations.size + 1 := Nat.lt_succ_of_lt parentBound
+            by_cases hasHeader : hasPrefix layout .value = true
+            all_goals
+              simp [hasHeader,extended,storageBound,ConstructionM.get,ConstructionM.set,
+                replaceDestination,replaceStorage,emit,bind,
+                ConstructionResult.finalState,DestinationBegins,destinationBeginIds,List.range_succ] at valid ⊢
+              first
+                | exact valid
+                | exact congrArg (· ++ [state.destinations.size]) valid
+
+theorem openDestination_destination_begins (storageId : StorageId)
+    (capability : Core.Destination Ty) (layout : ReceivingLayout) (knownCount : Option Nat) :
+    PreservesDestinationBegins (openDestination storageId capability layout knownCount) := by
+  cases layoutEq : layout <;> cases countEq : knownCount
+  all_goals try
+    simpa only [openDestination,openDestinationDirect,openDestinationWith,layoutEq,countEq] using
+      openDestinationDirect_destination_begins storageId capability layout knownCount
+  intro state valid
+  unfold DestinationBegins at valid
+  unfold openDestination openDestinationWith
+  simp only [lookupStorage,ConstructionM.get,bind,pure]
+  cases present : state.storage[storageId]? with
+  | none => simpa [ConstructionM.fail,ConstructionResult.finalState,DestinationBegins] using valid
+  | some storage =>
+      dsimp only
+      by_cases owned : state.destinations.any (fun d =>
+          (d.storage == storageId || d.backing.receiverStorage == storageId) && active d) = true
+      · simpa [owned,ConstructionM.fail,bind,ConstructionResult.finalState,DestinationBegins] using valid
+      · simp [owned,reserveStorage,hasPrefix,DestinationBacking.writeStorage,
+          ConstructionM.get,ConstructionM.set,emit,bind,pure,
+          ConstructionResult.finalState,DestinationBegins,destinationBeginIds,List.range_succ]
+        simpa only [destinationBeginIds] using valid
+
+theorem openExtension_destination_begins (parentId : DestinationId) (request : ConstructionRequest) (knownCount : Option Nat) :
+    PreservesDestinationBegins (openExtension parentId request knownCount) := by
+  intro state valid
+  unfold DestinationBegins at valid
+  unfold openExtension
+  simp only [bind]
+  cases read : writableDestination parentId state with
+  | fault kind after =>
+      have same : after = state := by simpa [read,ConstructionResult.finalState] using writableDestination_state parentId state
+      subst after
+      exact valid
+  | ok parent after =>
+      have parentBound := writableDestination_bound parentId state after parent read
+      have same : after = state := by simpa [read,ConstructionResult.finalState] using writableDestination_state parentId state
+      subst after
+      dsimp only
+      cases progress : parent.progress
+      all_goals simp only [pure]
+      all_goals try exact valid
+      all_goals
+        simp only [lookupStorage,ConstructionM.get,bind,pure]
+        cases present : state.storage[parent.storage]? with
+        | none =>
+            simp [ConstructionM.fail,ConstructionResult.finalState,DestinationBegins]
+            try exact valid
+        | some storage =>
+            have storageBound := (Array.getElem?_eq_some_iff.mp present).choose
+            have extended : parentId < state.destinations.size + 1 := Nat.lt_succ_of_lt parentBound
+            try dsimp only
+            cases parent.layout <;> cases parent.backing <;> cases knownCount
+            all_goals
+              simp [extended,reserveStorage,
+                ConstructionM.get,ConstructionM.set,ConstructionM.fail,replaceDestination,
+                emit,bind,pure,ConstructionResult.finalState,DestinationBegins,destinationBeginIds,List.range_succ]
+              repeat' (split at * <;> simp_all [↓reduceIte,ConstructionM.set,
+                    ConstructionResult.ok.injEq,ConstructionResult.fault.injEq,destinationBeginIds])
+              all_goals
+                first
+                  | simpa [destinationBeginIds,List.range_succ] using valid
+                  | rename_i completion
+                    rcases completion with ⟨sizeEqual,stateEqual⟩
+                    subst_vars
+                    simpa [destinationBeginIds,List.range_succ] using valid
+
+theorem openElementExtension_destination_begins (parentId : DestinationId) (ty : Ty) (layout : ReceivingLayout) (knownCount : Option Nat) (receiver : Loc) :
+    PreservesDestinationBegins (openElementExtension parentId ty layout knownCount receiver) := by
+  intro state valid
+  unfold DestinationBegins at valid
+  unfold openElementExtension
+  simp only [bind]
+  cases read : writableDestination parentId state with
+  | fault kind after =>
+      have same : after = state := by simpa [read,ConstructionResult.finalState] using writableDestination_state parentId state
+      subst after
+      exact valid
+  | ok parent after =>
+      have parentBound := writableDestination_bound parentId state after parent read
+      have same : after = state := by simpa [read,ConstructionResult.finalState] using writableDestination_state parentId state
+      subst after
+      dsimp only
+      cases progress : parent.progress
+      all_goals simp only [pure]
+      all_goals try exact valid
+      by_cases incompatible : (parent.capability.logicalType.element? != some ty) = true
+      · simpa [incompatible,ConstructionM.fail,bind,pure,ConstructionResult.finalState,DestinationBegins] using valid
+      · simp only [incompatible,↓reduceIte,Bool.false_eq_true]
+        simp only [lookupStorage,ConstructionM.get,bind,pure]
+        cases present : state.storage[parent.storage]? with
+        | none =>
+            simp [ConstructionM.fail,ConstructionResult.finalState,DestinationBegins]
+            try exact valid
+            cases parent.layout <;> cases parent.backing
+            all_goals
+              repeat' (split at * <;> simp_all [ConstructionM.fail])
+              all_goals
+                first
+                  | simpa [destinationBeginIds,List.range_succ] using valid
+                  | rename_i completion
+                    rcases completion with ⟨sizeEqual,stateEqual⟩
+                    subst_vars
+                    simpa [destinationBeginIds,List.range_succ] using valid
+        | some storage =>
+            have storageBound := (Array.getElem?_eq_some_iff.mp present).choose
+            have extended : parentId < state.destinations.size + 1 := Nat.lt_succ_of_lt parentBound
+            try dsimp only
+            cases parent.layout <;> cases parent.backing <;> cases layout
+            all_goals
+              simp [extended,storageBound,hasPrefix,
+                ConstructionM.get,ConstructionM.set,ConstructionM.fail,replaceDestination,replaceStorage,
+                emit,bind,ConstructionResult.finalState,DestinationBegins,destinationBeginIds,List.range_succ]
+              repeat' (split at * <;> simp_all [↓reduceIte,ConstructionM.set,
+                    ConstructionResult.ok.injEq,ConstructionResult.fault.injEq,destinationBeginIds])
+              all_goals
+                first
+                  | simpa [destinationBeginIds,List.range_succ] using valid
+                  | rename_i completion
+                    rcases completion with ⟨sizeEqual,stateEqual⟩
+                    subst_vars
+                    simpa [destinationBeginIds,List.range_succ] using valid
+
+theorem openExitReplacement_destination_begins (parentId : DestinationId) :
+    PreservesDestinationBegins (openExitReplacement parentId) := by
+  intro state valid
+  unfold DestinationBegins at valid
+  unfold openExitReplacement
+  simp only [bind]
+  cases read : writableDestination parentId state with
+  | fault kind after =>
+      have same : after = state := by simpa [read,ConstructionResult.finalState] using writableDestination_state parentId state
+      subst after
+      exact valid
+  | ok parent after =>
+      have parentBound := writableDestination_bound parentId state after parent read
+      have same : after = state := by simpa [read,ConstructionResult.finalState] using writableDestination_state parentId state
+      subst after
+      dsimp only
+      cases progress : parent.progress
+      all_goals simp only [pure]
+      all_goals try exact valid
+      all_goals
+        simp only [lookupStorage,ConstructionM.get,bind,pure]
+        cases present : state.storage[parent.storage]? with
+        | none =>
+            simp [ConstructionM.fail,ConstructionResult.finalState,DestinationBegins]
+            try exact valid
+        | some storage =>
+            have storageBound := (Array.getElem?_eq_some_iff.mp present).choose
+            have extended : parentId < state.destinations.size + 1 := Nat.lt_succ_of_lt parentBound
+            dsimp only
+            by_cases hasHeader : parent.layout = .packed ∧ parent.capability.request = .value
+            all_goals
+              simp [hasHeader,extended,storageBound,hasPrefix,
+                ConstructionM.get,ConstructionM.set,replaceDestination,replaceStorage,
+                emit,bind,ConstructionResult.finalState,DestinationBegins,destinationBeginIds,List.range_succ]
+              repeat' (split at * <;> simp_all [↓reduceIte,ConstructionM.fail,ConstructionM.set,ConstructionM.get,
+                    bind,pure,ConstructionResult.ok.injEq,ConstructionResult.fault.injEq,ConstructionResult.finalState,DestinationBegins,destinationBeginIds,
+                    List.filterMap_append,List.filterMap_cons,List.filterMap_nil,Array.size_push,List.range_succ])
+              all_goals
+                first
+                  | simpa [destinationBeginIds,List.range_succ] using valid
+                  | rename_i completion
+                    rcases completion with ⟨sizeEqual,stateEqual⟩
+                    subst_vars
+                    simpa [destinationBeginIds,List.range_succ] using valid
+
+theorem acknowledgeAbandonment_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (acknowledgeAbandonment id) := by
+  unfold acknowledgeAbandonment
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | split
+    | intro value
+
+theorem DestinationBegins.distinct (state : ConstructionState) (valid : DestinationBegins state) :
+    (destinationBeginIds state.events).Nodup := by
+  rw [show destinationBeginIds state.events = List.range state.destinations.size from valid]
+  exact List.nodup_range
+
+theorem DestinationBegins.covers (state : ConstructionState) (valid : DestinationBegins state)
+    (id : DestinationId) : id ∈ destinationBeginIds state.events ↔ id < state.destinations.size := by
+  rw [show destinationBeginIds state.events = List.range state.destinations.size from valid]
+  exact List.mem_range
+
 end Goose.Construct
