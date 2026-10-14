@@ -351,4 +351,105 @@ theorem shortCircuit_children_source (artifact : ArtifactProfile) (profile : Num
         | .done .returned "", .done .returned "" => true
         | _, _ => false
 
+def fillModule (artifact : ArtifactProfile) : Core.Module :=
+  { files := #["fill.goose"], types := #[.bool, .int .i64, .arr .bool 3],
+    globals := #[⟨"filled", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [
+      .assertS (.read (.elem (.of (.global 0)) (.lit .i64 0) 0)) 0,
+      .assertS (.read (.elem (.of (.global 0)) (.lit .i64 2) 0)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := artifact }
+
+theorem fill_claim (artifact : ArtifactProfile) (profile : NumProfile) :
+    TypedExprClaim 3 ⟨profile, fillModule artifact⟩ [.arr .bool 3]
+      (.fill (.arr .bool 3) (.bool true)) :=
+  typedExprClaim_fill (typedExprClaim_bool 2 _ _ true) (.arr .bool 3)
+
+theorem fill_child_source (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (fillModule artifact) = .ok ()) :
+    ∃ child : ExprSource ⟨profile, fillModule artifact⟩ ⟨#[], 0, [], 0⟩ (.bool true)
+      { St.initial with nextAct := 1 }, child.ty = .bool := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, fillModule artifact⟩) (state := St.initial) (g := 0)
+    (global := ⟨"filled", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩)
+    accepted rfl (InitializedGlobals.initial _).invariant
+  obtain ⟨element, count, targetEq, child, hchildTyping, hchildRoots, childTy⟩ := source.fillChild _
+  cases targetEq
+  exact ⟨child, childTy⟩
+
+def fieldType : Ty := .structT 0 (.cons .bool .nil)
+
+def fieldModule (artifact : ArtifactProfile) : Core.Module :=
+  { files := #["field.goose"], types := #[.bool, fieldType],
+    structs := #[⟨1, #[⟨.bool, .mutable, .mutable, 0⟩]⟩],
+    globals := #[⟨"owner", fieldType, .mutable, .structLit fieldType [.bool true], 0⟩,
+      ⟨"field", .bool, .mutable, .read (.field (.global 0) 0), 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [.assertS (.read (.global 1)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := artifact }
+
+def fieldPrefixState : St :=
+  { St.initial with nextAct := 1, store := Store.empty.introduce (.global 0) (.record 0 #[.bool true]) }
+
+theorem field_prefix (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (fieldModule artifact) = .ok ()) :
+    InitializedGlobals (fieldModule artifact) 1 fieldPrefixState :=
+  InitializedGlobals.afterInitializer (cfg := ⟨profile, fieldModule artifact⟩)
+    (before := St.initial) (after := { St.initial with nextAct := 1 })
+    (value := .record 0 #[.bool true]) (g := 0)
+    (global := ⟨"owner", fieldType, .mutable, .structLit fieldType [.bool true], 0⟩)
+    accepted rfl (InitializedGlobals.initial _) 2
+    (by simp [evalExpr, fieldType, mapList, pure_apply, bind_apply, St.initial])
+
+theorem field_owner_source (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (fieldModule artifact) = .ok ()) :
+    ∃ child : PlaceSource ⟨profile, fieldModule artifact⟩ ⟨#[], 1, [], 0⟩ (.global 0)
+      { fieldPrefixState with nextAct := 2 }, child.ty = fieldType := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, fieldModule artifact⟩) (state := fieldPrefixState) (g := 1)
+    (global := ⟨"field", .bool, .mutable, .read (.field (.global 0) 0), 0⟩)
+    accepted rfl (field_prefix artifact profile accepted).invariant
+  obtain ⟨field, hfieldTyping, hfieldRoots⟩ := source.readChild
+  obtain ⟨owner, hownerTyping, hownerRoots⟩ := field.fieldChild 0
+  have ht := owner.typed
+  rw [hownerTyping, hfieldTyping, htyping] at ht
+  simp only [tyPlace] at ht
+  inv at ht
+  obtain ⟨_, ht⟩ := ht
+  simp only [initEnv, fieldModule] at ht
+  have ht' := (Core.Sound.st_pure_ok _ _ _).1 ht
+  exact ⟨owner, congrArg (fun p => p.1.ty) ht'⟩
+
+theorem field_claim (artifact : ArtifactProfile) (profile : NumProfile) :
+    TypedExprClaim 4 ⟨profile, fieldModule artifact⟩ [.bool] (.read (.field (.global 0) 0)) :=
+  typedExprClaim_read (typedPlaceClaim_field (typedPlaceClaim_global 2 _ _ 0) 0)
+
+example : ∃ child : ExprSource ⟨.release, fillModule .pilot⟩ ⟨#[], 0, [], 0⟩ (.bool true)
+    { St.initial with nextAct := 1 }, child.ty = .bool := fill_child_source .pilot .release (by cbv)
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := fillModule artifact
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard match Core.validate (fieldModule .shrink), GIR.validate (lower (fieldModule .shrink)) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard match Core.validate (fieldModule .pilot), GIR.validate (lower (fieldModule .pilot)) with
+  | .error _, .error _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := fillModule artifact
+  [NumProfile.release, .debug].all fun profile =>
+    match Core.eval 100 profile source, GIR.run 200 profile (lower source) with
+    | .done .returned "", .done .returned "" => true
+    | _, _ => false
+
+#guard [NumProfile.release, .debug].all fun profile =>
+  let source := fieldModule .shrink
+  match Core.eval 100 profile source, GIR.run 200 profile (lower source) with
+  | .done .returned "", .done .returned "" => true
+  | _, _ => false
+
 end Goose.Lower.TypedExpressionChecks
