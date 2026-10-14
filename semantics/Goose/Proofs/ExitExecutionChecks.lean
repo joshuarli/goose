@@ -1,5 +1,7 @@
-import Goose.Proofs.ExitExecution
 import Goose.Construct.Validate
+import Goose.Proofs.ExitExecution
+
+set_option Elab.async false
 
 namespace Goose.Proofs.ExitExecutionChecks
 open Goose.Construct
@@ -27,23 +29,52 @@ def recursiveDestinations : Module :=
 def accepts (module : Module) : Bool :=
   match validate module with | .ok _ => true | .error _ => false
 
+theorem recursiveDestinations_validated : accepts recursiveDestinations = true := by
+  cbv
+
 def returnedObservation : ExecutionResult → Option (List UInt8 × List Goose.Core.ConstructionEvent)
   | .done .returned stdout events => some (stdout.data.toList, events)
   | _ => none
 
-theorem recursiveDestinations_validated : accepts recursiveDestinations = true := by cbv
-
 theorem recursiveDestinations_execution :
     returnedObservation (eval 200 .release recursiveDestinations) =
       some ([66, 10, 65, 10], [.begin 0, .begin 1, .write 1 0, .publish 1, .write 0 0, .publish 0]) := by
-  decide +kernel
+  cbv
+
+def timeoutActivations : ExecutionStep α → Option (List Goose.Core.ActId × Nat)
+  | .stop .timeout state => some (state.activations.map (·.act), state.nextAct)
+  | _ => none
+
+def selectedActivation : ExecutionStep RuntimeActivation → Option Goose.Core.ActId
+  | .ok activation _ => some activation.act
+  | _ => none
+
+theorem recursive_live_activations :
+    timeoutActivations (runModule 28 ⟨.release, recursiveDestinations⟩ .initial) =
+      some ([3, 2, 1, 0], 4) := by cbv
+
+theorem recursive_live_activations_fresh :
+    Goose.Proofs.ExitExecution.FreshActivations
+      (Goose.Proofs.Exit.stepState (runModule 28 ⟨.release, recursiveDestinations⟩ .initial)) :=
+  Goose.Proofs.ExitExecution.runModule_freshActivations _ _
+
+theorem recursive_live_nearest_target :
+    selectedActivation (targetActivation ⟨.release, recursiveDestinations⟩ 0
+      (Goose.Proofs.Exit.stepState (runModule 28 ⟨.release, recursiveDestinations⟩ .initial))) = some 2 := by
+  cbv
 
 #print axioms recursiveDestinations_validated
 #print axioms recursiveDestinations_execution
+#print axioms recursive_live_activations
+#print axioms recursive_live_activations_fresh
+#print axioms recursive_live_nearest_target
 #print axioms Goose.Proofs.ExitExecution.preservesFresh_copyValue
 #print axioms Goose.Proofs.ExitExecution.preservesFresh_deliverCarriers
 #print axioms Goose.Proofs.ExitExecution.preservesFresh_truncateOwner
 #print axioms Goose.Proofs.ExitExecution.preservesFresh_appendFixedValues
 #print axioms Goose.Proofs.ExitExecution.preservesFresh_appendRun
+#print axioms Goose.Proofs.ExitExecution.evaluation_preservesFresh
+#print axioms Goose.Proofs.ExitExecution.initGlobals_preservesFresh
+#print axioms Goose.Proofs.ExitExecution.runModule_freshActivations
 
 end Goose.Proofs.ExitExecutionChecks
