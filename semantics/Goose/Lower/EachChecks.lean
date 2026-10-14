@@ -33,9 +33,10 @@ def eachModule (grow byRef : Bool) (tail : List Stmt) : Core.Module :=
     origins := #[⟨0, 1, "each"⟩], profile := .shrink }
 
 #guard [false, true].all fun grow => [false, true].all fun byRef =>
-  match Core.validate (eachModule grow byRef []), GIR.validate (lower (eachModule grow byRef [])) with
-  | .ok _, .ok _ => true
-  | _, _ => false
+  [[], [.cont 0], [.brk 0], [.ret none 0]].all fun tail =>
+    match Core.validate (eachModule grow byRef tail), GIR.validate (lower (eachModule grow byRef tail)) with
+    | .ok _, .ok _ => true
+    | _, _ => false
 
 def actualRuns (m : Core.Module) (trace : String) : Bool :=
   [NumProfile.release, .debug].all fun profile =>
@@ -93,6 +94,20 @@ def actualOwnerRuns (grow byRef : Bool) : Bool :=
     | _, _ => false
 
 #guard [false, true].all fun grow => [false, true].all fun byRef => actualOwnerRuns grow byRef
+
+#guard [NumProfile.release, .debug].all fun profile =>
+  let m := eachModule false true [.brk 0]
+  match Core.runModule 80 ⟨profile, m⟩ St.initial,
+    GIR.runModule 500 ⟨profile, lower m⟩ St.initial with
+  | .ok _ a, .ok _ b => ownerContents a false 100 7 && ownerContents b false 100 7
+  | _, _ => false
+
+#guard [NumProfile.release, .debug].all fun profile =>
+  let m := eachModule true false [.ret none 0]
+  match Core.runModule 80 ⟨profile, m⟩ St.initial,
+    GIR.runModule 500 ⟨profile, lower m⟩ St.initial with
+  | .ok _ a, .ok _ b => ownerContents a true 9 7 && ownerContents b true 9 7
+  | _, _ => false
 
 def noIndexModule (byRef : Bool) : Core.Module :=
   let m := eachModule false byRef []

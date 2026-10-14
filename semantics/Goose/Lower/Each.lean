@@ -2,6 +2,7 @@ import Goose.Lower.Eventual
 import Goose.Lower.Claims
 import Goose.Lower.Return
 import Goose.Core.Sound.Invert
+import Goose.Core.Sound.Spec
 
 namespace Goose.Lower
 
@@ -10,6 +11,27 @@ open Goose.Core Goose.GIR
 def EachSourceCells (owner : Option ValueId) (view : ValueId) (vw : ViewVal) :
     List (ValueId × RVal) :=
   (view, .view vw) :: owner.toList.map (fun r => (r, .val (.ref vw.loc)))
+
+def eachSourceRegrows (access : AccessEnv) : View → Bool
+  | .val _ => false
+  | .of place => match access.placeType? place with
+    | some (.grow _) | some (.growshrink _) => true
+    | _ => false
+
+theorem eachSourceRegrows_of_aliases {m : Core.Module} {world : Core.Sound.World}
+    {penv : PEnv} {env : Env} {store : Store} {source : View} {vw : ViewVal} {element : Ty}
+    (h : Core.Sound.ViewAliases m world penv env store source vw element) :
+    eachSourceRegrows penv.access source = vw.resizable := by
+  cases h with
+  | fixed hresize hclass _ =>
+    rcases hclass with ⟨expr, rfl⟩ | ⟨place, count, rfl, htype⟩
+    · exact hresize.symm
+    · simp [eachSourceRegrows, htype, hresize]
+  | limited hresize place capacity hsource htype _ _ =>
+    simp [eachSourceRegrows, hsource, htype, hresize]
+  | owner hresize place owner hsource howner htype _ _ =>
+    rcases howner with rfl | rfl
+    all_goals simp [eachSourceRegrows, hsource, htype, hresize]
 
 theorem lowerEachSource_of_sim (n : Nat) (ihp : ∀ p, PlaceClaim n p) (p : Place)
     (hok : placeOk p = true) (le : LEnv) (ls ls' : LS)
@@ -151,6 +173,22 @@ theorem eachLen_sampled_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
     Nat.le_refl _, Same.refl _ _, hrel⟩
 
 theorem regrowOf_none (le : LEnv) (ls : LS) : regrowOf none le ls = (false, ls) := rfl
+
+theorem regrowOf_state (owner : Option ValueId) (le : LEnv) (ls : LS) :
+    (regrowOf owner le ls).2 = ls := by
+  cases owner with
+  | none => rfl
+  | some r =>
+    simp only [regrowOf, growOwner, bind_run]
+    have hs := valTy_run r le ls
+    cases hv : valTy r le ls with
+    | mk ty state =>
+      rw [hv] at hs
+      simp only at hs ⊢
+      subst state
+      cases ty with
+      | data ty => cases ty <;> rfl
+      | view _ _ => rfl
 
 theorem regrowOf_some {le : LEnv} {ls : LS} {owner : ValueId} {mu : Mutability} {ty : Ty}
     (h : ls.vals[owner]? = some (some (.data (.ref mu ty)))) :
@@ -303,6 +341,28 @@ theorem tyStmt_each_scopes (env : TEnv) (sc : Nat) (x : VarId) (idx : Option Var
   obtain ⟨_, lj, hv, hs, ht⟩ := hidx j hj
   exact ⟨lj, hv, hs, ht⟩
 
+theorem eachIRPre_scopes_of_typed (sourceEnv : TEnv) (env : Env) (sc : Nat)
+    (x : VarId) (idx : Option VarId) (source : View) (byRef : Bool) (body : Core.Block)
+    (org : OriginId) (next next' value counter : Nat) (after : TEnv)
+    (hvars : sourceEnv.vars = env.vars)
+    (htype : tyStmt sourceEnv sc (.forEach x idx source byRef body org) next = .ok (after, next')) :
+    ∀ p ∈ eachIRPre x idx value counter org,
+      ∃ lv, env.vars[p.1]? = some lv ∧ lv.scope = body.scope := by
+  have hscope := tyStmt_each_scopes sourceEnv sc x idx source byRef body org next next' after htype
+  rw [hvars] at hscope
+  intro p hp
+  cases hi : idx with
+  | none =>
+    simp only [eachIRPre, hi, List.mem_singleton] at hp
+    subst p
+    exact hscope.1
+  | some j =>
+    simp only [eachIRPre, hi, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hp
+    rcases hp with rfl | rfl
+    · exact hscope.1
+    · obtain ⟨lv, hvar, hsc, _⟩ := hscope.2 j hi
+      exact ⟨lv, hvar, hsc⟩
+
 def preparedEach (n : Nat) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option VarId)
     (byRef : Bool) (body : Core.Block) (vw : ViewVal) (i : Nat) : M Flow :=
   (if vw.resizable then lengthLoc vw.loc else pure vw.len) >>= fun len =>
@@ -443,6 +503,35 @@ theorem lowerEach_unfold {regrow : Bool} {owner : Option ValueId}
   rw [setCur_run] at hs hexit
   exact ⟨len, lsLen, c, lsCmp, tb, xb, lsf, lsBody, rBody, lsBodyEnd, lsBack,
     hlen, hcmp, hf, (Prod.mk.inj hs).2.symm, hbdy, hback, (Prod.mk.inj hexit).2.symm⟩
+
+theorem lowerStmt_each_unfold (lc : Option LoopCtx) (x : VarId) (idx : Option VarId)
+    (source : View) (byRef : Bool) (body : Core.Block) (org : OriginId)
+    (le : LEnv) (ls ls' : LS)
+    (h : lowerStmt lc (.forEach x idx source byRef body org) le ls = ((), ls')) :
+    ∃ owner view lsSource regrow sampled lsSampled start lsStart,
+      lowerEachSource source le ls = ((owner, view), lsSource) ∧
+      regrowOf owner le lsSource = (regrow, lsSource) ∧
+      eachSampled regrow view le lsSource = (sampled, lsSampled) ∧
+      emitDef (.constInt .i64 0) le lsSampled = (start, lsStart) ∧
+      whenLive () (fun _ => do
+        let (hb, params) ← newBlock [.data (.int .i64)]
+        let counter := params.headD 0
+        emitTerm (.br hb [start])
+        setCur (some hb)
+        lowerEach regrow owner sampled hb counter (fun depth exit => do
+          let elem ← emitDef (.refElem view counter)
+          let value ← eachElemValue x byRef elem
+          lowerBlock (some ⟨depth, exit, .next hb .i64 counter⟩)
+            (eachIRPre x idx value counter org) false body)) le lsStart = ((), ls') := by
+  simp only [lowerStmt, bind_eq] at h
+  obtain ⟨⟨owner, view⟩, lsSource, hSource, regrow, lsRegrow, hRegrow,
+    sampled, lsSampled, hSampled, start, lsStart, hStart, hLive⟩ := h
+  have hs := regrowOf_state owner le lsSource
+  rw [hRegrow] at hs
+  simp only at hs
+  subst lsRegrow
+  exact ⟨owner, view, lsSource, regrow, sampled, lsSampled, start, lsStart,
+    hSource, hRegrow, hSampled, hStart, hLive⟩
 
 structure EachInv (cfg : Cfg) (env : Env) (cx : FnCtx) (ls : LS)
     (counter view sampled : ValueId) (owner : Option ValueId) (vw : ViewVal)
