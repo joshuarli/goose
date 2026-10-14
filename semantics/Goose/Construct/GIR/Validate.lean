@@ -274,6 +274,65 @@ private def checkTypesAndEdges (m : Module) (f : Func) : Check Unit := do
             let types ← args.mapM fun arg => checkTypeResult (env.valTy arg)
             unless targetBlock.params.map (·.2) == leading ++ types do violation .v020 "branch carrier arity/type mismatch"
 
+private inductive ReturnFlow
+  | returns
+  | stops
+  | branches (blocks : List BlockId)
+
+private def blockReturnFlow (m : Module) (functionId : FnId) (mayReturn : Array Bool) : List Inst → ReturnFlow
+  | [] => .returns
+  | .def _ (.call callee ..) :: rest | .def _ (.callConstruct callee ..) :: rest =>
+      if mayReturn[callee]?.getD true then blockReturnFlow m functionId mayReturn rest else .stops
+  | .term (.ret ..) :: _ | .term .unreachable :: _ => .returns
+  | .term (.br block ..) :: _ => .branches [block]
+  | .term (.condbr _ left _ right _) :: _ => .branches [left,right]
+  | .term (.invoke callee _ _ normal _ escapes _) :: _ =>
+      .branches ((if mayReturn[callee]?.getD true then [normal] else []) ++ escapes.map (·.block))
+  | .term (.escape target ..) :: _ =>
+      if (m.targets[target]?).any (fun target => target.contains functionId) then .returns else .stops
+  | .term (.abort ..) :: _ | .term (.exit ..) :: _ => .stops
+  | _ :: rest => blockReturnFlow m functionId mayReturn rest
+
+private def functionMayReturn (m : Module) (mayReturn : Array Bool) (functionId : FnId) (f : Func) : Bool := Id.run do
+  let mut reached := [0]
+  for _ in [0:f.blocks.size + 1] do
+    let previous := reached
+    for id in reached do
+      let some block := f.blocks[id]? | return true
+      match blockReturnFlow m functionId mayReturn block.insts with
+      | .returns => return true
+      | .stops => pure ()
+      | .branches targets => reached := (reached ++ targets).eraseDups
+    if previous == reached then return false
+  return true
+
+private def functionsMayReturn (m : Module) : Array Bool := Id.run do
+  let initial := Array.replicate m.funcs.size true
+  let mut current := initial
+  for _ in [0:m.funcs.size + 1] do
+    let next := m.funcs.mapIdx (functionMayReturn m current)
+    if next == current then return current
+    current := next
+  return initial
+
+private def checkUnreachable (m : Module) : Check Unit := do
+  let mayReturn := functionsMayReturn m
+  for f in m.funcs do
+    for (block,index) in f.blocks.toList.zipIdx do
+      if block.lastTerm?.any (fun term => term matches .unreachable) then
+        let followsCall := match (block.insts.dropLast).getLast? with
+          | some (.def _ (.call callee ..)) | some (.def _ (.callConstruct callee ..)) => !mayReturn[callee]?.getD true
+          | _ => false
+        let predecessors := f.blocks.toList.filterMap fun block => do
+          let term ← block.lastTerm?
+          if term.successors.contains index then some term else none
+        let invokeContinuation := block.insts.length == 1 && !predecessors.isEmpty && predecessors.all (fun term =>
+          match term with
+          | .invoke callee _ _ normal _ escapes _ =>
+              normal == index && !(escapes.any (fun edge => edge.block == index)) && !mayReturn[callee]?.getD true
+          | _ => false)
+        unless followsCall || invokeContinuation do violation .v020 "unreachable lacks proven nonreturning call or invoke normal continuation"
+
 private def reachable (f : Func) : List Nat := Id.run do
   let mut found := [0]
   for _ in [0:f.blocks.size] do
@@ -1293,6 +1352,7 @@ def validate (m : Module) : Check Unit := do
   for f in all.funcs do checkTables all f
   for f in all.funcs do checkTypesAndEdges all f
   for f in all.funcs do checkDominance f
+  checkUnreachable all
   for f in all.funcs do checkPermissions all f
   for f in all.funcs do checkScopes f
   let returns := resultRoots all

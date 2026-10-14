@@ -1172,3 +1172,35 @@ private def unstagedFit : Module :=
 #guard (match Validate.validate unstagedFit with | .error v => v.code == .v060 | _ => false)
 
 end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def forgedUnreachable : Module := moduleOf #[function "entry" #[⟨[],[.term .unreachable]⟩]]
+#guard (match Validate.validate forgedUnreachable with | .error v => v.code == .v020 | _ => false)
+
+private def invokeNonreturning : Module :=
+  let entry := function "entry" #[
+    ⟨[],[.term (.invoke 1 [] [] 1 [] [⟨0,2,[]⟩] (some 0))]⟩,
+    ⟨[],[.term .unreachable]⟩,
+    ⟨[],[.eff (.print [.text "caught"] (some 0)),.term (.ret [] none)]⟩]
+  let helper := function "escape" #[⟨[],[.term (.escape 0 [] [] (some 0))]⟩]
+  { moduleOf #[{ entry with summary := known [] [] [] false true },
+      { helper with summary := known [] [0] [0] }] with targets := #[⟨0,[]⟩] }
+
+#guard (Validate.validate invokeNonreturning).isOk
+#guard observation invokeNonreturning == some ("caught\n".toUTF8.data.toList,[])
+#guard roundTrip invokeNonreturning
+
+private def returningInvokeUnreachable : Module :=
+  { invokeNonreturning with funcs := invokeNonreturning.funcs.mapIdx fun index f =>
+    if index == 1 then { f with blocks := #[⟨[],[.term (.ret [] none)]⟩] } else f }
+
+#guard (match Validate.validate returningInvokeUnreachable with | .error v => v.code == .v020 | _ => false)
+
+private def selfEscapeUnreachable : Module :=
+  let original := invokeNonreturning
+  { original with targets := #[⟨1,[]⟩] }
+
+#guard (match Validate.validate selfEscapeUnreachable with | .error v => v.code == .v020 | _ => false)
+
+end Goose.Construct.GIR.Checks
