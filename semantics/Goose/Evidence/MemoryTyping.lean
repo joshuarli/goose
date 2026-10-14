@@ -1,0 +1,142 @@
+import Goose.Proofs.Memory
+
+namespace Goose.Evidence
+
+open Goose.Core Goose.Proofs.Memory
+
+abbrev RootDeclarations := RootInst → Option Ty
+
+inductive StoragePath : Ty → List Nat → Ty → Prop
+  | root (ty : Ty) : StoragePath ty [] ty
+  | fixed {element count index path result}
+      (tail : StoragePath element path result) :
+      StoragePath (.arr element count) (index :: path) result
+  | grow {element index path result}
+      (tail : StoragePath element path result) :
+      StoragePath (.grow element) (index :: path) result
+  | shrink {element index path result}
+      (tail : StoragePath element path result) :
+      StoragePath (.growshrink element) (index :: path) result
+  | limited {element capacity index path result}
+      (tail : StoragePath element path result) :
+      StoragePath (.limited element capacity) (index :: path) result
+  | field {sid fields index fieldTy path result}
+      (field : fields.toList[index]? = some fieldTy)
+      (tail : StoragePath fieldTy path result) :
+      StoragePath (.structT sid fields) (index :: path) result
+
+def DeclaredLocation (roots : RootDeclarations) (location : Loc) (ty : Ty) : Prop :=
+  ∃ rootTy, roots location.root = some rootTy ∧ StoragePath rootTy location.path ty
+
+def WeakValueTy (roots : RootDeclarations) (value : Val) : Ty → Prop
+  | .ref _ target => ∃ location, value = .ref location ∧ DeclaredLocation roots location target
+  | .slice _ element => (∃ location start len arrayTy,
+      value = .slice location start len ∧ DeclaredLocation roots location arrayTy ∧
+      arrayTy.ownerElem? = some element) ∨
+      ∃ location start len count,
+        value = .slice location start len ∧ DeclaredLocation roots location (.arr element count)
+  | .unit => value = .unit
+  | ty => FlatTy ty value
+
+def WeakStoreTy (roots : RootDeclarations) (store : Store) : Prop :=
+  ∀ root value, store.roots[root]? = some value →
+    ∃ ty, roots root = some ty ∧ WeakValueTy roots value ty
+
+theorem StoragePath.append {a b c : Ty} {p q : List Nat}
+    (path : StoragePath a p b) (tail : StoragePath b q c) :
+    StoragePath a (p ++ q) c := by
+  induction path with
+  | root => exact tail
+  | fixed _ ih => exact .fixed (ih tail)
+  | grow _ ih => exact .grow (ih tail)
+  | shrink _ ih => exact .shrink (ih tail)
+  | limited _ ih => exact .limited (ih tail)
+  | field field _ ih => exact .field field (ih tail)
+
+theorem WeakValueTy.int {roots : RootDeclarations} {value : Val} {ty : IntTy}
+    (typed : WeakValueTy roots value (.int ty)) : ∃ n, value = .int ty n := by
+  cases value <;> simp_all [WeakValueTy, FlatTy]
+
+theorem WeakValueTy.ofFlat {roots : RootDeclarations} {value : Val} {ty : Ty}
+    (typed : FlatTy ty value) : WeakValueTy roots value ty := by
+  cases ty <;> try exact typed
+  all_goals cases value <;> simp_all [FlatTy]
+
+theorem StoragePath.get {rootTy result : Ty} {path : List Nat} {value selected : Val}
+    (declared : StoragePath rootTy path result) (typed : FlatTy rootTy value)
+    (read : value.get? path = some selected) : FlatTy result selected := by
+  induction declared generalizing value with
+  | root =>
+    simp only [Val.get?, Option.some.injEq] at read
+    subst selected
+    exact typed
+  | @fixed element count index path result tail ih =>
+    cases value <;> simp only [FlatTy] at typed
+    rename_i elements
+    rw [get_fixed] at read
+    cases present : elements[index]? with
+    | none => simp [present] at read
+    | some element =>
+      simp only [present, Option.bind_some] at read
+      exact ih (typed.2 _ element present) read
+  | @grow element index path result tail ih | @shrink element index path result tail ih =>
+    cases value <;> simp only [FlatTy] at typed
+    rename_i elementTy elements
+    rw [get_resizable] at read
+    cases present : elements[index]? with
+    | none => simp [present] at read
+    | some element =>
+      simp only [present, Option.bind_some] at read
+      exact ih (typed.2 _ element present) read
+  | @limited element capacity index path result tail ih =>
+    cases value <;> simp only [FlatTy] at typed
+    rename_i elementTy capacity elements len
+    rw [get_limited] at read
+    cases present : elements[index]? with
+    | none => simp [present] at read
+    | some element =>
+      simp only [present, Option.bind_some] at read
+      exact ih (typed.2.2.2.2 _ element present) read
+  | @field sid types index fieldTy path result selector tail ih =>
+    cases value <;> simp only [FlatTy] at typed
+    rename_i sid fields
+    obtain ⟨fieldValue, present, fieldTyped⟩ := fields_get _ _ typed.2 _ _ selector
+    have arrayPresent : fields[index]? = some fieldValue := by simpa using present
+    rw [get_record, arrayPresent] at read
+    exact ih fieldTyped read
+
+theorem WeakValueTy.get {roots : RootDeclarations} {rootTy result : Ty}
+    {path : List Nat} {value selected : Val}
+    (declared : StoragePath rootTy path result) (typed : WeakValueTy roots value rootTy)
+    (read : value.get? path = some selected) : WeakValueTy roots selected result := by
+  cases declared with
+  | root =>
+    simp only [Val.get?, Option.some.injEq] at read
+    subst selected
+    exact typed
+  | fixed tail => exact .ofFlat (StoragePath.get (.fixed tail) typed read)
+  | grow tail => exact .ofFlat (StoragePath.get (.grow tail) typed read)
+  | shrink tail => exact .ofFlat (StoragePath.get (.shrink tail) typed read)
+  | limited tail => exact .ofFlat (StoragePath.get (.limited tail) typed read)
+  | field selector tail => exact .ofFlat (StoragePath.get (.field selector tail) typed read)
+
+theorem WeakStoreTy.read {roots : RootDeclarations} {store : Store} {location : Loc}
+    {ty : Ty} {value : Val} (typed : WeakStoreTy roots store)
+    (declared : DeclaredLocation roots location ty) (read : store.read location = .ok value) :
+    WeakValueTy roots value ty := by
+  obtain ⟨rootTy, declaration, path⟩ := declared
+  obtain ⟨rootValue, present, selected⟩ := (read_ok_iff _ _ _).mp read
+  obtain ⟨storedTy, storedDeclaration, storedTyped⟩ := typed location.root rootValue present
+  have same : storedTy = rootTy := Option.some.inj (storedDeclaration.symm.trans declaration)
+  subst storedTy
+  exact storedTyped.get path selected
+
+theorem WeakStoreTy.release {roots : RootDeclarations} {store : Store} {root : RootInst}
+    (typed : WeakStoreTy roots store) : WeakStoreTy roots (store.release root) := by
+  intro other value present
+  simp only [Store.release, Std.HashMap.getElem?_erase] at present
+  split at present
+  · contradiction
+  · exact typed other value present
+
+end Goose.Evidence
