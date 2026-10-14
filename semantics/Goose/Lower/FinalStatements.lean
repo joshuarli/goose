@@ -96,4 +96,32 @@ theorem stmt_exit_expr_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
   obtain ⟨_, _, _, instruction⟩ := emitTerm_facts terminated P.pp hext
   exact (SimE.exit_term instruction cell).at_state after
 
+theorem typedStatementLoopSimulation_assert {n : Nat} {cfg : Cfg} {results : List Ty}
+    {loop : Option LoopCtx} {expr : Expr} {org : OriginId}
+    (hexpr : TypedExprClaim n cfg results expr) :
+    TypedStatementLoopSimulation (n + 1) cfg results loop (.assertS expr org) := by
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
+    hgir hresults hdepth htargets hcounter
+  obtain ⟨child, htyping, hroots, _⟩ := source.assertChild
+  have metadata : SourceResults child.typingEnv child.rootsEnv results := by
+    rw [htyping, hroots]
+    exact hmetadata
+  have resultEq : result = () := Subsingleton.elim _ _
+  subst result
+  exact (stmt_assert_expr_sim child metadata hexpr hlow hpp hext hrel hgir hresults).prepareNormalLoopFlow
+
+theorem typedStatementLoopSimulation_exit {n : Nat} {cfg : Cfg} {results : List Ty}
+    {loop : Option LoopCtx} {expr : Expr} {org : OriginId}
+    (hexpr : TypedExprClaim n cfg results expr) :
+    TypedStatementLoopSimulation (n + 1) cfg results loop (.exit expr org) := by
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
+    hgir hresults hdepth htargets hcounter
+  obtain ⟨child, _, htyping, hroots, _⟩ := source.exitChild
+  have metadata : SourceResults child.typingEnv child.rootsEnv results := by
+    rw [htyping, hroots]
+    exact hmetadata
+  have resultEq : result = () := Subsingleton.elim _ _
+  subst result
+  exact (stmt_exit_expr_sim child metadata hexpr hlow hpp hext hrel hgir hresults).prepareNormalLoopFlow
+
 end Goose.Lower
