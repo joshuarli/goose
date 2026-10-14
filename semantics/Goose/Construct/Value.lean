@@ -76,10 +76,20 @@ structure ExecutionState where
 
 def ExecutionState.initial : ExecutionState := ⟨[], [], .initial, 0, 0, [], []⟩
 
+inductive ExitTarget
+  | ordinary
+  | nonlocal (id : Core.NonlocalTargetId)
+  deriving Repr, BEq, DecidableEq
+
+structure ExitAddress where
+  activation : ActId
+  target : ExitTarget
+  deriving Repr, BEq, DecidableEq
+
 inductive ExecutionStep (α : Type)
   | ok (value : α) (state : ExecutionState)
   | stop (reason : Core.Stop) (state : ExecutionState)
-  | escape (activation : ActId) (carriers : List Carrier) (state : ExecutionState)
+  | escape (address : ExitAddress) (carriers : List Carrier) (state : ExecutionState)
   | jump (target : Nat) (kind : JumpKind) (state : ExecutionState)
 
 abbrev EvalM (α : Type) := ExecutionState → ExecutionStep α

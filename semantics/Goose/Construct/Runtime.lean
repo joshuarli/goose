@@ -368,20 +368,23 @@ def descendsFrom (state : ConstructionState) (id ancestor : DestinationId) : Boo
     | .child parent | .replacement parent => current := parent
   return false
 
+def protectedReplacement? (state : ConstructionState) (id : DestinationId)
+    (carriers : List Carrier) : Option DestinationId :=
+  carriers.findSome? fun carrier => match carrier with
+      | .completed replacementId => do
+          let replacement ← state.destinations[replacementId]?
+          match replacement.use with
+          | .replacement superseded =>
+              if descendsFrom state id superseded then some replacementId else none
+          | _ => none
+      | _ => none
+
 def cleanupDestination (origin : OriginId) (id : DestinationId) (carriers : List Carrier) : EvalM Unit := do
   let destination ← getDestination id
   if !activeProgress destination.progress then pure ()
   else
     let state ← EvalM.get
-    let preserved := carriers.findSome? fun carrier => match carrier with
-      | .completed replacementId => do
-          let replacement ← state.construction.destinations[replacementId]?
-          match replacement.use with
-          | .replacement superseded =>
-              if descendsFrom state.construction id superseded then some replacementId else none
-          | _ => none
-      | _ => none
-    match preserved with
+    match protectedReplacement? state.construction id carriers with
     | some replacement => liftConstruction origin (abandonPreservingExit id replacement)
     | none =>
         if carriers.any (fun carrier => match carrier with
@@ -476,7 +479,7 @@ def finishActivation (layout : LayoutEnv) (activation : RuntimeActivation) (resu
   match action state with
   | .ok carriers state' => finish carriers state'
   | .escape target carriers state' =>
-      if target == activation.act then finish carriers state'
+      if target.activation == activation.act then finish carriers state'
       else .escape target carriers { state' with activations := state'.activations.filter (fun current => current.act != activation.act) }
   | .stop reason state' => .stop reason state'
   | .jump _ _ state' => .stop (.fault .flow) state'
