@@ -837,6 +837,347 @@ void PassedOwnerPairsKeepTheirExactIdentity() {
     assert(Code(LowPassedOwnerPairModule(false, false, true)) == "");
 }
 
+// Write a global owner's header and stack through the low hidden result slot.
+void StoreGlobalOwnerPair(GirModule &m, GirBlock &block, int firstValue,
+                          int headerGlobal, int stackGlobal) {
+    auto ptr = m.PtrType();
+    auto header = Def(GirOp::GlobalAddr, firstValue);
+    header.idx = headerGlobal;
+    auto stack = Def(GirOp::GlobalStack, firstValue + 1);
+    stack.idx = stackGlobal;
+    block.insts.push_back(header);
+    block.insts.push_back(stack);
+
+    block.insts.push_back(Int(m, firstValue + 2, "0"));
+    auto headerAddress = Def(GirOp::PtrOffset, firstValue + 3);
+    headerAddress.idx = 8;
+    headerAddress.a = 1;
+    headerAddress.b = firstValue + 2;
+    block.insts.push_back(headerAddress);
+    GirInst storeHeader;
+    storeHeader.op = GirOp::PStore;
+    storeHeader.ty = ptr;
+    storeHeader.a = firstValue + 3;
+    storeHeader.b = firstValue;
+    block.insts.push_back(storeHeader);
+
+    block.insts.push_back(Int(m, firstValue + 4, "1"));
+    auto stackAddress = Def(GirOp::PtrOffset, firstValue + 5);
+    stackAddress.idx = 8;
+    stackAddress.a = 1;
+    stackAddress.b = firstValue + 4;
+    block.insts.push_back(stackAddress);
+    GirInst storeStack;
+    storeStack.op = GirOp::PStore;
+    storeStack.ty = ptr;
+    storeStack.a = firstValue + 5;
+    storeStack.b = firstValue + 1;
+    block.insts.push_back(storeStack);
+}
+
+GirModule LowReturnedOwnerPairModule() {
+    auto m = LowBase();
+    auto ptr = m.PtrType();
+    for (auto name : { "first", "second" }) {
+        GirLowGlobal global;
+        global.name = name;
+        global.kind = GirMember::Header;
+        m.lowglobals.push_back(global);
+    }
+    GirMember result;
+    result.kind = GirMember::Bytes;
+    result.size = 16;
+    result.scope = 0;
+    result.name = "result";
+    Main(m).members = { result };
+
+    GirFunc owner;
+    owner.name = "owner";
+    owner.params = { m.IntType(CoreIntTy::I64), ptr };
+    owner.scopes = { -1 };
+    owner.summary.unknown = true;
+    GirBlock ownerEntry;
+    ownerEntry.params = { { 0, owner.params[0] }, { 1, ptr } };
+    StoreGlobalOwnerPair(m, ownerEntry, 2, 0, 0);
+    ownerEntry.insts.push_back(Ret());
+    owner.blocks = { ownerEntry };
+    m.funcs.push_back(owner);
+
+    GirInst resultAddress = Def(GirOp::FrameAddr, 1);
+    resultAddress.idx = 0;
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 1;
+    call.vals = { 0, 1 };
+    call.org = 0;
+    GirBlock main;
+    main.params = { { 0, m.IntType(CoreIntTy::I64) } };
+    main.insts = { resultAddress, call };
+    main.insts.push_back(Int(m, 2, "0"));
+    auto headerAddress = Def(GirOp::PtrOffset, 3);
+    headerAddress.idx = 8;
+    headerAddress.a = 1;
+    headerAddress.b = 2;
+    main.insts.push_back(headerAddress);
+    auto header = Def(GirOp::PLoad, 4);
+    header.ty = ptr;
+    header.a = 3;
+    main.insts.push_back(header);
+    main.insts.push_back(Int(m, 5, "1"));
+    auto stackAddress = Def(GirOp::PtrOffset, 6);
+    stackAddress.idx = 8;
+    stackAddress.a = 1;
+    stackAddress.b = 5;
+    main.insts.push_back(stackAddress);
+    auto stack = Def(GirOp::PLoad, 7);
+    stack.ty = ptr;
+    stack.a = 6;
+    main.insts.push_back(stack);
+    auto mark = Def(GirOp::HdrBase, 8);
+    mark.a = 4;
+    main.insts.push_back(mark);
+    GirInst release;
+    release.op = GirOp::StackRelease;
+    release.a = 7;
+    release.b = 8;
+    main.insts.push_back(release);
+    main.insts.push_back(Ret());
+    Main(m).blocks = { main };
+    return m;
+}
+
+void OwnerCallUsesReturnedPairOnlyAfterOneProvenCall() {
+    auto m = LowReturnedOwnerPairModule();
+    assert(Code(m) == "");
+
+    // The output buffer is not a result of a call that happens later.
+    auto beforeCall = LowReturnedOwnerPairModule();
+    auto &instructions = Main(beforeCall).blocks[0].insts;
+    auto call = std::find_if(instructions.begin(), instructions.end(),
+                             [](const GirInst &i) { return i.op == GirOp::Call; });
+    assert(call != instructions.end());
+    auto savedCall = *call;
+    instructions.erase(call);
+    auto headerBase = std::find_if(instructions.begin(), instructions.end(),
+                                   [](const GirInst &i) { return i.op == GirOp::HdrBase; });
+    instructions.insert(headerBase, savedCall);
+    assert(Code(beforeCall) == "GIR-V090");
+
+    // An intervening pointer store can overwrite the returned header.
+    auto overwritten = LowReturnedOwnerPairModule();
+    auto &overwrittenInstructions = Main(overwritten).blocks[0].insts;
+    auto outputCall = std::find_if(overwrittenInstructions.begin(), overwrittenInstructions.end(),
+                                   [](const GirInst &i) { return i.op == GirOp::Call; });
+    assert(outputCall != overwrittenInstructions.end());
+    auto global = Def(GirOp::GlobalAddr, 9);
+    global.idx = 1;
+    GirInst store;
+    store.op = GirOp::PStore;
+    store.ty = overwritten.PtrType();
+    store.a = 1;
+    store.b = 9;
+    outputCall = overwrittenInstructions.insert(outputCall + 1, global);
+    overwrittenInstructions.insert(outputCall + 1, store);
+    assert(Code(overwritten) == "GIR-V090");
+
+    // Reusing one frame slot for two calls leaves the loads ambiguous.
+    auto reused = LowReturnedOwnerPairModule();
+    auto &reusedInstructions = Main(reused).blocks[0].insts;
+    auto firstCall = std::find_if(reusedInstructions.begin(), reusedInstructions.end(),
+                                  [](const GirInst &i) { return i.op == GirOp::Call; });
+    auto secondCall = *firstCall;
+    reusedInstructions.insert(firstCall + 1, secondCall);
+    assert(Code(reused) == "GIR-V090");
+}
+
+void ReturnedOwnerPairRequiresEveryReturnAndMatchingStores() {
+    auto missing = LowReturnedOwnerPairModule();
+    auto &owner = missing.funcs[1];
+    GirBlock entry;
+    entry.params = owner.blocks[0].params;
+    auto cond = Def(GirOp::Bool, 2);
+    entry.insts.push_back(cond);
+    GirInst branch;
+    branch.op = GirOp::CondBr;
+    branch.a = 2;
+    branch.idx = 1;
+    branch.idx2 = 2;
+    entry.insts.push_back(branch);
+    GirBlock good;
+    StoreGlobalOwnerPair(missing, good, 3, 0, 0);
+    good.insts.push_back(Ret());
+    GirBlock missingStores;
+    missingStores.insts = { Ret() };
+    owner.blocks = { entry, good, missingStores };
+    assert(Code(missing) == "GIR-V090");
+
+    // Matching pointer types alone do not establish a header/stack pair.
+    auto mismatch = LowReturnedOwnerPairModule();
+    auto &stores = mismatch.funcs[1].blocks[0].insts;
+    auto stack = std::find_if(stores.begin(), stores.end(), [](const GirInst &i) {
+        return i.op == GirOp::GlobalStack;
+    });
+    assert(stack != stores.end());
+    stack->idx = 1;
+    assert(Code(mismatch) == "GIR-V090");
+}
+
+void ReturnedOwnerPairRejectsUnsafePhiCycles() {
+    auto m = LowReturnedOwnerPairModule();
+    auto &owner = m.funcs[1];
+    auto ptr = m.PtrType();
+    GirMember headerMember;
+    headerMember.kind = GirMember::Header;
+    headerMember.scope = 0;
+    headerMember.stack = 0;
+    owner.members = { headerMember };
+    owner.stacks = 1;
+
+    GirBlock entry;
+    entry.params = owner.blocks[0].params;
+    auto cond = Def(GirOp::Bool, 2);
+    auto globalHeader = Def(GirOp::GlobalAddr, 3);
+    globalHeader.idx = 0;
+    auto globalStack = Def(GirOp::GlobalStack, 4);
+    globalStack.idx = 0;
+    auto localHeader = Def(GirOp::FrameAddr, 5);
+    localHeader.idx = 0;
+    auto localStack = Def(GirOp::StackAt, 6);
+    localStack.a = 0;
+    localStack.idx = 0;
+    GirInst choose;
+    choose.op = GirOp::CondBr;
+    choose.a = 2;
+    choose.idx = 1;
+    choose.idx2 = 2;
+    entry.insts = { cond, globalHeader, globalStack, localHeader, localStack, choose };
+
+    GirBlock safe;
+    safe.insts = { Br(4, { 3, 4 }) };
+    GirBlock local;
+    local.insts = { Br(3, { 5, 6 }) };
+    GirBlock loop;
+    loop.params = { { 7, ptr }, { 8, ptr } };
+    auto loopAgain = Def(GirOp::Bool, 9);
+    GirInst loopBranch;
+    loopBranch.op = GirOp::CondBr;
+    loopBranch.a = 9;
+    loopBranch.idx = 4;
+    loopBranch.vals = { 7, 8 };
+    loopBranch.idx2 = 3;
+    loopBranch.vals2 = { 7, 8 };
+    loop.insts = { loopAgain, loopBranch };
+
+    GirBlock join;
+    join.params = { { 10, ptr }, { 11, ptr } };
+    // Store the joined pair using the output ABI from the normal return block.
+    join.insts.push_back(Int(m, 12, "0"));
+    auto headerAddress = Def(GirOp::PtrOffset, 13);
+    headerAddress.idx = 8;
+    headerAddress.a = 1;
+    headerAddress.b = 12;
+    GirInst storeHeader;
+    storeHeader.op = GirOp::PStore;
+    storeHeader.ty = ptr;
+    storeHeader.a = 13;
+    storeHeader.b = 10;
+    join.insts.push_back(headerAddress);
+    join.insts.push_back(storeHeader);
+    join.insts.push_back(Int(m, 14, "1"));
+    auto stackAddress = Def(GirOp::PtrOffset, 15);
+    stackAddress.idx = 8;
+    stackAddress.a = 1;
+    stackAddress.b = 14;
+    GirInst storeStack;
+    storeStack.op = GirOp::PStore;
+    storeStack.ty = ptr;
+    storeStack.a = 15;
+    storeStack.b = 11;
+    join.insts.push_back(stackAddress);
+    join.insts.push_back(storeStack);
+    join.insts.push_back(Ret());
+    owner.blocks = { entry, safe, local, loop, join };
+    assert(Code(m) == "GIR-V090");
+}
+
+void RecursiveOwnerReturnDoesNotSeedItsOwnProof() {
+    auto m = LowReturnedOwnerPairModule();
+    auto &owner = m.funcs[1];
+    GirMember result;
+    result.kind = GirMember::Bytes;
+    result.size = 16;
+    result.scope = 0;
+    owner.members = { result };
+    GirBlock entry;
+    entry.params = owner.blocks[0].params;
+    entry.insts = { Def(GirOp::Bool, 2) };
+    GirInst choose;
+    choose.op = GirOp::CondBr;
+    choose.a = 2;
+    choose.idx = 1;
+    choose.idx2 = 2;
+    entry.insts.push_back(choose);
+    GirBlock base;
+    StoreGlobalOwnerPair(m, base, 3, 0, 0);
+    base.insts.push_back(Ret());
+    GirBlock recursive;
+    auto buffer = Def(GirOp::FrameAddr, 9);
+    buffer.idx = 0;
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 1;
+    call.vals = { 0, 9 };
+    call.org = 0;
+    recursive.insts = { buffer, call };
+    recursive.insts.push_back(Int(m, 10, "0"));
+    auto headerAddress = Def(GirOp::PtrOffset, 11);
+    headerAddress.idx = 8;
+    headerAddress.a = 9;
+    headerAddress.b = 10;
+    auto header = Def(GirOp::PLoad, 12);
+    header.ty = m.PtrType();
+    header.a = 11;
+    recursive.insts.push_back(headerAddress);
+    recursive.insts.push_back(header);
+    recursive.insts.push_back(Int(m, 13, "1"));
+    auto stackAddress = Def(GirOp::PtrOffset, 14);
+    stackAddress.idx = 8;
+    stackAddress.a = 9;
+    stackAddress.b = 13;
+    auto stack = Def(GirOp::PLoad, 15);
+    stack.ty = m.PtrType();
+    stack.a = 14;
+    recursive.insts.push_back(stackAddress);
+    recursive.insts.push_back(stack);
+    recursive.insts.push_back(Int(m, 16, "0"));
+    auto outputHeader = Def(GirOp::PtrOffset, 17);
+    outputHeader.idx = 8;
+    outputHeader.a = 1;
+    outputHeader.b = 16;
+    GirInst storeHeader;
+    storeHeader.op = GirOp::PStore;
+    storeHeader.ty = m.PtrType();
+    storeHeader.a = 17;
+    storeHeader.b = 12;
+    recursive.insts.push_back(outputHeader);
+    recursive.insts.push_back(storeHeader);
+    recursive.insts.push_back(Int(m, 18, "1"));
+    auto outputStack = Def(GirOp::PtrOffset, 19);
+    outputStack.idx = 8;
+    outputStack.a = 1;
+    outputStack.b = 18;
+    GirInst storeStack;
+    storeStack.op = GirOp::PStore;
+    storeStack.ty = m.PtrType();
+    storeStack.a = 19;
+    storeStack.b = 15;
+    recursive.insts.push_back(outputStack);
+    recursive.insts.push_back(storeStack);
+    recursive.insts.push_back(Ret());
+    owner.blocks = { entry, base, recursive };
+    assert(Code(m) == "GIR-V090");
+}
+
 GirModule ShrinkReplaceBindingModule(bool throughPhi, bool throughCall) {
     auto m = Base();
     m.profile = CoreProfile::Shrink;
@@ -3962,6 +4303,10 @@ int main() {
     RejectsTwoResizablesOnOneStack();
     RejectsWatermarkPastCallerOwnedRegion();
     PassedOwnerPairsKeepTheirExactIdentity();
+    OwnerCallUsesReturnedPairOnlyAfterOneProvenCall();
+    ReturnedOwnerPairRequiresEveryReturnAndMatchingStores();
+    ReturnedOwnerPairRejectsUnsafePhiCycles();
+    RecursiveOwnerReturnDoesNotSeedItsOwnProof();
     RejectsReplacementThroughALetOwnerPhi();
     LowPreservesOwnerLiteralRunsAcrossJoins();
     LowSplitsSameTargetCondBrForOwnerRuns();

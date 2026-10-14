@@ -19,6 +19,7 @@
 // Core by the lowering, and nothing here knows about it.
 #pragma once
 
+#include <charconv>
 #include <optional>
 
 namespace goose {
@@ -56,6 +57,7 @@ private:
     vector<Fn> fns;
     vector<pair<vector<GirTypeId>, vector<GirTypeId>>> sigs;
     vector<vector<int>> lowPassedPairs;
+    vector<bool> lowReturnedOwnerPairs;
 
     [[noreturn]] static void Fail(const char *code, string msg) { throw GirViolation { code, std::move(msg) }; }
 
@@ -201,7 +203,17 @@ private:
         for (auto &fn : fns) CheckCfg(fn);
         CheckUnreachable();
         if (m.low) {
-            lowPassedPairs = ComputePassedOwnerPairs();
+            lowPassedPairs.assign(m.funcs.size(), {});
+            lowReturnedOwnerPairs.assign(m.funcs.size(), false);
+            bool changed = true;
+            int rounds = 0;
+            while (changed && rounds++ < (int)m.funcs.size() * 4 + 8) {
+                auto passed = ComputePassedOwnerPairs(lowReturnedOwnerPairs);
+                auto returned = ComputeReturnedOwnerPairs(passed, lowReturnedOwnerPairs);
+                changed = passed != lowPassedPairs || returned != lowReturnedOwnerPairs;
+                lowPassedPairs = std::move(passed);
+                lowReturnedOwnerPairs = std::move(returned);
+            }
             for (auto &fn : fns) CheckPlacement(fn);
             for (auto &fn : fns) CheckOrigins(fn);
             return;
@@ -368,9 +380,10 @@ private:
     // stack's own top, a bump that the same block follows with the length
     // update of that stack's header, and the restoring of a mark taken from the
     // same stack. Passed pairs get identities from the call edges that provide
-    // adjacent header and stack words for one owner argument.
+    // adjacent header and stack words for one owner argument. A returned pair
+    // is proven from every normal return's hidden result stores.
     struct StackId {
-        int kind = 0;   // 0 unknown, 1 a function stack, 2 a global stack, 3 a passed pair, 4 a paired phi
+        int kind = 0;   // 0 unknown, 1 local stack, 2 global, 3 passed pair, 4 safe phi, 5 returned pair, 6 unsafe phi
         int index = 0;
         bool operator==(const StackId &o) const { return kind == o.kind && index == o.index; }
     };
@@ -378,6 +391,115 @@ private:
     struct StackFacts {
         vector<StackId> stack, header, markof;
     };
+
+    struct LowAddress {
+        int kind = 0; // 1 frame, 2 parameter
+        int index = -1;
+        int64_t offset = 0;
+        bool operator==(const LowAddress &other) const {
+            return kind == other.kind && index == other.index && offset == other.offset;
+        }
+    };
+
+    optional<int64_t> IntegerConstant(const Fn &fn, int value) const {
+        for (auto &block : fn.f->blocks)
+            for (auto &inst : block.insts) if (inst.op == GirOp::Int && inst.res == value) {
+                int64_t parsed = 0;
+                auto begin = inst.text.data();
+                auto end = begin + inst.text.size();
+                auto result = from_chars(begin, end, parsed);
+                if (result.ec == errc {} && result.ptr == end) return parsed;
+                return nullopt;
+            }
+        return nullopt;
+    }
+
+    optional<LowAddress> PointerLocationOf(const Fn &fn, int value, int depth = 0) const {
+        if (depth > fn.nvalues) return nullopt;
+        auto &f = *fn.f;
+        for (size_t p = 0; p < f.blocks[0].params.size(); p++)
+            if (f.blocks[0].params[p].first == value) return LowAddress { 2, (int)p, 0 };
+        for (auto &block : f.blocks)
+            for (auto &inst : block.insts) {
+                if (inst.res != value) continue;
+                if (inst.op == GirOp::FrameAddr) return LowAddress { 1, inst.idx, 0 };
+                if (inst.op != GirOp::PtrOffset || inst.idx != 8) return nullopt;
+                auto base = PointerLocationOf(fn, inst.a, depth + 1);
+                auto index = IntegerConstant(fn, inst.b);
+                if (!base || !index || (*index != 0 && *index != 1) ||
+                    (base->offset != 0 && base->offset != 8)) return nullopt;
+                auto offset = base->offset + *index * 8;
+                if (offset != 0 && offset != 8) return nullopt;
+                base->offset = offset;
+                return base;
+            }
+        return nullopt;
+    }
+
+    static bool ReturnableStackId(StackId id) {
+        return id.kind == 2 || id.kind == 3 || id.kind == 4 || id.kind == 5;
+    }
+
+    // Frame loads inherit owner identity only when one call fills their pair
+    // slot and no intervening write or call can change that slot.
+    map<int, pair<int, StackId>> ReturnedCallLoads(const Fn &fn,
+                                                    const vector<bool> &returnedPairs) const {
+        struct OutputCall {
+            LowAddress destination;
+            int callee = -1;
+            int block = -1;
+            int position = -1;
+            int token = -1;
+        };
+        vector<OutputCall> calls;
+        int nextToken = 0;
+        for (size_t b = 0; b < fn.f->blocks.size(); b++)
+            for (size_t k = 0; k < fn.f->blocks[b].insts.size(); k++) {
+                auto &inst = fn.f->blocks[b].insts[k];
+                if (inst.op != GirOp::Call || inst.idx < 0 || inst.idx >= (int)m.funcs.size() ||
+                    inst.vals.size() < 2) continue;
+                auto &callee = m.funcs[inst.idx];
+                if (!callee.results.empty() || callee.params.size() < 2 ||
+                    m.Type(callee.params[1]).kind != CoreType::Ptr) continue;
+                auto destination = PointerLocationOf(fn, inst.vals[1]);
+                if (!destination || destination->kind != 1 || destination->offset != 0 ||
+                    destination->index < 0 || destination->index >= (int)fn.f->members.size()) continue;
+                auto &member = fn.f->members[destination->index];
+                if (member.kind != GirMember::Bytes || member.size < 16) continue;
+                calls.push_back({ *destination, inst.idx, (int)b, (int)k, nextToken++ });
+            }
+
+        map<int, pair<int, StackId>> loads;
+        auto hasInterveningWrite = [&](int block, int begin, int end) {
+            auto &insts = fn.f->blocks[block].insts;
+            for (int k = begin + 1; k < end; k++)
+                switch (insts[k].op) {
+                    case GirOp::Call: case GirOp::PStore: case GirOp::BytesCopy: case GirOp::BytesMove:
+                    case GirOp::BytesFill: case GirOp::RtCall:
+                        return true;
+                    default: break;
+                }
+            return false;
+        };
+        for (size_t b = 0; b < fn.f->blocks.size(); b++)
+            for (size_t k = 0; k < fn.f->blocks[b].insts.size(); k++) {
+                auto &inst = fn.f->blocks[b].insts[k];
+                if (inst.op != GirOp::PLoad || m.Type(inst.ty).kind != CoreType::Ptr) continue;
+                auto address = PointerLocationOf(fn, inst.a);
+                if (!address || address->kind != 1 || (address->offset != 0 && address->offset != 8)) continue;
+                vector<const OutputCall *> matches;
+                for (auto &call : calls)
+                    if (call.destination.kind == address->kind && call.destination.index == address->index)
+                        matches.push_back(&call);
+                if (matches.size() != 1) continue;
+                auto &call = *matches[0];
+                if (call.block != (int)b || call.position >= (int)k ||
+                    call.callee >= (int)returnedPairs.size() || !returnedPairs[call.callee] ||
+                    hasInterveningWrite((int)b, call.position, (int)k)) continue;
+                loads[inst.res] = { (int)address->offset, { 5, call.token } };
+            }
+        return loads;
+    }
 
     static StackId MergeStackFacts(const vector<StackId> &values) {
         StackId merged;
@@ -393,10 +515,12 @@ private:
         return hasKnown ? merged : StackId { -1, 0 };
     }
 
-    StackFacts AnalyzeStackFacts(const Fn &fn, const vector<int> &passedPairs) const {
+    StackFacts AnalyzeStackFacts(const Fn &fn, const vector<int> &passedPairs,
+                                 const vector<bool> &returnedPairs) const {
         auto &f = *fn.f;
         auto n = fn.vt.size();
         StackFacts facts { vector<StackId>(n), vector<StackId>(n), vector<StackId>(n) };
+        auto returnedLoads = ReturnedCallLoads(fn, returnedPairs);
         for (size_t b = 1; b < f.blocks.size(); b++)
             for (auto &p : f.blocks[b].params) {
                 facts.stack[p.first] = { -1, 0 };
@@ -428,13 +552,13 @@ private:
                 add(term->idx2, term->vals2);
             }
         }
-        map<pair<int, int>, int> phiTokens;
+        map<tuple<int, int, bool>, int> phiTokens;
         int nextToken = 0;
-        auto pairToken = [&](int headerValue, int stackValue) {
-            auto key = make_pair(headerValue, stackValue);
+        auto pairToken = [&](int headerValue, int stackValue, bool returnable) {
+            auto key = make_tuple(headerValue, stackValue, returnable);
             auto [it, inserted] = phiTokens.emplace(key, nextToken);
             if (inserted) nextToken++;
-            return StackId { 4, it->second };
+            return StackId { returnable ? 4 : 6, it->second };
         };
 
         bool changed = true;
@@ -456,6 +580,13 @@ private:
                         case GirOp::StackMark:
                             set(facts.markof, i.res, at(facts.stack, i.a));
                             break;
+                        case GirOp::PLoad: {
+                            auto load = returnedLoads.find(i.res);
+                            if (load == returnedLoads.end()) break;
+                            if (load->second.first == 0) set(facts.header, i.res, load->second.second);
+                            else set(facts.stack, i.res, load->second.second);
+                            break;
+                        }
                         case GirOp::HdrBase:
                             set(facts.markof, i.res, at(facts.header, i.a));
                             break;
@@ -507,6 +638,7 @@ private:
                         bool hasKnownPair = false;
                         StackId firstPair;
                         bool samePair = true;
+                        bool allReturnable = true;
                         for (auto &edge : edges) {
                             if (hp >= edge.args.size() || sp >= edge.args.size()) {
                                 paired = false;
@@ -518,10 +650,12 @@ private:
                             if (h.kind == 0 || !(h == s)) { paired = false; break; }
                             if (!hasKnownPair) firstPair = h;
                             else if (!(firstPair == h)) samePair = false;
+                            allReturnable &= ReturnableStackId(h);
                             hasKnownPair = true;
                         }
                         if (!paired || !hasKnownPair) continue;
-                        auto token = samePair ? firstPair : pairToken(params[hp].first, params[sp].first);
+                        auto token = samePair ? firstPair : pairToken(params[hp].first, params[sp].first,
+                            allReturnable);
                         set(facts.header, params[hp].first, token);
                         set(facts.stack, params[sp].first, token);
                     }
@@ -591,7 +725,7 @@ private:
         return headerUsed && stackUsed;
     }
 
-    vector<vector<int>> ComputePassedOwnerPairs() const {
+    vector<vector<int>> ComputePassedOwnerPairs(const vector<bool> &returnedPairs) const {
         vector<vector<int>> pairs(m.funcs.size());
         bool changed = true;
         int rounds = 0;
@@ -602,7 +736,7 @@ private:
             for (size_t f = 0; f < fns.size(); f++) {
                 const vector<int> empty;
                 auto args = f < pairs.size() ? pairs[f] : empty;
-                facts.push_back(AnalyzeStackFacts(fns[f], args));
+                facts.push_back(AnalyzeStackFacts(fns[f], args, returnedPairs));
             }
             auto at = [&](const vector<StackId> &values, int id) {
                 return id >= 0 && id < (int)values.size() ? values[id] : StackId {};
@@ -642,6 +776,44 @@ private:
         return pairs;
     }
 
+    // The low ABI puts a multiword result behind parameter 1; every normal
+    // return must store a matching, externally rooted header/stack pair there.
+    vector<bool> ComputeReturnedOwnerPairs(const vector<vector<int>> &passedPairs,
+                                           const vector<bool> &returnedPairs) const {
+        vector<bool> returned(m.funcs.size(), false);
+        for (size_t f = 0; f < m.funcs.size() && f < fns.size(); f++) {
+            auto &function = m.funcs[f];
+            auto &fn = fns[f];
+            if (!function.results.empty() || function.params.size() < 2 ||
+                fn.f->blocks.empty() || fn.f->blocks[0].params.size() < 2 ||
+                m.Type(function.params[1]).kind != CoreType::Ptr) continue;
+
+            const vector<int> empty;
+            auto args = f < passedPairs.size() ? passedPairs[f] : empty;
+            auto facts = AnalyzeStackFacts(fn, args, returnedPairs);
+            bool sawReturn = false;
+            bool everyReturnStoresPair = true;
+            for (auto &block : fn.f->blocks) {
+                auto *term = LastTerm(block);
+                if (!term || term->op != GirOp::Ret) continue;
+                sawReturn = true;
+                StackId outputHeader, outputStack;
+                for (auto &inst : block.insts) {
+                    if (inst.op != GirOp::PStore || m.Type(inst.ty).kind != CoreType::Ptr) continue;
+                    auto destination = PointerLocationOf(fn, inst.a);
+                    if (!destination || destination->kind != 2 || destination->index != 1 ||
+                        (destination->offset != 0 && destination->offset != 8)) continue;
+                    auto &stored = destination->offset == 0 ? outputHeader : outputStack;
+                    stored = destination->offset == 0 ? facts.header[inst.b] : facts.stack[inst.b];
+                }
+                if (outputHeader.kind <= 0 || !(outputHeader == outputStack) ||
+                    !ReturnableStackId(outputHeader)) everyReturnStoresPair = false;
+            }
+            returned[f] = sawReturn && everyReturnStoresPair;
+        }
+        return returned;
+    }
+
     void CheckStackDiscipline(const Fn &fn) {
         auto &f = *fn.f;
         auto bad = [&](const string &msg) { Fail("GIR-V090", cat(fn.label, ": ", msg)); };
@@ -651,7 +823,7 @@ private:
             static const vector<int> empty;
             return empty;
         }();
-        auto facts = AnalyzeStackFacts(fn, passed);
+        auto facts = AnalyzeStackFacts(fn, passed, lowReturnedOwnerPairs);
         auto &stack = facts.stack;
         auto &header = facts.header;
         auto &markof = facts.markof;
