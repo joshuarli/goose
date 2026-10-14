@@ -1,12 +1,12 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** active on `master`, resumed 2026-10-14 at the owner's request.
+**Status:** winding down 2026-10-14.
 **Branch:** `master`. The former `goose-ir` campaign tip was fast-forwarded here locally on 2026-10-14; no push was run. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12).
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
-## Handoff (resumed 2026-10-14)
+## Handoff (winddown in progress)
 
-**Resume.** The campaign is active on `master`. First command, from the repository root: `git status --short --branch && git log --oneline -1 master` (expect a clean tree after the campaign-status commit).
+**Resume.** Finish this winddown on `master`; start with `git status --short --branch && git log --oneline -1 master`. Do not start another campaign item.
 
 **State.** `master` is now at the former `goose-ir` tip, `d440b9ab`; it is 423 commits ahead of `origin/master`. The local `goose-ir` and `origin/goose-ir` refs remain at that same tip. No push was run. Continue at O3, the next unparked item.
 
