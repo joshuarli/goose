@@ -222,4 +222,53 @@ example (profile : NumProfile) :
   obtain ⟨statements, _, _, statementRoots, _⟩ := source.enter
   exact ⟨statements, by rw [statementRoots, rootsEq]; rfl⟩
 
+example (profile : NumProfile) :
+    ∃ child : ExprSource ⟨profile, module⟩ enteredEnv (.ref .mutable (.global 0)) enteredState,
+      ExprResult child (.ref ⟨.global 0, []⟩) enteredState ∧
+      HasTy module child.world.G enteredState.store (.ref ⟨.global 0, []⟩) (.ref .readOnly .bool) := by
+  obtain ⟨statements, _⟩ := initialStatements profile
+  obtain ⟨head, _, _, _⟩ := statements.split
+  obtain ⟨child, declaration, variableAt, _, _, passable⟩ := head.letChild
+  have declarationEq : declaration = ⟨"alias", .ref .readOnly .bool, .immutable, 0, 0⟩ := by
+    simpa [enteredEnv, implementation] using variableAt.symm
+  subst declaration
+  have result := child.result 2 (.ref ⟨.global 0, []⟩) (by cbv)
+  exact ⟨child, result, result.value_passable passable⟩
+
+def returnImplementation : Impl :=
+  { callee with body := .mk 0 [.ret (some (.bool true)) 0] none, summary := .known ⟨[], [], [], [], [], false, false⟩ }
+
+def returnModule : Module :=
+  { callModule .pilot with impls := #[entryImplementation, returnImplementation] }
+
+example (profile : NumProfile) :
+    ∃ child : ExprSource ⟨profile, returnModule⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.bool true)
+        { St.initial with nextAct := 2, nextScope := 1 },
+      child.typingEnv.impl = some returnImplementation ∧ child.ty.passableTo .bool = true := by
+  obtain ⟨caller, _, _, _, _⟩ := acceptedGlobalActivation (cfg := ⟨profile, returnModule⟩)
+    (state := St.initial) (g := 0) (global := ⟨"flag", .bool, .mutable, .call 1 [] 0, 0⟩)
+    (by cbv) rfl (initialStoreInvariant returnModule)
+  obtain ⟨ctx, impl, contextAt, implementationAt, body, bodyTyping, bodyRoots⟩ := caller.calleeAfterArgs 1 [] rfl
+  have contextEq : ctx = calleeContext := by simpa [returnModule, callModule] using contextAt.symm
+  subst ctx
+  have implEq : impl = returnImplementation := by
+    simpa [returnModule, callModule, calleeContext] using implementationAt.symm
+  subst impl
+  obtain ⟨statements, statementsTyping, _, _, _⟩ := body.enter
+  obtain ⟨head, headTyping, _, _⟩ := statements.split
+  obtain ⟨child, implementation, target, implementationAt, resultType, childTyping, _, passable⟩ := head.retChild
+  have typedImplementation : child.typingEnv.impl = some returnImplementation := by
+    rw [childTyping, headTyping, statementsTyping]
+    have same := body.same.impl
+    rw [bodyTyping] at same
+    exact same
+  have implementationEq : implementation = returnImplementation := by
+    have same := implementationAt
+    rw [← childTyping, typedImplementation] at same
+    exact Option.some.inj same.symm
+  subst implementation
+  have targetEq : target = .bool := by simpa [returnImplementation, callee] using resultType.symm
+  subst target
+  exact ⟨child, typedImplementation, passable⟩
+
 end Goose.Lower.SourceContextChecks

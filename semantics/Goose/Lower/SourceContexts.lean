@@ -1548,4 +1548,174 @@ theorem acceptedEntryAfterGlobals {cfg : Cfg} {state : St}
         source.rootsEnv = ⟨cfg.mod, impl, ctx, []⟩ :=
   acceptedEntrySource accepted (initializedGlobals_of_success accepted fuel done).invariant
 
+private theorem rhsExpressionSource {cfg : Cfg} {env : Env} {stmt : Stmt} {state : St}
+    (source : StmtSource cfg env stmt state) (expr : Expr)
+    (childAt : (DemandNode.statement stmt).child? 0 = some (.expression expr))
+    (visible : ∀ x, x ∈ source.typingEnv.visible ↔
+      x ∈ (DemandNode.statement stmt).visibleForChild source.typingEnv.visible 0)
+    (variables : ∀ x, x ∈ expr.variables → x ∈ stmt.variables)
+    (future : ∀ access parent, (DemandNode.statement stmt).childExpectation? access parent 0 =
+      some ⟨(DemandNode.statement stmt).visibleForChild parent.active 0, parent.future⟩)
+    (typingStart typingEnd : Nat) (ty : Ty) (rootsStart rootsEnd : RState) (roots : List RootRef)
+    (typed : tyExpr source.typingEnv expr typingStart = .ok (ty, typingEnd))
+    (rooted : rpExpr source.rootsEnv expr rootsStart = .ok (roots, rootsEnd))
+    (effects : EffLe rootsEnd.eff source.world.E) :
+    ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv ∧ child.ty = ty := by
+  let ec := source.context
+  have phase : DemandNodeHasPhase (.expression expr) .expression := by
+    simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+  let child := ec.child rfl 0 (.expression expr) .expression childAt phase
+  have may : child.mayShrink source.world.ownerP source.observation =
+      ec.mayShrink source.world.ownerP source.observation := by
+    funext root
+    exact propext (ec.child_mayShrink_iff rfl 0 (.expression expr) .expression childAt phase
+      source.world.ownerP source.observation root)
+  have input : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env state child.inputFuture := by
+    apply source.frame.narrowFuture
+    intro x member
+    change x ∈ ec.inputFuture
+    change x ∈ (ec.child rfl 0 (.expression expr) .expression childAt phase).inputFuture at member
+    cases hcontext : ec with
+    | pilot profile active =>
+      rw [hcontext] at member
+      change x ∈ expr.variables ++ (DemandNode.statement stmt).visibleForChild active 0 at member
+      have activeEq : (DemandNode.statement stmt).visibleForChild active 0 = active := by
+        cases stmt <;> simp [DemandNode.visibleForChild]
+      rw [activeEq] at member
+      change x ∈ stmt.variables ++ active
+      exact (List.mem_append.mp member).elim
+        (fun h => List.mem_append_left _ (variables x h)) (List.mem_append_right _)
+    | shrink profile context =>
+      rw [hcontext] at member
+      let transition := context.child rfl 0 (.expression expr) .expression childAt phase
+      change x ∈ expr.variables ++ transition.context.expected.frame.future at member
+      rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq,
+        DemandNode.childFrame_future transition.childFrameEq (future _ _)] at member
+      change x ∈ stmt.variables ++ context.expected.frame.future
+      exact (List.mem_append.mp member).elim
+        (fun h => List.mem_append_left _ (variables x h)) (List.mem_append_right _)
+  refine ⟨{
+    accepted := source.accepted, plans := source.plans, path := source.path ++ [0], context := child,
+    observation := source.observation, world := source.world, typingEnv := source.typingEnv,
+    rootsEnv := source.rootsEnv, typingStart := typingStart, typingEnd := typingEnd, ty := ty,
+    rootsStart := rootsStart, rootsEnd := rootsEnd, roots := roots,
+    active := ec.child_activeMatches rfl 0 (.expression expr) .expression childAt phase
+      source.typingEnv source.typingEnv source.active visible,
+    access := (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression childAt phase _ _).mpr source.access,
+    protection := may ▸ source.protection, observed := may ▸ source.observed,
+    classified := source.classified, permission := source.permission, frame := input,
+    typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl⟩
+
+theorem StmtSource.exprChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} {origin : OriginId}
+    (source : StmtSource cfg env (.expr expr origin) state) :
+    ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv := by
+  have typed := source.typed
+  have rooted := source.rooted
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨_, ty, finish, typed, _⟩ := typed
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨roots, rooted⟩ := rooted
+  have childAt : (DemandNode.statement (.expr expr origin)).child? 0 = some (.expression expr) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨child, typingEq, rootsEq, _⟩ := rhsExpressionSource source expr childAt
+    (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
+    source.typingStart finish ty source.rootsStart source.rootsEnd roots typed rooted source.effects
+  exact ⟨child, typingEq, rootsEq⟩
+
+theorem StmtSource.letChild {cfg : Cfg} {env : Env} {state : St} {slot : VarId}
+    {expr : Expr} {origin : OriginId} (source : StmtSource cfg env (.letS slot expr origin) state) :
+    ∃ child : ExprSource cfg env expr state, ∃ declaration : LocalVar,
+      env.vars[slot]? = some declaration ∧ child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv ∧ child.ty.passableTo declaration.ty = true := by
+  have typed := source.typed
+  have rooted := source.rooted
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨_, declaration, start, declared, ty, finish, typed, _, _, passable, _⟩ := typed
+  have variableAt := (declare_ok _ _ _ _ _ declared).2.1
+  rw [source.frame.vars_t] at variableAt
+  have rootVariableAt : source.rootsEnv.impl.vars[slot]? = some declaration := by
+    rw [source.frame.vars_p]
+    exact variableAt
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨_, roots, finishRoots, rooted, tail⟩ := rooted
+  have endEq : source.rootsEnd = finishRoots := by
+    simp only [rootVariableAt] at tail
+    by_cases reference : declaration.ty.isRefLike = true
+    · simp only [reference, if_true] at tail
+      inv at tail
+      exact tail.2
+    · simp only [reference, if_false] at tail
+      inv at tail
+      exact tail
+  have childAt : (DemandNode.statement (.letS slot expr origin)).child? 0 = some (.expression expr) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨child, typingEq, rootsEq, typeEq⟩ := rhsExpressionSource source expr childAt
+    (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
+    start finish ty { source.rootsStart with nextVar := source.rootsStart.nextVar + 1 }
+    finishRoots roots typed rooted (by simpa [endEq] using source.effects)
+  exact ⟨child, declaration, variableAt, typingEq, rootsEq, by simpa [typeEq] using passable⟩
+
+theorem StmtSource.rebindChild {cfg : Cfg} {env : Env} {state : St} {slot : VarId}
+    {expr : Expr} {origin : OriginId} (source : StmtSource cfg env (.rebind slot expr origin) state) :
+    ∃ child : ExprSource cfg env expr state, ∃ declaration : LocalVar,
+      env.vars[slot]? = some declaration ∧ child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv ∧ child.ty.passableTo declaration.ty = true := by
+  have typed := source.typed
+  have rooted := source.rooted
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨_, _, declaration, variableAt, _, _, ty, finish, typed, passable, _⟩ := typed
+  rw [source.frame.vars_t] at variableAt
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨roots, finishRoots, rooted, _, final⟩ := rooted
+  have effects : EffLe finishRoots.eff source.world.E := by
+    refine EffLe.trans ?_ source.effects
+    rcases final with ⟨_, endEq⟩ | ⟨_, endEq⟩
+    · rw [endEq]
+      exact ⟨fun _ h => h, fun _ h => h, fun _ h => h, fun _ h => h, fun h => h⟩
+    · rw [endEq]
+      exact EffLe.refl _
+  have childAt : (DemandNode.statement (.rebind slot expr origin)).child? 0 = some (.expression expr) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨child, typingEq, rootsEq, typeEq⟩ := rhsExpressionSource source expr childAt
+    (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
+    source.typingStart finish ty source.rootsStart finishRoots roots typed rooted effects
+  exact ⟨child, declaration, variableAt, typingEq, rootsEq, by simpa [typeEq] using passable⟩
+
+theorem StmtSource.retChild {cfg : Cfg} {env : Env} {state : St}
+    {expr : Expr} {origin : OriginId} (source : StmtSource cfg env (.ret (some expr) origin) state) :
+    ∃ child : ExprSource cfg env expr state, ∃ implementation target,
+      source.typingEnv.impl = some implementation ∧ implementation.results.toList = [target] ∧
+      child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
+      child.ty.passableTo target = true := by
+  have typed := source.typed
+  have rooted := source.rooted
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨_, target, start, returnType, ty, finish, typed, passable, _⟩ := typed
+  obtain ⟨startEq, _, implementation, implementationAt, resultType⟩ := retTy_ok _ _ _ returnType
+  simp only at startEq resultType
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨roots, finishRoots, rooted, _, endEq⟩ := rooted
+  have childAt : (DemandNode.statement (.ret (some expr) origin)).child? 0 = some (.expression expr) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨child, typingEq, rootsEq, typeEq⟩ := rhsExpressionSource source expr childAt
+    (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
+    start finish ty source.rootsStart finishRoots roots typed rooted
+    (by simpa [endEq] using source.effects)
+  exact ⟨child, implementation, target, implementationAt, resultType, typingEq, rootsEq,
+    by simpa [typeEq] using passable⟩
+
 end Goose.Lower
