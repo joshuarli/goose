@@ -292,4 +292,63 @@ theorem comparison_children_source (artifact : ArtifactProfile) (profile : NumPr
       | .done .returned "", .done .returned "" => true
       | _, _ => false
 
+def shortCircuitRight : Expr := .cmp .eq (.bin .div (.lit .i64 1) (.lit .i64 0) 0) (.lit .i64 0)
+
+def shortCircuitExpression (isAnd boolean : Bool) : Expr :=
+  if isAnd then .and (.bool boolean) shortCircuitRight else .or (.bool boolean) shortCircuitRight
+
+def shortCircuitModule (artifact : ArtifactProfile) (isAnd boolean : Bool) : Core.Module :=
+  { files := #["short-circuit.goose"], types := #[.bool, .int .i64],
+    globals := #[⟨"result", .bool, .mutable, shortCircuitExpression isAnd boolean, 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [
+      .assertS (if isAnd then .not (.read (.global 0)) else .read (.global 0)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := artifact }
+
+theorem shortCircuit_claim (artifact : ArtifactProfile) (profile : NumProfile) (isAnd boolean : Bool) :
+    TypedExprClaim 5 ⟨profile, shortCircuitModule artifact isAnd boolean⟩ [.bool]
+      (shortCircuitExpression isAnd boolean) := by
+  have right : TypedExprClaim 4 ⟨profile, shortCircuitModule artifact isAnd boolean⟩ [.bool]
+      shortCircuitRight := typedExprClaim_cmp
+    (typedExprClaim_bin (typedExprClaim_lit 2 _ _ .i64 1) (typedExprClaim_lit 2 _ _ .i64 0) .div 0)
+    (typedExprClaim_lit 3 _ _ .i64 0) .eq
+  cases isAnd
+  · exact typedExprClaim_or (typedExprClaim_bool 4 _ _ boolean) right
+  · exact typedExprClaim_and (typedExprClaim_bool 4 _ _ boolean) right
+
+theorem shortCircuit_children_source (artifact : ArtifactProfile) (profile : NumProfile)
+    (isAnd boolean : Bool) (accepted : Core.validate (shortCircuitModule artifact isAnd boolean) = .ok ()) :
+    ∃ left : ExprSource ⟨profile, shortCircuitModule artifact isAnd boolean⟩ ⟨#[], 0, [], 0⟩
+        (.bool boolean) { St.initial with nextAct := 1 },
+      ∃ right : ExprSource ⟨profile, shortCircuitModule artifact isAnd boolean⟩ ⟨#[], 0, [], 0⟩
+        shortCircuitRight { St.initial with nextAct := 1 },
+        left.ty = .bool ∧ right.ty = .bool := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, shortCircuitModule artifact isAnd boolean⟩) (state := St.initial) (g := 0)
+    (global := ⟨"result", .bool, .mutable, shortCircuitExpression isAnd boolean, 0⟩)
+    accepted rfl (InitializedGlobals.initial _).invariant
+  obtain ⟨left, hltyping, hlroots, hltype, next⟩ := source.shortCircuitChildren isAnd
+  obtain ⟨right, hrtyping, hrroots, hrtype⟩ := next 4 (.bool boolean)
+    { St.initial with nextAct := 1 } (by simp [evalExpr, pure_apply, St.initial])
+  exact ⟨left, right, hltype, hrtype⟩
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  [false, true].all fun isAnd => [false, true].all fun boolean =>
+    let source := shortCircuitModule artifact isAnd boolean
+    match Core.validate source, GIR.validate (lower source) with
+    | .ok _, .ok _ => true
+    | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  [false, true].all fun isAnd => [false, true].all fun boolean =>
+    let source := shortCircuitModule artifact isAnd boolean
+    [NumProfile.release, .debug].all fun profile =>
+      if isAnd == boolean then
+        match Core.eval 80 profile source, GIR.run 160 profile (lower source) with
+        | .done (.aborted .divZero 0) "", .done (.aborted .divZero 0) "" => true
+        | _, _ => false
+      else
+        match Core.eval 80 profile source, GIR.run 160 profile (lower source) with
+        | .done .returned "", .done .returned "" => true
+        | _, _ => false
+
 end Goose.Lower.TypedExpressionChecks

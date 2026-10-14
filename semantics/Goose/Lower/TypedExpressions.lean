@@ -785,6 +785,146 @@ theorem ExprSource.cmpChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     classified := output.classified, permission := source.permission, frame := hFrameRight,
     typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl⟩
 
+theorem ExprSource.shortCircuitChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
+    (isAnd : Bool) (source : ExprSource cfg env (if isAnd then .and a b else .or a b) state) :
+    ∃ left : ExprSource cfg env a state,
+      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ left.ty = .bool ∧
+      ∀ n value after, evalExpr n cfg env a state = .ok value after →
+        ∃ right : ExprSource cfg env b after, right.typingEnv = source.typingEnv ∧
+          right.rootsEnv = source.rootsEnv ∧ right.ty = .bool := by
+  cases isAnd
+  all_goals (
+    have ht := source.typed
+    have hr := source.rooted
+    simp only [Bool.false_eq_true, ite_false, ite_true, tyExpr] at ht
+    inv at ht
+    simp only [Bool.false_eq_true, ite_false, ite_true, rpExpr] at hr
+    inv at hr
+    obtain ⟨ta, t1, hta, rfl, tb, t2, htb, rfl, htype, hend⟩ := ht
+    obtain ⟨ra, r1, hra, rb, r2, hrb, hroot, hrootEnd⟩ := hr
+    have hE2 : EffLe r2.eff source.world.E := by
+      rw [← hrootEnd]
+      exact source.effects
+    let ec := source.context
+    let lc := ec.child rfl 0 (.expression a) .expression rfl (by trivial)
+    let rc := ec.child rfl 1 (.expression b) .expression rfl (by trivial)
+    have hFrame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
+        state ec.inputFuture := source.frame
+    have hActive : ec.ActiveMatches source.typingEnv := source.active
+    have hLeftShrink : lc.mayShrink source.world.ownerP source.observation =
+        ec.mayShrink source.world.ownerP source.observation := by
+      funext root
+      exact propext (ec.child_mayShrink_iff rfl 0 (.expression a) .expression rfl
+        (by trivial) source.world.ownerP source.observation root)
+    have hRightShrink : rc.mayShrink source.world.ownerP source.observation =
+        ec.mayShrink source.world.ownerP source.observation := by
+      funext root
+      exact propext (ec.child_mayShrink_iff rfl 1 (.expression b) .expression rfl
+        (by trivial) source.world.ownerP source.observation root)
+    have hLeftFuture : lc.outputFuture = match (generalizing := false) ec with
+        | .pilot _ active => active
+        | .shrink _ context => b.variables ++ context.expected.frame.future := by
+      dsimp only [lc]
+      cases hec : ec with
+      | pilot profile active =>
+        simp [hec, EvaluationContext.child, EvaluationContext.outputFuture,
+          DemandNode.visibleAfter, DemandNode.visibleForChild]
+      | shrink profile context =>
+        let transition := context.child rfl 0 (.expression a) .expression rfl (by trivial)
+        change transition.context.expected.frame.future = b.variables ++ context.expected.frame.future
+        rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+        exact DemandNode.childFrame_future transition.childFrameEq rfl
+    have hLeftInput : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
+        state lc.inputFuture := by
+      dsimp only [lc]
+      cases hec : ec with
+      | pilot profile active =>
+        rw [hec] at hFrame
+        apply hFrame.narrowFuture
+        intro x hx
+        change x ∈ a.variables ++ active at hx
+        simp only [Bool.false_eq_true, ite_false, ite_true, EvaluationContext.inputFuture, DemandNode.variables, Expr.variables,
+          DemandNode.visibleAfter]
+        rcases List.mem_append.mp hx with hxa | hactive
+        · exact List.mem_append_left _ (List.mem_append_left _ hxa)
+        · exact List.mem_append_right _ hactive
+      | shrink profile context =>
+        dsimp only [lc] at hLeftFuture
+        rw [hec] at hFrame hLeftFuture
+        have hformula : ((EvaluationContext.shrink profile context).child rfl 0
+            (.expression a) .expression rfl (by trivial)).inputFuture = a.variables ++
+            ((EvaluationContext.shrink profile context).child rfl 0
+            (.expression a) .expression rfl (by trivial)).outputFuture := rfl
+        rw [hformula, hLeftFuture]
+        simpa [Bool.false_eq_true, ite_false, ite_true, EvaluationContext.inputFuture, EvaluationContext.outputFuture,
+          Core.Sound.NodeContext.inputFuture, Core.Sound.NodeContext.outputFuture,
+          DemandNode.variables, Expr.variables, List.append_assoc] using hFrame
+    let left : ExprSource cfg env a state := {
+      accepted := source.accepted, plans := source.plans, path := source.path ++ [0], context := lc,
+      observation := source.observation, world := source.world, typingEnv := source.typingEnv,
+      rootsEnv := source.rootsEnv, typingStart := source.typingStart, typingEnd := t1, ty := .bool,
+      rootsStart := source.rootsStart, rootsEnd := r1, roots := ra,
+      active := ec.child_activeMatches rfl 0 (.expression a) .expression rfl (by trivial)
+        source.typingEnv source.typingEnv source.active (by intro x; rfl),
+      access := (ec.child_accessMatches_iff rfl 0 (.expression a) .expression rfl
+        (by trivial) source.typingEnv source.rootsEnv).mpr source.access,
+      protection := by simpa [hLeftShrink] using source.protection,
+      observed := by simpa [hLeftShrink] using source.observed,
+      classified := source.classified, permission := source.permission, frame := hLeftInput,
+      typed := hta, rooted := hra, effects := (Core.Sound.rpExpr_mono hrb).2.trans hE2 }
+    refine ⟨left, rfl, rfl, rfl, ?_⟩
+    intro n value after hdone
+    have output := left.result n value hdone
+    have hF1 : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
+        after lc.outputFuture := output.frame
+    have hRightOutput : rc.outputFuture = ec.outputFuture := by
+      dsimp only [rc]
+      cases hec : ec with
+      | pilot profile active => rfl
+      | shrink profile context =>
+        let transition := context.child rfl 1 (.expression b) .expression rfl (by trivial)
+        change transition.context.expected.frame.future = context.expected.frame.future
+        rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+        exact DemandNode.childFrame_future transition.childFrameEq rfl
+    have hRightInput : rc.inputFuture = b.variables ++ ec.outputFuture := by
+      have hformula : rc.inputFuture = b.variables ++ rc.outputFuture := by
+        dsimp only [rc]
+        cases ec <;> rfl
+      rw [hformula, hRightOutput]
+    have hFrameRight : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
+        after rc.inputFuture := by
+      rw [hRightInput]
+      cases hec : ec with
+      | pilot profile active =>
+        rw [hec] at hActive
+        dsimp only [lc] at hF1
+        rw [hec] at hF1
+        apply hF1.changeFuture
+        intro x hx _
+        exact (hActive x).mpr hx
+      | shrink profile context =>
+        rw [hec] at hLeftFuture
+        have hfuture : lc.outputFuture = b.variables ++ context.expected.frame.future := by
+          simpa [EvaluationContext.outputFuture] using hLeftFuture
+        have framed : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
+            after (b.variables ++ context.expected.frame.future) := by
+          simpa only [hfuture] using hF1
+        simpa [EvaluationContext.outputFuture, Core.Sound.NodeContext.outputFuture] using framed
+    refine ⟨{
+      accepted := source.accepted, plans := source.plans, path := source.path ++ [1], context := rc,
+      observation := source.observation, world := source.world, typingEnv := source.typingEnv,
+      rootsEnv := source.rootsEnv, typingStart := t1, typingEnd := t2, ty := .bool,
+      rootsStart := r1, rootsEnd := r2, roots := rb,
+      active := ec.child_activeMatches rfl 1 (.expression b) .expression rfl (by trivial)
+        source.typingEnv source.typingEnv source.active (by intro x; rfl),
+      access := (ec.child_accessMatches_iff rfl 1 (.expression b) .expression rfl
+        (by trivial) source.typingEnv source.rootsEnv).mpr source.access,
+      protection := by simpa [hRightShrink] using source.protection,
+      observed := by simpa only [left, hLeftShrink, hRightShrink] using output.observed,
+      classified := output.classified, permission := source.permission, frame := hFrameRight,
+      typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl⟩
+  )
+
 theorem typedExprClaim_zero (cfg : Cfg) (results : List Ty) (expr : Expr) :
     TypedExprClaim 0 cfg results expr := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
@@ -919,6 +1059,174 @@ theorem typedExprClaim_bin {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
   have hy := P12.has (y, .val (.int intTy integer2)) (by simp)
   apply SimEAt.of_simG
   exact leaf_def P12 hdef hext (by simp) RVal.val (execPure_bin P2.rel.prof hx hy)
+
+theorem typed_shortCircuit_sim {isAnd : Bool} {x : ValueId} {rhs : B ValueId} {le : LEnv} {ls1 : LS} {r : ValueId}
+    {ls' : LS} {pt1 : Pt} {cfg : Cfg} {env : Env} {cx : FnCtx} {fr1 : Frame} {cb : M Val} {β : Bool} {state : St}
+    (hs : shortCircuit isAnd x rhs le ls1 = (r, ls')) (hpp : ls1.pp = some pt1)
+    (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr1 ls1)
+    (hx : fr1.vals[x]? = some (.val (.bool β))) (hadv : AdvB rhs)
+    (hrhs : ∀ (ls_d : LS) (y : ValueId) (ls_e : LS) (pt_d : Pt), rhs le ls_d = (y, ls_e) →
+      ls_d.pp = some pt_d → ExtT ls_e cx.fn.blocks → Rel cfg env cx fr1 ls_d →
+      SimEAt cx pt_d fr1 cb (fun vb pt' fr' => Post cfg env cx ls_d fr1 ls_e fr' pt' [(y, .val vb)]) state) :
+    SimEAt cx pt1 fr1 (if isAnd then
+      if β then cb >>= fun v => expectBool v >>= fun b => pure (.bool b) else pure (.bool false)
+      else if β then pure (.bool true) else cb >>= fun v => expectBool v >>= fun b => pure (.bool b)) (fun v pt' fr' => Post cfg env cx ls1 fr1 ls' fr' pt' [(r, .val v)]) state := by
+  obtain ⟨blk1, hc1, hb1, hp1⟩ := LS.pp_some hpp
+  unfold shortCircuit at hs
+  rw [whenLive_some _ _ _ hc1] at hs
+  simp only [bind_eq] at hs
+  obtain ⟨⟨rb, jb, p⟩, ls_c, h1, u2, ls_d, h2, y, ls_e, h3, u4, ls_f, h4, u5, ls_g, h5, hpure⟩ := hs
+  rw [pure_run] at hpure
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpure
+  have a_rhs : ls_d.Adv ls_e := hadv _ _ _ _ h3
+  have a_f := adv_emitTerm h4
+  have hg : ls_g = { ls_f with cur := some jb } := by
+    rw [setCur_run] at h5; exact (Prod.mk.inj h5).2.symm
+  have hd : ls_d = { ls_c with cur := some rb } := by
+    rw [setCur_run] at h2; exact (Prod.mk.inj h2).2.symm
+  have hext_f : ExtT ls_f cx.fn.blocks := by rw [hg] at hext; exact hext
+  have hext_e : ExtT ls_e cx.fn.blocks := hext_f.of_adv a_f
+  have hext_d : ExtT ls_d cx.fn.blocks := hext_e.of_adv a_rhs
+  have hext_c : ExtT ls_c cx.fn.blocks := by rw [hd] at hext_d; exact hext_d
+  obtain ⟨hrb, hjb, hpv, hvc, hstc, hcurc, hinst, hbrb, hbjb⟩ := scFork_facts h1 hpp hext_c
+  obtain ⟨-, hszc⟩ := scFork_ids h1
+  subst hrb hjb hpv
+  obtain ⟨Trb, hTrb, hTrbp⟩ := hext_c.params hbrb
+  obtain ⟨Tjb, hTjb, hTjbp⟩ := hext_c.params hbjb
+  have hdb : ls_d.blocks = ls_c.blocks := by rw [hd]
+  have hdpp : ls_d.pp = some (ls1.blocks.size, 0) := by
+    rw [hd]; exact LS.pp_cur hbrb
+  have hstd : ls_d.stack = ls1.stack := by rw [hd]; exact hstc
+  have hrel_d : Rel cfg env cx fr1 ls_d := hrel.stack_eq hstd
+  have hvd : ls_d.vals.size = ls1.vals.size + 1 := by rw [hd]; exact hvc
+  have hjb_d : ls_d.blocks[ls1.blocks.size + 1]? = some ⟨[(ls1.vals.size, .data .bool)], #[]⟩ := by
+    rw [hdb]; exact hbjb
+  have hjb_e : ls_e.blocks[ls1.blocks.size + 1]? = some ⟨[(ls1.vals.size, .data .bool)], #[]⟩ := by
+    refine a_rhs.keep _ _ ?_ hjb_d
+    rw [hd]
+    intro hh
+    have := Option.some.inj hh
+    nat_omega
+  have hjb_f : ls_f.blocks[ls1.blocks.size + 1]? = some ⟨[(ls1.vals.size, .data .bool)], #[]⟩ := by
+    cases hce : ls_e.cur with
+    | none =>
+      rw [emitTerm_none _ _ hce] at h4
+      obtain ⟨-, rfl⟩ := Prod.mk.inj h4
+      exact hjb_e
+    | some be =>
+      rw [emitTerm_run _ _ hce] at h4
+      obtain ⟨-, rfl⟩ := Prod.mk.inj h4
+      have hbe : be ≠ ls1.blocks.size + 1 := by
+        rcases a_rhs.cur with h | h | ⟨c, hc, hc1, _⟩
+        · rw [hce] at h; cases h
+        · rw [hce, hd] at h
+          have := Option.some.inj h
+          have hszd : ls_d.blocks.size = ls1.blocks.size + 2 := by rw [hdb]; exact hszc
+          nat_omega
+        · rw [hce] at hc
+          have := Option.some.inj hc
+          have hszd : ls_d.blocks.size = ls1.blocks.size + 2 := by rw [hdb]; exact hszc
+          nat_omega
+      show (ls_e.blocks.modify be _)[ls1.blocks.size + 1]? = _
+      rw [getElem?_modify_ne hbe]
+      exact hjb_e
+  have hpp_g : ls_g.pp = some (ls1.blocks.size + 1, 0) := by
+    rw [hg]; exact LS.pp_cur hjb_f
+  have hst_g : ls_g.stack = ls1.stack := by
+    rw [hg]
+    show ls_f.stack = _
+    rw [a_f.stack, a_rhs.stack, hstd]
+  have hv_g : ls1.vals.size + 1 ≤ ls_g.vals.size := by
+    rw [hg]
+    show _ ≤ ls_f.vals.size
+    have := a_f.vals; have := a_rhs.vals
+    nat_omega
+  have hmono : ls1.vals.size ≤ ls_g.vals.size := Nat.le_trans (Nat.le_succ _) hv_g
+  have hlt : ls1.vals.size < ls_g.vals.size := hv_g
+  have hTrb' : cx.fn.blocks[ls1.blocks.size]? = some Trb := hTrb
+  have hTjb' : cx.fn.blocks[ls1.blocks.size + 1]? = some Tjb := hTjb
+  have hjoin : ∀ (vb : Val) (pt_e : Pt) (fr_e : Frame),
+      Post cfg env cx ls_d fr1 ls_e fr_e pt_e [(y, .val vb)] → ∀ bb, vb = .bool bb →
+      SimG cx pt_e fr_e (pure (Val.bool bb) : M Val) (fun v pt' fr' =>
+        Post cfg env cx ls1 fr1 ls_g fr' pt' [(ls1.vals.size, .val v)]) := by
+    intro vb pt_e fr_e P bb hvb
+    subst hvb
+    obtain ⟨-, -, -, hinst_e⟩ := emitTerm_facts h4 P.pp hext_f
+    have hy : fr_e.vals[y]? = some (.val (.bool bb)) := P.has (y, _) (by simp)
+    have g2 := goes_br1 (cx := cx) (pt := pt_e) (fr := fr_e) hinst_e hTjb' hTjbp hy
+    refine SimG.goes g2 (SimG.ret ?_)
+    have hsame : Same ls1.vals.size fr1 fr_e := P.same.mono (by nat_omega)
+    have hrel_e : Rel cfg env cx fr_e ls1 := P.rel.stack_eq (by rw [a_rhs.stack, hstd])
+    exact Post.join hsame hrel_e (Nat.le_refl _) hlt hmono hst_g hpp_g
+  have hshort : ∀ b' : Bool, Goes cx pt1 fr1 (ls1.blocks.size + 1, 0)
+      (fr1.set ls1.vals.size (.val (.bool b'))) →
+      SimG cx pt1 fr1 (pure (Val.bool b') : M Val) (fun v pt' fr' =>
+        Post cfg env cx ls1 fr1 ls_g fr' pt' [(ls1.vals.size, .val v)]) := by
+    intro b' hg'
+    refine SimG.goes hg' (SimG.ret ?_)
+    exact Post.join (Same.refl _ _) hrel (Nat.le_refl _) hlt hmono hst_g hpp_g
+  have hrhs' := hrhs ls_d y ls_e (ls1.blocks.size, 0) h3 hdpp hext_e hrel_d
+  cases isAnd <;> cases β
+  · -- or, false: the right operand
+    have hi : instAt cx.fn pt1 = some (.term (.condbr x (ls1.blocks.size + 1) [x] ls1.blocks.size [])) := hinst
+    refine SimEAt.goes (goes_condbr_else0 hi hx hTrb' hTrbp rfl) ?_
+    exact SimEAt.bind hrhs' fun vb after pt_e fr_e hdone P =>
+      SimEAt.of_simG (SimG.expectBool fun bb hvb => hjoin vb pt_e fr_e P bb hvb) after
+  · -- or, true: the join directly
+    have hi : instAt cx.fn pt1 = some (.term (.condbr x (ls1.blocks.size + 1) [x] ls1.blocks.size [])) := hinst
+    exact SimEAt.of_simG (hshort true (goes_condbr_then1 hi hx hTjb' hTjbp rfl hx)) state
+  · -- and, false: the join directly
+    have hi : instAt cx.fn pt1 = some (.term (.condbr x ls1.blocks.size [] (ls1.blocks.size + 1) [x])) := hinst
+    exact SimEAt.of_simG (hshort false (goes_condbr_else1 hi hx hTjb' hTjbp rfl hx)) state
+  · -- and, true: the right operand
+    have hi : instAt cx.fn pt1 = some (.term (.condbr x ls1.blocks.size [] (ls1.blocks.size + 1) [x])) := hinst
+    refine SimEAt.goes (goes_condbr_then0 hi hx hTrb' hTrbp rfl) ?_
+    exact SimEAt.bind hrhs' fun vb after pt_e fr_e hdone P =>
+      SimEAt.of_simG (SimG.expectBool fun bb hvb => hjoin vb pt_e fr_e P bb hvb) after
+
+
+private theorem typedExprClaim_shortCircuit {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr}
+    (ha : TypedExprClaim n cfg results a) (hb : TypedExprClaim n cfg results b) (isAnd : Bool) :
+    TypedExprClaim (n + 1) cfg results (if isAnd then .and a b else .or a b) := by
+  cases isAnd
+  all_goals (
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    obtain ⟨left, htyping, hroots, htype, next⟩ := source.shortCircuitChildren _
+    have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
+      rw [htyping, hroots]
+      exact hmetadata
+    simp only [Bool.false_eq_true, ite_false, ite_true, lowerExpr, bind_eq] at hlow
+    obtain ⟨x, first, hfirst, hsc⟩ := hlow
+    have hadv := advB_lowerExpr b
+    have hextFirst : ExtT first cx.fn.blocks :=
+      hext.of_adv (advB_shortCircuit _ x hadv _ _ _ _ hsc)
+    simp only [Bool.false_eq_true, ite_false, ite_true, evalExpr]
+    refine SimEAt.bind (ha env state left hleftMetadata ls first x pt cx fr hfirst hpp
+      hextFirst hrel hgir hresults) fun value after pt1 fr1 hdone P1 => ?_
+    have hvalue := (left.result n value hdone).typed
+    rw [htype] at hvalue
+    obtain ⟨boolean, rfl⟩ := Core.Sound.hasTy_bool hvalue
+    simp only [Goose.Core.expectBool, pure_bind]
+    obtain ⟨right, htypingRight, hrootsRight, htypeRight⟩ := next n (.bool boolean) after hdone
+    have hrightMetadata : SourceResults right.typingEnv right.rootsEnv results := by
+      rw [htypingRight, hrootsRight]
+      exact hmetadata
+    have hx := P1.has (x, .val (.bool boolean)) (by simp)
+    refine SimEAt.mono (typed_shortCircuit_sim (cb := evalExpr n cfg env b) hsc P1.pp hext
+      P1.rel hx hadv ?_) fun v after2 pt' fr' done P => ?_
+    · intro ls_d y ls_e pt_d h3 hpp_d hext_e hrel_d
+      exact hb env after right hrightMetadata ls_d ls_e y pt_d cx fr1 h3 hpp_d hext_e
+        hrel_d hgir hresults
+    · exact (P1.comp P).sub (by simp)
+  )
+
+theorem typedExprClaim_and {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr}
+    (ha : TypedExprClaim n cfg results a) (hb : TypedExprClaim n cfg results b) :
+    TypedExprClaim (n + 1) cfg results (.and a b) := typedExprClaim_shortCircuit ha hb true
+
+theorem typedExprClaim_or {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr}
+    (ha : TypedExprClaim n cfg results a) (hb : TypedExprClaim n cfg results b) :
+    TypedExprClaim (n + 1) cfg results (.or a b) := typedExprClaim_shortCircuit ha hb false
 
 theorem typedExprClaim_cmp {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr}
     (ha : TypedExprClaim n cfg results a) (hb : TypedExprClaim n cfg results b)
