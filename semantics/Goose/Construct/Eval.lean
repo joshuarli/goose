@@ -74,6 +74,7 @@ def exitChannels (activation : RuntimeActivation) (operands : List Expr) (origin
         else pure (.construct (← liftConstruction origin (openExitReplacement id)))
 
 
+set_option maxHeartbeats 400000 in
 mutual
 def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → EvalM Value
   | 0, _, _, _ => timeout
@@ -430,11 +431,15 @@ def enterActivation : Nat → EvalConfig → RuntimeActivation → List (VarId �
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, activation, pre, body, origin => do
       let some implementation := config.module.impls[activation.implementation]? | fault .unbound
-      finishActivation config.layout activation (implementation.results.toList.map (·.ty)) origin do
-        let (flow, carriers) ← execResultBlockWith fuel config activation pre activation.channels body
-        match flow with
-        | .normal _ => pure carriers
-        | _ => fault .flow
+      finishActivation config.layout activation (implementation.results.toList.map (·.ty)) origin
+        (execActivationBody fuel config activation pre body)
+
+def execActivationBody (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
+    (pre : List (VarId × Value)) (body : Block) : EvalM (List Carrier) := do
+  let (flow, carriers) ← execResultBlockWith fuel config activation pre activation.channels body
+  match flow with
+  | .normal _ => pure carriers
+  | _ => fault .flow
 
 def execResultBlock : Nat → EvalConfig → RuntimeActivation → List Channel → Block → EvalM (Flow × List Carrier)
   | 0, _, _, _, _ => timeout
