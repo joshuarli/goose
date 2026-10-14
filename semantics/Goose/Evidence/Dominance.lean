@@ -215,16 +215,16 @@ theorem domUpdate_unchanged {preds : Array (List BlockId)} {full : Nat}
     state.2 = false ∧ (domUpdate preds full state block).1 = state.1 := by
   by_cases entry : block = 0
   · simp only [domUpdate, if_pos entry] at unchanged ⊢
-    exact ⟨unchanged, rfl⟩
+    exact ⟨unchanged, by trivial⟩
   · simp only [domUpdate, if_neg entry] at unchanged ⊢
-    dsimp only at unchanged ⊢
+    try dsimp only at unchanged ⊢
     split
     · rename_i changed
       simp only [if_pos changed] at unchanged
       contradiction
     · rename_i equal
       simp only [if_neg equal] at unchanged
-      exact ⟨unchanged, rfl⟩
+      exact ⟨unchanged, by trivial⟩
 
 theorem domScan_unchanged {preds : Array (List BlockId)} {full : Nat}
     {state : Array Nat × Bool} (blocks : List Nat)
