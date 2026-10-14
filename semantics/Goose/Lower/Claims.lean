@@ -1558,11 +1558,6 @@ theorem exprClaim_ifE (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihbv : ∀ blk, Bl
       (by nat_omega) (by nat_omega) (hstj.trans hst_out) (LS.pp_eq hcj hbj)
 
 /-- A fragment that leaves no result cell. -/
-theorem Post.nil {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS} {fr fr' : Frame} {pt' : Pt}
-    (hpp : ls'.pp = some pt') (hmono : ls.vals.size ≤ ls'.vals.size) (hsame : Same ls.vals.size fr fr')
-    (hrel : Rel cfg env cx fr' ls') : Post cfg env cx ls fr ls' fr' pt' [] :=
-  ⟨hpp, by simp, by simp, hmono, hsame, hrel⟩
-
 theorem stmtClaim_assert (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : OriginId) :
     StmtClaim (n + 1) lc (.assertS e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel

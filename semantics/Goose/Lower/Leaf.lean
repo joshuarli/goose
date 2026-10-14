@@ -9,6 +9,11 @@ theorem Post.init {cfg : Cfg} {env : Env} {cx : FnCtx} {ls : LS} {fr : Frame} {p
   ⟨hpp, by simp, by simp, Nat.le_refl _, Same.refl _ _, hrel⟩
 
 
+theorem Post.nil {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS} {fr fr' : Frame} {pt' : Pt}
+    (hpp : ls'.pp = some pt') (hmono : ls.vals.size ≤ ls'.vals.size) (hsame : Same ls.vals.size fr fr')
+    (hrel : Rel cfg env cx fr' ls') : Post cfg env cx ls fr ls' fr' pt' [] :=
+  ⟨hpp, by simp, by simp, hmono, hsame, hrel⟩
+
 theorem Post.comp {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls1 ls2 : LS} {fr fr1 fr2 : Frame}
     {pt1 pt2 : Pt} {c1 c2 : List (ValueId × RVal)}
     (h1 : Post cfg env cx ls fr ls1 fr1 pt1 c1) (h2 : Post cfg env cx ls1 fr1 ls2 fr2 pt2 c2) :
