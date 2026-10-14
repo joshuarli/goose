@@ -37,7 +37,7 @@ def resolveStruct (types : Array VTy) (sizes : Array Nat) (raw : Goose.Construct
     let some z := sizes[i]? | fail "struct field type size"
     fields := fields.push ⟨t, f.binding, f.contents, f.byteOffset⟩
     treeSize := treeSize + z
-  pure ({ byteSize := raw.byteSize, fields }, treeSize)
+  pure ({ byteSize := raw.byteSize, fields, displayName := raw.displayName }, treeSize)
 
 def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json)
     (structs : Array Goose.Construct.Decode.RawStructDef := #[]) : Except String (VTy × Nat) := do
@@ -950,7 +950,7 @@ def write (m : Module) : String :=
   let structs := wList (m.structs.toList.map fun d =>
     wRec "struct_def" [toString d.byteSize, wList (d.fields.toList.map fun f =>
       wRec "field" [toString ((tab.entries.findIdx? (· == .data f.ty)).getD 0),
-        quote (kindTag f.binding), quote (mutTag f.contents), toString f.byteOffset])])
+        quote (kindTag f.binding), quote (mutTag f.contents), toString f.byteOffset]) , quote d.displayName])
   let targets := wList (m.targets.toList.map fun target => wRec "target" [wNats target.members])
   wRec "module" [quote Decode.schemaName,quote "core-construction",files,types,structs,targets,globals,funcs,toString m.entry,origins] ++ "\n"
 
