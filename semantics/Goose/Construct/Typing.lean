@@ -250,14 +250,14 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
         .mut "pop requires writable shrinkable array"
       let some element := ty.element? | fail .type "pop array element missing"
       pure [element]
-  | fuel + 1, env, .ifE condition left right => do
+  | fuel + 1, env, .ifE condition left right _ => do
       expectBool (← one (← typeExpr fuel (ordinary env) condition))
       let a ← typeBlock fuel env left
       let b ← typeBlock fuel env right
       require (a == b) .type "branch result type mismatch"
       pure a
-  | fuel + 1, env, .blockE block => typeBlock fuel env block
-  | fuel + 1, env, .arrLit ty elements => do
+  | fuel + 1, env, .blockE block _ => typeBlock fuel env block
+  | fuel + 1, env, .arrLit ty elements _ => do
       require ty.constructible .type "array literal type is not constructible"
       let some element := ty.element? | fail .type "array literal requires array type"
       match ty with
@@ -266,7 +266,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       for expression in elements do
         require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo element) .type "array initializer type mismatch"
       pure [ty]
-  | fuel + 1, env, .fill ty expression => do
+  | fuel + 1, env, .fill ty expression _ => do
       match ty with
       | .arr element _ =>
           require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo element) .type "fill element type mismatch"

@@ -39,7 +39,7 @@ private def statementRejects (statement : Stmt) (rule : Rule) : Bool :=
 #guard !statementRejects (.expr (.push (.var 0) (.lit .u8 2)) 0) .mut
 #guard statementRejects (.expr (.bytes (.varr (.int .u8)) [] 0) 0) .type
 #guard statementRejects (.appendValue (.var 0) (.bytes (.varr (.int .u8)) [2] 0) 0) .type
-#guard statementRejects (.appendConstruct (.var 0) (.arrLit (.arr (.int .u8) 1) [.lit .u8 2]) 0) .type
+#guard statementRejects (.appendConstruct (.var 0) (.arrLit (.arr (.int .u8) 1) [.lit .u8 2] 0) 0) .type
 #guard statementRejects (.expr (.call 0 [] 0) 0) .type
 #guard match (typeExpr 256 { env with request := .elementRun } (.call 0 [] 0)).run 2 with
   | .error rejection => rejection.rule == .call

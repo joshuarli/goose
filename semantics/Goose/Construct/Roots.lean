@@ -169,14 +169,14 @@ private def maximumElements : Ty → Option Nat
 
 mutual
 private def expressionMaximum (env : PEnv) : Expr → Option Nat
-  | .bytes _ data _ | .arrLit _ data => some data.length
-  | .fill ty _ => maximumElements ty
+  | .bytes _ data _ | .arrLit _ data _ => some data.length
+  | .fill ty _ _ => maximumElements ty
   | .copy _ source _ => (env.access.placeType? source).bind maximumElements
-  | .ifE _ left right => do
+  | .ifE _ left right _ => do
       let a ← blockMaximum env left
       let b ← blockMaximum env right
       pure (max a b)
-  | .blockE block => blockMaximum env block
+  | .blockE block _ => blockMaximum env block
   | .str _ parts _ => parts.foldlM (fun count part => match part with
       | .text text => some (count + text.toUTF8.size)
       | _ => none) 0
@@ -223,12 +223,12 @@ private def producerMaximum (env : PEnv) : Expr → V (List (Option Nat))
       let some context := env.mod.contexts[contextId]? | reject .call "capacity analysis call context outside table"
       let some implementation := env.mod.impls[context.impl]? | reject .call "capacity analysis callee outside table"
       pure (implementation.results.toList.map descriptorMaximum)
-  | .ifE _ left right => do
+  | .ifE _ left right _ => do
       let a ← blockProducerMaximum env left
       let b ← blockProducerMaximum env right
       if a.length != b.length then reject .result "capacity analysis branch result count mismatch"
       pure ((a.zip b).map fun (a,b) => do pure (max (← a) (← b)))
-  | .blockE block => blockProducerMaximum env block
+  | .blockE block _ => blockProducerMaximum env block
   | expression => pure [expressionMaximum env expression]
 
 private def blockProducerMaximum (env : PEnv) : Block → V (List (Option Nat))
@@ -609,16 +609,16 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     addShrinks rho
     noteAborts
     pure []
-  | .ifE c t f => do
+  | .ifE c t f _ => do
     let _ ← rpExpr env c
     let (rt, lt) ← rpBlockValue env [] t
     let (rf, lf) ← rpBlockValue env [] f
     let _ := (lt, lf)
     pure (unionRoots rt rf)
-  | .blockE b => do
+  | .blockE b _ => do
     let (rho, _) ← rpBlockValue env [] b
     pure rho
-  | .arrLit ty es => do
+  | .arrLit ty es _ => do
     rpExprs env es
     match ty with
     | .limited _ capacity => if es.length > capacity then noteAborts
@@ -627,7 +627,7 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
   | .structLit _ es => do
     rpExprs env es
     pure []
-  | .fill _ a => do
+  | .fill _ a _ => do
     let _ ← rpExpr env a
     pure []
   | .bytes ty data _ => match ty with

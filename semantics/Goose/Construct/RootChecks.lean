@@ -41,7 +41,7 @@ private def copiesGlobal : Impl := { implementation with
   summary := .known ⟨[],[],[],[],[],[0],[],[],true,false⟩ }
 private def copyContext : Context := ⟨0, "copy", [], [[]], []⟩
 private def copyModule : Module := { module with
-  globals := #[⟨"global", .grow (.int .u8), .mutable, .arrLit (.grow (.int .u8)) [], 0⟩]
+  globals := #[⟨"global", .grow (.int .u8), .mutable, .arrLit (.grow (.int .u8)) [] 0, 0⟩]
   impls := #[copiesGlobal], contexts := #[copyContext] }
 #guard !accepts copyModule copyContext
 #guard accepts { copyModule with
@@ -63,7 +63,7 @@ private def limitedLiteral (expression : Expr) : Impl :=
     .known ⟨[],[],[],[],[],[0],[],[],false,false⟩⟩
 #guard !accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 1) [1,2] 0)], contexts := #[copyContext] } copyContext
 #guard !accepts { module with impls := #[limitedLiteral
-  (.arrLit (.limited (.int .u8) 1) [.lit .u8 1, .lit .u8 2])], contexts := #[copyContext] } copyContext
+  (.arrLit (.limited (.int .u8) 1) [.lit .u8 1, .lit .u8 2] 0)], contexts := #[copyContext] } copyContext
 
 #guard accepts { sliceParameterModule with impls := #[{ copiesSliceParameter with
   summary := .known ⟨[.param 0],[],[],[],[],[0],[],[],true,false⟩ }] } sliceParameterContext

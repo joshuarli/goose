@@ -89,9 +89,9 @@ def DeclarationEnv.exprType? (env : DeclarationEnv) : Expr → Option Ty
     | _ => none
   | .push p _ _ => do some (.ref .mutable (← (← env.placeType? p).ownerElem?))
   | .pop p _ => do (← env.placeType? p).ownerElem?
-  | .ifE _ t _ => env.blockType? t
-  | .blockE b => env.blockType? b
-  | .arrLit t _ | .fill t _ | .structLit t _ | .bytes t _ _ | .str t _ _ | .copy t _ _ => some t
+  | .ifE _ t _ _ => env.blockType? t
+  | .blockE b _ => env.blockType? b
+  | .arrLit t _ _ | .fill t _ _ | .structLit t _ | .bytes t _ _ | .str t _ _ | .copy t _ _ => some t
   | .resultLocal id _ => (env.variables[id]?).map (·.ty)
   | .values _ => none
 

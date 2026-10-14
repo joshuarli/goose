@@ -70,8 +70,8 @@ def AccessEnv.exprRoots (env : AccessEnv) : Expr → V (List RootRef)
   | .ref _ p => env.placeRoots p
   | .slice _ v _ _ _ => env.viewRoots v
   | .push p _ _ => env.placeRoots p
-  | .ifE _ t f => do pure ((← env.blockRoots t) ++ (← env.blockRoots f))
-  | .blockE b => env.blockRoots b
+  | .ifE _ t f _ => do pure ((← env.blockRoots t) ++ (← env.blockRoots f))
+  | .blockE b _ => env.blockRoots b
   | .call c args _ => do
     let some ctx := env.mod.contexts[c]? | reject .call "call has no context"
     let roots ← env.argsRoots args
@@ -120,12 +120,12 @@ def AccessEnv.resultRoots (env : AccessEnv) : Expr → V (List (List RootRef))
       let arguments ← env.argsRoots arguments
       context.resultRoots.mapM (mapExternalRoots arguments)
   | .values operands => operands.mapM env.exprRoots
-  | .ifE _ left right => do
+  | .ifE _ left right _ => do
       let a ← env.blockResultRoots left
       let b ← env.blockResultRoots right
       if a.length != b.length then reject .result "branch result channel count mismatch"
       pure ((a.zip b).map fun (a,b) => (a ++ b).eraseDups)
-  | .blockE block => env.blockResultRoots block
+  | .blockE block _ => env.blockResultRoots block
   | expression => do pure [← env.exprRoots expression]
 
 def AccessEnv.blockResultRoots (env : AccessEnv) : Block → V (List (List RootRef))

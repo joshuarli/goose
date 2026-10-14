@@ -330,19 +330,19 @@ def decExpr : Nat → Ctx → Json → R Expr
       let p ← decPlace f cx fs[0]!
       pure (.pop p (← liftE (decOrg cx fs[1]!)))
     | "e_if" => do
-      liftE (arity tag fs 3)
+      liftE (arity tag fs 4)
       let c ← decExpr f cx fs[0]!
       let t ← decBlock f cx fs[1]!
-      pure (.ifE c t (← decBlock f cx fs[2]!))
-    | "e_block" => do liftE (arity tag fs 1); pure (.blockE (← decBlock f cx fs[0]!))
+      pure (.ifE c t (← decBlock f cx fs[2]!) (← liftE (decOrg cx fs[3]!)))
+    | "e_block" => do liftE (arity tag fs 2); pure (.blockE (← decBlock f cx fs[0]!) (← liftE (decOrg cx fs[1]!)))
     | "e_arr" => do
-      liftE (arity tag fs 2)
+      liftE (arity tag fs 3)
       let t ← liftE (decTyRef cx fs[0]!)
-      pure (.arrLit t (← decExprs f cx fs[1]!))
+      pure (.arrLit t (← decExprs f cx fs[1]!) (← liftE (decOrg cx fs[2]!)))
     | "e_fill" => do
-      liftE (arity tag fs 2)
+      liftE (arity tag fs 3)
       let t ← liftE (decTyRef cx fs[0]!)
-      pure (.fill t (← decExpr f cx fs[1]!))
+      pure (.fill t (← decExpr f cx fs[1]!) (← liftE (decOrg cx fs[2]!)))
     | "e_struct" => do
 
       liftE (arity tag fs 2)

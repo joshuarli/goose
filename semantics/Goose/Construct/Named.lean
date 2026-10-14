@@ -10,15 +10,15 @@ def expressionVariables : Expr â†’ List VarId
   | .read place | .ref _ place | .copy _ place _ => placeVariables place
   | .slice _ view low high _ => viewVariables view ++ boundVariables low ++ boundVariables high
   | .len view => viewVariables view
-  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression => expressionVariables expression
+  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression _ => expressionVariables expression
   | .bin _ left right _ | .cmp _ left right | .and left right | .or left right =>
       expressionVariables left ++ expressionVariables right
   | .call _ arguments _ => argumentVariables arguments
   | .push owner expression _ => placeVariables owner ++ expressionVariables expression
   | .pop owner _ => placeVariables owner
-  | .ifE condition left right => expressionVariables condition ++ blockVariables left ++ blockVariables right
-  | .blockE block => blockVariables block
-  | .arrLit _ elements | .structLit _ elements | .values elements => expressionsVariables elements
+  | .ifE condition left right _ => expressionVariables condition ++ blockVariables left ++ blockVariables right
+  | .blockE block _ => blockVariables block
+  | .arrLit _ elements _ | .structLit _ elements | .values elements => expressionsVariables elements
   | .str _ arguments _ => printVariables arguments
 
 def placeVariables : Place â†’ List VarId
@@ -96,7 +96,7 @@ def nestedExpressionReturns (module : Module) (implementation : ImplId) : Expr â
   | .slice _ view low high _ => nestedViewReturns module implementation view ++
       nestedBoundReturns module implementation low ++ nestedBoundReturns module implementation high
   | .len view => nestedViewReturns module implementation view
-  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression =>
+  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression _ =>
       nestedExpressionReturns module implementation expression
   | .bin _ left right _ | .cmp _ left right | .and left right | .or left right =>
       nestedExpressionReturns module implementation left ++ nestedExpressionReturns module implementation right
@@ -107,10 +107,10 @@ def nestedExpressionReturns (module : Module) (implementation : ImplId) : Expr â
         | _ => []) ++ nestedArgumentReturns module implementation arguments
   | .push owner expression _ => nestedPlaceReturns module implementation owner ++ nestedExpressionReturns module implementation expression
   | .pop owner _ => nestedPlaceReturns module implementation owner
-  | .ifE condition left right => nestedExpressionReturns module implementation condition ++
+  | .ifE condition left right _ => nestedExpressionReturns module implementation condition ++
       nestedBlockReturns module implementation left ++ nestedBlockReturns module implementation right
-  | .blockE block => nestedBlockReturns module implementation block
-  | .arrLit _ elements | .structLit _ elements | .values elements => nestedExpressionsReturns module implementation elements
+  | .blockE block _ => nestedBlockReturns module implementation block
+  | .arrLit _ elements _ | .structLit _ elements | .values elements => nestedExpressionsReturns module implementation elements
   | .str _ arguments _ => nestedPrintReturns module implementation arguments
 
 def nestedPlaceReturns (module : Module) (implementation : ImplId) : Place â†’ List NamedSite
