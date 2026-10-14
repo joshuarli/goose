@@ -442,7 +442,7 @@ theorem return_from_after_operands (fuel : Nat) (config : EvalConfig)
     (state prepared afterOperands : ExecutionState)
     (present : config.module.targets[targetId]? = some target)
     (selected : selectTarget? target state.activations = some activation)
-    (preparedChannels : exitChannels activation operands origin state = .ok channels prepared)
+    (preparedChannels : exitChannels environment activation operands origin state = .ok channels prepared)
     (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands) :
     Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) state =
       .escape ⟨activation.act,.nonlocal targetId⟩ carriers afterOperands := by
@@ -457,7 +457,7 @@ theorem return_from_nearest_scope_dispatch (fuel : Nat) (config : EvalConfig)
     (present : config.module.targets[targetId]? = some target)
     (selected : selectTarget? target state.activations = some catcher)
     (distinct : (state.activations.map (·.act)).Nodup)
-    (preparedChannels : exitChannels catcher operands origin state = .ok channels prepared)
+    (preparedChannels : exitChannels environment catcher operands origin state = .ok channels prepared)
     (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands) :
     ∃ discarded outer, state.activations = discarded ++ catcher :: outer ∧
       target.contains catcher.implementation = true ∧
@@ -484,7 +484,7 @@ theorem return_from_forward_after_producer (fuel : Nat) (config : EvalConfig)
     (state prepared afterProducer : ExecutionState)
     (present : config.module.targets[targetId]? = some target)
     (selected : selectTarget? target state.activations = some activation)
-    (preparedChannels : exitChannels activation
+    (preparedChannels : exitChannels environment activation
       (List.replicate activation.channels.length producer) origin state = .ok channels prepared)
     (evaluated : evalProduce fuel config environment channels producer prepared = .ok carriers afterProducer) :
     Goose.Construct.execStmt (fuel + 1) config environment (.returnFromForward targetId producer origin) state =
