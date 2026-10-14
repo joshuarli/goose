@@ -292,14 +292,14 @@
  },
  {
   "feature": "TH-BCE-01",
-  "label": "deferred",
+  "label": "model-proved",
   "id": "TH-BCE-01",
-  "theorem": "Goose.Proofs.Bounds.f_const_sound, Goose.Proofs.Bounds.f_len_sound, Goose.Proofs.Bounds.f_snap_sound, Goose.Proofs.Bounds.f_cmp_sound, Goose.Proofs.Bounds.provesIndex_sound, Goose.Proofs.Bounds.indexProven_eq_checked_of_facts, Goose.Proofs.Bounds.exec_indexProven_eq_checked",
-  "statement": "Each implemented fact-generation rule is sound in the runtime fact interpretation. When the three required facts hold, one i_index_proven instruction is equal to i_index_checked, including its frame update and any continuation after that instruction.",
-  "differs_from_target": "The target quantifies over a whole accepted function and its run. The proved lemmas assume the certificate facts already hold at the current frame and state; they do not establish that assumption from certificate acceptance at every reachable program point.",
+  "theorem": "Goose.Proofs.Bounds.checked_runModule; Goose.Proofs.Bounds.checked_run",
+  "statement": "For every accepted GIR module, numeric profile and fuel, replacing proven indexing by checked indexing preserves the full interpreter result, state and trace.",
+  "differs_from_target": "No comparison premise remains. Runtime typing, SSA and executable dominance derive comparison facts from validation and actual execution prefixes.",
   "evidence": "Goose/Proofs/Bounds.lean; all seven local semantic theorems are in the axiom audit. The executable fixture validates, re-encodes and runs, and compiler unit tests cover successful proposal plus missing and forged evidence.",
-  "limits": "Parked after three proof attempts. Whole-function replacement still needs fact preservation through instructions that do not generate facts, conservative kills, block transitions, joins, loops and calls. No G-BCE or whole-run safety claim is made.",
-  "reviewer": "pending: the target theorem is incomplete"
+  "limits": "Checked-module validation, C++ parity and native performance remain separate qualification obligations.",
+  "reviewer": "Final independent review in progress at cfa6438d."
  },
  {
   "feature": "Conditional lowering symbol preservation",
@@ -364,13 +364,13 @@
   "evidence": "Goose/Evidence/{Execution,Provenance}.lean; registered axiom audit."
  },
  {
-  "feature": "Checked replacement with explicit comparison invariant",
+  "feature": "Unconditional checked replacement",
   "label": "model-proved",
   "theorem": "Goose.Proofs.Bounds.reachable_facts; Goose.Proofs.Bounds.reachable_index; Goose.Proofs.Bounds.checked_runModule; Goose.Proofs.Bounds.checked_run",
-  "statement": "Accepted certificate facts hold at runtime points and checked replacement preserves the actual whole-module result at the same fuel, conditional on TrueComparisonFacts.",
-  "assumptions": "validate succeeds and TrueComparisonFacts holds for the original configuration.",
-  "limits": "TrueComparisonFacts is not yet derived from validation. G-BCE remains open. checked-module validation, C++ parity and native performance are not proved.",
-  "reviewer": "Independent review at 3493a99e answered six statement questions and found no defect in the conditional claims. Runtime typing, SSA uniqueness and dynamic dominance must discharge the comparison premise.",
+  "statement": "Accepted certificate facts hold at actual runtime points; checked replacement preserves the whole-module result at the same fuel.",
+  "assumptions": "Validation succeeds for the original module.",
+  "limits": "C++ proposer and native conformance remain unqualified. No native cost claim follows.",
+  "reviewer": "Final independent review in progress at cfa6438d.",
   "evidence": "Goose/Evidence/{Bounds,Replay,Checked,Reachable,Simulation}.lean; registered axiom audit."
  },
  {
