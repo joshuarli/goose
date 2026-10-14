@@ -405,6 +405,146 @@ theorem execPure_cmp_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
   obtain ⟨rfl, rfl⟩ := evaluated
   exact ⟨True.intro, rfl⟩
 
+theorem expectRef_state {value : Val} {before after : St} {location : Loc}
+    (read : expectRef value before = .ok location after) : after = before := by
+  cases value <;> simp [expectRef, fault, M.stop, pure_apply] at read
+  exact read.2.symm
+
+theorem expectArray_state {value : Val} {before after : St} {shape : Nat × Bool}
+    (read : expectArray value before = .ok shape after) : after = before := by
+  cases value <;> simp [expectArray, fault, M.stop, pure_apply] at read
+  all_goals exact read.2.symm
+
+theorem readLoc_state {before after : St} {location : Loc} {value : Val}
+    (read : Goose.Core.readLoc location before = .ok value after) : after = before := by
+  unfold Goose.Core.readLoc at read
+  cases stored : before.store.read location <;> simp [stored] at read
+  exact read.2.symm
+
+theorem getView_state {fr : Frame} {id : ValueId} {before after : St} {view : ViewVal}
+    (read : Goose.GIR.getView fr id before = .ok view after) : after = before := by
+  unfold Goose.GIR.getView at read
+  obtain ⟨cell, middle, lookup, read⟩ := m_bind_ok read
+  have sameState := (getCell_success lookup).2
+  subst middle
+  cases cell <;> simp [fault, M.stop, pure_apply] at read
+  exact read.2.symm
+
+theorem execPure_viewLen_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
+    {id : ValueId} {before after : St} {cell : RVal}
+    (evaluated : execPure cx fr (.viewLen id) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.int .i64)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨view, middle, read, evaluated⟩ := m_bind_ok evaluated
+  have sameState := getView_state read
+  subst middle
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨rfl, rfl⟩
+
+theorem execPure_arrayLen_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
+    {id : ValueId} {before after : St} {cell : RVal}
+    (evaluated : execPure cx fr (.arrayLen id) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.int .i64)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨reference, middle, read, evaluated⟩ := m_bind_ok evaluated
+  have sameState := (getVal_success read).2
+  subst middle
+  obtain ⟨location, middle, read, evaluated⟩ := m_bind_ok evaluated
+  have sameState := expectRef_state read
+  subst middle
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  have sameState := readLoc_state read
+  subst middle
+  obtain ⟨shape, middle, read, evaluated⟩ := m_bind_ok evaluated
+  have sameState := expectArray_state read
+  subst middle
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨rfl, rfl⟩
+
+theorem execPure_boolCmp_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
+    {left right : ValueId} {comparison : CmpOp} {before after : St} {cell : RVal}
+    (evaluated : execPure cx fr (.boolCmp comparison left right) before = .ok cell after) :
+    WeakCellTy roots cell (.data .bool) ∧ after = before :=
+  execPure_cmp_typed (cx := cx) (ty := .i64) evaluated
+
+theorem execPure_constInt_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
+    {ty : IntTy} {n : Int} {before after : St} {cell : RVal}
+    (evaluated : execPure cx fr (.constInt ty n) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.int ty)) ∧ after = before := by
+  simp only [execPure, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨rfl, rfl⟩
+
+theorem execPure_constBool_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
+    {b : Bool} {before after : St} {cell : RVal}
+    (evaluated : execPure cx fr (.constBool b) before = .ok cell after) :
+    WeakCellTy roots cell (.data .bool) ∧ after = before := by
+  simp only [execPure, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨True.intro, rfl⟩
+
+theorem execPure_constUnit_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
+    {before after : St} {cell : RVal}
+    (evaluated : execPure cx fr .constUnit before = .ok cell after) :
+    WeakCellTy roots cell (.data .unit) ∧ after = before := by
+  simp only [execPure, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨rfl, rfl⟩
+
+theorem execPure_refFreeze_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {permission : Mutability} {ty : Ty}
+    {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data (.ref permission ty))))
+    (evaluated : execPure cx fr (.refFreeze id) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.ref .readOnly ty)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal metadata read
+  subst middle
+  obtain ⟨location, rfl, declared⟩ := valueTyped
+  simp only [expectRef, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨⟨location, rfl, declared⟩, rfl⟩
+
+theorem execPure_fieldAddr_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {permission fieldPermission : Mutability}
+    {sid : StructId} {fields : TyList} {index : Nat} {fieldTy : Ty}
+    {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data (.ref permission (.structT sid fields)))))
+    (selector : fields.toList[index]? = some fieldTy)
+    (evaluated : execPure cx fr (.fieldAddr id index) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.ref fieldPermission fieldTy)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal metadata read
+  subst middle
+  obtain ⟨location, rfl, declared⟩ := valueTyped
+  simp only [expectRef, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨⟨_, rfl, declared.append (.field selector (.root fieldTy))⟩, rfl⟩
+
+theorem execPure_arrFill_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {element : Ty} {count : Nat}
+    {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data element))) (flat : element.flat = true)
+    (evaluated : execPure cx fr (.arrFill (.arr element count) id) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.arr element count)) ∧ after = before := by
+  simp only [execPure, expectFixedCount, pure_bind] at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal metadata read
+  subst middle
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  refine ⟨⟨by simp, ?_⟩, rfl⟩
+  intro index selected present
+  rw [Array.getElem?_replicate] at present
+  split at present
+  · cases present
+    exact valueTyped.flat flat
+  · contradiction
+
 theorem execPure_indexProven_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {viewId indexId : ValueId} {permission : Mutability}
     {element : Ty} {indexTy : IntTy} {before after : St} {cell : RVal}
