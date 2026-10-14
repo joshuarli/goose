@@ -128,6 +128,7 @@ theorem checkImpl_localOrigins {m : Core.Module} {impl : Core.Impl}
   · simp only [if_neg hmany] at h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, horigins, _⟩ := exceptBind_ok_left h
     have hbound := coreForAll_ok impl.vars.toList (fun lv =>
       unless lv.org < m.origins.size do
@@ -145,6 +146,7 @@ theorem checkImpl_localScopes {m : Core.Module} {impl : Core.Impl}
   by_cases hmany : 1 < impl.results.size
   · simp [hmany, Core.reject, bind, Except.bind] at h
   · simp only [if_neg hmany] at h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
