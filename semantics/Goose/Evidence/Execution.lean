@@ -611,4 +611,32 @@ theorem RuntimeStepsAvoid.frame_identity {cfg : GCfg} {fn : Func} {ids : List Va
     have identity := transition.frame_identity
     exact ⟨ih.1.trans identity.1, ih.2.trans identity.2⟩
 
+theorem RuntimePoint.call_of_execOp_success {cfg : GCfg} {caller : Func} {pt : Pt}
+    {fr : Frame} {st final : St} {result callee : ValueId} {args : List ValueId}
+    {origin : Option OriginId} {fuel : Nat} {value : RVal}
+    (point : RuntimePoint cfg caller pt fr st)
+    (instruction : instAt caller pt = some (.def result (.call callee args origin)))
+    (success : execOp fuel ⟨cfg, caller⟩ fr (.call callee args origin) st = .ok value final) :
+    ∃ fn enteredFrame enteredState, RuntimePoint cfg fn (0, 0) enteredFrame enteredState := by
+  cases fuel with
+  | zero => simp [execOp, timeout, M.stop] at success
+  | succ remaining =>
+    simp only [execOp] at success
+    obtain ⟨values, readState, read, afterRead⟩ := m_bind_ok success
+    obtain ⟨returnedValue, returnedState, called, finished⟩ := m_bind_ok afterRead
+    obtain ⟨callFuel, fn, _, depth, lookup, entered⟩ := callFn_success_entry called
+    obtain ⟨bodyFuel, enteredFrame, enteredState, _, entry, executed⟩ := enterFn_success_entry entered
+    exact ⟨fn, enteredFrame, enteredState, .call point instruction depth read lookup entry⟩
+
+theorem RuntimePoint.initializer_of_enterFn_success {cfg : GCfg} {fuel index : Nat}
+    {before final : St} {global : Goose.GIR.Global} {value : Val}
+    (initialized : initGlobals fuel cfg (List.range index) St.initial = .ok () before)
+    (lookup : cfg.mod.globals[index]? = some global)
+    (success : Goose.GIR.enterFn fuel cfg 0 global.init [] before = .ok value final) :
+    ∃ fr entered, RuntimePoint cfg global.init (0, 0) fr entered := by
+  obtain ⟨remaining, fr, entered, fuelEq, entry, executed⟩ := enterFn_success_entry success
+  have positive : 0 < fuel := by omega
+  have validIndex := (Array.getElem?_eq_some_iff.mp lookup).1
+  exact ⟨fr, entered, .initializer positive validIndex initialized lookup entry⟩
+
 end Goose.Evidence
