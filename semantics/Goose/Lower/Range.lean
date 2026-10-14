@@ -86,41 +86,41 @@ def RangeInv (cfg : Cfg) (env : Env) (cx : FnCtx) (ls : LS) (counter bound : Val
 /-- The lowered range loop simulates every finite successful Core execution. The loop invariant
 keeps the values below the header parameter stable and names the changing counter and fixed upper
 bound as separate cells. -/
-theorem lowerRange_sim (n : Nat) (x : VarId) (t : IntTy) (counter bound : ValueId) (hb : BlockId)
+theorem lowerRange_sim (n : Nat) (x : VarId) (t hint : IntTy) (counter bound : ValueId) (hb : BlockId)
     (body : Core.Block) (org : OriginId) (upper : Int)
     (hokB : blockOk body = true) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (hscope : ∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope)
     (le : LEnv) (ls ls' : LS)
-    (hlow : lowerRange t counter bound hb
-      (fun d xb => lowerBlock (some ⟨d, xb, .next hb t counter⟩) [(x, counter, org)] false body)
+    (hlow : lowerRange hint counter bound hb
+      (fun d xb => lowerBlock (some ⟨d, xb, .next hb hint counter⟩) [(x, counter, org)] false body)
       le ls = ((), ls'))
     (hpp : ls.pp = some (hb, 0)) (hext : ExtT ls' cx.fn.blocks)
     (hheader : ∃ blk, cx.fn.blocks[hb]? = some blk ∧
-      blk.params = [(counter, .data (.int t))])
+      blk.params = [(counter, .data (.int hint))])
     (hboundLt : bound < counter) (hcounterLt : counter < ls.vals.size) :
     ∀ (base : Frame) (start : Int) (fr : Frame),
       RangeInv cfg env cx ls counter bound t upper base start fr →
       SimG cx (hb, 0) fr (execRange n cfg env x t start upper body)
-        (fun flow _ fr' => flow = .normal .unit ∧ Same counter base fr' ∧
+        (fun flow pt' fr' => flow = .normal .unit ∧ ls'.pp = some pt' ∧ Same counter base fr' ∧
           fr'.vals[bound]? = some (.val (.int t upper)) ∧ Rel cfg env cx fr' ls') := by
   let bodyB := fun d xb =>
-    lowerBlock (some ⟨d, xb, .next hb t counter⟩) [(x, counter, org)] false body
-  change lowerRange t counter bound hb bodyB le ls = ((), ls') at hlow
+    lowerBlock (some ⟨d, xb, .next hb hint counter⟩) [(x, counter, org)] false body
+  change lowerRange hint counter bound hb bodyB le ls = ((), ls') at hlow
   obtain ⟨c, ls1, tb, xb, lsf, ls2, rBody, lsBody, lsBack,
       hcmp, hfork, e2, hbody, hback, eExit⟩ := lowerRange_unfold hlow
-  have aBack := advB_rangeBack t counter hb le lsBody () lsBack hback
+  have aBack := advB_rangeBack hint counter hb le lsBody () lsBack hback
   have hextBack : ExtT lsBack cx.fn.blocks := by
     rw [eExit] at hext
     exact hext
   have hextBody : ExtT lsBody cx.fn.blocks := hextBack.of_adv aBack
-  have aBody := advB_lowerBlock (some ⟨ls1.stack.length, xb, .next hb t counter⟩)
+  have aBody := advB_lowerBlock (some ⟨ls1.stack.length, xb, .next hb hint counter⟩)
     [(x, counter, org)] false body le ls2 rBody lsBody hbody
   have hext2 : ExtT ls2 cx.fn.blocks := hextBody.of_adv aBody
   have hextFork : ExtT lsf cx.fn.blocks := by
     simpa [ExtT, e2] using hext2
   obtain ⟨_, hcur, _, _⟩ := LS.pp_some hpp
   have hcur1 : ls1.cur = some hb := by
-    have hrun := emitDef_run (.cmp .lt t counter bound) le hcur
+    have hrun := emitDef_run (.cmp .lt hint counter bound) le hcur
     rw [hrun] at hcmp
     have hstate := (Prod.mk.inj hcmp).2
     calc
@@ -134,7 +134,7 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t : IntTy) (counter bound : ValueI
     fork_facts hfork hppCmp hextFork
   obtain ⟨Ttb, hTtb, hTtbp⟩ := hextFork.params htb0
   obtain ⟨Txb, hTxb, hTxbp⟩ := hextFork.params hxb0
-  have hiCmp : instAt cx.fn (hb, 0) = some (.def c (.cmp .lt t counter bound)) := by
+  have hiCmp : instAt cx.fn (hb, 0) = some (.def c (.cmp .lt hint counter bound)) := by
     rw [instAt_eq]
     exact hcmpInst
   have hiBranch : instAt cx.fn (hb, 1) = some (.term (.condbr c tb [] xb [])) := by
@@ -148,15 +148,15 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t : IntTy) (counter bound : ValueI
   let headerInv := fun current fr =>
     RangeInv cfg env cx ls counter bound t upper base current fr
   let bodyInv := headerInv
-  let post : Flow → Pt → Frame → Prop := fun flow _ fr' =>
-    flow = Flow.normal .unit ∧ Same counter base fr' ∧
+  let post : Flow → Pt → Frame → Prop := fun flow pt' fr' =>
+    flow = Flow.normal .unit ∧ ls'.pp = some pt' ∧ Same counter base fr' ∧
       fr'.vals[bound]? = some (.val (.int t upper)) ∧ Rel cfg env cx fr' ls'
   have hc : RangeBranch cx (hb, 0) (tb, 0) upper headerInv bodyInv post := by
     intro current fr hinv
     rcases hinv with ⟨hsame, hcounter, hbound, hrel⟩
-    have hcmpPure : execPure cx fr (.cmp .lt t counter bound) =
+    have hcmpPure : execPure cx fr (.cmp .lt hint counter bound) =
         pure (.val (.bool (current < upper))) := by
-      have h := (execPure_cmp (cx := cx) (fr := fr) (op := .lt) hcounter hbound).1 t
+      have h := (execPure_cmp (cx := cx) (fr := fr) (op := .lt) hcounter hbound).1 hint
       rw [h]
       simp [expectComparable, expectSameTy, evalCmp]
     have gcmp := goes_cmp_pure hiCmp hcmpPure
@@ -191,7 +191,18 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t : IntTy) (counter bound : ValueI
         simpa [hlt] using htest
       have gbr := goes_condbr_else0 hiBranch htestFalse hTxb hTxbp rfl
       refine ⟨(xb, 0), frCmp, ?_, gcmp.trans gbr⟩
-      refine ⟨rfl, hsameCmp, hboundCmp, ?_⟩
+      have hxbBack : lsBack.blocks[xb]? = some ⟨[], #[]⟩ := by
+        refine (aBody.trans aBack).keep xb ⟨[], #[]⟩ ?_ ?_
+        · rw [e2]
+          intro he
+          have hb : tb = xb := Option.some.inj he
+          nat_omega
+        · rw [e2]
+          exact hxb0
+      have hppOut : ls'.pp = some (xb, 0) := by
+        rw [eExit]
+        exact LS.pp_cur hxbBack
+      refine ⟨rfl, hppOut, hsameCmp, hboundCmp, ?_⟩
       have hstackOut : ls'.stack = ls.stack := by
         rw [eExit]
         exact aBack.stack.trans (aBody.stack.trans (by rw [e2]; exact hstackFork.trans hcmpStack))
@@ -214,7 +225,7 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t : IntTy) (counter bound : ValueI
     have hpp2 : ls2.pp = some (tb, 0) := by
       rw [e2]
       exact LS.pp_cur htb0
-    have hblock := blockPreClaim fuel (some ⟨ls1.stack.length, xb, .next hb t counter⟩)
+    have hblock := blockPreClaim fuel (some ⟨ls1.stack.length, xb, .next hb hint counter⟩)
       [(x, counter, org)] [(x, .int t current)] false body cfg env hokB hscopeBody
       le ls2 rBody lsBody (tb, 0) cx fr hbody hpp2 hextBody hrel2 hpre
     refine SimG.mono hblock fun flow ptBody frBody hresult => ?_
@@ -233,7 +244,7 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t : IntTy) (counter bound : ValueI
     have hnLt : counter < lsBody.vals.size :=
       Nat.lt_of_lt_of_le hcounterBase P.mono
     have hbackLive : ∃ next lsN,
-        emitDef (.next t counter) le lsBody = (next, lsN) ∧
+        emitDef (.next hint counter) le lsBody = (next, lsN) ∧
         emitTerm (.br hb [next]) le lsN = ((), lsBack) := by
       rw [rangeBack] at hback
       rw [bind_run, isLive_run hcurBody] at hback
@@ -244,10 +255,10 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t : IntTy) (counter bound : ValueI
     obtain ⟨hnextId, hnextSize, hnextStack, hnextPp, hnextInst⟩ :=
       emitDef_facts hnext P.pp hextN
     obtain ⟨_, _, _, htermInst⟩ := emitTerm_facts hterm hnextPp hextBack
-    have hiNext : instAt cx.fn ptBody = some (.def next (.next t counter)) := by
+    have hiNext : instAt cx.fn ptBody = some (.def next (.next hint counter)) := by
       rw [instAt_eq]
       exact hnextInst
-    have hnextPure : execPure cx frBody (.next t counter) =
+    have hnextPure : execPure cx frBody (.next hint counter) =
         pure (.val (.int t (current + 1))) := by
       simp [execPure, getVal_of hcellBody, expectInt]
     have gnext := goes_next_pure hiNext hnextPure
@@ -301,5 +312,127 @@ theorem lowerRange_sim (n : Nat) (x : VarId) (t : IntTy) (counter bound : ValueI
   have hsim := range_sim cx cfg env x t upper body (hb, 0) (tb, 0)
     headerInv bodyInv post hc hbdy
   exact hsim n start fr hInitial
+
+theorem stmt_range_sim (n : Nat) (lc : Option LoopCtx) (x : VarId) (lo hi : Expr)
+    (body : Core.Block) (org : OriginId)
+    (hokLo : exprOk lo = true) (hokHi : exprOk hi = true) (hokBody : blockOk body = true)
+    (le : LEnv) (ls ls' : LS) (r : Unit) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
+    (fr : Frame) (hscope : ∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope)
+    (hlow : lowerStmt lc (.forRange x lo hi body org) le ls = (r, ls'))
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
+    SimG cx pt fr (execStmt n cfg env (.forRange x lo hi body org)) (fun flow pt' fr' =>
+      flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) := by
+  cases n with
+  | zero => simp only [execStmt]; exact SimG.of_timeout
+  | succ n =>
+    have hr : r = () := Subsingleton.elim _ _
+    subst r
+    have aAll := advB_lowerStmt lc (.forRange x lo hi body org) le ls () ls' hlow
+    simp only [lowerStmt, bind_eq] at hlow
+    obtain ⟨a, lsA, hA, b, lsB, hB, hLive⟩ := hlow
+    have aLive : lsB.Adv ls' := advB_whenLive () (fun _ =>
+      AdvB.bind (advB_intTyOf a) fun hint =>
+        advB_header1 (.data (.int hint)) a
+          (tail := fun hb counter => lowerRange hint counter b hb (fun d xb =>
+            lowerBlock (some ⟨d, xb, .next hb hint counter⟩) [(x, counter, org)] false body))
+          (fun hb counter => advB_lowerRange hint counter b hb
+            (fun d xb => advB_lowerBlock (some ⟨d, xb, .next hb hint counter⟩)
+              [(x, counter, org)] false body)))
+      le lsB () ls' hLive
+    have hextB : ExtT lsB cx.fn.blocks := hext.of_adv aLive
+    have hextA : ExtT lsA cx.fn.blocks := hextB.of_adv (advB_lowerExpr hi _ _ _ _ hB)
+    simp only [execStmt]
+    refine SimG.bind ((claims n).expr lo hokLo le ls a lsA pt cfg env cx fr
+      hA hpp hextA hrel) fun va ptA frA PA => ?_
+    refine SimG.expectInt fun runtimeType start hva => ?_
+    subst hva
+    refine SimG.bind ((claims n).expr hi hokHi le lsA b lsB ptA cfg env cx frA
+      hB PA.pp hextB PA.rel) fun vb ptB frB PB => ?_
+    refine SimG.expectInt fun upperType upper hvb => ?_
+    subst hvb
+    refine SimG.expectSameTy fun htypes => ?_
+    subst htypes
+    obtain ⟨blkB, hcB, hbB, hpB⟩ := LS.pp_some PB.pp
+    rw [whenLive_some _ _ _ hcB] at hLive
+    simp only [bind_eq] at hLive
+    obtain ⟨hint, lsTy, hTy, ⟨hb, params⟩, lsN, hNew,
+      u1, lsT, hTerm, u2, lsH, hSet, hRange⟩ := hLive
+    have hTyState := intTyOf_eq hTy
+    subst lsTy
+    have aRange := advB_lowerRange hint (params.headD 0) b hb
+      (fun _ _ => advB_lowerBlock _ _ _ body) _ _ _ _ hRange
+    have hextH : ExtT lsH cx.fn.blocks := hext.of_adv aRange
+    have eH : lsH = { lsT with cur := some hb } := by
+      rw [setCur_run] at hSet
+      exact (Prod.mk.inj hSet).2.symm
+    have hextT : ExtT lsT cx.fn.blocks := by rw [eH] at hextH; exact hextH
+    have hextN : ExtT lsN cx.fn.blocks := hextT.of_adv (adv_emitTerm hTerm)
+    have hNew0 := hNew
+    rw [newBlock1_run] at hNew0
+    obtain ⟨hIds, eN⟩ := Prod.mk.inj hNew0
+    obtain ⟨hHb, hParams⟩ := Prod.mk.inj hIds
+    have hCounter : params.headD 0 = lsB.vals.size := by rw [← hParams]; rfl
+    have hvalN : lsN.vals.size = lsB.vals.size + 1 := by rw [← eN]; simp
+    have hstackN : lsN.stack = lsB.stack := by rw [← eN]
+    have hcurN : lsN.cur = lsB.cur := by rw [← eN]
+    have hltB : ptB.1 < lsB.blocks.size := (Array.getElem?_eq_some_iff.mp hbB).1
+    have hblkN : lsN.blocks[ptB.1]? = some blkB := by
+      rw [← eN]
+      exact (getElem?_push_lt hltB).trans hbB
+    have hppN : lsN.pp = some ptB := by
+      have h := LS.pp_eq (hcurN.trans hcB) hblkN
+      rw [← hpB] at h
+      exact h
+    obtain ⟨hvalT, hstackT, _, hInst⟩ := emitTerm_facts hTerm hppN hextT
+    have hHeader : lsN.blocks[hb]? = some ⟨[(params.headD 0, .data (.int hint))], #[]⟩ := by
+      rw [hCounter, ← hHb, ← eN]
+      simp
+    have hNe : lsN.cur ≠ some hb := by
+      rw [hcurN, hcB]
+      intro h
+      have hi := Option.some.inj h
+      rw [← hHb] at hi
+      exact Nat.ne_of_lt hltB hi
+    have hHeaderT := (adv_emitTerm hTerm).keep hb _ hNe hHeader
+    have hppH : lsH.pp = some (hb, 0) := by rw [eH]; exact LS.pp_cur hHeaderT
+    obtain ⟨header, hHeaderFinal, hHeaderParams⟩ := hextT.params hHeaderT
+    have hlowCell : frB.vals[a]? = some (.val (.int runtimeType start)) := by
+      rw [PB.same a (PA.lt (a, .val (.int runtimeType start)) (by simp))]
+      exact PA.has (a, _) (by simp)
+    have hboundCell : frB.vals[b]? = some (.val (.int runtimeType upper)) :=
+      PB.has (b, _) (by simp)
+    let counter := params.headD 0
+    let frH := frB.set counter (.val (.int runtimeType start))
+    have hcounterId : counter = lsB.vals.size := hCounter
+    have hboundLt : b < counter := by
+      rw [hcounterId]
+      exact PB.lt (b, .val (.int runtimeType upper)) (by simp)
+    have hcounterLt : counter < lsH.vals.size := by
+      rw [eH]
+      change counter < lsT.vals.size
+      rw [hvalT, hvalN, hcounterId]
+      exact Nat.lt_succ_self _
+    have hboundH : frH.vals[b]? = some (.val (.int runtimeType upper)) := by
+      have hne : counter ≠ b := Nat.ne_of_gt hboundLt
+      simpa [frH, Frame.set, Std.HashMap.getElem?_insert, hne] using hboundCell
+    have hstackH : lsH.stack = lsB.stack := by
+      rw [eH]
+      exact hstackT.trans hstackN
+    have hrelH : Rel cfg env cx frH lsH :=
+      (PB.rel.set counter _).stack_eq hstackH
+    have hsameH : Same counter frB frH := Same.set frB (Nat.le_refl _) _
+    have hinit : RangeInv cfg env cx lsH counter b runtimeType upper frB start frH :=
+      ⟨hsameH, Frame.set_get _ _ _, hboundH, hrelH⟩
+    have hiTerm : instAt cx.fn ptB = some (.term (.br hb [a])) := hInst
+    refine SimG.goes (goes_br1 hiTerm hHeaderFinal hHeaderParams hlowCell)
+      ((lowerRange_sim n x runtimeType hint counter b hb body org upper hokBody cfg env cx
+        hscope le lsH ls' hRange hppH hext ⟨header, hHeaderFinal, hHeaderParams⟩
+        hboundLt hcounterLt frB start frH hinit).mono ?_)
+    rintro flow pt' fr' ⟨hf, hpp', hsame, _, hrel'⟩
+    refine ⟨hf, Post.nil hpp' aAll.vals ?_ hrel'⟩
+    have hprefix : ls.vals.size ≤ counter := by
+      rw [hcounterId]
+      exact Nat.le_trans PA.mono PB.mono
+    exact (PA.comp PB).same.trans (hsame.mono hprefix) (Nat.le_refl _)
 
 end Goose.Lower
