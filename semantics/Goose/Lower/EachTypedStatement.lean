@@ -113,6 +113,7 @@ theorem stmt_each_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initial
     (loop : Option LoopCtx) (input output : LS) (frame : GIR.Frame) (point : GIR.Pt)
     (mode : ∀ owner irView middle,
       lowerEachSource view (lowerEnv cfg.mod env.vars results) input = ((owner, irView), middle) →
+      ∀ finalPoint, middle.pp = some finalPoint →
       (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
         eachSourceRegrows source.rootsEnv.access view)
     (lowered : lowerStmt loop (.forEach x idx view byRef body origin)
@@ -128,7 +129,8 @@ theorem stmt_each_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initial
     (fun owner irView middle hlow hext => plan.sourceSimulation results metadata childSimulation cx
       module returned input middle frame point owner irView hlow atPoint hext related)
     (fun value state success => (plan.initial (n + 1) value success).aliases)
-    (fun owner irView middle hlow _ _ _ => mode owner irView middle hlow)
+    (fun owner irView middle hlow _ _ _ finalPoint sourcePoint =>
+      mode owner irView middle hlow finalPoint sourcePoint)
     (fun value _ state => EachLoopState plan value state)
     (fun value i state => EachLoopState plan value state ∧
       LocTy state.store ⟨value.loc.root, value.loc.path ++ [value.start + i]⟩ plan.element)
@@ -245,8 +247,8 @@ theorem typedStatementLoopSimulation_each_of_mode {n : Nat} {cfg : Cfg} {results
     (blocks : ∀ fuel, fuel < n + 1 → ∀ loop pre pre',
       TypedBlockLoopSimulation fuel cfg results (some loop) pre pre' false body)
     (mode : ∀ env state (source : StmtSource cfg env (.forEach x idx view byRef body origin) state)
-      input point owner irView middle, input.pp = some point →
-      lowerEachSource view (lowerEnv cfg.mod env.vars results) input = ((owner, irView), middle) →
+      input point owner irView middle finalPoint, input.pp = some point →
+      lowerEachSource view (lowerEnv cfg.mod env.vars results) input = ((owner, irView), middle) → middle.pp = some finalPoint →
       (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
         eachSourceRegrows source.rootsEnv.access view)
     (loop : Option LoopCtx) :
@@ -257,7 +259,8 @@ theorem typedStatementLoopSimulation_each_of_mode {n : Nat} {cfg : Cfg} {results
   rw [prepareLoopFlow_stmtEach]
   have simulation := stmt_each_checked_flow_sim_at source results metadata childSimulation blocks cx
     module returned loop input output frame point
-    (fun owner irView middle hlow => mode env state source input point owner irView middle atPoint hlow)
+    (fun owner irView middle hlow finalPoint hfinal =>
+      mode env state source input point owner irView middle finalPoint atPoint hlow hfinal)
     lowered atPoint extension related
   exact simulation.mono fun flow _ pt' fr' _ post =>
     post.elim (fun normal => Or.inl normal) (fun returned => Or.inr (Or.inl returned))
@@ -270,7 +273,7 @@ theorem typedStatementLoopSimulation_each_value {n : Nat} {cfg : Cfg} {results :
     (loop : Option LoopCtx) :
     TypedStatementLoopSimulation (n + 2) cfg results loop (.forEach x idx (.val expr) byRef body origin) := by
   apply typedStatementLoopSimulation_each_of_mode (view := .val expr) childSimulation blocks
-  intro env state source input point owner irView middle atPoint lowered
+  intro env state source input point owner irView middle finalPoint atPoint lowered finalAt
   exact eachSourceMode_val source.rootsEnv.access lowered
 
 theorem typedStatementLoopSimulation_each_variable {n : Nat} {cfg : Cfg} {results : List Ty}
@@ -281,7 +284,7 @@ theorem typedStatementLoopSimulation_each_variable {n : Nat} {cfg : Cfg} {result
     TypedStatementLoopSimulation (n + 2) cfg results loop
       (.forEach x idx (.of (.var ownerId)) byRef body origin) := by
   apply typedStatementLoopSimulation_each_of_mode (view := .of (.var ownerId)) (typedPlaceClaim_var n cfg results ownerId) blocks
-  intro env state source input point owner irView middle atPoint lowered
+  intro env state source input point owner irView middle finalPoint atPoint lowered finalAt
   obtain ⟨plan⟩ := source.eachPlan
   exact plan.sourceMode_variable results input middle point owner irView atPoint lowered
 
@@ -293,7 +296,7 @@ theorem typedStatementLoopSimulation_each_global {n : Nat} {cfg : Cfg} {results 
     TypedStatementLoopSimulation (n + 2) cfg results loop
       (.forEach x idx (.of (.global globalId)) byRef body origin) := by
   apply typedStatementLoopSimulation_each_of_mode (view := .of (.global globalId)) (typedPlaceClaim_global n cfg results globalId) blocks
-  intro env state source input point owner irView middle atPoint lowered
+  intro env state source input point owner irView middle finalPoint atPoint lowered finalAt
   obtain ⟨plan⟩ := source.eachPlan
   exact plan.sourceMode_global results input middle point owner irView atPoint lowered
 
