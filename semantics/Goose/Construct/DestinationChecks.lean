@@ -308,10 +308,33 @@ private def namedPackedIntoGrow : ConstructionM Unit := do
   writeElement destination (bytes [255])
   finishDestination destination
   removeConstructionHeader destination
+  restoreReceivingLayout destination .elements
   adaptDestinationType destination (.grow (.int .u8))
   publishOperation [destination]
 
 #guard observe namedPackedIntoGrow == some ([0,255], 2,
   [.begin 0,.write 0 0,.write 0 1,.relocate 0 .headerRemoval,.publish 0])
+
+
+private def namedPackedLimitedOverflow : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let limitedCapability := { capability with
+    layout := .limited (.int .u8) 2
+    logicalType := .limited (.int .u8) 2 }
+  let destination ← openDestination storage limitedCapability (.limited 2 1) none
+  prepareNamedBinding destination (.varr (.int .u8))
+  writeElement destination (bytes [10])
+  writeElement destination (bytes [20])
+  writeElement destination (bytes [30])
+  finishDestination destination
+  removeConstructionHeader destination
+  restoreReceivingLayout destination (.limited 2 1)
+  publishOperation [destination]
+
+#guard match namedPackedLimitedOverflow ConstructionState.initial with
+  | .fault .capacity state => (state.storage[0]?.map (·.bytes.size)) == some 0 &&
+      state.events == [.begin 0,.stage 0,.write 0 0,.write 0 1,.write 0 2,
+        .relocate 0 .headerRemoval]
+  | _ => false
 
 end Goose.Construct.DestinationChecks

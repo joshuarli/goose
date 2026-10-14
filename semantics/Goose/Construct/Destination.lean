@@ -246,7 +246,8 @@ def openChild (parentId : DestinationId) (logicalType : Ty) (layout : ReceivingL
       let state ← ConstructionM.get
       let id := state.destinations.size
       let capability := { parent.capability with
-        id := id, logicalType := logicalType, request := .value, start := parent.writeEnd }
+        id := id, layout := logicalType, logicalType := logicalType,
+        request := .value, start := parent.writeEnd }
       let child : PendingDestination := ⟨capability, .direct parent.storage, layout, .child parentId, .open 0,
         capability.start + if hasPrefix layout .value then 4 else 0⟩
       ConstructionM.set { state with destinations := state.destinations.push child }
@@ -644,5 +645,20 @@ def prepareNamedBinding (id : DestinationId) (localType : Ty) : ConstructionM Un
     capability := { destination.capability with logicalType := localType }
     layout := if needsPrefix then .packed else destination.layout
     writeEnd := destination.writeEnd + if needsPrefix then 4 else 0 }
+
+
+def restoreReceivingLayout (id : DestinationId) (layout : ReceivingLayout) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  let count ← match destination.progress with
+    | .built count => pure count
+    | _ => ConstructionM.fail .protocol
+  let agrees : Bool := match destination.capability.layout, layout with
+    | .grow _, .elements | .growshrink _, .elements => true
+    | .varr _, .packed => destination.layout == .packed
+    | .arr _ expected, .fixed actual => expected == actual && count == expected
+    | .limited _ expected, .limited actual _ => expected == actual
+    | _, _ => false
+  if !agrees then ConstructionM.fail .protocol
+  replaceDestination id { destination with layout := layout }
 
 end Goose.Construct
