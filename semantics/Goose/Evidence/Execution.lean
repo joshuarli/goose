@@ -93,4 +93,55 @@ theorem RuntimePoint.function_mem {cfg : GCfg} {fn : Func} {pt : Pt} {fr : Frame
     exact Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup)
   | step _ _ ih => exact ih
 
+theorem FunctionEntry.activation {fn : Func} {depth : Nat} {args : List Val}
+    {before : St} {fr : Frame} {after : St}
+    (entry : FunctionEntry fn depth args before fr after) :
+    ∃ act fresh,
+      act = before.nextAct ∧
+      fresh = { before with nextAct := before.nextAct + 1 } ∧
+      enterBlock fn ⟨act, [], {}, depth⟩ 0 (args.map RVal.val) fresh =
+        .ok (instsAt fn (0, 0), fr) after := by
+  obtain ⟨_, act, fresh, allocated, entered⟩ := entry
+  simp only [freshAct, Res.ok.injEq] at allocated
+  exact ⟨act, fresh, allocated.1.symm, allocated.2.symm, entered⟩
+
+theorem RuntimeStep.runAt {cfg : GCfg} {fn : Func} {pt pt' : Pt}
+    {fr fr' : Frame} {st st' : St}
+    (transition : RuntimeStep cfg fn pt fr st pt' fr' st') :
+    ∃ fuel, runAt ⟨cfg, fn⟩ pt fr (fuel + 1) st =
+      runAt ⟨cfg, fn⟩ pt' fr' fuel st' := by
+  cases transition with
+  | @define result op fuel value st' instruction eval =>
+    refine ⟨fuel, ?_⟩
+    unfold Goose.GIR.runAt
+    rw [instsAt_cons instruction]
+    simp only [Goose.GIR.exec, bind_apply, eval]
+    rfl
+  | effect instruction eval =>
+    refine ⟨0, ?_⟩
+    unfold Goose.GIR.runAt
+    rw [instsAt_cons instruction]
+    simp only [Goose.GIR.exec, bind_apply, eval]
+  | branch instruction read enter =>
+    refine ⟨0, ?_⟩
+    unfold Goose.GIR.runAt
+    rw [instsAt_cons instruction]
+    simp only [Goose.GIR.exec, bind_apply, read, enter]
+  | branchTrue instruction test read enter =>
+    refine ⟨0, ?_⟩
+    unfold Goose.GIR.runAt
+    rw [instsAt_cons instruction]
+    simp only [Goose.GIR.exec]
+    rw [← bind_assoc, bind_apply, test]
+    simp only [↓reduceIte]
+    simp only [bind_apply, read, enter]
+  | branchFalse instruction test read enter =>
+    refine ⟨0, ?_⟩
+    unfold Goose.GIR.runAt
+    rw [instsAt_cons instruction]
+    simp only [Goose.GIR.exec]
+    rw [← bind_assoc, bind_apply, test]
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    simp only [bind_apply, read, enter]
+
 end Goose.Evidence
