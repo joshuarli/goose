@@ -243,4 +243,76 @@ theorem PointFactsHold.edge {cx : FnCtx} {certificate : FactCertificate}
     refine ⟨certificate[target]?.getD [], ⟨block, blockAt, ?_⟩, runtimeFacts⟩
     simp [pure, Except.pure]
 
+theorem PointFactsHold.defStep {fuel : Nat} {cx : FnCtx} {vt : Array (Option VTy)}
+    {certificate : FactCertificate} {point : Pt} {fr : Frame} {state after : St}
+    {result : ValueId} {op : Op} {cell : RVal} (validated : validate cx.cfg.mod = .ok ())
+    (member : cx.fn ∈ cx.cfg.mod.allFuncs) (valid : CertificateValid cx.cfg.mod cx.fn vt certificate)
+    (hold : PointFactsHold cx certificate point fr state)
+    (instruction : instAt cx.fn point = some (.def result op))
+    (success : execOp fuel cx fr op state = .ok cell after) :
+    PointFactsHold cx certificate (point.1, point.2 + 1) (withCell fr result cell) after := by
+  obtain ⟨facts, replayed, holds⟩ := hold
+  obtain ⟨outgoing, checked⟩ := valid.instruction replayed instruction
+  have fresh : ∀ reference, op = .arrayLen reference → result ≠ reference := by
+    intro reference same
+    subst op
+    obtain ⟨block, blockAt, _⟩ := replayed
+    have instructionAt : block.insts[point.2]? = some (.def result (.arrayLen reference)) := by
+      simpa only [instAt, blockAt, Option.bind_some] using instruction
+    exact validated_arrayLen_fresh validated member (Array.mem_of_getElem? blockAt)
+      (List.mem_of_getElem? instructionAt)
+  exact ⟨outgoing, replayed.next instruction checked,
+    transfer_def_sound holds fresh success checked⟩
+
+theorem PointFactsHold.effStep {cx : FnCtx} {vt : Array (Option VTy)}
+    {certificate : FactCertificate} {point : Pt} {fr next : Frame} {state after : St}
+    {effect : Effect} (valid : CertificateValid cx.cfg.mod cx.fn vt certificate)
+    (hold : PointFactsHold cx certificate point fr state)
+    (instruction : instAt cx.fn point = some (.eff effect))
+    (success : execEff cx.fn fr effect state = .ok next after) :
+    PointFactsHold cx certificate (point.1, point.2 + 1) next after := by
+  obtain ⟨facts, replayed, holds⟩ := hold
+  obtain ⟨outgoing, checked⟩ := valid.instruction replayed instruction
+  exact ⟨outgoing, replayed.next instruction checked, transfer_effect_sound holds success checked⟩
+
+theorem PointFactsHold.br {cx : FnCtx} {vt : Array (Option VTy)} {certificate : FactCertificate}
+    {point : Pt} {fr next : Frame} {state after : St} {target : BlockId}
+    {operands : List ValueId} {args : List RVal} {insts : List Inst}
+    (valid : CertificateValid cx.cfg.mod cx.fn vt certificate) (terminated : TerminatedBlocks cx.fn)
+    (hold : PointFactsHold cx certificate point fr state)
+    (instruction : instAt cx.fn point = some (.term (.br target operands)))
+    (success : Goose.GIR.enterBlock cx.fn fr target args state = .ok (insts, next) after) :
+    PointFactsHold cx certificate (target, 0) next after := by
+  obtain ⟨facts, replayed, holds⟩ := hold
+  have claims := valid.termClaims terminated replayed instruction
+  exact PointFactsHold.edge holds claims success
+
+theorem PointFactsHold.condFalse {cx : FnCtx} {vt : Array (Option VTy)}
+    {certificate : FactCertificate} {point : Pt} {fr next : Frame} {state after : St}
+    {condition : ValueId} {yes no : BlockId} {yesArgs noArgs : List ValueId}
+    {args : List RVal} {insts : List Inst}
+    (valid : CertificateValid cx.cfg.mod cx.fn vt certificate) (terminated : TerminatedBlocks cx.fn)
+    (hold : PointFactsHold cx certificate point fr state)
+    (instruction : instAt cx.fn point = some (.term (.condbr condition yes yesArgs no noArgs)))
+    (success : Goose.GIR.enterBlock cx.fn fr no args state = .ok (insts, next) after) :
+    PointFactsHold cx certificate (no, 0) next after := by
+  obtain ⟨facts, replayed, holds⟩ := hold
+  have claims := valid.termClaims terminated replayed instruction
+  exact PointFactsHold.edge holds claims.2 success
+
+theorem PointFactsHold.condTrue {cx : FnCtx} {vt : Array (Option VTy)}
+    {certificate : FactCertificate} {point : Pt} {fr next : Frame} {state after : St}
+    {condition : ValueId} {yes no : BlockId} {yesArgs noArgs : List ValueId}
+    {args : List RVal} {insts : List Inst}
+    (valid : CertificateValid cx.cfg.mod cx.fn vt certificate) (terminated : TerminatedBlocks cx.fn)
+    (hold : PointFactsHold cx certificate point fr state)
+    (instruction : instAt cx.fn point = some (.term (.condbr condition yes yesArgs no noArgs)))
+    (comparison : ∀ left right, cx.fn.defOp? condition = some (.cmp .lt .i64 left right) →
+      FactHolds fr state (.lt left right))
+    (success : Goose.GIR.enterBlock cx.fn fr yes args state = .ok (insts, next) after) :
+    PointFactsHold cx certificate (yes, 0) next after := by
+  obtain ⟨facts, replayed, holds⟩ := hold
+  have claims := valid.termClaims terminated replayed instruction
+  exact PointFactsHold.edge (FactsHold.addTrueEdge holds comparison) claims.1 success
+
 end Goose.Proofs.Bounds
