@@ -24,4 +24,11 @@ theorem finishFunction_nondivergent (impl : Impl) (le : LEnv) (ls : LS) (v : Val
         emitTerm (.ret (if impl.body.value.isSome then [v] else []) none) : B Unit) le ls) := by
   simp [finishFunction, bind_run, read_apply, hd]
 
+theorem finishFunction_noResults (impl : Impl) (le : LEnv) (ls : LS) (v : ValueId)
+    (hresults : impl.results.isEmpty = true) :
+    finishFunction impl v le ls =
+      ((do if (← isLive) then
+        emitTerm (.ret (if impl.body.value.isSome then [v] else []) none) : B Unit) le ls) := by
+  simp [finishFunction, bind_run, read_apply, hresults]
+
 end Goose.Lower
