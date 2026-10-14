@@ -1092,4 +1092,427 @@ theorem landExitReplacement_stdout (replacementId : DestinationId) (state : Cons
                   · exact fun _ => rfl
                   · exact keepsOutput_completed_landing _ _ _ _ _ _
 
+
+def PreservesEventPrefix (action : ConstructionM α) : Prop :=
+  ∀ state, state.events <+: (action state).finalState.events
+
+private theorem eventPrefix_bind (action : ConstructionM α) (remaining : α → ConstructionM β)
+    (first : PreservesEventPrefix action) (next : ∀ value, PreservesEventPrefix (remaining value)) :
+    PreservesEventPrefix (action >>= remaining) := by
+  intro state
+  have before := first state
+  cases result : action state with
+  | ok value after =>
+      simp only [bind,result]
+      have extended : state.events <+: after.events := by
+        simpa [result,ConstructionResult.finalState] using before
+      exact extended.trans (next value after)
+  | fault reason after => simpa [bind,result,ConstructionResult.finalState] using before
+
+private theorem eventPrefix_pure (value : α) : PreservesEventPrefix (pure value) := fun _ => List.prefix_rfl
+private theorem eventPrefix_fail (reason : ConstructionFault) :
+    PreservesEventPrefix (ConstructionM.fail (α := α) reason) := fun _ => List.prefix_rfl
+private theorem eventPrefix_get : PreservesEventPrefix ConstructionM.get := fun _ => List.prefix_rfl
+
+private theorem eventPrefix_lookupDestination (id : DestinationId) : PreservesEventPrefix (lookupDestination id) := by
+  intro state
+  simp only [lookupDestination,ConstructionM.get,bind]
+  cases state.destinations[id]? <;> exact List.prefix_rfl
+
+private theorem eventPrefix_lookupStorage (id : StorageId) : PreservesEventPrefix (lookupStorage id) := by
+  intro state
+  simp only [lookupStorage,ConstructionM.get,bind]
+  cases state.storage[id]? <;> exact List.prefix_rfl
+
+private theorem eventPrefix_replaceDestination (id : DestinationId) (destination : PendingDestination) :
+    PreservesEventPrefix (replaceDestination id destination) := by
+  intro state
+  simp only [replaceDestination,ConstructionM.get,bind]
+  split <;> exact List.prefix_rfl
+
+private theorem eventPrefix_replaceStorage (id : StorageId) (storage : ReceivingStorage) :
+    PreservesEventPrefix (replaceStorage id storage) := by
+  intro state
+  simp only [replaceStorage,ConstructionM.get,bind]
+  split <;> exact List.prefix_rfl
+
+private theorem eventPrefix_emit (event : ConstructionEvent) : PreservesEventPrefix (emit event) := by
+  intro state
+  exact List.prefix_append state.events [event]
+
+private theorem eventPrefix_writableDestination (id : DestinationId) : PreservesEventPrefix (writableDestination id) := by
+  apply eventPrefix_bind (lookupDestination id)
+  · exact eventPrefix_lookupDestination id
+  · intro destination
+    apply eventPrefix_bind ConstructionM.get
+    · exact eventPrefix_get
+    · intro state current
+      dsimp only
+      split <;> exact List.prefix_rfl
+
+private theorem eventPrefix_if (condition : Prop) [Decidable condition]
+    (yes no : ConstructionM α) (first : PreservesEventPrefix yes) (second : PreservesEventPrefix no) :
+    PreservesEventPrefix (if condition then yes else no) := by
+  by_cases selected : condition
+  · simpa only [selected,↓reduceIte] using first
+  · simpa only [selected,↓reduceIte] using second
+
+theorem reserveStorage_events_prefix (bytes : ByteArray) (count : Nat) :
+    PreservesEventPrefix (reserveStorage bytes count) := fun _ => List.prefix_rfl
+
+theorem appendStdout_events_prefix (bytes : ByteArray) :
+    PreservesEventPrefix (appendStdout bytes) := fun _ => List.prefix_rfl
+
+theorem adaptDestinationType_events_prefix (id : DestinationId) (ty : Ty) :
+    PreservesEventPrefix (adaptDestinationType id ty) := by
+  apply eventPrefix_bind (writableDestination id)
+  · exact eventPrefix_writableDestination id
+  · intro destination
+    cases destination.progress
+    all_goals try exact fun _ => List.prefix_rfl
+    all_goals
+      apply eventPrefix_if
+      · exact fun _ => List.prefix_rfl
+      · exact eventPrefix_replaceDestination _ _
+
+
+private theorem eventPrefix_protectedAbandonment (discarded : List PendingDestination) :
+    PreservesEventPrefix (protectedAbandonment discarded) := by
+  intro state
+  obtain ⟨suffix,equal⟩ := protectedAbandonment_events discarded state
+  exact ⟨suffix,equal.symm⟩
+
+theorem restoreReceivingLayout_events_prefix (id : DestinationId) (layout : ReceivingLayout)  :
+    PreservesEventPrefix (restoreReceivingLayout id layout) := by
+  apply eventPrefix_bind (writableDestination id)
+  · exact eventPrefix_writableDestination id
+  · intro destination
+    cases destination.progress
+    all_goals try exact fun _ => List.prefix_rfl
+    apply eventPrefix_if
+    · exact fun _ => List.prefix_rfl
+    · exact eventPrefix_replaceDestination _ _
+
+theorem removeConstructionHeader_events_prefix (id : DestinationId)  :
+    PreservesEventPrefix (removeConstructionHeader id) := by
+  apply eventPrefix_bind (writableDestination id)
+  · exact eventPrefix_writableDestination id
+  · intro destination
+    cases destination.progress
+    all_goals try exact eventPrefix_fail .protocol
+    apply eventPrefix_if
+    · exact eventPrefix_fail .protocol
+    · apply eventPrefix_bind (lookupStorage destination.storage)
+      · exact eventPrefix_lookupStorage _
+      · intro storage
+        apply eventPrefix_if
+        · exact eventPrefix_fail .storage
+        · apply eventPrefix_bind (replaceStorage destination.storage _)
+          · exact eventPrefix_replaceStorage _ _
+          · intro _
+            apply eventPrefix_bind (replaceDestination id _)
+            · exact eventPrefix_replaceDestination _ _
+            · intro _; exact eventPrefix_emit _
+
+
+
+private theorem eventPrefix_landReceiving (storageId : StorageId) (receivingStart payloadStart : Nat) :
+    PreservesEventPrefix (landReceivingStorage storageId receivingStart payloadStart) := by
+  intro state
+  cases present : state.storage[storageId]? with
+  | none => simp [landReceivingStorage,present,ConstructionResult.finalState]
+  | some storage =>
+      simp only [landReceivingStorage,present]
+      split <;> exact List.prefix_rfl
+
+private theorem eventPrefix_completedLanding (replacementId supersededId : DestinationId) (count : Nat)
+    (replacement superseded : PendingDestination)
+    (parentUpdate : Option (DestinationId × PendingDestination)) :
+    PreservesEventPrefix (landCompletedReplacement replacementId supersededId count replacement superseded parentUpdate) := by
+  apply eventPrefix_bind (lookupStorage replacement.storage)
+  · exact eventPrefix_lookupStorage _
+  · intro _
+    apply eventPrefix_if
+    · exact fun _ => List.prefix_rfl
+    · apply eventPrefix_bind ConstructionM.get
+      · exact eventPrefix_get
+      · intro state
+        apply eventPrefix_bind (protectedAbandonment _)
+        · exact eventPrefix_protectedAbandonment _
+        · intro _
+          apply eventPrefix_bind (landReceivingStorage _ _ _)
+          · exact eventPrefix_landReceiving _ _ _
+          · intro _
+            apply eventPrefix_bind (replaceDestination replacementId _)
+            · exact eventPrefix_replaceDestination _ _
+            · intro _
+              cases parentUpdate with
+              | none =>
+                  apply eventPrefix_if
+                  · exact eventPrefix_emit _
+                  · exact eventPrefix_pure ()
+              | some parent =>
+                  apply eventPrefix_bind (replaceDestination parent.1 parent.2)
+                  · exact eventPrefix_replaceDestination _ _
+                  · intro _
+                    apply eventPrefix_if
+                    · exact eventPrefix_emit _
+                    · exact eventPrefix_pure ()
+
+theorem landExitReplacement_events_prefix (replacementId : DestinationId)  :
+    PreservesEventPrefix (landExitReplacement replacementId) := by
+  apply eventPrefix_bind (lookupDestination replacementId)
+  · exact eventPrefix_lookupDestination replacementId
+  · intro replacement
+    cases replacement.use with
+    | receiver => exact fun _ => List.prefix_rfl
+    | child parentId => exact fun _ => List.prefix_rfl
+    | replacement supersededId =>
+      cases replacement.progress
+      all_goals try exact fun _ => List.prefix_rfl
+      rename_i count
+      apply eventPrefix_bind (lookupDestination supersededId)
+      · exact eventPrefix_lookupDestination supersededId
+      · intro superseded
+        cases superseded.progress
+        all_goals try exact fun _ => List.prefix_rfl
+        all_goals
+          apply eventPrefix_if
+          · exact fun _ => List.prefix_rfl
+          · cases superseded.use with
+            | receiver => exact eventPrefix_completedLanding _ _ _ _ _ _
+            | replacement _ => exact fun _ => List.prefix_rfl
+            | child parentId =>
+                apply eventPrefix_bind (lookupDestination parentId)
+                · exact eventPrefix_lookupDestination _
+                · intro parent
+                  cases parent.progress
+                  all_goals try exact fun _ => List.prefix_rfl
+                  apply eventPrefix_if
+                  · exact fun _ => List.prefix_rfl
+                  · exact eventPrefix_completedLanding _ _ _ _ _ _
+
+
+
+theorem abandonPreservingExit_events_prefix (id replacementId : DestinationId) :
+    PreservesEventPrefix (abandonPreservingExit id replacementId) := by
+  intro state
+  obtain ⟨suffix,equal⟩ := abandonPreservingExit_events state id replacementId
+  exact ⟨suffix,equal.symm⟩
+
+theorem recordCopy_events_prefix (source : CopySource) (id : DestinationId) :
+    PreservesEventPrefix (recordCopy source id) := by
+  unfold recordCopy
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+
+set_option maxHeartbeats 600000 in
+theorem writeElement_events_prefix (id : DestinationId) (bytes : ByteArray) :
+    PreservesEventPrefix (writeElement id bytes) := by
+  unfold writeElement
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+theorem finishDestination_events_prefix (id : DestinationId) :
+    PreservesEventPrefix (finishDestination id) := by
+  unfold finishDestination
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+theorem attachChild_events_prefix (parent child : DestinationId) :
+    PreservesEventPrefix (attachChild parent child) := by
+  unfold attachChild
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+set_option maxHeartbeats 1200000 in
+theorem attachExtension_events_prefix (parent child : DestinationId) :
+    PreservesEventPrefix (attachExtension parent child) := by
+  unfold attachExtension
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+set_option maxHeartbeats 600000 in
+theorem attachElementExtension_events_prefix (parent child : DestinationId) :
+    PreservesEventPrefix (attachElementExtension parent child) := by
+  unfold attachElementExtension
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+theorem publishElementDestination_events_prefix (id : DestinationId) :
+    PreservesEventPrefix (publishElementDestination id) := by
+  unfold publishElementDestination
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+theorem retireRepeatedSource_events_prefix (parent source : DestinationId) :
+    PreservesEventPrefix (retireRepeatedSource parent source) := by
+  unfold retireRepeatedSource
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+theorem truncateConstructionStorage_events_prefix (storage : StorageId) (start finish count : Nat) (owner : Option DestinationId) (retainSlots : Bool) :
+    PreservesEventPrefix (truncateConstructionStorage storage start finish count owner retainSlots) := by
+  unfold truncateConstructionStorage
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+set_option maxHeartbeats 600000 in
+theorem prepareNamedBinding_events_prefix (id : DestinationId) (ty : Ty) :
+    PreservesEventPrefix (prepareNamedBinding id ty) := by
+  unfold prepareNamedBinding
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+theorem fitStagedDestination_events_prefix (id : DestinationId) :
+    PreservesEventPrefix (fitStagedDestination id) := by
+  unfold fitStagedDestination
+  repeat' first
+    | exact eventPrefix_pure _
+    | exact eventPrefix_fail _
+    | exact eventPrefix_get
+    | exact eventPrefix_writableDestination _
+    | exact eventPrefix_lookupDestination _
+    | exact eventPrefix_lookupStorage _
+    | exact eventPrefix_replaceDestination _ _
+    | exact eventPrefix_replaceStorage _ _
+    | exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_bind
+    | apply eventPrefix_if
+    | split
+    | intro value
+
+
 end Goose.Construct
