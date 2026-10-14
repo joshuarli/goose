@@ -109,6 +109,41 @@ private def staged : Module := moduleOf #[
   [.begin 0, .write 0 0, .publish 0, .begin 1, .stage 1,
     .write 1 0, .write 1 1, .copy (.storage 1 []) 1, .publish 1])
 
+private def knownTextCount : Module := moduleOf #[implementation "entry"
+  #[localVar "owner" (.limited (.int .u8) 4)]
+  (.mk 0 [.letS 0 (.str (.limited (.int .u8) 4) [.text "A", .text "箱"] 0) 0,
+    .print [.view (.of (.var 0))] 0] none)]
+
+#guard observes knownTextCount == some ("A箱\n".toUTF8.data.toList,
+  [.begin 0, .write 0 0, .write 0 1, .write 0 2, .write 0 3, .publish 0])
+
+private def knownFixedCopyCount : Module := moduleOf #[implementation "entry"
+  #[localVar "source" (.arr (.int .u8) 2), localVar "owner" (.limited (.int .u8) 3)]
+  (.mk 0 [.letS 0 (.bytes (.arr (.int .u8) 2) [65, 66] 0) 0,
+    .letS 1 (.copy (.limited (.int .u8) 3) (.var 0) 0) 0,
+    .print [.view (.of (.var 1))] 0] none)]
+
+#guard observes knownFixedCopyCount == some ([65, 66, 10],
+  [.begin 0, .copy (.storage 0 []) 0, .write 0 0, .write 0 1, .publish 0])
+
+private def boundedCopyCount : Module := moduleOf #[implementation "entry"
+  #[localVar "source" (.limited (.int .u8) 2), localVar "owner" (.limited (.int .u8) 2)]
+  (.mk 0 [.letS 0 (.bytes (.limited (.int .u8) 2) [65] 0) 0,
+    .letS 1 (.copy (.limited (.int .u8) 2) (.var 0) 0) 0,
+    .print [.view (.of (.var 1))] 0] none)]
+
+#guard observes boundedCopyCount == some ([65, 10],
+  [.begin 0, .write 0 0, .publish 0, .begin 1, .stage 1, .copy (.storage 0 []) 1,
+    .write 1 0, .copy (.storage 2 []) 1, .publish 1])
+
+private def dynamicTextCount : Module := moduleOf #[implementation "entry"
+  #[localVar "owner" (.limited (.int .u8) 2)]
+  (.mk 0 [.letS 0 (.str (.limited (.int .u8) 2) [.text "A", .expr (.lit .i64 7)] 0) 0,
+    .print [.view (.of (.var 0))] 0] none)]
+
+#guard observes dynamicTextCount == some ([65, 55, 10],
+  [.begin 0, .stage 0, .write 0 0, .write 0 1, .copy (.storage 1 []) 0, .publish 0])
+
 private def shrinkThenPush : Module := moduleOf #[implementation "entry"
   #[localVar "owner" (.limited (.int .u8) 3)]
   (.mk 0 [.letS 0 (.bytes (.limited (.int .u8) 3) [65, 66, 67] 0) 0,
@@ -185,6 +220,45 @@ private def nestedEscape : Module := moduleOf #[
   [.begin 0, .begin 1, .write 1 0, .write 0 0, .begin 2, .write 2 0,
     .begin 3, .begin 4, .write 4 0, .write 3 0,
     .abandon 2, .abandon 0, .relocate 3 .exitValue, .publish 3])
+
+private def helperLocalExit : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
+  implementation "target" #[] (.mk 0 [.expr (.call 2 [] 0) 0]
+    (some (.bytes (.varr (.int .u8)) [67] 0))) #[⟨.varr (.int .u8), .value, none⟩],
+  implementation "helper" #[localVar "result" (.grow (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.grow (.int .u8)) [66] 0) 0,
+      .returnFrom 0 [.resultLocal 0 0] 0] none)] #[⟨1, []⟩]
+
+#guard observes helperLocalExit == some ([66, 10],
+  [.begin 0, .begin 1, .write 1 0, .publish 1, .copy (.storage 1 []) 0,
+    .write 0 0, .publish 0])
+
+private def helperLocalCollision : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
+  implementation "target" #[localVar "result" (.grow (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.grow (.int .u8)) [65] 0) 0, .expr (.call 2 [] 0) 0]
+      (some (.resultLocal 0 0))) #[⟨.varr (.int .u8), .value, some 0⟩],
+  implementation "helper" #[localVar "result" (.grow (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.grow (.int .u8)) [66] 0) 0,
+      .returnFrom 0 [.resultLocal 0 0] 0] none)] #[⟨1, []⟩]
+
+#guard observes helperLocalCollision == some ([66, 10],
+  [.begin 0, .write 0 0, .begin 1, .write 1 0, .publish 1, .begin 2,
+    .copy (.storage 2 []) 2, .write 2 0, .abandon 0, .relocate 2 .exitValue, .publish 2])
+
+private def acceptedExitModule (module : Module) : Module := { module with
+  types := #[.int .u8, .grow (.int .u8), .varr (.int .u8)]
+  impls := module.impls.mapIdx fun index impl => { impl with summary := .known ⟨[], [], [], [], [], if index == 1 then [0] else [], if index == 2 then [0] else [], if index == 2 then [0] else [], true, index == 0⟩ }
+  contexts := module.impls.mapIdx fun index impl =>
+    ⟨index, "", [], List.replicate impl.results.size [], []⟩
+  origins := #[⟨0, 17, "let"⟩] }
+
+#guard Run.validateBytes (Writer.module (acceptedExitModule helperLocalExit)).toUTF8 == ("[\"ok\"]", 0)
+#guard Run.validateBytes (Writer.module (acceptedExitModule helperLocalCollision)).toUTF8 == ("[\"ok\"]", 0)
+#guard (Run.runBytes {} (Writer.module (acceptedExitModule helperLocalExit)).toUTF8).2 == 0
+#guard (Run.runBytes {} (Writer.module (acceptedExitModule helperLocalCollision)).toUTF8).2 == 0
 
 private def recursion : Module := moduleOf #[
   implementation "entry" #[localVar "result" (.int .i64)]
