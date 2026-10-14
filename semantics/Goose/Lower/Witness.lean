@@ -2,6 +2,7 @@ import Goose.Proofs.Lower
 import Goose.Core.Run
 import Goose.Lower.Commands
 import Goose.Lower.While
+import Goose.Lower.Range
 
 /-!
 Checks that the lowering theorem is not vacuous: committed goldens inside the
@@ -79,5 +80,62 @@ def hasCoveredWhile (bs : ByteArray) : Bool :=
 #guard (agreeLine .release branches.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"assert\""
 #guard (agreeLine .debug branches.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"assert\""
 #guard (agreeLine .debug intOverflow.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"int_overflow\""
+
+open Goose.Core Goose.GIR
+
+def rangeBody : Core.Block :=
+  .mk 1 [.print [.expr (.read (.var 0))] 0] none
+
+def rangeStmt : Stmt := .forRange 0 (.lit .i64 0) (.lit .i64 3) rangeBody 0
+
+def rangeModule : Core.Module :=
+  let impl : Core.Impl :=
+    { name := "main", params := #[], results := #[],
+      vars := #[⟨"i", .int .i64, .immutable, 1, 0⟩],
+      body := .mk 0 [rangeStmt] none, summary := .unknown }
+  { files := #["range.goose"], types := #[.int .i64], globals := #[],
+    impls := #[impl],
+    contexts := #[⟨0, "main", [], [], []⟩], entry := 0,
+    origins := #[⟨0, 1, "range"⟩] }
+
+def rangeVars : Array LocalVar := #[⟨"i", .int .i64, .immutable, 1, 0⟩]
+
+def rangeBuilder : LS :=
+  (lowerStmt none rangeStmt (lowerEnv rangeModule rangeVars) startLS).2
+
+def rangeFunction : Func :=
+  { name := "range", params := [], results := [],
+    slots := rangeVars.mapIdx fun i lv => ⟨lv.ty, lv.kind, lv.scope, i⟩,
+    scopes := #[none, some 0], blocks := finishBlocks rangeBuilder.blocks,
+    summary := .unknown, org := none }
+
+theorem concrete_range_statement (n : Nat) (p : NumProfile) :
+    SimG ⟨⟨p, lower rangeModule⟩, rangeFunction⟩ (0, 0) ⟨0, [], {}, 0⟩
+      (execStmt n ⟨p, rangeModule⟩ ⟨rangeVars, 0, [], 0⟩ rangeStmt)
+      (fun flow pt' fr' => flow = .normal .unit ∧
+        Post ⟨p, rangeModule⟩ ⟨rangeVars, 0, [], 0⟩ ⟨⟨p, lower rangeModule⟩, rangeFunction⟩
+          startLS ⟨0, [], {}, 0⟩ rangeBuilder fr' pt' []) := by
+  apply stmt_range_sim n none 0 (.lit .i64 0) (.lit .i64 3) rangeBody 0 rfl rfl rfl
+    (lowerEnv rangeModule rangeVars) startLS rangeBuilder () (0, 0)
+    ⟨p, rangeModule⟩ ⟨rangeVars, 0, [], 0⟩ ⟨⟨p, lower rangeModule⟩, rangeFunction⟩
+    ⟨0, [], {}, 0⟩
+  · exact ⟨⟨"i", .int .i64, .immutable, 1, 0⟩, rfl, rfl⟩
+  · apply Prod.ext
+    · exact Subsingleton.elim _ _
+    · rfl
+  · rfl
+  · exact extT_finish rangeBuilder
+  · exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
+
+#guard match Core.validate rangeModule, GIR.validate (lower rangeModule) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+#guard !moduleOk rangeModule
+#guard match Core.eval 50 .release rangeModule, GIR.run 100 .release (lower rangeModule) with
+  | .done .returned "0\n1\n2\n", .done .returned "0\n1\n2\n" => true
+  | _, _ => false
+#guard match Core.eval 50 .debug rangeModule, GIR.run 100 .debug (lower rangeModule) with
+  | .done .returned "0\n1\n2\n", .done .returned "0\n1\n2\n" => true
+  | _, _ => false
 
 end Goose.Lower.Witness
