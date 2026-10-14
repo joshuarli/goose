@@ -601,4 +601,14 @@ theorem validated_no_definition_avoiding_path_to_term {m : Goose.GIR.Module} {fn
     rw [samePoint] at atTerm
     exact terminated_no_term_before_def terminated definition last.2 earlier term atTerm
 
+theorem RuntimeStepsAvoid.frame_identity {cfg : GCfg} {fn : Func} {ids : List ValueId}
+    {pt pt' : Pt} {fr fr' : Frame} {st st' : St}
+    (history : RuntimeStepsAvoid cfg fn ids pt fr st pt' fr' st') :
+    fr'.act = fr.act ∧ fr'.depth = fr.depth := by
+  induction history with
+  | refl => exact ⟨rfl, rfl⟩
+  | next transition unwritten rest ih =>
+    have identity := transition.frame_identity
+    exact ⟨ih.1.trans identity.1, ih.2.trans identity.2⟩
+
 end Goose.Evidence
