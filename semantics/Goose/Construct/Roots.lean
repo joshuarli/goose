@@ -1,4 +1,5 @@
 import Goose.Construct.Access
+import Goose.Construct.Targets
 
 
 
@@ -38,6 +39,7 @@ structure PEnv where
   
   scopes : List Nat
   escaping : Array (List (Nat × List (List RootRef))) := #[]
+  targetEscapes : Array (List Nat) := #[]
 
 def rejP (r : Rule) (msg : String) : P α := throw ⟨r, msg⟩
 
@@ -588,9 +590,7 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
           noteReceivingCapacity env localVar.ty .value expression
       | _ => pure ()
     liftV (checkContents env c args argRoots)
-    let escapes := match callee.summary with
-      | .known summary => summary.escapes
-      | .unknown => List.range env.mod.targets.size
+    let escapes := env.targetEscapes[context.impl]?.getD []
     if escapes.any (fun target => (env.mod.targets[target]?).any (·.contains env.ctx.impl)) then
       noteResultConstruction env
     rpCall env c argRoots
@@ -1048,7 +1048,10 @@ def checkContextEscapes (m : Module) (ctx : Context)
   checkAnnotationShape m impl ctx
   checkResultShape m impl ctx
   checkContentShape m impl ctx
-  let env : PEnv := ⟨m, impl, ctx, [], escaping⟩
+  let actualEscapes ← match bodyTargets m with
+    | .ok escapes => pure escapes
+    | .error message => reject .call message
+  let env : PEnv := ⟨m, impl, ctx, [], escaping, actualEscapes⟩
   let ((), st) ← (do
       let (_, _) ← rpBlockValue env [] impl.body
       if let some expression := impl.body.value then
@@ -1083,7 +1086,7 @@ def checkInitRoots (m : Module) (g : GlobalId) : V Unit :=
   match m.globals[g]? with
   | none => pure ()
   | some gl => do
-    let env : PEnv := ⟨m, initImpl, initContext, [], #[]⟩
+    let env : PEnv := ⟨m, initImpl, initContext, [], #[], #[]⟩
     let (_, st) ← (do
       let roots ← rpExpr env gl.init
       noteReceivingCapacity env gl.ty .value gl.init

@@ -80,4 +80,18 @@ private def limitedWithAbort : Impl := { limitedLiteral (.bytes (.limited (.int 
 #guard !accepts { module with impls := #[{ implementation with
   summary := .known ⟨[],[],[],[],[],[0,1],[],[],false,false⟩ }] } context
 
+
+private def conservativeAbortHelper : Impl :=
+  ⟨"abort-helper",#[],#[],#[],.mk 0 [.abort "abort" 0] none,
+    .known ⟨[],[],[],[],[],[],[0],[0],true,false⟩⟩
+private def conservativeAbortCaller : Impl :=
+  ⟨"abort-caller",#[],#[⟨array,.value,none⟩],#[],
+    .mk 0 [.expr (.call 1 [] 0) 0,.abort "abort" 0] none,
+    .known ⟨[],[],[],[],[],[],[],[],true,false⟩⟩
+private def conservativeAbortContext : Context := ⟨0,"abort-caller",[],[[]],[]⟩
+#guard accepts { module with
+  impls := #[conservativeAbortCaller,conservativeAbortHelper]
+  contexts := #[conservativeAbortContext,⟨1,"abort-helper",[],[],[]⟩]
+  targets := #[⟨0,[]⟩] } conservativeAbortContext
+
 end Goose.Construct.RootChecks
