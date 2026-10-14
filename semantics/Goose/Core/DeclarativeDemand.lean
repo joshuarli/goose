@@ -36,6 +36,10 @@ structure DeclarativeFrameDemand (access : AccessEnv) (point : DemandPoint)
 
 structure DeclarativePlanDemand (m : Module) (owner : Nat)
     (plan : Array DemandPoint) : Prop where
+  sourceTotal : ∃ expected, DemandNode.expectedPoints m owner = .ok expected
+  coverage : ∀ expected, DemandExpectedAt m owner expected →
+    ∃ point, point ∈ plan.toList ∧ point.path = expected.path ∧
+      point.phase = expected.phase ∧ DemandPoint.sameFrameMembership point expected.toPoint
   access : ∃ access, demandAccess? m owner = some access ∧
     ∀ expected, DemandExpectedAt m owner expected →
       (expected.phase = .mutation →
@@ -48,7 +52,9 @@ structure DeclarativePlanDemand (m : Module) (owner : Nat)
 
 def DeclarativeDemand (m : Module) : Prop :=
   ∃ plans, PlansWellFormed m plans ∧
-    ∀ owner plan, plans[owner]? = some plan → DeclarativePlanDemand m owner plan
+    (∀ owner plan, plans[owner]? = some plan → DeclarativePlanDemand m owner plan) ∧
+    (m.profile ≠ .pilot → ∀ owner, owner < m.contexts.size + m.globals.size →
+      ∃ plan, plans[owner]? = some plan)
 
 private theorem rootSeparate_of_noOverlap {owner alias : RootRef}
     (apart : rootsMayOverlap owner alias = false) : DemandRootSeparate owner alias := by
@@ -101,9 +107,13 @@ private theorem frameDemand_of_safe {access : AccessEnv} {point expected : Deman
 private theorem planDemand_of_approvals {m : Module} {owner : Nat}
     {plan : Array DemandPoint} {expected : List DemandExpectedPoint}
     (walk : DemandNode.expectedPoints m owner = .ok expected)
-    (approvals : DemandPlanApprovals m owner plan expected) :
+    (approvals : DemandPlanApprovals m owner plan expected)
+    (coverage : ∀ occurrence, DemandExpectedAt m owner occurrence →
+      ∃ point, point ∈ plan.toList ∧ point.path = occurrence.path ∧
+        point.phase = occurrence.phase ∧
+          DemandPoint.sameFrameMembership point occurrence.toPoint) :
     DeclarativePlanDemand m owner plan := by
-  refine ⟨approvals.access, approvals.accessMatches, ?_⟩
+  refine ⟨⟨expected, walk⟩, coverage, approvals.access, approvals.accessMatches, ?_⟩
   intro occurrence source
   obtain ⟨points, hwalk, member⟩ := source
   rw [walk] at hwalk
@@ -132,10 +142,16 @@ theorem validate_declarativeDemand (m : Module) (accepted : validate m = .ok ())
   have checked := (Sound.validate_modOk m accepted).demand
   obtain ⟨plans, derived, wellFormed⟩ := deriveModuleDemand_ok_wellFormed m checked
   obtain ⟨approvals, _⟩ := deriveModuleDemand_ok_approvals m plans derived
-  refine ⟨plans, wellFormed, ?_⟩
-  intro owner plan selected
-  obtain ⟨⟨expected, walk, approved⟩⟩ := approvals owner plan selected
-  exact planDemand_of_approvals walk.down approved
+  refine ⟨plans, wellFormed, ?_, ?_⟩
+  · intro owner plan selected
+    obtain ⟨⟨expected, walk, approved⟩⟩ := approvals owner plan selected
+    exact planDemand_of_approvals walk.down approved
+      (wellFormed.2 owner plan selected).2.2.1
+  · intro shrink owner ownerIn
+    have size : plans.size = m.contexts.size + m.globals.size := by
+      simpa [PlansWellFormed, shrink] using wellFormed.1
+    have bound : owner < plans.size := by omega
+    exact ⟨plans[owner], Array.getElem?_eq_some_iff.mpr ⟨bound, rfl⟩⟩
 
 theorem DeclarativePlanDemand.directShrink {m : Module} {owner : Nat}
     {plan : Array DemandPoint} (demand : DeclarativePlanDemand m owner plan)

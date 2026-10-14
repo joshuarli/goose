@@ -70,6 +70,35 @@ example (slots : Array Val) :
 
 
 
+private def failedExtractionModule : Module := {
+  emptyModule .shrink with
+  impls := #[{
+    name := "main"
+    params := #[]
+    results := #[]
+    vars := #[]
+    body := .mk 0 [.clear (.var 0) 0] none
+    summary := .unknown }] }
+
+#guard match DemandNode.expectedPoints failedExtractionModule 0 with
+  | .ok _ => false
+  | .error _ => true
+
+example {m : Module} {owner : Nat} {plan : Array DemandPoint} {failure : Rejection}
+    (failed : DemandNode.expectedPoints m owner = .error failure) :
+    ¬ DeclarativePlanDemand m owner plan := by
+  intro demand
+  obtain ⟨expected, total⟩ := demand.sourceTotal
+  rw [failed] at total
+  cases total
+
+example {m : Module} {owner : Nat} {expected : DemandExpectedPoint}
+    (source : DemandExpectedAt m owner expected) :
+    ¬ DeclarativePlanDemand m owner #[] := by
+  intro demand
+  obtain ⟨point, member, _⟩ := demand.coverage expected source
+  simp at member
+
 #print axioms Goose.Core.validate_declarativeDemand
 #print axioms Goose.Core.DeclarativePlanDemand.directShrink
 #print axioms Goose.Core.DeclarativePlanDemand.unknownCall
