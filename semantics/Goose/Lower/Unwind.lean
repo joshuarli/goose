@@ -11,6 +11,28 @@ def releaseScopes (env : Env) : List (ScopeId × ScopeInst) → M Unit
     Core.releaseScope env scope scopeInstance
     releaseScopes env rest
 
+theorem releaseScope_same_activation {env env' : Env} (hvars : env.vars = env'.vars)
+    (hact : env.act = env'.act) (scope : ScopeId) (scopeInstance : ScopeInst) :
+    Core.releaseScope env scope scopeInstance = Core.releaseScope env' scope scopeInstance := by
+  funext state
+  simp only [Core.releaseScope, hvars, hact]
+
+theorem releaseScopes_same_activation {env env' : Env} (hvars : env.vars = env'.vars)
+    (hact : env.act = env'.act) (scopes : List (ScopeId × ScopeInst)) :
+    releaseScopes env scopes = releaseScopes env' scopes := by
+  induction scopes with
+  | nil => rfl
+  | cons scope rest ih =>
+    simp only [releaseScopes, releaseScope_same_activation hvars hact scope.1 scope.2, ih]
+
+theorem releaseScopes_entered (env : Env) (scope : ScopeId) (scopeInstance : ScopeInst) :
+    releaseScopes { env with scopes := (scope, scopeInstance) :: env.scopes }
+      ((scope, scopeInstance) :: env.scopes) =
+    (Core.releaseScope env scope scopeInstance >>= fun _ => releaseScopes env env.scopes) := by
+  rw [releaseScopes_same_activation
+    (env := { env with scopes := (scope, scopeInstance) :: env.scopes }) (env' := env) rfl rfl]
+  rfl
+
 private theorem erase_absent (map : Std.HashMap RootInst Val) (root : RootInst)
     (h : map.contains root = false) : map.erase root = map := by
   cases map with
