@@ -32,4 +32,6 @@ Removed the emitted-body-diagnostics, forkcursor, profile, and upstream-base32 c
 
 Preserved `../goose-rfc9-gig-perf-20261011` (115.7 MB). It is not a registered worktree and contains C inputs, result data, scripts, and draft PR text.
 
-Preserved `.work/tmp/construct-validation-src-20261014` because its 560 MB may include unique source edits. Build caches under `.work/wt/verify`, `.work/wt/verify-construct`, and `finish-*` remain available for campaign checks.
+Removed the obsolete 560 MB copied validation tree after checking its source against reachable local Git history. Its one unique older execution-check snapshot is preserved at `archive/winddown-20261014-validation-scratch` (`20ba2324`), in `semantics/Goose/Construct/ExecutionChecks.lean`; it is unverified evidence, not a merge candidate. The temporary decoder wrapper referenced disposable generated input and is superseded by committed source fixtures.
+
+Removed 49 clean inactive campaign checkouts in the first pass, then five completed finish, staging, and cleanup checkouts. All candidate branch refs remain except the fully merged integration-staging branch. Removed two clean inactive historical baseline checkouts after confirming their commits remain reachable and no process referenced their paths. Nine clean worktrees under `.work/wt` remain for baseline and expensive artifact reuse, named in the campaign handoff. No registered external worktree remains.
