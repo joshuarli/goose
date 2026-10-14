@@ -632,4 +632,185 @@ theorem FactsHold.defKills {fuel : Nat} {cx : FnCtx} {fr : Frame} {op : Op} {res
     subst after
     exact FactsHold.killValue hold result cell
 
+private theorem snapshotFold_sound {fr : Frame} {state : St} {source : Facts}
+    {reference result : ValueId}
+    (generated : ∀ found bound, .lenGe found bound ∈ source → found = reference →
+      FactHolds fr state (.viewLenGe result bound)) :
+    ∀ {initial : Facts}, FactsHold fr state initial →
+      FactsHold fr state (source.foldl (fun acc fact => match fact with
+        | .lenGe found bound => if found == reference then addFact acc (.viewLenGe result bound) else acc
+        | _ => acc) initial) := by
+  induction source with
+  | nil => intro initial hold; exact hold
+  | cons fact source ih =>
+    intro initial hold
+    apply ih (fun found bound member => generated found bound (by simp [member]))
+    cases fact with
+    | ge0 | lt | viewLenGe => exact hold
+    | lenGe found bound =>
+      by_cases same : found = reference
+      · simp only [same, beq_self_eq_true, ↓reduceIte]
+        exact FactsHold.add hold (generated found bound (by simp) same)
+      · simpa [beq_eq_false_iff_ne.mpr same] using hold
+
+theorem transfer_def_sound {fuel : Nat} {cx : FnCtx} {fr : Frame} {op : Op} {result : ValueId}
+    {state after : St} {cell : RVal} {facts outgoing : Facts}
+    (hold : FactsHold fr state facts)
+    (freshLength : ∀ reference, op = .arrayLen reference → result ≠ reference)
+    (success : execOp fuel cx fr op state = .ok cell after)
+    (checked : transferInst cx.cfg.mod cx.fn facts (.def result op) = .ok outgoing) :
+    FactsHold (withCell fr result cell) after outgoing := by
+  have survives := FactsHold.defKills (result := result) hold success
+  cases op with
+  | constInt type number =>
+    cases type <;> simp [transferInst, killsLengths, pure, Except.pure] at checked
+    all_goals first
+      | (subst outgoing; exact survives)
+      | (split at checked
+         · subst outgoing
+           exact FactsHold.add survives (constInt_fact (by assumption) (by simpa [execOp] using success))
+         · subst outgoing
+           exact survives)
+  | arrayLen reference =>
+    simp [transferInst, killsLengths, pure, Except.pure] at checked
+    subst outgoing
+    obtain ⟨nonnegative, length⟩ := arrayLen_facts (freshLength reference rfl)
+      (by simpa [execOp] using success)
+    exact FactsHold.add (FactsHold.add survives length) nonnegative
+  | snapshot mode reference =>
+    simp only [transferInst, killsLengths, Bool.false_eq_true, ↓reduceIte,
+      pure, Except.pure, Except.ok.injEq] at checked
+    subst outgoing
+    have generated : ∀ found bound, .lenGe found bound ∈ Goose.GIR.killValue facts result →
+        found = reference → FactHolds (withCell fr result cell) after (.viewLenGe result bound) := by
+      intro found bound member same
+      subst found
+      obtain ⟨original, kept⟩ := List.mem_filter.mp member
+      have fresh : result ≠ bound := by
+        intro same
+        subst bound
+        simp [Fact.mentions] at kept
+      exact snapshot_fact fresh (hold (.lenGe reference bound) original)
+        (by simpa [execOp] using success)
+    have combined := snapshotFold_sound (source := Goose.GIR.killValue facts result)
+      (initial := Goose.GIR.killValue facts result) generated survives
+    exact combined
+  | indexProven view index =>
+    by_cases justified : provesIndex facts view index = true
+    · simp [transferInst, justified, killsLengths, pure, Except.pure] at checked
+      subst outgoing
+      exact survives
+    · have unjustified : provesIndex facts view index = false := Bool.eq_false_iff.mpr justified
+      simp [transferInst, unjustified, bind, Except.bind] at checked
+  | _ =>
+    simp [transferInst, pure, Except.pure] at checked
+    subst outgoing
+    exact survives
+
+theorem ArrayLenAt.sameStore {state after : St} {loc : Loc} {len : Nat}
+    (stores : after.store = state.store) (hold : ArrayLenAt state loc len) :
+    ArrayLenAt after loc len := by
+  obtain ⟨array, resizable, read, length⟩ := hold
+  have stored : state.store.read loc = .ok array := by
+    unfold readLoc at read
+    cases found : state.store.read loc with
+    | error kind => simp [found] at read
+    | ok value =>
+      simp only [found, Res.ok.injEq] at read
+      simp [← read.1]
+  refine ⟨array, resizable, by simp [readLoc, stores, stored], ?_⟩
+  cases array <;> simp [expectArray, pure, M.pure', fault, M.stop] at length ⊢
+  all_goals exact length
+
+theorem FactHolds.sameStore {fr next : Frame} {state after : St} {fact : Fact}
+    (cells : next.vals = fr.vals) (stores : after.store = state.store)
+    (hold : FactHolds fr state fact) : FactHolds next after fact := by
+  cases fact with
+  | ge0 i => simpa [FactHolds, IntAt, cells] using hold
+  | lt i n => simpa [FactHolds, IntAt, cells] using hold
+  | viewLenGe v n => simpa [FactHolds, ViewAt, IntAt, cells] using hold
+  | lenGe r n =>
+    obtain ⟨loc, bound, len, ref, atBound, length, less⟩ := hold
+    exact ⟨loc, bound, len, by simpa [RefAt, cells] using ref,
+      by simpa [IntAt, cells] using atBound, ArrayLenAt.sameStore stores length, less⟩
+
+private theorem stable_render (value : Val) : StateStable (render value) := by
+  cases value with
+  | bool bit => cases bit <;> exact StateStable.pure _
+  | int => exact StateStable.pure _
+  | _ => exact StateStable.fault _
+
+private theorem stable_renderPart (fr : Frame) (part : PrintPart) : StateStable (renderPart fr part) := by
+  cases part with
+  | text text => exact StateStable.pure _
+  | val id => exact (stable_getVal fr id).bind fun value => stable_render value
+
+theorem execEff_print_store {f : Func} {fr next : Frame} {parts : List PrintPart}
+    {origin : Option OriginId} {state after : St}
+    (success : execEff f fr (.print parts origin) state = .ok next after) :
+    after.store = state.store := by
+  simp only [execEff] at success
+  obtain ⟨strings, first, evaluated, success⟩ := success_bind success
+  obtain ⟨ignored, second, emitted, success⟩ := success_bind success
+  have same := stable_mapList (stable_renderPart fr) parts state strings first evaluated
+  subst first
+  simp only [emit, Res.ok.injEq] at emitted
+  have sameSecond := emitted.2
+  subst second
+  simp only [pure_apply, Res.ok.injEq] at success
+  have storeSame := congrArg St.store success.2.symm
+  exact storeSame
+
+theorem transfer_effect_sound {cx : FnCtx} {fr next : Frame} {effect : Effect}
+    {state after : St} {facts outgoing : Facts} (hold : FactsHold fr state facts)
+    (success : execEff cx.fn fr effect state = .ok next after)
+    (checked : transferInst cx.cfg.mod cx.fn facts (.eff effect) = .ok outgoing) :
+    FactsHold next after outgoing := by
+  cases effect with
+  | print parts origin =>
+    simp [transferInst, killsLengths, pure, Except.pure] at checked
+    subst outgoing
+    intro fact member
+    exact FactHolds.sameStore (execEff_cells success) (execEff_print_store success) (hold fact member)
+  | _ =>
+    simp [transferInst, killsLengths, pure, Except.pure] at checked
+    subst outgoing
+    exact FactsHold.mutatingEffect hold success
+
+private theorem refTy_cell {env : TyEnv} {reference : ValueId} {mutability : Mutability} {owner : Ty}
+    (typed : env.refTy reference = .ok (mutability, owner)) :
+    env.vals[reference]? = some (some (.data (.ref mutability owner))) := by
+  unfold TyEnv.refTy at typed
+  obtain ⟨type, dataType, typed⟩ := Goose.GIR.bind_ok typed
+  cases type with
+  | ref mutability owner =>
+    simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at typed
+    obtain ⟨rfl, rfl⟩ := typed
+    exact Goose.GIR.dataTy_of dataType
+  | _ => simp [tyErr] at typed
+
+theorem typed_arrayLen_fresh {env : TyEnv} {result reference : ValueId} {type : VTy}
+    (typed : Op.resultTy env (.arrayLen reference) = .ok type)
+    (defined : env.vals[result]? = some (some type)) : result ≠ reference := by
+  intro same
+  subst result
+  simp only [Op.resultTy] at typed
+  obtain ⟨pair, refType, typed⟩ := Goose.GIR.bind_ok typed
+  rcases pair with ⟨mutability, owner⟩
+  have referenceType := refTy_cell refType
+  split at typed
+  · simp only [pure, Except.pure, Except.ok.injEq] at typed
+    subst type
+    rw [defined] at referenceType
+    simp at referenceType
+  · simp [tyErr] at typed
+
+theorem validated_arrayLen_fresh {m : GIR.Module} {f : Func} {block : GIR.Block}
+    {result reference : ValueId} (validated : validate m = .ok ())
+    (functionMember : f ∈ m.allFuncs) (blockMember : block ∈ f.blocks)
+    (instructionMember : .def result (.arrayLen reference) ∈ block.insts) : result ≠ reference := by
+  obtain ⟨_, typed, _⟩ := (Goose.GIR.validate_sound m validated).1 f functionMember
+  obtain ⟨type, resultType, valueType⟩ := typed block blockMember result (.arrayLen reference) instructionMember
+  exact typed_arrayLen_fresh resultType valueType
+
 end Goose.Proofs.Bounds
