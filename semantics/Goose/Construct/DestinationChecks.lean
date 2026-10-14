@@ -150,4 +150,23 @@ private def protectReplacement : ConstructionM Unit := do
         some [0, 0, 0, 0, 20, 0, 0, 0, 0, 30]
   | _ => false
 
+private def unknownLimited (values : List Nat) : ConstructionM Unit := do
+  let storage ← reserveStorage (bytes [10]) 1
+  let destination ← openDestination storage (capability .elementRun) (.limited 3) none
+  for value in values do writeElement destination (bytes [value])
+  finishDestination destination
+  publishOperation [destination]
+
+#guard observe (unknownLimited [255, 0]) == some ([10, 255, 0], 3,
+  [.begin 0, .stage 0, .write 0 0, .write 0 1, .copy (.storage 1 []) 0, .publish 0])
+#guard match unknownLimited [255, 0] ConstructionState.initial with
+  | .ok _ state => state.storage[1]?.map (·.bytes.size) == some 0
+  | _ => false
+#guard match unknownLimited [20, 30, 40] ConstructionState.initial with
+  | .fault .capacity state => state.events ==
+      [.begin 0, .stage 0, .write 0 0, .write 0 1, .write 0 2] &&
+      state.storage[0]?.map (fun s => s.bytes.data.toList.map UInt8.toNat) == some [10] &&
+      state.storage[0]?.map (·.publishedCount) == some 1
+  | _ => false
+
 end Goose.Construct.DestinationChecks
