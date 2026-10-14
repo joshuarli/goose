@@ -66,7 +66,7 @@ public:
             Context(objs, m.contexts[i]);
         }
         objs += "]";
-        if (m.profile == CoreProfile::Shrink)
+        if (CoreHasShrink(m.profile))
             for (size_t i = 0; i < m.types.size(); i++)
                 if (m.types[i].kind == CoreType::Struct) T((int)i);
         // Files are numbered by first use in the origin table.
@@ -91,11 +91,21 @@ public:
             TypeRecord(out, m.types[typeorder[i]]);
         }
         out += ']';
-        if (m.profile == CoreProfile::Shrink) {
+        if (CoreHasShrink(m.profile)) {
             out += ",[";
             for (size_t i = 0; i < m.structs.size(); i++) {
                 if (i) out += ',';
                 StructRecord(out, m.structs[i]);
+            }
+            out += ']';
+        }
+        if (CoreHasConstruction(m.profile)) {
+            out += ",[";
+            for (size_t i = 0; i < m.targets.size(); i++) {
+                if (i) out += ',';
+                out += "[\"target\",";
+                Ids(out, m.targets[i].members);
+                out += ']';
             }
             out += ']';
         }
@@ -210,6 +220,8 @@ private:
                 break;
             case CoreType::Ptr: out += "[\"ptr\"]"; break;
             case CoreType::Struct: Append(out, "[\"struct\",", t.structid, "]"); break;
+            case CoreType::Dest: case CoreType::Built: case CoreType::Cancelled:
+                throw CompileError { "internal compiler error: Core contains a GIR construction carrier" };
         }
     }
 
@@ -245,7 +257,10 @@ private:
         out += "],[";
         for (size_t i = 0; i < im.results.size(); i++) {
             if (i) out += ',';
-            Append(out, T(im.results[i]));
+            if (CoreHasConstruction(m.profile))
+                Append(out, "[\"result\",", T(im.results[i]), ",\"register\",[]]");
+            else
+                Append(out, T(im.results[i]));
         }
         out += "],[";
         for (size_t i = 0; i < im.vars.size(); i++) {
@@ -272,14 +287,28 @@ private:
         out += ']';
     }
 
+    static void Ids(string &out, const vector<int> &ids) {
+        out += '[';
+        for (size_t i = 0; i < ids.size(); i++) {
+            if (i) out += ',';
+            Append(out, ids[i]);
+        }
+        out += ']';
+    }
+
     void Summary(string &out, const CoreSummary &s) {
         if (s.unknown) { out += "[\"summary_unknown\"]"; return; }
         out += "[\"summary\",";
         Targets(out, s.reads); out += ',';
         Targets(out, s.writes); out += ',';
         Targets(out, s.grows); out += ',';
-        if (m.profile == CoreProfile::Shrink) {
+        if (CoreHasShrink(m.profile)) {
             Targets(out, s.shrinks); out += ',';
+        }
+        if (CoreHasConstruction(m.profile)) {
+            Ids(out, s.constructs); out += ',';
+            Ids(out, s.needs); out += ',';
+            Ids(out, s.escapes); out += ',';
         }
         Targets(out, s.rebinds);
         Append(out, ",", (int)s.aborts, ",", (int)s.outputs, "]");
@@ -570,7 +599,7 @@ private:
                 out += "[\"e_push\",";
                 Place(out, *e.place); out += ',';
                 Expr(out, *e.a);
-                if (m.profile == CoreProfile::Shrink) Append(out, ",", O(e.org));
+                if (CoreHasShrink(m.profile)) Append(out, ",", O(e.org));
                 out += ']';
                 break;
             case CoreExprKind::Pop:
@@ -610,6 +639,14 @@ private:
                     Expr(out, *e.elems[i]);
                 }
                 out += "]]";
+                break;
+            case CoreExprKind::Bytes:
+                Append(out, "[\"e_bytes\",", T(e.type), ",[" );
+                for (size_t i = 0; i < e.bytes.size(); i++) {
+                    if (i) out += ',';
+                    Append(out, (unsigned)e.bytes[i]);
+                }
+                Append(out, "],", O(e.org), "]");
                 break;
         }
     }

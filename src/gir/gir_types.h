@@ -303,7 +303,7 @@ public:
                 auto &pointee = m.Type(m.Type(r.ty).elem);
                 if (!GirOwnerKind(pointee.kind))
                     return GirTyErr("push to a reference that does not point at an owner array");
-                if (pointee.kind != CoreType::Grow && m.profile != CoreProfile::Shrink)
+                if (pointee.kind != CoreType::Grow && !CoreHasShrink(m.profile))
                     return GirTyErr("shrink-profile push under core-pilot");
                 auto v = Data(i.b);
                 if (!v.ok()) return v;
@@ -314,7 +314,7 @@ public:
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
                 auto &owner = m.Type(m.Type(r.ty).elem);
-                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(owner.kind))
+                if (!CoreHasShrink(m.profile) || !GirOwnerKind(owner.kind))
                     return GirTyErr("pop from a reference that does not point at a shrink-profile owner array");
                 return GirTyOk(owner.elem);
             }
@@ -340,7 +340,7 @@ public:
                 if (t.kind != CoreType::Arr && !GirOwnerKind(t.kind))
                     return GirTyErr("array literal of a type that is not an array");
                 if ((t.kind == CoreType::GrowShrink || t.kind == CoreType::Limited) &&
-                    m.profile != CoreProfile::Shrink)
+                    !CoreHasShrink(m.profile))
                     return GirTyErr("shrink-profile literal under core-pilot");
                 if (t.kind == CoreType::Arr && (int64_t)i.vals.size() != t.count)
                     return GirTyErr(cat("array literal of ", i.vals.size(), " elements for a type of ", t.count));
@@ -391,6 +391,42 @@ public:
                     return GirTyErr(cat("field ", i.idx, " outside the struct's field table"));
                 auto mut = fields[i.idx].binding == CoreVarKind::Var ? CoreMut::Mut : CoreMut::Const;
                 return GirTyOk(m.RefType(mut, fields[i.idx].type));
+            }
+            case GirOp::DestOpen: {
+                if (m.low || m.profile != CoreProfile::Construction)
+                    return GirTyErr("construction destination under an earlier profile or stage");
+                if (i.idx < 0 || i.idx >= (int)env.slots.size())
+                    return GirTyErr("destination slot outside the slot table");
+                if (i.ty < 0 || i.ty >= (int)m.types.size())
+                    return GirTyErr("destination type outside the type table");
+                auto &receiver = m.Type(env.slots[i.idx].ty);
+                auto &producer = m.Type(i.ty);
+                if (receiver.kind != CoreType::Grow || producer.kind != CoreType::Grow ||
+                    receiver.elem != producer.elem || m.Type(producer.elem).kind != CoreType::Int ||
+                    m.Type(producer.elem).ity != CoreIntTy::U8 || i.request != CoreRequest::Value)
+                    return GirTyErr("byte destination requires a value-form grow-only u8 array");
+                if (i.knownCount) {
+                    auto count = IntTy(*i.knownCount);
+                    if (!count.ok()) return count;
+                    if (count.ty != m.IntType(CoreIntTy::I64))
+                        return GirTyErr("destination element count is not i64");
+                }
+                CoreType result;
+                result.kind = CoreType::Dest;
+                result.elem = i.ty;
+                result.request = i.request;
+                return GirTyOk(m.Intern(result));
+            }
+            case GirOp::DestFinish: {
+                auto dest = Val(i.a);
+                if (!dest.ok()) return dest;
+                auto &type = m.Type(dest.ty);
+                if (type.kind != CoreType::Dest) return GirTyErr("finish of a value that is not a destination");
+                CoreType result;
+                result.kind = CoreType::Built;
+                result.elem = type.elem;
+                result.request = type.request;
+                return GirTyOk(m.Intern(result));
             }
             // The low stage: scalars and addresses.
             case GirOp::PtrOffset: {
@@ -449,8 +485,11 @@ public:
     GirTyResult Data(int v) {
         auto t = Val(v);
         if (!t.ok()) return t;
-        if (env.m.Type(t.ty).kind == CoreType::View)
+        auto kind = env.m.Type(t.ty).kind;
+        if (kind == CoreType::View)
             return GirTyErr(cat("value %", v, " is a view where a data value is required"));
+        if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled)
+            return GirTyErr(cat("value %", v, " is a construction carrier where a data value is required"));
         return t;
     }
     GirTyResult IntTy(int v) {

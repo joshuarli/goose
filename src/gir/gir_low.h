@@ -49,11 +49,14 @@ public:
     GirModule Lower() {
         l.low = true;
         l.profile = h.profile;
+        l.pointerBytes = sizeof(void *);
         l.files = h.files;
         l.diagfiles = h.diagfiles;
         l.filemodules = h.filemodules;
         l.origins = h.origins;
         l.entry = h.entry;
+        if (CoreHasConstruction(h.profile) && !h.targets.empty())
+            throw GirLowerUnsupported { "nonlocal-target", "module", -1 };
         // Signatures first: a call needs its callee's before its body exists.
         for (auto &f : h.funcs) lsigs.push_back(Signature(f));
         for (auto &g : h.globals) l.lowglobals.push_back(PlaceGlobal(g));
@@ -192,6 +195,13 @@ private:
         int stack = -1;
     };
 
+    struct Destination {
+        int header = -1;
+        int stack = -1;
+        int base = -1;
+        int64_t count = -1;
+    };
+
     const GirFunc *hf = nullptr;
     GirFunc lf;
     vector<GirTypeId> hvt;          // Type of each high value.
@@ -201,6 +211,8 @@ private:
     vector<int> blockparammembers;  // Owned byte storage for aggregate block parameters.
     vector<int> blockparamrunmembers; // Byte storage for transient owner-run parameters.
     vector<int> blockparamrunlens;  // Length members for transient owner-run parameters.
+    map<int, Destination> destinations;
+    map<int, Destination> completions;
     vector<GirTypeId> lvals;
     int cur = -1;
     int spval = 0, outval = -1;
@@ -605,6 +617,8 @@ private:
         lvals.clear();
         marks.clear();
         shape.clear();
+        destinations.clear();
+        completions.clear();
         // Value types of the high function.
         ComputeTypes();
         PlaceSlots();
@@ -624,7 +638,7 @@ private:
         // block parameter or a call result. The high type does not retain
         // alignment, so keep shrink-profile scalar references byte-safe at
         // every boundary where that provenance can be erased.
-        if (h.profile == CoreProfile::Shrink)
+        if (CoreHasShrink(h.profile))
             for (size_t v = 0; v < hvt.size(); v++) {
                 auto &t = HT(hvt[v]);
                 if (t.kind == CoreType::Ref &&
@@ -823,6 +837,51 @@ private:
                 auto offset = h.structs.at(sid).fields.at(i.idx).offset;
                 Define(i, { PtrAt(shape[i.a].w[0], ConstI(I64(), offset), 1) });
                 shape[i.res].unaligned = true;
+                return;
+            }
+            case GirOp::DestOpen: {
+                auto &place = places.at(i.idx);
+                if (place.kind != Place::Header || place.stack < 0 || place.members.size() != 1)
+                    throw CompileError { "internal compiler error: byte destination has no grow-only receiver" };
+                Destination destination;
+                destination.header = Simple(GirOp::FrameAddr, Ptr(), -1, -1, place.members[0]);
+                destination.stack = StackOf(place.stack);
+                destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
+                SimpleE(GirOp::HdrInit, destination.header, destination.base);
+                destinations.emplace(i.res, destination);
+                Define(i, {});
+                return;
+            }
+            case GirOp::DestBytes: {
+                auto found = destinations.find(i.a);
+                if (found == destinations.end())
+                    throw CompileError { "internal compiler error: byte write has no open destination" };
+                auto &destination = found->second;
+                auto byte = l.IntType(CoreIntTy::U8);
+                for (size_t index = 0; index < i.bytes.size(); index++) {
+                    auto at = PtrAt(destination.base, ConstI(I64(), (int64_t)index), 1);
+                    PStoreV(byte, at, ConstI(byte, i.bytes[index]));
+                }
+                destination.count = (int64_t)i.bytes.size();
+                if (destination.count > 0)
+                    SimpleE(GirOp::StackBump, destination.stack, ConstI(I64(), destination.count));
+                return;
+            }
+            case GirOp::DestFinish: {
+                auto found = destinations.find(i.a);
+                if (found == destinations.end() || found->second.count < 0)
+                    throw CompileError { "internal compiler error: completion has no initialized destination" };
+                completions.emplace(i.res, found->second);
+                destinations.erase(found);
+                Define(i, {});
+                return;
+            }
+            case GirOp::DestPublish: {
+                auto found = completions.find(i.a);
+                if (found == completions.end())
+                    throw CompileError { "internal compiler error: publication has no completed destination" };
+                SimpleE(GirOp::HdrSetLen, found->second.header, ConstI(I64(), found->second.count));
+                completions.erase(found);
                 return;
             }
             case GirOp::Freeze: shape[i.res] = shape[i.a]; return;
@@ -1070,7 +1129,7 @@ private:
             PStoreV(I64(), WordAt(p, 1), w[1]);
         }
         else if (c.kind == CoreType::Struct) Copy(p, w[0], Size(t));
-        else if (h.profile == CoreProfile::Shrink)
+        else if (CoreHasShrink(h.profile))
             StoreScalarBytes(Words(t)[0], p, w[0]);
         else PStoreV(Words(t)[0], p, w[0]);
     }
@@ -1150,7 +1209,7 @@ private:
         auto at = PtrAt(base, len, esz);
         StoreAt(elemty, at, shape[i.b].w);
         // Pilot push has no source-origin requirement, so keep its length increment unchecked.
-        auto newLen = h.profile == CoreProfile::Shrink
+        auto newLen = CoreHasShrink(h.profile)
             ? BinW(CoreBinOp::Add, I64(), len, ConstI(I64(), 1), true, i.org)
             : BinW(CoreBinOp::Add, I64(), len, ConstI(I64(), 1));
         if (limited) SetLimitedLength(address, owner, newLen);
@@ -1421,7 +1480,7 @@ private:
         else {
             auto one = FrameTemp(esz);
             src = Simple(GirOp::FrameAddr, Ptr(), -1, -1, one);
-            if (h.profile == CoreProfile::Shrink) StoreScalarBytes(Words(c.elem)[0], src, w[0]);
+            if (CoreHasShrink(h.profile)) StoreScalarBytes(Words(c.elem)[0], src, w[0]);
             else PStoreV(Words(c.elem)[0], src, w[0]);
         }
         GirInst f;

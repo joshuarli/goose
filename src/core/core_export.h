@@ -371,7 +371,7 @@ private:
         // component-before-parent.
         auto id = (int)mod.structs.size();
         structid.emplace(inst, id);
-        mod.profile = CoreProfile::Shrink;
+        mod.profile = CoreWithShrink(mod.profile);
         mod.structs.push_back(CoreStruct { layout.size, {} });
         CoreStruct descriptor;
         descriptor.size = layout.size;
@@ -450,12 +450,12 @@ private:
                         if (a->size > INT32_MAX) Fail("capacity-limit", t->line);
                         ct.kind = CoreType::Limited;
                         ct.count = a->size;
-                        mod.profile = CoreProfile::Shrink;
+                        mod.profile = CoreWithShrink(mod.profile);
                         break;
                     case A_GROWSHRINK:
                         if (position == TypePosition::Parameter) Fail("nonfixed-construction", t->line);
                         ct.kind = CoreType::GrowShrink;
-                        mod.profile = CoreProfile::Shrink;
+                        mod.profile = CoreWithShrink(mod.profile);
                         break;
                 }
                 ct.elem = (a->akind == A_GROW || a->akind == A_GROWSHRINK || a->akind == A_LIMITED)
@@ -518,6 +518,7 @@ private:
 
     bool OwnerLiteralRun(Node *n) const {
         if (!n) return false;
+        if (Is<StrLit>(n)) return true;
         if (Is<ArrayLit>(n)) {
             auto a = (ArrayLit *)n;
             return !a->fillval && !a->capexpr;
@@ -527,6 +528,15 @@ private:
             return x->elseb && OwnerLiteralRun(x->elseb);
         }
         if (auto b = Is<Block>(n)) return b->tail && OwnerLiteralRun(b->tail);
+        return false;
+    }
+
+    bool OwnerContainsString(Node *n) const {
+        if (!n) return false;
+        if (Is<StrLit>(n)) return true;
+        if (auto x = Is<IfExpr>(n))
+            return OwnerContainsString(x->thenb) || OwnerContainsString(x->elseb);
+        if (auto b = Is<Block>(n)) return OwnerContainsString(b->tail);
         return false;
     }
 
@@ -569,10 +579,10 @@ private:
         if (!grows && !shrinks && !writes) return CoreMut::Const;
         switch (t->arr->akind) {
             case A_GROW:
-                if (shrinks) mod.profile = CoreProfile::Shrink;
+                if (shrinks) mod.profile = CoreWithShrink(mod.profile);
                 return CoreMut::Mut;
             case A_GROWSHRINK:
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 return CoreMut::Mut;
             case A_LIMITED:
                 Fail("limited-capture-mutation", v->line);
@@ -725,6 +735,7 @@ private:
         cg.org = Org(g->line, CoreOriginKind::Global);
         cg.module = keys.ModuleOf(g->line.fileidx);
         coerceorg = cg.org;
+        if (OwnerContainsString(g->inits[0])) Fail("nonfixed-construction", g->inits[0]->line);
         if (v->type->kind == TY_ARRAY && v->type->arr->akind != A_FIXED)
             RequireOwnerLiteralRun(g->inits[0], v->type);
         cg.init = Value(g->inits[0]);
@@ -1100,8 +1111,9 @@ private:
             if (IsArrayTE(assigned) &&
                 (assigned->arr->akind == A_GROW || assigned->arr->akind == A_GROWSHRINK)) {
                 auto s = MakeStmt(CoreStmtKind::AssignWhole, a->line, CoreOriginKind::Assign);
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 s.place = ToPlace(a->lval, true);
+                if (OwnerContainsString(a->rhs)) Fail("nonfixed-construction", a->rhs->line);
                 RequireOwnerLiteralRun(a->rhs, assigned);
                 s.expr = Value(a->rhs);
                 out.stmts.push_back(std::move(s));
@@ -1232,7 +1244,7 @@ private:
             case B_POP_N: {
                 auto an = c->ArgNodes();
                 auto s = MakeStmt(CoreStmtKind::PopN, c->line, CoreOriginKind::Expr);
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 s.place = OwnerPlace(an[0]);
                 s.expr = Value(an[1]);
                 out.stmts.push_back(std::move(s));
@@ -1241,7 +1253,7 @@ private:
             case B_RESIZE: {
                 auto an = c->ArgNodes();
                 auto s = MakeStmt(CoreStmtKind::Resize, c->line, CoreOriginKind::Expr);
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 s.place = OwnerPlace(an[0]);
                 s.expr = Value(an[1]);
                 if (an.size() == 3) s.expr2 = Value(an[2]);
@@ -1251,7 +1263,7 @@ private:
             case B_CLEAR: {
                 auto an = c->ArgNodes();
                 auto s = MakeStmt(CoreStmtKind::Clear, c->line, CoreOriginKind::Expr);
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 s.place = OwnerPlace(an[0]);
                 out.stmts.push_back(std::move(s));
                 return;
@@ -1542,7 +1554,19 @@ private:
                 e->flag = ((BoolLit *)n)->val;
                 return e;
             }
-            case NK_StrLit: Fail("string-value");
+            case NK_StrLit: {
+                auto literal = (StrLit *)n;
+                auto type = Ty(n->exprtype);
+                auto &array = mod.Type(type);
+                if (array.kind != CoreType::Grow || mod.Type(array.elem).kind != CoreType::Int ||
+                    mod.Type(array.elem).ity != CoreIntTy::U8)
+                    Fail("string-value", n->line);
+                auto e = NewExpr(CoreExprKind::Bytes, type);
+                for (auto byte : literal->val) e->bytes.push_back((uint8_t)byte);
+                e->org = Org(n->line, CoreOriginKind::Expr);
+                mod.profile = CoreProfile::Construction;
+                return e;
+            }
             case NK_FltLit: Fail("float");
             case NK_Ident: return IdentValue((Ident *)n);
             case NK_ArrayLit: return ArrayValue((ArrayLit *)n);
@@ -1886,7 +1910,7 @@ private:
                 auto an = c->ArgNodes();
                 auto owner = Pointee(an[0]->exprtype);
                 auto e = NewExpr(CoreExprKind::Pop, OwnerElementTy(owner->arr->sub));
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 e->place = OwnerPlace(an[0]);
                 e->org = Org(c->line, CoreOriginKind::Expr);
                 return e;

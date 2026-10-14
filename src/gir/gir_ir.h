@@ -17,12 +17,12 @@ enum class GirOp : uint8_t {
     // Instructions that define a value, high stage.
     Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, Load,
     Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
-    Struct, Field,
+    Struct, Field, DestOpen, DestFinish,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
     HdrLen,
     // Instructions that define none, high stage.
-    Init, Store, Append, PopN, Resize, Clear, Replace, Enter, Leave, Print,
+    Init, Store, Append, PopN, Resize, Clear, Replace, DestBytes, DestPublish, Enter, Leave, Print,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
     BytesFill, RtCall,
@@ -42,6 +42,7 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::ArrayLen: case GirOp::Index:
         case GirOp::IndexProven:
         case GirOp::Push: case GirOp::Pop: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
+        case GirOp::DestOpen: case GirOp::DestFinish: case GirOp::DestBytes: case GirOp::DestPublish:
         case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
         case GirOp::Replace: case GirOp::Enter: case GirOp::Leave: case GirOp::Print:
@@ -83,42 +84,6 @@ struct GirPart {
     int val = 0;
 };
 
-// One instruction. `org` is an origin number of the module's origin table, or
-// -1 for none. Which members an instruction reads is fixed by `op`:
-//   Int: res, ty, text            Bool: res, flag             Unit: res
-//   Bin: res, bin, ty, a, b, org  Un: res, un, ty, a, org     Cmp: res, cmp, ty, a, b
-//   BoolCmp: res, cmp, a, b       Not: res, a
-//   Conv: res, conv, ty (source), ty2 (target), a, org        Next: res, ty, a
-//   Slot: res, idx (slot)         Global: res, idx (global)
-//   Elem: res, a (view), b (index)
-//   Freeze/Load/SliceView/ViewLen/ArrayLen: res, a
-//   Snap: res, snapshot mode, a
-//   ViewSlice: res, mut, a (view), lo, hi, org
-//   Index: res, a (view), b (index), org     IndexProven: res, a (view), b (index)
-//   Push: res, a (ref), b (value), org
-//   Pop: res, a (owner reference), org
-//   Call: res, idx (function), vals, org     Arr: res, ty, vals      Fill: res, ty, a
-//   Struct: res, ty, vals                    Field: res, a (reference), idx (real field)
-//   Init: idx (slot), a, org      Store/Append: a (ref), b, org
-//   PopN: a (owner reference), b (count), org   Resize: a, b (size), vals[0]? (fill), org
-//   Clear: a (owner reference), org             Replace: a (owner ref), b (literal run), org
-//   Enter/Leave: idx (scope)      Print: parts, org
-//   Br: idx (block), vals         CondBr: a, idx (true block), vals, idx2, vals2
-//   Ret: vals, org                Abort: abort, org        Exit: a, org
-// The low stage adds, over scalar and address values (flag on Bin/Un/Conv
-// says the operation is the runtime's checked one, off says it wraps):
-//   PtrOffset: res, a (address), b (i64 index), idx (element size in bytes)
-//   PLoad: res, ty, a (address)             PStore: ty, a (address), b (value)
-//   FrameAddr: res, idx (frame member)      LocalGet: res, idx          LocalSet: idx, a
-//   StackAt: res, a (i64 base), idx (offset)  StackMark: res, a (stack)
-//   StackRelease: a (stack), b (mark)       StackBump: a (stack), b (i64 bytes) or -1 and idx (bytes)
-//   GlobalAddr/GlobalStack: res, idx (low global)
-//   HdrBase/HdrLen: res, a (header)         HdrInit: a (header), b (base)   HdrSetLen: a, b
-//   BytesCopy/BytesMove: a (dst), b (src), vals[0] (i64 byte count)
-//   BytesFill: a (dst), b (src), idx (element size), vals[0] (i64 count)
-//   RtCall: idx (runtime entry point), a (argument, or -1), text
-//   Abort in the low stage names its operands in `vals`; its text is a user
-//   abort's message.
 struct GirInst {
     GirOp op = GirOp::Unit;
     int res = -1;
@@ -132,8 +97,11 @@ struct GirInst {
     CoreMut mut = CoreMut::Mut;
     GirSnapshotMode snap = GirSnapshotMode::Borrowed;
     GirAbortKind abort = GirAbortKind::Assert;
+    CoreRequest request = CoreRequest::Value;
+    optional<int> knownCount;
     int idx = -1, idx2 = -1;
     int a = -1, b = -1;
+    vector<uint8_t> bytes;
     GirBound lo, hi;
     vector<int> vals, vals2;
     vector<GirPart> parts;
@@ -236,6 +204,7 @@ struct GirModule {
     vector<CoreType> types;
     CoreProfile profile = CoreProfile::Pilot;
     vector<CoreStruct> structs;
+    vector<CoreTargetSet> targets;
     vector<GirGlobal> globals;
     vector<GirFunc> funcs;
     int entry = 0;
@@ -244,9 +213,11 @@ struct GirModule {
     // order, and the data stacks the program starts with.
     bool low = false;
     vector<GirLowGlobal> lowglobals;
+    vector<CoreTargetSet> lowtargets;
     vector<int> initfuncs;
     int mainstacks = 0;
     int globalstacks = 0;
+    int pointerBytes = sizeof(void *);
 
     GirTypeId Intern(const CoreType &t) {
         for (size_t i = 0; i < types.size(); i++)

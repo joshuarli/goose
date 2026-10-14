@@ -20,10 +20,25 @@ namespace goose {
 enum class CoreIntTy : uint8_t { I8, I16, I32, I64, U8, U16, U32, U64 };
 enum class CoreMut : uint8_t { Mut, Const };
 enum class CoreVarKind : uint8_t { Let, Var };
-enum class CoreProfile : uint8_t { Pilot, Shrink };
+enum class CoreProfile : uint8_t { Pilot, Shrink, Construction };
+enum class CoreRequest : uint8_t { Register, Value, ElementRun };
+
+inline const char *CoreRequestName(CoreRequest request) {
+    static const char *names[] = { "register", "value", "element_run" };
+    return names[(int)request];
+}
 
 inline const char *CoreProfileName(CoreProfile profile) {
-    return profile == CoreProfile::Pilot ? "core-pilot" : "core-shrink";
+    static const char *names[] = { "core-pilot", "core-shrink", "core-construction" };
+    return names[(int)profile];
+}
+
+inline bool CoreHasShrink(CoreProfile profile) {
+    return profile == CoreProfile::Shrink || profile == CoreProfile::Construction;
+}
+inline bool CoreHasConstruction(CoreProfile profile) { return profile == CoreProfile::Construction; }
+inline CoreProfile CoreWithShrink(CoreProfile profile) {
+    return profile == CoreProfile::Pilot ? CoreProfile::Shrink : profile;
 }
 
 inline const char *CoreIntName(CoreIntTy t) {
@@ -43,17 +58,15 @@ inline int CoreIntBits(CoreIntTy t) {
 
 using CoreTypeId = int;
 
-// `elem` is the element or pointee type; `count` is an array's fixed length
-// or a limited owner's capacity. A View is not a Core type: it is the type of a sampled run in
-// the lowered form (`mut` and `elem` as for a slice), kept here so that both
-// share one table. A Ptr is an address, a type of the low stage only.
 struct CoreType {
-    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, GrowShrink, Limited, Ref, Slice, View, Ptr, Struct } kind = Unit;
-    CoreIntTy ity = CoreIntTy::I64;   // Int
-    CoreMut mut = CoreMut::Mut;       // Ref, Slice
-    CoreTypeId elem = -1;             // Arr, Grow, GrowShrink, Limited, Ref, Slice
-    int64_t count = 0;                // Arr, Limited
-    int structid = -1;                // Struct: nominal descriptor table entry.
+    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, GrowShrink, Limited, Ref, Slice, View, Ptr, Struct,
+                          Dest, Built, Cancelled } kind = Unit;
+    CoreIntTy ity = CoreIntTy::I64;
+    CoreMut mut = CoreMut::Mut;
+    CoreTypeId elem = -1;
+    int64_t count = 0;
+    int structid = -1;
+    CoreRequest request = CoreRequest::Value;
     bool operator==(const CoreType &) const = default;
 };
 
@@ -164,21 +177,9 @@ struct CoreArg {
 
 enum class CoreExprKind : uint8_t {
     Lit, Bool, Read, Ref, Slice, Len, Un, Bin, Cmp, And, Or, Not, Conv, Call, Push, Pop, If, Block,
-    Arr, Fill, Struct,
+    Arr, Fill, Struct, Bytes,
 };
 
-// One expression. `type` is the expression's own Core type for every kind
-// (the exporter and the summary pass both read it); the writer prints it only
-// where the encoding carries a type. Which of the other members are meaningful
-// is fixed by `kind`:
-//   Lit: value, type          Bool: flag               Read: place
-//   Ref: mut, place           Slice: mut, view, lo, hi, org
-//   Len: view                 Un: un, a, org           Bin: bin, a, b, org
-//   Cmp: cmp, a, b            And/Or: a, b             Not: a
-//   Conv: conv, a, org        Call: ctx, args, org     Push: place, a, org
-//   Pop: place, org
-//   If: a, then, else         Block: then              Arr: elems, type
-//   Fill: a, type          Struct: elems, type
 struct CoreExpr {
     CoreExprKind kind = CoreExprKind::Bool;
     CoreTypeId type = -1;
@@ -196,6 +197,7 @@ struct CoreExpr {
     CoreExprP a, b;
     vector<CoreArg> args;
     vector<CoreExprP> elems;
+    vector<uint8_t> bytes;
     unique_ptr<CoreBlock> then, otherwise;
     CoreOrigin org;
 };
@@ -259,6 +261,7 @@ struct CoreTarget {
 struct CoreSummary {
     bool unknown = false;
     vector<CoreTarget> reads, writes, grows, shrinks, rebinds;
+    vector<int> constructs, needs, escapes;
     bool aborts = false;
     bool outputs = false;
 };
@@ -283,6 +286,10 @@ struct CoreImpl {
     vector<CoreVar> vars;
     CoreBlock body;
     CoreSummary summary;
+};
+
+struct CoreTargetSet {
+    vector<int> members;
 };
 
 // One checked specialization of a source function. Execution never reads it.
@@ -321,6 +328,7 @@ struct CoreModule {
     vector<CoreType> types;
     CoreProfile profile = CoreProfile::Pilot;
     vector<CoreStruct> structs;
+    vector<CoreTargetSet> targets;
     vector<CoreGlobal> globals;
     vector<CoreImpl> impls;
     vector<CoreContext> contexts;

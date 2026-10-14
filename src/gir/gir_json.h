@@ -28,7 +28,7 @@ public:
             Func(objs, m.funcs[i]);
         }
         objs += ']';
-        if (m.profile == CoreProfile::Shrink)
+        if (CoreHasShrink(m.profile))
             for (size_t i = 0; i < m.types.size(); i++)
                 if (m.types[i].kind == CoreType::Struct) T((int)i);
         string out = cat("[\"module\",\"", GIR_SCHEMA, "\",\"", CoreProfileName(m.profile), "\",[");
@@ -44,11 +44,21 @@ public:
             TypeRecord(out, m.types[typeorder[i]]);
         }
         out += ']';
-        if (m.profile == CoreProfile::Shrink) {
+        if (CoreHasShrink(m.profile)) {
             out += ",[";
             for (size_t i = 0; i < m.structs.size(); i++) {
                 if (i) out += ',';
                 StructRecord(out, m.structs[i]);
+            }
+            out += ']';
+        }
+        if (CoreHasConstruction(m.profile)) {
+            out += ",[";
+            for (size_t i = 0; i < m.targets.size(); i++) {
+                if (i) out += ',';
+                out += "[\"target\",";
+                Ints(out, m.targets[i].members);
+                out += ']';
             }
             out += ']';
         }
@@ -96,11 +106,24 @@ public:
             if (i) out += ',';
             TypeRecord(out, m.types[typeorder[i]]);
         }
-        out += "],";
+        out += ']';
+        if (CoreHasConstruction(m.profile)) {
+            out += ",[";
+            for (size_t i = 0; i < m.lowtargets.size(); i++) {
+                if (i) out += ',';
+                out += "[\"ltarget\",";
+                Ints(out, m.lowtargets[i].members);
+                out += ",[],[]]";
+            }
+            out += ']';
+        }
+        out += ',';
         out += objs;
         Append(out, ",", m.entry, ",");
         Ints(out, m.initfuncs);
-        Append(out, ",", m.mainstacks, ",", m.globalstacks, ",[");
+        Append(out, ",", m.mainstacks, ",", m.globalstacks);
+        if (CoreHasConstruction(m.profile)) Append(out, ",", m.pointerBytes);
+        out += ",[";
         for (size_t i = 0; i < m.origins.size(); i++) {
             if (i) out += ',';
             Append(out, "[\"origin\",", m.origins[i].file, ",", m.origins[i].line, ",\"",
@@ -114,6 +137,7 @@ private:
     const GirModule &m;
     unordered_map<GirTypeId, int> typenum;
     vector<GirTypeId> typeorder;
+    const GirFunc *function = nullptr;
 
     int T(GirTypeId id) {
         if (auto it = typenum.find(id); it != typenum.end()) return it->second;
@@ -164,6 +188,15 @@ private:
                 break;
             case CoreType::Ptr: out += "[\"ptr\"]"; break;
             case CoreType::Struct: Append(out, "[\"struct\",", t.structid, "]"); break;
+            case CoreType::Dest:
+                Append(out, "[\"dest\",", typenum.at(t.elem), ",\"", CoreRequestName(t.request), "\"]");
+                break;
+            case CoreType::Built:
+                Append(out, "[\"built\",", typenum.at(t.elem), ",\"", CoreRequestName(t.request), "\"]");
+                break;
+            case CoreType::Cancelled:
+                Append(out, "[\"cancelled\",", typenum.at(t.elem), ",\"", CoreRequestName(t.request), "\"]");
+                break;
         }
     }
 
@@ -216,8 +249,13 @@ private:
         Targets(out, s.reads); out += ',';
         Targets(out, s.writes); out += ',';
         Targets(out, s.grows); out += ',';
-        if (profile == CoreProfile::Shrink) {
+        if (CoreHasShrink(profile)) {
             Targets(out, s.shrinks); out += ',';
+        }
+        if (CoreHasConstruction(profile)) {
+            Ints(out, s.constructs); out += ',';
+            Ints(out, s.needs); out += ',';
+            Ints(out, s.escapes); out += ',';
         }
         Targets(out, s.rebinds);
         Append(out, ",", (int)s.aborts, ",", (int)s.outputs, "]");
@@ -289,6 +327,8 @@ private:
     }
 
     void Func(string &out, const GirFunc &f) {
+        auto previousFunction = function;
+        function = &f;
         out += "[\"func\",";
         Str(out, f.name);
         out += ",[";
@@ -299,7 +339,10 @@ private:
         out += "],[";
         for (size_t i = 0; i < f.results.size(); i++) {
             if (i) out += ',';
-            Append(out, T(f.results[i]));
+            if (CoreHasConstruction(m.profile))
+                Append(out, "[\"result\",", T(f.results[i]), ",\"register\",[]]");
+            else
+                Append(out, T(f.results[i]));
         }
         out += "],[";
         for (size_t i = 0; i < f.slots.size(); i++) {
@@ -320,6 +363,7 @@ private:
             Block(out, f.blocks[i]);
         }
         out += "],";
+        function = previousFunction;
         RootInfo(out, f.roots);
         out += ',';
         Summary(out, f.summary, m.profile);
@@ -465,9 +509,39 @@ private:
         out += "],[";
         for (size_t i = 0; i < b.insts.size(); i++) {
             if (i) out += ',';
+            NoteConstructionType(b.insts[i]);
             Inst(out, b.insts[i]);
         }
         out += "]]";
+    }
+
+    GirTypeId ConstructionType(CoreType::Kind kind, const GirInst &inst) const {
+        CoreType type;
+        type.kind = kind;
+        if (inst.op == GirOp::DestOpen) {
+            type.elem = inst.ty;
+            type.request = inst.request;
+        } else {
+            if (!function)
+                throw CompileError { "internal compiler error: construction result has no function" };
+            const GirInst *open = nullptr;
+            for (auto &block : function->blocks)
+                for (auto &candidate : block.insts)
+                    if (candidate.op == GirOp::DestOpen && candidate.res == inst.a) open = &candidate;
+            if (!open)
+                throw CompileError { "internal compiler error: construction completion has no destination" };
+            type.elem = open->ty;
+            type.request = open->request;
+        }
+        for (size_t id = 0; id < m.types.size(); id++)
+            if (m.types[id] == type) return (GirTypeId)id;
+        throw CompileError { "internal compiler error: construction result type was not verified" };
+    }
+
+    void NoteConstructionType(const GirInst &inst) {
+        if (!CoreHasConstruction(m.profile)) return;
+        if (inst.op == GirOp::DestOpen) T(ConstructionType(CoreType::Dest, inst));
+        if (inst.op == GirOp::DestFinish) T(ConstructionType(CoreType::Built, inst));
     }
 
     static void Bound(string &out, const GirBound &b) {
@@ -582,6 +656,21 @@ private:
                 out += ']';
                 return;
             case GirOp::Field: def("i_field"); Append(out, ",", i.a, ",", i.idx, "]"); return;
+            case GirOp::DestOpen:
+                def("i_dest_open");
+                Append(out, ",[\"dr_slot\",", i.idx, "],", T(i.ty), ",\"", CoreRequestName(i.request), "\",");
+                if (i.knownCount) Append(out, "[", *i.knownCount, "]");
+                else out += "[]";
+                out += ',';
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::DestFinish:
+                def("i_dest_finish");
+                Append(out, ",", i.a, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
             case GirOp::Init:
                 Append(out, "[\"x_init\",", i.idx, ",", i.a, ",");
                 OptOrg(out, i.org);
@@ -616,6 +705,18 @@ private:
                 return;
             case GirOp::Replace:
                 Append(out, "[\"x_replace\",", i.a, ",", i.b, ",");
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::DestBytes:
+                Append(out, "[\"x_dest_bytes\",", i.a, ",");
+                Ints(out, vector<int>(i.bytes.begin(), i.bytes.end()));
+                out += ',';
+                OptOrg(out, i.org);
+                out += ']';
+                return;
+            case GirOp::DestPublish:
+                Append(out, "[\"x_dest_publish\",", i.a, ",");
                 OptOrg(out, i.org);
                 out += ']';
                 return;

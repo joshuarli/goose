@@ -54,6 +54,9 @@ public:
         for (size_t f = 0; f < m.funcs.size(); f++) out.pieces.push_back(Piece((int)f));
         // The sections, in the conventions the unit assembler splits them by.
         string tdecls = "typedef struct { uint8_t *base; int64_t len; } gir_hdr;\n";
+        if (CoreHasConstruction(m.profile))
+            Append(tdecls, "typedef char gir_pointer_bytes_check[(sizeof(void *) == ", m.pointerBytes,
+                   ") ? 1 : -1];\n");
         for (auto size : blobs) Append(tdecls, "typedef struct { uint64_t w[", (size + 7) / 8, "]; } gir_blob_", size, ";\n");
         string data;
         for (size_t i = 0; i < m.diagfiles.size(); i++)

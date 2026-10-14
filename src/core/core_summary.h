@@ -185,7 +185,7 @@ private:
         join(s.rebinds, g.rebinds);
         s.aborts = e.aborts || g.aborts;
         s.outputs = e.outputs || g.outputs;
-        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, {}, false, false };
+        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, {}, {}, {}, {}, false, false };
         return s;
     }
 
@@ -231,7 +231,7 @@ private:
             case CoreStmtKind::Append: {
                 auto rho = Pl(*s.place);
                 Vw(*s.view);
-                if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
                 if (IsLimitedOwner(*s.place)) fx->aborts = true;
                 break;
@@ -339,7 +339,7 @@ private:
 
     Roots Ex(const CoreExpr &e) {
         switch (e.kind) {
-            case CoreExprKind::Lit: case CoreExprKind::Bool: return {};
+            case CoreExprKind::Lit: case CoreExprKind::Bool: case CoreExprKind::Bytes: return {};
             case CoreExprKind::Read: {
                 auto rho = Pl(*e.place);
                 AddTargets(fx->reads, rho);
@@ -383,7 +383,7 @@ private:
             case CoreExprKind::Push: {
                 auto rho = Pl(*e.place);
                 Ex(*e.a);
-                if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
                 if (IsLimitedOwner(*e.place)) fx->aborts = true;
                 return rho;

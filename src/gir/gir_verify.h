@@ -99,6 +99,12 @@ private:
             case GirOp::ArrayLen: case GirOp::Fill: case GirOp::Init: case GirOp::Exit:
                 add(i.a);
                 break;
+            case GirOp::DestBytes: case GirOp::DestFinish: case GirOp::DestPublish:
+                add(i.a);
+                break;
+            case GirOp::DestOpen:
+                if (i.knownCount) add(*i.knownCount);
+                break;
             case GirOp::Pop: case GirOp::Clear:
                 add(i.a);
                 break;
@@ -154,8 +160,10 @@ private:
             case GirOp::Bin: return MayAbortBin(i.bin) && (!m_low || i.flag);
             case GirOp::Un: return i.un == CoreUnOp::Neg && (!m_low || i.flag);
             case GirOp::Conv: return i.conv == CoreConvKind::As;
-            case GirOp::Push: return m.profile == CoreProfile::Shrink;
+            case GirOp::Push: return CoreHasShrink(m.profile);
             case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear: case GirOp::Replace:
+                return true;
+            case GirOp::DestOpen:
                 return true;
             case GirOp::ViewSlice: case GirOp::Index: case GirOp::Call:
             case GirOp::Init: case GirOp::Store: case GirOp::Append: case GirOp::Print:
@@ -230,7 +238,9 @@ private:
         for (auto &w : walks)
             if (!w.scopes.empty()) Fail("GIR-V040", w.scopes);
         CheckEffects();
-        if (m.profile == CoreProfile::Shrink) {
+        if (CoreHasConstruction(m.profile))
+            for (auto &fn : fns) CheckConstruction(fn);
+        if (CoreHasShrink(m.profile)) {
             auto resultRoots = ResultRoots();
             for (auto &fn : fns) CheckShrinkReplace(fn, resultRoots);
         }
@@ -259,7 +269,7 @@ private:
     }
 
     void CheckStructTable() {
-        if (m.profile != CoreProfile::Pilot && m.profile != CoreProfile::Shrink)
+        if (m.profile != CoreProfile::Pilot && !CoreHasShrink(m.profile))
             Fail("GIR-V010", "unknown Core profile");
         auto hasStructType = false;
         for (auto &t : m.types) hasStructType |= t.kind == CoreType::Struct;
@@ -273,9 +283,29 @@ private:
         for (auto &g : m.globals) scan(g.init);
 
         if (m.low) {
-            if (hasStructType || hasStructInst || !m.structs.empty())
+            if (hasStructType || hasStructInst || !m.structs.empty() || !m.targets.empty())
                 Fail("GIR-V090", "a low module retains a struct type, descriptor, or operation");
             return;
+        }
+        if (!CoreHasConstruction(m.profile) && !m.targets.empty())
+            Fail("GIR-V010", "only core-construction has a target table");
+        if (CoreHasConstruction(m.profile)) {
+            set<vector<int>> targetsets;
+            for (auto &target : m.targets) {
+                if (target.members.empty() ||
+                    !is_sorted(target.members.begin(), target.members.end()) ||
+                    adjacent_find(target.members.begin(), target.members.end()) != target.members.end() ||
+                    !targetsets.insert(target.members).second)
+                    Fail("GIR-V001", "a construction target is empty, repeated, or not sorted");
+                for (auto member : target.members)
+                    if (member < 0 || member >= (int)m.funcs.size())
+                        Fail("GIR-V001", cat("construction target member ", member,
+                                             " is outside the function table"));
+                auto &results = m.funcs[target.members[0]].results;
+                for (auto member : target.members)
+                    if (m.funcs[member].results != results)
+                        Fail("GIR-V010", "construction target members have different result types");
+            }
         }
         if (m.profile == CoreProfile::Pilot) {
             if (hasStructType || hasStructInst || !m.structs.empty())
@@ -325,9 +355,26 @@ private:
         };
         for (size_t id = 0; id < m.types.size(); id++) {
             auto &type = m.types[id];
+            if (type.kind == CoreType::Dest || type.kind == CoreType::Built ||
+                type.kind == CoreType::Cancelled) {
+                if (m.low) Fail("GIR-V090", "a low module retains a construction carrier type");
+                if (!CoreHasConstruction(m.profile))
+                    Fail("GIR-V010", "a construction carrier type appears outside core-construction");
+                if (type.elem < 0 || type.elem >= (int)id)
+                    Fail("GIR-V010", cat("construction carrier type ", id, " does not name an earlier type"));
+                if ((uint8_t)type.request > (uint8_t)CoreRequest::ElementRun)
+                    Fail("GIR-V010", cat("construction carrier type ", id, " has an unknown request"));
+                auto &owner = m.Type(type.elem);
+                if (owner.kind != CoreType::Grow || owner.elem < 0 ||
+                    m.Type(owner.elem).kind != CoreType::Int ||
+                    m.Type(owner.elem).ity != CoreIntTy::U8 || type.request != CoreRequest::Value)
+                    Fail("GIR-V010", cat("construction carrier type ", id,
+                                         " is outside the byte-array construction slice"));
+                continue;
+            }
             if (type.kind != CoreType::GrowShrink && type.kind != CoreType::Limited) continue;
             if (m.low) Fail("GIR-V090", "a low module retains a shrink-profile owner type");
-            if (m.profile != CoreProfile::Shrink)
+            if (!CoreHasShrink(m.profile))
                 Fail("GIR-V010", "core-pilot has no growshrink or limited type");
             if (type.elem < 0 || type.elem >= (int)id)
                 Fail("GIR-V010", cat("owner type ", id, " does not name an earlier element type"));
@@ -343,7 +390,7 @@ private:
                         if ((uint8_t)i.abort > (uint8_t)GirAbortKind::Capacity)
                             Fail("GIR-V010", cat("function ", fn.name, " uses an unknown abort kind"));
                         if (shrinkAbort(i.abort) &&
-                            (m.profile != CoreProfile::Shrink || !m.low))
+                            (!CoreHasShrink(m.profile) || !m.low))
                             Fail("GIR-V010", cat("function ", fn.name,
                                                    " uses a shrink abort kind outside core-shrink GIR-L"));
                     }
@@ -355,6 +402,8 @@ private:
         };
         for (auto &fn : m.funcs) scan(fn);
         for (auto &global : m.globals) scan(global.init);
+        if (CoreHasConstruction(m.profile) && m.low && m.pointerBytes != 4 && m.pointerBytes != 8)
+            Fail("GIR-V010", "construction GIR-L pointer size is not 4 or 8 bytes");
     }
 
     int64_t FlatSize(GirTypeId t) const {
@@ -1045,6 +1094,10 @@ private:
                 if (i.idx < 0 || i.idx >= (int)m.funcs.size())
                     SymbolFail(fn, cat("function ", i.idx, " is outside the function table"));
                 break;
+            case GirOp::DestOpen:
+                if (i.idx < 0 || i.idx >= (int)f.slots.size())
+                    SymbolFail(fn, cat("destination slot ", i.idx, " is outside the slot table"));
+                break;
             case GirOp::Enter: case GirOp::Leave:
                 if (i.idx < 0 || i.idx >= (int)f.scopes.size())
                     SymbolFail(fn, cat("scope ", i.idx, " is outside the scope table"));
@@ -1112,7 +1165,7 @@ private:
                 auto &pointee = m.Type(m.Type(r).elem);
                 if (!GirOwnerKind(pointee.kind))
                     TypeFail(fn, "append to a reference that does not point at an owner array");
-                if (pointee.kind != CoreType::Grow && m.profile != CoreProfile::Shrink)
+                if (pointee.kind != CoreType::Grow && !CoreHasShrink(m.profile))
                     TypeFail(fn, "shrink-profile append under core-pilot");
                 auto v = need(ty.View(i.b));
                 if (m.Type(v).elem != pointee.elem)
@@ -1122,7 +1175,7 @@ private:
             case GirOp::PopN: {
                 auto r = need(ty.Ref(i.a));
                 auto kind = m.Type(m.Type(r).elem).kind;
-                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(kind))
+                if (!CoreHasShrink(m.profile) || !GirOwnerKind(kind))
                     TypeFail(fn, "pop_n to a reference that does not point at a shrink-profile owner array");
                 need(ty.IntTy(i.b));
                 break;
@@ -1130,7 +1183,7 @@ private:
             case GirOp::Resize: {
                 auto r = need(ty.Ref(i.a));
                 auto &owner = m.Type(m.Type(r).elem);
-                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(owner.kind))
+                if (!CoreHasShrink(m.profile) || !GirOwnerKind(owner.kind))
                     TypeFail(fn, "resize to a reference that does not point at a shrink-profile owner array");
                 need(ty.IntTy(i.b));
                 if (i.vals.size() > 1) TypeFail(fn, "resize has more than one fill value");
@@ -1141,17 +1194,39 @@ private:
             case GirOp::Clear: {
                 auto r = need(ty.Ref(i.a));
                 auto kind = m.Type(m.Type(r).elem).kind;
-                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(kind))
+                if (!CoreHasShrink(m.profile) || !GirOwnerKind(kind))
                     TypeFail(fn, "clear to a reference that does not point at a shrink-profile owner array");
                 break;
             }
             case GirOp::Replace: {
                 auto r = need(ty.Ref(i.a));
                 auto &owner = m.Type(m.Type(r).elem);
-                if (m.profile != CoreProfile::Shrink || !GirResizableKind(owner.kind))
+                if (!CoreHasShrink(m.profile) || !GirResizableKind(owner.kind))
                     TypeFail(fn, "replace to a reference that does not point at a shrink-profile resizable array");
                 if (need(ty.Data(i.b)) != m.Type(r).elem)
                     TypeFail(fn, "replacement run has another type than the owner's");
+                break;
+            }
+            case GirOp::DestBytes: {
+                if (m.low || !CoreHasConstruction(m.profile))
+                    TypeFail(fn, "byte construction outside core-construction GIR-H");
+                auto destination = need(ty.Val(i.a));
+                auto &carrier = m.Type(destination);
+                if (carrier.kind != CoreType::Dest || carrier.request != CoreRequest::Value)
+                    TypeFail(fn, "byte initialization does not use a value-form destination");
+                auto &owner = m.Type(carrier.elem);
+                if (owner.kind != CoreType::Grow || m.Type(owner.elem).kind != CoreType::Int ||
+                    m.Type(owner.elem).ity != CoreIntTy::U8)
+                    TypeFail(fn, "byte initialization requires a grow-only u8 array");
+                break;
+            }
+            case GirOp::DestPublish: {
+                if (m.low || !CoreHasConstruction(m.profile))
+                    TypeFail(fn, "construction publication outside core-construction GIR-H");
+                auto completed = need(ty.Val(i.a));
+                auto &carrier = m.Type(completed);
+                if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value)
+                    TypeFail(fn, "publication does not consume a value-form completion");
                 break;
             }
             case GirOp::PStore: {
@@ -1471,7 +1546,7 @@ private:
                                             " is taken outside scope ", f.slots[s].scope));
                 };
                 switch (i.op) {
-                    case GirOp::Slot: case GirOp::Init: slotin(i.idx); break;
+                    case GirOp::Slot: case GirOp::Init: case GirOp::DestOpen: slotin(i.idx); break;
                     case GirOp::Enter: {
                         auto parent = f.scopes[i.idx];
                         auto ok = parent >= 0 ? !stack.empty() && stack.back() == parent : stack.empty();
@@ -2066,7 +2141,7 @@ private:
                     case GirOp::Push: {
                         auto roots = RootsAt(p.vals, i.a);
                         AddTargets(e.grows, roots);
-                        if (m.profile == CoreProfile::Shrink) AddTargets(e.writes, roots);
+                        if (CoreHasShrink(m.profile)) AddTargets(e.writes, roots);
                         auto &ref = m.Type(fn.vt[i.a]);
                         if (m.Type(ref.elem).kind == CoreType::Limited) e.aborts = true;
                         break;
@@ -2155,7 +2230,7 @@ private:
                     case GirOp::Append: {
                         auto roots = RootsAt(p.vals, i.a);
                         AddTargets(e.grows, roots);
-                        if (m.profile == CoreProfile::Shrink) AddTargets(e.writes, roots);
+                        if (CoreHasShrink(m.profile)) AddTargets(e.writes, roots);
                         AddTargets(e.reads, RootsAt(p.vals, i.b));
                         auto &ref = m.Type(fn.vt[i.a]);
                         if (m.Type(ref.elem).kind == CoreType::Limited) e.aborts = true;
@@ -2175,6 +2250,10 @@ private:
         for (size_t k = 0; k < m.funcs.size(); k++) {
             auto &f = m.funcs[k];
             if (f.summary.unknown) continue;
+            if (CoreHasConstruction(m.profile) &&
+                (!f.summary.constructs.empty() || !f.summary.needs.empty() || !f.summary.escapes.empty()))
+                Fail("GIR-V050", cat("function ", f.name,
+                                     " has construction summary entries outside the implemented byte slice"));
             auto e = Effects(fns[k], Provenance(res, fns[k]));
             auto name = cat("function ", f.name);
             if (e.unknown)
@@ -2200,6 +2279,80 @@ private:
     // survives from clear through replace. Receiver accesses and ref-like
     // source operands kill it; calls use their actual roots and summaries, with
     // unknown calls handled conservatively.
+
+    void CheckConstruction(const Fn &fn) {
+        auto &f = *fn.f;
+        vector<const GirInst *> definitions(fn.nvalues, nullptr);
+        vector<int> uses(fn.nvalues, 0);
+        set<pair<int, int>> matched;
+        for (size_t block = 0; block < f.blocks.size(); block++) {
+            auto &body = f.blocks[block];
+            for (auto &param : body.params)
+                if (param.second >= 0 && param.second < (int)m.types.size()) {
+                    auto kind = m.Type(param.second).kind;
+                    if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled)
+                        Fail("GIR-V060", cat(fn.label, ": a construction carrier is a block parameter"));
+                }
+            for (size_t index = 0; index < body.insts.size(); index++) {
+                auto &inst = body.insts[index];
+                if (GirDefinesValue(inst) && inst.res >= 0 && inst.res < fn.nvalues)
+                    definitions[inst.res] = &inst;
+                vector<int> operands;
+                Uses(inst, operands);
+                for (auto operand : operands)
+                    if (operand >= 0 && operand < fn.nvalues) uses[operand]++;
+                if (inst.op != GirOp::DestOpen) continue;
+                if (index + 3 >= body.insts.size())
+                    Fail("GIR-V060", cat(fn.label, ": a byte destination does not complete in its block"));
+                auto &write = body.insts[index + 1];
+                auto &finish = body.insts[index + 2];
+                auto &publish = body.insts[index + 3];
+                if (write.op != GirOp::DestBytes || finish.op != GirOp::DestFinish ||
+                    publish.op != GirOp::DestPublish || write.a != inst.res ||
+                    finish.a != inst.res || publish.a != finish.res)
+                    Fail("GIR-V060", cat(fn.label, ": a byte destination is not completed and published linearly"));
+                if (inst.idx < 0 || inst.idx >= (int)f.slots.size() ||
+                    inst.ty != f.slots[inst.idx].ty || !inst.knownCount)
+                    Fail("GIR-V060", cat(fn.label, ": a byte destination does not name its exact receiver slot"));
+                auto countValue = *inst.knownCount;
+                auto countDef = countValue >= 0 && countValue < fn.nvalues ? definitions[countValue] : nullptr;
+                if (!countDef || countDef->op != GirOp::Int)
+                    Fail("GIR-V060", cat(fn.label, ": a byte destination count is not a constant"));
+                int64_t count = -1;
+                auto [end, error] = from_chars(countDef->text.data(),
+                                               countDef->text.data() + countDef->text.size(), count);
+                if (error != errc() || end != countDef->text.data() + countDef->text.size() ||
+                    count < 0 || (uint64_t)count != write.bytes.size())
+                    Fail("GIR-V060", cat(fn.label, ": a byte destination count disagrees with its literal"));
+                matched.insert({ (int)block, (int)index });
+                matched.insert({ (int)block, (int)index + 1 });
+                matched.insert({ (int)block, (int)index + 2 });
+                matched.insert({ (int)block, (int)index + 3 });
+            }
+        }
+        for (size_t block = 0; block < f.blocks.size(); block++)
+            for (size_t index = 0; index < f.blocks[block].insts.size(); index++) {
+                auto &inst = f.blocks[block].insts[index];
+                if ((inst.op == GirOp::DestOpen || inst.op == GirOp::DestBytes ||
+                     inst.op == GirOp::DestFinish || inst.op == GirOp::DestPublish) &&
+                    !matched.count({ (int)block, (int)index }))
+                    Fail("GIR-V060", cat(fn.label, ": a construction operation is not part of a byte destination"));
+            }
+        for (int value = 0; value < fn.nvalues; value++) {
+            auto type = fn.vt[value];
+            if (type < 0 || type >= (int)m.types.size()) continue;
+            auto kind = m.Type(type).kind;
+            if (kind == CoreType::Dest) {
+                if (!definitions[value] || definitions[value]->op != GirOp::DestOpen || uses[value] != 2)
+                    Fail("GIR-V060", cat(fn.label, ": destination value %", value, " is not consumed exactly twice"));
+            } else if (kind == CoreType::Built) {
+                if (!definitions[value] || definitions[value]->op != GirOp::DestFinish || uses[value] != 1)
+                    Fail("GIR-V060", cat(fn.label, ": completion value %", value, " is not published exactly once"));
+            } else if (kind == CoreType::Cancelled) {
+                Fail("GIR-V060", cat(fn.label, ": cancellation carrier %", value, " has no construction protocol"));
+            }
+        }
+    }
 
     static vector<int> IncomingValues(const GirFunc &f, int target, size_t param) {
         vector<int> out;

@@ -37,6 +37,7 @@ public:
         mod.types = core.types;
         mod.profile = core.profile;
         mod.structs = core.structs;
+        mod.targets = core.targets;
         mod.files = files;
         mod.origins = origins;
         for (auto &im : core.impls) {
@@ -378,7 +379,7 @@ private:
                 i.op = GirOp::Push;
                 i.a = r;
                 i.b = v;
-                if (core.profile == CoreProfile::Shrink) i.org = Org(e.org);
+                if (CoreHasShrink(core.profile)) i.org = Org(e.org);
                 return EmitDef(std::move(i));
             }
             case CoreExprKind::Pop: {
@@ -405,6 +406,8 @@ private:
                 return JoinValue(endT, vt, endF, vf);
             }
             case CoreExprKind::Block: return LowerBlock(nullptr, {}, true, *e.then);
+            case CoreExprKind::Bytes:
+                throw CompileError { "internal compiler error: byte construction has no receiving destination" };
             case CoreExprKind::Arr: {
                 auto vs = LowerExprs(e.elems);
                 GirInst i;
@@ -577,10 +580,101 @@ private:
         return i;
     }
 
+    bool IsByteConstruction(const CoreExpr &expr) const {
+        if (expr.kind == CoreExprKind::Bytes) return true;
+        if (expr.kind == CoreExprKind::Block)
+            return expr.then && expr.then->value && IsByteConstruction(*expr.then->value);
+        if (expr.kind == CoreExprKind::If)
+            return expr.then && expr.then->value && expr.otherwise && expr.otherwise->value &&
+                   IsByteConstruction(*expr.then->value) && IsByteConstruction(*expr.otherwise->value);
+        return false;
+    }
+
+    void LowerBytesConstruction(const CoreExpr &expr, int slot) {
+        if (expr.kind == CoreExprKind::Bytes) {
+            GirInst open;
+            open.op = GirOp::DestOpen;
+            open.idx = slot;
+            open.ty = expr.type;
+            open.request = CoreRequest::Value;
+            open.knownCount = ConstInt(I64(), to_string(expr.bytes.size()));
+            open.org = Org(expr.org);
+            auto dest = EmitDef(std::move(open));
+
+            GirInst write;
+            write.op = GirOp::DestBytes;
+            write.a = dest;
+            write.bytes = expr.bytes;
+            write.org = Org(expr.org);
+            EmitEffect(std::move(write));
+
+            GirInst finish;
+            finish.op = GirOp::DestFinish;
+            finish.a = dest;
+            finish.org = Org(expr.org);
+            auto built = EmitDef(std::move(finish));
+
+            GirInst publish;
+            publish.op = GirOp::DestPublish;
+            publish.a = built;
+            publish.org = Org(expr.org);
+            EmitEffect(std::move(publish));
+            return;
+        }
+        if (expr.kind == CoreExprKind::Block) {
+            if (!expr.then || !expr.then->value)
+                throw CompileError { "internal compiler error: byte construction block has no value" };
+            LowerConstructionBlock(*expr.then, slot);
+            return;
+        }
+        if (expr.kind == CoreExprKind::If) {
+            if (!expr.then || !expr.otherwise)
+                throw CompileError { "internal compiler error: byte construction branch has no else arm" };
+            auto condition = LowerExpr(*expr.a);
+            if (cur < 0) return;
+            auto [thenBlock, thenParams] = NewBlock({});
+            auto [elseBlock, elseParams] = NewBlock({});
+            (void)thenParams;
+            (void)elseParams;
+            EmitTerm(CondBr(condition, thenBlock, {}, elseBlock, {}));
+            cur = thenBlock;
+            LowerConstructionBlock(*expr.then, slot);
+            auto thenEnd = cur;
+            cur = elseBlock;
+            LowerConstructionBlock(*expr.otherwise, slot);
+            auto elseEnd = cur;
+            JoinArms(thenEnd, elseEnd);
+            return;
+        }
+        throw CompileError { "internal compiler error: unsupported byte construction expression" };
+    }
+
+    void LowerConstructionBlock(const CoreBlock &block, int slot) {
+        GirInst enter;
+        enter.op = GirOp::Enter;
+        enter.idx = block.scope;
+        EmitEffect(std::move(enter));
+        stack.push_back(block.scope);
+        for (auto &stmt : block.stmts) {
+            if (cur < 0) break;
+            LowerStmt(nullptr, stmt);
+        }
+        if (cur >= 0) LowerBytesConstruction(*block.value, slot);
+        GirInst leave;
+        leave.op = GirOp::Leave;
+        leave.idx = block.scope;
+        EmitEffect(std::move(leave));
+        stack.pop_back();
+    }
+
     void LowerStmt(const Loop *lc, const CoreStmt &s) {
         auto org = Org(s.org);
         switch (s.kind) {
             case CoreStmtKind::Let: {
+                if (CoreHasConstruction(core.profile) && IsByteConstruction(*s.expr)) {
+                    LowerBytesConstruction(*s.expr, s.var);
+                    return;
+                }
                 auto v = LowerExpr(*s.expr);
                 GirInst i;
                 i.op = GirOp::Init;

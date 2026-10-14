@@ -4413,6 +4413,89 @@ void LowKeepsPackedFieldAlignmentAcrossCallParametersAndResults() {
     assert(scalarStores == 0);
 }
 
+GirModule ByteConstructionModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Construction;
+    auto u8 = m.IntType(CoreIntTy::U8);
+    CoreType owner;
+    owner.kind = CoreType::Grow;
+    owner.elem = u8;
+    auto ownerType = m.Intern(owner);
+    Main(m).slots = { { ownerType, CoreVarKind::Let, 0, 0 } };
+
+    auto count = Int(m, 0, "3");
+    GirInst open = Def(GirOp::DestOpen, 1);
+    open.idx = 0;
+    open.ty = ownerType;
+    open.request = CoreRequest::Value;
+    open.knownCount = 0;
+    open.org = 0;
+    GirInst write;
+    write.op = GirOp::DestBytes;
+    write.a = 1;
+    write.bytes = { 65, 0, 66 };
+    GirInst finish = Def(GirOp::DestFinish, 2);
+    finish.a = 1;
+    GirInst publish;
+    publish.op = GirOp::DestPublish;
+    publish.a = 2;
+    Main(m).blocks[0].insts = { Enter(0), count, open, write, finish, publish, Leave(0), Ret() };
+    return m;
+}
+
+void ConstructionBytesUseLinearDestinationProtocol() {
+    auto high = ByteConstructionModule();
+    assert(Code(high) == "");
+    assert(!GirVerifier(high).Verify());
+    auto encoded = GirWriter(high).Write();
+    assert(encoded.find("[\"dest\",") != string::npos);
+    assert(encoded.find("[\"built\",") != string::npos);
+
+    auto low = GirToLow(high).Lower();
+    assert(!GirVerifier(low).Verify());
+    assert(low.profile == CoreProfile::Construction);
+    assert(low.pointerBytes == sizeof(void *));
+    assert(low.lowtargets.empty());
+    auto stores = 0;
+    auto bumps = 0;
+    auto headerInitializations = 0;
+    auto lengthUpdates = 0;
+    for (auto &func : low.funcs) for (auto &block : func.blocks) for (auto &inst : block.insts) {
+        stores += inst.op == GirOp::PStore;
+        bumps += inst.op == GirOp::StackBump;
+        headerInitializations += inst.op == GirOp::HdrInit;
+        lengthUpdates += inst.op == GirOp::HdrSetLen;
+        assert(inst.op != GirOp::DestOpen && inst.op != GirOp::DestBytes &&
+               inst.op != GirOp::DestFinish && inst.op != GirOp::DestPublish);
+    }
+    assert(stores == 3);
+    assert(bumps == 1);
+    assert(headerInitializations == 1);
+    assert(lengthUpdates == 1);
+}
+
+void ConstructionBytesRejectIncompleteOrMismatchedDestinations() {
+    auto missingPublish = ByteConstructionModule();
+    Main(missingPublish).blocks[0].insts.erase(Main(missingPublish).blocks[0].insts.begin() + 5);
+    assert(Code(missingPublish) == "GIR-V060");
+
+    auto wrongCount = ByteConstructionModule();
+    Main(wrongCount).blocks[0].insts[1].text = "2";
+    assert(Code(wrongCount) == "GIR-V060");
+}
+
+void ConstructionTargetsRejectEmptyAndRepeatedMemberSets() {
+    auto empty = Base();
+    empty.profile = CoreProfile::Construction;
+    empty.targets = { CoreTargetSet {} };
+    assert(Code(empty) == "GIR-V001");
+
+    auto repeated = Base();
+    repeated.profile = CoreProfile::Construction;
+    repeated.targets = { CoreTargetSet { { 0, 0 } } };
+    assert(Code(repeated) == "GIR-V001");
+}
+
 }  // namespace
 
 int main() {
@@ -4496,6 +4579,9 @@ int main() {
     RejectsMaterializingAFieldRefFromAReadOnlyOwner();
     RejectsPassingAContentsConstAggregateFieldToAMutatingCall();
     LowKeepsPackedFieldAlignmentAcrossCallParametersAndResults();
+    ConstructionBytesUseLinearDestinationProtocol();
+    ConstructionBytesRejectIncompleteOrMismatchedDestinations();
+    ConstructionTargetsRejectEmptyAndRepeatedMemberSets();
     puts("compiler_gir ok");
     return 0;
 }
