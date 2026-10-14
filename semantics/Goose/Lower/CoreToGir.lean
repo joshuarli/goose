@@ -114,6 +114,7 @@ structure LEnv where
   vars : Array LocalVar
   globals : Array (Ty × VarKind)
   sigs : Array (List Ty × List Ty)
+  results : List Ty
 
 /-- The builder: reads the function's tables and threads the state. A plain
 function type, so that its `do` blocks unfold by definition. -/
@@ -733,8 +734,9 @@ def tyOfVar (impl : Impl) (x : VarId) : Ty :=
   | some lv => lv.ty
   | none => .unit
 
-def lowerEnv (m : Module) (vars : Array LocalVar) : LEnv :=
+def lowerEnv (m : Module) (vars : Array LocalVar) (results : List Ty) : LEnv :=
   { mod := m
+    results
     vars
     slots := vars.mapIdx fun i lv => ⟨lv.ty, lv.kind, lv.scope, i⟩
     globals := m.globals.map fun g => (g.ty, g.kind)
@@ -778,7 +780,7 @@ def finishFunction (impl : Impl) (v : ValueId) : B Unit := do
 
 /-- Lower an implementation using its position in the module as its identity. -/
 def lowerImplAt (m : Module) (implId : ImplId) (impl : Impl) : GIR.Func :=
-  let env := lowerEnv m impl.vars
+  let env := lowerEnv m impl.vars impl.results.toList
   let act : B Unit := do
     let (b0, ps) ← newBlock (impl.params.toList.map fun p => .data (tyOfVar impl p.var))
     setCur (some b0)
@@ -806,7 +808,7 @@ def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
 
 /-- Lower a global's initializer to a function that returns the value. -/
 def lowerGlobal (m : Module) (g : Global) : GIR.Global :=
-  let env := lowerEnv m #[]
+  let env := lowerEnv m #[] [g.ty]
   let act : B Unit := do
     let (b0, _) ← newBlock []
     setCur (some b0)

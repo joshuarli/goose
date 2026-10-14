@@ -108,7 +108,7 @@ def rangeModule : Core.Module :=
 def rangeVars : Array LocalVar := #[⟨"i", .int .i64, .immutable, 1, 0⟩]
 
 def rangeBuilder : LS :=
-  (lowerStmt none rangeStmt (lowerEnv rangeModule rangeVars) startLS).2
+  (lowerStmt none rangeStmt (lowerEnv rangeModule rangeVars []) startLS).2
 
 def rangeFunction : Func :=
   { name := "range", params := [], results := [],
@@ -123,7 +123,7 @@ theorem concrete_range_statement (n : Nat) (p : NumProfile) :
         Post ⟨p, rangeModule⟩ ⟨rangeVars, 0, [], 0⟩ ⟨⟨p, lower rangeModule⟩, rangeFunction⟩
           startLS ⟨0, [], {}, 0⟩ rangeBuilder fr' pt' []) := by
   apply stmt_range_sim n none 0 (.lit .i64 0) (.lit .i64 3) rangeBody 0 rfl rfl rfl
-    (lowerEnv rangeModule rangeVars) startLS rangeBuilder () (0, 0)
+    (lowerEnv rangeModule rangeVars []) startLS rangeBuilder () (0, 0)
     ⟨p, rangeModule⟩ ⟨rangeVars, 0, [], 0⟩ ⟨⟨p, lower rangeModule⟩, rangeFunction⟩
     ⟨0, [], {}, 0⟩
   · exact ⟨⟨"i", .int .i64, .immutable, 1, 0⟩, rfl, rfl⟩

@@ -15,7 +15,7 @@ def before (source : Ty) : LS :=
 def lowered (source target : Ty) : ValueId × LS :=
   (do let result ← coerceTo target 0
       emitTerm (.ret [result] none)
-      pure result) (lowerEnv sourceModule #[]) (before source)
+      pure result) (lowerEnv sourceModule #[] []) (before source)
 
 def fn (source target : Ty) : Func :=
   { name := "coerce", params := [source], results := [target], slots := #[], scopes := #[],

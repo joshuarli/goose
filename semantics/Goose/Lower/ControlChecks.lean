@@ -14,7 +14,7 @@ def nestedBlock : Core.Block := .mk 2
     (some (.mk 6 [Goose.Lower.ReturnChecks.returningStmt] none)) 0] none
 
 def nestedResult (m : Core.Module) : ValueId × LS :=
-  lowerBlock none [] false nestedBlock (lowerEnv m variables) scopedBuilder
+  lowerBlock none [] false nestedBlock (lowerEnv m variables []) scopedBuilder
 
 def nestedBuilder (m : Core.Module) : LS := (nestedResult m).2
 
@@ -27,7 +27,7 @@ theorem concrete_nested_returning_block (cfg : Cfg) (fuel : Nat) :
       (BlockFlowPost cfg beforeEnv ⟨⟨cfg.profile, lower cfg.mod⟩, nestedFunction cfg.mod⟩
         scopedBuilder beforeFrame (nestedBuilder cfg.mod) nestedBlock false (nestedResult cfg.mod).1) := by
   apply (flowClaims fuel).block none [] [] false nestedBlock rfl cfg beforeEnv
-    (by simp) (lowerEnv cfg.mod variables) scopedBuilder (nestedBuilder cfg.mod) (nestedResult cfg.mod).1
+    (by simp) (lowerEnv cfg.mod variables []) scopedBuilder (nestedBuilder cfg.mod) (nestedResult cfg.mod).1
     (0, 0) ⟨⟨cfg.profile, lower cfg.mod⟩, nestedFunction cfg.mod⟩ beforeFrame
   · exact (Prod.eta (nestedResult cfg.mod)).symm
   · rfl
