@@ -460,11 +460,14 @@ def finishChannel (layout : LayoutEnv) (origin : OriginId) (carrier : Carrier)
   | .register _ => pure ()
   | .completed id =>
       let destination ← getDestination id
-      let receivingPacked := match destination.capability.layout with | .varr _ => true | _ => false
-      if destination.layout == .packed && destination.capability.request == .value && !receivingPacked then
-        liftConstruction origin (removeConstructionHeader id)
-        liftConstruction origin (restoreReceivingLayout id (← receivingLayout layout destination.capability.layout))
-      liftConstruction origin (adaptDestinationType id result)
+      if destination.adaptation.isSome then
+        liftConstruction origin (normalizeProducerDestination id result)
+      else
+        let receivingPacked := match destination.capability.layout with | .varr _ => true | _ => false
+        if destination.layout == .packed && destination.capability.request == .value && !receivingPacked then
+          liftConstruction origin (removeConstructionHeader id)
+          liftConstruction origin (restoreReceivingLayout id (← receivingLayout layout destination.capability.layout))
+        liftConstruction origin (adaptDestinationType id result)
 
 def finishChannels (layout : LayoutEnv) (resultTypes : List Ty)
     (carriers : List Carrier) (origin : OriginId) : EvalM Unit := do
