@@ -299,4 +299,19 @@ private def namedStageOverflow : ConstructionM Unit := do
       state.events == [.begin 0,.write 0 0,.begin 1,.stage 1,.write 1 0,.write 1 1]
   | _ => false
 
+
+private def namedPackedIntoGrow : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 2)
+  prepareNamedBinding destination (.varr (.int .u8))
+  writeElement destination (bytes [0])
+  writeElement destination (bytes [255])
+  finishDestination destination
+  removeConstructionHeader destination
+  adaptDestinationType destination (.grow (.int .u8))
+  publishOperation [destination]
+
+#guard observe namedPackedIntoGrow == some ([0,255], 2,
+  [.begin 0,.write 0 0,.write 0 1,.relocate 0 .headerRemoval,.publish 0])
+
 end Goose.Construct.DestinationChecks

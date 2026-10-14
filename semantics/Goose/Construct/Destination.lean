@@ -1,4 +1,4 @@
-import Goose.Construct.Syntax
+import Goose.Construct.Typing
 
 namespace Goose.Construct
 open Goose.Core
@@ -612,5 +612,37 @@ def removeConstructionHeader (id : DestinationId) : ConstructionM Unit := do
       replaceDestination id { destination with layout := .elements, writeEnd := destination.writeEnd - 4 }
       emit (.relocate id .headerRemoval)
   | _ => ConstructionM.fail .protocol
+
+
+def adaptDestinationType (id : DestinationId) (logicalType : Ty) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  match destination.progress with
+  | .open _ | .built _ => pure ()
+  | _ => ConstructionM.fail .protocol
+  if !logicalType.constructible ||
+      !logicalType.adaptsTo destination.capability.logicalType then ConstructionM.fail .protocol
+  replaceDestination id { destination with
+    capability := { destination.capability with logicalType := logicalType } }
+
+def prepareNamedBinding (id : DestinationId) (localType : Ty) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  match destination.progress with
+  | .open 0 => pure ()
+  | _ => ConstructionM.fail .protocol
+  if destination.capability.request != .value ||
+      !localType.adaptsTo destination.capability.logicalType then ConstructionM.fail .protocol
+  let storage ← lookupStorage destination.storage
+  let needsPrefix : Bool := match localType with
+    | .varr _ => destination.layout != .packed
+    | _ => false
+  if needsPrefix then
+    if destination.writeEnd != destination.capability.start then ConstructionM.fail .protocol
+    let start := destination.capability.start
+    replaceStorage destination.storage { storage with
+      bytes := storage.bytes.extract 0 start ++ lengthPrefix ++ storage.bytes.extract start storage.bytes.size }
+  replaceDestination id { destination with
+    capability := { destination.capability with logicalType := localType }
+    layout := if needsPrefix then .packed else destination.layout
+    writeEnd := destination.writeEnd + if needsPrefix then 4 else 0 }
 
 end Goose.Construct
