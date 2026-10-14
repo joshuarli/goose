@@ -6,6 +6,9 @@ open Goose.Core Goose.Proofs.Memory
 
 abbrev RootDeclarations := RootInst → Option Ty
 
+def RootDeclarations.Extends (before after : RootDeclarations) : Prop :=
+  ∀ root ty, before root = some ty → after root = some ty
+
 inductive StoragePath : Ty → List Nat → Ty → Prop
   | root (ty : Ty) : StoragePath ty [] ty
   | fixed {element count index path result}
@@ -61,6 +64,33 @@ theorem WeakValueTy.ofFlat {roots : RootDeclarations} {value : Val} {ty : Ty}
     (typed : FlatTy ty value) : WeakValueTy roots value ty := by
   cases ty <;> try exact typed
   all_goals cases value <;> simp_all [FlatTy]
+
+theorem DeclaredLocation.mono {before after : RootDeclarations} {location : Loc} {ty : Ty}
+    (extension : before.Extends after) (declared : DeclaredLocation before location ty) :
+    DeclaredLocation after location ty := by
+  obtain ⟨rootTy, declaration, path⟩ := declared
+  exact ⟨rootTy, extension _ _ declaration, path⟩
+
+theorem WeakValueTy.mono {before after : RootDeclarations} {value : Val} {ty : Ty}
+    (extension : before.Extends after) (typed : WeakValueTy before value ty) :
+    WeakValueTy after value ty := by
+  cases ty with
+  | ref permission target =>
+    obtain ⟨location, same, declared⟩ := typed
+    exact ⟨location, same, declared.mono extension⟩
+  | slice permission element =>
+    rcases typed with ⟨location, start, len, arrayTy, same, declared, elementType⟩ |
+      ⟨location, start, len, count, same, declared⟩
+    · exact Or.inl ⟨location, start, len, arrayTy, same, declared.mono extension, elementType⟩
+    · exact Or.inr ⟨location, start, len, count, same, declared.mono extension⟩
+  | _ => exact typed
+
+theorem WeakStoreTy.mono {before after : RootDeclarations} {store : Store}
+    (extension : before.Extends after) (typed : WeakStoreTy before store) :
+    WeakStoreTy after store := by
+  intro root value present
+  obtain ⟨ty, declaration, valueTyped⟩ := typed root value present
+  exact ⟨ty, extension _ _ declaration, valueTyped.mono extension⟩
 
 theorem StoragePath.get {rootTy result : Ty} {path : List Nat} {value selected : Val}
     (declared : StoragePath rootTy path result) (typed : FlatTy rootTy value)
@@ -138,5 +168,19 @@ theorem WeakStoreTy.release {roots : RootDeclarations} {store : Store} {root : R
   split at present
   · contradiction
   · exact typed other value present
+
+theorem WeakStoreTy.introduce {roots : RootDeclarations} {store : Store} {root : RootInst}
+    {value : Val} {ty : Ty} (typed : WeakStoreTy roots store)
+    (declared : roots root = some ty) (valueTyped : WeakValueTy roots value ty) :
+    WeakStoreTy roots (store.introduce root value) := by
+  intro other stored present
+  simp only [Store.introduce, Std.HashMap.getElem?_insert] at present
+  split at present
+  · rename_i same
+    have sameRoot : root = other := eq_of_beq same
+    subst other
+    cases present
+    exact ⟨ty, declared, valueTyped⟩
+  · exact typed other stored present
 
 end Goose.Evidence

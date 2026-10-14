@@ -71,4 +71,51 @@ theorem WeakFrameTy.getVal {roots : RootDeclarations} {types : Array (Option VTy
       obtain ⟨rfl, rfl⟩ := read
       exact ⟨typed id (.val found) (.data ty) metadata present, rfl⟩
 
+theorem WeakViewTy.mono {before after : RootDeclarations} {view : ViewVal} {element : Ty}
+    (extension : before.Extends after) (typed : WeakViewTy before view element) :
+    WeakViewTy after view element := by
+  rcases typed with ⟨count, declared⟩ | declared | declared | ⟨capacity, declared⟩
+  · exact Or.inl ⟨count, declared.mono extension⟩
+  · exact Or.inr (Or.inl (declared.mono extension))
+  · exact Or.inr (Or.inr (Or.inl (declared.mono extension)))
+  · exact Or.inr (Or.inr (Or.inr ⟨capacity, declared.mono extension⟩))
+
+theorem WeakCellTy.mono {before after : RootDeclarations} {cell : RVal} {ty : VTy}
+    (extension : before.Extends after) (typed : WeakCellTy before cell ty) :
+    WeakCellTy after cell ty := by
+  cases cell <;> cases ty
+  · exact WeakValueTy.mono extension typed
+  · exact typed
+  · exact typed
+  · exact WeakViewTy.mono extension typed
+
+theorem WeakFrameTy.mono {before after : RootDeclarations} {types : Array (Option VTy)}
+    {fr : Frame} (extension : before.Extends after) (typed : WeakFrameTy before types fr) :
+    WeakFrameTy after types fr := by
+  intro id cell ty metadata present
+  exact (typed id cell ty metadata present).mono extension
+
+theorem execPure_load_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {permission : Mutability} {ty : Ty}
+    {before after : St} {cell : RVal}
+    (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data (.ref permission ty))))
+    (storeTyped : WeakStoreTy roots before.store)
+    (evaluated : execPure cx fr (.load id) before = .ok cell after) :
+    WeakCellTy roots cell (.data ty) ∧ after = before := by
+  unfold execPure at evaluated
+  cases read : getVal fr id before with
+  | stop outcome state => simp [bind_apply, read] at evaluated
+  | ok value state =>
+    obtain ⟨valueTyped, rfl⟩ := frameTyped.getVal metadata read
+    obtain ⟨location, rfl, declared⟩ := valueTyped
+    simp only [bind_apply, read, expectRef, pure_apply] at evaluated
+    unfold readLoc at evaluated
+    cases stored : state.store.read location with
+    | error fault => simp [stored] at evaluated
+    | ok value =>
+      simp only [stored, Res.ok.injEq] at evaluated
+      obtain ⟨rfl, rfl⟩ := evaluated
+      exact ⟨storeTyped.read declared stored, rfl⟩
+
 end Goose.Evidence
