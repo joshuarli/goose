@@ -2,7 +2,7 @@ import Goose.Lower.Claims
 import Goose.Lower.Range
 import Goose.Lower.Validate
 import Goose.Lower.IfSymbols
-import Goose.Lower.Finish
+import Goose.Lower.FunctionTail
 import Goose.Lower.Normal
 import Goose.Lower.ControlNormal
 import Goose.Core.Validate
@@ -309,11 +309,6 @@ theorem callFn_nil (cfg : GCfg) (depth k : Nat) (hd : ¬ depth ≥ maxCallDepth)
     callFn (k + 1) cfg depth f [] s = enterFn k cfg (depth + 1) fn [] s := by
   simp [callFn, hd, lookupFn, hf]
 
-theorem extT_finish (ls : LS) : ExtT ls (finishBlocks ls.blocks) := by
-  refine ⟨by simp [finishBlocks], fun i blk hi => ?_⟩
-  refine ⟨⟨blk.params, blk.insts.toList⟩, ?_, rfl, [], by simp⟩
-  simp [finishBlocks, Array.getElem?_map, hi]
-
 /-- The state at the start of a function whose entry block has no parameter. -/
 def startLS : LS := { blocks := #[⟨[], #[]⟩], vals := #[], cur := some 0, stack := [] }
 
@@ -401,10 +396,6 @@ theorem enterCall_nil (cfg : Cfg) (n : Nat) (c : ContextId) (ctx : Context) (imp
   have hmaxd : ¬ ((0 : Nat) ≥ maxCallDepth) := by simp [maxCallDepth]
   simp [enterCall, hmaxd, lookupContext, lookupImpl, hctx, himpl, hp]
 
-/-- Finalize the body with a return or close a synthetic divergent frontier. -/
-def bodyTail (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS) : LS :=
-  (finishFunction impl v le ls1).2
-
 theorem lowerImplAt_blocks (m : Core.Module) (implId : ImplId) (impl : Impl)
     (hp : impl.params = #[]) :
     (lowerImplAt m implId impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
@@ -421,26 +412,6 @@ theorem lowerImpl_blocks (m : Core.Module) (impl : Impl) (hp : impl.params = #[]
       (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).2).blocks := by
   unfold lowerImpl
   exact lowerImplAt_blocks m _ impl hp
-
-theorem bodyTail_cases (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS)
-    (hd : impl.body.diverges le.mod.noReturn = false) :
-    (ls1.cur = none ∧ bodyTail impl le v ls1 = ls1) ∨
-    (∃ b, ls1.cur = some b ∧
-      emitTerm (.ret (if impl.body.value.isSome then [v] else []) none) le ls1 =
-        ((), bodyTail impl le v ls1)) := by
-  cases hc : ls1.cur with
-  | none =>
-    left
-    refine ⟨rfl, ?_⟩
-    unfold bodyTail
-    rw [finishFunction_nondivergent impl le ls1 v hd]
-    simp [bind_run, isLive_none hc, pure_run]
-  | some b =>
-    right
-    refine ⟨b, rfl, ?_⟩
-    unfold bodyTail
-    rw [finishFunction_nondivergent impl le ls1 v hd]
-    simp [bind_run, isLive_run hc]
 
 theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     (hctx : m.contexts[m.entry]? = some ctx) (himpl : m.impls[ctx.impl]? = some impl)
