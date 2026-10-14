@@ -321,6 +321,11 @@ theorem keepsEventPrefix_allocateActivation (make : Goose.Core.ActId → Runtime
     kept (make state.nextAct)
       { state with nextAct := state.nextAct + 1, activations := make state.nextAct :: state.activations }
 
+theorem keepsEventPrefix_emitStdout (bytes : ByteArray) : KeepsEventPrefix (emitStdout bytes) := by
+  apply keepsEventPrefix_liftConstruction
+  intro state
+  exact eventPrefix_refl _
+
 theorem rejected_publication_preserves_execution (state : ExecutionState)
     (destinations : List Goose.Core.DestinationId) (kind : ConstructionFault)
     (origin : Goose.Core.OriginId)
