@@ -135,4 +135,38 @@ private def aliasedWholeReplacement : Module :=
 
 #guard rejectsWith aliasedWholeReplacement .whole
 
+private def exitSlice : Ty := .slice .readOnly (.int .u8)
+
+private def exitRootCaller : Impl :=
+  ⟨"target-caller", #[⟨0, .byValue⟩, ⟨1, .byValue⟩],
+    #[⟨exitSlice, .register, none⟩],
+    #[⟨"first", exitSlice, .immutable, 0, 0⟩, ⟨"second", exitSlice, .immutable, 0, 0⟩],
+    .mk 0 [.expr (.call 2 [.byVal (.read (.var 1))] 0) 0] none, .unknown⟩
+
+private def exitRootHelper : Impl :=
+  ⟨"helper", #[⟨0, .byValue⟩], #[], #[⟨"source", exitSlice, .immutable, 0, 0⟩],
+    .mk 0 [.returnFrom 0 [.read (.var 0)] 0] none, .unknown⟩
+
+private def exitRootCallerContext : Context :=
+  ⟨1, "target-caller", [(0, [.param 0]), (1, [.param 1])], [[.param 0]], []⟩
+
+private def exitRootHelperContext : Context :=
+  ⟨2, "helper", [(0, [.param 0])], [], []⟩
+
+private def missingExitRoot : Module := {
+  (baseModule mainImpl #[mainImpl, exitRootCaller, exitRootHelper]) with
+  contexts := #[context, exitRootCallerContext, exitRootHelperContext]
+  targets := #[⟨1, []⟩] }
+
+#guard missingExitRoot.contexts.toList.all fun context =>
+  match checkContext missingExitRoot context with
+  | .ok _ => true
+  | .error _ => false
+
+#guard match checkModuleExitRoots missingExitRoot with
+  | .error rejection => rejection.rule == .result
+  | .ok _ => false
+
+#guard rejectsWith missingExitRoot .result
+
 end Goose.Construct.ValidationChecks
