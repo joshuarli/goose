@@ -290,4 +290,346 @@ theorem FactsHold.claimedEdge {f : Func} {fr next : Frame} {state after : St}
     FactsHold next after claimed :=
   FactsHold.subset (FactsHold.enterBlock hold result) derived
 
+private theorem success_bind {computation : M α} {next : α → M β}
+    {state after : St} {result : β}
+    (success : (computation >>= next) state = .ok result after) :
+    ∃ value middle, computation state = .ok value middle ∧ next value middle = .ok result after := by
+  rw [bind_apply] at success
+  cases evaluated : computation state with
+  | stop reason stopped => simp [evaluated] at success
+  | ok value middle => exact ⟨value, middle, rfl, by simpa [evaluated] using success⟩
+
+theorem getCell_success {fr : Frame} {id : ValueId} {state after : St} {cell : RVal}
+    (success : getCell fr id state = .ok cell after) :
+    fr.vals[id]? = some cell ∧ after = state := by
+  unfold getCell at success
+  cases found : fr.vals[id]? with
+  | none => simp [found, fault, M.stop] at success
+  | some value =>
+    simp only [found, pure_apply, Res.ok.injEq] at success
+    exact ⟨by simp [← success.1], success.2.symm⟩
+
+theorem getVal_success {fr : Frame} {id : ValueId} {state after : St} {value : Val}
+    (success : getVal fr id state = .ok value after) :
+    fr.vals[id]? = some (.val value) ∧ after = state := by
+  unfold getVal at success
+  obtain ⟨cell, middle, read, success⟩ := success_bind success
+  obtain ⟨found, same⟩ := getCell_success read
+  subst middle
+  cases cell with
+  | val cell =>
+    simp only [pure_apply, Res.ok.injEq] at success
+    exact ⟨by simp [← success.1, found], success.2.symm⟩
+  | view cell => simp [fault, M.stop] at success
+
+theorem getView_success {fr : Frame} {id : ValueId} {state after : St} {value : ViewVal}
+    (success : getView fr id state = .ok value after) :
+    fr.vals[id]? = some (.view value) ∧ after = state := by
+  unfold getView at success
+  obtain ⟨cell, middle, read, success⟩ := success_bind success
+  obtain ⟨found, same⟩ := getCell_success read
+  subst middle
+  cases cell with
+  | val cell => simp [fault, M.stop] at success
+  | view cell =>
+    simp only [pure_apply, Res.ok.injEq] at success
+    exact ⟨by simp [← success.1, found], success.2.symm⟩
+
+theorem expectRef_success {value : Val} {state after : St} {loc : Loc}
+    (success : expectRef value state = .ok loc after) : value = .ref loc ∧ after = state := by
+  cases value <;> simp [expectRef, pure, M.pure', fault, M.stop] at success
+  obtain ⟨rfl, rfl⟩ := success
+  exact ⟨rfl, rfl⟩
+
+theorem readLoc_state {loc : Loc} {state after : St} {value : Val}
+    (success : readLoc loc state = .ok value after) : after = state := by
+  unfold readLoc at success
+  split at success
+  · exact (Res.ok.inj success).2.symm
+  · contradiction
+
+theorem expectArray_state {value : Val} {state after : St} {length : Nat × Bool}
+    (success : expectArray value state = .ok length after) : after = state := by
+  cases value <;> simp [expectArray, pure, M.pure', fault, M.stop] at success
+  all_goals exact success.2.symm
+
+theorem arrayLen_success {cx : FnCtx} {fr : Frame} {reference : ValueId}
+    {state after : St} {cell : RVal}
+    (success : execPure cx fr (.arrayLen reference) state = .ok cell after) :
+    ∃ loc len, RefAt fr reference loc ∧ ArrayLenAt state loc len ∧
+      cell = .val (.int .i64 len) ∧ after = state := by
+  simp only [execPure] at success
+  obtain ⟨value, first, hvalue, success⟩ := success_bind success
+  obtain ⟨loc, second, href, success⟩ := success_bind success
+  obtain ⟨array, third, harray, success⟩ := success_bind success
+  obtain ⟨length, fourth, hlength, success⟩ := success_bind success
+  obtain ⟨atValue, same⟩ := getVal_success hvalue
+  subst first
+  obtain ⟨rfl, same⟩ := expectRef_success href
+  subst second
+  have same := readLoc_state harray
+  subst third
+  have same := expectArray_state hlength
+  subst fourth
+  simp only [pure_apply, Res.ok.injEq] at success
+  refine ⟨loc, length.1, atValue, ⟨array, length.2, harray, hlength⟩, success.1.symm,
+    success.2.symm⟩
+
+theorem arrayLen_facts {cx : FnCtx} {fr : Frame} {reference result : ValueId}
+    {state after : St} {cell : RVal} (fresh : result ≠ reference)
+    (success : execPure cx fr (.arrayLen reference) state = .ok cell after) :
+    FactHolds (withCell fr result cell) after (.ge0 result) ∧
+      FactHolds (withCell fr result cell) after (.lenGe reference result) := by
+  obtain ⟨loc, len, ref, length, rfl, rfl⟩ := arrayLen_success success
+  exact f_len_sound fresh ref length
+
+theorem snapshot_success {cx : FnCtx} {fr : Frame} {reference : ValueId}
+    {mode : SnapshotMode} {state after : St} {cell : RVal}
+    (success : execPure cx fr (.snapshot mode reference) state = .ok cell after) :
+    ∃ loc len resizable, RefAt fr reference loc ∧ ArrayLenAt state loc len ∧
+      cell = .view ⟨loc, 0, len, resizable⟩ ∧ after = state := by
+  simp only [execPure] at success
+  obtain ⟨value, first, hvalue, success⟩ := success_bind success
+  obtain ⟨loc, second, href, success⟩ := success_bind success
+  obtain ⟨array, third, harray, success⟩ := success_bind success
+  obtain ⟨length, fourth, hlength, success⟩ := success_bind success
+  obtain ⟨atValue, same⟩ := getVal_success hvalue
+  subst first
+  obtain ⟨rfl, same⟩ := expectRef_success href
+  subst second
+  have same := readLoc_state harray
+  subst third
+  have same := expectArray_state hlength
+  subst fourth
+  simp only [pure_apply, Res.ok.injEq] at success
+  exact ⟨loc, length.1, length.2, atValue, ⟨array, length.2, harray, hlength⟩,
+    success.1.symm, success.2.symm⟩
+
+theorem snapshot_fact {cx : FnCtx} {fr : Frame} {reference result bound : ValueId}
+    {mode : SnapshotMode} {state after : St} {cell : RVal} (fresh : result ≠ bound)
+    (hold : FactHolds fr state (.lenGe reference bound))
+    (success : execPure cx fr (.snapshot mode reference) state = .ok cell after) :
+    FactHolds (withCell fr result cell) after (.viewLenGe result bound) := by
+  obtain ⟨loc, len, resizable, ref, length, rfl, rfl⟩ := snapshot_success success
+  exact f_snap_sound fresh ref length hold
+
+theorem constInt_fact {cx : FnCtx} {fr : Frame} {result : ValueId} {number : Int}
+    {state after : St} {cell : RVal} (nonnegative : 0 ≤ number)
+    (success : execPure cx fr (.constInt .i64 number) state = .ok cell after) :
+    FactHolds (withCell fr result cell) after (.ge0 result) := by
+  simp only [execPure, pure_apply, Res.ok.injEq] at success
+  obtain ⟨rfl, rfl⟩ := success
+  exact f_const_sound nonnegative
+
+private def StateStable (computation : M α) : Prop :=
+  ∀ state value after, computation state = .ok value after → after = state
+
+private theorem StateStable.pure (value : α) : StateStable (pure value) := by
+  intro state found after success
+  exact (Res.ok.inj success).2.symm
+
+private theorem StateStable.fault (kind : FaultKind) : StateStable (fault kind : M α) := by
+  intro state value after success
+  simp [Goose.Core.fault, M.stop] at success
+
+private theorem StateStable.abort (kind : AbortKind) (origin : Option OriginId) :
+    StateStable (abortAtOrg kind origin : M α) := by
+  intro state value after success
+  cases origin <;> simp [abortAtOrg, Goose.Core.fault, abortAt, M.stop] at success
+
+private theorem StateStable.bind {computation : M α} {next : α → M β}
+    (first : StateStable computation) (rest : ∀ value, StateStable (next value)) :
+    StateStable (computation >>= next) := by
+  intro state value after success
+  obtain ⟨intermediate, middle, evaluated, success⟩ := success_bind success
+  exact (rest intermediate middle value after success).trans
+    (first state intermediate middle evaluated)
+
+private theorem stable_getVal (fr : Frame) (id : ValueId) : StateStable (getVal fr id) :=
+  fun _ _ _ success => (getVal_success success).2
+
+private theorem stable_getView (fr : Frame) (id : ValueId) : StateStable (getView fr id) :=
+  fun _ _ _ success => (getView_success success).2
+
+private theorem stable_readLoc (loc : Loc) : StateStable (readLoc loc) :=
+  fun _ _ _ success => readLoc_state success
+
+private theorem stable_expectInt (value : Val) : StateStable (expectInt value) := by
+  cases value <;> first | exact StateStable.pure _ | exact StateStable.fault _
+
+private theorem stable_expectBool (value : Val) : StateStable (expectBool value) := by
+  cases value <;> first | exact StateStable.pure _ | exact StateStable.fault _
+
+private theorem stable_expectRef (value : Val) : StateStable (expectRef value) :=
+  fun _ _ _ success => (expectRef_success success).2
+
+private theorem stable_expectSlice (value : Val) : StateStable (expectSlice value) := by
+  cases value <;> first | exact StateStable.pure _ | exact StateStable.fault _
+
+private theorem stable_expectArray (value : Val) : StateStable (expectArray value) :=
+  fun _ _ _ success => expectArray_state success
+
+private theorem stable_expectSameTy (left right : IntTy) : StateStable (expectSameTy left right) := by
+  unfold expectSameTy
+  split
+  · exact StateStable.pure _
+  · exact StateStable.fault _
+
+private theorem stable_expectComparable (left right : Val) : StateStable (expectComparable left right) := by
+  cases left <;> cases right <;> simp only [expectComparable]
+  all_goals first
+    | exact StateStable.pure _
+    | exact StateStable.fault _
+    | exact (stable_expectSameTy _ _).bind fun _ => StateStable.pure _
+
+private theorem stable_expectArrayLit (type : Ty) (elements : Array Val) :
+    StateStable (expectArrayLit type elements) := by
+  cases type <;> simp only [expectArrayLit]
+  all_goals first
+    | exact StateStable.pure _
+    | exact StateStable.fault _
+    | (split <;> first | exact StateStable.pure _ | exact StateStable.fault _)
+
+private theorem stable_expectFixedCount (type : Ty) : StateStable (expectFixedCount type) := by
+  cases type <;> first | exact StateStable.pure _ | exact StateStable.fault _
+
+private theorem stable_slotRoot (f : Func) (fr : Frame) (slot : SlotId) : StateStable (slotRoot f fr slot) := by
+  unfold slotRoot
+  split
+  · exact StateStable.fault _
+  · split
+    · exact StateStable.fault _
+    · exact StateStable.pure _
+
+private theorem stable_mapList {get : α → M β} (stable : ∀ value, StateStable (get value)) :
+    ∀ values, StateStable (mapList get values) := by
+  intro values
+  induction values with
+  | nil => exact StateStable.pure _
+  | cons value values ih =>
+    exact (stable value).bind fun _ => ih.bind fun _ => StateStable.pure _
+
+private theorem stable_evalBnd (fr : Frame) (len : Nat) (default : Int) (bound : Bnd) :
+    StateStable (evalBnd fr len default bound) := by
+  cases bound with
+  | omitted => exact StateStable.pure _
+  | val id | fromEnd id =>
+    exact (stable_getVal fr id).bind fun value =>
+      (stable_expectInt value).bind fun _ => StateStable.pure _
+
+theorem execPure_state {cx : FnCtx} {fr : Frame} {op : Op} {result : ValueId}
+    {state after : St} {cell : RVal} (preserved : killsLengths (.def result op) = false)
+    (success : execPure cx fr op state = .ok cell after) : after = state := by
+  have stable : StateStable (execPure cx fr op) := by
+    cases op with
+    | push | pop | call => simp [killsLengths] at preserved
+    | constInt | constBool | constUnit | globalAddr => exact StateStable.pure _
+    | slotAddr slot => exact (stable_slotRoot cx.fn fr slot).bind fun _ => StateStable.pure _
+    | bin operator type left right origin =>
+      exact (stable_getVal fr left).bind fun lv => (stable_expectInt lv).bind fun li =>
+        (stable_getVal fr right).bind fun rv => (stable_expectInt rv).bind fun ri =>
+        (stable_expectSameTy li.1 ri.1).bind fun _ => by
+          split
+          · exact StateStable.pure _
+          · exact StateStable.abort _ _
+    | un operator type value origin =>
+      exact (stable_getVal fr value).bind fun v => (stable_expectInt v).bind fun vi => by
+        rcases vi with ⟨operandType, number⟩
+        dsimp only
+        split
+        · exact StateStable.pure _
+        · exact StateStable.abort _ _
+    | cmp operator type left right | boolCmp operator left right =>
+      exact (stable_getVal fr left).bind fun lv => (stable_getVal fr right).bind fun rv =>
+        (stable_expectComparable lv rv).bind fun _ => StateStable.pure _
+    | boolNot id =>
+      exact (stable_getVal fr id).bind fun value =>
+        (stable_expectBool value).bind fun _ => StateStable.pure _
+    | conv kind src dst id origin =>
+      exact (stable_getVal fr id).bind fun value => (stable_expectInt value).bind fun vi => by
+        rcases vi with ⟨operandType, number⟩
+        dsimp only
+        split
+        · exact StateStable.pure _
+        · exact StateStable.abort _ _
+    | next type id =>
+      exact (stable_getVal fr id).bind fun value =>
+        (stable_expectInt value).bind fun _ => StateStable.pure _
+    | refElem view index =>
+      exact (stable_getView fr view).bind fun vw =>
+        (stable_getVal fr index).bind fun value => (stable_expectInt value).bind fun vi => by
+          rcases vi with ⟨operandType, number⟩
+          dsimp only
+          split
+          · exact StateStable.pure _
+          · exact StateStable.fault _
+    | refFreeze reference =>
+      exact (stable_getVal fr reference).bind fun value =>
+        (stable_expectRef value).bind fun _ => StateStable.pure _
+    | load reference =>
+      exact (stable_getVal fr reference).bind fun value => (stable_expectRef value).bind fun loc =>
+        (stable_readLoc loc).bind fun _ => StateStable.pure _
+    | snapshot mode reference | arrayLen reference =>
+      exact (stable_getVal fr reference).bind fun value => (stable_expectRef value).bind fun loc =>
+        (stable_readLoc loc).bind fun array => (stable_expectArray array).bind fun _ => StateStable.pure _
+    | sliceView id =>
+      exact (stable_getVal fr id).bind fun value =>
+        (stable_expectSlice value).bind fun _ => StateStable.pure _
+    | viewLen id => exact (stable_getView fr id).bind fun _ => StateStable.pure _
+    | viewSlice mutability view lo hi origin =>
+      exact (stable_getView fr view).bind fun vw => (stable_evalBnd fr vw.len 0 lo).bind fun lower =>
+        (stable_evalBnd fr vw.len vw.len hi).bind fun upper => by
+          split
+          · exact StateStable.pure _
+          · exact StateStable.abort _ _
+    | indexChecked view index origin =>
+      exact (stable_getView fr view).bind fun vw => (stable_getVal fr index).bind fun value =>
+        (stable_expectInt value).bind fun vi => by
+          rcases vi with ⟨operandType, number⟩
+          dsimp only
+          split
+          · exact StateStable.pure _
+          · exact StateStable.abort _ _
+    | indexProven view index =>
+      exact (stable_getView fr view).bind fun vw => (stable_getVal fr index).bind fun value =>
+        (stable_expectInt value).bind fun _ => StateStable.pure _
+    | arrLit type values =>
+      exact (stable_mapList (stable_getVal fr) values).bind fun array =>
+        (stable_expectArrayLit type array.toArray).bind fun _ => StateStable.pure _
+    | arrFill type id =>
+      exact (stable_expectFixedCount type).bind fun _ =>
+        (stable_getVal fr id).bind fun _ => StateStable.pure _
+    | structLit type values =>
+      simp only [execPure]
+      split
+      · exact (stable_mapList (stable_getVal fr) values).bind fun _ => StateStable.pure _
+      · exact StateStable.fault _
+    | fieldAddr owner field =>
+      exact (stable_getVal fr owner).bind fun value =>
+        (stable_expectRef value).bind fun _ => StateStable.pure _
+  exact stable state cell after success
+
+theorem execOp_state {fuel : Nat} {cx : FnCtx} {fr : Frame} {op : Op} {result : ValueId}
+    {state after : St} {cell : RVal} (preserved : killsLengths (.def result op) = false)
+    (success : execOp fuel cx fr op state = .ok cell after) : after = state := by
+  have pureSuccess : execPure cx fr op state = .ok cell after := by
+    cases op <;> first
+      | simpa only [execOp] using success
+      | simp [killsLengths] at preserved
+  exact execPure_state preserved pureSuccess
+
+theorem FactsHold.defKills {fuel : Nat} {cx : FnCtx} {fr : Frame} {op : Op} {result : ValueId}
+    {state after : St} {cell : RVal} {facts : Facts} (hold : FactsHold fr state facts)
+    (success : execOp fuel cx fr op state = .ok cell after) :
+    FactsHold (withCell fr result cell) after
+      (if killsLengths (.def result op) then
+        Goose.GIR.killLengths (Goose.GIR.killValue facts result)
+      else Goose.GIR.killValue facts result) := by
+  cases mutates : killsLengths (.def result op) with
+  | true => exact FactsHold.mutatingDef hold result cell
+  | false =>
+    have same := execOp_state mutates success
+    subst after
+    exact FactsHold.killValue hold result cell
+
 end Goose.Proofs.Bounds
