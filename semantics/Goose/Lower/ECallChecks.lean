@@ -52,4 +52,57 @@ theorem actual_calling_callee_block (profile : NumProfile) (n : Nat) :
     CalleeBlockClaim n ⟨profile, referenceSource⟩ 1 referenceEntry :=
   calleeBlockClaim_of_simulation rfl profile n (reference_block profile n)
 
+theorem actual_calling_entry (profile : NumProfile) (n : Nat) :
+    CalleeCallClaim n ⟨profile, referenceSource⟩ referenceSource.entry := by
+  cases n with
+  | zero => exact calleeCallClaim_zero _ _
+  | succ n =>
+    exact calleeCallClaim_noResults_of_body (ctx := ⟨1, "main", [], [], []⟩)
+      (impl := referenceEntry) rfl rfl rfl profile n (actual_calling_callee_block profile n)
+
+theorem actual_calling_module_agree (profile : NumProfile) (n : Nat) (state : St) :
+    EventualM (Core.runModule n ⟨profile, referenceSource⟩)
+      (fun fuel => GIR.runModule fuel ⟨profile, lower referenceSource⟩) state := by
+  have hglobals : referenceSource.globals.size = 0 := rfl
+  have hgirGlobals : (lower referenceSource).globals.size = 0 := by simp [lower, referenceSource]
+  have hentry : (lower referenceSource).entry = 1 := rfl
+  simp only [Core.runModule, GIR.runModule, hglobals, hgirGlobals, hentry,
+    List.range_zero, Core.initGlobals, GIR.initGlobals, pure_bind]
+  exact EventualM.bind (actual_calling_entry profile n 0 [] state)
+    (fun _ after _ => EventualM.refl (pure ()) after)
+
+theorem actual_calling_module_correct (n : Nat) (p : NumProfile)
+    (o : Outcome) (t : String) (h : eval n p referenceSource = .done o t) :
+    ∃ k, GIR.run k p (lower referenceSource) = .done o t := by
+  have hA := actual_calling_module_agree p n St.initial
+  unfold eval at h
+  unfold GIR.run
+  cases hr : Goose.Core.runModule n ⟨p, referenceSource⟩ St.initial with
+  | ok a s =>
+    rw [hr] at h
+    simp only [Result.done.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    obtain ⟨K, hK⟩ := hA.1 a s hr
+    have hK' : GIR.runModule K ⟨p, lower referenceSource⟩ St.initial = Res.ok a s := hK K (Nat.le_refl _)
+    exact ⟨K, by rw [hK']⟩
+  | stop e s =>
+    rw [hr] at h
+    cases e with
+    | abort k org =>
+      simp only [Result.done.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨K, hK⟩ := hA.2 _ s hr trivial
+      have hK' : GIR.runModule K ⟨p, lower referenceSource⟩ St.initial = Res.stop (Stop.abort k org) s :=
+        hK K (Nat.le_refl _)
+      exact ⟨K, by rw [hK']⟩
+    | exit code =>
+      simp only [Result.done.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨K, hK⟩ := hA.2 _ s hr trivial
+      have hK' : GIR.runModule K ⟨p, lower referenceSource⟩ St.initial = Res.stop (Stop.exit code) s :=
+        hK K (Nat.le_refl _)
+      exact ⟨K, by rw [hK']⟩
+    | fault k => simp at h
+    | timeout => simp at h
+
 end Goose.Lower.ECallChecks
