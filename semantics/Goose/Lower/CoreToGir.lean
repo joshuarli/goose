@@ -150,15 +150,7 @@ def tyEnv (env : LEnv) (s : LS) : GIR.TyEnv :=
           blocks := s.blocks.map fun b => ⟨b.params, b.insts.toList⟩
           summary := .unknown
           org := none }
-      let m : GIR.Module :=
-        { files := env.mod.files
-          globals := #[]
-          funcs := #[]
-          entry := 0
-          origins := env.mod.origins
-          profile := env.mod.profile
-          structs := env.mod.structs }
-      (f.permissions m s.vals)[v]?.map (·.2) }
+      (f.permissionsFromTables (env.globals.map (·.2)) env.mod.structs s.vals)[v]?.map (·.2) }
 
 def curBlock : B (Option BlockId) := do pure (← get).cur
 
