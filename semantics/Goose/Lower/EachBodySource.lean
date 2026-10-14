@@ -38,7 +38,7 @@ private theorem eachBinders_visible (binders active : List VarId) (y : VarId) :
     · simp only [contains, Bool.false_eq_true, ite_false, List.mem_append, List.mem_cons]
       simp only [or_assoc, or_left_comm]
 
-private theorem eachBody_future {cfg : Cfg} {env : Env} {initial : St} {x : VarId}
+theorem EachPlan.bodyFuture {cfg : Cfg} {env : Env} {initial : St} {x : VarId}
     {idx : Option VarId} {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
     {source : StmtSource cfg env (.forEach x idx view byRef body origin) initial}
     (plan : EachPlan source) :
@@ -72,6 +72,27 @@ private theorem eachBody_future {cfg : Cfg} {env : Env} {initial : St} {x : VarI
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, future]
     simp [DemandNode.phaseFuture]
 
+theorem EachPlan.bodyFuture_coversInput {cfg : Cfg} {env : Env} {initial : St} {x : VarId}
+    {idx : Option VarId} {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
+    {source : StmtSource cfg env (.forEach x idx view byRef body origin) initial}
+    (plan : EachPlan source) (y : VarId) (visible : y ∈ source.typingEnv.visible)
+    (future : y ∈ body.variables ++ source.context.outputFuture) :
+    y ∈ plan.bodyContext.outputFuture := by
+  rw [plan.bodyFuture]
+  have active := source.active
+  cases contextAt : source.context with
+  | pilot profile current =>
+    rw [contextAt] at active
+    change y ∈ (DemandNode.statement (.forEach x idx view byRef body origin)).visibleForChild current 1
+    apply (eachBinders_visible (x :: idx.toList) current y).mp
+    exact List.mem_append_right _ ((active y).2 visible)
+  | shrink profile context =>
+    rw [contextAt] at future active
+    simp only [EvaluationContext.outputFuture, List.mem_append] at future
+    rcases future with bodyMember | outerMember
+    · exact List.mem_append_left _ (List.mem_filter.mpr ⟨(active y).2 visible, List.contains_iff_mem.mpr bodyMember⟩)
+    · exact List.mem_append_right _ outerMember
+
 private theorem eachBody_input_frame {cfg : Cfg} {env : Env} {initial state : St} {x : VarId}
     {idx : Option VarId} {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
     {source : StmtSource cfg env (.forEach x idx view byRef body origin) initial}
@@ -88,7 +109,7 @@ private theorem eachBody_input_frame {cfg : Cfg} {env : Env} {initial state : St
   intro y visible member
   rcases List.mem_append.mp member with bodyMember | futureMember
   · exact List.mem_append_left _ bodyMember
-  · rw [eachBody_future plan] at futureMember
+  · rw [EachPlan.bodyFuture plan] at futureMember
     have activeMatch := source.active
     cases hcontext : source.context with
     | pilot profile active =>
@@ -159,7 +180,12 @@ theorem EachLoopState.bodySource {cfg : Cfg} {env : Env} {initial state elementS
       blockSource.typingEnv = { source.typingEnv with loops := source.typingEnv.loops + 1 } ∧
       blockSource.rootsEnv = source.rootsEnv ∧ blockSource.world = source.world ∧
       blockSource.observation = source.observation ∧ blockSource.plans = source.plans ∧
-      blockSource.path = source.path ++ [1] ∧ HEq blockSource.context plan.bodyContext := by
+      blockSource.path = source.path ++ [1] ∧
+      blockSource.context.outputFuture = plan.bodyContext.outputFuture ∧
+      blockSource.context.retained = plan.bodyContext.retained ∧
+      blockSource.context.mayShrink source.world.ownerP source.observation =
+        plan.bodyContext.mayShrink source.world.ownerP source.observation ∧
+      HEq blockSource.context plan.bodyContext := by
   have unchanged := (eachElement_success location success).1
   subst elementState
   have values := eachBinder_value runtime i element location success

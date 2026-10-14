@@ -168,6 +168,9 @@ theorem eachBlockSource_reserved {cfg : Cfg} {env : Env} {state : St}
     ∃ source : BlockSource cfg env pre block state,
       source.typingEnv = typingEnv ∧ source.rootsEnv = rootsEnv ∧ source.world = world ∧
       source.observation = observation ∧ source.plans = plans ∧ source.path = path ∧
+      source.context.outputFuture = context.outputFuture ∧
+      source.context.retained = context.retained ∧
+      source.context.mayShrink world.ownerP observation = context.mayShrink world.ownerP observation ∧
       HEq source.context context := by
   obtain ⟨sc, stmts, value⟩ := block
   obtain ⟨fresh, inner, next, after, finish, declared, typedStatements, typedValue⟩ :=
@@ -197,7 +200,7 @@ theorem eachBlockSource_reserved {cfg : Cfg} {env : Env} {state : St}
     observed := observed, classified := classified, permission := permission, frame := frame,
     fresh := fresh, same := ?_, visible := ?_, pretyped := pretyped, bounded := bounded,
     typed := typedStatements, typedValue := ?_, rooted := rootedStatements, rootedValue := ?_,
-    effects := effects, rootsEscape := ?_ }, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl⟩
+    effects := effects, rootsEscape := ?_ }, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl⟩
   · exact ⟨same.mod, same.impl, same.vars, same.loops, same.inExpr, same.scopes,
       fun x member => same.sub x (List.mem_append_right _ member)⟩
   · intro y
