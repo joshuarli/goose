@@ -76,10 +76,21 @@ def WeakFrameTy (roots : RootDeclarations) (types : Array (Option VTy)) (fr : Fr
   ∀ (id : ValueId) (cell : RVal) (ty : VTy), types[id]? = some (some ty) → fr.vals[id]? = some cell →
     WeakCellTy roots cell ty
 
+def RuntimeFrameTy (cfg : GCfg) (fn : Func) (activations : ActivationTypes)
+    (fr : Frame) (state : St) : Prop :=
+  RuntimeStateTy cfg activations state ∧ activations fr.act = some fn ∧
+    WeakFrameTy (runtimeDeclarations cfg activations) (fn.valueTypes cfg.mod) fr
+
 theorem WeakFrameTy.empty (roots : RootDeclarations) (types : Array (Option VTy))
     (act depth : Nat) : WeakFrameTy roots types ⟨act, [], {}, depth⟩ := by
   intro id cell ty metadata present
   simp at present
+
+theorem WeakFrameTy.ofVals {roots : RootDeclarations} {types : Array (Option VTy)}
+    {before after : Frame} (typed : WeakFrameTy roots types before)
+    (same : before.vals = after.vals) : WeakFrameTy roots types after := by
+  intro id cell ty metadata present
+  exact typed id cell ty metadata (same ▸ present)
 
 theorem WeakCellTy.int {roots : RootDeclarations} {cell : RVal} {ty : IntTy}
     (typed : WeakCellTy roots cell (.data (.int ty))) :
@@ -402,6 +413,70 @@ theorem execPure_structLit_typed {roots : RootDeclarations} {types : Array (Opti
   simp only [pure_apply, Res.ok.injEq] at evaluated
   obtain ⟨rfl, rfl⟩ := evaluated
   exact ⟨⟨rfl, by simpa using fieldsTyped⟩, rfl⟩
+
+theorem releaseSlots_typed {roots : RootDeclarations} {fn : Func} {act : ActId}
+    {scope : ScopeId} {instanceId : ScopeInst} (count : Nat) {store : Store}
+    (typed : WeakStoreTy roots store) :
+    WeakStoreTy roots (releaseSlots fn act scope instanceId count store) := by
+  induction count generalizing store with
+  | zero => exact typed
+  | succ count ih =>
+    simp only [releaseSlots]
+    cases lookup : fn.slots[count]? with
+    | none => simpa only [lookup] using ih typed
+    | some slot =>
+      simp only
+      split
+      · exact ih typed.release
+      · exact ih typed
+
+theorem execEff_slotInit_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {slotId : SlotId} {valueId : ValueId} {slot : Slot}
+    {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (lookup : fn.slots[slotId]? = some slot)
+    (metadata : (fn.valueTypes cfg.mod)[valueId]? = some (some (.data slot.ty)))
+    (evaluated : execEff fn fr (.slotInit slotId valueId org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  simp only [execEff, slotRoot, lookup] at evaluated
+  cases scopeLookup : fr.scopes.lookup slot.scope with
+  | none => simp [scopeLookup, bind_apply, fault, M.stop] at evaluated
+  | some instanceId =>
+    simp only [scopeLookup, pure_bind] at evaluated
+    obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+    obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal metadata read
+    subst middle
+    simp only [bindRoot, bind_apply, pure_apply, Res.ok.injEq] at evaluated
+    obtain ⟨rfl, rfl⟩ := evaluated
+    refine ⟨⟨frameTyped.1.1, frameTyped.1.2.introduce ?_ valueTyped⟩, frameTyped.2⟩
+    simp [runtimeDeclarations, frameTyped.2.1, lookup]
+
+theorem execEff_enter_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {scope : ScopeId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (evaluated : execEff fn fr (.enter scope) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  simp only [execEff, freshScope, bind_apply, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨frameTyped.1, frameTyped.2.1, frameTyped.2.2⟩
+
+theorem execEff_leave_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {scope : ScopeId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (evaluated : execEff fn fr (.leave scope) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  simp only [execEff] at evaluated
+  cases scopes : fr.scopes with
+  | nil => simp [scopes, fault, M.stop] at evaluated
+  | cons top rest =>
+    obtain ⟨currentScope, instanceId⟩ := top
+    simp only [scopes] at evaluated
+    split at evaluated
+    · simp only [Goose.GIR.releaseScope, bind_apply, pure_apply, Res.ok.injEq] at evaluated
+      obtain ⟨rfl, rfl⟩ := evaluated
+      exact ⟨⟨frameTyped.1.1, releaseSlots_typed fn.slots.size frameTyped.1.2⟩,
+        frameTyped.2.1, frameTyped.2.2⟩
+    · simp [fault, M.stop] at evaluated
 
 theorem execPure_load_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {id : ValueId} {permission : Mutability} {ty : Ty}

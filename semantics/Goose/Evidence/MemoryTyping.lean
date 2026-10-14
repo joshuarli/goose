@@ -219,6 +219,10 @@ theorem WeakStoreTy.release {roots : RootDeclarations} {store : Store} {root : R
   · contradiction
   · exact typed other value present
 
+theorem WeakStoreTy.empty (roots : RootDeclarations) : WeakStoreTy roots Store.empty := by
+  intro root value present
+  simp [Store.empty] at present
+
 theorem WeakStoreTy.introduce {roots : RootDeclarations} {store : Store} {root : RootInst}
     {value : Val} {ty : Ty} (typed : WeakStoreTy roots store)
     (declared : roots root = some ty) (valueTyped : WeakValueTy roots value ty) :
