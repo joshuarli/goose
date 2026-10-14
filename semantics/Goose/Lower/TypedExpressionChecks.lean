@@ -1,4 +1,5 @@
 import Goose.Lower.TypedExpressions
+import Goose.Lower.SourceContexts
 import Goose.GIR.Validate
 
 namespace Goose.Lower.TypedExpressionChecks
@@ -196,6 +197,49 @@ def unaryModule : Core.Module :=
   | .done .returned "", .done .returned "",
       .done (.aborted coreKind coreOrigin) "", .done (.aborted girKind girOrigin) "" =>
     coreKind == girKind && coreOrigin == girOrigin
+  | _, _, _, _ => false
+
+def binaryExpression : Expr := .bin .add (.lit .i64 9223372036854775807) (.lit .i64 1) 0
+
+def binaryModule (artifact : ArtifactProfile) : Core.Module :=
+  { files := #["binary.goose"], types := #[.int .i64],
+    globals := #[⟨"sum", .int .i64, .mutable, binaryExpression, 0⟩],
+    impls := #[initImpl], contexts := #[initContext], entry := 0,
+    origins := #[⟨0, 1, "binary"⟩], profile := artifact }
+
+theorem binary_claim (artifact : ArtifactProfile) (profile : NumProfile) :
+    TypedExprClaim 5 ⟨profile, binaryModule artifact⟩ [.int .i64] binaryExpression :=
+  typedExprClaim_bin (typedExprClaim_lit 4 _ _ .i64 9223372036854775807)
+    (typedExprClaim_lit 4 _ _ .i64 1) .add 0
+
+theorem binary_children_source (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (binaryModule artifact) = .ok ()) :
+    ∃ left : ExprSource ⟨profile, binaryModule artifact⟩ ⟨#[], 0, [], 0⟩
+        (.lit .i64 9223372036854775807) { St.initial with nextAct := 1 },
+      ∃ right : ExprSource ⟨profile, binaryModule artifact⟩ ⟨#[], 0, [], 0⟩
+        (.lit .i64 1) { St.initial with nextAct := 1 },
+        left.typingEnv = right.typingEnv ∧ left.rootsEnv = right.rootsEnv := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, binaryModule artifact⟩) (state := St.initial) (g := 0)
+    (global := ⟨"sum", .int .i64, .mutable, binaryExpression, 0⟩)
+    accepted rfl (InitializedGlobals.initial _).invariant
+  obtain ⟨intTy, left, hltyping, hlroots, hltype, next⟩ := source.binChildren .add 0
+  obtain ⟨right, hrtyping, hrroots, hrtype⟩ := next 4 (.int .i64 9223372036854775807)
+    { St.initial with nextAct := 1 } (by simp [evalExpr, pure_apply, St.initial])
+  exact ⟨left, right, hltyping.trans hrtyping.symm, hlroots.trans hrroots.symm⟩
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := binaryModule artifact
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := binaryModule artifact
+  match Core.eval 80 .release source, GIR.run 160 .release (lower source),
+      Core.eval 80 .debug source, GIR.run 160 .debug (lower source) with
+  | .done .returned "", .done .returned "",
+      .done (.aborted .intOverflow 0) "", .done (.aborted .intOverflow 0) "" => true
   | _, _, _, _ => false
 
 end Goose.Lower.TypedExpressionChecks
