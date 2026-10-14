@@ -1,4 +1,4 @@
-import Goose.Lower.Leaf
+import Goose.Lower.Scope
 
 namespace Goose.Lower
 
@@ -1310,34 +1310,6 @@ theorem stmtsClaim_succ (n : Nat) (lc : Option LoopCtx) (ihs : ∀ s, StmtClaim 
 
 /-! ### Blocks -/
 
-/-- A block's own scope around its statements, and what it does with the flow that ends them. -/
-def coreBlock (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List Stmt)
-    (vf : Env → Flow → M Flow) : M Flow := do
-  let si ← freshScope
-  let env' : Env := { env with scopes := (sc, si) :: env.scopes }
-  let flow ← execStmts n cfg env' stmts
-  let flow' ← vf env' flow
-  Goose.Core.releaseScope env sc si
-  pure flow'
-
-/-- What a block does with the flow that ends its statements. -/
-def valueFlow (n : Nat) (cfg : Cfg) : Option Expr → Env → Flow → M Flow
-  | some e, env', .normal _ => do pure (Flow.normal (← evalExpr n cfg env' e))
-  | _, _, f => pure f
-
-theorem execBlock_nil (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List Stmt)
-    (value : Option Expr) :
-    execBlock (n + 1) cfg env [] (.mk sc stmts value) = coreBlock n cfg env sc stmts (valueFlow n cfg value) := by
-  rw [execBlock]
-  simp only [coreBlock, bindAll, pure_bind]
-  congr 1
-  funext si
-  congr 1
-  funext flow
-  congr 1
-  funext flow'
-  cases flow <;> cases value <;> simp [valueFlow]
-
 theorem block_core {n : Nat} {lc : Option LoopCtx} (ihs : ∀ ss, StmtsClaim n lc ss) {sc : ScopeId} {stmts : List Stmt}
     (hokS : stmtsOk stmts = true) {U : Val → Prop}
     {X : B ValueId} {vf : Env → Flow → M Flow} {cells : ValueId → Val → List (ValueId × RVal)}
@@ -1395,9 +1367,6 @@ theorem block_unfold {lc : Option LoopCtx} {sc : ScopeId} {stmts : List Stmt} {v
   rw [pure_run] at hpure
   obtain ⟨hr, rfl⟩ := Prod.mk.inj hpure
   exact ⟨ls1, ls_s, ls_x, ls_l, u3, rx, by simpa using h1, h3, h4, by simpa using h5, hls', hr.symm⟩
-
-def blockCells (blk : Core.Block) (want : Bool) (r : ValueId) (v : Val) : List (ValueId × RVal) :=
-  if blk.value.isSome || want then [(r, .val v)] else []
 
 def BlockClaim (n : Nat) (lc : Option LoopCtx) (want : Bool) (blk : Core.Block) : Prop :=
   blockOk blk = true → ∀ (le : LEnv) (ls : LS) (r : ValueId) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
