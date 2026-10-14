@@ -302,6 +302,48 @@ static BuiltProgram BuildEmittedSource(const string &goose, const string &emitte
     return result;
 }
 
+static void TestEmittedSourceContractVariant(
+    const char *dimension, const string &goose, const string &emitted_dir,
+    const string &builddir, const string &exe, const UnitContractValues &base_values,
+    const UnitContractValues &variant_values, const Toolchain &tc, const BuildOptions &opts,
+    const ProcessResult &expected_run, size_t unit_count,
+    const map<string, string> &base_snapshot) {
+    auto base_contract = MakeContract(base_values);
+    auto variant_contract = MakeContract(variant_values);
+    assert(variant_contract.digest != base_contract.digest);
+    assert(UnitStoreDirectory(builddir, variant_contract) !=
+           UnitStoreDirectory(builddir, base_contract));
+
+    auto variant = BuildEmittedSource(goose, emitted_dir, builddir, exe,
+                                      variant_values, tc, opts);
+    assert(variant.run.started && variant.run.code == expected_run.code &&
+           variant.run.output == expected_run.output);
+    assert(variant.report.units_written == (long long)unit_count &&
+           variant.report.missed == (long long)unit_count && variant.report.reused == 0 &&
+           InvocationUnits(variant.report.compiles) == unit_count);
+    assert(StoreSnapshot(UnitStoreDirectory(builddir, base_contract)) == base_snapshot);
+    auto variant_snapshot = StoreSnapshot(UnitStoreDirectory(builddir, variant_contract));
+
+    auto base_back = BuildEmittedSource(goose, emitted_dir, builddir, exe,
+                                        base_values, tc, opts);
+    assert(base_back.run.started && base_back.run.code == expected_run.code &&
+           base_back.run.output == expected_run.output);
+    assert(base_back.report.reused == (long long)unit_count && base_back.report.missed == 0 &&
+           base_back.report.compiles.empty() &&
+           InvocationUnits(base_back.report.verification) == unit_count);
+    assert(StoreSnapshot(UnitStoreDirectory(builddir, variant_contract)) == variant_snapshot);
+
+    auto variant_back = BuildEmittedSource(goose, emitted_dir, builddir, exe,
+                                           variant_values, tc, opts);
+    assert(variant_back.run.started && variant_back.run.code == expected_run.code &&
+           variant_back.run.output == expected_run.output);
+    assert(variant_back.report.reused == (long long)unit_count && variant_back.report.missed == 0 &&
+           variant_back.report.compiles.empty() &&
+           InvocationUnits(variant_back.report.verification) == unit_count);
+    assert(StoreSnapshot(UnitStoreDirectory(builddir, base_contract)) == base_snapshot);
+    fprintf(stderr, "compiler_units_builder: %s emitted-source probe passed\n", dimension);
+}
+
 static void TestEmittedSourceUnitBuilder(const string &goose, const string &source) {
     auto root = AbsolutePath(".work/tmp/compiler_units_emitted");
     std::error_code ec;
@@ -345,29 +387,22 @@ static void TestEmittedSourceUnitBuilder(const string &goose, const string &sour
            base.report.reused == 0 && InvocationUnits(base.report.compiles) == unit_count);
     auto base_snapshot = StoreSnapshot(UnitStoreDirectory(root, base.contract));
 
-    auto variant = BuildEmittedSource(goose, emitted_dir, root, program, variant_values, tc, opts);
-    assert(variant.contract.digest != base.contract.digest);
-    assert(UnitStoreDirectory(root, variant.contract) != UnitStoreDirectory(root, base.contract));
-    assert(variant.run.started && variant.run.code == clean_variant.code &&
-           variant.run.output == clean_variant.output);
-    assert(variant.report.units_written == (long long)unit_count && variant.report.missed == (long long)unit_count &&
-           variant.report.reused == 0 && InvocationUnits(variant.report.compiles) == unit_count);
-    assert(StoreSnapshot(UnitStoreDirectory(root, base.contract)) == base_snapshot);
-    auto variant_snapshot = StoreSnapshot(UnitStoreDirectory(root, variant.contract));
+    TestEmittedSourceContractVariant("raw C flags", goose, emitted_dir, root, program,
+                                    base_values, variant_values, tc, opts, clean_variant,
+                                    unit_count, base_snapshot);
 
-    auto base_back = BuildEmittedSource(goose, emitted_dir, root, program, base_values, tc, opts);
-    assert(base_back.run.started && base_back.run.code == clean_base.code &&
-           base_back.run.output == clean_base.output);
-    assert(base_back.report.reused == (long long)unit_count && base_back.report.missed == 0 &&
-           base_back.report.compiles.empty() && InvocationUnits(base_back.report.verification) == unit_count);
-    assert(StoreSnapshot(UnitStoreDirectory(root, variant.contract)) == variant_snapshot);
+    auto target_values = base_values;
+    target_values.target.arch = "builder-boundary-target";
+    TestEmittedSourceContractVariant("target identity", goose, emitted_dir, root, program,
+                                    base_values, target_values, tc, opts, clean_base,
+                                    unit_count, base_snapshot);
 
-    auto variant_back = BuildEmittedSource(goose, emitted_dir, root, program, variant_values, tc, opts);
-    assert(variant_back.run.started && variant_back.run.code == clean_variant.code &&
-           variant_back.run.output == clean_variant.output);
-    assert(variant_back.report.reused == (long long)unit_count && variant_back.report.missed == 0 &&
-           variant_back.report.compiles.empty() && InvocationUnits(variant_back.report.verification) == unit_count);
-    assert(StoreSnapshot(UnitStoreDirectory(root, base.contract)) == base_snapshot);
+    auto runtime_values = base_values;
+    runtime_values.runtime_version += "-builder-boundary";
+    TestEmittedSourceContractVariant("runtime identity", goose, emitted_dir, root, program,
+                                    base_values, runtime_values, tc, opts, clean_base,
+                                    unit_count, base_snapshot);
+
     filesystem::remove_all(filesystem::path(root), ec);
     assert(!ec);
 }
