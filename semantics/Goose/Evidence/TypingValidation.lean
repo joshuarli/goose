@@ -702,4 +702,78 @@ theorem validated_structLit_operands {m : Module} {fn : Func}
   exact ⟨field.ty, he.symm, validated_struct_fields_flat h desc
     (Array.mem_of_getElem? hd) field (Array.mem_toList_iff.mp hfmem)⟩
 
+private theorem call_metadata {env : TyEnv} {id : FnId} {args : List ValueId}
+    {org : Option OriginId} {result : VTy}
+    (h : (Op.call id args org).resultTy env = .ok result) :
+    ∃ params results, env.sigs[id]? = some (params, results) ∧
+      params.length = args.length ∧
+      (∀ pair ∈ params.zip args, ∃ argTy,
+        env.vals[pair.2]? = some (some (.data argTy)) ∧ argTy.passableTo pair.1 = true) ∧
+      ((results = [] ∧ result = .data .unit) ∨
+        ∃ ty, results = [ty] ∧ result = .data ty) := by
+  simp only [Op.resultTy] at h
+  cases hs : env.sigs[id]? with
+  | none => simp [hs, tyErr] at h
+  | some sig =>
+    rcases sig with ⟨params, results⟩
+    rw [hs] at h
+    dsimp only at h
+    have hl : params.length = args.length := by
+      by_cases hl : params.length = args.length
+      · exact hl
+      · simp [hl, tyErr, bind, Except.bind] at h
+    rw [ite_eq_left hl] at h
+    obtain ⟨u, hloop, hresult⟩ := bind_ok h
+    cases u
+    have hall := forIn_unit_ok hloop (by
+      intro pair u step checked
+      obtain ⟨ty, _, checked⟩ := bind_ok checked
+      by_cases hp : ty.passableTo pair.1 = true
+      · simpa [hp, pure, Except.pure] using checked.symm
+      · simp [hp, tyErr, bind, Except.bind] at checked)
+    refine ⟨params, results, rfl, hl, ?_, ?_⟩
+    · intro pair hp
+      have checked := hall pair hp
+      obtain ⟨ty, ht, checked⟩ := bind_ok checked
+      have hpass : ty.passableTo pair.1 = true := by
+        by_cases hpass : ty.passableTo pair.1 = true
+        · exact hpass
+        · simp [hpass, tyErr, bind, Except.bind] at checked
+      exact ⟨ty, dataTy_of ht, hpass⟩
+    · cases results with
+      | nil =>
+        simp only [pure, Except.pure, Except.ok.injEq] at hresult
+        exact Or.inl ⟨rfl, hresult.symm⟩
+      | cons ty rest =>
+        cases rest with
+        | nil =>
+          simp only [pure, Except.pure, Except.ok.injEq] at hresult
+          exact Or.inr ⟨ty, rfl, hresult.symm⟩
+        | cons next more => simp [tyErr] at hresult
+
+theorem validated_call_operands {m : Module} {fn : Func}
+    (h : validate m = .ok ()) (hf : fn ∈ m.allFuncs)
+    {block : Block} (hb : block ∈ fn.blocks) {result : ValueId} {id : FnId}
+    {args : List ValueId} {org : Option OriginId}
+    (hi : Inst.def result (.call id args org) ∈ block.insts) :
+    ∃ callee, m.funcs[id]? = some callee ∧ callee.params.length = args.length ∧
+      (∀ pair ∈ callee.params.zip args, ∃ argTy,
+        (fn.valueTypes m)[pair.2]? = some (some (.data argTy)) ∧
+          argTy.passableTo pair.1 = true) ∧
+      ((callee.results = [] ∧ (fn.valueTypes m)[result]? = some (some (.data .unit))) ∨
+        ∃ ty, callee.results = [ty] ∧
+          (fn.valueTypes m)[result]? = some (some (.data ty))) := by
+  obtain ⟨resultTy, checked, hmeta⟩ := (validate_sound m h).1 fn hf |>.2.1 block hb result _ hi
+  obtain ⟨params, results, hs, hl, ha, hr⟩ := call_metadata checked
+  change (m.funcs.map (fun f => (f.params, f.results)))[id]? = some (params, results) at hs
+  cases hc : m.funcs[id]? with
+  | none => simp [hc] at hs
+  | some callee =>
+    have he : (callee.params, callee.results) = (params, results) := by simpa [hc] using hs
+    cases he
+    refine ⟨callee, rfl, hl, ha, ?_⟩
+    rcases hr with ⟨he, ht⟩ | ⟨ty, he, ht⟩
+    · exact Or.inl ⟨he, ht ▸ hmeta⟩
+    · exact Or.inr ⟨ty, he, ht ▸ hmeta⟩
+
 end Goose.GIR
