@@ -212,66 +212,65 @@ private def reachesLocal (module : Module) (id : ImplId) (implementation : Impl)
       if reached.contains alias then reached := (reached ++ sources).eraseDups
   return reached.contains candidate
 
-private def siteCandidate (position : Nat) : NamedSite → Option VarId
-  | .forwarded | .alias .. => none
-  | .operands operands => match operands[position]? with
-    | some (.resultLocal id _) => some id
-    | _ => none
-
-private def independentSite (module : Module) (id : ImplId) (implementation : Impl) (position candidate : Nat) : NamedSite → Bool
-  | .forwarded | .alias .. => false
-  | .operands operands => match operands[position]? with
-    | none => false
-    | some (.resultLocal id _) => id == candidate
-    | some expression => !reachesLocal module id implementation candidate (expressionVariables expression)
-
 mutual
-private def completionChoices : Expr → List (List Expr)
-  | .values operands => operandChoices operands
-  | .ifE _ left right _ => blockCompletionChoices left ++ blockCompletionChoices right
-  | .blockE block _ => blockCompletionChoices block
-  | expression => [[expression]]
+private def completionExpressions (position : Nat) : Expr → List (Option Expr)
+  | .values operands => operandCompletionExpressions position operands
+  | .ifE _ left right _ => blockCompletionExpressions position left ++ blockCompletionExpressions position right
+  | .blockE block _ => blockCompletionExpressions position block
+  | expression => if position == 0 then [some expression] else [none]
 
-private def operandChoices : List Expr → List (List Expr)
-  | [] => [[]]
-  | operand :: rest =>
-      (completionChoices operand).flatMap fun first =>
-        (operandChoices rest).map fun remaining => first ++ remaining
+private def operandCompletionExpressions : Nat → List Expr → List (Option Expr)
+  | _, [] => [none]
+  | 0, operand :: _ => completionExpressions 0 operand
+  | position + 1, _ :: rest => operandCompletionExpressions position rest
 
-private def blockCompletionChoices : Block → List (List Expr)
-  | .mk _ statements tail => statementCompletionChoices statements ++
-      (match tail with | none => [] | some expression => completionChoices expression)
+private def blockCompletionExpressions (position : Nat) : Block → List (Option Expr)
+  | .mk _ statements tail => statementCompletionExpressions position statements ++
+      (match tail with | none => [] | some expression => completionExpressions position expression)
 
-private def statementCompletionChoices : List Stmt → List (List Expr)
+private def statementCompletionExpressions (position : Nat) : List Stmt → List (Option Expr)
   | [] => []
   | statement :: rest =>
       (match statement with
-        | .breakValue expression _ => completionChoices expression
-        | .ifS _ (.mk _ left _) right _ => statementCompletionChoices left ++
-            (match right with | none => [] | some (.mk _ statements _) => statementCompletionChoices statements)
+        | .breakValue expression _ => completionExpressions position expression
+        | .ifS _ (.mk _ left _) right _ => statementCompletionExpressions position left ++
+            (match right with | none => [] | some (.mk _ statements _) => statementCompletionExpressions position statements)
         | .while _ (.mk _ statements _) _ |
           .forRange _ _ _ (.mk _ statements _) _ |
-          .forEach _ _ _ _ (.mk _ statements _) _ => statementCompletionChoices statements
-        | _ => []) ++ statementCompletionChoices rest
+          .forEach _ _ _ _ (.mk _ statements _) _ => statementCompletionExpressions position statements
+        | _ => []) ++ statementCompletionExpressions position rest
 end
 
-private def expandedSite : NamedSite → List NamedSite
-  | .operands operands => (operandChoices operands).map NamedSite.operands
-  | site => [site]
+private def siteCompletionExpressions (position : Nat) : NamedSite → List (Option Expr)
+  | .operands [expression] => completionExpressions position expression
+  | .operands operands => match operands[position]? with
+      | some expression => completionExpressions 0 expression
+      | none => [none]
+  | _ => [none]
+
+private def expressionCandidate : Option Expr → Option VarId
+  | some (.resultLocal id _) => some id
+  | _ => none
+
+private def independentExpression (module : Module) (id : ImplId) (implementation : Impl)
+    (candidate : Nat) : Option Expr → Bool
+  | none => false
+  | some (.resultLocal id _) => id == candidate
+  | some expression => !reachesLocal module id implementation candidate (expressionVariables expression)
 
 private def candidatesFor (module : Module) (id : ImplId) (implementation : Impl) (position : Nat) : List VarId :=
   let sites := nestedBlockReturns module id implementation.body ++ (match implementation.body.value with
     | none => []
     | some (.values operands) => [.operands operands]
     | some expression => [.operands [expression]])
-  let sites := sites.flatMap expandedSite
   let sites := sites.filter fun site => match site with
     | .alias .. => false
     | _ => true
-  let candidates := sites.filterMap (siteCandidate position)
+  let completions := sites.flatMap (siteCompletionExpressions position)
+  let candidates := completions.filterMap expressionCandidate
   candidates.eraseDups.filter fun candidate =>
     bodyDeclared implementation.body candidate &&
-      sites.all (independentSite module id implementation position candidate)
+      completions.all (independentExpression module id implementation candidate)
 
 def discoverNamedResults (module : Module) (id : ImplId) (implementation : Impl) : List (Option VarId) := Id.run do
   let mut used : List VarId := []
