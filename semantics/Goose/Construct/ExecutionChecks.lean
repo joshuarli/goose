@@ -321,6 +321,60 @@ private def fixedParameterOrdinal : Module := moduleOf #[
 #guard observes fixedParameterOrdinal == some ([65, 10],
   [.begin 0, .copy (.storage 1 []) 0, .write 0 0, .publish 0])
 
+private def inheritedOperations : Module := moduleOf #[implementation "entry"
+  #[localVar "owner" (.growshrink (.int .i64)), localVar "slice" (.slice .mutable (.int .i64)),
+    localVar "sum" (.int .i64), localVar "index" (.int .i64) 1]
+  (.mk 0 [.letS 0 (.arrLit (.growshrink (.int .i64)) [.lit .i64 1, .lit .i64 2]) 0,
+    .letS 1 (.slice .mutable (.of (.var 0)) (.expr (.lit .i64 0)) .omitted 0) 0,
+    .letS 2 (.lit .i64 0) 0,
+    .assignOp .add (.elem (.val (.read (.var 1))) (.lit .i64 1) 0) (.lit .i64 5) 0,
+    .rebind 1 (.slice .mutable (.of (.var 0)) (.fromEnd (.lit .i64 1)) .omitted 0) 0,
+    .resize (.var 0) (.lit .i64 4) (some (.lit .i64 3)) 0,
+    .forRange 3 (.lit .i64 0) (.lit .i64 2)
+      (.mk 1 [.assignOp .add (.var 2) (.read (.var 3)) 0] none) 0,
+    .print [.view (.of (.var 0)), .expr (.read (.var 1)), .expr (.read (.var 2))] 0] none)]
+
+#guard (observes inheritedOperations).map Prod.fst == some "[1, 7, 3, 3][7]1\n".toUTF8.data.toList
+
+private def capacityOrigin : Module := {
+  moduleOf #[implementation "entry" #[localVar "owner" (.limited (.int .u8) 1)]
+    (.mk 0 [.print [.text "before"] 0,
+      .letS 0 (.bytes (.limited (.int .u8) 1) [65, 66] 0) 1] none)] with
+  origins := #[⟨0, 17, "print"⟩, ⟨0, 29, "let"⟩] }
+
+#guard match eval 1000 .release capacityOrigin with
+  | .done (.aborted .capacity 1) stdout events =>
+      stdout.data.toList == "before\n".toUTF8.data.toList && events.isEmpty
+  | _ => false
+
+private def retainedSlotReference : Module := moduleOf #[implementation "entry"
+  #[localVar "owner" (.limited (.int .i64) 3), localVar "slot" (.ref .mutable (.int .i64))]
+  (.mk 0 [.letS 0 (.arrLit (.limited (.int .i64) 3) [.lit .i64 1, .lit .i64 2, .lit .i64 3]) 0,
+    .letS 1 (.ref .mutable (.elem (.of (.var 0)) (.lit .i64 2) 0)) 0,
+    .popN (.var 0) (.lit .i64 2) 0,
+    .assign (.deref (.read (.var 1))) (.lit .i64 7) 0,
+    .print [.expr (.read (.deref (.read (.var 1)))), .view (.of (.var 0))] 0] none)]
+
+#guard (observes retainedSlotReference).map Prod.fst == some "7[1]\n".toUTF8.data.toList
+
+private def pairType : Ty := .structT 0 (.cons (.arr (.int .u8) 2) (.cons (.int .i64) .nil))
+
+private def namedStruct : Module := {
+  moduleOf #[implementation "entry" #[localVar "pair" pairType, localVar "pairs" (.grow pairType)]
+    (.mk 0 [.letS 0 (.structLit pairType [.bytes (.arr (.int .u8) 2) [65, 10] 0, .lit .i64 7]) 0,
+      .letS 1 (.arrLit (.grow pairType) [.read (.var 0)]) 0,
+      .assign (.field (.elem (.of (.var 1)) (.lit .i64 0) 0) 1) (.lit .i64 9) 0,
+      .print [.expr (.read (.var 0)), .view (.of (.var 1))] 0] none)] with
+  types := #[.int .u8, .arr (.int .u8) 2, .int .i64, pairType, .grow pairType]
+  structs := #[⟨16, #[⟨.arr (.int .u8) 2, .mutable, .mutable, 0⟩,
+    ⟨.int .i64, .mutable, .mutable, 8⟩], "Pair"⟩]
+  origins := #[⟨0, 17, "let"⟩] }
+
+#guard observes namedStruct == some ("Pair { \"A\\n\", 7 }[Pair { \"A\\n\", 9 }]\n".toUTF8.data.toList,
+  [.begin 0, .write 0 0, .publish 0])
+#guard Run.validateBytes (Writer.module namedStruct).toUTF8 == ("[\"ok\"]", 0)
+#guard (Run.runBytes {} (Writer.module namedStruct).toUTF8).2 == 0
+
 private def wireRaw : Module := {
   rawBytes with
   types := #[.int .u8, .varr (.int .u8)]
