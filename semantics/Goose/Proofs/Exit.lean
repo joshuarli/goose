@@ -537,4 +537,53 @@ theorem result_block_releases_scope_on_escape (fuel : Nat) (config : EvalConfig)
   simp [execResultBlockWith, Goose.Construct.freshScope, EvalM.get, EvalM.set, withScope, boundPre,
     escaped, Goose.Construct.releaseScope, bind, pure]
 
+
+theorem cleanup_replacement (origin : OriginId) (id replacementId superseded : DestinationId)
+    (state : ExecutionState) (destination replacement : PendingDestination)
+    (present : state.construction.destinations[id]? = some destination)
+    (live : activeProgress destination.progress = true)
+    (replacementPresent : state.construction.destinations[replacementId]? = some replacement)
+    (replacementUse : replacement.use = .replacement superseded)
+    (owned : descendsFrom state.construction id superseded = true) :
+    cleanupDestination origin id [.completed replacementId] state =
+      liftConstruction origin (abandonPreservingExit id replacementId) state := by
+  simp [cleanupDestination, getDestination, EvalM.get, bind, pure, present, live,
+    replacementPresent, replacementUse, owned]
+
+theorem protected_exit_payload_storage (origin : OriginId) (id replacementId superseded : DestinationId)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId)
+    (destination replacement : PendingDestination)
+    (escaped : action state = .escape target [.completed replacementId] afterOperands)
+    (present : afterOperands.construction.destinations[id]? = some destination)
+    (live : activeProgress destination.progress = true)
+    (replacementPresent : afterOperands.construction.destinations[replacementId]? = some replacement)
+    (replacementUse : replacement.use = .replacement superseded)
+    (owned : descendsFrom afterOperands.construction id superseded = true) :
+    (stepState (protectDestination origin id action state)).construction.storage =
+      afterOperands.construction.storage := by
+  have preserved := runtime_protected_cleanup_storage origin afterOperands id replacementId
+  simp only [protectDestination, escaped]
+  rw [cleanup_replacement origin id replacementId superseded afterOperands destination replacement
+    present live replacementPresent replacementUse owned]
+  cases result : liftConstruction origin (abandonPreservingExit id replacementId) afterOperands <;>
+    simpa [result, stepState] using preserved
+
+theorem protected_exit_prior_output (origin : OriginId) (id replacementId superseded : DestinationId)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId)
+    (destination replacement : PendingDestination)
+    (escaped : action state = .escape target [.completed replacementId] afterOperands)
+    (present : afterOperands.construction.destinations[id]? = some destination)
+    (live : activeProgress destination.progress = true)
+    (replacementPresent : afterOperands.construction.destinations[replacementId]? = some replacement)
+    (replacementUse : replacement.use = .replacement superseded)
+    (owned : descendsFrom afterOperands.construction id superseded = true) :
+    (stepState (protectDestination origin id action state)).construction.stdout =
+      afterOperands.construction.stdout := by
+  have preserved := runtime_protected_cleanup_stdout origin afterOperands id replacementId
+  simp only [protectDestination, escaped]
+  rw [cleanup_replacement origin id replacementId superseded afterOperands destination replacement
+    present live replacementPresent replacementUse owned]
+  cases result : liftConstruction origin (abandonPreservingExit id replacementId) afterOperands <;>
+    simpa [result, stepState] using preserved
+
 end Goose.Proofs.Exit
