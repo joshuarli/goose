@@ -476,4 +476,65 @@ theorem return_from_nearest_scope_dispatch (fuel : Nat) (config : EvalConfig)
       state afterOperands carriers (by simp [returned, bind])
   exact ⟨discarded,outer,shape,member,excluded,dispatched⟩
 
+
+theorem return_from_forward_after_producer (fuel : Nat) (config : EvalConfig)
+    (environment activation : RuntimeActivation) (targetId : Nat) (target : NonlocalTarget)
+    (producer : Goose.Construct.Expr) (origin : OriginId)
+    (channels : List Channel) (carriers : List Goose.Construct.Carrier)
+    (state prepared afterProducer : ExecutionState)
+    (present : config.module.targets[targetId]? = some target)
+    (selected : selectTarget? target state.activations = some activation)
+    (preparedChannels : exitChannels activation
+      (List.replicate activation.channels.length producer) origin state = .ok channels prepared)
+    (evaluated : evalProduce fuel config environment channels producer prepared = .ok carriers afterProducer) :
+    Goose.Construct.execStmt (fuel + 1) config environment (.returnFromForward targetId producer origin) state =
+      .escape activation.act carriers afterProducer := by
+  simp [Goose.Construct.execStmt, target_activation_success config targetId target activation state present selected,
+    preparedChannels, evaluated, returned, bind]
+
+theorem enter_activation_catches_body_escape (fuel : Nat) (config : EvalConfig)
+    (activation : RuntimeActivation) (implementation : Goose.Construct.Impl)
+    (pre : List (VarId × Value)) (body : Goose.Construct.Block) (origin : OriginId)
+    (carriers : List Goose.Construct.Carrier) (state afterOperands landed : ExecutionState)
+    (present : config.module.impls[activation.implementation]? = some implementation)
+    (escaped : execResultBlockWith fuel config activation pre activation.channels body state =
+      .escape activation.act carriers afterOperands)
+    (completed : finishChannels config.layout (implementation.results.toList.map (·.ty)) carriers origin
+      { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) } =
+      .ok () landed) :
+    enterActivation (fuel + 1) config activation pre body origin state = .ok carriers landed := by
+  simp [enterActivation, execActivationBody, present, finishActivation, escaped, completed, bind]
+
+theorem enter_activation_propagates_body_escape (fuel : Nat) (config : EvalConfig)
+    (activation : RuntimeActivation) (implementation : Goose.Construct.Impl)
+    (pre : List (VarId × Value)) (body : Goose.Construct.Block) (origin : OriginId)
+    (target : ActId) (carriers : List Goose.Construct.Carrier) (state afterOperands : ExecutionState)
+    (present : config.module.impls[activation.implementation]? = some implementation)
+    (escaped : execResultBlockWith fuel config activation pre activation.channels body state =
+      .escape target carriers afterOperands) (other : target ≠ activation.act) :
+    enterActivation (fuel + 1) config activation pre body origin state =
+      .escape target carriers { afterOperands with
+        activations := afterOperands.activations.filter (fun current => current.act != activation.act) } := by
+  simp [enterActivation, execActivationBody, present, finishActivation, escaped, other, bind]
+
+
+theorem result_block_releases_scope_on_escape (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (pre : List (VarId × Value)) (channels : List Channel)
+    (scope : Nat) (statements : List Goose.Construct.Stmt) (tail : Option Goose.Construct.Expr)
+    (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (state bound afterOperands : ExecutionState)
+    (boundPre : bindAll environment.act state.nextScope pre
+      { state with
+        nextScope := state.nextScope + 1
+        activations := state.activations.map (fun current => if current.act == environment.act then
+          { current with scopes := (scope,state.nextScope) :: environment.scopes } else current) } = .ok () bound)
+    (escaped : execStmts fuel config
+      { environment with scopes := (scope,state.nextScope) :: environment.scopes }
+      statements bound = .escape target carriers afterOperands) :
+    execResultBlockWith (fuel + 1) config environment pre channels (.mk scope statements tail) state =
+      .escape target carriers (releaseScopeState environment scope state.nextScope afterOperands) := by
+  simp only [beq_iff_eq] at boundPre
+  simp [execResultBlockWith, Goose.Construct.freshScope, EvalM.get, EvalM.set, withScope, boundPre,
+    escaped, Goose.Construct.releaseScope, bind, pure]
+
 end Goose.Proofs.Exit
