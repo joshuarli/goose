@@ -59,7 +59,12 @@ private theorem eachViewSource_at {cfg : Cfg} {env : Env} {state : St} {x : VarI
       child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
       child.world = source.world ∧ child.observation = source.observation ∧
       child.plans = source.plans ∧ child.path = source.path ++ [0] ∧
-      child.element = element ∧ child.roots = roots ∧ HEq child.context (source.context.child rfl 0 (.view view) .view
+      child.element = element ∧ child.roots = roots ∧
+      child.context.outputFuture = (source.context.child rfl 0 (.view view) .view
+        (by simp [DemandNode.child?, DemandNode.children])
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
+      child.context.mayShrink source.world.ownerP source.observation =
+        source.context.mayShrink source.world.ownerP source.observation ∧ HEq child.context (source.context.child rfl 0 (.view view) .view
         (by simp [DemandNode.child?, DemandNode.children])
         (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])) := by
   have childAt : (DemandNode.statement (.forEach x idx view byRef body origin)).child? 0 =
@@ -84,7 +89,7 @@ private theorem eachViewSource_at {cfg : Cfg} {env : Env} {state : St} {x : VarI
     classified := source.classified, permission := source.permission,
     frame := source.frame.narrowFuture (eachView_input_subset source),
     typed := typed, rooted := rooted, effects := effects },
-    rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl⟩
+    rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, may, HEq.rfl⟩
 
 theorem StmtSource.eachViewChild {cfg : Cfg} {env : Env} {state : St} {x : VarId}
     {idx : Option VarId} {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
@@ -112,7 +117,7 @@ theorem StmtSource.eachViewChild {cfg : Cfg} {env : Env} {state : St} {x : VarId
       exact (rpBlockValue_mono hrootBody).2.trans source.effects
     · subst heq
       exact (PMono.addReads _ _ _ _ hreads).2.trans ((rpBlockValue_mono hrootBody).2.trans source.effects)
-  obtain ⟨child, htyping, hroots, hworld, hobs, hplans, hpath, _, _, hcontext⟩ :=
+  obtain ⟨child, htyping, hroots, hworld, hobs, hplans, hpath, _, _, _, _, hcontext⟩ :=
     eachViewSource_at source t1 t2 element mutable _ r1 roots hview hrootView effects
   exact ⟨child, htyping, hroots, hworld, hobs, hplans, hpath, hcontext⟩
 
@@ -259,6 +264,11 @@ structure EachPlan {cfg : Cfg} {env : Env} {state : St} {x : VarId} {idx : Optio
   viewContext : HEq viewSource.context (source.context.child rfl 0 (.view view) .view
     (by simp [DemandNode.child?, DemandNode.children])
     (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
+  viewFuture : viewSource.context.outputFuture = (source.context.child rfl 0 (.view view) .view
+    (by simp [DemandNode.child?, DemandNode.children])
+    (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture
+  viewMay : viewSource.context.mayShrink source.world.ownerP source.observation =
+    source.context.mayShrink source.world.ownerP source.observation
   viewRootValues : viewSource.roots = roots
   typingStart : Nat
   typingEnd : Nat
@@ -318,14 +328,14 @@ theorem StmtSource.eachPlan {cfg : Cfg} {env : Env} {state : St} {x : VarId}
   · subst byReference
     subst endEq
     have effects : EffLe r1.eff source.world.E := (rpBlockValue_mono bodyRooted).2.trans source.effects
-    obtain ⟨child, htyping, hroots, hworld, hobs, hplans, hpath, helement, hrootValues, hcontext⟩ :=
+    obtain ⟨child, htyping, hroots, hworld, hobs, hplans, hpath, helement, hrootValues, hfuture, hmay, hcontext⟩ :=
       eachViewSource_at source t1 t2 element mutable _ r1 roots typedView rootedView effects
     have rangeAt := rpBlockValue_rng _ _ _ _ _ _ _ bodyRooted
     simp only at rangeAt
     refine ⟨{
       element := element, roots := roots, viewSource := child, viewTyping := htyping,
       viewRoots := hroots, viewWorld := hworld, viewObservation := hobs, viewPlans := hplans,
-      viewPath := hpath, viewElement := helement, viewContext := hcontext,
+      viewPath := hpath, viewElement := helement, viewContext := hcontext, viewFuture := hfuture, viewMay := hmay,
       viewRootValues := ?_, typingStart := t3, typingEnd := t4, bodyType := bodyType,
       rootsStart := r1, rootsEnd := source.rootsEnd, bodyRoots := bodyRoots, range := (lo, hi),
       binder := ⟨localVar, localAt, localScope, storable, ?_⟩,
@@ -342,7 +352,7 @@ theorem StmtSource.eachPlan {cfg : Cfg} {env : Env} {state : St} {x : VarId}
     subst endEq
     have effects : EffLe r1.eff source.world.E :=
       (PMono.addReads _ _ _ _ reads).2.trans ((rpBlockValue_mono bodyRooted).2.trans source.effects)
-    obtain ⟨child, htyping, hroots, hworld, hobs, hplans, hpath, helement, hrootValues, hcontext⟩ :=
+    obtain ⟨child, htyping, hroots, hworld, hobs, hplans, hpath, helement, hrootValues, hfuture, hmay, hcontext⟩ :=
       eachViewSource_at source t1 t2 element mutable _ r1 roots typedView rootedView effects
     have rangeAt := rpBlockValue_rng _ _ _ _ _ _ _ bodyRooted
     simp only at rangeAt
@@ -351,7 +361,7 @@ theorem StmtSource.eachPlan {cfg : Cfg} {env : Env} {state : St} {x : VarId}
     refine ⟨{
       element := element, roots := roots, viewSource := child, viewTyping := htyping,
       viewRoots := hroots, viewWorld := hworld, viewObservation := hobs, viewPlans := hplans,
-      viewPath := hpath, viewElement := helement, viewContext := hcontext,
+      viewPath := hpath, viewElement := helement, viewContext := hcontext, viewFuture := hfuture, viewMay := hmay,
       viewRootValues := ?_, typingStart := t3, typingEnd := t4, bodyType := bodyType,
       rootsStart := readState, rootsEnd := source.rootsEnd, bodyRoots := bodyRoots, range := (lo, hi),
       binder := ⟨localVar, localAt, localScope, storable, ?_⟩,
@@ -365,5 +375,78 @@ theorem StmtSource.eachPlan {cfg : Cfg} {env : Env} {state : St} {x : VarId}
       have outside := checkBlockValue_ok _ _ _ escapes y member
       exact outside ⟨Nat.le_trans (Nat.le_of_eq rootX.symm) interval.1,
         lt_of_lt_of_eq interval.2 rangeAt.symm⟩
+
+private theorem eachView_output_frame {cfg : Cfg} {env : Env} {state after : St} {x : VarId}
+    {idx : Option VarId} {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
+    (source : StmtSource cfg env (.forEach x idx view byRef body origin) state)
+    (frame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
+      (source.context.child rfl 0 (.view view) .view
+        (by simp [DemandNode.child?, DemandNode.children])
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture) :
+    Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
+      (body.variables ++ source.context.outputFuture) := by
+  have childAt : (DemandNode.statement (.forEach x idx view byRef body origin)).child? 0 =
+      some (.view view) := by simp [DemandNode.child?, DemandNode.children]
+  have phase : DemandNodeHasPhase (.view view) .view := by
+    simp [DemandNodeHasPhase, DemandNode.phaseMatches]
+  have activeMatch := source.active
+  cases hcontext : source.context with
+  | pilot profile active =>
+    rw [hcontext] at activeMatch frame
+    have activeFrame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after active := by
+      simpa [EvaluationContext.child, EvaluationContext.outputFuture,
+        DemandNode.visibleAfter, DemandNode.visibleForChild] using frame
+    have changed := activeFrame.changeFuture (future' := body.variables ++ active)
+      (fun y visible _ => (activeMatch y).2 visible)
+    simpa [EvaluationContext.outputFuture, DemandNode.visibleAfter] using changed
+  | shrink profile context =>
+    rename_i planContext
+    let transition := context.child rfl 0 (.view view) .view childAt phase
+    have expectation : (DemandNode.statement (.forEach x idx view byRef body origin)).childExpectation?
+        planContext.approvals.access ⟨source.path, .statement, context.expected.frame.active,
+          context.expected.frame.future, context.expected.frame.retained⟩ 0 = some ⟨
+            (DemandNode.statement (.forEach x idx view byRef body origin)).visibleForChild
+              context.expected.frame.active 0, body.variables ++ context.expected.frame.future⟩ := by
+      simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt]
+    have future := DemandNode.childFrame_future transition.childFrameEq expectation
+    rw [hcontext] at frame
+    change Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
+      transition.context.expected.frame.future at frame
+    rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, future] at frame
+    simpa [DemandNode.phaseFuture, EvaluationContext.outputFuture, NodeContext.outputFuture] using frame
+
+structure EachLoopState {cfg : Cfg} {env : Env} {initial : St} {x : VarId} {idx : Option VarId}
+    {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
+    {source : StmtSource cfg env (.forEach x idx view byRef body origin) initial}
+    (plan : EachPlan source) (value : ViewVal) (state : St) : Prop where
+  frame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env state
+    (body.variables ++ source.context.outputFuture)
+  typedView : EachViewOk state.store value plan.element
+  aliases : ViewAliases cfg.mod source.world source.rootsEnv env state.store view value plan.element
+  roots : Gam env source.world.P plan.roots value.loc.root
+  observed : ObservedSafe cfg.mod source.world
+    (source.context.mayShrink source.world.ownerP source.observation) source.observation state.store
+  classified : cfg.mod.profile = .shrink →
+    ClassifiedParameters cfg.mod source.world.P source.world.D source.observation state.store
+
+theorem EachPlan.initial {cfg : Cfg} {env : Env} {initial state : St} {x : VarId} {idx : Option VarId}
+    {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
+    {source : StmtSource cfg env (.forEach x idx view byRef body origin) initial}
+    (plan : EachPlan source) (fuel : Nat) (value : ViewVal)
+    (success : evalView fuel cfg env view initial = .ok value state) : EachLoopState plan value state := by
+  have result := plan.viewSource.result fuel value success
+  have frame := result.frame
+  rw [plan.viewTyping, plan.viewRoots, plan.viewWorld, plan.viewFuture] at frame
+  refine ⟨eachView_output_frame source frame, ?_, ?_, ?_, ?_, ?_⟩
+  · have typed := result.typed.eachView
+    simpa only [plan.viewElement] using typed
+  · have aliases := result.viewAliases
+    simpa only [plan.viewWorld, plan.viewRoots, plan.viewElement] using aliases
+  · have roots := result.rooted
+    simpa only [plan.viewWorld, plan.viewRootValues] using roots
+  · have observed := result.observed
+    simpa only [plan.viewWorld, plan.viewObservation, plan.viewMay] using observed
+  · have classified := result.classified
+    simpa only [plan.viewWorld, plan.viewObservation] using classified
 
 end Goose.Lower
