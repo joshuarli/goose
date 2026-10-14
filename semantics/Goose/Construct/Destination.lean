@@ -515,6 +515,19 @@ private theorem protectedAbandonment_storage (discarded : List PendingDestinatio
       · exact ih _
       · rfl
 
+private theorem protectedAbandonment_events (discarded : List PendingDestination) (state : ConstructionState) :
+    ∃ suffix, (protectedAbandonment discarded state).finalState.events = state.events ++ suffix := by
+  induction discarded generalizing state with
+  | nil => exact ⟨[], by simp [protectedAbandonment, pure, ConstructionResult.finalState]⟩
+  | cons destination rest ih =>
+      simp only [protectedAbandonment]
+      split
+      · obtain ⟨suffix, prefixed⟩ := ih { state with
+          destinations := state.destinations.set! destination.capability.id { destination with progress := .abandoned }
+          events := state.events ++ [.abandon destination.capability.id] }
+        exact ⟨.abandon destination.capability.id :: suffix, by simpa [List.append_assoc] using prefixed⟩
+      · exact ⟨[], by simp [ConstructionResult.finalState]⟩
+
 private theorem protectedAbandonment_stdout (discarded : List PendingDestination) (state : ConstructionState) :
     (protectedAbandonment discarded state).finalState.stdout = state.stdout := by
   induction discarded generalizing state with
@@ -543,6 +556,13 @@ theorem abandonPreservingExit_stdout (state : ConstructionState) (id replacement
   cases checked : protectedExitDiscarded state id replacementId with
   | error fault => rfl
   | ok discarded => exact protectedAbandonment_stdout discarded state
+
+theorem abandonPreservingExit_events (state : ConstructionState) (id replacementId : DestinationId) :
+    ∃ suffix, (abandonPreservingExit id replacementId state).finalState.events = state.events ++ suffix := by
+  simp only [abandonPreservingExit, ConstructionM.get, bind]
+  cases checked : protectedExitDiscarded state id replacementId with
+  | error fault => exact ⟨[], by simp [ConstructionM.fail, ConstructionResult.finalState]⟩
+  | ok discarded => exact protectedAbandonment_events discarded state
 
 def acknowledgeAbandonment (id : DestinationId) : ConstructionM Unit := do
   let destination ← lookupDestination id

@@ -1,4 +1,4 @@
-import Goose.Construct.Destination
+import Goose.Construct.Runtime
 import Init.Data.ByteArray.Lemmas
 
 namespace Goose.Proofs.Construct
@@ -89,5 +89,22 @@ theorem receiving_landing_outside (state : ConstructionState) (storageId other :
       state.storage[other]? := by
   rw [receiving_landing_success state storageId storage receivingStart payloadStart present ordered inside]
   exact Array.getElem?_setIfInBounds_ne different
+
+
+theorem cleanup_consumed_destination (state : ExecutionState) (id : Goose.Core.DestinationId)
+    (destination : PendingDestination) (origin : Goose.Core.OriginId) (carriers : List Goose.Construct.Carrier)
+    (present : state.construction.destinations[id]? = some destination)
+    (consumed : activeProgress destination.progress = false) :
+    cleanupDestination origin id carriers state = .ok () state := by
+  simp [cleanupDestination, getDestination, EvalM.get, bind, pure, present, consumed]
+
+theorem runtime_stop_skips_remaining (reason : Goose.Core.Stop) (state : ExecutionState)
+    (remaining : Unit → EvalM Unit) :
+    ((EvalM.stop reason >>= remaining) state) = .stop reason state := rfl
+
+theorem runtime_escape_skips_remaining (target : Goose.Core.ActId) (carriers : List Goose.Construct.Carrier)
+    (state : ExecutionState) (remaining : Unit → EvalM Unit) :
+    (((fun state => ExecutionStep.escape target carriers state) >>= remaining) state) =
+      .escape target carriers state := rfl
 
 end Goose.Proofs.Construct
