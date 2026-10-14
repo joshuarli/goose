@@ -54,6 +54,32 @@ theorem preparedLoopFlow_normal_success {env : Env} {loop : Option LoopCtx}
     obtain ⟨rfl, rfl⟩ := prepareLoopFlow_normal_success h
     rfl
 
+theorem prepareLoopFlow_execStmt_break (n : Nat) (cfg : Cfg) (env : Env) (loop : LoopCtx)
+    (org : OriginId) :
+    (execStmt n cfg env (.brk org) >>= prepareLoopFlow env (some loop)) =
+      (execStmt n cfg env (.brk org) >>= prepareLoopExit env loop.depth) := by
+  cases n with
+  | zero => simp only [execStmt]; rfl
+  | succ n => simp only [execStmt, pure_bind, prepareLoopFlow, prepareReturn]
+
+theorem prepareLoopFlow_execStmt_continue (n : Nat) (cfg : Cfg) (env : Env) (loop : LoopCtx)
+    (org : OriginId) :
+    (execStmt n cfg env (.cont org) >>= prepareLoopFlow env (some loop)) =
+      (execStmt n cfg env (.cont org) >>= prepareLoopExit env loop.depth) := by
+  cases n with
+  | zero => simp only [execStmt]; rfl
+  | succ n => simp only [execStmt, pure_bind, prepareLoopFlow, prepareReturn]
+
+theorem prepareLoopFlow_execStmt_return_none (n : Nat) (cfg : Cfg) (env : Env)
+    (loop : Option LoopCtx) (org : OriginId) :
+    (execStmt n cfg env (.ret none org) >>= prepareLoopFlow env loop) =
+      (execStmt n cfg env (.ret none org) >>= prepareReturn env) := by
+  cases n with
+  | zero => simp only [execStmt]; rfl
+  | succ n =>
+    cases loop <;> simp [execStmt, prepareLoopFlow, prepareReturn, prepareLoopExit,
+      bind_assoc, pure_bind]
+
 def loopStmtsTail (n : Nat) (cfg : Cfg) (env : Env) (loop : Option LoopCtx)
     (rest : List Stmt) : Flow → M Flow
   | .normal _ => execStmts n cfg env rest >>= prepareLoopFlow env loop

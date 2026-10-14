@@ -91,22 +91,6 @@ theorem statementsLoop_cons (n : Nat) (cfg : Cfg) (loop : Option LoopCtx)
     · exact SimE.ret (Or.inr (Or.inr ⟨context, hloop, Or.inl ⟨rfl, hexited⟩⟩))
     · exact SimE.ret (Or.inr (Or.inr ⟨context, hloop, Or.inr ⟨rfl, hcontinued⟩⟩))
 
-theorem prepareLoopFlow_execStmt_break (n : Nat) (cfg : Cfg) (env : Env) (loop : LoopCtx)
-    (org : OriginId) :
-    (execStmt n cfg env (.brk org) >>= prepareLoopFlow env (some loop)) =
-      (execStmt n cfg env (.brk org) >>= prepareLoopExit env loop.depth) := by
-  cases n with
-  | zero => simp only [execStmt]; rfl
-  | succ n => simp only [execStmt, pure_bind, prepareLoopFlow, prepareReturn]
-
-theorem prepareLoopFlow_execStmt_continue (n : Nat) (cfg : Cfg) (env : Env) (loop : LoopCtx)
-    (org : OriginId) :
-    (execStmt n cfg env (.cont org) >>= prepareLoopFlow env (some loop)) =
-      (execStmt n cfg env (.cont org) >>= prepareLoopExit env loop.depth) := by
-  cases n with
-  | zero => simp only [execStmt]; rfl
-  | succ n => simp only [execStmt, pure_bind, prepareLoopFlow, prepareReturn]
-
 theorem stmt_breakLoop_sim (n : Nat) (cfg : Cfg) (loop : LoopCtx) (org : OriginId)
     (le : LEnv) (ls ls' : LS) (u : Unit) (pt : Pt) (env : Env) (cx : FnCtx) (fr : GIR.Frame)
     (hlow : lowerStmt (some loop) (.brk org) le ls = (u, ls'))
