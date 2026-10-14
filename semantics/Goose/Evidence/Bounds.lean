@@ -813,4 +813,21 @@ theorem validated_arrayLen_fresh {m : GIR.Module} {f : Func} {block : GIR.Block}
   obtain ⟨type, resultType, valueType⟩ := typed block blockMember result (.arrayLen reference) instructionMember
   exact typed_arrayLen_fresh resultType valueType
 
+theorem cmp_true_facts {cx : FnCtx} {fr : Frame} {left right : ValueId}
+    {a b : Int} {state after : St} (leftInt : IntAt fr left a) (rightInt : IntAt fr right b)
+    (success : execPure cx fr (.cmp .lt .i64 left right) state = .ok (.val (.bool true)) after) :
+    FactHolds fr state (.lt left right) := by
+  obtain ⟨leftType, leftCell⟩ := leftInt
+  obtain ⟨rightType, rightCell⟩ := rightInt
+  have less : a < b := by
+    by_cases same : leftType = rightType
+    · subst rightType
+      simp [execPure, getVal_of leftCell, getVal_of rightCell, expectComparable,
+        expectSameTy, evalCmp, bind_apply, pure_apply] at success
+      exact success.1
+    · simp [execPure, getVal_of leftCell, getVal_of rightCell, expectComparable,
+        expectSameTy, same, fault, bind_apply, pure_apply] at success
+      cases success
+  exact ⟨a, b, ⟨leftType, leftCell⟩, ⟨rightType, rightCell⟩, less⟩
+
 end Goose.Proofs.Bounds
