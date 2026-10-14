@@ -2,7 +2,17 @@ import Goose.Construct.Syntax
 
 namespace Goose.Construct
 
-def fixedByteSize? (module : Module) : Ty → Option Nat
+structure LayoutEnv where
+  structs : Array StructDef
+  deriving Repr
+
+def LayoutEnv.ofModule (module : Module) : LayoutEnv := ⟨module.structs⟩
+
+def LayoutEnv.structType? (layout : LayoutEnv) (id : Goose.Core.StructId) : Option Ty :=
+  layout.structs[id]?.map fun descriptor =>
+    .structT id (TyList.ofList (descriptor.fields.toList.map (·.ty)))
+
+def fixedByteSize? (module : LayoutEnv) : Ty → Option Nat
   | .int ty => some (ty.bits / 8)
   | .bool => some 1
   | .arr element count => (fixedByteSize? module element).map (count * ·)
@@ -26,7 +36,7 @@ def readCount (bytes : ByteArray) (start : Nat) : Except LayoutFault Nat := do
   pure count
 
 mutual
-def packedEnd : Nat → Module → Ty → ByteArray → Nat → Except LayoutFault Nat
+def packedEnd : Nat → LayoutEnv → Ty → ByteArray → Nat → Except LayoutFault Nat
   | 0, _, _, _, _ => .error .fuel
   | fuel + 1, module, ty, bytes, start => do
       match fixedByteSize? module ty with
@@ -40,7 +50,7 @@ def packedEnd : Nat → Module → Ty → ByteArray → Nat → Except LayoutFau
         | .arr element count => elementsEnd fuel module element count bytes start
         | _ => throw .type
 
-def elementsEnd : Nat → Module → Ty → Nat → ByteArray → Nat → Except LayoutFault Nat
+def elementsEnd : Nat → LayoutEnv → Ty → Nat → ByteArray → Nat → Except LayoutFault Nat
   | 0, _, _, _, _, _ => .error .fuel
   | _fuel + 1, _, _, 0, _, start => .ok start
   | fuel + 1, module, element, count + 1, bytes, start => do
@@ -62,14 +72,14 @@ def samplePacked (ty : Ty) (bytes : ByteArray) (start : Nat) : Except LayoutFaul
   | .arr element count => pure ⟨start, count, element⟩
   | _ => .error .type
 
-def elementInterval (fuel : Nat) (module : Module) (bytes : ByteArray)
+def elementInterval (fuel : Nat) (module : LayoutEnv) (bytes : ByteArray)
     (run : SampledRun) (index : Nat) : Except LayoutFault (Nat × Nat) := do
   if index ≥ run.count then throw .bounds
   let start ← elementsEnd fuel module run.element index bytes run.byteStart
   let finish ← packedEnd fuel module run.element bytes start
   pure (start, finish)
 
-def sampledInterval (fuel : Nat) (module : Module) (bytes : ByteArray)
+def sampledInterval (fuel : Nat) (module : LayoutEnv) (bytes : ByteArray)
     (run : SampledRun) : Except LayoutFault (Nat × Nat) := do
   let finish ← elementsEnd fuel module run.element run.count bytes run.byteStart
   pure (run.byteStart, finish)
