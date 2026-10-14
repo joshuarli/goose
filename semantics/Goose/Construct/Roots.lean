@@ -16,6 +16,11 @@ structure Eff where
   outputs : Bool := false
   
   unknown : Bool := false
+  storageReads : List RootRef := []
+  storageWrites : List RootRef := []
+  storageGrows : List RootRef := []
+  storageShrinks : List RootRef := []
+  namedRoots : List RootRef := []
 
 structure RState where
   
@@ -65,16 +70,16 @@ def addRoots (rs : List RootRef) (upd : Eff → List Target → Eff) : P Unit :=
   modify fun s => { s with eff := upd s.eff (rootsTargets rs) }
 
 def addReads (rs : List RootRef) : P Unit :=
-  addRoots rs fun e ts => { e with reads := addTargets e.reads ts }
+  addRoots rs fun e ts => { e with reads := addTargets e.reads ts, storageReads := (e.storageReads ++ rs).eraseDups }
 
 def addWrites (rs : List RootRef) : P Unit :=
-  addRoots rs fun e ts => { e with writes := addTargets e.writes ts }
+  addRoots rs fun e ts => { e with writes := addTargets e.writes ts, storageWrites := (e.storageWrites ++ rs).eraseDups }
 
 def addGrows (rs : List RootRef) : P Unit :=
-  addRoots rs fun e ts => { e with grows := addTargets e.grows ts }
+  addRoots rs fun e ts => { e with grows := addTargets e.grows ts, storageGrows := (e.storageGrows ++ rs).eraseDups }
 
 def addShrinks (rs : List RootRef) : P Unit :=
-  addRoots rs fun e ts => { e with shrinks := addTargets e.shrinks ts }
+  addRoots rs fun e ts => { e with shrinks := addTargets e.shrinks ts, storageShrinks := (e.storageShrinks ++ rs).eraseDups }
 
 def PEnv.access (env : PEnv) : AccessEnv := ⟨env.mod, env.impl, env.ctx⟩
 
@@ -224,10 +229,66 @@ def checkBlockValue (n0 n1 : Nat) : List RootRef → V Unit
   | _ :: rest => checkBlockValue n0 n1 rest
 
 
+private def mappedStorage (callee : Impl) (context : Context) (arguments : List (List RootRef))
+    (targets : List Target) : List RootRef :=
+  targets.flatMap fun target => match target with
+    | .global id => [.global id]
+    | .param position =>
+        match arguments[position]? with
+        | none => []
+        | some roots => roots ++ (paramGlobals callee context position).filterMap fun target =>
+            match target with | .global id => some (.global id) | .param _ => none
+
+private def mergeEffects (a b : Eff) : Eff := {
+  reads := addTargets a.reads b.reads
+  writes := addTargets a.writes b.writes
+  grows := addTargets a.grows b.grows
+  shrinks := addTargets a.shrinks b.shrinks
+  rebinds := addTargets a.rebinds b.rebinds
+  aborts := a.aborts || b.aborts
+  outputs := a.outputs || b.outputs
+  unknown := a.unknown || b.unknown
+  storageReads := (a.storageReads ++ b.storageReads).eraseDups
+  storageWrites := (a.storageWrites ++ b.storageWrites).eraseDups
+  storageGrows := (a.storageGrows ++ b.storageGrows).eraseDups
+  storageShrinks := (a.storageShrinks ++ b.storageShrinks).eraseDups
+  namedRoots := (a.namedRoots ++ b.namedRoots).eraseDups }
+
+private def captureEffects (action : P α) : P (α × Eff) := fun state => do
+  let (value, result) ← action { state with eff := {} }
+  pure ((value, result.eff), { result with eff := mergeEffects state.eff result.eff })
+
+private def noteNamed (roots : List RootRef) : P Unit :=
+  modify fun state => { state with eff := { state.eff with
+    namedRoots := (state.eff.namedRoots ++ roots).eraseDups } }
+
+private def overlaps (receiver accessed : List RootRef) : Bool :=
+  receiver.any accessed.contains
+
+private def unknownGlobalAccess (receiver : List RootRef) (effects : Eff) : Bool :=
+  effects.unknown && receiver.any fun root => match root with | .global _ => true | _ => false
+
+private def checkNoGrowth (receiver : List RootRef) (effects : Eff) : P Unit :=
+  if overlaps receiver (effects.storageGrows ++ effects.storageShrinks) || unknownGlobalAccess receiver effects then
+    rejP .call "C-NOGROW: constructor resizes its open receiving owner"
+  else pure ()
+
+private def checkWholeAccess (receiver : List RootRef) (effects : Eff) : P Unit :=
+  if overlaps receiver (effects.namedRoots ++ effects.storageReads ++ effects.storageWrites ++
+      effects.storageGrows ++ effects.storageShrinks) || unknownGlobalAccess receiver effects then
+    rejP .whole "whole assignment replacement reaches its receiver"
+  else pure ()
+
 def callEffects (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) (e : Eff) : Eff :=
   match callee.summary with
   | .unknown =>
-    { e with writes := addTargets e.writes (rootsTargets argRoots.flatten), unknown := true }
+    { e with
+      writes := addTargets e.writes (rootsTargets argRoots.flatten)
+      unknown := true
+      storageReads := (e.storageReads ++ argRoots.flatten).eraseDups
+      storageWrites := (e.storageWrites ++ argRoots.flatten).eraseDups
+      storageGrows := (e.storageGrows ++ argRoots.flatten).eraseDups
+      storageShrinks := (e.storageShrinks ++ argRoots.flatten).eraseDups }
   | .known sm =>
     { e with
       reads := addTargets e.reads (mapCallTargets callee cctx argRoots sm.reads)
@@ -236,7 +297,11 @@ def callEffects (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)
       shrinks := addTargets e.shrinks (mapCallTargets callee cctx argRoots sm.shrinks)
       rebinds := addTargets e.rebinds (mapCallTargets callee cctx argRoots sm.rebinds)
       aborts := e.aborts || sm.aborts
-      outputs := e.outputs || sm.outputs }
+      outputs := e.outputs || sm.outputs
+      storageReads := (e.storageReads ++ mappedStorage callee cctx argRoots sm.reads).eraseDups
+      storageWrites := (e.storageWrites ++ mappedStorage callee cctx argRoots sm.writes).eraseDups
+      storageGrows := (e.storageGrows ++ mappedStorage callee cctx argRoots sm.grows).eraseDups
+      storageShrinks := (e.storageShrinks ++ mappedStorage callee cctx argRoots sm.shrinks).eraseDups }
 
 
 def callResultRoots (callee : Impl) (context : Context) (arguments : List (List RootRef)) : V (List RootRef) := do
@@ -324,9 +389,12 @@ def checkContents (env : PEnv) (c : ContextId) (args : List Arg) (argRoots : Lis
 mutual
 
 def rpPlace (env : PEnv) : Place → P (List RootRef)
-  | .var x => pure [.local x]
-  | .global g => pure [.global g]
-  | .deref e => rpExpr env e
+  | .var x => do noteNamed [.local x]; pure [.local x]
+  | .global g => do noteNamed [.global g]; pure [.global g]
+  | .deref e => do
+    let roots ← rpExpr env e
+    noteNamed roots
+    pure roots
   | .field owner _ => rpPlace env owner
   | .elem v i _ => do
     let rho ← rpView env v
@@ -402,7 +470,9 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     rpCall env c argRoots
   | .push owner a _ => do
     let rho ← rpPlace env owner
-    let _ ← rpExpr env a
+    let (_, effects) ← captureEffects (rpExpr env a)
+    if ((env.access.placeType? owner).bind Ty.ownerElem?).any (·.nonfixed) then
+      checkNoGrowth rho effects
     addGrows rho
     addWrites rho
     if (← liftV (env.limitedOwner owner)) then noteAborts
@@ -585,7 +655,8 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     let rho ← rpPlace env owner
     addReads rho
     addShrinks rho
-    let _ ← rpExpr env replacement
+    let (_, effects) ← captureEffects (rpExpr env replacement)
+    checkWholeAccess rho effects
     addWrites rho
     addGrows rho
   | .ifS c t f _ => do
@@ -628,9 +699,16 @@ def rpStmt (env : PEnv) : Stmt → P Unit
         let position := ids.idxOf id
         let some actual := roots[position]? | rejP .result "receive result channel missing"
         bindRoots env env.scopes id actual
-  | .appendValue owner producer _ | .appendConstruct owner producer _ => do
+  | .appendValue owner producer _ => do
     let roots ← rpPlace env owner
     let _ ← rpExpr env producer
+    addGrows roots
+    addWrites roots
+    if (← liftV (env.limitedOwner owner)) then noteAborts
+  | .appendConstruct owner producer _ => do
+    let roots ← rpPlace env owner
+    let (_, effects) ← captureEffects (rpExpr env producer)
+    checkNoGrowth roots effects
     addGrows roots
     addWrites roots
     if (← liftV (env.limitedOwner owner)) then noteAborts
