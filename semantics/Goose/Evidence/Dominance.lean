@@ -298,4 +298,50 @@ theorem dominators_predWalk_zero {fn : Func} {preds : Array (List BlockId)}
     (fuel := fn.blocks.size + 2) (by simp) initial
   exact final length block (by simpa using bound) walk
 
+theorem PredWalk.finite_witness {preds : Array (List BlockId)} {n blocked length block : Nat}
+    (walk : PredWalk preds n blocked length block) :
+    ∃ nodes : List Nat, nodes.Nodup ∧ (∀ node ∈ nodes, node < n) ∧ block ∈ nodes ∧
+      (∀ node ∈ nodes, ∃ distance, distance < nodes.length ∧ PredWalk preds n blocked distance node) := by
+  induction walk with
+  | entry bound avoids =>
+    refine ⟨[0], by simp, ?_, by simp, ?_⟩
+    · intro node member
+      simpa using (List.mem_singleton.mp member) ▸ bound
+    · intro node member
+      have equal := List.mem_singleton.mp member
+      subst node
+      exact ⟨0, by simp, .entry bound avoids⟩
+  | @next length before after prior bound avoids edge ih =>
+    obtain ⟨nodes, nodup, bounds, member, distances⟩ := ih
+    by_cases existsNode : after ∈ nodes
+    · exact ⟨nodes, nodup, bounds, existsNode, distances⟩
+    · refine ⟨after :: nodes, List.nodup_cons.mpr ⟨existsNode, nodup⟩, ?_, by simp, ?_⟩
+      · intro node member
+        rcases List.mem_cons.mp member with equal | member
+        · exact equal ▸ bound
+        · exact bounds node member
+      · intro node hnode
+        rcases List.mem_cons.mp hnode with equal | hnode
+        · subst node
+          obtain ⟨distance, hdist, hwalk⟩ := distances before member
+          exact ⟨distance + 1, by simp only [List.length_cons]; omega, .next hwalk bound avoids edge⟩
+        · obtain ⟨distance, hdist, hwalk⟩ := distances node hnode
+          exact ⟨distance, by simp only [List.length_cons]; omega, hwalk⟩
+
+theorem PredWalk.short {preds : Array (List BlockId)} {n blocked length block : Nat}
+    (walk : PredWalk preds n blocked length block) :
+    ∃ distance, distance < n ∧ PredWalk preds n blocked distance block := by
+  obtain ⟨nodes, nodup, bounds, member, distances⟩ := walk.finite_witness
+  have size : nodes.length ≤ n := by
+    simpa using nodup.length_le_of_subset (l₂ := List.range n)
+      (fun node member => List.mem_range.mpr (bounds node member))
+  obtain ⟨distance, bound, shortest⟩ := distances block member
+  exact ⟨distance, by omega, shortest⟩
+
+theorem dominators_predWalk_sound {fn : Func} {preds : Array (List BlockId)}
+    {blocked length block : Nat} (walk : PredWalk preds fn.blocks.size blocked length block) :
+    domBit (dominators fn preds) block blocked = false := by
+  obtain ⟨distance, bound, shortest⟩ := walk.short
+  exact dominators_predWalk_zero shortest (by omega)
+
 end Goose.Evidence
