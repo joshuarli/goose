@@ -1093,7 +1093,7 @@ theorem landExitReplacement_stdout (replacementId : DestinationId) (state : Cons
                   · exact keepsOutput_completed_landing _ _ _ _ _ _
 
 
-def PreservesEventPrefix (action : ConstructionM α) : Prop :=
+abbrev PreservesEventPrefix (action : ConstructionM α) : Prop :=
   ∀ state, state.events <+: (action state).finalState.events
 
 private theorem eventPrefix_bind (action : ConstructionM α) (remaining : α → ConstructionM β)
@@ -1108,6 +1108,51 @@ private theorem eventPrefix_bind (action : ConstructionM α) (remaining : α →
         simpa [result,ConstructionResult.finalState] using before
       exact extended.trans (next value after)
   | fault reason after => simpa [bind,result,ConstructionResult.finalState] using before
+
+private theorem eventPrefix_fault_bind (reason : ConstructionFault) (next : α → ConstructionM β) :
+    PreservesEventPrefix (ConstructionM.fail reason >>= next) := fun _ => List.prefix_rfl
+
+private theorem eventPrefix_get_bind (next : ConstructionState → ConstructionM α)
+    (safe : ∀ state, state.events <+: (next state state).finalState.events) :
+    PreservesEventPrefix (ConstructionM.get >>= next) := safe
+
+private theorem eventPrefix_set_then (state updated : ConstructionState) (next : Unit → ConstructionM α)
+    (before : state.events <+: updated.events)
+    (safe : ∀ value, PreservesEventPrefix (next value)) :
+    state.events <+: ((ConstructionM.set updated >>= next) state).finalState.events :=
+  before.trans (safe () updated)
+
+private theorem get_lookupStorage_swap (id : StorageId)
+    (next : ConstructionState → ReceivingStorage → ConstructionM α) :
+    (do let state ← ConstructionM.get; let storage ← lookupStorage id; next state storage) =
+      (do let storage ← lookupStorage id; let state ← ConstructionM.get; next state storage) := by
+  funext state
+  simp only [ConstructionM.get,lookupStorage,bind]
+  cases state.storage[id]? <;> rfl
+
+private theorem eventPrefix_guard_then (state : ConstructionState) (condition : Prop)
+    [Decidable condition] (reason : ConstructionFault) (next : Unit → ConstructionM α)
+    (safe : state.events <+: (next () state).finalState.events) :
+    state.events <+: ((do
+      if condition then ConstructionM.fail reason
+      next ()) state).finalState.events := by
+  by_cases selected : condition
+  · simp [selected,ConstructionM.fail,bind,ConstructionResult.finalState]
+  · simpa only [selected,↓reduceIte] using safe
+
+private theorem get_guard_swap (condition : Prop) [Decidable condition]
+    (reason : ConstructionFault) (next : ConstructionState → ConstructionM α) :
+    (do
+      let state ← ConstructionM.get
+      if condition then ConstructionM.fail reason
+      next state) =
+    (do
+      if condition then ConstructionM.fail reason
+      let state ← ConstructionM.get
+      next state) := by
+  funext state
+  by_cases selected : condition <;>
+    simp [selected,ConstructionM.get,ConstructionM.fail,bind]
 
 private theorem eventPrefix_pure (value : α) : PreservesEventPrefix (pure value) := fun _ => List.prefix_rfl
 private theorem eventPrefix_fail (reason : ConstructionFault) :
@@ -1304,39 +1349,40 @@ theorem recordCopy_events_prefix (source : CopySource) (id : DestinationId) :
     PreservesEventPrefix (recordCopy source id) := by
   unfold recordCopy
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
 
-set_option maxHeartbeats 600000 in
 theorem writeElement_events_prefix (id : DestinationId) (bytes : ByteArray) :
     PreservesEventPrefix (writeElement id bytes) := by
   unfold writeElement
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
@@ -1344,18 +1390,19 @@ theorem finishDestination_events_prefix (id : DestinationId) :
     PreservesEventPrefix (finishDestination id) := by
   unfold finishDestination
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
@@ -1363,58 +1410,59 @@ theorem attachChild_events_prefix (parent child : DestinationId) :
     PreservesEventPrefix (attachChild parent child) := by
   unfold attachChild
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
-set_option maxHeartbeats 1200000 in
 theorem attachExtension_events_prefix (parent child : DestinationId) :
     PreservesEventPrefix (attachExtension parent child) := by
   unfold attachExtension
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
-set_option maxHeartbeats 600000 in
 theorem attachElementExtension_events_prefix (parent child : DestinationId) :
     PreservesEventPrefix (attachElementExtension parent child) := by
   unfold attachElementExtension
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
@@ -1422,18 +1470,19 @@ theorem publishElementDestination_events_prefix (id : DestinationId) :
     PreservesEventPrefix (publishElementDestination id) := by
   unfold publishElementDestination
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
@@ -1441,18 +1490,19 @@ theorem retireRepeatedSource_events_prefix (parent source : DestinationId) :
     PreservesEventPrefix (retireRepeatedSource parent source) := by
   unfold retireRepeatedSource
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
@@ -1460,38 +1510,39 @@ theorem truncateConstructionStorage_events_prefix (storage : StorageId) (start f
     PreservesEventPrefix (truncateConstructionStorage storage start finish count owner retainSlots) := by
   unfold truncateConstructionStorage
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
-set_option maxHeartbeats 600000 in
 theorem prepareNamedBinding_events_prefix (id : DestinationId) (ty : Ty) :
     PreservesEventPrefix (prepareNamedBinding id ty) := by
   unfold prepareNamedBinding
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
@@ -1499,20 +1550,311 @@ theorem fitStagedDestination_events_prefix (id : DestinationId) :
     PreservesEventPrefix (fitStagedDestination id) := by
   unfold fitStagedDestination
   repeat' first
-    | exact eventPrefix_pure _
-    | exact eventPrefix_fail _
-    | exact eventPrefix_get
-    | exact eventPrefix_writableDestination _
-    | exact eventPrefix_lookupDestination _
-    | exact eventPrefix_lookupStorage _
-    | exact eventPrefix_replaceDestination _ _
-    | exact eventPrefix_replaceStorage _ _
-    | exact eventPrefix_emit _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
     | dsimp only
-    | apply eventPrefix_bind
-    | apply eventPrefix_if
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
     | split
     | intro value
 
+
+theorem openChild_events_prefix (parent : DestinationId) (ty : Ty) (layout : ReceivingLayout) :
+    PreservesEventPrefix (openChild parent ty layout) := by
+  unfold openChild
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_set_then
+    | with_reducible exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+theorem openExtension_events_prefix (parent : DestinationId) (request : ConstructionRequest) (count : Option Nat) :
+    PreservesEventPrefix (openExtension parent request count) := by
+  unfold openExtension
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_set_then
+    | with_reducible exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+theorem openElementExtension_events_prefix (parent : DestinationId) (ty : Ty) (layout : ReceivingLayout) (count : Option Nat) (receiver : Loc) :
+    PreservesEventPrefix (openElementExtension parent ty layout count receiver) := by
+  unfold openElementExtension
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_set_then
+    | with_reducible exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+theorem openExitReplacement_events_prefix (id : DestinationId) :
+    PreservesEventPrefix (openExitReplacement id) := by
+  unfold openExitReplacement
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_set_then
+    | with_reducible exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+private theorem eventPrefix_forInLoop (values : List α)
+    (body : (value : α) → value ∈ values → β → ConstructionM (ForInStep β))
+    (safe : ∀ value member accumulator, PreservesEventPrefix (body value member accumulator))
+    (remaining : List α) (accumulator : β) (inside : ∃ earlier, earlier ++ remaining = values) :
+    PreservesEventPrefix (List.forIn'.loop values body remaining accumulator inside) := by
+  induction remaining generalizing accumulator with
+  | nil => exact eventPrefix_pure _
+  | cons value rest ih =>
+      simp only [List.forIn'.loop]
+      apply eventPrefix_bind
+      · exact safe _ _ _
+      · intro step
+        cases step with
+        | done accumulator => exact eventPrefix_pure _
+        | yield accumulator => exact ih _ _
+
+private theorem eventPrefix_forIn (values : List α) (accumulator : β)
+    (body : α → β → ConstructionM (ForInStep β))
+    (safe : ∀ value accumulator, PreservesEventPrefix (body value accumulator)) :
+    PreservesEventPrefix (forIn values accumulator body) := by
+  apply eventPrefix_forInLoop
+  intro value member accumulator
+  exact safe value accumulator
+
+private theorem eventPrefix_foreach (values : List α) (body : α → ConstructionM Unit)
+    (safe : ∀ value, PreservesEventPrefix (body value)) :
+    PreservesEventPrefix (do for value in values do body value) := by
+  apply eventPrefix_bind
+  · apply eventPrefix_forInLoop
+    intro value member accumulator
+    apply eventPrefix_bind
+    · exact safe value
+    · intro _; exact eventPrefix_pure _
+  · intro _; exact eventPrefix_pure _
+
+
+private theorem eventPrefix_openDestinationWith (policy : StagingPolicy) (storage : StorageId)
+    (capability : Core.Destination Ty) (layout : ReceivingLayout) (count : Option Nat) :
+    PreservesEventPrefix (openDestinationWith policy storage capability layout count) := by
+  cases policy <;> cases layout <;> cases count
+  all_goals unfold openDestinationWith
+  all_goals simp only [get_lookupStorage_swap,get_guard_swap]
+  all_goals repeat' first
+    | with_reducible exact eventPrefix_pure _ _
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | apply eventPrefix_guard_then
+    | with_reducible apply eventPrefix_set_then
+    | exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | intro value
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+
+theorem openDestination_events_prefix (storage : StorageId) (capability : Core.Destination Ty)
+    (layout : ReceivingLayout) (count : Option Nat) :
+    PreservesEventPrefix (openDestination storage capability layout count) :=
+  eventPrefix_openDestinationWith _ _ _ _ _
+
+theorem openDestinationDirect_events_prefix (storage : StorageId) (capability : Core.Destination Ty)
+    (layout : ReceivingLayout) (count : Option Nat) :
+    PreservesEventPrefix (openDestinationDirect storage capability layout count) :=
+  eventPrefix_openDestinationWith _ _ _ _ _
+
+
+private theorem eventPrefix_publishReady (id : DestinationId) :
+    PreservesEventPrefix (publishReady id) := by
+  unfold publishReady
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_set_then
+    | with_reducible exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+theorem publishOperation_events_prefix (ids : List DestinationId) :
+    PreservesEventPrefix (publishOperation ids) := by
+  apply eventPrefix_get_bind
+  intro state
+  cases preflightPublication state ids with
+  | error reason => exact List.prefix_rfl
+  | ok value =>
+      cases value
+      exact eventPrefix_foreach ids publishReady eventPrefix_publishReady state
+
+
+theorem abandonDestination_events_prefix (id : DestinationId) :
+    PreservesEventPrefix (abandonDestination id) := by
+  unfold abandonDestination
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_set_then
+    | with_reducible exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+theorem stageDestination_events_prefix (id : DestinationId) :
+    PreservesEventPrefix (stageDestination id) := by
+  unfold stageDestination
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_set_then
+    | with_reducible exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+theorem abandonTree_events_prefix (id : DestinationId) :
+    PreservesEventPrefix (abandonTree id) := by
+  unfold abandonTree
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact reserveStorage_events_prefix _ _
+    | with_reducible exact reserveStorage_events_prefix _ _ _
+    | with_reducible exact abandonDestination_events_prefix _
+    | with_reducible apply eventPrefix_forIn
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_set_then
+    | with_reducible exact List.prefix_rfl
+    | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
 
 end Goose.Construct
