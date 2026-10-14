@@ -818,4 +818,95 @@ theorem full_push_source (profile : NumProfile) (accepted : Core.validate fullPu
   | .done (.aborted .capacity 0) "", .done (.aborted .capacity 0) "" => true
   | _, _ => false
 
+def aggregateModule (artifact : ArtifactProfile) : Core.Module :=
+  { files := #["aggregate.goose"], types := #[.bool, .int .i64, .arr .bool 2],
+    globals := #[⟨"owner", .arr .bool 2, .mutable,
+      .arrLit (.arr .bool 2) [.bool true, .bool false], 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [
+      .assertS (.read (.elem (.of (.global 0)) (.lit .i64 0) 0)) 0,
+      .assertS (.not (.read (.elem (.of (.global 0)) (.lit .i64 1) 0))) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := artifact }
+
+theorem aggregate_claim (artifact : ArtifactProfile) (profile : NumProfile) :
+    TypedExprClaim 3 ⟨profile, aggregateModule artifact⟩ [.arr .bool 2]
+      (.arrLit (.arr .bool 2) [.bool true, .bool false]) := by
+  apply typedExprClaim_arrLit
+  apply typedExprsClaim
+  intro expr h
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+  rcases h with rfl | rfl <;> exact typedExprClaim_bool 2 _ _ _
+
+theorem aggregate_sources (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (aggregateModule artifact) = .ok ()) :
+    ∃ children : ExprsSource 2 ⟨profile, aggregateModule artifact⟩ ⟨#[], 0, [], 0⟩
+      [.bool true, .bool false] { St.initial with nextAct := 1 },
+      children.resultsMatch [.arr .bool 2] := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, aggregateModule artifact⟩) (state := St.initial) (g := 0)
+    (global := ⟨"owner", .arr .bool 2, .mutable,
+      .arrLit (.arr .bool 2) [.bool true, .bool false], 0⟩)
+    accepted rfl (InitializedGlobals.initial _).invariant
+  exact source.arrLitChildren 2 [.arr .bool 2] (by
+    intro impl himpl
+    rw [htyping] at himpl
+    cases himpl)
+
+theorem aggregate_second_source (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (aggregateModule artifact) = .ok ()) :
+    ∃ child : ExprSource ⟨profile, aggregateModule artifact⟩ ⟨#[], 0, [], 0⟩
+      (.bool false) { St.initial with nextAct := 1 },
+      SourceResults child.typingEnv child.rootsEnv [.arr .bool 2] := by
+  obtain ⟨children, metadata⟩ := aggregate_sources artifact profile accepted
+  cases children with
+  | cons first next =>
+    have hdone : evalExpr 2 ⟨profile, aggregateModule artifact⟩ ⟨#[], 0, [], 0⟩
+        (.bool true) { St.initial with nextAct := 1 } =
+        .ok (.bool true) { St.initial with nextAct := 1 } := by simp [evalExpr, pure_apply]
+    have hrest := metadata.2 (.bool true) _ hdone
+    cases hnext : next (.bool true) _ hdone with
+    | cons second nextSecond =>
+      rw [hnext] at hrest
+      exact ⟨second, hrest.1⟩
+
+theorem struct_aggregate_claim (profile : NumProfile) :
+    TypedExprClaim 3 ⟨profile, fieldModule .shrink⟩ [fieldType]
+      (.structLit fieldType [.bool true]) := by
+  apply typedExprClaim_structLit
+  apply typedExprsClaim
+  intro expr h
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+  subst expr
+  exact typedExprClaim_bool 2 _ _ true
+
+theorem struct_aggregate_source (profile : NumProfile)
+    (accepted : Core.validate (fieldModule .shrink) = .ok ()) :
+    ∃ children : ExprsSource 2 ⟨profile, fieldModule .shrink⟩ ⟨#[], 0, [], 0⟩
+      [.bool true] { St.initial with nextAct := 1 }, children.resultsMatch [fieldType] := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, fieldModule .shrink⟩) (state := St.initial) (g := 0)
+    (global := ⟨"owner", fieldType, .mutable, .structLit fieldType [.bool true], 0⟩)
+    accepted rfl (InitializedGlobals.initial _).invariant
+  exact source.structLitChildren 2 [fieldType] (by
+    intro impl himpl
+    rw [htyping] at himpl
+    cases himpl)
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := aggregateModule artifact
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact => [NumProfile.release, .debug].all fun profile =>
+  let source := aggregateModule artifact
+  match Core.eval 100 profile source, GIR.run 200 profile (lower source) with
+  | .done .returned "", .done .returned "" => true
+  | _, _ => false
+
+#guard match (lowerGlobal (aggregateModule .pilot)
+  ⟨"owner", .arr .bool 2, .mutable, .arrLit (.arr .bool 2) [.bool true, .bool false], 0⟩).init.blocks[0]?.map (·.insts) with
+  | some [Inst.def 0 (.constBool true), Inst.def 1 (.constBool false),
+      Inst.def 2 (.arrLit (.arr .bool 2) [0, 1]), Inst.term (.ret [2] (some 0))] => true
+  | _ => false
+
 end Goose.Lower.TypedExpressionChecks

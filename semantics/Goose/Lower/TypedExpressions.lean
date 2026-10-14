@@ -3098,4 +3098,328 @@ theorem typedExprClaim_call {n : Nat} {cfg : Cfg} {results : List Ty} {c : Conte
   exact typed_call_sim ha env state argsSource argsMetadata (hc env state source hmetadata)
     ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
 
+inductive ExprsSource (n : Nat) (cfg : Cfg) (env : Env) : List Expr → St → Type
+  | nil (state : St) : ExprsSource n cfg env [] state
+  | cons {expr : Expr} {exprs : List Expr} {state : St}
+      (source : ExprSource cfg env expr state)
+      (rest : ∀ value after, evalExpr n cfg env expr state = .ok value after →
+        ExprsSource n cfg env exprs after) : ExprsSource n cfg env (expr :: exprs) state
+
+def ExprsSource.resultsMatch {n : Nat} {cfg : Cfg} {env : Env} :
+    {exprs : List Expr} → {state : St} → ExprsSource n cfg env exprs state → List Ty → Prop
+  | [], _, .nil _, _ => True
+  | _ :: _, _, .cons source rest, results =>
+      SourceResults source.typingEnv source.rootsEnv results ∧
+        ∀ value after hdone, (rest value after hdone).resultsMatch results
+
+private inductive ExprsTyping (env : TEnv) : List Expr → Nat → Nat → Prop
+  | nil (count : Nat) : ExprsTyping env [] count count
+  | cons {expr : Expr} {rest : List Expr} {before middle after : Nat} {ty : Ty}
+      (head : tyExpr env expr before = .ok (ty, middle))
+      (tail : ExprsTyping env rest middle after) : ExprsTyping env (expr :: rest) before after
+
+private theorem exprsTyping_of_as {env : TEnv} {el : Ty} :
+    ∀ {es : List Expr} {before after : Nat},
+    tyExprsAs env el es before = .ok ((), after) → ExprsTyping env es before after
+  | [], _, _, h => by
+    simp only [tyExprsAs] at h
+    have h' := (Core.Sound.st_pure_ok _ _ _).1 h
+    cases h'
+    exact .nil _
+  | _ :: _, _, _, h => by
+    simp only [tyExprsAs] at h
+    inv at h
+    obtain ⟨_, _, head, _, tail⟩ := h
+    exact .cons head (exprsTyping_of_as tail)
+
+private theorem exprsTyping_of_struct {env : TEnv} :
+    ∀ {ts : List Ty} {es : List Expr} {before after : Nat},
+    tyStructExprs env ts es before = .ok ((), after) → ExprsTyping env es before after
+  | [], [], _, _, h => by
+    simp only [tyStructExprs] at h
+    have h' := (Core.Sound.st_pure_ok _ _ _).1 h
+    cases h'
+    exact .nil _
+  | [], _ :: _, _, _, h => by simp only [tyStructExprs] at h; inv at h
+  | _ :: _, [], _, _, h => by simp only [tyStructExprs] at h; inv at h
+  | _ :: _, _ :: _, _, _, h => by
+    simp only [tyStructExprs] at h
+    inv at h
+    obtain ⟨_, _, head, _, tail⟩ := h
+    exact .cons head (exprsTyping_of_struct tail)
+
+open Core.Sound in
+private theorem typedExprsSource_suffix {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
+    {isStruct : Bool} {target : Ty} {all : List Expr} {results : List Ty}
+    (root : ExprSource cfg env
+      (if isStruct then .structLit target all else .arrLit target all) initial)
+    (metadata : SourceResults root.typingEnv root.rootsEnv results) :
+    ∀ (es : List Expr) (offset : Nat) (state : St) (tn tn' : Nat) (rst rst' : RState),
+    all.drop offset = es →
+    Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv env state
+      (es.flatMap Expr.variables ++ root.context.outputFuture) →
+    ObservedSafe cfg.mod root.world (root.context.mayShrink root.world.ownerP root.observation)
+      root.observation state.store →
+    (cfg.mod.profile = .shrink → ClassifiedParameters cfg.mod root.world.P root.world.D
+      root.observation state.store) →
+    ExprsTyping root.typingEnv es tn tn' →
+    rpExprs root.rootsEnv es rst = .ok ((), rst') → EffLe rst'.eff root.world.E →
+    ∃ source : ExprsSource n cfg env es state, source.resultsMatch results
+  | [], _, state, _, _, _, _, _, _, _, _, _, _, _ => ⟨.nil state, trivial⟩
+  | expr :: rest, offset, state, tn, tn', rst, rst', hdrop, frame, observed,
+      classified, typing, rooted, effects => by
+    cases typing with
+    | cons head tail =>
+      simp only [rpExprs] at rooted
+      inv at rooted
+      obtain ⟨roots, middle, hre, hrr⟩ := rooted
+      let ec := root.context
+      change Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv env state
+        ((expr :: rest).flatMap Expr.variables ++ ec.outputFuture) at frame
+      have hget : all[offset]? = some expr := by
+        have first : (all.drop offset)[0]? = some expr := by rw [hdrop]; rfl
+        simpa using first
+      have hdropTail : all.drop (offset + 1) = rest := by
+        rw [List.drop_add_one_eq_tail_drop, hdrop]
+        rfl
+      have hchild : (DemandNode.expression
+          (if isStruct then .structLit target all else .arrLit target all)).child? offset =
+          some (.expression expr) := by
+        cases isStruct <;> simp [DemandNode.child?, DemandNode.children, hget]
+      have phase : DemandPhase.expression = (DemandNode.expression
+          (if isStruct then .structLit target all else .arrLit target all)).primaryPhase := by
+        cases isStruct <;> rfl
+      let child := ec.child phase offset (.expression expr) .expression hchild (by trivial)
+      have active := ec.child_activeMatches phase offset (.expression expr) .expression hchild
+        (by trivial) root.typingEnv root.typingEnv root.active (by intro x; rfl)
+      have access := (ec.child_accessMatches_iff phase offset (.expression expr) .expression hchild
+        (by trivial) root.typingEnv root.rootsEnv).mpr root.access
+      have shrinkEq : child.mayShrink root.world.ownerP root.observation =
+          ec.mayShrink root.world.ownerP root.observation := by
+        funext r
+        exact propext (ec.child_mayShrink_iff phase offset (.expression expr) .expression hchild
+          (by trivial) root.world.ownerP root.observation r)
+      have childOutput : child.outputFuture =
+          match (generalizing := false) ec with
+          | .pilot _ active => active
+          | .shrink _ context => rest.flatMap Expr.variables ++ context.expected.frame.future := by
+        dsimp only [child]
+        cases ec with
+        | pilot profile active => cases isStruct <;> rfl
+        | @shrink pc profile context =>
+          let transition := context.child phase offset (.expression expr) .expression hchild (by trivial)
+          change transition.context.expected.frame.future =
+            rest.flatMap Expr.variables ++ context.expected.frame.future
+          rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq]
+          have hlt : offset < all.length := by
+            have hpos : 0 < (all.drop offset).length := by rw [hdrop]; simp
+            rw [List.length_drop] at hpos
+            omega
+          have hexpect : (DemandNode.expression
+                (if isStruct then .structLit target all else .arrLit target all)).childExpectation?
+              pc.approvals.access
+              ⟨root.path, .expression, context.expected.frame.active, context.expected.frame.future,
+                context.expected.frame.retained⟩ offset = some
+              ⟨context.expected.frame.active, rest.flatMap Expr.variables ++ context.expected.frame.future⟩ := by
+            cases isStruct <;>
+              simp [DemandNode.childExpectation?, DemandNode.childFuture,
+                DemandNode.visibleForChild, DemandNode.child?, DemandNode.children, hget, hlt, hdropTail]
+          exact DemandNode.childFrame_future transition.childFrameEq hexpect
+      have childInput : child.inputFuture = expr.variables ++ child.outputFuture := by
+        dsimp only [child]
+        cases ec <;> rfl
+      have childFrame : Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv
+          env state child.inputFuture := by
+        rw [childInput, childOutput]
+        cases hec : ec with
+        | pilot profile active =>
+          change Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv env state
+            (expr.variables ++ active)
+          have outputEq : ec.outputFuture = active := by
+            rw [hec]
+            cases isStruct <;> rfl
+          rw [outputEq] at frame
+          apply frame.narrowFuture
+          intro x hx
+          simp only [List.mem_append] at hx
+          change x ∈ (expr.variables ++ rest.flatMap Expr.variables) ++ active
+          rcases hx with h | h
+          · exact List.mem_append_left _ (List.mem_append_left _ h)
+          · exact List.mem_append_right _ h
+        | shrink profile context =>
+          simpa [hec, EvaluationContext.outputFuture, NodeContext.outputFuture,
+            List.flatMap_cons, List.append_assoc] using frame
+      let source : ExprSource cfg env expr state := {
+        accepted := root.accepted, plans := root.plans, path := root.path ++ [offset],
+        context := child, observation := root.observation, world := root.world,
+        typingEnv := root.typingEnv, rootsEnv := root.rootsEnv,
+        typingStart := _, typingEnd := _, ty := _, rootsStart := rst, rootsEnd := middle,
+        roots := roots, active := active, access := access,
+        protection := by simpa [shrinkEq] using root.protection,
+        observed := by simpa [shrinkEq] using observed, classified := classified,
+        permission := root.permission, frame := childFrame, typed := head, rooted := hre,
+        effects := (rpExprs_mono hrr).2.trans effects }
+      have nextReady : ∀ value after, evalExpr n cfg env expr state = .ok value after →
+          ∃ source : ExprsSource n cfg env rest after, source.resultsMatch results := by
+        intro value after hdone
+        have done := source.result n value hdone
+        have frame1 := done.frame
+        change Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv
+          env after child.outputFuture at frame1
+        rw [childOutput] at frame1
+        have tailFrame : Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv
+            env after (rest.flatMap Expr.variables ++ ec.outputFuture) := by
+          cases hec : ec with
+          | pilot profile live =>
+            have hframe : Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv
+                env after live := by
+              simpa only [hec] using frame1
+            apply hframe.changeFuture
+            intro x hx _
+            have hactive := root.active
+            change ec.ActiveMatches root.typingEnv at hactive
+            rw [hec] at hactive
+            exact (hactive x).mpr hx
+          | shrink profile context =>
+            simpa [hec, EvaluationContext.outputFuture, NodeContext.outputFuture] using frame1
+        exact typedExprsSource_suffix root metadata rest (offset + 1) after _ tn' middle rst'
+          hdropTail tailFrame (by simpa [source, shrinkEq] using done.observed)
+          done.classified tail hrr effects
+      let next := fun value after hdone => Classical.choose (nextReady value after hdone)
+      exact ⟨.cons source next, metadata, fun value after hdone =>
+        Classical.choose_spec (nextReady value after hdone)⟩
+
+private theorem aggregate_sources {n : Nat} {cfg : Cfg} {env : Env} {state : St}
+    {isStruct : Bool} {target : Ty} {es : List Expr} {results : List Ty}
+    (source : ExprSource cfg env
+      (if isStruct then .structLit target es else .arrLit target es) state)
+    (metadata : SourceResults source.typingEnv source.rootsEnv results)
+    (typed : ExprsTyping source.typingEnv es source.typingStart source.typingEnd)
+    (rooted : rpExprs source.rootsEnv es source.rootsStart = .ok ((), source.rootsEnd)) :
+    ∃ children : ExprsSource n cfg env es state, children.resultsMatch results := by
+  have frame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env state
+      (es.flatMap Expr.variables ++ source.context.outputFuture) := by
+    have hf := source.frame
+    cases isStruct <;> cases hec : source.context <;>
+      simpa [hec, Core.Sound.EvaluationContext.inputFuture, Core.Sound.EvaluationContext.outputFuture,
+        Core.Sound.NodeContext.inputFuture, Core.Sound.NodeContext.outputFuture,
+        DemandNode.variables, DemandNode.visibleAfter, Expr.variables] using hf
+  exact typedExprsSource_suffix source metadata es 0 state source.typingStart source.typingEnd
+    source.rootsStart source.rootsEnd rfl frame source.observed source.classified typed rooted source.effects
+
+theorem ExprSource.arrLitChildren {cfg : Cfg} {env : Env} {state : St} {target : Ty}
+    {es : List Expr} (source : ExprSource cfg env (.arrLit target es) state) (n : Nat)
+    (results : List Ty) (metadata : SourceResults source.typingEnv source.rootsEnv results) :
+    ∃ children : ExprsSource n cfg env es state, children.resultsMatch results := by
+  have rooted := source.rooted
+  simp only [rpExpr] at rooted
+  inv at rooted
+  obtain ⟨middle, hre, _, hend⟩ := rooted
+  cases hend
+  have typed : ExprsTyping source.typingEnv es source.typingStart source.typingEnd := by
+    have ht := source.typed
+    cases target <;> simp only [tyExpr] at ht <;> inv at ht
+    · obtain ⟨_, _, _, next, check, _, hend⟩ := ht
+      cases hend
+      exact exprsTyping_of_as check
+    · obtain ⟨_, _, next, check, _, hend⟩ := ht
+      cases hend
+      exact exprsTyping_of_as check
+    · obtain ⟨_, _, next, check, _, hend⟩ := ht
+      cases hend
+      exact exprsTyping_of_as check
+    · obtain ⟨_, _, next, check, _, hend⟩ := ht
+      cases hend
+      exact exprsTyping_of_as check
+  exact aggregate_sources (isStruct := false) source metadata typed hre
+
+theorem ExprSource.structLitChildren {cfg : Cfg} {env : Env} {state : St} {target : Ty}
+    {es : List Expr} (source : ExprSource cfg env (.structLit target es) state) (n : Nat)
+    (results : List Ty) (metadata : SourceResults source.typingEnv source.rootsEnv results) :
+    ∃ children : ExprsSource n cfg env es state, children.resultsMatch results := by
+  have rooted := source.rooted
+  simp only [rpExpr] at rooted
+  inv at rooted
+  obtain ⟨middle, hre, _, hend⟩ := rooted
+  cases hend
+  have typed := source.typed
+  simp only [tyExpr] at typed
+  inv at typed
+  obtain ⟨definition, next, hdefinition, _, after, check, _, hend⟩ := typed
+  obtain ⟨_, _, _, _, _, _, hstart⟩ := Core.Sound.structDef_ok _ _ _ _ _ hdefinition
+  cases hstart
+  cases hend
+  exact aggregate_sources (isStruct := true) source metadata (exprsTyping_of_struct check) hre
+
+def TypedExprsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (exprs : List Expr) : Prop :=
+  ∀ (env : Env) (state : St) (source : ExprsSource n cfg env exprs state), source.resultsMatch results →
+    ∀ (ls ls' : LS) (ids : List ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
+    lowerExprs exprs (lowerEnv cfg.mod env.vars results) ls = (ids, ls') →
+    ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    SimEAt cx pt fr (mapList (evalExpr n cfg env) exprs)
+      (fun values pt' fr' => ids.length = values.length ∧
+        Post cfg env cx ls fr ls' fr' pt' (cellsOf ids values)) state
+
+theorem typedExprsClaim {n : Nat} {cfg : Cfg} {results : List Ty} : ∀ (exprs : List Expr),
+    (∀ expr ∈ exprs, TypedExprClaim n cfg results expr) → TypedExprsClaim n cfg results exprs
+  | [], _ => by
+    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults
+    simp only [lowerExprs, pure_run] at hlow
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
+    exact SimEAt.ret ⟨rfl, by simpa [cellsOf] using Post.init hrel hpp⟩
+  | expr :: exprs, ha => by
+    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults
+    cases source with
+    | cons source rest =>
+      simp only [lowerExprs, bind_eq] at hlow
+      obtain ⟨id, middle, hhead, restIds, after, htail, hret⟩ := hlow
+      rw [pure_run] at hret
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj hret
+      have hextMiddle : ExtT middle cx.fn.blocks :=
+        hext.of_adv (advB_lowerExprs exprs _ _ _ _ htail)
+      simp only [mapList]
+      refine SimEAt.bind (ha expr (by simp) env state source hmetadata.1 ls middle id pt cx fr
+        hhead hpp hextMiddle hrel hgir hresults) fun value state1 pt1 fr1 hdone P => ?_
+      refine SimEAt.bind (typedExprsClaim exprs (fun expr h => ha expr (by simp [h]))
+        env state1 (rest value state1 hdone) (hmetadata.2 value state1 hdone)
+        middle after restIds pt1 cx fr1 htail P.pp hext P.rel hgir hresults)
+        fun values state2 pt2 fr2 hdoneRest ⟨hlen, Q⟩ => ?_
+      exact SimEAt.ret ⟨by simp [hlen], by simpa [cellsOf] using P.comp Q⟩
+
+theorem typedExprClaim_arrLit {n : Nat} {cfg : Cfg} {results : List Ty} {es : List Expr}
+    (children : TypedExprsClaim n cfg results es) (target : Ty) :
+    TypedExprClaim (n + 1) cfg results (.arrLit target es) := by
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  obtain ⟨sources, hsourceMetadata⟩ := source.arrLitChildren n results hmetadata
+  simp only [lowerExpr, bind_eq] at hlow
+  obtain ⟨ids, middle, hchildren, hdef⟩ := hlow
+  have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
+  simp only [evalExpr]
+  refine SimEAt.bind (children env state sources hsourceMetadata ls middle ids pt cx fr
+    hchildren hpp hextMiddle hrel hgir hresults) fun values after pt1 fr1 hdone ⟨hlen, P⟩ => ?_
+  have hread := mapList_getVal_cells hlen P.has
+  apply SimEAt.of_simG
+  exact leaf_def P hdef hext (by simp) RVal.val (by simp only [execPure, hread, pure_bind])
+
+theorem typedExprClaim_structLit {n : Nat} {cfg : Cfg} {results : List Ty} {es : List Expr}
+    (children : TypedExprsClaim n cfg results es) (target : Ty) :
+    TypedExprClaim (n + 1) cfg results (.structLit target es) := by
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  obtain ⟨sources, hsourceMetadata⟩ := source.structLitChildren n results hmetadata
+  have typing := source.typed
+  simp only [tyExpr] at typing
+  inv at typing
+  obtain ⟨definition, _, hdefinition, _⟩ := typing
+  obtain ⟨sid, ts, rfl, _⟩ := Core.Sound.structDef_ok _ _ _ _ _ hdefinition
+  simp only [lowerExpr, bind_eq] at hlow
+  obtain ⟨ids, middle, hchildren, hdef⟩ := hlow
+  have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
+  simp only [evalExpr]
+  refine SimEAt.bind (children env state sources hsourceMetadata ls middle ids pt cx fr
+    hchildren hpp hextMiddle hrel hgir hresults) fun values after pt1 fr1 hdone ⟨hlen, P⟩ => ?_
+  have hread := mapList_getVal_cells hlen P.has
+  apply SimEAt.of_simG
+  exact leaf_def P hdef hext (by simp) RVal.val (by simp only [execPure, hread, pure_bind])
+
 end Goose.Lower
