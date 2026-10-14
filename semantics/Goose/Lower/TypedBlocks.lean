@@ -102,6 +102,20 @@ theorem SourceResults.transport {before after : TEnv} {rootsBefore rootsAfter : 
   obtain ⟨hroot, hresults⟩ := h impl (htyping.symm.trans himpl)
   exact ⟨hroots.trans hroot, hresults⟩
 
+theorem SimEAt.prepareNormalLoopFlow {cfg : Cfg} {env : Env} {cx : FnCtx}
+    {ls ls' : LS} {fr : GIR.Frame} {pt : Pt} {state : St} {loop : Option LoopCtx}
+    {source : M Flow}
+    (h : SimEAt cx pt fr source (fun flow pt' fr' =>
+      flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) state) :
+    SimEAt cx pt fr (source >>= prepareLoopFlow env loop)
+      (StatementLoopPost cfg env cx ls fr ls' loop) state := by
+  refine h.bind fun flow _ pt' fr' _ ⟨hflow, P⟩ => ?_
+  subst flow
+  cases loop <;> simp only [prepareLoopFlow, prepareReturn, prepareLoopExit, pure_bind]
+  all_goals
+    apply SimEAt.ret
+    exact Or.inl ⟨rfl, P⟩
+
 def TypedBlockLoopSimulation (n : Nat) (cfg : Cfg) (results : List Ty)
     (loop : Option LoopCtx) (pre : List (SlotId × ValueId × OriginId))
     (pre' : List (VarId × Val)) (want : Bool) (block : Core.Block) : Prop :=

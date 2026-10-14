@@ -1,5 +1,6 @@
 import Goose.Lower.TypedExpressions
 import Goose.Lower.DestinationSim
+import Goose.Lower.TypedBlocks
 
 namespace Goose.Lower
 
@@ -72,5 +73,77 @@ theorem stmt_ret_typed_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
       hrel hgir hresults
   · intro value after hdone
     exact (source.result n value hdone).coercionValue hpass
+
+theorem typedStatementLoopSimulation_let {n : Nat} {cfg : Cfg} {results : List Ty}
+    {loop : Option LoopCtx} {slot : VarId} {expr : Expr} {org : OriginId}
+    (hexpr : TypedExprClaim n cfg results expr) :
+    TypedStatementLoopSimulation (n + 1) cfg results loop (.letS slot expr org) := by
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
+    hgir hresults hdepth htargets hcounter
+  obtain ⟨child, declaration, hvar, htyping, hroots, hpass⟩ := source.letChild
+  have hchild : SourceResults child.typingEnv child.rootsEnv results := by
+    apply hmetadata.transport
+    · rw [htyping]
+    · rw [hroots]
+  have hresult : result = () := Subsingleton.elim _ _
+  subst result
+  exact (stmt_let_typed_sim child hchild hvar hpass hexpr hlow hpp hext hrel hgir
+    hresults).prepareNormalLoopFlow
+
+theorem typedStatementLoopSimulation_rebind {n : Nat} {cfg : Cfg} {results : List Ty}
+    {loop : Option LoopCtx} {slot : VarId} {expr : Expr} {org : OriginId}
+    (hexpr : TypedExprClaim n cfg results expr) :
+    TypedStatementLoopSimulation (n + 1) cfg results loop (.rebind slot expr org) := by
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
+    hgir hresults hdepth htargets hcounter
+  obtain ⟨child, declaration, hvar, htyping, hroots, hpass⟩ := source.rebindChild
+  have hchild : SourceResults child.typingEnv child.rootsEnv results := by
+    apply hmetadata.transport
+    · rw [htyping]
+    · rw [hroots]
+  have hresult : result = () := Subsingleton.elim _ _
+  subst result
+  exact (stmt_rebind_typed_sim child hchild hvar hpass hexpr hlow hpp hext hrel hgir
+    hresults).prepareNormalLoopFlow
+
+theorem typedStatementLoopSimulation_return_some {n : Nat} {cfg : Cfg} {results : List Ty}
+    {loop : Option LoopCtx} {expr : Expr} {org : OriginId}
+    (hexpr : TypedExprClaim n cfg results expr) :
+    TypedStatementLoopSimulation (n + 1) cfg results loop (.ret (some expr) org) := by
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
+    hgir hresults hdepth htargets hcounter
+  obtain ⟨child, impl, target, himpl, hdecl, htyping, hroots, hpass⟩ := source.retChild
+  have hchild : SourceResults child.typingEnv child.rootsEnv results := by
+    apply hmetadata.transport
+    · rw [htyping]
+    · rw [hroots]
+  have hchildImpl : child.typingEnv.impl = some impl := by rw [htyping]; exact himpl
+  have hresult : result = () := Subsingleton.elim _ _
+  subst result
+  rw [prepareLoopFlow_execStmt_return_some]
+  exact (stmt_ret_typed_sim (rest := []) child hchild hchildImpl hdecl hpass hexpr hlow
+    hpp hext hrel hgir hresults).mono fun flow _ pt' fr' _ ⟨value, hflow, hsite⟩ =>
+      Or.inr (Or.inl ⟨value, org, hflow, hsite⟩)
+
+theorem typedStatementLoopSimulation_expr {n : Nat} {cfg : Cfg} {results : List Ty}
+    {loop : Option LoopCtx} {expr : Expr} {org : OriginId}
+    (hexpr : TypedExprClaim n cfg results expr) :
+    TypedStatementLoopSimulation (n + 1) cfg results loop (.expr expr org) := by
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
+    hgir hresults hdepth htargets hcounter
+  obtain ⟨child, htyping, hroots⟩ := source.exprChild
+  have hchild : SourceResults child.typingEnv child.rootsEnv results := by
+    apply hmetadata.transport
+    · rw [htyping]
+    · rw [hroots]
+  simp only [lowerStmt, bind_eq] at hlow
+  obtain ⟨value, middle, hvalue, hend⟩ := hlow
+  rw [pure_run] at hend
+  obtain ⟨_, rfl⟩ := Prod.mk.inj hend
+  apply SimEAt.prepareNormalLoopFlow
+  simp only [execStmt]
+  refine SimEAt.bind (hexpr env state child hchild ls middle value pt cx fr hvalue hpp hext
+    hrel hgir hresults) fun value _ pt' fr' _ P => ?_
+  exact SimEAt.ret ⟨rfl, P.sub (by simp)⟩
 
 end Goose.Lower

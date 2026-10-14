@@ -134,6 +134,16 @@ theorem prepareLoopFlow_execStmt_return_none (n : Nat) (cfg : Cfg) (env : Env)
     cases loop <;> simp [execStmt, prepareLoopFlow, prepareReturn, prepareLoopExit,
       bind_assoc, pure_bind]
 
+theorem prepareLoopFlow_execStmt_return_some (n : Nat) (cfg : Cfg) (env : Env)
+    (loop : Option LoopCtx) (expr : Expr) (org : OriginId) :
+    (execStmt n cfg env (.ret (some expr) org) >>= prepareLoopFlow env loop) =
+      (execStmt n cfg env (.ret (some expr) org) >>= prepareReturn env) := by
+  cases n with
+  | zero => simp only [execStmt]; rfl
+  | succ n =>
+    cases loop <;> simp [execStmt, prepareLoopFlow, prepareReturn, prepareLoopExit,
+      bind_assoc, pure_bind]
+
 theorem prepareLoopFlow_unitFlow (env : Env) (loop : Option LoopCtx) (flow : Flow) :
     prepareLoopFlow env loop (unitFlow flow) =
       (prepareLoopFlow env loop flow >>= fun prepared => pure (unitFlow prepared)) := by
