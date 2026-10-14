@@ -1,5 +1,6 @@
 import Goose.Lower.RuntimeSim
-import Goose.Lower.Arguments
+import Goose.Lower.Leaf
+import Goose.Lower.Coerce
 import Goose.Core.Sound.All
 
 namespace Goose.Lower
@@ -78,6 +79,11 @@ theorem ExprResult.value_passable {cfg : Cfg} {env : Env} {expr : Expr} {state a
     HasTy cfg.mod source.world.G after.store value target :=
   Core.Sound.hasTy_passable result.typed h
 
+theorem ExprResult.coercionValue {cfg : Cfg} {env : Env} {expr : Expr} {state after : St}
+    {source : ExprSource cfg env expr state} {value : Val} (result : ExprResult source value after)
+    {target : Ty} (h : source.ty.passableTo target = true) : CoercionValue target value :=
+  CoercionValue.of_hasTy (result.value_passable h)
+
 structure PlaceSource (cfg : Cfg) (env : Env) (place : Place) (state : St) where
   accepted : Core.validate cfg.mod = .ok ()
   plans : Array (Array DemandPoint)
@@ -143,47 +149,83 @@ theorem PlaceSource.result {cfg : Cfg} {env : Env} {place : Place} {state after 
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13⟩ := hs
   exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13⟩
 
+def SourceResults (typingEnv : TEnv) (rootsEnv : PEnv) (results : List Ty) : Prop :=
+  ∀ impl, typingEnv.impl = some impl → rootsEnv.impl = impl ∧ results = impl.results.toList
+
 def TypedExprClaim (n : Nat) (cfg : Cfg) (results : List Ty) (expr : Expr) : Prop :=
-  ∀ (env : Env) (state : St), ExprSource cfg env expr state →
-    ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
+  ∀ (env : Env) (state : St) (source : ExprSource cfg env expr state),
+    SourceResults source.typingEnv source.rootsEnv results → ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerExpr expr (lowerEnv cfg.mod env.vars results) ls = (r, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
     SimEAt cx pt fr (evalExpr n cfg env expr)
       (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) state
 
 def TypedPlaceClaim (n : Nat) (cfg : Cfg) (results : List Ty) (place : Place) : Prop :=
-  ∀ (env : Env) (state : St), PlaceSource cfg env place state →
-    ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
+  ∀ (env : Env) (state : St) (source : PlaceSource cfg env place state),
+    SourceResults source.typingEnv source.rootsEnv results → ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerPlace place (lowerEnv cfg.mod env.vars results) ls = (r, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
     SimEAt cx pt fr (evalPlace n cfg env place)
       (fun location pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val (.ref location))]) state
 
 theorem typedExprClaim_zero (cfg : Cfg) (results : List Ty) (expr : Expr) :
     TypedExprClaim 0 cfg results expr := by
-  intro env state source ls ls' r pt cx fr hlow hpp hext hrel hgir
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
   simp only [evalExpr]
   exact SimEAt.of_timeout state
 
 theorem typedPlaceClaim_zero (cfg : Cfg) (results : List Ty) (place : Place) :
     TypedPlaceClaim 0 cfg results place := by
-  intro env state source ls ls' r pt cx fr hlow hpp hext hrel hgir
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
   simp only [evalPlace]
   exact SimEAt.of_timeout state
 
-theorem typedExprClaim_fragment (n : Nat) (cfg : Cfg) (results : List Ty) (expr : Expr)
-    (hok : exprOk expr = true) : TypedExprClaim n cfg results expr := by
-  intro env state source ls ls' r pt cx fr hlow hpp hext hrel hgir
-  exact SimEAt.of_simG ((claims n).expr expr hok (lowerEnv cfg.mod env.vars results)
-    ls r ls' pt cfg env cx fr hlow hpp hext hrel) state
+theorem typedExprClaim_lit (n : Nat) (cfg : Cfg) (results : List Ty) (ty : IntTy) (value : Int) :
+    TypedExprClaim n cfg results (.lit ty value) := by
+  cases n with
+  | zero => exact typedExprClaim_zero _ _ _
+  | succ n =>
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    simp only [lowerExpr] at hlow
+    simp only [evalExpr]
+    exact SimEAt.of_simG (leaf_def (Post.init hrel hpp) hlow hext (by simp) RVal.val
+      (by simp [execPure])) state
 
-theorem typedPlaceClaim_fragment (n : Nat) (cfg : Cfg) (results : List Ty) (place : Place)
-    (hok : placeOk place = true) : TypedPlaceClaim n cfg results place := by
-  intro env state source ls ls' r pt cx fr hlow hpp hext hrel hgir
-  exact SimEAt.of_simG ((claims n).place place hok (lowerEnv cfg.mod env.vars results)
-    ls r ls' pt cfg env cx fr hlow hpp hext hrel) state
+theorem typedExprClaim_bool (n : Nat) (cfg : Cfg) (results : List Ty) (value : Bool) :
+    TypedExprClaim n cfg results (.bool value) := by
+  cases n with
+  | zero => exact typedExprClaim_zero _ _ _
+  | succ n =>
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    simp only [lowerExpr] at hlow
+    simp only [evalExpr]
+    exact SimEAt.of_simG (leaf_def (Post.init hrel hpp) hlow hext (by simp) RVal.val
+      (by simp [execPure])) state
+
+theorem typedPlaceClaim_var (n : Nat) (cfg : Cfg) (results : List Ty) (id : VarId) :
+    TypedPlaceClaim n cfg results (.var id) := by
+  cases n with
+  | zero => exact typedPlaceClaim_zero _ _ _
+  | succ n =>
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    simp only [lowerPlace] at hlow
+    simp only [evalPlace]
+    exact SimEAt.of_simG (leaf_def (Post.init hrel hpp) hlow hext (by simp)
+      (fun location => RVal.val (.ref location))
+      (by simp only [execPure, slotRoot_eq hrel id, bind_assoc, pure_bind])) state
+
+theorem typedPlaceClaim_global (n : Nat) (cfg : Cfg) (results : List Ty) (id : GlobalId) :
+    TypedPlaceClaim n cfg results (.global id) := by
+  cases n with
+  | zero => exact typedPlaceClaim_zero _ _ _
+  | succ n =>
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    simp only [lowerPlace] at hlow
+    simp only [evalPlace]
+    exact SimEAt.of_simG (leaf_def (Post.init hrel hpp) hlow hext (by simp)
+      (fun location => RVal.val (.ref location)) (by simp [execPure])) state
 
 inductive ArgSource (cfg : Cfg) (env : Env) (state : St) : Arg → Type
   | byVal {expr : Expr} (source : ExprSource cfg env expr state) :
@@ -193,46 +235,52 @@ inductive ArgSource (cfg : Cfg) (env : Env) (state : St) : Arg → Type
         (source.ty.isSlice = true ∧ source.mutable = true ∧ place.sliceArg = true)) :
       ArgSource cfg env state (.byRef mutability place)
 
+def ArgSource.resultsMatch {cfg : Cfg} {env : Env} {state : St} {arg : Arg}
+    (source : ArgSource cfg env state arg) (results : List Ty) : Prop :=
+  match source with
+  | .byVal source => SourceResults source.typingEnv source.rootsEnv results
+  | .byRef _ source _ => SourceResults source.typingEnv source.rootsEnv results
+
 def TypedArgClaim (n : Nat) (cfg : Cfg) (results : List Ty) (arg : Arg) : Prop :=
-  ∀ (env : Env) (state : St), ArgSource cfg env state arg →
+  ∀ (env : Env) (state : St) (source : ArgSource cfg env state arg), source.resultsMatch results →
     ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerArg arg (lowerEnv cfg.mod env.vars results) ls = (r, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
     SimEAt cx pt fr (evalArg n cfg env arg)
       (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) state
 
 theorem typedArgClaim_zero (cfg : Cfg) (results : List Ty) (arg : Arg) :
     TypedArgClaim 0 cfg results arg := by
-  intro env state source ls ls' r pt cx fr hlow hpp hext hrel hgir
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
   simp only [evalArg]
   exact SimEAt.of_timeout state
 
 theorem typedArgClaim_byVal {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) : TypedArgClaim (n + 1) cfg results (.byVal expr) := by
-  intro env state source ls ls' r pt cx fr hlow hpp hext hrel hgir
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
   cases source with
   | byVal source =>
     simp only [lowerArg] at hlow
     simp only [evalArg]
-    exact he env state source ls ls' r pt cx fr hlow hpp hext hrel hgir
+    exact he env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
 
 theorem typedArgClaim_byRef {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) (mutability : Mutability) :
     TypedArgClaim (n + 1) cfg results (.byRef mutability place) := by
-  intro env state source ls ls' r pt cx fr hlow hpp hext hrel hgir
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
   cases source with
   | byRef _ source target =>
     simp only [lowerArg, bind_eq] at hlow
     obtain ⟨id, middle, hplace, hfreeze⟩ := hlow
     rcases freezeTo_cases hfreeze with ⟨rfl, rfl⟩ | hfreeze
     · simp only [evalArg]
-      refine SimEAt.bind (hp env state source ls ls' r pt cx fr hplace hpp hext hrel hgir)
+      refine SimEAt.bind (hp env state source hmetadata ls ls' r pt cx fr hplace hpp hext hrel hgir hresults)
         fun location after pt' fr' hdone P => ?_
       exact SimEAt.ret P
     · have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hfreeze)
       simp only [evalArg]
-      refine SimEAt.bind (hp env state source ls middle id pt cx fr hplace hpp hextMiddle hrel hgir)
+      refine SimEAt.bind (hp env state source hmetadata ls middle id pt cx fr hplace hpp hextMiddle hrel hgir hresults)
         fun location after pt' fr' hdone P => ?_
       have hcell : fr'.vals[id]? = some (.val (.ref location)) := P.has (id, _) (by simp)
       apply SimEAt.of_simG
@@ -245,12 +293,18 @@ inductive ArgsSource (n : Nat) (cfg : Cfg) (env : Env) : List Arg → St → Typ
       (rest : ∀ value after, evalArg n cfg env arg state = .ok value after →
         ArgsSource n cfg env args after) : ArgsSource n cfg env (arg :: args) state
 
+def ArgsSource.resultsMatch {n : Nat} {cfg : Cfg} {env : Env} :
+    {args : List Arg} → {state : St} → ArgsSource n cfg env args state → List Ty → Prop
+  | [], _, .nil _, _ => True
+  | _ :: _, _, .cons source rest, results => source.resultsMatch results ∧
+      ∀ value after hdone, (rest value after hdone).resultsMatch results
+
 def TypedArgsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (args : List Arg) : Prop :=
-  ∀ (env : Env) (state : St), ArgsSource n cfg env args state →
+  ∀ (env : Env) (state : St) (source : ArgsSource n cfg env args state), source.resultsMatch results →
     ∀ (ls ls' : LS) (ids : List ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerArgs args (lowerEnv cfg.mod env.vars results) ls = (ids, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
     SimEAt cx pt fr (mapList (evalArg n cfg env) args)
       (fun values pt' fr' => ids.length = values.length ∧
         Post cfg env cx ls fr ls' fr' pt' (cellsOf ids values)) state
@@ -258,12 +312,12 @@ def TypedArgsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (args : List Arg) :
 theorem typedArgsClaim {n : Nat} {cfg : Cfg} {results : List Ty} : ∀ (args : List Arg),
     (∀ arg ∈ args, TypedArgClaim n cfg results arg) → TypedArgsClaim n cfg results args
   | [], _ => by
-    intro env state source ls ls' ids pt cx fr hlow hpp hext hrel hgir
+    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults
     simp only [lowerArgs, pure_run] at hlow
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
     exact SimEAt.ret ⟨rfl, by simpa [cellsOf] using Post.init hrel hpp⟩
   | arg :: args, ha => by
-    intro env state source ls ls' ids pt cx fr hlow hpp hext hrel hgir
+    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults
     cases source with
     | cons source rest =>
       simp only [lowerArgs, bind_eq] at hlow
@@ -273,11 +327,72 @@ theorem typedArgsClaim {n : Nat} {cfg : Cfg} {results : List Ty} : ∀ (args : L
       have hextMiddle : ExtT middle cx.fn.blocks :=
         hext.of_adv (advB_lowerArgs args _ _ _ _ hargs)
       simp only [mapList]
-      refine SimEAt.bind (ha arg (by simp) env state source ls middle id pt cx fr
-        harg hpp hextMiddle hrel hgir) fun value state1 pt1 fr1 hdone P => ?_
+      refine SimEAt.bind (ha arg (by simp) env state source hmetadata.1 ls middle id pt cx fr
+        harg hpp hextMiddle hrel hgir hresults) fun value state1 pt1 fr1 hdone P => ?_
       refine SimEAt.bind (typedArgsClaim args (fun arg harg => ha arg (by simp [harg]))
-        env state1 (rest value state1 hdone) middle after restIds pt1 cx fr1 hargs P.pp hext P.rel hgir)
+        env state1 (rest value state1 hdone) (hmetadata.2 value state1 hdone) middle after restIds pt1 cx fr1 hargs P.pp hext P.rel hgir hresults)
         fun values state2 pt2 fr2 hdoneRest ⟨hlen, Q⟩ => ?_
       exact SimEAt.ret ⟨by simp [hlen], by simpa [cellsOf] using P.comp Q⟩
+
+theorem SimEAt.call_step {cx : FnCtx} {pt : Pt} {fr : GIR.Frame} {r : ValueId} {f : FnId}
+    {args : List ValueId} {values : List Val} {org : Option OriginId} {c : M Val} {state : St}
+    (hi : instAt cx.fn pt = some (.def r (.call f args org)))
+    (ha : mapList (getVal fr) args = pure values)
+    (hc : EventualM c (fun fuel => callFn fuel cx.cfg fr.depth f values) state) :
+    SimEAt cx pt fr c
+      (fun value pt' fr' => pt' = (pt.1, pt.2 + 1) ∧ fr' = fr.set r (.val value)) state := by
+  refine SimEAt.def_step RVal.val hi ?_
+  have hm := EventualM.bind (c2 := fun value => pure (RVal.val value))
+    (g2 := fun value _ => pure (RVal.val value)) hc
+    (fun value after _ => EventualM.refl (pure (RVal.val value) : M RVal) after)
+  refine EventualM.shift 1 hm fun fuel => ?_
+  simp only [execOp, ha, pure_bind]
+
+theorem typed_call_sim {n : Nat} {cfg : Cfg} {results : List Ty} {c : ContextId}
+    {args : List Arg} {org : OriginId} (ha : TypedArgsClaim n cfg results args)
+    (env : Env) (state : St) (source : ArgsSource n cfg env args state)
+    (hmetadata : source.resultsMatch results)
+    (hc : ∀ values after, mapList (evalArg n cfg env) args state = .ok values after →
+      EventualM (enterCall n cfg env.depth c values)
+        (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ env.depth
+          (((cfg.mod.contexts[c]?).map (·.impl)).getD 0) values) after)
+    (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame)
+    (hlow : lowerExpr (.call c args org) (lowerEnv cfg.mod env.vars results) ls = (r, ls'))
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
+    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results) :
+    SimEAt cx pt fr (evalExpr (n + 1) cfg env (.call c args org))
+      (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) state := by
+  let le := lowerEnv cfg.mod env.vars results
+  obtain ⟨ids, middle, after, hargs, hdef, htail⟩ := lowerExpr_call_split hlow
+  have hextAfter : ExtT after cx.fn.blocks := by
+    rcases htail with ⟨_, hterm⟩ | ⟨_, rfl⟩
+    · exact hext.of_adv (adv_emitTerm hterm)
+    · exact hext
+  have hextMiddle : ExtT middle cx.fn.blocks := hextAfter.of_adv (adv_emitDef hdef)
+  simp only [evalExpr]
+  refine SimEAt.bind (ha env state source hmetadata ls middle ids pt cx fr
+    hargs hpp hextMiddle hrel hgir hresults) fun values afterArgs pt1 fr1 hdone ⟨hlen, P⟩ => ?_
+  have hread := mapList_getVal_cells hlen P.has
+  have hi := (Post.def_leaf P hdef hextAfter (.val .unit)).2
+  have hcfg : cx.cfg = ⟨cfg.profile, lower cfg.mod⟩ := by
+    cases hgc : cx.cfg
+    simp only [hgc] at hgir
+    have hp := P.rel.prof
+    simp only [hgc] at hp
+    cases hgir
+    cases hp
+    rfl
+  have hcall : EventualM (enterCall n cfg env.depth c values)
+      (fun fuel => callFn fuel cx.cfg fr1.depth
+        (((le.mod.contexts[c]?).map (·.impl)).getD 0) values) afterArgs := by
+    rw [hcfg, P.rel.depth]
+    exact hc values afterArgs hdone
+  have hs := SimEAt.call_step hi hread hcall
+  rcases htail with ⟨hnr, _⟩ | ⟨_, rfl⟩
+  · have hn := Core.Sound.noReturn_sound cfg.mod cfg.profile c hnr n env.depth values
+    exact SimEAt.of_stops (hn afterArgs) (fun _ _ h => h) hs
+  · exact hs.mono fun value afterValue pt' fr' hdoneValue ⟨hpt, hfr⟩ => by
+      subst hpt; subst hfr
+      exact (Post.def_leaf P hdef hext (.val value)).1
 
 end Goose.Lower

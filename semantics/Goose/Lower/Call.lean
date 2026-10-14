@@ -212,9 +212,6 @@ theorem enterFn_call (m : Core.Module) (profile : NumProfile) (i : ImplId) (impl
     hbparams, hentrylen, bindParams_call, pure_bind, runAt, hinsts]
   rfl
 
-theorem implOfContext_run (c : ContextId) (le : LEnv) (ls : LS) :
-    implOfContext c le ls = (((le.mod.contexts[c]?).map (·.impl)).getD 0, ls) := rfl
-
 theorem implOfContext_lookup {m : Core.Module} {c : ContextId} {ctx : Context}
     (hctx : m.contexts[c]? = some ctx) (vars : Array LocalVar) (ls : LS) :
     implOfContext c (lowerEnv m vars []) ls = (ctx.impl, ls) := by
@@ -559,31 +556,6 @@ theorem calleeCallClaim_flow {m : Core.Module} {c : ContextId} {ctx : Context} {
   | succ n =>
     exact calleeCallClaim_of_body hctx himpl hok profile n
       (calleeBlockClaim_flow hcheck hok profile n)
-
-theorem lowerExpr_call_split {c : ContextId} {args : List Arg} {org : OriginId}
-    {le : LEnv} {ls ls' : LS} {r : ValueId}
-    (h : lowerExpr (.call c args org) le ls = (r, ls')) :
-    ∃ ids middle after,
-      lowerArgs args le ls = (ids, middle) ∧
-      emitDef (.call (((le.mod.contexts[c]?).map (·.impl)).getD 0) ids (some org)) le middle =
-        (r, after) ∧
-      ((le.mod.noReturn c = true ∧ emitTerm .unreachable le after = ((), ls')) ∨
-        (le.mod.noReturn c = false ∧ ls' = after)) := by
-  simp only [lowerExpr, bind_eq] at h
-  obtain ⟨ids, middle, ha, f, middle', hf, id, after, hd, reader, same, hr, ht⟩ := h
-  rw [implOfContext_run] at hf
-  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hf
-  rw [read_apply] at hr
-  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hr
-  by_cases hn : le.mod.noReturn c = true
-  · rw [ite_eq_left hn] at ht
-    obtain ⟨u, last, hterm, hpure⟩ := bind_eq.mp ht
-    rw [pure_run] at hpure
-    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpure
-    exact ⟨ids, middle, after, ha, hd, Or.inl ⟨hn, by cases u; exact hterm⟩⟩
-  · rw [ite_eq_right hn, pure_run] at ht
-    obtain ⟨rfl, rfl⟩ := Prod.mk.inj ht
-    exact ⟨ids, middle, after, ha, hd, Or.inr ⟨Bool.eq_false_iff.mpr hn, rfl⟩⟩
 
 theorem expr_call_sim {n : Nat} {c : ContextId} {args : List Arg} {org : OriginId}
     (cfg : Cfg) (ha : ArgsEClaim n cfg args) (hc : CalleeCallClaim n cfg c)
