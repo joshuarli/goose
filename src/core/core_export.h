@@ -1826,6 +1826,7 @@ private:
                     e->otherwise->scope = cur.nextscope++;
                     e->otherwise->value = Value(x->elseb);
                 }
+                e->org = Org(n->line, CoreOriginKind::Expr);
                 return e;
             }
             case NK_Block: {
@@ -1833,6 +1834,7 @@ private:
                 auto e = NewExpr(CoreExprKind::Block, Ty(b->exprtype ? b->exprtype : ast.voidtype));
                 ExprBlockScope inexpr(*this);
                 e->then = BlockOf(b, b->exprtype && b->exprtype->kind != TY_VOID);
+                e->org = Org(n->line, CoreOriginKind::Expr);
                 return e;
             }
             case NK_StructLit: return StructValue((StructLit *)n);
@@ -1911,10 +1913,12 @@ private:
             if (ct.kind != CoreType::Arr) Fail("fill-grow");
             auto e = NewExpr(CoreExprKind::Fill, ty);
             e->a = Value(a->fillval);
+            e->org = Org(a->line, CoreOriginKind::Expr);
             return e;
         }
         auto e = NewExpr(CoreExprKind::Arr, ty);
         for (auto el : a->elems) e->elems.push_back(Value(el));
+        e->org = Org(a->line, CoreOriginKind::Expr);
         return e;
     }
 

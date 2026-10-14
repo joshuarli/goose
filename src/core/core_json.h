@@ -699,11 +699,13 @@ private:
                 Expr(out, *e.a); out += ',';
                 Block(out, *e.then); out += ',';
                 Block(out, *e.otherwise);
+                if (CoreHasConstruction(m.profile)) Append(out, ",", O(e.org));
                 out += ']';
                 break;
             case CoreExprKind::Block:
                 out += "[\"e_block\",";
                 Block(out, *e.then);
+                if (CoreHasConstruction(m.profile)) Append(out, ",", O(e.org));
                 out += ']';
                 break;
             case CoreExprKind::Arr:
@@ -712,11 +714,14 @@ private:
                     if (i) out += ',';
                     Expr(out, *e.elems[i]);
                 }
-                out += "]]";
+                out += ']';
+                if (CoreHasConstruction(m.profile)) Append(out, ",", O(e.org));
+                out += ']';
                 break;
             case CoreExprKind::Fill:
                 Append(out, "[\"e_fill\",", T(e.type), ",");
                 Expr(out, *e.a);
+                if (CoreHasConstruction(m.profile)) Append(out, ",", O(e.org));
                 out += ']';
                 break;
             case CoreExprKind::Struct:

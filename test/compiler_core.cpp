@@ -58,6 +58,72 @@ static CorePrintArg ViewArg(CoreTypeId type) {
     return arg;
 }
 
+static string ConstructionExpressionOrigins(CoreProfile profile) {
+    CoreModule module;
+    module.files = { "origins.goose" };
+    module.profile = profile;
+    auto i64 = module.IntType(CoreIntTy::I64);
+    auto boolean = module.BoolType();
+    CoreType array;
+    array.kind = CoreType::Arr;
+    array.elem = i64;
+    array.count = 1;
+    auto arrayType = module.Intern(array);
+
+    CoreImpl impl;
+    impl.name = "main";
+    impl.body.scope = 0;
+    auto append = [&](CoreExprP expr, int line) {
+        CoreStmt statement;
+        statement.kind = CoreStmtKind::Expr;
+        statement.expr = std::move(expr);
+        statement.org = CoreOrigin { 0, line, CoreOriginKind::Expr };
+        impl.body.stmts.push_back(std::move(statement));
+    };
+
+    auto arr = make_unique<CoreExpr>();
+    arr->kind = CoreExprKind::Arr;
+    arr->type = arrayType;
+    arr->elems.push_back(Int(i64, "1"));
+    arr->org = CoreOrigin { 0, 2, CoreOriginKind::Expr };
+    append(std::move(arr), 2);
+
+    auto fill = make_unique<CoreExpr>();
+    fill->kind = CoreExprKind::Fill;
+    fill->type = arrayType;
+    fill->a = Int(i64, "2");
+    fill->org = CoreOrigin { 0, 3, CoreOriginKind::Expr };
+    append(std::move(fill), 3);
+
+    auto conditional = make_unique<CoreExpr>();
+    conditional->kind = CoreExprKind::If;
+    conditional->type = i64;
+    conditional->a = make_unique<CoreExpr>();
+    conditional->a->kind = CoreExprKind::Bool;
+    conditional->a->type = boolean;
+    conditional->a->flag = true;
+    conditional->then = make_unique<CoreBlock>();
+    conditional->then->scope = 1;
+    conditional->then->value = Int(i64, "3");
+    conditional->otherwise = make_unique<CoreBlock>();
+    conditional->otherwise->scope = 2;
+    conditional->otherwise->value = Int(i64, "4");
+    conditional->org = CoreOrigin { 0, 4, CoreOriginKind::Expr };
+    append(std::move(conditional), 4);
+
+    auto block = make_unique<CoreExpr>();
+    block->kind = CoreExprKind::Block;
+    block->type = i64;
+    block->then = make_unique<CoreBlock>();
+    block->then->scope = 3;
+    block->then->value = Int(i64, "5");
+    block->org = CoreOrigin { 0, 5, CoreOriginKind::Expr };
+    append(std::move(block), 5);
+
+    module.impls.push_back(std::move(impl));
+    return CoreWriter(module).Write();
+}
+
 static CoreModule ConstructionShape() {
     CoreModule module;
     module.files = { "construct.goose" };
@@ -238,6 +304,21 @@ static CoreModule ConstructionShape() {
 }
 
 int main(int argc, char **argv) {
+    auto constructionOrigins = ConstructionExpressionOrigins(CoreProfile::Construction);
+    for (auto expr : { "[\"e_arr\",1,[[\"e_lit\",0,\"1\"]],0]",
+                       "[\"e_fill\",1,[\"e_lit\",0,\"2\"],1]",
+                       "[\"e_if\",[\"e_bool\",1],[\"block\",1,[],[[\"e_lit\",0,\"3\"]]],"
+                       "[\"block\",2,[],[[\"e_lit\",0,\"4\"]]],2]",
+                       "[\"e_block\",[\"block\",3,[],[[\"e_lit\",0,\"5\"]]],3]" })
+        assert(constructionOrigins.find(expr) != string::npos);
+    auto pilotOrigins = ConstructionExpressionOrigins(CoreProfile::Pilot);
+    for (auto expr : { "[\"e_arr\",1,[[\"e_lit\",0,\"1\"]]]",
+                       "[\"e_fill\",1,[\"e_lit\",0,\"2\"]]",
+                       "[\"e_if\",[\"e_bool\",1],[\"block\",1,[],[[\"e_lit\",0,\"3\"]]],"
+                       "[\"block\",2,[],[[\"e_lit\",0,\"4\"]]]]",
+                       "[\"e_block\",[\"block\",3,[],[[\"e_lit\",0,\"5\"]]]]" })
+        assert(pilotOrigins.find(expr) != string::npos);
+
     auto module = ConstructionShape();
     auto output = CoreWriter(module).Write();
     if (argc == 2 && string_view(argv[1]) == "--wire") {
