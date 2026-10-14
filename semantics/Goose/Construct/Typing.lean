@@ -74,48 +74,6 @@ private def fail (rule : Rule) (message : String) : TypingM α := throw ⟨rule,
 
 private def ordinary (env : TypingEnv) : TypingEnv := { env with use := .ordinary, request := .value, resultRequests := [] }
 
-mutual
-private def inferredExpressionTypes : Nat → DeclarationEnv → Expr → Option (List Ty)
-  | 0, _, _ => none
-  | fuel + 1, env, .values expressions => do
-      let channels ← expressions.mapM (inferredExpressionTypes fuel env)
-      if channels.all (fun types => types.length == 1) then some channels.flatten else none
-  | _, env, .call contextId _ _ => do
-      let context ← env.module.contexts[contextId]?
-      let implementation ← env.module.impls[context.impl]?
-      some (implementation.results.toList.map (·.ty))
-  | fuel + 1, env, .blockE block _ => inferredBlockTypes fuel env block
-  | fuel + 1, env, .ifE _ left right _ =>
-      match inferredBlockTypes fuel env left, inferredBlockTypes fuel env right with
-      | some [.unit], some rightTypes => some rightTypes
-      | some leftTypes, _ => some leftTypes
-      | none, rightTypes => rightTypes
-  | _ + 1, env, expression => (env.exprType? expression).map (fun ty => [ty])
-
-private def inferredBlockTypes : Nat → DeclarationEnv → Block → Option (List Ty)
-  | 0, _, _ => none
-  | fuel + 1, env, .mk _ statements tail =>
-      match tail with
-      | some expression => inferredExpressionTypes fuel env expression
-      | none => firstValueBreakTypes fuel env statements <|> some [.unit]
-
-private def firstValueBreakTypes : Nat → DeclarationEnv → List Stmt → Option (List Ty)
-  | 0, _, _ => none
-  | _ + 1, _, [] => none
-  | fuel + 1, env, statement :: rest =>
-      let current := match statement with
-        | .breakValue expression _ => inferredExpressionTypes fuel env expression
-        | .ifS _ (.mk _ left _) right _ =>
-            firstValueBreakTypes fuel env left <|>
-              (right.bind fun block => match block with
-                | .mk _ statements _ => firstValueBreakTypes fuel env statements)
-        | .while _ (.mk _ statements _) _ |
-          .forRange _ _ _ (.mk _ statements _) _ |
-          .forEach _ _ _ _ (.mk _ statements _) _ => firstValueBreakTypes fuel env statements
-        | _ => none
-      current <|> firstValueBreakTypes fuel env rest
-end
-
 private inductive StatementFlow
   | next
   | breakLoop
@@ -346,7 +304,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
         pure a
   | fuel + 1, env, .blockE block _ => do
       let declarations : DeclarationEnv := ⟨env.module, env.variables⟩
-      let some expected := inferredBlockTypes fuel declarations block |
+      let some expected := blockResultTypes? fuel declarations block |
         fail .type "cannot determine block result channels"
       let actual ← typeBlock fuel { env with
         valueBreakTypes := some expected

@@ -100,4 +100,47 @@ def DeclarationEnv.blockType? (env : DeclarationEnv) : Block → Option Ty
   | .mk _ _ (some e) => env.exprType? e
 end
 
+mutual
+def expressionResultTypes? : Nat → DeclarationEnv → Expr → Option (List Ty)
+  | 0, _, _ => none
+  | fuel + 1, env, .values expressions => do
+      let channels ← expressions.mapM (expressionResultTypes? fuel env)
+      if channels.all (fun types => types.length == 1) then some channels.flatten else none
+  | _, env, .call contextId _ _ => do
+      let context ← env.module.contexts[contextId]?
+      let implementation ← env.module.impls[context.impl]?
+      some (implementation.results.toList.map (·.ty))
+  | fuel + 1, env, .blockE block _ => blockResultTypes? fuel env block
+  | fuel + 1, env, .ifE _ left right _ =>
+      match blockResultTypes? fuel env left, blockResultTypes? fuel env right with
+      | some [.unit], some rightTypes => some rightTypes
+      | some leftTypes, _ => some leftTypes
+      | none, rightTypes => rightTypes
+  | _ + 1, env, expression => (env.exprType? expression).map (fun ty => [ty])
+
+def blockResultTypes? : Nat → DeclarationEnv → Block → Option (List Ty)
+  | 0, _, _ => none
+  | fuel + 1, env, .mk _ statements tail =>
+      match tail with
+      | some expression => expressionResultTypes? fuel env expression
+      | none => firstValueBreakTypes fuel env statements <|> some [.unit]
+
+private def firstValueBreakTypes : Nat → DeclarationEnv → List Stmt → Option (List Ty)
+  | 0, _, _ => none
+  | _ + 1, _, [] => none
+  | fuel + 1, env, statement :: rest =>
+      let current := match statement with
+        | .breakValue expression _ => expressionResultTypes? fuel env expression
+        | .ifS _ (.mk _ left _) right _ =>
+            firstValueBreakTypes fuel env left <|>
+              (right.bind fun block => match block with
+                | .mk _ statements _ => firstValueBreakTypes fuel env statements)
+        | .while _ (.mk _ statements _) _ |
+          .forRange _ _ _ (.mk _ statements _) _ |
+          .forEach _ _ _ _ (.mk _ statements _) _ => firstValueBreakTypes fuel env statements
+        | _ => none
+      current <|> firstValueBreakTypes fuel env rest
+end
+
+
 end Goose.Construct
