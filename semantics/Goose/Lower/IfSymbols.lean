@@ -292,6 +292,40 @@ theorem lowerBlock_value_symbolRun_of {le : LEnv} {sc scope : Nat}
     | some b => simp
   exact Nat.lt_of_lt_of_le (hv hl2 v (by simp)) ha.vals
 
+inductive V001Block (scopeCount : Nat) (env : Core.TEnv) : Core.Block → Prop where
+  | value {scope : Nat} {value : Core.Expr}
+      (typed : HasTypedBlock env (.mk scope [] (some value)))
+      (scopeBound : scope < scopeCount) (valueShape : V001Expr env value) :
+      V001Block scopeCount env (.mk scope [] (some value))
+
+theorem lowerBlock_v001_symbolRun {le : LEnv} {scopeCount : Nat}
+    {env : Core.TEnv} {block : Core.Block} (shape : V001Block scopeCount env block)
+    (slots : env.vars.size = le.slots.size)
+    (globals : env.globalLimit ≤ le.globals.size)
+    (origins : le.mod.origins.size = env.mod.origins.size) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerBlock none [] true block) := by
+  cases shape with
+  | value typed scopeBound valueShape =>
+    apply lowerBlock_value_symbolRun_of scopeBound
+    · intro ls
+      exact LS.SymbolRun.stable ⟨(), rfl⟩
+    · exact lowerExpr_v001_symbolRun valueShape slots globals origins
+
+theorem lowerExpr_ifE_v001_symbolRunAt {le : LEnv} {scopeCount : Nat}
+    {env : Core.TEnv} {condition : Core.Expr} {thenBlock elseBlock : Core.Block}
+    (conditionShape : V001Expr env condition)
+    (thenShape : V001Block scopeCount (Core.exprEnv env) thenBlock)
+    (elseShape : V001Block scopeCount (Core.exprEnv env) elseBlock)
+    (slots : env.vars.size = le.slots.size)
+    (globals : env.globalLimit ≤ le.globals.size)
+    (origins : le.mod.origins.size = env.mod.origins.size) :
+    ∀ ls, LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun v => [v])
+      (lowerExpr (.ifE condition thenBlock elseBlock)) := by
+  apply lowerExpr_ifE_symbolRunAt_of
+  · exact lowerExpr_v001_symbolRun conditionShape slots globals origins
+  · exact lowerBlock_v001_symbolRun thenShape slots globals origins
+  · exact lowerBlock_v001_symbolRun elseShape slots globals origins
+
 def conditionalArm (scope : Nat) (stop : Bool) (org : Core.OriginId) (n : Int) : Core.Block :=
   .mk scope (if stop then [.abort "stop" org] else []) (some (.lit .i64 n))
 

@@ -96,6 +96,14 @@ def loopVoid : Core.Module :=
     impls := m.impls.modify 1 (fun impl => { impl with results := #[] })
     contexts := m.contexts.modify 1 (fun ctx => { ctx with resultRoots := [] }) }
 
+def loopingEntry : Core.Module :=
+  { loopVoid with entry := 1 }
+
+#guard match Core.validate loopingEntry with
+  | .ok _ => true
+  | _ => false
+#guard !Goose.Proofs.Lower.moduleOk loopingEntry
+
 def tailResult : Core.Module :=
   let m := loopResult (.mk 1 [] none)
   { m with impls := m.impls.modify 1 (fun impl =>

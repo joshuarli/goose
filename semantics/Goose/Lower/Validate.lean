@@ -1629,6 +1629,9 @@ def HasTypedView (env : Core.TEnv) (v : Core.View) : Prop :=
 def HasTypedExpr (env : Core.TEnv) (e : Core.Expr) : Prop :=
   ∃ fuel ty fuel', (Core.tyExpr env e).run fuel = .ok (ty, fuel')
 
+def HasTypedBlock (env : Core.TEnv) (b : Core.Block) : Prop :=
+  ∃ fuel ty fuel', (Core.tyBlock env [] b).run fuel = .ok (ty, fuel')
+
 mutual
   inductive V001Place (env : Core.TEnv) : Core.Place → Prop where
     | var {x : Core.VarId} (h : HasTypedPlace env (.var x)) : V001Place env (.var x)
