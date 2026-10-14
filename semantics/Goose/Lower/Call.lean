@@ -442,7 +442,10 @@ theorem calleeBlockClaim_flow {m : Core.Module} {i : ImplId} {impl : Impl}
 
 theorem calleeCallClaim_of_body {m : Core.Module} {c : ContextId} {ctx : Context} {impl : Impl}
     (hctx : m.contexts[c]? = some ctx) (himpl : m.impls[ctx.impl]? = some impl)
-    (hok : flowBlockOk impl.body = true) (profile : NumProfile) (n : Nat)
+    (profile : NumProfile) (n : Nat)
+    (hnormal : ∀ env pre state after value,
+      execBlock n ⟨profile, m⟩ env pre impl.body state = .ok (.normal value) after →
+      impl.body.diverges m.noReturn = false)
     (hbody : CalleeBlockClaim n ⟨profile, m⟩ ctx.impl impl) :
     CalleeCallClaim (n + 1) ⟨profile, m⟩ c := by
   intro depth values state
@@ -492,8 +495,7 @@ theorem calleeCallClaim_of_body {m : Core.Module} {c : ContextId} {ctx : Context
           · subst hflow
             simp only [expectReturned, pure_apply] at h'
             obtain ⟨rfl, rfl⟩ := Res.ok.inj h'
-            have hdiv := execBlock_normal_not_divergent n ⟨profile, m⟩ env pre impl.body hok
-              initial finished normal hb
+            have hdiv := hnormal env pre initial finished normal hb
             rcases bodyTail_cases impl le body.1 body.2 hdiv with ⟨hnone, _⟩ | ⟨b, hcur, hterm⟩
             · obtain ⟨blk, hc, _⟩ := LS.pp_some P.pp
               rw [hnone] at hc
@@ -556,7 +558,9 @@ theorem calleeCallClaim_flow {m : Core.Module} {c : ContextId} {ctx : Context} {
   cases n with
   | zero => exact calleeCallClaim_zero _ _
   | succ n =>
-    exact calleeCallClaim_of_body hctx himpl hok profile n
+    exact calleeCallClaim_of_body hctx himpl profile n
+      (fun env pre state after value h =>
+        execBlock_normal_not_divergent n ⟨profile, m⟩ env pre impl.body hok state after value h)
       (calleeBlockClaim_flow hcheck hok profile n)
 
 theorem lowerExpr_call_split {c : ContextId} {args : List Arg} {org : OriginId}
