@@ -140,4 +140,38 @@ def shrinkingModule : Core.Module :=
 
 #guard actualRuns shrinkingModule "9\n100\n"
 
+def limitedRegrownModule (byRef : Bool) : Core.Module :=
+  let m := eachModule false byRef []
+  { m with impls := m.impls.map fun impl =>
+    { impl with body := match impl.body with
+      | .mk sc [.forEach x idx source ref body org] value =>
+        .mk sc [.forEach x idx source ref
+          (.mk body.scope (body.stmts.flatMap fun stmt => match stmt with
+            | .clear p o => [.clear p o, .expr (.push p (.lit .i64 42) (some o)) o]
+            | stmt => [stmt]) body.value) org] value
+      | body => body } }
+
+#guard [false, true].all fun byRef =>
+  match Core.validate (limitedRegrownModule byRef), GIR.validate (lower (limitedRegrownModule byRef)) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard actualRuns (limitedRegrownModule false) "9\n100\n7\n100\n"
+#guard actualRuns (limitedRegrownModule true) "9\n100\n7\n100\n"
+
+def limitedRegrownContents (s : St) (byRef : Bool) : Bool :=
+  s.store.roots.size == 1 && match s.store.roots[RootInst.global 0]? with
+  | some (.limited _ 2 slots 1) => match slots[0]?, slots[1]? with
+    | some (Val.int IntTy.i64 a), some (Val.int IntTy.i64 b) =>
+      a == 42 && b == (if byRef then 100 else 7)
+    | _, _ => false
+  | _ => false
+
+#guard [false, true].all fun byRef => [NumProfile.release, .debug].all fun profile =>
+  let m := limitedRegrownModule byRef
+  match Core.runModule 80 ⟨profile, m⟩ St.initial,
+    GIR.runModule 500 ⟨profile, lower m⟩ St.initial with
+  | .ok _ a, .ok _ b => limitedRegrownContents a byRef && limitedRegrownContents b byRef
+  | _, _ => false
+
 end Goose.Lower.EachChecks
