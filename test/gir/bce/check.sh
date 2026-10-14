@@ -33,6 +33,16 @@ run_result() {
     printf '%s' "$result"
 }
 
+for module in "$here"/../invalid/gir_rejected_v080_*.json; do
+    set +e
+    rejected=$("$tool" gir-validate "$module")
+    result=$?
+    set -e
+    [ "$result" -eq 5 ] || fail "$module was not rejected"
+    printf '%s\n' "$rejected" | "$jaq" -e '.[0:2] == ["rejected", "GIR-V080"]' >/dev/null ||
+        fail "$module did not report GIR-V080"
+done
+
 for name in returned aborted called looping call_kill scope_kill loop_counter; do
     high=$work/$name.gir-h
     checked=$work/$name.checked.gir-h
