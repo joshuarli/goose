@@ -4,40 +4,6 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 
-def unitFlow : Flow → Flow
-  | .normal _ => .normal .unit
-  | flow => flow
-
-theorem prepareReturn_unitFlow (env : Env) (flow : Flow) :
-    (prepareReturn env (unitFlow flow)) =
-      (prepareReturn env flow >>= fun flow' => pure (unitFlow flow')) := by
-  cases flow <;> simp [unitFlow, prepareReturn, bind_assoc, pure_bind]
-
-def preparedIf (n : Nat) (cfg : Cfg) (env : Env) (c : Expr)
-    (t : Core.Block) (f : Option Core.Block) : M Flow := do
-  let branch ← expectBool (← evalExpr n cfg env c)
-  let flow ← if branch then execBlock n cfg env [] t >>= prepareReturn env
-    else match f with
-      | some block => execBlock n cfg env [] block >>= prepareReturn env
-      | none => pure (.normal .unit)
-  pure (unitFlow flow)
-
-theorem prepareReturn_ifStmt (n : Nat) (cfg : Cfg) (env : Env) (c : Expr)
-    (t : Core.Block) (f : Option Core.Block) (org : OriginId) :
-    (execStmt (n + 1) cfg env (.ifS c t f org) >>= prepareReturn env) =
-      preparedIf n cfg env c t f := by
-  simp only [execStmt, preparedIf, bind_assoc]
-  congr 1
-  funext value
-  congr 1
-  funext branch
-  cases branch <;> cases f <;> simp only [Bool.false_eq_true, ↓reduceIte, pure_bind,
-    unitFlow, prepareReturn, bind_assoc]
-  all_goals
-    congr 1
-    funext flow
-    cases flow <;> simp [prepareReturn, unitFlow, bind_assoc, pure_bind]
-
 def BlockFlowSimulation (n : Nat) (lc : Option LoopCtx) (blk : Core.Block) : Prop :=
   ∀ (le : LEnv) (ls : LS) (r : ValueId) (ls' : LS) (pt : Pt)
     (cfg : Cfg) (env : Env) (cx : FnCtx) (fr : GIR.Frame),

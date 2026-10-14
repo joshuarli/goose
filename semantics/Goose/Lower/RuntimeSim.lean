@@ -138,6 +138,14 @@ theorem SimEAt.of_timeout {cx : FnCtx} {pt : Pt} {fr : Frame}
     {p : α → Pt → Frame → Prop} (s : St) :
     SimEAt cx pt fr (Goose.Core.timeout : M α) p s := SimE.of_timeout.at_state s
 
+theorem SimEAt.expectBool {cx : FnCtx} {pt : Pt} {fr : Frame} {value : Val}
+    {next : Bool → M α} {post : α → Pt → Frame → Prop} {state : St}
+    (h : ∀ branch, value = .bool branch → SimEAt cx pt fr (next branch) post state) :
+    SimEAt cx pt fr (Core.expectBool value >>= next) post state := by
+  cases value with
+  | bool branch => exact h branch rfl
+  | _ => exact SimEAt.of_simG (SimG.of_fault_bind fun s => ⟨_, s, rfl⟩) state
+
 theorem SimEOn.at_state {cx : FnCtx} {pt : Pt} {fr : Frame} {c : M α}
     {post : α → Pt → Frame → Prop} {allowed : St → Prop}
     (h : SimEOn cx pt fr c post allowed) {s : St} (hs : allowed s) :

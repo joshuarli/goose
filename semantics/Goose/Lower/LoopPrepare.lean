@@ -80,6 +80,40 @@ theorem prepareLoopFlow_execStmt_return_none (n : Nat) (cfg : Cfg) (env : Env)
     cases loop <;> simp [execStmt, prepareLoopFlow, prepareReturn, prepareLoopExit,
       bind_assoc, pure_bind]
 
+theorem prepareLoopFlow_unitFlow (env : Env) (loop : Option LoopCtx) (flow : Flow) :
+    prepareLoopFlow env loop (unitFlow flow) =
+      (prepareLoopFlow env loop flow >>= fun prepared => pure (unitFlow prepared)) := by
+  cases flow <;> cases loop <;>
+    simp [unitFlow, prepareLoopFlow, prepareReturn, prepareLoopExit, bind_assoc, pure_bind]
+
+def preparedLoopIf (n : Nat) (cfg : Cfg) (env : Env) (loop : Option LoopCtx)
+    (cond : Expr) (thenBlock : Core.Block) (elseBlock : Option Core.Block) : M Flow := do
+  let branch ← expectBool (← evalExpr n cfg env cond)
+  let flow ← if branch then execBlock n cfg env [] thenBlock >>= prepareLoopFlow env loop
+    else match elseBlock with
+      | some block => execBlock n cfg env [] block >>= prepareLoopFlow env loop
+      | none => pure (.normal .unit)
+  pure (unitFlow flow)
+
+theorem prepareLoopFlow_execStmt_if (n : Nat) (cfg : Cfg) (env : Env) (loop : Option LoopCtx)
+    (cond : Expr) (thenBlock : Core.Block) (elseBlock : Option Core.Block) (org : OriginId) :
+    (execStmt (n + 1) cfg env (.ifS cond thenBlock elseBlock org) >>= prepareLoopFlow env loop) =
+      preparedLoopIf n cfg env loop cond thenBlock elseBlock := by
+  simp only [execStmt, preparedLoopIf, bind_assoc]
+  congr 1
+  funext value
+  congr 1
+  funext branch
+  cases branch <;> cases elseBlock <;>
+    simp only [Bool.false_eq_true, ↓reduceIte, pure_bind, unitFlow, prepareLoopFlow,
+      prepareReturn, bind_assoc]
+  · cases loop <;> simp only [prepareLoopExit, pure_bind]
+  all_goals
+    congr 1
+    funext flow
+    cases flow <;> cases loop <;>
+      simp [prepareLoopFlow, prepareReturn, prepareLoopExit, unitFlow, bind_assoc, pure_bind]
+
 def loopStmtsTail (n : Nat) (cfg : Cfg) (env : Env) (loop : Option LoopCtx)
     (rest : List Stmt) : Flow → M Flow
   | .normal _ => execStmts n cfg env rest >>= prepareLoopFlow env loop
