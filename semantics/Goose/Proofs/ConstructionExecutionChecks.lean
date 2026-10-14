@@ -80,6 +80,28 @@ theorem reachable_terminal_preserves_published_bytes :
         (fun storage => storage.bytes.data.toList) = some [3, 0, 0, 0, 65, 0, 255] := by
   cbv
 
+def effectfulFill (count : Nat) : Module :=
+  let ty := Ty.arr (.varr (.int .u8)) count
+  ⟨#["fill-execution.goose"], #[], #[],
+    #[⟨"entry", #[], #[], #[⟨"result", ty, .immutable, 0, 0⟩],
+      .mk 0 [.letS 0 (.fill ty
+        (.blockE (.mk 1 [.print [.text "once"] 0]
+          (some (.bytes (.varr (.int .u8)) [66] 0))) 0) 0) 0,
+        .print ((List.range count).map fun index =>
+          .view (.of (.elem (.of (.var 0)) (.lit .i64 (Int.ofNat index)) 0))) 0] none,
+      .unknown⟩], #[⟨0, "entry", [], [], []⟩], 0, #[⟨0, 17, "let"⟩], #[], #[]⟩
+
+theorem effectfulFill_validated : accepts (effectfulFill 2) = true := by cbv
+
+theorem effectfulFill_execution :
+    returnedObservation (eval 100 .release (effectfulFill 2)) =
+      some ([111, 110, 99, 101, 10, 66, 66, 10],
+        [.begin 0, .begin 1, .write 1 0, .copy (.repeat 1) 0, .write 0 0,
+          .copy (.repeat 1) 0, .write 0 1, .publish 0]) := by cbv
+
+theorem zeroFill_rejected : validate (effectfulFill 0) =
+    .error ⟨.type, "invalid fixed-array element or count"⟩ := by cbv
+
 #print axioms rawBytes_validated
 #print axioms rawBytes_execution
 #print axioms terminalPrefix_validated
@@ -88,6 +110,9 @@ theorem reachable_terminal_preserves_published_bytes :
 #print axioms reachable_terminal_keeps_earlier_events
 #print axioms reachable_terminal_execution
 #print axioms reachable_terminal_preserves_published_bytes
+#print axioms effectfulFill_validated
+#print axioms effectfulFill_execution
+#print axioms zeroFill_rejected
 #print axioms Goose.Proofs.ConstructionExecution.evaluation_keepsEventPrefix
 #print axioms Goose.Proofs.ConstructionExecution.runModule_keepsEventPrefix
 
