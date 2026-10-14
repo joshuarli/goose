@@ -463,7 +463,13 @@ theorem BlockSource.enter {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
         { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store },
       statements.typingEnv = source.typingInner ∧
       statements.typingAfter = source.typingAfter ∧
-      statements.rootsEnv = { source.rootsEnv with scopes := block.scope :: source.rootsEnv.scopes } := by
+      statements.rootsEnv = { source.rootsEnv with scopes := block.scope :: source.rootsEnv.scopes } ∧
+      statements.world = source.world ∧ statements.observation = source.observation ∧
+      statements.typingStart = source.typingStart ∧ statements.typingEnd = source.typingValue ∧
+      statements.rootsStart = source.rootsStart ∧ statements.rootsEnd = source.rootsValue ∧
+      statements.plans = source.plans ∧ statements.path = source.path ∧
+      HEq statements.context source.context ∧ statements.all = block.stmts ∧
+      statements.value = block.value ∧ statements.offset = 0 := by
   rcases cfg with ⟨prof, m⟩
   rcases block with ⟨sc, stmts, value⟩
   rcases source with ⟨accepted, plans, path, bc, observation, W, tenv, tenv1, tenv2,
@@ -572,7 +578,7 @@ theorem BlockSource.enter {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
     offsetBounded := Nat.zero_le _, suffix := rfl, active := ?_, access := ?_,
     protection := hProtected, observed := hSafeB, classified := hClassBound, permission := hp,
     frame := hStart, scopeHead := ?_, top := hTop, bounded := hlo,
-    typed := hts, rooted := hrs, effects := hE2 }, rfl, rfl, rfl⟩
+    typed := hts, rooted := hrs, effects := hE2 }, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl, rfl, rfl, rfl⟩
   · cases bc <;> simpa [blockSuffixActive, DemandNode.visibleForChild,
       EvaluationContext.ActiveMatches, NodeContext.ActiveMatches, DemandExpectedPoint.toPoint,
       DemandPoint.ActiveMatches] using hActive
@@ -591,8 +597,9 @@ theorem initialFrame {m : Module} {state : St} {globals : Nat} {effects : Eff}
     (typingModule : typing.mod = m) (rootsModule : roots.mod = m)
     (typingVars : typing.vars = #[]) (rootsVars : roots.impl.vars = #[])
     (typingScopes : typing.scopes = []) (rootsScopes : roots.scopes = [])
-    (typingVisible : typing.visible = []) (rootsContents : ∀ x, roots.cont x = none) :
-    Core.Sound.Frame m (InitialWorld globals state.nextScope effects) typing roots noEnv state future := by
+    (typingVisible : typing.visible = []) (rootsContents : ∀ x, roots.cont x = none)
+    (activation : ActId := 0) :
+    Core.Sound.Frame m (InitialWorld globals state.nextScope effects) typing roots ⟨#[], activation, [], 0⟩ state future := by
   refine {
     mod_t := typingModule, mod_p := rootsModule, vars_t := typingVars, vars_p := rootsVars,
     scopes_t := typingScopes, scopes_p := rootsScopes, nodup := List.nodup_nil,
@@ -615,11 +622,11 @@ theorem initialFrame {m : Module} {state : St} {globals : Nat} {effects : Eff}
     rw [typingVisible] at member
     cases member
   · rintro r T ⟨x, lv, si, present, _, _⟩
-    simp [noEnv] at present
+    simp at present
   · intro x lv si v present
-    simp [noEnv] at present
+    simp at present
   · intro x lv si v present
-    simp [noEnv] at present
+    simp at present
   · exact invariant.changeDemand (fun _ _ => Or.inl trivial)
   · intro r t impossible
     exact impossible.elim
@@ -636,8 +643,8 @@ theorem initialFrame {m : Module} {state : St} {globals : Nat} {effects : Eff}
 theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : Global}
     (accepted : Core.validate cfg.mod = .ok ())
     (globalAt : cfg.mod.globals[g]? = some global)
-    (invariant : StoreInv cfg.mod g state) :
-    ∃ source : ExprSource cfg noEnv global.init state,
+    (invariant : StoreInv cfg.mod g state) (activation : ActId := 0) :
+    ∃ source : ExprSource cfg ⟨#[], activation, [], 0⟩ global.init state,
       source.typingEnv = initEnv cfg.mod g ∧
       source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty := by
   have moduleOk := validate_modOk cfg.mod accepted
@@ -669,7 +676,7 @@ theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : G
   · intro profile i r impossible
     exact impossible.elim
   · exact initialFrame invariant context.inputFuture (initEnv cfg.mod g)
-      ⟨cfg.mod, initImpl, initContext, []⟩ rfl rfl rfl rfl rfl rfl rfl (by intro x; rfl)
+      ⟨cfg.mod, initImpl, initContext, []⟩ rfl rfl rfl rfl rfl rfl rfl (by intro x; rfl) activation
 
 private theorem blockValueChild? {sc : Nat} {ss : List Stmt} {e : Expr} :
     (DemandNode.block (.mk sc ss (some e))).child? ss.length = some (.expression e) := by
@@ -1141,5 +1148,262 @@ theorem BlockSource.result {cfg : Cfg} {env : Env} {pre : List (VarId × Val)} {
 theorem initialStoreInvariant (module : Module) : StoreInv module 0 St.initial := by
   constructor
   all_goals simp [St.initial, Store.empty]
+
+private theorem sampledCalleeSource {prof : NumProfile} {plans path c args origin}
+    (accepted : Core.validate m = .ok ())
+    (ec : EvaluationContext m plans path (.expression (.call c args origin)) .expression)
+    (observation : Observation) (W : World) (tenv : TEnv) (penv : PEnv) (env : Env) (s : St)
+    (ctx : Context) (callee : Impl) (E : Eff) (vals : List Val) (ars : List (List RootRef))
+    (retained : List RetainedAlias) (ty : Ty) (rho : List RootRef) (initialEffects : Eff)
+    (contextAt : m.contexts[c]? = some ctx) (implementationAt : m.impls[ctx.impl]? = some callee)
+    (implementationChecked : ImplOk m callee) (contextChecked : CtxOk m callee ctx)
+    (effectReplay : ContextEff m callee ctx E)
+    (active : ec.ActiveMatches tenv) (access : ec.AccessMatches tenv penv)
+    (protectedSlices : ShrinkProtected W.D W.A (ec.mayShrink W.ownerP observation))
+    (sourceSafe : ObservedSafe m W (ec.mayShrink W.ownerP observation) observation s.store)
+    (sourceClassified : m.profile = .shrink → ClassifiedParameters m W.P W.D observation s.store)
+    (permission : Perm m W)
+    (frame : Frame m W tenv penv env s (callArgsFuture ec args.length []))
+    (size : callee.params.size = args.length) (length : vals.length = args.length)
+    (argumentsChecked : ∀ i, i < callee.params.size → checkArgRoots callee ctx ars i = .ok ())
+    (contentsChecked : ∀ i, i < args.length → checkContent penv ctx args ars i = .ok ())
+    (sampled : ∀ (i : Nat) (v : Val), vals[i]? = some v →
+      ∃ (p : Param) (pv : LocalVar) (ar : List RootRef) (a : Arg) (t : Ty)
+        (tn0 tn1 : Nat) (rst0 rst1 : RState),
+      callee.params.toList[i]? = some p ∧ callee.vars[p.var]? = some pv ∧
+      ars[i]? = some ar ∧ HasTy m W.G s.store v pv.ty ∧
+      (∀ r, Targets v r → Gam env W.P ar r) ∧
+      OwnerRooted env W.ownerP ar v pv.ty ∧ args[i]? = some a ∧
+      ArgTy tenv a tn0 t tn1 ∧ t.passableTo pv.ty = true ∧ ArgRp penv a rst0 ar rst1)
+    (resultType : (callee.results.toList = [] ∧ ty = .unit) ∨ callee.results.toList = [ty])
+    (resultReplay : callResultRoots callee ctx ars = .ok rho)
+    (effects : EffLe (callEffects callee ctx ars initialEffects) W.E)
+    (retainedSubset : ∀ alias, alias ∈ ec.retained → alias ∈ retained) :
+    let Pc := fun i root => Gam env W.P (ars[i]?.getD []) root
+    let boundary := callObservation (m := m) observation W tenv env ec.outputFuture retained s.store
+    let root := ec.calleeContext callee contextAt implementationAt
+    let calleeWorld := World.mk W.G Pc (callOwnerP W callee env ars) E s.nextScope
+      (callD W tenv env ec.outputFuture args) (callA W penv env)
+    ObservedSafe m calleeWorld (root.mayShrink (callOwnerP W callee env ars) boundary) boundary s.store →
+    (m.profile = .shrink → ClassifiedParameters m Pc
+      (callD W tenv env ec.outputFuture args) boundary s.store) →
+    ShrinkProtected (callD W tenv env ec.outputFuture args) (callA W penv env)
+      (root.mayShrink (callOwnerP W callee env ars) boundary) →
+    ∃ source : BlockSource ⟨prof, m⟩ ⟨callee.vars, s.nextAct, [], env.depth + 1⟩
+      (callee.params.toList.zip vals |>.map (fun item => (item.1.var, item.2))) callee.body
+      { s with nextAct := s.nextAct + 1 },
+      source.typingEnv = { implEnv m callee with visible := [] } ∧
+      source.rootsEnv = ⟨m, callee, ctx, []⟩ := by
+  dsimp only
+  intro boundarySafe boundaryClassified boundaryProtected
+  have futureSubset : ∀ x, x ∈ ec.outputFuture → x ∈ callArgsFuture ec args.length [] := by
+    cases ec with
+    | pilot _ _ =>
+      intro x member
+      simpa [callArgsFuture, EvaluationContext.outputFuture, DemandNode.visibleAfter] using member
+    | shrink _ _ =>
+      intro x member
+      simp only [callArgsFuture, List.flatMap_nil, List.append_nil, List.mem_append]
+      exact Or.inr member
+  have outer : OuterOk m W.G (callD W tenv env ec.outputFuture args) (callA W penv env) s :=
+    callOuterOk frame (fun x lv mu element variableAt typeEq visible needed =>
+      callArgsFuture_sliceHolder ec active access frame.vars_t variableAt typeEq visible needed)
+  have invariant := (frame.callDemand boundarySafe.typed
+    (fun root element hd => by obtain ⟨v, hv, ht, _⟩ := outer root element hd; exact ⟨v, hv, ht⟩)).observationDemand
+  let root := ec.calleeContext callee contextAt implementationAt
+  have owner := ec.calleeContext_owner callee contextAt implementationAt
+  have hvisible : ∀ x, x ∈ (implEnv m callee).visible ↔ x ∈ callee.params.toList.map (·.var) := by
+    intro x
+    change x ∈ List.range callee.params.size ↔ x ∈ callee.params.toList.map (·.var)
+    constructor
+    · intro member
+      have bound := List.mem_range.mp member
+      let parameter := callee.params[x]
+      have present : callee.params[x]? = some parameter := Array.getElem?_eq_getElem bound
+      have id := implementationChecked.params x parameter present
+      exact List.mem_map.mpr ⟨parameter, Array.mem_toList_iff.mpr
+        (Array.mem_iff_getElem?.mpr ⟨x, present⟩), id.1⟩
+    · intro member
+      obtain ⟨parameter, member, id⟩ := List.mem_map.mp member
+      obtain ⟨index, present⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp member)
+      have indexEq := (implementationChecked.params index parameter present).1
+      rw [← id, indexEq]
+      exact List.mem_range.mpr (Array.getElem?_eq_some_iff.mp present).1
+  have hmay : (root.callBody owner contextAt implementationAt).mayShrink
+      (callOwnerP W callee env ars) (callObservation (m := m) observation W tenv env ec.outputFuture retained s.store) =
+      root.mayShrink (callOwnerP W callee env ars) (callObservation (m := m) observation W tenv env ec.outputFuture retained s.store) := by
+    funext r
+    exact propext (root.callBody_mayShrink_iff owner contextAt implementationAt _ _ r)
+  obtain ⟨source, typingEq, rootsEq, worldEq⟩ := acceptedCalleeSource accepted W.G (fun i root => Gam env W.P (ars[i]?.getD []) root)
+    (callOwnerP W callee env ars) (callD W tenv env ec.outputFuture args) (callA W penv env) env.depth c vals s ctx callee E
+    (callObservation (m := m) observation W tenv env ec.outputFuture retained s.store)
+    (root.callBody owner contextAt implementationAt)
+    (root.callBody_activeMatches owner contextAt implementationAt _ hvisible)
+    (root.callBody_accessMatches owner contextAt implementationAt _ _ rfl rfl rfl rfl rfl)
+    effectReplay contextAt implementationAt
+    (frame.callOwnerP_subset callee ars) (callOwnerP.shape W callee env ars)
+    invariant (by rw [hmay]; exact boundarySafe) boundaryClassified
+    (by rw [hmay]; exact boundaryProtected)
+    (by rw [length]; exact size.symm)
+    (by
+      intro i value valueAt
+      obtain ⟨lv, variableAt, typed, roots⟩ := callValues_ok implementationChecked
+        contextChecked argumentsChecked (fun j v sampledAt => by
+          obtain ⟨p, pv, ar, _, _, _, _, _, _, hp, hv, hr, ht, roots, _⟩ := sampled j v sampledAt
+          exact ⟨p, pv, ar, hp, hv, hr, ht, roots⟩) i value valueAt
+      refine ⟨lv, variableAt, typed, ?_, roots⟩
+      exact callValues_ownerRooted implementationChecked (fun j v sampledAt => by
+        obtain ⟨p, pv, ar, _, _, _, _, _, _, hp, hv, hr, _, _, owner, _⟩ := sampled j v sampledAt
+        exact ⟨p, pv, ar, hp, hv, hr, owner⟩) i value lv valueAt variableAt)
+
+    (fun i activation instanceId variableId denoted => frame.gam_older denoted _ _ _ rfl)
+    (callA_older frame) (callD_out frame) (callD_fun frame) outer
+    (call_pref frame implementationChecked contextChecked contentsChecked size length sampled)
+    (callPermission permission contextChecked effects)
+  exact ⟨source, typingEq, rootsEq⟩
+
+theorem ExprSource.calleeAfterArgs {cfg : Cfg} {env : Env} {state after : St}
+    {c : ContextId} {args : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call c args origin) state)
+    (fuel : Nat) (vals : List Val)
+    (done : mapList (evalArg fuel cfg env) args state = .ok vals after) :
+    ∃ ctx callee, cfg.mod.contexts[c]? = some ctx ∧ cfg.mod.impls[ctx.impl]? = some callee ∧
+      ∃ body : BlockSource cfg ⟨callee.vars, after.nextAct, [], env.depth + 1⟩
+        (callee.params.toList.zip vals |>.map (fun item => (item.1.var, item.2))) callee.body
+        { after with nextAct := after.nextAct + 1 },
+        body.typingEnv = { implEnv cfg.mod callee with visible := [] } ∧
+        body.rootsEnv = ⟨cfg.mod, callee, ctx, []⟩ := by
+  rcases cfg with ⟨prof, m⟩
+  let ec := source.context
+  let W := source.world
+  let tenv := source.typingEnv
+  let penv := source.rootsEnv
+  let observation := source.observation
+  have hm := validate_modOk m source.accepted
+  have frame : Core.Sound.Frame m W tenv penv env state ec.inputFuture := source.frame
+  have typing : tyExpr tenv (.call c args origin) source.typingStart = .ok (source.ty, source.typingEnd) := source.typed
+  have replay : rpExpr penv (.call c args origin) source.rootsStart = .ok (source.roots, source.rootsEnd) := source.rooted
+  have effects := source.effects
+  have active : ec.ActiveMatches tenv := source.active
+  have access : ec.AccessMatches tenv penv := source.access
+  have protectedSlices : ShrinkProtected W.D W.A (ec.mayShrink W.ownerP observation) := source.protection
+  have sourceReplay := replay
+  simp only [rpExpr] at replay
+  inv at replay
+  obtain ⟨ars, state1, argumentsReplay, contentsCheck, callReplay⟩ := replay
+  have argumentsEffects := (PMono.rpCall _ _ _ _ _ _ callReplay).2.trans effects
+  obtain ⟨ctx, callee, contextAt, implementationAt, argumentCheck, effectAt, resultReplay⟩ :=
+    rpCall_ok _ _ _ _ _ _ callReplay
+  have contents := checkContents_ok _ _ _ _ ctx contentsCheck contextAt
+  rw [frame.mod_p] at contextAt implementationAt
+  have contextAtT : tenv.mod.contexts[c]? = some ctx := by rw [frame.mod_t]; exact contextAt
+  have implementationAtT : tenv.mod.impls[ctx.impl]? = some callee := by
+    rw [frame.mod_t]
+    exact implementationAt
+  simp only [tyExpr, contextAtT, implementationAtT] at typing
+  inv at typing
+  obtain ⟨_, size, next, argumentTypes, _, _, resultType, _⟩ := typing
+  obtain ⟨other, otherAt, contextChecked⟩ := hm.ctx c ctx contextAt
+  rw [implementationAt] at otherAt
+  cases otherAt
+  have implementationChecked := hm.impl _ _ implementationAt
+  have suffixFrame : Core.Sound.Frame m W tenv penv env state (callArgsFuture ec 0 args) := by
+    cases hcontext : source.context <;>
+      simpa [ec, hcontext, callArgsFuture, EvaluationContext.inputFuture, NodeContext.inputFuture,
+        NodeContext.outputFuture, DemandNode.variables, Expr.variables] using frame
+  have checked := args_spec ec observation (specs_all hm prof source.plans fuel).arg
+    source.permission active access protectedSlices callee implementationChecked args callee.params.toList
+    0 state source.typingStart next source.rootsStart state1 ars (by simp) (by omega)
+    (fun _ member => member) suffixFrame source.observed source.classified (by simpa using size)
+    argumentTypes argumentsReplay argumentsEffects
+  unfold Sat at checked
+  rw [done] at checked
+  obtain ⟨frame1, footprint1, roots1, values1, source1, retained1, pilot1, _, length,
+    sampled, class1, forbidden1, argumentsMutation⟩ := checked
+  obtain ⟨bodyRoots, range, bodyState, bodyReplay, _, _⟩ := contextChecked.body
+  have bodyEffects : ContextEff m callee ctx bodyState.eff :=
+    ⟨bodyRoots, range, bodyState, bodyReplay, rfl⟩
+  have charged : EffLe (callEffects callee ctx ars state1.eff) W.E := by
+    rw [effectAt] at effects
+    exact effects
+  have body := sampledCalleeSource (prof := prof) source.accepted ec observation W tenv penv env after
+    ctx callee bodyState.eff vals ars ec.retained source.ty source.roots state1.eff contextAt implementationAt
+    implementationChecked contextChecked bodyEffects active access protectedSlices source1 class1
+    source.permission frame1 size length argumentCheck contents sampled resultType resultReplay charged
+    (fun _ member => member)
+  refine ⟨ctx, callee, contextAt, implementationAt, ?_⟩
+  cases hcontext : ec with
+  | pilot profile bindings =>
+    rw [hcontext] at body source1 frame1
+    change ObservedSafe m W (fun _ => False) observation after.store at source1
+    have boundary := callBody_pilot_observed (args := args) (ars := ars) (callee := callee)
+      (E := bodyState.eff) (by simpa [callArgsFuture] using frame1) source1
+    apply body
+    · change ObservedSafe m _ (fun _ => False) _ _
+      exact boundary
+    · intro shrink
+      rw [profile] at shrink
+      cases shrink
+    · intro holder element target holderProtected alias targetRoot shrink
+      change False at shrink
+      exact shrink.elim
+  | shrink profile context =>
+    rw [hcontext] at body active access protectedSlices source1 frame1
+    let ec : EvaluationContext m source.plans source.path (.expression (.call c args origin)) .expression :=
+      .shrink profile context
+    have declarations := ArgumentRootDeclarations.ofCallArgs frame hm
+      (context.callerContext_checked hm access) size argumentTypes argumentsReplay
+    let boundary := callObservation (m := m) observation W tenv env context.outputFuture ec.retained after.store
+    let root := ec.calleeContext callee contextAt implementationAt
+    let shrinking := root.mayShrink (callOwnerP W callee env ars) boundary
+    have recorded : ∀ rootInst, shrinking rootInst →
+        MayShrinkEff (callOwnerP W callee env ars) bodyState.eff rootInst ∧ OwnerCap m boundary rootInst :=
+      fun _ shrink => EvaluationContext.callBody_effect root
+        (ec.calleeContext_owner callee contextAt implementationAt) contextAt implementationAt hm bodyEffects shrink
+    have coverage := NodeContext.callBody_coverage (retained := ec.retained) context frame1
+      access contextAt implementationAt contextChecked bodyEffects
+      source1.rootsOlder argumentsReplay
+    have cover : ∀ rootInst, shrinking rootInst → ∃ owner,
+        owner ∈ context.callMutationContext.expected.shrinkOwners ∧ owner.invalidates = true ∧
+        Gam env W.ownerP owner.roots rootInst :=
+      fun rootInst shrink => coverage rootInst (recorded rootInst shrink).1 (recorded rootInst shrink).2
+    have caps : ∀ rootInst, shrinking rootInst → OwnerCap m boundary rootInst :=
+      fun rootInst shrink => (recorded rootInst shrink).2
+    have futureSubset : ∀ x, x ∈ context.outputFuture → x ∈ callArgsFuture ec args.length [] := by
+      simp only [ec, callArgsFuture, List.flatMap_nil, List.append_nil, List.mem_append]
+      exact fun _ member => Or.inr member
+    have initialized : ∀ global, shrinking (.global global) → global < W.G := by
+      intro global shrink
+      obtain ⟨owner, ownerMember, _, ownerIn⟩ := cover _ shrink
+      exact NodeContext.callGlobal_initialized context hm frame1 access
+        source.permission sourceReplay effects ownerMember ownerIn (caps _ shrink)
+    have boundaryObserved := context.callObservation_observed frame1 active
+      access futureSubset source1
+      protectedSlices caps initialized (context.callMutation_retains_parent) cover
+    have protectedBoundary := context.callD_shrinkProtected frame1 active
+      access protectedSlices caps cover
+    have boundaryClass := frame1.callObservation_classified (continuation := context.outputFuture)
+      (args := args) (retained := ec.retained) declarations (class1 profile)
+    apply body
+    · exact ⟨boundaryObserved.typed, boundaryObserved.rootsOlder, boundaryObserved.valuesOlder,
+        boundaryObserved.rootsProtected, boundaryObserved.valuesProtected,
+        callObservation_callD_holderTypes frame1 source1 boundaryObserved⟩
+    · exact fun _ => boundaryClass
+    · exact protectedBoundary
+
+private theorem nextActivationInvariant {module : Module} {globals : Nat} {state : St}
+    {demanded : RootInst → Prop} (invariant : StoreInv module globals state demanded) :
+    StoreInv module globals { state with nextAct := state.nextAct + 1 } demanded :=
+  ⟨invariant.live, invariant.age, invariant.fresh, invariant.globals,
+    invariant.globalNonRefs, invariant.globalStorageDomain⟩
+
+theorem acceptedGlobalActivation {cfg : Cfg} {state : St} {g : GlobalId} {global : Global}
+    (accepted : Core.validate cfg.mod = .ok ())
+    (globalAt : cfg.mod.globals[g]? = some global) (invariant : StoreInv cfg.mod g state) :
+    ∃ source : ExprSource cfg ⟨#[], state.nextAct, [], 0⟩ global.init
+        { state with nextAct := state.nextAct + 1 },
+      source.typingEnv = initEnv cfg.mod g ∧
+      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty :=
+  acceptedGlobalSource accepted globalAt (nextActivationInvariant invariant) state.nextAct
 
 end Goose.Lower
