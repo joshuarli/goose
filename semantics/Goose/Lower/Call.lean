@@ -2,6 +2,7 @@ import Goose.Lower.Arguments
 import Goose.Proofs.Lower
 import Goose.Core.Sound.Stops
 import Goose.Lower.Flow
+import Goose.Lower.ControlNormal
 
 namespace Goose.Lower
 
@@ -145,6 +146,70 @@ theorem parameterPreRel (vars : Array LocalVar) (fr : Frame) :
   | _ :: _, [], _, hi, _, _ => by simp at hi
   | [], [], _ :: _, _, hv, _ => by simp at hv
   | _ :: _, _ :: _, [], _, hv, _ => by simp at hv
+
+theorem bindCallParams_zip_cells (fr : Frame) (ids : List ValueId) (tys : List VTy)
+    (values : List Val) (ht : ids.length = tys.length) (hn : ids.Nodup) :
+    ∀ pair ∈ ids.zip values,
+      (bindCallParams fr (ids.zip tys) (values.map RVal.val)).vals[pair.1]? = some (.val pair.2) := by
+  intro pair hpair
+  obtain ⟨i, hi⟩ := List.mem_iff_getElem?.mp hpair
+  obtain ⟨hid, hval⟩ := List.getElem?_zip_eq_some.mp hi
+  have hlt : i < tys.length := ht ▸ (List.getElem?_eq_some_iff.mp hid).1
+  obtain ⟨ty, hty⟩ : ∃ ty, tys[i]? = some ty :=
+    ⟨tys[i], by simp⟩
+  have hparams : (ids.zip tys)[i]? = some (pair.1, ty) :=
+    List.getElem?_zip_eq_some.mpr ⟨hid, hty⟩
+  have hvalues : (values.map RVal.val)[i]? = some (.val pair.2) := by simp [hval]
+  have hboth : ((ids.zip tys).zip (values.map RVal.val))[i]? =
+      some ((pair.1, ty), .val pair.2) := List.getElem?_zip_eq_some.mpr ⟨hparams, hvalues⟩
+  have hnodup : ((ids.zip tys).map Prod.fst).Nodup := by
+    rw [List.map_fst_zip (Nat.le_of_eq ht)]
+    exact hn
+  exact bindCallParams_has fr (ids.zip tys) (values.map RVal.val) hnodup _
+    (List.mem_iff_getElem?.mpr ⟨i, hboth⟩)
+
+def callFrame (impl : Impl) (act : ActId) (depth : Nat) (values : List Val) : Frame :=
+  bindCallParams ⟨act, [], {}, depth⟩ ((List.range impl.params.size).zip (callEntryTypes impl))
+    (values.map RVal.val)
+
+theorem callFrame_preRel (impl : Impl) (act : ActId) (depth : Nat) (values : List Val)
+    (h : impl.params.size = values.length) :
+    PreRel (callFrame impl act depth values) (callPre impl)
+      ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) := by
+  apply parameterPreRel impl.vars (callFrame impl act depth values)
+  · simp
+  · simpa using h
+  · exact bindCallParams_zip_cells _ _ _ _ (by simp [callEntryTypes]) List.nodup_range
+
+theorem callFrame_rel (m : Core.Module) (profile : NumProfile) (i : ImplId) (impl : Impl)
+    (act : ActId) (depth : Nat) (values : List Val) :
+    Rel ⟨profile, m⟩ ⟨impl.vars, act, [], depth⟩ ⟨⟨profile, lower m⟩, lowerImplAt m i impl⟩
+      (callFrame impl act depth values) (callEntry impl) := by
+  obtain ⟨ha, hs, hd⟩ := bindCallParams_frame ⟨act, [], {}, depth⟩
+    ((List.range impl.params.size).zip (callEntryTypes impl)) (values.map RVal.val)
+  exact ⟨rfl, rfl, ha, hs, hd, rfl⟩
+
+theorem enterFn_call (m : Core.Module) (profile : NumProfile) (i : ImplId) (impl : Impl)
+    (depth fuel : Nat) (values : List Val) (state : St)
+    (hp : impl.params.size = values.length)
+    (hext : ExtT (callEntry impl) (lowerImplAt m i impl).blocks) :
+    enterFn (fuel + 1) ⟨profile, lower m⟩ depth (lowerImplAt m i impl) values state =
+      runAt ⟨⟨profile, lower m⟩, lowerImplAt m i impl⟩ (0, 0)
+        (callFrame impl state.nextAct depth values) fuel
+        { state with nextAct := state.nextAct + 1 } := by
+  obtain ⟨blk, hb, hbparams⟩ := hext.params (b := 0)
+    (blk := ⟨(List.range impl.params.size).zip (callEntryTypes impl), #[]⟩) rfl
+  have hparams : (lowerImplAt m i impl).params.length = values.length := by
+    simpa [lowerImplAt] using hp
+  have hblkparams : blk.params.length = values.length := by
+    rw [hbparams]
+    simp [callEntryTypes, hp]
+  have hinsts : instsAt (lowerImplAt m i impl) (0, 0) = blk.insts := by simp [instsAt, hb]
+  have hentrylen : ((List.range impl.params.size).zip (callEntryTypes impl)).length =
+      values.length := by simp [callEntryTypes, hp]
+  simp only [enterFn, hparams, ite_true, enterBlock, hb, List.length_map,
+    hbparams, hentrylen, bindParams_call, pure_bind, runAt, hinsts]
+  rfl
 
 theorem implOfContext_run (c : ContextId) (le : LEnv) (ls : LS) :
     implOfContext c le ls = (((le.mod.contexts[c]?).map (·.impl)).getD 0, ls) := rfl
@@ -338,6 +403,161 @@ theorem calleeCallClaim_nil {m : Core.Module} {c : ContextId} {ctx : Context} {i
         simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl,
           pure_bind, hp, Array.size_empty, List.length_cons, Nat.zero_ne_add_one, ite_false]
         exact agree_fault _ _ _
+
+def CalleeBlockClaim (n : Nat) (cfg : Cfg) (i : ImplId) (impl : Impl) : Prop :=
+  ∀ act depth values, impl.params.size = values.length →
+    let env : Env := ⟨impl.vars, act, [], depth⟩
+    let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, lowerImplAt cfg.mod i impl⟩
+    let fr := callFrame impl act depth values
+    let body := lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod impl.vars)
+      (callEntry impl)
+    SimE cx (0, 0) fr
+      (execBlock n cfg env ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) impl.body)
+      (BlockFlowPost cfg env cx (callEntry impl) fr body.2 impl.body false body.1)
+
+theorem calleeBlockClaim_flow {m : Core.Module} {i : ImplId} {impl : Impl}
+    (hcheck : checkImpl m impl = .ok ()) (hok : flowBlockOk impl.body = true)
+    (profile : NumProfile) (n : Nat) : CalleeBlockClaim n ⟨profile, m⟩ i impl := by
+  intro act depth values hp
+  let le := lowerEnv m impl.vars
+  let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
+  let cx : FnCtx := ⟨⟨profile, lower m⟩, lowerImplAt m i impl⟩
+  let fr := callFrame impl act depth values
+  let env : Env := ⟨impl.vars, act, [], depth⟩
+  have hlow : lowerBlock none (callPre impl) false impl.body le (callEntry impl) = (body.1, body.2) := rfl
+  have hextTail : ExtT (bodyTail impl le body.1 body.2) cx.fn.blocks := by
+    rw [lowerImplAt_call_blocks]
+    exact extT_finish _
+  have hextBody : ExtT body.2 cx.fn.blocks := hextTail.of_adv
+    (advB_finishFunction impl body.1 le body.2 (finishFunction impl body.1 le body.2).1
+      (bodyTail impl le body.1 body.2) rfl)
+  have hsim := (flowClaims n).block none (callPre impl)
+    ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) false impl.body hok
+    ⟨profile, m⟩ env (callPre_scopes hcheck) le (callEntry impl) body.2 body.1 (0, 0) cx fr
+    hlow (callEntry_pp impl) hextBody (callFrame_rel m profile i impl act depth values)
+    (callFrame_preRel impl act depth values hp)
+  rw [prepareReturn_no_scopes env rfl] at hsim
+  simp only [bind_pure] at hsim
+  exact SimE.of_simG hsim
+
+theorem calleeCallClaim_of_body {m : Core.Module} {c : ContextId} {ctx : Context} {impl : Impl}
+    (hctx : m.contexts[c]? = some ctx) (himpl : m.impls[ctx.impl]? = some impl)
+    (hok : flowBlockOk impl.body = true) (profile : NumProfile) (n : Nat)
+    (hbody : CalleeBlockClaim n ⟨profile, m⟩ ctx.impl impl) :
+    CalleeCallClaim (n + 1) ⟨profile, m⟩ c := by
+  intro depth values state
+  by_cases hd : depth ≥ maxCallDepth
+  · simp only [enterCall, hd, ite_true]
+    exact agree_timeout _ _
+  · by_cases hp : impl.params.size = values.length
+    · have hent : ((m.contexts[c]?).map (·.impl)).getD 0 = ctx.impl := by simp [hctx]
+      rw [hent]
+      simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl, pure_bind,
+        hp, ite_true]
+      let le := lowerEnv m impl.vars
+      let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
+      let cx : FnCtx := ⟨⟨profile, lower m⟩, lowerImplAt m ctx.impl impl⟩
+      let env : Env := ⟨impl.vars, state.nextAct, [], depth + 1⟩
+      let fr := callFrame impl state.nextAct (depth + 1) values
+      let initial := { state with nextAct := state.nextAct + 1 }
+      let pre := (impl.params.toList.zip values).map fun (p, value) => (p.var, value)
+      have hlow : lowerBlock none (callPre impl) false impl.body le (callEntry impl) = (body.1, body.2) := rfl
+      have hextTail : ExtT (bodyTail impl le body.1 body.2) cx.fn.blocks := by
+        rw [lowerImplAt_call_blocks]
+        exact extT_finish _
+      have hextBody : ExtT body.2 cx.fn.blocks := hextTail.of_adv
+        (advB_finishFunction impl body.1 le body.2 (finishFunction impl body.1 le body.2).1
+          (bodyTail impl le body.1 body.2) rfl)
+      have hextEntry : ExtT (callEntry impl) cx.fn.blocks := hextBody.of_adv
+        (advB_lowerBlock none (callPre impl) false impl.body le (callEntry impl) body.1 body.2 hlow)
+      have hrun : ∀ fuel, callFn (fuel + 2) ⟨profile, lower m⟩ depth ctx.impl values state =
+          runAt cx (0, 0) fr fuel initial := by
+        intro fuel
+        rw [show fuel + 2 = (fuel + 1) + 1 from rfl, callFn]
+        simp only [hd, ite_false, lookupFn_lower himpl, pure_bind]
+        exact enterFn_call m profile ctx.impl impl (depth + 1) fuel values state hp hextEntry
+      have hs := hbody state.nextAct (depth + 1) values hp initial
+      refine ⟨fun value after h => ?_, fun err after h hf => ?_⟩
+      · have h' : (execBlock n ⟨profile, m⟩ env pre impl.body >>= expectReturned) initial =
+            .ok value after := h
+        rw [bind_apply] at h'
+        cases hb : execBlock n ⟨profile, m⟩ env pre impl.body initial with
+        | stop err stopped => rw [hb] at h'; cases h'
+        | ok flow finished =>
+          rw [hb] at h'
+          obtain ⟨pt', fr', hpost, hmore⟩ := hs.1 flow finished hb
+          change BlockFlowPost ⟨profile, m⟩ env cx (callEntry impl) fr body.2 impl.body false body.1
+            flow pt' fr' at hpost
+          rcases hpost with ⟨normal, hflow, hunit, P⟩ | ⟨returned, org, hflow, hsite⟩
+          · subst hflow
+            simp only [expectReturned, pure_apply] at h'
+            obtain ⟨rfl, rfl⟩ := Res.ok.inj h'
+            have hdiv := execBlock_normal_not_divergent n ⟨profile, m⟩ env pre impl.body hok
+              initial finished normal hb
+            rcases bodyTail_cases impl le body.1 body.2 hdiv with ⟨hnone, _⟩ | ⟨b, hcur, hterm⟩
+            · obtain ⟨blk, hc, _⟩ := LS.pp_some P.pp
+              rw [hnone] at hc
+              cases hc
+            obtain ⟨_, _, _, hi⟩ := emitTerm_facts hterm P.pp hextTail
+            change instAt cx.fn pt' = some (.term (.ret (if impl.body.value.isSome then [body.1] else []) none)) at hi
+            have hreturn : runAt cx pt' fr' 1 finished = .ok normal finished := by
+              cases hv : impl.body.value.isSome with
+              | false =>
+                have hnone : impl.body.value = none := by simpa using hv
+                have hi' : instAt cx.fn pt' = some (.term (.ret [] none)) := by simpa [hv] using hi
+                rw [runAt_ret0 hi' 0, hunit hnone]
+                rfl
+              | true =>
+                have hcell : fr'.vals[body.1]? = some (.val normal) :=
+                  P.has (body.1, .val normal) (by simp [blockCells, hv])
+                have hi' : instAt cx.fn pt' = some (.term (.ret [body.1] none)) := by simpa [hv] using hi
+                rw [runAt_ret1 hi' hcell 0]
+                rfl
+            obtain ⟨K, hK⟩ := hmore 1 (.ok normal finished) (NonTimeout.ok _ _) hreturn
+            refine ⟨K + 2, fun fuel hfu => ?_⟩
+            obtain ⟨extra, rfl⟩ : ∃ extra, fuel = extra + 2 := ⟨fuel - 2, by omega⟩
+            change callFn (extra + 2) ⟨profile, lower m⟩ depth ctx.impl values state = _
+            rw [hrun extra]
+            exact hK extra (by omega)
+          · subst hflow
+            simp only [expectReturned, pure_apply] at h'
+            obtain ⟨rfl, rfl⟩ := Res.ok.inj h'
+            obtain ⟨K, hK⟩ := hmore 1 (.ok returned finished) (NonTimeout.ok _ _) (hsite.run finished 0)
+            refine ⟨K + 2, fun fuel hfu => ?_⟩
+            obtain ⟨extra, rfl⟩ : ∃ extra, fuel = extra + 2 := ⟨fuel - 2, by omega⟩
+            change callFn (extra + 2) ⟨profile, lower m⟩ depth ctx.impl values state = _
+            rw [hrun extra]
+            exact hK extra (by omega)
+      · have h' : (execBlock n ⟨profile, m⟩ env pre impl.body >>= expectReturned) initial =
+            .stop err after := h
+        rw [bind_apply] at h'
+        cases hb : execBlock n ⟨profile, m⟩ env pre impl.body initial with
+        | stop err' stopped =>
+          rw [hb] at h'
+          obtain ⟨rfl, rfl⟩ := Res.stop.inj h'
+          obtain ⟨K, hK⟩ := hs.2 err' stopped hb hf
+          refine ⟨K + 2, fun fuel hfu => ?_⟩
+          obtain ⟨extra, rfl⟩ : ∃ extra, fuel = extra + 2 := ⟨fuel - 2, by omega⟩
+          change callFn (extra + 2) ⟨profile, lower m⟩ depth ctx.impl values state = _
+          rw [hrun extra]
+          exact hK extra (by omega)
+        | ok flow finished =>
+          rw [hb] at h'
+          cases flow <;> simp only [expectReturned, pure_apply, fault, M.stop] at h' <;>
+            cases h' <;> simp [IsFinal] at hf
+    · simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl, pure_bind,
+        hp, ite_false]
+      exact agree_fault _ _ _
+
+theorem calleeCallClaim_flow {m : Core.Module} {c : ContextId} {ctx : Context} {impl : Impl}
+    (hctx : m.contexts[c]? = some ctx) (himpl : m.impls[ctx.impl]? = some impl)
+    (hcheck : checkImpl m impl = .ok ()) (hok : flowBlockOk impl.body = true)
+    (profile : NumProfile) (n : Nat) : CalleeCallClaim n ⟨profile, m⟩ c := by
+  cases n with
+  | zero => exact calleeCallClaim_zero _ _
+  | succ n =>
+    exact calleeCallClaim_of_body hctx himpl hok profile n
+      (calleeBlockClaim_flow hcheck hok profile n)
 
 theorem lowerExpr_call_split {c : ContextId} {args : List Arg} {org : OriginId}
     {le : LEnv} {ls ls' : LS} {r : ValueId}
