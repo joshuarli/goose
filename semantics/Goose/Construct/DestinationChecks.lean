@@ -396,4 +396,53 @@ private def prematureNamedFit : ConstructionM Unit := do
       (state.storage[0]?.map (·.bytes.size)) == some 0
   | _ => false
 
+private def elementExtension : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let ty := Ty.varr (.int .u8)
+  let cap := { capability with layout := .grow ty, logicalType := .grow ty }
+  let parent ← openDestination storage cap .elements (some 0)
+  finishDestination parent
+  let child ← openElementExtension parent ty .packed (some 2) ⟨.global 0, [0]⟩
+  writeElement child (bytes [10])
+  writeElement child (bytes [20])
+  finishDestination child
+  attachElementExtension parent child
+  publishOperation [parent]
+#guard observe elementExtension == some ([2,0,0,0,10,20],1,
+  [.begin 0,.begin 1,.write 1 0,.write 1 1,.publish 1,.publish 0])
+
+private def publishedElement : ConstructionM Unit := do
+  let storage ← reserveStorage (bytes [7]) 1
+  let ty := Ty.varr (.int .u8)
+  let cap := { capability with layout := ty, logicalType := ty, receiver := ⟨.global 0,[1]⟩ }
+  let destination ← openDestination storage cap .packed (some 2)
+  writeElement destination (bytes [10])
+  writeElement destination (bytes [20])
+  finishDestination destination
+  publishElementDestination destination
+#guard observe publishedElement == some ([7,2,0,0,0,10,20],2,
+  [.begin 0,.write 0 0,.write 0 1,.publish 0])
+
+private def retiredRepeat (reuse : Bool) : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let parent ← openDestination storage capability .elements (some 1)
+  let temporary ← reserveStorage
+  let ty := Ty.int .u8
+  let source ← openDestination temporary { capability with logicalType := ty,layout := ty }
+    (.fixed 1) (some 1)
+  writeElement source (bytes [42])
+  finishDestination source
+  recordCopy (.repeat source) parent
+  writeElement parent (bytes [42])
+  retireRepeatedSource parent source
+  if reuse then recordCopy (.repeat source) parent
+#guard observe (retiredRepeat false) == some ([42],0,
+  [.begin 0,.begin 1,.write 1 0,.copy (.repeat 1) 0,.write 0 0])
+#guard match retiredRepeat true ConstructionState.initial with
+  | .fault .protocol state =>
+      (state.storage[1]?.map (·.bytes.size)) == some 0 &&
+      (state.destinations[1]?.map (·.progress)) == some .retired &&
+      (state.destinations[0]?.map (·.progress)) == some (.open 1)
+  | _ => false
+
 end Goose.Construct.DestinationChecks
