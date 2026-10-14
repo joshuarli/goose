@@ -643,4 +643,147 @@ theorem validated_operand_avoiding_path {m : Goose.GIR.Module} {fn : Func}
       rw [dominators_predWalk_sound walk] at mask
       contradiction
 
+theorem ControlStep.write_location {fn : Func} {before after : Pt} {value : ValueId}
+    (step : ControlStep fn before after) (written : value ∈ stepWrites fn before after) :
+    (value, (after.1, (after.2 : Int) - 1)) ∈ fn.definitionLocations := by
+  cases step with
+  | definition instruction =>
+    simp only [stepWrites, instruction, List.mem_singleton] at written
+    subst value
+    have offset : ((before.2 + 1 : Nat) : Int) - 1 = (before.2 : Int) := by omega
+    simp only [offset]
+    exact definitionLocation_mem instruction
+  | effect instruction => simp [stepWrites, instruction] at written
+  | @branch term target instruction successor =>
+    simp only [stepWrites, instruction] at written
+    cases found : fn.blocks[target]? with
+    | none => simp [found] at written
+    | some block =>
+      simp only [found, Option.map_some, Option.getD_some] at written
+      simpa using parameterLocation_mem found written
+
+theorem validated_write_endpoints_unique {m : Goose.GIR.Module} {fn : Func} {value : ValueId}
+    {leftBefore leftAfter rightBefore rightAfter : Pt}
+    (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (leftStep : ControlStep fn leftBefore leftAfter) (leftWrite : value ∈ stepWrites fn leftBefore leftAfter)
+    (rightStep : ControlStep fn rightBefore rightAfter) (rightWrite : value ∈ stepWrites fn rightBefore rightAfter) :
+    leftAfter = rightAfter := by
+  have equal := validated_definition_locations_unique valid member
+    (leftStep.write_location leftWrite) (rightStep.write_location rightWrite)
+  apply Prod.ext
+  · exact congrArg (fun row : Nat × Int => row.1) equal
+  · have indices := congrArg (fun row : Nat × Int => row.2) equal
+    omega
+
+theorem validated_definition_write_source {m : Goose.GIR.Module} {fn : Func} {value : ValueId}
+    {operation : Op} {definitionPt before after : Pt}
+    (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (definition : instAt fn definitionPt = some (.def value operation))
+    (step : ControlStep fn before after) (written : value ∈ stepWrites fn before after) : before = definitionPt := by
+  cases step with
+  | definition instruction =>
+    simp only [stepWrites, instruction, List.mem_singleton] at written
+    subst value
+    exact validated_instAt_def_unique valid member instruction definition
+  | effect instruction => simp [stepWrites, instruction] at written
+  | @branch term target instruction successor =>
+    have sampleStep : ControlStep fn definitionPt (definitionPt.1, definitionPt.2 + 1) := .definition definition
+    have sampleWrite : value ∈ stepWrites fn definitionPt (definitionPt.1, definitionPt.2 + 1) := by
+      simp [stepWrites, definition]
+    have equal := validated_write_endpoints_unique valid member sampleStep sampleWrite
+      (.branch instruction successor) written
+    have indices := congrArg Prod.snd equal
+    omega
+
+theorem ControlPath.avoid_to_definition {fn : Func} {value : ValueId} {first definitionPt : Pt}
+    (path : ControlPath fn [] first definitionPt)
+    (source : ∀ {before after}, ControlStep fn before after →
+      value ∈ stepWrites fn before after → before = definitionPt) :
+    ControlPath fn [value] first definitionPt := by
+  induction path with
+  | refl => exact .refl
+  | @next first middle last step unwritten suffix ih =>
+    by_cases written : value ∈ stepWrites fn first middle
+    · have equal := source step written
+      subst first
+      exact .refl
+    · exact .next step (by intro id member; simpa using (List.mem_singleton.mp member) ▸ written) (ih source)
+
+theorem ControlPath.find_write_prefix {fn : Func} {ids : List ValueId} {value : ValueId} {first last : Pt}
+    (path : ControlPath fn ids first last) :
+    ControlPath fn [value] first last ∨
+      ∃ before after, ControlPath fn ids first after ∧ ControlStep fn before after ∧
+        value ∈ stepWrites fn before after := by
+  induction path with
+  | refl => exact Or.inl .refl
+  | @next first middle last step unwritten suffix ih =>
+    by_cases written : value ∈ stepWrites fn first middle
+    · exact Or.inr ⟨first, middle, .next step unwritten .refl, step, written⟩
+    · rcases ih with avoided | ⟨before, after, prior, foundStep, foundWrite⟩
+      · exact Or.inl (.next step (by intro id member; simpa using (List.mem_singleton.mp member) ▸ written) avoided)
+      · exact Or.inr ⟨before, after, .next step unwritten prior, foundStep, foundWrite⟩
+
+theorem validated_entry_parameter_unwritten {m : Goose.GIR.Module} {fn : Func} {value : ValueId}
+    {before after : Pt} (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (parameter : EntryParameter fn value) (step : ControlStep fn before after) :
+    value ∉ stepWrites fn before after := by
+  intro written
+  obtain ⟨body, found, param⟩ := parameter
+  have equal := validated_definition_locations_unique valid member
+    (step.write_location written) (parameterLocation_mem found param)
+  have blockEqual := congrArg (fun row : Nat × Int => row.1) equal
+  have indexEqual := congrArg (fun row : Nat × Int => row.2) equal
+  cases step with
+  | definition instruction => dsimp only at indexEqual; omega
+  | effect instruction => simp [stepWrites, instruction] at written
+  | @branch term target instruction successor =>
+    dsimp only at blockEqual
+    subst target
+    have targetBound := (Array.getElem?_eq_some_iff.mp found).1
+    have predecessor := predecessors_instAt instruction targetBound successor
+    rw [validated_entry_predecessors valid member] at predecessor
+    simp at predecessor
+
+theorem validated_comparison_operand_unwritten {m : Goose.GIR.Module} {fn : Func}
+    {condition operand : ValueId} {comparison : Op} {samplePt before after branchPt : Pt}
+    {yes no : BlockId} {yesArgs noArgs : List ValueId}
+    (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (found : fn.defOp? condition = some comparison)
+    (sample : instAt fn samplePt = some (.def condition comparison))
+    (entryPath : ControlPath fn [] (0, 0) samplePt)
+    (operandUse : operand ∈ comparison.uses)
+    (step : ControlStep fn before after)
+    (suffix : ControlPath fn [condition] after branchPt)
+    (branch : instAt fn branchPt = some (.term (.condbr condition yes yesArgs no noArgs))) :
+    operand ∉ stepWrites fn before after := by
+  intro written
+  have entryAvoids := entryPath.avoid_to_definition (validated_definition_write_source valid member sample)
+  rcases entryAvoids.find_write_prefix (value := operand) with operandAvoids |
+      ⟨writeBefore, writeAfter, prior, writeStep, writeValue⟩
+  · have parameter := validated_operand_avoiding_path valid member sample operandUse operandAvoids
+    exact validated_entry_parameter_unwritten valid member parameter step written
+  · have equal := validated_write_endpoints_unique valid member writeStep writeValue step written
+    rw [equal] at prior
+    have entryBranch := prior.trans suffix
+    have parameter := validated_operand_avoiding_path valid member branch (by simp [Inst.uses, Term.uses]) entryBranch
+    obtain ⟨body, bodyFound, parameterMem⟩ := parameter
+    exact validated_defOp_not_param valid member found body (Array.mem_of_getElem? bodyFound) parameterMem
+
+theorem validated_cmp_operands_unwritten {m : Goose.GIR.Module} {fn : Func}
+    {condition i n : ValueId} {samplePt before after branchPt : Pt}
+    {yes no : BlockId} {yesArgs noArgs : List ValueId}
+    (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (found : fn.defOp? condition = some (.cmp .lt .i64 i n))
+    (sample : instAt fn samplePt = some (.def condition (.cmp .lt .i64 i n)))
+    (entryPath : ControlPath fn [] (0, 0) samplePt)
+    (step : ControlStep fn before after)
+    (suffix : ControlPath fn [condition] after branchPt)
+    (branch : instAt fn branchPt = some (.term (.condbr condition yes yesArgs no noArgs))) :
+    i ∉ stepWrites fn before after ∧ n ∉ stepWrites fn before after := by
+  constructor
+  · exact validated_comparison_operand_unwritten valid member found sample entryPath
+      (by simp [Op.uses]) step suffix branch
+  · exact validated_comparison_operand_unwritten valid member found sample entryPath
+      (by simp [Op.uses]) step suffix branch
+
 end Goose.Evidence
