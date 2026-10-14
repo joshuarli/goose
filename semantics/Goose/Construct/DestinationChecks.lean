@@ -445,4 +445,180 @@ private def retiredRepeat (reuse : Bool) : ConstructionM Unit := do
       (state.destinations[0]?.map (·.progress)) == some (.open 1)
   | _ => false
 
+
+private def adaptedPackedProducer : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 2)
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+  writeElement destination (bytes [10])
+  writeElement destination (bytes [20])
+  finishDestination destination
+  finishConstructionAdaptation destination
+  publishOperation [destination]
+
+#guard observe adaptedPackedProducer == some ([10,20], 2,
+  [.begin 0,.write 0 0,.write 0 1,.relocate 0 .headerRemoval,.publish 0])
+
+private def adaptedElementProducer : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let receiver := { capability with layout := Ty.varr (.int .u8), logicalType := Ty.varr (.int .u8) }
+  let destination ← openDestination storage receiver .packed (some 2)
+  adaptConstructionDestination destination (.grow (.int .u8)) .elementRun
+  writeElement destination (bytes [30])
+  writeElement destination (bytes [40])
+  finishDestination destination
+  finishConstructionAdaptation destination
+  publishOperation [destination]
+
+#guard observe adaptedElementProducer == some ([2,0,0,0,30,40], 2,
+  [.begin 0,.write 0 0,.write 0 1,.publish 0])
+
+private def cancelledAdaptation : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 1)
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+  writeElement destination (bytes [10])
+  abandonTree destination
+  acknowledgeAbandonment destination
+  finishConstructionAdaptation destination
+
+#guard observe cancelledAdaptation == some ([],0,[.begin 0,.write 0 0,.abandon 0])
+
+private def adaptedReplacement : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 1)
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+  writeElement destination (bytes [10])
+  let replacement ← openExitReplacement destination
+  writeElement replacement (bytes [20])
+  finishDestination replacement
+  abandonPreservingExit destination replacement
+  landExitReplacement replacement
+  finishConstructionAdaptation replacement
+  publishOperation [replacement]
+
+#guard observe adaptedReplacement == some ([20],1,
+  [.begin 0,.write 0 0,.begin 1,.write 1 0,.abandon 0,
+    .relocate 1 .exitValue,.relocate 1 .headerRemoval,.publish 1])
+
+
+
+private def adaptAfterWrite : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 1)
+  writeElement destination (bytes [10])
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+
+#guard match adaptAfterWrite ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0,.write 0 0]
+  | _ => false
+
+private def adaptTwice : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 1)
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+
+#guard match adaptTwice ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0] &&
+      state.storage[0]?.map (fun storage => storage.bytes.size) == some 4
+  | _ => false
+
+private def adaptWrongElement : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 1)
+  adaptConstructionDestination destination (.varr (.int .u16)) .value
+
+#guard match adaptWrongElement ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0] &&
+      state.storage[0]?.map (fun storage => storage.bytes.size) == some 0
+  | _ => false
+
+private def publishPendingAdaptation : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 1)
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+  writeElement destination (bytes [10])
+  finishDestination destination
+  publishOperation [destination]
+
+#guard match publishPendingAdaptation ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0,.write 0 0] &&
+      state.storage[0]?.map (·.publishedCount) == some 0
+  | _ => false
+
+private def limitedAdaptation (knownCount : Option Nat) : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let receiver := { capability with
+    layout := Ty.limited (.int .u8) 2
+    logicalType := Ty.limited (.int .u8) 2 }
+  let destination ← openDestination storage receiver (.limited 2 1) knownCount
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+  writeElement destination (bytes [10])
+  writeElement destination (bytes [20])
+  writeElement destination (bytes [30])
+  finishDestination destination
+  finishConstructionAdaptation destination
+  fitStagedDestination destination
+
+#guard match limitedAdaptation (some 2) ConstructionState.initial with
+  | .fault .capacity state => state.events == [.begin 0,.write 0 0,.write 0 1] &&
+      state.storage[0]?.map (fun storage => storage.bytes.data.toList.map UInt8.toNat) ==
+        some [0,0,0,0,10,20]
+  | _ => false
+
+#guard match limitedAdaptation none ConstructionState.initial with
+  | .fault .capacity state => state.events ==
+      [.begin 0,.stage 0,.write 0 0,.write 0 1,.write 0 2,.relocate 0 .headerRemoval] &&
+      state.storage[0]?.map (fun storage => storage.bytes.size) == some 0 &&
+      state.storage[1]?.map (fun storage => storage.bytes.data.toList.map UInt8.toNat) == some [10,20,30]
+  | _ => false
+
+#guard match cancelledAdaptation ConstructionState.initial with
+  | .ok _ state => match state.destinations[0]? with
+      | some destination => destination.adaptation.isNone &&
+          destination.capability.logicalType == Ty.grow (.int .u8) &&
+          destination.capability.request == ConstructionRequest.value && destination.layout == ReceivingLayout.elements
+      | none => false
+  | _ => false
+
+
+
+private def producerPayload : ConstructionM (Nat × Option Nat × List Nat) := do
+  let storage ← reserveStorage
+  let receiver := { capability with layout := Ty.varr (.int .u8), logicalType := Ty.varr (.int .u8) }
+  let destination ← openDestination storage receiver .packed (some 2)
+  adaptConstructionDestination destination (.grow (.int .u8)) .value
+  writeElement destination (bytes [30])
+  writeElement destination (bytes [40])
+  finishDestination destination
+  let state ← ConstructionM.get
+  let some pending := state.destinations[destination]? | ConstructionM.fail .destination
+  let some storage := state.storage[storage]? | ConstructionM.fail .storage
+  pure (pending.capability.start, pending.adaptation.map (·.start),
+    (storage.bytes.extract pending.capability.start pending.writeEnd).data.toList.map UInt8.toNat)
+
+#guard match producerPayload ConstructionState.initial with
+  | .ok payload _ => payload == (4,some 0,[30,40])
+  | _ => false
+
+private def retainedHeaderReplacement : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let receiver := { capability with layout := Ty.varr (.int .u8), logicalType := Ty.varr (.int .u8) }
+  let destination ← openDestination storage receiver .packed (some 1)
+  adaptConstructionDestination destination (.grow (.int .u8)) .value
+  writeElement destination (bytes [30])
+  let replacement ← openExitReplacement destination
+  writeElement replacement (bytes [40])
+  writeElement replacement (bytes [50])
+  finishDestination replacement
+  abandonPreservingExit destination replacement
+  landExitReplacement replacement
+  finishConstructionAdaptation replacement
+  publishOperation [replacement]
+
+#guard observe retainedHeaderReplacement == some ([2,0,0,0,40,50],2,
+  [.begin 0,.write 0 0,.begin 1,.write 1 0,.write 1 1,.abandon 0,.relocate 1 .exitValue,.publish 1])
+
+
 end Goose.Construct.DestinationChecks
