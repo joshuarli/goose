@@ -1167,9 +1167,15 @@ private def checkChannelOwners (m : Module) (functionId : FnId) (f : Func) : Che
             violation .v060 "constructed argument lacks associated parameter receiving storage"
       | .def _ (.destAbandonNamed slot replacement _) =>
           let some position := f.results.findIdx? (·.namedLocal == some slot) | violation .v060 "named abandonment alias missing"
-          requireOwner replacement (.result position)
-          unless sourceOp f.numValues replacement (fun op => op matches .resultExitDest ..) do
-            violation .v060 "named replacement does not originate at this activation result exit destination"
+          let exactTarget : Bool := match owners replacement with
+            | [.target target result] => result == position && (m.targets[target]?).any (fun target => target.contains functionId)
+            | _ => false
+          unless exactTarget do
+            requireOwner replacement (.result position)
+            unless sourceOp f.numValues replacement (fun op => match op with
+              | .resultExitDest result _ => result == position
+              | _ => false) do
+              violation .v060 "named replacement does not originate at this activation result exit destination"
       | .def _ (.destRelocate id reason _) =>
           match reason with
           | .headerRemoval =>

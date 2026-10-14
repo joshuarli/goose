@@ -1083,3 +1083,42 @@ private def publishElementRunReference : Module :=
 #guard (match Validate.validate publishElementRunReference with | .error v => v.code == .v010 | _ => false)
 
 end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def helperLocalExitCopy : Module :=
+  let original := targeted
+  let helper := { original.funcs[2] with slots := #[⟨byteTy,.mutable,0,0⟩], blocks := #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) byteTy .value none (some 0)),
+    .eff (.destBytes 0 [65,0] (some 0)),.def 1 (.destFinish 0 (some 0)),.eff (.destPublish 1 (some 0)),
+    .def 2 (.slotAddr 0),.def 3 (.targetDest 0 0 (some 0)),.eff (.destCopy 3 2 (some 0)),
+    .def 4 (.destFinish 3 (some 0)),.eff (.leave 0),.term (.escape 0 [4] [] (some 0))]⟩] }
+  { original with funcs := #[original.funcs[0],original.funcs[1],helper] }
+
+#guard (Validate.validate helperLocalExitCopy).isOk
+#guard observation helperLocalExitCopy == some ([65,0,10],
+  [.begin 0,.begin 1,.write 1 0,.write 1 1,.publish 1,.begin 2,
+    .copy (.storage 1 []) 2,.write 2 0,.write 2 1,.abandon 0,.relocate 2 .exitValue,.publish 2])
+#guard roundTrip helperLocalExitCopy
+
+private def helperLocalNamedExitCopy : Module :=
+  let original := helperLocalExitCopy
+  let producer := { original.funcs[1] with
+    slots := #[⟨byteTy,.mutable,0,0⟩], results := [⟨byteTy,.value,some 0⟩], blocks := #[
+    ⟨[(0,.dest byteTy .value)],[.eff (.enter 0),.eff (.destBytes 0 [79] (some 0)),
+      .def 1 (.destFinish 0 (some 0)),.eff (.destBind 0 1 (some 0)),
+      .term (.invoke 2 [] [] 1 [] [⟨0,2,[]⟩] (some 0))]⟩,
+    ⟨[],[.def 2 (.destNamed 0 (some 0)),.def 3 (.destAbandon 2 (some 0)),
+      .eff (.destCancel 3 (some 0)),.eff (.leave 0),.term (.abort .userAbort (some 0))]⟩,
+    ⟨[(4,.built byteTy .value)],[.def 5 (.destAbandonNamed 0 4 (some 0)),
+      .eff (.destCancel 5 (some 0)),.def 6 (.destRelocate 4 .exitValue (some 0)),
+      .eff (.leave 0),.term (.ret [6] (some 0))]⟩] }
+  { original with funcs := #[original.funcs[0],producer,original.funcs[2]] }
+
+#guard (Validate.validate helperLocalNamedExitCopy).isOk
+#guard observation helperLocalNamedExitCopy == some ([65,0,10],
+  [.begin 0,.write 0 0,.begin 1,.write 1 0,.write 1 1,.publish 1,.begin 2,
+    .copy (.storage 2 []) 2,.write 2 0,.write 2 1,.abandon 0,.relocate 2 .exitValue,.publish 2])
+#guard roundTrip helperLocalNamedExitCopy
+
+end Goose.Construct.GIR.Checks
