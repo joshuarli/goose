@@ -192,9 +192,12 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       require (mutability == .readOnly || writable) .mut "mutable slice of read-only view"
       pure [.slice mutability element]
   | fuel + 1, env, .len view => do let _ ← typeView fuel env view; pure [.int .i64]
-  | fuel + 1, env, .un _ expression _ => do
+  | fuel + 1, env, .un op expression _ => do
       let ty ← one (← typeExpr fuel (ordinary env) expression)
       expectInt ty
+      match op, ty with
+      | .neg, .int integer => require integer.signed .type "unsigned integer negation is not allowed"
+      | _, _ => pure ()
       pure [ty]
   | fuel + 1, env, .bin _ left right _ => do
       let a ← one (← typeExpr fuel (ordinary env) left)
@@ -202,20 +205,32 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       expectInt a
       require (a == b) .type "binary operand type mismatch"
       pure [a]
-  | fuel + 1, env, .cmp _ left right => do
+  | fuel + 1, env, .cmp op left right => do
       let a ← one (← typeExpr fuel (ordinary env) left)
       let b ← one (← typeExpr fuel (ordinary env) right)
-      expectInt a
-      require (a == b) .type "comparison operand type mismatch"
+      match a, b with
+      | .int _, .int _ => require (a == b) .type "comparison operand type mismatch"
+      | .bool, .bool => match op with
+        | .eq | .ne => pure ()
+        | _ => fail .type "booleans support equality comparison only"
+      | _, _ => fail .type "unsupported comparison operands"
       pure [.bool]
   | fuel + 1, env, .and left right | fuel + 1, env, .or left right => do
       expectBool (← one (← typeExpr fuel (ordinary env) left))
       expectBool (← one (← typeExpr fuel (ordinary env) right))
       pure [.bool]
   | fuel + 1, env, .not expression => do expectBool (← one (← typeExpr fuel (ordinary env) expression)); pure [.bool]
-  | fuel + 1, env, .conv _ target expression _ => do
+  | fuel + 1, env, .conv kind target expression _ => do
+      let source ← one (← typeExpr fuel (ordinary env) expression)
       expectInt target
-      expectInt (← one (← typeExpr fuel (ordinary env) expression))
+      expectInt source
+      match kind with
+      | .widen => match source, target with
+        | .int fromType, .int toType =>
+            require (decide (toType.minVal ≤ fromType.minVal ∧ fromType.maxVal ≤ toType.maxVal))
+              .type "widening conversion does not preserve the source range"
+        | _, _ => fail .type "widening requires integer types"
+      | .as | .asUnchecked => pure ()
       pure [target]
   | fuel + 1, env, .call contextId arguments _ => do
       let some context := env.module.contexts[contextId]? | fail .call "call context outside table"
@@ -237,7 +252,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       require (ty.growing && (writable)) .mut "push requires writable growing array"
       let some element := ty.element? | fail .type "push array element missing"
       require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo element) .type "pushed element type mismatch"
-      pure [.int .i64]
+      pure [.ref .mutable element]
   | fuel + 1, env, .pop owner _ => do
       let (ty, _, writable) ← typePlace fuel env owner
       require (writable && match ty with | .growshrink _ | .limited _ _ => true | _ => false)

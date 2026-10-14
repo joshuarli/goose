@@ -53,4 +53,11 @@ private def statementRejects (statement : Stmt) (rule : Rule) : Bool :=
 #guard !(Ty.arr (.int .u8) 1).adaptsTo (.arr (.int .u8) 2)
 #guard !(Ty.arr (.int .u8) 1).adaptsTo (.arr (.int .i8) 1)
 
+#guard expressionAccepts (.push (.var 0) (.lit .u8 2)) [.ref .mutable (.int .u8)]
+#guard expressionAccepts (.cmp .eq (.bool true) (.bool false)) [.bool]
+#guard !expressionAccepts (.cmp .lt (.bool true) (.bool false)) [.bool]
+#guard !expressionAccepts (.un .neg (.lit .u8 2) 0) [.int .u8]
+#guard !expressionAccepts (.conv .widen (.int .i8) (.lit .i64 2) 0) [.int .i8]
+#guard expressionAccepts (.conv .widen (.int .i64) (.lit .i8 2) 0) [.int .i64]
+
 end Goose.Construct.TypingChecks
