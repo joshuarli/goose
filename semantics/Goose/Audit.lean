@@ -13,6 +13,12 @@ import Goose.Proofs.Bounds
 import Goose.Proofs.Memory
 import Goose.Proofs.Core
 import Goose.Proofs.Safety
+import Goose.Lower.Bindings
+import Goose.Lower.Lifetime
+import Goose.Lower.Unwind
+import Goose.Evidence.Provenance
+import Goose.Evidence.SSA
+import Goose.Evidence.Simulation
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -23,7 +29,33 @@ axioms are all in `allowedAxioms`. It is an allowlist because `bv_decide` and
 `sorryAx`; none of those can be named in a denylist.
 
 Each `#audit` also defines a constant under `Goose.Audit.entry`, and
-`#audit_registry` collects those constants into `Goose.Audit.registry` so the
+`#audit Goose.Lower.stmt_range_sim
+#audit Goose.Lower.tyStmt_range_scope
+#audit Goose.Lower.tyStmt_range_children
+#audit Goose.Lower.stmt_range_sim_of_typed
+#audit Goose.Lower.RetainedOperandsAt.retained
+#audit Goose.Lower.Rel.demanded_slot_read
+#audit Goose.Lower.RunAliasAt.read_safe
+#audit Goose.Lower.leaveAll_sim
+#audit Goose.Lower.leaveTo_sim
+#audit Goose.Lower.releaseScopes_repeat_subset
+#audit Goose.Evidence.RuntimePoint.cell_source
+#audit Goose.Evidence.RuntimePoint.def_cell_sample
+#audit Goose.Evidence.RuntimeStepsAvoid.protect
+#audit Goose.Evidence.validated_cmp_operand_types
+#audit Goose.Evidence.validated_cmp_distinct
+#audit Goose.GIR.validated_definitions_nodup
+#audit Goose.GIR.validated_defOp_not_param
+#audit Goose.GIR.validated_instAt_defOp_eq
+#audit Goose.Proofs.Bounds.transfer_def_sound
+#audit Goose.Proofs.Bounds.transfer_effect_sound
+#audit Goose.Proofs.Bounds.cmp_true_facts
+#audit Goose.Proofs.Bounds.reachable_facts
+#audit Goose.Proofs.Bounds.reachable_index
+#audit Goose.Proofs.Bounds.checked_runModule
+#audit Goose.Proofs.Bounds.checked_run
+
+#audit_registry` collects those constants into `Goose.Audit.registry` so the
 `goose-semantics audit` executable can print what was audited. A theorem that
 is not named by `#audit` is not audited.
 -/
