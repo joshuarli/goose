@@ -612,7 +612,7 @@ theorem RuntimeStepsAvoid.frame_identity {cfg : GCfg} {fn : Func} {ids : List Va
     exact ⟨ih.1.trans identity.1, ih.2.trans identity.2⟩
 
 theorem RuntimePoint.call_of_execOp_success {cfg : GCfg} {caller : Func} {pt : Pt}
-    {fr : Frame} {st final : St} {result callee : ValueId} {args : List ValueId}
+    {fr : Frame} {st final : St} {result : ValueId} {callee : FnId} {args : List ValueId}
     {origin : Option OriginId} {fuel : Nat} {value : RVal}
     (point : RuntimePoint cfg caller pt fr st)
     (instruction : instAt caller pt = some (.def result (.call callee args origin)))
