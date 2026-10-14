@@ -343,4 +343,56 @@ theorem runtime_activation_catches (layout : LayoutEnv) (activation : RuntimeAct
     finishActivation layout activation resultTypes origin action state = .ok carriers landed := by
   simp [finishActivation, escaped, completed]
 
+
+def runtimeDropActivations (discarded : List RuntimeActivation) (state : ExecutionState) : ExecutionState :=
+  discarded.foldl (fun current activation => { current with
+    activations := current.activations.filter (fun active => active.act != activation.act) }) state
+
+def runtimeDiscardHandlers (layout : LayoutEnv) (results : ImplId → List Goose.Construct.Ty)
+    (origin : OriginId) : List RuntimeActivation → EvalM (List Goose.Construct.Carrier) → EvalM (List Goose.Construct.Carrier)
+  | [], action => action
+  | activation :: rest, action =>
+      runtimeDiscardHandlers layout results origin rest
+        (finishActivation layout activation (results activation.implementation) origin action)
+
+theorem runtime_discard_handlers_escape (layout : LayoutEnv) (results : ImplId → List Goose.Construct.Ty)
+    (origin : OriginId) (discarded : List RuntimeActivation)
+    (action : EvalM (List Goose.Construct.Carrier)) (state afterOperands : ExecutionState)
+    (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape target carriers afterOperands)
+    (other : ∀ activation ∈ discarded, target ≠ activation.act) :
+    runtimeDiscardHandlers layout results origin discarded action state =
+      .escape target carriers (runtimeDropActivations discarded afterOperands) := by
+  induction discarded generalizing action afterOperands with
+  | nil => exact escaped
+  | cons activation rest ih =>
+      apply ih _ _
+      · exact runtime_activation_propagates layout activation (results activation.implementation) origin action
+          state afterOperands target carriers escaped (other activation (by simp))
+      · intro frame member; exact other frame (by simp [member])
+
+theorem runtime_nearest_activation_dispatch (layout : LayoutEnv) (results : ImplId → List Goose.Construct.Ty)
+    (origin : OriginId) (target : NonlocalTarget) (stack : List RuntimeActivation) (catcher : RuntimeActivation)
+    (distinct : (stack.map (·.act)).Nodup) (selected : selectTarget? target stack = some catcher)
+    (action : EvalM (List Goose.Construct.Carrier)) (state afterOperands : ExecutionState)
+    (carriers : List Goose.Construct.Carrier) (escaped : action state = .escape catcher.act carriers afterOperands) :
+    ∃ discarded outer, stack = discarded ++ catcher :: outer ∧
+      target.contains catcher.implementation = true ∧
+      (∀ activation ∈ discarded, target.contains activation.implementation = false) ∧
+      finishActivation layout catcher (results catcher.implementation) origin
+        (runtimeDiscardHandlers layout results origin discarded action) state =
+      finishActivation layout catcher (results catcher.implementation) origin
+        (fun _ => .escape catcher.act carriers (runtimeDropActivations discarded afterOperands)) state := by
+  obtain ⟨discarded, outer, shape, member, excluded⟩ := runtime_select_nearest target stack catcher selected
+  have different : ∀ activation ∈ discarded, catcher.act ≠ activation.act := by
+    intro activation inDiscarded
+    have separated : (discarded.map (·.act) ++ (catcher :: outer).map (·.act)).Nodup := by
+      simpa [shape] using distinct
+    exact ((List.nodup_append.mp separated).2.2 activation.act (List.mem_map.mpr ⟨activation,inDiscarded,rfl⟩)
+      catcher.act (by simp)).symm
+  refine ⟨discarded, outer, shape, member, excluded, ?_⟩
+  have forwarded := runtime_discard_handlers_escape layout results origin discarded action state afterOperands
+    catcher.act carriers escaped different
+  simp only [finishActivation, forwarded]
+
 end Goose.Proofs.Exit
