@@ -148,9 +148,9 @@ private def targetResults (env : TypingEnv) (id : Nat) : TypingM (List ResultDes
   let some implementation := env.module.impls[target.first]? | fail .call "target member outside table"
   pure implementation.results.toList
 
-private def expectBool (ty : Ty) : TypingM Unit := require (ty == .bool) .type "boolean required"
+private def requireBoolType (ty : Ty) : TypingM Unit := require (ty == .bool) .type "boolean required"
 
-private def expectInt (ty : Ty) : TypingM Unit :=
+private def requireIntType (ty : Ty) : TypingM Unit :=
   match ty with | .int _ => pure () | _ => fail .type "integer required"
 
 private def canRender (ty : Ty) : Bool := ty.storable
@@ -178,7 +178,7 @@ def typePlace : Nat → TypingEnv → Place → TypingM (Ty × Bool × Bool)
       | _ => fail .type "dereference requires reference"
   | fuel + 1, env, .elem view index _ => do
       let (element, writable) ← typeView fuel env view
-      expectInt (← one (← typeExpr fuel (ordinary env) index))
+      requireIntType (← one (← typeExpr fuel (ordinary env) index))
       pure (element, writable, writable)
   | fuel + 1, env, .field owner index => do
       let (ty, _, writable) ← typePlace fuel env owner
@@ -205,7 +205,7 @@ def typeView : Nat → TypingEnv → View → TypingM (Ty × Bool)
 def typeBound : Nat → TypingEnv → Bound → TypingM Unit
   | 0, _, _ => fail .type "validation nesting limit"
   | _fuel + 1, _env, .omitted => pure ()
-  | fuel + 1, env, .expr expression | fuel + 1, env, .fromEnd expression => do expectInt (← one (← typeExpr fuel (ordinary env) expression))
+  | fuel + 1, env, .expr expression | fuel + 1, env, .fromEnd expression => do requireIntType (← one (← typeExpr fuel (ordinary env) expression))
 
 def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
   | 0, _, _ => fail .type "validation nesting limit"
@@ -231,7 +231,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
   | fuel + 1, env, .len view => do let _ ← typeView fuel env view; pure [.int .i64]
   | fuel + 1, env, .un op expression _ => do
       let ty ← one (← typeExpr fuel (ordinary env) expression)
-      expectInt ty
+      requireIntType ty
       match op, ty with
       | .neg, .int integer => require integer.signed .type "unsigned integer negation is not allowed"
       | _, _ => pure ()
@@ -239,7 +239,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
   | fuel + 1, env, .bin _ left right _ => do
       let a ← one (← typeExpr fuel (ordinary env) left)
       let b ← one (← typeExpr fuel (ordinary env) right)
-      expectInt a
+      requireIntType a
       require (a == b) .type "binary operand type mismatch"
       pure [a]
   | fuel + 1, env, .cmp op left right => do
@@ -253,14 +253,14 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       | _, _ => fail .type "unsupported comparison operands"
       pure [.bool]
   | fuel + 1, env, .and left right | fuel + 1, env, .or left right => do
-      expectBool (← one (← typeExpr fuel (ordinary env) left))
-      expectBool (← one (← typeExpr fuel (ordinary env) right))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) left))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) right))
       pure [.bool]
-  | fuel + 1, env, .not expression => do expectBool (← one (← typeExpr fuel (ordinary env) expression)); pure [.bool]
+  | fuel + 1, env, .not expression => do requireBoolType (← one (← typeExpr fuel (ordinary env) expression)); pure [.bool]
   | fuel + 1, env, .conv kind target expression _ => do
       let source ← one (← typeExpr fuel (ordinary env) expression)
-      expectInt target
-      expectInt source
+      requireIntType target
+      requireIntType source
       match kind with
       | .widen => match source, target with
         | .int fromType, .int toType =>
@@ -297,7 +297,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       let some element := ty.element? | fail .type "pop array element missing"
       pure [element]
   | fuel + 1, env, .ifE condition left right _ => do
-      expectBool (← one (← typeExpr fuel (ordinary env) condition))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) condition))
       let a ← typeBlock fuel env left
       let b ← typeBlock fuel env right
       if blockEscapes fuel left && blockEscapes fuel right then pure ((env.valueBreakTarget.map (·.types)).getD a)
@@ -488,7 +488,7 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
       pure env
   | fuel + 1, env, .assignOp _ place expression _ => do
       let (ty, writable, _) ← typePlace fuel env place
-      expectInt ty
+      requireIntType ty
       require (writable && (← one (← typeExpr fuel (ordinary env) expression)) == ty) .mut "compound assignment mismatch"
       pure env
   | fuel + 1, env, .rebind id expression _ => do
@@ -525,13 +525,13 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
       pure env
   | fuel + 1, env, .popN owner count _ | fuel + 1, env, .resize owner count none _ => do
       let (ty, _, writable) ← typePlace fuel env owner
-      expectInt (← one (← typeExpr fuel (ordinary env) count))
+      requireIntType (← one (← typeExpr fuel (ordinary env) count))
       require (writable && match ty with | .growshrink _ | .limited _ _ => true | _ => false)
         .mut "shrinking requires writable shrinkable owner"
       pure env
   | fuel + 1, env, .resize owner count (some fill) _ => do
       let (ty, _, writable) ← typePlace fuel env owner
-      expectInt (← one (← typeExpr fuel (ordinary env) count))
+      requireIntType (← one (← typeExpr fuel (ordinary env) count))
       require (ty.growing && (writable) && ty.element? == some (← one (← typeExpr fuel (ordinary env) fill)))
         .mut "resize type or permission mismatch"
       pure env
@@ -541,18 +541,18 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
         .mut "clear requires writable shrinkable owner"
       pure env
   | fuel + 1, env, .ifS condition left right _ => do
-      expectBool (← one (← typeExpr fuel (ordinary env) condition))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) condition))
       let _ ← typeBlock fuel (ordinary env) left
       if let some block := right then let _ ← typeBlock fuel (ordinary env) block
       pure env
   | fuel + 1, env, .while condition body _ => do
-      expectBool (← one (← typeExpr fuel (ordinary env) condition))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) condition))
       let _ ← typeBlock fuel { (ordinary env) with loops := env.loops + 1 } body
       pure env
   | fuel + 1, env, .forRange id low high body _ => do
       let lo ← one (← typeExpr fuel (ordinary env) low)
       let hi ← one (← typeExpr fuel (ordinary env) high)
-      expectInt lo
+      requireIntType lo
       require (lo == hi) .type "range bound type mismatch"
       let loopEnv := { (ordinary env) with scope := body.scope, loops := env.loops + 1 }
       let localVar ← declare loopEnv id
@@ -605,9 +605,9 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
       pure env
   | _fuel + 1, env, .brk _ | _fuel + 1, env, .cont _ => do require (env.loops > 0) .block "loop control outside loop"; pure env
   | fuel + 1, env, .print arguments _ => do typePrint fuel env arguments; pure env
-  | fuel + 1, env, .assertS expression _ => do expectBool (← one (← typeExpr fuel (ordinary env) expression)); pure env
+  | fuel + 1, env, .assertS expression _ => do requireBoolType (← one (← typeExpr fuel (ordinary env) expression)); pure env
   | _fuel + 1, env, .abort .. => pure env
-  | fuel + 1, env, .exit expression _ => do expectInt (← one (← typeExpr fuel (ordinary env) expression)); pure env
+  | fuel + 1, env, .exit expression _ => do requireIntType (← one (← typeExpr fuel (ordinary env) expression)); pure env
 end
 
 end Goose.Construct
