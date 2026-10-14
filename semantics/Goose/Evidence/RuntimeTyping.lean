@@ -202,6 +202,112 @@ theorem execPure_result_typed {cfg : GCfg} {fn : Func} {activations : Activation
     obtain ⟨element, count, rfl, metadata, rfl⟩ := arrFill_metadata typed
     exact pureResult_state frameTyped.1 (execPure_arrFill_typed frameTyped.2.2 metadata evaluated)
 
+theorem execEff_result_typed {cfg : GCfg} {fn : Func} {activations : ActivationTypes}
+    {fr fr' : Frame} {before after : St} {effect : Effect}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (typed : checkEffectTypes { cfg.mod.tyEnv fn with vals := fn.valueTypes cfg.mod } effect = .ok ())
+    (evaluated : execEff fn fr effect before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  cases effect with
+  | slotInit id value origin =>
+    simp only [checkEffectTypes] at typed
+    cases lookup : fn.slots[id]? with
+    | none => simp only [typing_env_slots, lookup] at typed; simp [tyErr] at typed
+    | some slot =>
+      simp only [typing_env_slots, lookup] at typed
+      obtain ⟨valueTy, valueMetadata, typed⟩ := bind_ok typed
+      have same : valueTy = slot.ty := by
+        by_cases same : valueTy = slot.ty
+        · exact same
+        · simp [same, tyErr] at typed
+      subst valueTy
+      exact execEff_slotInit_typed frameTyped lookup (dataTy_of valueMetadata) evaluated
+  | store reference value origin =>
+    simp only [checkEffectTypes] at typed
+    obtain ⟨⟨permission, target⟩, referenceMetadata, typed⟩ := bind_ok typed
+    obtain ⟨valueTy, valueMetadata, typed⟩ := bind_ok typed
+    have same : valueTy = target := by
+      by_cases same : valueTy = target
+      · exact same
+      · simp [same, tyErr] at typed
+    subst valueTy
+    exact execEff_store_typed frameTyped (refTy_metadata referenceMetadata) (dataTy_of valueMetadata) evaluated
+  | append reference view origin =>
+    simp only [checkEffectTypes] at typed
+    obtain ⟨⟨permission, owner⟩, referenceMetadata, typed⟩ := bind_ok typed
+    cases owner with
+    | grow element | growshrink element | limited element capacity =>
+      obtain ⟨⟨viewPermission, viewElement⟩, viewMetadata, typed⟩ := bind_ok typed
+      have same : viewElement = element := by
+        by_cases same : viewElement = element
+        · exact same
+        · simp [same, tyErr] at typed
+      subst viewElement
+      exact execEff_append_typed frameTyped (refTy_metadata referenceMetadata)
+        (viewTy_metadata viewMetadata) rfl evaluated
+    | _ => simp [tyErr] at typed
+  | popN reference count origin =>
+    simp only [checkEffectTypes] at typed
+    obtain ⟨⟨permission, owner⟩, referenceMetadata, typed⟩ := bind_ok typed
+    cases ownerType : owner.ownerElem? with
+    | none => simp [ownerType, tyErr, bind, Except.bind] at typed
+    | some element =>
+      simp only [ownerType, Option.isSome_some, ↓reduceIte] at typed
+      obtain ⟨countTy, countMetadata, result⟩ := bind_ok typed
+      exact execEff_popN_typed frameTyped (refTy_metadata referenceMetadata)
+        (intTy_of countMetadata) ownerType evaluated
+  | resize reference size fill origin =>
+    simp only [checkEffectTypes] at typed
+    obtain ⟨⟨permission, owner⟩, referenceMetadata, typed⟩ := bind_ok typed
+    cases ownerType : owner.ownerElem? with
+    | none => simp [ownerType, tyErr] at typed
+    | some element =>
+      simp only [ownerType] at typed
+      obtain ⟨sizeTy, sizeMetadata, typed⟩ := bind_ok typed
+      have fillMetadata : ∀ id, fill = some id →
+          (fn.valueTypes cfg.mod)[id]? = some (some (.data element)) := by
+        cases fill with
+        | none => intro id impossible; cases impossible
+        | some fillId =>
+          intro id sameId
+          cases sameId
+          obtain ⟨valueTy, valueMetadata, typed⟩ := bind_ok typed
+          have same : valueTy = element := by
+            by_cases same : valueTy = element
+            · exact same
+            · simp [same, tyErr] at typed
+          subst valueTy
+          exact dataTy_of valueMetadata
+      exact execEff_resize_typed frameTyped (refTy_metadata referenceMetadata)
+        (intTy_of sizeMetadata) fillMetadata ownerType evaluated
+  | clear reference origin =>
+    simp only [checkEffectTypes] at typed
+    obtain ⟨⟨permission, owner⟩, referenceMetadata, typed⟩ := bind_ok typed
+    cases ownerType : owner.ownerElem? with
+    | none => simp [ownerType, tyErr] at typed
+    | some element =>
+      exact execEff_clear_typed frameTyped (refTy_metadata referenceMetadata) ownerType evaluated
+  | replace reference value origin =>
+    simp only [checkEffectTypes] at typed
+    obtain ⟨⟨permission, owner⟩, referenceMetadata, typed⟩ := bind_ok typed
+    have valueTypeChecked : ∃ valueTy,
+        ({ cfg.mod.tyEnv fn with vals := fn.valueTypes cfg.mod } : TyEnv).dataTy value = .ok valueTy ∧
+        valueTy = owner := by
+      cases owner with
+      | grow element | growshrink element =>
+        obtain ⟨valueTy, valueMetadata, typed⟩ := bind_ok typed
+        split at typed
+        · rename_i same
+          exact ⟨valueTy, valueMetadata, same⟩
+        · simp [tyErr] at typed
+      | _ => simp [tyErr, bind, Except.bind] at typed
+    obtain ⟨valueTy, valueMetadata, rfl⟩ := valueTypeChecked
+    exact execEff_replace_typed frameTyped (refTy_metadata referenceMetadata)
+      (dataTy_of valueMetadata) evaluated
+  | enter scope => exact execEff_enter_typed frameTyped evaluated
+  | leave scope => exact execEff_leave_typed frameTyped evaluated
+  | print parts origin => exact execEff_print_typed frameTyped evaluated
+
 namespace AggregateReferences
 
 private def initializer : Func :=
