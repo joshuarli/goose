@@ -28,7 +28,7 @@ def source : Module :=
     globals := #[⟨"scalar", .int .i64, .mutable, .lit .i64 7, 0⟩,
       ⟨"array", .arr (.int .i64) 1, .mutable, .arrLit (.arr (.int .i64) 1) [.lit .i64 9], 0⟩],
     impls := #[main, receiver], contexts := #[⟨0, "main", [(0, [.global 0]), (1, [.global 1])], [], []⟩,
-      ⟨1, "receiver", [], [[.global 0]], []⟩], entry := 0, origins := #[⟨0, 1, "readonly"⟩] }
+      ⟨1, "receiver", [], [[.global 0]], []⟩], entry := 0, origins := #[⟨0, 1, "expr"⟩] }
 
 #guard [source, { source with profile := .shrink }].all fun module =>
   match Core.validate module, GIR.validate (lower module) with
