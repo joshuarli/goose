@@ -3,6 +3,8 @@ import Goose.Lower.Claims
 import Goose.Lower.Return
 import Goose.Core.Sound.Invert
 import Goose.Core.Sound.Spec
+import Goose.Lower.LoopFlow
+import Goose.Lower.RuntimeSim
 
 namespace Goose.Lower
 
@@ -197,6 +199,56 @@ theorem regrowOf_some {le : LEnv} {ls : LS} {owner : ValueId} {mu : Mutability} 
   simp only [regrowOf, growOwner, valTy, bind_run, get_apply, pure_run, h]
   cases ty <;> rfl
 
+theorem eachSourceMode_val {le : LEnv} {ls output : LS} {expr : Expr}
+    {owner : Option ValueId} {view : ValueId} (access : AccessEnv)
+    (h : lowerEachSource (.val expr) le ls = ((owner, view), output)) :
+    (regrowOf owner le output).1 = eachSourceRegrows access (.val expr) := by
+  simp only [lowerEachSource, bind_eq] at h
+  obtain ⟨_, _, _, _, _, _, h⟩ := h
+  rw [pure_run] at h
+  have ho := (Prod.mk.inj (Prod.mk.inj h).1).1
+  cases ho
+  rfl
+
+theorem eachSourceMode_global {le : LEnv} {ls output : LS} {g block : Nat}
+    {owner : Option ValueId} {view : ValueId} {ty : Ty} {kind : VarKind}
+    (access : AccessEnv) (global : Core.Global)
+    (hglobal : le.globals[g]? = some (ty, kind))
+    (haccess : access.mod.globals[g]? = some global) (htype : global.ty = ty)
+    (hcur : ls.cur = some block)
+    (h : lowerEachSource (.of (.global g)) le ls = ((owner, view), output)) :
+    (regrowOf owner le output).1 = eachSourceRegrows access (.of (.global g)) := by
+  simp only [lowerEachSource, lowerPlace, bind_eq] at h
+  obtain ⟨r, withOwner, howner, vw, withView, hview, hresult⟩ := h
+  rw [pure_run] at hresult
+  obtain ⟨hpair, rfl⟩ := Prod.mk.inj hresult
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpair
+  have hOp : ∃ mu, (Op.globalAddr g).resultTy (tyEnv le ls) = .ok (.data (.ref mu ty)) := by
+    simp only [Op.resultTy, tyEnv, hglobal]
+    exact ⟨_, rfl⟩
+  obtain ⟨mu, hOp⟩ := hOp
+  have hOwnerRun := howner
+  rw [emitDef_run _ le hcur] at hOwnerRun
+  obtain ⟨hId, hOwnerState⟩ := Prod.mk.inj hOwnerRun
+  have hcurOwner : withOwner.cur = some block := by
+    simpa using (congrArg LS.cur hOwnerState).symm.trans hcur
+  have hOwnerTy : withOwner.vals[r]? = some (some (.data
+      (.ref mu ty))) := by
+    rw [← hId, ← hOwnerState]
+    simp [hOp]
+    rfl
+  have hViewRun := hview
+  rw [emitDef_run _ le hcurOwner] at hViewRun
+  obtain ⟨_, hViewState⟩ := Prod.mk.inj hViewRun
+  have hOwnerBound : r < withOwner.vals.size := (Array.getElem?_eq_some_iff.mp hOwnerTy).1
+  have hOutputTy : withView.vals[r]? = some (some (.data
+      (.ref mu ty))) := by
+    rw [← hViewState]
+    exact (getElem?_push_lt hOwnerBound).trans hOwnerTy
+  rw [regrowOf_some hOutputTy]
+  simp only [eachSourceRegrows, AccessEnv.placeType?, haccess, Option.map_some, htype]
+  cases ty <;> rfl
+
 theorem eachSampled_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
     {ls lsk ls' : LS} {fr frk : Frame} {pt : Pt} {cells : List (ValueId × RVal)}
     {view result : ValueId} {vw : ViewVal}
@@ -206,15 +258,15 @@ theorem eachSampled_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
     (hext : ExtT ls' cx.fn.blocks) :
     SimG cx pt frk (pure ())
       (fun _ pt' fr' => Post cfg env cx ls fr ls' fr' pt'
-        (if regrow then [] else [(result, .val (.int .i64 vw.len))])) := by
+        (if regrow then cells else (result, .val (.int .i64 vw.len)) :: cells)) := by
   cases regrow with
   | true =>
     simp only [eachSampled, ite_true, pure_run] at hlow
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
-    exact SimG.ret (P.sub (by simp))
+    exact SimG.ret P
   | false =>
     simp only [eachSampled, Bool.false_eq_true, ite_false] at hlow
-    exact leaf_def P hlow hext (by simp) (fun _ => .val (.int .i64 vw.len))
+    exact leaf_def_keep P hlow hext (by simp) (fun _ => .val (.int .i64 vw.len))
       (by simpa using execPure_eachSampled hview)
 
 theorem eachElemValue_ref_cases {x : VarId} {elem value : ValueId} {le : LEnv}
@@ -759,6 +811,8 @@ theorem lowerEach_sim (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
       body d xb le input = (result, output) → input.pp = some (tb, 0) →
       rangeBack .i64 counter hb le output = ((), back) → ExtT back cx.fn.blocks →
       ExtT output cx.fn.blocks → counter < input.vals.size → input.stack = ls.stack →
+      d = input.stack.length → ls'.pp = some (xb, 0) →
+      (∃ block, cx.fn.blocks[xb]? = some block ∧ block.params = []) →
       ∀ fuel, fuel < n → EachBodyAt fuel cx cfg env x idx byRef block vw (hb, 0) (tb, 0)
         (EachInv cfg env cx ls counter view sampled owner vw base)
         (EachInv cfg env cx input counter view sampled owner vw base) post) :
@@ -813,9 +867,27 @@ theorem lowerEach_sim (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
   have hstackInput : input.stack = ls.stack := by
     rw [hInput]
     exact hfacts.2.2.2.2.1.trans (aCmp.stack.trans aLen.stack)
+  have hdepth : lsCmp.stack.length = input.stack.length := by
+    rw [hInput]
+    exact congrArg List.length hfacts.2.2.2.2.1.symm
+  have hxbBack : lsBack.blocks[xb]? = some ⟨[], #[]⟩ := by
+    refine (aBody.trans aBack).keep xb ⟨[], #[]⟩ ?_ ?_
+    · rw [hInput]
+      intro he
+      have hb : tb = xb := Option.some.inj he
+      have hids := fork_ids hFork
+      have hpair := hids.1
+      have ht := (Prod.mk.inj hpair).1
+      have hx := (Prod.mk.inj hpair).2
+      nat_omega
+    · rw [hInput]
+      exact hfacts.2.2.2.2.2.2.2.2
+  have hppExit : ls'.pp = some (xb, 0) := by rw [hExit]; exact LS.pp_cur hxbBack
+  obtain ⟨exitBlock, hExitBlock, hExitParams⟩ := hextBack.params hxbBack
   exact each_sim_bounded n cx cfg env x idx byRef block vw (hb, 0) (tb, 0)
     _ _ post hbranch' (hbody lsCmp.stack.length xb input result output lsBack tb hBody hppInput
-      hBack hextBack hextOutput hcounterInput hstackInput)
+      hBack hextBack hextOutput hcounterInput hstackInput hdepth hppExit
+      ⟨exitBlock, hExitBlock, hExitParams⟩)
 
 def eachBodyBuilder (x : VarId) (idx : Option VarId) (byRef : Bool) (block : Core.Block)
     (org : OriginId) (view counter hb : ValueId) (depth : Nat) (exit : BlockId) : B ValueId := do
@@ -857,7 +929,7 @@ theorem lowerEach_normal_sim (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le 
   · intro pt fr hp hv hr
     exact ⟨rfl, hp, hv, hr⟩
   · intro depth exit input result output back tb hbodyLow hppInput hBack hextBack
-      hextOutput hcounterInput hstackInput fuel _ i fr hinv
+      hextOutput hcounterInput hstackInput _ _ _ fuel _ i fr hinv
     unfold eachBodyBuilder at hbodyLow
     simp only [bind_eq] at hbodyLow
     obtain ⟨elem, withElem, hElem, value, withValue, hValue, hBlock⟩ := hbodyLow
