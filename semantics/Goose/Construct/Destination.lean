@@ -43,6 +43,13 @@ def DestinationBacking.writeStorage : DestinationBacking → StorageId
 def DestinationBacking.receiverStorage : DestinationBacking → StorageId
   | .direct storage | .staged storage _ => storage
 
+structure ReceivingAdaptation where
+  logicalType : Ty
+  request : ConstructionRequest
+  layout : ReceivingLayout
+  start : Nat
+  deriving Repr
+
 structure PendingDestination where
   capability : Core.Destination Ty
   backing : DestinationBacking
@@ -52,6 +59,7 @@ structure PendingDestination where
   writeEnd : Nat
   rollbackEnd : Nat
   knownCount : Option Nat
+  adaptation : Option ReceivingAdaptation := none
   deriving Repr
 
 def PendingDestination.storage (destination : PendingDestination) : StorageId :=
@@ -175,7 +183,10 @@ private def available (layout : ReceivingLayout) (storage : ReceivingStorage) (c
 
 private def writingAvailable (destination : PendingDestination) (storage : ReceivingStorage) (count : Nat) : Bool :=
   match destination.backing with
-  | .direct _ => available destination.layout storage count
+  | .direct _ => available destination.layout storage count &&
+      match destination.adaptation with
+      | some receiving => available receiving.layout storage count
+      | none => true
   | .staged _ _ => true
 
 private def active (destination : PendingDestination) : Bool :=
@@ -211,7 +222,7 @@ private def openDestinationWith (policy : StagingPolicy) (storageId : StorageId)
   let capability := { capability with id := id, start := start }
   let writeEnd := start + if hasPrefix layout capability.request then 4 else 0
   let destination : PendingDestination := ⟨capability, backing, layout, .receiver, .open 0, writeEnd,
-    (match layout with | .limited _ _ => storage.bytes.size | _ => start), knownCount⟩
+    (match layout with | .limited _ _ => storage.bytes.size | _ => start), knownCount, none⟩
   ConstructionM.set { state with destinations := state.destinations.push destination }
   if hasPrefix layout capability.request then
     replaceStorage backing.writeStorage { storage with bytes := storage.bytes ++ lengthPrefix }
@@ -248,7 +259,7 @@ def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit :
   | .open count =>
       let storage ← lookupStorage destination.storage
       if !writingAvailable destination storage (count + 1) then ConstructionM.fail .capacity
-      match destination.layout, destination.backing with
+      match (destination.adaptation.map (·.layout)).getD destination.layout, destination.backing with
       | .limited _ slotBytes, _ =>
           if bytes.size != slotBytes then ConstructionM.fail .protocol
       | _, _ => pure ()
@@ -286,7 +297,7 @@ def openChild (parentId : DestinationId) (logicalType : Ty) (layout : ReceivingL
         request := .value, start := parent.writeEnd }
       let child : PendingDestination := ⟨capability, .direct parent.storage, layout, .child parentId, .open 0,
         capability.start + (if hasPrefix layout .value then 4 else 0),
-        (match parent.layout with | .limited _ _ => storage.bytes.size | _ => capability.start), none⟩
+        (match parent.layout with | .limited _ _ => storage.bytes.size | _ => capability.start), none, none⟩
       ConstructionM.set { state with destinations := state.destinations.push child }
       replaceDestination parentId { parent with progress := .suspended count id }
       if hasPrefix layout .value then
@@ -321,6 +332,7 @@ def attachChild (parentId childId : DestinationId) : ConstructionM Unit := do
   let child ← writableDestination childId
   match parent.progress, child.progress, child.use with
   | .suspended count expected, .built childCount, .child owner =>
+      if child.adaptation.isSome then ConstructionM.fail .protocol
       if expected != childId || owner != parentId || child.storage != parent.storage then
         ConstructionM.fail .ownership
       replaceDestination childId { child with progress := .attached childCount }
@@ -332,6 +344,7 @@ private def publicationCheck (state : ConstructionState) (id : DestinationId) : 
   let some destination := state.destinations[id]? | throw .destination
   match destination.progress, destination.use with
   | .built count, .receiver =>
+      if destination.adaptation.isSome then throw .protocol
       let some receiver := state.storage[destination.backing.receiverStorage]? | throw .storage
       if !available destination.layout receiver count then throw .capacity
       if (state.storage[destination.storage]?).isNone then throw .storage
@@ -472,7 +485,7 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   let replacement : PendingDestination :=
     ⟨capability, superseded.backing, superseded.layout, .replacement supersededId, .open 0,
       capability.start + (if hasPrefix superseded.layout superseded.capability.request then 4 else 0),
-      capability.start, none⟩
+      capability.start, none, superseded.adaptation⟩
   ConstructionM.set { state with destinations := state.destinations.push replacement }
   replaceDestination supersededId { superseded with progress := .exiting count id }
   if hasPrefix superseded.layout superseded.capability.request then
@@ -685,7 +698,7 @@ def openExtension (parentId : DestinationId) (request : ConstructionRequest)
     ⟨capability, backing, .elements, .child parentId, .open 0, start,
       (match backing, parent.layout with
       | .direct _, .limited _ _ => storage.bytes.size
-      | _, _ => start), knownCount⟩
+      | _, _ => start), knownCount, none⟩
   ConstructionM.set { state with destinations := state.destinations.push child }
   replaceDestination parentId { parent with progress := .suspended count id }
   emit (.begin id)
@@ -699,6 +712,7 @@ def attachExtension (parentId childId : DestinationId) : ConstructionM Unit := d
   let child ← writableDestination childId
   match parent.progress, child.progress, child.use with
   | .suspended count expected, .built childCount, .child owner =>
+      if child.adaptation.isSome then ConstructionM.fail .protocol
       if expected != childId || owner != parentId || child.backing.receiverStorage != parent.storage ||
           child.layout != .elements then ConstructionM.fail .ownership
       match parent.layout, parent.backing with
@@ -752,7 +766,7 @@ def openElementExtension (parentId : DestinationId) (logicalType : Ty)
     layout := logicalType, logicalType := logicalType, request := .value, start := parent.writeEnd }
   let child : PendingDestination := ⟨capability, .direct parent.storage, layout, .child parentId,
     .open 0, parent.writeEnd + (if hasPrefix layout .value then 4 else 0),
-    (match parent.layout with | .limited _ _ => storage.bytes.size | _ => parent.writeEnd), knownCount⟩
+    (match parent.layout with | .limited _ _ => storage.bytes.size | _ => parent.writeEnd), knownCount, none⟩
   ConstructionM.set { state with destinations := state.destinations.push child }
   replaceDestination parentId { parent with progress := .suspended count id }
   if hasPrefix layout .value then
@@ -765,6 +779,7 @@ def attachElementExtension (parentId childId : DestinationId) : ConstructionM Un
   let child ← writableDestination childId
   match parent.progress, child.progress, child.use, child.backing with
   | .suspended count expected, .built childCount, .child owner, .direct storageId =>
+      if child.adaptation.isSome then ConstructionM.fail .protocol
       if expected != childId || owner != parentId || storageId != parent.storage ||
           child.capability.request != .value ||
           parent.capability.logicalType.element? != some child.capability.logicalType then
@@ -789,6 +804,7 @@ def publishElementDestination (id : DestinationId) : ConstructionM Unit := do
   let destination ← writableDestination id
   match destination.progress, destination.use, destination.backing with
   | .built count, .receiver, .direct storageId =>
+      if destination.adaptation.isSome then ConstructionM.fail .protocol
       if destination.capability.request != .value then ConstructionM.fail .protocol
       let storage ← lookupStorage storageId
       replaceStorage storageId { storage with publishedCount := storage.publishedCount + 1 }
@@ -907,6 +923,78 @@ def restoreReceivingLayout (id : DestinationId) (layout : ReceivingLayout) : Con
     | _, _ => false
   if !agrees then ConstructionM.fail .protocol
   replaceDestination id { destination with layout := layout }
+
+
+def adaptConstructionDestination (id : DestinationId) (producerType : Ty)
+    (request : ConstructionRequest) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  match destination.progress with
+  | .open 0 => pure ()
+  | _ => ConstructionM.fail .protocol
+  if destination.adaptation.isSome || !producerType.storageType ||
+      producerType.element?.isNone || !destination.capability.logicalType.storageType ||
+      destination.capability.logicalType.element?.isNone ||
+      !producerType.adaptsTo destination.capability.logicalType then ConstructionM.fail .protocol
+  let receiving : ReceivingAdaptation :=
+    ⟨destination.capability.logicalType,destination.capability.request,destination.layout,destination.capability.start⟩
+  let receivingPrefix := hasPrefix receiving.layout receiving.request
+  let producerPrefix : Bool := match producerType with
+    | .varr _ => request == .value
+    | _ => false
+  if destination.writeEnd != destination.capability.start + (if receivingPrefix then 4 else 0) then
+    ConstructionM.fail .protocol
+  if producerPrefix && !receivingPrefix then
+    let storage ← lookupStorage destination.storage
+    if destination.capability.start > storage.bytes.size then ConstructionM.fail .storage
+    replaceStorage destination.storage { storage with
+      bytes := storage.bytes.extract 0 destination.capability.start ++ lengthPrefix ++
+        storage.bytes.extract destination.capability.start storage.bytes.size }
+  let layout := if producerPrefix then ReceivingLayout.packed else match receiving.layout with
+    | .packed => .elements
+    | layout => layout
+  replaceDestination id { destination with
+    capability := { destination.capability with
+      logicalType := producerType
+      request := request
+      start := destination.capability.start + if receivingPrefix && !producerPrefix then 4 else 0 }
+    layout := layout
+    writeEnd := destination.writeEnd + if producerPrefix && !receivingPrefix then 4 else 0
+    adaptation := some receiving }
+
+def finishConstructionAdaptation (id : DestinationId) : ConstructionM Unit := do
+  let destination ← lookupDestination id
+  let some receiving := destination.adaptation | ConstructionM.fail .protocol
+  let count ← match destination.progress with
+    | .built count => do
+        let _ ← writableDestination id
+        let storage ← lookupStorage destination.storage
+        match destination.backing with
+        | .direct _ =>
+            if !available receiving.layout storage count then ConstructionM.fail .capacity
+        | .staged _ _ => pure ()
+        pure (some count)
+    | .cancelled => pure none
+    | _ => ConstructionM.fail .protocol
+  match count with
+  | some count =>
+      if hasPrefix destination.layout destination.capability.request &&
+          !hasPrefix receiving.layout receiving.request then
+        removeConstructionHeader id
+      if hasPrefix receiving.layout receiving.request then
+        let storage ← lookupStorage destination.storage
+        if receiving.start + 4 > storage.bytes.size then ConstructionM.fail .storage
+        replaceStorage destination.storage { storage with
+          bytes := patchCount storage.bytes receiving.start count }
+  | none => pure ()
+  let current ← lookupDestination id
+  replaceDestination id { current with
+    capability := { current.capability with
+      logicalType := receiving.logicalType
+      request := receiving.request
+      start := receiving.start }
+    layout := receiving.layout
+    adaptation := none }
+
 
 
 private def KeepsOutput (action : ConstructionM α) : Prop :=
@@ -1852,6 +1940,48 @@ theorem abandonTree_events_prefix (id : DestinationId) :
     | with_reducible apply eventPrefix_set_then
     | with_reducible exact List.prefix_rfl
     | with_reducible apply eventPrefix_get_bind
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+theorem adaptConstructionDestination_events_prefix (id : DestinationId) (ty : Ty) (request : ConstructionRequest) :
+    PreservesEventPrefix (adaptConstructionDestination id ty request) := by
+  unfold adaptConstructionDestination
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact removeConstructionHeader_events_prefix _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
+    | with_reducible apply eventPrefix_bind
+    | with_reducible apply eventPrefix_if
+    | split
+    | intro value
+
+theorem finishConstructionAdaptation_events_prefix (id : DestinationId) :
+    PreservesEventPrefix (finishConstructionAdaptation id) := by
+  unfold finishConstructionAdaptation
+  repeat' first
+    | with_reducible exact eventPrefix_pure _
+    | with_reducible exact eventPrefix_fault_bind _ _
+    | with_reducible exact eventPrefix_fail _
+    | with_reducible exact removeConstructionHeader_events_prefix _
+    | with_reducible exact eventPrefix_get
+    | with_reducible exact eventPrefix_writableDestination _
+    | with_reducible exact eventPrefix_lookupDestination _
+    | with_reducible exact eventPrefix_lookupStorage _
+    | with_reducible exact eventPrefix_replaceDestination _ _
+    | with_reducible exact eventPrefix_replaceStorage _ _
+    | with_reducible exact eventPrefix_emit _
+    | dsimp only
     | with_reducible apply eventPrefix_bind
     | with_reducible apply eventPrefix_if
     | split
