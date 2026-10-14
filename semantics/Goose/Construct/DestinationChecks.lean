@@ -185,4 +185,38 @@ private def supersededChildWrite : ConstructionM Unit := do
         some [0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 30]
   | _ => false
 
+private def supersededChildCleanup : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let parent ← openDestination storage capability .packed (some 1)
+  let child ← openChild parent (.varr (.int .u8)) .packed
+  writeElement child (bytes [20])
+  let replacement ← openExitReplacement parent
+  writeElement replacement (bytes [30])
+  abandonTree child
+
+#guard match supersededChildCleanup ConstructionState.initial with
+  | .fault .protocol state => state.events ==
+      [.begin 0, .begin 1, .write 1 0, .begin 2, .write 2 0] &&
+      state.storage[0]?.map (fun s => s.bytes.data.toList.map UInt8.toNat) ==
+        some [0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 30]
+  | _ => false
+
+private def protectedCleanup : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let parent ← openDestination storage capability .packed (some 1)
+  let child ← openChild parent (.varr (.int .u8)) .packed
+  writeElement child (bytes [20])
+  let replacement ← openExitReplacement parent
+  writeElement replacement (bytes [30])
+  finishDestination replacement
+  abandonPreservingExit child replacement
+  acknowledgeAbandonment child
+  landExitReplacement replacement
+  acknowledgeAbandonment parent
+  publishOperation [replacement]
+
+#guard observe protectedCleanup == some ([1, 0, 0, 0, 30], 1,
+  [.begin 0, .begin 1, .write 1 0, .begin 2, .write 2 0,
+   .abandon 1, .abandon 0, .relocate 2 .exitValue, .publish 2])
+
 end Goose.Construct.DestinationChecks

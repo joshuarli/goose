@@ -22,6 +22,7 @@ inductive DestinationProgress
   | published (count : Nat)
   | attached (count : Nat)
   | abandoned
+  | cancelled
   deriving DecidableEq, Repr
 
 inductive DestinationUse
@@ -170,7 +171,7 @@ private def writingAvailable (destination : PendingDestination) (storage : Recei
 private def active (destination : PendingDestination) : Bool :=
   match destination.progress with
   | .open _ | .suspended _ _ | .built _ | .exiting _ _ => true
-  | .published _ | .attached _ | .abandoned => false
+  | .published _ | .attached _ | .abandoned | .cancelled => false
 
 def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
     (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId := do
@@ -312,7 +313,7 @@ def abandonDestination (id : DestinationId) : ConstructionM Unit := do
       replaceDestination id { destination with progress := .abandoned }
       emit (.abandon id)
   | .suspended _ _ | .exiting _ _ => ConstructionM.fail .protocol
-  | .published _ | .attached _ | .abandoned => ConstructionM.fail .protocol
+  | .published _ | .attached _ | .abandoned | .cancelled => ConstructionM.fail .protocol
 
 private def descendantOf (destinations : Array PendingDestination) (ancestor : DestinationId)
     (id : DestinationId) : Bool := Id.run do
@@ -321,15 +322,15 @@ private def descendantOf (destinations : Array PendingDestination) (ancestor : D
     if current == ancestor then return true
     let some destination := destinations[current]? | return false
     match destination.use with
-    | .receiver | .replacement _ => return false
-    | .child parent => current := parent
+    | .receiver => return false
+    | .replacement parent | .child parent => current := parent
   return false
 
 def abandonTree (id : DestinationId) : ConstructionM Unit := do
   let parent ← writableDestination id
   match parent.progress with
   | .open _ | .built _ | .suspended _ _ => pure ()
-  | .exiting _ _ | .published _ | .attached _ | .abandoned => ConstructionM.fail .protocol
+  | .exiting _ _ | .published _ | .attached _ | .abandoned | .cancelled => ConstructionM.fail .protocol
   let state ← ConstructionM.get
   let descendants := state.destinations.toList.reverse.filter fun destination =>
     descendantOf state.destinations id destination.capability.id && active destination
@@ -349,7 +350,7 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   let superseded ← writableDestination supersededId
   let count ← match superseded.progress with
     | .open count | .built count | .suspended count _ => pure count
-    | .exiting _ _ | .published _ | .attached _ | .abandoned => ConstructionM.fail .protocol
+    | .exiting _ _ | .published _ | .attached _ | .abandoned | .cancelled => ConstructionM.fail .protocol
   let storage ← lookupStorage superseded.storage
   let state ← ConstructionM.get
   let id := state.destinations.size
@@ -362,6 +363,34 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
     replaceStorage superseded.storage { storage with bytes := storage.bytes ++ lengthPrefix }
   emit (.begin id)
   pure id
+
+def abandonPreservingExit (id replacementId : DestinationId) : ConstructionM Unit := do
+  let replacement ← lookupDestination replacementId
+  let supersededId ← match replacement.use, replacement.progress with
+    | .replacement supersededId, .built _ => pure supersededId
+    | _, _ => ConstructionM.fail .protocol
+  let superseded ← lookupDestination supersededId
+  match superseded.progress with
+  | .exiting _ expected => if expected != replacementId then ConstructionM.fail .ownership
+  | _ => ConstructionM.fail .protocol
+  let destination ← lookupDestination id
+  let state ← ConstructionM.get
+  if !active destination || destination.storage != replacement.storage ||
+      destination.capability.start > replacement.capability.start ||
+      !descendantOf state.destinations supersededId id || id == replacementId then
+    ConstructionM.fail .ownership
+  let discarded := state.destinations.toList.reverse.filter fun destination =>
+    destination.capability.id != replacementId &&
+      descendantOf state.destinations id destination.capability.id && active destination
+  for destination in discarded do
+    replaceDestination destination.capability.id { destination with progress := .abandoned }
+    emit (.abandon destination.capability.id)
+
+def acknowledgeAbandonment (id : DestinationId) : ConstructionM Unit := do
+  let destination ← lookupDestination id
+  match destination.progress with
+  | .abandoned => replaceDestination id { destination with progress := .cancelled }
+  | _ => ConstructionM.fail .protocol
 
 def landingBytes (bytes : ByteArray) (receivingStart payloadStart : Nat) : ByteArray :=
   bytes.extract 0 receivingStart ++ bytes.extract payloadStart bytes.size
@@ -376,6 +405,8 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
   | .exiting _ expected =>
       if expected != replacementId || superseded.storage != replacement.storage then
         ConstructionM.fail .ownership
+  | .abandoned | .cancelled =>
+      if superseded.storage != replacement.storage then ConstructionM.fail .ownership
   | _ => ConstructionM.fail .protocol
   let parentUpdate ← match superseded.use with
     | .receiver => pure none
@@ -391,7 +422,8 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
   if replacement.capability.start < superseded.capability.start then ConstructionM.fail .ownership
   let state ← ConstructionM.get
   let discarded := state.destinations.toList.reverse.filter fun destination =>
-    descendantOf state.destinations supersededId destination.capability.id && active destination
+    destination.capability.id != replacementId &&
+      descendantOf state.destinations supersededId destination.capability.id && active destination
   for destination in discarded do
     replaceDestination destination.capability.id { destination with progress := .abandoned }
     emit (.abandon destination.capability.id)
