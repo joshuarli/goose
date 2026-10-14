@@ -296,11 +296,16 @@ done
 # contexts; an empty-module check cannot protect representative wire bytes.
 pilot_source=$here/golden/first.goose
 pilot_golden=$here/golden/first.core.json
+pilot_gir_golden=$root/test/gir/golden/first.gir-h.json
 shrink_core=$root/test/semantics/golden/shrink_replace.core.json
-expect_export pilot --emit-core "$work/pilot.core.json" --check "$pilot_source"
-expect_export pilot-again --emit-core "$work/pilot-again.core.json" --check "$pilot_source"
+expect_export pilot --emit-core "$work/pilot.core.json" --emit-gir-high "$work/pilot.high.json" \
+    --check "$pilot_source"
+expect_export pilot-again --emit-core "$work/pilot-again.core.json" \
+    --emit-gir-high "$work/pilot-again.high.json" --check "$pilot_source"
 cmp "$pilot_golden" "$work/pilot.core.json"
 cmp "$work/pilot.core.json" "$work/pilot-again.core.json"
+cmp "$pilot_gir_golden" "$work/pilot.high.json"
+cmp "$work/pilot.high.json" "$work/pilot-again.high.json"
 "$jaq" -e '
     .[0] == "module" and .[1] == "goose-core/0.2" and .[2] == "core-pilot" and
     length == 10 and
