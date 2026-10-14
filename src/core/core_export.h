@@ -1403,10 +1403,17 @@ private:
                         pa.str = sl->val;
                     } else {
                         here = a->line;
-                        pa.kind = CorePrintArg::Expr;
-                        pa.expr = Value(a);
-                        auto k = mod.Type(pa.expr->type).kind;
-                        if (k != CoreType::Int && k != CoreType::Bool) Fail("print-argument", a->line);
+                        auto *type = a->exprtype ? Pointee(a->exprtype) : nullptr;
+                        if (CoreHasConstruction(mod.profile) && type &&
+                            (type->kind == TY_ARRAY || type->kind == TY_SLICE)) {
+                            pa.kind = CorePrintArg::View;
+                            pa.view = ToView(a);
+                        } else {
+                            pa.kind = CorePrintArg::Expr;
+                            pa.expr = Value(a);
+                            auto k = mod.Type(pa.expr->type).kind;
+                            if (k != CoreType::Int && k != CoreType::Bool) Fail("print-argument", a->line);
+                        }
                     }
                     s.print.push_back(std::move(pa));
                 }
