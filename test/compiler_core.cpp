@@ -70,17 +70,25 @@ static CoreModule ConstructionShape() {
     auto varr = module.Intern(variableArray);
     CoreType tuple;
     tuple.kind = CoreType::Tuple;
-    tuple.parts = { i64, varr };
+    tuple.parts = { varr, i64, varr };
     auto tupleType = module.Intern(tuple);
     CoreType reference;
     reference.kind = CoreType::Ref;
     reference.elem = i64;
     auto refType = module.Intern(reference);
+    CoreType nominal;
+    nominal.kind = CoreType::Struct;
+    nominal.structid = 0;
+    module.Intern(nominal);
+    module.structs.push_back(CoreStruct {
+        8, { CoreField { i64, CoreVarKind::Var, CoreMut::Mut, 0 } }, "Pair<i64>" });
 
     CoreImpl impl;
     impl.name = "main";
     impl.params = { CoreParam { 0, false }, CoreParam { 1, false }, CoreParam { 2, true } };
-    impl.results = { CoreResultDescriptor { tupleType, CoreRequest::ElementRun, CoreVarId { 3 } } };
+    impl.results = { CoreResultDescriptor { varr, CoreRequest::Value, CoreVarId { 3 } },
+                     CoreResultDescriptor { i64, CoreRequest::Register, {} },
+                     CoreResultDescriptor { varr, CoreRequest::ElementRun, {} } };
     impl.vars = { CoreVar { "first", i64, CoreVarKind::Let, 0,
                             CoreOrigin { 0, 1, CoreOriginKind::Param } },
                   CoreVar { "second", i64, CoreVarKind::Let, 0,
@@ -230,19 +238,29 @@ static CoreModule ConstructionShape() {
 }
 
 int main(int argc, char **argv) {
-    auto output = CoreWriter(ConstructionShape()).Write();
+    auto module = ConstructionShape();
+    auto output = CoreWriter(module).Write();
     if (argc == 2 && string_view(argv[1]) == "--wire") {
         puts(output.c_str());
         return 0;
     }
-    for (auto tag : { "[\"varr\",", "[\"tuple\",", "[\"result\",", "\"element_run\"",
+    for (auto tag : { "[\"varr\",", "[\"result\",", "\"element_run\"",
                       "[\"target\",[0,1]]", "[\"r_static\"]", "[\"e_str\",", "[\"e_copy\",",
                       "[\"e_result_local\",", "[\"e_values\",", "[\"a_val\",", "[\"a_construct\",",
                       "[\"a_ref\",", "[\"s_receive\",", "[\"s_append_value\",",
                       "[\"s_append_construct\",", "[\"s_ret_values\",", "[\"s_ret_forward\",",
                       "[\"s_return_from\",", "[\"s_return_from_forward\",", "[\"s_break_value\",",
                       "[\"pa_view\",", "[\"summary\",[[\"t_param\",0]],[[\"t_global\",0]],",
-                      "[[\"t_param\",1]],[[\"t_global\",1]],[[\"t_param\",2]],[0],[0],[0],1,1]" })
+                      "[[\"t_param\",1]],[[\"t_global\",1]],[[\"t_param\",2]],[0],[0],[0],1,1]",
+                      "[\"struct_def\",8,[[\"field\",0,\"var\",\"mut\",0]],\"Pair<i64>\"]" })
         assert(output.find(tag) != string::npos);
+    module.structs[0].displayName.clear();
+    bool rejected = false;
+    try {
+        CoreWriter(module).Write();
+    } catch (const CompileError &) {
+        rejected = true;
+    }
+    assert(rejected);
     puts("compiler_core ok");
 }

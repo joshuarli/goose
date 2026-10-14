@@ -93,6 +93,7 @@ struct CoreField {
 struct CoreStruct {
     int64_t size = 0;
     vector<CoreField> fields;
+    string displayName;
 };
 
 enum class CoreOriginKind : uint8_t {

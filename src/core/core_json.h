@@ -95,7 +95,7 @@ public:
             out += ",[";
             for (size_t i = 0; i < m.structs.size(); i++) {
                 if (i) out += ',';
-                StructRecord(out, m.structs[i]);
+                StructRecord(out, m.structs[i], CoreHasConstruction(m.profile));
             }
             out += ']';
         }
@@ -235,7 +235,9 @@ private:
         }
     }
 
-    void StructRecord(string &out, const CoreStruct &s) {
+    void StructRecord(string &out, const CoreStruct &s, bool construction) {
+        if (construction && (s.displayName.empty() || !CoreIsUtf8(s.displayName)))
+            throw CompileError { "internal compiler error: Core struct display name is not nonempty UTF-8" };
         Append(out, "[\"struct_def\",", s.size, ",[" );
         for (size_t i = 0; i < s.fields.size(); i++) {
             if (i) out += ',';
@@ -244,7 +246,11 @@ private:
                    field.binding == CoreVarKind::Var ? "var" : "let", "\",\"",
                    CoreMutName(field.contents), "\",", field.offset, "]");
         }
-        out += "]]";
+        out += construction ? "]," : "]]";
+        if (construction) {
+            Str(out, s.displayName);
+            out += ']';
+        }
     }
 
     void Global(string &out, const CoreGlobal &g) {
