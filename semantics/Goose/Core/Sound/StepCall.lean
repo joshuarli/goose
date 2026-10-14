@@ -314,7 +314,7 @@ theorem callArgsFuture_sliceHolder {plans path c all origin}
       exact Or.inl ⟨.byRef passingMu (.var x), passed, by
         simp [Arg.sliceHolderVariables, hlookup, Place.variables]⟩
 
-private theorem callArgContext_input_output {plans path c all origin}
+theorem callArgContext_input_output {plans path c all origin}
     (context : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
     (index : Nat) (arg : Arg) (harg : all[index]? = some arg) :
     (callArgContext context index arg harg).inputFuture =
@@ -325,7 +325,7 @@ private theorem callArgContext_input_output {plans path c all origin}
       DemandNode.variables, Arg.variables, DemandNode.visibleAfter, DemandNode.visibleForChild,
       NodeContext.inputFuture, NodeContext.outputFuture]
 
-private theorem callArgContext_shrinkOutputFuture {plans : Array (Array DemandPoint)}
+theorem callArgContext_shrinkOutputFuture {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {c : ContextId}
     {all : List Arg} {origin : OriginId}
     (context : NodeContext pc path (.expression (.call c all origin)) .expression)
@@ -385,7 +385,7 @@ private theorem sliceHolderVariables_subset (access : AccessEnv) (arg : Arg) {x 
     | none => simp [Arg.sliceHolderVariables, ty] at member
     | some T => cases T <;> simp_all [Arg.sliceHolderVariables, Arg.variables]
 
-private theorem callArgContext_inputFuture_subset {plans path c all origin}
+theorem callArgContext_inputFuture_subset {plans path c all origin}
     (context : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
     (index : Nat) (arg : Arg) (rest : List Arg) (harg : all[index]? = some arg)
     (hrest : rest = all.drop (index + 1)) {x : VarId}
@@ -417,7 +417,7 @@ private theorem callArgContext_inputFuture_subset {plans path c all origin}
     · exact Or.inr (Or.inr (Or.inl later))
     · exact Or.inr (Or.inr (Or.inr continuation))
 
-private theorem callArgFrame_rest {plans path c all origin}
+theorem callArgFrame_rest {plans path c all origin}
     (context : EvaluationContext m plans path (.expression (.call c all origin)) .expression)
     (index : Nat) (arg : Arg) (rest : List Arg) (harg : all[index]? = some arg)
     (hrest : rest = all.drop (index + 1)) (active : context.ActiveMatches tenv) {s : St}
