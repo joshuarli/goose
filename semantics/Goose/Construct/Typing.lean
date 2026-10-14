@@ -71,6 +71,16 @@ def Ty.passesTo (source target : Ty) : Bool :=
       a == b && (sourceMut == .mutable || targetMut == .readOnly)
   | _, _ => source.adaptsTo target
 
+private def Ty.referenceWritable (ty : Ty) (bindingWritable contentsWritable : Bool) : Bool :=
+  match ty with
+  | .grow _ | .growshrink _ => contentsWritable
+  | _ => bindingWritable
+
+private def referenceRepresentable (place : Place) (ty : Ty) (bindingWritable contentsWritable : Bool) : Bool :=
+  match place, ty with
+  | .field .., .structT .. | .field .., .arr .. => bindingWritable == contentsWritable
+  | _, _ => true
+
 inductive ExpressionUse
   | ordinary
   | result
@@ -193,9 +203,11 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       require (ty.storable && !ty.nonfixed) .type "read requires an ordinary storable value"
       pure [ty]
   | fuel + 1, env, .ref mutability place => do
-      let (ty, writable, _) ← typePlace fuel env place
+      let (ty, bindingWritable, contentsWritable) ← typePlace fuel env place
       require ty.storageType .type "reference target is not storage"
-      require (mutability == .readOnly || writable) .mut "mutable reference to read-only place"
+      require (referenceRepresentable place ty bindingWritable contentsWritable) .type "aggregate field capabilities cannot be retained by a reference"
+      require (mutability == .readOnly || ty.referenceWritable bindingWritable contentsWritable)
+        .mut "mutable reference to read-only place"
       pure [.ref mutability ty]
   | fuel + 1, env, .slice mutability view low high _ => do
       let (element, writable) ← typeView fuel env view
@@ -352,8 +364,10 @@ def typeArguments : Nat → TypingEnv → Impl → List Param → List Arg → T
           require localVar.ty.nonfixed .call "a_construct requires nonfixed by-value parameter"
           require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo localVar.ty) .call "constructed argument type mismatch"
       | .byRef, .byRef mutability place =>
-          let (ty, writable, _) ← typePlace fuel env place
-          require (mutability == .readOnly || writable) .mut "mutable argument requires writable storage"
+          let (ty, bindingWritable, contentsWritable) ← typePlace fuel env place
+          require (referenceRepresentable place ty bindingWritable contentsWritable) .type "aggregate field capabilities cannot be passed by reference"
+          require (mutability == .readOnly || ty.referenceWritable bindingWritable contentsWritable)
+            .mut "mutable argument requires writable storage"
           require ((Ty.ref mutability ty).passesTo localVar.ty) .call "reference argument type mismatch"
       | _, _ => fail .call "argument mode mismatch"
       typeArguments fuel env callee parameters arguments

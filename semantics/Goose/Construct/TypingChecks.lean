@@ -85,4 +85,15 @@ private def readonlySliceEnv : TypingEnv := { env with
   | .error rejection => rejection.rule == .mut
   | _ => false
 
+
+#guard expressionAccepts (.ref .mutable (.var 0)) [.ref .mutable (.grow (.int .u8))]
+private def splitFields : TyList := .cons (.arr (.int .u8) 1) .nil
+private def splitFieldEnv : TypingEnv := { env with
+  module := { module with structs := #[⟨1,#[⟨.arr (.int .u8) 1,.mutable,.readOnly,0⟩],"Box"⟩] }
+  variables := #[⟨"record",.structT 0 splitFields,.mutable,0,0⟩]
+  visible := [0] }
+#guard match (typeExpr 256 splitFieldEnv (.ref .mutable (.field (.var 0) 0))).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+
 end Goose.Construct.TypingChecks
