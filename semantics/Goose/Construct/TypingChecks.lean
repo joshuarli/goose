@@ -140,4 +140,10 @@ private def valueBlock (statements : List Stmt) (tail : Option Expr := none) : E
   (.mk 2 [.breakValue (.lit .u8 1) 0] none)
   (.mk 3 [.breakValue (.lit .u8 2) 0] none) 0))) [.int .u8]
 
+#guard !expressionAccepts (valueBlock [.breakValue (.resultLocal 0 0) 0]) [.grow (.int .u8)]
+#guard match (typeExpr 256 { env with use := .result }
+    (valueBlock [.breakValue (.resultLocal 0 0) 0])).run 2 with
+  | .ok (types, _) => types == [.grow (.int .u8)]
+  | _ => false
+
 end Goose.Construct.TypingChecks
