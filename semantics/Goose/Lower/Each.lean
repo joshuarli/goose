@@ -249,6 +249,99 @@ theorem eachSourceMode_global {le : LEnv} {ls output : LS} {g block : Nat}
   simp only [eachSourceRegrows, AccessEnv.placeType?, haccess, Option.map_some, htype]
   cases ty <;> rfl
 
+theorem eachSourceMode_var {le : LEnv} {ls output : LS} {x block : Nat}
+    {owner : Option ValueId} {view : ValueId} {ty : Ty}
+    (access : AccessEnv) (localVar : Core.LocalVar) (slot : GIR.Slot)
+    (hslot : le.slots[x]? = some slot) (hslotType : slot.ty = ty)
+    (haccess : access.impl.vars[x]? = some localVar) (htype : localVar.ty = ty)
+    (hcur : ls.cur = some block)
+    (h : lowerEachSource (.of (.var x)) le ls = ((owner, view), output)) :
+    (regrowOf owner le output).1 = eachSourceRegrows access (.of (.var x)) := by
+  simp only [lowerEachSource, lowerPlace, bind_eq] at h
+  obtain ⟨r, withOwner, howner, vw, withView, hview, hresult⟩ := h
+  rw [pure_run] at hresult
+  obtain ⟨hpair, rfl⟩ := Prod.mk.inj hresult
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpair
+  have hOp : ∃ mu, (Op.slotAddr x).resultTy (tyEnv le ls) = .ok (.data (.ref mu ty)) := by
+    simp only [Op.resultTy, tyEnv, hslot, hslotType]
+    exact ⟨_, rfl⟩
+  obtain ⟨mu, hOp⟩ := hOp
+  have hOwnerRun := howner
+  rw [emitDef_run _ le hcur] at hOwnerRun
+  obtain ⟨hId, hOwnerState⟩ := Prod.mk.inj hOwnerRun
+  have hcurOwner : withOwner.cur = some block := by
+    simpa using (congrArg LS.cur hOwnerState).symm.trans hcur
+  have hOwnerTy : withOwner.vals[r]? = some (some (.data
+      (.ref mu ty))) := by
+    rw [← hId, ← hOwnerState]
+    simp [hOp]
+    rfl
+  have hViewRun := hview
+  rw [emitDef_run _ le hcurOwner] at hViewRun
+  obtain ⟨_, hViewState⟩ := Prod.mk.inj hViewRun
+  have hOwnerBound : r < withOwner.vals.size := (Array.getElem?_eq_some_iff.mp hOwnerTy).1
+  have hOutputTy : withView.vals[r]? = some (some (.data
+      (.ref mu ty))) := by
+    rw [← hViewState]
+    exact (getElem?_push_lt hOwnerBound).trans hOwnerTy
+  rw [regrowOf_some hOutputTy]
+  simp only [eachSourceRegrows, AccessEnv.placeType?, haccess, Option.map_some, htype]
+  cases ty <;> rfl
+
+theorem eachSourceMode_var_lowerEnv {m : Core.Module} {vars : Array Core.LocalVar}
+    {results : List Ty} {ls output : LS} {x block : Nat} {owner : Option ValueId} {view : ValueId}
+    (access : AccessEnv) (localVar : Core.LocalVar) (hvars : access.impl.vars = vars)
+    (hlocal : vars[x]? = some localVar) (hcur : ls.cur = some block)
+    (h : lowerEachSource (.of (.var x)) (lowerEnv m vars results) ls = ((owner, view), output)) :
+    (regrowOf owner (lowerEnv m vars results) output).1 =
+      eachSourceRegrows access (.of (.var x)) := by
+  apply eachSourceMode_var access localVar
+    (⟨localVar.ty, localVar.kind, localVar.scope, x⟩ : GIR.Slot)
+  · simp [lowerEnv, Array.getElem?_mapIdx, hlocal]
+  · rfl
+  · simpa [hvars] using hlocal
+  · rfl
+  · exact hcur
+  · exact h
+
+theorem eachSourceMode_global_lowerEnv {m : Core.Module} {vars : Array Core.LocalVar}
+    {results : List Ty} {ls output : LS} {g block : Nat} {owner : Option ValueId} {view : ValueId}
+    (access : AccessEnv) (global : Core.Global) (hmodule : access.mod = m)
+    (hglobal : m.globals[g]? = some global) (hcur : ls.cur = some block)
+    (h : lowerEachSource (.of (.global g)) (lowerEnv m vars results) ls = ((owner, view), output)) :
+    (regrowOf owner (lowerEnv m vars results) output).1 =
+      eachSourceRegrows access (.of (.global g)) := by
+  apply eachSourceMode_global (ty := global.ty) (kind := global.kind) access global
+  · simp [lowerEnv, hglobal]
+  · simpa [hmodule] using hglobal
+  · rfl
+  · exact hcur
+  · exact h
+
+theorem eachSourceMode_of_placeType {le : LEnv} {ls output : LS} {place : Place}
+    {owner : Option ValueId} {view : ValueId} {ty : Ty} (access : AccessEnv)
+    (htype : access.placeType? place = some ty)
+    (hplace : ∀ r input, lowerPlace place le ls = (r, input) →
+      ∃ mu block, input.vals[r]? = some (some (.data (.ref mu ty))) ∧ input.cur = some block)
+    (h : lowerEachSource (.of place) le ls = ((owner, view), output)) :
+    (regrowOf owner le output).1 = eachSourceRegrows access (.of place) := by
+  simp only [lowerEachSource, bind_eq] at h
+  obtain ⟨r, withOwner, howner, vw, withView, hview, hresult⟩ := h
+  rw [pure_run] at hresult
+  obtain ⟨hpair, rfl⟩ := Prod.mk.inj hresult
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpair
+  obtain ⟨mu, block, hOwnerTy, hcurOwner⟩ := hplace r withOwner howner
+  have hViewRun := hview
+  rw [emitDef_run _ le hcurOwner] at hViewRun
+  obtain ⟨_, hViewState⟩ := Prod.mk.inj hViewRun
+  have hOwnerBound : r < withOwner.vals.size := (Array.getElem?_eq_some_iff.mp hOwnerTy).1
+  have hOutputTy : withView.vals[r]? = some (some (.data (.ref mu ty))) := by
+    rw [← hViewState]
+    exact (getElem?_push_lt hOwnerBound).trans hOwnerTy
+  rw [regrowOf_some hOutputTy]
+  simp only [eachSourceRegrows, htype]
+  cases ty <;> rfl
+
 theorem eachSampled_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
     {ls lsk ls' : LS} {fr frk : Frame} {pt : Pt} {cells : List (ValueId × RVal)}
     {view result : ValueId} {vw : ViewVal}
