@@ -85,7 +85,7 @@ def resultPack (results : List ResultDescriptor) : VTy :=
   match results with
   | [] => .data .unit
   | [r] => carrierType r
-  | rs => .pack rs
+  | rs => .pack (rs.map fun r => { r with namedLocal := none })
 
 def TyEnv.checkCall (env : TyEnv) (callee : FnId) (args destinations : List ValueId) : TyR (List ResultDescriptor) := do
   let some (params, results) := env.sigs[callee]? | tyErr "callee outside function table"

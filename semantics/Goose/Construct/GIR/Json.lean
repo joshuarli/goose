@@ -948,7 +948,7 @@ def write (m : Module) : String :=
       let _ ← internTy (.structT sid (TyList.ofList (m.structs[sid].fields.toList.map (·.ty))))
     let gs ← wMap m.globals.toList wGlobal
     let fs ← wMap m.funcs.toList wFunc
-    pure (gs, fs) : W (String × String)).run {}
+    pure (gs, fs) : W (String × String)).run { entries := m.types }
   let files := wList (m.files.toList.map fun f => wRec "file" [quote f])
   let origins := wList (m.origins.toList.map fun o =>
     wRec "origin" [toString o.file, toString o.line, quote o.kind])

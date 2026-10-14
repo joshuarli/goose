@@ -723,8 +723,7 @@ private def invokeReferenceRoots : Module :=
   { (moduleOf #[{ entry with summary := .known ⟨[.global 0,.global 1],[],[],[],[],[],[],[],false,true⟩ },
       { member with roots := { results := #[[.global 0,.global 1]] }, summary := known },
       { helper with params := [.bool], roots := { results := #[[.global 0]] }, summary := known [] [0] [0] }]) with
-    globals := #[⟨"a",array,.immutable,{ initializer with summary := known },0⟩,
-      ⟨"b",array,.immutable,{ second with summary := known },0⟩],
+    globals := #[⟨"a",array,.immutable,initializer,0⟩,⟨"b",array,.immutable,second,0⟩],
     targets := #[⟨1,[]⟩] }
 
 #guard (Validate.validate invokeReferenceRoots).isOk
@@ -896,5 +895,146 @@ private def omittedSpecializedParameterEffect : Module :=
     if index == 1 then { f with summary := known [] [] [] false true } else f }
 
 #guard (match Validate.validate omittedSpecializedParameterEffect with | .error v => v.code == .v050 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def returnedReboundSlice : Module :=
+  let original := invokeReferenceRoots
+  let slice := Ty.slice .readOnly (.int .u8)
+  let entry := function "entry" #[⟨[],[.def 0 (.call 1 [] (some 0)),.def 1 (.sliceView 0),
+    .eff (.print [.val 1] (some 0)),.term (.ret [] none)]⟩]
+  let wrapper := function "wrapper" #[⟨[],[
+    .eff (.enter 0),.def 0 (.globalAddr 0),.def 1 (.snapshot .borrowed 0),
+    .def 2 (.viewSlice .readOnly 1 .omitted .omitted (some 0)),.eff (.slotInit 0 2 (some 0)),
+    .def 3 (.slotAddr 0),.def 4 (.call 2 [3] (some 0)),.def 5 (.load 3),
+    .eff (.leave 0),.term (.ret [5] (some 0))]⟩] #[⟨slice,.mutable,0,0⟩] [⟨slice,.register,none⟩]
+  let callee := function "rebind" #[⟨[(0,.data (.ref .mutable slice))],[
+    .eff (.enter 0),.eff (.slotInit 0 0 (some 0)),.def 1 (.globalAddr 1),.def 2 (.snapshot .borrowed 1),
+    .def 3 (.viewSlice .readOnly 2 .omitted .omitted (some 0)),.eff (.store 0 3 (some 0)),
+    .eff (.leave 0),.term (.ret [] none)]⟩] #[⟨.ref .mutable slice,.immutable,0,0⟩]
+  { original with funcs := #[
+    { entry with summary := .known ⟨[.global 0,.global 1],[],[],[],[],[],[],[],true,true⟩ },
+    { wrapper with
+      roots := { results := #[[.global 0,.global 1]] },
+      summary := .known ⟨[.global 0,.global 1],[],[],[],[],[],[],[],true,false⟩ },
+    { callee with
+      params := [.ref .mutable slice], roots := { params := #[(0,[.param 0])], contents := #[(0,[.global 0,.global 1])] },
+      summary := .known ⟨[.global 1],[.param 0],[],[],[.param 0],[],[],[],true,false⟩ }], targets := #[] }
+
+#guard (Validate.validate returnedReboundSlice).isOk
+#guard observation returnedReboundSlice == some ("CD\n".toUTF8.data.toList,[])
+#guard roundTrip returnedReboundSlice
+
+private def omittedReturnedReboundRoot : Module :=
+  { returnedReboundSlice with funcs := returnedReboundSlice.funcs.mapIdx fun index f =>
+    if index == 1 then { f with roots := { f.roots with results := #[[.global 0]] } } else f }
+
+#guard (match Validate.validate omittedReturnedReboundRoot with | .error v => v.code == .v050 | _ => false)
+
+private def omittedStoredBackingRoot : Module :=
+  { returnedReboundSlice with funcs := returnedReboundSlice.funcs.mapIdx fun index f =>
+    if index == 2 then { f with roots := { f.roots with contents := #[(0,[.global 0])] } } else f }
+
+#guard (match Validate.validate omittedStoredBackingRoot with | .error v => v.code == .v050 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def initializerNeedsTarget : Module :=
+  let original := invokeReferenceRoots
+  let initializer := original.globals[0].init
+  let array := Ty.arr (.int .u8) 2
+  let helper := function "requires_target" #[⟨[],[.def 0 (.globalAddr 0),.term (.escape 0 [0] [] (some 0))]⟩]
+  let initializer := { initializer with blocks := #[
+    ⟨[],[.term (.invoke 3 [] [] 1 [] [⟨0,2,[]⟩] (some 0))]⟩,
+    ⟨[],[.def 0 (.constInt .u8 65),.def 1 (.constInt .u8 66),.def 2 (.arrLit array [0,1]),.term (.ret [2] (some 0))]⟩,
+    ⟨[(3,.data (.ref .readOnly array))],[.term (.escape 0 [3] [] (some 0))]⟩] }
+  { original with
+    globals := #[{ original.globals[0] with init := initializer },original.globals[1]],
+    funcs := original.funcs ++ #[{ helper with summary := known [] [0] [0] }] }
+
+#guard (match Validate.validate initializerNeedsTarget with | .error v => v.code == .v070 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def renderedRepeatSource : Module :=
+  let original := repeatPrivate 2
+  let entry := original.funcs[0]
+  let block := entry.blocks[0]
+  { original with funcs := #[{ entry with blocks := #[{ block with
+    insts := block.insts.take 5 ++ [.def 6 (.slotAddr 1),.def 7 (.render 6 (some 0)),
+      .eff (.print [.val 7] (some 0))] ++ block.insts.drop 5 }] }] }
+
+#guard (match Validate.validate renderedRepeatSource with | .error v => v.code == .v060 | _ => false)
+
+private def competingAppend : Module :=
+  let ty := Ty.grow (.int .u8)
+  moduleOf #[function "entry" #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) ty .value none (some 0)),
+    .def 1 (.destFinish 0 (some 0)),.eff (.destPublish 1 (some 0)),.def 2 (.slotAddr 0),
+    .def 3 (.destOpen (.append 2) byteTy .elementRun none (some 0)),
+    .def 4 (.destOpen (.append 2) byteTy .elementRun none (some 0)),
+    .def 5 (.destFinish 4 (some 0)),.eff (.destPublish 5 (some 0)),
+    .def 6 (.destFinish 3 (some 0)),.eff (.destPublish 6 (some 0)),
+    .eff (.leave 0),.term (.ret [] none)]⟩] #[⟨ty,.mutable,0,0⟩]]
+
+#guard (match Validate.validate competingAppend with | .error v => v.code == .v060 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def unmaterializedCopy : Module := moduleOf #[function "entry" #[⟨[],[
+  .eff (.enter 0),.def 0 (.destOpen (.slot 0) byteTy .value none (some 0)),
+  .def 1 (.bytes [65,66] (some 0)),.def 2 (.sliceView 1),.eff (.destCopy 0 2 (some 0)),
+  .def 3 (.destFinish 0 (some 0)),.eff (.destPublish 3 (some 0)),
+  .eff (.leave 0),.term (.ret [] none)]⟩] #[⟨byteTy,.immutable,0,0⟩]]
+
+#guard (match Validate.validate unmaterializedCopy with | .error v => v.code == .v060 | _ => false)
+
+private def sliceReferenceResult : Module :=
+  let slice := Ty.slice .readOnly (.int .u8)
+  let producer := function "parameter_type_result" #[⟨[(0,.data (.ref .readOnly slice))],[
+    .eff (.enter 0),.eff (.slotInit 0 0 (some 0)),.eff (.leave 0),.term (.ret [0] (some 0))]⟩]
+    #[⟨.ref .readOnly slice,.immutable,0,0⟩] [⟨.ref .readOnly slice,.register,none⟩]
+  moduleOf #[function "entry" #[⟨[],[.term (.ret [] none)]⟩],
+    { producer with params := [.ref .readOnly slice], roots := { params := #[(0,[.param 0])], results := #[[.param 0]] } }]
+
+#guard (match Validate.validate sliceReferenceResult with | .error v => v.code == .v010 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def emittedRawWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"construction_raw_bytes.goose\"]],[[\"int\",\"u8\"],[\"grow\",0],[\"int\",\"i64\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"tuple\",[4,2]],[\"view\",\"const\",0]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0],[\"slot\",2,\"let\",0,1]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_dest_open\",0,[\"dr_slot\",0],1,\"value\",[],[0]],[\"i_int\",1,0,\"65\"],[\"i_int\",2,0,\"66\"],[\"i_call_construct\",3,1,[1,2],[0],[0]],[\"i_result\",4,3,0],[\"i_result\",5,3,1],[\"x_dest_publish\",4,[0]],[\"x_init\",1,5,[0]],[\"i_slot\",6,0],[\"i_snap\",7,\"owner\",6],[\"i_render\",8,7,[2]],[\"x_print\",[[\"pp_val\",8]],[2]],[\"i_slot\",9,1],[\"i_load\",10,9],[\"t_exit\",10,[3]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[0],[]],[\"func\",\"payload\",[0,0],[[\"result\",1,\"value\",[2]],[\"result\",2,\"register\",[]]],[[\"slot\",0,\"let\",0,0],[\"slot\",0,\"let\",0,1],[\"slot\",1,\"var\",0,2]],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,0],[\"bp\",1,0],[\"bp\",2,3]],[[\"x_enter\",0],[\"x_init\",0,0,[4]],[\"x_init\",1,1,[4]],[\"i_slot\",3,0],[\"i_load\",4,3],[\"x_dest_write\",2,4,[5]],[\"i_int\",5,0,\"0\"],[\"x_dest_write\",2,5,[5]],[\"i_int\",6,0,\"255\"],[\"x_dest_write\",2,6,[5]],[\"i_slot\",7,1],[\"i_load\",8,7],[\"x_dest_write\",2,8,[5]],[\"i_dest_finish\",9,2,[5]],[\"x_dest_bind\",2,9,[5]],[\"i_dest_named\",10,2,[7]],[\"i_int\",11,2,\"19\"],[\"x_leave\",0],[\"t_ret\",[10,11],[7]]]]],[\"roots\",[],[],[[],[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[4],[]]],0,[[\"origin\",0,9,\"let\"],[\"origin\",0,10,\"call\"],[\"origin\",0,11,\"print\"],[\"origin\",0,12,\"exit\"],[\"origin\",0,2,\"param\"],[\"origin\",0,3,\"let\"],[\"origin\",0,3,\"expr\"],[\"origin\",0,4,\"return\"]]]\n"
+
+private def emittedRaw : Option Module := (Decode.decodeBytes emittedRawWire.toUTF8).toOption
+
+#guard emittedRaw.any (fun module => (Validate.validate module).isOk)
+#guard emittedRaw.any (fun module => match Run.run 1000 .release module with
+  | .done (.exited 19) stdout events => stdout.data.toList == [65,0,255,66,10] &&
+      events == [.begin 0,.write 0 0,.write 0 1,.write 0 2,.write 0 3,.publish 0]
+  | _ => false)
+
+private def emittedValuesWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"sem_construction_source_values.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"arr\",0,2],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",5],[\"ref\",\"mut\",1]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"var\",0,0],[\"slot\",2,\"let\",0,1],[\"slot\",2,\"let\",0,2],[\"slot\",0,\"let\",0,3],[\"slot\",0,\"let\",0,4],[\"slot\",0,\"let\",3,5]],[[\"scope\",[]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_int\",2,0,\"1\"],[\"x_dest_write\",1,2,[0]],[\"i_dest_finish\",3,1,[0]],[\"x_dest_publish\",3,[0]],[\"i_int\",4,0,\"2\"],[\"i_int\",5,0,\"3\"],[\"i_arr\",6,2,[4,5]],[\"x_init\",1,6,[1]],[\"i_int\",7,0,\"4\"],[\"i_fill\",8,2,7],[\"x_init\",2,8,[2]],[\"i_bool\",9,1],[\"t_condbr\",9,1,[],2,[]]]],[\"block\",[],[[\"x_enter\",1],[\"i_slot\",10,1],[\"i_snap\",11,\"owner\",10],[\"i_int\",12,0,\"0\"],[\"i_index\",13,11,12,[9]],[\"i_load\",14,13],[\"x_leave\",1],[\"t_br\",3,[14]]]],[\"block\",[],[[\"x_enter\",2],[\"i_int\",15,0,\"0\"],[\"x_leave\",2],[\"t_br\",3,[15]]]],[\"block\",[[\"bp\",16,0]],[[\"x_init\",3,16,[3]],[\"x_enter\",3],[\"i_int\",17,0,\"6\"],[\"x_init\",5,17,[5]],[\"i_slot\",18,5],[\"i_load\",19,18],[\"i_slot\",20,3],[\"i_load\",21,20],[\"i_bin\",22,\"add\",0,19,21,[11]],[\"x_leave\",3],[\"x_init\",4,22,[4]],[\"i_dest_open\",23,[\"dr_arg\",1,0],1,\"value\",[],[14]],[\"i_slot\",24,0],[\"x_dest_copy\",23,24,[13]],[\"i_dest_finish\",25,23,[13]],[\"i_dest_arg\",26,25,[14]],[\"i_call\",27,1,[26],[14]],[\"i_render\",28,27,[16]],[\"i_slot\",29,2],[\"i_snap\",30,\"owner\",29],[\"i_int\",31,0,\"1\"],[\"i_index\",32,30,31,[15]],[\"i_load\",33,32],[\"i_render\",34,33,[16]],[\"i_slot\",35,4],[\"i_load\",36,35],[\"i_render\",37,36,[16]],[\"x_print\",[[\"pp_val\",28],[\"pp_text\",\" \"],[\"pp_val\",34],[\"pp_text\",\" \"],[\"pp_val\",37]],[16]],[\"i_slot\",38,0],[\"i_slot\",39,4],[\"i_load\",40,39],[\"i_push\",41,38,40,[17]],[\"i_slot\",42,0],[\"i_snap\",43,\"owner\",42],[\"i_int\",44,0,\"1\"],[\"i_index\",45,43,44,[18]],[\"i_load\",46,45],[\"i_render\",47,46,[19]],[\"x_print\",[[\"pp_val\",47]],[19]],[\"x_leave\",0],[\"t_ret\",[],[0]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[0],[]],[\"func\",\"length\",[1],[[\"result\",0,\"register\",[]]],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,7]],[[\"x_enter\",0],[\"x_init\",0,0,[20]],[\"i_slot\",1,0],[\"i_snap\",2,\"owner\",1],[\"i_vlen\",3,2],[\"x_leave\",0],[\"t_ret\",[3],[21]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[],[],[],0,0],[20],[]]],0,[[\"origin\",0,6,\"let\"],[\"origin\",0,7,\"let\"],[\"origin\",0,8,\"let\"],[\"origin\",0,9,\"let\"],[\"origin\",0,14,\"let\"],[\"origin\",0,15,\"let\"],[\"origin\",0,6,\"expr\"],[\"origin\",0,7,\"expr\"],[\"origin\",0,8,\"expr\"],[\"origin\",0,10,\"index\"],[\"origin\",0,9,\"expr\"],[\"origin\",0,16,\"binary\"],[\"origin\",0,14,\"expr\"],[\"origin\",0,18,\"expr\"],[\"origin\",0,18,\"call\"],[\"origin\",0,18,\"index\"],[\"origin\",0,18,\"print\"],[\"origin\",0,19,\"expr\"],[\"origin\",0,20,\"index\"],[\"origin\",0,20,\"print\"],[\"origin\",0,1,\"param\"],[\"origin\",0,2,\"return\"]]]\n"
+
+#guard (Decode.decodeBytes emittedValuesWire.toUTF8).toOption.any (fun module =>
+  (Validate.validate module).isOk && Writer.write module == emittedValuesWire)
+
+private def repeatedOwnedProjection : Module :=
+  let module := emittedRaw.getD rawBytes
+  { module with funcs := module.funcs.mapIdx fun index f =>
+    if index == 0 then { f with blocks := f.blocks.map fun block =>
+      { block with insts := block.insts.flatMap fun inst =>
+        match inst with
+        | .def 5 (.result 3 1) => [inst,.def 11 (.result 3 0)]
+        | _ => [inst] } } else f }
+
+#guard (match Validate.validate repeatedOwnedProjection with | .error v => v.code == .v060 | _ => false)
 
 end Goose.Construct.GIR.Checks
