@@ -81,7 +81,7 @@ private def prematurePublish : ConstructionM Unit := do
 
 private def limitedOverflow : ConstructionM Unit := do
   let storage ← reserveStorage (bytes [10]) 1
-  let _ ← openDestination storage (capability .elementRun) (.limited 2) (some 2)
+  let _ ← openDestination storage (capability .elementRun) (.limited 2 1) (some 2)
 
 #guard match limitedOverflow ConstructionState.initial with
   | .fault .capacity state => state.events.isEmpty &&
@@ -152,7 +152,7 @@ private def protectReplacement : ConstructionM Unit := do
 
 private def unknownLimited (values : List Nat) : ConstructionM Unit := do
   let storage ← reserveStorage (bytes [10]) 1
-  let destination ← openDestination storage (capability .elementRun) (.limited 3) none
+  let destination ← openDestination storage (capability .elementRun) (.limited 3 1) none
   for value in values do writeElement destination (bytes [value])
   finishDestination destination
   publishOperation [destination]
@@ -243,5 +243,40 @@ private def extension : ConstructionM Unit := do
 #guard match extension ConstructionState.initial with
   | .ok _ state => state.stdout.data.toList.map UInt8.toNat == [0,255]
   | _ => false
+
+
+private def retainedLimited : ConstructionM Unit := do
+  let storage ← reserveStorage (bytes [10,20,30]) 3
+  truncateConstructionStorage storage 0 1 1 none true
+  let direct ← openDestination storage (capability .elementRun) (.limited 4 1) (some 1)
+  writeElement direct (bytes [99])
+  finishDestination direct
+  publishOperation [direct]
+  let staged ← openDestination storage (capability .elementRun) (.limited 4 1) none
+  writeElement staged (bytes [7])
+  finishDestination staged
+  publishOperation [staged]
+
+#guard observe retainedLimited == some ([10,99,7], 3,
+  [.begin 0, .write 0 0, .publish 0, .begin 1, .stage 1,
+   .write 1 0, .copy (.storage 1 []) 1, .publish 1])
+
+private def retainedNamed : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let parent ← openDestination storage capability (.limited 4 1) (some 3)
+  writeElement parent (bytes [10])
+  writeElement parent (bytes [20])
+  writeElement parent (bytes [30])
+  finishDestination parent
+  truncateConstructionStorage storage 0 1 1 (some parent) true
+  let child ← openExtension parent .elementRun (some 1)
+  writeElement child (bytes [99])
+  finishDestination child
+  attachExtension parent child
+  publishOperation [parent]
+
+#guard observe retainedNamed == some ([10,99,30], 2,
+  [.begin 0, .write 0 0, .write 0 1, .write 0 2,
+   .begin 1, .write 1 0, .publish 1, .publish 0])
 
 end Goose.Construct.DestinationChecks
