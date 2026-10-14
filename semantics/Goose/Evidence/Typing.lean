@@ -192,6 +192,69 @@ theorem execPure_globalAddr_typed {activations : ActivationTypes} {cx : FnCtx} {
   refine ⟨⟨_, rfl, global.ty, ?_, .root global.ty⟩, rfl⟩
   simp [runtimeDeclarations, lookup]
 
+theorem execPure_next_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {ty : IntTy} {before after : St} {cell : RVal}
+    (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data (.int ty))))
+    (evaluated : execPure cx fr (.next ty id) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.int ty)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal metadata read
+  subst middle
+  obtain ⟨n, rfl⟩ := valueTyped.int
+  simp only [expectInt, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨rfl, rfl⟩
+
+theorem execPure_un_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {ty : IntTy} {operation : UnOp}
+    {org : Option OriginId} {before after : St} {cell : RVal}
+    (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data (.int ty))))
+    (evaluated : execPure cx fr (.un operation ty id org) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.int ty)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal metadata read
+  subst middle
+  obtain ⟨n, rfl⟩ := valueTyped.int
+  simp only [expectInt, pure_bind] at evaluated
+  cases result : evalUn cx.cfg.profile operation ty n with
+  | error abort =>
+    cases org <;> simp [result, abortAtOrg, abortAt, fault, M.stop] at evaluated
+  | ok n' =>
+    simp only [result, pure_apply, Res.ok.injEq] at evaluated
+    obtain ⟨rfl, rfl⟩ := evaluated
+    exact ⟨rfl, rfl⟩
+
+theorem execPure_bin_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {left right : ValueId} {ty : IntTy} {operation : BinOp}
+    {org : Option OriginId} {before after : St} {cell : RVal}
+    (frameTyped : WeakFrameTy roots types fr)
+    (leftMetadata : types[left]? = some (some (.data (.int ty))))
+    (rightMetadata : types[right]? = some (some (.data (.int ty))))
+    (evaluated : execPure cx fr (.bin operation ty left right org) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.int ty)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal leftMetadata read
+  subst middle
+  obtain ⟨n, rfl⟩ := valueTyped.int
+  simp only [expectInt, pure_bind] at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal rightMetadata read
+  subst middle
+  obtain ⟨m, rfl⟩ := valueTyped.int
+  simp only [pure_bind, expectSameTy, ↓reduceIte] at evaluated
+  cases result : evalBin cx.cfg.profile operation ty n m with
+  | error abort =>
+    cases org <;> simp [result, abortAtOrg, abortAt, fault, M.stop] at evaluated
+  | ok n' =>
+    simp only [result, pure_apply, Res.ok.injEq] at evaluated
+    obtain ⟨rfl, rfl⟩ := evaluated
+    exact ⟨rfl, rfl⟩
+
 theorem execPure_load_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {id : ValueId} {permission : Mutability} {ty : Ty}
     {before after : St} {cell : RVal}
