@@ -189,7 +189,7 @@ private def recursion : Module := moduleOf #[
   implementation "entry" #[localVar "result" (.int .i64)]
     (.mk 0 [.letS 0 (.call 1 [.byVal (.lit .i64 0)] 0) 0,
       .print [.expr (.read (.var 0))] 0] none),
-  implementation "descend" #[localVar "depth" (.int .i64), localVar "child" (.int .i64)]
+  implementation "descend" #[localVar "depth" (.int .i64), localVar "child" (.int .i64) 1]
     (.mk 0 [.ifS (.cmp .eq (.read (.var 0)) (.lit .i64 0))
       (.mk 1 [.letS 1 (.call 1 [.byVal (.lit .i64 1)] 0) 0,
         .retValues [.bin .add (.read (.var 1)) (.lit .i64 100) 0] 0] none)
@@ -220,5 +220,65 @@ private def timeoutLoop : Module := moduleOf #[implementation "entry" #[]
 #guard match eval 30 .release timeoutLoop with
   | .timeout stdout events => stdout.data.toList == [98, 101, 102, 111, 114, 101, 10] && events.isEmpty
   | _ => false
+
+private def namedHeaderRemoval : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.grow (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
+  implementation "named" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.varr (.int .u8)) [65, 66] 0) 0]
+      (some (.resultLocal 0 0)))
+    #[⟨.varr (.int .u8), .value, some 0⟩]]
+
+#guard observes namedHeaderRemoval == some ([65, 66, 10],
+  [.begin 0, .write 0 0, .write 0 1, .relocate 0 .headerRemoval, .publish 0])
+
+private def elementRunLocal : Module := moduleOf #[
+  implementation "entry" #[localVar "owner" (.grow (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.grow (.int .u8)) [65] 0) 0,
+      .appendConstruct (.var 0) (.call 1 [] 0) 0,
+      .print [.view (.of (.var 0))] 0] none),
+  implementation "local" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.varr (.int .u8)) [66] 0) 0]
+      (some (.resultLocal 0 0)))
+    #[⟨.varr (.int .u8), .elementRun, none⟩]]
+
+#guard observes elementRunLocal == some ([65, 66, 10],
+  [.begin 0, .write 0 0, .publish 0, .begin 1, .begin 2, .write 2 0, .publish 2,
+    .copy (.storage 1 []) 1, .write 1 0, .publish 1])
+
+private def staticSlice : Module := moduleOf #[
+  implementation "entry" #[localVar "slice" (.slice .readOnly (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.expr (.read (.var 0))] 0] none),
+  implementation "static" #[] (.mk 0 [] (some (.bytes (.slice .readOnly (.int .u8)) [65, 0, 255] 0)))
+    #[⟨.slice .readOnly (.int .u8), .register, none⟩]]
+
+#guard observes staticSlice == some ([65, 0, 255, 10], [])
+
+private def structural : Module := moduleOf #[implementation "entry"
+  #[localVar "array" (.arr (.int .i64) 2), localVar "nested" (.varr (.varr (.int .u8)))]
+  (.mk 0 [.letS 0 (.arrLit (.arr (.int .i64) 2) [.lit .i64 1, .lit .i64 2]) 0,
+    .letS 1 (.arrLit (.varr (.varr (.int .u8)))
+      [.bytes (.varr (.int .u8)) [34, 92, 10, 0, 255] 0]) 0,
+    .print [.expr (.ref .readOnly (.var 0)), .text " ", .view (.of (.var 1))] 0] none)]
+
+#guard (observes structural).map Prod.fst == some
+  [91, 49, 44, 32, 50, 93, 32, 91, 34, 92, 34, 92, 92, 92, 110, 0, 255, 34, 93, 10]
+
+private def stringPrefix : Module := moduleOf #[implementation "entry"
+  #[localVar "string" (.varr (.int .u8))]
+  (.mk 0 [.letS 0 (.str (.varr (.int .u8))
+    [.text "A", .expr (.blockE (.mk 1 [.abort "stop" 0] (some (.lit .i64 7))))] 0) 0] none)]
+
+#guard match eval 1000 .release stringPrefix with
+  | .done (.aborted .userAbort 0) stdout events => stdout.isEmpty && events == [.begin 0, .write 0 0]
+  | _ => false
+
+private def printSnapshot : Module := moduleOf #[implementation "entry"
+  #[localVar "owner" (.growshrink (.int .u8))]
+  (.mk 0 [.letS 0 (.bytes (.growshrink (.int .u8)) [65] 0) 0,
+    .print [.view (.of (.var 0)), .expr (.blockE (.mk 1
+      [.print [.text "inner"] 0, .clear (.var 0) 0] (some (.lit .i64 7))))] 0] none)]
+
+#guard (observes printSnapshot).map Prod.fst == some [105, 110, 110, 101, 114, 10, 65, 55, 10]
 
 end Goose.Construct.ExecutionChecks
