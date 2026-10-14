@@ -12,9 +12,6 @@ def Ty.isRefSlice : Ty → Bool
   | .ref _ (.slice ..) => true
   | _ => false
 
-def Ty.ownerElem? : Ty → Option Ty
-  | .grow element | .growshrink element | .limited element _ => some element
-  | _ => none
 
 def Place.derefVar? : Place → Option VarId
   | .deref (.read (.var variableId)) => some variableId
@@ -25,59 +22,20 @@ structure AccessEnv where
   impl : Impl
   ctx : Context
 
-mutual
-def AccessEnv.placeType? (env : AccessEnv) : Place → Option Ty
-  | .var x => (env.impl.vars[x]?).map (·.ty)
-  | .global g => (env.mod.globals[g]?).map (·.ty)
-  | .deref e => do
-    match ← env.exprType? e with
-    | .ref _ t => some t
-    | _ => none
-  | .elem v _ _ => env.viewElement? v
-  | .field p i => do
-    match ← env.placeType? p with
-    | .structT sid _ => ((← env.mod.structs[sid]?).fields[i]?).map (·.ty)
-    | _ => none
+def AccessEnv.declarations (env : AccessEnv) : DeclarationEnv := ⟨env.mod, env.impl.vars⟩
 
-def AccessEnv.viewElement? (env : AccessEnv) : View → Option Ty
-  | .of p => do
-    match ← env.placeType? p with
-    | .arr t _ | .varr t | .grow t | .growshrink t | .limited t _ => some t
-    | _ => none
-  | .val e => do
-    match ← env.exprType? e with
-    | .slice _ t => some t
-    | _ => none
+def AccessEnv.placeType? (env : AccessEnv) (place : Place) : Option Ty :=
+  env.declarations.placeType? place
 
-def AccessEnv.exprType? (env : AccessEnv) : Expr → Option Ty
-  | .lit t _ => some (.int t)
-  | .bool _ | .cmp .. | .and .. | .or .. | .not _ => some .bool
-  | .read p => env.placeType? p
-  | .ref m p => (env.placeType? p).map (.ref m)
-  | .slice m v _ _ _ => (env.viewElement? v).map (.slice m)
-  | .len _ => some (.int .i64)
-  | .un _ e _ => env.exprType? e
-  | .bin _ a _ _ => env.exprType? a
-  | .conv _ t _ _ => some t
-  | .call c _ _ => do
-    let context ← env.mod.contexts[c]?
-    let impl ← env.mod.impls[context.impl]?
-    match impl.results.toList with
-    | [] => some .unit
-    | [t] => some t.ty
-    | _ => none
-  | .push p _ _ => do some (.ref .mutable (← (← env.placeType? p).ownerElem?))
-  | .pop p _ => do (← env.placeType? p).ownerElem?
-  | .ifE _ t _ => env.blockType? t
-  | .blockE b => env.blockType? b
-  | .arrLit t _ | .fill t _ | .structLit t _ | .bytes t _ _ | .str t _ _ | .copy t _ _ => some t
-  | .resultLocal id _ => (env.impl.vars[id]?).map (·.ty)
-  | .values _ => none
+def AccessEnv.viewElement? (env : AccessEnv) (view : View) : Option Ty :=
+  env.declarations.viewElement? view
 
-def AccessEnv.blockType? (env : AccessEnv) : Block → Option Ty
-  | .mk _ _ none => some .unit
-  | .mk _ _ (some e) => env.exprType? e
-end
+def AccessEnv.exprType? (env : AccessEnv) (expression : Expr) : Option Ty :=
+  env.declarations.exprType? expression
+
+def AccessEnv.blockType? (env : AccessEnv) (block : Block) : Option Ty :=
+  env.declarations.blockType? block
+
 
 def AccessEnv.variableRoots (env : AccessEnv) (x : VarId) : V (List RootRef) :=
   match (env.ctx.varRoots.find? (·.1 == x)).map (·.2) with

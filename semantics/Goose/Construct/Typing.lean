@@ -1,4 +1,4 @@
-import Goose.Construct.Syntax
+import Goose.Construct.Declarations
 import Goose.Core.Typing
 
 namespace Goose.Construct
@@ -35,42 +35,8 @@ def checkTypes (module : Module) : TyList → V Unit
   | .nil => pure ()
   | .cons ty rest => do checkType module ty; checkTypes module rest
 
-def Ty.storageType : Ty → Bool
-  | .int _ | .bool => true
-  | .arr element _ | .varr element | .grow element => element.flat || element.variableElement
-  | .growshrink element | .limited element _ => element.flat
-  | .structT _ fields => fields.flat
-  | _ => false
+
 end
-
-def Ty.storable (ty : Ty) : Bool :=
-  match ty with
-  | .ref _ target => target.storageType
-  | .slice _ element => element.flat || element.variableElement
-  | _ => ty.storageType
-
-def Ty.element? : Ty → Option Ty
-  | .arr element _ | .varr element | .grow element | .growshrink element |
-      .limited element _ | .slice _ element => some element
-  | _ => none
-
-def Ty.growing : Ty → Bool
-  | .grow _ | .growshrink _ | .limited _ _ => true
-  | _ => false
-
-def Ty.adaptsTo (source target : Ty) : Bool :=
-  source == target || match source, target with
-    | .arr a countA, .arr b countB => a == b && countA == countB
-    | _, .arr .. => false
-    | _, _ => match source.element?, target.element? with
-      | some a, some b => a == b && source.storageType && target.storageType
-      | _, _ => false
-
-def Ty.passesTo (source target : Ty) : Bool :=
-  match source, target with
-  | .ref sourceMut a, .ref targetMut b | .slice sourceMut a, .slice targetMut b =>
-      a == b && (sourceMut == .mutable || targetMut == .readOnly)
-  | _, _ => source.adaptsTo target
 
 private def Ty.referenceWritable (ty : Ty) (bindingWritable contentsWritable : Bool) : Bool :=
   match ty with
@@ -321,6 +287,13 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       | _ => fail .type "literal bytes require u8 array or immutable slice"
   | fuel + 1, env, .str ty arguments _ => do
       require (ty.storageType && ty.element? == some (.int .u8)) .type "constructed text requires u8 array"
+      if let .arr _ expected := ty then
+        let mut count := 0
+        for argument in arguments do
+          match argument with
+          | .text text => count := count + text.toUTF8.size
+          | _ => fail .type "fixed constructed text requires a statically known byte count"
+        require (count == expected) .type "fixed constructed text byte count mismatch"
       typePrint fuel env arguments
       pure [ty]
   | fuel + 1, env, .copy ty source _ => do
