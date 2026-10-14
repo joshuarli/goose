@@ -177,4 +177,48 @@ theorem getVal_success {fr : Frame} {id : ValueId} {st final : St} {value : Val}
     simp only [pure_apply, Res.ok.injEq] at success
     exact ⟨success.1 ▸ cell, success.2.symm⟩
 
+theorem bindParams_frame_fields {params : List (ValueId × VTy)} {args : List RVal}
+    {fr result : Frame} {st final : St}
+    (success : bindParams fr params args st = .ok result final) :
+    result.act = fr.act ∧ result.scopes = fr.scopes ∧ result.depth = fr.depth ∧ final = st := by
+  induction params generalizing args fr with
+  | nil =>
+    simp only [bindParams, pure_apply, Res.ok.injEq] at success
+    cases success.1
+    exact ⟨rfl, rfl, rfl, success.2.symm⟩
+  | cons param params ih =>
+    cases args with
+    | nil =>
+      simp only [bindParams, pure_apply, Res.ok.injEq] at success
+      cases success.1
+      exact ⟨rfl, rfl, rfl, success.2.symm⟩
+    | cons arg args =>
+      simp only [bindParams, setCell_eq, pure_bind] at success
+      simpa only [Frame.set] using (ih (fr := fr.set param.1 arg) success)
+
+theorem enterBlock_frame_fields {fn : Func} {fr result : Frame} {st final : St}
+    {target : BlockId} {args : List RVal} {insts : List Inst}
+    (success : enterBlock fn fr target args st = .ok (insts, result) final) :
+    result.act = fr.act ∧ result.scopes = fr.scopes ∧ result.depth = fr.depth ∧ final = st := by
+  unfold enterBlock at success
+  cases lookup : fn.blocks[target]? with
+  | none => simp [lookup, fault, M.stop] at success
+  | some block =>
+    simp only [lookup] at success
+    split at success
+    · obtain ⟨bound, middle, binding, finished⟩ := m_bind_ok success
+      simp only [pure_apply, Res.ok.injEq, Prod.mk.injEq] at finished
+      rw [← finished.1.2, ← finished.2]
+      exact bindParams_frame_fields binding
+    · simp [fault, M.stop] at success
+
+theorem FunctionEntry.frame_origin {fn : Func} {depth : Nat} {args : List Val}
+    {before : St} {fr : Frame} {after : St}
+    (entry : FunctionEntry fn depth args before fr after) :
+    fr.act = before.nextAct ∧ fr.scopes = [] ∧ fr.depth = depth ∧
+      after = { before with nextAct := before.nextAct + 1 } := by
+  obtain ⟨act, fresh, activation, state, entered⟩ := entry.activation
+  obtain ⟨frameActivation, scopes, frameDepth, afterEq⟩ := enterBlock_frame_fields entered
+  exact ⟨frameActivation.trans activation, scopes, frameDepth, afterEq.trans state⟩
+
 end Goose.Evidence
