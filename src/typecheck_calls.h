@@ -3165,7 +3165,10 @@ inline Val TypeCheck::RetAltVal(FnSpec *spec, const RootAlt &alt, vector<Val> &a
         auto record = RecordOf(spec);
         auto byteview = record && std::any_of(record->retroots.begin(), record->retroots.end(),
                                             [](const RetRoot &r) { return r.byteview; });
-        if (!byteview && !alt.exact && !IsRefOrSlice(t) && !spec->inprogress && ar.Exact() &&
+        auto callback = std::any_of(frames.begin(), frames.end(),
+                                    [](const Frame &f) { return f.isfunval; });
+        if (!callback && !byteview && !alt.exact && !IsRefOrSlice(t) &&
+            !spec->inprogress && ar.Exact() &&
             root && root->type && root->type->kind != TY_ARRAY &&
             ClassOf(root->type) == SC_FIXED &&
             !root->isglobal && !IsRefOrSlice(root->type) &&
