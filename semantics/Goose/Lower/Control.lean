@@ -19,6 +19,44 @@ def flowBlockOk : Core.Block → Bool
       (match value with | none => true | some expr => exprOk expr)
 end
 
+mutual
+theorem flowStmtOk_of_stmtOk (stmt : Stmt) (hok : stmtOk stmt = true) :
+    flowStmtOk stmt = true := by
+  cases stmt with
+  | ifS c t f org =>
+    cases f with
+    | none =>
+      have hok' : exprOk c = true ∧ blockOk t = true := by simpa [stmtOk] using hok
+      simp only [flowStmtOk, Bool.and_eq_true]
+      exact ⟨hok'.1, flowBlockOk_of_blockOk t hok'.2⟩
+    | some block =>
+      have hok' : (exprOk c = true ∧ blockOk t = true) ∧ blockOk block = true := by
+        simpa [stmtOk] using hok
+      simp only [flowStmtOk, Bool.and_eq_true]
+      exact ⟨⟨hok'.1.1, flowBlockOk_of_blockOk t hok'.1.2⟩,
+        flowBlockOk_of_blockOk block hok'.2⟩
+  | ret expr org => simp [stmtOk] at hok
+  | _ => simpa only [flowStmtOk, stmtReturnOk] using hok
+
+theorem flowStmtsOk_of_stmtsOk (stmts : List Stmt) (hok : stmtsOk stmts = true) :
+    flowStmtsOk stmts = true := by
+  cases stmts with
+  | nil => rfl
+  | cons stmt rest =>
+    have hok' : stmtOk stmt = true ∧ stmtsOk rest = true := by simpa [stmtsOk] using hok
+    simp only [flowStmtsOk, Bool.and_eq_true]
+    exact ⟨flowStmtOk_of_stmtOk stmt hok'.1, flowStmtsOk_of_stmtsOk rest hok'.2⟩
+
+theorem flowBlockOk_of_blockOk (block : Core.Block) (hok : blockOk block = true) :
+    flowBlockOk block = true := by
+  cases block with
+  | mk scope stmts value =>
+    rw [blockOk.eq_def] at hok
+    simp only [flowBlockOk, Bool.and_eq_true]
+    exact ⟨flowStmtsOk_of_stmtsOk stmts ((Bool.and_eq_true _ _).mp hok).1,
+      ((Bool.and_eq_true _ _).mp hok).2⟩
+end
+
 def FlowStmtClaim (n : Nat) (lc : Option LoopCtx) (stmt : Stmt) : Prop :=
   flowStmtOk stmt = true → ∀ (le : LEnv) (ls ls' : LS) (u : Unit) (pt : Pt)
     (cfg : Cfg) (env : Env) (cx : FnCtx) (fr : GIR.Frame),
