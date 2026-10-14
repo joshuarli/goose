@@ -138,6 +138,19 @@ theorem SimEAt.of_timeout {cx : FnCtx} {pt : Pt} {fr : Frame}
     {p : α → Pt → Frame → Prop} (s : St) :
     SimEAt cx pt fr (Goose.Core.timeout : M α) p s := SimE.of_timeout.at_state s
 
+theorem SimEAt.complete_ret1 {cx : FnCtx} {pt : Pt} {fr : Frame} {c : M Val}
+    {post : Val → Pt → Frame → Prop} {r : ValueId} {org : Option OriginId} {state : St}
+    (h : SimEAt cx pt fr c post state)
+    (ht : ∀ value after pt' fr', c state = .ok value after → post value pt' fr' →
+      instAt cx.fn pt' = some (.term (.ret [r] org)) ∧ fr'.vals[r]? = some (.val value)) :
+    EventualM c (fun fuel => runAt cx pt fr fuel) state := by
+  refine ⟨?_, h.2⟩
+  intro value after done
+  obtain ⟨point, frame, P, run⟩ := h.1 value after done
+  obtain ⟨instruction, cell⟩ := ht value after point frame done P
+  exact run 1 (.ok value after) (NonTimeout.ok value after)
+    (congrFun (runAt_ret1 instruction cell 0) after)
+
 theorem SimEAt.expectBool {cx : FnCtx} {pt : Pt} {fr : Frame} {value : Val}
     {next : Bool → M α} {post : α → Pt → Frame → Prop} {state : St}
     (h : ∀ branch, value = .bool branch → SimEAt cx pt fr (next branch) post state) :
