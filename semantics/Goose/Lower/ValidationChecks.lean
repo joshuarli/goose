@@ -102,7 +102,8 @@ def loopingEntry : Core.Module :=
 #guard match Core.validate loopingEntry with
   | .ok _ => true
   | _ => false
-#guard !Goose.Proofs.Lower.moduleOk loopingEntry
+#guard Goose.Proofs.Lower.moduleOk loopingEntry
+#guard !Goose.Proofs.Lower.moduleOk specializedResult
 
 def tailResult : Core.Module :=
   let m := loopResult (.mk 1 [] none)
