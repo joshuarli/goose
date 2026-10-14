@@ -598,7 +598,7 @@ theorem initialFrame {m : Module} {state : St} {globals : Nat} {effects : Eff}
     (typingVars : typing.vars = #[]) (rootsVars : roots.impl.vars = #[])
     (typingScopes : typing.scopes = []) (rootsScopes : roots.scopes = [])
     (typingVisible : typing.visible = []) (rootsContents : ∀ x, roots.cont x = none)
-    (activation : ActId := 0) :
+    (activation : ActId) :
     Core.Sound.Frame m (InitialWorld globals state.nextScope effects) typing roots ⟨#[], activation, [], 0⟩ state future := by
   refine {
     mod_t := typingModule, mod_p := rootsModule, vars_t := typingVars, vars_p := rootsVars,
@@ -643,10 +643,10 @@ theorem initialFrame {m : Module} {state : St} {globals : Nat} {effects : Eff}
 theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : Global}
     (accepted : Core.validate cfg.mod = .ok ())
     (globalAt : cfg.mod.globals[g]? = some global)
-    (invariant : StoreInv cfg.mod g state) (activation : ActId := 0) :
+    (invariant : StoreInv cfg.mod g state) (activation : ActId) :
     ∃ source : ExprSource cfg ⟨#[], activation, [], 0⟩ global.init state,
       source.typingEnv = initEnv cfg.mod g ∧
-      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty := by
+      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g := by
   have moduleOk := validate_modOk cfg.mod accepted
   obtain ⟨plans, derived, wellFormed⟩ := moduleOk.demandPlans
   have globalOk := moduleOk.glob g global globalAt
@@ -670,7 +670,7 @@ theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : G
     access := EvaluationContext.forGlobal_accessMatches derived wellFormed globalAt _ rfl rfl,
     protection := ?_, observed := ObservedSafe.empty _ _ _ _, classified := ?_,
     permission := permission, frame := ?_, typed := typed, rooted := rooted,
-    effects := EffLe.refl _ }, rfl, rfl, rfl⟩
+    effects := EffLe.refl _ }, rfl, rfl, rfl, rfl⟩
   · intro holder element target impossible
     exact impossible.elim
   · intro profile i r impossible
@@ -1403,7 +1403,149 @@ theorem acceptedGlobalActivation {cfg : Cfg} {state : St} {g : GlobalId} {global
     ∃ source : ExprSource cfg ⟨#[], state.nextAct, [], 0⟩ global.init
         { state with nextAct := state.nextAct + 1 },
       source.typingEnv = initEnv cfg.mod g ∧
-      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty :=
+      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g :=
   acceptedGlobalSource accepted globalAt (nextActivationInvariant invariant) state.nextAct
+
+structure InitializedGlobals (module : Module) (count : Nat) (state : St) : Prop where
+  invariant : StoreInv module count state
+  domain : ∀ (root : RootInst) (value : Val), state.store.roots[root]? = some value →
+    ∃ global : GlobalId, root = RootInst.global global ∧ global < count
+
+theorem InitializedGlobals.initial (module : Module) : InitializedGlobals module 0 St.initial :=
+  ⟨initialStoreInvariant module, by intro root value present; simp [St.initial, Store.empty] at present⟩
+
+theorem InitializedGlobals.afterInitializer {cfg : Cfg} {before after : St} {g : GlobalId}
+    {global : Global} {value : Val} (accepted : Core.validate cfg.mod = .ok ())
+    (globalAt : cfg.mod.globals[g]? = some global) (initialized : InitializedGlobals cfg.mod g before)
+    (fuel : Nat) (done : evalExpr fuel cfg ⟨#[], before.nextAct, [], 0⟩ global.init
+      { before with nextAct := before.nextAct + 1 } = .ok value after) :
+    InitializedGlobals cfg.mod (g + 1) { after with store := after.store.introduce (.global g) value } := by
+  obtain ⟨source, _, _, typeEq, countEq⟩ := acceptedGlobalActivation accepted globalAt initialized.invariant
+  have result := source.result fuel value done
+  have domain : ∀ (root : RootInst) (value : Val), after.store.roots[root]? = some value →
+      ∃ global : GlobalId, root = RootInst.global global ∧ global < g := by
+    intro root value present
+    have oldPresent := result.footprint.dom root (by rw [present]; simp)
+    obtain ⟨old, oldAt⟩ := Option.ne_none_iff_exists'.mp oldPresent
+    exact initialized.domain root old oldAt
+  have currentInvariant : StoreInv cfg.mod g after := by
+    have invariant := result.frame.inv
+    rw [countEq] at invariant
+    apply invariant.changeDemand
+    intro root demanded
+    cases root with
+    | global _ => exact Or.inl trivial
+    | «local» act scope slot =>
+      apply Or.inr
+      cases present : after.store.roots[RootInst.local act scope slot]? with
+      | none => rfl
+      | some v => obtain ⟨_, impossible, _⟩ := domain _ v present; cases impossible
+  have free : after.store.roots[RootInst.global g]? = none := by
+    cases present : after.store.roots[RootInst.global g]? with
+    | none => rfl
+    | some v =>
+      obtain ⟨index, equal, bound⟩ := domain _ v present
+      have indexEq := RootInst.global.inj equal
+      exact False.elim (Nat.lt_irrefl g (indexEq.symm ▸ bound))
+  have typed : HasTy cfg.mod g after.store value global.ty := by
+    have typed := result.typed
+    rw [typeEq, countEq] at typed
+    exact typed
+  have globalOk := (validate_modOk cfg.mod accepted).glob g global globalAt
+  have nonref := typed.not_ref globalOk.ty.2
+  have boundInvariant := currentInvariant.bind free typed.held
+    (fun root targeted => False.elim (nonref targeted.isRef))
+    (by intro act scope slot impossible; cases impossible)
+    (fun _ _ => nonref)
+    (fun _ equal => by cases equal; exact Or.inl (Array.getElem?_eq_some_iff.mp globalAt).1)
+  have boundDomain : ∀ root v,
+      (after.store.introduce (.global g) value).roots[root]? = some v →
+      ∃ global : GlobalId, root = RootInst.global global ∧ global < g + 1 := by
+    intro root v present
+    rw [get_introduce] at present
+    split at present
+    · rename_i same
+      exact ⟨g, same.symm, Nat.lt_succ_self _⟩
+    · obtain ⟨index, equal, bound⟩ := domain _ v present
+      exact ⟨index, equal, Nat.lt_succ_of_lt bound⟩
+  refine ⟨{
+    live := ?_, age := boundInvariant.age, fresh := boundInvariant.fresh,
+    globals := ?_, globalNonRefs := boundInvariant.globalNonRefs,
+    globalStorageDomain := boundInvariant.globalStorageDomain }, boundDomain⟩
+  · intro root v present demanded
+    obtain ⟨index, equal, _⟩ := boundDomain root v present
+    subst root
+    have nonref := boundInvariant.globalNonRefs index v present
+    cases v <;> simp [IsRef, Held] at nonref ⊢
+  · intro index declaration bound present
+    by_cases old : index < g
+    · exact boundInvariant.globals index declaration old present
+    · have equal : index = g := by omega
+      subst index
+      rw [globalAt] at present
+      cases present
+      refine ⟨value, ?_, typed.flatOfStorableNonref globalOk.ty.1 globalOk.ty.2⟩
+      apply (read_ok_iff _ _ _).mpr
+      exact ⟨value, by simp [get_introduce], by simp [get_nil]⟩
+
+theorem InitializedGlobals.afterInitializers {cfg : Cfg}
+    (accepted : Core.validate cfg.mod = .ok ()) (fuel : Nat) :
+    ∀ (count first : Nat) (before after : St),
+      first + count ≤ cfg.mod.globals.size → InitializedGlobals cfg.mod first before →
+      initGlobals fuel cfg (List.range' first count) before = .ok () after →
+      InitializedGlobals cfg.mod (first + count) after := by
+  intro count
+  induction count with
+  | zero =>
+    intro first before after bounded initialized done
+    simp only [List.range'_zero, initGlobals] at done
+    change Res.ok () before = Res.ok () after at done
+    cases done
+    exact initialized
+  | succ count induction =>
+    intro first before after bounded initialized done
+    have bound : first < cfg.mod.globals.size := by omega
+    let global := cfg.mod.globals[first]
+    have globalAt : cfg.mod.globals[first]? = some global := Array.getElem?_eq_getElem bound
+    simp only [List.range'_succ, initGlobals, lookupGlobal, globalAt, pure_bind] at done
+    change M.bind' (evalExpr fuel cfg ⟨#[], before.nextAct, [], 0⟩ global.init) (fun value =>
+      M.bind' (bindRoot (.global first) value) (fun _ =>
+        initGlobals fuel cfg (List.range' (first + 1) count)))
+      { before with nextAct := before.nextAct + 1 } = .ok () after at done
+    cases evaluated : evalExpr fuel cfg ⟨#[], before.nextAct, [], 0⟩ global.init
+        { before with nextAct := before.nextAct + 1 } with
+    | stop reason state =>
+      simp only [M.bind', evaluated] at done
+      cases done
+    | ok value state =>
+      have initializedNext := initialized.afterInitializer accepted globalAt fuel evaluated
+      have rest : initGlobals fuel cfg (List.range' (first + 1) count)
+          { state with store := state.store.introduce (.global first) value } = .ok () after := by
+        simpa only [M.bind', evaluated, bindRoot] using done
+      have final := induction (first + 1) _ after (by omega) initializedNext rest
+      have total : first + (count + 1) = (first + 1) + count := by omega
+      rw [total]
+      exact final
+
+theorem initializedGlobals_of_success {cfg : Cfg} {state : St}
+    (accepted : Core.validate cfg.mod = .ok ()) (fuel : Nat)
+    (done : initGlobals fuel cfg (List.range cfg.mod.globals.size) St.initial = .ok () state) :
+    InitializedGlobals cfg.mod cfg.mod.globals.size state := by
+  have run : initGlobals fuel cfg (List.range' 0 cfg.mod.globals.size) St.initial = .ok () state := by
+    simpa [List.range_eq_range'] using done
+  simpa only [Nat.zero_add] using InitializedGlobals.afterInitializers accepted fuel cfg.mod.globals.size 0 St.initial state
+    (by simp) (InitializedGlobals.initial cfg.mod) run
+
+theorem acceptedEntryAfterGlobals {cfg : Cfg} {state : St}
+    (accepted : Core.validate cfg.mod = .ok ()) (fuel : Nat)
+    (done : initGlobals fuel cfg (List.range cfg.mod.globals.size) St.initial = .ok () state) :
+    ∃ ctx impl, cfg.mod.contexts[cfg.mod.entry]? = some ctx ∧
+      cfg.mod.impls[ctx.impl]? = some impl ∧ impl.params.size = 0 ∧ impl.results.toList = [] ∧
+      ∃ source : BlockSource cfg ⟨impl.vars, state.nextAct, [], 1⟩
+          (impl.params.toList.zip [] |>.map (fun item => (item.1.var, item.2))) impl.body
+          { state with nextAct := state.nextAct + 1 },
+        source.typingEnv = { implEnv cfg.mod impl with visible := [] } ∧
+        source.rootsEnv = ⟨cfg.mod, impl, ctx, []⟩ :=
+  acceptedEntrySource accepted (initializedGlobals_of_success accepted fuel done).invariant
 
 end Goose.Lower
