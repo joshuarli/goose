@@ -2281,4 +2281,27 @@ theorem runModule_freshActivations (fuel : Nat) (config : EvalConfig) :
     FreshActivations (Goose.Proofs.Exit.stepState (runModule fuel config .initial)) :=
   runModule_preservesFresh fuel config .initial freshActivations_initial
 
+theorem runModule_selectedTarget_nearest (fuel : Nat) (config : EvalConfig) (targetId : Nat)
+    (activation : RuntimeActivation) (final : ExecutionState)
+    (selected : targetActivation config targetId
+      (Goose.Proofs.Exit.stepState (runModule fuel config .initial)) = .ok activation final) :
+    final = Goose.Proofs.Exit.stepState (runModule fuel config .initial) ∧
+    activation.act < final.nextAct ∧
+    ∃ target discarded outer,
+      config.module.targets[targetId]? = some target ∧
+      final.activations = discarded ++ activation :: outer ∧
+      target.contains activation.implementation = true ∧
+      (∀ earlier ∈ discarded, target.contains earlier.implementation = false) ∧
+      (final.activations.map (·.act)).Nodup := by
+  obtain ⟨unchanged, target, discarded, outer, declared, shape, member, excluded⟩ :=
+    targetActivation_selects_nearest config targetId _ final activation selected
+  subst final
+  obtain ⟨distinct, allocated⟩ := runModule_freshActivations fuel config
+  have present : activation ∈
+      (Goose.Proofs.Exit.stepState (runModule fuel config .initial)).activations := by
+    rw [shape]
+    simp
+  exact ⟨rfl, allocated activation present, target, discarded, outer, declared, shape,
+    member, excluded, distinct⟩
+
 end Goose.Proofs.ExitExecution
