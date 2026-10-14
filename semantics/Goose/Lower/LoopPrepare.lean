@@ -18,6 +18,60 @@ theorem prepareLoopFlow_none (env : Env) : prepareLoopFlow env none = prepareRet
   funext flow
   simp [prepareLoopFlow, bind_pure]
 
+theorem prepareLoopFlow_at_depth (env : Env) (loop : LoopCtx)
+    (hdepth : loop.depth = env.scopes.length) :
+    prepareLoopFlow env (some loop) = prepareReturn env := by
+  funext flow
+  cases flow <;>
+    simp [prepareLoopFlow, prepareReturn, prepareLoopExit, hdepth, releaseScopes,
+      bind_assoc, pure_bind]
+
+theorem execWhile_success_flow (fuel : Nat) (cfg : Cfg) (env : Env) (cond : Expr)
+    (body : Core.Block) : ∀ (state after : St) (flow : Flow),
+    execWhile fuel cfg env cond body state = .ok flow after →
+      flow = .normal .unit ∨ ∃ value, flow = .ret value := by
+  induction fuel with
+  | zero => intro state after flow done; simp [execWhile, Core.timeout, M.stop] at done
+  | succ fuel ih =>
+    intro state after flow done
+    simp only [execWhile, bind_apply] at done
+    cases hcond : evalExpr fuel cfg env cond state with
+    | stop reason middle => rw [hcond] at done; cases done
+    | ok value middle =>
+      simp only [hcond] at done
+      cases hbool : expectBool value middle with
+      | stop reason ready => rw [hbool] at done; cases done
+      | ok branch ready =>
+        simp only [hbool] at done
+        cases branch with
+        | false =>
+          simp only [Bool.false_eq_true, ↓reduceIte, pure_apply] at done
+          exact Or.inl (Res.ok.inj done).1.symm
+        | true =>
+          simp only [↓reduceIte, bind_apply] at done
+          cases hbody : execBlock fuel cfg env [] body ready with
+          | stop reason finished => rw [hbody] at done; cases done
+          | ok result finished =>
+            simp only [hbody] at done
+            cases result with
+            | normal value => exact ih finished after flow done
+            | cont => exact ih finished after flow done
+            | brk => exact Or.inl (Res.ok.inj done).1.symm
+            | ret value => exact Or.inr ⟨value, (Res.ok.inj done).1.symm⟩
+
+theorem prepareLoopFlow_execWhile (fuel : Nat) (cfg : Cfg) (env : Env) (loop : Option LoopCtx)
+    (cond : Expr) (body : Core.Block) :
+    (execWhile fuel cfg env cond body >>= prepareLoopFlow env loop) =
+      (execWhile fuel cfg env cond body >>= prepareReturn env) := by
+  funext state
+  simp only [bind_apply]
+  cases done : execWhile fuel cfg env cond body state with
+  | stop reason after => rfl
+  | ok flow after =>
+    rcases execWhile_success_flow fuel cfg env cond body state after flow done with rfl | ⟨value, rfl⟩
+    · cases loop <;> simp [prepareLoopFlow, prepareReturn, prepareLoopExit, pure_bind]
+    · cases loop <;> simp [prepareLoopFlow, prepareReturn, prepareLoopExit, bind_assoc, pure_bind]
+
 theorem prepareLoopFlow_normal_success {env : Env} {loop : Option LoopCtx}
     {flow : Flow} {value : Val} {before after : St}
     (h : prepareLoopFlow env loop flow before = .ok (.normal value) after) :
