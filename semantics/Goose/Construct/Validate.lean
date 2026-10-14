@@ -49,12 +49,20 @@ private def exprFacts (parent : Option Nat) : Expr → ValidationFacts
   | .pop owner org =>
       let children := placeFacts parent owner
       { children with origins := org :: children.origins }
-  | .ifE condition left right =>
-      (exprFacts parent condition).join ((blockFacts parent left).join (blockFacts parent right))
-  | .blockE block => blockFacts parent block
-  | .arrLit _ elements | .structLit _ elements | .values elements =>
+  | .ifE condition left right org =>
+      let children := (exprFacts parent condition).join ((blockFacts parent left).join (blockFacts parent right))
+      { children with origins := org :: children.origins }
+  | .blockE block org =>
+      let children := blockFacts parent block
+      { children with origins := org :: children.origins }
+  | .arrLit _ elements org =>
+      let children := joinFacts (elements.map (exprFacts parent))
+      { children with origins := org :: children.origins }
+  | .structLit _ elements | .values elements =>
       joinFacts (elements.map (exprFacts parent))
-  | .fill _ expression => exprFacts parent expression
+  | .fill _ expression org =>
+      let children := exprFacts parent expression
+      { children with origins := org :: children.origins }
   | .bytes _ _ org => { origins := [org] }
   | .str _ arguments org =>
       let children := printFacts parent arguments

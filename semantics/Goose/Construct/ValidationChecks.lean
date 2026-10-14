@@ -61,6 +61,88 @@ private def namedStructModule : Module := {
 #guard accepts namedStructModule
 #guard rejectsWith { namedStructModule with structs := #[⟨1, #[], ""⟩] } .type
 
+private def expressionModule (expression : Expr) : Module := {
+  (baseModule (implementation (.mk 0 [.expr expression 0] none))) with
+  origins := #[⟨0, 1, "global"⟩, ⟨0, 2, "global"⟩] }
+
+private def arrayLiteralOrigin : Module :=
+  expressionModule (.arrLit (.arr (.int .u8) 1) [.lit .u8 7] 1)
+#guard accepts arrayLiteralOrigin
+#guard rejectsWith { arrayLiteralOrigin with origins := #[⟨0, 1, "global"⟩] } .type
+
+private def fillOrigin : Module :=
+  expressionModule (.fill (.arr (.int .u8) 1) (.lit .u8 7) 1)
+#guard accepts fillOrigin
+#guard rejectsWith { fillOrigin with origins := #[⟨0, 1, "global"⟩] } .type
+
+private def conditionalOrigin : Module :=
+  expressionModule (.ifE (.bool true) (.mk 1 [] (some (.lit .i64 1)))
+    (.mk 2 [] (some (.lit .i64 2))) 1)
+#guard accepts conditionalOrigin
+#guard rejectsWith { conditionalOrigin with origins := #[⟨0, 1, "global"⟩] } .type
+
+private def valueBlockOrigin : Module :=
+  expressionModule (.blockE (.mk 1 [] (some (.lit .i64 1))) 1)
+#guard accepts valueBlockOrigin
+#guard rejectsWith { valueBlockOrigin with origins := #[⟨0, 1, "global"⟩] } .type
+
+private def workerModule (worker : Impl) (resultRoots : List (List RootRef)) : Module := {
+  (baseModule mainImpl #[mainImpl, worker]) with
+  contexts := #[context, ⟨1, worker.name, [], resultRoots, []⟩] }
+
+private def valueBreakWorker (body : Block) (results : Array ResultDescriptor)
+    (variables : Array LocalVar := #[]) : Impl := {
+  (implementation body variables results) with name := "value-worker" }
+
+private def referenceSlice : Ty := .ref .mutable (.slice .readOnly (.int .u8))
+
+private def referenceSliceParameterWorker : Impl := {
+  (valueBreakWorker (.mk 0 [] none) #[]) with
+  params := #[⟨0, .byRef⟩]
+  vars := #[⟨"view", referenceSlice, .immutable, 0, 0⟩] }
+
+private def referenceSliceParameterModule : Module := {
+  (workerModule referenceSliceParameterWorker []) with
+  types := #[referenceSlice]
+  contexts := #[context, ⟨1, "value-worker", [(0, [.param 0])], [], []⟩] }
+
+#guard accepts referenceSliceParameterModule
+
+private def referenceSliceLocalWorker : Impl :=
+  valueBreakWorker (.mk 0 [] none) #[] #[⟨"view", referenceSlice, .immutable, 0, 0⟩]
+
+#guard rejectsWith (workerModule referenceSliceLocalWorker []) .type
+
+private def noTailValueBreakWorker : Impl := valueBreakWorker
+  (.mk 0 [] (some (.blockE
+    (.mk 1 [.breakValue (.lit .i64 7) 0] none) 0)))
+  #[⟨.int .i64, .register, none⟩]
+
+#guard accepts (workerModule noTailValueBreakWorker [[]])
+
+private def whileValueBreakWorker : Impl := valueBreakWorker
+  (.mk 0 [] (some (.blockE (.mk 1 [
+    .while (.bool true) (.mk 2 [.breakValue (.lit .i64 7) 0] none) 0] none) 0)))
+  #[⟨.int .i64, .register, none⟩]
+
+#guard accepts (workerModule whileValueBreakWorker [[]])
+
+private def multiChannelValueBreakWorker : Impl := valueBreakWorker
+  (.mk 0 [] (some (.blockE
+    (.mk 1 [.breakValue (.values [.lit .i64 7, .lit .i64 8]) 0] none) 0)))
+  #[⟨.int .i64, .register, none⟩, ⟨.int .i64, .register, none⟩]
+
+#guard accepts (workerModule multiChannelValueBreakWorker [[], []])
+
+private def localReferenceValueBreakWorker : Impl := valueBreakWorker
+  (.mk 0 [] (some (.blockE (.mk 1 [
+    .letS 0 (.lit .i64 7) 0,
+    .breakValue (.ref .mutable (.var 0)) 0] none) 0)))
+  #[⟨.ref .mutable (.int .i64), .register, none⟩]
+  #[⟨"local", .int .i64, .mutable, 1, 0⟩]
+
+#guard rejectsWith (workerModule localReferenceValueBreakWorker [[]]) .block
+
 private def orphan : Impl := { mainImpl with name := "orphan" }
 #guard rejectsWith (baseModule mainImpl #[mainImpl, orphan]) .root
 
@@ -80,7 +162,7 @@ private def incompleteModule : Module := {
 private def missingPushOrigin : Impl :=
   implementation
     (.mk 0 [
-      .letS 0 (.arrLit (.grow (.int .u8)) []) 0,
+      .letS 0 (.arrLit (.grow (.int .u8)) [] 0) 0,
       .expr (.push (.var 0) (.lit .u8 1) none) 0] none)
     #[⟨"items", .grow (.int .u8), .mutable, 0, 0⟩]
 
@@ -122,12 +204,12 @@ private def arrays : Ty := .grow bytes
 
 private def mutatingProducer (owner : Nat) : Expr :=
   .blockE (.mk 1 [.expr (.push (.var owner) (.bytes bytes [10] 0) (some 0)) 0]
-    (some (.bytes bytes [20] 0)))
+    (some (.bytes bytes [20] 0))) 0
 
 private def ownerImplementation (statement : Stmt) : Impl :=
   implementation (.mk 0 [
-    .letS 0 (.arrLit arrays []) 0,
-    .letS 1 (.arrLit arrays []) 0,
+    .letS 0 (.arrLit arrays [] 0) 0,
+    .letS 1 (.arrLit arrays [] 0) 0,
     statement] none)
     #[⟨"owner", arrays, .mutable, 0, 0⟩, ⟨"other", arrays, .mutable, 0, 0⟩]
 
