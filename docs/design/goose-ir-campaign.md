@@ -1,10 +1,12 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** resumed 2026-10-14; remaining acceptance gates are parked or deferred.
+**Status:** active 2026-10-14; the owner requires completion of the remaining deliverables.
 **Branch:** `master`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`, rebased at the owner's request on 2026-10-14. The prior fork base and upstream merge remain historical records below.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
 ## Resumed checkpoint (2026-10-14)
+
+**Completion mandate.** The owner rejected ending the campaign with parked acceptance gates. Continue implementing and proving the remaining obligations. Earlier attempt limits describe prior investigations; they do not authorize ending this resumed run. Start independent construction work against the frozen schemas while lowering proofs develop. Keep every gate unclaimed until its actual acceptance evidence passes. The current history already corrects the stale redundant-cast snapshot in `61500d92`; the earlier red result below is historical.
 
 The resumed lanes start from clean `master` at `7cf79026`. The upstream target remains `46356c26`. Retained Core S8 candidates are superseded by integrated demand-aware proofs. Replaying their older files would remove current lemmas.
 
