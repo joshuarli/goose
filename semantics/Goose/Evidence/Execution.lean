@@ -484,4 +484,51 @@ theorem RuntimeStep.frame_identity {cfg : GCfg} {fn : Func} {pt pt' : Pt}
     have fields := enterBlock_frame_fields entered
     exact ⟨fields.1, fields.2.2.1⟩
 
+theorem ControlPath.definition_barrier {fn : Func} {id : ValueId} {operation : Op}
+    {definitionPt first last : Pt}
+    (definition : instAt fn definitionPt = some (.def id operation))
+    (noEarlierTerm : ∀ index < definitionPt.2, ∀ term,
+      instAt fn (definitionPt.1, index) ≠ some (.term term))
+    (path : ControlPath fn [id] first last)
+    (beforeDefinition : first.1 = definitionPt.1 ∧ first.2 ≤ definitionPt.2) :
+    last.1 = definitionPt.1 ∧ last.2 ≤ definitionPt.2 := by
+  induction path with
+  | refl => exact beforeDefinition
+  | @next first middle last transition unwritten rest ih =>
+    cases transition with
+    | @definition result writtenOperation instruction =>
+      by_cases equal : first.2 = definitionPt.2
+      · have pointEq : first = definitionPt := Prod.ext beforeDefinition.1 equal
+        rw [pointEq, definition] at instruction
+        cases instruction
+        have excluded := unwritten id (by simp)
+        simp [stepWrites, pointEq, definition] at excluded
+      · apply ih
+        exact ⟨beforeDefinition.1, by omega⟩
+    | @effect effect instruction =>
+      by_cases equal : first.2 = definitionPt.2
+      · have pointEq : first = definitionPt := Prod.ext beforeDefinition.1 equal
+        rw [pointEq, definition] at instruction
+        cases instruction
+      · apply ih
+        exact ⟨beforeDefinition.1, by omega⟩
+    | @branch term target instruction successor =>
+      have pointEq : first = (definitionPt.1, first.2) := Prod.ext beforeDefinition.1 rfl
+      by_cases equal : first.2 = definitionPt.2
+      · have exactPoint : first = definitionPt := Prod.ext beforeDefinition.1 equal
+        rw [exactPoint, definition] at instruction
+        cases instruction
+      · have earlier : first.2 < definitionPt.2 := by omega
+        rw [pointEq] at instruction
+        exact False.elim (noEarlierTerm first.2 earlier term instruction)
+
+theorem RuntimePoint.control_path {cfg : GCfg} {fn : Func} {pt : Pt} {fr : Frame} {st : St}
+    (point : RuntimePoint cfg fn pt fr st) : ControlPath fn [] (0, 0) pt := by
+  induction point with
+  | initializer _ _ _ _ _ => exact .refl
+  | entry _ _ _ _ => exact .refl
+  | call _ _ _ _ _ _ _ => exact .refl
+  | step _ transition ih =>
+    exact ih.trans (.next transition.control (by simp) .refl)
+
 end Goose.Evidence
