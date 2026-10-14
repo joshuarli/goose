@@ -838,6 +838,37 @@ theorem WeakFrameTy.callArgs {roots : RootDeclarations} {types : Array (Option V
       obtain ⟨rfl, rfl⟩ := read
       exact ⟨.cons (headTyped.passable passing) tailTyped, rfl⟩
 
+theorem WeakFrameTy.branchArgs {roots : RootDeclarations} {types : Array (Option VTy)}
+    {fr : Frame} {params : List (ValueId × VTy)} {ids : List ValueId} {values : List RVal}
+    {before after : St} (typed : WeakFrameTy roots types fr)
+    (metadata : ids.map (fun id => types[id]?) = params.map (fun param => some (some param.2)))
+    (read : mapList (getCell fr) ids before = .ok values after) :
+    ParamValuesTy roots params values ∧ after = before := by
+  induction params generalizing ids values before after with
+  | nil =>
+    cases ids with
+    | cons id ids => simp at metadata
+    | nil =>
+      simp only [mapList, pure_apply, Res.ok.injEq] at read
+      obtain ⟨rfl, rfl⟩ := read
+      exact ⟨.nil, rfl⟩
+  | cons param params ih =>
+    cases ids with
+    | nil => simp at metadata
+    | cons id ids =>
+      simp only [List.map_cons, List.cons.injEq] at metadata
+      simp only [mapList] at read
+      obtain ⟨value, middle, found, read⟩ := m_bind_ok read
+      obtain ⟨present, sameState⟩ := getCell_success found
+      subst middle
+      have headTyped := typed id value param.2 metadata.1 present
+      obtain ⟨tail, middle, foundTail, read⟩ := m_bind_ok read
+      obtain ⟨tailTyped, sameState⟩ := ih metadata.2 foundTail
+      subst middle
+      simp only [pure_apply, Res.ok.injEq] at read
+      obtain ⟨rfl, rfl⟩ := read
+      exact ⟨.cons headTyped tailTyped, rfl⟩
+
 theorem ParamValuesTy.mono {before after : RootDeclarations} {params : List (ValueId × VTy)}
     {args : List RVal} (extension : before.Extends after) (typed : ParamValuesTy before params args) :
     ParamValuesTy after params args := by
