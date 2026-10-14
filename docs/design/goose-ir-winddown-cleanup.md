@@ -103,3 +103,16 @@ Retired 32 parked historical S8 branch refs as lightweight tags under `archive/r
 | `goose-ir-sem-gir` | `archive/retired/goose-ir-sem-gir` |
 
 Removed two clean inactive historical baseline checkouts after confirming their commits remain reachable and no process referenced their paths. Ten clean worktrees under `.work/wt` remain for baseline and expensive artifact reuse, named in the campaign handoff. No registered external worktree remains.
+
+## Retired completed lane snapshots
+
+Retired four more completed lane branches as same-tip lightweight tags under `archive/retired/`:
+
+- `goose-ir-finish-construct-eval` at `9984015d`. Its evaluator, runtime, execution checks and runner source match master exactly.
+- `goose-ir-finish-construct-native` at `aa922b6d`. Preserve the earlier Core-export integration snapshot.
+- `goose-ir-finish-typing-validation` at `69fec42a`. Its typing-proof source matches master. Its older audit and coverage snapshot is superseded.
+- `goose-ir-winddown-disk-cleanup` at `02e31ccc`. Preserve the earlier cleanup-document snapshot.
+
+These tags preserve the full original histories. Retirement does not claim every historical patch is merged. The current unfinished compiler and proof lanes remain branches.
+
+The cleanup leaves 37 unmerged branches: 11 current campaign lanes or baselines and 26 owner-managed refs. Twenty-five integrated branch refs were deleted. Forty-three archive tags preserve retired evidence and candidate histories.
