@@ -939,6 +939,123 @@ theorem execEff_append_typed {activations : ActivationTypes} {fn : Func} {cfg : 
   subst middle
   exact appendEffect_typed frameTyped target ownerType valuesTyped evaluated
 
+theorem resizeTail_typed {cfg : GCfg} {fn : Func} {activations : ActivationTypes}
+    {fr fr' : Frame} {location : Loc} {owner element : Ty} {size : Int} {fill : Option Val}
+    {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (target : DeclaredLocation (runtimeDeclarations cfg activations) location owner)
+    (ownerType : owner.ownerElem? = some element)
+    (fillTyped : ∀ value, fill = some value → WeakValueTy (runtimeDeclarations cfg activations) value element)
+    (evaluated : (do
+      let len ← lengthLoc location
+      let size := wrap .i64 size
+      if size < 0 then abortAtOrg .resizeNegative org
+      else if size.toNat < len then
+        truncateLoc location size.toNat
+        pure fr
+      else if size.toNat == len then pure fr
+      else
+        match fill with
+        | none => abortAtOrg .resizeFill org
+        | some value => do
+          checkCapacityAtOrg location (size.toNat - len) org
+          let _ ← appendLoc location (Array.replicate (size.toNat - len) value)
+          pure fr) before = .ok fr' after) : RuntimeFrameTy cfg fn activations fr' after := by
+  obtain ⟨len, middle, measured, evaluated⟩ := m_bind_ok evaluated
+  have sameState := lengthLoc_state measured
+  subst middle
+  dsimp only at evaluated
+  split at evaluated
+  · cases org <;> simp [abortAtOrg, abortAt, fault, M.stop] at evaluated
+  · split at evaluated
+    · exact truncateEffect_typed frameTyped target ownerType evaluated
+    · split at evaluated
+      · simp only [pure_apply, Res.ok.injEq] at evaluated
+        obtain ⟨rfl, rfl⟩ := evaluated
+        exact frameTyped
+      · cases fill with
+        | none => cases org <;> simp [abortAtOrg, abortAt, fault, M.stop] at evaluated
+        | some value =>
+          obtain ⟨result, middle, checked, evaluated⟩ := m_bind_ok evaluated
+          have sameState := checkCapacityAtOrg_state checked
+          subst middle
+          apply appendEffect_typed frameTyped target ownerType _ evaluated
+          intro index selected present
+          rw [Array.getElem?_replicate] at present
+          split at present
+          · cases present
+            exact fillTyped value rfl
+          · contradiction
+
+theorem execEff_resize_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {targetId sizeId : ValueId} {permission : Mutability} {owner element : Ty}
+    {sizeTy : IntTy} {fillId : Option ValueId} {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission owner))))
+    (sizeMetadata : (fn.valueTypes cfg.mod)[sizeId]? = some (some (.data (.int sizeTy))))
+    (fillMetadata : ∀ id, fillId = some id → (fn.valueTypes cfg.mod)[id]? = some (some (.data element)))
+    (ownerType : owner.ownerElem? = some element)
+    (evaluated : execEff fn fr (.resize targetId sizeId fillId org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨targetTyped, sameState⟩ := frameTyped.2.2.getVal targetMetadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := targetTyped
+  simp only [expectRef, pure_bind] at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨sizeTyped, sameState⟩ := frameTyped.2.2.getVal sizeMetadata read
+  subst middle
+  obtain ⟨size, rfl⟩ := sizeTyped.int
+  simp only [expectInt, pure_bind] at evaluated
+  cases fillId with
+  | none =>
+    simp only at evaluated
+    exact resizeTail_typed frameTyped target ownerType (by simp) evaluated
+  | some id =>
+    simp only at evaluated
+    obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+    obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal (fillMetadata id rfl) read
+    subst middle
+    apply resizeTail_typed frameTyped target ownerType _ evaluated
+    intro other same
+    cases same
+    exact valueTyped
+
+theorem render_state {value : Val} {before after : St} {output : String}
+    (rendered : Goose.Core.render value before = .ok output after) : after = before := by
+  cases value <;> simp [Goose.Core.render, fault, M.stop, pure_apply] at rendered
+  all_goals first
+    | exact rendered.2.symm
+    | (rename_i b
+       cases b <;> simp only [pure_apply, Res.ok.injEq] at rendered <;> exact rendered.2.symm)
+
+theorem renderPart_state {fr : Frame} {part : PrintPart} {before after : St} {output : String}
+    (rendered : renderPart fr part before = .ok output after) : after = before := by
+  cases part with
+  | text text =>
+    simp only [renderPart, pure_apply, Res.ok.injEq] at rendered
+    exact rendered.2.symm
+  | val id =>
+    unfold renderPart at rendered
+    obtain ⟨value, middle, read, rendered⟩ := m_bind_ok rendered
+    have sameState := (getVal_success read).2
+    subst middle
+    exact render_state rendered
+
+theorem execEff_print_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {parts : List PrintPart} {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (evaluated : execEff fn fr (.print parts org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨strings, middle, rendered, evaluated⟩ := m_bind_ok evaluated
+  have sameState := mapList_state (fun _ _ _ _ read => renderPart_state read) rendered
+  subst middle
+  simp only [emit, bind_apply, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨frameTyped.1, frameTyped.2⟩
+
 theorem execEff_store_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
     {fr fr' : Frame} {targetId valueId : ValueId} {permission : Mutability} {ty : Ty}
     {org : Option OriginId} {before after : St}
