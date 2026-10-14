@@ -67,7 +67,7 @@ theorem validated_entry_params {m : Module} {fn : Func}
   exact (checkTypes_instructions checked).2
 
 theorem forIn_unit_ok {ε α : Type} {xs : List α}
-    {f : α → PUnit → Except ε (ForInStep PUnit)}
+    {f : α → PUnit.{1} → Except ε (ForInStep PUnit.{1})}
     (h : forIn xs PUnit.unit f = .ok ())
     (hy : ∀ x, ∀ u, ∀ step, f x u = .ok step → step = .yield PUnit.unit) :
     ∀ x ∈ xs, f x PUnit.unit = .ok (.yield PUnit.unit) := by
@@ -327,5 +327,219 @@ theorem validated_block_param_metadata {m : Module} {fn : Func}
           · exact ha
   · rw [← Array.foldl_toList, ← List.foldl_flatMap]
     exact fold_params_sets (by simp) hbound hpm coherent
+
+private def checkedEdge (label : String) (fn : Func) (vt : Array (Option VTy))
+    (source target : BlockId) (args : List ValueId) : Check Unit := do
+  let some dest := fn.blocks[target]? |
+    violation .v020 s!"{label}: block {source} branches outside the block table"
+  unless dest.params.length = args.length do
+    violation .v020 s!"{label}: the branch from block {source} to block {target} passes {args.length} arguments for {dest.params.length} parameters"
+  for (param, arg) in dest.params.zip args do
+    unless vt[arg]? == some (some param.2) do
+      violation .v020 s!"{label}: argument %{arg} of the branch from block {source} to block {target} has another type than parameter %{param.1}"
+
+private theorem forIn'_unit_ok {ε α : Type} {xs : List α}
+    {f : (x : α) → x ∈ xs → PUnit.{1} → Except ε (ForInStep PUnit.{1})}
+    (h : forIn' xs PUnit.unit f = .ok PUnit.unit)
+    (hy : ∀ x hx u step, f x hx u = .ok step → step = .yield PUnit.unit) :
+    ∀ x hx, f x hx PUnit.unit = .ok (.yield PUnit.unit) := by
+  induction xs with
+  | nil => simp
+  | cons a xs ih =>
+    rw [List.forIn'_cons] at h
+    obtain ⟨step, hs, hr⟩ := bind_ok h
+    have he := hy a List.mem_cons_self PUnit.unit step hs
+    subst step
+    intro x hx
+    rcases List.mem_cons.mp hx with rfl | hx
+    · exact hs
+    · exact ih hr (fun x hx u step => hy x (List.mem_cons_of_mem _ hx) u step) x hx
+
+private theorem checkedEdge_metadata {label : String} {fn : Func}
+    {vt : Array (Option VTy)} {source target : BlockId} {args : List ValueId}
+    (h : checkedEdge label fn vt source target args = .ok ()) :
+    ∃ dest, fn.blocks[target]? = some dest ∧ dest.params.length = args.length ∧
+      ∀ pair ∈ dest.params.zip args, vt[pair.2]? = some (some pair.1.2) := by
+  unfold checkedEdge at h
+  cases hd : fn.blocks[target]? with
+  | none => simp [hd, violation] at h
+  | some dest =>
+    rw [hd] at h
+    dsimp only at h
+    have hlen : dest.params.length = args.length := by
+      by_cases he : dest.params.length = args.length
+      · exact he
+      · simp [he, violation, bind, Except.bind] at h
+    rw [if_pos hlen] at h
+    obtain ⟨u, hloop, _⟩ := bind_ok h
+    cases u
+    have hall := forIn_unit_ok hloop (by
+      intro pair u step checked
+      by_cases he : vt[pair.2]? = some (some pair.1.2)
+      · simpa [he, pure, Except.pure] using checked.symm
+      · simp [he, violation, bind, Except.bind] at checked)
+    refine ⟨dest, rfl, hlen, ?_⟩
+    intro pair hp
+    have checked := hall pair hp
+    by_cases he : vt[pair.2]? = some (some pair.1.2)
+    · exact he
+    · simp [he, violation, bind, Except.bind] at checked
+
+private theorem cfg_branch_checks {label : String} {fn : Func} {vt : Array (Option VTy)}
+    (h : checkCfg label fn vt = .ok ()) :
+    ∀ source (hs : source < fn.blocks.size),
+      match fn.blocks[source].lastTerm? with
+      | some (.br target args) => checkedEdge label fn vt source target args = .ok ()
+      | some (.condbr _ target args other otherArgs) =>
+        checkedEdge label fn vt source target args = .ok () ∧
+          checkedEdge label fn vt source other otherArgs = .ok ()
+      | _ => True := by
+  unfold checkCfg at h
+  obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨u, hloop, _⟩ := bind_ok h
+  cases u
+  rw [Std.Legacy.Range.forIn'_eq_forIn'_range'] at hloop
+  have hall := forIn'_unit_ok hloop (by
+    intro source hs u step checked
+    have sourceLt : source < fn.blocks.size := by
+      have hm := List.mem_range'.mp hs
+      simp only [Std.Legacy.Range.size] at hm
+      omega
+    cases ht : fn.blocks[source].lastTerm? with
+    | none => simpa [ht, pure, Except.pure] using checked.symm
+    | some term =>
+      cases term <;> simp only [ht] at checked
+      all_goals
+        repeat' first
+          | exact (Except.ok.inj checked).symm
+          | obtain ⟨_, _, checked⟩ := bind_ok checked
+          | dsimp only at checked)
+  intro source hs
+  have hm : source ∈ List.range' 0 fn.blocks.size 1 := by
+    exact List.mem_range'.mpr ⟨source, hs, by omega⟩
+  have checked := hall source (by simpa [Std.Legacy.Range.size] using hm)
+  cases ht : fn.blocks[source].lastTerm? with
+  | none => trivial
+  | some term =>
+    simp only [ht] at checked
+    cases term <;> simp only [ht]
+    all_goals
+      first
+      | trivial
+      | dsimp only at checked
+        obtain ⟨_, hc, checked⟩ := bind_ok checked
+        exact hc
+      | dsimp only at checked
+        obtain ⟨_, hc, checked⟩ := bind_ok checked
+        obtain ⟨_, he, _⟩ := bind_ok checked
+        exact ⟨hc, he⟩
+
+private theorem map_eq_of_zip {α β γ : Type} {xs : List α} {ys : List β}
+    {f : α → γ} {g : β → γ} (hl : xs.length = ys.length)
+    (hz : ∀ pair ∈ xs.zip ys, f pair.1 = g pair.2) : xs.map f = ys.map g := by
+  induction xs generalizing ys with
+  | nil => cases ys <;> simp_all
+  | cons x xs ih =>
+    cases ys with
+    | nil => simp at hl
+    | cons y ys =>
+      simp only [List.length_cons, Nat.add_right_cancel_iff] at hl
+      have he := hz (x, y) (by simp)
+      have ht := ih hl (fun pair hp => hz pair (by simp [hp]))
+      simp only [List.map_cons, he, ht]
+
+theorem validated_branch_metadata {m : Module} {fn : Func}
+    (h : validate m = .ok ()) (hf : fn ∈ m.allFuncs)
+    {source : BlockId} (hs : source < fn.blocks.size)
+    {target : BlockId} {args : List ValueId}
+    (ht : fn.blocks[source].lastTerm? = some (.br target args)) :
+    ∃ dest, fn.blocks[target]? = some dest ∧
+      args.map (fun value => (fn.valueTypes m)[value]?) =
+        dest.params.map (fun param => some (some param.2)) := by
+  obtain ⟨info, hi, hfn, hvt⟩ := mem_infos hf
+  have hc := checkAll_mem (validate_stages h).2.1 hi
+  rw [hfn, hvt] at hc
+  have checked := cfg_branch_checks hc source hs
+  rw [ht] at checked
+  obtain ⟨dest, hd, hl, hz⟩ := checkedEdge_metadata checked
+  refine ⟨dest, hd, ?_⟩
+  exact (map_eq_of_zip hl (fun pair hp => (hz pair hp).symm)).symm
+
+theorem validated_condbranch_metadata {m : Module} {fn : Func}
+    (h : validate m = .ok ()) (hf : fn ∈ m.allFuncs)
+    {source : BlockId} (hs : source < fn.blocks.size)
+    {condition : ValueId} {target other : BlockId} {args otherArgs : List ValueId}
+    (ht : fn.blocks[source].lastTerm? = some (.condbr condition target args other otherArgs)) :
+    (∃ dest, fn.blocks[target]? = some dest ∧
+      args.map (fun value => (fn.valueTypes m)[value]?) =
+        dest.params.map (fun param => some (some param.2))) ∧
+    (∃ dest, fn.blocks[other]? = some dest ∧
+      otherArgs.map (fun value => (fn.valueTypes m)[value]?) =
+        dest.params.map (fun param => some (some param.2))) := by
+  obtain ⟨info, hi, hfn, hvt⟩ := mem_infos hf
+  have hc := checkAll_mem (validate_stages h).2.1 hi
+  rw [hfn, hvt] at hc
+  have checked := cfg_branch_checks hc source hs
+  rw [ht] at checked
+  constructor
+  · obtain ⟨dest, hd, hl, hz⟩ := checkedEdge_metadata checked.1
+    exact ⟨dest, hd, (map_eq_of_zip hl (fun pair hp => (hz pair hp).symm)).symm⟩
+  · obtain ⟨dest, hd, hl, hz⟩ := checkedEdge_metadata checked.2
+    exact ⟨dest, hd, (map_eq_of_zip hl (fun pair hp => (hz pair hp).symm)).symm⟩
+
+theorem validated_term_last {m : Module} {fn : Func}
+    (h : validate m = .ok ()) (hf : fn ∈ m.allFuncs)
+    {block : Block} (hb : block ∈ fn.blocks) {term : Term}
+    (hi : Inst.term term ∈ block.insts) : block.lastTerm? = some term := by
+  obtain ⟨hl, hlast⟩ := (validate_sound m h).1 fn hf |>.1 block hb
+  have hm : term ∈ block.terms := List.mem_filterMap.mpr ⟨.term term, hi, rfl⟩
+  have unique : ∀ other ∈ block.terms, other = term := by
+    intro other ho
+    cases hs : block.terms with
+    | nil => simp [hs] at hm
+    | cons first rest =>
+      have hr : rest = [] := by
+        have hrlen : rest.length = 0 := by
+          rw [hs] at hl
+          simp only [List.length_cons] at hl
+          omega
+        exact List.eq_nil_of_length_eq_zero hrlen
+      simp [hs, hr] at hm ho
+      exact ho.trans hm.symm
+  unfold Block.lastTerm? at hlast ⊢
+  cases he : block.insts.getLast? with
+  | none => simp [he] at hlast
+  | some inst =>
+    cases inst with
+    | «def» result op => simp [he] at hlast
+    | eff effect => simp [he] at hlast
+    | term other =>
+      have hmem : Inst.term other ∈ block.insts := by
+        obtain ⟨front, hp⟩ := List.getLast?_eq_some_iff.mp he
+        simp [hp]
+      have ho : other ∈ block.terms := List.mem_filterMap.mpr ⟨.term other, hmem, rfl⟩
+      simp [he, unique other ho]
+
+theorem typing_env_slots (m : Module) (fn : Func) : (m.tyEnv fn).slots = fn.slots := rfl
+
+theorem validated_instAt_term_last {m : Module} {fn : Func}
+    (h : validate m = .ok ()) (hf : fn ∈ m.allFuncs) {pt : Pt} {term : Term}
+    (hi : instAt fn pt = some (.term term)) :
+    ∃ hs : pt.1 < fn.blocks.size, fn.blocks[pt.1].lastTerm? = some term := by
+  unfold instAt at hi
+  cases hb : fn.blocks[pt.1]? with
+  | none => simp [hb] at hi
+  | some block =>
+    simp only [hb, Option.bind_some] at hi
+    obtain ⟨hs, he⟩ := Array.getElem_of_getElem? hb
+    refine ⟨hs, ?_⟩
+    rw [he]
+    exact validated_term_last h hf (Array.mem_of_getElem? hb) (List.mem_of_getElem? hi)
+
+theorem typing_env_signature {m : Module} {fn callee : Func} {id : FnId}
+    (h : m.funcs[id]? = some callee) :
+    (m.tyEnv fn).sigs[id]? = some (callee.params, callee.results) := by
+  change (m.funcs.map (fun f => (f.params, f.results)))[id]? = _
+  simp [h]
 
 end Goose.GIR
