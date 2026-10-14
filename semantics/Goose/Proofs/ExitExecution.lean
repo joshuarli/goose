@@ -1029,19 +1029,21 @@ theorem preservesFresh_finishChannel (layout : LayoutEnv) (origin : Goose.Core.O
       · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
       · intro destination
         simp only
-        split <;> split
-        all_goals
-          first
-            | exact preservesFresh_lift _ _
-            | (apply preservesFresh_bind
-               · exact preservesFresh_lift _ _
-               · intro _
-                 apply preservesFresh_bind
-                 · exact stateQuery_preservesFresh _ (stateQuery_receivingLayout layout destination.capability.layout)
-                 · intro receiving
+        split
+        · exact preservesFresh_lift _ _
+        · split <;> split
+          all_goals
+            first
+              | exact preservesFresh_lift _ _
+              | (apply preservesFresh_bind
+                 · exact preservesFresh_lift _ _
+                 · intro _
                    apply preservesFresh_bind
-                   · exact preservesFresh_lift _ _
-                   · intro _; exact preservesFresh_lift _ _)
+                   · exact stateQuery_preservesFresh _ (stateQuery_receivingLayout layout destination.capability.layout)
+                   · intro receiving
+                     apply preservesFresh_bind
+                     · exact preservesFresh_lift _ _
+                     · intro _; exact preservesFresh_lift _ _)
 
 theorem preservesFresh_finishChannels (layout : LayoutEnv) (types : List Ty)
     (carriers : List Carrier) (origin : Goose.Core.OriginId) :
@@ -1375,10 +1377,10 @@ theorem preservesFresh_escaped (address : ExitAddress) (carriers : List Carrier)
   intro state fresh
   exact fresh
 
-theorem preservesFresh_constructLocal (module : Module) (owner : Goose.Core.ActId) (ty : Ty)
+theorem preservesFresh_constructLocal (declarations : DeclarationEnv) (owner : Goose.Core.ActId) (ty : Ty)
     (origin : Goose.Core.OriginId) (expression : Expr) (construct : Goose.Core.DestinationId → EvalM Unit)
     (preserved : ∀ destination, PreservesFresh (construct destination)) :
-    PreservesFresh (constructLocal module owner ty origin expression construct) := by
+    PreservesFresh (constructLocal declarations owner ty origin expression construct) := by
   unfold constructLocal
   apply preservesFresh_bind
   · exact preservesFresh_newDestination _ _ _ _ _ _ _
@@ -1393,8 +1395,8 @@ theorem preservesFresh_constructLocal (module : Module) (owner : Goose.Core.ActI
         · exact preservesFresh_publishCarriers _ _
         · intro _; exact preservesFresh_pure _
 
-theorem preservesFresh_exitChannels (activation : RuntimeActivation) (operands : List Expr)
-    (origin : Goose.Core.OriginId) : PreservesFresh (exitChannels activation operands origin) := by
+theorem preservesFresh_exitChannels (source activation : RuntimeActivation) (operands : List Expr)
+    (origin : Goose.Core.OriginId) : PreservesFresh (exitChannels source activation operands origin) := by
   unfold exitChannels
   split
   · exact preservesFresh_stop _
@@ -1801,7 +1803,7 @@ macro_rules
     | with_reducible exact preservesFresh_writeLoc _ _ _ _
     | with_reducible exact preservesFresh_landCarriers _ _
     | with_reducible exact preservesFresh_bindAll _ _ _
-    | with_reducible exact preservesFresh_exitChannels _ _ _
+    | with_reducible exact preservesFresh_exitChannels _ _ _ _
     | with_reducible exact stateQuery_preservesFresh _ (stateQuery_rootOf _ _)
     | with_reducible exact stateQuery_preservesFresh _ (stateQuery_expectInt _)
     | with_reducible exact stateQuery_preservesFresh _ (stateQuery_expectBool _)
