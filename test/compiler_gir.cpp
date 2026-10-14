@@ -4564,20 +4564,20 @@ void ConstructionBytesUseLinearDestinationProtocol() {
     assert(low.profile == CoreProfile::Construction);
     assert(low.pointerBytes == sizeof(void *));
     assert(low.lowtargets.empty());
-    auto stores = 0;
+    auto writes = 0;
     auto bumps = 0;
     auto headerInitializations = 0;
     auto lengthUpdates = 0;
     for (auto &func : low.funcs) for (auto &block : func.blocks) for (auto &inst : block.insts) {
-        stores += inst.op == GirOp::PStore;
+        writes += inst.op == GirOp::Event && inst.event == GirEventKind::Write;
         bumps += inst.op == GirOp::StackBump;
         headerInitializations += inst.op == GirOp::HdrInit;
         lengthUpdates += inst.op == GirOp::HdrSetLen;
         assert(inst.op != GirOp::DestOpen && inst.op != GirOp::DestBytes &&
                inst.op != GirOp::DestFinish && inst.op != GirOp::DestPublish);
     }
-    assert(stores == 3);
-    assert(bumps == 1);
+    assert(writes == 3);
+    assert(bumps == 3);
     assert(headerInitializations == 1);
     assert(lengthUpdates == 1);
 }
@@ -4601,13 +4601,11 @@ void ConstructionGrowArrayUsesElementDestinations() {
 
     auto low = GirToLow(high).Lower();
     assert(!GirVerifier(low).Verify());
-    auto stores = 0;
     auto copies = 0;
     auto bumps = 0;
     auto headerInitializations = 0;
     auto lengthUpdates = 0;
     for (auto &func : low.funcs) for (auto &block : func.blocks) for (auto &inst : block.insts) {
-        stores += inst.op == GirOp::PStore;
         copies += inst.op == GirOp::BytesCopy;
         bumps += inst.op == GirOp::StackBump;
         headerInitializations += inst.op == GirOp::HdrInit;
@@ -4615,9 +4613,8 @@ void ConstructionGrowArrayUsesElementDestinations() {
         assert(inst.op != GirOp::DestOpen && inst.op != GirOp::DestWrite &&
                inst.op != GirOp::DestFinish && inst.op != GirOp::DestPublish);
     }
-    assert(stores == 0);
     assert(copies == 3);
-    assert(bumps == 1);
+    assert(bumps == 3);
     assert(headerInitializations == 1);
     assert(lengthUpdates == 1);
 }
@@ -5016,7 +5013,134 @@ void ConstructionFixedResultsUseExplicitOutputChannels() {
 
 }  // namespace
 
+GirModule ConstructionRecursiveArrayModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Construction;
+    auto byte = m.IntType(CoreIntTy::U8);
+    CoreType variable;
+    variable.kind = CoreType::VarArr;
+    variable.elem = byte;
+    auto inner = m.Intern(variable);
+    CoreType fixed;
+    fixed.kind = CoreType::Arr;
+    fixed.elem = inner;
+    fixed.count = 2;
+    auto outer = m.Intern(fixed);
+    Main(m).slots = { { outer, CoreVarKind::Let, 0, 0 } };
+    GirInst open = Def(GirOp::DestOpen, 0);
+    open.destReceiver = GirDestSlotReceiver { 0 };
+    open.ty = outer;
+    open.org = 0;
+    auto child = [&](int result, int parent) {
+        auto instruction = Def(GirOp::DestChild, result);
+        instruction.a = parent;
+        instruction.ty = inner;
+        instruction.org = 0;
+        return instruction;
+    };
+    auto bytes = [&](int destination, vector<uint8_t> values) {
+        GirInst instruction;
+        instruction.op = GirOp::DestBytes;
+        instruction.a = destination;
+        instruction.bytes = std::move(values);
+        instruction.org = 0;
+        return instruction;
+    };
+    auto finish = [&](int result, int destination) {
+        auto instruction = Def(GirOp::DestFinish, result);
+        instruction.a = destination;
+        instruction.org = 0;
+        return instruction;
+    };
+    auto attach = [&](int completion) {
+        GirInst instruction;
+        instruction.op = GirOp::DestAttach;
+        instruction.a = 0;
+        instruction.b = completion;
+        instruction.org = 0;
+        return instruction;
+    };
+    GirInst publish;
+    publish.op = GirOp::DestPublish;
+    publish.a = 5;
+    publish.org = 0;
+    auto slot = Def(GirOp::Slot, 6);
+    slot.idx = 0;
+    auto snapshot = Def(GirOp::Snap, 7);
+    snapshot.a = 6;
+    auto index = Def(GirOp::Index, 9);
+    index.a = 7;
+    index.b = 8;
+    index.org = 0;
+    auto innerSnapshot = Def(GirOp::Snap, 10);
+    innerSnapshot.a = 9;
+    auto render = Def(GirOp::Render, 11);
+    render.a = 10;
+    render.org = 0;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, "", 11 } };
+    print.org = 0;
+    Main(m).summary.outputs = true;
+    Main(m).summary.aborts = true;
+    Main(m).blocks[0].insts = {
+        Enter(0), open, child(1, 0), bytes(1, { 65, 0 }), finish(2, 1), attach(2),
+        child(3, 0), bytes(3, { 255 }), finish(4, 3), attach(4), finish(5, 0), publish,
+        slot, snapshot, Int(m, 8, "0"), index, innerSnapshot, render, print, Leave(0), Ret(),
+    };
+    return m;
+}
+
+void ConstructionRecursiveArraysUseExplicitPackedTraversal() {
+    auto m = ConstructionRecursiveArrayModule();
+    assert(Code(m) == "");
+    auto low = GirToLow(m).Lower();
+    assert(Code(low) == "");
+    assert(low.funcs[0].blocks.size() > 4);
+    assert(any_of(low.funcs[0].members.begin(), low.funcs[0].members.end(), [](auto &member) {
+        return member.kind == GirMember::Dynamic;
+    }));
+    for (auto &type : low.types)
+        assert(type.kind == CoreType::Int || type.kind == CoreType::Bool || type.kind == CoreType::Ptr || type.kind == CoreType::Unit);
+    auto wire = GirWriter(m).Write();
+    assert(wire.find("\"i_render\"") != string::npos);
+    auto escaped = m;
+    auto store = GirInst {};
+    store.op = GirOp::Init;
+    store.idx = 1;
+    store.a = 11;
+    store.org = 0;
+    Main(escaped).slots.push_back({ escaped.SliceType(CoreMut::Const, escaped.IntType(CoreIntTy::U8)), CoreVarKind::Let, 0, 1 });
+    Main(escaped).blocks[0].insts.insert(Main(escaped).blocks[0].insts.end() - 2, store);
+    assert(Code(escaped) != "");
+}
+
+void ConstructionCallsAndCarrierBranchesLowerToPrimitiveChannels() {
+    auto calls = ConstructionCallModule();
+    assert(Code(GirToLow(calls).Lower()) == "");
+    auto m = ByteConstructionModule();
+    auto destination = Main(m).blocks[0].insts[2];
+    auto type = m.CarrierType(CoreType::Dest, destination.ty, CoreRequest::Value);
+    auto built = m.CarrierType(CoreType::Built, destination.ty, CoreRequest::Value);
+    Main(m).blocks[0].insts = { Enter(0), Int(m, 0, "3"), destination, Br(1, { 1 }) };
+    GirInst write;
+    write.op = GirOp::DestBytes;
+    write.a = 2;
+    write.bytes = { 65, 0, 66 };
+    auto finish = Def(GirOp::DestFinish, 3);
+    finish.a = 2;
+    GirInst publish;
+    publish.op = GirOp::DestPublish;
+    publish.a = 4;
+    Main(m).blocks.push_back({ { { 2, type } }, { write, finish, Br(2, { 3 }) } });
+    Main(m).blocks.push_back({ { { 4, built } }, { publish, Leave(0), Ret() } });
+    assert(Code(m) == "");
+    assert(Code(GirToLow(m).Lower()) == "");
+}
+
 int main() {
+    ConstructionRecursiveArraysUseExplicitPackedTraversal();
+    ConstructionCallsAndCarrierBranchesLowerToPrimitiveChannels();
     ConstructionFixedResultsUseExplicitOutputChannels();
     ConstructionVariableExitRequiresCancellationBeforeLanding();
     ConstructionTargetEdgesAreTypedAndDerivedFromBodies();

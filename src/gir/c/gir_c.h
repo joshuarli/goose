@@ -67,6 +67,9 @@ public:
         string data;
         if (CoreHasConstruction(m.profile)) {
             data += "static GS_TLS int64_t gir_return_flag;\n";
+            data += "static GS_TLS gs_stack **gir_stack_cells;\nstatic GS_TLS size_t gir_stack_capacity;\n";
+            data += "static gs_stack *gir_stack_at(int64_t index) { if (index < 0 || (uint64_t)index >= SIZE_MAX / sizeof(gs_stack *)) gs_panic(\"invalid construction stack index\"); size_t needed = (size_t)index + 1; if (needed > gir_stack_capacity) { size_t capacity = gir_stack_capacity ? gir_stack_capacity : 8; while (capacity < needed) { if (capacity > SIZE_MAX / 2) gs_panic(\"construction stack directory overflow\"); capacity *= 2; } gs_stack **cells = (gs_stack **)realloc(gir_stack_cells, capacity * sizeof(gs_stack *)); if (!cells) gs_panic(\"out of memory allocating construction stacks\"); memset(cells + gir_stack_capacity, 0, (capacity - gir_stack_capacity) * sizeof(gs_stack *)); gir_stack_cells = cells; gir_stack_capacity = capacity; } if (!gir_stack_cells[index]) { gir_stack_cells[index] = (gs_stack *)malloc(sizeof(gs_stack)); if (!gir_stack_cells[index]) gs_panic(\"out of memory allocating construction stack cell\"); gs_stack_init(gir_stack_cells[index]); } return gir_stack_cells[index]; }\n";
+            data += "static void gir_stack_cells_close(void) { for (size_t index = 0; index < gir_stack_capacity; index++) free(gir_stack_cells[index]); free(gir_stack_cells); gir_stack_cells = NULL; gir_stack_capacity = 0; }\n";
             if (constructionTrace) {
                 data += "static FILE *gir_trace_file;\nstatic int gir_trace_comma;\nstatic int64_t gir_trace_storage, gir_trace_destination;\n";
                 data += "static void gir_trace_fail(void) { perror(\"construction trace\"); _Exit(74); }\n";
@@ -76,8 +79,8 @@ public:
                 data += "static void gir_trace_record(const char *kind, const char *reason, size_t n, const int64_t *v) { if (!gir_trace_file) return; if (fseek(gir_trace_file, -3, SEEK_END) != 0) gir_trace_fail(); if (gir_trace_comma && fputc(',', gir_trace_file) == EOF) gir_trace_fail(); gir_trace_comma = 1; if (fprintf(gir_trace_file, \"[\\\"%s\\\"\", kind) < 0) gir_trace_fail(); if (strcmp(kind, \"copy\") == 0) { if (fprintf(gir_trace_file, \",[\\\"%s\\\",%lld\", reason, (long long)v[0]) < 0) gir_trace_fail(); if (strcmp(reason, \"storage\") == 0) { if (fputs(\",[\", gir_trace_file) < 0) gir_trace_fail(); for (size_t k = 1; k + 1 < n; k++) if (fprintf(gir_trace_file, \"%s%lld\", k > 1 ? \",\" : \"\", (long long)v[k]) < 0) gir_trace_fail(); if (fputc(']', gir_trace_file) == EOF) gir_trace_fail(); } if (fprintf(gir_trace_file, \"],%lld\", (long long)v[n - 1]) < 0) gir_trace_fail(); } else { for (size_t k = 0; k < n; k++) if (fprintf(gir_trace_file, \",%lld\", (long long)v[k]) < 0) gir_trace_fail(); if (*reason && fprintf(gir_trace_file, \",\\\"%s\\\"\", reason) < 0) gir_trace_fail(); } if (fputc(']', gir_trace_file) == EOF || fputs(\"]]\\n\", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }\n";
             }
         }
-        for (size_t i = 0; i < m.diagfiles.size(); i++)
-            Append(data, "static const char ", filesym[i], "[] = ", CStr(m.diagfiles[i]), ";\n");
+        for (size_t i = 0; i < m.files.size(); i++)
+            Append(data, "static const char ", filesym[i], "[] = ", CStr(i < m.diagfiles.size() ? m.diagfiles[i] : m.files[i]), ";\n");
         string gblock;
         for (size_t g = 0; g < m.lowglobals.size(); g++) {
             auto &lg = m.lowglobals[g];
@@ -85,6 +88,7 @@ public:
                 case GirMember::Scalar: Append(gblock, "    ", CT(lg.ty), " ", gsym[g], ";\n"); break;
                 case GirMember::Bytes: Append(gblock, "    gir_blob_", lg.size, " ", gsym[g], ";\n"); break;
                 case GirMember::Header: Append(gblock, "    gir_hdr ", gsym[g], ";\n    gs_stack gs_gstk_", gsym[g], ";\n"); break;
+                case GirMember::Dynamic: Append(gblock, "    uint8_t *", gsym[g], ";\n    gs_stack gs_gstk_", gsym[g], ";\n"); break;
             }
         }
         if (!m.lowglobals.empty())
@@ -109,7 +113,7 @@ public:
             inits.push_back({ module, name });
             Append(initcode, "static void ", name, "(void) {\n");
             for (auto k = g; k < to; k++) {
-                if (m.lowglobals[k].kind == GirMember::Header)
+                if (m.lowglobals[k].kind == GirMember::Header || m.lowglobals[k].kind == GirMember::Dynamic)
                     Append(initcode, "    gs_stack_init(&GS_GL->gs_gstk_", gsym[k], ");\n");
                 Append(initcode, "    ", FName(m.initfuncs[k]), "(0);\n");
             }
@@ -120,7 +124,8 @@ public:
             string t = "static void gs_program_init(int argc, char **argv) {\n"
                        "    if (gs_program_initialized) return;\n";
             if (constructionTrace) t += "    gir_trace_open();\n";
-            Append(t, "    gs_rt_init(argc, argv, ", m.mainstacks, ", ", m.mainstacks + m.globalstacks, ", 0);\n");
+            if (CoreHasConstruction(m.profile)) t += "    if (atexit(gir_stack_cells_close) != 0) gs_panic(\"cannot register construction stack cleanup\");\n";
+            Append(t, "    gs_rt_init(argc, argv, ", (CoreHasConstruction(m.profile) ? 0 : m.mainstacks), ", ", m.mainstacks + m.globalstacks, ", 0);\n");
             if (units) {
                 set<string> modules;
                 for (auto &lg : m.lowglobals) modules.insert(lg.module);
@@ -150,7 +155,8 @@ public:
             UnitGlobalNames n;
             n.module = m.lowglobals[g].module;
             n.texts = { cat("GS_GL->", gsym[g]) };
-            if (m.lowglobals[g].kind == GirMember::Header) n.texts.push_back(cat("GS_GL->gs_gstk_", gsym[g]));
+            if (m.lowglobals[g].kind == GirMember::Header || m.lowglobals[g].kind == GirMember::Dynamic)
+                n.texts.push_back(cat("GS_GL->gs_gstk_", gsym[g]));
             u.globals.push_back(std::move(n));
             modules.insert(m.lowglobals[g].module);
         }
@@ -201,7 +207,7 @@ private:
                                                    Sha256::Of(cat(lg.module, "::", lg.name)).Short()));
             if (lg.kind == GirMember::Bytes) blobs.insert(lg.size);
         }
-        for (size_t i = 0; i < m.diagfiles.size(); i++)
+        for (size_t i = 0; i < m.files.size(); i++)
             filesym.push_back(i < m.filemodules.size() && !m.filemodules[i].empty()
                                   ? cat("gs_file_", Sha256::Of(m.filemodules[i]).Short())
                                   : cat("gs_file_", i));
@@ -337,6 +343,7 @@ private:
                 case GirMember::Scalar: Append(t, "    ", CT(mem.ty), " m", k, ";\n"); break;
                 case GirMember::Bytes: Append(t, "    uint64_t m", k, "[", (mem.size + 7) / 8, "];\n"); break;
                 case GirMember::Header: Append(t, "    gir_hdr m", k, ";\n"); break;
+                case GirMember::Dynamic: Append(t, "    uint8_t *m", k, ";\n"); break;
             }
         }
         for (size_t b = 0; b < f.blocks.size(); b++) {
@@ -435,7 +442,7 @@ private:
             }
             case GirOp::LocalGet: L(V(i.res), " = m", i.idx, ";"); return;
             case GirOp::LocalSet: L("m", i.idx, " = ", V(i.a), ";"); return;
-            case GirOp::StackAt: L(V(i.res), " = (uint8_t *)GS(", V(i.a), " + ", i.idx, ");"); return;
+            case GirOp::StackAt: L(V(i.res), " = (uint8_t *)", CoreHasConstruction(m.profile) ? "gir_stack_at(" : "GS(", V(i.a), " + ", i.idx, ");"); return;
             case GirOp::StackMark: L(V(i.res), " = ((gs_stack *)", V(i.a), ")->top;"); return;
             case GirOp::StackRelease: L("((gs_stack *)", V(i.a), ")->top = ", V(i.b), ";"); return;
             case GirOp::StackBump:

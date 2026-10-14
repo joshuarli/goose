@@ -19,13 +19,13 @@ enum class GirOp : uint8_t {
     Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
     Struct, Field, Bytes, Result, DestOpen, DestChild, DestFinish, DestNamed, ResultExitDest,
     DestAbandonNamed, DestArg, DestAbandon, DestValue, DestRelocate, DestStage, DestFit,
-    CallConstruct, TargetDest,
+    CallConstruct, TargetDest, Render,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
     HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId,
     // Instructions that define none, high stage.
     Init, Store, Append, AppendValue, PopN, Resize, Clear, Replace, DestWrite, DestAttach,
-    DestBytes, DestText, DestCopy, DestBind, DestPublish, DestCancel, Enter, Leave, Print,
+    DestBytes, DestText, DestCopy, DestRepeat, DestSnapshot, DestBind, DestPublish, DestCancel, Enter, Leave, Print,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
     BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event,
@@ -51,8 +51,8 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::ResultExitDest: case GirOp::DestAbandonNamed: case GirOp::DestArg:
         case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
         case GirOp::DestStage: case GirOp::DestFit: case GirOp::CallConstruct:
-        case GirOp::TargetDest: case GirOp::AppendValue: case GirOp::DestAttach:
-        case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestBind:
+        case GirOp::TargetDest: case GirOp::Render: case GirOp::AppendValue: case GirOp::DestAttach:
+        case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot: case GirOp::DestBind:
         case GirOp::DestCancel: case GirOp::Invoke: case GirOp::Escape:
         case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
@@ -232,7 +232,7 @@ struct GirRootInfo {
 // header of a resizable. A header's elements are on the data stack
 // `stack` of the function, numbered from its hidden base argument.
 struct GirMember {
-    enum Kind : uint8_t { Scalar, Bytes, Header } kind = Scalar;
+    enum Kind : uint8_t { Scalar, Bytes, Header, Dynamic } kind = Scalar;
     GirTypeId ty = -1;     // Scalar
     int64_t size = 0;      // Bytes
     int scope = 0;         // The scope whose entry and exit bound its life.
@@ -274,6 +274,7 @@ struct GirLowGlobal {
     GirMember::Kind kind = GirMember::Scalar;
     GirTypeId ty = -1;     // Scalar
     int64_t size = 0;      // Bytes
+    int stack = -1;
     string module;
 };
 

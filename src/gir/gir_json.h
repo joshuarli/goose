@@ -86,7 +86,8 @@ public:
             Str(objs, g.name);
             if (g.kind == GirMember::Scalar) Append(objs, ",\"scalar\",", T(g.ty), "]");
             else if (g.kind == GirMember::Bytes) Append(objs, ",\"bytes\",", g.size, "]");
-            else objs += ",\"header\"]";
+            else if (g.kind == GirMember::Header) objs += ",\"header\"]";
+            else Append(objs, ",\"dynamic\",", g.stack, "]");
         }
         objs += "],[";
         for (size_t i = 0; i < m.funcs.size(); i++) {
@@ -237,7 +238,12 @@ private:
                    field.binding == CoreVarKind::Var ? "var" : "let", "\",\"",
                    CoreMutName(field.contents), "\",", field.offset, "]");
         }
-        out += "]]";
+        out += ']';
+        if (CoreHasConstruction(m.profile)) {
+            out += ',';
+            Str(out, s.displayName);
+        }
+        out += ']';
     }
 
     static void Ints(string &out, const vector<int> &v) {
@@ -446,7 +452,8 @@ private:
             auto &mem = f.members[i];
             if (mem.kind == GirMember::Scalar) Append(out, "[\"m_scalar\",", T(mem.ty), ",");
             else if (mem.kind == GirMember::Bytes) Append(out, "[\"m_bytes\",", mem.size, ",");
-            else Append(out, "[\"m_header\",", mem.stack, ",");
+            else if (mem.kind == GirMember::Header) Append(out, "[\"m_header\",", mem.stack, ",");
+            else Append(out, "[\"m_dynamic\",", mem.stack, ",");
             Append(out, mem.scope, ",");
             Str(out, mem.name);
             out += ']';
@@ -598,7 +605,7 @@ private:
         auto type = functionValues[inst.res];
         auto kind = m.Type(type).kind;
         if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled ||
-            kind == CoreType::Tuple || inst.op == GirOp::Bytes) T(type);
+            kind == CoreType::Tuple || inst.op == GirOp::Bytes || inst.op == GirOp::Render) T(type);
     }
 
     static void Bound(string &out, const GirBound &b) {
@@ -741,6 +748,8 @@ private:
                 def("i_bytes"); out += ',';
                 Ints(out, vector<int>(i.bytes.begin(), i.bytes.end())); out += ',';
                 OptOrg(out, i.org); out += ']'; return;
+            case GirOp::Render:
+                def("i_render"); Append(out, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::Result:
                 def("i_result"); Append(out, ",", i.a, ",", i.idx, "]"); return;
             case GirOp::CallConstruct:
@@ -767,9 +776,10 @@ private:
                 if (i.op == GirOp::DestRelocate || i.op == GirOp::DestStage)
                     Append(out, "\"", GirEventReasonName(i.reason), "\",");
                 OptOrg(out, i.org); out += ']'; return;
-            case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::AppendValue:
+            case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot: case GirOp::AppendValue:
                 Append(out, "[\"", i.op == GirOp::DestAttach ? "x_dest_attach" :
-                       i.op == GirOp::DestText ? "x_dest_text" : i.op == GirOp::DestCopy ? "x_dest_copy" : "x_append_value",
+                       i.op == GirOp::DestText ? "x_dest_text" : i.op == GirOp::DestCopy ? "x_dest_copy" :
+                       i.op == GirOp::DestRepeat ? "x_dest_repeat" : i.op == GirOp::DestSnapshot ? "x_dest_snapshot" : "x_append_value",
                        "\",", i.a, ",", i.b, ",");
                 OptOrg(out, i.org); out += ']'; return;
             case GirOp::DestBind:

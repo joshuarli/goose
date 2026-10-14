@@ -376,6 +376,15 @@ public:
                     return GirTyErr("result projection outside a call pack");
                 return GirTyOk(tuple.parts[i.idx]);
             }
+            case GirOp::Render: {
+                auto operand = Val(i.a);
+                if (!operand.ok()) return operand;
+                auto &type = m.Type(operand.ty);
+                if (!CoreHasConstruction(m.profile) || m.low ||
+                    (type.kind != CoreType::View && !GirFlat(m, operand.ty)))
+                    return GirTyErr("render snapshot requires a fixed value or sampled view");
+                return GirTyOk(m.ViewType(CoreMut::Const, m.IntType(CoreIntTy::U8)));
+            }
             case GirOp::Bytes: {
                 if (i.ty < 0 || i.ty >= (int)m.types.size()) return GirTyErr("static bytes type outside the table");
                 auto &slice = m.Type(i.ty);
@@ -627,9 +636,10 @@ public:
                 return GirTyOk(m.PtrType());
             case GirOp::LocalGet:
                 if (!env.members || i.idx < 0 || i.idx >= (int)env.members->size() ||
-                    (*env.members)[i.idx].kind != GirMember::Scalar)
+                    ((*env.members)[i.idx].kind != GirMember::Scalar &&
+                     (*env.members)[i.idx].kind != GirMember::Dynamic))
                     return GirTyErr(cat("frame member ", i.idx, " is not a scalar of the frame"));
-                return GirTyOk((*env.members)[i.idx].ty);
+                return GirTyOk((*env.members)[i.idx].kind == GirMember::Dynamic ? m.PtrType() : (*env.members)[i.idx].ty);
             case GirOp::StackAt: {
                 auto b = Data(i.a);
                 if (!b.ok()) return b;

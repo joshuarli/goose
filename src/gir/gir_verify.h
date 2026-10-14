@@ -59,7 +59,8 @@ private:
     };
     vector<Fn> fns;
     vector<pair<vector<GirTypeId>, vector<GirTypeId>>> sigs;
-    vector<vector<int>> lowPassedPairs;
+    vector<vector<int>> lowPassedPairs, lowStackParams;
+    vector<vector<pair<int, int>>> lowMarkParams;
     vector<bool> lowReturnedOwnerPairs;
     vector<set<int>> constructionNeeds, constructionEscapes;
 
@@ -93,7 +94,7 @@ private:
             case GirOp::Index: case GirOp::IndexProven: case GirOp::Push: case GirOp::Store: case GirOp::Append:
             case GirOp::PopN: case GirOp::Replace:
             case GirOp::Format: case GirOp::OutBytes: case GirOp::AppendValue:
-            case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy:
+            case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot:
                 add(i.a); add(i.b);
                 break;
             case GirOp::Resize:
@@ -102,7 +103,7 @@ private:
                 break;
             case GirOp::Un: case GirOp::Not: case GirOp::Conv: case GirOp::Next: case GirOp::Freeze:
             case GirOp::Load: case GirOp::Snap: case GirOp::SliceView: case GirOp::ViewLen: case GirOp::Field:
-            case GirOp::ArrayLen: case GirOp::Fill: case GirOp::Init: case GirOp::Exit:
+            case GirOp::ArrayLen: case GirOp::Fill: case GirOp::Init: case GirOp::Exit: case GirOp::Render:
                 add(i.a);
                 break;
             case GirOp::DestBytes: case GirOp::DestFinish: case GirOp::DestPublish:
@@ -188,12 +189,12 @@ private:
             case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear: case GirOp::Replace:
                 return true;
             case GirOp::DestOpen:
-            case GirOp::OutBytes: case GirOp::DestChild:
+            case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render:
             case GirOp::DestNamed: case GirOp::ResultExitDest: case GirOp::DestAbandonNamed:
             case GirOp::DestArg: case GirOp::DestAbandon: case GirOp::DestValue:
             case GirOp::DestRelocate: case GirOp::DestStage: case GirOp::DestFit:
             case GirOp::CallConstruct: case GirOp::TargetDest: case GirOp::DestAttach:
-            case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestBind:
+            case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot: case GirOp::DestBind:
             case GirOp::DestCancel: case GirOp::Invoke: case GirOp::Escape:
                 return true;
             case GirOp::ViewSlice: case GirOp::Index: case GirOp::Call:
@@ -251,13 +252,16 @@ private:
         CheckUnreachable();
         if (m.low) {
             lowPassedPairs.assign(m.funcs.size(), {});
+            lowStackParams.assign(m.funcs.size(), {});
+            lowMarkParams.assign(m.funcs.size(), {});
             lowReturnedOwnerPairs.assign(m.funcs.size(), false);
             bool changed = true;
             int rounds = 0;
             while (changed && rounds++ < (int)m.funcs.size() * 4 + 8) {
+                auto channelChanged = CoreHasConstruction(m.profile) && ComputePassedStackChannels();
                 auto passed = ComputePassedOwnerPairs(lowReturnedOwnerPairs);
                 auto returned = ComputeReturnedOwnerPairs(passed, lowReturnedOwnerPairs);
-                changed = passed != lowPassedPairs || returned != lowReturnedOwnerPairs;
+                changed = channelChanged || passed != lowPassedPairs || returned != lowReturnedOwnerPairs;
                 lowPassedPairs = std::move(passed);
                 lowReturnedOwnerPairs = std::move(returned);
             }
@@ -353,6 +357,10 @@ private:
         }
 
         vector<int> typeForStruct(m.structs.size(), -1);
+        if (CoreHasConstruction(m.profile))
+            for (auto &descriptor : m.structs)
+                if (descriptor.displayName.empty() || !CoreIsUtf8(descriptor.displayName))
+                    Fail("GIR-V010", "construction struct display name is empty or not UTF-8");
         for (size_t t = 0; t < m.types.size(); t++) {
             auto &ty = m.types[t];
             if (ty.kind != CoreType::Struct) continue;
@@ -438,7 +446,7 @@ private:
         auto scan = [&](const GirFunc &fn) {
             for (auto &block : fn.blocks)
                 for (auto &i : block.insts) {
-                    auto constructionOp = (i.op >= GirOp::Bytes && i.op <= GirOp::TargetDest) ||
+                    auto constructionOp = (i.op >= GirOp::Bytes && i.op <= GirOp::Render) ||
                                           (i.op >= GirOp::StaticBytes && i.op <= GirOp::TraceId) ||
                                           i.op == GirOp::AppendValue ||
                                           (i.op >= GirOp::DestWrite && i.op <= GirOp::DestCancel) ||
@@ -653,6 +661,14 @@ private:
             facts.stack[entry.params[pos + 1].first] = token;
         }
 
+        if (CoreHasConstruction(m.profile))
+            for (size_t function = 0; function < m.funcs.size(); function++) if (&m.funcs[function] == &f) {
+                for (auto position : lowStackParams[function])
+                    facts.stack[entry.params[position].first] = { 3, position };
+                for (auto [mark, stack] : lowMarkParams[function])
+                    facts.markof[entry.params[mark].first] = { 3, stack };
+            }
+
         struct Edge { int block; vector<int> args; };
         vector<vector<Edge>> incoming(f.blocks.size());
         for (size_t b = 0; b < f.blocks.size(); b++) {
@@ -739,14 +755,16 @@ private:
                 auto &params = f.blocks[b].params;
                 auto &edges = incoming[b];
                 for (size_t p = 0; p < params.size(); p++) {
-                    vector<StackId> stacks, headers;
+                    vector<StackId> stacks, headers, marks;
                     for (auto &edge : edges) {
                         if (p >= edge.args.size()) continue;
                         stacks.push_back(at(facts.stack, edge.args[p]));
                         headers.push_back(at(facts.header, edge.args[p]));
+                        marks.push_back(at(facts.markof, edge.args[p]));
                     }
                     set(facts.stack, params[p].first, MergeStackFacts(stacks));
                     set(facts.header, params[p].first, MergeStackFacts(headers));
+                    set(facts.markof, params[p].first, MergeStackFacts(marks));
                 }
                 for (size_t hp = 0; hp < params.size(); hp++)
                     for (size_t sp = 0; sp < params.size(); sp++) {
@@ -839,6 +857,48 @@ private:
                 }
             }
         return headerUsed && stackUsed;
+    }
+
+    bool ComputePassedStackChannels() {
+        vector<StackFacts> facts;
+        for (size_t function = 0; function < fns.size(); function++)
+            facts.push_back(AnalyzeStackFacts(fns[function], lowPassedPairs[function], lowReturnedOwnerPairs));
+        bool changed = false;
+        for (size_t target = 0; target < m.funcs.size(); target++) {
+            auto &callee = m.funcs[target];
+            for (size_t position = 1; position < callee.params.size(); position++) {
+                if (m.Type(callee.params[position]).kind != CoreType::Ptr) continue;
+                bool called = false, valid = true;
+                for (size_t caller = 0; caller < fns.size(); caller++)
+                    for (auto &block : fns[caller].f->blocks) for (auto &inst : block.insts) {
+                        if (inst.op != GirOp::Call || inst.idx != (int)target) continue;
+                        called = true;
+                        if (facts[caller].stack[inst.vals[position]].kind <= 0) valid = false;
+                    }
+                if (called && valid && find(lowStackParams[target].begin(), lowStackParams[target].end(), (int)position) == lowStackParams[target].end()) {
+                    lowStackParams[target].push_back((int)position);
+                    changed = true;
+                }
+            }
+            for (size_t position = 1; position < callee.params.size(); position++)
+                for (auto stack : lowStackParams[target]) {
+                    bool called = false, valid = true;
+                    for (size_t caller = 0; caller < fns.size(); caller++)
+                        for (auto &block : fns[caller].f->blocks) for (auto &inst : block.insts) {
+                            if (inst.op != GirOp::Call || inst.idx != (int)target) continue;
+                            called = true;
+                            auto mark = facts[caller].markof[inst.vals[position]];
+                            auto owner = facts[caller].stack[inst.vals[stack]];
+                            if (mark.kind <= 0 || !(mark == owner)) valid = false;
+                        }
+                    auto pair = make_pair((int)position, stack);
+                    if (called && valid && find(lowMarkParams[target].begin(), lowMarkParams[target].end(), pair) == lowMarkParams[target].end()) {
+                        lowMarkParams[target].push_back(pair);
+                        changed = true;
+                    }
+                }
+        }
+        return changed;
     }
 
     vector<vector<int>> ComputePassedOwnerPairs(const vector<bool> &returnedPairs) const {
@@ -964,7 +1024,13 @@ private:
                     case GirOp::StackBump: {
                         auto s = at(stack, i.a);
                         if (s.kind <= 0) bad("a bump of a stack that is not known");
-                        pending.push_back(s);
+                        auto dynamic = false;
+                        if (s.kind == 1)
+                            for (auto &member : f.members)
+                                dynamic |= member.kind == GirMember::Dynamic && member.stack == s.index;
+                        if (s.kind == 2 && s.index >= 0 && s.index < (int)m.lowglobals.size())
+                            dynamic = m.lowglobals[s.index].kind == GirMember::Dynamic;
+                        if (!dynamic && (!CoreHasConstruction(m.profile) || find(pending.begin(), pending.end(), s) == pending.end())) pending.push_back(s);
                         break;
                     }
                     case GirOp::HdrSetLen: {
@@ -976,7 +1042,46 @@ private:
                     default: break;
                 }
             }
-            if (!pending.empty()) bad("a stack bumped without the length of its header following in the block");
+            if (!CoreHasConstruction(m.profile) && !pending.empty()) bad("a stack bumped without the length of its header following in the block");
+        }
+        if (CoreHasConstruction(m.profile)) {
+            vector<set<pair<int, int>>> incoming(f.blocks.size());
+            vector<bool> reached(f.blocks.size(), false);
+            vector<int> work { 0 };
+            reached[0] = true;
+            while (!work.empty()) {
+                auto block = work.back(); work.pop_back();
+                auto pending = incoming[block];
+                for (auto &instruction : f.blocks[block].insts) {
+                    if (instruction.op == GirOp::StackBump) {
+                        auto owner = at(stack, instruction.a);
+                        bool localHeader = false;
+                        if (owner.kind == 1) for (auto &member : f.members)
+                            localHeader |= member.kind == GirMember::Header && member.stack == owner.index;
+                        if (owner.kind == 2 && owner.index >= 0 && owner.index < (int)m.lowglobals.size())
+                            localHeader = m.lowglobals[owner.index].kind == GirMember::Header;
+                        if (localHeader) pending.insert({ owner.kind, owner.index });
+                    }
+                    if (instruction.op == GirOp::HdrSetLen) {
+                        auto owner = at(header, instruction.a);
+                        pending.erase({ owner.kind, owner.index });
+                    }
+                    if (instruction.op == GirOp::StackRelease) {
+                        auto owner = at(stack, instruction.a);
+                        pending.erase({ owner.kind, owner.index });
+                    }
+                    if (instruction.op == GirOp::Ret && !pending.empty())
+                        bad("normal return leaves an unpublished header growth");
+                }
+                for (auto successor : BlockSuccessors(f.blocks[block])) {
+                    auto before = incoming[successor];
+                    incoming[successor].insert(pending.begin(), pending.end());
+                    if (!reached[successor] || before != incoming[successor]) {
+                        reached[successor] = true;
+                        work.push_back(successor);
+                    }
+                }
+            }
         }
     }
 
@@ -1005,13 +1110,17 @@ private:
             if (mem.kind == GirMember::Bytes && mem.size <= 0) bad("a block of bytes without a size");
             if (mem.kind == GirMember::Header && (mem.stack < 0 || mem.stack >= f.stacks))
                 bad("a header whose data stack is outside the function's stacks");
+            if (mem.kind == GirMember::Dynamic &&
+                (!CoreHasConstruction(m.profile) || mem.stack < 0 || mem.stack >= f.stacks))
+                bad("a dynamic member without a construction-owned data stack");
         }
-        // At most one live resizable per stack: two that share a stack have
-        // scopes that neither contains the other.
         for (size_t a = 0; a < f.members.size(); a++)
             for (size_t c = a + 1; c < f.members.size(); c++) {
                 auto &x = f.members[a], &y = f.members[c];
-                if (x.kind != GirMember::Header || y.kind != GirMember::Header || x.stack != y.stack) continue;
+                auto ownsStack = [](const GirMember &member) {
+                    return member.kind == GirMember::Header || member.kind == GirMember::Dynamic;
+                };
+                if (!ownsStack(x) || !ownsStack(y) || x.stack != y.stack) continue;
                 if (ScopeWithin(f.scopes, x.scope, y.scope) || ScopeWithin(f.scopes, y.scope, x.scope))
                     bad(cat("two resizables live on data stack ", x.stack));
             }
@@ -1124,11 +1233,41 @@ private:
             }
             return done(nullopt);
         };
+        auto allocatedOutput = [&](int blockId, const GirInst &output) {
+            auto *start = definitions[output.a];
+            if (!start || start->op != GirOp::StackMark) return false;
+            auto guarded = false;
+            auto bound = upper(output.b);
+            if (bound) guarded = true;
+            for (auto &predecessor : f.blocks) {
+                auto *term = LastTerm(predecessor);
+                if (!term || term->op != GirOp::CondBr || term->idx != blockId || !term->vals.empty()) continue;
+                auto *condition = definitions[term->a];
+                if (!condition || condition->op != GirOp::Cmp || condition->cmp != CoreCmpOp::Ge ||
+                    condition->a != output.b || upper(condition->b) != optional<int64_t>(0)) continue;
+                auto *failure = LastTerm(f.blocks[term->idx2]);
+                if (failure && failure->op == GirOp::Abort) guarded = true;
+            }
+            if (!guarded) return false;
+            bool marked = false, allocated = false;
+            for (auto &instruction : f.blocks[blockId].insts) {
+                if (&instruction == &output) return marked && allocated;
+                if (&instruction == start) marked = true;
+                if (instruction.op == GirOp::StackBump && instruction.a == start->a) {
+                    if (!marked || allocated || instruction.b != output.b) return false;
+                    allocated = true;
+                }
+                if (instruction.op == GirOp::StackRelease && instruction.a == start->a) return false;
+                if (instruction.op == GirOp::Call) return false;
+            }
+            return false;
+        };
         for (auto &block : f.blocks) for (auto &inst : block.insts) {
             if (inst.op == GirOp::OutBytes) {
                 auto source = region(inst.a);
                 auto count = upper(inst.b);
-                if (!source || !count || *count > source->available)
+                if ((!source || !count || *count > source->available) &&
+                    !allocatedOutput((int)(&block - f.blocks.data()), inst))
                     Fail("GIR-V090", cat(fn.label, ": byte output interval is not proven live and nonnegative"));
             }
             if (inst.op == GirOp::Format) {
@@ -1331,7 +1470,12 @@ private:
         switch (i.op) {
             case GirOp::Init: {
                 auto v = need(ty.Data(i.a));
-                if (v != f.slots[i.idx].ty)
+                auto alias = false;
+                if (CoreHasConstruction(m.profile) && GirNonfixed(m, f.slots[i.idx].ty))
+                    for (size_t parameter = 0; parameter < f.params.size(); parameter++)
+                        alias |= f.params[parameter] == f.slots[i.idx].ty && f.blocks[0].params[parameter].first == i.a &&
+                                 v == m.RefType(CoreMut::Mut, f.slots[i.idx].ty);
+                if (v != f.slots[i.idx].ty && !alias)
                     TypeFail(fn, cat("slot ", i.idx, " is initialized with a value of another type"));
                 break;
             }
@@ -1461,6 +1605,23 @@ private:
                     TypeFail(fn, "construction copy changes the element type");
                 break;
             }
+            case GirOp::DestRepeat: {
+                auto &destination = m.Type(need(ty.Val(i.a)));
+                auto &source = m.Type(need(ty.Val(i.b)));
+                if (destination.kind != CoreType::Dest || source.kind != CoreType::Built ||
+                    source.request != CoreRequest::Value || m.Type(destination.elem).kind != CoreType::Arr ||
+                    m.Type(destination.elem).elem != source.elem)
+                    TypeFail(fn, "repeat source does not match the fixed-count destination element");
+                break;
+            }
+            case GirOp::DestSnapshot: {
+                auto &destination = m.Type(need(ty.Val(i.a)));
+                auto snapshot = need(ty.Data(i.b));
+                if (destination.kind != CoreType::Dest || m.Type(snapshot).kind != CoreType::Arr ||
+                    !GirFlat(m, snapshot) || m.Type(destination.elem).elem != m.Type(snapshot).elem)
+                    TypeFail(fn, "fixed snapshot does not match destination elements");
+                break;
+            }
             case GirOp::DestBind: {
                 auto &carrier = m.Type(need(ty.Val(i.a)));
                 if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value || i.idx < 0 ||
@@ -1526,9 +1687,10 @@ private:
                 break;
             }
             case GirOp::LocalSet: {
-                if (i.idx < 0 || i.idx >= (int)f.members.size() || f.members[i.idx].kind != GirMember::Scalar)
+                if (i.idx < 0 || i.idx >= (int)f.members.size() ||
+                    (f.members[i.idx].kind != GirMember::Scalar && f.members[i.idx].kind != GirMember::Dynamic))
                     TypeFail(fn, cat("frame member ", i.idx, " is not a scalar of the frame"));
-                if (need(ty.Data(i.a)) != f.members[i.idx].ty)
+                if (need(ty.Data(i.a)) != (f.members[i.idx].kind == GirMember::Dynamic ? m.PtrType() : f.members[i.idx].ty))
                     TypeFail(fn, "a member set to a value of another type");
                 break;
             }
@@ -1561,10 +1723,13 @@ private:
             case GirOp::Print:
                 for (auto &p : i.parts) {
                     if (p.text) continue;
-                    auto t = need(ty.Data(p.val));
+                    auto t = need(ty.Val(p.val));
                     auto k = m.Type(t).kind;
-                    if (k != CoreType::Int && k != CoreType::Bool)
-                        TypeFail(fn, "a printed value is neither an integer nor a boolean");
+                    if (k != CoreType::Int && k != CoreType::Bool &&
+                        !(CoreHasConstruction(m.profile) && k == CoreType::View &&
+                          m.Type(t).mut == CoreMut::Const && m.Type(m.Type(t).elem).kind == CoreType::Int &&
+                          m.Type(m.Type(t).elem).ity == CoreIntTy::U8))
+                        TypeFail(fn, "a printed value is not a scalar or rendered byte snapshot");
                 }
                 break;
             default: break;
@@ -1665,6 +1830,15 @@ private:
         for (auto param : f.params)
             if (GirOwnerKind(m.Type(param).kind) && !CoreHasConstruction(m.profile))
                 TypeFail(fn, "a nonfixed owner is a by-value parameter");
+        if (CoreHasConstruction(m.profile) && !m.low)
+            for (size_t parameter = 0; parameter < f.params.size(); parameter++) {
+                if (!GirNonfixed(m, f.params[parameter])) continue;
+                int bindings = 0;
+                for (auto &inst : f.blocks[0].insts)
+                    if (inst.op == GirOp::Init && inst.a == f.blocks[0].params[parameter].first &&
+                        f.slots[inst.idx].ty == f.params[parameter]) bindings++;
+                if (bindings != 1) TypeFail(fn, "owned parameter does not bind exactly one local slot in block 0");
+            }
         for (auto result : f.results)
             if (IsRefSlice(result))
                 TypeFail(fn, "a reference-to-slice type is only valid for a parameter");
@@ -2805,6 +2979,14 @@ private:
             auto parsed = from_chars(text.data(), text.data() + text.size(), n);
             return parsed.ec == errc() && parsed.ptr == text.data() + text.size() ? n : -1;
         };
+        for (auto &block : f.blocks) for (auto &inst : block.insts) {
+            vector<int> uses;
+            Uses(inst, uses);
+            for (auto value : uses)
+                if (definitions[value] && definitions[value]->op == GirOp::Render &&
+                    !((inst.op == GirOp::Print) || (inst.op == GirOp::DestText && inst.b == value)))
+                    bad("rendered print snapshot escapes its statement consumer");
+        }
         State initial;
         size_t channel = f.params.size();
         for (size_t result = 0; result < f.results.size(); result++) {
@@ -2941,6 +3123,20 @@ private:
                     case GirOp::DestText: case GirOp::DestCopy:
                         ready(inst.a).count = -1;
                         break;
+                    case GirOp::DestSnapshot: {
+                        auto &owner = ready(inst.a);
+                        if (owner.count >= 0) owner.count += m.Type(fn.vt[inst.b]).count;
+                        break;
+                    }
+                    case GirOp::DestRepeat: {
+                        auto source = consume(inst.b);
+                        if (source.parent >= 0 || source.channel >= 0 || source.argumentFunction >= 0 || source.staged)
+                            bad("repeat consumes a completion belonging to another receiver");
+                        auto &owner = ready(inst.a);
+                        if (owner.count != 0) bad("repeat destination already contains elements");
+                        owner.count = m.Type(m.Type(fn.vt[inst.a]).elem).count;
+                        break;
+                    }
                     case GirOp::DestAttach: {
                         auto child = consume(inst.b);
                         auto &parent = ready(inst.a);
