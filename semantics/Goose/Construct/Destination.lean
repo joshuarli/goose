@@ -489,6 +489,9 @@ def acknowledgeAbandonment (id : DestinationId) : ConstructionM Unit := do
 def landingBytes (bytes : ByteArray) (receivingStart payloadStart : Nat) : ByteArray :=
   bytes.extract 0 receivingStart ++ bytes.extract payloadStart bytes.size
 
+def ReceivingStorage.landExit (storage : ReceivingStorage) (receivingStart payloadStart : Nat) : ReceivingStorage :=
+  { storage with bytes := landingBytes storage.bytes receivingStart payloadStart }
+
 def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := do
   let replacement ← lookupDestination replacementId
   let (supersededId, count) ← match replacement.use, replacement.progress with
@@ -521,8 +524,8 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
   for destination in discarded do
     replaceDestination destination.capability.id { destination with progress := .abandoned }
     emit (.abandon destination.capability.id)
-  let landed := landingBytes storage.bytes superseded.capability.start replacement.capability.start
-  replaceStorage replacement.storage { storage with bytes := landed }
+  replaceStorage replacement.storage
+    (storage.landExit superseded.capability.start replacement.capability.start)
   replaceDestination replacementId { replacement with
     capability := { replacement.capability with start := superseded.capability.start }
     use := superseded.use

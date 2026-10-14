@@ -41,4 +41,21 @@ theorem publication_rejection_keeps_prefix (state : ConstructionState) (ids : Li
     publishOperation ids state = .fault kind state := by
   simp [publishOperation, ConstructionM.get, rejected, bind, ConstructionM.fail]
 
+
+theorem landed_storage_prefix (storage : ReceivingStorage) (receivingStart payloadStart : Nat)
+    (inside : receivingStart ≤ storage.bytes.size) :
+    (storage.landExit receivingStart payloadStart).bytes.extract 0 receivingStart =
+      storage.bytes.extract 0 receivingStart :=
+  landing_preserves_prefix storage.bytes receivingStart payloadStart inside
+
+theorem landed_storage_payload (storage : ReceivingStorage) (receivingStart payloadStart : Nat)
+    (inside : receivingStart ≤ storage.bytes.size) :
+    (storage.landExit receivingStart payloadStart).bytes.extract receivingStart
+      (storage.landExit receivingStart payloadStart).bytes.size =
+      storage.bytes.extract payloadStart storage.bytes.size :=
+  landing_preserves_payload storage.bytes receivingStart payloadStart inside
+
+theorem landed_storage_publication (storage : ReceivingStorage) (receivingStart payloadStart : Nat) :
+    (storage.landExit receivingStart payloadStart).publishedCount = storage.publishedCount := rfl
+
 end Goose.Proofs.Construct

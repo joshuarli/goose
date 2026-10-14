@@ -269,4 +269,59 @@ theorem runtime_unwind_outside (scopes : List (RuntimeActivation × Nat × Scope
         ih _ (fun s hs => outside s (by simp [hs]))]
       exact runtime_release_scope_outside scope.1 scope.2.1 scope.2.2 state entry (outside scope (by simp))
 
+
+theorem runtime_with_scope_escape (activation : RuntimeActivation) (scope scopeInst : Nat)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape target carriers afterOperands) :
+    withScope activation scope scopeInst action state =
+      .escape target carriers (releaseScopeState activation scope scopeInst afterOperands) := by
+  simp [withScope, escaped, Goose.Construct.releaseScope, EvalM.get, EvalM.set, bind]
+
+def runtimeWithScopes : List (RuntimeActivation × Nat × ScopeInst) → EvalM α → EvalM α
+  | [], action => action
+  | (activation,scope,scopeInst) :: rest, action =>
+      runtimeWithScopes rest (withScope activation scope scopeInst action)
+
+theorem runtime_with_scopes_escape (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId) (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape target carriers afterOperands) :
+    runtimeWithScopes scopes action state =
+      .escape target carriers (runtimeReleaseScopes scopes afterOperands) := by
+  induction scopes generalizing action afterOperands with
+  | nil => exact escaped
+  | cons scope rest ih =>
+      simp only [runtimeWithScopes]
+      exact ih (withScope scope.1 scope.2.1 scope.2.2 action)
+        (releaseScopeState scope.1 scope.2.1 scope.2.2 afterOperands)
+        (runtime_with_scope_escape scope.1 scope.2.1 scope.2.2 action state afterOperands target carriers escaped)
+
+
+theorem runtime_unwind_subset (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (state : ExecutionState) (entry : RootInst × Value) :
+    entry ∈ (runtimeReleaseScopes scopes state).objects → entry ∈ state.objects := by
+  induction scopes generalizing state with
+  | nil => exact id
+  | cons scope rest ih =>
+      intro member
+      have retained := ih (releaseScopeState scope.1 scope.2.1 scope.2.2 state) member
+      exact (runtime_release_scope_members scope.1 scope.2.1 scope.2.2 state entry).mp retained |>.1
+
+theorem runtime_unwind_removes (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (state : ExecutionState) (entry : RootInst × Value)
+    (owned : ∃ scope ∈ scopes, (runtimeScopeRoots scope.1 scope.2.1 scope.2.2).contains entry.1 = true) :
+    entry ∉ (runtimeReleaseScopes scopes state).objects := by
+  induction scopes generalizing state with
+  | nil => simp at owned
+  | cons scope rest ih =>
+      obtain ⟨owner, member, owns⟩ := owned
+      rcases List.mem_cons.mp member with same | member
+      · subst owner
+        intro retained
+        have inReleased := runtime_unwind_subset rest
+          (releaseScopeState scope.1 scope.2.1 scope.2.2 state) entry retained
+        have notOwned := (runtime_release_scope_members scope.1 scope.2.1 scope.2.2 state entry).mp inReleased |>.2
+        have impossible : false = true := notOwned.symm.trans owns
+        cases impossible
+      · exact ih (releaseScopeState scope.1 scope.2.1 scope.2.2 state) ⟨owner,member,owns⟩
+
 end Goose.Proofs.Exit
