@@ -480,8 +480,12 @@ private:
                 L(V(i.res), " = ", V(i.a), " + ", V(i.b), " * (int64_t)", i.idx, ";");
                 return;
             case GirOp::PtrEq: L(V(i.res), " = ", V(i.a), " == ", V(i.b), ";"); return;
-            case GirOp::PLoad: L(V(i.res), " = *(", CT(i.ty), " *)", V(i.a), ";"); return;
-            case GirOp::PStore: L("*(", CT(i.ty), " *)", V(i.a), " = ", V(i.b), ";"); return;
+            case GirOp::PLoad:
+                if (CoreHasConstruction(m.profile)) L("memcpy(&", V(i.res), ", ", V(i.a), ", sizeof(", V(i.res), "));");
+                else L(V(i.res), " = *(", CT(i.ty), " *)", V(i.a), ";"); return;
+            case GirOp::PStore:
+                if (CoreHasConstruction(m.profile)) L("memcpy(", V(i.a), ", &", V(i.b), ", sizeof(", V(i.b), "));");
+                else L("*(", CT(i.ty), " *)", V(i.a), " = ", V(i.b), ";"); return;
             case GirOp::FrameAddr: {
                 auto &mem = f.members[i.idx];
                 if (mem.kind == GirMember::Bytes) L(V(i.res), " = (uint8_t *)m", i.idx, ";");
@@ -507,13 +511,24 @@ private:
                 return;
             case GirOp::GlobalAddr: L(V(i.res), " = (uint8_t *)&GS_GL->", gsym[i.idx], ";"); return;
             case GirOp::GlobalStack: L(V(i.res), " = (uint8_t *)&GS_GL->gs_gstk_", gsym[i.idx], ";"); return;
-            case GirOp::HdrBase: L(V(i.res), " = ((gir_hdr *)", V(i.a), ")->base;"); return;
-            case GirOp::HdrLen: L(V(i.res), " = ((gir_hdr *)", V(i.a), ")->len;"); return;
+            case GirOp::HdrBase:
+                if (CoreHasConstruction(m.profile)) L("memcpy(&", V(i.res), ", ", V(i.a), ", sizeof(", V(i.res), "));");
+                else L(V(i.res), " = ((gir_hdr *)", V(i.a), ")->base;"); return;
+            case GirOp::HdrLen:
+                if (CoreHasConstruction(m.profile)) L("memcpy(&", V(i.res), ", ", V(i.a), " + 8, sizeof(", V(i.res), "));");
+                else L(V(i.res), " = ((gir_hdr *)", V(i.a), ")->len;"); return;
             case GirOp::HdrInit:
-                L("((gir_hdr *)", V(i.a), ")->base = ", V(i.b), ";");
-                L("((gir_hdr *)", V(i.a), ")->len = 0;");
+                if (CoreHasConstruction(m.profile)) {
+                    L("memcpy(", V(i.a), ", &", V(i.b), ", sizeof(", V(i.b), "));");
+                    L("memset(", V(i.a), " + 8, 0, 8);");
+                } else {
+                    L("((gir_hdr *)", V(i.a), ")->base = ", V(i.b), ";");
+                    L("((gir_hdr *)", V(i.a), ")->len = 0;");
+                }
                 return;
-            case GirOp::HdrSetLen: L("((gir_hdr *)", V(i.a), ")->len = ", V(i.b), ";"); return;
+            case GirOp::HdrSetLen:
+                if (CoreHasConstruction(m.profile)) L("memcpy(", V(i.a), " + 8, &", V(i.b), ", sizeof(", V(i.b), "));");
+                else L("((gir_hdr *)", V(i.a), ")->len = ", V(i.b), ";"); return;
             case GirOp::BytesCopy:
                 L("gs_memcpy(", V(i.a), ", ", V(i.b), ", (size_t)", V(i.vals[0]), ");");
                 return;

@@ -379,7 +379,7 @@ private:
             changed = false;
             for (auto &block : f.blocks) for (auto &inst : block.insts) {
                 if (!GirDefinesValue(inst) || functionValues[inst.res] >= 0) continue;
-                GirTyEnv env { module, f.slots, signatures, functionValues, &f.members, &f.blocks };
+                GirTyEnv env { module, f.slots, signatures, functionValues, &f.members, &f.blocks, &f };
                 auto type = GirTyper(env).Of(inst);
                 if (type.ok()) { functionValues[inst.res] = type.ty; changed = true; }
             }

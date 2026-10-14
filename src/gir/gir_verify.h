@@ -354,8 +354,13 @@ private:
                 auto &results = m.funcs[target.members[0]].results;
                 auto &protocols = m.funcs[target.members[0]].resultProtocols;
                 for (auto member : target.members)
-                    if (m.funcs[member].results != results || m.funcs[member].resultProtocols != protocols)
-                        Fail("GIR-V010", "construction target members have different result types");
+                    {
+                        auto &candidate = m.funcs[member];
+                        bool same = candidate.results == results && candidate.resultProtocols.size() == protocols.size();
+                        if (same) for (size_t result = 0; result < protocols.size(); result++)
+                            same &= candidate.resultProtocols[result].request == protocols[result].request;
+                        if (!same) Fail("GIR-V010", "construction target members have different result types or requests");
+                    }
             }
         }
         if (m.profile == CoreProfile::Pilot) {
@@ -1675,7 +1680,7 @@ private:
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
                     if (!GirDefinesValue(i) || i.res >= fn.nvalues || fn.vt[i.res] >= 0) continue;
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
                     auto r = GirTyper(env).Of(i);
                     if (r.ok()) {
                         fn.vt[i.res] = r.ty;
@@ -1689,7 +1694,7 @@ private:
 
     void CheckEffectTypes(const Fn &fn, const GirInst &i) {
         auto &f = *fn.f;
-        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
+        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
         GirTyper ty(env);
         auto need = [&](GirTyResult r) {
             if (!r.ok()) TypeFail(fn, r.error);
@@ -1852,9 +1857,12 @@ private:
             }
             case GirOp::DestBind: {
                 auto &carrier = m.Type(need(ty.Val(i.a)));
+                bool matches = false;
+                for (size_t result = 0; result < f.resultProtocols.size(); result++)
+                    matches |= f.resultProtocols[result].namedSlot == i.idx && f.results[result] == carrier.elem;
                 if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value || i.idx < 0 ||
-                    i.idx >= (int)f.slots.size() || f.slots[i.idx].ty != carrier.elem)
-                    TypeFail(fn, "named binding does not consume a matching value completion");
+                    i.idx >= (int)f.slots.size() || !matches)
+                    TypeFail(fn, "named binding does not consume its receiving channel completion");
                 break;
             }
             case GirOp::AppendValue: {
@@ -1972,7 +1980,7 @@ private:
 
     void CheckTermTypes(const Fn &fn, const GirInst &i) {
         auto &f = *fn.f;
-        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
+        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
         GirTyper ty(env);
         auto need = [&](GirTyResult r) {
             if (!r.ok()) TypeFail(fn, r.error);
@@ -2051,7 +2059,12 @@ private:
             if (protocol.namedSlot) {
                 auto slot = *protocol.namedSlot;
                 if (protocol.request != CoreRequest::Value || !GirNonfixed(m, type) || slot < 0 ||
-                    slot >= (int)f.slots.size() || f.slots[slot].ty != type || !aliases.insert(slot).second)
+                    slot >= (int)f.slots.size() || !aliases.insert(slot).second)
+                    TypeFail(fn, "named result slot aliases an invalid or repeated value channel");
+                auto local = f.slots[slot].ty;
+                bool sameLayout = local == type || (m.Type(type).kind == CoreType::VarArr &&
+                    GirResizableKind(m.Type(local).kind) && m.Type(local).elem == m.Type(type).elem);
+                if (!sameLayout)
                     TypeFail(fn, "named result slot aliases an invalid or repeated value channel");
             }
         }
@@ -2095,13 +2108,13 @@ private:
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
                 if (GirDefinesValue(i)) {
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
                     auto r = GirTyper(env).Of(i);
                     if (!r.ok()) TypeFail(fn, r.error);
                     if (fn.vt[i.res] != r.ty) TypeFail(fn, cat("value %", i.res, " has two types"));
                 } else if (i.op == GirOp::Call) {
                     // A call with no result in the low stage.
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
                     auto r = GirTyper(env).Of(i);
                     if (!r.ok()) TypeFail(fn, r.error);
                 } else if (GirIsTerminator(i.op)) {
@@ -2166,7 +2179,7 @@ private:
             seen[b] = 1;
             bool ended = false;
             for (auto &i : f.blocks[b].insts) {
-                if (i.op == GirOp::Call && i.idx >= 0 && i.idx < (int)mayReturn.size() && !mayReturn[i.idx]) {
+                if ((i.op == GirOp::Call || i.op == GirOp::CallConstruct) && i.idx >= 0 && i.idx < (int)mayReturn.size() && !mayReturn[i.idx]) {
                     ended = true;
                     break;
                 }
@@ -2180,6 +2193,16 @@ private:
                     case GirOp::CondBr:
                         work.push_back(i.idx);
                         work.push_back(i.idx2);
+                        ended = true;
+                        break;
+                    case GirOp::Invoke:
+                        if (mayReturn[i.idx]) work.push_back(i.a);
+                        for (auto &edge : i.escapes) work.push_back(edge.block);
+                        ended = true;
+                        break;
+                    case GirOp::Escape:
+                        for (auto member : m.targets[i.idx].members)
+                            if (&m.funcs[member] == &f) return true;
                         ended = true;
                         break;
                     case GirOp::Abort: case GirOp::Exit:
@@ -2217,8 +2240,23 @@ private:
                         auto callee = b.insts[k - 1].idx;
                         valid = callee >= 0 && callee < (int)mayReturn.size() && !mayReturn[callee];
                     }
+                    if (!valid && CoreHasConstruction(m.profile) && k == 0) {
+                        bool reached = false;
+                        valid = true;
+                        auto destination = (int)(&b - fn.f->blocks.data());
+                        for (auto &predecessor : fn.f->blocks) {
+                            auto term = LastTerm(predecessor);
+                            if (!term) continue;
+                            auto successors = Successors(*term);
+                            if (find(successors.begin(), successors.end(), destination) == successors.end()) continue;
+                            reached = true;
+                            valid &= term->op == GirOp::Invoke && term->a == destination && !mayReturn[term->idx];
+                            for (auto &edge : term->escapes) if (edge.block == destination) valid = false;
+                        }
+                        valid &= reached;
+                    }
                     if (!valid)
-                        CfgFail(fn, "unreachable does not immediately follow a call to a function that cannot return");
+                        CfgFail(fn, "unreachable has no immediate call or invoke-normal proof that its callee cannot return");
                 }
     }
 
@@ -3272,6 +3310,7 @@ private:
             map<int, Ownership> named;
             map<pair<int, int>, Ownership> packed;
             map<int, Ownership> arguments;
+            set<int> rendered;
             bool operator==(const State &) const = default;
         };
         vector<const GirInst *> definitions(fn.nvalues, nullptr);
@@ -3289,6 +3328,10 @@ private:
             auto parsed = from_chars(text.data(), text.data() + text.size(), n);
             return parsed.ec == errc() && parsed.ptr == text.data() + text.size() ? n : -1;
         };
+        auto fixedCount = [&](GirTypeId type) -> int64_t {
+            auto &array = m.Type(type);
+            return array.kind == CoreType::Arr ? array.count : -1;
+        };
         for (auto &block : f.blocks) for (auto &inst : block.insts) {
             vector<int> uses;
             Uses(inst, uses);
@@ -3305,6 +3348,7 @@ private:
             Ownership owner;
             owner.root = value;
             owner.channel = (int)result;
+            owner.expected = fixedCount(f.results[result]);
             initial.live[value] = owner;
         }
         auto handlesTarget = [&](int target) {
@@ -3327,6 +3371,7 @@ private:
                 return;
             }
             auto combined = *incoming[target];
+            if (combined.rendered != next.rendered) bad("control-flow merge changes unconsumed print snapshots");
             if (combined.live.size() != next.live.size() || combined.named.size() != next.named.size() ||
                 combined.packed.size() != next.packed.size() || combined.arguments.size() != next.arguments.size())
                 bad("control-flow merge changes outstanding destination ownership");
@@ -3394,11 +3439,15 @@ private:
                     case GirOp::DestOpen: {
                         Ownership owner;
                         owner.root = inst.res;
+                        owner.expected = fixedCount(inst.ty);
                         if (inst.knownCount) {
-                            owner.expected = constant(*inst.knownCount);
-                            if (owner.expected < 0 && definitions[*inst.knownCount] &&
+                            auto count = constant(*inst.knownCount);
+                            if (count < 0 && definitions[*inst.knownCount] &&
                                 definitions[*inst.knownCount]->op == GirOp::Int)
                                 bad("destination known count is negative or invalid");
+                            if (owner.expected >= 0 && count >= 0 && owner.expected != count)
+                                bad("destination known count differs from its fixed array length");
+                            if (count >= 0) owner.expected = count;
                         }
                         if (auto slot = get_if<GirDestSlotReceiver>(&inst.destReceiver)) {
                             owner.slot = slot->slot;
@@ -3418,6 +3467,7 @@ private:
                         Ownership child;
                         child.root = inst.res;
                         child.parent = parent.root;
+                        child.expected = fixedCount(inst.ty);
                         state.live[inst.res] = child;
                         break;
                     }
@@ -3431,7 +3481,20 @@ private:
                         if (owner.count >= 0) owner.count += (int64_t)inst.bytes.size();
                         break;
                     }
-                    case GirOp::DestText: case GirOp::DestCopy:
+                    case GirOp::Render:
+                        state.rendered.insert(inst.res);
+                        break;
+                    case GirOp::Print:
+                        for (auto &part : inst.parts)
+                            if (!part.text && definitions[part.val] && definitions[part.val]->op == GirOp::Render &&
+                                !state.rendered.erase(part.val)) bad("print consumes a rendered snapshot twice");
+                        break;
+                    case GirOp::DestText:
+                        if (definitions[inst.b] && definitions[inst.b]->op == GirOp::Render && !state.rendered.erase(inst.b))
+                            bad("text destination consumes a rendered snapshot twice");
+                        ready(inst.a).count = -1;
+                        break;
+                    case GirOp::DestCopy:
                         ready(inst.a).count = -1;
                         break;
                     case GirOp::DestSnapshot: {
@@ -3502,6 +3565,7 @@ private:
                         Ownership replacement;
                         replacement.root = inst.res;
                         replacement.channel = inst.idx;
+                        replacement.expected = fixedCount(inst.ty);
                         replacement.replacement = true;
                         state.live[inst.res] = replacement;
                         break;
@@ -3518,7 +3582,7 @@ private:
                     }
                     case GirOp::DestAdapt: {
                         auto owner = consume(inst.a);
-                        if (owner.count != 0 || owner.adaptedFrom >= 0 || owner.valueAdapter || owner.staged)
+                        if (owner.count != 0 || owner.adaptedFrom >= 0 || owner.valueAdapter)
                             bad("destination adaptation begins after writes or inside another adapter");
                         owner.adaptedFrom = fn.vt[inst.a];
                         state.live[inst.res] = owner;
@@ -3527,7 +3591,7 @@ private:
                     case GirOp::DestAdaptFinish: {
                         auto owner = consume(inst.a);
                         auto &restored = m.Type(fn.vt[inst.res]);
-                        if (owner.adaptedFrom < 0 || owner.valueAdapter || owner.staged ||
+                        if (owner.adaptedFrom < 0 || owner.valueAdapter ||
                             m.Type(owner.adaptedFrom).elem != restored.elem ||
                             m.Type(owner.adaptedFrom).request != restored.request)
                             bad("producer completion or cancellation restores another receiving channel");
@@ -3537,7 +3601,7 @@ private:
                     }
                     case GirOp::DestValue: {
                         auto owner = consume(inst.a);
-                        if (owner.count != 0) bad("value adapter changes a destination after writing elements");
+                        if (owner.count != 0 || owner.adaptedFrom >= 0) bad("value adapter begins after writes or during another adaptation");
                         owner.valueAdapter = true;
                         state.live[inst.res] = owner;
                         break;
@@ -3545,7 +3609,7 @@ private:
                     case GirOp::DestRelocate: {
                         auto owner = consume(inst.a);
                         if (inst.reason == GirEventReason::HeaderRemoval) {
-                            if (!owner.valueAdapter) bad("header removal has no preceding value adapter");
+                            if (!owner.valueAdapter || owner.adaptedFrom >= 0) bad("header removal has no restored value adapter");
                             owner.valueAdapter = false;
                         } else {
                             if (!owner.replacement || owner.landed) bad("exit landing has no pending replacement interval");
@@ -3560,7 +3624,7 @@ private:
                     }
                     case GirOp::DestStage: {
                         auto owner = consume(inst.a);
-                        if (owner.staged || owner.expected >= 0 || owner.count != 0)
+                        if (owner.staged || owner.expected >= 0 || owner.count != 0 || owner.adaptedFrom >= 0)
                             bad("capacity stage is repeated or has a known element count");
                         owner.staged = true;
                         state.live[inst.res] = owner;
@@ -3568,7 +3632,7 @@ private:
                     }
                     case GirOp::DestFit: {
                         auto owner = consume(inst.a);
-                        if (!owner.staged) bad("capacity fit does not consume its private stage");
+                        if (!owner.staged || owner.adaptedFrom >= 0) bad("capacity fit does not consume a restored private stage");
                         owner.staged = false;
                         state.live[inst.res] = owner;
                         break;
@@ -3621,7 +3685,7 @@ private:
                                 owner.staged || owner.valueAdapter || owner.adaptedFrom >= 0 || (owner.replacement && !owner.landed))
                                 bad("returned completion belongs to another channel or an unfinished adapter");
                         }
-                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty())
+                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty() || !state.rendered.empty())
                             bad("return leaves unfinished destination, named, argument, or pack ownership");
                         break;
                     case GirOp::Abort: case GirOp::Exit: case GirOp::Unreachable: break;
@@ -3629,6 +3693,7 @@ private:
                         Ownership owner;
                         owner.root = inst.res;
                         owner.channel = inst.idx2;
+                        owner.expected = fixedCount(inst.ty);
                         owner.target = inst.idx;
                         owner.replacement = true;
                         state.live[inst.res] = owner;
@@ -3715,7 +3780,7 @@ private:
                                     bad("escape forwards another normal result channel's cancellation");
                             }
                         }
-                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty())
+                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty() || !state.rendered.empty())
                             bad("escape leaves unfinished local, result, argument, or pack ownership");
                         break;
                     case GirOp::Leave:

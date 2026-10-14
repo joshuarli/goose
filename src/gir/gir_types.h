@@ -32,6 +32,7 @@ struct GirTyEnv {
     // The frame of a low function, when typing one.
     const vector<GirMember> *members = nullptr;
     const vector<GirBlock> *blocks = nullptr;
+    const GirFunc *function = nullptr;
 };
 
 // A type error or the type.
@@ -95,6 +96,15 @@ inline bool GirConstructible(const GirModule &m, GirTypeId type) {
 
 inline bool GirArrayKind(CoreType::Kind kind) {
     return kind == CoreType::Arr || kind == CoreType::VarArr || GirOwnerKind(kind);
+}
+
+inline bool GirAdaptsTo(const GirModule &m, GirTypeId producer, GirTypeId receiver) {
+    if (producer == receiver) return true;
+    auto &source = m.Type(producer);
+    auto &target = m.Type(receiver);
+    if (target.kind == CoreType::Arr)
+        return source.kind == CoreType::Arr && source.elem == target.elem && source.count == target.count;
+    return GirArrayKind(source.kind) && GirArrayKind(target.kind) && source.elem == target.elem;
 }
 
 // What a reference may point to.
@@ -490,7 +500,7 @@ public:
                 if (carrier.kind != CoreType::Dest || i.ty < 0 || i.ty >= (int)m.types.size() ||
                     !GirNonfixed(m, i.ty) || !GirConstructible(m, i.ty) ||
                     !GirArrayKind(m.Type(carrier.elem).kind) || !GirArrayKind(m.Type(i.ty).kind) ||
-                    m.Type(carrier.elem).elem != m.Type(i.ty).elem ||
+                    !GirAdaptsTo(m, i.ty, carrier.elem) ||
                     (i.request != CoreRequest::Value && i.request != CoreRequest::ElementRun))
                     return GirTyErr("destination adaptation changes elements or has no receiving protocol");
                 return GirTyOk(m.CarrierType(CoreType::Dest, i.ty, i.request));
@@ -555,9 +565,8 @@ public:
                 if (!GirNonfixed(m, i.ty) || !GirConstructible(m, i.ty) ||
                     !GirConstructible(m, receiverType) || i.request != receiverRequest)
                     return GirTyErr("destination receiving type or request is not constructible");
-                if (receiverType != i.ty && (!GirArrayKind(m.Type(receiverType).kind) ||
-                    !GirArrayKind(m.Type(i.ty).kind) || m.Type(receiverType).elem != m.Type(i.ty).elem))
-                    return GirTyErr("destination producer and receiver have different elements");
+                if (!GirAdaptsTo(m, i.ty, receiverType))
+                    return GirTyErr("destination producer cannot adapt to its receiving type");
                 if (i.knownCount) {
                     auto count = IntTy(*i.knownCount);
                     if (!count.ok()) return count;
@@ -593,9 +602,12 @@ public:
                 return GirTyOk(m.CarrierType(CoreType::Dest, i.ty, CoreRequest::Value));
             }
             case GirOp::DestNamed:
-                if (i.idx < 0 || i.idx >= (int)env.slots.size() || !GirNonfixed(m, env.slots[i.idx].ty))
-                    return GirTyErr("named result does not name a nonfixed slot");
-                return GirTyOk(m.CarrierType(CoreType::Built, env.slots[i.idx].ty, CoreRequest::Value));
+                if (i.idx < 0 || i.idx >= (int)env.slots.size() || !env.function)
+                    return GirTyErr("named result has no enclosing slot and result descriptor");
+                for (size_t result = 0; result < env.function->resultProtocols.size(); result++)
+                    if (env.function->resultProtocols[result].namedSlot == i.idx)
+                        return GirTyOk(m.CarrierType(CoreType::Built, env.function->results[result], CoreRequest::Value));
+                return GirTyErr("named result slot has no receiving result channel");
             case GirOp::ResultExitDest: case GirOp::TargetDest:
                 if (i.ty < 0 || i.ty >= (int)m.types.size() || !GirNonfixed(m, i.ty) ||
                     (i.request != CoreRequest::Value && i.request != CoreRequest::ElementRun))
@@ -615,8 +627,12 @@ public:
                 if (!replacement.ok()) return replacement;
                 auto &carrier = m.Type(replacement.ty);
                 if (carrier.kind != CoreType::Built || i.idx < 0 || i.idx >= (int)env.slots.size() ||
-                    env.slots[i.idx].ty != carrier.elem)
+                    !env.function)
                     return GirTyErr("named abandonment does not match the replacement completion");
+                bool matches = false;
+                for (size_t result = 0; result < env.function->resultProtocols.size(); result++)
+                    matches |= env.function->resultProtocols[result].namedSlot == i.idx && env.function->results[result] == carrier.elem;
+                if (!matches) return GirTyErr("named abandonment does not restore its receiving channel");
                 return GirTyOk(m.CarrierType(CoreType::Cancelled, carrier.elem, carrier.request));
             }
             case GirOp::DestArg: {

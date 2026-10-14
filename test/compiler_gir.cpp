@@ -5131,6 +5131,29 @@ void ConstructionRecursiveArraysUseExplicitPackedTraversal() {
     Main(escaped).slots.push_back({ escaped.SliceType(CoreMut::Const, escaped.IntType(CoreIntTy::U8)), CoreVarKind::Let, 0, 1 });
     Main(escaped).blocks[0].insts.insert(Main(escaped).blocks[0].insts.end() - 2, store);
     assert(Code(escaped) != "");
+    auto incomplete = m;
+    auto fixed = incomplete.Type(Main(incomplete).slots[0].ty);
+    fixed.count = 3;
+    auto lengthThree = incomplete.Intern(fixed);
+    Main(incomplete).slots[0].ty = lengthThree;
+    Main(incomplete).blocks[0].insts[1].ty = lengthThree;
+    assert(Code(incomplete) == "GIR-V060");
+    for (bool dynamicProducer : { false, true }) {
+        auto invalid = m;
+        auto producer = invalid.Type(Main(invalid).slots[0].ty);
+        if (dynamicProducer) producer.kind = CoreType::Grow;
+        else producer.count = 3;
+        auto adapt = Def(GirOp::DestAdapt, 1);
+        adapt.a = 0;
+        adapt.ty = invalid.Intern(producer);
+        adapt.org = 0;
+        GirInst trap;
+        trap.op = GirOp::Abort;
+        trap.abort = GirAbortKind::Assert;
+        trap.org = 0;
+        Main(invalid).blocks[0].insts = { Enter(0), Main(invalid).blocks[0].insts[1], adapt, trap };
+        assert(Code(invalid) == "GIR-V010");
+    }
 }
 
 void ConstructionCallsAndCarrierBranchesLowerToPrimitiveChannels() {
@@ -5357,6 +5380,148 @@ void StorageSummaryCoverageNormalizesSpecializedAndGenericRoots() {
             assert(Code(omitted) == "GIR-V050");
         }
     }
+}
+
+GirModule ConstructionNamedAliasModule();
+
+GirModule ConstructionNamedGrowAsPackedResultModule() {
+    auto m = ConstructionNamedAliasModule();
+    auto grow = Main(m).slots[0].ty;
+    CoreType packed;
+    packed.kind = CoreType::VarArr;
+    packed.elem = m.Type(grow).elem;
+    auto packedType = m.Intern(packed);
+    Main(m).slots[0].ty = packedType;
+    Main(m).blocks[0].insts[2].ty = packedType;
+    Main(m).blocks[0].insts[2].knownCount.reset();
+    auto &callee = m.funcs[1];
+    callee.results[0] = packedType;
+    callee.blocks[0].params[0].second = m.CarrierType(CoreType::Dest, packedType, CoreRequest::Value);
+    auto local = Def(GirOp::Slot, 4);
+    local.idx = 0;
+    auto append = Def(GirOp::Push, 6);
+    append.a = 4;
+    append.b = 5;
+    append.org = 0;
+    auto sample = Def(GirOp::Snap, 7);
+    sample.a = 4;
+    sample.snap = GirSnapshotMode::Owner;
+    auto render = Def(GirOp::Render, 8);
+    render.a = 7;
+    render.org = 0;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, {}, 8 } };
+    print.org = 0;
+    auto &instructions = callee.blocks[0].insts;
+    auto beforeNamed = find_if(instructions.begin(), instructions.end(), [](auto &inst) { return inst.op == GirOp::DestNamed; });
+    instructions.insert(beforeNamed, { local, Int(m, 5, "9"), append, sample, render, print });
+    callee.summary.outputs = true;
+    auto slot = Def(GirOp::Slot, 3);
+    slot.idx = 0;
+    auto output = Def(GirOp::Snap, 4);
+    output.a = 3;
+    output.snap = GirSnapshotMode::Owner;
+    auto outputRender = Def(GirOp::Render, 5);
+    outputRender.a = 4;
+    outputRender.org = 0;
+    print.parts[0].val = 5;
+    auto &caller = Main(m).blocks[0].insts;
+    caller.insert(caller.end() - 2, { slot, output, outputRender, print });
+    Main(m).summary.outputs = true;
+    return m;
+}
+
+void ConstructionNamedGrowAliasesReserveTheReceivingPrefix() {
+    auto high = ConstructionNamedGrowAsPackedResultModule();
+    assert(Code(high) == "");
+    assert(Code(GirToLow(high).Lower()) == "");
+    auto wrong = high;
+    wrong.funcs[1].slots[0].ty = wrong.IntType(CoreIntTy::I64);
+    assert(Code(wrong) == "GIR-V010");
+}
+
+CoreModule ConstructionSourceTargetModule() {
+    CoreModule core;
+    core.profile = CoreProfile::Construction;
+    core.files = { "source-target.goose" };
+    core.types = { CoreType { .kind = CoreType::Int, .ity = CoreIntTy::I64 },
+                   CoreType { .kind = CoreType::Grow, .elem = 0 }, CoreType { .kind = CoreType::Unit } };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    CoreImpl entry;
+    entry.name = "main";
+    entry.body.scope = 0;
+    entry.vars = { CoreVar { "out", 1, CoreVarKind::Let, 0, origin } };
+    auto call = make_unique<CoreExpr>();
+    call->kind = CoreExprKind::Call;
+    call->ctx = 1;
+    call->type = 1;
+    call->org = origin;
+    CoreStmt receive;
+    receive.kind = CoreStmtKind::Let;
+    receive.var = 0;
+    receive.expr = std::move(call);
+    receive.org = origin;
+    entry.body.stmts.push_back(std::move(receive));
+    CoreImpl target;
+    target.name = "target";
+    target.body.scope = 0;
+    target.results = { CoreResultDescriptor { 1, CoreRequest::Value, nullopt } };
+    target.summary.constructs = { 0 };
+    auto helperCall = make_unique<CoreExpr>();
+    helperCall->kind = CoreExprKind::Call;
+    helperCall->ctx = 2;
+    helperCall->type = 2;
+    helperCall->org = origin;
+    CoreStmt invoke;
+    invoke.kind = CoreStmtKind::Expr;
+    invoke.expr = std::move(helperCall);
+    invoke.org = origin;
+    target.body.stmts.push_back(std::move(invoke));
+    CoreImpl helper;
+    helper.name = "helper";
+    helper.body.scope = 0;
+    helper.summary.needs = { 0 };
+    helper.summary.escapes = { 0 };
+    auto array = make_unique<CoreExpr>();
+    array->kind = CoreExprKind::Arr;
+    array->type = 1;
+    array->org = origin;
+    auto element = make_unique<CoreExpr>();
+    element->kind = CoreExprKind::Lit;
+    element->type = 0;
+    element->value = "7";
+    array->elems.push_back(std::move(element));
+    CoreStmt escape;
+    escape.kind = CoreStmtKind::ReturnFrom;
+    escape.target = 0;
+    escape.values.push_back(std::move(array));
+    escape.org = origin;
+    helper.body.stmts.push_back(std::move(escape));
+    core.impls.push_back(std::move(entry));
+    core.impls.push_back(std::move(target));
+    core.impls.push_back(std::move(helper));
+    core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1 }, CoreContext { .impl = 2 } };
+    core.targets = { CoreTargetSet { { 1 } } };
+    return core;
+}
+
+void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
+    auto core = ConstructionSourceTargetModule();
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    assert(GirWriter(high).Write().find("t_invoke") != string::npos);
+    assert(GirWriter(high).Write().find("t_escape") != string::npos);
+    auto forged = high;
+    forged.funcs[2].blocks[0].insts.back().op = GirOp::Ret;
+    forged.funcs[2].blocks[0].insts.back().vals.clear();
+    forged.funcs[2].blocks[0].insts.back().vals2.clear();
+    assert(Code(forged) == "GIR-V020");
+    auto differentEdge = high;
+    for (auto &block : differentEdge.funcs[1].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::Invoke) inst.escapes[0].block = inst.a;
+    assert(Code(differentEdge) == "GIR-V020");
 }
 
 void ConstructionPointerEqualityRejectsTraceMetadata() {
@@ -5626,7 +5791,22 @@ void ConstructionPushPublishesOneMutableElementReference() {
     assert(Code(high) == "GIR-V010");
 }
 
+void ConstructionPrintSnapshotsHaveOneResumedConsumer() {
+    auto high = ConstructionPushReferenceModule();
+    auto &instructions = Main(high).blocks[0].insts;
+    auto print = find_if(instructions.begin(), instructions.end(), [](auto &inst) { return inst.op == GirOp::Print; });
+    print->parts.push_back(print->parts[0]);
+    assert(Code(high) == "GIR-V060");
+    high = ConstructionPushReferenceModule();
+    auto &unconsumed = Main(high).blocks[0].insts;
+    unconsumed.erase(find_if(unconsumed.begin(), unconsumed.end(), [](auto &inst) { return inst.op == GirOp::Print; }));
+    assert(Code(high) == "GIR-V060");
+}
+
 int main() {
+    ConstructionPrintSnapshotsHaveOneResumedConsumer();
+    ConstructionNamedGrowAliasesReserveTheReceivingPrefix();
+    ConstructionSourceTargetsLowerToCheckedReceivingEdges();
     ConstructionPointerEqualityRejectsTraceMetadata();
     ConstructionReferenceProvenanceUsesEachResultPosition();
     ConstructionPushPublishesOneMutableElementReference();

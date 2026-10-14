@@ -943,7 +943,7 @@ private:
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
                     if (!GirDefinesValue(i) || hvt[i.res] >= 0) continue;
-                    GirTyEnv env { mm, f.slots, hsigs, hvt, nullptr, &f.blocks };
+                    GirTyEnv env { mm, f.slots, hsigs, hvt, nullptr, &f.blocks, &f };
                     auto r = GirTyper(env).Of(i);
                     if (r.ok()) { hvt[i.res] = r.ty; changed = true; }
                 }
@@ -1484,6 +1484,8 @@ private:
         });
         PStoreV(I64(), shape[inst.a].w[2], BinW(CoreBinOp::Add, I64(), old, count));
         (void)start;
+        if (scratchStacks.count(inst.b))
+            SimpleE(GirOp::StackRelease, StackOf(scratchStacks.at(inst.b)), shape[inst.b].w[0]);
     }
 
     void Lower(const GirInst &i) {
@@ -1628,7 +1630,9 @@ private:
                 auto reference = shape[i.a].w[1];
                 if (IsResizableKind(HT(hf->slots[i.idx].ty).kind)) {
                     reference = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(16));
-                    SimpleE(GirOp::HdrInit, reference, shape[i.a].w[1]);
+                    auto prefix = Prefix(HT(hvt[i.a]).elem, HT(hvt[i.a]).request);
+                    auto elements = prefix ? PtrAt(shape[i.a].w[1], ConstI(I64(), prefix), 1) : shape[i.a].w[1];
+                    SimpleE(GirOp::HdrInit, reference, elements);
                     SimpleE(GirOp::HdrSetLen, reference, DestinationCount(i.a));
                 }
                 SimpleE(GirOp::LocalSet, reference, -1, place.members[0]);
@@ -2058,6 +2062,7 @@ private:
             SimpleE(GirOp::HdrSetLen, address, newLen);
         }
         Define(i, { at });
+        if (CoreHasConstruction(h.profile)) shape[i.res].source = ChildSource(rs.source, len);
     }
 
     void LowerAppend(const GirInst &i) {
@@ -2473,6 +2478,9 @@ private:
             output.org = i.org;
             EmitE(std::move(output));
             SimpleE(GirOp::StackRelease, stack, base);
+            for (auto &part : i.parts)
+                if (!part.text && scratchStacks.count(part.val))
+                    SimpleE(GirOp::StackRelease, StackOf(scratchStacks.at(part.val)), shape[part.val].w[0]);
             return;
         }
         for (auto &p : i.parts) {
