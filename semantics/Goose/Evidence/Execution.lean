@@ -433,4 +433,55 @@ theorem runModule_success_entry {cfg : GCfg} {fuel : Nat} {final : St}
   refine ⟨fn, fr, afterEntry, .entry ?_ initialized lookup entry⟩
   omega
 
+theorem execEff_frame_fields {fn : Func} {fr result : Frame} {st final : St}
+    {effect : Effect}
+    (success : execEff fn fr effect st = .ok result final) : result.act = fr.act ∧ result.depth = fr.depth ∧ result.vals = fr.vals := by
+  cases effect <;> simp only [execEff] at success
+  case leave scope =>
+    cases scopes : fr.scopes with
+    | nil => simp [scopes, fault, M.stop] at success
+    | cons top rest =>
+      obtain ⟨enteredScope, scopeInstance⟩ := top
+      simp only [scopes] at success
+      split at success
+      · obtain ⟨_, _, _, success⟩ := m_bind_ok success
+        simp only [pure_apply, Res.ok.injEq] at success
+        cases success.1
+        exact ⟨rfl, rfl, rfl⟩
+      · simp [fault, M.stop] at success
+  all_goals
+    repeat' first
+      | solve | simp [fault, M.stop, abortAtOrg, abortAt] at success
+      | obtain ⟨intermediate, middle, evaluated, success⟩ := m_bind_ok success
+      | split at success
+      | unfold abortAtOrg at success
+  all_goals
+    simp only [pure_apply, Res.ok.injEq] at success
+    cases success.1
+    exact ⟨rfl, rfl, rfl⟩
+
+theorem execEff_preserves_cells {fn : Func} {fr result : Frame} {st final : St}
+    {effect : Effect}
+    (success : execEff fn fr effect st = .ok result final) : result.vals = fr.vals :=
+  (execEff_frame_fields success).2.2
+
+theorem RuntimeStep.frame_identity {cfg : GCfg} {fn : Func} {pt pt' : Pt}
+    {fr fr' : Frame} {st st' : St}
+    (transition : RuntimeStep cfg fn pt fr st pt' fr' st') :
+    fr'.act = fr.act ∧ fr'.depth = fr.depth := by
+  cases transition with
+  | define _ _ => exact ⟨rfl, rfl⟩
+  | effect _ evaluated =>
+    have fields := execEff_frame_fields evaluated
+    exact ⟨fields.1, fields.2.1⟩
+  | branch _ _ entered =>
+    have fields := enterBlock_frame_fields entered
+    exact ⟨fields.1, fields.2.2.1⟩
+  | branchTrue _ _ _ entered =>
+    have fields := enterBlock_frame_fields entered
+    exact ⟨fields.1, fields.2.2.1⟩
+  | branchFalse _ _ _ entered =>
+    have fields := enterBlock_frame_fields entered
+    exact ⟨fields.1, fields.2.2.1⟩
+
 end Goose.Evidence
