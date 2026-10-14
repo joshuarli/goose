@@ -94,6 +94,33 @@ private def lookupDestination (id : DestinationId) : ConstructionM PendingDestin
   | some destination => pure destination
   | none => ConstructionM.fail .destination
 
+private def writableDestination (id : DestinationId) : ConstructionM PendingDestination := do
+  let destination ← lookupDestination id
+  let state ← ConstructionM.get
+  let valid := Id.run do
+    let mut current := id
+    for _ in [0:state.destinations.size + 1] do
+      let some owner := state.destinations[current]? | return false
+      match owner.use with
+      | .receiver => return true
+      | .child parentId =>
+          let some parent := state.destinations[parentId]? | return false
+          match parent.progress with
+          | .suspended _ expected =>
+              if expected != current then return false
+              current := parentId
+          | _ => return false
+      | .replacement supersededId =>
+          let some superseded := state.destinations[supersededId]? | return false
+          match superseded.progress with
+          | .exiting _ expected =>
+              if expected != current then return false
+              current := supersededId
+          | _ => return false
+    return false
+  if !valid then ConstructionM.fail .protocol
+  pure destination
+
 private def lookupStorage (id : StorageId) : ConstructionM ReceivingStorage := do
   match (← ConstructionM.get).storage[id]? with
   | some storage => pure storage
@@ -173,7 +200,7 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
   pure id
 
 def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit := do
-  let destination ← lookupDestination id
+  let destination ← writableDestination id
   match destination.progress with
   | .open count =>
       let storage ← lookupStorage destination.storage
@@ -185,7 +212,7 @@ def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit :
 
 def openChild (parentId : DestinationId) (logicalType : Ty) (layout : ReceivingLayout) :
     ConstructionM DestinationId := do
-  let parent ← lookupDestination parentId
+  let parent ← writableDestination parentId
   match parent.progress with
   | .open count =>
       let storage ← lookupStorage parent.storage
@@ -210,7 +237,7 @@ private def patchCount (bytes : ByteArray) (start count : Nat) : ByteArray := Id
   return result
 
 def finishDestination (id : DestinationId) : ConstructionM Unit := do
-  let destination ← lookupDestination id
+  let destination ← writableDestination id
   match destination.progress with
   | .open count =>
       match destination.layout with
@@ -225,8 +252,8 @@ def finishDestination (id : DestinationId) : ConstructionM Unit := do
   | _ => ConstructionM.fail .protocol
 
 def attachChild (parentId childId : DestinationId) : ConstructionM Unit := do
-  let parent ← lookupDestination parentId
-  let child ← lookupDestination childId
+  let parent ← writableDestination parentId
+  let child ← writableDestination childId
   match parent.progress, child.progress, child.use with
   | .suspended count expected, .built childCount, .child owner =>
       if expected != childId || owner != parentId || child.storage != parent.storage then
@@ -276,7 +303,7 @@ def publishOperation (ids : List DestinationId) : ConstructionM Unit := do
   for id in ids do publishReady id
 
 def abandonDestination (id : DestinationId) : ConstructionM Unit := do
-  let destination ← lookupDestination id
+  let destination ← writableDestination id
   match destination.progress with
   | .open _ | .built _ =>
       let storage ← lookupStorage destination.storage
@@ -299,7 +326,7 @@ private def descendantOf (destinations : Array PendingDestination) (ancestor : D
   return false
 
 def abandonTree (id : DestinationId) : ConstructionM Unit := do
-  let parent ← lookupDestination id
+  let parent ← writableDestination id
   match parent.progress with
   | .open _ | .built _ | .suspended _ _ => pure ()
   | .exiting _ _ | .published _ | .attached _ | .abandoned => ConstructionM.fail .protocol
@@ -311,7 +338,7 @@ def abandonTree (id : DestinationId) : ConstructionM Unit := do
     | .exiting _ _ => ConstructionM.fail .protocol
     | _ => pure ()
   for destination in descendants do
-    let current ← lookupDestination destination.capability.id
+    let current ← writableDestination destination.capability.id
     match current.progress with
     | .suspended count _ =>
         replaceDestination current.capability.id { current with progress := .open count }
@@ -319,7 +346,7 @@ def abandonTree (id : DestinationId) : ConstructionM Unit := do
     abandonDestination destination.capability.id
 
 def openExitReplacement (supersededId : DestinationId) : ConstructionM DestinationId := do
-  let superseded ← lookupDestination supersededId
+  let superseded ← writableDestination supersededId
   let count ← match superseded.progress with
     | .open count | .built count | .suspended count _ => pure count
     | .exiting _ _ | .published _ | .attached _ | .abandoned => ConstructionM.fail .protocol
