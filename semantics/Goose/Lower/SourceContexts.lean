@@ -2212,4 +2212,54 @@ theorem StmtSource.whileAfterBody {cfg : Cfg} {env : Env} {state afterCondition 
     (fun root member => conditionResult.footprint.dom root (bodyResult.footprint.dom root member)) (Nat.le_refl _)
   exact ⟨{ source with frame := input, observed := observed, classified := classified, top := top }, rfl, rfl, rfl, rfl⟩
 
+theorem StmtSource.assertChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} {origin : OriginId}
+    (source : StmtSource cfg env (.assertS expr origin) state) :
+    ∃ child : ExprSource cfg env expr state,
+      child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
+      child.ty = .bool := by
+  have typed := source.typed
+  have rooted := source.rooted
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨_, ty, finish, typed, typeEq, _, _⟩ := typed
+  have typeEq : ty = .bool := by simpa using typeEq
+  subst ty
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨roots, finishRoots, rooted, aborts⟩ := rooted
+  have childAt : (DemandNode.statement (.assertS expr origin)).child? 0 = some (.expression expr) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := firstExpressionSource source expr childAt
+    (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
+    (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
+    source.typingStart finish .bool source.rootsStart finishRoots roots typed rooted
+    ((PMono.noteAborts _ _ _ aborts).2.trans source.effects)
+  exact ⟨child, typingEq, rootsEq, typeEq⟩
+
+theorem StmtSource.exitChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} {origin : OriginId}
+    (source : StmtSource cfg env (.exit expr origin) state) :
+    ∃ child : ExprSource cfg env expr state, ∃ integer : IntTy,
+      child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
+      child.ty = .int integer := by
+  have typed := source.typed
+  have rooted := source.rooted
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨_, ty, finish, typed, integer, typeEq, _, _⟩ := typed
+  have typeEq : ty = .int integer := by simpa using typeEq
+  subst ty
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨roots, finishRoots, rooted, aborts⟩ := rooted
+  have childAt : (DemandNode.statement (.exit expr origin)).child? 0 = some (.expression expr) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := firstExpressionSource source expr childAt
+    (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
+    (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
+    source.typingStart finish (.int integer) source.rootsStart finishRoots roots typed rooted
+    ((PMono.noteAborts _ _ _ aborts).2.trans source.effects)
+  exact ⟨child, integer, typingEq, rootsEq, typeEq⟩
+
 end Goose.Lower

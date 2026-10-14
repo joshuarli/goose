@@ -325,4 +325,54 @@ example (profile : NumProfile) :
   rw [bodyTyping] at same
   exact same
 
+def assertImplementation : Impl :=
+  { initImpl with body := .mk 0 [.assertS (.bool true) 0] none }
+
+def assertModule : Module :=
+  { conditionalModule with impls := #[assertImplementation] }
+
+#guard match Core.validate assertModule with | .ok _ => true | .error _ => false
+
+example (profile : NumProfile) :
+    ∃ child : ExprSource ⟨profile, assertModule⟩ ⟨#[], 0, [(0, 0)], 1⟩ (.bool true)
+      { St.initial with nextAct := 1, nextScope := 1 }, child.ty = .bool := by
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _⟩ :=
+    acceptedEntryAfterGlobals (cfg := ⟨profile, assertModule⟩) (by cbv) 1 (by cbv)
+  have contextEq : ctx = initContext := by simpa [assertModule, conditionalModule, callModule] using contextAt.symm
+  subst ctx
+  have implEq : impl = assertImplementation := by simpa [assertModule, initContext] using implementationAt.symm
+  subst impl
+  obtain ⟨statements, _, _, _, _⟩ := source.enter
+  obtain ⟨head, _, _, _⟩ := statements.split
+  obtain ⟨child, _, _, typeEq⟩ := head.assertChild
+  exact ⟨child, typeEq⟩
+
+def exitImplementation : Impl :=
+  { initImpl with body := .mk 0 [.exit (.lit .i32 0) 0] none }
+
+def exitModule : Module :=
+  { conditionalModule with impls := #[exitImplementation] }
+
+#guard match Core.validate exitModule with | .ok _ => true | .error _ => false
+
+example (profile : NumProfile) :
+    ∃ child : ExprSource ⟨profile, exitModule⟩ ⟨#[], 0, [(0, 0)], 1⟩ (.lit .i32 0)
+      { St.initial with nextAct := 1, nextScope := 1 }, child.ty = (.int .i32) := by
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _⟩ :=
+    acceptedEntryAfterGlobals (cfg := ⟨profile, exitModule⟩) (by cbv) 1 (by cbv)
+  have contextEq : ctx = initContext := by simpa [exitModule, conditionalModule, callModule] using contextAt.symm
+  subst ctx
+  have implEq : impl = exitImplementation := by simpa [exitModule, initContext] using implementationAt.symm
+  subst impl
+  obtain ⟨statements, _, _, _, _⟩ := source.enter
+  obtain ⟨head, _, _, _⟩ := statements.split
+  obtain ⟨child, integer, _, _, typeEq⟩ := head.exitChild
+  have integerEq : integer = .i32 := by
+    have typed := child.typed
+    change Except.ok (.int .i32, child.typingStart) = Except.ok (child.ty, child.typingEnd) at typed
+    have typeKnown : child.ty = .int .i32 := (congrArg Prod.fst (Except.ok.inj typed)).symm
+    exact Ty.int.inj (typeEq.symm.trans typeKnown)
+  subst integer
+  exact ⟨child, typeEq⟩
+
 end Goose.Lower.SourceContextChecks
