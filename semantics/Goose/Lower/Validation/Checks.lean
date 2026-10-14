@@ -41,6 +41,45 @@ def readonlyShrinkBorrow : Module :=
     impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
     entry := 0, origins := #[⟨0, 1, "test"⟩], profile := .shrink }
 
+def readonlyReferenceLocal : Module :=
+  let main : Impl :=
+    { emptyEntry with
+      vars := #[⟨"r", .ref .readOnly (.int .i64), .immutable, 0, 0⟩],
+      body := .mk 0 [.letS 0 (.ref .mutable (.global 0)) 0] none }
+  { files := #["readonly-reference-local.goose"], types := #[],
+    globals := #[⟨"g", .int .i64, .mutable, .lit .i64 1, 0⟩],
+    impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
+    entry := 0, origins := #[⟨0, 1, "test"⟩] }
+
+def readonlyReferenceRebind : Module :=
+  { readonlyReferenceLocal with
+    impls := readonlyReferenceLocal.impls.modify 0 fun impl =>
+      { impl with
+        vars := impl.vars.modify 0 fun var => { var with kind := .mutable },
+        body := .mk 0 [.letS 0 (.ref .readOnly (.global 0)) 0,
+          .rebind 0 (.ref .mutable (.global 0)) 0] none } }
+
+def readonlyReferenceResult : Module :=
+  let receiver : Impl :=
+    { emptyEntry with
+      name := "receiver", results := #[.ref .readOnly (.int .i64)],
+      body := .mk 0 [.ret (some (.ref .mutable (.global 0))) 0] none }
+  { readonlyReferenceLocal with
+    impls := #[emptyEntry, receiver],
+    contexts := #[⟨0, "main", [], [], []⟩,
+      ⟨1, "receiver", [], [[.global 0]], []⟩] }
+
+def readonlySliceLocal : Module :=
+  let owner := Ty.arr (.int .i64) 1
+  let main : Impl :=
+    { emptyEntry with
+      vars := #[⟨"s", .slice .readOnly (.int .i64), .immutable, 0, 0⟩],
+      body := .mk 0 [.letS 0 (.slice .mutable (.of (.global 0)) .omitted .omitted 0) 0] none }
+  { files := #["readonly-slice-local.goose"], types := #[],
+    globals := #[⟨"g", owner, .mutable, .arrLit owner [.lit .i64 1], 0⟩],
+    impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
+    entry := 0, origins := #[⟨0, 1, "test"⟩] }
+
 #guard match Core.validate parameterSlice, GIR.validate (lower parameterSlice) with
   | .ok _, .ok _ => true
   | _, _ => false
@@ -61,5 +100,17 @@ def readonlyShrinkBorrow : Module :=
 #guard match GIR.validate (lower readonlyShrinkBorrow) with
   | .ok _ => true
   | _ => false
+
+#guard [(readonlyReferenceLocal,
+      "function main: slot 0 is initialized with a value of another type"),
+    (readonlyReferenceRebind,
+      "function main: a store of a value of another type than the referent"),
+    (readonlyReferenceResult,
+      "function receiver: a returned value of another type than the result"),
+    (readonlySliceLocal,
+      "function main: slot 0 is initialized with a value of another type")].all fun (module, message) =>
+  match Core.validate module, GIR.validate (lower module) with
+  | .ok _, .error rejection => rejection.code == .v010 && rejection.message == message
+  | _, _ => false
 
 end Goose.Lower.Validation.Checks
