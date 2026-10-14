@@ -95,6 +95,7 @@ inductive Op
   | arrFill (t : Ty) (v : ValueId)
   | structLit (t : Ty) (vs : List ValueId)
   | fieldAddr (owner : ValueId) (index : Nat)
+  | render (operand : ValueId) (org : Option OriginId)
   | bytes (data : List UInt8) (org : Option OriginId)
   | result (pack : ValueId) (position : Nat)
   | destOpen (receiver : DestReceiver) (ty : Ty) (request : ConstructionRequest) (count : Option ValueId) (org : Option OriginId)
@@ -131,6 +132,8 @@ inductive Effect
   | leave (sc : ScopeId)
   | print (parts : List PrintPart) (org : Option OriginId)
   | appendValue (receiver snapshot : ValueId) (org : Option OriginId)
+  | destRepeat (destination source : ValueId) (org : Option OriginId)
+  | destSnapshot (destination snapshot : ValueId) (org : Option OriginId)
   | destWrite (destination value : ValueId) (org : Option OriginId)
   | destAttach (parent child : ValueId) (org : Option OriginId)
   | destBytes (destination : ValueId) (bytes : List UInt8) (org : Option OriginId)
@@ -262,7 +265,7 @@ def Op.uses : Op → List ValueId
   | .arrLit _ vs | .structLit _ vs => vs
   | .arrFill _ v | .fieldAddr v _ => [v]
   | .bytes .. | .destNamed .. | .resultExitDest .. | .targetDest .. => []
-  | .result v _ => [v]
+  | .result v _ | .render v _ => [v]
   | .destOpen receiver _ _ count _ => receiver.uses ++ count.toList
   | .destChild v _ _ | .destFinish v _ | .destArg v _ | .destAbandon v _ |
       .destValue v _ | .destRelocate v _ _ | .destStage v _ | .destFit v _ => [v]
@@ -282,7 +285,7 @@ def Effect.uses : Effect → List ValueId
   | .replace r run _ => [r, run]
   | .enter _ | .leave _ => []
   | .print parts _ => parts.flatMap PrintPart.uses
-  | .appendValue a b _ | .destWrite a b _ | .destAttach a b _ | .destText a b _ | .destCopy a b _ => [a,b]
+  | .destRepeat a b _ | .destSnapshot a b _ | .appendValue a b _ | .destWrite a b _ | .destAttach a b _ | .destText a b _ | .destCopy a b _ => [a,b]
   | .destBytes d _ _ | .destBind _ d _ | .destPublish d _ | .destCancel d _ => [d]
 
 def Term.uses : Term → List ValueId

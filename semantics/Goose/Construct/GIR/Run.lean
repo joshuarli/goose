@@ -10,8 +10,9 @@ private def initGlobals : Nat → Config → List Nat → EvalM Unit
   | _ + 1, _, [] => pure ()
   | fuel + 1, config, globalId :: rest => do
       let some global := config.module.globals[globalId]? | fault .unbound
-      let storage ← reserveRootObject (.global globalId)
+      let storage ← if global.ty.nonfixed then pure (some (← reserveRootObject (.global globalId))) else pure none
       let destinations ← if global.ty.nonfixed then do
+          let some storage := storage | fault .flow
           let request := match global.init.results.head?.map (·.request) with
             | some .elementRun => Core.ConstructionRequest.elementRun
             | _ => .value
@@ -24,6 +25,7 @@ private def initGlobals : Nat → Config → List Nat → EvalM Unit
       match results with
       | [.register value] => bindRoot (.global globalId) value
       | [.completed id] =>
+          let some storage := storage | fault .shape
           liftConstruction global.org (publishOperation [id])
           bindRoot (.global globalId) (.stored { (← storedDestination id) with object := some storage })
       | _ => fault .arity

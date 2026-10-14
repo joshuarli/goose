@@ -272,6 +272,7 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   let v (i : Nat) := decVal fs[i]!
   let def_ (op : Op) : Except String Inst := do pure (.def (← v 0) op)
   match tag with
+  | "i_render" => do arity tag fs 3; def_ (.render (← v 1) (← org 2))
   | "i_bytes" => do arity tag fs 3; def_ (.bytes (← decBytes fs[1]!) (← org 2))
   | "i_result" => do arity tag fs 3; def_ (.result (← v 1) (← asNat fs[2]! "result position"))
   | "i_dest_open" => do
@@ -309,6 +310,8 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   | "i_target_dest" => do
     arity tag fs 4
     def_ (.targetDest (← checkIndex (← asNat fs[1]! "target") tb.nTargets "target") (← asNat fs[2]! "target result position") (← org 3))
+  | "x_dest_repeat" => do arity tag fs 3; pure (.eff (.destRepeat (← v 0) (← v 1) (← org 2)))
+  | "x_dest_snapshot" => do arity tag fs 3; pure (.eff (.destSnapshot (← v 0) (← v 1) (← org 2)))
   | "x_append_value" => do arity tag fs 3; pure (.eff (.appendValue (← v 0) (← v 1) (← org 2)))
   | "x_dest_write" => do arity tag fs 3; pure (.eff (.destWrite (← v 0) (← v 1) (← org 2)))
   | "x_dest_attach" => do arity tag fs 3; pure (.eff (.destAttach (← v 0) (← v 1) (← org 2)))
@@ -773,6 +776,7 @@ def wEscape (edge : EscapeEdge) : String :=
   wRec "escape_edge" [toString edge.target,toString edge.block,wNats edge.args]
 
 def wOp (r : ValueId) : Op → W String
+  | .render operand org => pure (wRec "i_render" [toString r,toString operand,wOpt org])
   | .bytes bytes org => pure (wRec "i_bytes" [toString r,wBytes bytes,wOpt org])
   | .result pack position => pure (wRec "i_result" [toString r,toString pack,toString position])
   | .destOpen receiver ty request count org => do
@@ -827,6 +831,8 @@ def wOp (r : ValueId) : Op → W String
   | .arrFill t v => do pure (wRec "i_fill" [toString r, ← wTy t, toString v])
 
 def wInst : Inst → W String
+  | .eff (.destRepeat d s org) => pure (wRec "x_dest_repeat" [toString d,toString s,wOpt org])
+  | .eff (.destSnapshot d s org) => pure (wRec "x_dest_snapshot" [toString d,toString s,wOpt org])
   | .eff (.appendValue r v org) => pure (wRec "x_append_value" [toString r,toString v,wOpt org])
   | .eff (.destWrite d v org) => pure (wRec "x_dest_write" [toString d,toString v,wOpt org])
   | .eff (.destAttach p c org) => pure (wRec "x_dest_attach" [toString p,toString c,wOpt org])

@@ -121,6 +121,12 @@ def TyEnv.resultDestination (_env : TyEnv) (results : List ResultDescriptor) (po
   pure ty
 
 def Op.resultTy (env : TyEnv) : Op → TyR VTy
+  | .render operand _ => do
+    match ← env.valTy operand with
+    | .data ty => if ty.nonfixed then tyErr "render nonfixed operand requires sampled view"
+    | .view .. => pure ()
+    | _ => tyErr "protocol carrier cannot be rendered"
+    pure (.view .readOnly (.int .u8))
   | .bytes _ _ => pure (.data (.slice .readOnly (.int .u8)))
   | .result pack position => do
     let .pack results ← env.valTy pack | tyErr "result projection requires result pack"
