@@ -524,4 +524,58 @@ theorem view_val_result (artifact : ArtifactProfile) (profile : NumProfile)
     | .done .returned "", .done .returned "" => true
     | _, _ => false
 
+def indexedModule (artifact : ArtifactProfile) (index : Int) : Core.Module :=
+  { files := #["indexed.goose"], types := #[.bool, .int .i64, .arr .bool 3],
+    globals := #[⟨"owner", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩,
+      ⟨"selected", .bool, .mutable, .read (.elem (.of (.global 0)) (.lit .i64 index) 0), 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [.assertS (.read (.global 1)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "index"⟩], profile := artifact }
+
+theorem indexed_prefix (artifact : ArtifactProfile) (profile : NumProfile) (index : Int)
+    (accepted : Core.validate (indexedModule artifact index) = .ok ()) :
+    InitializedGlobals (indexedModule artifact index) 1 viewOwnerState :=
+  InitializedGlobals.afterInitializer (cfg := ⟨profile, indexedModule artifact index⟩)
+    (before := St.initial) (after := { St.initial with nextAct := 1 })
+    (value := .fixed (Array.replicate 3 (.bool true))) (g := 0)
+    (global := ⟨"owner", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩)
+    accepted rfl (InitializedGlobals.initial _) 3
+    (by simp [evalExpr, Core.expectFixedCount, pure_apply, bind_apply, St.initial])
+
+theorem indexed_children_source (artifact : ArtifactProfile) (profile : NumProfile) (index : Int)
+    (accepted : Core.validate (indexedModule artifact index) = .ok ()) :
+    ∃ view : ViewSource ⟨profile, indexedModule artifact index⟩ ⟨#[], 1, [], 0⟩ (.of (.global 0))
+      { viewOwnerState with nextAct := 2 },
+      ∃ operand : ExprSource ⟨profile, indexedModule artifact index⟩ ⟨#[], 1, [], 0⟩ (.lit .i64 index)
+        { viewOwnerState with nextAct := 2 }, view.typingEnv = operand.typingEnv := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, indexedModule artifact index⟩) (state := viewOwnerState) (g := 1)
+    (global := ⟨"selected", .bool, .mutable, .read (.elem (.of (.global 0)) (.lit .i64 index) 0), 0⟩)
+    accepted rfl (indexed_prefix artifact profile index accepted).invariant
+  obtain ⟨place, hplaceTyping, hplaceRoots⟩ := source.readChild
+  obtain ⟨intTy, view, hviewTyping, hviewRoots, next⟩ := place.elemChildren 0
+  obtain ⟨operand, hoperandTyping, hoperandRoots, hoperandType⟩ := next 3
+    ⟨⟨.global 0, []⟩, 0, 3, false⟩ { viewOwnerState with nextAct := 2 } (by cbv)
+  exact ⟨view, operand, hviewTyping.trans hoperandTyping.symm⟩
+
+theorem indexed_claim (artifact : ArtifactProfile) (profile : NumProfile) (index : Int) :
+    TypedExprClaim 5 ⟨profile, indexedModule artifact index⟩ [.bool]
+      (.read (.elem (.of (.global 0)) (.lit .i64 index) 0)) :=
+  typedExprClaim_read (typedPlaceClaim_elem
+    (typedViewClaim_of (typedPlaceClaim_global 2 _ _ 0)) (typedExprClaim_lit 3 _ _ .i64 index) 0)
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact => [2, 3].all fun index =>
+  let source := indexedModule artifact index
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact => [NumProfile.release, .debug].all fun profile =>
+  let within := indexedModule artifact 2
+  let outside := indexedModule artifact 3
+  match Core.eval 160 profile within, GIR.run 320 profile (lower within),
+      Core.eval 160 profile outside, GIR.run 320 profile (lower outside) with
+  | .done .returned "", .done .returned "",
+      .done (.aborted .indexOob 0) "", .done (.aborted .indexOob 0) "" => true
+  | _, _, _, _ => false
+
 end Goose.Lower.TypedExpressionChecks
