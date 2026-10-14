@@ -314,4 +314,104 @@ theorem CellSample.extend {cfg : GCfg} {fn : Func} {id : ValueId} {value : RVal}
     point, instruction, evaluated, history.trans ?_⟩
   exact .next transition (by simpa using unwritten) .refl
 
+theorem RuntimePoint.cell_source {cfg : GCfg} {fn : Func} {pt : Pt} {fr : Frame} {st : St}
+    {id : ValueId} {value : RVal}
+    (point : RuntimePoint cfg fn pt fr st) (cell : fr.vals[id]? = some value) :
+    (∃ block ∈ fn.blocks, id ∈ block.params.map Prod.fst) ∨
+      CellSample cfg fn id value pt fr st := by
+  induction point generalizing id value with
+  | initializer _ _ _ _ entry => exact .inl (entry.cell_parameter cell)
+  | entry _ _ _ enter => exact .inl (enter.cell_parameter cell)
+  | call _ _ _ _ _ enter _ => exact .inl (enter.cell_parameter cell)
+  | @step fn pt fr st pt' fr' st' before transition ih =>
+    cases transition with
+    | @define result operation fuel computed writtenState instruction evaluated =>
+      by_cases equal : result = id
+      · subst result
+        simp only [Frame.set, Std.HashMap.getElem?_insert, beq_self_eq_true, ↓reduceIte,
+          Option.some.injEq] at cell
+        subst computed
+        right
+        exact ⟨pt, fr, st, operation, fuel, st',
+          before, instruction, evaluated, .refl⟩
+      · have oldCell : fr.vals[id]? = some value := by
+          simpa [Frame.set, Std.HashMap.getElem?_insert, equal] using cell
+        rcases ih oldCell with parameter | sample
+        · exact .inl parameter
+        · right
+          apply sample.extend (.define instruction evaluated)
+          simpa [stepWrites, instruction] using Ne.symm equal
+    | effect instruction evaluated =>
+      rw [execEff_preserves_cells evaluated] at cell
+      rcases ih cell with parameter | sample
+      · exact .inl parameter
+      · exact .inr (sample.extend (.effect instruction evaluated) (by simp [stepWrites, instruction]))
+    | branch instruction read entered =>
+      obtain ⟨block, lookup, source⟩ := enterBlock_cell_source entered cell
+      by_cases parameter : id ∈ block.params.map Prod.fst
+      · exact .inl ⟨block, Array.mem_of_getElem? lookup, parameter⟩
+      · have oldCell := source.resolve_left parameter
+        rcases ih oldCell with parameterSource | sample
+        · exact .inl parameterSource
+        · right
+          apply sample.extend (.branch instruction read entered)
+          simpa [stepWrites, instruction, lookup] using parameter
+    | branchTrue instruction tested read entered =>
+      obtain ⟨block, lookup, source⟩ := enterBlock_cell_source entered cell
+      by_cases parameter : id ∈ block.params.map Prod.fst
+      · exact .inl ⟨block, Array.mem_of_getElem? lookup, parameter⟩
+      · have oldCell := source.resolve_left parameter
+        rcases ih oldCell with parameterSource | sample
+        · exact .inl parameterSource
+        · right
+          apply sample.extend (.branchTrue instruction tested read entered)
+          simpa [stepWrites, instruction, lookup] using parameter
+    | branchFalse instruction tested read entered =>
+      obtain ⟨block, lookup, source⟩ := enterBlock_cell_source entered cell
+      by_cases parameter : id ∈ block.params.map Prod.fst
+      · exact .inl ⟨block, Array.mem_of_getElem? lookup, parameter⟩
+      · have oldCell := source.resolve_left parameter
+        rcases ih oldCell with parameterSource | sample
+        · exact .inl parameterSource
+        · right
+          apply sample.extend (.branchFalse instruction tested read entered)
+          simpa [stepWrites, instruction, lookup] using parameter
+
+theorem cmp_true_cells {cfg : GCfg} {fn : Func} {fr : Frame} {st final : St}
+    {left right : ValueId} {fuel : Nat}
+    (evaluated : execOp fuel ⟨cfg, fn⟩ fr (.cmp .lt .i64 left right) st =
+      .ok (.val (.bool true)) final) :
+    ∃ leftValue rightValue comparable,
+      fr.vals[left]? = some (.val leftValue) ∧
+      fr.vals[right]? = some (.val rightValue) ∧
+      expectComparable leftValue rightValue st = .ok comparable final ∧
+      comparable.1 < comparable.2 := by
+  simp only [execOp, execPure] at evaluated
+  obtain ⟨leftValue, firstState, leftRead, afterLeft⟩ := m_bind_ok evaluated
+  obtain ⟨rightValue, secondState, rightRead, afterRight⟩ := m_bind_ok afterLeft
+  obtain ⟨comparable, middle, compared, finished⟩ := m_bind_ok afterRight
+  obtain ⟨leftCell, firstStateEq⟩ := getVal_success leftRead
+  obtain ⟨rightCell, secondStateEq⟩ := getVal_success rightRead
+  simp only [pure_apply, Res.ok.injEq, RVal.val.injEq, Val.bool.injEq, evalCmp,
+    decide_eq_true_eq] at finished
+  rw [secondStateEq, firstStateEq, finished.2] at compared
+  exact ⟨leftValue, rightValue, comparable, leftCell, rightCell, compared, finished.1⟩
+
+theorem cmp_true_i64 {cfg : GCfg} {fn : Func} {fr : Frame} {st final : St}
+    {left right : ValueId} {fuel : Nat} {a b : Int}
+    (evaluated : execOp fuel ⟨cfg, fn⟩ fr (.cmp .lt .i64 left right) st =
+      .ok (.val (.bool true)) final)
+    (leftCell : fr.vals[left]? = some (.val (.int .i64 a)))
+    (rightCell : fr.vals[right]? = some (.val (.int .i64 b))) : a < b := by
+  obtain ⟨leftValue, rightValue, comparable, leftRead, rightRead, compared, less⟩ :=
+    cmp_true_cells evaluated
+  rw [leftCell] at leftRead
+  rw [rightCell] at rightRead
+  cases leftRead
+  cases rightRead
+  simp only [expectComparable, expectSameTy, ↓reduceIte, pure_bind,
+    pure_apply, Res.ok.injEq] at compared
+  cases compared.1
+  exact less
+
 end Goose.Evidence
