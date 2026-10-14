@@ -67,6 +67,9 @@ public:
         string data;
         if (CoreHasConstruction(m.profile)) {
             data += "static GS_TLS int64_t gir_return_flag;\n";
+            for (size_t target = 0; target < m.lowtargets.size(); target++)
+                for (size_t cell = 0; cell < m.lowtargets[target].cells.size(); cell++)
+                    Append(data, "static GS_TLS ", CT(m.lowtargets[target].cells[cell]), " gir_target_", target, "_", cell, ";\n");
             data += "static GS_TLS gs_stack **gir_stack_cells;\nstatic GS_TLS size_t gir_stack_capacity;\n";
             data += "static gs_stack *gir_stack_at(int64_t base, int64_t offset) { if (base < 0 || offset < 0 || base > INT64_MAX - offset) gs_panic(\"invalid construction stack base\"); int64_t index = base + offset; if ((uint64_t)index >= SIZE_MAX / sizeof(gs_stack *)) gs_panic(\"invalid construction stack index\"); size_t needed = (size_t)index + 1; if (needed > gir_stack_capacity) { size_t capacity = gir_stack_capacity ? gir_stack_capacity : 8; while (capacity < needed) { if (capacity > SIZE_MAX / sizeof(gs_stack *) / 2) gs_panic(\"construction stack directory overflow\"); capacity *= 2; } gs_stack **cells = (gs_stack **)realloc(gir_stack_cells, capacity * sizeof(gs_stack *)); if (!cells) gs_panic(\"out of memory allocating construction stacks\"); memset(cells + gir_stack_capacity, 0, (capacity - gir_stack_capacity) * sizeof(gs_stack *)); gir_stack_cells = cells; gir_stack_capacity = capacity; } if (!gir_stack_cells[index]) { gir_stack_cells[index] = (gs_stack *)malloc(sizeof(gs_stack)); if (!gir_stack_cells[index]) gs_panic(\"out of memory allocating construction stack cell\"); gs_stack_init(gir_stack_cells[index]); } return gir_stack_cells[index]; }\n";
             data += "static void gir_stack_cells_close(void) { for (size_t index = 0; index < gir_stack_capacity; index++) free(gir_stack_cells[index]); free(gir_stack_cells); gir_stack_cells = NULL; gir_stack_capacity = 0; }\n";
@@ -103,6 +106,17 @@ static void gir_source_close(void) { if (gir_source_scope_top || gir_source_call
 static void gir_source_global_set(size_t position, gir_source *source) { gir_source_retain(source); gir_source_release(gir_global_sources[position]); gir_global_sources[position] = source; }
 static void gir_source_copy(gir_source *source, int64_t destination) { if (!source || source->count > SIZE_MAX - 2) gir_trace_fail(); int64_t *values = (int64_t *)gir_source_alloc((source->count + 2) * sizeof(int64_t)); values[0] = source->storage; for (size_t index = 0; index < source->count; index++) values[index + 1] = source->path[index]; values[source->count + 1] = destination; gir_trace_record("copy", "storage", source->count + 2, values); free(values); }
 )";
+                if (!m.lowtargets.empty()) {
+                    Append(data, "#define GIR_SOURCE_TARGETS ", m.lowtargets.size(), "\n");
+                    data += R"(
+typedef struct gir_source_target { struct gir_source_target *previous; gir_source_call *call; size_t target, count; int64_t *positions; gir_source **results; } gir_source_target;
+static GS_TLS gir_source_target *gir_source_targets[GIR_SOURCE_TARGETS];
+static uint8_t *gir_source_target_enter(size_t target, size_t count, const int64_t *positions) { if (target >= GIR_SOURCE_TARGETS) gir_trace_fail(); gir_source_target *record = (gir_source_target *)gir_source_alloc(sizeof(*record)); record->previous = gir_source_targets[target]; record->call = gir_source_call_top; record->target = target; record->count = count; record->positions = (int64_t *)gir_source_alloc((count + 1) * sizeof(int64_t)); record->results = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); for (size_t position = 0; position < count; position++) record->positions[position] = positions[position]; gir_source_targets[target] = record; return (uint8_t *)record; }
+static void gir_source_target_leave(uint8_t *token) { gir_source_target *record = (gir_source_target *)token; if (!record || record->target >= GIR_SOURCE_TARGETS || gir_source_targets[record->target] != record) gir_trace_fail(); for (size_t position = 0; position < record->count; position++) gir_source_release(record->results[position]); gir_source_targets[record->target] = record->previous; free(record->positions); free(record->results); free(record); }
+static void gir_source_target_result(size_t target, size_t position, gir_source *source) { if (target >= GIR_SOURCE_TARGETS || !source) gir_trace_fail(); gir_source_target *record = gir_source_targets[target]; if (!record || position >= record->count || record->positions[position] < 1 || !record->call || (uint64_t)record->positions[position] > record->call->count) gir_trace_fail(); gir_source_retain(source); gir_source_release(record->results[position]); record->results[position] = source; size_t output = (size_t)record->positions[position]; gir_source_retain(source); gir_source_release(record->call->results[output]); record->call->results[output] = source; }
+static gir_source *gir_source_target_get(uint8_t *token, size_t position) { gir_source_target *record = (gir_source_target *)token; if (!record || record->target >= GIR_SOURCE_TARGETS || gir_source_targets[record->target] != record || position >= record->count || !record->results[position]) gir_trace_fail(); return record->results[position]; }
+)";
+                }
 
             }
         }
@@ -544,6 +558,8 @@ private:
                 L(V(i.res), " = (uint8_t *)", literals.at(string(i.bytes.begin(), i.bytes.end())), ";"); return;
             case GirOp::ReturnFlagGet: L(V(i.res), " = gir_return_flag;"); return;
             case GirOp::ReturnFlagSet: L("gir_return_flag = ", V(i.a), ";"); return;
+            case GirOp::TargetLoad: L(V(i.res), " = gir_target_", i.idx, "_", i.idx2, ";"); return;
+            case GirOp::TargetStore: L("gir_target_", i.idx, "_", i.idx2, " = ", V(i.a), ";"); return;
             case GirOp::Format:
                 L(V(i.res), " = gs_fmt_", i.format == GirFormatKind::Int ? "i64" :
                   i.format == GirFormatKind::Uint ? "u64" : "bool", "(", V(i.b), ", ", V(i.a), ");");
@@ -594,6 +610,20 @@ private:
                 if (constructionTrace) L("gir_source_result(", i.idx, ", (gir_source *)", V(i.a), ");"); return;
             case GirOp::SourceCopy:
                 if (constructionTrace) L("gir_source_copy((gir_source *)", V(i.a), ", ", V(i.b), ");"); return;
+            case GirOp::SourceTargetEnter:
+                if (constructionTrace) {
+                    string positions = "(const int64_t[]){";
+                    for (auto position : i.vals) { if (positions.back() != '{') positions += ','; positions += to_string(position); }
+                    positions += i.vals.empty() ? "-1}" : "}";
+                    L(V(i.res), " = gir_source_target_enter(", i.idx, ", ", i.vals.size(), ", ", positions, ");");
+                }
+                return;
+            case GirOp::SourceTargetLeave:
+                if (constructionTrace) L("gir_source_target_leave(", V(i.a), ");"); return;
+            case GirOp::SourceTargetResult:
+                if (constructionTrace) L("gir_source_target_result(", i.idx, ", ", i.idx2, ", (gir_source *)", V(i.a), ");"); return;
+            case GirOp::SourceTargetGet:
+                if (constructionTrace) L("gir_source_assign(&", V(i.res), ", gir_source_target_get(", V(i.a), ", ", i.idx, "));"); return;
             case GirOp::TraceId:
                 if (constructionTrace) L(V(i.res), " = gir_trace_", GirTraceName(i.trace), "++;");
                 else L(V(i.res), " = 0;");

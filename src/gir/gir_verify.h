@@ -255,6 +255,7 @@ private:
         for (auto &fn : fns) CheckCfg(fn);
         CheckUnreachable();
         if (m.low) {
+            if (CoreHasConstruction(m.profile)) CheckLowTargetProtocols();
             lowPassedPairs.assign(m.funcs.size(), {});
             lowStackParams.assign(m.funcs.size(), {});
             lowMarkParams.assign(m.funcs.size(), {});
@@ -328,13 +329,10 @@ private:
         for (auto &g : m.globals) scan(g.init);
 
         if (m.low) {
-            for (auto &function : m.funcs) for (auto &block : function.blocks) for (auto &inst : block.insts)
-                if (inst.op == GirOp::SourceTargetEnter || inst.op == GirOp::SourceTargetLeave ||
-                    inst.op == GirOp::SourceTargetResult || inst.op == GirOp::SourceTargetGet)
-                    Fail("GIR-V090", "target provenance requires a supported low target activation");
             if (hasStructType || hasStructInst || !m.structs.empty() || !m.targets.empty() ||
-                !m.lowtargets.empty())
+                (!CoreHasConstruction(m.profile) && !m.lowtargets.empty()))
                 Fail("GIR-V090", "a low module retains a high-stage artifact or an unsupported target table");
+            CheckLowTargetTables();
             return;
         }
         if (!CoreHasConstruction(m.profile) && !m.targets.empty())
@@ -405,6 +403,183 @@ private:
                     field.offset > st.size || bytes > st.size - field.offset)
                     Fail("GIR-V010", cat("struct ", s, " field ", f, " has an invalid byte extent"));
                 end = field.offset + bytes;
+            }
+        }
+    }
+
+    void CheckLowTargetTables() {
+        auto bad = [&](const string &message) { Fail("GIR-V090", message); };
+        if (!m.lowtargets.empty()) bad("low targets require the complete checked activation protocol");
+        set<vector<int>> sets;
+        for (size_t target = 0; target < m.lowtargets.size(); target++) {
+            auto &table = m.lowtargets[target];
+            if (table.members.empty() || !is_sorted(table.members.begin(), table.members.end()) ||
+                adjacent_find(table.members.begin(), table.members.end()) != table.members.end() || !sets.insert(table.members).second)
+                bad("low target member set is empty, repeated, or unsorted");
+            for (auto member : table.members) if (member < 0 || member >= (int)m.funcs.size()) bad("low target member lies outside the function table");
+            if (table.cells.empty() || table.cells[0] < 0 || table.cells[0] >= (int)m.types.size() || m.Type(table.cells[0]).kind != CoreType::Bool)
+                bad("low target active cell is not boolean");
+            vector<bool> covered(table.cells.size(), false);
+            covered[0] = true;
+            for (auto &channel : table.channels) {
+                if (channel.incoming.empty() || channel.escaped.empty() || channel.incoming.size() != channel.escaped.size())
+                    bad("low target channel omits incoming or escaped ABI words");
+                for (auto *cells : { &channel.incoming, &channel.escaped })
+                    for (auto cell : *cells) {
+                        if (cell <= 0 || cell >= (int)table.cells.size() || covered[cell]) bad("low target channels do not partition their cells");
+                        covered[cell] = true;
+                        auto type = table.cells[cell];
+                        if (type < 0 || type >= (int)m.types.size()) bad("low target cell type lies outside the type table");
+                        auto kind = m.Type(type).kind;
+                        if (kind != CoreType::Int && kind != CoreType::Bool && kind != CoreType::Ptr) bad("low target cell retains an unresolved layout");
+                        if (cells == &channel.incoming && kind != CoreType::Ptr) bad("low target incoming output channel is not an address");
+                    }
+                if (channel.incoming.size() == 3 &&
+                    (m.Type(table.cells[channel.escaped[0]]).kind != CoreType::Ptr ||
+                     m.Type(table.cells[channel.escaped[1]]).kind != CoreType::Ptr ||
+                     m.Type(table.cells[channel.escaped[2]]).kind != CoreType::Int ||
+                     m.Type(table.cells[channel.escaped[2]]).ity != CoreIntTy::I64))
+                    bad("low target construction payload is not start, end, and count");
+            }
+            if (find(covered.begin(), covered.end(), false) != covered.end()) bad("low target table has an unconsumed cell");
+            for (auto member : table.members) {
+                auto &function = m.funcs[member];
+                if (function.blocks.empty()) bad("low target member has no entry block");
+                const GirInst *enter = nullptr;
+                for (auto &block : function.blocks) for (auto &inst : block.insts)
+                    if (inst.op == GirOp::SourceTargetEnter && inst.idx == (int)target) {
+                        if (enter || &block != &function.blocks[0]) bad("low target member does not have one entry activation");
+                        enter = &inst;
+                    }
+                if (!enter || enter->vals.size() != table.channels.size()) bad("low target member does not consume every declared channel");
+                vector<int> parameters;
+                for (auto &channel : table.channels) for (auto cell : channel.incoming) {
+                    int parameter = -1;
+                    for (auto &inst : function.blocks[0].insts)
+                        if (&inst == enter) break;
+                        else if (inst.op == GirOp::TargetStore && inst.idx == (int)target && inst.idx2 == cell)
+                            for (size_t position = 1; position < function.blocks[0].params.size(); position++)
+                                if (function.blocks[0].params[position].first == inst.a) parameter = (int)position;
+                    if (parameter < 1 || m.Type(function.params[parameter]).kind != CoreType::Ptr) bad("low target incoming cell is not installed from an output parameter");
+                    parameters.push_back(parameter);
+                }
+                for (size_t position = 1; position < parameters.size(); position++)
+                    if (parameters[position] != parameters[position - 1] + 1) bad("low target primitive output positions are not consecutive");
+                size_t offset = 0;
+                for (size_t channel = 0; channel < table.channels.size(); channel++) {
+                    if (enter->vals[channel] >= 0 && enter->vals[channel] != parameters[offset]) bad("low target reference shadow names another output channel");
+                    offset += table.channels[channel].incoming.size();
+                }
+            }
+        }
+    }
+
+    void CheckLowTargetProtocols() {
+        auto bad = [&](const string &message) { Fail("GIR-V090", message); };
+        vector<set<int>> needs(m.funcs.size()), escapes(m.funcs.size());
+        auto member = [&](size_t function, int target) {
+            auto &members = m.lowtargets[target].members;
+            return find(members.begin(), members.end(), (int)function) != members.end();
+        };
+        auto integer = [&](const GirFunc &function, int value) -> int64_t {
+            for (auto &block : function.blocks) for (auto &inst : block.insts) if (inst.res == value && inst.op == GirOp::Int) {
+                int64_t result = -1;
+                auto parsed = from_chars(inst.text.data(), inst.text.data() + inst.text.size(), result);
+                if (parsed.ec == errc() && parsed.ptr == inst.text.data() + inst.text.size()) return result;
+            }
+            return -1;
+        };
+        for (size_t function = 0; function < m.funcs.size(); function++)
+            for (auto &block : m.funcs[function].blocks) for (auto &inst : block.insts) {
+                if (inst.op == GirOp::TargetLoad || inst.op == GirOp::TargetStore || inst.op == GirOp::SourceTargetResult) {
+                    if (inst.idx < 0 || inst.idx >= (int)m.lowtargets.size()) bad("low target use is outside the table");
+                    if (!member(function, inst.idx)) needs[function].insert(inst.idx);
+                }
+                if (inst.op == GirOp::ReturnFlagSet) {
+                    auto flag = integer(m.funcs[function], inst.a);
+                    if (flag < 0 || flag > (int64_t)m.lowtargets.size()) bad("return flag does not name a checked target");
+                    if (flag) escapes[function].insert((int)flag - 1);
+                }
+            }
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (size_t function = 0; function < m.funcs.size(); function++)
+                for (auto &block : m.funcs[function].blocks) for (auto &inst : block.insts) if (inst.op == GirOp::Call)
+                    for (auto target : needs[inst.idx]) if (!member(function, target)) changed |= needs[function].insert(target).second;
+        }
+        if (!needs[m.entry].empty()) bad("low entry requires an unavailable target activation");
+        for (auto initializer : m.initfuncs) if (!needs[initializer].empty()) bad("low global initializer requires an unavailable target activation");
+        for (size_t functionIndex = 0; functionIndex < m.funcs.size(); functionIndex++) {
+            auto &function = m.funcs[functionIndex];
+            map<pair<int, int>, int> saved;
+            for (size_t target = 0; target < m.lowtargets.size(); target++) if (member(functionIndex, (int)target)) {
+                set<int> installed;
+                for (auto &inst : function.blocks[0].insts) {
+                    if (inst.op == GirOp::TargetLoad && inst.idx == (int)target && !installed.count(inst.idx2))
+                        if (!saved.emplace(make_pair((int)target, inst.idx2), inst.res).second) bad("low target activation saves a cell twice");
+                    if (inst.op == GirOp::TargetStore && inst.idx == (int)target) installed.insert(inst.idx2);
+                    if (inst.op == GirOp::SourceTargetEnter && inst.idx == (int)target) break;
+                }
+                for (size_t cell = 0; cell < m.lowtargets[target].cells.size(); cell++)
+                    if (!saved.count({ (int)target, (int)cell })) bad("low target activation does not save every recursive cell");
+            }
+            struct State {
+                set<pair<int, int>> restored, payload;
+                int flag = -1;
+                bool operator==(const State &) const = default;
+            };
+            vector<optional<State>> incoming(function.blocks.size());
+            incoming[0] = State {};
+            vector<int> work { 0 };
+            auto merge = [&](int block, State state) {
+                if (!incoming[block]) { incoming[block] = std::move(state); work.push_back(block); return; }
+                auto next = *incoming[block];
+                if (next.flag != state.flag) next.flag = -1;
+                for (auto *items : { &next.restored, &next.payload }) {
+                    auto &other = items == &next.restored ? state.restored : state.payload;
+                    for (auto iterator = items->begin(); iterator != items->end();) {
+                        if (!other.count(*iterator)) iterator = items->erase(iterator); else ++iterator;
+                    }
+                }
+                if (!(next == *incoming[block])) { incoming[block] = std::move(next); work.push_back(block); }
+            };
+            while (!work.empty()) {
+                auto block = work.back(); work.pop_back();
+                auto state = *incoming[block];
+                for (size_t position = 0; position < function.blocks[block].insts.size(); position++) {
+                    auto &inst = function.blocks[block].insts[position];
+                    if (inst.op == GirOp::Call && !escapes[inst.idx].empty()) {
+                        auto &instructions = function.blocks[block].insts;
+                        if (position + 1 >= instructions.size() || instructions[position + 1].op != GirOp::ReturnFlagGet)
+                            bad("escaping low call reads outputs before its return discriminant");
+                    }
+                    if (inst.op == GirOp::TargetStore) {
+                        auto key = make_pair(inst.idx, inst.idx2);
+                        auto previous = saved.find(key);
+                        if (previous != saved.end() && previous->second == inst.a) state.restored.insert(key);
+                        else {
+                            bool incomingCell = inst.idx2 == 0;
+                            for (auto &channel : m.lowtargets[inst.idx].channels)
+                                incomingCell |= find(channel.incoming.begin(), channel.incoming.end(), inst.idx2) != channel.incoming.end();
+                            if (incomingCell && block != 0) bad("low target incoming activation cell is overwritten outside its entry or restoration");
+                            state.restored.erase(key);
+                            if (!incomingCell) state.payload.insert(key);
+                        }
+                    }
+                    if (inst.op == GirOp::ReturnFlagSet) state.flag = (int)integer(function, inst.a);
+                    if (inst.op == GirOp::Ret && !m.lowtargets.empty()) {
+                        if (state.flag < 0) bad("low return omits its normal or target discriminant");
+                        for (auto &[key, value] : saved) { (void)value; if (!state.restored.count(key)) bad("low return fails to restore a recursive target cell"); }
+                        if (state.flag) {
+                            auto target = state.flag - 1;
+                            for (auto &channel : m.lowtargets[target].channels) for (auto cell : channel.escaped)
+                                if (!state.payload.count({ target, cell })) bad("low target return omits an escaped payload cell");
+                        }
+                    }
+                }
+                auto *term = LastTerm(function.blocks[block]);
+                if (term && term->op == GirOp::Br) merge(term->idx, state);
+                if (term && term->op == GirOp::CondBr) { merge(term->idx, state); merge(term->idx2, state); }
             }
         }
     }
@@ -722,6 +897,21 @@ private:
                     switch (i.op) {
                         case GirOp::StackAt: set(facts.stack, i.res, { 1, i.idx }); break;
                         case GirOp::GlobalStack: set(facts.stack, i.res, { 2, i.idx }); break;
+                        case GirOp::TargetLoad: {
+                            if (i.idx < 0 || i.idx >= (int)m.lowtargets.size()) break;
+                            for (size_t channel = 0; channel < m.lowtargets[i.idx].channels.size(); channel++) {
+                                auto &cells = m.lowtargets[i.idx].channels[channel];
+                                if (cells.incoming.size() != 3) continue;
+                                StackId token { 7, i.idx * 65536 + (int)channel };
+                                for (auto &entryInst : f.blocks[0].insts)
+                                    if (entryInst.op == GirOp::TargetStore && entryInst.idx == i.idx && entryInst.idx2 == cells.incoming[0])
+                                        for (auto &parameter : f.blocks[0].params) if (parameter.first == entryInst.a && at(facts.stack, entryInst.a).kind > 0)
+                                            token = at(facts.stack, entryInst.a);
+                                if (i.idx2 == cells.incoming[0]) set(facts.stack, i.res, token);
+                                if (i.idx2 == cells.incoming[1] || i.idx2 == cells.escaped[0] || i.idx2 == cells.escaped[1]) set(facts.markof, i.res, token);
+                            }
+                            break;
+                        }
                         case GirOp::StackMark:
                             set(facts.markof, i.res, at(facts.stack, i.a));
                             break;
@@ -1190,8 +1380,10 @@ private:
         struct State {
             vector<int> scopes;
             vector<Call> calls;
+            vector<pair<int, int>> targets;
             map<int, int> owners, members;
             set<int> outputs;
+            int flag = 0;
             bool operator==(const State &) const = default;
         };
         vector<optional<State>> incoming(function.blocks.size());
@@ -1201,7 +1393,8 @@ private:
             if (!incoming[target]) { incoming[target] = std::move(state); work.push_back(target); return; }
             auto previous = *incoming[target];
             auto next = previous;
-            if (next.scopes != state.scopes || next.calls != state.calls) bad("control-flow merge changes active trace scopes or calls");
+            if (next.scopes != state.scopes || next.calls != state.calls || next.targets != state.targets) bad("control-flow merge changes active trace scopes, targets, or calls");
+            if (next.flag != state.flag) next.flag = -1;
             for (auto *members : { &next.owners, &next.members }) {
                 auto &other = members == &next.owners ? state.owners : state.members;
                 for (auto iterator = members->begin(); iterator != members->end();) {
@@ -1245,8 +1438,8 @@ private:
             for (auto &inst : function.blocks[block].insts) {
                 vector<int> uses;
                 Uses(inst, uses);
-                bool traceOperation = (inst.op >= GirOp::SourceNew && inst.op <= GirOp::SourceGlobal) ||
-                                      (inst.op >= GirOp::SourceLeave && inst.op <= GirOp::SourceGlobalSet);
+                bool traceOperation = (inst.op >= GirOp::SourceNew && inst.op <= GirOp::SourceTargetGet) ||
+                                      (inst.op >= GirOp::SourceLeave && inst.op <= GirOp::SourceTargetResult);
                 for (auto value : uses) if (kinds.values[value] > GirSourceKind::Ordinary && !traceOperation) {
                     if (inst.op == GirOp::LocalSet && kinds.values[value] == GirSourceKind::Descriptor) source(value);
                     else if ((inst.op == GirOp::Br || inst.op == GirOp::CondBr) && kinds.values[value] == GirSourceKind::Descriptor && value != inst.a) source(value);
@@ -1258,6 +1451,7 @@ private:
                         if (inst.a < 0 || kinds.values[inst.a] != GirSourceKind::Scope || state.scopes.empty() || state.scopes.back() != inst.a)
                             bad("trace scope token is dead or not the innermost scope");
                         for (auto &active : state.calls) if (active.scope == inst.a) bad("trace scope leaves before its call epilogue");
+                        if (!state.targets.empty()) bad("trace scope leaves before its target activation cleanup");
                         state.scopes.pop_back();
                         break;
                     case GirOp::SourceNew: {
@@ -1324,6 +1518,54 @@ private:
                         if (call(inst.a).callee < 0) bad("trace call token popped before the call");
                         state.calls.pop_back();
                         break;
+                    case GirOp::SourceTargetEnter: {
+                        if (state.scopes.empty() || inst.idx < 0 || inst.idx >= (int)m.lowtargets.size()) bad("target provenance activation has no live scope or checked target");
+                        auto &table = m.lowtargets[inst.idx];
+                        auto functionIndex = (int)(&function - m.funcs.data());
+                        if (find(table.members.begin(), table.members.end(), functionIndex) == table.members.end() ||
+                            inst.vals.size() != table.channels.size()) bad("target provenance activation does not belong to its member or channels");
+                        for (auto position : inst.vals)
+                            if (position >= 0 && !sourceResults(functionIndex).count(position)) bad("target provenance maps an unproduced primitive output position");
+                        state.targets.push_back({ inst.res, inst.idx });
+                        break;
+                    }
+                    case GirOp::SourceTargetLeave:
+                        if (state.targets.empty() || state.targets.back().first != inst.a || kinds.values[inst.a] != GirSourceKind::Target)
+                            bad("target provenance token is dead or not the innermost activation");
+                        state.targets.pop_back();
+                        break;
+                    case GirOp::SourceTargetGet: {
+                        auto active = find_if(state.targets.begin(), state.targets.end(), [&](auto entry) { return entry.first == inst.a; });
+                        if (active == state.targets.end() || kinds.values[inst.a] != GirSourceKind::Target) bad("target provenance lookup uses a dead activation");
+                        const GirInst *enter = nullptr;
+                        for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                            if (candidate.op == GirOp::SourceTargetEnter && candidate.res == inst.a) enter = &candidate;
+                        if (!enter || inst.idx < 0 || inst.idx >= (int)enter->vals.size() || enter->vals[inst.idx] < 0)
+                            bad("target provenance lookup does not map a reference result position");
+                        owner(inst.res);
+                        break;
+                    }
+                    case GirOp::SourceTargetResult:
+                        if (inst.idx < 0 || inst.idx >= (int)m.lowtargets.size() || inst.idx2 < 0 ||
+                            inst.idx2 >= (int)m.lowtargets[inst.idx].channels.size()) bad("target provenance result lies outside its checked channels");
+                        {
+                            bool referenceChannel = false;
+                            for (auto member : m.lowtargets[inst.idx].members)
+                                for (auto &candidateBlock : m.funcs[member].blocks) for (auto &candidate : candidateBlock.insts)
+                                    if (candidate.op == GirOp::SourceTargetEnter && candidate.idx == inst.idx && candidate.vals[inst.idx2] >= 0)
+                                        referenceChannel = true;
+                            if (!referenceChannel) bad("target provenance result does not name a reference output channel");
+                        }
+                        source(inst.a);
+                        break;
+                    case GirOp::ReturnFlagSet:
+                        state.flag = -1;
+                        for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                            if (candidate.op == GirOp::Int && candidate.res == inst.a) {
+                                auto parsed = from_chars(candidate.text.data(), candidate.text.data() + candidate.text.size(), state.flag);
+                                if (parsed.ec != errc()) bad("return discriminant is invalid");
+                            }
+                        break;
                     case GirOp::SourceResult: {
                         source(inst.a);
                         if (inst.idx <= 0 || inst.idx >= (int)function.params.size() || m.Type(function.params[inst.idx]).kind != CoreType::Ptr)
@@ -1356,8 +1598,8 @@ private:
                         if (kinds.members[inst.idx] > GirSourceKind::Ordinary) bad("program memory exposes a trace metadata member");
                         break;
                     case GirOp::Ret:
-                        if (!state.scopes.empty() || !state.calls.empty()) bad("normal return omits trace scope or call cleanup");
-                        for (auto position : sourceResults((int)(&function - m.funcs.data())))
+                        if (!state.scopes.empty() || !state.calls.empty() || !state.targets.empty()) bad("return omits trace scope, target, or call cleanup");
+                        if (state.flag == 0) for (auto position : sourceResults((int)(&function - m.funcs.data())))
                             if (!state.outputs.count(position)) bad("normal return omits a source output channel");
                         break;
                     default: break;
@@ -1880,7 +2122,7 @@ private:
                 if (v != i.ty) TypeFail(fn, "a store of a value of another type than the one stated");
                 break;
             }
-            case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet:
+            case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet: case GirOp::SourceTargetLeave: case GirOp::SourceTargetResult:
                 need(ty.PtrOf(i.a)); break;
             case GirOp::SourceCopy:
                 need(ty.PtrOf(i.a));
