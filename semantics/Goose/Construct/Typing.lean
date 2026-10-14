@@ -61,6 +61,7 @@ def Ty.growing : Ty → Bool
 def Ty.adaptsTo (source target : Ty) : Bool :=
   source == target || match source, target with
     | .arr a countA, .arr b countB => a == b && countA == countB
+    | _, .arr .. => false
     | _, _ => match source.element?, target.element? with
       | some a, some b => a == b && source.storageType && target.storageType
       | _, _ => false
@@ -324,8 +325,11 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       pure [ty]
   | fuel + 1, env, .copy ty source _ => do
       let (sourceTy, _, _) ← typePlace fuel env source
-      require (sourceTy.adaptsTo ty || (sourceTy.element? == ty.element? && sourceTy.element?.isSome))
-        .type "copy source and destination layout mismatch"
+      require ty.constructible .type "copy requires a storage receiving type"
+      let viewAdaptation := match ty with
+        | .arr .. => false
+        | _ => sourceTy.element? == ty.element? && sourceTy.element?.isSome
+      require (sourceTy.adaptsTo ty || viewAdaptation) .type "copy source and destination layout mismatch"
       pure [ty]
   | _fuel + 1, env, .resultLocal id _ => do
       require (env.use == .result) .result "returned local outside result position"

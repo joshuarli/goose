@@ -96,4 +96,16 @@ private def splitFieldEnv : TypingEnv := { env with
   | .error rejection => rejection.rule == .type
   | _ => false
 
+
+#guard !(Ty.varr (.int .u8)).adaptsTo (.arr (.int .u8) 2)
+private def fixedCopyEnv : TypingEnv := { env with
+  variables := #[⟨"source",.arr (.int .u8) 2,.immutable,0,0⟩]
+  visible := [0] }
+#guard match (typeExpr 256 fixedCopyEnv (.copy (.arr (.int .u8) 3) (.var 0) 0)).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+#guard match (typeExpr 256 fixedCopyEnv (.copy (.slice .readOnly (.int .u8)) (.var 0) 0)).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+
 end Goose.Construct.TypingChecks
