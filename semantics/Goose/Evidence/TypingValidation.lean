@@ -776,4 +776,63 @@ theorem validated_call_operands {m : Module} {fn : Func}
     · exact Or.inl ⟨he, ht ▸ hmeta⟩
     · exact Or.inr ⟨ty, he, ht ▸ hmeta⟩
 
+theorem refTy_of {env : TyEnv} {value : ValueId} {permission : Mutability} {ty : Ty}
+    (h : env.refTy value = .ok (permission, ty)) :
+    env.vals[value]? = some (some (.data (.ref permission ty))) := by
+  unfold TyEnv.refTy at h
+  obtain ⟨data, hd, h⟩ := bind_ok h
+  cases data with
+  | ref m t =>
+    simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl⟩
+    exact dataTy_of hd
+  | _ => simp [tyErr] at h
+
+theorem viewTy_of {env : TyEnv} {value : ValueId} {permission : Mutability} {ty : Ty}
+    (h : env.viewTy value = .ok (permission, ty)) :
+    env.vals[value]? = some (some (.view permission ty)) := by
+  unfold TyEnv.viewTy at h
+  obtain ⟨valueTy, hv, h⟩ := bind_ok h
+  cases valueTy with
+  | view m t =>
+    simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl⟩
+    exact valTy_of hv
+  | data ty => simp [tyErr] at h
+
+theorem validated_entry_and_global_signatures {m : Module} (h : validate m = .ok ()) :
+    (∃ entry, m.funcs[m.entry]? = some entry ∧ entry.params = [] ∧ entry.results = []) ∧
+      (∀ global ∈ m.globals, global.init.params = [] ∧ global.init.results = [global.ty]) := by
+  unfold validate at h
+  obtain ⟨_, hc, _⟩ := bind_ok h
+  unfold checkEntryAndGlobals at hc
+  cases hl : m.funcs[m.entry]? with
+  | none => simp [hl, violation, bind, Except.bind] at hc
+  | some entry =>
+    have hs : (entry.params.isEmpty && entry.results.isEmpty) = true := by
+      by_cases hs : (entry.params.isEmpty && entry.results.isEmpty) = true
+      · exact hs
+      · simp [hl, hs, violation, bind, Except.bind] at hc
+    simp only [hl, hs, ↓reduceIte] at hc
+    refine ⟨⟨entry, rfl, by simpa using hs⟩, ?_⟩
+    obtain ⟨u, hloop, _⟩ := bind_ok hc
+    cases u
+    rw [← Array.forIn_toList] at hloop
+    have hall := forIn_unit_ok hloop (by
+      intro global u step checked
+      repeat' first
+        | exact (Except.ok.inj checked).symm
+        | obtain ⟨_, _, checked⟩ := bind_ok checked
+        | dsimp only at checked
+        | split at checked
+        | simp only [violation, bind, Except.bind] at checked
+        | contradiction)
+    intro global hglobal
+    have checked := hall global (Array.mem_toList_iff.mpr hglobal)
+    have hs : (global.init.params.isEmpty && global.init.results == [global.ty]) = true := by
+      by_cases hs : (global.init.params.isEmpty && global.init.results == [global.ty]) = true
+      · exact hs
+      · simp [hs, violation, bind, Except.bind] at checked
+    simpa using hs
+
 end Goose.GIR
