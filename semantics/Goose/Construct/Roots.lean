@@ -29,6 +29,7 @@ structure RState where
   
   nextVar : Nat
   eff : Eff
+  valueBreakRoots : List RootRef := []
 
 abbrev P := StateT RState V
 
@@ -38,6 +39,7 @@ structure PEnv where
   ctx : Context
   
   scopes : List Nat
+  valueBlock : Option Nat := none
   escaping : Array (List (Nat × List (List RootRef))) := #[]
   targetEscapes : Array (List Nat) := #[]
 
@@ -216,6 +218,13 @@ private def descriptorMaximum (descriptor : ResultDescriptor) : Option Nat :=
   | .varr _, .elementRun => none
   | ty, _ => maximumElements ty
 
+private def mergeProducerMaxima (left right : List (Option Nat)) : V (List (Option Nat)) := do
+  if left.isEmpty then pure right
+  else if right.isEmpty then pure left
+  else
+    if left.length != right.length then reject .result "capacity analysis branch result count mismatch"
+    pure ((left.zip right).map fun (a,b) => do pure (max (← a) (← b)))
+
 mutual
 private def producerMaximum (env : PEnv) : Expr → V (List (Option Nat))
   | .values operands => pure (operands.map (expressionMaximum env))
@@ -226,14 +235,38 @@ private def producerMaximum (env : PEnv) : Expr → V (List (Option Nat))
   | .ifE _ left right _ => do
       let a ← blockProducerMaximum env left
       let b ← blockProducerMaximum env right
-      if a.length != b.length then reject .result "capacity analysis branch result count mismatch"
-      pure ((a.zip b).map fun (a,b) => do pure (max (← a) (← b)))
-  | .blockE block _ => blockProducerMaximum env block
+      mergeProducerMaxima a b
+  | .blockE block _ => do
+      let maxima ← blockProducerMaximum env block
+      if maxima.isEmpty then
+        let some types := blockResultTypes? 10000 env.access.declarations block |
+          reject .type "cannot determine block capacity channels"
+        pure (types.map maximumElements)
+      else pure maxima
   | expression => pure [expressionMaximum env expression]
 
 private def blockProducerMaximum (env : PEnv) : Block → V (List (Option Nat))
-  | .mk _ _ none => pure []
-  | .mk _ _ (some expression) => producerMaximum env expression
+  | .mk _ statements tail => do
+      let breaks ← statementBreakMaximum env statements
+      let normal ← match tail with | none => pure [] | some expression => producerMaximum env expression
+      mergeProducerMaxima breaks normal
+
+private def statementBreakMaximum (env : PEnv) : List Stmt → V (List (Option Nat))
+  | [] => pure []
+  | statement :: rest => do
+      let current ← match statement with
+        | .breakValue expression _ => producerMaximum env expression
+        | .ifS _ (.mk _ left _) right _ => do
+            let left ← statementBreakMaximum env left
+            let right ← match right with
+              | none => pure []
+              | some (.mk _ statements _) => statementBreakMaximum env statements
+            mergeProducerMaxima left right
+        | .while _ (.mk _ statements _) _ |
+          .forRange _ _ _ (.mk _ statements _) _ |
+          .forEach _ _ _ _ (.mk _ statements _) _ => statementBreakMaximum env statements
+        | _ => pure []
+      mergeProducerMaxima current (← statementBreakMaximum env rest)
 end
 
 private def noteProducerCapacities (env : PEnv) (descriptors : List ResultDescriptor) (producer : Expr) : P Unit := do
@@ -616,7 +649,11 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     let _ := (lt, lf)
     pure (unionRoots rt rf)
   | .blockE b _ => do
-    let (rho, _) ← rpBlockValue env [] b
+    let previous := (← get).valueBreakRoots
+    modify fun state => { state with valueBreakRoots := [] }
+    let .mk scope _ _ := b
+    let (rho, _) ← rpBlockValue { env with valueBlock := some scope } [] b
+    modify fun state => { state with valueBreakRoots := previous }
     pure rho
   | .arrLit ty es _ => do
     rpExprs env es
@@ -692,6 +729,7 @@ def rpBlockValue (env : PEnv) (pre : List VarId) : Block → P (List RootRef × 
       | none => pure []
       | some e => rpExpr { env with scopes := sc :: env.scopes } e)
     let st1 ← get
+    let rho := if env.valueBlock == some sc then unionRoots rho st1.valueBreakRoots else rho
     liftV (checkBlockValue st0.nextVar st1.nextVar rho)
     pure (rho, (st0.nextVar, st1.nextVar))
 
@@ -882,7 +920,9 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     noteProducerCapacities env implementation.results.toList producer
     liftV (checkNoLocal roots)
     receiveEscapeRoots env targetId (← liftV (env.access.resultRoots producer))
-  | .breakValue expression _ => do let _ ← rpExpr env expression; pure ()
+  | .breakValue expression _ => do
+    let roots ← rpExpr env expression
+    modify fun state => { state with valueBreakRoots := unionRoots state.valueBreakRoots roots }
   | .ret e _ => do
     noteResultConstruction env
     match e with
@@ -1051,14 +1091,14 @@ def checkContextEscapes (m : Module) (ctx : Context)
   let actualEscapes ← match bodyTargets m with
     | .ok escapes => pure escapes
     | .error message => reject .call message
-  let env : PEnv := ⟨m, impl, ctx, [], escaping, actualEscapes⟩
+  let env : PEnv := ⟨m, impl, ctx, [], none, escaping, actualEscapes⟩
   let ((), st) ← (do
       let (_, _) ← rpBlockValue env [] impl.body
       if let some expression := impl.body.value then
         noteResultConstruction env
         noteProducerCapacities env impl.results.toList expression
         let actual ← liftV (env.access.blockResultRoots impl.body)
-        liftV (checkResultChannels env actual) : P Unit).run ⟨impl.params.size, {}⟩
+        liftV (checkResultChannels env actual) : P Unit).run ⟨impl.params.size, {}, []⟩
   checkSummary m impl ctx st.eff
   pure st.eff.escapeRoots
 
@@ -1086,11 +1126,11 @@ def checkInitRoots (m : Module) (g : GlobalId) : V Unit :=
   match m.globals[g]? with
   | none => pure ()
   | some gl => do
-    let env : PEnv := ⟨m, initImpl, initContext, [], #[], #[]⟩
+    let env : PEnv := ⟨m, initImpl, initContext, [], none, #[], #[]⟩
     let (_, st) ← (do
       let roots ← rpExpr env gl.init
       noteReceivingCapacity env gl.ty .value gl.init
-      pure roots : P (List RootRef)).run ⟨0, {}⟩
+      pure roots : P (List RootRef)).run ⟨0, {}, []⟩
     if st.eff.unknown then
       reject .call s!"initializer of global {gl.name} calls an implementation whose effects are unknown"
     forAll (st.eff.reads ++ st.eff.writes ++ st.eff.grows ++ st.eff.shrinks) fun t =>

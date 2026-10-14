@@ -47,6 +47,24 @@ def AccessEnv.contentRoots (env : AccessEnv) (x : VarId) : V (List RootRef) :=
   | some rs => pure rs
   | none => reject .root s!"slice-reference variable {x} has no checked content roots"
 
+private def mapExternalRoots (arguments : List (List RootRef)) (roots : List RootRef) : V (List RootRef) := do
+  let mut result := []
+  for root in roots do
+    match root with
+    | .static | .global _ => result := result ++ [root]
+    | .param position =>
+        let some actual := arguments[position]? | reject .call "result root names missing argument"
+        result := result ++ actual
+    | .local _ => reject .result "callee result names local root"
+  pure result.eraseDups
+
+private def mergeRootChannels (left right : List (List RootRef)) : V (List (List RootRef)) := do
+  if left.isEmpty then pure right
+  else if right.isEmpty then pure left
+  else
+    if left.length != right.length then reject .result "block result channel count mismatch"
+    pure ((left.zip right).map fun (a,b) => (a ++ b).eraseDups)
+
 mutual
 def AccessEnv.placeRoots (env : AccessEnv) : Place → V (List RootRef)
   | .var x => pure [.local x]
@@ -99,21 +117,8 @@ def AccessEnv.argsRoots (env : AccessEnv) : List Arg → V (List (List RootRef))
   | a :: args => do pure ((← env.argRoots a) :: (← env.argsRoots args))
 
 def AccessEnv.blockRoots (env : AccessEnv) : Block → V (List RootRef)
-  | .mk _ _ none => pure []
-  | .mk _ _ (some e) => env.exprRoots e
-end
-private def mapExternalRoots (arguments : List (List RootRef)) (roots : List RootRef) : V (List RootRef) := do
-  let mut result := []
-  for root in roots do
-    match root with
-    | .static | .global _ => result := result ++ [root]
-    | .param position =>
-        let some actual := arguments[position]? | reject .call "result root names missing argument"
-        result := result ++ actual
-    | .local _ => reject .result "callee result names local root"
-  pure result.eraseDups
+  | block => do pure (← env.blockResultRoots block).flatten
 
-mutual
 def AccessEnv.resultRoots (env : AccessEnv) : Expr → V (List (List RootRef))
   | .call contextId arguments _ => do
       let some context := env.mod.contexts[contextId]? | reject .call "call context outside table"
@@ -123,14 +128,38 @@ def AccessEnv.resultRoots (env : AccessEnv) : Expr → V (List (List RootRef))
   | .ifE _ left right _ => do
       let a ← env.blockResultRoots left
       let b ← env.blockResultRoots right
-      if a.length != b.length then reject .result "branch result channel count mismatch"
-      pure ((a.zip b).map fun (a,b) => (a ++ b).eraseDups)
-  | .blockE block _ => env.blockResultRoots block
+      mergeRootChannels a b
+  | .blockE block _ => do
+      let roots ← env.blockResultRoots block
+      if roots.isEmpty then
+        let some types := blockResultTypes? 10000 env.declarations block |
+          reject .type "cannot determine block result roots"
+        pure (types.map fun _ => [])
+      else pure roots
   | expression => do pure [← env.exprRoots expression]
 
 def AccessEnv.blockResultRoots (env : AccessEnv) : Block → V (List (List RootRef))
-  | .mk _ _ none => pure []
-  | .mk _ _ (some expression) => env.resultRoots expression
+  | .mk _ statements tail => do
+      let breaks ← env.statementBreakRoots statements
+      let normal ← match tail with | none => pure [] | some expression => env.resultRoots expression
+      mergeRootChannels breaks normal
+
+def AccessEnv.statementBreakRoots (env : AccessEnv) : List Stmt → V (List (List RootRef))
+  | [] => pure []
+  | statement :: rest => do
+      let current ← match statement with
+        | .breakValue expression _ => env.resultRoots expression
+        | .ifS _ (.mk _ left _) right _ => do
+            let left ← env.statementBreakRoots left
+            let right ← match right with
+              | none => pure []
+              | some (.mk _ statements _) => env.statementBreakRoots statements
+            mergeRootChannels left right
+        | .while _ (.mk _ statements _) _ |
+          .forRange _ _ _ (.mk _ statements _) _ |
+          .forEach _ _ _ _ (.mk _ statements _) _ => env.statementBreakRoots statements
+        | _ => pure []
+      mergeRootChannels current (← env.statementBreakRoots rest)
 end
 
 end Goose.Construct

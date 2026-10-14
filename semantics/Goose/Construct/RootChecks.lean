@@ -94,4 +94,25 @@ private def conservativeAbortContext : Context := ⟨0,"abort-caller",[],[[]],[]
   contexts := #[conservativeAbortContext,⟨1,"abort-helper",[],[],[]⟩]
   targets := #[⟨0,[]⟩] } conservativeAbortContext
 
+private def breakLocalReference : Impl :=
+  ⟨"break-local",#[],#[⟨.ref .readOnly (.int .u8),.register,none⟩],
+    #[⟨"local",.int .u8,.immutable,1,0⟩],
+    .mk 0 [] (some (.blockE (.mk 1
+      [.letS 0 (.lit .u8 7) 0,.breakValue (.ref .readOnly (.var 0)) 0] (some (.ref .readOnly (.global 0)))) 0)),
+    .known ⟨[],[],[],[],[],[],[],[],false,false⟩⟩
+private def breakLocalContext : Context := ⟨0,"break-local",[],[[.global 0]],[]⟩
+#guard !accepts { module with
+  globals := #[⟨"outside",.int .u8,.immutable,.lit .u8 1,0⟩]
+  impls := #[breakLocalReference],contexts := #[breakLocalContext] } breakLocalContext
+
+private def breakGlobalReference : Impl := { breakLocalReference with
+  vars := #[]
+  body := .mk 0 [] (some (.blockE (.mk 1
+    [.breakValue (.ref .readOnly (.global 0)) 0] none) 0)) }
+private def breakGlobalModule : Module := { module with
+  globals := #[⟨"outside",.int .u8,.immutable,.lit .u8 1,0⟩]
+  impls := #[breakGlobalReference],contexts := #[breakLocalContext] }
+#guard accepts breakGlobalModule breakLocalContext
+#guard !accepts breakGlobalModule { breakLocalContext with resultRoots := [[]] }
+
 end Goose.Construct.RootChecks
