@@ -70,6 +70,25 @@ theorem concrete_callee (profile : NumProfile) (n : Nat) :
   calleeCallClaim_nil (ctx := ⟨1, "second", [], [[]], []⟩)
     (impl := source.impls[1]) rfl rfl rfl rfl profile n
 
+theorem concrete_call_expression (profile : NumProfile) (n : Nat) :
+    ExprEClaim n ⟨profile, source⟩ (.call 0 [] 0) := by
+  cases n with
+  | zero => exact exprEClaim_zero _ _
+  | succ n => exact exprEClaim_call (argsEClaim [] (by simp)) (concrete_callee profile n)
+
+theorem concrete_nested_call_arguments (profile : NumProfile) (n : Nat) :
+    ArgsEClaim n ⟨profile, source⟩ [.byVal (.call 0 [] 0), .byVal (.bool true)] := by
+  apply argsEClaim
+  intro a ha
+  simp at ha
+  rcases ha with rfl | rfl
+  · cases n with
+    | zero => exact argEClaim_zero _ _
+    | succ n => exact argEClaim_byVal (concrete_call_expression profile n)
+  · cases n with
+    | zero => exact argEClaim_zero _ _
+    | succ n => exact argEClaim_byVal (ExprLowerClaim.toEventual ((claims n).expr (.bool true) rfl))
+
 #guard (lowerArgs arguments (lowerEnv source variables) initialBuilder).1 == [0, 2, 3]
 #guard match Option.map (fun (block : BlockB) => block.insts.toList) argumentBuilder.blocks[0]? with
   | some [Inst.def 0 (.constBool true), .def 1 (.slotAddr 0), .def 2 (.refFreeze 1),

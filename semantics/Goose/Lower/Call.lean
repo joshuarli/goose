@@ -1,12 +1,150 @@
 import Goose.Lower.Arguments
 import Goose.Proofs.Lower
 import Goose.Core.Sound.Stops
+import Goose.Lower.Flow
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 open Goose.Proofs.Lower (Agree enterFn_nil callFn_nil extT_finish startLS startLS_pp
-  bodyTail lowerImplAt_blocks bodyTail_cases)
+  bodyTail lowerImplAt_blocks bodyTail_cases exceptBind_ok_left coreForAll_ok)
+
+def callEntryTypes (impl : Impl) : List VTy :=
+  impl.params.toList.map fun p => .data (tyOfVar impl p.var)
+
+def callEntry (impl : Impl) : LS :=
+  { blocks := #[⟨(List.range impl.params.size).zip (callEntryTypes impl), #[]⟩],
+    vals := (callEntryTypes impl).foldl (fun a t => a.push (some t)) #[],
+    cur := some 0, stack := [] }
+
+def callPre (impl : Impl) : List (SlotId × ValueId × OriginId) :=
+  (impl.params.toList.zip (List.range impl.params.size)).map fun (p, v) =>
+    (p.var, v, (impl.vars[p.var]?.map (·.org)).getD 0)
+
+theorem callEntry_pp (impl : Impl) : (callEntry impl).pp = some (0, 0) := rfl
+
+theorem lowerImplAt_call_blocks (m : Core.Module) (i : ImplId) (impl : Impl) :
+    (lowerImplAt m i impl).blocks =
+      finishBlocks (bodyTail impl (lowerEnv m impl.vars)
+        (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars) (callEntry impl)).1
+        (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars) (callEntry impl)).2).blocks := by
+  simp [lowerImplAt, callEntry, callEntryTypes, callPre, bodyTail, newBlock, initState,
+    bind_run, setCur_run, set]
+  rfl
+
+theorem checkParam_scope {impl : Impl} {i : Nat} {p : Param}
+    (hp : impl.params[i]? = some p) (h : checkParam impl i = .ok ()) :
+    ∃ lv, impl.vars[p.var]? = some lv ∧ lv.scope = 0 := by
+  unfold checkParam at h
+  rw [hp] at h
+  by_cases hvar : p.var = i
+  · simp only [hvar, ite_true] at h
+    cases hv : impl.vars[i]? with
+    | none => simp [hv, reject] at h
+    | some lv =>
+      by_cases hs : lv.scope = 0
+      · exact ⟨lv, by simpa [hvar] using hv, hs⟩
+      · simp [hv, hs, reject, bind, Except.bind] at h
+  · simp [hvar, reject, bind, Except.bind] at h
+
+theorem checkImpl_paramScopes {m : Core.Module} {impl : Impl}
+    (h : checkImpl m impl = .ok ()) :
+    impl.body.scope = 0 ∧
+      ∀ p ∈ impl.params.toList, ∃ lv, impl.vars[p.var]? = some lv ∧ lv.scope = impl.body.scope := by
+  unfold checkImpl at h
+  by_cases hmany : 1 < impl.results.size
+  · simp [hmany, reject, bind, Except.bind] at h
+  · simp only [ite_false, hmany] at h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, hparams, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    by_cases hbody : impl.body.scope = 0
+    · refine ⟨hbody, fun p hp => ?_⟩
+      obtain ⟨i, hi⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp hp)
+      have hbound : i ∈ List.range impl.params.size :=
+        List.mem_range.mpr (Array.getElem?_eq_some_iff.mp hi).1
+      have hparam := coreForAll_ok (List.range impl.params.size) (checkParam impl) hparams i hbound
+      obtain ⟨lv, hlv, hscope⟩ := checkParam_scope hi hparam
+      exact ⟨lv, hlv, hscope.trans hbody.symm⟩
+    · simp [hbody, reject, bind, Except.bind] at h
+
+theorem callPre_scopes {m : Core.Module} {impl : Impl} (h : checkImpl m impl = .ok ()) :
+    ∀ p ∈ callPre impl, ∃ lv, impl.vars[p.1]? = some lv ∧ lv.scope = impl.body.scope := by
+  intro p hp
+  obtain ⟨pair, hpair, rfl⟩ := List.mem_map.mp hp
+  exact (checkImpl_paramScopes h).2 pair.1 ((List.of_mem_zip hpair).1)
+
+def bindCallParams (fr : Frame) : List (ValueId × VTy) → List RVal → Frame
+  | p :: ps, value :: values => bindCallParams (fr.set p.1 value) ps values
+  | _, _ => fr
+
+theorem bindParams_call (fr : Frame) (params : List (ValueId × VTy)) (values : List RVal) :
+    bindParams fr params values = pure (bindCallParams fr params values) := by
+  induction params generalizing fr values with
+  | nil => cases values <;> rfl
+  | cons p ps ih =>
+    cases values with
+    | nil => rfl
+    | cons value values => simp only [bindParams, setCell_eq, pure_bind, ih, bindCallParams]
+
+theorem bindCallParams_get_absent (fr : Frame) (params : List (ValueId × VTy))
+    (values : List RVal) (id : ValueId) (h : id ∉ params.map Prod.fst) :
+    (bindCallParams fr params values).vals[id]? = fr.vals[id]? := by
+  induction params generalizing fr values with
+  | nil => cases values <;> rfl
+  | cons p ps ih =>
+    cases values with
+    | nil => rfl
+    | cons value values =>
+      simp only [List.map_cons, List.mem_cons, not_or] at h
+      rw [bindCallParams, ih _ _ h.2]
+      simp [Frame.set, Std.HashMap.getElem?_insert, (Ne.symm h.1)]
+
+theorem bindCallParams_has (fr : Frame) (params : List (ValueId × VTy))
+    (values : List RVal) (hn : (params.map Prod.fst).Nodup) :
+    ∀ p ∈ params.zip values, (bindCallParams fr params values).vals[p.1.1]? = some p.2 := by
+  induction params generalizing fr values with
+  | nil => simp
+  | cons p ps ih =>
+    cases values with
+    | nil => simp
+    | cons value values =>
+      simp only [List.map_cons, List.nodup_cons] at hn
+      intro pair hpair
+      simp only [List.zip_cons_cons, List.mem_cons] at hpair
+      rcases hpair with rfl | hpair
+      · rw [bindCallParams, bindCallParams_get_absent _ _ _ _ hn.1]
+        exact Frame.set_get _ _ _
+      · exact ih _ _ hn.2 pair hpair
+
+theorem bindCallParams_frame (fr : Frame) (params : List (ValueId × VTy))
+    (values : List RVal) :
+    (bindCallParams fr params values).act = fr.act ∧
+    (bindCallParams fr params values).scopes = fr.scopes ∧
+    (bindCallParams fr params values).depth = fr.depth := by
+  induction params generalizing fr values with
+  | nil => cases values <;> exact ⟨rfl, rfl, rfl⟩
+  | cons p ps ih =>
+    cases values with
+    | nil => exact ⟨rfl, rfl, rfl⟩
+    | cons value values => exact ih _ _
+
+theorem parameterPreRel (vars : Array LocalVar) (fr : Frame) :
+    ∀ (params : List Param) (ids : List ValueId) (values : List Val),
+    params.length = ids.length → params.length = values.length →
+    (∀ pair ∈ ids.zip values, fr.vals[pair.1]? = some (.val pair.2)) →
+    PreRel fr ((params.zip ids).map fun (p, id) =>
+      (p.var, id, (vars[p.var]?.map (·.org)).getD 0))
+      ((params.zip values).map fun (p, value) => (p.var, value))
+  | [], [], [], _, _, _ => trivial
+  | p :: params, id :: ids, value :: values, hi, hv, hc => by
+    refine ⟨rfl, hc (id, value) (by simp), ?_⟩
+    exact parameterPreRel vars fr params ids values (by simpa using hi) (by simpa using hv)
+      (fun pair hpair => hc pair (by simp [hpair]))
+  | [], _ :: _, _, hi, _, _ => by simp at hi
+  | _ :: _, [], _, hi, _, _ => by simp at hi
+  | [], [], _ :: _, _, hv, _ => by simp at hv
+  | _ :: _, _ :: _, [], _, hv, _ => by simp at hv
 
 theorem implOfContext_run (c : ContextId) (le : LEnv) (ls : LS) :
     implOfContext c le ls = (((le.mod.contexts[c]?).map (·.impl)).getD 0, ls) := rfl
@@ -200,5 +338,78 @@ theorem calleeCallClaim_nil {m : Core.Module} {c : ContextId} {ctx : Context} {i
         simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl,
           pure_bind, hp, Array.size_empty, List.length_cons, Nat.zero_ne_add_one, ite_false]
         exact agree_fault _ _ _
+
+theorem lowerExpr_call_split {c : ContextId} {args : List Arg} {org : OriginId}
+    {le : LEnv} {ls ls' : LS} {r : ValueId}
+    (h : lowerExpr (.call c args org) le ls = (r, ls')) :
+    ∃ ids middle after,
+      lowerArgs args le ls = (ids, middle) ∧
+      emitDef (.call (((le.mod.contexts[c]?).map (·.impl)).getD 0) ids (some org)) le middle =
+        (r, after) ∧
+      ((le.mod.noReturn c = true ∧ emitTerm .unreachable le after = ((), ls')) ∨
+        (le.mod.noReturn c = false ∧ ls' = after)) := by
+  simp only [lowerExpr, bind_eq] at h
+  obtain ⟨ids, middle, ha, f, middle', hf, id, after, hd, reader, same, hr, ht⟩ := h
+  rw [implOfContext_run] at hf
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hf
+  rw [read_apply] at hr
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hr
+  by_cases hn : le.mod.noReturn c = true
+  · rw [ite_eq_left hn] at ht
+    obtain ⟨u, last, hterm, hpure⟩ := bind_eq.mp ht
+    rw [pure_run] at hpure
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpure
+    exact ⟨ids, middle, after, ha, hd, Or.inl ⟨hn, by cases u; exact hterm⟩⟩
+  · rw [ite_eq_right hn, pure_run] at ht
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj ht
+    exact ⟨ids, middle, after, ha, hd, Or.inr ⟨Bool.eq_false_iff.mpr hn, rfl⟩⟩
+
+theorem expr_call_sim {n : Nat} {c : ContextId} {args : List Arg} {org : OriginId}
+    (cfg : Cfg) (ha : ArgsEClaim n cfg args) (hc : CalleeCallClaim n cfg c)
+    (le : LEnv) (ls ls' : LS) (r : ValueId) (pt : Pt) (env : Env) (cx : FnCtx) (fr : Frame)
+    (hlow : lowerExpr (.call c args org) le ls = (r, ls')) (hpp : ls.pp = some pt)
+    (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
+    (hmod : le.mod = cfg.mod) (hgir : cx.cfg.mod = lower cfg.mod) :
+    SimE cx pt fr (evalExpr (n + 1) cfg env (.call c args org)) (fun value pt' fr' =>
+      Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) := by
+  obtain ⟨ids, middle, after, hargs, hdef, htail⟩ := lowerExpr_call_split hlow
+  have hextAfter : ExtT after cx.fn.blocks := by
+    rcases htail with ⟨_, hterm⟩ | ⟨_, rfl⟩
+    · exact hext.of_adv (adv_emitTerm hterm)
+    · exact hext
+  have hextMiddle : ExtT middle cx.fn.blocks := hextAfter.of_adv (adv_emitDef hdef)
+  simp only [evalExpr]
+  refine SimE.bind (ha le ls ids middle pt env cx fr hargs hpp hextMiddle hrel hmod hgir)
+    fun vals pt1 fr1 ⟨hlen, P⟩ => ?_
+  have hread := mapList_getVal_cells hlen P.has
+  have hi := (Post.def_leaf P hdef hextAfter (.val .unit)).2
+  have hcall : ∀ state, EventualM (enterCall n cfg env.depth c vals)
+      (fun fuel => callFn fuel cx.cfg fr1.depth
+        (((le.mod.contexts[c]?).map (·.impl)).getD 0) vals) state := by
+    intro state
+    have hcfg : cx.cfg = ⟨cfg.profile, lower cfg.mod⟩ := by
+      cases hgcfg : cx.cfg
+      simp only [hgcfg] at hgir
+      have hprof := P.rel.prof
+      simp only [hgcfg] at hprof
+      cases hgir
+      cases hprof
+      rfl
+    rw [hmod, hcfg, P.rel.depth]
+    exact hc env.depth vals state
+  have hstep := SimE.call_step hi hread hcall
+  rcases htail with ⟨hnr, _⟩ | ⟨_, rfl⟩
+  · have hn : Core.Sound.Never (enterCall n cfg env.depth c vals) :=
+      enterCall_noReturn_never cfg c (by simpa [hmod] using hnr) n env.depth vals
+    exact SimE.of_stops hn (fun _ _ _ h => h) hstep
+  · exact hstep.mono fun value pt' fr' ⟨hpt, hfr⟩ => by
+      subst hpt; subst hfr
+      exact (Post.def_leaf P hdef hext (.val value)).1
+
+theorem exprEClaim_call {n : Nat} {cfg : Cfg} {c : ContextId} {args : List Arg} {org : OriginId}
+    (ha : ArgsEClaim n cfg args) (hc : CalleeCallClaim n cfg c) :
+    ExprEClaim (n + 1) cfg (.call c args org) := by
+  intro le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
+  exact expr_call_sim cfg ha hc le ls ls' r pt env cx fr hlow hpp hext hrel hmod hgir
 
 end Goose.Lower
