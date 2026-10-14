@@ -33,21 +33,25 @@ def Func.entryTypes (f : Func) : List VTy :=
 
 def Inst.origin? : Inst → Option (Option OriginId)
   | .def _ op => match op with
-    | .bin _ _ _ _ o | .un _ _ _ o | .conv _ _ _ _ o | .viewSlice _ _ _ _ o |
+    | .bin op _ _ _ o => if op matches .add | .sub | .mul | .div | .mod then some o else o.map some
+    | .un op _ _ o => if op matches .neg then some o else o.map some
+    | .conv kind _ _ _ o => if kind matches .as then some o else o.map some
+    | .viewSlice _ _ _ _ o |
       .indexChecked _ _ o | .push _ _ o | .pop _ o | .call _ _ o | .bytes _ o |
       .destOpen _ _ _ _ o | .destChild _ _ o | .destFinish _ o | .destNamed _ o |
       .resultExitDest _ o | .destAbandonNamed _ _ o | .destArg _ o | .destAbandon _ o |
       .destValue _ o | .destRelocate _ _ o | .destStage _ o | .destFit _ o |
-      .callConstruct _ _ _ o | .targetDest _ _ o => some o
+      .callConstruct _ _ _ o | .targetDest _ _ o | .render _ o => some o
     | _ => none
   | .eff e => match e with
     | .slotInit _ _ o | .store _ _ o | .append _ _ o | .popN _ _ o | .resize _ _ _ o |
       .clear _ o | .replace _ _ o | .print _ o | .appendValue _ _ o | .destWrite _ _ o |
       .destAttach _ _ o | .destBytes _ _ o | .destText _ _ o | .destCopy _ _ o |
-      .destBind _ _ o | .destPublish _ o | .destCancel _ o => some o
+      .destBind _ _ o | .destPublish _ o | .destCancel _ o | .destRepeat _ _ o | .destSnapshot _ _ o => some o
     | _ => none
   | .term t => match t with
-    | .ret _ o | .abort _ o | .exit _ o | .invoke _ _ _ _ _ _ o | .escape _ _ _ o => some o
+    | .ret _ o => o.map some
+    | .abort _ o | .exit _ o | .invoke _ _ _ _ _ _ o | .escape _ _ _ o => some o
     | _ => none
 
 def Term.edges (term : Term) : List (BlockId × List ValueId) :=
@@ -66,18 +70,26 @@ private def allTypesValid (m : Module) : Ty → Bool
   | .varr e | .grow e => (e.flat || e.variableElement) && allTypesValid m e
   | .growshrink e => e.flat && allTypesValid m e
   | .limited e n => n > 0 && n < 2^31 && e.flat && allTypesValid m e
-  | .ref _ e => e.storageType && allTypesValid m e
+  | .ref _ e => (e.storageType || (e matches .slice ..)) && allTypesValid m e
   | .slice _ e => (e.flat || e.variableElement) && allTypesValid m e
   | .structT sid fs => match m.structs[sid]? with
     | some d => fs == TyList.ofList (d.fields.toList.map (·.ty)) && fs.flat
     | none => false
   | .tuple _ => false
 
+private def parameterBinding (f : Func) (slot : SlotId) (value : ValueId) : Bool :=
+  match f.blocks[0]?, f.slots[slot]?, f.params[slot]? with
+  | some entry, some descriptor, some ty =>
+      descriptor.scope == 0 && descriptor.ty == ty && (entry.params[slot]?).any (·.1 == value)
+  | _, _, _ => false
+
 private def ownedParameter (f : Func) (slot : SlotId) (value : ValueId) : Bool :=
-  match f.blocks[0]?, f.slots[slot]? with
-  | some entry, some descriptor =>
-      (entry.params.take f.params.length |>.zip f.params).any fun ((id,_),ty) =>
-        id == value && ty.nonfixed && ty == descriptor.ty
+  (f.params[slot]?).any (·.nonfixed) && parameterBinding f slot value
+
+private def borrowedSliceParameter (f : Func) (slot : SlotId) : Bool :=
+  match f.slots[slot]?, f.params[slot]? with
+  | some descriptor, some ty =>
+      descriptor.scope == 0 && descriptor.ty == ty && (ty matches .ref _ (.slice ..))
   | _, _ => false
 
 private def checkTables (m : Module) (f : Func) : Check Unit := do
@@ -99,21 +111,21 @@ private def checkTables (m : Module) (f : Func) : Check Unit := do
         violation .v060 "named result slot is not eligible receiving storage"
   let aliases := f.results.filterMap (·.namedLocal)
   unless aliases.eraseDups == aliases do violation .v060 "one slot aliases several results"
-  for slot in f.slots do
-    unless allTypesValid m slot.ty && slot.ty.storable do violation .v010 "invalid slot type"
+  for (slot,index) in f.slots.toList.zipIdx do
+    unless allTypesValid m slot.ty && (slot.ty.storable || borrowedSliceParameter f index) do violation .v010 "invalid slot type"
     unless slot.scope < f.scopes.size do violation .v001 "slot scope outside table"
   for ty in f.params do
-    unless allTypesValid m ty && ty.storable do violation .v010 "invalid parameter type"
+    unless allTypesValid m ty && (ty.storable || (ty matches .ref _ (.slice ..))) do violation .v010 "invalid parameter type"
   let some entry := f.blocks[0]? | violation .v001 "entry block missing"
   unless entry.params.map (·.2) == f.entryTypes do violation .v010 "entry carriers differ from source parameters and result channels"
   for ((id,_),ty) in (entry.params.take f.params.length).zip f.params do
-    if ty.nonfixed then
+    if ty.nonfixed || (ty matches .ref _ (.slice ..)) then
       let bindings := f.blocks.toList.flatMap (·.insts) |>.filterMap fun
-        | .eff (.slotInit slot value _) => if ownedParameter f slot value && value == id then some slot else none
+        | .eff (.slotInit slot value _) => if parameterBinding f slot value && value == id then some slot else none
         | _ => none
       unless bindings.length == 1 && entry.insts.any (fun inst => match inst with
           | .eff (.slotInit slot value _) => value == id && bindings == [slot]
-          | _ => false) do violation .v060 "owned nonfixed parameter must bind exactly one original entry slot"
+          | _ => false) do violation .v060 "owned or borrowed-slice parameter must bind exactly one original entry slot"
 
 private def requireVal (env : TyEnv) (value : ValueId) (expected : VTy) : Check Unit := do
   unless (← checkTypeResult (env.valTy value)) == expected do violation .v010 "operand type mismatch"
@@ -125,7 +137,10 @@ private def checkEffect (f : Func) (env : TyEnv) : Effect → Check Unit
       if slot.ty.nonfixed then
         unless ownedParameter f slotId value do violation .v060 "nonfixed initialization requires destination publication or corresponding owned entry parameter"
         requireVal env value (.data (.ref .mutable slot.ty))
-      else requireVal env value (.data slot.ty)
+      else
+        if slot.ty matches .ref _ (.slice ..) then
+          unless parameterBinding f slotId value do violation .v060 "reference-to-slice slot requires its matching source entry parameter"
+        requireVal env value (.data slot.ty)
   | .store reference value _ => do
       let (mutability, ty) ← checkTypeResult (env.refTy reference)
       unless mutability == .mutable do violation .v030 "store through read-only reference"
@@ -138,6 +153,15 @@ private def checkEffect (f : Func) (env : TyEnv) : Effect → Check Unit
           | .data ty => if ty.nonfixed then violation .v010 "nonfixed print requires sampled view"
           | .view .. => pure ()
           | _ => violation .v010 "protocol carrier cannot be printed"
+  | .destSnapshot destination value _ => do
+      let (ty, _) ← checkTypeResult (env.destTy destination)
+      let .arr element _ ← checkTypeResult (env.dataTy value) | violation .v010 "destination snapshot requires fixed array"
+      unless element.flat && ty.element? == some element do violation .v010 "destination snapshot element mismatch"
+  | .destRepeat destination source _ => do
+      let (ty, _) ← checkTypeResult (env.destTy destination)
+      let .arr element _ := ty | violation .v010 "repeat requires fixed count destination"
+      let (sourceTy, request) ← checkTypeResult (env.builtTy source)
+      unless element == sourceTy && request == .value do violation .v010 "repeat source element/type mismatch"
   | .destWrite destination value _ => do
       let (ty, _) ← checkTypeResult (env.destTy destination)
       let some element := ty.element? | violation .v010 "destination has no element"
@@ -313,7 +337,7 @@ private def externalRoots (arguments : List (List RootRef)) (roots : List RootRe
     | .local _ => []
     | root => [root]
 
-private def valueRoots (m : Module) (f : Func) (returns : Array (List (List RootRef))) : Array (List RootRef) := Id.run do
+private def storageRoots (m : Module) (f : Func) (returns : Array (List (List RootRef))) : Array (List RootRef) × Array (List RootRef) := Id.run do
   let types := f.valueTypes m
   let mut roots := Array.replicate f.numValues []
   let mut slots := Array.replicate f.slots.size []
@@ -337,6 +361,14 @@ private def valueRoots (m : Module) (f : Func) (returns : Array (List (List Root
                   if ((types[id]?).bind (fun value => value)).any (fun t => t matches .data (.ref ..) | .data (.slice ..)) then
                     (get reference).flatMap fun
                       | .local slot => slots[slot]?.getD []
+                      | .param position =>
+                          if (f.params[position]?).any (fun ty => ty matches .ref _ (.slice ..)) then
+                            (f.roots.contents.find? (fun (row : Nat × List RootRef) => row.1 == position)).map (fun row => row.2) |>.getD []
+                          else [.param position]
+                      | .global global =>
+                          if (m.globals[global]?).any (fun global => global.ty matches .ref .. | .slice ..) then
+                            (returns[m.funcs.size - m.globals.size + global]?.getD []).flatten
+                          else [.global global]
                       | root => [root]
                   else []
               | .refFreeze source | .snapshot _ source | .sliceView source | .viewSlice _ source _ _ _ |
@@ -367,7 +399,10 @@ private def valueRoots (m : Module) (f : Func) (returns : Array (List (List Root
                   | _ => 0
                 for ((id,_), arg) in (targetBlock.params.drop skip).zip args do roots := roots.set! id ((get id ++ get arg).eraseDups)
         | _ => pure ()
-  return roots
+  return (roots,slots)
+
+private def valueRoots (m : Module) (f : Func) (returns : Array (List (List RootRef))) : Array (List RootRef) :=
+  (storageRoots m f returns).1
 
 private def resultRoots (m : Module) : Array (List (List RootRef)) := Id.run do
   let mut returns := m.funcs.map fun f => f.results.map fun _ => []
@@ -427,6 +462,12 @@ private def rootsTargets (roots : List RootRef) : List Target := roots.filterMap
   | .global i => some (.global i)
   | _ => none
 
+private def expandParameter (f : Func) : RootRef → List RootRef
+  | .param position =>
+      let declared := (f.roots.params.find? (·.1 == position)).map (·.2) |>.getD []
+      if declared.isEmpty then [.param position] else declared
+  | root => [root]
+
 private def mapTargets (roots : Array (List RootRef)) (args : List ValueId) (targets : List Target) : List Target :=
   targets.flatMap fun
     | .global id => [.global id]
@@ -449,18 +490,24 @@ private def constructionMaximum (m : Module) (f : Func) (provenance : Provenance
       for id in reached do
         reached := (reached ++ (((f.blocks[id]?).bind Block.lastTerm?).map Term.successors |>.getD [])).eraseDups
     return reached.contains start
-  let writes (inst : Inst) := match inst with
-    | .eff (.destBytes destination ..) | .eff (.destWrite destination ..) | .eff (.destAttach destination ..) |
-        .eff (.destText destination ..) | .eff (.destCopy destination ..) => same destination
-    | .def _ (.callConstruct _ _ destinations _) | .term (.invoke _ _ destinations _ _ _ _) => destinations.any same
-    | _ => false
-  let mut count := 0
+  let env := m.environment f
+  let mut costs : Array Nat := #[]
   for (block,index) in f.blocks.toList.zipIdx do
-    if block.insts.any writes && cyclic index then return none
+    let mut count := 0
     for inst in block.insts do
       match inst with
       | .eff (.destBytes destination bytes _) => if same destination then count := count + bytes.length
       | .eff (.destWrite destination _ _) | .eff (.destAttach destination _ _) => if same destination then count := count + 1
+      | .eff (.destRepeat destination _ _) =>
+          if same destination then
+            match (env.destTy destination).toOption with
+            | some (.arr _ length, _) => count := count + length
+            | _ => return none
+      | .eff (.destSnapshot destination snapshot _) =>
+          if same destination then
+            match (env.dataTy snapshot).toOption with
+            | some (.arr _ length) => count := count + length
+            | _ => return none
       | .eff (.destText destination _ _) | .eff (.destCopy destination _ _) => if same destination then return none
       | .def _ (.callConstruct callee _ destinations _) | .term (.invoke callee _ destinations _ _ _ _) =>
           let some callee := m.funcs[callee]? | return none
@@ -473,7 +520,19 @@ private def constructionMaximum (m : Module) (f : Func) (provenance : Provenance
               | .varr _ => count := count + (2^32 - 1)
               | _ => return none
       | _ => pure ()
-  return some count
+    if count > 0 && cyclic index then return none
+    costs := costs.push count
+  let mut entries : Array (Option Nat) := Array.replicate f.blocks.size none
+  entries := entries.set! 0 (some 0)
+  let mut maximum := 0
+  for _ in [0:f.blocks.size + 1] do
+    for (block,index) in f.blocks.toList.zipIdx do
+      if let some initial := (entries[index]?).join then
+        let count := initial + costs[index]!
+        maximum := max maximum count
+        for successor in (block.lastTerm?.map Term.successors).getD [] do
+          entries := entries.set! successor (some (max count ((entries[successor]?).join.getD 0)))
+  return some maximum
 
 private def deriveEffects (m : Module) (returns : Array (List (List RootRef))) : Array Summary := Id.run do
   let mut summaries := m.funcs.map fun _ => emptySummary
@@ -487,14 +546,14 @@ private def deriveEffects (m : Module) (returns : Array (List (List RootRef))) :
         | .varr _ => request == .value && (constructionMaximum m f provenance id).all (· >= 2^32)
         | _ => false
       let limited (id : ValueId) := ((m.environment f).refTy id).toOption.any (fun (_,ty) => ty matches .limited ..)
-      let get (id : ValueId) := rootsTargets (roots[id]?.getD [])
+      let get (id : ValueId) := rootsTargets ((roots[id]?.getD []).flatMap (expandParameter f))
       let mut summary := emptySummary
       let addCall (summary : Summary) (callee : FnId) (args : List ValueId) :=
         let found := summaries[callee]?.getD emptySummary
         unionSummary summary { found with
-          reads := mapTargets roots args found.reads, writes := mapTargets roots args found.writes,
-          grows := mapTargets roots args found.grows, shrinks := mapTargets roots args found.shrinks,
-          rebinds := mapTargets roots args found.rebinds, constructs := [] }
+          reads := mapTargets (roots.map (fun roots => roots.flatMap (expandParameter f))) args found.reads, writes := mapTargets (roots.map (fun roots => roots.flatMap (expandParameter f))) args found.writes,
+          grows := mapTargets (roots.map (fun roots => roots.flatMap (expandParameter f))) args found.grows, shrinks := mapTargets (roots.map (fun roots => roots.flatMap (expandParameter f))) args found.shrinks,
+          rebinds := mapTargets (roots.map (fun roots => roots.flatMap (expandParameter f))) args found.rebinds, constructs := [] }
       for block in f.blocks do
         for inst in block.insts do
           match inst with
@@ -524,13 +583,17 @@ private def deriveEffects (m : Module) (returns : Array (List (List RootRef))) :
               if op matches .add | .sub | .mul | .div | .mod then summary := { summary with aborts := true }
           | .def _ (.un .neg ..) | .def _ (.conv .as ..) | .def _ (.viewSlice ..) | .def _ (.indexChecked ..) => summary := { summary with aborts := true }
           | .eff (.store reference _ _) => summary := unionSummary summary { emptySummary with writes := get reference }
-          | .eff (.destCopy _ source _) => summary := unionSummary summary { emptySummary with reads := get source }
+          | .eff (.destCopy _ source _) | .eff (.destText _ source _) | .def _ (.render source _) => summary := unionSummary summary { emptySummary with reads := get source }
           | .eff (.append reference source _) => summary := unionSummary summary { emptySummary with grows := get reference, writes := get reference, reads := get source, aborts := limited reference }
           | .eff (.appendValue reference _ _) => summary := unionSummary summary { emptySummary with grows := get reference, writes := get reference, aborts := limited reference }
           | .eff (.popN reference _ _) => summary := unionSummary summary { emptySummary with reads := get reference, shrinks := get reference, aborts := true }
           | .eff (.clear reference _) => summary := unionSummary summary { emptySummary with reads := get reference, shrinks := get reference }
           | .eff (.resize reference _ fill _) => summary := unionSummary summary { emptySummary with reads := get reference, writes := if fill.isSome then get reference else [], grows := if fill.isSome then get reference else [], shrinks := get reference, aborts := true }
-          | .eff (.print ..) => summary := { summary with outputs := true }
+          | .eff (.print parts _) =>
+              let reads := parts.flatMap fun
+                | .val id => get id
+                | .text _ => []
+              summary := unionSummary summary { emptySummary with reads, outputs := true }
           | .term (.abort ..) => summary := { summary with aborts := true }
           | .term (.ret _ _) => summary := { summary with constructs := f.results.zipIdx |>.filterMap fun (r,i) => if r.ty.nonfixed then some i else none }
           | _ => pure ()
@@ -540,6 +603,50 @@ private def deriveEffects (m : Module) (returns : Array (List (List RootRef))) :
   return summaries
 
 private def included [BEq α] (actual declared : List α) : Bool := actual.all declared.contains
+
+private def argumentContents (m : Module) (f : Func) (returns : Array (List (List RootRef)))
+    (roots slots : Array (List RootRef)) (value : ValueId) : List RootRef :=
+  (roots[value]?.getD []).flatMap fun (root : RootRef) =>
+    let backing : List RootRef := match root with
+      | .local slot => slots[slot]?.getD []
+      | .param position => (f.roots.contents.find? (fun (row : Nat × List RootRef) => row.1 == position)).map (fun row => row.2) |>.getD []
+      | .global global => (returns[m.funcs.size - m.globals.size + global]?.getD []).flatten
+      | .static => [.static]
+    backing.flatMap (expandParameter f)
+
+private def checkParameterRoots (m : Module) (returns : Array (List (List RootRef))) : Check Unit := do
+  for f in m.funcs do
+    let (roots,slots) := storageRoots m f returns
+    for block in f.blocks do
+      for inst in block.insts do
+        let call? : Option (FnId × List ValueId) := match inst with
+          | .def _ (.call callee args _) | .def _ (.callConstruct callee args _ _) | .term (.invoke callee args _ _ _ _ _) => some (callee,args)
+          | _ => none
+        if let some (callee,args) := call? then
+          let some callee := m.funcs[callee]? | violation .v001 "callee missing in root analysis"
+          for ((parameter,arg),position) in (callee.params.zip args).zipIdx do
+            if parameter matches .ref .. | .slice .. then
+              let expected := (roots[arg]?.getD []).flatMap fun root =>
+                (expandParameter f root).map fun
+                  | .global global => RootRef.global global
+                  | .static => .static
+                  | _ => .param position
+              let declared := (callee.roots.params.find? (·.1 == position)).map (·.2) |>.getD []
+              unless included expected declared do violation .v050 "callee parameter roots omit backing storage supplied at a call"
+            if parameter matches .ref _ (.slice ..) then
+              let actual := argumentContents m f returns roots slots arg
+              let declared := (callee.roots.contents.find? (·.1 == position)).map (·.2) |>.getD []
+              let mapped := declared.flatMap fun
+                | .global global => [RootRef.global global]
+                | .static => [.static]
+                | .param source =>
+                    if let some arg := args[source]? then
+                      if (callee.params[source]?).any (fun t => t matches .ref _ (.slice ..)) then
+                        argumentContents m f returns roots slots arg
+                      else (roots[arg]?.getD []).flatMap (expandParameter f)
+                    else []
+                | .local _ => []
+              unless included actual mapped do violation .v050 "callee content roots omit slice backing storage supplied at a call"
 
 private def checkSummaries (m : Module) (returns : Array (List (List RootRef))) (derived : Array Summary) : Check Unit := do
   for h : fi in [0:m.funcs.size] do
@@ -565,7 +672,7 @@ private def checkSummaries (m : Module) (returns : Array (List (List RootRef))) 
         unless (f.roots.results[index]?.getD []).isEmpty do violation .v050 "nonfixed result has reference roots"
       else if descriptor.ty matches .ref .. | .slice .. then
         unless roots.all (fun root => !(root matches .local _)) do violation .v040 "reference result points into local/by-value parameter storage"
-        unless included roots (f.roots.results[index]?.getD []) do violation .v050 "result root annotation omits derived backing roots"
+        unless included (roots.flatMap (expandParameter f)) (f.roots.results[index]?.getD []) do violation .v050 "result root annotation omits derived backing roots"
 
 structure Ownership where
   live : List ValueId := []
@@ -573,6 +680,10 @@ structure Ownership where
   suspended : List (ValueId × ValueId) := []
   projections : List (ValueId × Nat) := []
   arguments : List (ValueId × FnId × Nat) := []
+  availableSlots : List SlotId := []
+  allocatedSlots : List SlotId := []
+  stagedOwners : List DestinationOwner := []
+  suspendedNamed : List SlotId := []
   deriving DecidableEq, Repr
 
 private def protocolType : VTy → Bool
@@ -597,7 +708,7 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
   let types := f.valueTypes m
   let roots := valueRoots m f returns
   let provenance := f.provenance m functionId
-  let getRoots (id : ValueId) := roots[id]?.getD []
+  let getRoots (id : ValueId) := (roots[id]?.getD []).flatMap (expandParameter f)
   let typeOf (id : ValueId) := ((types[id]?).bind (fun value => value)).getD (.data .unit)
   let mut entries : Array (Option Ownership) := Array.replicate f.blocks.size none
   let some entry := f.blocks[0]? | violation .v001 "ownership entry missing"
@@ -608,6 +719,16 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
         let mut state := initial
         for inst in f.blocks[bi].insts do
           for id in inst.uses do
+            unless !(getRoots id).any (fun root => match root with | .local slot => state.suspendedNamed.contains slot | _ => false) do
+              violation .v060 "alternate result expression reaches suspended named local"
+            let observes := match inst with
+              | .def _ (.load _) | .def _ (.snapshot ..) | .def _ (.arrayLen _) | .def _ (.push ..) | .def _ (.pop ..) | .def _ (.call ..) | .def _ (.callConstruct ..) | .term (.invoke ..) => true
+              | .eff (.store ..) | .eff (.append ..) | .eff (.appendValue ..) | .eff (.popN ..) | .eff (.resize ..) | .eff (.clear ..) | .eff (.destCopy ..) | .eff (.print ..) => true
+              | _ => false
+            if observes && !protocolType (typeOf id) then
+              for root in getRoots id do
+                if let .local slot := root then
+                  unless state.availableSlots.contains slot do violation .v060 "reference/view observes unpublished or uninitialized local receiving storage"
             if protocolType (typeOf id) then
               unless state.live.contains id do violation .v060 "use of consumed linear carrier"
             if state.arguments.any (fun (argument,_,_) => argument == id) then
@@ -655,15 +776,33 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
           match inst with
           | .def result op =>
               match op with
+              | .destOpen (.slot slot) .. =>
+                  unless !state.allocatedSlots.contains slot do violation .v060 "receiving slot is initialized more than once in one scope activation"
+                  state := { state with allocatedSlots := slot :: state.allocatedSlots }
+              | .slotAddr slot =>
+                  unless !state.suspendedNamed.contains slot do violation .v060 "alternate result names suspended local"
+              | .resultExitDest position _ =>
+                  if let some slot := (f.results[position]?).bind (·.namedLocal) then
+                    state := { state with suspendedNamed := slot :: state.suspendedNamed }
               | .destChild parent _ _ =>
                   unless !(state.suspended.any (fun pair => pair.1 == parent)) do violation .v060 "parent already has pending child"
                   state := { state with suspended := (parent,result) :: state.suspended }
               | .destFinish id _ | .destValue id _ | .destRelocate id _ _ | .destFit id _ | .destStage id _ | .destAbandon id _ =>
+                  let owners := provenance.values[id]?.getD []
+                  match op with
+                  | .destStage .. =>
+                      unless !(owners.any state.stagedOwners.contains) do violation .v060 "receiving destination is staged more than once"
+                      state := { state with stagedOwners := (owners ++ state.stagedOwners).eraseDups }
+                  | .destFit .. =>
+                      unless owners.all state.stagedOwners.contains do violation .v060 "fit has no outstanding receiving stage"
+                      state := { state with stagedOwners := state.stagedOwners.filter (!owners.contains ·) }
+                  | .destAbandon .. => state := { state with stagedOwners := state.stagedOwners.filter (!owners.contains ·) }
+                  | _ => pure ()
                   state ← consume state id
                   state := { state with suspended := state.suspended.map fun (parent,child) => (parent,if child == id then result else child) }
               | .destArg built _ =>
                   state ← consume state built
-                                    let rec producer : Nat → ValueId → Option (FnId × Nat)
+                  let rec producer : Nat → ValueId → Option (FnId × Nat)
                     | 0, _ => none
                     | fuel + 1, id => do
                         let inst ← f.blocks.toList.flatMap (·.insts) |>.find? fun
@@ -677,10 +816,10 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                   state := { state with arguments := (result,callee,position) :: state.arguments }
               | .destNamed slot _ =>
                   unless state.named.contains slot do violation .v060 "named result is unbound or already returned"
-                  state := { state with named := state.named.filter (· != slot) }
+                  state := { state with named := state.named.filter (· != slot), availableSlots := state.availableSlots.filter (· != slot) }
               | .destAbandonNamed slot _ _ =>
                   unless state.named.contains slot do violation .v060 "named abandonment has no bound alias"
-                  state := { state with named := state.named.filter (· != slot) }
+                  state := { state with named := state.named.filter (· != slot), availableSlots := state.availableSlots.filter (· != slot) }
               | .result pack position =>
                   if protocolType (typeOf result) then
                     unless !(state.projections.contains (pack,position)) do violation .v060 "nonfixed pack component projected twice"
@@ -695,22 +834,41 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
               | _ => pure ()
               if protocolType (typeOf result) then state := { state with live := result :: state.live }
           | .eff effect => match effect with
+              | .slotInit slot _ _ =>
+                  unless !state.allocatedSlots.contains slot do violation .v060 "local slot is initialized more than once in one scope activation"
+                  state := { state with availableSlots := slot :: state.availableSlots, allocatedSlots := slot :: state.allocatedSlots }
+              | .leave scope =>
+                  unless !state.named.any (fun slot => (f.slots[slot]?).any (·.scope == scope)) do violation .v060 "named result ownership survives scope leave without completion/cancellation"
+                  state := { state with
+                    availableSlots := state.availableSlots.filter (fun slot => (f.slots[slot]?).any (·.scope != scope))
+                    allocatedSlots := state.allocatedSlots.filter (fun slot => (f.slots[slot]?).any (·.scope != scope)) }
               | .destAttach parent child _ =>
                   unless state.suspended.contains (parent,child) do violation .v060 "child attach does not match suspended parent"
                   state ← consume state child
                   state := { state with suspended := state.suspended.filter (· != (parent,child)) }
               | .destBind slot built _ =>
                   state ← consume state built
-                  unless !state.named.contains slot do violation .v060 "named result bound twice"
-                  state := { state with named := slot :: state.named }
-              | .destPublish built _ | .destCancel built _ => state ← consume state built
-              | .destWrite parent _ _ | .destBytes parent _ _ | .destText parent _ _ | .destCopy parent _ _ =>
+                  unless !state.allocatedSlots.contains slot do violation .v060 "named result slot is initialized more than once"
+                  state := { state with named := slot :: state.named, availableSlots := slot :: state.availableSlots, allocatedSlots := slot :: state.allocatedSlots }
+              | .destRepeat parent source _ =>
+                  unless !(state.suspended.any (fun pair => pair.1 == parent)) do violation .v060 "repeat writes suspended parent"
+                  state ← consume state source
+              | .destPublish built _ =>
+                  unless !(provenance.values[built]?.getD []).any state.stagedOwners.contains do violation .v060 "staged completion is published before fit"
+                  for owner in provenance.values[built]?.getD [] do
+                    if let .receiver (.slot slot) := owner then state := { state with availableSlots := slot :: state.availableSlots }
+                  state ← consume state built
+              | .destCancel built _ => state ← consume state built
+              | .destWrite parent _ _ | .destBytes parent _ _ | .destText parent _ _ | .destCopy parent _ _ | .destSnapshot parent _ _ =>
                   unless !(state.suspended.any (fun pair => pair.1 == parent)) do violation .v060 "write to suspended parent destination"
               | _ => pure ()
           | .term term =>
               match term with
               | .ret operands _ | .escape _ operands _ _ =>
                   let ids := match term with | .escape _ _ cancelled _ => operands ++ cancelled | _ => operands
+                  for id in operands do
+                    if protocolType (typeOf id) then
+                      unless !(provenance.values[id]?.getD []).any state.stagedOwners.contains do violation .v060 "staged completion is transferred before fit"
                   for id in ids do if protocolType (typeOf id) then state ← consume state id
                   unless state.live.isEmpty && state.named.isEmpty && state.arguments.isEmpty do violation .v060 "return/escape leaks destination, completion, cancellation or argument ownership"
               | .invoke callee args destinations normal forwarded escapes _ =>
@@ -776,6 +934,39 @@ private def checkTargets (m : Module) (derived : Array Summary) (initializers : 
                 unless active.contains target && !handled.contains target do violation .v070 "escape must propagate to an enclosing target member"
             | _ => pure ()
 
+private def checkKnownCounts (m : Module) (f : Func) : Check Unit := do
+  for block in f.blocks do
+    for (inst,index) in block.insts.zipIdx do
+      if let .def destination (.destOpen _ receivingType _ (some known) _) := inst then
+        if let some (.constInt _ expected) := f.defOp? known then
+          if expected < 0 then continue
+          let mut aliases := [destination]
+          let mut count := some 0
+          for inst in block.insts.drop (index + 1) do
+            match inst with
+            | .eff (.destBytes destination bytes _) => if aliases.contains destination then count := count.map (· + bytes.length)
+            | .eff (.destWrite destination _ _) | .eff (.destAttach destination _ _) => if aliases.contains destination then count := count.map (· + 1)
+            | .eff (.destRepeat destination _ _) =>
+                if aliases.contains destination then
+                  match receivingType with
+                  | .arr _ length => count := count.map (· + length)
+                  | _ => count := none
+            | .eff (.destSnapshot destination snapshot _) =>
+                if aliases.contains destination then
+                  match (m.environment f |>.dataTy snapshot).toOption with
+                  | some (.arr _ length) => count := count.map (· + length)
+                  | _ => count := none
+            | .eff (.destText destination _ _) | .eff (.destCopy destination _ _) => if aliases.contains destination then count := none
+            | .def result (.destStage source _) | .def result (.destValue source _) => if aliases.contains source then aliases := result :: aliases
+            | .def _ (.callConstruct _ _ destinations _) | .term (.invoke _ _ destinations _ _ _ _) => if destinations.any aliases.contains then count := none
+            | .def _ (.destFinish destination _) =>
+                if aliases.contains destination then
+                  if let some completedCount := count then
+                    unless completedCount == expected.toNat do violation .v060 "known destination element count differs from completed writes"
+                  break
+            | .term _ => break
+            | _ => pure ()
+
 private def checkPermissions (m : Module) (f : Func) : Check Unit := do
   let env := m.environment f
   let permissions := f.permissions m env.vals
@@ -834,6 +1025,10 @@ private def checkChannelOwners (m : Module) (functionId : FnId) (f : Func) : Che
       | .eff (.destPublish id _) =>
           let [.receiver receiver] := owners id | violation .v060 "publication requires owning source receiver"
           if receiver matches .arg .. then violation .v060 "argument completion requires dest_arg transfer"
+      | .eff (.destRepeat destination source _) =>
+          let [.receiver (.slot sourceSlot)] := owners source | violation .v060 "repeat source must be unpublished private slot completion"
+          unless !(f.results.any (·.namedLocal == some sourceSlot)) do violation .v060 "repeat source cannot alias receiving result storage"
+          unless !(owners destination).any (fun owner => owner == .receiver (.slot sourceSlot)) do violation .v060 "repeat source and destination storage overlap"
       | .eff (.destBind slot id _) =>
           let some position := f.results.findIdx? (·.namedLocal == some slot) | violation .v060 "binding slot is not named result"
           requireOwner id (.result position)
@@ -859,6 +1054,19 @@ private def checkChannelOwners (m : Module) (functionId : FnId) (f : Func) : Che
       | .def _ (.destFit id _) =>
           unless sourceOp f.numValues id (fun op => op matches .destStage ..) do violation .v060 "fit requires completed private stage"
       | _ => pure ()
+
+private def checkRenderedSnapshots (f : Func) : Check Unit := do
+  let rendered := f.blocks.toList.flatMap (·.insts) |>.filterMap fun
+    | .def result (.render ..) => some result
+    | _ => none
+  for block in f.blocks do
+    for inst in block.insts do
+      for id in inst.uses do
+        if rendered.contains id then
+          match inst with
+          | .eff (.print ..) => pure ()
+          | .eff (.destText _ source _) => unless source == id do violation .v060 "rendered snapshot only supplies text operand"
+          | _ => violation .v060 "operand-time rendered snapshot escapes its print/text consumer"
 
 private def checkOrigins (m : Module) (f : Func) : Check Unit := do
   for block in f.blocks do
@@ -910,9 +1118,12 @@ def validate (m : Module) : Check Unit := do
   let returns := resultRoots all
   for f in all.funcs do checkLifetimes all f returns
   let effects := deriveEffects all returns
+  checkParameterRoots all returns
   checkSummaries all returns effects
   for (f,index) in all.funcs.toList.zipIdx do checkOwnership all index f returns effects
   for (f,index) in all.funcs.toList.zipIdx do checkChannelOwners all index f
+  for f in all.funcs do checkKnownCounts all f
+  for f in all.funcs do checkRenderedSnapshots f
   checkTargets all effects initializers
   for f in all.funcs do checkCertificates all f
   for f in all.funcs do checkOrigins all f

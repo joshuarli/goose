@@ -7,7 +7,9 @@ open Goose.Core (ActId ScopeInst RootInst Loc OriginId DestinationId StorageId N
 
 inductive RVal
   | value (value : Value)
-  | view (view : RuntimeView)
+  | copied (value : Value) (source : Core.CopySource)
+  | rendered (bytes : ByteArray)
+  | view (view : RuntimeView) (source : Option Core.CopySource := none)
   | dest (id : DestinationId)
   | built (id : DestinationId)
   | cancelled (id : DestinationId)
@@ -24,16 +26,23 @@ structure Frame where
   activation : RuntimeActivation
   vals : Std.HashMap ValueId RVal := {}
   named : List (SlotId × DestinationId) := []
-  arguments : List (DestinationId × Loc) := []
+  parameterOrdinals : List StorageId := []
+  copySources : Std.HashMap ValueId Core.CopySource := {}
+  elementReceivers : List (DestinationId × Loc) := []
 
 private def getCell (frame : Frame) (id : ValueId) : EvalM RVal :=
-  match frame.vals[id]? with | some value => pure value | none => fault .unbound
+  match frame.vals[id]? with
+  | some (.value value) => match frame.copySources[id]? with
+    | some source => pure (.copied value source)
+    | none => pure (.value value)
+  | some value => pure value
+  | none => fault .unbound
 
 private def getValue (frame : Frame) (id : ValueId) : EvalM Value := do
-  match ← getCell frame id with | .value value => pure value | _ => fault .shape
+  match ← getCell frame id with | .value value | .copied value _ => pure value | _ => fault .shape
 
 private def getView (frame : Frame) (id : ValueId) : EvalM RuntimeView := do
-  match ← getCell frame id with | .view view => pure view | _ => fault .shape
+  match ← getCell frame id with | .view view _ => pure view | _ => fault .shape
 
 private def getDest (frame : Frame) (id : ValueId) : EvalM DestinationId := do
   match ← getCell frame id with | .dest id => pure id | _ => fault .shape
@@ -48,7 +57,7 @@ private def getProtocol (frame : Frame) (id : ValueId) : EvalM DestinationId := 
 
 private def getCarrier (frame : Frame) (id : ValueId) : EvalM Carrier := do
   match ← getCell frame id with
-  | .value value => pure (.register value)
+  | .value value | .copied value _ => pure (.register value)
   | .built id => pure (.completed id)
   | _ => fault .shape
 
@@ -61,7 +70,10 @@ private def packResults (carriers : List Carrier) : RVal :=
 
 private def bindParams (frame : Frame) (params : List (ValueId × VTy)) (values : List RVal) : EvalM Frame := do
   unless params.length == values.length do fault .arity
-  pure { frame with vals := (params.zip values).foldl (fun map ((id,_),value) => map.insert id value) frame.vals }
+  let sources := (params.zip values).foldl (fun sources ((id,_),value) => match value with
+    | .copied _ source => sources.insert id source
+    | _ => sources.erase id) frame.copySources
+  pure { frame with vals := (params.zip values).foldl (fun map ((id,_),value) => map.insert id value) frame.vals, copySources := sources }
 
 private def origin (org : Option OriginId) : EvalM OriginId :=
   match org with | some org => pure org | none => fault .unbound
@@ -99,9 +111,14 @@ private def writeBytes (destination : DestinationId) (bytes : ByteArray) (org : 
 
 private def renderCell (fuel : Nat) (config : Config) (cell : RVal) : EvalM ByteArray := do
   match cell with
-  | .value value => renderAny fuel config.layout .topLevel value
-  | .view view => renderView fuel config.layout .topLevel view
+  | .value value | .copied value _ => renderAny fuel config.layout .topLevel value
+  | .view view _ => renderView fuel config.layout .topLevel view
+  | .rendered bytes => pure bytes
   | _ => fault .shape
+
+private def sourceOfLocation (location : Loc) : EvalM Core.CopySource := do
+  let some object := (← EvalM.get).objectOrdinals.lookup location.root | fault .unbound
+  pure (.storage object location.path)
 
 private def openReceiver (fuel : Nat) (config : Config) (function : Func) (frame : Frame)
     (receiver : DestReceiver) (logical : Ty) (request : Core.ConstructionRequest) (count : Option Nat) (org : OriginId) : EvalM DestinationId := do
@@ -132,18 +149,20 @@ private def openReceiver (fuel : Nat) (config : Config) (function : Func) (frame
   | .push reference => do
       let location ← expectRef (← getValue frame reference)
       let .stored stored ← readLoc fuel config.layout location | fault .shape
-      let parent ← ownerDestination config.layout stored .elementRun (some 1) org
-      liftConstruction org (openChild parent logical (← receivingLayout config.layout logical))
+      openElementReceiving config.layout frame.activation.act location stored logical count org
 
-private def publishDestination (fuel : Nat) (config : Config) (id : DestinationId) (org : OriginId) : EvalM Unit := do
+private def publishDestination (fuel : Nat) (config : Config) (id : DestinationId) (org : OriginId)
+    (elementReceiver : Option Loc := none) : EvalM Unit := do
+  if let some location := elementReceiver then
+    let .stored stored ← readLoc fuel config.layout location | fault .shape
+    publishElementReceiving fuel config.layout location stored id org
+    return
   let pending ← getDestination id
   let location := pending.capability.receiver
   match pending.use with
-  | .child parent =>
-      liftConstruction org (attachChild parent id)
-      liftConstruction org (finishDestination parent)
+  | .child _ =>
       let .stored stored ← readLoc fuel config.layout location | fault .shape
-      publishOwner fuel config.layout location stored parent org
+      publishOwner fuel config.layout location stored id org
   | .receiver =>
       match (← EvalM.get).objects.lookup location.root with
       | some _ =>
@@ -162,6 +181,7 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, function, frame, op => do
     match op with
+    | .render operand _ => pure (.rendered (← renderCell fuel config (← getCell frame operand)))
     | .constInt ty value => pure (.value (.int ty value))
     | .constBool value => pure (.value (.bool value))
     | .constUnit => pure (.value .unit)
@@ -184,10 +204,12 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
     | .globalAddr id => pure (.value (.ref ⟨.global id,[]⟩))
     | .refFreeze reference => pure (.value (← getValue frame reference))
     | .load reference => pure (.value (← readLoc fuel config.layout (← expectRef (← getValue frame reference))))
-    | .snapshot _ reference => pure (.view (← sample fuel config (← expectRef (← getValue frame reference))))
+    | .snapshot _ reference =>
+        let location ← expectRef (← getValue frame reference)
+        pure (.view (← sample fuel config location) (some (← sourceOfLocation location)))
     | .sliceView id =>
         let .slice location start count ← getValue frame id | fault .shape
-        pure (.view ⟨location,start,count,false⟩)
+        pure (.view ⟨location,start,count,false⟩ frame.copySources[id]?)
     | .viewLen id => pure (.value (.int .i64 (← getView frame id).count))
     | .arrayLen reference =>
         let (count,_) ← arrayLength (← readLoc fuel config.layout (← expectRef (← getValue frame reference)))
@@ -243,6 +265,9 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
         pure (.dest (← liftConstruction (← origin org) (openChild (← getDest frame parent) element (← receivingLayout config.layout element))))
     | .destFinish destination org =>
         let id ← getDest frame destination
+        let pending ← getDestination id
+        if let some expected := pending.knownCount then
+          unless progressCount pending.progress == some expected do fault .flow
         liftConstruction (← origin org) (finishDestination id)
         pure (.built id)
     | .destNamed slot _ =>
@@ -285,7 +310,10 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
     | .destRelocate built reason org =>
         let id ← getBuilt frame built
         match reason with
-        | .headerRemoval => liftConstruction (← origin org) (removeConstructionHeader id)
+        | .headerRemoval =>
+            liftConstruction (← origin org) (removeConstructionHeader id)
+            let pending ← getDestination id
+            liftConstruction (← origin org) (restoreReceivingLayout id (← receivingLayout config.layout pending.capability.layout))
         | .exitValue => liftConstruction (← origin org) (landExitReplacement id)
         pure (.built id)
     | .destStage destination org =>
@@ -309,13 +337,17 @@ def evalEffect : Nat → Config → Func → Frame → Effect → EvalM Frame
         let scopeInst ← freshScope
         let activation := { frame.activation with scopes := (scope,scopeInst) :: frame.activation.scopes }
         setActivation activation
+        if scope == 0 then
+          for ((ty,ordinal),position) in (function.params.zip frame.parameterOrdinals).zipIdx do
+            if (function.slots[position]?).any (fun slot => slot.scope == 0 && slot.ty == ty) then
+              setObjectOrdinal (.local activation.act scopeInst position) ordinal
         pure { frame with activation }
     | .leave scope =>
         let some (current,scopeInst) := frame.activation.scopes.head? | fault .flow
         unless current == scope do fault .flow
         let activation := { frame.activation with scopes := frame.activation.scopes.tail }
         releaseScope activation scope scopeInst
-        pure { frame with activation }
+        pure { frame with activation, named := frame.named.filter (fun (slot,_) => (function.slots[slot]?).any (·.scope != scope)) }
     | .slotInit slot value _ =>
         let location ← slotLoc function frame slot
         let value ← getValue frame value
@@ -362,6 +394,22 @@ def evalEffect : Nat → Config → Func → Frame → Effect → EvalM Frame
           | .val id => do renderCell fuel config (← getCell frame id)
         emitStdout ((bytes.foldl (· ++ ·) ByteArray.empty).push 10)
         pure frame
+    | .destSnapshot destination snapshot org =>
+        let id ← getDest frame destination
+        let pending ← getDestination id
+        let some element := pending.capability.logicalType.element? | fault .shape
+        let .fixed values ← getValue frame snapshot | fault .shape
+        for value in values do
+          liftConstruction (← origin org) (writeElement id (← liftExcept (fixedBytes fuel config.layout element value)))
+        pure frame
+    | .destRepeat destination source org =>
+        let id ← getDest frame destination
+        let source ← getBuilt frame source
+        let pending ← getDestination id
+        let .arr element count := pending.capability.logicalType | fault .shape
+        for _ in [0:count] do repeatElement fuel config.layout id element source (← origin org)
+        liftConstruction (← origin org) (retireRepeatedSource id source)
+        pure frame
     | .destWrite destination value org =>
         let destination ← getDest frame destination
         let pending ← getDestination destination
@@ -382,18 +430,22 @@ def evalEffect : Nat → Config → Func → Frame → Effect → EvalM Frame
         let destination ← getDest frame destination
         let pending ← getDestination destination
         let some element := pending.capability.logicalType.element? | fault .shape
-        let view ← match ← getCell frame source with
-          | .view view => pure view
-          | .value (.ref location) => sample fuel config location
-          | .value (.slice location start count) => pure ⟨location,start,count,false⟩
+        let (view,copySource) ← match ← getCell frame source with
+          | .view view source =>
+              let some source := source | fault .unbound
+              pure (view,source)
+          | .value (.ref location) => do
+              let source ← sourceOfLocation location
+              let view ← match ← readLoc fuel config.layout location with
+                | .slice backing start count => pure ⟨backing,start,count,false⟩
+                | _ => sample fuel config location
+              pure (view,source)
+          | .copied (.slice location start count) source => pure (⟨location,start,count,false⟩,source)
+          | .value (.slice location start count) =>
+              let some source := frame.copySources[source]? | fault .unbound
+              pure (⟨location,start,count,false⟩,source)
           | _ => fault .shape
-        let source ← readLoc fuel config.layout view.location
-        match source with
-        | .stored stored => liftConstruction (← origin org) (recordCopy (.storage (stored.object.getD stored.storage) stored.path) destination)
-        | .fixed _ =>
-            let some ordinal := (← EvalM.get).objectOrdinals.lookup view.location.root | fault .unbound
-            liftConstruction (← origin org) (recordCopy (.storage ordinal view.location.path) destination)
-        | _ => fault .shape
+        liftConstruction (← origin org) (recordCopy copySource destination)
         for index in [0:view.count] do
           let value ← readLoc fuel config.layout ⟨view.location.root,view.location.path ++ [view.start + index]⟩
           let bytes ← if element.nonfixed then do
@@ -409,10 +461,12 @@ def evalEffect : Nat → Config → Func → Frame → Effect → EvalM Frame
         let value ← storedDestination id
         let location ← slotLoc function frame slot
         let some descriptor := function.slots[slot]? | fault .unbound
-        bindRoot location.root (.stored { value with ty := descriptor.ty, object := some value.storage })
+        let object ← reserveRootObject location.root
+        bindRoot location.root (.stored { value with ty := descriptor.ty, object := some object })
         pure { frame with named := (slot,id) :: frame.named }
     | .destPublish built org =>
-        publishDestination fuel config (← getBuilt frame built) (← origin org)
+        let id ← getBuilt frame built
+        publishDestination fuel config id (← origin org) (frame.elementReceivers.lookup id)
         pure frame
     | .destCancel cancelled org =>
         let .cancelled id ← getCell frame cancelled | fault .shape
@@ -426,7 +480,21 @@ def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (Li
     | [] => fault .flow
     | .def result op :: rest =>
         let value ← evalOp fuel config function frame op
-        executeInsts fuel config function { frame with vals := frame.vals.insert result value } rest
+        let copySource ← match op with
+          | .load reference => do
+              match value with
+              | .value (.slice ..) => pure (some (← sourceOfLocation (← expectRef (← getValue frame reference))))
+              | _ => pure none
+          | .viewSlice _ source _ _ _ => do
+              let .view _ source ← getCell frame source | fault .shape
+              pure source
+          | _ => pure none
+        let receivers ← match op, value with
+          | .destOpen (.push reference) .., .dest id => do
+              pure ((id, ← expectRef (← getValue frame reference)) :: frame.elementReceivers)
+          | _, _ => pure frame.elementReceivers
+        let sources := match copySource with | some source => frame.copySources.insert result source | none => frame.copySources.erase result
+        executeInsts fuel config function { frame with vals := frame.vals.insert result value, copySources := sources, elementReceivers := receivers } rest
     | .eff effect :: rest =>
         executeInsts fuel config function (← evalEffect fuel config function frame effect) rest
     | .term term :: _ => match term with
@@ -480,6 +548,14 @@ def executeFunction : Nat → Config → FnId → Func → List Value → List D
   | fuel + 1, config, functionId, function, arguments, destinations, org => do
     unless arguments.length == function.params.length do fault .arity
     let act ← freshAct
+    let mut parameterOrdinals : List StorageId := []
+    for (ty,value) in function.params.zip arguments do
+      let ordinal ← if ty.nonfixed then do
+          let location ← expectRef value
+          let some ordinal := (← EvalM.get).objectOrdinals.lookup location.root | fault .unbound
+          pure ordinal
+        else liftConstruction org reserveStorage
+      parameterOrdinals := parameterOrdinals ++ [ordinal]
     let mut destinationIds := destinations
     let mut channels : List Channel := []
     for descriptor in function.results do
@@ -495,8 +571,9 @@ def executeFunction : Nat → Config → FnId → Func → List Value → List D
     let activation : RuntimeActivation := ⟨functionId,act,vars,[],channels⟩
     let state ← EvalM.get
     EvalM.set { state with activations := activation :: state.activations }
-    let frame : Frame := ⟨functionId,activation,{},[],[]⟩
-    let arguments := arguments.map RVal.value ++ destinations.map RVal.dest
+    let frame : Frame := { function := functionId, activation, parameterOrdinals }
+    let arguments := (arguments.zip function.params |>.zip parameterOrdinals).map (fun ((value,ty),ordinal) =>
+      if ty matches .slice .. then RVal.copied value (.storage ordinal []) else RVal.value value) ++ destinations.map RVal.dest
     fun state => mapStepState (fun state => { state with activations := state.activations.filter (fun activation => activation.act != act) })
       (executeBlock fuel config function frame 0 arguments state)
 end
