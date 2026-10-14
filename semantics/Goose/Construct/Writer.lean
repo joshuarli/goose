@@ -192,7 +192,7 @@ def origin (o : Origin) : String := rec "origin" [nat o.file, nat o.line, str o.
 
 def structDef (ty : Ty → Nat) (d : StructDef) : String :=
   rec "struct_def" [nat d.byteSize, arr (d.fields.toList.map fun f =>
-    rec "field" [nat (ty f.ty), str (varKind f.binding), str (mutability f.contents), nat f.byteOffset])]
+    rec "field" [nat (ty f.ty), str (varKind f.binding), str (mutability f.contents), nat f.byteOffset]), str d.displayName]
 
 
 def module (m : Module) : String :=

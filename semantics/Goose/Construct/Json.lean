@@ -20,12 +20,15 @@ structure RawStructField where
 structure RawStructDef where
   byteSize : Nat
   fields : Array RawStructField
+  displayName : String
 
 def decStructDefs (j : Json) : Except String (Array RawStructDef) := do
   (← asArr j "structs").mapM fun entry => do
     let (tag, fs) ← record entry "struct descriptor"
     unless tag == "struct_def" do fail "expected a struct_def"
-    arity tag fs 2
+    arity tag fs 3
+    let displayName ← asStr fs[2]! "struct display name"
+    if displayName.isEmpty then fail "struct display name must be nonempty"
     let byteSize ← asNat fs[0]! "struct byte size"
     if byteSize == 0 then fail "struct byte size must be positive"
     let fields ← (← asArr fs[1]! "struct fields").mapM fun entry => do
@@ -37,7 +40,7 @@ def decStructDefs (j : Json) : Except String (Array RawStructDef) := do
       let contents ← decMut (← asStr fs[2]! "field contents")
       let byteOffset ← asNat fs[3]! "field byte offset"
       pure ({ typeIndex, binding, contents, byteOffset } : RawStructField)
-    pure { byteSize, fields }
+    pure { byteSize, fields, displayName }
 
 def resolveStruct (types : Array Ty) (sizes : Array Nat) (d : RawStructDef) :
     Except String (StructDef × Nat) := do
@@ -49,7 +52,7 @@ def resolveStruct (types : Array Ty) (sizes : Array Nat) (d : RawStructDef) :
     let some z := sizes[i]? | fail "struct field type size"
     treeSize := treeSize + z
     fields := fields.push { ty := t, binding := f.binding, contents := f.contents, byteOffset := f.byteOffset }
-  pure ({ byteSize := d.byteSize, fields }, treeSize)
+  pure ({ byteSize := d.byteSize, fields, displayName := d.displayName }, treeSize)
 
 
 def decTypeEntry (types : Array Ty) (sizes : Array Nat) (j : Json)
