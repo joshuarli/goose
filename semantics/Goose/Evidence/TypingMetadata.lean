@@ -207,7 +207,7 @@ theorem refElem_metadata {env : TyEnv} {view index : ValueId} {result : VTy}
       env.vals[index]? = some (some (.data (.int indexTy))) ∧
       result = .data (.ref permission element) := view_index_metadata typed
 
-theorem indexChecked_metadata {env : TyEnv} {view index : ValueId} {origin : OriginId}
+theorem indexChecked_metadata {env : TyEnv} {view index : ValueId} {origin : Option OriginId}
     {result : VTy} (typed : (Op.indexChecked view index origin).resultTy env = .ok result) :
     ∃ permission element indexTy,
       env.vals[view]? = some (some (.view permission element)) ∧
@@ -283,7 +283,7 @@ theorem boundTy_metadata {env : TyEnv} {bound : Bnd}
     exact ⟨ty, intTy_of operand⟩
 
 theorem viewSlice_metadata {env : TyEnv} {permission : Mutability} {view : ValueId}
-    {lo hi : Bnd} {origin : OriginId} {result : VTy}
+    {lo hi : Bnd} {origin : Option OriginId} {result : VTy}
     (typed : (Op.viewSlice permission view lo hi origin).resultTy env = .ok result) :
     ∃ sourcePermission element,
       env.vals[view]? = some (some (.view sourcePermission element)) ∧
@@ -339,7 +339,7 @@ theorem push_metadata {env : TyEnv} {reference value : ValueId} {origin : Option
     exact ⟨permission, owner, element, refTy_metadata operand, arrayType, dataTy_of valueType,
       (Except.ok.inj typed).symm⟩
 
-theorem pop_metadata {env : TyEnv} {reference : ValueId} {origin : OriginId} {result : VTy}
+theorem pop_metadata {env : TyEnv} {reference : ValueId} {origin : Option OriginId} {result : VTy}
     (typed : (Op.pop reference origin).resultTy env = .ok result) :
     ∃ permission owner element,
       env.vals[reference]? = some (some (.data (.ref permission owner))) ∧
