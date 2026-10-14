@@ -61,6 +61,10 @@ theorem WeakValueTy.int {roots : RootDeclarations} {value : Val} {ty : IntTy}
     (typed : WeakValueTy roots value (.int ty)) : ∃ n, value = .int ty n := by
   cases value <;> simp_all [WeakValueTy, FlatTy]
 
+theorem WeakValueTy.bool {roots : RootDeclarations} {value : Val}
+    (typed : WeakValueTy roots value .bool) : ∃ b, value = .bool b := by
+  cases value <;> simp_all [WeakValueTy, FlatTy]
+
 theorem WeakValueTy.ofFlat {roots : RootDeclarations} {value : Val} {ty : Ty}
     (typed : FlatTy ty value) : WeakValueTy roots value ty := by
   cases ty <;> try exact typed

@@ -339,6 +339,72 @@ theorem execPure_bin_typed {roots : RootDeclarations} {types : Array (Option VTy
     obtain ⟨rfl, rfl⟩ := evaluated
     exact ⟨rfl, rfl⟩
 
+theorem execPure_conv_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {source target : IntTy} {conversion : ConvKind}
+    {org : Option OriginId} {before after : St} {cell : RVal}
+    (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data (.int source))))
+    (evaluated : execPure cx fr (.conv conversion source target id org) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.int target)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal metadata read
+  subst middle
+  obtain ⟨n, rfl⟩ := valueTyped.int
+  simp only [expectInt, pure_bind] at evaluated
+  cases result : evalConv cx.cfg.profile conversion source target n with
+  | error abort =>
+    cases org <;> simp [result, abortAtOrg, abortAt, fault, M.stop] at evaluated
+  | ok n' =>
+    simp only [result, pure_apply, Res.ok.injEq] at evaluated
+    obtain ⟨rfl, rfl⟩ := evaluated
+    exact ⟨rfl, rfl⟩
+
+theorem execPure_boolNot_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {before after : St} {cell : RVal}
+    (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data .bool)))
+    (evaluated : execPure cx fr (.boolNot id) before = .ok cell after) :
+    WeakCellTy roots cell (.data .bool) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal metadata read
+  subst middle
+  obtain ⟨b, rfl⟩ := valueTyped.bool
+  simp only [expectBool, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨True.intro, rfl⟩
+
+theorem expectComparable_state {left right : Val} {before after : St} {pair : Int × Int}
+    (compared : expectComparable left right before = .ok pair after) : after = before := by
+  cases left <;> cases right <;> simp only [expectComparable] at compared
+  all_goals try (simp [fault, M.stop] at compared)
+  all_goals try (simp only [pure_apply, Res.ok.injEq] at compared; exact compared.2.symm)
+  rw [← bind_pure_comp] at compared
+  unfold expectSameTy at compared
+  split at compared
+  · simp only [pure_bind, pure_apply, Res.ok.injEq] at compared
+    exact compared.2.symm
+  · simp [bind_apply, fault, M.stop] at compared
+
+theorem execPure_cmp_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
+    {left right : ValueId} {ty : IntTy} {comparison : CmpOp} {before after : St} {cell : RVal}
+    (evaluated : execPure cx fr (.cmp comparison ty left right) before = .ok cell after) :
+    WeakCellTy roots cell (.data .bool) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨leftValue, middle, read, evaluated⟩ := m_bind_ok evaluated
+  have sameState := (getVal_success read).2
+  subst middle
+  obtain ⟨rightValue, middle, read, evaluated⟩ := m_bind_ok evaluated
+  have sameState := (getVal_success read).2
+  subst middle
+  obtain ⟨pair, middle, compared, evaluated⟩ := m_bind_ok evaluated
+  have sameState := expectComparable_state compared
+  subst middle
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨True.intro, rfl⟩
+
 theorem execPure_indexProven_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {viewId indexId : ValueId} {permission : Mutability}
     {element : Ty} {indexTy : IntTy} {before after : St} {cell : RVal}
