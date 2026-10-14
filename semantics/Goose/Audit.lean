@@ -32,14 +32,7 @@ axioms are all in `allowedAxioms`. It is an allowlist because `bv_decide` and
 `sorryAx`; none of those can be named in a denylist.
 
 Each `#audit` also defines a constant under `Goose.Audit.entry`, and
-`#audit Goose.Evidence.RuntimePoint.typed
-#audit Goose.Evidence.validated_true_cmp_fact
-#audit Goose.Proofs.Bounds.validated_trueComparisonFacts
-#audit Goose.Proofs.Bounds.checked_fuel
-#audit Goose.Proofs.Bounds.checked_initGlobals
-#audit Goose.Proofs.Bounds.SimulationChecks.fixture_run_replacement
-
-#audit_registry` collects those constants into `Goose.Audit.registry` so the
+`#audit_registry` collects those constants into `Goose.Audit.registry` so the
 `goose-semantics audit` executable can print what was audited. A theorem that
 is not named by `#audit` is not audited.
 -/
@@ -87,33 +80,12 @@ def elabAudit : CommandElab
       { theoremName := $nameLit, axioms := [$axLits,*] }))
   | _ => throwUnsupportedSyntax
 
-/-- `#audit Goose.Evidence.RuntimePoint.typed
-#audit Goose.Evidence.validated_true_cmp_fact
-#audit Goose.Proofs.Bounds.validated_trueComparisonFacts
-#audit Goose.Proofs.Bounds.checked_fuel
-#audit Goose.Proofs.Bounds.checked_initGlobals
-#audit Goose.Proofs.Bounds.SimulationChecks.fixture_run_replacement
-
-#audit_registry` defines `Goose.Audit.registry` from every `#audit` so far. -/
-syntax (name := auditRegistryCmd) "#audit Goose.Evidence.RuntimePoint.typed
-#audit Goose.Evidence.validated_true_cmp_fact
-#audit Goose.Proofs.Bounds.validated_trueComparisonFacts
-#audit Goose.Proofs.Bounds.checked_fuel
-#audit Goose.Proofs.Bounds.checked_initGlobals
-#audit Goose.Proofs.Bounds.SimulationChecks.fixture_run_replacement
-
-#audit_registry" : command
+/-- `#audit_registry` defines `Goose.Audit.registry` from every `#audit` so far. -/
+syntax (name := auditRegistryCmd) "#audit_registry" : command
 
 @[command_elab auditRegistryCmd]
 def elabAuditRegistry : CommandElab
-  | `(#audit Goose.Evidence.RuntimePoint.typed
-#audit Goose.Evidence.validated_true_cmp_fact
-#audit Goose.Proofs.Bounds.validated_trueComparisonFacts
-#audit Goose.Proofs.Bounds.checked_fuel
-#audit Goose.Proofs.Bounds.checked_initGlobals
-#audit Goose.Proofs.Bounds.SimulationChecks.fixture_run_replacement
-
-#audit_registry) => do
+  | `(#audit_registry) => do
     let entries := (← getEnv).constants.map₂.foldl
       (fun acc n _ => if `Goose.Audit.entry |>.isPrefixOf n then n :: acc else acc) []
     let sorted := entries.mergeSort (fun a b => toString a ≤ toString b)
