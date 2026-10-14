@@ -403,6 +403,18 @@ theorem typedCall_afterArgs {n : Nat} {cfg : Cfg} {env : Env} {state after : St}
   · simpa [Core.Sound.implEnv] using congrArg TEnv.loops htyping
   · exact hblocks ctx impl hcontext himplementation
 
+theorem typedExprClaim_call_one (cfg : Cfg) (results : List Ty) (c : ContextId)
+    (args : List Arg) (origin : OriginId) : TypedExprClaim 1 cfg results (.call c args origin) := by
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  have stopped : evalExpr 1 cfg env (.call c args origin) state = .stop .timeout state := by
+    cases args <;> simp [evalExpr, evalArg, mapList, enterCall, Core.timeout, M.stop, bind_apply, pure_apply]
+  refine ⟨fun value after hdone => ?_, fun err after hdone hfinal => ?_⟩
+  · rw [stopped] at hdone
+    cases hdone
+  · rw [stopped] at hdone
+    cases hdone
+    simp [IsFinal] at hfinal
+
 theorem typedExprClaim_call_of_blocks {n : Nat} {cfg : Cfg} {results : List Ty}
     {c : ContextId} {args : List Arg} {origin : OriginId}
     (ha : TypedArgsClaim (n + 1) cfg results args)

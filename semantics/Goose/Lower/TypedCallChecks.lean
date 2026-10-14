@@ -183,4 +183,14 @@ theorem readonly_call_lower (artifact : ArtifactProfile) (profile : NumProfile) 
     | _ => false
   | none => false
 
+theorem readonly_call_one (artifact : ArtifactProfile) (profile : NumProfile) :
+    TypedExprClaim 1 ⟨profile, readonlyModule artifact⟩ [.bool] (.call 1 readonlyArguments 0) :=
+  typedExprClaim_call_one _ _ _ _ _
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact => [NumProfile.release, .debug].all fun profile =>
+  match evalExpr 1 ⟨profile, readonlyModule artifact⟩ ⟨#[], 1, [], 0⟩ (.call 1 readonlyArguments 0)
+      { readonlyPrefixState with nextAct := 2 } with
+  | .stop .timeout state => state.nextAct == 2 && state.nextScope == 0 && state.trace == ""
+  | _ => false
+
 end Goose.Lower.TypedCallChecks
