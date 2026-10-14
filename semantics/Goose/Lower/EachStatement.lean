@@ -1,5 +1,6 @@
 import Goose.Lower.EachHeader
 import Goose.Lower.EachFlow
+import Goose.Lower.EachTyped
 
 namespace Goose.Lower
 
@@ -299,5 +300,55 @@ theorem stmt_each_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
     exact Or.inl ⟨hflow,
       Post.nil hpp' aAll.vals (PStart.same.trans (hsame.mono hprefix) (Nat.le_refl _)) hrel'⟩
   · exact Or.inr hreturn
+
+theorem stmt_each_typed_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
+    (le : LEnv) (ls ls' : LS) (fr : Frame) (pt : Pt) (s : St)
+    (lc : Option LoopCtx) (x : VarId) (idx : Option VarId) (source : View)
+    (byRef : Bool) (body : Core.Block) (org : OriginId)
+    (sourceEnv after : TEnv) (sc next next' : Nat) (hvars : sourceEnv.vars = env.vars)
+    (htype : tyStmt sourceEnv sc (.forEach x idx source byRef body org) next = .ok (after, next'))
+    (penv : PEnv) (world : Core.Sound.World) (element : Ty)
+    (hsource : ∀ owner view output,
+      lowerEachSource source le ls = ((owner, view), output) → ExtT output cx.fn.blocks →
+      SimEAt cx pt fr (evalView n cfg env source)
+        (fun vw pt' fr' => Post cfg env cx ls fr output fr' pt' (EachSourceCells owner view vw)) s)
+    (hsourceAliases : ∀ vw state, evalView n cfg env source s = .ok vw state →
+      Core.Sound.ViewAliases cfg.mod world penv env state.store source vw element)
+    (hsourceMode : ∀ owner view output,
+      lowerEachSource source le ls = ((owner, view), output) →
+      ∀ vw state, evalView n cfg env source s = .ok vw state →
+      (regrowOf owner le output).1 = eachSourceRegrows penv.access source)
+    (allowed : ViewVal → Nat → St → Prop)
+    (hsourceTyped : ∀ vw state, evalView n cfg env source s = .ok vw state →
+      Core.Sound.ViewOk state.store vw element)
+    (hinitial : ∀ vw state, evalView n cfg env source s = .ok vw state → allowed vw 0 state)
+    (hretain : ∀ vw k, k < n → ∀ i state flow state', (allowed vw i state ∧ Goose.Proofs.Memory.LocTy state.store
+        ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩ element) →
+      eachIterationCore k cfg env x idx byRef body vw i state = .ok flow state' →
+      (match flow with | .normal _ | .cont => allowed vw (i + 1) state' ∧ Core.Sound.EachViewOk state'.store vw element | _ => True))
+    (hblock : ∀ vw header base counter view sampled hb owner,
+      (∃ lv, env.vars[x]? = some lv ∧ lv.scope = body.scope) →
+      (∀ j, idx = some j → ∃ lv, env.vars[j]? = some lv ∧ lv.scope = body.scope) →
+      EachBlockCallback n cfg env cx le header counter view sampled hb owner vw base
+        x idx byRef body org (fun i state => allowed vw i state ∧
+          Goose.Proofs.Memory.LocTy state.store ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩ element))
+    (hlow : lowerStmt lc (.forEach x idx source byRef body org) le ls = ((), ls'))
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) :
+    SimEAt cx pt fr (execStmt (n + 1) cfg env (.forEach x idx source byRef body org) >>= prepareReturn env)
+      (StmtFlowPost cfg env cx ls fr ls') s := by
+  apply stmt_each_flow_sim_at n cfg env cx le ls ls' fr pt s lc x idx source byRef body org
+    sourceEnv after sc next next' hvars htype penv world element hsource hsourceAliases hsourceMode
+    (fun vw i state => allowed vw i state ∧ Core.Sound.EachViewOk state.store vw element)
+    (fun vw i state => allowed vw i state ∧ Goose.Proofs.Memory.LocTy state.store
+      ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩ element)
+  · intro vw state hsuccess
+    exact ⟨hinitial vw state hsuccess, (hsourceTyped vw state hsuccess).eachView⟩
+  · intro vw i state len state' hallowed hlength hi
+    exact ⟨hallowed.1, eachElement_typed_location hallowed.2 hlength hi⟩
+  · exact hretain
+  · exact hblock
+  · exact hlow
+  · exact hpp
+  · exact hext
 
 end Goose.Lower
