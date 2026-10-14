@@ -657,4 +657,21 @@ theorem initGlobals_success_prefix {fuel : Nat} {cfg : GCfg} {first second : Lis
   cases value
   exact ⟨middle, prefixSuccess, suffixSuccess⟩
 
+theorem instsAt_cons_inverse {fn : Func} {pt : Pt} {instruction : Inst} {rest : List Inst}
+    (suffix : instsAt fn pt = instruction :: rest) :
+    instAt fn pt = some instruction ∧ rest = instsAt fn (pt.1, pt.2 + 1) := by
+  have atPoint : instAt fn pt = some instruction := by
+    unfold instAt
+    unfold instsAt at suffix
+    cases lookup : fn.blocks[pt.1]? with
+    | none => simp [lookup] at suffix
+    | some block =>
+      simp only [lookup, Option.map_some, Option.getD_some] at suffix
+      simp only [lookup, Option.bind_some]
+      rw [← List.head?_drop, suffix]
+      rfl
+  have fullSuffix := instsAt_cons atPoint
+  rw [suffix] at fullSuffix
+  exact ⟨atPoint, (List.cons.inj fullSuffix).2⟩
+
 end Goose.Evidence
