@@ -429,6 +429,40 @@ theorem runtime_nearest_scope_dispatch (layout : LayoutEnv)
     fun entry owned => runtime_unwind_removes scopes afterOperands entry owned⟩
 
 
+
+def RuntimeActivationIds (state : ExecutionState) : Prop :=
+  (state.activations.map (·.act)).Nodup ∧
+    ∀ activation ∈ state.activations, activation.act < state.nextAct
+
+theorem runtime_initial_activation_ids : RuntimeActivationIds ExecutionState.initial := by
+  simp [RuntimeActivationIds, ExecutionState.initial]
+
+theorem runtime_fresh_act (state : ExecutionState) :
+    Goose.Construct.freshAct state = .ok state.nextAct { state with nextAct := state.nextAct + 1 } := by
+  simp [Goose.Construct.freshAct, EvalM.get, EvalM.set, bind, pure]
+
+theorem runtime_allocated_activation_ids (state : ExecutionState)
+    (implementation : ImplId) (vars : Array Goose.Construct.LocalVar) (channels : List Channel)
+    (valid : RuntimeActivationIds state) :
+    RuntimeActivationIds
+      { state with nextAct := state.nextAct + 1, activations := RuntimeActivation.mk implementation state.nextAct vars [] channels :: state.activations } := by
+  obtain ⟨distinct,bounded⟩ := valid
+  change (state.nextAct :: state.activations.map (·.act)).Nodup ∧
+    ∀ activation ∈ RuntimeActivation.mk implementation state.nextAct vars [] channels :: state.activations,
+      activation.act < state.nextAct + 1
+  constructor
+  · simp only [List.nodup_cons]
+    refine ⟨?_,distinct⟩
+    intro present
+    obtain ⟨activation,present,equal⟩ := List.mem_map.mp present
+    exact (Nat.ne_of_lt (bounded activation present)) equal
+  · intro activation present
+    rcases List.mem_cons.mp present with equal | present
+    · subst activation
+      simp
+    · exact Nat.lt_succ_of_lt (bounded activation present)
+
+
 theorem target_activation_success (config : EvalConfig) (targetId : Nat) (target : NonlocalTarget)
     (activation : RuntimeActivation) (state : ExecutionState)
     (present : config.module.targets[targetId]? = some target)
