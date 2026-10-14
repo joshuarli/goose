@@ -576,6 +576,44 @@ inductive ParamValuesTy (roots : RootDeclarations) : List (ValueId × VTy) → L
       (head : WeakCellTy roots arg param.2) (tail : ParamValuesTy roots params args) :
       ParamValuesTy roots (param :: params) (arg :: args)
 
+theorem ParamValuesTy.mono {before after : RootDeclarations} {params : List (ValueId × VTy)}
+    {args : List RVal} (extension : before.Extends after) (typed : ParamValuesTy before params args) :
+    ParamValuesTy after params args := by
+  induction typed with
+  | nil => exact .nil
+  | cons head tail ih => exact .cons (head.mono extension) ih
+
+theorem bindParams_act {params : List (ValueId × VTy)} {args : List RVal} {fr fr' : Frame}
+    {before after : St} (bound : bindParams fr params args before = .ok fr' after) :
+    fr'.act = fr.act := by
+  induction params generalizing args fr with
+  | nil =>
+    simp only [bindParams, pure_apply, Res.ok.injEq] at bound
+    exact congrArg Frame.act bound.1.symm
+  | cons param params ih =>
+    cases args with
+    | nil =>
+      simp only [bindParams, pure_apply, Res.ok.injEq] at bound
+      exact congrArg Frame.act bound.1.symm
+    | cons arg args =>
+      simp only [bindParams, setCell, pure_bind] at bound
+      exact ih (fr := { fr with vals := fr.vals.insert param.1 arg }) bound
+
+theorem enterBlock_act {fn : Func} {fr fr' : Frame} {block : BlockId} {args : List RVal}
+    {before after : St} {insts : List Inst}
+    (entered : enterBlock fn fr block args before = .ok (insts, fr') after) : fr'.act = fr.act := by
+  unfold enterBlock at entered
+  cases lookup : fn.blocks[block]? with
+  | none => simp [lookup, fault, M.stop] at entered
+  | some destination =>
+    simp only [lookup] at entered
+    split at entered
+    · obtain ⟨frame, middle, bound, entered⟩ := m_bind_ok entered
+      simp only [pure_apply, Res.ok.injEq, Prod.mk.injEq] at entered
+      obtain ⟨⟨rfl, rfl⟩, rfl⟩ := entered
+      exact bindParams_act bound
+    · simp [fault, M.stop] at entered
+
 theorem bindParams_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {params : List (ValueId × VTy)} {args : List RVal} {fr fr' : Frame} {before after : St}
     (frameTyped : WeakFrameTy roots types fr)
@@ -613,5 +651,26 @@ theorem enterBlock_typed {roots : RootDeclarations} {types : Array (Option VTy)}
       obtain ⟨⟨rfl, rfl⟩, rfl⟩ := entered
       exact bindParams_typed frameTyped metadata argsTyped bound
   · simp [fault, M.stop] at entered
+
+theorem FunctionEntry.typed {cfg : GCfg} {activations : ActivationTypes} {fn : Func}
+    {depth : Nat} {args : List Val} {before after : St} {fr : Frame} {entryBlock : GIR.Block}
+    (stateTyped : RuntimeStateTy cfg activations before) (lookup : fn.blocks[0]? = some entryBlock)
+    (metadata : ∀ param ∈ entryBlock.params,
+      (fn.valueTypes cfg.mod)[param.1]? = some (some param.2))
+    (argsTyped : ParamValuesTy (runtimeDeclarations cfg activations) entryBlock.params
+      (args.map RVal.val))
+    (entry : FunctionEntry fn depth args before fr after) :
+    ∃ extended, (runtimeDeclarations cfg activations).Extends (runtimeDeclarations cfg extended) ∧
+      RuntimeFrameTy cfg fn extended fr after := by
+  obtain ⟨arity, act, fresh, allocated, entered⟩ := entry
+  obtain ⟨freshTyped, owner, extension⟩ := stateTyped.freshAct fn allocated
+  obtain ⟨frameTyped, sameState⟩ := enterBlock_typed lookup
+    (WeakFrameTy.empty _ _ act depth) metadata (argsTyped.mono extension) entered
+  have current := enterBlock_act entered
+  change fr.act = act at current
+  refine ⟨activations.enter act fn, extension, ?_⟩
+  refine ⟨sameState ▸ freshTyped, ?_, frameTyped⟩
+  rw [current]
+  exact owner
 
 end Goose.Evidence
