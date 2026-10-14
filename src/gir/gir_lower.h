@@ -16,7 +16,7 @@
 //
 // Evaluation order is instruction order. `ifE`/`ifS` branch on the condition
 // and create their join after both arms, only if an arm reaches it. A loop's
-// source is sampled once; a grow-only array has its length read again in the
+// source is sampled once; a resizable owner has its length read again in the
 // loop header. Every Core block enters its scope, binds the variables its
 // construct declares, runs its statements, evaluates its value and leaves its
 // scope; `ret` leaves every scope entered, `break` and `continue` those
@@ -862,8 +862,8 @@ private:
             auto sl = LowerExpr(*s.view->expr);
             vw = Def(GirOp::SliceView, sl);
         }
-        auto regrow = owner >= 0 && IsGrowRef(owner);
-        int sampled = regrow ? 0 : Def(GirOp::ViewLen, vw);
+        auto resizable = owner >= 0 && IsResizableRef(owner);
+        int sampled = resizable ? 0 : Def(GirOp::ViewLen, vw);
         auto startat = ConstInt(I64(), "0");
         if (cur < 0) return;
         auto depth = stack.size();
@@ -871,7 +871,7 @@ private:
         auto i = hs[0];
         EmitTerm(Br(hb, { startat }));
         cur = hb;
-        int n = regrow ? Def(GirOp::ArrayLen, owner) : sampled;
+        int n = resizable ? Def(GirOp::ArrayLen, owner) : sampled;
         GirInst cmp;
         cmp.op = GirOp::Cmp;
         cmp.cmp = CoreCmpOp::Lt;
@@ -900,9 +900,10 @@ private:
         cur = xb;
     }
 
-    bool IsGrowRef(int r) {
+    bool IsResizableRef(int r) {
         auto &t = mod.Type(ValTy(r));
-        return t.kind == CoreType::Ref && mod.Type(t.elem).kind == CoreType::Grow;
+        if (t.kind != CoreType::Ref) return false;
+        return GirResizableKind(mod.Type(t.elem).kind);
     }
 
     // ---------------------------------------------------------------------
