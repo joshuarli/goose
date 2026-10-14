@@ -3,10 +3,12 @@ import Goose.Proofs.Exit
 import Init.Data.List.Monadic
 import Init.Data.Range.Lemmas
 
+set_option Elab.async false
+
 namespace Goose.Proofs.ExitExecution
 open Goose.Construct
 
-local instance : LawfulMonad EvalM := LawfulMonad.mk'
+instance evalMLawfulMonad : LawfulMonad EvalM := LawfulMonad.mk'
   EvalM
   (id_map := fun action => by
     funext state
@@ -870,7 +872,6 @@ theorem preservesFresh_cleanupDestination (origin : Goose.Core.OriginId)
     · apply preservesFresh_bind
       · exact preservesFresh_get
       · intro state
-        simp only
         split
         · exact preservesFresh_lift _ _
         · split
@@ -994,25 +995,53 @@ theorem fresh_activation_filter (state : ExecutionState) (predicate : RuntimeAct
   · intro activation member
     exact fresh.2 activation (List.mem_filter.mp member).1
 
+theorem preservesFresh_landCarrier (origin : Goose.Core.OriginId) (carrier : Carrier) :
+    PreservesFresh (landCarrier origin carrier) := by
+  unfold landCarrier
+  cases carrier with
+  | register value => exact preservesFresh_pure _
+  | completed id =>
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
+      · intro destination
+        cases destination.use with
+        | replacement old => exact preservesFresh_lift _ _
+        | receiver | child parent => exact preservesFresh_pure _
+
 theorem preservesFresh_landCarriers (origin : Goose.Core.OriginId) (carriers : List Carrier) :
     PreservesFresh (landCarriers origin carriers) := by
   unfold landCarriers
   apply preservesFresh_bind
   · apply preservesFresh_listForIn
     intro carrier _
-    cases carrier with
-    | register value => exact preservesFresh_pure _
-    | completed id =>
-        apply preservesFresh_bind
-        · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
-        · intro destination
-          cases destination.use with
-          | replacement old =>
-              apply preservesFresh_bind
-              · exact preservesFresh_lift _ _
-              · intro _; exact preservesFresh_pure _
-          | receiver | child parent => exact preservesFresh_pure _
+    apply preservesFresh_bind
+    · exact preservesFresh_landCarrier origin carrier
+    · intro _; exact preservesFresh_pure _
   · intro _; exact preservesFresh_pure _
+
+theorem preservesFresh_finishChannel (layout : LayoutEnv) (origin : Goose.Core.OriginId)
+    (carrier : Carrier) (result : Ty) : PreservesFresh (finishChannel layout origin carrier result) := by
+  unfold finishChannel
+  cases carrier with
+  | register value => exact preservesFresh_pure _
+  | completed id =>
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
+      · intro destination
+        simp only
+        split <;> split
+        all_goals
+          first
+            | exact preservesFresh_lift _ _
+            | (apply preservesFresh_bind
+               · exact preservesFresh_lift _ _
+               · intro _
+                 apply preservesFresh_bind
+                 · exact stateQuery_preservesFresh _ (stateQuery_receivingLayout layout destination.capability.layout)
+                 · intro receiving
+                   apply preservesFresh_bind
+                   · exact preservesFresh_lift _ _
+                   · intro _; exact preservesFresh_lift _ _)
 
 theorem preservesFresh_finishChannels (layout : LayoutEnv) (types : List Ty)
     (carriers : List Carrier) (origin : Goose.Core.OriginId) :
@@ -1027,29 +1056,9 @@ theorem preservesFresh_finishChannels (layout : LayoutEnv) (types : List Ty)
       · apply preservesFresh_listForIn
         intro item _
         rcases item with ⟨carrier, result⟩
-        cases carrier with
-        | register value => exact preservesFresh_pure _
-        | completed id =>
-            apply preservesFresh_bind
-            · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
-            · intro destination
-              simp only
-              split <;> split
-              all_goals
-                apply preservesFresh_bind
-                · exact preservesFresh_lift _ _
-                · intro _
-                  first
-                    | exact preservesFresh_pure _
-                    | (apply preservesFresh_bind
-                       · exact stateQuery_preservesFresh _ (stateQuery_receivingLayout layout destination.capability.layout)
-                       · intro receiving
-                         apply preservesFresh_bind
-                         · exact preservesFresh_lift _ _
-                         · intro _
-                           apply preservesFresh_bind
-                           · exact preservesFresh_lift _ _
-                           · intro _; exact preservesFresh_pure _)
+        apply preservesFresh_bind
+        · exact preservesFresh_finishChannel layout origin carrier result
+        · intro _; exact preservesFresh_pure _
       · intro _; exact preservesFresh_pure _
 
 theorem preservesFresh_withScope (activation : RuntimeActivation) (scope scopeInst : Nat)
@@ -1094,7 +1103,7 @@ theorem preservesFresh_finishActivation (layout : LayoutEnv) (activation : Runti
       simpa [finishActivation, result, Goose.Proofs.Exit.stepState] using after
   | escape target carriers final =>
       simp only [result, Goose.Proofs.Exit.stepState] at after
-      by_cases caught : target = activation.act
+      by_cases caught : target.activation = activation.act
       · let trimmed : ExecutionState := { final with
           activations := final.activations.filter (fun current => current.act != activation.act) }
         have trimmedFresh : FreshActivations trimmed := fresh_activation_filter final _ after
@@ -1329,5 +1338,947 @@ theorem fresh_activations_map (state : ExecutionState) (change : RuntimeActivati
     obtain ⟨original, originalMember, equal⟩ := List.mem_map.mp member
     rw [← equal, identifier]
     exact earlier original originalMember
+
+theorem stateQuery_getImplementation (config : EvalConfig) (context : Goose.Core.ContextId) :
+    StateQuery (getImplementation config context) := by
+  unfold getImplementation
+  split
+  · split
+    · exact stateQuery_pure _
+    · exact stateQuery_stop _
+  · exact stateQuery_stop _
+
+theorem stateQuery_enclosingActivation (environment : RuntimeActivation) :
+    StateQuery (enclosingActivation environment) := by
+  unfold enclosingActivation
+  apply stateQuery_bind
+  · exact stateQuery_get
+  · intro state
+    split
+    · exact stateQuery_pure _
+    · exact stateQuery_stop _
+
+theorem stateQuery_targetActivation (config : EvalConfig) (target : Nat) :
+    StateQuery (targetActivation config target) := by
+  unfold targetActivation
+  split
+  · apply stateQuery_bind
+    · exact stateQuery_get
+    · intro state
+      split
+      · exact stateQuery_pure _
+      · exact stateQuery_stop _
+  · exact stateQuery_stop _
+
+theorem preservesFresh_escaped (address : ExitAddress) (carriers : List Carrier) :
+    PreservesFresh (escaped (α := α) address carriers) := by
+  intro state fresh
+  exact fresh
+
+theorem preservesFresh_constructLocal (module : Module) (owner : Goose.Core.ActId) (ty : Ty)
+    (origin : Goose.Core.OriginId) (expression : Expr) (construct : Goose.Core.DestinationId → EvalM Unit)
+    (preserved : ∀ destination, PreservesFresh (construct destination)) :
+    PreservesFresh (constructLocal module owner ty origin expression construct) := by
+  unfold constructLocal
+  apply preservesFresh_bind
+  · exact preservesFresh_newDestination _ _ _ _ _ _ _
+  · intro destination
+    apply preservesFresh_bind
+    · exact preserved destination
+    · intro _
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_completedDestination destination)
+      · intro completed
+        apply preservesFresh_bind
+        · exact preservesFresh_publishCarriers _ _
+        · intro _; exact preservesFresh_pure _
+
+theorem preservesFresh_exitChannels (activation : RuntimeActivation) (operands : List Expr)
+    (origin : Goose.Core.OriginId) : PreservesFresh (exitChannels activation operands origin) := by
+  unfold exitChannels
+  split
+  · exact preservesFresh_stop _
+  · apply preservesFresh_listMapM
+    intro item
+    rcases item with ⟨channel, operand⟩
+    cases channel with
+    | register ty => exact preservesFresh_pure _
+    | construct id =>
+        apply preservesFresh_bind
+        · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
+        · intro destination
+          have finish (alias : Bool) : PreservesFresh
+              (if (match destination.progress with | .open 0 => true | _ => false) || alias then
+                pure (Channel.construct id)
+              else do pure (Channel.construct (← liftConstruction origin (openExitReplacement id)))) := by
+            split <;> split
+            all_goals first
+              | exact preservesFresh_pure _
+              | (apply preservesFresh_bind
+                 · exact preservesFresh_lift _ _
+                 · intro _; exact preservesFresh_pure _)
+          cases operand <;> first
+            | (apply preservesFresh_bind
+               · exact preservesFresh_pure _
+               · intro alias; exact finish alias)
+            | (apply preservesFresh_bind
+               · exact stateQuery_preservesFresh _ (stateQuery_rootOf _ _)
+               · intro root
+                 apply preservesFresh_bind
+                 · exact preservesFresh_get
+                 · intro state
+                   split
+                   all_goals
+                     apply preservesFresh_bind
+                     · exact preservesFresh_pure _
+                     · intro alias; exact finish alias)
+
+
+theorem preservesFresh_openElementReceiving (layout : LayoutEnv) (owner : Goose.Core.ActId)
+    (location : Goose.Core.Loc) (stored : StoredValue) (element : Ty) (known : Option Nat)
+    (origin : Goose.Core.OriginId) :
+    PreservesFresh (openElementReceiving layout owner location stored element known origin) := by
+  unfold openElementReceiving
+  apply preservesFresh_bind
+  · exact stateQuery_preservesFresh _ (stateQuery_sampledStored stored)
+  · intro sampled
+    rcases sampled with ⟨bytes, run⟩
+    apply preservesFresh_bind
+    · exact stateQuery_preservesFresh _ (stateQuery_receivingLayout layout element)
+    · intro receiving
+      cases stored.destination with
+      | none => exact preservesFresh_lift _ _
+      | some id =>
+          apply preservesFresh_bind
+          · exact stateQuery_preservesFresh _ (stateQuery_getDestination id)
+          · intro pending
+            cases pending.progress <;> first
+              | exact preservesFresh_lift _ _
+              | exact preservesFresh_stop _
+
+theorem preservesFresh_publishElementReceiving (fuel : Nat) (layout : LayoutEnv)
+    (location : Goose.Core.Loc) (stored : StoredValue) (destination : Goose.Core.DestinationId)
+    (origin : Goose.Core.OriginId) :
+    PreservesFresh (publishElementReceiving fuel layout location stored destination origin) := by
+  cases fuel with
+  | zero => exact preservesFresh_stop _
+  | succ fuel =>
+      unfold publishElementReceiving
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_getDestination destination)
+      · intro pending
+        cases pending.use with
+        | replacement _ => exact preservesFresh_stop _
+        | child parent =>
+            apply preservesFresh_bind
+            · exact preservesFresh_lift _ _
+            · intro _
+              apply preservesFresh_bind
+              · exact stateQuery_preservesFresh _ (stateQuery_storedDestination parent)
+              · intro value; exact preservesFresh_writeLoc _ _ _ _
+        | receiver =>
+            apply preservesFresh_bind
+            · exact preservesFresh_lift _ _
+            · intro _
+              apply preservesFresh_bind
+              · exact stateQuery_preservesFresh _ (stateQuery_getStorage stored.storage)
+              · intro value; exact preservesFresh_writeLoc _ _ _ _
+
+structure EvaluationPreservesFresh (fuel : Nat) (config : EvalConfig) : Prop where
+  value : ∀ environment expression, PreservesFresh (evalValue fuel config environment expression)
+  bound : ∀ environment count defaultValue operand, PreservesFresh (evalBound fuel config environment count defaultValue operand)
+  place : ∀ environment operand, PreservesFresh (evalPlace fuel config environment operand)
+  view : ∀ environment operand, PreservesFresh (evalView fuel config environment operand)
+  produce : ∀ environment channels operand, PreservesFresh (evalProduce fuel config environment channels operand)
+  operands : ∀ environment channels expressions, PreservesFresh (evalOperands fuel config environment channels expressions)
+  build : ∀ environment destination expression, PreservesFresh (buildExpr fuel config environment destination expression)
+  element : ∀ environment destination element expression, PreservesFresh (buildElement fuel config environment destination element expression)
+  arguments : ∀ environment vars params args, PreservesFresh (evalArguments fuel config environment vars params args)
+  call : ∀ environment context args channels origin, PreservesFresh (invokeCall fuel config environment context args channels origin)
+  activation : ∀ environment pre body origin, PreservesFresh (enterActivation fuel config environment pre body origin)
+  activationBody : ∀ environment pre body, PreservesFresh (execActivationBody fuel config environment pre body)
+  resultBlock : ∀ environment channels body, PreservesFresh (execResultBlock fuel config environment channels body)
+  resultBlockWith : ∀ environment pre channels body, PreservesFresh (execResultBlockWith fuel config environment pre channels body)
+  block : ∀ environment pre channels body, PreservesFresh (execBlock fuel config environment pre channels body)
+  statements : ∀ environment statements, PreservesFresh (execStmts fuel config environment statements)
+  statement : ∀ environment statement, PreservesFresh (execStmt fuel config environment statement)
+  printArgument : ∀ environment argument, PreservesFresh (evalPrintArg fuel config environment argument)
+  whileLoop : ∀ environment condition body, PreservesFresh (execWhile fuel config environment condition body)
+  rangeLoop : ∀ environment var ty first last body, PreservesFresh (execRange fuel config environment var ty first last body)
+  eachLoop : ∀ environment var index byRef body view current, PreservesFresh (execEach fuel config environment var index byRef body view current)
+  loop : ∀ environment pre body, PreservesFresh (loopBody fuel config environment pre body)
+  push : ∀ environment owner expression origin, PreservesFresh (pushValue fuel config environment owner expression origin)
+
+theorem evaluationPreservesFresh_zero (config : EvalConfig) : EvaluationPreservesFresh 0 config := by
+  constructor
+  all_goals intros
+  all_goals simp [evalValue, evalBound, evalPlace, evalView, evalProduce, evalOperands,
+    buildExpr, buildElement, evalArguments, invokeCall, enterActivation, execActivationBody,
+    execResultBlock, execResultBlockWith, execBlock, execStmts, execStmt, evalPrintArg,
+    execWhile, execRange, execEach, loopBody, pushValue, timeout, EvalM.stop,
+    PreservesFresh, Goose.Proofs.Exit.stepState, bind]
+
+private theorem evalBound_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (count : Nat) (defaultValue : Int) (operand : Bound) :
+    PreservesFresh (evalBound (fuel + 1) config environment count defaultValue operand) := by
+  cases operand with
+  | omitted => simpa only [evalBound] using preservesFresh_pure defaultValue
+  | expr expression | fromEnd expression =>
+      simp only [evalBound]
+      apply preservesFresh_bind
+      · exact previous.value _ _
+      · intro value
+        apply preservesFresh_bind
+        · exact stateQuery_preservesFresh _ (stateQuery_expectInt value)
+        · intro pair; exact preservesFresh_pure _
+
+private theorem evalPlace_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation) (operand : Place) :
+    PreservesFresh (evalPlace (fuel + 1) config environment operand) := by
+  cases operand with
+  | var localVar =>
+      simp only [evalPlace]
+      apply preservesFresh_bind
+      · exact stateQuery_preservesFresh _ (stateQuery_rootOf _ _)
+      · intro _; exact preservesFresh_pure _
+  | global global => simpa only [evalPlace] using preservesFresh_pure (Goose.Core.Loc.mk (.global global) [])
+  | deref expression =>
+      simp only [evalPlace]
+      apply preservesFresh_bind
+      · exact previous.value _ _
+      · intro value; exact stateQuery_preservesFresh _ (stateQuery_expectRef value)
+  | elem view expression origin =>
+      simp only [evalPlace]
+      apply preservesFresh_bind
+      · exact previous.view _ _
+      · intro view
+        apply preservesFresh_bind
+        · exact previous.value _ _
+        · intro value
+          apply preservesFresh_bind
+          · exact stateQuery_preservesFresh _ (stateQuery_expectInt value)
+          · intro pair
+            rcases pair with ⟨ty, index⟩
+            split
+            · exact preservesFresh_pure _
+            · exact preservesFresh_stop _
+  | field place index =>
+      simp only [evalPlace]
+      apply preservesFresh_bind
+      · exact previous.place _ _
+      · intro _; exact preservesFresh_pure _
+
+private theorem evalView_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation) (operand : View) :
+    PreservesFresh (evalView (fuel + 1) config environment operand) := by
+  cases operand with
+  | of place =>
+      simp only [evalView]
+      apply preservesFresh_bind
+      · exact previous.place _ _
+      · intro location
+        apply preservesFresh_bind
+        · exact stateQuery_preservesFresh _ (stateQuery_readLoc _ _ _)
+        · intro value
+          apply preservesFresh_bind
+          · exact stateQuery_preservesFresh _ (stateQuery_arrayLength value)
+          · intro pair
+            rcases pair with ⟨count, dynamic⟩
+            exact preservesFresh_pure _
+  | val expression =>
+      simp only [evalView]
+      apply preservesFresh_bind
+      · exact previous.value _ _
+      · intro value
+        cases value <;> first
+          | exact preservesFresh_pure _
+          | (apply preservesFresh_bind
+             · exact stateQuery_preservesFresh _ (stateQuery_arrayLength _)
+             · intro pair
+               rcases pair with ⟨count, dynamic⟩
+               apply preservesFresh_bind
+               · exact preservesFresh_freshScope
+               · intro index
+                 apply preservesFresh_bind
+                 · exact preservesFresh_bindRoot _ _
+                 · intro _; exact preservesFresh_pure _)
+
+private theorem evalOperands_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (channels : List Channel) (operands : List Expr) :
+    PreservesFresh (evalOperands (fuel + 1) config environment channels operands) := by
+  cases channels <;> cases operands <;> simp only [evalOperands]
+  all_goals first
+    | exact preservesFresh_pure _
+    | exact preservesFresh_stop _
+    | (apply preservesFresh_bind
+       · exact previous.produce _ _ _
+       · intro carriers
+         apply preservesFresh_bind
+         · exact stateQuery_preservesFresh _ (stateQuery_singleCarrier carriers)
+         · intro carrier
+           apply preservesFresh_bind
+           · exact previous.operands _ _ _
+           · intro _; exact preservesFresh_pure _)
+
+private theorem evalPrintArg_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation) (argument : PrintArg) :
+    PreservesFresh (evalPrintArg (fuel + 1) config environment argument) := by
+  cases argument with
+  | text text => simpa only [evalPrintArg] using preservesFresh_pure text.toUTF8
+  | expr expression =>
+      simp only [evalPrintArg]
+      apply preservesFresh_bind
+      · exact previous.value _ _
+      · intro value; exact stateQuery_preservesFresh _ ((rendering_stateQueries fuel config.layout).1 _ _)
+  | view view =>
+      simp only [evalPrintArg]
+      apply preservesFresh_bind
+      · exact previous.view _ _
+      · intro view; exact stateQuery_preservesFresh _ ((rendering_stateQueries fuel config.layout).2.2.2 _ _)
+
+private theorem evalArguments_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (vars : Array LocalVar) (parameters : List Param) (arguments : List Arg) :
+    PreservesFresh (evalArguments (fuel + 1) config environment vars parameters arguments) := by
+  cases parameters with
+  | nil =>
+      cases arguments <;> simp only [evalArguments]
+      · exact preservesFresh_pure _
+      · exact preservesFresh_stop _
+  | cons parameter parameters =>
+      cases arguments with
+      | nil => simpa only [evalArguments, fault] using preservesFresh_stop (Goose.Core.Stop.fault .arity)
+      | cons argument arguments =>
+          have finish (value : Value) : PreservesFresh (do
+              let values ← evalArguments fuel config environment vars parameters arguments
+              pure (value :: values)) := by
+            apply preservesFresh_bind
+            · exact previous.arguments _ _ _ _
+            · intro _; exact preservesFresh_pure _
+          cases argument with
+          | byVal expression =>
+              simp only [evalArguments]
+              apply preservesFresh_bind
+              · exact previous.value _ _
+              · intro value; exact finish value
+          | byRef mutability place =>
+              simp only [evalArguments]
+              apply preservesFresh_bind
+              · exact previous.place _ _
+              · intro location
+                apply preservesFresh_bind
+                · exact preservesFresh_pure _
+                · intro value; exact finish value
+          | construct expression =>
+              simp only [evalArguments]
+              split
+              · apply preservesFresh_bind
+                · apply preservesFresh_constructLocal
+                  intro destination; exact previous.build _ _ _
+                · intro carrier
+                  apply preservesFresh_bind
+                  · exact stateQuery_preservesFresh _ (stateQuery_carrierValue carrier)
+                  · intro value; exact finish value
+              · apply preservesFresh_bind
+                · exact preservesFresh_stop _
+                · intro value; exact finish value
+
+private theorem execStmts_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (statements : List Stmt) : PreservesFresh (execStmts (fuel + 1) config environment statements) := by
+  cases statements with
+  | nil => simpa only [execStmts] using preservesFresh_pure (Flow.normal .unit)
+  | cons statement statements =>
+      simp only [execStmts]
+      apply preservesFresh_bind
+      · exact previous.statement _ _
+      · intro flow
+        cases flow with
+        | normal value => exact previous.statements _ _
+        | breaking value | continuing => exact preservesFresh_pure _
+
+private theorem execResultBlock_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (channels : List Channel) (body : Block) :
+    PreservesFresh (execResultBlock (fuel + 1) config environment channels body) := by
+  simpa only [execResultBlock] using previous.resultBlockWith environment [] channels body
+
+private theorem execActivationBody_preservesFresh (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value)) (body : Block)
+    (preserved : PreservesFresh (execResultBlockWith fuel config environment pre environment.channels body)) :
+    PreservesFresh (execActivationBody fuel config environment pre body) := by
+  unfold execActivationBody
+  apply preservesFresh_bind
+  · exact preserved
+  · intro result
+    rcases result with ⟨flow, carriers⟩
+    cases flow <;> first | exact preservesFresh_pure _ | exact preservesFresh_stop _
+
+private theorem enterActivation_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (body : Block) (origin : Goose.Core.OriginId) :
+    PreservesFresh (enterActivation (fuel + 1) config environment pre body origin) := by
+  simp only [enterActivation]
+  split
+  · apply preservesFresh_finishActivation
+    exact previous.activationBody _ _ _
+  · exact preservesFresh_stop _
+
+private theorem preservesFresh_mapActivations (change : RuntimeActivation → RuntimeActivation)
+    (identifier : ∀ activation, (change activation).act = activation.act)
+    (action : EvalM α) (preserved : PreservesFresh action) :
+    PreservesFresh (do
+      let state ← EvalM.get
+      EvalM.set { state with activations := state.activations.map change }
+      action) := by
+  intro state fresh
+  have updated := fresh_activations_map state change identifier fresh
+  simpa [EvalM.get, EvalM.set, bind, pure] using preserved _ updated
+
+private theorem preservesFresh_fault (kind : Goose.Core.FaultKind) : PreservesFresh (fault (α := α) kind) :=
+  preservesFresh_stop _
+
+private theorem preservesFresh_timeout : PreservesFresh (timeout (α := α)) := preservesFresh_stop _
+
+private theorem preservesFresh_abortAt (kind : Goose.Core.AbortKind) (origin : Goose.Core.OriginId) :
+    PreservesFresh (abortAt (α := α) kind origin) := preservesFresh_stop _
+
+private theorem preservesFresh_fault_bind (kind : Goose.Core.FaultKind) (next : α → EvalM β) :
+    PreservesFresh (fault kind >>= next) := by
+  intro state fresh
+  exact fresh
+
+private theorem preservesFresh_timeout_bind (next : α → EvalM β) :
+    PreservesFresh (timeout >>= next) := by
+  intro state fresh
+  exact fresh
+
+private theorem preservesFresh_abortAt_bind (kind : Goose.Core.AbortKind) (origin : Goose.Core.OriginId)
+    (next : α → EvalM β) : PreservesFresh (abortAt kind origin >>= next) := by
+  intro state fresh
+  exact fresh
+
+local syntax "fresh_eval" ident : tactic
+macro_rules
+  | `(tactic| fresh_eval $previous:ident) => `(tactic|
+  repeat' first
+    | with_reducible assumption
+    | with_reducible exact preservesFresh_pure _
+    | with_reducible exact preservesFresh_stop _
+    | with_reducible exact preservesFresh_fault _
+    | with_reducible exact preservesFresh_timeout
+    | with_reducible exact preservesFresh_abortAt _ _
+    | with_reducible exact preservesFresh_fault_bind _ _
+    | with_reducible exact preservesFresh_timeout_bind _
+    | with_reducible exact preservesFresh_abortAt_bind _ _ _
+    | with_reducible exact preservesFresh_get
+    | with_reducible exact preservesFresh_lift _ _
+    | with_reducible exact preservesFresh_bindRoot _ _
+    | with_reducible exact preservesFresh_bindStaticRoot _ _
+    | with_reducible exact preservesFresh_reserveRootObject _
+    | with_reducible exact preservesFresh_setObjectOrdinal _ _
+    | with_reducible exact preservesFresh_newDestination _ _ _ _ _ _ _
+    | with_reducible exact preservesFresh_channelsFor _ _ _ _
+    | with_reducible exact preservesFresh_freshAct
+    | with_reducible exact preservesFresh_freshScope
+    | with_reducible exact preservesFresh_returned _ _
+    | with_reducible exact preservesFresh_escaped _ _
+    | with_reducible exact preservesFresh_jump _ _
+    | with_reducible exact preservesFresh_emitStdout _
+    | with_reducible exact preservesFresh_publishCarriers _ _
+    | with_reducible exact preservesFresh_copyValue _ _ _ _ _ _
+    | with_reducible exact preservesFresh_deliverCarriers _ _ _ _ _
+    | with_reducible exact preservesFresh_ownerDestination _ _ _ _ _
+    | with_reducible exact preservesFresh_publishOwner _ _ _ _ _ _
+    | with_reducible exact preservesFresh_openElementReceiving _ _ _ _ _ _ _
+    | with_reducible exact preservesFresh_publishElementReceiving _ _ _ _ _ _
+    | with_reducible exact preservesFresh_repeatElement _ _ _ _ _ _
+    | with_reducible exact preservesFresh_truncateOwner _ _ _ _ _
+    | with_reducible exact preservesFresh_appendFixedValues _ _ _ _ _
+    | with_reducible exact preservesFresh_appendRun _ _ _ _ _
+    | with_reducible exact preservesFresh_writeLoc _ _ _ _
+    | with_reducible exact preservesFresh_landCarriers _ _
+    | with_reducible exact preservesFresh_bindAll _ _ _
+    | with_reducible exact preservesFresh_exitChannels _ _ _
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_rootOf _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_expectInt _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_expectBool _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_expectRef _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_sameIntType _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_comparable _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_readLoc _ _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_arrayLength _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_getDestination _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_getStorage _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_sampledStored _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_readStoredElement _ _ _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_carrierValue _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_singleCarrier _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_completedDestination _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_storedDestination _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_receivingLayout _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_getImplementation _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_enclosingActivation _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_targetActivation _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_currentBreak _ _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_liftExcept _)
+    | with_reducible exact stateQuery_preservesFresh _ (stateQuery_liftLayout _)
+    | with_reducible exact ($previous).value _ _
+    | with_reducible exact ($previous).bound _ _ _ _
+    | with_reducible exact ($previous).place _ _
+    | with_reducible exact ($previous).view _ _
+    | with_reducible exact ($previous).produce _ _ _
+    | with_reducible exact ($previous).operands _ _ _
+    | with_reducible exact ($previous).build _ _ _
+    | with_reducible exact ($previous).element _ _ _ _
+    | with_reducible exact ($previous).arguments _ _ _ _
+    | with_reducible exact ($previous).call _ _ _ _ _
+    | with_reducible exact ($previous).activation _ _ _ _
+    | with_reducible exact ($previous).activationBody _ _ _
+    | with_reducible exact ($previous).resultBlock _ _ _
+    | with_reducible exact ($previous).resultBlockWith _ _ _ _
+    | with_reducible exact ($previous).block _ _ _ _
+    | with_reducible exact ($previous).statements _ _
+    | with_reducible exact ($previous).statement _ _
+    | with_reducible exact ($previous).printArgument _ _
+    | with_reducible exact ($previous).whileLoop _ _ _
+    | with_reducible exact ($previous).rangeLoop _ _ _ _ _ _
+    | with_reducible exact ($previous).eachLoop _ _ _ _ _ _ _
+    | with_reducible exact ($previous).loop _ _ _
+    | with_reducible exact ($previous).push _ _ _ _
+    | with_reducible apply preservesFresh_allocateActivation
+    | with_reducible apply preservesFresh_mapActivations
+    | with_reducible apply preservesFresh_protectDestination
+    | with_reducible apply preservesFresh_withScope
+    | with_reducible apply preservesFresh_finishActivation
+    | with_reducible apply preservesFresh_withBreakTarget
+    | with_reducible apply preservesFresh_constructLocal
+    | with_reducible apply preservesFresh_bind
+    | with_reducible apply preservesFresh_listMapM
+    | with_reducible apply preservesFresh_listForIn
+    | with_reducible apply preservesFresh_arrayForIn
+    | with_reducible apply preservesFresh_rangeForIn
+    | with_reducible split
+    | with_reducible rfl
+    | with_reducible intro)
+
+private theorem evalValue_lit_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (_previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (ty : Goose.Core.IntTy) (value : Int) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.lit ty value)) := by
+  simp only [evalValue]
+  fresh_eval _previous
+
+private theorem evalValue_bool_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (_previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (value : Bool) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.bool value)) := by
+  simp only [evalValue]
+  fresh_eval _previous
+
+private theorem evalValue_read_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (place : Place) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.read place)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_ref_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (mutability : Goose.Core.Mutability) (place : Place) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.ref mutability place)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_slice_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (mutability : Goose.Core.Mutability) (view : View) (lo hi : Bound) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.slice mutability view lo hi origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_len_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (view : View) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.len view)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_un_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (operation : Goose.Core.UnOp) (expression : Expr) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.un operation expression origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_bin_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (operation : Goose.Core.BinOp) (first second : Expr) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.bin operation first second origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_cmp_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (operation : Goose.Core.CmpOp) (first second : Expr) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.cmp operation first second)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_and_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (first second : Expr) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.and first second)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_or_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (first second : Expr) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.or first second)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_not_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (expression : Expr) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.not expression)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_conv_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (kind : Goose.Core.ConvKind) (target : Ty) (expression : Expr) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.conv kind target expression origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_call_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.call context arguments origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_push_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (owner : Place) (expression : Expr) (origin : Option Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.push owner expression origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_pop_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (owner : Place) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.pop owner origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_ifE_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.ifE condition yes no origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_blockE_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (body : Block) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.blockE body origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_arrLit_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (ty : Ty) (operands : List Expr) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.arrLit ty operands origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_fill_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (ty : Ty) (expression : Expr) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.fill ty expression origin)) := by
+  cases ty <;> simp only [evalValue]
+  all_goals fresh_eval previous
+
+private theorem evalValue_structLit_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (ty : Ty) (operands : List Expr) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.structLit ty operands)) := by
+  cases ty <;> simp only [evalValue]
+  all_goals fresh_eval previous
+
+private theorem evalValue_bytes_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.bytes ty bytes origin)) := by
+  cases ty <;> try simp only [evalValue]
+  all_goals fresh_eval previous
+  case slice mutability element =>
+    cases element <;> try simp only [evalValue]
+    all_goals fresh_eval previous
+    case int ty =>
+      cases ty <;> simp only [evalValue]
+      all_goals fresh_eval previous
+
+private theorem evalValue_str_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.str ty arguments origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_copy_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (ty : Ty) (source : Place) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.copy ty source origin)) := by
+  simp only [evalValue]
+  fresh_eval previous
+
+private theorem evalValue_resultLocal_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (_previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.resultLocal localVar origin)) := by
+  simp only [evalValue]
+  fresh_eval _previous
+
+private theorem evalValue_values_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (operands : List Expr) :
+    PreservesFresh (evalValue (fuel + 1) config environment (Expr.values operands)) := by
+  cases operands with
+  | nil => simpa only [evalValue] using preservesFresh_pure Value.unit
+  | cons expression operands =>
+      cases operands <;> simp only [evalValue]
+      all_goals fresh_eval previous
+
+private theorem evalValue_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation) (expression : Expr) :
+    PreservesFresh (evalValue (fuel + 1) config environment expression) := by
+  cases expression with
+  | lit ty value => exact evalValue_lit_preservesFresh_succ fuel config previous environment ty value
+  | bool value => exact evalValue_bool_preservesFresh_succ fuel config previous environment value
+  | read place => exact evalValue_read_preservesFresh_succ fuel config previous environment place
+  | ref mutability place => exact evalValue_ref_preservesFresh_succ fuel config previous environment mutability place
+  | slice mutability view lo hi origin => exact evalValue_slice_preservesFresh_succ fuel config previous environment mutability view lo hi origin
+  | len view => exact evalValue_len_preservesFresh_succ fuel config previous environment view
+  | un operation expression origin => exact evalValue_un_preservesFresh_succ fuel config previous environment operation expression origin
+  | bin operation first second origin => exact evalValue_bin_preservesFresh_succ fuel config previous environment operation first second origin
+  | cmp operation first second => exact evalValue_cmp_preservesFresh_succ fuel config previous environment operation first second
+  | and first second => exact evalValue_and_preservesFresh_succ fuel config previous environment first second
+  | or first second => exact evalValue_or_preservesFresh_succ fuel config previous environment first second
+  | not expression => exact evalValue_not_preservesFresh_succ fuel config previous environment expression
+  | conv kind target expression origin => exact evalValue_conv_preservesFresh_succ fuel config previous environment kind target expression origin
+  | call context arguments origin => exact evalValue_call_preservesFresh_succ fuel config previous environment context arguments origin
+  | push owner expression origin => exact evalValue_push_preservesFresh_succ fuel config previous environment owner expression origin
+  | pop owner origin => exact evalValue_pop_preservesFresh_succ fuel config previous environment owner origin
+  | ifE condition yes no origin => exact evalValue_ifE_preservesFresh_succ fuel config previous environment condition yes no origin
+  | blockE body origin => exact evalValue_blockE_preservesFresh_succ fuel config previous environment body origin
+  | arrLit ty operands origin => exact evalValue_arrLit_preservesFresh_succ fuel config previous environment ty operands origin
+  | fill ty expression origin => exact evalValue_fill_preservesFresh_succ fuel config previous environment ty expression origin
+  | structLit ty operands => exact evalValue_structLit_preservesFresh_succ fuel config previous environment ty operands
+  | bytes ty bytes origin => exact evalValue_bytes_preservesFresh_succ fuel config previous environment ty bytes origin
+  | str ty arguments origin => exact evalValue_str_preservesFresh_succ fuel config previous environment ty arguments origin
+  | copy ty source origin => exact evalValue_copy_preservesFresh_succ fuel config previous environment ty source origin
+  | resultLocal localVar origin => exact evalValue_resultLocal_preservesFresh_succ fuel config previous environment localVar origin
+  | values operands => exact evalValue_values_preservesFresh_succ fuel config previous environment operands
+
+private theorem buildElement_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (destination : Goose.Core.DestinationId) (element : Ty) (expression : Expr) :
+    PreservesFresh (buildElement (fuel + 1) config environment destination element expression) := by
+  simp only [buildElement]
+  fresh_eval previous
+
+private theorem execWhile_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (condition : Expr) (body : Block) :
+    PreservesFresh (execWhile (fuel + 1) config environment condition body) := by
+  simp only [execWhile]
+  fresh_eval previous
+
+private theorem execRange_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (var : Goose.Core.VarId) (ty : Goose.Core.IntTy) (first last : Int) (body : Block) :
+    PreservesFresh (execRange (fuel + 1) config environment var ty first last body) := by
+  simp only [execRange]
+  fresh_eval previous
+
+private theorem execEach_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (var : Goose.Core.VarId) (index : Option Goose.Core.VarId) (byRef : Bool) (body : Block)
+    (view : RuntimeView) (current : Nat) :
+    PreservesFresh (execEach (fuel + 1) config environment var index byRef body view current) := by
+  simp only [execEach]
+  fresh_eval previous
+
+private theorem loopBody_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (body : Block) :
+    PreservesFresh (loopBody (fuel + 1) config environment pre body) := by
+  simp only [loopBody]
+  fresh_eval previous
+
+private theorem pushValue_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (owner : Place) (expression : Expr) (origin : Goose.Core.OriginId) :
+    PreservesFresh (pushValue (fuel + 1) config environment owner expression origin) := by
+  simp only [pushValue]
+  fresh_eval previous
+
+set_option maxHeartbeats 2000000 in
+private theorem evalProduce_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (channels : List Channel) (expression : Expr) :
+    PreservesFresh (evalProduce (fuel + 1) config environment channels expression) := by
+  cases channels with
+  | nil =>
+      cases expression <;> simp only [evalProduce]
+      all_goals fresh_eval previous
+  | cons channel channels =>
+      cases channels with
+      | nil =>
+          cases channel <;> cases expression <;> simp only [evalProduce]
+          all_goals fresh_eval previous
+      | cons second channels =>
+          cases expression <;> simp only [evalProduce]
+          all_goals fresh_eval previous
+
+set_option maxHeartbeats 2000000 in
+private theorem buildExpr_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (destination : Goose.Core.DestinationId) (expression : Expr) :
+    PreservesFresh (buildExpr (fuel + 1) config environment destination expression) := by
+  cases expression <;> try simp only [buildExpr]
+  all_goals fresh_eval previous
+  case fill ty expression origin =>
+    cases ty <;> simp only [buildExpr]
+    all_goals fresh_eval previous
+  case values operands =>
+    cases operands with
+    | nil =>
+        simp only [buildExpr]
+        fresh_eval previous
+    | cons expression operands =>
+        cases operands <;> simp only [buildExpr]
+        all_goals fresh_eval previous
+
+set_option maxHeartbeats 2000000 in
+private theorem execStmt_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation) (statement : Stmt) :
+    PreservesFresh (execStmt (fuel + 1) config environment statement) := by
+  cases statement <;> try simp only [execStmt]
+  all_goals fresh_eval previous
+  case ifS condition yes no origin =>
+    cases no <;> simp only [execStmt]
+    all_goals fresh_eval previous
+
+private theorem execBlock_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (body : Block) :
+    PreservesFresh (execBlock (fuel + 1) config environment pre channels body) := by
+  cases body
+  simp only [execBlock]
+  fresh_eval previous
+
+private theorem execResultBlockWith_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (body : Block) :
+    PreservesFresh (execResultBlockWith (fuel + 1) config environment pre channels body) := by
+  cases body
+  simp only [execResultBlockWith]
+  fresh_eval previous
+
+private theorem invokeCall_preservesFresh_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesFresh fuel config) (environment : RuntimeActivation)
+    (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
+    (origin : Goose.Core.OriginId) :
+    PreservesFresh (invokeCall (fuel + 1) config environment context arguments channels origin) := by
+  simp only [invokeCall]
+  apply preservesFresh_bind
+  · exact stateQuery_preservesFresh _ (stateQuery_getImplementation config context)
+  · intro implementation
+    rcases implementation with ⟨id, implementation⟩
+    split
+    · fresh_eval previous
+    · apply preservesFresh_bind
+      · fresh_eval previous
+      · intro callableChannels
+        apply preservesFresh_bind
+        · exact previous.arguments _ _ _ _
+        · intro values
+          apply preservesFresh_bind
+          · exact preservesFresh_get
+          · intro state
+            split
+            · fresh_eval previous
+            · apply preservesFresh_allocateActivation
+                (make := fun act => ⟨id, act, implementation.vars, [], callableChannels⟩)
+                (action := fun activation => do
+                  let carriers ← enterActivation fuel config activation
+                    ((implementation.params.toList.zip values).map fun item => (item.1.var, item.2))
+                    implementation.body origin
+                  deliverCarriers fuel config.layout channels carriers origin)
+              · intro act; rfl
+              · intro activation
+                fresh_eval previous
+
+theorem evaluation_preservesFresh (fuel : Nat) (config : EvalConfig) :
+    EvaluationPreservesFresh fuel config := by
+  induction fuel with
+  | zero => exact evaluationPreservesFresh_zero config
+  | succ fuel previous =>
+      refine {
+        value := evalValue_preservesFresh_succ fuel config previous
+        bound := evalBound_preservesFresh_succ fuel config previous
+        place := evalPlace_preservesFresh_succ fuel config previous
+        view := evalView_preservesFresh_succ fuel config previous
+        produce := evalProduce_preservesFresh_succ fuel config previous
+        operands := evalOperands_preservesFresh_succ fuel config previous
+        build := buildExpr_preservesFresh_succ fuel config previous
+        element := buildElement_preservesFresh_succ fuel config previous
+        arguments := evalArguments_preservesFresh_succ fuel config previous
+        call := invokeCall_preservesFresh_succ fuel config previous
+        activation := enterActivation_preservesFresh_succ fuel config previous
+        activationBody := ?_
+        resultBlock := execResultBlock_preservesFresh_succ fuel config previous
+        resultBlockWith := execResultBlockWith_preservesFresh_succ fuel config previous
+        block := execBlock_preservesFresh_succ fuel config previous
+        statements := execStmts_preservesFresh_succ fuel config previous
+        statement := execStmt_preservesFresh_succ fuel config previous
+        printArgument := evalPrintArg_preservesFresh_succ fuel config previous
+        whileLoop := execWhile_preservesFresh_succ fuel config previous
+        rangeLoop := execRange_preservesFresh_succ fuel config previous
+        eachLoop := execEach_preservesFresh_succ fuel config previous
+        loop := loopBody_preservesFresh_succ fuel config previous
+        push := pushValue_preservesFresh_succ fuel config previous }
+      intro environment pre body
+      apply execActivationBody_preservesFresh
+      exact execResultBlockWith_preservesFresh_succ fuel config previous environment pre environment.channels body
+
+theorem initGlobals_preservesFresh (fuel : Nat) (config : EvalConfig) (globals : List Goose.Core.GlobalId) :
+    PreservesFresh (initGlobals fuel config globals) := by
+  have previous := evaluation_preservesFresh fuel config
+  induction globals with
+  | nil => simpa only [initGlobals] using preservesFresh_pure ()
+  | cons global globals preserved =>
+      simp only [initGlobals]
+      fresh_eval previous
+
+theorem runModule_preservesFresh (fuel : Nat) (config : EvalConfig) :
+    PreservesFresh (runModule fuel config) := by
+  have previous := evaluation_preservesFresh fuel config
+  unfold runModule
+  apply preservesFresh_bind
+  · exact initGlobals_preservesFresh _ _ _
+  · intro _
+    fresh_eval previous
+
+theorem runModule_freshActivations (fuel : Nat) (config : EvalConfig) :
+    FreshActivations (Goose.Proofs.Exit.stepState (runModule fuel config .initial)) :=
+  runModule_preservesFresh fuel config .initial freshActivations_initial
 
 end Goose.Proofs.ExitExecution

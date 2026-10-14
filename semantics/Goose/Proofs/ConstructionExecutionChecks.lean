@@ -22,7 +22,7 @@ theorem rawBytes_validated : accepts rawBytes = true := by decide +kernel
 theorem rawBytes_execution :
     returnedObservation (eval 100 .release rawBytes) =
       some ([65, 0, 255, 10], [.begin 0, .write 0 0, .write 0 1, .write 0 2, .publish 0]) := by
-  decide +kernel
+  cbv
 
 def terminalPrefix : Module := { rawBytes with
   impls := #[{ (rawBytes.impls[0]) with body := (.mk 0
@@ -40,7 +40,7 @@ theorem terminalPrefix_validated : accepts terminalPrefix = true := by decide +k
 theorem terminalPrefix_execution :
     abortedObservation (eval 100 .release terminalPrefix) =
       some ([98, 101, 102, 111, 114, 101, 10], [.begin 0, .write 0 0, .publish 0]) := by
-  decide +kernel
+  cbv
 
 def terminalProgram (message : String) (remaining : List Stmt) : Module :=
   ⟨#["terminal-execution.goose"], #[], #[],
