@@ -45,6 +45,7 @@ structure StructField where
 structure StructDef where
   byteSize : Nat
   fields : Array StructField
+  displayName : String
   deriving DecidableEq, Repr
 
 mutual

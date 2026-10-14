@@ -63,4 +63,13 @@ private def validModule : Module :=
 #guard !(Ty.growshrink (.varr (.int .u8))).constructible
 #guard !(Ty.limited (.varr (.int .u8)) 4).constructible
 
+
+private def namedStructModule : Module := { validModule with
+  types := validModule.types.push (.structT 0 (.cons (.int .u8) .nil))
+  structs := #[⟨1,#[⟨.int .u8,.immutable,.mutable,0⟩],"箱"⟩] }
+#guard roundTrips namedStructModule
+#guard rejects ((Writer.module namedStructModule).replace ",\"箱\"]" "]")
+#guard rejects ((Writer.module namedStructModule).replace "\"箱\"" "\"\"")
+#guard rejects ((Writer.module namedStructModule).replace ",\"箱\"]" ",\"箱\",\"extra\"]")
+
 end Goose.Construct.WireChecks
