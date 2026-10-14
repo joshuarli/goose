@@ -63,11 +63,66 @@ theorem recursive_live_nearest_target :
       (Goose.Proofs.Exit.stepState (runModule 28 ⟨.release, recursiveDestinations⟩ .initial))) = some 2 := by
   cbv
 
+def overlappingTargets : Module :=
+  ⟨#["overlapping-targets.goose"], #[.int .i64], #[],
+    #[⟨"entry", #[], #[], #[⟨"result", .int .i64, .immutable, 0, 0⟩],
+        .mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.expr (.read (.var 0))] 0] none,
+        .known ⟨[], [], [], [], [], [], [], [], false, true⟩⟩,
+      ⟨"member", #[], #[⟨.int .i64, .register, none⟩], #[],
+        .mk 0 [.expr (.call 2 [] 0) 0] (some (.lit .i64 999)),
+        .known ⟨[], [], [], [], [], [], [], [], false, false⟩⟩,
+      ⟨"escape", #[], #[], #[], .mk 0 [.returnFrom 1 [.lit .i64 7] 0] none,
+        .known ⟨[], [], [], [], [], [], [1], [1], false, false⟩⟩,
+      ⟨"other", #[], #[⟨.int .i64, .register, none⟩], #[],
+        .mk 0 [] (some (.lit .i64 9)),
+        .known ⟨[], [], [], [], [], [], [], [], false, false⟩⟩],
+    #[⟨0, "entry", [], [], []⟩, ⟨1, "member", [], [[]], []⟩,
+      ⟨2, "escape", [], [], []⟩, ⟨3, "other", [], [[]], []⟩], 0,
+    #[⟨0, 17, "let"⟩], #[], #[⟨1, []⟩, ⟨1, [3]⟩]⟩
+
+theorem overlappingTargets_validated : accepts overlappingTargets = true := by cbv
+
+theorem overlappingTargets_execution :
+    returnedObservation (eval 100 .release overlappingTargets) = some ([55, 10], []) := by cbv
+
+def overlapReachable : ExecutionState :=
+  Goose.Proofs.Exit.stepState (runModule 15 ⟨.release, overlappingTargets⟩ .initial)
+
+def overlapExit : ExecutionStep Flow :=
+  match overlapReachable.activations.head? with
+  | some source => execStmt 100 ⟨.release, overlappingTargets⟩ source
+      (.returnFrom 1 [.lit .i64 7] 0) overlapReachable
+  | none => .stop (.fault .unbound) overlapReachable
+
+def exitObservation : ExecutionStep α → Option (ExitAddress × List Carrier)
+  | .escape address carriers _ => some (address, carriers)
+  | _ => none
+
+theorem overlappingTargets_live_stack :
+    timeoutActivations (runModule 15 ⟨.release, overlappingTargets⟩ .initial) =
+      some ([2, 1, 0], 3) := by cbv
+
+theorem overlappingTargets_reachable_address :
+    exitObservation overlapExit = some (⟨1, .nonlocal 1⟩, [.register (.int .i64 7)]) := by cbv
+
+def inactiveTarget : Module := { overlappingTargets with
+  impls := overlappingTargets.impls.mapIdx fun index implementation =>
+    if index == 0 then { implementation with vars := #[], body := .mk 0 [.expr (.call 2 [] 0) 0] none }
+    else implementation }
+
+theorem inactiveTarget_rejected :
+    validate inactiveTarget = .error ⟨.summary, "V-SUMMARY: missing required nonlocal target"⟩ := by cbv
+
 #print axioms recursiveDestinations_validated
 #print axioms recursiveDestinations_execution
 #print axioms recursive_live_activations
 #print axioms recursive_live_activations_fresh
 #print axioms recursive_live_nearest_target
+#print axioms overlappingTargets_validated
+#print axioms overlappingTargets_execution
+#print axioms overlappingTargets_live_stack
+#print axioms overlappingTargets_reachable_address
+#print axioms inactiveTarget_rejected
 #print axioms Goose.Proofs.ExitExecution.preservesFresh_copyValue
 #print axioms Goose.Proofs.ExitExecution.preservesFresh_deliverCarriers
 #print axioms Goose.Proofs.ExitExecution.preservesFresh_truncateOwner
