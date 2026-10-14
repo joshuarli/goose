@@ -219,4 +219,29 @@ private def protectedCleanup : ConstructionM Unit := do
   [.begin 0, .begin 1, .write 1 0, .begin 2, .write 2 0,
    .abandon 1, .abandon 0, .relocate 2 .exitValue, .publish 2])
 
+
+private def extension : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let parent ← openDestination storage capability .packed (some 1)
+  writeElement parent (bytes [10])
+  finishDestination parent
+  let child ← openExtension parent .elementRun (some 2)
+  recordCopy (.storage 0 []) child
+  writeElement child (bytes [20])
+  writeElement child (bytes [30])
+  finishDestination child
+  attachExtension parent child
+  truncateConstructionStorage storage 0 6 2 (some parent) false
+  removeConstructionHeader parent
+  publishOperation [parent]
+  appendStdout (bytes [0,255])
+
+#guard observe extension == some ([10,20], 2,
+  [.begin 0, .write 0 0, .begin 1, .copy (.storage 0 []) 1,
+   .write 1 0, .write 1 1, .publish 1, .relocate 0 .headerRemoval, .publish 0])
+
+#guard match extension ConstructionState.initial with
+  | .ok _ state => state.stdout.data.toList.map UInt8.toNat == [0,255]
+  | _ => false
+
 end Goose.Construct.DestinationChecks
