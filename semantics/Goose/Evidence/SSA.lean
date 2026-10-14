@@ -165,8 +165,8 @@ theorem definitionEntries_ids_func (fn : Func) :
   simp only [Func.definitionEntries, List.map_flatMap]
   exact congrArg (List.flatMap · fn.blocks.toList) (funext definitionEntries_ids)
 
-theorem entry_eq_of_nodup_ids {entries : List (ValueId × Option Op)}
-    (h : (entries.map Prod.fst).Nodup) {a b : ValueId × Option Op}
+theorem entry_eq_of_nodup_ids {β : Type} {entries : List (ValueId × β)}
+    (h : (entries.map Prod.fst).Nodup) {a b : ValueId × β}
     (ha : a ∈ entries) (hb : b ∈ entries) (he : a.1 = b.1) : a = b := by
   induction entries with
   | nil => simp at ha
@@ -223,5 +223,94 @@ theorem validated_instAt_defOp_eq {m : Module} {fn : Func} {value : ValueId}
   have equal := entry_eq_of_nodup_ids nodup (definitionEntry_mem ho hs)
     (definitionEntry_mem hb hi) rfl
   exact Option.some.inj (congrArg Prod.snd equal)
+
+def Block.definitionLocations (block : Block) (id : Nat) : List (ValueId × (Nat × Int)) :=
+  block.params.map (fun param => (param.1, (id, -1))) ++
+    block.insts.zipIdx.filterMap fun (inst, index) => match inst with
+      | .def result _ => some (result, (id, (index : Int)))
+      | _ => none
+
+def Func.definitionLocations (fn : Func) : List (ValueId × (Nat × Int)) :=
+  fn.blocks.toList.zipIdx.flatMap fun (block, id) => block.definitionLocations id
+
+theorem definitionLocations_ids (block : Block) (id : Nat) :
+    (block.definitionLocations id).map Prod.fst = block.defs := by
+  simp only [Block.definitionLocations, Block.defs, List.map_append, List.map_map]
+  congr 1
+  have scan : ∀ (insts : List Inst) (start : Nat),
+      (insts.zipIdx start |>.filterMap fun (inst, index) => match inst with
+        | .def result _ => some (result, (id, (index : Int)))
+        | _ => none).map Prod.fst = insts.filterMap (fun inst => match inst with
+          | .def result _ => some result
+          | _ => none) := by
+    intro insts
+    induction insts with
+    | nil => intro start; rfl
+    | cons inst rest ih =>
+      intro start
+      cases inst <;> simp [List.zipIdx_cons, List.filterMap_cons, ih]
+  exact scan block.insts 0
+
+theorem definitionLocations_ids_func (fn : Func) :
+    fn.definitionLocations.map Prod.fst = fn.blocks.toList.flatMap Block.defs := by
+  simp only [Func.definitionLocations, List.map_flatMap]
+  have rows : (fun pair : Block × Nat => (pair.1.definitionLocations pair.2).map Prod.fst) =
+      (fun pair : Block × Nat => pair.1.defs) := by
+    funext pair
+    exact definitionLocations_ids pair.1 pair.2
+  rw [rows]
+  have hmap := congrArg (List.flatMap Block.defs) (List.zipIdx_map_fst 0 fn.blocks.toList)
+  simpa only [List.flatMap_map] using hmap
+
+theorem definitionLocation_mem {fn : Func} {pt : Pt} {value : ValueId} {op : Op}
+    (instruction : instAt fn pt = some (.def value op)) :
+    (value, (pt.1, (pt.2 : Int))) ∈ fn.definitionLocations := by
+  unfold instAt at instruction
+  cases found : fn.blocks[pt.1]? with
+  | none => simp [found] at instruction
+  | some block =>
+    simp only [found, Option.bind_some] at instruction
+    apply List.mem_flatMap.mpr
+    refine ⟨(block, pt.1), ?_, ?_⟩
+    · apply List.mem_of_getElem? (i := pt.1)
+      simp [List.getElem?_zipIdx, found]
+    · simp only [Block.definitionLocations, List.mem_append]
+      apply Or.inr
+      apply List.mem_filterMap.mpr
+      refine ⟨(.def value op, pt.2), ?_, rfl⟩
+      apply List.mem_of_getElem? (i := pt.2)
+      simp [List.getElem?_zipIdx, instruction]
+
+theorem parameterLocation_mem {fn : Func} {block : Block} {id value : ValueId}
+    (found : fn.blocks[id]? = some block) (parameter : value ∈ block.params.map Prod.fst) :
+    (value, (id, (-1 : Int))) ∈ fn.definitionLocations := by
+  obtain ⟨param, hparam, hvalue⟩ := List.mem_map.mp parameter
+  apply List.mem_flatMap.mpr
+  refine ⟨(block, id), ?_, ?_⟩
+  · apply List.mem_of_getElem? (i := id)
+    simp [List.getElem?_zipIdx, found]
+  · simp only [Block.definitionLocations, List.mem_append]
+    exact Or.inl (List.mem_map.mpr ⟨param, hparam, by simp [hvalue]⟩)
+
+theorem validated_definition_locations_unique {m : Module} {fn : Func}
+    {value : ValueId} {left right : Nat × Int}
+    (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (leftMem : (value, left) ∈ fn.definitionLocations)
+    (rightMem : (value, right) ∈ fn.definitionLocations) : left = right := by
+  have nodup := validated_definitions_nodup valid member
+  rw [← definitionLocations_ids_func] at nodup
+  exact congrArg Prod.snd (entry_eq_of_nodup_ids nodup leftMem rightMem rfl)
+
+theorem validated_instAt_def_unique {m : Module} {fn : Func} {value : ValueId}
+    {op otherOp : Op} {left right : Pt}
+    (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (leftInst : instAt fn left = some (.def value op))
+    (rightInst : instAt fn right = some (.def value otherOp)) : left = right := by
+  have equal := validated_definition_locations_unique valid member
+    (definitionLocation_mem leftInst) (definitionLocation_mem rightInst)
+  apply Prod.ext
+  · exact congrArg (fun row : Nat × Int => row.1) equal
+  · have equalIndex := congrArg (fun row : Nat × Int => row.2) equal
+    omega
 
 end Goose.GIR
