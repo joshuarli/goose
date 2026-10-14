@@ -58,7 +58,7 @@ def nestedModule : Core.Module :=
     { name := "main", params := #[], results := #[], vars := #[],
       body := nestedEntryBody, summary := .unknown }
   { files := #["control.goose"], types := #[], globals := #[], impls := #[main],
-    contexts := #[⟨0, "main", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "control"⟩] }
+    contexts := #[⟨0, "main", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "if"⟩] }
 
 #guard match Core.validate nestedModule, GIR.validate (lower nestedModule) with
   | .ok _, .ok _ => true
@@ -95,7 +95,7 @@ def returningLoopModule : Core.Module :=
     { name := "main", params := #[], results := #[], vars := #[],
       body := returningLoopBody, summary := .unknown }
   { files := #["loop-return.goose"], types := #[], globals := #[], impls := #[main],
-    contexts := #[⟨0, "main", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "loop"⟩] }
+    contexts := #[⟨0, "main", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "while"⟩] }
 
 #guard match Core.validate returningLoopModule, GIR.validate (lower returningLoopModule) with
   | .ok _, .ok _ => true

@@ -103,7 +103,7 @@ def rangeModule : Core.Module :=
   { files := #["range.goose"], types := #[.int .i64], globals := #[],
     impls := #[impl],
     contexts := #[⟨0, "main", [], [], []⟩], entry := 0,
-    origins := #[⟨0, 1, "range"⟩] }
+    origins := #[⟨0, 1, "for"⟩] }
 
 def rangeVars : Array LocalVar := #[⟨"i", .int .i64, .immutable, 1, 0⟩]
 
