@@ -442,6 +442,22 @@ theorem getView_state {fr : Frame} {id : ValueId} {before after : St} {view : Vi
   cases cell <;> simp [fault, M.stop, pure_apply] at read
   exact read.2.symm
 
+theorem checkCapacityAtOrg_state {location : Loc} {count : Nat} {org : Option OriginId}
+    {before after : St} {result : Unit}
+    (checked : checkCapacityAtOrg location count org before = .ok result after) : after = before := by
+  unfold checkCapacityAtOrg at checked
+  obtain ⟨value, middle, read, checked⟩ := m_bind_ok checked
+  have sameState := readLoc_state read
+  subst middle
+  cases value <;> simp only at checked
+  all_goals first
+    | (simp [fault, M.stop] at checked; done)
+    | (simp only [pure_apply, Res.ok.injEq] at checked; exact checked.2.symm)
+    | (split at checked
+       · cases org <;> simp [abortAtOrg, abortAt, fault, M.stop] at checked
+       · simp only [pure_apply, Res.ok.injEq] at checked
+         exact checked.2.symm)
+
 theorem execPure_viewLen_typed {roots : RootDeclarations} {cx : FnCtx} {fr : Frame}
     {id : ValueId} {before after : St} {cell : RVal}
     (evaluated : execPure cx fr (.viewLen id) before = .ok cell after) :
@@ -631,6 +647,63 @@ theorem execPure_structLit_typed {roots : RootDeclarations} {types : Array (Opti
   simp only [pure_apply, Res.ok.injEq] at evaluated
   obtain ⟨rfl, rfl⟩ := evaluated
   exact ⟨⟨rfl, by simpa using fieldsTyped⟩, rfl⟩
+
+theorem pushAppend_typed {cfg : GCfg} {activations : ActivationTypes}
+    {location : Loc} {value : Val} {owner element : Ty} {before after : St} {cell : RVal}
+    (stateTyped : RuntimeStateTy cfg activations before)
+    (target : DeclaredLocation (runtimeDeclarations cfg activations) location owner)
+    (ownerType : owner.ownerElem? = some element) (elementFlat : element.flat = true)
+    (valueTyped : WeakValueTy (runtimeDeclarations cfg activations) value element)
+    (evaluated : (appendLoc location #[value] >>= fun index =>
+      pure (RVal.val (.ref { location with path := location.path ++ [index] }))) before = .ok cell after) :
+    WeakCellTy (runtimeDeclarations cfg activations) cell (.data (.ref .mutable element)) ∧
+      RuntimeStateTy cfg activations after := by
+  obtain ⟨index, middle, appended, evaluated⟩ := m_bind_ok evaluated
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  unfold appendLoc at appended
+  cases changed : before.store.append location #[value] with
+  | error fault => simp [changed] at appended
+  | ok result =>
+    obtain ⟨store, start⟩ := result
+    simp only [changed, Res.ok.injEq] at appended
+    obtain ⟨rfl, sameState⟩ := appended
+    subst middle
+    refine ⟨⟨_, rfl, target.ownerElement ownerType start⟩,
+      stateTyped.1, stateTyped.2.appendOwner target ownerType elementFlat ?_ changed⟩
+    intro index selected present
+    simp only [Array.getElem?_singleton] at present
+    split at present
+    · cases present
+      exact valueTyped
+    · contradiction
+
+theorem execPure_push_typed {cfg : GCfg} {activations : ActivationTypes} {fn : Func}
+    {fr : Frame} {targetId valueId : ValueId} {permission : Mutability} {owner element : Ty}
+    {org : Option OriginId} {before after : St} {cell : RVal}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission owner))))
+    (valueMetadata : (fn.valueTypes cfg.mod)[valueId]? = some (some (.data element)))
+    (ownerType : owner.ownerElem? = some element) (elementFlat : element.flat = true)
+    (evaluated : execPure ⟨cfg, fn⟩ fr (.push targetId valueId org) before = .ok cell after) :
+    WeakCellTy (runtimeDeclarations cfg activations) cell (.data (.ref .mutable element)) ∧
+      RuntimeStateTy cfg activations after := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨targetTyped, sameState⟩ := frameTyped.2.2.getVal targetMetadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := targetTyped
+  simp only [expectRef, pure_bind] at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal valueMetadata read
+  subst middle
+  cases org with
+  | none => exact pushAppend_typed frameTyped.1 target ownerType elementFlat valueTyped evaluated
+  | some origin =>
+    obtain ⟨result, middle, checked, evaluated⟩ := m_bind_ok evaluated
+    have sameState := checkCapacityAtOrg_state checked
+    subst middle
+    exact pushAppend_typed frameTyped.1 target ownerType elementFlat valueTyped evaluated
 
 theorem releaseSlots_typed {roots : RootDeclarations} {fn : Func} {act : ActId}
     {scope : ScopeId} {instanceId : ScopeInst} (count : Nat) {store : Store}
