@@ -1298,4 +1298,36 @@ theorem preservesFresh_appendRun (fuel : Nat) (layout : LayoutEnv) (location : G
                             · intro _; exact preservesFresh_pure _
                         · intro _; exact finish
 
+theorem preservesFresh_allocateActivation (make : Goose.Core.ActId → RuntimeActivation)
+    (identifier : ∀ act, (make act).act = act) (action : RuntimeActivation → EvalM α)
+    (preserved : ∀ activation, PreservesFresh (action activation)) :
+    PreservesFresh (do
+      let act ← freshAct
+      let activation := make act
+      let state ← EvalM.get
+      EvalM.set { state with activations := activation :: state.activations }
+      action activation) := by
+  intro state fresh
+  have pushed := fresh_activation_push state (make state.nextAct) fresh (identifier _)
+  have after := preserved (make state.nextAct)
+    { state with nextAct := state.nextAct + 1, activations := make state.nextAct :: state.activations } pushed
+  simpa [freshAct, EvalM.get, EvalM.set, bind, pure, Goose.Proofs.Exit.stepState] using after
+
+theorem fresh_activations_map (state : ExecutionState) (change : RuntimeActivation → RuntimeActivation)
+    (identifier : ∀ activation, (change activation).act = activation.act)
+    (fresh : FreshActivations state) :
+    FreshActivations { state with activations := state.activations.map change } := by
+  obtain ⟨distinct, earlier⟩ := fresh
+  have same : (state.activations.map change).map (·.act) = state.activations.map (·.act) := by
+    simp only [List.map_map]
+    apply List.map_congr_left
+    intro activation _
+    exact identifier activation
+  constructor
+  · simpa only [same] using distinct
+  · intro activation member
+    obtain ⟨original, originalMember, equal⟩ := List.mem_map.mp member
+    rw [← equal, identifier]
+    exact earlier original originalMember
+
 end Goose.Proofs.ExitExecution
