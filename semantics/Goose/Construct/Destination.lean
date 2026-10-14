@@ -49,6 +49,8 @@ structure PendingDestination where
   use : DestinationUse
   progress : DestinationProgress
   writeEnd : Nat
+  rollbackEnd : Nat
+  knownCount : Option Nat
   deriving Repr
 
 def PendingDestination.storage (destination : PendingDestination) : StorageId :=
@@ -73,6 +75,9 @@ inductive ConstructionFault
 inductive ConstructionResult (α : Type)
   | ok (value : α) (state : ConstructionState)
   | fault (kind : ConstructionFault) (state : ConstructionState)
+
+def ConstructionResult.finalState : ConstructionResult α → ConstructionState
+  | .ok _ state | .fault _ state => state
 
 abbrev ConstructionM (α : Type) := ConstructionState → ConstructionResult α
 
@@ -177,7 +182,12 @@ private def active (destination : PendingDestination) : Bool :=
   | .open _ | .suspended _ _ | .built _ | .exiting _ _ => true
   | .published _ | .attached _ | .abandoned | .cancelled => false
 
-def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
+private inductive StagingPolicy
+  | automatic
+  | explicit
+  deriving DecidableEq
+
+private def openDestinationWith (policy : StagingPolicy) (storageId : StorageId) (capability : Core.Destination Ty)
     (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId := do
   let storage ← lookupStorage storageId
   let state ← ConstructionM.get
@@ -187,9 +197,9 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
     if !available layout storage count then ConstructionM.fail .capacity
   else
     pure ()
-  let backing ← match layout, knownCount with
-    | .limited _ _, none => do pure (.staged storageId (← reserveStorage))
-    | _, _ => pure (DestinationBacking.direct storageId)
+  let backing ← match policy, layout, knownCount with
+    | .automatic, .limited _ _, none => do pure (.staged storageId (← reserveStorage))
+    | _, _, _ => pure (DestinationBacking.direct storageId)
   let state ← ConstructionM.get
   let storage ← lookupStorage backing.writeStorage
   let id := state.destinations.size
@@ -199,7 +209,8 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
   if start > storage.bytes.size then ConstructionM.fail .storage
   let capability := { capability with id := id, start := start }
   let writeEnd := start + if hasPrefix layout capability.request then 4 else 0
-  let destination : PendingDestination := ⟨capability, backing, layout, .receiver, .open 0, writeEnd⟩
+  let destination : PendingDestination := ⟨capability, backing, layout, .receiver, .open 0, writeEnd,
+    (match layout with | .limited _ _ => storage.bytes.size | _ => start), knownCount⟩
   ConstructionM.set { state with destinations := state.destinations.push destination }
   if hasPrefix layout capability.request then
     replaceStorage backing.writeStorage { storage with bytes := storage.bytes ++ lengthPrefix }
@@ -208,6 +219,27 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
   | .staged _ _ => emit (.stage id)
   | .direct _ => pure ()
   pure id
+
+def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
+    (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId :=
+  openDestinationWith .automatic storageId capability layout knownCount
+
+def openDestinationDirect (storageId : StorageId) (capability : Core.Destination Ty)
+    (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId :=
+  openDestinationWith .explicit storageId capability layout knownCount
+
+def stageDestination (id : DestinationId) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  match destination.progress, destination.layout, destination.backing, destination.knownCount, destination.use with
+  | .open 0, .limited _ _, .direct receiverId, none, .receiver =>
+      let stageId ← reserveStorage
+      replaceDestination id { destination with
+        backing := .staged receiverId stageId
+        capability := { destination.capability with start := 0 }
+        writeEnd := 0
+        rollbackEnd := 0 }
+      emit (.stage id)
+  | _, _, _, _, _ => ConstructionM.fail .protocol
 
 def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit := do
   let destination ← writableDestination id
@@ -246,9 +278,11 @@ def openChild (parentId : DestinationId) (logicalType : Ty) (layout : ReceivingL
       let state ← ConstructionM.get
       let id := state.destinations.size
       let capability := { parent.capability with
-        id := id, logicalType := logicalType, request := .value, start := parent.writeEnd }
+        id := id, layout := logicalType, logicalType := logicalType,
+        request := .value, start := parent.writeEnd }
       let child : PendingDestination := ⟨capability, .direct parent.storage, layout, .child parentId, .open 0,
-        capability.start + if hasPrefix layout .value then 4 else 0⟩
+        capability.start + (if hasPrefix layout .value then 4 else 0),
+        (match parent.layout with | .limited _ _ => storage.bytes.size | _ => capability.start), none⟩
       ConstructionM.set { state with destinations := state.destinations.push child }
       replaceDestination parentId { parent with progress := .suspended count id }
       if hasPrefix layout .value then
@@ -290,17 +324,53 @@ def attachChild (parentId childId : DestinationId) : ConstructionM Unit := do
       emit (.write parentId count)
   | _, _, _ => ConstructionM.fail .protocol
 
-private def checkPublication (id : DestinationId) : ConstructionM Unit := do
-  let destination ← lookupDestination id
+private def publicationCheck (state : ConstructionState) (id : DestinationId) : Except ConstructionFault Unit := do
+  let some destination := state.destinations[id]? | throw .destination
   match destination.progress, destination.use with
   | .built count, .receiver =>
-      let receiver ← lookupStorage destination.backing.receiverStorage
-      requireFit destination receiver count
-  | _, _ => ConstructionM.fail .protocol
-where
-  requireFit (destination : PendingDestination) (receiver : ReceivingStorage) (count : Nat) : ConstructionM Unit := do
-    if !available destination.layout receiver count then ConstructionM.fail .capacity
-    let _ ← lookupStorage destination.storage
+      let some receiver := state.storage[destination.backing.receiverStorage]? | throw .storage
+      if !available destination.layout receiver count then throw .capacity
+      if (state.storage[destination.storage]?).isNone then throw .storage
+  | _, _ => throw .protocol
+
+def preflightPublication (state : ConstructionState) (ids : List DestinationId) :
+    Except ConstructionFault Unit := do
+  if ids.eraseDups != ids then throw .ownership
+  for id in ids do publicationCheck state id
+
+def fitStagedDestination (id : DestinationId) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  let count ← match destination.progress with
+    | .built count => pure count
+    | _ => ConstructionM.fail .protocol
+  let (receiverId, stageId) ← match destination.backing with
+    | .staged receiverId stageId => pure (receiverId,stageId)
+    | _ => ConstructionM.fail .protocol
+  let receiver ← lookupStorage receiverId
+  let stage ← lookupStorage stageId
+  let start ← match destination.use with
+    | .receiver => do
+        if !available destination.layout receiver count then ConstructionM.fail .capacity
+        pure (match destination.layout with
+          | .limited _ slotBytes => receiver.publishedCount * slotBytes
+          | _ => receiver.bytes.size)
+    | .child parentId => do
+        let parent ← writableDestination parentId
+        match parent.progress, parent.layout with
+        | .suspended parentCount expected, .limited capacity _ =>
+            if expected != id || receiverId != parent.storage then ConstructionM.fail .ownership
+            if parentCount + count > capacity then ConstructionM.fail .capacity
+            pure parent.writeEnd
+        | _, _ => ConstructionM.fail .protocol
+    | .replacement _ => ConstructionM.fail .protocol
+  replaceStorage receiverId { receiver with bytes := overwriteBytes receiver.bytes start stage.bytes }
+  replaceStorage stageId ⟨ByteArray.empty,0⟩
+  replaceDestination id { destination with
+    backing := .direct receiverId
+    capability := { destination.capability with start := start }
+    writeEnd := start + stage.bytes.size
+    rollbackEnd := receiver.bytes.size }
+  emit (.copy (.storage stageId []) id)
 
 private def publishReady (id : DestinationId) : ConstructionM Unit := do
   let destination ← lookupDestination id
@@ -336,9 +406,9 @@ private def publishReady (id : DestinationId) : ConstructionM Unit := do
   | _, _ => ConstructionM.fail .protocol
 
 def publishOperation (ids : List DestinationId) : ConstructionM Unit := do
-  if ids.eraseDups != ids then ConstructionM.fail .ownership
-  for id in ids do checkPublication id
-  for id in ids do publishReady id
+  match preflightPublication (← ConstructionM.get) ids with
+  | .error fault => ConstructionM.fail fault
+  | .ok () => for id in ids do publishReady id
 
 def abandonDestination (id : DestinationId) : ConstructionM Unit := do
   let destination ← writableDestination id
@@ -346,9 +416,7 @@ def abandonDestination (id : DestinationId) : ConstructionM Unit := do
   | .open _ | .built _ =>
       let storage ← lookupStorage destination.storage
       replaceStorage destination.storage
-        { storage with bytes := match destination.layout with
-          | .limited _ _ => storage.bytes
-          | _ => storage.bytes.extract 0 destination.capability.start }
+        { storage with bytes := storage.bytes.extract 0 destination.rollbackEnd }
       replaceDestination id { destination with progress := .abandoned }
       emit (.abandon id)
   | .suspended _ _ | .exiting _ _ => ConstructionM.fail .protocol
@@ -396,7 +464,8 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   let capability := { superseded.capability with id := id, start := storage.bytes.size }
   let replacement : PendingDestination :=
     ⟨capability, superseded.backing, superseded.layout, .replacement supersededId, .open 0,
-      capability.start + if hasPrefix superseded.layout superseded.capability.request then 4 else 0⟩
+      capability.start + (if hasPrefix superseded.layout superseded.capability.request then 4 else 0),
+      capability.start, none⟩
   ConstructionM.set { state with destinations := state.destinations.push replacement }
   replaceDestination supersededId { superseded with progress := .exiting count id }
   if hasPrefix superseded.layout superseded.capability.request then
@@ -404,27 +473,73 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   emit (.begin id)
   pure id
 
-def abandonPreservingExit (id replacementId : DestinationId) : ConstructionM Unit := do
-  let replacement ← lookupDestination replacementId
+def protectedExitDiscarded (state : ConstructionState) (id replacementId : DestinationId) :
+    Except ConstructionFault (List PendingDestination) := do
+  let some replacement := state.destinations[replacementId]? | throw .destination
   let supersededId ← match replacement.use, replacement.progress with
     | .replacement supersededId, .built _ => pure supersededId
-    | _, _ => ConstructionM.fail .protocol
-  let superseded ← lookupDestination supersededId
+    | _, _ => throw .protocol
+  let some superseded := state.destinations[supersededId]? | throw .destination
   match superseded.progress with
-  | .exiting _ expected => if expected != replacementId then ConstructionM.fail .ownership
-  | _ => ConstructionM.fail .protocol
-  let destination ← lookupDestination id
-  let state ← ConstructionM.get
+  | .exiting _ expected => if expected != replacementId then throw .ownership
+  | _ => throw .protocol
+  let some destination := state.destinations[id]? | throw .destination
   if !active destination || destination.storage != replacement.storage ||
       destination.capability.start > replacement.capability.start ||
       !descendantOf state.destinations supersededId id || id == replacementId then
-    ConstructionM.fail .ownership
-  let discarded := state.destinations.toList.reverse.filter fun destination =>
+    throw .ownership
+  pure (state.destinations.toList.reverse.filter fun destination =>
     destination.capability.id != replacementId &&
-      descendantOf state.destinations id destination.capability.id && active destination
-  for destination in discarded do
-    replaceDestination destination.capability.id { destination with progress := .abandoned }
-    emit (.abandon destination.capability.id)
+      descendantOf state.destinations id destination.capability.id && active destination)
+
+private def protectedAbandonment : List PendingDestination → ConstructionM Unit
+  | [] => pure ()
+  | destination :: rest => fun state =>
+      let id := destination.capability.id
+      if id < state.destinations.size then
+        protectedAbandonment rest { state with
+          destinations := state.destinations.set! id { destination with progress := .abandoned }
+          events := state.events ++ [.abandon id] }
+      else .fault .destination state
+
+private theorem protectedAbandonment_storage (discarded : List PendingDestination) (state : ConstructionState) :
+    (protectedAbandonment discarded state).finalState.storage = state.storage := by
+  induction discarded generalizing state with
+  | nil => rfl
+  | cons destination rest ih =>
+      simp only [protectedAbandonment]
+      split
+      · exact ih _
+      · rfl
+
+private theorem protectedAbandonment_stdout (discarded : List PendingDestination) (state : ConstructionState) :
+    (protectedAbandonment discarded state).finalState.stdout = state.stdout := by
+  induction discarded generalizing state with
+  | nil => rfl
+  | cons destination rest ih =>
+      simp only [protectedAbandonment]
+      split
+      · exact ih _
+      · rfl
+
+def abandonPreservingExit (id replacementId : DestinationId) : ConstructionM Unit := do
+  match protectedExitDiscarded (← ConstructionM.get) id replacementId with
+  | .error fault => ConstructionM.fail fault
+  | .ok discarded => protectedAbandonment discarded
+
+theorem abandonPreservingExit_storage (state : ConstructionState) (id replacementId : DestinationId) :
+    (abandonPreservingExit id replacementId state).finalState.storage = state.storage := by
+  simp only [abandonPreservingExit, ConstructionM.get, bind]
+  cases checked : protectedExitDiscarded state id replacementId with
+  | error fault => rfl
+  | ok discarded => exact protectedAbandonment_storage discarded state
+
+theorem abandonPreservingExit_stdout (state : ConstructionState) (id replacementId : DestinationId) :
+    (abandonPreservingExit id replacementId state).finalState.stdout = state.stdout := by
+  simp only [abandonPreservingExit, ConstructionM.get, bind]
+  cases checked : protectedExitDiscarded state id replacementId with
+  | error fault => rfl
+  | ok discarded => exact protectedAbandonment_stdout discarded state
 
 def acknowledgeAbandonment (id : DestinationId) : ConstructionM Unit := do
   let destination ← lookupDestination id
@@ -434,6 +549,19 @@ def acknowledgeAbandonment (id : DestinationId) : ConstructionM Unit := do
 
 def landingBytes (bytes : ByteArray) (receivingStart payloadStart : Nat) : ByteArray :=
   bytes.extract 0 receivingStart ++ bytes.extract payloadStart bytes.size
+
+def ReceivingStorage.landExit (storage : ReceivingStorage) (receivingStart payloadStart : Nat) : ReceivingStorage :=
+  { storage with bytes := landingBytes storage.bytes receivingStart payloadStart }
+
+def landReceivingStorage (storageId : StorageId) (receivingStart payloadStart : Nat) :
+    ConstructionM Unit := fun state =>
+  match state.storage[storageId]? with
+  | none => .fault .storage state
+  | some storage =>
+      if receivingStart ≤ payloadStart && payloadStart ≤ storage.bytes.size then
+        .ok () { state with
+          storage := state.storage.set! storageId (storage.landExit receivingStart payloadStart) }
+      else .fault .ownership state
 
 def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := do
   let replacement ← lookupDestination replacementId
@@ -458,7 +586,7 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
             pure (some (parentId, { parent with progress := .suspended parentCount replacementId }))
         | _ => ConstructionM.fail .protocol
     | .replacement _ => ConstructionM.fail .protocol
-  let storage ← lookupStorage replacement.storage
+  let _ ← lookupStorage replacement.storage
   if replacement.capability.start < superseded.capability.start then ConstructionM.fail .ownership
   let state ← ConstructionM.get
   let discarded := state.destinations.toList.reverse.filter fun destination =>
@@ -467,13 +595,13 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
   for destination in discarded do
     replaceDestination destination.capability.id { destination with progress := .abandoned }
     emit (.abandon destination.capability.id)
-  let landed := landingBytes storage.bytes superseded.capability.start replacement.capability.start
-  replaceStorage replacement.storage { storage with bytes := landed }
+  landReceivingStorage replacement.storage superseded.capability.start replacement.capability.start
   replaceDestination replacementId { replacement with
     capability := { replacement.capability with start := superseded.capability.start }
     use := superseded.use
     progress := .built count
-    writeEnd := replacement.writeEnd - (replacement.capability.start - superseded.capability.start) }
+    writeEnd := replacement.writeEnd - (replacement.capability.start - superseded.capability.start)
+    rollbackEnd := superseded.rollbackEnd }
   if let some (parentId, parent) := parentUpdate then
     replaceDestination parentId parent
   if superseded.capability.start < replacement.capability.start then
@@ -504,7 +632,7 @@ def openExtension (parentId : DestinationId) (request : ConstructionRequest)
   let count ← match parent.progress with
     | .built count => pure count
     | _ => ConstructionM.fail .protocol
-  let _ ← lookupStorage parent.storage
+  let storage ← lookupStorage parent.storage
   if let some additional := knownCount then
     match parent.layout, parent.backing with
     | .limited capacity _, .direct _ =>
@@ -524,7 +652,10 @@ def openExtension (parentId : DestinationId) (request : ConstructionRequest)
   let id := state.destinations.size
   let capability := { parent.capability with id := id, request := request, start := start }
   let child : PendingDestination :=
-    ⟨capability, backing, .elements, .child parentId, .open 0, start⟩
+    ⟨capability, backing, .elements, .child parentId, .open 0, start,
+      (match backing, parent.layout with
+      | .direct _, .limited _ _ => storage.bytes.size
+      | _, _ => start), knownCount⟩
   ConstructionM.set { state with destinations := state.destinations.push child }
   replaceDestination parentId { parent with progress := .suspended count id }
   emit (.begin id)
@@ -644,5 +775,20 @@ def prepareNamedBinding (id : DestinationId) (localType : Ty) : ConstructionM Un
     capability := { destination.capability with logicalType := localType }
     layout := if needsPrefix then .packed else destination.layout
     writeEnd := destination.writeEnd + if needsPrefix then 4 else 0 }
+
+
+def restoreReceivingLayout (id : DestinationId) (layout : ReceivingLayout) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  let count ← match destination.progress with
+    | .built count => pure count
+    | _ => ConstructionM.fail .protocol
+  let agrees : Bool := match destination.capability.layout, layout with
+    | .grow _, .elements | .growshrink _, .elements => true
+    | .varr _, .packed => destination.layout == .packed
+    | .arr _ expected, .fixed actual => expected == actual && count == expected
+    | .limited _ expected, .limited actual _ => expected == actual
+    | _, _ => false
+  if !agrees then ConstructionM.fail .protocol
+  replaceDestination id { destination with layout := layout }
 
 end Goose.Construct

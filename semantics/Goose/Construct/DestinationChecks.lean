@@ -308,10 +308,77 @@ private def namedPackedIntoGrow : ConstructionM Unit := do
   writeElement destination (bytes [255])
   finishDestination destination
   removeConstructionHeader destination
+  restoreReceivingLayout destination .elements
   adaptDestinationType destination (.grow (.int .u8))
   publishOperation [destination]
 
 #guard observe namedPackedIntoGrow == some ([0,255], 2,
   [.begin 0,.write 0 0,.write 0 1,.relocate 0 .headerRemoval,.publish 0])
+
+
+private def namedPackedLimitedOverflow : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let limitedCapability := { capability with
+    layout := .limited (.int .u8) 2
+    logicalType := .limited (.int .u8) 2 }
+  let destination ← openDestination storage limitedCapability (.limited 2 1) none
+  prepareNamedBinding destination (.varr (.int .u8))
+  writeElement destination (bytes [10])
+  writeElement destination (bytes [20])
+  writeElement destination (bytes [30])
+  finishDestination destination
+  removeConstructionHeader destination
+  restoreReceivingLayout destination (.limited 2 1)
+  publishOperation [destination]
+
+#guard match namedPackedLimitedOverflow ConstructionState.initial with
+  | .fault .capacity state => (state.storage[0]?.map (·.bytes.size)) == some 0 &&
+      state.events == [.begin 0,.stage 0,.write 0 0,.write 0 1,.write 0 2,
+        .relocate 0 .headerRemoval]
+  | _ => false
+
+
+private def abandonLimitedExtent : ConstructionM Unit := do
+  let storage ← reserveStorage (bytes [10,20,30]) 1
+  let destination ← openDestination storage (capability .elementRun) (.limited 5 1) (some 3)
+  writeElement destination (bytes [99])
+  writeElement destination (bytes [88])
+  writeElement destination (bytes [77])
+  abandonTree destination
+
+#guard observe abandonLimitedExtent == some ([10,99,88], 1,
+  [.begin 0,.write 0 0,.write 0 1,.write 0 2,.abandon 0])
+
+
+private def explicitStageFit : ConstructionM Unit := do
+  let storage ← reserveStorage (bytes [10,20,30]) 1
+  let destination ← openDestinationDirect storage (capability .elementRun) (.limited 4 1) none
+  stageDestination destination
+  writeElement destination (bytes [99])
+  finishDestination destination
+  fitStagedDestination destination
+
+#guard observe explicitStageFit == some ([10,99,30], 1,
+  [.begin 0,.stage 0,.write 0 0,.copy (.storage 1 []) 0])
+
+private def explicitKnownStage : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestinationDirect storage capability (.limited 4 1) (some 1)
+  stageDestination destination
+
+#guard match explicitKnownStage ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0] && state.storage.size == 1
+  | _ => false
+
+
+private def replacementStage : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let root ← openDestinationDirect storage capability (.limited 4 1) none
+  let replacement ← openExitReplacement root
+  stageDestination replacement
+
+#guard match replacementStage ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0,.begin 1] && state.storage.size == 1
+  | _ => false
 
 end Goose.Construct.DestinationChecks
