@@ -23,12 +23,12 @@ theorem checkSymbols_definition_scan {m : Module} {label : String} {f : Func}
   unfold checkSymbols at h
   have h := asCheck_ok h
   repeat' first
-    | exact ⟨_, h⟩
+    | exact ⟨_, by assumption⟩
     | obtain ⟨_, _, h⟩ := bind_ok h
-    | progress dsimp only at h
+    | dsimp only at h
     | split at h
     | contradiction
-    | progress simp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw] at h
+    | simp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw] at h
 
 theorem symbolDef_scan {n : Nat} {xs : List Nat} {seen out : Array Bool}
     (hsize : seen.size = n)
@@ -43,11 +43,14 @@ theorem symbolDef_scan {n : Nat} {xs : List Nat} {seen out : Array Bool}
   | cons d ds ih =>
     rw [List.forIn_cons] at h
     unfold symbolDefStep at h
-    by_cases hd : d < n
-    · rw [if_pos hd] at h
-    · simp [hd, bind, Except.bind, throw, throwThe, MonadExceptOf.throw] at h
-    by_cases hs : seen[d]! = true
-    · simp [hs, bind, Except.bind, throw, throwThe, MonadExceptOf.throw] at h
+    have hd : d < n := by
+      by_cases hd : d < n
+      · exact hd
+      · simp [hd, bind, Except.bind, throw, throwThe, MonadExceptOf.throw] at h
+    rw [if_pos hd] at h
+    have hs : seen[d]! ≠ true := by
+      intro hs
+      simp [hs, bind, Except.bind, throw, throwThe, MonadExceptOf.throw] at h
     rw [if_neg hs] at h
     simp only [pure, Except.pure, bind, Except.bind] at h
     have hdsize : d < seen.size := by omega
@@ -62,13 +65,17 @@ theorem symbolDef_scan {n : Nat} {xs : List Nat} {seen out : Array Bool}
       · exact hs
       · by_cases hne : d = v
         · subst v; exact hs
-        · simpa [Array.getElem!_set!_ne seen d v true hne] using hnot v hv
+        · have hvnot := hnot v hv
+          rw [Array.getElem!_set!_ne seen d v true hne] at hvnot
+          exact hvnot
     · intro v
       rw [hvals]
       by_cases hne : d = v
       · subst v
-        simp [Array.getElem!_set!_self seen d true hdsize]
-      · simp [Array.getElem!_set!_ne seen d v true hne, hne, List.mem_cons]
+        rw [Array.getElem!_set!_self seen d true hdsize]
+        simp
+      · rw [Array.getElem!_set!_ne seen d v true hne]
+        simp [List.mem_cons, Ne.symm hne]
 
 theorem symbolBlock_scan {m : Module} {f : Func} {bs : List Block} {seen out : Array Bool}
     (hsize : seen.size = f.numValues)
@@ -120,12 +127,20 @@ theorem validated_definitions_nodup {m : Module} {f : Func}
     (f.blocks.toList.flatMap Block.defs).Nodup := by
   unfold validate at h
   obtain ⟨_, _, h⟩ := bind_ok h
-  obtain ⟨_, hs, _⟩ := bind_ok h
-  apply definitions_nodup_of_symbols
+  obtain ⟨checked, hs, _⟩ := bind_ok h
+  cases checked
   simp only [Module.allFuncs, List.mem_append, List.mem_map] at hf
   rcases hf with hf | ⟨g, hg, rfl⟩
-  · exact checkAll_mem hs (by simp [Module.labelled, hf])
-  · exact checkAll_mem hs (by simp [Module.labelled, hg])
+  · apply definitions_nodup_of_symbols (label := s!"function {f.name}")
+    exact checkAll_mem (x := (s!"function {f.name}", f)) hs
+      (by
+        simp only [Module.labelled, List.mem_append]
+        exact Or.inl (List.mem_map.mpr ⟨f, hf, rfl⟩))
+  · apply definitions_nodup_of_symbols (label := s!"initializer of global {g.name}")
+    exact checkAll_mem (x := (s!"initializer of global {g.name}", g.init)) hs
+      (by
+        simp only [Module.labelled, List.mem_append]
+        exact Or.inr (List.mem_map.mpr ⟨g, hg, rfl⟩))
 
 def Inst.definitionEntry : Inst → Option (ValueId × Option Op)
   | .def result op => some (result, some op)
@@ -143,7 +158,7 @@ theorem definitionEntries_ids (block : Block) : block.definitionEntries.map Prod
   induction block.insts with
   | nil => rfl
   | cons inst rest ih =>
-    cases inst <;> simp_all [Inst.definitionEntry]
+    cases inst <;> simp_all [Inst.definitionEntry, List.filterMap_cons]
 
 theorem definitionEntries_ids_func (fn : Func) :
     fn.definitionEntries.map Prod.fst = fn.blocks.toList.flatMap Block.defs := by
@@ -157,12 +172,14 @@ theorem entry_eq_of_nodup_ids {entries : List (ValueId × Option Op)}
   | nil => simp at ha
   | cons entry entries ih =>
     simp only [List.map_cons, List.nodup_cons] at h
-    rcases List.mem_cons.mp ha with rfl | ha
-    · rcases List.mem_cons.mp hb with rfl | hb
-      · rfl
+    rcases List.mem_cons.mp ha with ha | ha
+    · subst a
+      rcases List.mem_cons.mp hb with hb | hb
+      · exact hb.symm
       · exact False.elim (h.1 (List.mem_map.mpr ⟨b, hb, he.symm⟩))
-    · rcases List.mem_cons.mp hb with rfl | hb
-      · exact False.elim (h.1 (List.mem_map.mpr ⟨a, ha, he⟩))
+    · rcases List.mem_cons.mp hb with hb | hb
+      · subst b
+        exact False.elim (h.1 (List.mem_map.mpr ⟨a, ha, he⟩))
       · exact ih h.2 ha hb
 
 theorem definitionEntry_mem {fn : Func} {block : Block} {result : ValueId} {op : Op}
