@@ -250,12 +250,12 @@ def freezeTo (m : Mutability) (r : ValueId) : B ValueId := do
   | .readOnly, .data (.ref .mutable _) => emitDef (.refFreeze r)
   | _, _ => pure r
 
-def coerceTo (target : Ty) (r : ValueId) : B ValueId := do
+def coerceTo (target : Ty) (r : ValueId) (org : OriginId) : B ValueId := do
   match target, (← valTy r) with
   | .ref .readOnly _, .data (.ref .mutable _) => emitDef (.refFreeze r)
   | .slice .readOnly _, .data (.slice .mutable _) =>
     let view ← emitDef (.sliceView r)
-    emitDef (.viewSlice .readOnly view .omitted .omitted none)
+    emitDef (.viewSlice .readOnly view .omitted .omitted (some org))
   | _, _ => pure r
 
 def pushScope (sc : ScopeId) : B Unit := modify fun s => { s with stack := sc :: s.stack }

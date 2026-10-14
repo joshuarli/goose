@@ -1,3 +1,4 @@
+import Goose.Core.Sound.Basic
 import Goose.Lower.Claims
 import Goose.Lower.RuntimeSim
 
@@ -11,12 +12,27 @@ def CoercionValue (target : Ty) (value : Val) : Prop :=
   | .slice .readOnly _ => ∃ loc start len, value = .slice loc start len
   | _ => True
 
+theorem CoercionValue.of_hasTy {m : Core.Module} {globals : Nat} {store : Store}
+    {target : Ty} {value : Val} (h : Core.Sound.HasTy m globals store value target) :
+    CoercionValue target value := by
+  cases target <;> try trivial
+  · rename_i mutability elem
+    cases mutability
+    · trivial
+    · obtain ⟨loc, hvalue, _⟩ := h
+      exact ⟨loc, hvalue⟩
+  · rename_i mutability elem
+    cases mutability
+    · trivial
+    · obtain ⟨loc, start, len, hvalue, _⟩ := h
+      exact ⟨loc, start, len, hvalue⟩
+
 theorem coerceTo_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
     {base ls ls' : LS} {before fr : GIR.Frame} {pt : Pt} {r r' : ValueId}
-    {target : Ty} {value : Val}
+    {target : Ty} {value : Val} {org : OriginId}
     (P : Post cfg env cx base before ls fr pt [(r, .val value)])
     (hshape : CoercionValue target value)
-    (hlow : coerceTo target r le ls = (r', ls')) (hext : ExtT ls' cx.fn.blocks) :
+    (hlow : coerceTo target r org le ls = (r', ls')) (hext : ExtT ls' cx.fn.blocks) :
     SimE cx pt fr (pure value : M Val)
       (fun result pt' fr' => result = value ∧
         Post cfg env cx base before ls' fr' pt' [(r', .val value)]) := by
