@@ -1,20 +1,9 @@
-import Goose.Lower.Unwind
+import Goose.Lower.ReturnState
 import Goose.Lower.Prefix
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR
-
-def prepareReturn (env : Env) : Flow → M Flow
-  | .ret value => do
-    releaseScopes env env.scopes
-    pure (.ret value)
-  | flow => pure flow
-
-theorem prepareReturn_no_scopes (env : Env) (hscopes : env.scopes = []) :
-    prepareReturn env = fun flow => pure flow := by
-  funext flow
-  cases flow <;> simp [prepareReturn, hscopes, releaseScopes, pure_bind]
 
 def preparedCoreBlock (n : Nat) (cfg : Cfg) (env : Env) (scope : ScopeId)
     (stmts : List Stmt) (value : Option Expr) (pre : List (VarId × Val)) : M Flow := do
@@ -48,23 +37,6 @@ theorem prepareReturn_execBlock (n : Nat) (cfg : Cfg) (env : Env) (scope : Scope
   | brk => simp [valueFlow, prepareReturn, bind_assoc, pure_bind]
   | cont => simp [valueFlow, prepareReturn, bind_assoc, pure_bind]
   | ret v => simp [valueFlow, prepareReturn, bind_assoc, pure_bind, releaseScopes_entered]
-
-structure ReturnSite (cx : FnCtx) (pt : Pt) (frame : GIR.Frame) (value : Val)
-    (org : OriginId) : Prop where
-  instruction : ∃ ids, instAt cx.fn pt = some (.term (.ret ids (some org))) ∧
-    ((ids = [] ∧ value = .unit) ∨ ∃ id, ids = [id] ∧ frame.vals[id]? = some (.val value))
-  scopes : frame.scopes = []
-
-theorem ReturnSite.run {cx : FnCtx} {pt : Pt} {frame : GIR.Frame} {value : Val} {org : OriginId}
-    (h : ReturnSite cx pt frame value org) (state : St) :
-    ∀ extra, runAt cx pt frame (extra + 1) state = .ok value state := by
-  intro extra
-  obtain ⟨ids, hinst, hvalue⟩ := h.instruction
-  rcases hvalue with ⟨rfl, rfl⟩ | ⟨id, rfl, hcell⟩
-  · rw [runAt_ret0 hinst extra]
-    rfl
-  · rw [runAt_ret1 hinst hcell extra]
-    rfl
 
 theorem stmt_ret_none_prepared (n : Nat) (lc : Option LoopCtx) (org : OriginId)
     (le : LEnv) (ls ls' : LS) (r : Unit) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
