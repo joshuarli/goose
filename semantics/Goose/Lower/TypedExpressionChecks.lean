@@ -6,7 +6,7 @@ namespace Goose.Lower.TypedExpressionChecks
 open Goose.Core Goose.GIR Goose.Core.Sound
 
 def sourceImpl : Impl :=
-  { initImpl with body := .mk 0 [.expr (.bool true) 0] none }
+  { initImpl with body := .mk 0 [.expr (.not (.bool true)) 0] none }
 
 def sourceModule : Core.Module :=
   { files := #["typed.goose"], types := #[], globals := #[], impls := #[sourceImpl],
@@ -54,6 +54,28 @@ def boolSource (profile : NumProfile) : ExprSource ⟨profile, sourceModule⟩ s
     permission := Or.inl (by exact Nat.le_refl 0),
     frame := (by simpa [EvaluationContext.inputFuture, DemandNode.variables, Expr.variables] using initial_frame), typed := rfl, rooted := rfl,
     effects := EffLe.refl _ }
+
+def notSource (profile : NumProfile) : ExprSource ⟨profile, sourceModule⟩ sourceEnv (.not (.bool true))
+    enteredState :=
+  { accepted := (by cbv), plans := #[], path := [], context := .pilot rfl [],
+    observation := .empty, world := sourceWorld, typingEnv := typingEnv, rootsEnv := rootsEnv,
+    typingStart := 0, typingEnd := 0, ty := .bool, rootsStart := ⟨0, {}⟩,
+    rootsEnd := ⟨0, {}⟩, roots := [], active := by simp [typingEnv, EvaluationContext.ActiveMatches], access := trivial,
+    protection := by simp [ShrinkProtected, sourceWorld],
+    observed := ObservedSafe.empty _ _ _ _, classified := (by intro h; cases h),
+    permission := Or.inl (by exact Nat.le_refl 0),
+    frame := (by simpa [EvaluationContext.inputFuture, DemandNode.variables, Expr.variables] using initial_frame), typed := rfl, rooted := rfl,
+    effects := EffLe.refl _ }
+
+theorem not_source_result (profile : NumProfile) :
+    ExprResult (notSource profile) (.bool false) enteredState :=
+  (notSource profile).result 2 (.bool false)
+    (by simp [evalExpr, expectBool, pure_bind, pure_apply])
+
+theorem not_child_source (profile : NumProfile) :
+    ∃ child : ExprSource ⟨profile, sourceModule⟩ sourceEnv (.bool true) enteredState,
+      child.typingEnv = typingEnv ∧ child.rootsEnv = rootsEnv ∧ child.ty = .bool :=
+  (notSource profile).notChild
 
 theorem bool_source_result (profile : NumProfile) :
     ExprResult (boolSource profile) (.bool true) enteredState :=
