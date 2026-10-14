@@ -3,7 +3,7 @@ import Goose.Construct.Destination
 namespace Goose.Construct.DestinationChecks
 open Goose.Core Goose.Construct
 
-private def capability (request : Request := .value) : Destination :=
+private def capability (request : ConstructionRequest := .value) : Destination :=
   ⟨0, ⟨.global 0, []⟩, .grow (.int .u8), .grow (.int .u8), request, 0, 0⟩
 
 private def bytes (values : List Nat) : ByteArray :=

@@ -23,6 +23,18 @@ def Request.ofTag? : String → Option Request
   | "element_run" => some .elementRun
   | _ => none
 
+inductive ConstructionRequest
+  | value
+  | elementRun
+  deriving DecidableEq, Repr
+
+def ConstructionRequest.toRequest : ConstructionRequest → Request
+  | .value => .value
+  | .elementRun => .elementRun
+
+def ConstructionRequest.tag (request : ConstructionRequest) : String :=
+  request.toRequest.tag
+
 inductive RelocationReason
   | headerRemoval
   | exitValue
@@ -69,7 +81,7 @@ structure Destination where
   receiver : Loc
   layout : Ty
   logicalType : Ty
-  request : Request
+  request : ConstructionRequest
   start : Nat
   owner : ActId
   deriving DecidableEq, Repr

@@ -109,7 +109,7 @@ def reserveStorage (bytes : ByteArray := ByteArray.empty) (publishedCount : Nat 
 
 private def lengthPrefix : ByteArray := ⟨#[0, 0, 0, 0]⟩
 
-private def hasPrefix (layout : ReceivingLayout) (request : Request) : Bool :=
+private def hasPrefix (layout : ReceivingLayout) (request : ConstructionRequest) : Bool :=
   layout == .packed && request == .value
 
 private def available (layout : ReceivingLayout) (storage : ReceivingStorage) (count : Nat) : Bool :=
@@ -126,7 +126,6 @@ private def active (destination : PendingDestination) : Bool :=
 
 def openDestination (storageId : StorageId) (capability : Destination)
     (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId := do
-  if capability.request == .register then ConstructionM.fail .protocol
   let storage ← lookupStorage storageId
   let state ← ConstructionM.get
   if state.destinations.any (fun d => d.storage == storageId && active d) then
