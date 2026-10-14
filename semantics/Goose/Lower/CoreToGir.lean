@@ -132,15 +132,13 @@ instance : MonadStateOf LS B where
   set s' := fun _ _ => ((), s')
   modifyGet f := fun _ s => f s
 
-/-- Snapshot typing consults the same contents provenance as validation. The
-capability lookup is delayed until a snapshot needs it, so scalar emission does
-not walk the accumulated CFG. -/
 def tyEnv (env : LEnv) (s : LS) : GIR.TyEnv :=
   { slots := env.slots
     globals := env.globals
     sigs := env.sigs
     vals := s.vals
     structs := env.mod.structs
+    profile := env.mod.profile
     contentsWritable := fun v =>
       let f : GIR.Func :=
         { name := ""
