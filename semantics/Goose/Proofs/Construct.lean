@@ -35,4 +35,10 @@ theorem terminal_skips_remaining (kind : ConstructionFault) (state : Constructio
     (remaining : Unit → ConstructionM Unit) :
     ((ConstructionM.fail kind >>= remaining) state) = .fault kind state := rfl
 
+
+theorem publication_rejection_keeps_prefix (state : ConstructionState) (ids : List Goose.Core.DestinationId)
+    (kind : ConstructionFault) (rejected : preflightPublication state ids = .error kind) :
+    publishOperation ids state = .fault kind state := by
+  simp [publishOperation, ConstructionM.get, rejected, bind, ConstructionM.fail]
+
 end Goose.Proofs.Construct

@@ -294,17 +294,19 @@ def attachChild (parentId childId : DestinationId) : ConstructionM Unit := do
       emit (.write parentId count)
   | _, _, _ => ConstructionM.fail .protocol
 
-private def checkPublication (id : DestinationId) : ConstructionM Unit := do
-  let destination ← lookupDestination id
+private def publicationCheck (state : ConstructionState) (id : DestinationId) : Except ConstructionFault Unit := do
+  let some destination := state.destinations[id]? | throw .destination
   match destination.progress, destination.use with
   | .built count, .receiver =>
-      let receiver ← lookupStorage destination.backing.receiverStorage
-      requireFit destination receiver count
-  | _, _ => ConstructionM.fail .protocol
-where
-  requireFit (destination : PendingDestination) (receiver : ReceivingStorage) (count : Nat) : ConstructionM Unit := do
-    if !available destination.layout receiver count then ConstructionM.fail .capacity
-    let _ ← lookupStorage destination.storage
+      let some receiver := state.storage[destination.backing.receiverStorage]? | throw .storage
+      if !available destination.layout receiver count then throw .capacity
+      if (state.storage[destination.storage]?).isNone then throw .storage
+  | _, _ => throw .protocol
+
+def preflightPublication (state : ConstructionState) (ids : List DestinationId) :
+    Except ConstructionFault Unit := do
+  if ids.eraseDups != ids then throw .ownership
+  for id in ids do publicationCheck state id
 
 private def publishReady (id : DestinationId) : ConstructionM Unit := do
   let destination ← lookupDestination id
@@ -340,9 +342,9 @@ private def publishReady (id : DestinationId) : ConstructionM Unit := do
   | _, _ => ConstructionM.fail .protocol
 
 def publishOperation (ids : List DestinationId) : ConstructionM Unit := do
-  if ids.eraseDups != ids then ConstructionM.fail .ownership
-  for id in ids do checkPublication id
-  for id in ids do publishReady id
+  match preflightPublication (← ConstructionM.get) ids with
+  | .error fault => ConstructionM.fail fault
+  | .ok () => for id in ids do publishReady id
 
 def abandonDestination (id : DestinationId) : ConstructionM Unit := do
   let destination ← writableDestination id
