@@ -452,4 +452,27 @@ example (profile : NumProfile)
   obtain ⟨child, integer, _, _, _, _, typeEq⟩ := children 1 ⟨.global 0, []⟩ _ (by cbv)
   exact ⟨child, integer, typeEq⟩
 
+#guard match Core.validate (ownerModule (.resize (.global 0) (.lit .i32 0) none 0)) with | .ok _ => true | .error _ => false
+#guard match Core.validate (ownerModule (.resize (.global 0) (.lit .i32 2) (some (.bool false)) 0)) with | .ok _ => true | .error _ => false
+
+example (profile : NumProfile)
+    (accepted : Core.validate (ownerModule (.resize (.global 0) (.lit .i32 0) none 0)) = .ok ()) :
+    ∃ child : ExprSource ⟨profile, ownerModule (.resize (.global 0) (.lit .i32 0) none 0)⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.lit .i32 0)
+      { afterOwnerGlobals with nextAct := 2, nextScope := 1 }, ∃ integer, child.ty = .int integer := by
+  obtain ⟨source, _⟩ := ownerStatement profile (.resize (.global 0) (.lit .i32 0) none 0) accepted
+  obtain ⟨destination, element, _, _, _, _, _, _, children⟩ := source.resizeSizeChildren
+  obtain ⟨child, integer, _, _, _, _, typeEq⟩ := children 1 ⟨.global 0, []⟩ _ (by cbv)
+  exact ⟨child, integer, typeEq⟩
+
+example (profile : NumProfile)
+    (accepted : Core.validate (ownerModule (.resize (.global 0) (.lit .i32 2) (some (.bool false)) 0)) = .ok ()) :
+    ∃ child : ExprSource ⟨profile, ownerModule (.resize (.global 0) (.lit .i32 2) (some (.bool false)) 0)⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.bool false)
+      { afterOwnerGlobals with nextAct := 2, nextScope := 1 }, child.ty = .bool := by
+  obtain ⟨source, _⟩ := ownerStatement profile (.resize (.global 0) (.lit .i32 2) (some (.bool false)) 0) accepted
+  obtain ⟨child, _, _, _, _⟩ := source.resizeFillChild 1 1 ⟨.global 0, []⟩ (.int .i32 2) (by cbv) (by cbv)
+  refine ⟨child, ?_⟩
+  have typed := child.typed
+  change Except.ok (.bool, child.typingStart) = Except.ok (child.ty, child.typingEnd) at typed
+  exact (congrArg Prod.fst (Except.ok.inj typed)).symm
+
 end Goose.Lower.SourceContextChecks
