@@ -58,4 +58,36 @@ theorem landed_storage_payload (storage : ReceivingStorage) (receivingStart payl
 theorem landed_storage_publication (storage : ReceivingStorage) (receivingStart payloadStart : Nat) :
     (storage.landExit receivingStart payloadStart).publishedCount = storage.publishedCount := rfl
 
+
+theorem receiving_landing_success (state : ConstructionState) (storageId : Goose.Core.StorageId)
+    (storage : ReceivingStorage) (receivingStart payloadStart : Nat)
+    (present : state.storage[storageId]? = some storage)
+    (ordered : receivingStart ≤ payloadStart) (inside : payloadStart ≤ storage.bytes.size) :
+    landReceivingStorage storageId receivingStart payloadStart state =
+      .ok () { state with
+        storage := state.storage.set! storageId (storage.landExit receivingStart payloadStart) } := by
+  simp [landReceivingStorage, present, ordered, inside]
+
+theorem receiving_landing_payload (state : ConstructionState) (storageId : Goose.Core.StorageId)
+    (storage : ReceivingStorage) (receivingStart payloadStart : Nat)
+    (present : state.storage[storageId]? = some storage)
+    (ordered : receivingStart ≤ payloadStart) (inside : payloadStart ≤ storage.bytes.size) :
+    ((landReceivingStorage storageId receivingStart payloadStart state).finalState.storage[storageId]?).map
+      (fun landed => landed.bytes.extract receivingStart landed.bytes.size) =
+      some (storage.bytes.extract payloadStart storage.bytes.size) := by
+  rw [receiving_landing_success state storageId storage receivingStart payloadStart present ordered inside]
+  obtain ⟨inBounds, _⟩ := Array.getElem?_eq_some_iff.mp present
+  simp only [ConstructionResult.finalState, Array.set!, Array.getElem?_setIfInBounds_self_of_lt inBounds, Option.map_some]
+  rw [landed_storage_payload storage receivingStart payloadStart (Nat.le_trans ordered inside)]
+
+theorem receiving_landing_outside (state : ConstructionState) (storageId other : Goose.Core.StorageId)
+    (storage : ReceivingStorage) (receivingStart payloadStart : Nat)
+    (present : state.storage[storageId]? = some storage)
+    (ordered : receivingStart ≤ payloadStart) (inside : payloadStart ≤ storage.bytes.size)
+    (different : storageId ≠ other) :
+    (landReceivingStorage storageId receivingStart payloadStart state).finalState.storage[other]? =
+      state.storage[other]? := by
+  rw [receiving_landing_success state storageId storage receivingStart payloadStart present ordered inside]
+  exact Array.getElem?_setIfInBounds_ne different
+
 end Goose.Proofs.Construct

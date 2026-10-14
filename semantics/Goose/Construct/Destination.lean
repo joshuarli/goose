@@ -492,6 +492,16 @@ def landingBytes (bytes : ByteArray) (receivingStart payloadStart : Nat) : ByteA
 def ReceivingStorage.landExit (storage : ReceivingStorage) (receivingStart payloadStart : Nat) : ReceivingStorage :=
   { storage with bytes := landingBytes storage.bytes receivingStart payloadStart }
 
+def landReceivingStorage (storageId : StorageId) (receivingStart payloadStart : Nat) :
+    ConstructionM Unit := fun state =>
+  match state.storage[storageId]? with
+  | none => .fault .storage state
+  | some storage =>
+      if receivingStart ≤ payloadStart && payloadStart ≤ storage.bytes.size then
+        .ok () { state with
+          storage := state.storage.set! storageId (storage.landExit receivingStart payloadStart) }
+      else .fault .ownership state
+
 def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := do
   let replacement ← lookupDestination replacementId
   let (supersededId, count) ← match replacement.use, replacement.progress with
@@ -515,7 +525,7 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
             pure (some (parentId, { parent with progress := .suspended parentCount replacementId }))
         | _ => ConstructionM.fail .protocol
     | .replacement _ => ConstructionM.fail .protocol
-  let storage ← lookupStorage replacement.storage
+  let _ ← lookupStorage replacement.storage
   if replacement.capability.start < superseded.capability.start then ConstructionM.fail .ownership
   let state ← ConstructionM.get
   let discarded := state.destinations.toList.reverse.filter fun destination =>
@@ -524,8 +534,7 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
   for destination in discarded do
     replaceDestination destination.capability.id { destination with progress := .abandoned }
     emit (.abandon destination.capability.id)
-  replaceStorage replacement.storage
-    (storage.landExit superseded.capability.start replacement.capability.start)
+  landReceivingStorage replacement.storage superseded.capability.start replacement.capability.start
   replaceDestination replacementId { replacement with
     capability := { replacement.capability with start := superseded.capability.start }
     use := superseded.use
