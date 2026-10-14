@@ -133,7 +133,7 @@ theorem StmtsSource.result {cfg : Cfg} {env : Env} {stmts : List Stmt} {state af
 
 variable {m : Module} {plans : Array (Array DemandPoint)}
 
-theorem blockStmtChild? {sc : Nat} {all : List Stmt} {value : Option Expr}
+private theorem blockStmtChild? {sc : Nat} {all : List Stmt} {value : Option Expr}
     {offset : Nat} {st : Stmt} {rest : List Stmt}
     (hdrop : st :: rest = all.drop offset) :
     DemandNode.child? (.block (.mk sc all value)) offset = some (.statement st) := by
@@ -149,7 +149,7 @@ theorem blockStmtChild? {sc : Nat} {all : List Stmt} {value : Option Expr}
   rw [List.getElem?_map, hget0]
   rfl
 
-noncomputable def blockStmtContext {path : List Nat} {sc : Nat}
+private noncomputable def blockStmtContext {path : List Nat} {sc : Nat}
     {all : List Stmt} {value : Option Expr}
     (bc : EvaluationContext m plans path (.block (.mk sc all value)) .block)
     (offset : Nat) (st : Stmt)
@@ -158,7 +158,7 @@ noncomputable def blockStmtContext {path : List Nat} {sc : Nat}
   bc.child rfl offset (.statement st) .statement hchild
     (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
 
-theorem stmt_visibleAfter {tenv tenv' : TEnv} {sc tn tn' : Nat} {st : Stmt}
+private theorem stmt_visibleAfter {tenv tenv' : TEnv} {sc tn tn' : Nat} {st : Stmt}
     (ht : tyStmt tenv sc st tn = .ok (tenv', tn')) :
     ∀ x, x ∈ tenv'.visible ↔ x ∈ (DemandNode.statement st).visibleAfter tenv.visible := by
   cases st with
@@ -263,7 +263,7 @@ theorem stmt_visibleAfter {tenv tenv' : TEnv} {sc tn tn' : Nat} {st : Stmt}
     all_goals simp_all [DemandNode.visibleAfter]
     all_goals try (split <;> simp_all)
 
-theorem blockSuffixActive_succ {path sc all value offset st rest}
+private theorem blockSuffixActive_succ {path sc all value offset st rest}
     (bc : EvaluationContext m plans path (.block (.mk sc all value)) .block)
     (hdrop : st :: rest = all.drop offset) :
     blockSuffixActive bc (offset + 1) =
@@ -275,7 +275,7 @@ theorem blockSuffixActive_succ {path sc all value offset st rest}
   all_goals rw [List.take_add_one, hget]; simp only [Option.toList_some, List.foldl_append,
     List.foldl_cons, List.foldl_nil]; cases st <;> rfl
 
-theorem blockStmt_shrinkFuture {path sc all value offset st rest}
+private theorem blockStmt_shrinkFuture {path sc all value offset st rest}
     {pc : PlanContext m plans} (profile : m.profile = .shrink)
     (context : NodeContext pc path (.block (.mk sc all value)) .block)
     (hdrop : st :: rest = all.drop offset)
@@ -1137,5 +1137,9 @@ theorem BlockSource.result {cfg : Cfg} {env : Env} {pre : List (VarId × Val)} {
     rw [done] at checked
     obtain ⟨a, b, c, d, e, f, g, h, i, j, k⟩ := checked
     cases flow <;> exact ⟨a, b, c, d, e, f, g, h, i, j, k⟩
+
+theorem initialStoreInvariant (module : Module) : StoreInv module 0 St.initial := by
+  constructor
+  all_goals simp [St.initial, Store.empty]
 
 end Goose.Lower
