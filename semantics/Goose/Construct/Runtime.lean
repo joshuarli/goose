@@ -41,7 +41,7 @@ def storedDestination (id : DestinationId) : EvalM StoredValue := do
     | .published _ => destination.backing.receiverStorage
     | _ => destination.storage
   pure ⟨storage, destination.capability.start,
-    destination.capability.logicalType, count, some id, none, []⟩
+    destination.capability.logicalType, count, some id, none, [], count⟩
 
 def elementType : Ty → Option Ty
   | .arr element _ | .varr element | .grow element | .growshrink element | .limited element _ => some element
@@ -136,12 +136,18 @@ def sampledStored (stored : StoredValue) : EvalM (ByteArray × SampledRun) := do
     | none => pure (match stored.ty with | .varr _ => 4 | _ => 0)
   pure (bytes, ⟨stored.start + headerSize, count, element⟩)
 
-def readStoredElement (fuel : Nat) (module : LayoutEnv) (stored : StoredValue) (index : Nat) : EvalM Value := do
+def storedPathRun (stored : StoredValue) : EvalM (ByteArray × SampledRun) := do
   let (bytes, run) ← sampledStored stored
+  pure (bytes, { run with count := match stored.ty with
+    | .limited _ _ => stored.writtenCount
+    | _ => run.count })
+
+def readStoredElement (fuel : Nat) (module : LayoutEnv) (stored : StoredValue) (index : Nat) : EvalM Value := do
+  let (bytes, run) ← storedPathRun stored
   let (start, _) ← liftLayout (elementInterval fuel module bytes run index)
   if run.element.nonfixed then
     let sampled ← liftLayout (samplePacked run.element bytes start)
-    pure (.stored ⟨stored.storage, start, run.element, sampled.count, none, some (stored.object.getD stored.storage), stored.path ++ [index]⟩)
+    pure (.stored ⟨stored.storage, start, run.element, sampled.count, none, some (stored.object.getD stored.storage), stored.path ++ [index], sampled.count⟩)
   else liftExcept (fixedValue fuel module run.element bytes start)
 
 def readValuePath : Nat → LayoutEnv → Value → List Nat → EvalM Value
@@ -200,7 +206,7 @@ def writeValuePath : Nat → LayoutEnv → Value → List Nat → Value → Eval
           let child ← writeValuePath fuel module child rest replacement
           pure (.record id (fields.set! index child))
       | .stored stored =>
-          let (bytes, run) ← sampledStored stored
+          let (bytes, run) ← storedPathRun stored
           let (start, finish) ← liftLayout (elementInterval fuel module bytes run index)
           let child ← readStoredElement fuel module stored index
           if run.element.nonfixed then
@@ -539,11 +545,11 @@ def publishOwner : Nat → LayoutEnv → Loc → StoredValue → DestinationId �
       | .child parent =>
           liftConstruction origin (attachExtension parent destination)
           let value ← storedDestination parent
-          writeLoc fuel config location (.stored { value with ty := stored.ty, object := stored.object })
+          writeLoc fuel config location (.stored { value with ty := stored.ty, object := stored.object, writtenCount := max stored.writtenCount value.count })
       | .receiver =>
           publishCarriers origin [.completed destination]
           let storage ← getStorage stored.storage
-          writeLoc fuel config location (.stored { stored with count := storage.publishedCount, destination := some destination })
+          writeLoc fuel config location (.stored { stored with count := storage.publishedCount, destination := some destination, writtenCount := max stored.writtenCount storage.publishedCount })
       | .replacement _ => fault .flow
 
 def truncateOwner : Nat → LayoutEnv → Loc → Nat → OriginId → EvalM Unit
@@ -617,7 +623,11 @@ def renderAny : Nat → LayoutEnv → RenderPosition → Value → EvalM ByteArr
               pure (UInt8.ofNat byte.toNat)
             pure (if nested == .aggregatePart then quoteBytes ⟨bytes.toArray⟩ else ⟨bytes.toArray⟩)
           else renderElements fuel config values.toList
-      | .record _ _ => fault .shape
+      | .record id fields =>
+          let some descriptor := config.structs[id]? | fault .unbound
+          if fields.size != descriptor.fields.size || descriptor.displayName.isEmpty then fault .shape
+          let parts ← fields.toList.mapM (renderAny fuel config .aggregatePart)
+          pure (descriptor.displayName.toUTF8 ++ " { ".toUTF8 ++ joinBytes ", ".toUTF8 parts ++ " }".toUTF8)
 
 def renderElements : Nat → LayoutEnv → List Value → EvalM ByteArray
   | 0, _, _ => timeout
