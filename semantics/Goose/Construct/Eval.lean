@@ -3,16 +3,16 @@ import Goose.Construct.Runtime
 namespace Goose.Construct
 open Goose.Core (ActId ScopeInst RootInst Loc StorageId DestinationId VarId GlobalId ContextId OriginId IntTy NumProfile AbortKind FaultKind BinOp)
 
-private structure EvalConfig where
+structure EvalConfig where
   profile : NumProfile
   module : Module
 
 private def EvalConfig.layout (config : EvalConfig) : LayoutEnv := LayoutEnv.ofModule config.module
 
-private def returned (activation : ActId) (carriers : List Carrier) : EvalM α := fun state =>
+def returned (activation : ActId) (carriers : List Carrier) : EvalM α := fun state =>
   .escape activation carriers state
 
-private inductive Flow
+inductive Flow
   | normal (value : Value)
   | breaking (value : Option Value)
   | continuing
@@ -47,7 +47,7 @@ private def enclosingActivation (environment : RuntimeActivation) : EvalM Runtim
   let some activation := (← EvalM.get).activations.find? (fun activation => activation.act == environment.act) | fault .flow
   pure { activation with scopes := environment.scopes }
 
-private def targetActivation (config : EvalConfig) (target : Nat) : EvalM RuntimeActivation := do
+def targetActivation (config : EvalConfig) (target : Nat) : EvalM RuntimeActivation := do
   let some target := config.module.targets[target]? | fault .unbound
   let some activation := selectTarget? target (← EvalM.get).activations | fault .flow
   pure activation
@@ -74,7 +74,7 @@ private def exitChannels (activation : RuntimeActivation) (operands : List Expr)
 
 
 mutual
-private def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → EvalM Value
+def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → EvalM Value
   | 0, _, _, _ => timeout
   | fuel + 1, config, environment, expression => do
       match expression with
@@ -208,7 +208,7 @@ private def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → Ev
           | [operand] => evalValue fuel config environment operand
           | _ => fault .arity
 
-private def evalBound : Nat → EvalConfig → RuntimeActivation → Nat → Int → Bound → EvalM Int
+def evalBound : Nat → EvalConfig → RuntimeActivation → Nat → Int → Bound → EvalM Int
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, count, defaultValue, bound => do
       match bound with
@@ -216,7 +216,7 @@ private def evalBound : Nat → EvalConfig → RuntimeActivation → Nat → Int
       | .expr operand => pure (← expectInt (← evalValue fuel config environment operand)).2
       | .fromEnd operand => pure ((count : Int) - (← expectInt (← evalValue fuel config environment operand)).2)
 
-private def evalPlace : Nat → EvalConfig → RuntimeActivation → Place → EvalM Loc
+def evalPlace : Nat → EvalConfig → RuntimeActivation → Place → EvalM Loc
   | 0, _, _, _ => timeout
   | fuel + 1, config, environment, place => do
       match place with
@@ -233,7 +233,7 @@ private def evalPlace : Nat → EvalConfig → RuntimeActivation → Place → E
           let location ← evalPlace fuel config environment owner
           pure ⟨location.root, location.path ++ [index]⟩
 
-private def evalView : Nat → EvalConfig → RuntimeActivation → View → EvalM RuntimeView
+def evalView : Nat → EvalConfig → RuntimeActivation → View → EvalM RuntimeView
   | 0, _, _, _ => timeout
   | fuel + 1, config, environment, view => do
       match view with
@@ -251,7 +251,7 @@ private def evalView : Nat → EvalConfig → RuntimeActivation → View → Eva
               bindRoot root value
               pure ⟨⟨root, []⟩, 0, count, dynamic⟩
 
-private def evalProduce : Nat → EvalConfig → RuntimeActivation → List Channel → Expr → EvalM (List Carrier)
+def evalProduce : Nat → EvalConfig → RuntimeActivation → List Channel → Expr → EvalM (List Carrier)
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, environment, channels, expression => do
       match expression with
@@ -285,7 +285,7 @@ private def evalProduce : Nat → EvalConfig → RuntimeActivation → List Chan
               pure [.completed (← completedDestination destination)]
           | _ => fault .arity
 
-private def evalOperands : Nat → EvalConfig → RuntimeActivation → List Channel → List Expr → EvalM (List Carrier)
+def evalOperands : Nat → EvalConfig → RuntimeActivation → List Channel → List Expr → EvalM (List Carrier)
   | 0, _, _, _, _ => timeout
   | _ + 1, _, _, [], [] => pure []
   | fuel + 1, config, environment, channel :: channels, operand :: operands => do
@@ -293,7 +293,7 @@ private def evalOperands : Nat → EvalConfig → RuntimeActivation → List Cha
       pure (carrier :: (← evalOperands fuel config environment channels operands))
   | _ + 1, _, _, _, _ => fault .arity
 
-private def buildExpr : Nat → EvalConfig → RuntimeActivation → DestinationId → Expr → EvalM Unit
+def buildExpr : Nat → EvalConfig → RuntimeActivation → DestinationId → Expr → EvalM Unit
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, environment, destination, expression =>
       protectDestination (expressionOrigin expression) destination do
@@ -369,7 +369,7 @@ private def buildExpr : Nat → EvalConfig → RuntimeActivation → Destination
             let value ← evalValue fuel config environment expression
             copyValue fuel config.layout destination value (expressionOrigin expression) none
 
-private def buildElement : Nat → EvalConfig → RuntimeActivation → DestinationId → Ty → Expr → EvalM Unit
+def buildElement : Nat → EvalConfig → RuntimeActivation → DestinationId → Ty → Expr → EvalM Unit
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, parent, element, operand => do
       if element.nonfixed then
@@ -381,7 +381,7 @@ private def buildElement : Nat → EvalConfig → RuntimeActivation → Destinat
         let bytes ← liftExcept (fixedBytes fuel config.layout element value)
         liftConstruction (expressionOrigin operand) (writeElement parent bytes)
 
-private def evalArguments : Nat → EvalConfig → RuntimeActivation → Array LocalVar → List Param → List Arg → EvalM (List (Value × StorageId))
+def evalArguments : Nat → EvalConfig → RuntimeActivation → Array LocalVar → List Param → List Arg → EvalM (List (Value × StorageId))
   | 0, _, _, _, _, _ => timeout
   | _ + 1, _, _, _, [], [] => pure []
   | fuel + 1, config, environment, parameterVars, parameter :: parameters, argument :: arguments => do
@@ -401,7 +401,7 @@ private def evalArguments : Nat → EvalConfig → RuntimeActivation → Array L
       pure ((value, ordinal) :: (← evalArguments fuel config environment parameterVars parameters arguments))
   | _ + 1, _, _, _, _, _ => fault .arity
 
-private def invokeCall : Nat → EvalConfig → RuntimeActivation → ContextId → List Arg → List Channel → OriginId → EvalM (List Carrier)
+def invokeCall : Nat → EvalConfig → RuntimeActivation → ContextId → List Arg → List Channel → OriginId → EvalM (List Carrier)
   | 0, _, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, context, arguments, channels, origin => do
       let (id, implementation) ← getImplementation config context
@@ -427,7 +427,7 @@ private def invokeCall : Nat → EvalConfig → RuntimeActivation → ContextId 
       let carriers ← enterActivation fuel config activation pre implementation.body origin
       deliverCarriers fuel config.layout channels carriers origin
 
-private def enterActivation : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → Block → OriginId → EvalM (List Carrier)
+def enterActivation : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → Block → OriginId → EvalM (List Carrier)
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, activation, pre, body, origin => do
       let some implementation := config.module.impls[activation.implementation]? | fault .unbound
@@ -437,12 +437,12 @@ private def enterActivation : Nat → EvalConfig → RuntimeActivation → List 
         | .normal _ => pure carriers
         | _ => fault .flow
 
-private def execResultBlock : Nat → EvalConfig → RuntimeActivation → List Channel → Block → EvalM (Flow × List Carrier)
+def execResultBlock : Nat → EvalConfig → RuntimeActivation → List Channel → Block → EvalM (Flow × List Carrier)
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, environment, channels, block =>
       execResultBlockWith fuel config environment [] channels block
 
-private def execResultBlockWith : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → List Channel → Block → EvalM (Flow × List Carrier)
+def execResultBlockWith : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → List Channel → Block → EvalM (Flow × List Carrier)
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, pre, channels, .mk scope statements value => do
       let scopeInst ← freshScope
@@ -463,7 +463,7 @@ private def execResultBlockWith : Nat → EvalConfig → RuntimeActivation → L
             else fault .arity
         | flow, _ => pure (flow, [])
 
-private def execBlock : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → List Channel → Block → EvalM Flow
+def execBlock : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → List Channel → Block → EvalM Flow
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, pre, channels, .mk scope statements value => do
       let scopeInst ← freshScope
@@ -477,7 +477,7 @@ private def execBlock : Nat → EvalConfig → RuntimeActivation → List (VarId
             else pure (.normal (← carrierValue (← singleCarrier (← evalProduce fuel config environment' channels expression))))
         | flow, _ => pure flow
 
-private def execStmts : Nat → EvalConfig → RuntimeActivation → List Stmt → EvalM Flow
+def execStmts : Nat → EvalConfig → RuntimeActivation → List Stmt → EvalM Flow
   | 0, _, _, _ => timeout
   | _ + 1, _, _, [] => pure (.normal .unit)
   | fuel + 1, config, environment, statement :: statements => do
@@ -485,7 +485,7 @@ private def execStmts : Nat → EvalConfig → RuntimeActivation → List Stmt �
       | .normal _ => execStmts fuel config environment statements
       | flow => pure flow
 
-private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
+def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
   | 0, _, _, _ => timeout
   | fuel + 1, config, environment, statement => do
       match statement with
@@ -664,7 +664,7 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
           let (_, code) ← expectInt (← evalValue fuel config environment expression)
           EvalM.stop (.exit code)
 
-private def evalPrintArg : Nat → EvalConfig → RuntimeActivation → PrintArg → EvalM ByteArray
+def evalPrintArg : Nat → EvalConfig → RuntimeActivation → PrintArg → EvalM ByteArray
   | 0, _, _, _ => timeout
   | fuel + 1, config, environment, argument => do
       match argument with
@@ -672,7 +672,7 @@ private def evalPrintArg : Nat → EvalConfig → RuntimeActivation → PrintArg
       | .expr expression => renderAny fuel config.layout .topLevel (← evalValue fuel config environment expression)
       | .view view => renderView fuel config.layout .topLevel (← evalView fuel config environment view)
 
-private def execWhile : Nat → EvalConfig → RuntimeActivation → Expr → Block → EvalM Flow
+def execWhile : Nat → EvalConfig → RuntimeActivation → Expr → Block → EvalM Flow
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, environment, condition, body => do
       if (← expectBool (← evalValue fuel config environment condition)) then
@@ -681,7 +681,7 @@ private def execWhile : Nat → EvalConfig → RuntimeActivation → Expr → Bl
         | .breaking value => pure (.normal (value.getD .unit))
       else pure (.normal .unit)
 
-private def execRange : Nat → EvalConfig → RuntimeActivation → VarId → IntTy → Int → Int → Block → EvalM Flow
+def execRange : Nat → EvalConfig → RuntimeActivation → VarId → IntTy → Int → Int → Block → EvalM Flow
   | 0, _, _, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, localVar, ty, first, last, body => do
       if first < last then
@@ -690,7 +690,7 @@ private def execRange : Nat → EvalConfig → RuntimeActivation → VarId → I
         | .breaking value => pure (.normal (value.getD .unit))
       else pure (.normal .unit)
 
-private def execEach : Nat → EvalConfig → RuntimeActivation → VarId → Option VarId → Bool → Block → RuntimeView → Nat → EvalM Flow
+def execEach : Nat → EvalConfig → RuntimeActivation → VarId → Option VarId → Bool → Block → RuntimeView → Nat → EvalM Flow
   | 0, _, _, _, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, localVar, index, byRef, body, view, current => do
       let count ← if view.dynamic then do pure (← arrayLength (← readLoc fuel config.layout view.location)).1 else pure view.count
@@ -703,7 +703,7 @@ private def execEach : Nat → EvalConfig → RuntimeActivation → VarId → Op
         | .breaking value => pure (.normal (value.getD .unit))
       else pure (.normal .unit)
 
-private def loopBody : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → Block → EvalM Flow
+def loopBody : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → Block → EvalM Flow
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, environment, pre, body =>
       withBreakTarget environment.act .loop []
@@ -714,7 +714,7 @@ private def loopBody : Nat → EvalConfig → RuntimeActivation → List (VarId 
           | .breakValue [] => pure (.breaking none)
           | .breakValue carriers => pure (.breaking (some (← carrierValue (← singleCarrier carriers)))))
 
-private def pushValue : Nat → EvalConfig → RuntimeActivation → Place → Expr → OriginId → EvalM Value
+def pushValue : Nat → EvalConfig → RuntimeActivation → Place → Expr → OriginId → EvalM Value
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, owner, expression, origin => do
       let location ← evalPlace fuel config environment owner
@@ -734,7 +734,7 @@ private def pushValue : Nat → EvalConfig → RuntimeActivation → Place → E
       pure (.ref ⟨location.root, location.path ++ [index]⟩)
 end
 
-private def initGlobals (fuel : Nat) (config : EvalConfig) : List GlobalId → EvalM Unit
+def initGlobals (fuel : Nat) (config : EvalConfig) : List GlobalId → EvalM Unit
   | [] => pure ()
   | global :: globals => do
       let some descriptor := config.module.globals[global]? | fault .unbound
@@ -748,7 +748,7 @@ private def initGlobals (fuel : Nat) (config : EvalConfig) : List GlobalId → E
       bindRoot (.global global) value
       initGlobals fuel config globals
 
-private def runModule (fuel : Nat) (config : EvalConfig) : EvalM Unit := do
+def runModule (fuel : Nat) (config : EvalConfig) : EvalM Unit := do
   initGlobals fuel config (List.range config.module.globals.size)
   let (_, implementation) ← getImplementation config config.module.entry
   let channels ← channelsFor config.layout 0 implementation.results.toList 0
