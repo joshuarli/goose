@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** resumed 2026-10-13 at the owner's request. Current progress is appended to §13; the paused handoff below records the starting state and historical status at pause.
+**Status:** winding down 2026-10-14 at the owner's request. No new campaign work may start.
 **Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12). `master` is not touched.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
