@@ -290,6 +290,37 @@ theorem keepsEventPrefix_withBreakTarget (act : Goose.Core.ActId) (scope : Break
       · simpa [withBreakTarget, installed, target, result, caught, removed, mapStepState,
           Goose.Proofs.Exit.stepState] using keptEvents
 
+theorem keepsEventPrefix_releaseScope (environment : RuntimeActivation) (scope scopeInst : Nat) :
+    KeepsEventPrefix (releaseScope environment scope scopeInst) := by
+  intro state
+  exact eventPrefix_refl _
+
+theorem keepsEventPrefix_bindAll (act : Goose.Core.ActId) (scopeInst : Goose.Core.ScopeInst)
+    (values : List (Goose.Core.VarId × Value)) : KeepsEventPrefix (bindAll act scopeInst values) := by
+  unfold bindAll
+  apply keepsEventPrefix_bind
+  · apply keepsEventPrefix_listForIn
+    intro entry current
+    rcases entry with ⟨localVar, value⟩
+    apply keepsEventPrefix_bind
+    · exact keepsEventPrefix_bindRoot _ _
+    · intro _; exact keepsEventPrefix_pure _
+  · intro _; exact keepsEventPrefix_pure _
+
+theorem keepsEventPrefix_allocateActivation (make : Goose.Core.ActId → RuntimeActivation)
+    (action : RuntimeActivation → EvalM α)
+    (kept : ∀ activation, KeepsEventPrefix (action activation)) :
+    KeepsEventPrefix (do
+      let act ← freshAct
+      let activation := make act
+      let state ← EvalM.get
+      EvalM.set { state with activations := activation :: state.activations }
+      action activation) := by
+  intro state
+  simpa [freshAct, EvalM.get, EvalM.set, bind, pure, Goose.Proofs.Exit.stepState] using
+    kept (make state.nextAct)
+      { state with nextAct := state.nextAct + 1, activations := make state.nextAct :: state.activations }
+
 theorem rejected_publication_preserves_execution (state : ExecutionState)
     (destinations : List Goose.Core.DestinationId) (kind : ConstructionFault)
     (origin : Goose.Core.OriginId)
