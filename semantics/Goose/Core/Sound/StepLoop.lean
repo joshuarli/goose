@@ -768,7 +768,7 @@ private theorem AliasAt.sliceTy {m : Module} {W : World} {env : Env} {s : Store}
   cases hlen
   exact hslice
 
-private theorem eachViewAfterBody {m : Module} {W : World} {penv : PEnv} {env : Env}
+theorem eachViewAfterBody {m : Module} {W : World} {penv : PEnv} {env : Env}
     {s s' : Store} {source : View} {vw : ViewVal} {el : Ty} {path : List Nat}
     {alias : RetainedAlias}
     (hEach : EachViewOk s vw el)
