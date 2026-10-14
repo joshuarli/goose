@@ -189,11 +189,10 @@ def typeView : Nat → TypingEnv → View → TypingM (Ty × Bool)
   | 0, _, _ => fail .type "validation nesting limit"
   | fuel + 1, env, .of place => do
       let (ty, _, writable) ← typePlace fuel env place
-      match ty with
-      | .slice mutability element => pure (element, writable && mutability == .mutable)
-      | _ => match ty.element? with
-        | some element => pure (element, writable)
-        | none => fail .type "view requires array storage"
+      require ty.storageType .type "place-based view requires array storage"
+      match ty.element? with
+      | some element => pure (element, writable)
+      | none => fail .type "view requires array storage"
   | fuel + 1, env, .val expression => do
       match (← one (← typeExpr fuel (ordinary env) expression)) with
       | .slice mutability element => pure (element, mutability == .mutable)
