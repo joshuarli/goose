@@ -47,7 +47,7 @@ def elementType : Ty → Option Ty
   | .arr element _ | .varr element | .grow element | .growshrink element | .limited element _ => some element
   | _ => none
 
-def receivingLayout (module : Module) : Ty → EvalM ReceivingLayout
+def receivingLayout (module : LayoutEnv) : Ty → EvalM ReceivingLayout
   | .varr _ => pure .packed
   | .arr _ count => pure (.fixed count)
   | .limited element capacity =>
@@ -72,7 +72,7 @@ def bytesInt (ty : IntTy) (bytes : ByteArray) (start : Nat) : Except FaultKind I
     bits := bits + byte.toNat * 2 ^ (8 * index)
   pure (Core.ofBits ty bits)
 
-def fixedBytes : Nat → Module → Ty → Value → Except Core.Stop ByteArray
+def fixedBytes : Nat → LayoutEnv → Ty → Value → Except Core.Stop ByteArray
   | 0, _, _, _ => .error .timeout
   | fuel + 1, module, ty, value => do
     match ty, value with
@@ -98,7 +98,7 @@ def fixedBytes : Nat → Module → Ty → Value → Except Core.Stop ByteArray
     | _, _ => .error (.fault .shape)
   
 
-def fixedValue (fuel : Nat) (module : Module) (ty : Ty) (bytes : ByteArray) (start : Nat) : Except Core.Stop Value :=
+def fixedValue (fuel : Nat) (module : LayoutEnv) (ty : Ty) (bytes : ByteArray) (start : Nat) : Except Core.Stop Value :=
   match fuel with
   | 0 => .error .timeout
   | fuel + 1 => do
@@ -136,7 +136,7 @@ def sampledStored (stored : StoredValue) : EvalM (ByteArray × SampledRun) := do
     | none => pure (match stored.ty with | .varr _ => 4 | _ => 0)
   pure (bytes, ⟨stored.start + headerSize, count, element⟩)
 
-def readStoredElement (fuel : Nat) (module : Module) (stored : StoredValue) (index : Nat) : EvalM Value := do
+def readStoredElement (fuel : Nat) (module : LayoutEnv) (stored : StoredValue) (index : Nat) : EvalM Value := do
   let (bytes, run) ← sampledStored stored
   let (start, _) ← liftLayout (elementInterval fuel module bytes run index)
   if run.element.nonfixed then
@@ -144,7 +144,7 @@ def readStoredElement (fuel : Nat) (module : Module) (stored : StoredValue) (ind
     pure (.stored ⟨stored.storage, start, run.element, sampled.count, none, some (stored.object.getD stored.storage), stored.path ++ [index]⟩)
   else liftExcept (fixedValue fuel module run.element bytes start)
 
-def readValuePath : Nat → Module → Value → List Nat → EvalM Value
+def readValuePath : Nat → LayoutEnv → Value → List Nat → EvalM Value
   | 0, _, _, _ => timeout
   | _ + 1, _, value, [] => pure value
   | fuel + 1, module, value, index :: rest => do
@@ -157,7 +157,7 @@ def readValuePath : Nat → Module → Value → List Nat → EvalM Value
         | _ => fault .shape
       readValuePath fuel module child rest
 
-def readLoc (fuel : Nat) (module : Module) (location : Loc) : EvalM Value := do
+def readLoc (fuel : Nat) (module : LayoutEnv) (location : Loc) : EvalM Value := do
   match (← EvalM.get).objects.lookup location.root with
   | some value => readValuePath fuel module value location.path
   | none => fault .danglingRoot
@@ -166,7 +166,7 @@ def bindRoot (root : RootInst) (value : Value) : EvalM Unit := do
   let state ← EvalM.get
   EvalM.set { state with objects := (root, value) :: state.objects.filter (fun entry => entry.1 != root) }
 
-def writeValuePath : Nat → Module → Value → List Nat → Value → EvalM Value
+def writeValuePath : Nat → LayoutEnv → Value → List Nat → Value → EvalM Value
   | 0, _, _, _, _ => timeout
   | _ + 1, _, _, [], replacement => pure replacement
   | fuel + 1, module, value, index :: rest, replacement => do
@@ -199,7 +199,7 @@ def writeValuePath : Nat → Module → Value → List Nat → Value → EvalM V
             pure value
       | _ => fault .shape
 
-def writeLoc (fuel : Nat) (module : Module) (location : Loc) (replacement : Value) : EvalM Unit := do
+def writeLoc (fuel : Nat) (module : LayoutEnv) (location : Loc) (replacement : Value) : EvalM Unit := do
   let some value := (← EvalM.get).objects.lookup location.root | fault .danglingRoot
   let value ← writeValuePath fuel module value location.path replacement
   bindRoot location.root value
@@ -264,11 +264,7 @@ def bindAll (act : ActId) (scopeInst : ScopeInst) (values : List (VarId × Value
 
 def emitStdout (bytes : ByteArray) : EvalM Unit := liftConstruction 0 (appendStdout bytes)
 
-structure EvalConfig where
-  profile : NumProfile
-  module : Module
-
-def newDestination (module : Module) (owner : ActId) (ty : Ty) (request : Core.ConstructionRequest)
+def newDestination (module : LayoutEnv) (owner : ActId) (ty : Ty) (request : Core.ConstructionRequest)
     (origin : OriginId) (storage : Option StorageId := none) (knownCount : Option Nat := none) : EvalM DestinationId := do
   let storage ← match storage with
     | some storage => pure storage
@@ -276,7 +272,7 @@ def newDestination (module : Module) (owner : ActId) (ty : Ty) (request : Core.C
   let capability : Core.Destination Ty := ⟨0, ⟨.local owner 0 0, []⟩, ty, ty, request, 0, owner⟩
   liftConstruction origin (openDestination storage capability (← receivingLayout module ty) knownCount)
 
-def channelsFor (module : Module) (owner : ActId) (results : List ResultDescriptor) (origin : OriginId) : EvalM (List Channel) := do
+def channelsFor (module : LayoutEnv) (owner : ActId) (results : List ResultDescriptor) (origin : OriginId) : EvalM (List Channel) := do
   results.mapM fun descriptor => match descriptor.request with
     | .register => pure (.register descriptor.ty)
     | .value => do pure (.construct (← newDestination module owner descriptor.ty .value origin))
@@ -327,7 +323,7 @@ def arrayLength (value : Value) : EvalM (Nat × Bool) := do
       pure (run.count, dynamic)
   | _ => fault .shape
 
-def readRun (fuel : Nat) (module : Module) (view : RuntimeView) : EvalM (List Value) :=
+def readRun (fuel : Nat) (module : LayoutEnv) (view : RuntimeView) : EvalM (List Value) :=
   (List.range view.count).mapM fun index =>
     readLoc fuel module ⟨view.location.root, view.location.path ++ [view.start + index]⟩
 
@@ -442,7 +438,7 @@ def quoteBytes (bytes : ByteArray) : ByteArray := Id.run do
       | _ => ⟨#[byte]⟩
   return result ++ "\"".toUTF8
 
-def copyValue : Nat → EvalConfig → DestinationId → Value → OriginId → EvalM Unit
+def copyValue : Nat → LayoutEnv → DestinationId → Value → OriginId → EvalM Unit
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, destination, value, origin => do
       let pending ← getDestination destination
@@ -453,24 +449,24 @@ def copyValue : Nat → EvalConfig → DestinationId → Value → OriginId → 
           if run.element != element then fault .shape
           liftConstruction origin (recordCopy (.storage (stored.object.getD stored.storage) stored.path) destination)
           for index in [0:run.count] do
-            let (start, finish) ← liftLayout (elementInterval fuel config.module bytes run index)
+            let (start, finish) ← liftLayout (elementInterval fuel config bytes run index)
             liftConstruction origin (writeElement destination (bytes.extract start finish))
       | .fixed values =>
           for value in values do
-            liftConstruction origin (writeElement destination (← liftExcept (fixedBytes fuel config.module element value)))
+            liftConstruction origin (writeElement destination (← liftExcept (fixedBytes fuel config element value)))
       | _ => fault .shape
       liftConstruction origin (finishDestination destination)
 
-def repeatElement : Nat → EvalConfig → DestinationId → Ty → DestinationId → OriginId → EvalM Unit
+def repeatElement : Nat → LayoutEnv → DestinationId → Ty → DestinationId → OriginId → EvalM Unit
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, parent, element, source, origin => do
       let stored ← storedDestination source
       let storage ← getStorage stored.storage
-      let finish ← liftLayout (packedEnd fuel config.module element storage.bytes stored.start)
+      let finish ← liftLayout (packedEnd fuel config element storage.bytes stored.start)
       liftConstruction origin (recordCopy (.repeat source) parent)
       liftConstruction origin (writeElement parent (storage.bytes.extract stored.start finish))
 
-def ownerDestination (module : Module) (stored : StoredValue) (request : Core.ConstructionRequest)
+def ownerDestination (module : LayoutEnv) (stored : StoredValue) (request : Core.ConstructionRequest)
     (knownCount : Option Nat) (origin : OriginId) : EvalM DestinationId := do
   match stored.destination with
   | some id =>
@@ -481,7 +477,7 @@ def ownerDestination (module : Module) (stored : StoredValue) (request : Core.Co
       | _ => fault .flow
   | none => newDestination module 0 stored.ty request origin (some stored.storage) knownCount
 
-def publishOwner : Nat → EvalConfig → Loc → StoredValue → DestinationId → OriginId → EvalM Unit
+def publishOwner : Nat → LayoutEnv → Loc → StoredValue → DestinationId → OriginId → EvalM Unit
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, location, stored, destination, origin => do
       let pending ← getDestination destination
@@ -489,57 +485,57 @@ def publishOwner : Nat → EvalConfig → Loc → StoredValue → DestinationId 
       | .child parent =>
           liftConstruction origin (attachExtension parent destination)
           let value ← storedDestination parent
-          writeLoc fuel config.module location (.stored { value with ty := stored.ty, object := stored.object })
+          writeLoc fuel config location (.stored { value with ty := stored.ty, object := stored.object })
       | .receiver =>
           publishCarriers origin [.completed destination]
           let storage ← getStorage stored.storage
-          writeLoc fuel config.module location (.stored { stored with count := storage.publishedCount, destination := some destination })
+          writeLoc fuel config location (.stored { stored with count := storage.publishedCount, destination := some destination })
       | .replacement _ => fault .flow
 
-def truncateOwner : Nat → EvalConfig → Loc → Nat → OriginId → EvalM Unit
+def truncateOwner : Nat → LayoutEnv → Loc → Nat → OriginId → EvalM Unit
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, location, count, origin => do
-      let .stored stored ← readLoc fuel config.module location | fault .shape
+      let .stored stored ← readLoc fuel config location | fault .shape
       let (bytes, run) ← sampledStored stored
       if count > run.count then fault .pathRange
-      let finish ← liftLayout (elementsEnd fuel config.module run.element count bytes run.byteStart)
+      let finish ← liftLayout (elementsEnd fuel config run.element count bytes run.byteStart)
       let owner ← match stored.destination with
         | some id => do
             let destination ← getDestination id
             pure (match destination.progress with | .published _ => none | _ => some id)
         | none => pure none
       liftConstruction origin (truncateConstructionStorage stored.storage stored.start finish count owner (match stored.ty with | .limited _ _ => true | _ => false))
-      writeLoc fuel config.module location (.stored { stored with count := count })
+      writeLoc fuel config location (.stored { stored with count := count })
 
-def appendFixedValues : Nat → EvalConfig → Loc → List Value → OriginId → EvalM Unit
+def appendFixedValues : Nat → LayoutEnv → Loc → List Value → OriginId → EvalM Unit
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, location, values, origin => do
-      let .stored stored ← readLoc fuel config.module location | fault .shape
+      let .stored stored ← readLoc fuel config location | fault .shape
       let some element := elementType stored.ty | fault .shape
-      let parts ← values.mapM (fun value => liftExcept (fixedBytes fuel config.module element value))
-      let destination ← ownerDestination config.module stored .elementRun (some values.length) origin
+      let parts ← values.mapM (fun value => liftExcept (fixedBytes fuel config element value))
+      let destination ← ownerDestination config stored .elementRun (some values.length) origin
       for bytes in parts do liftConstruction origin (writeElement destination bytes)
       liftConstruction origin (finishDestination destination)
       publishOwner fuel config location stored (← completedDestination destination) origin
 
-def appendRun : Nat → EvalConfig → Loc → RuntimeView → OriginId → EvalM Unit
+def appendRun : Nat → LayoutEnv → Loc → RuntimeView → OriginId → EvalM Unit
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, location, view, origin => do
-      let .stored stored ← readLoc fuel config.module location | fault .shape
-      let source ← readLoc fuel config.module view.location
-      let destination ← ownerDestination config.module stored .elementRun (some view.count) origin
+      let .stored stored ← readLoc fuel config location | fault .shape
+      let source ← readLoc fuel config view.location
+      let destination ← ownerDestination config stored .elementRun (some view.count) origin
       match source with
       | .stored source =>
           let (bytes, run) ← sampledStored source
           liftConstruction origin (recordCopy (.storage (source.object.getD source.storage) source.path) destination)
           for index in [0:view.count] do
-            let (start, finish) ← liftLayout (elementInterval fuel config.module bytes run (view.start + index))
+            let (start, finish) ← liftLayout (elementInterval fuel config bytes run (view.start + index))
             liftConstruction origin (writeElement destination (bytes.extract start finish))
       | .fixed values =>
           let some element := elementType stored.ty | fault .shape
           for index in [0:view.count] do
             let some value := values[view.start + index]? | fault .pathRange
-            liftConstruction origin (writeElement destination (← liftExcept (fixedBytes fuel config.module element value)))
+            liftConstruction origin (writeElement destination (← liftExcept (fixedBytes fuel config element value)))
       | _ => fault .shape
       liftConstruction origin (finishDestination destination)
       publishOwner fuel config location stored (← completedDestination destination) origin
@@ -551,13 +547,13 @@ inductive RenderPosition
 
 mutual
 
-def renderAny : Nat → EvalConfig → RenderPosition → Value → EvalM ByteArray
+def renderAny : Nat → LayoutEnv → RenderPosition → Value → EvalM ByteArray
   | 0, _, _, _ => timeout
   | fuel + 1, config, nested, value => do
       match value with
       | .int _ _ | .bool _ => renderValue value
       | .unit => pure "()".toUTF8
-      | .ref location => renderAny fuel config nested (← readLoc fuel config.module location)
+      | .ref location => renderAny fuel config nested (← readLoc fuel config location)
       | .slice location start count => renderView fuel config nested ⟨location, start, count, false⟩
       | .stored stored => renderStored fuel config nested stored
       | .fixed values =>
@@ -569,33 +565,33 @@ def renderAny : Nat → EvalConfig → RenderPosition → Value → EvalM ByteAr
           else renderElements fuel config values.toList
       | .record _ _ => fault .shape
 
-def renderElements : Nat → EvalConfig → List Value → EvalM ByteArray
+def renderElements : Nat → LayoutEnv → List Value → EvalM ByteArray
   | 0, _, _ => timeout
   | fuel + 1, config, values => do
       let parts ← values.mapM (renderAny fuel config .aggregatePart)
       pure ("[".toUTF8 ++ joinBytes ", ".toUTF8 parts ++ "]".toUTF8)
 
-def renderStored : Nat → EvalConfig → RenderPosition → StoredValue → EvalM ByteArray
+def renderStored : Nat → LayoutEnv → RenderPosition → StoredValue → EvalM ByteArray
   | 0, _, _, _ => timeout
   | fuel + 1, config, nested, stored => do
       let (bytes, run) ← sampledStored stored
       if run.element == .int .u8 then
-        let (start, finish) ← liftLayout (sampledInterval fuel config.module bytes run)
+        let (start, finish) ← liftLayout (sampledInterval fuel config bytes run)
         let bytes := bytes.extract start finish
         pure (if nested == .aggregatePart then quoteBytes bytes else bytes)
       else
-        let values ← (List.range run.count).mapM (readStoredElement fuel config.module stored)
+        let values ← (List.range run.count).mapM (readStoredElement fuel config stored)
         renderElements fuel config values
 
-def renderView : Nat → EvalConfig → RenderPosition → RuntimeView → EvalM ByteArray
+def renderView : Nat → LayoutEnv → RenderPosition → RuntimeView → EvalM ByteArray
   | 0, _, _, _ => timeout
   | fuel + 1, config, nested, view => do
-      let value ← readLoc fuel config.module view.location
+      let value ← readLoc fuel config view.location
       let rawBytes ← match value with
         | .stored stored => do pure ((← sampledStored stored).2.element == .int .u8)
         | .fixed values => pure (values.all (fun value => match value with | .int .u8 _ => true | _ => false))
         | _ => fault .shape
-      let values ← readRun fuel config.module view
+      let values ← readRun fuel config view
       if rawBytes then
         let bytes ← values.mapM fun value => do
           let (ty, byte) ← expectInt value
