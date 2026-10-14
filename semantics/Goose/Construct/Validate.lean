@@ -217,6 +217,7 @@ private def checkStructTables (module : Module) : V Unit := do
   let layout := LayoutEnv.ofModule module
   for h : structId in [0:module.structs.size] do
     let definition := module.structs[structId]
+    if definition.displayName.isEmpty then reject .type "struct display name must be nonempty"
     unless definition.byteSize > 0 do reject .type "struct byte size must be positive"
     let mut endOffset := 0
     for field in definition.fields do

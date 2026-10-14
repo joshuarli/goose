@@ -53,6 +53,14 @@ private def rejectsWith (module : Module) (rule : Rule) : Bool :=
 
 #guard accepts baseModule
 
+private def namedStructModule : Module := {
+  (baseModule mainImpl) with
+  types := #[.structT 0 .nil]
+  structs := #[⟨1, #[], "箱"⟩] }
+
+#guard accepts namedStructModule
+#guard rejectsWith { namedStructModule with structs := #[⟨1, #[], ""⟩] } .type
+
 private def orphan : Impl := { mainImpl with name := "orphan" }
 #guard rejectsWith (baseModule mainImpl #[mainImpl, orphan]) .root
 
