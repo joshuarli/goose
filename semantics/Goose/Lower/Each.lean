@@ -150,6 +150,35 @@ theorem eachLen_sampled_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
   exact SimE.ret ⟨hpp, by simpa using hsampled, by simpa using hlt,
     Nat.le_refl _, Same.refl _ _, hrel⟩
 
+theorem regrowOf_none (le : LEnv) (ls : LS) : regrowOf none le ls = (false, ls) := rfl
+
+theorem regrowOf_some {le : LEnv} {ls : LS} {owner : ValueId} {mu : Mutability} {ty : Ty}
+    (h : ls.vals[owner]? = some (some (.data (.ref mu ty)))) :
+    regrowOf (some owner) le ls =
+      ((match ty with | .grow _ | .growshrink _ => true | _ => false), ls) := by
+  simp only [regrowOf, growOwner, valTy, bind_run, get_apply, pure_run, h]
+  cases ty <;> rfl
+
+theorem eachSampled_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
+    {ls lsk ls' : LS} {fr frk : Frame} {pt : Pt} {cells : List (ValueId × RVal)}
+    {view result : ValueId} {vw : ViewVal}
+    (P : Post cfg env cx ls fr lsk frk pt cells)
+    (hview : frk.vals[view]? = some (.view vw)) (regrow : Bool)
+    (hlow : eachSampled regrow view le lsk = (result, ls'))
+    (hext : ExtT ls' cx.fn.blocks) :
+    SimG cx pt frk (pure ())
+      (fun _ pt' fr' => Post cfg env cx ls fr ls' fr' pt'
+        (if regrow then [] else [(result, .val (.int .i64 vw.len))])) := by
+  cases regrow with
+  | true =>
+    simp only [eachSampled, ite_true, pure_run] at hlow
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
+    exact SimG.ret (P.sub (by simp))
+  | false =>
+    simp only [eachSampled, Bool.false_eq_true, ite_false] at hlow
+    exact leaf_def P hlow hext (by simp) (fun _ => .val (.int .i64 vw.len))
+      (by simpa using execPure_eachSampled hview)
+
 theorem eachElemValue_ref_cases {x : VarId} {elem value : ValueId} {le : LEnv}
     {ls ls' : LS} (h : eachElemValue x true elem le ls = (value, ls')) :
     (value = elem ∧ ls' = ls) ∨ emitDef (.refFreeze elem) le ls = (value, ls') := by
@@ -192,6 +221,69 @@ theorem eachElemValue_sim {cfg : Cfg} {env : Env} {cx : FnCtx}
           (fun _ => RVal.val (.ref loc)) ?_) fun _ pt' fr' P' => SimG.ret P'
         simp [execPure, getVal_of hc, Goose.Core.expectRef]
       simpa only [pure_bind] using hs
+
+def eachIRPre (x : VarId) (idx : Option VarId) (value counter : ValueId) (org : OriginId) :
+    List (SlotId × ValueId × OriginId) :=
+  (x, value, org) :: (match idx with | some j => [(j, counter, org)] | none => [])
+
+def eachCorePre (x : VarId) (idx : Option VarId) (value : Val) (i : Nat) : List (VarId × Val) :=
+  (x, value) :: (match idx with | some j => [(j, Val.int .i64 i)] | none => [])
+
+theorem eachIteration_sim (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
+    (input withElem withValue output : LS) (fr : Frame) (pt : Pt)
+    (view counter elem value result : ValueId) (vw : ViewVal) (i : Nat)
+    (x : VarId) (idx : Option VarId) (byRef : Bool) (block : Core.Block)
+    (loop : LoopCtx) (org : OriginId) (post : Flow → Pt → Frame → Prop)
+    (hElem : emitDef (.refElem view counter) le input = (elem, withElem))
+    (hValue : eachElemValue x byRef elem le withElem = (value, withValue))
+    (hBlock : lowerBlock (some loop)
+      (eachIRPre x idx value counter org)
+      false block le withValue = (result, output))
+    (hpp : input.pp = some pt) (hext : ExtT output cx.fn.blocks)
+    (hrel : Rel cfg env cx fr input)
+    (hview : fr.vals[view]? = some (.view vw))
+    (hcounter : fr.vals[counter]? = some (.val (.int .i64 i)))
+    (hc : counter < input.vals.size)
+    (hbody : ∀ ev pt' fr',
+      Post cfg env cx input fr withValue fr' pt' [(value, .val ev)] →
+      PreRel fr' (eachIRPre x idx value counter org)
+        (eachCorePre x idx ev i) →
+      SimE cx pt' fr' (execBlock n cfg env
+        (eachCorePre x idx ev i) block >>=
+        prepareReturn env) post) :
+    SimE cx pt fr
+      ((if byRef then pure (Val.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩)
+        else readLoc ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩) >>= fun ev =>
+      execBlock n cfg env (eachCorePre x idx ev i) block >>= prepareReturn env) post := by
+  have aBlock := advB_lowerBlock (some loop)
+    (eachIRPre x idx value counter org)
+    false block le withValue result output hBlock
+  have hextValue := hext.of_adv aBlock
+  have hextElem := hextValue.of_adv (advB_eachElemValue x byRef elem le withElem value withValue hValue)
+  have hop := execPure_eachElem (cx := cx) hview hcounter
+  have hElemSim := leaf_def (c := pure ()) (Post.init hrel hpp) hElem hextElem (by simp)
+    (fun _ => RVal.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩)) (by simpa using hop)
+  have hunit :
+      ((if byRef then pure (Val.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩)
+        else readLoc ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩) >>= fun ev =>
+      execBlock n cfg env (eachCorePre x idx ev i) block >>= prepareReturn env) =
+      (pure () >>= fun _ =>
+      (if byRef then pure (Val.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩)
+        else readLoc ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩) >>= fun ev =>
+      execBlock n cfg env (eachCorePre x idx ev i) block >>= prepareReturn env) := by simp
+  rw [hunit]
+  refine SimE.bind (SimE.of_simG hElemSim) fun _ ptElem frElem PElem => ?_
+  refine SimE.bind (SimE.of_simG (eachElemValue_sim PElem x byRef le hValue hextValue))
+    fun ev ptValue frValue PValue => ?_
+  have hcounterValue : frValue.vals[counter]? = some (.val (.int .i64 i)) := by
+    rw [PValue.same counter hc]
+    exact hcounter
+  have hpre : PreRel frValue
+      (eachIRPre x idx value counter org)
+      (eachCorePre x idx ev i) := by
+    have hval := PValue.has (value, .val ev) (by simp)
+    cases idx <;> simp [PreRel, eachIRPre, eachCorePre, hval, hcounterValue]
+  exact hbody ev ptValue frValue PValue hpre
 
 theorem tyStmt_each_scopes (env : TEnv) (sc : Nat) (x : VarId) (idx : Option VarId)
     (source : View) (byRef : Bool) (body : Core.Block) (org : OriginId)
@@ -266,10 +358,10 @@ def EachBranch (cx : FnCtx) (vw : ViewVal) (header body : Pt)
       (fun len pt' fr' => if i < len then pt' = body ∧ bodyInv i fr'
         else post (.normal .unit) pt' fr')
 
-def EachBody (cx : FnCtx) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option VarId)
+def EachBodyAt (n : Nat) (cx : FnCtx) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option VarId)
     (byRef : Bool) (block : Core.Block) (vw : ViewVal) (header body : Pt)
     (headerInv bodyInv : Nat → Frame → Prop) (post : Flow → Pt → Frame → Prop) : Prop :=
-  ∀ n i fr, bodyInv i fr →
+  ∀ i fr, bodyInv i fr →
     SimE cx body fr
       ((if byRef then pure (Val.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩)
         else readLoc ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩) >>= fun ev =>
@@ -280,14 +372,20 @@ def EachBody (cx : FnCtx) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option VarI
         | .brk => post (.normal .unit) pt' fr'
         | .ret value => post (.ret value) pt' fr')
 
-theorem each_sim (cx : FnCtx) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option VarId)
+def EachBody (cx : FnCtx) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option VarId)
     (byRef : Bool) (block : Core.Block) (vw : ViewVal) (header body : Pt)
-    (headerInv bodyInv : Nat → Frame → Prop) (post : Flow → Pt → Frame → Prop)
+    (headerInv bodyInv : Nat → Frame → Prop) (post : Flow → Pt → Frame → Prop) : Prop :=
+  ∀ n, EachBodyAt n cx cfg env x idx byRef block vw header body headerInv bodyInv post
+
+theorem each_sim_bounded (n : Nat) (cx : FnCtx) (cfg : Cfg) (env : Env)
+    (x : VarId) (idx : Option VarId) (byRef : Bool) (block : Core.Block) (vw : ViewVal)
+    (header body : Pt) (headerInv bodyInv : Nat → Frame → Prop)
+    (post : Flow → Pt → Frame → Prop)
     (hbranch : EachBranch cx vw header body headerInv bodyInv post)
-    (hbody : EachBody cx cfg env x idx byRef block vw header body headerInv bodyInv post) :
-    ∀ n i fr, headerInv i fr →
+    (hbody : ∀ k, k < n → EachBodyAt k cx cfg env x idx byRef block vw
+      header body headerInv bodyInv post) :
+    ∀ i fr, headerInv i fr →
       SimE cx header fr (execEach n cfg env x idx byRef block vw i >>= prepareReturn env) post := by
-  intro n
   induction n with
   | zero =>
     intro i fr _
@@ -302,15 +400,28 @@ theorem each_sim (cx : FnCtx) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option 
     · simp only [hi, ite_true] at hlen ⊢
       obtain ⟨rfl, hinvBody⟩ := hlen
       rw [← bind_assoc]
-      refine SimE.bind (hbody n i fr1 hinvBody) fun flow pt2 fr2 hflow => ?_
+      refine SimE.bind (hbody n (Nat.lt_succ_self n) i fr1 hinvBody)
+        fun flow pt2 fr2 hflow => ?_
       cases flow with
       | normal value | cont =>
         obtain ⟨frh, hinvh, hgo⟩ := hflow
-        exact SimE.goes hgo (ih (i + 1) frh hinvh)
+        exact SimE.goes hgo (ih (fun k hk => hbody k (Nat.lt_trans hk (Nat.lt_succ_self n)))
+          (i + 1) frh hinvh)
       | brk => exact SimE.ret hflow
       | ret value => exact SimE.ret hflow
     · simp only [hi, ite_false] at hlen ⊢
       exact SimE.ret hlen
+
+theorem each_sim (cx : FnCtx) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option VarId)
+    (byRef : Bool) (block : Core.Block) (vw : ViewVal) (header body : Pt)
+    (headerInv bodyInv : Nat → Frame → Prop) (post : Flow → Pt → Frame → Prop)
+    (hbranch : EachBranch cx vw header body headerInv bodyInv post)
+    (hbody : EachBody cx cfg env x idx byRef block vw header body headerInv bodyInv post) :
+    ∀ n i fr, headerInv i fr →
+      SimE cx header fr (execEach n cfg env x idx byRef block vw i >>= prepareReturn env) post := by
+  intro n i fr hinv
+  exact each_sim_bounded n cx cfg env x idx byRef block vw header body headerInv bodyInv post
+    hbranch (fun k _ => hbody k) i fr hinv
 
 theorem lowerEach_unfold {regrow : Bool} {owner : Option ValueId}
     {sampled hb i : Nat} {body : Nat → BlockId → B ValueId} {le : LEnv} {ls ls' : LS}
@@ -363,6 +474,62 @@ theorem EachInv.of_post {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS}
   · intro hr
     rw [P.same sampled (Nat.lt_trans (hs hr) hc)]
     exact hinv.sampledValue hr
+
+theorem EachInv.reentry {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS}
+    {counter view sampled : ValueId} {owner : Option ValueId} {vw : ViewVal}
+    {base fr fr' : Frame} {i : Nat}
+    (hinv : EachInv cfg env cx ls counter view sampled owner vw base i fr)
+    (hsame : Same counter fr fr')
+    (hcounter : fr'.vals[counter]? = some (.val (.int .i64 (i + 1 : Nat))))
+    (hrel : Rel cfg env cx fr' ls') (hv : view < counter)
+    (ho : vw.resizable = true → owner.getD 0 < counter)
+    (hs : vw.resizable = false → sampled < counter) :
+    EachInv cfg env cx ls' counter view sampled owner vw base (i + 1) fr' := by
+  refine ⟨hinv.values.trans hsame (Nat.le_refl _), hcounter, ?_, ?_, ?_, hrel⟩
+  · rw [hsame view hv]
+    exact hinv.viewValue
+  · intro hr
+    rw [hsame (owner.getD 0) (ho hr)]
+    exact hinv.ownerValue hr
+  · intro hr
+    rw [hsame sampled (hs hr)]
+    exact hinv.sampledValue hr
+
+theorem eachBack_goes (cx : FnCtx) (le : LEnv) (ls ls' : LS) (pt : Pt) (fr : Frame)
+    (counter hb : ValueId) (i : Nat)
+    (hback : rangeBack .i64 counter hb le ls = ((), ls'))
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks)
+    (hc : counter < ls.vals.size)
+    (hcounter : fr.vals[counter]? = some (.val (.int .i64 i)))
+    (hheader : ∃ block, cx.fn.blocks[hb]? = some block ∧
+      block.params = [(counter, .data (.int .i64))]) :
+    ∃ fr', Goes cx pt fr (hb, 0) fr' ∧ Same counter fr fr' ∧
+      fr'.vals[counter]? = some (.val (.int .i64 (i + 1 : Nat))) ∧
+      fr'.act = fr.act ∧ fr'.scopes = fr.scopes ∧ fr'.depth = fr.depth := by
+  obtain ⟨_, hcur, _, _⟩ := LS.pp_some hpp
+  rw [rangeBack, bind_run, isLive_run hcur] at hback
+  simp only [ite_true, bind_eq] at hback
+  obtain ⟨next, lsNext, hnext, hterm⟩ := hback
+  have hextNext := hext.of_adv (adv_emitTerm hterm)
+  obtain ⟨hnextId, _, _, hppNext, hnextInst⟩ := emitDef_facts hnext hpp hextNext
+  obtain ⟨_, _, _, htermInst⟩ := emitTerm_facts hterm hppNext hext
+  have hiNext : instAt cx.fn pt = some (.def next (.next .i64 counter)) := by
+    rw [instAt_eq]
+    exact hnextInst
+  have hnextPure : execPure cx fr (.next .i64 counter) =
+      pure (.val (.int .i64 (i + 1 : Nat))) := by
+    simp [execPure, getVal_of hcounter, expectInt]
+  have gnext := Goes.def_pure hiNext (by simp) hnextPure
+  have hiTerm : instAt cx.fn (pt.1, pt.2 + 1) = some (.term (.br hb [next])) := by
+    rw [instAt_eq]
+    exact htermInst
+  obtain ⟨block, hblock, hparams⟩ := hheader
+  have gback := goes_br1 hiTerm hblock hparams (Frame.set_get fr next (.val (.int .i64 (i + 1 : Nat))))
+  let after := (fr.set next (.val (.int .i64 (i + 1 : Nat)))).set counter
+    (.val (.int .i64 (i + 1 : Nat)))
+  refine ⟨after, gnext.trans gback, ?_, Frame.set_get _ _ _, rfl, rfl, rfl⟩
+  have hnextBound : counter ≤ next := by rw [hnextId]; exact Nat.le_of_lt hc
+  exact (Same.set fr hnextBound _).trans (Same.set _ (Nat.le_refl counter) _) (Nat.le_refl _)
 
 theorem eachLen_inv_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
     {ls ls' : LS} {counter view sampled result : ValueId} {owner : Option ValueId}
@@ -485,5 +652,70 @@ theorem lowerEach_branch_sim (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
     refine SimE.goes hgo (SimE.ret ?_)
     simp only [hlt, ite_false]
     exact ⟨by trivial, hppOut, hinvCmp.values, hinvCmp.rel.stack_eq hstackOut⟩
+
+theorem lowerEach_sim (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
+    (ls ls' : LS) (counter view sampled hb : ValueId) (owner : Option ValueId)
+    (vw : ViewVal) (base : Frame) (x : VarId) (idx : Option VarId) (byRef : Bool)
+    (block : Core.Block) (body : Nat → BlockId → B ValueId)
+    (post : Flow → Pt → Frame → Prop)
+    (hlow : lowerEach vw.resizable owner sampled hb counter body le ls = ((), ls'))
+    (hadv : ∀ d xb, AdvB (body d xb))
+    (hpp : ls.pp = some (hb, 0)) (hext : ExtT ls' cx.fn.blocks)
+    (hc : counter < ls.vals.size) (hv : view < counter)
+    (ho : vw.resizable = true → owner.getD 0 < counter)
+    (hs : vw.resizable = false → sampled < counter)
+    (hexit : ∀ pt fr, ls'.pp = some pt → Same counter base fr → Rel cfg env cx fr ls' →
+      post (.normal .unit) pt fr)
+    (hbody : ∀ d xb input result output tb,
+      body d xb le input = (result, output) → input.pp = some (tb, 0) →
+      ExtT output cx.fn.blocks →
+      ∀ fuel, fuel < n → EachBodyAt fuel cx cfg env x idx byRef block vw (hb, 0) (tb, 0)
+        (EachInv cfg env cx ls counter view sampled owner vw base)
+        (EachInv cfg env cx input counter view sampled owner vw base) post) :
+    ∀ i fr, EachInv cfg env cx ls counter view sampled owner vw base i fr →
+      SimE cx (hb, 0) fr (execEach n cfg env x idx byRef block vw i >>= prepareReturn env) post := by
+  obtain ⟨len, lsLen, cmp, lsCmp, tb, xb, lsf, input, result, output, lsBack,
+    hLen, hCmp, hFork, hInput, hBody, hBack, hExit⟩ := lowerEach_unfold hlow
+  have aBody := hadv lsCmp.stack.length xb le input result output hBody
+  have aBack := advB_rangeBack .i64 counter hb le output () lsBack hBack
+  have hextBack : ExtT lsBack cx.fn.blocks := by simpa [hExit, ExtT] using hext
+  have hextOutput := hextBack.of_adv aBack
+  have hextInput := hextOutput.of_adv aBody
+  have hextFork : ExtT lsf cx.fn.blocks := by simpa [hInput, ExtT] using hextInput
+  have hbranch := lowerEach_branch_sim cfg env cx le ls lsLen lsCmp lsf input output lsBack ls'
+    counter view sampled len cmp hb tb xb owner vw base body result
+    hLen hCmp hFork hInput hBody aBody hBack hExit hpp hext hc hv ho hs
+  have hbranch' : EachBranch cx vw (hb, 0) (tb, 0)
+      (EachInv cfg env cx ls counter view sampled owner vw base)
+      (EachInv cfg env cx input counter view sampled owner vw base) post := by
+    intro i fr hinv
+    exact (hbranch i fr hinv).mono fun length pt' fr' h => by
+      by_cases hi : i < length
+      · simpa only [hi, ite_true] using h
+      · simp only [hi, ite_false] at h ⊢
+        exact hexit pt' fr' h.2.1 h.2.2.1 h.2.2.2
+  have aLen := advB_eachLen vw.resizable owner sampled le ls len lsLen hLen
+  have aCmp := adv_emitDef hCmp
+  obtain ⟨block0, hcur, hlookup, _⟩ := LS.pp_some hpp
+  have hcurLen : lsLen.cur = some hb := by
+    cases hr : vw.resizable <;> simp only [eachLen, hr, Bool.false_eq_true, ite_false, ite_true] at hLen
+    · rw [pure_run] at hLen
+      have he := (Prod.mk.inj hLen).2
+      simpa [← he] using hcur
+    · rw [emitDef_run _ le hcur] at hLen
+      have he := (Prod.mk.inj hLen).2
+      simpa using (congrArg LS.cur he).symm.trans hcur
+  have hcurCmp : lsCmp.cur = some hb := by
+    rw [emitDef_run _ le hcurLen] at hCmp
+    have he := (Prod.mk.inj hCmp).2
+    simpa using (congrArg LS.cur he).symm.trans hcurLen
+  obtain ⟨blockCmp, hlookupCmp, _, _, _⟩ := (aLen.trans aCmp).ext.2 hb block0 hlookup
+  have hextCmp := hextFork.of_adv (adv_fork hcurCmp hFork)
+  have hfacts := fork_facts hFork (LS.pp_eq hcurCmp hlookupCmp) hextFork
+  have hppInput : input.pp = some (tb, 0) := by
+    rw [hInput]
+    exact LS.pp_cur hfacts.2.2.2.2.2.2.2.1
+  exact each_sim_bounded n cx cfg env x idx byRef block vw (hb, 0) (tb, 0)
+    _ _ post hbranch' (hbody lsCmp.stack.length xb input result output tb hBody hppInput hextOutput)
 
 end Goose.Lower

@@ -94,4 +94,35 @@ def actualOwnerRuns (grow byRef : Bool) : Bool :=
 
 #guard [false, true].all fun grow => [false, true].all fun byRef => actualOwnerRuns grow byRef
 
+def noIndexModule (byRef : Bool) : Core.Module :=
+  let m := eachModule false byRef []
+  { m with impls := m.impls.map fun impl =>
+    { impl with vars := impl.vars.extract 0 1, body := match impl.body with
+      | .mk sc [.forEach x _ source ref body org] value =>
+        .mk sc [.forEach x none source ref body org] value
+      | body => body } }
+
+#guard [false, true].all fun byRef =>
+  match Core.validate (noIndexModule byRef), GIR.validate (lower (noIndexModule byRef)) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard actualRuns (noIndexModule false) "9\n100\n7\n100\n"
+#guard actualRuns (noIndexModule true) "9\n100\n7\n100\n"
+
+def shrinkingModule : Core.Module :=
+  let m := eachModule false false []
+  { m with
+    types := #[.int .i64, .growshrink (.int .i64)]
+    globals := m.globals.map fun gl =>
+      { gl with
+        ty := .growshrink (.int .i64)
+        init := .arrLit (.growshrink (.int .i64)) [.lit .i64 9, .lit .i64 7] } }
+
+#guard match Core.validate shrinkingModule, GIR.validate (lower shrinkingModule) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard actualRuns shrinkingModule "9\n100\n"
+
 end Goose.Lower.EachChecks
