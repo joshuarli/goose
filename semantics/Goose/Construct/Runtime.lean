@@ -442,30 +442,35 @@ def currentBreak (act : ActId) (scope : Option BreakScope := none) : EvalM Break
   let some target := (← EvalM.get).breaks.find? (fun target => target.act == act && (scope.isNone || scope == some target.scope)) | fault .flow
   pure target
 
+def landCarrier (origin : OriginId) (carrier : Carrier) : EvalM Unit := do
+  match carrier with
+  | .register _ => pure ()
+  | .completed id =>
+      let destination ← getDestination id
+      match destination.use with
+      | .replacement _ => liftConstruction origin (landExitReplacement id)
+      | _ => pure ()
+
 def landCarriers (origin : OriginId) (carriers : List Carrier) : EvalM Unit := do
-  for carrier in carriers do
-    match carrier with
-    | .register _ => pure ()
-    | .completed id =>
-        let destination ← getDestination id
-        match destination.use with
-        | .replacement _ => liftConstruction origin (landExitReplacement id)
-        | _ => pure ()
+  for carrier in carriers do landCarrier origin carrier
+
+def finishChannel (layout : LayoutEnv) (origin : OriginId) (carrier : Carrier)
+    (result : Ty) : EvalM Unit := do
+  match carrier with
+  | .register _ => pure ()
+  | .completed id =>
+      let destination ← getDestination id
+      let receivingPacked := match destination.capability.layout with | .varr _ => true | _ => false
+      if destination.layout == .packed && destination.capability.request == .value && !receivingPacked then
+        liftConstruction origin (removeConstructionHeader id)
+        liftConstruction origin (restoreReceivingLayout id (← receivingLayout layout destination.capability.layout))
+      liftConstruction origin (adaptDestinationType id result)
 
 def finishChannels (layout : LayoutEnv) (resultTypes : List Ty)
     (carriers : List Carrier) (origin : OriginId) : EvalM Unit := do
   landCarriers origin carriers
   if carriers.length != resultTypes.length then fault .arity
-  for (carrier, result) in carriers.zip resultTypes do
-    match carrier with
-    | .register _ => pure ()
-    | .completed id =>
-        let destination ← getDestination id
-        let receivingPacked := match destination.capability.layout with | .varr _ => true | _ => false
-        if destination.layout == .packed && destination.capability.request == .value && !receivingPacked then
-          liftConstruction origin (removeConstructionHeader id)
-          liftConstruction origin (restoreReceivingLayout id (← receivingLayout layout destination.capability.layout))
-        liftConstruction origin (adaptDestinationType id result)
+  for (carrier, result) in carriers.zip resultTypes do finishChannel layout origin carrier result
 
 def finishActivation (layout : LayoutEnv) (activation : RuntimeActivation) (resultTypes : List Ty)
     (origin : OriginId) (action : EvalM (List Carrier)) : EvalM (List Carrier) := fun state =>
