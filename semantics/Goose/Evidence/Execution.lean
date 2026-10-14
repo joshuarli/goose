@@ -333,4 +333,30 @@ theorem RuntimeStepsAvoid.control_path {cfg : GCfg} {fn : Func} {ids : List Valu
   | refl => exact .refl
   | next transition unwritten rest ih => exact .next transition.control unwritten ih
 
+theorem ControlPath.trans {fn : Func} {ids : List ValueId} {first middle last : Pt}
+    (left : ControlPath fn ids first middle) (right : ControlPath fn ids middle last) :
+    ControlPath fn ids first last := by
+  induction left with
+  | refl => exact right
+  | next transition unwritten rest ih => exact .next transition unwritten (ih right)
+
+theorem RuntimeStepsAvoid.protect {cfg : GCfg} {fn : Func} {ids guarded : List ValueId}
+    {first last : Pt} {firstFrame lastFrame : Frame} {firstState lastState : St}
+    (history : RuntimeStepsAvoid cfg fn ids first firstFrame firstState last lastFrame lastState)
+    (edgeProtected : ∀ {before after}, ControlPath fn ids first before →
+      ControlStep fn before after → (∀ id ∈ ids, id ∉ stepWrites fn before after) →
+      ControlPath fn ids after last → ∀ id ∈ guarded, id ∉ stepWrites fn before after) :
+    RuntimeStepsAvoid cfg fn guarded first firstFrame firstState last lastFrame lastState := by
+  have lift : ∀ {middle frame state}, ControlPath fn ids first middle →
+      RuntimeStepsAvoid cfg fn ids middle frame state last lastFrame lastState →
+      RuntimeStepsAvoid cfg fn guarded middle frame state last lastFrame lastState := by
+    intro middle frame state path rest
+    induction rest with
+    | refl => exact .refl
+    | next transition unwritten remaining ih =>
+      exact .next transition
+        (edgeProtected path transition.control unwritten remaining.control_path)
+        (ih history edgeProtected (path.trans (.next transition.control unwritten .refl)))
+  exact lift .refl history
+
 end Goose.Evidence
