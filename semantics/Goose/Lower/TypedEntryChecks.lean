@@ -1,4 +1,5 @@
 import Goose.Lower.TypedEntry
+import Goose.Lower.ModuleFuel
 import Goose.Lower.TypedGlobalChecks
 import Goose.Lower.FinalStatements
 import Goose.Lower.TypedLists
@@ -58,6 +59,13 @@ theorem module_simulation (artifact : ArtifactProfile) (profile : NumProfile)
       simpa [TypedGlobalChecks.module] using implAt.symm
     subst impl
     exact body_simulation 7 _
+
+theorem completed_module_no_fault (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (TypedGlobalChecks.module artifact) = .ok ()) (after : St)
+    (completed : Core.runModule 8 ⟨profile, TypedGlobalChecks.module artifact⟩ St.initial = .ok () after) :
+    ∀ fuel kind failed, GIR.runModule fuel ⟨profile, lower (TypedGlobalChecks.module artifact)⟩
+      St.initial ≠ .stop (.fault kind) failed :=
+  (module_simulation artifact profile accepted).module_no_fault_of_ok completed
 
 #guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
   [NumProfile.release, .debug].all fun profile =>
