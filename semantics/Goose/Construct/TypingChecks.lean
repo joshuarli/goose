@@ -81,7 +81,7 @@ private def readonlySliceEnv : TypingEnv := { env with
   variables := #[⟨"view",.slice .readOnly (.int .u8),.immutable,0,0⟩]
   visible := [0] }
 #guard match (typeExpr 256 readonlySliceEnv
-    (.ref .mutable (.elem (.of (.var 0)) (.lit .i64 0) 0))).run 1 with
+    (.ref .mutable (.elem (.val (.read (.var 0))) (.lit .i64 0) 0))).run 1 with
   | .error rejection => rejection.rule == .mut
   | _ => false
 
@@ -107,5 +107,33 @@ private def fixedCopyEnv : TypingEnv := { env with
 #guard match (typeExpr 256 fixedCopyEnv (.copy (.slice .readOnly (.int .u8)) (.var 0) 0)).run 1 with
   | .error rejection => rejection.rule == .type
   | _ => false
+
+
+#guard !expressionAccepts (.str (.arr (.int .u8) 2) [.text "x"] 0) [.arr (.int .u8) 2]
+#guard expressionAccepts (.str (.arr (.int .u8) 3) [.text "箱"] 0) [.arr (.int .u8) 3]
+#guard !expressionAccepts (.str (.arr (.int .u8) 1) [.expr (.lit .u8 1)] 0) [.arr (.int .u8) 1]
+
+
+#guard match (typeView 256 readonlySliceEnv (.of (.var 0))).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+
+private def valueBlock (statements : List Stmt) (tail : Option Expr := none) : Expr :=
+  .blockE (.mk 1 statements tail) 0
+#guard expressionAccepts (valueBlock [.breakValue (.lit .u8 7) 0]) [.int .u8]
+#guard expressionAccepts (valueBlock [.breakValue (.lit .u8 7) 0] (some (.lit .u8 9))) [.int .u8]
+#guard !expressionAccepts (valueBlock [.breakValue (.bool true) 0] (some (.lit .u8 9))) [.int .u8]
+#guard !expressionAccepts (valueBlock [.ifS (.bool true)
+  (.mk 2 [.breakValue (.lit .u8 7) 0] none) none 0]) [.int .u8]
+#guard expressionAccepts (valueBlock [.while (.bool true)
+  (.mk 2 [.breakValue (.lit .u8 7) 0] none) 0]) [.int .u8]
+#guard !expressionAccepts (valueBlock [.while (.bool true)
+  (.mk 2 [.brk 0,.breakValue (.lit .u8 7) 0] none) 0]) [.int .u8]
+#guard match (typeStatement 256 env (.while (.bool true)
+  (.mk 1 [.breakValue (.lit .u8 7) 0] none) 0)).run 1 with
+  | .error rejection => rejection.rule == .block
+  | _ => false
+#guard expressionAccepts (.ifE (.bool true)
+  (.mk 1 [.abort "stop" 0] none) (.mk 2 [] (some (.lit .u8 7))) 0) [.int .u8]
 
 end Goose.Construct.TypingChecks

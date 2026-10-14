@@ -63,6 +63,9 @@ structure TypingEnv where
   use : ExpressionUse := .ordinary
   request : Request := .value
   resultRequests : List Request := []
+  valueBreakTypes : Option (List Ty) := none
+  valueBreakRequests : List Request := []
+  valueBreakRequest : Request := .value
   globalLimit : Nat
 
 abbrev TypingM := StateT Nat V
@@ -70,6 +73,88 @@ abbrev TypingM := StateT Nat V
 private def fail (rule : Rule) (message : String) : TypingM α := throw ⟨rule, message⟩
 
 private def ordinary (env : TypingEnv) : TypingEnv := { env with use := .ordinary, request := .value, resultRequests := [] }
+
+mutual
+private def inferredExpressionTypes : Nat → DeclarationEnv → Expr → Option (List Ty)
+  | 0, _, _ => none
+  | fuel + 1, env, .values expressions => do
+      let channels ← expressions.mapM (inferredExpressionTypes fuel env)
+      if channels.all (fun types => types.length == 1) then some channels.flatten else none
+  | _, env, .call contextId _ _ => do
+      let context ← env.module.contexts[contextId]?
+      let implementation ← env.module.impls[context.impl]?
+      some (implementation.results.toList.map (·.ty))
+  | fuel + 1, env, .blockE block _ => inferredBlockTypes fuel env block
+  | fuel + 1, env, .ifE _ left right _ =>
+      match inferredBlockTypes fuel env left, inferredBlockTypes fuel env right with
+      | some [.unit], some rightTypes => some rightTypes
+      | some leftTypes, _ => some leftTypes
+      | none, rightTypes => rightTypes
+  | _ + 1, env, expression => (env.exprType? expression).map (fun ty => [ty])
+
+private def inferredBlockTypes : Nat → DeclarationEnv → Block → Option (List Ty)
+  | 0, _, _ => none
+  | fuel + 1, env, .mk _ statements tail =>
+      match tail with
+      | some expression => inferredExpressionTypes fuel env expression
+      | none => firstValueBreakTypes fuel env statements <|> some [.unit]
+
+private def firstValueBreakTypes : Nat → DeclarationEnv → List Stmt → Option (List Ty)
+  | 0, _, _ => none
+  | _ + 1, _, [] => none
+  | fuel + 1, env, statement :: rest =>
+      let current := match statement with
+        | .breakValue expression _ => inferredExpressionTypes fuel env expression
+        | .ifS _ (.mk _ left _) right _ =>
+            firstValueBreakTypes fuel env left <|>
+              (right.bind fun block => match block with
+                | .mk _ statements _ => firstValueBreakTypes fuel env statements)
+        | .while _ (.mk _ statements _) _ |
+          .forRange _ _ _ (.mk _ statements _) _ |
+          .forEach _ _ _ _ (.mk _ statements _) _ => firstValueBreakTypes fuel env statements
+        | _ => none
+      current <|> firstValueBreakTypes fuel env rest
+end
+
+private inductive StatementFlow
+  | next
+  | breakLoop
+  | continueLoop
+  | escape
+  deriving DecidableEq
+
+mutual
+private def statementsFlow : Nat → List Stmt → List StatementFlow
+  | 0, _ => [.next]
+  | _ + 1, [] => [.next]
+  | fuel + 1, statement :: rest =>
+      (statementFlow fuel statement).flatMap fun flow =>
+        if flow == .next then statementsFlow fuel rest else [flow]
+
+private def blockFlow : Nat → Block → List StatementFlow
+  | 0, _ => [.next]
+  | fuel + 1, .mk _ statements _ => statementsFlow fuel statements
+
+private def statementFlow : Nat → Stmt → List StatementFlow
+  | 0, _ => [.next]
+  | _ + 1, .ret .. | _ + 1, .retValues .. | _ + 1, .retForward .. |
+    _ + 1, .returnFrom .. | _ + 1, .returnFromForward .. |
+    _ + 1, .breakValue .. | _ + 1, .abort .. | _ + 1, .exit .. => [.escape]
+  | _ + 1, .brk _ => [.breakLoop]
+  | _ + 1, .cont _ => [.continueLoop]
+  | fuel + 1, .ifS _ left right _ =>
+      blockFlow fuel left ++ (match right with | some block => blockFlow fuel block | none => [.next])
+  | fuel + 1, .while condition body _ =>
+      let bodyFlow := blockFlow fuel body
+      let escapes := bodyFlow.filter (· == .escape)
+      if (match condition with | .bool true => true | _ => false) && !bodyFlow.contains .breakLoop then escapes else .next :: escapes
+  | fuel + 1, .forRange _ _ _ body _ |
+    fuel + 1, .forEach _ _ _ _ body _ => .next :: (blockFlow fuel body).filter (· == .escape)
+  | _, _ => [.next]
+end
+
+private def blockEscapes (fuel : Nat) (block : Block) : Bool :=
+  (blockFlow fuel block).all (· == .escape)
 
 private def lookupVariable (env : TypingEnv) (id : VarId) : TypingM LocalVar := do
   if !env.visible.contains id then fail .type "localVar is not visible"
@@ -254,9 +339,26 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       expectBool (← one (← typeExpr fuel (ordinary env) condition))
       let a ← typeBlock fuel env left
       let b ← typeBlock fuel env right
-      require (a == b) .type "branch result type mismatch"
-      pure a
-  | fuel + 1, env, .blockE block _ => typeBlock fuel env block
+      if blockEscapes fuel left then pure b
+      else if blockEscapes fuel right then pure a
+      else
+        require (a == b) .type "branch result type mismatch"
+        pure a
+  | fuel + 1, env, .blockE block _ => do
+      let declarations : DeclarationEnv := ⟨env.module, env.variables⟩
+      let some expected := inferredBlockTypes fuel declarations block |
+        fail .type "cannot determine block result channels"
+      let actual ← typeBlock fuel { env with
+        valueBreakTypes := some expected
+        valueBreakRequests := env.resultRequests
+        valueBreakRequest := env.request } block
+      match block with
+      | .mk _ _ none =>
+          require (expected == [.unit] || blockEscapes fuel block) .block "value block may complete without a value"
+          pure expected
+      | .mk _ _ (some _) =>
+          require (actual == expected) .type "block result channel mismatch"
+          pure actual
   | fuel + 1, env, .arrLit ty elements _ => do
       require ty.constructible .type "array literal type is not constructible"
       let some element := ty.element? | fail .type "array literal requires array type"
@@ -533,8 +635,13 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
         .result "target-forwarded result type mismatch"
       pure env
   | fuel + 1, env, .breakValue expression _ => do
-      require (env.loops > 0) .block "value break outside loop"
-      let _ ← typeExpr fuel env expression
+      let some expected := env.valueBreakTypes | fail .block "value break outside value-producing block"
+      let actual ← typeExpr fuel { env with
+        use := .result, request := env.valueBreakRequest
+        resultRequests := env.valueBreakRequests } expression
+      require (actual.length == expected.length &&
+        (actual.zip expected).all (fun (source,target) => source.passesTo target))
+        .result "value break target channel mismatch"
       pure env
   | _fuel + 1, env, .brk _ | _fuel + 1, env, .cont _ => do require (env.loops > 0) .block "loop control outside loop"; pure env
   | fuel + 1, env, .print arguments _ => do typePrint fuel env arguments; pure env
