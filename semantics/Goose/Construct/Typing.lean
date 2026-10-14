@@ -139,7 +139,14 @@ def typePlace : Nat → TypingEnv → Place → TypingM (Ty × Bool × Bool)
       let some global := env.module.globals[id]? | fail .type "global outside table"
       pure (global.ty, global.kind == .mutable, true)
   | fuel + 1, env, .deref expression => do
-      match (← one (← typeExpr fuel (ordinary env) expression)) with
+      let ty ← match expression with
+        | .read (.var id) => do
+            let localVar ← lookupVariable env id
+            match localVar.ty with
+            | .ref _ (.slice ..) => pure localVar.ty
+            | _ => one (← typeExpr fuel (ordinary env) expression)
+        | _ => one (← typeExpr fuel (ordinary env) expression)
+      match ty with
       | .ref mutability target => pure (target, mutability == .mutable, mutability == .mutable)
       | _ => fail .type "dereference requires reference"
   | fuel + 1, env, .elem view index _ => do
@@ -178,7 +185,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
   | _fuel + 1, _env, .bool _ => pure [.bool]
   | fuel + 1, env, .read place => do
       let (ty, _, _) ← typePlace fuel env place
-      require (!ty.nonfixed) .type "nonfixed reads require explicit copy or returned-local form"
+      require (ty.storable && !ty.nonfixed) .type "read requires an ordinary storable value"
       pure [ty]
   | fuel + 1, env, .ref mutability place => do
       let (ty, writable, _) ← typePlace fuel env place

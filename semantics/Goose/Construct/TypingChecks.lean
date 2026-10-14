@@ -60,4 +60,15 @@ private def statementRejects (statement : Stmt) (rule : Rule) : Bool :=
 #guard !expressionAccepts (.conv .widen (.int .i8) (.lit .i64 2) 0) [.int .i8]
 #guard expressionAccepts (.conv .widen (.int .i64) (.lit .i8 2) 0) [.int .i64]
 
+
+private def sliceReferenceEnv : TypingEnv := { env with
+  variables := #[⟨"slice-ref",.ref .mutable (.slice .readOnly (.int .u8)),.immutable,0,0⟩]
+  visible := [0] }
+#guard match (typePlace 256 sliceReferenceEnv (.deref (.read (.var 0)))).run 1 with
+  | .ok ((.slice .readOnly (.int .u8), true, true), _) => true
+  | _ => false
+#guard match (typeExpr 256 sliceReferenceEnv (.read (.var 0))).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+
 end Goose.Construct.TypingChecks
