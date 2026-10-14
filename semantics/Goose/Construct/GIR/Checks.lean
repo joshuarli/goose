@@ -1122,3 +1122,53 @@ private def helperLocalNamedExitCopy : Module :=
 #guard roundTrip helperLocalNamedExitCopy
 
 end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def stagedCall : Module :=
+  let original := staged 2
+  let ty := Ty.limited (.int .u8) 2
+  let caller := { original.funcs[0] with blocks := #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) ty .value none (some 0)),
+    .def 1 (.destStage 0 (some 0)),.def 2 (.callConstruct 1 [] [1] (some 0)),
+    .def 3 (.destFit 2 (some 0)),.eff (.destPublish 3 (some 0)),
+    .def 4 (.slotAddr 0),.def 5 (.snapshot .owner 4),.eff (.print [.val 5] (some 0)),
+    .eff (.leave 0),.term (.ret [] none)]⟩] }
+  let producer := function "producer" #[⟨[(0,.dest ty .value)],[
+    .eff (.destBytes 0 [65,66] (some 0)),.def 1 (.destFinish 0 (some 0)),.term (.ret [1] (some 0))]⟩]
+    #[] [⟨ty,.value,none⟩]
+  { original with funcs := #[caller,producer] }
+
+#guard (Validate.validate stagedCall).isOk
+#guard observation stagedCall == observation (staged 2)
+#guard roundTrip stagedCall
+
+private def stagedBranch : Module :=
+  let original := staged 2
+  let ty := Ty.limited (.int .u8) 2
+  { original with funcs := #[{ original.funcs[0] with blocks := #[
+    ⟨[],[.eff (.enter 0),.def 0 (.destOpen (.slot 0) ty .value none (some 0)),
+      .def 1 (.destStage 0 (some 0)),.def 2 (.constBool true),.term (.condbr 2 1 [1] 2 [1])]⟩,
+    ⟨[(3,.dest ty .value)],[.eff (.destBytes 3 [65,66] (some 0)),.def 4 (.destFinish 3 (some 0)),.term (.br 3 [4])]⟩,
+    ⟨[(5,.dest ty .value)],[.eff (.destBytes 5 [67,68] (some 0)),.def 6 (.destFinish 5 (some 0)),.term (.br 3 [6])]⟩,
+    ⟨[(7,.built ty .value)],[.def 8 (.destFit 7 (some 0)),.eff (.destPublish 8 (some 0)),
+      .def 9 (.slotAddr 0),.def 10 (.snapshot .owner 9),.eff (.print [.val 10] (some 0)),
+      .eff (.leave 0),.term (.ret [] none)]⟩] }] }
+
+#guard (Validate.validate stagedBranch).isOk
+#guard observation stagedBranch == observation (staged 2)
+#guard roundTrip stagedBranch
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def unstagedFit : Module :=
+  { rawBytes with funcs := rawBytes.funcs.map fun f => { f with blocks := f.blocks.map fun block =>
+    { block with insts := block.insts.flatMap fun
+      | .eff (.destPublish built org) => [.def 4 (.destFit built org),.eff (.destPublish 4 org)]
+      | inst => [inst] } } }
+
+#guard (match Validate.validate unstagedFit with | .error v => v.code == .v060 | _ => false)
+
+end Goose.Construct.GIR.Checks

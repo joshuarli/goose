@@ -1187,8 +1187,6 @@ private def checkChannelOwners (m : Module) (functionId : FnId) (f : Func) : Che
           unless (owners id).any (fun owner => (receiverType owner).any (fun ty => ty matches .limited ..)) do violation .v060 "stage does not receive into limited storage"
           unless sourceOp f.numValues id (fun op => match op with | .destOpen _ _ _ none _ => true | _ => false) do
             violation .v060 "stage requires unknown length at receiving open"
-      | .def _ (.destFit id _) =>
-          unless sourceOp f.numValues id (fun op => op matches .destStage ..) do violation .v060 "fit requires completed private stage"
       | _ => pure ()
 
 private def checkRenderedSnapshots (f : Func) : Check Unit := do
