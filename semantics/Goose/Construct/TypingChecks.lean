@@ -76,4 +76,13 @@ private def sliceReferenceEnv : TypingEnv := { env with
   | .error rejection => rejection.rule == .type
   | .ok _ => false
 
+
+private def readonlySliceEnv : TypingEnv := { env with
+  variables := #[⟨"view",.slice .readOnly (.int .u8),.immutable,0,0⟩]
+  visible := [0] }
+#guard match (typeExpr 256 readonlySliceEnv
+    (.ref .mutable (.elem (.of (.var 0)) (.lit .i64 0) 0))).run 1 with
+  | .error rejection => rejection.rule == .mut
+  | _ => false
+
 end Goose.Construct.TypingChecks
