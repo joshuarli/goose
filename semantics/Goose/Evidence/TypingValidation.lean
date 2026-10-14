@@ -642,7 +642,9 @@ theorem validated_struct_fields_flat {m : Module} (h : validate m = .ok ()) :
 
 private theorem structLit_metadata {env : TyEnv} {ty : Ty} {values : List ValueId}
     {result : VTy} (h : (Op.structLit ty values).resultTy env = .ok result) :
-    ∃ (sid : StructId) (desc : StructDef), env.structs[sid]? = some desc ∧
+    ∃ (sid : StructId) (fields : TyList) (desc : StructDef),
+      ty = .structT sid fields ∧ result = .data ty ∧ env.structs[sid]? = some desc ∧
+      fields = TyList.ofList (desc.fields.toList.map (·.ty)) ∧
       values.map (fun value => env.vals[value]?) =
         desc.fields.toList.map (fun field => some (some (.data field.ty))) := by
   cases ty with
@@ -663,7 +665,7 @@ private theorem structLit_metadata {env : TyEnv} {ty : Ty} {values : List ValueI
         · exact hl
         · simp [hl, tyErr, bind, Except.bind] at h
       simp only [hl, beq_self_eq_true, ↓reduceIte] at h
-      obtain ⟨u, hloop, _⟩ := bind_ok h
+      obtain ⟨u, hloop, hresult⟩ := bind_ok h
       cases u
       have hall := forIn_unit_ok hloop (by
         intro pair u step checked
@@ -671,17 +673,18 @@ private theorem structLit_metadata {env : TyEnv} {ty : Ty} {values : List ValueI
         by_cases he : t = pair.2.ty
         · simpa [he, pure, Except.pure] using checked.symm
         · simp [he, tyErr, bind, Except.bind] at checked)
-      refine ⟨sid, desc, hd, ?_⟩
-      apply map_eq_of_zip (by simpa using hl)
-      intro pair hp
-      have checked := hall pair hp
-      obtain ⟨t, ht, checked⟩ := bind_ok checked
-      have he : t = pair.2.ty := by
-        by_cases he : t = pair.2.ty
-        · exact he
-        · simp [he, tyErr, bind, Except.bind] at checked
-      subst t
-      exact dataTy_of ht
+      refine ⟨sid, fields, desc, rfl, ?_, hd, hp, ?_⟩
+      · simpa [hp, pure, Except.pure] using hresult.symm
+      · apply map_eq_of_zip (by simpa using hl)
+        intro pair hp
+        have checked := hall pair hp
+        obtain ⟨t, ht, checked⟩ := bind_ok checked
+        have he : t = pair.2.ty := by
+          by_cases he : t = pair.2.ty
+          · exact he
+          · simp [he, tyErr, bind, Except.bind] at checked
+        subst t
+        exact dataTy_of ht
   | _ => simp [Op.resultTy, tyErr] at h
 
 theorem validated_structLit_operands {m : Module} {fn : Func}
@@ -691,7 +694,7 @@ theorem validated_structLit_operands {m : Module} {fn : Func}
     ∀ value ∈ values, ∃ fieldTy,
       (fn.valueTypes m)[value]? = some (some (.data fieldTy)) ∧ fieldTy.flat = true := by
   obtain ⟨resultTy, checked, _⟩ := (validate_sound m h).1 fn hf |>.2.1 block hb result _ hi
-  obtain ⟨sid, desc, hd, hm⟩ := structLit_metadata checked
+  obtain ⟨sid, fields, desc, _, _, hd, _, hm⟩ := structLit_metadata checked
   change m.structs[sid]? = some desc at hd
   intro value hv
   have hmem : (fn.valueTypes m)[value]? ∈
@@ -974,5 +977,21 @@ theorem print_types_of {env : TyEnv} {parts : List PrintPart} {org : Option Orig
   | int t => exact Or.inl ⟨t, dataTy_of ht⟩
   | bool => exact Or.inr (dataTy_of ht)
   | _ => simp [tyErr, bind, Except.bind] at checked
+
+private theorem tyList_toList_ofList (types : List Ty) :
+    (TyList.ofList types).toList = types := by
+  induction types with
+  | nil => rfl
+  | cons ty rest ih => simp [TyList.ofList, TyList.toList, ih]
+
+theorem structLit_types_of {env : TyEnv} {ty : Ty} {values : List ValueId} {result : VTy}
+    (h : (Op.structLit ty values).resultTy env = .ok result) :
+    ∃ sid fields, ty = .structT sid fields ∧ result = .data ty ∧
+      values.map (fun value => env.vals[value]?) =
+        fields.toList.map (fun fieldTy => some (some (.data fieldTy))) := by
+  obtain ⟨sid, fields, desc, hty, hr, _, hf, hm⟩ := structLit_metadata h
+  refine ⟨sid, fields, hty, hr, ?_⟩
+  rw [hf, tyList_toList_ofList, List.map_map]
+  exact hm
 
 end Goose.GIR
