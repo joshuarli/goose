@@ -23,6 +23,7 @@ inductive DestinationProgress
   | attached (count : Nat)
   | abandoned
   | cancelled
+  | retired
   deriving DecidableEq, Repr
 
 inductive DestinationUse
@@ -180,7 +181,7 @@ private def writingAvailable (destination : PendingDestination) (storage : Recei
 private def active (destination : PendingDestination) : Bool :=
   match destination.progress with
   | .open _ | .suspended _ _ | .built _ | .exiting _ _ => true
-  | .published _ | .attached _ | .abandoned | .cancelled => false
+  | .published _ | .attached _ | .abandoned | .cancelled | .retired => false
 
 private inductive StagingPolicy
   | automatic
@@ -256,8 +257,11 @@ def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit :
           let parent ← lookupDestination parentId
           match parent.layout, parent.progress, parent.backing, destination.backing with
           | .limited capacity slotBytes, .suspended parentCount _, .direct _, .direct _ =>
-              if parentCount + count + 1 > capacity then ConstructionM.fail .capacity
-              if bytes.size != slotBytes then ConstructionM.fail .protocol
+              if destination.capability.request == .elementRun then
+                if parentCount + count + 1 > capacity then ConstructionM.fail .capacity
+                if bytes.size != slotBytes then ConstructionM.fail .protocol
+              else
+                if parentCount + 1 > capacity then ConstructionM.fail .capacity
           | _, _, _, _ => pure ()
       | _ => pure ()
       replaceStorage destination.storage { storage with
@@ -423,7 +427,7 @@ def abandonDestination (id : DestinationId) : ConstructionM Unit := do
       replaceDestination id { destination with progress := .abandoned }
       emit (.abandon id)
   | .suspended _ _ | .exiting _ _ => ConstructionM.fail .protocol
-  | .published _ | .attached _ | .abandoned | .cancelled => ConstructionM.fail .protocol
+  | .published _ | .attached _ | .abandoned | .cancelled | .retired => ConstructionM.fail .protocol
 
 private def descendantOf (destinations : Array PendingDestination) (ancestor : DestinationId)
     (id : DestinationId) : Bool := Id.run do
@@ -440,7 +444,7 @@ def abandonTree (id : DestinationId) : ConstructionM Unit := do
   let parent ← writableDestination id
   match parent.progress with
   | .open _ | .built _ | .suspended _ _ => pure ()
-  | .exiting _ _ | .published _ | .attached _ | .abandoned | .cancelled => ConstructionM.fail .protocol
+  | .exiting _ _ | .published _ | .attached _ | .abandoned | .cancelled | .retired => ConstructionM.fail .protocol
   let state ← ConstructionM.get
   let descendants := state.destinations.toList.reverse.filter fun destination =>
     descendantOf state.destinations id destination.capability.id && active destination
@@ -460,7 +464,7 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   let superseded ← writableDestination supersededId
   let count ← match superseded.progress with
     | .open count | .built count | .suspended count _ => pure count
-    | .exiting _ _ | .published _ | .attached _ | .abandoned | .cancelled => ConstructionM.fail .protocol
+    | .exiting _ _ | .published _ | .attached _ | .abandoned | .cancelled | .retired => ConstructionM.fail .protocol
   let storage ← lookupStorage superseded.storage
   let state ← ConstructionM.get
   let id := state.destinations.size
@@ -515,6 +519,19 @@ private theorem protectedAbandonment_storage (discarded : List PendingDestinatio
       · exact ih _
       · rfl
 
+private theorem protectedAbandonment_events (discarded : List PendingDestination) (state : ConstructionState) :
+    ∃ suffix, (protectedAbandonment discarded state).finalState.events = state.events ++ suffix := by
+  induction discarded generalizing state with
+  | nil => exact ⟨[], by simp [protectedAbandonment, pure, ConstructionResult.finalState]⟩
+  | cons destination rest ih =>
+      simp only [protectedAbandonment]
+      split
+      · obtain ⟨suffix, prefixed⟩ := ih { state with
+          destinations := state.destinations.set! destination.capability.id { destination with progress := .abandoned }
+          events := state.events ++ [.abandon destination.capability.id] }
+        exact ⟨.abandon destination.capability.id :: suffix, by simpa [List.append_assoc] using prefixed⟩
+      · exact ⟨[], by simp [ConstructionResult.finalState]⟩
+
 private theorem protectedAbandonment_stdout (discarded : List PendingDestination) (state : ConstructionState) :
     (protectedAbandonment discarded state).finalState.stdout = state.stdout := by
   induction discarded generalizing state with
@@ -543,6 +560,13 @@ theorem abandonPreservingExit_stdout (state : ConstructionState) (id replacement
   cases checked : protectedExitDiscarded state id replacementId with
   | error fault => rfl
   | ok discarded => exact protectedAbandonment_stdout discarded state
+
+theorem abandonPreservingExit_events (state : ConstructionState) (id replacementId : DestinationId) :
+    ∃ suffix, (abandonPreservingExit id replacementId state).finalState.events = state.events ++ suffix := by
+  simp only [abandonPreservingExit, ConstructionM.get, bind]
+  cases checked : protectedExitDiscarded state id replacementId with
+  | error fault => exact ⟨[], by simp [ConstructionM.fail, ConstructionResult.finalState]⟩
+  | ok discarded => exact protectedAbandonment_events discarded state
 
 def acknowledgeAbandonment (id : DestinationId) : ConstructionM Unit := do
   let destination ← lookupDestination id
@@ -701,6 +725,93 @@ def attachExtension (parentId childId : DestinationId) : ConstructionM Unit := d
       replaceDestination parentId { parent with progress := .built (count + childCount), writeEnd := child.writeEnd }
       emit (.publish childId)
   | _, _, _ => ConstructionM.fail .protocol
+
+
+def openElementExtension (parentId : DestinationId) (logicalType : Ty)
+    (layout : ReceivingLayout) (knownCount : Option Nat) (receiverLoc : Core.Loc) :
+    ConstructionM DestinationId := do
+  let parent ← writableDestination parentId
+  let count ← match parent.progress with
+    | .built count => pure count
+    | _ => ConstructionM.fail .protocol
+  if parent.capability.logicalType.element? != some logicalType then ConstructionM.fail .protocol
+  match parent.layout, parent.backing with
+  | .limited capacity _, .direct _ =>
+      if count + 1 > capacity then ConstructionM.fail .capacity
+  | .packed, _ => if count + 1 ≥ 2 ^ 32 then ConstructionM.fail .capacity
+  | .fixed _, _ => ConstructionM.fail .protocol
+  | _, _ => pure ()
+  let storage ← lookupStorage parent.storage
+  let state ← ConstructionM.get
+  let id := state.destinations.size
+  let capability := { parent.capability with
+    id := id, receiver := receiverLoc
+    layout := logicalType, logicalType := logicalType, request := .value, start := parent.writeEnd }
+  let child : PendingDestination := ⟨capability, .direct parent.storage, layout, .child parentId,
+    .open 0, parent.writeEnd + (if hasPrefix layout .value then 4 else 0),
+    (match parent.layout with | .limited _ _ => storage.bytes.size | _ => parent.writeEnd), knownCount⟩
+  ConstructionM.set { state with destinations := state.destinations.push child }
+  replaceDestination parentId { parent with progress := .suspended count id }
+  if hasPrefix layout .value then
+    replaceStorage parent.storage { storage with bytes := overwriteBytes storage.bytes parent.writeEnd lengthPrefix }
+  emit (.begin id)
+  pure id
+
+def attachElementExtension (parentId childId : DestinationId) : ConstructionM Unit := do
+  let parent ← writableDestination parentId
+  let child ← writableDestination childId
+  match parent.progress, child.progress, child.use, child.backing with
+  | .suspended count expected, .built childCount, .child owner, .direct storageId =>
+      if expected != childId || owner != parentId || storageId != parent.storage ||
+          child.capability.request != .value ||
+          parent.capability.logicalType.element? != some child.capability.logicalType then
+        ConstructionM.fail .ownership
+      let storage ← lookupStorage parent.storage
+      match parent.layout with
+      | .limited capacity slotBytes =>
+          if count + 1 > capacity then ConstructionM.fail .capacity
+          if child.writeEnd - child.capability.start != slotBytes then ConstructionM.fail .protocol
+      | .packed => if count + 1 ≥ 2 ^ 32 then ConstructionM.fail .capacity
+      | .fixed _ => ConstructionM.fail .protocol
+      | .elements => pure ()
+      if hasPrefix parent.layout parent.capability.request then
+        replaceStorage parent.storage { storage with
+          bytes := patchCount storage.bytes parent.capability.start (count + 1) }
+      replaceDestination childId { child with progress := .attached childCount }
+      replaceDestination parentId { parent with progress := .built (count + 1), writeEnd := child.writeEnd }
+      emit (.publish childId)
+  | _, _, _, _ => ConstructionM.fail .protocol
+
+def publishElementDestination (id : DestinationId) : ConstructionM Unit := do
+  let destination ← writableDestination id
+  match destination.progress, destination.use, destination.backing with
+  | .built count, .receiver, .direct storageId =>
+      if destination.capability.request != .value then ConstructionM.fail .protocol
+      let storage ← lookupStorage storageId
+      replaceStorage storageId { storage with publishedCount := storage.publishedCount + 1 }
+      replaceDestination id { destination with progress := .published count }
+      emit (.publish id)
+  | _, _, _ => ConstructionM.fail .protocol
+
+def retireRepeatedSource (parentId sourceId : DestinationId) : ConstructionM Unit := do
+  let parent ← writableDestination parentId
+  let source ← writableDestination sourceId
+  match parent.progress, source.progress, source.use, source.backing with
+  | .open _, .built _, .receiver, .direct storageId =>
+      if parentId == sourceId || parent.storage == storageId ||
+          parent.backing.receiverStorage == storageId || source.capability.request != .value ||
+          parent.capability.logicalType.element? != some source.capability.logicalType then
+        ConstructionM.fail .ownership
+      let storage ← lookupStorage storageId
+      if storage.publishedCount != 0 || source.capability.start != 0 || source.rollbackEnd != 0 then
+        ConstructionM.fail .ownership
+      let state ← ConstructionM.get
+      if state.destinations.any (fun destination =>
+          destination.capability.id != sourceId && destination.storage == storageId && active destination) then
+        ConstructionM.fail .ownership
+      replaceStorage storageId ⟨ByteArray.empty, 0⟩
+      replaceDestination sourceId { source with progress := .retired }
+  | _, _, _, _ => ConstructionM.fail .protocol
 
 def truncateConstructionStorage (storageId : StorageId) (start finish count : Nat)
     (owner : Option DestinationId) (retainSlots : Bool) : ConstructionM Unit := do
