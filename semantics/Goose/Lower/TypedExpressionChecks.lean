@@ -452,4 +452,76 @@ example : ∃ child : ExprSource ⟨.release, fillModule .pilot⟩ ⟨#[], 0, []
   | .done .returned "", .done .returned "" => true
   | _, _ => false
 
+def viewLengthModule (artifact : ArtifactProfile) : Core.Module :=
+  { files := #["view-length.goose"], types := #[.bool, .int .i64, .arr .bool 3, .slice .readOnly .bool],
+    globals := #[⟨"owner", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩,
+      ⟨"sliceLength", .int .i64, .mutable,
+        .len (.val (.slice .readOnly (.of (.global 0)) .omitted .omitted 0)), 0⟩,
+      ⟨"ownerLength", .int .i64, .mutable, .len (.of (.global 0)), 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [
+      .assertS (.cmp .eq (.read (.global 1)) (.lit .i64 3)) 0,
+      .assertS (.cmp .eq (.read (.global 2)) (.lit .i64 3)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := artifact }
+
+def viewOwnerState : St :=
+  { St.initial with nextAct := 1, store := Store.empty.introduce (.global 0) (.fixed (Array.replicate 3 (.bool true))) }
+
+theorem view_owner_prefix (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (viewLengthModule artifact) = .ok ()) :
+    InitializedGlobals (viewLengthModule artifact) 1 viewOwnerState :=
+  InitializedGlobals.afterInitializer (cfg := ⟨profile, viewLengthModule artifact⟩)
+    (before := St.initial) (after := { St.initial with nextAct := 1 })
+    (value := .fixed (Array.replicate 3 (.bool true))) (g := 0)
+    (global := ⟨"owner", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩)
+    accepted rfl (InitializedGlobals.initial _) 3
+    (by simp [evalExpr, Core.expectFixedCount, pure_apply, bind_apply, St.initial])
+
+theorem view_val_source (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (viewLengthModule artifact) = .ok ()) :
+    Nonempty (ViewSource ⟨profile, viewLengthModule artifact⟩ ⟨#[], 1, [], 0⟩
+      (.val (.slice .readOnly (.of (.global 0)) .omitted .omitted 0))
+      { viewOwnerState with nextAct := 2 }) := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, viewLengthModule artifact⟩) (state := viewOwnerState) (g := 1)
+    (global := ⟨"sliceLength", .int .i64, .mutable,
+      .len (.val (.slice .readOnly (.of (.global 0)) .omitted .omitted 0)), 0⟩)
+    accepted rfl (view_owner_prefix artifact profile accepted).invariant
+  obtain ⟨view, hviewTyping, hviewRoots⟩ := source.lenChild
+  exact ⟨view⟩
+
+theorem view_of_claim (artifact : ArtifactProfile) (profile : NumProfile) :
+    TypedExprClaim 4 ⟨profile, viewLengthModule artifact⟩ [.int .i64] (.len (.of (.global 0))) :=
+  typedExprClaim_len (typedViewClaim_of (typedPlaceClaim_global 2 _ _ 0))
+
+theorem view_val_child_source (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (viewLengthModule artifact) = .ok ()) :
+    Nonempty (ExprSource ⟨profile, viewLengthModule artifact⟩ ⟨#[], 1, [], 0⟩
+      (.slice .readOnly (.of (.global 0)) .omitted .omitted 0)
+      { viewOwnerState with nextAct := 2 }) := by
+  obtain ⟨source⟩ := view_val_source artifact profile accepted
+  obtain ⟨child, htyping, hroots, mutability, htype⟩ := source.valChild
+  exact ⟨child⟩
+
+theorem view_val_result (artifact : ArtifactProfile) (profile : NumProfile)
+    (accepted : Core.validate (viewLengthModule artifact) = .ok ()) :
+    ∃ source : ViewSource ⟨profile, viewLengthModule artifact⟩ ⟨#[], 1, [], 0⟩
+      (.val (.slice .readOnly (.of (.global 0)) .omitted .omitted 0))
+      { viewOwnerState with nextAct := 2 },
+      ViewResult source ⟨⟨.global 0, []⟩, 0, 3, false⟩ { viewOwnerState with nextAct := 2 } := by
+  obtain ⟨source⟩ := view_val_source artifact profile accepted
+  exact ⟨source, source.result 5 _ (by cbv)⟩
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := viewLengthModule artifact
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := viewLengthModule artifact
+  [NumProfile.release, .debug].all fun profile =>
+    match Core.eval 160 profile source, GIR.run 320 profile (lower source) with
+    | .done .returned "", .done .returned "" => true
+    | _, _ => false
+
 end Goose.Lower.TypedExpressionChecks
