@@ -699,4 +699,443 @@ private theorem blockValue_shrinkFuture {path sc ss e} {pc : PlanContext m plans
   simp [DemandNode.phaseFuture]
 
 
+private theorem contextEff_unique {impl : Impl} {ctx : Context} {E E' : Eff}
+    (h : ContextEff m impl ctx E) (h' : ContextEff m impl ctx E') : E = E' := by
+  rcases h with ⟨rho, range, state, hrun, hE⟩
+  rcases h' with ⟨rho', range', state', hrun', hE'⟩
+  rw [hrun] at hrun'
+  cases hrun'
+  exact hE.symm.trans hE'
+
+
+private theorem pre_fst_range (f : Param × Val → VarId × Val) (hf : ∀ p v, f (p, v) = (p.var, v)) :
+    ∀ (ps : List Param) (vs : List Val) (k : Nat), ps.length = vs.length →
+    (∀ i p, ps[i]? = some p → p.var = k + i) →
+    ((ps.zip vs).map f).map Prod.fst = List.range' k ps.length
+  | [], vs, k, _, _ => by simp
+  | p :: ps, [], k, hl, _ => by simp at hl
+  | p :: ps, v :: vs, k, hl, hvar => by
+    have h0 : p.var = k := by simpa using hvar 0 p rfl
+    have ih := pre_fst_range f hf ps vs (k + 1) (by simpa using hl) (fun i p' h => by
+      have := hvar (i + 1) p' (by simpa using h)
+      rw [this]; omega)
+    simp only [List.zip_cons_cons, List.map_cons, hf, List.length_cons, List.range'_succ, ih, h0]
+
+private theorem pre_mem (f : Param × Val → VarId × Val) (hf : ∀ p v, f (p, v) = (p.var, v)) :
+    ∀ (ps : List Param) (vs : List Val) (x : VarId) (v : Val), (x, v) ∈ (ps.zip vs).map f →
+    ∃ (i : Nat) (p : Param), ps[i]? = some p ∧ vs[i]? = some v ∧ p.var = x
+  | [], vs, x, v, h => by simp at h
+  | p :: ps, [], x, v, h => by simp at h
+  | p :: ps, v' :: vs, x, v, h => by
+    simp only [List.zip_cons_cons, List.map_cons, hf, List.mem_cons, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl⟩ | h
+    · exact ⟨0, p, rfl, rfl, rfl⟩
+    · obtain ⟨i, p', h1, h2, h3⟩ := pre_mem f hf ps vs x v h
+      exact ⟨i + 1, p', by simpa using h1, by simpa using h2, h3⟩
+
+private theorem ownerRefParam_of_type {impl : Impl} (checked : ImplOk m impl)
+    {i : Nat} {parameter : Param} {declaration : LocalVar}
+    (parameterAt : impl.params[i]? = some parameter)
+    (variableAt : impl.vars[i]? = some declaration)
+    (ownerType : OwnerRefTy declaration.ty) : OwnerRefParam impl i := by
+  obtain ⟨parameterId, checkedDeclaration, checkedAt, declarationScope, _⟩ :=
+    checked.params i parameter parameterAt
+  rw [variableAt] at checkedAt
+  cases checkedAt
+  have parameterBound : i < impl.params.size := (Array.getElem?_eq_some_iff.1 parameterAt).1
+  have mode : parameter.mode = .byRef := by
+    cases parameterMode : parameter.mode with
+    | byRef => rfl
+    | byValue =>
+      obtain ⟨mu, element, referenceType | referenceType⟩ := ownerType
+      · have shape := checked.parameterShape i parameterBound
+        simp [checkParam, parameterAt, parameterId, variableAt, declarationScope,
+          parameterMode, referenceType] at shape
+        inv at shape
+      · have shape := checked.parameterShape i parameterBound
+        simp [checkParam, parameterAt, parameterId, variableAt, declarationScope,
+          parameterMode, referenceType] at shape
+        inv at shape
+  exact ⟨parameter, declaration, parameterAt, mode, by simpa [parameterId] using variableAt, ownerType⟩
+
+
+theorem acceptedCalleeSource {m : Module} {prof : NumProfile} {plans : Array (Array DemandPoint)}
+    (accepted : Core.validate m = .ok ()) :
+  ∀ (G : Nat) (P ownerP : Nat → RootInst → Prop) (D : RootInst → Ty → Prop)
+    (A : RootInst → RootInst → Prop) (depth : Nat) (c : ContextId) (vals : List Val)
+    (s : St) (ctx : Context) (impl : Impl) (E : Eff) (observation : Observation)
+    (root : EvaluationContext m plans [] (.block impl.body) .block),
+    root.ActiveMatches (implEnv m impl) →
+    root.AccessMatches { implEnv m impl with visible := [] } ⟨m, impl, ctx, []⟩ →
+    ContextEff m impl ctx E → m.contexts[c]? = some ctx → m.impls[ctx.impl]? = some impl →
+    (∀ i r, ownerP i r → P i r) → OwnerParameterShape impl ownerP →
+    StoreInv m G s (ObservationDemand observation) →
+    ObservedSafe m ⟨G, P, ownerP, E, s.nextScope, D, A⟩ (root.mayShrink ownerP observation) observation s.store →
+    (m.profile = .shrink → ClassifiedParameters m P D observation s.store) →
+    ShrinkProtected D A (root.mayShrink ownerP observation) → vals.length = impl.params.size →
+    (∀ i v, vals[i]? = some v → ∃ lv, impl.vars[i]? = some lv ∧ HasTy m G s.store v lv.ty ∧
+      (OwnerRefParam impl i → OwnerRooted noEnv ownerP [.param i] v lv.ty) ∧
+      ∀ r, Targets v r → ∃ ann, (ctx.varRoots.find? (·.1 == i)).map (·.2) = some ann ∧ Gam noEnv P ann r) →
+    (∀ i a si x, P i (.local a si x) → si < s.nextScope) →
+    (∀ r t, A r t → Older t r) →
+    (∀ r el, D r el → ∃ a si x, r = RootInst.local a si x ∧ si < s.nextScope) →
+    (∀ r el el', D r el → D r el' → el = el') → OuterOk m G D A s →
+    (∀ x cont, (ctx.contentRoots.find? (·.1 == x)).map (·.2) = some cont → PRef P D A ⟨m, impl, ctx, []⟩ impl.vars x cont) →
+    (m.globals.size ≤ G ∨ SumOk G P impl ctx) →
+    ∃ source : BlockSource ⟨prof, m⟩ ⟨impl.vars, s.nextAct, [], depth + 1⟩
+      (impl.params.toList.zip vals |>.map (fun item => (item.1.var, item.2)))
+      impl.body { s with nextAct := s.nextAct + 1 },
+      source.typingEnv = { implEnv m impl with visible := [] } ∧
+      source.rootsEnv = ⟨m, impl, ctx, []⟩ ∧
+      source.world = ⟨G, P, ownerP, E, s.nextScope, D, A⟩ := by
+  have hm := validate_modOk m accepted
+  intro G P ownerP D A depth c vals s ctx impl E observation root hActiveRoot hAccessRoot hEff
+    hctx himpl hOwnerSubset hOwnerShape hInv hObserved hClass hProtected hlen hargs hPage hAO
+    hDout hDfun hSA hcont hperm
+  obtain ⟨impl', himpl', hcOk⟩ := hm.ctx c ctx hctx
+  rw [himpl] at himpl'
+  cases himpl'
+  have hiOk := hm.impl _ _ himpl
+  have hpar := hiOk.params
+  have hsc0 := hiOk.bodyScope
+  obtain ⟨bodyTy, tnb, htb, hresTy⟩ := hiOk.body
+  obtain ⟨rho, rng, st, hrb, hck, hcs⟩ := hcOk.body
+  have hEffEq : E = st.eff := contextEff_unique hEff ⟨rho, rng, st, hrb, rfl⟩
+  subst E
+  have hpW : Perm m ⟨G, P, ownerP, st.eff, s.nextScope, D, A⟩ := by
+    rcases hperm with h | ⟨sm, hs, hall⟩
+    · exact Or.inl h
+    · obtain ⟨hu, h1, h2, h3, _⟩ := checkSummary_ok _ _ _ _ hcs sm hs
+      refine Or.inr ⟨hu, fun t ht => ?_⟩
+      rcases ht with ht | ht | ht | ht
+      · exact hall t (Or.inl (h1 t ht))
+      · exact hall t (Or.inr (Or.inl (h2 t ht)))
+      · exact hall t (Or.inr (Or.inr (Or.inl (h3 t ht))))
+      · exact hall t (Or.inr (Or.inr (Or.inr (checkSummary_shrinks_ok m impl ctx st.eff hcs sm hs t ht))))
+  have hF0 : Frame m ⟨G, P, ownerP, st.eff, s.nextScope, D, A⟩
+      { implEnv m impl with visible := [] }
+      ⟨m, impl, ctx, []⟩ ⟨impl.vars, s.nextAct, [], depth + 1⟩
+      { s with nextAct := s.nextAct + 1 } root.inputFuture :=
+    { mod_t := rfl, mod_p := rfl, vars_t := rfl, vars_p := rfl
+      scopes_t := rfl, scopes_p := rfl
+      nodup := List.nodup_nil, sorted := List.Pairwise.nil
+      below := fun p hp => by cases hp
+      base_le := Nat.le_refl _
+      ownerSubset := hOwnerSubset
+      ownerShape := hOwnerShape
+      pAge := hPage
+      vis := fun x hx => by cases hx
+      bindings := fun x hx => by cases hx
+      storage := by
+        rintro r T ⟨x, lv, si, _, hscope, _⟩ v hv
+        simp [List.lookup] at hscope
+      rooted := fun x lv si v _ h => by simp [List.lookup] at h
+      rootedOwners := fun x lv si v _ h => by simp [List.lookup] at h
+      inv := {
+        live := by
+          intro r v hv hd
+          cases r with
+          | global g => exact hInv.live _ v hv trivial
+          | «local» a si x =>
+            rcases hd with ⟨_, _, _, lv, _, hscope⟩
+            simp [List.lookup] at hscope
+        age := hInv.age, fresh := hInv.fresh, globals := hInv.globals
+        globalNonRefs := hInv.globalNonRefs
+        globalStorageDomain := hInv.globalStorageDomain }
+      aOlder := hAO, dOut := hDout, dFun := hDfun, sa := hSA
+      pref := fun x cont h => hcont x cont h }
+  have hpreFst := pre_fst_range (fun x => (x.fst.var, x.snd)) (fun _ _ => rfl) impl.params.toList
+    vals 0 (by simp [hlen]) (fun i p h => by
+      have := (hpar i p (by simpa using h)).1
+      simp [this])
+  generalize impl.body = body at *
+  obtain ⟨sc, stmts, value⟩ := body
+  have hsc : sc = 0 := hsc0
+  subst hsc
+  obtain ⟨_, env1, tn1, env2, tn2, hdp, hts, htv⟩ := tyBlock_ok _ _ _ _ _ _ _ _ htb
+  obtain ⟨hsame, hvisT, _, _⟩ := declarePre_ok _ _ _ _ _ _ hdp
+  obtain ⟨_, st2, hrs, hrv, _⟩ := rpBlockValue_ok _ _ _ _ _ _ _ _ _ hrb
+  have hpreOk : PreOk m ⟨G, P, ownerP, st.eff, s.nextScope, D, A⟩ ⟨m, impl, ctx, []⟩
+      { vars := impl.vars, act := s.nextAct, scopes := [(0, s.nextScope)], depth := depth + 1 } 0 0
+      (impl.params.size + 0) s.store
+      (List.map (fun x => (x.fst.var, x.snd)) (impl.params.toList.zip vals)) := by
+    refine ⟨by rw [hpreFst]; exact List.nodup_range', ?_⟩
+    intro x v hxv
+    obtain ⟨i, p, h1, h2, h3⟩ := pre_mem _ (fun _ _ => rfl) _ _ x v hxv
+    have h1' : impl.params[i]? = some p := by simpa using h1
+    obtain ⟨hvar, lv, hlv, hlsc, hlst⟩ := hpar i p h1'
+    rw [hvar] at h3
+    subst h3
+    obtain ⟨lv', hlv', hty, hownerRoots, hroots⟩ := hargs i v h2
+    rw [hlv] at hlv'
+    cases hlv'
+    refine ⟨Nat.zero_le _, by simpa using (Array.getElem?_eq_some_iff.1 h1').1, lv, hlv, hlsc, hlst,
+      hty, fun r hr => ?_⟩
+    obtain ⟨ann, ha, hg⟩ := hroots r hr
+    refine ⟨ann, ha, gam_of_noEnv hg, fun howner => ?_⟩
+    have hownerSlot := ownerRefParam_of_type hiOk h1' hlv howner
+    have hownerRoot := hownerRoots hownerSlot howner r hr
+    obtain ⟨ownerRef, hownerMember, hownerDenoted⟩ := hownerRoot
+    have hownerEq : ownerRef = .param i := by simpa using hownerMember
+    subst ownerRef
+    obtain ⟨q, hq, hdenoted⟩ := hg
+    rcases hcOk.paramAnn i ann (by simpa using (Array.getElem?_eq_some_iff.1 h1').1)
+        ha q hq with rfl | ⟨global, rfl⟩
+    · exact ⟨.param i, hq, hownerDenoted⟩
+    · exact ⟨.global global, hq, hdenoted⟩
+  have hvisB : ∀ y, y ∈ env1.visible ↔
+      y ∈ (List.map (fun x => (x.fst.var, x.snd)) (impl.params.toList.zip vals)).map Prod.fst ∨
+        y ∈ ([] : List VarId) := by
+    intro y
+    rw [hvisT y, hpreFst]
+    simp [implEnv, List.range_eq_range']
+  have hkeep : ∀ y, RootRef.local y ∈ rho → ¬ (0 ≤ y ∧ y < st.nextVar) := by
+    intro y hy
+    cases value with
+    | none => rw [hrv.1] at hy; cases hy
+    | some e => exact absurd hy ((checkResultV_ok _ _ (hck rfl)).1 y)
+  have hactive : root.ActiveMatches env1 := by
+    have hvisible : ∀ x, x ∈ env1.visible ↔ x ∈ (implEnv m impl).visible := by
+      intro x
+      rw [hvisB x, hpreFst]
+      simp [implEnv, List.range_eq_range']
+    cases root <;> intro x <;> exact (hActiveRoot x).trans (hvisible x).symm
+  refine ⟨{
+    accepted := accepted, plans := plans, path := [], context := root,
+    observation := observation, world := ⟨G, P, ownerP, st.eff, s.nextScope, D, A⟩,
+    typingEnv := { implEnv m impl with visible := [] }, typingInner := env1,
+    typingAfter := env2, rootsEnv := ⟨m, impl, ctx, []⟩,
+    typingStart := tn1, typingValue := tn2, typingEnd := tnb, ty := bodyTy,
+    rootsStart := ⟨impl.params.size, {}⟩, rootsValue := st2, rootsEnd := st,
+    roots := rho, lowerBound := 0, active := hactive, access := hAccessRoot,
+    protection := hProtected, observed := hObserved, classified := hClass,
+    permission := hpW, frame := hF0, fresh := by simp [implEnv, Block.scope],
+    same := ⟨hsame.mod, hsame.impl, hsame.vars, hsame.loops, hsame.inExpr, hsame.scopes,
+      fun _ h => by cases h⟩, visible := hvisB, pretyped := hpreOk,
+    bounded := Nat.zero_le _, typed := hts, typedValue := ?_, rooted := hrs,
+    rootedValue := ?_, effects := EffLe.refl _, rootsEscape := hkeep }, rfl, rfl, rfl⟩
+  · cases value with
+    | none => exact htv.1
+    | some e => exact htv
+  · cases value <;> exact hrv
+
+theorem acceptedContextRoot {m : Module} (accepted : Core.validate m = .ok ())
+    {c : ContextId} {ctx : Context} {impl : Impl}
+    (contextAt : m.contexts[c]? = some ctx) (implementationAt : m.impls[ctx.impl]? = some impl) :
+    ∃ plans, ∃ root : EvaluationContext m plans [] (.block impl.body) .block,
+      root.ActiveMatches (implEnv m impl) ∧
+      root.AccessMatches { implEnv m impl with visible := [] } ⟨m, impl, ctx, []⟩ := by
+  have checked := validate_modOk m accepted
+  obtain ⟨plans, derived, wellFormed⟩ := checked.demandPlans
+  let selected := EvaluationContext.forContext derived wellFormed contextAt impl implementationAt
+  have owner := EvaluationContext.forContext_ownerMatches derived wellFormed contextAt impl implementationAt
+  let root := selected.callBody owner contextAt implementationAt
+  refine ⟨plans, root, ?_, ?_⟩
+  · apply EvaluationContext.callBody_activeMatches
+    intro x
+    change x ∈ List.range impl.params.size ↔ x ∈ impl.params.toList.map (·.var)
+    constructor
+    · intro member
+      have bound := List.mem_range.mp member
+      let parameter := impl.params[x]
+      have present : impl.params[x]? = some parameter := Array.getElem?_eq_getElem bound
+      have id := (checked.impl _ impl implementationAt).params x parameter present
+      exact List.mem_map.mpr ⟨parameter, Array.mem_toList_iff.mpr
+        (Array.mem_iff_getElem?.mpr ⟨x, present⟩), id.1⟩
+    · intro member
+      obtain ⟨parameter, member, id⟩ := List.mem_map.mp member
+      obtain ⟨index, present⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp member)
+      have indexEq := ((checked.impl _ impl implementationAt).params index parameter present).1
+      rw [← id, indexEq]
+      exact List.mem_range.mpr (Array.getElem?_eq_some_iff.mp present).1
+  · exact EvaluationContext.callBody_accessMatches selected owner contextAt implementationAt
+      _ _ rfl rfl rfl rfl rfl
+
+theorem acceptedEntrySource {cfg : Cfg} {state : St}
+    (accepted : Core.validate cfg.mod = .ok ())
+    (invariant : StoreInv cfg.mod cfg.mod.globals.size state) :
+    ∃ ctx impl, cfg.mod.contexts[cfg.mod.entry]? = some ctx ∧
+      cfg.mod.impls[ctx.impl]? = some impl ∧ impl.params.size = 0 ∧ impl.results.toList = [] ∧
+      ∃ source : BlockSource cfg ⟨impl.vars, state.nextAct, [], 1⟩
+          (impl.params.toList.zip [] |>.map (fun item => (item.1.var, item.2))) impl.body
+          { state with nextAct := state.nextAct + 1 },
+        source.typingEnv = { implEnv cfg.mod impl with visible := [] } ∧
+        source.rootsEnv = ⟨cfg.mod, impl, ctx, []⟩ := by
+  rcases cfg with ⟨profile, module⟩
+  let cfg : Cfg := ⟨profile, module⟩
+  have checked := validate_modOk cfg.mod accepted
+  obtain ⟨ctx, impl, contextAt, implementationAt, noParameters, noResults⟩ := checked.entry
+  obtain ⟨plans, root, active, access⟩ := acceptedContextRoot accepted contextAt implementationAt
+  obtain ⟨otherImpl, otherAt, contextOk⟩ := checked.ctx _ ctx contextAt
+  rw [implementationAt] at otherAt
+  cases otherAt
+  obtain ⟨rho, range, replayState, replay, resultCheck, summary⟩ := contextOk.body
+  have frameInvariant : StoreInv cfg.mod cfg.mod.globals.size state (ObservationDemand Observation.empty) :=
+    invariant.changeDemand (fun _ _ => Or.inl trivial)
+  obtain ⟨source, typingEq, rootsEq, worldEq⟩ := acceptedCalleeSource (prof := cfg.profile) accepted
+    cfg.mod.globals.size (fun _ _ => False) (fun _ _ => False) (fun _ _ => False)
+    (fun _ _ => False) 0 cfg.mod.entry [] state ctx impl replayState.eff Observation.empty root
+    active access ⟨rho, range, replayState, replay, rfl⟩ contextAt implementationAt
+    (by intro i r impossible; exact impossible.elim)
+    (by intro i r impossible; exact impossible.elim) frameInvariant (ObservedSafe.empty _ _ _ _)
+    (by intro profile i r impossible; exact impossible.elim)
+    (by intro holder element target impossible; exact impossible.elim)
+    (by simp [noParameters]) (by intro i v impossible; simp at impossible)
+    (by intro i a si x impossible; exact impossible.elim)
+    (by intro r t impossible; exact impossible.elim)
+    (by intro r el impossible; exact impossible.elim)
+    (by intro r el el' impossible; exact impossible.elim)
+    (by intro r el impossible; exact impossible.elim)
+    (by
+      intro x contents present
+      have bound := (contextOk.content x contents present).1
+      omega)
+    (Or.inl (Nat.le_refl _))
+  refine ⟨ctx, impl, contextAt, implementationAt, noParameters, noResults, ?_⟩
+  exact ⟨source, typingEq, rootsEq⟩
+
+private theorem stmts_visible {tenv tenv' : TEnv} {sc tn tn' : Nat} {ss : List Stmt}
+    (ht : tyStmts tenv sc ss tn = .ok (tenv', tn')) :
+    ∀ x, x ∈ tenv'.visible ↔
+      x ∈ (DemandNode.block (.mk sc ss none)).visibleForChild tenv.visible ss.length := by
+  induction ss generalizing tenv tn with
+  | nil =>
+    simp only [tyStmts] at ht; inv at ht
+    obtain ⟨rfl, rfl⟩ := ht
+    intro x; rfl
+  | cons st rest ih =>
+    simp only [tyStmts] at ht; inv at ht
+    obtain ⟨mid, next, hstmt, hrest⟩ := ht
+    intro x
+    have h1 := ih hrest x
+    have h2 := (DemandNode.block (.mk sc rest none)).visibleForChild_mem_congr rest.length
+      (stmt_visibleAfter hstmt) x
+    cases st <;> simpa only [DemandNode.visibleForChild, List.take_length, List.foldl_cons,
+      DemandNode.visibleAfter] using h1.trans h2
+
+
+theorem StmtsSource.valueChild {cfg : Cfg} {env : Env} {stmts : List Stmt} {state after : St}
+    (source : StmtsSource cfg env stmts state) (expr : Expr)
+    (hasValue : source.value = some expr) (ty : Ty) (typingEnd : Nat)
+    (roots : List RootRef) (rootsEnd : RState)
+    (typed : tyExpr source.typingAfter expr source.typingEnd = .ok (ty, typingEnd))
+    (rooted : rpExpr source.rootsEnv expr source.rootsEnd = .ok (roots, rootsEnd))
+    (effects : EffLe rootsEnd.eff source.world.E)
+    (fuel : Nat) (value : Val) (done : execStmts fuel cfg env stmts state = .ok (.normal value) after) :
+    ∃ child : ExprSource cfg env expr after,
+      child.typingEnv = source.typingAfter ∧ child.rootsEnv = source.rootsEnv ∧ child.ty = ty := by
+  have result := source.result fuel (.normal value) done
+  obtain ⟨finalTyping, same, frame, normal⟩ := result.frame
+  have finalEq := normal value rfl
+  subst finalTyping
+  rcases cfg with ⟨prof, m⟩
+  rcases source with ⟨accepted, plans, path, observation, W, tenv, tenv', penv,
+    tn, tn', rst, rst', lo, sc, all, blockValue, bc, offset, hOffset, hDrop, hActive, hAccess,
+    hProtected, hObserved, hClass, hp, hF, hsc, hT, hlo, ht, hr, hE⟩
+  dsimp only at hasValue
+  subst blockValue
+  have same : TSame tenv tenv' := same
+  have hall : all.take offset ++ stmts = all := by
+    rw [hDrop]
+    exact List.take_append_drop offset all
+  have hfold : (DemandNode.block (.mk sc stmts none)).visibleForChild
+      (blockSuffixActive bc offset) stmts.length = blockSuffixActive bc all.length := by
+    cases bc <;> simp only [blockSuffixActive, DemandNode.visibleForChild, List.take_length]
+    all_goals rw [← List.foldl_append]; exact congrArg _ hall
+  have hfinalActive : ∀ x, x ∈ blockSuffixActive bc all.length ↔ x ∈ tenv'.visible := by
+    intro x
+    have initial := (DemandNode.block (.mk sc stmts none)).visibleForChild_mem_congr
+      stmts.length hActive x
+    rw [hfold] at initial
+    exact initial.trans (stmts_visible ht x).symm
+  let ec := bc.child rfl all.length (.expression expr) .expression blockValueChild?
+    (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
+  have hAct : ec.ActiveMatches tenv' := by
+    cases bc with
+    | pilot profile active => exact hfinalActive
+    | shrink profile context =>
+      let transition := context.child rfl all.length (.expression expr) .expression blockValueChild?
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
+      change ∀ x, x ∈ transition.context.expected.frame.active ↔ x ∈ tenv'.visible
+      rw [transition.expectedFrameEq, DemandNode.phaseFrame_active transition.phaseFrameEq,
+        DemandNode.childFrame_active transition.childFrameEq]
+      exact hfinalActive
+  have hAcc : ec.AccessMatches tenv' penv := by
+    apply (bc.child_accessMatches_iff rfl all.length (.expression expr) .expression
+      blockValueChild? (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) _ _).2
+    cases bc <;> simpa [EvaluationContext.AccessMatches, NodeContext.AccessMatches,
+      (show tenv'.mod = tenv.mod from same.mod), (show tenv'.vars = tenv.vars from same.vars)] using hAccess
+  have hMay : ec.mayShrink W.ownerP observation = bc.mayShrink W.ownerP observation := by
+    funext r
+    exact propext (bc.child_mayShrink_iff rfl all.length (.expression expr) .expression
+      blockValueChild? (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.ownerP observation r)
+  have hInput : Core.Sound.Frame m W tenv' penv env after ec.inputFuture := by
+    apply frame.changeFuture
+    intro x hx hf
+    cases bc with
+    | pilot profile active => exact (hAct x).2 hx
+    | shrink profile context =>
+      have hout := blockValue_shrinkFuture profile context
+      have hin : ec.inputFuture = expr.variables ++ ec.outputFuture := rfl
+      rw [hin, hout] at hf
+      simpa [blockSuffixFuture, List.drop_length, EvaluationContext.outputFuture,
+        List.flatMap_nil, List.nil_append] using hf
+  refine ⟨{
+    accepted := accepted, plans := plans, path := path ++ [all.length], context := ec,
+    observation := observation, world := W, typingEnv := tenv', rootsEnv := penv,
+    typingStart := tn', typingEnd := typingEnd, ty := ty, rootsStart := rst',
+    rootsEnd := rootsEnd, roots := roots, active := hAct, access := hAcc,
+    protection := hMay ▸ hProtected, observed := ?_, classified := result.classified,
+    permission := hp, frame := hInput, typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl⟩
+  rw [hMay]
+  exact result.observed
+
+theorem SourceResults.tsame {before after : TEnv} {roots : PEnv} {results : List Ty}
+    (metadata : SourceResults before roots results) (same : TSame before after) :
+    SourceResults after roots results := by
+  intro impl present
+  apply metadata impl
+  rw [same.impl] at present
+  exact present
+
+structure BlockResult {cfg : Cfg} {env : Env} {pre : List (VarId × Val)} {block : Block} {state : St}
+    (source : BlockSource cfg env pre block state) (flow : Flow) (after : St) : Prop where
+  frame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after source.context.outputFuture
+  footprint : Footprint (Core.Sound.insts env) (Dset source.world) state after
+  rootTypes : PreservesRootTypes cfg.mod source.world.G source.observation.roots state.store after.store
+  values : PreservesValues cfg.mod source.world.G source.observation.values state.store after.store
+  observed : ObservedSafe cfg.mod source.world (source.context.mayShrink source.world.ownerP source.observation) source.observation after.store
+  aliases : RetainsAliases cfg.mod source.world env state.store after.store source.context.retained
+  pilotStore : PilotStoreLe cfg.mod state after
+  flow : match flow with
+    | .normal value => HasTy cfg.mod source.world.G after.store value source.ty ∧
+        (∀ root, Targets value root → Gam env source.world.P source.roots root) ∧
+        stmtsDiverge cfg.mod.noReturn block.stmts = false ∧
+        OwnerRooted env source.world.ownerP source.roots value source.ty
+    | .brk => source.typingEnv.loops ≠ 0 ∧ stmtsHaveBreak block.stmts = true
+    | .cont => source.typingEnv.loops ≠ 0
+    | .ret value => source.typingEnv.inExpr = false ∧ RetOk cfg.mod source.world source.typingEnv source.rootsEnv after value
+  classified : cfg.mod.profile = .shrink → ClassifiedParameters cfg.mod source.world.P source.world.D source.observation after.store
+  forbidden : PreservesForbiddenOwnerRoots (m := cfg.mod) (G := source.world.G) (env := env) (P := source.world.P) source.context.forbiddenOwners state after
+  mutations : MutationFootprint env source.world.P source.world.base (effectMutationRoots cfg.mod source.rootsEnv.impl source.rootsEnd.eff) state after
+
+theorem BlockSource.result {cfg : Cfg} {env : Env} {pre : List (VarId × Val)} {block : Block} {state after : St}
+    (source : BlockSource cfg env pre block state) (fuel : Nat) (flow : Flow)
+    (done : execBlock fuel cfg env pre block state = .ok flow after) : BlockResult source flow after := by
+  cases block with
+  | mk scope stmts value =>
+    have checked := (Core.Sound.specs_all (validate_modOk cfg.mod source.accepted)
+      cfg.profile source.plans fuel).block source.path scope stmts value source.context
+      source.observation source.world source.typingEnv source.typingInner source.typingAfter
+      source.rootsEnv env state pre source.typingStart source.typingValue source.typingEnd
+      source.ty source.rootsStart source.rootsValue source.rootsEnd source.roots source.lowerBound
+      source.active source.access source.protection source.observed source.classified source.permission
+      source.frame source.fresh source.same source.visible source.pretyped source.bounded source.typed
+      (by cases value <;> exact source.typedValue) source.rooted
+      (by cases value <;> exact source.rootedValue) source.effects source.rootsEscape
+    unfold Sat at checked
+    rw [done] at checked
+    obtain ⟨a, b, c, d, e, f, g, h, i, j, k⟩ := checked
+    cases flow <;> exact ⟨a, b, c, d, e, f, g, h, i, j, k⟩
+
 end Goose.Lower
