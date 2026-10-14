@@ -648,4 +648,63 @@ theorem bounded_slice_claim (artifact : ArtifactProfile) (profile : NumProfile) 
       .done (.aborted .sliceOob 0) "", .done (.aborted .sliceOob 0) "" => true
   | _, _, _, _ => false
 
+def popValues (nonempty : Bool) : List Expr := if nonempty then [.bool true] else []
+
+def popModule (artifact : ArtifactProfile) (nonempty : Bool) : Core.Module :=
+  { files := #["pop.goose"], types := #[.bool, .int .i64, .growshrink .bool],
+    globals := #[⟨"owner", .growshrink .bool, .mutable, .arrLit (.growshrink .bool) (popValues nonempty), 0⟩,
+      ⟨"popped", .bool, .mutable, .pop (.global 0) 0, 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [.assertS (.read (.global 1)) 0,
+      .assertS (.cmp .eq (.len (.of (.global 0))) (.lit .i64 0)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := artifact }
+
+def popPrefixState (nonempty : Bool) : St :=
+  { St.initial with nextAct := 1, store := Store.empty.introduce (.global 0) (.resizable .bool (if nonempty then #[.bool true] else #[])) }
+
+theorem pop_prefix (artifact : ArtifactProfile) (profile : NumProfile) (nonempty : Bool)
+    (accepted : Core.validate (popModule artifact nonempty) = .ok ()) :
+    InitializedGlobals (popModule artifact nonempty) 1 (popPrefixState nonempty) := by
+  exact InitializedGlobals.afterInitializer (cfg := ⟨profile, popModule artifact nonempty⟩)
+    (before := St.initial) (after := { St.initial with nextAct := 1 })
+    (value := .resizable .bool (if nonempty then #[.bool true] else #[])) (g := 0)
+    (global := ⟨"owner", .growshrink .bool, .mutable, .arrLit (.growshrink .bool) (popValues nonempty), 0⟩)
+    accepted rfl (InitializedGlobals.initial _) 3
+    (by cases nonempty <;> simp [evalExpr, popValues, mapList, Core.expectArrayLit,
+      bind_apply, pure_apply, St.initial])
+
+theorem pop_owner_source (artifact : ArtifactProfile) (profile : NumProfile) (nonempty : Bool)
+    (accepted : Core.validate (popModule artifact nonempty) = .ok ()) :
+    Nonempty (PlaceSource ⟨profile, popModule artifact nonempty⟩ ⟨#[], 1, [], 0⟩ (.global 0)
+      { popPrefixState nonempty with nextAct := 2 }) := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, popModule artifact nonempty⟩) (state := popPrefixState nonempty) (g := 1)
+    (global := ⟨"popped", .bool, .mutable, .pop (.global 0) 0, 0⟩)
+    accepted rfl (pop_prefix artifact profile nonempty accepted).invariant
+  obtain ⟨owner, hownerTyping, hownerRoots⟩ := source.popChild 0
+  exact ⟨owner⟩
+
+theorem pop_claim (artifact : ArtifactProfile) (profile : NumProfile) :
+    TypedExprClaim 4 ⟨profile, popModule artifact true⟩ [.bool] (.pop (.global 0) 0) :=
+  typedExprClaim_pop (typedPlaceClaim_global 3 _ _ 0) 0
+
+#guard [false, true].all fun nonempty =>
+  let source := popModule .shrink nonempty
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [false, true].all fun nonempty =>
+  match Core.validate (popModule .pilot nonempty) with
+  | .error _ => true
+  | .ok _ => false
+
+#guard [NumProfile.release, .debug].all fun profile =>
+  let within := popModule .shrink true
+  let empty := popModule .shrink false
+  match Core.eval 160 profile within, GIR.run 320 profile (lower within),
+      Core.eval 160 profile empty, GIR.run 320 profile (lower empty) with
+  | .done .returned "", .done .returned "",
+      .done (.aborted .popEmpty 0) "", .done (.aborted .popEmpty 0) "" => true
+  | _, _, _, _ => false
+
 end Goose.Lower.TypedExpressionChecks
