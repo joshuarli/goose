@@ -1,4 +1,4 @@
-import Goose.Evidence.SSA
+import Goose.Evidence.CfgValidation
 
 namespace Goose.Evidence
 
@@ -470,5 +470,177 @@ theorem predecessors_instAt {fn : Func} {pt : Pt} {term : Term} {target : Nat}
     apply predecessors_successor found bound
     exact List.mem_flatMap.mpr ⟨term,
       List.mem_filterMap.mpr ⟨.term term, List.mem_of_getElem? instruction, rfl⟩, successor⟩
+
+def DefinitionSite (fn : Func) (value block : Nat) (offset : Int) : Prop :=
+  (offset = -1 ∧ ∃ body, fn.blocks[block]? = some body ∧ value ∈ body.params.map Prod.fst) ∨
+    (∃ (index : Nat) (operation : Op), offset = (index : Int) ∧ instAt fn (block, index) = some (.def value operation))
+
+theorem definitionLocation_site {fn : Func} {value block : Nat} {offset : Int}
+    (member : (value, (block, offset)) ∈ fn.definitionLocations) : DefinitionSite fn value block offset := by
+  obtain ⟨pair, hb, hloc⟩ := List.mem_flatMap.mp member
+  rcases pair with ⟨body, id⟩
+  have indexed := List.mem_zipIdx hb
+  have found : fn.blocks[id]? = some body := by
+    rw [← Array.getElem?_toList, List.getElem?_eq_getElem (by simpa using indexed.2.1)]
+    simp only [Nat.zero_add, Nat.sub_zero] at indexed
+    rw [← indexed.2.2]
+  simp only [Block.definitionLocations, List.mem_append] at hloc
+  rcases hloc with parameter | definition
+  · obtain ⟨param, hp, he⟩ := List.mem_map.mp parameter
+    have valueEq : param.1 = value := congrArg Prod.fst he
+    have siteEq : (id, (-1 : Int)) = (block, offset) := congrArg Prod.snd he
+    cases siteEq
+    exact Or.inl ⟨rfl, body, found, List.mem_map.mpr ⟨param, hp, valueEq⟩⟩
+  · obtain ⟨pair, hi, he⟩ := List.mem_filterMap.mp definition
+    rcases pair with ⟨inst, index⟩
+    cases inst with
+    | eff effect => simp at he
+    | term term => simp at he
+    | «def» result operation =>
+      simp only [Option.some.injEq, Prod.mk.injEq] at he
+      rcases he with ⟨rfl, rfl, offsetEq⟩
+      apply Or.inr
+      refine ⟨index, operation, offsetEq.symm, ?_⟩
+      have indexedInst := List.mem_zipIdx hi
+      unfold instAt
+      rw [found]
+      simp only [Option.bind_some]
+      rw [List.getElem?_eq_getElem (by simpa using indexedInst.2.1)]
+      simp only [Nat.zero_add, Nat.sub_zero] at indexedInst
+      rw [← indexedInst.2.2]
+
+theorem ControlStep.source_bound {fn : Func} {before after : Pt}
+    (step : ControlStep fn before after) : before.1 < fn.blocks.size := by
+  have atSource : ∃ instruction, instAt fn before = some instruction := by
+    cases step with
+    | definition instruction => exact ⟨_, instruction⟩
+    | effect instruction => exact ⟨_, instruction⟩
+    | branch instruction _ => exact ⟨_, instruction⟩
+  obtain ⟨instruction, found⟩ := atSource
+  unfold instAt at found
+  cases lookup : fn.blocks[before.1]? with
+  | none => simp [lookup] at found
+  | some block => exact (Array.getElem?_eq_some_iff.mp lookup).1
+
+theorem ControlPath.source_bound {fn : Func} {ids : List ValueId} {first last : Pt}
+    (path : ControlPath fn ids first last) (bound : last.1 < fn.blocks.size) : first.1 < fn.blocks.size := by
+  cases path with
+  | refl => exact bound
+  | next transition _ _ => exact transition.source_bound
+
+theorem ControlPath.definition_avoiding_predWalk {m : Goose.GIR.Module} {fn : Func} {id : ValueId}
+    {operation : Op} {definitionPt last : Pt}
+    (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (definition : instAt fn definitionPt = some (.def id operation))
+    (path : ControlPath fn [id] (0, 0) last)
+    (past : last.1 ≠ definitionPt.1 ∨ definitionPt.2 < last.2)
+    (lastBound : last.1 < fn.blocks.size) :
+    ∃ length, PredWalk (predecessors fn) fn.blocks.size definitionPt.1 length last.1 := by
+  have cannotEnter : ∀ point, ControlPath fn [id] point last → point = (definitionPt.1, 0) → False := by
+    intro point suffix equal
+    subst point
+    have barrier := validated_definition_barrier valid member definition suffix ⟨rfl, by omega⟩
+    rcases past with otherBlock | later
+    · exact otherBlock barrier.1
+    · omega
+  have entryAvoids : 0 ≠ definitionPt.1 := by
+    intro equal
+    exact cannotEnter (0, 0) path (Prod.ext equal rfl)
+  have entryBound := path.source_bound lastBound
+  have initial : PredWalk (predecessors fn) fn.blocks.size definitionPt.1 0 0 := .entry entryBound entryAvoids
+  have travel : ∀ {first : Pt}, ControlPath fn [id] first last →
+      ∀ length, PredWalk (predecessors fn) fn.blocks.size definitionPt.1 length first.1 →
+      ∃ distance, PredWalk (predecessors fn) fn.blocks.size definitionPt.1 distance last.1 := by
+    intro first history
+    induction history with
+    | refl => intro length walk; exact ⟨length, walk⟩
+    | @next first middle last step unwritten suffix ih =>
+      intro length walk
+      cases step with
+      | definition instruction => exact ih path past lastBound cannotEnter length walk
+      | effect instruction => exact ih path past lastBound cannotEnter length walk
+      | @branch term target instruction successor =>
+        have targetBound := suffix.source_bound lastBound
+        have targetAvoids : target ≠ definitionPt.1 := by
+          intro equal
+          exact cannotEnter (target, 0) suffix (Prod.ext equal rfl)
+        exact ih path past lastBound cannotEnter (length + 1) (PredWalk.next walk targetBound targetAvoids
+          (predecessors_instAt instruction targetBound successor))
+  exact travel path 0 initial
+
+def EntryParameter (fn : Func) (value : ValueId) : Prop :=
+  ∃ body, fn.blocks[0]? = some body ∧ value ∈ body.params.map Prod.fst
+
+theorem ControlPath.parameter_avoiding_predWalk {fn : Func} {id block : ValueId}
+    {body : Goose.GIR.Block} {last : Pt}
+    (parameter : id ∈ body.params.map Prod.fst) (found : fn.blocks[block]? = some body)
+    (nonentry : block ≠ 0) (path : ControlPath fn [id] (0, 0) last)
+    (lastBound : last.1 < fn.blocks.size) :
+    ∃ length, PredWalk (predecessors fn) fn.blocks.size block length last.1 := by
+  have initial : PredWalk (predecessors fn) fn.blocks.size block 0 0 :=
+    .entry (path.source_bound lastBound) nonentry.symm
+  have travel : ∀ {first : Pt}, ControlPath fn [id] first last →
+      ∀ length, PredWalk (predecessors fn) fn.blocks.size block length first.1 →
+      ∃ distance, PredWalk (predecessors fn) fn.blocks.size block distance last.1 := by
+    intro first history
+    induction history with
+    | refl => intro length walk; exact ⟨length, walk⟩
+    | @next first middle last step unwritten suffix ih =>
+      intro length walk
+      cases step with
+      | definition instruction => exact ih path lastBound length walk
+      | effect instruction => exact ih path lastBound length walk
+      | @branch term target instruction successor =>
+        have targetBound := suffix.source_bound lastBound
+        have targetAvoids : target ≠ block := by
+          intro equal
+          subst target
+          have excluded := unwritten id (by simp)
+          simp only [stepWrites, instruction, found, Option.map_some, Option.getD_some] at excluded
+          exact excluded parameter
+        exact ih path lastBound (length + 1) (PredWalk.next walk targetBound targetAvoids
+          (predecessors_instAt instruction targetBound successor))
+  exact travel path 0 initial
+
+theorem instAt_block_bound {fn : Func} {pt : Pt} {instruction : Inst}
+    (found : instAt fn pt = some instruction) : pt.1 < fn.blocks.size := by
+  unfold instAt at found
+  cases lookup : fn.blocks[pt.1]? with
+  | none => simp [lookup] at found
+  | some block => exact (Array.getElem?_eq_some_iff.mp lookup).1
+
+theorem validated_operand_avoiding_path {m : Goose.GIR.Module} {fn : Func}
+    {pt : Pt} {instruction : Inst} {value : ValueId}
+    (valid : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (atPoint : instAt fn pt = some instruction) (operand : value ∈ instruction.uses)
+    (path : ControlPath fn [value] (0, 0) pt) : EntryParameter fn value := by
+  obtain ⟨block, offset, location, _, dominance⟩ :=
+    validated_operand_definition valid member atPoint operand
+  have site := definitionLocation_site location
+  have lastBound := instAt_block_bound atPoint
+  rcases site with ⟨rfl, body, found, parameter⟩ | ⟨index, operation, rfl, definition⟩
+  · by_cases entry : block = 0
+    · subst block
+      exact ⟨body, found, parameter⟩
+    · obtain ⟨length, walk⟩ := ControlPath.parameter_avoiding_predWalk parameter found entry path lastBound
+      by_cases sameBlock : block = pt.1
+      · exact False.elim (walk.avoids sameBlock.symm)
+      · have mask : domBit (dominators fn (predecessors fn)) pt.1 block = true := by
+          simpa only [if_neg sameBlock, domBit] using dominance
+        rw [dominators_predWalk_sound walk] at mask
+        contradiction
+  · have past : pt.1 ≠ block ∨ index < pt.2 := by
+      by_cases sameBlock : block = pt.1
+      · right
+        simp only [if_pos sameBlock] at dominance
+        omega
+      · exact Or.inl (Ne.symm sameBlock)
+    obtain ⟨length, walk⟩ := ControlPath.definition_avoiding_predWalk valid member definition path past lastBound
+    by_cases sameBlock : block = pt.1
+    · exact False.elim (walk.avoids sameBlock.symm)
+    · have mask : domBit (dominators fn (predecessors fn)) pt.1 block = true := by
+        simpa only [if_neg sameBlock, domBit] using dominance
+      rw [dominators_predWalk_sound walk] at mask
+      contradiction
 
 end Goose.Evidence
