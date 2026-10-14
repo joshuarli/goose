@@ -57,15 +57,26 @@ inline int CoreIntBits(CoreIntTy t) {
 }
 
 using CoreTypeId = int;
+using CoreFileId = int;
+using CoreOriginId = int;
+using CoreScopeId = int;
+using CoreStructId = int;
+using CoreVarId = int;
+using CoreGlobalId = int;
+using CoreContextId = int;
+using CoreImplId = int;
+using CoreResultId = int;
+using CoreTargetId = int;
 
 struct CoreType {
-    enum Kind : uint8_t { Int, Bool, Unit, Arr, Grow, GrowShrink, Limited, Ref, Slice, View, Ptr, Struct,
-                          Dest, Built, Cancelled } kind = Unit;
+    enum Kind : uint8_t { Int, Bool, Unit, Arr, VarArr, Grow, GrowShrink, Limited, Ref, Slice, View, Ptr,
+                          Tuple, Struct, Dest, Built, Cancelled } kind = Unit;
     CoreIntTy ity = CoreIntTy::I64;
     CoreMut mut = CoreMut::Mut;
     CoreTypeId elem = -1;
+    vector<CoreTypeId> parts;
     int64_t count = 0;
-    int structid = -1;
+    CoreStructId structid = -1;
     CoreRequest request = CoreRequest::Value;
     bool operator==(const CoreType &) const = default;
 };
@@ -100,7 +111,7 @@ inline const char *CoreOriginKindName(CoreOriginKind k) {
 // Where an operation came from: an index into CoreModule::files, a line from
 // 1, and the kind of source construct.
 struct CoreOrigin {
-    int file = 0;
+    CoreFileId file = 0;
     int line = 0;
     CoreOriginKind kind = CoreOriginKind::Expr;
     bool operator==(const CoreOrigin &) const = default;
@@ -139,7 +150,7 @@ using CoreViewP = unique_ptr<CoreView>;
 
 // A scope. Variables are declared by a `let` or a loop statement inside it.
 struct CoreBlock {
-    int scope = 0;
+    CoreScopeId scope = 0;
     vector<CoreStmt> stmts;
     CoreExprP value;   // Absent for a unit block.
 };
@@ -168,17 +179,17 @@ struct CoreBound {
     CoreExprP expr;
 };
 
-struct CoreArg {
-    enum Kind : uint8_t { Val, Ref } kind = Val;
-    CoreMut mut = CoreMut::Mut;   // Ref
-    CoreExprP expr;               // Val
-    CorePlaceP place;             // Ref
-};
+struct CoreArgValue { CoreExprP expr; };
+struct CoreArgConstruct { CoreExprP expr; };
+struct CoreArgReference { CoreMut mut = CoreMut::Mut; CorePlaceP place; };
+using CoreArg = variant<CoreArgValue, CoreArgConstruct, CoreArgReference>;
 
 enum class CoreExprKind : uint8_t {
     Lit, Bool, Read, Ref, Slice, Len, Un, Bin, Cmp, And, Or, Not, Conv, Call, Push, Pop, If, Block,
-    Arr, Fill, Struct, Bytes,
+    Arr, Fill, Struct, Bytes, String, Copy, ResultLocal, Values,
 };
+
+struct CorePrintArg;
 
 struct CoreExpr {
     CoreExprKind kind = CoreExprKind::Bool;
@@ -190,48 +201,46 @@ struct CoreExpr {
     CoreBinOp bin = CoreBinOp::Add;
     CoreCmpOp cmp = CoreCmpOp::Eq;
     CoreConvKind conv = CoreConvKind::Widen;
-    int ctx = 0;
+    CoreContextId ctx = 0;
+    CoreVarId var = -1;
     CorePlaceP place;
     CoreViewP view;
     CoreBound lo, hi;
     CoreExprP a, b;
     vector<CoreArg> args;
     vector<CoreExprP> elems;
+    vector<CoreExprP> values;
+    vector<CorePrintArg> print;
     vector<uint8_t> bytes;
     unique_ptr<CoreBlock> then, otherwise;
     CoreOrigin org;
 };
 
 struct CorePrintArg {
-    bool text = false;
-    string str;          // text
-    CoreExprP expr;      // !text
+    enum Kind : uint8_t { Text, Expr, View } kind = Text;
+    string str;
+    CoreExprP expr;
+    CoreViewP view;
 };
 
 enum class CoreStmtKind : uint8_t {
     Let, Assign, AssignOp, AssignWhole, Rebind, Expr, Append, PopN, Resize, Clear, If, While, ForRange, ForEach, Ret, Break,
-    Continue, Print, Assert, Abort, Exit,
+    Continue, Print, Assert, Abort, Exit, Receive, AppendValue, AppendConstruct, RetValues, RetForward,
+    ReturnFrom, ReturnFromForward, BreakValue,
 };
 
-// One statement. Meaningful members by kind:
-//   Let: var, expr          Assign: place, expr      AssignOp: bin, place, expr
-//   AssignWhole: place, expr    Rebind: var, expr       Expr: expr
-//   Append: place, view    PopN: place, expr          Resize: place, expr (size), expr2 (optional fill)
-//   Clear: place
-//   If: expr, then, otherwise (optional)             While: expr, then
-//   ForRange: var, expr (lo), expr2 (hi), then
-//   ForEach: var, index (optional), view, byRef, then
-//   Ret: expr (optional)    Print: print             Assert/Exit: expr
-//   Abort: message
 struct CoreStmt {
     CoreStmtKind kind = CoreStmtKind::Break;
     int var = 0;
     int index = -1;
+    CoreTargetId target = -1;
     bool byRef = false;
     CoreBinOp bin = CoreBinOp::Add;
     CorePlaceP place;
     CoreViewP view;
     CoreExprP expr, expr2;
+    vector<CoreVarId> vars;
+    vector<CoreExprP> values;
     unique_ptr<CoreBlock> then, otherwise;
     vector<CorePrintArg> print;
     string message;
@@ -239,7 +248,7 @@ struct CoreStmt {
 };
 
 struct CoreRootRef {
-    enum Kind : uint8_t { Local, Global, Param } kind = Local;
+    enum Kind : uint8_t { Static, Local, Global, Param } kind = Local;
     int index = 0;
     auto operator<=>(const CoreRootRef &) const = default;
 };
@@ -261,7 +270,8 @@ struct CoreTarget {
 struct CoreSummary {
     bool unknown = false;
     vector<CoreTarget> reads, writes, grows, shrinks, rebinds;
-    vector<int> constructs, needs, escapes;
+    vector<CoreResultId> constructs;
+    vector<CoreTargetId> needs, escapes;
     bool aborts = false;
     bool outputs = false;
 };
@@ -270,7 +280,7 @@ struct CoreVar {
     string name;
     CoreTypeId type = -1;
     CoreVarKind kind = CoreVarKind::Let;
-    int scope = 0;
+    CoreScopeId scope = 0;
     CoreOrigin org;
 };
 
@@ -279,28 +289,34 @@ struct CoreParam {
     bool byRef = false;
 };
 
+struct CoreResultDescriptor {
+    CoreTypeId type = -1;
+    CoreRequest request = CoreRequest::Register;
+    optional<CoreVarId> namedLocal;
+};
+
 struct CoreImpl {
     string name;
     vector<CoreParam> params;
-    vector<CoreTypeId> results;
+    vector<CoreResultDescriptor> results;
     vector<CoreVar> vars;
     CoreBlock body;
     CoreSummary summary;
 };
 
 struct CoreTargetSet {
-    vector<int> members;
+    vector<CoreImplId> members;
 };
 
 // One checked specialization of a source function. Execution never reads it.
 struct CoreContext {
-    int impl = 0;
+    CoreImplId impl = 0;
     string declkey;
     // The stable identity of the checked context and the module of its
     // declaration, for naming what is emitted from it. Not part of the wire format.
     string stablekey, module;
     // Root set of each reference- or slice-typed variable, by ascending variable.
-    vector<pair<int, vector<CoreRootRef>>> varroots;
+    vector<pair<CoreVarId, vector<CoreRootRef>>> varroots;
     vector<vector<CoreRootRef>> resultroots;
     // The content roots of the variables whose type is a reference to a slice,
     // aligned with `varroots`: what the slice the variable refers to may be
@@ -332,7 +348,7 @@ struct CoreModule {
     vector<CoreGlobal> globals;
     vector<CoreImpl> impls;
     vector<CoreContext> contexts;
-    int entry = 0;
+    CoreContextId entry = 0;
 
     CoreTypeId Intern(const CoreType &t) {
         for (size_t i = 0; i < types.size(); i++)
@@ -383,7 +399,7 @@ struct CoreModule {
                 }
                 if (!owner || *owner < 0 || *owner >= (int)types.size()) return {};
                 auto &array = Type(*owner);
-                if (array.kind != CoreType::Arr && array.kind != CoreType::Grow &&
+                if (array.kind != CoreType::Arr && array.kind != CoreType::VarArr && array.kind != CoreType::Grow &&
                     array.kind != CoreType::GrowShrink && array.kind != CoreType::Limited) return {};
                 return array.elem;
             }
@@ -433,11 +449,18 @@ inline void CoreVisitExprs(const CoreExpr &e, const function<void(const CoreExpr
     if (e.hi.expr) CoreVisitExprs(*e.hi.expr, f);
     if (e.a) CoreVisitExprs(*e.a, f);
     if (e.b) CoreVisitExprs(*e.b, f);
-    for (auto &a : e.args) {
-        if (a.expr) CoreVisitExprs(*a.expr, f);
-        if (a.place) CoreVisitExprs(*a.place, f);
-    }
+    for (auto &a : e.args) visit([&](auto &arg) {
+        using Arg = decay_t<decltype(arg)>;
+        if constexpr (is_same_v<Arg, CoreArgValue> || is_same_v<Arg, CoreArgConstruct>) {
+            if (arg.expr) CoreVisitExprs(*arg.expr, f);
+        } else if (arg.place) CoreVisitExprs(*arg.place, f);
+    }, a);
     for (auto &el : e.elems) CoreVisitExprs(*el, f);
+    for (auto &value : e.values) CoreVisitExprs(*value, f);
+    for (auto &part : e.print) {
+        if (part.kind == CorePrintArg::Expr && part.expr) CoreVisitExprs(*part.expr, f);
+        if (part.kind == CorePrintArg::View && part.view) CoreVisitExprs(*part.view, f);
+    }
     if (e.then) CoreVisitExprs(*e.then, f);
     if (e.otherwise) CoreVisitExprs(*e.otherwise, f);
 }
@@ -448,7 +471,11 @@ inline void CoreVisitExprs(const CoreBlock &b, const function<void(const CoreExp
         if (s.view) CoreVisitExprs(*s.view, f);
         if (s.expr) CoreVisitExprs(*s.expr, f);
         if (s.expr2) CoreVisitExprs(*s.expr2, f);
-        for (auto &a : s.print) if (!a.text) CoreVisitExprs(*a.expr, f);
+        for (auto &a : s.print) {
+            if (a.kind == CorePrintArg::Expr) CoreVisitExprs(*a.expr, f);
+            if (a.kind == CorePrintArg::View) CoreVisitExprs(*a.view, f);
+        }
+        for (auto &value : s.values) CoreVisitExprs(*value, f);
         if (s.then) CoreVisitExprs(*s.then, f);
         if (s.otherwise) CoreVisitExprs(*s.otherwise, f);
     }

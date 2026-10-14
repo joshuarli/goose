@@ -295,12 +295,36 @@ private:
                 Block(*s.then);
                 break;
             }
+            case CoreStmtKind::Receive:
+                Ex(*s.expr);
+                break;
+            case CoreStmtKind::AppendValue:
+            case CoreStmtKind::AppendConstruct: {
+                auto rho = Pl(*s.place);
+                Ex(*s.expr);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
+                AddTargets(fx->grows, rho);
+                if (IsLimitedOwner(*s.place)) fx->aborts = true;
+                break;
+            }
             case CoreStmtKind::Ret:
                 if (s.expr) Ex(*s.expr);
                 break;
+            case CoreStmtKind::RetValues:
+            case CoreStmtKind::ReturnFrom:
+                for (auto &value : s.values) Ex(*value);
+                break;
+            case CoreStmtKind::RetForward:
+            case CoreStmtKind::ReturnFromForward:
+            case CoreStmtKind::BreakValue:
+                Ex(*s.expr);
+                break;
             case CoreStmtKind::Print:
                 fx->outputs = true;
-                for (auto &a : s.print) if (!a.text) Ex(*a.expr);
+                for (auto &a : s.print) {
+                    if (a.kind == CorePrintArg::Expr) Ex(*a.expr);
+                    if (a.kind == CorePrintArg::View) Vw(*a.view);
+                }
                 break;
             case CoreStmtKind::Assert:
             case CoreStmtKind::Exit:
@@ -339,7 +363,8 @@ private:
 
     Roots Ex(const CoreExpr &e) {
         switch (e.kind) {
-            case CoreExprKind::Lit: case CoreExprKind::Bool: case CoreExprKind::Bytes: return {};
+            case CoreExprKind::Lit: case CoreExprKind::Bool: case CoreExprKind::Bytes:
+            case CoreExprKind::ResultLocal: return {};
             case CoreExprKind::Read: {
                 auto rho = Pl(*e.place);
                 AddTargets(fx->reads, rho);
@@ -406,6 +431,22 @@ private:
                 for (auto &el : e.elems) Ex(*el);
                 return {};
             case CoreExprKind::Fill: Ex(*e.a); return {};
+            case CoreExprKind::String:
+                for (auto &part : e.print) {
+                    if (part.kind == CorePrintArg::Expr) Ex(*part.expr);
+                    if (part.kind == CorePrintArg::View) Vw(*part.view);
+                }
+                return {};
+            case CoreExprKind::Copy: {
+                auto rho = Pl(*e.place);
+                AddTargets(fx->reads, rho);
+                return {};
+            }
+            case CoreExprKind::Values: {
+                Roots roots;
+                for (auto &value : e.values) roots = Union(roots, Ex(*value));
+                return roots;
+            }
         }
         return {};
     }
@@ -413,7 +454,11 @@ private:
     Roots Call(const CoreExpr &e) {
         vector<Roots> argroots;
         for (auto &a : e.args)
-            argroots.push_back(a.kind == CoreArg::Val ? Ex(*a.expr) : Pl(*a.place));
+            argroots.push_back(visit([&](const auto &arg) -> Roots {
+                using Arg = decay_t<decltype(arg)>;
+                if constexpr (is_same_v<Arg, CoreArgReference>) return Pl(*arg.place);
+                else return Ex(*arg.expr);
+            }, a));
         auto &ctx = m.contexts[e.ctx];
         auto &callee = m.impls[ctx.impl];
         if (callee.summary.unknown) fx->unknown = true;
@@ -440,12 +485,13 @@ private:
             fx->outputs |= callee.summary.outputs;
         }
         Roots out;
-        if (callee.results.size() == 1 && m.IsRefOrSlice(callee.results[0]) && ctx.resultroots.size() == 1)
-            for (auto &r : ctx.resultroots[0]) {
-                if (r.kind == CoreRootRef::Param && r.index < (int)argroots.size())
-                    out = Union(out, argroots[r.index]);
-                else if (r.kind == CoreRootRef::Global) out = Union(out, { r });
-            }
+        for (size_t i = 0; i < callee.results.size() && i < ctx.resultroots.size(); i++)
+            if (m.IsRefOrSlice(callee.results[i].type))
+                for (auto &r : ctx.resultroots[i]) {
+                    if (r.kind == CoreRootRef::Param && r.index < (int)argroots.size())
+                        out = Union(out, argroots[r.index]);
+                    else if (r.kind == CoreRootRef::Global) out = Union(out, { r });
+                }
         return out;
     }
 };

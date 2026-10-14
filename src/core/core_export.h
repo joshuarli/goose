@@ -789,7 +789,8 @@ private:
         if (!CoreIsUtf8(impl.name)) Fail("non-utf8-text");
         if (sp->rets.size() > 1) ReportOrFail("multiple-results", sp->sf->line);
         if (sp->sf->isthread) ReportOrFail("thread", sp->sf->line);
-        for (size_t r = 0; r < sp->rets.size(); r++) impl.results.push_back(ResultTy(sp, r));
+        for (size_t r = 0; r < sp->rets.size(); r++)
+            impl.results.push_back({ ResultTy(sp, r), CoreRequest::Register, {} });
         auto porg = Org(sp->sf->line, CoreOriginKind::Param);
         for (size_t i = 0; i < sp->params.size(); i++) {
             auto vd = sp->params[i];
@@ -1198,10 +1199,11 @@ private:
                     CorePrintArg pa;
                     if (auto sl = Is<StrLit>(a)) {
                         if (!CoreIsUtf8(sl->val)) Fail("non-utf8-text", a->line);
-                        pa.text = true;
+                        pa.kind = CorePrintArg::Text;
                         pa.str = sl->val;
                     } else {
                         here = a->line;
+                        pa.kind = CorePrintArg::Expr;
                         pa.expr = Value(a);
                         auto k = mod.Type(pa.expr->type).kind;
                         if (k != CoreType::Int && k != CoreType::Bool) Fail("print-argument", a->line);
@@ -1494,7 +1496,9 @@ private:
 
     // A mutable reference or slice where the slot has a read-only one of the
     // same elements: reborrowed read-only.
-    CoreTypeId ResultOfCurrent() { return cur.impl && !cur.impl->results.empty() ? cur.impl->results[0] : -1; }
+    CoreTypeId ResultOfCurrent() {
+        return cur.impl && !cur.impl->results.empty() ? cur.impl->results[0].type : -1;
+    }
 
     CoreExprP ReborrowTo(CoreExprP e, CoreTypeId want) {
         if (want < 0 || !e || e->type == want) return e;
@@ -1878,12 +1882,9 @@ private:
             auto pt = callee->argtypes[i];
             CoreArg arg;
             if (pt->kind == TY_REF) {
-                arg.kind = CoreArg::Ref;
-                arg.mut = mod.Type(ParamTy(callee, i)).mut;
-                arg.place = ArgPlace(an[i]);
+                arg = CoreArgReference { mod.Type(ParamTy(callee, i)).mut, ArgPlace(an[i]) };
             } else {
-                arg.kind = CoreArg::Val;
-                arg.expr = Value(an[i]);
+                arg = CoreArgValue { Value(an[i]) };
             }
             e->args.push_back(std::move(arg));
         }
@@ -1891,9 +1892,7 @@ private:
         // activation's variables of the same name.
         for (auto fv : freevars[callee]) {
             CoreArg arg;
-            arg.kind = CoreArg::Ref;
-            arg.mut = CaptureMut(callee, fv);
-            arg.place = VarPlace(fv);
+            arg = CoreArgReference { CaptureMut(callee, fv), VarPlace(fv) };
             e->args.push_back(std::move(arg));
         }
         coerceorg = savedorg;
@@ -2045,7 +2044,7 @@ private:
         for (size_t i = 0; i < impl.results.size(); i++) {
             vector<CoreRootRef> roots;
             vector<VarDef *> classes;
-            if (mod.IsRefOrSlice(impl.results[i]) && i < sp->record.retroots.size())
+            if (mod.IsRefOrSlice(impl.results[i].type) && i < sp->record.retroots.size())
                 roots = RootsOf(sp->record.retroots[i].alts, sp, classes);
             for (auto c : classes) globalclasses.push_back({ k, true, (int)i, c });
             ctx.resultroots.push_back(std::move(roots));
@@ -2093,8 +2092,11 @@ private:
     }
 
     RootSet ArgRoots(const CoreArg &a, int k) {
-        if (a.kind == CoreArg::Ref) return PlaceRoots(*a.place, k);
-        return mod.IsRefOrSlice(a.expr->type) ? ExprRoots(*a.expr, k) : RootSet {};
+        return visit([&](const auto &arg) -> RootSet {
+            using Arg = decay_t<decltype(arg)>;
+            if constexpr (is_same_v<Arg, CoreArgReference>) return PlaceRoots(*arg.place, k);
+            else return mod.IsRefOrSlice(arg.expr->type) ? ExprRoots(*arg.expr, k) : RootSet {};
+        }, a);
     }
 
     // The roots of a reference- or slice-typed expression in context k.
@@ -2108,14 +2110,14 @@ private:
             case CoreExprKind::Ref: case CoreExprKind::Push: out = PlaceRoots(*e.place, k); break;
             case CoreExprKind::Slice: out = ViewRoots(*e.view, k); break;
             case CoreExprKind::Call: {
-                auto &res = mod.contexts[e.ctx].resultroots;
-                if (res.empty()) break;
-                for (auto &r : res[0]) {
-                    if (r.kind == CoreRootRef::Param) {
-                        auto a = ArgRoots(e.args[r.index], k);
-                        out.insert(a.begin(), a.end());
-                    } else if (r.kind == CoreRootRef::Global) out.insert(r);
-                }
+                auto &context = mod.contexts[e.ctx];
+                for (auto &roots : context.resultroots)
+                    for (auto &r : roots) {
+                        if (r.kind == CoreRootRef::Param) {
+                            auto a = ArgRoots(e.args[r.index], k);
+                            out.insert(a.begin(), a.end());
+                        } else if (r.kind == CoreRootRef::Global) out.insert(r);
+                    }
                 break;
             }
             case CoreExprKind::If: case CoreExprKind::Block: {
@@ -2165,9 +2167,10 @@ private:
                         here = ctxspecs[e.ctx]->sf->line;
                         // The slice variable passed, and the roots it has here.
                         auto &a = e.args[j];
-                        if (a.kind != CoreArg::Ref) Fail("reference-to-slice");
+                        auto argument = get_if<CoreArgReference>(&a);
+                        if (!argument) Fail("reference-to-slice");
                         RootSet slice;
-                        auto &p = *a.place;
+                        auto &p = *argument->place;
                         if (p.kind == CorePlace::Local) {
                             if (auto r = VarRoots((int)k, p.index)) slice.insert(r->begin(), r->end());
                         } else if (p.kind == CorePlace::Deref && p.expr->kind == CoreExprKind::Read &&

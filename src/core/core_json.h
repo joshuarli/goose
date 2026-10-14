@@ -146,7 +146,7 @@ public:
         return out;
     }
     // The number of an origin of this module.
-    int OriginId(const CoreOrigin &o) const {
+    CoreOriginId OriginId(const CoreOrigin &o) const {
         return originnum.at(make_tuple(o.file, o.line, (int)o.kind));
     }
 
@@ -168,6 +168,7 @@ private:
         } else if (t.elem >= 0) {
             T(t.elem);
         }
+        for (auto part : t.parts) T(part);
         auto n = (int)typeorder.size();
         typenum[id] = n;
         typeorder.push_back(id);
@@ -206,6 +207,7 @@ private:
             case CoreType::Bool: out += "[\"bool\"]"; break;
             case CoreType::Unit: out += "[\"unit\"]"; break;
             case CoreType::Arr: Append(out, "[\"arr\",", typenum.at(t.elem), ",", t.count, "]"); break;
+            case CoreType::VarArr: Append(out, "[\"varr\",", typenum.at(t.elem), "]"); break;
             case CoreType::Grow: Append(out, "[\"grow\",", typenum.at(t.elem), "]"); break;
             case CoreType::GrowShrink: Append(out, "[\"growshrink\",", typenum.at(t.elem), "]"); break;
             case CoreType::Limited: Append(out, "[\"limited\",", typenum.at(t.elem), ",", t.count, "]"); break;
@@ -219,6 +221,14 @@ private:
                 Append(out, "[\"view\",\"", CoreMutName(t.mut), "\",", typenum.at(t.elem), "]");
                 break;
             case CoreType::Ptr: out += "[\"ptr\"]"; break;
+            case CoreType::Tuple:
+                out += "[\"tuple\",[";
+                for (size_t i = 0; i < t.parts.size(); i++) {
+                    if (i) out += ',';
+                    Append(out, typenum.at(t.parts[i]));
+                }
+                out += "]]";
+                break;
             case CoreType::Struct: Append(out, "[\"struct\",", t.structid, "]"); break;
             case CoreType::Dest: case CoreType::Built: case CoreType::Cancelled:
                 throw CompileError { "internal compiler error: Core contains a GIR construction carrier" };
@@ -257,10 +267,12 @@ private:
         out += "],[";
         for (size_t i = 0; i < im.results.size(); i++) {
             if (i) out += ',';
-            if (CoreHasConstruction(m.profile))
-                Append(out, "[\"result\",", T(im.results[i]), ",\"register\",[]]");
-            else
-                Append(out, T(im.results[i]));
+            auto &result = im.results[i];
+            if (CoreHasConstruction(m.profile)) {
+                Append(out, "[\"result\",", T(result.type), ",\"", CoreRequestName(result.request), "\",[");
+                if (result.namedLocal) Append(out, *result.namedLocal);
+                out += "]]";
+            } else Append(out, T(result.type));
         }
         out += "],[";
         for (size_t i = 0; i < im.vars.size(); i++) {
@@ -296,6 +308,33 @@ private:
         out += ']';
     }
 
+    void PrintArg(string &out, const CorePrintArg &arg) {
+        switch (arg.kind) {
+            case CorePrintArg::Text:
+                out += "[\"pa_text\",";
+                Str(out, arg.str);
+                break;
+            case CorePrintArg::Expr:
+                out += "[\"pa_expr\",";
+                Expr(out, *arg.expr);
+                break;
+            case CorePrintArg::View:
+                out += "[\"pa_view\",";
+                View(out, *arg.view);
+                break;
+        }
+        out += ']';
+    }
+
+    void PrintArgs(string &out, const vector<CorePrintArg> &args) {
+        out += '[';
+        for (size_t i = 0; i < args.size(); i++) {
+            if (i) out += ',';
+            PrintArg(out, args[i]);
+        }
+        out += ']';
+    }
+
     void Summary(string &out, const CoreSummary &s) {
         if (s.unknown) { out += "[\"summary_unknown\"]"; return; }
         out += "[\"summary\",";
@@ -319,8 +358,11 @@ private:
         out += '[';
         for (size_t i = 0; i < rs.size(); i++) {
             if (i) out += ',';
-            static const char *tags[] = { "r_local", "r_global", "r_param" };
-            Append(out, "[\"", tags[rs[i].kind], "\",", rs[i].index, "]");
+            if (rs[i].kind == CoreRootRef::Static) out += "[\"r_static\"]";
+            else {
+                static const char *tags[] = { "r_static", "r_local", "r_global", "r_param" };
+                Append(out, "[\"", tags[rs[i].kind], "\",", rs[i].index, "]");
+            }
         }
         out += ']';
     }
@@ -444,19 +486,51 @@ private:
             case CoreStmtKind::Break: out += "[\"s_break\""; break;
             case CoreStmtKind::Continue: out += "[\"s_continue\""; break;
             case CoreStmtKind::Print:
-                out += "[\"s_print\",[";
-                for (size_t i = 0; i < s.print.size(); i++) {
+                out += "[\"s_print\",";
+                PrintArgs(out, s.print);
+                break;
+            case CoreStmtKind::Receive:
+                out += "[\"s_receive\",[";
+                for (size_t i = 0; i < s.vars.size(); i++) {
                     if (i) out += ',';
-                    if (s.print[i].text) {
-                        out += "[\"pa_text\",";
-                        Str(out, s.print[i].str);
-                    } else {
-                        out += "[\"pa_expr\",";
-                        Expr(out, *s.print[i].expr);
-                    }
-                    out += ']';
+                    Append(out, s.vars[i]);
+                }
+                out += "],";
+                Expr(out, *s.expr);
+                break;
+            case CoreStmtKind::AppendValue:
+            case CoreStmtKind::AppendConstruct:
+                out += s.kind == CoreStmtKind::AppendValue ? "[\"s_append_value\"," : "[\"s_append_construct\",";
+                Place(out, *s.place); out += ',';
+                Expr(out, *s.expr);
+                break;
+            case CoreStmtKind::RetValues:
+                out += "[\"s_ret_values\",[";
+                for (size_t i = 0; i < s.values.size(); i++) {
+                    if (i) out += ',';
+                    Expr(out, *s.values[i]);
                 }
                 out += ']';
+                break;
+            case CoreStmtKind::RetForward:
+                out += "[\"s_ret_forward\",";
+                Expr(out, *s.expr);
+                break;
+            case CoreStmtKind::ReturnFrom:
+                Append(out, "[\"s_return_from\",", s.target, ",[");
+                for (size_t i = 0; i < s.values.size(); i++) {
+                    if (i) out += ',';
+                    Expr(out, *s.values[i]);
+                }
+                out += ']';
+                break;
+            case CoreStmtKind::ReturnFromForward:
+                Append(out, "[\"s_return_from_forward\",", s.target, ",");
+                Expr(out, *s.expr);
+                break;
+            case CoreStmtKind::BreakValue:
+                out += "[\"s_break_value\",";
+                Expr(out, *s.expr);
                 break;
             case CoreStmtKind::Assert:
                 out += "[\"s_assert\",";
@@ -585,14 +659,20 @@ private:
                 for (size_t i = 0; i < e.args.size(); i++) {
                     if (i) out += ',';
                     auto &a = e.args[i];
-                    if (a.kind == CoreArg::Val) {
-                        out += "[\"a_val\",";
-                        Expr(out, *a.expr);
-                    } else {
-                        Append(out, "[\"a_ref\",\"", CoreMutName(a.mut), "\",");
-                        Place(out, *a.place);
-                    }
-                    out += ']';
+                    visit([&](auto &arg) {
+                        using Arg = decay_t<decltype(arg)>;
+                        if constexpr (is_same_v<Arg, CoreArgValue>) {
+                            out += "[\"a_val\",";
+                            Expr(out, *arg.expr);
+                        } else if constexpr (is_same_v<Arg, CoreArgConstruct>) {
+                            out += "[\"a_construct\",";
+                            Expr(out, *arg.expr);
+                        } else {
+                            Append(out, "[\"a_ref\",\"", CoreMutName(arg.mut), "\",");
+                            Place(out, *arg.place);
+                        }
+                        out += ']';
+                    }, a);
                 }
                 Append(out, "],", O(e.org), "]");
                 break;
@@ -648,6 +728,27 @@ private:
                     Append(out, (unsigned)e.bytes[i]);
                 }
                 Append(out, "],", O(e.org), "]");
+                break;
+            case CoreExprKind::String:
+                Append(out, "[\"e_str\",", T(e.type), ",");
+                PrintArgs(out, e.print);
+                Append(out, ",", O(e.org), "]");
+                break;
+            case CoreExprKind::Copy:
+                Append(out, "[\"e_copy\",", T(e.type), ",");
+                Place(out, *e.place);
+                Append(out, ",", O(e.org), "]");
+                break;
+            case CoreExprKind::ResultLocal:
+                Append(out, "[\"e_result_local\",", e.var, ",", O(e.org), "]");
+                break;
+            case CoreExprKind::Values:
+                out += "[\"e_values\",[";
+                for (size_t i = 0; i < e.values.size(); i++) {
+                    if (i) out += ',';
+                    Expr(out, *e.values[i]);
+                }
+                out += "]]";
                 break;
         }
     }
