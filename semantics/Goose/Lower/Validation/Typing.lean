@@ -76,8 +76,8 @@ theorem lowerExpr_read_typed_of_place {le : LEnv} {before mid : LS}
 theorem lowerPlace_var_typed {env : Core.TEnv} {varId : VarId}
     {info : PlaceInfo} {next final : Nat}
     (source : Core.tyPlace env (.var varId) next = .ok (info, final))
-    (before : LS) {block : BlockId} (live : before.cur = some block) :
-    let (value, after) := lowerPlace (.var varId) (lowerEnv env.mod env.vars) before
+    (results : List Ty) (before : LS) {block : BlockId} (live : before.cur = some block) :
+    let (value, after) := lowerPlace (.var varId) (lowerEnv env.mod env.vars results) before
     ∃ mu, after.cur = before.cur ∧
       after.vals[value]? = some (some (.data (.ref mu info.ty))) := by
   simp only [Core.tyPlace] at source
@@ -87,11 +87,11 @@ theorem lowerPlace_var_typed {env : Core.TEnv} {varId : VarId}
   have pair := (Core.Sound.st_pure_ok _ _ _).mp shape
   have referent : info.ty = localVar.ty := by
     exact congrArg (fun pair => pair.1.ty) pair
-  have slotRow : (lowerEnv env.mod env.vars).slots[varId]? =
+  have slotRow : (lowerEnv env.mod env.vars results).slots[varId]? =
       some ⟨localVar.ty, localVar.kind, localVar.scope, varId⟩ := by
     simp [lowerEnv, Array.getElem?_mapIdx, varIdRow.2.1]
   have address : ∃ mu, (Op.slotAddr varId).resultTy
-      (tyEnv (lowerEnv env.mod env.vars) before) = .ok (.data (.ref mu info.ty)) := by
+      (tyEnv (lowerEnv env.mod env.vars results) before) = .ok (.data (.ref mu info.ty)) := by
     simp only [Op.resultTy, tyEnv, slotRow]
     rw [referent]
     exact ⟨_, rfl⟩
@@ -102,8 +102,8 @@ theorem lowerPlace_var_typed {env : Core.TEnv} {varId : VarId}
 theorem lowerPlace_global_typed {env : Core.TEnv} {global : GlobalId}
     {info : PlaceInfo} {next final : Nat}
     (source : Core.tyPlace env (.global global) next = .ok (info, final))
-    (vars : Array LocalVar) (before : LS) {block : BlockId} (live : before.cur = some block) :
-    let (value, after) := lowerPlace (.global global) (lowerEnv env.mod vars) before
+    (vars : Array LocalVar) (results : List Ty) (before : LS) {block : BlockId} (live : before.cur = some block) :
+    let (value, after) := lowerPlace (.global global) (lowerEnv env.mod vars results) before
     ∃ mu, after.cur = before.cur ∧
       after.vals[value]? = some (some (.data (.ref mu info.ty))) := by
   by_cases available : global < env.globalLimit
@@ -117,7 +117,7 @@ theorem lowerPlace_global_typed {env : Core.TEnv} {global : GlobalId}
       have pair := (Core.Sound.st_pure_ok _ _ _).mp source
       have referent : info.ty = globalVar.ty := congrArg (fun pair => pair.1.ty) pair
       have address : ∃ mu, (Op.globalAddr global).resultTy
-          (tyEnv (lowerEnv env.mod vars) before) = .ok (.data (.ref mu info.ty)) := by
+          (tyEnv (lowerEnv env.mod vars results) before) = .ok (.data (.ref mu info.ty)) := by
         simp only [Op.resultTy, tyEnv, lowerEnv, Array.getElem?_map, globalRow, Option.map_some]
         rw [referent]
         exact ⟨_, rfl⟩

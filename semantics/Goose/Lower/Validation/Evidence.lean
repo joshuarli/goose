@@ -734,8 +734,8 @@ theorem lowerImplAt_checkedIndices (module : Core.Module) (implId : ImplId) (imp
     exact CheckedRun.bind (checked_newBlock _) fun ⟨_, _⟩ =>
       CheckedRun.bind (checked_setCur _) fun _ =>
       CheckedRun.bind (checked_lowerBlock _ _ _ _) fun _ => checked_finishFunction _ _
-  let output := action (lowerEnv module impl.vars) initState
-  have checked := preservation (lowerEnv module impl.vars) initState output.1 output.2 rfl checked_initState
+  let output := action (lowerEnv module impl.vars impl.results.toList) initState
+  have checked := preservation (lowerEnv module impl.vars impl.results.toList) initState output.1 output.2 rfl checked_initState
   exact checked_finishBlocks checked
 
 theorem lowerGlobal_checkedIndices (module : Core.Module) (global : Core.Global) :
@@ -749,8 +749,8 @@ theorem lowerGlobal_checkedIndices (module : Core.Module) (global : Core.Global)
     exact CheckedRun.bind (checked_newBlock _) fun ⟨_, _⟩ =>
       CheckedRun.bind (checked_setCur _) fun _ =>
       CheckedRun.bind (checked_lowerExpr _) fun _ => checked_emitTerm _
-  let output := action (lowerEnv module #[]) initState
-  have checked := preservation (lowerEnv module #[]) initState output.1 output.2 rfl checked_initState
+  let output := action (lowerEnv module #[] [global.ty]) initState
+  have checked := preservation (lowerEnv module #[] [global.ty]) initState output.1 output.2 rfl checked_initState
   exact checked_finishBlocks checked
 
 theorem Func.noProvenIndex {func : Func} (checked : Func.CheckedIndices func) :
