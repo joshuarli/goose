@@ -21,6 +21,11 @@ def WeakFrameTy (roots : RootDeclarations) (types : Array (Option VTy)) (fr : Fr
   ∀ (id : ValueId) (cell : RVal) (ty : VTy), types[id]? = some (some ty) → fr.vals[id]? = some cell →
     WeakCellTy roots cell ty
 
+theorem WeakFrameTy.empty (roots : RootDeclarations) (types : Array (Option VTy))
+    (act depth : Nat) : WeakFrameTy roots types ⟨act, [], {}, depth⟩ := by
+  intro id cell ty metadata present
+  simp at present
+
 theorem WeakCellTy.int {roots : RootDeclarations} {cell : RVal} {ty : IntTy}
     (typed : WeakCellTy roots cell (.data (.int ty))) :
     ∃ n, cell = .val (.int ty n) := by
@@ -117,5 +122,49 @@ theorem execPure_load_typed {roots : RootDeclarations} {types : Array (Option VT
       simp only [stored, Res.ok.injEq] at evaluated
       obtain ⟨rfl, rfl⟩ := evaluated
       exact ⟨storeTyped.read declared stored, rfl⟩
+
+inductive ParamValuesTy (roots : RootDeclarations) : List (ValueId × VTy) → List RVal → Prop
+  | nil : ParamValuesTy roots [] []
+  | cons {param arg params args}
+      (head : WeakCellTy roots arg param.2) (tail : ParamValuesTy roots params args) :
+      ParamValuesTy roots (param :: params) (arg :: args)
+
+theorem bindParams_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {params : List (ValueId × VTy)} {args : List RVal} {fr fr' : Frame} {before after : St}
+    (frameTyped : WeakFrameTy roots types fr)
+    (metadata : ∀ param ∈ params, types[param.1]? = some (some param.2))
+    (argsTyped : ParamValuesTy roots params args)
+    (bound : bindParams fr params args before = .ok fr' after) :
+    WeakFrameTy roots types fr' ∧ after = before := by
+  induction argsTyped generalizing fr with
+  | nil =>
+    simp only [bindParams, pure_apply, Res.ok.injEq] at bound
+    obtain ⟨rfl, rfl⟩ := bound
+    exact ⟨frameTyped, rfl⟩
+  | @cons param arg params args argTyped restTyped ih =>
+    simp only [bindParams, setCell, pure_bind] at bound
+    apply ih (fr := fr.set param.1 arg)
+    · exact frameTyped.set (metadata param (by simp)) argTyped
+    · intro other present
+      exact metadata other (List.mem_cons_of_mem _ present)
+    · exact bound
+
+theorem enterBlock_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {fn : Func} {block : GIR.Block} {id : BlockId} {args : List RVal} {fr fr' : Frame}
+    {before after : St} {insts : List Inst}
+    (lookup : fn.blocks[id]? = some block) (frameTyped : WeakFrameTy roots types fr)
+    (metadata : ∀ param ∈ block.params, types[param.1]? = some (some param.2))
+    (argsTyped : ParamValuesTy roots block.params args)
+    (entered : enterBlock fn fr id args before = .ok (insts, fr') after) :
+    WeakFrameTy roots types fr' ∧ after = before := by
+  simp only [enterBlock, lookup] at entered
+  split at entered
+  · cases bound : bindParams fr block.params args before with
+    | stop outcome state => simp [bind_apply, bound] at entered
+    | ok frame state =>
+      simp only [bind_apply, bound, pure_apply, Res.ok.injEq, Prod.mk.injEq] at entered
+      obtain ⟨⟨rfl, rfl⟩, rfl⟩ := entered
+      exact bindParams_typed frameTyped metadata argsTyped bound
+  · simp [fault, M.stop] at entered
 
 end Goose.Evidence
