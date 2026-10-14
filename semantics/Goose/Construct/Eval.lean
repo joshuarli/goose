@@ -3,6 +3,12 @@ import Goose.Construct.Runtime
 namespace Goose.Construct
 open Goose.Core (ActId ScopeInst RootInst Loc StorageId DestinationId VarId GlobalId ContextId OriginId IntTy NumProfile AbortKind FaultKind BinOp)
 
+private structure EvalConfig where
+  profile : NumProfile
+  module : Module
+
+private def EvalConfig.layout (config : EvalConfig) : LayoutEnv := LayoutEnv.ofModule config.module
+
 private def returned (activation : ActId) (carriers : List Carrier) : EvalM α := fun state =>
   .escape activation carriers state
 
@@ -26,7 +32,7 @@ private def literalCount : Expr → Option Nat
 
 private def constructLocal (module : Module) (owner : ActId) (ty : Ty) (origin : OriginId) (expression : Expr)
     (construct : DestinationId → EvalM Unit) : EvalM Carrier := do
-  let destination ← newDestination module owner ty .value origin none (literalCount expression)
+  let destination ← newDestination (LayoutEnv.ofModule module) owner ty .value origin none (literalCount expression)
   construct destination
   let destination ← completedDestination destination
   publishCarriers origin [.completed destination]
@@ -79,7 +85,7 @@ private def finishChannels (config : EvalConfig) (activation : RuntimeActivation
         let receivingPacked := match destination.capability.layout with | .varr _ => true | _ => false
         if destination.layout == .packed && destination.capability.request == .value && !receivingPacked then
           liftConstruction origin (removeConstructionHeader id)
-          liftConstruction origin (restoreReceivingLayout id (← receivingLayout config.module destination.capability.layout))
+          liftConstruction origin (restoreReceivingLayout id (← receivingLayout config.layout destination.capability.layout))
         liftConstruction origin (adaptDestinationType id result.ty)
 
 mutual
@@ -89,7 +95,7 @@ private def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → Ev
       match expression with
       | .lit ty value => pure (.int ty value)
       | .bool value => pure (.bool value)
-      | .read place => readLoc fuel config.module (← evalPlace fuel config environment place)
+      | .read place => readLoc fuel config.layout (← evalPlace fuel config environment place)
       | .ref _ place => pure (.ref (← evalPlace fuel config environment place))
       | .slice _ view lo hi origin =>
           let view ← evalView fuel config environment view
@@ -132,7 +138,7 @@ private def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → Ev
           | .error reason => abortAt (AbortKind.ofNum reason) origin
       | .call context arguments origin =>
           let (_, implementation) ← getImplementation config context
-          let channels ← channelsFor config.module environment.act implementation.results.toList origin
+          let channels ← channelsFor config.layout environment.act implementation.results.toList origin
           let carriers ← invokeCall fuel config environment context arguments channels origin
           publishCarriers origin carriers
           carrierValue (← singleCarrier carriers)
@@ -140,11 +146,11 @@ private def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → Ev
           pushValue fuel config environment owner operand (origin.getD 0)
       | .pop owner origin =>
           let location ← evalPlace fuel config environment owner
-          let value ← readLoc fuel config.module location
+          let value ← readLoc fuel config.layout location
           let (count, _) ← arrayLength value
           if count == 0 then abortAt .popEmpty origin
-          let result ← readLoc fuel config.module ⟨location.root, location.path ++ [count - 1]⟩
-          truncateOwner fuel config location (count - 1) origin
+          let result ← readLoc fuel config.layout ⟨location.root, location.path ++ [count - 1]⟩
+          truncateOwner fuel config.layout location (count - 1) origin
           pure result
       | .ifE condition yes no =>
           let flow ← if (← expectBool (← evalValue fuel config environment condition)) then
@@ -197,20 +203,20 @@ private def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → Ev
           else
             let .stored stored := value | fault .shape
             let storage ← getStorage stored.storage
-            liftExcept (fixedValue fuel config.module ty storage.bytes stored.start)
+            liftExcept (fixedValue fuel config.layout ty storage.bytes stored.start)
       | .copy ty source origin =>
           if ty.nonfixed then
             carrierValue (← constructLocal config.module environment.act ty origin expression
               (fun destination => buildExpr fuel config environment destination expression))
           else
-            let value ← readLoc fuel config.module (← evalPlace fuel config environment source)
+            let value ← readLoc fuel config.layout (← evalPlace fuel config environment source)
             match ty, value with
             | .arr _ count, .stored stored =>
                 let (_, run) ← sampledStored stored
                 if count != run.count then fault .shape
-                pure (.fixed (← (List.range count).mapM (readStoredElement fuel config.module stored)).toArray)
+                pure (.fixed (← (List.range count).mapM (readStoredElement fuel config.layout stored)).toArray)
             | _, value => pure value
-      | .resultLocal localVar _ => readLoc fuel config.module ⟨← rootOf environment localVar, []⟩
+      | .resultLocal localVar _ => readLoc fuel config.layout ⟨← rootOf environment localVar, []⟩
       | .values operands =>
           match operands with
           | [] => pure .unit
@@ -248,7 +254,7 @@ private def evalView : Nat → EvalConfig → RuntimeActivation → View → Eva
       match view with
       | .of place =>
           let location ← evalPlace fuel config environment place
-          let (count, dynamic) ← arrayLength (← readLoc fuel config.module location)
+          let (count, dynamic) ← arrayLength (← readLoc fuel config.layout location)
           pure ⟨location, 0, count, dynamic⟩
       | .val operand =>
           match (← evalValue fuel config environment operand) with
@@ -340,13 +346,13 @@ private def buildExpr : Nat → EvalConfig → RuntimeActivation → Destination
         | .fill ty operand =>
             let .arr element count := ty | fault .shape
             if element.nonfixed then
-              let source ← newDestination config.module environment.act element .value (expressionOrigin expression)
+              let source ← newDestination config.layout environment.act element .value (expressionOrigin expression)
               buildExpr fuel config environment source operand
               for _ in [0:count] do
-                repeatElement fuel config destination element source (expressionOrigin expression)
+                repeatElement fuel config.layout destination element source (expressionOrigin expression)
             else
               let value ← evalValue fuel config environment operand
-              let bytes ← liftExcept (fixedBytes fuel config.module element value)
+              let bytes ← liftExcept (fixedBytes fuel config.layout element value)
               for _ in [0:count] do liftConstruction (expressionOrigin expression) (writeElement destination bytes)
             liftConstruction (expressionOrigin expression) (finishDestination destination)
         | .bytes _ bytes origin =>
@@ -358,9 +364,9 @@ private def buildExpr : Nat → EvalConfig → RuntimeActivation → Destination
               for byte in bytes.data do liftConstruction origin (writeElement destination ⟨#[byte]⟩)
             liftConstruction origin (finishDestination destination)
         | .copy _ source origin =>
-            copyValue fuel config destination (← readLoc fuel config.module (← evalPlace fuel config environment source)) origin
+            copyValue fuel config.layout destination (← readLoc fuel config.layout (← evalPlace fuel config environment source)) origin
         | .resultLocal localVar origin =>
-            let value ← readLoc fuel config.module ⟨← rootOf environment localVar, []⟩
+            let value ← readLoc fuel config.layout ⟨← rootOf environment localVar, []⟩
             match value with
             | .stored stored =>
                 if stored.destination == some destination then
@@ -369,22 +375,22 @@ private def buildExpr : Nat → EvalConfig → RuntimeActivation → Destination
                   | .built _ => pure ()
                   | .open _ => liftConstruction origin (finishDestination destination)
                   | _ => fault .flow
-                else copyValue fuel config destination value origin
+                else copyValue fuel config.layout destination value origin
             | _ => fault .shape
         | _ =>
             let value ← evalValue fuel config environment expression
-            copyValue fuel config destination value (expressionOrigin expression)
+            copyValue fuel config.layout destination value (expressionOrigin expression)
 
 private def buildElement : Nat → EvalConfig → RuntimeActivation → DestinationId → Ty → Expr → EvalM Unit
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, parent, element, operand => do
       if element.nonfixed then
-        let child ← liftConstruction (expressionOrigin operand) (openChild parent element (← receivingLayout config.module element))
+        let child ← liftConstruction (expressionOrigin operand) (openChild parent element (← receivingLayout config.layout element))
         buildExpr fuel config environment child operand
         liftConstruction (expressionOrigin operand) (attachChild parent (← completedDestination child))
       else
         let value ← evalValue fuel config environment operand
-        let bytes ← liftExcept (fixedBytes fuel config.module element value)
+        let bytes ← liftExcept (fixedBytes fuel config.layout element value)
         liftConstruction (expressionOrigin operand) (writeElement parent bytes)
 
 private def evalArguments : Nat → EvalConfig → RuntimeActivation → Array LocalVar → List Param → List Arg → EvalM (List Value)
@@ -516,7 +522,7 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
                     match environment.channels[index]? with
                     | some (.construct destination) => pure destination
                     | _ => fault .flow
-                | none => newDestination config.module environment.act descriptor.ty .value origin none (literalCount expression)
+                | none => newDestination config.layout environment.act descriptor.ty .value origin none (literalCount expression)
               if named.isSome then liftConstruction origin (prepareNamedBinding destination descriptor.ty)
               buildExpr fuel config environment destination expression
               let destination ← completedDestination destination
@@ -529,19 +535,19 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
       | .assign place expression _ =>
           let location ← evalPlace fuel config environment place
           let value ← evalValue fuel config environment expression
-          writeLoc fuel config.module location value
+          writeLoc fuel config.layout location value
           pure (.normal .unit)
       | .assignOp operation place expression origin =>
           let location ← evalPlace fuel config environment place
-          let (ty, oldValue) ← expectInt (← readLoc fuel config.module location)
+          let (ty, oldValue) ← expectInt (← readLoc fuel config.layout location)
           let (otherTy, value) ← expectInt (← evalValue fuel config environment expression)
           sameIntType ty otherTy
           match Core.evalBin config.profile operation ty oldValue value with
-          | .ok result => writeLoc fuel config.module location (.int ty result); pure (.normal .unit)
+          | .ok result => writeLoc fuel config.layout location (.int ty result); pure (.normal .unit)
           | .error reason => abortAt (AbortKind.ofNum reason) origin
       | .rebind localVar expression _ =>
           let value ← evalValue fuel config environment expression
-          writeLoc fuel config.module ⟨← rootOf environment localVar, []⟩ value
+          writeLoc fuel config.layout ⟨← rootOf environment localVar, []⟩ value
           pure (.normal .unit)
       | .expr expression _ =>
           let _ ← evalValue fuel config environment expression
@@ -549,14 +555,14 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
       | .append owner source origin =>
           let location ← evalPlace fuel config environment owner
           let view ← evalView fuel config environment source
-          appendRun fuel config location view origin
+          appendRun fuel config.layout location view origin
           pure (.normal .unit)
       | .popN owner expression origin =>
           let location ← evalPlace fuel config environment owner
           let (_, count) ← expectInt (← evalValue fuel config environment expression)
-          let (length, _) ← arrayLength (← readLoc fuel config.module location)
+          let (length, _) ← arrayLength (← readLoc fuel config.layout location)
           if count < 0 || count > (length : Int) then abortAt .popNRange origin
-          truncateOwner fuel config location (length - count.toNat) origin
+          truncateOwner fuel config.layout location (length - count.toNat) origin
           pure (.normal .unit)
       | .resize owner expression fill origin =>
           let location ← evalPlace fuel config environment owner
@@ -564,25 +570,25 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
           let value ← match fill with
             | none => pure none
             | some expression => do pure (some (← evalValue fuel config environment expression))
-          let (length, _) ← arrayLength (← readLoc fuel config.module location)
+          let (length, _) ← arrayLength (← readLoc fuel config.layout location)
           let size := Core.wrap .i64 size
           if size < 0 then abortAt .resizeNegative origin
-          if size.toNat ≤ length then truncateOwner fuel config location size.toNat origin
+          if size.toNat ≤ length then truncateOwner fuel config.layout location size.toNat origin
           else
             match value with
             | none => abortAt .resizeFill origin
-            | some value => appendFixedValues fuel config location (List.replicate (size.toNat - length) value) origin
+            | some value => appendFixedValues fuel config.layout location (List.replicate (size.toNat - length) value) origin
           pure (.normal .unit)
       | .clear owner origin =>
-          truncateOwner fuel config (← evalPlace fuel config environment owner) 0 origin
+          truncateOwner fuel config.layout (← evalPlace fuel config environment owner) 0 origin
           pure (.normal .unit)
       | .assignWhole owner expression origin =>
           let location ← evalPlace fuel config environment owner
-          truncateOwner fuel config location 0 origin
-          let .stored stored ← readLoc fuel config.module location | fault .shape
-          let destination ← ownerDestination config.module stored .value (literalCount expression) origin
+          truncateOwner fuel config.layout location 0 origin
+          let .stored stored ← readLoc fuel config.layout location | fault .shape
+          let destination ← ownerDestination config.layout stored .value (literalCount expression) origin
           buildExpr fuel config environment destination expression
-          publishOwner fuel config location stored (← completedDestination destination) origin
+          publishOwner fuel config.layout location stored (← completedDestination destination) origin
           pure (.normal .unit)
       | .ifS condition yes no _ =>
           if (← expectBool (← evalValue fuel config environment condition)) then execBlock fuel config environment [] [] yes
@@ -601,7 +607,7 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
           let channels ← localVars.mapM fun localVar => do
             let some descriptor := environment.vars[localVar]? | fault .unbound
             if descriptor.ty.nonfixed then
-              pure (Channel.construct (← newDestination config.module environment.act descriptor.ty .value origin))
+              pure (Channel.construct (← newDestination config.layout environment.act descriptor.ty .value origin))
             else pure (.register descriptor.ty)
           let carriers ← evalProduce fuel config environment channels producer
           if carriers.length != localVars.length then fault .arity
@@ -612,14 +618,14 @@ private def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → Eva
       | .appendValue owner producer origin =>
           let location ← evalPlace fuel config environment owner
           let .fixed values ← evalValue fuel config environment producer | fault .shape
-          appendFixedValues fuel config location values.toList origin
+          appendFixedValues fuel config.layout location values.toList origin
           pure (.normal .unit)
       | .appendConstruct owner producer origin =>
           let location ← evalPlace fuel config environment owner
-          let .stored stored ← readLoc fuel config.module location | fault .shape
-          let destination ← ownerDestination config.module stored .elementRun (literalCount producer) origin
+          let .stored stored ← readLoc fuel config.layout location | fault .shape
+          let destination ← ownerDestination config.layout stored .elementRun (literalCount producer) origin
           buildExpr fuel config environment destination producer
-          publishOwner fuel config location stored (← completedDestination destination) origin
+          publishOwner fuel config.layout location stored (← completedDestination destination) origin
           pure (.normal .unit)
       | .retValues operands origin =>
           let activation ← enclosingActivation environment
@@ -672,8 +678,8 @@ private def evalPrintArg : Nat → EvalConfig → RuntimeActivation → PrintArg
   | fuel + 1, config, environment, argument => do
       match argument with
       | .text text => pure text.toUTF8
-      | .expr expression => renderAny fuel config .topLevel (← evalValue fuel config environment expression)
-      | .view view => renderView fuel config .topLevel (← evalView fuel config environment view)
+      | .expr expression => renderAny fuel config.layout .topLevel (← evalValue fuel config environment expression)
+      | .view view => renderView fuel config.layout .topLevel (← evalView fuel config environment view)
 
 private def execWhile : Nat → EvalConfig → RuntimeActivation → Expr → Block → EvalM Flow
   | 0, _, _, _, _ => timeout
@@ -696,10 +702,10 @@ private def execRange : Nat → EvalConfig → RuntimeActivation → VarId → I
 private def execEach : Nat → EvalConfig → RuntimeActivation → VarId → Option VarId → Bool → Block → RuntimeView → Nat → EvalM Flow
   | 0, _, _, _, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, localVar, index, byRef, body, view, current => do
-      let count ← if view.dynamic then do pure (← arrayLength (← readLoc fuel config.module view.location)).1 else pure view.count
+      let count ← if view.dynamic then do pure (← arrayLength (← readLoc fuel config.layout view.location)).1 else pure view.count
       if current < count then
         let location : Loc := ⟨view.location.root, view.location.path ++ [view.start + current]⟩
-        let value ← if byRef then pure (.ref location) else readLoc fuel config.module location
+        let value ← if byRef then pure (.ref location) else readLoc fuel config.layout location
         let pre := (localVar, value) :: (index.toList.map fun index => (index, Value.int .i64 current))
         match (← loopBody fuel config environment pre body) with
         | .normal _ | .continuing => execEach fuel config environment localVar index byRef body view (current + 1)
@@ -721,18 +727,20 @@ private def pushValue : Nat → EvalConfig → RuntimeActivation → Place → E
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, owner, expression, origin => do
       let location ← evalPlace fuel config environment owner
-      let .stored stored ← readLoc fuel config.module location | fault .shape
+      let .stored stored ← readLoc fuel config.layout location | fault .shape
       let (_, run) ← sampledStored stored
-      let result : Loc := ⟨location.root, location.path ++ [run.count]⟩
-      if run.element.nonfixed then
-        let destination ← ownerDestination config.module stored .elementRun (some 1) origin
+      let index ← if run.element.nonfixed then do
+        let destination ← ownerDestination config.layout stored .elementRun (some 1) origin
         buildElement fuel config environment destination run.element expression
         liftConstruction origin (finishDestination destination)
-        publishOwner fuel config location stored (← completedDestination destination) origin
-      else
+        publishOwner fuel config.layout location stored (← completedDestination destination) origin
+        pure run.count
+      else do
         let value ← evalValue fuel config environment expression
-        appendFixedValues fuel config location [value] origin
-      pure (.ref result)
+        let (count, _) ← arrayLength (← readLoc fuel config.layout location)
+        appendFixedValues fuel config.layout location [value] origin
+        pure count
+      pure (.ref ⟨location.root, location.path ++ [index]⟩)
 end
 
 private def initGlobals (fuel : Nat) (config : EvalConfig) : List GlobalId → EvalM Unit
@@ -751,7 +759,7 @@ private def initGlobals (fuel : Nat) (config : EvalConfig) : List GlobalId → E
 private def runModule (fuel : Nat) (config : EvalConfig) : EvalM Unit := do
   initGlobals fuel config (List.range config.module.globals.size)
   let (_, implementation) ← getImplementation config config.module.entry
-  let channels ← channelsFor config.module 0 implementation.results.toList 0
+  let channels ← channelsFor config.layout 0 implementation.results.toList 0
   let environment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
   let carriers ← invokeCall fuel config environment config.module.entry [] channels 0
   publishCarriers 0 carriers

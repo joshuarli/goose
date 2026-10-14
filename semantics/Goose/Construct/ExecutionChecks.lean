@@ -289,4 +289,13 @@ private def nestedWrite : Module := moduleOf #[implementation "entry"
 
 #guard (observes nestedWrite).map Prod.fst == some [66, 10]
 
+private def fixedPushReentrancy : Module := moduleOf #[implementation "entry"
+  #[localVar "owner" (.grow (.int .i64)), localVar "result" (.ref .mutable (.int .i64))]
+  (.mk 0 [.letS 0 (.arrLit (.grow (.int .i64)) []) 0,
+    .letS 1 (.push (.var 0) (.blockE (.mk 1
+      [.expr (.push (.var 0) (.lit .i64 7) (some 0)) 0] (some (.lit .i64 9)))) (some 0)) 0,
+    .print [.expr (.read (.deref (.read (.var 1)))), .view (.of (.var 0))] 0] none)]
+
+#guard (observes fixedPushReentrancy).map Prod.fst == some [57, 91, 55, 44, 32, 57, 93, 10]
+
 end Goose.Construct.ExecutionChecks
