@@ -55,13 +55,16 @@ theorem prepareReturn_execStmts (n : Nat) (cfg : Cfg) (env : Env)
   funext flow
   cases flow <;> simp [prepareReturn, returnStmtsTail, bind_assoc, pure_bind]
 
-def StmtsReturnClaim (n : Nat) (lc : Option LoopCtx) (stmts : List Stmt) : Prop :=
-  stmtsReturnOk stmts = true → ∀ (le : LEnv) (ls ls' : LS) (u : Unit) (pt : Pt)
+def StatementsFlowSimulation (n : Nat) (lc : Option LoopCtx) (stmts : List Stmt) : Prop :=
+  ∀ (le : LEnv) (ls ls' : LS) (u : Unit) (pt : Pt)
     (cfg : Cfg) (env : Env) (cx : FnCtx) (fr : GIR.Frame),
     lowerStmts lc stmts le ls = (u, ls') → ls.pp = some pt → ExtT ls' cx.fn.blocks →
     Rel cfg env cx fr ls →
     SimG cx pt fr (execStmts n cfg env stmts >>= prepareReturn env)
       (StmtFlowPost cfg env cx ls fr ls')
+
+def StmtsReturnClaim (n : Nat) (lc : Option LoopCtx) (stmts : List Stmt) : Prop :=
+  stmtsReturnOk stmts = true → StatementsFlowSimulation n lc stmts
 
 theorem stmtsReturnClaim (n : Nat) (lc : Option LoopCtx) (stmts : List Stmt) :
     StmtsReturnClaim n lc stmts := by
@@ -114,7 +117,8 @@ def BlockFlowPost (cfg : Cfg) (env : Env) (cx : FnCtx) (ls : LS) (fr : GIR.Frame
 
 theorem preparedBlock_core {n : Nat} {lc : Option LoopCtx} {sc : ScopeId}
     {stmts : List Stmt} {value : Option Expr} {pre : List (SlotId × ValueId × OriginId)}
-    {pre' : List (VarId × Val)} {env : Env} (hokS : stmtsReturnOk stmts = true)
+    {pre' : List (VarId × Val)} {env : Env}
+    (hstmts : StatementsFlowSimulation n lc stmts)
     {U : Val → Prop} {X : B ValueId} {cells : ValueId → Val → List (ValueId × RVal)}
     {le : LEnv} {ls ls1 ls_p ls_s ls_x ls_l ls' : LS} {u0 u : Unit} {rx r : ValueId}
     {pt : Pt} {cfg : Cfg} {cx : FnCtx} {fr : GIR.Frame}
@@ -151,7 +155,7 @@ theorem preparedBlock_core {n : Nat} {lc : Option LoopCtx} {sc : ScopeId}
   subst fr1'
   have hrel1' : Rel cfg { env with scopes := (sc, si) :: env.scopes } cx fr1 ls_p :=
     hrel1.stack_eq hst1'
-  refine SimG.bind (stmtsReturnClaim n lc stmts hokS le _ ls_s u pt1' cfg _ cx fr1
+  refine SimG.bind (hstmts le _ ls_s u pt1' cfg _ cx fr1
     h3 hpp1' hext_s hrel1') fun flow pt2 fr2 hpost => ?_
   rcases hpost with ⟨rfl, P2⟩ | ⟨returned, org, rfl, hsite⟩
   · refine SimG.bind (hX _ pt2 fr2 P2.pp hext_x P2.rel)
@@ -180,6 +184,65 @@ def BlockReturnClaim (n : Nat) (lc : Option LoopCtx)
     SimG cx pt fr (execBlock n cfg env pre' blk >>= prepareReturn env)
       (BlockFlowPost cfg env cx ls fr ls' blk want r)
 
+theorem blockFlow_sim (n : Nat) (lc : Option LoopCtx)
+    (pre : List (SlotId × ValueId × OriginId)) (pre' : List (VarId × Val))
+    (want : Bool) (sc : ScopeId) (stmts : List Stmt) (value : Option Expr)
+    (hstmts : StatementsFlowSimulation n lc stmts)
+    (hokV : (match value with | none => true | some expr => exprOk expr) = true)
+    (cfg : Cfg) (env : Env)
+    (hpre : ∀ p ∈ pre, ∃ lv, env.vars[p.1]? = some lv ∧ lv.scope = sc)
+    (le : LEnv) (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame)
+    (hlow : lowerBlock lc pre want (.mk sc stmts value) le ls = (r, ls'))
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
+    (hprer : PreRel fr pre pre') :
+    SimG cx pt fr (execBlock (n + 1) cfg env pre' (.mk sc stmts value) >>= prepareReturn env)
+      (BlockFlowPost cfg env cx ls fr ls' (.mk sc stmts value) want r) := by
+  obtain ⟨ls1, ls_p, ls_s, ls_x, ls_l, u0, u, rx, h1, h2, h3, h4, h5, hls', hr⟩ :=
+    prefixBlock_unfold hlow
+  rw [prepareReturn_execBlock]
+  cases value with
+  | some expr =>
+    simp only [lowerBlockValue] at h4
+    refine (preparedBlock_core hstmts hpre h1 h2 h3 h4 h5 hls' hr hpp hext hrel hprer
+      (advB_lowerExpr expr) (U := fun _ => True) (cells := fun rx v => [(rx, .val v)]) ?_).mono ?_
+    · intro env' pt_x fr_x hpp_x hext_x hrel_x
+      simp only [valueFlow]
+      refine SimG.bind ((claims n).expr expr hokV le ls_s rx ls_x pt_x cfg env' cx fr_x
+        h4 hpp_x hext_x hrel_x) fun v pt' fr' P => ?_
+      exact SimG.ret ⟨v, rfl, trivial, P⟩
+    · intro flow pt' fr' hpost
+      rcases hpost with ⟨v, hflow, _, P⟩ | hreturned
+      · exact Or.inl ⟨v, hflow, (fun h => by cases h), by simpa [blockCells, Core.Block.value] using P⟩
+      · exact Or.inr hreturned
+  | none =>
+    cases want
+    · have h4' : (pure 0 : B ValueId) le ls_s = (rx, ls_x) := by
+        simpa [lowerBlockValue] using h4
+      refine (preparedBlock_core hstmts hpre h1 h2 h3 h4' h5 hls' hr hpp hext hrel hprer
+        (AdvB.pure _) (U := fun v => v = .unit) (cells := fun _ _ => []) ?_).mono ?_
+      · intro env' pt_x fr_x hpp_x hext_x hrel_x
+        have hx : ls_x = ls_s := by rw [pure_run] at h4'; exact (Prod.mk.inj h4').2.symm
+        subst hx
+        exact SimG.ret ⟨.unit, rfl, rfl, Post.init hrel_x hpp_x⟩
+      · intro flow pt' fr' hpost
+        rcases hpost with ⟨v, hflow, hunit, P⟩ | hreturned
+        · exact Or.inl ⟨v, hflow, fun _ => hunit, by simpa [blockCells, Core.Block.value] using P⟩
+        · exact Or.inr hreturned
+    · have h4' : emitDef .constUnit le ls_s = (rx, ls_x) := by
+        simpa [lowerBlockValue] using h4
+      refine (preparedBlock_core hstmts hpre h1 h2 h3 h4' h5 hls' hr hpp hext hrel hprer
+        (advB_emitDef _) (U := fun v => v = .unit) (cells := fun rx v => [(rx, .val v)]) ?_).mono ?_
+      · intro env' pt_x fr_x hpp_x hext_x hrel_x
+        have P := Post.init hrel_x hpp_x
+        show SimG cx pt_x fr_x ((pure () : M Unit) >>= fun _ => pure (Flow.normal Val.unit)) _
+        refine SimG.bind (leaf_def P h4' hext_x (by simp) (fun _ => RVal.val Val.unit)
+          (c := (pure () : M Unit)) (by simp [execPure])) fun _ pt' fr' P' => ?_
+        exact SimG.ret ⟨.unit, rfl, rfl, P'⟩
+      · intro flow pt' fr' hpost
+        rcases hpost with ⟨v, hflow, hunit, P⟩ | hreturned
+        · exact Or.inl ⟨v, hflow, fun _ => hunit, by simpa [blockCells, Core.Block.value] using P⟩
+        · exact Or.inr hreturned
+
 theorem blockReturnClaim (n : Nat) (lc : Option LoopCtx)
     (pre : List (SlotId × ValueId × OriginId)) (pre' : List (VarId × Val))
     (want : Bool) (blk : Core.Block) : BlockReturnClaim n lc pre pre' want blk := by
@@ -192,51 +255,8 @@ theorem blockReturnClaim (n : Nat) (lc : Option LoopCtx)
     obtain ⟨sc, stmts, value⟩ := blk
     intro hok cfg env hpre le ls ls' r pt cx fr hlow hpp hext hrel hprer
     simp only [blockReturnOk, Bool.and_eq_true] at hok
-    obtain ⟨hokS, hokV⟩ := hok
-    obtain ⟨ls1, ls_p, ls_s, ls_x, ls_l, u0, u, rx, h1, h2, h3, h4, h5, hls', hr⟩ :=
-      prefixBlock_unfold hlow
-    rw [prepareReturn_execBlock]
-    cases value with
-    | some expr =>
-      simp only [lowerBlockValue] at h4
-      refine (preparedBlock_core hokS hpre h1 h2 h3 h4 h5 hls' hr hpp hext hrel hprer
-        (advB_lowerExpr expr) (U := fun _ => True) (cells := fun rx v => [(rx, .val v)]) ?_).mono ?_
-      · intro env' pt_x fr_x hpp_x hext_x hrel_x
-        simp only [valueFlow]
-        refine SimG.bind ((claims n).expr expr hokV le ls_s rx ls_x pt_x cfg env' cx fr_x
-          h4 hpp_x hext_x hrel_x) fun v pt' fr' P => ?_
-        exact SimG.ret ⟨v, rfl, trivial, P⟩
-      · intro flow pt' fr' hpost
-        rcases hpost with ⟨v, hflow, _, P⟩ | hreturned
-        · exact Or.inl ⟨v, hflow, (fun h => by cases h), by simpa [blockCells, Core.Block.value] using P⟩
-        · exact Or.inr hreturned
-    | none =>
-      cases want
-      · have h4' : (pure 0 : B ValueId) le ls_s = (rx, ls_x) := by
-          simpa [lowerBlockValue] using h4
-        refine (preparedBlock_core hokS hpre h1 h2 h3 h4' h5 hls' hr hpp hext hrel hprer
-          (AdvB.pure _) (U := fun v => v = .unit) (cells := fun _ _ => []) ?_).mono ?_
-        · intro env' pt_x fr_x hpp_x hext_x hrel_x
-          have hx : ls_x = ls_s := by rw [pure_run] at h4'; exact (Prod.mk.inj h4').2.symm
-          subst hx
-          exact SimG.ret ⟨.unit, rfl, rfl, Post.init hrel_x hpp_x⟩
-        · intro flow pt' fr' hpost
-          rcases hpost with ⟨v, hflow, hunit, P⟩ | hreturned
-          · exact Or.inl ⟨v, hflow, fun _ => hunit, by simpa [blockCells, Core.Block.value] using P⟩
-          · exact Or.inr hreturned
-      · have h4' : emitDef .constUnit le ls_s = (rx, ls_x) := by
-          simpa [lowerBlockValue] using h4
-        refine (preparedBlock_core hokS hpre h1 h2 h3 h4' h5 hls' hr hpp hext hrel hprer
-          (advB_emitDef _) (U := fun v => v = .unit) (cells := fun rx v => [(rx, .val v)]) ?_).mono ?_
-        · intro env' pt_x fr_x hpp_x hext_x hrel_x
-          have P := Post.init hrel_x hpp_x
-          show SimG cx pt_x fr_x ((pure () : M Unit) >>= fun _ => pure (Flow.normal Val.unit)) _
-          refine SimG.bind (leaf_def P h4' hext_x (by simp) (fun _ => RVal.val Val.unit)
-            (c := (pure () : M Unit)) (by simp [execPure])) fun _ pt' fr' P' => ?_
-          exact SimG.ret ⟨.unit, rfl, rfl, P'⟩
-        · intro flow pt' fr' hpost
-          rcases hpost with ⟨v, hflow, hunit, P⟩ | hreturned
-          · exact Or.inl ⟨v, hflow, fun _ => hunit, by simpa [blockCells, Core.Block.value] using P⟩
-          · exact Or.inr hreturned
+    exact blockFlow_sim n lc pre pre' want sc stmts value
+      (stmtsReturnClaim n lc stmts hok.1) hok.2 cfg env hpre le ls ls' r pt cx fr
+      hlow hpp hext hrel hprer
 
 end Goose.Lower
