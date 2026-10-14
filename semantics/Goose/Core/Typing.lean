@@ -946,6 +946,11 @@ def checkImpl (m : Module) (impl : Impl) : V Unit := do
   forAll impl.results.toList fun t =>
     unless t.readable && t != .unit do reject .type s!"{impl.name} has a result of a type no function may return"
   forAll (List.range impl.params.size) (checkParam impl)
+  forAll impl.vars.toList.zipIdx fun (lv, i) =>
+    unless lv.ty.storable || (lv.ty.isRefSlice && match impl.params[i]? with
+      | some p => p.var == i && p.mode == .byRef
+      | none => false) do
+      reject .type s!"{impl.name}: variable {lv.name} has a type no variable may have"
   forAll impl.vars.toList fun lv =>
     unless lv.org < m.origins.size do
       reject .type s!"{impl.name}: origin of variable {lv.name} is outside the origin table"
