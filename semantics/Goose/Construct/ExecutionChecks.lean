@@ -200,6 +200,54 @@ private def recursion : Module := moduleOf #[
 
 #guard (observes recursion).map Prod.fst == some [49, 48, 55, 10]
 
+private def overlappingTargets : Module :=
+  let module := moduleOf #[
+    implementation "entry" #[localVar "result" (.int .i64)]
+      (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.expr (.read (.var 0))] 0] none),
+    implementation "member" #[] (.mk 0 [.expr (.call 2 [] 0) 0] (some (.lit .i64 999)))
+      #[⟨.int .i64, .register, none⟩],
+    implementation "escape" #[] (.mk 0 [.returnFrom 1 [.lit .i64 7] 0] none),
+    implementation "other" #[] (.mk 0 [] (some (.lit .i64 9)))
+      #[⟨.int .i64, .register, none⟩]] #[⟨1, []⟩, ⟨1, [3]⟩]
+  { module with
+  impls := module.impls.mapIdx fun index impl => { impl with summary := .known ⟨[], [], [], [], [], [], if index == 2 then [1] else [], if index == 2 then [1] else [], false, index == 0⟩ }
+  types := #[.int .i64]
+  contexts := #[⟨0, "", [], [], []⟩, ⟨1, "", [], [[]], []⟩,
+    ⟨2, "", [], [], []⟩, ⟨3, "", [], [[]], []⟩]
+  origins := #[⟨0, 17, "let"⟩] }
+
+#guard Run.validateBytes (Writer.module overlappingTargets).toUTF8 == ("[\"ok\"]", 0)
+#guard (observes overlappingTargets).map Prod.fst == some [55, 10]
+
+private def overlapState : ExecutionState := {
+  ExecutionState.initial with activations := [
+    ⟨2, 12, #[], [], []⟩,
+    ⟨1, 11, #[], [], [.register (.int .i64)]⟩] }
+
+#guard match execStmt 1000 ⟨.release, overlappingTargets⟩ ⟨2, 12, #[], [], []⟩
+    (.returnFrom 1 [.lit .i64 7] 0) overlapState with
+  | .escape address [.register (.int .i64 7)] _ => address == ⟨11, .nonlocal 1⟩
+  | _ => false
+
+#guard match execStmt 1000 ⟨.release, overlappingTargets⟩ ⟨2, 12, #[], [], []⟩
+    (.returnFromForward 1 (.lit .i64 7) 0) overlapState with
+  | .escape address [.register (.int .i64 7)] _ => address == ⟨11, .nonlocal 1⟩
+  | _ => false
+
+#guard match (returned 11 [.register (.int .i64 7)] : EvalM Unit) overlapState with
+  | .escape address _ _ => address == ⟨11, .ordinary⟩
+  | _ => false
+
+#guard match withScope ⟨2, 12, #[], [], []⟩ 0 0
+    (escaped ⟨11, .nonlocal 1⟩ [.register (.int .i64 7)] : EvalM Unit) overlapState with
+  | .escape address _ _ => address == ⟨11, .nonlocal 1⟩
+  | _ => false
+
+#guard match finishActivation ⟨#[]⟩ ⟨2, 12, #[], [], []⟩ [] 0
+    (escaped ⟨11, .nonlocal 1⟩ [.register (.int .i64 7)]) overlapState with
+  | .escape address _ state => address == ⟨11, .nonlocal 1⟩ && state.activations.length == 1
+  | _ => false
+
 private def copyAndFill : Module := moduleOf #[implementation "entry"
   #[localVar "source" (.varr (.int .u8)), localVar "copy" (.varr (.int .u8)),
     localVar "fill" (.arr (.varr (.int .u8)) 2)]
