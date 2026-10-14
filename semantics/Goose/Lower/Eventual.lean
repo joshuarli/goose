@@ -257,7 +257,7 @@ theorem EventualM.bind {c1 : M α} {g1 : Nat → M α} {c2 : α → M β} {g2 : 
       exact hK2 k (Nat.le_trans (Nat.le_max_right _ _) hk)
 
 theorem EventualM.refl (c : M α) (s : St) : EventualM c (fun _ => c) s :=
-  ⟨fun a s1 h => ⟨0, fun _ _ => h⟩, fun e s1 h _ => ⟨0, fun _ _ => h⟩⟩
+  ⟨fun _ _ h => ⟨0, fun _ _ => h⟩, fun _ _ h _ => ⟨0, fun _ _ => h⟩⟩
 
 theorem SimE.of_stops {cx : FnCtx} {pt : Pt} {fr : Frame} {c : M α} {c' : M β}
     {p : α → Pt → Frame → Prop} {q : β → Pt → Frame → Prop}
@@ -267,7 +267,6 @@ theorem SimE.of_stops {cx : FnCtx} {pt : Pt} {fr : Frame} {c : M α} {c' : M β}
   refine ⟨fun b s1 hc => absurd hc (hn s b s1), fun e s1 hc hf => ?_⟩
   exact (h s).2 e s1 (hst s e s1 hc) hf
 
-/-- A computation that never finishes and only stops with faults or timeouts is matched by anything. -/
 theorem SimE.vacuous {cx : FnCtx} {pt : Pt} {fr : Frame} {c : M α} {p : α → Pt → Frame → Prop}
     (h : ∀ s, (∀ a s1, c s ≠ .ok a s1) ∧ (∀ e s1, c s = .stop e s1 → ¬ IsFinal e)) :
     SimE cx pt fr c p := by
@@ -282,7 +281,6 @@ theorem SimE.of_timeout {cx : FnCtx} {pt : Pt} {fr : Frame} {p : α → Pt → F
       obtain ⟨rfl, _⟩ := hc
       simp [IsFinal]⟩
 
-/-- A computation that raises a fault is matched by anything. -/
 theorem SimE.of_fault {cx : FnCtx} {pt : Pt} {fr : Frame} {k : FaultKind} {p : α → Pt → Frame → Prop} :
     SimE cx pt fr (Goose.Core.fault k : M α) p :=
   SimE.vacuous fun s => ⟨fun a s1 => by simp [Goose.Core.fault, M.stop],
@@ -483,5 +481,10 @@ theorem SimE.complete_ret0 {cx : FnCtx} {pt : Pt} {fr : Frame} {c : M Val}
   refine h.complete (fun a pt' fr' hp => ?_) s
   obtain ⟨hi, rfl⟩ := ht a pt' fr' hp
   exact ⟨1, runAt_ret0 hi 0⟩
+
+theorem SimE.of_timeout_bind {cx : FnCtx} {pt : Pt} {fr : Frame} {f : α → M β}
+    {post : β → Pt → Frame → Prop} :
+    SimE cx pt fr ((Goose.Core.timeout : M α) >>= f) post :=
+  SimE.of_simG SimG.of_timeout_bind
 
 end Goose.Lower
