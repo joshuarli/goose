@@ -4,47 +4,6 @@ namespace Goose.Evidence
 
 open Goose.Core Goose.GIR
 
-theorem findDefIn_member {value : ValueId} {insts : List Inst} {op : Op}
-    (found : findDefIn value insts = some op) : Inst.def value op ∈ insts := by
-  induction insts with
-  | nil => simp [findDefIn] at found
-  | cons instruction rest ih =>
-    cases instruction with
-    | «def» result operation =>
-      simp only [findDefIn] at found
-      split at found
-      · rename_i equal
-        have : result = value := by simpa using equal
-        subst result
-        cases found
-        simp
-      · exact List.mem_cons_of_mem _ (ih found)
-    | eff effect => exact List.mem_cons_of_mem _ (ih found)
-    | term terminator => exact List.mem_cons_of_mem _ (ih found)
-
-theorem defOp_member {fn : Func} {value : ValueId} {op : Op}
-    (found : fn.defOp? value = some op) :
-    ∃ block ∈ fn.blocks, Inst.def value op ∈ block.insts := by
-  have scan : ∀ blocks : List Goose.GIR.Block, Func.defOp?.blocks value blocks = some op →
-      ∃ block ∈ blocks, Inst.def value op ∈ block.insts := by
-    intro blocks
-    induction blocks with
-    | nil => simp [Func.defOp?.blocks]
-    | cons block blocks ih =>
-      intro found
-      simp only [Func.defOp?.blocks] at found
-      cases localFound : findDefIn value block.insts with
-      | some operation =>
-        simp only [localFound, Option.orElse_some] at found
-        cases found
-        exact ⟨block, by simp, findDefIn_member localFound⟩
-      | none =>
-        simp only [localFound, Option.orElse_none] at found
-        obtain ⟨other, member, definition⟩ := ih found
-        exact ⟨other, List.mem_cons_of_mem _ member, definition⟩
-  obtain ⟨block, member, definition⟩ := scan fn.blocks.toList found
-  exact ⟨block, Array.mem_toList_iff.mp member, definition⟩
-
 theorem cmp_operand_types {env : TyEnv} {comparison : CmpOp} {type : IntTy}
     {left right : ValueId} {result : VTy}
     (typed : (Op.cmp comparison type left right).resultTy env = .ok result) :
@@ -142,12 +101,6 @@ theorem execEff_preserves_cells {fn : Func} {fr result : Frame} {st final : St}
     cases success.1
     rfl
 
-def stepWrites (fn : Func) (before after : Pt) : List ValueId :=
-  match instAt fn before with
-  | some (.def result _) => [result]
-  | some (.term _) => ((fn.blocks[after.1]?).map fun block => block.params.map Prod.fst).getD []
-  | _ => []
-
 theorem RuntimeStep.preserves_cell {cfg : GCfg} {fn : Func} {pt pt' : Pt}
     {fr fr' : Frame} {st st' : St} {id : ValueId}
     (transition : RuntimeStep cfg fn pt fr st pt' fr' st')
@@ -176,15 +129,6 @@ theorem RuntimeStep.preserves_cell {cfg : GCfg} {fn : Func} {pt pt' : Pt}
     intro block lookup
     simpa [stepWrites, instruction, lookup] using unwritten
 
-inductive RuntimeStepsAvoid (cfg : GCfg) (fn : Func) (ids : List ValueId) :
-    Pt → Frame → St → Pt → Frame → St → Prop
-  | refl {pt fr st} : RuntimeStepsAvoid cfg fn ids pt fr st pt fr st
-  | next {pt fr st middlePt middleFrame middleState lastPt lastFrame lastState}
-      (transition : RuntimeStep cfg fn pt fr st middlePt middleFrame middleState)
-      (unwritten : ∀ id ∈ ids, id ∉ stepWrites fn pt middlePt)
-      (rest : RuntimeStepsAvoid cfg fn ids middlePt middleFrame middleState lastPt lastFrame lastState) :
-      RuntimeStepsAvoid cfg fn ids pt fr st lastPt lastFrame lastState
-
 theorem RuntimeStepsAvoid.preserves_cell {cfg : GCfg} {fn : Func} {ids : List ValueId}
     {pt pt' : Pt} {fr fr' : Frame} {st st' : St} {id : ValueId}
     (history : RuntimeStepsAvoid cfg fn ids pt fr st pt' fr' st') (member : id ∈ ids) :
@@ -193,17 +137,6 @@ theorem RuntimeStepsAvoid.preserves_cell {cfg : GCfg} {fn : Func} {ids : List Va
   | refl => rfl
   | next transition unwritten rest ih =>
     rw [ih, transition.preserves_cell (unwritten id member)]
-
-theorem RuntimeStepsAvoid.trans {cfg : GCfg} {fn : Func} {ids : List ValueId}
-    {first middle last : Pt} {firstFrame middleFrame lastFrame : Frame}
-    {firstState middleState lastState : St}
-    (left : RuntimeStepsAvoid cfg fn ids first firstFrame firstState middle middleFrame middleState)
-    (right : RuntimeStepsAvoid cfg fn ids middle middleFrame middleState last lastFrame lastState) :
-    RuntimeStepsAvoid cfg fn ids first firstFrame firstState last lastFrame lastState := by
-  induction left with
-  | refl => exact right
-  | next transition unwritten rest ih =>
-    exact .next transition unwritten (ih right)
 
 theorem bindParams_cell_source {params : List (ValueId × VTy)} {args : List RVal}
     {fr result : Frame} {st final : St} {id : ValueId} {value : RVal}
@@ -413,5 +346,15 @@ theorem validated_cmp_distinct {cfg : GCfg} {fn : Func} {pt : Pt}
     subst right
     rw [resultType] at rightType
     cases rightType
+
+theorem RuntimePoint.def_cell_sample {cfg : GCfg} {fn : Func} {pt : Pt} {fr : Frame} {st : St}
+    {id : ValueId} {value : RVal}
+    (point : RuntimePoint cfg fn pt fr st) (cell : fr.vals[id]? = some value)
+    (notParameter : ∀ block ∈ fn.blocks, id ∉ block.params.map Prod.fst) :
+    CellSample cfg fn id value pt fr st := by
+  rcases point.cell_source cell with parameter | sample
+  · obtain ⟨block, member, parameter⟩ := parameter
+    exact False.elim (notParameter block member parameter)
+  · exact sample
 
 end Goose.Evidence
