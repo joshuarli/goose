@@ -1795,6 +1795,222 @@ theorem runModule_terminal_prefix (fuel : Nat) (config : EvalConfig)
   simp only [stopped, Goose.Proofs.Exit.stepState] at kept
   exact ⟨kept, wholeRun_terminal_skips_continuation fuel config initial terminal reason next stopped⟩
 
+def ConstructionBegins (state : ExecutionState) : Prop := DestinationBegins state.construction
+
+def PreservesConstructionBegins (action : EvalM α) : Prop :=
+  ∀ state, ConstructionBegins state → ConstructionBegins (Goose.Proofs.Exit.stepState (action state))
+
+theorem stateQuery_preservesConstructionBegins (action : EvalM α) (query : StateQuery action) :
+    PreservesConstructionBegins action := by
+  intro state valid
+  rw [query state]
+  exact valid
+
+theorem preservesConstructionBegins_lift (origin : Goose.Core.OriginId) (action : ConstructionM α)
+    (preserved : PreservesDestinationBegins action) :
+    PreservesConstructionBegins (liftConstruction origin action) := by
+  intro state valid
+  have after := preserved state.construction valid
+  cases result : action state.construction <;>
+    simpa only [ConstructionBegins, liftConstruction, result, ConstructionResult.finalState,
+      Goose.Proofs.Exit.stepState] using after
+
+macro "kernel_begins" : tactic => `(tactic|
+  (apply preservesConstructionBegins_lift
+   with_reducible exact FramesDestinationBegins.preserves _ (reserveStorage_destination_begins_frame _ _)))
+
+theorem preservesConstructionBegins_pure (value : α) : PreservesConstructionBegins (pure value) := by
+  intro state fresh
+  exact fresh
+
+theorem preservesConstructionBegins_stop (reason : Goose.Core.Stop) :
+    PreservesConstructionBegins (EvalM.stop (α := α) reason) := by
+  intro state fresh
+  exact fresh
+
+theorem preservesConstructionBegins_get : PreservesConstructionBegins EvalM.get := by
+  intro state fresh
+  exact fresh
+
+theorem preservesConstructionBegins_get_bind (next : ExecutionState → EvalM α)
+    (preserved : ∀ state, ConstructionBegins state →
+      ConstructionBegins (Goose.Proofs.Exit.stepState (next state state))) :
+    PreservesConstructionBegins (EvalM.get >>= next) := preserved
+
+theorem preservesConstructionBegins_bind (action : EvalM α) (next : α → EvalM β)
+    (first : PreservesConstructionBegins action) (remaining : ∀ value, PreservesConstructionBegins (next value)) :
+    PreservesConstructionBegins (action >>= next) := by
+  intro state fresh
+  have preserved := first state fresh
+  cases result : action state with
+  | ok value final =>
+      simp only [result, Goose.Proofs.Exit.stepState] at preserved
+      simpa only [bind, result] using remaining value final preserved
+  | stop reason final => simpa only [bind, result, Goose.Proofs.Exit.stepState] using preserved
+  | escape target carriers final => simpa only [bind, result, Goose.Proofs.Exit.stepState] using preserved
+  | jump target kind final => simpa only [bind, result, Goose.Proofs.Exit.stepState] using preserved
+
+theorem preservesConstructionBegins_listMapM (action : α → EvalM β) (items : List α)
+    (preserved : ∀ item, PreservesConstructionBegins (action item)) : PreservesConstructionBegins (items.mapM action) := by
+  induction items with
+  | nil => exact preservesConstructionBegins_pure _
+  | cons item rest ih =>
+      rw [List.mapM_cons]
+      apply preservesConstructionBegins_bind
+      · exact preserved item
+      · intro value
+        apply preservesConstructionBegins_bind
+        · exact ih
+        · intro values; exact preservesConstructionBegins_pure _
+
+theorem preservesConstructionBegins_listForIn (action : α → β → EvalM (ForInStep β)) (items : List α)
+    (initial : β) (preserved : ∀ item value, PreservesConstructionBegins (action item value)) :
+    PreservesConstructionBegins (forIn items initial action) := by
+  induction items generalizing initial with
+  | nil => exact preservesConstructionBegins_pure _
+  | cons item rest ih =>
+      rw [List.forIn_cons]
+      apply preservesConstructionBegins_bind
+      · exact preserved item initial
+      · intro step
+        cases step with
+        | done value => exact preservesConstructionBegins_pure _
+        | yield value => exact ih value
+
+theorem preservesConstructionBegins_arrayForIn (action : α → β → EvalM (ForInStep β)) (items : Array α)
+    (initial : β) (preserved : ∀ item value, PreservesConstructionBegins (action item value)) :
+    PreservesConstructionBegins (forIn items initial action) := by
+  rw [← Array.forIn_toList]
+  exact preservesConstructionBegins_listForIn action items.toList initial preserved
+
+theorem preservesConstructionBegins_rangeForIn (action : Nat → β → EvalM (ForInStep β))
+    (range : Std.Legacy.Range) (initial : β)
+    (preserved : ∀ index value, PreservesConstructionBegins (action index value)) :
+    PreservesConstructionBegins (forIn range initial action) := by
+  rw [Std.Legacy.Range.forIn_eq_forIn_range']
+  exact preservesConstructionBegins_listForIn action _ initial preserved
+
+theorem preservesConstructionBegins_setObjectOrdinal (root : Goose.Core.RootInst) (ordinal : Goose.Core.StorageId) :
+    PreservesConstructionBegins (setObjectOrdinal root ordinal) := by
+  intro state fresh
+  exact fresh
+
+theorem preservesConstructionBegins_bindStaticRoot (root : Goose.Core.RootInst) (value : Value) :
+    PreservesConstructionBegins (bindStaticRoot root value) := by
+  intro state fresh
+  exact fresh
+
+theorem preservesConstructionBegins_reserveRootObject (root : Goose.Core.RootInst) : PreservesConstructionBegins (reserveRootObject root) := by
+  unfold reserveRootObject
+  apply preservesConstructionBegins_bind
+  · exact preservesConstructionBegins_get
+  · intro state
+    cases state.objectOrdinals.lookup root with
+    | some ordinal => exact preservesConstructionBegins_pure _
+    | none =>
+        apply preservesConstructionBegins_bind
+        · kernel_begins
+        · intro ordinal
+          apply preservesConstructionBegins_bind
+          · exact preservesConstructionBegins_setObjectOrdinal root ordinal
+          · intro _; exact preservesConstructionBegins_pure _
+
+theorem preservesConstructionBegins_bindRoot (root : Goose.Core.RootInst) (value : Value) : PreservesConstructionBegins (bindRoot root value) := by
+  unfold bindRoot
+  apply preservesConstructionBegins_bind
+  · exact preservesConstructionBegins_get
+  · intro state
+    split
+    · cases value <;> apply preservesConstructionBegins_bind
+      all_goals first
+        | exact preservesConstructionBegins_setObjectOrdinal _ _
+        | exact preservesConstructionBegins_reserveRootObject _
+        | (intro _
+           apply preservesConstructionBegins_bind
+           · exact preservesConstructionBegins_pure _
+           · intro _; exact preservesConstructionBegins_bindStaticRoot root _)
+        | (intro _; exact preservesConstructionBegins_bindStaticRoot root _)
+    · exact preservesConstructionBegins_bindStaticRoot root value
+
+theorem preservesConstructionBegins_writeValuePath (fuel : Nat) (layout : LayoutEnv)
+    (value : Value) (path : List Nat) (replacement : Value) :
+    PreservesConstructionBegins (writeValuePath fuel layout value path replacement) := by
+  induction fuel generalizing value path replacement with
+  | zero => exact preservesConstructionBegins_stop _
+  | succ fuel ih =>
+      cases path with
+      | nil => exact preservesConstructionBegins_pure _
+      | cons index rest =>
+          cases value with
+          | fixed elements | record id elements =>
+              simp only [writeValuePath]
+              cases present : elements[index]? with
+              | none => exact preservesConstructionBegins_stop _
+              | some child =>
+                  apply preservesConstructionBegins_bind
+                  · exact ih child rest replacement
+                  · intro written; exact preservesConstructionBegins_pure _
+          | int _ _ | bool _ | unit | ref _ | slice _ _ _ => exact preservesConstructionBegins_stop _
+          | stored stored =>
+              unfold writeValuePath
+              apply preservesConstructionBegins_bind
+              · exact stateQuery_preservesConstructionBegins _ (stateQuery_storedPathRun stored)
+              · intro sampled
+                rcases sampled with ⟨bytes, run⟩
+                simp only
+                apply preservesConstructionBegins_bind
+                · exact stateQuery_preservesConstructionBegins _ (stateQuery_liftLayout _)
+                · intro interval
+                  rcases interval with ⟨start, finish⟩
+                  simp only
+                  apply preservesConstructionBegins_bind
+                  · exact stateQuery_preservesConstructionBegins _ (stateQuery_readStoredElement fuel layout stored index)
+                  · intro child
+                    split
+                    · split
+                      · exact preservesConstructionBegins_stop _
+                      · apply preservesConstructionBegins_bind
+                        · exact ih child rest replacement
+                        · intro _; exact preservesConstructionBegins_pure _
+                    · apply preservesConstructionBegins_bind
+                      · exact ih child rest replacement
+                      · intro written
+                        apply preservesConstructionBegins_bind
+                        · exact stateQuery_preservesConstructionBegins _ (stateQuery_liftExcept _)
+                        · intro part
+                          split
+                          · exact preservesConstructionBegins_stop _
+                          · apply preservesConstructionBegins_get_bind
+                            intro state fresh
+                            cases present : state.construction.storage[stored.storage]? with
+                            | none => exact fresh
+                            | some receiving => exact fresh
+
+theorem preservesConstructionBegins_writeLoc (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
+    (replacement : Value) : PreservesConstructionBegins (writeLoc fuel layout location replacement) := by
+  unfold writeLoc
+  apply preservesConstructionBegins_bind
+  · exact preservesConstructionBegins_get
+  · intro state
+    cases present : state.objects.lookup location.root with
+    | none => exact preservesConstructionBegins_stop _
+    | some value =>
+        apply preservesConstructionBegins_bind
+        · exact preservesConstructionBegins_writeValuePath fuel layout value location.path replacement
+        · intro written; exact preservesConstructionBegins_bindRoot location.root written
+
+theorem preservesConstructionBegins_bindAll (act : Goose.Core.ActId) (scopeInst : Goose.Core.ScopeInst)
+    (values : List (Goose.Core.VarId × Value)) : PreservesConstructionBegins (bindAll act scopeInst values) := by
+  unfold bindAll
+  apply preservesConstructionBegins_bind
+  · apply preservesConstructionBegins_listForIn
+    intro item _
+    rcases item with ⟨localVar, value⟩
+    apply preservesConstructionBegins_bind
+    · exact preservesConstructionBegins_bindRoot _ value
+    · intro _; exact preservesConstructionBegins_pure _
+  · intro _; exact preservesConstructionBegins_pure _
+
 theorem rejected_publication_preserves_execution (state : ExecutionState)
     (destinations : List Goose.Core.DestinationId) (kind : ConstructionFault)
     (origin : Goose.Core.OriginId)
