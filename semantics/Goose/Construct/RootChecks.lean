@@ -24,6 +24,7 @@ private def accepts (module : Module) (context : Context) : Bool :=
 #guard !accepts module { context with resultRoots := [[.static], [.static]] }
 
 private def receiver : Impl := { implementation with
+  summary := .known ⟨[],[],[],[],[],[],[],[],false,false⟩
   results := #[⟨slice, .register, none⟩]
   vars := #[⟨"view", slice, .immutable, 0, 0⟩, ⟨"scalar", .int .i64, .immutable, 0, 0⟩]
   body := .mk 0 [.receive [0, 1] (.values [.bytes slice [0, 255] 0, .lit .i64 7]) 0,
@@ -37,7 +38,7 @@ private def receiveContext : Context := ⟨0, "receive", [(0,[.static])], [[.sta
 private def copiesGlobal : Impl := { implementation with
   results := #[⟨array, .value, none⟩]
   body := .mk 0 [.retValues [.copy array (.global 0) 0] 0] none
-  summary := known }
+  summary := .known ⟨[],[],[],[],[],[0],[],[],true,false⟩ }
 private def copyContext : Context := ⟨0, "copy", [], [[]], []⟩
 private def copyModule : Module := { module with
   globals := #[⟨"global", .grow (.int .u8), .mutable, .arrLit (.grow (.int .u8)) [], 0⟩]
@@ -72,5 +73,11 @@ private def limitedWithAbort : Impl := { limitedLiteral (.bytes (.limited (.int 
 #guard accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 1) [1] 0)], contexts := #[copyContext] } copyContext
 
 #guard !accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 2) [1,2] 0)], contexts := #[copyContext] } copyContext
+
+
+#guard !accepts { module with impls := #[{ implementation with
+  summary := .known ⟨[],[],[],[],[],[],[],[],false,false⟩ }] } context
+#guard !accepts { module with impls := #[{ implementation with
+  summary := .known ⟨[],[],[],[],[],[0,1],[],[],false,false⟩ }] } context
 
 end Goose.Construct.RootChecks

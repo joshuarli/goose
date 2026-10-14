@@ -12,6 +12,7 @@ structure Eff where
   grows : List Target := []
   shrinks : List Target := []
   rebinds : List Target := []
+  constructs : List Nat := []
   aborts : Bool := false
   outputs : Bool := false
   
@@ -90,6 +91,12 @@ def PEnv.limitedOwner (env : PEnv) (p : Place) : V Bool :=
   | none => reject .type "owner has no checked declaration type"
 
 def noteAborts : P Unit := modify fun s => { s with eff := { s.eff with aborts := true } }
+
+def noteResultConstruction (env : PEnv) : P Unit :=
+  let positions := env.impl.results.toList.zipIdx.filterMap fun (result, position) =>
+    if result.ty.nonfixed then some position else none
+  modify fun state => { state with eff := { state.eff with
+    constructs := (state.eff.constructs ++ positions).eraseDups } }
 
 def noteOutputs : P Unit := modify fun s => { s with eff := { s.eff with outputs := true } }
 
@@ -329,6 +336,7 @@ private def mergeEffects (a b : Eff) : Eff := {
   grows := addTargets a.grows b.grows
   shrinks := addTargets a.shrinks b.shrinks
   rebinds := addTargets a.rebinds b.rebinds
+  constructs := (a.constructs ++ b.constructs).eraseDups
   aborts := a.aborts || b.aborts
   outputs := a.outputs || b.outputs
   unknown := a.unknown || b.unknown
@@ -559,6 +567,11 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
           noteReceivingCapacity env localVar.ty .value expression
       | _ => pure ()
     liftV (checkContents env c args argRoots)
+    let escapes := match callee.summary with
+      | .known summary => summary.escapes
+      | .unknown => List.range env.mod.targets.size
+    if escapes.any (fun target => (env.mod.targets[target]?).any (·.contains env.ctx.impl)) then
+      noteResultConstruction env
     rpCall env c argRoots
   | .push owner a _ => do
     let rho ← rpPlace env owner
@@ -819,10 +832,12 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     addWrites roots
     if (← liftV (env.limitedOwner owner)) then noteAborts
   | .retValues operands _ => do
+    noteResultConstruction env
     if operands.length != env.impl.results.size then rejP .result "result count mismatch"
     noteOperandCapacities env env.impl.results.toList operands
     rpReturnOperands env env.ctx.resultRoots operands
   | .retForward producer _ => do
+    noteResultConstruction env
     let _ ← rpExpr env producer
     noteProducerCapacities env env.impl.results.toList producer
     let actual ← liftV (env.access.resultRoots producer)
@@ -830,6 +845,7 @@ def rpStmt (env : PEnv) : Stmt → P Unit
   | .returnFrom target operands _ => do
     let some target := env.mod.targets[target]? | rejP .call "target outside table"
     let some implementation := env.mod.impls[target.first]? | rejP .call "target member outside table"
+    if target.contains env.ctx.impl then noteResultConstruction env
     if operands.length != implementation.results.size then rejP .result "target result count mismatch"
     noteOperandCapacities env implementation.results.toList operands
     rpNoLocalOperands env operands
@@ -837,10 +853,12 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     let roots ← rpExpr env producer
     let some target := env.mod.targets[targetId]? | rejP .call "target outside table"
     let some implementation := env.mod.impls[target.first]? | rejP .call "target implementation outside table"
+    if target.contains env.ctx.impl then noteResultConstruction env
     noteProducerCapacities env implementation.results.toList producer
     liftV (checkNoLocal roots)
   | .breakValue expression _ => do let _ ← rpExpr env expression; pure ()
   | .ret e _ => do
+    noteResultConstruction env
     match e with
     | none => pure ()
     | some e => do
@@ -981,6 +999,12 @@ def checkSummary (m : Module) (impl : Impl) (ctx : Context) (eff : Eff) : V Unit
     checkSummaryTargets m impl "grows" s.grows
     checkSummaryTargets m impl "shrinks" s.shrinks
     checkSummaryTargets m impl "rebinds" s.rebinds
+    forAll s.constructs fun position =>
+      unless (impl.results[position]?).any (·.ty.nonfixed) do
+        reject .summary s!"{impl.name}: construction summary names a fixed or missing result"
+    forAll eff.constructs fun position =>
+      unless s.constructs.contains position do
+        reject .summary s!"{impl.name}: construction summary omits result {position}"
     if eff.unknown then
       reject .summary s!"{impl.name} calls an implementation whose summary is unknown, so its own summary cannot be known"
     effWithin impl.name "reads" eff.reads (expandTargets impl ctx s.reads)
@@ -1001,6 +1025,7 @@ def checkContext (m : Module) (ctx : Context) : V Unit := do
   let ((), st) ← (do
       let (_, _) ← rpBlockValue env [] impl.body
       if let some expression := impl.body.value then
+        noteResultConstruction env
         noteProducerCapacities env impl.results.toList expression
         let actual ← liftV (env.access.blockResultRoots impl.body)
         liftV (checkResultChannels env actual) : P Unit).run ⟨impl.params.size, {}⟩
