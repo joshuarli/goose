@@ -755,9 +755,10 @@ theorem lowerEach_sim (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
     (hs : vw.resizable = false → sampled < counter)
     (hexit : ∀ pt fr, ls'.pp = some pt → Same counter base fr → Rel cfg env cx fr ls' →
       post (.normal .unit) pt fr)
-    (hbody : ∀ d xb input result output tb,
+    (hbody : ∀ d xb input result output back tb,
       body d xb le input = (result, output) → input.pp = some (tb, 0) →
-      ExtT output cx.fn.blocks →
+      rangeBack .i64 counter hb le output = ((), back) → ExtT back cx.fn.blocks →
+      ExtT output cx.fn.blocks → counter < input.vals.size → input.stack = ls.stack →
       ∀ fuel, fuel < n → EachBodyAt fuel cx cfg env x idx byRef block vw (hb, 0) (tb, 0)
         (EachInv cfg env cx ls counter view sampled owner vw base)
         (EachInv cfg env cx input counter view sampled owner vw base) post) :
@@ -804,7 +805,100 @@ theorem lowerEach_sim (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
   have hppInput : input.pp = some (tb, 0) := by
     rw [hInput]
     exact LS.pp_cur hfacts.2.2.2.2.2.2.2.1
+  have hcounterInput : counter < input.vals.size := by
+    rw [hInput]
+    change counter < lsf.vals.size
+    rw [hfacts.2.2.2.1]
+    exact Nat.lt_of_lt_of_le hc (aLen.trans aCmp).vals
+  have hstackInput : input.stack = ls.stack := by
+    rw [hInput]
+    exact hfacts.2.2.2.2.1.trans (aCmp.stack.trans aLen.stack)
   exact each_sim_bounded n cx cfg env x idx byRef block vw (hb, 0) (tb, 0)
-    _ _ post hbranch' (hbody lsCmp.stack.length xb input result output tb hBody hppInput hextOutput)
+    _ _ post hbranch' (hbody lsCmp.stack.length xb input result output lsBack tb hBody hppInput
+      hBack hextBack hextOutput hcounterInput hstackInput)
+
+def eachBodyBuilder (x : VarId) (idx : Option VarId) (byRef : Bool) (block : Core.Block)
+    (org : OriginId) (view counter hb : ValueId) (depth : Nat) (exit : BlockId) : B ValueId := do
+  let elem ← emitDef (.refElem view counter)
+  let value ← eachElemValue x byRef elem
+  lowerBlock (some ⟨depth, exit, .next hb .i64 counter⟩)
+    (eachIRPre x idx value counter org) false block
+
+theorem lowerEach_normal_sim (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
+    (ls ls' : LS) (counter view sampled hb : ValueId) (owner : Option ValueId)
+    (vw : ViewVal) (base : Frame) (x : VarId) (idx : Option VarId) (byRef : Bool)
+    (block : Core.Block) (org : OriginId) (hok : blockOk block = true)
+    (hscope : (∃ lv, env.vars[x]? = some lv ∧ lv.scope = block.scope) ∧
+      (∀ j, idx = some j → ∃ lv, env.vars[j]? = some lv ∧ lv.scope = block.scope))
+    (hlow : lowerEach vw.resizable owner sampled hb counter
+      (eachBodyBuilder x idx byRef block org view counter hb) le ls = ((), ls'))
+    (hpp : ls.pp = some (hb, 0)) (hext : ExtT ls' cx.fn.blocks)
+    (hheader : ∃ header, cx.fn.blocks[hb]? = some header ∧
+      header.params = [(counter, .data (.int .i64))])
+    (hc : counter < ls.vals.size) (hv : view < counter)
+    (ho : vw.resizable = true → owner.getD 0 < counter)
+    (hs : vw.resizable = false → sampled < counter) :
+    ∀ i fr, EachInv cfg env cx ls counter view sampled owner vw base i fr →
+      SimE cx (hb, 0) fr (execEach n cfg env x idx byRef block vw i >>= prepareReturn env)
+        (fun flow pt' fr' => flow = .normal .unit ∧ ls'.pp = some pt' ∧
+          Same counter base fr' ∧ Rel cfg env cx fr' ls') := by
+  apply lowerEach_sim n cfg env cx le ls ls' counter view sampled hb owner vw base x idx byRef block
+    (eachBodyBuilder x idx byRef block org view counter hb) _ hlow
+  · intro depth exit
+    unfold eachBodyBuilder
+    exact AdvB.bind (advB_emitDef _) fun elem =>
+      AdvB.bind (advB_eachElemValue x byRef elem) fun value => advB_lowerBlock _ _ _ block
+  · exact hpp
+  · exact hext
+  · exact hc
+  · exact hv
+  · exact ho
+  · exact hs
+  · intro pt fr hp hv hr
+    exact ⟨rfl, hp, hv, hr⟩
+  · intro depth exit input result output back tb hbodyLow hppInput hBack hextBack
+      hextOutput hcounterInput hstackInput fuel _ i fr hinv
+    unfold eachBodyBuilder at hbodyLow
+    simp only [bind_eq] at hbodyLow
+    obtain ⟨elem, withElem, hElem, value, withValue, hValue, hBlock⟩ := hbodyLow
+    have aBlock := advB_lowerBlock (some ⟨depth, exit, .next hb .i64 counter⟩)
+      (eachIRPre x idx value counter org) false block le withValue result output hBlock
+    have aValue := advB_eachElemValue x byRef elem le withElem value withValue hValue
+    have aElem := adv_emitDef hElem
+    have hstackOutput : ls.stack = output.stack :=
+      hstackInput.symm.trans ((aElem.trans (aValue.trans aBlock)).stack.symm)
+    refine eachIteration_sim fuel cfg env cx le input withElem withValue output fr (tb, 0)
+      view counter elem value result vw i x idx byRef block
+      ⟨depth, exit, .next hb .i64 counter⟩ org _ hElem hValue hBlock hppInput hextOutput
+      hinv.rel hinv.viewValue hinv.counterValue hcounterInput ?_
+    intro ev ptValue frValue PValue hpre
+    have hscopePre : ∀ p ∈ eachIRPre x idx value counter org,
+        ∃ lv, env.vars[p.1]? = some lv ∧ lv.scope = block.scope := by
+      intro p hp
+      cases hi : idx with
+      | none =>
+        simp only [eachIRPre, hi, List.mem_singleton] at hp
+        subst p
+        exact hscope.1
+      | some j =>
+        simp only [eachIRPre, hi, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hp
+        rcases hp with rfl | rfl
+        · exact hscope.1
+        · exact hscope.2 j hi
+    have hclaim := blockPreClaim fuel (some ⟨depth, exit, .next hb .i64 counter⟩)
+      (eachIRPre x idx value counter org) (eachCorePre x idx ev i) false block cfg env hok hscopePre
+      le withValue result output ptValue cx frValue hBlock PValue.pp hextOutput PValue.rel hpre
+    refine SimE.bind (SimE.of_simG hclaim) fun flow ptBody frBody hresult => ?_
+    obtain ⟨v, rfl, _, PBlock⟩ := hresult
+    have P := PValue.comp PBlock
+    have hinvBody := hinv.of_post P hcounterInput hv ho hs
+    have hcounterBody : counter < output.vals.size := Nat.lt_of_lt_of_le hcounterInput P.mono
+    obtain ⟨frHeader, hgo, hsame, hcell, hact, hscopes, hdepth⟩ := eachBack_goes cx le output back
+      ptBody frBody counter hb i hBack PBlock.pp hextBack hcounterBody hinvBody.counterValue hheader
+    have hrelHeader : Rel cfg env cx frHeader ls :=
+      ⟨hinvBody.rel.prof, hinvBody.rel.slots, hact.trans hinvBody.rel.act,
+        hscopes.trans hinvBody.rel.scopes, hdepth.trans hinvBody.rel.depth,
+        hstackOutput.trans hinvBody.rel.stack⟩
+    exact SimE.ret ⟨frHeader, hinvBody.reentry hsame hcell hrelHeader hv ho hs, hgo⟩
 
 end Goose.Lower
