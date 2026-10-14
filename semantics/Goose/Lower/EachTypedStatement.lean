@@ -147,4 +147,163 @@ theorem stmt_each_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initial
   · exact atPoint
   · exact extension
 
+theorem EachPlan.sourceMode_variable {cfg : Cfg} {env : Env} {initial : St} {x ownerId : VarId}
+    {idx : Option VarId} {byRef : Bool} {body : Block} {origin : OriginId}
+    {source : StmtSource cfg env (.forEach x idx (.of (.var ownerId)) byRef body origin) initial}
+    (plan : EachPlan source) (results : List Ty) (input middle : LS) (point : GIR.Pt)
+    (owner : Option GIR.ValueId) (irView : GIR.ValueId) (atPoint : input.pp = some point)
+    (lowered : lowerEachSource (.of (.var ownerId)) (lowerEnv cfg.mod env.vars results) input =
+      ((owner, irView), middle)) :
+    (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
+      eachSourceRegrows source.rootsEnv.access (.of (.var ownerId)) := by
+  obtain ⟨child, typing, roots⟩ := plan.viewSource.ofChild
+  have typed := child.typed
+  simp only [tyPlace] at typed
+  rw [st_bind_ok] at typed
+  obtain ⟨localVar, finish, checked, _⟩ := typed
+  obtain ⟨visible, atVariable, _⟩ := (varOf_ok _ _ _ _).mp checked
+  rw [typing, plan.viewTyping, source.frame.vars_t] at atVariable
+  obtain ⟨block, live, _, _⟩ := LS.pp_some atPoint
+  exact eachSourceMode_var_lowerEnv source.rootsEnv.access localVar source.frame.vars_p atVariable live lowered
+
+theorem EachPlan.sourceMode_global {cfg : Cfg} {env : Env} {initial : St} {x : VarId} {globalId : GlobalId}
+    {idx : Option VarId} {byRef : Bool} {body : Block} {origin : OriginId}
+    {source : StmtSource cfg env (.forEach x idx (.of (.global globalId)) byRef body origin) initial}
+    (plan : EachPlan source) (results : List Ty) (input middle : LS) (point : GIR.Pt)
+    (owner : Option GIR.ValueId) (irView : GIR.ValueId) (atPoint : input.pp = some point)
+    (lowered : lowerEachSource (.of (.global globalId)) (lowerEnv cfg.mod env.vars results) input =
+      ((owner, irView), middle)) :
+    (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
+      eachSourceRegrows source.rootsEnv.access (.of (.global globalId)) := by
+  obtain ⟨child, typing, roots⟩ := plan.viewSource.ofChild
+  have typed := child.typed
+  simp only [tyPlace] at typed
+  split at typed
+  · rename_i before
+    cases tableAt : child.typingEnv.mod.globals[globalId]? with
+    | none => simp [tableAt, rej_ok] at typed
+    | some global =>
+      rw [typing, plan.viewTyping, source.frame.mod_t] at tableAt
+      obtain ⟨block, live, _, _⟩ := LS.pp_some atPoint
+      exact eachSourceMode_global_lowerEnv source.rootsEnv.access global source.frame.mod_p tableAt live lowered
+  · simp only [rej_ok] at typed
+
+private theorem eachBind_congr (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
+    (idx : Option VarId) (byRef : Bool) (body : Block) (value : ViewVal) (i : Nat)
+    (left right : Flow → M Flow) (normal : left (.normal .unit) = right (.normal .unit))
+    (returned : ∀ v, left (.ret v) = right (.ret v)) :
+    (execEach n cfg env x idx byRef body value i >>= left) =
+      (execEach n cfg env x idx byRef body value i >>= right) := by
+  induction n generalizing i with
+  | zero =>
+    funext state
+    simp [execEach, GIR.bind_apply, timeout, M.stop]
+  | succ n ih =>
+    simp only [eachCoreStep, bind_assoc]
+    congr 1
+    funext length
+    split
+    · simp only [bind_assoc]
+      congr 1
+      funext element
+      congr 1
+      funext flow
+      cases flow with
+      | normal v | cont => exact ih (i + 1)
+      | brk => simpa only [pure_bind] using normal
+      | ret v => simpa only [pure_bind] using returned v
+    · simpa only [pure_bind] using normal
+
+theorem prepareLoopFlow_execEach (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
+    (idx : Option VarId) (byRef : Bool) (body : Block) (value : ViewVal) (i : Nat)
+    (loop : Option LoopCtx) :
+    (execEach n cfg env x idx byRef body value i >>= prepareLoopFlow env loop) =
+      (execEach n cfg env x idx byRef body value i >>= prepareReturn env) := by
+  apply eachBind_congr
+  · cases loop <;> simp [prepareLoopFlow, prepareLoopExit, prepareReturn, pure_bind]
+  · intro returned
+    cases loop <;> simp [prepareLoopFlow, prepareLoopExit, prepareReturn]
+
+theorem prepareLoopFlow_stmtEach (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
+    (idx : Option VarId) (byRef : Bool) (body : Block) (view : View) (origin : OriginId)
+    (loop : Option LoopCtx) :
+    (execStmt n cfg env (.forEach x idx view byRef body origin) >>= prepareLoopFlow env loop) =
+      (execStmt n cfg env (.forEach x idx view byRef body origin) >>= prepareReturn env) := by
+  cases n with
+  | zero =>
+    funext state
+    simp [execStmt, GIR.bind_apply, timeout, M.stop]
+  | succ n =>
+    simp only [execStmt, bind_assoc]
+    congr 1
+    funext value
+    exact prepareLoopFlow_execEach n cfg env x idx byRef body value 0 loop
+
+theorem typedStatementLoopSimulation_each_of_mode {n : Nat} {cfg : Cfg} {results : List Ty}
+    {x : VarId} {idx : Option VarId} {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
+    (childSimulation : EachSourceChildSimulation n cfg results view)
+    (blocks : ∀ fuel, fuel < n + 1 → ∀ loop pre pre',
+      TypedBlockLoopSimulation fuel cfg results (some loop) pre pre' false body)
+    (mode : ∀ env state (source : StmtSource cfg env (.forEach x idx view byRef body origin) state)
+      input point owner irView middle, input.pp = some point →
+      lowerEachSource view (lowerEnv cfg.mod env.vars results) input = ((owner, irView), middle) →
+      (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
+        eachSourceRegrows source.rootsEnv.access view)
+    (loop : Option LoopCtx) :
+    TypedStatementLoopSimulation (n + 2) cfg results loop (.forEach x idx view byRef body origin) := by
+  intro env state source metadata lexical input output result point cx frame lowered atPoint
+    extension related module returned depth targets counter
+  cases result
+  rw [prepareLoopFlow_stmtEach]
+  have simulation := stmt_each_checked_flow_sim_at source results metadata childSimulation blocks cx
+    module returned loop input output frame point
+    (fun owner irView middle hlow => mode env state source input point owner irView middle atPoint hlow)
+    lowered atPoint extension related
+  exact simulation.mono fun flow _ pt' fr' _ post =>
+    post.elim (fun normal => Or.inl normal) (fun returned => Or.inr (Or.inl returned))
+
+theorem typedStatementLoopSimulation_each_value {n : Nat} {cfg : Cfg} {results : List Ty}
+    {x : VarId} {idx : Option VarId} {expr : Expr} {byRef : Bool} {body : Block} {origin : OriginId}
+    (childSimulation : TypedExprClaim n cfg results expr)
+    (blocks : ∀ fuel, fuel < n + 1 → ∀ loop pre pre',
+      TypedBlockLoopSimulation fuel cfg results (some loop) pre pre' false body)
+    (loop : Option LoopCtx) :
+    TypedStatementLoopSimulation (n + 2) cfg results loop (.forEach x idx (.val expr) byRef body origin) := by
+  apply typedStatementLoopSimulation_each_of_mode (view := .val expr) childSimulation blocks
+  intro env state source input point owner irView middle atPoint lowered
+  exact eachSourceMode_val source.rootsEnv.access lowered
+
+theorem typedStatementLoopSimulation_each_variable {n : Nat} {cfg : Cfg} {results : List Ty}
+    {x ownerId : VarId} {idx : Option VarId} {byRef : Bool} {body : Block} {origin : OriginId}
+    (blocks : ∀ fuel, fuel < n + 1 → ∀ loop pre pre',
+      TypedBlockLoopSimulation fuel cfg results (some loop) pre pre' false body)
+    (loop : Option LoopCtx) :
+    TypedStatementLoopSimulation (n + 2) cfg results loop
+      (.forEach x idx (.of (.var ownerId)) byRef body origin) := by
+  apply typedStatementLoopSimulation_each_of_mode (view := .of (.var ownerId)) (typedPlaceClaim_var n cfg results ownerId) blocks
+  intro env state source input point owner irView middle atPoint lowered
+  obtain ⟨plan⟩ := source.eachPlan
+  exact plan.sourceMode_variable results input middle point owner irView atPoint lowered
+
+theorem typedStatementLoopSimulation_each_global {n : Nat} {cfg : Cfg} {results : List Ty}
+    {x : VarId} {globalId : GlobalId} {idx : Option VarId} {byRef : Bool} {body : Block} {origin : OriginId}
+    (blocks : ∀ fuel, fuel < n + 1 → ∀ loop pre pre',
+      TypedBlockLoopSimulation fuel cfg results (some loop) pre pre' false body)
+    (loop : Option LoopCtx) :
+    TypedStatementLoopSimulation (n + 2) cfg results loop
+      (.forEach x idx (.of (.global globalId)) byRef body origin) := by
+  apply typedStatementLoopSimulation_each_of_mode (view := .of (.global globalId)) (typedPlaceClaim_global n cfg results globalId) blocks
+  intro env state source input point owner irView middle atPoint lowered
+  obtain ⟨plan⟩ := source.eachPlan
+  exact plan.sourceMode_global results input middle point owner irView atPoint lowered
+
+theorem typedStatementLoopSimulation_each_one (cfg : Cfg) (results : List Ty)
+    (loop : Option LoopCtx) (x : VarId) (idx : Option VarId) (view : View)
+    (byRef : Bool) (body : Block) (origin : OriginId) :
+    TypedStatementLoopSimulation 1 cfg results loop (.forEach x idx view byRef body origin) := by
+  intro env state source metadata lexical input output result point cx frame lowered atPoint
+    extension related module returned depth targets counter
+  cases view <;> simp only [execStmt, evalView, bind_assoc] <;>
+    exact SimEAt.of_simG GIR.SimG.of_timeout_bind state
+
 end Goose.Lower

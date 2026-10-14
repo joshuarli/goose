@@ -522,7 +522,7 @@ def preparedEach (n : Nat) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option Var
         | .ret v => pure (.ret v)
     else pure (.normal .unit)
 
-private theorem each_step (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
+theorem eachCoreStep (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
     (idx : Option VarId) (byRef : Bool) (body : Core.Block) (vw : ViewVal) (i : Nat) :
     execEach (n + 1) cfg env x idx byRef body vw i =
       ((if vw.resizable then lengthLoc vw.loc else pure vw.len) >>= fun len =>
@@ -543,7 +543,7 @@ theorem prepareReturn_execEach (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
     (idx : Option VarId) (byRef : Bool) (body : Core.Block) (vw : ViewVal) (i : Nat) :
     (execEach (n + 1) cfg env x idx byRef body vw i >>= prepareReturn env) =
       preparedEach n cfg env x idx byRef body vw i := by
-  rw [each_step]
+  rw [eachCoreStep]
   simp only [preparedEach, bind_assoc]
   congr 1
   funext len
