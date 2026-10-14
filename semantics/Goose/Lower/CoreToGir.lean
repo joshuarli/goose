@@ -250,6 +250,16 @@ def coerceTo (target : Ty) (r : ValueId) (org : OriginId) : B ValueId := do
     emitDef (.viewSlice .readOnly view .omitted .omitted (some org))
   | _, _ => pure r
 
+def coerceSlot (slot : SlotId) (value : ValueId) (org : OriginId) : B ValueId := do
+  match (← read).slots[slot]? with
+  | some destination => coerceTo destination.ty value org
+  | none => pure value
+
+def coerceResult (value : ValueId) (org : OriginId) : B ValueId := do
+  match (← read).results.head? with
+  | some destination => coerceTo destination value org
+  | none => pure value
+
 def pushScope (sc : ScopeId) : B Unit := modify fun s => { s with stack := sc :: s.stack }
 
 def popScope : B Unit := modify fun s => { s with stack := s.stack.drop 1 }
@@ -580,6 +590,7 @@ def lowerPrintArgs : List PrintArg → B (List PrintPart)
 def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
   | .letS x e org => do
     let v ← lowerExpr e
+    let v ← coerceSlot x v org
     emitEffect (.slotInit x v (some org))
   | .assign p e org => do
     let r ← lowerPlace p
@@ -593,6 +604,7 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
     emitEffect (.store r res (some org))
   | .rebind x e org => do
     let v ← lowerExpr e
+    let v ← coerceSlot x v org
     let r ← emitDef (.slotAddr x)
     emitEffect (.store r v (some org))
   | .expr e _ => do
@@ -677,7 +689,9 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
         lowerBlock (some ⟨d, xb, .next hb .i64 i⟩) pre false body)
   | .ret e org => do
     let vs ← match e with
-      | some e => do pure [← lowerExpr e]
+      | some e => do
+        let v ← lowerExpr e
+        pure [← coerceResult v org]
       | none => pure []
     leaveTo 0
     emitTerm (.ret vs (some org))
