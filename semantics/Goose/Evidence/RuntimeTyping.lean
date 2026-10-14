@@ -658,4 +658,160 @@ theorem successful_functions_typed {cfg : GCfg} (accepted : validate cfg.mod = .
     exact ⟨exec_typed_from_smaller accepted ih,
       enterFn_typed_from_exec accepted (fun remaining bound => (ih remaining bound).1)⟩
 
+private theorem moduleSignatures {m : GIR.Module} (accepted : validate m = .ok ()) :
+    (∃ entry, m.funcs[m.entry]? = some entry ∧ entry.params = [] ∧ entry.results = []) ∧
+    (∀ global ∈ m.globals, global.init.params = [] ∧ global.init.results = [global.ty]) := by
+  unfold Goose.GIR.validate at accepted
+  obtain ⟨_, signatures, _⟩ := bind_ok accepted
+  unfold checkEntryAndGlobals at signatures
+  cases lookup : m.funcs[m.entry]? with
+  | none => simp [lookup, violation, bind, Except.bind] at signatures
+  | some entry =>
+    have entrySignature : (entry.params.isEmpty && entry.results.isEmpty) = true := by
+      by_cases entrySignature : (entry.params.isEmpty && entry.results.isEmpty) = true
+      · exact entrySignature
+      · simp [lookup, entrySignature, violation, bind, Except.bind] at signatures
+    simp only [lookup, entrySignature, ↓reduceIte] at signatures
+    obtain ⟨_, globalsChecked, _⟩ := bind_ok signatures
+    refine ⟨⟨entry, rfl, ?_⟩, ?_⟩
+    · simpa only [Bool.and_eq_true, List.isEmpty_iff] using entrySignature
+    rw [← Array.forIn_toList] at globalsChecked
+    have all := forIn_yielded globalsChecked (by
+      intro global accumulator step checked
+      by_cases signature : (global.init.params.isEmpty && (global.init.results == [global.ty])) = true
+      · simp only [signature, ↓reduceIte] at checked
+        by_cases origin : global.org < m.origins.size
+        · simpa [origin, pure, Except.pure] using checked.symm
+        · simp [origin, violation, bind, Except.bind] at checked
+      · simp [signature, violation, bind, Except.bind] at checked)
+    intro global member
+    have checked := all global (Array.mem_toList_iff.mpr member)
+    have signature : (global.init.params.isEmpty && (global.init.results == [global.ty])) = true := by
+      by_cases signature : (global.init.params.isEmpty && (global.init.results == [global.ty])) = true
+      · exact signature
+      · simp [signature, violation, bind, Except.bind] at checked
+    simpa only [Bool.and_eq_true, List.isEmpty_iff, beq_iff_eq] using signature
+
+theorem initGlobals_typed {cfg : GCfg} {fuel : Nat} {ids : List GlobalId}
+    {activations : ActivationTypes} {before after : St}
+    (accepted : validate cfg.mod = .ok ()) (stateTyped : RuntimeStateTy cfg activations before)
+    (initialized : initGlobals fuel cfg ids before = .ok () after) :
+    ∃ extended, activations.Extends extended ∧ RuntimeStateTy cfg extended after := by
+  induction ids generalizing activations before with
+  | nil =>
+    simp only [Goose.GIR.initGlobals, pure_apply, Res.ok.injEq] at initialized
+    obtain ⟨_, sameState⟩ := initialized
+    subst after
+    exact ⟨activations, .refl activations, stateTyped⟩
+  | cons id rest ih =>
+    simp only [Goose.GIR.initGlobals] at initialized
+    obtain ⟨init, middle, found, initialized⟩ := m_bind_ok initialized
+    cases lookup : cfg.mod.globals[id]? with
+    | none => simp [lookupInit, lookup, fault, M.stop] at found
+    | some global =>
+      simp only [lookupInit, lookup, pure_apply, Res.ok.injEq] at found
+      obtain ⟨sameFn, sameState⟩ := found
+      have fnEq : init = global.init := sameFn.symm
+      have stateEq : middle = before := sameState.symm
+      subst init
+      subst middle
+      obtain ⟨value, returned, entered, initialized⟩ := m_bind_ok initialized
+      have globalMember := Array.mem_of_getElem? lookup
+      obtain ⟨noParams, resultType⟩ := (moduleSignatures accepted).2 global globalMember
+      have initMember : global.init ∈ cfg.mod.allFuncs := by
+        simp only [Module.allFuncs, List.mem_append, List.mem_map]
+        exact Or.inr ⟨global, Array.mem_toList_iff.mpr globalMember, rfl⟩
+      have argsTyped : CallValuesTy (runtimeDeclarations cfg activations) global.init.params [] := by
+        rw [noParams]
+        exact .nil
+      obtain ⟨intermediate, extension, returnedTyped, valueTyped⟩ :=
+        (successful_functions_typed accepted fuel).2 global.init 0 [] activations before returned value
+          initMember stateTyped argsTyped entered
+      have globalValueTyped : WeakValueTy (runtimeDeclarations cfg intermediate) value global.ty := by
+        simpa only [FunctionValueTy, resultType] using valueTyped
+      have declaration : runtimeDeclarations cfg intermediate (.global id) = some global.ty := by
+        simp [runtimeDeclarations, lookup]
+      have boundTyped : RuntimeStateTy cfg intermediate
+          { returned with store := returned.store.introduce (.global id) value } :=
+        ⟨returnedTyped.1, returnedTyped.2.introduce declaration globalValueTyped⟩
+      simp only [bindRoot, bind_apply] at initialized
+      obtain ⟨extended, restExtension, finalTyped⟩ := ih boundTyped initialized
+      exact ⟨extended, extension.trans restExtension, finalTyped⟩
+
+theorem RuntimePoint.typed {cfg : GCfg} {fn : Func} {point : Pt} {fr : Frame} {state : St}
+    (accepted : validate cfg.mod = .ok ()) (reachable : RuntimePoint cfg fn point fr state) :
+    ∃ activations, RuntimeFrameTy cfg fn activations fr state := by
+  induction reachable with
+  | @initializer fuel index before global fr after positive valid initialized lookup entry =>
+    obtain ⟨activations, extension, beforeTyped⟩ := initGlobals_typed accepted
+      (RuntimeStateTy.initial cfg) initialized
+    have globalMember := Array.mem_of_getElem? lookup
+    have member : global.init ∈ cfg.mod.allFuncs := by
+      simp only [Module.allFuncs, List.mem_append, List.mem_map]
+      exact Or.inr ⟨global, Array.mem_toList_iff.mpr globalMember, rfl⟩
+    have noParams := ((moduleSignatures accepted).2 global globalMember).1
+    have argsTyped : CallValuesTy (runtimeDeclarations cfg activations) global.init.params [] := by
+      rw [noParams]
+      exact .nil
+    obtain ⟨entryBlock, entryLookup, entryTypes⟩ := validated_entry_params accepted member
+    obtain ⟨extended, rootExtension, activationExtension, typed⟩ :=
+      entry.typed beforeTyped entryLookup
+        (fun param present => validated_block_param_metadata accepted member
+          (Array.mem_of_getElem? entryLookup) present) (argsTyped.entry entryTypes)
+    exact ⟨extended, typed⟩
+  | @entry fuel before fn fr after positive initialized lookup entry =>
+    obtain ⟨activations, extension, beforeTyped⟩ := initGlobals_typed accepted
+      (RuntimeStateTy.initial cfg) initialized
+    have member : fn ∈ cfg.mod.allFuncs :=
+      List.mem_append_left _ (Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup))
+    obtain ⟨checkedEntry, checkedLookup, noParams, noResults⟩ := (moduleSignatures accepted).1
+    have sameFn : checkedEntry = fn := Option.some.inj (checkedLookup.symm.trans lookup)
+    subst checkedEntry
+    have argsTyped : CallValuesTy (runtimeDeclarations cfg activations) fn.params [] := by
+      rw [noParams]
+      exact .nil
+    obtain ⟨entryBlock, entryLookup, entryTypes⟩ := validated_entry_params accepted member
+    obtain ⟨extended, rootExtension, activationExtension, typed⟩ :=
+      entry.typed beforeTyped entryLookup
+        (fun param present => validated_block_param_metadata accepted member
+          (Array.mem_of_getElem? entryLookup) present) (argsTyped.entry entryTypes)
+    exact ⟨extended, typed⟩
+  | call callerPoint instruction depth read lookup entry ih =>
+    obtain ⟨activations, callerTyped⟩ := ih
+    obtain ⟨extended, rootExtension, activationExtension, typed⟩ :=
+      RuntimePoint.call_entry_typed accepted callerPoint callerTyped instruction read lookup entry
+    exact ⟨extended, typed⟩
+  | step before transition ih =>
+    obtain ⟨activations, beforeTyped⟩ := ih
+    have member := before.function_mem
+    cases transition with
+    | define instruction evaluated =>
+      obtain ⟨block, blockMember, instructionMember⟩ := instAt_member instruction
+      obtain ⟨ty, opTyped, resultMetadata⟩ :=
+        (validate_sound cfg.mod accepted).1 _ member |>.2.1 block blockMember _ _ instructionMember
+      obtain ⟨extended, extension, stateTyped, valueTyped⟩ :=
+        execOp_result_typed accepted member beforeTyped instruction opTyped resultMetadata
+          (fun fuel bound => (successful_functions_typed accepted fuel).2) evaluated
+      have transferred := beforeTyped.transfer extension stateTyped
+      exact ⟨extended, transferred.1, transferred.2.1, transferred.2.2.set resultMetadata valueTyped⟩
+    | effect instruction evaluated =>
+      obtain ⟨block, blockMember, instructionMember⟩ := instAt_member instruction
+      exact ⟨activations, execEff_result_typed beforeTyped
+        (validated_effect_types accepted member blockMember instructionMember) evaluated⟩
+    | branch instruction read entered =>
+      exact ⟨activations, RuntimeStep.branch_typed accepted member beforeTyped instruction read entered⟩
+    | branchTrue instruction tested read entered =>
+      exact ⟨activations, RuntimeStep.branchTrue_typed accepted member beforeTyped instruction tested read entered⟩
+    | branchFalse instruction tested read entered =>
+      exact ⟨activations, RuntimeStep.branchFalse_typed accepted member beforeTyped instruction tested read entered⟩
+
+theorem RuntimePoint.int {cfg : GCfg} {fn : Func} {point : Pt} {fr : Frame} {state : St}
+    {id : ValueId} {ty : IntTy} {cell : RVal}
+    (accepted : validate cfg.mod = .ok ()) (reachable : RuntimePoint cfg fn point fr state)
+    (metadata : (fn.valueTypes cfg.mod)[id]? = some (some (.data (.int ty))))
+    (present : fr.vals[id]? = some cell) :
+    ∃ value, fr.vals[id]? = some (.val (.int ty value)) := by
+  obtain ⟨activations, typed⟩ := reachable.typed accepted
+  exact typed.2.2.int metadata present
+
 end Goose.Evidence
