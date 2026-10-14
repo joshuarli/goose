@@ -1,4 +1,5 @@
 import Goose.Evidence.Execution
+import Goose.Evidence.SSA
 
 namespace Goose.Evidence
 
@@ -379,5 +380,25 @@ theorem sampled_cmp_current_lt {cfg : GCfg} {fn : Func}
   simp only [differentRight, Bool.false_eq_true, ↓reduceIte] at rightPreserved
   exact ⟨leftPreserved.trans leftCell, rightPreserved.trans rightCell,
     cmp_true_i64 evaluated leftCell rightCell⟩
+
+theorem validated_cell_definition {cfg : GCfg} {fn : Func} {pt : Pt}
+    {fr : Frame} {st : St} {id : ValueId} {operation : Op} {value : RVal}
+    (validated : validate cfg.mod = .ok ())
+    (point : RuntimePoint cfg fn pt fr st)
+    (definition : fn.defOp? id = some operation)
+    (cell : fr.vals[id]? = some value) :
+    ∃ sourcePt sourceFrame sourceState fuel writtenState,
+      RuntimePoint cfg fn sourcePt sourceFrame sourceState ∧
+      instAt fn sourcePt = some (.def id operation) ∧
+      execOp fuel ⟨cfg, fn⟩ sourceFrame operation sourceState = .ok value writtenState ∧
+      RuntimeStepsAvoid cfg fn [id] (sourcePt.1, sourcePt.2 + 1)
+        (sourceFrame.set id value) writtenState pt fr st := by
+  have noParameter := validated_defOp_not_param validated point.function_mem definition
+  obtain ⟨sourcePt, sourceFrame, sourceState, sampledOperation, fuel, writtenState,
+    sampledPoint, instruction, evaluated, history⟩ := point.def_cell_sample cell noParameter
+  have operationEq := validated_instAt_defOp_eq validated point.function_mem definition instruction
+  subst sampledOperation
+  exact ⟨sourcePt, sourceFrame, sourceState, fuel, writtenState,
+    sampledPoint, instruction, evaluated, history⟩
 
 end Goose.Evidence
