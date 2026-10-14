@@ -6,14 +6,14 @@ open Goose.Core Goose.GIR
 
 def sourceModule : Core.Module :=
   { files := #["coerce.goose"], types := #[], globals := #[], impls := #[],
-    contexts := #[], entry := 0, origins := #[] }
+    contexts := #[], entry := 0, origins := #[⟨0, 1, "coerce"⟩] }
 
 def before (source : Ty) : LS :=
   { blocks := #[⟨[(0, .data source)], #[]⟩], vals := #[some (.data source)],
     cur := some 0, stack := [] }
 
 def lowered (source target : Ty) : ValueId × LS :=
-  (do let result ← coerceTo target 0
+  (do let result ← coerceTo target 0 0
       emitTerm (.ret [result] none)
       pure result) (lowerEnv sourceModule #[] []) (before source)
 

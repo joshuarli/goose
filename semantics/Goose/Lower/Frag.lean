@@ -428,7 +428,7 @@ theorem advB_freezeTo (m : Mutability) (r : ValueId) : AdvB (freezeTo m r) := by
     | exact AdvB.pure _
     | (rename_i t; cases t <;> first | exact AdvB.pure _ | (rename_i m' _; cases m' <;> first | exact AdvB.pure _ | exact advB_emitDef _))
 
-theorem advB_coerceTo (target : Ty) (r : ValueId) : AdvB (coerceTo target r) := by
+theorem advB_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : AdvB (coerceTo target r org) := by
   unfold coerceTo
   refine AdvB.bind (advB_valTy r) fun source => ?_
   split
@@ -635,12 +635,12 @@ theorem intTyOf_eq {v : ValueId} {le : LEnv} {ls : LS} {t : IntTy} {ls' : LS}
     | view _ _ => exact (Prod.mk.inj h).2.symm
 
 theorem coerceTo_cases {target : Ty} {r : ValueId} {le : LEnv} {ls : LS}
-    {r' : ValueId} {ls' : LS} (h : coerceTo target r le ls = (r', ls')) :
+    {r' : ValueId} {ls' : LS} {org : OriginId} (h : coerceTo target r org le ls = (r', ls')) :
     (r' = r ∧ ls' = ls) ∨
     (∃ elem, target = .ref .readOnly elem ∧ emitDef (.refFreeze r) le ls = (r', ls')) ∨
     (∃ elem view mid, target = .slice .readOnly elem ∧
       emitDef (.sliceView r) le ls = (view, mid) ∧
-      emitDef (.viewSlice .readOnly view .omitted .omitted none) le mid = (r', ls')) := by
+      emitDef (.viewSlice .readOnly view .omitted .omitted (some org)) le mid = (r', ls')) := by
   unfold coerceTo at h
   simp only [bind_run] at h
   have hs := valTy_run r le ls
