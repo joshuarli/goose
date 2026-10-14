@@ -451,6 +451,37 @@ theorem execEff_slotInit_typed {activations : ActivationTypes} {fn : Func} {cfg 
     refine ⟨⟨frameTyped.1.1, frameTyped.1.2.introduce ?_ valueTyped⟩, frameTyped.2⟩
     simp [runtimeDeclarations, frameTyped.2.1, lookup]
 
+theorem execEff_store_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {targetId valueId : ValueId} {permission : Mutability} {ty : Ty}
+    {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission ty))))
+    (valueMetadata : (fn.valueTypes cfg.mod)[valueId]? = some (some (.data ty)))
+    (readable : ty.readable = true)
+    (evaluated : execEff fn fr (.store targetId valueId org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨targetTyped, sameState⟩ := frameTyped.2.2.getVal targetMetadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := targetTyped
+  simp only [expectRef, pure_bind] at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal valueMetadata read
+  subst middle
+  obtain ⟨result, middle, written, evaluated⟩ := m_bind_ok evaluated
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  unfold writeLoc at written
+  cases stored : before.store.write location value with
+  | error fault => simp [stored] at written
+  | ok store =>
+    simp only [stored, Res.ok.injEq] at written
+    obtain ⟨_, sameState⟩ := written
+    subst middle
+    exact ⟨⟨frameTyped.1.1, frameTyped.1.2.writeReadable target readable valueTyped stored⟩,
+      frameTyped.2⟩
+
 theorem execEff_enter_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
     {fr fr' : Frame} {scope : ScopeId} {before after : St}
     (frameTyped : RuntimeFrameTy cfg fn activations fr before)

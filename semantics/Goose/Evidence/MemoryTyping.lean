@@ -187,6 +187,27 @@ theorem WeakValueTy.get {roots : RootDeclarations} {rootTy result : Ty}
   | limited tail => exact .ofFlat (StoragePath.get (.limited tail) typed read)
   | field selector tail => exact .ofFlat (StoragePath.get (.field selector tail) typed read)
 
+theorem FlatTy.notRefLike {ty : Ty} {value : Val} (typed : FlatTy ty value) :
+    ty.isRefLike = false := by
+  cases ty <;> cases value <;> simp_all [Ty.isRefLike, FlatTy]
+
+theorem WeakValueTy.referencePath {roots : RootDeclarations} {rootTy result : Ty}
+    {path : List Nat} {value selected : Val}
+    (declared : StoragePath rootTy path result) (typed : WeakValueTy roots value rootTy)
+    (read : value.get? path = some selected) (reference : result.isRefLike = true) :
+    path = [] ∧ rootTy = result := by
+  have impossible (flatTyped : FlatTy result selected) : False := by
+    have notRef := Goose.Evidence.FlatTy.notRefLike flatTyped
+    rw [reference] at notRef
+    contradiction
+  cases declared with
+  | root => exact ⟨rfl, rfl⟩
+  | fixed tail => exact False.elim (impossible (StoragePath.get (.fixed tail) typed read))
+  | grow tail => exact False.elim (impossible (StoragePath.get (.grow tail) typed read))
+  | shrink tail => exact False.elim (impossible (StoragePath.get (.shrink tail) typed read))
+  | limited tail => exact False.elim (impossible (StoragePath.get (.limited tail) typed read))
+  | field selector tail => exact False.elim (impossible (StoragePath.get (.field selector tail) typed read))
+
 theorem WeakStoreTy.read {roots : RootDeclarations} {store : Store} {location : Loc}
     {ty : Ty} {value : Val} (typed : WeakStoreTy roots store)
     (declared : DeclaredLocation roots location ty) (read : store.read location = .ok value) :
@@ -331,6 +352,45 @@ theorem WeakStoreTy.writeFlat {roots : RootDeclarations} {before after : Store}
   exact typed.flatStep (Goose.Core.Sound.write_flatStep before after location value ty
     flat ⟨selected, read, selectedTyped⟩ (valueTyped.flat flat) written)
     (modify_preserves_unit read selectedTyped written)
+
+theorem WeakStoreTy.writeReference {roots : RootDeclarations} {before after : Store}
+    {location : Loc} {value : Val} {ty : Ty} (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location ty) (reference : ty.isRefLike = true)
+    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
+    WeakStoreTy roots after := by
+  obtain ⟨rootTy, declaration, path⟩ := target
+  obtain ⟨old, selected, new, rebuilt, rootPresent, oldRead, replaced, modified, rootMap⟩ :=
+    modify_spec before after location (fun _ => some value) written
+  obtain ⟨storedTy, storedDeclaration, oldTyped⟩ := typed location.root old rootPresent
+  have sameTy : storedTy = rootTy := Option.some.inj (storedDeclaration.symm.trans declaration)
+  subst storedTy
+  obtain ⟨emptyPath, sameTy⟩ := oldTyped.referencePath path oldRead reference
+  subst rootTy
+  cases location with
+  | mk root selectors =>
+    simp only [] at emptyPath
+    subst selectors
+    simp only [Val.modifyAt?, Option.some.injEq] at modified
+    subst rebuilt
+    intro other stored present
+    rw [rootMap, Goose.Core.Sound.get_reinsert] at present
+    by_cases same : root = other
+    · subst other
+      simp only [↓reduceIte, Option.some.injEq] at present
+      subst stored
+      exact ⟨ty, declaration, valueTyped⟩
+    · simp only [same, ↓reduceIte] at present
+      exact typed other stored present
+
+theorem WeakStoreTy.writeReadable {roots : RootDeclarations} {before after : Store}
+    {location : Loc} {value : Val} {ty : Ty} (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location ty) (readable : ty.readable = true)
+    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
+    WeakStoreTy roots after := by
+  cases ty with
+  | ref permission targetTy => exact typed.writeReference target rfl valueTyped written
+  | slice permission element => exact typed.writeReference target rfl valueTyped written
+  | _ => exact typed.writeFlat target readable valueTyped written
 
 theorem WeakStoreTy.appendOwner {roots : RootDeclarations} {before after : Store}
     {location : Loc} {values : Array Val} {owner element : Ty} {index : Nat}
