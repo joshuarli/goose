@@ -1,22 +1,132 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** winding down 2026-10-14.
-**Branch:** `master`. The former `goose-ir` campaign tip was fast-forwarded here locally on 2026-10-14; no push was run. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12).
+**Status:** paused 2026-10-14.
+**Branch:** `master`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`, rebased at the owner's request on 2026-10-14. The prior fork base and upstream merge remain historical records below.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
-## Handoff (winddown in progress)
+## Handoff (paused; reboot audit 2026-10-14)
 
-**Resume.** Finish this winddown on `master`; start with `git status --short --branch && git log --oneline -1 master`. Do not start another campaign item.
+**Resume prompt.** "Resume the paused Goose IR campaign from docs/design/goose-ir-campaign.md on master. Recheck this handoff and the retained branches before selecting an item; O3 has no valid timing result." Resumption requires a new owner request. First run `git status --short --branch` from the repository root. The inspection commands below start no lane and run no measurements.
 
-**State.** `master` is now at the former `goose-ir` tip, `d440b9ab`; it is 423 commits ahead of `origin/master`. The local `goose-ir` and `origin/goose-ir` refs remain at that same tip. No push was run. Continue at O3, the next unparked item.
+**State.** The campaign was rebased from `ae2c93dc` onto upstream `46356c26`; the rebased tip before this handoff is `56d64e50`, with 441 replayed fork commits beyond upstream. The rebase flattened the old merges and dropped patches already upstream. Conflicts preserve the fork's lint, reporting, units, Core/GIR and proof work alongside upstream's type-checking and native-build changes. Growth summaries now include upstream's resizable types, and units use upstream's toolchain selection and lock progress label. The input-reader audit explicitly permits the new native-stage nested-package scan and freshness-size read, as it already permits native-stage recursive discovery and timestamps; terminal display environment reads have specific exemptions, and an obsolete output-write allowance was removed; native-package builds remain ineligible for compile-skipping reuse. No parked lane was merged or restarted. `goose-ir` remains at `d440b9ab`. At inspection, `origin/master` was `25c4992f` and diverged by 340 commits on each side; these are local ref observations, not a fetch. This handoff adds one document commit. This executor ran no push.
 
-**Known red.** No failing compiler test is known on this tree. Several campaign gates are incomplete: `TH-LOWER-03` is not proved, so `G-SHRINK` was not reached; `S9`/`G-CONSTRUCT` remain parked behind S8; `G-BCE` was parked after three proof attempts; `H2` is incomplete; and `O2` missed its admission threshold (9.82% against 10%). The last O3 timing was discarded because the host readiness check failed after the run.
+**Known red and limits.** The Debug compiler builds. Focused lifetime, multi-assignment, CLI, native-toolchain and native-rebuild checks passed. The reader guard initially failed on new native-stage and display reads, and on a stale output-write allowance. The four units checks passed; the corrected reader audit then passed directly over 68 sources. Its exemptions name only reads outside compile input selection; the removed allowance no longer matched a write after upstream switched to its directory-creating writer. The full baseline suite, linter suite, JIT, Lean proofs, Docker reproductions and performance gates were not rerun for this rebase. No new compiler failure is known within the focused checks. `TH-LOWER-03` is not proved; `G-SHRINK`, S9/`G-CONSTRUCT`, H2 and the final campaign gates remain incomplete. `G-BCE` remains parked after three attempts, and O2 remains below its 10% admission threshold (9.82%). **O3 has no valid timing result:** the previous timing was discarded by the post-run readiness failure. No measurements were run during this rebase/winddown; budgets remain unfrozen. The prior performance status remains **perf gate deferred: host busy**.
 
-**Open work.** S8 proof and T3 partial commits remain on clean, unmerged branches under `git branch --no-merged master`; all campaign worktrees are under `.work/wt/` and their state is committed. Compare each candidate with `master` before cherry-picking because some branch patches duplicate integrated work. `goose-ir-parity-base` is the O3 baseline, not a work lane. The two deferred upstream fixes remain in `upstream-pr/native-stack-bounds-main-thread-musl` and `upstream-pr/native-package-rebuild-stamp`; their drafts and required follow-up are in §14.
+**Open lanes.** None is running or in flight. The current 67 unmerged local refs are all enumerated below: 31 S8 refs, one T3/S8 ref, one O3 baseline, and 34 owner-managed refs. An unmerged ref after a rebase does not establish that its patch is missing: many retained branches duplicate integrated work and still carry the old history. Compare specific item patches and file contents with rebased `master` before replaying anything. Each retained ref is committed; do not replay an entire `master..branch` range. All 29 in-repo lane worktrees are clean and attached to unmerged refs. They are disposable: if absent after reboot, recreate only a selected lane under `.work/wt/<lane>` from its named branch after resumption is authorized. The campaign document and Git refs, rather than a scratch checkout or built binary, carry the continuation state.
 
-**Next.** Re-run O3 only when `perf-gate-ready` passes immediately before and after measurement. O4 is conditional on the measured unit-emission share of E03; then run O5 and close with P4. S8/S9 stay parked until their proof prerequisites are met. Owner decisions still owed: freeze the proposed build budgets; decide the units/sharing defaults and CI integration; decide whether to file the `redundant_cast` lint inconsistency; and complete local evidence for the two O7 drafts. Pushing or opening them requires a separate owner request. O3 also needs the Aincrad3 source checkout at the recorded commit in §11.3; only aggregate results belong in this repository.
+| Unmerged branch | Tip | Item | State / finding | Next step after authorized resume |
+|---|---|---|---|---|
+| `backup/master-before-upstream-20261010` | `3a25b43c` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `bookkeeping/gs-002-callee-local-provenance/base` | `df16b306` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `bookkeeping/gs-003-diverging-dead-code/base` | `6417b91e` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `bookkeeping/gs-004-default-init-order/base` | `3a25b43c` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `campaign/s8-argument-root-syntax` | `b20da0fa` | S8 | parked — committed WIP/candidate: argument-root declarations; proof gate incomplete | Compare declaration bounds with the caller implementation. |
+| `campaign/s8-call-effect-bridge` | `046fc145` | S8 | parked — committed WIP/candidate: call-effect replay bridge; proof gate incomplete | Compare expected owner roots and replay inclusion with current demand. |
+| `campaign/s8-expr-final` | `0065113d` | S8 | parked — committed WIP/candidate: expression owner preservation; proof gate incomplete | Compare expression-step owner proofs; keep only missing lemmas. |
+| `campaign/s8-global-domain` | `ebfd2f0c` | S8 | parked — committed WIP/candidate: global owner-domain bounds; proof gate incomplete | Compare declared global indices and frame invariants. |
+| `campaign/s8-loop-final` | `952bd844` | S8 | parked — committed WIP/candidate: per-element loop preservation; proof gate incomplete | Complete the per-element kernel against current demand and owner contracts. |
+| `campaign/s8-loop-owner-final` | `52252b87` | S8 | parked — committed WIP/candidate: loop owner preservation; proof gate incomplete | Complete loop owner transport; compare with the other loop candidate. |
+| `campaign/s8-lower-helper-wip` | `504f9e32` | S8 | parked — committed WIP/candidate: shrink lowering helper; proof gate incomplete | Finish the lowering proof helper after exact shrink closure. |
+| `campaign/s8-owner-authority` | `b3fb0d9c` | S8 | parked — committed WIP/candidate: owner authority transport; proof gate incomplete | Compare equality transport and owner/content separation. |
+| `campaign/s8-owner-call-args` | `5b5209fa` | S8 | parked — committed WIP/candidate: argument owner authority; proof gate incomplete | Compare argument-prefix authority with current call preservation. |
+| `campaign/s8-place-final` | `2b6dac8e` | S8 | parked — committed WIP/candidate: place and mutation contracts; proof gate incomplete | Compare place-root disjointness and authority lemmas. |
+| `campaign/s8-proof-composition` | `ae8ec2b7` | S8 | parked — committed WIP/candidate: statement/block composition; proof gate incomplete | Compare prebound authority and composition lemmas. |
+| `campaign/s8-shrink-owner-contract` | `790741ec` | S8 | parked — committed WIP/candidate: shrink owner contract; proof gate incomplete | Compare owner-root protection with the current contract. |
+| `campaign/s8-stmt-assign-whole` | `a898a487` | S8 | parked — committed WIP/candidate: whole assignment preservation; proof gate incomplete | Complete whole assignment against current owner and store contracts. |
+| `campaign/s8-stmt-assignwhole-case-prep` | `e0fa9226` | S8 | parked — committed WIP/candidate: whole assignment case preparation; proof gate incomplete | Compare with the final whole-assignment candidate before continuing. |
+| `campaign/s8-stmt-assignwhole-final` | `f24bb517` | S8 | parked — committed WIP/candidate: whole assignment final cases; proof gate incomplete | Complete outstanding cases and compare the preparation candidate. |
+| `campaign/s8-stmt-final` | `1e3949c5` | S8 | parked — committed WIP/candidate: statement owner contract migration; proof gate incomplete | Compare migrated statement cases with integrated preservation proofs. |
+| `campaign/s8-stmt-popn-clear` | `03c6e152` | S8 | parked — committed WIP/candidate: popn/clear preservation; proof gate incomplete | Compare retained aliases and truncate proofs; finish missing cases. |
+| `campaign/s8-stmt-resize-main` | `6fb66fd3` | S8 | parked — committed WIP/candidate: resize retained aliases; proof gate incomplete | Compare retained truncate aliases with checked safety. |
+| `campaign/s8-stmt-resize-next-wip` | `10a66a95` | S8 | parked — committed WIP/candidate: resize next cases; proof gate incomplete | Compare resize candidates, then finish outstanding cases. |
+| `campaign/s8-stmt-resize-wip` | `e4f484ce` | S8 | parked — committed WIP/candidate: resize preservation; proof gate incomplete | Compare resize candidates against the integrated mutation theorem. |
+| `campaign/whole-root-effect-footprint` | `f80a2f7a` | S8 | parked — committed WIP/candidate: whole-root effect footprint; proof gate incomplete | Compare checked place-root disjointness and retained child approval. |
+| `experiment/emitted-body-diagnostics` | `6be31c0c` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `feat-semantic-linter` | `6d538382` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `fix/codegen-local-name-cursor-rfc9-fork` | `54f1a765` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `fix/gs-002-callee-local-provenance` | `cd00459d` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `fix/gs-003-diverging-dead-code` | `3a25b43c` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `fix/gs-004-default-init-order` | `4a2c8bf5` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `fix/lint-facts-limit-512mib` | `0c127337` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `fix/lint-root-depthkey-context` | `6be31c0c` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `fuzzygoose` | `592aee41` | owner-managed | parked — retained owner ref; no campaign work scheduled | Retain; the backtracking change was reverted on the campaign. |
+| `goose-ir` | `d440b9ab` | owner-managed | parked — retained owner ref; no campaign work scheduled | Retain as the pre-rebase campaign history; compare content before any reuse. |
+| `goose-ir-parity-base` | `011acacf` | O3 | parked — historical comparison baseline, not a lane | Requalify a baseline on the same upstream revision before any later measurements. |
+| `goose-ir-s8-contract` | `6340747f` | S8 | parked — committed WIP/candidate: shrink validation contract; proof gate incomplete | Finish pending validator/contract closure after comparison with current Core. |
+| `goose-ir-s8-fixtures` | `088e11bb` | S8 | parked — committed WIP/candidate: flat struct boundary fixtures; proof gate incomplete | Compare the struct gate with its integrated copy; retain any missing coverage. |
+| `goose-ir-s8-lower-next` | `6e1b2c2b` | S8 | parked — committed WIP/candidate: shrink lowering validation; proof gate incomplete | Finish remaining validation cases after exact shrink closure. |
+| `goose-ir-s8-proof-block` | `cba9badb` | S8 | parked — committed WIP/candidate: block binding preservation; proof gate incomplete | Compare prebound owner and scope-release composition. |
+| `goose-ir-s8-proof-call` | `cce886eb` | S8 | parked — committed WIP/candidate: demand-indexed call preservation; proof gate incomplete | Compare argument holders, callee entry, and current checked call effects. |
+| `goose-ir-s8-proof-expr` | `d4adf783` | S8 | parked — committed WIP/candidate: sampled view aliases; proof gate incomplete | Compare sampled-view aliases and demanded scope release. |
+| `goose-ir-s8-proof-foundation` | `3e0342bc` | S8 | parked — committed WIP/candidate: call/foreach demand foundation; proof gate incomplete | Compare access-aware holder liveness and demand aliases. |
+| `goose-ir-s8-proof-stmt` | `6a1b6a29` | S8 | parked — committed WIP/candidate: initialized storage/frame foundation; proof gate incomplete | Compare initialized storage types and loop iteration frames. |
+| `goose-ir-s8-step-stmt` | `b61729cd` | S8 | parked — committed WIP/candidate: shrink statement cases; proof gate incomplete | Finish missing statement forms after comparing current proofs. |
+| `goose-ir-s8-storage-foundation` | `5c421aad` | S8 | parked — committed WIP/candidate: initialized storage foundation; proof gate incomplete | Compare initialized local storage types and frame invariants. |
+| `goose-ir-sem-gir` | `50b723e2` | T3 / S8 | parked — committed WIP: local while lowering and partial loop claims | Finish exact loop lowering closure; TH-LOWER-03 remains unproved. |
+| `integrate/upstream-20261010` | `c01d8f9d` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `perf/codegen-local-name-cursor-rfc9` | `2e7ee8ff` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `perf/rfc9-bce-upstream-qualification` | `23366273` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `qualify/upstream-fee060c-20261011` | `ad8f2a87` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `review/cached-callee-references` | `925d52bb` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `review/diverging-dead-code` | `84569b58` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `review/parse-int-overflow` | `42a3e5df` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `review/pr18-latest` | `a3556c11` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `review/reordered-reference-fields` | `865b1aa6` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/basecase-reference-alias` | `ba822e8e` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/cached-callee-references` | `298bd817` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/diverging-dead-code` | `96a6e660` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/generic-argument-backtracking` | `b37cebb7` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/gs-004-reordered-reference-initializers` | `81004d20` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/native-package-rebuild-stamp` | `8a3637b1` | owner-managed (U1/O7) | parked — retained owner ref; no campaign work scheduled | Upstream now supersedes the stamp fix; reassess or retire the draft before any submission. |
+| `upstream-pr/native-stack-bounds-main-thread-musl` | `7cd75268` | owner-managed (U1/O7) | parked — retained owner ref; no campaign work scheduled | Keep the committed draft; quiet-host evidence and exact published-revision reproduction are still owed. |
+| `upstream-pr/parse-float-leading-zeroes` | `c08f1d79` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/parse-int-overflow` | `e2b9cb92` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/reordered-reference-fields` | `d68e4427` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
+| `upstream-pr/serialized-offset-overflow` | `39b8d7a9` | owner-managed | parked — retained owner ref; no campaign work scheduled | Owner reviews the retained candidate/history before reuse or deletion. |
 
-**Verified.** The local fast-forward succeeded with no conflicts. `master` was the ancestor of `goose-ir` (423 commits ahead, zero behind). The last focused Lean proof build completed 30 jobs with existing warnings. This branch move changed no source files; no code check was rerun for it. The host was busy during the last O3 attempt, so there is still no valid timing result.
+**Not started.** O3 is the next unparked item when the owner resumes the campaign and supplies a quiet-host window; it requires a fresh baseline qualified against the same upstream revision and the Aincrad3 source at the revision recorded in §11.3. Disposable build outputs and the historical `.work/aincrad3` extraction must be rebuilt/recreated from source; they are not continuation state. O4 depends on measured unit-emission share of E03, followed by O5 and P4. S8 and S9 remain parked behind exact proof closure. The owner still owes decisions on build budgets, units/sharing defaults and CI integration, the `redundant_cast` lint inconsistency, and O7 draft disposition/evidence. Upstream now supersedes the native-package stamp fix; do not submit that obsolete patch. The committed stack-bounds draft still lacks quiet-host measurements and the exact published-revision reproduction. Pushes and external submissions require a separate request.
+
+**Verified reboot audit.** `git worktree prune` and every linked worktree's status were checked again. The main checkout was clean before the document edit; the final commit contains only this document. The 29 in-repo lane worktrees are clean, and their committed branches are all unmerged and listed above. `.work/` is ignored by `.git/info/exclude` and lives on ext4, not memory storage. The campaign document and tracked agent definitions were scanned for temporary-path references; no separate lane briefs or agent definitions were found outside the tracked `.agents` definitions. The historical draft pointer to a disposable worktree was replaced by its committed draft in §14. All continuation documents and branch tips can be read from Git. Built compilers, Lake output, historical scratch evidence and workload extracts are disposable and are not needed to inspect/resume the handoff.
+
+**Audit exceptions.** The strict path/cleanliness audit cannot pass: 12 owner-managed linked worktrees are outside this repository, six dirty, and were preserved untouched. One external detached checkout is on temporary storage; its loss affects no campaign continuation state. It remains listed below as an explicit exception to the temporary-path scan. No campaign lane, build, test, watcher or loop remained at the final process inspection; the collaboration tree contained only the coordinator. No new lane or message was started. Scheduled-wakeup inspection is incomplete: `crontab -l` cannot open the user's crontab, the root crontab cannot be read because of permissions, and `atq` is unavailable. No campaign scheduler process was observed; that does not prove the absence of inaccessible scheduled jobs. Preserve all external worktrees; owner review is needed for their cleanup and for privileged scheduler inspection.
+
+| Preserved external worktree | Ref | Audited state |
+|---|---|---|
+| `/home/josh/d/aincrad3/.work/wt/goose-master-62366eb4` | `detached 62366eb4` | clean |
+| `/home/josh/d/goose-emitted-body-diagnostics` | `experiment/emitted-body-diagnostics` | dirty: measurements/ |
+| `/home/josh/d/goose-lint-aincrad-20261011` | `fix/lint-facts-limit-512mib` | clean |
+| `/home/josh/d/goose-rfc9-bce` | `perf/rfc9-bce-upstream-qualification` | dirty: build.log, checks/, configure.log |
+| `/home/josh/d/goose-rfc9-forkcursor` | `fix/codegen-local-name-cursor-rfc9-fork` | dirty: checks/, configure.log |
+| `/home/josh/d/goose-rfc9-namecursor` | `perf/codegen-local-name-cursor-rfc9` | dirty: build.log, checks/, configure.log |
+| `/home/josh/d/goose-rfc9-profile` | `detached a03a2ca6` | dirty: src/clone.h, src/codegen_emit.h, src/main.cpp, src/optimize.h, src/typecheck_calls.h, build.log, configure.log, measurements/, src/profile.h |
+| `/home/josh/d/goose-rfc9-upstream-base32` | `detached 32f8ff87` | dirty: build.log, configure.log |
+| `/home/josh/d/goose-update-latest-20261011` | `qualify/upstream-fee060c-20261011` | clean |
+| `/home/josh/d/goose-upstream-pr-generic-argument-backtracking` | `upstream-pr/generic-argument-backtracking` | clean |
+| `/home/josh/d/goose-upstream-pr-gs-004-reordered-reference-initializers` | `upstream-pr/gs-004-reordered-reference-initializers` | clean |
+| `/tmp/goose-linter-upstream-base` | `detached e023e99c` | clean |
+
+**Rehearsed resume commands.** These commands were executed from `env -i HOME="$HOME" PATH="$PATH" sh`. They inspect committed continuation files and every current unmerged branch, and open all linked worktrees without modifying their contents. Any build or measurement must wait for an explicit campaign resume and is not part of this rehearsal.
+
+```sh
+set -eu
+cd /home/josh/d/goose
+git status --short --branch
+git log -5 --oneline master
+git merge-base --is-ancestor 46356c26a94f0e1723b3b61ad56b93a7da70878f master
+git worktree list
+git branch --no-merged master
+sed -n '1,220p' docs/design/goose-ir-campaign.md
+for branch in $(git branch --no-merged master --format='%(refname:short)'); do
+    git show --no-patch --format='%h %s' "$branch"
+done
+for path in docs/design/goose-ir-campaign.md docs/design/goose-ir-spec.md     docs/design/goose-ir-validation.md docs/development.md docs/testing.md     semantics/coverage.json semantics/decisions.md semantics/trust.md     docs/design/upstream-drafts/native-stack-bounds-main-thread-musl.md     docs/design/upstream-drafts/native-package-rebuild-stamp.md; do
+    git show "master:$path" >/dev/null
+done
+git worktree list --porcelain | sed -n 's/^worktree //p' |
+while IFS= read -r path; do
+    git -C "$path" status --porcelain
+done
+```
 
 **Goal.** Two outcomes, pursued together. First, an executable, mechanically checked semantics for a Goose fragment and an opt-in IR pipeline that must agree with it. Second, a measurably shorter edit-build-verify loop for large programs: attribution of where build cost comes from, fewer emitted bodies with no weaker checking, and reuse of unchanged native code. A better-structured compiler that still regenerates and recompiles the whole program after a small edit does not meet the goal.
 
@@ -540,10 +650,13 @@ the pending statuses in the paused handoff above.)*
 
 - **Resumed 2026-10-14 on `master`.** The local `master` was fast-forwarded from `62366eb4` to `d440b9ab`, the former `goose-ir` tip (423 commits; no divergence). The `goose-ir` and `origin/goose-ir` refs were left unchanged, and no push was run. Continue with O3; prior post-run host-load failure invalidated its timing, so no budget is frozen.
 
+- **Paused after rebase 2026-10-14.** Rebased `master` onto upstream `46356c26a94f0e1723b3b61ad56b93a7da70878f`, preserving fork tooling and the frozen campaign with integration corrections folded into replayed commits. Rechecked 67 unmerged refs, 29 clean in-repo lane worktrees and 12 preserved external worktrees (six dirty); no lane was started or integrated. Debug build and focused integration checks passed, including the corrected native/display reader exemptions and obsolete write allowance. Replaced the stale handoff with the branch-by-branch paused handoff and rehearsed its inspection commands in a clean environment. Strict path audit cannot pass because of the preserved external worktrees; privileged cron and `at` inspection remains incomplete. O3 still has no valid timing result; no measurements or pushes were run by this executor.
+
 ## 14. For the owner afterwards
 
 - A confirmed linter inconsistency, not changed here because linter behaviour is frozen for the campaign: `redundant_cast` warnings carry an empty specialization list where `docs/lint/facts-v1.md` describes contexts. Minimal input in §12. Either the documentation or the producer should change, on the fork.
-- Upstream draft pull requests owed under O7 and deferred by O8, each with its branch and drafted description: (1) `upstream-pr/native-stack-bounds-main-thread-musl`, commit `7cd7526`, description at `.work/wt/u1/.work/pr/description.md` — still owed: the before/after `test/goose_in_goose` and normal-workload measurement on a quiet host, pushing the branch to the fork, running the exact Docker reproducer against the pushed commit, opening the draft. Note for the description: GCC 16.2 on musl could not be run; the musl results use GCC 15.2.
+- Upstream draft pull requests owed under O7 and deferred by O8, each with its branch and drafted description: (1) `upstream-pr/native-stack-bounds-main-thread-musl`, commit `7cd7526`, committed description at `docs/design/upstream-drafts/native-stack-bounds-main-thread-musl.md` — still owed: the before/after `test/goose_in_goose` and normal-workload measurement on a quiet host, pushing the branch to the fork, running the exact Docker reproducer against the pushed commit, opening the draft. Note for the description: GCC 16.2 on musl could not be run; the musl results use GCC 15.2.
+- The native-package rebuild draft is committed at `docs/design/upstream-drafts/native-package-rebuild-stamp.md`, on branch `upstream-pr/native-package-rebuild-stamp`. Upstream `c57587a1` and later native-build changes supersede its implementation; reassess its disposition before any external action.
 - §11's attribution: whether the frontend or native compilation dominates Aincrad3's loop decides whether `X1` and `X2` are the next campaign.
 - §8 and `semantics/decisions.md`: every contract change and every disagreement with the legacy compiler.
 - `semantics/coverage.json`: theorems passing, parked, and the reviewer's answers.
