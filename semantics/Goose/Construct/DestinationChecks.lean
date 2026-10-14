@@ -88,4 +88,20 @@ private def limitedOverflow : ConstructionM Unit := do
       state.storage[0]?.map (fun s => s.bytes.data.toList.map UInt8.toNat) == some [10]
   | _ => false
 
+private def staleAbandon : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let completed ← openDestination storage (capability .elementRun) .elements (some 1)
+  writeElement completed (bytes [10])
+  finishDestination completed
+  publishOperation [completed]
+  let independent ← openDestination storage (capability .elementRun) .elements (some 1)
+  writeElement independent (bytes [20])
+  abandonTree completed
+
+#guard match staleAbandon ConstructionState.initial with
+  | .fault .protocol state => state.events ==
+      [.begin 0, .write 0 0, .publish 0, .begin 1, .write 1 0] &&
+      state.storage[0]?.map (fun s => s.bytes.data.toList.map UInt8.toNat) == some [10, 20]
+  | _ => false
+
 end Goose.Construct.DestinationChecks

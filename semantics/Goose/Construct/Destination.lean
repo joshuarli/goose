@@ -245,6 +245,7 @@ def abandonDestination (id : DestinationId) : ConstructionM Unit := do
 
 def abandonTree (id : DestinationId) : ConstructionM Unit := do
   let parent ← lookupDestination id
+  if !active parent then ConstructionM.fail .protocol
   let state ← ConstructionM.get
   let descendants := state.destinations.toList.reverse.filter fun destination =>
     destination.storage == parent.storage &&
