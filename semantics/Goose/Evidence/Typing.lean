@@ -576,6 +576,62 @@ inductive ParamValuesTy (roots : RootDeclarations) : List (ValueId × VTy) → L
       (head : WeakCellTy roots arg param.2) (tail : ParamValuesTy roots params args) :
       ParamValuesTy roots (param :: params) (arg :: args)
 
+inductive CallValuesTy (roots : RootDeclarations) : List Ty → List Val → Prop
+  | nil : CallValuesTy roots [] []
+  | cons {ty value types values}
+      (head : WeakValueTy roots value ty) (tail : CallValuesTy roots types values) :
+      CallValuesTy roots (ty :: types) (value :: values)
+
+theorem CallValuesTy.entry {roots : RootDeclarations} {types : List Ty} {values : List Val}
+    {params : List (ValueId × VTy)} (typed : CallValuesTy roots types values)
+    (sameTypes : params.map Prod.snd = types.map VTy.data) :
+    ParamValuesTy roots params (values.map RVal.val) := by
+  induction typed generalizing params with
+  | nil =>
+    cases params <;> simp_all
+    exact .nil
+  | @cons ty value types values head tail ih =>
+    cases params with
+    | nil => simp at sameTypes
+    | cons param params =>
+      simp only [List.map_cons, List.cons.injEq] at sameTypes
+      apply ParamValuesTy.cons
+      · rw [sameTypes.1]
+        exact head
+      · exact ih sameTypes.2
+
+theorem WeakFrameTy.callArgs {roots : RootDeclarations} {types : Array (Option VTy)}
+    {fr : Frame} {params : List Ty} {ids : List ValueId} {values : List Val} {before after : St}
+    (typed : WeakFrameTy roots types fr) (arity : params.length = ids.length)
+    (metadata : ∀ pair ∈ params.zip ids, ∃ source,
+      types[pair.2]? = some (some (.data source)) ∧ source.passableTo pair.1 = true)
+    (read : mapList (Goose.GIR.getVal fr) ids before = .ok values after) :
+    CallValuesTy roots params values ∧ after = before := by
+  induction params generalizing ids values before after with
+  | nil =>
+    have empty : ids = [] := List.length_eq_zero_iff.mp arity.symm
+    subst ids
+    simp only [mapList, pure_apply, Res.ok.injEq] at read
+    obtain ⟨rfl, rfl⟩ := read
+    exact ⟨.nil, rfl⟩
+  | cons param params ih =>
+    cases ids with
+    | nil => simp at arity
+    | cons id ids =>
+      simp only [List.length_cons, Nat.succ.injEq] at arity
+      obtain ⟨source, headMetadata, passing⟩ := metadata (param, id) (by simp)
+      simp only [mapList] at read
+      obtain ⟨value, middle, found, read⟩ := m_bind_ok read
+      obtain ⟨headTyped, sameState⟩ := typed.getVal headMetadata found
+      subst middle
+      obtain ⟨tail, middle, foundTail, read⟩ := m_bind_ok read
+      obtain ⟨tailTyped, sameState⟩ := ih arity
+        (fun pair present => metadata pair (List.mem_cons_of_mem _ present)) foundTail
+      subst middle
+      simp only [pure_apply, Res.ok.injEq] at read
+      obtain ⟨rfl, rfl⟩ := read
+      exact ⟨.cons (headTyped.passable passing) tailTyped, rfl⟩
+
 theorem ParamValuesTy.mono {before after : RootDeclarations} {params : List (ValueId × VTy)}
     {args : List RVal} (extension : before.Extends after) (typed : ParamValuesTy before params args) :
     ParamValuesTy after params args := by

@@ -76,6 +76,20 @@ theorem WeakValueTy.ownerFlat {roots : RootDeclarations} {value : Val} {ty eleme
   cases ty <;> try exact typed
   all_goals simp [Ty.ownerElem?] at owner
 
+theorem WeakValueTy.passable {roots : RootDeclarations} {value : Val} {source target : Ty}
+    (typed : WeakValueTy roots value source) (passing : source.passableTo target = true) :
+    WeakValueTy roots value target := by
+  cases source <;> cases target <;>
+    simp only [Ty.passableTo, Bool.and_eq_true, beq_iff_eq] at passing <;>
+    first
+    | (simp at passing; done)
+    | (obtain ⟨rfl, _⟩ := passing; exact typed)
+    | (cases passing; exact typed)
+    | (injection passing with sameElement sameCount
+       subst sameElement
+       first | (subst sameCount; exact typed) | exact typed)
+    | exact typed
+
 theorem DeclaredLocation.mono {before after : RootDeclarations} {location : Loc} {ty : Ty}
     (extension : before.Extends after) (declared : DeclaredLocation before location ty) :
     DeclaredLocation after location ty := by
