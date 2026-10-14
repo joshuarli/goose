@@ -337,4 +337,16 @@ private def namedPackedLimitedOverflow : ConstructionM Unit := do
         .relocate 0 .headerRemoval]
   | _ => false
 
+
+private def abandonLimitedExtent : ConstructionM Unit := do
+  let storage ← reserveStorage (bytes [10,20,30]) 1
+  let destination ← openDestination storage (capability .elementRun) (.limited 5 1) (some 3)
+  writeElement destination (bytes [99])
+  writeElement destination (bytes [88])
+  writeElement destination (bytes [77])
+  abandonTree destination
+
+#guard observe abandonLimitedExtent == some ([10,99,88], 1,
+  [.begin 0,.write 0 0,.write 0 1,.write 0 2,.abandon 0])
+
 end Goose.Construct.DestinationChecks

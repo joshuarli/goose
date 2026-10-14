@@ -49,6 +49,7 @@ structure PendingDestination where
   use : DestinationUse
   progress : DestinationProgress
   writeEnd : Nat
+  rollbackEnd : Nat
   deriving Repr
 
 def PendingDestination.storage (destination : PendingDestination) : StorageId :=
@@ -199,7 +200,8 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
   if start > storage.bytes.size then ConstructionM.fail .storage
   let capability := { capability with id := id, start := start }
   let writeEnd := start + if hasPrefix layout capability.request then 4 else 0
-  let destination : PendingDestination := ⟨capability, backing, layout, .receiver, .open 0, writeEnd⟩
+  let destination : PendingDestination := ⟨capability, backing, layout, .receiver, .open 0, writeEnd,
+    match layout with | .limited _ _ => storage.bytes.size | _ => start⟩
   ConstructionM.set { state with destinations := state.destinations.push destination }
   if hasPrefix layout capability.request then
     replaceStorage backing.writeStorage { storage with bytes := storage.bytes ++ lengthPrefix }
@@ -249,7 +251,8 @@ def openChild (parentId : DestinationId) (logicalType : Ty) (layout : ReceivingL
         id := id, layout := logicalType, logicalType := logicalType,
         request := .value, start := parent.writeEnd }
       let child : PendingDestination := ⟨capability, .direct parent.storage, layout, .child parentId, .open 0,
-        capability.start + if hasPrefix layout .value then 4 else 0⟩
+        capability.start + (if hasPrefix layout .value then 4 else 0),
+        match parent.layout with | .limited _ _ => storage.bytes.size | _ => capability.start⟩
       ConstructionM.set { state with destinations := state.destinations.push child }
       replaceDestination parentId { parent with progress := .suspended count id }
       if hasPrefix layout .value then
@@ -347,9 +350,7 @@ def abandonDestination (id : DestinationId) : ConstructionM Unit := do
   | .open _ | .built _ =>
       let storage ← lookupStorage destination.storage
       replaceStorage destination.storage
-        { storage with bytes := match destination.layout with
-          | .limited _ _ => storage.bytes
-          | _ => storage.bytes.extract 0 destination.capability.start }
+        { storage with bytes := storage.bytes.extract 0 destination.rollbackEnd }
       replaceDestination id { destination with progress := .abandoned }
       emit (.abandon id)
   | .suspended _ _ | .exiting _ _ => ConstructionM.fail .protocol
@@ -397,7 +398,8 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   let capability := { superseded.capability with id := id, start := storage.bytes.size }
   let replacement : PendingDestination :=
     ⟨capability, superseded.backing, superseded.layout, .replacement supersededId, .open 0,
-      capability.start + if hasPrefix superseded.layout superseded.capability.request then 4 else 0⟩
+      capability.start + (if hasPrefix superseded.layout superseded.capability.request then 4 else 0),
+      capability.start⟩
   ConstructionM.set { state with destinations := state.destinations.push replacement }
   replaceDestination supersededId { superseded with progress := .exiting count id }
   if hasPrefix superseded.layout superseded.capability.request then
@@ -474,7 +476,8 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
     capability := { replacement.capability with start := superseded.capability.start }
     use := superseded.use
     progress := .built count
-    writeEnd := replacement.writeEnd - (replacement.capability.start - superseded.capability.start) }
+    writeEnd := replacement.writeEnd - (replacement.capability.start - superseded.capability.start)
+    rollbackEnd := superseded.rollbackEnd }
   if let some (parentId, parent) := parentUpdate then
     replaceDestination parentId parent
   if superseded.capability.start < replacement.capability.start then
@@ -505,7 +508,7 @@ def openExtension (parentId : DestinationId) (request : ConstructionRequest)
   let count ← match parent.progress with
     | .built count => pure count
     | _ => ConstructionM.fail .protocol
-  let _ ← lookupStorage parent.storage
+  let storage ← lookupStorage parent.storage
   if let some additional := knownCount then
     match parent.layout, parent.backing with
     | .limited capacity _, .direct _ =>
@@ -525,7 +528,10 @@ def openExtension (parentId : DestinationId) (request : ConstructionRequest)
   let id := state.destinations.size
   let capability := { parent.capability with id := id, request := request, start := start }
   let child : PendingDestination :=
-    ⟨capability, backing, .elements, .child parentId, .open 0, start⟩
+    ⟨capability, backing, .elements, .child parentId, .open 0, start,
+      match backing, parent.layout with
+      | .direct _, .limited _ _ => storage.bytes.size
+      | _, _ => start⟩
   ConstructionM.set { state with destinations := state.destinations.push child }
   replaceDestination parentId { parent with progress := .suspended count id }
   emit (.begin id)
