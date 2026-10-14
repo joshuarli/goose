@@ -715,25 +715,27 @@ theorem runtime_finish_channel_frames_objects (layout : LayoutEnv) (origin : Ori
       apply runtime_bind_frames_objects (getDestination id)
       · exact runtime_get_destination_frames_objects id
       · intro destination current
-        split
-        · dsimp only
-          simpa [Bool.not_true,Bool.and_false] using
-            runtime_lift_frames_objects origin (adaptDestinationType id result) current
-        · dsimp only
-          by_cases header : (destination.layout == .packed && destination.capability.request == .value) = true
-          · simp only [Bool.not_false,Bool.and_true,header,↓reduceIte]
-            apply runtime_bind_frames_objects (liftConstruction origin (removeConstructionHeader id))
-            · exact runtime_lift_frames_objects origin (removeConstructionHeader id)
-            · intro _ middle
-              apply runtime_bind_frames_objects (receivingLayout layout destination.capability.layout)
-              · exact runtime_receiving_layout_frames_objects layout destination.capability.layout
-              · intro receiving finalState
-                apply runtime_bind_frames_objects (liftConstruction origin (restoreReceivingLayout id receiving))
-                · exact runtime_lift_frames_objects origin (restoreReceivingLayout id receiving)
-                · intro _ after
-                  exact runtime_lift_frames_objects origin (adaptDestinationType id result) after
-          · simpa [Bool.not_false,Bool.and_true,header] using
+        by_cases adapted : destination.adaptation.isSome = true
+        · simpa only [adapted,↓reduceIte] using
+            runtime_lift_frames_objects origin (normalizeProducerDestination id result) current
+        · simp [adapted]
+          split
+          · simpa [Bool.not_true,Bool.and_false] using
               runtime_lift_frames_objects origin (adaptDestinationType id result) current
+          · by_cases header : destination.layout = .packed ∧ destination.capability.request = .value
+            · simp only [header,and_true,↓reduceIte]
+              apply runtime_bind_frames_objects (liftConstruction origin (removeConstructionHeader id))
+              · exact runtime_lift_frames_objects origin (removeConstructionHeader id)
+              · intro _ middle
+                apply runtime_bind_frames_objects (receivingLayout layout destination.capability.layout)
+                · exact runtime_receiving_layout_frames_objects layout destination.capability.layout
+                · intro receiving finalState
+                  apply runtime_bind_frames_objects (liftConstruction origin (restoreReceivingLayout id receiving))
+                  · exact runtime_lift_frames_objects origin (restoreReceivingLayout id receiving)
+                  · intro _ after
+                    exact runtime_lift_frames_objects origin (adaptDestinationType id result) after
+            · simpa [Bool.not_false,Bool.and_true,header] using
+                runtime_lift_frames_objects origin (adaptDestinationType id result) current
 
 
 private theorem runtime_forin_loop_frames (field : ExecutionState → γ) (values : List α)
@@ -901,25 +903,27 @@ theorem runtime_finish_channel_frames_output (layout : LayoutEnv) (origin : Orig
       apply runtime_bind_frames_output (getDestination id)
       · exact runtime_get_destination_frames_output id
       · intro destination current
-        split
-        · dsimp only
-          simpa [Bool.not_true,Bool.and_false] using
-            runtime_lift_frames_output origin (adaptDestinationType id result) (adaptDestinationType_stdout id result) current
-        · dsimp only
-          by_cases header : (destination.layout == .packed && destination.capability.request == .value) = true
-          · simp only [Bool.not_false,Bool.and_true,header,↓reduceIte]
-            apply runtime_bind_frames_output (liftConstruction origin (removeConstructionHeader id))
-            · exact runtime_lift_frames_output origin (removeConstructionHeader id) (removeConstructionHeader_stdout id)
-            · intro _ middle
-              apply runtime_bind_frames_output (receivingLayout layout destination.capability.layout)
-              · exact runtime_receiving_layout_frames_output layout destination.capability.layout
-              · intro receiving finalState
-                apply runtime_bind_frames_output (liftConstruction origin (restoreReceivingLayout id receiving))
-                · exact runtime_lift_frames_output origin (restoreReceivingLayout id receiving) (restoreReceivingLayout_stdout id receiving)
-                · intro _ after
-                  exact runtime_lift_frames_output origin (adaptDestinationType id result) (adaptDestinationType_stdout id result) after
-          · simpa [Bool.not_false,Bool.and_true,header] using
+        by_cases adapted : destination.adaptation.isSome = true
+        · simpa only [adapted,↓reduceIte] using
+            runtime_lift_frames_output origin (normalizeProducerDestination id result) (normalizeProducerDestination_stdout id result) current
+        · simp [adapted]
+          split
+          · simpa [Bool.not_true,Bool.and_false] using
               runtime_lift_frames_output origin (adaptDestinationType id result) (adaptDestinationType_stdout id result) current
+          · by_cases header : destination.layout = .packed ∧ destination.capability.request = .value
+            · simp only [header,and_true,↓reduceIte]
+              apply runtime_bind_frames_output (liftConstruction origin (removeConstructionHeader id))
+              · exact runtime_lift_frames_output origin (removeConstructionHeader id) (removeConstructionHeader_stdout id)
+              · intro _ middle
+                apply runtime_bind_frames_output (receivingLayout layout destination.capability.layout)
+                · exact runtime_receiving_layout_frames_output layout destination.capability.layout
+                · intro receiving finalState
+                  apply runtime_bind_frames_output (liftConstruction origin (restoreReceivingLayout id receiving))
+                  · exact runtime_lift_frames_output origin (restoreReceivingLayout id receiving) (restoreReceivingLayout_stdout id receiving)
+                  · intro _ after
+                    exact runtime_lift_frames_output origin (adaptDestinationType id result) (adaptDestinationType_stdout id result) after
+            · simpa [Bool.not_false,Bool.and_true,header] using
+                runtime_lift_frames_output origin (adaptDestinationType id result) (adaptDestinationType_stdout id result) current
 
 
 
