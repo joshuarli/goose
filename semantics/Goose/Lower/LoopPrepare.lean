@@ -18,6 +18,42 @@ theorem prepareLoopFlow_none (env : Env) : prepareLoopFlow env none = prepareRet
   funext flow
   simp [prepareLoopFlow, bind_pure]
 
+theorem prepareLoopFlow_normal_success {env : Env} {loop : Option LoopCtx}
+    {flow : Flow} {value : Val} {before after : St}
+    (h : prepareLoopFlow env loop flow before = .ok (.normal value) after) :
+    flow = .normal value ∧ after = before := by
+  cases flow with
+  | normal returned =>
+    cases loop <;>
+      simp only [prepareLoopFlow, prepareReturn, prepareLoopExit, pure_bind, pure_apply,
+        Res.ok.injEq, Flow.normal.injEq] at h <;>
+      exact ⟨congrArg Flow.normal h.1, h.2.symm⟩
+  | ret returned =>
+    obtain ⟨middle, hrelease, _, _⟩ := releaseScopes_result env env.scopes before
+    cases loop <;> simp only [prepareLoopFlow, prepareReturn, prepareLoopExit,
+      bind_apply, hrelease, pure_apply] at h <;> cases h
+  | brk | cont =>
+    cases loop with
+    | none => simp only [prepareLoopFlow, prepareReturn, pure_bind, pure_apply] at h; cases h
+    | some context =>
+      obtain ⟨middle, hrelease, _, _⟩ := releaseScopes_result env
+        (env.scopes.take (env.scopes.length - context.depth)) before
+      simp only [prepareLoopFlow, prepareReturn, prepareLoopExit, pure_bind,
+        bind_apply, hrelease, pure_apply] at h
+      cases h
+
+theorem preparedLoopFlow_normal_success {env : Env} {loop : Option LoopCtx}
+    {source : M Flow} {value : Val} {before after : St}
+    (h : (source >>= prepareLoopFlow env loop) before = .ok (.normal value) after) :
+    source before = .ok (.normal value) after := by
+  rw [bind_apply] at h
+  cases hsource : source before with
+  | stop reason state => rw [hsource] at h; cases h
+  | ok flow state =>
+    rw [hsource] at h
+    obtain ⟨rfl, rfl⟩ := prepareLoopFlow_normal_success h
+    rfl
+
 def loopStmtsTail (n : Nat) (cfg : Cfg) (env : Env) (loop : Option LoopCtx)
     (rest : List Stmt) : Flow → M Flow
   | .normal _ => execStmts n cfg env rest >>= prepareLoopFlow env loop
