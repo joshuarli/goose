@@ -96,6 +96,21 @@ inline string UnitFileDigest(const string &path) {
     return UnitReadFile(path, data) ? Sha256::Of(data).Hex() : string();
 }
 
+inline bool UnitExecutableIdentityOf(const string &path, long long &size, string &digest) {
+    string contents;
+    if (!UnitReadFile(path, contents)) return false;
+    size = (long long)contents.size();
+    digest = Sha256::Of(contents).Hex();
+    return true;
+}
+
+inline bool UnitExecutableMatches(const string &path, long long size, const string &digest) {
+    long long actual_size;
+    string actual_digest;
+    return UnitExecutableIdentityOf(path, actual_size, actual_digest) &&
+           actual_size == size && actual_digest == digest;
+}
+
 // The digest of a program the build runs or links with, found again only when
 // its size or modification time changes.
 inline string UnitBinaryDigest(string path) {
@@ -625,8 +640,8 @@ inline int BuildUnitObjects(UnitsBuildInput &in, const string &runtime_object) {
     if (!in.rebuild && !opts.dryrun && UnitReadFile(in.store.dir + "/link.rec", linkrec)) {
         auto lines = UnitLines(linkrec);
         if (lines.size() == 5 && lines[0] == "goose-unit-link/2" && lines[1] == linkdigest &&
-            lines[2] == in.exe && UnitFileSize(in.exe) == atoll(lines[3].c_str()) &&
-            UnitFileDigest(in.exe) == lines[4])
+            lines[2] == in.exe &&
+            UnitExecutableMatches(in.exe, atoll(lines[3].c_str()), lines[4]))
             skip = true;
     }
     if (opts.dryrun || opts.verbose) {

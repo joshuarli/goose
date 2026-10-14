@@ -1797,7 +1797,10 @@ def main():
             if not ok:
                 r.fail(f"compiler-cc {name}", log)
             else:
-                code, out, err = tc.run_capture([out_exe])
+                run_args = [out_exe]
+                if name == "compiler_units_builder":
+                    run_args.extend((exe, tc.REPO_ROOT / "test" / "scale" / "units_contract.goose"))
+                code, out, err = tc.run_capture(run_args)
                 if code != 0 or tc.sanitizer_failure(err):
                     r.fail(f"compiler {name}", out + err)
                 else:
@@ -1805,6 +1808,16 @@ def main():
         for name in ("compiler_roots", "compiler_containers", "compiler_ident", "compiler_units",
                      "compiler_units_builder", "compiler_gir", "compiler_reader") if wanted("extra/compiler_units") else ():
             r.show_task(compiler_unit, name)
+
+        def units_last_record():
+            path = HERE / "scale" / "units_last_record.py"
+            code, out, err = tc.run_capture([sys.executable, path, "--goose", exe])
+            if code:
+                r.fail("units-last-record", out + err)
+            else:
+                r.ok("units-last-record")
+        if wanted("extra/compiler_units"):
+            r.show_task(units_last_record)
 
         # Direct runtime lifecycle checks use small region limits and allocator
         # instrumentation that cannot be expressed by a Goose program. Keep

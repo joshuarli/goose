@@ -205,6 +205,175 @@ static void TestNativeUnitBuilderContractDimensions() {
     assert(!ec);
 }
 
-int main() {
+static string RuntimeVersionOf(const string &goose) {
+    auto result = RunProcess({ goose, "version" });
+    assert(result.started && result.code == 0);
+    auto end = result.output.find_first_of("\r\n");
+    auto line = result.output.substr(0, end);
+    const string prefix = "goose runtime ";
+    assert(line.compare(0, prefix.size(), prefix) == 0);
+    return line.substr(prefix.size());
+}
+
+static UnitContractValues SourceContractValues(const string &goose, const Toolchain &tc,
+                                               const BuildOptions &opts) {
+    UnitContractValues values;
+    values.goose_digest = UnitBinaryDigest(goose);
+    values.runtime_version = RuntimeVersionOf(goose);
+    values.args = { "--standalone", "-O1" };
+    values.c_compiler_digest = UnitBinaryDigest(tc.cc);
+    values.c_compiler_version = tc.version;
+    values.c_compiler_name = tc.name;
+    values.c_compiler_style = tc.style;
+    Builder builder { tc, opts, stderr };
+    values.c_flags = builder.CFlags();
+    values.system_libs = builder.SystemLibs();
+    values.target = UnitHostTarget();
+    for (auto name : { "GOOSE_STDLIB", "GOOSE_CC", "GOOSE_RUNTIME" }) {
+        auto value = getenv(name);
+        values.environment.push_back({ name, value ? value : "" });
+    }
+    return values;
+}
+
+static vector<pair<string, string>> ReadEmittedUnits(const string &dir, const string &store) {
+    vector<pair<string, string>> sources;
+    string runtime_header;
+    for (auto &entry : filesystem::directory_iterator(filesystem::path(dir))) {
+        if (!entry.is_regular_file()) continue;
+        auto name = entry.path().filename().string();
+        string text;
+        assert(UnitReadFile(entry.path().string(), text));
+        if (name == "goose_runtime.h") runtime_header = std::move(text);
+        else if (name.size() >= 2 && name.compare(name.size() - 2, 2, ".c") == 0) {
+            assert(UnitWriteFile(store + "/" + name, text));
+            sources.emplace_back(name, std::move(text));
+        }
+    }
+    assert(!runtime_header.empty() && !sources.empty());
+    assert(UnitWriteFile(store + "/goose_runtime.h", runtime_header));
+    return sources;
+}
+
+static ProcessResult BuildCleanSource(const string &goose, const string &source,
+                                      const string &cfile, const string &exe,
+                                      const Toolchain &tc, const vector<string> &c_flags,
+                                      const vector<string> &system_libs, const string &cwd) {
+    auto emit = RunProcess({ goose, "--standalone", "-O1", "-o", cfile, source }, cwd);
+    assert(emit.started && emit.code == 0);
+    vector<string> command = { tc.cc };
+    for (auto &flag : c_flags) command.push_back(flag);
+    if (tc.style == "msvc") {
+        command.push_back(cfile);
+        command.push_back(cat("/Fe:", exe));
+    } else {
+        command.push_back(cfile);
+        command.push_back("-o");
+        command.push_back(exe);
+        for (auto &library : system_libs) command.push_back(library);
+    }
+    auto compile = RunProcess(command, cwd);
+    assert(compile.started && compile.code == 0);
+    return RunProcess({ exe }, cwd);
+}
+
+static BuiltProgram BuildEmittedSource(const string &goose, const string &emitted_dir,
+                                       const string &builddir, const string &exe,
+                                       const UnitContractValues &values, const Toolchain &tc,
+                                       const BuildOptions &opts) {
+    BuiltProgram result;
+    result.contract = MakeContract(values);
+    UnitsBuildInput in;
+    in.tc = &tc;
+    in.opts = &opts;
+    in.contract = result.contract;
+    in.store.dir = UnitStoreDirectory(builddir, result.contract);
+    in.exe = exe;
+    in.verify = true;
+    in.msgs = stderr;
+    std::error_code ec;
+    filesystem::create_directories(filesystem::path(in.store.Units()), ec);
+    assert(!ec);
+    unit_stats.files = ReadEmittedUnits(emitted_dir, in.store.Units());
+    units_build = UnitsBuildReport();
+    assert(BuildUnitObjects(in, "") == 0);
+    result.report = units_build;
+    result.run = RunProcess({ exe });
+    return result;
+}
+
+static void TestEmittedSourceUnitBuilder(const string &goose, const string &source) {
+    auto root = AbsolutePath(".work/tmp/compiler_units_emitted");
+    std::error_code ec;
+    filesystem::remove_all(filesystem::path(root), ec);
+    assert(!ec);
+    filesystem::create_directories(filesystem::path(root), ec);
+    assert(!ec);
+    SetEnvVar("GOOSE_HOME", root + "/goose-home");
+    filesystem::create_directories(filesystem::path(GooseHome()), ec);
+    assert(!ec);
+
+    Toolchain tc;
+    string why;
+    assert(FindToolchain("", tc, why));
+    BuildOptions opts;
+    opts.standalone = true;
+    auto base_values = SourceContractValues(goose, tc, opts);
+    auto variant_values = base_values;
+    variant_values.c_flags.push_back(tc.style == "msvc" ? "/Oy-" : "-fno-omit-frame-pointer");
+
+    auto emitted_dir = root + "/emitted";
+    auto emitted = RunProcess({ goose, "--standalone", "-O1", "--emit-units", emitted_dir, source }, root);
+    assert(emitted.started && emitted.code == 0);
+    auto clean_base = BuildCleanSource(goose, source, root + "/clean-base.c", root + "/clean-base",
+                                       tc, base_values.c_flags, base_values.system_libs, root);
+    auto clean_variant = BuildCleanSource(goose, source, root + "/clean-variant.c", root + "/clean-variant",
+                                          tc, variant_values.c_flags, variant_values.system_libs, root);
+    assert(clean_base.started && clean_base.code == 0 && clean_variant.started &&
+           clean_variant.code == 0 && clean_base.output == clean_variant.output);
+
+    #ifdef _WIN32
+        auto suffix = string(".exe");
+    #else
+        auto suffix = string();
+    #endif
+    auto program = root + "/program" + suffix;
+    auto base = BuildEmittedSource(goose, emitted_dir, root, program, base_values, tc, opts);
+    assert(base.run.started && base.run.code == clean_base.code && base.run.output == clean_base.output);
+    auto unit_count = (size_t)base.report.units_written;
+    assert(unit_count > 0 && base.report.missed == (long long)unit_count &&
+           base.report.reused == 0 && InvocationUnits(base.report.compiles) == unit_count);
+    auto base_snapshot = StoreSnapshot(UnitStoreDirectory(root, base.contract));
+
+    auto variant = BuildEmittedSource(goose, emitted_dir, root, program, variant_values, tc, opts);
+    assert(variant.contract.digest != base.contract.digest);
+    assert(UnitStoreDirectory(root, variant.contract) != UnitStoreDirectory(root, base.contract));
+    assert(variant.run.started && variant.run.code == clean_variant.code &&
+           variant.run.output == clean_variant.output);
+    assert(variant.report.units_written == (long long)unit_count && variant.report.missed == (long long)unit_count &&
+           variant.report.reused == 0 && InvocationUnits(variant.report.compiles) == unit_count);
+    assert(StoreSnapshot(UnitStoreDirectory(root, base.contract)) == base_snapshot);
+    auto variant_snapshot = StoreSnapshot(UnitStoreDirectory(root, variant.contract));
+
+    auto base_back = BuildEmittedSource(goose, emitted_dir, root, program, base_values, tc, opts);
+    assert(base_back.run.started && base_back.run.code == clean_base.code &&
+           base_back.run.output == clean_base.output);
+    assert(base_back.report.reused == (long long)unit_count && base_back.report.missed == 0 &&
+           base_back.report.compiles.empty() && InvocationUnits(base_back.report.verification) == unit_count);
+    assert(StoreSnapshot(UnitStoreDirectory(root, variant.contract)) == variant_snapshot);
+
+    auto variant_back = BuildEmittedSource(goose, emitted_dir, root, program, variant_values, tc, opts);
+    assert(variant_back.run.started && variant_back.run.code == clean_variant.code &&
+           variant_back.run.output == clean_variant.output);
+    assert(variant_back.report.reused == (long long)unit_count && variant_back.report.missed == 0 &&
+           variant_back.report.compiles.empty() && InvocationUnits(variant_back.report.verification) == unit_count);
+    assert(StoreSnapshot(UnitStoreDirectory(root, base.contract)) == base_snapshot);
+    filesystem::remove_all(filesystem::path(root), ec);
+    assert(!ec);
+}
+
+int main(int argc, char **argv) {
     TestNativeUnitBuilderContractDimensions();
+    assert(argc == 1 || argc == 3);
+    if (argc == 3) TestEmittedSourceUnitBuilder(argv[1], argv[2]);
 }

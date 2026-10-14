@@ -1352,21 +1352,20 @@ int Main(int argc, char **argv) {
             rep.enabled = true;
             rep.store = ur.store.dir;
             rep.contract = ur.contract.digest;
-            // The no-op check: every input the last successful build read, as it was.
             string last;
             auto hit = false;
             if (!buildopts.rebuild && !buildopts.dryrun &&
                 UnitReadFile(ur.store.dir + "/last.rec", last)) {
                 auto lines = UnitLines(last);
-                // goose-build-record/1, cwd, exe, exe size, then the inputs.
-                if (lines.size() >= 4 && lines[0] == "goose-build-record/1" &&
+                if (lines.size() >= 5 && lines[0] == "goose-build-record/2" &&
                     lines[1] == cat("cwd ", filesystem::current_path().string()) &&
-                    lines[2].compare(0, 4, "exe ") == 0 && lines[3].compare(0, 9, "exe_size ") == 0) {
+                    lines[2].compare(0, 4, "exe ") == 0 && lines[3].compare(0, 9, "exe_size ") == 0 &&
+                    lines[4].compare(0, 11, "exe_sha256 ") == 0) {
                     auto exe_path = lines[2].substr(4);
-                    vector<string> inputs(lines.begin() + 4, lines.end());
-                    // The same executable as was asked for, and as it was made.
+                    vector<string> inputs(lines.begin() + 5, lines.end());
                     hit = (buildopts.exe.empty() || buildopts.exe == exe_path) &&
-                          UnitFileSize(exe_path) == atoll(lines[3].c_str() + 9) &&
+                          UnitExecutableMatches(exe_path, atoll(lines[3].c_str() + 9),
+                                                lines[4].substr(11)) &&
                           InputsUnchanged(inputs);
                     if (hit) {
                         string o, e;
@@ -1492,8 +1491,13 @@ int Main(int argc, char **argv) {
                         if (!eligible) units_build.no_op_note = "the program has a native part built from its own C";
                         else if (ur.out.empty()) units_build.no_op_note = "the compile's output could not be kept";
                         else {
-                            string rec = cat("goose-build-record/1\ncwd ", filesystem::current_path().string(),
-                                             "\nexe ", in.exe, "\nexe_size ", UnitFileSize(in.exe), "\n");
+                            long long exe_size;
+                            string exe_digest;
+                            if (!UnitExecutableIdentityOf(in.exe, exe_size, exe_digest))
+                                throw CompileError { cat("cannot read the built executable for its cache record: ", in.exe) };
+                            string rec = cat("goose-build-record/2\ncwd ", filesystem::current_path().string(),
+                                             "\nexe ", in.exe, "\nexe_size ", exe_size,
+                                             "\nexe_sha256 ", exe_digest, "\n");
                             rec += ur.inputs.Text();
                             UnitPublish(ur.store.dir + "/last.stdout", ur.out);
                             UnitPublish(ur.store.dir + "/last.stderr", ur.err);
