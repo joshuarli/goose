@@ -86,6 +86,19 @@ set -e
 [ "$out" = '["done",["exited",7],""]' ] && [ "$code" -eq 0 ] ||
     { echo "FAIL gir_accepted_unreachable.json: run gave $out ($code)" >&2; status=1; }
 
+# The accepted evidence fixture pins every new wire record and executes the
+# unchecked index after the certificate checker has accepted it.
+evidence=$here/gir_valid_v080_evidence.json
+for tag in i_index_proven certificate f_ge0 f_lt f_len_ge f_view_len_ge; do
+    grep -q "\"$tag\"" "$evidence" || { echo "FAIL evidence fixture omits $tag" >&2; status=1; }
+done
+set +e
+out=$("$tool" gir-run "$evidence")
+code=$?
+set -e
+[ "$out" = '["done",["returned"],""]' ] && [ "$code" -eq 0 ] ||
+    { echo "FAIL gir_valid_v080_evidence.json: run gave $out ($code)" >&2; status=1; }
+
 for f in "$here"/*.json; do
     grep -q "^$(basename "$f")	" "$here/INDEX" || { echo "FAIL $(basename "$f") is not in INDEX" >&2; status=1; }
 done

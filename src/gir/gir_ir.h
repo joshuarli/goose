@@ -16,7 +16,8 @@ using GirTypeId = CoreTypeId;
 enum class GirOp : uint8_t {
     // Instructions that define a value, high stage.
     Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, Load,
-    Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, Push, Pop, Call, Arr, Fill, Struct, Field,
+    Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
+    Struct, Field,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
     HdrLen,
@@ -39,6 +40,7 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::BoolCmp: case GirOp::Next: case GirOp::Slot: case GirOp::Global: case GirOp::Elem:
         case GirOp::Freeze: case GirOp::Load: case GirOp::Snap: case GirOp::SliceView:
         case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::ArrayLen: case GirOp::Index:
+        case GirOp::IndexProven:
         case GirOp::Push: case GirOp::Pop: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
         case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
@@ -92,7 +94,8 @@ struct GirPart {
 //   Freeze/Load/SliceView/ViewLen/ArrayLen: res, a
 //   Snap: res, snapshot mode, a
 //   ViewSlice: res, mut, a (view), lo, hi, org
-//   Index: res, a (view), b (index), org     Push: res, a (ref), b (value), org
+//   Index: res, a (view), b (index), org     IndexProven: res, a (view), b (index)
+//   Push: res, a (ref), b (value), org
 //   Pop: res, a (owner reference), org
 //   Call: res, idx (function), vals, org     Arr: res, ty, vals      Fill: res, ty, a
 //   Struct: res, ty, vals                    Field: res, a (reference), idx (real field)
@@ -155,6 +158,21 @@ struct GirSlot {
     int var = 0;
 };
 
+struct GirFact {
+    enum Kind : uint8_t { Ge0, Lt, LenGe, ViewLenGe } kind = Ge0;
+    // Ge0 uses `a`; the other facts use `a`, `b`.
+    int a = 0, b = 0;
+
+    bool operator==(const GirFact &other) const {
+        return kind == other.kind && a == other.a && b == other.b;
+    }
+};
+
+struct GirFactCertificate {
+    // One asserted entry fact set per function block.
+    vector<vector<GirFact>> blocks;
+};
+
 // Root annotations merged from every Core context that specializes this
 // implementation. Parameter indices are positional in GIR.
 struct GirRootInfo {
@@ -182,6 +200,7 @@ struct GirFunc {
     GirRootInfo roots;
     vector<int> scopes;   // The parent of each scope, or -1.
     vector<GirBlock> blocks;
+    optional<GirFactCertificate> certificate;
     CoreSummary summary;
     int org = -1;         // -1 for none.
     // The low stage: the frame, and how many data stacks the function owns.

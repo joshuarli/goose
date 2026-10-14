@@ -151,7 +151,7 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     let (_, t) ← env.refTy r
     if (arrayElem? t).isSome then pure (.data (.int .i64))
     else tyErr "length of a reference to something that is not an array"
-  | .indexChecked v i _ => do
+  | .indexChecked v i _ | .indexProven v i => do
     let (m, e) ← env.viewTy v
     let _ ← env.intTy i
     pure (.data (.ref m e))
@@ -269,7 +269,7 @@ def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (
             | .snapshot _ owner =>
               let writable := (capAt caps owner).2
               (writable, writable)
-            | .refElem owner _ | .indexChecked owner _ _ =>
+            | .refElem owner _ | .indexChecked owner _ _ | .indexProven owner _ =>
               ((capAt caps owner).2, (capAt caps owner).2)
             | _ => typed v
           next := next.set! v (meet (capAt next v) c)

@@ -2,7 +2,7 @@ import Goose.Core.Json
 import Goose.GIR.Syntax
 
 /-!
-The `gir-h/0.3` encoding: a strict decoder and the deterministic writer.
+The `gir-h/0.4` encoding: a strict decoder and the deterministic writer.
 
 The encoding follows the Core one (`Goose.Core.Decode`): arrays, strings and
 unsigned integers only, a tag and a fixed arity per record, no objects. The
@@ -22,7 +22,7 @@ open Goose.Core
 open Goose.Core.Decode (fail record arity asNat asStr asArr asFlag asInt decIntTy decMut decVarKind
   decUnOp decBinOp decCmpOp decConvKind list optional checkIndex natLimit)
 
-def schemaName : String := "gir-h/0.3"
+def schemaName : String := "gir-h/0.4"
 def profileName : String := "core-pilot"
 
 /-! ### Decoder -/
@@ -299,6 +299,7 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     def_ (.viewSlice m (← v 2) (← decBnd fs[3]!) (← decBnd fs[4]!) (← org 5))
   | "i_alen" => do arity tag fs 2; def_ (.arrayLen (← v 1))
   | "i_index" => do arity tag fs 4; def_ (.indexChecked (← v 1) (← v 2) (← org 3))
+  | "i_index_proven" => do arity tag fs 3; def_ (.indexProven (← v 1) (← v 2))
   | "i_push" => do arity tag fs 4; def_ (.push (← v 1) (← v 2) (← org 3))
   | "i_pop" => do
     unless tb.profile == .shrink do fail "i_pop requires core-shrink"
@@ -403,6 +404,28 @@ def decSlot (tb : Tables) (j : Lean.Json) : Except String Slot := do
          scope := ← checkIndex (← asNat fs[2]! "slot scope") tb.nScopes "scope"
          var := ← asNat fs[3]! "slot variable" }
 
+def decFact (_tb : Tables) (j : Lean.Json) : Except String Fact := do
+  let (tag, fs) ← record j "fact"
+  match tag with
+  | "f_ge0" => do arity tag fs 1; pure (.ge0 (← asNat fs[0]! "fact value"))
+  | "f_lt" => do
+    arity tag fs 2
+    pure (.lt (← asNat fs[0]! "fact value") (← asNat fs[1]! "fact bound"))
+  | "f_len_ge" => do
+    arity tag fs 2
+    pure (.lenGe (← asNat fs[0]! "fact reference") (← asNat fs[1]! "fact bound"))
+  | "f_view_len_ge" => do
+    arity tag fs 2
+    pure (.viewLenGe (← asNat fs[0]! "fact view") (← asNat fs[1]! "fact bound"))
+  | _ => fail s!"unknown fact tag {tag.quote}"
+
+def decCertificate (tb : Tables) (j : Lean.Json) : Except String FactCertificate := do
+  let (tag, fs) ← record j "certificate"
+  unless tag == "certificate" do fail s!"expected a certificate, found tag {tag.quote}"
+  arity tag fs 1
+  let sets ← asArr fs[0]! "certificate block sets"
+  sets.mapM fun facts => list facts "block facts" (decFact tb)
+
 /-- A scope's parent, which must be an earlier scope. -/
 def decScope (i : Nat) (nScopes : Nat) (j : Lean.Json) : Except String (Option ScopeId) := do
   let (tag, fs) ← record j "scope"
@@ -424,7 +447,7 @@ def instCount : Lean.Json → Nat
 def decFunc (m : Tables) (j : Lean.Json) : Except String Func := do
   let (tag, fs) ← record j "func"
   unless tag == "func" do fail s!"expected a func, found tag {tag.quote}"
-  arity tag fs 9
+  arity tag fs 10
   let name ← asStr fs[0]! "func name"
   let params ← list fs[1]! "func parameters" (decTy m)
   let results ← list fs[2]! "func results" (decTy m)
@@ -441,7 +464,8 @@ def decFunc (m : Tables) (j : Lean.Json) : Except String Func := do
   let roots ← decRootInfo tb params.length results.length fs[6]!
   let summary ← Decode.decSummary m.profile m.nGlobals params.length fs[7]!
   let org ← decOrgOpt tb fs[8]!
-  pure { name, params, results, slots, scopes, blocks, roots, summary, org }
+  let certificate ← optional fs[9]! "fact certificate" (decCertificate tb)
+  pure { name, params, results, slots, scopes, blocks, roots, summary, org, certificate }
 
 def decGlobal (tb : Tables) (j : Lean.Json) : Except String Global := do
   let (tag, fs) ← record j "global"
@@ -636,6 +660,7 @@ def wOp (r : ValueId) : Op → W String
     pure (wRec "i_vslice" [toString r, quote (mutTag m), toString v, wBnd lo, wBnd hi, wOpt org])
   | .arrayLen a => pure (wRec "i_alen" [toString r, toString a])
   | .indexChecked v i org => pure (wRec "i_index" [toString r, toString v, toString i, wOpt org])
+  | .indexProven v i => pure (wRec "i_index_proven" [toString r, toString v, toString i])
   | .push a v org => pure (wRec "i_push" [toString r, toString a, toString v, wOpt org])
   | .pop a org => pure (wRec "i_pop" [toString r, toString a, wOpt org])
   | .call f args org => pure (wRec "i_call" [toString r, toString f, wNats args, wOpt org])
@@ -690,6 +715,15 @@ def wSummary (profile : ArtifactProfile) : SummaryAnn → String
       (if profile == .shrink then [wList (s.shrinks.map wTarget)] else []) ++
       [wList (s.rebinds.map wTarget), if s.aborts then "1" else "0", if s.outputs then "1" else "0"])
 
+def wFact : Fact → String
+  | .ge0 i => wRec "f_ge0" [toString i]
+  | .lt i n => wRec "f_lt" [toString i, toString n]
+  | .lenGe reference n => wRec "f_len_ge" [toString reference, toString n]
+  | .viewLenGe v n => wRec "f_view_len_ge" [toString v, toString n]
+
+def wCertificate (certificate : FactCertificate) : String :=
+  wRec "certificate" [wList (certificate.toList.map fun facts => wList (facts.map wFact))]
+
 def wFunc (profile : ArtifactProfile) (f : Func) : W String := do
   let ps ← wMap f.params wTy
   let rs ← wMap f.results wTy
@@ -697,7 +731,9 @@ def wFunc (profile : ArtifactProfile) (f : Func) : W String := do
     pure (wRec "slot" [← wTy sl.ty, quote (kindTag sl.kind), toString sl.scope, toString sl.var])
   let scopes := wList (f.scopes.toList.map fun p => wRec "scope" [wOpt p])
   let blocks ← wMap f.blocks.toList wBlock
-  pure (wRec "func" [quote f.name, ps, rs, slots, scopes, blocks, wRootInfo f.roots, wSummary profile f.summary, wOpt f.org])
+  let certificate := match f.certificate with | some c => wList [wCertificate c] | none => "[]"
+  pure (wRec "func" [quote f.name, ps, rs, slots, scopes, blocks, wRootInfo f.roots,
+    wSummary profile f.summary, wOpt f.org, certificate])
 
 def wGlobal (profile : ArtifactProfile) (g : Global) : W String := do
   let t ← wTy g.ty

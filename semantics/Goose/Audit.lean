@@ -9,6 +9,7 @@ import Goose.Lower.Prefix
 import Goose.GIR.Sound
 import Goose.Proofs.Fuel
 import Goose.Proofs.GIRFuel
+import Goose.Proofs.Bounds
 import Goose.Proofs.Memory
 import Goose.Proofs.Core
 import Goose.Proofs.Safety
@@ -191,6 +192,14 @@ end Goose.Audit
 #audit Goose.Lower.range_reentry_changes_counter
 #audit Goose.GIR.validate_sound
 #audit Goose.GIR.validated_scalar_safe
+#audit Goose.Proofs.Bounds.checkEvidence_sound
+#audit Goose.Proofs.Bounds.f_const_sound
+#audit Goose.Proofs.Bounds.f_len_sound
+#audit Goose.Proofs.Bounds.f_snap_sound
+#audit Goose.Proofs.Bounds.f_cmp_sound
+#audit Goose.Proofs.Bounds.provesIndex_sound
+#audit Goose.Proofs.Bounds.indexProven_eq_checked_of_facts
+#audit Goose.Proofs.Bounds.exec_indexProven_eq_checked
 
 #audit Goose.Core.Sound.validate_modOk
 #audit Goose.Core.Sound.specs_all

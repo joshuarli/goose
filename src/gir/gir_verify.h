@@ -12,6 +12,9 @@
 //   GIR-V040  scope enter and leave balance on every path and nest as the
 //             scope tree; `ret` with no scope entered
 //   GIR-V050  summaries closed over the body
+//   GIR-V060  whole-owner replacement starts from proven empty storage
+//   GIR-V080  every proven index follows from its fact certificate
+//   GIR-V090  operations belong to the module stage
 //   GIR-V100  origins on every operation that can abort or stands for a
 //             statement
 //
@@ -83,7 +86,7 @@ private:
                 for (auto v : i.vals) add(v);
                 break;
             case GirOp::Bin: case GirOp::Cmp: case GirOp::BoolCmp: case GirOp::Elem:
-            case GirOp::Index: case GirOp::Push: case GirOp::Store: case GirOp::Append:
+            case GirOp::Index: case GirOp::IndexProven: case GirOp::Push: case GirOp::Store: case GirOp::Append:
             case GirOp::PopN: case GirOp::Replace:
                 add(i.a); add(i.b);
                 break;
@@ -231,6 +234,9 @@ private:
             auto resultRoots = ResultRoots();
             for (auto &fn : fns) CheckShrinkReplace(fn, resultRoots);
         }
+        for (auto &fn : fns)
+            if (auto error = CheckGirEvidence(m, *fn.f, fn.vt))
+                Fail("GIR-V080", cat(fn.label, ": ", *error));
         for (auto &fn : fns) CheckOrigins(fn);
     }
 
@@ -1573,7 +1579,8 @@ private:
                              contentsMutable(def->a, open));
             }
             if (def && (def->op == GirOp::SliceView || def->op == GirOp::ViewSlice ||
-                        def->op == GirOp::Elem || def->op == GirOp::Index))
+                        def->op == GirOp::Elem || def->op == GirOp::Index ||
+                        def->op == GirOp::IndexProven))
                 return close(contentsMutable(def->a, open));
             // The callee's return check has already established that a mutable
             // slice result carries mutable contents.
@@ -1630,7 +1637,8 @@ private:
                 if (def->idx < 0 || def->idx >= (int)fields.size()) return close(false);
                 return close(contentsMutable(def->a, open) && fields[def->idx].binding == CoreVarKind::Var);
             }
-            if (def && (def->op == GirOp::Elem || def->op == GirOp::Index))
+            if (def && (def->op == GirOp::Elem || def->op == GirOp::Index ||
+                        def->op == GirOp::IndexProven))
                 return close(contentsMutable(def->a, open));
             if (def && def->op == GirOp::Freeze) return close(false);
             if (!def) {
@@ -1926,7 +1934,7 @@ private:
             case GirOp::Slot: return { CoreRootRef { CoreRootRef::Local, i.idx } };
             case GirOp::Global: return { CoreRootRef { CoreRootRef::Global, i.idx } };
             case GirOp::Field: return RootsAt(p.vals, i.a);
-            case GirOp::Elem: case GirOp::ViewSlice: case GirOp::Index:
+            case GirOp::Elem: case GirOp::ViewSlice: case GirOp::Index: case GirOp::IndexProven:
                 return RootsAt(p.vals, i.a);
             case GirOp::Freeze: case GirOp::Snap: case GirOp::SliceView: case GirOp::Push:
                 return RootsAt(p.vals, i.a);
@@ -2330,7 +2338,8 @@ private:
             bool checksOperands = false;
             switch (inst.op) {
                 case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen: case GirOp::SliceView:
-                case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::Index: case GirOp::Push:
+                case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::Index:
+                case GirOp::IndexProven: case GirOp::Push:
                 case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Store:
                 case GirOp::Append: case GirOp::Replace:
                     operands = RootsAt(p.vals, inst.a);

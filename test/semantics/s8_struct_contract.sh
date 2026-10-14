@@ -393,7 +393,7 @@ cmp "$work/struct.low.json" "$work/struct-again.low.json"
     ])
 ' "$work/struct.core.json" >/dev/null
 "$jaq" -e '
-    .[0] == "module" and .[1] == "gir-h/0.3" and .[2] == "core-shrink" and
+    .[0] == "module" and .[1] == "gir-h/0.4" and .[2] == "core-shrink" and
     length == 10 and (.[5] | length) == 1 and .[5][0][1] == 11 and
     (tostring | contains("i_struct") and contains("i_field"))
 ' "$work/struct.high.json" >/dev/null

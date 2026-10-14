@@ -840,6 +840,7 @@ private:
                 return;
             }
             case GirOp::Index: return LowerIndex(i);
+            case GirOp::IndexProven: return LowerIndexProven(i);
             case GirOp::Push: return LowerPush(i);
             case GirOp::Pop: return LowerPop(i);
             case GirOp::Call: return LowerCall(i);
@@ -1002,6 +1003,13 @@ private:
         auto idx = ToI64(i.b);
         auto fail = AbortBlock(GirAbortKind::IndexOob, { idx, n }, i.org);
         CheckThen(CmpI(CoreCmpOp::Lt, U64(), Conv(idx, I64(), U64()), Conv(n, I64(), U64())), fail);
+        Define(i, { PtrAt(base, idx, esz) });
+    }
+
+    void LowerIndexProven(const GirInst &i) {
+        auto esz = Size(HT(hvt[i.res]).elem);
+        auto base = shape[i.a].w[0];
+        auto idx = ToI64(i.b);
         Define(i, { PtrAt(base, idx, esz) });
     }
 

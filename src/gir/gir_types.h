@@ -290,7 +290,7 @@ public:
                     return GirTyErr("length of a reference to something that is not an array");
                 return GirTyOk(m.IntType(CoreIntTy::I64));
             }
-            case GirOp::Index: {
+            case GirOp::Index: case GirOp::IndexProven: {
                 auto v = View(i.a);
                 if (!v.ok()) return v;
                 auto n = IntTy(i.b);

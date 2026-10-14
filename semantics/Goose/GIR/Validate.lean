@@ -1,4 +1,5 @@
 import Goose.GIR.Effects
+import Goose.GIR.Evidence
 import Goose.Core.Demand
 
 /-!
@@ -15,6 +16,8 @@ check is known to pass every earlier one.
 | `GIR-V030` | slot addresses inside their scope, stores through mutable references, loadable and storable types |
 | `GIR-V040` | scope enter and leave balance on every path and nest as the scope tree; `ret` with no scope entered |
 | `GIR-V050` | summaries closed over the body |
+| `GIR-V060` | whole-owner replacement starts from proven empty storage |
+| `GIR-V080` | every proven index follows from its fact certificate |
 | `GIR-V100` | origins on every operation that can abort or stands for a statement |
 
 Acceptance does not establish that references stay valid: that is carried from
@@ -26,7 +29,7 @@ namespace Goose.GIR
 open Goose.Core
 
 inductive Code
-  | v001 | v010 | v020 | v030 | v040 | v050 | v060 | v100
+  | v001 | v010 | v020 | v030 | v040 | v050 | v060 | v080 | v100
   deriving DecidableEq, Repr
 
 def Code.tag : Code → String
@@ -37,6 +40,7 @@ def Code.tag : Code → String
   | .v040 => "GIR-V040"
   | .v050 => "GIR-V050"
   | .v060 => "GIR-V060"
+  | .v080 => "GIR-V080"
   | .v100 => "GIR-V100"
 
 structure Violation where
@@ -835,7 +839,8 @@ def transferEmptyInst (m : Module) (vt : Array (Option VTy)) (p : Prov)
       | some roots => killEmptyFacts facts roots p
     | .def _ (.load r) | .def _ (.snapshot _ r) | .def _ (.arrayLen r)
     | .def _ (.sliceView r) | .def _ (.viewLen r) | .def _ (.viewSlice _ r ..)
-    | .def _ (.indexChecked r ..) | .def _ (.push r ..) | .def _ (.pop r ..)
+    | .def _ (.indexChecked r ..) | .def _ (.indexProven r ..)
+    | .def _ (.push r ..) | .def _ (.pop r ..)
     | .eff (.store r ..) | .eff (.append r ..) | .eff (.popN r ..)
     | .eff (.resize r ..) | .eff (.replace r ..) => killEmptyFacts facts (rootsAt p.vals r) p
     | _ => facts
@@ -975,6 +980,7 @@ def validate (m : Module) : Check Unit := do
   checkAll m.infos fun i =>
     let p := i.f.provenance res i.vt m.rootCount
     checkShrinkReplace m i.label i.f i.vt p
+  checkAll m.infos fun i => asCheck .v080 i.label (checkEvidence m i.f i.vt)
   checkAll m.infos fun i => checkOrigins m.profile i.label i.f
 
 end Goose.GIR
