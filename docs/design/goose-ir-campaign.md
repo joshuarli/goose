@@ -1,10 +1,12 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** paused 2026-10-14.
+**Status:** active 2026-10-14, resumed by the owner after the upstream rebase.
 **Branch:** `master`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`, rebased at the owner's request on 2026-10-14. The prior fork base and upstream merge remain historical records below.
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
 ## Handoff (paused; reboot audit 2026-10-14)
+
+**Resumption 2026-10-14.** The owner requested resumption from this handoff. `master` was clean at `7cf79026`. Four isolated lanes start from that revision: S8 Core proof closure, T3/S8 lowering closure, H2 reuse hardening, and S8/S9 profile qualification. Each lane compares retained candidate patches with the rebased files before reuse. The parked handoff below remains the historical starting point. O3 still has no valid timing result. Performance gates remain deferred until the host passes readiness checks.
 
 **Resume prompt.** "Resume the paused Goose IR campaign from docs/design/goose-ir-campaign.md on master. Recheck this handoff and the retained branches before selecting an item; O3 has no valid timing result." Resumption requires a new owner request. First run `git status --short --branch` from the repository root. The inspection commands below start no lane and run no measurements.
 
