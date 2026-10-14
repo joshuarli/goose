@@ -45,6 +45,7 @@ import gen  # noqa: E402
 FAMILY = dict(helpers=1, contexts=2, types=gen.INT_TYPES[:1], shareable=1, root_params=2, distinct=True,
               edit_targets=True)
 SOURCE_EDITS = ("E02", "E03", "E04", "E05", "E06", "E07a", "E07b", "E08", "E09a", "E09b", "E09c")
+EDIT_CASES = set(SOURCE_EDITS) | {"E07c", "E15a", "E15b", "E16"}
 E10_UNAVAILABLE = {
     "independent_c_flags": "the build command exposes no raw C flag override; --debug changes numeric mode and C flags together (-D is tested separately)",
     "target": "the compiler has no target option; a cross compiler also changes C compiler identity",
@@ -178,21 +179,34 @@ class Session:
     def build(self, *flags, label=None, goose=None, env_overrides=None,
               kill_when=None, on_kill=None, kill_timeout=30, verify=True):
         self.counter += 1
-        return Build(self, list(flags), label or f"b{self.counter}", goose, env_overrides,
-                     kill_when, on_kill, kill_timeout, verify)
+        runtime_cache = self.home / "build" / "runtime"
+        runtime_snapshot = None
+        try:
+            if runtime_cache.exists():
+                runtime_snapshot = self.dir / f"runtime-cache-before-{self.counter}"
+                shutil.copytree(runtime_cache, runtime_snapshot)
+            build = Build(self, list(flags), label or f"b{self.counter}", goose, env_overrides,
+                          kill_when, on_kill, kill_timeout, verify)
+        except BaseException as error:
+            remove_runtime_snapshot(runtime_snapshot, error)
+            raise
+        build.runtime_cache_snapshot = runtime_snapshot
+        return build
 
     def run(self, exe):
         r = subprocess.run([str(exe)], capture_output=True, text=True, errors="replace",
                            cwd=self.dir)
         return r.returncode, r.stdout, r.stderr
 
-    def clean(self, *flags, goose=None):
+    def clean(self, *flags, goose=None, runtime_snapshot=None):
         """A build of the same sources in a store of its own."""
         other = Session.__new__(Session)
         other.goose, other.dir, other.counter = self.goose, self.dir, 0
         other.exe_name = f"clean{self.counter}"
         other.home = self.dir / f"home-clean{self.counter}"
         shutil.rmtree(other.home, ignore_errors=True)
+        if runtime_snapshot is not None:
+            shutil.copytree(runtime_snapshot, other.home / "build" / "runtime")
         b = Build(other, list(flags), f"clean{self.counter}", goose=goose, verify=True)
         b.home = other.home
         return b
@@ -211,6 +225,17 @@ def normalized(text, *paths):
     for p in paths:
         text = text.replace(str(p), "<path>")
     return re.sub(r"/[^ \n]*home[^ \n]*", "<home>", text)
+
+
+def remove_runtime_snapshot(snapshot, primary_error=None):
+    if snapshot is None or not snapshot.exists():
+        return
+    try:
+        shutil.rmtree(snapshot)
+    except OSError as cleanup_error:
+        if primary_error is None:
+            raise
+        print(f"failed to remove runtime cache snapshot {snapshot}: {cleanup_error}", file=sys.stderr)
 
 
 class Matrix:
@@ -238,29 +263,35 @@ class Matrix:
 
     def equal_to_clean(self, row, s, b, flags=(), goose=None):
         """L-EQ: the incremental build `b`, against a clean build."""
-        c = s.clean(*flags, goose=goose)
-        if b.exit != c.exit:
-            return self.fail(row, f"exit {b.exit} against a clean build's {c.exit}")
-        if normalized(b.stdout, b.exe, s.home, s.dir) != normalized(c.stdout, c.exe, c.home, s.dir):
-            return self.fail(row, "stdout differs from a clean build's:\n--- incremental\n"
-                                  f"{b.stdout[-300:]}\n--- clean\n{c.stdout[-300:]}")
-        if normalized(b.stderr, b.exe, s.home, s.dir) != normalized(c.stderr, c.exe, c.home, s.dir):
-            return self.fail(row, "diagnostics differ from a clean build's:\n--- incremental\n"
-                                  f"{b.stderr[-300:]}\n--- clean\n{c.stderr[-300:]}")
-        if b.exit != 0:
-            return None
-        if b.store is None or c.store is None:
-            return self.fail(row, "no store reported")
-        ub, uc = units_of(b.store), units_of(c.store)
-        if ub != uc:
-            return self.fail(row, "unit texts differ from a clean build's: "
-                                  f"{sorted(k for k in ub.keys() | uc.keys() if ub.get(k) != uc.get(k))}")
-        want = s.run(c.exe)
-        got = s.run(b.exe)
-        if got != want:
-            return self.fail(row, f"the program differs from a clean build's: {got[:2]} / {want[:2]}")
-        if s.output is not None and got[1] != s.output:
-            return self.fail(row, "the program's output is not the expected one")
+        runtime_snapshot = b.runtime_cache_snapshot
+        try:
+            c = s.clean(*flags, goose=goose, runtime_snapshot=runtime_snapshot)
+            if b.exit != c.exit:
+                return self.fail(row, f"exit {b.exit} against a clean build's {c.exit}")
+            if normalized(b.stdout, b.exe, s.home, s.dir) != normalized(c.stdout, c.exe, c.home, s.dir):
+                return self.fail(row, "stdout differs from a clean build's:\n--- incremental\n"
+                                      f"{b.stdout[-300:]}\n--- clean\n{c.stdout[-300:]}")
+            if normalized(b.stderr, b.exe, s.home, s.dir) != normalized(c.stderr, c.exe, c.home, s.dir):
+                return self.fail(row, "diagnostics differ from a clean build's:\n--- incremental\n"
+                                      f"{b.stderr[-300:]}\n--- clean\n{c.stderr[-300:]}")
+            if b.exit != 0:
+                return None
+            if b.store is None or c.store is None:
+                return self.fail(row, "no store reported")
+            ub, uc = units_of(b.store), units_of(c.store)
+            if ub != uc:
+                return self.fail(row, "unit texts differ from a clean build's: "
+                                      f"{sorted(k for k in ub.keys() | uc.keys() if ub.get(k) != uc.get(k))}")
+            want = s.run(c.exe)
+            got = s.run(b.exe)
+            if got != want:
+                return self.fail(row, f"the program differs from a clean build's: {got[:2]} / {want[:2]}")
+            if s.output is not None and got[1] != s.output:
+                return self.fail(row, "the program's output is not the expected one")
+        finally:
+            if runtime_snapshot is not None:
+                remove_runtime_snapshot(runtime_snapshot, sys.exc_info()[1])
+                b.runtime_cache_snapshot = None
         return None
 
     def record(self, row, b, **extra):
@@ -343,8 +374,12 @@ class Matrix:
         self.equal_to_clean(row, s, b)
         if e.outcome == "warning":
             w = s.build()
-            if e.message not in w.stderr:
-                self.fail(row, "a warm build does not replay the warning")
+            warm_row = f"{row} warm"
+            self.record(warm_row, w)
+            if self.ok_build(warm_row, w):
+                if e.message not in w.stderr:
+                    self.fail(warm_row, "a warm build does not replay the warning")
+                self.equal_to_clean(warm_row, s, w)
 
     def holders(self, b, names):
         """The units that hold an implementation of any of the functions."""
@@ -381,25 +416,30 @@ class Matrix:
         if stray:
             self.fail("E08", f"L-ADD: units recompiled that hold neither the new function nor its caller: {stray}")
 
-    def rows_edits(self):
-        self.edit_row("E02", "E02", self.check_loc)
-        self.edit_row("E03", "E03", self.check_leaf)
+    def rows_edits(self, cases=None):
+        selected = EDIT_CASES if cases is None else set(cases)
+        if "E02" in selected:
+            self.edit_row("E02", "E02", self.check_loc)
+        if "E03" in selected:
+            self.edit_row("E03", "E03", self.check_leaf)
         for row in ("E04", "E05", "E06", "E07a", "E07b", "E07c", "E09a", "E09b", "E09c", "E15a", "E15b"):
-            self.edit_row(row, row, lambda s, f, b: None)
-        # E08 needs the symbols of the original.
-        s = Session(self.goose, self.work, "e-E08")
-        first = s.build()
-        if self.ok_build("E08", first):
-            self.symbols_before = set()
-            for text in units_of(first.store).values():
-                self.symbols_before |= set(re.findall(r"^GS_HIDDEN [^(\n]*?(\w+)\(", text.decode(errors="replace"), re.M))
-            s.write("E08")
-            b = s.build()
-            self.record("E08", b)
-            if self.ok_build("E08", b):
-                self.check_add(s, first, b)
-                self.equal_to_clean("E08", s, b)
-        self.row_E16()
+            if row in selected:
+                self.edit_row(row, row, lambda s, f, b: None)
+        if "E08" in selected:
+            s = Session(self.goose, self.work, "e-E08")
+            first = s.build()
+            if self.ok_build("E08", first):
+                self.symbols_before = set()
+                for text in units_of(first.store).values():
+                    self.symbols_before |= set(re.findall(r"^GS_HIDDEN [^(\n]*?(\w+)\(", text.decode(errors="replace"), re.M))
+                s.write("E08")
+                b = s.build()
+                self.record("E08", b)
+                if self.ok_build("E08", b):
+                    self.check_add(s, first, b)
+                    self.equal_to_clean("E08", s, b)
+        if "E16" in selected:
+            self.row_E16()
 
     def row_E16(self):
         s = Session(self.goose, self.work, "e-E16")
@@ -651,8 +691,9 @@ class Matrix:
         want = set(cases)
         if not want or want & {"E00", "E01"}:
             self.row_E00_E01(None)
-        if not want or want & (set(SOURCE_EDITS) | {"E16", "E15a", "E15b", "E07c"}):
-            self.rows_edits()
+        selected_edits = want & EDIT_CASES
+        if not want or selected_edits:
+            self.rows_edits(selected_edits if want else None)
         for name, fn in steps[2:]:
             if not want or name in want:
                 fn()

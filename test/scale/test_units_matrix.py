@@ -27,7 +27,8 @@ class UnitsMatrixTests(unittest.TestCase):
         session = SimpleNamespace(home=self.scratch / "home", dir=self.scratch,
                                   clean=lambda *args, **kwargs: clean)
         incremental = SimpleNamespace(exit=0, stdout="incremental\n", stderr="",
-                                      exe=self.scratch / "incremental.exe")
+                                      exe=self.scratch / "incremental.exe",
+                                      runtime_cache_snapshot=None)
 
         with contextlib.redirect_stdout(io.StringIO()):
             matrix.equal_to_clean("stdout", session, incremental)
@@ -45,7 +46,7 @@ class UnitsMatrixTests(unittest.TestCase):
         session = SimpleNamespace(home=self.scratch / "home", dir=directory,
                                   clean=lambda *args, **kwargs: clean)
         incremental = SimpleNamespace(exit=1, stdout=f"built {incremental_exe}\n", stderr="",
-                                      exe=incremental_exe)
+                                      exe=incremental_exe, runtime_cache_snapshot=None)
 
         matrix.equal_to_clean("executable path", session, incremental)
 
@@ -206,36 +207,142 @@ class UnitsMatrixTests(unittest.TestCase):
 
     def test_edit_error_is_compared_with_a_clean_build(self):
         class FakeBuild:
-            def __init__(self, exit_code, no_op=False):
+            def __init__(self, exit_code, stderr="", no_op=False, store=None, exe=None,
+                         runtime_cache_snapshot=None):
                 self.exit = exit_code
                 self.stdout = ""
-                self.stderr = units_matrix.edits.EDITS["E15a"].message if exit_code else ""
+                self.stderr = stderr
                 self.native = {"no_op": no_op}
+                self.store = store
+                self.exe = exe
+                self.home = None
+                self.runtime_cache_snapshot = runtime_cache_snapshot
+
+            def record(self, row):
+                return {"row": row, "exit": self.exit}
+
+        class FakeSession:
+            instances = []
+
+            def __init__(self, goose, work, name):
+                self.calls = 0
+                self.clean_calls = []
+                self.dir = work / "program"
+                units_matrix.shutil.rmtree(self.dir, ignore_errors=True)
+                self.dir.mkdir(parents=True)
+                self.home = work / "home"
+                self.output = None
+                type(self).instances.append(self)
+
+            def build(self, *args, **kwargs):
+                self.calls += 1
+                snapshot = None
+                if self.calls > 1:
+                    snapshot = self.dir / f"runtime-cache-before-{self.calls}"
+                    snapshot.mkdir()
+                if self.calls == 2:
+                    return FakeBuild(1, stderr=units_matrix.edits.EDITS["E15a"].message,
+                                     runtime_cache_snapshot=snapshot)
+                return FakeBuild(0, no_op=self.calls == 3,
+                                 store=self.dir / "store", exe=self.dir / "prog.exe",
+                                 runtime_cache_snapshot=snapshot)
+
+            def write(self, edit):
+                self.edit = edit
+
+            def clean(self, *flags, runtime_snapshot=None, **kwargs):
+                self.clean_calls.append(runtime_snapshot)
+                if len(self.clean_calls) == 1:
+                    return FakeBuild(1, stderr="different clean diagnostic")
+                return FakeBuild(0, store=self.dir / "clean-store", exe=self.dir / "clean.exe")
+
+            def run(self, exe):
+                return 0, "", ""
+
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        with patch.object(units_matrix, "Session", FakeSession), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.edit_row("E15a", "E15a", lambda *args: None)
+
+        self.assertEqual(len(matrix.failures), 1)
+        self.assertIn("diagnostics differ", matrix.failures[0])
+        self.assertEqual(FakeSession.instances[-1].clean_calls, [
+            self.scratch / "program" / "runtime-cache-before-2",
+            self.scratch / "program" / "runtime-cache-before-3",
+        ])
+
+    def test_edit_case_selection_runs_only_requested_failure_rows(self):
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        called = []
+        with patch.object(matrix, "edit_row", lambda row, edit, check: called.append(row)), \
+                patch.object(matrix, "row_E16", lambda: called.append("E16")), \
+                patch.object(matrix, "ok_build", lambda row, build: False), \
+                patch.object(units_matrix, "Session", lambda *args: SimpleNamespace(build=lambda: object())), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.run_all({"E15a", "E07c"})
+
+        self.assertEqual(called, ["E07c", "E15a"])
+
+    def test_warning_warm_build_must_succeed(self):
+        matrix, _ = self.run_warning_case(1)
+
+        self.assertEqual(len(matrix.failures), 1)
+        self.assertIn("E15b warm: build failed", matrix.failures[0])
+
+    def test_warning_warm_build_is_compared_with_clean(self):
+        matrix, compared = self.run_warning_case(0)
+
+        self.assertEqual(matrix.failures, [])
+        self.assertEqual(compared, ["edit", "warm"])
+
+    def run_warning_case(self, warm_exit):
+        warning = units_matrix.edits.EDITS["E15b"].message
+        compared = []
+
+        class FakeBuild:
+            def __init__(self, label, scratch, exit_code=0):
+                self.label = label
+                self.exit = exit_code
+                self.stdout = ""
+                self.stderr = warning if label != "initial" else ""
+                self.native = {"native_compiler_invocations": [], "link": {"ran": False}}
+                self.store = scratch / f"{label}-store"
+                self.exe = scratch / f"{label}.exe"
+                self.runtime_cache_snapshot = None
 
             def record(self, row):
                 return {"row": row, "exit": self.exit}
 
         class FakeSession:
             def __init__(self, goose, work, name):
+                self.scratch = work
+                self.output = None
                 self.calls = 0
+                self.edit = None
 
             def build(self, *args, **kwargs):
                 self.calls += 1
-                return FakeBuild(1 if self.calls == 2 else 0, no_op=self.calls == 3)
+                if self.calls == 1:
+                    return FakeBuild("initial", self.scratch)
+                if self.calls == 2:
+                    return FakeBuild("edit", self.scratch)
+                return FakeBuild("warm", self.scratch, warm_exit)
 
             def write(self, edit):
                 self.edit = edit
 
         matrix = units_matrix.Matrix("unused", self.scratch)
-        compared = []
-        with patch.object(units_matrix, "Session", FakeSession), \
-                patch.object(units_matrix.Matrix, "equal_to_clean",
-                             lambda self, row, session, build, *args, **kwargs: compared.append(build)), \
-                contextlib.redirect_stdout(io.StringIO()):
-            matrix.edit_row("E15a", "E15a", lambda *args: None)
 
-        self.assertEqual(matrix.failures, [])
-        self.assertEqual([build.exit for build in compared], [1, 0])
+        def compare(self, row, session, build, *args, **kwargs):
+            compared.append(build.label)
+
+        with patch.object(units_matrix, "Session", FakeSession), \
+                patch.object(units_matrix, "units_of", lambda store: {"main.c": b"same"}), \
+                patch.object(units_matrix.Matrix, "equal_to_clean", compare), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.edit_row("E15b", "E15b", lambda *args: None)
+
+        return matrix, compared
 
 
 if __name__ == "__main__":
