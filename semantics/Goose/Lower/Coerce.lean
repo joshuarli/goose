@@ -1,5 +1,5 @@
 import Goose.Core.Sound.Basic
-import Goose.Lower.Claims
+import Goose.Lower.Leaf
 import Goose.Lower.RuntimeSim
 
 namespace Goose.Lower
