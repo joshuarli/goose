@@ -1,4 +1,5 @@
 import Goose.Lower.Claims
+import Goose.Proofs.Memory
 
 namespace Goose.Lower
 
@@ -9,6 +10,113 @@ def releaseScopes (env : Env) : List (ScopeId × ScopeInst) → M Unit
   | (scope, scopeInstance) :: rest => do
     Core.releaseScope env scope scopeInstance
     releaseScopes env rest
+
+private theorem erase_absent (map : Std.HashMap RootInst Val) (root : RootInst)
+    (h : map.contains root = false) : map.erase root = map := by
+  cases map with
+  | mk inner =>
+    cases inner with
+    | mk raw wf =>
+      cases raw with
+      | mk size buckets =>
+        simp only [Std.HashMap.contains, Std.DHashMap.contains,
+          Std.DHashMap.Internal.Raw₀.contains] at h
+        simp only [Std.HashMap.erase, Std.DHashMap.erase,
+          Std.DHashMap.Internal.Raw₀.erase]
+        simp only [h, Bool.false_eq_true, ite_false]
+
+theorem store_release_absent (store : Store) (root : RootInst) (h : store.roots[root]? = none) :
+    store.release root = store := by
+  have hcontains : store.roots.contains root = false := by
+    simp [Std.HashMap.contains_eq_isSome_getElem?, h]
+  cases store
+  simp only [Store.release, Store.mk.injEq]
+  exact erase_absent _ _ hcontains
+
+theorem releaseVars_absent (vars : Array LocalVar) (act : ActId) (sc : Nat) (si : ScopeInst)
+    (count : Nat) (store : Store)
+    (h : ∀ root, Goose.Proofs.Memory.ScopeRoots vars act sc si root → store.roots[root]? = none) :
+    releaseVars vars act sc si count store = store := by
+  induction count with
+  | zero => rfl
+  | succ count ih =>
+    rw [releaseVars]
+    cases hv : vars[count]? with
+    | none => exact ih
+    | some lv =>
+      by_cases hs : lv.scope = sc
+      · simp only [hs, beq_self_eq_true, ite_true]
+        rw [store_release_absent store (.local act si count) (h _ ⟨count, lv, hv, hs, rfl⟩)]
+        exact ih
+      · simp only [beq_eq_false_iff_ne.mpr hs, Bool.false_eq_true, ite_false]
+        exact ih
+
+theorem releaseVars_idempotent (vars : Array LocalVar) (act : ActId) (sc : Nat) (si : ScopeInst)
+    (store : Store) :
+    releaseVars vars act sc si vars.size (releaseVars vars act sc si vars.size store) =
+      releaseVars vars act sc si vars.size store := by
+  exact releaseVars_absent vars act sc si vars.size _
+    (Goose.Proofs.Memory.releaseScope_roots vars act sc si store).2
+
+theorem releaseScope_idempotent (env : Env) (sc : Nat) (si : ScopeInst) :
+    (Core.releaseScope env sc si >>= fun _ => Core.releaseScope env sc si) =
+      Core.releaseScope env sc si := by
+  funext state
+  change Res.ok () { state with store := (releaseVars env.vars env.act sc si env.vars.size
+      (releaseVars env.vars env.act sc si env.vars.size state.store)) } =
+    Res.ok () { state with store := releaseVars env.vars env.act sc si env.vars.size state.store }
+  rw [releaseVars_idempotent]
+
+theorem releaseVars_preserves_absence (vars : Array LocalVar) (act : ActId) (sc : Nat)
+    (si : ScopeInst) (count : Nat) (store : Store) (root : RootInst)
+    (h : store.roots[root]? = none) :
+    (releaseVars vars act sc si count store).roots[root]? = none := by
+  rw [Goose.Proofs.Memory.releaseVars_roots]
+  split <;> simp [h]
+
+theorem releaseScopes_result (env : Env) (scopes : List (ScopeId × ScopeInst)) (state : St) :
+    ∃ after, releaseScopes env scopes state = .ok () after ∧
+      (∀ (root : RootInst), state.store.roots[root]? = none → after.store.roots[root]? = none) ∧
+      (∀ scope ∈ scopes, ∀ (root : RootInst), Goose.Proofs.Memory.ScopeRoots env.vars env.act scope.1 scope.2 root →
+        after.store.roots[root]? = none) := by
+  induction scopes generalizing state with
+  | nil => exact ⟨state, rfl, fun _ h => h, by simp⟩
+  | cons scope rest ih =>
+    let middle : St := { state with store :=
+      (releaseVars env.vars env.act scope.1 scope.2 env.vars.size state.store) }
+    obtain ⟨after, hrest, hmissing, hremoved⟩ := ih middle
+    refine ⟨after, ?_, ?_, ?_⟩
+    · simp [releaseScopes, Core.releaseScope, middle, bind_apply, hrest]
+    · intro root hroot
+      exact hmissing root (releaseVars_preserves_absence _ _ _ _ _ _ root hroot)
+    · intro released hreleased root hroot
+      rcases List.mem_cons.mp hreleased with rfl | hreleased
+      · exact hmissing root
+          ((Goose.Proofs.Memory.releaseScope_roots env.vars env.act released.1 released.2 state.store).2
+            root hroot)
+      · exact hremoved released hreleased root hroot
+
+theorem releaseScopes_repeat (env : Env) (scopes : List (ScopeId × ScopeInst))
+    (scope : ScopeId × ScopeInst) (hscope : scope ∈ scopes) :
+    (releaseScopes env scopes >>= fun _ => Core.releaseScope env scope.1 scope.2) =
+      releaseScopes env scopes := by
+  funext state
+  obtain ⟨after, hrun, _, hremoved⟩ := releaseScopes_result env scopes state
+  rw [bind_apply, hrun]
+  change Res.ok () { after with store :=
+    (releaseVars env.vars env.act scope.1 scope.2 env.vars.size after.store) } = .ok () after
+  rw [releaseVars_absent env.vars env.act scope.1 scope.2 env.vars.size after.store
+    (hremoved scope hscope)]
+
+theorem releaseScopes_repeat_subset (env : Env) (scopes repeated : List (ScopeId × ScopeInst))
+    (hsubset : ∀ scope ∈ repeated, scope ∈ scopes) :
+    (releaseScopes env scopes >>= fun _ => releaseScopes env repeated) = releaseScopes env scopes := by
+  induction repeated with
+  | nil => simp [releaseScopes, bind_pure]
+  | cons scope rest ih =>
+    simp only [releaseScopes]
+    rw [← bind_assoc, releaseScopes_repeat env scopes scope (hsubset scope (by simp))]
+    exact ih (fun scope hscope => hsubset scope (by simp [hscope]))
 
 structure UnwindPost (ls : LS) (fr : GIR.Frame) (ls' : LS) (fr' : GIR.Frame)
     (suffix : List (ScopeId × ScopeInst)) (pt : Pt) : Prop where
