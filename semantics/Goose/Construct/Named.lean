@@ -225,11 +225,46 @@ private def independentSite (module : Module) (id : ImplId) (implementation : Im
     | some (.resultLocal id _) => id == candidate
     | some expression => !reachesLocal module id implementation candidate (expressionVariables expression)
 
+mutual
+private def completionChoices : Expr → List (List Expr)
+  | .values operands => operandChoices operands
+  | .ifE _ left right _ => blockCompletionChoices left ++ blockCompletionChoices right
+  | .blockE block _ => blockCompletionChoices block
+  | expression => [[expression]]
+
+private def operandChoices : List Expr → List (List Expr)
+  | [] => [[]]
+  | operand :: rest =>
+      (completionChoices operand).flatMap fun first =>
+        (operandChoices rest).map fun remaining => first ++ remaining
+
+private def blockCompletionChoices : Block → List (List Expr)
+  | .mk _ statements tail => statementCompletionChoices statements ++
+      (match tail with | none => [] | some expression => completionChoices expression)
+
+private def statementCompletionChoices : List Stmt → List (List Expr)
+  | [] => []
+  | statement :: rest =>
+      (match statement with
+        | .breakValue expression _ => completionChoices expression
+        | .ifS _ (.mk _ left _) right _ => statementCompletionChoices left ++
+            (match right with | none => [] | some (.mk _ statements _) => statementCompletionChoices statements)
+        | .while _ (.mk _ statements _) _ |
+          .forRange _ _ _ (.mk _ statements _) _ |
+          .forEach _ _ _ _ (.mk _ statements _) _ => statementCompletionChoices statements
+        | _ => []) ++ statementCompletionChoices rest
+end
+
+private def expandedSite : NamedSite → List NamedSite
+  | .operands operands => (operandChoices operands).map NamedSite.operands
+  | site => [site]
+
 private def candidatesFor (module : Module) (id : ImplId) (implementation : Impl) (position : Nat) : List VarId :=
   let sites := nestedBlockReturns module id implementation.body ++ (match implementation.body.value with
     | none => []
     | some (.values operands) => [.operands operands]
     | some expression => [.operands [expression]])
+  let sites := sites.flatMap expandedSite
   let sites := sites.filter fun site => match site with
     | .alias .. => false
     | _ => true

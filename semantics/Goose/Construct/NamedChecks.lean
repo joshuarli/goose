@@ -52,4 +52,17 @@ private def discovers (implementation : Impl) (expected : List (Option Nat)) : B
     .ifS (.bool true) (.mk 1 [.retValues [.resultLocal 0 0] 0] none) none 0,
     .retValues [.copy array (.var 1) 0] 0] none } [none]
 
+#guard discovers { base with body := .mk 0 [.letS 0 (.bytes array [10] 0) 0] (some (.blockE (.mk 1 [.breakValue (.resultLocal 0 0) 0] none) 0)) } [some 0]
+
+#guard discovers { base with
+  body := .mk 0
+    [.letS 0 (.bytes array [10] 0) 0,.letS 1 (.bytes array [20] 0) 0]
+    (some (.blockE (.mk 1 [.ifS (.bool true)
+      (.mk 2 [.breakValue (.resultLocal 0 0) 0] none) none 0]
+      (some (.resultLocal 1 0))) 0)) } [none]
+#guard discovers { base with
+  body := .mk 0 [.letS 0 (.bytes array [10] 0) 0]
+    (some (.blockE (.mk 1 [.breakValue (.resultLocal 0 0) 0]
+      (some (.copy array (.var 0) 0))) 0)) } [none]
+
 end Goose.Construct.NamedChecks
