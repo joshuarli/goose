@@ -1,9 +1,206 @@
 import Goose.Evidence.Typing
 import Goose.Evidence.TypingValidation
+import Goose.Evidence.TypingViews
+import Goose.Evidence.TypingMetadata
 
 namespace Goose.Evidence
 
 open Goose.Core Goose.GIR
+
+private theorem forIn_yielded {ε α : Type} {xs : List α}
+    {f : α → PUnit.{1} → Except ε (ForInStep PUnit.{1})}
+    (checked : forIn xs PUnit.unit f = .ok ())
+    (yielded : ∀ value accumulator step, f value accumulator = .ok step → step = .yield PUnit.unit) :
+    ∀ value ∈ xs, f value PUnit.unit = .ok (.yield PUnit.unit) := by
+  induction xs with
+  | nil => simp
+  | cons value rest ih =>
+    rw [List.forIn_cons] at checked
+    obtain ⟨step, head, tail⟩ := bind_ok checked
+    have same := yielded value PUnit.unit step head
+    subst step
+    intro other present
+    rcases List.mem_cons.mp present with rfl | present
+    · exact head
+    · exact ih tail other present
+
+private theorem map_equal_from_zip {α β γ : Type} {xs : List α} {ys : List β}
+    {left : α → γ} {right : β → γ} (count : xs.length = ys.length)
+    (matched : ∀ pair ∈ xs.zip ys, left pair.1 = right pair.2) : xs.map left = ys.map right := by
+  induction xs generalizing ys with
+  | nil => cases ys <;> simp_all
+  | cons head tail ih =>
+    cases ys with
+    | nil => simp at count
+    | cons other rest =>
+      simp only [List.length_cons, Nat.add_right_cancel_iff] at count
+      have same := matched (head, other) (by simp)
+      have tailSame := ih count (fun pair present => matched pair (by simp [present]))
+      simp only [List.map_cons, same, tailSame]
+
+private theorem structResult_metadata {env : TyEnv} {ty : Ty} {values : List ValueId}
+    {result : VTy} (typed : (Op.structLit ty values).resultTy env = .ok result) :
+    ∃ sid fields, ty = .structT sid fields ∧ result = .data ty ∧
+      values.map (fun id => env.vals[id]?) = fields.toList.map (fun fieldTy => some (some (.data fieldTy))) := by
+  cases ty with
+  | structT sid fields =>
+    simp only [Op.resultTy] at typed
+    cases lookup : env.structs[sid]? with
+    | none => simp [lookup, tyErr] at typed
+    | some descriptor =>
+      rw [lookup] at typed
+      dsimp only at typed
+      have payload : fields = TyList.ofList (descriptor.fields.toList.map (·.ty)) := by
+        by_cases same : fields = TyList.ofList (descriptor.fields.toList.map (·.ty))
+        · exact same
+        · simp [same, tyErr, bind, Except.bind] at typed
+      simp only [payload, beq_self_eq_true, ↓reduceIte] at typed
+      have count : values.length = descriptor.fields.size := by
+        by_cases same : values.length = descriptor.fields.size
+        · exact same
+        · simp [same, tyErr, bind, Except.bind] at typed
+      simp only [count, beq_self_eq_true, ↓reduceIte] at typed
+      obtain ⟨accumulator, loop, resultTyped⟩ := bind_ok typed
+      cases accumulator
+      have all := forIn_yielded loop (by
+        intro pair accumulator step checked
+        obtain ⟨fieldTy, read, checked⟩ := bind_ok checked
+        by_cases same : fieldTy = pair.2.ty
+        · simpa [same, pure, Except.pure] using checked.symm
+        · simp [same, tyErr, bind, Except.bind] at checked)
+      refine ⟨sid, fields, rfl, ?_, ?_⟩
+      · simpa only [payload] using (Except.ok.inj resultTyped).symm
+      · simp only [payload, Goose.Core.Sound.tyList_toList_ofList, List.map_map]
+        apply map_equal_from_zip (by simpa using count)
+        intro pair present
+        have checked := all pair present
+        obtain ⟨fieldTy, read, checked⟩ := bind_ok checked
+        have same : fieldTy = pair.2.ty := by
+          by_cases same : fieldTy = pair.2.ty
+          · exact same
+          · simp [same, tyErr, bind, Except.bind] at checked
+        subst fieldTy
+        exact dataTy_of read
+  | _ => simp [Op.resultTy, tyErr] at typed
+
+private theorem pureResult_state {cfg : GCfg} {activations : ActivationTypes}
+    {before after : St} {cell : RVal} {ty : VTy}
+    (stateTyped : RuntimeStateTy cfg activations before)
+    (result : WeakCellTy (runtimeDeclarations cfg activations) cell ty ∧ after = before) :
+    WeakCellTy (runtimeDeclarations cfg activations) cell ty ∧ RuntimeStateTy cfg activations after :=
+  ⟨result.1, result.2 ▸ stateTyped⟩
+
+theorem execPure_result_typed {cfg : GCfg} {fn : Func} {activations : ActivationTypes}
+    {fr : Frame} {before after : St} {op : Op} {ty : VTy} {cell : RVal}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (typed : op.resultTy { cfg.mod.tyEnv fn with vals := fn.valueTypes cfg.mod } = .ok ty)
+    (evaluated : execPure ⟨cfg, fn⟩ fr op before = .ok cell after) :
+    WeakCellTy (runtimeDeclarations cfg activations) cell ty ∧ RuntimeStateTy cfg activations after := by
+  cases op with
+  | constInt intTy value =>
+    obtain ⟨range, rfl⟩ := constInt_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_constInt_typed evaluated)
+  | constBool value =>
+    have result := constBool_metadata typed
+    subst ty
+    exact pureResult_state frameTyped.1 (execPure_constBool_typed evaluated)
+  | constUnit =>
+    have result := constUnit_metadata typed
+    subst ty
+    exact pureResult_state frameTyped.1 (execPure_constUnit_typed evaluated)
+  | bin operator intTy left right origin =>
+    obtain ⟨leftMetadata, rightMetadata, rfl⟩ := bin_metadata typed
+    exact pureResult_state frameTyped.1
+      (execPure_bin_typed frameTyped.2.2 leftMetadata rightMetadata evaluated)
+  | un operator intTy operand origin =>
+    obtain ⟨metadata, rfl⟩ := un_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_un_typed frameTyped.2.2 metadata evaluated)
+  | cmp operator intTy left right =>
+    obtain ⟨leftMetadata, rightMetadata, rfl⟩ := cmp_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_cmp_typed evaluated)
+  | boolCmp operator left right =>
+    obtain ⟨leftMetadata, rightMetadata, rfl⟩ := boolCmp_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_boolCmp_typed evaluated)
+  | boolNot operand =>
+    obtain ⟨metadata, rfl⟩ := boolNot_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_boolNot_typed frameTyped.2.2 metadata evaluated)
+  | conv conversion source target operand origin =>
+    obtain ⟨metadata, rfl⟩ := conv_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_conv_typed frameTyped.2.2 metadata evaluated)
+  | next intTy operand =>
+    obtain ⟨metadata, rfl⟩ := next_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_next_typed frameTyped.2.2 metadata evaluated)
+  | slotAddr slotId =>
+    obtain ⟨slot, permission, lookup, rfl⟩ := slotAddr_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_slotAddr_typed frameTyped.2.1 lookup evaluated permission)
+  | globalAddr globalId =>
+    obtain ⟨target, kind, permission, lookup, rfl⟩ := globalAddr_metadata typed
+    change (cfg.mod.globals.map (fun global => (global.ty, global.kind)))[globalId]? = some (target, kind) at lookup
+    cases globalLookup : cfg.mod.globals[globalId]? with
+    | none => simp [globalLookup] at lookup
+    | some global =>
+      have same : (global.ty, global.kind) = (target, kind) := by simpa [globalLookup] using lookup
+      obtain ⟨rfl, rfl⟩ := same
+      exact pureResult_state frameTyped.1 (execPure_globalAddr_typed globalLookup evaluated permission)
+  | refElem viewId indexId =>
+    obtain ⟨permission, element, indexTy, viewMetadata, indexMetadata, rfl⟩ := refElem_metadata typed
+    exact pureResult_state frameTyped.1
+      (execPure_refElem_typed frameTyped.2.2 viewMetadata indexMetadata evaluated)
+  | refFreeze reference =>
+    obtain ⟨permission, target, metadata, rfl⟩ := refFreeze_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_refFreeze_typed frameTyped.2.2 metadata evaluated)
+  | load reference =>
+    obtain ⟨permission, target, metadata, rfl⟩ := load_metadata typed
+    exact pureResult_state frameTyped.1
+      (execPure_load_typed frameTyped.2.2 metadata frameTyped.1.2 evaluated)
+  | snapshot mode reference =>
+    obtain ⟨permission, owner, element, resultPermission, metadata, arrayType, rfl⟩ := snapshot_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_snapshot_typed frameTyped.2.2 metadata arrayType evaluated)
+  | sliceView sliceId =>
+    obtain ⟨permission, element, metadata, rfl⟩ := sliceView_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_sliceView_typed frameTyped.2.2 metadata evaluated)
+  | viewLen viewId =>
+    obtain ⟨permission, element, metadata, rfl⟩ := viewLen_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_viewLen_typed evaluated)
+  | viewSlice permission viewId lo hi origin =>
+    obtain ⟨sourcePermission, element, metadata, loMetadata, hiMetadata, rfl⟩ := viewSlice_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_viewSlice_typed frameTyped.2.2 metadata evaluated)
+  | arrayLen reference =>
+    obtain ⟨permission, owner, element, metadata, arrayType, rfl⟩ := arrayLen_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_arrayLen_typed evaluated)
+  | indexChecked viewId indexId origin =>
+    obtain ⟨permission, element, indexTy, viewMetadata, indexMetadata, rfl⟩ := indexChecked_metadata typed
+    exact pureResult_state frameTyped.1
+      (execPure_indexChecked_typed frameTyped.2.2 viewMetadata indexMetadata evaluated)
+  | indexProven viewId indexId =>
+    obtain ⟨permission, element, indexTy, viewMetadata, indexMetadata, rfl⟩ := indexProven_metadata typed
+    exact pureResult_state frameTyped.1
+      (execPure_indexProven_typed frameTyped.2.2 viewMetadata indexMetadata evaluated)
+  | push reference value origin =>
+    obtain ⟨permission, owner, element, refMetadata, ownerType, valueMetadata, rfl⟩ := push_metadata typed
+    exact execPure_push_typed frameTyped refMetadata valueMetadata ownerType evaluated
+  | pop reference origin =>
+    obtain ⟨permission, owner, element, metadata, ownerType, rfl⟩ := pop_metadata typed
+    obtain ⟨valueTyped, storeTyped, sameAllocation⟩ :=
+      execPure_pop_typed frameTyped.2.2 metadata ownerType frameTyped.1.2 evaluated
+    exact ⟨valueTyped, sameAllocation ▸ frameTyped.1.1, storeTyped⟩
+  | call callee args origin => simp [execPure, fault, M.stop] at evaluated
+  | arrLit arrayTy values =>
+    obtain ⟨element, arrayType, metadata, fixedCount, capacity, rfl⟩ := arrLit_metadata typed
+    exact pureResult_state frameTyped.1
+      (execPure_arrLit_typed frameTyped.2.2 metadata arrayType fixedCount evaluated)
+  | structLit structTy values =>
+    obtain ⟨sid, fields, rfl, rfl, metadata⟩ := structResult_metadata typed
+    exact pureResult_state frameTyped.1
+      (execPure_structLit_typed frameTyped.2.2 (FieldOperands.ofMap metadata) evaluated)
+  | fieldAddr owner index =>
+    obtain ⟨permission, sid, fields, descriptor, field, metadata, lookup, selector, logicalField, rfl⟩ :=
+      fieldAddr_metadata typed
+    exact pureResult_state frameTyped.1
+      (execPure_fieldAddr_typed frameTyped.2.2 metadata logicalField evaluated)
+  | arrFill arrayTy operand =>
+    obtain ⟨element, count, rfl, metadata, rfl⟩ := arrFill_metadata typed
+    exact pureResult_state frameTyped.1 (execPure_arrFill_typed frameTyped.2.2 metadata evaluated)
 
 namespace AggregateReferences
 
