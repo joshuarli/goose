@@ -81,15 +81,10 @@ def prefixCoreBlock (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List S
   Goose.Core.releaseScope env sc si
   pure flow'
 
-/-- What a block does with the flow that ends its statements. -/
-def prefixValueFlow (n : Nat) (cfg : Cfg) : Option Expr → Env → Flow → M Flow
-  | some e, env', .normal _ => do pure (Flow.normal (← evalExpr n cfg env' e))
-  | _, _, f => pure f
-
 theorem execBlock_pre (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List Stmt)
     (pre' : List (VarId × Val)) (value : Option Expr) :
     execBlock (n + 1) cfg env pre' (.mk sc stmts value) =
-      prefixCoreBlock n cfg env sc stmts pre' (prefixValueFlow n cfg value) := by
+      prefixCoreBlock n cfg env sc stmts pre' (valueFlow n cfg value) := by
   rw [execBlock]
   simp only [prefixCoreBlock]
   congr 1
@@ -100,7 +95,7 @@ theorem execBlock_pre (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List
   funext flow
   congr 1
   funext flow'
-  cases flow <;> cases value <;> simp [prefixValueFlow]
+  cases flow <;> cases value <;> simp [valueFlow]
 
 theorem prefixBlock_core {n : Nat} {lc : Option LoopCtx} (ihs : ∀ ss, StmtsClaim n lc ss) {sc : ScopeId}
     {stmts : List Stmt} {pre : List (SlotId × ValueId × OriginId)} {pre' : List (VarId × Val)}
@@ -194,9 +189,9 @@ theorem blockPreClaim_succ (n : Nat) (lc : Option LoopCtx) (pre : List (SlotId �
   | some e =>
     simp only [lowerBlockValue] at h4
     refine (prefixBlock_core ihs (by okpf) hpre h1 h2 h3 h4 h5 hls' hr hpp hext hrel hprer (advB_lowerExpr e)
-      (U := fun _ => True) (cells := fun rx v => [(rx, .val v)]) (vf := prefixValueFlow n cfg (some e)) ?_).mono ?_
+      (U := fun _ => True) (cells := fun rx v => [(rx, .val v)]) (vf := valueFlow n cfg (some e)) ?_).mono ?_
     · intro env' pt_x fr_x hpp_x hext_x hrel_x
-      simp only [prefixValueFlow]
+      simp only [valueFlow]
       refine SimG.bind (ihe e (by okpf) le ls_s rx ls_x pt_x cfg env' cx fr_x h4 hpp_x hext_x hrel_x)
         fun v pt' fr' P => ?_
       exact SimG.ret ⟨v, rfl, trivial, P⟩
@@ -208,7 +203,7 @@ theorem blockPreClaim_succ (n : Nat) (lc : Option LoopCtx) (pre : List (SlotId �
     · have h4' : (pure 0 : B ValueId) le ls_s = (rx, ls_x) := by
         simpa [lowerBlockValue] using h4
       refine (prefixBlock_core ihs (by okpf) hpre h1 h2 h3 h4' h5 hls' hr hpp hext hrel hprer (AdvB.pure _)
-        (U := fun v => v = .unit) (cells := fun _ _ => []) (vf := prefixValueFlow n cfg none) ?_).mono ?_
+        (U := fun v => v = .unit) (cells := fun _ _ => []) (vf := valueFlow n cfg none) ?_).mono ?_
       · intro env' pt_x fr_x hpp_x hext_x hrel_x
         have hx : ls_x = ls_s := by rw [pure_run] at h4'; exact (Prod.mk.inj h4').2.symm
         subst hx
@@ -219,7 +214,7 @@ theorem blockPreClaim_succ (n : Nat) (lc : Option LoopCtx) (pre : List (SlotId �
     · have h4' : emitDef .constUnit le ls_s = (rx, ls_x) := by
         simpa [lowerBlockValue] using h4
       refine (prefixBlock_core ihs (by okpf) hpre h1 h2 h3 h4' h5 hls' hr hpp hext hrel hprer (advB_emitDef _)
-        (U := fun v => v = .unit) (cells := fun rx v => [(rx, .val v)]) (vf := prefixValueFlow n cfg none) ?_).mono ?_
+        (U := fun v => v = .unit) (cells := fun rx v => [(rx, .val v)]) (vf := valueFlow n cfg none) ?_).mono ?_
       · intro env' pt_x fr_x hpp_x hext_x hrel_x
         have hP := Post.init hrel_x hpp_x
         show SimG cx pt_x fr_x ((pure () : M Unit) >>= fun _ => pure (Flow.normal Val.unit)) _
