@@ -20,6 +20,7 @@ structure TyEnv where
   targets : Array (List ResultDescriptor) := #[]
   
   contentsWritable : ValueId → Option Bool := fun _ => none
+  adaptedSources : ValueId → List ValueId := fun _ => []
 
 abbrev TyR := Except String
 
@@ -166,6 +167,22 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     let (ty, _) ← env.destTy parent
     unless ty.element? == some element && element.nonfixed do tyErr "destination child type mismatch"
     pure (.dest element .value)
+  | .destAdapt destination producer request _ => do
+    let (receiving,_) ← env.destTy destination
+    unless receiving.nonfixed && producer.nonfixed && producer.constructible &&
+        arrayElem? receiving == arrayElem? producer && (arrayElem? producer).isSome && producer.adaptsTo receiving do
+      tyErr "construction adaptation requires nonfixed array families with identical element type"
+    pure (.dest producer request)
+  | .destAdaptFinish closed _ => do
+    let sources := env.adaptedSources closed
+    let some source := sources.head? | tyErr "adaptation completion lacks receiving lineage"
+    let (receiving,request) ← env.destTy source
+    for source in sources do
+      unless (← env.destTy source) == (receiving,request) do tyErr "adaptation joins incompatible receiving protocols"
+    match ← env.valTy closed with
+    | .built .. => pure (.built receiving request)
+    | .cancelled .. => pure (.cancelled receiving request)
+    | _ => tyErr "adaptation completion requires built or cancelled producer"
   | .destFinish destination _ => do
     let (ty, request) ← env.destTy destination
     pure (.built ty request)
@@ -355,11 +372,66 @@ namespace Goose.Construct.GIR
 open Goose.Core (Mutability VarKind IntTy Request ConstructionRequest)
 
 
+private def adaptationSources (m : Module) (f : Func) : Array (List ValueId) := Id.run do
+  let mut sources : Array (List ValueId) := Array.replicate f.numValues []
+  let mut packs : Array (List (List ValueId)) := Array.replicate f.numValues []
+  for _ in [0:f.numValues * (f.blocks.size + 1) + 1] do
+    let previous := sources
+    let previousPacks := packs
+    for block in f.blocks do
+      for inst in block.insts do
+        let get (id : ValueId) : List ValueId := sources[id]?.getD []
+        let outputs (results : List ResultDescriptor) (destinations : List ValueId) := Id.run do
+          let mut pending := destinations
+          let mut rows : List (List ValueId) := []
+          for result in results do
+            if result.ty.nonfixed then
+              rows := rows ++ [(pending.head?).map get |>.getD []]
+              pending := pending.tail
+            else rows := rows ++ [[]]
+          return rows
+        match inst with
+        | .def id op =>
+            let found := match op with
+              | .destAdapt source .. => [source]
+              | .destFinish source _ | .destAbandon source _ | .destRelocate source _ _ |
+                .destStage source _ | .destFit source _ | .destValue source _ => get source
+              | .result pack position => (packs[pack]?.getD [])[position]?.getD []
+              | .callConstruct callee _ destinations _ =>
+                  let rows := (m.funcs[callee]?).map (fun f => outputs f.results destinations) |>.getD []
+                  if rows.length == 1 then rows.head?.getD [] else []
+              | _ => []
+            sources := sources.set! id ((get id ++ found).eraseDups)
+            if let .callConstruct callee _ destinations _ := op then
+              packs := packs.set! id ((m.funcs[callee]?).map (fun f => outputs f.results destinations) |>.getD [])
+        | .term term =>
+            let edges : List (BlockId × List (List ValueId) × List ValueId) := match term with
+              | .br target args => [(target,[],args)]
+              | .condbr _ left la right ra => [(left,[],la),(right,[],ra)]
+              | .invoke callee _ destinations normal forwarded escapes _ =>
+                  let rows := (m.funcs[callee]?).map (fun f => outputs f.results destinations) |>.getD []
+                  (normal,rows,forwarded) :: escapes.map (fun edge =>
+                    let results := ((m.targets[edge.target]?).bind (fun target => m.funcs[target.first]?)).map (·.results) |>.getD []
+                    (edge.block,results.map (fun _ => []) ++ destinations.map get,edge.args))
+              | _ => []
+            for (target,leading,args) in edges do
+              if let some block := f.blocks[target]? then
+                for ((id,_),lineage) in (block.params.take leading.length).zip leading do
+                  sources := sources.set! id ((get id ++ lineage).eraseDups)
+                for ((id,_),arg) in (block.params.drop leading.length).zip args do
+                  sources := sources.set! id ((get id ++ get arg).eraseDups)
+                  packs := packs.set! id (packs[arg]?.getD [])
+        | _ => pure ()
+    if previous == sources && previousPacks == packs then break
+  return sources
+
 private def Module.baseTyEnv (m : Module) (f : Func) : TyEnv :=
+  let adaptations := adaptationSources m f
   { slots := f.slots
     globals := m.globals.map fun g => (g.ty, g.kind)
     sigs := m.funcs.map fun h => (h.params, h.results)
     vals := #[]
+    adaptedSources := fun id => adaptations[id]?.getD []
     structs := m.structs
     results := f.results
     targets := m.targets.map fun target => (m.funcs[target.first]?).map (·.results) |>.getD [] }

@@ -1204,3 +1204,165 @@ private def selfEscapeUnreachable : Module :=
 #guard (match Validate.validate selfEscapeUnreachable with | .error v => v.code == .v020 | _ => false)
 
 end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def emittedPushReferenceWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"u8\"],[\"varr\",0],[\"grow\",1],[\"int\",\"i64\"],[\"dest\",2,\"value\"],[\"built\",2,\"value\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"view\",\"const\",0]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",2,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,3,\"0\"],[\"i_dest_open\",1,[\"dr_slot\",0],2,\"value\",[0],[0]],[\"i_dest_finish\",2,1,[0]],[\"x_dest_publish\",2,[0]],[\"i_slot\",3,0],[\"i_dest_open\",4,[\"dr_push\",3],1,\"value\",[],[0]],[\"x_dest_bytes\",4,[65],[0]],[\"i_dest_finish\",5,4,[0]],[\"i_dest_publish_ref\",6,5,[0]],[\"i_snap\",7,\"borrowed\",6],[\"i_int\",8,3,\"0\"],[\"i_elem\",9,7,8],[\"i_int\",10,0,\"66\"],[\"x_store\",9,10,[0]],[\"i_alen\",11,3],[\"i_render\",12,11,[0]],[\"i_snap\",13,\"borrowed\",6],[\"i_elem\",14,13,8],[\"i_load\",15,14],[\"i_render\",16,15,[0]],[\"x_print\",[[\"pp_val\",12],[\"pp_text\",\" \"],[\"pp_val\",16]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+
+private def emittedPushReference : Option Module := (Decode.decodeBytes emittedPushReferenceWire.toUTF8).toOption
+
+#guard emittedPushReference.any (fun module => (Validate.validate module).isOk)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def emittedAdaptGrowWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"dest\",1,\"value\"],[\"varr\",0],[\"dest\",3,\"value\"],[\"built\",3,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",7]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_dest_adapt\",2,1,3,\"value\",[0]],[\"i_call_construct\",3,1,[],[2],[0]],[\"i_dest_adapt_finish\",4,3,[0]],[\"x_dest_publish\",4,[0]],[\"i_slot\",5,0],[\"i_snap\",6,\"owner\",5],[\"i_render\",7,6,[0]],[\"x_print\",[[\"pp_val\",7]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,1],[],[]],[\"func\",\"make\",[],[[\"result\",3,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,4]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+
+private def emittedAdaptGrow : Option Module := (Decode.decodeBytes emittedAdaptGrowWire.toUTF8).toOption
+
+#guard emittedAdaptGrow.any (fun module => (Validate.validate module).isOk)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def emittedAdaptVarrWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"varr\",0],[\"dest\",1,\"value\"],[\"grow\",0],[\"dest\",3,\"value\"],[\"built\",3,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",7]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_dest_adapt\",2,1,3,\"value\",[0]],[\"i_call_construct\",3,1,[],[2],[0]],[\"i_dest_adapt_finish\",4,3,[0]],[\"x_dest_publish\",4,[0]],[\"i_slot\",5,0],[\"i_snap\",6,\"owner\",5],[\"i_render\",7,6,[0]],[\"x_print\",[[\"pp_val\",7]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,1],[],[]],[\"func\",\"make\",[],[[\"result\",3,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,4]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+
+private def emittedAdaptVarr : Option Module := (Decode.decodeBytes emittedAdaptVarrWire.toUTF8).toOption
+
+#guard emittedAdaptVarr.any (fun module => (Validate.validate module).isOk)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+#guard emittedPushReference.bind observation == some ("1 66\n".toUTF8.data.toList,
+  [.begin 0,.publish 0,.begin 1,.write 1 0,.publish 1])
+#guard emittedPushReference.any roundTrip
+#guard emittedAdaptGrow.bind observation == some ("[7]\n".toUTF8.data.toList,
+  [.begin 0,.write 0 0,.relocate 0 .headerRemoval,.publish 0])
+#guard emittedAdaptGrow.any roundTrip
+#guard emittedAdaptVarr.bind observation == some ("[7]\n".toUTF8.data.toList,
+  [.begin 0,.write 0 0,.publish 0])
+#guard emittedAdaptVarr.any roundTrip
+
+private def unfinishedAdaptation : Module :=
+  let original := emittedAdaptGrow.getD rawBytes
+  { original with funcs := original.funcs.mapIdx fun index f =>
+    if index == 0 then { f with blocks := f.blocks.map fun block =>
+      { block with insts := block.insts.map fun
+        | .def 4 (.destAdaptFinish ..) => .def 4 .constUnit
+        | .eff (.destPublish _ org) => .eff (.destPublish 3 org)
+        | inst => inst } } else f }
+
+#guard (match Validate.validate unfinishedAdaptation with | .error v => v.code == .v060 | _ => false)
+
+private def nestedAdaptation : Module :=
+  let original := emittedAdaptGrow.getD rawBytes
+  { original with funcs := original.funcs.mapIdx fun index f =>
+    if index == 0 then { f with blocks := f.blocks.map fun block =>
+      { block with insts := block.insts.flatMap fun
+        | .def 3 (.callConstruct callee args _ org) =>
+            [.def 8 (.destAdapt 2 (.varr (.int .i64)) .value org),.def 3 (.callConstruct callee args [8] org)]
+        | inst => [inst] } } else f }
+
+#guard (match Validate.validate nestedAdaptation with | .error v => v.code == .v060 | _ => false)
+
+private def missingAdaptationLineage : Module :=
+  let original := rawBytes
+  { original with funcs := original.funcs.map fun f => { f with blocks := f.blocks.map fun block =>
+    { block with insts := block.insts.map fun
+      | .def 1 (.destFinish _ org) => .def 1 (.destAdaptFinish 0 org)
+      | inst => inst } } }
+
+#guard (match Validate.validate missingAdaptationLineage with | .error v => v.code == .v010 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def nonemptyAdaptation : Module :=
+  let original := emittedAdaptGrow.getD rawBytes
+  { original with funcs := original.funcs.mapIdx fun index f =>
+    if index == 0 then { f with blocks := f.blocks.map fun block =>
+      { block with insts := block.insts.flatMap fun
+        | .def 2 op => [.eff (.destWrite 1 0 (some 0)),.def 2 op]
+        | inst => [inst] } } else f }
+
+#guard (match Validate.validate nonemptyAdaptation with | .error v => v.code == .v060 | _ => false)
+
+private def cancelledAdaptation : Module :=
+  let owner := Ty.grow (.int .i64)
+  moduleOf #[function "entry" #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) owner .value none (some 0)),
+    .def 1 (.destAdapt 0 (.varr (.int .i64)) .value (some 0)),
+    .def 2 (.destAbandon 1 (some 0)),.def 3 (.destAdaptFinish 2 (some 0)),
+    .eff (.destCancel 3 (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩] #[⟨owner,.mutable,0,0⟩]]
+
+#guard (Validate.validate cancelledAdaptation).isOk
+#guard observation cancelledAdaptation == some ([],[.begin 0,.abandon 0])
+#guard roundTrip cancelledAdaptation
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def stagedAdaptation (capacity : Nat) : Module :=
+  let owner := Ty.limited (.int .u8) capacity
+  moduleOf #[function "entry" #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) owner .value none (some 0)),
+    .def 1 (.destStage 0 (some 0)),.def 2 (.destAdapt 1 byteTy .value (some 0)),
+    .eff (.destBytes 2 [65,66] (some 0)),.def 3 (.destFinish 2 (some 0)),
+    .def 4 (.destAdaptFinish 3 (some 0)),.def 5 (.destFit 4 (some 0)),
+    .eff (.destPublish 5 (some 0)),.def 6 (.slotAddr 0),.def 7 (.snapshot .owner 6),
+    .eff (.print [.val 7] (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩] #[⟨owner,.mutable,0,0⟩]]
+
+#guard (Validate.validate (stagedAdaptation 2)).isOk
+#guard observation (stagedAdaptation 2) == some ([65,66,10],
+  [.begin 0,.stage 0,.write 0 0,.write 0 1,.relocate 0 .headerRemoval,.copy (.storage 1 []) 0,.publish 0])
+#guard roundTrip (stagedAdaptation 2)
+#guard (match Run.run 1000 .release (stagedAdaptation 1) with
+  | .done (.aborted .capacity 0) stdout events => stdout.isEmpty &&
+      events == [.begin 0,.stage 0,.write 0 0,.write 0 1,.relocate 0 .headerRemoval]
+  | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def adaptedNamedProducer : Module :=
+  let original := emittedAdaptVarr.getD rawBytes
+  let producer := Ty.grow (.int .i64)
+  let callee := { original.funcs[1] with
+    slots := #[⟨producer,.mutable,0,0⟩],
+    results := [⟨producer,.value,some 0⟩], summary := .unknown, blocks := #[⟨[(0,.dest producer .value)],[
+      .eff (.enter 0),.def 1 (.constInt .i64 7),.eff (.destWrite 0 1 (some 0)),
+      .def 2 (.destFinish 0 (some 0)),.eff (.destBind 0 2 (some 0)),
+      .def 3 (.slotAddr 0),.def 4 (.snapshot .owner 3),.def 5 (.constInt .i64 0),
+      .def 6 (.indexChecked 4 5 (some 0)),.def 7 (.constInt .i64 9),.eff (.store 6 7 (some 0)),
+      .def 8 (.snapshot .owner 3),.eff (.print [.val 8] (some 0)),.def 9 (.destNamed 0 (some 0)),
+      .eff (.leave 0),.term (.ret [9] (some 0))]⟩] }
+  { original with funcs := #[{ original.funcs[0] with summary := .unknown },callee] }
+
+#guard (Validate.validate adaptedNamedProducer).isOk
+#guard observation adaptedNamedProducer == some ("[9]\n[9]\n".toUTF8.data.toList,
+  [.begin 0,.write 0 0,.publish 0])
+#guard roundTrip adaptedNamedProducer
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def abortBeforeAdaptationFinish : Module :=
+  let original := emittedAdaptGrow.getD rawBytes
+  { original with funcs := original.funcs.mapIdx fun index f =>
+    if index == 0 then { f with
+      summary := known [] [] [] true false, blocks := f.blocks.map fun block => { block with insts := block.insts.take 5 ++ [.term (.abort .userAbort (some 0))] } } else f }
+
+#guard (Validate.validate abortBeforeAdaptationFinish).isOk
+#guard (match Run.run 1000 .release abortBeforeAdaptationFinish with
+  | .done (.aborted .userAbort 0) stdout events => stdout.isEmpty && events == [.begin 0,.write 0 0]
+  | _ => false)
+
+end Goose.Construct.GIR.Checks

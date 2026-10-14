@@ -280,6 +280,8 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     def_ (.destOpen (← decReceiver tb fs[1]!) (← decTy tb fs[2]!) (← decRequest fs[3]!)
       (← optional fs[4]! "known count" decVal) (← org 5))
   | "i_dest_child" => do arity tag fs 4; def_ (.destChild (← v 1) (← decTy tb fs[2]!) (← org 3))
+  | "i_dest_adapt" => do arity tag fs 5; def_ (.destAdapt (← v 1) (← decTy tb fs[2]!) (← decRequest fs[3]!) (← org 4))
+  | "i_dest_adapt_finish" => do arity tag fs 3; def_ (.destAdaptFinish (← v 1) (← org 2))
   | "i_dest_finish" => do arity tag fs 3; def_ (.destFinish (← v 1) (← org 2))
   | "i_dest_named" => do
     arity tag fs 3
@@ -783,6 +785,8 @@ def wOp (r : ValueId) : Op → W String
   | .destOpen receiver ty request count org => do
       pure (wRec "i_dest_open" [toString r,wReceiver receiver,← wTy ty,quote request.tag,wOpt count,wOpt org])
   | .destChild parent ty org => do pure (wRec "i_dest_child" [toString r,toString parent,← wTy ty,wOpt org])
+  | .destAdapt id producer request org => do pure (wRec "i_dest_adapt" [toString r,toString id,← wTy producer,quote request.tag,wOpt org])
+  | .destAdaptFinish id org => pure (wRec "i_dest_adapt_finish" [toString r,toString id,wOpt org])
   | .destFinish id org => pure (wRec "i_dest_finish" [toString r,toString id,wOpt org])
   | .destNamed slot org => pure (wRec "i_dest_named" [toString r,toString slot,wOpt org])
   | .resultExitDest position org => pure (wRec "i_result_exit_dest" [toString r,toString position,wOpt org])

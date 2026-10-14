@@ -100,6 +100,8 @@ inductive Op
   | result (pack : ValueId) (position : Nat)
   | destOpen (receiver : DestReceiver) (ty : Ty) (request : ConstructionRequest) (count : Option ValueId) (org : Option OriginId)
   | destChild (parent : ValueId) (element : Ty) (org : Option OriginId)
+  | destAdapt (destination : ValueId) (producer : Ty) (request : ConstructionRequest) (org : Option OriginId)
+  | destAdaptFinish (closed : ValueId) (org : Option OriginId)
   | destFinish (destination : ValueId) (org : Option OriginId)
   | destNamed (slot : SlotId) (org : Option OriginId)
   | resultExitDest (position : Nat) (org : Option OriginId)
@@ -268,7 +270,7 @@ def Op.uses : Op → List ValueId
   | .bytes .. | .destNamed .. | .resultExitDest .. | .targetDest .. => []
   | .result v _ | .render v _ => [v]
   | .destOpen receiver _ _ count _ => receiver.uses ++ count.toList
-  | .destChild v _ _ | .destFinish v _ | .destPublishRef v _ | .destArg v _ | .destAbandon v _ |
+  | .destAdapt v _ _ _ | .destAdaptFinish v _ | .destChild v _ _ | .destFinish v _ | .destPublishRef v _ | .destArg v _ | .destAbandon v _ |
       .destValue v _ | .destRelocate v _ _ | .destStage v _ | .destFit v _ => [v]
   | .destAbandonNamed _ v _ => [v]
   | .callConstruct _ args destinations _ => args ++ destinations

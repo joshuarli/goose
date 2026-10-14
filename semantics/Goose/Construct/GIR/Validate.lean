@@ -1,5 +1,6 @@
 import Goose.Construct.GIR.Evidence
 import Goose.Construct.GIR.Provenance
+import Goose.Construct.GIR.Borrow
 import Goose.Construct.Layout
 
 namespace Goose.Construct.GIR
@@ -38,7 +39,7 @@ def Inst.origin? : Inst → Option (Option OriginId)
     | .conv kind _ _ _ o => if kind matches .as then some o else o.map some
     | .viewSlice _ _ _ _ o |
       .indexChecked _ _ o | .push _ _ o | .pop _ o | .call _ _ o | .bytes _ o |
-      .destOpen _ _ _ _ o | .destChild _ _ o | .destFinish _ o | .destNamed _ o |
+      .destOpen _ _ _ _ o | .destAdapt _ _ _ o | .destAdaptFinish _ o | .destChild _ _ o | .destFinish _ o | .destNamed _ o |
       .resultExitDest _ o | .destAbandonNamed _ _ o | .destPublishRef _ o | .destArg _ o | .destAbandon _ o |
       .destValue _ o | .destRelocate _ _ o | .destStage _ o | .destFit _ o |
       .callConstruct _ _ _ o | .targetDest _ _ o | .render _ o => some o
@@ -504,7 +505,7 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
                   else []
               | .refFreeze source | .snapshot _ source | .sliceView source | .viewSlice _ source _ _ _ |
                 .refElem source _ | .indexChecked source _ _ | .indexProven source _ | .fieldAddr source _ |
-                .destFinish source _ | .destPublishRef source _ | .destArg source _ | .destAbandon source _ | .destValue source _ |
+                .destAdapt source _ _ _ | .destAdaptFinish source _ | .destFinish source _ | .destPublishRef source _ | .destArg source _ | .destAbandon source _ | .destValue source _ |
                 .destRelocate source _ _ | .destStage source _ | .destFit source _ | .destChild source _ _ => get source
               | .destOpen receiver _ _ _ _ => match receiver with
                 | .slot slot => [.local slot]
@@ -645,58 +646,69 @@ private def receiverType? (m : Module) (f : Func) (receiver : DestReceiver) : Op
   | .push reference => (m.environment f |>.refTy reference).toOption.bind fun (_,ty) => ty.element?
   | .append reference | .whole reference => (m.environment f |>.refTy reference).toOption.map (·.2)
 
-private def constructionMaximum (m : Module) (f : Func) (provenance : Provenance) (id : ValueId) : Option Nat := Id.run do
-  let owner := provenance.values[id]?.getD []
-  let same (id : ValueId) := provenance.values[id]?.getD [] == owner
-  let cyclic (start : Nat) := Id.run do
-    let mut reached := ((f.blocks[start]?).bind Block.lastTerm?).map Term.successors |>.getD []
-    for _ in [0:f.blocks.size] do
-      for id in reached do
-        reached := (reached ++ (((f.blocks[id]?).bind Block.lastTerm?).map Term.successors |>.getD [])).eraseDups
-    return reached.contains start
-  let env := m.environment f
-  let mut costs : Array Nat := #[]
-  for (block,index) in f.blocks.toList.zipIdx do
-    let mut count := 0
-    for inst in block.insts do
-      match inst with
-      | .eff (.destBytes destination bytes _) => if same destination then count := count + bytes.length
-      | .eff (.destWrite destination _ _) | .eff (.destAttach destination _ _) => if same destination then count := count + 1
-      | .eff (.destRepeat destination _ _) =>
-          if same destination then
-            match (env.destTy destination).toOption with
-            | some (.arr _ length, _) => count := count + length
-            | _ => return none
-      | .eff (.destSnapshot destination snapshot _) =>
-          if same destination then
-            match (env.dataTy snapshot).toOption with
-            | some (.arr _ length) => count := count + length
-            | _ => return none
-      | .eff (.destText destination _ _) | .eff (.destCopy destination _ _) => if same destination then return none
-      | .def _ (.callConstruct callee _ destinations _) | .term (.invoke callee _ destinations _ _ _ _) =>
-          let some callee := m.funcs[callee]? | return none
-          let results := callee.results.filter (·.ty.nonfixed)
-          for (destination,result) in destinations.zip results do
-            if same destination then
-              match result.ty with
-              | .arr _ length => count := count + length
-              | .limited _ capacity => count := count + capacity
-              | .varr _ => count := count + (2^32 - 1)
-              | _ => return none
-      | _ => pure ()
-    if count > 0 && cyclic index then return none
-    costs := costs.push count
-  let mut entries : Array (Option Nat) := Array.replicate f.blocks.size none
-  entries := entries.set! 0 (some 0)
-  let mut maximum := 0
-  for _ in [0:f.blocks.size + 1] do
+private def constructionMaximumAux : Nat → Module → Func → Provenance → ValueId → Option Nat
+  | 0, _, _, _, _ => none
+  | fuel + 1, m, f, provenance, id => Id.run do
+    let owner := provenance.values[id]?.getD []
+    let same (id : ValueId) := provenance.values[id]?.getD [] == owner
+    let cyclic (start : Nat) := Id.run do
+      let mut reached := ((f.blocks[start]?).bind Block.lastTerm?).map Term.successors |>.getD []
+      for _ in [0:f.blocks.size] do
+        for id in reached do
+          reached := (reached ++ (((f.blocks[id]?).bind Block.lastTerm?).map Term.successors |>.getD [])).eraseDups
+      return reached.contains start
+    let env := m.environment f
+    let mut costs : Array Nat := #[]
     for (block,index) in f.blocks.toList.zipIdx do
-      if let some initial := (entries[index]?).join then
-        let count := initial + costs[index]!
-        maximum := max maximum count
-        for successor in (block.lastTerm?.map Term.successors).getD [] do
-          entries := entries.set! successor (some (max count ((entries[successor]?).join.getD 0)))
-  return some maximum
+      let mut count := 0
+      for inst in block.insts do
+        match inst with
+        | .eff (.destBytes destination bytes _) => if same destination then count := count + bytes.length
+        | .eff (.destWrite destination _ _) | .eff (.destAttach destination _ _) => if same destination then count := count + 1
+        | .eff (.destRepeat destination _ _) =>
+            if same destination then
+              match (env.destTy destination).toOption with
+              | some (.arr _ length, _) => count := count + length
+              | _ => return none
+        | .eff (.destSnapshot destination snapshot _) =>
+            if same destination then
+              match (env.dataTy snapshot).toOption with
+              | some (.arr _ length) => count := count + length
+              | _ => return none
+        | .eff (.destText destination _ _) | .eff (.destCopy destination _ _) => if same destination then return none
+        | .def _ (.callConstruct calleeId _ destinations _) | .term (.invoke calleeId _ destinations _ _ _ _) =>
+            let some callee := m.funcs[calleeId]? | return none
+            let results := callee.results.filter (·.ty.nonfixed)
+            let entry := (callee.blocks[0]?).map (fun block => block.params.drop callee.params.length) |>.getD []
+            for ((destination,result),channel) in (destinations.zip results).zipIdx do
+              if same destination then
+                let maximum := do
+                  let (id,_) ← entry[channel]?
+                  constructionMaximumAux fuel m callee (callee.provenance m calleeId) id
+                match result.ty, maximum with
+                | .arr _ length, _ => count := count + length
+                | .limited _ capacity, maximum => count := count + min capacity (maximum.getD capacity)
+                | .varr _, maximum => count := count + min (2^32 - 1) (maximum.getD (2^32 - 1))
+                | _, some maximum => count := count + maximum
+                | _, none => return none
+        | _ => pure ()
+      if count > 0 && cyclic index then return none
+      costs := costs.push count
+    let mut entries : Array (Option Nat) := Array.replicate f.blocks.size none
+    entries := entries.set! 0 (some 0)
+    let mut maximum := 0
+    for _ in [0:f.blocks.size + 1] do
+      for (block,index) in f.blocks.toList.zipIdx do
+        if let some initial := (entries[index]?).join then
+          let count := initial + costs[index]!
+          maximum := max maximum count
+          for successor in (block.lastTerm?.map Term.successors).getD [] do
+            entries := entries.set! successor (some (max count ((entries[successor]?).join.getD 0)))
+    return some maximum
+
+
+private def constructionMaximum (m : Module) (f : Func) (provenance : Provenance) (id : ValueId) : Option Nat :=
+  constructionMaximumAux (m.funcs.size + 1) m f provenance id
 
 private def deriveEffects (m : Module) (returns : Array (List (List RootRef))) : Array Summary := Id.run do
   let mut summaries := m.funcs.map fun _ => emptySummary
@@ -849,6 +861,8 @@ structure Ownership where
   availableSlots : List SlotId := []
   allocatedSlots : List SlotId := []
   stagedOwners : List DestinationOwner := []
+  adaptedOwners : List DestinationOwner := []
+  writtenOwners : List DestinationOwner := []
   suspendedNamed : List SlotId := []
   deriving DecidableEq, Repr
 
@@ -869,6 +883,10 @@ private def remapOwnership (state : Ownership) (params : List (ValueId × VTy)) 
     suspended := state.suspended.map (fun (a,b) => (rename a,rename b))
     projections := state.projections.map (fun (a,b) => (rename a,b))
     arguments := state.arguments.map (fun (a,b,c) => (rename a,b,c)) }
+
+private def joinOwnership (previous next : Ownership) : Check Ownership := do
+  unless previous == { next with writtenOwners := previous.writtenOwners } do violation .v060 "linear ownership differs across CFG join"
+  pure { previous with writtenOwners := (previous.writtenOwners ++ next.writtenOwners).eraseDups }
 
 private def fixedPackUse (type : VTy) (id : ValueId) (inst : Inst) : Bool :=
   match type, inst with
@@ -953,8 +971,32 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
               if let some (_,expected,expectedPosition) := state.arguments.find? (fun (id,_,_) => id == arg) then
                 unless expected == callee && expectedPosition == position do violation .v060 "constructed argument transferred to wrong callee/parameter"
                 state := { state with arguments := state.arguments.filter (fun (id,_,_) => id != arg) }
+            let calleeProvenance := calleeDef.provenance m callee
+            let channels := calleeDef.results.zipIdx |>.filterMap fun (r,i) => if r.ty.nonfixed then some i else none
+            for (destination,position) in destinations.zip channels do
+              let owners := provenance.values[destination]?.getD []
+              for block in calleeDef.blocks do
+                for inst in block.insts do
+                  let source := match inst with
+                    | .def _ (.destAdapt source ..) | .def _ (.destStage source ..) | .def _ (.destValue source ..) => some source
+                    | _ => none
+                  if let some source := source then
+                    if (calleeProvenance.values[source]?.getD []).contains (.result position) then
+                      unless !(owners.any state.adaptedOwners.contains) do violation .v060 "callee nests stage/value/type adapter on adapted result channel"
+                      if inst matches .def _ (.destAdapt ..) then
+                        unless !(owners.any state.writtenOwners.contains) do violation .v060 "callee adaptation receives nonempty result channel"
             for destination in destinations do state ← consume state destination
             pure state
+          let writes : List ValueId := match inst with
+            | .eff (.destBytes destination bytes _) => if bytes.isEmpty then [] else [destination]
+            | .eff (.destWrite destination ..) | .eff (.destAttach destination ..) | .eff (.destText destination ..) |
+              .eff (.destCopy destination ..) | .eff (.destSnapshot destination ..) | .eff (.destRepeat destination ..) => [destination]
+            | _ => []
+          if inst matches .def _ (.destOpen ..) | .def _ (.destChild ..) | .def _ (.resultExitDest ..) | .def _ (.targetDest ..) then
+            if let .def result _ := inst then
+              let owners := provenance.values[result]?.getD []
+              state := { state with writtenOwners := state.writtenOwners.filter (!owners.contains ·) }
+          state := { state with writtenOwners := (state.writtenOwners ++ writes.flatMap (fun id => provenance.values[id]?.getD [])).eraseDups }
           match inst with
           | .def result op =>
               match op with
@@ -969,23 +1011,38 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
               | .destChild parent _ _ =>
                   unless !(state.suspended.any (fun pair => pair.1 == parent)) do violation .v060 "parent already has pending child"
                   state := { state with suspended := (parent,result) :: state.suspended }
-              | .destFinish id _ | .destValue id _ | .destRelocate id _ _ | .destFit id _ | .destStage id _ | .destAbandon id _ =>
+              | .destAdapt id _ _ _ | .destAdaptFinish id _ | .destFinish id _ | .destValue id _ | .destRelocate id _ _ | .destFit id _ | .destStage id _ | .destAbandon id _ =>
                   let owners := provenance.values[id]?.getD []
                   match op with
-                  | .destStage .. =>
-                      unless !(owners.any state.stagedOwners.contains) do violation .v060 "receiving destination is staged more than once"
-                      state := { state with stagedOwners := (owners ++ state.stagedOwners).eraseDups }
-                  | .destFit .. =>
-                      unless owners.all state.stagedOwners.contains do violation .v060 "fit has no outstanding receiving stage"
-                      state := { state with stagedOwners := state.stagedOwners.filter (!owners.contains ·) }
+                  | .destAdapt .. =>
+                      unless !(owners.any state.adaptedOwners.contains) &&
+                          !(owners.any state.writtenOwners.contains) do violation .v060 "adaptation requires empty unadapted receiving channel"
+                      state := { state with adaptedOwners := (owners ++ state.adaptedOwners).eraseDups }
+                  | .destAdaptFinish .. =>
+                      unless !owners.isEmpty && owners.all state.adaptedOwners.contains do violation .v060 "adaptation completion has no exact pending receiving channel"
+                      state := { state with adaptedOwners := state.adaptedOwners.filter (!owners.contains ·) }
+                  | .destValue .. | .destStage .. | .destFit .. =>
+                      unless !(owners.any state.adaptedOwners.contains) do violation .v060 "stage/value adapter requires completed receiving adaptation"
+                      match op with
+                      | .destStage .. =>
+                          unless !(owners.any state.stagedOwners.contains) do violation .v060 "receiving destination is staged more than once"
+                          state := { state with stagedOwners := (owners ++ state.stagedOwners).eraseDups }
+                      | .destFit .. =>
+                          unless owners.all state.stagedOwners.contains do violation .v060 "fit has no outstanding receiving stage"
+                          state := { state with stagedOwners := state.stagedOwners.filter (!owners.contains ·) }
+                      | _ => pure ()
+                  | .destRelocate _ .headerRemoval _ =>
+                      unless !(owners.any state.adaptedOwners.contains) do violation .v060 "header removal requires adaptation completion"
                   | .destAbandon .. => state := { state with stagedOwners := state.stagedOwners.filter (!owners.contains ·) }
                   | _ => pure ()
                   state ← consume state id
                   state := { state with suspended := state.suspended.map fun (parent,child) => (parent,if child == id then result else child) }
               | .destPublishRef built _ =>
+                  unless !(provenance.values[built]?.getD []).any state.adaptedOwners.contains do violation .v060 "push publication requires restored receiving adaptation"
                   unless !(provenance.values[built]?.getD []).any state.stagedOwners.contains do violation .v060 "staged push publication requires fit"
                   state ← consume state built
               | .destArg built _ =>
+                  unless !(provenance.values[built]?.getD []).any state.adaptedOwners.contains do violation .v060 "argument transfer requires restored receiving adaptation"
                   state ← consume state built
                   let rec producer : Nat → ValueId → Option (FnId × Nat)
                     | 0, _ => none
@@ -995,7 +1052,7 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                           | _ => false
                         match inst with
                         | .def _ (.destOpen (.arg callee position) ..) => some (callee,position)
-                        | .def _ (.destFinish input _) | .def _ (.destFit input _) | .def _ (.destStage input _) => producer fuel input
+                        | .def _ (.destAdapt input _ _ _) | .def _ (.destAdaptFinish input _) | .def _ (.destFinish input _) | .def _ (.destFit input _) | .def _ (.destStage input _) => producer fuel input
                         | _ => none
                   let some (callee,position) := producer f.numValues built | violation .v060 "dest_arg completion has no dr_arg provenance"
                   state := { state with arguments := (result,callee,position) :: state.arguments }
@@ -1032,6 +1089,7 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                   state ← consume state child
                   state := { state with suspended := state.suspended.filter (· != (parent,child)) }
               | .destBind slot built _ =>
+                  unless !(provenance.values[built]?.getD []).any state.adaptedOwners.contains do violation .v060 "named binding requires restored receiving adaptation"
                   state ← consume state built
                   unless !state.allocatedSlots.contains slot do violation .v060 "named result slot is initialized more than once"
                   state := { state with named := slot :: state.named, availableSlots := slot :: state.availableSlots, allocatedSlots := slot :: state.allocatedSlots }
@@ -1039,11 +1097,14 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                   unless !(state.suspended.any (fun pair => pair.1 == parent)) do violation .v060 "repeat writes suspended parent"
                   state ← consume state source
               | .destPublish built _ =>
+                  unless !(provenance.values[built]?.getD []).any state.adaptedOwners.contains do violation .v060 "publication requires restored receiving adaptation"
                   unless !(provenance.values[built]?.getD []).any state.stagedOwners.contains do violation .v060 "staged completion is published before fit"
                   for owner in provenance.values[built]?.getD [] do
                     if let .receiver (.slot slot) := owner then state := { state with availableSlots := slot :: state.availableSlots }
                   state ← consume state built
-              | .destCancel built _ => state ← consume state built
+              | .destCancel built _ =>
+                  unless !(provenance.values[built]?.getD []).any state.adaptedOwners.contains do violation .v060 "cancellation requires restored receiving adaptation"
+                  state ← consume state built
               | .destWrite parent _ _ | .destBytes parent _ _ | .destText parent _ _ | .destCopy parent _ _ | .destSnapshot parent _ _ =>
                   unless !(state.suspended.any (fun pair => pair.1 == parent)) do violation .v060 "write to suspended parent destination"
               | _ => pure ()
@@ -1055,6 +1116,7 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                     if protocolType (typeOf id) then
                       unless !(provenance.values[id]?.getD []).any state.stagedOwners.contains do violation .v060 "staged completion is transferred before fit"
                   for id in ids do if protocolType (typeOf id) then state ← consume state id
+                  unless state.adaptedOwners.isEmpty do violation .v060 "return/escape leaves unrestored receiving adaptation"
                   unless state.live.isEmpty && state.named.isEmpty && state.arguments.isEmpty do violation .v060 "return/escape leaks destination, completion, cancellation or argument ownership"
               | .invoke callee args destinations normal forwarded escapes _ =>
                   state ← consumeCall state callee args destinations
@@ -1066,7 +1128,7 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                     for (id,t) in targetBlock.params.take leadingCount do
                       if protocolType t then edgeState := { edgeState with live := id :: edgeState.live }
                     match entries[target]? with
-                    | some (some previous) => unless previous == edgeState do violation .v060 "linear ownership differs at invoke join"
+                    | some (some previous) => entries := entries.set! target (some (← joinOwnership previous edgeState))
                     | some none => entries := entries.set! target (some edgeState)
                     | none => violation .v020 "invoke successor outside blocks"
                   let _ := (normal,forwarded,escapes,callee)
@@ -1075,7 +1137,7 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                     let some block := f.blocks[target]? | violation .v020 "ownership branch outside blocks"
                     let edgeState := remapOwnership state block.params args
                     match entries[target]? with
-                    | some (some previous) => unless previous == edgeState do violation .v060 "linear ownership differs across CFG join"
+                    | some (some previous) => entries := entries.set! target (some (← joinOwnership previous edgeState))
                     | some none => entries := entries.set! target (some edgeState)
                     | none => violation .v020 "ownership successor outside blocks"
 
@@ -1361,6 +1423,16 @@ def validate (m : Module) : Check Unit := do
   checkParameterRoots all returns
   checkStoredContents all returns
   checkSummaries all returns effects
+  for f in all.funcs do
+    let (roots,slots) := storageRoots all f returns
+    let contents : RootRef → List RootRef
+      | .local slot => slots[slot]?.getD []
+      | .global global => storedGlobalRoots all returns global
+      | .param position => (f.roots.contents.find? (·.1 == position)).map (·.2) |>.getD []
+      | .static => []
+    if let .error message := Borrow.check all f (f.valueTypes all)
+        (fun id => (roots[id]?.getD []).flatMap (expandParameter f))
+        (fun root => (contents root).flatMap (expandParameter f)) effects then violation .v040 message
   for (f,index) in all.funcs.toList.zipIdx do checkOwnership all index f returns effects
   for (f,index) in all.funcs.toList.zipIdx do checkChannelOwners all index f
   for f in all.funcs do checkKnownCounts all f

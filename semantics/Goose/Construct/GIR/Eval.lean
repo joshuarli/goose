@@ -263,6 +263,17 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
         pure (.dest (← openReceiver fuel config function frame receiver ty request count (← origin org)))
     | .destChild parent element org =>
         pure (.dest (← liftConstruction (← origin org) (openChild (← getDest frame parent) element (← receivingLayout config.layout element))))
+    | .destAdapt destination producer request org =>
+        let id ← getDest frame destination
+        liftConstruction (← origin org) (adaptConstructionDestination id producer request)
+        pure (.dest id)
+    | .destAdaptFinish closed org =>
+        let id ← getProtocol frame closed
+        liftConstruction (← origin org) (finishConstructionAdaptation id)
+        match ← getCell frame closed with
+        | .built _ => pure (.built id)
+        | .cancelled _ => pure (.cancelled id)
+        | _ => fault .shape
     | .destFinish destination org =>
         let id ← getDest frame destination
         let pending ← getDestination id
