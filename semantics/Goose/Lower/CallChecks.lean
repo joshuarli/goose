@@ -28,11 +28,11 @@ def source : Core.Module :=
     origins := #[⟨0, 1, "calls"⟩] }
 
 def argumentBuilder : LS :=
-  (lowerArgs arguments (lowerEnv source variables) initialBuilder).2
+  (lowerArgs arguments (lowerEnv source variables []) initialBuilder).2
 
 def argumentFunction : Func :=
   { name := "arguments", params := [], results := [],
-    slots := (lowerEnv source variables).slots, scopes := #[none],
+    slots := (lowerEnv source variables []).slots, scopes := #[none],
     blocks := finishBlocks argumentBuilder.blocks, summary := .unknown, org := none }
 
 theorem concrete_arguments (n : Nat) : ArgsClaim n arguments := by
@@ -57,7 +57,7 @@ theorem concrete_argument_cells (n : Nat) (profile : NumProfile) :
         Post ⟨profile, source⟩ ⟨variables, 0, [(0, 11)], 0⟩
           ⟨⟨profile, lower source⟩, argumentFunction⟩ initialBuilder ⟨0, [(0, 11)], {}, 0⟩
           argumentBuilder frame pt (cellsOf [0, 2, 3] vals)) := by
-  apply concrete_arguments n (lowerEnv source variables) initialBuilder [0, 2, 3]
+  apply concrete_arguments n (lowerEnv source variables []) initialBuilder [0, 2, 3]
     argumentBuilder (0, 0) ⟨profile, source⟩ ⟨variables, 0, [(0, 11)], 0⟩
     ⟨⟨profile, lower source⟩, argumentFunction⟩ ⟨0, [(0, 11)], {}, 0⟩
   · rfl
@@ -149,7 +149,7 @@ theorem concrete_noReturn_call_expression (profile : NumProfile) (n : Nat) :
       (calleeCallClaim_flow (ctx := ⟨0, "abort", [], [], []⟩)
         (impl := abortCallee) rfl rfl rfl rfl profile n)
 
-#guard (lowerArgs arguments (lowerEnv source variables) initialBuilder).1 == [0, 2, 3]
+#guard (lowerArgs arguments (lowerEnv source variables []) initialBuilder).1 == [0, 2, 3]
 #guard match Option.map (fun (block : BlockB) => block.insts.toList) argumentBuilder.blocks[0]? with
   | some [Inst.def 0 (.constBool true), .def 1 (.slotAddr 0), .def 2 (.refFreeze 1),
       Inst.def 3 (.constBool false)] => true

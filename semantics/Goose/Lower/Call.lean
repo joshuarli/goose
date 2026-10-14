@@ -26,9 +26,9 @@ theorem callEntry_pp (impl : Impl) : (callEntry impl).pp = some (0, 0) := rfl
 
 theorem lowerImplAt_call_blocks (m : Core.Module) (i : ImplId) (impl : Impl) :
     (lowerImplAt m i impl).blocks =
-      finishBlocks (bodyTail impl (lowerEnv m impl.vars)
-        (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars) (callEntry impl)).1
-        (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars) (callEntry impl)).2).blocks := by
+      finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
+        (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars impl.results.toList) (callEntry impl)).1
+        (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars impl.results.toList) (callEntry impl)).2).blocks := by
   simp [lowerImplAt, callEntry, callEntryTypes, callPre, bodyTail, newBlock, initState,
     bind_run, setCur_run, set]
   rfl
@@ -58,6 +58,7 @@ theorem checkImpl_paramScopes {m : Core.Module} {impl : Impl}
   · simp only [ite_false, hmany] at h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, hparams, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     by_cases hbody : impl.body.scope = 0
     · refine ⟨hbody, fun p hp => ?_⟩
@@ -216,7 +217,7 @@ theorem implOfContext_run (c : ContextId) (le : LEnv) (ls : LS) :
 
 theorem implOfContext_lookup {m : Core.Module} {c : ContextId} {ctx : Context}
     (hctx : m.contexts[c]? = some ctx) (vars : Array LocalVar) (ls : LS) :
-    implOfContext c (lowerEnv m vars) ls = (ctx.impl, ls) := by
+    implOfContext c (lowerEnv m vars []) ls = (ctx.impl, ls) := by
   simp [implOfContext_run, lowerEnv, hctx]
 
 theorem lookupFn_lower {m : Core.Module} {i : ImplId} {impl : Impl}
@@ -294,7 +295,7 @@ theorem call_nil_agree (m : Core.Module) (c : ContextId) (ctx : Context) (impl :
       simp [lower, himpl]
     rw [hent]
     rw [enterCall_nil_at ⟨p, m⟩ n' depth hd c ctx impl hctx himpl hp]
-    let le := lowerEnv m impl.vars
+    let le := lowerEnv m impl.vars impl.results.toList
     have hlow : lowerBlock none [] false impl.body le startLS =
         ((lowerBlock none [] false impl.body le startLS).1,
           (lowerBlock none [] false impl.body le startLS).2) := rfl
@@ -409,7 +410,7 @@ def CalleeBlockClaim (n : Nat) (cfg : Cfg) (i : ImplId) (impl : Impl) : Prop :=
     let env : Env := ⟨impl.vars, act, [], depth⟩
     let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, lowerImplAt cfg.mod i impl⟩
     let fr := callFrame impl act depth values
-    let body := lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod impl.vars)
+    let body := lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod impl.vars impl.results.toList)
       (callEntry impl)
     SimE cx (0, 0) fr
       (execBlock n cfg env ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) impl.body)
@@ -419,7 +420,7 @@ theorem calleeBlockClaim_flow {m : Core.Module} {i : ImplId} {impl : Impl}
     (hcheck : checkImpl m impl = .ok ()) (hok : flowBlockOk impl.body = true)
     (profile : NumProfile) (n : Nat) : CalleeBlockClaim n ⟨profile, m⟩ i impl := by
   intro act depth values hp
-  let le := lowerEnv m impl.vars
+  let le := lowerEnv m impl.vars impl.results.toList
   let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
   let cx : FnCtx := ⟨⟨profile, lower m⟩, lowerImplAt m i impl⟩
   let fr := callFrame impl act depth values
@@ -454,7 +455,7 @@ theorem calleeCallClaim_of_body {m : Core.Module} {c : ContextId} {ctx : Context
       rw [hent]
       simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl, pure_bind,
         hp, ite_true]
-      let le := lowerEnv m impl.vars
+      let le := lowerEnv m impl.vars impl.results.toList
       let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
       let cx : FnCtx := ⟨⟨profile, lower m⟩, lowerImplAt m ctx.impl impl⟩
       let env : Env := ⟨impl.vars, state.nextAct, [], depth + 1⟩
