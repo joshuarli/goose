@@ -73,39 +73,6 @@ theorem validated_cmp_operand_types {cfg : GCfg} {fn : Func} {pt : Pt}
   obtain ⟨result, typed, _⟩ := definitions block member condition _ instruction
   exact cmp_operand_types typed
 
-theorem m_bind_ok {first : M α} {next : α → M β} {st final : St} {value : β}
-    (success : (first >>= next) st = .ok value final) :
-    ∃ intermediate middle, first st = .ok intermediate middle ∧
-      next intermediate middle = .ok value final := by
-  rw [bind_apply] at success
-  cases evaluated : first st with
-  | stop reason middle => rw [evaluated] at success; cases success
-  | ok intermediate middle =>
-    rw [evaluated] at success
-    exact ⟨intermediate, middle, rfl, success⟩
-
-theorem getCell_success {fr : Frame} {id : ValueId} {st final : St} {value : RVal}
-    (success : getCell fr id st = .ok value final) :
-    fr.vals[id]? = some value ∧ final = st := by
-  unfold getCell at success
-  cases cell : fr.vals[id]? with
-  | none => simp [cell, fault, M.stop] at success
-  | some stored =>
-    simp only [cell, pure_apply, Res.ok.injEq] at success
-    exact ⟨by simp [success.1], success.2.symm⟩
-
-theorem getVal_success {fr : Frame} {id : ValueId} {st final : St} {value : Val}
-    (success : getVal fr id st = .ok value final) :
-    fr.vals[id]? = some (.val value) ∧ final = st := by
-  unfold getVal at success
-  obtain ⟨stored, middle, read, success⟩ := m_bind_ok success
-  obtain ⟨cell, rfl⟩ := getCell_success read
-  cases stored with
-  | view view => simp [fault, M.stop] at success
-  | val stored =>
-    simp only [pure_apply, Res.ok.injEq] at success
-    exact ⟨success.1 ▸ cell, success.2.symm⟩
-
 theorem bindParams_preserves {params : List (ValueId × VTy)} {args : List RVal}
     {fr result : Frame} {st final : St} {id : ValueId}
     (unbound : id ∉ params.map Prod.fst)
@@ -413,5 +380,38 @@ theorem cmp_true_i64 {cfg : GCfg} {fn : Func} {fr : Frame} {st final : St}
     pure_apply, Res.ok.injEq] at compared
   cases compared.1
   exact less
+
+theorem cmp_result_type {env : TyEnv} {comparison : CmpOp} {type : IntTy}
+    {left right : ValueId} {result : VTy}
+    (typed : (Op.cmp comparison type left right).resultTy env = .ok result) :
+    result = .data .bool := by
+  unfold Op.resultTy at typed
+  obtain ⟨leftType, leftTyped, afterLeft⟩ := bind_ok typed
+  obtain ⟨rightType, rightTyped, afterRight⟩ := bind_ok afterLeft
+  split at afterRight
+  · simp only [pure, Except.pure, Except.ok.injEq] at afterRight
+    exact afterRight.symm
+  · simp [tyErr, bind, Except.bind] at afterRight
+
+theorem validated_cmp_distinct {cfg : GCfg} {fn : Func} {pt : Pt}
+    {fr : Frame} {st : St} {condition left right : ValueId}
+    (validated : validate cfg.mod = .ok ())
+    (point : RuntimePoint cfg fn pt fr st)
+    (comparison : fn.defOp? condition = some (.cmp .lt .i64 left right)) :
+    condition ≠ left ∧ condition ≠ right := by
+  obtain ⟨block, member, instruction⟩ := defOp_member comparison
+  obtain ⟨_, definitions, _⟩ := (validate_sound cfg.mod validated).1 fn point.function_mem
+  obtain ⟨result, typed, resultType⟩ := definitions block member condition _ instruction
+  obtain ⟨leftType, rightType⟩ := cmp_operand_types typed
+  rw [cmp_result_type typed] at resultType
+  constructor
+  · intro equal
+    subst left
+    rw [resultType] at leftType
+    cases leftType
+  · intro equal
+    subst right
+    rw [resultType] at rightType
+    cases rightType
 
 end Goose.Evidence

@@ -144,4 +144,37 @@ theorem RuntimeStep.runAt {cfg : GCfg} {fn : Func} {pt pt' : Pt}
     simp only [Bool.false_eq_true, ↓reduceIte]
     simp only [bind_apply, read, enter]
 
+theorem m_bind_ok {first : M α} {next : α → M β} {st final : St} {value : β}
+    (success : (first >>= next) st = .ok value final) :
+    ∃ intermediate middle, first st = .ok intermediate middle ∧
+      next intermediate middle = .ok value final := by
+  rw [bind_apply] at success
+  cases evaluated : first st with
+  | stop reason middle => rw [evaluated] at success; cases success
+  | ok intermediate middle =>
+    rw [evaluated] at success
+    exact ⟨intermediate, middle, rfl, success⟩
+
+theorem getCell_success {fr : Frame} {id : ValueId} {st final : St} {value : RVal}
+    (success : getCell fr id st = .ok value final) :
+    fr.vals[id]? = some value ∧ final = st := by
+  unfold getCell at success
+  cases cell : fr.vals[id]? with
+  | none => simp [cell, fault, M.stop] at success
+  | some stored =>
+    simp only [cell, pure_apply, Res.ok.injEq] at success
+    exact ⟨by simp [success.1], success.2.symm⟩
+
+theorem getVal_success {fr : Frame} {id : ValueId} {st final : St} {value : Val}
+    (success : getVal fr id st = .ok value final) :
+    fr.vals[id]? = some (.val value) ∧ final = st := by
+  unfold getVal at success
+  obtain ⟨stored, middle, read, success⟩ := m_bind_ok success
+  obtain ⟨cell, rfl⟩ := getCell_success read
+  cases stored with
+  | view view => simp [fault, M.stop] at success
+  | val stored =>
+    simp only [pure_apply, Res.ok.injEq] at success
+    exact ⟨success.1 ▸ cell, success.2.symm⟩
+
 end Goose.Evidence
