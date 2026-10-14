@@ -547,7 +547,7 @@ theorem cleanup_replacement (origin : OriginId) (id replacementId superseded : D
     (owned : descendsFrom state.construction id superseded = true) :
     cleanupDestination origin id [.completed replacementId] state =
       liftConstruction origin (abandonPreservingExit id replacementId) state := by
-  simp [cleanupDestination, getDestination, EvalM.get, bind, pure, present, live,
+  simp [cleanupDestination, protectedReplacement?, getDestination, EvalM.get, bind, pure, present, live,
     replacementPresent, replacementUse, owned]
 
 theorem protected_exit_payload_storage (origin : OriginId) (id replacementId superseded : DestinationId)
@@ -585,5 +585,40 @@ theorem protected_exit_prior_output (origin : OriginId) (id replacementId supers
     present live replacementPresent replacementUse owned]
   cases result : liftConstruction origin (abandonPreservingExit id replacementId) afterOperands <;>
     simpa [result, stepState] using preserved
+
+
+theorem cleanup_selected_replacement (origin : OriginId) (id replacementId : DestinationId)
+    (state : ExecutionState) (destination : PendingDestination) (carriers : List Goose.Construct.Carrier)
+    (present : state.construction.destinations[id]? = some destination)
+    (live : activeProgress destination.progress = true)
+    (selected : protectedReplacement? state.construction id carriers = some replacementId) :
+    cleanupDestination origin id carriers state =
+      liftConstruction origin (abandonPreservingExit id replacementId) state := by
+  simp [cleanupDestination, getDestination, EvalM.get, bind, pure, present, live, selected]
+
+theorem protection_escape_state (origin : OriginId) (id : DestinationId)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId)
+    (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape target carriers afterOperands) :
+    stepState (protectDestination origin id action state) =
+      stepState (cleanupDestination origin id carriers afterOperands) := by
+  simp only [protectDestination, escaped]
+  cases cleaned : cleanupDestination origin id carriers afterOperands <;> rfl
+
+theorem protected_exit_replacement_frame (origin : OriginId) (id replacementId : DestinationId)
+    (action : EvalM α) (state afterOperands : ExecutionState) (target : ActId)
+    (destination : PendingDestination) (carriers : List Goose.Construct.Carrier)
+    (escaped : action state = .escape target carriers afterOperands)
+    (present : afterOperands.construction.destinations[id]? = some destination)
+    (live : activeProgress destination.progress = true)
+    (selected : protectedReplacement? afterOperands.construction id carriers = some replacementId) :
+    (stepState (protectDestination origin id action state)).construction.storage =
+      afterOperands.construction.storage ∧
+    (stepState (protectDestination origin id action state)).construction.stdout =
+      afterOperands.construction.stdout := by
+  rw [protection_escape_state origin id action state afterOperands target carriers escaped,
+    cleanup_selected_replacement origin id replacementId afterOperands destination carriers present live selected]
+  exact ⟨runtime_protected_cleanup_storage origin afterOperands id replacementId,
+    runtime_protected_cleanup_stdout origin afterOperands id replacementId⟩
 
 end Goose.Proofs.Exit
