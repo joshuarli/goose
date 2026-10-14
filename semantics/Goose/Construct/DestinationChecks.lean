@@ -370,4 +370,15 @@ private def explicitKnownStage : ConstructionM Unit := do
   | .fault .protocol state => state.events == [.begin 0] && state.storage.size == 1
   | _ => false
 
+
+private def replacementStage : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let root ← openDestinationDirect storage capability (.limited 4 1) none
+  let replacement ← openExitReplacement root
+  stageDestination replacement
+
+#guard match replacementStage ConstructionState.initial with
+  | .fault .protocol state => state.events == [.begin 0,.begin 1] && state.storage.size == 1
+  | _ => false
+
 end Goose.Construct.DestinationChecks

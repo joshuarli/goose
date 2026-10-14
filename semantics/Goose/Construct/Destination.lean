@@ -230,8 +230,8 @@ def openDestinationDirect (storageId : StorageId) (capability : Core.Destination
 
 def stageDestination (id : DestinationId) : ConstructionM Unit := do
   let destination ← writableDestination id
-  match destination.progress, destination.layout, destination.backing, destination.knownCount with
-  | .open 0, .limited _ _, .direct receiverId, none =>
+  match destination.progress, destination.layout, destination.backing, destination.knownCount, destination.use with
+  | .open 0, .limited _ _, .direct receiverId, none, .receiver =>
       let stageId ← reserveStorage
       replaceDestination id { destination with
         backing := .staged receiverId stageId
@@ -239,7 +239,7 @@ def stageDestination (id : DestinationId) : ConstructionM Unit := do
         writeEnd := 0
         rollbackEnd := 0 }
       emit (.stage id)
-  | _, _, _, _ => ConstructionM.fail .protocol
+  | _, _, _, _, _ => ConstructionM.fail .protocol
 
 def writeElement (id : DestinationId) (bytes : ByteArray) : ConstructionM Unit := do
   let destination ← writableDestination id
