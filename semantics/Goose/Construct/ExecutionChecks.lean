@@ -281,4 +281,12 @@ private def printSnapshot : Module := moduleOf #[implementation "entry"
 
 #guard (observes printSnapshot).map Prod.fst == some [105, 110, 110, 101, 114, 10, 65, 55, 10]
 
+private def nestedWrite : Module := moduleOf #[implementation "entry"
+  #[localVar "nested" (.varr (.varr (.int .u8)))]
+  (.mk 0 [.letS 0 (.arrLit (.varr (.varr (.int .u8))) [.bytes (.varr (.int .u8)) [65] 0]) 0,
+    .assign (.elem (.of (.elem (.of (.var 0)) (.lit .i64 0) 0)) (.lit .i64 0) 0) (.lit .u8 66) 0,
+    .print [.view (.of (.elem (.of (.var 0)) (.lit .i64 0) 0))] 0] none)]
+
+#guard (observes nestedWrite).map Prod.fst == some [66, 10]
+
 end Goose.Construct.ExecutionChecks
