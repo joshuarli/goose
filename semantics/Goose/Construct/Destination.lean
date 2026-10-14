@@ -294,6 +294,9 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   emit (.begin id)
   pure id
 
+def landingBytes (bytes : ByteArray) (receivingStart payloadStart : Nat) : ByteArray :=
+  bytes.extract 0 receivingStart ++ bytes.extract payloadStart bytes.size
+
 def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := do
   let replacement ← lookupDestination replacementId
   let (supersededId, count) ← match replacement.use, replacement.progress with
@@ -323,8 +326,7 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
   for destination in discarded do
     replaceDestination destination.capability.id { destination with progress := .abandoned }
     emit (.abandon destination.capability.id)
-  let landed := storage.bytes.extract 0 superseded.capability.start ++
-    storage.bytes.extract replacement.capability.start storage.bytes.size
+  let landed := landingBytes storage.bytes superseded.capability.start replacement.capability.start
   replaceStorage replacement.storage { storage with bytes := landed }
   replaceDestination replacementId { replacement with
     capability := { replacement.capability with start := superseded.capability.start }

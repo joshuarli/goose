@@ -76,6 +76,94 @@ theorem unwind_frame (plan : ExitPlan) (store : Store) (root : RootInst)
         exact releaseActivation_frame activation current root (excluded activation (by simp))
   exact frame plan.discarded intermediate store
 
+theorem releaseActivation_absent (activation : Activation) (store : Store) (root : RootInst)
+    (absent : store.roots[root]? = none) :
+    (releaseActivation activation store).roots[root]? = none := by
+  unfold releaseActivation
+  have preserved : ∀ scopes : List (Nat × ScopeInst), ∀ store : Store,
+      store.roots[root]? = none →
+      (scopes.foldl (fun current (scope, scopeInst) =>
+        releaseVars activation.vars activation.act scope scopeInst activation.vars.size current)
+        store).roots[root]? = none := by
+    intro scopes
+    induction scopes with
+    | nil => intro _ absent; exact absent
+    | cons pair rest ih =>
+        intro current absent
+        rw [List.foldl_cons]
+        apply ih
+        rw [releaseVars_roots]
+        split
+        · rfl
+        · exact absent
+  exact preserved activation.scopes store absent
+
+theorem releaseActivation_removed (activation : Activation) (store : Store) (root : RootInst)
+    (owned : ActivationRoots activation root) :
+    (releaseActivation activation store).roots[root]? = none := by
+  have absent : ∀ scopes : List (Nat × ScopeInst), ∀ store : Store,
+      store.roots[root]? = none →
+      (scopes.foldl (fun current (scope, scopeInst) =>
+        releaseVars activation.vars activation.act scope scopeInst activation.vars.size current)
+        store).roots[root]? = none := by
+    intro scopes current missing
+    exact releaseActivation_absent { activation with scopes := scopes } current root missing
+  have removed : ∀ scopes : List (Nat × ScopeInst),
+      (∃ scope scopeInst, (scope, scopeInst) ∈ scopes ∧
+        ScopeRoots activation.vars activation.act scope scopeInst root) →
+      ∀ store : Store,
+        (scopes.foldl (fun current (scope, scopeInst) =>
+          releaseVars activation.vars activation.act scope scopeInst activation.vars.size current)
+          store).roots[root]? = none := by
+    intro scopes
+    induction scopes with
+    | nil => intro owned; simp at owned
+    | cons pair rest ih =>
+        rintro ⟨scope, scopeInst, member, owned⟩ current
+        rw [List.foldl_cons]
+        rcases List.mem_cons.mp member with same | member
+        · cases same
+          apply absent
+          exact (releaseScope_roots activation.vars activation.act scope scopeInst current).2 root owned
+        · exact ih ⟨scope, scopeInst, member, owned⟩ _
+  exact removed activation.scopes owned store
+
+theorem unwind_removes (plan : ExitPlan) (store : Store) (root : RootInst)
+    (owned : ActivationRoots plan.catcher root ∨
+      ∃ activation ∈ plan.discarded, ActivationRoots activation root) :
+    (unwindStore plan store).roots[root]? = none := by
+  unfold unwindStore
+  rcases owned with catcher | intermediate
+  · exact releaseActivation_removed plan.catcher _ root catcher
+  · apply releaseActivation_absent
+    have removed : ∀ stack : List Activation,
+        (∃ activation ∈ stack, ActivationRoots activation root) →
+        ∀ store : Store,
+          (stack.foldl (fun current activation => releaseActivation activation current)
+            store).roots[root]? = none := by
+      intro stack
+      induction stack with
+      | nil => intro owned; simp at owned
+      | cons activation rest ih =>
+          rintro ⟨owner, member, owned⟩ current
+          rw [List.foldl_cons]
+          rcases List.mem_cons.mp member with same | member
+          · subst owner
+            have preserved : ∀ remaining : List Activation, ∀ store : Store,
+                store.roots[root]? = none →
+                (remaining.foldl (fun current activation => releaseActivation activation current)
+                  store).roots[root]? = none := by
+              intro remaining
+              induction remaining with
+              | nil => intro _ missing; exact missing
+              | cons frame tail ih =>
+                  intro state missing
+                  rw [List.foldl_cons]
+                  exact ih _ (releaseActivation_absent frame state root missing)
+            exact preserved rest _ (releaseActivation_removed activation current root owned)
+          · exact ih ⟨owner, member, owned⟩ _
+    exact removed plan.discarded intermediate store
+
 theorem unwind_preserves_output (plan : ExitPlan) (state : St) :
     (unwindState plan state).trace = state.trace := rfl
 
