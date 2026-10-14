@@ -1,7 +1,7 @@
 import Goose.Lower.FunctionTail
 import Goose.Lower.FlowState
 import Goose.Lower.SourceDivergence
-import Goose.Lower.SourceContexts
+import Goose.Lower.TypedBlocks
 
 namespace Goose.Lower
 
@@ -208,13 +208,6 @@ theorem lookupFn_lower {m : Core.Module} {i : ImplId} {impl : Impl}
     lookupFn ⟨profile, lower m⟩ i = pure (lowerImplAt m i impl) := by
   simp [lookupFn, lower, Array.getElem?_mapIdx, hi]
 
-private theorem nonfinalStop_eventual (err : Stop) (hfinal : ¬ IsFinal err)
-    (g : Nat → M α) (state : St) : EventualM (M.stop err) g state := by
-  refine ⟨fun value after h => ?_, fun stopped after h hf => ?_⟩
-  · cases h
-  · cases h
-    exact False.elim (hfinal hf)
-
 def CalleeBodyAt (n : Nat) (cfg : Cfg) (i : ImplId) (impl : Impl)
     (depth : Nat) (values : List Val) (state : St) : Prop :=
   let env : Env := ⟨impl.vars, state.nextAct, [], depth + 1⟩
@@ -226,6 +219,45 @@ def CalleeBodyAt (n : Nat) (cfg : Cfg) (i : ImplId) (impl : Impl)
   SimEAt cx (0, 0) fr (execBlock n cfg env pre impl.body)
     (BlockFlowPost cfg env cx (callEntry impl) fr body.2 impl.body false body.1)
     { state with nextAct := state.nextAct + 1 }
+
+theorem calleeBodyAt_of_typedBlock {n : Nat} {cfg : Cfg} {i : ImplId} {impl : Impl}
+    {depth : Nat} {values : List Val} {state : St} (hp : impl.params.size = values.length)
+    (source : BlockSource cfg ⟨impl.vars, state.nextAct, [], depth + 1⟩
+      ((impl.params.toList.zip values).map fun (p, value) => (p.var, value))
+      impl.body { state with nextAct := state.nextAct + 1 })
+    (htyping : source.typingEnv.impl = some impl) (hroots : source.rootsEnv.impl = impl)
+    (hloops : source.typingEnv.loops = 0) (hbody : TypedBlockLoopSimulation n cfg impl.results.toList none (callPre impl)
+      ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) false impl.body) :
+    CalleeBodyAt n cfg i impl depth values state := by
+  let le := lowerEnv cfg.mod impl.vars impl.results.toList
+  let env : Env := ⟨impl.vars, state.nextAct, [], depth + 1⟩
+  let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, lowerImplAt cfg.mod i impl⟩
+  let fr := callFrame impl state.nextAct (depth + 1) values
+  let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
+  have hmetadata : SourceResults source.typingEnv source.rootsEnv impl.results.toList := by
+    intro actual hactual
+    rw [htyping] at hactual
+    cases hactual
+    exact ⟨hroots, rfl⟩
+  have hextTail : ExtT (bodyTail impl le body.1 body.2) cx.fn.blocks := by
+    rw [lowerImplAt_call_blocks]
+    exact extT_finish _
+  have hextBody : ExtT body.2 cx.fn.blocks := hextTail.of_adv
+    (advB_finishFunction impl body.1 le body.2 (finishFunction impl body.1 le body.2).1
+      (bodyTail impl le body.1 body.2) rfl)
+  have hs := hbody.function env { state with nextAct := state.nextAct + 1 } source hmetadata hloops
+    (callEntry impl) body.2 body.1 (0, 0) cx fr rfl (callEntry_pp impl) hextBody
+    (callFrame_rel cfg.mod cfg.profile i impl state.nextAct (depth + 1) values)
+    (callFrame_preRel impl state.nextAct (depth + 1) values hp) rfl rfl
+  rw [prepareReturn_no_scopes env rfl, bind_pure] at hs
+  exact hs
+
+private theorem nonfinalStop_eventual (err : Stop) (hfinal : ¬ IsFinal err)
+    (g : Nat → M α) (state : St) : EventualM (M.stop err) g state := by
+  refine ⟨fun value after h => ?_, fun stopped after h hf => ?_⟩
+  · cases h
+  · cases h
+    exact False.elim (hfinal hf)
 
 theorem typedCall_of_body {m : Core.Module} {c : ContextId} {ctx : Context} {impl : Impl}
     (hctx : m.contexts[c]? = some ctx) (himpl : m.impls[ctx.impl]? = some impl)
@@ -337,5 +369,49 @@ theorem typedCall_of_body {m : Core.Module} {c : ContextId} {ctx : Context} {imp
     · simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl, pure_bind,
         hp, ite_false]
       exact nonfinalStop_eventual _ (by simp [IsFinal]) _ _
+
+theorem typedCall_of_source {cfg : Cfg} {c : ContextId} {ctx : Context} {impl : Impl}
+    (hctx : cfg.mod.contexts[c]? = some ctx) (himpl : cfg.mod.impls[ctx.impl]? = some impl)
+    (n depth : Nat) (values : List Val) (state : St)
+    (source : BlockSource cfg ⟨impl.vars, state.nextAct, [], depth + 1⟩
+      ((impl.params.toList.zip values).map fun (p, value) => (p.var, value))
+      impl.body { state with nextAct := state.nextAct + 1 })
+    (htyping : source.typingEnv.impl = some impl) (hroots : source.rootsEnv.impl = impl)
+    (hloops : source.typingEnv.loops = 0) (hbody : TypedBlockLoopSimulation n cfg impl.results.toList none (callPre impl)
+      ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) false impl.body) :
+    EventualM (enterCall (n + 1) cfg depth c values)
+      (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ depth
+        (((cfg.mod.contexts[c]?).map (·.impl)).getD 0) values) state := by
+  exact typedCall_of_body hctx himpl cfg.profile n depth values state
+    (fun hp => calleeBodyAt_of_typedBlock hp source htyping hroots hloops hbody)
+
+theorem typedCall_afterArgs {n : Nat} {cfg : Cfg} {env : Env} {state after : St}
+    {c : ContextId} {args : List Arg} {origin : OriginId} {values : List Val}
+    (source : ExprSource cfg env (.call c args origin) state) (argFuel : Nat)
+    (hdone : mapList (evalArg argFuel cfg env) args state = .ok values after)
+    (hblocks : ∀ ctx impl, cfg.mod.contexts[c]? = some ctx → cfg.mod.impls[ctx.impl]? = some impl →
+      TypedBlockLoopSimulation n cfg impl.results.toList none (callPre impl)
+        ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) false impl.body) :
+    EventualM (enterCall (n + 1) cfg env.depth c values)
+      (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ env.depth
+        (((cfg.mod.contexts[c]?).map (·.impl)).getD 0) values) after := by
+  obtain ⟨ctx, impl, hcontext, himplementation, body, htyping, hroots⟩ :=
+    source.calleeAfterArgs argFuel values hdone
+  apply typedCall_of_source hcontext himplementation n env.depth values after body
+  · simpa [htyping, Core.Sound.implEnv] using congrArg TEnv.impl htyping
+  · simpa using congrArg PEnv.impl hroots
+  · simpa [Core.Sound.implEnv] using congrArg TEnv.loops htyping
+  · exact hblocks ctx impl hcontext himplementation
+
+theorem typedExprClaim_call_of_blocks {n : Nat} {cfg : Cfg} {results : List Ty}
+    {c : ContextId} {args : List Arg} {origin : OriginId}
+    (ha : TypedArgsClaim (n + 1) cfg results args)
+    (hblocks : ∀ ctx impl, cfg.mod.contexts[c]? = some ctx → cfg.mod.impls[ctx.impl]? = some impl →
+      ∀ pre, TypedBlockLoopSimulation n cfg impl.results.toList none (callPre impl) pre false impl.body) :
+    TypedExprClaim (n + 2) cfg results (.call c args origin) := by
+  apply typedExprClaim_call ha
+  intro env state source metadata values after hdone
+  exact typedCall_afterArgs source (n + 1) hdone
+    (fun ctx impl hctx himpl => hblocks ctx impl hctx himpl _)
 
 end Goose.Lower
