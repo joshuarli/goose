@@ -1,55 +1,22 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** winding down 2026-10-14 at the owner's request. No new campaign work may start.
-**Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12). `master` is not touched.
+**Status:** active on `master`, resumed 2026-10-14 at the owner's request.
+**Branch:** `master`. The former `goose-ir` campaign tip was fast-forwarded here locally on 2026-10-14; no push was run. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12).
 **Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
 
-## Handoff (paused 2026-10-13)
+## Handoff (resumed 2026-10-14)
 
-**Resume.** Prompt: `Act as integrator and resume docs/design/goose-ir-campaign.md from its handoff; never ask; stop only when every deliverable is met or parked.` First command, from the repository root: `git status --short && git log --oneline -1 goose-ir` (expect a clean tree). Everything under `.work/` is disposable; rebuild what you need:
+**Resume.** The campaign is active on `master`. First command, from the repository root: `git status --short --branch && git log --oneline -1 master` (expect a clean tree after the campaign-status commit).
 
-```sh
-cmake -S . -B .work/build/goose-ir -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build .work/build/goose-ir --parallel 8
-git worktree add --detach .work/wt/parity-base goose-ir-parity-base
-cmake -S .work/wt/parity-base -B .work/build/base3 -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build .work/build/base3 --parallel 8
-(cd semantics && lake build) && semantics/.lake/build/bin/goose-semantics audit
-python3 test/run_tests.py --exe .work/build/goose-ir/goose --profile baseline --cc native --require-clang
-```
+**State.** `master` is now at the former `goose-ir` tip, `d440b9ab`; it is 423 commits ahead of `origin/master`. The local `goose-ir` and `origin/goose-ir` refs remain at that same tip. No push was run. Continue at O3, the next unparked item.
 
-The Aincrad3 scratch copy, if needed: `mkdir -p .work/aincrad3 && git -C ~/d/aincrad3 archive ef1e1ef33b96fa68748e4ecf3cad37153a4de59c | tar -x -C .work/aincrad3`, then copy its one generated source from the checkout's staged build output, `~/d/aincrad3/.work/boundary-src/world-core-continue/protocol/schema_generated.goose`, to `.work/aincrad3/src/protocol/`. Build it with a scratch `GOOSE_HOME` under `.work/`.
+**Known red.** No failing compiler test is known on this tree. Several campaign gates are incomplete: `TH-LOWER-03` is not proved, so `G-SHRINK` was not reached; `S9`/`G-CONSTRUCT` remain parked behind S8; `G-BCE` was parked after three proof attempts; `H2` is incomplete; and `O2` missed its admission threshold (9.82% against 10%). The last O3 timing was discarded because the host readiness check failed after the run.
 
-**State.** Branch `goose-ir`, not pushed by the executor. Merged this session: the ground items; the Lean model, validator and tool for `core-pilot` with 81 audited theorems (numeric rules, fuel monotonicity, growth, the live-reference invariant, the safety theorem `validated_never_faults`, sharing and reuse, the lowering theorem for structured control); an independent review and its fixes; references to slice variables in the Lean model and the exporter; Core and IR export, the IR pipeline with its own C emitter (`--pipeline gir`), and its units; the cost report, stable keys, shared implementations, code-generation units, the units build driver with its object store, dependency recording, and a native-support unit for programs with C of their own; conformance and corpus harnesses, the synthetic family, the edit matrix; linter parity; upstream `1cfe4b6`; two runtime and build fixes cherry-picked. Gates reached: `G-PILOT`, `G-SHARE`, `G-ATTR` except frozen budgets, `G-UNITS` on its structural gates.
+**Open work.** S8 proof and T3 partial commits remain on clean, unmerged branches under `git branch --no-merged master`; all campaign worktrees are under `.work/wt/` and their state is committed. Compare each candidate with `master` before cherry-picking because some branch patches duplicate integrated work. `goose-ir-parity-base` is the O3 baseline, not a work lane. The two deferred upstream fixes remain in `upstream-pr/native-stack-bounds-main-thread-musl` and `upstream-pr/native-package-rebuild-stamp`; their drafts and required follow-up are in §14.
 
-Known red at pause (historical): under `--pipeline gir`, corpus mode had two internal compiler errors (`GIR-V010`), on `optimizer/loop_shapes_countdown_abort` (a mutable slice over a `let` array) and `runtime/never_returns_exit` (a call that never returns). The Core validator had learned both rules; the IR validator, the C++ verifier and the lowering had not. The later GIR alignment is recorded in §13. Everything else listed under Verified was green at pause.
+**Next.** Re-run O3 only when `perf-gate-ready` passes immediately before and after measurement. O4 is conditional on the measured unit-emission share of E03; then run O5 and close with P4. S8/S9 stay parked until their proof prerequisites are met. Owner decisions still owed: freeze the proposed build budgets; decide the units/sharing defaults and CI integration; decide whether to file the `redundant_cast` lint inconsistency; and complete local evidence for the two O7 drafts. Pushing or opening them requires a separate owner request. O3 also needs the Aincrad3 source checkout at the recorded commit in §11.3; only aggregate results belong in this repository.
 
-**Open lanes.** Recreate a worktree with `git worktree add .work/wt/<lane> <branch>`.
-
-| Branch | Item | State | Next step |
-|---|---|---|---|
-| `goose-ir-sem-gir` | `T3` | wip: one commit holding `semantics/wip/Claims.stage2-partial.lean`, a non-compiling partial development outside the build. Two of three attempts used. | Stage 2 of the lowering theorem: loops (`while`, `forRange` without `break`/`continue` first), by induction on Core's fuel from the loop header, generalizing the statement and block claims over the loop context. Then calls and `ret`, then the whole profile. For-each over an array needs a typing fact from Core's validator. |
-| `upstream-pr/native-stack-bounds-main-thread-musl` | `U1` | parked by O8: fix `7cd7526`, cherry-picked here as `2de048a`. | After the campaign, on a quiet host: the before/after measurements, push to the fork, run the exact Docker reproducer against the pushed commit, open the draft. Description: `docs/design/upstream-drafts/native-stack-bounds-main-thread-musl.md`. |
-| `upstream-pr/native-package-rebuild-stamp` | `U1` | parked by O8: fix `8a3637b`, cherry-picked here as `510f495`. | As above. Description: `docs/design/upstream-drafts/native-package-rebuild-stamp.md` (its Dockerfile has a placeholder for the fix commit). |
-| `goose-ir-parity-base` | — | not a lane: `master` plus upstream `1cfe4b6` plus the two fixes, the reference for default-output parity. | Rebuild as above; add any further fix cherry-picked onto `goose-ir`. |
-
-**Historical pending list at pause (not current status).** The resumed work and
-latest dispositions are recorded in §13; use those entries when deciding what
-remains to do. The list below records what had not started at the pause.
-
-1. Align the IR with the Core validator's newer rules (the known red above), and add IR support for references to slice variables (the IR part of `S4`; the pipeline reports them unsupported today).
-2. `B8`, remainder: route the five `test/packages` sidecar fixtures through `goose build --units` in the units corpus; then build Aincrad3's core entry in units mode and fill §11.3's table for it. Nothing was run on the core entry after `B8` landed.
-3. `S3b`: every unsupported feature per program and the forecast table (owner decision O9 depends on it).
-4. `T3` stages 2–4 (third attempt), then `H1`.
-5. `S8` (`core-shrink`; flat structs first, they block the most corpus programs), then `S9`.
-6. `H3` remainder (`LINT-07`: the linter suite against a units-built companion), `H4` (documentation; `--build-report-deps` and the `B8` flags are not yet in §8).
-7. P3: `O1` (bounds certificates), `O2` if its gate holds (the report now gives blocked bytes per cause), `O3` (budgets; needs a quiet host), `O4`, `O5`.
-8. `B5`, remainder: the Aincrad3 mode of `test/scale/edit_matrix.py` is still a stub.
-9. P4 close.
-
-Owed by the owner: the two upstream draft pull requests (O7, O8); any corpus reach floor, after the forecast (O9); whether to file the `redundant_cast` linter inconsistency on the fork; whether units or sharing become defaults (`X4`).
-
-**Verified at the stop.** On the final tree before the last fast-forward: compiler build; Lean build and audit (81 theorems, three allowed axioms); full baseline suite (all passed); linter suite; default-output parity (1,232 equal); linter parity (0 differences); the native-support unit check; corpus conformance against the Lean model (76 agree of 77 exported, 0 mismatch, 1 inconclusive by design). Reboot audit: no campaign worktree remains; the main checkout is clean; `.work/` is ignored and on ext4; no campaign process is running; every unmerged campaign branch is in the table above; the resume commands were rehearsed from a clean environment, with the two full compiler builds and the full Lean build replaced by a configure and a one-module build.
-
-Not rerun on the final tree, last green one or two merges earlier: the units edit matrix, unit locality, the units corpus, the dependency check, the report corpus, sharing and key-stability checks, the IR golden and invalid checks, the pilot harness, the fuzz unit tests. Never run: any timed measurement on a quiet host (**perf gate deferred: host busy**), so no budget is frozen and no speedup is claimed.
+**Verified.** The local fast-forward succeeded with no conflicts. `master` was the ancestor of `goose-ir` (423 commits ahead, zero behind). The last focused Lean proof build completed 30 jobs with existing warnings. This branch move changed no source files; no code check was rerun for it. The host was busy during the last O3 attempt, so there is still no valid timing result.
 
 **Goal.** Two outcomes, pursued together. First, an executable, mechanically checked semantics for a Goose fragment and an opt-in IR pipeline that must agree with it. Second, a measurably shorter edit-build-verify loop for large programs: attribution of where build cost comes from, fewer emitted bodies with no weaker checking, and reuse of unchanged native code. A better-structured compiler that still regenerates and recompiles the whole program after a small edit does not meet the goal.
 
@@ -70,7 +37,7 @@ Not rerun on the final tree, last green one or two merges earlier: the units edi
 ## 1. Charter
 
 - Decide, log the call in §10, and keep going. Never ask, never wait for approval, send no progress report. Run until every deliverable is met or every remaining item is parked.
-- Hard stops, each of which parks the item and moves on: an action outside this repository other than reading the Aincrad3 checkout and the upstream draft pull requests of O7; anything §7 forbids; a loop that cannot check anything. Pushing is forbidden except the one fix branch each O7 pull request needs, pushed to the fork and never to upstream.
+- Hard stops, each of which parks the item and moves on: an action outside this repository other than reading the Aincrad3 checkout and the upstream draft pull requests of O7; anything §7 forbids; a loop that cannot check anything. Under the current working contract, pushing and opening external pull requests require a separate owner request; keep O7 at locally prepared drafts until then.
 - Fix on the way, in its own commit, what is egregious: a loop command over 5 minutes on a quiet host; a CPU-time regression over 2× against the baseline on a command whose new flags are absent; a test red on the baseline that blocks the item. Record anything else and leave it.
 - Parity before optimization. No item of phase P3 starts while a P1 item is neither done nor parked.
 - A failing item gets three attempts, each ending in a root-cause statement (`root-cause`); Tier B theorems get two. Then it is parked with a finding, and work continues with whatever does not depend on it.
@@ -78,7 +45,7 @@ Not rerun on the final tree, last green one or two merges earlier: the units edi
 - Bookkeeping is minimal: no provenance, hashes or manifests beyond what a deliverable needs.
 - Run as wide as file ownership and memory allow (`orchestrate`). Start with four lanes; widen from measured peak memory, keeping 16 GB free. Budget 4 GB for a C++ lane building at `--parallel 4` (the compiler's own build peaked near 2 GB) and 8 GB for a Lean lane. Aincrad3 measurements are run by the integrator alone, one at a time.
 - Lanes are `worker`. The lanes proving `TH-SAFE-01` and `TH-LOWER-01` and the theorem-statement reviewer are `expert`. The final adversarial review is `god`.
-- Lane worktrees are `.work/wt/<lane>` on branch `goose-ir-<lane>`; each builds in its own `build/`. The integrator verifies merged commits from `.work/wt/verify`. All scratch is under `.work/`, never `/tmp`. After a lane merges and its checks pass on the merged tree, the integrator removes its worktree and deletes its branch; a parked lane keeps its branch.
+- Lane worktrees are `.work/wt/<lane>` on branch `goose-ir-<lane>`; each builds in its own `build/`. The integrator verifies merged commits from `.work/wt/verify`. Keep all scratch under `.work/`. After a lane merges and its checks pass on the merged tree, the integrator removes its worktree and deletes its branch; a parked lane keeps its branch.
 - Every commit is a Conventional Commit scoped by workstream (`feat(units): …`). Item ids go in the body.
 - Code comments never cite this document, its item ids, gates or theorem ids.
 - Follow `AGENTS.md`: no formatters on existing `.goose` files; new `.goose` fixtures may be formatted with `scripts/format_goose.py`; `/usr/bin/rg` and `/usr/bin/fd` if the ones on `PATH` fail to execute.
@@ -97,7 +64,7 @@ Not rerun on the final tree, last green one or two merges earlier: the units edi
 | O6 | Build scalability is a primary requirement with its own gates, not a consequence hoped for from the IR. |
 | O9 | Corpus reach has no percentage target (2026-10-13). The target is completeness within the profile: every repository program whose features all lie in the implemented profiles exports, validates and agrees, with each exception explained. Reach is reported at each profile gate beside a forecast of what the next feature set would unlock (`S3b`), and any floor is set from that forecast, by the owner, after it exists. |
 | O8 | The host stays noisy for the rest of the campaign (2026-10-12). The final verification gates of an O7 pull request — the before/after measurements, the exact Docker reproducer against the pushed fix commit, the push itself and opening the draft — are deferred until after the campaign ends. During the campaign a confirmed defect gets its fix branch, its regression test, its locally verified reproduction and its drafted description, and is listed in §14. |
-| O7 | A genuine compiler defect found along the way gets a draft pull request to upstream, following the guidelines. They are in two places: this repository's `AGENTS.md` ("Upstream pull requests") and the Aincrad3 checkout's `docs/GOOSE-WORKFLOW.md`; where they differ, the stricter applies. In short: the defect violates a supported language or runtime contract and is confirmed on the failing baseline; it is reduced to a small public fixture; the fix branch starts from upstream `master` and carries one fix, its regression test and no fork tooling; the exact Docker reproducer is run locally with Clang 23 and the current stable GCC and shows the baseline failure and the fixed result; a before/after `test/goose_in_goose` comparison and the affected normal workloads are measured on a quiet host; the title is a Conventional Commit and the body is What, Why, How, Testing, Reproduction; the pull request stays a draft and is never merged by the executor. Linter defects are fork matters and are not sent upstream. The fix is also cherry-picked onto `goose-ir`. |
+| O7 | A genuine compiler defect found along the way gets a draft pull request to upstream, following the guidelines. They are in two places: this repository's `AGENTS.md` ("Upstream pull requests") and the Aincrad3 checkout's `docs/GOOSE-WORKFLOW.md`; where they differ, the stricter applies. In short: the defect violates a supported language or runtime contract and is confirmed on the failing baseline; it is reduced to a small public fixture; the fix branch starts from upstream `master` and carries one fix, its regression test and no fork tooling; the exact Docker reproducer is run locally with Clang 23 and the current stable GCC and shows the baseline failure and the fixed result; a before/after `test/goose_in_goose` comparison and the affected normal workloads are measured on a quiet host; the title is a Conventional Commit and the body is What, Why, How, Testing, Reproduction; the pull request stays a draft and is never merged by the executor. Linter defects are fork matters and are not sent upstream. The fix is also cherry-picked onto `master`. |
 
 ### 2.2 Prescribed
 
@@ -281,9 +248,9 @@ The full baseline suite runs at `G-PILOT`, `G-SHARE`, `G-UNITS`, `G-GIR` and the
 
 **Pre-authorized, all additive and opt-in:** the flags `--emit-core FILE`, `--emit-gir-high FILE`, `--emit-gir-low FILE`, `--pipeline legacy|gir`, `--build-report FILE`, `--share`, `--emit-units DIR`, and for `goose build`: `--units`, `--rebuild`, `--verify-reuse`; the report format `goose-build-report/1`; the store directories under a program's existing build directory; `src/runtime/runtime_units.h`; `--only` and `--goose-arg` in `test/run_tests.py`; `--semantics` and `--pipeline` in `fuzz/driver.py`; new files in `CMakeLists.txt`'s source list; new entries in the C++ unit-test list.
 
-**Also authorized (O7):** pushing one fix branch per confirmed defect to the fork and opening a draft pull request against upstream from it.
+**O7 local preparation:** build and verify one fix branch per confirmed defect and prepare its draft description. Pushing the branch or opening an external pull request requires a separate owner request under the current working contract.
 
-**Forbidden:** changing the behavior or default output bytes of any existing command; facts v1, diagnostics v1, contracts v1, lint configuration, baselines, lint statuses, warning text; `docs/goose_spec.md`; existing fixtures and expected outputs; the five existing runtime files; the checker's acceptance of any program; `.github/workflows`; a new dependency in C++ or Lean; making any new mode the default; `master`.
+**Forbidden:** changing the behavior or default output bytes of any existing command; facts v1, diagnostics v1, contracts v1, lint configuration, baselines, lint statuses, warning text; `docs/goose_spec.md`; existing fixtures and expected outputs; the five existing runtime files; the checker's acceptance of any program; `.github/workflows`; a new dependency in C++ or Lean; making any new mode the default. The owner redirected campaign work to `master` on 2026-10-14, superseding the original branch restriction.
 
 Each change made is appended to §8.
 
@@ -570,6 +537,8 @@ the pending statuses in the paused handoff above.)*
 - `G0` merged: runner filter and extra-argument option; default log identical to the old runner's; baseline status recorded in §3.
 - `G1` merged: Lake project with a build-time axiom audit, the `goose-core/0.2` tag table (specification §12.1), three goldens. P0 complete.
 - `G2` merged: `test/scale/gen.py` (issue #9's program, parameterized) and `test/scale/parity.py` (1,120 emissions compared; base against itself equal, `--no-bce` differs in 696).
+
+- **Resumed 2026-10-14 on `master`.** The local `master` was fast-forwarded from `62366eb4` to `d440b9ab`, the former `goose-ir` tip (423 commits; no divergence). The `goose-ir` and `origin/goose-ir` refs were left unchanged, and no push was run. Continue with O3; prior post-run host-load failure invalidated its timing, so no budget is frozen.
 
 ## 14. For the owner afterwards
 
