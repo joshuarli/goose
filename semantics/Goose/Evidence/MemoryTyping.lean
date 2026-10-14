@@ -74,11 +74,42 @@ theorem WeakValueTy.flat {roots : RootDeclarations} {value : Val} {ty : Ty}
   cases ty <;> try exact typed
   all_goals simp [Ty.flat] at flat
 
+theorem WeakValueTy.ownerFlat {roots : RootDeclarations} {value : Val} {ty element : Ty}
+    (owner : ty.ownerElem? = some element) (typed : WeakValueTy roots value ty) : FlatTy ty value := by
+  cases ty <;> try exact typed
+  all_goals simp [Ty.ownerElem?] at owner
+
 theorem DeclaredLocation.mono {before after : RootDeclarations} {location : Loc} {ty : Ty}
     (extension : before.Extends after) (declared : DeclaredLocation before location ty) :
     DeclaredLocation after location ty := by
   obtain ⟨rootTy, declaration, path⟩ := declared
   exact ⟨rootTy, extension _ _ declaration, path⟩
+
+theorem DeclaredLocation.append {roots : RootDeclarations} {location : Loc} {a b : Ty}
+    {path : List Nat} (declared : DeclaredLocation roots location a)
+    (selection : StoragePath a path b) :
+    DeclaredLocation roots ⟨location.root, location.path ++ path⟩ b := by
+  obtain ⟨rootTy, declaration, initialPath⟩ := declared
+  exact ⟨rootTy, declaration, initialPath.append selection⟩
+
+theorem DeclaredLocation.ownerElement {roots : RootDeclarations} {location : Loc}
+    {owner element : Ty} (declared : DeclaredLocation roots location owner)
+    (ownerType : owner.ownerElem? = some element) (index : Nat) :
+    DeclaredLocation roots ⟨location.root, location.path ++ [index]⟩ element := by
+  cases owner with
+  | grow other =>
+    simp only [Ty.ownerElem?, Option.some.injEq] at ownerType
+    subst other
+    exact declared.append (.grow (.root element))
+  | growshrink other =>
+    simp only [Ty.ownerElem?, Option.some.injEq] at ownerType
+    subst other
+    exact declared.append (.shrink (.root element))
+  | limited other capacity =>
+    simp only [Ty.ownerElem?, Option.some.injEq] at ownerType
+    subst other
+    exact declared.append (.limited (.root element))
+  | _ => simp [Ty.ownerElem?] at ownerType
 
 theorem WeakValueTy.mono {before after : RootDeclarations} {value : Val} {ty : Ty}
     (extension : before.Extends after) (typed : WeakValueTy before value ty) :
@@ -248,5 +279,23 @@ theorem WeakStoreTy.writeFlat {roots : RootDeclarations} {before after : Store}
   have selectedTyped := (typed.read target read).flat flat
   exact typed.flatStep declarations (Goose.Core.Sound.write_flatStep before after location value ty
     flat ⟨selected, read, selectedTyped⟩ (valueTyped.flat flat) written)
+
+theorem WeakStoreTy.appendOwner {roots : RootDeclarations} {before after : Store}
+    {location : Loc} {values : Array Val} {owner element : Ty} {index : Nat}
+    (declarations : roots.Storable) (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location owner) (ownerType : owner.ownerElem? = some element)
+    (flat : element.flat = true)
+    (valuesTyped : ∀ (i : Nat) (value : Val), values[i]? = some value → WeakValueTy roots value element)
+    (appended : before.append location values = .ok (after, index)) : WeakStoreTy roots after := by
+  have successfulRead : ∃ selected, before.read location = .ok selected := by
+    rcases append_spec before after location values index appended with
+      ⟨elementTy, elements, read, rest⟩ | ⟨elementTy, capacity, slots, len, read, rest⟩
+    · exact ⟨_, read⟩
+    · exact ⟨_, read⟩
+  obtain ⟨selected, read⟩ := successfulRead
+  have selectedTyped := (typed.read target read).ownerFlat ownerType
+  exact typed.flatStep declarations (Goose.Core.Sound.append_flatStep_owner before after location
+    values index owner element ownerType flat ⟨selected, read, selectedTyped⟩
+    (fun i value present => (valuesTyped i value present).flat flat) appended)
 
 end Goose.Evidence

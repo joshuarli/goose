@@ -85,6 +85,15 @@ theorem WeakViewTy.mono {before after : RootDeclarations} {view : ViewVal} {elem
   · exact Or.inr (Or.inr (Or.inl (declared.mono extension)))
   · exact Or.inr (Or.inr (Or.inr ⟨capacity, declared.mono extension⟩))
 
+theorem WeakViewTy.element {roots : RootDeclarations} {view : ViewVal} {element : Ty}
+    (typed : WeakViewTy roots view element) (index : Nat) :
+    DeclaredLocation roots ⟨view.loc.root, view.loc.path ++ [view.start + index]⟩ element := by
+  rcases typed with ⟨count, declared⟩ | declared | declared | ⟨capacity, declared⟩
+  · exact declared.append (.fixed (.root element))
+  · exact declared.append (.grow (.root element))
+  · exact declared.append (.shrink (.root element))
+  · exact declared.append (.limited (.root element))
+
 theorem WeakCellTy.mono {before after : RootDeclarations} {cell : RVal} {ty : VTy}
     (extension : before.Extends after) (typed : WeakCellTy before cell ty) :
     WeakCellTy after cell ty := by
