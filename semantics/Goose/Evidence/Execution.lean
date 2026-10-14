@@ -531,4 +531,74 @@ theorem RuntimePoint.control_path {cfg : GCfg} {fn : Func} {pt : Pt} {fr : Frame
   | step _ transition ih =>
     exact ih.trans (.next transition.control (by simp) .refl)
 
+theorem terminated_no_term_before_def {fn : Func} {pt : Pt} {id : ValueId} {operation : Op}
+    (terminated : TerminatedBlocks fn)
+    (definition : instAt fn pt = some (.def id operation)) :
+    ∀ index < pt.2, ∀ term, instAt fn (pt.1, index) ≠ some (.term term) := by
+  unfold instAt at definition
+  cases lookup : fn.blocks[pt.1]? with
+  | none => simp [lookup] at definition
+  | some block =>
+    simp only [lookup, Option.bind_some] at definition
+    obtain ⟨oneTerm, lastTerm⟩ := terminated block (Array.mem_of_getElem? lookup)
+    cases lastElement : block.insts.getLast? with
+    | none => simp [Block.lastTerm?, lastElement] at lastTerm
+    | some instruction =>
+      cases instruction with
+      | «def» _ _ => simp [Block.lastTerm?, lastElement] at lastTerm
+      | eff _ => simp [Block.lastTerm?, lastElement] at lastTerm
+      | term terminator =>
+        obtain ⟨prefixInsts, shape⟩ := List.getLast?_eq_some_iff.mp lastElement
+        have noPrefixTerms : prefixInsts.filterMap Inst.term? = [] := by
+          have lengthZero : (prefixInsts.filterMap Inst.term?).length = 0 := by
+            simpa [Block.terms, shape, List.filterMap_append, Inst.term?] using oneTerm
+          exact List.length_eq_zero_iff.mp lengthZero
+        have defBeforeLast : pt.2 < prefixInsts.length := by
+          have bound := (List.getElem?_eq_some_iff.mp definition).1
+          rw [shape, List.length_append] at bound
+          simp only [List.length_cons, List.length_nil] at bound
+          by_cases before : pt.2 < prefixInsts.length
+          · exact before
+          · have equal : pt.2 = prefixInsts.length := by omega
+            simp [shape, equal] at definition
+        intro index before term earlier
+        have prefixIndex : index < prefixInsts.length := by omega
+        simp only [instAt, lookup, Option.bind_some] at earlier
+        rw [shape] at earlier
+        simp only [List.getElem?_append, prefixIndex, ↓reduceIte] at earlier
+        have present : term ∈ prefixInsts.filterMap Inst.term? :=
+          List.mem_filterMap.mpr ⟨.term term, List.mem_of_getElem? earlier, rfl⟩
+        rw [noPrefixTerms] at present
+        cases present
+
+theorem validated_definition_barrier {m : Goose.GIR.Module} {fn : Func} {id : ValueId} {operation : Op}
+    {definitionPt first last : Pt}
+    (validated : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (definition : instAt fn definitionPt = some (.def id operation))
+    (path : ControlPath fn [id] first last)
+    (beforeDefinition : first.1 = definitionPt.1 ∧ first.2 ≤ definitionPt.2) :
+    last.1 = definitionPt.1 ∧ last.2 ≤ definitionPt.2 := by
+  have terminated := ((validate_sound m validated).1 fn member).1
+  exact ControlPath.definition_barrier definition
+    (terminated_no_term_before_def terminated definition) path beforeDefinition
+
+theorem validated_no_definition_avoiding_path_to_term {m : Goose.GIR.Module} {fn : Func}
+    {id : ValueId} {operation : Op} {term : Term} {definitionPt first last : Pt}
+    (validated : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (definition : instAt fn definitionPt = some (.def id operation))
+    (path : ControlPath fn [id] first last)
+    (beforeDefinition : first.1 = definitionPt.1 ∧ first.2 ≤ definitionPt.2)
+    (atTerm : instAt fn last = some (.term term)) : False := by
+  obtain ⟨sameBlock, beforeIndex⟩ :=
+    validated_definition_barrier validated member definition path beforeDefinition
+  have terminated := ((validate_sound m validated).1 fn member).1
+  by_cases equal : last.2 = definitionPt.2
+  · have samePoint : last = definitionPt := Prod.ext sameBlock equal
+    rw [samePoint, definition] at atTerm
+    cases atTerm
+  · have earlier : last.2 < definitionPt.2 := by omega
+    have samePoint : last = (definitionPt.1, last.2) := Prod.ext sameBlock rfl
+    rw [samePoint] at atTerm
+    exact terminated_no_term_before_def terminated definition last.2 earlier term atTerm
+
 end Goose.Evidence
