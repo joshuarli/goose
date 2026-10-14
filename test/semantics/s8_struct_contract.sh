@@ -131,6 +131,111 @@ expect_semantics_prefix() {
     esac
 }
 
+expect_semantics_outcome() {
+    label=$1
+    outcome=$2
+    abort_kind=$3
+    trace_file=$4
+    shift 4
+    output=$work/$label.json
+    log=$work/$label.log
+
+    if "$@" >"$output" 2>"$log"; then
+        status=0
+    else
+        status=$?
+    fi
+    [ "$status" -eq 0 ] || {
+        echo "FAIL $label: semantics exit status $status" >&2
+        cat "$log" >&2
+        exit 1
+    }
+    if ! "$jaq" --rawfile trace "$trace_file" --arg outcome "$outcome" \
+        --arg kind "$abort_kind" -e '
+            .[0] == "done" and .[2] == $trace and
+            (if $outcome == "returned" then .[1] == ["returned"] else
+                .[1][0] == "aborted" and .[1][1] == $kind end)
+        ' "$output" >/dev/null; then
+        echo "FAIL $label: outcome or output trace differs" >&2
+        cat "$output" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+}
+
+expect_struct_artifact() {
+    label=$1
+    source=$2
+    expected_output=$3
+    outcome=$4
+    abort_kind=$5
+    abort_message=$6
+    core=$work/$label.core.json
+    high=$work/$label.high.json
+    low=$work/$label.low.json
+
+    expect_export "$label-export" --emit-core "$core" --emit-gir-high "$high" \
+        --emit-gir-low "$low" --check "$source"
+    expect_semantics_line "$label-core-validate" 0 '["ok"]' validate "$core"
+    expect_semantics_outcome "$label-core-run" "$outcome" "$abort_kind" \
+        "$expected_output" "$semantics" run "$core"
+    if ! "$semantics" lower "$core" >"$work/$label-lowered.high.json" \
+        2>"$work/$label-lower.log"; then
+        echo "FAIL $label: Lean Core lower" >&2
+        cat "$work/$label-lower.log" >&2
+        cat "$work/$label-lowered.high.json" >&2
+        exit 1
+    fi
+    cmp "$high" "$work/$label-lowered.high.json"
+    expect_semantics_line "$label-gir-validate" 0 '["ok"]' gir-validate "$high"
+    expect_semantics_outcome "$label-gir-run" "$outcome" "$abort_kind" \
+        "$expected_output" "$semantics" gir-run "$high"
+    if ! "$semantics" gir-reencode "$high" >"$work/$label-reencoded.high.json" \
+        2>"$work/$label-reencode.log"; then
+        echo "FAIL $label: Lean GIR reencode" >&2
+        cat "$work/$label-reencode.log" >&2
+        cat "$work/$label-reencoded.high.json" >&2
+        exit 1
+    fi
+    cmp "$high" "$work/$label-reencoded.high.json"
+
+    c_file=$work/$label-gir.c
+    if ! "$goose" --pipeline gir --standalone -o "$c_file" "$source" \
+        >"$work/$label-gir-build.log" 2>&1; then
+        echo "FAIL $label: GIR C emission" >&2
+        cat "$work/$label-gir-build.log" >&2
+        exit 1
+    fi
+    program=$work/$label-native
+    if ! "$clang" -O0 -fsanitize=alignment -fno-sanitize-recover=alignment \
+        "$c_file" -lm -pthread -o "$program" >"$work/$label-clang.log" 2>&1; then
+        echo "FAIL $label: native GIR build" >&2
+        cat "$work/$label-clang.log" >&2
+        exit 1
+    fi
+    if "$program" >"$work/$label-native.out" 2>"$work/$label-native.err"; then
+        status=0
+    else
+        status=$?
+    fi
+    cmp "$expected_output" "$work/$label-native.out"
+    if [ "$outcome" = returned ]; then
+        [ "$status" -eq 0 ] || {
+            echo "FAIL $label: native GIR exit status $status" >&2
+            cat "$work/$label-native.err" >&2
+            exit 1
+        }
+    else
+        [ "$status" -ne 0 ] || { echo "FAIL $label: native GIR did not abort" >&2; exit 1; }
+        case $(cat "$work/$label-native.err") in
+            *"goose runtime error: $abort_message"*) ;;
+            *) echo "FAIL $label: missing native abort diagnostic $abort_message" >&2
+                cat "$work/$label-native.err" >&2
+                exit 1 ;;
+        esac
+    fi
+}
+
 expect_malformed() {
     label=$1
     command=$2
@@ -384,6 +489,76 @@ cmp "$work/struct.high.json" "$work/lean-reencoded.high.json"
 expect_semantics_line agree 0 '["agree",["done",["returned"],"1 42 7\n"]]' \
     agree "$work/struct.core.json" "$work/struct.high.json"
 
+# Keep the copy snapshot and ordered, aborting default initializers in the
+# source-to-Core/GIR/native contract, not only in the independent Lean model.
+expect_struct_artifact struct-copy "$root/test/codegen/flat_struct_copy.goose" \
+    "$root/test/expected/flat_struct_copy.out" returned "" ""
+expect_struct_artifact struct-default-order "$root/test/codegen/flat_struct_initializer_order.goose" \
+    "$root/test/expected/flat_struct_initializer_order.out" aborted user_abort middle
+# The Core/GIR path can check these packed-storage operations but cannot export the
+# whole dynamic array formatter used by the legacy fixture. Read its fields.
+shrink_packed_source=$work/shrink-packed-storage.goose
+sed 's/print(resizable, " ", marker);/print(resizable[0].flag, " ", resizable[0].value, " ", marker);/' \
+    "$root/test/codegen/shrink_packed_storage.goose" >"$shrink_packed_source"
+printf '33 0\n44 44 1\n1 17\n7 88 17\n' >"$work/shrink-packed-storage.out"
+expect_struct_artifact shrink-packed-storage "$shrink_packed_source" \
+    "$work/shrink-packed-storage.out" returned "" ""
+
+# A scalar field's contents permission does not govern assignment to the
+# field itself. Use a fixed array field to check writes through its contents.
+field_array_source=$work/struct-array-field.goose
+cat >"$field_array_source" <<'EOF'
+struct FieldArray { values: i64[2] }
+fn main() {
+    var record = FieldArray { values: [1, 2] };
+    record.values[0] = 3;
+    print(record.values[0]);
+}
+EOF
+printf '3\n' >"$work/struct-array-field.out"
+expect_export struct-array-field --emit-core "$work/struct-array-field.core.json" \
+    --emit-gir-high "$work/struct-array-field.high.json" \
+    --emit-gir-low "$work/struct-array-field.low.json" --check "$field_array_source"
+expect_semantics_line struct-array-field-core-validate 0 '["ok"]' validate \
+    "$work/struct-array-field.core.json"
+expect_semantics_outcome struct-array-field-core-run returned "" \
+    "$work/struct-array-field.out" "$semantics" run "$work/struct-array-field.core.json"
+expect_semantics_line struct-array-field-gir-validate 0 '["ok"]' gir-validate \
+    "$work/struct-array-field.high.json"
+expect_semantics_outcome struct-array-field-gir-run returned "" \
+    "$work/struct-array-field.out" "$semantics" gir-run "$work/struct-array-field.high.json"
+expect_semantics_line struct-array-field-agree 0 \
+    '["agree",["done",["returned"],"3\n"]]' agree \
+    "$work/struct-array-field.core.json" "$work/struct-array-field.high.json"
+
+# A two-element optional fill is a decoder failure; the same valid one-fill
+# resize remains well-formed and reaches the capacity abort during evaluation.
+resize_fill_core=$root/test/semantics/golden/limited_resize_fill_before_capacity.core.json
+printf 'fill\n' >"$work/resize-fill-trace.out"
+expect_semantics_line resize-fill-core-validate 0 '["ok"]' validate "$resize_fill_core"
+expect_semantics_outcome resize-fill-core-run aborted capacity "$work/resize-fill-trace.out" \
+    "$semantics" run "$resize_fill_core"
+if ! "$semantics" lower "$resize_fill_core" >"$work/resize-fill.high.json" \
+    2>"$work/resize-fill-lower.log"; then
+    echo "FAIL resize-fill: Lean Core lower" >&2
+    cat "$work/resize-fill-lower.log" >&2
+    cat "$work/resize-fill.high.json" >&2
+    exit 1
+fi
+expect_semantics_line resize-fill-gir-validate 0 '["ok"]' gir-validate "$work/resize-fill.high.json"
+expect_semantics_outcome resize-fill-gir-run aborted capacity "$work/resize-fill-trace.out" \
+    "$semantics" gir-run "$work/resize-fill.high.json"
+"$jaq" '.[7][0][5][2][1][3] as $fill |
+    .[7][0][5][2][1][3] = [$fill[0], $fill[0]]' "$resize_fill_core" \
+    >"$work/core-shrink-resize-fill-arity.json"
+expect_malformed core-shrink-resize-fill-arity validate \
+    "$work/core-shrink-resize-fill-arity.json"
+"$jaq" '.[7][0][6][0][2] |= map(
+    if .[0] == "x_resize" then .[3] = [0, 0] else . end
+)' "$work/resize-fill.high.json" >"$work/gir-shrink-resize-fill-arity.json"
+expect_malformed gir-shrink-resize-fill-arity gir-validate \
+    "$work/gir-shrink-resize-fill-arity.json"
+
 # Exercise the GIR-H verifier's independently decoded whole-replacement cases.
 if ! "$semantics" lower "$shrink_core" >"$work/shrink.high.json" \
     2>"$work/shrink-lower.log"; then
@@ -482,6 +657,74 @@ expect_semantics_prefix forged-core-type 5 '["rejected","V-TYPE",' \
     validate "$work/forged-type.core.json"
 expect_semantics_prefix forged-core-mut 5 '["rejected","V-MUT",' \
     validate "$work/forged-mut.core.json"
+
+# A duplicate descriptor has identical fields and offsets but a distinct
+# nominal identity. The Core and GIR verifiers reject its forged constructor.
+"$jaq" '
+    (.[4] | length) as $nominal
+    | .[4] += [["struct",1]]
+    | .[5] += [.[5][0]]
+    | .[7][0][5][2][0][2][1] = $nominal
+' "$work/struct.core.json" >"$work/forged-nominal.core.json"
+expect_semantics_prefix forged-core-nominal 5 '["rejected","V-TYPE",' \
+    validate "$work/forged-nominal.core.json"
+"$jaq" '
+    (.[4] | length) as $nominal
+    | .[4] += [["struct",1]]
+    | .[5] += [.[5][0]]
+    | .[7] |= map(.[6] |= map(.[2] |= map(
+        if .[0] == "i_struct" then .[2] = $nominal else . end
+    )))
+' "$work/struct.high.json" >"$work/forged-nominal.high.json"
+expect_semantics_prefix forged-gir-nominal 5 '["rejected","GIR-V010",' \
+    gir-validate "$work/forged-nominal.high.json"
+
+# Constructor count, component type, selector bounds, and field permissions
+# fail in their owning validators after the artifact has decoded successfully.
+"$jaq" '
+    .[7][0][5][2][0][2][2] as $values
+    | .[7][0][5][2][0][2][2] = [$values[0], $values[1]]
+' "$work/struct.core.json" >"$work/forged-constructor-count.core.json"
+expect_semantics_prefix forged-core-constructor-count 5 '["rejected","V-TYPE",' \
+    validate "$work/forged-constructor-count.core.json"
+"$jaq" '
+    .[7][0][5][2][0][2][2] as $values
+    | .[7][0][5][2][0][2][2] = [$values[1], $values[0], $values[2]]
+' "$work/struct.core.json" >"$work/forged-constructor-type.core.json"
+expect_semantics_prefix forged-core-constructor-type 5 '["rejected","V-TYPE",' \
+    validate "$work/forged-constructor-type.core.json"
+"$jaq" '.[7][0][5][2][1][2][2] = 3' "$work/struct.core.json" \
+    >"$work/forged-field-index.core.json"
+expect_semantics_prefix forged-core-field-index 5 '["rejected","V-TYPE",' \
+    validate "$work/forged-field-index.core.json"
+"$jaq" '.[5][0][2][1][2] = "let"' "$work/struct.core.json" \
+    >"$work/forged-field-binding.core.json"
+expect_semantics_prefix forged-core-field-binding 5 '["rejected","V-MUT",' \
+    validate "$work/forged-field-binding.core.json"
+"$jaq" '.[5][0][2][1][2] = "let"' "$work/struct.high.json" \
+    >"$work/forged-field-binding.high.json"
+expect_semantics_prefix forged-gir-field-binding 5 '["rejected","GIR-V030",' \
+    gir-validate "$work/forged-field-binding.high.json"
+"$jaq" '.[5][0][2][0][3] = "const"' "$work/struct-array-field.core.json" \
+    >"$work/forged-field-contents.core.json"
+expect_semantics_prefix forged-core-field-contents 5 '["rejected","V-MUT",' \
+    validate "$work/forged-field-contents.core.json"
+"$jaq" '.[5][0][2][0][3] = "const"' "$work/struct-array-field.high.json" \
+    >"$work/forged-field-contents.high.json"
+expect_semantics_prefix forged-gir-field-contents 5 '["rejected","GIR-V030",' \
+    gir-validate "$work/forged-field-contents.high.json"
+"$jaq" '.[7] |= map(.[6] |= map(.[2] |= map(
+    if .[0] == "i_struct" then .[3] as $values |
+        .[3] = [$values[1], $values[0], $values[2]]
+    else . end
+)))' "$work/struct.high.json" >"$work/forged-constructor-type.high.json"
+expect_semantics_prefix forged-gir-constructor-type 5 '["rejected","GIR-V010",' \
+    gir-validate "$work/forged-constructor-type.high.json"
+"$jaq" '.[7] |= map(.[6] |= map(.[2] |= map(
+    if .[0] == "i_field" then .[3] = 3 else . end
+)))' "$work/struct.high.json" >"$work/forged-field-index.high.json"
+expect_semantics_prefix forged-gir-field-index 5 '["rejected","GIR-V010",' \
+    gir-validate "$work/forged-field-index.high.json"
 
     echo "s8 structs: Lean Core/GIR validation, parity, and mutation checks ok"
 else

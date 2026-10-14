@@ -1885,6 +1885,56 @@ GirModule ShrinkReplaceAfterClearThroughParameters(bool loop) {
     return m;
 }
 
+GirModule ShrinkReplaceAfterCallArgument() {
+    auto m = Base();
+    m.profile = CoreProfile::Shrink;
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto ownerTy = m.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = i64 });
+    auto refTy = m.RefType(CoreMut::Mut, ownerTy);
+
+    GirFunc probe;
+    probe.name = "replace-after-call-argument";
+    probe.params = { refTy };
+    probe.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    probe.scopes = { -1 };
+    probe.summary.unknown = true;
+    GirBlock body;
+    body.params = { { 0, refTy } };
+    auto clear = Def(GirOp::Clear, -1);
+    clear.a = 0;
+    clear.org = 0;
+    auto call = Def(GirOp::Call, 1);
+    call.idx = 2;
+    call.vals = { 0 };
+    call.org = 0;
+    auto run = Def(GirOp::Arr, 2);
+    run.ty = ownerTy;
+    run.vals = { 1 };
+    GirInst replace;
+    replace.op = GirOp::Replace;
+    replace.a = 0;
+    replace.b = 2;
+    replace.org = 0;
+    body.insts = { clear, call, run, replace, Ret() };
+    probe.blocks = { body };
+
+    GirFunc reader;
+    reader.name = "read-owner";
+    reader.params = { refTy };
+    reader.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+    reader.results = { i64 };
+    reader.scopes = { -1 };
+    reader.summary.unknown = true;
+    GirBlock readerBody;
+    readerBody.params = { { 0, refTy } };
+    readerBody.insts = { Int(m, 1, "7"), Ret({ 1 }) };
+    reader.blocks = { readerBody };
+
+    m.funcs.push_back(std::move(probe));
+    m.funcs.push_back(std::move(reader));
+    return m;
+}
+
 GirModule ShrinkReplaceAfterMixedClearJoin() {
     auto m = Base();
     m.profile = CoreProfile::Shrink;
@@ -1969,6 +2019,7 @@ void RejectsInvalidShrinkReplacementProofs() {
     assert(Code(ShrinkLocalReplacementWithUnrelatedParameterRead()) == "");
     for (auto readElement : { false, true })
         assert(Code(ShrinkReplaceAfterClearReadIntoRun(readElement)) == "GIR-V060");
+    assert(Code(ShrinkReplaceAfterCallArgument()) == "GIR-V060");
     assert(Code(ShrinkReplaceAfterAppendSourceAlias()) == "GIR-V060");
     assert(Code(ShrinkReplaceAfterSlotInitSourceAlias()) == "GIR-V060");
 }
