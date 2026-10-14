@@ -91,7 +91,7 @@ class UnitsMatrixTests(unittest.TestCase):
                 self.edit = None
                 self.calls = 0
 
-            def build(self, *flags):
+            def build(self, *flags, **kwargs):
                 self.calls += 1
                 return FakeBuild(0 if self.calls == 1 else 1)
 
@@ -110,6 +110,41 @@ class UnitsMatrixTests(unittest.TestCase):
 
                 self.assertEqual(len(matrix.failures), 1)
                 self.assertIn("unexpected build failure", matrix.failures[0])
+
+    def test_random_sequence_forces_reuse_verification(self):
+        class FixedRandom:
+            def choice(self, options):
+                return "nothing"
+
+        class FakeBuild:
+            exit = 0
+            stdout = ""
+            stderr = ""
+            native = {}
+
+            def record(self, row):
+                return {"row": row, "exit": self.exit}
+
+        class FakeSession:
+            verification = []
+
+            def __init__(self, goose, work, name):
+                self.edit = None
+                type(self).verification = []
+
+            def build(self, *flags, verify=False):
+                type(self).verification.append(verify)
+                return FakeBuild()
+
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        with patch.object(units_matrix, "Session", FakeSession), \
+                patch.object(units_matrix.random, "Random", lambda seed: FixedRandom()), \
+                patch.object(units_matrix.Matrix, "equal_to_clean", lambda *args, **kwargs: None), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.random_sequence(1, seed=1)
+
+        self.assertEqual(matrix.failures, [])
+        self.assertEqual(FakeSession.verification, [True, True])
 
     def test_build_kills_only_after_predicate(self):
         with tempfile.TemporaryDirectory(dir=self.scratch) as temp:
@@ -168,6 +203,39 @@ class UnitsMatrixTests(unittest.TestCase):
 
             self.assertEqual(len(matrix.failures), 1)
             self.assertIn("E16 edit", matrix.failures[0])
+
+    def test_edit_error_is_compared_with_a_clean_build(self):
+        class FakeBuild:
+            def __init__(self, exit_code, no_op=False):
+                self.exit = exit_code
+                self.stdout = ""
+                self.stderr = units_matrix.edits.EDITS["E15a"].message if exit_code else ""
+                self.native = {"no_op": no_op}
+
+            def record(self, row):
+                return {"row": row, "exit": self.exit}
+
+        class FakeSession:
+            def __init__(self, goose, work, name):
+                self.calls = 0
+
+            def build(self, *args, **kwargs):
+                self.calls += 1
+                return FakeBuild(1 if self.calls == 2 else 0, no_op=self.calls == 3)
+
+            def write(self, edit):
+                self.edit = edit
+
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        compared = []
+        with patch.object(units_matrix, "Session", FakeSession), \
+                patch.object(units_matrix.Matrix, "equal_to_clean",
+                             lambda self, row, session, build, *args, **kwargs: compared.append(build)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.edit_row("E15a", "E15a", lambda *args: None)
+
+        self.assertEqual(matrix.failures, [])
+        self.assertEqual([build.exit for build in compared], [1, 0])
 
 
 if __name__ == "__main__":

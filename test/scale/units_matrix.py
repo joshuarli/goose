@@ -193,7 +193,7 @@ class Session:
         other.exe_name = f"clean{self.counter}"
         other.home = self.dir / f"home-clean{self.counter}"
         shutil.rmtree(other.home, ignore_errors=True)
-        b = Build(other, list(flags), f"clean{self.counter}", goose=goose)
+        b = Build(other, list(flags), f"clean{self.counter}", goose=goose, verify=True)
         b.home = other.home
         return b
 
@@ -323,7 +323,7 @@ class Matrix:
                 self.fail(row, f"an error was expected; exit {b.exit}")
             if "built " in b.stdout:
                 self.fail(row, "a failed build reported an executable")
-            # Nothing was recorded, so the original is still a warm build.
+            self.equal_to_clean(row, s, b)
             s.write(None)
             w = s.build(verify=False)
             if not w.native.get("no_op"):
@@ -662,7 +662,7 @@ class Matrix:
     def random_sequence(self, steps, seed):
         rng = random.Random(seed)
         s = Session(self.goose, self.work, "random")
-        initial = s.build()
+        initial = s.build(verify=True)
         if not self.ok_build("random initial build", initial):
             return
         self.equal_to_clean("random initial build", s, initial)
@@ -702,7 +702,7 @@ class Matrix:
                     label += f" {kind}"
                 if not damaged:
                     self.fail(label, "the damage action found no cached object to damage")
-            b = s.build(*flags)
+            b = s.build(*flags, verify=True)
             self.record(label, b, action=action, damage_applied=damaged)
             expected_error = s.edit in ("E15a", "E07c")
             if expected_error:
