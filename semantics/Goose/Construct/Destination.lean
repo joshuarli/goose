@@ -2114,4 +2114,701 @@ theorem normalizeProducerDestination_stdout (id : DestinationId) (ty : Ty) :
     | intro value
 
 
+def destinationBeginIds (events : List ConstructionEvent) : List DestinationId :=
+  events.filterMap fun event => match event with
+    | .begin id => some id
+    | _ => none
+
+def DestinationBegins (state : ConstructionState) : Prop :=
+  destinationBeginIds state.events = List.range state.destinations.size
+
+abbrev PreservesDestinationBegins (action : ConstructionM α) : Prop :=
+  ∀ state, DestinationBegins state → DestinationBegins (action state).finalState
+
+abbrev DestinationBeginFrame (before after : ConstructionState) : Prop :=
+  destinationBeginIds after.events = destinationBeginIds before.events ∧
+    after.destinations.size = before.destinations.size
+
+abbrev FramesDestinationBegins (action : ConstructionM α) : Prop :=
+  ∀ state, DestinationBeginFrame state (action state).finalState
+
+theorem initial_destination_begins : DestinationBegins ConstructionState.initial := rfl
+
+theorem FramesDestinationBegins.preserves (action : ConstructionM α)
+    (frame : FramesDestinationBegins action) : PreservesDestinationBegins action := by
+  intro state valid
+  rcases frame state with ⟨events, size⟩
+  simpa only [DestinationBegins, events, size] using valid
+
+private theorem beginFrame_refl (state : ConstructionState) : DestinationBeginFrame state state := ⟨rfl,rfl⟩
+
+private theorem beginFrame_trans {before middle after : ConstructionState}
+    (first : DestinationBeginFrame before middle) (second : DestinationBeginFrame middle after) :
+    DestinationBeginFrame before after := ⟨second.1.trans first.1,second.2.trans first.2⟩
+
+private theorem beginFrame_bind (action : ConstructionM α) (next : α → ConstructionM β)
+    (first : FramesDestinationBegins action) (remaining : ∀ value, FramesDestinationBegins (next value)) :
+    FramesDestinationBegins (action >>= next) := by
+  intro state
+  cases result : action state with
+  | ok value after =>
+      simp only [bind,result]
+      apply beginFrame_trans _ (remaining value after)
+      simpa only [result,ConstructionResult.finalState] using first state
+  | fault kind after => simpa only [bind,result,ConstructionResult.finalState] using first state
+
+private theorem beginFrame_pure (value : α) : FramesDestinationBegins (pure value) := beginFrame_refl
+private theorem beginFrame_fail (kind : ConstructionFault) :
+    FramesDestinationBegins (ConstructionM.fail (α := α) kind) := beginFrame_refl
+private theorem beginFrame_fault_bind (kind : ConstructionFault) (next : α → ConstructionM β) :
+    FramesDestinationBegins (ConstructionM.fail kind >>= next) := beginFrame_refl
+private theorem beginFrame_get : FramesDestinationBegins ConstructionM.get := beginFrame_refl
+
+private theorem beginFrame_lookupDestination (id : DestinationId) :
+    FramesDestinationBegins (lookupDestination id) := by
+  intro state
+  simp only [lookupDestination,ConstructionM.get,bind]
+  cases state.destinations[id]? <;> exact beginFrame_refl state
+
+private theorem beginFrame_lookupStorage (id : StorageId) : FramesDestinationBegins (lookupStorage id) := by
+  intro state
+  simp only [lookupStorage,ConstructionM.get,bind]
+  cases state.storage[id]? <;> exact beginFrame_refl state
+
+private theorem beginFrame_replaceDestination (id : DestinationId) (destination : PendingDestination) :
+    FramesDestinationBegins (replaceDestination id destination) := by
+  intro state
+  simp only [replaceDestination,ConstructionM.get,bind]
+  split
+  · exact ⟨rfl, by simp [ConstructionM.set,ConstructionResult.finalState]⟩
+  · exact beginFrame_refl state
+
+private theorem beginFrame_replaceStorage (id : StorageId) (storage : ReceivingStorage) :
+    FramesDestinationBegins (replaceStorage id storage) := by
+  intro state
+  simp only [replaceStorage,ConstructionM.get,bind]
+  split <;> exact ⟨rfl,rfl⟩
+
+private theorem beginFrame_emit (event : ConstructionEvent)
+    (notBegin : (match event with | .begin _ => false | _ => true) = true) :
+    FramesDestinationBegins (emit event) := by
+  intro state
+  cases event <;> simp_all [emit,ConstructionM.get,ConstructionM.set,bind,
+    ConstructionResult.finalState,DestinationBeginFrame,destinationBeginIds]
+
+private theorem beginFrame_writableDestination (id : DestinationId) :
+    FramesDestinationBegins (writableDestination id) := by
+  apply beginFrame_bind (lookupDestination id)
+  · exact beginFrame_lookupDestination id
+  · intro destination
+    apply beginFrame_bind ConstructionM.get
+    · exact beginFrame_get
+    · intro state current
+      dsimp only
+      split <;> exact beginFrame_refl current
+
+private theorem beginFrame_if (condition : Prop) [Decidable condition] (yes no : ConstructionM α)
+    (first : FramesDestinationBegins yes) (second : FramesDestinationBegins no) :
+    FramesDestinationBegins (if condition then yes else no) := by
+  by_cases selected : condition
+  · simpa only [selected,↓reduceIte] using first
+  · simpa only [selected,↓reduceIte] using second
+
+theorem reserveStorage_destination_begins_frame (bytes : ByteArray) (count : Nat) :
+    FramesDestinationBegins (reserveStorage bytes count) := fun _ => ⟨rfl,rfl⟩
+
+theorem appendStdout_destination_begins_frame (bytes : ByteArray) :
+    FramesDestinationBegins (appendStdout bytes) := fun _ => ⟨rfl,rfl⟩
+
+theorem recordCopy_destination_begins_frame (source : CopySource) (id : DestinationId) :
+    FramesDestinationBegins (recordCopy source id) := by
+  unfold recordCopy
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem writeElement_destination_begins_frame (id : DestinationId) (bytes : ByteArray) :
+    FramesDestinationBegins (writeElement id bytes) := by
+  unfold writeElement
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem finishDestination_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (finishDestination id) := by
+  unfold finishDestination
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem attachChild_destination_begins_frame (parent child : DestinationId) :
+    FramesDestinationBegins (attachChild parent child) := by
+  unfold attachChild
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem attachExtension_destination_begins_frame (parent child : DestinationId) :
+    FramesDestinationBegins (attachExtension parent child) := by
+  unfold attachExtension
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem attachElementExtension_destination_begins_frame (parent child : DestinationId) :
+    FramesDestinationBegins (attachElementExtension parent child) := by
+  unfold attachElementExtension
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem publishElementDestination_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (publishElementDestination id) := by
+  unfold publishElementDestination
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem retireRepeatedSource_destination_begins_frame (parent source : DestinationId) :
+    FramesDestinationBegins (retireRepeatedSource parent source) := by
+  unfold retireRepeatedSource
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem truncateConstructionStorage_destination_begins_frame (storage : StorageId) (start finish count : Nat) (owner : Option DestinationId) (retainSlots : Bool) :
+    FramesDestinationBegins (truncateConstructionStorage storage start finish count owner retainSlots) := by
+  unfold truncateConstructionStorage
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem prepareNamedBinding_destination_begins_frame (id : DestinationId) (ty : Ty) :
+    FramesDestinationBegins (prepareNamedBinding id ty) := by
+  unfold prepareNamedBinding
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem fitStagedDestination_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (fitStagedDestination id) := by
+  unfold fitStagedDestination
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem removeConstructionHeader_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (removeConstructionHeader id) := by
+  unfold removeConstructionHeader
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem restoreReceivingLayout_destination_begins_frame (id : DestinationId) (layout : ReceivingLayout) :
+    FramesDestinationBegins (restoreReceivingLayout id layout) := by
+  apply beginFrame_bind (writableDestination id)
+  · exact beginFrame_writableDestination id
+  · intro destination
+    cases destination.progress
+    all_goals try exact beginFrame_refl
+    apply beginFrame_if
+    · exact beginFrame_refl
+    · exact beginFrame_replaceDestination _ _
+
+theorem adaptDestinationType_destination_begins_frame (id : DestinationId) (ty : Ty) :
+    FramesDestinationBegins (adaptDestinationType id ty) := by
+  unfold adaptDestinationType
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem adaptConstructionDestination_destination_begins_frame (id : DestinationId) (ty : Ty) (request : ConstructionRequest) :
+    FramesDestinationBegins (adaptConstructionDestination id ty request) := by
+  unfold adaptConstructionDestination
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem finishConstructionAdaptation_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (finishConstructionAdaptation id) := by
+  unfold finishConstructionAdaptation
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | with_reducible exact removeConstructionHeader_destination_begins_frame _
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem normalizeProducerDestination_destination_begins_frame (id : DestinationId) (ty : Ty) :
+    FramesDestinationBegins (normalizeProducerDestination id ty) := by
+  unfold normalizeProducerDestination
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | with_reducible exact removeConstructionHeader_destination_begins_frame _
+    | dsimp only
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+private theorem beginFrame_get_bind (next : ConstructionState → ConstructionM α)
+    (safe : ∀ state, DestinationBeginFrame state (next state state).finalState) :
+    FramesDestinationBegins (ConstructionM.get >>= next) := safe
+
+private theorem beginFrame_set_then (state updated : ConstructionState) (next : Unit → ConstructionM α)
+    (before : DestinationBeginFrame state updated)
+    (safe : ∀ value, FramesDestinationBegins (next value)) :
+    DestinationBeginFrame state ((ConstructionM.set updated >>= next) state).finalState :=
+  beginFrame_trans before (safe () updated)
+
+private theorem beginFrame_protectedAbandonment (discarded : List PendingDestination) :
+    FramesDestinationBegins (protectedAbandonment discarded) := by
+  intro state
+  induction discarded generalizing state with
+  | nil => exact beginFrame_refl state
+  | cons destination rest ih =>
+      simp only [protectedAbandonment]
+      split
+      · apply beginFrame_trans _ (ih _)
+        simp [DestinationBeginFrame,destinationBeginIds]
+      · exact beginFrame_refl state
+
+theorem abandonPreservingExit_destination_begins_frame (id replacement : DestinationId) :
+    FramesDestinationBegins (abandonPreservingExit id replacement) := by
+  intro state
+  unfold abandonPreservingExit
+  simp only [ConstructionM.get,bind]
+  cases protectedExitDiscarded state id replacement with
+  | error _ => exact beginFrame_refl state
+  | ok discarded => exact beginFrame_protectedAbandonment discarded state
+
+theorem landReceivingStorage_destination_begins_frame (storage : StorageId) (receivingStart payloadStart : Nat) :
+    FramesDestinationBegins (landReceivingStorage storage receivingStart payloadStart) := by
+  intro state
+  cases present : state.storage[storage]? with
+  | none => simp [landReceivingStorage,present,ConstructionResult.finalState,DestinationBeginFrame]
+  | some receiving =>
+      simp only [landReceivingStorage,present]
+      split <;> exact ⟨rfl,rfl⟩
+
+private theorem beginFrame_forInLoop (values : List α)
+    (body : (value : α) → value ∈ values → β → ConstructionM (ForInStep β))
+    (safe : ∀ value member accumulator, FramesDestinationBegins (body value member accumulator))
+    (remaining : List α) (accumulator : β) (inside : ∃ earlier, earlier ++ remaining = values) :
+    FramesDestinationBegins (List.forIn'.loop values body remaining accumulator inside) := by
+  induction remaining generalizing accumulator with
+  | nil => exact beginFrame_pure _
+  | cons value rest ih =>
+      simp only [List.forIn'.loop]
+      apply beginFrame_bind
+      · exact safe _ _ _
+      · intro step
+        cases step with
+        | done accumulator => exact beginFrame_pure _
+        | yield accumulator => exact ih _ _
+
+private theorem beginFrame_forIn (values : List α) (accumulator : β)
+    (body : α → β → ConstructionM (ForInStep β))
+    (safe : ∀ value accumulator, FramesDestinationBegins (body value accumulator)) :
+    FramesDestinationBegins (forIn values accumulator body) := by
+  apply beginFrame_forInLoop
+  intro value member accumulator
+  exact safe value accumulator
+
+private theorem beginFrame_foreach (values : List α) (body : α → ConstructionM Unit)
+    (safe : ∀ value, FramesDestinationBegins (body value)) :
+    FramesDestinationBegins (do for value in values do body value) := by
+  apply beginFrame_bind
+  · apply beginFrame_forInLoop
+    intro value member accumulator
+    apply beginFrame_bind
+    · exact safe value
+    · intro _; exact beginFrame_pure _
+  · intro _; exact beginFrame_pure _
+
+
+theorem abandonDestination_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (abandonDestination id) := by
+  unfold abandonDestination
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact reserveStorage_destination_begins_frame _ _
+    | with_reducible exact reserveStorage_destination_begins_frame _ _ _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_set_then
+    | with_reducible exact ⟨rfl,rfl⟩
+    | with_reducible apply beginFrame_get_bind
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem stageDestination_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (stageDestination id) := by
+  unfold stageDestination
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact reserveStorage_destination_begins_frame _ _
+    | with_reducible exact reserveStorage_destination_begins_frame _ _ _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_set_then
+    | with_reducible exact ⟨rfl,rfl⟩
+    | with_reducible apply beginFrame_get_bind
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem abandonTree_destination_begins_frame (id : DestinationId) :
+    FramesDestinationBegins (abandonTree id) := by
+  unfold abandonTree
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact reserveStorage_destination_begins_frame _ _
+    | with_reducible exact reserveStorage_destination_begins_frame _ _ _
+    | with_reducible exact abandonDestination_destination_begins_frame _
+    | with_reducible apply beginFrame_forIn
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_set_then
+    | with_reducible exact ⟨rfl,rfl⟩
+    | with_reducible apply beginFrame_get_bind
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+private theorem beginFrame_completedLanding (replacementId supersededId : DestinationId) (count : Nat)
+    (replacement superseded : PendingDestination)
+    (parentUpdate : Option (DestinationId × PendingDestination)) :
+    FramesDestinationBegins (landCompletedReplacement replacementId supersededId count replacement superseded parentUpdate) := by
+  apply beginFrame_bind (lookupStorage replacement.storage)
+  · exact beginFrame_lookupStorage _
+  · intro _
+    apply beginFrame_if
+    · exact beginFrame_refl
+    · apply beginFrame_bind ConstructionM.get
+      · exact beginFrame_get
+      · intro state
+        apply beginFrame_bind (protectedAbandonment _)
+        · exact beginFrame_protectedAbandonment _
+        · intro _
+          apply beginFrame_bind (landReceivingStorage _ _ _)
+          · exact landReceivingStorage_destination_begins_frame _ _ _
+          · intro _
+            apply beginFrame_bind (replaceDestination replacementId _)
+            · exact beginFrame_replaceDestination _ _
+            · intro _
+              cases parentUpdate with
+              | none =>
+                  apply beginFrame_if
+                  · exact beginFrame_emit _ rfl
+                  · exact beginFrame_pure ()
+              | some parent =>
+                  apply beginFrame_bind (replaceDestination parent.1 parent.2)
+                  · exact beginFrame_replaceDestination _ _
+                  · intro _
+                    apply beginFrame_if
+                    · exact beginFrame_emit _ rfl
+                    · exact beginFrame_pure ()
+
+theorem landExitReplacement_destination_begins_frame (replacementId : DestinationId)  :
+    FramesDestinationBegins (landExitReplacement replacementId) := by
+  apply beginFrame_bind (lookupDestination replacementId)
+  · exact beginFrame_lookupDestination replacementId
+  · intro replacement
+    cases replacement.use with
+    | receiver => exact beginFrame_refl
+    | child parentId => exact beginFrame_refl
+    | replacement supersededId =>
+      cases replacement.progress
+      all_goals try exact beginFrame_refl
+      rename_i count
+      apply beginFrame_bind (lookupDestination supersededId)
+      · exact beginFrame_lookupDestination supersededId
+      · intro superseded
+        cases superseded.progress
+        all_goals try exact beginFrame_refl
+        all_goals
+          apply beginFrame_if
+          · exact beginFrame_refl
+          · cases superseded.use with
+            | receiver => exact beginFrame_completedLanding _ _ _ _ _ _
+            | replacement _ => exact beginFrame_refl
+            | child parentId =>
+                apply beginFrame_bind (lookupDestination parentId)
+                · exact beginFrame_lookupDestination _
+                · intro parent
+                  cases parent.progress
+                  all_goals try exact beginFrame_refl
+                  apply beginFrame_if
+                  · exact beginFrame_refl
+                  · exact beginFrame_completedLanding _ _ _ _ _ _
+
+
+
+private theorem beginFrame_publishReady (id : DestinationId) :
+    FramesDestinationBegins (publishReady id) := by
+  unfold publishReady
+  repeat' first
+    | with_reducible exact beginFrame_pure _
+    | with_reducible exact beginFrame_fault_bind _ _
+    | with_reducible exact beginFrame_fail _
+    | with_reducible exact reserveStorage_destination_begins_frame _ _
+    | with_reducible exact reserveStorage_destination_begins_frame _ _ _
+    | with_reducible exact beginFrame_get
+    | with_reducible exact beginFrame_writableDestination _
+    | with_reducible exact beginFrame_lookupDestination _
+    | with_reducible exact beginFrame_lookupStorage _
+    | with_reducible exact beginFrame_replaceDestination _ _
+    | with_reducible exact beginFrame_replaceStorage _ _
+    | with_reducible exact beginFrame_emit _ rfl
+    | dsimp only
+    | with_reducible apply beginFrame_set_then
+    | with_reducible exact ⟨rfl,rfl⟩
+    | with_reducible apply beginFrame_get_bind
+    | with_reducible apply beginFrame_bind
+    | with_reducible apply beginFrame_if
+    | split
+    | intro value
+
+theorem publishOperation_destination_begins_frame (ids : List DestinationId) :
+    FramesDestinationBegins (publishOperation ids) := by
+  apply beginFrame_get_bind
+  intro state
+  cases preflightPublication state ids with
+  | error reason => exact ⟨rfl,rfl⟩
+  | ok value =>
+      cases value
+      exact beginFrame_foreach ids publishReady beginFrame_publishReady state
+
+
 end Goose.Construct
