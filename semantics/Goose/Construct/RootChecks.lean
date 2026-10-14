@@ -44,7 +44,7 @@ private def copyModule : Module := { module with
   impls := #[copiesGlobal], contexts := #[copyContext] }
 #guard !accepts copyModule copyContext
 #guard accepts { copyModule with
-  impls := #[{ copiesGlobal with summary := known [.global 0] }] } copyContext
+  impls := #[{ copiesGlobal with summary := .known ⟨[.global 0],[],[],[],[],[0],[],[],true,false⟩ }] } copyContext
 
 private def copiesSliceParameter : Impl :=
   ⟨"copy-slice", #[⟨0,.byValue⟩], #[⟨array,.value,none⟩],
@@ -65,10 +65,12 @@ private def limitedLiteral (expression : Expr) : Impl :=
   (.arrLit (.limited (.int .u8) 1) [.lit .u8 1, .lit .u8 2])], contexts := #[copyContext] } copyContext
 
 #guard accepts { sliceParameterModule with impls := #[{ copiesSliceParameter with
-  summary := .known ⟨[.param 0],[],[],[],[],[0],[],[],false,false⟩ }] } sliceParameterContext
+  summary := .known ⟨[.param 0],[],[],[],[],[0],[],[],true,false⟩ }] } sliceParameterContext
 private def limitedWithAbort : Impl := { limitedLiteral (.bytes (.limited (.int .u8) 1) [1,2] 0) with
   summary := .known ⟨[],[],[],[],[],[0],[],[],true,false⟩ }
 #guard accepts { module with impls := #[limitedWithAbort], contexts := #[copyContext] } copyContext
-#guard accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 2) [1,2] 0)], contexts := #[copyContext] } copyContext
+#guard accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 1) [1] 0)], contexts := #[copyContext] } copyContext
+
+#guard !accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 2) [1,2] 0)], contexts := #[copyContext] } copyContext
 
 end Goose.Construct.RootChecks

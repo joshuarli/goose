@@ -517,13 +517,17 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
       match producer with | .call .. => pure () | _ => fail .result "forwarding return requires call"
       let descriptors ← resultTypes env
       let results ← typeExpr fuel { env with use := .result, resultRequests := descriptors.map (·.request) } producer
-      require (results == descriptors.map (·.ty)) .result "forwarded result type mismatch"
+      require (results.length == descriptors.length &&
+        (results.zip descriptors).all (fun (source,target) => source.passesTo target.ty))
+        .result "forwarded result type mismatch"
       pure env
   | fuel + 1, env, .returnFromForward target producer _ => do
       match producer with | .call .. => pure () | _ => fail .result "forwarding return requires call"
       let descriptors ← targetResults env target
       let results ← typeExpr fuel { env with use := .result, resultRequests := descriptors.map (·.request) } producer
-      require (results == descriptors.map (·.ty)) .result "target-forwarded result type mismatch"
+      require (results.length == descriptors.length &&
+        (results.zip descriptors).all (fun (source,target) => source.passesTo target.ty))
+        .result "target-forwarded result type mismatch"
       pure env
   | fuel + 1, env, .breakValue expression _ => do
       require (env.loops > 0) .block "value break outside loop"

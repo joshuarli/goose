@@ -3,7 +3,7 @@ import Goose.Construct.Access
 
 
 namespace Goose.Construct
-open Goose.Core (V reject forAll Rule VarId GlobalId ContextId BinOp)
+open Goose.Core (V reject forAll Rule VarId GlobalId ContextId BinOp Request)
 
 
 structure Eff where
@@ -149,6 +149,90 @@ def checkResultV (env : PEnv) (rho : List RootRef) : V Unit := do
     unless subsetRoots rho declared do
       reject .result s!"a returned value is rooted at {showRoots rho}, the context declares {showRoots declared}"
   | _ => reject .result "the context does not declare roots for the single result"
+
+private def maximumElements : Ty → Option Nat
+  | .arr _ count => some count
+  | .limited _ capacity => some capacity
+  | .varr _ => some (2 ^ 32 - 1)
+  | _ => none
+
+mutual
+private def expressionMaximum (env : PEnv) : Expr → Option Nat
+  | .bytes _ data _ | .arrLit _ data => some data.length
+  | .fill ty _ => maximumElements ty
+  | .copy _ source _ => (env.access.placeType? source).bind maximumElements
+  | .ifE _ left right => do
+      let a ← blockMaximum env left
+      let b ← blockMaximum env right
+      pure (max a b)
+  | .blockE block => blockMaximum env block
+  | .str _ parts _ => parts.foldlM (fun count part => match part with
+      | .text text => some (count + text.toUTF8.size)
+      | _ => none) 0
+  | .call contextId _ _ => do
+      let context ← env.mod.contexts[contextId]?
+      let implementation ← env.mod.impls[context.impl]?
+      match implementation.results.toList with
+      | [descriptor] => match descriptor.ty, descriptor.request with
+        | .varr _, .elementRun => none
+        | _, _ => maximumElements descriptor.ty
+      | _ => none
+  | expression => (env.access.exprType? expression).bind maximumElements
+
+private def blockMaximum (env : PEnv) : Block → Option Nat
+  | .mk _ _ none => none
+  | .mk _ _ (some expression) => expressionMaximum env expression
+end
+
+private def receivingCapacity : Ty → Request → Option Nat
+  | .limited _ capacity, _ => some capacity
+  | .varr _, .value => some (2 ^ 32 - 1)
+  | _, _ => none
+
+private def noteReceivingCapacity (env : PEnv) (ty : Ty) (request : Request) (expression : Expr) : P Unit :=
+  match receivingCapacity ty request with
+  | none => pure ()
+  | some capacity => match expressionMaximum env expression with
+    | some maximum => if maximum > capacity then noteAborts else pure ()
+    | none => noteAborts
+
+private def noteOperandCapacities (env : PEnv) (descriptors : List ResultDescriptor) (operands : List Expr) : P Unit :=
+  for (descriptor, operand) in descriptors.zip operands do
+    noteReceivingCapacity env descriptor.ty descriptor.request operand
+
+private def descriptorMaximum (descriptor : ResultDescriptor) : Option Nat :=
+  match descriptor.ty, descriptor.request with
+  | .varr _, .elementRun => none
+  | ty, _ => maximumElements ty
+
+mutual
+private def producerMaximum (env : PEnv) : Expr → V (List (Option Nat))
+  | .values operands => pure (operands.map (expressionMaximum env))
+  | .call contextId _ _ => do
+      let some context := env.mod.contexts[contextId]? | reject .call "capacity analysis call context outside table"
+      let some implementation := env.mod.impls[context.impl]? | reject .call "capacity analysis callee outside table"
+      pure (implementation.results.toList.map descriptorMaximum)
+  | .ifE _ left right => do
+      let a ← blockProducerMaximum env left
+      let b ← blockProducerMaximum env right
+      if a.length != b.length then reject .result "capacity analysis branch result count mismatch"
+      pure ((a.zip b).map fun (a,b) => do pure (max (← a) (← b)))
+  | .blockE block => blockProducerMaximum env block
+  | expression => pure [expressionMaximum env expression]
+
+private def blockProducerMaximum (env : PEnv) : Block → V (List (Option Nat))
+  | .mk _ _ none => pure []
+  | .mk _ _ (some expression) => producerMaximum env expression
+end
+
+private def noteProducerCapacities (env : PEnv) (descriptors : List ResultDescriptor) (producer : Expr) : P Unit := do
+  let maxima ← liftV (producerMaximum env producer)
+  if maxima.length != descriptors.length then rejP .result "capacity analysis result channel count mismatch"
+  for (descriptor, maximum) in descriptors.zip maxima do
+    match receivingCapacity descriptor.ty descriptor.request, maximum with
+    | none, _ => pure ()
+    | some capacity, some maximum => if maximum > capacity then noteAborts
+    | some _, none => noteAborts
 
 def checkResultChannels (env : PEnv) (actual : List (List RootRef)) : V Unit := do
   if actual.length != env.ctx.resultRoots.length then reject .result "result root channel count mismatch"
@@ -466,6 +550,14 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     pure []
   | .call c args _ => do
     let argRoots ← rpArgs env args
+    let some context := env.mod.contexts[c]? | rejP .call "call context outside table"
+    let some callee := env.mod.impls[context.impl]? | rejP .call "callee outside table"
+    for (parameter, argument) in callee.params.toList.zip args do
+      match argument with
+      | .construct expression =>
+          let some localVar := callee.vars[parameter.var]? | rejP .call "parameter outside variable table"
+          noteReceivingCapacity env localVar.ty .value expression
+      | _ => pure ()
     liftV (checkContents env c args argRoots)
     rpCall env c argRoots
   | .push owner a _ => do
@@ -606,6 +698,7 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     let rho ← rpExpr env e
     match env.impl.vars[x]? with
     | some lv =>
+      noteReceivingCapacity env lv.ty .value e
       if lv.ty.isRefLike then bindRoots env env.scopes x rho
     | none => rejP .root s!"variable {x} outside the variable table"
   | .assign p e _ => do
@@ -664,6 +757,8 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     addShrinks rho
     let (_, effects) ← captureEffects (rpExpr env replacement)
     checkWholeAccess rho effects
+    let some ty := env.access.placeType? owner | rejP .type "whole receiver type missing"
+    noteReceivingCapacity env ty .value replacement
     addWrites rho
     addGrows rho
   | .ifS c t f _ => do
@@ -698,6 +793,10 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     liftV (checkBlockValue st0.nextVar body.2.1 body.1)
   | .receive ids producer _ => do
     let _ ← rpExpr env producer
+    let descriptors ← liftV (ids.mapM fun id => do
+      let some localVar := env.impl.vars[id]? | reject .type "receive variable outside table"
+      pure ({ ty := localVar.ty, request := if localVar.ty.nonfixed then .value else .register, namedLocal := none } : ResultDescriptor))
+    noteProducerCapacities env descriptors producer
     for id in ids do
       modify fun state => { state with nextVar := state.nextVar + 1 }
       let some localVar := env.impl.vars[id]? | rejP .type "receive variable outside table"
@@ -721,18 +820,24 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     if (← liftV (env.limitedOwner owner)) then noteAborts
   | .retValues operands _ => do
     if operands.length != env.impl.results.size then rejP .result "result count mismatch"
+    noteOperandCapacities env env.impl.results.toList operands
     rpReturnOperands env env.ctx.resultRoots operands
   | .retForward producer _ => do
     let _ ← rpExpr env producer
+    noteProducerCapacities env env.impl.results.toList producer
     let actual ← liftV (env.access.resultRoots producer)
     liftV (checkResultChannels env actual)
   | .returnFrom target operands _ => do
     let some target := env.mod.targets[target]? | rejP .call "target outside table"
     let some implementation := env.mod.impls[target.first]? | rejP .call "target member outside table"
     if operands.length != implementation.results.size then rejP .result "target result count mismatch"
+    noteOperandCapacities env implementation.results.toList operands
     rpNoLocalOperands env operands
-  | .returnFromForward _ producer _ => do
+  | .returnFromForward targetId producer _ => do
     let roots ← rpExpr env producer
+    let some target := env.mod.targets[targetId]? | rejP .call "target outside table"
+    let some implementation := env.mod.impls[target.first]? | rejP .call "target implementation outside table"
+    noteProducerCapacities env implementation.results.toList producer
     liftV (checkNoLocal roots)
   | .breakValue expression _ => do let _ ← rpExpr env expression; pure ()
   | .ret e _ => do
@@ -740,6 +845,7 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     | none => pure ()
     | some e => do
       let rho ← rpExpr env e
+      noteOperandCapacities env env.impl.results.toList [e]
       checkResult env rho
   | .brk _ => pure ()
   | .cont _ => pure ()
@@ -894,7 +1000,8 @@ def checkContext (m : Module) (ctx : Context) : V Unit := do
   let env : PEnv := ⟨m, impl, ctx, []⟩
   let ((), st) ← (do
       let (_, _) ← rpBlockValue env [] impl.body
-      if impl.body.value.isSome then
+      if let some expression := impl.body.value then
+        noteProducerCapacities env impl.results.toList expression
         let actual ← liftV (env.access.blockResultRoots impl.body)
         liftV (checkResultChannels env actual) : P Unit).run ⟨impl.params.size, {}⟩
   checkSummary m impl ctx st.eff
@@ -909,7 +1016,11 @@ def checkInitRoots (m : Module) (g : GlobalId) : V Unit :=
   match m.globals[g]? with
   | none => pure ()
   | some gl => do
-    let (_, st) ← (rpExpr ⟨m, initImpl, initContext, []⟩ gl.init).run ⟨0, {}⟩
+    let env : PEnv := ⟨m, initImpl, initContext, []⟩
+    let (_, st) ← (do
+      let roots ← rpExpr env gl.init
+      noteReceivingCapacity env gl.ty .value gl.init
+      pure roots : P (List RootRef)).run ⟨0, {}⟩
     if st.eff.unknown then
       reject .call s!"initializer of global {gl.name} calls an implementation whose effects are unknown"
     forAll (st.eff.reads ++ st.eff.writes ++ st.eff.grows ++ st.eff.shrinks) fun t =>
