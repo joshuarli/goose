@@ -540,4 +540,122 @@ theorem RuntimePoint.call_entry_typed {cfg : GCfg} {activations : ActivationType
       (Array.mem_of_getElem? entryLookup) present)
     (argsTyped.entry entryTypes)
 
+theorem exec_typed_from_smaller {cfg : GCfg} {fuel : Nat}
+    (accepted : validate cfg.mod = .ok ())
+    (smaller : ∀ remaining, remaining < fuel →
+      ExecPreservation cfg remaining ∧ EntryPreservation cfg remaining) : ExecPreservation cfg fuel := by
+  intro fn point fr activations before after value member frameTyped evaluated
+  cases fuel with
+  | zero => simp [exec, timeout, M.stop] at evaluated
+  | succ remaining =>
+    cases suffix : instsAt fn point with
+    | nil => simp [exec, suffix, fault, M.stop] at evaluated
+    | cons instruction rest =>
+      obtain ⟨atPoint, nextSuffix⟩ := instsAt_cons_inverse suffix
+      obtain ⟨block, blockMember, instructionMember⟩ := instAt_member atPoint
+      have bodyTyped := (smaller remaining (Nat.lt_succ_self _)).1
+      cases instruction with
+      | «def» result op =>
+        obtain ⟨resultTy, opTyped, resultMetadata⟩ :=
+          (validate_sound cfg.mod accepted).1 fn member |>.2.1 block blockMember result op instructionMember
+        simp only [exec, suffix] at evaluated
+        obtain ⟨cell, middle, executedOp, evaluated⟩ := m_bind_ok evaluated
+        obtain ⟨intermediate, extension, stateTyped, cellTyped⟩ :=
+          execOp_result_typed accepted member frameTyped atPoint opTyped resultMetadata
+            (fun subfuel bound => (smaller subfuel (Nat.lt_trans bound (Nat.lt_succ_self _))).2) executedOp
+        have callerTyped := frameTyped.transfer extension stateTyped
+        have nextTyped : RuntimeFrameTy cfg fn intermediate (fr.set result cell) middle :=
+          ⟨callerTyped.1, callerTyped.2.1, callerTyped.2.2.set resultMetadata cellTyped⟩
+        simp only [setCell, pure_bind] at evaluated
+        rw [nextSuffix] at evaluated
+        obtain ⟨extended, bodyExtension, afterTyped, valueTyped⟩ :=
+          bodyTyped fn (point.1, point.2 + 1) (fr.set result cell) intermediate middle after value
+            member nextTyped evaluated
+        exact ⟨extended, extension.trans bodyExtension, afterTyped, valueTyped⟩
+      | eff effect =>
+        have effectTyped := validated_effect_types accepted member blockMember instructionMember
+        simp only [exec, suffix] at evaluated
+        obtain ⟨nextFrame, middle, executedEffect, evaluated⟩ := m_bind_ok evaluated
+        have nextTyped := execEff_result_typed frameTyped effectTyped executedEffect
+        rw [nextSuffix] at evaluated
+        exact bodyTyped fn (point.1, point.2 + 1) nextFrame activations middle after value member nextTyped evaluated
+      | term term =>
+        cases term with
+        | br target args =>
+          simp only [exec, suffix] at evaluated
+          obtain ⟨values, readState, read, evaluated⟩ := m_bind_ok evaluated
+          obtain ⟨pair, enteredState, entered, evaluated⟩ := m_bind_ok evaluated
+          obtain ⟨instructions, nextFrame⟩ := pair
+          have instructionsEq := enterBlock_instructions entered
+          rw [instructionsEq] at entered evaluated
+          have nextTyped := RuntimeStep.branch_typed accepted member frameTyped atPoint read entered
+          exact bodyTyped fn (target, 0) nextFrame activations enteredState after value member nextTyped evaluated
+        | condbr condition trueTarget trueArgs falseTarget falseArgs =>
+          simp only [exec, suffix] at evaluated
+          obtain ⟨conditionValue, readState, read, evaluated⟩ := m_bind_ok evaluated
+          obtain ⟨testValue, testedState, tested, evaluated⟩ := m_bind_ok evaluated
+          have conditionResult : (getVal fr condition >>= expectBool) before = .ok testValue testedState := by
+            rw [bind_apply, read]
+            exact tested
+          have sameState := condition_state conditionResult
+          subst testedState
+          cases testValue with
+          | true =>
+            simp only [↓reduceIte] at evaluated
+            obtain ⟨values, readState, read, evaluated⟩ := m_bind_ok evaluated
+            obtain ⟨pair, enteredState, entered, evaluated⟩ := m_bind_ok evaluated
+            obtain ⟨instructions, nextFrame⟩ := pair
+            have instructionsEq := enterBlock_instructions entered
+            rw [instructionsEq] at entered evaluated
+            have nextTyped := RuntimeStep.branchTrue_typed accepted member frameTyped atPoint conditionResult read entered
+            exact bodyTyped fn (trueTarget, 0) nextFrame activations enteredState after value member nextTyped evaluated
+          | false =>
+            simp only [Bool.false_eq_true, ↓reduceIte] at evaluated
+            obtain ⟨values, readState, read, evaluated⟩ := m_bind_ok evaluated
+            obtain ⟨pair, enteredState, entered, evaluated⟩ := m_bind_ok evaluated
+            obtain ⟨instructions, nextFrame⟩ := pair
+            have instructionsEq := enterBlock_instructions entered
+            rw [instructionsEq] at entered evaluated
+            have nextTyped := RuntimeStep.branchFalse_typed accepted member frameTyped atPoint conditionResult read entered
+            exact bodyTyped fn (falseTarget, 0) nextFrame activations enteredState after value member nextTyped evaluated
+        | ret values origin =>
+          obtain ⟨arity, metadata⟩ := validated_ret_metadata accepted member blockMember instructionMember
+          simp only [exec, suffix] at evaluated
+          cases values with
+          | nil =>
+            have noResults : fn.results = [] := List.length_eq_zero_iff.mp arity.symm
+            simp only [pure_apply, Res.ok.injEq] at evaluated
+            obtain ⟨rfl, rfl⟩ := evaluated
+            exact ⟨activations, .refl activations, frameTyped.1, by simp [FunctionValueTy, noResults]⟩
+          | cons id rest =>
+            cases rest with
+            | cons next rest => simp [fault, M.stop] at evaluated
+            | nil =>
+              cases resultTypes : fn.results with
+              | nil => simp [resultTypes] at arity
+              | cons resultTy rest =>
+                cases rest with
+                | cons next rest => simp [resultTypes] at arity
+                | nil =>
+                  have valueMetadata := metadata (id, resultTy) (by simp [resultTypes])
+                  obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal valueMetadata evaluated
+                  subst after
+                  exact ⟨activations, .refl activations, frameTyped.1,
+                    by simpa only [FunctionValueTy, resultTypes] using valueTyped⟩
+        | abort kind origin =>
+          cases origin <;> simp [exec, suffix, abortAtOrg, abortAt, fault, M.stop] at evaluated
+        | exit id origin =>
+          simp only [exec, suffix] at evaluated
+          obtain ⟨exitValue, middle, read, evaluated⟩ := m_bind_ok evaluated
+          obtain ⟨integer, middle, checked, evaluated⟩ := m_bind_ok evaluated
+          simp [M.stop] at evaluated
+        | unreachable => simp [exec, suffix, fault, M.stop] at evaluated
+
+theorem successful_functions_typed {cfg : GCfg} (accepted : validate cfg.mod = .ok ()) (fuel : Nat) :
+    ExecPreservation cfg fuel ∧ EntryPreservation cfg fuel := by
+  induction fuel using Nat.strongRecOn with
+  | ind fuel ih =>
+    exact ⟨exec_typed_from_smaller accepted ih,
+      enterFn_typed_from_exec accepted (fun remaining bound => (ih remaining bound).1)⟩
+
 end Goose.Evidence
