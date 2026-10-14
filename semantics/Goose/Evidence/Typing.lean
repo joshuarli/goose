@@ -136,7 +136,7 @@ theorem execPure_load_typed {roots : RootDeclarations} {types : Array (Option VT
 theorem execPure_pop_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {id : ValueId} {permission : Mutability} {owner element : Ty}
     {org : Option OriginId} {before after : St} {cell : RVal}
-    (declarations : roots.Storable) (frameTyped : WeakFrameTy roots types fr)
+    (frameTyped : WeakFrameTy roots types fr)
     (metadata : types[id]? = some (some (.data (.ref permission owner))))
     (ownerType : owner.ownerElem? = some element) (storeTyped : WeakStoreTy roots before.store)
     (evaluated : execPure cx fr (.pop id org) before = .ok cell after) :
@@ -169,7 +169,7 @@ theorem execPure_pop_typed {roots : RootDeclarations} {types : Array (Option VTy
       simp only [shrunk, Res.ok.injEq] at shortened
       obtain ⟨_, sameState⟩ := shortened
       subst finalState
-      exact ⟨selectedTyped, storeTyped.truncateOwner declarations target ownerType shrunk⟩
+      exact ⟨selectedTyped, storeTyped.truncateOwner target ownerType shrunk⟩
 
 inductive ParamValuesTy (roots : RootDeclarations) : List (ValueId × VTy) → List RVal → Prop
   | nil : ParamValuesTy roots [] []
