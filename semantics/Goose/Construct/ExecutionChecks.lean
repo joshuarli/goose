@@ -32,7 +32,7 @@ private def rawBytes : Module := moduleOf #[implementation "entry"
 private def nested : Module := moduleOf #[implementation "entry"
   #[localVar "nested" (.varr (.varr (.int .u8)))]
   (.mk 0 [.letS 0 (.arrLit (.varr (.varr (.int .u8)))
-      [.bytes (.varr (.int .u8)) [65, 0] 0, .bytes (.varr (.int .u8)) [255] 0]) 0,
+      [.bytes (.varr (.int .u8)) [65, 0] 0, .bytes (.varr (.int .u8)) [255] 0] 0) 0,
     .print [.view (.of (.elem (.of (.var 0)) (.lit .i64 0) 0)),
       .view (.of (.elem (.of (.var 0)) (.lit .i64 1) 0))] 0] none)]
 
@@ -53,7 +53,7 @@ private def abortPrefix : Module := moduleOf #[implementation "entry"
   #[localVar "bytes" (.varr (.int .u8))]
   (.mk 0 [.print [.text "before"] 0,
     .letS 0 (.arrLit (.varr (.int .u8)) [.lit .u8 65,
-      .blockE (.mk 1 [.abort "stop" 0] (some (.lit .u8 66)))]) 0] none)]
+      .blockE (.mk 1 [.abort "stop" 0] (some (.lit .u8 66))) 0] 0) 0] none)]
 
 #guard (match eval 1000 .release abortPrefix with
   | .done (.aborted .userAbort 0) stdout events =>
@@ -63,7 +63,7 @@ private def abortPrefix : Module := moduleOf #[implementation "entry"
 
 private def appendProducer : Module := moduleOf #[
   implementation "entry" #[localVar "owner" (.grow (.int .u8))]
-    (.mk 0 [.letS 0 (.arrLit (.grow (.int .u8)) [.lit .u8 65]) 0,
+    (.mk 0 [.letS 0 (.arrLit (.grow (.int .u8)) [.lit .u8 65] 0) 0,
       .appendConstruct (.var 0) (.call 1 [] 0) 0,
       .print [.view (.of (.var 0))] 0] none),
   implementation "producer" #[] (.mk 0 [] (some (.bytes (.varr (.int .u8)) [66, 67] 0)))
@@ -76,7 +76,7 @@ private def named : Module := moduleOf #[
   implementation "entry" #[localVar "result" (.varr (.int .u8))]
     (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
   implementation "named" #[localVar "result" (.grow (.int .u8))]
-    (.mk 0 [.letS 0 (.arrLit (.grow (.int .u8)) [.lit .u8 65]) 0,
+    (.mk 0 [.letS 0 (.arrLit (.grow (.int .u8)) [.lit .u8 65] 0) 0,
       .expr (.push (.var 0) (.lit .u8 66) (some 0)) 0]
       (some (.resultLocal 0 0)))
     #[⟨.varr (.int .u8), .value, some 0⟩]]
@@ -98,7 +98,7 @@ private def namedAlternate : Module := moduleOf #[
 
 private def staged : Module := moduleOf #[
   implementation "entry" #[localVar "owner" (.limited (.int .u8) 3)]
-    (.mk 0 [.letS 0 (.arrLit (.limited (.int .u8) 3) [.lit .u8 65]) 0,
+    (.mk 0 [.letS 0 (.arrLit (.limited (.int .u8) 3) [.lit .u8 65] 0) 0,
       .appendConstruct (.var 0) (.call 1 [] 0) 0,
       .print [.view (.of (.var 0))] 0] none),
   implementation "producer" #[] (.mk 0 [.print [.text "effect"] 0]
@@ -121,7 +121,7 @@ private def shrinkThenPush : Module := moduleOf #[implementation "entry"
 private def breakConstruction : Module := moduleOf #[implementation "entry"
   #[localVar "result" (.varr (.int .u8))]
   (.mk 0 [.letS 0 (.blockE (.mk 1 [] (some (.arrLit (.varr (.int .u8))
-      [.lit .u8 65, .ifE (.bool true) (.mk 2 [.breakValue (.bytes (.varr (.int .u8)) [66] 0) 0] none) (.mk 3 [] (some (.lit .u8 67)))])))) 0,
+      [.lit .u8 65, .ifE (.bool true) (.mk 2 [.breakValue (.bytes (.varr (.int .u8)) [66] 0) 0] none) (.mk 3 [] (some (.lit .u8 67))) 0] 0))) 0) 0,
     .print [.view (.of (.var 0))] 0] none)]
 
 #guard observes breakConstruction == some ([66, 10],
@@ -132,7 +132,7 @@ private def nonlocal : Module := moduleOf #[
   implementation "entry" #[localVar "result" (.varr (.int .u8))]
     (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
   implementation "catcher" #[] (.mk 0 [] (some (.arrLit (.varr (.int .u8))
-    [.lit .u8 65, .call 2 [] 0]))) #[⟨.varr (.int .u8), .value, none⟩],
+    [.lit .u8 65, .call 2 [] 0] 0))) #[⟨.varr (.int .u8), .value, none⟩],
   implementation "escape" #[] (.mk 0 [.print [.text "escape"] 0,
     .returnFrom 0 [.bytes (.varr (.int .u8)) [66] 0] 0] (some (.lit .u8 67)))
     #[⟨.int .u8, .register, none⟩]] #[⟨1, []⟩]
@@ -175,10 +175,10 @@ private def nestedEscape : Module := moduleOf #[
       .print [.view (.of (.elem (.of (.var 0)) (.lit .i64 0) 0))] 0] none),
   implementation "catcher" #[] (.mk 0 [] (some (.arrLit (.varr (.varr (.int .u8)))
     [.bytes (.varr (.int .u8)) [65] 0,
-      .arrLit (.varr (.int .u8)) [.lit .u8 66, .call 2 [] 0]])))
+      .arrLit (.varr (.int .u8)) [.lit .u8 66, .call 2 [] 0] 0] 0)))
     #[⟨.varr (.varr (.int .u8)), .value, none⟩],
   implementation "escape" #[] (.mk 0 [.returnFrom 0
-    [.arrLit (.varr (.varr (.int .u8))) [.bytes (.varr (.int .u8)) [67] 0]] 0] (some (.lit .u8 68)))
+    [.arrLit (.varr (.varr (.int .u8))) [.bytes (.varr (.int .u8)) [67] 0] 0] 0] (some (.lit .u8 68)))
     #[⟨.int .u8, .register, none⟩]] #[⟨1, []⟩]
 
 #guard observes nestedEscape == some ([67, 10],
@@ -207,7 +207,7 @@ private def copyAndFill : Module := moduleOf #[implementation "entry"
     .letS 1 (.copy (.varr (.int .u8)) (.var 0) 0) 0,
     .letS 2 (.fill (.arr (.varr (.int .u8)) 2)
       (.blockE (.mk 1 [.print [.text "once"] 0]
-        (some (.bytes (.varr (.int .u8)) [66] 0))))) 0,
+        (some (.bytes (.varr (.int .u8)) [66] 0))) 0) 0) 0,
     .print [.view (.of (.var 1)),
       .view (.of (.elem (.of (.var 2)) (.lit .i64 0) 0)),
       .view (.of (.elem (.of (.var 2)) (.lit .i64 1) 0))] 0] none)]
@@ -257,9 +257,9 @@ private def staticSlice : Module := moduleOf #[
 
 private def structural : Module := moduleOf #[implementation "entry"
   #[localVar "array" (.arr (.int .i64) 2), localVar "nested" (.varr (.varr (.int .u8)))]
-  (.mk 0 [.letS 0 (.arrLit (.arr (.int .i64) 2) [.lit .i64 1, .lit .i64 2]) 0,
+  (.mk 0 [.letS 0 (.arrLit (.arr (.int .i64) 2) [.lit .i64 1, .lit .i64 2] 0) 0,
     .letS 1 (.arrLit (.varr (.varr (.int .u8)))
-      [.bytes (.varr (.int .u8)) [34, 92, 10, 0, 255] 0]) 0,
+      [.bytes (.varr (.int .u8)) [34, 92, 10, 0, 255] 0] 0) 0,
     .print [.expr (.ref .readOnly (.var 0)), .text " ", .view (.of (.var 1))] 0] none)]
 
 #guard (observes structural).map Prod.fst == some
@@ -268,7 +268,7 @@ private def structural : Module := moduleOf #[implementation "entry"
 private def stringPrefix : Module := moduleOf #[implementation "entry"
   #[localVar "string" (.varr (.int .u8))]
   (.mk 0 [.letS 0 (.str (.varr (.int .u8))
-    [.text "A", .expr (.blockE (.mk 1 [.abort "stop" 0] (some (.lit .i64 7))))] 0) 0] none)]
+    [.text "A", .expr (.blockE (.mk 1 [.abort "stop" 0] (some (.lit .i64 7))) 0)] 0) 0] none)]
 
 #guard match eval 1000 .release stringPrefix with
   | .done (.aborted .userAbort 0) stdout events => stdout.isEmpty && events == [.begin 0, .write 0 0]
@@ -278,13 +278,13 @@ private def printSnapshot : Module := moduleOf #[implementation "entry"
   #[localVar "owner" (.growshrink (.int .u8))]
   (.mk 0 [.letS 0 (.bytes (.growshrink (.int .u8)) [65] 0) 0,
     .print [.view (.of (.var 0)), .expr (.blockE (.mk 1
-      [.print [.text "inner"] 0, .clear (.var 0) 0] (some (.lit .i64 7))))] 0] none)]
+      [.print [.text "inner"] 0, .clear (.var 0) 0] (some (.lit .i64 7))) 0)] 0] none)]
 
 #guard (observes printSnapshot).map Prod.fst == some [105, 110, 110, 101, 114, 10, 65, 55, 10]
 
 private def nestedWrite : Module := moduleOf #[implementation "entry"
   #[localVar "nested" (.varr (.varr (.int .u8)))]
-  (.mk 0 [.letS 0 (.arrLit (.varr (.varr (.int .u8))) [.bytes (.varr (.int .u8)) [65] 0]) 0,
+  (.mk 0 [.letS 0 (.arrLit (.varr (.varr (.int .u8))) [.bytes (.varr (.int .u8)) [65] 0] 0) 0,
     .assign (.elem (.of (.elem (.of (.var 0)) (.lit .i64 0) 0)) (.lit .i64 0) 0) (.lit .u8 66) 0,
     .print [.view (.of (.elem (.of (.var 0)) (.lit .i64 0) 0))] 0] none)]
 
@@ -292,9 +292,9 @@ private def nestedWrite : Module := moduleOf #[implementation "entry"
 
 private def fixedPushReentrancy : Module := moduleOf #[implementation "entry"
   #[localVar "owner" (.grow (.int .i64)), localVar "result" (.ref .mutable (.int .i64))]
-  (.mk 0 [.letS 0 (.arrLit (.grow (.int .i64)) []) 0,
+  (.mk 0 [.letS 0 (.arrLit (.grow (.int .i64)) [] 0) 0,
     .letS 1 (.push (.var 0) (.blockE (.mk 1
-      [.expr (.push (.var 0) (.lit .i64 7) (some 0)) 0] (some (.lit .i64 9)))) (some 0)) 0,
+      [.expr (.push (.var 0) (.lit .i64 7) (some 0)) 0] (some (.lit .i64 9))) 0) (some 0)) 0,
     .print [.expr (.read (.deref (.read (.var 1)))), .view (.of (.var 0))] 0] none)]
 
 #guard (observes fixedPushReentrancy).map Prod.fst == some [57, 91, 55, 44, 32, 57, 93, 10]
@@ -303,7 +303,7 @@ private def fixedObjectOrdinals : Module := moduleOf #[implementation "entry"
   #[localVar "scalar" (.int .i64), localVar "source" (.arr (.int .u8) 1),
     localVar "copy" (.varr (.int .u8))]
   (.mk 0 [.letS 0 (.lit .i64 7) 0,
-    .letS 1 (.arrLit (.arr (.int .u8) 1) [.lit .u8 65]) 0,
+    .letS 1 (.arrLit (.arr (.int .u8) 1) [.lit .u8 65] 0) 0,
     .letS 2 (.copy (.varr (.int .u8)) (.var 1) 0) 0,
     .print [.view (.of (.var 2))] 0] none)]
 
@@ -312,7 +312,7 @@ private def fixedObjectOrdinals : Module := moduleOf #[implementation "entry"
 
 private def fixedParameterOrdinal : Module := moduleOf #[
   implementation "entry" #[localVar "result" (.varr (.int .u8))]
-    (.mk 0 [.letS 0 (.call 1 [.byVal (.arrLit (.arr (.int .u8) 1) [.lit .u8 65])] 0) 0,
+    (.mk 0 [.letS 0 (.call 1 [.byVal (.arrLit (.arr (.int .u8) 1) [.lit .u8 65] 0)] 0) 0,
       .print [.view (.of (.var 0))] 0] none),
   implementation "copy" #[localVar "source" (.arr (.int .u8) 1)]
     (.mk 0 [] (some (.copy (.varr (.int .u8)) (.var 0) 0)))
@@ -324,7 +324,7 @@ private def fixedParameterOrdinal : Module := moduleOf #[
 private def inheritedOperations : Module := moduleOf #[implementation "entry"
   #[localVar "owner" (.growshrink (.int .i64)), localVar "slice" (.slice .mutable (.int .i64)),
     localVar "sum" (.int .i64), localVar "index" (.int .i64) 1]
-  (.mk 0 [.letS 0 (.arrLit (.growshrink (.int .i64)) [.lit .i64 1, .lit .i64 2]) 0,
+  (.mk 0 [.letS 0 (.arrLit (.growshrink (.int .i64)) [.lit .i64 1, .lit .i64 2] 0) 0,
     .letS 1 (.slice .mutable (.of (.var 0)) (.expr (.lit .i64 0)) .omitted 0) 0,
     .letS 2 (.lit .i64 0) 0,
     .assignOp .add (.elem (.val (.read (.var 1))) (.lit .i64 1) 0) (.lit .i64 5) 0,
@@ -349,7 +349,7 @@ private def capacityOrigin : Module := {
 
 private def retainedSlotReference : Module := moduleOf #[implementation "entry"
   #[localVar "owner" (.limited (.int .i64) 3), localVar "slot" (.ref .mutable (.int .i64))]
-  (.mk 0 [.letS 0 (.arrLit (.limited (.int .i64) 3) [.lit .i64 1, .lit .i64 2, .lit .i64 3]) 0,
+  (.mk 0 [.letS 0 (.arrLit (.limited (.int .i64) 3) [.lit .i64 1, .lit .i64 2, .lit .i64 3] 0) 0,
     .letS 1 (.ref .mutable (.elem (.of (.var 0)) (.lit .i64 2) 0)) 0,
     .popN (.var 0) (.lit .i64 2) 0,
     .assign (.deref (.read (.var 1))) (.lit .i64 7) 0,
@@ -362,7 +362,7 @@ private def pairType : Ty := .structT 0 (.cons (.arr (.int .u8) 2) (.cons (.int 
 private def namedStruct : Module := {
   moduleOf #[implementation "entry" #[localVar "pair" pairType, localVar "pairs" (.grow pairType)]
     (.mk 0 [.letS 0 (.structLit pairType [.bytes (.arr (.int .u8) 2) [65, 10] 0, .lit .i64 7]) 0,
-      .letS 1 (.arrLit (.grow pairType) [.read (.var 0)]) 0,
+      .letS 1 (.arrLit (.grow pairType) [.read (.var 0)] 0) 0,
       .assign (.field (.elem (.of (.var 1)) (.lit .i64 0) 0) 1) (.lit .i64 9) 0,
       .print [.expr (.read (.var 0)), .view (.of (.var 1))] 0] none)] with
   types := #[.int .u8, .arr (.int .u8) 2, .int .i64, pairType, .grow pairType]
@@ -379,7 +379,7 @@ private def adaptedFixedCall : Module := moduleOf #[
   implementation "entry" #[localVar "result" (.varr (.int .u8))]
     (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
   implementation "fixed" #[] (.mk 0 [.print [.text "once"] 0]
-    (some (.arrLit (.arr (.int .u8) 2) [.lit .u8 65, .lit .u8 66])))
+    (some (.arrLit (.arr (.int .u8) 2) [.lit .u8 65, .lit .u8 66] 0)))
     #[⟨.arr (.int .u8) 2, .register, none⟩]]
 
 #guard observes adaptedFixedCall == some ("once\nAB\n".toUTF8.data.toList,
@@ -390,7 +390,7 @@ private def adaptedFixedCallAbort : Module := moduleOf #[
     (.mk 0 [.letS 0 (.call 1 [] 0) 0] none),
   implementation "fixed" #[] (.mk 0 []
     (some (.arrLit (.arr (.int .u8) 2) [.lit .u8 65,
-      .blockE (.mk 1 [.print [.text "effect"] 0, .abort "stop" 0] (some (.lit .u8 66)))])))
+      .blockE (.mk 1 [.print [.text "effect"] 0, .abort "stop" 0] (some (.lit .u8 66))) 0] 0)))
     #[⟨.arr (.int .u8) 2, .register, none⟩]]
 
 #guard match eval 1000 .release adaptedFixedCallAbort with
@@ -424,10 +424,75 @@ private def adaptedFixedChannels : Module := moduleOf #[
     (.mk 0 [.receive [0, 1] (.call 1 [] 0) 0,
       .print [.view (.of (.var 0)), .expr (.read (.var 1))] 0] none),
   implementation "fixed" #[] (.mk 0 [] (some (.values
-    [.arrLit (.arr (.int .u8) 1) [.lit .u8 65], .lit .i64 7])))
+    [.arrLit (.arr (.int .u8) 1) [.lit .u8 65] 0, .lit .i64 7])))
     #[⟨.arr (.int .u8) 1, .register, none⟩, ⟨.int .i64, .register, none⟩]]
 
 #guard observes adaptedFixedChannels == some ("A7\n".toUTF8.data.toList,
+  [.begin 0, .write 0 0, .publish 0])
+
+private def singleValuePush : Module := moduleOf #[implementation "entry"
+  #[localVar "owner" (.grow (.varr (.int .u8)))]
+  (.mk 0 [.letS 0 (.arrLit (.grow (.varr (.int .u8))) [] 0) 0,
+    .expr (.push (.var 0) (.bytes (.varr (.int .u8)) [65, 66] 0) (some 0)) 0,
+    .print [.view (.of (.elem (.of (.var 0)) (.lit .i64 0) 0))] 0] none)]
+
+#guard observes singleValuePush == some ([65, 66, 10],
+  [.begin 0, .publish 0, .begin 1, .write 1 0, .write 1 1, .publish 1])
+
+private def namedSingleValuePush : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.varr (.int .u8)))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0,
+      .print [.view (.of (.elem (.of (.var 0)) (.lit .i64 0) 0))] 0] none),
+  implementation "producer" #[localVar "result" (.grow (.varr (.int .u8)))]
+    (.mk 0 [.letS 0 (.arrLit (.grow (.varr (.int .u8))) [] 0) 0,
+      .expr (.push (.var 0) (.bytes (.varr (.int .u8)) [65, 66] 0) (some 0)) 0]
+      (some (.resultLocal 0 0)))
+    #[⟨.varr (.varr (.int .u8)), .value, some 0⟩]]
+
+#guard observes namedSingleValuePush == some ([65, 66, 10],
+  [.begin 0, .begin 1, .write 1 0, .write 1 1, .publish 1, .publish 0])
+
+private def valueBreakThroughLoop : Module := moduleOf #[implementation "entry"
+  #[localVar "result" (.varr (.int .u8))]
+  (.mk 0 [.letS 0 (.blockE (.mk 1
+    [.while (.bool true) (.mk 2
+      [.breakValue (.bytes (.varr (.int .u8)) [65, 66] 0) 0] none) 0] none) 0) 0,
+    .print [.view (.of (.var 0))] 0] none)]
+
+#guard observes valueBreakThroughLoop == some ([65, 66, 10],
+  [.begin 0, .write 0 0, .write 0 1, .publish 0])
+
+private def standaloneValueBreak : Module := moduleOf #[implementation "entry" #[]
+  (.mk 0 [.print [.expr (.blockE (.mk 1
+    [.while (.bool true) (.mk 2 [.breakValue (.lit .i64 7) 0] none) 0] none) 0)] 0] none)]
+
+#guard (observes standaloneValueBreak).map Prod.fst == some [55, 10]
+
+private def standaloneNonfixedBreak : Module := moduleOf #[implementation "entry" #[]
+  (.mk 0 [.print [.expr (.blockE (.mk 1
+    [.breakValue (.bytes (.varr (.int .u8)) [65, 66] 0) 0] none) 0)] 0] none)]
+
+#guard observes standaloneNonfixedBreak == some ([65, 66, 10],
+  [.begin 0, .write 0 0, .write 0 1, .publish 0])
+
+private def multichannelValueBreak : Module := moduleOf #[implementation "entry"
+  #[localVar "bytes" (.varr (.int .u8)), localVar "scalar" (.int .i64)]
+  (.mk 0 [.receive [0, 1] (.blockE (.mk 1
+    [.breakValue (.values [.bytes (.varr (.int .u8)) [65] 0, .lit .i64 7]) 0] none) 0) 0,
+    .print [.view (.of (.var 0)), .expr (.read (.var 1))] 0] none)]
+
+#guard observes multichannelValueBreak == some ([65, 55, 10],
+  [.begin 0, .write 0 0, .publish 0])
+
+private def explicitMultichannelReturn : Module := moduleOf #[
+  implementation "entry" #[localVar "bytes" (.varr (.int .u8)), localVar "scalar" (.int .i64)]
+    (.mk 0 [.receive [0, 1] (.call 1 [] 0) 0,
+      .print [.view (.of (.var 0)), .expr (.read (.var 1))] 0] none),
+  implementation "producer" #[] (.mk 0
+    [.ret (some (.values [.bytes (.varr (.int .u8)) [65] 0, .lit .i64 7])) 0] none)
+    #[⟨.varr (.int .u8), .value, none⟩, ⟨.int .i64, .register, none⟩]]
+
+#guard observes explicitMultichannelReturn == some ([65, 55, 10],
   [.begin 0, .write 0 0, .publish 0])
 
 private def wireRaw : Module := {
