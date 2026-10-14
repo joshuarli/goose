@@ -329,6 +329,9 @@ Each row runs on the synthetic family and, where the edit can be expressed witho
 | `E15` | An edit introducing a compile error; one introducing a new warning in a function whose units do not change | The error is reported and no executable is reported as built; the warning is printed. |
 | `E16` | An edit and its exact revert | The final state equals the initial clean build. |
 
+The owner approved qualifying E10’s independent C flags, target identity, and runtime identity at the production native-builder boundary on 2026-10-14. These probes use units emitted from Goose source, the production contract serializer, and the production compile/link/store pipeline. Each probe checks fresh compilation, isolation of the previous store, return-to-store object reuse, and executable behavior against a clean build. The remaining E10 dimensions use the full CLI. Target identity qualification checks contract/store selection on the host target.
+
+
 ### 10.2 Recorded for every row
 
 Frontend phases that ran; contexts checked; implementation digests changed; units whose text changed; native compiler invocations and units per invocation; objects reused and missed; whether the link ran; wall time, CPU time and peak resident memory of the compiler and of the largest native compiler process.
