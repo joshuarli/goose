@@ -48,6 +48,17 @@ theorem PreRel.ext {fr fr' : Frame} (h : fr'.vals = fr.vals) :
   | [], _ :: _, hp => absurd hp (by simp [PreRel])
   | _ :: _, [], hp => absurd hp (by simp [PreRel])
 
+theorem PreRel.source_member {fr : Frame} :
+    ∀ {pre pre'}, PreRel fr pre pre' → ∀ p ∈ pre, ∃ value, (p.1, value) ∈ pre'
+  | [], [], _, _, h => by simp at h
+  | (x, r, org) :: rest, (x', value) :: values, ⟨hx, _, hrest⟩, p, hp => by
+    rcases List.mem_cons.mp hp with rfl | htail
+    · exact ⟨value, by simp [hx]⟩
+    · obtain ⟨value', hvalue⟩ := hrest.source_member p htail
+      exact ⟨value', List.mem_cons_of_mem _ hvalue⟩
+  | [], _ :: _, hp, _, _ => hp.elim
+  | _ :: _, [], hp, _, _ => hp.elim
+
 
 theorem rootOf_head {env : Env} {sc : Nat} {si : ScopeInst} {rest : List (Nat × ScopeInst)} {x : VarId}
     (hs : env.scopes = (sc, si) :: rest) {lv : LocalVar} (hv : env.vars[x]? = some lv)
