@@ -2150,4 +2150,66 @@ theorem StmtSource.whileBodyChild {cfg : Cfg} {env : Env} {state after : St} {co
   obtain ⟨child, typingEq, rootsEq, worldEq, observationEq, _⟩ := whileBodyData source fuel done
   exact ⟨child, typingEq, rootsEq, worldEq, observationEq⟩
 
+theorem StmtSource.whileAfterBody {cfg : Cfg} {env : Env} {state afterCondition after : St}
+    {condition : Expr} {body : Block} {origin : OriginId}
+    (source : StmtSource cfg env (.while condition body origin) state)
+    (conditionFuel bodyFuel : Nat) (flow : Flow)
+    (conditionDone : evalExpr conditionFuel cfg env condition state = .ok (.bool true) afterCondition)
+    (bodyDone : execBlock bodyFuel cfg env [] body afterCondition = .ok flow after)
+    (_reentry : (∃ value, flow = .normal value) ∨ flow = .cont) :
+    ∃ next : StmtSource cfg env (.while condition body origin) after,
+      next.typingEnv = source.typingEnv ∧ next.rootsEnv = source.rootsEnv ∧
+      next.world = source.world ∧ next.observation = source.observation := by
+  obtain ⟨conditionSource, conditionTyping, conditionRoots, _, conditionWorld, _, _, _⟩ := whileConditionData source
+  have conditionResult := conditionSource.result conditionFuel (.bool true) conditionDone
+  obtain ⟨bodySource, bodyTyping, bodyRoots, bodyWorld, bodyObservation, bodyOutput, bodyMay⟩ := whileBodyData source conditionFuel conditionDone
+  have bodyResult := bodySource.result bodyFuel flow bodyDone
+  have frame := bodyResult.frame
+  rw [bodyTyping, bodyRoots, bodyWorld, bodyOutput] at frame
+  have frame := frame.tenv_congr (t2 := source.typingEnv) rfl rfl rfl (fun _ member => member)
+  have bodyAt : (DemandNode.statement (.while condition body origin)).child? 1 = some (.block body) := by
+    simp [DemandNode.child?, DemandNode.children]
+  have input : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after source.context.inputFuture := by
+    cases hcontext : source.context with
+    | pilot profile active =>
+      rw [hcontext] at frame
+      change Core.Sound.Frame _ _ _ _ _ _ active at frame
+      simp only [EvaluationContext.inputFuture, DemandNode.variables, Stmt.variables]
+      change Core.Sound.Frame _ _ _ _ _ _ ((condition.variables ++ body.variables) ++ active)
+      apply frame.changeFuture
+      intro x member _
+      have activeEq := source.active
+      rw [hcontext] at activeEq
+      exact (activeEq x).mpr member
+    | shrink profile context =>
+      rw [hcontext] at frame
+      let child := context.child rfl 1 (.block body) .block bodyAt
+        (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
+      change Core.Sound.Frame _ _ _ _ _ _ child.context.expected.frame.future at frame
+      rw [child.expectedFrameEq, DemandNode.phaseFrame_future child.phaseFrameEq,
+        DemandNode.childFrame_future child.childFrameEq (show
+          (DemandNode.statement (.while condition body origin)).childExpectation? _
+            ⟨source.path, .expression, context.expected.frame.active, context.expected.frame.future, context.expected.frame.retained⟩ 1 =
+            some ⟨context.expected.frame.active, context.expected.frame.active.filter (condition.variables ++ body.variables).contains ++ context.expected.frame.future⟩ from by
+          simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.visibleForChild, bodyAt])] at frame
+      simp only [EvaluationContext.inputFuture, NodeContext.inputFuture, DemandNode.variables, Stmt.variables]
+      change Core.Sound.Frame _ _ _ _ _ _ ((condition.variables ++ body.variables) ++ context.expected.frame.future)
+      apply frame.changeFuture
+      intro x visible member
+      cases List.mem_append.mp member with
+      | inl used =>
+        apply List.mem_append_left
+        apply List.mem_filter.mpr
+        have activeEq := source.active
+        rw [hcontext] at activeEq
+        exact ⟨(activeEq x).mpr visible, by simpa [List.contains_iff_mem] using used⟩
+      | inr future => exact List.mem_append_right _ future
+  have observed := bodyResult.observed
+  rw [bodyWorld, bodyObservation, bodyMay] at observed
+  have classified := bodyResult.classified
+  rw [bodyWorld, bodyObservation] at classified
+  have top := source.top.ext (cur' := source.rootsStart.nextVar)
+    (fun root member => conditionResult.footprint.dom root (bodyResult.footprint.dom root member)) (Nat.le_refl _)
+  exact ⟨{ source with frame := input, observed := observed, classified := classified, top := top }, rfl, rfl, rfl, rfl⟩
+
 end Goose.Lower

@@ -298,4 +298,31 @@ example (profile : NumProfile) :
   rw [bodyTyping] at same
   exact same
 
+def loopImplementation : Impl :=
+  { initImpl with body := .mk 0 [.while (.bool true) (.mk 1 [] none) 0] none }
+
+def loopModule : Module :=
+  { conditionalModule with impls := #[loopImplementation] }
+
+#guard match Core.validate loopModule with | .ok _ => true | .error _ => false
+
+example (profile : NumProfile) :
+    ∃ next : StmtSource ⟨profile, loopModule⟩ ⟨#[], 0, [(0, 0)], 1⟩
+      (.while (.bool true) (.mk 1 [] none) 0) { St.initial with nextAct := 1, nextScope := 2 },
+      next.typingEnv.impl = some loopImplementation := by
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, bodyTyping, _⟩ :=
+    acceptedEntryAfterGlobals (cfg := ⟨profile, loopModule⟩) (by cbv) 1 (by cbv)
+  have contextEq : ctx = initContext := by simpa [loopModule, conditionalModule, callModule] using contextAt.symm
+  subst ctx
+  have implEq : impl = loopImplementation := by simpa [loopModule, initContext] using implementationAt.symm
+  subst impl
+  obtain ⟨statements, statementsTyping, _, _, _⟩ := source.enter
+  obtain ⟨head, headTyping, _, _⟩ := statements.split
+  obtain ⟨next, nextTyping, _, _, _⟩ := head.whileAfterBody 1 2 (.normal .unit) (by cbv) (by cbv) (Or.inl ⟨.unit, rfl⟩)
+  refine ⟨next, ?_⟩
+  rw [nextTyping, headTyping, statementsTyping]
+  have same := source.same.impl
+  rw [bodyTyping] at same
+  exact same
+
 end Goose.Lower.SourceContextChecks
