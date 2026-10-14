@@ -406,22 +406,26 @@ private def invokeCall : Nat → EvalConfig → RuntimeActivation → ContextId 
   | fuel + 1, config, environment, context, arguments, channels, origin => do
       let (id, implementation) ← getImplementation config context
       if channels.length != implementation.results.size then fault .arity
-      for (channel, result) in channels.zip implementation.results.toList do
-        match channel with
-        | .register _ => pure ()
-        | .construct destination => liftConstruction origin (adaptDestinationType destination result.ty)
+      let callableChannels ← (channels.zip implementation.results.toList).mapM fun (channel, result) => do
+        match result.request, channel with
+        | .register, _ => pure (Channel.register result.ty)
+        | .value, .construct destination | .elementRun, .construct destination =>
+            liftConstruction origin (adaptDestinationType destination result.ty)
+            pure (.construct destination)
+        | .value, .register _ | .elementRun, .register _ => fault .shape
       let values ← evalArguments fuel config environment implementation.vars implementation.params.toList arguments
       let state ← EvalM.get
       if state.activations.length ≥ Core.maxCallDepth then timeout
       let act ← freshAct
-      let activation : RuntimeActivation := ⟨id, act, implementation.vars, [], channels⟩
+      let activation : RuntimeActivation := ⟨id, act, implementation.vars, [], callableChannels⟩
       let state ← EvalM.get
       EvalM.set { state with activations := activation :: state.activations }
       let pre := (implementation.params.toList.zip values).map fun (parameter, value) => (parameter.var, value.1)
       let scopeInst := (← EvalM.get).nextScope
       for (parameter, value) in implementation.params.toList.zip values do
         setObjectOrdinal (.local act scopeInst parameter.var) value.2
-      enterActivation fuel config activation pre implementation.body origin
+      let carriers ← enterActivation fuel config activation pre implementation.body origin
+      deliverCarriers fuel config.layout channels carriers origin
 
 private def enterActivation : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → Block → OriginId → EvalM (List Carrier)
   | 0, _, _, _, _, _ => timeout
