@@ -1,7 +1,7 @@
 # Goose IR specification
 
 **Schemas:** Goose Core 0.2, GIR-H 0.3, GIR-L 0.2. **Revision date:** 2026-10-12.
-**Status:** Design contract for the [campaign](goose-ir-campaign.md). The C++ compiler implements `core-pilot` and the flat fixed-struct slice of `core-shrink` through Core, GIR-H and native execution. The Lean Core model also implements shrink-owner semantics, but its demand-aware safety proof and GIR/native shrink support remain pending. Broader shrink and construction contracts are prospective, and this specification does not claim their gates have passed.
+**Status:** Design contract for the [campaign](goose-ir-campaign.md). The C++ compiler implements `core-pilot`, flat fixed structs, and a checked subset of shrink operations through Core, GIR-H and native execution. The Lean Core model implements shrink-owner semantics with proved demand-aware safety for accepted Core modules. Whole-profile shrink lowering safety, complete source-to-native qualification, and construction remain pending. This specification does not claim their gates have passed.
 **Baseline:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`.
 **Companion:** [proof, conformance and qualification plan](goose-ir-validation.md).
 
@@ -822,7 +822,7 @@ The C emitter must support unaligned packed scalar accesses. A low `PLoad` or `P
 
 ### 12.6 Shrink operations in core-shrink
 
-The Lean Core model implements the shrink-owner semantics in this contract, including the follow-up permission and transitive-effect checks. The demand-aware safety proof and GIR/native shrink support remain pending, and no gate is claimed complete. This contract extends §§12.4–12.5 at schemas `goose-core/0.2`, `gir-h/0.4` and `gir-l/0.2`. A schema/profile pair selects one shape; no decoder tries alternate arities. `core-pilot` retains every tag, module/summary arity, numbering and byte choice in §§12.1–12.3. The `core-shrink` Core module has ten fields after its tag and GIR-H has nine, including the mandatory struct table even when empty. Flat-struct types, descriptors and field operations retain §§12.4–12.5's shapes. The completed shrink profile changes its summary and `e_push` shapes as specified below; a pre-shrink flat-struct artifact using their pilot shapes is malformed under this contract.
+The Lean Core model implements the shrink-owner semantics in this contract, including permission and transitive-effect checks. `validated_steps_keep_invariant` and `validated_never_faults` prove demand-aware safety for accepted Core modules, including `core-shrink`. These theorems do not establish GIR lowering safety or complete source-to-native qualification. No shrink gate is claimed complete. This contract extends §§12.4–12.5 at schemas `goose-core/0.2`, `gir-h/0.4` and `gir-l/0.2`. A schema/profile pair selects one shape; no decoder tries alternate arities. `core-pilot` retains every tag, module/summary arity, numbering and byte choice in §§12.1–12.3. The `core-shrink` Core module has ten fields after its tag and GIR-H has nine, including the mandatory struct table even when empty. Flat-struct types, descriptors and field operations retain §§12.4–12.5's shapes. The completed shrink profile changes its summary and `e_push` shapes as specified below; a pre-shrink flat-struct artifact using their pilot shapes is malformed under this contract.
 
 #### Supported types, storage and source boundary
 
