@@ -131,6 +131,79 @@ theorem WeakFrameTy.getVal {roots : RootDeclarations} {types : Array (Option VTy
       obtain ⟨rfl, rfl⟩ := read
       exact ⟨typed id (.val found) (.data ty) metadata present, rfl⟩
 
+theorem WeakFrameTy.getView {roots : RootDeclarations} {types : Array (Option VTy)}
+    {fr : Frame} {id : ValueId} {permission : Mutability} {element : Ty} {view : ViewVal}
+    {before after : St} (typed : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.view permission element)))
+    (read : Goose.GIR.getView fr id before = .ok view after) :
+    WeakViewTy roots view element ∧ after = before := by
+  unfold Goose.GIR.getView at read
+  obtain ⟨cell, middle, lookup, read⟩ := m_bind_ok read
+  obtain ⟨present, sameState⟩ := getCell_success lookup
+  subst middle
+  cases cell with
+  | val value => simp [fault, M.stop] at read
+  | view found =>
+    simp only [pure_apply, Res.ok.injEq] at read
+    obtain ⟨rfl, rfl⟩ := read
+    exact ⟨typed id (.view found) _ metadata present, rfl⟩
+
+theorem WeakFrameTy.getVals {roots : RootDeclarations} {types : Array (Option VTy)}
+    {fr : Frame} {ids : List ValueId} {ty : Ty} {values : List Val} {before after : St}
+    (typed : WeakFrameTy roots types fr)
+    (metadata : ∀ id ∈ ids, types[id]? = some (some (.data ty)))
+    (read : mapList (Goose.GIR.getVal fr) ids before = .ok values after) :
+    (∀ value ∈ values, WeakValueTy roots value ty) ∧ values.length = ids.length ∧ after = before := by
+  induction ids generalizing values before after with
+  | nil =>
+    simp only [mapList, pure_apply, Res.ok.injEq] at read
+    obtain ⟨rfl, rfl⟩ := read
+    exact ⟨by simp, rfl, rfl⟩
+  | cons id ids ih =>
+    simp only [mapList] at read
+    obtain ⟨value, middle, found, read⟩ := m_bind_ok read
+    obtain ⟨headTyped, sameState⟩ := typed.getVal (metadata id (by simp)) found
+    subst middle
+    obtain ⟨tail, middle, foundTail, read⟩ := m_bind_ok read
+    obtain ⟨tailTyped, size, sameState⟩ := ih
+      (fun other present => metadata other (List.mem_cons_of_mem _ present)) foundTail
+    subst middle
+    simp only [pure_apply, Res.ok.injEq] at read
+    obtain ⟨rfl, rfl⟩ := read
+    refine ⟨?_, by simp [size], rfl⟩
+    intro other present
+    rcases List.mem_cons.mp present with rfl | present
+    · exact headTyped
+    · exact tailTyped other present
+
+inductive FlatOperands (types : Array (Option VTy)) : List ValueId → TyList → Prop
+  | nil : FlatOperands types [] .nil
+  | cons {id ty ids rest}
+      (metadata : types[id]? = some (some (.data ty))) (flat : ty.flat = true)
+      (tail : FlatOperands types ids rest) : FlatOperands types (id :: ids) (.cons ty rest)
+
+theorem WeakFrameTy.getFields {roots : RootDeclarations} {types : Array (Option VTy)}
+    {fr : Frame} {ids : List ValueId} {fields : TyList} {values : List Val} {before after : St}
+    (typed : WeakFrameTy roots types fr) (operands : FlatOperands types ids fields)
+    (read : mapList (Goose.GIR.getVal fr) ids before = .ok values after) :
+    FieldsTy fields values ∧ after = before := by
+  induction operands generalizing values before after with
+  | nil =>
+    simp only [mapList, pure_apply, Res.ok.injEq] at read
+    obtain ⟨rfl, rfl⟩ := read
+    exact ⟨True.intro, rfl⟩
+  | cons metadata flat tail ih =>
+    simp only [mapList] at read
+    obtain ⟨value, middle, found, read⟩ := m_bind_ok read
+    obtain ⟨headTyped, sameState⟩ := typed.getVal metadata found
+    subst middle
+    obtain ⟨tail, middle, foundTail, read⟩ := m_bind_ok read
+    obtain ⟨tailTyped, sameState⟩ := ih foundTail
+    subst middle
+    simp only [pure_apply, Res.ok.injEq] at read
+    obtain ⟨rfl, rfl⟩ := read
+    exact ⟨⟨headTyped.flat flat, tailTyped⟩, rfl⟩
+
 theorem WeakViewTy.mono {before after : RootDeclarations} {view : ViewVal} {element : Ty}
     (extension : before.Extends after) (typed : WeakViewTy before view element) :
     WeakViewTy after view element := by
@@ -254,6 +327,81 @@ theorem execPure_bin_typed {roots : RootDeclarations} {types : Array (Option VTy
     simp only [result, pure_apply, Res.ok.injEq] at evaluated
     obtain ⟨rfl, rfl⟩ := evaluated
     exact ⟨rfl, rfl⟩
+
+theorem execPure_indexProven_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {viewId indexId : ValueId} {permission : Mutability}
+    {element : Ty} {indexTy : IntTy} {before after : St} {cell : RVal}
+    (frameTyped : WeakFrameTy roots types fr)
+    (viewMetadata : types[viewId]? = some (some (.view permission element)))
+    (indexMetadata : types[indexId]? = some (some (.data (.int indexTy))))
+    (evaluated : execPure cx fr (.indexProven viewId indexId) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.ref permission element)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨view, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨viewTyped, sameState⟩ := frameTyped.getView viewMetadata read
+  subst middle
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal indexMetadata read
+  subst middle
+  obtain ⟨index, rfl⟩ := valueTyped.int
+  simp only [expectInt, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨⟨_, rfl, viewTyped.element index.toNat⟩, rfl⟩
+
+theorem execPure_arrLit_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {ids : List ValueId} {ty element : Ty}
+    {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
+    (metadata : ∀ id ∈ ids, types[id]? = some (some (.data element)))
+    (arrayType : arrayElem? ty = some element) (elementFlat : element.flat = true)
+    (fixedCount : ∀ e count, ty = .arr e count → ids.length = count)
+    (evaluated : execPure cx fr (.arrLit ty ids) before = .ok cell after) :
+    WeakCellTy roots cell (.data ty) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨values, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valuesTyped, size, sameState⟩ := frameTyped.getVals metadata read
+  subst middle
+  have elementsTyped : ∀ (i : Nat) (value : Val), values.toArray[i]? = some value → FlatTy element value := by
+    intro i value present
+    have member : value ∈ values := by simpa using Array.mem_of_getElem? present
+    exact (valuesTyped value member).flat elementFlat
+  cases ty with
+  | arr e count =>
+    simp only [arrayElem?, Option.some.injEq] at arrayType
+    subst e
+    simp only [expectArrayLit, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+    obtain ⟨rfl, rfl⟩ := evaluated
+    exact ⟨⟨by simp [size, fixedCount element count rfl], elementsTyped⟩, rfl⟩
+  | grow e | growshrink e =>
+    simp only [arrayElem?, Option.some.injEq] at arrayType
+    subst e
+    simp only [expectArrayLit, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+    obtain ⟨rfl, rfl⟩ := evaluated
+    exact ⟨⟨rfl, elementsTyped⟩, rfl⟩
+  | limited e capacity =>
+    simp only [arrayElem?, Option.some.injEq] at arrayType
+    subst e
+    simp only [expectArrayLit] at evaluated
+    split at evaluated
+    · rename_i capacityBound
+      simp only [pure_bind, pure_apply, Res.ok.injEq] at evaluated
+      obtain ⟨rfl, rfl⟩ := evaluated
+      exact ⟨⟨rfl, rfl, capacityBound, Nat.le_refl _, elementsTyped⟩, rfl⟩
+    · simp [bind_apply, fault, M.stop] at evaluated
+  | _ => simp [arrayElem?] at arrayType
+
+theorem execPure_structLit_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {ids : List ValueId} {sid : StructId} {fields : TyList}
+    {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
+    (operands : FlatOperands types ids fields)
+    (evaluated : execPure cx fr (.structLit (.structT sid fields) ids) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.structT sid fields)) ∧ after = before := by
+  simp only [execPure] at evaluated
+  obtain ⟨values, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨fieldsTyped, sameState⟩ := frameTyped.getFields operands read
+  subst middle
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨⟨rfl, by simpa using fieldsTyped⟩, rfl⟩
 
 theorem execPure_load_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {id : ValueId} {permission : Mutability} {ty : Ty}
