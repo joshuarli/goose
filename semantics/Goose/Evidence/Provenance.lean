@@ -148,4 +148,170 @@ theorem enterBlock_preserves {fn : Func} {fr result : Frame} {st final : St}
       exact bindParams_preserves (unbound block lookup) binding
     · simp [fault, M.stop] at success
 
+theorem execEff_preserves_cells {fn : Func} {fr result : Frame} {st final : St}
+    {effect : Effect}
+    (success : execEff fn fr effect st = .ok result final) : result.vals = fr.vals := by
+  cases effect <;> simp only [execEff] at success
+  case leave scope =>
+    cases scopes : fr.scopes with
+    | nil => simp [scopes, fault, M.stop] at success
+    | cons top rest =>
+      obtain ⟨enteredScope, scopeInstance⟩ := top
+      simp only [scopes] at success
+      split at success
+      · obtain ⟨_, _, _, success⟩ := m_bind_ok success
+        simp only [pure_apply, Res.ok.injEq] at success
+        cases success.1
+        rfl
+      · simp [fault, M.stop] at success
+  all_goals
+    repeat' first
+      | solve | simp [fault, M.stop, abortAtOrg, abortAt] at success
+      | obtain ⟨intermediate, middle, evaluated, success⟩ := m_bind_ok success
+      | split at success
+      | unfold abortAtOrg at success
+  all_goals
+    simp only [pure_apply, Res.ok.injEq] at success
+    cases success.1
+    rfl
+
+def stepWrites (fn : Func) (before after : Pt) : List ValueId :=
+  match instAt fn before with
+  | some (.def result _) => [result]
+  | some (.term _) => ((fn.blocks[after.1]?).map fun block => block.params.map Prod.fst).getD []
+  | _ => []
+
+theorem RuntimeStep.preserves_cell {cfg : GCfg} {fn : Func} {pt pt' : Pt}
+    {fr fr' : Frame} {st st' : St} {id : ValueId}
+    (transition : RuntimeStep cfg fn pt fr st pt' fr' st')
+    (unwritten : id ∉ stepWrites fn pt pt') : fr'.vals[id]? = fr.vals[id]? := by
+  cases transition with
+  | @define result op fuel value st' instruction evaluated =>
+    simp only [stepWrites, instruction, List.mem_singleton] at unwritten
+    simp only [Frame.set, Std.HashMap.getElem?_insert]
+    have distinct : (result == id) = false := by
+      apply Bool.eq_false_iff.mpr
+      intro equal
+      exact unwritten (eq_of_beq equal).symm
+    simp [distinct]
+  | effect instruction evaluated =>
+    rw [execEff_preserves_cells evaluated]
+  | branch instruction read entered =>
+    apply enterBlock_preserves (success := entered)
+    intro block lookup
+    simpa [stepWrites, instruction, lookup] using unwritten
+  | branchTrue instruction tested read entered =>
+    apply enterBlock_preserves (success := entered)
+    intro block lookup
+    simpa [stepWrites, instruction, lookup] using unwritten
+  | branchFalse instruction tested read entered =>
+    apply enterBlock_preserves (success := entered)
+    intro block lookup
+    simpa [stepWrites, instruction, lookup] using unwritten
+
+inductive RuntimeStepsAvoid (cfg : GCfg) (fn : Func) (ids : List ValueId) :
+    Pt → Frame → St → Pt → Frame → St → Prop
+  | refl {pt fr st} : RuntimeStepsAvoid cfg fn ids pt fr st pt fr st
+  | next {pt fr st middlePt middleFrame middleState lastPt lastFrame lastState}
+      (transition : RuntimeStep cfg fn pt fr st middlePt middleFrame middleState)
+      (unwritten : ∀ id ∈ ids, id ∉ stepWrites fn pt middlePt)
+      (rest : RuntimeStepsAvoid cfg fn ids middlePt middleFrame middleState lastPt lastFrame lastState) :
+      RuntimeStepsAvoid cfg fn ids pt fr st lastPt lastFrame lastState
+
+theorem RuntimeStepsAvoid.preserves_cell {cfg : GCfg} {fn : Func} {ids : List ValueId}
+    {pt pt' : Pt} {fr fr' : Frame} {st st' : St} {id : ValueId}
+    (history : RuntimeStepsAvoid cfg fn ids pt fr st pt' fr' st') (member : id ∈ ids) :
+    fr'.vals[id]? = fr.vals[id]? := by
+  induction history with
+  | refl => rfl
+  | next transition unwritten rest ih =>
+    rw [ih, transition.preserves_cell (unwritten id member)]
+
+theorem RuntimeStepsAvoid.trans {cfg : GCfg} {fn : Func} {ids : List ValueId}
+    {first middle last : Pt} {firstFrame middleFrame lastFrame : Frame}
+    {firstState middleState lastState : St}
+    (left : RuntimeStepsAvoid cfg fn ids first firstFrame firstState middle middleFrame middleState)
+    (right : RuntimeStepsAvoid cfg fn ids middle middleFrame middleState last lastFrame lastState) :
+    RuntimeStepsAvoid cfg fn ids first firstFrame firstState last lastFrame lastState := by
+  induction left with
+  | refl => exact right
+  | next transition unwritten rest ih =>
+    exact .next transition unwritten (ih right)
+
+theorem bindParams_cell_source {params : List (ValueId × VTy)} {args : List RVal}
+    {fr result : Frame} {st final : St} {id : ValueId} {value : RVal}
+    (success : bindParams fr params args st = .ok result final)
+    (cell : result.vals[id]? = some value) :
+    id ∈ params.map Prod.fst ∨ fr.vals[id]? = some value := by
+  induction params generalizing args fr with
+  | nil =>
+    simp only [bindParams, pure_apply, Res.ok.injEq] at success
+    cases success.1
+    exact .inr cell
+  | cons param params ih =>
+    cases args with
+    | nil =>
+      simp only [bindParams, pure_apply, Res.ok.injEq] at success
+      cases success.1
+      exact .inr cell
+    | cons arg args =>
+      simp only [bindParams, setCell_eq, pure_bind] at success
+      rcases ih success with member | previous
+      · exact .inl (by simp [member])
+      · by_cases equal : param.1 = id
+        · exact .inl (by simp [equal])
+        · right
+          simpa [Frame.set, Std.HashMap.getElem?_insert, equal] using previous
+
+theorem enterBlock_cell_source {fn : Func} {fr result : Frame} {st final : St}
+    {target : BlockId} {args : List RVal} {insts : List Inst} {id : ValueId} {value : RVal}
+    (success : enterBlock fn fr target args st = .ok (insts, result) final)
+    (cell : result.vals[id]? = some value) :
+    ∃ block, fn.blocks[target]? = some block ∧
+      (id ∈ block.params.map Prod.fst ∨ fr.vals[id]? = some value) := by
+  unfold enterBlock at success
+  cases lookup : fn.blocks[target]? with
+  | none => simp [lookup, fault, M.stop] at success
+  | some block =>
+    simp only [lookup] at success
+    split at success
+    · obtain ⟨bound, middle, binding, finished⟩ := m_bind_ok success
+      simp only [pure_apply, Res.ok.injEq, Prod.mk.injEq] at finished
+      rw [← finished.1.2] at cell
+      exact ⟨block, rfl, bindParams_cell_source binding cell⟩
+    · simp [fault, M.stop] at success
+
+theorem FunctionEntry.cell_parameter {fn : Func} {depth : Nat} {args : List Val}
+    {before : St} {fr : Frame} {after : St} {id : ValueId} {value : RVal}
+    (entry : FunctionEntry fn depth args before fr after)
+    (cell : fr.vals[id]? = some value) :
+    ∃ block ∈ fn.blocks, id ∈ block.params.map Prod.fst := by
+  obtain ⟨_, act, fresh, _, entered⟩ := entry
+  obtain ⟨block, lookup, source⟩ := enterBlock_cell_source entered cell
+  refine ⟨block, Array.mem_of_getElem? lookup, ?_⟩
+  rcases source with parameter | impossible
+  · exact parameter
+  · simp only [Std.HashMap.getElem?_empty] at impossible
+    cases impossible
+
+def CellSample (cfg : GCfg) (fn : Func) (id : ValueId) (value : RVal)
+    (pt : Pt) (fr : Frame) (st : St) : Prop :=
+  ∃ sourcePt sourceFrame sourceState operation fuel writtenState,
+    RuntimePoint cfg fn sourcePt sourceFrame sourceState ∧
+    instAt fn sourcePt = some (.def id operation) ∧
+    execOp fuel ⟨cfg, fn⟩ sourceFrame operation sourceState = .ok value writtenState ∧
+    RuntimeStepsAvoid cfg fn [id] (sourcePt.1, sourcePt.2 + 1)
+      (sourceFrame.set id value) writtenState pt fr st
+
+theorem CellSample.extend {cfg : GCfg} {fn : Func} {id : ValueId} {value : RVal}
+    {pt pt' : Pt} {fr fr' : Frame} {st st' : St}
+    (sample : CellSample cfg fn id value pt fr st)
+    (transition : RuntimeStep cfg fn pt fr st pt' fr' st')
+    (unwritten : id ∉ stepWrites fn pt pt') : CellSample cfg fn id value pt' fr' st' := by
+  obtain ⟨sourcePt, sourceFrame, sourceState, operation, fuel, writtenState,
+    point, instruction, evaluated, history⟩ := sample
+  refine ⟨sourcePt, sourceFrame, sourceState, operation, fuel, writtenState,
+    point, instruction, evaluated, history.trans ?_⟩
+  exact .next transition (by simpa using unwritten) .refl
+
 end Goose.Evidence
