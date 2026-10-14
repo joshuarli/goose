@@ -8,6 +8,7 @@ import Goose.Lower.While
 import Goose.Lower.Prefix
 import Goose.GIR.Sound
 import Goose.Proofs.Fuel
+import Goose.Proofs.GIRFuel
 import Goose.Proofs.Memory
 import Goose.Proofs.Core
 import Goose.Proofs.Safety
@@ -146,6 +147,7 @@ end Goose.Audit
 #audit Goose.Reuse.wrong_answer_without_key_determination
 #audit Goose.Reuse.key_omission_example
 #audit Goose.Proofs.Fuel.eval_fuel_mono
+#audit Goose.Proofs.GIRFuel.run_nonTimeout_fuel_mono
 
 #audit Goose.Proofs.Memory.fields_get
 #audit Goose.Proofs.Memory.FieldPath.get
