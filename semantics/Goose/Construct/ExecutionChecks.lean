@@ -84,6 +84,49 @@ private def named : Module := moduleOf #[
 #guard observes named == some ([65, 66, 10],
   [.begin 0, .write 0 0, .begin 1, .write 1 0, .publish 1, .publish 0])
 
+private def namedGrowReadMutation : Module := moduleOf #[
+  implementation "entry" #[localVar "result" (.varr (.int .u8))]
+    (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
+  implementation "named" #[localVar "result" (.grow (.int .u8))]
+    (.mk 0 [.letS 0 (.bytes (.grow (.int .u8)) [65, 66] 0) 0,
+      .assign (.elem (.of (.var 0)) (.lit .i64 0) 0) (.lit .u8 67) 0,
+      .print [.view (.of (.var 0))] 0] (some (.resultLocal 0 0)))
+    #[⟨.varr (.int .u8), .value, some 0⟩]]
+
+#guard observes namedGrowReadMutation == some ([67, 66, 10, 67, 66, 10],
+  [.begin 0, .write 0 0, .write 0 1, .publish 0])
+
+private def finishExplicitProducer (receiving producer localType : Ty) : EvalM Nat := do
+  let id ← newDestination ⟨#[]⟩ 0 receiving .value 0 none (some 1)
+  liftConstruction 0 (adaptConstructionDestination id producer .value)
+  liftConstruction 0 (prepareNamedBinding id localType)
+  liftConstruction 0 (writeElement id ⟨#[65]⟩)
+  liftConstruction 0 (finishDestination id)
+  finishChannels ⟨#[]⟩ [producer] [.completed id] 0
+  pure id
+
+private def observesProducer (receiving producer localType : Ty) :
+    Option (List UInt8 × ReceivingLayout × Nat × List ConstructionEvent × Bool) :=
+  match finishExplicitProducer receiving producer localType ExecutionState.initial with
+  | .ok id state => do
+      let destination ← state.construction.destinations[id]?
+      let storage ← state.construction.storage[destination.storage]?
+      some (storage.bytes.data.toList, destination.layout, destination.capability.start,
+        state.construction.events, destination.adaptation.isSome)
+  | _ => none
+
+#guard observesProducer (.grow (.int .u8)) (.varr (.int .u8)) (.varr (.int .u8)) ==
+  some ([1, 0, 0, 0, 65], .packed, 0, [.begin 0, .write 0 0], true)
+
+#guard observesProducer (.grow (.int .u8)) (.grow (.int .u8)) (.varr (.int .u8)) ==
+  some ([65], .elements, 0, [.begin 0, .write 0 0, .relocate 0 .headerRemoval], true)
+
+#guard observesProducer (.varr (.int .u8)) (.grow (.int .u8)) (.varr (.int .u8)) ==
+  some ([0, 0, 0, 0, 65], .elements, 4, [.begin 0, .write 0 0, .relocate 0 .headerRemoval], true)
+
+#guard observesProducer (.grow (.int .u8)) (.varr (.int .u8)) (.grow (.int .u8)) ==
+  some ([1, 0, 0, 0, 65], .packed, 0, [.begin 0, .write 0 0], true)
+
 private def namedAlternate : Module := moduleOf #[
   implementation "entry" #[localVar "result" (.varr (.int .u8))]
     (.mk 0 [.letS 0 (.call 1 [] 0) 0, .print [.view (.of (.var 0))] 0] none),
