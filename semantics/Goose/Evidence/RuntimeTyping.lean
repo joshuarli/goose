@@ -308,6 +308,95 @@ theorem execEff_result_typed {cfg : GCfg} {fn : Func} {activations : ActivationT
   | leave scope => exact execEff_leave_typed frameTyped evaluated
   | print parts origin => exact execEff_print_typed frameTyped evaluated
 
+def FunctionValueTy (roots : RootDeclarations) (fn : Func) (value : Val) : Prop :=
+  match fn.results with
+  | [] => value = .unit
+  | [ty] => WeakValueTy roots value ty
+  | _ => False
+
+def EntryPreservation (cfg : GCfg) (fuel : Nat) : Prop :=
+  ∀ (fn : Func) (depth : Nat) (args : List Val) (activations : ActivationTypes)
+    (before after : St) (value : Val),
+    fn ∈ cfg.mod.allFuncs → RuntimeStateTy cfg activations before →
+    CallValuesTy (runtimeDeclarations cfg activations) fn.params args →
+    Goose.GIR.enterFn fuel cfg depth fn args before = .ok value after →
+    ∃ extended, activations.Extends extended ∧ RuntimeStateTy cfg extended after ∧
+      FunctionValueTy (runtimeDeclarations cfg extended) fn value
+
+def ExecPreservation (cfg : GCfg) (fuel : Nat) : Prop :=
+  ∀ (fn : Func) (point : Pt) (fr : Frame) (activations : ActivationTypes)
+    (before after : St) (value : Val),
+    fn ∈ cfg.mod.allFuncs → RuntimeFrameTy cfg fn activations fr before →
+    exec fuel ⟨cfg, fn⟩ fr (instsAt fn point) before = .ok value after →
+    ∃ extended, activations.Extends extended ∧ RuntimeStateTy cfg extended after ∧
+      FunctionValueTy (runtimeDeclarations cfg extended) fn value
+
+theorem enterFn_typed_from_exec {cfg : GCfg} {fuel : Nat}
+    (accepted : validate cfg.mod = .ok ())
+    (bodyTyped : ∀ remaining, remaining < fuel → ExecPreservation cfg remaining) :
+    EntryPreservation cfg fuel := by
+  intro fn depth args activations before after value member stateTyped argsTyped evaluated
+  obtain ⟨remaining, fr, entered, fuelEq, entry, executed⟩ := enterFn_success_entry evaluated
+  obtain ⟨entryBlock, lookup, entryTypes⟩ := validated_entry_params accepted member
+  obtain ⟨enteredActivations, rootExtension, activationExtension, frameTyped⟩ :=
+    entry.typed stateTyped lookup
+      (fun param present => validated_block_param_metadata accepted member
+        (Array.mem_of_getElem? lookup) present) (argsTyped.entry entryTypes)
+  obtain ⟨extended, bodyExtension, afterTyped, valueTyped⟩ :=
+    bodyTyped remaining (by omega) fn (0, 0) fr enteredActivations entered after value
+      member frameTyped executed
+  exact ⟨extended, activationExtension.trans bodyExtension, afterTyped, valueTyped⟩
+
+theorem execOp_result_typed {cfg : GCfg} {fn : Func} {activations : ActivationTypes}
+    {point : Pt} {fr : Frame} {before after : St} {fuel : Nat} {result : ValueId}
+    {op : Op} {ty : VTy} {cell : RVal}
+    (accepted : validate cfg.mod = .ok ()) (member : fn ∈ cfg.mod.allFuncs)
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (instruction : instAt fn point = some (.def result op))
+    (typed : op.resultTy { cfg.mod.tyEnv fn with vals := fn.valueTypes cfg.mod } = .ok ty)
+    (metadata : (fn.valueTypes cfg.mod)[result]? = some (some ty))
+    (entryTyped : ∀ remaining, remaining < fuel → EntryPreservation cfg remaining)
+    (evaluated : execOp fuel ⟨cfg, fn⟩ fr op before = .ok cell after) :
+    ∃ extended, activations.Extends extended ∧ RuntimeStateTy cfg extended after ∧
+      WeakCellTy (runtimeDeclarations cfg extended) cell ty := by
+  cases op with
+  | call callee args origin =>
+    obtain ⟨block, blockMember, instructionMember⟩ := instAt_member instruction
+    obtain ⟨checkedFn, checkedLookup, arity, operands, resultMetadata⟩ :=
+      validated_call_operands accepted member blockMember instructionMember
+    cases fuel with
+    | zero => simp [execOp, timeout, M.stop] at evaluated
+    | succ remaining =>
+      simp only [execOp] at evaluated
+      obtain ⟨values, middle, read, evaluated⟩ := m_bind_ok evaluated
+      obtain ⟨argsTyped, sameState⟩ := frameTyped.2.2.callArgs arity operands read
+      subst middle
+      obtain ⟨value, returned, called, evaluated⟩ := m_bind_ok evaluated
+      simp only [pure_apply, Res.ok.injEq] at evaluated
+      obtain ⟨rfl, rfl⟩ := evaluated
+      obtain ⟨bodyFuel, calleeFn, callFuel, depth, lookup, entered⟩ := callFn_success_entry called
+      have sameFn : calleeFn = checkedFn := Option.some.inj (lookup.symm.trans checkedLookup)
+      subst calleeFn
+      have calleeMember : checkedFn ∈ cfg.mod.allFuncs :=
+        List.mem_append_left _ (Array.mem_toList_iff.mpr (Array.mem_of_getElem? checkedLookup))
+      obtain ⟨extended, extension, stateTyped, valueTyped⟩ :=
+        entryTyped bodyFuel (by omega) checkedFn (fr.depth + 1) values activations before returned value
+          calleeMember frameTyped.1 argsTyped entered
+      refine ⟨extended, extension, stateTyped, ?_⟩
+      rcases resultMetadata with ⟨noResults, resultMetadata⟩ | ⟨returnTy, oneResult, resultMetadata⟩
+      · have sameTy : ty = .data .unit := Option.some.inj (Option.some.inj
+          (metadata.symm.trans resultMetadata))
+        subst ty
+        simpa only [FunctionValueTy, noResults, WeakCellTy, WeakValueTy] using valueTyped
+      · have sameTy : ty = .data returnTy := Option.some.inj (Option.some.inj
+          (metadata.symm.trans resultMetadata))
+        subst ty
+        simpa only [FunctionValueTy, oneResult, WeakCellTy] using valueTyped
+  | _ =>
+    simp only [execOp] at evaluated
+    obtain ⟨cellTyped, stateTyped⟩ := execPure_result_typed frameTyped typed evaluated
+    exact ⟨activations, .refl activations, stateTyped, cellTyped⟩
+
 namespace AggregateReferences
 
 private def initializer : Func :=
