@@ -215,4 +215,49 @@ theorem readonlySlice_typed {le : LEnv} {before : LS} {view : ValueId} {element 
   have emitted := emitDef_recorded live sliceTyped
   exact ⟨emitted.2.1, emitted.2.2.1⟩
 
+theorem passable_nonidentical {source target : Ty}
+    (permission : source.passableTo target = true) (different : source ≠ target) :
+    (∃ element, source = .ref .mutable element ∧ target = .ref .readOnly element) ∨
+    (∃ element, source = .slice .mutable element ∧ target = .slice .readOnly element) := by
+  cases source <;> cases target <;> simp_all [Ty.passableTo, Mutability.atLeast]
+  all_goals
+    first
+    | (rename_i actual _ requested _
+       cases actual <;> cases requested <;> simp_all)
+    | contradiction
+
+theorem coerceTo_identical {le : LEnv} {before : LS} {value : ValueId} {ty : Ty}
+    (typed : before.vals[value]? = some (some (.data ty))) (origin : OriginId) :
+    coerceTo ty value origin le before = (value, before) := by
+  simp only [coerceTo, bind_run, valTy_of_recorded typed]
+  cases ty <;> first | rfl | (rename_i mu _; cases mu <;> rfl)
+
+theorem coerceTo_typed {le : LEnv} {before : LS} {value : ValueId} {source target : Ty}
+    {block : BlockId} (typed : before.vals[value]? = some (some (.data source)))
+    (permission : source.passableTo target = true) (live : before.cur = some block)
+    (origin : OriginId) :
+    let (result, after) := coerceTo target value origin le before
+    after.cur = before.cur ∧ after.vals[result]? = some (some (.data target)) := by
+  by_cases identical : source = target
+  · subst target
+    rw [coerceTo_identical typed origin]
+    exact ⟨rfl, typed⟩
+  · rcases passable_nonidentical permission identical with
+      ⟨element, sourceShape, targetShape⟩ | ⟨element, sourceShape, targetShape⟩
+    · subst source target
+      have freezeTyped : (Op.refFreeze value).resultTy (tyEnv le before) =
+          .ok (.data (.ref .readOnly element)) := by
+        simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv,
+          typed, pure, Except.pure, bind, Except.bind]
+      simp only [coerceTo, bind_run, valTy_of_recorded typed]
+      exact ⟨(emitDef_recorded live freezeTyped).2.1,
+        (emitDef_recorded live freezeTyped).2.2.1⟩
+    · subst source target
+      let view := emitDef (.sliceView value) le before
+      have viewTyped := sliceView_typed (le := le) typed live
+      have viewLive : view.2.cur = some block := viewTyped.1.trans live
+      have weakened := readonlySlice_typed (le := le) viewTyped.2 viewLive origin
+      simp only [coerceTo, bind_run, valTy_of_recorded typed]
+      exact ⟨weakened.1.trans viewTyped.1, weakened.2⟩
+
 end Goose.Lower.Validation

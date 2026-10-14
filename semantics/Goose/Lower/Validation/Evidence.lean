@@ -183,6 +183,14 @@ theorem checked_freezeTo (m : Mutability) (r : ValueId) : CheckedRun (freezeTo m
     | exact CheckedRun.pure _
     | (rename_i t; cases t <;> first | exact CheckedRun.pure _ | (rename_i m' _; cases m' <;> first | exact CheckedRun.pure _ | exact checked_emitDef _))
 
+theorem checked_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : CheckedRun (coerceTo target r org) := by
+  unfold coerceTo
+  refine CheckedRun.bind (checked_valTy r) fun source => ?_
+  split
+  · exact checked_emitDef _
+  · exact CheckedRun.bind (checked_emitDef _) (fun _ => checked_emitDef _)
+  · exact CheckedRun.pure _
+
 theorem checked_implOfContext (c : ContextId) : CheckedRun (implOfContext c) := by
   unfold implOfContext
   exact CheckedRun.bind checked_read fun _ => CheckedRun.pure _

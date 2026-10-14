@@ -138,6 +138,14 @@ theorem types_freezeTo (m : Mutability) (r : ValueId) : TypeRun (freezeTo m r) :
     | exact TypeRun.pure _
     | (rename_i t; cases t <;> first | exact TypeRun.pure _ | (rename_i m' _; cases m' <;> first | exact TypeRun.pure _ | exact types_emitDef _))
 
+theorem types_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : TypeRun (coerceTo target r org) := by
+  unfold coerceTo
+  refine TypeRun.bind (types_valTy r) fun source => ?_
+  split
+  · exact types_emitDef _
+  · exact TypeRun.bind (types_emitDef _) (fun _ => types_emitDef _)
+  · exact TypeRun.pure _
+
 theorem types_implOfContext (c : ContextId) : TypeRun (implOfContext c) := by
   unfold implOfContext
   exact TypeRun.bind types_read fun _ => TypeRun.pure _
