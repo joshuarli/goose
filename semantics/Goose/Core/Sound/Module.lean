@@ -49,7 +49,7 @@ theorem checkImpl_ok (m : Module) (impl : Impl) (h : checkImpl m impl = .ok ()) 
   | none =>
     simp only [hscope] at h
     inv at h
-    obtain ⟨_, _, hpar, _, hsc, _, bodyTy, tn, htb, hres⟩ := h
+    obtain ⟨_, _, hpar, _, _, hsc, _, bodyTy, tn, htb, hres⟩ := h
     have parameterShape : ∀ i, i < impl.params.size → checkParam impl i = .ok () :=
       fun i hlt => (forAll_ok _ _).1 hpar i (List.mem_range.2 hlt)
     refine ⟨parameterShape, ?_, hsc, bodyTy, tn, htb, ?_⟩
