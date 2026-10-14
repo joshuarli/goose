@@ -506,11 +506,11 @@ def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (Li
       | .abort kind org => abortAt kind (← origin org)
       | .exit value _ => EvalM.stop (.exit (← expectInt (← getValue frame value)).2)
       | .unreachable => fault .flow
-      | .escape target results _ _ =>
-          let some target := config.module.targets[target]? | fault .unbound
+      | .escape targetId results _ _ =>
+          let some target := config.module.targets[targetId]? | fault .unbound
           let some activation := selectTarget? target (← EvalM.get).activations | fault .flow
           let carriers ← results.mapM (getCarrier frame)
-          fun state => .escape activation.act carriers state
+          fun state => .escape ⟨activation.act,.nonlocal targetId⟩ carriers state
       | .invoke callee args destinations normal forwarded escapes org =>
           let arguments ← args.mapM (getValue frame)
           let destinations ← destinations.mapM (getDest frame)
@@ -519,15 +519,20 @@ def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (Li
           fun state =>
             match executeFn fuel config callee arguments destinations org state with
             | .ok results state => executeBlock fuel config function frame normal ((results.map fun carrier => packResults [carrier]) ++ forwarded) state
-            | .escape target results state =>
-                match state.activations.find? (fun activation => activation.act == target) with
-                | none => .stop (.fault .flow) state
-                | some activation =>
-                    match escapes.find? (fun edge => (config.module.targets[edge.target]?).any (fun target => target.contains activation.implementation)) with
+            | .escape address results state =>
+                match address.target with
+                | .ordinary => .stop (.fault .flow) state
+                | .nonlocal targetId =>
+                    match state.activations.find? (fun activation => activation.act == address.activation) with
                     | none => .stop (.fault .flow) state
-                    | some edge =>
-                        let leading := results.map (fun carrier => packResults [carrier]) ++ destinations.map RVal.cancelled
-                        (do executeBlock fuel config function frame edge.block (leading ++ (← edge.args.mapM (getCell frame)))) state
+                    | some activation =>
+                        if !(config.module.targets[targetId]?).any (fun target => target.contains activation.implementation) then
+                          .stop (.fault .flow) state
+                        else match escapes.find? (fun edge => edge.target == targetId) with
+                        | none => .stop (.fault .flow) state
+                        | some edge =>
+                            let leading := results.map (fun carrier => packResults [carrier]) ++ destinations.map RVal.cancelled
+                            (do executeBlock fuel config function frame edge.block (leading ++ (← edge.args.mapM (getCell frame)))) state
             | .stop stop state => .stop stop state
             | .jump target kind state => .jump target kind state
 

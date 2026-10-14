@@ -70,7 +70,7 @@ private def allTypesValid (m : Module) : Ty → Bool
   | .varr e | .grow e => (e.flat || e.variableElement) && allTypesValid m e
   | .growshrink e => e.flat && allTypesValid m e
   | .limited e n => n > 0 && n < 2^31 && e.flat && allTypesValid m e
-  | .ref _ e => (e.storageType || (e matches .slice ..)) && allTypesValid m e
+  | .ref _ e => (e.storable || (e matches .ref _ (.slice ..))) && allTypesValid m e
   | .slice _ e => (e.flat || e.variableElement) && allTypesValid m e
   | .structT sid fs => match m.structs[sid]? with
     | some d => fs == TyList.ofList (d.fields.toList.map (·.ty)) && fs.flat
@@ -337,10 +337,38 @@ private def externalRoots (arguments : List (List RootRef)) (roots : List RootRe
     | .local _ => []
     | root => [root]
 
+private def expandParameter (f : Func) : RootRef → List RootRef
+  | .param position =>
+      let declared := (f.roots.params.find? (·.1 == position)).map (·.2) |>.getD []
+      if declared.isEmpty then [.param position] else declared
+  | root => [root]
+
+
+private def storageRebinds (f : Func) (roots : Array (List RootRef)) (reference : ValueId) : List Target :=
+  (roots[reference]?.getD []).filterMap fun
+    | .param position =>
+        if (f.params[position]?).any (fun ty => ty matches .ref _ (.slice ..)) then some (.param position) else none
+    | .local slot =>
+        match f.slots[slot]?, f.params[slot]? with
+        | some descriptor, some parameter =>
+            if descriptor.scope == 0 && descriptor.ty == parameter && (parameter matches .ref .. | .slice ..) then some (.param slot) else none
+        | _, _ => none
+    | _ => none
+
+private def escapeResultIndex (m : Module) (functionId : FnId) (targetId : Nat) : Nat :=
+  m.funcs.size + functionId * m.targets.size + targetId
+
+private def globalContentIndex (m : Module) (globalId : Core.GlobalId) : Nat :=
+  m.funcs.size * (m.targets.size + 1) + globalId
+
+private def mergeRootRows (previous next : List (List RootRef)) : List (List RootRef) :=
+  if previous.isEmpty then next else if next.isEmpty then previous else (previous.zip next).map fun (a,b) => (a ++ b).eraseDups
+
 private def storageRoots (m : Module) (f : Func) (returns : Array (List (List RootRef))) : Array (List RootRef) × Array (List RootRef) := Id.run do
   let types := f.valueTypes m
   let mut roots := Array.replicate f.numValues []
   let mut slots := Array.replicate f.slots.size []
+  let mut packs : Array (List (List RootRef)) := Array.replicate f.numValues []
   if let some entry := f.blocks[0]? then
     for ((id,_), ty, position) in (entry.params.take f.params.length |>.zip f.params |>.zipIdx).map (fun ((id,ty),position) => (id,ty,position)) do
       let boundSlot := entry.insts.findSome? fun
@@ -353,7 +381,12 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
         let get (id : ValueId) := roots[id]?.getD []
         match inst with
         | .def id op =>
-            let found := match op with
+            match op with
+            | .call callee args _ | .callConstruct callee args _ _ =>
+                let rows := (returns[callee]?.getD []).map (externalRoots (args.map get))
+                packs := packs.set! id (mergeRootRows (packs[id]?.getD []) rows)
+            | _ => pure ()
+            let found : List RootRef := match op with
               | .slotAddr slot => [.local slot]
               | .globalAddr global => [.global global]
               | .bytes .. => [.static]
@@ -367,7 +400,8 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
                           else [.param position]
                       | .global global =>
                           if (m.globals[global]?).any (fun global => global.ty matches .ref .. | .slice ..) then
-                            (returns[m.funcs.size - m.globals.size + global]?.getD []).flatten
+                            ((returns[m.funcs.size - m.globals.size + global]?.getD []).flatten ++
+                              (returns[globalContentIndex m global]?.getD []).flatten).eraseDups
                           else [.global global]
                       | root => [root]
                   else []
@@ -383,7 +417,7 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
               | .destNamed slot _ => [.local slot]
               | .call callee args _ | .callConstruct callee args _ _ =>
                   externalRoots (args.map get) ((returns[callee]?.getD []).flatten)
-              | .result pack _ => get pack
+              | .result pack position => (packs[pack]?.getD [])[position]?.getD []
               | _ => []
             roots := roots.set! id ((get id ++ found).eraseDups)
         | .eff (.slotInit slot value _) => slots := slots.set! slot ((slots[slot]?.getD [] ++ get value).eraseDups)
@@ -397,7 +431,17 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
                   | .invoke callee _ _ normal _ _ _ =>
                       if target == normal then (m.funcs[callee]?).map (·.results.length) |>.getD 0 else targetBlock.params.length - args.length
                   | _ => 0
-                for ((id,_), arg) in (targetBlock.params.drop skip).zip args do roots := roots.set! id ((get id ++ get arg).eraseDups)
+                if let .invoke callee callArgs _ normal _ escapeEdges _ := term then
+                  let rows := if target == normal then returns[callee]?.getD [] else
+                    match escapeEdges.find? (·.block == target) with
+                    | some edge => returns[escapeResultIndex m callee edge.target]?.getD []
+                    | none => []
+                  for ((id,_),row) in targetBlock.params.zip rows do
+                    roots := roots.set! id ((get id ++ externalRoots (callArgs.map get) row).eraseDups)
+                for ((id,type), arg) in (targetBlock.params.drop skip).zip args do
+                  roots := roots.set! id ((get id ++ get arg).eraseDups)
+                  if type matches .pack .. then
+                    packs := packs.set! id (mergeRootRows (packs[id]?.getD []) (packs[arg]?.getD []))
         | _ => pure ()
   return (roots,slots)
 
@@ -405,16 +449,33 @@ private def valueRoots (m : Module) (f : Func) (returns : Array (List (List Root
   (storageRoots m f returns).1
 
 private def resultRoots (m : Module) : Array (List (List RootRef)) := Id.run do
-  let mut returns := m.funcs.map fun f => f.results.map fun _ => []
+  let normal := m.funcs.map fun f => f.results.map fun _ => []
+  let propagated := m.funcs.flatMap fun _ => m.targets.map fun target =>
+    (m.funcs[target.first]?).map (fun member => member.results.map fun _ => []) |>.getD []
+  let mut returns := normal ++ propagated ++ Array.replicate m.globals.size [[]]
   for _ in [0:m.funcs.size * (m.funcs.foldl (fun n f => n + f.numValues) 0) + 1] do
     for h : fi in [0:m.funcs.size] do
       let f := m.funcs[fi]
       let roots := valueRoots m f returns
-      let mut found := returns[fi]?.getD []
       for block in f.blocks do
-        if let some (.ret operands _) := block.lastTerm? then
-          found := (found.zip operands).map fun (previous,id) => (previous ++ roots[id]?.getD []).eraseDups
-      returns := returns.set! fi found
+        for inst in block.insts do
+          if let .eff (.store reference value _) := inst then
+            let storing := (roots[value]?.getD []).flatMap (expandParameter f)
+            for root in roots[reference]?.getD [] do
+              let receiving := expandParameter f root
+              for receiver in receiving do
+                if let .global global := receiver then
+                  let index := globalContentIndex m global
+                  returns := returns.set! index [((returns[index]?.getD []).flatten ++ storing).eraseDups]
+        match block.lastTerm? with
+        | some (.ret operands _) =>
+            let found := (returns[fi]?.getD []).zip operands |>.map fun (previous,id) => (previous ++ roots[id]?.getD []).eraseDups
+            returns := returns.set! fi found
+        | some (.escape target operands _ _) =>
+            let index := escapeResultIndex m fi target
+            let found := (returns[index]?.getD []).zip operands |>.map fun (previous,id) => (previous ++ roots[id]?.getD []).eraseDups
+            returns := returns.set! index found
+        | _ => pure ()
   return returns
 
 private def checkLifetimes (m : Module) (f : Func) (returns : Array (List (List RootRef))) : Check Unit := do
@@ -462,11 +523,6 @@ private def rootsTargets (roots : List RootRef) : List Target := roots.filterMap
   | .global i => some (.global i)
   | _ => none
 
-private def expandParameter (f : Func) : RootRef → List RootRef
-  | .param position =>
-      let declared := (f.roots.params.find? (·.1 == position)).map (·.2) |>.getD []
-      if declared.isEmpty then [.param position] else declared
-  | root => [root]
 
 private def mapTargets (roots : Array (List RootRef)) (args : List ValueId) (targets : List Target) : List Target :=
   targets.flatMap fun
@@ -582,7 +638,8 @@ private def deriveEffects (m : Module) (returns : Array (List (List RootRef))) :
           | .def _ (.bin op ..) =>
               if op matches .add | .sub | .mul | .div | .mod then summary := { summary with aborts := true }
           | .def _ (.un .neg ..) | .def _ (.conv .as ..) | .def _ (.viewSlice ..) | .def _ (.indexChecked ..) => summary := { summary with aborts := true }
-          | .eff (.store reference _ _) => summary := unionSummary summary { emptySummary with writes := get reference }
+          | .eff (.store reference _ _) =>
+              summary := unionSummary summary { emptySummary with writes := get reference, rebinds := storageRebinds f roots reference }
           | .eff (.destCopy _ source _) | .eff (.destText _ source _) | .def _ (.render source _) => summary := unionSummary summary { emptySummary with reads := get source }
           | .eff (.append reference source _) => summary := unionSummary summary { emptySummary with grows := get reference, writes := get reference, reads := get source, aborts := limited reference }
           | .eff (.appendValue reference _ _) => summary := unionSummary summary { emptySummary with grows := get reference, writes := get reference, aborts := limited reference }
@@ -648,6 +705,11 @@ private def checkParameterRoots (m : Module) (returns : Array (List (List RootRe
                 | .local _ => []
               unless included actual mapped do violation .v050 "callee content roots omit slice backing storage supplied at a call"
 
+private def declaredEffectTargets (f : Func) (targets : List Target) : List Target :=
+  targets.flatMap fun
+    | .param position => Target.param position :: rootsTargets (expandParameter f (.param position))
+    | .global global => [.global global]
+
 private def checkSummaries (m : Module) (returns : Array (List (List RootRef))) (derived : Array Summary) : Check Unit := do
   for h : fi in [0:m.funcs.size] do
     let f := m.funcs[fi]
@@ -660,9 +722,9 @@ private def checkSummaries (m : Module) (returns : Array (List (List RootRef))) 
             | _ => none
           if let some callee := callee? then
             unless (m.funcs[callee]?).any (fun f => f.summary matches .known _) do violation .v050 "known summary calls unknown callee summary"
-      unless included actual.reads declared.reads && included actual.writes declared.writes &&
-          included actual.grows declared.grows && included actual.shrinks declared.shrinks &&
-          included actual.rebinds declared.rebinds && included actual.constructs declared.constructs &&
+      unless included actual.reads (declaredEffectTargets f declared.reads) && included actual.writes (declaredEffectTargets f declared.writes) &&
+          included actual.grows (declaredEffectTargets f declared.grows) && included actual.shrinks (declaredEffectTargets f declared.shrinks) &&
+          included actual.rebinds (declaredEffectTargets f declared.rebinds) && included actual.constructs declared.constructs &&
           included actual.needs declared.needs && included actual.escapes declared.escapes &&
           (!actual.aborts || declared.aborts) && (!actual.outputs || declared.outputs) do
         violation .v050 "effect summary omits independently derived body/callee effects"
@@ -735,6 +797,9 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
               unless inst matches .def _ (.call ..) | .def _ (.callConstruct ..) | .term (.invoke ..) do
                 violation .v060 "owned constructed argument has a use outside its associated call"
           let changed : List RootRef := match inst with
+            | .eff (.store reference ..) => (storageRebinds f roots reference).flatMap fun
+                | .param position => expandParameter f (.param position)
+                | .global global => [.global global]
             | .def _ (.push receiver ..) | .def _ (.pop receiver ..) | .eff (.append receiver ..) |
               .eff (.appendValue receiver ..) | .eff (.popN receiver ..) | .eff (.resize receiver ..) |
               .eff (.clear receiver ..) => getRoots receiver

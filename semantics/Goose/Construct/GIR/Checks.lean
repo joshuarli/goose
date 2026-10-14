@@ -666,3 +666,235 @@ private def fixedGlobalOrdinal : Module :=
 #guard roundTrip fixedGlobalOrdinal
 
 end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def overlappingTargets : Module :=
+  let entry := function "entry" #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) byteTy .value none (some 0)),
+    .def 1 (.callConstruct 1 [] [0] (some 0)),.eff (.destPublish 1 (some 0)),
+    .def 2 (.slotAddr 0),.def 3 (.snapshot .owner 2),.eff (.print [.val 3] (some 0)),
+    .eff (.leave 0),.term (.ret [] none)]⟩] #[⟨byteTy,.immutable,0,0⟩]
+  let member := function "member" #[⟨[(0,.dest byteTy .value)],[
+      .def 1 (.constBool true),.term (.invoke 2 [1] [] 1 [] [⟨0,2,[]⟩,⟨1,3,[]⟩] (some 0))]⟩,
+    ⟨[],[.term (.abort .userAbort (some 0))]⟩,
+    ⟨[(2,.built byteTy .value)],[.def 3 (.destAbandon 0 (some 0)),.eff (.destCancel 3 (some 0)),
+      .def 4 (.destRelocate 2 .exitValue (some 0)),.eff (.print [.text "zero"] (some 0)),.term (.ret [4] (some 0))]⟩,
+    ⟨[(5,.built byteTy .value)],[.def 6 (.destAbandon 0 (some 0)),.eff (.destCancel 6 (some 0)),
+      .def 7 (.destRelocate 5 .exitValue (some 0)),.eff (.print [.text "one"] (some 0)),.term (.ret [7] (some 0))]⟩]
+    #[] [⟨byteTy,.value,none⟩]
+  let helper := function "helper" #[⟨[(0,.data .bool)],[.term (.condbr 0 1 [] 2 [])]⟩,
+    ⟨[],[.def 1 (.targetDest 1 0 (some 0)),.eff (.destBytes 1 [65] (some 0)),
+      .def 2 (.destFinish 1 (some 0)),.term (.escape 1 [2] [] (some 0))]⟩,
+    ⟨[],[.def 3 (.targetDest 0 0 (some 0)),.eff (.destBytes 3 [66] (some 0)),
+      .def 4 (.destFinish 3 (some 0)),.term (.escape 0 [4] [] (some 0))]⟩]
+  let other := function "other" #[⟨[(0,.dest byteTy .value)],[.eff (.destBytes 0 [67] (some 0)),
+    .def 1 (.destFinish 0 (some 0)),.term (.ret [1] (some 0))]⟩] #[] [⟨byteTy,.value,none⟩]
+  { (moduleOf #[{ entry with summary := known [] [] [] true true },
+      { member with summary := known [0] [] [] true true },
+      { helper with params := [.bool], summary := known [] [0,1] [0,1] false false },
+      { other with summary := known [0] [] [] false false }]) with targets := #[⟨1,[]⟩,⟨1,[3]⟩] }
+
+#guard (Validate.validate overlappingTargets).isOk
+#guard observation overlappingTargets == some ("one\nA\n".toUTF8.data.toList,
+  [.begin 0,.begin 1,.write 1 0,.abandon 0,.relocate 1 .exitValue,.publish 1])
+#guard roundTrip overlappingTargets
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def invokeReferenceRoots : Module :=
+  let array := Ty.arr (.int .u8) 2
+  let reference := Ty.ref .readOnly array
+  let entry := function "entry" #[⟨[],[.def 0 (.call 1 [] (some 0)),
+    .def 1 (.snapshot .borrowed 0),.eff (.print [.val 1] (some 0)),.term (.ret [] none)]⟩]
+  let member := function "member" #[⟨[],[.def 0 (.constBool true),
+      .term (.invoke 2 [0] [] 1 [] [⟨0,2,[]⟩] (some 0))]⟩,
+    ⟨[(1,.data reference)],[.term (.ret [1] (some 0))]⟩,
+    ⟨[(2,.data reference)],[.term (.ret [2] (some 0))]⟩] #[] [⟨reference,.register,none⟩]
+  let helper := function "helper" #[⟨[(0,.data .bool)],[.term (.condbr 0 1 [] 2 [])]⟩,
+    ⟨[],[.def 1 (.globalAddr 0),.term (.ret [1] (some 0))]⟩,
+    ⟨[],[.def 2 (.globalAddr 1),.term (.escape 0 [2] [] (some 0))]⟩] #[] [⟨reference,.register,none⟩]
+  let initializer := function "initializer" #[⟨[],[.def 0 (.constInt .u8 65),.def 1 (.constInt .u8 66),
+    .def 2 (.arrLit array [0,1]),.term (.ret [2] (some 0))]⟩] #[] [⟨array,.register,none⟩]
+  let second := function "second" #[⟨[],[.def 0 (.constInt .u8 67),.def 1 (.constInt .u8 68),
+    .def 2 (.arrLit array [0,1]),.term (.ret [2] (some 0))]⟩] #[] [⟨array,.register,none⟩]
+  { (moduleOf #[{ entry with summary := .known ⟨[.global 0,.global 1],[],[],[],[],[],[],[],false,true⟩ },
+      { member with roots := { results := #[[.global 0,.global 1]] }, summary := known },
+      { helper with params := [.bool], roots := { results := #[[.global 0]] }, summary := known [] [0] [0] }]) with
+    globals := #[⟨"a",array,.immutable,{ initializer with summary := known },0⟩,
+      ⟨"b",array,.immutable,{ second with summary := known },0⟩],
+    targets := #[⟨1,[]⟩] }
+
+#guard (Validate.validate invokeReferenceRoots).isOk
+#guard observation invokeReferenceRoots == some ([65,66,10],[])
+#guard roundTrip invokeReferenceRoots
+
+private def invokeReferenceEscape : Module :=
+  { invokeReferenceRoots with funcs := invokeReferenceRoots.funcs.mapIdx fun index f =>
+    if index == 1 then { f with blocks := f.blocks.map fun block => { block with insts := block.insts.map fun
+      | .def result (.constBool _) => .def result (.constBool false)
+      | inst => inst } } else f }
+
+#guard (Validate.validate invokeReferenceEscape).isOk
+#guard observation invokeReferenceEscape == some ("CD\n".toUTF8.data.toList,[])
+#guard roundTrip invokeReferenceEscape
+
+private def omittedInvokeRoot (global : Nat) : Module :=
+  let original := invokeReferenceRoots
+  { original with funcs := original.funcs.mapIdx fun index f =>
+    if index == 1 then { f with roots := { f.roots with results := #[[.global global]] } } else f }
+
+#guard (match Validate.validate (omittedInvokeRoot 0) with | .error v => v.code == .v050 | _ => false)
+#guard (match Validate.validate (omittedInvokeRoot 1) with | .error v => v.code == .v050 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def resultPackRoots : Module :=
+  let original := invokeReferenceRoots
+  let array := Ty.arr (.int .u8) 2
+  let descriptor : ResultDescriptor := ⟨.ref .readOnly array,.register,none⟩
+  let entry := function "entry" #[⟨[],[.def 0 (.call 2 [] (some 0)),.def 1 (.result 0 0),.def 2 (.result 0 1),
+    .def 3 (.snapshot .borrowed 1),.def 4 (.snapshot .borrowed 2),
+    .eff (.print [.val 3,.val 4] (some 0)),.term (.ret [] none)]⟩]
+  let producer := function "pair" #[⟨[],[.def 0 (.globalAddr 0),.def 1 (.globalAddr 1),
+    .term (.ret [0,1] (some 0))]⟩] #[] [descriptor,descriptor]
+  let forward := function "forward" #[⟨[],[.def 0 (.call 1 [] (some 0)),.term (.br 1 [0])]⟩,
+    ⟨[(1,.pack [descriptor,descriptor])],[.def 2 (.result 1 0),.def 3 (.result 1 1),.term (.ret [2,3] (some 0))]⟩]
+    #[] [descriptor,descriptor]
+  { original with funcs := #[
+    { entry with summary := .known ⟨[.global 0,.global 1],[],[],[],[],[],[],[],false,true⟩ },
+    { producer with roots := { results := #[[.global 0],[.global 1]] }, summary := known },
+    { forward with roots := { results := #[[.global 0],[.global 1]] }, summary := known }], targets := #[] }
+
+#guard (Validate.validate resultPackRoots).isOk
+#guard observation resultPackRoots == some ("ABCD\n".toUTF8.data.toList,[])
+#guard roundTrip resultPackRoots
+
+private def missingPackRoot : Module :=
+  { resultPackRoots with funcs := resultPackRoots.funcs.mapIdx fun index f =>
+    if index == 2 then { f with roots := { f.roots with results := #[[],[.global 1]] } } else f }
+
+#guard (match Validate.validate missingPackRoot with | .error v => v.code == .v050 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def borrowedSliceSlotLoad : Module :=
+  let original := sliceBacking true
+  let callee := original.funcs[1]
+  { original with funcs := #[original.funcs[0],{ callee with blocks := #[⟨[(0,.data callee.params[0])],[
+    .eff (.enter 0),.eff (.slotInit 0 0 (some 0)),.def 1 (.slotAddr 0),.def 2 (.load 1),
+    .def 3 (.load 2),.def 4 (.sliceView 3),.eff (.print [.val 4] (some 0)),
+    .eff (.leave 0),.term (.ret [] none)]⟩] }] }
+
+#guard (Validate.validate borrowedSliceSlotLoad).isOk
+#guard observation borrowedSliceSlotLoad == some ([65,66,10],[])
+#guard roundTrip borrowedSliceSlotLoad
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def writerCallWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"dest\",1,\"value\"],[\"built\",1,\"value\"]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_call_construct\",2,1,[],[1],[0]],[\"x_dest_publish\",2,[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,0],[],[]],[\"func\",\"make\",[],[[\"result\",1,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,2]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+
+private def writerCall : Option Module := (Decode.decodeBytes writerCallWire.toUTF8).toOption
+
+#guard writerCall.any (fun module => (Validate.validate module).isOk)
+#guard writerCall.bind observation == some ([],[.begin 0,.write 0 0,.publish 0])
+#guard writerCall.any roundTrip
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def reboundGlobalRoots : Module :=
+  let original := invokeReferenceRoots
+  let slice := Ty.slice .readOnly (.int .u8)
+  let initializer := function "descriptor" #[⟨[],[.def 0 (.globalAddr 0),.def 1 (.snapshot .borrowed 0),
+    .def 2 (.viewSlice .readOnly 1 .omitted .omitted (some 0)),.term (.ret [2] (some 0))]⟩] #[] [⟨slice,.register,none⟩]
+  let entry := function "entry" #[⟨[],[.def 0 (.globalAddr 1),.def 1 (.snapshot .borrowed 0),
+    .def 2 (.viewSlice .readOnly 1 .omitted .omitted (some 0)),.def 3 (.globalAddr 2),
+    .eff (.store 3 2 (some 0)),.def 4 (.call 1 [] (some 0)),.term (.ret [] none)]⟩]
+  let reader := function "reader" #[⟨[],[.def 0 (.globalAddr 2),.def 1 (.load 0),.def 2 (.sliceView 1),
+    .eff (.print [.val 2] (some 0)),.term (.ret [] none)]⟩]
+  { original with
+    funcs := #[
+      { entry with summary := .known ⟨[.global 0,.global 1,.global 2],[.global 2],[],[],[],[],[],[],true,true⟩ },
+      { reader with summary := .known ⟨[.global 0,.global 1,.global 2],[],[],[],[],[],[],[],false,true⟩ }],
+    globals := original.globals ++ #[⟨"descriptor",slice,.mutable,
+      { initializer with
+        roots := { results := #[[.global 0]] },
+        summary := .known ⟨[.global 0],[],[],[],[],[],[],[],true,false⟩ },0⟩], targets := #[] }
+
+#guard (Validate.validate reboundGlobalRoots).isOk
+#guard observation reboundGlobalRoots == some ("CD\n".toUTF8.data.toList,[])
+#guard roundTrip reboundGlobalRoots
+
+private def omittedReboundGlobalRoot : Module :=
+  { reboundGlobalRoots with funcs := reboundGlobalRoots.funcs.mapIdx fun index f =>
+    if index == 1 then { f with summary := .known ⟨[.global 0,.global 2],[],[],[],[],[],[],[],false,true⟩ } else f }
+
+#guard (match Validate.validate omittedReboundGlobalRoot with | .error v => v.code == .v050 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def sliceParameterRebind : Module :=
+  let original := sliceBacking true
+  let slice := Ty.slice .readOnly (.int .u8)
+  let entry := original.funcs[0]
+  let callee := function "rebind" #[⟨[(0,.data (.ref .mutable slice))],[
+    .eff (.enter 0),.eff (.slotInit 0 0 (some 0)),.def 1 (.bytes [67,68] (some 0)),
+    .eff (.store 0 1 (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩]
+    #[⟨.ref .mutable slice,.immutable,0,0⟩]
+  { original with funcs := #[{ entry with slots := #[⟨slice,.mutable,0,0⟩] },
+    { callee with
+      params := [.ref .mutable slice],
+      roots := { params := #[(0,[.param 0])], contents := #[(0,[.global 0,.static])] },
+      summary := .known ⟨[],[.param 0],[],[],[.param 0],[],[],[],false,false⟩ }] }
+
+#guard (Validate.validate sliceParameterRebind).isOk
+#guard observation sliceParameterRebind == some ([],[])
+#guard roundTrip sliceParameterRebind
+
+private def omittedParameterRebind : Module :=
+  { sliceParameterRebind with funcs := sliceParameterRebind.funcs.mapIdx fun index f =>
+    if index == 1 then { f with summary := .known ⟨[],[.param 0],[],[],[],[],[],[],false,false⟩ } else f }
+
+#guard (match Validate.validate omittedParameterRebind with | .error v => v.code == .v050 | _ => false)
+
+end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def specializedParameterEffect : Module :=
+  let original := invokeReferenceRoots
+  let array := Ty.arr (.int .u8) 2
+  let reference := Ty.ref .readOnly array
+  let entry := function "entry" #[⟨[],[.def 0 (.globalAddr 0),.def 1 (.call 1 [0] (some 0)),.term (.ret [] none)]⟩]
+  let callee := function "specialized" #[⟨[(0,.data reference)],[
+    .eff (.enter 0),.eff (.slotInit 0 0 (some 0)),.def 1 (.snapshot .borrowed 0),
+    .eff (.print [.val 1] (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩] #[⟨reference,.immutable,0,0⟩]
+  { original with funcs := #[
+    { entry with summary := .known ⟨[.global 0],[],[],[],[],[],[],[],false,true⟩ },
+    { callee with
+      params := [reference], roots := { params := #[(0,[.global 0])] },
+      summary := .known ⟨[.param 0],[],[],[],[],[],[],[],false,true⟩ }], targets := #[] }
+
+#guard (Validate.validate specializedParameterEffect).isOk
+#guard observation specializedParameterEffect == some ("AB\n".toUTF8.data.toList,[])
+#guard roundTrip specializedParameterEffect
+
+private def omittedSpecializedParameterEffect : Module :=
+  { specializedParameterEffect with funcs := specializedParameterEffect.funcs.mapIdx fun index f =>
+    if index == 1 then { f with summary := known [] [] [] false true } else f }
+
+#guard (match Validate.validate omittedSpecializedParameterEffect with | .error v => v.code == .v050 | _ => false)
+
+end Goose.Construct.GIR.Checks
