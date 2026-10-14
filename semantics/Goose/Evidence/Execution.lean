@@ -639,4 +639,22 @@ theorem RuntimePoint.initializer_of_enterFn_success {cfg : GCfg} {fuel index : N
   have validIndex := (Array.getElem?_eq_some_iff.mp lookup).1
   exact ⟨fr, entered, .initializer positive validIndex initialized lookup entry⟩
 
+theorem initGlobals_append (fuel : Nat) (cfg : GCfg) (first second : List GlobalId) :
+    initGlobals fuel cfg (first ++ second) =
+      (initGlobals fuel cfg first >>= fun _ => initGlobals fuel cfg second) := by
+  induction first with
+  | nil => simp only [List.nil_append, Goose.GIR.initGlobals, pure_bind]
+  | cons global rest ih =>
+    simp only [List.cons_append, Goose.GIR.initGlobals, ih, bind_assoc]
+
+theorem initGlobals_success_prefix {fuel : Nat} {cfg : GCfg} {first second : List GlobalId}
+    {before final : St}
+    (success : initGlobals fuel cfg (first ++ second) before = .ok () final) :
+    ∃ middle, initGlobals fuel cfg first before = .ok () middle ∧
+      initGlobals fuel cfg second middle = .ok () final := by
+  rw [initGlobals_append] at success
+  obtain ⟨value, middle, prefixSuccess, suffixSuccess⟩ := m_bind_ok success
+  cases value
+  exact ⟨middle, prefixSuccess, suffixSuccess⟩
+
 end Goose.Evidence
