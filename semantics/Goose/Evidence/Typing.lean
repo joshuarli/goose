@@ -556,7 +556,7 @@ theorem execPure_fieldAddr_typed {roots : RootDeclarations} {types : Array (Opti
 theorem execPure_arrFill_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {id : ValueId} {element : Ty} {count : Nat}
     {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
-    (metadata : types[id]? = some (some (.data element))) (flat : element.flat = true)
+    (metadata : types[id]? = some (some (.data element)))
     (evaluated : execPure cx fr (.arrFill (.arr element count) id) before = .ok cell after) :
     WeakCellTy roots cell (.data (.arr element count)) ∧ after = before := by
   simp only [execPure, expectFixedCount, pure_bind] at evaluated
@@ -570,7 +570,7 @@ theorem execPure_arrFill_typed {roots : RootDeclarations} {types : Array (Option
   rw [Array.getElem?_replicate] at present
   split at present
   · cases present
-    exact valueTyped.flat flat
+    exact valueTyped
   · contradiction
 
 theorem execPure_indexProven_typed {roots : RootDeclarations} {types : Array (Option VTy)}
@@ -597,7 +597,7 @@ theorem execPure_arrLit_typed {roots : RootDeclarations} {types : Array (Option 
     {cx : FnCtx} {fr : Frame} {ids : List ValueId} {ty element : Ty}
     {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
     (metadata : ∀ id ∈ ids, types[id]? = some (some (.data element)))
-    (arrayType : arrayElem? ty = some element) (elementFlat : element.flat = true)
+    (arrayType : arrayElem? ty = some element)
     (fixedCount : ∀ e count, ty = .arr e count → ids.length = count)
     (evaluated : execPure cx fr (.arrLit ty ids) before = .ok cell after) :
     WeakCellTy roots cell (.data ty) ∧ after = before := by
@@ -605,10 +605,10 @@ theorem execPure_arrLit_typed {roots : RootDeclarations} {types : Array (Option 
   obtain ⟨values, middle, read, evaluated⟩ := m_bind_ok evaluated
   obtain ⟨valuesTyped, size, sameState⟩ := frameTyped.getVals metadata read
   subst middle
-  have elementsTyped : ∀ (i : Nat) (value : Val), values.toArray[i]? = some value → FlatTy element value := by
+  have elementsTyped : ∀ (i : Nat) (value : Val), values.toArray[i]? = some value → WeakValueTy roots value element := by
     intro i value present
     have member : value ∈ values := by simpa using Array.mem_of_getElem? present
-    exact (valuesTyped value member).flat elementFlat
+    exact valuesTyped value member
   cases ty with
   | arr e count =>
     simp only [arrayElem?, Option.some.injEq] at arrayType
@@ -646,13 +646,13 @@ theorem execPure_structLit_typed {roots : RootDeclarations} {types : Array (Opti
   subst middle
   simp only [pure_apply, Res.ok.injEq] at evaluated
   obtain ⟨rfl, rfl⟩ := evaluated
-  exact ⟨⟨rfl, by simpa using fieldsTyped⟩, rfl⟩
+  exact ⟨⟨rfl, by simpa using WeakFieldsTy.ofFlat (roots := roots) fieldsTyped⟩, rfl⟩
 
 theorem pushAppend_typed {cfg : GCfg} {activations : ActivationTypes}
     {location : Loc} {value : Val} {owner element : Ty} {before after : St} {cell : RVal}
     (stateTyped : RuntimeStateTy cfg activations before)
     (target : DeclaredLocation (runtimeDeclarations cfg activations) location owner)
-    (ownerType : owner.ownerElem? = some element) (elementFlat : element.flat = true)
+    (ownerType : owner.ownerElem? = some element)
     (valueTyped : WeakValueTy (runtimeDeclarations cfg activations) value element)
     (evaluated : (appendLoc location #[value] >>= fun index =>
       pure (RVal.val (.ref { location with path := location.path ++ [index] }))) before = .ok cell after) :
@@ -670,7 +670,7 @@ theorem pushAppend_typed {cfg : GCfg} {activations : ActivationTypes}
     obtain ⟨rfl, sameState⟩ := appended
     subst middle
     refine ⟨⟨_, rfl, target.ownerElement ownerType start⟩,
-      stateTyped.1, stateTyped.2.appendOwner target ownerType elementFlat ?_ changed⟩
+      stateTyped.1, stateTyped.2.appendOwner target ownerType ?_ changed⟩
     intro index selected present
     simp only [Array.getElem?_singleton] at present
     split at present
@@ -684,7 +684,7 @@ theorem execPure_push_typed {cfg : GCfg} {activations : ActivationTypes} {fn : F
     (frameTyped : RuntimeFrameTy cfg fn activations fr before)
     (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission owner))))
     (valueMetadata : (fn.valueTypes cfg.mod)[valueId]? = some (some (.data element)))
-    (ownerType : owner.ownerElem? = some element) (elementFlat : element.flat = true)
+    (ownerType : owner.ownerElem? = some element)
     (evaluated : execPure ⟨cfg, fn⟩ fr (.push targetId valueId org) before = .ok cell after) :
     WeakCellTy (runtimeDeclarations cfg activations) cell (.data (.ref .mutable element)) ∧
       RuntimeStateTy cfg activations after := by
@@ -698,12 +698,12 @@ theorem execPure_push_typed {cfg : GCfg} {activations : ActivationTypes} {fn : F
   obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal valueMetadata read
   subst middle
   cases org with
-  | none => exact pushAppend_typed frameTyped.1 target ownerType elementFlat valueTyped evaluated
+  | none => exact pushAppend_typed frameTyped.1 target ownerType valueTyped evaluated
   | some origin =>
     obtain ⟨result, middle, checked, evaluated⟩ := m_bind_ok evaluated
     have sameState := checkCapacityAtOrg_state checked
     subst middle
-    exact pushAppend_typed frameTyped.1 target ownerType elementFlat valueTyped evaluated
+    exact pushAppend_typed frameTyped.1 target ownerType valueTyped evaluated
 
 theorem releaseSlots_typed {roots : RootDeclarations} {fn : Func} {act : ActId}
     {scope : ScopeId} {instanceId : ScopeInst} (count : Nat) {store : Store}

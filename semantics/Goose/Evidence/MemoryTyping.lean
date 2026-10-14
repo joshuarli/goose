@@ -32,20 +32,6 @@ inductive StoragePath : Ty → List Nat → Ty → Prop
 def DeclaredLocation (roots : RootDeclarations) (location : Loc) (ty : Ty) : Prop :=
   ∃ rootTy, roots location.root = some rootTy ∧ StoragePath rootTy location.path ty
 
-def WeakValueTy (roots : RootDeclarations) (value : Val) : Ty → Prop
-  | .ref _ target => ∃ location, value = .ref location ∧ DeclaredLocation roots location target
-  | .slice _ element => (∃ location start len arrayTy,
-      value = .slice location start len ∧ DeclaredLocation roots location arrayTy ∧
-      arrayTy.ownerElem? = some element) ∨
-      ∃ location start len count,
-        value = .slice location start len ∧ DeclaredLocation roots location (.arr element count)
-  | .unit => value = .unit
-  | ty => FlatTy ty value
-
-def WeakStoreTy (roots : RootDeclarations) (store : Store) : Prop :=
-  ∀ root value, store.roots[root]? = some value →
-    ∃ ty, roots root = some ty ∧ WeakValueTy roots value ty
-
 theorem StoragePath.append {a b c : Ty} {p q : List Nat}
     (path : StoragePath a p b) (tail : StoragePath b q c) :
     StoragePath a (p ++ q) c := by
@@ -56,43 +42,6 @@ theorem StoragePath.append {a b c : Ty} {p q : List Nat}
   | shrink _ ih => exact .shrink (ih tail)
   | limited _ ih => exact .limited (ih tail)
   | field field _ ih => exact .field field (ih tail)
-
-theorem WeakValueTy.int {roots : RootDeclarations} {value : Val} {ty : IntTy}
-    (typed : WeakValueTy roots value (.int ty)) : ∃ n, value = .int ty n := by
-  cases value <;> simp_all [WeakValueTy, FlatTy]
-
-theorem WeakValueTy.bool {roots : RootDeclarations} {value : Val}
-    (typed : WeakValueTy roots value .bool) : ∃ b, value = .bool b := by
-  cases value <;> simp_all [WeakValueTy, FlatTy]
-
-theorem WeakValueTy.ofFlat {roots : RootDeclarations} {value : Val} {ty : Ty}
-    (typed : FlatTy ty value) : WeakValueTy roots value ty := by
-  cases ty <;> try exact typed
-  all_goals cases value <;> simp_all [FlatTy]
-
-theorem WeakValueTy.flat {roots : RootDeclarations} {value : Val} {ty : Ty}
-    (flat : ty.flat = true) (typed : WeakValueTy roots value ty) : FlatTy ty value := by
-  cases ty <;> try exact typed
-  all_goals simp [Ty.flat] at flat
-
-theorem WeakValueTy.ownerFlat {roots : RootDeclarations} {value : Val} {ty element : Ty}
-    (owner : ty.ownerElem? = some element) (typed : WeakValueTy roots value ty) : FlatTy ty value := by
-  cases ty <;> try exact typed
-  all_goals simp [Ty.ownerElem?] at owner
-
-theorem WeakValueTy.passable {roots : RootDeclarations} {value : Val} {source target : Ty}
-    (typed : WeakValueTy roots value source) (passing : source.passableTo target = true) :
-    WeakValueTy roots value target := by
-  cases source <;> cases target <;>
-    simp only [Ty.passableTo, Bool.and_eq_true, beq_iff_eq] at passing <;>
-    first
-    | (simp at passing; done)
-    | (obtain ⟨rfl, _⟩ := passing; exact typed)
-    | (cases passing; exact typed)
-    | (injection passing with sameElement sameCount
-       subst sameElement
-       first | (subst sameCount; exact typed) | exact typed)
-    | exact typed
 
 theorem DeclaredLocation.mono {before after : RootDeclarations} {location : Loc} {ty : Ty}
     (extension : before.Extends after) (declared : DeclaredLocation before location ty) :
@@ -125,27 +74,6 @@ theorem DeclaredLocation.ownerElement {roots : RootDeclarations} {location : Loc
     subst other
     exact declared.append (.limited (.root element))
   | _ => simp [Ty.ownerElem?] at ownerType
-
-theorem WeakValueTy.mono {before after : RootDeclarations} {value : Val} {ty : Ty}
-    (extension : before.Extends after) (typed : WeakValueTy before value ty) :
-    WeakValueTy after value ty := by
-  cases ty with
-  | ref permission target =>
-    obtain ⟨location, same, declared⟩ := typed
-    exact ⟨location, same, declared.mono extension⟩
-  | slice permission element =>
-    rcases typed with ⟨location, start, len, arrayTy, same, declared, elementType⟩ |
-      ⟨location, start, len, count, same, declared⟩
-    · exact Or.inl ⟨location, start, len, arrayTy, same, declared.mono extension, elementType⟩
-    · exact Or.inr ⟨location, start, len, count, same, declared.mono extension⟩
-  | _ => exact typed
-
-theorem WeakStoreTy.mono {before after : RootDeclarations} {store : Store}
-    (extension : before.Extends after) (typed : WeakStoreTy before store) :
-    WeakStoreTy after store := by
-  intro root value present
-  obtain ⟨ty, declaration, valueTyped⟩ := typed root value present
-  exact ⟨ty, extension _ _ declaration, valueTyped.mono extension⟩
 
 theorem StoragePath.get {rootTy result : Ty} {path : List Nat} {value selected : Val}
     (declared : StoragePath rootTy path result) (typed : FlatTy rootTy value)
@@ -190,65 +118,387 @@ theorem StoragePath.get {rootTy result : Ty} {path : List Nat} {value selected :
     rw [get_record, arrayPresent] at read
     exact ih fieldTyped read
 
-theorem WeakValueTy.get {roots : RootDeclarations} {rootTy result : Ty}
-    {path : List Nat} {value selected : Val}
-    (declared : StoragePath rootTy path result) (typed : WeakValueTy roots value rootTy)
-    (read : value.get? path = some selected) : WeakValueTy roots selected result := by
-  cases declared with
+mutual
+def WeakValueTy (roots : RootDeclarations) (value : Val) (ty : Ty) : Prop :=
+  match ty, value with
+  | .ref _ target, value => ∃ location, value = .ref location ∧ DeclaredLocation roots location target
+  | .slice _ element, value => (∃ location start len arrayTy,
+      value = .slice location start len ∧ DeclaredLocation roots location arrayTy ∧
+      arrayTy.ownerElem? = some element) ∨
+      ∃ location start len count,
+        value = .slice location start len ∧ DeclaredLocation roots location (.arr element count)
+  | .unit, value => value = .unit
+  | .int ty, value => FlatTy (.int ty) value
+  | .bool, value => FlatTy .bool value
+  | .arr element count, .fixed elements => elements.size = count ∧
+      ∀ (i : Nat) (value : Val), elements[i]? = some value → WeakValueTy roots value element
+  | .grow element, .resizable stored elements
+  | .growshrink element, .resizable stored elements => element = stored ∧
+      ∀ (i : Nat) (value : Val), elements[i]? = some value → WeakValueTy roots value element
+  | .limited element capacity, .limited stored storedCapacity slots len =>
+      element = stored ∧ capacity = storedCapacity ∧ len ≤ capacity ∧ len ≤ slots.size ∧
+      ∀ (i : Nat) (value : Val), slots[i]? = some value → WeakValueTy roots value element
+  | .structT sid fields, .record stored values => sid = stored ∧ WeakFieldsTy roots fields values.toList
+  | _, _ => False
+
+def WeakFieldsTy (roots : RootDeclarations) : TyList → List Val → Prop
+  | .nil, [] => True
+  | .cons ty rest, value :: values => WeakValueTy roots value ty ∧ WeakFieldsTy roots rest values
+  | _, _ => False
+end
+
+mutual
+theorem WeakValueTy.ofFlat {roots : RootDeclarations} {ty : Ty} {value : Val}
+    (typed : FlatTy ty value) : WeakValueTy roots value ty := by
+  cases ty <;> cases value <;> simp only [FlatTy] at typed <;>
+    try contradiction
+  case int.int => exact typed
+  case bool.bool => exact typed
+  case arr.fixed =>
+    exact ⟨typed.1, fun i value present => WeakValueTy.ofFlat (typed.2 i value present)⟩
+  case grow.resizable =>
+    exact ⟨typed.1, fun i value present => WeakValueTy.ofFlat (typed.2 i value present)⟩
+  case growshrink.resizable =>
+    exact ⟨typed.1, fun i value present => WeakValueTy.ofFlat (typed.2 i value present)⟩
+  case limited.limited =>
+    exact ⟨typed.1, typed.2.1, typed.2.2.1, typed.2.2.2.1,
+      fun i value present => WeakValueTy.ofFlat (typed.2.2.2.2 i value present)⟩
+  case structT.record => exact ⟨typed.1, WeakFieldsTy.ofFlat typed.2⟩
+termination_by structural ty
+
+theorem WeakFieldsTy.ofFlat {roots : RootDeclarations} {fields : TyList} {values : List Val}
+    (typed : Goose.Proofs.Memory.FieldsTy fields values) : WeakFieldsTy roots fields values := by
+  cases fields <;> cases values <;> simp only [Goose.Proofs.Memory.FieldsTy] at typed <;>
+    try contradiction
+  case nil.nil => trivial
+  case cons.cons => exact ⟨WeakValueTy.ofFlat typed.1, WeakFieldsTy.ofFlat typed.2⟩
+termination_by structural fields
+end
+
+mutual
+theorem WeakValueTy.flat {roots : RootDeclarations} {ty : Ty} {value : Val}
+    (flat : ty.flat = true) (typed : WeakValueTy roots value ty) : FlatTy ty value := by
+  cases ty <;> cases value <;> simp only [Ty.flat] at flat <;>
+    simp only [WeakValueTy] at typed <;> try contradiction
+  case int.int => exact typed
+  case bool.bool => exact typed
+  case arr.fixed =>
+    exact ⟨typed.1, fun i value present => WeakValueTy.flat flat (typed.2 i value present)⟩
+  case structT.record => exact ⟨typed.1, WeakFieldsTy.flat flat typed.2⟩
+termination_by structural ty
+
+theorem WeakFieldsTy.flat {roots : RootDeclarations} {fields : TyList} {values : List Val}
+    (flat : fields.flat = true) (typed : WeakFieldsTy roots fields values) :
+    Goose.Proofs.Memory.FieldsTy fields values := by
+  cases fields <;> cases values <;> simp only [WeakFieldsTy] at typed <;> try contradiction
+  case nil.nil => trivial
+  case cons.cons =>
+    simp only [TyList.flat, Bool.and_eq_true] at flat
+    exact ⟨WeakValueTy.flat flat.1 typed.1, WeakFieldsTy.flat flat.2 typed.2⟩
+termination_by structural fields
+end
+
+mutual
+theorem WeakValueTy.mono {before after : RootDeclarations} {ty : Ty} {value : Val}
+    (extension : before.Extends after) (typed : WeakValueTy before value ty) : WeakValueTy after value ty := by
+  cases ty with
+  | ref permission target =>
+    obtain ⟨location, same, declared⟩ := typed
+    exact ⟨location, same, declared.mono extension⟩
+  | slice permission element =>
+    rcases typed with ⟨location, start, len, arrayTy, same, declared, elementType⟩ |
+      ⟨location, start, len, count, same, declared⟩
+    · exact Or.inl ⟨location, start, len, arrayTy, same, declared.mono extension, elementType⟩
+    · exact Or.inr ⟨location, start, len, count, same, declared.mono extension⟩
+  | unit | int _ | bool | tuple _ => exact typed
+  | arr element count =>
+    cases value <;> simp only [WeakValueTy] at typed ⊢ <;> try contradiction
+    exact ⟨typed.1, fun i value present => WeakValueTy.mono extension (typed.2 i value present)⟩
+  | grow element | growshrink element =>
+    cases value <;> simp only [WeakValueTy] at typed ⊢ <;> try contradiction
+    exact ⟨typed.1, fun i value present => WeakValueTy.mono extension (typed.2 i value present)⟩
+  | limited element capacity =>
+    cases value <;> simp only [WeakValueTy] at typed ⊢ <;> try contradiction
+    exact ⟨typed.1, typed.2.1, typed.2.2.1, typed.2.2.2.1,
+      fun i value present => WeakValueTy.mono extension (typed.2.2.2.2 i value present)⟩
+  | structT sid fields =>
+    cases value <;> simp only [WeakValueTy] at typed ⊢ <;> try contradiction
+    exact ⟨typed.1, WeakFieldsTy.mono extension typed.2⟩
+termination_by structural ty
+
+theorem WeakFieldsTy.mono {before after : RootDeclarations} {fields : TyList} {values : List Val}
+    (extension : before.Extends after) (typed : WeakFieldsTy before fields values) : WeakFieldsTy after fields values := by
+  cases fields <;> cases values <;> simp only [WeakFieldsTy] at typed ⊢ <;> try contradiction
+  case cons.cons => exact ⟨WeakValueTy.mono extension typed.1, WeakFieldsTy.mono extension typed.2⟩
+termination_by structural fields
+end
+
+theorem WeakFieldsTy.get : ∀ (fields : TyList) (values : List Val), WeakFieldsTy roots fields values →
+    ∀ (i : Nat) (ty : Ty), fields.toList[i]? = some ty →
+      ∃ value, values[i]? = some value ∧ WeakValueTy roots value ty
+  | .nil, values, typed, i, ty, selector => by simp [TyList.toList] at selector
+  | .cons head rest, values, typed, i, ty, selector => by
+    cases values with
+    | nil => contradiction
+    | cons value values =>
+      cases i with
+      | zero =>
+        simp only [TyList.toList, List.getElem?_cons_zero, Option.some.injEq] at selector
+        subst ty
+        exact ⟨value, rfl, typed.1⟩
+      | succ i =>
+        exact WeakFieldsTy.get rest values typed.2 i ty (by simpa [TyList.toList] using selector)
+
+theorem WeakFieldsTy.set {roots : RootDeclarations} {fields : TyList} {values : List Val}
+    {index : Nat} {ty : Ty} {value : Val}
+    (typed : WeakFieldsTy roots fields values) (selector : fields.toList[index]? = some ty)
+    (replacement : WeakValueTy roots value ty) : WeakFieldsTy roots fields (values.set index value) := by
+  cases fields with
+  | nil => simp [TyList.toList] at selector
+  | cons head rest =>
+    cases values with
+    | nil => contradiction
+    | cons old values =>
+      cases index with
+      | zero =>
+        simp only [TyList.toList, List.getElem?_cons_zero, Option.some.injEq] at selector
+        subst ty
+        exact ⟨replacement, typed.2⟩
+      | succ index =>
+        exact ⟨typed.1, WeakFieldsTy.set typed.2 (by simpa [TyList.toList] using selector) replacement⟩
+
+termination_by structural fields
+
+
+theorem WeakValueTy.get {roots : RootDeclarations} {rootTy result : Ty} {path : List Nat}
+    {value selected : Val} (declared : StoragePath rootTy path result)
+    (typed : WeakValueTy roots value rootTy) (read : value.get? path = some selected) :
+    WeakValueTy roots selected result := by
+  induction declared generalizing value with
   | root =>
     simp only [Val.get?, Option.some.injEq] at read
     subst selected
     exact typed
-  | fixed tail => exact .ofFlat (StoragePath.get (.fixed tail) typed read)
-  | grow tail => exact .ofFlat (StoragePath.get (.grow tail) typed read)
-  | shrink tail => exact .ofFlat (StoragePath.get (.shrink tail) typed read)
-  | limited tail => exact .ofFlat (StoragePath.get (.limited tail) typed read)
-  | field selector tail => exact .ofFlat (StoragePath.get (.field selector tail) typed read)
+  | @fixed element count index path result tail ih =>
+    cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i elements
+    rw [get_fixed] at read
+    cases present : elements[index]? with
+    | none => simp [present] at read
+    | some child =>
+      simp only [present, Option.bind_some] at read
+      exact ih (typed.2 index child present) read
+  | @grow element index path result tail ih | @shrink element index path result tail ih =>
+    cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i stored elements
+    rw [get_resizable] at read
+    cases present : elements[index]? with
+    | none => simp [present] at read
+    | some child =>
+      simp only [present, Option.bind_some] at read
+      exact ih (typed.2 index child present) read
+  | @limited element capacity index path result tail ih =>
+    cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i stored storedCapacity slots len
+    rw [get_limited] at read
+    cases present : slots[index]? with
+    | none => simp [present] at read
+    | some child =>
+      simp only [present, Option.bind_some] at read
+      exact ih (typed.2.2.2.2 index child present) read
+  | @field sid fields index fieldTy path result selector tail ih =>
+    cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i stored values
+    obtain ⟨child, present, childTyped⟩ := WeakFieldsTy.get fields values.toList typed.2 index fieldTy selector
+    have arrayPresent : values[index]? = some child := by simpa using present
+    rw [get_record, arrayPresent] at read
+    exact ih childTyped read
 
-theorem FlatTy.notRefLike {ty : Ty} {value : Val} (typed : FlatTy ty value) :
-    ty.isRefLike = false := by
-  cases ty <;> cases value <;> simp_all [Ty.isRefLike, FlatTy]
+theorem elements_set {roots : RootDeclarations} {element : Ty} {values : Array Val}
+    {index : Nat} (bound : index < values.size) {replacement : Val}
+    (typed : ∀ (i : Nat) (value : Val), values[i]? = some value → WeakValueTy roots value element)
+    (newTyped : WeakValueTy roots replacement element) :
+    ∀ (i : Nat) (value : Val), (values.set index replacement bound)[i]? = some value → WeakValueTy roots value element := by
+  intro i value present
+  rw [Array.getElem?_set] at present
+  split at present
+  · cases present
+    exact newTyped
+  · exact typed i value present
 
-theorem WeakValueTy.referencePath {roots : RootDeclarations} {rootTy result : Ty}
-    {path : List Nat} {value selected : Val}
+theorem WeakValueTy.modifyAt {roots : RootDeclarations} {rootTy result : Ty} {path : List Nat}
+    {value changed : Val} {f : Val → Option Val}
     (declared : StoragePath rootTy path result) (typed : WeakValueTy roots value rootTy)
-    (read : value.get? path = some selected) (reference : result.isRefLike = true) :
-    path = [] ∧ rootTy = result := by
-  have impossible (flatTyped : FlatTy result selected) : False := by
-    have notRef := Goose.Evidence.FlatTy.notRefLike flatTyped
-    rw [reference] at notRef
-    contradiction
-  cases declared with
-  | root => exact ⟨rfl, rfl⟩
-  | fixed tail => exact False.elim (impossible (StoragePath.get (.fixed tail) typed read))
-  | grow tail => exact False.elim (impossible (StoragePath.get (.grow tail) typed read))
-  | shrink tail => exact False.elim (impossible (StoragePath.get (.shrink tail) typed read))
-  | limited tail => exact False.elim (impossible (StoragePath.get (.limited tail) typed read))
-  | field selector tail => exact False.elim (impossible (StoragePath.get (.field selector tail) typed read))
+    (modified : value.modifyAt? path f = some changed)
+    (preserve : ∀ old new, WeakValueTy roots old result → f old = some new → WeakValueTy roots new result) :
+    WeakValueTy roots changed rootTy := by
+  induction declared generalizing value changed with
+  | root => exact preserve value changed typed modified
+  | @fixed element count index path result tail ih =>
+    cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i values
+    simp only [Val.modifyAt?] at modified
+    split at modified
+    · rename_i bound
+      cases childChange : values[index].modifyAt? path f with
+      | none => simp [childChange] at modified
+      | some replacement =>
+        simp only [childChange, Option.some.injEq] at modified
+        subst changed
+        have childTyped := ih (typed.2 index values[index] (by simp)) childChange preserve
+        exact ⟨by simpa using typed.1, elements_set bound typed.2 childTyped⟩
+    · contradiction
+  | @grow element index path result tail ih | @shrink element index path result tail ih =>
+    cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i stored values
+    simp only [Val.modifyAt?] at modified
+    split at modified
+    · rename_i bound
+      cases childChange : values[index].modifyAt? path f with
+      | none => simp [childChange] at modified
+      | some replacement =>
+        simp only [childChange, Option.some.injEq] at modified
+        subst changed
+        have childTyped := ih (typed.2 index values[index] (by simp)) childChange preserve
+        exact ⟨typed.1, elements_set bound typed.2 childTyped⟩
+    · contradiction
+  | @limited element capacity index path result tail ih =>
+    cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i stored storedCapacity slots len
+    simp only [Val.modifyAt?] at modified
+    split at modified
+    · rename_i bound
+      cases childChange : slots[index].modifyAt? path f with
+      | none => simp [childChange] at modified
+      | some replacement =>
+        simp only [childChange, Option.some.injEq] at modified
+        subst changed
+        have childTyped := ih (typed.2.2.2.2 index slots[index] (by simp)) childChange preserve
+        exact ⟨typed.1, typed.2.1, typed.2.2.1, by simpa using typed.2.2.2.1,
+          elements_set bound typed.2.2.2.2 childTyped⟩
+    · contradiction
+  | @field sid fields index fieldTy path result selector tail ih =>
+    cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i stored values
+    simp only [Val.modifyAt?] at modified
+    split at modified
+    · rename_i bound
+      cases childChange : values[index].modifyAt? path f with
+      | none => simp [childChange] at modified
+      | some replacement =>
+        simp only [childChange, Option.some.injEq] at modified
+        subst changed
+        obtain ⟨child, present, oldTyped⟩ := WeakFieldsTy.get fields values.toList typed.2 index fieldTy selector
+        have arrayPresent : values[index]? = some child := by simpa using present
+        rw [Array.getElem?_eq_getElem bound] at arrayPresent
+        cases arrayPresent
+        have childTyped := ih oldTyped childChange preserve
+        refine ⟨typed.1, ?_⟩
+        rw [Array.toList_set]
+        exact WeakFieldsTy.set typed.2 selector childTyped
+    · contradiction
 
-theorem WeakStoreTy.read {roots : RootDeclarations} {store : Store} {location : Loc}
-    {ty : Ty} {value : Val} (typed : WeakStoreTy roots store)
-    (declared : DeclaredLocation roots location ty) (read : store.read location = .ok value) :
-    WeakValueTy roots value ty := by
-  obtain ⟨rootTy, declaration, path⟩ := declared
-  obtain ⟨rootValue, present, selected⟩ := (read_ok_iff _ _ _).mp read
-  obtain ⟨storedTy, storedDeclaration, storedTyped⟩ := typed location.root rootValue present
-  have same : storedTy = rootTy := Option.some.inj (storedDeclaration.symm.trans declaration)
-  subst storedTy
-  exact storedTyped.get path selected
 
-theorem WeakStoreTy.readLoc {roots : RootDeclarations} {before after : St} {location : Loc}
-    {ty : Ty} {value : Val} (typed : WeakStoreTy roots before.store)
-    (declared : DeclaredLocation roots location ty)
-    (read : Goose.Core.readLoc location before = .ok value after) :
-    WeakValueTy roots value ty ∧ after = before := by
-  unfold Goose.Core.readLoc at read
-  cases stored : before.store.read location with
-  | error fault => simp [stored] at read
-  | ok found =>
-    simp only [stored, Res.ok.injEq] at read
-    obtain ⟨rfl, rfl⟩ := read
-    exact ⟨typed.read declared stored, rfl⟩
+theorem elements_extract {roots : RootDeclarations} {element : Ty} {values : Array Val}
+    (typed : ∀ (i : Nat) (value : Val), values[i]? = some value → WeakValueTy roots value element)
+    (start stop : Nat) :
+    ∀ (i : Nat) (value : Val), (values.extract start stop)[i]? = some value → WeakValueTy roots value element := by
+  intro i value present
+  rw [Array.getElem?_extract] at present
+  split at present
+  · exact typed (start + i) value present
+  · contradiction
+
+theorem elements_append {roots : RootDeclarations} {element : Ty} {left right : Array Val}
+    (leftTyped : ∀ (i : Nat) (value : Val), left[i]? = some value → WeakValueTy roots value element)
+    (rightTyped : ∀ (i : Nat) (value : Val), right[i]? = some value → WeakValueTy roots value element) :
+    ∀ (i : Nat) (value : Val), (left ++ right)[i]? = some value → WeakValueTy roots value element := by
+  intro i value present
+  by_cases leftBound : i < left.size
+  · rw [Array.getElem?_append_left leftBound] at present
+    exact leftTyped i value present
+  · rw [Array.getElem?_append_right (by omega)] at present
+    exact rightTyped (i - left.size) value present
+
+theorem WeakValueTy.appendOwner {roots : RootDeclarations} {owner element : Ty} {old new : Val}
+    {values : Array Val} (ownerType : owner.ownerElem? = some element)
+    (typed : WeakValueTy roots old owner)
+    (valuesTyped : ∀ (i : Nat) (value : Val), values[i]? = some value → WeakValueTy roots value element)
+    (appended : old.appendAll values = some new) : WeakValueTy roots new owner := by
+  cases owner <;> simp only [Ty.ownerElem?] at ownerType <;> try contradiction
+  all_goals simp only [Option.some.injEq] at ownerType; subst element
+  case grow element =>
+    cases old <;> simp only [WeakValueTy] at typed <;> try contradiction
+    simp only [Val.appendAll, Option.some.injEq] at appended
+    subst new
+    exact ⟨typed.1, elements_append typed.2 valuesTyped⟩
+  case growshrink element =>
+    cases old <;> simp only [WeakValueTy] at typed <;> try contradiction
+    simp only [Val.appendAll, Option.some.injEq] at appended
+    subst new
+    exact ⟨typed.1, elements_append typed.2 valuesTyped⟩
+  case limited element capacity =>
+    cases old <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i stored storedCapacity slots len
+    obtain ⟨rfl, rfl, withinCapacity, withinSlots, slotsTyped⟩ := typed
+    simp only [Val.appendAll] at appended
+    split at appended
+    · rename_i capacityBound
+      have size := limitedAppendSlots_written_size slots values len withinSlots
+      have extent := limitedAppendSlots_written_le_size slots values len
+      simp only [Option.some.injEq] at appended
+      subst new
+      refine ⟨rfl, rfl, ?_, ?_, ?_⟩
+      · simpa only [Array.size_append, Array.size_extract, Nat.min_eq_left withinSlots,
+          Nat.sub_zero] using capacityBound
+      · exact extent
+      · exact elements_append (elements_append (elements_extract slotsTyped 0 len) valuesTyped)
+          (elements_extract slotsTyped _ _)
+    · contradiction
+
+theorem WeakValueTy.truncateOwner {roots : RootDeclarations} {owner element : Ty} {old new : Val}
+    {len : Nat} (ownerType : owner.ownerElem? = some element)
+    (typed : WeakValueTy roots old owner) (truncated : old.truncate len = some new) : WeakValueTy roots new owner := by
+  cases owner <;> simp only [Ty.ownerElem?] at ownerType <;> try contradiction
+  all_goals simp only [Option.some.injEq] at ownerType; subst element
+  case grow element =>
+    cases old <;> simp only [WeakValueTy] at typed <;> try contradiction
+    simp only [Val.truncate] at truncated
+    split at truncated
+    · simp only [Option.some.injEq] at truncated
+      subst new
+      exact ⟨typed.1, elements_extract typed.2 0 len⟩
+    · contradiction
+  case growshrink element =>
+    cases old <;> simp only [WeakValueTy] at typed <;> try contradiction
+    simp only [Val.truncate] at truncated
+    split at truncated
+    · simp only [Option.some.injEq] at truncated
+      subst new
+      exact ⟨typed.1, elements_extract typed.2 0 len⟩
+    · contradiction
+  case limited element capacity =>
+    cases old <;> simp only [WeakValueTy] at typed <;> try contradiction
+    rename_i stored storedCapacity slots oldLen
+    simp only [Val.truncate] at truncated
+    split at truncated
+    · rename_i shorter
+      simp only [Option.some.injEq] at truncated
+      subst new
+      exact ⟨typed.1, typed.2.1, Nat.le_trans shorter typed.2.2.1,
+        Nat.le_trans shorter typed.2.2.2.1, typed.2.2.2.2⟩
+    · contradiction
+
+
+def WeakStoreTy (roots : RootDeclarations) (store : Store) : Prop :=
+  ∀ root value, store.roots[root]? = some value →
+    ∃ ty, roots root = some ty ∧ WeakValueTy roots value ty
+
+theorem WeakStoreTy.mono {before after : RootDeclarations} {store : Store}
+    (extension : before.Extends after) (typed : WeakStoreTy before store) : WeakStoreTy after store := by
+  intro root value present
+  obtain ⟨ty, declaration, valueTyped⟩ := typed root value present
+  exact ⟨ty, extension _ _ declaration, valueTyped.mono extension⟩
 
 theorem WeakStoreTy.release {roots : RootDeclarations} {store : Store} {root : RootInst}
     (typed : WeakStoreTy roots store) : WeakStoreTy roots (store.release root) := by
@@ -276,158 +526,55 @@ theorem WeakStoreTy.introduce {roots : RootDeclarations} {store : Store} {root :
     exact ⟨ty, declared, valueTyped⟩
   · exact typed other stored present
 
-theorem WeakStoreTy.rootStep {roots : RootDeclarations} {before after : Store}
-    (typed : WeakStoreTy roots before)
-    (rootTypes : RootTyLe before after)
-    (references : ∀ (root : RootInst) (value : Val), before.roots[root]? = some value →
-      (Goose.Core.Sound.IsRef value ∨ value = .unit) → after.roots[root]? = some value)
-    (existing : ∀ (root : RootInst) (value : Val), after.roots[root]? = some value → before.roots[root]? ≠ none) :
-    WeakStoreTy roots after := by
-  intro root value present
-  have oldPresent := existing root value present
-  cases old : before.roots[root]? with
-  | none => exact False.elim (oldPresent old)
-  | some oldValue =>
-    obtain ⟨ty, declared, valueTyped⟩ := typed root oldValue old
-    refine ⟨ty, declared, ?_⟩
-    have flatTransfer (flatTyped : FlatTy ty oldValue) : WeakValueTy roots value ty := by
-      have locationTyped : LocTy before ⟨root, []⟩ ty :=
-        ⟨oldValue, (read_ok_iff _ _ _).mpr ⟨oldValue, old, rfl⟩, flatTyped⟩
-      obtain ⟨newValue, read, newTyped⟩ := rootTypes root ty locationTyped
-      obtain ⟨rootValue, newPresent, rootRead⟩ := (read_ok_iff _ _ _).mp read
-      rw [present] at newPresent
-      cases newPresent
-      simp only [Val.get?, Option.some.injEq] at rootRead
-      subst newValue
-      exact .ofFlat newTyped
-    cases ty with
-    | unit =>
-      have kept := references root oldValue old (Or.inr valueTyped)
-      rw [present] at kept
-      cases kept
-      exact valueTyped
-    | ref permission target =>
-      obtain ⟨location, same, declaredLocation⟩ := valueTyped
-      have kept := references root oldValue old (Or.inl (by rw [same]; trivial))
-      rw [present] at kept
-      cases kept
-      exact ⟨location, same, declaredLocation⟩
-    | slice permission element =>
-      have isRef : Goose.Core.Sound.IsRef oldValue := by
-        rcases valueTyped with ⟨location, start, len, arrayTy, same, rest⟩ |
-          ⟨location, start, len, count, same, rest⟩
-        all_goals rw [same]; trivial
-      have kept := references root oldValue old (Or.inl isRef)
-      rw [present] at kept
-      cases kept
-      exact valueTyped
-    | _ => exact flatTransfer valueTyped
+theorem WeakStoreTy.read {roots : RootDeclarations} {store : Store} {location : Loc}
+    {ty : Ty} {value : Val} (typed : WeakStoreTy roots store)
+    (declared : DeclaredLocation roots location ty) (read : store.read location = .ok value) :
+    WeakValueTy roots value ty := by
+  obtain ⟨rootTy, declaration, path⟩ := declared
+  obtain ⟨rootValue, present, selected⟩ := (read_ok_iff _ _ _).mp read
+  obtain ⟨storedTy, storedDeclaration, storedTyped⟩ := typed location.root rootValue present
+  have same : storedTy = rootTy := Option.some.inj (storedDeclaration.symm.trans declaration)
+  subst storedTy
+  exact storedTyped.get path selected
 
-theorem WeakStoreTy.flatStep {roots : RootDeclarations} {before after : Store}
-    (typed : WeakStoreTy roots before)
-    (transition : Goose.Core.Sound.FlatStep before after)
-    (units : ∀ (root : RootInst), before.roots[root]? = some .unit → after.roots[root]? = some .unit) :
-    WeakStoreTy roots after := by
-  apply typed.rootStep (RootTyLe.of_storeLe transition.le)
-  · intro root value present guarded
-    rcases guarded with isRef | unitValue
-    · exact transition.keep root value present isRef
-    · subst value
-      exact units root present
-  · intro root value present
-    rcases transition.back root value present with old | changed
-    · simp [old]
-    · exact changed.2
-
-theorem modify_preserves_unit {before after : Store} {location : Loc} {f : Val → Option Val}
-    {selected : Val} {ty : Ty} (read : before.read location = .ok selected)
-    (selectedTyped : FlatTy ty selected) (modified : before.modify location f = .ok after) :
-    ∀ (root : RootInst), before.roots[root]? = some .unit → after.roots[root]? = some .unit := by
-  obtain ⟨old, oldPresent, oldRead⟩ := (read_ok_iff _ _ _).mp read
-  intro root present
-  by_cases same : root = location.root
-  · subst root
-    rw [present] at oldPresent
-    cases oldPresent
-    cases path : location.path <;> simp [path, Val.get?, Val.children?, Val.elems?] at oldRead
-    subst selected
-    cases ty <;> simp [FlatTy] at selectedTyped
-  · have agree := modify_roots_agree_except before after location f modified root same
-    rw [agree]
-    exact present
-
-theorem WeakStoreTy.writeFlat {roots : RootDeclarations} {before after : Store}
-    {location : Loc} {value : Val} {ty : Ty}
-    (typed : WeakStoreTy roots before)
-    (target : DeclaredLocation roots location ty) (flat : ty.flat = true)
-    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
-    WeakStoreTy roots after := by
-  obtain ⟨old, selected, new, rebuilt, rootPresent, oldRead, replaced, modified, roots⟩ :=
-    modify_spec before after location (fun _ => some value) written
-  have read : before.read location = .ok selected :=
-    (read_ok_iff _ _ _).mpr ⟨old, rootPresent, oldRead⟩
-  have selectedTyped := (typed.read target read).flat flat
-  exact typed.flatStep (Goose.Core.Sound.write_flatStep before after location value ty
-    flat ⟨selected, read, selectedTyped⟩ (valueTyped.flat flat) written)
-    (modify_preserves_unit read selectedTyped written)
-
-theorem WeakStoreTy.writeReference {roots : RootDeclarations} {before after : Store}
-    {location : Loc} {value : Val} {ty : Ty} (typed : WeakStoreTy roots before)
-    (target : DeclaredLocation roots location ty) (reference : ty.isRefLike = true)
-    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
-    WeakStoreTy roots after := by
+theorem WeakStoreTy.modify {roots : RootDeclarations} {before after : Store} {location : Loc}
+    {ty : Ty} {f : Val → Option Val} (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location ty)
+    (preserve : ∀ old new, WeakValueTy roots old ty → f old = some new → WeakValueTy roots new ty)
+    (modified : before.modify location f = .ok after) : WeakStoreTy roots after := by
   obtain ⟨rootTy, declaration, path⟩ := target
-  obtain ⟨old, selected, new, rebuilt, rootPresent, oldRead, replaced, modified, rootMap⟩ :=
-    modify_spec before after location (fun _ => some value) written
+  obtain ⟨old, selected, new, rebuilt, rootPresent, oldRead, replaced, changed, rootMap⟩ :=
+    modify_spec before after location f modified
   obtain ⟨storedTy, storedDeclaration, oldTyped⟩ := typed location.root old rootPresent
   have sameTy : storedTy = rootTy := Option.some.inj (storedDeclaration.symm.trans declaration)
   subst storedTy
-  obtain ⟨emptyPath, sameTy⟩ := oldTyped.referencePath path oldRead reference
-  subst rootTy
-  cases location with
-  | mk root selectors =>
-    simp only [] at emptyPath
-    subst selectors
-    simp only [Val.modifyAt?, Option.some.injEq] at modified
-    subst rebuilt
-    intro other stored present
-    rw [rootMap, Goose.Core.Sound.get_reinsert] at present
-    by_cases same : root = other
-    · subst other
-      simp only [↓reduceIte, Option.some.injEq] at present
-      subst stored
-      exact ⟨ty, declaration, valueTyped⟩
-    · simp only [same, ↓reduceIte] at present
-      exact typed other stored present
+  have newTyped := oldTyped.modifyAt path changed preserve
+  intro root value present
+  rw [rootMap, Goose.Core.Sound.get_reinsert] at present
+  by_cases same : location.root = root
+  · subst root
+    simp only [↓reduceIte, Option.some.injEq] at present
+    subst value
+    exact ⟨rootTy, declaration, newTyped⟩
+  · simp only [same, ↓reduceIte] at present
+    exact typed root value present
 
-theorem WeakStoreTy.writeReadable {roots : RootDeclarations} {before after : Store}
-    {location : Loc} {value : Val} {ty : Ty} (typed : WeakStoreTy roots before)
-    (target : DeclaredLocation roots location ty) (readable : ty.readable = true)
-    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
-    WeakStoreTy roots after := by
-  cases ty with
-  | ref permission targetTy => exact typed.writeReference target rfl valueTyped written
-  | slice permission element => exact typed.writeReference target rfl valueTyped written
-  | _ => exact typed.writeFlat target readable valueTyped written
+theorem WeakStoreTy.write {roots : RootDeclarations} {before after : Store} {location : Loc}
+    {ty : Ty} {value : Val} (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location ty) (valueTyped : WeakValueTy roots value ty)
+    (written : before.write location value = .ok after) : WeakStoreTy roots after := by
+  apply typed.modify target _ written
+  intro old new oldTyped replaced
+  cases replaced
+  exact valueTyped
 
 theorem WeakStoreTy.appendOwner {roots : RootDeclarations} {before after : Store}
     {location : Loc} {values : Array Val} {owner element : Ty} {index : Nat}
-    (typed : WeakStoreTy roots before)
-    (target : DeclaredLocation roots location owner) (ownerType : owner.ownerElem? = some element)
-    (flat : element.flat = true)
+    (typed : WeakStoreTy roots before) (target : DeclaredLocation roots location owner)
+    (ownerType : owner.ownerElem? = some element)
     (valuesTyped : ∀ (i : Nat) (value : Val), values[i]? = some value → WeakValueTy roots value element)
     (appended : before.append location values = .ok (after, index)) : WeakStoreTy roots after := by
-  have successfulRead : ∃ selected, before.read location = .ok selected := by
-    rcases append_spec before after location values index appended with
-      ⟨elementTy, elements, read, rest⟩ | ⟨elementTy, capacity, slots, len, read, rest⟩
-    · exact ⟨_, read⟩
-    · exact ⟨_, read⟩
-  obtain ⟨selected, read⟩ := successfulRead
-  have selectedTyped := (typed.read target read).ownerFlat ownerType
-  apply typed.flatStep (Goose.Core.Sound.append_flatStep_owner before after location
-    values index owner element ownerType flat ⟨selected, read, selectedTyped⟩
-    (fun i value present => (valuesTyped i value present).flat flat) appended)
-  apply modify_preserves_unit read selectedTyped
+  apply typed.modify target (fun _old _new oldTyped changed => oldTyped.appendOwner ownerType valuesTyped changed)
   rcases append_spec before after location values index appended with
     ⟨elementTy, elements, read, size, modified⟩ |
     ⟨elementTy, capacity, slots, len, read, size, modified⟩
@@ -435,61 +582,63 @@ theorem WeakStoreTy.appendOwner {roots : RootDeclarations} {before after : Store
 
 theorem WeakStoreTy.truncateOwner {roots : RootDeclarations} {before after : Store}
     {location : Loc} {owner element : Ty} {len : Nat}
-    (typed : WeakStoreTy roots before)
-    (target : DeclaredLocation roots location owner) (ownerType : owner.ownerElem? = some element)
-    (truncated : before.truncate location len = .ok after) : WeakStoreTy roots after := by
-  obtain ⟨old, selected, new, rebuilt, rootPresent, oldRead, replaced, modified, rootMap⟩ :=
-    modify_spec before after location (Val.truncate len) truncated
-  have read : before.read location = .ok selected :=
-    (read_ok_iff _ _ _).mpr ⟨old, rootPresent, oldRead⟩
-  have selectedTyped := (typed.read target read).ownerFlat ownerType
-  have ownerTyped : LocTy before location owner := ⟨selected, read, selectedTyped⟩
-  have rootTypes : RootTyLe before after := by
-    cases owner with
-    | grow other =>
-      exact truncate_growshrink_rootTyLe before after location len other
-        ownerTyped.grow_to_growshrink truncated
-    | growshrink other =>
-      exact truncate_growshrink_rootTyLe before after location len other ownerTyped truncated
-    | limited other capacity =>
-      intro root ty locationTyped
-      apply truncate_limited_locTy before after location ⟨root, []⟩ len other capacity ty
-        ownerTyped truncated _ locationTyped
-      by_cases same : root = location.root
-      · exact Or.inr (Or.inl ⟨same, by simp⟩)
-      · exact Or.inl same
-    | _ => simp [Ty.ownerElem?] at ownerType
-  have oldNotRef : ¬ Goose.Core.Sound.IsRef old := by
-    apply (Goose.Core.Sound.modifyAt_notRef (Val.truncate len) location.path old rebuilt
-      selected modified oldRead (Goose.Core.Sound.flat_not_ref selectedTyped) _).1
-    intro value shortened
-    cases selected <;> simp only [Val.truncate] at shortened
-    all_goals first
-      | contradiction
-      | (split at shortened
-         · cases shortened; simp [Goose.Core.Sound.IsRef]
-         · contradiction)
-  apply typed.rootStep rootTypes
-  · intro root value present guarded
-    by_cases same : root = location.root
-    · subst root
-      rw [rootPresent] at present
-      cases present
-      rcases guarded with isRef | unitValue
-      · exact False.elim (oldNotRef isRef)
-      · subst old
-        cases path : location.path <;> simp [path, Val.get?, Val.children?, Val.elems?] at oldRead
-        subst selected
-        cases owner <;> simp [FlatTy] at selectedTyped
-    · have agree := truncate_except_owner before after location len truncated root same
-      rw [agree]
-      exact present
-  · intro root value present
-    by_cases same : root = location.root
-    · subst root
-      simp [rootPresent]
-    · have agree := truncate_except_owner before after location len truncated root same
-      rw [agree] at present
-      simp [present]
+    (typed : WeakStoreTy roots before) (target : DeclaredLocation roots location owner)
+    (ownerType : owner.ownerElem? = some element) (truncated : before.truncate location len = .ok after) :
+    WeakStoreTy roots after :=
+  typed.modify target (fun _old _new oldTyped changed => oldTyped.truncateOwner ownerType changed) truncated
+
+
+theorem WeakValueTy.int {roots : RootDeclarations} {value : Val} {ty : IntTy}
+    (typed : WeakValueTy roots value (.int ty)) : ∃ n, value = .int ty n := by
+  cases value <;> simp_all [WeakValueTy, FlatTy]
+
+theorem WeakValueTy.bool {roots : RootDeclarations} {value : Val}
+    (typed : WeakValueTy roots value .bool) : ∃ b, value = .bool b := by
+  cases value <;> simp_all [WeakValueTy, FlatTy]
+
+theorem WeakValueTy.passable {roots : RootDeclarations} {value : Val} {source target : Ty}
+    (typed : WeakValueTy roots value source) (passing : source.passableTo target = true) :
+    WeakValueTy roots value target := by
+  cases source <;> cases target <;>
+    simp only [Ty.passableTo, Bool.and_eq_true, beq_iff_eq] at passing <;>
+    first
+    | (simp at passing; done)
+    | (obtain ⟨rfl, _⟩ := passing; exact typed)
+    | (cases passing; exact typed)
+    | (injection passing with sameElement sameCount
+       subst sameElement
+       first | (subst sameCount; exact typed) | exact typed)
+    | exact typed
+
+theorem WeakStoreTy.readLoc {roots : RootDeclarations} {before after : St} {location : Loc}
+    {ty : Ty} {value : Val} (typed : WeakStoreTy roots before.store)
+    (declared : DeclaredLocation roots location ty)
+    (read : Goose.Core.readLoc location before = .ok value after) :
+    WeakValueTy roots value ty ∧ after = before := by
+  unfold Goose.Core.readLoc at read
+  cases stored : before.store.read location with
+  | error fault => simp [stored] at read
+  | ok found =>
+    simp only [stored, Res.ok.injEq] at read
+    obtain ⟨rfl, rfl⟩ := read
+    exact ⟨typed.read declared stored, rfl⟩
+
+theorem WeakStoreTy.writeFlat {roots : RootDeclarations} {before after : Store}
+    {location : Loc} {value : Val} {ty : Ty} (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location ty) (_flat : ty.flat = true)
+    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
+    WeakStoreTy roots after := typed.write target valueTyped written
+
+theorem WeakStoreTy.writeReference {roots : RootDeclarations} {before after : Store}
+    {location : Loc} {value : Val} {ty : Ty} (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location ty) (_reference : ty.isRefLike = true)
+    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
+    WeakStoreTy roots after := typed.write target valueTyped written
+
+theorem WeakStoreTy.writeReadable {roots : RootDeclarations} {before after : Store}
+    {location : Loc} {value : Val} {ty : Ty} (typed : WeakStoreTy roots before)
+    (target : DeclaredLocation roots location ty) (_readable : ty.readable = true)
+    (valueTyped : WeakValueTy roots value ty) (written : before.write location value = .ok after) :
+    WeakStoreTy roots after := typed.write target valueTyped written
 
 end Goose.Evidence

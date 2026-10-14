@@ -39,6 +39,18 @@ private def module : GIR.Module :=
 #guard match run 20 .release module with | .done .returned "" => true | _ => false
 #guard (entry.valueTypes module)[1]? == some (some (.data (.arr (.ref .readOnly .unit) 1)))
 
+private theorem referenceArrayTyped :
+    WeakValueTy (runtimeDeclarations ⟨.release, module⟩ (fun _ => none))
+      (.fixed #[.ref ⟨.global 0, []⟩]) (.arr (.ref .readOnly .unit) 1) := by
+  refine ⟨rfl, ?_⟩
+  intro index selected present
+  simp only [Array.getElem?_singleton] at present
+  split at present
+  · cases present
+    refine ⟨_, rfl, .unit, ?_, .root .unit⟩
+    simp [runtimeDeclarations, module]
+  · contradiction
+
 end AggregateReferences
 
 theorem enterBranch_typed {cfg : GCfg} {activations : ActivationTypes} {fn : Func}
