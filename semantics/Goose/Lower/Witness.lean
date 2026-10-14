@@ -39,6 +39,7 @@ def assertFail : String := include_str "../../../test/gir/golden/gir_assert_fail
 def userAbort : String := include_str "../../../test/gir/golden/gir_user_abort.core.json"
 def exitCode : String := include_str "../../../test/gir/golden/gir_exit_code.core.json"
 def blockValue : String := include_str "../../../test/gir/golden/gir_ord02.core.json"
+def structLocal : String := include_str "../../../test/semantics/golden/struct_local.core.json"
 
 /-- A short instance of the committed counting while, with the same condition and body. -/
 def countingWhile : String :=
@@ -80,6 +81,12 @@ def hasCoveredWhile (bs : ByteArray) : Bool :=
 #guard (agreeLine .release branches.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"assert\""
 #guard (agreeLine .debug branches.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"assert\""
 #guard (agreeLine .debug intOverflow.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"int_overflow\""
+
+#guard covered structLocal.toUTF8
+#guard (agreeLine .release structLocal.toUTF8).startsWith
+  "[\"agree\",[\"done\",[\"returned\"],\"1 42 7\\n\"]"
+#guard (agreeLine .debug structLocal.toUTF8).startsWith
+  "[\"agree\",[\"done\",[\"returned\"],\"1 42 7\\n\"]"
 
 open Goose.Core Goose.GIR
 
