@@ -582,6 +582,40 @@ def publishOwner : Nat → LayoutEnv → Loc → StoredValue → DestinationId �
           writeLoc fuel config location (.stored { stored with count := storage.publishedCount, destination := some destination, writtenCount := max stored.writtenCount storage.publishedCount })
       | .replacement _ => fault .flow
 
+def openElementReceiving (module : LayoutEnv) (owner : ActId) (location : Loc)
+    (stored : StoredValue) (element : Ty) (knownCount : Option Nat)
+    (origin : OriginId) : EvalM DestinationId := do
+  let (_, run) ← sampledStored stored
+  let receiver : Loc := ⟨location.root, location.path ++ [run.count]⟩
+  let layout ← receivingLayout module element
+  match stored.destination with
+  | some id =>
+      let pending ← getDestination id
+      match pending.progress with
+      | .built _ => liftConstruction origin (openElementExtension id element layout knownCount receiver)
+      | .published _ =>
+          let capability : Core.Destination Ty := ⟨0, receiver, element, element, .value, 0, owner⟩
+          liftConstruction origin (openDestination stored.storage capability layout knownCount)
+      | _ => fault .flow
+  | none =>
+      let capability : Core.Destination Ty := ⟨0, receiver, element, element, .value, 0, owner⟩
+      liftConstruction origin (openDestination stored.storage capability layout knownCount)
+
+def publishElementReceiving : Nat → LayoutEnv → Loc → StoredValue → DestinationId → OriginId → EvalM Unit
+  | 0, _, _, _, _, _ => timeout
+  | fuel + 1, config, location, stored, destination, origin => do
+      let pending ← getDestination destination
+      match pending.use with
+      | .child parent =>
+          liftConstruction origin (attachElementExtension parent destination)
+          let value ← storedDestination parent
+          writeLoc fuel config location (.stored { value with ty := stored.ty, object := stored.object, path := stored.path, writtenCount := max stored.writtenCount value.count })
+      | .receiver =>
+          liftConstruction origin (publishElementDestination destination)
+          let storage ← getStorage stored.storage
+          writeLoc fuel config location (.stored { stored with count := storage.publishedCount, writtenCount := max stored.writtenCount storage.publishedCount })
+      | .replacement _ => fault .flow
+
 def truncateOwner : Nat → LayoutEnv → Loc → Nat → OriginId → EvalM Unit
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, location, count, origin => do
