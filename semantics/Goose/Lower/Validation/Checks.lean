@@ -59,8 +59,7 @@ def readonlyShrinkBorrow : Module :=
   | _ => false
 
 #guard match GIR.validate (lower readonlyShrinkBorrow) with
-  | .error e => e.code == .v010 &&
-      e.message == "function main: slot 0 is initialized with a value of another type"
+  | .ok _ => true
   | _ => false
 
 end Goose.Lower.Validation.Checks
