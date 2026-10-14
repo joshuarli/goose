@@ -1786,6 +1786,15 @@ theorem runModule_keepsEventPrefix (fuel : Nat) (config : EvalConfig) :
   · intro _
     prefix_eval previous
 
+theorem runModule_terminal_prefix (fuel : Nat) (config : EvalConfig)
+    (initial terminal : ExecutionState) (reason : Goose.Core.Stop) (next : Unit → EvalM α)
+    (stopped : runModule fuel config initial = .stop reason terminal) :
+    EventPrefix initial.construction.events terminal.construction.events ∧
+    (runModule fuel config >>= next) initial = .stop reason terminal := by
+  have kept := runModule_keepsEventPrefix fuel config initial
+  simp only [stopped, Goose.Proofs.Exit.stepState] at kept
+  exact ⟨kept, wholeRun_terminal_skips_continuation fuel config initial terminal reason next stopped⟩
+
 theorem rejected_publication_preserves_execution (state : ExecutionState)
     (destinations : List Goose.Core.DestinationId) (kind : ConstructionFault)
     (origin : Goose.Core.OriginId)
