@@ -32,7 +32,7 @@ def getStorage (id : StorageId) : EvalM ReceivingStorage := do
 def progressCount : DestinationProgress → Option Nat
   | .open count | .built count | .published count | .attached count => some count
   | .suspended count _ | .exiting count _ => some count
-  | .abandoned | .cancelled => none
+  | .abandoned | .cancelled | .retired => none
 
 def storedDestination (id : DestinationId) : EvalM StoredValue := do
   let destination ← getDestination id
