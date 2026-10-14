@@ -26,12 +26,43 @@ Each dirty checkout was committed on a new local archive branch before removal. 
 - `../goose-rfc9-profile`: detached at `a03a2ca6`; archive `archive/winddown-20261014-rfc9-profile` at `d6b3ca40`.
 - `../goose-rfc9-upstream-base32`: detached at `32f8ff87`; archive `archive/winddown-20261014-rfc9-upstream-base32` at `57686bd4`.
 
+Converted the six archive branches above and `archive/winddown-20261014-validation-scratch` to lightweight tags with the same names and target commits. The original source branches remain at their old heads.
+
 Removed the emitted-body-diagnostics, forkcursor, profile, and upstream-base32 checkout directories. `git worktree remove` deregistered the bce and namecursor worktrees but could not delete their root-owned build outputs. Their unregistered partial directories remain at `../goose-rfc9-bce` (62.5 MB) and `../goose-rfc9-namecursor` (228.4 MB). Each `checks/gcc16-compiler` tree has 12.1 MB of root-owned outputs: `CMakeFiles/`, `tcc/`, `.cmake/`, `tcclib/`, `generated/`, `libgoose_shaderc.a`, `build.ninja`, `.ninja_log`, `cmake_install.cmake`, `goose`, `.ninja_deps`, and `CMakeCache.txt`. No privilege override was used.
 
 ## Preserved paths
 
 Preserved `../goose-rfc9-gig-perf-20261011` (115.7 MB). It is not a registered worktree and contains C inputs, result data, scripts, and draft PR text.
 
-Removed the obsolete 560 MB copied validation tree after checking its source against reachable local Git history. Its one unique older execution-check snapshot is preserved at `archive/winddown-20261014-validation-scratch` (`20ba2324`), in `semantics/Goose/Construct/ExecutionChecks.lean`; it is unverified evidence, not a merge candidate. The temporary decoder wrapper referenced disposable generated input and is superseded by committed source fixtures.
+Removed the obsolete 560 MB copied validation tree after checking its source against reachable local Git history. Its one unique older execution-check snapshot is preserved by the lightweight tag `archive/winddown-20261014-validation-scratch` (`20ba2324`), in `semantics/Goose/Construct/ExecutionChecks.lean`; it is unverified evidence, not a merge candidate. The temporary decoder wrapper referenced disposable generated input and is superseded by committed source fixtures.
 
-Removed 49 clean inactive campaign checkouts in the first pass, then five completed finish, staging, and cleanup checkouts. All candidate branch refs remain except the fully merged integration-staging branch. Removed two clean inactive historical baseline checkouts after confirming their commits remain reachable and no process referenced their paths. Nine clean worktrees under `.work/wt` remain for baseline and expensive artifact reuse, named in the campaign handoff. No registered external worktree remains.
+Removed 49 clean inactive campaign checkouts in the first pass, then five completed finish, staging, and cleanup checkouts. Deleted the fully merged integration-staging branch and the ancestry-merged `goose-ir-finish-construct-native-glue` branch.
+
+Deleted 24 inactive branches whose branch-only commits all have patch-equivalent commits in `master` and contain no branch-only merges:
+
+- `bookkeeping/gs-002-callee-local-provenance/base`
+- `goose-ir-finish-cfg-validation`
+- `goose-ir-finish-construct-validation`
+- `goose-ir-finish-core-declarative-demand`
+- `goose-ir-finish-core-declarative-roots`
+- `goose-ir-finish-core-declarative-tables`
+- `goose-ir-finish-core-metadata`
+- `goose-ir-finish-dominance`
+- `goose-ir-finish-h2`
+- `goose-ir-finish-lower-eventual`
+- `goose-ir-finish-provenance`
+- `goose-ir-finish-runtime-typing`
+- `goose-ir-finish-shrink-qualification`
+- `goose-ir-finish-source-divergence`
+- `goose-ir-resume-core`
+- `perf/codegen-local-name-cursor-rfc9`
+- `review/diverging-dead-code`
+- `review/parse-int-overflow`
+- `upstream-pr/basecase-reference-alias`
+- `upstream-pr/diverging-dead-code`
+- `upstream-pr/generic-argument-backtracking`
+- `upstream-pr/parse-float-leading-zeroes`
+- `upstream-pr/parse-int-overflow`
+- `upstream-pr/serialized-offset-overflow`
+
+Removed two clean inactive historical baseline checkouts after confirming their commits remain reachable and no process referenced their paths. Ten clean worktrees under `.work/wt` remain for baseline and expensive artifact reuse, named in the campaign handoff. No registered external worktree remains.
