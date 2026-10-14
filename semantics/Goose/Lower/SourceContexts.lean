@@ -2786,4 +2786,50 @@ theorem StmtSource.resizeFillChild {cfg : Cfg} {env : Env} {state afterPlace aft
     sizeFinish fillFinish fillRoots fillTyped fillRooted effects sizeFuel value sizeDone
   exact ⟨child, childTyping, childRoots, childWorld, childObservation⟩
 
+theorem StmtSource.assignOpChildren {cfg : Cfg} {env : Env} {state : St}
+    {op : BinOp} {place : Place} {expr : Expr} {origin : OriginId}
+    (source : StmtSource cfg env (.assignOp op place expr origin) state) :
+    ∃ destination : PlaceSource cfg env place state,
+      destination.typingEnv = source.typingEnv ∧ destination.rootsEnv = source.rootsEnv ∧
+      destination.world = source.world ∧ destination.observation = source.observation ∧
+      ∀ fuel location after, evalPlace fuel cfg env place state = .ok location after →
+        ∃ child : ExprSource cfg env expr after, child.typingEnv = source.typingEnv ∧
+          child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧
+          child.observation = source.observation ∧ child.ty = destination.ty := by
+  have typed := source.typed
+  simp only [tyStmt] at typed
+  inv at typed
+  obtain ⟨_, ty, mutable, contents, placeEnd, placeTyped, integer, rfl,
+    exprTy, exprEnd, exprTyped, exprInteger, rfl, rfl, _, _, _⟩ := typed
+  have rooted := source.rooted
+  simp only [rpStmt] at rooted
+  inv at rooted
+  obtain ⟨placeRoots, placeFinish, placeRooted, exprRoots, exprFinish, exprRooted,
+    readFinish, reads, writeFinish, writes, final⟩ := rooted
+  have finalEffects : EffLe writeFinish.eff source.world.E := by
+    apply EffLe.trans _ source.effects
+    cases final with
+    | inl aborts => exact (PMono.noteAborts _ _ _ aborts.2).2
+    | inr unchanged => exact unchanged.2 ▸ EffLe.refl _
+  have effects := (PMono.addReads _ _ _ _ reads).2.trans ((PMono.addWrites _ _ _ _ writes).2.trans finalEffects)
+  have placeAt : (DemandNode.statement (.assignOp op place expr origin)).child? 0 = some (.place place) := by
+    simp [DemandNode.child?, DemandNode.children]
+  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _⟩ :=
+    firstPlaceSource source place placeAt (by simp [DemandNode.visibleForChild])
+      (by intro x member; simp [Stmt.variables, member])
+      (fun parent => expr.variables ++ parent.future)
+      (by intro parent x member; simpa [Stmt.variables, List.append_assoc] using List.mem_append_right place.variables member)
+      (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, placeAt])
+      source.typingStart placeEnd (.int integer) mutable contents source.rootsStart placeFinish placeRoots placeTyped placeRooted
+      ((rpExpr_mono exprRooted).2.trans effects)
+  refine ⟨destination, typingEq, rootsEq, worldEq, observationEq, ?_⟩
+  intro fuel location after done
+  obtain ⟨child, childTyping, childRoots, childWorld, childObservation, childTy, _⟩ := afterPlaceExpression source placeAt
+    (by simp [DemandNode.child?, DemandNode.children])
+    (by intro active; simp [DemandNode.visibleForChild]) (fun parent => parent.future)
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.child?, DemandNode.children, DemandNode.visibleForChild])
+    (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.child?, DemandNode.children, DemandNode.visibleForChild]) destination
+    typingEq rootsEq worldEq observationEq outputEq mayEq placeEnd exprEnd (.int integer) placeFinish exprFinish exprRoots exprTyped exprRooted effects fuel location done
+  exact ⟨child, childTyping, childRoots, childWorld, childObservation, childTy.trans destinationTy.symm⟩
+
 end Goose.Lower

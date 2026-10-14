@@ -475,4 +475,33 @@ example (profile : NumProfile)
   change Except.ok (.bool, child.typingStart) = Except.ok (child.ty, child.typingEnd) at typed
   exact (congrArg Prod.fst (Except.ok.inj typed)).symm
 
+def compoundImplementation : Impl :=
+  { initImpl with body := .mk 0 [.assignOp .add (.global 0) (.lit .i32 2) 0] none }
+
+def compoundModule : Module :=
+  { conditionalModule with globals := #[⟨"integer", .int .i32, .mutable, .lit .i32 1, 0⟩], impls := #[compoundImplementation] }
+
+def afterIntegerGlobals : St :=
+  { St.initial with store := Store.empty.introduce (.global 0) (.int .i32 1), nextAct := 1 }
+
+#guard match Core.validate compoundModule with | .ok _ => true | .error _ => false
+
+example (profile : NumProfile) :
+    ∃ destination : PlaceSource ⟨profile, compoundModule⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.global 0)
+      { afterIntegerGlobals with nextAct := 2, nextScope := 1 },
+      ∃ child : ExprSource ⟨profile, compoundModule⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.lit .i32 2)
+        { afterIntegerGlobals with nextAct := 2, nextScope := 1 }, child.ty = destination.ty := by
+  have globalsDone : initGlobals 2 ⟨profile, compoundModule⟩ [0] St.initial = .ok () afterIntegerGlobals := by cbv
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, body, _, _⟩ :=
+    acceptedEntryAfterGlobals (cfg := ⟨profile, compoundModule⟩) (by cbv) 2 globalsDone
+  have contextEq : ctx = initContext := by simpa [compoundModule, conditionalModule, callModule] using contextAt.symm
+  subst ctx
+  have implEq : impl = compoundImplementation := by simpa [compoundModule, initContext] using implementationAt.symm
+  subst impl
+  obtain ⟨statements, _, _, _, _⟩ := body.enter
+  obtain ⟨head, _, _, _⟩ := statements.split
+  obtain ⟨destination, _, _, _, _, children⟩ := head.assignOpChildren
+  obtain ⟨child, _, _, _, _, typeEq⟩ := children 1 ⟨.global 0, []⟩ _ (by cbv)
+  exact ⟨destination, child, typeEq⟩
+
 end Goose.Lower.SourceContextChecks
