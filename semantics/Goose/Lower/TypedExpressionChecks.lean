@@ -707,4 +707,115 @@ theorem pop_claim (artifact : ArtifactProfile) (profile : NumProfile) :
       .done (.aborted .popEmpty 0) "", .done (.aborted .popEmpty 0) "" => true
   | _, _, _, _ => false
 
+def pushOwnerType : ArtifactProfile → Nat → Ty
+  | .pilot, _ => .grow .bool
+  | .shrink, capacity => .limited .bool capacity
+
+def pushOrigin : ArtifactProfile → Option OriginId
+  | .pilot => none
+  | .shrink => some 0
+
+def pushOwnerValue : ArtifactProfile → Nat → Val
+  | .pilot, _ => .resizable .bool #[]
+  | .shrink, capacity => .limited .bool capacity #[] 0
+
+def pushModule (artifact : ArtifactProfile) (capacity : Nat) : Core.Module :=
+  let ownerTy := pushOwnerType artifact capacity
+  { files := #["push.goose"], types := #[.bool, .int .i64, ownerTy, .ref .mutable .bool],
+    globals := #[⟨"owner", ownerTy, .mutable, .arrLit ownerTy [], 0⟩,
+      ⟨"pushed", .bool, .mutable, .read (.deref (.push (.global 0) (.bool true) (pushOrigin artifact))), 0⟩],
+    impls := #[{ initImpl with body := .mk 0 [.assertS (.read (.global 1)) 0,
+      .assertS (.cmp .eq (.len (.of (.global 0))) (.lit .i64 1)) 0] none }],
+    contexts := #[initContext], entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := artifact }
+
+def pushPrefixState (artifact : ArtifactProfile) (capacity : Nat) : St :=
+  { St.initial with nextAct := 1, store := Store.empty.introduce (.global 0) (pushOwnerValue artifact capacity) }
+
+theorem push_prefix (artifact : ArtifactProfile) (profile : NumProfile) (capacity : Nat)
+    (accepted : Core.validate (pushModule artifact capacity) = .ok ()) :
+    InitializedGlobals (pushModule artifact capacity) 1 (pushPrefixState artifact capacity) := by
+  exact InitializedGlobals.afterInitializer (cfg := ⟨profile, pushModule artifact capacity⟩)
+    (before := St.initial) (after := { St.initial with nextAct := 1 })
+    (value := pushOwnerValue artifact capacity) (g := 0)
+    (global := ⟨"owner", pushOwnerType artifact capacity, .mutable,
+      .arrLit (pushOwnerType artifact capacity) [], 0⟩)
+    accepted rfl (InitializedGlobals.initial _) 3 (by cases artifact <;>
+      simp [evalExpr, pushOwnerType, pushOwnerValue, mapList, Core.expectArrayLit,
+        bind_apply, pure_apply, St.initial])
+
+theorem push_children_source (artifact : ArtifactProfile) (profile : NumProfile) (capacity : Nat)
+    (accepted : Core.validate (pushModule artifact capacity) = .ok ()) :
+    ∃ owner : PlaceSource ⟨profile, pushModule artifact capacity⟩ ⟨#[], 1, [], 0⟩ (.global 0)
+        { pushPrefixState artifact capacity with nextAct := 2 },
+      ∃ value : ExprSource ⟨profile, pushModule artifact capacity⟩ ⟨#[], 1, [], 0⟩ (.bool true)
+        { pushPrefixState artifact capacity with nextAct := 2 }, owner.typingEnv = value.typingEnv := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, pushModule artifact capacity⟩) (state := pushPrefixState artifact capacity) (g := 1)
+    (global := ⟨"pushed", .bool, .mutable,
+      .read (.deref (.push (.global 0) (.bool true) (pushOrigin artifact))), 0⟩)
+    accepted rfl (push_prefix artifact profile capacity accepted).invariant
+  obtain ⟨place, hplaceTyping, hplaceRoots⟩ := source.readChild
+  obtain ⟨push, hpushTyping, hpushRoots, mutability, target, hpushType⟩ := place.derefChild (by rfl)
+  obtain ⟨owner, hownerTyping, hownerRoots, next⟩ := push.pushChildren (pushOrigin artifact)
+  obtain ⟨value, hvalueTyping, hvalueRoots⟩ := next 2 ⟨.global 0, []⟩
+    { pushPrefixState artifact capacity with nextAct := 2 } (by simp [evalPlace, pure_apply, pushPrefixState])
+  exact ⟨owner, value, hownerTyping.trans hvalueTyping.symm⟩
+
+theorem push_claim (artifact : ArtifactProfile) (profile : NumProfile) (capacity : Nat) :
+    TypedExprClaim 5 ⟨profile, pushModule artifact capacity⟩ [.bool]
+      (.read (.deref (.push (.global 0) (.bool true) (pushOrigin artifact)))) :=
+  typedExprClaim_read (typedPlaceClaim_deref
+    (typedExprClaim_push (typedPlaceClaim_global 2 _ _ 0) (typedExprClaim_bool 2 _ _ true)
+      (pushOrigin artifact)))
+
+def fullPushModule : Core.Module :=
+  let source := pushModule .shrink 1
+  { source with globals := source.globals.modify 0 fun owner =>
+      { owner with init := .arrLit owner.ty [.bool false] } }
+
+def fullPushPrefixState : St :=
+  { St.initial with nextAct := 1, store := Store.empty.introduce (.global 0) (.limited .bool 1 #[.bool false] 1) }
+
+theorem full_push_prefix (profile : NumProfile) (accepted : Core.validate fullPushModule = .ok ()) :
+    InitializedGlobals fullPushModule 1 fullPushPrefixState :=
+  InitializedGlobals.afterInitializer (cfg := ⟨profile, fullPushModule⟩)
+    (before := St.initial) (after := { St.initial with nextAct := 1 })
+    (value := .limited .bool 1 #[.bool false] 1) (g := 0)
+    (global := ⟨"owner", .limited .bool 1, .mutable, .arrLit (.limited .bool 1) [.bool false], 0⟩)
+    accepted rfl (InitializedGlobals.initial _) 3
+    (by simp [evalExpr, mapList, Core.expectArrayLit, bind_apply, pure_apply, St.initial])
+
+theorem full_push_source (profile : NumProfile) (accepted : Core.validate fullPushModule = .ok ()) :
+    Nonempty (ExprSource ⟨profile, fullPushModule⟩ ⟨#[], 1, [], 0⟩
+      (.push (.global 0) (.bool true) (some 0)) { fullPushPrefixState with nextAct := 2 }) := by
+  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+    (cfg := ⟨profile, fullPushModule⟩) (state := fullPushPrefixState) (g := 1)
+    (global := ⟨"pushed", .bool, .mutable, .read (.deref (.push (.global 0) (.bool true) (some 0))), 0⟩)
+    accepted rfl (full_push_prefix profile accepted).invariant
+  obtain ⟨place, hplaceTyping, hplaceRoots⟩ := source.readChild
+  obtain ⟨push, hpushTyping, hpushRoots, mutability, target, hpushType⟩ := place.derefChild (by rfl)
+  exact ⟨push⟩
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
+  let source := pushModule artifact 1
+  match Core.validate source, GIR.validate (lower source) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard match Core.validate fullPushModule, GIR.validate (lower fullPushModule) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [ArtifactProfile.pilot, .shrink].all fun artifact => [NumProfile.release, .debug].all fun profile =>
+  let source := pushModule artifact 1
+  match Core.eval 160 profile source, GIR.run 320 profile (lower source) with
+  | .done .returned "", .done .returned "" => true
+  | _, _ => false
+
+#guard [NumProfile.release, .debug].all fun profile =>
+  let source := fullPushModule
+  match Core.eval 160 profile source, GIR.run 320 profile (lower source) with
+  | .done (.aborted .capacity 0) "", .done (.aborted .capacity 0) "" => true
+  | _, _ => false
+
 end Goose.Lower.TypedExpressionChecks
