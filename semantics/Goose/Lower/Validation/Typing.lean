@@ -163,4 +163,56 @@ theorem newBlock_parameter_types (types : List VTy) (le : LEnv) (before : LS) (i
     (newBlock types le before).2.vals[before.vals.size + index]? = types[index]?.map some :=
   pushParamTypes_lookup types before.vals index
 
+theorem intTyOf_recorded {le : LEnv} {before : LS} {value : ValueId} {ty : IntTy}
+    (typed : before.vals[value]? = some (some (.data (.int ty)))) :
+    intTyOf value le before = (ty, before) := by
+  simp only [intTyOf, bind_run, valTy_of_recorded typed, pure_run]
+
+theorem freezeTo_typed {le : LEnv} {before : LS} {value : ValueId} {ty : Ty}
+    {actual requested : Mutability} {block : BlockId}
+    (typed : before.vals[value]? = some (some (.data (.ref actual ty))))
+    (permission : actual.atLeast requested = true) (live : before.cur = some block) :
+    let (result, after) := freezeTo requested value le before
+    after.cur = before.cur ∧ after.vals[result]? = some (some (.data (.ref requested ty))) := by
+  cases requested <;> cases actual
+  · simpa only [freezeTo, bind_run, valTy_of_recorded typed, pure_run] using
+      And.intro (Eq.refl before.cur) typed
+  · simp [Mutability.atLeast] at permission
+  · have freezeTyped : (Op.refFreeze value).resultTy (tyEnv le before) =
+        .ok (.data (.ref .readOnly ty)) := by
+      simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv,
+        typed, pure, Except.pure, bind, Except.bind]
+    simp only [freezeTo, bind_run, valTy_of_recorded typed]
+    exact ⟨(emitDef_recorded live freezeTyped).2.1,
+      (emitDef_recorded live freezeTyped).2.2.1⟩
+  · simpa only [freezeTo, bind_run, valTy_of_recorded typed, pure_run] using
+      And.intro (Eq.refl before.cur) typed
+
+theorem sliceView_typed {le : LEnv} {before : LS} {value : ValueId} {element : Ty}
+    {mu : Mutability} {block : BlockId}
+    (typed : before.vals[value]? = some (some (.data (.slice mu element))))
+    (live : before.cur = some block) :
+    let (result, after) := emitDef (.sliceView value) le before
+    after.cur = before.cur ∧ after.vals[result]? = some (some (.view mu element)) := by
+  have viewTyped : (Op.sliceView value).resultTy (tyEnv le before) =
+      .ok (.view mu element) := by
+    simp [Op.resultTy, TyEnv.dataTy, TyEnv.valTy, tyEnv,
+      typed, pure, Except.pure, bind, Except.bind]
+  have emitted := emitDef_recorded live viewTyped
+  exact ⟨emitted.2.1, emitted.2.2.1⟩
+
+theorem readonlySlice_typed {le : LEnv} {before : LS} {view : ValueId} {element : Ty}
+    {mu : Mutability} {block : BlockId}
+    (typed : before.vals[view]? = some (some (.view mu element)))
+    (live : before.cur = some block) (origin : OriginId) :
+    let (result, after) := emitDef (.viewSlice .readOnly view .omitted .omitted (some origin)) le before
+    after.cur = before.cur ∧ after.vals[result]? = some (some (.data (.slice .readOnly element))) := by
+  have permission : mu.atLeast .readOnly = true := by cases mu <;> rfl
+  have sliceTyped : (Op.viewSlice .readOnly view .omitted .omitted (some origin)).resultTy
+      (tyEnv le before) = .ok (.data (.slice .readOnly element)) := by
+    simp [Op.resultTy, TyEnv.viewTy, TyEnv.valTy, TyEnv.boundTy, tyEnv,
+      typed, permission, pure, Except.pure, bind, Except.bind]
+  have emitted := emitDef_recorded live sliceTyped
+  exact ⟨emitted.2.1, emitted.2.2.1⟩
+
 end Goose.Lower.Validation
