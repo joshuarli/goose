@@ -19,6 +19,7 @@
 #include "typecheck.h"
 #include "typecheck_types.h"
 #include "typecheck_exprs.h"
+#include "typecheck_expansion.h"
 #include "typecheck_flow.h"
 #include "typecheck_calls.h"
 #include "typecheck_builtins.h"
@@ -27,6 +28,7 @@
 #include "optimize_basecase.h"
 #include "optimize_tre.h"
 #include "optimize_loops.h"
+#include "optimize_reassoc.h"
 #include "bce.h"
 #include "codegen.h"
 #include "codegen_types.h"
@@ -47,9 +49,9 @@
 #include "report/report.h"
 #include "units/share_report.h"
 #include "report/deps_report.h"
+#include "process.h"
 #include "jit.h"
 #include "progress.h"
-#include "process.h"
 #include "buildfile.h"
 #include "toolchain.h"
 #include "builtin.h"
@@ -180,8 +182,10 @@ struct DeclaredPackage {
 // package in the root file and is a requirement anywhere else, which the
 // root's declaration must satisfy. A
 // `rootsource` is the root file's text, which is then not read from disk.
+// `exedir` is the compiler's directory, where a release keeps the packages
+// compiled into it.
 void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlibdirs,
-                  const string *rootsource = nullptr,
+                  const string &exedir, const string *rootsource = nullptr,
                   PackageFetchPolicy fetch_policy = PackageFetchPolicy::AllowFetch) {
     // The program is package 0; a standard library directory becomes a
     // package the first time a module in it is reached.
@@ -195,21 +199,17 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
         return (int)ast.packages.size() - 1;
     };
     map<string, DeclaredPackage> declared;
-    // Loads a blessed package once, under its package name among the
-    // declared ones: from where the compiler's build put it when it is
-    // compiled in, else from its source as a declared package would be (a
-    // path in the table is relative to the source tree the standard
-    // library is found in).
     auto loadblessed = [&](const BlessedEntry &be) -> int {
         auto it = declared.find(be.package);
         if (it != declared.end()) return it->second.pkg;
         auto builtin = BuiltinLookup(be.package);
+        auto builtindir = builtin ? BuiltinSrcDir(*builtin, exedir) : string();
         PackageSource src;
         src.text = be.source;
         string root;
-        if (builtin && PathExists(cat(builtin->srcdir, be.package, ".goose"))) {
+        if (builtin && PathExists(cat(builtindir, be.package, ".goose"))) {
             src.ispath = true;
-            src.dir = root = builtin->srcdir;
+            src.dir = root = builtindir;
         } else if (IsPathSource(be.source)) {
             auto rel = be.source.rfind("./", 0) == 0 ? be.source.substr(2) : be.source;
             for (auto &dir : stdlibdirs) {
@@ -240,7 +240,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
         ast.packages.push_back(Package { be.package, root, false });
         auto &p = ast.packages.back();
         if (!src.ispath) p.cachekey = GitCacheKey(src);
-        if (builtin && root == builtin->srcdir) p.builtin = BuiltinIndex(builtin);
+        if (builtin && root == builtindir) p.builtin = BuiltinIndex(builtin);
         LoadSidecar(p, false);
         declared.emplace(be.package, DeclaredPackage { src, (int)ast.packages.size() - 1, 0 });
         return (int)ast.packages.size() - 1;
@@ -432,10 +432,10 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
 // that gives back the same text: what `goose --dump` of the dump written to a
 // file would print. `path` is where the dump's diagnostics say they are.
 void CheckRoundtrip(const string &dumped, const string &path,
-                    const vector<string> &stdlibdirs) {
+                    const vector<string> &stdlibdirs, const string &exedir) {
     Ast again;
     try {
-        ParseProgram(again, path, stdlibdirs, &dumped);
+        ParseProgram(again, path, stdlibdirs, exedir, &dumped);
     } catch (CompileError &e) {
         throw CompileError { cat("the dump does not parse again:\n", e.msg) };
     }
@@ -584,6 +584,222 @@ int RunOnCompilerStack(const function<int()> &fn);
 // the file's name as given.
 constexpr const char *MULTIMARK = "==== goose --multi-test: exit";
 
+// The options run, build and check share, for their help.
+constexpr const char *COMPILEOPTIONS =
+R"(  -D NAME[=VALUE]       Define a C macro in the generated program (or -DNAME).
+  --stdlib dir          The standard library's directory (or GOOSE_STDLIB);
+                        found from where goose is by default.
+  --update              Fetch packages at a tag or branch again (a commit is
+                        never fetched again).
+  --stack-reserve size  Address space reserved per data stack, with a K, M, G
+                        or T suffix (default 2G).
+  --stacks              Report the data stacks the program and each worker can
+                        take, and the cap that puts on hardware_threads().
+  --no-bce              Keep every bounds check.
+  --bce-lines           Report the bounds checks elided and kept on each line.
+  --specs               Print the specializations of each function.
+)";
+
+constexpr const char *DEBUGOPTION =
+R"(  --debug               Overflow, range and tag checks that name the source
+                        line they fail on.
+)";
+
+// The help on a command or topic, `goose help` or `goose --help`'s for ""
+// or "help", and "" for none. Each starts with its usage lines and a blank
+// line, which a command line without a file prints.
+string HelpText(const string &topic) {
+    if (topic.empty() || topic == "help") return
+R"(usage: goose <command> file.goose [options]
+       goose file.goose [options] [-- program args...]
+
+Commands:
+  run        Compile a program and run it in this process, which goose
+             file.goose does too.
+  build      Build an executable with a C compiler on this machine.
+  check      Parse and typecheck a program, and run nothing.
+  fetch      Fetch the packages a program declares.
+  toolchain  Report the C compiler, cmake and git found, and GOOSE_HOME.
+  version    Print the runtime version.
+  help       Print this (or --help, -h); with a command, that command's help.
+  lint       Analyze a program and report lint diagnostics.
+
+Common options:
+  -O0, -O1, -O2   Inlining level (a run defaults to -O1, a build to -O2).
+  --debug         Overflow, range and tag checks that name the source line
+                  they fail on.
+  -- args...      What follows is the program's arguments.
+
+Environment:
+  GOOSE_HOME      Fetched packages, build intermediates and settings
+                  (default ~/.goose).
+  GOOSE_CC        The C compiler, where --cc is not given.
+  GOOSE_STDLIB    The standard library, where --stdlib is not given.
+  GOOSE_PROGRESS  plain or live: how progress shows on stderr.
+
+goose <command> --help, or goose help <command>, lists a command's options.
+goose help c covers writing the C yourself (goose -o out.c), and goose help
+internals the options for looking into the compiler and testing it.
+)";
+    if (topic == "lint") return "usage: goose lint file.goose [options]\n"
+                  "  --format text|jsonl       output format (default: text)\n"
+                  "  --group NAME              select one rule group\n"
+                  "  --deny RULE               fail when a selected rule is found (repeatable)\n"
+                  "  --allow RULE              ignore a selected rule (repeatable)\n"
+                  "  --config PATH             JSON policy file\n"
+                  "  --baseline PATH           exact-finding baseline\n"
+                  "  --write-baseline          explicitly write the baseline\n"
+                  "  --require-complete        fail when semantic coverage is partial\n"
+                  "  --allow-fetch             permit fetching declared packages\n"
+                  "  -O0|-O1|-O2               select the lint profile (default: -O1)\n"
+                  "\n"
+                  "Rule groups: existing, correctness, suspicious, review, performance, project.\n"
+                  "Default groups: existing, correctness, suspicious. Available rules:\n"
+                  "  redundant_cast, redundant_reference_marker, avoidable_reference_copy\n"
+                  "  discarded_failure (stdlib::parse_int), unchecked_poll_result (qpoll)\n"
+                  "  unused_pure_value (proven pure statements), stale_suppression\n"
+                  "Opt-in review: post_overflow_guard, stale_slice_length\n"
+                  "Opt-in performance: specialization_fanout\n"
+                  "Opt-in project: view_before_append_argument, foreign_container_index\n"
+                  "Project rules require exact API roles in a config contracts file.\n"
+                  "See docs/lint/ for supported proof shapes and coverage limits.\n"
+                  "Exit status: 0 clean, 1 denied finding, 2 invalid source/import,\n"
+                  "3 invalid config/baseline, 4 tool failure or incomplete analysis.\n"
+                  "--write-baseline requires --baseline PATH or config baseline.\n";
+    if (topic == "run") return cat(
+R"(usage: goose run file.goose [options] [-- program args...]
+       goose file.goose [options] [-- program args...]
+
+Compiles the program and runs it in this process with TinyCC, and exits with
+its exit code. What follows -- is the program's arguments. A program that
+starts threads needs goose build.
+
+Options:
+  -O0, -O1, -O2         Inlining level (default -O1).
+)", DEBUGOPTION, COMPILEOPTIONS,
+R"(  --cc name|path        The C compiler for packages' native parts: msvc,
+                        clang-cl, clang, gcc, cc or a path (or GOOSE_CC).
+  -v                    Print each command that builds a native part, and
+                        what it prints.
+)");
+    if (topic == "build") return cat(
+R"(usage: goose build file.goose [options]
+
+Builds an executable beside the source with a C compiler on this machine
+(goose toolchain says which), linking the runtime and the native parts of
+the packages the program uses. Intermediates go under GOOSE_HOME.
+
+Options:
+  -o exe                Where the executable goes.
+  -O0, -O1, -O2         Inlining level and the C compiler's optimization
+                        (default -O2).
+  --debug               Overflow, range and tag checks that name the source
+                        line they fail on, and the C built for a debugger.
+)", COMPILEOPTIONS,
+R"(  --cc name|path        The C compiler: msvc, clang-cl, clang, gcc, cc or a
+                        path (or GOOSE_CC; by default the first one found).
+  --units               Build and reuse separate C compilation units.
+  --rebuild             Rebuild all units.
+  --verify-reuse        Verify cached units against regenerated output.
+  --standalone          Compile the runtime into the program rather than link
+                        the runtime object built once per C compiler.
+  -v                    Print each command the build runs and what it prints.
+  --dry-run             Print the commands the build would run, and run none.
+)");
+    if (topic == "check") return cat(
+R"(usage: goose check file.goose [options]
+
+Parses and typechecks the program and what it imports, and writes and runs
+nothing.
+
+Options:
+)", COMPILEOPTIONS);
+    if (topic == "fetch") return
+R"(usage: goose fetch [--update] file.goose
+
+Fetches the packages the program declares from git into GOOSE_HOME, and
+compiles nothing. A run or a build fetches what is missing as well.
+
+Options:
+  --update              Fetch packages at a tag or branch again (a commit is
+                        never fetched again).
+)";
+    if (topic == "toolchain") return
+R"(usage: goose toolchain [--cc name|path] [--json] [--refresh]
+
+Reports the C compiler a build would use, cmake, git, GOOSE_HOME and the
+modules compiled into goose. Exits with 1 when there is no C compiler.
+
+Options:
+  --cc name|path        Look for this C compiler: msvc, clang-cl, clang, gcc,
+                        cc or a path (or GOOSE_CC).
+  --json                Report as JSON.
+  --refresh             Set up Visual Studio's environment again rather than
+                        take the one kept from last time.
+)";
+    if (topic == "version") return
+R"(usage: goose version
+
+Prints the runtime version, which the runtime that goose --emit-runtime
+writes has to match.
+)";
+    if (topic == "c") return cat(
+R"(usage: goose -o out.c file.goose [options]
+       goose --emit-runtime runtime.c
+       goose --<package>-link msvc|cc
+
+Writes the program's C, for a build of your own or a C host. It links with
+the runtime that --emit-runtime writes, compiled once with the C compiler
+and flags the programs use. goose build --dry-run prints the commands for
+the program at hand.
+
+Options:
+  -o out.c              Write the program's C rather than run it.
+  --standalone          Write C that holds the whole runtime and builds alone.
+  --header out.h        Also write a header for a C host, which supplies main
+                        and starts the program through goose_init.
+  --include header.h    Have the C include this header (may be repeated).
+  --stable-names        Emit deterministic C names.
+  --share               Emit shared declarations for separate compilation.
+  --build-report FILE   Write a build report.
+  --build-report-deps   Include dependency details in the build report.
+  --emit-units DIR      Write separate C compilation units under DIR.
+  --jit                 Also run the program in this process.
+  --emit-runtime out.c  Write the runtime's C.
+  --<package>-link msvc|cc
+                        Print the response file that links the native part of
+                        a package compiled into goose (--gfx-link cc).
+  -O0, -O1, -O2         Inlining level (default -O1).
+)", DEBUGOPTION, COMPILEOPTIONS);
+    if (topic == "internals") return cat(
+R"(usage: goose [options] file.goose
+
+Options for looking into what the compiler does, and for its test suite.
+
+Options:
+  --tokens              Print the file's tokens.
+  --parse               Stop after parsing.
+  --check               Stop after typechecking, as goose check does.
+  --dump                Print the parsed program back as source.
+  --dump-file out       Write that dump to a file, and go on.
+  --roundtrip           Check that the dump parses and dumps back to itself.
+  --multi-test file...  Compile each file as a run of its own would, ending what
+                        each printed with a line on stdout and on stderr:
+                        `)", MULTIMARK, R"( <code> <file>`.
+                        A % in -o stands for each file's name.
+  --bce-test            Verify the `// bce:elide` and `// bce:keep` annotations.
+  --unsafe-no-rf-check  Leave out the checks after calls that a `return ...
+                        from` can pass through: unsound, for pricing them only.
+  --emit-core FILE      Export the Core representation.
+  --emit-core-report    Report Core export details.
+  --emit-gir-high FILE  Export high Goose IR.
+  --emit-gir-low FILE   Export low Goose IR.
+  --pipeline legacy|gir Select the compilation pipeline (default legacy).
+  --gen-runtime-header  Regenerate src/runtime_inline.h from src/runtime/.
+)");
+    return "";
+}
+
 // A size with an optional K, M, G or T suffix (--stack-reserve).
 bool ParseSize(string s, uint64_t &out) {
     if (!s.empty() && toupper((unsigned char)s.back()) == 'B') s.pop_back();
@@ -683,18 +899,35 @@ struct UnitsRun {
 int Main(int argc, char **argv) {
     auto exe = ExePath(argv[0]);
     if (argc > 1 && string_view(argv[1]) == "lint") return LintMain(argc - 2, argv + 2, exe);
-    // The verb forms, `goose run|build|check|fetch|toolchain|version ...`. A
-    // first argument that is none of them is read as an option or a file, as
-    // it always was, so `goose foo.goose` is `goose run foo.goose`.
     string verb;
     auto firstarg = 1;
     if (argc > 1) {
         string v = argv[1];
         if (v == "run" || v == "build" || v == "check" || v == "fetch" || v == "toolchain" ||
-            v == "version") {
+            v == "version" || v == "help") {
             verb = v;
             firstarg = 2;
         }
+    }
+    // --help anywhere before a `--` is the help on the command given, or on
+    // all of them when none is.
+    for (int i = firstarg; i < argc; i++) {
+        string arg = argv[i];
+        if (arg == "--") break;
+        if (arg == "--help" || arg == "-h") {
+            fputs(HelpText(verb).c_str(), stdout);
+            return 0;
+        }
+    }
+    if (verb == "help") {
+        auto topic = argc > 2 ? string(argv[2]) : string();
+        auto help = HelpText(topic);
+        if (help.empty()) {
+            fprintf(stderr, "no help on %s: goose help lists the commands\n", topic.c_str());
+            return 1;
+        }
+        fputs(help.c_str(), stdout);
+        return 0;
     }
     if (verb == "version") {
         printf("goose runtime %s\n", RuntimeVersion().c_str());
@@ -840,7 +1073,7 @@ int Main(int argc, char **argv) {
         else if (arg == "-D" && i + 1 < argc) cdefines.push_back(argv[++i]);
         else if (arg.rfind("-D", 0) == 0 && arg.size() > 2) cdefines.push_back(arg.substr(2));
         else if (!arg.empty() && arg[0] == '-') {
-            fprintf(stderr, "unknown option: %s\n", arg.c_str());
+            fprintf(stderr, "unknown option: %s (goose --help lists them)\n", arg.c_str());
             return 1;
         }
         else files.push_back(arg);
@@ -943,36 +1176,10 @@ int Main(int argc, char **argv) {
         return 0;
     }
     if (files.empty()) {
-        fprintf(stderr, "usage: goose run file.goose [options] [-- program args...] | "
-                        "goose check file.goose [options] | goose fetch [--update] file.goose | "
-                        "goose version |\n"
-                        "       goose build file.goose [options] [-o exe] [--debug] [--standalone] "
-                        "[--cc name|path] [-v] [--dry-run] [--units [--rebuild] [--verify-reuse]] |\n"
-                        "       goose toolchain [--cc name|path] [--json] [--refresh]\n");
-        fprintf(stderr, "   or: goose [--dump] [--parse] [--tokens] [--roundtrip] "
-                        "[--dump-file out.goose] [--specs] [--stacks] [--check] "
-                        "[--emit-core FILE|--emit-core-report] [--emit-gir-high FILE] "
-                        "[--emit-gir-low FILE] [--pipeline legacy|gir] "
-                        "[--no-bce] [--bce-test] [--bce-lines] [--unsafe-no-rf-check] [-O0|-O1|-O2] "
-                        "[-o out.c [--standalone]] [--jit] [-DNAME=VALUE]... [--stack-reserve size] "
-                        "[--include header.h]... "
-                        "[--header out.h] [--share] [--build-report FILE] [--build-report-deps] "
-                        "[--emit-units DIR] "
-                        "[--stdlib dir] file.goose [-- program args...] | "
-                        "--multi-test [options] file.goose... | --emit-runtime runtime.c | "
-                        "--gen-runtime-header | "
-                        "--<package>-link msvc|cc\n");
-        fprintf(stderr, "without -o the program is compiled and run in this process by TinyCC.\n");
-        fprintf(stderr, "the .c that -o writes links with the runtime that --emit-runtime "
-                        "writes, compiled once;\n--standalone writes one that holds the "
-                        "runtime itself.\n");
-        fprintf(stderr, "--stacks reports the data stacks the program and each worker can take "
-                        "and the thread cap they\ngive hardware_threads(); --stack-reserve sets "
-                        "the address space reserved per stack (K/M/G/T suffixes).\n");
-        fprintf(stderr, "--multi-test compiles each file as a run of its own would, one after "
-                        "another, ending what each\nprinted with a line `%s <exit code> <file>` "
-                        "on stdout and on stderr; an -o names\neach file's C with a %% "
-                        "standing for the file's name without its extension.\n", MULTIMARK);
+        auto help = HelpText(verb);
+        fprintf(stderr, "%s\n%s\n", help.substr(0, help.find("\n\n") + 1).c_str(),
+                verb.empty() ? "goose --help lists the commands and common options."
+                             : cat("goose ", verb, " --help lists its options.").c_str());
         return 1;
     }
     // With no output file the program is compiled into this process and run,
@@ -1018,7 +1225,7 @@ int Main(int argc, char **argv) {
         astp = make_unique<Ast>();
         auto &ast = *astp;
         auto stdlibdirs = StdlibDirs(stdlibdir, exe);
-        ParseProgram(ast, filename, stdlibdirs);
+        ParseProgram(ast, filename, stdlibdirs, DirOf(exe));
         if (dump) {
             // Dump is parse-level output: no name resolution or typecheck,
             // so parse-only test files can roundtrip, and every name shows
@@ -1046,7 +1253,7 @@ int Main(int argc, char **argv) {
         // it would without --roundtrip.
         if (roundtrip) {
             CheckRoundtrip(dumped, dumpfile.empty() ? cat(filename, ".dump") : dumpfile,
-                           stdlibdirs);
+                           stdlibdirs, DirOf(exe));
             fprintf(msgs, "roundtrip ok: %d bytes of dump\n", (int)dumped.size());
         }
         if (parseonly) return 0;
@@ -1131,16 +1338,23 @@ int Main(int argc, char **argv) {
         }
         fprintf(msgs, "typechecked ok: %d specialization(s), %d struct/%d enum instance(s); "
                 "optimized -O%d: %d inlined, %d base case(s), %d folded, %d propagated, "
-                "%d tail loop(s)\n",
+                "%d tail loop(s), %d reassociated\n",
                 (int)ast.fnspecs.size(), (int)ast.structinsts.size(),
                 (int)ast.enuminsts.size(), optlevel, opt.inlined, opt.basecases,
-                opt.folded, opt.propagated, opt.tailloops);
+                opt.folded, opt.propagated, opt.tailloops, opt.reassociated);
         if (g_build_report) BuildReportPhase(Phase::BoundsCheckElimination);
         BCE bce(ast);
         if (!nobce) {
             bce.RunAll();
             fprintf(msgs, "bce: elided %d/%d index and %d/%d slice checks\n",
                     bce.idxelided, bce.idxtotal, bce.slelided, bce.sltotal);
+            if (!bce.checkfreefails.empty()) throw CompileError { bce.CheckfreeReport() };
+        } else {
+            for (auto sf : ast.functions)
+                if (sf->checkfree && !sf->isnested) {
+                    fprintf(stderr, "warning: checkfree is not verified under --no-bce\n");
+                    break;
+                }
         }
         // Per-line outcomes, for comparing two builds of the pass.
         if (bcelines)
@@ -1772,32 +1986,7 @@ int LintMain(int argc, char **argv, const string &exe) {
     for (int i = 0; i < argc; i++) {
         string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
-            fputs("usage: goose lint file.goose [options]\n"
-                  "  --format text|jsonl       output format (default: text)\n"
-                  "  --group NAME              select one rule group\n"
-                  "  --deny RULE               fail when a selected rule is found (repeatable)\n"
-                  "  --allow RULE              ignore a selected rule (repeatable)\n"
-                  "  --config PATH             JSON policy file\n"
-                  "  --baseline PATH           exact-finding baseline\n"
-                  "  --write-baseline          explicitly write the baseline\n"
-                  "  --require-complete        fail when semantic coverage is partial\n"
-                  "  --allow-fetch             permit fetching declared packages\n"
-                  "  -O0|-O1|-O2               select the lint profile (default: -O1)\n"
-                  "\n"
-                  "Rule groups: existing, correctness, suspicious, review, performance, project.\n"
-                  "Default groups: existing, correctness, suspicious. Available rules:\n"
-                  "  redundant_cast, redundant_reference_marker, avoidable_reference_copy\n"
-                  "  discarded_failure (stdlib::parse_int), unchecked_poll_result (qpoll)\n"
-                  "  unused_pure_value (proven pure statements), stale_suppression\n"
-                  "Opt-in review: post_overflow_guard, stale_slice_length\n"
-                  "Opt-in performance: specialization_fanout\n"
-                  "Opt-in project: view_before_append_argument, foreign_container_index\n"
-                  "Project rules require exact API roles in a config contracts file.\n"
-                  "See docs/lint/ for supported proof shapes and coverage limits.\n"
-                  "Exit status: 0 clean, 1 denied finding, 2 invalid source/import,\n"
-                  "3 invalid config/baseline, 4 tool failure or incomplete analysis.\n"
-                  "--write-baseline requires --baseline PATH or config baseline.\n",
-                  stdout);
+            fputs(HelpText("lint").c_str(), stdout);
             return 0;
         } else if (arg == "--format") {
             cli.format = take_value(i, arg);
@@ -1860,7 +2049,7 @@ int LintMain(int argc, char **argv, const string &exe) {
             ast.capture_lint_metadata = true;
             auto stdlibdirs = StdlibDirs(cli.stdlibdir, exe);
             parse_started = true;
-            ParseProgram(ast, cli.input, stdlibdirs, nullptr,
+            ParseProgram(ast, cli.input, stdlibdirs, DirOf(exe), nullptr,
                          cli.allow_fetch ? PackageFetchPolicy::LintAllowFetch : PackageFetchPolicy::Offline);
             parse_complete = true;
             check_started = true;

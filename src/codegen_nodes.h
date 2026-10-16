@@ -8,6 +8,10 @@
 
 namespace goose {
 
+inline string ConstFor::CgX(CodeGen &cg) { cg.Fail(line, "internal: unexpanded const for"); }
+inline void ConstFor::CgAny(CodeGen &cg, const Dst &) { cg.Fail(line, "internal: unexpanded const for"); }
+inline void ConstFor::CgStmt(CodeGen &cg) { cg.Fail(line, "internal: unexpanded const for"); }
+
 // ---- CgX ------------------------------------------------------------------
 
 inline string IntLit::CgX(CodeGen &) {
@@ -135,14 +139,7 @@ inline string Binary::CgX(CodeGen &cg) {
         auto l = cg.GenTruth(left);
         auto t = cg.T();
         cg.L("uint8_t ", t, " = (uint8_t)(", l, op == T_ANDAND ? " != 0);" : " != 0);");
-        // In a loop that can be straight-line code, a right operand that can
-        // neither fail nor have an effect runs whatever the left gave,
-        // combined with & or | on the two 0/1 values: a C compiler can
-        // if-convert that, and vectorize the loop, where it keeps the branch
-        // of a short circuit. Elsewhere the early branch is as good, and
-        // better ahead of a branch that stays.
-        auto budget = 24;
-        if (cg.InStraightLoop() && cg.Speculatable(right, specidx > 0, true, budget)) {
+        if (cg.SpeculativeForm(this)) {
             auto r = cg.GenTruth(right);
             return cat("(uint8_t)(", t, op == T_ANDAND ? " & " : " | ", "(uint8_t)(", r,
                        " != 0))");
@@ -252,12 +249,21 @@ inline string Binary::CgX(CodeGen &cg) {
                                                   ", ", cg.LocArgs(line), ")");
                         // A divisor fixed for an enclosing loop: its magic, unless
                         // gs_divu_gen found none to give (HoistDivisors).
-                        auto key = cg.LoopDivisible(this) ? cg.DivisorKey(right) : string();
+                        auto key = cg.LoopDivisible(this) ? cg.DivisionKey(this) : string();
                         auto dm = key.empty() ? cg.divmagic.end() : cg.divmagic.find(key);
                         if (dm == cg.divmagic.end()) return plain;
                         auto &mg = dm->second;
-                        auto q = cat("gs_divu_q((uint64_t)(", lc, "), ", mg.magic, ", ", mg.more, ")");
-                        auto fast = div ? q : cat("(uint64_t)(", lc, ") - ", q, " * ", mg.val);
+                        auto w = mg.narrow ? "uint32_t" : "uint64_t";
+                        auto q = cat(mg.narrow ? "gs_divu32_q(" : "gs_divu_q(", "(", w, ")(", lc,
+                                     "), ", mg.magic, ", ", mg.more, ")");
+                        auto fast = div ? q : cat("(", w, ")(", lc, ") - ", q, " * ", mg.val);
+                        // Where only a zero divisor goes without, the plain division would
+                        // fail. Failing outright leaves a test of the loop-invariant `more`
+                        // that gcc takes out of the loop; the plain division's own zero
+                        // test would be a loop exit after which the loop's stores might
+                        // not run, which keeps gcc from holding them in registers (and
+                        // from vectorizing the loop).
+                        if (mg.zeronone) plain = cat("(gs_divfail(", cg.LocArgs(line), "), 0)");
                         return cat("(", ct, ")(", mg.more, " != GS_DIVU_NONE ? ", fast, " : ",
                                    plain, ")");
                     }
@@ -342,7 +348,11 @@ inline string SliceExpr::CgX(CodeGen &cg) {
 // rounds like float arithmetic does, and beyond f32's range it is an
 // infinity.
 inline string AsCast::CgX(CodeGen &cg) {
-    auto x = cg.GenX(child);
+    // Into an index or bound type: the value converted is checked against
+    // the array first, in every build (§3.11). A narrower width then
+    // converts as any `as` does; what it wraps to is still in range.
+    auto x = totype->ix && !nobc ? cg.IndexTypeCheck(cg.GenPure(child), totype, line)
+                                 : cg.GenX(child);
     auto st = child->exprtype;
     auto tt = totype;
     // u64 is the one source whose values exceed the int64 range the checks
@@ -443,12 +453,27 @@ inline void Block::CgAny(CodeGen &cg, const Dst &d) {
 }
 
 inline void IfExpr::CgAny(CodeGen &cg, const Dst &d) {
-    auto c = cg.GenTruth(cond);
+    // Both arms starting with the same bounds check (same array, same index,
+    // nothing before it): one check ahead of the branch, after the
+    // condition, reporting the line of the arm that is taken. The arms'
+    // accesses are then plain addresses, which lets the C compiler merge
+    // their stores into one of a select instead of keeping the branch.
+    auto ta = !flat && elseb ? cg.LeadingCheck(thenb) : nullptr;
+    auto ea = ta ? cg.LeadingCheck(elseb) : nullptr;
+    auto hoist = ea && cg.SameCheck(ta, ea);
+    // A && or || condition, or an inlined bool call, branches to the arm it
+    // selects (GenBranch).
+    string lbl;
+    if (!hoist && cg.BranchChain(cond)) {
+        lbl = cg.Lbl();
+        cg.GenBranch(cond, flat, lbl);
+    }
+    auto c = lbl.empty() ? cg.GenTruth(cond) : "";
     if (flat) {
         // The else cannot complete normally, so the then-block's contents
         // follow it in this C block, a scope without braces of its own: a
         // run of guards nests no C blocks, however long.
-        cg.L("if (!(", c, ")) {");
+        cg.L(lbl.empty() ? cat("if (!(", c, ")) {") : "{");
         cg.ind++;
         cg.PushSc(CodeGen::SC_PLAIN);
         if (auto b = Is<Block>(elseb)) cg.GenBlockInner(b, d);
@@ -457,20 +482,13 @@ inline void IfExpr::CgAny(CodeGen &cg, const Dst &d) {
         cg.PopSc();
         cg.ind--;
         cg.L("}");
+        if (!lbl.empty()) cg.L(lbl, ":;");
         cg.PushSc(CodeGen::SC_PLAIN);
         cg.GenBlockInner(thenb, d);
         cg.PopSc();
         cg.termjump = false;
         return;
     }
-    // Both arms starting with the same bounds check (same array, same index,
-    // nothing before it): one check ahead of the branch, after the
-    // condition, reporting the line of the arm that is taken. The arms'
-    // accesses are then plain addresses, which lets the C compiler merge
-    // their stores into one of a select instead of keeping the branch.
-    auto ta = elseb ? cg.LeadingCheck(thenb) : nullptr;
-    auto ea = ta ? cg.LeadingCheck(elseb) : nullptr;
-    auto hoist = ea && cg.SameCheck(ta, ea);
     if (hoist) {
         auto ct = cg.T();
         cg.L("uint8_t ", ct, " = (uint8_t)(", c, ");");
@@ -478,22 +496,35 @@ inline void IfExpr::CgAny(CodeGen &cg, const Dst &d) {
         cg.EmitHoistedCheck(ta, ea, c);
         ta->nobc = ea->nobc = true;
     }
-    cg.L("if (", c, ") {");
+    cg.L(lbl.empty() ? cat("if (", c, ") {") : "{");
     cg.ind++;
     cg.PushSc(CodeGen::SC_PLAIN);
     cg.GenBlockInner(thenb, d);
     cg.PopSc();
     cg.ind--;
     if (elseb) {
-        cg.L("} else {");
+        string endlbl;
+        if (lbl.empty()) {
+            cg.L("} else {");
+        } else {
+            endlbl = cg.Lbl();
+            cg.L("}");
+            cg.L("goto ", endlbl, ";");
+            cg.L(lbl, ":;");
+            cg.L("{");
+        }
         cg.ind++;
         cg.PushSc(CodeGen::SC_PLAIN);
         if (auto b = Is<Block>(elseb)) cg.GenBlockInner(b, d);
         else cg.GenAny(elseb, d);
         cg.PopSc();
         cg.ind--;
+        cg.L("}");
+        if (!endlbl.empty()) cg.L(endlbl, ":;");
+    } else {
+        cg.L("}");
+        if (!lbl.empty()) cg.L(lbl, ":;");
     }
-    cg.L("}");
     cg.termjump = false;
     // A body can be emitted more than once (element-run twins).
     if (hoist) ta->nobc = ea->nobc = false;
@@ -1000,12 +1031,11 @@ inline void While::CgStmt(CodeGen &cg) {
         return;
     }
     cg.GenLoopBody([&]() {
-        auto c = cg.GenTruth(cond);
-        auto si = (int)cg.cscopes.size() - 1;
         // The loop scope has no allocations yet, so a plain goto exits
-        // cleanly; the condition's own temps were allocated in this
-        // scope's compile-time list and are restored... none yet either.
-        cg.L("if (!(", c, ")) goto ", cg.cscopes[si].brklbl, ";");
+        // cleanly; the condition's own are restored ahead of each branch.
+        auto si = (int)cg.cscopes.size() - 1;
+        assert(cg.cscopes[si].saves.empty());
+        cg.GenBranch(cond, false, cg.cscopes[si].brklbl);
         cg.cscopes[si].usedbrk = true;
     }, body, d, "", cond);
 }
@@ -1069,7 +1099,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     // the backend already knows nothing aliases, and hoisting it by hand only
     // lengthens a live range.
     auto memlen = v.len.find('*') != string::npos || v.len.find("->") != string::npos;
-    if (fixedlen && memlen) {
+    auto hoist = [&]() {
         auto nv = cg.T();
         cg.L("int64_t ", nv, " = ", v.len, ";");
         auto bv = cg.T();
@@ -1077,7 +1107,8 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
         else cg.L("uint8_t *", bv, " = (uint8_t *)(", v.elems, ");");
         v.len = nv;
         v.elems = bv;
-    }
+    };
+    if (fixedlen && memlen) hoist();
     // A body that re-points a slice on the path, or rebinds a reference on it,
     // moves the walk to the elements the path leads to now, as the length read
     // again does: the next iteration takes the element at its index there. An
@@ -1161,6 +1192,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     }
     auto esz = cg.FixedSize(v.elem);
     auto nbinds = 0;
+    string at;   // The cursor of a pointer walk (below), if the loop is one.
     auto bind = [&]() {
         // Each copy of a body run in blocks binds the element under a name of
         // its own: an aggregate's declaration moves to the top of the
@@ -1173,7 +1205,9 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
         // The start of the elements behind a varint length prefix is a
         // statement's (RawArrayView), which runs again where they can move.
         auto elems = moves ? cg.ArrayView(lv).elems : v.elems;
-        string elem = v.typedelems
+        string elem = !at.empty() ? (v.typedelems ? cat("(*", at, ")")
+                                                  : cat("(*(", cg.CT(v.elem), " *)", at, ")"))
+                      : v.typedelems
                           ? cat(elems, "[", gi, "]")
                           : cat("(*(", cg.CT(v.elem), " *)((", elems, ") + ", gi, " * ",
                                 esz, "))");
@@ -1208,6 +1242,37 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
         }
     }
     setbound();
+    // A body that calls a recursive function keeps what the loop needs in
+    // callee-saved registers or spills it. With no index binder, elements
+    // that stay where they are and a count the body cannot change, a cursor
+    // walks the elements up to their end there: two values to keep rather
+    // than the elements, the length and an index, and the end spills as a
+    // value the loop only reads, where a count left would be stored back
+    // every iteration. Elsewhere the index is the shape the C compiler reads
+    // best: from a cursor clang can no longer tell the element from another
+    // one of the same array (n-body's planet from the ones after it), nor
+    // keep the other one's fields in registers. A fixed array's length is a
+    // constant and keeps the index too. An empty sequence's elements may be
+    // NULL, and NULL + 0 is undefined in C, so the end is only computed for a
+    // sequence that has some. The test is `<`: with `!=`, clang loses the
+    // bound it knows on a short loop's trip count and no longer unrolls it.
+    if (!idxdef && fixedlen && !fixedarr && !exitlen && CodeGen::CallsRecursive(body)) {
+        if (!memlen) hoist();
+        at = v.elems;
+        auto end = cg.T();
+        cg.L("if (", v.len, " > 0) {");
+        cg.ind++;
+        cg.GenLoopBody(bind, body, d,
+            v.typedelems
+                ? cat("for (", cg.CT(v.elem), " *", end, " = ", at, " + ", v.len, "; ", at,
+                      " < ", end, "; ", at, "++) {")
+                : cat("for (uint8_t *", end, " = ", at, " + ", v.len, " * ", esz, "; ", at,
+                      " < ", end, "; ", at, " += ", esz, ") {"),
+            nullptr, 0, { vdef, idxdef });
+        cg.ind--;
+        cg.L("}");
+        return;
+    }
     cg.GenLoopBody([&]() {
         testlen();
         bind();

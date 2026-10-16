@@ -53,13 +53,10 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
     auto ln = c->line;
     switch ((BuiltinKind)c->builtin) {
         case B_PRINT: {
-            // The whole line is rendered before any of it is written, so
-            // an argument that prints on its own (a call) cannot interleave
-            // with it.
             auto b = TempBuilder();
             for (auto a : an) EmitFormatInto(b, a, ln, c);
+            RenderLit(b, "\n");
             L("gs_out_bytes(", b.hdr, ".base, ", b.hdr, ".len);");
-            L("gs_out_nl();");
             return {};
         }
         case B_STR: return EmitStr(c, an, d0, ln);
@@ -69,6 +66,13 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             return {};
         }
         case B_ASSERT: {
+            if (BranchChain(an[0])) {
+                auto ok = Lbl();
+                GenBranch(an[0], true, ok);
+                L("gs_abort(GS_E_ASSERT, ", LocArgs(ln), ");");
+                L(ok, ":;");
+                return {};
+            }
             auto x = GenTruth(an[0]);
             L("if (!(", x, ")) gs_abort(GS_E_ASSERT, ", LocArgs(ln), ");");
             return {};
