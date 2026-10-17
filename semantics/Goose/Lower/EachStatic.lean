@@ -1,4 +1,5 @@
 import Goose.Lower.EachTypedStatement
+import Goose.Lower.Validation.ExpressionTypingGenerated
 
 namespace Goose.Lower
 
@@ -24,6 +25,12 @@ theorem PlaceOwnerShape.of_generatedTyping {cfg : Cfg} {results : List Ty} {plac
     rw [source.frame.mod_t, source.frame.vars_t]
     exact lowered
   exact recorded source.typed sourceRun (by simp only [live, Option.isSome_some]) generated
+
+theorem placeOwnerShape_generated (cfg : Cfg) (results : List Ty) (place : Place) :
+    PlaceOwnerShape cfg results place := by
+  apply PlaceOwnerShape.of_generatedTyping
+  intro typingEnv info start finish typed input output address lowered live generated
+  exact Validation.lowerPlace_generated_typed place typed lowered live generated
 
 theorem eachSourceMode_of_live_place {cfg : Cfg} {env : Env} {state : St} {results : List Ty}
     {place : Place} (source : PlaceSource cfg env place state)
