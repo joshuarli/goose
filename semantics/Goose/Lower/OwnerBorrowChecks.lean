@@ -1,5 +1,6 @@
 import Goose.Lower.CoreToGir
 import Goose.GIR.Eval
+import Goose.GIR.Json
 
 namespace Goose.Lower.OwnerBorrowChecks
 
@@ -23,5 +24,25 @@ private def function : Func :=
 #guard function.permissionOfOp #[] #[] #[] #[(false, true)] 1 (.ownerBorrow 0) == (true, true)
 #guard function.permissionOfOp #[] #[] #[] #[(true, false)] 1 (.ownerBorrow 0) == (false, false)
 #guard function.permissionOfOp #[] #[] #[] #[(true, true)] 1 (.refFreeze 0) == (false, false)
+
+private def wire : String := (Json.wOp 1 (.ownerBorrow 0)).run {} |>.1
+
+private def tables : Json.Tables :=
+  { types := #[], nGlobals := 0, nFuncs := 0, nOrigins := 0,
+    nSlots := 0, nScopes := 0, nBlocks := 0 }
+
+#guard wire == "[\"i_owner_borrow\",1,0]"
+#guard match Lean.Json.parse wire >>= Json.decInst tables with
+  | .ok (.def 1 (.ownerBorrow 0)) => true
+  | _ => false
+#guard match Lean.Json.parse "[\"i_owner_borrow\",1]" >>= Json.decInst tables with
+  | .error _ => true
+  | _ => false
+#guard match Lean.Json.parse "[\"i_owner_borrow\",1,0,null]" >>= Json.decInst tables with
+  | .error _ => true
+  | _ => false
+
+theorem ownerBorrow_runtime_identity (cx : FnCtx) (frame : Frame) (owner : ValueId) :
+    execPure cx frame (.ownerBorrow owner) = execPure cx frame (.refFreeze owner) := rfl
 
 end Goose.Lower.OwnerBorrowChecks
