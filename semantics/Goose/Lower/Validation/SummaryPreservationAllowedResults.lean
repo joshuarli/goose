@@ -60,7 +60,7 @@ theorem rootsRepresent_context_allowed {module : Core.Module} {ctx : Context} {i
   apply allowedRoots_complete represented
   intro index member
   have bound := rootsRepresent_context_parameter_bounds represented declaredBounds index member
-  simpa [lowerContextAt, lowerImpl] using bound
+  simpa [lowerContextAt, lowerImpl, lowerImplFromState] using bound
 
 
 theorem checkedResult_allowedRoots {env : PEnv} {actual source : List RootRef}
