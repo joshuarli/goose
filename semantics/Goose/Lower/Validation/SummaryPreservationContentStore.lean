@@ -26,8 +26,39 @@ def contentElementStore : Module :=
 theorem contentElementStore_core_accepted : Core.validate contentElementStore = .ok () := by
   cbv
 
-theorem contentElementStore_gir_rejected :
-    (match GIR.validate (lower contentElementStore) with
+theorem contentElementStore_gir_accepted :
+    GIR.validate (lower contentElementStore) = .ok () := by
+  cbv
+
+def sliceVariableStore : Module :=
+  { contentElementStore with
+    impls := contentElementStore.impls.modify 1 fun impl =>
+      { impl with
+        body := .mk 0 [.assign (.deref (.read (.var 0)))
+          (.read (.deref (.read (.var 1)))) 0] none,
+        summary := .known ⟨[.param 1], [.param 0], [], [], [.param 0], false, false⟩ },
+    contexts := contentElementStore.contexts.modify 1 fun context =>
+      { context with contentRoots := [(0, []), (1, [])] } }
+
+def undeclaredSliceVariableStore : Module :=
+  { sliceVariableStore with
+    impls := sliceVariableStore.impls.modify 1 fun impl =>
+      { impl with summary := .known ⟨[.param 1], [.param 0], [], [], [], false, false⟩ } }
+
+theorem sliceVariableStore_core_accepted : Core.validate sliceVariableStore = .ok () := by
+  cbv
+
+theorem sliceVariableStore_gir_accepted : GIR.validate (lower sliceVariableStore) = .ok () := by
+  cbv
+
+theorem undeclaredSliceVariableStore_core_rejected :
+    (match Core.validate undeclaredSliceVariableStore with
+    | .error _ => true
+    | .ok _ => false) = true := by
+  cbv
+
+theorem undeclaredSliceVariableStore_gir_rejected :
+    (match GIR.validate (lower undeclaredSliceVariableStore) with
     | .error rejection => rejection.code == .v050
     | .ok _ => false) = true := by
   cbv
