@@ -23,6 +23,7 @@ theorem effectStep_congr_values {module : GIR.Module} {vt : Array (Option VTy)}
         intro value member
         rw [values value member]
       simp only [Func.effectStep, arguments]
+    | viewSlice mutability value low high origin => cases low <;> cases high <;> rfl
     | un operation ty value origin => cases operation <;> rfl
     | conv kind source target value origin => cases kind <;> rfl
     | _ => simp_all [Func.effectStep, Inst.uses, Op.uses]

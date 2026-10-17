@@ -23,8 +23,25 @@ def readonlySliceCoercion : Module :=
 theorem readonlySliceCoercion_core_accepted : Core.validate readonlySliceCoercion = .ok () := by
   cbv
 
-theorem readonlySliceCoercion_gir_rejected :
-    (match GIR.validate (lower readonlySliceCoercion) with
+theorem readonlySliceCoercion_gir_accepted :
+    GIR.validate (lower readonlySliceCoercion) = .ok () := by
+  cbv
+
+
+def boundedReadonlySlice : Module :=
+  { readonlySliceCoercion with
+    impls := readonlySliceCoercion.impls.modify 1 fun impl =>
+      { impl with body := .mk 0 [.letS 1 (.slice .readOnly (.val (.read (.var 0)))
+          (.expr (.lit .i64 (-1))) .omitted 0) 0] none } }
+
+theorem boundedReadonlySlice_core_rejected :
+    (match Core.validate boundedReadonlySlice with
+    | .error rejection => rejection.rule == .summary
+    | .ok _ => false) = true := by
+  cbv
+
+theorem boundedReadonlySlice_gir_rejected :
+    (match GIR.validate (lower boundedReadonlySlice) with
     | .error rejection => rejection.code == .v050
     | .ok _ => false) = true := by
   cbv
