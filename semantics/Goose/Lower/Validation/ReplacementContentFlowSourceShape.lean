@@ -36,7 +36,6 @@ theorem accepted_context_return_seed {module : Core.Module} {index : ContextId} 
     (contextRow : module.contexts[index]? = some ctx)
     (implementationRow : module.impls[ctx.impl]? = some impl) :
     ∃ atoms, declaredReturn (lowerContextAt module ctx impl) = .known atoms := by
-  have checked := actual_context_checked accepted contextRow implementationRow
   obtain ⟨bodyType, next, typed, shape⟩ :=
     ((Core.Sound.validate_modOk module accepted).impl ctx.impl impl implementationRow).body
   rcases shape with ⟨empty, _⟩ | ⟨type, singleton, _⟩

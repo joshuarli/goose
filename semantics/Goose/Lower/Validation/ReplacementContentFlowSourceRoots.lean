@@ -11,21 +11,21 @@ theorem normalize_empty (func : Func) : normalize func (.known []) = some [] := 
 
 theorem normalize_local (func : Func) (slot : SlotId) :
     normalize func (.known [.local slot]) = some [.local slot] := by
-  simp [normalize, unionRoots]
+  simp [normalize, normalizeAtom, unionRoots]
 
 theorem normalize_global (func : Func) (global : GlobalId) :
     normalize func (.known [.global global]) = some [.global global] := by
-  simp [normalize, unionRoots]
+  simp [normalize, normalizeAtom, unionRoots]
 
 theorem normalize_parameter (func : Func) (index : Nat) :
     normalize func (.known [.param index]) = some (unionRoots [] (func.parameterRoots index)) := by
-  simp [normalize]
+  simp [normalize, normalizeAtom]
 
 theorem normalize_contents {func : Func} {index : Nat} {roots : List RootRef}
     (annotation : func.roots.contents.find? (·.1 == index) = some (index, roots)) :
     normalize func (.known [.contents index]) =
       some (unionRoots [] (roots.flatMap func.expandParameterRoot)) := by
-  simp [normalize, annotation]
+  simp [normalize, normalizeAtom, annotation]
 
 theorem lowerContextAt_parameter_normalized {module : Core.Module} {ctx : Context} {impl : Impl}
     {index : Nat} {param : Param} {roots : List RootRef}
