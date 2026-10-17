@@ -5499,6 +5499,8 @@ private:
     void CheckShrinkReplace(const Fn &fn, const ResultRootInfo &resultRoots) {
         const auto &f = *fn.f;
         auto provenance = Provenance(resultRoots, fn);
+        for (auto &roots : provenance.vals) roots = ExpandParameterRoots(f, roots);
+        for (auto &roots : provenance.slots) roots = ExpandParameterRoots(f, roots);
         auto fresh = FreshOwnerRuns(fn);
         auto states = EmptyFactsAtBlocks(fn, provenance);
         for (size_t b = 0; b < f.blocks.size(); b++) {

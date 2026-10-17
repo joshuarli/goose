@@ -2720,6 +2720,101 @@ void AcceptsEmptyOwnerFactsThroughBlockParameters() {
     assert(Code(ShrinkReplaceAfterMixedClearJoin()) == "GIR-V060");
 }
 
+void SpecializedReplacementRootsUseCheckedGlobalIdentities() {
+    CoreModule core;
+    core.profile = CoreProfile::Shrink;
+    core.files = { "specialized-replacement.goose" };
+    core.types = { CoreType { .kind = CoreType::Int, .ity = CoreIntTy::I64 },
+                   CoreType { .kind = CoreType::GrowShrink, .elem = 0 },
+                   CoreType { .kind = CoreType::Ref, .mut = CoreMut::Mut, .elem = 1 },
+                   CoreType { .kind = CoreType::Ref, .mut = CoreMut::Const, .elem = 0 },
+                   CoreType { .kind = CoreType::Unit } };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto empty = make_unique<CoreExpr>();
+    empty->kind = CoreExprKind::Arr;
+    empty->type = 1;
+    auto one = make_unique<CoreExpr>();
+    one->kind = CoreExprKind::Lit;
+    one->type = 0;
+    one->value = "1";
+    core.globals.push_back(CoreGlobal { "owner", 1, CoreVarKind::Var, std::move(empty), origin });
+    core.globals.push_back(CoreGlobal { "other", 0, CoreVarKind::Let, std::move(one), origin });
+    CoreImpl entry;
+    entry.name = "main";
+    entry.summary.unknown = true;
+    entry.body.scope = 0;
+    CoreStmt invoke;
+    invoke.kind = CoreStmtKind::Expr;
+    invoke.org = origin;
+    invoke.expr = make_unique<CoreExpr>();
+    invoke.expr->kind = CoreExprKind::Call;
+    invoke.expr->ctx = 1;
+    invoke.expr->type = 4;
+    invoke.expr->org = origin;
+    for (int global = 0; global < 2; global++) {
+        auto place = make_unique<CorePlace>();
+        place->kind = CorePlace::Global;
+        place->index = global;
+        invoke.expr->args.push_back(CoreArgReference { global == 0 ? CoreMut::Mut : CoreMut::Const, std::move(place) });
+    }
+    entry.body.stmts.push_back(std::move(invoke));
+    CoreImpl replace;
+    replace.name = "replace";
+    replace.params = { { 0, true }, { 1, true } };
+    replace.vars = { CoreVar { "p", 2, CoreVarKind::Let, 0, origin },
+                     CoreVar { "q", 3, CoreVarKind::Let, 0, origin } };
+    replace.summary.unknown = true;
+    replace.body.scope = 0;
+    auto dereference = [](int variable, CoreTypeId type) {
+        auto place = make_unique<CorePlace>();
+        place->kind = CorePlace::Deref;
+        place->expr = make_unique<CoreExpr>();
+        place->expr->kind = CoreExprKind::Read;
+        place->expr->type = type;
+        place->expr->place = make_unique<CorePlace>();
+        place->expr->place->kind = CorePlace::Local;
+        place->expr->place->index = variable;
+        return place;
+    };
+    CoreStmt assignment;
+    assignment.kind = CoreStmtKind::AssignWhole;
+    assignment.org = origin;
+    assignment.place = dereference(0, 2);
+    assignment.expr = make_unique<CoreExpr>();
+    assignment.expr->kind = CoreExprKind::Arr;
+    assignment.expr->type = 1;
+    auto element = make_unique<CoreExpr>();
+    element->kind = CoreExprKind::Read;
+    element->type = 0;
+    element->place = dereference(1, 3);
+    assignment.expr->elems.push_back(std::move(element));
+    replace.body.stmts.push_back(std::move(assignment));
+    core.impls.push_back(std::move(entry));
+    core.impls.push_back(std::move(replace));
+    core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1, .varroots = {
+        { 0, { CoreRootRef { CoreRootRef::Global, 0 } } },
+        { 1, { CoreRootRef { CoreRootRef::Global, 1 } } } } } };
+    auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    auto overlapping = high;
+    overlapping.funcs[0].blocks[0].insts.erase(remove_if(overlapping.funcs[0].blocks[0].insts.begin(),
+        overlapping.funcs[0].blocks[0].insts.end(), [](auto &inst) { return inst.op == GirOp::Call; }),
+        overlapping.funcs[0].blocks[0].insts.end());
+    overlapping.funcs[1].roots.params[1].second = { CoreRootRef { CoreRootRef::Global, 0 } };
+    assert(Code(overlapping) == "GIR-V060");
+    auto unknown = high;
+    unknown.funcs[1].roots.params.erase(unknown.funcs[1].roots.params.begin() + 1);
+    assert(Code(unknown) == "GIR-V060");
+    unknown.funcs[1].roots.params.clear();
+    assert(Code(unknown) == "GIR-V060");
+    auto forged = high;
+    forged.funcs[1].roots.params[0].second = { CoreRootRef { CoreRootRef::Global, 1 } };
+    assert(Code(forged) == "GIR-V050");
+    auto emptyAnnotation = high;
+    emptyAnnotation.funcs[1].roots.params[1].second.clear();
+    assert(Code(emptyAnnotation) == "GIR-V050");
+}
+
 void RejectsInvalidShrinkReplacementProofs() {
     auto uncleared = ShrinkReplaceRunThroughPhi();
     auto &entry = Main(uncleared).blocks[0].insts;
@@ -6989,6 +7084,7 @@ int main() {
     RejectsReplacementThroughALetOwnerPhi();
     LowPreservesOwnerLiteralRunsAcrossJoins();
     LowSplitsSameTargetCondBrForOwnerRuns();
+    SpecializedReplacementRootsUseCheckedGlobalIdentities();
     RejectsInvalidShrinkReplacementProofs();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
