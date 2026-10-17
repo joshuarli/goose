@@ -25,6 +25,7 @@ theorem resultRoots_go_below
 
 theorem resultRoots_below {module : Goose.GIR.Module} {vts : Array (Array (Option VTy))}
     {upper : Array (List RootRef)}
+    (initial : RootsBelow module.declaredResultRoots upper)
     (returned : ∀ candidate, RootsBelow candidate upper →
       ∀ index func types, (module.funcs.zip vts)[index]? = some (func, types) →
         ∀ root ∈ func.returnedRoots (func.provenance candidate types
@@ -45,8 +46,6 @@ theorem resultRoots_below {module : Goose.GIR.Module} {vts : Array (Array (Optio
       rcases mem_unionRoots_iff.mp member with prior | body
       · exact bounded _ _ prior
       · exact returned candidate bounded index func types lookup root body
-  · intro index root member
-    simp only [rootsAt, Array.getElem?_map] at member
-    cases lookup : module.funcs[index]? <;> simp [lookup] at member
+  · exact initial
 
 end Goose.Lower.Validation.SummaryPreservation
