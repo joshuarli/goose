@@ -8,11 +8,7 @@ def ReconstructionPartial (n : Nat) (types : ValueId → VTy)
     (vals : Array (Option VTy)) : Prop :=
   vals.size = n ∧ ∀ v t, vals[v]? = some (some t) → t = types v
 
-def ReconstructionPrefix (types : ValueId → VTy)
-    (vals : Array (Option VTy)) (k : Nat) : Prop :=
-  ∀ v, v < k → vals[v]? = some (some (types v))
-
-def ReconstructionExtends (before after : Array (Option VTy)) : Prop :=
+private def ReconstructionExtends (before after : Array (Option VTy)) : Prop :=
   ∀ (v : ValueId) (t : VTy), before[v]? = some (some t) → after[v]? = some (some t)
 
 def reconstructionEnv (m : GIR.Module) (f : Func)
@@ -24,23 +20,6 @@ def reconstructionEnv (m : GIR.Module) (f : Func)
     structs := m.structs
     profile := m.profile
     contentsWritable := fun v => (f.permissions m roundStart)[v]?.map (·.2) }
-
-structure OrderedReconstruction (m : GIR.Module) (f : Func) (types : ValueId → VTy) : Prop where
-  parameters : ∀ b ∈ f.blocks.toList, ∀ v t, (v, t) ∈ b.params → t = types v
-  covers : ∀ v, v < f.numValues →
-    (∃ b ∈ f.blocks.toList, (v, types v) ∈ b.params) ∨
-    (∃ b ∈ f.blocks.toList, ∃ op, .def v op ∈ b.insts)
-  sound : ∀ b ∈ f.blocks.toList, ∀ v op, .def v op ∈ b.insts →
-    ∀ roundStart vals t,
-      ReconstructionPartial f.numValues types roundStart →
-      ReconstructionPartial f.numValues types vals →
-      op.resultTy (reconstructionEnv m f roundStart vals) = .ok t → t = types v
-  ready : ∀ b ∈ f.blocks.toList, ∀ v op, .def v op ∈ b.insts →
-    v < f.numValues → ∀ roundStart vals,
-      ReconstructionPartial f.numValues types roundStart →
-      ReconstructionPartial f.numValues types vals →
-      ReconstructionPrefix types vals v →
-      op.resultTy (reconstructionEnv m f roundStart vals) = .ok (types v)
 
 private theorem partial_set {n types vals v t}
     (known : ReconstructionPartial n types vals) (typed : t = types v) :
@@ -99,7 +78,7 @@ private theorem fold_reaches {α β : Type} (xs : List α) (step : β → α →
         (fun z hz => preserve z (by simp [hz]))
         (fun z hz => retain z (by simp [hz])) ⟨y, tail, produces⟩
 
-def reconstructionInstruction (m : GIR.Module) (f : Func)
+private def reconstructionInstruction (m : GIR.Module) (f : Func)
     (roundStart : Array (Option VTy)) (acc : Array (Option VTy) × Bool)
     (instruction : Inst) : Array (Option VTy) × Bool :=
   match instruction with
@@ -111,62 +90,25 @@ def reconstructionInstruction (m : GIR.Module) (f : Func)
     else acc
   | _ => acc
 
-def reconstructionInstructions (f : Func) : List Inst :=
+private def reconstructionInstructions (f : Func) : List Inst :=
   f.blocks.toList.flatMap (·.insts)
 
-def reconstructionRound (m : GIR.Module) (f : Func)
+private def reconstructionRound (m : GIR.Module) (f : Func)
     (vals : Array (Option VTy)) : Array (Option VTy) × Bool :=
   (reconstructionInstructions f).foldl (reconstructionInstruction m f vals) (vals, false)
 
-def reconstructionStart (f : Func) : Array (Option VTy) :=
+private def reconstructionStart (f : Func) : Array (Option VTy) :=
   f.blocks.toList.foldl (fun a b =>
     b.params.foldl (fun a (v, t) =>
       if v < f.numValues then a.set! v (some t) else a) a)
     (Array.replicate f.numValues none)
 
-theorem valueTypes_eq_reconstruction (m : GIR.Module) (f : Func) :
+private theorem valueTypes_eq_reconstruction (m : GIR.Module) (f : Func) :
     f.valueTypes m = Func.valueTypes.go (reconstructionRound m f)
       (2 * f.numValues + 2) (reconstructionStart f) := by
   unfold Func.valueTypes reconstructionRound reconstructionInstructions reconstructionStart
   simp only [List.foldl_flatMap, Array.foldl_toList]
   rfl
-
-private theorem instruction_preserves {m : GIR.Module} {f : Func} {types : ValueId → VTy}
-    (ordered : OrderedReconstruction m f types)
-    {roundStart : Array (Option VTy)}
-    (roundKnown : ReconstructionPartial f.numValues types roundStart)
-    {instruction : Inst} (member : instruction ∈ reconstructionInstructions f)
-    (acc : Array (Option VTy) × Bool)
-    (known : ReconstructionPartial f.numValues types acc.1) :
-    ReconstructionPartial f.numValues types
-      (reconstructionInstruction m f roundStart acc instruction).1 ∧
-    ReconstructionExtends acc.1
-      (reconstructionInstruction m f roundStart acc instruction).1 := by
-  obtain ⟨b, blockMember, instructionMember⟩ := List.mem_flatMap.mp member
-  cases instruction <;> simp only [reconstructionInstruction]
-  case «def» v op =>
-    split
-    · split
-      · next t typed =>
-          have agrees := ordered.sound b blockMember v op instructionMember
-            roundStart acc.1 t roundKnown known typed
-          exact ⟨partial_set known agrees, extends_set known agrees⟩
-      · exact ⟨known, fun _ _ lookup => lookup⟩
-    · exact ⟨known, fun _ _ lookup => lookup⟩
-  all_goals exact ⟨known, fun _ _ lookup => lookup⟩
-
-private theorem round_preserves {m : GIR.Module} {f : Func} {types : ValueId → VTy}
-    (ordered : OrderedReconstruction m f types)
-    {vals : Array (Option VTy)} (known : ReconstructionPartial f.numValues types vals) :
-    ReconstructionPartial f.numValues types (reconstructionRound m f vals).1 ∧
-    ReconstructionExtends vals (reconstructionRound m f vals).1 := by
-  apply fold_preserves (reconstructionInstructions f) (reconstructionInstruction m f vals)
-    (fun acc => ReconstructionPartial f.numValues types acc.1 ∧
-      ReconstructionExtends vals acc.1) (vals, false)
-  · exact ⟨known, fun _ _ lookup => lookup⟩
-  · intro inst member acc established
-    obtain ⟨nextKnown, extension⟩ := instruction_preserves ordered known member acc established.1
-    exact ⟨nextKnown, fun v t lookup => extension v t (established.2 v t lookup)⟩
 
 private theorem start_known {f : Func} {types : ValueId → VTy}
     (parameters : ∀ b ∈ f.blocks.toList, ∀ v t, (v, t) ∈ b.params → t = types v) :
@@ -227,49 +169,6 @@ private theorem start_parameter {f : Func} {types : ValueId → VTy}
         known.1]⟩
   simpa only [pairs, step, reconstructionStart, List.foldl_flatMap] using produced
 
-private theorem round_prefix {m : GIR.Module} {f : Func} {types : ValueId → VTy}
-    (ordered : OrderedReconstruction m f types)
-    {vals : Array (Option VTy)} (known : ReconstructionPartial f.numValues types vals)
-    {k : Nat} (front : ReconstructionPrefix types vals k) :
-    ReconstructionPrefix types (reconstructionRound m f vals).1 k := by
-  intro v bound
-  exact (round_preserves ordered known).2 v (types v) (front v bound)
-
-private theorem round_next {m : GIR.Module} {f : Func} {types : ValueId → VTy}
-    (ordered : OrderedReconstruction m f types)
-    {vals : Array (Option VTy)} (known : ReconstructionPartial f.numValues types vals)
-    {k : Nat} (bound : k < f.numValues) (front : ReconstructionPrefix types vals k)
-    (seeded : ∀ v, v < f.numValues →
-      (∃ b ∈ f.blocks.toList, (v, types v) ∈ b.params) →
-      vals[v]? = some (some (types v))) :
-    ReconstructionPrefix types (reconstructionRound m f vals).1 (k + 1) := by
-  have kept := round_prefix ordered known front
-  intro v below
-  by_cases old : v < k
-  · exact kept v old
-  have same : v = k := by omega
-  subst v
-  rcases ordered.covers k bound with parameter | definition
-  · exact (round_preserves ordered known).2 k (types k) (seeded k bound parameter)
-  · obtain ⟨b, blockMember, op, member⟩ := definition
-    have witness : Inst.def k op ∈ reconstructionInstructions f :=
-      List.mem_flatMap.mpr ⟨b, blockMember, member⟩
-    apply fold_reaches (reconstructionInstructions f) (reconstructionInstruction m f vals)
-      (fun acc => ReconstructionPartial f.numValues types acc.1 ∧
-        ReconstructionPrefix types acc.1 k)
-      (fun acc => acc.1[k]? = some (some (types k))) (vals, false) ⟨known, front⟩
-    · intro inst imem acc established
-      obtain ⟨nextKnown, extension⟩ := instruction_preserves ordered known imem acc established.1
-      exact ⟨nextKnown, fun w h => extension w (types w) (established.2 w h)⟩
-    · intro inst imem acc established typed
-      exact (instruction_preserves ordered known imem acc established.1).2 k (types k) typed
-    · refine ⟨.def k op, witness, ?_⟩
-      intro acc established
-      have typed := ordered.ready b blockMember k op member bound vals acc.1
-        known established.1 established.2
-      simp [reconstructionInstruction, bound, typed, Array.set!_eq_setIfInBounds,
-        established.1.1]
-
 private theorem set_same {vals : Array (Option VTy)} {v : ValueId} {t : VTy}
     (lookup : vals[v]? = some (some t)) : vals.set! v (some t) = vals := by
   apply Array.ext_getElem?
@@ -319,78 +218,11 @@ private theorem round_unchanged {m : GIR.Module} {f : Func}
       rw [List.foldl_cons, rest, (instruction_unchanged firstFalse).1]
   exact congrArg Prod.fst (foldFalse _ (vals, false) unchanged)
 
-private theorem round_total_of_unchanged {m : GIR.Module} {f : Func} {types : ValueId → VTy}
-    (ordered : OrderedReconstruction m f types)
-    {vals : Array (Option VTy)} (known : ReconstructionPartial f.numValues types vals)
-    (seeded : ∀ v, v < f.numValues →
-      (∃ b ∈ f.blocks.toList, (v, types v) ∈ b.params) →
-      vals[v]? = some (some (types v)))
-    (unchanged : (reconstructionRound m f vals).2 = false) :
-    ReconstructionPrefix types vals f.numValues := by
-  have progress : ∀ k, k ≤ f.numValues → ReconstructionPrefix types vals k := by
-    intro k
-    induction k with
-    | zero => intros; intro v h; omega
-    | succ k ih =>
-      intro bound
-      have next := round_next ordered known (by omega) (ih (by omega)) seeded
-      rwa [round_unchanged unchanged] at next
-  exact progress _ (Nat.le_refl _)
-
-private theorem go_reconstructs {m : GIR.Module} {f : Func} {types : ValueId → VTy}
-    (ordered : OrderedReconstruction m f types)
-    (fuel : Nat) {vals : Array (Option VTy)}
-    (known : ReconstructionPartial f.numValues types vals)
-    (seeded : ∀ v, v < f.numValues →
-      (∃ b ∈ f.blocks.toList, (v, types v) ∈ b.params) →
-      vals[v]? = some (some (types v)))
-    {k : Nat} (front : ReconstructionPrefix types vals k)
-    (enough : f.numValues ≤ k + fuel) :
-    ReconstructionPrefix types
-      (Func.valueTypes.go (reconstructionRound m f) fuel vals) f.numValues := by
-  induction fuel generalizing vals k with
-  | zero =>
-    simp only [Func.valueTypes.go.eq_1]
-    intro v bound
-    exact front v (by omega)
-  | succ fuel ih =>
-    rw [Func.valueTypes.go.eq_2]
-    change ReconstructionPrefix types
-      (if (reconstructionRound m f vals).2 = true then
-        Func.valueTypes.go (reconstructionRound m f) fuel (reconstructionRound m f vals).1
-      else (reconstructionRound m f vals).1) f.numValues
-    split
-    · next changed =>
-        have nextKnown := (round_preserves ordered known).1
-        have nextSeeded : ∀ v, v < f.numValues →
-            (∃ b ∈ f.blocks.toList, (v, types v) ∈ b.params) →
-            (reconstructionRound m f vals).1[v]? = some (some (types v)) := by
-          intro v bound parameter
-          exact (round_preserves ordered known).2 v (types v) (seeded v bound parameter)
-        by_cases complete : f.numValues ≤ k
-        · exact ih nextKnown nextSeeded (round_prefix ordered known front) (by omega)
-        · exact ih nextKnown nextSeeded
-            (round_next ordered known (by omega) front seeded) (by omega)
-    · next stopped =>
-        have stoppedFalse : (reconstructionRound m f vals).2 = false := by
-          cases h : (reconstructionRound m f vals).2 <;> simp_all
-        rw [round_unchanged stoppedFalse]
-        exact round_total_of_unchanged ordered known seeded stoppedFalse
-
-theorem valueTypes_reconstructs {m : GIR.Module} {f : Func} {types : ValueId → VTy}
-    (ordered : OrderedReconstruction m f types) :
-    ReconstructionPrefix types (f.valueTypes m) f.numValues := by
-  rw [valueTypes_eq_reconstruction]
-  apply go_reconstructs ordered _ (start_known ordered.parameters)
-    (fun v bound parameter => start_parameter ordered.parameters bound parameter)
-    (k := 0) (by intro v h; omega)
-  omega
-
 def ReconstructionRankPrefix (f : Func) (rank : ValueId → Nat)
     (types : ValueId → VTy) (vals : Array (Option VTy)) (k : Nat) : Prop :=
   ∀ v, v < f.numValues → rank v < k → vals[v]? = some (some (types v))
 
-def ReconstructionParameters (f : Func) (types : ValueId → VTy)
+private def ReconstructionParameters (f : Func) (types : ValueId → VTy)
     (vals : Array (Option VTy)) : Prop :=
   ∀ b ∈ f.blocks.toList, ∀ v t, (v, t) ∈ b.params →
     v < f.numValues → vals[v]? = some (some (types v))
