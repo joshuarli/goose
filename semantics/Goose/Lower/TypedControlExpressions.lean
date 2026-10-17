@@ -342,7 +342,8 @@ theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Exp
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨cv, ls1, h1, hw⟩ := hlow
   have hadv_w : ls1.Adv ls' :=
-    advB_ifE_core cv (advB_lowerBlock none [] true thenBlock) (advB_lowerBlock none [] true elseBlock) _ _ _ _ hw
+    advB_ifE_core cv (sourceBlockScope thenBlock)
+      (advB_lowerBlock none [] true thenBlock) (advB_lowerBlock none [] true elseBlock) _ _ _ _ hw
   have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv hadv_w
   simp only [evalExpr]
   refine SimEAt.bind (conditionClaim env state condition conditionMetadata ls ls1 cv pt cx fr
@@ -360,12 +361,35 @@ theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Exp
   rw [whenLive_some _ _ _ hc1] at hw
   simp only [bind_eq] at hw
   obtain ⟨⟨tb, eb⟩, lsf, hf, u2, ls2, hs1, vt, ls3, ha1, endT, ls4, hc4, u5, ls5, hs2, vf, ls6, ha2,
-    endF, ls7, hc7, hj⟩ := hw
+    endF, ls7, hc7, joined, ls8, hj, u8, ls9, hrecipe, hp⟩ := hw
   obtain ⟨e4c, e4⟩ := curBlock_eq hc4
   subst e4
   obtain ⟨e7c, e7⟩ := curBlock_eq hc7
   subst e7
-  have hext6 : ExtT ls7 cx.fn.blocks := hext.of_ext (joinValue_ext hj)
+  rw [pure_run] at hp
+  have hfinal : ls9 = ls' := (Prod.mk.inj hp).2
+  have recipeExt : ls8.Ext ls9 :=
+    (advB_recordValueRootRecipe joined (sourceBlockScope thenBlock) _ _ _ _ hrecipe).ext
+  have recipeState := hrecipe
+  rw [recordValueRootRecipe_run] at recipeState
+  have recipeUpdate := (Prod.mk.inj recipeState).2
+  have recipeVals : ls9.vals = ls8.vals := by
+    simpa using (congrArg LS.vals recipeUpdate).symm
+  have recipeStack : ls9.stack = ls8.stack := by
+    simpa using (congrArg LS.stack recipeUpdate).symm
+  have recipePp : ls8.pp = ls9.pp := by
+    simpa [LS.pp] using congrArg LS.pp recipeUpdate
+  have recipeFinal : ls8.Ext ls' := by
+    rw [← hfinal]
+    exact recipeExt
+  have finalVals : ls'.vals = ls8.vals := by
+    rw [← hfinal]
+    exact recipeVals
+  have finalStack : ls'.stack = ls8.stack := by
+    rw [← hfinal]
+    exact recipeStack
+  have joinOutputExt : ExtT ls8 cx.fn.blocks := hext.of_ext recipeFinal
+  have hext6 : ExtT ls7 cx.fn.blocks := joinOutputExt.of_ext (joinValue_ext hj)
   have hadv1 := advB_lowerBlock none [] true thenBlock _ _ _ _ ha1
   have hadv2 := advB_lowerBlock none [] true elseBlock _ _ _ _ ha2
   obtain ⟨htb, heb, hinst, ⟨Ttb, hTtb, hTtbp⟩, ⟨Teb, hTeb, hTebp⟩, hpp2, hpp5, hst2, hv2, hst3, hst6,
@@ -427,21 +451,26 @@ theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Exp
     obtain ⟨blk7, hc7', hb7, hp7⟩ := LS.pp_some P7.pp
     have hendF' : endF = some pt7.1 := by rw [e7c]; exact hc7'
     have hlive : endT.isSome ∨ endF.isSome := Or.inr (by rw [hendF']; rfl)
-    obtain ⟨ty, hr, hvj, hstj, hbj, hcj, hTj, hFj⟩ := joinValue_facts hj hext hlive hnd hltT hltF
+    obtain ⟨ty, hr, hvj, hstj, hbj, hcj, hTj, hFj⟩ := joinValue_facts hj joinOutputExt hlive hnd hltT hltF
+    have hresult : r = ls7.vals.size := (Prod.mk.inj hp).1.symm.trans hr
+    have finalPp : ls'.pp = some (ls7.blocks.size, 0) := by
+      rw [← hfinal, ← recipePp]
+      exact LS.pp_eq hcj hbj
     have hinstF := hFj pt7.1 blk7 hendF' hb7
-    obtain ⟨Tjb, hTjb, hTjbp⟩ := hext.params hbj
+    obtain ⟨Tjb, hTjb, hTjbp⟩ := joinOutputExt.params hbj
     have hcell : fr7.vals[vf]? = some (.val v) := P7.has (vf, _) (by simp)
     have hpt7 : pt7 = (pt7.1, blk7.insts.size) := Prod.ext rfl hp7
     have hi7 : instAt cx.fn pt7 = some (.term (.br ls7.blocks.size [vf])) := by
       rw [hpt7]; exact hinstF
     have g2 := goes_br1 hi7 hTjb hTjbp hcell
     refine ⟨(ls7.blocks.size, 0), fr7.set ls7.vals.size (.val v), g2, ?_⟩
-    rw [hr]
+    rw [hresult]
     have hsame : Same ls.vals.size fr fr7 := by
       refine P1.same.trans (P7.same.mono ?_) P1.mono
       rw [e5]; show ls1.vals.size ≤ ls4.vals.size; exact hmono_all
     exact Post.join hsame (P7.rel.stack_eq (hrel.stack.trans P7.rel.stack.symm)) (by nat_omega)
-      (by nat_omega) (by nat_omega) (hstj.trans hst_out) (LS.pp_eq hcj hbj)
+      (by rw [finalVals]; nat_omega) (by rw [finalVals]; nat_omega)
+      (finalStack.trans (hstj.trans hst_out)) finalPp
   ·
     simp only [↓reduceIte]
     refine SimEAt.goes (goes_condbr_then0 hinst' hcv hTtb hTtbp rfl) ?_
@@ -451,23 +480,28 @@ theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Exp
     obtain ⟨blk3, hc3, hb3, hp3⟩ := LS.pp_some P3.pp
     have hendT' : endT = some pt3.1 := by rw [e4c]; exact hc3
     have hlive : endT.isSome ∨ endF.isSome := Or.inl (by rw [hendT']; rfl)
-    obtain ⟨ty, hr, hvj, hstj, hbj, hcj, hTj, hFj⟩ := joinValue_facts hj hext hlive hnd hltT hltF
+    obtain ⟨ty, hr, hvj, hstj, hbj, hcj, hTj, hFj⟩ := joinValue_facts hj joinOutputExt hlive hnd hltT hltF
+    have hresult : r = ls7.vals.size := (Prod.mk.inj hp).1.symm.trans hr
+    have finalPp : ls'.pp = some (ls7.blocks.size, 0) := by
+      rw [← hfinal, ← recipePp]
+      exact LS.pp_eq hcj hbj
     have hne : pt3.1 ≠ eb := (hendT pt3.1 hc3).2.1
     have hb7 : ls7.blocks[pt3.1]? = some blk3 := hkeep pt3.1 blk3 hb3 hne
     have hinstT := hTj pt3.1 blk3 hendT' hb7
-    obtain ⟨Tjb, hTjb, hTjbp⟩ := hext.params hbj
+    obtain ⟨Tjb, hTjb, hTjbp⟩ := joinOutputExt.params hbj
     have hcell : fr3.vals[vt]? = some (.val v) := P3.has (vt, _) (by simp)
     have hpt3 : pt3 = (pt3.1, blk3.insts.size) := Prod.ext rfl hp3
     have hi3 : instAt cx.fn pt3 = some (.term (.br ls7.blocks.size [vt])) := by
       rw [hpt3]; exact hinstT
     have g2 := goes_br1 hi3 hTjb hTjbp hcell
     refine ⟨(ls7.blocks.size, 0), fr3.set ls7.vals.size (.val v), g2, ?_⟩
-    rw [hr]
+    rw [hresult]
     have hsame : Same ls.vals.size fr fr3 := by
       refine P1.same.trans (P3.same.mono ?_) P1.mono
       nat_omega
     exact Post.join hsame (P3.rel.stack_eq (hrel.stack.trans P3.rel.stack.symm)) (by nat_omega)
-      (by nat_omega) (by nat_omega) (hstj.trans hst_out) (LS.pp_eq hcj hbj)
+      (by rw [finalVals]; nat_omega) (by rw [finalVals]; nat_omega)
+      (finalStack.trans (hstj.trans hst_out)) finalPp
 
 
 end Goose.Lower
