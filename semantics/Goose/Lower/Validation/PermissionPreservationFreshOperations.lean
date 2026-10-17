@@ -51,7 +51,7 @@ theorem freshWritableEvidence_call {le : LEnv} {before after : LS}
   rfl
 
 theorem freshWritableEvidence_push {le : LEnv} {before after : LS}
-    {owner stored value : ValueId} {referent : Ty} {origin : OriginId} {current : BlockId}
+    {owner stored value : ValueId} {referent : Ty} {origin : Option OriginId} {current : BlockId}
     (checked : before.DenseDefinitions) (bounded : LiveBound before)
     (live : before.cur = some current)
     (run : emitDef (.push owner stored origin) le before = (value, after))
