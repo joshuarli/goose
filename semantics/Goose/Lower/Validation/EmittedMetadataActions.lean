@@ -243,4 +243,26 @@ theorem EmittedMetadataAction.inScope {le : LEnv} {loop : Option LoopCtx} (scope
     ⟨generated.dense, generated.live, generated.targets⟩ loopBounds loopTypes bodyRun (metadata.pushScope scope)
   exact active.popScope
 
+
+theorem EmittedMetadataAction.leaveAll (le : LEnv) (loop : Option LoopCtx) :
+    ∀ scopes, EmittedMetadataAction le loop (Goose.Lower.leaveAll scopes)
+  | [] => .pure le loop ()
+  | scope :: rest => (EmittedMetadataAction.leave le loop scope).bind fun _ => EmittedMetadataAction.leaveAll le loop rest
+
+theorem EmittedMetadataAction.leaveTo (le : LEnv) (loop : Option LoopCtx) (depth : Nat) :
+    EmittedMetadataAction le loop (Goose.Lower.leaveTo depth) := by
+  unfold Goose.Lower.leaveTo
+  exact (EmittedMetadataAction.get le loop).bind fun state => EmittedMetadataAction.leaveAll le loop _
+
+theorem EmittedMetadataAction.loopBranch (le : LEnv) (loop : Option LoopCtx) (target : BlockId) (args : List ValueId)
+    (bounded : ∀ state, LoopBuilderTargets loop state → target < state.blocks.size) :
+    EmittedMetadataAction le loop (Goose.Lower.emitTerm (.br target args)) := by
+  apply EmittedMetadataAction.emitTerm le loop (.br target args)
+  · intro state checked destination member
+    have same : destination = target := by simpa only [Term.successors, List.mem_singleton] using member
+    rw [same]
+    exact bounded state checked
+  · intro before generated loopBounds loopTypes live
+    exact .br target args
+
 end Goose.Lower.Validation

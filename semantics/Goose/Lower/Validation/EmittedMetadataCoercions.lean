@@ -53,4 +53,16 @@ theorem metadata_coerceResult_typed {le : LEnv} {before : LS} {value : ValueId} 
   rw [same]
   exact (coerceTo_typed (le := le) valueAt permission live origin).2
 
+
+theorem metadata_dead_leaveAll : ∀ scopes, DeadRun (Goose.Lower.leaveAll scopes)
+  | [] => .pure ()
+  | scope :: rest => DeadRun.bind (dead_emitEffect (.leave scope)) fun _ => metadata_dead_leaveAll rest
+
+theorem metadata_dead_leaveTo (depth : Nat) : DeadRun (Goose.Lower.leaveTo depth) := by
+  unfold Goose.Lower.leaveTo
+  refine DeadRun.bind ?_ fun state => metadata_dead_leaveAll _
+  intro le before result after run live
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  exact live
+
 end Goose.Lower.Validation
