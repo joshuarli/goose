@@ -86,19 +86,19 @@ theorem FreshPermissionInstruction.joinArms {module : GIR.Module} {func : Func} 
 
 theorem lowerIfSome_newPermissionInstructions {module : GIR.Module} {func : Func} {le : LEnv}
     {first : Nat} {before after : LS} {result : Unit} {loop : Option LoopCtx} {origin : OriginId} {condition : Expr} {yes no : Core.Block}
-    (generated : GeneratedBuilderState before)
+    (generated : GeneratedBuilderState before) (floor : first ≤ before.vals.size)
     (frames : LoopBuilderFrames loop before)
-    (conditions : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input →
+    (conditions : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input → first ≤ input.vals.size →
       lowerExpr condition le input = (value,output) → NewPermissionInstructions module func le first input output)
-    (yesBranch : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input → LoopBuilderFrames loop input →
+    (yesBranch : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input → first ≤ input.vals.size → LoopBuilderFrames loop input →
       lowerBlock loop [] false yes le input = (value,output) → NewPermissionInstructions module func le first input output)
-    (noBranch : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input → LoopBuilderFrames loop input →
+    (noBranch : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input → first ≤ input.vals.size → LoopBuilderFrames loop input →
       lowerBlock loop [] false no le input = (value,output) → NewPermissionInstructions module func le first input output)
     (run : lowerStmt loop (.ifS condition yes (some no) origin) le before = (result,after)) :
     NewPermissionInstructions module func le first before after := by
   simp only [lowerStmt,bind_eq] at run
   obtain ⟨cv,conditionAfter,conditionRun,run⟩ := run
-  have conditionRules := conditions generated conditionRun
+  have conditionRules := conditions generated floor conditionRun
   have conditionGenerated := generated.lowerExpr condition conditionRun
   have conditionFrames := frames.mono (advB_lowerExpr condition le before cv conditionAfter conditionRun).ext
   cases live : conditionAfter.cur with
@@ -116,6 +116,8 @@ theorem lowerIfSome_newPermissionInstructions {module : GIR.Module} {func : Func
     obtain ⟨rfl,rfl⟩ := Prod.mk.inj yesReadRun
     obtain ⟨rfl,rfl⟩ := Prod.mk.inj noReadRun
     have forkedGenerated := conditionGenerated.fork cv forkRun
+    have forkedFloor := Nat.le_trans floor (Nat.le_trans (advB_lowerExpr condition le before cv conditionAfter conditionRun).vals
+      (advB_fork cv le conditionAfter _ forked forkRun).vals)
     have forkedFrames := conditionFrames.mono (advB_fork cv le conditionAfter (yesId,noId) forked forkRun).ext
     have ids := fork_ids forkRun
     have yesBound : yesId < forked.blocks.size := by
@@ -128,6 +130,11 @@ theorem lowerIfSome_newPermissionInstructions {module : GIR.Module} {func : Func
       dsimp only at same
       rw [same,ids.2]
       nat_omega
+    have yesFloor : first ≤ yesInput.vals.size := by
+      have same := yesEntry
+      rw [setCur_run] at same
+      obtain ⟨_,rfl⟩ := Prod.mk.inj same
+      exact forkedFloor
     have yesGenerated := forkedGenerated.setCur (some yesId)
       (by intro block same; cases same; exact yesBound) yesEntry
     have yesFrames := forkedFrames.of_blocks (setCur_blocks yesEntry)
@@ -137,6 +144,11 @@ theorem lowerIfSome_newPermissionInstructions {module : GIR.Module} {func : Func
       have growth := (advB_lowerBlock loop [] false yes le yesInput yesValue yesAfter yesRun).ext.1
       rw [setCur_blocks yesEntry] at growth
       exact Nat.lt_of_lt_of_le noBound growth
+    have noFloor : first ≤ noInput.vals.size := by
+      have same := noEntry
+      rw [setCur_run] at same
+      obtain ⟨_,rfl⟩ := Prod.mk.inj same
+      exact Nat.le_trans yesFloor (advB_lowerBlock loop [] false yes le yesInput yesValue yesAfter yesRun).vals
     have noGenerated := yesAfterGenerated.setCur (some noId)
       (by intro block same; cases same; exact noTarget) noEntry
     have noFrames := yesAfterFrames.of_blocks (setCur_blocks noEntry)
@@ -163,8 +175,8 @@ theorem lowerIfSome_newPermissionInstructions {module : GIR.Module} {func : Func
       intro instruction permitted
       exact retainedFork instruction (permitted.of_framed_run forkRun (dense_fork cv)
         (advB_fork cv) (types_fork cv) (generatedTargetFrame_fork none cv) conditionGenerated trivial)
-    have yesRules := (yesBranch yesGenerated yesFrames yesRun).prepend_setCur yesEntry
-    have noRules := (noBranch noGenerated noFrames noRun).prepend_setCur noEntry
+    have yesRules := (yesBranch yesGenerated yesFloor yesFrames yesRun).prepend_setCur yesEntry
+    have noRules := (noBranch noGenerated noFloor noFrames noRun).prepend_setCur noEntry
     intro instruction member
     rcases NewPermissionInstructions.joinArms joining instruction member with old | issued
     · rcases noRules instruction old with old | issued
@@ -180,17 +192,17 @@ theorem lowerIfSome_newPermissionInstructions {module : GIR.Module} {func : Func
 theorem lowerIfNone_newPermissionInstructions {module : GIR.Module} {func : Func} {le : LEnv}
     {first : Nat} {before after : LS} {result : Unit} {loop : Option LoopCtx}
     {origin : OriginId} {condition : Expr} {yes : Core.Block}
-    (generated : GeneratedBuilderState before) (frames : LoopBuilderFrames loop before)
-    (conditions : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input →
+    (generated : GeneratedBuilderState before) (floor : first ≤ before.vals.size) (frames : LoopBuilderFrames loop before)
+    (conditions : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input → first ≤ input.vals.size →
       lowerExpr condition le input = (value,output) → NewPermissionInstructions module func le first input output)
-    (yesBranch : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input →
+    (yesBranch : ∀ {input output : LS} {value : ValueId}, GeneratedBuilderState input → first ≤ input.vals.size →
       LoopBuilderFrames loop input → lowerBlock loop [] false yes le input = (value,output) →
       NewPermissionInstructions module func le first input output)
     (run : lowerStmt loop (.ifS condition yes none origin) le before = (result,after)) :
     NewPermissionInstructions module func le first before after := by
   simp only [lowerStmt,bind_eq] at run
   obtain ⟨cv,conditionAfter,conditionRun,run⟩ := run
-  have conditionRules := conditions generated conditionRun
+  have conditionRules := conditions generated floor conditionRun
   have conditionGenerated := generated.lowerExpr condition conditionRun
   have conditionFrames := frames.mono (advB_lowerExpr condition le before cv conditionAfter conditionRun).ext
   cases live : conditionAfter.cur with
@@ -204,6 +216,8 @@ theorem lowerIfNone_newPermissionInstructions {module : GIR.Module} {func : Func
     obtain ⟨⟨yesId,joinId⟩,forked,forkRun,ignored,yesInput,yesEntry,
       yesValue,yesAfter,yesRun,ignored,closed,backRun,entry⟩ := run
     have forkedGenerated := conditionGenerated.fork cv forkRun
+    have forkedFloor := Nat.le_trans floor (Nat.le_trans (advB_lowerExpr condition le before cv conditionAfter conditionRun).vals
+      (advB_fork cv le conditionAfter _ forked forkRun).vals)
     have forkedFrames := conditionFrames.mono (advB_fork cv le conditionAfter (yesId,joinId) forked forkRun).ext
     have ids := fork_ids forkRun
     have yesBound : yesId < forked.blocks.size := by
@@ -211,6 +225,11 @@ theorem lowerIfNone_newPermissionInstructions {module : GIR.Module} {func : Func
       dsimp only at same
       rw [same,ids.2]
       nat_omega
+    have yesFloor : first ≤ yesInput.vals.size := by
+      have same := yesEntry
+      rw [setCur_run] at same
+      obtain ⟨_,rfl⟩ := Prod.mk.inj same
+      exact forkedFloor
     have yesGenerated := forkedGenerated.setCur (some yesId)
       (by intro block same; cases same; exact yesBound) yesEntry
     have yesFrames := forkedFrames.of_blocks (setCur_blocks yesEntry)
@@ -250,7 +269,7 @@ theorem lowerIfNone_newPermissionInstructions {module : GIR.Module} {func : Func
       intro instruction permitted
       exact retainedFork instruction (permitted.of_framed_run forkRun (dense_fork cv)
         (advB_fork cv) (types_fork cv) (generatedTargetFrame_fork none cv) conditionGenerated trivial)
-    have yesRules := (yesBranch yesGenerated yesFrames yesRun).prepend_setCur yesEntry
+    have yesRules := (yesBranch yesGenerated yesFloor yesFrames yesRun).prepend_setCur yesEntry
     intro instruction member
     rcases (NewPermissionInstructions.branch backRun).append_setCur entry instruction member with old | issued
     · rcases yesRules instruction old with old | issued
