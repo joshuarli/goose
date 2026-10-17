@@ -130,7 +130,7 @@ private theorem typedStatementFamily_succ {n : Nat} {cfg : Cfg}
       (fun context => smaller.block results (some context) [] [] false body)
       (smaller.whileLoop results condition body origin)
 
-private theorem typedStatementFamily_all (cfg : Cfg)
+private theorem typedStatementFamily_of_ownerShapes (cfg : Cfg)
     (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
     ∀ n, TypedStatementFamily n cfg := by
   intro n
@@ -142,22 +142,23 @@ private theorem typedStatementFamily_all (cfg : Cfg)
       exact typedStatementFamily_succ
         (fun fuel bound => earlier fuel (Nat.lt_succ_of_le bound)) shapes
 
-private theorem typedModule_of_ownerShapes {cfg : Cfg} (n : Nat)
-    (accepted : Core.validate cfg.mod = .ok ())
-    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+theorem typedStatementFamily_all (cfg : Cfg) : ∀ n, TypedStatementFamily n cfg :=
+  typedStatementFamily_of_ownerShapes cfg (placeOwnerShape_generated cfg)
+
+private theorem typedModule_simulation_positive {cfg : Cfg} (n : Nat)
+    (accepted : Core.validate cfg.mod = .ok ()) :
     EventualM (Core.runModule (n + 1) cfg)
       (fun fuel => GIR.runModule fuel ⟨cfg.profile, lower cfg.mod⟩) St.initial := by
-  have family := typedStatementFamily_all cfg shapes
+  have family := typedStatementFamily_all cfg
   exact typedModule_simulation_succ n accepted
     (fun _ global _ => (family (n + 1)).expressions.expr [global.ty] global.init)
     (fun _ impl _ _ => (family n).block impl.results.toList none (callPre impl) [] false impl.body)
 
-private theorem typedModule_allFuel_of_ownerShapes {cfg : Cfg} (fuel : Nat)
-    (accepted : Core.validate cfg.mod = .ok ())
-    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+theorem typedModule_simulation {cfg : Cfg} (fuel : Nat)
+    (accepted : Core.validate cfg.mod = .ok ()) :
     EventualM (Core.runModule fuel cfg)
       (fun targetFuel => GIR.runModule targetFuel ⟨cfg.profile, lower cfg.mod⟩) St.initial := by
-  have next := typedModule_of_ownerShapes fuel accepted shapes
+  have next := typedModule_simulation_positive fuel accepted
   have mono := Goose.Proofs.Fuel.MonoM.runModule fuel (fuel + 1) (Nat.le_succ fuel) cfg St.initial
   constructor
   · intro value after completed
