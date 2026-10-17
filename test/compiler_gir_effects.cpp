@@ -264,9 +264,24 @@ void RequiresEveryJoinInputKnownEmpty() {
     choice.idx2 = 1;
     choice.vals2 = { 9 };
     assert(Code(module) == "GIR-V060");
+
+    choice = Inst(GirOp::Br);
+    choice.idx = 1;
+    choice.vals = { 9 };
+    auto &loop = function.blocks[1].insts;
+    GirBlock exit;
+    exit.insts.assign(loop.end() - 2, loop.end());
+    loop.erase(loop.end() - 2, loop.end());
+    auto repeat = Inst(GirOp::CondBr, -1, 10);
+    repeat.idx = 1;
+    repeat.idx2 = 2;
+    repeat.vals = { 7 };
+    loop.push_back(repeat);
+    function.blocks.push_back(exit);
+    assert(Code(module) == "GIR-V060");
 }
 
-void RetainsNonemptyContentAliases() {
+GirModule GlobalEmptyContentReplacement() {
     auto module = EmptyContentReplacement();
     auto owner = module.funcs[1].slots[1].ty;
     GirGlobal global;
@@ -289,8 +304,106 @@ void RetainsNonemptyContentAliases() {
             instruction.op = GirOp::Global;
             instruction.idx = 0;
         }
+    return module;
+}
+
+void RetainsNonemptyContentAliases() {
+    auto module = GlobalEmptyContentReplacement();
     assert(Code(module).empty());
-    function.roots.contents[0].second = { { CoreRootRef::Global, 0 } };
+    module.funcs[1].roots.contents[0].second = { { CoreRootRef::Global, 0 } };
+    assert(Code(module) == "GIR-V060");
+}
+
+void RejectsChangedEmptyParameterContents() {
+    for (bool aliased : { false, true })
+        for (bool called : { false, true }) {
+            auto module = GlobalEmptyContentReplacement();
+            auto slice = module.Type(module.funcs[1].params[0]).elem;
+            auto reference = module.RefType(CoreMut::Mut, slice);
+            auto &function = module.funcs[1];
+            if (!aliased) {
+                function.params[0] = reference;
+                function.slots[0].ty = reference;
+                function.blocks[0].params[0].second = reference;
+            }
+            function.params.push_back(slice);
+            function.roots.params.push_back({ 1, { { CoreRootRef::Global, 0 } } });
+            function.blocks[0].params.push_back({ 7, slice });
+            int address = 0;
+            if (aliased) {
+                function.params.push_back(reference);
+                function.roots.params.push_back({ 2, { { CoreRootRef::Param, 2 } } });
+                function.blocks[0].params.push_back({ 8, reference });
+                address = 8;
+            }
+            auto write = Inst(GirOp::Store, -1, address, 7);
+            if (called) {
+                write = Inst(GirOp::Call);
+                write.idx = 2;
+                write.vals = { address, 7 };
+            }
+            function.blocks[0].insts.insert(function.blocks[0].insts.begin() + 4, write);
+            if (called) {
+                GirFunc callee;
+                callee.name = "replace_parameter_contents";
+                callee.params = { reference, slice };
+                callee.scopes = { -1 };
+                callee.summary.unknown = true;
+                callee.blocks = { { { { 0, reference }, { 1, slice } },
+                    { Inst(GirOp::Store, -1, 0, 1), Inst(GirOp::Ret) } } };
+                module.funcs.push_back(callee);
+            }
+            assert(Code(module) == "GIR-V060");
+            if (called) {
+                module.funcs[2].summary.unknown = false;
+                module.funcs[2].summary.writes = { { false, 0 } };
+                module.funcs[2].summary.rebinds = { { false, 0 } };
+                assert(Code(module) == "GIR-V060");
+            }
+            module.funcs[1].roots.params[1].second.clear();
+            assert(Code(module).empty());
+        }
+}
+
+void RejectsGlobalContentChangesFromNoArgumentCalls() {
+    auto module = GlobalEmptyContentReplacement();
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    GirGlobal global;
+    global.name = "slice_header";
+    global.ty = slice;
+    global.kind = CoreVarKind::Var;
+    global.init.name = "slice_header_init";
+    global.init.results = { slice };
+    global.init.scopes = { -1 };
+    global.init.summary.unknown = true;
+    global.init.roots.results = { { { CoreRootRef::Global, 0 } } };
+    auto owner = Inst(GirOp::Global, 0);
+    owner.idx = 0;
+    auto view = Inst(GirOp::Snap, 1, 0);
+    auto content = Inst(GirOp::ViewSlice, 2, 1);
+    content.mut = CoreMut::Const;
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 2 };
+    global.init.blocks = { { {}, { owner, view, content, ret } } };
+    module.globals.push_back(global);
+    GirFunc callee;
+    callee.name = "change_global_slice_header";
+    callee.scopes = { -1 };
+    callee.summary.unknown = true;
+    auto header = Inst(GirOp::Global, 3);
+    header.idx = 1;
+    callee.blocks = { { {}, { owner, view, content, header, Inst(GirOp::Store, -1, 3, 2), Inst(GirOp::Ret) } } };
+    module.funcs.push_back(callee);
+    auto &function = module.funcs[1];
+    function.roots.params[0].second = { { CoreRootRef::Global, 1 } };
+    auto call = Inst(GirOp::Call);
+    call.idx = 2;
+    function.blocks[0].insts.insert(function.blocks[0].insts.begin() + 4, call);
+    assert(Code(module) == "GIR-V060");
+    module.funcs[2].summary.unknown = false;
+    module.funcs[2].summary.aborts = true;
+    module.funcs[2].summary.reads = { { true, 0 } };
+    module.funcs[2].summary.writes = { { true, 1 } };
     assert(Code(module) == "GIR-V060");
 }
 
@@ -349,6 +462,8 @@ int main() {
     PreservesKnownEmptyLocalCopies();
     RequiresEveryJoinInputKnownEmpty();
     RetainsNonemptyContentAliases();
+    RejectsChangedEmptyParameterContents();
+    RejectsGlobalContentChangesFromNoArgumentCalls();
     PreservesConservativeCallDependencies();
     assert(Code(ContentAliasStore()).empty());
     assert(Code(ParameterContentStore()).empty());

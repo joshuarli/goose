@@ -5367,6 +5367,32 @@ private:
                 }
             return written;
         };
+        auto parameterContentsStable = [&]() {
+            auto mayAliasParameter = [&](int value) {
+                if (knownEmpty(value)) return false;
+                auto roots = RootsAt(provenance.vals, value);
+                return roots.empty() || any_of(roots.begin(), roots.end(), [](const CoreRootRef &root) {
+                    return root.kind != CoreRootRef::Local;
+                });
+            };
+            for (auto &block : function.blocks)
+                for (auto &inst : block.insts) {
+                    if (inst.op == GirOp::Store && ValRefLike(fn, inst.b) && !knownEmpty(inst.b) && mayAliasParameter(inst.a)) return false;
+                    if (inst.op != GirOp::Call && inst.op != GirOp::CallConstruct && inst.op != GirOp::Invoke) continue;
+                    if (any_of(inst.vals.begin(), inst.vals.end(), [&](int value) {
+                        return ValRefLike(fn, value) && knownEmpty(value);
+                    })) continue;
+                    if (inst.idx < 0 || inst.idx >= (int)m.funcs.size()) return false;
+                    auto &summary = m.funcs[inst.idx].summary;
+                    auto mayWriteParameter = [&](const CoreTarget &target) {
+                        return target.global || target.index < 0 || target.index >= (int)inst.vals.size() ||
+                            mayAliasParameter(inst.vals[target.index]);
+                    };
+                    if (summary.unknown || any_of(summary.writes.begin(), summary.writes.end(), mayWriteParameter) ||
+                        any_of(summary.rebinds.begin(), summary.rebinds.end(), mayWriteParameter)) return false;
+                }
+            return true;
+        };
         for (int value = 0; value < fn.nvalues; value++)
             queries.emptyValues[value] = rootsEmpty(RootsAt(provenance.vals, value));
         bool changed = true;
@@ -5403,7 +5429,7 @@ private:
                                     root.index >= (int)function.params.size() || !IsRefSlice(function.params[root.index]) ||
                                     m.Type(fn.vt[inst.res]).kind != CoreType::Slice) return false;
                                 auto contents = ContentRoots(function, root.index);
-                                return contents && ExpandParameterRoots(function, *contents).empty();
+                                return contents && ExpandParameterRoots(function, *contents).empty() && parameterContentsStable();
                             }));
                             break;
                         }
