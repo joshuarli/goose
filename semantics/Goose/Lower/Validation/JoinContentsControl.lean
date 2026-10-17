@@ -4,6 +4,30 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
+theorem joinValue_record_freshContents {le : LEnv} {before : LS} {endT endF : Option BlockId}
+    {valueT valueF : ValueId} {ty : VTy} {first : Nat}
+    (sourceScope : ScopeId)
+    (checked : before.DenseDefinitions) (bounded : LiveBound before)
+    (targets : TargetsBounded before)
+    (thenBound : ∀ block, endT = some block → block < before.blocks.size)
+    (elseBound : ∀ block, endF = some block → block < before.blocks.size)
+    (thenTyped : endT.isSome = true → before.vals[valueT]? = some (some ty))
+    (elseTyped : endF.isSome = true → before.vals[valueF]? = some (some ty))
+    (noninteger : ∀ intTy, ty ≠ .data (.int intTy))
+    (lower : first ≤ before.vals.size)
+    (thenEvidence : endT.isSome = true → FreshContentsEvidence le first before valueT)
+    (elseEvidence : endF.isSome = true → FreshContentsEvidence le first before valueF) :
+    let (value, after) := (do
+      let value ← joinValue endT valueT endF valueF
+      recordValueRootRecipe value sourceScope
+      pure value) le before
+    after.cur.isSome = true → FreshContentsEvidence le first after value ∧
+      (endT.isSome = true → FreshContentsEvidence le first after valueT) ∧
+      (endF.isSome = true → FreshContentsEvidence le first after valueF) := by
+  simpa only [bind_run, recordValueRootRecipe_run, pure_run, FreshContentsEvidence, permissionFunc] using
+    (joinValue_freshContents checked bounded targets thenBound elseBound thenTyped elseTyped
+      noninteger lower thenEvidence elseEvidence)
+
 theorem ContentsEvidence.fresh_zero {le : LEnv} {state : LS} {value : ValueId}
     (evidence : ContentsEvidence le state value) : FreshContentsEvidence le 0 state value := by
   obtain ⟨authorized, closed, noninteger, member⟩ := evidence
