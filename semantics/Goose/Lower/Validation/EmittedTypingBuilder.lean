@@ -127,4 +127,41 @@ theorem EmittedAt.intTyOf (le : LEnv) (before : LS) (value : ValueId) :
       | view _ _ => simp [Goose.Lower.intTyOf, Goose.Lower.valTy, bind_run, row, pure_run]
       | data type => cases type <;> simp [Goose.Lower.intTyOf, Goose.Lower.valTy, bind_run, row, pure_run]
 
+
+theorem EmittedRun.of_at {action : B α} (checked : ∀ le before, EmittedAt le before action) : EmittedRun action := checked
+
+theorem EmittedRun.emitEffect (effect : Effect) : EmittedRun (Goose.Lower.emitEffect effect) :=
+  fun le before => EmittedAt.emitEffect le before effect
+
+theorem EmittedRun.emitTerm (term : Term) : EmittedRun (Goose.Lower.emitTerm term) :=
+  fun le before => EmittedAt.emitTerm le before term
+
+theorem EmittedRun.patchTerm (block : BlockId) (term : Term) : EmittedRun (Goose.Lower.patchTerm block term) :=
+  fun le before => EmittedAt.patchTerm le before block term
+
+theorem EmittedRun.newBlock (types : List VTy) : EmittedRun (Goose.Lower.newBlock types) :=
+  fun le before => EmittedAt.newBlock le before types
+
+theorem EmittedRun.setCur (block : Option BlockId) : EmittedRun (Goose.Lower.setCur block) :=
+  fun le before => EmittedAt.setCur le before block
+
+theorem EmittedRun.pushScope (scope : ScopeId) : EmittedRun (Goose.Lower.pushScope scope) :=
+  fun le before => EmittedAt.pushScope le before scope
+
+theorem EmittedRun.popScope : EmittedRun Goose.Lower.popScope := EmittedAt.popScope
+
+theorem EmittedRun.get : EmittedRun (get : B LS) := EmittedAt.get
+
+theorem EmittedRun.read : EmittedRun (read : B LEnv) := EmittedAt.read
+
+theorem EmittedRun.curBlock : EmittedRun Goose.Lower.curBlock := EmittedAt.curBlock
+
+theorem EmittedRun.isLive : EmittedRun Goose.Lower.isLive := EmittedAt.isLive
+
+theorem EmittedRun.valTy (value : ValueId) : EmittedRun (Goose.Lower.valTy value) :=
+  fun le before => EmittedAt.valTy le before value
+
+theorem EmittedRun.intTyOf (value : ValueId) : EmittedRun (Goose.Lower.intTyOf value) :=
+  fun le before => EmittedAt.intTyOf le before value
+
 end Goose.Lower.Validation
