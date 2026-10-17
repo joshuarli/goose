@@ -1,4 +1,4 @@
-import Goose.GIR.Effects
+import Goose.GIR.RootBounds
 import Goose.GIR.RootSeeds
 
 namespace Goose.GIR
@@ -34,9 +34,7 @@ def Func.admittedInstruction (m : Module) (vt : Array (Option VTy))
         | .param parameter =>
             !(f.params[parameter]?).any Ty.isRefSlice ||
               (f.roots.contents.find? (·.1 == parameter)).any fun (_, ceiling) =>
-                let actual := (rootsAt p.vals value).flatMap f.expandParameterRoot
-                let declared := ceiling.flatMap f.expandParameterRoot
-                actual.all declared.contains
+                f.rootsWithin (rootsAt p.vals value) ceiling
         | _ => true
   | .def _ (.call fn args _) =>
       match m.funcs[fn]? with

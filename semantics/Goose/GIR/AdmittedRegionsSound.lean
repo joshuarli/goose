@@ -57,6 +57,15 @@ theorem Func.checkRegionClosure_result {m : Module} {results : Array (List RootR
       simp_all [Func.checkRegionClosure, bind, Except.bind, throw]
   simpa only [List.contains_iff_mem] using List.all_eq_true.mp bounded
 
+theorem Module.checkAdmittedRegions_globalTypes {m : Module}
+    {types : Array (Array (Option VTy))} {results : Array (List RootRef)} {nRoots : Nat}
+    (checked : m.checkAdmittedRegions types results nRoots = .ok ()) :
+    m.checkRegionGlobalTypes = .ok () := by
+  unfold Module.checkAdmittedRegions at checked
+  obtain ⟨checkedUnit, first, _⟩ := except_bind_ok checked
+  cases checkedUnit
+  exact first
+
 theorem Module.checkAdmittedRegions_function_closure {m : Module}
     {types : Array (Array (Option VTy))} {results : Array (List RootRef)} {nRoots : Nat}
     (checked : m.checkAdmittedRegions types results nRoots = .ok ())
@@ -177,8 +186,7 @@ theorem Func.checkAdmittedRegions_store {m : Module} {vt : Array (Option VTy)}
     (target : RootRef.param parameter ∈ rootsAt p.vals address)
     (sliceReference : (f.params[parameter]?).any Ty.isRefSlice = true) :
     ∃ ceiling, f.roots.contents.find? (·.1 == parameter) = some (parameter,ceiling) ∧
-      ∀ root ∈ (rootsAt p.vals value).flatMap f.expandParameterRoot,
-        root ∈ ceiling.flatMap f.expandParameterRoot := by
+      RootsRefine f (rootsAt p.vals value) ceiling := by
   have instruction := f.checkAdmittedRegions_instruction checked blockMember stored
   simp only [Func.admittedInstruction, reference, Bool.not_true, Bool.false_or] at instruction
   have bound := List.all_eq_true.mp instruction (.param parameter) target
@@ -193,6 +201,6 @@ theorem Func.checkAdmittedRegions_store {m : Module} {vt : Array (Option VTy)}
     change selected = parameter at same
     subst selected
     refine ⟨ceiling, rfl, ?_⟩
-    simpa only [List.contains_iff_mem] using List.all_eq_true.mp bound
+    exact (Func.rootsWithin_eq_true f _ _).mp bound
 
 end Goose.GIR
