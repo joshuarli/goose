@@ -4212,6 +4212,18 @@ private:
         // Value ids are dense and each is defined once.
         auto n = NumValues(f);
         fn.nvalues = n;
+        if (f.roots.values) {
+            vector<char> seenValues(n, 0);
+            for (auto &row : *f.roots.values) {
+                auto value = row.first;
+                if (value < 0 || value >= n)
+                    SymbolFail(fn, cat("value root info names absent value %", value));
+                if (seenValues[value])
+                    SymbolFail(fn, cat("value root info repeats value %", value));
+                seenValues[value] = 1;
+                checkRoots(row.second, false);
+            }
+        }
         vector<char> seen(n, 0);
         auto define = [&](int d) {
             if (d < 0 || d >= n) SymbolFail(fn, cat("value %", d, " is outside the value table of ", n));
@@ -4666,6 +4678,10 @@ private:
 
     void CheckTypes(const Fn &fn) {
         auto &f = *fn.f;
+        if (f.roots.values)
+            for (auto &row : *f.roots.values)
+                if (!ValRefLike(fn, row.first))
+                    TypeFail(fn, cat("value root info annotates non-reference value %", row.first));
         if (!f.resultProtocols.empty() &&
             (m.low || !CoreHasConstruction(m.profile) || f.resultProtocols.size() != f.results.size()))
             TypeFail(fn, "result protocol descriptors do not match the high construction signature");
@@ -5530,6 +5546,11 @@ private:
         for (auto &fn : fns) {
             auto &f = *fn.f;
             auto p = Provenance(res, fn);
+            if (f.roots.values)
+                for (auto &row : *f.roots.values)
+                    if (!within(RootsAt(p.vals, row.first), row.second))
+                        Fail("GIR-V050", cat(fn.label, " value %", row.first,
+                            " root info omits a root derived by the body"));
             if (f.roots.slots)
                 for (auto &row : *f.roots.slots) {
                     if (row.first < 0 || row.first >= (int)f.slots.size() || !GirRefLike(m, f.slots[row.first].ty))
@@ -5719,6 +5740,8 @@ private:
                             root = { CoreRootRef::Local, instruction.idx };
                 p.vals[b0.params[k].first] = { root };
             }
+        if (f.roots.values)
+            for (auto &row : *f.roots.values) AddRoots(p.vals[row.first], row.second);
         return p;
     }
 

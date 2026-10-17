@@ -2,6 +2,221 @@
 
 namespace goose {
 
+class CoreSourceRootProjection {
+public:
+    using Rows = map<int, vector<CoreRootRef>>;
+
+    CoreSourceRootProjection(const CoreModule &module, const CoreImpl *impl, const CoreContext *context)
+        : module(module), impl(impl), context(context) {}
+
+    Rows Run(const CoreBlock &body) {
+        BlockRoots(body);
+        return rows;
+    }
+
+    Rows Run(const CoreExpr &expression) {
+        ExprRoots(expression);
+        return rows;
+    }
+
+private:
+    using RootSet = set<CoreRootRef>;
+
+    const CoreModule &module;
+    const CoreImpl *impl;
+    const CoreContext *context;
+    Rows rows;
+
+    static void Add(RootSet &to, const RootSet &from) {
+        to.insert(from.begin(), from.end());
+    }
+
+    const vector<CoreRootRef> *VariableRoots(int variable) const {
+        if (!context) return nullptr;
+        for (auto &row : context->varroots)
+            if (row.first == variable) return &row.second;
+        return nullptr;
+    }
+
+    const vector<CoreRootRef> *VariableContents(int variable) const {
+        if (!context) return nullptr;
+        for (size_t index = 0; index < context->varroots.size(); index++)
+            if (context->varroots[index].first == variable && index < context->hascontent.size() &&
+                context->hascontent[index] && index < context->content.size())
+                return &context->content[index];
+        return nullptr;
+    }
+
+    RootSet ReadRoots(const CorePlace &place) const {
+        if (place.kind == CorePlace::Local && impl && place.index >= 0 &&
+            place.index < (int)impl->vars.size() && module.IsRefOrSlice(impl->vars[place.index].type)) {
+            auto roots = VariableRoots(place.index);
+            return roots ? RootSet(roots->begin(), roots->end()) : RootSet {};
+        }
+        if (place.kind == CorePlace::Deref && place.expr && place.expr->kind == CoreExprKind::Read &&
+            place.expr->place && place.expr->place->kind == CorePlace::Local && impl) {
+            auto variable = place.expr->place->index;
+            if (variable >= 0 && variable < (int)impl->vars.size()) {
+                auto &reference = module.Type(impl->vars[variable].type);
+                if (reference.kind == CoreType::Ref && module.Type(reference.elem).kind == CoreType::Slice) {
+                    auto roots = VariableContents(variable);
+                    return roots ? RootSet(roots->begin(), roots->end()) : RootSet {};
+                }
+            }
+        }
+        return {};
+    }
+
+    RootSet PlaceRoots(const CorePlace &place) {
+        switch (place.kind) {
+            case CorePlace::Local: return { CoreRootRef { CoreRootRef::Local, place.index } };
+            case CorePlace::Global: return { CoreRootRef { CoreRootRef::Global, place.index } };
+            case CorePlace::Deref: return place.expr ? ExprRoots(*place.expr) : RootSet {};
+            case CorePlace::Elem: {
+                auto roots = place.view ? ViewRoots(*place.view) : RootSet {};
+                if (place.expr) ExprRoots(*place.expr);
+                return roots;
+            }
+            case CorePlace::Field: return place.base ? PlaceRoots(*place.base) : RootSet {};
+        }
+        return {};
+    }
+
+    RootSet ViewRoots(const CoreView &view) {
+        if (view.kind == CoreView::Of) return view.place ? PlaceRoots(*view.place) : RootSet {};
+        return view.expr ? ExprRoots(*view.expr) : RootSet {};
+    }
+
+    RootSet ArgumentRoots(const CoreArg &argument) {
+        return visit([&](const auto &arg) -> RootSet {
+            using Arg = decay_t<decltype(arg)>;
+            if constexpr (is_same_v<Arg, CoreArgReference>)
+                return arg.place ? PlaceRoots(*arg.place) : RootSet {};
+            else {
+                if (!arg.expr) return {};
+                auto roots = ExprRoots(*arg.expr);
+                return module.IsRefOrSlice(arg.expr->type) ? roots : RootSet {};
+            }
+        }, argument);
+    }
+
+    RootSet CallRoots(const CoreExpr &expression, const vector<RootSet> &arguments) const {
+        if (expression.ctx < 0 || expression.ctx >= (int)module.contexts.size()) return {};
+        auto &callee = module.contexts[expression.ctx];
+        if (callee.impl < 0 || callee.impl >= (int)module.impls.size()) return {};
+        auto &implementation = module.impls[callee.impl];
+        if (implementation.results.size() != 1 || callee.resultroots.size() != 1 ||
+            !module.IsRefOrSlice(implementation.results[0].type)) return {};
+        RootSet roots;
+        for (auto &root : callee.resultroots[0]) {
+            if (root.kind == CoreRootRef::Param) {
+                if (root.index >= 0 && root.index < (int)arguments.size()) Add(roots, arguments[root.index]);
+            } else if (root.kind == CoreRootRef::Global || root.kind == CoreRootRef::Static) {
+                roots.insert(root);
+            }
+        }
+        return roots;
+    }
+
+    void BoundRoots(const CoreBound &bound) {
+        if (bound.expr) ExprRoots(*bound.expr);
+    }
+
+    void PrintRoots(const vector<CorePrintArg> &arguments) {
+        for (auto &argument : arguments) {
+            if (argument.expr) ExprRoots(*argument.expr);
+            if (argument.view) ViewRoots(*argument.view);
+        }
+    }
+
+    RootSet ExprRoots(const CoreExpr &expression) {
+        switch (expression.kind) {
+            case CoreExprKind::Lit: case CoreExprKind::Bool: case CoreExprKind::Bytes:
+            case CoreExprKind::ResultLocal:
+                return {};
+            case CoreExprKind::String:
+                PrintRoots(expression.print);
+                return {};
+            case CoreExprKind::Read: {
+                if (expression.place) {
+                    PlaceRoots(*expression.place);
+                    return ReadRoots(*expression.place);
+                }
+                return {};
+            }
+            case CoreExprKind::Ref: case CoreExprKind::Push: {
+                auto roots = expression.place ? PlaceRoots(*expression.place) : RootSet {};
+                if (expression.a) ExprRoots(*expression.a);
+                return roots;
+            }
+            case CoreExprKind::Slice: {
+                auto roots = expression.view ? ViewRoots(*expression.view) : RootSet {};
+                BoundRoots(expression.lo);
+                BoundRoots(expression.hi);
+                return roots;
+            }
+            case CoreExprKind::Len:
+                if (expression.view) ViewRoots(*expression.view);
+                return {};
+            case CoreExprKind::Un: case CoreExprKind::Not: case CoreExprKind::Conv:
+            case CoreExprKind::Fill:
+                if (expression.a) ExprRoots(*expression.a);
+                return {};
+            case CoreExprKind::Bin: case CoreExprKind::Cmp: case CoreExprKind::And:
+            case CoreExprKind::Or:
+                if (expression.a) ExprRoots(*expression.a);
+                if (expression.b) ExprRoots(*expression.b);
+                return {};
+            case CoreExprKind::Call: {
+                vector<RootSet> arguments;
+                for (auto &argument : expression.args) arguments.push_back(ArgumentRoots(argument));
+                return CallRoots(expression, arguments);
+            }
+            case CoreExprKind::Pop:
+                if (expression.place) PlaceRoots(*expression.place);
+                return {};
+            case CoreExprKind::If: {
+                if (expression.a) ExprRoots(*expression.a);
+                auto yes = expression.then ? BlockRoots(*expression.then) : RootSet {};
+                auto no = expression.otherwise ? BlockRoots(*expression.otherwise) : RootSet {};
+                Add(yes, no);
+                if (expression.then)
+                    rows[expression.then->scope] = vector<CoreRootRef>(yes.begin(), yes.end());
+                return yes;
+            }
+            case CoreExprKind::Block:
+                return expression.then ? BlockRoots(*expression.then) : RootSet {};
+            case CoreExprKind::Arr: case CoreExprKind::Struct:
+                for (auto &element : expression.elems) if (element) ExprRoots(*element);
+                return {};
+            case CoreExprKind::Copy:
+                if (!expression.place) return {};
+                PlaceRoots(*expression.place);
+                return ReadRoots(*expression.place);
+            case CoreExprKind::Values:
+                for (auto &value : expression.values) if (value) ExprRoots(*value);
+                return {};
+        }
+        return {};
+    }
+
+    RootSet BlockRoots(const CoreBlock &block) {
+        for (auto &statement : block.stmts) StatementRoots(statement);
+        return block.value ? ExprRoots(*block.value) : RootSet {};
+    }
+
+    void StatementRoots(const CoreStmt &statement) {
+        if (statement.place) PlaceRoots(*statement.place);
+        if (statement.view) ViewRoots(*statement.view);
+        if (statement.expr) ExprRoots(*statement.expr);
+        if (statement.expr2) ExprRoots(*statement.expr2);
+        for (auto &value : statement.values) if (value) ExprRoots(*value);
+        if (statement.then) BlockRoots(*statement.then);
+        if (statement.otherwise) BlockRoots(*statement.otherwise);
+        PrintRoots(statement.print);
+    }
+};
+
 class GirLowerer {
 public:
     // `origin` maps a Core origin to its number in the Core module's document.
@@ -68,6 +283,7 @@ private:
     vector<pair<vector<GirTypeId>, vector<GirTypeId>>> sigs;
     vector<pair<GirTypeId, CoreVarKind>> globaltypes;
     vector<char> noReturn;
+    vector<pair<int, int>> sourceValueRecipes;
 
     static bool Plain(const CoreStmt &s) {
         switch (s.kind) {
@@ -511,7 +727,13 @@ private:
                 cur = eb;
                 auto vf = LowerBlock(lexicalLoop, {}, true, *e.otherwise);
                 auto endF = cur;
-                return JoinValue(endT, vt, endF, vf);
+                auto joined = JoinValue(endT, vt, endF, vf);
+                if (cur >= 0) {
+                    auto kind = mod.Type(ValTy(joined)).kind;
+                    if (kind == CoreType::Ref || kind == CoreType::Slice || kind == CoreType::View)
+                        sourceValueRecipes.push_back({ joined, e.then->scope });
+                }
+                return joined;
             }
             case CoreExprKind::Block: return LowerValueBlock(*e.then, e.type);
             case CoreExprKind::Bytes:
@@ -2496,6 +2718,7 @@ private:
     void Begin(const vector<CoreVar> *vs) {
         blocks.clear();
         vals.clear();
+        sourceValueRecipes.clear();
         cur = -1;
         lexicalLoop = nullptr;
         valueBoundary = nullptr;
@@ -2568,6 +2791,16 @@ private:
             auto refSlice = ty.kind == CoreType::Ref && mod.Type(ty.elem).kind == CoreType::Slice &&
                 row.first < (int)impl.params.size() && impl.params[row.first].var == row.first;
             out.slots->push_back({ row.first, refSlice ? vector<CoreRootRef> { { CoreRootRef::Param, row.first } } : ceiling(row.second) });
+        }
+        if (!sourceValueRecipes.empty()) {
+            auto sourceRows = CoreSourceRootProjection(core, &impl, &context).Run(impl.body);
+            out.values.emplace();
+            for (auto &[value, scope] : sourceValueRecipes) {
+                auto source = sourceRows.find(scope);
+                if (source == sourceRows.end())
+                    throw CompileError { "internal compiler error: missing source value-root projection" };
+                out.values->push_back({ value, ceiling(source->second) });
+            }
         }
         return out;
     }
@@ -2658,6 +2891,16 @@ private:
         out.init.scopes = ScopeTable(pairs);
         out.init.blocks = std::move(blocks);
         out.init.roots.results.resize(1);
+        if (!sourceValueRecipes.empty()) {
+            auto sourceRows = CoreSourceRootProjection(core, nullptr, nullptr).Run(*g.init);
+            out.init.roots.values.emplace();
+            for (auto &[value, scope] : sourceValueRecipes) {
+                auto source = sourceRows.find(scope);
+                if (source == sourceRows.end())
+                    throw CompileError { "internal compiler error: missing initializer value-root projection" };
+                out.init.roots.values->push_back({ value, source->second });
+            }
+        }
         out.init.summary.unknown = true;
         out.init.org = Org(g.org);
         return out;

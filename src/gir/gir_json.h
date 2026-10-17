@@ -337,7 +337,13 @@ private:
             Roots(out, r.results[i]);
         }
         out += ']';
-        if (r.slots) {
+        if (r.values) {
+            out += ',';
+            if (r.slots) RootRows(out, *r.slots, "sr");
+            else out += "null";
+            out += ',';
+            RootRows(out, *r.values, "er");
+        } else if (r.slots) {
             out += ',';
             RootRows(out, *r.slots, "sr");
         }

@@ -1102,6 +1102,178 @@ void PreservesOptionalSlotRootMetadata() {
     assert(gir.funcs[0].roots.slots && !gir.funcs[0].roots.slots->empty());
 }
 
+void PreservesOptionalValueRootMetadata() {
+    auto raw = Module();
+    auto oldWire = GirWriter(raw).Write();
+    raw.funcs[0].roots.values.emplace();
+    auto noSlots = GirWriter(raw).Write();
+    assert(noSlots.find("[\"roots\",[],[],[],null,[]]") != string::npos);
+    raw.funcs[0].roots.slots.emplace();
+    auto emptySlots = GirWriter(raw).Write();
+    assert(emptySlots.find("[\"roots\",[],[],[],[],[]]") != string::npos);
+    raw.funcs[0].roots.values->push_back({ 3, { { CoreRootRef::Global, 1 } } });
+    assert(GirWriter(raw).Write().find("[\"er\",3,[[\"r_global\",1]]]") != string::npos);
+    raw.funcs[0].roots.values.reset();
+    assert(GirWriter(raw).Write().find("[\"roots\",[],[],[],[]]") != string::npos);
+    raw.funcs[0].roots.slots.reset();
+    assert(GirWriter(raw).Write() == oldWire);
+}
+
+void EnforcesSourceValueRootCeilings() {
+    auto module = Module();
+    auto integer = module.IntType(CoreIntTy::I64);
+    module.funcs[0].slots = { { integer, CoreVarKind::Var, 0, 0 } };
+    auto enter = Inst(GirOp::Enter);
+    enter.idx = 0;
+    auto address = Inst(GirOp::Slot, 0);
+    address.idx = 0;
+    auto leave = Inst(GirOp::Leave);
+    leave.idx = 0;
+    module.funcs[0].blocks = { { {}, { enter, address, Inst(GirOp::Freeze, 1, 0),
+        Inst(GirOp::Load, 2, 1), leave, Inst(GirOp::Ret) } } };
+    module.funcs[0].roots.values = vector<pair<int, vector<CoreRootRef>>> {
+        { 1, { { CoreRootRef::Local, 0 } } }
+    };
+    assert(Code(module).empty());
+    module.funcs[0].roots.values->at(0).second.clear();
+    assert(Code(module) == "GIR-V050");
+    module.funcs[0].roots.values = vector<pair<int, vector<CoreRootRef>>> {
+        { 1, { { CoreRootRef::Local, 0 } } }, { 1, {} }
+    };
+    assert(Code(module) == "GIR-V001");
+    module.funcs[0].roots.values = vector<pair<int, vector<CoreRootRef>>> { { 2, {} } };
+    assert(Code(module) == "GIR-V010");
+    module.funcs[0].roots.values = vector<pair<int, vector<CoreRootRef>>> { { 3, {} } };
+    assert(Code(module) == "GIR-V001");
+}
+
+void RejectsWideValueRootsAtNarrowSlots() {
+    auto module = Module();
+    auto integer = module.IntType(CoreIntTy::I64);
+    auto reference = module.RefType(CoreMut::Const, integer);
+    for (auto name : { "first", "second" }) {
+        GirGlobal global;
+        global.name = name;
+        global.ty = integer;
+        global.kind = CoreVarKind::Var;
+        global.init.name = cat(name, "_init");
+        global.init.results = { integer };
+        global.init.scopes = { -1 };
+        auto zero = Inst(GirOp::Int, 0);
+        zero.ty = integer;
+        zero.text = "0";
+        auto ret = Inst(GirOp::Ret);
+        ret.vals = { 0 };
+        global.init.blocks = { { {}, { zero, ret } } };
+        module.globals.push_back(std::move(global));
+    }
+    auto &function = module.funcs[0];
+    function.slots = { { reference, CoreVarKind::Var, 0, 0 } };
+    function.roots.slots = vector<pair<int, vector<CoreRootRef>>> {
+        { 0, { { CoreRootRef::Global, 0 } } }
+    };
+    function.roots.values = vector<pair<int, vector<CoreRootRef>>> {
+        { 2, { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } }
+    };
+    auto enter = Inst(GirOp::Enter);
+    enter.idx = 0;
+    auto address = Inst(GirOp::Slot, 0);
+    address.idx = 0;
+    auto global = Inst(GirOp::Global, 1);
+    global.idx = 0;
+    auto leave = Inst(GirOp::Leave);
+    leave.idx = 0;
+    function.blocks = { { {}, { enter, address, global, Inst(GirOp::Freeze, 2, 1),
+        Inst(GirOp::Store, -1, 0, 2), leave, Inst(GirOp::Ret) } } };
+    assert(Code(module) == "GIR-V050");
+}
+
+void LowersStoppedConditionalRootsPerContext() {
+    CoreModule core;
+    core.files = { "conditional-source-roots.goose" };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto integer = core.IntType(CoreIntTy::I64);
+    auto boolean = core.BoolType();
+    CoreType reference;
+    reference.kind = CoreType::Ref;
+    reference.mut = CoreMut::Const;
+    reference.elem = integer;
+    auto referenceType = core.Intern(reference);
+    for (int index = 0; index < 3; index++) {
+        CoreGlobal global;
+        global.name = cat("root", index);
+        global.type = integer;
+        global.org = origin;
+        global.init = make_unique<CoreExpr>();
+        global.init->kind = CoreExprKind::Lit;
+        global.init->type = integer;
+        global.init->value = "0";
+        core.globals.push_back(std::move(global));
+    }
+    CoreImpl entry;
+    entry.name = "main";
+    entry.body.scope = 0;
+    core.impls.push_back(std::move(entry));
+    CoreContext entryContext;
+    entryContext.impl = 0;
+    core.contexts.push_back(std::move(entryContext));
+    CoreImpl function;
+    function.name = "conditional";
+    function.params = { { 0, true } };
+    function.vars = { { "source", referenceType, CoreVarKind::Let, 0, origin } };
+    function.results = { { referenceType, CoreRequest::Register, nullopt } };
+    function.summary.aborts = true;
+    function.body.scope = 0;
+    function.body.value = make_unique<CoreExpr>();
+    function.body.value->kind = CoreExprKind::If;
+    function.body.value->type = referenceType;
+    function.body.value->org = origin;
+    function.body.value->a = make_unique<CoreExpr>();
+    function.body.value->a->kind = CoreExprKind::Bool;
+    function.body.value->a->type = boolean;
+    function.body.value->a->flag = true;
+    function.body.value->then = make_unique<CoreBlock>();
+    function.body.value->then->scope = 1;
+    CoreStmt abort;
+    abort.kind = CoreStmtKind::Abort;
+    abort.org = origin;
+    function.body.value->then->stmts.push_back(std::move(abort));
+    function.body.value->then->value = make_unique<CoreExpr>();
+    function.body.value->then->value->kind = CoreExprKind::Read;
+    function.body.value->then->value->type = referenceType;
+    function.body.value->then->value->place = make_unique<CorePlace>();
+    function.body.value->then->value->place->kind = CorePlace::Local;
+    function.body.value->then->value->place->index = 0;
+    function.body.value->otherwise = make_unique<CoreBlock>();
+    function.body.value->otherwise->scope = 2;
+    function.body.value->otherwise->value = make_unique<CoreExpr>();
+    function.body.value->otherwise->value->kind = CoreExprKind::Ref;
+    function.body.value->otherwise->value->type = referenceType;
+    function.body.value->otherwise->value->mut = CoreMut::Const;
+    function.body.value->otherwise->value->place = make_unique<CorePlace>();
+    function.body.value->otherwise->value->place->kind = CorePlace::Global;
+    function.body.value->otherwise->value->place->index = 0;
+    core.impls.push_back(std::move(function));
+    for (int root : { 1, 2 }) {
+        CoreContext context;
+        context.impl = 1;
+        context.varroots = { { 0, { { CoreRootRef::Global, root } } } };
+        context.resultroots = { { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, root } } };
+        core.contexts.push_back(std::move(context));
+    }
+    auto gir = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    assert(gir.funcs[1].roots.values && gir.funcs[1].roots.values->size() == 1);
+    assert(gir.funcs[2].roots.values && gir.funcs[2].roots.values->size() == 1);
+    auto first = gir.funcs[1].roots.values->front().second;
+    auto second = gir.funcs[2].roots.values->front().second;
+    assert(find(first.begin(), first.end(), CoreRootRef { CoreRootRef::Global, 0 }) != first.end());
+    assert(find(first.begin(), first.end(), CoreRootRef { CoreRootRef::Global, 1 }) != first.end());
+    assert(find(second.begin(), second.end(), CoreRootRef { CoreRootRef::Global, 0 }) != second.end());
+    assert(find(second.begin(), second.end(), CoreRootRef { CoreRootRef::Global, 2 }) != second.end());
+    assert(first != second);
+    assert(Code(gir).empty());
+}
+
 void EnforcesDeclaredRegionCeilings() {
     auto lower = [](CoreModule core) {
         return GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
@@ -2297,6 +2469,10 @@ int main() {
     ChecksDeclaredContentStoresAndCallRegions();
     EnforcesDeclaredRegionCeilings();
     PreservesOptionalSlotRootMetadata();
+    PreservesOptionalValueRootMetadata();
+    EnforcesSourceValueRootCeilings();
+    RejectsWideValueRootsAtNarrowSlots();
+    LowersStoppedConditionalRootsPerContext();
     AdmitsCallerStorageThroughGenericContentBounds();
     DistinguishesReturnedOwnerAddressesFromReads();
     PreservesActualGlobalCallDependencies();
