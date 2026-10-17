@@ -82,4 +82,41 @@ theorem abandonDestination_destination_lifecycle_invariant (id : DestinationId)
   exact ⟨parts.1, abandonDestination_destination_capabilities id state valid.2.1,
     parts.2.1, parts.2.2⟩
 
+theorem destination_capability_ids_eq_range (state : ConstructionState)
+    (valid : DestinationCapabilitiesIndexed state) :
+    state.destinations.toList.map (·.capability.id) = List.range state.destinations.size := by
+  apply List.ext_getElem
+  · simp
+  · intro index left right
+    have inside : index < state.destinations.size := by simpa using right
+    have present : state.destinations[index]? = some state.destinations[index] :=
+      Array.getElem?_eq_getElem inside
+    simpa using valid index state.destinations[index] present
+
+theorem destinationLifecycleInvariant_abandon_row (state : ConstructionState) (id : DestinationId)
+    (destination : PendingDestination)
+    (present : state.destinations[id]? = some destination)
+    (active : ∃ count, destination.progress = .open count ∨ destination.progress = .built count ∨
+      (∃ child, destination.progress = .suspended count child) ∨
+      ∃ replacement, destination.progress = .exiting count replacement)
+    (valid : DestinationLifecycleInvariant state) :
+    DestinationLifecycleInvariant { state with
+      destinations := state.destinations.set! id { destination with progress := .abandoned }
+      events := state.events ++ [.abandon id] } := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · apply destinationTraceProtocol_replace state id destination _ _ present
+      (by intro index different; simp [destinationObservations, observeDestination, Ne.symm different])
+      _ valid.1
+    intro phase matched
+    obtain ⟨count, active⟩ := active
+    rcases active with progress | progress | ⟨child, progress⟩ | ⟨replacement, progress⟩ <;>
+      cases phase <;>
+      simp_all [DestinationTracePhase.matchesDestination, DestinationTracePhase.matchesProgress,
+        runDestinationTrace, destinationObservations, observeDestination,
+        runDestinationObservations, destinationTraceStep]
+  · exact destinationCapabilities_replace state id _ (valid.2.1 id destination present) valid.2.1
+  · exact destinationStorageReferences_replace state id _ state.storage (Nat.le_refl _)
+      (valid.2.2.1 id destination present).1 (valid.2.2.1 id destination present).2 valid.2.2.1
+  · exact destinationOwnersOrdered_replace state id destination _ present rfl valid.2.2.2
+
 end Goose.Proofs.ConstructionExecutionProtocol
