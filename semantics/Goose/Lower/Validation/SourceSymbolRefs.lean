@@ -1,6 +1,7 @@
 import Goose.Lower.Validation.SymbolSourceTables
 import Goose.Lower.Validation.ExpressionTypingCallOps
 import Goose.Lower.Validation.ScopeLexical
+import Goose.Lower.Validation.ScopeBlocks
 
 namespace Goose.Lower.Validation
 
@@ -51,7 +52,8 @@ theorem Inst.SourceSymbolsWithin.term {le : LEnv} {scopeCount : Nat} {term : Ter
   · simp [instScopeRefs]
 
 def LS.SourceSymbolsWF (le : LEnv) (scopeCount : Nat) (state : LS) : Prop :=
-  ∀ inst ∈ state.insts, Inst.SourceSymbolsWithin le scopeCount inst
+  (∀ inst ∈ state.insts, Inst.SourceSymbolsWithin le scopeCount inst) ∧
+    (∀ scope ∈ state.stack, scope < scopeCount)
 
 def LS.SourceSymbolsRun (le : LEnv) (scopeCount : Nat) (action : B α) : Prop :=
   ∀ before result after, action le before = (result, after) →
@@ -75,30 +77,33 @@ theorem LS.sourceSymbols_appendInst {le : LEnv} {scopeCount : Nat} {before : LS}
     (checked : LS.SourceSymbolsWF le scopeCount before) (block : BlockId) (inst : Inst)
     (source : Inst.SourceSymbolsWithin le scopeCount inst) :
     LS.SourceSymbolsWF le scopeCount (before.appendInst block inst) := by
-  intro next member
-  change next ∈ (before.blocks.modify block fun current =>
-    { current with insts := current.insts.push inst }).toList.flatMap (fun current => current.insts.toList) at member
-  obtain ⟨current, currentMember, instructionMember⟩ := List.mem_flatMap.mp member
-  obtain ⟨index, lookup⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp currentMember)
-  rw [Array.getElem?_modify] at lookup
-  by_cases same : block = index
-  · simp only [same, ↓reduceIte] at lookup
-    cases previous : before.blocks[index]? with
-    | none => simp [previous] at lookup
-    | some old =>
-      simp only [previous, Option.map_some, Option.some.injEq] at lookup
-      subst current
-      simp only [Array.toList_push, List.mem_append, List.mem_singleton] at instructionMember
-      rcases instructionMember with oldInstruction | fresh
-      · exact checked next (by
-          simp only [LS.insts, List.mem_flatMap]
-          exact ⟨old, Array.mem_toList_iff.mpr (Array.mem_of_getElem? previous), oldInstruction⟩)
-      · subst next
-        exact source
-  · simp only [same, ↓reduceIte] at lookup
-    exact checked next (by
-      simp only [LS.insts, List.mem_flatMap]
-      exact ⟨current, Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup), instructionMember⟩)
+  refine ⟨?_, ?_⟩
+  · intro next member
+    have checked := checked.1
+    change next ∈ (before.blocks.modify block fun current =>
+      { current with insts := current.insts.push inst }).toList.flatMap (fun current => current.insts.toList) at member
+    obtain ⟨current, currentMember, instructionMember⟩ := List.mem_flatMap.mp member
+    obtain ⟨index, lookup⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp currentMember)
+    rw [Array.getElem?_modify] at lookup
+    by_cases same : block = index
+    · simp only [same, ↓reduceIte] at lookup
+      cases previous : before.blocks[index]? with
+      | none => simp [previous] at lookup
+      | some old =>
+        simp only [previous, Option.map_some, Option.some.injEq] at lookup
+        subst current
+        simp only [Array.toList_push, List.mem_append, List.mem_singleton] at instructionMember
+        rcases instructionMember with oldInstruction | fresh
+        · exact checked next (by
+            simp only [LS.insts, List.mem_flatMap]
+            exact ⟨old, Array.mem_toList_iff.mpr (Array.mem_of_getElem? previous), oldInstruction⟩)
+        · subst next
+          exact source
+    · simp only [same, ↓reduceIte] at lookup
+      exact checked next (by
+        simp only [LS.insts, List.mem_flatMap]
+        exact ⟨current, Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup), instructionMember⟩)
+  · simpa [LS.appendInst] using checked.2
 
 theorem LS.SourceSymbolsRun.emitDef {le : LEnv} {scopeCount : Nat} {op : Op}
     (origin : ∀ o, op.origin = some o → o < le.mod.origins.size)
@@ -150,6 +155,106 @@ theorem LS.SourceSymbolsRun.emitTerm {le : LEnv} {scopeCount : Nat} (term : Term
       (Inst.SourceSymbolsWithin.term (scopeCount := scopeCount) origin)
     simpa only [LS.SourceSymbolsWF, LS.insts, LS.appendInst] using appended
 
+theorem LS.SourceSymbolsRun.pushScope {le : LEnv} {scopeCount : Nat} (scope : ScopeId)
+    (bounded : scope < scopeCount) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.pushScope scope) := by
+  intro before result after run checked
+  rw [pushScope_run] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  refine ⟨checked.1, ?_⟩
+  intro next member
+  simp only [List.mem_cons] at member
+  rcases member with same | member
+  · subst next
+    exact bounded
+  · exact checked.2 next member
+
+theorem LS.SourceSymbolsRun.popScope {le : LEnv} {scopeCount : Nat} :
+    LS.SourceSymbolsRun le scopeCount Goose.Lower.popScope := by
+  intro before result after run checked
+  rw [popScope_run] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  refine ⟨checked.1, ?_⟩
+  intro next member
+  cases stack : before.stack with
+  | nil => simp [stack] at member
+  | cons head rest =>
+    simp only [stack, List.drop_succ_cons, List.drop_zero] at member
+    exact checked.2 next (by rw [stack]; exact List.mem_cons.mpr (Or.inr member))
+
+theorem LS.SourceSymbolsRun.enterScope {le : LEnv} {scopeCount scope : Nat}
+    (bounded : scope < scopeCount) :
+    LS.SourceSymbolsRun le scopeCount (enterScope scope) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (Goose.Lower.emitEffect (.enter scope) >>= fun _ => Goose.Lower.pushScope scope)
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitEffect (.enter scope))
+  · exact LS.SourceSymbolsRun.emitEffect (.enter scope) (by simp [Effect.origin]) (by
+      simpa [Effect.SymbolRefsValid] using bounded)
+  · intro _
+    exact LS.SourceSymbolsRun.pushScope scope bounded
+
+theorem LS.SourceSymbolsRun.leaveScope {le : LEnv} {scopeCount scope : Nat}
+    (bounded : scope < scopeCount) :
+    LS.SourceSymbolsRun le scopeCount (leaveScope scope) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (Goose.Lower.emitEffect (.leave scope) >>= fun _ => Goose.Lower.popScope)
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitEffect (.leave scope))
+  · exact LS.SourceSymbolsRun.emitEffect (.leave scope) (by simp [Effect.origin]) (by
+      simpa [Effect.SymbolRefsValid] using bounded)
+  · intro _
+    exact LS.SourceSymbolsRun.popScope
+
+theorem LS.SourceSymbolsRun.leaveAll {le : LEnv} {scopeCount : Nat} :
+    ∀ scopes : List ScopeId, (∀ scope ∈ scopes, scope < scopeCount) →
+      LS.SourceSymbolsRun le scopeCount (Goose.Lower.leaveAll scopes)
+  | [], _ => by
+    change LS.SourceSymbolsRun le scopeCount (Pure.pure ())
+    exact LS.SourceSymbolsRun.pure ()
+  | scope :: rest, bounded => by
+    change LS.SourceSymbolsRun le scopeCount
+      (Goose.Lower.emitEffect (.leave scope) >>= fun _ => Goose.Lower.leaveAll rest)
+    apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitEffect (.leave scope))
+    · apply LS.SourceSymbolsRun.emitEffect
+      · intro origin equality
+        simp [Effect.origin] at equality
+      · simpa [Effect.SymbolRefsValid] using bounded scope (by simp)
+    · intro _
+      apply LS.SourceSymbolsRun.leaveAll
+      intro next member
+      exact bounded next (by simp [member])
+
+theorem LS.SourceSymbolsRun.leaveTo {le : LEnv} {scopeCount depth : Nat} :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.leaveTo depth) := by
+  intro before result after run checked
+  simp only [Goose.Lower.leaveTo, bind_run, get_apply] at run
+  let scopes := before.stack.take (before.stack.length - depth)
+  have bounded : ∀ scope ∈ scopes, scope < scopeCount := by
+    intro scope member
+    exact checked.2 scope (List.mem_of_mem_take member)
+  exact LS.SourceSymbolsRun.leaveAll scopes bounded before result _ run checked
+
+theorem LS.SourceSymbolsRun.initSlots {le : LEnv} {scopeCount : Nat} :
+    ∀ entries : List (SlotId × ValueId × OriginId),
+      (∀ entry ∈ entries, entry.1 < le.slots.size ∧ entry.2.2 < le.mod.origins.size) →
+      LS.SourceSymbolsRun le scopeCount (initSlots entries)
+  | [], _ => by
+    change LS.SourceSymbolsRun le scopeCount (Pure.pure ())
+    exact LS.SourceSymbolsRun.pure ()
+  | (slot, value, origin) :: rest, bounded => by
+    change LS.SourceSymbolsRun le scopeCount
+      (Goose.Lower.emitEffect (.slotInit slot value (some origin)) >>= fun _ => Goose.Lower.initSlots rest)
+    apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitEffect (.slotInit slot value (some origin)))
+    · apply LS.SourceSymbolsRun.emitEffect
+      · intro emitted equality
+        simp only [Effect.origin, Option.some.injEq] at equality
+        cases equality
+        exact (bounded (slot, value, origin) (by simp)).2
+      · simpa [Effect.SymbolRefsValid] using (bounded (slot, value, origin) (by simp)).1
+    · intro _
+      apply LS.SourceSymbolsRun.initSlots
+      intro entry member
+      exact bounded entry (by simp [member])
+
 theorem Inst.SymbolsWithin.ofSource {le : LEnv} {scopeCount valueCount blockCount : Nat}
     {inst : Inst} (source : Inst.SourceSymbolsWithin le scopeCount inst)
     (uses : ∀ v ∈ inst.uses, v < valueCount)
@@ -188,6 +293,15 @@ theorem Core.tyPlace_global_success_reference {env : Core.TEnv} {le : LEnv}
     Op.SymbolRefsValid le (.globalAddr global) := by
   simpa [Op.SymbolRefsValid] using Nat.lt_of_lt_of_le
     (Core.tyPlace_global_success_bound source) globals
+
+theorem Core.tyPlace_elem_success_origin_bound {env : Core.TEnv} {view : Core.View}
+    {index : Core.Expr} {origin : Core.OriginId} {start : Nat}
+    {info : Core.PlaceInfo} {finish : Nat}
+    (source : Core.tyPlace env (.elem view index origin) start = .ok (info, finish)) :
+    origin < env.mod.origins.size := by
+  simp only [Core.tyPlace] at source
+  obtain ⟨_, _, checked, _⟩ := (st_bind_ok _ _ _ _).mp source
+  exact (checkOrg_ok _ _ _ _).mp checked |>.1
 
 theorem Core.declare_success_slot_reference {env : Core.TEnv} {le : LEnv}
     {slot scope start finish : Nat} {localVar : Core.LocalVar}
