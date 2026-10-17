@@ -5,9 +5,6 @@ namespace Goose.GIR
 
 open Goose.Core
 
-def Module.hasDeclaredRegions (m : Module) : Bool :=
-  m.funcs.any (·.roots.slots.isSome) || m.globals.any (·.init.roots.slots.isSome)
-
 def Func.admittedSlots (f : Func) (p : Prov) : Bool :=
   (f.roots.slots.getD #[]).toList.all fun (slot, ceiling) =>
     (f.slots[slot]?).any fun storage =>
@@ -82,16 +79,26 @@ def Module.checkRegionGlobalTypes (m : Module) : Except String Unit := do
     unless global.ty.storable && !global.ty.isRefLike do
       throw s!"global {global.name} has a type no source module may have"
 
+def Func.checkRegionClosure (m : Module) (results : Array (List RootRef))
+    (vt : Array (Option VTy)) (f : Func) (p : Prov)
+    (returned : Option (List RootRef)) : Except String Unit := do
+  if (provRound results vt f p).2 then
+    throw s!"{f.name} provenance analysis has not reached a fixed point"
+  if let some roots := returned then
+    unless (f.returnedRoots p).all roots.contains do
+      throw s!"{f.name} result analysis omits a root returned by the body"
+  f.checkAdmittedRegions m vt p
+
 def Module.checkAdmittedRegions (m : Module) (types : Array (Array (Option VTy)))
     (results : Array (List RootRef)) (nRoots : Nat) : Except String Unit := do
-  if !m.hasDeclaredRegions then return ()
   m.checkRegionGlobalTypes
   for (f, index) in m.funcs.toList.zipIdx do
     let vt := types[index]?.getD #[]
-    f.checkAdmittedRegions m vt (f.provenance results vt nRoots)
+    f.checkRegionClosure m results vt (f.provenance results vt nRoots)
+      (some (rootsAt results index))
   for global in m.globals do
     let f := global.init
     let vt := f.valueTypes m
-    f.checkAdmittedRegions m vt (f.provenance results vt nRoots)
+    f.checkRegionClosure m results vt (f.provenance results vt nRoots) none
 
 end Goose.GIR
