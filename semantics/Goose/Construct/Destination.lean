@@ -132,6 +132,29 @@ def destinationCanWrite (state : ConstructionState) (id : DestinationId) : Bool 
         | _ => return false
   return false
 
+theorem destinationCanWrite_result (state : ConstructionState) (id : DestinationId) :
+    destinationCanWrite state id = Id.run do
+      let mut current := id
+      for _ in [0:state.destinations.size + 1] do
+        let some owner := state.destinations[current]? | return false
+        match owner.use with
+        | .receiver => return true
+        | .child parentId =>
+            let some parent := state.destinations[parentId]? | return false
+            match parent.progress with
+            | .suspended _ expected =>
+                if expected != current then return false
+                current := parentId
+            | _ => return false
+        | .replacement supersededId =>
+            let some superseded := state.destinations[supersededId]? | return false
+            match superseded.progress with
+            | .exiting _ expected =>
+                if expected != current then return false
+                current := supersededId
+            | _ => return false
+      return false := rfl
+
 private def writableDestination (id : DestinationId) : ConstructionM PendingDestination := do
   let destination ← lookupDestination id
   let state ← ConstructionM.get
@@ -648,6 +671,17 @@ private def descendantOf (destinations : Array PendingDestination) (ancestor : D
     | .receiver => return false
     | .replacement parent | .child parent => current := parent
   return false
+
+theorem descendantOf_result (destinations : Array PendingDestination) (ancestor id : DestinationId) :
+    descendantOf destinations ancestor id = Id.run do
+      let mut current := id
+      for _ in [0:destinations.size] do
+        if current == ancestor then return true
+        let some destination := destinations[current]? | return false
+        match destination.use with
+        | .receiver => return false
+        | .replacement parent | .child parent => current := parent
+      return false := rfl
 
 def abandonTree (id : DestinationId) : ConstructionM Unit := do
   let parent ← writableDestination id
