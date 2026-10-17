@@ -61,4 +61,19 @@ theorem tyStmt_assignOp_storage {env output : TEnv} {place : Place} {expr : Expr
       | assumption
       | (solve | simp_all [Ty.readable, Ty.flat])
 
+theorem passableTo_readable {source target : Ty} (passable : source.passableTo target = true)
+    (readable : source.readable = true) : target.readable = true := by
+  cases source <;> cases target <;> simp_all [Ty.passableTo, Ty.readable]
+
+theorem passableTo_source_refLike {source target : Ty}
+    (passable : source.passableTo target = true) (reference : target.isRefLike = true) :
+    source.isRefLike = true := by
+  cases source <;> cases target <;> simp_all [Ty.passableTo, Ty.isRefLike]
+
+theorem passableTo_noRefSlice {source target : Ty} (passable : source.passableTo target = true)
+    (ordinary : source.isRefSlice = false) : target.isRefSlice = false := by
+  cases source <;> cases target <;> simp_all [Ty.passableTo, Ty.isRefSlice]
+  case ref.ref sourceMu sourceTy targetMu targetTy =>
+    cases targetTy <;> simp_all [Ty.isRefSlice]
+
 end Goose.Lower.Validation
