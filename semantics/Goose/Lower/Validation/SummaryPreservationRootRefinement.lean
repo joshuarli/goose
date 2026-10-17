@@ -1,12 +1,11 @@
 import Goose.Lower.Validation.SummaryPreservationAllowedResults
+import Goose.GIR.RootBounds
 
 namespace Goose.Lower.Validation.SummaryPreservation
 
 open Goose.Core Goose.GIR
 
-def RootsRefine (func : Func) (actual source : List RootRef) : Prop :=
-  ∀ root ∈ actual, root ∈ source ∨
-    ∀ concrete ∈ func.expandParameterRoot root, concrete ∈ source
+abbrev RootsRefine := Goose.GIR.RootsRefine
 
 theorem RootsRefine.refl (func : Func) (roots : List RootRef) : RootsRefine func roots roots :=
   fun _ member => Or.inl member
