@@ -159,4 +159,181 @@ theorem ScopeFlowAction.shortCircuit {parents : Array (Option ScopeId)} {parent 
     exact ⟨nextEntry, nextExit, resumedConfig,
       (forkScopeMap_advance before entry exit).trans startAdvance rhsMaps⟩
 
+theorem ScopeFlowAction.ifThen {parents : Array (Option ScopeId)} {parent : Option ScopeId}
+    {loop : Option LoopCtx} (condition : ValueId) {body : B ValueId}
+    (bodyAction : ScopeFlowAction parents parent loop body) :
+    ScopeFlowAction parents parent loop (whenLive () fun _ => do
+      let (tb, xb) ← fork condition
+      setCur (some tb)
+      let _ ← body
+      emitTerm (.br xb [])
+      setCur (some xb)) := by
+  refine ⟨ScopeAction.ifThen condition bodyAction.scopes, ?_⟩
+  intro env before entry exit config context head
+  generalize run : (whenLive () fun _ => do
+      let (tb, xb) ← fork condition
+      setCur (some tb)
+      let _ ← body
+      emitTerm (.br xb [])
+      setCur (some xb)) env before = result
+  obtain ⟨resultValue, after⟩ := result
+  dsimp only
+  cases live : before.cur with
+  | none =>
+    rw [whenLive_none _ _ _ live] at run
+    obtain ⟨_, rfl⟩ := Prod.mk.inj run
+    exact ⟨entry, exit, config, ScopeMapAdvance.refl _ _ _⟩
+  | some current =>
+    rw [whenLive_some _ _ _ live] at run
+    simp only [bind_eq] at run
+    obtain ⟨⟨tb, xb⟩, forked, forkRun, u1, started, startRun,
+      result, evaluated, bodyRun, u2, closed, closeRun, resumeRun⟩ := run
+    have ids := fork_ids forkRun
+    obtain ⟨tbId, xbId⟩ := Prod.mk.inj ids.1
+    subst tbId xbId
+    have forkedConfig := config.fork condition env
+    rw [forkRun] at forkedConfig
+    dsimp only at forkedConfig
+    have forkTargets := fork_open_targets live (config.openCurrent.bound current live) condition env
+    rw [forkRun] at forkTargets
+    dsimp only at forkTargets
+    obtain ⟨bodyRow, bodyLookup, bodyOpen⟩ := forkTargets.1
+    obtain ⟨joinBody, joinRow, joinOpen⟩ := forkTargets.2
+    have forkAdvance := advB_fork condition env before _ _ forkRun
+    have startedConfig := forkedConfig.setCur before.blocks.size bodyRow bodyLookup bodyOpen (by
+      simp [forkScopeMap, forkAdvance.stack]) env
+    rw [startRun] at startedConfig
+    dsimp only at startedConfig
+    have startAdvance := adv_setCur_step forkAdvance (Or.inr (Nat.le_refl _))
+      (by have size := ids.2; nat_omega) startRun
+    have startContext := ScopeLoopContext.advance context startAdvance (forkScopeMap_advance before entry exit)
+    obtain ⟨nextEntry, nextExit, evaluatedConfig, bodyMaps⟩ :=
+      bodyAction.preserves env started (forkScopeMap before entry) (forkScopeMap before exit)
+        startedConfig startContext (by rw [startAdvance.stack]; exact head)
+    rw [bodyRun] at evaluatedConfig
+    dsimp only at evaluatedConfig
+    have bodyAdvance := bodyAction.scopes.advance env started _ _ bodyRun
+    have evaluatedStack : evaluated.stack = before.stack := bodyAdvance.stack.trans startAdvance.stack
+    have joinOld : before.blocks.size + 1 < started.blocks.size := by
+      rw [setCur_blocks startRun]
+      have size := ids.2
+      nat_omega
+    have startedCurrent : started.cur = some before.blocks.size := by
+      rw [setCur_run] at startRun
+      exact congrArg (fun pair => pair.2.cur) startRun.symm
+    have notJoin : started.cur ≠ some (before.blocks.size + 1) := by
+      rw [startedCurrent]
+      intro same
+      have equality := Option.some.inj same
+      nat_omega
+    have entryJoin := (bodyMaps _ joinOld).1
+    have exitJoin := (bodyMaps _ joinOld).2 notJoin
+    have joinBound : before.blocks.size + 1 < evaluated.blocks.size :=
+      Nat.lt_of_lt_of_le joinOld bodyAdvance.ext.1
+    have closedConfig := evaluatedConfig.emitTerm (.br (before.blocks.size + 1) []) rfl env (by
+      intro destination member
+      have same : destination = before.blocks.size + 1 := by simpa [Term.successors] using member
+      subst destination
+      rw [entryJoin]
+      simp [forkScopeMap, evaluatedStack]) (by
+      intro destination member
+      have same : destination = before.blocks.size + 1 := by simpa [Term.successors] using member
+      subst destination
+      exact joinBound)
+    rw [closeRun] at closedConfig
+    dsimp only at closedConfig
+    have closeAdvance := adv_emitTerm closeRun
+    have evaluatedOther := LS_Adv.otherCurrent bodyAdvance joinOld notJoin
+    have evaluatedJoinRow : evaluated.blocks[before.blocks.size + 1]? = some joinBody :=
+      bodyAdvance.keep _ joinBody notJoin (by rw [setCur_blocks startRun]; exact joinRow)
+    have closedJoinRow : closed.blocks[before.blocks.size + 1]? = some joinBody :=
+      closeAdvance.keep _ joinBody evaluatedOther evaluatedJoinRow
+    have closedStack : closed.stack = before.stack := closeAdvance.stack.trans evaluatedStack
+    have resumedConfig := closedConfig.setCur (before.blocks.size + 1) joinBody closedJoinRow joinOpen (by
+      rw [exitJoin]
+      simp [forkScopeMap, closedStack]) env
+    rw [resumeRun] at resumedConfig
+    dsimp only at resumedConfig
+    exact ⟨nextEntry, nextExit, resumedConfig,
+      (forkScopeMap_advance before entry exit).trans startAdvance bodyMaps⟩
+
+
+theorem ScopeFlowAction.whenLive {parents : Array (Option ScopeId)} {parent : Option ScopeId}
+    {loop : Option LoopCtx} (default : α) {body : BlockId → B α}
+    (bodyAction : ∀ block, ScopeFlowAction parents parent loop (body block)) :
+    ScopeFlowAction parents parent loop (Goose.Lower.whenLive default body) := by
+  unfold Goose.Lower.whenLive
+  apply (ScopeFlowAction.curBlock parents parent loop).bind
+  intro current
+  cases current with
+  | none => exact ScopeFlowAction.pure parents parent loop default
+  | some block => exact bodyAction block
+
+theorem ScopeFlowAction.assertCore (parents : Array (Option ScopeId)) (parent : Option ScopeId)
+    (loop : Option LoopCtx) (condition : ValueId) (origin : OriginId) :
+    ScopeFlowAction parents parent loop (Goose.Lower.whenLive () fun _ => do
+      let (pass, fail) ← Goose.Lower.fork condition
+      Goose.Lower.setCur (some fail)
+      Goose.Lower.emitTerm (.abort .assert (some origin))
+      Goose.Lower.setCur (some pass)) := by
+  refine ⟨ScopeAction.assertCore parents parent condition origin, ?_⟩
+  intro env before entry exit config context head
+  generalize run : (Goose.Lower.whenLive () fun _ => do
+      let (pass, fail) ← Goose.Lower.fork condition
+      Goose.Lower.setCur (some fail)
+      Goose.Lower.emitTerm (.abort .assert (some origin))
+      Goose.Lower.setCur (some pass)) env before = result
+  obtain ⟨resultValue, after⟩ := result
+  dsimp only
+  cases live : before.cur with
+  | none =>
+    rw [whenLive_none _ _ _ live] at run
+    obtain ⟨_, rfl⟩ := Prod.mk.inj run
+    exact ⟨entry, exit, config, ScopeMapAdvance.refl _ _ _⟩
+  | some current =>
+    rw [whenLive_some _ _ _ live] at run
+    simp only [bind_eq] at run
+    obtain ⟨⟨pass, fail⟩, forked, forkRun, u1, started, startRun, u2, closed, closeRun, resumeRun⟩ := run
+    have ids := fork_ids forkRun
+    obtain ⟨passId, failId⟩ := Prod.mk.inj ids.1
+    subst passId failId
+    have forkedConfig := config.fork condition env
+    rw [forkRun] at forkedConfig
+    dsimp only at forkedConfig
+    have forkTargets := fork_open_targets live (config.openCurrent.bound current live) condition env
+    rw [forkRun] at forkTargets
+    dsimp only at forkTargets
+    obtain ⟨passBody, passRow, passOpen⟩ := forkTargets.1
+    obtain ⟨failBody, failRow, failOpen⟩ := forkTargets.2
+    have forkAdvance := advB_fork condition env before _ _ forkRun
+    have startedConfig := forkedConfig.setCur (before.blocks.size + 1) failBody failRow failOpen (by
+      simp [forkScopeMap, forkAdvance.stack]) env
+    rw [startRun] at startedConfig
+    dsimp only at startedConfig
+    have startedStack : started.stack = before.stack := by
+      rw [setCur_run] at startRun
+      rw [← (Prod.mk.inj startRun).2]
+      exact forkAdvance.stack
+    have closedConfig := startedConfig.emitTerm (.abort .assert (some origin)) rfl env
+      (by intro target member; simp [Term.successors] at member)
+      (by intro target member; simp [Term.successors] at member)
+    rw [closeRun] at closedConfig
+    dsimp only at closedConfig
+    have closeAdvance := adv_emitTerm closeRun
+    have closedStack := closeAdvance.stack.trans startedStack
+    have startedPass : started.blocks[before.blocks.size]? = some passBody := by
+      rw [setCur_blocks startRun]
+      exact passRow
+    have other : started.cur ≠ some before.blocks.size := by
+      rw [setCur_run] at startRun
+      rw [← (Prod.mk.inj startRun).2]
+      simp
+    have closedPass := closeAdvance.keep _ passBody other startedPass
+    have resumedConfig := closedConfig.setCur before.blocks.size passBody closedPass passOpen (by
+      simp [forkScopeMap, closedStack]) env
+    rw [resumeRun] at resumedConfig
+    dsimp only at resumedConfig
+    exact ⟨forkScopeMap before entry, forkScopeMap before exit, resumedConfig,
+      forkScopeMap_advance before entry exit⟩
+
 end Goose.Lower.Validation

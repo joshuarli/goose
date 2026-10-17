@@ -157,6 +157,117 @@ theorem sliced_element_typed {before after : LS} {value : ValueId}
 #guard let (value, after) := lowerPlace slicedElement (lowerEnv module env.vars []) initial
        after.cur.isSome && after.vals[value]? == some (some (.data (.ref .readOnly (.int .i64))))
 
+def fieldEnv : Core.TEnv :=
+  { structEnv with vars := #[⟨"owner", structTy, .mutable, 0, 0⟩], visible := [0] }
+
+def mutableFieldReference : Expr :=
+  .ref .mutable (.field (.deref (.blockE (.mk 1 [] (some (.ref .mutable (.var 0)))))) 1)
+
+theorem mutable_field_reference_source : Core.tyExpr fieldEnv mutableFieldReference 2 =
+    .ok (.ref .mutable .bool, 2) := by rfl
+
+theorem mutable_field_reference_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableFieldReference (lowerEnv structModule fieldEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) :
+    after.vals[value]? = some (some (.data (.ref .mutable .bool))) := by
+  exact lowerExpr_recursive_typed mutableFieldReference (by trivial) mutable_field_reference_source run live
+
+#guard let (value, after) := lowerExpr mutableFieldReference (lowerEnv structModule fieldEnv.vars []) initial
+  after.vals[value]? == some (some (.data (.ref .mutable .bool)))
+
+def fieldCallee : Core.Impl :=
+  { callee with params := #[⟨0, .byRef⟩], vars := #[⟨"field", .ref .mutable .bool, .immutable, 0, 0⟩] }
+
+def fieldCallModule : Core.Module := { structModule with impls := #[fieldCallee] }
+def fieldCallEnv : Core.TEnv := { fieldEnv with mod := fieldCallModule }
+def mutableFieldCall : Expr :=
+  .call 1 [.byRef .mutable (.field (.deref (.blockE (.mk 1 [] (some (.ref .mutable (.var 0)))))) 1)] 0
+
+theorem mutable_field_call_source : Core.tyExpr fieldCallEnv mutableFieldCall 2 =
+    .ok (.int .i64, 2) := by rfl
+
+theorem mutable_field_call_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableFieldCall (lowerEnv fieldCallModule fieldCallEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.int .i64))) := by
+  exact lowerExpr_recursive_typed mutableFieldCall (by trivial) mutable_field_call_source run live
+
+#guard let (value, after) := lowerExpr mutableFieldCall (lowerEnv fieldCallModule fieldCallEnv.vars []) initial
+  after.vals[value]? == some (some (.data (.int .i64)))
+
+def mutableReferenceChoice : Expr :=
+  .ifE (.bool true) (.mk 1 [] (some (.read (.var 0)))) (.mk 2 [] (some (.read (.var 0))))
+
+def mutableDerefReference : Expr := .ref .mutable (.deref mutableReferenceChoice)
+
+theorem mutable_deref_reference_source : Core.tyExpr env mutableDerefReference 2 =
+    .ok (.ref .mutable (.int .i64), 2) := by rfl
+
+theorem mutable_deref_reference_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableDerefReference (lowerEnv module env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.ref .mutable (.int .i64)))) := by
+  exact lowerExpr_recursive_typed mutableDerefReference (by trivial) mutable_deref_reference_source run live
+
+def mutableDerefCall : Expr :=
+  .call 1 [.byRef .mutable (.deref mutableReferenceChoice), .byRef .mutable (.var 1)] 0
+
+theorem mutable_deref_call_source : Core.tyExpr referenceEnv mutableDerefCall 2 =
+    .ok (.int .i64, 2) := by rfl
+
+theorem mutable_deref_call_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableDerefCall (lowerEnv referenceModule env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.int .i64))) := by
+  exact lowerExpr_recursive_typed mutableDerefCall (by trivial) mutable_deref_call_source run live
+
+#guard let (value, after) := lowerExpr mutableDerefCall (lowerEnv referenceModule env.vars []) initial
+  after.vals[value]? == some (some (.data (.int .i64)))
+
+def mutableSliceEnv : Core.TEnv :=
+  { env with vars := #[⟨"slice", .slice .mutable (.int .i64), .immutable, 0, 0⟩], visible := [0] }
+
+def mutableSliceExpression : Expr :=
+  .slice .mutable (.val (.blockE (.mk 1 [] (some (.read (.var 0))))))
+    .omitted (.fromEnd (.lit .i8 1)) 0
+
+theorem mutable_slice_value_source : Core.tyExpr mutableSliceEnv mutableSliceExpression 2 =
+    .ok (.slice .mutable (.int .i64), 2) := by rfl
+
+theorem mutable_slice_value_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableSliceExpression (lowerEnv module mutableSliceEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.slice .mutable (.int .i64)))) := by
+  exact lowerExpr_recursive_typed mutableSliceExpression (by trivial) mutable_slice_value_source run live
+
+#guard let (value, after) := lowerExpr mutableSliceExpression (lowerEnv module mutableSliceEnv.vars []) initial
+  after.vals[value]? == some (some (.data (.slice .mutable (.int .i64))))
+
+def mutableSliceElement : Place :=
+  .elem (.val (.blockE (.mk 1 [] (some (.read (.var 0)))))) convertedIndex 0
+
+def mutableSliceElementReference : Expr := .ref .mutable mutableSliceElement
+
+theorem mutable_slice_element_reference_source : Core.tyExpr mutableSliceEnv mutableSliceElementReference 2 =
+    .ok (.ref .mutable (.int .i64), 2) := by rfl
+
+theorem mutable_slice_element_reference_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableSliceElementReference (lowerEnv module mutableSliceEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.ref .mutable (.int .i64)))) := by
+  exact lowerExpr_recursive_typed mutableSliceElementReference (by trivial) mutable_slice_element_reference_source run live
+
+def mutableSliceCallEnv : Core.TEnv :=
+  { referenceEnv with vars := mutableSliceEnv.vars ++ #[⟨"array", .arr (.int .i64) 4, .mutable, 0, 0⟩] }
+
+def mutableSliceElementCall : Expr := .call 1 [.byRef .mutable mutableSliceElement, .byRef .mutable (.var 1)] 0
+
+theorem mutable_slice_element_call_source : Core.tyExpr mutableSliceCallEnv mutableSliceElementCall 2 =
+    .ok (.int .i64, 2) := by rfl
+
+theorem mutable_slice_element_call_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableSliceElementCall (lowerEnv referenceModule mutableSliceCallEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.int .i64))) := by
+  exact lowerExpr_recursive_typed mutableSliceElementCall (by trivial) mutable_slice_element_call_source run live
+
+#guard let (value, after) := lowerExpr mutableSliceElementCall (lowerEnv referenceModule mutableSliceCallEnv.vars []) initial
+  after.vals[value]? == some (some (.data (.int .i64)))
+
 #print axioms lowerBound_recursive_typed
 #print axioms lowerExprs_recursive_typed
 #print axioms structLiteral_resultTy

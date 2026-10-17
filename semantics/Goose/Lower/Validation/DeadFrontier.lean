@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ScalarTyping
+import Goose.Lower.Frag
 
 namespace Goose.Lower.Validation
 

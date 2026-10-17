@@ -379,7 +379,7 @@ private:
             changed = false;
             for (auto &block : f.blocks) for (auto &inst : block.insts) {
                 if (!GirDefinesValue(inst) || functionValues[inst.res] >= 0) continue;
-                GirTyEnv env { module, f.slots, signatures, functionValues, &f.members };
+                GirTyEnv env { module, f.slots, signatures, functionValues, &f.members, &f.blocks, &f };
                 auto type = GirTyper(env).Of(inst);
                 if (type.ok()) { functionValues[inst.res] = type.ty; changed = true; }
             }
@@ -462,6 +462,30 @@ private:
         for (size_t i = 0; i < f.scopes.size(); i++) {
             if (i) out += ',';
             Append(out, f.scopes[i]);
+        }
+        if (CoreHasConstruction(m.profile)) {
+            out += "],[";
+            if (!f.lowResults) throw CompileError { "construction function omits its low result ABI" };
+            for (size_t i = 0; i < f.lowResults->size(); i++) {
+                if (i) out += ',';
+                auto &result = (*f.lowResults)[i];
+                if (auto scalar = get_if<GirLowScalarResult>(&result.layout))
+                    Append(out, "[\"lresult_scalar\",", result.sourceType, ",", T(scalar->type), ",", scalar->output, "]");
+                else if (auto snapshot = get_if<GirLowSnapshotResult>(&result.layout))
+                    Append(out, "[\"lresult_snapshot\",", result.sourceType, ",", snapshot->bytes, ",", snapshot->output, "]");
+                else if (auto reference = get_if<GirLowReferenceResult>(&result.layout))
+                    Append(out, "[\"lresult_reference\",", result.sourceType, ",", reference->output, "]");
+                else if (auto reference = get_if<GirLowResizableReferenceResult>(&result.layout))
+                    Append(out, "[\"lresult_resizable_reference\",", result.sourceType, ",", reference->header, ",", reference->stack, "]");
+                else if (auto slice = get_if<GirLowSliceResult>(&result.layout))
+                    Append(out, "[\"lresult_slice\",", result.sourceType, ",", slice->data, ",", slice->count, "]");
+                else {
+                    auto &nonfixed = get<GirLowNonfixedResult>(result.layout);
+                    Append(out, "[\"lresult_nonfixed\",", result.sourceType, ",");
+                    Str(out, CoreRequestName(nonfixed.request));
+                    Append(out, ",", nonfixed.stack, ",", nonfixed.start, ",", nonfixed.count, ",", nonfixed.progress, "]");
+                }
+            }
         }
         out += "],[";
         for (size_t i = 0; i < f.blocks.size(); i++) {
@@ -556,6 +580,21 @@ private:
                 Str(out, i.text);
                 out += ']';
                 return;
+            case GirOp::PtrEq:
+                Append(out, "[\"l_ptr_eq\",", i.res, ",", i.a, ",", i.b, "]"); return;
+            case GirOp::SourceTargetEnter:
+                Append(out, "[\"l_source_target_enter\",", i.res, ",", i.idx, ",[");
+                for (size_t position = 0; position < i.vals.size(); position++) {
+                    if (position) out += ',';
+                    out += '['; if (i.vals[position] >= 0) Append(out, i.vals[position]); out += ']';
+                }
+                out += "]]"; return;
+            case GirOp::SourceTargetLeave:
+                Append(out, "[\"l_source_target_leave\",", i.a, "]"); return;
+            case GirOp::SourceTargetResult:
+                Append(out, "[\"l_source_target_result\",", i.idx, ",", i.idx2, ",", i.a, "]"); return;
+            case GirOp::SourceTargetGet:
+                Append(out, "[\"l_source_target_get\",", i.res, ",", i.a, ",", i.idx, "]"); return;
             case GirOp::SourceNew:
                 Append(out, "[\"l_source_new\",", i.res, ",", i.a, ","); Ints(out, i.vals); out += ']'; return;
             case GirOp::SourceChild:
@@ -786,6 +825,13 @@ private:
             case GirOp::DestChild:
                 def("i_dest_child"); Append(out, ",", i.a, ",", T(i.ty), ",");
                 OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestAdapt:
+                def("i_dest_adapt"); Append(out, ",", i.a, ",", T(i.ty), ",\"", CoreRequestName(i.request), "\",");
+                OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestAdaptFinish:
+                def("i_dest_adapt_finish"); Append(out, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestPublishRef:
+                def("i_dest_publish_ref"); Append(out, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::DestNamed:
                 def("i_dest_named"); Append(out, ",", i.idx, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::ResultExitDest:

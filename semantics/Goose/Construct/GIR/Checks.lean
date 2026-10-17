@@ -142,7 +142,7 @@ private def targeted : Module :=
 
 #guard (Validate.validate targeted).isOk
 #guard observation targeted == some ([65,0,255,10],
-  [.begin 0,.begin 1,.write 1 0,.write 1 1,.write 1 2,.abandon 0,.relocate 1 .exitValue,.publish 1])
+  [.begin 0,.write 0 0,.write 0 1,.write 0 2,.publish 0])
 #guard roundTrip targeted
 
 private def namedResult : Module :=
@@ -371,7 +371,7 @@ private def recursiveTarget : Module :=
 
 #guard (Validate.validate recursiveTarget).isOk
 #guard observation recursiveTarget == some ([73,10,79,10],
-  [.begin 0,.begin 1,.begin 2,.write 2 0,.abandon 1,.relocate 2 .exitValue,.publish 2,.write 0 0,.publish 0])
+  [.begin 0,.begin 1,.write 1 0,.publish 1,.write 0 0,.publish 0])
 #guard roundTrip recursiveTarget
 
 end Goose.Construct.GIR.Checks
@@ -697,7 +697,7 @@ private def overlappingTargets : Module :=
 
 #guard (Validate.validate overlappingTargets).isOk
 #guard observation overlappingTargets == some ("one\nA\n".toUTF8.data.toList,
-  [.begin 0,.begin 1,.write 1 0,.abandon 0,.relocate 1 .exitValue,.publish 1])
+  [.begin 0,.write 0 0,.publish 0])
 #guard roundTrip overlappingTargets
 
 end Goose.Construct.GIR.Checks
@@ -1098,8 +1098,8 @@ private def helperLocalExitCopy : Module :=
 
 #guard (Validate.validate helperLocalExitCopy).isOk
 #guard observation helperLocalExitCopy == some ([65,0,10],
-  [.begin 0,.begin 1,.write 1 0,.write 1 1,.publish 1,.begin 2,
-    .copy (.storage 1 []) 2,.write 2 0,.write 2 1,.abandon 0,.relocate 2 .exitValue,.publish 2])
+  [.begin 0,.begin 1,.write 1 0,.write 1 1,.publish 1,
+    .copy (.storage 1 []) 0,.write 0 0,.write 0 1,.publish 0])
 #guard roundTrip helperLocalExitCopy
 
 private def helperLocalNamedExitCopy : Module :=

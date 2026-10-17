@@ -4,8 +4,10 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-def OperandBounds (state : LS) : Prop :=
-  ∀ inst ∈ state.insts, ∀ value ∈ inst.uses, value < state.vals.size
+structure OperandBounds (state : LS) : Prop where
+  uses : ∀ inst ∈ state.insts, ∀ value ∈ inst.uses, value < state.vals.size
+  definitions : ∀ result op, Inst.def result op ∈ state.insts →
+    ∀ value ∈ op.uses, value < result
 
 def OperandRun (action : B α) : Prop :=
   ∀ le before result after, action le before = (result, after) →
@@ -26,17 +28,21 @@ theorem OperandRun.bind {action : B α} {next : α → B β}
 theorem OperandRun.of_unchanged {action : B α}
     (instructions : ∀ le state, (action le state).2.insts = state.insts)
     (values : ∀ le state, state.vals.size ≤ (action le state).2.vals.size) : OperandRun action := by
-  intro le before result after run checked inst member value use
+  intro le before result after run checked
   have same := instructions le before
   have grows := values le before
   rw [run] at same grows
-  rw [same] at member
-  exact Nat.lt_of_lt_of_le (checked inst member value use) grows
+  constructor
+  · intro inst member value use
+    rw [same] at member
+    exact Nat.lt_of_lt_of_le (checked.uses inst member value use) grows
+  · intro result op member value use
+    rw [same] at member
+    exact checked.definitions result op member value use
 
-theorem operands_appendInst {before : LS} (checked : OperandBounds before)
-    (block : BlockId) (inst : Inst) (bounded : ∀ value ∈ inst.uses, value < before.vals.size) :
-    OperandBounds (before.appendInst block inst) := by
-  intro next member value use
+theorem insts_appendInst_member {before : LS} {block : BlockId} {inst next : Inst} :
+    next ∈ (before.appendInst block inst).insts → next ∈ before.insts ∨ next = inst := by
+  intro member
   change next ∈ (before.blocks.modify block fun blk =>
     { blk with insts := blk.insts.push inst }).toList.flatMap (fun blk => blk.insts.toList) at member
   obtain ⟨blk, blockMember, instructionMember⟩ := List.mem_flatMap.mp member
@@ -51,13 +57,26 @@ theorem operands_appendInst {before : LS} (checked : OperandBounds before)
       subst blk
       simp only [Array.toList_push, List.mem_append, List.mem_singleton] at instructionMember
       rcases instructionMember with oldInstruction | fresh
-      · exact checked next (List.mem_flatMap.mpr
-          ⟨old, Array.mem_toList_iff.mpr (Array.mem_of_getElem? previous), oldInstruction⟩) value use
-      · subst next
-        exact bounded value use
+      · exact Or.inl (List.mem_flatMap.mpr
+          ⟨old, Array.mem_toList_iff.mpr (Array.mem_of_getElem? previous), oldInstruction⟩)
+      · exact Or.inr fresh
   · simp only [same, ↓reduceIte] at lookup
-    exact checked next (List.mem_flatMap.mpr
-      ⟨blk, Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup), instructionMember⟩) value use
+    exact Or.inl (List.mem_flatMap.mpr
+      ⟨blk, Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup), instructionMember⟩)
+
+theorem operands_appendInst {before : LS} (checked : OperandBounds before)
+    (block : BlockId) (inst : Inst) (bounded : ∀ value ∈ inst.uses, value < before.vals.size)
+    (ordered : ∀ result op, inst = .def result op → ∀ value ∈ op.uses, value < result) :
+    OperandBounds (before.appendInst block inst) := by
+  constructor
+  · intro next member value use
+    rcases insts_appendInst_member member with previous | rfl
+    · exact checked.uses next previous value use
+    · exact bounded value use
+  · intro result op member value use
+    rcases insts_appendInst_member member with previous | equal
+    · exact checked.definitions result op previous value use
+    · exact ordered result op equal.symm value use
 
 theorem operands_emitDef {op : Op} {le before result after}
     (run : emitDef op le before = (result, after)) (checked : OperandBounds before)
@@ -72,10 +91,15 @@ theorem operands_emitDef {op : Op} {le before result after}
     rw [emitDef_run op le current] at run
     obtain ⟨_, rfl⟩ := Prod.mk.inj run
     have extended := operands_appendInst checked block (.def before.vals.size op)
-      (bounded (by simp [current]))
-    intro inst member value use
-    have bound := extended inst (by exact member) value use
-    exact Nat.lt_of_lt_of_le bound (by simp [LS.appendInst])
+      (bounded (by simp [current])) (by
+        intro result next equal used member
+        cases equal
+        exact bounded (by simp [current]) used member)
+    constructor
+    · intro inst member value use
+      have bound := extended.uses inst (by exact member) value use
+      exact Nat.lt_of_lt_of_le bound (by simp [LS.appendInst])
+    · exact extended.definitions
 
 theorem operands_emitEffect {effect : Effect} {le before result after}
     (run : emitEffect effect le before = (result, after)) (checked : OperandBounds before)
@@ -89,7 +113,7 @@ theorem operands_emitEffect {effect : Effect} {le before result after}
   | some block =>
     rw [emitEffect_run effect le current] at run
     obtain ⟨_, rfl⟩ := Prod.mk.inj run
-    exact operands_appendInst checked block (.eff effect) (bounded (by simp [current]))
+    exact operands_appendInst checked block (.eff effect) (bounded (by simp [current])) (by intros; contradiction)
 
 theorem operands_emitTerm {term : Term} {le before result after}
     (run : emitTerm term le before = (result, after)) (checked : OperandBounds before)
@@ -103,7 +127,8 @@ theorem operands_emitTerm {term : Term} {le before result after}
   | some block =>
     rw [emitTerm_run term le current] at run
     obtain ⟨_, rfl⟩ := Prod.mk.inj run
-    exact operands_appendInst checked block (.term term) (bounded (by simp [current]))
+    have final := operands_appendInst checked block (.term term) (bounded (by simp [current])) (by intros; contradiction)
+    exact ⟨final.uses, final.definitions⟩
 
 theorem operands_newBlock (types : List VTy) : OperandRun (newBlock types) := by
   apply OperandRun.of_unchanged
@@ -439,7 +464,7 @@ theorem operands_patchTerm {block : BlockId} {term : Term} {le before result aft
     (bounded : ∀ value ∈ term.uses, value < before.vals.size) : OperandBounds after := by
   rw [patchTerm_run] at run
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
-  exact operands_appendInst checked block (.term term) bounded
+  exact operands_appendInst checked block (.term term) bounded (by intros; contradiction)
 
 theorem operands_setCur (current : Option BlockId) : OperandRun (setCur current) := by
   apply OperandRun.of_unchanged <;> intros <;> rw [setCur_run]
@@ -459,7 +484,8 @@ theorem OperandRun.inScope (scope : ScopeId) {action : B α} (child : OperandRun
     OperandRun (inScope scope action) := by
   intro le before result after run checked
   obtain ⟨mid, actionRun, rfl⟩ := inScope_eq run
-  exact child le _ result mid actionRun checked
+  have final := child le _ result mid actionRun ⟨checked.uses, checked.definitions⟩
+  exact ⟨final.uses, final.definitions⟩
 
 theorem operands_patchBrs (target : BlockId) :
     ∀ incoming le before result after, patchBrs target incoming le before = (result, after) →

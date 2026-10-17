@@ -82,6 +82,12 @@ theorem ReachableBuilder.patchTerm {state : LS} (paths : ReachableBuilder state)
   rw [patchTerm_run]
   exact paths.of_ext ((LS.Ext.refl state).modify (appends_push _) block) (by simp)
 
+theorem ReachableBuilder.finished_paths {state : LS} (paths : ReachableBuilder state) (func : Func)
+    (blocks : func.blocks = finishBlocks state.blocks) :
+    ∀ block, block < func.blocks.size → BlockReachable func block := by
+  intro block bound
+  exact (paths block (by simpa [blocks, finishBlocks] using bound)).finished func blocks
+
 theorem ReachableBuilder.finished {state : LS} (paths : ReachableBuilder state)
     (nonempty : 0 < state.blocks.size) (func : Func)
     (blocks : func.blocks = finishBlocks state.blocks) :

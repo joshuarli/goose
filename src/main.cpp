@@ -795,6 +795,8 @@ Options:
   --emit-gir-high FILE  Export high Goose IR.
   --emit-gir-low FILE   Export low Goose IR.
   --pipeline legacy|gir Select the compilation pipeline (default legacy).
+  --trace-construction FILE
+                        Write native construction events to FILE at program exit.
   --gen-runtime-header  Regenerate src/runtime_inline.h from src/runtime/.
 )");
     return "";
@@ -935,6 +937,7 @@ int Main(int argc, char **argv) {
     }
     string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore, unitsdir,
         emitgirhigh, emitgirlow, pipeline = "legacy";
+    optional<string> constructionTracePath;
     auto emitcorereport = false;
     for (int i = firstarg; i < argc && string_view(argv[i]) != "--"; i++)
         if (string_view(argv[i]) == "--emit-core-report") emitcorereport = true;
@@ -967,6 +970,13 @@ int Main(int argc, char **argv) {
         else if (arg == "--emit-core-report") emitcorereport = true;
         else if (arg == "--emit-gir-high" && i + 1 < argc) emitgirhigh = argv[++i];
         else if (arg == "--emit-gir-low" && i + 1 < argc) emitgirlow = argv[++i];
+        else if (arg == "--trace-construction") {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--trace-construction needs a file path\n");
+                return 1;
+            }
+            constructionTracePath = argv[++i];
+        }
         else if (arg == "--pipeline" && i + 1 < argc) {
             pipeline = argv[++i];
             if (pipeline != "legacy" && pipeline != "gir") {
@@ -1078,6 +1088,10 @@ int Main(int argc, char **argv) {
         }
         else files.push_back(arg);
     }
+    if (constructionTracePath && pipeline != "gir") {
+        fprintf(stderr, "--trace-construction requires --pipeline gir\n");
+        return 1;
+    }
     if (verbose || dryrun) ProgressPlain();
     // What shapes a unit build's output, as the command line says it: every
     // option but the ones that only say where, how loudly or whether to reuse.
@@ -1085,6 +1099,11 @@ int Main(int argc, char **argv) {
     for (int i = firstarg; i < argc; i++) {
         string a = argv[i];
         if (a == "--") break;
+        if (a == "--trace-construction") {
+            contractargs.push_back(a);
+            if (i + 1 < argc) contractargs.push_back(argv[++i]);
+            continue;
+        }
         if (a == "-o" || a == "--build-report" || a == "--cc") { i++; continue; }
         if (a == "--build-report-deps" || a == "--units" || a == "--rebuild" || a == "--verify-reuse" || a == "-v" ||
             a == "--dry-run" || a.empty() || a[0] != '-')
@@ -1135,6 +1154,10 @@ int Main(int argc, char **argv) {
         buildopts.verify = verifyflag;
         outname.clear();
     }
+    if (constructionTracePath && nocgen) {
+        fprintf(stderr, "--trace-construction cannot be combined with --check\n");
+        return 1;
+    }
     if ((unitsbuild || rebuildflag || verifyflag) && verb != "build") {
         fprintf(stderr, "--units, --rebuild and --verify-reuse belong to goose build\n");
         return 1;
@@ -1147,6 +1170,7 @@ int Main(int argc, char **argv) {
                            tokens || dump || parseonly || roundtrip || multitest || stacks || specs ||
                            !dumpfile.empty() || !reportfile.empty() || !emitcore.empty() ||
                            !emitgirhigh.empty() || !emitgirlow.empty() || pipeline == "gir" ||
+                           constructionTracePath.has_value() ||
                            !outname.empty() || !headername.empty() || !unitsdir.empty() ||
                            unitsbuild || rebuildflag || verifyflag || report_dependencies ||
                            !shaderfile.empty() || forcejit || standalone)) {
@@ -1269,9 +1293,16 @@ int Main(int argc, char **argv) {
             return 0;
         }
         // Before the optimizer: it rewrites the bodies this reads.
-        if (!emitcore.empty() || !emitgirhigh.empty() || !emitgirlow.empty() || pipeline == "gir")
-            EmitCore(ast, filename, emitcore, emitgirhigh, emitgirlow,
-                     pipeline == "gir" ? &girprogram : nullptr);
+        if (!emitcore.empty() || !emitgirhigh.empty() || !emitgirlow.empty() || pipeline == "gir") {
+            CoreEmitRequest request;
+            request.entry = filename;
+            request.corePath = emitcore;
+            request.highGirPath = emitgirhigh;
+            request.lowGirPath = emitgirlow;
+            request.program = pipeline == "gir" ? &girprogram : nullptr;
+            request.constructionTracePath = constructionTracePath;
+            EmitCore(ast, request);
+        }
         auto emit_gir_output = [&]() {
             if (!unitsdir.empty()) {
                 // The units include one header, the runtime's, and link with the

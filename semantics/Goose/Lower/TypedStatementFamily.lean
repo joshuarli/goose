@@ -1,3 +1,4 @@
+import Goose.Lower.TypedEntry
 import Goose.Lower.TypedExpressionFamily
 import Goose.Lower.TypedIf
 import Goose.Lower.TypedWhile
@@ -11,6 +12,7 @@ import Goose.Lower.TypedTransfers
 import Goose.Lower.PrintStatements
 import Goose.Lower.WholeReplacementStatements
 import Goose.Lower.EachFamily
+import Goose.Lower.RangeFamily
 
 namespace Goose.Lower
 
@@ -34,9 +36,7 @@ theorem typedStatementFamily_zero (cfg : Cfg) : TypedStatementFamily 0 cfg := by
 
 private theorem statementFamily_succ {n : Nat} {cfg : Cfg}
     (earlier : ∀ k, k ≤ n → TypedStatementFamily k cfg)
-    (shapes : ∀ results place, PlaceOwnerShape cfg results place)
-    (range : ∀ results loop x lo hi body origin,
-      TypedStatementLoopSimulation (n + 1) cfg results loop (.forRange x lo hi body origin)) :
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
     ∀ results loop stmt, TypedStatementLoopSimulation (n + 1) cfg results loop stmt := by
   let smaller := earlier n (Nat.le_refl n)
   intro results loop stmt
@@ -76,7 +76,11 @@ private theorem statementFamily_succ {n : Nat} {cfg : Cfg}
         (smaller.block results loop [] [] false yes) (smaller.block results loop [] [] false no)
   | «while» condition body origin =>
     exact typedStatementLoopSimulation_while (smaller.whileLoop results condition body origin)
-  | forRange x lo hi body origin => exact range results loop x lo hi body origin
+  | forRange x lo hi body origin =>
+    exact typedStatementLoopSimulation_range (smaller.expressions.expr results lo)
+      (smaller.expressions.expr results hi)
+      (fun fuel bound context pre pre' => (earlier fuel (by omega)).block results
+        (some context) pre pre' false body) loop
   | forEach x index view byRef body origin =>
     exact typedStatementLoopSimulation_each (n + 1) cfg results
       (fun fuel bound => (earlier fuel (by omega)).expressions)
@@ -98,16 +102,14 @@ private theorem statementFamily_succ {n : Nat} {cfg : Cfg}
 
 private theorem typedStatementFamily_succ {n : Nat} {cfg : Cfg}
     (earlier : ∀ k, k ≤ n → TypedStatementFamily k cfg)
-    (shapes : ∀ results place, PlaceOwnerShape cfg results place)
-    (range : ∀ results loop x lo hi body origin,
-      TypedStatementLoopSimulation (n + 1) cfg results loop (.forRange x lo hi body origin)) :
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
     TypedStatementFamily (n + 1) cfg := by
   let smaller := earlier n (Nat.le_refl n)
   refine {
     expressions := typedExpressionFamily_succ smaller.expressions
       (fun fuel bound results pre pre' want body =>
         (earlier fuel bound).block results none pre pre' want body),
-    statement := statementFamily_succ earlier shapes range,
+    statement := statementFamily_succ earlier shapes,
     statements := ?_, block := ?_, whileLoop := ?_ }
   · intro results loop stmts
     cases stmts with
@@ -127,5 +129,27 @@ private theorem typedStatementFamily_succ {n : Nat} {cfg : Cfg}
     exact typedWhileSimulation_succ (smaller.expressions.expr results condition)
       (fun context => smaller.block results (some context) [] [] false body)
       (smaller.whileLoop results condition body origin)
+
+private theorem typedStatementFamily_all (cfg : Cfg)
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+    ∀ n, TypedStatementFamily n cfg := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n earlier =>
+    cases n with
+    | zero => exact typedStatementFamily_zero cfg
+    | succ n =>
+      exact typedStatementFamily_succ
+        (fun fuel bound => earlier fuel (Nat.lt_succ_of_le bound)) shapes
+
+private theorem typedModule_of_ownerShapes {cfg : Cfg} (n : Nat)
+    (accepted : Core.validate cfg.mod = .ok ())
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+    EventualM (Core.runModule (n + 1) cfg)
+      (fun fuel => GIR.runModule fuel ⟨cfg.profile, lower cfg.mod⟩) St.initial := by
+  have family := typedStatementFamily_all cfg shapes
+  exact typedModule_simulation_succ n accepted
+    (fun _ global _ => (family (n + 1)).expressions.expr [global.ty] global.init)
+    (fun _ impl _ _ => (family n).block impl.results.toList none (callPre impl) [] false impl.body)
 
 end Goose.Lower

@@ -25,7 +25,8 @@ theorem stmt_assignOp_place_expr_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnC
       ∃ child : ExprSource cfg env e after, SourceResults child.typingEnv child.rootsEnv results)
     (hlow : lowerStmt loop (.assignOp op p e org) (lowerEnv cfg.mod env.vars results) ls = ((), ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
-    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results) :
+    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results)
+    (hgenerated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.assignOp op p e org))
       (fun flow pt' fr' => flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) state := by
   simp only [lowerStmt, bind_eq] at hlow
@@ -37,7 +38,7 @@ theorem stmt_assignOp_place_expr_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnC
   have hext2 : ExtT ls2 cx.fn.blocks := hext3.of_adv (advB_lowerExpr e _ _ _ _ h3)
   have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (adv_emitDef h2)
   simp only [execStmt]
-  refine SimEAt.bind (hplace env state source metadata ls ls1 rp pt cx fr h1 hpp hext1 hrel hgir hresults)
+  refine SimEAt.bind (hplace env state source metadata ls ls1 rp pt cx fr h1 hpp hext1 hrel hgir hresults hgenerated)
     fun l afterPlace pt1 fr1 done P1 => ?_
   obtain ⟨child, childMetadata⟩ := ready l afterPlace done
   have hl1 : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
@@ -50,7 +51,7 @@ theorem stmt_assignOp_place_expr_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnC
   subst afterRead
   refine SimEAt.expectInt fun t x hva => ?_
   subst hva
-  refine SimEAt.bind (hexpr env afterPlace child childMetadata ls2 ls3' rhs pt2 cx fr2 h3 P2.pp hext3 P2.rel hgir hresults)
+  refine SimEAt.bind (hexpr env afterPlace child childMetadata ls2 ls3' rhs pt2 cx fr2 h3 P2.pp hext3 P2.rel hgir hresults ((hgenerated.lowerPlace p h1).emitDef _ h2))
     fun vb afterExpr pt3 fr3 _ P3 => ?_
   refine SimEAt.expectInt fun u y hvb => ?_
   subst hvb
@@ -87,7 +88,7 @@ theorem typedStatementLoopSimulation_assignOp {n : Nat} {cfg : Cfg} {results : L
     (hplace : TypedPlaceClaim n cfg results place) (hexpr : TypedExprClaim n cfg results expr) :
     TypedStatementLoopSimulation (n + 1) cfg results loop (.assignOp op place expr org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   obtain ⟨destination, typingEq, rootsEq, _, _, ready⟩ := source.assignOpChildren
   have metadata : SourceResults destination.typingEnv destination.rootsEnv results := by
     rw [typingEq, rootsEq]
@@ -95,7 +96,7 @@ theorem typedStatementLoopSimulation_assignOp {n : Nat} {cfg : Cfg} {results : L
   have resultEq : result = () := Subsingleton.elim _ _
   subst result
   apply SimEAt.prepareNormalLoopFlow
-  apply stmt_assignOp_place_expr_sim destination metadata hplace hexpr ?_ hlow hpp hext hrel hgir hresults
+  apply stmt_assignOp_place_expr_sim destination metadata hplace hexpr ?_ hlow hpp hext hrel hgir hresults hgenerated
   intro location after done
   obtain ⟨child, childTyping, childRoots, _⟩ := ready n location after done
   refine ⟨child, ?_⟩

@@ -8,7 +8,7 @@ theorem typedStatementLoopSimulation_zero (cfg : Cfg) (results : List Ty)
     (loop : Option LoopCtx) (stmt : Stmt) :
     TypedStatementLoopSimulation 0 cfg results loop stmt := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   simp only [execStmt]
   exact SimEAt.of_simG SimG.of_timeout_bind state
 
@@ -16,7 +16,7 @@ theorem typedStatementLoopSimulation_abort {n : Nat} {cfg : Cfg} {results : List
     {loop : Option LoopCtx} (message : String) (org : OriginId) :
     TypedStatementLoopSimulation (n + 1) cfg results loop (.abort message org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   simp only [lowerStmt] at hlow
   obtain ⟨_, _, _, instruction⟩ := emitTerm_facts hlow hpp hext
   simp only [execStmt, abortAt, M.stop, bind_apply]
@@ -26,7 +26,7 @@ theorem typedStatementLoopSimulation_return_none (n : Nat) (cfg : Cfg) (results 
     (loop : Option LoopCtx) (org : OriginId) :
     TypedStatementLoopSimulation n cfg results loop (.ret none org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   rw [prepareLoopFlow_execStmt_return_none]
   exact (SimEAt.of_simG (stmt_ret_none_prepared n loop org _ ls ls' result pt cfg env cx fr
     hlow hpp hext hrel) state).mono fun flow _ pt' fr' _ ⟨hflow, hsite⟩ =>
@@ -36,7 +36,7 @@ theorem typedStatementLoopSimulation_break (n : Nat) (cfg : Cfg) (results : List
     (loop : Option LoopCtx) (org : OriginId) :
     TypedStatementLoopSimulation n cfg results loop (.brk org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   cases loop with
   | none =>
     have hzero := hloops.mp rfl
@@ -54,7 +54,7 @@ theorem typedStatementLoopSimulation_continue (n : Nat) (cfg : Cfg) (results : L
     (loop : Option LoopCtx) (org : OriginId) :
     TypedStatementLoopSimulation n cfg results loop (.cont org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   cases loop with
   | none =>
     have hzero := hloops.mp rfl

@@ -6,6 +6,23 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Proofs.Lower
 
+theorem startLS_generated : GeneratedBuilderState startLS := by
+  refine ⟨?_, ?_, ?_⟩
+  · simp [startLS, LS.DenseDefinitions, LS.defs, BlockB.defs]
+  · intro block current
+    change some 0 = some block at current
+    cases current
+    decide
+  · intro index block row target successor
+    have bound := (Array.getElem?_eq_some_iff.mp row).1
+    have zero : index = 0 := by
+      change index < 1 at bound
+      nat_omega
+    subst index
+    have equal : block = ⟨[], #[]⟩ := (Option.some.inj row).symm
+    subst block
+    simp [Validation.cfgBlock, GIR.Block.terms] at successor
+
 theorem typedGlobal_simulation {cfg : Cfg} {globalId : GlobalId} {global : Core.Global}
     {state : St} {n : Nat}
     (accepted : Core.validate cfg.mod = .ok ())
@@ -38,7 +55,7 @@ theorem typedGlobal_simulation {cfg : Cfg} {globalId : GlobalId} {global : Core.
     ⟨rfl, by simp [cx, lowerGlobal], rfl, rfl, rfl, rfl⟩
   have simulation := hexpr ⟨#[], state.nextAct, [], 0⟩
     { state with nextAct := state.nextAct + 1 } source metadata startLS middle id (0, 0) cx frame
-    evaluated startLS_pp extendedMiddle related rfl rfl
+    evaluated startLS_pp extendedMiddle related rfl rfl startLS_generated
   have completed := simulation.complete_ret1 (r := id) (org := some global.org)
     (fun value _ point endpoint _ P => by
       obtain ⟨_, _, _, instruction⟩ := emitTerm_facts terminated P.pp extendedFinal

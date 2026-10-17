@@ -289,6 +289,7 @@ def Func.effectStep (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov)
     | .bin o .. => if o.mayAbort then { e with aborts := true } else e
     | .un .neg .. => { e with aborts := true }
     | .conv .as .. => { e with aborts := true }
+    | .viewSlice _ _ .omitted .omitted _ => e
     | .viewSlice .. | .indexChecked .. => { e with aborts := true }
     | .call g args _ => call e g args
     | _ => e
@@ -302,7 +303,7 @@ def Func.effectStep (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov)
         | none => none
       | .param j =>
         match f.params[j]? with
-        | some t => if t.isRefSlice then some (Target.param j) else none
+        | some t => if t.isRefSlice && (ownerTy vt r).any Ty.isSlice then some (Target.param j) else none
         | none => none
       | .global _ => none
     { e with rebinds := addTargets e.rebinds rebound }

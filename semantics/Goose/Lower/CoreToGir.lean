@@ -757,7 +757,7 @@ def lowerContextRootInfo (ctx : Context) (impl : Impl) : GIR.RootInfo :=
     let parameterRoots := impl.params.toList.zipIdx.filterMap fun (p, j) =>
       match ctx.varRoots.find? (·.1 == p.var) with
       | some (_, rootsForParam) =>
-        if roots.any rootsForParam.contains then some (.param j) else none
+        if rootsForParam.all roots.contains then some (.param j) else none
       | none => none
     unionRoots roots parameterRoots
   { params := params.toArray, contents := contents.toArray, results := results.toArray }

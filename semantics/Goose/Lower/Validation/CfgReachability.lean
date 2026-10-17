@@ -264,6 +264,13 @@ theorem reachable_complete (func : Func) (nonempty : 0 < func.blocks.size)
     ∀ block, block < func.blocks.size → (reachable func)[block]? = some true :=
   fun block bound => reachable_marks_path nonempty (paths block bound)
 
+theorem BlockReachable.of_blocks {left right : Func} {block : BlockId}
+    (path : BlockReachable left block) (same : left.blocks = right.blocks) : BlockReachable right block := by
+  induction path with
+  | entry => exact .entry
+  | @next source target body prior row successor bound ih =>
+    exact .next ih (same ▸ row) successor (same ▸ bound)
+
 theorem reachable_go_of_blocks {left right : Func} (same : left.blocks = right.blocks)
     (size fuel : Nat) (pending : List BlockId) (seen : Array Bool) :
     reachable.go left size fuel pending seen = reachable.go right size fuel pending seen := by
