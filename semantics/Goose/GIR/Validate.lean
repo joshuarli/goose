@@ -446,16 +446,16 @@ def funcMayReturn (mayReturn : Array Bool) (f : Func) : Bool := Id.run do
   termination_by fuel todo _ => (fuel, todo.length)
   return walk (f.blocks.size + 1) [0] (Array.replicate f.blocks.size false)
 
-/-- The greatest conservative approximation, descending from the assumption
-that every function might return. -/
+/-- Functions with finite returning-call derivations. Exhaustion conservatively
+marks every function as potentially returning. -/
 def Module.functionsMayReturn (m : Module) : Array Bool := Id.run do
-  let initial := Array.replicate m.funcs.size true
+  let conservative := Array.replicate m.funcs.size true
   let rec fix : Nat → Array Bool → Array Bool
-    | 0, _ => initial
+    | 0, _ => conservative
     | fuel + 1, current =>
       let next := m.funcs.map (funcMayReturn current)
       if next == current then current else fix fuel next
-  return fix (m.funcs.size + 1) initial
+  return fix (m.funcs.size + 1) (Array.replicate m.funcs.size false)
 
 /-- `unreachable` must immediately follow a call whose body proves it has no
 normal return path. -/
