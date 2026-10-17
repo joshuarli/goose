@@ -118,6 +118,30 @@ theorem reference_call_typed {before after : LS} {value : ValueId}
 #guard let (value, after) := lowerExpr referenceCall (lowerEnv referenceModule env.vars []) initial
        after.cur.isSome && after.vals[value]? == some (some (.data (.int .i64)))
 
+def convertedIndex : Expr := .conv .widen (.int .i64) (.blockE (.mk 1 [] (some (.lit .i8 2)))) 0
+
+theorem converted_index_source : Core.tyExpr env convertedIndex 2 = .ok (.int .i64, 2) := by rfl
+
+theorem converted_index_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr convertedIndex (lowerEnv module env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.int .i64))) := by
+  exact lowerExpr_recursive_typed convertedIndex (by trivial) converted_index_source run live
+
+def ownerEnv : Core.TEnv :=
+  { env with
+    mod := { module with profile := .shrink },
+    vars := #[⟨"owner", .growshrink (.int .i64), .immutable, 0, 0⟩], visible := [0] }
+
+def pushedPlace : Place := .deref (.push (.var 0) (.lit .i64 3) (some 0))
+
+theorem pushed_place_source : Core.tyPlace ownerEnv pushedPlace 1 = .ok (⟨.int .i64, true, true⟩, 1) := by rfl
+
+theorem pushed_place_typed {before after : LS} {value : ValueId}
+    (run : lowerPlace pushedPlace (lowerEnv ownerEnv.mod ownerEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) :
+    ∃ mu, after.vals[value]? = some (some (.data (.ref mu (.int .i64)))) := by
+  exact lowerPlace_recursive_typed pushedPlace (by trivial) pushed_place_source run live
+
 #print axioms lowerExprs_recursive_typed
 #print axioms structLiteral_resultTy
 #print axioms arrayLiteral_resultTy

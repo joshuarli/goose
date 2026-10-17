@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ExpressionTypingAggregateOps
+import Goose.Lower.Validation.ExpressionTypingScalarOps
 
 namespace Goose.Lower.Validation
 
@@ -8,8 +8,10 @@ mutual
 
 def RecursiveExpression : Expr → Prop
   | .read p | .ref .readOnly p => RecursivePlace p
-  | .un _ e _ | .not e => RecursiveExpression e
-  | .bin _ a b _ => RecursiveExpression a ∧ RecursiveExpression b
+  | .un _ e _ | .not e | .conv _ _ e _ => RecursiveExpression e
+  | .bin _ a b _ | .cmp _ a b => RecursiveExpression a ∧ RecursiveExpression b
+  | .push owner expr _ => RecursivePlace owner ∧ RecursiveExpression expr
+  | .pop owner _ => RecursivePlace owner
   | .len v => RecursiveView v
   | .call _ args _ => RecursiveArguments args
   | .arrLit _ exprs | .structLit _ exprs => RecursiveExpressions exprs
@@ -166,6 +168,108 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
     | some block =>
       have operation : (Op.viewLen view).resultTy (tyEnv (lowerEnv env.mod env.vars results) mid) = .ok (.data (.int .i64)) := by
         simp [Op.resultTy, TyEnv.viewTy, TyEnv.valTy, tyEnv, typed, pure, Except.pure, bind, Except.bind]
+      have recorded := emitDef_recorded current operation
+      rw [emitted] at recorded
+      exact recorded.2.2.1
+  | conv kind target expr origin =>
+    obtain ⟨src, dst, childStart, childFinish, childSource, targetShape, shape, range⟩ := tyExpr_conversion_child source
+    subst ty
+    subst target
+    have lowering := run
+    simp only [lowerExpr] at lowering
+    obtain ⟨child, middle, childRun, tailRun⟩ := bind_eq.mp lowering
+    have middleLive := (DeadRun.bind (dead_intTyOf child) fun _ => dead_emitDef _).live_before tailRun live
+    have typed := lowerExpr_recursive_typed expr supported childSource childRun middleLive
+    cases current : middle.cur with
+    | none => simp [current] at middleLive
+    | some block =>
+      have operation : (Op.conv kind src dst child (some origin)).resultTy
+          (tyEnv (lowerEnv env.mod env.vars results) middle) = .ok (.data (.int dst)) := by
+        cases kind <;> simp [Op.resultTy, TyEnv.intTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, typed,
+          range, pure, Except.pure, bind, Except.bind]
+      simp only [lowerExpr, bind_run, childRun, intTyOf_recorded typed] at run
+      have recorded := emitDef_recorded current operation
+      rw [run] at recorded
+      exact recorded.2.2.1
+  | cmp op left right =>
+    obtain ⟨leftTy, rightTy, leftFinish, rightFinish, leftSource, rightSource, shape, scalar⟩ :=
+      tyExpr_comparison_children source
+    subst ty
+    obtain ⟨leftSupported, rightSupported⟩ := supported
+    have lowering := run
+    simp only [lowerExpr] at lowering
+    obtain ⟨leftValue, leftAfter, leftRun, lowering⟩ := bind_eq.mp lowering
+    obtain ⟨rightValue, middle, rightRun, tailRun⟩ := bind_eq.mp lowering
+    have tailDead : DeadRun (do
+        match (← valTy leftValue) with
+        | .data (.int t) => emitDef (.cmp op t leftValue rightValue)
+        | _ => emitDef (.boolCmp op leftValue rightValue)) := by
+      exact DeadRun.bind (dead_valTy leftValue) fun t => by
+        cases t with
+        | data t => cases t <;> exact dead_emitDef _
+        | view _ _ => exact dead_emitDef _
+    have middleLive := tailDead.live_before tailRun live
+    have rightTyped := lowerExpr_recursive_typed right rightSupported rightSource rightRun middleLive
+    have leftLive := (dead_lowerExpr right).live_before rightRun middleLive
+    have leftTyped := lowerExpr_recursive_typed left leftSupported leftSource leftRun leftLive
+    have retained := types_lowerExpr right _ _ _ _ rightRun leftValue (.data leftTy) leftTyped
+    cases current : middle.cur with
+    | none => simp [current] at middleLive
+    | some block =>
+      rcases scalar with ⟨intTy, rfl, rfl⟩ | ⟨rfl, rfl, comparable⟩
+      · have operation : (Op.cmp op intTy leftValue rightValue).resultTy
+            (tyEnv (lowerEnv env.mod env.vars results) middle) = .ok (.data .bool) := by
+          simp [Op.resultTy, TyEnv.intTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, retained, rightTyped,
+            pure, Except.pure, bind, Except.bind]
+        simp only [lowerExpr, bind_run, leftRun, rightRun, valTy_of_recorded retained] at run
+        have recorded := emitDef_recorded current operation
+        rw [run] at recorded
+        exact recorded.2.2.1
+      · have operation : (Op.boolCmp op leftValue rightValue).resultTy
+            (tyEnv (lowerEnv env.mod env.vars results) middle) = .ok (.data .bool) := by
+          rcases comparable with rfl | rfl <;>
+            simp [Op.resultTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, retained, rightTyped,
+              pure, Except.pure, bind, Except.bind]
+        simp only [lowerExpr, bind_run, leftRun, rightRun, valTy_of_recorded retained] at run
+        have recorded := emitDef_recorded current operation
+        rw [run] at recorded
+        exact recorded.2.2.1
+  | pop owner origin =>
+    obtain ⟨info, ownerStart, ownerFinish, ownerSource, element⟩ := tyExpr_pop_owner source
+    simp only [lowerExpr] at run
+    obtain ⟨address, middle, ownerRun, emitted⟩ := bind_eq.mp run
+    have middleLive := (dead_emitDef (.pop address (some origin))).live_before emitted live
+    obtain ⟨mu, typed⟩ := lowerPlace_recursive_typed owner supported ownerSource ownerRun middleLive
+    cases current : middle.cur with
+    | none => simp [current] at middleLive
+    | some block =>
+      have operation : (Op.pop address (some origin)).resultTy
+          (tyEnv (lowerEnv env.mod env.vars results) middle) = .ok (.data ty) := by
+        simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, typed, element,
+          pure, Except.pure, bind, Except.bind]
+      have recorded := emitDef_recorded current operation
+      rw [emitted] at recorded
+      exact recorded.2.2.1
+  | push owner expr origin =>
+    obtain ⟨info, element, ownerStart, ownerFinish, childStart, childFinish,
+      ownerSource, ownerElement, childSource, shape⟩ := tyExpr_push_children source
+    subst ty
+    obtain ⟨ownerSupported, childSupported⟩ := supported
+    simp only [lowerExpr] at run
+    obtain ⟨address, ownerAfter, ownerRun, run⟩ := bind_eq.mp run
+    obtain ⟨value, middle, childRun, emitted⟩ := bind_eq.mp run
+    have middleLive := (dead_emitDef (.push address value origin)).live_before emitted live
+    have childTyped := lowerExpr_recursive_typed expr childSupported childSource childRun middleLive
+    have ownerLive := (dead_lowerExpr expr).live_before childRun middleLive
+    obtain ⟨mu, ownerTyped⟩ := lowerPlace_recursive_typed owner ownerSupported ownerSource ownerRun ownerLive
+    have retained := types_lowerExpr expr _ _ _ _ childRun address (.data (.ref mu info.ty)) ownerTyped
+    cases current : middle.cur with
+    | none => simp [current] at middleLive
+    | some block =>
+      have operation : (Op.push address value origin).resultTy
+          (tyEnv (lowerEnv env.mod env.vars results) middle) = .ok (.data (.ref .mutable element)) := by
+        simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, retained, childTyped,
+          ownerElement, pure, Except.pure, bind, Except.bind]
       have recorded := emitDef_recorded current operation
       rw [emitted] at recorded
       exact recorded.2.2.1
