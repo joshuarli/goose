@@ -54,9 +54,28 @@ theorem printed_arguments {env : TEnv} {args : List PrintArg} {start finish : Na
   prior.frame symbols size retained
     (returnFrame_lowerPrintArgs args (tyPrintArgs_returnFree args source) le before parts after run)
 
+theorem return_unit {upper : Prov} {state : LS} {origin : OriginId}
+    (loop : Option LoopCtx)
+    (prior : BuilderReturnsBound upper target state) (current : state.CurrentBlocks) :
+    BuilderReturnsBound upper target (lowerStmt loop (.ret none origin) le state).2 := by
+  let left := (Goose.Lower.leaveTo 0 le state).2
+  have leaveFrame := ReturnFrameRun.of_absence (fun _ => ReturnFrames.returnAbsent_leaveTo 0)
+    le state () left rfl
+  have retained : BuilderReturnsBound upper target left := by
+    intro value retOrigin member
+    exact prior value retOrigin (leaveFrame [value] retOrigin member)
+  have leftCurrent : left.CurrentBlocks :=
+    liveBound_of_adv (advB_leaveTo 0 le state () left rfl) current
+  have completed := retained.emitTerm (le := le) leftCurrent (.ret [] (some origin)) (by
+    intro value retOrigin same
+    have roots := Term.ret.inj same
+    cases roots.1)
+  simpa only [lowerStmt, bind_run, pure_run, left] using completed
+
 #print axioms bound
 #print axioms plain_statement
 #print axioms expression_block
 #print axioms printed_arguments
+#print axioms return_unit
 
 end Goose.Lower.Validation.SummaryPreservation.BuilderReturnsBound

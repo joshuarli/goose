@@ -13,7 +13,7 @@ theorem shortCircuit (isAnd : Bool) (value : ValueId) (rhs : B ValueId)
     (grows : AdvB rhs)
     (ready : ReplayBuilder module results vt func target le scopeCount slots ls upper)
     (input : ls.cur.isSome = true → value < ls.vals.size ∧ rootsAt upper.vals value = [])
-    (rhsChild : ∀ provenance,
+    (rhsChild : ∀ provenance, ls.cur.isSome = true →
       let entry := { (scFork isAnd value le ls).2 with cur := some (scFork isAnd value le ls).1.1 }
       ReplayBuilder module results vt func target le scopeCount slots entry provenance →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots (rhs le entry).2 next ∧
@@ -50,7 +50,7 @@ theorem shortCircuit (isAnd : Bool) (value : ValueId) (rhs : B ValueId)
         cases row
         exact rightBound)
       simpa only [setCur_run] using selected
-    obtain ⟨next, rhsReady, rhsValue, rhsPrefix⟩ := rhsChild middle entryReady
+    obtain ⟨next, rhsReady, rhsValue, rhsPrefix⟩ := rhsChild middle (by simp [current]) entryReady
     let produced := rhs le entry
     have rhsGrowth := grows le entry produced.1 produced.2 rfl
     have producedJoin : forked.1.2.1 < produced.2.blocks.size :=

@@ -50,7 +50,7 @@ theorem typedShortCircuit {module : GIR.Module} {results : Array (List RootRef)}
   obtain ⟨next, completed, returned, retained⟩ := leftReady.shortCircuit isAnd loweredLeft.1
     (lowerExpr right) (advB_lowerExpr right)
     (fun live => ⟨(leftValue live).bound, (leftValue live).scalar rfl⟩)
-    (fun provenance stateReady => by
+    (fun provenance _live stateReady => by
       obtain ⟨next, generated, value, growth⟩ :=
         rightChild middleCounter rightRoots middleSource provenance typedRight replayedRight stateReady
       exact ⟨next, generated, fun live => ⟨(value live).bound, (value live).scalar rfl⟩, growth⟩)
