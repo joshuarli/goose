@@ -175,6 +175,25 @@ theorem mutable_field_reference_typed {before after : LS} {value : ValueId}
 #guard let (value, after) := lowerExpr mutableFieldReference (lowerEnv structModule fieldEnv.vars []) initial
   after.vals[value]? == some (some (.data (.ref .mutable .bool)))
 
+def fieldCallee : Core.Impl :=
+  { callee with params := #[⟨0, .byRef⟩], vars := #[⟨"field", .ref .mutable .bool, .immutable, 0, 0⟩] }
+
+def fieldCallModule : Core.Module := { structModule with impls := #[fieldCallee] }
+def fieldCallEnv : Core.TEnv := { fieldEnv with mod := fieldCallModule }
+def mutableFieldCall : Expr :=
+  .call 1 [.byRef .mutable (.field (.deref (.blockE (.mk 1 [] (some (.ref .mutable (.var 0)))))) 1)] 0
+
+theorem mutable_field_call_source : Core.tyExpr fieldCallEnv mutableFieldCall 2 =
+    .ok (.int .i64, 2) := by rfl
+
+theorem mutable_field_call_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableFieldCall (lowerEnv fieldCallModule fieldCallEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.int .i64))) := by
+  exact lowerExpr_recursive_typed mutableFieldCall (by trivial) mutable_field_call_source run live
+
+#guard let (value, after) := lowerExpr mutableFieldCall (lowerEnv fieldCallModule fieldCallEnv.vars []) initial
+  after.vals[value]? == some (some (.data (.int .i64)))
+
 #print axioms lowerBound_recursive_typed
 #print axioms lowerExprs_recursive_typed
 #print axioms structLiteral_resultTy

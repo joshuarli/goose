@@ -48,6 +48,7 @@ def RecursiveExpressions : List Expr → Prop
 def RecursiveArgument : Arg → Prop
   | .byVal expr => RecursiveExpression expr
   | .byRef .readOnly place => RecursivePlace place
+  | .byRef .mutable (.field owner _) => RecursivePlace owner
   | .byRef .mutable (.var _) | .byRef .mutable (.global _) => True
   | _ => False
 
@@ -671,24 +672,54 @@ theorem lowerArgs_recursive_typed (args : List Arg) (supported : RecursiveArgume
               rw [childRun] at typed
               exact typed
           | mutable =>
-            have initial := (dead_lowerPlace place).live_before placeRun placeLive
-            cases current : before.cur with
-            | none => simp [current] at initial
-            | some block =>
-              have placeTyped :
-                  let (address, after) := lowerPlace place (lowerEnv env.mod env.vars results) before
-                  after.cur = before.cur ∧ after.vals[address]? = some (some (referenceType info env.mod.profile)) := by
-                cases place with
-                | var x => exact lowerPlace_var_exact placeSource results before current
-                | global g => exact lowerPlace_global_exact placeSource env.vars results before current
-                | _ => contradiction
-              rw [placeRun] at placeTyped
-              have permission : (if info.referenceWritable env.mod.profile then Mutability.mutable else .readOnly).atLeast .mutable = true := by
-                simp [writable rfl, Mutability.atLeast]
-              have typed := lowerArg_byRef_typed_of_place placeRun
-                (by simpa only [referenceType] using placeTyped.2) permission (placeTyped.1.trans current)
-              rw [childRun] at typed
-              exact typed
+            cases place with
+            | field owner index =>
+              obtain ⟨ownerInfo, ownerFinish, field, fieldFinish, ownerSource, _, _, _⟩ :=
+                tyPlace_field_mutable_binding placeSource (writable rfl)
+              have ownerLowering := placeRun
+              simp only [lowerPlace] at ownerLowering
+              obtain ⟨ownerValue, ownerState, ownerRun, emitted⟩ := bind_eq.mp ownerLowering
+              have ownerLive := (dead_emitDef (.fieldAddr ownerValue index)).live_before emitted placeLive
+              obtain ⟨actual, ownerTyped⟩ := lowerPlace_recursive_typed owner childSupported ownerSource ownerRun ownerLive
+              cases current : ownerState.cur with
+              | none => simp [current] at ownerLive
+              | some block =>
+                have typed := lowerPlace_field_mutable_typed_of_owner placeSource (writable rfl)
+                  ownerSource ownerRun ownerTyped current
+                rw [placeRun] at typed
+                cases placeCurrent : placeAfter.cur with
+                | none => simp [placeCurrent] at placeLive
+                | some placeBlock =>
+                  have frozen := lowerArg_byRef_typed_of_place (requested := .mutable) placeRun typed.2 (by rfl) placeCurrent
+                  rw [childRun] at frozen
+                  exact frozen
+            | var x =>
+              have initial := (dead_lowerPlace (.var x)).live_before placeRun placeLive
+              cases current : before.cur with
+              | none => simp [current] at initial
+              | some block =>
+                have placeTyped := lowerPlace_var_exact placeSource results before current
+                rw [placeRun] at placeTyped
+                have permission : (if info.referenceWritable env.mod.profile then Mutability.mutable else .readOnly).atLeast .mutable = true := by
+                  simp [writable rfl, Mutability.atLeast]
+                have typed := lowerArg_byRef_typed_of_place placeRun
+                  (by simpa only [referenceType] using placeTyped.2) permission (placeTyped.1.trans current)
+                rw [childRun] at typed
+                exact typed
+            | global g =>
+              have initial := (dead_lowerPlace (.global g)).live_before placeRun placeLive
+              cases current : before.cur with
+              | none => simp [current] at initial
+              | some block =>
+                have placeTyped := lowerPlace_global_exact placeSource env.vars results before current
+                rw [placeRun] at placeTyped
+                have permission : (if info.referenceWritable env.mod.profile then Mutability.mutable else .readOnly).atLeast .mutable = true := by
+                  simp [writable rfl, Mutability.atLeast]
+                have typed := lowerArg_byRef_typed_of_place placeRun
+                  (by simpa only [referenceType] using placeTyped.2) permission (placeTyped.1.trans current)
+                rw [childRun] at typed
+                exact typed
+            | deref _ | elem _ _ _ => contradiction
         have retained := types_lowerArgs args _ _ _ _ restRun value (.data (.ref mu info.ty)) childTyped
         exact .cons ⟨.ref mu info.ty, retained, by simpa [tyOfVar, row] using permission⟩ restTyped
       | byVal expr =>
