@@ -26,7 +26,7 @@ theorem scopeFlow_lowerExpr (parents : Array (Option ScopeId)) (parent : Option 
     exact (scopeFlow_lowerPlace parents parent loop place source).bind fun _ => ScopeFlowAction.emitDef parents parent loop _
   | .ref mutability place, source => by
     simp only [lowerExpr]
-    exact (scopeFlow_lowerPlace parents parent loop place source).bind fun value => ScopeFlowAction.freezeTo parents parent loop mutability value
+    exact (scopeFlow_lowerPlace parents parent loop place source).bind fun value => ScopeFlowAction.borrowTo parents parent loop mutability value
   | .slice mutability view lower upper origin, source => by
     simp only [exprScopes, ScopeTableContains.append] at source
     simp only [lowerExpr]
@@ -124,7 +124,7 @@ theorem scopeFlow_lowerArg (parents : Array (Option ScopeId)) (parent : Option S
     simp only [argsScopes, List.append_nil] at source
     simp only [lowerArg]
     exact (scopeFlow_lowerPlace parents parent loop place source).bind fun value =>
-      ScopeFlowAction.freezeTo parents parent loop mutability value
+      ScopeFlowAction.borrowTo parents parent loop mutability value
 
 theorem scopeFlow_lowerArgs (parents : Array (Option ScopeId)) (parent : Option ScopeId) (loop : Option LoopCtx) :
     ∀ args : List Arg, ScopeTableContains parents (argsScopes parent args) →
