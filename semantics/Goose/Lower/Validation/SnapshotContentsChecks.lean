@@ -1,5 +1,6 @@
 import Goose.Lower.Validation.SnapshotContentsFinal
 import Goose.Lower.Validation.SnapshotContentsConstructors
+import Goose.Lower.Validation.SnapshotContentsLoops
 
 namespace Goose.Lower.Validation.SnapshotContentsChecks
 
@@ -71,5 +72,41 @@ example : ∃ authorized,
     have fresh : 1 ≤ 0 := witness.fresh 0 old
     omega
   · exact fun joined => Nat.lt_irrefl _ (witness.beforeSnapshot 2 joined)
+
+private def allocated := newBlock [.data (.int .i64)] (lowerEnv module env.vars []) finalState
+
+private def selected : LS := { allocated.2 with cur := some allocated.1.1 }
+
+private def rangeState : LS :=
+  (Goose.Lower.lowerRange .i64 (allocated.1.2.headD 0) 0 allocated.1.1
+    (fun _ _ => pure 0) (lowerEnv module env.vars []) selected).2
+
+private theorem rangeTrace : SnapshotSourceTrace (lowerEnv module env.vars []) 0 rangeState rangeState := by
+  have finalGenerated : GeneratedBuilderState finalState := generated.lowerView (.of place)
+    (show lowerView (.of place) (lowerEnv module env.vars []) initial = (2, finalState) from rfl)
+  have allocatedTrace := sourceTrace.newBlock [.data (.int .i64)] finalGenerated
+    (show newBlock [.data (.int .i64)] (lowerEnv module env.vars []) finalState = allocated from rfl)
+  have allocatedGenerated : GeneratedBuilderState allocated.2 := finalGenerated.newBlock (env := lowerEnv module env.vars []) _ rfl
+  have selectedTrace : SnapshotSourceTrace (lowerEnv module env.vars []) 0 selected selected :=
+    allocatedTrace.setCur_full (current := some allocated.1.1) rfl
+  have headerRow : selected.blocks[allocated.1.1]? =
+      some ⟨[(allocated.1.2.headD 0, .data (.int .i64))], #[]⟩ := by
+    simp [selected, allocated, newBlock1_run]
+  have selectedGenerated : GeneratedBuilderState selected := allocatedGenerated.setCur
+    (env := lowerEnv module env.vars []) (some allocated.1.1)
+    (by
+      intro block same
+      cases Option.some.inj same
+      simp [allocated, newBlock1_run]) rfl
+  exact (snapshot_lowerRange selectedTrace selectedGenerated (Nat.zero_le _) .i64
+    (allocated.1.2.headD 0) 0 allocated.1.1 ⟨_, headerRow, rfl⟩ (fun _ _ => pure 0)
+    (fun depth exit => SnapshotSourceAction.pure _ (some ⟨depth, exit,
+      .next allocated.1.1 .i64 (allocated.1.2.headD 0)⟩) 0)).1
+
+example : MutableSnapshotGraphs (lower module)
+    (permissionFunc (lowerEnv module env.vars []) rangeState) rangeState :=
+  rangeTrace.mutableSnapshotGraphs rfl rfl (by cbv) rfl
+
+#guard rangeState.vals[2]? == some (some (.view .mutable (.int .i64)))
 
 end Goose.Lower.Validation.SnapshotContentsChecks
