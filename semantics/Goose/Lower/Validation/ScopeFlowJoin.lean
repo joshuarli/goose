@@ -385,7 +385,7 @@ theorem ScopeFlowAction.ifValue {parents : Array (Option ScopeId)} {parent : Opt
     {loop : Option LoopCtx} (condition : ValueId) {first second : B ValueId}
     (firstAction : ScopeFlowAction parents parent loop first)
     (secondAction : ScopeFlowAction parents parent loop second) :
-    ScopeFlowAction parents parent loop (whenLive 0 fun _ => do
+    ScopeFlowAction parents parent loop (Goose.Lower.whenLive 0 fun _ => do
       let (tb, eb) ← fork condition
       setCur (some tb)
       let valueT ← first
@@ -396,7 +396,7 @@ theorem ScopeFlowAction.ifValue {parents : Array (Option ScopeId)} {parent : Opt
       joinValue endT valueT endF valueF) := by
   refine ⟨ScopeAction.ifValue condition firstAction.scopes secondAction.scopes, ?_⟩
   intro env before entry exit config context head
-  generalize run : (whenLive 0 fun _ => do
+  generalize run : (Goose.Lower.whenLive 0 fun _ => do
       let (tb, eb) ← fork condition
       setCur (some tb)
       let valueT ← first
@@ -423,7 +423,7 @@ theorem ScopeFlowAction.ifArms {parents : Array (Option ScopeId)} {parent : Opti
     {loop : Option LoopCtx} (condition : ValueId) {first second : B ValueId}
     (firstAction : ScopeFlowAction parents parent loop first)
     (secondAction : ScopeFlowAction parents parent loop second) :
-    ScopeFlowAction parents parent loop (whenLive () fun _ => do
+    ScopeFlowAction parents parent loop (Goose.Lower.whenLive () fun _ => do
       let (tb, eb) ← fork condition
       setCur (some tb)
       let _ ← first
@@ -434,7 +434,7 @@ theorem ScopeFlowAction.ifArms {parents : Array (Option ScopeId)} {parent : Opti
       joinArms endT endF) := by
   refine ⟨ScopeAction.ifArms condition firstAction.scopes secondAction.scopes, ?_⟩
   intro env before entry exit config context head
-  generalize run : (whenLive () fun _ => do
+  generalize run : (Goose.Lower.whenLive () fun _ => do
       let (tb, eb) ← fork condition
       setCur (some tb)
       let _ ← first

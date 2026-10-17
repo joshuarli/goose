@@ -257,4 +257,83 @@ theorem ScopeFlowAction.ifThen {parents : Array (Option ScopeId)} {parent : Opti
     exact ⟨nextEntry, nextExit, resumedConfig,
       (forkScopeMap_advance before entry exit).trans startAdvance bodyMaps⟩
 
+
+theorem ScopeFlowAction.whenLive {parents : Array (Option ScopeId)} {parent : Option ScopeId}
+    {loop : Option LoopCtx} (default : α) {body : BlockId → B α}
+    (bodyAction : ∀ block, ScopeFlowAction parents parent loop (body block)) :
+    ScopeFlowAction parents parent loop (Goose.Lower.whenLive default body) := by
+  unfold Goose.Lower.whenLive
+  apply (ScopeFlowAction.curBlock parents parent loop).bind
+  intro current
+  cases current with
+  | none => exact ScopeFlowAction.pure parents parent loop default
+  | some block => exact bodyAction block
+
+theorem ScopeFlowAction.assertCore (parents : Array (Option ScopeId)) (parent : Option ScopeId)
+    (loop : Option LoopCtx) (condition : ValueId) (origin : OriginId) :
+    ScopeFlowAction parents parent loop (Goose.Lower.whenLive () fun _ => do
+      let (pass, fail) ← Goose.Lower.fork condition
+      Goose.Lower.setCur (some fail)
+      Goose.Lower.emitTerm (.abort .assert (some origin))
+      Goose.Lower.setCur (some pass)) := by
+  refine ⟨ScopeAction.assertCore parents parent condition origin, ?_⟩
+  intro env before entry exit config context head
+  generalize run : (Goose.Lower.whenLive () fun _ => do
+      let (pass, fail) ← Goose.Lower.fork condition
+      Goose.Lower.setCur (some fail)
+      Goose.Lower.emitTerm (.abort .assert (some origin))
+      Goose.Lower.setCur (some pass)) env before = result
+  obtain ⟨resultValue, after⟩ := result
+  dsimp only
+  cases live : before.cur with
+  | none =>
+    rw [whenLive_none _ _ _ live] at run
+    obtain ⟨_, rfl⟩ := Prod.mk.inj run
+    exact ⟨entry, exit, config, ScopeMapAdvance.refl _ _ _⟩
+  | some current =>
+    rw [whenLive_some _ _ _ live] at run
+    simp only [bind_eq] at run
+    obtain ⟨⟨pass, fail⟩, forked, forkRun, u1, started, startRun, u2, closed, closeRun, resumeRun⟩ := run
+    have ids := fork_ids forkRun
+    obtain ⟨passId, failId⟩ := Prod.mk.inj ids.1
+    subst passId failId
+    have forkedConfig := config.fork condition env
+    rw [forkRun] at forkedConfig
+    dsimp only at forkedConfig
+    have forkTargets := fork_open_targets live (config.openCurrent.bound current live) condition env
+    rw [forkRun] at forkTargets
+    dsimp only at forkTargets
+    obtain ⟨passBody, passRow, passOpen⟩ := forkTargets.1
+    obtain ⟨failBody, failRow, failOpen⟩ := forkTargets.2
+    have forkAdvance := advB_fork condition env before _ _ forkRun
+    have startedConfig := forkedConfig.setCur (before.blocks.size + 1) failBody failRow failOpen (by
+      simp [forkScopeMap, forkAdvance.stack]) env
+    rw [startRun] at startedConfig
+    dsimp only at startedConfig
+    have startedStack : started.stack = before.stack := by
+      rw [setCur_run] at startRun
+      rw [← (Prod.mk.inj startRun).2]
+      exact forkAdvance.stack
+    have closedConfig := startedConfig.emitTerm (.abort .assert (some origin)) rfl env
+      (by intro target member; simp [Term.successors] at member)
+      (by intro target member; simp [Term.successors] at member)
+    rw [closeRun] at closedConfig
+    dsimp only at closedConfig
+    have closeAdvance := adv_emitTerm closeRun
+    have closedStack := closeAdvance.stack.trans startedStack
+    have startedPass : started.blocks[before.blocks.size]? = some passBody := by
+      rw [setCur_blocks startRun]
+      exact passRow
+    have other : started.cur ≠ some before.blocks.size := by
+      rw [setCur_run] at startRun
+      rw [← (Prod.mk.inj startRun).2]
+      simp
+    have closedPass := closeAdvance.keep _ passBody other startedPass
+    have resumedConfig := closedConfig.setCur before.blocks.size passBody closedPass passOpen (by
+      simp [forkScopeMap, closedStack]) env
+    rw [resumeRun] at resumedConfig
+    dsimp only at resumedConfig
+    exact ⟨forkScopeMap before entry, forkScopeMap before exit, resumedConfig,
+      forkScopeMap_advance before entry exit⟩
+
 end Goose.Lower.Validation
