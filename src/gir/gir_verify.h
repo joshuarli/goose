@@ -4594,16 +4594,16 @@ private:
                     case GirOp::Store: {
                         auto rs = RootsAt(p.vals, i.a);
                         AddTargets(e.writes, rs);
-                        // A store through a reference-to-slice parameter replaces
-                        // the caller's slice binding.
+                        auto ownerType = m.Type(fn.vt[i.a]).elem;
                         for (auto &r : rs)
                             if (r.kind == CoreRootRef::Param && r.index < (int)f.params.size()) {
                                 auto &pt = m.Type(f.params[r.index]);
-                                if (pt.kind == CoreType::Ref && m.Type(pt.elem).kind == CoreType::Slice)
+                                if (pt.kind == CoreType::Ref && m.Type(pt.elem).kind == CoreType::Slice &&
+                                    m.Type(ownerType).kind == CoreType::Slice)
                                     e.rebinds.insert({ false, r.index });
                             } else if (r.kind == CoreRootRef::Local && r.index < (int)f.slots.size()) {
                                 auto &sl = f.slots[r.index];
-                                if (GirRefLike(m, sl.ty) && sl.var < (int)f.params.size())
+                                if (GirRefLike(m, sl.ty) && sl.var < (int)f.params.size() && GirRefLike(m, ownerType))
                                     e.rebinds.insert({ false, sl.var });
                             }
                         break;
