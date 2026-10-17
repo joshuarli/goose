@@ -1,5 +1,6 @@
 import Goose.Lower.Frag
 import Goose.Lower.Validation.ScopeGraph
+import Goose.Lower.Validation.ScopeEmission
 
 namespace Goose.Lower.Validation
 
@@ -140,5 +141,153 @@ def ScopeBuilder.finish {parents : Array (Option ScopeId)}
       simp only [beforeLookup, Option.map_some, Option.some.injEq] at lookup
       subst body
       exact edges block beforeBody beforeLookup target member
+
+theorem ScopeBlockTraces.push {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {blocks : Array BlockB}
+    (traces : ScopeBlockTraces parents entry exit blocks)
+    (params : List (ValueId × VTy)) (stack : List ScopeId) :
+    ScopeBlockTraces parents
+      (fun block => if block = blocks.size then stack else entry block)
+      (fun block => if block = blocks.size then stack else exit block)
+      (blocks.push ⟨params, #[]⟩) := by
+  intro block body lookup
+  simp only [Array.getElem?_push] at lookup
+  by_cases fresh : block = blocks.size
+  · simp only [fresh, ite_true, Option.some.injEq] at lookup ⊢
+    subst body
+    exact .nil stack
+  · simp only [fresh, ite_false] at lookup ⊢
+    exact traces block body lookup
+
+theorem ScopeBuilder.push {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {before : LS}
+    (valid : ScopeBuilder parents entry exit before)
+    (bound : ∀ block, before.cur = some block → block < before.blocks.size)
+    (params : List (ValueId × VTy)) (vals : Array (Option VTy)) :
+    ScopeBuilder parents
+      (fun block => if block = before.blocks.size then before.stack else entry block)
+      (fun block => if block = before.blocks.size then before.stack else exit block)
+      { before with blocks := before.blocks.push ⟨params, #[]⟩, vals := vals } := by
+  refine ⟨valid.traces.push params before.stack, ?_⟩
+  intro block live
+  have earlier := bound block live
+  have distinct : block ≠ before.blocks.size := Nat.ne_of_lt earlier
+  simp only [distinct, ite_false]
+  exact valid.current block live
+
+theorem ScopeBuilder.setCur {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {before : LS}
+    (valid : ScopeBuilder parents entry exit before) (next : Option BlockId)
+    (resume : ∀ block, next = some block → exit block = before.stack) (env : LEnv) :
+    ScopeBuilder parents entry exit (setCur next env before).2 := by
+  rw [setCur_run]
+  exact ⟨valid.traces, resume⟩
+
+theorem ScopeBuilder.newBlock {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {before : LS}
+    (valid : ScopeBuilder parents entry exit before)
+    (bound : ∀ block, before.cur = some block → block < before.blocks.size)
+    (env : LEnv) (types : List VTy) :
+    ScopeBuilder parents
+      (fun block => if block = before.blocks.size then before.stack else entry block)
+      (fun block => if block = before.blocks.size then before.stack else exit block)
+      (newBlock types env before).2 := by
+  exact valid.push bound (((List.range types.length).map (before.vals.size + ·)).zip types)
+    (types.foldl (fun vals type => vals.push (some type)) before.vals)
+
+theorem ScopeBuilder.emitNeutralTerm {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {before : LS}
+    (valid : ScopeBuilder parents entry exit before) (term : Term)
+    (neutral : scopeNeutral (.term term) = true) (env : LEnv) :
+    ScopeBuilder parents entry exit (emitTerm term env before).2 := by
+  cases live : before.cur with
+  | none => simpa [emitTerm_none term env live] using valid
+  | some block =>
+    rw [emitTerm_run term env live]
+    refine ⟨?_, ?_⟩
+    · have step : ScopeTrace parents (exit block) [.term term] (exit block) :=
+        .neutral neutral (.nil _)
+      have extended := valid.traces.append block (.term term) (exit block) step
+      have same : (fun other => if other = block then exit block else exit other) = exit := by
+        funext other
+        split <;> simp_all
+      simpa only [same] using extended
+    · intro other current
+      cases current
+
+theorem ScopeBuilder.patchNeutralTerm {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {before : LS}
+    (valid : ScopeBuilder parents entry exit before) (block : BlockId) (term : Term)
+    (neutral : scopeNeutral (.term term) = true) (env : LEnv) :
+    ScopeBuilder parents entry exit (patchTerm block term env before).2 := by
+  rw [patchTerm_run]
+  refine ⟨?_, valid.current⟩
+  have step : ScopeTrace parents (exit block) [.term term] (exit block) :=
+    .neutral neutral (.nil _)
+  have extended := valid.traces.append block (.term term) (exit block) step
+  have same : (fun other => if other = block then exit block else exit other) = exit := by
+    funext other
+    split <;> simp_all
+  simpa only [same] using extended
+
+theorem ScopeBuilder.initState (parents : Array (Option ScopeId))
+    (entry exit : BlockId → List ScopeId) : ScopeBuilder parents entry exit initState := by
+  constructor
+  · intro block body lookup
+    simp [Goose.Lower.initState] at lookup
+  · intro block current
+    cases current
+
+theorem ScopeBuilder.unwindTerm {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {before : LS}
+    (valid : ScopeBuilder parents entry exit before) (depth : Nat) (term : Term)
+    (termTrace : ScopeTrace parents (before.stack.drop (before.stack.length - depth))
+      [.term term] (before.stack.drop (before.stack.length - depth)))
+    (env : LEnv) (block : BlockId) (body : BlockB)
+    (live : before.cur = some block) (lookup : before.blocks[block]? = some body) :
+    ScopeBuilder parents entry
+      (fun other => if other = block then before.stack.drop (before.stack.length - depth) else exit other)
+      ((leaveTo depth >>= fun _ => emitTerm term) env before).2 := by
+  have emitted := unwindTerm_emitted depth term env before block body live lookup
+  dsimp only at emitted
+  constructor
+  · intro other afterBody afterLookup
+    by_cases same : other = block
+    · subst other
+      rw [emitted.2.2.2] at afterLookup
+      cases afterLookup
+      simp only [ite_true, Array.toList_push, Array.toList_append ]
+      have first := valid.traces block body lookup
+      rw [valid.current block live] at first
+      exact (first.append (ScopeTrace.leaveTo parents before.stack depth)).append termTrace
+    · have distinct := Ne.symm same
+      rw [unwindTerm_otherBlock depth term env before block other live distinct] at afterLookup
+      simpa only [same, ite_false] using valid.traces other afterBody afterLookup
+  · intro other current
+    rw [emitted.1] at current
+    cases current
+
+theorem ScopeBuilder.unwindReturn {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {before : LS}
+    (valid : ScopeBuilder parents entry exit before) (values : List ValueId)
+    (origin : Option OriginId) (env : LEnv) (block : BlockId) (body : BlockB)
+    (live : before.cur = some block) (lookup : before.blocks[block]? = some body) :
+    ScopeBuilder parents entry (fun other => if other = block then [] else exit other)
+      ((leaveTo 0 >>= fun _ => emitTerm (.ret values origin)) env before).2 := by
+  have trace : ScopeTrace parents (before.stack.drop (before.stack.length - 0))
+      [.term (.ret values origin)] (before.stack.drop (before.stack.length - 0)) := by
+    simp only [Nat.sub_zero, List.drop_length]
+    exact .ret (.nil [])
+  simpa only [Nat.sub_zero, List.drop_length] using
+    valid.unwindTerm 0 (.ret values origin) trace env block body live lookup
+
+theorem ScopeBuilder.closedStack {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {before : LS}
+    (valid : ScopeBuilder parents entry exit before) (closed : before.cur = none)
+    (stack : List ScopeId) : ScopeBuilder parents entry exit { before with stack := stack } := by
+  refine ⟨valid.traces, ?_⟩
+  intro block current
+  rw [closed] at current
+  cases current
 
 end Goose.Lower.Validation

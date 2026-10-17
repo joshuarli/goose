@@ -155,4 +155,42 @@ theorem lowerStmt_continueNext_scopeTrace (depth : Nat) (exit header : BlockId)
         (.neutral (inst := .term (.br header [(leaveTo depth env before).2.vals.size])) rfl (.nil _)))
     simpa [afterBody, value, leaves, List.drop_append] using trace
 
+theorem leaveAll_otherBlock (scopes : List ScopeId) (env : LEnv) (before : LS)
+    (block other : BlockId) (live : before.cur = some block) (distinct : block ≠ other) :
+    (leaveAll scopes env before).2.blocks[other]? = before.blocks[other]? := by
+  induction scopes generalizing before with
+  | nil => rfl
+  | cons scope scopes ih =>
+    rw [leaveAll, bind_run, emitEffect_run _ _ live]
+    dsimp only
+    have rest := ih { before with blocks := before.blocks.modify block (fun blk => { blk with insts := blk.insts.push (.eff (.leave scope)) }) } live
+    simpa [Array.getElem?_modify, distinct] using rest
+
+theorem leaveAll_cur (scopes : List ScopeId) (env : LEnv) (before : LS) :
+    (leaveAll scopes env before).2.cur = before.cur := by
+  induction scopes generalizing before with
+  | nil => rfl
+  | cons scope scopes ih =>
+    rw [leaveAll, bind_run]
+    cases live : before.cur with
+    | none =>
+      rw [emitEffect_none _ _ live]
+      simpa only [live] using ih before
+    | some block =>
+      rw [emitEffect_run _ _ live]
+      simpa only [live] using ih { before with blocks := before.blocks.modify block (fun blk => { blk with insts := blk.insts.push (.eff (.leave scope)) }) }
+
+theorem unwindTerm_otherBlock (depth : Nat) (term : Term) (env : LEnv) (before : LS)
+    (block other : BlockId) (live : before.cur = some block) (distinct : block ≠ other) :
+    ((leaveTo depth >>= fun _ => emitTerm term) env before).2.blocks[other]? = before.blocks[other]? := by
+  have same : (leaveTo depth env before).2.cur = some block := by
+    simpa [leaveTo, bind_run, get_apply] using
+      (leaveAll_cur (before.stack.take (before.stack.length - depth)) env before).trans live
+  simp only [bind_run]
+  rw [emitTerm_run _ _ same]
+  dsimp only
+  simp only [Array.getElem?_modify, distinct, ite_false]
+  simpa [leaveTo, bind_run, get_apply] using
+    leaveAll_otherBlock (before.stack.take (before.stack.length - depth)) env before block other live distinct
+
 end Goose.Lower.Validation
