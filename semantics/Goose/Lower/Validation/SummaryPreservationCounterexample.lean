@@ -22,4 +22,21 @@ theorem sharedCalleeContexts_gir_rejected :
       .error ⟨.v050, "function main: main reads global 1, which its summary omits"⟩ := by
   cbv
 
+def genericParameterContext : Module :=
+  let base := Checks.specializedParameterSummary
+  { base with contexts := base.contexts.modify 1 fun ctx =>
+      { ctx with varRoots := [(0, [.param 0])] } }
+
+set_option maxRecDepth 12000 in
+set_option maxHeartbeats 2000000 in
+theorem genericParameterContext_core_accepted : validate genericParameterContext = .ok () := by
+  cbv
+
+set_option maxRecDepth 12000 in
+set_option maxHeartbeats 2000000 in
+theorem genericParameterContext_gir_rejected :
+    Goose.GIR.validate (lower genericParameterContext) =
+      .error ⟨.v050, "function receiver parameter 0 root info omits a root passed at a call site"⟩ := by
+  cbv
+
 end Goose.Lower.Validation.SummaryPreservation
