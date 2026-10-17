@@ -12,6 +12,9 @@ FIXTURES = (
     ROOT / "test/semantics/sem_construction_source_values.goose",
     ROOT / "test/semantics/sem_construction_source_exit.goose",
     ROOT / "test/semantics/sem_construction_source_exit_recursive_multi.goose",
+    ROOT / "test/semantics/sem_construction_target_call.goose",
+    ROOT / "test/semantics/sem_construction_named_result.goose",
+    ROOT / "test/semantics/sem_construction_nested_target_mode.goose",
 )
 NUMERIC_PROFILES = ("release", "debug")
 OPT_LEVELS = ("-O0", "-O2")
