@@ -60,16 +60,18 @@ structure State where
   returned : Roots := .pending
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq
 
+def Atom.ofRootRef : RootRef → Atom
+  | .local slot => .local slot
+  | .global index => .global index
+  | .param index => .param index
+
 def declaredReturn (f : Func) : Roots :=
   match f.results with
   | [type] =>
       if type.isRefLike then
         match f.roots.results[0]? with
         | none => .unknown
-        | some roots => .known (roots.map fun
-            | .local slot => .local slot
-            | .global global => .global global
-            | .param index => .param index)
+        | some roots => .known (roots.map Atom.ofRootRef)
       else .known []
   | [] => .known []
   | _ => .unknown
@@ -161,13 +163,13 @@ def result (f : Func) (vt : Array (Option VTy)) (state : State)
     | .call .. => .pending
     | _ => .unknown
 
-def receiver : Inst → Option ValueId
-  | .def _ (.load address) | .def _ (.snapshot _ address) | .def _ (.arrayLen address)
-  | .def _ (.viewLen address) | .def _ (.indexChecked address ..)
-  | .def _ (.indexProven address ..) | .def _ (.push address ..) | .def _ (.pop address ..)
-  | .eff (.store address ..) | .eff (.append address ..) | .eff (.popN address ..)
-  | .eff (.resize address ..) | .eff (.clear address ..) | .eff (.replace address ..) => some address
-  | _ => none
+def sourceOperands : Inst → List ValueId
+  | .term _ => []
+  | inst => inst.uses
+
+def touchValues (vt : Array (Option VTy)) (state : State) (values : List ValueId) : State :=
+  { state with touched := values.foldl (fun roots value =>
+      if valRefLike vt value then roots.join (flowAt state.values value) else roots) state.touched }
 
 def edge (f : Func) (state : State) (target : BlockId) (args : List ValueId) : State :=
   match f.blocks[target]? with
@@ -178,14 +180,15 @@ def edge (f : Func) (state : State) (target : BlockId) (args : List ValueId) : S
 
 def step (m : Module) (states : Array State) (f : Func) (vt : Array (Option VTy))
     (state : State) (inst : Inst) : State := Id.run do
-  let mut state := state
-  if let some address := receiver inst then
-    state := { state with touched := state.touched.join (flowAt state.values address) }
+  let state := touchValues vt state (sourceOperands inst)
   match inst with
   | .def value (.call fn args _) =>
       let (roots, after) := callState m states f state fn args
-      return { after with values := addFlow after.values value (if valRefLike vt value then roots else .known []) }
-  | .def value op => return { state with values := addFlow state.values value (result f vt state value op) }
+      let after := { after with values := addFlow after.values value (if valRefLike vt value then roots else .known []) }
+      return touchValues vt after [value]
+  | .def value op =>
+      let after := { state with values := addFlow state.values value (result f vt state value op) }
+      return touchValues vt after [value]
   | .eff (.slotInit slot value _) =>
       return { state with slots := addFlow state.slots slot (flowAt state.values value) }
   | .eff (.store address value _) =>
@@ -225,17 +228,19 @@ def closeFrom (m : Module) (types : Array (Array (Option VTy))) :
 def close (m : Module) (types : Array (Array (Option VTy))) : Option (Array State) :=
   closeFrom m types (moduleFuel m) (moduleStart m types)
 
+def normalizeAtom (f : Func) : Atom → Option (List RootRef)
+  | .local slot => some [.local slot]
+  | .global global => some [.global global]
+  | .param index => some (f.parameterRoots index)
+  | .contents index =>
+      (f.roots.contents.find? (·.1 == index)).map fun row =>
+        row.2.flatMap f.expandParameterRoot
+
 def normalize (f : Func) (roots : Roots) : Option (List RootRef) :=
   match roots with
   | .pending | .unknown => none
   | .known roots => roots.foldlM (init := []) fun result root => do
-      let mapped ← match root with
-        | .local slot => some [.local slot]
-        | .global global => some [.global global]
-        | .param index => some (f.parameterRoots index)
-        | .contents index =>
-            (f.roots.contents.find? (·.1 == index)).map fun row =>
-              row.2.flatMap f.expandParameterRoot
+      let mapped ← normalizeAtom f root
       pure (unionRoots result mapped)
 
 def rootsWithin (actual : Option (List RootRef)) (expected : List RootRef) : Bool :=
@@ -269,18 +274,10 @@ def checkReturned (f : Func) (state : State) : Bool :=
   | [] => true
   | _ => false
 
-def mappedBound (f callee : Func) (state : State) (args : List ValueId)
-    (bound : List RootRef) : Option (List RootRef) :=
-  bound.foldlM (init := []) fun result root => do
-    let mapped ← match root with
-      | .global global => some [.global global]
-      | .param index => do
-          let value ← args[index]?
-          normalize f (if (callee.params[index]?).any Ty.isRefSlice then
-            content f state (flowAt state.values value)
-            else flowAt state.values value)
-      | .local _ => none
-    pure (unionRoots result mapped)
+def mappedBound (f : Func) (state : State) (args : List ValueId)
+    (bound : List RootRef) : Option (List RootRef) := do
+  let actual ← args.mapM (fun value => normalize f (flowAt state.values value))
+  (Goose.Core.mapResultRoots actual [] bound).toOption
 
 def checkCall (m : Module) (f : Func) (state : State) (fn : FnId)
     (args : List ValueId) : Bool :=
@@ -300,7 +297,7 @@ def checkCall (m : Module) (f : Func) (state : State) (fn : FnId)
                     | .global global => declared.contains (.global global)
                     | .local _ | .param _ => declared.contains (.param index)
       parameters && callee.roots.contents.toList.all fun (index, bound) =>
-        match args[index]?, mappedBound f callee state args bound with
+        match args[index]?, mappedBound f state args bound with
         | some value, some expected => rootsWithin (normalize f (content f state (flowAt state.values value))) expected
         | _, _ => false
 
@@ -326,31 +323,34 @@ def annotationsValid (m : Module) (f : Func) : Bool :=
     contents.all (fun (index, roots) => (f.params[index]?).any Ty.isRefSlice && roots.all external) &&
     f.roots.results.all (·.all external)
 
-def check (m : Module) (f : Func) (vt : Array (Option VTy)) (state : State) : Bool :=
+def checkInstruction (m : Module) (f : Func) (vt : Array (Option VTy)) (state : State)
+    (inst : Inst) : Bool :=
   let env : TyEnv := { m.tyEnv f with vals := vt }
+  refReady vt state inst && match inst with
+  | .def value op =>
+      (op.resultTy env).toOption.any (fun type => vt[value]? == some (some type)) &&
+      match op with
+      | .call fn args _ => checkCall m f state fn args
+      | _ => true
+  | .eff (.store address value _) =>
+      (env.refTy address).toOption.any fun (_, type) => (env.dataTy value).toOption == some type
+  | .eff (.slotInit slot value _) =>
+      (f.slots[slot]?).any fun slot => (env.dataTy value).toOption == some slot.ty
+  | .term (.ret values _) =>
+      values.length == f.results.length &&
+        (values.zip f.results).all (fun (value, type) => (env.dataTy value).toOption == some type)
+  | .term (.br target args) => edgeTyped f vt target args
+  | .term (.condbr value thenBlock thenArgs elseBlock elseArgs) =>
+      (env.dataTy value).toOption == some .bool &&
+        edgeTyped f vt thenBlock thenArgs && edgeTyped f vt elseBlock elseArgs
+  | _ => true
+
+def check (m : Module) (f : Func) (vt : Array (Option VTy)) (state : State) : Bool :=
   f.params.all Ty.paramOk && annotationsValid m f &&
     (f.blocks[0]?).any (fun entry => entry.params.map (·.2) == f.params.map VTy.data) &&
     checkWrites f state && checkReturned f state && f.blocks.all fun block =>
     block.params.all (fun (value, type) => vt[value]? == some (some type)) &&
-    block.insts.all fun inst =>
-      refReady vt state inst && match inst with
-      | .def value op =>
-          (op.resultTy env).toOption.any (fun type => vt[value]? == some (some type)) &&
-          match op with
-          | .call fn args _ => checkCall m f state fn args
-          | _ => true
-      | .eff (.store address value _) =>
-          (env.refTy address).toOption.any fun (_, type) => (env.dataTy value).toOption == some type
-      | .eff (.slotInit slot value _) =>
-          (f.slots[slot]?).any fun slot => (env.dataTy value).toOption == some slot.ty
-      | .term (.ret values _) =>
-          values.length == f.results.length &&
-            (values.zip f.results).all (fun (value, type) => (env.dataTy value).toOption == some type)
-      | .term (.br target args) => edgeTyped f vt target args
-      | .term (.condbr value thenBlock thenArgs elseBlock elseArgs) =>
-          (env.dataTy value).toOption == some .bool &&
-            edgeTyped f vt thenBlock thenArgs && edgeTyped f vt elseBlock elseArgs
-      | _ => true
+    block.insts.all (checkInstruction m f vt state)
 
 def closeFunctionFrom (m : Module) (states : Array State) (f : Func)
     (vt : Array (Option VTy)) : Nat → State → Option State

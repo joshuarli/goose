@@ -115,7 +115,7 @@ private def aliasModule := module #[aliasCaller, aliasWriter] #[global owner, gl
 
 private def contentReader := function "contentReader" [holder] [element] #[]
   [.def 1 (.load 0), .def 2 (.sliceView 1), .def 3 (.viewLen 2), .term (.ret [3] (some 0))]
-  { params := #[(0, [.param 0])], contents := #[(0, [.param 0])] }
+  { params := #[(0, [.param 0])], contents := #[(0, [.global 0])] }
 private def readerCaller := function "readerCaller" [slice] [] #[⟨slice, .mutable, 0, 0⟩]
   [.eff (.slotInit 0 0 (some 0)), .def 1 (.slotAddr 0),
    .def 2 (.call 1 [1] (some 0)), .term (.ret [] (some 0))]
@@ -149,7 +149,7 @@ private def constantEmptyModule := module #[constantEmpty]
 
 private def readerInitializerModule := module #[contentReader]
   #[global owner, { global element with init := initializerCaller }]
-#guard ((localFlow readerInitializerModule contentReader).value 1).any (·.contains (.param 0))
+#guard ((localFlow readerInitializerModule contentReader).value 1).any (·.contains (.global 0))
 
 private def invalidEntry := { constantEmptyModule with entry := 0 }
 #guard (localFlow invalidEntry constantEmpty).value 0 == none
@@ -230,5 +230,26 @@ private def scalarRefModule := module #[scalarRefCaller, scalarRefReader] #[glob
 #guard (localFlow scalarRefModule scalarRefCaller).call 1 [1] == some [.global 0]
 #guard ReplacementContentFlow.Model.ownerTouches scalarModule [.global 20] == [.global 20]
 #guard ReplacementContentFlow.Model.ownerTouches (module #[pure] #[global holder]) [.global 0] == [.global 0]
+
+private def loadOnlyReader := function "loadOnlyReader" [holder] [] #[]
+  [.def 1 (.load 0), .term (.ret [] (some 0))]
+  { params := #[(0, [.param 0])], contents := #[(0, [.global 0])] }
+private def loadOnlyModule := module #[readerCaller, loadOnlyReader] #[global owner]
+#guard ((localFlow loadOnlyModule readerCaller).call 1 [1]).any (·.contains (.global 0))
+
+private def forwardedOnlyReader := { loadOnlyReader with blocks := #[⟨[(0, .data holder)],
+  [.def 1 (.load 0), .def 2 (.sliceView 1),
+   .def 3 (.viewSlice .readOnly 2 .omitted .omitted (some 0)), .term (.ret [] (some 0))]⟩] }
+private def forwardedOnlyModule := module #[readerCaller, forwardedOnlyReader] #[global owner]
+#guard ((localFlow forwardedOnlyModule readerCaller).call 1 [1]).any (·.contains (.global 0))
+
+private def crossContentCallee := function "crossContentCallee" [holder, holder] [element] #[]
+  [.def 2 (.constInt .i64 1), .term (.ret [2] (some 0))]
+  { params := #[(0, [.param 0]), (1, [.param 1])], contents := #[(0, [.param 1]), (1, [])] }
+private def crossContentWrapper := function "crossContentWrapper" [holder, holder] [] #[]
+  [.def 2 (.call 1 [0, 1] (some 0)), .term (.ret [] (some 0))]
+  { params := #[(0, [.param 0]), (1, [.param 1])], contents := #[(0, [.param 1]), (1, [])] }
+private def crossContentModule := module #[crossContentWrapper, crossContentCallee, pure]
+#guard (localFlow crossContentModule pure).value 0 == some []
 
 end Goose.GIR.ReplacementContentFlowChecks
