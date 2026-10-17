@@ -125,6 +125,20 @@ private theorem helper_checkTypes (variant : Variant) (placement : Placement) :
   rw [helper_valueTypes]
   cases variant <;> cases placement <;> cbv
 
+private theorem checkAll_success {items : List α} {action : α → Except ε Unit}
+    (checked : ∀ item ∈ items, action item = .ok ()) : checkAll items action = .ok () := by
+  induction items with
+  | nil => rfl
+  | cons item rest inductionHypothesis =>
+    simp only [checkAll, checked item (by simp), bind, Except.bind]
+    exact inductionHypothesis (fun next member => checked next (by simp [member]))
+
+private theorem bind_success {action : Except ε α} {next : α → Except ε β} {value : α} {result : β}
+    (first : action = .ok value) (remaining : next value = .ok result) :
+    (action >>= next) = .ok result := by
+  rw [first]
+  exact remaining
+
 private theorem validate_of_checks (m : GIR.Module)
     (entry : checkEntryAndGlobals m = .ok ())
     (symbols : (checkAll m.labelled fun (l, f) => checkSymbols m l f) = .ok ())
@@ -143,12 +157,24 @@ private theorem validate_of_checks (m : GIR.Module)
     (evidence : (checkAll m.infos fun i => asCheck .v080 i.label (checkEvidence m i.f i.vt)) = .ok ())
     (origins : (checkAll m.infos fun i => checkOrigins m.profile i.label i.f) = .ok ()) :
     GIR.validate m = .ok () := by
-  simp only [bind, Except.bind, pure, Except.pure] at storage scopes
-  simp only [GIR.validate, entry, symbols, structs, types, cfg, unreachable,
-    summaries, GIR.checkShrinkReplace_canonical, shrink, evidence, origins,
-    bind, Except.bind, pure, Except.pure]
-  unfold GIR.validate.match_1 validate_of_checks.match_3 at *
-  simp only [storage, scopes]
+  unfold GIR.validate
+  rw [entry, symbols, structs, types, cfg, unreachable]
+  simp only [bind, Except.bind]
+  apply bind_success (value := ())
+  · apply checkAll_success
+    intro pair member
+    have checked := checkAll_ok storage pair member
+    rcases pair with ⟨info, walk⟩
+    cases found : walk.storage <;>
+      simpa only [found, bind, Except.bind, pure, Except.pure] using checked
+  · apply bind_success (value := ())
+    · apply checkAll_success
+      intro walk member
+      have checked := checkAll_ok scopes walk member
+      cases found : walk.scopes <;>
+        simpa only [found, pure, Except.pure] using checked
+    · simp only [GIR.checkShrinkReplace_canonical]
+      rw [summaries, shrink, evidence, origins]
 
 private theorem fixture_checks (variant : Variant) (placement : Placement) : GIR.validate (fixture variant placement) = .ok () := by
   apply validate_of_checks
@@ -168,6 +194,7 @@ private theorem fixture_checks (variant : Variant) (placement : Placement) : GIR
     rw [fixture_infos]
     cases variant <;> cases placement <;> cbv
   · rw [fixture_infos]
+    simp only [checkAll, checkShrinkReplace_eq]
     cases variant <;> cases placement <;> cbv
   · rw [fixture_infos]
     cases variant <;> cases placement <;> cbv
