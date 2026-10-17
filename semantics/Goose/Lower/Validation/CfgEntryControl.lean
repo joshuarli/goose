@@ -188,7 +188,7 @@ theorem entry_fork_then (loop : Option LoopCtx) (condition : ValueId)
   exact continuation yes no env middle result after tail checked.1 checked.2 (by have positive := bounded.positive; dsimp only at yesId; nat_omega)
     (by dsimp only at noId; nat_omega)
 
-theorem entry_ifE_core (loop : Option LoopCtx) (condition : ValueId)
+theorem entry_ifE_core (loop : Option LoopCtx) (condition : ValueId) (sourceScope : ScopeId)
     {yes no : B ValueId} (yesRun : EntryRun loop yes) (noRun : EntryRun loop no) :
     EntryRun loop (whenLive 0 fun _ => do
       let (yesBlock, noBlock) ← fork condition
@@ -198,7 +198,9 @@ theorem entry_ifE_core (loop : Option LoopCtx) (condition : ValueId)
       setCur (some noBlock)
       let noValue ← no
       let noEnd ← curBlock
-      joinValue yesEnd yesValue noEnd noValue) := by
+      let result ← joinValue yesEnd yesValue noEnd noValue
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   refine entry_whenLive loop _ fun _ => ?_
   refine EntryRun.bind (entry_fork loop condition) fun blocks => ?_
   refine EntryRun.bind (entry_setCur loop _) fun _ => ?_
@@ -207,7 +209,8 @@ theorem entry_ifE_core (loop : Option LoopCtx) (condition : ValueId)
   refine EntryRun.bind (entry_setCur loop _) fun _ => ?_
   refine EntryRun.bind noRun fun noValue => ?_
   refine EntryRun.bind (entry_curBlock loop) fun noEnd => ?_
-  exact entry_joinValue loop yesEnd noEnd yesValue noValue
+  refine EntryRun.bind (entry_joinValue loop yesEnd noEnd yesValue noValue) fun result => ?_
+  exact EntryRun.bind (entry_recordValueRootRecipe loop result sourceScope) fun _ => entry_pure loop result
 
 theorem entry_ifS_some_core (loop : Option LoopCtx) (condition : ValueId)
     {yes no : B ValueId} (yesRun : EntryRun loop yes) (noRun : EntryRun loop no) :
