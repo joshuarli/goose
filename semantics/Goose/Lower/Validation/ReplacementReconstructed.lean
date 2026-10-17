@@ -7,7 +7,7 @@ open Goose.Core Goose.GIR
 
 theorem ReplacementInstApart.scalar_reference_free {module : GIR.Module}
     {types : Array (Option VTy)} {queries : ReplacementQueries} {owner value : ValueId} {op : Op}
-    (scalar : ScalarOp op) (result : valRefLike types value = false)
+    (scalar : ScalarOp op)
     (operands : ∀ operand ∈ op.uses, valRefLike types operand = false) :
     ReplacementInstApart module types queries owner (.def value op) := by
   constructor
@@ -15,11 +15,8 @@ theorem ReplacementInstApart.scalar_reference_free {module : GIR.Module}
     have uses : emptyFactSourceOperands (.def value op) = op.uses := by cases scalar <;> rfl
     have absent := operands operand (uses ▸ member)
     simp [reference] at absent
-  · intro resultValue operation same reference
-    obtain ⟨rfl, rfl⟩ := Inst.def.inj same
-    simp [reference] at result
-  · intro receiver accessed
-    cases scalar <;> cases accessed
+  · intro resultValue member reference
+    cases scalar <;> simp [ReplacementContentFlow.Model.loadedResults] at member
   · intro resultValue function args origin same
     cases scalar <;> cases same
 
@@ -44,15 +41,14 @@ theorem replacementScalarApart_of_source_graphs
     builder.sites value op definition
   have referenceFree := scalarOp_reference_free scalar typed
   apply ReplacementInstApart.scalar_reference_free scalar
-  · simp [valRefLike, retained, recorded, referenceFree.1]
-  · intro operand member
-    have ordered := builder.checkpoint.operands.definitions value op definition operand member
-    obtain ⟨operandType, row⟩ := trace.present initialPresent operand (by simpa only [← fresh] using ordered)
-    have absent := referenceFree.2 operand member
-    change valRefLike site.vals operand = false at absent
-    simp only [valRefLike, row, Option.getD_some] at absent
-    have finalRow := typePrefix.typed operand operandType row
-    simpa only [valRefLike, retained, finalRow, Option.getD_some] using absent
+  intro operand member
+  have ordered := builder.checkpoint.operands.definitions value op definition operand member
+  obtain ⟨operandType, row⟩ := trace.present initialPresent operand (by simpa only [← fresh] using ordered)
+  have absent := referenceFree.2 operand member
+  change valRefLike site.vals operand = false at absent
+  simp only [valRefLike, row, Option.getD_some] at absent
+  have finalRow := typePrefix.typed operand operandType row
+  simpa only [valRefLike, retained, finalRow, Option.getD_some] using absent
 
 theorem replacementFlatLiteralApart_of_source_graphs
     {module : GIR.Module} {func : Func} {le : LEnv} {state : LS}
@@ -75,18 +71,13 @@ theorem replacementFlatLiteralApart_of_source_graphs
   have flat := flat element shape
   have elementNotRef : element.isRefLike = false := by
     cases element <;> simp_all [Ty.flat, Ty.isRefLike]
-  have resultNotRef : ty.isRefLike = false := by
-    cases ty <;> simp_all [arrayElem?, Ty.isRefLike]
   constructor
   · intro operand member reference
     have sourceRow := operandTypes operand member
     have finalRow := typePrefix.typed operand (.data element) sourceRow
     simp [valRefLike, retained, finalRow, VTy.refLike, elementNotRef] at reference
-  · intro resultValue op same reference
-    obtain ⟨rfl, rfl⟩ := Inst.def.inj same
-    simp [valRefLike, retained, recorded, resultType, VTy.refLike, resultNotRef] at reference
-  · intro receiver accessed
-    cases accessed
+  · intro resultValue member reference
+    simp [ReplacementContentFlow.Model.loadedResults] at member
   · intro resultValue function args origin same
     cases same
 

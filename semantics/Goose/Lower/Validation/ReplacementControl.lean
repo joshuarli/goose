@@ -15,11 +15,9 @@ theorem ReplacementInstApart.control {module : GIR.Module} {types : Array (Optio
     (control : ReplacementControlInst inst) : ReplacementInstApart module types queries owner inst := by
   constructor
   · intro value member reference
-    cases control <;> simp [emptyFactSourceOperands] at member
-  · intro value op same reference
-    cases control <;> cases same
-  · intro value receiver
-    cases control <;> cases receiver
+    cases control <;> simp [emptyFactSourceOperands, ReplacementContentFlow.Model.accessOperands, Inst.uses, Effect.uses] at member
+  · intro value member reference
+    cases control <;> simp [ReplacementContentFlow.Model.loadedResults] at member
   · intro value function args origin same
     cases control <;> cases same
 

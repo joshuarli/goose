@@ -64,8 +64,7 @@ theorem scalarOp_reference_free {env : TyEnv} {op : Op} {result : VTy}
 
 theorem ReplacementInstApart.scalar {module : GIR.Module} {types : Array (Option VTy)}
     {queries : ReplacementQueries} {owner value : ValueId} {op : Op} {result : VTy} {env : TyEnv}
-    (scalar : ScalarOp op) (typed : op.resultTy env = .ok result) (values : env.vals = types)
-    (recorded : types[value]? = some (some result)) :
+    (scalar : ScalarOp op) (typed : op.resultTy env = .ok result) (values : env.vals = types) :
     ReplacementInstApart module types queries owner (.def value op) := by
   have referenceFree := scalarOp_reference_free scalar typed
   constructor
@@ -76,12 +75,8 @@ theorem ReplacementInstApart.scalar {module : GIR.Module} {types : Array (Option
     rw [values] at absent
     simp only [reference] at absent
     contradiction
-  · intro resultValue operation same reference
-    obtain ⟨rfl, rfl⟩ := Inst.def.inj same
-    simp only [valRefLike, recorded, referenceFree.1] at reference
-    contradiction
-  · intro receiver accessed
-    cases scalar <;> cases accessed
+  · intro resultValue member reference
+    cases scalar <;> simp [ReplacementContentFlow.Model.loadedResults] at member
   · intro resultValue function args origin same
     cases scalar <;> cases same
 
@@ -89,26 +84,20 @@ theorem ReplacementInstApart.literal {module : GIR.Module} {types : Array (Optio
     {queries : ReplacementQueries} {owner value : ValueId} {ty : Ty} {operands : List ValueId}
     {result : VTy} {env : TyEnv}
     (typed : (Op.arrLit ty operands).resultTy env = .ok result) (values : env.vals = types)
-    (recorded : types[value]? = some (some result))
     (flat : ∀ element, arrayElem? ty = some element → element.flat = true) :
     ReplacementInstApart module types queries owner (.def value (.arrLit ty operands)) := by
   obtain ⟨element, shape, operandTypes, _, _, resultType⟩ := arrLit_metadata typed
   have elementNotRef : element.isRefLike = false := by
     have flatElement := flat element shape
     cases element <;> simp_all [Ty.flat, Ty.isRefLike]
-  have resultNotRef : ty.isRefLike = false := by
-    cases ty <;> simp_all [arrayElem?, Ty.isRefLike]
   constructor
   · intro operand member reference
     have operandMember : operand ∈ operands := member
     have row := operandTypes operand operandMember
     rw [values] at row
     simp [valRefLike, row, VTy.refLike, elementNotRef] at reference
-  · intro resultValue op same reference
-    obtain ⟨rfl, rfl⟩ := Inst.def.inj same
-    simp [valRefLike, recorded, resultType, VTy.refLike, resultNotRef] at reference
-  · intro receiver accessed
-    cases accessed
+  · intro resultValue member reference
+    simp [ReplacementContentFlow.Model.loadedResults] at member
   · intro resultValue fn args origin same
     cases same
 

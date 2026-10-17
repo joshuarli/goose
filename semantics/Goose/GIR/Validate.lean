@@ -882,20 +882,9 @@ def callDependencies (m : Module) (vt : Array (Option VTy)) (queries : Replaceme
     let touched ← callSummaryRoots m queries fn args
     pure (unionRoots roots (unionRoots actual touched))
 
-/-- Values evaluated as sources by an instruction. Mutation targets are handled
-separately, calls use their summary, and edge arguments only transport facts
-to block parameters. -/
 def emptyFactSourceOperands : Inst → List ValueId
-  | .def _ (.call ..) => []
-  | .def _ (.push _ value _) => [value]
-  | .def _ op => op.uses
-  | .eff (.slotInit _ value _) => [value]
-  | .eff (.store _ value _) | .eff (.append _ value _) | .eff (.replace _ value _) => [value]
-  | .eff (.popN _ count _) => [count]
-  | .eff (.resize _ size fill _) => size :: fill.toList
-  | .eff (.print parts _) => parts.flatMap PrintPart.uses
-  | .eff (.clear ..) | .eff (.enter ..) | .eff (.leave ..) => []
-  | .term _ => []
+  | .eff (.clear ..) => []
+  | inst => ReplacementContentFlow.Model.accessOperands inst
 
 def killEmptyFactSources (facts : List ValueId) (operands : List ValueId)
     (vt : Array (Option VTy)) (p : ReplacementQueries) : List ValueId :=
@@ -905,23 +894,12 @@ def killEmptyFactSources (facts : List ValueId) (operands : List ValueId)
 
 def transferEmptyInst (m : Module) (vt : Array (Option VTy)) (p : ReplacementQueries)
     (facts : List ValueId) (inst : Inst) : List ValueId := Id.run do
-  let afterReceiver := match inst with
+  let afterCall := match inst with
     | .eff (.clear r _) => if facts.contains r then facts else facts ++ [r]
-    | .def _ (.call fn args _) =>
-      killEmptyFacts facts (callDependencies m vt p fn args) p
-    | .def _ (.load r) | .def _ (.snapshot _ r) | .def _ (.arrayLen r)
-    | .def _ (.sliceView r) | .def _ (.viewLen r) | .def _ (.viewSlice _ r ..)
-    | .def _ (.indexChecked r ..) | .def _ (.indexProven r ..)
-    | .def _ (.push r ..) | .def _ (.pop r ..)
-    | .eff (.store r ..) | .eff (.append r ..) | .eff (.popN r ..)
-    | .eff (.resize r ..) | .eff (.replace r ..) => killEmptyFacts facts (p.value r) p
+    | .def _ (.call fn args _) => killEmptyFacts facts (callDependencies m vt p fn args) p
     | _ => facts
-  let afterSources := killEmptyFactSources afterReceiver (emptyFactSourceOperands inst) vt p
-  match inst with
-  | .def res _ =>
-    if valRefLike vt res then pure (killEmptyFacts afterSources (p.value res) p)
-    else pure afterSources
-  | _ => pure afterSources
+  let afterSources := killEmptyFactSources afterCall (emptyFactSourceOperands inst) vt p
+  return killEmptyFactSources afterSources (ReplacementContentFlow.Model.loadedResults inst) vt p
 
 def transferEmptyBlock (m : Module) (vt : Array (Option VTy)) (p : ReplacementQueries)
     (facts : List ValueId) (b : Block) : List ValueId :=
