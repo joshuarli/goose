@@ -78,4 +78,54 @@ private def loopWithReturn : GIR.Func :=
 #guard !(GIR.funcMayReturn #[] duplicatedTarget)
 #guard GIR.funcMayReturn #[] loopWithReturn
 
+private def recursiveStop : Core.Impl :=
+  { stoppedCaller with body := .mk 0 [.expr (.call 0 [] 0) 0, .abort "stop" 0] none }
+
+private def recursiveStopModule : Core.Module :=
+  { stoppedModule with impls := #[recursiveStop], contexts := #[⟨0, "main", [], [], []⟩] }
+
+private def firstMutualStop : Core.Impl :=
+  { recursiveStop with name := "first", body := .mk 0 [.expr (.call 1 [] 0) 0, .abort "stop" 0] none }
+
+private def secondMutualStop : Core.Impl :=
+  { recursiveStop with name := "second" }
+
+private def mutualStopModule : Core.Module :=
+  { stoppedModule with
+    impls := #[firstMutualStop, secondMutualStop]
+    contexts := #[⟨0, "first", [], [], []⟩, ⟨1, "second", [], [], []⟩] }
+
+#guard (Core.validate recursiveStopModule).toBool
+#guard recursiveStopModule.noReturn 0
+#guard (Lower.lower recursiveStopModule).functionsMayReturn == #[false]
+#guard (GIR.validate (Lower.lower recursiveStopModule)).toBool
+#guard (Core.validate mutualStopModule).toBool
+#guard mutualStopModule.noReturn 0 && mutualStopModule.noReturn 1
+#guard (Lower.lower mutualStopModule).functionsMayReturn == #[false, false]
+#guard (GIR.validate (Lower.lower mutualStopModule)).toBool
+
+private def recursiveBaseCase : GIR.Func :=
+  { returning with
+    name := "recursive-base-case"
+    blocks := #[⟨[], [.def 0 (.constBool true), .term (.condbr 0 1 [] 2 [])]⟩,
+      ⟨[], [.term (.ret [] none)]⟩, ⟨[], [.def 1 (.call 0 [] none), .term .unreachable]⟩] }
+
+private def recursiveBaseCaseModule : GIR.Module :=
+  { Lower.lower stoppedModule with funcs := #[recursiveBaseCase] }
+
+private def bareUnreachable : GIR.Func :=
+  { returning with name := "bare-unreachable", blocks := #[⟨[], [.term .unreachable]⟩] }
+
+private def unknownCallee : GIR.Func :=
+  { returning with name := "unknown-callee", blocks := #[⟨[], [.def 0 (.call 7 [] none), .term .unreachable]⟩] }
+
+#guard GIR.funcMayReturn #[false] recursiveBaseCase
+#guard recursiveBaseCaseModule.functionsMayReturn == #[true]
+#guard !(GIR.checkUnreachableOf recursiveBaseCaseModule.functionsMayReturn "base" recursiveBaseCase).toBool
+#guard !(GIR.validate recursiveBaseCaseModule).toBool
+#guard GIR.funcMayReturn #[] bareUnreachable
+#guard !(GIR.checkUnreachableOf #[true] "bare" bareUnreachable).toBool
+#guard GIR.funcMayReturn #[] unknownCallee
+#guard !(GIR.checkUnreachableOf #[] "unknown" unknownCallee).toBool
+
 end Goose.Lower.Validation.CfgChecks
