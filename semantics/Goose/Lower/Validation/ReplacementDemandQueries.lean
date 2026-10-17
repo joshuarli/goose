@@ -8,6 +8,33 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR SummaryPreservation
 
+theorem ReplacementRootsWithin.expanded_mono {query : ReplacementRootQuery}
+    {actual expected : List RootRef} {func : Func}
+    (known : ReplacementRootsWithin query (actual.flatMap func.expandParameterRoot))
+    (included : Core.Sound.RootsIncluded actual expected) :
+    ReplacementRootsWithin query (expected.flatMap func.expandParameterRoot) := by
+  obtain ⟨roots, equality, upper⟩ := known
+  refine ⟨roots, equality, ?_⟩
+  intro root member
+  obtain ⟨source, sourceAt, expandedAt⟩ := List.mem_flatMap.mp (upper member)
+  exact List.mem_flatMap.mpr ⟨source, included source sourceAt, expandedAt⟩
+
+theorem ReplacementRootsWithin.access_place {query : ReplacementRootQuery} {func : Func}
+    {env : PEnv} {place : Place} {before after : RState} {actual roots : List RootRef}
+    (known : ReplacementRootsWithin query (actual.flatMap func.expandParameterRoot))
+    (replayed : rpPlace env place before = .ok (actual, after))
+    (access : env.access.placeRoots place = .ok roots) :
+    ReplacementRootsWithin query (roots.flatMap func.expandParameterRoot) :=
+  known.expanded_mono (Core.Sound.rpPlace_accessRoots env place before actual after roots replayed access)
+
+theorem ReplacementRootsWithin.access_expr {query : ReplacementRootQuery} {func : Func}
+    {env : PEnv} {expr : Expr} {before after : RState} {actual roots : List RootRef}
+    (known : ReplacementRootsWithin query (actual.flatMap func.expandParameterRoot))
+    (replayed : rpExpr env expr before = .ok (actual, after))
+    (access : env.access.exprRoots expr = .ok roots) :
+    ReplacementRootsWithin query (roots.flatMap func.expandParameterRoot) :=
+  known.expanded_mono (Core.Sound.rpExpr_accessRoots env expr before actual after roots replayed access)
+
 theorem replacementApart_of_expanded_source {func : Func}
     {queries : ReplacementQueries} {owner : ValueId} {query : ReplacementRootQuery}
     {ownerRoots sourceRoots : List RootRef} (closed : ParameterRootsClosed func)
@@ -139,6 +166,8 @@ theorem ReplacementDemandContext.descendant_read_load_apart {module : Core.Modul
     cases same
 
 #print axioms replacementApart_of_expanded_source
+#print axioms ReplacementRootsWithin.access_place
+#print axioms ReplacementRootsWithin.access_expr
 #print axioms ReplacementDemandContext.descendant_read_query_apart
 #print axioms ReplacementDemandContext.descendant_place_query_apart
 #print axioms ReplacementDemandContext.descendant_call_query_apart
