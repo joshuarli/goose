@@ -56,6 +56,12 @@ inductive ListMapMLoopJumped (action : α → EvalM β) :
 def SourcePrefix (visited inputs : List α) : Prop :=
   ∃ suffix, inputs = visited ++ suffix
 
+theorem sourcePrefix_length_le {visited inputs : List α}
+    (sourcePrefix : SourcePrefix visited inputs) : visited.length ≤ inputs.length := by
+  obtain ⟨suffix, equality⟩ := sourcePrefix
+  rw [equality]
+  simp
+
 theorem listMapMLoop_success_trace (action : α → EvalM β) (inputs : List α)
     (accumulator : List β) (initial : ExecutionState) (values : List β) (final : ExecutionState)
     (result : List.mapM.loop action inputs accumulator initial = .ok values final) :
@@ -108,6 +114,77 @@ private theorem listForInUnit_success_trace (action : α → EvalM Unit) (inputs
       | escape address carriers middle => simp only [bind, head] at result; cases result
       | jump target kind middle => simp only [bind, head] at result; cases result
 
+private theorem listForInUnit_stopped_trace (action : α → EvalM Unit) (inputs : List α)
+    (accumulator : List Unit) (initial : ExecutionState) (reason : Goose.Core.Stop)
+    (final : ExecutionState)
+    (result : listForInUnit action inputs initial = .stop reason final) :
+    ∃ visited, ListMapMLoopStopped action inputs accumulator initial reason final visited := by
+  induction inputs generalizing accumulator initial reason final with
+  | nil =>
+      simp only [listForInUnit, List.forIn_nil, pure] at result
+      cases result
+  | cons input inputs ih =>
+      simp only [listForInUnit, List.forIn_cons] at result
+      cases head : action input initial with
+      | ok value middle =>
+          simp only [bind, head, pure] at result
+          obtain ⟨visited, tail⟩ := ih (value :: accumulator) middle reason final result
+          exact ⟨input :: visited, .afterHead head tail⟩
+      | stop stopped final' =>
+          simp only [bind, head] at result
+          cases result
+          exact ⟨[input], .atHead (rest := inputs) (accumulator := accumulator) head⟩
+      | escape address carriers middle => simp only [bind, head] at result; cases result
+      | jump target kind middle => simp only [bind, head] at result; cases result
+
+private theorem listForInUnit_escaped_trace (action : α → EvalM Unit) (inputs : List α)
+    (accumulator : List Unit) (initial : ExecutionState) (address : ExitAddress)
+    (carriers : List Carrier) (final : ExecutionState)
+    (result : listForInUnit action inputs initial = .escape address carriers final) :
+    ∃ visited,
+      ListMapMLoopEscaped action inputs accumulator initial address carriers final visited := by
+  induction inputs generalizing accumulator initial address carriers final with
+  | nil =>
+      simp only [listForInUnit, List.forIn_nil, pure] at result
+      cases result
+  | cons input inputs ih =>
+      simp only [listForInUnit, List.forIn_cons] at result
+      cases head : action input initial with
+      | ok value middle =>
+          simp only [bind, head, pure] at result
+          obtain ⟨visited, tail⟩ := ih (value :: accumulator) middle address carriers final result
+          exact ⟨input :: visited, .afterHead head tail⟩
+      | stop reason middle => simp only [bind, head] at result; cases result
+      | escape escapedAddress escapedCarriers final' =>
+          simp only [bind, head] at result
+          cases result
+          exact ⟨[input], .atHead (rest := inputs) (accumulator := accumulator) head⟩
+      | jump target kind middle => simp only [bind, head] at result; cases result
+
+private theorem listForInUnit_jumped_trace (action : α → EvalM Unit) (inputs : List α)
+    (accumulator : List Unit) (initial : ExecutionState) (target : Nat) (kind : JumpKind)
+    (final : ExecutionState)
+    (result : listForInUnit action inputs initial = .jump target kind final) :
+    ∃ visited,
+      ListMapMLoopJumped action inputs accumulator initial target kind final visited := by
+  induction inputs generalizing accumulator initial target kind final with
+  | nil =>
+      simp only [listForInUnit, List.forIn_nil, pure] at result
+      cases result
+  | cons input inputs ih =>
+      simp only [listForInUnit, List.forIn_cons] at result
+      cases head : action input initial with
+      | ok value middle =>
+          simp only [bind, head, pure] at result
+          obtain ⟨visited, tail⟩ := ih (value :: accumulator) middle target kind final result
+          exact ⟨input :: visited, .afterHead head tail⟩
+      | stop reason middle => simp only [bind, head] at result; cases result
+      | escape address carriers middle => simp only [bind, head] at result; cases result
+      | jump jumpedTarget jumpedKind final' =>
+          simp only [bind, head] at result
+          cases result
+          exact ⟨[input], .atHead (rest := inputs) (accumulator := accumulator) head⟩
+
 private theorem protectDestination_success (origin : Goose.Core.OriginId)
     (destination : Goose.Core.DestinationId) (action : EvalM α)
     (initial : ExecutionState) (value : α) (final : ExecutionState)
@@ -122,6 +199,236 @@ private theorem protectDestination_success (origin : Goose.Core.OriginId)
   | jump target kind state =>
       simp only [protectDestination, actionResult] at result
       split at result <;> cases result
+
+inductive ArrayLiteralOperandTraversal (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (ty : Ty)
+    (operands : List Expr) (origin : Goose.Core.OriginId) (initial : ExecutionState) : Prop
+  | beforeStop {reason : Goose.Core.Stop} {final : ExecutionState}
+      (destinationResult : getDestination destination initial = .stop reason final) :
+      ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial
+  | beforeEscape {address : ExitAddress} {carriers : List Carrier} {final : ExecutionState}
+      (destinationResult : getDestination destination initial = .escape address carriers final) :
+      ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial
+  | beforeJump {target : Nat} {kind : JumpKind} {final : ExecutionState}
+      (destinationResult : getDestination destination initial = .jump target kind final) :
+      ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial
+  | invalidElement {pending : PendingDestination} {before : ExecutionState}
+      (destinationResult : getDestination destination initial = .ok pending before)
+      (elementResult : elementType pending.capability.logicalType = none) :
+      ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial
+  | loopComplete {pending : PendingDestination} {before : ExecutionState} {element : Ty}
+      {values : List Unit} {after : ExecutionState}
+      (destinationResult : getDestination destination initial = .ok pending before)
+      (elementResult : elementType pending.capability.logicalType = some element)
+      (loopResult : listForInUnit
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands before = .ok PUnit.unit after)
+      (trace : ListMapMLoopSuccess
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands [] before values after) :
+      ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial
+  | loopStopped {pending : PendingDestination} {before : ExecutionState} {element : Ty}
+      {reason : Goose.Core.Stop} {final : ExecutionState} {visited : List Expr}
+      (destinationResult : getDestination destination initial = .ok pending before)
+      (elementResult : elementType pending.capability.logicalType = some element)
+      (loopResult : listForInUnit
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands before = .stop reason final)
+      (trace : ListMapMLoopStopped
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands [] before reason final visited) :
+      ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial
+  | loopEscaped {pending : PendingDestination} {before : ExecutionState} {element : Ty}
+      {address : ExitAddress} {carriers : List Carrier} {final : ExecutionState}
+      {visited : List Expr}
+      (destinationResult : getDestination destination initial = .ok pending before)
+      (elementResult : elementType pending.capability.logicalType = some element)
+      (loopResult : listForInUnit
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands before = .escape address carriers final)
+      (trace : ListMapMLoopEscaped
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands [] before address carriers final visited) :
+      ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial
+  | loopJumped {pending : PendingDestination} {before : ExecutionState} {element : Ty}
+      {target : Nat} {kind : JumpKind} {final : ExecutionState} {visited : List Expr}
+      (destinationResult : getDestination destination initial = .ok pending before)
+      (elementResult : elementType pending.capability.logicalType = some element)
+      (loopResult : listForInUnit
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands before = .jump target kind final)
+      (trace : ListMapMLoopJumped
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands [] before target kind final visited) :
+      ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial
+
+private theorem buildExpr_arrayLiteral_body_operand_traversal (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (ty : Ty)
+    (operands : List Expr) (origin : Goose.Core.OriginId) (initial : ExecutionState)
+    (outcome : ExecutionStep Unit)
+    (result : (do
+      let pending ← getDestination destination
+      let some element := elementType pending.capability.logicalType | fault .shape
+      for operand in operands do
+        buildElement fuel config environment destination element operand
+      liftConstruction origin (finishDestination destination)) initial = outcome) :
+    ArrayLiteralOperandTraversal fuel config environment destination ty operands origin initial := by
+  cases destinationResult : getDestination destination initial with
+  | ok pending before =>
+      simp only [bind, destinationResult] at result
+      cases elementResult : elementType pending.capability.logicalType with
+      | none =>
+          simp only [elementResult, fault, EvalM.stop] at result
+          exact .invalidElement destinationResult elementResult
+      | some element =>
+          simp only [elementResult] at result
+          split at result
+          case h_1 _ value after loopResult =>
+            have loopSuccess : listForInUnit
+                (fun operand => buildElement fuel config environment destination element operand)
+                operands before = .ok PUnit.unit after := loopResult
+            obtain ⟨values, trace⟩ := listForInUnit_success_trace
+              (fun operand => buildElement fuel config environment destination element operand)
+              operands [] before after loopSuccess
+            exact .loopComplete destinationResult elementResult loopSuccess trace
+          case h_2 _ reason after loopResult =>
+            have loopStopped : listForInUnit
+                (fun operand => buildElement fuel config environment destination element operand)
+                operands before = .stop reason after := loopResult
+            obtain ⟨visited, trace⟩ := listForInUnit_stopped_trace
+              (fun operand => buildElement fuel config environment destination element operand)
+              operands [] before reason after loopStopped
+            exact .loopStopped destinationResult elementResult loopStopped trace
+          case h_3 _ address carriers after loopResult =>
+            have loopEscaped : listForInUnit
+                (fun operand => buildElement fuel config environment destination element operand)
+                operands before = .escape address carriers after := loopResult
+            obtain ⟨visited, trace⟩ := listForInUnit_escaped_trace
+              (fun operand => buildElement fuel config environment destination element operand)
+              operands [] before address carriers after loopEscaped
+            exact .loopEscaped destinationResult elementResult loopEscaped trace
+          case h_4 _ target kind after loopResult =>
+            have loopJumped : listForInUnit
+                (fun operand => buildElement fuel config environment destination element operand)
+                operands before = .jump target kind after := loopResult
+            obtain ⟨visited, trace⟩ := listForInUnit_jumped_trace
+              (fun operand => buildElement fuel config environment destination element operand)
+              operands [] before target kind after loopJumped
+            exact .loopJumped destinationResult elementResult loopJumped trace
+  | stop reason before =>
+      exact .beforeStop destinationResult
+  | escape address carriers before =>
+      exact .beforeEscape destinationResult
+  | jump target kind before =>
+      exact .beforeJump destinationResult
+
+inductive BuildExprArrayLiteralTraversal (config : EvalConfig) (environment : RuntimeActivation)
+    (destination : Goose.Core.DestinationId) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (initial : ExecutionState) : Nat → Prop
+  | timeout : BuildExprArrayLiteralTraversal config environment destination ty operands origin
+      initial 0
+  | entered {elementFuel : Nat}
+      (traversal : ArrayLiteralOperandTraversal elementFuel config environment destination ty
+        operands origin initial) :
+      BuildExprArrayLiteralTraversal config environment destination ty operands origin initial
+        (elementFuel + 1)
+
+theorem buildExpr_arrayLiteral_operand_traversal (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (ty : Ty)
+    (operands : List Expr) (origin : Goose.Core.OriginId) (initial : ExecutionState)
+    (outcome : ExecutionStep Unit)
+    (result : buildExpr fuel config environment destination (.arrLit ty operands origin) initial =
+      outcome) :
+    BuildExprArrayLiteralTraversal config environment destination ty operands origin initial fuel := by
+  cases fuel with
+  | zero => exact .timeout
+  | succ elementFuel =>
+      simp only [buildExpr, expressionOrigin] at result
+      cases bodyResult : (do
+          let pending ← getDestination destination
+          let some element := elementType pending.capability.logicalType | fault .shape
+          for operand in operands do
+            buildElement elementFuel config environment destination element operand
+          liftConstruction origin (finishDestination destination)) initial with
+      | ok _ after =>
+          exact .entered (buildExpr_arrayLiteral_body_operand_traversal elementFuel config
+            environment destination ty operands origin initial (.ok () after) bodyResult)
+      | stop reason after =>
+          exact .entered (buildExpr_arrayLiteral_body_operand_traversal elementFuel config
+            environment destination ty operands origin initial (.stop reason after) bodyResult)
+      | escape address carriers after =>
+          exact .entered (buildExpr_arrayLiteral_body_operand_traversal elementFuel config
+            environment destination ty operands origin initial (.escape address carriers after)
+            bodyResult)
+      | jump target kind after =>
+          exact .entered (buildExpr_arrayLiteral_body_operand_traversal elementFuel config
+            environment destination ty operands origin initial (.jump target kind after) bodyResult)
+
+inductive NonfixedArrayEvalTraversal (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (initial : ExecutionState) : Prop
+  | allocationStop {outcome : ExecutionStep Value} (nonfixed : ty.nonfixed = true)
+      (evaluation : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+        outcome) {reason : Goose.Core.Stop} {final : ExecutionState}
+      (allocation : newDestination (LayoutEnv.ofModule config.module) environment.act ty .value origin
+        none (producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands origin)) initial =
+        .stop reason final) :
+      NonfixedArrayEvalTraversal fuel config environment ty operands origin initial
+  | allocationEscape {outcome : ExecutionStep Value} (nonfixed : ty.nonfixed = true)
+      (evaluation : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+        outcome) {address : ExitAddress} {carriers : List Carrier} {final : ExecutionState}
+      (allocation : newDestination (LayoutEnv.ofModule config.module) environment.act ty .value origin
+        none (producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands origin)) initial =
+        .escape address carriers final) :
+      NonfixedArrayEvalTraversal fuel config environment ty operands origin initial
+  | allocationJump {outcome : ExecutionStep Value} (nonfixed : ty.nonfixed = true)
+      (evaluation : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+        outcome) {target : Nat} {kind : JumpKind} {final : ExecutionState}
+      (allocation : newDestination (LayoutEnv.ofModule config.module) environment.act ty .value origin
+        none (producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands origin)) initial =
+        .jump target kind final) :
+      NonfixedArrayEvalTraversal fuel config environment ty operands origin initial
+  | allocated {outcome : ExecutionStep Value} (nonfixed : ty.nonfixed = true)
+      (evaluation : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+        outcome) {destination : Goose.Core.DestinationId} {opened : ExecutionState}
+      (allocation : newDestination (LayoutEnv.ofModule config.module) environment.act ty .value origin
+        none (producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands origin)) initial =
+        .ok destination opened)
+      (builder : BuildExprArrayLiteralTraversal config environment destination ty operands origin
+        opened fuel) :
+      NonfixedArrayEvalTraversal fuel config environment ty operands origin initial
+
+theorem evalValue_nonfixedArray_operand_traversal (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (initial : ExecutionState) (outcome : ExecutionStep Value)
+    (nonfixed : ty.nonfixed = true)
+    (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial = outcome) :
+    NonfixedArrayEvalTraversal fuel config environment ty operands origin initial := by
+  have evaluation : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+      outcome := result
+  simp only [evalValue] at result
+  simp [nonfixed] at result
+  simp only [constructLocal] at result
+  cases allocation : newDestination (LayoutEnv.ofModule config.module) environment.act ty .value origin
+      none (producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands origin)) initial with
+  | ok destination opened =>
+      simp only [bind, allocation] at result
+      cases built : buildExpr fuel config environment destination (.arrLit ty operands origin) opened with
+      | ok _ after =>
+          exact .allocated nonfixed evaluation allocation (buildExpr_arrayLiteral_operand_traversal fuel config
+            environment destination ty operands origin opened (.ok () after) built)
+      | stop reason after =>
+          exact .allocated nonfixed evaluation allocation (buildExpr_arrayLiteral_operand_traversal fuel config
+            environment destination ty operands origin opened (.stop reason after) built)
+      | escape address carriers after =>
+          exact .allocated nonfixed evaluation allocation (buildExpr_arrayLiteral_operand_traversal fuel config
+            environment destination ty operands origin opened (.escape address carriers after) built)
+      | jump target kind after =>
+          exact .allocated nonfixed evaluation allocation (buildExpr_arrayLiteral_operand_traversal fuel config
+            environment destination ty operands origin opened (.jump target kind after) built)
+  | stop reason after => exact .allocationStop nonfixed evaluation allocation
+  | escape address carriers after => exact .allocationEscape nonfixed evaluation allocation
+  | jump target kind after => exact .allocationJump nonfixed evaluation allocation
 
 theorem listMapMLoop_success_length (action : α → EvalM β) {inputs : List α}
     {accumulator : List β} {initial : ExecutionState} {values : List β} {final : ExecutionState}
@@ -340,6 +647,49 @@ theorem sourcePrefix_of_jumped {action : α → EvalM β} {inputs : List α}
   | @afterHead item rest visited accumulator initial middle final value target kind head tail ih =>
       obtain ⟨suffix, suffixEq⟩ := ih
       exact ⟨suffix, by simp [suffixEq]⟩
+
+theorem arrayLiteralOperandTraversal_prefix {fuel : Nat} {config : EvalConfig}
+    {environment : RuntimeActivation} {destination : Goose.Core.DestinationId} {ty : Ty}
+    {operands : List Expr} {origin : Goose.Core.OriginId} {initial : ExecutionState}
+    (traversal : ArrayLiteralOperandTraversal fuel config environment destination ty operands origin
+      initial) :
+    ∃ visited, SourcePrefix visited operands ∧ visited.length ≤ operands.length := by
+  cases traversal with
+  | beforeStop _ | beforeEscape _ | beforeJump _ | invalidElement _ _ =>
+      exact ⟨[], ⟨operands, by simp⟩, by simp⟩
+  | loopComplete destinationResult elementResult loopResult trace =>
+      exact ⟨operands, ⟨[], by simp⟩, Nat.le_refl _⟩
+  | loopStopped destinationResult elementResult loopResult trace =>
+      exact ⟨_, sourcePrefix_of_stopped trace, sourcePrefix_length_le (sourcePrefix_of_stopped trace)⟩
+  | loopEscaped destinationResult elementResult loopResult trace =>
+      exact ⟨_, sourcePrefix_of_escaped trace, sourcePrefix_length_le (sourcePrefix_of_escaped trace)⟩
+  | loopJumped destinationResult elementResult loopResult trace =>
+      exact ⟨_, sourcePrefix_of_jumped trace, sourcePrefix_length_le (sourcePrefix_of_jumped trace)⟩
+
+theorem buildExprArrayLiteralTraversal_prefix {fuel : Nat} {config : EvalConfig}
+    {environment : RuntimeActivation} {destination : Goose.Core.DestinationId} {ty : Ty}
+    {operands : List Expr} {origin : Goose.Core.OriginId} {initial : ExecutionState}
+    (traversal : BuildExprArrayLiteralTraversal config environment destination ty operands origin
+      initial fuel) :
+    ∃ visited, SourcePrefix visited operands ∧ visited.length ≤ operands.length := by
+  cases traversal with
+  | timeout => exact ⟨[], ⟨operands, by simp⟩, by simp⟩
+  | entered traversal => exact arrayLiteralOperandTraversal_prefix traversal
+
+theorem nonfixedArrayEvalTraversal_prefix {fuel : Nat} {config : EvalConfig}
+    {environment : RuntimeActivation} {ty : Ty} {operands : List Expr}
+    {origin : Goose.Core.OriginId} {initial : ExecutionState}
+    (traversal : NonfixedArrayEvalTraversal fuel config environment ty operands origin initial) :
+    ∃ visited, SourcePrefix visited operands ∧ visited.length ≤ operands.length := by
+  cases traversal with
+  | allocationStop nonfixed evaluation allocation =>
+      exact ⟨[], ⟨operands, by simp⟩, by simp⟩
+  | allocationEscape nonfixed evaluation allocation =>
+      exact ⟨[], ⟨operands, by simp⟩, by simp⟩
+  | allocationJump nonfixed evaluation allocation =>
+      exact ⟨[], ⟨operands, by simp⟩, by simp⟩
+  | allocated nonfixed evaluation allocation builder =>
+      exact buildExprArrayLiteralTraversal_prefix builder
 
 theorem listMapM_jumped_source_prefix (action : α → EvalM β) (inputs : List α)
     (initial final : ExecutionState) (target : Nat) (kind : JumpKind)
