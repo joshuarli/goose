@@ -47,4 +47,66 @@ theorem futureLiteralValue_arrLit {env : LEnv} {before captured : LS}
       live generated extension blocks dense runType
     exact rows body bodyMember value ty values definition runType
 
+theorem futureLiteralValue_joinAt {env : LEnv} {before current captured : LS}
+    {pending : List (BlockId × ValueId)} {value : ValueId}
+    (run : (do
+      let ty ← valTy (pending.headD (0, 0)).2
+      let (join, params) ← newBlock [ty]
+      patchBrs join pending
+      setCur (some join)
+      pure (params.headD 0)) env current = (value, captured))
+    (bounded : TargetsBounded current) (pendingNonempty : pending ≠ [])
+    (pendingBounds : ∀ item ∈ pending, item.1 < current.blocks.size)
+    (startExtension : before.Ext current)
+    (inputs : ∀ item ∈ pending, FutureLiteralValue before captured item.2) :
+    FutureLiteralValue before captured value := by
+  intro loop after func types frames framed extension closed blocks dense rows
+  simp only [bind_eq] at run
+  obtain ⟨ty, typedState, typeRun, ⟨join, params⟩, allocated, allocation,
+    _, patched, patch, _, resumed, resume, final⟩ := run
+  have typedSame : typedState = current := by
+    have same := valTy_run (pending.headD (0, 0)).2 env current
+    rw [typeRun] at same
+    exact same
+  subst typedState
+  have shape := allocation
+  rw [newBlock1_run] at shape
+  obtain ⟨pair, state⟩ := Prod.mk.inj shape
+  obtain ⟨joinEq, paramsEq⟩ := Prod.mk.inj pair
+  subst join
+  subst params
+  rw [setCur_run] at resume
+  obtain ⟨_, rfl⟩ := Prod.mk.inj resume
+  obtain ⟨rfl, rfl⟩ := pure_eq.mp final
+  apply freshLiteralValue_joinAt allocation patch bounded pendingNonempty pendingBounds
+    (frames.mono startExtension) framed extension closed blocks
+  intro item member
+  exact inputs item member loop after func types frames framed extension closed blocks dense rows
+
+theorem futureLiteralValue_joinValue {env : LEnv} {before current captured : LS}
+    {yes no : Option BlockId} {yesValue noValue value : ValueId}
+    (run : joinValue yes yesValue no noValue env current = (value, captured))
+    (live : captured.cur.isSome = true) (bounded : TargetsBounded current)
+    (yesBound : ∀ block, yes = some block → block < current.blocks.size)
+    (noBound : ∀ block, no = some block → block < current.blocks.size)
+    (startExtension : before.Ext current)
+    (yesFresh : yes.isSome = true → FutureLiteralValue before captured yesValue)
+    (noFresh : no.isSome = true → FutureLiteralValue before captured noValue) :
+    FutureLiteralValue before captured value := by
+  unfold joinValue at run
+  cases yes <;> cases no
+  · obtain ⟨_, middle, change, final⟩ := bind_eq.mp run
+    rw [setCur_run] at change
+    obtain ⟨_, rfl⟩ := Prod.mk.inj change
+    obtain ⟨_, rfl⟩ := pure_eq.mp final
+    simp at live
+  all_goals
+    refine futureLiteralValue_joinAt run bounded (by simp) ?_ startExtension ?_
+    · intro item member
+      simp at member
+      rcases member with rfl | rfl <;> first | exact yesBound _ rfl | exact noBound _ rfl
+    · intro item member
+      simp at member
+      rcases member with rfl | rfl <;> first | exact yesFresh rfl | exact noFresh rfl
+
 end Goose.Lower.Validation
