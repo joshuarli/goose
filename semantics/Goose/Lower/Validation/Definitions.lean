@@ -229,6 +229,12 @@ theorem definitions_freezeTo (m : Mutability) (r : ValueId) : DefinitionRun (fre
     | exact DefinitionRun.pure _
     | (rename_i t; cases t <;> first | exact DefinitionRun.pure _ | (rename_i m' _; cases m' <;> first | exact DefinitionRun.pure _ | exact definitions_emitDef _))
 
+theorem definitions_borrowTo (m : Mutability) (r : ValueId) : DefinitionRun (borrowTo m r) := by
+  intro le before result after run
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact definitions_freezeTo m r le before result after frozen
+  · exact definitions_emitDef _ le before result after borrowed
+
 theorem definitions_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : DefinitionRun (coerceTo target r org) := by
   unfold coerceTo
   refine DefinitionRun.bind (definitions_valTy r) fun source => ?_
@@ -291,7 +297,7 @@ theorem definitions_eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) :
     | some lv =>
       dsimp only
       cases lv.ty with
-      | ref m t => exact definitions_freezeTo m elem
+      | ref m t => exact definitions_borrowTo m elem
       | _ => exact DefinitionRun.pure _
 
 theorem definitions_regrowOf (o : Option ValueId) : DefinitionRun (regrowOf o) := by
@@ -486,7 +492,7 @@ theorem definitions_lowerExpr : ∀ e : Expr, DefinitionRun (lowerExpr e)
     exact DefinitionRun.bind (definitions_lowerPlace p) fun _ => definitions_emitDef _
   | .ref m p => by
     simp only [lowerExpr]
-    exact DefinitionRun.bind (definitions_lowerPlace p) fun r => definitions_freezeTo m r
+    exact DefinitionRun.bind (definitions_lowerPlace p) fun r => definitions_borrowTo m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact DefinitionRun.bind (definitions_lowerView v) fun _ => DefinitionRun.bind (definitions_lowerBound lo) fun _ =>
@@ -557,7 +563,7 @@ theorem definitions_lowerArg : ∀ a : Arg, DefinitionRun (lowerArg a)
   | .byVal e => by simp only [lowerArg]; exact definitions_lowerExpr e
   | .byRef m p => by
     simp only [lowerArg]
-    exact DefinitionRun.bind (definitions_lowerPlace p) fun r => definitions_freezeTo m r
+    exact DefinitionRun.bind (definitions_lowerPlace p) fun r => definitions_borrowTo m r
 
 theorem definitions_lowerArgs : ∀ as : List Arg, DefinitionRun (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact DefinitionRun.pure _
