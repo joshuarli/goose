@@ -165,6 +165,13 @@ theorem TermEdgesFramed.refl (loop : Option LoopCtx) (state : LS) :
   intro source body term target row member successor targetBound
   exact Or.inl ⟨body, row, member⟩
 
+theorem TermEdgesFramed.of_blocks {loop : Option LoopCtx} {base before after : LS}
+    (framed : TermEdgesFramed loop base before) (same : after.blocks = before.blocks) :
+    TermEdgesFramed loop base after := by
+  intro source body term target row member successor targetBound
+  rw [same] at row
+  exact framed source body term target row member successor targetBound
+
 theorem TermEdgesFramed.weakenLoop {inner outer : Option LoopCtx} {base state : LS}
     (framed : TermEdgesFramed inner base state)
     (fresh : ∀ target, LoopBuilderFrameTarget inner target → base.blocks.size ≤ target) :
@@ -234,6 +241,46 @@ theorem TermEdgesFramed.emitTermAt {loop : Option LoopCtx} {base current after :
           exact Or.inr (targets target successor targetBound)
       · simp only [same, ite_false] at row
         exact Or.inl ⟨body, row, member⟩
+
+theorem TermEdgesFramed.patchTermAt {loop : Option LoopCtx} {base current after : LS}
+    {env : LEnv} {result : Unit} {block : BlockId} {term : Term}
+    (oldFrames : TermEdgesFramed loop base current)
+    (run : patchTerm block term env current = (result, after))
+    (targets : ∀ target, target ∈ term.successors → target < base.blocks.size →
+      LoopBuilderFrameTarget loop target) : TermEdgesFramed loop base after := by
+  have afterEq : after = (patchTerm block term env current).2 := (congrArg Prod.snd run).symm
+  rw [patchTerm_run] at afterEq
+  apply TermEdgesFramed.extend oldFrames
+  intro source body emitted target row member successor targetBound
+  rw [afterEq] at row
+  rw [Array.getElem?_modify] at row
+  by_cases same : block = source
+  · subst source
+    simp only [↓reduceIte, Option.map_eq_some_iff] at row
+    obtain ⟨old, oldAt, rfl⟩ := row
+    rcases List.mem_append.mp (by simpa only [Array.toList_push] using member) with oldMember | addedMember
+    · exact Or.inl ⟨old, oldAt, oldMember⟩
+    · simp at addedMember
+      subst emitted
+      exact Or.inr (targets target successor targetBound)
+  · simp only [same, ite_false] at row
+    exact Or.inl ⟨body, row, member⟩
+
+theorem patchTerm_ext {state : LS} {block : BlockId} {term : Term}
+    {env : LEnv} {result : Unit} {after : LS}
+    (run : patchTerm block term env state = (result, after)) : state.Ext after := by
+  rw [patchTerm_run] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  refine ⟨by simp, fun index old oldAt => ?_⟩
+  by_cases same : block = index
+  · subst index
+    refine ⟨{ old with insts := old.insts.push (.term term) }, ?_, rfl,
+      [Inst.term term], ?_⟩
+    · rw [Array.getElem?_modify]
+      simp [oldAt]
+    · simp [Array.toList_push, List.append_assoc]
+  · rw [Array.getElem?_modify]
+    simp [same, oldAt]
 
 theorem GeneratedTargetFrameRun.bind {loop : Option LoopCtx} {first : B α} {next : α → B β}
     (one : GeneratedTargetFrameRun loop first)
