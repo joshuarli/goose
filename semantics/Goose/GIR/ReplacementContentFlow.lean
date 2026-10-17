@@ -230,8 +230,9 @@ private def checkWrites (f : Func) (state : State) : Bool :=
     match write with
     | .unchanged => true
     | .assigned roots =>
-        (f.roots.contents.find? (·.1 == index)).any fun row =>
-          rootsWithin (normalize f roots) (row.2.flatMap f.expandParameterRoot)
+        let actual := normalize f roots
+        actual == some [] || (f.roots.contents.find? (·.1 == index)).any fun row =>
+          rootsWithin actual (row.2.flatMap f.expandParameterRoot)
 
 private def mappedBound (f callee : Func) (state : State) (args : List ValueId)
     (bound : List RootRef) : Option (List RootRef) :=

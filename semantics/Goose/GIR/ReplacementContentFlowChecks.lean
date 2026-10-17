@@ -184,4 +184,9 @@ private def invalidScalarReturn := function "invalidScalarReturn" [] [element] #
 #guard (localFlow scalarModule scalarCaller).call 1 [0] == none
 #guard (localFlow overwrittenModule overwritten).mutation 1 [3] == none
 
+private def emptyAliasStore := function "emptyAliasStore" [.ref .readOnly slice, slice, holder] [slice] #[]
+  [.eff (.store 2 1 (some 0)), .def 3 (.load 0), .term (.ret [3] (some 0))]
+  { params := #[(0, [.param 0]), (1, []), (2, [.param 2])], contents := #[(0, [])], results := #[[]] }
+#guard (localFlow (module #[emptyAliasStore]) emptyAliasStore).value 3 == some []
+
 end Goose.GIR.ReplacementContentFlowChecks
