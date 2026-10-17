@@ -42,7 +42,10 @@ theorem destinationLifecycleInvariant_abandon_rows
     (rows : List PendingDestination) (state : ConstructionState)
     (current : ∀ destination ∈ rows,
       state.destinations[destination.capability.id]? = some destination)
-    (active : ∀ destination ∈ rows, RowActive destination)
+    (active : ∀ destination ∈ rows, ∃ count,
+      destination.progress = .open count ∨ destination.progress = .built count ∨
+      (∃ child, destination.progress = .suspended count child) ∨
+      ∃ replacement, destination.progress = .exiting count replacement)
     (unique : rows.Pairwise fun first second => first.capability.id ≠ second.capability.id)
     (valid : DestinationLifecycleInvariant state) :
     DestinationLifecycleInvariant (action rows state).finalState := by
@@ -62,6 +65,38 @@ theorem destinationLifecycleInvariant_abandon_rows
       · exact (List.pairwise_cons.mp unique).2
       · exact destinationLifecycleInvariant_abandon_row state destination.capability.id destination present
           (active destination (List.mem_cons_self ..)) valid
+
+theorem destinationAbandonRows_frame
+    (action : List PendingDestination → ConstructionM Unit)
+    (nilResult : ∀ state, action [] state = .ok () state)
+    (consResult : ∀ destination rest state,
+      action (destination :: rest) state =
+        if destination.capability.id < state.destinations.size then
+          action rest { state with
+            destinations := state.destinations.set! destination.capability.id
+              { destination with progress := .abandoned }
+            events := state.events ++ [.abandon destination.capability.id] }
+        else .fault .destination state)
+    (rows : List PendingDestination) (state : ConstructionState) :
+    (action rows state).finalState.storage = state.storage ∧
+    (action rows state).finalState.destinations.size = state.destinations.size ∧
+    ∀ index, (∀ destination ∈ rows, destination.capability.id ≠ index) →
+      (action rows state).finalState.destinations[index]? = state.destinations[index]? := by
+  induction rows generalizing state with
+  | nil => simp [nilResult, ConstructionResult.finalState]
+  | cons destination rest ih =>
+      rw [consResult]
+      split
+      · have frame := ih { state with
+          destinations := state.destinations.set! destination.capability.id
+            { destination with progress := .abandoned }
+          events := state.events ++ [.abandon destination.capability.id] }
+        refine ⟨frame.1, frame.2.1.trans (by simp), ?_⟩
+        intro index outside
+        rw [frame.2.2 index (by intro row member; exact outside row (List.mem_cons_of_mem _ member))]
+        have different := outside destination (List.mem_cons_self ..)
+        simp only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds, different, ↓reduceIte]
+      · exact ⟨rfl, rfl, by intros; rfl⟩
 
 private def rowActiveBoolean (destination : PendingDestination) : Bool :=
   match destination.progress with
