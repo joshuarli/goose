@@ -24,11 +24,11 @@ theorem lowerContextAt_checkShrinkReplace_of_required (module : Core.Module) (co
     (impl : Core.Impl) (types : Array (Option VTy)) (provenance : Prov) (label : String)
     (required : BlockId → List ValueId)
     (closed : EmptyFactsClosed (lower module) (lowerContextAt module context impl) types
-      (replacementQueries (lowerContextAt module context impl) provenance) required)
+      (replacementQueries (lower module) (lowerContextAt module context impl) types provenance) required)
     (entry : required 0 = [])
     (traces : ∀ (index : Nat) (block : GIR.Block),
       (lowerContextAt module context impl).blocks[index]? = some block →
-        ReplacementTrace (lower module) types (replacementQueries (lowerContextAt module context impl) provenance)
+        ReplacementTrace (lower module) types (replacementQueries (lower module) (lowerContextAt module context impl) types provenance)
           (freshRuns (lowerContextAt module context impl) types) (required index) block.insts) :
     checkShrinkReplace (lower module) label (lowerContextAt module context impl) types provenance = .ok () := by
   apply checkShrinkReplace_of_blocks
@@ -40,11 +40,11 @@ theorem lowerContextAt_checkShrinkReplace_of_required (module : Core.Module) (co
 theorem lowerGlobal_checkShrinkReplace_of_required (module : Core.Module) (global : Core.Global)
     (types : Array (Option VTy)) (provenance : Prov) (label : String) (required : BlockId → List ValueId)
     (closed : EmptyFactsClosed (lower module) (lowerGlobal module global).init types
-      (replacementQueries (lowerGlobal module global).init provenance) required)
+      (replacementQueries (lower module) (lowerGlobal module global).init types provenance) required)
     (entry : required 0 = [])
     (traces : ∀ (index : Nat) (block : GIR.Block),
       (lowerGlobal module global).init.blocks[index]? = some block →
-        ReplacementTrace (lower module) types (replacementQueries (lowerGlobal module global).init provenance)
+        ReplacementTrace (lower module) types (replacementQueries (lower module) (lowerGlobal module global).init types provenance)
           (freshRuns (lowerGlobal module global).init types) (required index) block.insts) :
     checkShrinkReplace (lower module) label (lowerGlobal module global).init types provenance = .ok () := by
   apply checkShrinkReplace_of_blocks

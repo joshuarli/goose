@@ -5325,11 +5325,129 @@ private:
     struct ReplacementQueries {
         const GirFunc &function;
         const Prov &provenance;
+        vector<char> emptyValues;
     };
+
+    ReplacementQueries MakeReplacementQueries(const Fn &fn, const Prov &provenance) const {
+        const auto &function = *fn.f;
+        ReplacementQueries queries { function, provenance, vector<char>(fn.nvalues, 0) };
+        auto knownEmpty = [&](int value) {
+            return value >= 0 && value < fn.nvalues && queries.emptyValues[value];
+        };
+        auto rootsEmpty = [&](const Roots &roots) {
+            return !roots.empty() && ExpandParameterRoots(function, roots).empty();
+        };
+        auto slotEmpty = [&](int slot) {
+            bool written = false;
+            for (auto &block : function.blocks)
+                for (auto &inst : block.insts) {
+                    if (inst.op == GirOp::Init && inst.idx == slot) {
+                        written = true;
+                        if (!knownEmpty(inst.a)) return false;
+                    }
+                    if (inst.op == GirOp::Store) {
+                        auto roots = RootsAt(provenance.vals, inst.a);
+                        if (ValRefLike(fn, inst.b) && !knownEmpty(inst.a) && roots.empty()) return false;
+                        if (find(roots.begin(), roots.end(), CoreRootRef { CoreRootRef::Local, slot }) != roots.end()) {
+                            written = true;
+                            if (!knownEmpty(inst.b)) return false;
+                        }
+                    }
+                    if (inst.op == GirOp::Call || inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke) {
+                        if (any_of(inst.vals.begin(), inst.vals.end(), [&](int value) {
+                            return ValRefLike(fn, value) && knownEmpty(value);
+                        })) continue;
+                        for (auto value : inst.vals) {
+                            if (!ValRefLike(fn, value) || knownEmpty(value)) continue;
+                            auto roots = RootsAt(provenance.vals, value);
+                            if (roots.empty() || find(roots.begin(), roots.end(), CoreRootRef { CoreRootRef::Local, slot }) != roots.end())
+                                return false;
+                        }
+                    }
+                }
+            return written;
+        };
+        auto parameterContentsStable = [&]() {
+            auto mayAliasParameter = [&](int value) {
+                if (knownEmpty(value)) return false;
+                auto roots = RootsAt(provenance.vals, value);
+                return roots.empty() || any_of(roots.begin(), roots.end(), [](const CoreRootRef &root) {
+                    return root.kind != CoreRootRef::Local;
+                });
+            };
+            for (auto &block : function.blocks)
+                for (auto &inst : block.insts) {
+                    if (inst.op == GirOp::Store && ValRefLike(fn, inst.b) && !knownEmpty(inst.b) && mayAliasParameter(inst.a)) return false;
+                    if (inst.op != GirOp::Call && inst.op != GirOp::CallConstruct && inst.op != GirOp::Invoke) continue;
+                    if (any_of(inst.vals.begin(), inst.vals.end(), [&](int value) {
+                        return ValRefLike(fn, value) && knownEmpty(value);
+                    })) continue;
+                    if (inst.idx < 0 || inst.idx >= (int)m.funcs.size()) return false;
+                    auto &summary = m.funcs[inst.idx].summary;
+                    auto mayWriteParameter = [&](const CoreTarget &target) {
+                        return target.global || target.index < 0 || target.index >= (int)inst.vals.size() ||
+                            mayAliasParameter(inst.vals[target.index]);
+                    };
+                    if (summary.unknown || any_of(summary.writes.begin(), summary.writes.end(), mayWriteParameter) ||
+                        any_of(summary.rebinds.begin(), summary.rebinds.end(), mayWriteParameter)) return false;
+                }
+            return true;
+        };
+        for (int value = 0; value < fn.nvalues; value++)
+            queries.emptyValues[value] = rootsEmpty(RootsAt(provenance.vals, value));
+        bool changed = true;
+        for (size_t round = 0; changed && round <= queries.emptyValues.size(); round++) {
+            changed = false;
+            for (size_t target = 0; target < function.blocks.size(); target++) {
+                auto &block = function.blocks[target];
+                for (size_t position = 0; position < block.params.size(); position++) {
+                    auto value = block.params[position].first;
+                    if (value < 0 || value >= fn.nvalues || knownEmpty(value) || !ValRefLike(fn, value) ||
+                        !RootsAt(provenance.vals, value).empty()) continue;
+                    auto incoming = IncomingValues(function, (int)target, position);
+                    if (!incoming.empty() && all_of(incoming.begin(), incoming.end(), knownEmpty)) {
+                        queries.emptyValues[value] = 1;
+                        changed = true;
+                    }
+                }
+                for (auto &inst : block.insts) {
+                    if (!GirDefinesValue(inst) || inst.res < 0 || inst.res >= fn.nvalues || knownEmpty(inst.res) ||
+                        !ValRefLike(fn, inst.res) || !RootsAt(provenance.vals, inst.res).empty()) continue;
+                    bool empty = false;
+                    switch (inst.op) {
+                        case GirOp::Field: case GirOp::Elem: case GirOp::ViewSlice: case GirOp::Index:
+                        case GirOp::IndexProven: case GirOp::Freeze: case GirOp::OwnerBorrow:
+                        case GirOp::SliceView: case GirOp::Push: case GirOp::Snap:
+                            empty = knownEmpty(inst.a);
+                            break;
+                        case GirOp::Load: {
+                            auto roots = RootsAt(provenance.vals, inst.a);
+                            empty = knownEmpty(inst.a) || (!roots.empty() && all_of(roots.begin(), roots.end(), [&](const CoreRootRef &root) {
+                                if (root.kind == CoreRootRef::Local)
+                                    return rootsEmpty(RootsAt(provenance.slots, root.index)) || slotEmpty(root.index);
+                                if (root.kind != CoreRootRef::Param || root.index < 0 ||
+                                    root.index >= (int)function.params.size() || !IsRefSlice(function.params[root.index]) ||
+                                    m.Type(fn.vt[inst.res]).kind != CoreType::Slice) return false;
+                                auto contents = ContentRoots(function, root.index);
+                                return contents && ExpandParameterRoots(function, *contents).empty() && parameterContentsStable();
+                            }));
+                            break;
+                        }
+                        default: break;
+                    }
+                    if (empty) { queries.emptyValues[inst.res] = 1; changed = true; }
+                }
+            }
+        }
+        return queries;
+    }
 
     ReplacementRootQuery ReplacementRoots(const ReplacementQueries &queries, int value) const {
         auto roots = RootsAt(queries.provenance.vals, value);
-        if (roots.empty()) return nullopt;
+        if (roots.empty()) {
+            if (value >= 0 && value < (int)queries.emptyValues.size() && queries.emptyValues[value]) return Roots {};
+            return nullopt;
+        }
         return ExpandParameterRoots(queries.function, roots);
     }
 
@@ -5525,7 +5643,7 @@ private:
     void CheckShrinkReplace(const Fn &fn, const ResultRootInfo &resultRoots) {
         const auto &f = *fn.f;
         auto provenance = Provenance(resultRoots, fn);
-        ReplacementQueries queries { f, provenance };
+        auto queries = MakeReplacementQueries(fn, provenance);
         auto fresh = FreshOwnerRuns(fn);
         auto states = EmptyFactsAtBlocks(fn, queries);
         for (size_t b = 0; b < f.blocks.size(); b++) {

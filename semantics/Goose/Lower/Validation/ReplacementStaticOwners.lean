@@ -92,8 +92,8 @@ theorem lowerPlace_static_query_known {root : RootRef} {place : Place}
     (extension : captured.Ext state) (blocks : func.blocks = finishBlocks state.blocks)
     (dense : state.DenseDefinitions) (member : func ∈ module.funcs.toList)
     (bounded : ProvenanceConvergence.RootBounds results func module.globals.size) :
-    ∃ roots, (replacementQueries func (func.provenance results types (ProvenanceConvergence.moduleRootCount module))).value value = some roots :=
-  replacementQueries_known_of_member
+    ∃ roots, (replacementQueries module func types (func.provenance results types (ProvenanceConvergence.moduleRootCount module))).value value = some roots :=
+  replacementQueries_known_of_member module types
     (lowerPlace_static_provenance_root source run current live extension blocks dense member bounded)
 
 end Goose.Lower.Validation

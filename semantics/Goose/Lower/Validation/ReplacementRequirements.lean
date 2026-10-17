@@ -67,7 +67,7 @@ theorem lowerContextAt_checkShrinkReplace_of_regions (module : Core.Module) (con
     (impl : Core.Impl) (types : Array (Option VTy)) (provenance : Prov) (label : String)
     (regions : List (BlockId → List ValueId))
     (closed : ∀ region ∈ regions, EmptyFactsClosed (lower module) (lowerContextAt module context impl)
-      types (replacementQueries (lowerContextAt module context impl) provenance) region)
+      types (replacementQueries (lower module) (lowerContextAt module context impl) types provenance) region)
     (entry : ∀ region ∈ regions, region 0 = [])
     (sites : ∀ (index : BlockId) (block : GIR.Block),
       (lowerContextAt module context impl).blocks[index]? = some block →
@@ -75,7 +75,7 @@ theorem lowerContextAt_checkShrinkReplace_of_regions (module : Core.Module) (con
         (∃ element, ownerTy types owner = some (.grow element) ∨ ownerTy types owner = some (.growshrink element)) ∧
         (freshRuns (lowerContextAt module context impl) types)[run]? = some true ∧
         ∃ region ∈ regions, owner ∈ head.foldl
-          (transferEmptyInst (lower module) types (replacementQueries (lowerContextAt module context impl) provenance))
+          (transferEmptyInst (lower module) types (replacementQueries (lower module) (lowerContextAt module context impl) types provenance))
           (region index)) :
     checkShrinkReplace (lower module) label (lowerContextAt module context impl) types provenance = .ok () := by
   apply lowerContextAt_checkShrinkReplace_of_required module context impl types provenance label
@@ -87,7 +87,7 @@ theorem lowerGlobal_checkShrinkReplace_of_regions (module : Core.Module) (global
     (types : Array (Option VTy)) (provenance : Prov) (label : String)
     (regions : List (BlockId → List ValueId))
     (closed : ∀ region ∈ regions, EmptyFactsClosed (lower module) (lowerGlobal module global).init
-      types (replacementQueries (lowerGlobal module global).init provenance) region)
+      types (replacementQueries (lower module) (lowerGlobal module global).init types provenance) region)
     (entry : ∀ region ∈ regions, region 0 = [])
     (sites : ∀ (index : BlockId) (block : GIR.Block),
       (lowerGlobal module global).init.blocks[index]? = some block →
@@ -95,7 +95,7 @@ theorem lowerGlobal_checkShrinkReplace_of_regions (module : Core.Module) (global
         (∃ element, ownerTy types owner = some (.grow element) ∨ ownerTy types owner = some (.growshrink element)) ∧
         (freshRuns (lowerGlobal module global).init types)[run]? = some true ∧
         ∃ region ∈ regions, owner ∈ head.foldl
-          (transferEmptyInst (lower module) types (replacementQueries (lowerGlobal module global).init provenance))
+          (transferEmptyInst (lower module) types (replacementQueries (lower module) (lowerGlobal module global).init types provenance))
           (region index)) :
     checkShrinkReplace (lower module) label (lowerGlobal module global).init types provenance = .ok () := by
   apply lowerGlobal_checkShrinkReplace_of_required module global types provenance label
