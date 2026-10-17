@@ -60,7 +60,26 @@ theorem ArmsSSA.joinValue {before state : LS} {beforeImports imports : ImportedV
       exact ⟨_, by simpa only [Goose.Lower.joinValue, incoming, Option.map_some,
         Option.toList_some, List.cons_append, List.nil_append] using finished⟩
 
-theorem ssa_ifE_core (loop : Option LoopCtx) (condition : ValueId) {thenAction elseAction : B ValueId}
+theorem ssa_recordValueRootRecipe (loop : Option LoopCtx) (value : ValueId) (sourceScope : ScopeId) :
+    SSARun loop [value] (fun _ => [value]) (recordValueRootRecipe value sourceScope) := by
+  intro env before result after run imports checked ready arguments
+  have advance := advB_recordValueRootRecipe value sourceScope env before result after run
+  rw [recordValueRootRecipe_run] at run
+  obtain ⟨resultEq, afterEq⟩ := Prod.mk.inj run
+  subst result
+  have checkedAfter : ImportedState after imports := by
+    rw [← afterEq]
+    exact checked.of_tables rfl rfl rfl
+  have current : after.cur = before.cur := by
+    rw [← afterEq]
+  refine ⟨imports, SSAResult.of_current checkedAfter advance (Or.inr current) ?_⟩
+  intro block live output member
+  have equal : output = value := by simpa using member
+  subst output
+  exact (arguments block (current.symm.trans live) value (by simp)).of_ext advance.ext (fun _ _ => rfl)
+
+theorem ssa_ifE_core (loop : Option LoopCtx) (condition : ValueId) (sourceScope : ScopeId)
+    {thenAction elseAction : B ValueId}
     (thenSource : SSARun loop [] (fun value => [value]) thenAction)
     (elseSource : SSARun loop [] (fun value => [value]) elseAction) :
     SSARun loop [condition] (fun result => [result]) (whenLive 0 fun _ => do
@@ -71,7 +90,9 @@ theorem ssa_ifE_core (loop : Option LoopCtx) (condition : ValueId) {thenAction e
       setCur (some elseBlock)
       let elseValue ← elseAction
       let endElse ← curBlock
-      Goose.Lower.joinValue endThen thenValue endElse elseValue) := by
+      let result ← Goose.Lower.joinValue endThen thenValue endElse elseValue
+      Goose.Lower.recordValueRootRecipe result sourceScope
+      pure result) := by
   intro env before result after run imports checked ready arguments
   cases current : before.cur with
   | none =>
@@ -81,16 +102,24 @@ theorem ssa_ifE_core (loop : Option LoopCtx) (condition : ValueId) {thenAction e
       (by simp [AvailableValues, current])⟩
   | some start =>
     rw [whenLive_some _ _ env current] at run
+    have decomposed := (by simpa only [bind_eq] using run)
     obtain ⟨⟨thenBlock, elseBlock⟩, forked, forkRun, _, thenStart, thenStartRun,
       thenValue, thenEnd, thenRun, endThen, thenRead, thenReadRun, _, elseStart, elseStartRun,
-      elseValue, elseEnd, elseRun, endElse, elseRead, elseReadRun, joinRun⟩ := (by simpa only [bind_eq] using run)
+      elseValue, elseEnd, elseRun, endElse, elseRead, elseReadRun, joined, joinState, joinRun,
+      recipeUnit, recipeState, recipeRun, pureRun⟩ := decomposed
     obtain ⟨thenCurrent, thenSame⟩ := curBlock_eq thenReadRun
     obtain ⟨elseCurrent, elseSame⟩ := curBlock_eq elseReadRun
     subst thenSame elseSame
     obtain ⟨armImports, arms⟩ := ssa_arms loop true condition thenSource elseSource forkRun thenStartRun
       thenRun elseStartRun elseRun imports checked ready current arguments
-    obtain ⟨nextImports, finished⟩ := arms.joinValue checked (by simp [current]) env
-    rw [← thenCurrent, ← elseCurrent, joinRun] at finished
-    exact ⟨nextImports, finished⟩
+    obtain ⟨nextImports, joinedResult⟩ := arms.joinValue checked (by simp [current]) env
+    rw [← thenCurrent, ← elseCurrent, joinRun] at joinedResult
+    obtain ⟨lastImports, recipeResult⟩ := ssa_recordValueRootRecipe loop joined sourceScope
+      env joinState recipeUnit recipeState recipeRun nextImports
+      joinedResult.checked (joinedResult.loop ready) joinedResult.available
+    change SSAResult before joinState imports nextImports [joined] at joinedResult
+    rw [pure_run] at pureRun
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj pureRun
+    exact ⟨lastImports, joinedResult.trans recipeResult⟩
 
 end Goose.Lower.Validation
