@@ -37,6 +37,7 @@ theorem header1_newPermissionInstructions {module : GIR.Module} {func : Func} {l
     (tailNew : ∀ header counter input output,
       GeneratedBuilderState input → first ≤ input.vals.size →
       (∃ block, input.blocks[header]? = some block ∧ block.params = [(counter,.data (.int hint))]) →
+      input.vals[counter]? = some (some (.data (.int hint))) →
       before.Ext input → before.vals.size ≤ input.vals.size → TypePrefix before input →
       TermEdgesFramed none before input → tail header counter le input = ((),output) → NewPermissionInstructions module func le first input output)
     (run : (do
@@ -92,7 +93,15 @@ theorem header1_newPermissionInstructions {module : GIR.Module} {func : Func} {l
   have selectedTypes := (types_newBlock _ le before (header,ids) allocated allocation).trans
     ((types_emitTerm _ le allocated ignored branched branchRun).trans
       (types_setCur _ le branched ignored' selected selectedRun))
-  have tailRules := tailNew header (ids.headD 0) selected after selectedGenerated selectedLower headerAt
+  have allocatedCounter : allocated.vals[ids.headD 0]? = some (some (.data (.int hint))) := by
+    have allocationCopy := allocation
+    rw [newBlock1_run] at allocationCopy
+    have valuesEq := congrArg LS.vals (Prod.mk.inj allocationCopy).2
+    rw [← valuesEq,idsEq]
+    simp
+  have selectedCounter := ((types_emitTerm _ le allocated ignored branched branchRun).trans
+    (types_setCur _ le branched ignored' selected selectedRun)) _ _ allocatedCounter
+  have tailRules := tailNew header (ids.headD 0) selected after selectedGenerated selectedLower headerAt selectedCounter
     (prefixExt.trans selectedFramed.2) selectedGrowth selectedTypes selectedFramed.1 tailRun
   intro instruction member
   rcases tailRules instruction member with old | fresh

@@ -11,6 +11,7 @@ theorem lowerEach_counted_newPermissionInstructions
     {body : Nat → BlockId → B ValueId}
     (generated : GeneratedBuilderState before) (lower : first ≤ before.vals.size)
     (headerAt : ∃ block, before.blocks[header]? = some block ∧ block.params = [(counter,.data (.int .i64))])
+    (counterRecorded : before.vals[counter]? = some (some (.data (.int .i64))))
     (bodyDense : ∀ depth exit, DenseRun (body depth exit))
     (bodyAdvance : ∀ depth exit, AdvB (body depth exit))
     (bodyTypes : ∀ depth exit, TypeRun (body depth exit))
@@ -18,6 +19,7 @@ theorem lowerEach_counted_newPermissionInstructions
       (some ⟨depth,exit,.next header .i64 counter⟩) (body depth exit))
     (bodyNew : ∀ depth exit input value output,
       GeneratedBuilderState input → input.cur.isSome = true → LoopBuilderFrames (some ⟨depth,exit,.next header .i64 counter⟩) input →
+      input.vals[counter]? = some (some (.data (.int .i64))) →
       first ≤ input.vals.size → before.Ext input → before.vals.size ≤ input.vals.size →
       TypePrefix before input → TermEdgesFramed none before input →
       body depth exit le input = (value,output) → NewPermissionInstructions module func le first input output)
@@ -46,7 +48,8 @@ theorem lowerEach_counted_newPermissionInstructions
     ⟨comparedHead,comparedHeadRow,comparedHeadParams.trans headParams⟩
     bodyDense bodyAdvance bodyTypes bodyFrames
     (fun depth exit input value output gen live frames floor extension grows types terms childRun =>
-      bodyNew depth exit input value output gen live frames floor (beforeCompared.trans extension)
+      bodyNew depth exit input value output gen live frames
+        ((typesCompared.trans types) _ _ counterRecorded) floor (beforeCompared.trans extension)
         (Nat.le_trans valuesCompared grows) (typesCompared.trans types)
         (comparedFrames.1.compose terms beforeCompared) childRun) loopRun
   have measuredNew := NewPermissionInstructions.eachLen (module := module) (func := func) (first := first) measureRun
@@ -61,5 +64,7 @@ theorem lowerEach_counted_newPermissionInstructions
       (generatedTargetFrame_eachLen none regrow owner sampled) generated trivial
     exact loop.2 instruction (atMeasured.of_framed_run compareRun (dense_emitDef _)
       (advB_emitDef _) (types_emitDef _) (generatedTargetFrame_emitDef none _) measuredGenerated trivial)
+
+#print axioms lowerEach_counted_newPermissionInstructions
 
 end Goose.Lower.Validation
