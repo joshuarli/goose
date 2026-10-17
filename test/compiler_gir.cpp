@@ -251,6 +251,74 @@ CoreViewP CorePlaceView(CorePlaceP place) {
     return view;
 }
 
+CoreModule CoreLengthModule(CoreType::Kind kind) {
+    CoreModule core;
+    core.profile = CoreProfile::Construction;
+    core.files = { "length.goose" };
+    auto i64 = core.IntType(CoreIntTy::I64);
+    CoreType array;
+    array.kind = kind;
+    array.elem = i64;
+    if (kind == CoreType::Arr || kind == CoreType::Limited) array.count = 1;
+    auto arrayType = core.Intern(array);
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Let };
+    CoreImpl implementation;
+    implementation.name = "main";
+    implementation.vars = { CoreVar { "items", arrayType, CoreVarKind::Var, 0, origin } };
+    implementation.body.scope = 0;
+    auto literal = make_unique<CoreExpr>();
+    literal->kind = CoreExprKind::Arr;
+    literal->type = arrayType;
+    literal->elems.push_back(CoreInt(i64, "7"));
+    CoreStmt initialize;
+    initialize.kind = CoreStmtKind::Let;
+    initialize.var = 0;
+    initialize.expr = std::move(literal);
+    initialize.org = origin;
+    implementation.body.stmts.push_back(std::move(initialize));
+    auto length = make_unique<CoreExpr>();
+    length->kind = CoreExprKind::Len;
+    length->type = i64;
+    length->view = CorePlaceView(CoreLocal(0));
+    length->org = origin;
+    CoreStmt evaluate;
+    evaluate.kind = CoreStmtKind::Expr;
+    evaluate.expr = std::move(length);
+    evaluate.org = origin;
+    implementation.body.stmts.push_back(std::move(evaluate));
+    core.impls.push_back(std::move(implementation));
+    core.contexts = { CoreContext { .impl = 0 } };
+    core.entry = 0;
+    return core;
+}
+
+void DirectOwnerLengthsUseArrayLength() {
+    for (auto kind : { CoreType::Arr, CoreType::Grow, CoreType::GrowShrink, CoreType::Limited }) {
+        auto core = CoreLengthModule(kind);
+        auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Let } },
+            [](const CoreOrigin &) { return 0; }).Lower();
+        assert(Code(high) == "");
+        int arrayLengths = 0, snapshots = 0, viewLengths = 0;
+        for (auto &block : high.funcs[0].blocks) for (auto &inst : block.insts) {
+            arrayLengths += inst.op == GirOp::ArrayLen;
+            snapshots += inst.op == GirOp::Snap;
+            viewLengths += inst.op == GirOp::ViewLen;
+        }
+        assert(arrayLengths == 1 && snapshots == 0 && viewLengths == 0);
+    }
+    auto core = CoreLengthModule(CoreType::VarArr);
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Let } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    int arrayLengths = 0, snapshots = 0, viewLengths = 0;
+    for (auto &block : high.funcs[0].blocks) for (auto &inst : block.insts) {
+        arrayLengths += inst.op == GirOp::ArrayLen;
+        snapshots += inst.op == GirOp::Snap;
+        viewLengths += inst.op == GirOp::ViewLen;
+    }
+    assert(arrayLengths == 0 && snapshots == 1 && viewLengths == 1);
+}
+
 CoreModule LetArrayFieldCase(bool byRefIteration, CoreMut contents = CoreMut::Mut) {
     CoreModule core;
     core.files = { "t.goose" };
@@ -5413,6 +5481,7 @@ int main() {
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
     CoreShrinkPushAndSummaryCarryOriginsAndShrinks();
+    DirectOwnerLengthsUseArrayLength();
     CoreShrinkOperationTagsAndPlaceTypingAreCanonical();
     CoreShrinkOperationsLowerToVerifiedGir();
     ResizeChecksFollowNegativeSizeAndEvaluateFillFirst();

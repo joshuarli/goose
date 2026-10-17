@@ -308,7 +308,18 @@ private:
                 return EmitDef(std::move(i));
             }
             case CoreExprKind::Len: {
-                auto vw = LowerView(*e.view);
+                int vw;
+                if (e.view->kind == CoreView::Of) {
+                    auto owner = LowerPlace(*e.view->place);
+                    auto &reference = mod.Type(ValTy(owner));
+                    if (reference.kind == CoreType::Ref) {
+                        auto kind = mod.Type(reference.elem).kind;
+                        if (kind == CoreType::Arr || GirOwnerKind(kind)) return Def(GirOp::ArrayLen, owner);
+                    }
+                    vw = SnapshotPlaceView(*e.view, owner);
+                } else {
+                    vw = LowerView(*e.view);
+                }
                 return Def(GirOp::ViewLen, vw);
             }
             case CoreExprKind::Un: {
@@ -543,16 +554,20 @@ private:
     int LowerView(const CoreView &v) {
         if (v.kind == CoreView::Of) {
             auto r = LowerPlace(*v.place);
-            GirInst i;
-            i.op = GirOp::Snap;
-            i.a = r;
-            i.snap = v.place->kind == CorePlace::Local || v.place->kind == CorePlace::Global ||
-                     v.place->kind == CorePlace::Field
-                ? GirSnapshotMode::Owner : GirSnapshotMode::Borrowed;
-            return EmitDef(std::move(i));
+            return SnapshotPlaceView(v, r);
         }
         auto s = LowerExpr(*v.expr);
         return Def(GirOp::SliceView, s);
+    }
+
+    int SnapshotPlaceView(const CoreView &v, int place) {
+        GirInst i;
+        i.op = GirOp::Snap;
+        i.a = place;
+        i.snap = v.place->kind == CorePlace::Local || v.place->kind == CorePlace::Global ||
+                 v.place->kind == CorePlace::Field
+            ? GirSnapshotMode::Owner : GirSnapshotMode::Borrowed;
+        return EmitDef(std::move(i));
     }
 
     GirBound LowerBound(const CoreBound &b) {
