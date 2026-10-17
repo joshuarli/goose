@@ -5313,10 +5313,24 @@ private:
         return fresh;
     }
 
-    static bool RootsOverlap(const Roots &a, const Roots &b) {
-        if (a.empty() || b.empty()) return true;
-        for (auto &x : a)
-            for (auto &y : b) {
+    using ReplacementRootQuery = optional<Roots>;
+
+    struct ReplacementQueries {
+        const GirFunc &function;
+        const Prov &provenance;
+    };
+
+    ReplacementRootQuery ReplacementRoots(const ReplacementQueries &queries, int value) const {
+        auto roots = RootsAt(queries.provenance.vals, value);
+        if (roots.empty()) return nullopt;
+        return ExpandParameterRoots(queries.function, roots);
+    }
+
+    static bool ReplacementOverlap(const ReplacementRootQuery &a, const ReplacementRootQuery &b) {
+        if ((a && a->empty()) || (b && b->empty())) return false;
+        if (!a || !b) return true;
+        for (auto &x : *a)
+            for (auto &y : *b) {
                 if (x.kind == CoreRootRef::Param || y.kind == CoreRootRef::Param) {
                     if (x.kind == CoreRootRef::Local || y.kind == CoreRootRef::Local) continue;
                     return true;
@@ -5326,16 +5340,22 @@ private:
         return false;
     }
 
-    optional<Roots> CallDependencies(const Fn &fn, const Prov &p, const GirInst &call) const {
+    ReplacementRootQuery CallDependencies(const Fn &fn, const ReplacementQueries &queries,
+                                          const GirInst &call) const {
+        for (auto arg : call.vals) {
+            if (!ValRefLike(fn, arg)) continue;
+            auto actual = ReplacementRoots(queries, arg);
+            if (actual && actual->empty()) return Roots {};
+        }
         if (call.idx < 0 || call.idx >= (int)m.funcs.size()) return nullopt;
         const auto &callee = m.funcs[call.idx];
         if (callee.summary.unknown) return nullopt;
         Roots out;
         for (auto arg : call.vals) {
             if (!ValRefLike(fn, arg)) continue;
-            auto actual = RootsAt(p.vals, arg);
-            if (actual.empty()) return nullopt;
-            AddRoots(out, actual);
+            auto actual = ReplacementRoots(queries, arg);
+            if (!actual) return nullopt;
+            AddRoots(out, *actual);
         }
         auto add = [&](const vector<CoreTarget> &targets) {
             for (auto &target : targets) {
@@ -5344,9 +5364,9 @@ private:
                     continue;
                 }
                 if (target.index < 0 || target.index >= (int)call.vals.size()) return false;
-                auto actual = RootsAt(p.vals, call.vals[target.index]);
-                if (actual.empty()) return false;
-                AddRoots(out, actual);
+                auto actual = ReplacementRoots(queries, call.vals[target.index]);
+                if (!actual) return false;
+                AddRoots(out, *actual);
                 if (target.index < (int)callee.params.size())
                     if (auto annotated = ParamRoots(callee, target.index))
                         for (auto &root : *annotated)
@@ -5360,11 +5380,11 @@ private:
         return out;
     }
 
-    vector<int> KillEmptyFacts(const vector<int> &facts, const Roots &roots, const Prov &p) const {
-        if (roots.empty()) return {};
+    vector<int> KillEmptyFacts(const vector<int> &facts, const ReplacementRootQuery &roots,
+                              const ReplacementQueries &queries) const {
         vector<int> kept;
         for (auto fact : facts)
-            if (!RootsOverlap(roots, RootsAt(p.vals, fact))) kept.push_back(fact);
+            if (!ReplacementOverlap(roots, ReplacementRoots(queries, fact))) kept.push_back(fact);
         return kept;
     }
 
@@ -5389,7 +5409,7 @@ private:
         return out;
     }
 
-    vector<int> TransferEmptyInst(const Fn &fn, const Prov &p, vector<int> facts,
+    vector<int> TransferEmptyInst(const Fn &fn, const ReplacementQueries &queries, vector<int> facts,
                                   const GirInst &inst) const {
         auto contains = [&](int value) { return find(facts.begin(), facts.end(), value) != facts.end(); };
         if (inst.op == GirOp::Clear) {
@@ -5397,11 +5417,10 @@ private:
             return facts;
         }
         if (inst.op == GirOp::Call || inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke) {
-            auto dependencies = CallDependencies(fn, p, inst);
-            if (!dependencies) return {};
-            if (!dependencies->empty()) facts = KillEmptyFacts(facts, *dependencies, p);
+            auto dependencies = CallDependencies(fn, queries, inst);
+            facts = KillEmptyFacts(facts, dependencies, queries);
         } else {
-            Roots operands;
+            ReplacementRootQuery operands;
             bool checksOperands = false;
             switch (inst.op) {
                 case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen: case GirOp::SliceView:
@@ -5409,24 +5428,24 @@ private:
                 case GirOp::IndexProven: case GirOp::Push:
                 case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Store:
                 case GirOp::Append: case GirOp::Replace:
-                    operands = RootsAt(p.vals, inst.a);
+                    operands = ReplacementRoots(queries, inst.a);
                     checksOperands = true;
                     break;
                 default:
                     break;
             }
-            if (checksOperands) facts = KillEmptyFacts(facts, operands, p);
+            if (checksOperands) facts = KillEmptyFacts(facts, operands, queries);
         }
         for (auto value : EmptyFactSourceOperands(inst))
-            if (ValRefLike(fn, value)) facts = KillEmptyFacts(facts, RootsAt(p.vals, value), p);
+            if (ValRefLike(fn, value)) facts = KillEmptyFacts(facts, ReplacementRoots(queries, value), queries);
         if (GirDefinesValue(inst) && ValRefLike(fn, inst.res))
-            facts = KillEmptyFacts(facts, RootsAt(p.vals, inst.res), p);
+            facts = KillEmptyFacts(facts, ReplacementRoots(queries, inst.res), queries);
         return facts;
     }
 
-    vector<int> TransferEmptyBlock(const Fn &fn, const Prov &p, vector<int> facts,
+    vector<int> TransferEmptyBlock(const Fn &fn, const ReplacementQueries &queries, vector<int> facts,
                                    const GirBlock &block) const {
-        for (auto &inst : block.insts) facts = TransferEmptyInst(fn, p, std::move(facts), inst);
+        for (auto &inst : block.insts) facts = TransferEmptyInst(fn, queries, std::move(facts), inst);
         return facts;
     }
 
@@ -5444,7 +5463,7 @@ private:
         return translated;
     }
 
-    vector<optional<vector<int>>> EmptyFactsAtBlocks(const Fn &fn, const Prov &p) const {
+    vector<optional<vector<int>>> EmptyFactsAtBlocks(const Fn &fn, const ReplacementQueries &queries) const {
         const auto &f = *fn.f;
         vector<optional<vector<int>>> states(f.blocks.size());
         if (!states.empty()) states[0] = vector<int> {};
@@ -5454,7 +5473,7 @@ private:
             auto old = states;
             for (size_t b = 0; b < f.blocks.size(); b++) {
                 if (!old[b]) continue;
-                auto outgoing = TransferEmptyBlock(fn, p, *old[b], f.blocks[b]);
+                auto outgoing = TransferEmptyBlock(fn, queries, *old[b], f.blocks[b]);
                 auto *term = LastTerm(f.blocks[b]);
                 if (!term) continue;
                 auto propagate = [&](int target, const vector<int> &args) {
@@ -5499,10 +5518,9 @@ private:
     void CheckShrinkReplace(const Fn &fn, const ResultRootInfo &resultRoots) {
         const auto &f = *fn.f;
         auto provenance = Provenance(resultRoots, fn);
-        for (auto &roots : provenance.vals) roots = ExpandParameterRoots(f, roots);
-        for (auto &roots : provenance.slots) roots = ExpandParameterRoots(f, roots);
+        ReplacementQueries queries { f, provenance };
         auto fresh = FreshOwnerRuns(fn);
-        auto states = EmptyFactsAtBlocks(fn, provenance);
+        auto states = EmptyFactsAtBlocks(fn, queries);
         for (size_t b = 0; b < f.blocks.size(); b++) {
             if (!states[b]) Fail("GIR-V060", cat(fn.label, ": no clear-state proof for block ", b));
             auto facts = *states[b];
@@ -5518,7 +5536,7 @@ private:
                     if (find(facts.begin(), facts.end(), inst.a) == facts.end())
                         Fail("GIR-V060", cat(fn.label, ": whole replacement owner was not cleared on every path"));
                 }
-                facts = TransferEmptyInst(fn, provenance, std::move(facts), inst);
+                facts = TransferEmptyInst(fn, queries, std::move(facts), inst);
             }
         }
     }

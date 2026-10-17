@@ -2720,7 +2720,7 @@ void AcceptsEmptyOwnerFactsThroughBlockParameters() {
     assert(Code(ShrinkReplaceAfterMixedClearJoin()) == "GIR-V060");
 }
 
-void SpecializedReplacementRootsUseCheckedGlobalIdentities() {
+GirModule SpecializedReplacementRootsModule() {
     CoreModule core;
     core.profile = CoreProfile::Shrink;
     core.files = { "specialized-replacement.goose" };
@@ -2794,7 +2794,11 @@ void SpecializedReplacementRootsUseCheckedGlobalIdentities() {
     core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1, .varroots = {
         { 0, { CoreRootRef { CoreRootRef::Global, 0 } } },
         { 1, { CoreRootRef { CoreRootRef::Global, 1 } } } } } };
-    auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    return GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+}
+
+void SpecializedReplacementRootsUseCheckedGlobalIdentities() {
+    auto high = SpecializedReplacementRootsModule();
     assert(Code(high) == "");
     auto overlapping = high;
     overlapping.funcs[0].blocks[0].insts.erase(remove_if(overlapping.funcs[0].blocks[0].insts.begin(),
@@ -2813,6 +2817,79 @@ void SpecializedReplacementRootsUseCheckedGlobalIdentities() {
     auto emptyAnnotation = high;
     emptyAnnotation.funcs[1].roots.params[1].second.clear();
     assert(Code(emptyAnnotation) == "GIR-V050");
+}
+
+void ReplacementQueriesDistinguishKnownEmptyAndUnknownRoots() {
+    auto high = SpecializedReplacementRootsModule();
+    auto &entry = Main(high).blocks[0].insts;
+    entry.erase(remove_if(entry.begin(), entry.end(), [](auto &inst) { return inst.op == GirOp::Call; }), entry.end());
+    high.funcs[1].roots.params[1].second.clear();
+    assert(Code(high) == "");
+    auto emptyOwner = high;
+    emptyOwner.funcs[1].roots.params[0].second.clear();
+    emptyOwner.funcs[1].roots.params.erase(emptyOwner.funcs[1].roots.params.begin() + 1);
+    assert(Code(emptyOwner) == "");
+    auto missing = high;
+    missing.funcs[1].roots.params.erase(missing.funcs[1].roots.params.begin() + 1);
+    assert(Code(missing) == "GIR-V060");
+
+    GirFunc opaque;
+    opaque.name = "opaque-reference";
+    opaque.results = { high.funcs[1].params[1] };
+    opaque.roots.results = { {} };
+    opaque.summary.aborts = true;
+    opaque.scopes = { -1 };
+    GirInst abort;
+    abort.op = GirOp::Abort;
+    abort.org = 0;
+    opaque.blocks = { GirBlock { {}, { abort } } };
+    auto unknownRead = high;
+    unknownRead.funcs.push_back(opaque);
+    auto &body = unknownRead.funcs[1].blocks[0].insts;
+    int next = 0;
+    for (auto &inst : body) if (GirDefinesValue(inst)) next = max(next, inst.res + 1);
+    auto call = Def(GirOp::Call, next);
+    call.idx = 2;
+    call.org = 0;
+    auto clear = find_if(body.begin(), body.end(), [](auto &inst) { return inst.op == GirOp::Clear; });
+    assert(clear != body.end());
+    body.insert(clear, call);
+    auto scalar = find_if(body.rbegin(), body.rend(), [](auto &inst) { return inst.op == GirOp::Load; });
+    assert(scalar != body.rend());
+    scalar->a = call.res;
+    assert(Code(unknownRead) == "GIR-V060");
+    unknownRead.funcs[1].roots.params[0].second.clear();
+    assert(Code(unknownRead) == "");
+
+    for (auto emptyArgument : { false, true }) {
+        auto invocation = high;
+        auto &function = invocation.funcs[1];
+        GirFunc callee;
+        callee.name = "unknown-effects";
+        callee.scopes = { -1 };
+        callee.summary.unknown = true;
+        GirBlock calleeBody;
+        if (emptyArgument) {
+            callee.params = { function.params[1] };
+            calleeBody.params = { { 0, function.params[1] } };
+        }
+        calleeBody.insts = { Ret() };
+        callee.blocks = { calleeBody };
+        auto &instructions = function.blocks[0].insts;
+        auto source = find_if(instructions.rbegin(), instructions.rend(), [](auto &inst) { return inst.op == GirOp::Load; });
+        assert(source != instructions.rend());
+        auto invoke = Def(GirOp::Call, next);
+        invoke.idx = 2;
+        invoke.org = 0;
+        if (emptyArgument) invoke.vals = { source->a };
+        auto run = find_if(instructions.begin(), instructions.end(), [](auto &inst) { return inst.op == GirOp::Arr; });
+        assert(run != instructions.end());
+        instructions.insert(run, invoke);
+        invocation.funcs.push_back(std::move(callee));
+        assert(Code(invocation) == (emptyArgument ? "" : "GIR-V060"));
+        invocation.funcs[1].roots.params[0].second.clear();
+        assert(Code(invocation) == "");
+    }
 }
 
 void RejectsInvalidShrinkReplacementProofs() {
@@ -7085,6 +7162,7 @@ int main() {
     LowPreservesOwnerLiteralRunsAcrossJoins();
     LowSplitsSameTargetCondBrForOwnerRuns();
     SpecializedReplacementRootsUseCheckedGlobalIdentities();
+    ReplacementQueriesDistinguishKnownEmptyAndUnknownRoots();
     RejectsInvalidShrinkReplacementProofs();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();
