@@ -1,3 +1,4 @@
+import Goose.Lower.ContextLowering
 import Goose.Lower.FunctionTail
 import Goose.Lower.FlowState
 import Goose.Lower.SourceDivergence
@@ -22,12 +23,12 @@ def callPre (impl : Impl) : List (SlotId × ValueId × OriginId) :=
 
 theorem callEntry_pp (impl : Impl) : (callEntry impl).pp = some (0, 0) := rfl
 
-theorem lowerImplAt_call_blocks (m : Core.Module) (i : ImplId) (impl : Impl) :
-    (lowerImplAt m i impl).blocks =
+theorem lowerImpl_call_blocks (m : Core.Module) (impl : Impl) :
+    (lowerImpl m impl).blocks =
       finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
         (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars impl.results.toList) (callEntry impl)).1
         (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars impl.results.toList) (callEntry impl)).2).blocks := by
-  simp [lowerImplAt, callEntry, callEntryTypes, callPre, bodyTail, newBlock, initState,
+  simp [lowerImpl, callEntry, callEntryTypes, callPre, bodyTail, newBlock, initState,
     bind_run, setCur_run, set]
   rfl
 
@@ -168,50 +169,46 @@ theorem callFrame_preRel (impl : Impl) (act : ActId) (depth : Nat) (values : Lis
   · simpa using h
   · exact bindCallParams_zip_cells _ _ _ _ (by simp [callEntryTypes]) List.nodup_range
 
-theorem callFrame_rel (m : Core.Module) (profile : NumProfile) (i : ImplId) (impl : Impl)
+theorem callFrame_rel (m : Core.Module) (profile : NumProfile) (ctx : Context) (impl : Impl)
     (act : ActId) (depth : Nat) (values : List Val) :
-    Rel ⟨profile, m⟩ ⟨impl.vars, act, [], depth⟩ ⟨⟨profile, lower m⟩, lowerImplAt m i impl⟩
+    Rel ⟨profile, m⟩ ⟨impl.vars, act, [], depth⟩ ⟨⟨profile, lower m⟩, lowerContextAt m ctx impl⟩
       (callFrame impl act depth values) (callEntry impl) := by
   obtain ⟨ha, hs, hd⟩ := bindCallParams_frame ⟨act, [], {}, depth⟩
     ((List.range impl.params.size).zip (callEntryTypes impl)) (values.map RVal.val)
   exact ⟨rfl, rfl, ha, hs, hd, rfl⟩
 
-theorem enterFn_call (m : Core.Module) (profile : NumProfile) (i : ImplId) (impl : Impl)
+theorem enterFn_call (m : Core.Module) (profile : NumProfile) (ctx : Context) (impl : Impl)
     (depth fuel : Nat) (values : List Val) (state : St)
     (hp : impl.params.size = values.length)
-    (hext : ExtT (callEntry impl) (lowerImplAt m i impl).blocks) :
-    enterFn (fuel + 1) ⟨profile, lower m⟩ depth (lowerImplAt m i impl) values state =
-      runAt ⟨⟨profile, lower m⟩, lowerImplAt m i impl⟩ (0, 0)
+    (hext : ExtT (callEntry impl) (lowerContextAt m ctx impl).blocks) :
+    enterFn (fuel + 1) ⟨profile, lower m⟩ depth (lowerContextAt m ctx impl) values state =
+      runAt ⟨⟨profile, lower m⟩, lowerContextAt m ctx impl⟩ (0, 0)
         (callFrame impl state.nextAct depth values) fuel
         { state with nextAct := state.nextAct + 1 } := by
   obtain ⟨blk, hb, hbparams⟩ := hext.params (b := 0)
     (blk := ⟨(List.range impl.params.size).zip (callEntryTypes impl), #[]⟩) rfl
-  have hparams : (lowerImplAt m i impl).params.length = values.length := by
-    simpa [lowerImplAt] using hp
+  have hparams : (lowerContextAt m ctx impl).params.length = values.length := by
+    simpa [lowerContextAt, lowerImpl] using hp
   have hblkparams : blk.params.length = values.length := by
     rw [hbparams]
     simp [callEntryTypes, hp]
-  have hinsts : instsAt (lowerImplAt m i impl) (0, 0) = blk.insts := by simp [instsAt, hb]
+  have hinsts : instsAt (lowerContextAt m ctx impl) (0, 0) = blk.insts := by simp [instsAt, hb]
   have hentrylen : ((List.range impl.params.size).zip (callEntryTypes impl)).length =
       values.length := by simp [callEntryTypes, hp]
   simp only [enterFn, hparams, ite_true, enterBlock, hb, List.length_map,
     hbparams, hentrylen, bindParams_call, pure_bind, runAt, hinsts]
   rfl
 
-theorem implOfContext_lookup {m : Core.Module} {c : ContextId} {ctx : Context}
-    (hctx : m.contexts[c]? = some ctx) (vars : Array LocalVar) (ls : LS) :
-    implOfContext c (lowerEnv m vars []) ls = (ctx.impl, ls) := by
-  simp [implOfContext_run, lowerEnv, hctx]
+theorem lookupFn_lower {m : Core.Module} {c : ContextId} {ctx : Context} {impl : Impl}
+    (hctx : m.contexts[c]? = some ctx) (hi : m.impls[ctx.impl]? = some impl)
+    (profile : NumProfile) :
+    lookupFn ⟨profile, lower m⟩ c = pure (lowerContextAt m ctx impl) := by
+  simp [lookupFn, lower_func_at hctx hi]
 
-theorem lookupFn_lower {m : Core.Module} {i : ImplId} {impl : Impl}
-    (hi : m.impls[i]? = some impl) (profile : NumProfile) :
-    lookupFn ⟨profile, lower m⟩ i = pure (lowerImplAt m i impl) := by
-  simp [lookupFn, lower, Array.getElem?_mapIdx, hi]
-
-def CalleeBodyAt (n : Nat) (cfg : Cfg) (i : ImplId) (impl : Impl)
+def CalleeBodyAt (n : Nat) (cfg : Cfg) (ctx : Context) (impl : Impl)
     (depth : Nat) (values : List Val) (state : St) : Prop :=
   let env : Env := ⟨impl.vars, state.nextAct, [], depth + 1⟩
-  let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, lowerImplAt cfg.mod i impl⟩
+  let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩
   let fr := callFrame impl state.nextAct (depth + 1) values
   let body := lowerBlock none (callPre impl) false impl.body
     (lowerEnv cfg.mod impl.vars impl.results.toList) (callEntry impl)
@@ -220,7 +217,7 @@ def CalleeBodyAt (n : Nat) (cfg : Cfg) (i : ImplId) (impl : Impl)
     (BlockFlowPost cfg env cx (callEntry impl) fr body.2 impl.body false body.1)
     { state with nextAct := state.nextAct + 1 }
 
-theorem calleeBodyAt_of_typedBlock {n : Nat} {cfg : Cfg} {i : ImplId} {impl : Impl}
+theorem calleeBodyAt_of_typedBlock {n : Nat} {cfg : Cfg} {ctx : Context} {impl : Impl}
     {depth : Nat} {values : List Val} {state : St} (hp : impl.params.size = values.length)
     (source : BlockSource cfg ⟨impl.vars, state.nextAct, [], depth + 1⟩
       ((impl.params.toList.zip values).map fun (p, value) => (p.var, value))
@@ -228,10 +225,10 @@ theorem calleeBodyAt_of_typedBlock {n : Nat} {cfg : Cfg} {i : ImplId} {impl : Im
     (htyping : source.typingEnv.impl = some impl) (hroots : source.rootsEnv.impl = impl)
     (hloops : source.typingEnv.loops = 0) (hbody : TypedBlockLoopSimulation n cfg impl.results.toList none (callPre impl)
       ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) false impl.body) :
-    CalleeBodyAt n cfg i impl depth values state := by
+    CalleeBodyAt n cfg ctx impl depth values state := by
   let le := lowerEnv cfg.mod impl.vars impl.results.toList
   let env : Env := ⟨impl.vars, state.nextAct, [], depth + 1⟩
-  let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, lowerImplAt cfg.mod i impl⟩
+  let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩
   let fr := callFrame impl state.nextAct (depth + 1) values
   let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
   have hmetadata : SourceResults source.typingEnv source.rootsEnv impl.results.toList := by
@@ -240,14 +237,14 @@ theorem calleeBodyAt_of_typedBlock {n : Nat} {cfg : Cfg} {i : ImplId} {impl : Im
     cases hactual
     exact ⟨hroots, rfl⟩
   have hextTail : ExtT (bodyTail impl le body.1 body.2) cx.fn.blocks := by
-    rw [lowerImplAt_call_blocks]
+    rw [lowerContextAt_blocks, lowerImpl_call_blocks]
     exact extT_finish _
   have hextBody : ExtT body.2 cx.fn.blocks := hextTail.of_adv
     (advB_finishFunction impl body.1 le body.2 (finishFunction impl body.1 le body.2).1
       (bodyTail impl le body.1 body.2) rfl)
   have hs := hbody.function env { state with nextAct := state.nextAct + 1 } source hmetadata hloops
     (callEntry impl) body.2 body.1 (0, 0) cx fr rfl (callEntry_pp impl) hextBody
-    (callFrame_rel cfg.mod cfg.profile i impl state.nextAct (depth + 1) values)
+    (callFrame_rel cfg.mod cfg.profile ctx impl state.nextAct (depth + 1) values)
     (callFrame_preRel impl state.nextAct (depth + 1) values hp) rfl rfl
   rw [prepareReturn_no_scopes env rfl, bind_pure] at hs
   exact hs
@@ -263,40 +260,38 @@ theorem typedCall_of_body {m : Core.Module} {c : ContextId} {ctx : Context} {imp
     (hctx : m.contexts[c]? = some ctx) (himpl : m.impls[ctx.impl]? = some impl)
     (profile : NumProfile) (n depth : Nat) (values : List Val) (state : St)
     (hbody : impl.params.size = values.length →
-      CalleeBodyAt n ⟨profile, m⟩ ctx.impl impl depth values state) :
+      CalleeBodyAt n ⟨profile, m⟩ ctx impl depth values state) :
     EventualM (enterCall (n + 1) ⟨profile, m⟩ depth c values)
       (fun fuel => callFn fuel ⟨profile, lower m⟩ depth
-        (((m.contexts[c]?).map (·.impl)).getD 0) values) state := by
+        c values) state := by
   by_cases hd : depth ≥ maxCallDepth
   · simp only [enterCall, hd, ite_true]
     exact nonfinalStop_eventual .timeout (by simp [IsFinal]) _ _
   · by_cases hp : impl.params.size = values.length
-    · have hent : ((m.contexts[c]?).map (·.impl)).getD 0 = ctx.impl := by simp [hctx]
-      rw [hent]
-      simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl, pure_bind,
+    · simp only [enterCall, hd, ite_false, lookupContext, lookupImpl, hctx, himpl, pure_bind,
         hp, ite_true]
       let le := lowerEnv m impl.vars impl.results.toList
       let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
-      let cx : FnCtx := ⟨⟨profile, lower m⟩, lowerImplAt m ctx.impl impl⟩
+      let cx : FnCtx := ⟨⟨profile, lower m⟩, lowerContextAt m ctx impl⟩
       let env : Env := ⟨impl.vars, state.nextAct, [], depth + 1⟩
       let fr := callFrame impl state.nextAct (depth + 1) values
       let initial := { state with nextAct := state.nextAct + 1 }
       let pre := (impl.params.toList.zip values).map fun (p, value) => (p.var, value)
       have hlow : lowerBlock none (callPre impl) false impl.body le (callEntry impl) = (body.1, body.2) := rfl
       have hextTail : ExtT (bodyTail impl le body.1 body.2) cx.fn.blocks := by
-        rw [lowerImplAt_call_blocks]
+        rw [lowerContextAt_blocks, lowerImpl_call_blocks]
         exact extT_finish _
       have hextBody : ExtT body.2 cx.fn.blocks := hextTail.of_adv
         (advB_finishFunction impl body.1 le body.2 (finishFunction impl body.1 le body.2).1
           (bodyTail impl le body.1 body.2) rfl)
       have hextEntry : ExtT (callEntry impl) cx.fn.blocks := hextBody.of_adv
         (advB_lowerBlock none (callPre impl) false impl.body le (callEntry impl) body.1 body.2 hlow)
-      have hrun : ∀ fuel, callFn (fuel + 2) ⟨profile, lower m⟩ depth ctx.impl values state =
+      have hrun : ∀ fuel, callFn (fuel + 2) ⟨profile, lower m⟩ depth c values state =
           runAt cx (0, 0) fr fuel initial := by
         intro fuel
         rw [show fuel + 2 = (fuel + 1) + 1 from rfl, callFn]
-        simp only [hd, ite_false, lookupFn_lower himpl, pure_bind]
-        exact enterFn_call m profile ctx.impl impl (depth + 1) fuel values state hp hextEntry
+        simp only [hd, ite_false, lookupFn_lower hctx himpl, pure_bind]
+        exact enterFn_call m profile ctx impl (depth + 1) fuel values state hp hextEntry
       have hs := hbody hp
       refine ⟨fun value after h => ?_, fun err after h hf => ?_⟩
       · have h' : (execBlock n ⟨profile, m⟩ env pre impl.body >>= expectReturned) initial =
@@ -337,7 +332,7 @@ theorem typedCall_of_body {m : Core.Module} {c : ContextId} {ctx : Context} {imp
             obtain ⟨K, hK⟩ := hmore 1 (.ok normal finished) (NonTimeout.ok _ _) hreturn
             refine ⟨K + 2, fun fuel hfu => ?_⟩
             obtain ⟨extra, rfl⟩ : ∃ extra, fuel = extra + 2 := ⟨fuel - 2, by omega⟩
-            change callFn (extra + 2) ⟨profile, lower m⟩ depth ctx.impl values state = _
+            change callFn (extra + 2) ⟨profile, lower m⟩ depth c values state = _
             rw [hrun extra]
             exact hK extra (by omega)
           · subst hflow
@@ -346,7 +341,7 @@ theorem typedCall_of_body {m : Core.Module} {c : ContextId} {ctx : Context} {imp
             obtain ⟨K, hK⟩ := hmore 1 (.ok returned finished) (NonTimeout.ok _ _) (hsite.run finished 0)
             refine ⟨K + 2, fun fuel hfu => ?_⟩
             obtain ⟨extra, rfl⟩ : ∃ extra, fuel = extra + 2 := ⟨fuel - 2, by omega⟩
-            change callFn (extra + 2) ⟨profile, lower m⟩ depth ctx.impl values state = _
+            change callFn (extra + 2) ⟨profile, lower m⟩ depth c values state = _
             rw [hrun extra]
             exact hK extra (by omega)
       · have h' : (execBlock n ⟨profile, m⟩ env pre impl.body >>= expectReturned) initial =
@@ -359,7 +354,7 @@ theorem typedCall_of_body {m : Core.Module} {c : ContextId} {ctx : Context} {imp
           obtain ⟨K, hK⟩ := hs.2 err' stopped hb hf
           refine ⟨K + 2, fun fuel hfu => ?_⟩
           obtain ⟨extra, rfl⟩ : ∃ extra, fuel = extra + 2 := ⟨fuel - 2, by omega⟩
-          change callFn (extra + 2) ⟨profile, lower m⟩ depth ctx.impl values state = _
+          change callFn (extra + 2) ⟨profile, lower m⟩ depth c values state = _
           rw [hrun extra]
           exact hK extra (by omega)
         | ok flow finished =>
@@ -381,7 +376,7 @@ theorem typedCall_of_source {cfg : Cfg} {c : ContextId} {ctx : Context} {impl : 
       ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) false impl.body) :
     EventualM (enterCall (n + 1) cfg depth c values)
       (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ depth
-        (((cfg.mod.contexts[c]?).map (·.impl)).getD 0) values) state := by
+        c values) state := by
   exact typedCall_of_body hctx himpl cfg.profile n depth values state
     (fun hp => calleeBodyAt_of_typedBlock hp source htyping hroots hloops hbody)
 
@@ -394,7 +389,7 @@ theorem typedCall_afterArgs {n : Nat} {cfg : Cfg} {env : Env} {state after : St}
         ((impl.params.toList.zip values).map fun (p, value) => (p.var, value)) false impl.body) :
     EventualM (enterCall (n + 1) cfg env.depth c values)
       (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ env.depth
-        (((cfg.mod.contexts[c]?).map (·.impl)).getD 0) values) after := by
+        c values) after := by
   obtain ⟨ctx, impl, hcontext, himplementation, body, htyping, hroots⟩ :=
     source.calleeAfterArgs argFuel values hdone
   apply typedCall_of_source hcontext himplementation n env.depth values after body

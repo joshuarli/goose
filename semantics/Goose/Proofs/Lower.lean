@@ -1,3 +1,4 @@
+import Goose.Lower.ContextLowering
 import Goose.Lower.Claims
 import Goose.Lower.Range
 import Goose.Lower.Validate
@@ -108,10 +109,6 @@ theorem lower_global_lookup (m : Core.Module) (i : Nat) :
     (lower m).globals[i]? = (m.globals[i]?).map (lowerGlobal m) := by
   simp [lower]
 
-theorem lower_func_lookup (m : Core.Module) (i : Nat) :
-    (lower m).funcs[i]? = (m.impls[i]?).map (fun impl => lowerImplAt m i impl) := by
-  simp [lower]
-
 theorem checkGlobal_origin {m : Core.Module} {i : Nat} {g : Core.Global}
     (h : Core.checkGlobal m i g = .ok ()) : g.org < m.origins.size := by
   by_cases ht : (g.ty.storable && !g.ty.isRefLike) = true
@@ -168,10 +165,10 @@ theorem checkImpl_localScopes {m : Core.Module} {impl : Core.Impl}
         · simp [hnot, Core.reject] at hcheck
     · simp [hbody, Core.reject, bind, Except.bind] at h
 
-theorem lowerImplAt_slotScopes {m : Core.Module} {implId : Nat} {impl : Core.Impl}
+theorem lowerImpl_slotScopes {m : Core.Module} {impl : Core.Impl}
     (hcheck : Core.checkImpl m impl = .ok ()) :
-    ∀ sl ∈ (lowerImplAt m implId impl).slots,
-      sl.scope < (lowerImplAt m implId impl).scopes.size := by
+    ∀ sl ∈ (lowerImpl m impl).slots,
+      sl.scope < (lowerImpl m impl).scopes.size := by
   intro sl hsl
   obtain ⟨i, hslot⟩ := Array.mem_iff_getElem?.mp hsl
   change (impl.vars.mapIdx fun i lv =>
@@ -184,7 +181,7 @@ theorem lowerImplAt_slotScopes {m : Core.Module} {implId : Nat} {impl : Core.Imp
     have hmem : lv ∈ impl.vars.toList :=
       Array.mem_toList_iff.mpr (Array.mem_iff_getElem?.mpr ⟨i, hvar⟩)
     have hscope := checkImpl_localScopes hcheck lv hmem
-    simpa [lowerImplAt, Core.scopeParents] using hscope
+    simpa [lowerImpl, Core.scopeParents] using hscope
 
 /-- Lowering preserves the entry signature and global initializer headers. -/
 theorem lower_checkEntryAndGlobals (m : Core.Module) (h : Core.validate m = .ok ()) :
@@ -192,9 +189,8 @@ theorem lower_checkEntryAndGlobals (m : Core.Module) (h : Core.validate m = .ok 
   obtain ⟨_, hentry, _, hglobals, _, _, _, _⟩ := core_validate_stages m h
   obtain ⟨ctx, impl, hctx, himpl, hparams, hresults⟩ := checkEntry_shape hentry
   have hfunc : (lower m).funcs[(lower m).entry]? =
-      some (lowerImplAt m ctx.impl impl) := by
-    rw [lower_func_lookup]
-    simp [lower, hctx, himpl]
+      some (lowerContextAt m ctx impl) := by
+    exact lower_func_at hctx himpl
   have hparamsList : impl.params.toList = [] := by
     have hlen : impl.params.toList.length = 0 := by simpa using hparams
     exact List.eq_nil_of_length_eq_zero hlen
@@ -236,9 +232,9 @@ theorem lower_checkEntryAndGlobals (m : Core.Module) (h : Core.validate m = .ok 
   unfold GIR.checkEntryAndGlobals
   simp only [bind, Except.bind]
   have hentryShape :
-      ((lowerImplAt m ctx.impl impl).params.isEmpty &&
-        (lowerImplAt m ctx.impl impl).results.isEmpty) = true := by
-    simp [lowerImplAt, hparamsList, hresultsList]
+      ((lowerContextAt m ctx impl).params.isEmpty &&
+        (lowerContextAt m ctx impl).results.isEmpty) = true := by
+    simp [lowerContextAt, lowerImpl, hparamsList, hresultsList]
   simp only [hfunc, hentryShape, if_true]
   rw [hOrigins]
   rw [← Array.forIn_toList]
@@ -359,9 +355,9 @@ theorem enterCall_nil (cfg : Cfg) (n : Nat) (c : ContextId) (ctx : Context) (imp
   have hmaxd : ¬ ((0 : Nat) ≥ maxCallDepth) := by simp [maxCallDepth]
   simp [enterCall, hmaxd, lookupContext, lookupImpl, hctx, himpl, hp]
 
-theorem lowerImplAt_blocks (m : Core.Module) (implId : ImplId) (impl : Impl)
+theorem lowerImpl_blocks (m : Core.Module) (impl : Impl)
     (hp : impl.params = #[]) :
-    (lowerImplAt m implId impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
+    (lowerImpl m impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
       (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).1
       (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).2).blocks := by
   rcases impl with ⟨name, params, results, vars, body, summary⟩
@@ -369,18 +365,11 @@ theorem lowerImplAt_blocks (m : Core.Module) (implId : ImplId) (impl : Impl)
   subst hp
   rfl
 
-theorem lowerImpl_blocks (m : Core.Module) (impl : Impl) (hp : impl.params = #[]) :
-    (lowerImpl m impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).1
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).2).blocks := by
-  unfold lowerImpl
-  exact lowerImplAt_blocks m _ impl hp
-
 theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     (hctx : m.contexts[m.entry]? = some ctx) (himpl : m.impls[ctx.impl]? = some impl)
     (hp : impl.params = #[]) (hb : flowBlockOk impl.body = true) (p : NumProfile) (n : Nat) (s : St) :
     Agree (enterCall n ⟨p, m⟩ 0 m.entry [])
-      (fun k => callFn k ⟨p, lower m⟩ 0 (((m.contexts[m.entry]?).map (·.impl)).getD 0) []) s := by
+      (fun k => callFn k ⟨p, lower m⟩ 0 m.entry []) s := by
   cases n with
   | zero =>
     refine ⟨fun a s1 h => ?_, fun e s1 h hf => ?_⟩
@@ -389,11 +378,9 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
       obtain ⟨rfl, _⟩ := h
       exact absurd hf (by simp [IsFinal])
   | succ n' =>
-    have hent : ((m.contexts[m.entry]?).map (·.impl)).getD 0 = ctx.impl := by simp [hctx]
-    have hfn : (lower m).funcs[ctx.impl]? = some (lowerImplAt m ctx.impl impl) := by
-      simp [lower, himpl]
+    have hfn : (lower m).funcs[m.entry]? = some (lowerContextAt m ctx impl) := by
+      exact lower_func_at hctx himpl
     have hmaxd : ¬ ((0 : Nat) ≥ maxCallDepth) := by simp [maxCallDepth]
-    rw [hent]
     rw [enterCall_nil ⟨p, m⟩ n' m.entry ctx impl hctx himpl hp]
     let le := lowerEnv m impl.vars impl.results.toList
     have hlow : lowerBlock none [] false impl.body le startLS =
@@ -401,11 +388,11 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
           (lowerBlock none [] false impl.body le startLS).2) := rfl
     generalize hr : (lowerBlock none [] false impl.body le startLS).1 = r at hlow
     generalize hl1 : (lowerBlock none [] false impl.body le startLS).2 = ls1 at hlow
-    have hT : (lowerImplAt m ctx.impl impl).blocks = finishBlocks (bodyTail impl le r ls1).blocks := by
-      rw [lowerImplAt_blocks m ctx.impl impl hp, hr, hl1]
-    let cx : FnCtx := ⟨⟨p, lower m⟩, lowerImplAt m ctx.impl impl⟩
+    have hT : (lowerContextAt m ctx impl).blocks = finishBlocks (bodyTail impl le r ls1).blocks := by
+      rw [lowerContextAt_blocks, lowerImpl_blocks m impl hp, hr, hl1]
+    let cx : FnCtx := ⟨⟨p, lower m⟩, lowerContextAt m ctx impl⟩
     have hextE : ExtT (bodyTail impl le r ls1) cx.fn.blocks := by
-      show ExtT _ (lowerImplAt m ctx.impl impl).blocks
+      show ExtT _ (lowerContextAt m ctx impl).blocks
       rw [hT]; exact extT_finish _
     have hext1 : ExtT ls1 cx.fn.blocks :=
       hextE.of_adv (advB_finishFunction impl r le ls1
@@ -413,7 +400,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     have hext0 : ExtT startLS cx.fn.blocks := hext1.of_adv (advB_lowerBlock none [] false impl.body _ _ _ _ hlow)
     obtain ⟨blk0, hb0, hb0p⟩ := hext0.params (b := 0) (blk := ⟨[], #[]⟩) rfl
     have hb0p' : blk0.params = [] := hb0p
-    have hpar : (lowerImplAt m ctx.impl impl).params = [] := by simp [lowerImplAt, hp]
+    have hpar : (lowerContextAt m ctx impl).params = [] := by simp [lowerContextAt, lowerImpl, hp]
     have hrel0 : ∀ act, Rel (⟨p, m⟩ : Cfg) (⟨impl.vars, act, [], 0 + 1⟩ : Env) cx
         (⟨act, [], {}, 0 + 1⟩ : Frame) startLS := fun act => ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
     have hclaim := (flowClaims n').block none [] [] false impl.body hb ⟨p, m⟩
@@ -421,7 +408,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
       ⟨s.nextAct, [], {}, 0 + 1⟩ hlow startLS_pp hext1 (hrel0 s.nextAct) trivial
     rw [prepareReturn_no_scopes _ rfl, bind_pure] at hclaim
     have hclaim' := hclaim { s with nextAct := s.nextAct + 1 }
-    have hcall : ∀ k0 : Nat, callFn (k0 + 2) ⟨p, lower m⟩ 0 ctx.impl [] s =
+    have hcall : ∀ k0 : Nat, callFn (k0 + 2) ⟨p, lower m⟩ 0 m.entry [] s =
         runAt cx (0, 0) ⟨s.nextAct, [], {}, 0 + 1⟩ k0 { s with nextAct := s.nextAct + 1 } := by
       intro k0
       rw [show k0 + 2 = (k0 + 1) + 1 from rfl, callFn_nil _ _ _ hmaxd _ _ hfn]
@@ -449,8 +436,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
           obtain ⟨-, -, -, hinst⟩ := emitTerm_facts hemit P.pp hextE
           refine ⟨kk + 3, fun k hk => ?_⟩
           obtain ⟨k0, rfl⟩ : ∃ k0, k = k0 + 2 := ⟨k - 2, by omega⟩
-          show callFn (k0 + 2) ⟨p, lower m⟩ 0 (ctx.impl) [] s = _
-          show callFn (k0 + 2) ⟨p, lower m⟩ 0 ctx.impl [] s = _
+          show callFn (k0 + 2) ⟨p, lower m⟩ 0 m.entry [] s = _
           rw [hcall k0]
           obtain ⟨j, rfl⟩ : ∃ j, k0 = (j + 1) + kk := ⟨k0 - kk - 1, by omega⟩
           rw [hrun (j + 1)]
@@ -474,7 +460,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
           obtain ⟨rfl, rfl⟩ := Res.ok.inj hc'
           refine ⟨kk + 3, fun k hk => ?_⟩
           obtain ⟨k0, rfl⟩ : ∃ k0, k = k0 + 2 := ⟨k - 2, by omega⟩
-          show callFn (k0 + 2) ⟨p, lower m⟩ 0 ctx.impl [] s = _
+          show callFn (k0 + 2) ⟨p, lower m⟩ 0 m.entry [] s = _
           rw [hcall k0]
           obtain ⟨j, rfl⟩ : ∃ j, k0 = (j + 1) + kk := ⟨k0 - kk - 1, by omega⟩
           rw [hrun (j + 1)]
@@ -491,7 +477,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
         obtain ⟨kk, hrun⟩ := hclaim'.2 e2 s2 hcb hf
         refine ⟨kk + 2, fun k hk => ?_⟩
         obtain ⟨k0, rfl⟩ : ∃ k0, k = k0 + 2 := ⟨k - 2, by omega⟩
-        show callFn (k0 + 2) ⟨p, lower m⟩ 0 (ctx.impl) [] s = _
+        show callFn (k0 + 2) ⟨p, lower m⟩ 0 m.entry [] s = _
         rw [hcall k0]
         obtain ⟨j, rfl⟩ : ∃ j, k0 = j + kk := ⟨k0 - kk, by omega⟩
         rw [hrun j]
@@ -556,7 +542,7 @@ theorem runModule_agree (m : Core.Module) (hm : moduleOk m = true) (p : NumProfi
       obtain ⟨hpe, hb⟩ := hentry
       have hp : impl.params = #[] := by simpa using hpe
       have hsz : (lower m).globals.size = m.globals.size := by simp [lower]
-      have hent : (lower m).entry = ((m.contexts[m.entry]?).map (·.impl)).getD 0 := rfl
+      have hent : (lower m).entry = m.entry := rfl
       simp only [Goose.Core.runModule, GIR.runModule, hsz, hent]
       exact Agree.bind (initGlobals_agree m p n hglob _ (fun g hg => by simpa using hg) s) fun _ s1 _ =>
         Agree.bind (entry_agree m ctx impl hctx himpl hp hb p n s1) fun _ s2 _ =>
