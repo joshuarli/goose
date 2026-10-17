@@ -928,9 +928,14 @@ def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) (v
       violation .v060 s!"{label}: x_replace owner was not cleared on every path"
   | _ => pure ()
 
+def replacementProvenance (f : Func) (p : Prov) : Prov :=
+  { slots := p.slots.map fun roots => roots.flatMap f.expandParameterRoot
+    vals := p.vals.map fun roots => roots.flatMap f.expandParameterRoot }
+
 def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Option VTy))
     (p : Prov) : Check Unit := do
   if m.profile == .shrink then
+    let p := replacementProvenance f p
     let validRuns := freshRuns f vt
     let states := emptyFactsAtBlocks m f vt p
     for h : b in [0:f.blocks.size] do
