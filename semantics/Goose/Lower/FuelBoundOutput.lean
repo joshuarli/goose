@@ -577,7 +577,7 @@ theorem typedStatementFuelBound_append {sourceFuel fuel : Nat} {cfg : Cfg} {resu
       have addressCell := combined.has (address, .val (.ref location)) (by simp)
       have viewCell := combined.has (viewId, .view sourceView) (by simp)
       have equal : execEff cx.fn fr2 (.append address viewId (some origin)) =
-          (readRun sourceView >>= fun elements => checkedAppendLoc location elements origin) >>= 
+          (readRun sourceView >>= fun elements => checkedAppendLoc location elements origin) >>=
             fun _ => pure fr2 := by
         simp only [execEff, getVal_of addressCell, getView_of viewCell, Goose.Core.expectRef,
           bind_assoc, pure_bind, Goose.Core.checkedAppendLoc, checkCapacityAtOrg,
@@ -744,7 +744,7 @@ theorem typedStatementFuelBound_assert {sourceFuel fuel : Nat} {cfg : Cfg} {resu
             have stopped := FuelBoundAt.abortTerm (sourceFuel := sourceFuel) (fuel := residual)
               (cx := cx) (pt := (elseBlock, 0)) (fr := fr1)
               (source := fun _ =>
-                (if false then pure (Flow.normal .unit) else abortAt .assert origin) >>= 
+                (if false then pure (Flow.normal .unit) else abortAt .assert origin) >>=
                   prepareLoopFlow env loop)
               (post := fun flow _ pt' fr' =>
                 StatementLoopPost cfg env cx ls fr after loop flow pt' fr')
@@ -772,7 +772,7 @@ theorem typedStatementFuelBound_assert {sourceFuel fuel : Nat} {cfg : Cfg} {resu
             have selectedSource := normal.of_source
               (otherFuel := sourceFuel)
               (other := fun _ =>
-                (if true then pure (Flow.normal .unit) else abortAt .assert origin) >>= 
+                (if true then pure (Flow.normal .unit) else abortAt .assert origin) >>=
                   prepareLoopFlow env loop) branchSourceEq
             have selectedBranch := FuelBoundAt.condbr_take0 branchAt conditionCell
               (by simpa only [Bool.false_eq_true, ↓reduceIte] using thenTargetAt)
