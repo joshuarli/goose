@@ -194,6 +194,33 @@ theorem mutable_field_call_typed {before after : LS} {value : ValueId}
 #guard let (value, after) := lowerExpr mutableFieldCall (lowerEnv fieldCallModule fieldCallEnv.vars []) initial
   after.vals[value]? == some (some (.data (.int .i64)))
 
+def mutableReferenceChoice : Expr :=
+  .ifE (.bool true) (.mk 1 [] (some (.read (.var 0)))) (.mk 2 [] (some (.read (.var 0))))
+
+def mutableDerefReference : Expr := .ref .mutable (.deref mutableReferenceChoice)
+
+theorem mutable_deref_reference_source : Core.tyExpr env mutableDerefReference 2 =
+    .ok (.ref .mutable (.int .i64), 2) := by rfl
+
+theorem mutable_deref_reference_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableDerefReference (lowerEnv module env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.ref .mutable (.int .i64)))) := by
+  exact lowerExpr_recursive_typed mutableDerefReference (by trivial) mutable_deref_reference_source run live
+
+def mutableDerefCall : Expr :=
+  .call 1 [.byRef .mutable (.deref mutableReferenceChoice), .byRef .mutable (.var 1)] 0
+
+theorem mutable_deref_call_source : Core.tyExpr referenceEnv mutableDerefCall 2 =
+    .ok (.int .i64, 2) := by rfl
+
+theorem mutable_deref_call_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableDerefCall (lowerEnv referenceModule env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.int .i64))) := by
+  exact lowerExpr_recursive_typed mutableDerefCall (by trivial) mutable_deref_call_source run live
+
+#guard let (value, after) := lowerExpr mutableDerefCall (lowerEnv referenceModule env.vars []) initial
+  after.vals[value]? == some (some (.data (.int .i64)))
+
 #print axioms lowerBound_recursive_typed
 #print axioms lowerExprs_recursive_typed
 #print axioms structLiteral_resultTy
