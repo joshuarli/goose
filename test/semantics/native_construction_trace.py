@@ -16,6 +16,9 @@ FIXTURES = (
     ROOT / "test/semantics/sem_construction_named_result.goose",
     ROOT / "test/semantics/sem_construction_nested_target_mode.goose",
 )
+FOCUSED_FIXTURES = (
+    ROOT / "test/semantics/sem_construction_built_zero_replacement.goose",
+)
 NUMERIC_PROFILES = ("release", "debug")
 OPT_LEVELS = ("-O0", "-O2")
 
@@ -183,6 +186,9 @@ def main():
     parser.add_argument("--semantics", type=Path, required=True)
     parser.add_argument("--cc", default="clang")
     parser.add_argument("--timeout", type=float, default=120)
+    fixture_options = FIXTURES + FOCUSED_FIXTURES
+    parser.add_argument("--fixture", choices=tuple(fixture.stem for fixture in fixture_options),
+                        action="append")
     args = parser.parse_args()
     for executable in (args.goose, args.semantics):
         if not executable.is_file():
@@ -197,7 +203,9 @@ def main():
         print(f"native construction trace: {error}", file=sys.stderr)
         return 1
     differences = []
-    for fixture in FIXTURES:
+    fixtures = FIXTURES if not args.fixture else tuple(
+        fixture for fixture in fixture_options if fixture.stem in args.fixture)
+    for fixture in fixtures:
         try:
             compare_fixture(args.goose, args.semantics, args.cc, fixture, work, args.timeout)
         except CheckFailure as error:
