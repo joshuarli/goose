@@ -149,6 +149,11 @@ theorem execPure_result_typed {cfg : GCfg} {fn : Func} {activations : Activation
   | refFreeze reference =>
     obtain ⟨permission, target, metadata, rfl⟩ := refFreeze_metadata typed
     exact pureResult_state frameTyped.1 (execPure_refFreeze_typed frameTyped.2.2 metadata evaluated)
+  | ownerBorrow reference =>
+    rcases ownerBorrow_metadata typed with
+      ⟨element, metadata, rfl⟩ | ⟨element, metadata, rfl⟩
+    · exact pureResult_state frameTyped.1 (execPure_ownerBorrow_typed frameTyped.2.2 metadata evaluated)
+    · exact pureResult_state frameTyped.1 (execPure_ownerBorrow_typed frameTyped.2.2 metadata evaluated)
   | load reference =>
     obtain ⟨permission, target, metadata, rfl⟩ := load_metadata typed
     exact pureResult_state frameTyped.1

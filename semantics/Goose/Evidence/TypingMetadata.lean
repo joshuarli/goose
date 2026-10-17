@@ -171,6 +171,26 @@ theorem refFreeze_metadata {env : TyEnv} {reference : ValueId} {result : VTy}
   obtain ⟨⟨permission, target⟩, operand, typed⟩ := bind_ok typed
   exact ⟨permission, target, refTy_metadata operand, (Except.ok.inj typed).symm⟩
 
+theorem ownerBorrow_metadata {env : TyEnv} {reference : ValueId} {result : VTy}
+    (typed : (Op.ownerBorrow reference).resultTy env = .ok result) :
+    (∃ element, env.vals[reference]? = some (some (.data (.ref .mutable (.grow element)))) ∧
+      result = .data (.ref .mutable (.grow element))) ∨
+    (∃ element, env.vals[reference]? = some (some (.data (.ref .mutable (.growshrink element)))) ∧
+      result = .data (.ref .mutable (.growshrink element))) := by
+  simp only [Op.resultTy] at typed
+  obtain ⟨⟨permission, target⟩, operand, typed⟩ := bind_ok typed
+  cases permission with
+  | readOnly => simp [bind, Except.bind, tyErr] at typed
+  | mutable =>
+    cases target with
+    | grow element =>
+      simp only [beq_self_eq_true, ↓reduceIte] at typed
+      exact Or.inl ⟨element, refTy_metadata operand, (Except.ok.inj typed).symm⟩
+    | growshrink element =>
+      simp only [beq_self_eq_true, ↓reduceIte] at typed
+      exact Or.inr ⟨element, refTy_metadata operand, (Except.ok.inj typed).symm⟩
+    | _ => simp [tyErr] at typed
+
 theorem load_metadata {env : TyEnv} {reference : ValueId} {result : VTy}
     (typed : (Op.load reference).resultTy env = .ok result) :
     ∃ permission target, env.vals[reference]? = some (some (.data (.ref permission target))) ∧
