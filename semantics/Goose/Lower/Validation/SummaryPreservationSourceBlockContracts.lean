@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.SummaryPreservationSourceScopeBounds
 import Goose.Lower.Validation.SummaryPreservationReplayTypedPlacesContracts
 import Goose.Lower.Validation.SummaryPreservationTypedResultBounds
 import Goose.Lower.Validation.SummaryPreservationReturnTransfer
@@ -5,9 +6,6 @@ import Goose.Lower.Validation.SummaryPreservationReturnTransfer
 namespace Goose.Lower.Validation.SummaryPreservation
 
 open Goose.Core Goose.GIR
-
-def SourceScopesWithin (count : Nat) (scopes : List (ScopeId × Option ScopeId)) : Prop :=
-  ∀ entry ∈ scopes, entry.1 < count
 
 def BlockReplayAt (typingEnv : TEnv) (env : PEnv) (results : Array (List RootRef))
     (vt : Array (Option VTy)) (target : Core.Eff) (scopeCount : Nat)
