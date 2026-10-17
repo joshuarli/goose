@@ -198,7 +198,7 @@
   "feature": "TH-LOWER-01",
   "label": "model-proved",
   "id": "TH-LOWER-01-REST",
-  "limits": "These theorems concern the transparent Lean Core evaluator, lower builder and GIR interpreter. GIR validation preservation (TH-LOWER-02) remains open. They do not prove production C++ exporter, emitter, native runtime or core-construction conformance. The legacy moduleOk theorem retains its fragment restrictions.",
+  "limits": "These theorems concern the transparent Lean Core evaluator, lower builder and GIR interpreter. GIR validation preservation remains open. An explicit bound relating source and target fuel (TH-LOWER-02) remains open. Agreement of timeout prefixes is outside these claims. They do not prove production C++ exporter, emitter, native runtime or core-construction conformance. The legacy moduleOk theorem retains its fragment restrictions.",
   "theorem": "Goose.Lower.typedModule_simulation, Goose.Lower.acceptedModule_reflection, Goose.Lower.acceptedModule_never_faults",
   "statement": "For every module accepted by Core.validate and every numeric profile, every successful or final source result at any source fuel occurs at all sufficiently large target fuels. Every non-timeout lowered GIR result at any target fuel occurs in Core at some source fuel. The lowered module never faults at any target fuel.",
   "assumptions": "Core.validate cfg.mod = .ok (). All source and target runs start at St.initial. No moduleOk fragment premise or additional typing, builder, callback or reflection hypothesis remains.",
