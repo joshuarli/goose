@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ExpressionTypingBlocks
+import Goose.Lower.Validation.ExpressionTypingCallOps
 
 namespace Goose.Lower.Validation
 
@@ -11,6 +11,7 @@ def RecursiveExpression : Expr → Prop
   | .un _ e _ | .not e => RecursiveExpression e
   | .bin _ a b _ => RecursiveExpression a ∧ RecursiveExpression b
   | .len v => RecursiveView v
+  | .call _ args _ => RecursiveArguments args
   | .and _ _ | .or _ _ => True
   | .blockE b => RecursiveBlock b
   | .ifE _ t f => RecursiveBlock t ∧ RecursiveBlock f
@@ -29,6 +30,11 @@ def RecursiveView : View → Prop
 def RecursiveBlock : Core.Block → Prop
   | .mk _ _ none => True
   | .mk _ _ (some e) => RecursiveExpression e
+
+def RecursiveArguments : List Arg → Prop
+  | [] => True
+  | .byVal e :: args => RecursiveExpression e ∧ RecursiveArguments args
+  | _ => False
 
 end
 
@@ -152,6 +158,36 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
       have recorded := emitDef_recorded current operation
       rw [emitted] at recorded
       exact recorded.2.2.1
+  | call context args origin =>
+    obtain ⟨ctx, callee, argsStart, argsFinish, resultStart, contextRow, calleeRow,
+      sameLength, argsSource, resultSource⟩ := tyExpr_call_tables source
+    have signature := lower_context_sigs_at env.vars results contextRow calleeRow
+    simp only [lowerExpr] at run
+    obtain ⟨arguments, middle, argsRun, run⟩ := bind_eq.mp run
+    obtain ⟨result, emitted, emitRun, tailRun⟩ := bind_eq.mp run
+    rw [call_result_tail_run] at tailRun
+    by_cases returns : (lowerEnv env.mod env.vars results).mod.noReturn context = true
+    · simp only [returns, ite_true] at tailRun
+      cases current : emitted.cur with
+      | none =>
+        rw [emitTerm_none _ _ current] at tailRun
+        obtain ⟨_, rfl⟩ := Prod.mk.inj tailRun
+        simp [current] at live
+      | some block =>
+        rw [emitTerm_run _ _ current] at tailRun
+        obtain ⟨_, rfl⟩ := Prod.mk.inj tailRun
+        contradiction
+    · simp only [returns] at tailRun
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj tailRun
+      have middleLive := (dead_emitDef (.call context arguments (some origin))).live_before emitRun live
+      have argumentsTyped := lowerArgs_recursive_typed args supported sameLength argsSource argsRun middleLive
+      cases current : middle.cur with
+      | none => simp [current] at middleLive
+      | some block =>
+        have operation := call_resultTy_of_passable signature argumentsTyped resultSource origin
+        have recorded := emitDef_recorded current operation
+        rw [emitRun] at recorded
+        exact recorded.2.2.1
   | and a b =>
     have typed := lowerExpr_and_source_result_typed source results before
     rw [run] at typed
@@ -311,6 +347,42 @@ theorem lowerView_recursive_typed (v : View) (supported : RecursiveView v)
         rw [run] at lowered
         exact ⟨mu, lowered.2⟩
     | _ => exact (rej_ok _ _ _ _).mp tail |>.elim
+
+theorem lowerArgs_recursive_typed (args : List Arg) (supported : RecursiveArguments args)
+    {env : Core.TEnv} {callee : Core.Impl} {params : List Param} {start finish : Nat}
+    (sameLength : params.length = args.length)
+    (source : Core.tyArgs env callee params args start = .ok ((), finish))
+    {results : List Ty} {before after : LS} {values : List ValueId}
+    (run : lowerArgs args (lowerEnv env.mod env.vars results) before = (values, after))
+    (live : after.cur.isSome = true) :
+    PassableValues after (params.map (fun param => tyOfVar callee param.var)) values := by
+  cases args with
+  | nil =>
+    cases params with
+    | nil =>
+      obtain ⟨rfl, rfl⟩ := pure_eq.mp run
+      exact .nil
+    | cons _ _ => simp at sameLength
+  | cons arg args =>
+    cases params with
+    | nil => simp at sameLength
+    | cons param params =>
+      cases arg with
+      | byRef mu place => contradiction
+      | byVal expr =>
+        obtain ⟨exprSupported, argsSupported⟩ := supported
+        obtain ⟨localVar, argTy, childStart, childFinish, restStart,
+          row, childSource, permission, restSource⟩ := tyArgs_byVal_head source
+        simp only [lowerArgs, lowerArg] at run
+        obtain ⟨value, middle, childRun, run⟩ := bind_eq.mp run
+        obtain ⟨restValues, restAfter, restRun, run⟩ := bind_eq.mp run
+        obtain ⟨rfl, rfl⟩ := pure_eq.mp run
+        have restTyped := lowerArgs_recursive_typed args argsSupported (by simpa using sameLength)
+          restSource restRun live
+        have middleLive := (dead_lowerArgs args).live_before restRun live
+        have childTyped := lowerExpr_recursive_typed expr exprSupported childSource childRun middleLive
+        have retained := types_lowerArgs args _ _ _ _ restRun value (.data argTy) childTyped
+        exact .cons ⟨argTy, retained, by simpa [tyOfVar, row] using permission⟩ restTyped
 
 theorem lowerBlock_recursive_typed (body : Core.Block) (supported : RecursiveBlock body)
     {env : Core.TEnv} {ty : Ty} {start finish : Nat}
