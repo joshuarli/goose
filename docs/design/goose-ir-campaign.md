@@ -6,15 +6,37 @@
 
 ## Current checkpoint
 
-The integrated source checkpoint is `master` at `d8b16216`. Its full source-aware rehash covers 144 changed roots plus `Goose.Audit`, 1,308 modules in 1,309 jobs, and all 171 registered claims, with only `propext`, `Classical.choice`, and `Quot.sound` reported. This source-only checkpoint establishes source elaboration and transitive audit results. It does not establish a fresh executable `goose-semantics` audit, whole evaluation, cross-layer parity, or final gates. Full validation, whole-evaluation proofs, same-checkpoint parity, final regression, and performance gates remain open.
+The integrated C++ checkpoint is `master` at `153f44f0`. Its six C++ commits match the checked candidate `a26a9783` byte-for-byte across `src`, `test`, the GIR specification, and native construction contract files. Bounded compiler checks passed on that candidate. The separate semantic-source checkpoint remains `d8b16216`: its source-only rehash covers 144 changed roots plus `Goose.Audit`, 1,308 modules in 1,309 jobs, and all 171 registered claims, with only `propext`, `Classical.choice`, and `Quot.sound` reported. Neither receipt establishes a fresh integrated `goose-semantics` audit, accepted Core-to-GIR validation, whole evaluation, same-checkpoint Core/GIR/native parity, or final gates. Full validation, whole-evaluation proofs, same-checkpoint parity, final regression, and performance gates remain open.
 
 ### Evidence by scope
 
 #### Source kernel and transitive audit
 
-The predecessor checkpoint `4f7ccf1a` matched frozen source `dc7cb23b`. Its closure covered 216 changed or new Lean roots since `09374665`, plus `Goose.Audit`, for 1,290 modules. `verify_closure.py` fully rehashed the closure. The exact selected command is in `.work/wt/resume-semantic-check-nextplain/.work/tmp/nextplain-command.txt`; its completion log is `nextplain-closure-restart.log`. A separate `Goose.Audit` import reported 171 claims using only `propext`, `Classical.choice`, and `Quot.sound`; its runner and output are `.work/tmp/nextplain-audit.lean` and `.work/tmp/nextplain-audit.jsonl` in that worktree. This predecessor receipt is source elaboration and a transitive declaration audit, not an executable `goose-semantics` build or audit.
+The predecessor checkpoint `4f7ccf1a` matched frozen source `dc7cb23b`. Its closure covered 216 changed or new Lean roots since `09374665`, plus `Goose.Audit`, for 1,290 modules. The source-root selection is reproducible from `git diff --diff-filter=AM --name-only 09374665 dc7cb23b -- semantics/Goose`, retaining `.lean` paths present at `dc7cb23b`, converting paths to module names, sorting uniquely, and appending `Goose.Audit`. `verify_closure.py` fully rehashed the resulting dependency closure. The exact expanded command is in `.work/wt/resume-semantic-check-nextplain/.work/tmp/nextplain-command.txt`; its completion log is `nextplain-closure-restart.log`. A separate `Goose.Audit` import reported 171 claims using only `propext`, `Classical.choice`, and `Quot.sound`; its runner and output are `.work/tmp/nextplain-audit.lean` and `.work/tmp/nextplain-audit.jsonl` in that worktree. This predecessor receipt is source elaboration and a transitive declaration audit, not an executable `goose-semantics` build or audit.
 
-The current integrated root is the region-aligned source snapshot `d8b16216daee678d5f766e7665d070cc11e1beab`. It rehashed 144 changed roots plus `Goose.Audit`, 1,308 modules in 1,309 jobs, and all 171 audit registrations with the same three reported axioms. The invocation and result are in `.work/wt/resume-native-regions-aligned/.work/tmp/regions-aligned-check1-resumed.log`. The integrated source closure still excludes the subsequent model-knownness and SSA-value metadata, whole-evaluation proofs, Core/runtime updates, and GIR-H 0.5.
+The current integrated root is the region-aligned source snapshot `d8b16216daee678d5f766e7665d070cc11e1beab`. From that source tree, derive roots with `git diff --diff-filter=AM --name-only cc063a86 d8b16216 -- semantics/Goose`, retaining `.lean` paths present at `d8b16216`, converting to sorted unique module names, and appending `Goose.Audit`. This produces 144 changed roots plus the audit module. `verify_closure.py` expanded that selection to 1,308 modules and fully rehashed them; the derived module order exactly matches the recorded command. The invocation and result are in `.work/wt/resume-native-regions-aligned/.work/tmp/regions-aligned-check1-resumed.log`. The integrated source closure still excludes subsequent model-knownness and SSA-value metadata, whole-evaluation proofs, Core/runtime updates, and full Core-to-GIR integration.
+
+To reproduce a source selection and closure, run from its target checkout and set `base` and `target` to the source pair named above. Use `09374665` and `dc7cb23b` for the predecessor selection instead:
+
+```sh
+base=cc063a86
+target=d8b16216
+mapfile -t roots < <(
+    git diff --diff-filter=AM --name-only "$base" "$target" -- semantics/Goose |
+    while IFS= read -r path; do
+        case "$path" in
+            *.lean) git cat-file -e "$target:$path" 2>/dev/null || continue
+                   module=${path#semantics/}
+                   module=${module%.lean}
+                   printf '%s\n' "${module//\//.}" ;;
+        esac
+    done | sort -u
+)
+roots+=(Goose.Audit)
+module_args=()
+for module in "${roots[@]}"; do module_args+=(--module "$module"); done
+TMPDIR="$PWD/.work/tmp" python3 test/semantics/verify_closure.py --semantics-root semantics "${module_args[@]}"
+```
 
 Three closed lowering results remain valid for the definitions they state. `28eb9cc1` proves forward lowering preservation for accepted Core modules at every source fuel bound. `1da41160` checks reverse execution and all-fuel target-fault exclusion. `770db8aa` proves the converse fuel bound `8 * (moduleSyntaxCap + 1) * (targetFuel + 2) + 1`; its 265-module closure and independent review passed. Neither direction assumes source termination or an owner-shape certificate. These model results do not establish C++ lowering or native-emitter correctness.
 
@@ -22,15 +44,44 @@ Three closed lowering results remain valid for the definitions they state. `28eb
 
 No fresh `goose-semantics` Main build or executable audit is established for the integrated root. The old 158- and 157-claim executable audits in the historical campaign log are not current evidence. The source-level audit above does not replace this gate.
 
-#### Production C++ units
+#### Integrated C++ candidate
 
-Three focused units passed on isolated source commit `561a0f52`, based on `4f7ccf1a` plus source-root-ceiling changes. This is not an integrated Debug compiler or a current-root receipt. From that worktree, the three commands were:
+The checked candidate `a26a9783` is the source base for the six C++ commits now integrated at `153f44f0`. A Git comparison confirmed that `src`, `test`, the GIR specification, and native construction contract files are byte-identical between them. From `resume-cpp-closing`, all three focused GIR units passed:
 
 ```sh
-TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir.cpp -pthread -lm -o .work/tmp/compiler_gir-source-roots && .work/tmp/compiler_gir-source-roots
-TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir_effects.cpp -pthread -lm -o .work/tmp/compiler_gir_effects-source-roots && .work/tmp/compiler_gir_effects-source-roots
-TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir_reservations.cpp -pthread -lm -o .work/tmp/compiler_gir_reservations-source-roots && .work/tmp/compiler_gir_reservations-source-roots
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir.cpp -pthread -lm -o .work/tmp/compiler_gir-closing && .work/tmp/compiler_gir-closing
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir_effects.cpp -pthread -lm -o .work/tmp/compiler_gir_effects-closing && .work/tmp/compiler_gir_effects-closing
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir_reservations.cpp -pthread -lm -o .work/tmp/compiler_gir_reservations-closing && .work/tmp/compiler_gir_reservations-closing
 ```
+
+A fresh Debug GCC `goose` build also passed on the candidate:
+
+```sh
+TMPDIR="$PWD/.work/tmp" cmake -S . -B .work/build-cpp-closing -DCMAKE_BUILD_TYPE=Debug
+TMPDIR="$PWD/.work/tmp" cmake --build .work/build-cpp-closing --target goose --parallel 2
+```
+
+The resulting `.work/build-cpp-closing/goose` passed four selected baseline fixtures (eight parse/roundtrip/typecheck checks, four generated-C `-O0`/`-O2` runs, and four TinyCC runs):
+
+```sh
+TMPDIR="$PWD/.work/tmp" python3 test/run_tests.py --exe .work/build-cpp-closing/goose --profile baseline --cc native --jobs 1 --batch 1 --only storage/relative_known_null --only storage/relative_store_facts --only storage/pool_reference_rebinds --only codegen/named_fn_value_scope
+```
+
+Both GIR source scripts passed:
+
+```sh
+TMPDIR="$PWD/.work/tmp" sh test/gir/source/check.sh .work/build-cpp-closing/goose
+TMPDIR="$PWD/.work/tmp" sh test/gir/source/check_regressions.sh .work/build-cpp-closing/goose
+```
+
+The source fixture was `.work/tmp/cpp-closing-source/conditional_reference.goose`. Its Core, high GIR, and low GIR exports passed parsing, typechecking, and lowering; the high GIR included the expected `er` source-root row, verified by `jaq`:
+
+```sh
+.work/build-cpp-closing/goose -O0 --pipeline gir --emit-core .work/tmp/cpp-closing-source/conditional_reference.core.json --emit-gir-high .work/tmp/cpp-closing-source/conditional_reference.high.json --emit-gir-low .work/tmp/cpp-closing-source/conditional_reference.low.json --check .work/tmp/cpp-closing-source/conditional_reference.goose
+jaq -e '.[6][] | select(.[0] == "func" and .[1] == "pick") | .[7][5] == [["er",9,[["r_param",0],["r_param",1]]]]' .work/tmp/cpp-closing-source/conditional_reference.high.json
+```
+
+These are bounded candidate checks, not a fresh semantic Main build, source9 comparison, full source corpus, or completed Core-to-GIR theorem. No stdout/stderr log files were captured for these commands; the export artifacts and GIR script scratch outputs remain under `.work/tmp` in the candidate worktree.
 
 #### Construction Core, GIR, and native execution
 
