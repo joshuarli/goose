@@ -65,6 +65,7 @@ public:
             auto &signature = lsigs[target.members[0]];
             for (size_t result = 0; result < function.results.size(); result++) {
                 GirLowChannel channel;
+                channel.position = (int)result;
                 for (auto word : signature.resultWords[result]) {
                     (void)word;
                     channel.incoming.push_back((int)low.cells.size());

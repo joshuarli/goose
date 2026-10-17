@@ -416,6 +416,8 @@ private:
             if (table.members.empty() || !is_sorted(table.members.begin(), table.members.end()) ||
                 adjacent_find(table.members.begin(), table.members.end()) != table.members.end() || !sets.insert(table.members).second)
                 bad("low target member set is empty, repeated, or unsorted");
+            for (size_t channel = 0; channel < table.channels.size(); channel++)
+                if (table.channels[channel].position != (int)channel) bad("low target result positions are not dense and ordered");
             for (auto member : table.members) if (member < 0 || member >= (int)m.funcs.size()) bad("low target member lies outside the function table");
             if (table.cells.empty() || table.cells[0] < 0 || table.cells[0] >= (int)m.types.size() || m.Type(table.cells[0]).kind != CoreType::Bool)
                 bad("low target active cell is not boolean");

@@ -5586,6 +5586,15 @@ void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
         auto low = GirToLow(high).Lower();
         assert(low.lowtargets.size() == 1);
         assert(Code(low) == "");
+        assert(GirWriter(low).WriteLow().find("[\"lchannel\",0,") != string::npos);
+
+        auto missingPosition = low;
+        missingPosition.lowtargets[0].channels[0].position = -1;
+        assert(Code(missingPosition) == "GIR-V090");
+
+        auto duplicatePosition = low;
+        duplicatePosition.lowtargets[0].channels.push_back(duplicatePosition.lowtargets[0].channels[0]);
+        assert(Code(duplicatePosition) == "GIR-V090");
 
         auto targetFunction = low.lowtargets[0].members[0];
         auto missingActivation = low;
