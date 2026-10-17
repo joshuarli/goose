@@ -221,6 +221,24 @@ theorem mutable_deref_call_typed {before after : LS} {value : ValueId}
 #guard let (value, after) := lowerExpr mutableDerefCall (lowerEnv referenceModule env.vars []) initial
   after.vals[value]? == some (some (.data (.int .i64)))
 
+def mutableSliceEnv : Core.TEnv :=
+  { env with vars := #[⟨"slice", .slice .mutable (.int .i64), .immutable, 0, 0⟩], visible := [0] }
+
+def mutableSliceExpression : Expr :=
+  .slice .mutable (.val (.blockE (.mk 1 [] (some (.read (.var 0))))))
+    .omitted (.fromEnd (.lit .i8 1)) 0
+
+theorem mutable_slice_value_source : Core.tyExpr mutableSliceEnv mutableSliceExpression 2 =
+    .ok (.slice .mutable (.int .i64), 2) := by rfl
+
+theorem mutable_slice_value_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableSliceExpression (lowerEnv module mutableSliceEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.slice .mutable (.int .i64)))) := by
+  exact lowerExpr_recursive_typed mutableSliceExpression (by trivial) mutable_slice_value_source run live
+
+#guard let (value, after) := lowerExpr mutableSliceExpression (lowerEnv module mutableSliceEnv.vars []) initial
+  after.vals[value]? == some (some (.data (.slice .mutable (.int .i64))))
+
 #print axioms lowerBound_recursive_typed
 #print axioms lowerExprs_recursive_typed
 #print axioms structLiteral_resultTy

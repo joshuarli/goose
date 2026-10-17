@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ExpressionTypingMutableDerefOps
+import Goose.Lower.Validation.ExpressionTypingMutableViewOps
 
 namespace Goose.Lower.Validation
 
@@ -16,6 +16,7 @@ def RecursiveExpression : Expr → Prop
   | .pop owner _ => RecursivePlace owner
   | .len v => RecursiveView v
   | .slice .readOnly view lo hi _ => RecursiveView view ∧ RecursiveBound lo ∧ RecursiveBound hi
+  | .slice .mutable (.val expr) lo hi _ => RecursiveExpression expr ∧ RecursiveBound lo ∧ RecursiveBound hi
   | .call _ args _ => RecursiveArguments args
   | .arrLit _ exprs | .structLit _ exprs => RecursiveExpressions exprs
   | .fill _ expr => RecursiveExpression expr
@@ -224,7 +225,37 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
       exact recorded.2.2.1
   | slice mu view lo hi origin =>
     cases mu with
-    | mutable => contradiction
+    | mutable =>
+      cases view with
+      | of place => contradiction
+      | val expr =>
+        obtain ⟨element, viewStart, viewFinish, lowFinish, highFinish,
+          viewSource, lowSource, highSource, shape⟩ := tyExpr_slice_mutable_children source
+        subst ty
+        obtain ⟨exprSupported, lowSupported, highSupported⟩ := supported
+        simp only [lowerExpr] at run
+        obtain ⟨viewValue, viewAfter, viewRun, run⟩ := bind_eq.mp run
+        obtain ⟨lowValue, lowAfter, lowRun, run⟩ := bind_eq.mp run
+        obtain ⟨highValue, middle, highRun, emitted⟩ := bind_eq.mp run
+        have middleLive := (dead_emitDef (.viewSlice .mutable viewValue lowValue highValue (some origin))).live_before emitted live
+        have highTyped := lowerBound_recursive_typed hi highSupported highSource highRun middleLive
+        have lowLive := (dead_lowerBound hi).live_before highRun middleLive
+        have lowTyped := lowerBound_recursive_typed lo lowSupported lowSource lowRun lowLive
+        have viewLive := (dead_lowerBound lo).live_before lowRun lowLive
+        have viewTyped := lowerView_val_writable_typed_of_child viewSource viewRun viewLive
+          (fun childFinish childState childValue childSource childRun childLive =>
+            lowerExpr_recursive_typed expr exprSupported childSource childRun childLive)
+        have retainedLow := lowTyped.retained (types_lowerBound hi _ _ _ _ highRun)
+        have retainedView := types_lowerBound hi _ _ _ _ highRun viewValue (.view .mutable element)
+          (types_lowerBound lo _ _ _ _ lowRun viewValue (.view .mutable element) viewTyped)
+        cases current : middle.cur with
+        | none => simp [current] at middleLive
+        | some block =>
+          have operation := mutableSlice_resultTy (le := lowerEnv env.mod env.vars results)
+            retainedView retainedLow highTyped origin
+          have recorded := emitDef_recorded current operation
+          rw [emitted] at recorded
+          exact recorded.2.2.1
     | readOnly =>
       obtain ⟨element, writable, viewStart, viewFinish, lowFinish, highFinish,
         viewSource, lowSource, highSource, shape⟩ := tyExpr_slice_children source
