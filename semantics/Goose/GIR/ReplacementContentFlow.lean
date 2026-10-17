@@ -286,6 +286,42 @@ def mappedBound (f : Func) (state : State) (args : List ValueId)
   let actual ← args.mapM (fun value => normalize f (flowAt state.values value))
   (Goose.Core.mapResultRoots actual [] bound).toOption
 
+inductive ContentInputBound
+  | roots (roots : List RootRef)
+  | callerStorage
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq
+
+def ContentInputBound.join : ContentInputBound → ContentInputBound → ContentInputBound
+  | .callerStorage, _ | _, .callerStorage => .callerStorage
+  | .roots left, .roots right => .roots (unionRoots left right)
+
+def ContentInputBound.covers (bound : ContentInputBound)
+    (actual : Option (List RootRef)) : Bool :=
+  actual.any fun roots => match bound with
+    | .roots expected => roots.all expected.contains
+    | .callerStorage => true
+
+def admittedArgumentBound (callee : Func) (argumentRoots : Nat → Option (List RootRef))
+    (index : Nat) : Option ContentInputBound := do
+  let type ← callee.params[index]?
+  let actual ← argumentRoots index
+  match callee.roots.params.find? (·.1 == index) with
+  | some (_, declared) =>
+      if type.isRefLike && declared.contains (.param index) then pure .callerStorage
+      else pure (.roots (unionRoots actual (declared.filterMap fun
+        | .global global => some (.global global)
+        | _ => none)))
+  | none => pure (.roots actual)
+
+def contentInputBound (callee : Func) (argumentRoots : Nat → Option (List RootRef))
+    (bound : List RootRef) : Option ContentInputBound :=
+  bound.foldlM (init := .roots []) fun upper root => do
+    let next ← match root with
+      | .global global => some (.roots [.global global])
+      | .param index => admittedArgumentBound callee argumentRoots index
+      | .local _ => none
+    pure (upper.join next)
+
 def checkCall (m : Module) (f : Func) (state : State) (fn : FnId)
     (args : List ValueId) : Bool :=
   match m.funcs[fn]? with
@@ -297,15 +333,17 @@ def checkCall (m : Module) (f : Func) (state : State) (fn : FnId)
           | none => false
           | some value =>
               let declared := callee.parameterRoots index
-              declared == [.param index] ||
+              declared.contains (.param index) ||
                 (normalize f (flowAt state.values value)).any fun actual =>
                   actual.all fun root =>
                     match root with
                     | .global global => declared.contains (.global global)
                     | .local _ | .param _ => declared.contains (.param index)
+      let argumentRoots := fun (index : Nat) => args[index]?.bind fun value =>
+        normalize f (flowAt state.values value)
       parameters && callee.roots.contents.toList.all fun (index, bound) =>
-        match args[index]?, mappedBound f state args bound with
-        | some value, some expected => rootsWithin (normalize f (content f state (flowAt state.values value))) expected
+        match args[index]?, contentInputBound callee argumentRoots bound with
+        | some value, some expected => expected.covers (normalize f (content f state (flowAt state.values value)))
         | _, _ => false
 
 def edgeTyped (f : Func) (vt : Array (Option VTy)) (target : BlockId)
