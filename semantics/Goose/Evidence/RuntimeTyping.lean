@@ -405,12 +405,12 @@ theorem execOp_result_typed {cfg : GCfg} {fn : Func} {activations : ActivationTy
 namespace AggregateReferences
 
 private def initializer : Func :=
-  { name := "unit-global"
+  { name := "integer-global"
     params := []
-    results := [.unit]
+    results := [.int .i32]
     slots := #[]
     scopes := #[]
-    blocks := #[⟨[], [.def 0 .constUnit, .term (.ret [0] none)]⟩]
+    blocks := #[⟨[], [.def 0 (.constInt .i32 1), .term (.ret [0] none)]⟩]
     summary := .unknown
     org := none }
 
@@ -421,30 +421,30 @@ private def entry : Func :=
     slots := #[]
     scopes := #[]
     blocks := #[⟨[], [.def 0 (.globalAddr 0),
-      .def 1 (.arrLit (.arr (.ref .readOnly .unit) 1) [0]), .term (.ret [] none)]⟩]
+      .def 1 (.arrLit (.arr (.ref .readOnly (.int .i32)) 1) [0]), .term (.ret [] none)]⟩]
     summary := .unknown
     org := none }
 
 private def module : GIR.Module :=
   { files := #["reference-array"]
-    globals := #[⟨"unit", .unit, .immutable, initializer, 0⟩]
+    globals := #[⟨"integer", .int .i32, .immutable, initializer, 0⟩]
     funcs := #[entry]
     entry := 0
     origins := #[⟨0, 1, "global"⟩] }
 
 #guard match validate module with | .ok () => true | .error _ => false
 #guard match run 20 .release module with | .done .returned "" => true | _ => false
-#guard (entry.valueTypes module)[1]? == some (some (.data (.arr (.ref .readOnly .unit) 1)))
+#guard (entry.valueTypes module)[1]? == some (some (.data (.arr (.ref .readOnly (.int .i32)) 1)))
 
 private theorem referenceArrayTyped :
     WeakValueTy (runtimeDeclarations ⟨.release, module⟩ (fun _ => none))
-      (.fixed #[.ref ⟨.global 0, []⟩]) (.arr (.ref .readOnly .unit) 1) := by
+      (.fixed #[.ref ⟨.global 0, []⟩]) (.arr (.ref .readOnly (.int .i32)) 1) := by
   refine ⟨rfl, ?_⟩
   intro index selected present
   simp only [Array.getElem?_singleton] at present
   split at present
   · cases present
-    refine ⟨_, rfl, .unit, ?_, .root .unit⟩
+    refine ⟨_, rfl, .int .i32, ?_, .root (.int .i32)⟩
     simp [runtimeDeclarations, module]
   · contradiction
 
