@@ -951,6 +951,12 @@ void RejectsParameterRootUnderapproximationAtCall() {
     touch.summary.reads = { CoreTarget { false, 0 } };
     m.funcs.push_back(touch);
 
+    assert(Code(m) == "");
+    m.funcs[1].roots.params[0].second.clear();
+    assert(Code(m) == "GIR-V050");
+    m.funcs[1].roots.params[0].second = {
+        { CoreRootRef::Param, 0 }, { CoreRootRef::Static, 0 }
+    };
     assert(Code(m) == "GIR-V050");
 }
 
