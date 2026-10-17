@@ -1,4 +1,5 @@
 import Goose.Lower.Each
+import Goose.Lower.GeneratedBuilder
 
 namespace Goose.Lower
 
@@ -21,8 +22,10 @@ theorem lowerEachSource_of_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (le : LEnv) (ls ls' : LS) (fr : Frame) (pt : Pt) (s : St) (place : Place)
     (owner : Option ValueId) (view : ValueId)
     (hlow : lowerEachSource (.of place) le ls = ((owner, view), ls'))
+    (generated : GeneratedBuilderState ls)
     (hext : ExtT ls' cx.fn.blocks)
     (hplace : ∀ r output, lowerPlace place le ls = (r, output) → ExtT output cx.fn.blocks →
+      GeneratedBuilderState ls →
       SimEAt cx pt fr (evalPlace n cfg env place)
         (fun loc pt' fr' => Post cfg env cx ls fr output fr' pt' [(r, .val (.ref loc))]) s) :
     SimEAt cx pt fr (evalView (n + 1) cfg env (.of place))
@@ -34,7 +37,7 @@ theorem lowerEachSource_of_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpair
   have hextPlace := hext.of_adv (adv_emitDef hView)
   simp only [evalView]
-  refine SimEAt.bind (hplace r lsPlace hPlace hextPlace) fun loc s1 pt1 fr1 _ P => ?_
+  refine SimEAt.bind (hplace r lsPlace hPlace hextPlace generated) fun loc s1 pt1 fr1 _ P => ?_
   have hc : fr1.vals[r]? = some (.val (.ref loc)) := P.has (r, _) (by simp)
   have hop : execPure cx fr1 (.snapshot
       (match place with | .var _ | .global _ => .owner | _ => .borrowed) r) =
@@ -54,8 +57,10 @@ theorem lowerEachSource_val_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx
     (le : LEnv) (ls ls' : LS) (fr : Frame) (pt : Pt) (s : St) (expr : Expr)
     (owner : Option ValueId) (view : ValueId)
     (hlow : lowerEachSource (.val expr) le ls = ((owner, view), ls'))
+    (generated : GeneratedBuilderState ls)
     (hext : ExtT ls' cx.fn.blocks)
     (hexpr : ∀ r output, lowerExpr expr le ls = (r, output) → ExtT output cx.fn.blocks →
+      GeneratedBuilderState ls →
       SimEAt cx pt fr (evalExpr n cfg env expr)
         (fun value pt' fr' => Post cfg env cx ls fr output fr' pt' [(r, .val value)]) s) :
     SimEAt cx pt fr (evalView (n + 1) cfg env (.val expr))
@@ -67,7 +72,7 @@ theorem lowerEachSource_val_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpair
   have hextExpr := hext.of_adv (adv_emitDef hView)
   simp only [evalView]
-  refine SimEAt.bind (hexpr r lsExpr hExpr hextExpr) fun value s1 pt1 fr1 _ P => ?_
+  refine SimEAt.bind (hexpr r lsExpr hExpr hextExpr generated) fun value s1 pt1 fr1 _ P => ?_
   have hs : SimE cx pt1 fr1
       (expectSlice value >>= fun slice => pure (⟨slice.1, slice.2.1, slice.2.2, false⟩ : ViewVal))
       (fun vw pt' fr' => Post cfg env cx ls fr lsView fr' pt' (EachSourceCells none rv vw)) := by

@@ -22,6 +22,26 @@ def initialBuilder : LS := ⟨#[⟨[], #[]⟩], #[], some 0, []⟩
 
 def initialFrame : GIR.Frame := { act := 0, scopes := [], depth := 1, vals := {} }
 
+private theorem initialBuilder_generated : GeneratedBuilderState initialBuilder := by
+  let le := lowerEnv (module .pilot) #[] []
+  have newBlockRun : newBlock [] le initState =
+      ((0, []), { initState with blocks := #[⟨[], #[]⟩] }) := by
+    rw [newBlock0_run]
+    simp [initState]
+  have afterNew : GeneratedBuilderState { initState with blocks := #[⟨[], #[]⟩] } :=
+    GeneratedBuilderState.initState.newBlock [] newBlockRun
+  have blockBound : ∀ block, some 0 = some block →
+      block < ({ initState with blocks := #[⟨[], #[]⟩] }).blocks.size := by
+    intro block active
+    have equal : block = 0 := Option.some.inj active.symm
+    subst block
+    simp
+  have setCurrent : setCur (some 0) le { initState with blocks := #[⟨[], #[]⟩] } =
+      ((), initialBuilder) := by
+    rw [setCur_run]
+    simp [initialBuilder, initState]
+  simpa [initialBuilder] using afterNew.setCur (some 0) blockBound setCurrent
+
 def loweredBody (profile : ArtifactProfile) : ValueId × LS :=
   lowerBlock none [] false body (lowerEnv (module profile) #[] []) initialBuilder
 
@@ -75,6 +95,7 @@ theorem accepted_return_body (artifact : ArtifactProfile) (profile : NumProfile)
   · trivial
   · rfl
   · rfl
+  · exact initialBuilder_generated
 
 #guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
   match Core.validate (module artifact), GIR.validate (lower (module artifact)) with

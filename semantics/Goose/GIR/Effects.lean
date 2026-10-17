@@ -289,6 +289,7 @@ def Func.effectStep (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov)
     | .bin o .. => if o.mayAbort then { e with aborts := true } else e
     | .un .neg .. => { e with aborts := true }
     | .conv .as .. => { e with aborts := true }
+    | .viewSlice _ _ .omitted .omitted _ => e
     | .viewSlice .. | .indexChecked .. => { e with aborts := true }
     | .call g args _ => call e g args
     | _ => e

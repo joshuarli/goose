@@ -1,3 +1,5 @@
+import Goose.Lower.GeneratedBuilder
+import Goose.Lower.GeneratedLoopFrames
 import Goose.Lower.RangeIteration
 import Goose.Lower.RangeBack
 import Goose.Lower.EachFlow
@@ -84,6 +86,8 @@ def RangeBlockCallback (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv
     RangeInv cfg env cx input counter bound runtimeType upper base current frame →
     bodyAllowed current state →
     PreRel frame [(x, counter, org)] [(x, .int runtimeType current)] →
+    GeneratedBuilderState input →
+    LoopBuilderFrames (some ⟨depth, exit, .next hb hint counter⟩) input →
     SimEAt cx bodyPoint frame
       (execBlock fuel cfg env [(x, .int runtimeType current)] block >>= prepareReturn env)
       (LoopFlowPost cfg env cx input frame output
@@ -100,6 +104,7 @@ theorem lowerRange_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (l
     (headerBlock : ∃ target, cx.fn.blocks[hb]? = some target ∧
       target.params = [(counter, .data (.int hint))])
     (boundBeforeCounter : bound < counter) (counterInHeader : counter < header.vals.size)
+    (headerGenerated : GeneratedBuilderState header)
     (bodyCallback : RangeBlockCallback n cfg env cx le header counter bound hb hint runtimeType
       upper base x block org bodyAllowed)
     (enter : ∀ current state, allowed current state → bodyAllowed current state)
@@ -170,6 +175,21 @@ theorem lowerRange_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (l
       LoopTargets cx.fn ⟨depth, exit, .next hb hint counter⟩ := by
     intro depth
     exact ⟨⟨exitTarget, exitTargetLive, exitParams⟩, headerBlock⟩
+  have generatedFork := (headerGenerated.emitDef (.cmp .lt hint counter bound) hcompare).fork condition hfork
+  have selectedRun : setCur (some bodyPoint) le forked = ((), input) := by
+    rw [setCur_run, hinput]
+  have inputGenerated := generatedFork.setCur (some bodyPoint)
+    (by intro current same; cases same; exact (Array.getElem?_eq_some_iff.mp bodyBlockLive).1) selectedRun
+  have inputBounds : LoopBuilderTargets
+      (some ⟨compared.stack.length, exit, .next hb hint counter⟩) input := by
+    refine ⟨?_, ?_⟩
+    · rw [hinput]
+      exact (Array.getElem?_eq_some_iff.mp exitBlockLive).1
+    · rw [hinput]
+      exact Nat.lt_of_lt_of_le (headerGenerated.live hb entryLive)
+        (Nat.le_trans (adv_emitDef hcompare).ext.1 (advB_fork condition _ _ _ _ hfork).ext.1)
+  have inputFrames := LoopBuilderFrames.of_functionTargets (bodyTargets compared.stack.length)
+    inputBounds extensionInput
   have outputExitBlock : back.blocks[exit]? = some ⟨[], #[]⟩ := by
     refine (bodyAdvances'.trans backAdvances).keep exit ⟨[], #[]⟩ ?_ ?_
     · rw [hinput]
@@ -253,7 +273,7 @@ theorem lowerRange_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (l
       (enter current state allowedState)
       (by
         obtain ⟨_, counterValue, _, _⟩ := invariant
-        simp [PreRel, counterValue])
+        simp [PreRel, counterValue]) inputGenerated inputFrames
     exact callbackInput.mono fun flow _ point after _ bodyFlow =>
       rangeLoopFlow_to_step cfg env cx le header input bodyOutput back output
         base frame after counter bound hb exit compared.stack.length result hint runtimeType
