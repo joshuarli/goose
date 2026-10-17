@@ -23,6 +23,19 @@ def callPre (impl : Impl) : List (SlotId × ValueId × OriginId) :=
 
 theorem callEntry_pp (impl : Impl) : (callEntry impl).pp = some (0, 0) := rfl
 
+theorem callEntry_generated (module : Core.Module) (impl : Impl) : GeneratedBuilderState (callEntry impl) := by
+  let env := lowerEnv module impl.vars impl.results.toList
+  let created := (newBlock (callEntryTypes impl) env initState).2
+  have generated := GeneratedBuilderState.initState.newBlock (callEntryTypes impl)
+    (env := env) (result := (newBlock (callEntryTypes impl) env initState).1)
+    (after := created) (by apply Prod.ext <;> rfl)
+  have bound : 0 < created.blocks.size := by simp [created, newBlock_run_general, initState]
+  have selected := generated.setCur (some 0)
+    (by intro current equal; cases equal; exact bound)
+    (env := env) (result := ()) (after := { created with cur := some 0 }) rfl
+  simpa [callEntry, created, callEntryTypes, newBlock_run_general, initState,
+    paramIds, pushParamTypes] using selected
+
 theorem lowerImpl_call_blocks (m : Core.Module) (impl : Impl) :
     (lowerImpl m impl).blocks =
       finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
@@ -246,6 +259,7 @@ theorem calleeBodyAt_of_typedBlock {n : Nat} {cfg : Cfg} {ctx : Context} {impl :
     (callEntry impl) body.2 body.1 (0, 0) cx fr rfl (callEntry_pp impl) hextBody
     (callFrame_rel cfg.mod cfg.profile ctx impl state.nextAct (depth + 1) values)
     (callFrame_preRel impl state.nextAct (depth + 1) values hp) rfl rfl
+    (callEntry_generated cfg.mod impl)
   rw [prepareReturn_no_scopes env rfl, bind_pure] at hs
   exact hs
 
@@ -400,7 +414,7 @@ theorem typedCall_afterArgs {n : Nat} {cfg : Cfg} {env : Env} {state after : St}
 
 theorem typedExprClaim_call_one (cfg : Cfg) (results : List Ty) (c : ContextId)
     (args : List Arg) (origin : OriginId) : TypedExprClaim 1 cfg results (.call c args origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   have stopped : evalExpr 1 cfg env (.call c args origin) state = .stop .timeout state := by
     cases args <;> simp [evalExpr, evalArg, mapList, enterCall, Core.timeout, M.stop, bind_apply, pure_apply]
   refine ⟨fun value after hdone => ?_, fun err after hdone hfinal => ?_⟩

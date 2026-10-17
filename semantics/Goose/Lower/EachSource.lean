@@ -135,14 +135,15 @@ theorem eachBlock_typed_sim {n : Nat} {cfg : Cfg} {env : Env} {state : St}
     (related : Rel cfg env cx frame input) (binders : PreRel frame pre pre')
     (module : cx.cfg.mod = lower cfg.mod) (returned : cx.fn.results = results)
     (depth : loop.depth = env.scopes.length) (targets : LoopTargets cx.fn loop)
-    (counter : LoopCounterAt (some loop) input frame) :
+    (counter : LoopCounterAt (some loop) input frame)
+    (generated : GeneratedBuilderState input) (frames : LoopBuilderFrames (some loop) input) :
     SimEAt cx pt frame (execBlock n cfg env pre' block >>= prepareReturn env)
       (LoopFlowPost cfg env cx input frame output loop block result) state := by
   have loops : LoopSourceMatches source.typingEnv (some loop) := by
     simp only [LoopSourceMatches, Option.some_ne_none]
     exact ⟨False.elim, lexicalLoop⟩
   have h := simulation env state source metadata loops input output result pt cx frame lowered
-    point extension related binders module returned (Nat.le_of_eq depth) targets counter
+    point extension related binders module returned (Nat.le_of_eq depth) targets counter generated frames
   rw [prepareLoopFlow_at_depth env loop depth] at h
   refine h.mono fun flow _ pt' frame' _ post => ?_
   rcases post with ⟨value, hflow, _, normal⟩ | returned | ⟨context, same, abnormal⟩

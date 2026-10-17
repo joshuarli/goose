@@ -11,7 +11,7 @@ theorem typedStatementLoopSimulation_assignWhole {n : Nat} {cfg : Cfg} {results 
     (hplace : TypedPlaceClaim n cfg results owner) (hexpr : TypedExprClaim n cfg results replacement) :
     TypedStatementLoopSimulation (n + 1) cfg results loop (.assignWhole owner replacement org) := by
   intro env state source metadata loops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults depth targets counter
+    hgir hresults depth targets counter hgenerated hframes
   obtain ⟨destination, typing, roots, _, _, ready⟩ := source.assignWholeChildren
   have destinationMetadata : SourceResults destination.typingEnv destination.rootsEnv results := by
     rw [typing, roots]
@@ -28,7 +28,7 @@ theorem typedStatementLoopSimulation_assignWhole {n : Nat} {cfg : Cfg} {results 
   apply SimEAt.prepareNormalLoopFlow
   simp only [execStmt]
   refine SimEAt.bind (hplace env state destination destinationMetadata ls ls1 rp pt cx fr h1 hpp hext1 hrel
-    hgir hresults) fun l afterPlace pt1 fr1 donePlace P1 => ?_
+    hgir hresults hgenerated) fun l afterPlace pt1 fr1 donePlace P1 => ?_
   obtain ⟨Pclear, hi⟩ := Post.eff_leaf P1 h2 hext2
   have hrp1 : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
   have hvals : ls2.vals.size = ls1.vals.size := (emitEffect_facts h2 P1.pp hext2).1
@@ -61,7 +61,7 @@ theorem typedStatementLoopSimulation_assignWhole {n : Nat} {cfg : Cfg} {results 
       rw [typing, roots]
       exact metadata
     refine SimEAt.bind (hexpr env { afterPlace with store := clear } child childMetadata ls2 ls3 run
-      (pt1.1, pt1.2 + 1) cx fr1 h3 Pclear.pp hext3 Pclear.rel hgir hresults)
+      (pt1.1, pt1.2 + 1) cx fr1 h3 Pclear.pp hext3 Pclear.rel hgir hresults ((hgenerated.lowerPlace owner h1).emitEffect _ h2))
       fun replacementVal afterReplacement pt3 fr3 doneReplacement Preplacement => ?_
     have P13 := PclearKeep.comp Preplacement
     have hrp : fr3.vals[rp]? = some (.val (.ref l)) := P13.has (rp, _) (by simp)

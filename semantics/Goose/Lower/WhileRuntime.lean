@@ -12,7 +12,7 @@ theorem lowerWhile_loop_sim_at (n : Nat) (c : Expr) (body : Core.Block)
       le ls = ((), ls'))
     (hpp : ls.pp = some (hb, 0)) (hext : ExtT ls' cx.fn.blocks)
     (hheader : ∃ block, cx.fn.blocks[hb]? = some block ∧ block.params = [])
-    (hrel : Rel cfg env cx fr ls)
+    (hrel : Rel cfg env cx fr ls) (hgenerated : GeneratedBuilderState ls)
     (hcond : ∀ cv ls1, lowerExpr c le ls = (cv, ls1) → ls.pp = some (hb, 0) →
       ExtT ls1 cx.fn.blocks → Rel cfg env cx fr ls →
       SimEAt cx (hb, 0) fr (evalExpr n cfg env c)
@@ -22,6 +22,7 @@ theorem lowerWhile_loop_sim_at (n : Nat) (c : Expr) (body : Core.Block)
       lowerBlock (some ⟨depth, exitBlock, .jump hb⟩) [] false body le ls2 = (vt, ls3) →
       ls2.pp = some pt2 → ExtT ls3 cx.fn.blocks → Rel cfg env cx fr2 ls2 →
       depth = env.scopes.length → LoopTargets cx.fn ⟨depth, exitBlock, .jump hb⟩ →
+      GeneratedBuilderState ls2 → LoopBuilderFrames (some ⟨depth, exitBlock, .jump hb⟩) ls2 →
       SimEAt cx pt2 fr2
         (execBlock n cfg env [] body >>= prepareLoopFlow env (some ⟨depth, exitBlock, .jump hb⟩))
         (BlockLoopPost cfg env cx ls2 fr2 ls3 (some ⟨depth, exitBlock, .jump hb⟩) body false vt) after)
@@ -66,6 +67,24 @@ theorem lowerWhile_loop_sim_at (n : Nat) (c : Expr) (body : Core.Block)
   obtain ⟨htb, hjb, hszf, hvf, hstf, hcf, hinst, hbtb, hbjb⟩ := fork_facts hf P1.pp hextf
   obtain ⟨Ttb, hTtb, hTtbp⟩ := hextf.params hbtb
   obtain ⟨Tjb, hTjb, hTjbp⟩ := hextf.params hbjb
+  obtain ⟨localHeader, _, localHeaderAt, _⟩ := LS.pp_some hpp
+  obtain ⟨finalHeader, finalHeaderAt, finalHeaderParams⟩ := (hext1.of_adv (advB_lowerExpr c _ _ _ _ h1)).params localHeaderAt
+  have headerCopy := hheader
+  obtain ⟨expectedHeader, expectedHeaderAt, expectedHeaderParams⟩ := headerCopy
+  have sameHeader : finalHeader = expectedHeader :=
+    Option.some.inj (finalHeaderAt.symm.trans expectedHeaderAt)
+  have localHeaderParams : localHeader.params = [] := by
+    rw [← finalHeaderParams, sameHeader]
+    exact expectedHeaderParams
+  have headerFrames : LoopBuilderFrames (some ⟨ls1.stack.length, hb, .jump hb⟩) ls :=
+    ⟨⟨localHeader, localHeaderAt, localHeaderParams⟩, ⟨localHeader, localHeaderAt, localHeaderParams⟩⟩
+  have carried := ((headerFrames.mono (advB_lowerExpr c _ _ _ _ h1).ext).mono
+    (advB_fork cv _ _ _ _ hf).ext).of_blocks (setCur_blocks hs1)
+  have bodyFrames : LoopBuilderFrames (some ⟨ls1.stack.length, jb, .jump hb⟩) ls2 :=
+    ⟨⟨⟨[], #[]⟩, by rw [setCur_blocks hs1]; exact hbjb, rfl⟩, carried.2⟩
+  have generatedF := (hgenerated.lowerExpr c h1).fork cv hf
+  have generated2 := generatedF.setCur (some tb)
+    (by intro current same; cases same; exact (Array.getElem?_eq_some_iff.mp hbtb).1) hs1
   have hpp2 : ls2.pp = some (tb, 0) := by rw [e2]; exact LS.pp_cur hbtb
   have hst1 : ls1.stack = ls.stack := P1.rel.stack.trans hrel.stack.symm
   have hst2 : ls2.stack = ls.stack := by rw [e2]; show lsf.stack = _; rw [hstf, hst1]
@@ -117,7 +136,7 @@ theorem lowerWhile_loop_sim_at (n : Nat) (c : Expr) (body : Core.Block)
     have hcontextDepth : ls1.stack.length = env.scopes.length := by
       rw [P1.rel.stack, List.length_map]
     have hbodySim := hbody afterCond hactualCond ls1.stack.length jb ls2 vt ls3 (tb, 0) fr1
-      ha1 hpp2 hext3 hrel2 hcontextDepth ⟨⟨Tjb, hTjb, hTjbp⟩, hheader⟩
+      ha1 hpp2 hext3 hrel2 hcontextDepth ⟨⟨Tjb, hTjb, hTjbp⟩, hheader⟩ generated2 bodyFrames
     rw [prepareLoopFlow_at_depth env _ hcontextDepth] at hbodySim
     refine SimEAt.bind hbodySim fun flow afterBody pt3 fr3 hactualBody hpost => ?_
     rcases hpost with ⟨v, hf, _, P3⟩ | ⟨returned, returnOrg, hf, hsite⟩ | ⟨context, hloop, htransfer⟩
@@ -173,12 +192,13 @@ theorem stmt_while_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     (fr : GIR.Frame) (state : St)
     (hlow : lowerStmt lc (.while c body org) le ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
+    (hgenerated : GeneratedBuilderState ls)
     (hwhile : ∀ hb lsH,
       lowerWhile hb (lowerExpr c)
         (fun depth exitBlock => lowerBlock (some ⟨depth, exitBlock, .jump hb⟩) [] false body)
         le lsH = ((), ls') → lsH.pp = some (hb, 0) → ExtT ls' cx.fn.blocks →
       (∃ block, cx.fn.blocks[hb]? = some block ∧ block.params = []) → Rel cfg env cx fr lsH →
-      SimEAt cx (hb, 0) fr (execWhile n cfg env c body >>= prepareReturn env)
+      GeneratedBuilderState lsH → SimEAt cx (hb, 0) fr (execWhile n cfg env c body >>= prepareReturn env)
         (StmtFlowPost cfg env cx lsH fr ls') state) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.while c body org) >>= prepareLoopFlow env lc)
       (StatementLoopPost cfg env cx ls fr ls' lc) state := by
@@ -225,11 +245,20 @@ theorem stmt_while_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     rw [eH]; show ls2.stack = _; rw [hst2, hst1])
   have hsizeH : lsH.vals.size = ls.vals.size := by
     rw [eH]; show ls2.vals.size = _; rw [hv2, hval1]
+  have generated1 := hgenerated.newBlock [] hn
+  have generated2 := generated1.emitTerm (.br hb [])
+    (by
+      intro target member
+      simp only [Term.successors, List.mem_singleton] at member
+      subst target
+      exact (Array.getElem?_eq_some_iff.mp hnew).1) ht
+  have generatedH := generated2.setCur (some hb)
+    (by intro current same; cases same; exact (Array.getElem?_eq_some_iff.mp hb2).1) hs
   have hi : instAt cx.fn pt = some (.term (.br hb [])) := hinst
   simp only [execStmt]
   rw [prepareLoopFlow_execWhile]
   refine SimEAt.goes (goes_br0 hi hThb hThbp)
-    ((hwhile hb lsH hw hppH hext ⟨Thb, hThb, hThbp⟩ hrelH).mono ?_)
+    ((hwhile hb lsH hw hppH hext ⟨Thb, hThb, hThbp⟩ hrelH generatedH).mono ?_)
   intro flow _ pt' fr' _ hpost
   rcases hpost with ⟨hflow, P⟩ | hreturned
   · refine Or.inl ⟨hflow, ⟨P.pp, P.has, P.lt, ?_, ?_, P.rel⟩⟩

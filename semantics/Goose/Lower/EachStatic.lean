@@ -7,7 +7,7 @@ open Goose.Core Goose.Core.Sound
 def PlaceOwnerShape (cfg : Cfg) (results : List Ty) (place : Place) : Prop :=
   ∀ env state (source : PlaceSource cfg env place state) input output address block,
     lowerPlace place (lowerEnv cfg.mod env.vars results) input = (address, output) →
-    output.cur = some block →
+    GeneratedBuilderState input → output.cur = some block →
     ∃ mutability, output.vals[address]? = some (some (.data (.ref mutability source.ty)))
 
 theorem eachSourceMode_of_live_place {cfg : Cfg} {env : Env} {state : St} {results : List Ty}
@@ -15,7 +15,7 @@ theorem eachSourceMode_of_live_place {cfg : Cfg} {env : Env} {state : St} {resul
     (shape : PlaceOwnerShape cfg results place) {input output : LS}
     {owner : Option GIR.ValueId} {view : GIR.ValueId} {point : GIR.Pt}
     (lowered : lowerEachSource (.of place) (lowerEnv cfg.mod env.vars results) input = ((owner, view), output))
-    (live : output.pp = some point) :
+    (generated : GeneratedBuilderState input) (live : output.pp = some point) :
     (regrowOf owner (lowerEnv cfg.mod env.vars results) output).1 =
       eachSourceRegrows source.rootsEnv.access (.of place) := by
   have complete := lowered
@@ -37,7 +37,7 @@ theorem eachSourceMode_of_live_place {cfg : Cfg} {env : Env} {state : St} {resul
       (source.frame.vars_t.trans source.frame.vars_p.symm) source.typed) ?_ lowered
   intro result intermediate run
   have equal := Prod.mk.inj (run.symm.trans placeAt)
-  obtain ⟨mutability, typed⟩ := shape env state source input withOwner address block placeAt liveOwner
+  obtain ⟨mutability, typed⟩ := shape env state source input withOwner address block placeAt generated liveOwner
   rw [equal.1, equal.2]
   exact ⟨mutability, block, typed, liveOwner⟩
 
@@ -51,10 +51,10 @@ theorem typedStatementLoopSimulation_each_place {n : Nat} {cfg : Cfg} {results :
     TypedStatementLoopSimulation (n + 2) cfg results loop
       (.forEach x idx (.of place) byRef body origin) := by
   apply typedStatementLoopSimulation_each_of_mode (view := .of place) childSimulation blocks
-  intro env state source input point owner irView middle finalPoint atPoint lowered finalAt
+  intro env state source input point owner irView middle finalPoint atPoint generated lowered finalAt
   obtain ⟨plan⟩ := source.eachPlan
   obtain ⟨child, typing, roots⟩ := plan.viewSource.ofChild
-  have mode := eachSourceMode_of_live_place child shape lowered finalAt
+  have mode := eachSourceMode_of_live_place child shape lowered generated finalAt
   simpa only [roots, plan.viewRoots] using mode
 
 end Goose.Lower

@@ -20,7 +20,7 @@ theorem EachPlan.blockCallback {n : Nat} {cfg : Cfg} {env : Env} {initial : St} 
         LocTy state.store ⟨value.loc.root, value.loc.path ++ [value.start + i]⟩ plan.element) := by
   intro fuel smaller depth exit input withElem withValue output elem irValue result tb i frame
     state element elementState ptValue frValue hElem hValue hBlock extension counterBound
-    stackAt depthAt targets point invariant allowed success valuePost pre
+    stackAt depthAt targets point invariant allowed success valuePost pre generated frames
   obtain ⟨bodySource, typing, roots, world, observation, plans, path, future, retained, may, context⟩ :=
     allowed.1.bodySource i element allowed.2 success
   have bodyMetadata : SourceResults bodySource.typingEnv bodySource.rootsEnv results := by
@@ -36,7 +36,7 @@ theorem EachPlan.blockCallback {n : Nat} {cfg : Cfg} {env : Env} {initial : St} 
     exact Nat.ne_of_gt (Nat.zero_lt_succ source.typingEnv.loops)
   exact eachBlock_typed_sim bodySource (blocks fuel smaller _ _ _) bodyMetadata
     lexical withValue output result ptValue cx frValue
-    hBlock valuePost.pp extension valuePost.rel pre module returned loopDepth targets loopCounter
+    hBlock valuePost.pp extension valuePost.rel pre module returned loopDepth targets loopCounter generated frames
 
 theorem EachLoopState.afterIteration {cfg : Cfg} {env : Env} {initial state after : St} {x : VarId}
     {idx : Option VarId} {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
@@ -67,7 +67,7 @@ theorem EachPlan.sourceSimulation {n : Nat} {cfg : Cfg} {env : Env} {initial : S
     (irView : GIR.ValueId)
     (lowered : lowerEachSource view (lowerEnv cfg.mod env.vars results) input = ((owner, irView), output))
     (atPoint : input.pp = some point) (extension : ExtT output cx.fn.blocks)
-    (related : Rel cfg env cx frame input) :
+    (related : Rel cfg env cx frame input) (generated : GeneratedBuilderState input) :
     SimEAt cx point frame (evalView (n + 1) cfg env view)
       (fun value pt' fr' => Post cfg env cx input frame output fr' pt'
         (EachSourceCells owner irView value)) initial := by
@@ -78,8 +78,8 @@ theorem EachPlan.sourceSimulation {n : Nat} {cfg : Cfg} {env : Env} {initial : S
   | of place =>
     obtain ⟨child, typing, roots⟩ := plan.viewSource.ofChild
     apply lowerEachSource_of_sim_at n cfg env cx _ input output frame point initial place owner irView
-      lowered extension
-    intro address middle hplace hext
+      lowered generated extension
+    intro address middle hplace hext childGenerated
     apply childSimulation env initial child
     · rw [typing, roots]; exact viewMetadata
     · exact hplace
@@ -88,11 +88,12 @@ theorem EachPlan.sourceSimulation {n : Nat} {cfg : Cfg} {env : Env} {initial : S
     · exact related
     · exact module
     · exact returned
+    · exact childGenerated
   | val expr =>
     obtain ⟨child, typing, roots, mutability, childType⟩ := plan.viewSource.valChild
     apply lowerEachSource_val_sim_at n cfg env cx _ input output frame point initial expr owner irView
-      lowered extension
-    intro value middle hexpr hext
+      lowered generated extension
+    intro value middle hexpr hext childGenerated
     apply childSimulation env initial child
     · rw [typing, roots]; exact viewMetadata
     · exact hexpr
@@ -101,6 +102,7 @@ theorem EachPlan.sourceSimulation {n : Nat} {cfg : Cfg} {env : Env} {initial : S
     · exact related
     · exact module
     · exact returned
+    · exact childGenerated
 
 theorem stmt_each_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
     {x : VarId} {idx : Option VarId} {view : View} {byRef : Bool} {body : Block} {origin : OriginId}
@@ -119,15 +121,15 @@ theorem stmt_each_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initial
     (lowered : lowerStmt loop (.forEach x idx view byRef body origin)
       (lowerEnv cfg.mod env.vars results) input = ((), output))
     (atPoint : input.pp = some point) (extension : ExtT output cx.fn.blocks)
-    (related : Rel cfg env cx frame input) :
+    (related : Rel cfg env cx frame input) (generated : GeneratedBuilderState input) :
     SimEAt cx point frame (execStmt (n + 2) cfg env (.forEach x idx view byRef body origin) >>=
       prepareReturn env) (StmtFlowPost cfg env cx input frame output) initial := by
   obtain ⟨plan⟩ := source.eachPlan
   apply stmt_each_flow_sim_at (n + 1) cfg env cx _ input output frame point initial loop x idx view
     byRef body origin source.typingEnv source.typingAfter source.scope source.typingStart source.typingEnd
     source.frame.vars_t source.typed source.rootsEnv source.world plan.element
-    (fun owner irView middle hlow hext => plan.sourceSimulation results metadata childSimulation cx
-      module returned input middle frame point owner irView hlow atPoint hext related)
+    (fun owner irView middle hlow hext childGenerated => plan.sourceSimulation results metadata childSimulation cx
+      module returned input middle frame point owner irView hlow atPoint hext related childGenerated)
     (fun value state success => (plan.initial (n + 1) value success).aliases)
     (fun owner irView middle hlow _ _ _ finalPoint sourcePoint =>
       mode owner irView middle hlow finalPoint sourcePoint)
@@ -148,6 +150,7 @@ theorem stmt_each_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initial
   · exact lowered
   · exact atPoint
   · exact extension
+  · exact generated
 
 theorem EachPlan.sourceMode_variable {cfg : Cfg} {env : Env} {initial : St} {x ownerId : VarId}
     {idx : Option VarId} {byRef : Bool} {body : Block} {origin : OriginId}
@@ -247,21 +250,21 @@ theorem typedStatementLoopSimulation_each_of_mode {n : Nat} {cfg : Cfg} {results
     (blocks : ∀ fuel, fuel < n + 1 → ∀ loop pre pre',
       TypedBlockLoopSimulation fuel cfg results (some loop) pre pre' false body)
     (mode : ∀ env state (source : StmtSource cfg env (.forEach x idx view byRef body origin) state)
-      input point owner irView middle finalPoint, input.pp = some point →
+      input point owner irView middle finalPoint, input.pp = some point → GeneratedBuilderState input →
       lowerEachSource view (lowerEnv cfg.mod env.vars results) input = ((owner, irView), middle) → middle.pp = some finalPoint →
       (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
         eachSourceRegrows source.rootsEnv.access view)
     (loop : Option LoopCtx) :
     TypedStatementLoopSimulation (n + 2) cfg results loop (.forEach x idx view byRef body origin) := by
   intro env state source metadata lexical input output result point cx frame lowered atPoint
-    extension related module returned depth targets counter
+    extension related module returned depth targets counter generated frames
   cases result
   rw [prepareLoopFlow_stmtEach]
   have simulation := stmt_each_checked_flow_sim_at source results metadata childSimulation blocks cx
     module returned loop input output frame point
     (fun owner irView middle hlow finalPoint hfinal =>
-      mode env state source input point owner irView middle finalPoint atPoint hlow hfinal)
-    lowered atPoint extension related
+      mode env state source input point owner irView middle finalPoint atPoint generated hlow hfinal)
+    lowered atPoint extension related generated
   exact simulation.mono fun flow _ pt' fr' _ post =>
     post.elim (fun normal => Or.inl normal) (fun returned => Or.inr (Or.inl returned))
 
@@ -273,7 +276,7 @@ theorem typedStatementLoopSimulation_each_value {n : Nat} {cfg : Cfg} {results :
     (loop : Option LoopCtx) :
     TypedStatementLoopSimulation (n + 2) cfg results loop (.forEach x idx (.val expr) byRef body origin) := by
   apply typedStatementLoopSimulation_each_of_mode (view := .val expr) childSimulation blocks
-  intro env state source input point owner irView middle finalPoint atPoint lowered finalAt
+  intro env state source input point owner irView middle finalPoint atPoint generated lowered finalAt
   exact eachSourceMode_val source.rootsEnv.access lowered
 
 theorem typedStatementLoopSimulation_each_variable {n : Nat} {cfg : Cfg} {results : List Ty}
@@ -284,7 +287,7 @@ theorem typedStatementLoopSimulation_each_variable {n : Nat} {cfg : Cfg} {result
     TypedStatementLoopSimulation (n + 2) cfg results loop
       (.forEach x idx (.of (.var ownerId)) byRef body origin) := by
   apply typedStatementLoopSimulation_each_of_mode (view := .of (.var ownerId)) (typedPlaceClaim_var n cfg results ownerId) blocks
-  intro env state source input point owner irView middle finalPoint atPoint lowered finalAt
+  intro env state source input point owner irView middle finalPoint atPoint generated lowered finalAt
   obtain ⟨plan⟩ := source.eachPlan
   exact plan.sourceMode_variable results input middle point owner irView atPoint lowered
 
@@ -296,7 +299,7 @@ theorem typedStatementLoopSimulation_each_global {n : Nat} {cfg : Cfg} {results 
     TypedStatementLoopSimulation (n + 2) cfg results loop
       (.forEach x idx (.of (.global globalId)) byRef body origin) := by
   apply typedStatementLoopSimulation_each_of_mode (view := .of (.global globalId)) (typedPlaceClaim_global n cfg results globalId) blocks
-  intro env state source input point owner irView middle finalPoint atPoint lowered finalAt
+  intro env state source input point owner irView middle finalPoint atPoint generated lowered finalAt
   obtain ⟨plan⟩ := source.eachPlan
   exact plan.sourceMode_global results input middle point owner irView atPoint lowered
 
@@ -305,7 +308,7 @@ theorem typedStatementLoopSimulation_each_one (cfg : Cfg) (results : List Ty)
     (byRef : Bool) (body : Block) (origin : OriginId) :
     TypedStatementLoopSimulation 1 cfg results loop (.forEach x idx view byRef body origin) := by
   intro env state source metadata lexical input output result point cx frame lowered atPoint
-    extension related module returned depth targets counter
+    extension related module returned depth targets counter generated frames
   cases view <;> simp only [execStmt, evalView, bind_assoc] <;>
     exact SimEAt.of_simG GIR.SimG.of_timeout_bind state
 

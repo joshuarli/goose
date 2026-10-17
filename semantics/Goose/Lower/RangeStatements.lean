@@ -21,7 +21,7 @@ theorem RangePlan.blockCallback {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
     RangeBlockCallback n cfg env cx (lowerEnv cfg.mod env.vars results) header counter bound hb
       hint runtimeType upper base x body origin (fun _ state => RangeLoopState plan state) := by
   intro fuel smaller depth exit input result output current frame state bodyPoint lowered point
-    extension stack depthEq counterBound targets invariant allowed pre
+    extension stack depthEq counterBound targets invariant allowed pre generated frames
   obtain ⟨bodySource, typing, roots, _, _, _, _, _, _, _, _⟩ :=
     allowed.bodyChild runtimeTypeEq current
   have bodyMetadata : SourceResults bodySource.typingEnv bodySource.rootsEnv results := by
@@ -40,7 +40,7 @@ theorem RangePlan.blockCallback {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
   exact eachBlock_typed_sim bodySource
     (blocks fuel smaller loop [(x, counter, origin)] [(x, .int runtimeType current)])
     bodyMetadata lexical input output result bodyPoint cx frame lowered point extension
-    invariant.2.2.2 pre module returned loopDepth targets loopCounter
+    invariant.2.2.2 pre module returned loopDepth targets loopCounter generated frames
 
 theorem execRange_success_flow (fuel : Nat) (cfg : Cfg) (env : Env) (x : VarId)
     (ty : IntTy) (current upper : Int) (body : Core.Block) :
@@ -160,7 +160,7 @@ theorem stmt_range_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initia
     (lowered : lowerStmt loop (.forRange x lo hi body origin)
       (lowerEnv cfg.mod env.vars results) input = ((), output))
     (atPoint : input.pp = some point) (extension : ExtT output cx.fn.blocks)
-    (related : Rel cfg env cx frame input) :
+    (related : Rel cfg env cx frame input) (generated : GeneratedBuilderState input) :
     SimEAt cx point frame
       (execStmt (n + 1) cfg env (.forRange x lo hi body origin) >>= prepareReturn env)
       (StmtFlowPost cfg env cx input frame output) initial := by
@@ -207,7 +207,7 @@ theorem stmt_range_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initia
   simp only [execStmt, bind_assoc]
   refine SimEAt.bind
     (lowerSimulation env initial lowerSource lowerMetadata input afterLowerBuilder lowerId
-      point cx frame lowerBuilder atPoint extensionLower related module returned)
+      point cx frame lowerBuilder atPoint extensionLower related module returned generated)
     fun lowerValue lowerState lowerPoint lowerFrame lowerDone lowerPost => ?_
   have lowerTyped := (lowerSource.result n lowerValue lowerDone).typed
   rw [lowerType] at lowerTyped
@@ -242,7 +242,7 @@ theorem stmt_range_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initia
   refine SimEAt.bind
     (upperSimulation env lowerState upperSource upperMetadata afterLowerBuilder
       afterUpperBuilder upperId lowerPoint cx lowerFrame upperBuilder lowerPost.pp
-      extensionUpper lowerPost.rel module returned)
+      extensionUpper lowerPost.rel module returned (generated.lowerExpr lo lowerBuilder))
     fun upperValue upperState upperPoint upperFrame upperDone upperPost => ?_
   have upperTyped := (upperSource.result n upperValue upperDone).typed
   rw [upperType] at upperTyped
@@ -313,6 +313,17 @@ theorem stmt_range_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initia
     rw [headerState]
     exact LS.pp_cur headerBlockPreserved
   obtain ⟨headerTarget, headerTargetLive, headerParams⟩ := extensionTerm.params headerBlockPreserved
+  have generatedUpper := (generated.lowerExpr lo lowerBuilder).lowerExpr hi upperBuilder
+  have generatedNew := generatedUpper.newBlock [.data (.int hint)] newBlock
+  have generatedTerm := generatedNew.emitTerm (.br hb [lowerId])
+    (by
+      intro target member
+      simp only [Term.successors, List.mem_singleton] at member
+      subst target
+      exact (Array.getElem?_eq_some_iff.mp headerBlockOld).1) term
+  have generatedHeader := generatedTerm.setCur (some hb)
+    (by intro current same; cases same; exact (Array.getElem?_eq_some_iff.mp headerBlockPreserved).1) setHeader
+
   have lowerCell : upperFrame.vals[lowerId]? =
       some (.val (.int plan.intTy start)) := by
     rw [upperPost.same lowerId (lowerPost.lt (lowerId, .val (.int plan.intTy start)) (by simp))]
@@ -373,7 +384,7 @@ theorem stmt_range_checked_flow_sim_at {n : Nat} {cfg : Cfg} {env : Env} {initia
     upper upperFrame x origin body (fun _ state => RangeLoopState plan state)
     (fun _ state => RangeLoopState plan state) lowerRangeBuilder headerPoint extension
     ⟨headerTarget, headerTargetLive, headerParams⟩ boundBeforeCounter counterInHeader
-    bodyCallback (fun _ _ allowed => allowed) retained
+    generatedHeader bodyCallback (fun _ _ allowed => allowed) retained
   have hiTerm : instAt cx.fn upperPoint = some (.term (.br hb [lowerId])) :=
     compareFacts.2.2.2
   have startGoes := goes_br1 hiTerm headerTargetLive headerParams lowerCell
