@@ -4274,6 +4274,13 @@ private:
             auto p = Provenance(res, caller);
             for (auto &block : f.blocks)
                 for (auto &i : block.insts) {
+                    if (i.op == GirOp::Load && m.Type(caller.vt[i.res]).kind == CoreType::Slice)
+                        for (auto &root : RootsAt(p.vals, i.a))
+                            if (root.kind == CoreRootRef::Param && root.index >= 0 &&
+                                root.index < (int)f.params.size() && IsRefSlice(f.params[root.index]) &&
+                                !ContentRoots(f, root.index))
+                                Fail("GIR-V050", cat("function ", f.name, " reads slice contents through parameter ",
+                                    root.index, " without content root info"));
                     if (i.op != GirOp::Call && i.op != GirOp::CallConstruct && i.op != GirOp::Invoke) continue;
                     auto &callee = m.funcs[i.idx];
                     auto label = cat("function ", callee.name);
@@ -4288,15 +4295,15 @@ private:
                                     Fail("GIR-V050", cat(label, " parameter ", j,
                                         " root info omits a root passed at a call site"));
                         }
-                        if (IsRefSlice(callee.params[j])) {
-                            auto actual = ArgumentContents(caller, p, i.vals[j]);
-                            auto declared = ContentRoots(callee, (int)j);
-                            auto mapped = declared ? MapDeclaredContents(p, i.vals, *declared) : Roots {};
-                            for (auto &root : actual)
-                                if (find(mapped.begin(), mapped.end(), root) == mapped.end())
-                                    Fail("GIR-V050", cat(label, " content root info for parameter ", j,
-                                        " omits a root passed at a call site"));
-                        }
+                        if (IsRefSlice(callee.params[j]))
+                            if (auto declared = ContentRoots(callee, (int)j)) {
+                                auto actual = ArgumentContents(caller, p, i.vals[j]);
+                                auto mapped = MapDeclaredContents(p, i.vals, *declared);
+                                for (auto &root : actual)
+                                    if (find(mapped.begin(), mapped.end(), root) == mapped.end())
+                                        Fail("GIR-V050", cat(label, " content root info for parameter ", j,
+                                            " omits a root passed at a call site"));
+                            }
                     }
                 }
         }
