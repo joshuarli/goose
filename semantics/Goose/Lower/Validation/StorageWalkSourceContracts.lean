@@ -49,4 +49,12 @@ def StorageWalkSourceBlock (env : Core.TEnv) (results : List Ty) (stack : List S
       (∀ entry ∈ pre, StorageSlotVisible (lowerEnv env.mod env.vars results).slots (body.scope :: stack) entry.1) →
       StorageWalkAction (lowerEnv env.mod env.vars results).slots stack loop (lowerBlock loop pre want body)
 
+theorem storageWalk_source_emptyBlock {env : Core.TEnv} {results : List Ty} {stack : List ScopeId}
+    {body : Core.Block} (child : StorageWalkSourceBlock env results stack body)
+    {type : Ty} {start finish : Nat} (source : Core.tyBlock env [] body start = .ok (type, finish))
+    (visible : StorageWalkVisible env stack) (loop : Option LoopCtx) (want : Bool) :
+    StorageWalkAction (lowerEnv env.mod env.vars results).slots stack loop (lowerBlock loop [] want body) :=
+  child source (visible.mono (fun scope member => List.mem_cons_of_mem _ member)) loop [] want
+    (by intro entry member; cases member)
+
 end Goose.Lower.Validation
