@@ -6,17 +6,6 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-theorem Func.parameter_ids_bounded_of_dense {func : Func}
-    (dense : (func.blocks.toList.flatMap GIR.Block.defs).Perm (List.range func.numValues)) :
-    ∀ block ∈ func.blocks.toList, ∀ param ∈ block.params, param.1 < func.numValues := by
-  intro block member param parameter
-  apply List.mem_range.mp
-  apply dense.mem_iff.mp
-  apply List.mem_flatMap.mpr
-  refine ⟨block, member, ?_⟩
-  simp only [GIR.Block.defs, List.mem_append, List.mem_map]
-  exact Or.inl ⟨param, parameter, rfl⟩
-
 theorem lowerImpl_emptyFacts_known (module : Core.Module) (impl : Core.Impl)
     (types : Array (Option VTy)) (provenance : Prov) {block : BlockId}
     (bounded : block < (lowerImpl module impl).blocks.size) :
