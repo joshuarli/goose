@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ExpressionTypingMutableViewOps
+import Goose.Lower.Validation.ExpressionTypingMutableElemOps
 
 namespace Goose.Lower.Validation
 
@@ -10,6 +10,7 @@ def RecursiveExpression : Expr → Prop
   | .read p | .ref .readOnly p => RecursivePlace p
   | .ref .mutable (.field owner _) => RecursivePlace owner
   | .ref .mutable (.deref expr) => RecursiveExpression expr
+  | .ref .mutable (.elem (.val expr) index _) => RecursiveExpression expr ∧ RecursiveExpression index
   | .un _ e _ | .not e | .conv _ _ e _ => RecursiveExpression e
   | .bin _ a b _ | .cmp _ a b => RecursiveExpression a ∧ RecursiveExpression b
   | .push owner expr _ => RecursivePlace owner ∧ RecursiveExpression expr
@@ -52,6 +53,7 @@ def RecursiveArgument : Arg → Prop
   | .byRef .readOnly place => RecursivePlace place
   | .byRef .mutable (.field owner _) => RecursivePlace owner
   | .byRef .mutable (.deref expr) => RecursiveExpression expr
+  | .byRef .mutable (.elem (.val expr) index _) => RecursiveExpression expr ∧ RecursiveExpression index
   | .byRef .mutable (.var _) | .byRef .mutable (.global _) => True
   | _ => False
 
@@ -136,7 +138,28 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
           have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed (by rfl) current
           rw [frozenRun] at frozen
           simpa only [shape] using frozen.2
-      | var _ | global _ | elem _ _ _ =>
+      | elem view index origin =>
+        cases view with
+        | of owner => contradiction
+        | val expr =>
+          obtain ⟨exprSupported, indexSupported⟩ := supported
+          obtain ⟨info, placeFinish, placeSource, shape, permission⟩ := tyExpr_ref_place source
+          have writable : info.referenceWritable env.mod.profile = true := by
+            cases bound : info.referenceWritable env.mod.profile <;> simp_all [Mutability.atLeast]
+          have lowering := run
+          simp only [lowerExpr] at lowering
+          obtain ⟨address, mid, placeRun, frozenRun⟩ := bind_eq.mp lowering
+          have midLive := (dead_freezeTo .mutable address).live_before frozenRun live
+          have typed := lowerPlace_elem_val_writable_typed_of_children placeSource writable placeRun midLive
+            (fun _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed expr exprSupported childSource childRun childLive)
+            (fun _ _ _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed index indexSupported childSource childRun childLive)
+          cases current : mid.cur with
+          | none => simp [current] at midLive
+          | some block =>
+            have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed (by rfl) current
+            rw [frozenRun] at frozen
+            simpa only [shape] using frozen.2
+      | var _ | global _ =>
         have initial := (dead_lowerExpr _).live_before run live
         cases current : before.cur with
         | none => simp [current] at initial
@@ -777,7 +800,20 @@ theorem lowerArgs_recursive_typed (args : List Arg) (supported : RecursiveArgume
                 have frozen := lowerArg_byRef_typed_of_place (requested := .mutable) placeRun typed (by rfl) current
                 rw [childRun] at frozen
                 exact frozen
-            | elem _ _ _ => contradiction
+            | elem view index origin =>
+              cases view with
+              | of owner => contradiction
+              | val expr =>
+                obtain ⟨exprSupported, indexSupported⟩ := childSupported
+                have typed := lowerPlace_elem_val_writable_typed_of_children placeSource (writable rfl) placeRun placeLive
+                  (fun _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed expr exprSupported childSource childRun childLive)
+                  (fun _ _ _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed index indexSupported childSource childRun childLive)
+                cases current : placeAfter.cur with
+                | none => simp [current] at placeLive
+                | some block =>
+                  have frozen := lowerArg_byRef_typed_of_place (requested := .mutable) placeRun typed (by rfl) current
+                  rw [childRun] at frozen
+                  exact frozen
         have retained := types_lowerArgs args _ _ _ _ restRun value (.data (.ref mu info.ty)) childTyped
         exact .cons ⟨.ref mu info.ty, retained, by simpa [tyOfVar, row] using permission⟩ restTyped
       | byVal expr =>
