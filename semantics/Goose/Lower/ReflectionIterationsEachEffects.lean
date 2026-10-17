@@ -85,9 +85,11 @@ theorem eachElemValue_reflectAtFuel {cfg : Cfg} {env : Env} {cx : FnCtx}
     simp [execPure,getVal_of cell,expectRef]
   | true =>
     simp only [ite_true]
-    rcases eachElemValue_ref_cases lowering with ⟨rfl,rfl⟩ | frozen
+    rcases eachElemValue_ref_cases lowering with ⟨rfl,rfl⟩ | frozen | borrowed
     · exact ReflectAtFuel.ret fuel post
     · apply leaf_def_reflectAtFuel post frozen extension (by simp) RVal.val (sourceFuel := 0)
+      simp [execPure,getVal_of cell,expectRef]
+    · apply leaf_def_reflectAtFuel post borrowed extension (by simp) RVal.val (sourceFuel := 0)
       simp [execPure,getVal_of cell,expectRef]
 
 end Goose.Lower

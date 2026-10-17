@@ -10,7 +10,7 @@ theorem typedStatementReflection_each_of_mode {fuel : Nat} {cfg : Cfg} {results 
     {lc : Option LoopCtx} (child : EachSourceChildReflection fuel cfg results sourceView)
     (eachs : ∀ residual, residual < fuel → TypedEachReflection residual cfg results x idx sourceView byRef body org)
     (mode : ∀ env state (source : StmtSource cfg env (.forEach x idx sourceView byRef body org) state)
-      input point owner irView middle finalPoint, input.pp = some point →
+      input point owner irView middle finalPoint, input.pp = some point → GeneratedBuilderState input →
       lowerEachSource sourceView (lowerEnv cfg.mod env.vars results) input = ((owner,irView),middle) →
       middle.pp = some finalPoint → (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
         eachSourceRegrows source.rootsEnv.access sourceView) :
@@ -49,7 +49,7 @@ theorem typedStatementReflection_each_of_mode {fuel : Nat} {cfg : Cfg} {results 
     · intro nSource vw sourceState sourcePoint sourceFrame hSourceRun PSource prefixFuel prefixBound
       have runtime := plan.initial nSource vw hSourceRun
       have hmode : regrow = vw.resizable := by
-        have equal := mode env s source ls pt owner view lsSource sourcePoint hpp hSource PSource.pp
+        have equal := mode env s source ls pt owner view lsSource sourcePoint hpp generated hSource PSource.pp
         rw [hRegrow] at equal
         exact equal.trans (eachSourceRegrows_of_aliases runtime.aliases)
       have hview : sourceFrame.vals[view]? = some (.view vw) := PSource.has (view,_) (by simp [EachSourceCells])
@@ -169,7 +169,7 @@ theorem typedStatementReflection_each_value {fuel : Nat} {cfg : Cfg} {results : 
     (eachs : ∀ residual, residual < fuel → TypedEachReflection residual cfg results x idx (.val expr) byRef body org) :
     TypedStatementReflection fuel cfg results loop (.forEach x idx (.val expr) byRef body org) := by
   apply typedStatementReflection_each_of_mode (sourceView := .val expr) child eachs
-  intro env state source input point owner irView middle finalPoint atPoint lowering finalAt
+  intro env state source input point owner irView middle finalPoint atPoint generated lowering finalAt
   exact eachSourceMode_val source.rootsEnv.access lowering
 
 theorem typedStatementReflection_each_place {fuel : Nat} {cfg : Cfg} {results : List Ty}
@@ -179,10 +179,10 @@ theorem typedStatementReflection_each_place {fuel : Nat} {cfg : Cfg} {results : 
     (eachs : ∀ residual, residual < fuel → TypedEachReflection residual cfg results x idx (.of place) byRef body org) :
     TypedStatementReflection fuel cfg results loop (.forEach x idx (.of place) byRef body org) := by
   apply typedStatementReflection_each_of_mode (sourceView := .of place) child eachs
-  intro env state source input point owner irView middle finalPoint atPoint lowering finalAt
+  intro env state source input point owner irView middle finalPoint atPoint generated lowering finalAt
   obtain ⟨plan⟩ := source.eachPlan
   obtain ⟨childSource,typing,roots⟩ := plan.viewSource.ofChild
-  have mode := eachSourceMode_of_live_place childSource shape lowering finalAt
+  have mode := eachSourceMode_of_live_place childSource shape lowering generated finalAt
   simpa only [roots,plan.viewRoots] using mode
 
 theorem typedStatementReflection_each_variable {fuel : Nat} {cfg : Cfg} {results : List Ty}
@@ -193,7 +193,7 @@ theorem typedStatementReflection_each_variable {fuel : Nat} {cfg : Cfg} {results
     TypedStatementReflection fuel cfg results loop (.forEach x idx (.of (.var ownerId)) byRef body org) := by
   apply typedStatementReflection_each_of_mode (sourceView := .of (.var ownerId))
     (typedPlaceReflection_var fuel cfg results ownerId) eachs
-  intro env state source input point owner irView middle finalPoint atPoint lowering finalAt
+  intro env state source input point owner irView middle finalPoint atPoint generated lowering finalAt
   obtain ⟨plan⟩ := source.eachPlan
   exact plan.sourceMode_variable results input middle point owner irView atPoint lowering
 
@@ -205,7 +205,7 @@ theorem typedStatementReflection_each_global {fuel : Nat} {cfg : Cfg} {results :
     TypedStatementReflection fuel cfg results loop (.forEach x idx (.of (.global globalId)) byRef body org) := by
   apply typedStatementReflection_each_of_mode (sourceView := .of (.global globalId))
     (typedPlaceReflection_global fuel cfg results globalId) eachs
-  intro env state source input point owner irView middle finalPoint atPoint lowering finalAt
+  intro env state source input point owner irView middle finalPoint atPoint generated lowering finalAt
   obtain ⟨plan⟩ := source.eachPlan
   exact plan.sourceMode_global results input middle point owner irView atPoint lowering
 
