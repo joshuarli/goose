@@ -248,6 +248,40 @@ private def siteCompletionExpressions (position : Nat) : NamedSite → List (Opt
       | none => [none]
   | _ => [none]
 
+private def laterOperandVariables : List Expr → List VarId
+  | [] => []
+  | .resultLocal .. :: rest => laterOperandVariables rest
+  | expression :: rest => expressionVariables expression ++ laterOperandVariables rest
+
+mutual
+private def laterResultVariables (position : Nat) : Expr → List VarId
+  | .values operands => laterOperandVariables (operands.drop (position + 1))
+  | .ifE _ left right _ => laterBlockResultVariables position left ++ laterBlockResultVariables position right
+  | .blockE block _ => laterBlockResultVariables position block
+  | _ => []
+
+private def laterBlockResultVariables (position : Nat) : Block → List VarId
+  | .mk _ statements tail => laterStatementResultVariables position statements ++
+      (match tail with | none => [] | some expression => laterResultVariables position expression)
+
+private def laterStatementResultVariables (position : Nat) : List Stmt → List VarId
+  | [] => []
+  | statement :: rest =>
+      (match statement with
+        | .breakValue expression _ => laterResultVariables position expression
+        | .ifS _ (.mk _ left _) right _ => laterStatementResultVariables position left ++
+            (match right with | none => [] | some (.mk _ statements _) => laterStatementResultVariables position statements)
+        | .while _ (.mk _ statements _) _ |
+          .forRange _ _ _ (.mk _ statements _) _ |
+          .forEach _ _ _ _ (.mk _ statements _) _ => laterStatementResultVariables position statements
+        | _ => []) ++ laterStatementResultVariables position rest
+end
+
+private def siteLaterResultVariables (position : Nat) : NamedSite → List VarId
+  | .operands [expression] => laterResultVariables position expression
+  | .operands operands => laterOperandVariables (operands.drop (position + 1))
+  | _ => []
+
 private def expressionCandidate : Option Expr → Option VarId
   | some (.resultLocal id _) => some id
   | _ => none
@@ -270,7 +304,8 @@ private def candidatesFor (module : Module) (id : ImplId) (implementation : Impl
   let candidates := completions.filterMap expressionCandidate
   candidates.eraseDups.filter fun candidate =>
     bodyDeclared implementation.body candidate &&
-      completions.all (independentExpression module id implementation candidate)
+      completions.all (independentExpression module id implementation candidate) &&
+      !reachesLocal module id implementation candidate (sites.flatMap (siteLaterResultVariables position))
 
 def discoverNamedResults (module : Module) (id : ImplId) (implementation : Impl) : List (Option VarId) := Id.run do
   let mut used : List VarId := []
