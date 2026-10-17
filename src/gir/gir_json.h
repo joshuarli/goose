@@ -483,7 +483,7 @@ private:
                     auto &nonfixed = get<GirLowNonfixedResult>(result.layout);
                     Append(out, "[\"lresult_nonfixed\",", result.sourceType, ",");
                     Str(out, CoreRequestName(nonfixed.request));
-                    Append(out, ",", nonfixed.stack, ",", nonfixed.start, ",", nonfixed.count, "]");
+                    Append(out, ",", nonfixed.stack, ",", nonfixed.start, ",", nonfixed.count, ",", nonfixed.progress, "]");
                 }
             }
         }

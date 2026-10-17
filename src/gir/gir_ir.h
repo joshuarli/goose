@@ -245,7 +245,16 @@ struct GirLowSnapshotResult { int64_t bytes; int output; };
 struct GirLowReferenceResult { int output; };
 struct GirLowResizableReferenceResult { int header, stack; };
 struct GirLowSliceResult { int data, count; };
-struct GirLowNonfixedResult { CoreRequest request; int stack, start, count; };
+enum class GirConstructionProgress : int64_t {
+    Open = 0, Suspended = 1, Built = 2, Published = 3, Exiting = 4,
+    Abandoned = 5, Cancelled = 6, Attached = 7, Retired = 8
+};
+
+inline constexpr int64_t GirConstructionIdentityOffset = 8;
+inline constexpr int64_t GirConstructionMetadataBytes = 16;
+inline constexpr int64_t GirConstructionProgressBytes = 8;
+
+struct GirLowNonfixedResult { CoreRequest request; int stack, start, count, progress; };
 using GirLowResultLayout = variant<GirLowScalarResult, GirLowSnapshotResult, GirLowReferenceResult,
     GirLowResizableReferenceResult, GirLowSliceResult, GirLowNonfixedResult>;
 struct GirLowResult {
