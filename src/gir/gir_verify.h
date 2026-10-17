@@ -3211,7 +3211,7 @@ private:
                 continue;
             }
             auto annotated = ParamRoots(f, root.index);
-            if (!annotated || annotated->empty()) AddRoot(out, root);
+            if (!annotated) AddRoot(out, root);
             else AddRoots(out, *annotated);
         }
         return out;
@@ -3231,7 +3231,7 @@ private:
                 AddRoot(out, { CoreRootRef::Param, calleeParam });
             } else {
                 auto annotated = ParamRoots(*caller.f, r.index);
-                if (!annotated || annotated->empty()) {
+                if (!annotated) {
                     AddRoot(out, { CoreRootRef::Param, calleeParam });
                 } else {
                     for (auto &root : *annotated) {
@@ -3296,8 +3296,10 @@ private:
                         if (GirRefLike(m, callee.params[j])) {
                             auto expected = MapArgumentRoots(caller, p, i.vals[j], (int)j);
                             auto declared = ParamRoots(callee, (int)j);
+                            bool generic = declared && declared->size() == 1 &&
+                                (*declared)[0] == CoreRootRef { CoreRootRef::Param, (int)j };
                             for (auto &root : expected)
-                                if (!declared || find(declared->begin(), declared->end(), root) == declared->end())
+                                if (!generic && (!declared || find(declared->begin(), declared->end(), root) == declared->end()))
                                     Fail("GIR-V050", cat(label, " parameter ", j,
                                         " root info omits a root passed at a call site"));
                         }
