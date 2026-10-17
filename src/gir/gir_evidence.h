@@ -31,6 +31,18 @@ public:
                 if (GirDefinesValue(inst) && inst.res >= 0 && inst.res < count) defs[inst.res] = &inst;
     }
 
+    void NormalizeEvidenceOperands(GirFunc &function) const {
+        NormalizeAddressOperands(function);
+        auto entries = BlockEntries();
+        for (size_t block = 0; block < function.blocks.size(); block++) {
+            auto facts = entries[block];
+            for (auto &inst : function.blocks[block].insts) {
+                if (inst.op == GirOp::Index) NormalizeIndexOperand(inst, facts);
+                facts = TransferInst(std::move(facts), inst, nullptr);
+            }
+        }
+    }
+
     optional<string> Check(const vector<GirTypeId> &types) const {
         bool proven = false;
         for (auto &block : f.blocks)
@@ -166,6 +178,124 @@ private:
 
     static bool Has(const GirFacts &facts, const GirFact &fact) {
         return binary_search(facts.begin(), facts.end(), fact, GirFactLess);
+    }
+
+    bool SameI64Constant(int a, int b) const {
+        auto x = Constant(a), y = Constant(b);
+        return x && y && *x == *y;
+    }
+
+    void NormalizeIndexOperand(GirInst &inst, const GirFacts &facts) const {
+        if (!Has(facts, FactGe0(inst.b))) return;
+        for (auto &view : facts) {
+            if (view.kind != GirFact::ViewLenGe || view.a != inst.a) continue;
+            for (auto &fact : facts) {
+                if (fact.kind == GirFact::Lt && fact.b == view.b && Has(facts, FactGe0(fact.a)) &&
+                    SameI64Constant(fact.a, inst.b)) {
+                    inst.b = fact.a;
+                    return;
+                }
+            }
+        }
+    }
+
+    bool ScopeContains(int ancestor, int scope) const {
+        while (scope >= 0 && scope < (int)f.scopes.size()) {
+            if (scope == ancestor) return true;
+            scope = f.scopes[scope];
+        }
+        return false;
+    }
+
+    int AddressAliasIndex(const GirInst &inst) const {
+        if (inst.op == GirOp::Slot && inst.idx >= 0 && inst.idx < (int)f.slots.size()) return inst.idx;
+        if (inst.op == GirOp::Global && inst.idx >= 0 && inst.idx < (int)m.globals.size())
+            return (int)f.slots.size() + inst.idx;
+        return -1;
+    }
+
+    int AddressAliasIndexForValue(int value) const {
+        return value >= 0 && value < (int)defs.size() && defs[value] ? AddressAliasIndex(*defs[value]) : -1;
+    }
+
+    void TransferAddressAliases(vector<int> &aliases, const GirInst &inst) const {
+        auto index = AddressAliasIndex(inst);
+        if (index >= 0 && aliases[index] < 0) aliases[index] = inst.res;
+        if (inst.op != GirOp::Enter && inst.op != GirOp::Leave) return;
+        for (size_t slot = 0; slot < f.slots.size(); slot++)
+            if (ScopeContains(inst.idx, f.slots[slot].scope)) aliases[slot] = -1;
+    }
+
+    optional<vector<int>> JoinAddressAliases(int block, const vector<vector<int>> &incoming,
+                                             const vector<optional<vector<int>>> &outgoing) const {
+        optional<vector<int>> joined;
+        for (auto edge : incoming[block]) {
+            auto &source = outgoing[edge];
+            if (!source) continue;
+            if (!joined) {
+                joined = *source;
+                continue;
+            }
+            for (size_t alias = 0; alias < joined->size(); alias++)
+                if ((*joined)[alias] != (*source)[alias]) (*joined)[alias] = -1;
+        }
+        return joined;
+    }
+
+    vector<optional<vector<int>>> AddressAliasEntries() const {
+        vector<optional<vector<int>>> entries(f.blocks.size());
+        if (f.blocks.empty()) return entries;
+        auto edges = AllEdges();
+        vector<vector<int>> outgoing(f.blocks.size()), incoming(f.blocks.size());
+        for (size_t edge = 0; edge < edges.size(); edge++) {
+            if (edges[edge].from < 0 || edges[edge].from >= (int)f.blocks.size() ||
+                edges[edge].target < 0 || edges[edge].target >= (int)f.blocks.size()) continue;
+            outgoing[edges[edge].from].push_back((int)edge);
+            incoming[edges[edge].target].push_back(edges[edge].from);
+        }
+        auto empty = vector<int>(f.slots.size() + m.globals.size(), -1);
+        vector<optional<vector<int>>> exits(f.blocks.size());
+        entries[0] = empty;
+        vector<int> work { 0 };
+        vector<char> queued(f.blocks.size(), 0);
+        queued[0] = 1;
+        while (!work.empty()) {
+            auto block = work.back();
+            work.pop_back();
+            queued[block] = 0;
+            auto aliases = *entries[block];
+            for (auto &inst : f.blocks[block].insts) TransferAddressAliases(aliases, inst);
+            if (exits[block] == aliases) continue;
+            exits[block] = std::move(aliases);
+            for (auto edge : outgoing[block]) {
+                auto target = edges[edge].target;
+                if (target == 0) continue;
+                auto joined = JoinAddressAliases(target, incoming, exits);
+                if (joined && entries[target] != joined) {
+                    entries[target] = std::move(joined);
+                    if (!queued[target]) {
+                        work.push_back(target);
+                        queued[target] = 1;
+                    }
+                }
+            }
+        }
+        return entries;
+    }
+
+    void NormalizeAddressOperands(GirFunc &function) const {
+        auto entries = AddressAliasEntries();
+        for (size_t block = 0; block < function.blocks.size(); block++) {
+            if (!entries[block]) continue;
+            auto aliases = *entries[block];
+            for (auto &inst : function.blocks[block].insts) {
+                if (inst.op == GirOp::ArrayLen || inst.op == GirOp::Snap) {
+                    auto alias = AddressAliasIndexForValue(inst.a);
+                    if (alias >= 0 && aliases[alias] >= 0) inst.a = aliases[alias];
+                }
+                TransferAddressAliases(aliases, inst);
+            }
+        }
     }
 
     static void Add(GirFacts &facts, GirFact fact) {
@@ -327,6 +457,14 @@ private:
 inline optional<string> CheckGirEvidence(const GirModule &module, const GirFunc &function,
                                          const vector<GirTypeId> &types) {
     return GirEvidenceAnalysis(module, function).Check(types);
+}
+
+inline void NormalizeGirEvidenceInputs(GirModule &module) {
+    if (module.low) return;
+    for (auto &function : module.funcs)
+        GirEvidenceAnalysis(module, function).NormalizeEvidenceOperands(function);
+    for (auto &global : module.globals)
+        GirEvidenceAnalysis(module, global.init).NormalizeEvidenceOperands(global.init);
 }
 
 inline void ProposeGirEvidenceForFunction(const GirModule &module, GirFunc &function) {

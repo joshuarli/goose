@@ -6,11 +6,17 @@
 
 ## Current execution
 
-The resumed compiler built in Debug mode. H2 recovery cases E11–E16 and the separate 60-step sequence with seed 1 passed at `f570b026`. E10 exposed a builder-test include failure and a raw filesystem probe that bypassed input recording; `c203aa9d` repairs both, and its focused compiler-unit checks passed. E10 is being checked again on the integrated compiler. These runs establish no performance result.
+The resumed compiler built in Debug mode. H2 recovery cases E11–E16 and the separate 60-step sequence with seed 1 passed at `f570b026`. E10 exposed a builder-test include failure and a raw filesystem probe that bypassed input recording; `c203aa9d` repairs both, and its focused compiler-unit checks passed. E10 passed again on the integrated compiler. The response-file recorder regression failed against the former raw filesystem probe, then passed after the repair; the integrated focused runner passed all nine compiler checks. These runs establish no performance result.
 
 The argument-root proof module exceeded the 4 GiB Lean heap cap. Splitting root declarations from global-effect replay passed both modules under the original cap without changing the existing theorem conclusions; integrated as `67e984bb`. A separate thread-creation failure came from an 8 GiB virtual-address limit, which has been removed while retaining the Lean heap limit.
 
-The construction GIR lane independently decoded, validated, re-encoded byte-for-byte, and executed raw-byte, source-values and source-exit fixtures using the rebuilt construction compiler. These are lane results pending integration and review. Native target handling, whole-profile proofs and the final gates remain open.
+The construction GIR lane independently decoded, validated, re-encoded byte-for-byte, and executed raw-byte, source-values and source-exit fixtures using the rebuilt construction compiler. The construction GIR changes and review fixes are integrated at `4e20a576`; its exact 30-module check closure passed. Review regressions cover adapted counts, readonly invoke forwarding, published reference roots, and immutable owners with writable contents. Native target handling, whole-profile proofs and the final gates remain open.
+
+Production BCE is integrated through `a2afdd15`. The integrated Debug compiler passed the seven-fixture qualification against the fresh semantic executable from `55128436`: guarded cases emit proven indexes, mutation cases retain checked indexes, forged certificates reject, and both numeric profiles agree at all selected fuel bounds. This is correctness evidence, not a speed measurement.
+
+Checked lane changes now use one GIR function per Core context, retaining context-specific roots. This changes reference function numbering and removes the obsolete implementation-index helper. Runtime and validation proof consumers are being migrated together. Generic and explicitly empty root annotations have separate checked regression fixes. These lowering changes remain unmerged until their consumers pass.
+
+Native receiving verification is being repaired with mandatory construction-only low result descriptors and a checked payload endpoint guard. Pilot/shrink wire forms and the native two-i64 `{count, destination_id}` record are retained. Review found that arbitrary operand use did not establish receiving; the replacement tracks actual output initialization and payload transfer. The duplicated-target-context case passes the prototype, while the source-exit forwarding fixture exposed another positive regression under repair. No native gate is claimed closed.
 
 ## Handoff for the next executor
 
