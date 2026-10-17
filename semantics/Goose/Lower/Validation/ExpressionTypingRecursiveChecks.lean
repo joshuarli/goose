@@ -157,6 +157,24 @@ theorem sliced_element_typed {before after : LS} {value : ValueId}
 #guard let (value, after) := lowerPlace slicedElement (lowerEnv module env.vars []) initial
        after.cur.isSome && after.vals[value]? == some (some (.data (.ref .readOnly (.int .i64))))
 
+def fieldEnv : Core.TEnv :=
+  { structEnv with vars := #[⟨"owner", structTy, .mutable, 0, 0⟩], visible := [0] }
+
+def mutableFieldReference : Expr :=
+  .ref .mutable (.field (.deref (.blockE (.mk 1 [] (some (.ref .mutable (.var 0)))))) 1)
+
+theorem mutable_field_reference_source : Core.tyExpr fieldEnv mutableFieldReference 2 =
+    .ok (.ref .mutable .bool, 2) := by rfl
+
+theorem mutable_field_reference_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr mutableFieldReference (lowerEnv structModule fieldEnv.vars []) before = (value, after))
+    (live : after.cur.isSome = true) :
+    after.vals[value]? = some (some (.data (.ref .mutable .bool))) := by
+  exact lowerExpr_recursive_typed mutableFieldReference (by trivial) mutable_field_reference_source run live
+
+#guard let (value, after) := lowerExpr mutableFieldReference (lowerEnv structModule fieldEnv.vars []) initial
+  after.vals[value]? == some (some (.data (.ref .mutable .bool)))
+
 #print axioms lowerBound_recursive_typed
 #print axioms lowerExprs_recursive_typed
 #print axioms structLiteral_resultTy
