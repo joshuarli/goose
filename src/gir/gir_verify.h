@@ -2033,8 +2033,9 @@ private:
                 state.attempts.insert(result); state.values[result] = std::move(value);
             };
             auto complete = [&](Fact value) {
-                for (auto &[key, entry] : state.values)
-                    if (entry.kind == Kind::Attempt && entry.root == value.root) entry.raw = RawState::Built;
+                for (auto facts : { &state.values, &state.locals, &state.targets })
+                    for (auto &[key, entry] : *facts)
+                        if (entry.kind == Kind::Attempt && entry.root == value.root) entry.raw = RawState::Built;
             };
             auto invalidateRoleQueries = [&](int ticket) {
                 for (auto facts : { &state.values, &state.locals, &state.targets })
@@ -2417,6 +2418,7 @@ private:
                     }
                     case GirOp::ControlAttemptFinish: {
                         auto raw = require(inst.a, Kind::Attempt);
+                        if (raw.raw != RawState::Writing) bad("construction finish does not own an active writer");
                         state.writtenAttempts.insert(raw.root);
                         complete(raw); break;
                     }
