@@ -23,16 +23,15 @@ theorem newBlock_empty_refined_witness {module : GIR.Module}
     exact prior inst member
 
 
-theorem newBlock_parameter_refined_witness {module : GIR.Module}
+theorem newBlock_parameter_refined_frame {module : GIR.Module}
     {results : Array (List RootRef)} {vt : Array (Option VTy)} {func : Func} {upper : Prov}
-    {source : Core.Eff} {sourceRoots parameterRoots : List RootRef}
+    {source : Core.Eff} (parameterRoots : List RootRef)
     {ls : LS} {le : LEnv} {scopeCount : Nat} (ty : VTy)
     (symbols : ls.SymbolWF le scopeCount) (witness : BuilderRootWitness results vt func upper ls)
-    (prior : BuilderEffectRefinement module vt func upper source ls)
-    (parameter : RootsRefine func parameterRoots sourceRoots) :
+    (prior : BuilderEffectRefinement module vt func upper source ls) :
     ∃ next : Prov, BuilderRootWitness results vt func next (newBlock [ty] le ls).2 ∧
       BuilderEffectRefinement module vt func next source (newBlock [ty] le ls).2 ∧
-      RootsRefine func (rootsAt next.vals ls.vals.size) sourceRoots ∧ next.slots = upper.slots ∧
+      rootsAt next.vals ls.vals.size = parameterRoots ∧ next.slots = upper.slots ∧
       ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
   let next : Prov := { upper with vals := upper.vals.push parameterRoots }
   rw [newBlock1_run]
@@ -57,10 +56,24 @@ theorem newBlock_parameter_refined_witness {module : GIR.Module}
       exact (symbols.instructions inst member).uses value used
     rw [stable]
     exact prior inst member
-  · change RootsRefine func (rootsAt (upper.vals.push parameterRoots) ls.vals.size) sourceRoots
+  · change rootsAt (upper.vals.push parameterRoots) ls.vals.size = parameterRoots
     rw [← witness.valueSize, rootsAt_push_new]
-    exact parameter
   · intro index bound
     exact rootsAt_push_old bound
+
+theorem newBlock_parameter_refined_witness {module : GIR.Module}
+    {results : Array (List RootRef)} {vt : Array (Option VTy)} {func : Func} {upper : Prov}
+    {source : Core.Eff} {sourceRoots parameterRoots : List RootRef}
+    {ls : LS} {le : LEnv} {scopeCount : Nat} (ty : VTy)
+    (symbols : ls.SymbolWF le scopeCount) (witness : BuilderRootWitness results vt func upper ls)
+    (prior : BuilderEffectRefinement module vt func upper source ls)
+    (parameter : RootsRefine func parameterRoots sourceRoots) :
+    ∃ next : Prov, BuilderRootWitness results vt func next (newBlock [ty] le ls).2 ∧
+      BuilderEffectRefinement module vt func next source (newBlock [ty] le ls).2 ∧
+      RootsRefine func (rootsAt next.vals ls.vals.size) sourceRoots ∧ next.slots = upper.slots ∧
+      ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
+  obtain ⟨next, roots, effects, exactRoots, slots, growth⟩ :=
+    newBlock_parameter_refined_frame parameterRoots ty symbols witness prior
+  exact ⟨next, roots, effects, by simpa [exactRoots] using parameter, slots, growth⟩
 
 end Goose.Lower.Validation.SummaryPreservation
