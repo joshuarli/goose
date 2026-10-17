@@ -58,7 +58,7 @@ theorem allowedRoots_lowerContext_result {module : Core.Module} {ctx : Context}
       subst root
       apply lowerContext_parameter_result_alias bound _ subset
       have indexBound := List.mem_range.mp indexMember
-      simpa [lowerContextAt, lowerImpl] using indexBound
+      simpa [lowerContextAt, lowerImpl, lowerImplFromState] using indexBound
     · simp at selected
 
 
