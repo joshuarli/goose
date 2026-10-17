@@ -36,4 +36,21 @@ def CfgSourceStatements (env : Core.TEnv) (results : List Ty) (stmts : List Stmt
     Core.tyStmts env scope stmts start = .ok (output, finish) →
     ∀ context, GeneratedEdgeRun (lowerEnv env.mod env.vars results) context (lowerStmts context stmts)
 
+def CfgSourceExpressions (env : Core.TEnv) (results : List Ty) (exprs : List Expr) : Prop :=
+  ∀ {types : List Ty} {start finish : Nat}, Core.tyStructExprs env types exprs start = .ok ((), finish) →
+    GeneratedEdgeRun (lowerEnv env.mod env.vars results) none (lowerExprs exprs)
+
+def CfgSourceArguments (env : Core.TEnv) (results : List Ty) (args : List Arg) : Prop :=
+  ∀ {callee : Core.Impl} {params : List Param} {start finish : Nat}, params.length = args.length →
+    Core.tyArgs env callee params args start = .ok ((), finish) →
+    GeneratedEdgeRun (lowerEnv env.mod env.vars results) none (lowerArgs args)
+
+def CfgSourcePrintArguments (env : Core.TEnv) (results : List Ty) (args : List PrintArg) : Prop :=
+  ∀ {start finish : Nat}, Core.tyPrintArgs env args start = .ok ((), finish) →
+    GeneratedEdgeRun (lowerEnv env.mod env.vars results) none (lowerPrintArgs args)
+
+def CfgSourceEachSource (env : Core.TEnv) (results : List Ty) (view : View) : Prop :=
+  ∀ {info : Ty × Bool} {start finish : Nat}, Core.tyView env view start = .ok (info, finish) →
+    GeneratedEdgeRun (lowerEnv env.mod env.vars results) none (lowerEachSource view)
+
 end Goose.Lower.Validation

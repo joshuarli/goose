@@ -86,4 +86,16 @@ theorem cfg_source_slice {env : Core.TEnv} {results : List Ty} (mu : Mutability)
   exact (viewChild viewSource).bind fun _ => (loChild loSource).bind fun _ =>
     (hiChild hiSource).bind fun _ => generated_edge_emitDef _ _ _
 
+theorem cfg_source_eachOwner {env : Core.TEnv} {results : List Ty} (place : Place)
+    (child : CfgSourcePlace env results place) : CfgSourceEachSource env results (.of place) := by
+  intro info start finish source
+  obtain ⟨placeInfo, placeFinish, placeSource, _⟩ := (st_bind_ok _ _ _ _).mp source
+  exact (child placeSource).bind fun _ => (generated_edge_emitDef _ _ _).bind fun _ => generated_edge_pure _ _ _
+
+theorem cfg_source_eachValue {env : Core.TEnv} {results : List Ty} (expr : Expr)
+    (child : CfgSourceExpression env results expr) : CfgSourceEachSource env results (.val expr) := by
+  intro info start finish source
+  obtain ⟨ty, childFinish, childSource, _⟩ := (st_bind_ok _ _ _ _).mp source
+  exact (child childSource).bind fun _ => (generated_edge_emitDef _ _ _).bind fun _ => generated_edge_pure _ _ _
+
 end Goose.Lower.Validation
