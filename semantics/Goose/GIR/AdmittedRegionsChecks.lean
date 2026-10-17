@@ -53,6 +53,11 @@ private def decodeRoots (text : String) : Except String RootInfo := do
 #guard (decodeRoots "[\"roots\",[],[],[[]],[[\"sr\",0,[[\"r_local\",2]]]]]").isOk == false
 #guard (decodeRoots "[\"roots\",[],[],[[]],[[\"sr\",0,[[\"r_global\",1]]]]]").isOk == false
 
+private def legacyEmpty : Module :=
+  module #[function "legacy" [] #[] [.term (.ret [] (some 0))]]
+#guard admitted legacyEmpty
+#guard (validate legacyEmpty).isOk
+
 private def slotTest : Func :=
   function "slots" [] #[⟨slice,.mutable,0,0⟩] [.term (.ret [] (some 0))]
     { slots := some #[(0,[.global 0])] }
@@ -140,6 +145,15 @@ example : Core.validate widenedReturn = .ok () := by cbv
     ((lower widenedReturn).funcs.map fun f => { f with roots := { f.roots with slots := none } }) }
   (lower widenedReturn).implTypes)[2]?.getD [] == [.global 0]
 
+#guard admitted { lower widenedReturn with funcs := (lower widenedReturn).funcs.modify 2 fun f =>
+  { f with roots := { f.roots with slots := none } } }
+private def incomplete : Func :=
+  function "incomplete" [] #[] [.def 0 (.globalAddr 0),.term (.ret [] (some 0))]
+#guard (incomplete.checkRegionClosure (module #[incomplete]) #[] #[some (.data holder)]
+  ⟨#[],#[[]]⟩ none).isOk == false
+#guard (resultTest.checkRegionClosure (module #[resultTest]) #[] #[some (.data slice)]
+  ⟨#[],#[[.global 0]]⟩ (some [])).isOk == false
+
 private def storeTest : Func :=
   function "store" [holder,slice] #[] [.eff (.store 0 1 (some 0)),.term (.ret [] (some 0))]
     { params := #[(0,[.param 0]),(1,[.param 1])], contents := #[(0,[])], slots := some #[] }
@@ -166,7 +180,8 @@ private def caller : Func :=
     with summary := .known ⟨[.global 0],[],[],[],[],true,false⟩ }
 private def global : Global :=
   { name := "P", ty := owner, kind := .mutable, org := 0,
-    init := { function "init" [] #[] [.def 0 (.arrLit owner []), .term (.ret [0] (some 0))]
+    init := { function "init" [] #[] [.def 0 (.constInt .i64 0), .def 1 (.arrLit owner [0]),
+      .term (.ret [1] (some 0))]
       with results := [owner], roots := { results := #[[]] } } }
 private def unsafeEffect : Module := module #[caller,callee] #[global]
 #guard !admitted unsafeEffect
@@ -174,6 +189,80 @@ private def unsafeEffect : Module := module #[caller,callee] #[global]
 #guard (caller.summaryClosed (caller.effects unsafeEffect
   (caller.provenance (resultRoots unsafeEffect unsafeEffect.implTypes)
     (caller.valueTypes unsafeEffect) unsafeEffect.rootCount))).isOk
+
+private def specializedStoreCallee : Func :=
+  { function "specialized.store" [holder,slice] #[]
+    [.def 2 (.globalAddr 0), .def 3 (.snapshot .owner 2),
+     .def 4 (.viewSlice .mutable 3 .omitted .omitted (some 0)),
+     .eff (.store 0 4 (some 0)), .term (.ret [] (some 0))]
+    { params := #[(0,[.param 0]),(1,[.global 0,.global 1])], contents := #[(0,[.param 1])], slots := some #[] }
+    with summary := .known ⟨[.global 0],[.param 0],[],[],[.param 0],false,false⟩ }
+private def specializedStoreCaller : Func :=
+  { function "specialized.main" [] #[⟨slice,.mutable,0,0⟩]
+    [.def 0 (.globalAddr 1), .def 1 (.snapshot .owner 0),
+     .def 2 (.viewSlice .mutable 1 .omitted .omitted (some 0)),
+     .eff (.slotInit 0 2 (some 0)), .def 3 (.slotAddr 0),
+     .def 4 (.call 1 [3,2] (some 0)), .def 5 (.load 3),
+     .def 6 (.sliceView 5), .def 7 (.constInt .i64 0),
+     .def 8 (.indexChecked 6 7 (some 0)), .eff (.store 8 7 (some 0)), .term (.ret [] (some 0))]
+    { slots := some #[(0,[.global 1])] }
+    with summary := .known ⟨[.global 0,.global 1],[.global 1],[],[],[],true,false⟩ }
+private def specializedStoreModule : Module :=
+  module #[specializedStoreCaller,specializedStoreCallee] #[global,{ global with name := "H" }]
+private def specializedStoreProv := specializedStoreCaller.provenance
+  (resultRoots specializedStoreModule specializedStoreModule.implTypes)
+  (specializedStoreCaller.valueTypes specializedStoreModule) specializedStoreModule.rootCount
+#guard rootsChecked specializedStoreModule
+#guard specializedStoreCallee.expandParameterRoot (.param 1) == [.global 0,.global 1]
+#guard !specializedStoreCallee.rootsWithin [.global 0] [.param 1]
+#guard specializedStoreCallee.rootsWithin [.param 1] [.global 0,.global 1]
+#guard specializedStoreCallee.rootsWithin [.param 1] [.param 1]
+#guard !admitted specializedStoreModule
+#guard (validate specializedStoreModule).isOk == false
+#guard rootsAt specializedStoreProv.slots 0 == [.global 1]
+#guard ((replacementContentFlow specializedStoreModule).forFunction specializedStoreCaller
+  (specializedStoreCaller.valueTypes specializedStoreModule)).value 5 |>.any fun roots =>
+    roots.contains (.global 0) && roots.contains (.global 1)
+#guard (specializedStoreCaller.summaryClosed
+  (specializedStoreCaller.effects specializedStoreModule specializedStoreProv)).isOk
+
+private def specializedMutator : Func :=
+  { function "specialized.mutator" [holder] #[]
+    [.def 1 (.globalAddr 0), .def 2 (.snapshot .owner 1),
+     .def 3 (.viewSlice .mutable 2 .omitted .omitted (some 0)),
+     .eff (.store 0 3 (some 0)), .term (.ret [] (some 0))]
+    { params := #[(0,[.param 0])], contents := #[(0,[.global 0,.global 1])], slots := some #[] }
+    with summary := .known ⟨[.global 0],[.param 0],[],[],[.param 0],false,false⟩ }
+private def specializedWrapper : Func :=
+  { function "specialized.wrapper" [holder,slice] #[]
+    [.def 2 (.call 2 [0] (some 0)), .def 3 (.load 0), .term (.ret [3] (some 0))]
+    { params := #[(0,[.param 0]),(1,[.global 0,.global 1])], contents := #[(0,[.param 1])],
+      results := #[[.param 1]], slots := some #[] }
+    with results := [slice], summary := .known ⟨[.global 0,.param 0],[.param 0],[],[],[.param 0],false,false⟩ }
+private def specializedReturnCaller : Func :=
+  { function "specialized.return.main" [] #[⟨slice,.mutable,0,0⟩]
+    [.def 0 (.globalAddr 1), .def 1 (.snapshot .owner 0),
+     .def 2 (.viewSlice .mutable 1 .omitted .omitted (some 0)),
+     .eff (.slotInit 0 2 (some 0)), .def 3 (.slotAddr 0),
+     .def 4 (.call 1 [3,2] (some 0)), .def 5 (.sliceView 4), .def 6 (.constInt .i64 0),
+     .def 7 (.indexChecked 5 6 (some 0)), .eff (.store 7 6 (some 0)), .term (.ret [] (some 0))]
+    { slots := some #[(0,[.global 1])] }
+    with summary := .known ⟨[.global 0,.global 1],[.global 1],[],[],[],true,false⟩ }
+private def specializedReturnModule : Module :=
+  module #[specializedReturnCaller,specializedWrapper,specializedMutator] #[global,{ global with name := "H" }]
+private def specializedWrapperProv := specializedWrapper.provenance
+  (resultRoots specializedReturnModule specializedReturnModule.implTypes)
+  (specializedWrapper.valueTypes specializedReturnModule) specializedReturnModule.rootCount
+#guard rootsChecked specializedReturnModule
+#guard (argumentContents specializedWrapper specializedWrapperProv 0).all
+  (mapContentRoots specializedWrapper specializedWrapperProv [0] [.global 0,.global 1]).contains
+#guard (mapContentRoots specializedWrapper specializedWrapperProv [0] [.global 0,.global 1]).all
+  (argumentContents specializedWrapper specializedWrapperProv 0).contains
+#guard !admitted specializedReturnModule
+#guard (validate specializedReturnModule).isOk == false
+#guard ((replacementContentFlow specializedReturnModule).forFunction specializedReturnCaller
+  (specializedReturnCaller.valueTypes specializedReturnModule)).value 4 |>.any fun roots =>
+    roots.contains (.global 0) && roots.contains (.global 1)
 
 private def phiCallee : Func :=
   { function "phi.callee" [holder] #[]
@@ -207,6 +296,11 @@ private def phiProv : Prov := phiCaller.provenance
 #guard (mapContentRoots phiCaller phiProv [9] [.global 0,.global 1]).all
   (argumentContents phiCaller phiProv 9).contains
 #guard !admitted phiModule
+#guard (validate phiModule).isOk == false
+#guard !admitted { phiModule with funcs := phiModule.funcs.map fun f =>
+  { f with roots := { f.roots with slots := none } } }
+#guard (validate { phiModule with funcs := phiModule.funcs.map fun f =>
+  { f with roots := { f.roots with slots := none } } }).isOk == false
 #guard (phiCaller.summaryClosed (phiCaller.effects phiModule phiProv)).isOk
 
 private def headerGlobal : Global :=
@@ -232,14 +326,14 @@ private def headerAliasCaller : Func :=
 private def legacyHeaderAlias : Module :=
   module #[headerAliasCaller,headerAliasCallee] #[global,headerGlobal,{ global with name := "Q" }]
 #guard rootsChecked legacyHeaderAlias
-#guard (validate legacyHeaderAlias).isOk
-#guard admitted legacyHeaderAlias
+#guard (validate legacyHeaderAlias).isOk == false
+#guard !admitted legacyHeaderAlias
 #guard !admitted { legacyHeaderAlias with funcs := legacyHeaderAlias.funcs.modify 0 fun f =>
   { f with roots := { f.roots with slots := some #[] } } }
 
 private def referenceGlobal : Global := { global with ty := slice }
 #guard !admitted (module #[resultTest] #[referenceGlobal])
-#guard admitted (module #[{ resultTest with roots := { resultTest.roots with slots := none } }] #[referenceGlobal])
+#guard !admitted (module #[{ resultTest with roots := { resultTest.roots with slots := none } }] #[referenceGlobal])
 #guard !admitted (module #[function "old" [] #[] [.term (.ret [] (some 0))]]
   #[{ referenceGlobal with init := { referenceGlobal.init with roots := { slots := some #[] } } }])
 

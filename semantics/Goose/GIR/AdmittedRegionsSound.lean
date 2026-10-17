@@ -169,13 +169,13 @@ theorem Func.checkAdmittedRegions_call_receiver {m : Module} {vt : Array (Option
     {parameter : Nat} {ceiling : List RootRef} (row : (parameter,ceiling) ∈ callee.roots.contents.toList)
     (reference : (callee.params[parameter]?).any Ty.isRefSlice = true)
     {receiver : RootRef} (receiverMember : receiver ∈ rootsAt p.vals args[parameter]!) :
-    ∀ root ∈ mapContentRoots f p args ceiling, root ∈ f.receiverContentCeiling p receiver := by
+    RootsRefine f (mapRawContentRoots p args ceiling) (f.receiverContentCeiling p receiver) := by
   have instruction := f.checkAdmittedRegions_instruction checked blockMember called
   simp only [Func.admittedInstruction, calleeAt] at instruction
   have bound := List.all_eq_true.mp instruction (parameter,ceiling) row
   simp only [reference, Bool.not_true, Bool.false_or, Bool.and_eq_true] at bound
   have receiverBound := List.all_eq_true.mp bound.2 receiver receiverMember
-  simpa only [List.contains_iff_mem] using List.all_eq_true.mp receiverBound
+  exact (Func.rootsWithin_eq_true f _ _).mp receiverBound
 
 theorem Func.checkAdmittedRegions_store {m : Module} {vt : Array (Option VTy)}
     {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ())

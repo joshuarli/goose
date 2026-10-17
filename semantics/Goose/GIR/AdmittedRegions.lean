@@ -11,17 +11,16 @@ def Func.admittedSlots (f : Func) (p : Prov) : Bool :=
       storage.ty.isRefLike && (rootsAt p.slots slot).all ceiling.contains
 
 def Func.receiverContentCeiling (f : Func) (p : Prov) (root : RootRef) : List RootRef :=
-  let roots := match root with
+  match root with
     | .local slot => rootsAt p.slots slot
     | .param parameter =>
         if (f.params[parameter]?).any Ty.isRefSlice then f.contentRoots parameter else []
     | .global global => [.global global]
-  roots.flatMap f.expandParameterRoot
 
 def Func.admittedCallReceiver (f : Func) (p : Prov) (value : ValueId)
     (mapped : List RootRef) : Bool :=
   (rootsAt p.vals value).all fun root =>
-    mapped.all (f.receiverContentCeiling p root).contains
+    f.rootsWithin mapped (f.receiverContentCeiling p root)
 
 def Func.admittedInstruction (m : Module) (vt : Array (Option VTy))
     (f : Func) (p : Prov) : Inst → Bool
@@ -44,7 +43,8 @@ def Func.admittedInstruction (m : Module) (vt : Array (Option VTy))
             let actual := argumentContents f p args[parameter]!
             let mapped := mapContentRoots f p args ceiling
             actual.all mapped.contains && mapped.all actual.contains &&
-              f.admittedCallReceiver p args[parameter]! mapped
+              f.admittedCallReceiver p args[parameter]!
+                (mapRawContentRoots p args ceiling)
   | _ => true
 
 def Func.checkAdmittedRegions (m : Module) (vt : Array (Option VTy))

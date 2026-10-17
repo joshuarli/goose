@@ -26,4 +26,10 @@ theorem Func.rootsWithin_eq_true (f : Func) (actual ceiling : List RootRef) :
     f.rootsWithin actual ceiling = true ↔ RootsRefine f actual ceiling := by
   simp [Func.rootsWithin, RootsRefine, List.all_eq_true, Func.rootWithin_eq_true]
 
+def mapRawContentRoots (p : Prov) (args : List ValueId) (roots : List RootRef) : List RootRef :=
+  (roots.flatMap fun
+    | .global global => [.global global]
+    | .param parameter => (args[parameter]?).map (rootsAt p.vals) |>.getD []
+    | .local _ => []).eraseDups
+
 end Goose.GIR
