@@ -563,7 +563,7 @@ theorem execPure_state {cx : FnCtx} {fr : Frame} {op : Op} {result : ValueId}
           split
           · exact StateStable.pure _
           · exact StateStable.fault _
-    | refFreeze reference =>
+    | refFreeze reference | ownerBorrow reference =>
       exact (stable_getVal fr reference).bind fun value =>
         (stable_expectRef value).bind fun _ => StateStable.pure _
     | load reference =>

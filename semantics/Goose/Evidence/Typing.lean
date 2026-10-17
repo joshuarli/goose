@@ -640,6 +640,21 @@ theorem execPure_refFreeze_typed {roots : RootDeclarations} {types : Array (Opti
   obtain ⟨rfl, rfl⟩ := evaluated
   exact ⟨⟨location, rfl, declared⟩, rfl⟩
 
+theorem execPure_ownerBorrow_typed {roots : RootDeclarations} {types : Array (Option VTy)}
+    {cx : FnCtx} {fr : Frame} {id : ValueId} {ty : Ty}
+    {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
+    (metadata : types[id]? = some (some (.data (.ref .mutable ty))))
+    (evaluated : execPure cx fr (.ownerBorrow id) before = .ok cell after) :
+    WeakCellTy roots cell (.data (.ref .mutable ty)) ∧ after = before := by
+  unfold execPure at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.getVal metadata read
+  subst middle
+  obtain ⟨location, rfl, declared⟩ := valueTyped
+  simp only [expectRef, pure_bind, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨⟨location, rfl, declared⟩, rfl⟩
+
 theorem execPure_fieldAddr_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {id : ValueId} {permission fieldPermission : Mutability}
     {sid : StructId} {fields : TyList} {index : Nat} {fieldTy : Ty}
