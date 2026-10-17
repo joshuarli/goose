@@ -37,6 +37,9 @@ theorem start_components (f : Func) (vt : Array (Option VTy)) :
   cases found : f.blocks[0]? <;>
     simp [start, found, List.forIn_pure_yield_eq_foldl]
 
+theorem start_returned (f : Func) (vt : Array (Option VTy)) :
+    (start f vt).returned = .known [] := congrArg State.returned (start_components f vt)
+
 theorem start_supported {m : Module} {f : Func} (vt : Array (Option VTy))
     (valid : annotationsValid m f = true)
     (entryBound : ∀ (entry : Block), f.blocks[0]? = some entry → entry.params.length ≤ f.params.length) :
@@ -178,6 +181,7 @@ theorem globalAddr_inBounds (env : TyEnv) (global : GlobalId) (type : VTy)
 
 #print axioms Atom.ofRootRef_injective
 #print axioms start_shape
+#print axioms start_returned
 #print axioms start_supported
 #print axioms moduleStart_finite
 #print axioms moduleRound_finite
