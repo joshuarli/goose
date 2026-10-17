@@ -37,7 +37,7 @@ theorem lowerContextRootInfo_result_eq {ctx : Context} {impl : Impl}
         (impl.params.toList.zipIdx.filterMap fun (param, position) =>
           match ctx.varRoots.find? (·.1 == param.var) with
           | some (_, paramRoots) =>
-            if (ctx.resultRoots[result]?.getD []).any paramRoots.contains then
+            if paramRoots.all (ctx.resultRoots[result]?.getD []).contains then
               some (.param position) else none
           | none => none)) := by
   simp [lowerContextRootInfo, bound]
