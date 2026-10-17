@@ -190,6 +190,12 @@ theorem origins_freezeTo (m : Mutability) (r : ValueId) : OriginRun (freezeTo m 
     | exact OriginRun.pure _
     | (rename_i t; cases t <;> first | exact OriginRun.pure _ | (rename_i m' _; cases m' <;> first | exact OriginRun.pure _ | exact origins_emitDef _))
 
+theorem origins_borrowTo (m : Mutability) (r : ValueId) : OriginRun (borrowTo m r) := by
+  intro le before result after run
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact origins_freezeTo m r le before result after frozen
+  · exact origins_emitDef (.ownerBorrow r) (by simp [Op.OriginPresent, Inst.needsOriginIn, Inst.needsOrigin]) le before result after borrowed
+
 theorem origins_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : OriginRun (coerceTo target r org) := by
   unfold coerceTo
   refine OriginRun.bind (origins_valTy r) fun source => ?_
@@ -252,7 +258,7 @@ theorem origins_eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) :
     | some lv =>
       dsimp only
       cases lv.ty with
-      | ref m t => exact origins_freezeTo m elem
+      | ref m t => exact origins_borrowTo m elem
       | _ => exact OriginRun.pure _
 
 theorem origins_regrowOf (o : Option ValueId) : OriginRun (regrowOf o) := by
@@ -457,7 +463,7 @@ theorem origins_lowerExpr (e : Expr)
   | ref m p =>
     try simp [Expr.pushOrigins] at source
     simp only [lowerExpr]
-    exact OriginRun.bind (origins_lowerPlace p) fun r => origins_freezeTo m r
+    exact OriginRun.bind (origins_lowerPlace p) fun r => origins_borrowTo m r
   | slice m v lo hi org =>
     try simp [Expr.pushOrigins] at source
     simp only [lowerExpr]
@@ -557,7 +563,7 @@ theorem origins_lowerArg (a : Arg)
   | byRef m p =>
     try simp [Arg.pushOrigins] at source
     simp only [lowerArg]
-    exact OriginRun.bind (origins_lowerPlace p) fun r => origins_freezeTo m r
+    exact OriginRun.bind (origins_lowerPlace p) fun r => origins_borrowTo m r
 
 theorem origins_lowerArgs (args : List Arg)
     (source : PushOrigins.Present (args.flatMap Arg.pushOrigins) := by solve_by_elim [And.left, And.right]) :
