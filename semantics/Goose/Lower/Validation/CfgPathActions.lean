@@ -65,10 +65,6 @@ theorem path_coerceResult (value : ValueId) (origin : OriginId) :
   | none => exact PathAction.pure _
   | some destination => exact path_coerceTo _ _ _
 
-theorem path_implOfContext (context : ContextId) : PathAction (implOfContext context) := by
-  unfold implOfContext
-  exact PathAction.bind path_read fun _ => PathAction.pure _
-
 theorem path_growOwner (value : ValueId) : PathAction (growOwner value) := by
   unfold growOwner
   refine PathAction.bind (path_valTy value) fun ty => ?_

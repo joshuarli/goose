@@ -66,10 +66,6 @@ theorem open_coerceResult (value : ValueId) (origin : OriginId) :
   | none => exact OpenAction.pure _
   | some destination => exact open_coerceTo _ _ _
 
-theorem open_implOfContext (context : ContextId) : OpenAction (implOfContext context) := by
-  unfold implOfContext
-  exact OpenAction.bind open_read fun _ => OpenAction.pure _
-
 theorem open_growOwner (value : ValueId) : OpenAction (growOwner value) := by
   unfold growOwner
   refine OpenAction.bind (open_valTy value) fun ty => ?_

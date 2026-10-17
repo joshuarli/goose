@@ -58,7 +58,7 @@ theorem path_lowerExpr : ∀ expr : Expr, PathAction (lowerExpr expr)
     exact PathAction.bind (path_lowerExpr expr) fun value => PathAction.bind (path_intTyOf value) fun _ => path_emitDef _
   | .call context args _ => by
     simp only [lowerExpr]
-    refine PathAction.bind (path_lowerArgs args) fun _ => PathAction.bind (path_implOfContext context) fun _ =>
+    refine PathAction.bind (path_lowerArgs args) fun _ =>
       PathAction.bind (path_emitDef _) fun _ => PathAction.bind path_read fun env => ?_
     cases env.mod.noReturn context <;> simp only [Bool.false_eq_true, ↓reduceIte] <;>
       first | exact PathAction.pure _ | exact PathAction.bind (path_emitTerm _) fun _ => PathAction.pure _

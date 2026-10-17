@@ -58,7 +58,7 @@ theorem open_lowerExpr : ∀ expr : Expr, OpenAction (lowerExpr expr)
     exact OpenAction.bind (open_lowerExpr expr) fun value => OpenAction.bind (open_intTyOf value) fun _ => open_emitDef _
   | .call context args _ => by
     simp only [lowerExpr]
-    refine OpenAction.bind (open_lowerArgs args) fun _ => OpenAction.bind (open_implOfContext context) fun _ =>
+    refine OpenAction.bind (open_lowerArgs args) fun _ =>
       OpenAction.bind (open_emitDef _) fun _ => OpenAction.bind open_read fun env => ?_
     cases env.mod.noReturn context <;> simp only [Bool.false_eq_true, ↓reduceIte] <;>
       first | exact OpenAction.pure _ | exact OpenAction.bind (open_emitTerm _) fun _ => OpenAction.pure _

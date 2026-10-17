@@ -264,4 +264,22 @@ theorem reachable_complete (func : Func) (nonempty : 0 < func.blocks.size)
     ∀ block, block < func.blocks.size → (reachable func)[block]? = some true :=
   fun block bound => reachable_marks_path nonempty (paths block bound)
 
+theorem reachable_go_of_blocks {left right : Func} (same : left.blocks = right.blocks)
+    (size fuel : Nat) (pending : List BlockId) (seen : Array Bool) :
+    reachable.go left size fuel pending seen = reachable.go right size fuel pending seen := by
+  induction fuel generalizing pending seen with
+  | zero => rfl
+  | succ fuel ih =>
+    cases pending with
+    | nil => rfl
+    | cons block rest =>
+      simp only [reachable.go, same]
+      exact ih _ _
+
+theorem reachable_of_blocks {left right : Func} (same : left.blocks = right.blocks) :
+    reachable left = reachable right := by
+  unfold reachable
+  rw [same]
+  exact reachable_go_of_blocks same _ _ _ _
+
 end Goose.Lower.Validation

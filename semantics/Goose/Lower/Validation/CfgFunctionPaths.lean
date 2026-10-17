@@ -66,9 +66,9 @@ theorem paths_function_start (types : List VTy) (continuation : List ValueId →
     Nat.lt_of_lt_of_le (by change 0 < 1; decide) growth.ext.1
   exact ⟨paths, positive⟩
 
-theorem lowerImplAt_reachable (module : Core.Module) (index : ImplId) (impl : Core.Impl) :
-    ∀ block, block < (lowerImplAt module index impl).blocks.size →
-      (reachable (lowerImplAt module index impl))[block]? = some true := by
+theorem lowerImpl_reachable (module : Core.Module) (impl : Core.Impl) :
+    ∀ block, block < (lowerImpl module impl).blocks.size →
+      (reachable (lowerImpl module impl))[block]? = some true := by
   let env := lowerEnv module impl.vars impl.results.toList
   let types := impl.params.toList.map fun param => VTy.data (tyOfVar impl param.var)
   let continuation : List ValueId → B Unit := fun params => do
@@ -79,7 +79,15 @@ theorem lowerImplAt_reachable (module : Core.Module) (index : ImplId) (impl : Co
   have actionPaths : ∀ params, PathAction (continuation params) := fun params =>
     PathAction.bind (path_lowerBlock none _ false impl.body) fun value => path_finishFunction impl value
   have started := paths_function_start types continuation actionPaths env
-  exact started.1.finished started.2 (lowerImplAt module index impl) rfl
+  exact started.1.finished started.2 (lowerImpl module impl) rfl
+
+theorem lowerContextAt_reachable (module : Core.Module) (context : Core.Context) (impl : Core.Impl) :
+    ∀ block, block < (lowerContextAt module context impl).blocks.size →
+      (reachable (lowerContextAt module context impl))[block]? = some true := by
+  intro block bound
+  rw [reachable_of_blocks (left := lowerContextAt module context impl)
+    (right := lowerImpl module impl) rfl]
+  exact lowerImpl_reachable module impl block bound
 
 theorem lowerGlobal_reachable (module : Core.Module) (global : Core.Global) :
     ∀ block, block < (lowerGlobal module global).init.blocks.size →
