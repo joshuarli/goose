@@ -236,6 +236,78 @@ theorem LS.SourceSymbolsRun.freezeTo {le : LEnv} {scopeCount : Nat}
         | readOnly => exact LS.SourceSymbolsRun.pure address
       | _ => exact LS.SourceSymbolsRun.pure address
 
+theorem LS.SourceSymbolsRun.coerceTo {le : LEnv} {scopeCount : Nat}
+    (target : Core.Ty) (value : ValueId) (origin : Core.OriginId)
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.coerceTo target value origin) := by
+  unfold Goose.Lower.coerceTo
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.valTy value)
+    (LS.SourceSymbolsRun.valTy value)
+  intro valueTy
+  cases target with
+  | ref requested _ =>
+    cases valueTy with
+    | data sourceTy =>
+      cases sourceTy with
+      | ref actual _ =>
+        cases requested with
+        | mutable => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+        | readOnly =>
+          cases actual with
+          | mutable => simpa [Goose.Lower.coerceTo] using
+              (LS.SourceSymbolsRun.emitDef_unreferenced (le := le) (scopeCount := scopeCount)
+                (op := .refFreeze value) (by simp [Op.origin]) (by simp [Op.SymbolRefsValid]))
+          | readOnly => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+      | _ => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+    | view _ _ => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+  | slice requested _ =>
+    cases valueTy with
+    | data sourceTy =>
+      cases sourceTy with
+      | slice actual _ =>
+        cases requested with
+        | mutable => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+        | readOnly =>
+          cases actual with
+          | mutable =>
+            simpa [Goose.Lower.coerceTo] using
+              (LS.SourceSymbolsRun.bind (action := Goose.Lower.emitDef (.sliceView value))
+              (LS.SourceSymbolsRun.emitDef_unreferenced (by simp [Op.origin])
+                (by simp [Op.SymbolRefsValid]))
+                (fun sampled => LS.SourceSymbolsRun.emitDef
+                  (by
+                    intro emitted equality
+                    simp only [Op.origin, Option.some.injEq] at equality
+                    cases equality
+                    exact originBound)
+                  (by simp [Op.SymbolRefsValid])))
+          | readOnly => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+      | _ => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+    | view _ _ => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+  | _ => simpa [Goose.Lower.coerceTo] using LS.SourceSymbolsRun.pure value
+
+theorem LS.SourceSymbolsRun.coerceSlot {le : LEnv} {scopeCount : Nat}
+    (slot : SlotId) (value : ValueId) (origin : Core.OriginId)
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.coerceSlot slot value origin) := by
+  unfold Goose.Lower.coerceSlot
+  apply LS.SourceSymbolsRun.bind (action := (read : B LEnv)) LS.SourceSymbolsRun.readAction
+  intro env
+  cases row : env.slots[slot]? with
+  | none => exact LS.SourceSymbolsRun.pure value
+  | some destination => exact LS.SourceSymbolsRun.coerceTo destination.ty value origin originBound
+
+theorem LS.SourceSymbolsRun.coerceResult {le : LEnv} {scopeCount : Nat}
+    (value : ValueId) (origin : Core.OriginId)
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.coerceResult value origin) := by
+  unfold Goose.Lower.coerceResult
+  apply LS.SourceSymbolsRun.bind (action := (read : B LEnv)) LS.SourceSymbolsRun.readAction
+  intro env
+  cases row : env.results.head? with
+  | none => exact LS.SourceSymbolsRun.pure value
+  | some destination => exact LS.SourceSymbolsRun.coerceTo destination value origin originBound
+
 theorem LS.SourceSymbolsRun.lowerExpr_read {le : LEnv} {scopeCount : Nat} {place : Core.Place}
     (source : LS.SourceSymbolsRun le scopeCount (lowerPlace place)) :
     LS.SourceSymbolsRun le scopeCount (lowerExpr (.read place)) := by
@@ -316,6 +388,32 @@ theorem LS.SourceSymbolsRun.lowerArgs {le : LEnv} {scopeCount : Nat} :
     intro _
     apply LS.SourceSymbolsRun.bind (action := Goose.Lower.lowerArgs rest)
       (LS.SourceSymbolsRun.lowerArgs rest (fun child member => children child (by simp [member])))
+    intro _
+    exact LS.SourceSymbolsRun.pure _
+
+theorem LS.SourceSymbolsRun.lowerPrintArgs {le : LEnv} {scopeCount : Nat} :
+    ∀ args : List Core.PrintArg, (∀ expr, Core.PrintArg.expr expr ∈ args →
+      LS.SourceSymbolsRun le scopeCount (lowerExpr expr)) →
+      LS.SourceSymbolsRun le scopeCount (Goose.Lower.lowerPrintArgs args)
+  | [], _ => by
+    change LS.SourceSymbolsRun le scopeCount (Pure.pure [])
+    exact LS.SourceSymbolsRun.pure []
+  | .text text :: rest, children => by
+    change LS.SourceSymbolsRun le scopeCount
+      (Goose.Lower.lowerPrintArgs rest >>= fun values => Pure.pure (.text text :: values))
+    apply LS.SourceSymbolsRun.bind (action := Goose.Lower.lowerPrintArgs rest)
+      (LS.SourceSymbolsRun.lowerPrintArgs rest (fun expr member => children expr (by simp [member])))
+    intro _
+    exact LS.SourceSymbolsRun.pure _
+  | .expr expr :: rest, children => by
+    change LS.SourceSymbolsRun le scopeCount
+      (lowerExpr expr >>= fun value =>
+        Goose.Lower.lowerPrintArgs rest >>= fun values => Pure.pure (.val value :: values))
+    apply LS.SourceSymbolsRun.bind (action := lowerExpr expr)
+      (children expr (by simp))
+    intro _
+    apply LS.SourceSymbolsRun.bind (action := Goose.Lower.lowerPrintArgs rest)
+      (LS.SourceSymbolsRun.lowerPrintArgs rest (fun child member => children child (by simp [member])))
     intro _
     exact LS.SourceSymbolsRun.pure _
 
@@ -626,6 +724,30 @@ theorem LS.SourceSymbolsRun.emitTerm {le : LEnv} {scopeCount : Nat} (term : Term
       (Inst.SourceSymbolsWithin.term (scopeCount := scopeCount) origin)
     simpa only [LS.SourceSymbolsWF, LS.insts, LS.appendInst] using appended
 
+theorem LS.SourceSymbolsRun.patchTerm {le : LEnv} {scopeCount : Nat} (block : BlockId)
+    (term : Term) (origin : ∀ o, term.origin = some o → o < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.patchTerm block term) := by
+  intro before result after run checked
+  rw [patchTerm_run] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  have appended := LS.sourceSymbols_appendInst checked block (.term term)
+    (Inst.SourceSymbolsWithin.term (scopeCount := scopeCount) origin)
+  simpa only [LS.SourceSymbolsWF, LS.insts, LS.appendInst] using appended
+
+theorem LS.SourceSymbolsRun.whenLive {le : LEnv} {scopeCount : Nat} (default : α)
+    {action : BlockId → B α} (children : ∀ block, LS.SourceSymbolsRun le scopeCount (action block)) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.whenLive default action) := by
+  change LS.SourceSymbolsRun le scopeCount
+    ((Goose.Lower.curBlock : B (Option BlockId)) >>= fun current =>
+      match current with
+      | none => (Pure.pure default : B α)
+      | some block => action block)
+  apply LS.SourceSymbolsRun.bind LS.SourceSymbolsRun.curBlock
+  intro current
+  cases current with
+  | none => exact LS.SourceSymbolsRun.pure default
+  | some block => exact children block
+
 theorem LS.SourceSymbolsRun.fork {le : LEnv} {scopeCount : Nat} (condition : ValueId) :
     LS.SourceSymbolsRun le scopeCount (Goose.Lower.fork condition) := by
   simp only [Goose.Lower.fork]
@@ -666,6 +788,60 @@ theorem LS.SourceSymbolsRun.scFork {le : LEnv} {scopeCount : Nat}
     · intro _
       exact LS.SourceSymbolsRun.pure _
 
+theorem LS.SourceSymbolsRun.shortCircuit {le : LEnv} {scopeCount : Nat}
+    {isAnd : Bool} {left : ValueId} {right : B ValueId}
+    (rightSource : LS.SourceSymbolsRun le scopeCount right) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.shortCircuit isAnd left right) := by
+  unfold Goose.Lower.shortCircuit
+  apply LS.SourceSymbolsRun.whenLive
+  intro current
+  change LS.SourceSymbolsRun le scopeCount
+    (Goose.Lower.scFork isAnd left >>= fun blocks =>
+      Goose.Lower.setCur (some blocks.1) >>= fun _ =>
+      right >>= fun value =>
+      Goose.Lower.emitTerm (.br blocks.2.1 [value]) >>= fun _ =>
+      Goose.Lower.setCur (some blocks.2.1) >>= fun _ =>
+      (Pure.pure blocks.2.2 : B ValueId))
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.scFork isAnd left)
+    (LS.SourceSymbolsRun.scFork isAnd left)
+  intro blocks
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.setCur (some blocks.1))
+    (LS.SourceSymbolsRun.setCur (some blocks.1))
+  intro _
+  apply LS.SourceSymbolsRun.bind (action := right) rightSource
+  intro value
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitTerm (.br blocks.2.1 [value]))
+  · apply LS.SourceSymbolsRun.emitTerm
+    intro origin equality
+    simp [Term.origin] at equality
+  · intro _
+    apply LS.SourceSymbolsRun.bind (action := Goose.Lower.setCur (some blocks.2.1))
+      (LS.SourceSymbolsRun.setCur (some blocks.2.1))
+    intro _
+    exact LS.SourceSymbolsRun.pure _
+
+theorem LS.SourceSymbolsRun.lowerExpr_and {le : LEnv} {scopeCount : Nat}
+    {left right : Core.Expr}
+    (leftSource : LS.SourceSymbolsRun le scopeCount (lowerExpr left))
+    (rightSource : LS.SourceSymbolsRun le scopeCount (lowerExpr right)) :
+    LS.SourceSymbolsRun le scopeCount (lowerExpr (.and left right)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerExpr left >>= fun value => Goose.Lower.shortCircuit true value (lowerExpr right))
+  apply LS.SourceSymbolsRun.bind (action := lowerExpr left) leftSource
+  intro value
+  exact LS.SourceSymbolsRun.shortCircuit rightSource
+
+theorem LS.SourceSymbolsRun.lowerExpr_or {le : LEnv} {scopeCount : Nat}
+    {left right : Core.Expr}
+    (leftSource : LS.SourceSymbolsRun le scopeCount (lowerExpr left))
+    (rightSource : LS.SourceSymbolsRun le scopeCount (lowerExpr right)) :
+    LS.SourceSymbolsRun le scopeCount (lowerExpr (.or left right)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerExpr left >>= fun value => Goose.Lower.shortCircuit false value (lowerExpr right))
+  apply LS.SourceSymbolsRun.bind (action := lowerExpr left) leftSource
+  intro value
+  exact LS.SourceSymbolsRun.shortCircuit rightSource
+
 theorem LS.SourceSymbolsRun.lowerExpr_call {le : LEnv} {scopeCount : Nat}
     {context : Core.ContextId} {args : List Core.Arg} {origin : Core.OriginId}
     (argsSource : LS.SourceSymbolsRun le scopeCount (Goose.Lower.lowerArgs args))
@@ -695,6 +871,261 @@ theorem LS.SourceSymbolsRun.lowerExpr_call {le : LEnv} {scopeCount : Nat}
         simp [Term.origin] at equality
       · intro _
         exact LS.SourceSymbolsRun.pure result
+
+theorem LS.SourceSymbolsRun.lowerStmt_expr {le : LEnv} {scopeCount : Nat}
+    {expr : Core.Expr} {origin : Core.OriginId}
+    (child : LS.SourceSymbolsRun le scopeCount (lowerExpr expr)) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.expr expr origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerExpr expr >>= fun _ => Pure.pure ())
+  apply LS.SourceSymbolsRun.bind (action := lowerExpr expr) child
+  intro _
+  exact LS.SourceSymbolsRun.pure ()
+
+theorem LS.SourceSymbolsRun.lowerStmt_let {le : LEnv} {scopeCount : Nat}
+    {slot : Core.VarId} {expr : Core.Expr} {origin : Core.OriginId}
+    (child : LS.SourceSymbolsRun le scopeCount (lowerExpr expr))
+    (slotBound : slot < le.slots.size) (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.letS slot expr origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerExpr expr >>= fun value =>
+      Goose.Lower.coerceSlot slot value origin >>= fun coerced =>
+      Goose.Lower.emitEffect (.slotInit slot coerced (some origin)))
+  apply LS.SourceSymbolsRun.bind (action := lowerExpr expr) child
+  intro value
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.coerceSlot slot value origin)
+    (LS.SourceSymbolsRun.coerceSlot slot value origin originBound)
+  intro coerced
+  apply LS.SourceSymbolsRun.emitEffect
+  · intro emitted equality
+    simp only [Effect.origin, Option.some.injEq] at equality
+    cases equality
+    exact originBound
+  · simpa [Effect.SymbolRefsValid] using slotBound
+
+theorem LS.SourceSymbolsRun.lowerStmt_assign {le : LEnv} {scopeCount : Nat}
+    {place : Core.Place} {expr : Core.Expr} {origin : Core.OriginId}
+    (placeSource : LS.SourceSymbolsRun le scopeCount (lowerPlace place))
+    (exprSource : LS.SourceSymbolsRun le scopeCount (lowerExpr expr))
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.assign place expr origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerPlace place >>= fun address =>
+      lowerExpr expr >>= fun value => Goose.Lower.emitEffect (.store address value (some origin)))
+  apply LS.SourceSymbolsRun.bind (action := lowerPlace place) placeSource
+  intro address
+  apply LS.SourceSymbolsRun.bind (action := lowerExpr expr) exprSource
+  intro value
+  apply LS.SourceSymbolsRun.emitEffect
+  · intro emitted equality
+    simp only [Effect.origin, Option.some.injEq] at equality
+    cases equality
+    exact originBound
+  · simp [Effect.SymbolRefsValid]
+
+theorem LS.SourceSymbolsRun.lowerStmt_rebind {le : LEnv} {scopeCount : Nat}
+    {slot : Core.VarId} {expr : Core.Expr} {origin : Core.OriginId}
+    (exprSource : LS.SourceSymbolsRun le scopeCount (lowerExpr expr))
+    (slotBound : slot < le.slots.size) (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.rebind slot expr origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerExpr expr >>= fun value =>
+      Goose.Lower.coerceSlot slot value origin >>= fun coerced =>
+      Goose.Lower.emitDef (.slotAddr slot) >>= fun address =>
+      Goose.Lower.emitEffect (.store address coerced (some origin)))
+  apply LS.SourceSymbolsRun.bind (action := lowerExpr expr) exprSource
+  intro value
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.coerceSlot slot value origin)
+    (LS.SourceSymbolsRun.coerceSlot slot value origin originBound)
+  intro coerced
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitDef (.slotAddr slot))
+  · apply LS.SourceSymbolsRun.emitDef
+    · intro emitted equality
+      simp [Op.origin] at equality
+    · simpa [Op.SymbolRefsValid] using slotBound
+  · intro address
+    apply LS.SourceSymbolsRun.emitEffect
+    · intro emitted equality
+      simp only [Effect.origin, Option.some.injEq] at equality
+      cases equality
+      exact originBound
+    · simp [Effect.SymbolRefsValid]
+
+theorem LS.SourceSymbolsRun.lowerStmt_assignOp {le : LEnv} {scopeCount : Nat}
+    {op : Core.BinOp} {place : Core.Place} {expr : Core.Expr} {origin : Core.OriginId}
+    (placeSource : LS.SourceSymbolsRun le scopeCount (lowerPlace place))
+    (exprSource : LS.SourceSymbolsRun le scopeCount (lowerExpr expr))
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.assignOp op place expr origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerPlace place >>= fun address =>
+      Goose.Lower.emitDef (.load address) >>= fun old =>
+      lowerExpr expr >>= fun value =>
+      Goose.Lower.intTyOf old >>= fun ty =>
+      Goose.Lower.emitDef (.bin op ty old value (some origin)) >>= fun result =>
+      Goose.Lower.emitEffect (.store address result (some origin)))
+  apply LS.SourceSymbolsRun.bind (action := lowerPlace place) placeSource
+  intro address
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitDef (.load address))
+    (LS.SourceSymbolsRun.emitDef_unreferenced (by simp [Op.origin]) (by simp [Op.SymbolRefsValid]))
+  intro old
+  apply LS.SourceSymbolsRun.bind (action := lowerExpr expr) exprSource
+  intro value
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.intTyOf old)
+    (LS.SourceSymbolsRun.intTyOf old)
+  intro ty
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitDef (.bin op ty old value (some origin)))
+  · apply LS.SourceSymbolsRun.emitDef
+    · intro emitted equality
+      simp only [Op.origin, Option.some.injEq] at equality
+      cases equality
+      exact originBound
+    · simp [Op.SymbolRefsValid]
+  · intro result
+    apply LS.SourceSymbolsRun.emitEffect
+    · intro emitted equality
+      simp only [Effect.origin, Option.some.injEq] at equality
+      cases equality
+      exact originBound
+    · simp [Effect.SymbolRefsValid]
+
+theorem LS.SourceSymbolsRun.lowerStmt_append {le : LEnv} {scopeCount : Nat}
+    {place : Core.Place} {view : Core.View} {origin : Core.OriginId}
+    (placeSource : LS.SourceSymbolsRun le scopeCount (lowerPlace place))
+    (viewSource : LS.SourceSymbolsRun le scopeCount (lowerView view))
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.append place view origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerPlace place >>= fun address =>
+      lowerView view >>= fun sampled =>
+      Goose.Lower.emitEffect (.append address sampled (some origin)))
+  apply LS.SourceSymbolsRun.bind (action := lowerPlace place) placeSource
+  intro address
+  apply LS.SourceSymbolsRun.bind (action := lowerView view) viewSource
+  intro sampled
+  apply LS.SourceSymbolsRun.emitEffect
+  · intro emitted equality
+    simp only [Effect.origin, Option.some.injEq] at equality
+    cases equality
+    exact originBound
+  · simp [Effect.SymbolRefsValid]
+
+theorem LS.SourceSymbolsRun.lowerStmt_popN {le : LEnv} {scopeCount : Nat}
+    {place : Core.Place} {count : Core.Expr} {origin : Core.OriginId}
+    (placeSource : LS.SourceSymbolsRun le scopeCount (lowerPlace place))
+    (countSource : LS.SourceSymbolsRun le scopeCount (lowerExpr count))
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.popN place count origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerPlace place >>= fun address =>
+      lowerExpr count >>= fun value =>
+      Goose.Lower.emitEffect (.popN address value (some origin)))
+  apply LS.SourceSymbolsRun.bind (action := lowerPlace place) placeSource
+  intro address
+  apply LS.SourceSymbolsRun.bind (action := lowerExpr count) countSource
+  intro value
+  apply LS.SourceSymbolsRun.emitEffect
+  · intro emitted equality
+    simp only [Effect.origin, Option.some.injEq] at equality
+    cases equality
+    exact originBound
+  · simp [Effect.SymbolRefsValid]
+
+theorem LS.SourceSymbolsRun.lowerStmt_resize {le : LEnv} {scopeCount : Nat}
+    {place : Core.Place} {size : Core.Expr} {fill : Option Core.Expr} {origin : Core.OriginId}
+    (placeSource : LS.SourceSymbolsRun le scopeCount (lowerPlace place))
+    (sizeSource : LS.SourceSymbolsRun le scopeCount (lowerExpr size))
+    (fillSource : ∀ expr, fill = some expr → LS.SourceSymbolsRun le scopeCount (lowerExpr expr))
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.resize place size fill origin)) := by
+  cases fill with
+  | none =>
+    change LS.SourceSymbolsRun le scopeCount
+      (lowerPlace place >>= fun address =>
+        lowerExpr size >>= fun count =>
+        (Pure.pure none : B (Option ValueId)) >>= fun fill =>
+        Goose.Lower.emitEffect (.resize address count fill (some origin)))
+    apply LS.SourceSymbolsRun.bind (action := lowerPlace place) placeSource
+    intro address
+    apply LS.SourceSymbolsRun.bind (action := lowerExpr size) sizeSource
+    intro count
+    apply LS.SourceSymbolsRun.bind (action := (Pure.pure none : B (Option ValueId)))
+      (LS.SourceSymbolsRun.pure none)
+    intro fill
+    apply LS.SourceSymbolsRun.emitEffect
+    · intro emitted equality
+      simp only [Effect.origin, Option.some.injEq] at equality
+      cases equality
+      exact originBound
+    · simp [Effect.SymbolRefsValid]
+  | some expr =>
+    change LS.SourceSymbolsRun le scopeCount
+      (lowerPlace place >>= fun address =>
+        lowerExpr size >>= fun count =>
+        lowerExpr expr >>= fun value =>
+        (Pure.pure (some value) : B (Option ValueId)) >>= fun fill =>
+        Goose.Lower.emitEffect (.resize address count fill (some origin)))
+    apply LS.SourceSymbolsRun.bind (action := lowerPlace place) placeSource
+    intro address
+    apply LS.SourceSymbolsRun.bind (action := lowerExpr size) sizeSource
+    intro count
+    apply LS.SourceSymbolsRun.bind (action := lowerExpr expr) (fillSource expr rfl)
+    intro value
+    apply LS.SourceSymbolsRun.bind (action := (Pure.pure (some value) : B (Option ValueId)))
+      (LS.SourceSymbolsRun.pure (some value))
+    intro fill
+    apply LS.SourceSymbolsRun.emitEffect
+    · intro emitted equality
+      simp only [Effect.origin, Option.some.injEq] at equality
+      cases equality
+      exact originBound
+    · simp [Effect.SymbolRefsValid]
+
+theorem LS.SourceSymbolsRun.lowerStmt_clear {le : LEnv} {scopeCount : Nat}
+    {place : Core.Place} {origin : Core.OriginId}
+    (placeSource : LS.SourceSymbolsRun le scopeCount (lowerPlace place))
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.clear place origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerPlace place >>= fun address => Goose.Lower.emitEffect (.clear address (some origin)))
+  apply LS.SourceSymbolsRun.bind (action := lowerPlace place) placeSource
+  intro address
+  apply LS.SourceSymbolsRun.emitEffect
+  · intro emitted equality
+    simp only [Effect.origin, Option.some.injEq] at equality
+    cases equality
+    exact originBound
+  · simp [Effect.SymbolRefsValid]
+
+theorem LS.SourceSymbolsRun.lowerStmt_assignWhole {le : LEnv} {scopeCount : Nat}
+    {place : Core.Place} {replacement : Core.Expr} {origin : Core.OriginId}
+    (placeSource : LS.SourceSymbolsRun le scopeCount (lowerPlace place))
+    (replacementSource : LS.SourceSymbolsRun le scopeCount (lowerExpr replacement))
+    (originBound : origin < le.mod.origins.size) :
+    LS.SourceSymbolsRun le scopeCount (lowerStmt none (.assignWhole place replacement origin)) := by
+  change LS.SourceSymbolsRun le scopeCount
+    (lowerPlace place >>= fun address =>
+      Goose.Lower.emitEffect (.clear address (some origin)) >>= fun _ =>
+      lowerExpr replacement >>= fun value =>
+      Goose.Lower.emitEffect (.replace address value (some origin)))
+  apply LS.SourceSymbolsRun.bind (action := lowerPlace place) placeSource
+  intro address
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitEffect (.clear address (some origin)))
+  · apply LS.SourceSymbolsRun.emitEffect
+    · intro emitted equality
+      simp only [Effect.origin, Option.some.injEq] at equality
+      cases equality
+      exact originBound
+    · simp [Effect.SymbolRefsValid]
+  · intro _
+    apply LS.SourceSymbolsRun.bind (action := lowerExpr replacement) replacementSource
+    intro value
+    apply LS.SourceSymbolsRun.emitEffect
+    · intro emitted equality
+      simp only [Effect.origin, Option.some.injEq] at equality
+      cases equality
+      exact originBound
+    · simp [Effect.SymbolRefsValid]
 
 theorem LS.SourceSymbolsRun.pushScope {le : LEnv} {scopeCount : Nat} (scope : ScopeId)
     (bounded : scope < scopeCount) :
