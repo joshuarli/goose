@@ -464,6 +464,15 @@ theorem generatedTargetFrame_freezeTo (loop : Option LoopCtx) (mutability : Muta
             | exact generatedTargetFrame_pure loop _
             | exact generatedTargetFrame_emitDef loop _))
 
+theorem generatedTargetFrame_borrowTo (loop : Option LoopCtx) (mutability : Mutability)
+    (value : ValueId) : GeneratedTargetFrameRun loop (borrowTo mutability value) := by
+  unfold borrowTo
+  refine GeneratedTargetFrameRun.bind (generatedTargetFrame_read loop) fun env =>
+    GeneratedTargetFrameRun.bind (generatedTargetFrame_valTy loop value) fun ty => ?_
+  split <;> dsimp only <;> split <;> first
+    | exact generatedTargetFrame_emitDef loop _
+    | exact generatedTargetFrame_freezeTo loop mutability value
+
 theorem generatedTargetFrame_coerceTo (loop : Option LoopCtx) (target : Ty)
     (value : ValueId) (origin : OriginId) :
     GeneratedTargetFrameRun loop (coerceTo target value origin) := by
@@ -537,7 +546,7 @@ theorem generatedTargetFrame_eachElemValue (loop : Option LoopCtx) (slot : VarId
       dsimp only
       cases declaration.ty <;> first
         | exact generatedTargetFrame_pure loop _
-        | exact generatedTargetFrame_freezeTo loop _ _
+        | exact generatedTargetFrame_borrowTo loop _ _
 
 theorem generatedTargetFrame_leaveAll (loop : Option LoopCtx) : ∀ scopes,
     GeneratedTargetFrameRun loop (leaveAll scopes)
