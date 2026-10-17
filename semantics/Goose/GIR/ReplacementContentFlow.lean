@@ -5,28 +5,28 @@ namespace Goose.GIR
 
 open Goose.Core
 
-namespace ReplacementContentFlow
+namespace ReplacementContentFlow.Model
 
-private inductive Atom
+inductive Atom
   | local (slot : SlotId)
   | global (global : GlobalId)
   | param (parameter : Nat)
   | contents (parameter : Nat)
-  deriving BEq, Inhabited
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Inhabited
 
-private inductive Roots
+inductive Roots
   | pending
   | known (roots : List Atom)
   | unknown
-  deriving BEq, Inhabited
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Inhabited
 
-private def Roots.join : Roots → Roots → Roots
+def Roots.join : Roots → Roots → Roots
   | .unknown, _ | _, .unknown => .unknown
   | .pending, roots | roots, .pending => roots
   | .known left, .known right =>
       .known (right.foldl (fun roots root => if roots.contains root then roots else roots ++ [root]) left)
 
-private def Roots.bind (roots : Roots) (map : Atom → Roots) : Roots :=
+def Roots.bind (roots : Roots) (map : Atom → Roots) : Roots :=
   match roots with
   | .pending => .pending
   | .unknown => .unknown
@@ -36,31 +36,31 @@ private def Roots.bind (roots : Roots) (map : Atom → Roots) : Roots :=
       | .pending, _ | _, .pending => .pending
       | left, right => left.join right) (.known [])
 
-private def flowAt (roots : Array Roots) (index : Nat) : Roots :=
+def flowAt (roots : Array Roots) (index : Nat) : Roots :=
   roots[index]?.getD .unknown
 
-private def addFlow (roots : Array Roots) (index : Nat) (added : Roots) : Array Roots :=
+def addFlow (roots : Array Roots) (index : Nat) (added : Roots) : Array Roots :=
   roots.set! index ((flowAt roots index).join added)
 
-private inductive Write
+inductive Write
   | unchanged
   | assigned (roots : Roots)
-  deriving BEq, Inhabited
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Inhabited
 
-private def Write.join : Write → Write → Write
+def Write.join : Write → Write → Write
   | .unchanged, write | write, .unchanged => write
   | .assigned left, .assigned right => .assigned (left.join right)
 
-private structure State where
+structure State where
   values : Array Roots
   slots : Array Roots
   contents : Array Roots
   writes : Array Write
   touched : Roots := .known []
   returned : Roots := .pending
-  deriving BEq
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq
 
-private def start (f : Func) (vt : Array (Option VTy)) : State := Id.run do
+def start (f : Func) (vt : Array (Option VTy)) : State := Id.run do
   let mut values := Array.replicate f.numValues Roots.pending
   if let some entry := f.blocks[0]? then
     for ((value, _), index) in entry.params.zipIdx do
@@ -71,18 +71,18 @@ private def start (f : Func) (vt : Array (Option VTy)) : State := Id.run do
              if type.isRefSlice then .known [.contents index] else .known []
            writes := Array.replicate f.params.length .unchanged }
 
-private def content (f : Func) (state : State) (address : Roots) : Roots :=
+def content (f : Func) (state : State) (address : Roots) : Roots :=
   address.bind fun
     | .local slot => flowAt state.slots slot
     | .param index =>
         if (f.params[index]?).any Ty.isRefSlice then flowAt state.contents index else .unknown
     | .global _ | .contents _ => .unknown
 
-private def holdersOverlap (f : Func) (left right : Nat) : Bool :=
+def holdersOverlap (f : Func) (left right : Nat) : Bool :=
   (f.parameterRoots left).any fun a =>
     (f.parameterRoots right).any (Goose.Core.rootsMayOverlap a)
 
-private def write (f : Func) (state : State) (address value : Roots) : State :=
+def write (f : Func) (state : State) (address value : Roots) : State :=
   match address with
   | .pending => state
   | .unknown =>
@@ -104,7 +104,7 @@ private def write (f : Func) (state : State) (address value : Roots) : State :=
       | .global _ | .contents _ =>
           { state with touched := .unknown }) state
 
-private def substitute (f : Func) (state : State) (args : List ValueId) (roots : Roots) : Roots :=
+def substitute (f : Func) (state : State) (args : List ValueId) (roots : Roots) : Roots :=
   roots.bind fun
     | .global global => .known [.global global]
     | .param index => (args[index]?).map (flowAt state.values ·) |>.getD .unknown
@@ -112,12 +112,12 @@ private def substitute (f : Func) (state : State) (args : List ValueId) (roots :
         (args[index]?).map (fun value => content f state (flowAt state.values value)) |>.getD .unknown
     | .local _ => .unknown
 
-private def publicTouches (roots : Roots) : Roots :=
+def publicTouches (roots : Roots) : Roots :=
   roots.bind fun
     | .local _ => .known []
     | root => .known [root]
 
-private def callState (m : Module) (states : Array State) (f : Func) (state : State)
+def callState (m : Module) (states : Array State) (f : Func) (state : State)
     (fn : FnId) (args : List ValueId) : Roots × State := Id.run do
   let some callee := m.funcs[fn]? | return (.unknown, { state with touched := .unknown })
   let some effects := states[fn]? | return (.unknown, { state with touched := .unknown })
@@ -132,7 +132,7 @@ private def callState (m : Module) (states : Array State) (f : Func) (state : St
           state := write f state address (substitute f before args roots)
   return (substitute f before args effects.returned, state)
 
-private def result (f : Func) (vt : Array (Option VTy)) (state : State)
+def result (f : Func) (vt : Array (Option VTy)) (state : State)
     (value : ValueId) (op : Op) : Roots :=
   if !valRefLike vt value then .known [] else
     match op with
@@ -146,7 +146,7 @@ private def result (f : Func) (vt : Array (Option VTy)) (state : State)
     | .call .. => .pending
     | _ => .unknown
 
-private def receiver : Inst → Option ValueId
+def receiver : Inst → Option ValueId
   | .def _ (.load address) | .def _ (.snapshot _ address) | .def _ (.arrayLen address)
   | .def _ (.viewLen address) | .def _ (.indexChecked address ..)
   | .def _ (.indexProven address ..) | .def _ (.push address ..) | .def _ (.pop address ..)
@@ -154,14 +154,14 @@ private def receiver : Inst → Option ValueId
   | .eff (.resize address ..) | .eff (.clear address ..) | .eff (.replace address ..) => some address
   | _ => none
 
-private def edge (f : Func) (state : State) (target : BlockId) (args : List ValueId) : State :=
+def edge (f : Func) (state : State) (target : BlockId) (args : List ValueId) : State :=
   match f.blocks[target]? with
   | none => { state with touched := .unknown }
   | some block =>
       (block.params.zip args).foldl (fun state (parameter, arg) =>
         { state with values := addFlow state.values parameter.1 (flowAt state.values arg) }) state
 
-private def step (m : Module) (states : Array State) (f : Func) (vt : Array (Option VTy))
+def step (m : Module) (states : Array State) (f : Func) (vt : Array (Option VTy))
     (state : State) (inst : Inst) : State := Id.run do
   let mut state := state
   if let some address := receiver inst then
@@ -182,25 +182,35 @@ private def step (m : Module) (states : Array State) (f : Func) (vt : Array (Opt
       return { state with returned := state.returned.join (flowAt state.values value) }
   | _ => return state
 
-private def round (m : Module) (states : Array State) (f : Func) (vt : Array (Option VTy))
+def round (m : Module) (states : Array State) (f : Func) (vt : Array (Option VTy))
     (state : State) : State :=
   f.blocks.foldl (fun state block => block.insts.foldl (step m states f vt) state) state
 
-private def capacity (m : Module) (f : Func) : Nat :=
+def capacity (m : Module) (f : Func) : Nat :=
   (f.numValues + f.slots.size + 3 * f.params.length + 3) *
     (m.globals.size + f.slots.size + 2 * f.params.length + 3)
 
-private def close (m : Module) (types : Array (Array (Option VTy))) : Option (Array State) :=
-  let initial := m.funcs.mapIdx fun index f => start f (types[index]?.getD #[])
-  let rec go : Nat → Array State → Option (Array State)
-    | 0, _ => none
-    | fuel + 1, states =>
-        let next := m.funcs.mapIdx fun index f =>
-          round m states f (types[index]?.getD #[]) (states[index]?.getD (start f #[]))
-        if next == states then some states else go fuel next
-  go (m.funcs.foldl (fun fuel f => fuel + capacity m f) 1) initial
+def moduleStart (m : Module) (types : Array (Array (Option VTy))) : Array State :=
+  m.funcs.mapIdx fun index f => start f (types[index]?.getD #[])
 
-private def normalize (f : Func) (roots : Roots) : Option (List RootRef) :=
+def moduleRound (m : Module) (types : Array (Array (Option VTy))) (states : Array State) : Array State :=
+  m.funcs.mapIdx fun index f =>
+    round m states f (types[index]?.getD #[]) (states[index]?.getD (start f #[]))
+
+def moduleFuel (m : Module) : Nat :=
+  m.funcs.foldl (fun fuel f => fuel + capacity m f) 1
+
+def closeFrom (m : Module) (types : Array (Array (Option VTy))) :
+    Nat → Array State → Option (Array State)
+  | 0, _ => none
+  | fuel + 1, states =>
+      let next := moduleRound m types states
+      if next == states then some states else closeFrom m types fuel next
+
+def close (m : Module) (types : Array (Array (Option VTy))) : Option (Array State) :=
+  closeFrom m types (moduleFuel m) (moduleStart m types)
+
+def normalize (f : Func) (roots : Roots) : Option (List RootRef) :=
   match roots with
   | .pending | .unknown => none
   | .known roots => roots.foldlM (init := []) fun result root => do
@@ -213,10 +223,10 @@ private def normalize (f : Func) (roots : Roots) : Option (List RootRef) :=
               row.2.flatMap f.expandParameterRoot
       pure (unionRoots result mapped)
 
-private def rootsWithin (actual : Option (List RootRef)) (expected : List RootRef) : Bool :=
+def rootsWithin (actual : Option (List RootRef)) (expected : List RootRef) : Bool :=
   actual.any fun roots => roots.all expected.contains
 
-private def refReady (vt : Array (Option VTy)) (state : State) (inst : Inst) : Bool :=
+def refReady (vt : Array (Option VTy)) (state : State) (inst : Inst) : Bool :=
   inst.uses.all fun value =>
     match vt[value]? with
     | some (some type) => !type.refLike ||
@@ -225,7 +235,7 @@ private def refReady (vt : Array (Option VTy)) (state : State) (inst : Inst) : B
         | _ => true
     | _ => false
 
-private def checkWrites (f : Func) (state : State) : Bool :=
+def checkWrites (f : Func) (state : State) : Bool :=
   state.writes.toList.zipIdx.all fun (write, index) =>
     match write with
     | .unchanged => true
@@ -234,7 +244,7 @@ private def checkWrites (f : Func) (state : State) : Bool :=
         actual == some [] || (f.roots.contents.find? (·.1 == index)).any fun row =>
           rootsWithin actual (row.2.flatMap f.expandParameterRoot)
 
-private def mappedBound (f callee : Func) (state : State) (args : List ValueId)
+def mappedBound (f callee : Func) (state : State) (args : List ValueId)
     (bound : List RootRef) : Option (List RootRef) :=
   bound.foldlM (init := []) fun result root => do
     let mapped ← match root with
@@ -247,7 +257,7 @@ private def mappedBound (f callee : Func) (state : State) (args : List ValueId)
       | .local _ => none
     pure (unionRoots result mapped)
 
-private def checkCall (m : Module) (f : Func) (state : State) (fn : FnId)
+def checkCall (m : Module) (f : Func) (state : State) (fn : FnId)
     (args : List ValueId) : Bool :=
   match m.funcs[fn]? with
   | none => false
@@ -269,13 +279,13 @@ private def checkCall (m : Module) (f : Func) (state : State) (fn : FnId)
         | some value, some expected => rootsWithin (normalize f (content f state (flowAt state.values value))) expected
         | _, _ => false
 
-private def edgeTyped (f : Func) (vt : Array (Option VTy)) (target : BlockId)
+def edgeTyped (f : Func) (vt : Array (Option VTy)) (target : BlockId)
     (args : List ValueId) : Bool :=
   (f.blocks[target]?).any fun block =>
     args.length == block.params.length &&
       (args.zip block.params).all fun (value, (_, type)) => vt[value]? == some (some type)
 
-private def annotationsValid (m : Module) (f : Func) : Bool :=
+def annotationsValid (m : Module) (f : Func) : Bool :=
   let external := fun
     | RootRef.global global => global < m.globals.size
     | .param index => index < f.params.length
@@ -291,7 +301,7 @@ private def annotationsValid (m : Module) (f : Func) : Bool :=
     contents.all (fun (index, roots) => (f.params[index]?).any Ty.isRefSlice && roots.all external) &&
     f.roots.results.all (·.all external)
 
-private def check (m : Module) (f : Func) (vt : Array (Option VTy)) (state : State) : Bool :=
+def check (m : Module) (f : Func) (vt : Array (Option VTy)) (state : State) : Bool :=
   let env : TyEnv := { m.tyEnv f with vals := vt }
   f.params.all Ty.paramOk && annotationsValid m f &&
     (f.blocks[0]?).any (fun entry => entry.params.map (·.2) == f.params.map VTy.data) &&
@@ -317,45 +327,82 @@ private def check (m : Module) (f : Func) (vt : Array (Option VTy)) (state : Sta
             edgeTyped f vt thenBlock thenArgs && edgeTyped f vt elseBlock elseArgs
       | _ => true
 
-private def closeFunction (m : Module) (states : Array State) (f : Func)
-    (vt : Array (Option VTy)) : Option State :=
-  let rec go : Nat → State → Option State
-    | 0, _ => none
-    | fuel + 1, state =>
-        let next := round m states f vt state
-        if next == state then if check m f vt state then some state else none else go fuel next
-  go (capacity m f + 1) (start f vt)
+def closeFunctionFrom (m : Module) (states : Array State) (f : Func)
+    (vt : Array (Option VTy)) : Nat → State → Option State
+  | 0, _ => none
+  | fuel + 1, state =>
+      let next := round m states f vt state
+      if next == state then if check m f vt state then some state else none
+      else closeFunctionFrom m states f vt fuel next
 
-end ReplacementContentFlow
+def closeFunction (m : Module) (states : Array State) (f : Func)
+    (vt : Array (Option VTy)) : Option State :=
+  closeFunctionFrom m states f vt (capacity m f + 1) (start f vt)
+
+def storageClosed (m : Module) : Bool :=
+  m.globals.all (fun global => global.ty.storable && !global.ty.isRefLike)
+
+def certificate (m : Module) (types : Array (Array (Option VTy))) (states : Array State) : Bool :=
+  (m.funcs[m.entry]?).any (fun entry => entry.params.isEmpty && entry.results.isEmpty) &&
+    (m.funcs.toList.zipIdx.all fun (f, index) =>
+      (states[index]?).any (check m f (types[index]?.getD #[]))) &&
+    m.globals.all fun global =>
+      global.init.params.isEmpty && global.init.results == [global.ty] &&
+      (closeFunction m states global.init (global.init.valueTypes m)).isSome
+
+def callQuery (m : Module) (f : Func) (vt : Array (Option VTy))
+    (states : Array State) (state : State) (fn : FnId) (args : List ValueId) : Option (List RootRef) :=do
+  let env : TyEnv := { m.tyEnv f with vals := vt }
+  if !(checkCall m f state fn args) ||
+      (Op.call fn args none |>.resultTy env).toOption.isNone then failure else pure ()
+  let effects ← states[fn]?
+  let arguments ← args.foldlM (init := []) fun roots value => do
+    if !valRefLike vt value then pure roots else
+      let actual ← normalize f (flowAt state.values value)
+      pure (unionRoots roots actual)
+  let touched ← normalize f (substitute f state args (publicTouches effects.touched))
+  pure (unionRoots arguments touched)
+
+
+def mutationQuery (m : Module) (f : Func) (vt : Array (Option VTy))
+    (states : Array State) (state : State) (fn : FnId) (args : List ValueId) : Option (List RootRef) :=do
+  let env : TyEnv := { m.tyEnv f with vals := vt }
+  if !(checkCall m f state fn args) ||
+      (Op.call fn args none |>.resultTy env).toOption.isNone then failure else pure ()
+  let effects ← states[fn]?
+  let callee ← m.funcs[fn]?
+  callee.params.zipIdx.foldlM (init := []) fun roots (type, index) => do
+    if !type.isRefSlice then pure roots else
+      match effects.writes[index]?.getD (.assigned .unknown) with
+      | .unchanged => pure roots
+      | .assigned _ =>
+          let value ← args[index]?
+          let actual ← normalize f (flowAt state.values value)
+          pure (unionRoots roots actual)
+
+
+end ReplacementContentFlow.Model
 
 structure ReplacementContentFlow where
   private mk ::
   private module : Module
-  private states : Option (Array ReplacementContentFlow.State)
+  private states : Option (Array ReplacementContentFlow.Model.State)
 
 structure ReplacementFunctionFlow where
   private mk ::
   private cache : ReplacementContentFlow
   private function : Func
   private types : Array (Option VTy)
-  private state : Option ReplacementContentFlow.State
+  private state : Option ReplacementContentFlow.Model.State
 
-open ReplacementContentFlow in
+open ReplacementContentFlow.Model in
 
 def replacementContentFlow (m : Module) : ReplacementContentFlow :=
   let types := m.funcs.map (·.valueTypes m)
-  let states := if m.globals.all (fun global => global.ty.storable && !global.ty.isRefLike) then
-    (close m types).filter fun states =>
-      (m.funcs[m.entry]?).any (fun entry => entry.params.isEmpty && entry.results.isEmpty) &&
-      (m.funcs.toList.zipIdx.all fun (f, index) =>
-        (states[index]?).any (check m f (types[index]?.getD #[]))) &&
-      m.globals.all fun global =>
-        global.init.params.isEmpty && global.init.results == [global.ty] &&
-        (closeFunction m states global.init (global.init.valueTypes m)).isSome
-  else none
+  let states := if storageClosed m then (close m types).filter (certificate m types) else none
   ⟨m, states⟩
 
-open ReplacementContentFlow in
+open ReplacementContentFlow.Model in
 
 def ReplacementContentFlow.forFunction (cache : ReplacementContentFlow) (f : Func)
     (vt : Array (Option VTy)) : ReplacementFunctionFlow :=
@@ -364,51 +411,82 @@ def ReplacementContentFlow.forFunction (cache : ReplacementContentFlow) (f : Fun
     cache.states.bind fun states => closeFunction cache.module states f actualTypes
     else none⟩
 
-open ReplacementContentFlow in
+open ReplacementContentFlow.Model in
 
 def ReplacementFunctionFlow.value (flow : ReplacementFunctionFlow) (value : ValueId) : Option (List RootRef) :=
   flow.state.bind fun state => normalize flow.function (flowAt state.values value)
 
-open ReplacementContentFlow in
+open ReplacementContentFlow.Model in
 
 def ReplacementFunctionFlow.contents (flow : ReplacementFunctionFlow) (value : ValueId) : Option (List RootRef) :=
   flow.state.bind fun state => normalize flow.function (content flow.function state (flowAt state.values value))
 
-open ReplacementContentFlow in
+open ReplacementContentFlow.Model in
 
 def ReplacementFunctionFlow.call (flow : ReplacementFunctionFlow) (fn : FnId)
     (args : List ValueId) : Option (List RootRef) := do
   let state ← flow.state
-  let env : TyEnv := { flow.cache.module.tyEnv flow.function with vals := flow.types }
-  if !(checkCall flow.cache.module flow.function state fn args) ||
-      (Op.call fn args none |>.resultTy env).toOption.isNone then failure else pure ()
   let states ← flow.cache.states
-  let effects ← states[fn]?
-  let arguments ← args.foldlM (init := []) fun roots value => do
-    if !valRefLike flow.types value then pure roots else
-      let actual ← normalize flow.function (flowAt state.values value)
-      pure (unionRoots roots actual)
-  let touched ← normalize flow.function (substitute flow.function state args (publicTouches effects.touched))
-  pure (unionRoots arguments touched)
+  callQuery flow.cache.module flow.function flow.types states state fn args
 
-open ReplacementContentFlow in
+open ReplacementContentFlow.Model in
 
 def ReplacementFunctionFlow.mutation (flow : ReplacementFunctionFlow) (fn : FnId)
     (args : List ValueId) : Option (List RootRef) := do
   let state ← flow.state
-  let env : TyEnv := { flow.cache.module.tyEnv flow.function with vals := flow.types }
-  if !(checkCall flow.cache.module flow.function state fn args) ||
-      (Op.call fn args none |>.resultTy env).toOption.isNone then failure else pure ()
   let states ← flow.cache.states
-  let effects ← states[fn]?
-  let callee ← flow.cache.module.funcs[fn]?
-  callee.params.zipIdx.foldlM (init := []) fun roots (type, index) => do
-    if !type.isRefSlice then pure roots else
-      match effects.writes[index]?.getD (.assigned .unknown) with
-      | .unchanged => pure roots
-      | .assigned _ =>
-          let value ← args[index]?
-          let actual ← normalize flow.function (flowAt state.values value)
-          pure (unionRoots roots actual)
+  mutationQuery flow.cache.module flow.function flow.types states state fn args
+
+def ReplacementContentFlow.source (cache : ReplacementContentFlow) : Module := cache.module
+
+def ReplacementContentFlow.model (cache : ReplacementContentFlow) :
+    Option (Array ReplacementContentFlow.Model.State) := cache.states
+
+def ReplacementFunctionFlow.source (flow : ReplacementFunctionFlow) : Func := flow.function
+
+def ReplacementFunctionFlow.module (flow : ReplacementFunctionFlow) : Module := flow.cache.module
+
+def ReplacementFunctionFlow.valueTypes (flow : ReplacementFunctionFlow) : Array (Option VTy) := flow.types
+
+def ReplacementFunctionFlow.calleeStates (flow : ReplacementFunctionFlow) :
+    Option (Array ReplacementContentFlow.Model.State) := flow.cache.states
+
+def ReplacementFunctionFlow.model (flow : ReplacementFunctionFlow) :
+    Option ReplacementContentFlow.Model.State := flow.state
+
+theorem replacementContentFlow_source (m : Module) : (replacementContentFlow m).source = m := rfl
+
+theorem replacementContentFlow_model (m : Module) :
+    (replacementContentFlow m).model =
+      if ReplacementContentFlow.Model.storageClosed m then
+        (ReplacementContentFlow.Model.close m (m.funcs.map (·.valueTypes m))).filter
+          (ReplacementContentFlow.Model.certificate m (m.funcs.map (·.valueTypes m)))
+      else none := rfl
+
+theorem ReplacementContentFlow.forFunction_model (cache : ReplacementContentFlow) (f : Func)
+    (vt : Array (Option VTy)) :
+    (cache.forFunction f vt).model =
+      if vt == f.valueTypes cache.source then
+        cache.model.bind (fun states => ReplacementContentFlow.Model.closeFunction cache.source states f
+          (f.valueTypes cache.source))
+      else none := rfl
+
+theorem ReplacementFunctionFlow.value_model (flow : ReplacementFunctionFlow) (value : ValueId) :
+    flow.value value = flow.model.bind (fun state =>
+      ReplacementContentFlow.Model.normalize flow.source (ReplacementContentFlow.Model.flowAt state.values value)) := rfl
+
+theorem ReplacementFunctionFlow.contents_model (flow : ReplacementFunctionFlow) (value : ValueId) :
+    flow.contents value = flow.model.bind (fun state => ReplacementContentFlow.Model.normalize flow.source
+      (ReplacementContentFlow.Model.content flow.source state (ReplacementContentFlow.Model.flowAt state.values value))) := rfl
+
+theorem ReplacementFunctionFlow.call_model (flow : ReplacementFunctionFlow) (fn : FnId)
+    (args : List ValueId) :
+    flow.call fn args = flow.model.bind (fun state => flow.calleeStates.bind (fun states =>
+      ReplacementContentFlow.Model.callQuery flow.module flow.source flow.valueTypes states state fn args)) := rfl
+
+theorem ReplacementFunctionFlow.mutation_model (flow : ReplacementFunctionFlow) (fn : FnId)
+    (args : List ValueId) :
+    flow.mutation fn args = flow.model.bind (fun state => flow.calleeStates.bind (fun states =>
+      ReplacementContentFlow.Model.mutationQuery flow.module flow.source flow.valueTypes states state fn args)) := rfl
 
 end Goose.GIR
