@@ -301,11 +301,19 @@ theorem operands_freezeTo {mu : Mutability} {input : ValueId} {le before result 
   · apply operands_emitDef fresh checked
     simpa [Op.uses] using bounded
 
+theorem operands_borrowTo {mu : Mutability} {input : ValueId} {le before result after}
+    (run : borrowTo mu input le before = (result, after)) (checked : OperandBounds before)
+    (bounded : before.cur.isSome = true → input < before.vals.size) : OperandBounds after := by
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact operands_freezeTo frozen checked bounded
+  · apply operands_emitDef borrowed checked
+    simpa [Op.uses] using bounded
+
 theorem operands_lowerExpr_ref (mu : Mutability) (place : Place)
     (child : OperandRun (lowerPlace place)) : OperandRun (lowerExpr (.ref mu place)) := by
   intro le before result after run checked
   obtain ⟨input, mid, placeRun, freeze⟩ := bind_eq.mp run
-  exact operands_freezeTo freeze (child _ _ _ _ placeRun checked)
+  exact operands_borrowTo freeze (child _ _ _ _ placeRun checked)
     (value_lowerPlace place _ _ _ _ placeRun)
 
 theorem operands_lowerArg (arg : Arg)
