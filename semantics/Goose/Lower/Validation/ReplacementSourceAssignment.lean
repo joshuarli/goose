@@ -15,8 +15,8 @@ theorem checkReplace_of_source_assignWhole
     (clearRun : emitEffect (.clear owner (some origin)) (lowerEnv env.mod env.vars results) addressed = ((), cleared))
     (run : lowerExpr expr (lowerEnv env.mod env.vars results) cleared = (value, captured))
     (live : LiveBound addressed) (generated : GeneratedBuilderState cleared)
-    {loop : Option LoopCtx} {module : GIR.Module} {func : Func}
-    (frames : LoopBuilderFrames loop cleared) (framed : TermEdgesFramed loop captured after)
+    {module : GIR.Module} {func : Func}
+    (framed : IntervalEdgesFramed cleared captured after)
     (extension : captured.Ext after) (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     (builder : EmittedBuilder (lowerEnv env.mod env.vars results) initState after)
     (blocks : func.blocks = finishBlocks after.blocks)
@@ -48,6 +48,6 @@ theorem checkReplace_of_source_assignWhole
   have ownerResult : isLiteralRunType info.ty = true := by
     rcases ownerShape with grow | growshrink <;> simp_all [isLiteralRunType]
   exact checkReplace_of_source_current childSource shape shape.fresh ownerResult clearRun run live generated
-    frames framed extension closed builder blocks slots globals sigs structs profile graphs current row ownerType label
+    framed extension closed builder blocks slots globals sigs structs profile graphs current row ownerType label
 
 end Goose.Lower.Validation

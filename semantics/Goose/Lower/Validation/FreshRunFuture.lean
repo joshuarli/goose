@@ -10,8 +10,8 @@ def OwnerLiteralRows (func : Func) (types : Array (Option VTy)) : Prop :=
       types[value]? = some (some (.data ty))
 
 def FutureLiteralValue (before captured : LS) (value : ValueId) : Prop :=
-  ∀ (loop : Option LoopCtx) (after : LS) (func : Func) (types : Array (Option VTy)),
-    LoopBuilderFrames loop before → TermEdgesFramed loop captured after → captured.Ext after →
+  ∀ (after : LS) (func : Func) (types : Array (Option VTy)),
+    IntervalEdgesFramed before captured after → captured.Ext after →
     (∀ body ∈ after.blocks.toList, ClosedBlock body) →
     func.blocks = finishBlocks after.blocks →
     (func.blocks.toList.flatMap GIR.Block.defs).Perm (List.range func.numValues) →
@@ -22,18 +22,21 @@ theorem FutureLiteralValue.weaken {before childStart childEnd captured : LS} {va
     (startExtension : before.Ext childStart) (suffix : childEnd.Ext captured)
     (framedSuffix : TermEdgesFramed none childEnd captured) :
     FutureLiteralValue before captured value := by
-  intro loop after func types frames framed extension closed blocks dense rows
-  apply child loop after func types (frames.mono startExtension) _ (suffix.trans extension) closed blocks dense rows
-  have oldFrames : TermEdgesFramed loop childEnd captured :=
-    framedSuffix.weakenLoop (by intro target impossible; cases impossible)
-  exact TermEdgesFramed.rebase oldFrames framed suffix (by intro target loopTarget; exact Or.inl loopTarget)
+  intro after func types framed extension closed blocks dense rows
+  apply child after func types _ (suffix.trans extension) closed blocks dense rows
+  intro source body term target row member successor lower upper
+  obtain ⟨old, oldAt, oldMember⟩ := framed source body term target row member successor
+    (Nat.le_trans startExtension.1 lower) (Nat.lt_of_lt_of_le upper suffix.1)
+  rcases framedSuffix source old term target oldAt oldMember successor upper with retained | impossible
+  · exact retained
+  · cases impossible
 
 theorem futureLiteralValue_arrLit {env : LEnv} {before captured : LS}
     {ty : Ty} {exprs : List Expr} {value : ValueId}
     (run : lowerExpr (.arrLit ty exprs) env before = (value, captured))
     (live : captured.cur.isSome = true) (generated : GeneratedBuilderState before)
     (runType : isLiteralRunType ty = true) : FutureLiteralValue before captured value := by
-  intro loop after func types frames framed extension closed blocks dense rows
+  intro after func types framed extension closed blocks dense rows
   simp only [lowerExpr] at run
   obtain ⟨values, middle, childrenRun, literalRun⟩ := bind_eq.mp run
   have middleLive := (dead_emitDef (.arrLit ty values)).live_before literalRun live
@@ -60,7 +63,7 @@ theorem futureLiteralValue_joinAt {env : LEnv} {before current captured : LS}
     (startExtension : before.Ext current)
     (inputs : ∀ item ∈ pending, FutureLiteralValue before captured item.2) :
     FutureLiteralValue before captured value := by
-  intro loop after func types frames framed extension closed blocks dense rows
+  intro after func types framed extension closed blocks dense rows
   simp only [bind_eq] at run
   obtain ⟨ty, typedState, typeRun, ⟨join, params⟩, allocated, allocation,
     _, patched, patch, _, resumed, resume, final⟩ := run
@@ -79,9 +82,11 @@ theorem futureLiteralValue_joinAt {env : LEnv} {before current captured : LS}
   obtain ⟨_, rfl⟩ := Prod.mk.inj resume
   obtain ⟨rfl, rfl⟩ := pure_eq.mp final
   apply freshLiteralValue_joinAt allocation patch bounded pendingNonempty pendingBounds
-    (frames.mono startExtension) framed extension closed blocks
+    (fun source body term target row member successor lower upper =>
+      framed source body term target row member successor (Nat.le_trans startExtension.1 lower) upper)
+    extension closed blocks
   intro item member
-  exact inputs item member loop after func types frames framed extension closed blocks dense rows
+  exact inputs item member after func types framed extension closed blocks dense rows
 
 theorem futureLiteralValue_joinValue {env : LEnv} {before current captured : LS}
     {yes no : Option BlockId} {yesValue noValue value : ValueId}

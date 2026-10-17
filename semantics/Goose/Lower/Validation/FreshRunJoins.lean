@@ -134,8 +134,7 @@ theorem freshLiteralValue_joinAt {env : LEnv} {before allocated captured after :
     (patch : patchBrs join pending env allocated = ((), captured))
     (bounded : TargetsBounded before) (pendingNonempty : pending ≠ [])
     (pendingBounds : ∀ item ∈ pending, item.1 < before.blocks.size)
-    {loop : Option LoopCtx} (frames : LoopBuilderFrames loop before)
-    (framed : TermEdgesFramed loop captured after) (extension : captured.Ext after)
+    (framed : IntervalEdgesFramed before captured after) (extension : captured.Ext after)
     (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     {func : Func} {types : Array (Option VTy)} (blocks : func.blocks = finishBlocks after.blocks)
     (inputs : ∀ item ∈ pending, FreshLiteralValue func types item.2) :
@@ -164,7 +163,7 @@ theorem freshLiteralValue_joinAt {env : LEnv} {before allocated captured after :
       obtain ⟨_, rfl⟩ := Prod.mk.inj allocation
       simp)
   obtain ⟨body, bodyAt, branch⟩ := patchBrs_branch_present patch itemMember itemBound
-  apply freshLiteralValue_of_framed frames fresh capturedBound framed extension closed blocks targetBound parameterAt
+  apply freshLiteralValue_of_framed fresh capturedBound framed extension closed blocks targetBound parameterAt
     bodyAt branch (by rfl)
   intro source old term args input row member edge argument
   exact inputs (source, input) (patchBrs_incoming_values patch noIncoming row member edge argument)

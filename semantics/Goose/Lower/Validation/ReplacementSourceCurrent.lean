@@ -14,8 +14,8 @@ theorem checkReplace_of_source_current {expr : Expr} {env : Core.TEnv} {ty : Ty}
     (clearRun : emitEffect (.clear owner clearOrigin) (lowerEnv env.mod env.vars results) before = ((), cleared))
     (run : lowerExpr expr (lowerEnv env.mod env.vars results) cleared = (value, captured))
     (live : LiveBound before) (generated : GeneratedBuilderState cleared)
-    {loop : Option LoopCtx} {module : GIR.Module} {func : Func}
-    (frames : LoopBuilderFrames loop cleared) (framed : TermEdgesFramed loop captured after)
+    {module : GIR.Module} {func : Func}
+    (framed : IntervalEdgesFramed cleared captured after)
     (extension : captured.Ext after) (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     (builder : EmittedBuilder (lowerEnv env.mod env.vars results) initState after)
     (blocks : func.blocks = finishBlocks after.blocks)
@@ -35,7 +35,7 @@ theorem checkReplace_of_source_current {expr : Expr} {env : Core.TEnv} {ty : Ty}
   have emitted := lowerExpr_owner_shape_apart (queries := queries) (owner := owner)
     builder blocks slots globals sigs structs profile graphs source shape run extension
   have valid := lowerExpr_freshOwner_reconstructed source fresh ownerResult run
-    (by simp [current]) generated frames framed extension closed builder blocks
+    (by simp [current]) generated framed extension closed builder blocks
     (dense_finishBlocks builder.checkpoint.dense blocks) slots globals sigs structs profile graphs
   exact checkReplace_after_independent_rhs live clearRun emitted
     (advB_lowerExpr expr _ _ _ _ run) current row ownerType valid label

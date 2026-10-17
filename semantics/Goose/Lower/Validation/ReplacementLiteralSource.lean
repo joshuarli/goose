@@ -150,8 +150,7 @@ theorem replacementRegion_scalar_literal_closed {env : LEnv} {before cleared cap
     (clearRun : emitEffect (.clear owner origin) env before = ((), cleared))
     (rhsRun : lowerExpr (.arrLit ty exprs) env cleared = (value, captured))
     (live : LiveBound before) (bounded : TargetsBounded cleared)
-    {loop : Option LoopCtx} (frames : LoopBuilderFrames loop cleared)
-    (framed : TermEdgesFramed loop captured state) (extension : captured.Ext state)
+    (framed : IntervalEdgesFramed cleared captured state) (extension : captured.Ext state)
     (shaped : ∀ (index : BlockId) (body : BlockB), captured.blocks[index]? = some body → OpenBlock body ∨ ClosedBlock body)
     (closed : ∀ body ∈ state.blocks.toList, ClosedBlock body) :
     EmptyFactsClosed module func (func.valueTypes module) queries (ReplacementRegionFacts cleared captured owner) := by
@@ -159,7 +158,7 @@ theorem replacementRegion_scalar_literal_closed {env : LEnv} {before cleared cap
   have emitted := lowerExpr_scalar_array_literal_apart (queries := queries) (owner := owner)
     builder blocks slots globals sigs structs profile graphs source literals rhsRun clearedLive extension
   exact replacementRegion_closed_of_emission live clearRun emitted
-    (advB_lowerExpr (.arrLit ty exprs) _ _ _ _ rhsRun) bounded frames framed extension shaped closed blocks
+    (advB_lowerExpr (.arrLit ty exprs) _ _ _ _ rhsRun) bounded framed extension shaped closed blocks
 
 theorem lowerExpr_scalar_array_apart {env : LEnv} {before captured : LS}
     {queries : ReplacementQueries} {owner value : ValueId} {ty : Ty} {exprs : List Expr}
@@ -213,8 +212,7 @@ theorem replacementRegion_boolean_array_closed {env : LEnv} {before cleared capt
     (clearRun : emitEffect (.clear owner origin) env before = ((), cleared))
     (rhsRun : lowerExpr (.arrLit ty exprs) env cleared = (value, captured))
     (live : LiveBound before) (bounded : TargetsBounded cleared)
-    {loop : Option LoopCtx} (frames : LoopBuilderFrames loop cleared)
-    (framed : TermEdgesFramed loop captured state) (extension : captured.Ext state)
+    (framed : IntervalEdgesFramed cleared captured state) (extension : captured.Ext state)
     (shaped : ∀ (index : BlockId) (body : BlockB), captured.blocks[index]? = some body → OpenBlock body ∨ ClosedBlock body)
     (closed : ∀ body ∈ state.blocks.toList, ClosedBlock body) :
     EmptyFactsClosed module func (func.valueTypes module) queries (ReplacementRegionFacts cleared captured owner) := by
@@ -222,7 +220,7 @@ theorem replacementRegion_boolean_array_closed {env : LEnv} {before cleared capt
   have emitted := lowerExpr_boolean_array_apart (queries := queries) (owner := owner)
     builder blocks slots globals sigs structs profile graphs source scalars rhsRun clearedLive extension
   exact replacementRegion_closed_of_emission live clearRun emitted
-    (advB_lowerExpr (.arrLit ty exprs) _ _ _ _ rhsRun) bounded frames framed extension shaped closed blocks
+    (advB_lowerExpr (.arrLit ty exprs) _ _ _ _ rhsRun) bounded framed extension shaped closed blocks
 
 end ScalarLiterals
 

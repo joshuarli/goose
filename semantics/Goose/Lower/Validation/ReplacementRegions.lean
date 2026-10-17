@@ -99,8 +99,7 @@ theorem closedTerm_row_retained {before after : LS} (extension : before.Ext afte
 theorem replacementRegion_closed {module : GIR.Module} {types : Array (Option VTy)}
     {queries : ReplacementQueries} {owner : ValueId} {before captured after : LS}
     (advance : before.Adv captured) (bounded : TargetsBounded before)
-    {loop : Option LoopCtx} (frames : LoopBuilderFrames loop before)
-    (framed : TermEdgesFramed loop captured after) (extension : captured.Ext after)
+    (framed : IntervalEdgesFramed before captured after) (extension : captured.Ext after)
     (shaped : ∀ (index : BlockId) (body : BlockB), captured.blocks[index]? = some body → OpenBlock body ∨ ClosedBlock body)
     (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     {func : Func} (blocks : func.blocks = finishBlocks after.blocks)
@@ -128,8 +127,7 @@ theorem replacementRegion_closed {module : GIR.Module} {types : Array (Option VT
         exact same ▸ instMember
     obtain ⟨finalBody, finalAt, blockEq⟩ := finishBlocks_row_source blocks blockAt
     subst block
-    obtain ⟨old, oldAt, oldMember⟩ := TermEdgesFramed.term_to_fresh_block frames lower upper framed
-      finalAt instMember (termEdges_successor termEdge)
+    obtain ⟨old, oldAt, oldMember⟩ := framed source finalBody term target finalAt instMember (termEdges_successor termEdge) lower upper
     have unchanged := closedTerm_row_retained extension shaped closed oldAt finalAt oldMember
     have outgoing : owner ∈ transferEmptyBlock module types queries
         (ReplacementRegionFacts before captured owner source) (cfgBlock finalBody) := by

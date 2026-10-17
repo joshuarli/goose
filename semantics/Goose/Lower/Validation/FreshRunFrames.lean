@@ -1,4 +1,5 @@
 import Goose.Lower.GeneratedTargetFramesSource
+import Goose.Lower.GeneratedIntervalFrames
 import Goose.Lower.Validation.FreshRunClosure
 
 namespace Goose.Lower.Validation
@@ -40,10 +41,9 @@ theorem incomingValues_has_term {func : Func} {target : BlockId} {index : Nat} {
     obtain ⟨args, edge, row⟩ := List.mem_filterMap.mp incoming
     exact ⟨block, blockMember, term, args, last, edge, row⟩
 
-theorem incomingValues_from_framed {loop : Option LoopCtx} {before captured after : LS}
-    (frames : LoopBuilderFrames loop before) {target : BlockId}
+theorem incomingValues_from_framed {before captured after : LS} {target : BlockId}
     (fresh : before.blocks.size ≤ target) (capturedBound : target < captured.blocks.size)
-    (framed : TermEdgesFramed loop captured after)
+    (framed : IntervalEdgesFramed before captured after)
     {func : Func} (blocks : func.blocks = finishBlocks after.blocks)
     {index : Nat} {value : ValueId} (incoming : value ∈ incomingValues func target index) :
     ∃ (source : BlockId) (old : BlockB) (term : Term) (args : List ValueId), captured.blocks[source]? = some old ∧
@@ -68,8 +68,7 @@ theorem incomingValues_from_framed {loop : Option LoopCtx} {before captured afte
         have same : finalTerm = term := Option.some.inj last
         subst finalTerm
         exact List.mem_of_getLast? lastAt
-    obtain ⟨old, oldAt, oldMember⟩ := TermEdgesFramed.term_to_fresh_block frames fresh capturedBound framed
-      bodyAt termMember (edgeArgsTo_successor edge)
+    obtain ⟨old, oldAt, oldMember⟩ := framed source body term target bodyAt termMember (edgeArgsTo_successor edge) fresh capturedBound
     exact ⟨source, old, term, args, oldAt, oldMember, edge, valueAt⟩
 
 theorem closedBlock_term_is_last {body : BlockB} (closed : ClosedBlock body) {term : Term}
@@ -117,10 +116,9 @@ theorem incomingValues_retains_branch {captured after : LS} (extension : capture
     apply List.mem_filterMap.mpr
     exact ⟨args, by simp [edgeArgsTo], argument⟩
 
-theorem freshLiteralValue_of_framed {loop : Option LoopCtx} {before captured after : LS}
-    (frames : LoopBuilderFrames loop before) {target : BlockId}
+theorem freshLiteralValue_of_framed {before captured after : LS} {target : BlockId}
     (fresh : before.blocks.size ≤ target) (capturedBound : target < captured.blocks.size)
-    (framed : TermEdgesFramed loop captured after) (extension : captured.Ext after)
+    (framed : IntervalEdgesFramed before captured after) (extension : captured.Ext after)
     (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     {func : Func} {types : Array (Option VTy)} (blocks : func.blocks = finishBlocks after.blocks)
     {value : ValueId} {ty : VTy} {index : Nat} (targetBound : target < func.blocks.size)
@@ -138,7 +136,7 @@ theorem freshLiteralValue_of_framed {loop : Option LoopCtx} {before captured aft
     simp [empty] at retained
   · intro input incoming
     obtain ⟨source, old, term, args, row, member, edge, argument⟩ :=
-      incomingValues_from_framed frames fresh capturedBound framed blocks incoming
+      incomingValues_from_framed fresh capturedBound framed blocks incoming
     exact inputs source old term args input row member edge argument
 
 end Goose.Lower.Validation
