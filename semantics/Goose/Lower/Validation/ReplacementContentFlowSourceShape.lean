@@ -64,6 +64,20 @@ theorem accepted_global_return_seed {module : Core.Module} {index : GlobalId} {g
   have checked := (Core.Sound.validate_modOk module accepted).glob index global globalRow
   simp [declaredReturn, lowerGlobal, checked.ty.2]
 
+theorem accepted_function_context {module : Core.Module} {index : FnId} {func : Func}
+    (accepted : Core.validate module = .ok ())
+    (functionRow : (lower module).funcs[index]? = some func) :
+    ∃ ctx impl, module.contexts[index]? = some ctx ∧ module.impls[ctx.impl]? = some impl ∧
+      func = lowerContextAt module ctx impl := by
+  cases contextRow : module.contexts[index]? with
+  | none => simp [lower, Array.getElem?_map, contextRow] at functionRow
+  | some ctx =>
+    obtain ⟨impl, implementationRow, checked⟩ :=
+      (Core.Sound.validate_modOk module accepted).ctx index ctx contextRow
+    exact ⟨ctx, impl, rfl, implementationRow,
+      Option.some.inj (functionRow.symm.trans (lower_func_at contextRow implementationRow))⟩
+
+#print axioms accepted_function_context
 #print axioms accepted_global_return_seed
 #print axioms accepted_context_return_seed
 #print axioms accepted_entry_shape

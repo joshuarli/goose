@@ -112,6 +112,28 @@ theorem accepted_global_annotationsValid {module : Core.Module} {index : GlobalI
   · simp [lowerGlobal]
   · simp [lowerGlobal]
 
+theorem accepted_function_annotationsValid {module : Core.Module} {index : FnId} {func : Func}
+    (accepted : Core.validate module = .ok ())
+    (functionRow : (lower module).funcs[index]? = some func) :
+    annotationsValid (lower module) func = true := by
+  obtain ⟨ctx, impl, contextRow, implementationRow, rfl⟩ :=
+    accepted_function_context accepted functionRow
+  exact accepted_context_annotationsValid accepted contextRow implementationRow
+
+theorem accepted_initializer_annotationsValid {module : Core.Module} {index : GlobalId}
+    {global : GIR.Global} (accepted : Core.validate module = .ok ())
+    (globalRow : (lower module).globals[index]? = some global) :
+    annotationsValid (lower module) global.init = true := by
+  cases sourceRow : module.globals[index]? with
+  | none => simp [lower, Array.getElem?_map, sourceRow] at globalRow
+  | some source =>
+    have identity : global = lowerGlobal module source := by
+      simpa only [lower, Array.getElem?_map, sourceRow, Option.map_some, Option.some.injEq] using globalRow.symm
+    rw [identity]
+    exact accepted_global_annotationsValid accepted sourceRow
+
+#print axioms accepted_function_annotationsValid
+#print axioms accepted_initializer_annotationsValid
 #print axioms accepted_context_annotationsValid
 #print axioms accepted_global_annotationsValid
 
