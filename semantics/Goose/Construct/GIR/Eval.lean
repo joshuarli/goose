@@ -13,6 +13,7 @@ inductive RVal
   | dest (id : DestinationId)
   | built (id : DestinationId)
   | cancelled (id : DestinationId)
+  | directCancelled (id : DestinationId)
   | pack (carriers : List Carrier)
 
 structure Config where
@@ -28,7 +29,7 @@ structure Frame where
   named : List (SlotId × DestinationId) := []
   parameterOrdinals : List StorageId := []
   copySources : Std.HashMap ValueId Core.CopySource := {}
-  elementReceivers : List (DestinationId × Loc) := []
+  pushOwners : List (Loc × Loc) := []
 
 private def getCell (frame : Frame) (id : ValueId) : EvalM RVal :=
   match frame.vals[id]? with
@@ -54,6 +55,11 @@ private def getProtocol (frame : Frame) (id : ValueId) : EvalM DestinationId := 
   match ← getCell frame id with
   | .dest id | .built id | .cancelled id => pure id
   | _ => fault .shape
+
+private def hasDirectTargetCancellation (frame : Frame) (id : DestinationId) : Bool :=
+  frame.vals.toList.any fun (_, value) => match value with
+    | .directCancelled found => found == id
+    | _ => false
 
 private def getCarrier (frame : Frame) (id : ValueId) : EvalM Carrier := do
   match ← getCell frame id with
@@ -263,6 +269,17 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
         pure (.dest (← openReceiver fuel config function frame receiver ty request count (← origin org)))
     | .destChild parent element org =>
         pure (.dest (← liftConstruction (← origin org) (openChild (← getDest frame parent) element (← receivingLayout config.layout element))))
+    | .destAdapt destination producer request org =>
+        let id ← getDest frame destination
+        liftConstruction (← origin org) (adaptConstructionDestination id producer request)
+        pure (.dest id)
+    | .destAdaptFinish closed org =>
+        let id ← getProtocol frame closed
+        liftConstruction (← origin org) (finishConstructionAdaptation id)
+        match ← getCell frame closed with
+        | .built _ => pure (.built id)
+        | .cancelled _ => pure (.cancelled id)
+        | _ => fault .shape
     | .destFinish destination org =>
         let id ← getDest frame destination
         let pending ← getDestination id
@@ -280,18 +297,38 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
         let some target := config.module.targets[target]? | fault .unbound
         let some activation := selectTarget? target (← EvalM.get).activations | fault .flow
         let some (.construct id) := activation.channels[position]? | fault .shape
-        pure (.dest (← liftConstruction (← origin org) (openExitReplacement id)))
+        let destination ← getDestination id
+        match destination.progress with
+        | .open 0 => pure (.dest id)
+        | _ => pure (.dest (← liftConstruction (← origin org) (openExitReplacement id)))
     | .destAbandonNamed slot replacement org =>
         let some id := frame.named.lookup slot | fault .unbound
-        liftConstruction (← origin org) (abandonPreservingExit id (← getBuilt frame replacement))
-        pure (.cancelled id)
+        let replacement ← getBuilt frame replacement
+        if replacement == id then pure (.directCancelled id)
+        else
+          liftConstruction (← origin org) (abandonPreservingExit id replacement)
+          pure (.cancelled id)
     | .destAbandon carrier org =>
+        let cell ← getCell frame carrier
         let id ← getProtocol frame carrier
-        let pending ← getDestination id
-        match pending.progress with
-        | .exiting _ replacement => liftConstruction (← origin org) (abandonPreservingExit id replacement)
-        | _ => liftConstruction (← origin org) (abandonTree id)
-        pure (.cancelled id)
+        let direct := match cell with
+          | .dest found => found == id && (frame.vals.toList.any fun (_, value) =>
+              match value with | .built built => built == id | _ => false)
+          | _ => false
+        if direct then
+          pure (.directCancelled id)
+        else do
+          let pending ← getDestination id
+          match pending.progress with
+          | .exiting _ replacement => liftConstruction (← origin org) (abandonPreservingExit id replacement)
+          | _ => liftConstruction (← origin org) (abandonTree id)
+          pure (.cancelled id)
+    | .destPublishRef built org =>
+        let id ← getBuilt frame built
+        let location := (← getDestination id).capability.receiver
+        let some owner := frame.pushOwners.lookup location | fault .flow
+        publishDestination fuel config id (← origin org) (some owner)
+        pure (.value (.ref location))
     | .destArg built org =>
         let id ← getBuilt frame built
         publishDestination fuel config id (← origin org)
@@ -314,7 +351,9 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
             liftConstruction (← origin org) (removeConstructionHeader id)
             let pending ← getDestination id
             liftConstruction (← origin org) (restoreReceivingLayout id (← receivingLayout config.layout pending.capability.layout))
-        | .exitValue => liftConstruction (← origin org) (landExitReplacement id)
+        | .exitValue =>
+            unless hasDirectTargetCancellation frame id do
+              liftConstruction (← origin org) (landExitReplacement id)
         pure (.built id)
     | .destStage destination org =>
         let id ← getDest frame destination
@@ -466,11 +505,14 @@ def evalEffect : Nat → Config → Func → Frame → Effect → EvalM Frame
         pure { frame with named := (slot,id) :: frame.named }
     | .destPublish built org =>
         let id ← getBuilt frame built
-        publishDestination fuel config id (← origin org) (frame.elementReceivers.lookup id)
+        publishDestination fuel config id (← origin org) (frame.pushOwners.lookup (← getDestination id).capability.receiver)
         pure frame
     | .destCancel cancelled org =>
-        let .cancelled id ← getCell frame cancelled | fault .shape
-        liftConstruction (← origin org) (acknowledgeAbandonment id)
+        match ← getCell frame cancelled with
+        | .cancelled id => liftConstruction (← origin org) (acknowledgeAbandonment id)
+        | .directCancelled _ => pure ()
+        | _ => fault .shape
+        let _ ← origin org
         pure frame
 
 def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (List Carrier)
@@ -491,10 +533,10 @@ def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (Li
           | _ => pure none
         let receivers ← match op, value with
           | .destOpen (.push reference) .., .dest id => do
-              pure ((id, ← expectRef (← getValue frame reference)) :: frame.elementReceivers)
-          | _, _ => pure frame.elementReceivers
+              pure (((← getDestination id).capability.receiver, ← expectRef (← getValue frame reference)) :: frame.pushOwners)
+          | _, _ => pure frame.pushOwners
         let sources := match copySource with | some source => frame.copySources.insert result source | none => frame.copySources.erase result
-        executeInsts fuel config function { frame with vals := frame.vals.insert result value, copySources := sources, elementReceivers := receivers } rest
+        executeInsts fuel config function { frame with vals := frame.vals.insert result value, copySources := sources, pushOwners := receivers } rest
     | .eff effect :: rest =>
         executeInsts fuel config function (← evalEffect fuel config function frame effect) rest
     | .term term :: _ => match term with

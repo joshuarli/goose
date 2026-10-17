@@ -280,6 +280,8 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     def_ (.destOpen (← decReceiver tb fs[1]!) (← decTy tb fs[2]!) (← decRequest fs[3]!)
       (← optional fs[4]! "known count" decVal) (← org 5))
   | "i_dest_child" => do arity tag fs 4; def_ (.destChild (← v 1) (← decTy tb fs[2]!) (← org 3))
+  | "i_dest_adapt" => do arity tag fs 5; def_ (.destAdapt (← v 1) (← decTy tb fs[2]!) (← decRequest fs[3]!) (← org 4))
+  | "i_dest_adapt_finish" => do arity tag fs 3; def_ (.destAdaptFinish (← v 1) (← org 2))
   | "i_dest_finish" => do arity tag fs 3; def_ (.destFinish (← v 1) (← org 2))
   | "i_dest_named" => do
     arity tag fs 3
@@ -288,6 +290,7 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   | "i_dest_abandon_named" => do
     arity tag fs 4
     def_ (.destAbandonNamed (← checkIndex (← asNat fs[1]! "named slot") tb.nSlots "slot") (← v 2) (← org 3))
+  | "i_dest_publish_ref" => do arity tag fs 3; def_ (.destPublishRef (← v 1) (← org 2))
   | "i_dest_arg" => do arity tag fs 3; def_ (.destArg (← v 1) (← org 2))
   | "i_dest_abandon" => do arity tag fs 3; def_ (.destAbandon (← v 1) (← org 2))
   | "i_dest_value" => do arity tag fs 3; def_ (.destValue (← v 1) (← org 2))
@@ -782,10 +785,13 @@ def wOp (r : ValueId) : Op → W String
   | .destOpen receiver ty request count org => do
       pure (wRec "i_dest_open" [toString r,wReceiver receiver,← wTy ty,quote request.tag,wOpt count,wOpt org])
   | .destChild parent ty org => do pure (wRec "i_dest_child" [toString r,toString parent,← wTy ty,wOpt org])
+  | .destAdapt id producer request org => do pure (wRec "i_dest_adapt" [toString r,toString id,← wTy producer,quote request.tag,wOpt org])
+  | .destAdaptFinish id org => pure (wRec "i_dest_adapt_finish" [toString r,toString id,wOpt org])
   | .destFinish id org => pure (wRec "i_dest_finish" [toString r,toString id,wOpt org])
   | .destNamed slot org => pure (wRec "i_dest_named" [toString r,toString slot,wOpt org])
   | .resultExitDest position org => pure (wRec "i_result_exit_dest" [toString r,toString position,wOpt org])
   | .destAbandonNamed slot replacement org => pure (wRec "i_dest_abandon_named" [toString r,toString slot,toString replacement,wOpt org])
+  | .destPublishRef id org => pure (wRec "i_dest_publish_ref" [toString r,toString id,wOpt org])
   | .destArg id org => pure (wRec "i_dest_arg" [toString r,toString id,wOpt org])
   | .destAbandon id org => pure (wRec "i_dest_abandon" [toString r,toString id,wOpt org])
   | .destValue id org => pure (wRec "i_dest_value" [toString r,toString id,wOpt org])
@@ -948,7 +954,7 @@ def write (m : Module) : String :=
       let _ ← internTy (.structT sid (TyList.ofList (m.structs[sid].fields.toList.map (·.ty))))
     let gs ← wMap m.globals.toList wGlobal
     let fs ← wMap m.funcs.toList wFunc
-    pure (gs, fs) : W (String × String)).run {}
+    pure (gs, fs) : W (String × String)).run { entries := m.types }
   let files := wList (m.files.toList.map fun f => wRec "file" [quote f])
   let origins := wList (m.origins.toList.map fun o =>
     wRec "origin" [toString o.file, toString o.line, quote o.kind])

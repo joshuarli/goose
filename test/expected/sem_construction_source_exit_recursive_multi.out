@@ -1,0 +1,6 @@
+enter 3
+enter 2
+enter 1
+resume 2 20 21 99 22
+resume 3 20 21 99 23
+result 20 21 99
