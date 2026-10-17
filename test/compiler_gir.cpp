@@ -778,7 +778,7 @@ void RejectsSummaryThatOmitsSliceParameterRebind() {
     b.insts = { store, Ret() };
     f.blocks = { b };
     f.roots.params = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
-    f.roots.contents = { { 0, {} } };
+    f.roots.contents = { { 0, { CoreRootRef { CoreRootRef::Param, 1 } } } };
     f.summary.writes = { CoreTarget { false, 0 } };
     m.funcs.push_back(f);
     assert(Code(m) == "GIR-V050");
@@ -910,7 +910,7 @@ void SpecializedParameterSummariesNormalizeBothCoverageSides() {
     assert(Code(m) == "");
 }
 
-void RejectsParameterRootUnderapproximationAtCall() {
+void ChecksParameterRootBoundsAtCall() {
     auto m = Base();
     auto i64 = m.IntType(CoreIntTy::I64);
     auto ref = m.RefType(CoreMut::Mut, i64);
@@ -960,7 +960,7 @@ void RejectsParameterRootUnderapproximationAtCall() {
     m.funcs[1].roots.params[0].second = {
         { CoreRootRef::Param, 0 }, { CoreRootRef::Static, 0 }
     };
-    assert(Code(m) == "GIR-V050");
+    assert(Code(m).empty());
 }
 
 void SliceContentAnnotationsAreRequiredOnlyWhenLoaded() {
@@ -2423,13 +2423,13 @@ GirModule ShrinkReplaceAfterAliasedEffect(EmptyOwnerEffect effect) {
 
     GirFunc probe;
     probe.name = cat("empty-owner-effect-", (int)effect);
-    probe.params = { refTy, sliceTy, viewTy };
+    probe.params = { refTy, sliceTy };
     probe.scopes = { -1 };
     probe.summary.unknown = true;
     GirBlock body;
-    body.params = { { 0, refTy }, { 1, sliceTy }, { 2, viewTy } };
+    body.params = { { 0, refTy }, { 1, sliceTy } };
     auto &insts = body.insts;
-    int next = 3;
+    int next = 2;
     auto intValue = [&](const char *text) {
         auto id = next++;
         insts.push_back(Int(m, id, text));
@@ -2479,21 +2479,30 @@ GirModule ShrinkReplaceAfterAliasedEffect(EmptyOwnerEffect effect) {
                 break;
             }
             case EmptyOwnerEffect::ViewLength: {
+                auto view = Def(GirOp::SliceView, next++);
+                view.a = 1;
+                insts.push_back(view);
                 auto length = Def(GirOp::ViewLen, next++);
-                length.a = 2;
+                length.a = view.res;
                 insts.push_back(length);
                 break;
             }
             case EmptyOwnerEffect::ViewSlice: {
+                auto view = Def(GirOp::SliceView, next++);
+                view.a = 1;
+                insts.push_back(view);
                 auto slice = Def(GirOp::ViewSlice, next++);
-                slice.a = 2;
+                slice.a = view.res;
                 insts.push_back(slice);
                 break;
             }
             case EmptyOwnerEffect::Index: {
+                auto view = Def(GirOp::SliceView, next++);
+                view.a = 1;
+                insts.push_back(view);
                 auto zero = intValue("0");
                 auto index = Def(GirOp::Index, next++);
-                index.a = 2;
+                index.a = view.res;
                 index.b = zero;
                 index.org = 0;
                 insts.push_back(index);
@@ -2536,9 +2545,12 @@ GirModule ShrinkReplaceAfterAliasedEffect(EmptyOwnerEffect effect) {
                 break;
             }
             case EmptyOwnerEffect::Store: {
+                auto view = Def(GirOp::SliceView, next++);
+                view.a = 1;
+                insts.push_back(view);
                 auto zero = intValue("0");
                 auto index = Def(GirOp::Index, next++);
-                index.a = 2;
+                index.a = view.res;
                 index.b = zero;
                 index.org = 0;
                 insts.push_back(index);
@@ -2552,10 +2564,13 @@ GirModule ShrinkReplaceAfterAliasedEffect(EmptyOwnerEffect effect) {
                 break;
             }
             case EmptyOwnerEffect::Append: {
+                auto view = Def(GirOp::SliceView, next++);
+                view.a = 1;
+                insts.push_back(view);
                 GirInst append;
                 append.op = GirOp::Append;
                 append.a = 0;
-                append.b = 2;
+                append.b = view.res;
                 append.org = 0;
                 insts.push_back(append);
                 break;
@@ -8583,7 +8598,7 @@ int main() {
     RejectsDuplicateVariablesForReferenceToSliceParameterSlots();
     RejectsSlotVariableThatNamesAnotherReferenceToSliceParameter();
     SpecializedParameterSummariesNormalizeBothCoverageSides();
-    RejectsParameterRootUnderapproximationAtCall();
+    ChecksParameterRootBoundsAtCall();
     SliceContentAnnotationsAreRequiredOnlyWhenLoaded();
     AcceptsUnreachableAfterANonReturningCall();
     RejectsUnreachableWithoutANonReturningCall();
