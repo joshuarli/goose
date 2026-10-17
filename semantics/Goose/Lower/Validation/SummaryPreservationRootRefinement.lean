@@ -7,7 +7,7 @@ open Goose.Core Goose.GIR
 
 abbrev RootsRefine := Goose.GIR.RootsRefine
 
-@[simp] theorem RootsRefine.empty (func : Func) (source : List RootRef) :
+theorem RootsRefine.empty (func : Func) (source : List RootRef) :
     RootsRefine func [] source := by
   intro root member
   cases member

@@ -90,9 +90,9 @@ theorem loopEachCopy (ready : ReplayBuilder module results vt func target le sco
   · intro live
     exact loop_read_refinement closed (input live).2 reads
   · intro live
-    simp [rootsOfDef, scalarType live, RootsRefine]
+    simp [rootsOfDef, scalarType live, Goose.GIR.RootsRefine]
   · intro live _
-    simp [rootsOfDef, scalarType live, RootsRefine]
+    simp [rootsOfDef, scalarType live, Goose.GIR.RootsRefine]
 
 def eachLoopBodyEntry (regrow : Bool) (owner : Option ValueId) (sampled counter : ValueId)
     (le : LEnv) (state : LS) : LS :=
