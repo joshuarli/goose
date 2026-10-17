@@ -19,7 +19,7 @@ theorem accepted_entry_shape {module : Core.Module}
   have empty : impl.params.toList = [] := by
     apply List.eq_nil_of_length_eq_zero
     simpa using parameters
-  simp [lowerContextAt, lowerImpl, empty, results]
+  simp [lowerContextAt, lowerImpl, lowerImplFromState, empty, results]
 
 theorem actual_context_checked {module : Core.Module} {index : ContextId} {ctx : Context}
     {impl : Impl} (accepted : Core.validate module = .ok ())
