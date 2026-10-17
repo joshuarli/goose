@@ -88,6 +88,7 @@ theorem loopEachBody (ready : ReplayBuilder module results vt func target le sco
       ∀ root ∈ actual, root ∈ rootsAt slots variableId)
     (bodyStep : ∀ value state provenance,
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
+      ls.blocks.size ≤ state.blocks.size →
       (∀ item ∈ (variableId, value, origin) :: indexVar.toList.map (fun j => (j, counter, origin)), item.2.1 < state.vals.size) →
       (∀ item ∈ (variableId, value, origin) :: indexVar.toList.map (fun j => (j, counter, origin)),
         ∀ root ∈ rootsAt provenance.vals item.2.1, root ∈ rootsAt slots item.1) →
@@ -117,7 +118,7 @@ theorem loopEachBody (ready : ReplayBuilder module results vt func target le sco
     exact Nat.lt_of_lt_of_le counterBound addressAdv.vals
   have counterEmpty : rootsAt valueProv.vals counter = [] :=
     (valueGrowth counter counterAddress).trans ((addressGrowth counter counterOld).trans counterScalar)
-  obtain ⟨next, nextReady, bodyGrowth⟩ := bodyStep value.1 value.2 valueProv valueReady
+  obtain ⟨next, nextReady, bodyGrowth⟩ := bodyStep value.1 value.2 valueProv valueReady (Nat.le_trans addressAdv.ext.1 valueAdv.ext.1)
     (by
       intro item member
       simp only [List.mem_cons, List.mem_map] at member

@@ -94,6 +94,12 @@ theorem loopEachCopy (ready : ReplayBuilder module results vt func target le sco
   · intro live _
     simp [rootsOfDef, scalarType live, RootsRefine]
 
+def eachLoopBodyEntry (regrow : Bool) (owner : Option ValueId) (sampled counter : ValueId)
+    (le : LEnv) (state : LS) : LS :=
+  let length := eachLen regrow owner sampled le state
+  let compare := Goose.Lower.emitDef (.cmp .lt .i64 counter length.1) le length.2
+  loopBodyEntry compare.1 le compare.2
+
 theorem loopEach (ready : ReplayBuilder module results vt func target le scopeCount slots ls upper)
     (regrow : Bool) (owner : Option ValueId) (sampled counter : ValueId) (header : BlockId)
     (sourceRoots : List RootRef) (body : Nat → BlockId → B ValueId)
@@ -106,6 +112,7 @@ theorem loopEach (ready : ReplayBuilder module results vt func target le scopeCo
     (bodyAdv : ∀ depth exit, AdvB (body depth exit))
     (bodyStep : ∀ depth exit state provenance,
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
+      state = eachLoopBodyEntry regrow owner sampled counter le ls →
       state.cur.isSome = true → header < state.blocks.size → exit < state.blocks.size → counter < state.vals.size → rootsAt provenance.vals counter = [] →
       ls.vals.size ≤ state.vals.size →
       (∀ index, index < upper.vals.size → rootsAt provenance.vals index = rootsAt upper.vals index) →
@@ -149,10 +156,10 @@ theorem loopEach (ready : ReplayBuilder module results vt func target le scopeCo
   obtain ⟨next, nextReady, growth⟩ := compareReady.loopBody compare.1 (compareValue compareLive).bound compareLive
     body (rangeBack .i64 counter header) bodyAdv (advB_rangeBack _ _ _)
     (by
-      intro depth exit state provenance stateReady stateLive exitBound blocks values priorRoots
+      intro depth exit state provenance stateReady stateEq stateLive exitBound blocks values priorRoots
       have compareCounterBound : counter < compareProv.vals.size := by
         simpa only [compareReady.roots.valueSize] using counterStill
-      apply bodyStep depth exit state provenance stateReady stateLive (Nat.lt_of_lt_of_le headerStill blocks)
+      apply bodyStep depth exit state provenance stateReady stateEq stateLive (Nat.lt_of_lt_of_le headerStill blocks)
         exitBound (Nat.lt_of_lt_of_le counterStill values) ((priorRoots counter compareCounterBound).trans compareCounter)
         (Nat.le_trans lengthAdv.vals (Nat.le_trans compareAdv.vals values))
       intro index bound
