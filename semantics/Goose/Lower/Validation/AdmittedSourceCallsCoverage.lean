@@ -115,4 +115,43 @@ theorem call_content_coverage_of_receivers
         content contentMember root expandedMember)
     exact argumentContents_mem.mpr ⟨receiver, receiverMember, origin, originMember, concreteMember⟩
 
+theorem admittedInstruction_call_of_source_bounds
+    {module : GIR.Module} {func callee : Func} {types : Array (Option VTy)}
+    {provenance : Prov} {function : FnId} {arguments : List ValueId}
+    {value : ValueId} {origin : Option OriginId}
+    (calleeFound : module.funcs[function]? = some callee)
+    (closed : ∀ index root, root ∈ func.parameterRoots index →
+      root = .param index ∨ ∃ global, root = .global global)
+    (rows : ∀ parameter declared, (parameter, declared) ∈ callee.roots.contents.toList →
+      (callee.params[parameter]?).any Ty.isRefSlice = true →
+      ∃ argumentRoots mapped,
+        mapResultRoots argumentRoots [] declared = .ok mapped ∧
+        (∀ (index : Nat) (argument : ValueId) (source : List RootRef),
+          RootRef.param index ∈ declared → arguments[index]? = some argument →
+          argumentRoots[index]? = some source →
+          RootsRefine func (rootsAt provenance.vals argument) source) ∧
+        (∀ (index : Nat) (source : List RootRef),
+          RootRef.param index ∈ declared → argumentRoots[index]? = some source →
+          ∃ argument, arguments[index]? = some argument ∧
+            source ⊆ rootsAt provenance.vals argument) ∧
+        (∃ receiver, receiver ∈ rootsAt provenance.vals arguments[parameter]!) ∧
+        (∀ receiver ∈ rootsAt provenance.vals arguments[parameter]!,
+          RootsRefine func (func.receiverContentCeiling provenance receiver) mapped) ∧
+        (∀ receiver ∈ rootsAt provenance.vals arguments[parameter]!,
+          mapped ⊆ func.receiverContentCeiling provenance receiver)) :
+    func.admittedInstruction module types provenance
+      (.def value (.call function arguments origin)) = true := by
+  simp only [Func.admittedInstruction, calleeFound, List.all_eq_true]
+  rintro ⟨parameter, declared⟩ member
+  by_cases reference : (callee.params[parameter]?).any Ty.isRefSlice = true
+  · obtain ⟨sourceArguments, mapped, mappedChecked, argumentBounds, argumentFloors,
+      nonempty, receiverBounds, receiverFloors⟩ := rows parameter declared member reference
+    have raw := admittedCallReceiver_of_source_bounds mappedChecked argumentBounds argumentFloors
+      receiverBounds receiverFloors
+    have coverage := call_content_coverage_of_receivers closed nonempty raw
+    simp only [reference, Bool.not_true, Bool.false_or, raw, Bool.and_true,
+      Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem]
+    exact coverage
+  · simp [reference]
+
 end Goose.Lower.Validation.AdmittedSourceCalls
