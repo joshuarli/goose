@@ -121,4 +121,23 @@ theorem readRoots_variable_load_represent_of_annotations {env : PEnv}
     exact slotRoots
   · exact rootsRepresent_empty func sourceRoots
 
+
+theorem readRoots_variable_state {env : PEnv} {varId : VarId} {localVar : LocalVar}
+    {roots : List RootRef} {start finish : RState}
+    (variableRow : env.impl.vars[varId]? = some localVar)
+    (source : readRoots env (.var varId) start = .ok (roots, finish)) : finish = start := by
+  by_cases reference : localVar.ty.isRefLike = true
+  · cases annotation : env.ann varId with
+    | none =>
+      simp only [readRoots, variableRow, reference, ite_true, annotation] at source
+      cases source
+    | some roots =>
+      simp only [readRoots, variableRow, reference, ite_true, annotation] at source
+      exact congrArg Prod.snd ((st_pure_ok _ _ _).mp source)
+  · simp only [readRoots, variableRow, reference, ite_false] at source
+    exact congrArg Prod.snd ((st_pure_ok _ _ _).mp source)
+
+theorem rpExpr_read_variable {env : PEnv} {varId : VarId} {start : RState} :
+    rpExpr env (.read (.var varId)) start = readRoots env (.var varId) start := rfl
+
 end Goose.Lower.Validation.SummaryPreservation
