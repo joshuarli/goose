@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.ValueTypes
 import Goose.Lower.Validation.SummaryPreservationReplayLoopsBuilder
 import Goose.Lower.Validation.SummaryPreservationReplayTerm
 import Goose.Lower.Validation.SummaryPreservationReturnTransfer
@@ -5,6 +6,19 @@ import Goose.Lower.Validation.SummaryPreservationReturnTransfer
 namespace Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
 
 open Goose.Core Goose.GIR
+
+theorem types_finishFunction (impl : Impl) (value : ValueId) :
+    TypeRun (Goose.Lower.finishFunction impl value) := by
+  unfold Goose.Lower.finishFunction
+  refine TypeRun.bind types_read fun le => TypeRun.bind types_isLive fun live => ?_
+  cases live
+  · exact TypeRun.pure _
+  · by_cases sink : !impl.results.isEmpty && impl.body.value.isNone && impl.body.diverges le.mod.noReturn
+    · rw [if_pos sink]
+      exact TypeRun.bind (types_newBlock []) fun _ =>
+        TypeRun.bind (types_emitTerm _) fun _ => TypeRun.bind (types_setCur _) fun _ => types_emitTerm _
+    · rw [if_neg sink]
+      exact types_emitTerm _
 
 variable {module : GIR.Module} {results : Array (List RootRef)} {vt : Array (Option VTy)}
   {func : Func} {target : Core.Eff} {le : LEnv} {scopeCount : Nat}
@@ -88,6 +102,7 @@ theorem finishFunction (impl : Impl) (value : ValueId) (expected : List RootRef)
           exact returned live present root member
         · simp [term, present] at same
 
+#print axioms types_finishFunction
 #print axioms finishFunction
 
 end Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
