@@ -71,8 +71,10 @@ theorem path_lowerExpr : ∀ expr : Expr, PathAction (lowerExpr expr)
   | .ifE condition yes no => by
     simp only [lowerExpr]
     exact PathAction.bind (path_lowerExpr condition) fun value =>
-      ⟨advB_ifE_core value (path_lowerBlock none [] true yes).advance (path_lowerBlock none [] true no).advance,
-        paths_ifE_core value (path_lowerBlock none [] true yes).advance (path_lowerBlock none [] true no).advance
+      ⟨advB_ifE_core value (sourceBlockScope yes) (path_lowerBlock none [] true yes).advance
+          (path_lowerBlock none [] true no).advance,
+        paths_ifE_core value (sourceBlockScope yes) (path_lowerBlock none [] true yes).advance
+          (path_lowerBlock none [] true no).advance
           (path_lowerBlock none [] true yes).paths (path_lowerBlock none [] true no).paths⟩
   | .blockE block => path_lowerBlock none [] true block
   | .arrLit _ es => by
