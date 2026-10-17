@@ -38,11 +38,11 @@ theorem typedStatementLoopSimulation_range {n : Nat} {cfg : Cfg} {results : List
     (loop : Option LoopCtx) :
     TypedStatementLoopSimulation (n + 1) cfg results loop (.forRange x lo hi body origin) := by
   intro env state source metadata lexical input output result point cx frame lowered atPoint
-    extension related module returned depth targets counter
+    extension related module returned depth targets counter generated frames
   cases result
   rw [prepareLoopFlow_stmtRange]
   have simulation := stmt_range_checked_flow_sim_at source results metadata lowerSimulation upperSimulation
-    blocks cx module returned loop input output frame point lowered atPoint extension related
+    blocks cx module returned loop input output frame point lowered atPoint extension related generated
   exact simulation.mono fun flow _ pt' fr' _ post =>
     post.elim (fun normal => Or.inl normal) (fun returned => Or.inr (Or.inl returned))
 

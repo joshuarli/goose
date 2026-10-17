@@ -10,7 +10,7 @@ theorem typedStatementsLoopSimulation_cons (n : Nat) (cfg : Cfg) (results : List
     (hrest : TypedStatementsLoopSimulation n cfg results loop rest) :
     TypedStatementsLoopSimulation (n + 1) cfg results loop (stmt :: rest) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   obtain ⟨block, hcur, _, _⟩ := LS.pp_some hpp
   simp only [lowerStmts, bind_eq] at hlow
   obtain ⟨live, initial, hlive, hlow⟩ := hlow
@@ -29,7 +29,7 @@ theorem typedStatementsLoopSimulation_cons (n : Nat) (cfg : Cfg) (results : List
     rw [htyping]
   rw [prepareLoopFlow_execStmts]
   refine SimEAt.bind (hstmt env state head hhead hheadLoops ls middle firstResult pt cx fr hfirst hpp
-    hextMiddle hrel hgir hresults hdepth htargets hcounter)
+    hextMiddle hrel hgir hresults hdepth htargets hcounter hgenerated hframes)
     fun flow after ptMiddle frMiddle hactual hpost => ?_
   rcases hpost with ⟨rfl, P⟩ | hreturned | ⟨context, hloop, htransfer⟩
   · have hraw := preparedLoopFlow_normal_success hactual
@@ -44,7 +44,8 @@ theorem typedStatementsLoopSimulation_cons (n : Nat) (cfg : Cfg) (results : List
       rw [htailTyping]
       exact (head.result n (.normal .unit) hraw).same.loops
     exact (hrest env after tail htail htailLoops middle ls' result ptMiddle cx frMiddle hremaining P.pp
-      hext P.rel hgir hresults hdepth htargets (hcounter.afterPost P)).mono
+      hext P.rel hgir hresults hdepth htargets (hcounter.afterPost P) (hgenerated.lowerStmt loop stmt hframes.toTargets hfirst)
+      (hframes.mono (advB_lowerStmt loop stmt _ _ _ _ hfirst).ext)).mono
         fun flow' _ pt' fr' _ Q => StatementLoopPost.prefix hrel P hcounter Q
   · obtain ⟨returned, org, rfl, hsite⟩ := hreturned
     exact SimEAt.ret (Or.inr (Or.inl ⟨returned, org, rfl, hsite⟩))

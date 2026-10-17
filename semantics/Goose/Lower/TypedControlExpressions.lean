@@ -278,22 +278,22 @@ def TypedBlockValueClaim (n : Nat) (cfg : Cfg) (results : List Ty) (block : Core
     ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerBlock none [] true block (lowerEnv cfg.mod env.vars results) ls = (r, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → GeneratedBuilderState ls →
     SimEAt cx pt fr (blockValue n cfg env block)
       (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) state
 
 theorem typedBlockValueClaim_zero (cfg : Cfg) (results : List Ty) (block : Core.Block) :
     TypedBlockValueClaim 0 cfg results block := by
-  intro env state source metadata loops inExpr ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source metadata loops inExpr ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   simp only [blockValue]
   exact SimEAt.of_timeout state
 
 theorem typedBlockValueClaim_succ {n : Nat} {cfg : Cfg} {results : List Ty} {block : Core.Block}
     (body : TypedBlockLoopSimulation n cfg results none [] [] true block) :
     TypedBlockValueClaim (n + 1) cfg results block := by
-  intro env state source metadata loops inExpr ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source metadata loops inExpr ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   have hs := body.function env state source metadata loops ls ls' r pt cx fr hlow hpp hext hrel
-    trivial hgir hresults
+    trivial hgir hresults hgenerated
   have prepareEq : (execBlock n cfg env [] block >>= prepareReturn env) state =
       execBlock n cfg env [] block state := by
     rw [bind_apply]
@@ -318,7 +318,7 @@ theorem typedBlockValueClaim_succ {n : Nat} {cfg : Cfg} {results : List Ty} {blo
 theorem typedExprClaim_blockE {n : Nat} {cfg : Cfg} {results : List Ty} {block : Core.Block}
     (body : TypedBlockValueClaim n cfg results block) :
     TypedExprClaim (n + 1) cfg results (.blockE block) := by
-  intro env state source metadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source metadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots⟩ := source.blockEChild
   have hmetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -326,14 +326,14 @@ theorem typedExprClaim_blockE {n : Nat} {cfg : Cfg} {results : List Ty} {block :
   simp only [lowerExpr] at hlow
   simp only [evalExpr]
   exact body env state child hmetadata (by simp [htyping, exprEnv])
-    (by simp [htyping, exprEnv]) ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    (by simp [htyping, exprEnv]) ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
 
 theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Expr}
     {thenBlock elseBlock : Core.Block} (conditionClaim : TypedExprClaim n cfg results cond)
     (thenClaim : TypedBlockValueClaim n cfg results thenBlock)
     (elseClaim : TypedBlockValueClaim n cfg results elseBlock) :
     TypedExprClaim (n + 1) cfg results (.ifE cond thenBlock elseBlock) := by
-  intro env state source metadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source metadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨condition, conditionTyping, conditionRoots, conditionType, next⟩ := source.ifEChildren n
   have conditionMetadata : SourceResults condition.typingEnv condition.rootsEnv results := by
     rw [conditionTyping, conditionRoots]
@@ -346,7 +346,7 @@ theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Exp
   have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv hadv_w
   simp only [evalExpr]
   refine SimEAt.bind (conditionClaim env state condition conditionMetadata ls ls1 cv pt cx fr
-    h1 hpp hext1 hrel hgir hresults) fun va afterCondition pt1 fr1 hdone P1 => ?_
+    h1 hpp hext1 hrel hgir hresults hgenerated) fun va afterCondition pt1 fr1 hdone P1 => ?_
   refine SimEAt.expectBool fun β hva => ?_
   subst hva
   obtain ⟨body, bodyTyping, bodyRoots⟩ := next β afterCondition hdone
@@ -371,6 +371,23 @@ theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Exp
   obtain ⟨htb, heb, hinst, ⟨Ttb, hTtb, hTtbp⟩, ⟨Teb, hTeb, hTebp⟩, hpp2, hpp5, hst2, hv2, hst3, hst6,
     hv16, hv36, hendT, hendF, hkeep, hsz36, hsz6⟩ :=
     branch_facts hf hs1 hadv1 hs2 hadv2 P1.pp hext6
+  have generatedF := (hgenerated.lowerExpr cond h1).fork cv hf
+  obtain ⟨forkIds, forkSize⟩ := fork_ids hf
+  have thenBound : tb < lsf.blocks.size := by
+    have id : tb = ls1.blocks.size := congrArg Prod.fst forkIds
+    rw [id, forkSize]
+    nat_omega
+  have elseBound : eb < lsf.blocks.size := by
+    have id : eb = ls1.blocks.size + 1 := congrArg Prod.snd forkIds
+    rw [id, forkSize]
+    nat_omega
+  have generated2 := generatedF.setCur (some tb)
+    (by intro current same; cases same; exact thenBound) hs1
+  have generated4 := generated2.lowerBlock none [] true thenBlock trivial ha1
+  have elseBound4 : eb < ls4.blocks.size :=
+    Nat.lt_of_lt_of_le (by rw [setCur_blocks hs1]; exact elseBound) hadv1.ext.1
+  have generated5 := generated4.setCur (some eb)
+    (by intro current same; cases same; exact elseBound4) hs2
   have hpp2' : ls2.pp = some (tb, 0) := hpp2
   have hrel2 : Rel cfg env cx fr1 ls2 := P1.rel.stack_eq hst2
   have hltT : ∀ b, endT = some b → b < ls7.blocks.size := by
@@ -405,7 +422,7 @@ theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Exp
     refine SimEAt.goes (goes_condbr_else0 hinst' hcv hTeb hTebp rfl) ?_
     have hrel5 : Rel cfg env cx fr1 ls5 := P1.rel.stack_eq (by rw [e5]; exact hst3)
     refine SimEAt.mono_goes (elseClaim env afterCondition body bodyMetadata bodyLoops bodyInExpr
-      ls5 ls7 vf (eb, 0) cx fr1 ha2 hpp5 hext6 hrel5 hgir hresults) ?_
+      ls5 ls7 vf (eb, 0) cx fr1 ha2 hpp5 hext6 hrel5 hgir hresults generated5) ?_
     intro v finalState pt7 fr7 blockDone P7
     obtain ⟨blk7, hc7', hb7, hp7⟩ := LS.pp_some P7.pp
     have hendF' : endF = some pt7.1 := by rw [e7c]; exact hc7'
@@ -429,7 +446,7 @@ theorem typedExprClaim_ifE {n : Nat} {cfg : Cfg} {results : List Ty} {cond : Exp
     simp only [↓reduceIte]
     refine SimEAt.goes (goes_condbr_then0 hinst' hcv hTtb hTtbp rfl) ?_
     refine SimEAt.mono_goes (thenClaim env afterCondition body bodyMetadata bodyLoops bodyInExpr
-      ls2 ls4 vt (tb, 0) cx fr1 ha1 hpp2' hext4 hrel2 hgir hresults) ?_
+      ls2 ls4 vt (tb, 0) cx fr1 ha1 hpp2' hext4 hrel2 hgir hresults generated2) ?_
     intro v finalState pt3 fr3 blockDone P3
     obtain ⟨blk3, hc3, hb3, hp3⟩ := LS.pp_some P3.pp
     have hendT' : endT = some pt3.1 := by rw [e4c]; exact hc3

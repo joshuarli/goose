@@ -12,7 +12,8 @@ theorem stmt_append_typed_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
     (hplace : TypedPlaceClaim n cfg results owner) (hview : TypedViewClaim n cfg results src)
     (hlow : lowerStmt loop (.append owner src org) (lowerEnv cfg.mod env.vars results) ls = ((), ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
-    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results) :
+    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results)
+    (hgenerated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.append owner src org))
       (fun flow pt' fr' => flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) state := by
   obtain ⟨destination, typingEq, rootsEq, children⟩ := source.appendChildren
@@ -24,13 +25,13 @@ theorem stmt_append_typed_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
   have hext2 : ExtT ls2 cx.fn.blocks := hext.of_adv (adv_emitEffect h3)
   have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (advB_lowerView src _ _ _ _ h2)
   simp only [execStmt]
-  refine SimEAt.bind (hplace env state destination metadata ls ls1 rp pt cx fr h1 hpp hext1 hrel hgir hresults)
+  refine SimEAt.bind (hplace env state destination metadata ls ls1 rp pt cx fr h1 hpp hext1 hrel hgir hresults hgenerated)
     fun l afterPlace pt1 fr1 donePlace P1 => ?_
   obtain ⟨viewSource, viewTyping, viewRoots⟩ := children n l afterPlace donePlace
   have viewMetadata : SourceResults viewSource.typingEnv viewSource.rootsEnv results := by
     rw [viewTyping, viewRoots]
     exact hmetadata
-  refine SimEAt.bind (hview env afterPlace viewSource viewMetadata ls1 ls2 vw pt1 cx fr1 h2 P1.pp hext2 P1.rel hgir hresults)
+  refine SimEAt.bind (hview env afterPlace viewSource viewMetadata ls1 ls2 vw pt1 cx fr1 h2 P1.pp hext2 P1.rel hgir hresults (hgenerated.lowerPlace owner h1))
     fun vwv afterView pt2 fr2 _ P2 => ?_
   have P12 := P1.comp P2
   have hl : fr2.vals[rp]? = some (.val (.ref l)) := P12.has (rp, _) (by simp)
@@ -47,9 +48,9 @@ theorem typedStatementLoopSimulation_append {n : Nat} {cfg : Cfg} {results : Lis
     (hplace : TypedPlaceClaim n cfg results owner) (hview : TypedViewClaim n cfg results src) :
     TypedStatementLoopSimulation (n + 1) cfg results loop (.append owner src org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   have resultEq : result = () := Subsingleton.elim _ _
   subst result
-  exact (stmt_append_typed_sim source hmetadata hplace hview hlow hpp hext hrel hgir hresults).prepareNormalLoopFlow
+  exact (stmt_append_typed_sim source hmetadata hplace hview hlow hpp hext hrel hgir hresults hgenerated).prepareNormalLoopFlow
 
 end Goose.Lower

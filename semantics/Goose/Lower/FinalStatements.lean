@@ -12,7 +12,8 @@ theorem stmt_assert_expr_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
     (hexpr : TypedExprClaim n cfg results expr)
     (hlow : lowerStmt loop (.assertS expr org) (lowerEnv cfg.mod env.vars results) ls = ((), ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
-    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results) :
+    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results)
+    (hgenerated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.assertS expr org))
       (fun flow pt' fr' => flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) state := by
   simp only [lowerStmt, bind_eq] at hlow
@@ -20,7 +21,7 @@ theorem stmt_assert_expr_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
   have hadv_w : ls1.Adv ls' := advB_assert_core cv org _ _ _ _ hw
   have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv hadv_w
   simp only [execStmt]
-  refine SimEAt.bind (hexpr env state source hmetadata ls ls1 cv pt cx fr h1 hpp hext1 hrel hgir hresults) fun va after pt1 fr1 _ P1 => ?_
+  refine SimEAt.bind (hexpr env state source hmetadata ls ls1 cv pt cx fr h1 hpp hext1 hrel hgir hresults hgenerated) fun va after pt1 fr1 _ P1 => ?_
   refine SimEAt.expectBool fun β hva => ?_
   subst hva
   have hcv : fr1.vals[cv]? = some (.val (.bool β)) := P1.has (cv, _) (by simp)
@@ -81,7 +82,8 @@ theorem stmt_exit_expr_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
     (hexpr : TypedExprClaim n cfg results expr)
     (hlow : lowerStmt loop (.exit expr org) (lowerEnv cfg.mod env.vars results) ls = ((), ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
-    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results) :
+    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results)
+    (hgenerated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.exit expr org))
       (fun flow pt' fr' => flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) state := by
   simp only [lowerStmt, bind_eq] at hlow
@@ -89,7 +91,7 @@ theorem stmt_exit_expr_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
   have hextMiddle := hext.of_adv (adv_emitTerm terminated)
   simp only [execStmt]
   refine SimEAt.bind (hexpr env state source hmetadata ls middle id pt cx fr evaluated hpp
-    hextMiddle hrel hgir hresults) fun value after pt' fr' _ P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun value after pt' fr' _ P => ?_
   refine SimEAt.expectInt fun ty number hvalue => ?_
   subst value
   have cell := P.has (id, .val (.int ty number)) (by simp)
@@ -101,27 +103,27 @@ theorem typedStatementLoopSimulation_assert {n : Nat} {cfg : Cfg} {results : Lis
     (hexpr : TypedExprClaim n cfg results expr) :
     TypedStatementLoopSimulation (n + 1) cfg results loop (.assertS expr org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   obtain ⟨child, htyping, hroots, _⟩ := source.assertChild
   have metadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
   have resultEq : result = () := Subsingleton.elim _ _
   subst result
-  exact (stmt_assert_expr_sim child metadata hexpr hlow hpp hext hrel hgir hresults).prepareNormalLoopFlow
+  exact (stmt_assert_expr_sim child metadata hexpr hlow hpp hext hrel hgir hresults hgenerated).prepareNormalLoopFlow
 
 theorem typedStatementLoopSimulation_exit {n : Nat} {cfg : Cfg} {results : List Ty}
     {loop : Option LoopCtx} {expr : Expr} {org : OriginId}
     (hexpr : TypedExprClaim n cfg results expr) :
     TypedStatementLoopSimulation (n + 1) cfg results loop (.exit expr org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   obtain ⟨child, _, htyping, hroots, _⟩ := source.exitChild
   have metadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
   have resultEq : result = () := Subsingleton.elim _ _
   subst result
-  exact (stmt_exit_expr_sim child metadata hexpr hlow hpp hext hrel hgir hresults).prepareNormalLoopFlow
+  exact (stmt_exit_expr_sim child metadata hexpr hlow hpp hext hrel hgir hresults hgenerated).prepareNormalLoopFlow
 
 end Goose.Lower
