@@ -31,6 +31,8 @@ theorem global_provenance_seed (module : Core.Module) (global : Core.Global)
     (vt : Array (Option VTy)) (upper : Prov) :
     ProvenanceBelow (provStart vt (lowerGlobal module global).init) upper := by
   apply provStart_below_of_entry_seeds
+  · intro slot root member
+    simp [Func.slotRootSeeds, rootsAt, lowerGlobal] at member
   intro block row pair member reference
   rw [cfg_global_entry_parameters module global block row] at member
   cases member
