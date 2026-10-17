@@ -793,12 +793,58 @@ def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
 def rootsOverlap (a b : List RootRef) : Bool :=
   a.isEmpty || b.isEmpty || a.any (fun x => b.any (Goose.Core.rootsMayOverlap x))
 
+structure FnInfo where
+  label : String
+  f : Func
+  vt : Array (Option VTy)
+
+
+/-- Every function of the module with the name the diagnostics use: the
+implementations, then the initializers. -/
+def Module.labelled (m : Module) : List (String × Func) :=
+  (m.funcs.toList.map fun f => (s!"function {f.name}", f)) ++
+  (m.globals.toList.map fun g => (s!"initializer of global {g.name}", g.init))
+
+
+def Module.infos (m : Module) : List FnInfo :=
+  m.labelled.map fun (l, f) => FnInfo.mk l f (f.valueTypes m)
+
+/-- The value types of the implementations, in order. -/
+def Module.implTypes (m : Module) : Array (Array (Option VTy)) :=
+  (m.infos.take m.funcs.size).map (·.vt) |>.toArray
+
+def Module.rootCount (m : Module) : Nat :=
+  m.globals.size + m.funcs.foldl (fun n f => n + f.params.length + f.slots.size) 0
+
+private def replacementMemoryFreeCallsOf (m : Module) (types : Array (Array (Option VTy)))
+    (results : Array (List RootRef)) (rootCount : Nat) : Array Bool :=
+  let rec certify : Nat → Array Bool → Array Bool
+    | 0, _ => Array.replicate m.funcs.size false
+    | fuel + 1, candidates =>
+        let assumed := { m with funcs := m.funcs.mapIdx fun index callee =>
+          if candidates[index]?.getD false then
+            { callee with summary := .known ⟨[], [], [], [], [], false, false⟩ }
+          else callee }
+        let next := m.funcs.mapIdx fun index callee =>
+          if !(candidates[index]?.getD false) then false else
+            let effects := callee.effectsOfTypes assumed (types[index]?.getD #[])
+              (callee.provenance results (types[index]?.getD #[]) rootCount)
+            !effects.unknown && effects.reads.isEmpty && effects.writes.isEmpty && effects.grows.isEmpty &&
+              effects.shrinks.isEmpty && effects.rebinds.isEmpty
+        if next == candidates then next else certify fuel next
+  certify (m.funcs.size + 1) (Array.replicate m.funcs.size true)
+
+private def replacementMemoryFreeCalls (m : Module) : Array Bool :=
+  let types := m.implTypes
+  replacementMemoryFreeCallsOf m types (resultRoots m types) m.rootCount
+
 abbrev ReplacementRootQuery := Option (List RootRef)
 
 structure ReplacementQueries where
   parameters : Array (Nat × List RootRef)
   values : Array (List RootRef)
   emptyValues : Array Bool
+  memoryFreeCalls : Array Bool
 
 def ReplacementQueries.expand (queries : ReplacementQueries) : RootRef → List RootRef
   | .param index =>
@@ -808,11 +854,15 @@ def ReplacementQueries.expand (queries : ReplacementQueries) : RootRef → List 
   | root => [root]
 
 def replacementRootsEmpty (f : Func) (roots : List RootRef) : Bool :=
-  !roots.isEmpty && (roots.flatMap (ReplacementQueries.mk f.roots.params #[] #[]).expand).isEmpty
+  !roots.isEmpty && (roots.flatMap (ReplacementQueries.mk f.roots.params #[] #[] #[]).expand).isEmpty
 
-def replacementSlotEmpty (f : Func) (vt : Array (Option VTy)) (p : Prov)
-    (empty : Array Bool) (slot : SlotId) : Bool :=
+private def replacementSlotEmpty (memoryFreeCalls : Array Bool) (m : Module)
+    (f : Func) (vt : Array (Option VTy)) (p : Prov) (empty : Array Bool) (slot : SlotId) : Bool :=
   let known := fun value => empty[value]?.getD false
+  let external := fun value =>
+    !known value && ((rootsAt p.vals value).isEmpty || (rootsAt p.vals value).any fun
+      | .local target => target == slot
+      | _ => true)
   let instructions := f.blocks.toList.flatMap (·.insts)
   let writers := instructions.filterMap fun
     | .eff (.slotInit target value _) => if target == slot then some value else none
@@ -820,17 +870,24 @@ def replacementSlotEmpty (f : Func) (vt : Array (Option VTy)) (p : Prov)
         if (rootsAt p.vals address).contains (.local slot) then some value else none
     | _ => none
   let unknownWrite := instructions.any fun
-    | .eff (.store address value _) =>
-        valRefLike vt value && !known address && (rootsAt p.vals address).isEmpty
-    | .def _ (.call _ args _) =>
-        !(args.any fun value => valRefLike vt value && known value) &&
-          args.any fun value => valRefLike vt value && !known value &&
-            ((rootsAt p.vals value).isEmpty || (rootsAt p.vals value).contains (.local slot))
+    | .eff (.store address value _) => valRefLike vt value && !known value && external address
+    | .def _ (.call fn args _) =>
+        match m.funcs[fn]? with
+        | none => true
+        | some callee =>
+            match callee.summary with
+            | .unknown => !(memoryFreeCalls[fn]?.getD false)
+            | .known summary => (summary.writes ++ summary.rebinds).any fun
+                | .global _ => true
+                | .param parameter =>
+                    match args[parameter]? with
+                    | none => true
+                    | some value => external value
     | _ => false
   !writers.isEmpty && writers.all known && !unknownWrite
 
-def replacementParameterContentsStable (m : Module) (f : Func) (vt : Array (Option VTy))
-    (p : Prov) (empty : Array Bool) : Bool :=
+private def replacementParameterContentsStable (memoryFreeCalls : Array Bool)
+    (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) (empty : Array Bool) : Bool :=
   let known := fun value => empty[value]?.getD false
   let external := fun value =>
     !known value && ((rootsAt p.vals value).isEmpty ||
@@ -842,7 +899,7 @@ def replacementParameterContentsStable (m : Module) (f : Func) (vt : Array (Opti
         | none => true
         | some callee =>
             match callee.summary with
-            | .unknown => true
+            | .unknown => !(memoryFreeCalls[fn]?.getD false)
             | .known summary => (summary.writes ++ summary.rebinds).any fun
                 | .global _ => true
                 | .param parameter =>
@@ -851,7 +908,7 @@ def replacementParameterContentsStable (m : Module) (f : Func) (vt : Array (Opti
                     | some value => external value
     | _ => false
 
-def replacementEmptyOp (f : Func) (vt : Array (Option VTy)) (p : Prov)
+private def replacementEmptyOp (memoryFreeCalls : Array Bool) (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
     (empty : Array Bool) (parameterContents : Bool) (result : ValueId) (op : Op) : Bool :=
   let known := fun value => empty[value]?.getD false
   if !valRefLike vt result || !(rootsAt p.vals result).isEmpty then false else
@@ -861,17 +918,17 @@ def replacementEmptyOp (f : Func) (vt : Array (Option VTy)) (p : Prov)
     | .sliceView value | .push value _ _ | .snapshot _ value => known value
     | .load address =>
         known address || (!(rootsAt p.vals address).isEmpty && (rootsAt p.vals address).all fun
-          | .local slot => replacementRootsEmpty f (rootsAt p.slots slot) || replacementSlotEmpty f vt p empty slot
+          | .local slot => replacementRootsEmpty f (rootsAt p.slots slot) || replacementSlotEmpty memoryFreeCalls m f vt p empty slot
           | .param parameter =>
               (vt[result]?).any (fun | some (.data (.slice ..)) => true | _ => false) &&
                 (f.params[parameter]?).any Ty.isRefSlice &&
                 parameterContents &&
                 (f.roots.contents.find? (·.1 == parameter)).any
-                  (fun row => (row.2.flatMap (ReplacementQueries.mk f.roots.params #[] #[]).expand).isEmpty)
+                  (fun row => (row.2.flatMap (ReplacementQueries.mk f.roots.params #[] #[] #[]).expand).isEmpty)
           | .global _ => false)
     | _ => false
 
-def replacementEmptyRound (f : Func) (vt : Array (Option VTy)) (p : Prov)
+private def replacementEmptyRound (memoryFreeCalls : Array Bool) (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
     (empty : Array Bool) (parameterContents : Bool) : Array Bool × Bool := Id.run do
   let mut empty := empty
   let mut changed := false
@@ -885,35 +942,57 @@ def replacementEmptyRound (f : Func) (vt : Array (Option VTy)) (p : Prov)
         changed := true
     for inst in block.insts do
       if let .def value op := inst then
-        if replacementEmptyOp f vt p empty parameterContents value op && !empty[value]?.getD false && value < empty.size then
+        if replacementEmptyOp memoryFreeCalls m f vt p empty parameterContents value op && !empty[value]?.getD false && value < empty.size then
           empty := empty.set! value true
           changed := true
   return (empty, changed)
 
-def replacementEmptyCandidate (f : Func) (vt : Array (Option VTy)) (p : Prov)
+private def replacementEmptyCandidate (memoryFreeCalls : Array Bool) (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
     (parameterContents : Bool) : Array Bool := Id.run do
   let mut empty := p.vals.map (replacementRootsEmpty f)
   let mut changed := true
   let mut fuel := p.vals.size + 1
   while changed && fuel > 0 do
-    let (next, progress) := replacementEmptyRound f vt p empty parameterContents
+    let (next, progress) := replacementEmptyRound memoryFreeCalls m f vt p empty parameterContents
     empty := next
     changed := progress
     fuel := fuel - 1
   return empty
 
+private def replacementEmptyValuesUsing (memoryFreeCalls : Array Bool)
+    (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) : Array Bool :=
+  let candidate := replacementEmptyCandidate memoryFreeCalls m f vt p (parameterContents := true)
+  if replacementParameterContentsStable memoryFreeCalls m f vt p candidate then candidate
+  else replacementEmptyCandidate memoryFreeCalls m f vt p (parameterContents := false)
+
 def replacementEmptyValues (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) : Array Bool :=
-  let candidate := replacementEmptyCandidate f vt p (parameterContents := true)
-  if replacementParameterContentsStable m f vt p candidate then candidate
-  else replacementEmptyCandidate f vt p (parameterContents := false)
+  replacementEmptyValuesUsing (replacementMemoryFreeCalls m) m f vt p
+
+private def replacementQueriesUsing (memoryFreeCalls : Array Bool)
+    (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) : ReplacementQueries :=
+  ⟨f.roots.params, p.vals, replacementEmptyValuesUsing memoryFreeCalls m f vt p, memoryFreeCalls⟩
 
 def replacementQueries (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) : ReplacementQueries :=
-  ⟨f.roots.params, p.vals, replacementEmptyValues m f vt p⟩
+  replacementQueriesUsing (replacementMemoryFreeCalls m) m f vt p
 
 def ReplacementQueries.value (queries : ReplacementQueries) (value : ValueId) : ReplacementRootQuery :=
   match rootsAt queries.values value with
   | [] => if queries.emptyValues[value]?.getD false then some [] else none
   | roots => some (roots.flatMap queries.expand)
+
+theorem replacementQueries_value (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
+    (value : ValueId) :
+    (replacementQueries m f vt p).value value =
+      match rootsAt p.vals value with
+      | [] => if (replacementEmptyValues m f vt p)[value]?.getD false then some [] else none
+      | roots => some (roots.flatMap f.expandParameterRoot) := by
+  cases roots : rootsAt p.vals value with
+  | nil =>
+    simp only [ReplacementQueries.value, replacementQueries, replacementQueriesUsing, roots]
+    rfl
+  | cons root rest =>
+    simp only [ReplacementQueries.value, replacementQueries, replacementQueriesUsing, roots]
+    rfl
 
 def replacementOverlap (left right : ReplacementRootQuery) : Bool :=
   match left, right with
@@ -931,7 +1010,7 @@ def callSummaryRoots (m : Module) (queries : ReplacementQueries) (fn : FnId)
   | none => none
   | some callee =>
     match callee.summary with
-    | .unknown => none
+    | .unknown => if queries.memoryFreeCalls[fn]?.getD false then some [] else none
     | .known summary =>
       let touched := summary.reads ++ summary.writes ++ summary.grows ++
         summary.shrinks ++ summary.rebinds
@@ -1063,10 +1142,10 @@ def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Replacem
       violation .v060 s!"{label}: x_replace owner was not cleared on every path"
   | _ => pure ()
 
-def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Option VTy))
+private def checkShrinkReplaceUsing (memoryFreeCalls : Array Bool) (m : Module) (label : String) (f : Func) (vt : Array (Option VTy))
     (p : Prov) : Check Unit := do
   if m.profile == .shrink then
-    let p := replacementQueries m f vt p
+    let p := replacementQueriesUsing memoryFreeCalls m f vt p
     let validRuns := freshRuns f vt
     let states := emptyFactsAtBlocks m f vt p
     for h : b in [0:f.blocks.size] do
@@ -1078,12 +1157,26 @@ def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Opt
         checkReplace m f vt p validRuns label current inst
         current := transferEmptyInst m vt p current inst
 
-/-! ### The module -/
+def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Option VTy))
+    (p : Prov) : Check Unit :=
+  checkShrinkReplaceUsing (replacementMemoryFreeCalls m) m label f vt p
 
-structure FnInfo where
-  label : String
-  f : Func
-  vt : Array (Option VTy)
+theorem checkShrinkReplace_eq (m : Module) (label : String) (f : Func) (vt : Array (Option VTy))
+    (p : Prov) : checkShrinkReplace m label f vt p = (do
+  if m.profile == .shrink then
+    let p := replacementQueries m f vt p
+    let validRuns := freshRuns f vt
+    let states := emptyFactsAtBlocks m f vt p
+    for h : b in [0:f.blocks.size] do
+      let some block := f.blocks[b]? | pure ()
+      let some facts := states[b]? |>.join |
+        violation .v060 s!"{label}: no clear-state proof for block {b}"
+      let mut current := facts
+      for inst in block.insts do
+        checkReplace m f vt p validRuns label current inst
+        current := transferEmptyInst m vt p current inst ) := rfl
+
+/-! ### The module -/
 
 /-- The summary of function `k` closes over the effects of its body. -/
 def checkSummaryOf (m : Module) (vts : Array (Array (Option VTy))) (res : Array (List RootRef))
@@ -1095,25 +1188,9 @@ def checkSummaryOf (m : Module) (vts : Array (Array (Option VTy))) (res : Array 
     let vt := vts[k]?.getD #[]
     asCheck .v050 s!"function {f.name}" (f.summaryClosed (f.effects m (f.provenance res vt nRoots)))
 
-/-- Every function of the module with the name the diagnostics use: the
-implementations, then the initializers. -/
-def Module.labelled (m : Module) : List (String × Func) :=
-  (m.funcs.toList.map fun f => (s!"function {f.name}", f)) ++
-  (m.globals.toList.map fun g => (s!"initializer of global {g.name}", g.init))
-
 def checkUnreachable (m : Module) : Check Unit :=
   let mayReturn := m.functionsMayReturn
   checkAll m.labelled fun (label, f) => checkUnreachableOf mayReturn label f
-
-def Module.infos (m : Module) : List FnInfo :=
-  m.labelled.map fun (l, f) => FnInfo.mk l f (f.valueTypes m)
-
-/-- The value types of the implementations, in order. -/
-def Module.implTypes (m : Module) : Array (Array (Option VTy)) :=
-  (m.infos.take m.funcs.size).map (·.vt) |>.toArray
-
-def Module.rootCount (m : Module) : Nat :=
-  m.globals.size + m.funcs.foldl (fun n f => n + f.params.length + f.slots.size) 0
 
 def validate (m : Module) : Check Unit := do
   checkEntryAndGlobals m
@@ -1129,12 +1206,13 @@ def validate (m : Module) : Check Unit := do
     checkPermissions m i.label i.f i.vt
   checkAll walks fun w => do
     if let some msg := w.scopes then violation .v040 msg
-  -- Summaries are closed over what each body does, with each callee's own summary.
-  let res := resultRoots m m.implTypes
-  checkAll (List.range m.funcs.size) (checkSummaryOf m m.implTypes res m.rootCount)
+  let types := m.implTypes
+  let res := resultRoots m types
+  checkAll (List.range m.funcs.size) (checkSummaryOf m types res m.rootCount)
+  let memoryFreeCalls := replacementMemoryFreeCallsOf m types res m.rootCount
   checkAll m.infos fun i =>
     let p := i.f.provenance res i.vt m.rootCount
-    checkShrinkReplace m i.label i.f i.vt p
+    checkShrinkReplaceUsing memoryFreeCalls m i.label i.f i.vt p
   checkAll m.infos fun i => asCheck .v080 i.label (checkEvidence m i.f i.vt)
   checkAll m.infos fun i => checkOrigins m.profile i.label i.f
 

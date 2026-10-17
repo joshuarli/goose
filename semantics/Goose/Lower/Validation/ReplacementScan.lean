@@ -70,7 +70,7 @@ theorem checkShrinkReplace_of_blocks (module : GIR.Module) (func : Func)
     (types : Array (Option VTy)) (provenance : Prov) (label : String)
     (safe : ReplacementBlocksSafe module func types provenance) :
     checkShrinkReplace module label func types provenance = .ok () := by
-  unfold checkShrinkReplace
+  rw [checkShrinkReplace_eq]
   split
   · dsimp only
     apply Eq.trans (congrArg (fun result : Check PUnit => result >>= fun _ => pure ()) (a₂ := .ok PUnit.unit) ?_) rfl

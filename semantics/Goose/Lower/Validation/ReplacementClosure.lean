@@ -70,8 +70,8 @@ theorem replacementQueries_known_of_member (module : GIR.Module) (types : Array 
   cases raw : rootsAt provenance.vals value with
   | nil => simp [raw] at member
   | cons first rest =>
-    exact ⟨(first :: rest).flatMap (replacementQueries module func types provenance).expand, by
-      simp only [ReplacementQueries.value, replacementQueries, raw]⟩
+    exact ⟨(first :: rest).flatMap func.expandParameterRoot, by
+      simp only [replacementQueries_value, raw]⟩
 
 theorem replacementRootsWithin_of_member (module : GIR.Module) (types : Array (Option VTy)) {func : Func} {provenance : Prov} {value : ValueId}
     {root : RootRef} {source : List RootRef} (member : root ∈ rootsAt provenance.vals value)

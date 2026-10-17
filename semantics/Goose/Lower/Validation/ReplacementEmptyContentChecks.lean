@@ -151,4 +151,48 @@ private def globalMutationWithEmptyArgument (knownSummary : Bool) : GIR.Module :
 #guard match GIR.validate (globalMutationWithEmptyArgument false) with | .error e => e.code == .v060 | _ => false
 #guard match GIR.validate (globalMutationWithEmptyArgument true) with | .error e => e.code == .v060 | _ => false
 
+private def globalMutationThroughChain : GIR.Module :=
+  let input := globalMutation false
+  let wrapper : GIR.Func :=
+    { emptyMain with
+      name := "mutating_wrapper", blocks := #[⟨[], [.def 0 (.call 2 [] (some 0)), .term (.ret [] (some 0))]⟩] }
+  { input with funcs := (input.funcs.modify 1 fun receiver =>
+      { receiver with blocks := receiver.blocks.modify 0 fun block =>
+        { block with insts := block.insts.map fun
+          | .def value (.call _ args origin) => .def value (.call 3 args origin)
+          | inst => inst } }).push wrapper }
+#guard match GIR.validate globalMutationThroughChain with | .error e => e.code == .v060 | _ => false
+
+private def changedLocalContents (knownSummary : Bool) : GIR.Module :=
+  let receiver : GIR.Func :=
+    { emptyMain with
+      name := "replace_local_copy", params := [.ref .readOnly sliceTy, sliceTy, sliceTy],
+      slots := #[⟨sliceTy, .mutable, 0, 0⟩],
+      roots := { params := #[(0, [.param 0]), (1, [.global 0]), (2, [])], contents := #[(0, [])] },
+      blocks := #[⟨[(0, .data (.ref .readOnly sliceTy)), (7, .data sliceTy), (8, .data sliceTy)],
+        [.eff (.enter 0), .def 1 (.arrLit ownerTy []), .def 2 (.globalAddr 0), .def 3 (.load 0),
+          .eff (.slotInit 0 3 (some 0)), .def 9 (.slotAddr 0), .def 10 (.call 2 [9, 7, 8] (some 0)),
+          .eff (.clear 2 (some 0)), .def 11 (.load 9), .def 4 (.sliceView 11), .def 5 (.viewLen 4),
+          .def 6 (.arrLit ownerTy [5]), .eff (.replace 2 6 (some 0)),
+          .eff (.leave 0), .term (.ret [] (some 0))]⟩] }
+  let callee : GIR.Func :=
+    { emptyMain with
+      name := "mutate_local_copy", params := [mutableHolder, sliceTy, sliceTy],
+      roots := { params := #[(0, [.param 0]), (1, [.param 1]), (2, [.param 2])] },
+      summary := if knownSummary then .known ⟨[], [.param 0], [], [], [.param 0], false, false⟩ else .unknown,
+      blocks := #[⟨[(0, .data mutableHolder), (1, .data sliceTy), (2, .data sliceTy)],
+        [.eff (.store 0 1 (some 0)), .term (.ret [] (some 0))]⟩] }
+  rawModule receiver #[callee]
+#guard match GIR.validate (changedLocalContents false) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (changedLocalContents true) with | .error e => e.code == .v060 | _ => false
+
+private def unchangedLocalContents (knownSummary : Bool) : GIR.Module :=
+  let input := changedLocalContents knownSummary
+  { input with funcs := input.funcs.modify 2 fun callee =>
+    { callee with
+      summary := if knownSummary then .known ⟨[], [], [], [], [], false, false⟩ else .unknown,
+      blocks := callee.blocks.map fun block => { block with insts := [.term (.ret [] (some 0))] } } }
+#guard (GIR.validate (unchangedLocalContents false)).toBool
+#guard (GIR.validate (unchangedLocalContents true)).toBool
+
 end Goose.Lower.Validation.ReplacementEmptyContentChecks

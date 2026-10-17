@@ -261,10 +261,9 @@ theorem replacementQueries_values (module : GIR.Module) (func : Func) (types : A
   cases roots : rootsAt provenance.vals value with
   | nil =>
     by_cases empty : (replacementEmptyValues module func types provenance)[value]?.getD false = true
-    all_goals simp [ReplacementQueries.value, replacementQueries, roots, empty]
+    all_goals simp [replacementQueries_value, roots, empty]
   | cons root rest =>
-    simp only [ReplacementQueries.value, replacementQueries, roots, Option.getD_some]
-    rfl
+    simp only [replacementQueries_value, roots, Option.getD_some]
 
 theorem replacementQueries_known_empty (module : GIR.Module) (func : Func) (types : Array (Option VTy)) (provenance : Prov) (value : ValueId)
     (present : rootsAt provenance.vals value ≠ [])
@@ -274,8 +273,7 @@ theorem replacementQueries_known_empty (module : GIR.Module) (func : Func) (type
   cases roots : rootsAt provenance.vals value with
   | nil => exact False.elim (present roots)
   | cons root rest =>
-    simp only [ReplacementQueries.value, replacementQueries, roots]
-    change some ((root :: rest).flatMap (replacementQueries module func types provenance).expand) = some []
+    simp only [replacementQueries_value, roots]
     change some ((root :: rest).flatMap func.expandParameterRoot) = some []
     exact congrArg some (roots ▸ normalized)
 
@@ -283,7 +281,7 @@ theorem replacementQueries_unknown (module : GIR.Module) (func : Func) (types : 
     (unknown : rootsAt provenance.vals value = [])
     (notEmpty : (replacementEmptyValues module func types provenance)[value]?.getD false = false) :
     (replacementQueries module func types provenance).value value = none := by
-  simp [ReplacementQueries.value, replacementQueries, unknown, notEmpty]
+  simp [replacementQueries_value, unknown, notEmpty]
 
 theorem replacementQueries_slotAddr (module : GIR.Module) (results : Array (List RootRef)) (types : Array (Option VTy))
     (func : Func) (rootCount : Nat) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
