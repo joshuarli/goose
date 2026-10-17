@@ -45,7 +45,6 @@ class ProcessCleanupFailure(Exception):
 @dataclass(frozen=True)
 class Build:
     module: str
-    selector: str
     command: tuple[str, ...]
 
 
@@ -190,23 +189,11 @@ def scratch_lakefile(semantics_root):
         lakefile.unlink(missing_ok=True)
 
 
-def make_builds(semantics_root, lakefile, modules):
-    builds = []
-    for module in modules:
-        selector = f"+{module}:olean"
-        command = (
-            "lake",
-            "--dir",
-            str(semantics_root),
-            "--file",
-            str(lakefile.resolve()),
-            "--rehash",
-            "--verbose",
-            "build",
-            selector,
-        )
-        builds.append(Build(module, selector, command))
-    return builds
+def make_build(semantics_root, lakefile, modules):
+    helper = Path(__file__).with_name("verify_closure.lean").resolve()
+    command = ("lean", "-j1", "-M4096", "--run", str(helper), str(semantics_root),
+               str(lakefile.resolve()), *modules)
+    return Build("module closure", command)
 
 
 def _signal_group(process, signum, kill_group):
@@ -238,7 +225,7 @@ def terminate_process_group(process, kill_group=None, pause=None):
         try:
             process.wait()
         except BaseException as error:
-            failures.append(f"waiting for Lake failed: {error}")
+            failures.append(f"waiting for verifier failed: {error}")
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
     if failures:
@@ -266,7 +253,7 @@ def run_build(build, semantics_root, environment, popen=None, kill_group=None, p
             try:
                 terminate_process_group(process, kill_group, pause)
             except BaseException as cleanup_error:
-                print(f"Lake cleanup failed: {cleanup_error}", file=sys.stderr, flush=True)
+                print(f"verifier cleanup failed: {cleanup_error}", file=sys.stderr, flush=True)
         raise
     if returncode:
         raise BuildFailure(build.module, returncode)
@@ -279,13 +266,10 @@ def verify(semantics_root, roots, popen=None, kill_group=None, pause=None):
     environment["TMPDIR"] = str(semantics_root.parent / ".work" / "tmp")
     environment["LEAN_NUM_THREADS"] = "1"
     with scratch_lakefile(semantics_root) as lakefile:
-        builds = make_builds(semantics_root, lakefile, modules)
-        print(f"closure: {len(builds)} modules", flush=True)
-        for index, build in enumerate(builds, 1):
-            print(f"[{index}/{len(builds)}] {build.selector}", flush=True)
-            print(f"$ {shlex.join(build.command)}", flush=True)
-            run_build(build, semantics_root, environment, popen, kill_group, pause)
-            print(f"built {build.selector}", flush=True)
+        build = make_build(semantics_root, lakefile, modules)
+        print(f"closure: {len(modules)} modules", flush=True)
+        print(f"$ {shlex.join(build.command)}", flush=True)
+        run_build(build, semantics_root, environment, popen, kill_group, pause)
         print("all module roots built", flush=True)
 
 
