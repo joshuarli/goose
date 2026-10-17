@@ -1,6 +1,7 @@
 import Goose.Lower.Validation.ExpressionTypingAuthority
 import Goose.Lower.Validation.DenseDefinitions
 import Goose.Lower.Validation.ValueTypes
+import Goose.Lower.GeneratedTargets
 
 namespace Goose.Lower.Validation
 
@@ -352,6 +353,138 @@ theorem ContentsClosed.emitDef_extend {le : LEnv} {before after : LS}
       rw [permitted, fresh] at bound
       exact (Nat.lt_irrefl _ bound).elim
 
+theorem permissionEdge_target {term : Term} {edge : BlockId × List ValueId}
+    (member : edge ∈ term.permissionEdges) : edge.1 ∈ term.successors := by
+  cases term <;> simp_all [Term.permissionEdges, Term.successors]
+  rcases member with rfl | rfl <;> simp
+
+theorem permissionFunc_target_bound {le : LEnv} {state : LS} (bounded : TargetsBounded state)
+    {block : GIR.Block} (blockMember : block ∈ (permissionFunc le state).blocks.toList)
+    {term : Term} (member : Inst.term term ∈ block.insts) {edge : BlockId × List ValueId}
+    (edgeMember : edge ∈ term.permissionEdges) : edge.1 < state.blocks.size := by
+  have instMember : Inst.term term ∈ state.insts := by
+    simp only [permissionFunc, Array.toList_map, List.mem_map] at blockMember
+    obtain ⟨actual, actualMember, rfl⟩ := blockMember
+    exact List.mem_flatMap.mpr ⟨actual, actualMember, member⟩
+  exact Goose.Lower.TargetsBounded.instTargets bounded (.term term) instMember edge.1
+    (permissionEdge_target edgeMember)
+
+theorem paramIds_lower_bound {types : List VTy} {values : Array (Option VTy)}
+    {param : ValueId × VTy} (member : param ∈ (paramIds types values).zip types) :
+    values.size ≤ param.1 := by
+  have belongs := (List.of_mem_zip member).1
+  change param.1 ∈ (List.range types.length).map (values.size + ·) at belongs
+  obtain ⟨index, _, equation⟩ := List.mem_map.mp belongs
+  rw [← equation]
+  exact Nat.le_add_right _ _
+
+theorem newBlock_frame_blocks {le : LEnv} {before after : LS} {types : List VTy}
+    {result : BlockId × List ValueId} (run : newBlock types le before = (result, after))
+    {block : GIR.Block} (member : block ∈ (permissionFunc le after).blocks.toList) :
+    block ∈ (permissionFunc le before).blocks.toList ∨
+      block = ⟨(paramIds types before.vals).zip types, []⟩ := by
+  rw [newBlock_run_general] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  simpa only [permissionFunc, Array.map_push, Array.toList_push, List.mem_append,
+    List.mem_singleton] using member
+
+theorem newBlock_frame_at {le : LEnv} {before after : LS} {types : List VTy}
+    {result : BlockId × List ValueId} (run : newBlock types le before = (result, after))
+    {target : BlockId} {block : GIR.Block} (row : (permissionFunc le after).blocks[target]? = some block) :
+    (permissionFunc le before).blocks[target]? = some block ∨
+      block = ⟨(paramIds types before.vals).zip types, []⟩ := by
+  rw [newBlock_run_general] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  simp only [permissionFunc, Array.map_push, Array.getElem?_push] at row
+  split at row
+  · exact Or.inr (Option.some.inj row).symm
+  · exact Or.inl row
+
+theorem ContentsClosed.newBlock_preserve {le : LEnv} {before after : LS} {types : List VTy}
+    {result : BlockId × List ValueId} {authorized : ValueId → Prop}
+    (checked : before.DenseDefinitions) (bounded : LiveBound before)
+    (run : newBlock types le before = (result, after))
+    (closed : ContentsClosed (le.globals.map (·.2)) le.mod.structs
+      (permissionFunc le before) before.vals authorized) :
+    ContentsClosed (le.globals.map (·.2)) le.mod.structs
+      (permissionFunc le after) after.vals authorized := by
+  have extension := types_newBlock types le before result after run
+  have afterDense := (dense_newBlock types le before result after run checked bounded).1
+  have size : before.vals.size ≤ after.vals.size := by
+    rw [newBlock_run_general] at run
+    obtain ⟨_, rfl⟩ := Prod.mk.inj run
+    simp only [array_size_pushParamTypes]
+    omega
+  have oldBound : ∀ candidate, authorized candidate → candidate < before.vals.size := by
+    intro candidate member
+    simpa only [permissionFunc_numValues checked le] using closed.bounded candidate member
+  constructor
+  · intro value member
+    rw [permissionFunc_numValues afterDense le]
+    exact Nat.lt_of_lt_of_le (oldBound value member) size
+  · intro block row param member permitted
+    rcases newBlock_frame_at run row with oldRow | rfl
+    · exact typedPermissions_retained extension (closed.entry block oldRow param member permitted)
+    · have fresh := paramIds_lower_bound member
+      have old := oldBound param.1 permitted
+      exact (Nat.not_lt_of_ge fresh old).elim
+  · intro block blockMember value op member permitted
+    rcases newBlock_frame_blocks run blockMember with oldBlock | rfl
+    · exact (closed.definitions block oldBlock value op member permitted).retained extension
+    · simp at member
+  · intro block blockMember term member edge edgeMember destination row entry entryMember permitted
+    rcases newBlock_frame_blocks run blockMember with oldBlock | rfl
+    · rcases newBlock_frame_at run row with oldRow | rfl
+      · exact closed.edges block oldBlock term member edge edgeMember destination oldRow entry entryMember permitted
+      · have fresh := paramIds_lower_bound (List.of_mem_zip entryMember).1
+        have old := oldBound entry.1.1 permitted
+        exact (Nat.not_lt_of_ge fresh old).elim
+    · simp at member
+
+theorem newBlock_frame_old_at {le : LEnv} {before after : LS} {types : List VTy}
+    {result : BlockId × List ValueId} (run : newBlock types le before = (result, after))
+    {target : BlockId} (bounded : target < before.blocks.size) :
+    (permissionFunc le after).blocks[target]? = (permissionFunc le before).blocks[target]? := by
+  rw [newBlock_run_general] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  simp only [permissionFunc, Array.map_push]
+  simp only [Array.getElem?_push, Array.size_map, Nat.ne_of_lt bounded, ↓reduceIte]
+
+theorem contentsClosed_newBlock_fresh {le : LEnv} {before after : LS} {types : List VTy}
+    {result : BlockId × List ValueId} {current : BlockId}
+    (checked : before.DenseDefinitions) (bounded : LiveBound before)
+    (targets : TargetsBounded before) (live : before.cur = some current)
+    (run : newBlock types le before = (result, after)) :
+    ContentsClosed (le.globals.map (·.2)) le.mod.structs
+      (permissionFunc le after) after.vals
+      (fun candidate => before.vals.size ≤ candidate ∧ candidate < after.vals.size) := by
+  have afterDense := (dense_newBlock types le before result after run checked bounded).1
+  have nonempty : 0 < before.blocks.size := Nat.zero_lt_of_lt (bounded current live)
+  constructor
+  · intro value member
+    rw [permissionFunc_numValues afterDense le]
+    exact member.2
+  · intro block row param member permitted
+    rw [newBlock_frame_old_at run nonempty] at row
+    have old := permissionFunc_param_bound checked
+      (Array.mem_toList_iff.mpr (Array.mem_of_getElem? row)) member
+    exact (Nat.not_lt_of_ge permitted.1 old).elim
+  · intro block blockMember value op member permitted
+    rcases newBlock_frame_blocks run blockMember with oldBlock | rfl
+    · have old := permissionFunc_def_bound checked oldBlock member
+      exact (Nat.not_lt_of_ge permitted.1 old).elim
+    · simp at member
+  · intro block blockMember term member edge edgeMember destination row entry entryMember permitted
+    rcases newBlock_frame_blocks run blockMember with oldBlock | rfl
+    · have targetBound := permissionFunc_target_bound targets oldBlock member edgeMember
+      rw [newBlock_frame_old_at run targetBound] at row
+      have old := permissionFunc_param_bound checked
+        (Array.mem_toList_iff.mpr (Array.mem_of_getElem? row)) (List.of_mem_zip entryMember).1
+      exact (Nat.not_lt_of_ge permitted.1 old).elim
+    · simp at member
+
+#print axioms ContentsClosed.newBlock_preserve
+#print axioms contentsClosed_newBlock_fresh
 #print axioms ContentsClosed.emitDef_preserve
 #print axioms ContentsClosed.emitDef_extend
 #print axioms emitDef_slot_contents
