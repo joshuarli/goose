@@ -6,6 +6,39 @@ namespace Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
 
 open Goose.Core Goose.GIR
 
+private theorem replayBuilder_recordValueRootRecipe {module : GIR.Module} {results : Array (List RootRef)}
+    {vt : Array (Option VTy)} {func : Func} {target : Core.Eff} {le : LEnv}
+    {scopeCount : Nat} {slots : Array (List RootRef)} {ls : LS} {upper : Prov}
+    (ready : ReplayBuilder module results vt func target le scopeCount slots ls upper)
+    (value : ValueId) (sourceScope : ScopeId) :
+    ReplayBuilder module results vt func target le scopeCount slots
+      (recordValueRootRecipe value sourceScope le ls).2 upper := by
+  let after := (recordValueRootRecipe value sourceScope le ls).2
+  have blocksEq : after.blocks = ls.blocks := by simp [after, recordValueRootRecipe_run]
+  have valuesEq : after.vals = ls.vals := by simp [after, recordValueRootRecipe_run]
+  have currentEq : after.cur = ls.cur := by simp [after, recordValueRootRecipe_run]
+  have instructionsEq : after.insts = ls.insts := by
+    simp only [LS.insts, blocksEq]
+  change ReplayBuilder module results vt func target le scopeCount slots after upper
+  rcases ready with ⟨roots, effects, symbols, current, slotsEq⟩
+  refine ⟨?_, ?_, ?_, ?_, slotsEq⟩
+  · constructor
+    · simpa only [valuesEq] using roots.valueSize
+    · intro instruction member
+      have oldMember : instruction ∈ ls.insts := by simpa only [instructionsEq] using member
+      simpa only [blocksEq] using roots.instructions instruction oldMember
+  · intro instruction member
+    have oldMember : instruction ∈ ls.insts := by simpa only [instructionsEq] using member
+    exact effects instruction oldMember
+  · constructor
+    · simpa [LS.DenseDefinitions, LS.defs, valuesEq, blocksEq] using symbols.definitions
+    · intro instruction member
+      have oldMember : instruction ∈ ls.insts := by simpa only [instructionsEq] using member
+      simpa only [valuesEq, blocksEq] using symbols.instructions instruction oldMember
+  · intro block row
+    have oldRow : ls.cur = some block := by simpa only [currentEq] using row
+    simpa only [blocksEq] using current block oldRow
+
 theorem ifExpression {module : GIR.Module} {results : Array (List RootRef)}
     {vt : Array (Option VTy)} {func : Func} {target : Core.Eff} {le : LEnv}
     {scopeCount : Nat} {slots : Array (List RootRef)} {initial ls : LS} {upper : Prov}
@@ -105,8 +138,13 @@ theorem ifExpression {module : GIR.Module} {results : Array (List RootRef)}
       (fun nonref reachable => (noValue reachable).scalar nonref)
       (value := (Goose.Lower.joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 le noResult.2).1)
       (final := (Goose.Lower.joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 le noResult.2).2) rfl
+    have completedWithRecipe := replayBuilder_recordValueRootRecipe completed
+      (Goose.Lower.joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 le noResult.2).1
+      (sourceBlockScope yes)
     have whole : lowerExpr (.ifE condition yes no) le initial =
-        Goose.Lower.joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 le noResult.2 := by
+        (Goose.Lower.joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 >>= fun value => do
+          recordValueRootRecipe value (sourceBlockScope yes)
+          pure value) le noResult.2 := by
       apply lowerExpr_ifE_after_branches conditionRun current
         (forked := forked) (yesBlock := ls.blocks.size) (noBlock := ls.blocks.size + 1)
         (yesValue := yesResult.1) (noValue := noResult.1) (yesLS := yesResult.2) (noLS := noResult.2)
@@ -114,15 +152,21 @@ theorem ifExpression {module : GIR.Module} {results : Array (List RootRef)}
       · rfl
       · rfl
     rw [whole]
-    refine ⟨finalUpper, completed, returned, ?_⟩
-    intro index bound
-    have middleGrowth : upper.vals.size ≤ middle.vals.size := by
-      rw [yesReady.roots.valueSize, yesCompleted.roots.valueSize]
-      exact yesGrowth.vals
-    have nextGrowth : middle.vals.size ≤ next.vals.size := by
-      rw [noReady.roots.valueSize, noCompleted.roots.valueSize]
-      exact noGrowth.vals
-    exact (retained index (Nat.lt_of_lt_of_le bound (Nat.le_trans middleGrowth nextGrowth))).trans
-      ((noPrefix index (Nat.lt_of_lt_of_le bound middleGrowth)).trans (yesPrefix index bound))
+    refine ⟨finalUpper, completedWithRecipe, ?_, ?_⟩
+    · intro reachable
+      have joinLive : (Goose.Lower.joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 le noResult.2).2.cur.isSome = true := by
+        simpa only [bind_run, recordValueRootRecipe_run, pure_run] using reachable
+      rcases returned joinLive with ⟨valueBound, refined, scalar⟩
+      refine ⟨?_, refined, scalar⟩
+      simpa only [bind_run, recordValueRootRecipe_run, pure_run] using valueBound
+    · intro index bound
+      have middleGrowth : upper.vals.size ≤ middle.vals.size := by
+        rw [yesReady.roots.valueSize, yesCompleted.roots.valueSize]
+        exact yesGrowth.vals
+      have nextGrowth : middle.vals.size ≤ next.vals.size := by
+        rw [noReady.roots.valueSize, noCompleted.roots.valueSize]
+        exact noGrowth.vals
+      exact (retained index (Nat.lt_of_lt_of_le bound (Nat.le_trans middleGrowth nextGrowth))).trans
+        ((noPrefix index (Nat.lt_of_lt_of_le bound middleGrowth)).trans (yesPrefix index bound))
 
 end Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
