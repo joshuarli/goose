@@ -8125,6 +8125,295 @@ CoreModule ConstructionWaitingCompletionWithUnusedEscapeModule(bool stopped) {
     return core;
 }
 
+CoreModule ConstructionBorrowedWaitingLoopModule(bool continueLoop) {
+    CoreModule core;
+    core.profile = CoreProfile::Construction; core.files = { "borrowed-waiting-loop.goose" };
+    auto byte = core.IntType(CoreIntTy::U8), integer = core.IntType(CoreIntTy::I64);
+    auto array = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = byte });
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto literal = [&](CoreTypeId type, const char *text) {
+        auto value = make_unique<CoreExpr>(); value->kind = CoreExprKind::Lit; value->type = type; value->value = text; return value;
+    };
+    CoreImpl entry;
+    entry.name = "entry"; entry.body.scope = 0; entry.summary.outputs = true; entry.summary.aborts = true;
+    entry.vars = { { "output", array, CoreVarKind::Var, 0, origin } };
+    CoreStmt receive; receive.kind = CoreStmtKind::Let; receive.var = 0; receive.org = origin;
+    receive.expr = make_unique<CoreExpr>(); receive.expr->kind = CoreExprKind::Call;
+    receive.expr->ctx = 1; receive.expr->type = array; receive.expr->org = origin;
+    entry.body.stmts.push_back(std::move(receive));
+    CoreStmt print; print.kind = CoreStmtKind::Print; print.org = origin;
+    CorePrintArg shown; shown.kind = CorePrintArg::View; shown.view = make_unique<CoreView>(); shown.view->place = CoreLocal(0);
+    print.print.push_back(std::move(shown)); entry.body.stmts.push_back(std::move(print));
+    CoreImpl producer;
+    producer.name = "producer"; producer.body.scope = 0; producer.summary.constructs = { 0 }; producer.summary.aborts = true;
+    producer.results = { { array, CoreRequest::Value, nullopt } };
+    producer.vars = { { "index", integer, CoreVarKind::Var, 2, origin } };
+    producer.body.value = make_unique<CoreExpr>(); producer.body.value->kind = CoreExprKind::Block;
+    producer.body.value->type = array; producer.body.value->org = origin;
+    producer.body.value->then = make_unique<CoreBlock>(); producer.body.value->then->scope = 1;
+    CoreStmt loop; loop.kind = CoreStmtKind::ForRange; loop.var = 0; loop.org = origin;
+    loop.expr = literal(integer, "0"); loop.expr2 = literal(integer, "1");
+    loop.then = make_unique<CoreBlock>(); loop.then->scope = 2;
+    CoreStmt completed; completed.kind = CoreStmtKind::BreakValue; completed.org = origin;
+    completed.expr = make_unique<CoreExpr>(); completed.expr->kind = CoreExprKind::Arr;
+    completed.expr->type = array; completed.expr->org = origin; completed.expr->elems.push_back(literal(byte, "65"));
+    auto interrupt = make_unique<CoreExpr>(); interrupt->kind = CoreExprKind::Block;
+    interrupt->type = byte; interrupt->org = origin; interrupt->then = make_unique<CoreBlock>(); interrupt->then->scope = 3;
+    CoreStmt jump; jump.kind = continueLoop ? CoreStmtKind::Continue : CoreStmtKind::Break; jump.org = origin;
+    interrupt->then->stmts.push_back(std::move(jump)); interrupt->then->value = literal(byte, "66");
+    completed.expr->elems.push_back(std::move(interrupt)); loop.then->stmts.push_back(std::move(completed));
+    producer.body.value->then->stmts.push_back(std::move(loop));
+    producer.body.value->then->value = make_unique<CoreExpr>(); producer.body.value->then->value->kind = CoreExprKind::Bytes;
+    producer.body.value->then->value->type = array; producer.body.value->then->value->bytes = { 67 }; producer.body.value->then->value->org = origin;
+    core.impls.push_back(std::move(entry)); core.impls.push_back(std::move(producer));
+    core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1, .resultroots = { {} } } };
+    return core;
+}
+
+CoreModule ConstructionBorrowedWaitingChildLoopModule(bool continueLoop) {
+    auto core = ConstructionBorrowedWaitingLoopModule(continueLoop);
+    auto &producer = core.impls[1];
+    auto outer = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = producer.results[0].type });
+    producer.results[0].type = outer;
+    auto child = std::move(producer.body.value);
+    producer.body.value = make_unique<CoreExpr>(); producer.body.value->kind = CoreExprKind::Arr;
+    producer.body.value->type = outer; producer.body.value->org = child->org;
+    producer.body.value->elems.push_back(std::move(child));
+    core.impls[0].vars[0].type = outer;
+    core.impls[0].body.stmts[0].expr->type = outer;
+    return core;
+}
+
+CoreModule ConstructionWaitingNamedSupersessionModule() {
+    auto core = ConstructionBorrowedWaitingLoopModule(false);
+    auto array = core.impls[1].results[0].type;
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto bytes = [&](uint8_t byte) {
+        auto value = make_unique<CoreExpr>(); value->kind = CoreExprKind::Bytes; value->type = array;
+        value->bytes = { byte }; value->org = origin; return value;
+    };
+    auto &producer = core.impls[1]; producer.vars = { { "named", array, CoreVarKind::Var, 0, origin } };
+    producer.results[0].namedLocal = 0;
+    CoreStmt initial; initial.kind = CoreStmtKind::Let; initial.var = 0; initial.expr = bytes(65); initial.org = origin;
+    producer.body.stmts.push_back(std::move(initial));
+    auto &block = *producer.body.value->then; block.stmts.clear();
+    CoreStmt returned; returned.kind = CoreStmtKind::RetValues; returned.org = origin; returned.values.push_back(bytes(66));
+    block.stmts.push_back(std::move(returned));
+    block.value = make_unique<CoreExpr>(); block.value->kind = CoreExprKind::ResultLocal;
+    block.value->var = 0; block.value->type = array; block.value->org = origin;
+    return core;
+}
+
+void ConstructionBorrowedWaitingTokensResumeAfterLoopJumps() {
+    for (bool continueLoop : { false, true }) {
+        auto core = ConstructionBorrowedWaitingLoopModule(continueLoop);
+        CoreWriter writer(core); writer.Write();
+        auto high = GirLowerer(core, writer.FileTable(), writer.OriginTable(),
+            [&](const CoreOrigin &origin) { return writer.OriginId(origin); }).Lower();
+        assert(Code(high) == "");
+        assert(Code(GirToLow(high).Lower()) == "");
+    }
+    for (bool continueLoop : { false, true }) {
+        auto core = ConstructionBorrowedWaitingChildLoopModule(continueLoop);
+        CoreWriter writer(core); writer.Write();
+        auto high = GirLowerer(core, writer.FileTable(), writer.OriginTable(),
+            [&](const CoreOrigin &origin) { return writer.OriginId(origin); }).Lower();
+        assert(Code(high) == "");
+        assert(Code(GirToLow(high).Lower()) == "");
+        auto stale = high;
+        set<int> receivingWriters;
+        for (auto &instruction : stale.funcs[1].blocks[0].insts)
+            if (instruction.op == GirOp::DestRenew) receivingWriters.insert(instruction.res);
+        int interruptedWriter = -1;
+        bool changed = false;
+        for (size_t block = 1; block < stale.funcs[1].blocks.size(); block++)
+            for (auto &instruction : stale.funcs[1].blocks[block].insts)
+            if (instruction.op == GirOp::DestRefresh && receivingWriters.count(instruction.b)) {
+                interruptedWriter = instruction.b;
+                instruction.op = GirOp::DestAdapt; instruction.a = instruction.b; instruction.b = -1;
+                instruction.ty = stale.Type(stale.funcs[1].results[0]).elem;
+                instruction.request = CoreRequest::Value; instruction.org = 0; changed = true;
+            }
+        auto error = GirVerifier(stale).Verify();
+        assert(changed && error && error->code == "GIR-V060" && error->message.find("requires its exact receiving refresh") != string::npos);
+        if (!continueLoop) continue;
+        auto backedge = high;
+        int next = 0;
+        for (auto &block : backedge.funcs[1].blocks) {
+            for (auto [value, type] : block.params) next = max(next, value + 1);
+            for (auto &instruction : block.insts) if (GirDefinesValue(instruction)) next = max(next, instruction.res + 1);
+        }
+        changed = false;
+        for (auto &block : backedge.funcs[1].blocks) {
+            auto reserved = find_if(block.insts.begin(), block.insts.end(), [](auto &instruction) { return instruction.op == GirOp::ExitReserve; });
+            if (reserved == block.insts.end()) continue;
+            auto value = Int(backedge, next, "0"); value.ty = backedge.IntType(CoreIntTy::U8);
+            GirInst write; write.op = GirOp::DestWrite; write.a = interruptedWriter; write.b = next; write.org = 0;
+            auto position = reserved - block.insts.begin();
+            block.insts.insert(block.insts.begin() + position, { value, write }); changed = true; break;
+        }
+        error = GirVerifier(backedge).Verify();
+        assert(changed && error && error->code == "GIR-V060" && error->message.find("requires its exact receiving refresh") != string::npos);
+    }
+    auto core = ConstructionWaitingNamedSupersessionModule();
+    CoreWriter writer(core); writer.Write();
+    auto high = GirLowerer(core, writer.FileTable(), writer.OriginTable(),
+        [&](const CoreOrigin &origin) { return writer.OriginId(origin); }).Lower();
+    assert(Code(high) == "");
+    assert(Code(GirToLow(high).Lower()) == "");
+}
+
+GirModule ConstructionWaitingRearmModule() {
+    auto module = ConstructionCallModule();
+    module.funcs[1].summary.aborts = true;
+    Main(module).summary.aborts = true;
+    auto def = [](GirOp op, int result, int source) {
+        auto instruction = Def(op, result); instruction.a = source; instruction.org = 0; return instruction;
+    };
+    GirInst select; select.op = GirOp::ExitSelect; select.a = 2; select.org = 0;
+    GirInst acknowledge; acknowledge.op = GirOp::DestCancel; acknowledge.a = 6; acknowledge.org = 0;
+    GirInst rearm; rearm.op = GirOp::ExitRearm; rearm.a = 2; rearm.org = 0;
+    GirInst release; release.op = GirOp::ExitRelease; release.a = 2; release.org = 0;
+    auto wait = def(GirOp::ExitWait, 2, 1); wait.org = -1;
+    auto cancelled = def(GirOp::ReceivingCancel, 9, 1); cancelled.vals = { 8 };
+    auto acknowledgeResult = acknowledge; acknowledgeResult.a = 9;
+    auto landed = def(GirOp::ExitLand, 10, 2); landed.b = 8;
+    module.funcs[1].blocks[0].insts = { def(GirOp::ReceivingOpen, 1, 0), Enter(0), wait, select,
+        def(GirOp::ReservedDest, 3, 2), def(GirOp::ReceivingOpen, 4, 3), def(GirOp::DestRenew, 5, 4),
+        def(GirOp::ReceivingCancel, 6, 4), acknowledge, rearm, select, def(GirOp::ReservedDest, 7, 2),
+        def(GirOp::DestFinish, 8, 7), cancelled, acknowledgeResult, landed, release, Leave(0), Ret({ 10 }) };
+    return module;
+}
+
+void ConstructionWaitingRearmRequiresTheOriginalCleanedReceipt() {
+    auto module = ConstructionWaitingRearmModule();
+    assert(Code(module) == "");
+    auto low = GirToLow(module).Lower();
+    assert(Code(low) == "");
+    assert(GirWriter(module).Write().find("[\"x_exit_rearm\",2,[0]]") != string::npos);
+    assert(GirWriter(low).WriteLow().find("[\"l_control_exit_rearm\",") != string::npos);
+    for (bool eager : { false, true }) {
+        auto invalid = module;
+        auto &instructions = invalid.funcs[1].blocks[0].insts;
+        if (eager) {
+            instructions[2].op = GirOp::ExitReserve; instructions[2].org = 0;
+            erase_if(instructions, [](auto &instruction) { return instruction.op == GirOp::ExitSelect; });
+        } else {
+            auto rearm = find_if(instructions.begin(), instructions.end(), [](auto &instruction) { return instruction.op == GirOp::ExitRearm; });
+            auto discarded = *rearm; discarded.op = GirOp::ExitDiscard;
+            instructions.insert(rearm, discarded);
+        }
+        assert(Code(invalid) == "GIR-V060");
+        assert(Code(GirToLow(invalid).Lower()) == "GIR-V090");
+    }
+    for (bool completed : { false, true }) {
+        auto invalid = module;
+        auto &instructions = invalid.funcs[1].blocks[0].insts;
+        auto cleanup = find_if(instructions.begin(), instructions.end(), [](auto &instruction) { return instruction.op == GirOp::ExitRearm; });
+        rotate(cleanup - 2, cleanup, cleanup + 1);
+        if (completed) {
+            auto finished = Def(GirOp::DestFinish, 11); finished.a = 5; finished.org = 0;
+            auto rearm = find_if(instructions.begin(), instructions.end(), [](auto &instruction) { return instruction.op == GirOp::ExitRearm; });
+            instructions.insert(rearm, finished);
+        }
+        assert(Code(invalid) == "GIR-V060");
+        assert(Code(GirToLow(invalid).Lower()) == "GIR-V090");
+    }
+    auto repeated = module;
+    auto &instructions = repeated.funcs[1].blocks[0].insts;
+    auto rearm = find_if(instructions.begin(), instructions.end(), [](auto &instruction) { return instruction.op == GirOp::ExitRearm; });
+    auto again = *rearm; instructions.insert(rearm + 1, again);
+    assert(Code(repeated) == "GIR-V060");
+    assert(Code(GirToLow(repeated).Lower()) == "GIR-V090");
+    auto received = ConstructionVariableTargetModule();
+    bool changed = false;
+    for (auto &function : received.funcs) for (auto &block : function.blocks) {
+        auto adopted = find_if(block.insts.begin(), block.insts.end(), [](auto &instruction) { return instruction.op == GirOp::ExitAdopt; });
+        if (adopted == block.insts.end()) continue;
+        GirInst invalid; invalid.op = GirOp::ExitRearm; invalid.a = adopted->res; invalid.org = 0;
+        block.insts.insert(adopted + 1, invalid); changed = true;
+    }
+    assert(changed && Code(received) == "GIR-V060");
+    assert(Code(GirToLow(received).Lower()) == "GIR-V090");
+    auto foreign = low;
+    changed = false;
+    for (auto &block : foreign.funcs[1].blocks) {
+        int receiving = -1;
+        for (auto &instruction : block.insts) {
+            if (instruction.op == GirOp::ControlReceivingOpen) receiving = instruction.res;
+            if (instruction.op == GirOp::ControlExitRearm) { instruction.a = receiving; changed = true; }
+        }
+    }
+    assert(changed && Code(foreign) == "GIR-V090");
+    auto delegated = module;
+    auto &delegation = delegated.funcs[1].blocks[0].insts;
+    auto renew = find_if(delegation.begin(), delegation.end(), [](auto &instruction) { return instruction.op == GirOp::DestRenew; });
+    auto wrongIncoming = Def(GirOp::ExitWait, 11); wrongIncoming.a = 4;
+    delegation.insert(renew, wrongIncoming);
+    auto delegatedError = GirVerifier(delegated).Verify();
+    assert(delegatedError && delegatedError->code == "GIR-V060" && delegatedError->message.find("completion wait") != string::npos);
+    assert(Code(GirToLow(delegated).Lower()) == "GIR-V090");
+    auto priorWriter = low;
+    int next = 0;
+    for (auto &block : priorWriter.funcs[1].blocks) {
+        for (auto [value, type] : block.params) next = max(next, value + 1);
+        for (auto &instruction : block.insts) if (GirDefinesValue(instruction)) next = max(next, instruction.res + 1);
+    }
+    changed = false;
+    for (auto &block : priorWriter.funcs[1].blocks) {
+        auto wait = find_if(block.insts.begin(), block.insts.end(), [](auto &instruction) { return instruction.op == GirOp::ControlExitWait; });
+        if (wait == block.insts.end()) continue;
+        auto writer = Def(GirOp::ControlReceivingCurrent, next); writer.a = wait->a;
+        block.insts.insert(wait, writer); changed = true; break;
+    }
+    auto priorError = GirVerifier(priorWriter).Verify();
+    assert(changed && priorError && priorError->code == "GIR-V090" && priorError->message.find("rearm retains") != string::npos);
+    auto staleRole = ConstructionNamedAliasModule();
+    auto &alias = staleRole.funcs[1].blocks[0].insts;
+    auto reserve = find_if(alias.begin(), alias.end(), [](auto &instruction) { return instruction.op == GirOp::ExitReserve; });
+    auto selection = *reserve; selection.op = GirOp::ExitSelect; selection.a = reserve->res; selection.res = -1;
+    reserve->op = GirOp::ExitWait; reserve->org = -1; reserve->exitSource = GirExitNewValue {};
+    alias.insert(reserve + 1, selection);
+    assert(Code(staleRole) == "");
+    auto spilled = GirToLow(staleRole).Lower();
+    assert(Code(spilled) == "");
+    auto &spilledFunction = spilled.funcs[1];
+    auto member = (int)spilledFunction.members.size();
+    spilledFunction.members.push_back(GirMember { .kind = GirMember::Scalar, .ty = spilled.BoolType(), .scope = 0 });
+    int restored = 0;
+    for (auto &block : spilledFunction.blocks) {
+        for (auto [value, type] : block.params) restored = max(restored, value + 1);
+        for (auto &instruction : block.insts) if (GirDefinesValue(instruction)) restored = max(restored, instruction.res + 1);
+    }
+    changed = false;
+    for (auto &block : spilledFunction.blocks) {
+        auto query = find_if(block.insts.begin(), block.insts.end(), [](auto &instruction) { return instruction.op == GirOp::ControlExitIsNamed; });
+        if (query == block.insts.end()) continue;
+        auto ticket = query->a;
+        GirInst save; save.op = GirOp::LocalSet; save.idx = member; save.a = query->res;
+        GirInst reset; reset.op = GirOp::ControlExitRearm; reset.a = ticket;
+        GirInst selectAgain;
+        bool selected = false;
+        for (auto &other : spilledFunction.blocks) for (auto &instruction : other.insts)
+            if (instruction.op == GirOp::ControlExitSelect && instruction.a == ticket) { selectAgain = instruction; selected = true; }
+        assert(selected);
+        auto load = Def(GirOp::LocalGet, restored); load.idx = member;
+        auto position = query - block.insts.begin();
+        block.insts.insert(block.insts.begin() + position + 1, { save, reset, selectAgain, load });
+        assert(block.insts.back().op == GirOp::CondBr); block.insts.back().a = restored;
+        changed = true; break;
+    }
+    assert(changed && Code(spilled) == "GIR-V090");
+    GirInst stale; stale.op = GirOp::ExitRearm; stale.a = selection.a; stale.org = 0;
+    alias.insert(alias.end() - 1, stale);
+    assert(Code(staleRole) == "GIR-V060");
+    assert(Code(GirToLow(staleRole).Lower()) == "GIR-V090");
+    auto originless = module;
+    for (auto &instruction : originless.funcs[1].blocks[0].insts)
+        if (instruction.op == GirOp::ExitRearm) instruction.org = -1;
+    assert(Code(originless) == "GIR-V100");
+}
+
 CoreModule ConstructionImplicitNamedTupleModule() {
     auto core = ConstructionNamedOwnerWithScalarResultModule();
     auto &payload = core.impls[1];
@@ -8542,6 +8831,8 @@ int main() {
     ConstructionBorrowedReceivingsRetireOnlyLocalAuthority();
     ConstructionOwnershipTypesStayAtTheGirBoundary();
     ConstructionExitReservationsRejectForgedAndRepeatedAuthority();
+    ConstructionBorrowedWaitingTokensResumeAfterLoopJumps();
+    ConstructionWaitingRearmRequiresTheOriginalCleanedReceipt();
     ConstructionCompletionTokensSelectOnceAtTheLeaf();
     ConstructionInterruptedReturnsReachTheEnclosingLoopExit();
     ConstructionValueBreaksLandOnlyTheirSavedChannel();

@@ -343,6 +343,7 @@ private:
         int counter;
         size_t exitDepth;
         size_t constructionDepth;
+        set<int> borrowedWaiting;
     };
     const Loop *lexicalLoop = nullptr;
     struct ValueBoundary {
@@ -2132,6 +2133,23 @@ private:
                 if (!closed) unfinished.push_back(receiving);
             }
         CancelReceivingRoots(unfinished, {}, {}, org);
+        for (auto position = exitReservations.rbegin(); position != exitReservations.rend(); ++position) {
+            auto ticket = *position;
+            if (!loop.borrowedWaiting.count(ticket) || waitingExits.count(ticket)) continue;
+            GirInst rearm;
+            rearm.op = GirOp::ExitRearm;
+            rearm.a = ticket;
+            rearm.org = org;
+            EmitEffect(std::move(rearm));
+            waitingExits.insert(ticket);
+            if (auto builder = reservationBuilders.find(ticket); builder != reservationBuilders.end()) {
+                receivingReservations.erase(builder->second);
+                reservationBuilders.erase(builder);
+            }
+            for (auto boundary : completionBoundaries)
+                for (size_t index = 0; index < boundary->tickets.size(); index++)
+                    if (boundary->tickets[index] == ticket) boundary->handles[index] = -1;
+        }
     }
 
     void LowerStmt(const Loop *lc, const CoreStmt &s) {
@@ -2319,7 +2337,7 @@ private:
                 (void)bs; (void)xs;
                 EmitTerm(CondBr(cv, bb, {}, xb, {}));
                 cur = bb;
-                Loop l { depth, xb, false, hb, -1, -1, exitReservations.size(), activeReceivings.size() };
+                Loop l { depth, xb, false, hb, -1, -1, exitReservations.size(), activeReceivings.size(), waitingExits };
                 LowerBlock(&l, {}, false, *s.then);
                 EmitTerm(Br(hb, {}));
                 cur = xb;
@@ -2347,7 +2365,7 @@ private:
                 (void)bs; (void)xs;
                 EmitTerm(CondBr(c, bb, {}, xb, {}));
                 cur = bb;
-                Loop l { depth, xb, true, hb, t, i, exitReservations.size(), activeReceivings.size() };
+                Loop l { depth, xb, true, hb, t, i, exitReservations.size(), activeReceivings.size(), waitingExits };
                 LowerBlock(&l, { { s.var, i, org } }, false, *s.then);
                 if (cur >= 0) Increment(l);
                 cur = xb;
@@ -2627,7 +2645,7 @@ private:
         }
         vector<Binding> pre { { s.var, ev, org } };
         if (s.index >= 0) pre.push_back({ s.index, i, org });
-        Loop l { depth, xb, true, hb, I64(), i, exitReservations.size(), activeReceivings.size() };
+        Loop l { depth, xb, true, hb, I64(), i, exitReservations.size(), activeReceivings.size(), waitingExits };
         LowerBlock(&l, pre, false, *s.then);
         if (cur >= 0) Increment(l);
         cur = xb;

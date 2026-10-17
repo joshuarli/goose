@@ -104,7 +104,7 @@ private:
             case GirOp::ControlAttemptReceiving: case GirOp::ControlExitWait: case GirOp::ControlExitSelect: case GirOp::ControlExitReserve:
             case GirOp::ControlExitIsNamed: case GirOp::ControlExitAdopt: case GirOp::ControlExitSelected: case GirOp::ControlExitPrepare: case GirOp::ControlExitCommit:
             case GirOp::ControlReceivingCancel: case GirOp::ControlAttemptAbandon: case GirOp::ControlLeave:
-            case GirOp::ControlCallPop: case GirOp::ControlReceivingDrop: case GirOp::ControlReceivingTransfer: case GirOp::ControlExitMarkNamed: case GirOp::ControlExitRelease: case GirOp::ControlExitDiscard:
+            case GirOp::ControlCallPop: case GirOp::ControlReceivingDrop: case GirOp::ControlReceivingTransfer: case GirOp::ControlExitMarkNamed: case GirOp::ControlExitRearm: case GirOp::ControlExitRelease: case GirOp::ControlExitDiscard:
             case GirOp::ControlAttemptCancel: case GirOp::ControlAttemptPrepareNamed: case GirOp::ControlAttemptNormalize: case GirOp::ControlAttemptPack: case GirOp::ControlAttemptRemoveHeader: case GirOp::ControlAttemptChild: case GirOp::ControlAttemptFinish:
             case GirOp::ControlAttemptAttach: case GirOp::ControlAttemptPublish: case GirOp::ControlAttemptReturn:
                 throw CompileError { "construction control operand contract is missing" };
@@ -138,7 +138,7 @@ private:
                 add(i.a);
                 break;
             case GirOp::ReceivingOpen: case GirOp::DestRenew: case GirOp::ExitWait: case GirOp::ExitSelect: case GirOp::ExitReserve: case GirOp::ReceivingDrop:
-            case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed: case GirOp::ExitMarkNamed: case GirOp::ExitRelease:
+            case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed: case GirOp::ExitMarkNamed: case GirOp::ExitRearm: case GirOp::ExitRelease:
             case GirOp::DestBytes: case GirOp::DestFinish: case GirOp::DestPublish:
             case GirOp::Result: case GirOp::DestChild: case GirOp::DestArg:
             case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate: case GirOp::DestPrepareNamed: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
@@ -227,7 +227,7 @@ private:
                 return true;
             case GirOp::DestOpen: case GirOp::DestWrite: case GirOp::DestFinish: case GirOp::DestPublish: case GirOp::DestBytes:
             case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestPrepareNamed: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
-            case GirOp::TargetReceiving: case GirOp::ExitReserve: case GirOp::ExitSelect: case GirOp::ReservedNamed: case GirOp::ExitMarkNamed: case GirOp::ExitRelease: case GirOp::ExitDiscard:
+            case GirOp::TargetReceiving: case GirOp::ExitReserve: case GirOp::ExitSelect: case GirOp::ReservedNamed: case GirOp::ExitMarkNamed: case GirOp::ExitRearm: case GirOp::ExitRelease: case GirOp::ExitDiscard:
             case GirOp::ExitLand: case GirOp::ReceivingCancel:
             case GirOp::DestArg: case GirOp::DestAbandon: case GirOp::DestValue:
             case GirOp::DestRelocate: case GirOp::DestStage: case GirOp::DestFit:
@@ -1893,11 +1893,16 @@ private:
         enum class Kind { Unknown, Scope, Receiving, Attempt, Record, Ticket, Call, Stack, Start, Progress, Mode, Prefix, Prepared, Flag, Comparison, TicketRole, Owner, Binding, BindingRole, NamedBinding, OwnerTarget, Header, Whole };
         enum class Role { Waiting, Fresh, UnknownAlias, Named, Received };
         enum class RawState { Writing, Built, Cancelled };
+        struct WaitingReceipt {
+            int receiving, result, target, lineage, parent;
+            bool operator==(const WaitingReceipt &) const = default;
+        };
         struct Fact {
             Kind kind = Kind::Unknown;
             int root = -1, owner = -1, ticket = -1, callee = -1, result = -1, target = -1, binding = -1, lineage = -1, parent = -1;
             RawState raw = RawState::Writing;
             Role role = Role::Fresh;
+            optional<WaitingReceipt> waitingOrigin;
             set<int> selections;
             bool operator==(const Fact &) const = default;
         };
@@ -2024,6 +2029,12 @@ private:
             auto complete = [&](Fact value) {
                 for (auto &[key, entry] : state.values)
                     if (entry.kind == Kind::Attempt && entry.root == value.root) entry.raw = RawState::Built;
+            };
+            auto invalidateRoleQueries = [&](int ticket) {
+                for (auto facts : { &state.values, &state.locals, &state.targets })
+                    erase_if(*facts, [&](const auto &entry) {
+                        return entry.second.kind == Kind::TicketRole && entry.second.root == ticket;
+                    });
             };
             auto carried = [&](const vector<int> &values) {
                 set<int> protectedAttempts;
@@ -2211,6 +2222,7 @@ private:
                                 bad("completion result has two waiting obligations");
                         Fact ticket { Kind::Ticket, inst.res }; ticket.owner = handle.root; ticket.role = Role::Waiting;
                         ticket.result = handle.result; ticket.target = handle.target;
+                        ticket.waitingOrigin = WaitingReceipt { handle.root, handle.result, handle.target, handle.lineage, handle.parent };
                         state.values[inst.res] = ticket; state.tickets.insert(inst.res); break;
                     }
                     case GirOp::ControlExitReserve: case GirOp::ControlExitSelect: {
@@ -2224,7 +2236,9 @@ private:
                             return Fact {};
                         }() : require(inst.a, Kind::Receiving);
                         if (state.unselectedCompletions.count(handle.root)) bad("selection bypasses an unselected cancellation witness");
-                        Fact ticket { Kind::Ticket, ticketValue }; ticket.owner = handle.root; ticket.ticket = handle.ticket; ticket.selections = handle.selections;
+                        Fact ticket { Kind::Ticket, ticketValue };
+                        if (inst.op == GirOp::ControlExitSelect) ticket.waitingOrigin = require(inst.a, Kind::Ticket).waitingOrigin;
+                        ticket.owner = handle.root; ticket.ticket = handle.ticket; ticket.selections = handle.selections;
                         ticket.target = handle.target; ticket.result = handle.result;
                         ticket.lineage = handle.lineage; ticket.parent = handle.parent;
                         if (auto binding = GirNamedExitBinding(inst.exitSource)) {
@@ -2233,6 +2247,7 @@ private:
                                 bad("named alias reservation has no exact source binding authority");
                             ticket.role = Role::UnknownAlias; ticket.binding = source.root;
                         }
+                        invalidateRoleQueries(ticketValue);
                         state.values[ticketValue] = ticket; state.tickets.insert(ticketValue); break;
                     }
                     case GirOp::ControlExitIsNamed: {
@@ -2285,6 +2300,34 @@ private:
                         if (!state.prepared.erase(ticket.root) || target.root != ticket.root || target.owner != raw.root)
                             bad("construction landing commits another boundary or raw attempt");
                         state.attempts.erase(raw.root); attempt(inst.res, raw); break;
+                    }
+                    case GirOp::ControlExitRearm: {
+                        auto ticket = require(inst.a, Kind::Ticket);
+                        if (!ticket.waitingOrigin || ticket.role == Role::Waiting || ticket.role == Role::Received ||
+                            state.prepared.count(ticket.root) || ticket.waitingOrigin->receiving != ticket.owner)
+                            bad("rearm does not retain a selected Waiting-origin receipt");
+                        bool exact = false;
+                        for (auto &[value, entry] : state.values) {
+                            if (entry.kind == Kind::Receiving && state.handles.count(entry.root)) {
+                                if (entry.root == ticket.owner)
+                                    exact |= entry.result == ticket.waitingOrigin->result && entry.target == ticket.waitingOrigin->target &&
+                                        entry.lineage == ticket.waitingOrigin->lineage && entry.parent == ticket.waitingOrigin->parent;
+                                else if (entry.selections.count(ticket.root) || entry.ticket == ticket.root)
+                                    bad("rearm precedes selected builder cleanup");
+                            }
+                            if (entry.kind == Kind::Attempt && state.attempts.count(entry.root) &&
+                                (entry.selections.count(ticket.root) || entry.owner == ticket.owner) && entry.raw != RawState::Cancelled)
+                                bad("rearm retains a selected or prior raw lease");
+                        }
+                        if (!exact) bad("rearm changes its immutable incoming receiving view");
+                        Fact waiting { Kind::Ticket, ticket.root };
+                        waiting.owner = ticket.owner; waiting.result = ticket.waitingOrigin->result;
+                        waiting.target = ticket.waitingOrigin->target; waiting.role = Role::Waiting;
+                        waiting.waitingOrigin = ticket.waitingOrigin;
+                        invalidateRoleQueries(ticket.root);
+                        state.values[inst.a] = waiting;
+                        state.extracted.erase(ticket.root); state.prepared.erase(-ticket.root - 1);
+                        break;
                     }
                     case GirOp::ControlExitRelease: case GirOp::ControlExitDiscard: {
                         auto ticket = require(inst.a, Kind::Ticket);
@@ -4434,7 +4477,7 @@ private:
                         TypeFail(fn, "named selection source is not an exact in-scope named result binding");
                 break;
             }
-            case GirOp::ExitMarkNamed: case GirOp::ExitRelease: case GirOp::ExitDiscard:
+            case GirOp::ExitMarkNamed: case GirOp::ExitRearm: case GirOp::ExitRelease: case GirOp::ExitDiscard:
                 if (m.low || !CoreHasConstruction(m.profile) ||
                     m.Type(need(ty.Val(i.a))).kind != CoreType::ExitReservation)
                     TypeFail(fn, "exit cleanup does not consume a reservation ticket");
@@ -6088,12 +6131,18 @@ private:
             bool operator==(const Receiving &) const = default;
         };
         enum class ExitRole { Waiting, Fresh, AliasUnknown, Named };
+        struct WaitingReceipt {
+            int receiving;
+            Ownership incoming;
+            bool operator==(const WaitingReceipt &) const = default;
+        };
         struct Reservation {
             int receiving = -1;
             Ownership selected;
             Ownership boundary;
             Receiving snapshot;
             optional<pair<int, Ownership>> savedNamed;
+            optional<WaitingReceipt> waitingOrigin;
             GirExitSource source = GirExitNewValue {};
             ExitRole role = ExitRole::Fresh;
             vector<int> parked;
@@ -6111,6 +6160,7 @@ private:
             set<int> rendered;
             map<int, Receiving> receivers;
             map<int, Reservation> reservations;
+            map<int, int> roleQueries;
             set<int> parked;
             set<int> refresh;
             map<int, pair<int, vector<int>>> unselectedCompletions;
@@ -6212,9 +6262,14 @@ private:
                             ", root %", receiver.current.root, "/%", other->second.current.root, ")"));
                 }
             if (combined.receivers != next.receivers || combined.reservations != next.reservations ||
-                combined.parked != next.parked || combined.refresh != next.refresh ||
+                combined.parked != next.parked ||
                 combined.unselectedCompletions != next.unselectedCompletions || combined.terminalWaitingReleased != next.terminalWaitingReleased)
                 bad("control-flow merge changes receiving leases or exit reservations");
+            combined.refresh.insert(next.refresh.begin(), next.refresh.end());
+            for (auto iterator = combined.roleQueries.begin(); iterator != combined.roleQueries.end();)
+                if (auto found = next.roleQueries.find(iterator->first); found == next.roleQueries.end() || found->second != iterator->second)
+                    iterator = combined.roleQueries.erase(iterator);
+                else ++iterator;
             if (!(combined == *incoming[target])) {
                 incoming[target] = std::move(combined);
                 work.push_back(target);
@@ -6318,7 +6373,8 @@ private:
                     auto definition = definitions[condition->first];
                     if (definition && definition->op == GirOp::ExitIsNamed) {
                         auto found = next.reservations.find(definition->a);
-                        if (found == next.reservations.end()) bad("exit role branch uses a consumed reservation");
+                        if (found == next.reservations.end() || !next.roleQueries.count(condition->first) ||
+                            next.roleQueries.at(condition->first) != definition->a) bad("exit role branch uses a consumed or rearmed selection");
                         auto &ticket = found->second;
                         auto role = condition->second ? ExitRole::Named : ExitRole::Fresh;
                         if (ticket.role != ExitRole::AliasUnknown && ticket.role != role) return;
@@ -6439,6 +6495,7 @@ private:
                         Reservation ticket;
                         ticket.receiving = inst.a;
                         ticket.role = ExitRole::Waiting;
+                        ticket.waitingOrigin = WaitingReceipt { inst.a, receiver.boundary };
                         state.reservations[inst.res] = ticket;
                         break;
                     }
@@ -6452,6 +6509,7 @@ private:
                         auto &receiver = receiving(receiverValue);
                         Reservation ticket;
                         ticket.receiving = receiverValue;
+                        if (inst.op == GirOp::ExitSelect) ticket.waitingOrigin = reservation(inst.a).waitingOrigin;
                         ticket.snapshot = receiver;
                         ticket.source = inst.exitSource;
                         ticket.selected = receiver.current;
@@ -6474,6 +6532,7 @@ private:
                                 state.parked.insert(value);
                                 ticket.parked.push_back(value);
                             }
+                        erase_if(state.roleQueries, [&](const auto &entry) { return entry.second == ticketValue; });
                         state.reservations[ticketValue] = std::move(ticket);
                         break;
                     }
@@ -6481,6 +6540,7 @@ private:
                         auto &ticket = reservation(inst.a);
                         if (ticket.role == ExitRole::Waiting || ticket.received || ticket.extracted || !GirNamedExitBinding(ticket.source))
                             bad("exit role query does not retain an unresolved alias source");
+                        state.roleQueries[inst.res] = inst.a;
                         break;
                     }
                     case GirOp::ExitMarkNamed: {
@@ -6556,6 +6616,34 @@ private:
                         owner.landed = ticket.boundary.landed;
                         ticket.landed = true;
                         moveOwner(inst.res, owner);
+                        break;
+                    }
+                    case GirOp::ExitRearm: {
+                        auto ticket = reservation(inst.a);
+                        if (!ticket.waitingOrigin || ticket.received || ticket.landed || ticket.role == ExitRole::Waiting ||
+                            ticket.snapshot.writer >= 0 || ticket.snapshot.delegated >= 0 ||
+                            ticket.waitingOrigin->receiving != ticket.receiving)
+                            bad("rearm does not retain a selected Waiting-origin receipt");
+                        auto &receiver = receiving(ticket.receiving);
+                        if (receiver.boundary != ticket.waitingOrigin->incoming || receiver.writer >= 0 || receiver.delegated >= 0 ||
+                            any_of(state.live.begin(), state.live.end(), [&](const auto &entry) {
+                                return entry.second.selections.count(inst.a) && m.Type(fn.vt[entry.first]).kind != CoreType::Cancelled;
+                            }) || any_of(state.receivers.begin(), state.receivers.end(), [&](const auto &entry) {
+                                return entry.first != ticket.receiving && within(entry.first, ticket.receiving);
+                            }))
+                            bad("rearm precedes exact selected writer and builder cleanup");
+                        receiver = ticket.snapshot;
+                        if (ticket.savedNamed) state.named[ticket.savedNamed->first] = ticket.savedNamed->second;
+                        for (auto value : ticket.parked) {
+                            state.parked.erase(value);
+                            if (state.live.count(value)) state.refresh.insert(value);
+                        }
+                        Reservation waiting;
+                        waiting.receiving = ticket.receiving;
+                        waiting.role = ExitRole::Waiting;
+                        waiting.waitingOrigin = ticket.waitingOrigin;
+                        erase_if(state.roleQueries, [&](const auto &entry) { return entry.second == inst.a; });
+                        state.reservations[inst.a] = std::move(waiting);
                         break;
                     }
                     case GirOp::ExitRelease: {

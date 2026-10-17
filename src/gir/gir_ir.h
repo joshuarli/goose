@@ -33,11 +33,11 @@ enum class GirOp : uint8_t {
     // Instructions that define none, high stage.
     Init, Store, Append, AppendValue, PopN, Resize, Clear, Replace, DestWrite, DestAttach,
     DestBytes, DestText, DestCopy, DestRepeat, DestSnapshot, DestBind, DestPublish, DestCancel, Enter, Leave, Print,
-    ExitSelect, ExitRelease, ExitDiscard, ExitMarkNamed, ReceivingDrop,
+    ExitSelect, ExitRearm, ExitRelease, ExitDiscard, ExitMarkNamed, ReceivingDrop,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
     BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event, SourceLeave, SourceCallPop, SourceResult, SourceCopy, SourceGlobalSet, SourceTargetLeave, SourceTargetResult,
-    ControlLeave, ControlCallPop, ControlOwnerCheck, ControlOwnerExtend, ControlOwnerUpdate, ControlOwnerResult, ControlOwnerTargetResult, ControlOwnerTargetLeave, ControlReceivingDrop, ControlReceivingTransfer, ControlExitSelect, ControlExitMarkNamed, ControlExitRelease, ControlExitDiscard, ControlAttemptCancel,
+    ControlLeave, ControlCallPop, ControlOwnerCheck, ControlOwnerExtend, ControlOwnerUpdate, ControlOwnerResult, ControlOwnerTargetResult, ControlOwnerTargetLeave, ControlReceivingDrop, ControlReceivingTransfer, ControlExitSelect, ControlExitRearm, ControlExitMarkNamed, ControlExitRelease, ControlExitDiscard, ControlAttemptCancel,
     ControlAttemptPrepareNamed, ControlAttemptNormalize, ControlAttemptPack, ControlAttemptRemoveHeader, ControlAttemptChild, ControlAttemptFinish, ControlAttemptAttach, ControlAttemptPublish, ControlAttemptReturn,
     // Terminators.
     Br, CondBr, Invoke, Ret, Escape, Abort, Exit, Unreachable,
@@ -66,7 +66,7 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::ReceivingOpen: case GirOp::TargetReceiving: case GirOp::DestRenew: case GirOp::DestRefresh:
         case GirOp::ExitWait: case GirOp::ExitReserve: case GirOp::ExitSelect: case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed:
         case GirOp::ExitLand: case GirOp::ExitAdopt: case GirOp::ReceivingCancel:
-        case GirOp::ExitRelease: case GirOp::ExitDiscard: case GirOp::ExitMarkNamed: case GirOp::ReceivingDrop:
+        case GirOp::ExitRearm: case GirOp::ExitRelease: case GirOp::ExitDiscard: case GirOp::ExitMarkNamed: case GirOp::ReceivingDrop:
         case GirOp::DestCancel: case GirOp::Invoke: case GirOp::Escape:
         case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
@@ -281,6 +281,7 @@ inline optional<GirControlContract> GirControlOf(GirOp op) {
         case GirOp::ControlCallPop: return GirControlContract { "l_control_call_pop", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
         case GirOp::ControlReceivingDrop: return GirControlContract { "l_control_receiving_drop", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
         case GirOp::ControlReceivingTransfer: return GirControlContract { "l_control_receiving_transfer", Form::PairValues, nullopt, { Kind::Ptr, Kind::Ptr, Kind::Bool }, nullopt };
+        case GirOp::ControlExitRearm: return GirControlContract { "l_control_exit_rearm", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
         case GirOp::ControlExitRelease: return GirControlContract { "l_control_exit_release", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
         case GirOp::ControlExitDiscard: return GirControlContract { "l_control_exit_discard", Form::OperandValues, nullopt, { Kind::Ptr }, Kind::Ptr };
         case GirOp::ControlAttemptCancel: return GirControlContract { "l_control_attempt_cancel", Form::Operand, nullopt, { Kind::Ptr }, nullopt };

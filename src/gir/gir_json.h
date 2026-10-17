@@ -927,6 +927,8 @@ private:
                 Append(out, "[\"x_receiving_drop\",", i.a, ']'); return;
             case GirOp::ExitMarkNamed:
                 Append(out, "[\"x_exit_mark_named\",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::ExitRearm:
+                Append(out, "[\"x_exit_rearm\",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::ExitRelease:
                 Append(out, "[\"x_exit_release\",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::ExitDiscard:
