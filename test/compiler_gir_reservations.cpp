@@ -688,7 +688,296 @@ CoreModule DeferredValueBreakCleanup() {
     return core;
 }
 
+CoreModule WaitingCompletion(bool explicitReturn) {
+    CoreModule core;
+    core.profile = CoreProfile::Construction;
+    core.files = { "tail-completion-siblings.goose" };
+    auto u8 = core.IntType(CoreIntTy::U8);
+    auto bytes = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = u8 });
+    CoreImpl entry;
+    entry.name = "entry";
+    entry.body.scope = 0;
+    entry.vars = { {"first", bytes, CoreVarKind::Let, 0, origin}, {"second", bytes, CoreVarKind::Let, 0, origin} };
+    entry.summary.aborts = true;
+    entry.summary.outputs = true;
+    CoreStmt receive;
+    receive.kind = CoreStmtKind::Receive;
+    receive.vars = { 0, 1 };
+    receive.org = origin;
+    receive.expr = make_unique<CoreExpr>();
+    receive.expr->kind = CoreExprKind::Call;
+    receive.expr->ctx = 1;
+    receive.expr->org = origin;
+    entry.body.stmts.push_back(std::move(receive));
+    CoreStmt print;
+    print.kind = CoreStmtKind::Print;
+    print.org = origin;
+    for (int index : { 0, 1 }) {
+        CorePrintArg view;
+        view.kind = CorePrintArg::View;
+        view.view = make_unique<CoreView>();
+        view.view->place = make_unique<CorePlace>();
+        view.view->place->index = index;
+        print.print.push_back(std::move(view));
+    }
+    entry.body.stmts.push_back(std::move(print));
+    CoreImpl producer;
+    producer.name = "producer";
+    producer.body.scope = 0;
+    producer.results = { {bytes, CoreRequest::Value}, {bytes, CoreRequest::Value} };
+    producer.summary.constructs = { 0, 1 };
+    producer.summary.needs = { 0 };
+    producer.summary.escapes = { 0 };
+    producer.summary.aborts = true;
+    CoreStmt unreachable;
+    unreachable.kind = CoreStmtKind::If;
+    unreachable.org = origin;
+    unreachable.expr = make_unique<CoreExpr>();
+    unreachable.expr->kind = CoreExprKind::Bool;
+    unreachable.then = make_unique<CoreBlock>();
+    unreachable.then->scope = 1;
+    CoreStmt fallback;
+    fallback.kind = CoreStmtKind::RetValues;
+    fallback.org = origin;
+    fallback.values.push_back(Bytes(bytes, 70));
+    fallback.values.push_back(Bytes(bytes, 68));
+    unreachable.then->stmts.push_back(std::move(fallback));
+    producer.body.stmts.push_back(std::move(unreachable));
+    auto first = make_unique<CoreExpr>();
+    first->kind = CoreExprKind::Block;
+    first->type = bytes;
+    first->org = origin;
+    first->then = make_unique<CoreBlock>();
+    first->then->scope = 2;
+    auto array = make_unique<CoreExpr>();
+    array->kind = CoreExprKind::Arr;
+    array->type = bytes;
+    array->org = origin;
+    array->elems.push_back(Integer(u8, "66"));
+    auto branch = make_unique<CoreExpr>();
+    branch->kind = CoreExprKind::If;
+    branch->type = u8;
+    branch->org = origin;
+    branch->a = make_unique<CoreExpr>();
+    branch->a->kind = CoreExprKind::Bool;
+    branch->a->flag = true;
+    branch->then = make_unique<CoreBlock>();
+    branch->then->scope = 3;
+    CoreStmt broken;
+    broken.kind = CoreStmtKind::BreakValue;
+    broken.org = origin;
+    broken.expr = Bytes(bytes, 67);
+    branch->then->stmts.push_back(std::move(broken));
+    branch->then->value = Integer(u8, "68");
+    branch->otherwise = make_unique<CoreBlock>();
+    branch->otherwise->scope = 4;
+    branch->otherwise->value = Integer(u8, "69");
+    array->elems.push_back(std::move(branch));
+    first->then->value = std::move(array);
+    auto second = make_unique<CoreExpr>();
+    second->kind = CoreExprKind::Block;
+    second->type = bytes;
+    second->org = origin;
+    second->then = make_unique<CoreBlock>();
+    second->then->scope = 5;
+    CoreStmt escape;
+    escape.kind = CoreStmtKind::ReturnFrom;
+    escape.target = 0;
+    escape.org = origin;
+    second->then->stmts.push_back(std::move(escape));
+    second->then->value = Bytes(bytes, 69);
+    if (explicitReturn) {
+        CoreStmt returned;
+        returned.kind = CoreStmtKind::RetValues;
+        returned.org = origin;
+        returned.values.push_back(std::move(first));
+        returned.values.push_back(std::move(second));
+        producer.body.stmts.push_back(std::move(returned));
+    } else {
+        producer.body.value = make_unique<CoreExpr>();
+        producer.body.value->kind = CoreExprKind::Values;
+        producer.body.value->values.push_back(std::move(first));
+        producer.body.value->values.push_back(std::move(second));
+    }
+    core.impls.push_back(std::move(entry));
+    core.impls.push_back(std::move(producer));
+    core.targets = { CoreTargetSet { {0} } };
+    core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1, .resultroots = {{}, {}} } };
+    return core;
+}
+
+CoreModule WaitingArgument(bool guarded) {
+    auto core = InterruptedReturn(CoreStmtKind::Break);
+    auto bytes = core.impls[1].results[0].type;
+    auto i64 = core.IntType(CoreIntTy::I64);
+    auto &entry = core.impls[0];
+    entry.summary = {};
+    entry.body.stmts.resize(1);
+    if (!guarded) {
+        entry.vars.push_back(CoreVar { "second", bytes, CoreVarKind::Var, 0, origin });
+        entry.body.stmts[0].kind = CoreStmtKind::Receive;
+        entry.body.stmts[0].vars = {0, 1};
+    }
+    auto &producer = core.impls[1];
+    producer.vars = { CoreVar { "argument", i64, CoreVarKind::Let, 0, origin } };
+    producer.params = {{0, false}};
+    producer.body = CoreBlock {};
+    producer.body.scope = 0;
+    producer.body.value = make_unique<CoreExpr>();
+    producer.body.value->kind = CoreExprKind::Block;
+    producer.body.value->type = bytes;
+    producer.body.value->org = origin;
+    producer.body.value->then = make_unique<CoreBlock>();
+    producer.body.value->then->scope = 1;
+    CoreStmt escaped;
+    escaped.kind = CoreStmtKind::ReturnFrom;
+    escaped.target = 0;
+    escaped.org = origin;
+    producer.body.value->then->stmts.push_back(std::move(escaped));
+    producer.body.value->then->value = Bytes(bytes, 66);
+    producer.summary.needs = {0};
+    producer.summary.escapes = {0};
+    if (!guarded) {
+        producer.results.push_back({bytes, CoreRequest::Value});
+        producer.summary.constructs.push_back(1);
+        core.contexts[1].resultroots.push_back({});
+        auto first = std::move(producer.body.value->then->value);
+        producer.body.value->then->value = make_unique<CoreExpr>();
+        producer.body.value->then->value->kind = CoreExprKind::Values;
+        producer.body.value->then->value->values.push_back(std::move(first));
+        producer.body.value->then->value->values.push_back(Bytes(bytes, 67));
+    }
+    auto argument = make_unique<CoreExpr>();
+    argument->kind = CoreExprKind::Block;
+    argument->type = i64;
+    argument->org = origin;
+    argument->then = make_unique<CoreBlock>();
+    argument->then->scope = 1;
+    CoreStmt interrupted;
+    interrupted.kind = CoreStmtKind::ReturnFrom;
+    interrupted.target = 0;
+    interrupted.org = origin;
+    argument->then->stmts.push_back(std::move(interrupted));
+    argument->then->value = Integer(i64, "0");
+    entry.body.stmts[0].expr->args.push_back(CoreArgValue {std::move(argument)});
+    core.targets = { CoreTargetSet {{0}} };
+    return core;
+}
+
 CoreModule Fixture(string_view name) {
+    if (name == "waiting-delegated-argument") return WaitingArgument(false);
+    if (name == "waiting-guarded-argument") return WaitingArgument(true);
+    if (name == "waiting-guarded-call") {
+        auto core = DeferredTargetCleanup();
+        auto bytes = core.impls[1].results[0].type;
+        auto &initial = core.impls[2].body.stmts[0];
+        initial.expr = make_unique<CoreExpr>();
+        initial.expr->kind = CoreExprKind::Call;
+        initial.expr->type = bytes;
+        initial.expr->ctx = 3;
+        initial.expr->org = origin;
+        auto &helper = core.impls[3];
+        helper.results = { {bytes, CoreRequest::Value} };
+        helper.summary.constructs = {0};
+        auto escaped = std::move(helper.body.stmts[0]);
+        helper.body.stmts.clear();
+        helper.body.value = make_unique<CoreExpr>();
+        helper.body.value->kind = CoreExprKind::Block;
+        helper.body.value->type = bytes;
+        helper.body.value->org = origin;
+        helper.body.value->then = make_unique<CoreBlock>();
+        helper.body.value->then->scope = 1;
+        helper.body.value->then->stmts.push_back(std::move(escaped));
+        helper.body.value->then->value = Bytes(bytes, 67);
+        return core;
+    }
+    if (name == "waiting-own-catch") {
+        auto core = WaitingCompletion(false);
+        auto bytes = core.impls[1].results[0].type;
+        core.targets[0].members = {1};
+        core.impls[1].summary.needs.clear();
+        core.impls[1].summary.escapes.clear();
+        auto &laterEscape = core.impls[1].body.value->values[1]->then->stmts[0];
+        laterEscape.values.push_back(Bytes(bytes, 70));
+        laterEscape.values.push_back(Bytes(bytes, 68));
+        CoreStmt called;
+        called.kind = CoreStmtKind::Expr;
+        called.org = origin;
+        called.expr = make_unique<CoreExpr>();
+        called.expr->kind = CoreExprKind::Call;
+        called.expr->ctx = 2;
+        called.expr->org = origin;
+        core.impls[1].body.value->values[0]->then->stmts.push_back(std::move(called));
+        CoreImpl helper;
+        helper.name = "return_to_producer";
+        helper.body.scope = 0;
+        helper.summary.needs = {0};
+        helper.summary.escapes = {0};
+        helper.summary.aborts = true;
+        CoreStmt escaped;
+        escaped.kind = CoreStmtKind::ReturnFrom;
+        escaped.target = 0;
+        escaped.org = origin;
+        escaped.values.push_back(Bytes(bytes, 70));
+        escaped.values.push_back(Bytes(bytes, 68));
+        helper.body.stmts.push_back(std::move(escaped));
+        core.impls.push_back(std::move(helper));
+        core.contexts.push_back(CoreContext { .impl = 2 });
+        return core;
+    }
+    if (name == "waiting-nested-return") {
+        auto core = WaitingCompletion(false);
+        auto bytes = core.impls[1].results[0].type;
+        CoreStmt returned;
+        returned.kind = CoreStmtKind::RetValues;
+        returned.org = origin;
+        returned.values.push_back(Bytes(bytes, 70));
+        returned.values.push_back(Bytes(bytes, 68));
+        core.impls[1].body.value->values[0]->then->stmts.push_back(std::move(returned));
+        return core;
+    }
+    if (name == "waiting-stop") {
+        auto core = WaitingCompletion(false);
+        CoreStmt stopped;
+        stopped.kind = CoreStmtKind::Exit;
+        stopped.org = origin;
+        stopped.expr = Integer(core.IntType(CoreIntTy::I64), "7");
+        core.impls[1].body.value->values[0]->then->stmts.push_back(std::move(stopped));
+        return core;
+    }
+    if (name == "waiting-built-before-tail") {
+        auto core = WaitingCompletion(false);
+        auto &producer = core.impls[1];
+        auto bytes = producer.results[0].type;
+        producer.results[1].namedLocal = 0;
+        producer.vars = { {"named", bytes, CoreVarKind::Var, 0, origin} };
+        producer.body.stmts.clear();
+        CoreStmt initialized;
+        initialized.kind = CoreStmtKind::Let;
+        initialized.var = 0;
+        initialized.org = origin;
+        initialized.expr = Bytes(bytes, 65);
+        producer.body.stmts.push_back(std::move(initialized));
+        auto &first = producer.body.value->values[0];
+        first->then->scope = 1;
+        first->then->value->elems[1]->then->scope = 2;
+        first->then->value->elems[1]->otherwise->scope = 3;
+        first->then->stmts.clear();
+        CoreStmt escaped;
+        escaped.kind = CoreStmtKind::ReturnFrom;
+        escaped.target = 0;
+        escaped.org = origin;
+        first->then->stmts.push_back(std::move(escaped));
+        auto named = make_unique<CoreExpr>();
+        named->kind = CoreExprKind::ResultLocal;
+        named->type = bytes;
+        named->var = 0;
+        named->org = origin;
+        producer.body.value->values[1] = std::move(named);
+        return core;
+    }
+    if (name == "waiting-implicit") return WaitingCompletion(false);
+    if (name == "waiting-explicit") return WaitingCompletion(true);
     if (name == "nested-break") return InterruptedReturn(CoreStmtKind::Break, true);
     if (name == "nested-continue") return InterruptedReturn(CoreStmtKind::Continue, true);
     if (name == "value-break-cleanup") return DeferredValueBreakCleanup();
@@ -746,7 +1035,7 @@ int main(int argc, char **argv) try {
         return 0;
     }
     assert(argc == 1);
-    for (auto name : { "break", "continue", "call", "named-borrow", "owner-child", "owner-named", "cross-same", "cross-different", "deferred-cleanup", "own-deferred-cleanup", "value-break-cleanup", "nested-break", "nested-continue" }) {
+    for (auto name : { "break", "continue", "call", "named-borrow", "owner-child", "owner-named", "cross-same", "cross-different", "deferred-cleanup", "own-deferred-cleanup", "value-break-cleanup", "nested-break", "nested-continue", "waiting-implicit", "waiting-explicit", "waiting-nested-return", "waiting-stop", "waiting-built-before-tail", "waiting-own-catch", "waiting-guarded-call", "waiting-delegated-argument", "waiting-guarded-argument" }) {
         auto core = Fixture(name);
         auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
         Valid(high);

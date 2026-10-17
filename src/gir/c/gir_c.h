@@ -249,11 +249,12 @@ typedef struct gir_control_call gir_control_call;
 typedef struct gir_control_lease gir_control_lease;
 typedef struct gir_control_owner gir_control_owner;
 typedef struct gir_control_owner_ref gir_control_owner_ref;
+typedef struct gir_control_call_output gir_control_call_output;
 typedef enum gir_control_binding_kind { GIR_CONTROL_NAMED_VALUE, GIR_CONTROL_MUTABLE_OWNER } gir_control_binding_kind;
 typedef enum gir_control_parent_kind { GIR_CONTROL_ROOT, GIR_CONTROL_CHILD, GIR_CONTROL_REPLACEMENT } gir_control_parent_kind;
-typedef enum gir_control_cleanup { GIR_CONTROL_NO_CLEANUP, GIR_CONTROL_RELEASE_STORAGE, GIR_CONTROL_PRESERVE_STORAGE, GIR_CONTROL_STORAGE_CLEANED } gir_control_cleanup;
+typedef enum gir_control_cleanup { GIR_CONTROL_NO_CLEANUP, GIR_CONTROL_RELEASE_STORAGE, GIR_CONTROL_PRESERVE_STORAGE, GIR_CONTROL_STORAGE_CLEANED, GIR_CONTROL_UNSELECTED_COMPLETION } gir_control_cleanup;
 typedef enum gir_control_ticket_state { GIR_CONTROL_TICKET_ACTIVE, GIR_CONTROL_TICKET_RESTORED } gir_control_ticket_state;
-typedef enum gir_control_ticket_role { GIR_CONTROL_FRESH, GIR_CONTROL_NAMED_AWAITING, GIR_CONTROL_NAMED_READY, GIR_CONTROL_NAMED_MATERIALIZED } gir_control_ticket_role;
+typedef enum gir_control_ticket_role { GIR_CONTROL_WAITING, GIR_CONTROL_FRESH, GIR_CONTROL_NAMED_AWAITING, GIR_CONTROL_NAMED_READY, GIR_CONTROL_NAMED_MATERIALIZED } gir_control_ticket_role;
 typedef enum gir_control_ticket_kind { GIR_CONTROL_TICKET_RESERVED, GIR_CONTROL_TICKET_SELECTED, GIR_CONTROL_TICKET_RECEIVED } gir_control_ticket_kind;
 typedef struct gir_control_metadata { int64_t count, identity; } gir_control_metadata;
 typedef struct gir_control_snapshot {
@@ -287,6 +288,8 @@ struct gir_control_receiving {
     gir_control_attempt *boundary, *handoff;
     gir_control_scope *scope;
     gir_control_receiving *next;
+    gir_control_ticket *unselected;
+    gir_control_call_output *input;
     uint8_t exposed, handoff_mode, outward_mode, consumed, extension;
     ptrdiff_t view_offset;
     int64_t view_prefix;
@@ -342,14 +345,17 @@ struct gir_control_ticket {
     gir_control_ticket_kind kind;
     gir_control_ticket_role role;
     size_t lease_boundary;
+    size_t protected_count;
+    uint8_t **protected_metadata;
 };
-typedef struct gir_control_call_output {
+struct gir_control_call_output {
     gir_control_attempt *attempt;
     gir_control_receiving *receiving;
     uint8_t mode, claimed;
     ptrdiff_t view_offset;
     int64_t view_prefix;
-} gir_control_call_output;
+    gir_control_cleanup completion;
+};
 struct gir_control_call {
     gir_control_call *previous;
     size_t count;
@@ -358,6 +364,7 @@ struct gir_control_call {
     gir_control_owner **bindings, **owner_results;
 };
 static GS_TLS gir_control_attempt *gir_control_live_attempts;
+static void gir_control_ticket_destroy(gir_control_ticket *ticket);
 static GS_TLS gir_control_scope *gir_control_scope_top;
 static GS_TLS gir_control_call *gir_control_call_top;
 typedef char gir_control_metadata_size[(sizeof(gir_control_metadata) == 16) ? 1 : -1];
@@ -536,6 +543,7 @@ static void gir_control_handle_close(gir_control_receiving *receiving) {
     gir_control_require(*position == receiving);
     *position = receiving->next;
     gir_control_graph *graph = receiving->graph;
+    if (receiving->unselected) gir_control_ticket_destroy(receiving->unselected);
     if (receiving->handoff) gir_control_node_release(receiving->handoff);
     gir_control_node_release(receiving->boundary);
     free(receiving);
@@ -826,8 +834,10 @@ static uint8_t *gir_control_call_param(size_t position) {
     gir_control_call *call = gir_control_call_top;
     gir_control_require(call && position < call->count && call->outputs[position].attempt && !call->outputs[position].claimed);
     call->outputs[position].claimed = 1;
-    return (uint8_t *)gir_control_handle(gir_control_resolve(call->outputs[position].attempt),
+    gir_control_receiving *receiving = gir_control_handle(gir_control_resolve(call->outputs[position].attempt),
         call->outputs[position].view_offset, call->outputs[position].view_prefix);
+    receiving->input = &call->outputs[position];
+    return (uint8_t *)receiving;
 }
 static uint8_t *gir_control_call_get(uint8_t *token, size_t position) {
     gir_control_call *call = (gir_control_call *)token;
@@ -836,7 +846,11 @@ static uint8_t *gir_control_call_get(uint8_t *token, size_t position) {
     uint8_t *metadata = gir_control_add_lease_view(output->receiving, gir_control_resolve(output->attempt), output->mode,
         output->view_offset, output->view_prefix);
     gir_control_lease *lease = gir_control_find_lease(metadata);
-    if (lease->progress == GIR_CONTROL_ABANDONED || lease->progress == GIR_CONTROL_CANCELLED)
+    if (output->completion == GIR_CONTROL_UNSELECTED_COMPLETION) {
+        lease->attempt->active = NULL;
+        lease->progress = GIR_CONTROL_CANCELLED;
+        lease->cleanup = GIR_CONTROL_UNSELECTED_COMPLETION;
+    } else if (lease->progress == GIR_CONTROL_ABANDONED || lease->progress == GIR_CONTROL_CANCELLED)
         lease->cleanup = GIR_CONTROL_STORAGE_CLEANED;
     return metadata;
 }
@@ -1036,8 +1050,15 @@ static gir_control_attempt *gir_control_renew_node(gir_control_receiving *receiv
     gir_control_node_release(renewed);
     return renewed;
 }
+static void gir_control_receiving_selectable(gir_control_receiving *receiving) {
+    gir_control_require(!receiving->unselected);
+    for (gir_control_ticket *ticket = receiving->graph->tickets; ticket; ticket = ticket->previous)
+        gir_control_require(ticket->receiving != receiving || ticket->scope != gir_control_scope_top ||
+            ticket->role != GIR_CONTROL_WAITING);
+}
 static uint8_t *gir_control_receiving_renew(uint8_t *control) {
     gir_control_receiving *receiving = (gir_control_receiving *)control;
+    gir_control_receiving_selectable(receiving);
     gir_control_attempt *attempt = gir_control_renew_node(receiving, gir_control_boundary(receiving),
         receiving->view_offset, receiving->view_prefix);
     gir_control_require(attempt->progress == GIR_CONTROL_OPEN);
@@ -1045,6 +1066,7 @@ static uint8_t *gir_control_receiving_renew(uint8_t *control) {
 }
 static uint8_t *gir_control_receiving_refresh(uint8_t *control, uint8_t *metadata, uint8_t *view_start, int64_t prefix) {
     gir_control_receiving *receiving = (gir_control_receiving *)control;
+    gir_control_receiving_selectable(receiving);
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *before = lease->attempt;
     gir_control_require(receiving->graph == before->graph);
@@ -1063,8 +1085,7 @@ static uint8_t *gir_control_receiving_refresh(uint8_t *control, uint8_t *metadat
     gir_control_drop_lease(metadata);
     return after;
 }
-static gir_control_ticket *gir_control_ticket_new(gir_control_receiving *receiving, gir_control_attempt *boundary,
-                                                 gir_control_attempt *snapshot_attempt, gir_control_attempt *selected) {
+static gir_control_ticket *gir_control_ticket_allocate(gir_control_receiving *receiving) {
     gir_control_require(gir_control_scope_top != NULL);
     gir_control_ticket *ticket = (gir_control_ticket *)gir_control_alloc(sizeof(*ticket));
     ticket->receiving = receiving;
@@ -1072,22 +1093,32 @@ static gir_control_ticket *gir_control_ticket_new(gir_control_receiving *receivi
     ticket->view_offset = receiving->view_offset;
     ticket->view_prefix = receiving->view_prefix;
     ticket->outward_mode = receiving->outward_mode;
-    ticket->boundary = boundary;
-    ticket->snapshot_attempt = snapshot_attempt;
-    ticket->selected = selected;
-    ticket->boundary_start = boundary->receiving_start + receiving->view_offset;
     ticket->scope = gir_control_scope_top;
     ticket->lease_boundary = gir_control_scope_top->next_lease;
     ticket->scope_next = gir_control_scope_top->tickets;
     gir_control_scope_top->tickets = ticket;
     ticket->previous = receiving->graph->tickets;
     receiving->graph->tickets = ticket;
+    gir_control_graph_retain(receiving->graph);
+    return ticket;
+}
+static void gir_control_ticket_snapshot(gir_control_ticket *ticket, gir_control_attempt *boundary,
+                                        gir_control_attempt *snapshot_attempt, gir_control_attempt *selected) {
+    ticket->boundary = boundary;
+    ticket->snapshot_attempt = snapshot_attempt;
+    ticket->selected = selected;
+    ticket->boundary_start = boundary->receiving_start + ticket->view_offset;
     ticket->snapshot = gir_control_snapshot_of(snapshot_attempt);
     gir_control_node_retain(boundary);
     gir_control_node_retain(snapshot_attempt);
     gir_control_node_retain(selected);
     gir_control_parent_retain(snapshot_attempt, ticket->snapshot.expected);
-    gir_control_graph_retain(receiving->graph);
+}
+static gir_control_ticket *gir_control_ticket_new(gir_control_receiving *receiving, gir_control_attempt *boundary,
+                                                 gir_control_attempt *snapshot_attempt, gir_control_attempt *selected) {
+    gir_control_ticket *ticket = gir_control_ticket_allocate(receiving);
+    gir_control_ticket_snapshot(ticket, boundary, snapshot_attempt, selected);
+    ticket->role = GIR_CONTROL_FRESH;
     return ticket;
 }
 static void gir_control_drop_ticket_leases(gir_control_ticket *ticket, size_t count, uint8_t *const *carried) {
@@ -1112,7 +1143,7 @@ static void gir_control_drop_ticket_leases(gir_control_ticket *ticket, size_t co
     }
 }
 static void gir_control_cancel_ticket(gir_control_ticket *ticket, size_t count, uint8_t *const *carried) {
-    gir_control_require(ticket->kind != GIR_CONTROL_TICKET_RECEIVED);
+    gir_control_require(ticket->kind != GIR_CONTROL_TICKET_RECEIVED && ticket->role != GIR_CONTROL_WAITING);
     if (ticket->state == GIR_CONTROL_TICKET_RESTORED) return;
     if (ticket->role != GIR_CONTROL_FRESH) {
         ticket->state = GIR_CONTROL_TICKET_RESTORED;
@@ -1142,8 +1173,19 @@ static void gir_control_restore_named(gir_control_receiving *receiving, gir_cont
         if (gir_control_descendant(named, ticket->snapshot_attempt)) gir_control_cancel_ticket(ticket, 0, NULL);
     }
 }
-static uint8_t *gir_control_exit_reserve(uint8_t *control, uint8_t alias, uint8_t *binding) {
+static uint8_t *gir_control_exit_wait(uint8_t *control) {
     gir_control_receiving *receiving = (gir_control_receiving *)control;
+    gir_control_require(receiving->scope == gir_control_scope_top && !receiving->consumed && !receiving->unselected);
+    for (gir_control_ticket *ticket = receiving->graph->tickets; ticket; ticket = ticket->previous)
+        gir_control_require(ticket->receiving != receiving || ticket->role != GIR_CONTROL_WAITING);
+    return (uint8_t *)gir_control_ticket_allocate(receiving);
+}
+static void gir_control_exit_select(uint8_t *token, uint8_t alias, uint8_t *binding) {
+    gir_control_ticket *ticket = (gir_control_ticket *)token;
+    gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->role == GIR_CONTROL_WAITING &&
+        ticket->kind == GIR_CONTROL_TICKET_RESERVED && ticket->scope == gir_control_scope_top && ticket->receiving);
+    gir_control_receiving *receiving = ticket->receiving;
+    gir_control_require(!receiving->unselected && !receiving->consumed);
     gir_control_owner *source = (gir_control_owner *)binding;
     gir_control_attempt *current = gir_control_boundary(receiving);
     uint8_t named = alias && source && source->boundary == current;
@@ -1172,7 +1214,7 @@ static uint8_t *gir_control_exit_reserve(uint8_t *control, uint8_t alias, uint8_
         selected->receiving_prefix = frontier->receiving_prefix;
         gir_control_set_parent(selected, frontier, GIR_CONTROL_REPLACEMENT);
     }
-    gir_control_ticket *ticket = gir_control_ticket_new(receiving, boundary, frontier, selected);
+    gir_control_ticket_snapshot(ticket, boundary, frontier, selected);
     ticket->snapshot = snapshot;
     ticket->role = named ? GIR_CONTROL_NAMED_AWAITING : GIR_CONTROL_FRESH;
     ticket->source = named ? source : NULL;
@@ -1186,11 +1228,17 @@ static uint8_t *gir_control_exit_reserve(uint8_t *control, uint8_t alias, uint8_
         }
         gir_control_event("begin", selected->metadata.identity);
     }
+}
+static uint8_t *gir_control_exit_reserve(uint8_t *control, uint8_t alias, uint8_t *binding) {
+    gir_control_require(!((gir_control_receiving *)control)->unselected);
+    gir_control_ticket *ticket = gir_control_ticket_allocate((gir_control_receiving *)control);
+    gir_control_exit_select((uint8_t *)ticket, alias, binding);
     return (uint8_t *)ticket;
 }
 static uint8_t gir_control_exit_is_named(uint8_t *token) {
     gir_control_ticket *ticket = (gir_control_ticket *)token;
-    gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->kind == GIR_CONTROL_TICKET_RESERVED);
+    gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->kind == GIR_CONTROL_TICKET_RESERVED &&
+        ticket->role != GIR_CONTROL_WAITING);
     return ticket->role != GIR_CONTROL_FRESH;
 }
 static void gir_control_exit_mark_named(uint8_t *token) {
@@ -1237,7 +1285,8 @@ static void gir_control_materialize_named(gir_control_ticket *ticket) {
 }
 static uint8_t *gir_control_exit_selected(uint8_t *token) {
     gir_control_ticket *ticket = (gir_control_ticket *)token;
-    gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->kind == GIR_CONTROL_TICKET_RESERVED && ticket->receiving);
+    gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->kind == GIR_CONTROL_TICKET_RESERVED &&
+        ticket->role != GIR_CONTROL_WAITING && ticket->receiving);
     if (ticket->role != GIR_CONTROL_FRESH) gir_control_materialize_named(ticket);
     ticket->kind = GIR_CONTROL_TICKET_SELECTED;
     gir_control_attempt *selected = gir_control_resolve(ticket->selected);
@@ -1256,8 +1305,7 @@ static uint8_t *gir_control_exit_adopt(uint8_t *control, uint8_t *metadata) {
     gir_control_node_release(selected);
     return (uint8_t *)ticket;
 }
-static void gir_control_exit_release(uint8_t *token) {
-    gir_control_ticket *ticket = (gir_control_ticket *)token;
+static void gir_control_ticket_detach(gir_control_ticket *ticket) {
     gir_control_graph *graph = ticket->graph;
     gir_control_ticket **scope_position = &ticket->scope->tickets;
     while (*scope_position && *scope_position != ticket) scope_position = &(*scope_position)->scope_next;
@@ -1267,17 +1315,46 @@ static void gir_control_exit_release(uint8_t *token) {
     while (*graph_position && *graph_position != ticket) graph_position = &(*graph_position)->previous;
     gir_control_require(*graph_position == ticket);
     *graph_position = ticket->previous;
-    gir_control_parent_release(ticket->snapshot_attempt, ticket->snapshot.expected);
-    gir_control_node_release(ticket->snapshot_attempt);
-    gir_control_node_release(ticket->boundary);
-    gir_control_node_release(ticket->selected);
+}
+static void gir_control_ticket_destroy(gir_control_ticket *ticket) {
+    gir_control_graph *graph = ticket->graph;
+    if (ticket->snapshot_attempt) {
+        gir_control_parent_release(ticket->snapshot_attempt, ticket->snapshot.expected);
+        gir_control_node_release(ticket->snapshot_attempt);
+    }
+    if (ticket->boundary) gir_control_node_release(ticket->boundary);
+    if (ticket->selected) gir_control_node_release(ticket->selected);
     if (ticket->prepared) gir_control_node_release(ticket->prepared);
     gir_control_owner_release(ticket->source);
+    free(ticket->protected_metadata);
     free(ticket);
     gir_control_graph_release(graph);
 }
+static void gir_control_exit_release(uint8_t *token) {
+    gir_control_ticket *ticket = (gir_control_ticket *)token;
+    gir_control_ticket_detach(ticket);
+    gir_control_ticket_destroy(ticket);
+}
 static void gir_control_exit_discard(uint8_t *token, size_t count, uint8_t *const *carried) {
-    gir_control_cancel_ticket((gir_control_ticket *)token, count, carried);
+    gir_control_ticket *ticket = (gir_control_ticket *)token;
+    if (ticket->role == GIR_CONTROL_WAITING) {
+        gir_control_receiving *receiving = ticket->receiving;
+        gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->kind == GIR_CONTROL_TICKET_RESERVED &&
+            ticket->scope == gir_control_scope_top && receiving && receiving->scope == gir_control_scope_top &&
+            !receiving->unselected && !receiving->consumed);
+        gir_control_ticket_detach(ticket);
+        gir_control_require(count <= SIZE_MAX / sizeof(*ticket->protected_metadata));
+        ticket->protected_count = count;
+        ticket->protected_metadata = (uint8_t **)gir_control_alloc((count ? count : 1) * sizeof(*ticket->protected_metadata));
+        for (size_t index = 0; index < count; index++) {
+            gir_control_find_lease(carried[index]);
+            ticket->protected_metadata[index] = carried[index];
+        }
+        ticket->state = GIR_CONTROL_TICKET_RESTORED;
+        receiving->unselected = ticket;
+        return;
+    }
+    gir_control_cancel_ticket(ticket, count, carried);
     gir_control_exit_release(token);
 }
 static uint8_t *gir_control_exit_prepare(uint8_t *token, uint8_t *metadata) {
@@ -1358,6 +1435,59 @@ static uint8_t *gir_control_exit_commit(uint8_t *token, uint8_t *metadata, uint8
 static uint8_t *gir_control_receiving_cancel(uint8_t *control, size_t count, uint8_t *const *carried) {
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_attempt *attempt = gir_control_boundary(receiving);
+    if (receiving->unselected) {
+        gir_control_ticket *ticket = receiving->unselected;
+        gir_control_require(receiving->scope == gir_control_scope_top && ticket->receiving == receiving &&
+            ticket->scope == gir_control_scope_top && ticket->role == GIR_CONTROL_WAITING &&
+            ticket->state == GIR_CONTROL_TICKET_RESTORED && !receiving->consumed);
+        gir_control_require(ticket->protected_count == count);
+        for (size_t index = 0; index < count; index++)
+            gir_control_require(ticket->protected_metadata[index] == carried[index]);
+        gir_control_ticket *superseding = NULL;
+        for (gir_control_ticket *active = receiving->graph->tickets; active; active = active->previous) {
+            if (active->receiving != receiving || active->scope != gir_control_scope_top) continue;
+            gir_control_require(!superseding &&
+                (active->kind == GIR_CONTROL_TICKET_SELECTED || active->kind == GIR_CONTROL_TICKET_RECEIVED) &&
+                active->state == GIR_CONTROL_TICKET_ACTIVE && active->role != GIR_CONTROL_WAITING);
+            superseding = active;
+        }
+        if (superseding) {
+            uint8_t matching = 0;
+            gir_control_attempt *selected = gir_control_resolve(superseding->selected);
+            for (size_t index = 0; index < count; index++) {
+                gir_control_lease *lease = gir_control_find_lease(carried[index]);
+                gir_control_attempt *node = lease->attempt;
+                if (lease->progress != GIR_CONTROL_BUILT) continue;
+                while (node != selected && node->parent && node->parent_kind == GIR_CONTROL_REPLACEMENT)
+                    node = node->parent;
+                if (node == selected) matching = 1;
+            }
+            gir_control_require(matching);
+        }
+        for (gir_control_lease *lease = gir_control_scope_top->leases; lease; lease = lease->next) {
+            if (lease->receiving != receiving) continue;
+            uint8_t protected = 0;
+            for (size_t index = 0; index < count; index++)
+                if (carried[index] == (uint8_t *)&lease->metadata && lease->progress == GIR_CONTROL_BUILT) protected = 1;
+            gir_control_require(superseding && protected);
+        }
+        for (gir_control_call *call = gir_control_call_top; call && call != gir_control_scope_top->call; call = call->previous)
+            for (size_t position = 0; position < call->count; position++)
+                gir_control_require(call->outputs[position].receiving != receiving);
+        receiving->unselected = NULL;
+        gir_control_ticket_destroy(ticket);
+        if (!superseding) {
+            uint8_t *metadata = gir_control_add_lease(receiving, attempt, receiving->outward_mode);
+            gir_control_lease *certificate = gir_control_find_lease(metadata);
+            attempt->active = NULL;
+            certificate->progress = GIR_CONTROL_CANCELLED;
+            certificate->cleanup = GIR_CONTROL_UNSELECTED_COMPLETION;
+            if (receiving->input) receiving->input->completion = GIR_CONTROL_UNSELECTED_COMPLETION;
+            receiving->consumed = 1;
+            return metadata;
+        }
+    }
+    gir_control_receiving_selectable(receiving);
     gir_control_abandon_tree(attempt, count, carried);
     gir_control_restore_top(attempt, count, carried);
     if (receiving->extension && attempt->extension && attempt->parent &&
@@ -1400,7 +1530,7 @@ static uint8_t *gir_control_attempt_abandon(uint8_t *metadata, size_t count, uin
 static void gir_control_receiving_drop(uint8_t *control) {
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     uint8_t owning = receiving->scope == gir_control_scope_top;
-    if (owning) gir_control_require(!receiving->handoff);
+    if (owning) gir_control_require(!receiving->handoff && !receiving->unselected);
     for (gir_control_ticket *ticket = receiving->graph->tickets; ticket; ticket = ticket->previous)
         if (owning || ticket->scope == gir_control_scope_top) gir_control_require(ticket->receiving != receiving);
     for (gir_control_lease *lease = gir_control_scope_top->leases; lease; lease = lease->next) {
@@ -1437,6 +1567,13 @@ static void gir_control_attempt_cancel(uint8_t *metadata) {
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     gir_control_receiving *receiving = lease->receiving;
+    if (lease->cleanup == GIR_CONTROL_UNSELECTED_COMPLETION) {
+        gir_control_require(lease->progress == GIR_CONTROL_CANCELLED && attempt->active != lease);
+        uint8_t close = receiving && receiving->scope == gir_control_scope_top && receiving->consumed;
+        gir_control_drop_lease(metadata);
+        if (close) gir_control_handle_close(receiving);
+        return;
+    }
     gir_control_capture(attempt);
     gir_control_require(attempt->progress == GIR_CONTROL_ABANDONED || attempt->progress == GIR_CONTROL_CANCELLED ||
                         attempt->progress == GIR_CONTROL_BUILT);

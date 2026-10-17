@@ -277,7 +277,6 @@ private:
     vector<int> blockparamrunlens;  // Length members for transient owner-run parameters.
     map<int, Destination> destinations;
     map<int, Destination> completions;
-    map<int, int> exitOrigins;
     vector<int> carrierRoots;
     map<int, int> scratchStacks;
     map<const GirInst *, int> printStacks;
@@ -796,9 +795,6 @@ private:
 
     GirFunc LowerFunc(const GirFunc &f, int global) {
         hf = &f;
-        exitOrigins.clear();
-        for (const auto &block : f.blocks) for (const auto &instruction : block.insts)
-            if (instruction.op == GirOp::ExitReserve && instruction.org >= 0) exitOrigins[instruction.res] = instruction.org;
         auto functionOrigin = f.org;
         if (functionOrigin < 0)
             for (const auto &block : f.blocks) for (const auto &instruction : block.insts)
@@ -2013,6 +2009,15 @@ private:
             case GirOp::DestRefresh:
                 Define(i, Raw(Control(GirOp::ControlReceivingRefresh, W0(i.a), shape[i.b].w[2],
                     { shape[i.b].w[1], ConstI(I64(), Prefix(HT(hvt[i.b]).elem, HT(hvt[i.b]).request)) }))); return;
+            case GirOp::ExitWait:
+                Define(i, { Control(GirOp::ControlExitWait, W0(i.a)) }); return;
+            case GirOp::ExitSelect: {
+                GirExitSource source = GirExitNewValue {};
+                if (auto slot = GirNamedExitBinding(i.exitSource))
+                    source = GirExitNamedAlias { Simple(GirOp::LocalGet, Ptr(), -1, -1, ownerMembers.at(*slot)) };
+                Control(GirOp::ControlExitSelect, W0(i.a), -1, {}, -1, source);
+                return;
+            }
             case GirOp::ExitReserve: {
                 GirExitSource source = GirExitNewValue {};
                 if (auto slot = GirNamedExitBinding(i.exitSource))
@@ -2028,9 +2033,8 @@ private:
             case GirOp::ReservedNamed:
                 Define(i, Raw(Control(GirOp::ControlExitSelected, W0(i.a))));
                 if (Prefix(HT(hvt[i.res]).elem, HT(hvt[i.res]).request)) {
-                    auto found = exitOrigins.find(i.a);
-                    if (found == exitOrigins.end()) throw CompileError { "named exit prefix has no source origin" };
-                    PatchPrefix(i.res, found->second);
+                    if (i.org < 0) throw CompileError { "named exit prefix has no source origin" };
+                    PatchPrefix(i.res, i.org);
                 }
                 return;
             case GirOp::ExitAdopt:
