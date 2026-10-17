@@ -45,6 +45,58 @@ theorem closeFunction_fixed_checked {m : Module} {states : Array State} {f : Fun
     round m states f types result = result ∧ check m f types result = true :=
   closeFunctionFrom_fixed_checked closed
 
+theorem check_writes {m : Module} {f : Func} {types : Array (Option VTy)} {state : State}
+    (checked : check m f types state = true) : checkWrites f state = true := by
+  simp only [check, Bool.and_eq_true] at checked
+  exact checked.1.1.2
+
+theorem check_returned {m : Module} {f : Func} {types : Array (Option VTy)} {state : State}
+    (checked : check m f types state = true) : checkReturned f state = true := by
+  simp only [check, Bool.and_eq_true] at checked
+  exact checked.1.2
+
+theorem check_annotations {m : Module} {f : Func} {types : Array (Option VTy)} {state : State}
+    (checked : check m f types state = true) : annotationsValid m f = true := by
+  simp only [check, Bool.and_eq_true] at checked
+  exact checked.1.1.1.1.2
+
+theorem checkReturned_roots {f : Func} {state : State} {type : Ty} {bound actual : List RootRef}
+    (results : f.results = [type]) (reference : type.isRefLike = true)
+    (declared : f.roots.results[0]? = some bound) (roots : normalize f state.returned = some actual)
+    (checked : checkReturned f state = true) :
+    ∀ root ∈ actual, root ∈ bound.flatMap f.expandParameterRoot := by
+  simp only [checkReturned, results, reference, ite_true, declared, Option.any_some,
+    rootsWithin, roots, Option.any_some] at checked
+  intro root member
+  exact List.contains_iff_mem.mp (List.all_eq_true.mp checked root member)
+
+theorem closeFrom_success_of_bounded_rank {m : Module} {types : Array (Array (Option VTy))}
+    (rank : Array State → Nat) (invariant : Array State → Prop) (bound : Nat)
+    (preserved : ∀ state, invariant state → invariant (moduleRound m types state))
+    (bounded : ∀ state, invariant state → rank state ≤ bound)
+    (progress : ∀ state, invariant state → moduleRound m types state ≠ state →
+      rank state < rank (moduleRound m types state))
+    {fuel : Nat} {initial : Array State} (valid : invariant initial)
+    (enough : bound - rank initial < fuel) :
+    ∃ result, closeFrom m types fuel initial = some result := by
+  induction fuel generalizing initial with
+  | zero => omega
+  | succ fuel ih =>
+      by_cases stable : moduleRound m types initial = initial
+      · exact ⟨initial, by simp [closeFrom, stable]⟩
+      · have next := preserved initial valid
+        have growth := progress initial valid stable
+        have limit := bounded initial valid
+        have nextLimit := bounded _ next
+        have remaining : bound - rank (moduleRound m types initial) < fuel := by omega
+        obtain ⟨result, closed⟩ := ih next remaining
+        refine ⟨result, ?_⟩
+        have changed : (moduleRound m types initial == initial) = false := by
+          apply Bool.eq_false_iff.mpr
+          intro equal
+          exact stable (eq_of_beq equal)
+        simpa only [closeFrom, changed, Bool.false_eq_true, ite_false] using closed
+
 end Goose.GIR.ReplacementContentFlow.Model
 
 namespace Goose.GIR
@@ -89,6 +141,11 @@ theorem ReplacementContentFlow.forFunction_model_checked
         exact ⟨eq_of_beq canonical, states, rfl, checked⟩
   · simp at built
 
+#print axioms ReplacementContentFlow.Model.check_writes
+#print axioms ReplacementContentFlow.Model.check_returned
+#print axioms ReplacementContentFlow.Model.check_annotations
+#print axioms ReplacementContentFlow.Model.checkReturned_roots
+#print axioms ReplacementContentFlow.Model.closeFrom_success_of_bounded_rank
 #print axioms replacementContentFlow_source
 #print axioms replacementContentFlow_model
 #print axioms ReplacementContentFlow.forFunction_model
