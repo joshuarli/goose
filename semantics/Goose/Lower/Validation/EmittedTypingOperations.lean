@@ -85,6 +85,59 @@ theorem emitted_freezeTo (le : LEnv) (before : LS) (mu : Mutability) (value : Va
                | (simpa only [EmittedAt, freezeTo, bind_run, valTy_of_recorded row, pure_run] using EmittedTrace.refl (le := le) (initial := before))
                | (simpa only [EmittedAt, freezeTo, bind_run, valTy_of_recorded row, pure_run] using emitted_refFreeze (le := le) row))
 
+theorem emitted_valTy_nonunit {le : LEnv} {before : LS} {value : ValueId} {type : VTy}
+    (nonunit : type ≠ .data .unit) (observed : (valTy value le before).1 = type) :
+    before.vals[value]? = some (some type) := by
+  cases row : before.vals[value]? with
+  | none => simp [valTy, bind_run, row, pure_run] at observed; exact (nonunit observed.symm).elim
+  | some recorded => cases recorded with
+    | none => simp [valTy, bind_run, row, pure_run] at observed; exact (nonunit observed.symm).elim
+    | some actual =>
+      have same : actual = type := by simpa [valTy, bind_run, row, pure_run] using observed
+      simpa only [same] using row
+
+theorem emitted_borrowTo_cases (le : LEnv) (before : LS) (requested : Mutability) (value : ValueId) :
+    borrowTo requested value le before = freezeTo requested value le before ∨
+    ∃ type, before.vals[value]? = some (some type) ∧
+      (Op.ownerBorrow value).resultTy (tyEnv le before) = .ok type ∧
+      borrowTo requested value le before = emitDef (.ownerBorrow value) le before := by
+  unfold borrowTo
+  simp only [bind_run, read_apply, valTy_run]
+  split
+  next element observed =>
+    have row := emitted_valTy_nonunit (by intro equality; cases equality) observed
+    by_cases selected : (requested == .mutable && le.mod.profile == .shrink) = true
+    · right
+      refine ⟨_, row, ?_, ?_⟩
+      · simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, row,
+          pure, Except.pure, bind, Except.bind]
+      · simp [selected]
+    · left
+      simp [selected]
+  next element observed =>
+    have row := emitted_valTy_nonunit (by intro equality; cases equality) observed
+    by_cases selected : (requested == .mutable && le.mod.profile == .shrink) = true
+    · right
+      refine ⟨_, row, ?_, ?_⟩
+      · simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, row,
+          pure, Except.pure, bind, Except.bind]
+      · simp [selected]
+    · left
+      simp [selected]
+  next observed noGrow noShrink =>
+    left
+    simp
+
+theorem emitted_borrowTo (le : LEnv) (before : LS) (requested : Mutability) (value : ValueId) :
+    EmittedAt le before (borrowTo requested value) := by
+  rcases emitted_borrowTo_cases le before requested value with same | ⟨type, row, success, same⟩
+  · unfold EmittedAt
+    rw [same]
+    exact emitted_freezeTo le before requested value
+  · unfold EmittedAt
+    rw [same]
+    exact EmittedAt.emitDef (.ownerBorrow value) (fun _ => ⟨type, success⟩)
+
 theorem emitted_sliceView {le : LEnv} {before : LS} {value : ValueId} {mu : Mutability} {type : Ty}
     (typed : before.vals[value]? = some (some (.data (.slice mu type)))) :
     EmittedAt le before (emitDef (.sliceView value)) := by
@@ -100,16 +153,6 @@ theorem emitted_readOnlySlice {le : LEnv} {before : LS} {value : ValueId} {mu : 
     simp [Op.resultTy, TyEnv.viewTy, TyEnv.valTy, TyEnv.boundTy, tyEnv, typed, permission,
       pure, Except.pure, bind, Except.bind])
 
-theorem emitted_valTy_nonunit {le : LEnv} {before : LS} {value : ValueId} {type : VTy}
-    (nonunit : type ≠ .data .unit) (observed : (valTy value le before).1 = type) :
-    before.vals[value]? = some (some type) := by
-  cases row : before.vals[value]? with
-  | none => simp [valTy, bind_run, row, pure_run] at observed; exact (nonunit observed.symm).elim
-  | some recorded => cases recorded with
-    | none => simp [valTy, bind_run, row, pure_run] at observed; exact (nonunit observed.symm).elim
-    | some actual =>
-      have same : actual = type := by simpa [valTy, bind_run, row, pure_run] using observed
-      simpa only [same] using row
 
 theorem emitted_coerceTo (le : LEnv) (before : LS) (target : Ty) (value : ValueId) (origin : OriginId) :
     EmittedAt le before (coerceTo target value origin) := by
