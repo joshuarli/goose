@@ -84,6 +84,16 @@ private theorem check_types_of_instructions {module : Core.Module}
         info.vt instruction = .ok ()) :
     checkTypes (lower module) info.label info.f info.vt = .ok () := by
   have profiles := profile_function_checks (module := lower module) supported
+  have parameters : (checkAll info.f.params fun ty => do
+      unless ty.paramOk do throw "a parameter has a type no parameter may have") =
+      (Except.ok () : Except String Unit) := by
+    obtain ⟨_, source⟩ := lower_info_source accepted member
+    rcases source with ⟨contextIndex, context, impl, contextAt, implAt, same⟩ |
+      ⟨globalIndex, global, globalAt, same⟩
+    · rw [same]
+      exact lowerContextAt_parameterTypeChecks context accepted implAt
+    · rw [same]
+      rfl
   have results := lower_info_resultTypeChecks accepted member
   have slots := lower_info_slotTypeChecks accepted member
   have rows : (checkAll info.f.blocks.toList fun block =>
@@ -105,6 +115,8 @@ private theorem check_types_of_instructions {module : Core.Module}
               if (lower module).profile != .shrink && kind ∈ [.popEmpty, .popNRange, .resizeNegative, .resizeFill, .capacity] then
                 throw s!"abort kind {kind.tag.quote} requires core-shrink"
           | _ => pure ()
+      checkAll info.f.params fun ty => do
+        unless ty.paramOk do throw "a parameter has a type no parameter may have"
       checkAll info.f.results fun ty => do
         unless !ty.isRefSlice do throw "a reference-to-slice type is only valid for a parameter"
       checkAll info.f.slots.toList.zipIdx fun (slot, position) => do
@@ -123,6 +135,7 @@ private theorem check_types_of_instructions {module : Core.Module}
       | none => throw "no blocks") = (Except.ok () : Except String Unit) := by
     rw [profiles]
     simp only [bind, Except.bind]
+    rw [parameters]
     rw [results]
     simp only [bind, Except.bind, pure, Except.pure, throw] at slots ⊢
     rw [slots, rows, entryAt]
