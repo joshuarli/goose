@@ -39,7 +39,8 @@ theorem compound_owner_slice_typed {before after : LS} {value : ValueId}
     (run : lowerExpr compoundOwnerSlice (lowerEnv module env.vars []) before = (value, after))
     (live : after.cur.isSome = true) :
     after.vals[value]? = some (some (.data (.slice .mutable (.int .i64)))) :=
-  lowerExpr_generated_typed compoundOwnerSlice compound_owner_slice_source run live generated
+  by
+  exact lowerExpr_generated_typed compoundOwnerSlice compound_owner_slice_source run live
 
 theorem compound_owner_element_typed {before after : LS} {value : ValueId}
     (generated : GeneratedBuilderState before)

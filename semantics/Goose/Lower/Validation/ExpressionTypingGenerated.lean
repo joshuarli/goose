@@ -14,8 +14,6 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
-local macro "generated_builder" : tactic => `(tactic| assumption)
-
 private theorem generated_pushScope {before after : LS} (generated : GeneratedBuilderState before)
     {scope : ScopeId} {le : LEnv} {result : Unit}
     (run : pushScope scope le before = (result, after)) : GeneratedBuilderState after := by
@@ -38,7 +36,7 @@ theorem lowerExpr_generated_typed (e : Expr)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerExpr e (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) : after.vals[value]? = some (some (.data ty)) := by
+    (generated : GeneratedBuilderState before := by assumption) : after.vals[value]? = some (some (.data ty)) := by
   cases e with
   | lit t n | bool b =>
     have initial := (dead_lowerExpr _).live_before run live
@@ -478,7 +476,7 @@ theorem lowerPlace_generated_typed (p : Place)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerPlace p (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) :
+    (generated : GeneratedBuilderState before := by assumption) :
     ∃ mu, after.vals[value]? = some (some (.data (.ref mu info.ty))) := by
   cases p with
   | var x | global g =>
@@ -535,7 +533,7 @@ theorem lowerView_generated_typed (v : View)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerView v (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) : ∃ mu, after.vals[value]? = some (some (.view mu pair.1)) := by
+    (generated : GeneratedBuilderState before := by assumption) : ∃ mu, after.vals[value]? = some (some (.view mu pair.1)) := by
   cases v with
   | of p =>
     have children := source
@@ -578,7 +576,7 @@ theorem lowerBound_generated_typed (bound : Bound)
     {results : List Ty} {before after : LS} {value : Bnd}
     (run : lowerBound bound (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) : BoundTyped after value := by
+    (generated : GeneratedBuilderState before := by assumption) : BoundTyped after value := by
   cases bound with
   | omitted =>
     obtain ⟨rfl, rfl⟩ := pure_eq.mp run
@@ -596,7 +594,7 @@ theorem lowerExprs_generated_typed (exprs : List Expr)
     {results : List Ty} {before after : LS} {values : List ValueId}
     (run : lowerExprs exprs (lowerEnv env.mod env.vars results) before = (values, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) : TypedValues after types values := by
+    (generated : GeneratedBuilderState before := by assumption) : TypedValues after types values := by
   cases exprs with
   | nil =>
     cases types with
@@ -633,7 +631,7 @@ theorem lowerArgs_generated_typed (args : List Arg)
     {results : List Ty} {before after : LS} {values : List ValueId}
     (run : lowerArgs args (lowerEnv env.mod env.vars results) before = (values, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) :
+    (generated : GeneratedBuilderState before := by assumption) :
     PassableValues after (params.map (fun param => tyOfVar callee param.var)) values := by
   cases args with
   | nil =>
@@ -704,7 +702,7 @@ theorem lowerBlock_generated_typed (body : Core.Block)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerBlock none [] true body (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) : after.vals[value]? = some (some (.data ty)) := by
+    (generated : GeneratedBuilderState before := by assumption) : after.vals[value]? = some (some (.data ty)) := by
   cases body with
   | mk scope statements expression =>
     unfold Core.tyBlock at source
@@ -769,7 +767,7 @@ theorem lowerPlace_generated_writable_typed (place : Place)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerPlace place (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) :
+    (generated : GeneratedBuilderState before := by assumption) :
     after.vals[value]? = some (some (.data (.ref .mutable info.ty))) := by
   cases place with
   | var index =>
@@ -830,7 +828,7 @@ theorem lowerView_generated_writable_typed (view : View)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerView view (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) :
+    (generated : GeneratedBuilderState before := by assumption) :
     after.vals[value]? = some (some (.view .mutable element)) := by
   cases view with
   | val expr =>
@@ -860,7 +858,7 @@ theorem lowerExpr_generated_contents (expr : Expr)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerExpr expr (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) :
+    (generated : GeneratedBuilderState before := by assumption) :
     FreshContentsEvidence (lowerEnv env.mod env.vars results) before.vals.size after value := by
   have form := tyExpr_mutable_reference_form source
   cases expr with
@@ -1077,7 +1075,7 @@ theorem lowerPlace_generated_contents (place : Place)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerPlace place (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) :
+    (generated : GeneratedBuilderState before := by assumption) :
     FreshContentsEvidence (lowerEnv env.mod env.vars results) before.vals.size after value := by
   cases place with
   | var index =>
@@ -1134,7 +1132,7 @@ theorem lowerView_generated_contents (view : View)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerView view (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) :
+    (generated : GeneratedBuilderState before := by assumption) :
     FreshContentsEvidence (lowerEnv env.mod env.vars results) before.vals.size after value := by
   cases view with
   | val expr =>
@@ -1173,7 +1171,7 @@ theorem lowerBlock_generated_contents (body : Core.Block)
     {results : List Ty} {before after : LS} {value : ValueId}
     (run : lowerBlock none [] true body (lowerEnv env.mod env.vars results) before = (value, after))
     (live : after.cur.isSome = true)
-    (generated : GeneratedBuilderState before := by generated_builder) : FreshContentsEvidence (lowerEnv env.mod env.vars results) before.vals.size after value := by
+    (generated : GeneratedBuilderState before := by assumption) : FreshContentsEvidence (lowerEnv env.mod env.vars results) before.vals.size after value := by
   cases body with
   | mk scope statements expression =>
     unfold Core.tyBlock at source
