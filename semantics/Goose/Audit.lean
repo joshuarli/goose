@@ -5,6 +5,10 @@ import Goose.Reuse.Model
 import Goose.Proofs.Lower
 import Goose.Lower.TypedStatementFamily
 import Goose.Lower.ReflectionInduction
+import Goose.Lower.Validation.ValidationStructural
+import Goose.Lower.Validation.SnapshotContentsModule
+import Goose.Lower.Validation.ValidationTypedModule
+import Goose.Lower.Validation.PermissionPreservationAccepted
 import Goose.Lower.Loops
 import Goose.Lower.While
 import Goose.Lower.Prefix
@@ -197,6 +201,11 @@ end Goose.Audit
 #audit Goose.Lower.typedModule_simulation
 #audit Goose.Lower.acceptedModule_reflection
 #audit Goose.Lower.acceptedModule_never_faults
+#audit Goose.Lower.Validation.lower_structuralValidation_of_accepted
+#audit Goose.Lower.Validation.lowerContext_mutableSnapshotGraphs_of_accepted
+#audit Goose.Lower.Validation.lowerGlobal_mutableSnapshotGraphs_of_accepted
+#audit Goose.Lower.Validation.lower_typedValidation_of_accepted
+#audit Goose.Lower.Validation.lower_permission_stage_of_accepted
 #audit Goose.Lower.claims
 #audit Goose.Lower.blockPreClaim
 #audit Goose.Lower.stmt_while_sim

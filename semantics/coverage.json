@@ -210,9 +210,19 @@
   "id": "TH-LOWER-03",
   "theorem": "Goose.Lower.typedModule_simulation, Goose.Lower.acceptedModule_reflection, Goose.Lower.acceptedModule_never_faults (runtime preservation and fault freedom only)",
   "statement": "The core-shrink target requires validation preservation, transfer of Core's demand and retained-operand invariant to lowered GIR, done-run preservation, and fault freedom for every fuel-indexed run of a validated lowering.",
-  "evidence": "TH-LOWER-01-REST proves forward preservation and reverse reflection for every accepted Core module, including core-shrink, and fault freedom at every target fuel. The restricted Goose.Proofs.Lower.lower_correct_ctl theorem remains available. Goose/GIR/ShrinkChecks.lean provides the accepted, faulting deadResizableRef negative control for standalone GIR validation.",
-  "limits": "GIR validation preservation and explicit transfer of Core's demand and retained-operand invariant remain open. The module runtime theorems discharge forward preservation, reverse reflection and fault freedom, including when the source diverges. They do not prove core-construction or production C++ conformance.",
-  "reviewer": "The runtime endpoints have no residual simulation or reflection premises beyond Core acceptance. Validation preservation and explicit invariant transfer remain open."
+  "evidence": "TH-LOWER-01-REST proves forward preservation, reverse reflection and fault freedom for every accepted Core module, including core-shrink. TH-LOWER-VALIDATION-STAGES records the closed GIR checker stages and snapshot graph certificates.",
+  "limits": "Full GIR.validate preservation remains open. The scope walk's storage component, summary and root-annotation checks, and replacement checks remain open. Explicit transfer of Core's demand and retained-operand invariant also remains open. Whole-module runtime preservation and fault freedom are proved, including for divergent sources. These are Lean model results, with no core-construction or production C++ conformance claim.",
+  "reviewer": "The runtime and registered module-wide checker endpoints require only Core acceptance. Full validator composition and explicit invariant transfer remain open."
+ },
+ {
+  "feature": "Accepted Core lowering: closed GIR validation stages",
+  "label": "model-proved",
+  "id": "TH-LOWER-VALIDATION-STAGES",
+  "theorem": "Goose.Lower.Validation.lower_structuralValidation_of_accepted, Goose.Lower.Validation.lower_typedValidation_of_accepted, Goose.Lower.Validation.lowerContext_mutableSnapshotGraphs_of_accepted, Goose.Lower.Validation.lowerGlobal_mutableSnapshotGraphs_of_accepted, Goose.Lower.Validation.lower_permission_stage_of_accepted",
+  "statement": "For every module accepted by Core.validate, lower module passes checkEntryAndGlobals, checkSymbols, checkStructTypes, checkTypes, checkCfg, checkUnreachable, standalone checkStorage, checkPermissions, the scope walk's scopes check, checkEvidence and checkOrigins. Mutable snapshot graph certificates are derived for the actual lowered context functions and global initializers.",
+  "assumptions": "Core.validate module = .ok (). The module-wide checker endpoints have no callback, profile or type-table premises. Snapshot certificates additionally select an implementation or global row.",
+  "evidence": "Goose/Lower/Validation/{ValidationStructural,ValidationTypedModule,SnapshotContentsModule,PermissionPreservationAccepted}.lean. The checker claims use the actual lowered function tables and final inferred value types. Snapshot graph witnesses are derived from accepted source and actual emitted states. Goose/Audit.lean audits these public endpoints.",
+  "limits": "Full GIR.validate preservation, the scope walk's storage component, summary and root-annotation checks, and replacement checks remain open. These claims concern Lean definitions. C++ lowering and native execution are outside scope."
  },
  {
   "feature": "TH-GIR-01",
