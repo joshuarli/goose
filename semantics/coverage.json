@@ -198,11 +198,21 @@
   "feature": "TH-LOWER-01",
   "label": "model-proved",
   "id": "TH-LOWER-01-REST",
-  "limits": "These theorems concern the transparent Lean Core evaluator, lower builder and GIR interpreter. GIR validation preservation remains open. An explicit bound relating source and target fuel (TH-LOWER-02) remains open. Agreement of timeout prefixes is outside these claims. They do not prove production C++ exporter, emitter, native runtime or core-construction conformance. The legacy moduleOk theorem retains its fragment restrictions.",
+  "limits": "These theorems concern the transparent Lean Core evaluator, lower builder and GIR interpreter. GIR validation preservation remains open. TH-LOWER-02 supplies an explicit converse fuel bound and timeout/divergence consequences. Agreement of timeout prefixes is outside these claims. They do not prove production C++ exporter, emitter, native runtime or core-construction conformance. The legacy moduleOk theorem retains its fragment restrictions.",
   "theorem": "Goose.Lower.typedModule_simulation, Goose.Lower.acceptedModule_reflection, Goose.Lower.acceptedModule_never_faults",
   "statement": "For every module accepted by Core.validate and every numeric profile, every successful or final source result at any source fuel occurs at all sufficiently large target fuels. Every non-timeout lowered GIR result at any target fuel occurs in Core at some source fuel. The lowered module never faults at any target fuel.",
   "assumptions": "Core.validate cfg.mod = .ok (). All source and target runs start at St.initial. No moduleOk fragment premise or additional typing, builder, callback or reflection hypothesis remains.",
   "evidence": "Goose/Lower/TypedStatementFamily.lean proves typedModule_simulation for every source fuel. Goose/Lower/ReflectionInduction.lean proves acceptedModule_reflection and acceptedModule_never_faults. EventualM preserves the complete result and state from successful or final source execution. ReflectM preserves the complete non-timeout result and state from target execution. Goose/Audit.lean audits all three endpoints."
+ },
+ {
+  "feature": "Accepted Core lowering: numerical converse fuel bound",
+  "label": "model-proved",
+  "id": "TH-LOWER-02",
+  "theorem": "Goose.Lower.acceptedModule_fuelBound, Goose.Lower.lowered_done_at_source_fuel_bound, Goose.Lower.lowered_timeout_of_source_fuel_bound, Goose.Lower.lowering_diverges_with_fuel_bound",
+  "statement": "Let C = moduleSyntaxCap module and B(module,k) = 8 * (C + 1) * (k + 2) + 1. For every accepted Core module and numeric profile, every non-timeout lowered GIR result at target fuel k is the exact Core result and state at source fuel B(module,k). Consequently, target done preserves outcome and trace at that source fuel; source timeout at B(module,k) implies target timeout at k; and source timeout at every fuel implies target timeout at every fuel.",
+  "assumptions": "Core.validate module = .ok (). Completed-run and timeout consequences additionally assume the stated observed run; divergence assumes source timeout at every fuel. All runs start at St.initial. No callback, future-fuel or fragment premise remains.",
+  "evidence": "Goose/Lower/FuelBoundInduction.lean proves acceptedModule_fuelBound for all source syntax. Goose/Lower/FuelBoundConverse.lean derives the completed-run, timeout and divergence consequences. C is computed as the maximum source body or global-initializer node count. Goose/Audit.lean audits all four public endpoints.",
+  "limits": "This is a converse bound from target fuel to source fuel, not a forward target-fuel bound or a tight cost estimate. Timeout traces are existential and need not agree; timeout-prefix agreement is not claimed. Both evaluators share maxCallDepth = 100000, whose timeout is included in the modeled divergence premise. These are Lean model results, with no full GIR.validate, production C++ or core-construction conformance claim."
  },
  {
   "feature": "TH-LOWER-03",
@@ -211,18 +221,18 @@
   "theorem": "Goose.Lower.typedModule_simulation, Goose.Lower.acceptedModule_reflection, Goose.Lower.acceptedModule_never_faults (runtime preservation and fault freedom only)",
   "statement": "The core-shrink target requires validation preservation, transfer of Core's demand and retained-operand invariant to lowered GIR, done-run preservation, and fault freedom for every fuel-indexed run of a validated lowering.",
   "evidence": "TH-LOWER-01-REST proves forward preservation, reverse reflection and fault freedom for every accepted Core module, including core-shrink. TH-LOWER-VALIDATION-STAGES records the closed GIR checker stages and snapshot graph certificates.",
-  "limits": "Full GIR.validate preservation remains open. The scope walk's storage component, summary and root-annotation checks, and replacement checks remain open. Explicit transfer of Core's demand and retained-operand invariant also remains open. Whole-module runtime preservation and fault freedom are proved, including for divergent sources. These are Lean model results, with no core-construction or production C++ conformance claim.",
+  "limits": "Full GIR.validate preservation remains open. Summary and root-annotation checks and replacement checks remain open. Explicit transfer of Core's demand and retained-operand invariant also remains open. Whole-module runtime preservation and fault freedom are proved, including for divergent sources. These are Lean model results, with no core-construction or production C++ conformance claim.",
   "reviewer": "The runtime and registered module-wide checker endpoints require only Core acceptance. Full validator composition and explicit invariant transfer remain open."
  },
  {
   "feature": "Accepted Core lowering: closed GIR validation stages",
   "label": "model-proved",
   "id": "TH-LOWER-VALIDATION-STAGES",
-  "theorem": "Goose.Lower.Validation.lower_structuralValidation_of_accepted, Goose.Lower.Validation.lower_typedValidation_of_accepted, Goose.Lower.Validation.lowerContext_mutableSnapshotGraphs_of_accepted, Goose.Lower.Validation.lowerGlobal_mutableSnapshotGraphs_of_accepted, Goose.Lower.Validation.lower_permission_stage_of_accepted",
-  "statement": "For every module accepted by Core.validate, lower module passes checkEntryAndGlobals, checkSymbols, checkStructTypes, checkTypes, checkCfg, checkUnreachable, standalone checkStorage, checkPermissions, the scope walk's scopes check, checkEvidence and checkOrigins. Mutable snapshot graph certificates are derived for the actual lowered context functions and global initializers.",
+  "theorem": "Goose.Lower.Validation.lower_structuralValidation_of_accepted, Goose.Lower.Validation.lower_typedValidation_of_accepted, Goose.Lower.Validation.lowerContext_mutableSnapshotGraphs_of_accepted, Goose.Lower.Validation.lowerGlobal_mutableSnapshotGraphs_of_accepted, Goose.Lower.Validation.lower_permission_stage_of_accepted, Goose.Lower.Validation.lower_checkStorageWalk",
+  "statement": "For every module accepted by Core.validate, lower module passes checkEntryAndGlobals, checkSymbols, checkStructTypes, checkTypes, checkCfg, checkUnreachable, standalone checkStorage, checkPermissions, the scope walk's scopes and storage checks, checkEvidence and checkOrigins. Mutable snapshot graph certificates are derived for the actual lowered context functions and global initializers.",
   "assumptions": "Core.validate module = .ok (). The module-wide checker endpoints have no callback, profile or type-table premises. Snapshot certificates additionally select an implementation or global row.",
-  "evidence": "Goose/Lower/Validation/{ValidationStructural,ValidationTypedModule,SnapshotContentsModule,PermissionPreservationAccepted}.lean. The checker claims use the actual lowered function tables and final inferred value types. Snapshot graph witnesses are derived from accepted source and actual emitted states. Goose/Audit.lean audits these public endpoints.",
-  "limits": "Full GIR.validate preservation, the scope walk's storage component, summary and root-annotation checks, and replacement checks remain open. These claims concern Lean definitions. C++ lowering and native execution are outside scope."
+  "evidence": "Goose/Lower/Validation/{ValidationStructural,ValidationTypedModule,SnapshotContentsModule,PermissionPreservationAccepted,StorageWalkAcceptance}.lean. The checker claims use the actual lowered function tables and final inferred value types. Snapshot graph witnesses are derived from accepted source and actual emitted states. Goose/Audit.lean audits these public endpoints.",
+  "limits": "Full GIR.validate preservation, summary and root-annotation checks and replacement checks remain open. These claims concern Lean definitions. C++ lowering and native execution are outside scope."
  },
  {
   "feature": "TH-GIR-01",
