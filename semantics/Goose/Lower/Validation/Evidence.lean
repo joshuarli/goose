@@ -191,6 +191,22 @@ theorem checked_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : CheckedR
   · exact CheckedRun.bind (checked_emitDef _) (fun _ => checked_emitDef _)
   · exact CheckedRun.pure _
 
+theorem checked_coerceSlot (slot : SlotId) (value : ValueId) (org : OriginId) :
+    CheckedRun (coerceSlot slot value org) := by
+  unfold coerceSlot
+  refine CheckedRun.bind checked_read fun le => ?_
+  cases le.slots[slot]? with
+  | none => exact CheckedRun.pure _
+  | some destination => exact checked_coerceTo destination.ty value org
+
+theorem checked_coerceResult (value : ValueId) (org : OriginId) :
+    CheckedRun (coerceResult value org) := by
+  unfold coerceResult
+  refine CheckedRun.bind checked_read fun le => ?_
+  cases le.results.head? with
+  | none => exact CheckedRun.pure _
+  | some destination => exact checked_coerceTo destination value org
+
 theorem checked_implOfContext (c : ContextId) : CheckedRun (implOfContext c) := by
   unfold implOfContext
   exact CheckedRun.bind checked_read fun _ => CheckedRun.pure _
@@ -580,7 +596,8 @@ theorem checked_lowerPrintArgs : ∀ as : List PrintArg, CheckedRun (lowerPrintA
 theorem checked_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, CheckedRun (lowerStmt lc s)
   | .letS x e org => by
     simp only [lowerStmt]
-    exact CheckedRun.bind (checked_lowerExpr e) fun _ => checked_emitEffect _
+    exact CheckedRun.bind (checked_lowerExpr e) fun value =>
+      CheckedRun.bind (checked_coerceSlot x value org) fun _ => checked_emitEffect _
   | .assign p e org => by
     simp only [lowerStmt]
     exact CheckedRun.bind (checked_lowerPlace p) fun _ => CheckedRun.bind (checked_lowerExpr e) fun _ => checked_emitEffect _
@@ -591,7 +608,9 @@ theorem checked_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, CheckedRun (lowe
       CheckedRun.bind (checked_emitDef _) fun _ => checked_emitEffect _
   | .rebind x e org => by
     simp only [lowerStmt]
-    exact CheckedRun.bind (checked_lowerExpr e) fun _ => CheckedRun.bind (checked_emitDef _) fun _ => checked_emitEffect _
+    exact CheckedRun.bind (checked_lowerExpr e) fun value =>
+      CheckedRun.bind (checked_coerceSlot x value org) fun _ =>
+        CheckedRun.bind (checked_emitDef _) fun _ => checked_emitEffect _
   | .expr e _ => by
     simp only [lowerStmt]
     exact CheckedRun.bind (checked_lowerExpr e) fun _ => CheckedRun.pure _
@@ -662,8 +681,10 @@ theorem checked_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, CheckedRun (lowe
     cases e with
     | some e =>
       simp only [lowerStmt]
-      exact CheckedRun.bind (checked_lowerExpr e) fun _ => CheckedRun.bind (CheckedRun.pure _) fun _ =>
-        CheckedRun.bind (checked_leaveTo 0) fun _ => checked_emitTerm _
+      exact CheckedRun.bind (checked_lowerExpr e) fun value =>
+        CheckedRun.bind (checked_coerceResult value org) fun _ =>
+          CheckedRun.bind (CheckedRun.pure _) fun _ =>
+            CheckedRun.bind (checked_leaveTo 0) fun _ => checked_emitTerm _
     | none =>
       simp only [lowerStmt]
       exact CheckedRun.bind (CheckedRun.pure _) fun _ => CheckedRun.bind (checked_leaveTo 0) fun _ => checked_emitTerm _

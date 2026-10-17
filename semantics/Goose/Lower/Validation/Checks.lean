@@ -1,5 +1,7 @@
 import Goose.Core.Validate
+import Goose.Core.Eval
 import Goose.GIR.Validate
+import Goose.GIR.Eval
 import Goose.Lower.CoreToGir
 
 namespace Goose.Lower.Validation.Checks
@@ -79,6 +81,40 @@ def readonlySliceLocal : Module :=
     globals := #[⟨"g", owner, .mutable, .arrLit owner [.lit .i64 1], 0⟩],
     impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
     entry := 0, origins := #[⟨0, 1, "expr"⟩] }
+
+def readonlyFieldSlice : Module :=
+  let arrayTy := Ty.arr (.int .i64) 2
+  let fields := TyList.ofList [arrayTy]
+  let structTy := Ty.structT 0 fields
+  let main : Impl :=
+    { emptyEntry with
+      vars := #[⟨"s", .slice .mutable (.int .i64), .immutable, 0, 0⟩],
+      body := .mk 0 [.letS 0 (.slice .mutable (.of (.field (.global 0) 0)) .omitted .omitted 0) 0,
+        .print [.expr (.len (.val (.read (.var 0))))] 0] none }
+  { files := #["readonly-field-slice.goose"], types := #[],
+    globals := #[⟨"g", structTy, .immutable,
+      .structLit structTy [.arrLit arrayTy [.lit .i64 7, .lit .i64 9]], 0⟩],
+    impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
+    entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := .shrink,
+    structs := #[⟨16, #[⟨arrayTy, .immutable, .mutable, 0⟩]⟩] }
+
+
+def resizableStructField : Module :=
+  let fieldTy := Ty.growshrink (.int .i64)
+  let structTy := Ty.structT 0 (.cons fieldTy .nil)
+  let main : Impl :=
+    { emptyEntry with
+      vars := #[⟨"r", .ref .mutable fieldTy, .immutable, 0, 0⟩],
+      body := .mk 0 [.letS 0 (.ref .mutable (.field (.global 0) 0)) 0] none }
+  { files := #["resizable-struct-field.goose"], types := #[],
+    globals := #[⟨"g", structTy, .immutable, .structLit structTy [.arrLit fieldTy []], 0⟩],
+    impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
+    entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := .shrink,
+    structs := #[⟨8, #[⟨fieldTy, .immutable, .mutable, 0⟩]⟩] }
+
+#guard match Core.validate resizableStructField with
+  | .error error => error.message == "struct fields must be flat fixed values"
+  | .ok _ => false
 
 def specializedSummary : Module :=
   let summary : SummaryAnn := .known ⟨[.global 0], [], [], [], [], false, true⟩
@@ -161,16 +197,10 @@ def omittedSpecializedRead : Module :=
   | .ok _ => true
   | _ => false
 
-#guard [(readonlyReferenceLocal,
-      "function main: slot 0 is initialized with a value of another type"),
-    (readonlyReferenceRebind,
-      "function main: a store of a value of another type than the referent"),
-    (readonlyReferenceResult,
-      "function receiver: a returned value of another type than the result"),
-    (readonlySliceLocal,
-      "function main: slot 0 is initialized with a value of another type")].all fun (module, message) =>
+#guard [readonlyReferenceLocal, readonlyReferenceRebind,
+    readonlyReferenceResult, readonlySliceLocal].all fun module =>
   match Core.validate module, GIR.validate (lower module) with
-  | .ok _, .error rejection => rejection.code == .v010 && rejection.message == message
+  | .ok _, .ok _ => true
   | _, _ => false
 
 #guard match Core.validate specializedSummary, GIR.validate (lower specializedSummary) with
@@ -203,5 +233,14 @@ def omittedSpecializedRead : Module :=
       | .error source, .error lowered => source.rule == .summary && lowered.code == .v050
       | _, _ => false
   | _ => false
+
+#guard match Core.validate readonlyFieldSlice, GIR.validate (lower readonlyFieldSlice) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+
+#guard [NumProfile.release, .debug].all fun profile =>
+  match Core.eval 100 profile readonlyFieldSlice, GIR.run 300 profile (lower readonlyFieldSlice) with
+  | .done .returned "2\n", .done .returned "2\n" => true
+  | _, _ => false
 
 end Goose.Lower.Validation.Checks

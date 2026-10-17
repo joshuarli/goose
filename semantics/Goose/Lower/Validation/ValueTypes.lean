@@ -146,6 +146,22 @@ theorem types_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : TypeRun (c
   · exact TypeRun.bind (types_emitDef _) (fun _ => types_emitDef _)
   · exact TypeRun.pure _
 
+theorem types_coerceSlot (slot : SlotId) (value : ValueId) (org : OriginId) :
+    TypeRun (coerceSlot slot value org) := by
+  unfold coerceSlot
+  refine TypeRun.bind types_read fun le => ?_
+  cases le.slots[slot]? with
+  | none => exact TypeRun.pure _
+  | some destination => exact types_coerceTo destination.ty value org
+
+theorem types_coerceResult (value : ValueId) (org : OriginId) :
+    TypeRun (coerceResult value org) := by
+  unfold coerceResult
+  refine TypeRun.bind types_read fun le => ?_
+  cases le.results.head? with
+  | none => exact TypeRun.pure _
+  | some destination => exact types_coerceTo destination value org
+
 theorem types_implOfContext (c : ContextId) : TypeRun (implOfContext c) := by
   unfold implOfContext
   exact TypeRun.bind types_read fun _ => TypeRun.pure _
@@ -535,7 +551,8 @@ theorem types_lowerPrintArgs : ∀ as : List PrintArg, TypeRun (lowerPrintArgs a
 theorem types_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, TypeRun (lowerStmt lc s)
   | .letS x e org => by
     simp only [lowerStmt]
-    exact TypeRun.bind (types_lowerExpr e) fun _ => types_emitEffect _
+    exact TypeRun.bind (types_lowerExpr e) fun value =>
+      TypeRun.bind (types_coerceSlot x value org) fun _ => types_emitEffect _
   | .assign p e org => by
     simp only [lowerStmt]
     exact TypeRun.bind (types_lowerPlace p) fun _ => TypeRun.bind (types_lowerExpr e) fun _ => types_emitEffect _
@@ -546,7 +563,9 @@ theorem types_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, TypeRun (lowerStmt
       TypeRun.bind (types_emitDef _) fun _ => types_emitEffect _
   | .rebind x e org => by
     simp only [lowerStmt]
-    exact TypeRun.bind (types_lowerExpr e) fun _ => TypeRun.bind (types_emitDef _) fun _ => types_emitEffect _
+    exact TypeRun.bind (types_lowerExpr e) fun value =>
+      TypeRun.bind (types_coerceSlot x value org) fun _ =>
+        TypeRun.bind (types_emitDef _) fun _ => types_emitEffect _
   | .expr e _ => by
     simp only [lowerStmt]
     exact TypeRun.bind (types_lowerExpr e) fun _ => TypeRun.pure _
@@ -617,8 +636,10 @@ theorem types_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, TypeRun (lowerStmt
     cases e with
     | some e =>
       simp only [lowerStmt]
-      exact TypeRun.bind (types_lowerExpr e) fun _ => TypeRun.bind (TypeRun.pure _) fun _ =>
-        TypeRun.bind (types_leaveTo 0) fun _ => types_emitTerm _
+      exact TypeRun.bind (types_lowerExpr e) fun value =>
+        TypeRun.bind (types_coerceResult value org) fun _ =>
+          TypeRun.bind (TypeRun.pure _) fun _ =>
+            TypeRun.bind (types_leaveTo 0) fun _ => types_emitTerm _
     | none =>
       simp only [lowerStmt]
       exact TypeRun.bind (TypeRun.pure _) fun _ => TypeRun.bind (types_leaveTo 0) fun _ => types_emitTerm _
