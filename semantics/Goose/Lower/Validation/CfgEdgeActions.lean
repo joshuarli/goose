@@ -136,4 +136,22 @@ theorem edge_whenLive (fallback : α) {body : BlockId → B α}
   | none => exact EdgeRun.pure fallback
   | some block => exact checked block
 
+theorem EdgeRun.of_tables {action : B α}
+    (same : ∀ env state, (action env state).2.blocks = state.blocks ∧ (action env state).2.vals = state.vals) :
+    EdgeRun action := by
+  intro env before result after run checked
+  have equal := same env before
+  rw [run] at equal
+  change after.blocks = before.blocks ∧ after.vals = before.vals at equal
+  have extension : before.Ext after := by
+    constructor
+    · simp [equal.1]
+    · intro index body row
+      exact ⟨body, by rw [equal.1]; exact row, rfl, [], by simp⟩
+  have types : ∀ (value : ValueId) (ty : VTy), before.vals[value]? = some (some ty) → after.vals[value]? = some (some ty) := by
+    intro value ty typed
+    rw [equal.2]
+    exact typed
+  exact ⟨⟨extension, types⟩, checked.of_blocks equal.1 types⟩
+
 end Goose.Lower.Validation
