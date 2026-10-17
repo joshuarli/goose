@@ -33,7 +33,7 @@ private theorem ContentsOperation.restrict
     have ownerBound := operands owner (by simp [Op.uses])
     exact ⟨⟨member, ownerBound⟩, mu, id, fields, descriptor, entry,
       (prefixTypes owner ownerBound).trans typed, descriptorRow, fieldRow, writable⟩
-  | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ =>
+  | ownerBorrow owner | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ =>
     exact ⟨operation, operands owner (by simp [Op.uses])⟩
   | _ =>
     simpa only [ContentsOperation, typedPermissions, prefixTypes value bound] using operation

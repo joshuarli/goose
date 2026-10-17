@@ -64,6 +64,8 @@ theorem resultTy_operand_congr (op : Op) {left right : TyEnv}
   all_goals simp only [Op.uses, List.mem_cons, List.not_mem_nil,
     or_false, forall_eq_or_imp, forall_eq] at ints data refs views same
   all_goals try simp only [slots, globals, sigs, structs, profile]
+  case ownerBorrow owner =>
+    rw [ref_lookup_congr same]
   all_goals try simp only [ints, data, refs, views]
   case snapshot mode owner => rw [contents mode owner rfl]
   case viewSlice mu v lo hi org =>
