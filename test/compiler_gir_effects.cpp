@@ -650,6 +650,30 @@ void PreservesConservativeCallDependencies() {
 }
 
 
+void RetainsSpecializedGlobalPolicyWithEmptyActualArguments() {
+    auto module = GlobalEmptyContentReplacement();
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    module.funcs[1].params.push_back(slice);
+    module.funcs[1].blocks[0].params.push_back({ 7, slice });
+    module.funcs[1].roots.params.push_back({ 1, {} });
+    GirFunc callee;
+    callee.name = "pure_with_global_policy";
+    callee.params = { slice };
+    callee.roots.params = { { 0, { { CoreRootRef::Global, 0 } } } };
+    callee.summary.writes = { { false, 0 } };
+    callee.scopes = { -1 };
+    callee.blocks = { { { { 0, slice } }, { Inst(GirOp::Ret) } } };
+    module.funcs.push_back(callee);
+    auto call = Inst(GirOp::Call);
+    call.idx = 2;
+    call.vals = { 7 };
+    auto &instructions = module.funcs[1].blocks[0].insts;
+    instructions.insert(instructions.end() - 3, call);
+    assert(Code(module) == "GIR-V060");
+    module.funcs[2].roots.params[0].second.clear();
+    assert(Code(module).empty());
+}
+
 GirGlobal IntegerGlobal(GirModule &module) {
     auto integer = module.IntType(CoreIntTy::I64);
     GirGlobal global;
@@ -1036,6 +1060,7 @@ void IncludesActualRefSliceBackingReads() {
 
 int main() {
     PreservesActualGlobalCallDependencies();
+    RetainsSpecializedGlobalPolicyWithEmptyActualArguments();
     CertifiesRecursiveReferenceReturnBounds();
     IncludesActualRefSliceBackingReads();
     PreservesActualReturnedAliases();

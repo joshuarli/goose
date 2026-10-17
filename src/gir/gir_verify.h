@@ -6692,7 +6692,6 @@ private:
                 auto actual = ReplacementRoots(queries, call.vals[target.index]);
                 if (!actual) return false;
                 AddRoots(out, *actual);
-                if (actual->empty()) continue;
                 if (target.index < (int)callee.params.size())
                     if (auto annotated = ParamRoots(callee, target.index))
                         for (auto &root : *annotated)
