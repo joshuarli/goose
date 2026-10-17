@@ -78,4 +78,27 @@ theorem EmittedTermTyped.check {le : LEnv} {state : LS} {results : List Ty} {ter
   | abort _ _ => rfl
   | unreachable => rfl
 
+
+theorem checkEffectTypes_tables (effect : Effect) {left right : TyEnv}
+    (slots : left.slots = right.slots) (values : left.vals = right.vals) :
+    checkEffectTypes left effect = checkEffectTypes right effect := by
+  cases effect <;> simp only [checkEffectTypes, TyEnv.refTy, TyEnv.viewTy, TyEnv.intTy,
+    TyEnv.dataTy, TyEnv.valTy, slots, values]
+
+theorem checkTermTypes_values (func : Func) (term : Term) {left right : TyEnv}
+    (values : left.vals = right.vals) : checkTermTypes func left term = checkTermTypes func right term := by
+  cases term <;> simp only [checkTermTypes, TyEnv.intTy, TyEnv.dataTy, TyEnv.valTy, values]
+
+theorem EmittedEffectTyped.checkWith {le : LEnv} {state : LS} {effect : Effect}
+    (typed : EmittedEffectTyped le state effect) (env : TyEnv)
+    (slots : env.slots = le.slots) (values : env.vals = state.vals) : checkEffectTypes env effect = .ok () := by
+  rw [checkEffectTypes_tables effect (right := tyEnv le state) slots values]
+  exact typed.check
+
+theorem EmittedTermTyped.checkWith {le : LEnv} {state : LS} {results : List Ty} {term : Term}
+    (typed : EmittedTermTyped results state term) (func : Func) (same : func.results = results)
+    (env : TyEnv) (values : env.vals = state.vals) : checkTermTypes func env term = .ok () := by
+  rw [checkTermTypes_values func term (right := tyEnv le state) values]
+  exact typed.check func same
+
 end Goose.Lower.Validation
