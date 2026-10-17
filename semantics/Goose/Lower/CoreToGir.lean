@@ -756,20 +756,30 @@ def lowerEnv (m : Module) (vars : Array LocalVar) (results : List Ty) : LEnv :=
       | some impl => (impl.params.toList.map (tyOfVar impl ·.var), impl.results.toList)
       | none => ([], []) }
 
+def lowerContextRootCeiling (ctx : Context) (impl : Impl) (roots : List RootRef) : List RootRef :=
+  let parameterRoots := impl.params.toList.zipIdx.filterMap fun (p, j) =>
+    match ctx.varRoots.find? (·.1 == p.var) with
+    | some (_, rootsForParam) =>
+      if rootsForParam.all roots.contains then some (.param j) else none
+    | none => none
+  unionRoots roots parameterRoots
+
 def lowerContextRootInfo (ctx : Context) (impl : Impl) : GIR.RootInfo :=
   let params := impl.params.toList.zipIdx.filterMap fun (p, i) =>
     (ctx.varRoots.find? (·.1 == p.var)).map fun (_, roots) => (i, roots)
   let contents := impl.params.toList.zipIdx.filterMap fun (p, i) =>
     (ctx.contentRoots.find? (·.1 == p.var)).map fun (_, roots) => (i, roots)
   let results := (List.range impl.results.size).map fun i =>
-    let roots := ctx.resultRoots[i]?.getD []
-    let parameterRoots := impl.params.toList.zipIdx.filterMap fun (p, j) =>
-      match ctx.varRoots.find? (·.1 == p.var) with
-      | some (_, rootsForParam) =>
-        if rootsForParam.all roots.contains then some (.param j) else none
-      | none => none
-    unionRoots roots parameterRoots
-  { params := params.toArray, contents := contents.toArray, results := results.toArray }
+    lowerContextRootCeiling ctx impl (ctx.resultRoots[i]?.getD [])
+  let slots := ctx.varRoots.filterMap fun (slot, roots) =>
+    match impl.vars[slot]? with
+    | some localVar =>
+      if !localVar.ty.isRefLike then none
+      else some (slot, if localVar.ty.isRefSlice then [.param slot]
+        else lowerContextRootCeiling ctx impl roots)
+    | none => none
+  { params := params.toArray, contents := contents.toArray, results := results.toArray,
+    slots := some slots.toArray }
 
 /-- Core validation proves that a result-bearing body without a tail value
 cannot fall through when it diverges. A live frontier left by a constant loop
