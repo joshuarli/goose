@@ -39,4 +39,25 @@ theorem genericParameterContext_gir_rejected :
       .error ⟨.v050, "function receiver parameter 0 root info omits a root passed at a call site"⟩ := by
   cbv
 
+def emptyParameterContext : Module :=
+  let base := Checks.specializedParameterSummary
+  { base with
+    impls := base.impls.modify 0 (fun impl =>
+        { impl with body := .mk 0 [] none, summary := .unknown })
+      |>.modify 1 (fun impl =>
+        { impl with summary := .known ⟨[], [], [], [], [], false, true⟩ })
+    contexts := base.contexts.modify 1 fun ctx => { ctx with varRoots := [(0, [])] } }
+
+set_option maxRecDepth 12000 in
+set_option maxHeartbeats 2000000 in
+theorem emptyParameterContext_core_accepted : validate emptyParameterContext = .ok () := by
+  cbv
+
+set_option maxRecDepth 12000 in
+set_option maxHeartbeats 2000000 in
+theorem emptyParameterContext_gir_rejected :
+    Goose.GIR.validate (lower emptyParameterContext) =
+      .error ⟨.v050, "function receiver: receiver reads parameter 0, which its summary omits"⟩ := by
+  cbv
+
 end Goose.Lower.Validation.SummaryPreservation
