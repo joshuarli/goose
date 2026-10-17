@@ -30,11 +30,8 @@ def specializedCallerContent : Core.Module :=
 
 theorem specializedCallerContent_core_accepted : Core.validate specializedCallerContent = .ok () := by cbv
 
-theorem specializedCallerContent_gir_rejected :
-    GIR.validate (lower specializedCallerContent) = .error
-      ⟨.v050, "function callee parameter 1 root info omits a root passed at a call site"⟩ := by cbv
+#guard (GIR.validate (lower specializedCallerContent)).toBool
 
 #print axioms specializedCallerContent_core_accepted
-#print axioms specializedCallerContent_gir_rejected
 
 end Goose.Lower.Validation.SummaryPreservation.CallAnnotationChecks

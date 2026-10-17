@@ -712,7 +712,7 @@ def checkRootAnnotationsOf (m : Module) (vts : Array (Array (Option VTy)))
           if callee.params[j].isRefLike then
             let expected := mapArgumentRoots f p args[j]! j
             let declared := (callee.roots.params.find? (·.1 == j)).map (·.2) |>.getD []
-            unless declared == [.param j] || expected.all declared.contains do
+            unless declared.contains (.param j) || expected.all declared.contains do
               violation .v050 s!"{calleeLabel} parameter {j} root info omits a root passed at a call site"
           if callee.params[j].isRefSlice then
             if let some (_, declared) := callee.roots.contents.find? (·.1 == j) then
