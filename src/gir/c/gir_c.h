@@ -19,13 +19,13 @@ namespace goose {
 // The runtime entry points the emitted C calls, and every one of them: a
 // reader of the emitter's output meets nothing else of the runtime's.
 //   data stacks     gs_rt_init, gs_stack_init, GS(i), gs_memcpy, gs_memmove, gs_rt_stats
-//   output          gs_out_int, gs_out_uint, gs_out_bool, gs_out_bytes, gs_out_nl
+//   output          gs_out_int, gs_out_uint, gs_out_bool, gs_out_bytes
 //   aborts          gs_abort (GS_E_SLICE, GS_E_ASSERT), gs_abort_msg, gs_idxfail, gs_exit
 //   checked ints    gs_add_*, gs_sub_*, gs_mul_*, gs_neg_*, gs_div_*, gs_mod_*, gs_shl_*, gs_shr_*,
 //                   GS_RANGE, GS_RANGE_U
 inline constexpr const char *GIR_C_RUNTIME_ENTRY_POINTS =
     "gs_rt_init gs_stack_init GS gs_memcpy gs_memmove gs_rt_stats gs_out_int gs_out_uint gs_out_bool "
-    "gs_out_bytes gs_out_nl gs_fmt_i64 gs_fmt_u64 gs_fmt_bool gs_abort gs_abort_msg gs_idxfail gs_exit gs_add gs_sub gs_mul gs_neg "
+    "gs_out_bytes gs_fmt_i64 gs_fmt_u64 gs_fmt_bool gs_abort gs_abort_msg gs_idxfail gs_exit gs_add gs_sub gs_mul gs_neg "
     "gs_div gs_mod gs_shl gs_shr GS_RANGE GS_RANGE_U";
 
 // One function's text with what it refers to.
@@ -744,7 +744,7 @@ private:
             case GirRt::OutText:
                 if (!i.text.empty()) L("gs_out_bytes(", literals.at(i.text), ", ", i.text.size(), ");");
                 break;
-            case GirRt::OutNl: L("gs_out_nl();"); break;
+            case GirRt::OutNl: L("gs_out_bytes((const uint8_t *)\"\\n\", 1);"); break;
             default: break;
         }
     }
