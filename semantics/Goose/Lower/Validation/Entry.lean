@@ -64,4 +64,28 @@ theorem lower_checkEntryAndGlobals {module : Core.Module} (accepted : Core.valid
   have bound := checkGlobal_origin_bound (validate_global_checks accepted lookup)
   simp [lowerGlobal, lower, bound, bind]
 
+theorem checkGlobal_region_type {module : Core.Module} {index : GlobalId} {global : Core.Global}
+    (checked : Core.checkGlobal module index global = .ok ()) :
+    (global.ty.storable && !global.ty.isRefLike) = true := by
+  by_cases shape : (global.ty.storable && !global.ty.isRefLike) = true
+  · exact shape
+  · simp [Core.checkGlobal, shape, Core.reject, bind, Except.bind] at checked
+
+theorem lower_checkRegionGlobalTypes {module : Core.Module} (accepted : Core.validate module = .ok ()) :
+    (lower module).checkRegionGlobalTypes = .ok () := by
+  unfold Module.checkRegionGlobalTypes
+  rw [← Array.forIn_toList]
+  suffices loop : forIn (lower module).globals.toList PUnit.unit _ =
+      (Except.ok PUnit.unit : Except String PUnit) by
+    rw [loop]
+    rfl
+  apply forIn_unit_ok
+  intro lowered member
+  change lowered ∈ (module.globals.map (lowerGlobal module)).toList at member
+  simp only [Array.toList_map, List.mem_map] at member
+  obtain ⟨global, globalMember, rfl⟩ := member
+  obtain ⟨index, lookup⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp globalMember)
+  have shape := checkGlobal_region_type (validate_global_checks accepted lookup)
+  simp [lowerGlobal, shape, pure, Except.pure]
+
 end Goose.Lower.Validation

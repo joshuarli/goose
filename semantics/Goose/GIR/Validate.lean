@@ -671,6 +671,7 @@ def checkStructTypes (m : Module) : Check Unit := do
     | .ok _ => pure ()
     | .error e => violation .v010 e.message
   check (Core.checkStructTables cm)
+  asCheck .v010 "globals" m.checkRegionGlobalTypes
   for g in m.globals do check (Core.checkResolvedType cm g.ty)
   for f in m.funcs.toList ++ m.globals.toList.map (·.init) do
     for t in f.params ++ f.results ++ f.slots.toList.map (·.ty) do
