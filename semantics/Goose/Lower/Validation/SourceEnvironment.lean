@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.DeadFrontier
+import Goose.Core.Sound.Check
 
 namespace Goose.Lower.Validation
 
