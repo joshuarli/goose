@@ -94,7 +94,7 @@ theorem emptyFactRound_within (module : GIR.Module) (func : Func)
         have incomingBounds := checked block incoming (Option.join_eq_some_iff.mp present)
         have outgoingBounds := emptyFactsWithin_transferEmptyBlock module types provenance incoming body
           incomingBounds (operands body blockMember)
-        apply list_forIn_invariant (property := fun state : Array (Option (List ValueId)) × Bool =>
+        apply list_forIn_state_invariant (property := fun state : Array (Option (List ValueId)) × Bool =>
           EmptyStatesWithin func.numValues state.1)
         · exact valid
         · intro edge current valid
@@ -150,7 +150,7 @@ theorem emptyFactRound_progress (module : GIR.Module) (func : Func)
         have incomingBounds := checked block incoming (Option.join_eq_some_iff.mp present)
         have outgoingBounds := emptyFactsWithin_transferEmptyBlock module types provenance incoming body
           incomingBounds (operands body blockMember)
-        apply list_forIn_invariant (property := EmptyRoundProgress func.numValues states)
+        apply list_forIn_state_invariant (property := EmptyRoundProgress func.numValues states)
         · exact valid
         · intro edge current valid
           obtain ⟨target, args⟩ := edge

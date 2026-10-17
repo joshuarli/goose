@@ -19,7 +19,7 @@ theorem freshRuns_literal (func : Func) (types : Array (Option VTy))
       (known := fun flags => flags[result]? = some true) _ _ _ block blockMember ?_ ?_ ?_ ?_ ?_
     · simp
     · intro body flags size
-      apply list_forIn_invariant (property := fun flags : Array Bool => flags.size = func.numValues)
+      apply list_forIn_state_invariant (property := fun flags : Array Bool => flags.size = func.numValues)
       · exact size
       · intro inst flags size
         cases inst with
@@ -32,7 +32,7 @@ theorem freshRuns_literal (func : Func) (types : Array (Option VTy))
           · exact size
         | _ => exact size
     · intro body flags known
-      apply list_forIn_invariant (property := fun flags : Array Bool => flags[result]? = some true)
+      apply list_forIn_state_invariant (property := fun flags : Array Bool => flags[result]? = some true)
       · exact known
       · intro inst flags known
         cases inst with
