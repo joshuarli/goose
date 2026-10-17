@@ -1,5 +1,6 @@
 import Goose.Lower.Validation.SummaryPreservationValueGrowth
 import Goose.Lower.Validate
+import Goose.Lower.Validation.SummaryPreservationFunctionShape
 
 namespace Goose.Lower.Validation.SummaryPreservation
 
@@ -49,5 +50,13 @@ theorem builder_instruction_roots_after_push {res : Array (List RootRef)}
     cases equation
     rw [size]
     exact builder_parameter_bound symbols.definitions builderMember pairMember
+
+
+theorem appendInst_block_parameters (func : Func) (ls : LS) (block : BlockId) (inst : Inst) :
+    BlockParametersAgree { func with blocks := finishBlocks ls.blocks }
+      { func with blocks := finishBlocks (ls.appendInst block inst).blocks } := by
+  intro target
+  simp only [finishBlocks, LS.appendInst, Array.getElem?_map, Array.getElem?_modify]
+  split <;> cases ls.blocks[target]? <;> rfl
 
 end Goose.Lower.Validation.SummaryPreservation
