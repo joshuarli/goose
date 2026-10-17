@@ -1,8 +1,22 @@
 import Goose.Lower.Validation.PermissionPreservationFresh
+import Goose.Lower.Validation.PermissionPreservationTargets
 
 namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
+
+theorem borrowTo_ordinary_fresh_binding {le : LEnv} {first : Nat} {before after : LS}
+    {owner value : ValueId} {referent : Ty}
+    (evidence : FreshWritableEvidence le first before owner)
+    (typed : before.vals[owner]? = some (some (.data (.ref .mutable referent))))
+    (ordinary : BindingTarget .pilot referent)
+    (run : borrowTo .mutable owner le before = (value, after)) :
+    FreshWritableEvidence le first after value := by
+  cases referent <;> try (simp [BindingTarget] at ordinary)
+  all_goals
+    simp [borrowTo, bind_run, valTy_of_recorded typed, freezeTo, pure_run] at run
+    obtain ⟨rfl, rfl⟩ := run
+    exact evidence
 
 theorem FreshContentsEvidence.ownerBorrow_permissions {le : LEnv} {first : Nat} {before after : LS}
     {owner value : ValueId} {current : BlockId}
@@ -40,6 +54,7 @@ theorem lowerExpr_ref_owner_fresh_permissions_of_place {le : LEnv} {first : Nat}
   simp only [lowerExpr, bind_run, placeRun] at run
   exact borrowTo_owner_fresh_permissions evidence checked bounded live profile typed resizable run
 
+#print axioms borrowTo_ordinary_fresh_binding
 #print axioms FreshContentsEvidence.ownerBorrow_permissions
 #print axioms borrowTo_owner_fresh_permissions
 #print axioms lowerExpr_ref_owner_fresh_permissions_of_place
