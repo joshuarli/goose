@@ -30,7 +30,7 @@ theorem accepted_context_provenance_seed {module : Core.Module} {ctx : Context} 
   rw [implementationRow] at row
   cases row
   apply provStart_below_retained_entry (types := impl.params.toList.map fun param => .data (tyOfVar impl param.var))
-    (by rw [slots]; exact lowerContext_slotRootSeeds_below checked.annotationShape)
+    (by rw [slots]; exact lowerContext_slotRootSeeds_below accepted implementationRow checked.annotationShape)
   · intro block row
     simpa only [List.length_map, Array.length_toList] using cfg_impl_entry_parameters module impl block row
   · exact fun index type row => accepted_context_entry_type accepted implementationRow row

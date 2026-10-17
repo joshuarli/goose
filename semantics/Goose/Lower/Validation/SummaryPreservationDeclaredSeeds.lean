@@ -54,6 +54,8 @@ theorem annotation_find_of_row {module : Core.Module} {ctx : Context} {impl : Im
   rfl
 
 theorem lowerContext_slotRootSeeds_below {module : Core.Module} {ctx : Context} {impl : Impl}
+    (accepted : Core.validate module = .ok ())
+    (implementationRow : module.impls[ctx.impl]? = some impl)
     (checked : checkAnnotationShape module impl ctx = .ok ()) :
     RootsBelow (lowerContextAt module ctx impl).slotRootSeeds (typedContextSlotUpper module ctx impl) := by
   intro slot root member
@@ -68,7 +70,7 @@ theorem lowerContext_slotRootSeeds_below {module : Core.Module} {ctx : Context} 
       change row ∈ (ctx.varRoots.filterMap fun (slot, roots) =>
         match impl.vars[slot]? with
         | some localVar => if !localVar.ty.isRefLike then none
-          else some (slot, if localVar.ty.isRefSlice then [.param slot]
+          else some (slot, if localVar.ty.isRefSlice && (impl.params[slot]?).any (·.var == slot) then [.param slot]
             else lowerContextRootCeiling ctx impl roots)
         | none => none).toArray at member
       obtain ⟨⟨index, declared⟩, annotationMember, selected⟩ := List.mem_filterMap.mp (Array.mem_toList_iff.mpr member)
@@ -82,7 +84,9 @@ theorem lowerContext_slotRootSeeds_below {module : Core.Module} {ctx : Context} 
           subst index
           rw [typedContextSlotUpper_at variableRow]
           by_cases refSlice : localVar.ty.isRefSlice = true
-          · simpa [refSlice] using itemMember
+          · obtain ⟨param, parameterRow, identity, _⟩ :=
+              accepted_refSlice_parameter accepted implementationRow variableRow refSlice
+            simpa [refSlice, parameterRow, identity] using itemMember
           · simp only [refSlice, Bool.false_eq_true, ite_false] at itemMember ⊢
             have annotation := annotation_find_of_row checked variableRow reference annotationMember
             simpa only [annotation, Option.map_some, Option.getD_some] using
