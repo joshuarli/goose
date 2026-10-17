@@ -303,7 +303,7 @@ def Func.effectStep (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov)
     let rebound := rs.filterMap fun
       | .local s =>
         match f.slots[s]? with
-        | some sl => if sl.ty.isRefLike && sl.var < f.params.length then some (Target.param sl.var) else none
+        | some sl => if sl.ty.isRefLike && sl.var < f.params.length && (ownerTy vt r).any Ty.isRefLike then some (Target.param sl.var) else none
         | none => none
       | .param j =>
         match f.params[j]? with

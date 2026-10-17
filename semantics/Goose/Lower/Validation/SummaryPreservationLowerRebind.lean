@@ -6,7 +6,8 @@ namespace Goose.Lower.Validation.SummaryPreservation
 open Goose.Core Goose.Core.Sound Goose.GIR
 
 theorem lowerStmt_rebind_source_witness {env : PEnv} {context : ContextId} {varId : VarId}
-    {expression : Expr} {org : OriginId} {localVar : LocalVar} {sourceRoots : List RootRef}
+    {expression : Expr} {org : OriginId} {localVar : LocalVar} {slotMutability : Mutability}
+    {sourceRoots : List RootRef}
     {initialSource before after : RState} {results : Array (List RootRef)} {vt : Array (Option VTy)}
     {upper : Prov} {initial ls : LS} {le : LEnv} {scopeCount : Nat} {block : BlockId}
     {value : ValueId} (loop : Option LoopCtx)
@@ -26,6 +27,8 @@ theorem lowerStmt_rebind_source_witness {env : PEnv} {context : ContextId} {varI
     (valueBound : value < ls.vals.size)
     (roots : RootsRefine (lowerContextAt env.mod env.ctx env.impl) (rootsAt upper.vals value) sourceRoots)
     (slots : upper.slots = typedContextSlotUpper env.mod env.ctx env.impl)
+    (addressType : vt[(coerceSlot varId value org le ls).2.vals.size]? =
+      some (some (.data (.ref slotMutability localVar.ty))))
     (slotBound : varId < le.slots.size) (originBound : org < le.mod.origins.size) :
     ∃ next : Prov,
       BuilderRootWitness results vt (lowerContextAt env.mod env.ctx env.impl) next
@@ -83,8 +86,13 @@ theorem lowerStmt_rebind_source_witness {env : PEnv} {context : ContextId} {varI
     rw [nextSlotRoots]
     exact bindRootsV_typed_slot_bound contextOk.annotationShape variableRow ordinary contract.1
       nextValueRoots root rootMember
+  have addressValue : address.1 = coerced.2.vals.size := by
+    dsimp [address]
+    rw [emitDef_run _ _ middleCurrent]
+  have addressOwner : (ownerTy vt address.1).any Ty.isRefLike = true := by
+    simpa [ownerTy, addressValue, coerced, addressType] using reference
   have delta := effectStep_rebind_refines_from_source (vt := vt) (value := coerced.1)
-    variableRow reference addressRoots operandSource source
+    variableRow reference addressRoots addressOwner operandSource source
   have storedWitness := emitEffect_refined_witness (le := le) addressCurrent addressBlockBound
     nextWitness nextEffects stored delta
   have addressBound : address.1 < address.2.vals.size := by
