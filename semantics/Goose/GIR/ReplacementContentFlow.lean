@@ -65,17 +65,6 @@ def Atom.ofRootRef : RootRef → Atom
   | .global index => .global index
   | .param index => .param index
 
-def declaredReturn (f : Func) : Roots :=
-  match f.results with
-  | [type] =>
-      if type.isRefLike then
-        match f.roots.results[0]? with
-        | none => .unknown
-        | some roots => .known (roots.eraseDups.map Atom.ofRootRef)
-      else .known []
-  | [] => .known []
-  | _ => .unknown
-
 def start (f : Func) (vt : Array (Option VTy)) : State := Id.run do
   let mut values := Array.replicate f.numValues Roots.pending
   if let some entry := f.blocks[0]? then
@@ -86,7 +75,7 @@ def start (f : Func) (vt : Array (Option VTy)) : State := Id.run do
            contents := f.params.toArray.mapIdx fun index type =>
              if type.isRefSlice then .known [.contents index] else .known []
            writes := Array.replicate f.params.length .unchanged
-           returned := declaredReturn f }
+           returned := .known [] }
 
 def content (f : Func) (state : State) (address : Roots) : Roots :=
   address.bind fun

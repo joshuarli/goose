@@ -4,6 +4,16 @@ namespace Goose.GIR
 
 open Goose.Core
 
+theorem Func.checkAdmittedRegions_value {m : Module} {vt : Array (Option VTy)}
+    {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ())
+    {value : ValueId} {ceiling : List RootRef}
+    (row : (value, ceiling) ∈ (f.roots.values.getD #[]).toList) :
+    valRefLike vt value = true ∧ rootsAt p.vals value ⊆ ceiling := by
+  have admitted := (List.all_eq_true.mp (Func.checkAdmittedRegions_values checked))
+    (value, ceiling) row
+  simp only [Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem] at admitted
+  exact admitted
+
 private theorem except_bind_ok {α β : Type} {action : Except String α}
     {next : α → Except String β} {result : β}
     (checked : (action >>= next) = .ok result) :
@@ -175,7 +185,26 @@ theorem Func.checkAdmittedRegions_call_receiver {m : Module} {vt : Array (Option
   have bound := List.all_eq_true.mp instruction (parameter,ceiling) row
   simp only [reference, Bool.not_true, Bool.false_or, Bool.and_eq_true] at bound
   have receiverBound := List.all_eq_true.mp bound.2 receiver receiverMember
-  exact (Func.rootsWithin_eq_true f _ _).mp receiverBound
+  simp only [Bool.and_eq_true] at receiverBound
+  exact (Func.rootsWithin_eq_true f _ _).mp receiverBound.1
+
+theorem Func.checkAdmittedRegions_call_receiver_reverse {m : Module} {vt : Array (Option VTy)}
+    {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ())
+    {block : Block} (blockMember : block ∈ f.blocks.toList)
+    {value fn : Nat} {args : List ValueId} {org : Option OriginId}
+    (called : Inst.def value (.call fn args org) ∈ block.insts)
+    {callee : Func} (calleeAt : m.funcs[fn]? = some callee)
+    {parameter : Nat} {ceiling : List RootRef} (row : (parameter,ceiling) ∈ callee.roots.contents.toList)
+    (reference : (callee.params[parameter]?).any Ty.isRefSlice = true)
+    {receiver : RootRef} (receiverMember : receiver ∈ rootsAt p.vals args[parameter]!) :
+    RootsRefine f (f.receiverContentCeiling p receiver) (mapRawContentRoots p args ceiling) := by
+  have instruction := f.checkAdmittedRegions_instruction checked blockMember called
+  simp only [Func.admittedInstruction, calleeAt] at instruction
+  have bound := List.all_eq_true.mp instruction (parameter,ceiling) row
+  simp only [reference, Bool.not_true, Bool.false_or, Bool.and_eq_true] at bound
+  have receiverBound := List.all_eq_true.mp bound.2 receiver receiverMember
+  simp only [Bool.and_eq_true] at receiverBound
+  exact (Func.rootsWithin_eq_true f _ _).mp receiverBound.2
 
 theorem Func.checkAdmittedRegions_store {m : Module} {vt : Array (Option VTy)}
     {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ())

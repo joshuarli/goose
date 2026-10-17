@@ -47,7 +47,8 @@ theorem lower_checkEntryAndGlobals {module : Core.Module} (accepted : Core.valid
       some (lowerContextAt module ctx impl) := lower_func_at ctxLookup implLookup
   have empty : ((lowerContextAt module ctx impl).params.isEmpty &&
       (lowerContextAt module ctx impl).results.isEmpty) = true := by
-    simp only [lowerContextAt, lowerImpl, noParams, results, List.map_nil, List.isEmpty_nil, Bool.and_true]
+    simp only [lowerContextAt, lowerImpl, lowerImplFromState, noParams, results,
+      List.map_nil, List.isEmpty_nil, Bool.and_true]
   unfold checkEntryAndGlobals
   rw [entry]
   simp only [empty, ite_true, pure, Except.pure, bind, Except.bind]

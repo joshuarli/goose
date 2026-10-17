@@ -161,6 +161,7 @@ structure RootInfo where
   contents : Array (Nat × List RootRef) := #[]
   results : Array (List RootRef) := #[]
   slots : Option (Array (SlotId × List RootRef)) := none
+  values : Option (Array (ValueId × List RootRef)) := none
 
 inductive Fact
   | ge0 (i : ValueId)

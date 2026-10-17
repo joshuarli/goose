@@ -10,6 +10,10 @@ def Func.admittedSlots (f : Func) (p : Prov) : Bool :=
     (f.slots[slot]?).any fun storage =>
       storage.ty.isRefLike && (rootsAt p.slots slot).all ceiling.contains
 
+def Func.admittedValues (f : Func) (vt : Array (Option VTy)) (p : Prov) : Bool :=
+  (f.roots.values.getD #[]).toList.all fun (value, ceiling) =>
+    valRefLike vt value && (rootsAt p.vals value).all ceiling.contains
+
 def Func.receiverContentCeiling (f : Func) (p : Prov) (root : RootRef) : List RootRef :=
   match root with
     | .local slot => rootsAt p.slots slot
@@ -20,7 +24,8 @@ def Func.receiverContentCeiling (f : Func) (p : Prov) (root : RootRef) : List Ro
 def Func.admittedCallReceiver (f : Func) (p : Prov) (value : ValueId)
     (mapped : List RootRef) : Bool :=
   (rootsAt p.vals value).all fun root =>
-    f.rootsWithin mapped (f.receiverContentCeiling p root)
+    f.rootsWithin mapped (f.receiverContentCeiling p root) &&
+      f.rootsWithin (f.receiverContentCeiling p root) mapped
 
 def Func.admittedInstruction (m : Module) (vt : Array (Option VTy))
     (f : Func) (p : Prov) : Inst → Bool
@@ -51,6 +56,8 @@ def Func.checkAdmittedRegions (m : Module) (vt : Array (Option VTy))
     (f : Func) (p : Prov) : Except String Unit := do
   unless f.admittedSlots p do
     throw s!"{f.name} slot root info does not cover its reference-like storage"
+  unless f.admittedValues vt p do
+    throw s!"{f.name} value root info does not cover its reference-like values"
   unless (f.blocks.toList.flatMap (·.insts)).all (f.admittedInstruction m vt p) do
     throw s!"{f.name} root info does not bound a stored, returned, or passed region"
 
@@ -60,7 +67,7 @@ theorem Func.checkAdmittedRegions_instruction {m : Module} {vt : Array (Option V
     {inst : Inst} (instMember : inst ∈ block.insts) :
     f.admittedInstruction m vt p inst = true := by
   have all : (f.blocks.toList.flatMap (·.insts)).all (f.admittedInstruction m vt p) = true := by
-    cases slotCase : f.admittedSlots p <;>
+    cases slotCase : f.admittedSlots p <;> cases valueCase : f.admittedValues vt p <;>
       cases instCase : (f.blocks.toList.flatMap (·.insts)).all (f.admittedInstruction m vt p) <;>
       simp_all [Func.checkAdmittedRegions, bind, Except.bind, throw]
   exact (List.all_eq_true.mp all) inst (List.mem_flatMap.mpr ⟨block, blockMember, instMember⟩)
@@ -68,7 +75,14 @@ theorem Func.checkAdmittedRegions_instruction {m : Module} {vt : Array (Option V
 theorem Func.checkAdmittedRegions_slots {m : Module} {vt : Array (Option VTy)}
     {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ()) :
     f.admittedSlots p = true := by
-  cases slotCase : f.admittedSlots p <;>
+  cases slotCase : f.admittedSlots p <;> cases valueCase : f.admittedValues vt p <;>
+    cases instCase : (f.blocks.toList.flatMap (·.insts)).all (f.admittedInstruction m vt p) <;>
+    simp_all [Func.checkAdmittedRegions, bind, Except.bind, throw]
+
+theorem Func.checkAdmittedRegions_values {m : Module} {vt : Array (Option VTy)}
+    {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ()) :
+    f.admittedValues vt p = true := by
+  cases slotCase : f.admittedSlots p <;> cases valueCase : f.admittedValues vt p <;>
     cases instCase : (f.blocks.toList.flatMap (·.insts)).all (f.admittedInstruction m vt p) <;>
     simp_all [Func.checkAdmittedRegions, bind, Except.bind, throw]
 

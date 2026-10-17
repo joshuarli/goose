@@ -85,6 +85,13 @@ theorem generatedTargets_read (loop : Option LoopCtx) :
 theorem generatedTargets_get (loop : Option LoopCtx) :
     GeneratedTargetRun loop (get : B LS) := GeneratedTargetRun.unchanged (by intros; rfl)
 
+theorem generatedTargets_recordValueRootRecipe (loop : Option LoopCtx) (value : ValueId) (sourceScope : ScopeId) :
+    GeneratedTargetRun loop (recordValueRootRecipe value sourceScope) := by
+  intro env before result after run bounded targets
+  rw [recordValueRootRecipe_run] at run
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj run
+  exact ⟨bounded.of_blocks rfl, by cases loop <;> exact targets⟩
+
 theorem generatedTargets_emitDef (loop : Option LoopCtx) (op : Op) :
     GeneratedTargetRun loop (emitDef op) := by
   apply GeneratedTargetRun.of_targets (advB_emitDef op)

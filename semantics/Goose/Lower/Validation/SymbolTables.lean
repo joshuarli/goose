@@ -41,6 +41,14 @@ structure SymbolTableFacts (module : GIR.Module) (func : Func) : Prop where
       | .global index => index < module.globals.size
       | .param index => index < func.params.length
 
+  valueRoots : ∀ value roots, (value, roots) ∈ (func.roots.values.getD #[]).toList →
+    value < func.numValues ∧ ∀ root ∈ roots,
+      match root with
+      | .local index => index < func.slots.size
+      | .global index => index < module.globals.size
+      | .param index => index < func.params.length
+  valueRootKeys : ((func.roots.values.getD #[]).toList.map Prod.fst).Nodup
+
 private theorem forIn'_yields {items : List α}
     {body : (item : α) → item ∈ items → Except String (ForInStep PUnit.{1})}
     (checked : ∀ item member, body item member = .ok (.yield PUnit.unit)) :
@@ -300,6 +308,50 @@ theorem SymbolTableFacts.slot_root_scan {module : GIR.Module} {func : Func}
   rw [all]
   rfl
 
+theorem SymbolTableFacts.value_root_scan {module : GIR.Module} {func : Func}
+    (facts : SymbolTableFacts module func) :
+    (do
+      for (value, roots) in func.roots.values.getD #[] do
+        unless value < func.numValues do throw s!"value root info names value %{value}, outside the value table"
+        for root in roots do
+          match root with
+          | .local index => unless index < func.slots.size do throw s!"value root info names local slot {index}, outside the slot table"
+          | .global index => unless index < module.globals.size do throw s!"value root info names global {index}, outside the global table"
+          | .param index => unless index < func.params.length do throw s!"value root info names parameter {index}, which does not exist") =
+        (Except.ok () : Except String Unit) := by
+  rw [← Array.forIn_toList]
+  have checked : ∀ pair ∈ (func.roots.values.getD #[]).toList,
+      (do
+        let (value, roots) := pair
+        unless value < func.numValues do throw s!"value root info names value %{value}, outside the value table"
+        for root in roots do
+          match root with
+          | .local index => unless index < func.slots.size do throw s!"value root info names local slot {index}, outside the slot table"
+          | .global index => unless index < module.globals.size do throw s!"value root info names global {index}, outside the global table"
+          | .param index => unless index < func.params.length do throw s!"value root info names parameter {index}, which does not exist"
+        pure (.yield PUnit.unit)) =
+        (Except.ok (.yield PUnit.unit) : Except String (ForInStep PUnit)) := by
+    intro pair member
+    obtain ⟨value, roots⟩ := pair
+    have info := facts.valueRoots value roots member
+    have checkedRoots : (forIn roots PUnit.unit fun root _ => do
+        match root with
+        | .local index => unless index < func.slots.size do throw s!"value root info names local slot {index}, outside the slot table"
+        | .global index => unless index < module.globals.size do throw s!"value root info names global {index}, outside the global table"
+        | .param index => unless index < func.params.length do throw s!"value root info names parameter {index}, which does not exist"
+        pure (.yield PUnit.unit)) =
+        (Except.ok PUnit.unit : Except String PUnit) := by
+      apply forIn_yields
+      intro root rootMember
+      have allowed := info.2 root rootMember
+      cases root <;> simp_all [pure, Except.pure]
+    simp only [info.1, ite_true, pure, Except.pure, bind, Except.bind] at checkedRoots ⊢
+    rw [checkedRoots]
+  have all := forIn_yields checked
+  change (_ >>= fun _ => pure ()) = (Except.ok () : Except String Unit)
+  rw [all]
+  rfl
+
 theorem SymbolTableFacts.slot_scan {module : GIR.Module} {func : Func}
     (facts : SymbolTableFacts module func) :
     (do
@@ -375,6 +427,8 @@ theorem checkSymbols_of_tables {module : GIR.Module} {func : Func} {env : LEnv}
   cases resultUnit
   obtain ⟨slotRootUnit, slotRootRaw, _⟩ := (Core.Sound.ex_bind_ok _ _ _).mp facts.slot_root_scan
   cases slotRootUnit
+  obtain ⟨valueRootUnit, valueRootRaw, _⟩ := (Core.Sound.ex_bind_ok _ _ _).mp facts.value_root_scan
+  cases valueRootUnit
   have instructionChecks : ∀ block ∈ func.blocks.toList, ∀ inst ∈ block.insts,
       checkInstSymbols module func func.numValues inst = .ok () := by
     intro block blockMember inst instMember
@@ -402,6 +456,8 @@ theorem checkSymbols_of_tables {module : GIR.Module} {func : Func} {env : LEnv}
       apply accept_bind contentRaw
       apply accept_bind resultRaw
       apply accept_bind slotRootRaw
+      simp only [facts.valueRootKeys, ite_true, pure, Except.pure, bind, Except.bind]
+      apply accept_bind valueRootRaw
       apply accept_bind scanned
       rfl
 

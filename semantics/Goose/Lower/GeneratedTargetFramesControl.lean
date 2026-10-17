@@ -4,6 +4,14 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Lower.Validation
 
+theorem generatedTargetFrame_recordValueRootRecipe (loop : Option LoopCtx)
+    (value : ValueId) (sourceScope : ScopeId) :
+    GeneratedTargetFrameRun loop (recordValueRootRecipe value sourceScope) := by
+  intro base env current result after baseCurrent frames terms run
+  rw [recordValueRootRecipe_run] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  exact ⟨terms, .refl _⟩
+
 theorem generatedTargetFrame_curBlock (loop : Option LoopCtx) :
     GeneratedTargetFrameRun loop curBlock := by
   intro base env current result after baseCurrent frames terms run
@@ -359,6 +367,32 @@ theorem generatedTargetFrame_ifS_none_core (loop : Option LoopCtx) (condition : 
       (bodyChecked.2.trans closedExt)) frames closedChecked finalRun
   exact ⟨finalChecked.1,
     currentSelected.trans (bodyChecked.2.trans (closedExt.trans finalChecked.2))⟩
+
+theorem generatedTargetFrame_ifE_recorded_core (loop : Option LoopCtx) (condition : ValueId) (sourceScope : ScopeId)
+    {yes no : B ValueId} (yesRun : GeneratedTargetFrameRun loop yes)
+    (noRun : GeneratedTargetFrameRun loop no) :
+    GeneratedTargetFrameRun loop (whenLive 0 fun _ => do
+      let (yesBlock, noBlock) ← fork condition
+      setCur (some yesBlock)
+      let yesValue ← yes
+      let yesEnd ← curBlock
+      setCur (some noBlock)
+      let noValue ← no
+      let noEnd ← curBlock
+      let value ← joinValue yesEnd yesValue noEnd noValue
+      recordValueRootRecipe value sourceScope
+      pure value) := by
+  refine generatedTargetFrame_whenLive loop _ fun _ => ?_
+  refine GeneratedTargetFrameRun.bind (generatedTargetFrame_fork loop condition) fun blocks => ?_
+  refine GeneratedTargetFrameRun.bind (generatedTargetFrame_setCur loop _) fun _ => ?_
+  refine GeneratedTargetFrameRun.bind yesRun fun yesValue => ?_
+  refine GeneratedTargetFrameRun.bind (generatedTargetFrame_curBlock loop) fun yesEnd => ?_
+  refine GeneratedTargetFrameRun.bind (generatedTargetFrame_setCur loop _) fun _ => ?_
+  refine GeneratedTargetFrameRun.bind noRun fun noValue => ?_
+  refine GeneratedTargetFrameRun.bind (generatedTargetFrame_curBlock loop) fun noEnd => ?_
+  exact GeneratedTargetFrameRun.bind (generatedTargetFrame_joinValue loop yesEnd noEnd yesValue noValue) fun value =>
+    GeneratedTargetFrameRun.bind (generatedTargetFrame_recordValueRootRecipe loop value sourceScope) fun _ =>
+      generatedTargetFrame_pure loop value
 
 theorem generatedTargetFrame_ifE_core (loop : Option LoopCtx) (condition : ValueId)
     {yes no : B ValueId} (yesRun : GeneratedTargetFrameRun loop yes)

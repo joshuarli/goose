@@ -155,6 +155,13 @@ theorem definitions_setCur (block : Option BlockId) : DefinitionRun (setCur bloc
   rw [setCur_run]
   exact ⟨rfl, rfl⟩
 
+theorem definitions_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    DefinitionRun (recordValueRootRecipe value sourceScope) := by
+  apply DefinitionRun.of_unchanged
+  intro le state
+  rw [recordValueRootRecipe_run]
+  exact ⟨rfl, rfl⟩
+
 theorem definitions_emitTerm (term : Term) : DefinitionRun (emitTerm term) := by
   apply DefinitionRun.of_unchanged
   intro le state
@@ -405,7 +412,7 @@ theorem definitions_lowerEach (regrow : Bool) (owner : Option ValueId) (sampled 
   exact DefinitionRun.bind (definitions_eachLen _ _ _) fun n => DefinitionRun.bind (definitions_emitDef _) fun c =>
     definitions_loopBody c hbody (definitions_rangeBack _ _ _)
 
-theorem definitions_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : DefinitionRun a1) (h2 : DefinitionRun a2) :
+theorem definitions_ifE_core (cv : ValueId) (sourceScope : ScopeId) {a1 a2 : B ValueId} (h1 : DefinitionRun a1) (h2 : DefinitionRun a2) :
     DefinitionRun (whenLive 0 fun _ => do
       let (tb, eb) ← fork cv
       setCur (some tb)
@@ -414,12 +421,16 @@ theorem definitions_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : Definition
       setCur (some eb)
       let vf ← a2
       let endF ← curBlock
-      joinValue endT vt endF vf) := by
+      let result ← joinValue endT vt endF vf
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   exact definitions_whenLive _ fun _ =>
     DefinitionRun.bind (definitions_fork _) fun ⟨_, _⟩ =>
     DefinitionRun.bind (definitions_setCur _) fun _ => DefinitionRun.bind h1 fun _ =>
     DefinitionRun.bind definitions_curBlock fun _ => DefinitionRun.bind (definitions_setCur _) fun _ =>
-    DefinitionRun.bind h2 fun _ => DefinitionRun.bind definitions_curBlock fun _ => definitions_joinValue _ _ _ _
+    DefinitionRun.bind h2 fun _ => DefinitionRun.bind definitions_curBlock fun _ =>
+    DefinitionRun.bind (definitions_joinValue _ _ _ _) fun result =>
+    DefinitionRun.bind (definitions_recordValueRootRecipe result sourceScope) fun _ => DefinitionRun.pure result
 
 theorem definitions_ifS_some_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : DefinitionRun a1) (h2 : DefinitionRun a2) :
     DefinitionRun (whenLive () fun _ => do
@@ -542,7 +553,7 @@ theorem definitions_lowerExpr : ∀ e : Expr, DefinitionRun (lowerExpr e)
   | .ifE c t f => by
     simp only [lowerExpr]
     exact DefinitionRun.bind (definitions_lowerExpr c) fun cv =>
-      definitions_ifE_core cv (definitions_lowerBlock none [] true t) (definitions_lowerBlock none [] true f)
+      definitions_ifE_core cv (sourceBlockScope t) (definitions_lowerBlock none [] true t) (definitions_lowerBlock none [] true f)
   | .blockE b => by
     simp only [lowerExpr]
     exact definitions_lowerBlock none [] true b
@@ -830,11 +841,7 @@ theorem lower_unique_definitions (module : Core.Module) (func : Func)
     (member : func ∈ (lower module).funcs.toList ++ (lower module).globals.toList.map (·.init)) :
     (func.blocks.toList.flatMap GIR.Block.defs).Nodup := by
   rcases List.mem_append.mp member with implementation | initializer
-  · change func ∈ (module.contexts.map fun ctx =>
-        match (module.impls.map fun impl => (impl, lowerImpl module impl))[ctx.impl]? with
-        | some (impl, body) => { body with roots := lowerContextRootInfo ctx impl }
-        | none => invalidContextFunction ctx).toList at implementation
-    simp only [Array.toList_map, List.mem_map] at implementation
+  · simp only [lower, Array.toList_map, List.mem_map] at implementation
     obtain ⟨ctx, _, equality⟩ := implementation
     rw [Array.getElem?_map] at equality
     cases source : module.impls[ctx.impl]? with

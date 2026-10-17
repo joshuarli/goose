@@ -26,6 +26,12 @@ theorem DeadRun.of_cur_unchanged {action : B α}
   rw [run] at same
   exact same.trans dead
 
+theorem dead_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    DeadRun (recordValueRootRecipe value sourceScope) := by
+  apply DeadRun.of_cur_unchanged
+  intro le state
+  rw [recordValueRootRecipe_run]
+
 theorem dead_emitDef (op : Op) : DeadRun (emitDef op) := by
   intro le before result after run dead
   rw [emitDef_none op le dead] at run

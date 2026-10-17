@@ -177,11 +177,18 @@ theorem actualContents_sourceExpr (expr : Expr)
           exact Nat.lt_of_lt_of_le bounded
             (Nat.le_trans (Nat.le_of_eq (actualContents_setCur_sizes elseStartRun).1.symm)
               (advB_lowerBlock none [] true elseBody _ _ _ _ elseRun).ext.1)
+        obtain ⟨joinedValue, joinedState, joinRun, recordTail⟩ := bind_eq.mp run
+        obtain ⟨_, recordedState, recordRun, returned⟩ := bind_eq.mp recordTail
+        obtain ⟨rfl, rfl⟩ := pure_eq.mp returned
+        have joinedLive := (dead_recordValueRootRecipe joinedValue (sourceBlockScope thenBody)).live_before recordRun live
         intro ambient allowed
+        let recordedAmbient := ambient.before (advB_recordValueRootRecipe joinedValue
+          (sourceBlockScope thenBody) _ _ _ _ recordRun).ext
+          (types_recordValueRootRecipe joinedValue (sourceBlockScope thenBody) _ _ _ _ recordRun)
         have arguments := actualContents_joinValue_arguments thenBound elseAfterGenerated.live thenTyped elseTyped
-          run live ambient allowed
-        let joinAmbient := ambient.before (actualContents_joinValue_ext run)
-          (types_joinValue _ _ _ _ _ _ _ _ run)
+          joinRun joinedLive recordedAmbient allowed
+        let joinAmbient := recordedAmbient.before (actualContents_joinValue_ext joinRun)
+          (types_joinValue _ _ _ _ _ _ _ _ joinRun)
         have thenEvidence : thenAfter.cur.isSome = true →
             FreshContentsEvidence (lowerEnv env.mod env.vars results) before.vals.size elseAfter thenValue := by
           intro branchLive
@@ -200,9 +207,12 @@ theorem actualContents_sourceExpr (expr : Expr)
           intro branchLive
           exact (actualContents_sourceBlock elseBody elseSource elseRun branchLive elseGenerated
             joinAmbient (arguments.2 branchLive)).weaken beforeElse
-        exact (joinValue_freshContents_run elseAfterGenerated.dense elseAfterGenerated.live
+        have joined := joinValue_record_freshContents (sourceBlockScope thenBody)
+          elseAfterGenerated.dense elseAfterGenerated.live
           elseAfterGenerated.targets thenBound elseAfterGenerated.live thenTyped elseTyped
-          (by intro intTy unequal; cases unequal) beforeJoin thenEvidence elseEvidence run live).1
+          (by intro intTy unequal; cases unequal) beforeJoin thenEvidence elseEvidence
+        rw [run] at joined
+        exact (joined live).1
     · simp only [equal] at source
       change ((rej .type "the branches of `if` have different types" : Core.T Unit) >>=
         fun _ => pure thenTy) elseFinish = .ok (.ref mu target, finish) at source

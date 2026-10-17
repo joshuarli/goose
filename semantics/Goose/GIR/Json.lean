@@ -37,6 +37,7 @@ structure Tables where
   nScopes : Nat
   nBlocks : Nat
   profile : ArtifactProfile := .pilot
+  nValues : Nat := 0
 
 /-- Resolve field components against earlier data types. Views are valid table
 entries but can never become a descriptor's stored field type. -/
@@ -205,15 +206,19 @@ def decRootRows (tb : Tables) (nParams nRows : Nat) (rowKind expectedTag : Strin
 def decRootInfo (tb : Tables) (nParams nResults : Nat) (j : Lean.Json) : Except String RootInfo := do
   let (tag, fs) ← record j "root info"
   unless tag == "roots" do fail s!"expected roots, found tag {tag.quote}"
-  unless fs.size == 3 || fs.size == 4 do fail "roots expects 3 or 4 fields"
+  unless fs.size == 3 || fs.size == 4 || fs.size == 5 do fail "roots expects 3, 4, or 5 fields"
   let params ← decRootRows tb nParams nParams "parameter" "vr" fs[0]!
   let contents ← decRootRows tb nParams nParams "parameter" "cr" fs[1]!
   let results ← list fs[2]! "result root rows" (fun row => list row "root set" (decRootRef tb nParams))
   unless results.length == nResults do fail s!"root info has {results.length} result rows, expected {nResults}"
-  let slots ← if fs.size == 4 then
+  let slots ← if fs.size == 5 && fs[3]! == Lean.Json.null then pure none
+    else if fs.size >= 4 then
       some <$> decRootRows tb nParams tb.nSlots "slot" "sr" fs[3]!
     else pure none
-  pure { params, contents, results := results.toArray, slots }
+  let values ← if fs.size == 5 then
+      some <$> decRootRows tb nParams tb.nValues "value" "er" fs[4]!
+    else pure none
+  pure { params, contents, results := results.toArray, slots, values }
 
 def decPart (j : Lean.Json) : Except String PrintPart := do
   let (tag, fs) ← record j "print part"
@@ -465,7 +470,8 @@ def decFunc (m : Tables) (j : Lean.Json) : Except String Func := do
   if nInsts > Decode.maxNodesPerFunction then
     fail s!"more than {Decode.maxNodesPerFunction} instructions in one function"
   let blocks ← blocksJ.mapIdx (fun i b => Decode.inEntry "block" i (decBlock tb b)) |>.mapM id
-  let roots ← decRootInfo tb params.length results.length fs[6]!
+  let valueCount := blocks.foldl (fun n block => n + block.defs.length) 0
+  let roots ← decRootInfo { tb with nValues := valueCount } params.length results.length fs[6]!
   let summary ← Decode.decSummary m.profile m.nGlobals params.length fs[7]!
   let org ← decOrgOpt tb fs[8]!
   let certificate ← optional fs[9]! "fact certificate" (decCertificate tb)
@@ -497,7 +503,7 @@ def decodeModule (j : Lean.Json) : Except String Module := do
   let (types, structs) ← decVTypesWithStructs fs[3]! raw profile
   let nGlobals := (← asArr fs[4 + extra]! "globals").size
   let nFuncs := (← asArr fs[5 + extra]! "functions").size
-  let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0, profile⟩
+  let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0, profile, 0⟩
   let globals ← Decode.decodeMapped "global" fs[4 + extra]! (decGlobal tb)
   let funcs ← Decode.decodeMapped "func" fs[5 + extra]! (decFunc tb)
   let entry ← checkIndex (← asNat fs[6 + extra]! "entry") nFuncs "function"
@@ -711,9 +717,11 @@ def wRootInfo (r : RootInfo) : String :=
   let rows tag rs := wList (rs.toList.map fun (i, roots) => wRec tag [toString i, wList (roots.map wRootRef)])
   let fields := [rows "vr" r.params, rows "cr" r.contents,
     wList (r.results.toList.map fun roots => wList (roots.map wRootRef))]
-  wRec "roots" (match r.slots with
-    | none => fields
-    | some slots => fields ++ [rows "sr" slots])
+  wRec "roots" (match r.values with
+    | some values => fields ++ [r.slots.map (rows "sr") |>.getD "null", rows "er" values]
+    | none => match r.slots with
+      | none => fields
+      | some slots => fields ++ [rows "sr" slots])
 
 def wSummary (profile : ArtifactProfile) : SummaryAnn → String
   | .unknown => wRec "summary_unknown" []

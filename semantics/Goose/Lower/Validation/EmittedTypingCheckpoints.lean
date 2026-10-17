@@ -221,4 +221,10 @@ theorem EmittedBuilder.of_unchanged {le : LEnv} {initial before : LS}
   · intro value op member
     simpa only [LS.insts, blocks] using member
 
+theorem EmittedBuilder.recordValueRootRecipe {le : LEnv} {initial before : LS}
+    (builder : EmittedBuilder le initial before) (value : ValueId) (sourceScope : ScopeId) :
+    EmittedBuilder le initial (Goose.Lower.recordValueRootRecipe value sourceScope le before).2 := by
+  apply builder.of_unchanged (Goose.Lower.recordValueRootRecipe value sourceScope)
+  all_goals rw [recordValueRootRecipe_run]
+
 end Goose.Lower.Validation

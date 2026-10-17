@@ -25,7 +25,7 @@ theorem emitted_source_ifExpression {env : Core.TEnv} {results : List Ty}
   let evaluated := lowerExpr condition le before
   have conditionBuilder := conditionChild conditionSource generated builder
   have conditionGenerated : GeneratedBuilderState evaluated.2 := generated.lowerExpr condition rfl
-  have checked := emitted_checked_generated_ifValue conditionBuilder conditionGenerated evaluated.1
+  have checked := emitted_checked_generated_ifValue_recorded conditionBuilder conditionGenerated evaluated.1 (sourceBlockScope yes)
     (value_lowerExpr condition le before _ _ rfl) (lowerBlock none [] true yes) (lowerBlock none [] true no)
     (fun initial started builder generated _ _ =>
       ⟨yesChild (Core.exprEnv env) yesSource none [] true generated builder trivial trivial

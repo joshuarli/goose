@@ -36,6 +36,13 @@ theorem OriginRun.of_unchanged {action : B α}
   rw [run] at equality
   simpa only [PresentOrigins, equality] using checked
 
+theorem origins_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    OriginRun (recordValueRootRecipe value sourceScope) := by
+  apply OriginRun.of_unchanged
+  intro le state
+  rw [recordValueRootRecipe_run]
+  rfl
+
 theorem origins_appendInst {before : LS} (checked : PresentOrigins before)
     (block : BlockId) (inst : Inst) (instruction : Inst.OriginPresent inst) :
     PresentOrigins (before.appendInst block inst) := by
@@ -364,7 +371,7 @@ theorem origins_lowerEach (regrow : Bool) (owner : Option ValueId) (sampled : Va
   exact OriginRun.bind (origins_eachLen _ _ _) fun n => OriginRun.bind (origins_emitDef _) fun c =>
     origins_loopBody c hbody (origins_rangeBack _ _ _)
 
-theorem origins_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : OriginRun a1) (h2 : OriginRun a2) :
+theorem origins_ifE_core (cv : ValueId) (sourceScope : ScopeId) {a1 a2 : B ValueId} (h1 : OriginRun a1) (h2 : OriginRun a2) :
     OriginRun (whenLive 0 fun _ => do
       let (tb, eb) ← fork cv
       setCur (some tb)
@@ -373,12 +380,16 @@ theorem origins_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : OriginRun a1) 
       setCur (some eb)
       let vf ← a2
       let endF ← curBlock
-      joinValue endT vt endF vf) := by
+      let result ← joinValue endT vt endF vf
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   exact origins_whenLive _ fun _ =>
     OriginRun.bind (origins_fork _) fun ⟨_, _⟩ =>
     OriginRun.bind (origins_setCur _) fun _ => OriginRun.bind h1 fun _ =>
     OriginRun.bind origins_curBlock fun _ => OriginRun.bind (origins_setCur _) fun _ =>
-    OriginRun.bind h2 fun _ => OriginRun.bind origins_curBlock fun _ => origins_joinValue _ _ _ _
+    OriginRun.bind h2 fun _ => OriginRun.bind origins_curBlock fun _ =>
+    OriginRun.bind (origins_joinValue _ _ _ _) fun result =>
+    OriginRun.bind (origins_recordValueRootRecipe result sourceScope) fun _ => OriginRun.pure result
 
 theorem origins_ifS_some_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : OriginRun a1) (h2 : OriginRun a2) :
     OriginRun (whenLive () fun _ => do
@@ -501,7 +512,7 @@ theorem origins_lowerExpr : ∀ e : Expr, OriginRun (lowerExpr e)
   | .ifE c t f => by
     simp only [lowerExpr]
     exact OriginRun.bind (origins_lowerExpr c) fun cv =>
-      origins_ifE_core cv (origins_lowerBlock none [] true t) (origins_lowerBlock none [] true f)
+      origins_ifE_core cv (sourceBlockScope t) (origins_lowerBlock none [] true t) (origins_lowerBlock none [] true f)
   | .blockE b => by
     simp only [lowerExpr]
     exact origins_lowerBlock none [] true b
@@ -794,11 +805,7 @@ theorem lower_presentOrigins (module : Core.Module) (func : Func)
     (member : func ∈ (lower module).funcs.toList ++ (lower module).globals.toList.map (·.init)) :
     Func.PresentOrigins func := by
   rcases List.mem_append.mp member with implementation | initializer
-  · change func ∈ (module.contexts.map fun ctx =>
-        match (module.impls.map fun impl => (impl, lowerImpl module impl))[ctx.impl]? with
-        | some (impl, body) => { body with roots := lowerContextRootInfo ctx impl }
-        | none => invalidContextFunction ctx).toList at implementation
-    simp only [Array.toList_map, List.mem_map] at implementation
+  · simp only [lower, Array.toList_map, List.mem_map] at implementation
     obtain ⟨ctx, _, equality⟩ := implementation
     rw [Array.getElem?_map] at equality
     cases source : module.impls[ctx.impl]? with

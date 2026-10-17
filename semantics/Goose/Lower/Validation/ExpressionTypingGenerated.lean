@@ -461,7 +461,8 @@ theorem lowerExpr_generated_typed (e : Expr)
         have elseTyped : elseAfter.cur.isSome = true → elseAfter.vals[elseValue]? = some (some (.data thenTy)) := by
           intro branchLive
           exact lowerBlock_generated_typed elseBody elseSource elseRun branchLive
-        have joined := joinValue_typed (le := lowerEnv env.mod env.vars results) thenTyped elseTyped
+        have joined := joinValue_record_typed (le := lowerEnv env.mod env.vars results)
+          (sourceBlockScope thenBody) thenTyped elseTyped
         rw [run] at joined
         exact joined live
     · simp only [equal] at source
@@ -1055,7 +1056,7 @@ theorem lowerExpr_generated_contents (expr : Expr)
           apply Nat.lt_of_lt_of_le bounded
           exact Nat.le_trans (Nat.le_of_eq (generated_setCur_sizes elseStartRun).1.symm)
             (advB_lowerBlock none [] true elseBody _ _ _ _ elseRun).ext.1
-        have joined := joinValue_freshContents elseAfterGenerated.dense elseAfterGenerated.live
+        have joined := joinValue_record_freshContents (sourceBlockScope thenBody) elseAfterGenerated.dense elseAfterGenerated.live
           elseAfterGenerated.targets thenBound elseAfterGenerated.live thenTyped elseTyped
           (by intro intTy unequal; cases unequal) beforeJoin thenEvidence elseEvidence
         rw [run] at joined

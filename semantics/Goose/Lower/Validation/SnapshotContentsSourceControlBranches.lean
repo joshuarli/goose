@@ -82,7 +82,7 @@ theorem snapshot_control_branches {le : LEnv} {loop : Option LoopCtx}
   exact tailTrace _ _ _ _ _ _ _ _ secondTrace secondGenerated secondFrames tailRun
 
 theorem SnapshotTraceRun.ifValue {le : LEnv} {loop : Option LoopCtx}
-    (condition : ValueId) {yes no : B ValueId}
+    (condition : ValueId) (sourceScope : ScopeId) {yes no : B ValueId}
     (yesSource : SnapshotSourceAction le loop yes) (noSource : SnapshotSourceAction le loop no) :
     SnapshotTraceRun le loop (Goose.Lower.whenLive 0 fun _ => do
       let (tb, eb) ← Goose.Lower.fork condition
@@ -92,7 +92,9 @@ theorem SnapshotTraceRun.ifValue {le : LEnv} {loop : Option LoopCtx}
       Goose.Lower.setCur (some eb)
       let valueF ← no
       let endF ← Goose.Lower.curBlock
-      Goose.Lower.joinValue endT valueT endF valueF) := by
+      let value ← Goose.Lower.joinValue endT valueT endF valueF
+      Goose.Lower.recordValueRootRecipe value sourceScope
+      Pure.pure value) := by
   intro before result after generated frames run
   cases live : before.cur with
   | none =>
@@ -102,8 +104,16 @@ theorem SnapshotTraceRun.ifValue {le : LEnv} {loop : Option LoopCtx}
   | some current =>
     rw [whenLive_some _ _ _ live] at run
     exact snapshot_control_branches condition yesSource noSource
-      (fun endT valueT endF valueF => Goose.Lower.joinValue endT valueT endF valueF)
-      (fun _ _ _ _ _ _ _ _ trace generated frames run => trace.joinValue generated frames run)
+      (fun endT valueT endF valueF => do
+        let value ← Goose.Lower.joinValue endT valueT endF valueF
+        Goose.Lower.recordValueRootRecipe value sourceScope
+        Pure.pure value)
+      (by
+        intro first before after result endT valueT endF valueF trace generated frames run
+        obtain ⟨value, joined, joinRun, tail⟩ := bind_eq.mp run
+        obtain ⟨_, recorded, recordRun, returned⟩ := bind_eq.mp tail
+        obtain ⟨rfl, rfl⟩ := pure_eq.mp returned
+        exact (trace.joinValue generated frames joinRun).recordValueRootRecipe recordRun)
       before result after generated frames run
 
 theorem SnapshotTraceRun.ifArms {le : LEnv} {loop : Option LoopCtx}

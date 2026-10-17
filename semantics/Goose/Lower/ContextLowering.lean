@@ -7,7 +7,7 @@ open Goose.Core
 theorem lower_func_at {m : Module} {c : ContextId} {ctx : Context} {impl : Impl}
     (contextAt : m.contexts[c]? = some ctx) (implAt : m.impls[ctx.impl]? = some impl) :
     (lower m).funcs[c]? = some (lowerContextAt m ctx impl) := by
-  simp [lower, Array.getElem?_map, contextAt, implAt, lowerContextAt]
+  simp [lower, Array.getElem?_map, contextAt, implAt, lowerContextAt, lowerImpl]
 
 theorem lower_context_sigs_at {m : Module} {c : ContextId} {ctx : Context} {impl : Impl}
     (vars : Array LocalVar) (results : List Ty)

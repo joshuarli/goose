@@ -538,7 +538,8 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
         have elseTyped : elseAfter.cur.isSome = true → elseAfter.vals[elseValue]? = some (some (.data thenTy)) := by
           intro branchLive
           exact lowerBlock_recursive_typed elseBody elseSupported elseSource elseRun branchLive
-        have joined := joinValue_typed (le := lowerEnv env.mod env.vars results) thenTyped elseTyped
+        have joined := joinValue_record_typed (le := lowerEnv env.mod env.vars results)
+          (sourceBlockScope thenBody) thenTyped elseTyped
         rw [run] at joined
         exact joined live
     · simp only [equal] at source

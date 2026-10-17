@@ -254,7 +254,7 @@ private def crossContentModule := module #[crossContentWrapper, crossContentCall
 
 private def duplicatedReturnBound := { globalReturnBound with roots := { results := #[[.global 0, .global 0]] } }
 private def duplicatedReturnModule := module #[duplicatedReturnBound, pure] #[global owner]
-#guard ReplacementContentFlow.Model.declaredReturn duplicatedReturnBound == .known [.global 0]
+#guard duplicatedReturnBound.roots.results[0]!.length == 2
 #guard (localFlow duplicatedReturnModule duplicatedReturnBound).value 0 == some [.global 0]
 
 private def independentWriter := function "independentWriter" [holder, holder, slice] [] #[]

@@ -5,6 +5,18 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
+theorem joinValue_record_typed {le : LEnv} {before : LS} {endT endF : Option BlockId}
+    {valueT valueF : ValueId} {ty : VTy} (sourceScope : ScopeId)
+    (thenTyped : endT.isSome = true → before.vals[valueT]? = some (some ty))
+    (elseTyped : endF.isSome = true → before.vals[valueF]? = some (some ty)) :
+    let (value, after) := (do
+      let value ← joinValue endT valueT endF valueF
+      recordValueRootRecipe value sourceScope
+      pure value) le before
+    after.cur.isSome = true → after.vals[value]? = some (some ty) := by
+  simpa only [bind_run, recordValueRootRecipe_run, pure_run] using
+    (joinValue_typed (le := le) thenTyped elseTyped)
+
 def StaticBlockResult : Core.Block → Prop
   | .mk _ _ none => True
   | .mk _ _ (some e) => StaticExpression e
@@ -171,7 +183,8 @@ theorem lowerExpr_ifE_static_result_typed {env : Core.TEnv} {condition : Expr}
         intro branchLive
         exact lowerBlock_static_result_typed (env := Core.exprEnv env)
           elseSupported elseSource elseRun branchLive
-      have joined := joinValue_typed (le := lowerEnv env.mod env.vars results) thenTyped elseTyped
+      have joined := joinValue_record_typed (le := lowerEnv env.mod env.vars results)
+        (sourceBlockScope thenBody) thenTyped elseTyped
       rw [run] at joined
       exact joined live
   · simp only [equal] at source

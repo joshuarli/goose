@@ -208,6 +208,30 @@ theorem generatedTargets_ifE_core (loop : Option LoopCtx) (condition : ValueId)
   refine GeneratedTargetRun.bind (generatedTargets_curBlock loop) fun noEnd => ?_
   exact generatedTargets_joinValue loop yesEnd noEnd yesValue noValue
 
+theorem generatedTargets_ifE_recorded_core (loop : Option LoopCtx) (condition : ValueId) (sourceScope : ScopeId)
+    {yes no : B ValueId} (yesRun : GeneratedTargetRun loop yes) (noRun : GeneratedTargetRun loop no) :
+    GeneratedTargetRun loop (whenLive 0 fun _ => do
+      let (yesBlock, noBlock) ← fork condition
+      setCur (some yesBlock)
+      let yesValue ← yes
+      let yesEnd ← curBlock
+      setCur (some noBlock)
+      let noValue ← no
+      let noEnd ← curBlock
+      let value ← joinValue yesEnd yesValue noEnd noValue
+      recordValueRootRecipe value sourceScope
+      pure value) := by
+  refine generatedTargets_whenLive loop _ fun _ => ?_
+  refine GeneratedTargetRun.bind (generatedTargets_fork loop condition) fun blocks => ?_
+  refine GeneratedTargetRun.bind (generatedTargets_setCur loop _) fun _ => ?_
+  refine GeneratedTargetRun.bind yesRun fun yesValue => ?_
+  refine GeneratedTargetRun.bind (generatedTargets_curBlock loop) fun yesEnd => ?_
+  refine GeneratedTargetRun.bind (generatedTargets_setCur loop _) fun _ => ?_
+  refine GeneratedTargetRun.bind noRun fun noValue => ?_
+  refine GeneratedTargetRun.bind (generatedTargets_curBlock loop) fun noEnd => ?_
+  refine GeneratedTargetRun.bind (generatedTargets_joinValue loop yesEnd noEnd yesValue noValue) fun value => ?_
+  exact GeneratedTargetRun.bind (generatedTargets_recordValueRootRecipe loop value sourceScope) fun _ => generatedTargets_pure loop value
+
 theorem generatedTargets_ifS_some_core (loop : Option LoopCtx) (condition : ValueId)
     {yes no : B ValueId} (yesRun : GeneratedTargetRun loop yes) (noRun : GeneratedTargetRun loop no) :
     GeneratedTargetRun loop (whenLive () fun _ => do

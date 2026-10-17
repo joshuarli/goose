@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.CfgFrontier
+import Goose.Lower.Validation.CfgBuilderFunctions
 import Goose.Lower.Validation.Definitions
 
 namespace Goose.Lower.Validation
@@ -39,6 +40,14 @@ theorem DenseRun.of_unchanged {action : B α}
   change after = before at equal
   subst after
   exact ⟨checked, bounded, Nat.le_refl _⟩
+
+theorem dense_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    DenseRun (recordValueRootRecipe value sourceScope) := by
+  apply DenseRun.of_bounded ?_ (advB_recordValueRootRecipe value sourceScope)
+  intro le before result after run checked bounded
+  rw [recordValueRootRecipe_run] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  exact checked
 
 theorem dense_emitDef (op : Op) : DenseRun (emitDef op) := by
   apply DenseRun.of_bounded ?_ (advB_emitDef op)
@@ -414,7 +423,7 @@ theorem dense_fork_actions (condition : ValueId) {first : B α} {second : B β}
     Nat.le_trans forkedState.2.2 (Nat.le_trans thenEntry.2.2 (Nat.le_trans thenState.2.2
       (Nat.le_trans elseEntry.2.2 (Nat.le_trans elseState.2.2 joined.2.2))))⟩
 
-theorem dense_ifE_core (condition : ValueId) {first second : B ValueId}
+theorem dense_ifE_core (condition : ValueId) (sourceScope : ScopeId) {first second : B ValueId}
     (one : DenseRun first) (two : DenseRun second) :
     DenseRun (whenLive 0 fun _ => do
       let (thenBlock, elseBlock) ← fork condition
@@ -424,8 +433,12 @@ theorem dense_ifE_core (condition : ValueId) {first second : B ValueId}
       setCur (some elseBlock)
       let elseValue ← second
       let elseEnd ← curBlock
-      joinValue thenEnd thenValue elseEnd elseValue) :=
-  dense_whenLive _ fun _ => dense_fork_actions condition one two dense_joinValue
+      let result ← joinValue thenEnd thenValue elseEnd elseValue
+      recordValueRootRecipe result sourceScope
+      pure result) :=
+  dense_whenLive _ fun _ => dense_fork_actions condition one two fun thenEnd thenValue elseEnd elseValue =>
+    DenseRun.bind (dense_joinValue thenEnd thenValue elseEnd elseValue) fun result =>
+      DenseRun.bind (dense_recordValueRootRecipe result sourceScope) fun _ => DenseRun.pure result
 
 theorem dense_ifS_some_core (condition : ValueId) {first second : B ValueId}
     (one : DenseRun first) (two : DenseRun second) :
@@ -649,7 +662,7 @@ theorem dense_lowerExpr : ∀ e : Expr, DenseRun (lowerExpr e)
   | .ifE c t f => by
     simp only [lowerExpr]
     exact DenseRun.bind (dense_lowerExpr c) fun cv =>
-      dense_ifE_core cv (dense_lowerBlock none [] true t) (dense_lowerBlock none [] true f)
+      dense_ifE_core cv (sourceBlockScope t) (dense_lowerBlock none [] true t) (dense_lowerBlock none [] true f)
   | .blockE b => by
     simp only [lowerExpr]
     exact dense_lowerBlock none [] true b
@@ -950,56 +963,72 @@ theorem Func.parameter_ids_distinct_of_dense {func : Func}
   have distinct := sublist.nodup (dense.nodup_iff.mpr List.nodup_range)
   exact (List.nodup_append.mp distinct).1
 
+theorem dense_cfg_implAction (impl : Core.Impl) : DenseRun (cfg_implAction impl) := by
+  intro le before result after run checked bounded
+  simp only [cfg_implAction, bind_eq] at run
+  obtain ⟨⟨entry, params⟩, allocated, allocation, _, entered, entryRun,
+    value, bodyState, bodyRun, finished⟩ := run
+  have one := dense_newBlock _ le before _ allocated allocation checked bounded
+  have fresh := liveBound_newBlock (impl.params.toList.map fun param => .data (tyOfVar impl param.var)) le before
+  rw [allocation] at fresh
+  have two := dense_setCur_at entryRun one.1 (by intro current equal; cases equal; exact fresh)
+  have three := dense_lowerBlock _ _ _ _ le entered value bodyState bodyRun two.1 two.2.1
+  have four := dense_finishFunction impl value le bodyState result after finished three.1 three.2.1
+  exact ⟨four.1, four.2.1, Nat.le_trans one.2.2 (Nat.le_trans two.2.2 (Nat.le_trans three.2.2 four.2.2))⟩
+
+theorem dense_cfg_globalAction (global : Core.Global) : DenseRun (cfg_globalAction global) := by
+  intro le before result after run checked bounded
+  simp only [cfg_globalAction, bind_eq] at run
+  obtain ⟨⟨entry, params⟩, allocated, allocation, _, entered, entryRun,
+    value, bodyState, bodyRun, finished⟩ := run
+  have one := dense_newBlock [] le before _ allocated allocation checked bounded
+  have fresh := liveBound_newBlock [] le before
+  rw [allocation] at fresh
+  have two := dense_setCur_at entryRun one.1 (by intro current equal; cases equal; exact fresh)
+  have three := dense_lowerExpr global.init le entered value bodyState bodyRun two.1 two.2.1
+  have four := dense_emitTerm (.ret [value] (some global.org)) le bodyState result after finished three.1 three.2.1
+  exact ⟨four.1, four.2.1, Nat.le_trans one.2.2 (Nat.le_trans two.2.2 (Nat.le_trans three.2.2 four.2.2))⟩
+
+theorem lowerImplState_denseDefinitions (module : Core.Module) (impl : Core.Impl) :
+    (lowerImplState module impl).DenseDefinitions :=
+  (dense_cfg_implAction impl (lowerEnv module impl.vars impl.results.toList) initState _ _ rfl
+    LS.denseDefinitions_initState liveBound_initState).1
+
+theorem cfg_globalState_denseDefinitions (module : Core.Module) (global : Core.Global) :
+    (cfg_globalState module global).DenseDefinitions :=
+  (dense_cfg_globalAction global (lowerEnv module #[] [global.ty]) initState _ _ rfl
+    LS.denseDefinitions_initState liveBound_initState).1
+
+theorem dense_values_eq_numValues {state : LS} {func : Func} (checked : state.DenseDefinitions)
+    (blocks : func.blocks = finishBlocks state.blocks) : state.vals.size = func.numValues := by
+  rw [Func.numValues_eq_definition_count, blocks, finishBlocks_defs]
+  simpa only [List.length_range, LS.defs] using checked.length.symm
+
+theorem lowerImplState_numValues (module : Core.Module) (impl : Core.Impl) :
+    (lowerImplState module impl).vals.size = (lowerImpl module impl).numValues :=
+  dense_values_eq_numValues (lowerImplState_denseDefinitions module impl) rfl
+
+theorem lowerContextAt_state_numValues (module : Core.Module) (context : Context) (impl : Core.Impl) :
+    (lowerImplState module impl).vals.size = (lowerContextAt module context impl).numValues :=
+  dense_values_eq_numValues (lowerImplState_denseDefinitions module impl) rfl
+
+theorem lowerGlobal_state_numValues (module : Core.Module) (global : Core.Global) :
+    (cfg_globalState module global).vals.size = (lowerGlobal module global).init.numValues :=
+  dense_values_eq_numValues (cfg_globalState_denseDefinitions module global) rfl
+
 theorem lowerImpl_dense_definitions (module : Core.Module) (impl : Core.Impl) :
     ((lowerImpl module impl).blocks.toList.flatMap GIR.Block.defs).Perm
-      (List.range (lowerImpl module impl).numValues) := by
-  let action : B Unit := do
-    let (entry, params) ← newBlock (impl.params.toList.map fun param => .data (tyOfVar impl param.var))
-    setCur (some entry)
-    let pre := (impl.params.toList.zip params).map fun (param, value) =>
-      (param.var, value, (impl.vars[param.var]?.map (·.org)).getD 0)
-    let value ← lowerBlock none pre false impl.body
-    finishFunction impl value
-  have preservation : DenseRun action := by
-    intro le before result after run checked bounded
-    simp only [action, bind_eq] at run
-    obtain ⟨⟨entry, params⟩, allocated, allocation, _, entered, entryRun,
-      value, bodyState, bodyRun, finished⟩ := run
-    have one := dense_newBlock _ le before _ allocated allocation checked bounded
-    have fresh := liveBound_newBlock (impl.params.toList.map fun param => .data (tyOfVar impl param.var)) le before
-    rw [allocation] at fresh
-    have two := dense_setCur_at entryRun one.1 (by intro current equal; cases equal; exact fresh)
-    have three := dense_lowerBlock _ _ _ _ le entered value bodyState bodyRun two.1 two.2.1
-    have four := dense_finishFunction impl value le bodyState result after finished three.1 three.2.1
-    exact ⟨four.1, four.2.1, Nat.le_trans one.2.2 (Nat.le_trans two.2.2 (Nat.le_trans three.2.2 four.2.2))⟩
-  let output := action (lowerEnv module impl.vars impl.results.toList) initState
-  have checked := preservation (lowerEnv module impl.vars impl.results.toList)
-    initState output.1 output.2 rfl LS.denseDefinitions_initState liveBound_initState
-  exact dense_finishBlocks checked.1 rfl
+      (List.range (lowerImpl module impl).numValues) :=
+  dense_finishBlocks (lowerImplState_denseDefinitions module impl) rfl
 
 theorem lowerGlobal_dense_definitions (module : Core.Module) (global : Core.Global) :
     ((lowerGlobal module global).init.blocks.toList.flatMap GIR.Block.defs).Perm
-      (List.range (lowerGlobal module global).init.numValues) := by
-  let action : B Unit := do
-    let (entry, _) ← newBlock []
-    setCur (some entry)
-    let value ← lowerExpr global.init
-    emitTerm (.ret [value] (some global.org))
-  have preservation : DenseRun action := by
-    intro le before result after run checked bounded
-    simp only [action, bind_eq] at run
-    obtain ⟨⟨entry, params⟩, allocated, allocation, _, entered, entryRun,
-      value, bodyState, bodyRun, finished⟩ := run
-    have one := dense_newBlock [] le before _ allocated allocation checked bounded
-    have fresh := liveBound_newBlock [] le before
-    rw [allocation] at fresh
-    have two := dense_setCur_at entryRun one.1 (by intro current equal; cases equal; exact fresh)
-    have three := dense_lowerExpr global.init le entered value bodyState bodyRun two.1 two.2.1
-    have four := dense_emitTerm (.ret [value] (some global.org)) le bodyState result after finished three.1 three.2.1
-    exact ⟨four.1, four.2.1, Nat.le_trans one.2.2 (Nat.le_trans two.2.2 (Nat.le_trans three.2.2 four.2.2))⟩
-  let output := action (lowerEnv module #[] [global.ty]) initState
-  have checked := preservation (lowerEnv module #[] [global.ty])
-    initState output.1 output.2 rfl LS.denseDefinitions_initState liveBound_initState
-  exact dense_finishBlocks checked.1 rfl
+      (List.range (lowerGlobal module global).init.numValues) :=
+  dense_finishBlocks (cfg_globalState_denseDefinitions module global) rfl
+
+#print axioms lowerImplState_denseDefinitions
+#print axioms cfg_globalState_denseDefinitions
+#print axioms lowerContextAt_state_numValues
+#print axioms lowerGlobal_state_numValues
 
 end Goose.Lower.Validation

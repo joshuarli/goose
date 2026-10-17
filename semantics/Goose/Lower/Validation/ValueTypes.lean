@@ -36,6 +36,12 @@ theorem TypeRun.of_unchanged {action : B α}
   rw [equality]
   exact typed
 
+theorem types_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    TypeRun (recordValueRootRecipe value sourceScope) := by
+  apply TypeRun.of_unchanged
+  intro le state
+  rw [recordValueRootRecipe_run]
+
 theorem types_emitDef (op : Op) : TypeRun (emitDef op) := by
   intro le before result after run value ty typed
   cases current : before.cur with
@@ -314,7 +320,7 @@ theorem types_lowerEach (regrow : Bool) (owner : Option ValueId) (sampled : Valu
   exact TypeRun.bind (types_eachLen _ _ _) fun n => TypeRun.bind (types_emitDef _) fun c =>
     types_loopBody c hbody (types_rangeBack _ _ _)
 
-theorem types_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : TypeRun a1) (h2 : TypeRun a2) :
+theorem types_ifE_core (cv : ValueId) (sourceScope : ScopeId) {a1 a2 : B ValueId} (h1 : TypeRun a1) (h2 : TypeRun a2) :
     TypeRun (whenLive 0 fun _ => do
       let (tb, eb) ← fork cv
       setCur (some tb)
@@ -323,12 +329,16 @@ theorem types_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : TypeRun a1) (h2 
       setCur (some eb)
       let vf ← a2
       let endF ← curBlock
-      joinValue endT vt endF vf) := by
+      let result ← joinValue endT vt endF vf
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   exact types_whenLive _ fun _ =>
     TypeRun.bind (types_fork _) fun ⟨_, _⟩ =>
     TypeRun.bind (types_setCur _) fun _ => TypeRun.bind h1 fun _ =>
     TypeRun.bind types_curBlock fun _ => TypeRun.bind (types_setCur _) fun _ =>
-    TypeRun.bind h2 fun _ => TypeRun.bind types_curBlock fun _ => types_joinValue _ _ _ _
+    TypeRun.bind h2 fun _ => TypeRun.bind types_curBlock fun _ =>
+    TypeRun.bind (types_joinValue _ _ _ _) fun result =>
+    TypeRun.bind (types_recordValueRootRecipe result sourceScope) fun _ => TypeRun.pure result
 
 theorem types_ifS_some_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : TypeRun a1) (h2 : TypeRun a2) :
     TypeRun (whenLive () fun _ => do
@@ -451,7 +461,7 @@ theorem types_lowerExpr : ∀ e : Expr, TypeRun (lowerExpr e)
   | .ifE c t f => by
     simp only [lowerExpr]
     exact TypeRun.bind (types_lowerExpr c) fun cv =>
-      types_ifE_core cv (types_lowerBlock none [] true t) (types_lowerBlock none [] true f)
+      types_ifE_core cv (sourceBlockScope t) (types_lowerBlock none [] true t) (types_lowerBlock none [] true f)
   | .blockE b => by
     simp only [lowerExpr]
     exact types_lowerBlock none [] true b
