@@ -11,7 +11,7 @@ theorem rangeBack_goes (cx : FnCtx) (le : LEnv) (ls ls' : LS) (pt : Pt) (fr : Fr
     (hc : counter < ls.vals.size)
     (hcounter : fr.vals[counter]? = some (.val (.int ty i)))
     (hheader : ∃ block, cx.fn.blocks[hb]? = some block ∧
-      block.params = [(counter, .data (.int ty))]) :
+      block.params = [(counter, .data (.int hint))]) :
     ∃ fr', Goes cx pt fr (hb, 0) fr' ∧ Same counter fr fr' ∧
       fr'.vals[counter]? = some (.val (.int ty (i + 1))) ∧
       fr'.act = fr.act ∧ fr'.scopes = fr.scopes ∧ fr'.depth = fr.depth := by
