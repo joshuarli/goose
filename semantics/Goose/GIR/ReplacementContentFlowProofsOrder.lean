@@ -288,8 +288,8 @@ theorem step_extends (m : Module) (states : Array State) (f : Func)
     (vt : Array (Option VTy)) (state : State) (inst : Inst) :
     state.Extends (step m states f vt state inst) := by
   unfold step
-  apply (touchValues_extends vt state (sourceOperands inst)).trans
-  generalize touchValues vt state (sourceOperands inst) = current
+  apply (touchValues_extends vt state (accessOperands inst)).trans
+  generalize touchValues vt state (accessOperands inst) = current
   split
   · exact ((callState_extends _ _ _ _ _ _).trans (State.extends_values _ _ _)).trans
       (touchValues_extends _ _ _)

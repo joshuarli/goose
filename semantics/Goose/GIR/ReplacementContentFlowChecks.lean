@@ -307,4 +307,50 @@ private def initializerAliasModule (compatible : Bool) :=
 #guard (localFlow (initializerAliasModule false) pure).value 0 == none
 #guard ((localFlow (initializerAliasModule true) aliasInitializer).value 7).any (·.contains (.global 1))
 
+private def ownerReference := Ty.ref .readOnly owner
+private def ownerAddress := function "ownerAddress" [] [ownerReference] #[]
+  [.def 0 (.globalAddr 0), .def 1 (.refFreeze 0), .term (.ret [1] (some 0))]
+  { results := #[[.global 0]] }
+private def ownerAddressModule := module #[scalarCaller, ownerAddress] #[global owner]
+#guard (localFlow ownerAddressModule scalarCaller).call 1 [] == some []
+#guard (localFlow ownerAddressModule scalarCaller).value 0 == some [.global 0]
+
+private def ownerAddressBinding := function "ownerAddressBinding" [] [element] #[⟨ownerReference, .mutable, 0, 0⟩]
+  [.def 0 (.globalAddr 0), .def 1 (.refFreeze 0), .eff (.slotInit 0 1 (some 0)),
+   .def 2 (.constInt .i64 1), .term (.ret [2] (some 0))]
+private def ownerAddressBindingModule := module #[scalarCaller, ownerAddressBinding] #[global owner]
+#guard (localFlow ownerAddressBindingModule scalarCaller).call 1 [] == some []
+
+private def ownerAddressCopy := function "ownerAddressCopy" [] [ownerReference] #[⟨ownerReference, .mutable, 0, 0⟩]
+  [.def 0 (.globalAddr 0), .def 1 (.refFreeze 0), .eff (.slotInit 0 1 (some 0)),
+   .def 2 (.slotAddr 0), .def 3 (.load 2), .term (.ret [3] (some 0))]
+  { results := #[[.global 0]] }
+private def ownerAddressCopyModule := module #[scalarCaller, ownerAddressCopy] #[global owner]
+#guard (localFlow ownerAddressCopyModule scalarCaller).call 1 [] == some []
+#guard (localFlow ownerAddressCopyModule ownerAddressCopy).value 3 == some [.global 0]
+
+private def ownerAddressStore := function "ownerAddressStore" [] [element] #[⟨ownerReference, .mutable, 0, 0⟩]
+  [.def 0 (.globalAddr 0), .def 1 (.refFreeze 0), .def 2 (.slotAddr 0),
+   .eff (.store 2 1 (some 0)), .def 3 (.constInt .i64 1), .term (.ret [3] (some 0))]
+private def ownerAddressStoreModule := module #[scalarCaller, ownerAddressStore] #[global owner]
+#guard (localFlow ownerAddressStoreModule scalarCaller).call 1 [] == some []
+
+private def ownerAddressBorrow := function "ownerAddressBorrow" [] [.ref .mutable owner] #[]
+  [.def 0 (.globalAddr 0), .def 1 (.ownerBorrow 0), .term (.ret [1] (some 0))]
+  { results := #[[.global 0]] }
+private def ownerAddressBorrowModule := module #[scalarCaller, ownerAddressBorrow] #[global owner]
+#guard (localFlow ownerAddressBorrowModule scalarCaller).call 1 [] == some []
+#guard (localFlow ownerAddressBorrowModule ownerAddressBorrow).value 1 == some [.global 0]
+
+private def ownerAddressConsumer := function "ownerAddressConsumer" [] [element] #[]
+  [.def 0 (.call 2 [] (some 0)), .def 1 (.arrayLen 0), .term (.ret [1] (some 0))]
+private def ownerAddressConsumerModule := module #[scalarCaller, ownerAddressConsumer, ownerAddress] #[global owner]
+#guard (localFlow ownerAddressConsumerModule scalarCaller).call 1 [] == some [.global 0]
+
+private def ownerAddressForwarder := function "ownerAddressForwarder" [] [ownerReference] #[]
+  [.def 0 (.call 2 [] (some 0)), .term (.ret [0] (some 0))] { results := #[[.global 0]] }
+private def ownerAddressForwarderModule := module #[scalarCaller, ownerAddressForwarder, ownerAddressCopy] #[global owner]
+#guard (localFlow ownerAddressForwarderModule scalarCaller).call 1 [] == some []
+#guard (localFlow ownerAddressForwarderModule ownerAddressForwarder).value 0 == some [.global 0]
+
 end Goose.GIR.ReplacementContentFlowChecks
