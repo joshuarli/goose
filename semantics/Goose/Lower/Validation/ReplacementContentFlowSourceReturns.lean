@@ -32,7 +32,7 @@ theorem accepted_context_return_normalized {module : Core.Module} {context : Con
         rw [lowerContextRootInfo_result_eq bound]
         rfl
       obtain ⟨actual, normalized, members⟩ :=
-        normalize_rootMap_known (lowerContextAt module ctx impl) declared
+        normalize_rootMap_dedup_known (lowerContextAt module ctx impl) declared
       refine ⟨actual, ?_, ?_⟩
       · simpa only [declaredReturn, lowerContextAt, lowerImpl, singleton, reference, ite_true, row]
           using normalized
