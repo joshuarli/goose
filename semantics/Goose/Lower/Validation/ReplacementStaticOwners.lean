@@ -83,17 +83,4 @@ theorem lowerPlace_static_provenance_root {root : RootRef} {place : Place}
     (ProvenanceConvergence.provenance_sizes results types func (ProvenanceConvergence.moduleRootCount module)).2
     (ProvenanceConvergence.provenance_module_instructionRootsClosed member bounded)
 
-theorem lowerPlace_static_query_known {root : RootRef} {place : Place}
-    (source : StaticOwnerPlace root place)
-    {env : LEnv} {before captured state : LS} {module : GIR.Module} {func : Func}
-    {results : Array (List RootRef)} {types : Array (Option VTy)} {value : ValueId} {index : BlockId}
-    (run : lowerPlace place env before = (value, captured))
-    (current : before.cur = some index) (live : LiveBound before)
-    (extension : captured.Ext state) (blocks : func.blocks = finishBlocks state.blocks)
-    (dense : state.DenseDefinitions) (member : func ∈ module.funcs.toList)
-    (bounded : ProvenanceConvergence.RootBounds results func module.globals.size) :
-    ∃ roots, (replacementQueries module func types (func.provenance results types (ProvenanceConvergence.moduleRootCount module))).value value = some roots :=
-  replacementQueries_known_of_member module types
-    (lowerPlace_static_provenance_root source run current live extension blocks dense member bounded)
-
 end Goose.Lower.Validation

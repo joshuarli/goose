@@ -215,4 +215,22 @@ private def specializedGlobalMutation (localArgument : Bool) : GIR.Module :=
 #guard match GIR.validate (specializedGlobalMutation false) with | .error e => e.code == .v060 | _ => false
 #guard match GIR.validate (specializedGlobalMutation true) with | .error e => e.code == .v060 | _ => false
 
+private def staleLocalContents (emptyInitial : Bool) : GIR.Module :=
+  let input := changedLocalContents true
+  { input with
+    globals := input.globals.push { ownerGlobal with name := "unrelated_owner" },
+    funcs := input.funcs.modify 1 fun receiver =>
+      { receiver with
+        params := receiver.params ++ [sliceTy],
+        roots := { receiver.roots with params := receiver.roots.params.push (3, if emptyInitial then [] else [.global 1]) },
+        blocks := receiver.blocks.modify 0 fun block =>
+          { block with
+            params := block.params ++ [(12, .data sliceTy)],
+            insts := block.insts.map fun
+              | .eff (.slotInit slot _ origin) => .eff (.slotInit slot 12 origin)
+              | inst => inst } } }
+
+#guard match GIR.validate (staleLocalContents true) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (staleLocalContents false) with | .error e => e.code == .v060 | _ => false
+
 end Goose.Lower.Validation.ReplacementEmptyContentChecks

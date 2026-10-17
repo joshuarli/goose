@@ -80,19 +80,6 @@ theorem provenance_ref_parameter (results : Array (List RootRef)) (types : Array
   (provFix_extends results types func _ _).2.2.2 value (.param position)
     (provStart_ref_parameter func types entryAt distinct parameterAt reference bounded)
 
-theorem replacementQueries_ref_parameter (module : GIR.Module) (results : Array (List RootRef)) (types : Array (Option VTy))
-    (func : Func) (rootCount : Nat) {entry : GIR.Block} (entryAt : func.blocks[0]? = some entry)
-    (distinct : (entry.params.map Prod.fst).Nodup)
-    {position : Nat} {value : ValueId} {ty : VTy}
-    (parameterAt : entry.params[position]? = some (value, ty))
-    (reference : valRefLike types value = true) (bounded : value < func.numValues)
-    {root : RootRef} (declared : root ∈ func.parameterRoots position) :
-    root ∈ ((replacementQueries module func types (func.provenance results types rootCount)).value value).getD [] := by
-  rw [replacementQueries_values]
-  exact List.mem_flatMap.mpr ⟨.param position,
-    provenance_ref_parameter results types func rootCount entryAt distinct parameterAt reference bounded,
-    declared⟩
-
 theorem provenance_ref_parameter_of_dense (results : Array (List RootRef))
     (types : Array (Option VTy)) (func : Func) (rootCount : Nat)
     (dense : (func.blocks.toList.flatMap GIR.Block.defs).Perm (List.range func.numValues))
