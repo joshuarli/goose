@@ -1,34 +1,10 @@
+import Goose.Lower.Validation.SummaryPreservationArgumentReplay
 import Goose.Lower.Validation.SummaryPreservationReplayReferences
 import Goose.Lower.Validation.DeadFrontier
 
 namespace Goose.Lower.Validation.SummaryPreservation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
-
-def ArgumentReplay (env : PEnv) (argument : Arg) (before : RState)
-    (roots : List RootRef) (after : RState) : Prop :=
-  match argument with
-  | .byVal expression => rpExpr env expression before = .ok (roots, after)
-  | .byRef _ place => rpPlace env place before = .ok (roots, after)
-
-theorem rpArgs_cons_contract {env : PEnv} {argument : Arg} {rest : List Arg}
-    {before after : RState} {sourceRoots : List (List RootRef)}
-    (source : rpArgs env (argument :: rest) before = .ok (sourceRoots, after)) :
-    ∃ roots remaining middle, ArgumentReplay env argument before roots middle ∧
-      rpArgs env rest middle = .ok (remaining, after) ∧ sourceRoots = roots :: remaining := by
-  cases argument with
-  | byVal expression =>
-    obtain ⟨roots, middle, first, tail⟩ := (st_bind_ok _ _ _ _).mp source
-    obtain ⟨remaining, finish, restReplay, result⟩ := (st_bind_ok _ _ _ _).mp tail
-    have equal := (st_pure_ok _ _ _).mp result
-    cases equal
-    exact ⟨roots, remaining, middle, first, restReplay, rfl⟩
-  | byRef mutability place =>
-    obtain ⟨roots, middle, first, tail⟩ := (st_bind_ok _ _ _ _).mp source
-    obtain ⟨remaining, finish, restReplay, result⟩ := (st_bind_ok _ _ _ _).mp tail
-    have equal := (st_pure_ok _ _ _).mp result
-    cases equal
-    exact ⟨roots, remaining, middle, first, restReplay, rfl⟩
 
 namespace ReplayBuilder
 
@@ -106,7 +82,7 @@ theorem arguments {env : PEnv} (syntaxArgs : List Arg)
     refine ⟨upper, ready, ?_, fun _ _ => rfl⟩
     simp [lowerArgs, pure_run]
   | cons argument rest ih =>
-    obtain ⟨roots, remaining, middleSource, firstReplay, restReplay, rfl⟩ := rpArgs_cons_contract source
+    obtain ⟨roots, middleSource, remaining, firstReplay, restReplay, rfl⟩ := rpArgs_cons_contract source
     obtain ⟨middle, middleReady, firstValue, middleRoots⟩ :=
       step argument (by simp) before middleSource roots ls upper ready firstReplay
     obtain ⟨next, nextReady, tailValues, nextRoots⟩ := ih middleReady

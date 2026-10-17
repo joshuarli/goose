@@ -47,7 +47,7 @@ theorem typedArgumentsNative {module : GIR.Module} {results : Array (List RootRe
     | nil => simp at shape
     | cons parameter parameters =>
       obtain ⟨middleCounter, headTyped, tailTyped⟩ := tyArgs_cons_children typed
-      obtain ⟨roots, remaining, middleSource, firstReplay, restReplay, rfl⟩ := rpArgs_cons_contract source
+      obtain ⟨roots, middleSource, remaining, firstReplay, restReplay, rfl⟩ := rpArgs_cons_contract source
       have firstEffect := effectRefinement_before_of_replay
         (rp_mono_all.2.2.2.2.2.2.2.2.1 env rest)
         (rp_rebinds_mono_all.2.2.2.2.2.2.2.2.1 env rest)
