@@ -1,26 +1,3 @@
-// Goose compiler — lowering a Core module to GIR-H.
-//
-// Every Core form becomes a fixed sequence of instructions, and every table is
-// numbered by the order the lowering creates its entries. Executable code
-// comes from implementations; root annotations merge the Core contexts that
-// specialize each implementation. Contexts also name call targets and entry.
-//
-// Slots, scopes and globals keep the numbers of the Core variables, blocks and
-// globals. Blocks and values are numbered as they are created: a block takes
-// the next block id and then the next value ids for its parameters, and an
-// instruction that defines a value takes the next value id when it is emitted.
-// The lowering emits into one current block. A terminator closes it and leaves
-// none; while there is none nothing is emitted, no block is created and
-// statements are skipped, so there is no unreachable block and no instruction
-// after a terminator.
-//
-// Evaluation order is instruction order. `ifE`/`ifS` branch on the condition
-// and create their join after both arms, only if an arm reaches it. A loop's
-// source is sampled once; a resizable owner has its length read again in the
-// loop header. Every Core block enters its scope, binds the variables its
-// construct declares, runs its statements, evaluates its value and leaves its
-// scope; `ret` leaves every scope entered, `break` and `continue` those
-// entered since the loop began.
 #pragma once
 
 namespace goose {
@@ -37,10 +14,22 @@ public:
         mod.types = core.types;
         mod.profile = core.profile;
         mod.structs = core.structs;
-        mod.targets = core.targets;
         mod.files = files;
         mod.origins = origins;
-        for (auto &im : core.impls) {
+        for (auto &target : core.targets) {
+            vector<int> members;
+            for (size_t context = 0; context < core.contexts.size(); context++)
+                if (find(target.members.begin(), target.members.end(), core.contexts[context].impl) != target.members.end())
+                    members.push_back((int)context);
+            mod.targets.push_back({ std::move(members) });
+        }
+        vector<int> representative(core.impls.size(), -1);
+        for (size_t context = 0; context < core.contexts.size(); context++) {
+            auto impl = core.contexts[context].impl;
+            if (impl < 0 || impl >= (int)core.impls.size())
+                throw CompileError { "context names a missing implementation" };
+            if (representative[impl] < 0) representative[impl] = (int)context;
+            auto &im = core.impls[impl];
             pair<vector<GirTypeId>, vector<GirTypeId>> sig;
             for (auto &p : im.params) sig.first.push_back(im.vars[p.var].type);
             for (auto &result : im.results) sig.second.push_back(result.type);
@@ -54,8 +43,19 @@ public:
         }
         for (auto &g : core.globals) globaltypes.push_back({ g.type, g.kind });
         for (auto &g : core.globals) mod.globals.push_back(LowerGlobal(g));
-        for (size_t i = 0; i < core.impls.size(); i++) mod.funcs[i] = LowerImpl(core.impls[i], (int)i);
-        mod.entry = core.contexts[core.entry].impl;
+        for (size_t impl = 0; impl < core.impls.size(); impl++) {
+            if (representative[impl] < 0) continue;
+            auto body = LowerImpl(core.impls[impl], (int)impl, representative[impl]);
+            for (size_t context = representative[impl]; context < core.contexts.size(); context++) {
+                if (core.contexts[context].impl != (int)impl) continue;
+                auto function = body;
+                function.roots = Roots((int)context, (int)impl);
+                function.key = core.contexts[context].stablekey;
+                function.module = core.contexts[context].module;
+                mod.funcs[context] = std::move(function);
+            }
+        }
+        mod.entry = core.entry;
         return std::move(mod);
     }
 
@@ -136,6 +136,7 @@ private:
     const CoreBlock *functionBody = nullptr;
     int functionOrigin = -1;
     int currentImpl = -1;
+    int currentFunction = -1;
     vector<int> resultDestinations, activeDestinations;
     set<int> boundNamedSlots;
 
@@ -159,7 +160,7 @@ private:
 
     int EmitDef(GirInst i) {
         if (cur < 0) return 0;
-        GirTyEnv env { mod, slots, sigs, vals, nullptr, &blocks, currentImpl < 0 ? nullptr : &mod.funcs[currentImpl] };
+        GirTyEnv env { mod, slots, sigs, vals, nullptr, &blocks, currentFunction < 0 ? nullptr : &mod.funcs[currentFunction] };
         auto r = GirTyper(env).Of(i);
         if (!r.ok()) throw CompileError { cat("internal compiler error: GIR lowering type: ", r.error) };
         auto ty = r.ty;
@@ -390,15 +391,16 @@ private:
                 return EmitDef(std::move(i));
             }
             case CoreExprKind::Call: {
-                auto callee = core.contexts[e.ctx].impl;
-                auto vs = LowerArgs(e.args, callee, Org(e.org));
+                auto context = e.ctx;
+                auto callee = core.contexts[context].impl;
+                auto vs = LowerArgs(e.args, context, Org(e.org));
                 if (CoreHasConstruction(core.profile) && !core.impls[callee].summary.escapes.empty()) {
-                    auto values = InvokeValues(callee, std::move(vs), {}, Org(e.org));
+                    auto values = InvokeValues(context, std::move(vs), {}, Org(e.org));
                     return cur >= 0 && !values.empty() ? values[0] : 0;
                 }
                 GirInst i;
                 i.op = GirOp::Call;
-                i.idx = core.contexts[e.ctx].impl;
+                i.idx = context;
                 i.vals = std::move(vs);
                 i.org = Org(e.org);
                 auto v = EmitDef(std::move(i));
@@ -866,7 +868,8 @@ private:
                 return done(JoinValue(thenEnd, thenValue, elseEnd, elseValue));
             }
             case CoreExprKind::Call: {
-                auto callee = core.contexts[expression.ctx].impl;
+                auto context = expression.ctx;
+                auto callee = core.contexts[context].impl;
                 if (core.impls[callee].results.size() != 1 || core.impls[callee].summary.unknown)
                     throw CompileError { "construction call requires explicit multiple-result or escape channels" };
                 if (!GirNonfixed(mod, core.impls[callee].results[0].type)) {
@@ -881,16 +884,16 @@ private:
                     return done(FinishDestination(destination, org));
                 }
                 if (!core.impls[callee].summary.escapes.empty()) {
-                    auto arguments = LowerArgs(expression.args, callee, org);
-                    auto values = InvokeValues(callee, std::move(arguments), { destination }, org);
+                    auto arguments = LowerArgs(expression.args, context, org);
+                    auto values = InvokeValues(context, std::move(arguments), { destination }, org);
                     return done(cur >= 0 ? values[0] : 0);
                 }
-                auto arguments = LowerArgs(expression.args, callee, org);
+                auto arguments = LowerArgs(expression.args, context, org);
                 if (cur < 0) return done(0);
                 auto [producerDestination, adapted] = AdaptProducerDestination(destination, core.impls[callee].results[0], org);
                 GirInst call;
                 call.op = GirOp::CallConstruct;
-                call.idx = callee;
+                call.idx = context;
                 call.vals = std::move(arguments);
                 call.vals2 = { producerDestination };
                 call.org = org;
@@ -1002,8 +1005,9 @@ private:
         }
     }
 
-    vector<int> InvokeValues(int callee, vector<int> arguments, const vector<int> &receivers, int org) {
+    vector<int> InvokeValues(int context, vector<int> arguments, const vector<int> &receivers, int org) {
         if (cur < 0) return {};
+        auto callee = core.contexts[context].impl;
         auto &function = core.impls[callee];
         vector<GirTypeId> normalTypes;
         vector<int> producerDestinations;
@@ -1022,7 +1026,7 @@ private:
         auto [normalBlock, normalValues] = NewBlock(normalTypes);
         GirInst invoke;
         invoke.op = GirOp::Invoke;
-        invoke.idx = callee;
+        invoke.idx = context;
         invoke.vals = std::move(arguments);
         invoke.vals2 = std::move(producerDestinations);
         invoke.a = normalBlock;
@@ -1062,9 +1066,7 @@ private:
         activeDestinations = std::move(savedActive);
         boundNamedSlots = std::move(savedNamed);
         cur = normalBlock;
-        bool canReturn = false;
-        for (size_t context = 0; context < core.contexts.size(); context++)
-            if (core.contexts[context].impl == callee && !noReturn[context]) canReturn = true;
+        auto canReturn = context >= 0 && context < (int)noReturn.size() && !noReturn[context];
         if (!canReturn) {
             GirInst end;
             end.op = GirOp::Unreachable;
@@ -1136,16 +1138,17 @@ private:
             return finished(std::move(values));
         }
         if (expression.kind != CoreExprKind::Call) throw CompileError { "multiple-result producer is not values or a call" };
-        auto callee = core.contexts[expression.ctx].impl;
+        auto context = expression.ctx;
+        auto callee = core.contexts[context].impl;
         auto &function = core.impls[callee];
         if (function.results.size() != destinations.size()) throw CompileError { "call result count differs from its receiving channels" };
         if (!function.summary.escapes.empty())
-            return finished(InvokeValues(callee, LowerArgs(expression.args, callee, org), destinations, org));
+            return finished(InvokeValues(context, LowerArgs(expression.args, context, org), destinations, org));
         GirInst call;
         call.op = GirOp::Call;
-        call.idx = callee;
+        call.idx = context;
         vector<bool> adapted(destinations.size(), false);
-        auto arguments = LowerArgs(expression.args, callee, org);
+        auto arguments = LowerArgs(expression.args, context, org);
         if (cur < 0) return {};
         for (size_t position = 0; position < destinations.size(); position++) {
             if (!GirNonfixed(mod, function.results[position].type)) continue;
@@ -1784,6 +1787,7 @@ private:
         functionBody = nullptr;
         functionOrigin = -1;
         currentImpl = -1;
+        currentFunction = -1;
         resultDestinations.clear();
         activeDestinations.clear();
         boundNamedSlots.clear();
@@ -1792,42 +1796,34 @@ private:
                 slots.push_back({ (*vs)[i].type, (*vs)[i].kind, (*vs)[i].scope, (int)i });
     }
 
-    GirRootInfo Roots(int implIndex) const {
+    GirRootInfo Roots(int contextIndex, int implIndex) const {
         GirRootInfo out;
-        auto add = [](vector<CoreRootRef> &to, const vector<CoreRootRef> &from) {
-            for (auto &r : from)
-                if (find(to.begin(), to.end(), r) == to.end()) to.push_back(r);
-        };
-        if (implIndex < 0 || implIndex >= (int)core.impls.size()) return out;
+        if (contextIndex < 0 || contextIndex >= (int)core.contexts.size() ||
+            implIndex < 0 || implIndex >= (int)core.impls.size() ||
+            core.contexts[contextIndex].impl != implIndex) return out;
         auto &impl = core.impls[implIndex];
+        auto &context = core.contexts[contextIndex];
         out.results.resize(impl.results.size());
-        for (auto &ctx : core.contexts) {
-            if (ctx.impl != implIndex) continue;
-            for (size_t i = 0; i < impl.params.size(); i++) {
-                auto var = impl.params[i].var;
-                if (CoreHasConstruction(core.profile) && GirNonfixed(mod, impl.vars[var].type)) continue;
-                for (auto &roots : ctx.varroots)
-                    if (roots.first == var) {
-                        auto row = find_if(out.params.begin(), out.params.end(), [&](auto &r) { return r.first == (int)i; });
-                        if (row == out.params.end()) out.params.push_back({ (int)i, {} }), row = out.params.end() - 1;
-                        add(row->second, roots.second);
-                    }
-                for (size_t j = 0; j < ctx.varroots.size() && j < ctx.hascontent.size(); j++)
-                    if (ctx.varroots[j].first == var && ctx.hascontent[j]) {
-                        auto row = find_if(out.contents.begin(), out.contents.end(), [&](auto &r) { return r.first == (int)i; });
-                        if (row == out.contents.end()) out.contents.push_back({ (int)i, {} }), row = out.contents.end() - 1;
-                        add(row->second, ctx.content[j]);
-                    }
-            }
-            for (size_t i = 0; i < ctx.resultroots.size() && i < out.results.size(); i++) add(out.results[i], ctx.resultroots[i]);
+        for (size_t i = 0; i < impl.params.size(); i++) {
+            auto var = impl.params[i].var;
+            if (CoreHasConstruction(core.profile) && GirNonfixed(mod, impl.vars[var].type)) continue;
+            auto roots = find_if(context.varroots.begin(), context.varroots.end(),
+                [&](auto &entry) { return entry.first == var; });
+            if (roots != context.varroots.end()) out.params.push_back({ (int)i, roots->second });
+            for (size_t j = 0; j < context.varroots.size() && j < context.hascontent.size(); j++)
+                if (context.varroots[j].first == var && context.hascontent[j])
+                    out.contents.push_back({ (int)i, j < context.content.size() ? context.content[j] : vector<CoreRootRef> {} });
         }
+        for (size_t i = 0; i < context.resultroots.size() && i < out.results.size(); i++)
+            out.results[i] = context.resultroots[i];
         return out;
     }
 
-    GirFunc LowerImpl(const CoreImpl &impl, int implIndex) {
+    GirFunc LowerImpl(const CoreImpl &impl, int implIndex, int contextIndex) {
         Begin(&impl.vars);
         currentResults = &impl.results;
         currentImpl = implIndex;
+        currentFunction = contextIndex;
         functionBody = &impl.body;
         functionOrigin = impl.vars.empty() ? -1 : Org(impl.vars[0].org);
         vector<GirTypeId> ptys;
@@ -1870,14 +1866,11 @@ private:
         BlockScopes(-1, impl.body, pairs);
         f.scopes = ScopeTable(pairs);
         f.blocks = std::move(blocks);
-        f.roots = Roots(implIndex);
+        f.roots = Roots(contextIndex, implIndex);
         f.summary = impl.summary;
         f.org = impl.vars.empty() ? -1 : Org(impl.vars[0].org);
-        auto index = (size_t)(&impl - core.impls.data());
-        if (index < core.contexts.size() && core.contexts[index].impl == (int)index) {
-            f.key = core.contexts[index].stablekey;
-            f.module = core.contexts[index].module;
-        }
+        f.key = core.contexts[contextIndex].stablekey;
+        f.module = core.contexts[contextIndex].module;
         return f;
     }
 
