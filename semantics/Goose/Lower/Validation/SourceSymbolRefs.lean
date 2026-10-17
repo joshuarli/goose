@@ -1,5 +1,5 @@
 import Goose.Lower.Validation.SymbolTables
-import Goose.Lower.Validation.ExpressionTypingCallOps
+import Goose.Core.Sound.Invert
 import Goose.Lower.Validation.ScopeLexical
 import Goose.Lower.Validation.ScopeBlocks
 
@@ -1238,8 +1238,11 @@ theorem Core.tyExpr_call_success_context_bound {env : Core.TEnv} {context : Core
     {args : List Core.Arg} {origin : Core.OriginId} {ty : Core.Ty} {start finish : Nat}
     (source : Core.tyExpr env (.call context args origin) start = .ok (ty, finish)) :
     context < env.mod.contexts.size := by
-  obtain ⟨ctx, _, _, _, _, contextAt, _, _, _, _⟩ := tyExpr_call_tables source
-  exact (Array.getElem?_eq_some_iff.mp contextAt).1
+  simp only [Core.tyExpr] at source
+  obtain ⟨_, _, _, source⟩ := (st_bind_ok _ _ _ _).mp source
+  cases contextRow : env.mod.contexts[context]? with
+  | none => simp [contextRow, chk] at source
+  | some ctx => exact (Array.getElem?_eq_some_iff.mp contextRow).1
 
 theorem Core.tyExpr_call_success_function_reference {env : Core.TEnv}
     {context : Core.ContextId} {args : List Core.Arg} {origin : Core.OriginId}
