@@ -152,6 +152,8 @@ private theorem validate_of_checks (m : GIR.Module)
       checkPermissions m i.label i.f i.vt) = .ok ())
     (scopes : (checkAll (m.infos.map fun i => walkScopes i.label i.f) fun w => do
       if let some msg := w.scopes then violation .v040 msg) = .ok ())
+    (regions : asCheck .v050 "declared regions"
+      (m.checkAdmittedRegions m.implTypes (resultRoots m m.implTypes) m.rootCount) = .ok ())
     (summaries : checkAll (List.range m.funcs.size) (checkSummaryOf m m.implTypes (resultRoots m m.implTypes) m.rootCount) = .ok ())
     (shrink : (checkAll m.infos fun i => checkShrinkReplace m i.label i.f i.vt) = .ok ())
     (evidence : (checkAll m.infos fun i => asCheck .v080 i.label (checkEvidence m i.f i.vt)) = .ok ())
@@ -174,7 +176,7 @@ private theorem validate_of_checks (m : GIR.Module)
       cases found : walk.scopes <;>
         simpa only [found, pure, Except.pure] using checked
     · simp only [GIR.checkShrinkReplace_canonical]
-      rw [summaries, shrink, evidence, origins]
+      rw [regions, summaries, shrink, evidence, origins]
 
 private theorem fixture_checks (variant : Variant) (placement : Placement) : GIR.validate (fixture variant placement) = .ok () := by
   apply validate_of_checks
@@ -190,6 +192,7 @@ private theorem fixture_checks (variant : Variant) (placement : Placement) : GIR
     cases variant <;> cases placement <;> cbv
   · rw [fixture_infos]
     cases variant <;> cases placement <;> cbv
+  · cases variant <;> cases placement <;> cbv
   · unfold Module.implTypes
     rw [fixture_infos]
     cases variant <;> cases placement <;> cbv

@@ -40,7 +40,7 @@ theorem lowerContextRootInfo_result_eq {ctx : Context} {impl : Impl}
             if paramRoots.all (ctx.resultRoots[result]?.getD []).contains then
               some (.param position) else none
           | none => none)) := by
-  simp [lowerContextRootInfo, bound]
+  simp [lowerContextRootInfo, lowerContextRootCeiling, bound]
   rfl
 
 theorem lowerContextRootInfo_result_contains {ctx : Context} {impl : Impl}

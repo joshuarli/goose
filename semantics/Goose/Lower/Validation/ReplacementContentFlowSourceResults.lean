@@ -8,7 +8,7 @@ open SummaryPreservation
 
 theorem lowerContextAt_result_refines_source {module : Core.Module} {ctx : Context} {impl : Impl}
     {result : Nat} (bound : result < impl.results.size) :
-    RootsRefine (lowerContextAt module ctx impl)
+    SummaryPreservation.RootsRefine (lowerContextAt module ctx impl)
       (((lowerContextAt module ctx impl).roots.results[result]?).getD [])
       (ctx.resultRoots[result]?.getD []) := by
   intro root member

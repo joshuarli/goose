@@ -24,11 +24,12 @@ theorem empty_roots_below (size : Nat) (upper : Array (List RootRef)) :
   split at member <;> cases member
 
 theorem provStart_below_of_entry_seeds {vt : Array (Option VTy)} {func : Func} {upper : Prov}
+    (slotSeeds : RootsBelow func.slotRootSeeds upper.slots)
     (seeds : ∀ block, func.blocks[0]? = some block →
       ∀ pair ∈ block.params.zipIdx,
         valRefLike vt pair.1.1 = true → RootRef.param pair.2 ∈ rootsAt upper.vals pair.1.1) :
     ProvenanceBelow (provStart vt func) upper := by
-  refine ⟨empty_roots_below _ _, ?_⟩
+  refine ⟨slotSeeds, ?_⟩
   unfold provStart
   cases entry : func.blocks[0]? with
   | none => exact empty_roots_below _ _

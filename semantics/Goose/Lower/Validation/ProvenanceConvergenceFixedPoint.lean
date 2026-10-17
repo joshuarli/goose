@@ -48,7 +48,7 @@ theorem provenance_quiet {results : Array (List RootRef)} {types : Array (Option
   apply provFix_quiet universeBound _ ((func.numValues + func.slots.size) * roots.length)
     (provStart_bounded universeBound)
   · simp only [provStart_values_size]
-    simp [provStart, Nat.add_comm]
+    simp [provStart, Func.slotRootSeeds, Nat.add_comm]
   · have product := Nat.mul_le_mul_left (func.numValues + func.slots.size) rootBound
     have enough : (func.numValues + func.slots.size) * roots.length <
         (func.numValues + func.slots.size + 1) * (rootCount + 1) := by

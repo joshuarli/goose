@@ -1,7 +1,4 @@
-import Goose.Lower.Validation.SummaryPreservationReplayAcceptedRead
-import Goose.Lower.Validation.SummaryPreservationContentSource
-import Goose.Lower.Validation.SummaryPreservationContentReads
-import Goose.Lower.Validation.SummaryPreservationReadSource
+import Goose.Lower.Validation.SummaryPreservationReplayContentReadOrigins
 
 namespace Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
 
@@ -41,76 +38,7 @@ theorem contentRead {env : PEnv} {context : ContextId} {index : Nat} {param : Pa
             (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1
           sourceRoots (.data (.slice mutability element))) ∧
       ∀ old, old < upper.vals.size → rootsAt next.vals old = rootsAt upper.vals old := by
-  let le := lowerEnv env.mod env.impl.vars env.impl.results.toList
-  let func := lowerContextAt env.mod env.ctx env.impl
-  let loaded := lowerExpr (.read (.var param.var)) le ls
-  cases current : ls.cur with
-  | none =>
-    have stable := stopped_lowerExpr (.read (.deref (.read (.var param.var))))
-    have generated : ReplayBuilder (lower env.mod) results vt func target le scopeCount
-        (typedContextSlotUpper env.mod env.ctx env.impl)
-        (lowerExpr (.read (.deref (.read (.var param.var)))) le ls).2 upper := ready.stopped stable current rfl
-    have dead : (lowerExpr (.read (.deref (.read (.var param.var))))
-        (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).2.cur = none :=
-      (stable le ls _ _ rfl current).1
-    exact ⟨upper, generated, by simp only [dead, Option.isSome_none, Bool.false_eq_true, false_implies], fun _ _ => rfl⟩
-  | some block =>
-    have live : ls.cur.isSome = true := by simp [current]
-    have refLike : localVar.ty.isRefLike = true := by
-      cases type : localVar.ty <;> simp_all [Ty.isRefLike, Ty.isRefSlice]
-    obtain ⟨readAfter, placeReplay⟩ := rpExpr_content_place_contract accepted contextRow implementationRow
-      parameter variableRow reference source
-    obtain ⟨middle, middleReady, loadedInfo, middleGrowth⟩ := ready.acceptedLocalRead
-      accepted contextRow implementationRow variableRow placeReplay
-      (by intro _ nonref; rw [refLike] at nonref; cases nonref)
-    let slot := lowerPlace (.var param.var) le ls
-    have slotCurrent : slot.2.cur = some block := by
-      dsimp [slot, lowerPlace]
-      rw [emitDef_run _ _ current]
-      exact current
-    have loadedCurrent : loaded.2.cur = some block := by
-      change (Goose.Lower.emitDef (.load slot.1) le slot.2).2.cur = some block
-      rw [emitDef_run _ _ slotCurrent]
-      exact slotCurrent
-    have loadedLive : loaded.2.cur.isSome = true := by simp [loadedCurrent]
-    obtain ⟨loadedValue, raw⟩ := loadedInfo loadedLive
-    have recognized : valRefLike vt loaded.1 = true := by
-      have tag : vt[loaded.1]? = some (some (.data localVar.ty)) := addressType live
-      simp only [valRefLike, tag, VTy.refLike, refLike]
-    have identity := ((validate_modOk env.mod accepted).impl env.ctx.impl env.impl implementationRow).params
-      index param parameter |>.1
-    have rawRoots : rootsAt middle.vals loaded.1 = [.param index] := by
-      change rootsAt middle.vals loaded.1 = (if valRefLike vt loaded.1 then
-        rootsAt (typedContextSlotUpper env.mod env.ctx env.impl) param.var else []) at raw
-      rw [if_pos recognized, typedContextSlotUpper_at variableRow, if_pos reference] at raw
-      simpa only [identity] using raw
-    have rawPlace : rpPlace env (.deref (.read (.var param.var))) before =
-        .ok ([.param index], readAfter) := placeReplay
-    have sourceContract := rpExpr_read_contract rawPlace source
-    have computed := readRoots_refSlice_parameter_refines (res := results) (vt := vt) (provenance := middle)
-      (result := loaded.2.vals.size) parameter variableRow reference sourceContract.1 rawRoots (sliceType live)
-    have nodeEffect : EffectRefinement func
-        { readAfter.eff with reads := addTargets readAfter.eff.reads (rootsTargets [.param index]) } target := by
-      simpa only [sourceContract.2] using wholeEffect
-    have delta : EffectRefinement func (func.effectStep (lower env.mod) vt middle {}
-        (.def loaded.2.vals.size (.load loaded.1))) target := by
-      apply (effectStep_load_refines (lowerContextAt_parameterRoots_closed accepted contextRow implementationRow)
-        (effectRefinement_empty func readAfter.eff) ?_).trans nodeEffect
-      rw [rawRoots]
-      exact RootsRefine.refl _ _
-    obtain ⟨next, nextReady, nextValue, nextGrowth⟩ := middleReady.emitTypedDef (.load loaded.1) sourceRoots
-      (.data (.slice mutability element)) (by simpa [Op.uses] using loadedValue.bound)
-      (by simp [Op.origin]) (by simp [Op.SymbolRefsValid]) delta computed (by simp [VTy.refLike, Ty.isRefLike])
-    have whole : lowerExpr (.read (.deref (.read (.var param.var)))) le ls =
-        Goose.Lower.emitDef (.load loaded.1) le loaded.2 := by
-      simp only [lowerExpr, lowerPlace, bind_run]
-      rfl
-    rw [whole]
-    refine ⟨next, nextReady, nextValue, ?_⟩
-    intro old bound
-    have growth : upper.vals.size ≤ middle.vals.size := by
-      rw [ready.roots.valueSize, middleReady.roots.valueSize]
-      exact (advB_lowerExpr (.read (.var param.var)) le ls loaded.1 loaded.2 rfl).vals
-    exact (nextGrowth old (Nat.lt_of_lt_of_le bound growth)).trans (middleGrowth old bound)
+  obtain ⟨next, completed, value, retained, _⟩ := ready.contentReadWithOrigins accepted contextRow implementationRow parameter variableRow reference source wholeEffect addressType sliceType
+  exact ⟨next, completed, value, retained⟩
 
 end Goose.Lower.Validation.SummaryPreservation.ReplayBuilder

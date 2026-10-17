@@ -30,6 +30,7 @@ structure RootBounds (results : Array (List RootRef)) (func : Func) (globalCount
   globals : ∀ block ∈ func.blocks.toList, ∀ value global,
     Inst.def value (.globalAddr global) ∈ block.insts → global < globalCount
   contents : ∀ row ∈ func.roots.contents, ∀ root ∈ row.2, ValidRoot globalCount func root
+  slotSeeds : ∀ row ∈ func.roots.slots.getD #[], ∀ root ∈ row.2, ValidRoot globalCount func root
   results : ∀ callee global, RootRef.global global ∈ rootsAt results callee → global < globalCount
 
 theorem RootBounds.finite {results : Array (List RootRef)} {func : Func} {globalCount : Nat}
@@ -52,6 +53,8 @@ theorem RootBounds.finite {results : Array (List RootRef)} {func : Func} {global
       exact bound.globals block blockMember value global member
   · intro row rowMember root member
     exact mem_finiteRootUniverse.mpr (bound.contents row rowMember root member)
+  · intro row rowMember root member
+    exact mem_finiteRootUniverse.mpr (bound.slotSeeds row rowMember root member)
   · intro callee global member
     exact mem_finiteRootUniverse.mpr (bound.results callee global member)
 
@@ -100,7 +103,7 @@ theorem provenance_sizes (results : Array (List RootRef)) (types : Array (Option
   constructor
   · change (provFix results types func _ _).slots.size = func.slots.size
     rw [extension.1]
-    simp [provStart]
+    simp [provStart, Func.slotRootSeeds]
   · exact extension.2.1.trans (provStart_values_size func types)
 
 theorem provenance_weight_le {results : Array (List RootRef)} {types : Array (Option VTy)}

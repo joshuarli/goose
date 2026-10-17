@@ -31,6 +31,8 @@ private theorem validate_of_stages (module : GIR.Module)
     (permissions : checkAll module.infos (fun info => checkPermissions module info.label info.f info.vt) = .ok ())
     (scopes : checkAll (module.infos.map fun info => walkScopes info.label info.f) (fun walk => do
       if let some message := walk.scopes then violation .v040 message) = .ok ())
+    (regions : asCheck .v050 "declared regions"
+      (module.checkAdmittedRegions module.implTypes (resultRoots module module.implTypes) module.rootCount) = .ok ())
     (summaries : checkAll (List.range module.funcs.size)
       (checkSummaryOf module module.implTypes (resultRoots module module.implTypes) module.rootCount) = .ok ())
     (replacement : checkAll module.infos (fun info =>
@@ -61,6 +63,6 @@ private theorem validate_of_stages (module : GIR.Module)
       | none => simp [pure, Except.pure]
       | some message => simp [found, violation] at checked
     · simp only [GIR.checkShrinkReplace_canonical]
-      rw [summaries, replacement, evidence, origins]
+      rw [regions, summaries, replacement, evidence, origins]
 
 end Goose.Lower.Validation

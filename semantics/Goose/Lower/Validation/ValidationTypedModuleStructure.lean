@@ -77,6 +77,7 @@ private theorem struct_types_of_rows {module : Core.Module}
   have descriptor : check (Core.checkStructTables cm) = .ok () := by
     rw [show Core.checkStructTables cm = .ok () from lower_structDescriptorTables accepted]
     rfl
+  have regionGlobals := lower_checkRegionGlobalTypes accepted
   have globals : forIn lowered.globals PUnit.unit (fun (global : GIR.Global) _ => do
       check (Core.checkResolvedType cm global.ty)
       pure (ForInStep.yield PUnit.unit)) = (Except.ok PUnit.unit : Check PUnit) := by
@@ -179,6 +180,7 @@ private theorem struct_types_of_rows {module : Core.Module}
   unfold checkStructTypes
   change (do
     check (Core.checkStructTables cm)
+    asCheck .v010 "globals" lowered.checkRegionGlobalTypes
     for global in lowered.globals do check (Core.checkResolvedType cm global.ty)
     for func in lowered.funcs.toList ++ lowered.globals.toList.map (fun global : GIR.Global => global.init) do
       for type in func.params ++ func.results ++ func.slots.toList.map (fun slot : GIR.Slot => slot.ty) do check (Core.checkResolvedType cm type)
@@ -195,6 +197,8 @@ private theorem struct_types_of_rows {module : Core.Module}
           | _ => pure ()) = .ok ()
   rw [descriptor]
   simp only [bind, Except.bind, pure, Except.pure]
+  rw [regionGlobals]
+  simp only [asCheck]
   rw [globals]
   simp only []
   rw [functions]

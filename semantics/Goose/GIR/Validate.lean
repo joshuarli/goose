@@ -1,4 +1,5 @@
 import Goose.GIR.Effects
+import Goose.GIR.AdmittedRegions
 import Goose.GIR.ReplacementContentFlow
 import Goose.GIR.Evidence
 import Goose.Core.Demand
@@ -219,6 +220,13 @@ def checkSymbols (m : Module) (label : String) (f : Func) : Check Unit := do
         | .local x => throw s!"result root info names local slot {x}"
         | .global g => unless g < m.globals.size do throw s!"result root info names global {g}, outside the global table"
         | .param p => unless p < f.params.length do throw s!"result root info names parameter {p}, which does not exist"
+    for (slot, roots) in f.roots.slots.getD #[] do
+      unless slot < f.slots.size do throw s!"slot root info names slot {slot}, outside the slot table"
+      for root in roots do
+        match root with
+        | .local x => unless x < f.slots.size do throw s!"slot root info names local slot {x}, outside the slot table"
+        | .global g => unless g < m.globals.size do throw s!"slot root info names global {g}, outside the global table"
+        | .param p => unless p < f.params.length do throw s!"slot root info names parameter {p}, which does not exist"
     -- Value ids are dense and each is defined once.
     let n := f.numValues
     let mut seen := Array.replicate n false
@@ -305,6 +313,9 @@ def checkTypes (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)
           if m.profile != .shrink && k ∈ [.popEmpty, .popNRange, .resizeNegative, .resizeFill, .capacity] then
             throw s!"abort kind {k.tag.quote} requires core-shrink"
         | _ => pure ()
+    checkAll f.params fun t => do
+      unless t.paramOk do
+        throw "a parameter has a type no parameter may have"
     checkAll f.results fun t => do
       unless !t.isRefSlice do
         throw "a reference-to-slice type is only valid for a parameter"
@@ -663,6 +674,7 @@ def checkStructTypes (m : Module) : Check Unit := do
     | .ok _ => pure ()
     | .error e => violation .v010 e.message
   check (Core.checkStructTables cm)
+  asCheck .v010 "globals" m.checkRegionGlobalTypes
   for g in m.globals do check (Core.checkResolvedType cm g.ty)
   for f in m.funcs.toList ++ m.globals.toList.map (·.init) do
     for t in f.params ++ f.results ++ f.slots.toList.map (·.ty) do
@@ -704,7 +716,7 @@ def checkRootAnnotationsOf (m : Module) (vts : Array (Array (Option VTy)))
           if callee.params[j].isRefLike then
             let expected := mapArgumentRoots f p args[j]! j
             let declared := (callee.roots.params.find? (·.1 == j)).map (·.2) |>.getD []
-            unless declared == [.param j] || expected.all declared.contains do
+            unless declared.contains (.param j) || expected.all declared.contains do
               violation .v050 s!"{calleeLabel} parameter {j} root info omits a root passed at a call site"
           if callee.params[j].isRefSlice then
             if let some (_, declared) := callee.roots.contents.find? (·.1 == j) then
@@ -1037,6 +1049,7 @@ def validate (m : Module) : Check Unit := do
     if let some msg := w.scopes then violation .v040 msg
   let types := m.implTypes
   let res := resultRoots m types
+  asCheck .v050 "declared regions" (m.checkAdmittedRegions types res m.rootCount)
   checkAll (List.range m.funcs.size) (checkSummaryOf m types res m.rootCount)
   let replacementFlow := replacementContentFlow m
   checkAll m.infos fun i =>

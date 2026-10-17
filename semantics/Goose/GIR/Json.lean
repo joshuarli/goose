@@ -187,30 +187,33 @@ def decRootRef (tb : Tables) (nParams : Nat) (j : Lean.Json) : Except String Roo
   | "r_param" => pure (.param (← checkIndex i nParams "parameter"))
   | _ => fail s!"unknown root reference tag {tag.quote}"
 
-def decRootRows (tb : Tables) (nParams : Nat) (expectedTag : String) (j : Lean.Json) :
+def decRootRows (tb : Tables) (nParams nRows : Nat) (rowKind expectedTag : String) (j : Lean.Json) :
     Except String (Array (Nat × List RootRef)) := do
   let rows ← (← asArr j "root rows").mapM fun row => do
     let (tag, fs) ← record row "root row"
     unless tag == expectedTag do fail s!"expected {expectedTag}, found tag {tag.quote}"
     arity tag fs 2
-    let i ← checkIndex (← asNat fs[0]! "root row parameter") nParams "parameter"
+    let i ← checkIndex (← asNat fs[0]! s!"root row {rowKind}") nRows rowKind
     let roots ← list fs[1]! "root set" (decRootRef tb nParams)
     pure (i, roots)
   let rec distinct : List (Nat × List RootRef) → Bool
     | [] => true
     | (i, _) :: rest => !(rest.any (·.1 == i)) && distinct rest
-  unless distinct rows.toList do fail s!"{expectedTag} rows repeat a parameter"
+  unless distinct rows.toList do fail s!"{expectedTag} rows repeat a {rowKind}"
   pure rows
 
 def decRootInfo (tb : Tables) (nParams nResults : Nat) (j : Lean.Json) : Except String RootInfo := do
   let (tag, fs) ← record j "root info"
   unless tag == "roots" do fail s!"expected roots, found tag {tag.quote}"
-  arity tag fs 3
-  let params ← decRootRows tb nParams "vr" fs[0]!
-  let contents ← decRootRows tb nParams "cr" fs[1]!
+  unless fs.size == 3 || fs.size == 4 do fail "roots expects 3 or 4 fields"
+  let params ← decRootRows tb nParams nParams "parameter" "vr" fs[0]!
+  let contents ← decRootRows tb nParams nParams "parameter" "cr" fs[1]!
   let results ← list fs[2]! "result root rows" (fun row => list row "root set" (decRootRef tb nParams))
   unless results.length == nResults do fail s!"root info has {results.length} result rows, expected {nResults}"
-  pure { params, contents, results := results.toArray }
+  let slots ← if fs.size == 4 then
+      some <$> decRootRows tb nParams tb.nSlots "slot" "sr" fs[3]!
+    else pure none
+  pure { params, contents, results := results.toArray, slots }
 
 def decPart (j : Lean.Json) : Except String PrintPart := do
   let (tag, fs) ← record j "print part"
@@ -706,8 +709,11 @@ def wRootRef : RootRef → String
 
 def wRootInfo (r : RootInfo) : String :=
   let rows tag rs := wList (rs.toList.map fun (i, roots) => wRec tag [toString i, wList (roots.map wRootRef)])
-  wRec "roots" [rows "vr" r.params, rows "cr" r.contents,
+  let fields := [rows "vr" r.params, rows "cr" r.contents,
     wList (r.results.toList.map fun roots => wList (roots.map wRootRef))]
+  wRec "roots" (match r.slots with
+    | none => fields
+    | some slots => fields ++ [rows "sr" slots])
 
 def wSummary (profile : ArtifactProfile) : SummaryAnn → String
   | .unknown => wRec "summary_unknown" []
