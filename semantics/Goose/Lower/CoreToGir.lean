@@ -820,9 +820,8 @@ def lowerImplState (m : Module) (impl : Impl) : LS :=
     finishFunction impl v
   (act env initState).2
 
-def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
+def lowerImplFromState (m : Module) (impl : Impl) (s : LS) : GIR.Func :=
   let env := lowerEnv m impl.vars impl.results.toList
-  let s := lowerImplState m impl
   { name := impl.name
     params := impl.params.toList.map fun p => tyOfVar impl p.var
     results := impl.results.toList
@@ -831,6 +830,9 @@ def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
     blocks := finishBlocks s.blocks
     summary := impl.summary
     org := impl.vars[0]?.map (·.org) }
+
+def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
+  lowerImplFromState m impl (lowerImplState m impl)
 
 def lowerValueRootRows (env : PEnv) (table : SourceRootTable)
     (recipes : Array (ValueId × ScopeId)) : Option (Array (ValueId × List RootRef)) :=
@@ -888,12 +890,15 @@ def lowerGlobal (m : Module) (g : Global) : GIR.Global :=
 
 /-- The reference lowering of a Core module. -/
 def lower (m : Module) : GIR.Module :=
-  let bodies := m.impls.map fun impl => (impl, lowerImpl m impl)
+  let bodies := m.impls.map fun impl =>
+    let state := lowerImplState m impl
+    (impl, lowerImplFromState m impl state, state)
   { files := m.files
     globals := m.globals.map (lowerGlobal m)
     funcs := m.contexts.map fun ctx =>
       match bodies[ctx.impl]? with
-      | some (impl, body) => { body with roots := lowerContextRootInfo ctx impl }
+      | some (impl, body, state) => { body with roots := { lowerContextRootInfo ctx impl with
+          values := lowerContextValueRoots m ctx impl state } }
       | none => invalidContextFunction ctx
     entry := m.entry
     origins := m.origins
