@@ -96,6 +96,19 @@ theorem ExprsSource.afterHead_resultsMatch {n : Nat} {cfg : Cfg} {env : Env}
   ExprsSource.atFuel_resultsMatch _ _ ((sources (max n fuel)).tail_resultsMatch (metadata (max n fuel))
     (((monoAll n (max n fuel) (Nat.le_max_left _ _)).expr cfg env expression state).1 value after done))
 
+noncomputable def ArgsSource.head {n : Nat} {cfg : Cfg} {env : Env}
+    {expression : Arg} {rest : List Arg} {state : St}
+    (source : ArgsSource n cfg env (expression :: rest) state) : ArgSource cfg env state expression :=
+  match source with
+  | .cons head _ => head
+
+theorem ArgsSource.head_resultsMatch {n : Nat} {cfg : Cfg} {env : Env}
+    {expression : Arg} {rest : List Arg} {state : St} {results : List Ty}
+    (source : ArgsSource n cfg env (expression :: rest) state) (metadata : source.resultsMatch results) :
+    source.head.resultsMatch results := by
+  cases source with
+  | cons head tail => exact metadata.1
+
 noncomputable def ArgsSource.tail {n : Nat} {cfg : Cfg} {env : Env}
     {expression : Arg} {rest : List Arg} {state after : St} {value : Val}
     (source : ArgsSource n cfg env (expression :: rest) state)
