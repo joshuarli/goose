@@ -236,6 +236,26 @@ theorem LS.SourceSymbolsRun.freezeTo {le : LEnv} {scopeCount : Nat}
         | readOnly => exact LS.SourceSymbolsRun.pure address
       | _ => exact LS.SourceSymbolsRun.pure address
 
+theorem LS.SourceSymbolsRun.borrowTo {le : LEnv} {scopeCount : Nat}
+    (mutability : Core.Mutability) (address : ValueId) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.borrowTo mutability address) := by
+  unfold Goose.Lower.borrowTo
+  apply LS.SourceSymbolsRun.bind (action := (read : B LEnv)) LS.SourceSymbolsRun.readAction
+  intro env
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.valTy address)
+    (LS.SourceSymbolsRun.valTy address)
+  intro valueTy
+  dsimp only
+  split
+  all_goals
+    first
+    | (simp only [Bool.and_false, Bool.false_eq_true, ↓reduceIte];
+        exact LS.SourceSymbolsRun.freezeTo mutability address)
+    | (split <;> first
+        | exact LS.SourceSymbolsRun.emitDef_unreferenced
+            (by simp [Op.origin]) (by simp [Op.SymbolRefsValid])
+        | exact LS.SourceSymbolsRun.freezeTo mutability address)
+
 theorem LS.SourceSymbolsRun.coerceTo {le : LEnv} {scopeCount : Nat}
     (target : Core.Ty) (value : ValueId) (origin : Core.OriginId)
     (originBound : origin < le.mod.origins.size) :
@@ -323,10 +343,10 @@ theorem LS.SourceSymbolsRun.lowerExpr_ref {le : LEnv} {scopeCount : Nat}
     (child : LS.SourceSymbolsRun le scopeCount (lowerPlace place)) :
     LS.SourceSymbolsRun le scopeCount (lowerExpr (.ref mutability place)) := by
   change LS.SourceSymbolsRun le scopeCount
-    (lowerPlace place >>= fun address => Goose.Lower.freezeTo mutability address)
+    (lowerPlace place >>= fun address => Goose.Lower.borrowTo mutability address)
   apply LS.SourceSymbolsRun.bind (action := lowerPlace place) child
   intro address
-  exact LS.SourceSymbolsRun.freezeTo mutability address
+  exact LS.SourceSymbolsRun.borrowTo mutability address
 
 theorem LS.SourceSymbolsRun.lowerExpr_lit {le : LEnv} {scopeCount : Nat}
     (ty : Core.IntTy) (value : Int) :
@@ -369,10 +389,10 @@ theorem LS.SourceSymbolsRun.lowerArg_byRef {le : LEnv} {scopeCount : Nat}
     (child : LS.SourceSymbolsRun le scopeCount (lowerPlace place)) :
     LS.SourceSymbolsRun le scopeCount (lowerArg (.byRef mutability place)) := by
   change LS.SourceSymbolsRun le scopeCount
-    (lowerPlace place >>= fun address => Goose.Lower.freezeTo mutability address)
+    (lowerPlace place >>= fun address => Goose.Lower.borrowTo mutability address)
   apply LS.SourceSymbolsRun.bind (action := lowerPlace place) child
   intro address
-  exact LS.SourceSymbolsRun.freezeTo mutability address
+  exact LS.SourceSymbolsRun.borrowTo mutability address
 
 theorem LS.SourceSymbolsRun.lowerArgs {le : LEnv} {scopeCount : Nat} :
     ∀ args : List Core.Arg, (∀ arg ∈ args,
@@ -1485,7 +1505,7 @@ theorem LS.SourceSymbolsRun.eachElemValue {le : LEnv} {scopeCount : Nat}
       cases localVar with
       | mk name ty kind scope origin =>
         cases ty with
-        | ref mutability _ => simp only [row]; exact LS.SourceSymbolsRun.freezeTo mutability element
+        | ref mutability _ => simp only [row]; exact LS.SourceSymbolsRun.borrowTo mutability element
         | _ => simp only [row]; exact LS.SourceSymbolsRun.pure element
 
 theorem LS.SourceSymbolsRun.lowerEachSource {le : LEnv} {scopeCount : Nat}
