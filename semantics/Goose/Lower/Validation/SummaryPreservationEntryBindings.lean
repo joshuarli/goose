@@ -19,6 +19,23 @@ theorem annotation_find_of_reference {module : Core.Module} {ctx : Context} {imp
     rw [empty] at count
     cases count
 
+theorem checkImpl_variable_origin_bound {module : Core.Module} {impl : Impl}
+    {index : VarId} {localVar : LocalVar} (checked : checkImpl module impl = .ok ())
+    (variableRow : impl.vars[index]? = some localVar) : localVar.org < module.origins.size := by
+  unfold checkImpl at checked
+  by_cases several : impl.results.size > 1
+  · simp [several, chk] at checked
+  · simp only [several] at checked
+    obtain ⟨_, _, checked⟩ := (ex_bind_ok _ _ _).mp checked
+    obtain ⟨_, _, checked⟩ := (ex_bind_ok _ _ _).mp checked
+    obtain ⟨_, _, checked⟩ := (ex_bind_ok _ _ _).mp checked
+    obtain ⟨_, origins, _⟩ := (ex_bind_ok _ _ _).mp checked
+    have one := (forAll_ok _ _).mp origins localVar
+      (Array.mem_toList_iff.mpr (Array.mem_of_getElem? variableRow))
+    by_cases bound : localVar.org < module.origins.size
+    · exact bound
+    · simp [bound, chk] at one
+
 theorem entry_parameter_roots_within_slots {module : Core.Module} {ctx : Context} {impl : Impl}
     {index : Nat} {param : Param} {localVar : LocalVar}
     (checked : CtxOk module impl ctx)
@@ -43,6 +60,29 @@ theorem entry_parameter_roots_within_slots {module : Core.Module} {ctx : Context
     simp only [scalar, Bool.false_eq_true, ite_false]
     simp
 
+theorem entry_parameter_pair {module : Core.Module} {impl : Impl} {implementation : ImplId}
+    {param : Param} {value : ValueId} (le : LEnv)
+    (accepted : Core.validate module = .ok ())
+    (implementationRow : module.impls[implementation]? = some impl)
+    (paired : (param, value) ∈ impl.params.toList.zip
+      (newBlock (impl.params.toList.map fun p => VTy.data (tyOfVar impl p.var)) le initState).1.2) :
+    ∃ index localVar, impl.params[index]? = some param ∧ param.var = index ∧ value = index ∧
+      impl.vars[index]? = some localVar ∧ localVar.org < module.origins.size := by
+  obtain ⟨index, pairAt⟩ := List.mem_iff_getElem?.mp paired
+  obtain ⟨parameterAt, valueAt⟩ := List.getElem?_zip_eq_some.mp pairAt
+  have row : impl.params[index]? = some param := by simpa only [Array.getElem?_toList] using parameterAt
+  have bound : index < impl.params.size := (Array.getElem?_eq_some_iff.mp row).1
+  have ids : (newBlock (impl.params.toList.map fun p => VTy.data (tyOfVar impl p.var)) le initState).1.2 =
+      List.range impl.params.size := by simp [newBlock_run_general, paramIds, initState]
+  rw [ids, List.getElem?_range bound] at valueAt
+  obtain ⟨identity, localVar, variableRow, _, _⟩ := (validate_modOk module accepted).impl implementation impl implementationRow
+    |>.params index param row
+  exact ⟨index, localVar, row, identity, (Option.some.inj valueAt).symm, variableRow,
+    checkImpl_variable_origin_bound (accepted_implementation_checked accepted implementationRow) variableRow⟩
+
+#print axioms entry_parameter_pair
+
+#print axioms checkImpl_variable_origin_bound
 #print axioms annotation_find_of_reference
 #print axioms entry_parameter_roots_within_slots
 
