@@ -110,4 +110,43 @@ theorem FreshContentsEvidence.common {le : LEnv} {first : Nat} {state : LS}
       · intro value member
         exact member.elim (leftFresh value) (rightFresh value)
 
+theorem ContentsClosed.patchBrs_avoiding_target {le : LEnv} {before after : LS} {result : Unit}
+    {target : BlockId} (incoming : List (BlockId × ValueId)) {authorized : ValueId → Prop}
+    (checked : before.DenseDefinitions) (bounded : LiveBound before)
+    (run : Goose.Lower.patchBrs target incoming le before = (result, after))
+    (closed : ContentsClosed (le.globals.map (·.2)) le.mod.structs
+      (permissionFunc le before) before.vals authorized)
+    (excluded : ∀ destination, (permissionFunc le before).blocks[target]? = some destination →
+      ∀ parameter ∈ destination.params, ¬ authorized parameter.1) :
+    ContentsClosed (le.globals.map (·.2)) le.mod.structs
+      (permissionFunc le after) after.vals authorized := by
+  induction incoming generalizing before after result with
+  | nil => obtain ⟨_, rfl⟩ := pure_eq.mp run; exact closed
+  | cons pair rest ih =>
+      obtain ⟨stepResult, middle, firstRun, restRun⟩ := bind_eq.mp run
+      have middleFacts := dense_patchTerm pair.1 (.br target [pair.2]) le before stepResult middle firstRun checked bounded
+      apply ih middleFacts.1 middleFacts.2.1 restRun
+      · apply closed.patchTerm checked bounded firstRun
+        intro edge member destination row entry belongs permitted
+        have same : edge = (target, [pair.2]) := by simpa [Term.permissionEdges] using member
+        subst edge
+        exact (excluded destination row entry.1 (List.of_mem_zip belongs).1 permitted).elim
+      · intro destination row parameter member permitted
+        obtain ⟨old, oldRow, params⟩ := join_patchTerm_frame_at firstRun row
+        exact excluded old oldRow parameter (by rw [← params]; exact member) permitted
+
+theorem FreshContentsEvidence.patchBrs_before {le : LEnv} {before after : LS} {first : Nat}
+    {target : BlockId} {value : ValueId} {result : Unit} (incoming : List (BlockId × ValueId))
+    (evidence : FreshContentsEvidence le first before value)
+    (checked : before.DenseDefinitions) (bounded : LiveBound before)
+    (run : patchBrs target incoming le before = (result, after))
+    (earlier : ∀ destination, (permissionFunc le before).blocks[target]? = some destination →
+      ∀ parameter ∈ destination.params, parameter.1 < first) :
+    FreshContentsEvidence le first after value := by
+  obtain ⟨authorized, closed, noninteger, member, fresh⟩ := evidence
+  refine ⟨authorized, closed.patchBrs_avoiding_target incoming checked bounded run ?_,
+    noninteger.patchBrs incoming run, member, fresh⟩
+  intro destination row parameter belongs permitted
+  exact Nat.not_lt_of_ge (fresh parameter.1 permitted) (earlier destination row parameter belongs)
+
 end Goose.Lower.Validation
