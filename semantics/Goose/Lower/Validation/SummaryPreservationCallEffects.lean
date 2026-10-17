@@ -73,7 +73,7 @@ theorem lowerContextAt_parameterGlobals {module : Core.Module} {ctx : Context} {
       | none => []) = paramGlobals impl ctx index := by
   obtain ⟨identity, localVar, variableRow, scope, parameterType⟩ := implOk.params index param parameter
   have paramType : (lowerContextAt module ctx impl).params[index]? = some localVar.ty := by
-    simp only [lowerContextAt, lowerImpl, List.getElem?_map]
+    simp only [lowerContextAt, lowerImpl, lowerImplFromState, List.getElem?_map]
     have row : impl.params.toList[index]? = some param := by simpa using parameter
     rw [row]
     simp [tyOfVar, identity, variableRow]
