@@ -52,7 +52,8 @@ theorem provStart_ref_parameter (func : Func) (types : Array (Option VTy))
   refine list_foldl_establishes_member
     (property := fun roots : Array (List RootRef) => roots.size = func.numValues)
     (known := fun roots => RootRef.param position ∈ rootsAt roots value)
-    _ _ _ ((value, ty), position) (List.mk_mem_zipIdx_iff_getElem?.mpr parameterAt) (by simp) ?_ ?_ ?_
+    _ _ _ ((value, ty), position) (List.mk_mem_zipIdx_iff_getElem?.mpr parameterAt)
+      (by simp [Func.valueRootSeeds]) ?_ ?_ ?_
   · intro roots pair member size
     try dsimp only
     split <;> simpa using size
@@ -62,13 +63,13 @@ theorem provStart_ref_parameter (func : Func) (types : Array (Option VTy))
     split
     · by_cases same : other = value
       · subst other
-        have pairAt := List.mk_mem_zipIdx_iff_getElem?.mp member
-        have equal : otherPosition = position := parameter_position_unique distinct pairAt parameterAt
-        simp [equal, rootsAt, size, bounded]
+        simpa [rootsAt, size, bounded] using
+          Sound.unionRoots_left (rootsAt roots value) [.param otherPosition] (.param position) known
       · simpa [rootsAt, Array.getElem?_setIfInBounds, same] using known
     · exact known
   · intro roots size
-    simp [reference, size, bounded, rootsAt]
+    simpa [reference, size, bounded, rootsAt] using
+      Sound.unionRoots_right (rootsAt roots value) [.param position] (.param position) (by simp)
 
 theorem provenance_ref_parameter (results : Array (List RootRef)) (types : Array (Option VTy))
     (func : Func) (rootCount : Nat) {entry : GIR.Block} (entryAt : func.blocks[0]? = some entry)
