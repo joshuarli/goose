@@ -251,12 +251,77 @@ void GenericAndEmptyContextRootsRemainDistinct() {
     assert(ParamRoots(absent.funcs[1], 0) == nullptr);
 }
 
+CoreModule ParameterResultRoots(vector<CoreRootRef> parameterRoots, vector<CoreRootRef> resultRoots) {
+    CoreModule core;
+    core.files = { "parameter-result-roots.goose" };
+    auto integer = core.IntType(CoreIntTy::I64);
+    CoreType referenceType;
+    referenceType.kind = CoreType::Ref;
+    referenceType.mut = CoreMut::Const;
+    referenceType.elem = integer;
+    auto reference = core.Intern(referenceType);
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Param };
+
+    CoreImpl entry;
+    entry.name = "main";
+    entry.body.scope = 0;
+    CoreImpl receiver;
+    receiver.name = "receiver";
+    receiver.params = { CoreParam { 0, true } };
+    receiver.results = { CoreResultDescriptor { reference, CoreRequest::Register, nullopt } };
+    receiver.vars = { CoreVar { "parameter", reference, CoreVarKind::Let, 0, origin } };
+    receiver.body.scope = 0;
+    receiver.body.value = make_unique<CoreExpr>();
+    receiver.body.value->kind = CoreExprKind::Read;
+    receiver.body.value->type = reference;
+    receiver.body.value->place = make_unique<CorePlace>();
+    receiver.body.value->place->kind = CorePlace::Local;
+    receiver.body.value->place->index = 0;
+
+    core.impls.push_back(std::move(entry));
+    core.impls.push_back(std::move(receiver));
+    CoreContext entryContext;
+    entryContext.impl = 0;
+    CoreContext receiverContext;
+    receiverContext.impl = 1;
+    receiverContext.varroots = { { 0, std::move(parameterRoots) } };
+    receiverContext.resultroots = { std::move(resultRoots) };
+    core.contexts = { std::move(entryContext), std::move(receiverContext) };
+    core.entry = 0;
+    for (int index = 0; index < 2; index++) {
+        CoreGlobal global;
+        global.name = cat("root", index);
+        global.type = integer;
+        global.kind = CoreVarKind::Var;
+        global.init = Integer(integer, "0");
+        global.org = origin;
+        core.globals.push_back(std::move(global));
+    }
+    return core;
+}
+
+void ResultRootAliasesRequireCompleteContextExpansion() {
+    auto empty = Lower(ParameterResultRoots({}, {}));
+    assert(Code(empty).empty());
+    vector<CoreRootRef> parameterAlias { CoreRootRef { CoreRootRef::Param, 0 } };
+    assert(empty.funcs[1].roots.results[0] == parameterAlias);
+
+    vector<CoreRootRef> partialExpansion {
+        CoreRootRef { CoreRootRef::Global, 0 }, CoreRootRef { CoreRootRef::Global, 1 }
+    };
+    vector<CoreRootRef> partialResult { CoreRootRef { CoreRootRef::Global, 0 } };
+    auto partial = Lower(ParameterResultRoots(partialExpansion, partialResult));
+    assert(partial.funcs[1].roots.results[0] == partialResult);
+    assert(Code(partial) == "GIR-V050");
+}
+
 }
 
 int main() {
     SharedImplementationsKeepContextRootsAndCallIndices();
     ConstructionTargetsIncludeEveryMemberContext();
     GenericAndEmptyContextRootsRemainDistinct();
+    ResultRootAliasesRequireCompleteContextExpansion();
     puts("compiler_gir_contexts ok");
     return 0;
 }

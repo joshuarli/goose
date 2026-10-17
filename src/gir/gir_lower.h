@@ -1814,8 +1814,22 @@ private:
                 if (context.varroots[j].first == var && context.hascontent[j])
                     out.contents.push_back({ (int)i, j < context.content.size() ? context.content[j] : vector<CoreRootRef> {} });
         }
-        for (size_t i = 0; i < context.resultroots.size() && i < out.results.size(); i++)
+        for (size_t i = 0; i < context.resultroots.size() && i < out.results.size(); i++) {
             out.results[i] = context.resultroots[i];
+            for (size_t j = 0; j < impl.params.size(); j++) {
+                auto var = impl.params[j].var;
+                auto parameterRoots = find_if(context.varroots.begin(), context.varroots.end(),
+                    [&](auto &entry) { return entry.first == var; });
+                if (parameterRoots == context.varroots.end()) continue;
+                auto fullyIncluded = all_of(parameterRoots->second.begin(), parameterRoots->second.end(),
+                    [&](auto &root) {
+                        return find(out.results[i].begin(), out.results[i].end(), root) != out.results[i].end();
+                    });
+                CoreRootRef alias { CoreRootRef::Param, (int)j };
+                if (fullyIncluded && find(out.results[i].begin(), out.results[i].end(), alias) == out.results[i].end())
+                    out.results[i].push_back(alias);
+            }
+        }
         return out;
     }
 
