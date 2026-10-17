@@ -71,7 +71,7 @@ def declaredReturn (f : Func) : Roots :=
       if type.isRefLike then
         match f.roots.results[0]? with
         | none => .unknown
-        | some roots => .known (roots.map Atom.ofRootRef)
+        | some roots => .known (roots.eraseDups.map Atom.ofRootRef)
       else .known []
   | [] => .known []
   | _ => .unknown

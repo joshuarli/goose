@@ -68,10 +68,20 @@ theorem normalize_rootMap_known (f : Func) (roots : List RootRef) :
   intro root
   simpa only [List.not_mem_nil, false_or] using fold_expanded_roots_mem f roots [] root
 
+theorem normalize_rootMap_dedup_known (f : Func) (roots : List RootRef) :
+    ∃ actual, normalize f (.known (roots.eraseDups.map Atom.ofRootRef)) = some actual ∧
+      ∀ root, root ∈ actual ↔ root ∈ roots.flatMap f.expandParameterRoot := by
+  obtain ⟨actual, known, members⟩ := normalize_rootMap_known f roots.eraseDups
+  refine ⟨actual, known, ?_⟩
+  intro root
+  rw [members]
+  simp only [List.mem_flatMap, List.mem_eraseDups]
+
 #print axioms normalizeAtom_ofRootRef
 #print axioms normalize_rootMap
 #print axioms unionRoots_mem_iff
 #print axioms fold_expanded_roots_mem
 #print axioms normalize_rootMap_known
+#print axioms normalize_rootMap_dedup_known
 
 end Goose.GIR.ReplacementContentFlow.Model

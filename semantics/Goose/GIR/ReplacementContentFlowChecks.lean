@@ -252,4 +252,9 @@ private def crossContentWrapper := function "crossContentWrapper" [holder, holde
 private def crossContentModule := module #[crossContentWrapper, crossContentCallee, pure]
 #guard (localFlow crossContentModule pure).value 0 == some []
 
+private def duplicatedReturnBound := { globalReturnBound with roots := { results := #[[.global 0, .global 0]] } }
+private def duplicatedReturnModule := module #[duplicatedReturnBound, pure] #[global owner]
+#guard ReplacementContentFlow.Model.declaredReturn duplicatedReturnBound == .known [.global 0]
+#guard (localFlow duplicatedReturnModule duplicatedReturnBound).value 0 == some [.global 0]
+
 end Goose.GIR.ReplacementContentFlowChecks
