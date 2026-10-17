@@ -67,4 +67,15 @@ theorem lowerPlace_global_root_witness {res : Array (List RootRef)} {vt : Array 
   exact emitDef_represented_witness symbols current blockBound witness
     (by simp [Op.uses]) (rootsRepresent_global func global)
 
+
+theorem lowerPlace_var_exact_root_witness {res : Array (List RootRef)}
+    {vt : Array (Option VTy)} {func : Func} {upper : Prov} {ls : LS} {le : LEnv}
+    {scopeCount : Nat} {block : BlockId} (symbols : ls.SymbolWF le scopeCount)
+    (current : ls.cur = some block) (blockBound : block < ls.blocks.size)
+    (witness : BuilderRootWitness res vt func upper ls) (varId : VarId) :
+    ∃ next : Prov, BuilderRootWitness res vt func next (lowerPlace (.var varId) le ls).2 ∧
+      rootsAt next.vals (lowerPlace (.var varId) le ls).1 = [.local varId] ∧
+      next.slots = upper.slots := by
+  exact emitDef_root_witness symbols current blockBound witness (by simp [Op.uses]) rfl
+
 end Goose.Lower.Validation.SummaryPreservation
