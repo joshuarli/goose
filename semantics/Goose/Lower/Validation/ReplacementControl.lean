@@ -56,4 +56,46 @@ theorem emitsOnly_controlTerm {module : GIR.Module} {types : Array (Option VTy)}
     EmitsOnlyRun (ReplacementInstApart module types queries owner) (emitTerm term) :=
   emitsOnly_emitTerm term (.control (.term term))
 
+theorem EmitsOnlyRun.whenLive {property : Inst → Prop} (default : α) (next : BlockId → B α)
+    (preserves : ∀ block, EmitsOnlyRun property (next block)) :
+    EmitsOnlyRun property (Goose.Lower.whenLive default next) := by
+  unfold Goose.Lower.whenLive
+  apply EmitsOnlyRun.bind (EmitsOnlyRun.unchanged (fun _ _ => rfl))
+  intro current
+  cases current with
+  | none => exact .pure _ _
+  | some index => exact preserves index
+
+theorem emitsOnly_scFork (property : Inst → Prop) (terms : ∀ term, property (.term term))
+    (isAnd : Bool) (value : ValueId) : EmitsOnlyRun property (scFork isAnd value) := by
+  unfold scFork
+  apply EmitsOnlyRun.bind (emitsOnly_newBlock property [])
+  rintro ⟨right, _⟩
+  apply EmitsOnlyRun.bind (emitsOnly_newBlock property [.data .bool])
+  rintro ⟨join, params⟩
+  dsimp only
+  split
+  all_goals
+    apply EmitsOnlyRun.bind (emitsOnly_emitTerm _ (terms _))
+    intro _
+    exact .pure _ _
+
+theorem emitsOnly_shortCircuit {property : Inst → Prop} (terms : ∀ term, property (.term term))
+    (isAnd : Bool) (value : ValueId) {rhs : B ValueId} (preserves : EmitsOnlyRun property rhs) :
+    EmitsOnlyRun property (shortCircuit isAnd value rhs) := by
+  unfold shortCircuit
+  apply EmitsOnlyRun.whenLive
+  intro index
+  apply EmitsOnlyRun.bind (emitsOnly_scFork property terms isAnd value)
+  rintro ⟨right, join, parameter⟩
+  apply EmitsOnlyRun.bind (emitsOnly_setCur property (some right))
+  intro _
+  apply EmitsOnlyRun.bind preserves
+  intro result
+  apply EmitsOnlyRun.bind (emitsOnly_emitTerm _ (terms _))
+  intro _
+  apply EmitsOnlyRun.bind (emitsOnly_setCur property (some join))
+  intro _
+  exact .pure _ _
+
 end Goose.Lower.Validation
