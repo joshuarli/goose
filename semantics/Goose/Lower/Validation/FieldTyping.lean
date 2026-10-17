@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.SourceEnvironment
+import Goose.Lower.Validation.BuilderTyping
 
 namespace Goose.Lower.Validation
 
