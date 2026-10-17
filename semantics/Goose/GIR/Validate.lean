@@ -621,6 +621,9 @@ def checkPermissions (m : Module) (label : String) (f : Func) (vt : Array (Optio
         let cap := caps[r]?.getD (false, false)
         unless cap.1 && cap.2 do
           violation .v030 s!"{label}: replacement without whole-owner permission"
+      | .def _ (.ownerBorrow owner) =>
+        unless (caps[owner]?.getD (false, false)).2 do
+          violation .v030 s!"{label}: an owner borrow without contents permission"
       | .def v (.snapshot _ _) =>
         match vt[v]? with
         | some (some (.view .mutable _)) =>
