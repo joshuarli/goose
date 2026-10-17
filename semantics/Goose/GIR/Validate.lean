@@ -880,7 +880,9 @@ private def replacementSlotEmpty (memoryFreeCalls : Array Bool) (m : Module)
             | .known summary => (summary.writes ++ summary.rebinds).any fun
                 | .global _ => true
                 | .param parameter =>
-                    match args[parameter]? with
+                    let globals := ((callee.roots.params.find? (·.1 == parameter)).map (·.2)).getD [] |>.any
+                      (fun | .global _ => true | _ => false)
+                    globals || match args[parameter]? with
                     | none => true
                     | some value => external value
     | _ => false
@@ -903,7 +905,9 @@ private def replacementParameterContentsStable (memoryFreeCalls : Array Bool)
             | .known summary => (summary.writes ++ summary.rebinds).any fun
                 | .global _ => true
                 | .param parameter =>
-                    match args[parameter]? with
+                    let globals := ((callee.roots.params.find? (·.1 == parameter)).map (·.2)).getD [] |>.any
+                      (fun | .global _ => true | _ => false)
+                    globals || match args[parameter]? with
                     | none => true
                     | some value => external value
     | _ => false
@@ -1023,7 +1027,7 @@ def callSummaryRoots (m : Module) (queries : ReplacementQueries) (fn : FnId)
           let annotated := ((callee.roots.params.find? (·.1 == i)).map (·.2)).getD [] |>.filterMap fun
             | .global g => some (.global g)
             | _ => none
-          pure (if actual.isEmpty then roots else unionRoots roots (actual ++ annotated))
+          pure (unionRoots roots (actual ++ annotated))
 
 def callDependencies (m : Module) (vt : Array (Option VTy)) (queries : ReplacementQueries)
     (fn : FnId) (args : List ValueId) : ReplacementRootQuery :=

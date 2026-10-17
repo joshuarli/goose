@@ -195,4 +195,24 @@ private def unchangedLocalContents (knownSummary : Bool) : GIR.Module :=
 #guard (GIR.validate (unchangedLocalContents false)).toBool
 #guard (GIR.validate (unchangedLocalContents true)).toBool
 
+private def specializedGlobalMutation (localArgument : Bool) : GIR.Module :=
+  let input := globalMutationWithEmptyArgument true
+  { input with funcs := input.funcs.modify 2 (fun callee =>
+      { callee with
+        roots := { params := #[(0, if localArgument then [.param 0, .global 1] else [.global 1])] },
+        summary := .known ⟨[.global 0], [.param 0], [], [], [], false, false⟩ }) |>.modify 1 fun receiver =>
+      if !localArgument then receiver else
+        { receiver with
+          slots := #[⟨ownerTy, .mutable, 0, 0⟩],
+          blocks := receiver.blocks.map fun block =>
+            { block with insts := [.eff (.enter 0), .def 8 (.arrLit ownerTy []), .eff (.slotInit 0 8 (some 0)),
+                .def 9 (.slotAddr 0), .def 10 (.snapshot .owner 9),
+                .def 11 (.viewSlice .readOnly 10 .omitted .omitted (some 0))] ++
+              block.insts.flatMap fun
+                | .def value (.call fn _ origin) => [.def value (.call fn [11] origin)]
+                | .term (.ret values origin) => [.eff (.leave 0), .term (.ret values origin)]
+                | inst => [inst] } } }
+#guard match GIR.validate (specializedGlobalMutation false) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (specializedGlobalMutation true) with | .error e => e.code == .v060 | _ => false
+
 end Goose.Lower.Validation.ReplacementEmptyContentChecks
