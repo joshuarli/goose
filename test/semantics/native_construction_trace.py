@@ -15,6 +15,7 @@ FIXTURES = (
     ROOT / "test/semantics/sem_construction_target_call.goose",
     ROOT / "test/semantics/sem_construction_named_result.goose",
     ROOT / "test/semantics/sem_construction_nested_target_mode.goose",
+    ROOT / "test/semantics/sem_construction_bottom_block.goose",
 )
 FOCUSED_FIXTURES = (
     ROOT / "test/semantics/sem_construction_built_zero_replacement.goose",
