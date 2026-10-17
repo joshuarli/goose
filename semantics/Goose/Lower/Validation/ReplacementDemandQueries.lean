@@ -58,6 +58,31 @@ theorem ReplacementDemandContext.descendant_place_query_apart {module : Core.Mod
   subst actualRoots
   exact replacementApart_of_expanded_source closed ownerKnown sourceKnown disjoint
 
+theorem ReplacementDemandContext.descendant_call_query_apart {module : Core.Module}
+    {planOwner : Nat} {path : List Nat} {place : Place} {rhs : Expr} {origin : OriginId}
+    (context : ReplacementDemandContext module planOwner path place rhs origin)
+    {suffix : List Nat} {callee : ContextId} {args : List Arg} {callOrigin : OriginId}
+    (source : DemandNodeAt (.expression rhs) suffix (.expression (.call callee args callOrigin)))
+    {target : DemandOwner} {effects : List DemandOwner}
+    (targetAt : context.planContext.approvals.access.owner place = .ok target)
+    (effectsAt : context.planContext.approvals.access.callEffectOwners callee args = .ok effects)
+    {func : Func} {queries : ReplacementQueries} {owner : ValueId} {query : ReplacementRootQuery}
+    (closed : ParameterRootsClosed func)
+    (ownerKnown : ReplacementRootsWithin (queries.value owner) (target.roots.flatMap func.expandParameterRoot))
+    (sourceKnown : ReplacementRootsWithin query
+      ((effects.flatMap DemandOwner.roots).flatMap func.expandParameterRoot)) :
+    ReplacementApart queries owner query := by
+  obtain ⟨actualTarget, actualEffects, actualTargetAt, actualEffectsAt, disjoint⟩ :=
+    context.descendant_call_disjoint source
+  have sameTarget := Except.ok.inj (actualTargetAt.symm.trans targetAt)
+  have sameEffects := Except.ok.inj (actualEffectsAt.symm.trans effectsAt)
+  subst actualTarget
+  subst actualEffects
+  apply replacementApart_of_expanded_source closed ownerKnown sourceKnown
+  intro ownerRoot ownerMember effectRoot effectMember
+  obtain ⟨effect, effectAt, rootAt⟩ := List.mem_flatMap.mp effectMember
+  exact disjoint effect effectAt ownerRoot ownerMember effectRoot rootAt
+
 theorem ReplacementDemandContext.descendant_read_load_apart {module : Core.Module}
     {planOwner : Nat} {path : List Nat} {place : Place} {rhs : Expr} {origin : OriginId}
     (context : ReplacementDemandContext module planOwner path place rhs origin)
@@ -97,6 +122,7 @@ theorem ReplacementDemandContext.descendant_read_load_apart {module : Core.Modul
 #print axioms replacementApart_of_expanded_source
 #print axioms ReplacementDemandContext.descendant_read_query_apart
 #print axioms ReplacementDemandContext.descendant_place_query_apart
+#print axioms ReplacementDemandContext.descendant_call_query_apart
 #print axioms ReplacementDemandContext.descendant_read_load_apart
 
 end Goose.Lower.Validation
