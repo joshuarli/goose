@@ -63,6 +63,13 @@ private:
     vector<vector<pair<int, int>>> lowMarkParams;
     vector<bool> lowReturnedOwnerPairs;
     vector<set<int>> constructionNeeds, constructionEscapes;
+    set<pair<int, int>> checkedTargetUnreachable;
+    struct LowReturnFlagEffect {
+        set<int64_t> values;
+        bool preservesInput = false;
+        bool operator==(const LowReturnFlagEffect &) const = default;
+    };
+    vector<LowReturnFlagEffect> lowReturnFlagEffects;
 
     [[noreturn]] static void Fail(const char *code, string msg) { throw GirViolation { code, std::move(msg) }; }
 
@@ -84,7 +91,7 @@ private:
             case GirOp::Int: case GirOp::Bool: case GirOp::Unit: case GirOp::Slot: case GirOp::Global:
             case GirOp::Enter: case GirOp::Leave: case GirOp::Unreachable:
             case GirOp::Bytes: case GirOp::StaticBytes: case GirOp::ReturnFlagGet:
-            case GirOp::TargetLoad: case GirOp::TraceId: case GirOp::SourceParam: case GirOp::SourceEnter: case GirOp::SourceGlobal: case GirOp::DestNamed:
+            case GirOp::TargetLoad: case GirOp::TraceId: case GirOp::SourceParam: case GirOp::SourceEnter: case GirOp::SourceGlobal: case GirOp::SourceTargetEnter: case GirOp::DestNamed:
             case GirOp::ResultExitDest: case GirOp::TargetDest:
                 break;
             case GirOp::Abort:
@@ -94,7 +101,7 @@ private:
             case GirOp::Index: case GirOp::IndexProven: case GirOp::Push: case GirOp::Store: case GirOp::Append:
             case GirOp::PopN: case GirOp::Replace:
             case GirOp::Format: case GirOp::OutBytes: case GirOp::AppendValue:
-            case GirOp::SourceChild: case GirOp::SourceCopy: case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot:
+            case GirOp::PtrEq: case GirOp::SourceChild: case GirOp::SourceCopy: case GirOp::DestAttach: case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot:
                 add(i.a); add(i.b);
                 break;
             case GirOp::SourceNew:
@@ -112,10 +119,10 @@ private:
                 break;
             case GirOp::DestBytes: case GirOp::DestFinish: case GirOp::DestPublish:
             case GirOp::Result: case GirOp::DestChild: case GirOp::DestArg:
-            case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
+            case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
             case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestBind:
             case GirOp::DestCancel: case GirOp::ReturnFlagSet: case GirOp::TargetStore:
-            case GirOp::DestAbandonNamed: case GirOp::SourceCallGet: case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet:
+            case GirOp::DestAbandonNamed: case GirOp::SourceCallGet: case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet: case GirOp::SourceTargetLeave: case GirOp::SourceTargetResult: case GirOp::SourceTargetGet: case GirOp::DestPublishRef:
                 add(i.a);
                 break;
             case GirOp::DestWrite:
@@ -193,7 +200,7 @@ private:
             case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear: case GirOp::Replace:
                 return true;
             case GirOp::DestOpen: case GirOp::DestWrite: case GirOp::DestFinish: case GirOp::DestPublish: case GirOp::DestBytes:
-            case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render:
+            case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
             case GirOp::DestNamed: case GirOp::ResultExitDest: case GirOp::DestAbandonNamed:
             case GirOp::DestArg: case GirOp::DestAbandon: case GirOp::DestValue:
             case GirOp::DestRelocate: case GirOp::DestStage: case GirOp::DestFit:
@@ -244,6 +251,9 @@ private:
         CheckStages();
         CheckStructTable();
         CheckProfileTypes();
+        for (auto &function : m.funcs)
+            if (function.lowResults && (!m.low || !CoreHasConstruction(m.profile)))
+                Fail("GIR-V090", "result channel descriptors appear outside construction GIR-L");
         CheckEntryAndGlobals();
         for (auto &f : m.funcs) sigs.push_back({ f.params, f.results });
         for (auto &f : m.funcs) fns.push_back({ cat("function ", f.name), &f, false, {}, 0 });
@@ -253,12 +263,20 @@ private:
         for (auto &fn : fns) ValueTypes(fn);
         for (auto &fn : fns) CheckTypes(fn);
         for (auto &fn : fns) CheckCfg(fn);
+        if (m.low && CoreHasConstruction(m.profile)) { CheckLowResultTables(); CheckLowTargetProtocols(); }
         CheckUnreachable();
         if (m.low) {
             lowPassedPairs.assign(m.funcs.size(), {});
             lowStackParams.assign(m.funcs.size(), {});
             lowMarkParams.assign(m.funcs.size(), {});
             lowReturnedOwnerPairs.assign(m.funcs.size(), false);
+            if (CoreHasConstruction(m.profile))
+                for (size_t function = 0; function < m.funcs.size(); function++)
+                    for (auto &result : *m.funcs[function].lowResults)
+                        if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
+                            lowStackParams[function].push_back(nonfixed->stack);
+                            lowMarkParams[function].push_back({ nonfixed->start, nonfixed->stack });
+                        }
             bool changed = true;
             int rounds = 0;
             while (changed && rounds++ < (int)m.funcs.size() * 4 + 8) {
@@ -329,8 +347,9 @@ private:
 
         if (m.low) {
             if (hasStructType || hasStructInst || !m.structs.empty() || !m.targets.empty() ||
-                !m.lowtargets.empty())
+                (!CoreHasConstruction(m.profile) && !m.lowtargets.empty()))
                 Fail("GIR-V090", "a low module retains a high-stage artifact or an unsupported target table");
+            CheckLowTargetTables();
             return;
         }
         if (!CoreHasConstruction(m.profile) && !m.targets.empty())
@@ -350,8 +369,13 @@ private:
                 auto &results = m.funcs[target.members[0]].results;
                 auto &protocols = m.funcs[target.members[0]].resultProtocols;
                 for (auto member : target.members)
-                    if (m.funcs[member].results != results || m.funcs[member].resultProtocols != protocols)
-                        Fail("GIR-V010", "construction target members have different result types");
+                    {
+                        auto &candidate = m.funcs[member];
+                        bool same = candidate.results == results && candidate.resultProtocols.size() == protocols.size();
+                        if (same) for (size_t result = 0; result < protocols.size(); result++)
+                            same &= candidate.resultProtocols[result].request == protocols[result].request;
+                        if (!same) Fail("GIR-V010", "construction target members have different result types or requests");
+                    }
             }
         }
         if (m.profile == CoreProfile::Pilot) {
@@ -396,6 +420,493 @@ private:
                     field.offset > st.size || bytes > st.size - field.offset)
                     Fail("GIR-V010", cat("struct ", s, " field ", f, " has an invalid byte extent"));
                 end = field.offset + bytes;
+            }
+        }
+    }
+
+    void CheckLowTargetTables() {
+        auto bad = [&](const string &message) { Fail("GIR-V090", message); };
+        set<vector<int>> sets;
+        for (size_t target = 0; target < m.lowtargets.size(); target++) {
+            auto &table = m.lowtargets[target];
+            if (table.members.empty() || !is_sorted(table.members.begin(), table.members.end()) ||
+                adjacent_find(table.members.begin(), table.members.end()) != table.members.end() || !sets.insert(table.members).second)
+                bad("low target member set is empty, repeated, or unsorted");
+            for (size_t channel = 0; channel < table.channels.size(); channel++)
+                if (table.channels[channel].position != (int)channel) bad("low target result positions are not dense and ordered");
+            for (auto member : table.members) if (member < 0 || member >= (int)m.funcs.size()) bad("low target member lies outside the function table");
+            if (table.cells.empty() || table.cells[0] < 0 || table.cells[0] >= (int)m.types.size() || m.Type(table.cells[0]).kind != CoreType::Bool)
+                bad("low target active cell is not boolean");
+            vector<bool> covered(table.cells.size(), false);
+            covered[0] = true;
+            for (auto &channel : table.channels) {
+                if (channel.incoming.empty() || channel.escaped.empty() || channel.incoming.size() != channel.escaped.size())
+                    bad("low target channel omits incoming or escaped ABI words");
+                for (auto *cells : { &channel.incoming, &channel.escaped })
+                    for (auto cell : *cells) {
+                        if (cell <= 0 || cell >= (int)table.cells.size() || covered[cell]) bad("low target channels do not partition their cells");
+                        covered[cell] = true;
+                        auto type = table.cells[cell];
+                        if (type < 0 || type >= (int)m.types.size()) bad("low target cell type lies outside the type table");
+                        auto kind = m.Type(type).kind;
+                        if (kind != CoreType::Int && kind != CoreType::Bool && kind != CoreType::Ptr) bad("low target cell retains an unresolved layout");
+                        if (cells == &channel.incoming && kind != CoreType::Ptr) bad("low target incoming output channel is not an address");
+                    }
+                if (channel.incoming.size() == 3 &&
+                    (m.Type(table.cells[channel.escaped[0]]).kind != CoreType::Ptr ||
+                     m.Type(table.cells[channel.escaped[1]]).kind != CoreType::Ptr ||
+                     m.Type(table.cells[channel.escaped[2]]).kind != CoreType::Int ||
+                     m.Type(table.cells[channel.escaped[2]]).ity != CoreIntTy::I64))
+                    bad("low target construction payload is not start, end, and count");
+            }
+            if (find(covered.begin(), covered.end(), false) != covered.end()) bad("low target table has an unconsumed cell");
+            for (auto member : table.members) {
+                auto &function = m.funcs[member];
+                if (function.blocks.empty()) bad("low target member has no entry block");
+                const GirInst *enter = nullptr;
+                for (auto &block : function.blocks) for (auto &inst : block.insts)
+                    if (inst.op == GirOp::SourceTargetEnter && inst.idx == (int)target) {
+                        if (enter || &block != &function.blocks[0]) bad("low target member does not have one entry activation");
+                        enter = &inst;
+                    }
+                if (!enter || enter->vals.size() != table.channels.size()) bad("low target member does not consume every declared channel");
+                auto &entry = function.blocks[0].insts;
+                auto enterPosition = find_if(entry.begin(), entry.end(), [&](const GirInst &inst) { return &inst == enter; });
+                if (enterPosition == entry.end()) bad("low target activation is not in its entry block");
+                int activeStores = 0;
+                for (auto inst = entry.begin(); inst != enterPosition; ++inst) if (inst->op == GirOp::TargetStore && inst->idx == (int)target && inst->idx2 == 0) {
+                    bool active = false;
+                    for (auto &definition : entry)
+                        if (definition.res == inst->a && definition.op == GirOp::Bool && definition.flag) active = true;
+                    if (!active) bad("low target activation does not set its active cell");
+                    activeStores++;
+                }
+                if (activeStores != 1) bad("low target activation does not set its active cell exactly once");
+                vector<int> parameters;
+                for (auto &channel : table.channels) for (auto cell : channel.incoming) {
+                    int parameter = -1;
+                    for (auto &inst : function.blocks[0].insts)
+                        if (&inst == enter) break;
+                        else if (inst.op == GirOp::TargetStore && inst.idx == (int)target && inst.idx2 == cell)
+                            for (size_t position = 1; position < function.blocks[0].params.size(); position++)
+                                if (function.blocks[0].params[position].first == inst.a) parameter = (int)position;
+                    if (parameter < 1 || m.Type(function.params[parameter]).kind != CoreType::Ptr) bad("low target incoming cell is not installed from an output parameter");
+                    parameters.push_back(parameter);
+                }
+                for (size_t position = 1; position < parameters.size(); position++)
+                    if (parameters[position] != parameters[position - 1] + 1) bad("low target primitive output positions are not consecutive");
+                size_t offset = 0;
+                for (size_t channel = 0; channel < table.channels.size(); channel++) {
+                    if (enter->vals[channel] >= 0 && enter->vals[channel] != parameters[offset]) bad("low target reference shadow names another output channel");
+                    offset += table.channels[channel].incoming.size();
+                }
+            }
+        }
+    }
+
+    template<class Integer>
+    vector<LowReturnFlagEffect> ComputeLowReturnFlagEffects(Integer integer) const {
+        struct Flow {
+            set<int64_t> values;
+            bool preservesInput = false;
+            bool reachable = false;
+            bool operator==(const Flow &) const = default;
+        };
+        vector<LowReturnFlagEffect> effects(m.funcs.size());
+        bool changed = true;
+        while (changed) {
+            auto nextEffects = effects;
+            for (size_t function = 0; function < m.funcs.size(); function++) {
+                auto &f = m.funcs[function];
+                vector<optional<Flow>> incoming(f.blocks.size());
+                if (f.blocks.empty()) continue;
+                incoming[0] = Flow { {}, true, true };
+                vector<int> work { 0 };
+                auto merge = [&](int block, Flow state) {
+                    if (!state.reachable) return;
+                    if (!incoming[block]) {
+                        incoming[block] = std::move(state);
+                        work.push_back(block);
+                        return;
+                    }
+                    auto merged = *incoming[block];
+                    merged.reachable = true;
+                    merged.preservesInput |= state.preservesInput;
+                    merged.values.insert(state.values.begin(), state.values.end());
+                    if (!(merged == *incoming[block])) {
+                        incoming[block] = std::move(merged);
+                        work.push_back(block);
+                    }
+                };
+                while (!work.empty()) {
+                    auto block = work.back();
+                    work.pop_back();
+                    auto state = *incoming[block];
+                    for (auto &inst : f.blocks[block].insts) {
+                        if (inst.op == GirOp::ReturnFlagSet) {
+                            state.values = { integer(f, inst.a) };
+                            state.preservesInput = false;
+                        } else if (inst.op == GirOp::Call) {
+                            auto &callee = effects[inst.idx];
+                            if (callee.values.empty() && !callee.preservesInput) {
+                                state.reachable = false;
+                            } else {
+                                auto values = callee.values;
+                                if (callee.preservesInput)
+                                    values.insert(state.values.begin(), state.values.end());
+                                state.values = std::move(values);
+                                state.preservesInput &= callee.preservesInput;
+                                state.reachable = !state.values.empty() || state.preservesInput;
+                            }
+                        } else if (inst.op == GirOp::Ret) {
+                            nextEffects[function].values.insert(state.values.begin(), state.values.end());
+                            nextEffects[function].preservesInput |= state.preservesInput;
+                            break;
+                        } else if (inst.op == GirOp::Abort || inst.op == GirOp::Exit || inst.op == GirOp::Unreachable) {
+                            state.reachable = false;
+                        }
+                        if (!state.reachable) break;
+                    }
+                    if (!state.reachable) continue;
+                    auto *term = LastTerm(f.blocks[block]);
+                    if (!term) continue;
+                    if (term->op == GirOp::Br) merge(term->idx, state);
+                    if (term->op == GirOp::CondBr) {
+                        merge(term->idx, state);
+                        merge(term->idx2, state);
+                    }
+                }
+            }
+            changed = nextEffects != effects;
+            effects = std::move(nextEffects);
+        }
+        return effects;
+    }
+
+    struct LowResultWord {
+        int parameter;
+        GirTypeId type;
+        int64_t bytes;
+        bool operator==(const LowResultWord &) const = default;
+    };
+
+    vector<LowResultWord> LowResultWords(const GirLowResult &result) const {
+        auto primitive = [&](CoreType::Kind kind) {
+            for (size_t type = 0; type < m.types.size(); type++)
+                if (m.types[type].kind == kind && (kind != CoreType::Int || m.types[type].ity == CoreIntTy::I64)) return (int)type;
+            return -1;
+        };
+        auto pointer = primitive(CoreType::Ptr), integer = primitive(CoreType::Int);
+        if (auto scalar = get_if<GirLowScalarResult>(&result.layout))
+            return { { scalar->output, scalar->type, scalar->type >= 0 && scalar->type < (int)m.types.size() ? FlatSize(scalar->type) : 0 } };
+        if (auto snapshot = get_if<GirLowSnapshotResult>(&result.layout)) return { { snapshot->output, pointer, snapshot->bytes } };
+        if (auto reference = get_if<GirLowReferenceResult>(&result.layout)) return { { reference->output, pointer, m.pointerBytes } };
+        if (auto reference = get_if<GirLowResizableReferenceResult>(&result.layout))
+            return { { reference->header, pointer, m.pointerBytes }, { reference->stack, pointer, m.pointerBytes } };
+        if (auto slice = get_if<GirLowSliceResult>(&result.layout))
+            return { { slice->data, pointer, m.pointerBytes }, { slice->count, integer, 8 } };
+        auto &nonfixed = get<GirLowNonfixedResult>(result.layout);
+        return { { nonfixed.stack, pointer, 0 }, { nonfixed.start, pointer, 0 }, { nonfixed.count, integer, 8 } };
+    }
+
+    void CheckLowResultTables() {
+        auto bad = [&](const string &message) { Fail("GIR-V090", message); };
+        map<int, pair<size_t, int64_t>> sourceLayouts;
+        for (auto &function : m.funcs) {
+            if (!function.lowResults) bad("construction function omits its result channel descriptors");
+            set<int> parameters;
+            int previousParameter = -1;
+            for (auto &result : *function.lowResults) {
+                if (result.sourceType < 0) bad("low result source identity is negative");
+                int64_t detail = 0;
+                if (auto scalar = get_if<GirLowScalarResult>(&result.layout)) detail = scalar->type;
+                if (auto snapshot = get_if<GirLowSnapshotResult>(&result.layout)) detail = snapshot->bytes;
+                auto shape = make_pair(result.layout.index(), detail);
+                auto previous = sourceLayouts.emplace(result.sourceType, shape);
+                if (!previous.second && previous.first->second != shape) bad("one low result source identity has contradictory physical layouts");
+                if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout))
+                    if (nonfixed->request != CoreRequest::Value && nonfixed->request != CoreRequest::ElementRun)
+                        bad("nonfixed low result has no construction request");
+                for (auto &word : LowResultWords(result)) {
+                    if (word.parameter <= 0 || word.parameter >= (int)function.params.size() ||
+                        m.Type(function.params[word.parameter]).kind != CoreType::Ptr || !parameters.insert(word.parameter).second)
+                        bad("low result descriptors do not name distinct primitive output parameters");
+                    if (previousParameter >= 0 && word.parameter != previousParameter + 1)
+                        bad("low result outputs do not follow result and word order");
+                    previousParameter = word.parameter;
+                    if (word.type < 0 || word.type >= (int)m.types.size() || word.bytes < 0)
+                        bad("low result descriptor has an invalid primitive layout");
+                }
+                if (auto scalar = get_if<GirLowScalarResult>(&result.layout))
+                    if (m.Type(scalar->type).kind != CoreType::Int && m.Type(scalar->type).kind != CoreType::Bool)
+                        bad("scalar low result does not name an integer or boolean");
+                if (auto snapshot = get_if<GirLowSnapshotResult>(&result.layout))
+                    if (snapshot->bytes <= 0) bad("snapshot low result has no byte extent");
+            }
+            if (!parameters.empty()) {
+                auto first = *parameters.begin();
+                if ((int)parameters.size() != (int)function.params.size() - first)
+                    bad("low result outputs are not a dense signature suffix");
+            }
+        }
+        for (auto &target : m.lowtargets) for (auto member : target.members) {
+            auto &function = m.funcs[member];
+            if (function.lowResults->size() != target.channels.size()) bad("low target channel count disagrees with its member result ABI");
+            for (size_t result = 0; result < target.channels.size(); result++) {
+                auto &canonical = (*m.funcs[target.members[0]].lowResults)[result];
+                auto &actual = (*function.lowResults)[result];
+                if (canonical.layout.index() != actual.layout.index() || canonical.sourceType != actual.sourceType) bad("low target member result descriptor kinds disagree");
+                if (auto scalar = get_if<GirLowScalarResult>(&canonical.layout))
+                    if (scalar->type != get<GirLowScalarResult>(actual.layout).type) bad("low target scalar result types disagree");
+                if (auto snapshot = get_if<GirLowSnapshotResult>(&canonical.layout))
+                    if (snapshot->bytes != get<GirLowSnapshotResult>(actual.layout).bytes) bad("low target snapshot extents disagree");
+                if (auto nonfixed = get_if<GirLowNonfixedResult>(&canonical.layout))
+                    if (nonfixed->request != get<GirLowNonfixedResult>(actual.layout).request) bad("low target construction requests disagree");
+                auto &channel = target.channels[result];
+                auto words = LowResultWords((*function.lowResults)[result]);
+                if (words.size() != channel.incoming.size()) bad("low target incoming words disagree with its member result ABI");
+                bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
+                if (nonfixed != (channel.incoming.size() == 3)) bad("low target result kind disagrees with its member result ABI");
+                for (size_t word = 0; word < words.size(); word++) {
+                    auto expected = nonfixed && word < 2 ? m.Type(target.cells[channel.escaped[word]]).kind == CoreType::Ptr :
+                        target.cells[channel.escaped[word]] == words[word].type;
+                    if (!expected) bad("low target escaped word disagrees with its member result ABI");
+                    bool installed = false;
+                    auto parameter = function.blocks[0].params[words[word].parameter].first;
+                    for (auto &inst : function.blocks[0].insts)
+                        installed |= inst.op == GirOp::TargetStore && inst.idx == (int)(&target - m.lowtargets.data()) &&
+                            inst.idx2 == channel.incoming[word] && inst.a == parameter;
+                    if (!installed) bad("low target incoming cell does not install its declared result parameter");
+                }
+            }
+        }
+    }
+
+    void CheckLowTargetProtocols() {
+        auto bad = [&](const string &message) { Fail("GIR-V090", message); };
+        vector<set<int>> needs(m.funcs.size()), escapes(m.funcs.size());
+        vector<set<int64_t>> returnFlags(m.funcs.size());
+        auto member = [&](size_t function, int target) {
+            auto &members = m.lowtargets[target].members;
+            return find(members.begin(), members.end(), (int)function) != members.end();
+        };
+        auto integer = [&](const GirFunc &function, int value) -> int64_t {
+            for (auto &block : function.blocks) for (auto &inst : block.insts) if (inst.res == value && inst.op == GirOp::Int) {
+                int64_t result = -1;
+                auto parsed = from_chars(inst.text.data(), inst.text.data() + inst.text.size(), result);
+                if (parsed.ec == errc() && parsed.ptr == inst.text.data() + inst.text.size()) return result;
+            }
+            return -1;
+        };
+        for (size_t function = 0; function < m.funcs.size(); function++)
+            for (auto &block : m.funcs[function].blocks) for (auto &inst : block.insts) {
+                if (inst.op == GirOp::TargetLoad || inst.op == GirOp::TargetStore || inst.op == GirOp::SourceTargetResult) {
+                    if (inst.idx < 0 || inst.idx >= (int)m.lowtargets.size()) bad("low target use is outside the table");
+                    if (!member(function, inst.idx)) needs[function].insert(inst.idx);
+                }
+                if (inst.op == GirOp::ReturnFlagSet) {
+                    auto flag = integer(m.funcs[function], inst.a);
+                    if (flag < 0 || flag > (int64_t)m.lowtargets.size()) bad("return flag does not name a checked target");
+                }
+            }
+        lowReturnFlagEffects = ComputeLowReturnFlagEffects(integer);
+        for (size_t function = 0; function < m.funcs.size(); function++) {
+            returnFlags[function] = lowReturnFlagEffects[function].values;
+            for (auto flag : returnFlags[function]) if (flag) escapes[function].insert((int)flag - 1);
+            if (lowReturnFlagEffects[function].preservesInput)
+                for (size_t target = 0; target < m.lowtargets.size(); target++) escapes[function].insert((int)target);
+        }
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (size_t function = 0; function < m.funcs.size(); function++)
+                for (auto &block : m.funcs[function].blocks) for (auto &inst : block.insts) if (inst.op == GirOp::Call)
+                    for (auto target : needs[inst.idx]) if (!member(function, target)) changed |= needs[function].insert(target).second;
+        }
+        if (!needs[m.entry].empty()) bad("low entry requires an unavailable target activation");
+        for (auto initializer : m.initfuncs) if (!needs[initializer].empty()) bad("low global initializer requires an unavailable target activation");
+        for (size_t functionIndex = 0; functionIndex < m.funcs.size(); functionIndex++) {
+            auto &function = m.funcs[functionIndex];
+            vector<vector<int>> predecessors(function.blocks.size());
+            for (size_t block = 0; block < function.blocks.size(); block++) {
+                auto *term = LastTerm(function.blocks[block]);
+                if (!term) continue;
+                for (auto successor : Successors(*term))
+                    if (successor >= 0 && successor < (int)predecessors.size()) predecessors[successor].push_back((int)block);
+            }
+            auto comparedTag = [&](int value, int flag) -> optional<int64_t> {
+                for (auto &block : function.blocks) for (auto &inst : block.insts)
+                    if (inst.res == value && inst.op == GirOp::Cmp && inst.cmp == CoreCmpOp::Eq) {
+                        if (inst.a == flag) return integer(function, inst.b);
+                        if (inst.b == flag) return integer(function, inst.a);
+                    }
+                return nullopt;
+            };
+            auto singleBranchSentinel = [&](int start, int source) {
+                set<int> seen;
+                auto block = start;
+                auto predecessor = source;
+                while (block >= 0 && block < (int)function.blocks.size() && seen.insert(block).second &&
+                    predecessors[block].size() == 1 && predecessors[block][0] == predecessor) {
+                    auto &candidate = function.blocks[block];
+                    auto *term = LastTerm(candidate);
+                    if (term && term->op == GirOp::Unreachable && candidate.insts.size() == 1) return block;
+                    if (!term || term->op != GirOp::Br) return -1;
+                    predecessor = block;
+                    block = term->idx;
+                }
+                return -1;
+            };
+            for (size_t block = 0; block < function.blocks.size(); block++) {
+                auto &instructions = function.blocks[block].insts;
+                for (size_t position = 0; position < instructions.size(); position++) {
+                    auto &call = instructions[position];
+                    if (call.op != GirOp::Call || escapes[call.idx].empty()) continue;
+                    if (position + 1 >= instructions.size() || instructions[position + 1].op != GirOp::ReturnFlagGet)
+                        bad("escaping low call does not read its return discriminant");
+                    auto flag = instructions[position + 1].res;
+                    auto *first = LastTerm(function.blocks[block]);
+                    if (!first || first->op != GirOp::CondBr) bad("escaping low call has no zero discriminant branch");
+                    auto zero = comparedTag(first->a, flag);
+                    if (!zero || *zero != 0 || first->idx == first->idx2)
+                        bad("escaping low call does not dispatch normal return exactly once");
+                    auto normal = first->idx;
+                    auto next = first->idx2;
+                    auto sentinelPredecessor = (int)block;
+                    set<int64_t> pending;
+                    for (auto target : escapes[call.idx]) pending.insert((int64_t)target + 1);
+                    set<int> handledBlocks;
+                    while (!pending.empty()) {
+                        if (next < 0 || next >= (int)function.blocks.size()) bad("escaping low call dispatch leaves the block table");
+                        auto *term = LastTerm(function.blocks[next]);
+                        if (!term || term->op != GirOp::CondBr) bad("escaping low call omits a handled target case");
+                        auto tag = comparedTag(term->a, flag);
+                        if (!tag || !pending.erase(*tag) || term->idx == term->idx2 || !handledBlocks.insert(term->idx).second)
+                            bad("escaping low call has a duplicate or invalid handled target case");
+                        auto target = (int)*tag - 1;
+                        bool active = member(functionIndex, target) || needs[functionIndex].count(target);
+                        if (!active) bad("escaping low call handles a target without an active receiving protocol");
+                        auto &handler = function.blocks[term->idx];
+                        bool readsTarget = false;
+                        for (auto &inst : handler.insts)
+                            readsTarget |= (inst.op == GirOp::TargetLoad || inst.op == GirOp::TargetStore ||
+                                            inst.op == GirOp::SourceTargetGet || inst.op == GirOp::SourceTargetResult) && inst.idx == target;
+                        if (!readsTarget) bad("escaping low call has a target case without a receiving handler");
+                        for (auto &channel : m.lowtargets[target].channels) {
+                            vector<int> required = channel.escaped;
+                            if (channel.incoming.size() == 3) required = { channel.escaped[0], channel.escaped[2] };
+                            for (auto cell : required) {
+                                const GirInst *load = nullptr;
+                                for (auto &inst : handler.insts)
+                                    if (inst.op == GirOp::TargetLoad && inst.idx == target && inst.idx2 == cell) load = &inst;
+                                if (!load) bad("target case omits an escaped result cell");
+                            }
+                            if (member(functionIndex, target)) {
+                                bool reference = false;
+                                for (auto targetMember : m.lowtargets[target].members)
+                                    for (auto &entryBlock : m.funcs[targetMember].blocks)
+                                        for (auto &inst : entryBlock.insts)
+                                            if (inst.op == GirOp::SourceTargetEnter && inst.idx == target &&
+                                                channel.position < (int)inst.vals.size() && inst.vals[channel.position] >= 0)
+                                                reference = true;
+                                if (reference) {
+                                    bool source = false;
+                                    for (auto &inst : handler.insts)
+                                        source |= inst.op == GirOp::SourceTargetGet && inst.idx == channel.position;
+                                    if (!source) bad("target case omits its reference result source");
+                                }
+                            }
+                        }
+                        sentinelPredecessor = next;
+                        next = term->idx2;
+                    }
+                    if (next < 0 || next >= (int)function.blocks.size()) bad("escaping low call has no invalid-discriminant sentinel");
+                    auto &sentinel = function.blocks[next];
+                    auto *last = LastTerm(sentinel);
+                    if (!last || last->op != GirOp::Unreachable || sentinel.insts.size() != 1 ||
+                        predecessors[next].size() != 1 || predecessors[next][0] != sentinelPredecessor)
+                        bad("escaping low call has no closed invalid-discriminant sentinel");
+                    checkedTargetUnreachable.emplace((int)functionIndex, next);
+                    if (!returnFlags[call.idx].count(0) && !lowReturnFlagEffects[call.idx].preservesInput) {
+                        auto normalSentinel = singleBranchSentinel(normal, (int)block);
+                        if (normalSentinel >= 0) checkedTargetUnreachable.emplace((int)functionIndex, normalSentinel);
+                    }
+                }
+            }
+            map<pair<int, int>, int> saved;
+            for (size_t target = 0; target < m.lowtargets.size(); target++) if (member(functionIndex, (int)target)) {
+                set<int> installed;
+                for (auto &inst : function.blocks[0].insts) {
+                    if (inst.op == GirOp::TargetLoad && inst.idx == (int)target && !installed.count(inst.idx2))
+                        if (!saved.emplace(make_pair((int)target, inst.idx2), inst.res).second) bad("low target activation saves a cell twice");
+                    if (inst.op == GirOp::TargetStore && inst.idx == (int)target) installed.insert(inst.idx2);
+                    if (inst.op == GirOp::SourceTargetEnter && inst.idx == (int)target) break;
+                }
+                for (size_t cell = 0; cell < m.lowtargets[target].cells.size(); cell++)
+                    if (!saved.count({ (int)target, (int)cell })) bad("low target activation does not save every recursive cell");
+            }
+            struct State {
+                set<pair<int, int>> restored, payload;
+                int flag = -1;
+                bool operator==(const State &) const = default;
+            };
+            vector<optional<State>> incoming(function.blocks.size());
+            incoming[0] = State {};
+            vector<int> work { 0 };
+            auto merge = [&](int block, State state) {
+                if (!incoming[block]) { incoming[block] = std::move(state); work.push_back(block); return; }
+                auto next = *incoming[block];
+                if (next.flag != state.flag) next.flag = -1;
+                for (auto *items : { &next.restored, &next.payload }) {
+                    auto &other = items == &next.restored ? state.restored : state.payload;
+                    for (auto iterator = items->begin(); iterator != items->end();) {
+                        if (!other.count(*iterator)) iterator = items->erase(iterator); else ++iterator;
+                    }
+                }
+                if (!(next == *incoming[block])) { incoming[block] = std::move(next); work.push_back(block); }
+            };
+            while (!work.empty()) {
+                auto block = work.back(); work.pop_back();
+                auto state = *incoming[block];
+                for (size_t position = 0; position < function.blocks[block].insts.size(); position++) {
+                    auto &inst = function.blocks[block].insts[position];
+                    if (inst.op == GirOp::Call && !escapes[inst.idx].empty()) {
+                        auto &instructions = function.blocks[block].insts;
+                        if (position + 1 >= instructions.size() || instructions[position + 1].op != GirOp::ReturnFlagGet)
+                            bad("escaping low call reads outputs before its return discriminant");
+                    }
+                    if (inst.op == GirOp::TargetStore) {
+                        auto key = make_pair(inst.idx, inst.idx2);
+                        auto previous = saved.find(key);
+                        if (previous != saved.end() && previous->second == inst.a) state.restored.insert(key);
+                        else {
+                            bool incomingCell = inst.idx2 == 0;
+                            for (auto &channel : m.lowtargets[inst.idx].channels)
+                                incomingCell |= find(channel.incoming.begin(), channel.incoming.end(), inst.idx2) != channel.incoming.end();
+                            if (incomingCell && block != 0) bad("low target incoming activation cell is overwritten outside its entry or restoration");
+                            state.restored.erase(key);
+                            if (!incomingCell) state.payload.insert(key);
+                        }
+                    }
+                    if (inst.op == GirOp::Call) {
+                        auto &effect = lowReturnFlagEffects[inst.idx];
+                        if (effect.preservesInput && effect.values.empty()) continue;
+                        if (!effect.preservesInput && effect.values.size() == 1) state.flag = (int)*effect.values.begin();
+                        else state.flag = -1;
+                    }
+                    if (inst.op == GirOp::ReturnFlagSet) state.flag = (int)integer(function, inst.a);
+                    if (inst.op == GirOp::Ret && !m.lowtargets.empty()) {
+                        if (state.flag < 0) bad("low return omits its normal or target discriminant");
+                        for (auto &[key, value] : saved) { (void)value; if (!state.restored.count(key)) bad("low return fails to restore a recursive target cell"); }
+                        if (state.flag) {
+                            auto target = state.flag - 1;
+                            for (auto &channel : m.lowtargets[target].channels) for (auto cell : channel.escaped)
+                                if (!state.payload.count({ target, cell })) bad("low target return omits an escaped payload cell");
+                        }
+                    }
+                }
+                auto *term = LastTerm(function.blocks[block]);
+                if (term && term->op == GirOp::Br) merge(term->idx, state);
+                if (term && term->op == GirOp::CondBr) { merge(term->idx, state); merge(term->idx2, state); }
             }
         }
     }
@@ -450,11 +961,11 @@ private:
         auto scan = [&](const GirFunc &fn) {
             for (auto &block : fn.blocks)
                 for (auto &i : block.insts) {
-                    auto constructionOp = (i.op >= GirOp::Bytes && i.op <= GirOp::Render) ||
-                                          (i.op >= GirOp::StaticBytes && i.op <= GirOp::SourceGlobal) ||
+                    auto constructionOp = (i.op >= GirOp::Bytes && i.op <= GirOp::DestAdaptFinish) ||
+                                          (i.op >= GirOp::StaticBytes && i.op <= GirOp::SourceTargetGet) ||
                                           i.op == GirOp::AppendValue ||
                                           (i.op >= GirOp::DestWrite && i.op <= GirOp::DestCancel) ||
-                                          (i.op >= GirOp::ReturnFlagSet && i.op <= GirOp::SourceGlobalSet) ||
+                                          (i.op >= GirOp::ReturnFlagSet && i.op <= GirOp::SourceTargetResult) ||
                                           i.op == GirOp::Invoke || i.op == GirOp::Escape;
                     if (constructionOp && !CoreHasConstruction(m.profile))
                         Fail("GIR-V010", cat("function ", fn.name,
@@ -713,6 +1224,21 @@ private:
                     switch (i.op) {
                         case GirOp::StackAt: set(facts.stack, i.res, { 1, i.idx }); break;
                         case GirOp::GlobalStack: set(facts.stack, i.res, { 2, i.idx }); break;
+                        case GirOp::TargetLoad: {
+                            if (i.idx < 0 || i.idx >= (int)m.lowtargets.size()) break;
+                            for (size_t channel = 0; channel < m.lowtargets[i.idx].channels.size(); channel++) {
+                                auto &cells = m.lowtargets[i.idx].channels[channel];
+                                if (cells.incoming.size() != 3) continue;
+                                StackId token { 7, i.idx * 65536 + (int)channel };
+                                for (auto &entryInst : f.blocks[0].insts)
+                                    if (entryInst.op == GirOp::TargetStore && entryInst.idx == i.idx && entryInst.idx2 == cells.incoming[0])
+                                        for (auto &parameter : f.blocks[0].params) if (parameter.first == entryInst.a && at(facts.stack, entryInst.a).kind > 0)
+                                            token = at(facts.stack, entryInst.a);
+                                if (i.idx2 == cells.incoming[0]) set(facts.stack, i.res, token);
+                                if (i.idx2 == cells.incoming[1] || i.idx2 == cells.escaped[0] || i.idx2 == cells.escaped[1]) set(facts.markof, i.res, token);
+                            }
+                            break;
+                        }
                         case GirOp::StackMark:
                             set(facts.markof, i.res, at(facts.stack, i.a));
                             break;
@@ -753,6 +1279,22 @@ private:
                         }
                         default: break;
                     }
+                }
+
+            if (CoreHasConstruction(m.profile))
+                for (auto &block : f.blocks) for (auto &inst : block.insts) {
+                    if (inst.op != GirOp::HdrInit) continue;
+                    auto location = PointerLocationOf(fn, inst.a);
+                    if (!location || location->kind != 1 || location->offset != 0 ||
+                        f.members[location->index].kind != GirMember::Bytes || f.members[location->index].size != 16) continue;
+                    auto owner = at(facts.markof, inst.b);
+                    bool unique = owner.kind > 0;
+                    for (auto &otherBlock : f.blocks) for (auto &other : otherBlock.insts)
+                        if (other.op == GirOp::HdrInit && &other != &inst) {
+                            auto address = PointerLocationOf(fn, other.a);
+                            if (address && *address == *location) unique = false;
+                        }
+                    if (unique) set(facts.header, inst.a, owner);
                 }
 
             for (size_t b = 1; b < f.blocks.size(); b++) {
@@ -1015,7 +1557,12 @@ private:
                 switch (i.op) {
                     case GirOp::HdrInit: {
                         auto h = at(header, i.a), mk = at(markof, i.b);
-                        if (h.kind <= 0 || h.kind == 3 || h.kind == 4 || mk.kind <= 0 || !(h == mk))
+                        auto location = PointerLocationOf(fn, i.a);
+                        bool localAliasHeader = CoreHasConstruction(m.profile) && location && location->kind == 1 &&
+                            location->offset == 0 && f.members[location->index].kind == GirMember::Bytes &&
+                            f.members[location->index].size == 16;
+                        if (h.kind <= 0 || ((h.kind == 3 || h.kind == 4) && !localAliasHeader) ||
+                            mk.kind <= 0 || !(h == mk))
                             bad("a header initialized from something other than the top of its own stack");
                         break;
                     }
@@ -1098,7 +1645,7 @@ private:
             auto k = m.Type(t).kind;
             return k == CoreType::Int || k == CoreType::Bool || k == CoreType::Ptr;
         };
-        if (CoreHasConstruction(m.profile)) { CheckConstructionByteIntervals(fn); CheckLowSources(fn); }
+        if (CoreHasConstruction(m.profile)) { CheckConstructionByteIntervals(fn); CheckLowSources(fn); CheckLowResultFlow(fn); }
         for (auto t : f.params) if (!scalar(t)) bad("a parameter whose layout is not resolved");
         for (auto t : f.results) if (!scalar(t)) bad("a result whose layout is not resolved");
         if (CoreHasConstruction(m.profile) && !f.results.empty())
@@ -1150,18 +1697,670 @@ private:
             }
     }
 
+    void CheckLowResultFlow(const Fn &fn) {
+        auto &function = *fn.f;
+        auto functionIndex = (int)(&function - m.funcs.data());
+        auto bad = [&](const string &message) { Fail("GIR-V090", cat(fn.label, ": ", message)); };
+        struct Address {
+            enum class Kind { Unknown, Value, Frame, Global, LocalStack, GlobalStack, StackBytes, SavedTarget, EscapedTarget } kind = Kind::Unknown;
+            int root = 0;
+            int64_t offset = 0;
+            int target = -1, cell = -1;
+            Address() = default;
+            Address(int identity, int64_t bytes) : kind(identity >= 0 ? Kind::Value : Kind::Frame),
+                root(identity >= 0 ? identity : (int)(-(int64_t)identity - 1)), offset(bytes) {}
+            static Address Target(int target, int cell, bool escaped) {
+                Address result;
+                result.kind = escaped ? Kind::EscapedTarget : Kind::SavedTarget;
+                result.target = target;
+                result.cell = cell;
+                return result;
+            }
+            bool SameBase(const Address &other) const {
+                return kind == other.kind && root == other.root && target == other.target && cell == other.cell;
+            }
+            bool operator==(const Address &) const = default;
+            auto operator<=>(const Address &) const = default;
+        };
+        struct Value {
+            Address address;
+            int target = -1, cell = -1, sourceResult = -1;
+            bool operator==(const Value &) const = default;
+        };
+        struct Blocked {
+            Address address;
+            int64_t bytes;
+            int call;
+            bool operator==(const Blocked &) const = default;
+            auto operator<=>(const Blocked &) const = default;
+        };
+        struct State {
+            map<int, Value> values, members;
+            map<Address, pair<Value, int64_t>> memory, bytePayloads;
+            map<Address, Value> stackEnds;
+            set<tuple<int, int, int>> extents;
+            set<Blocked> blocked;
+            set<pair<Address, int64_t>> initialized;
+            set<pair<int, int>> receiving, sourceReceiving;
+            map<pair<int, int>, Value> payload;
+            map<pair<int, int>, int> moves;
+            int flag = 0, pending = -1, inFlight = -1;
+            bool operator==(const State &) const = default;
+        };
+        vector<const GirInst *> definitions(fn.nvalues, nullptr);
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (GirDefinesValue(inst)) definitions[inst.res] = &inst;
+        auto constant = [&](int value) -> optional<int64_t> {
+            if (value < 0 || value >= fn.nvalues) return nullopt;
+            auto inst = definitions[value];
+            if (!inst || inst->op != GirOp::Int) return nullopt;
+            int64_t number;
+            auto parsed = from_chars(inst->text.data(), inst->text.data() + inst->text.size(), number);
+            if (parsed.ec != errc() || parsed.ptr != inst->text.data() + inst->text.size()) return nullopt;
+            return number;
+        };
+        auto member = [&](int target) {
+            auto &members = m.lowtargets[target].members;
+            return find(members.begin(), members.end(), functionIndex) != members.end();
+        };
+        auto value = [&](const State &state, int id) {
+            auto found = state.values.find(id);
+            auto result = found == state.values.end() ? Value {} : found->second;
+            auto content = state.bytePayloads.find(result.address);
+            if (content != state.bytePayloads.end()) {
+                result.target = content->second.first.target;
+                result.cell = content->second.first.cell;
+            } else if (result.target >= 0 && result.cell >= 0) {
+                auto &target = m.lowtargets[result.target];
+                for (size_t position = 0; position < target.channels.size(); position++)
+                    if (target.channels[position].escaped[0] == result.cell &&
+                        holds_alternative<GirLowSnapshotResult>((*m.funcs[target.members[0]].lowResults)[position].layout))
+                        result.target = result.cell = -1;
+            }
+            return result;
+        };
+        auto overlaps = [&](Address a, int64_t bytes, const Blocked &blocked) {
+            if (a.kind != Address::Kind::Unknown && blocked.address.kind != Address::Kind::Unknown && !a.SameBase(blocked.address)) return false;
+            if (a.kind == Address::Kind::Unknown || blocked.address.kind == Address::Kind::Unknown || a.offset == INT64_MAX ||
+                blocked.address.offset == INT64_MAX || bytes == INT64_MAX || blocked.bytes == INT64_MAX) return true;
+            if (a.offset <= blocked.address.offset)
+                return (uint64_t)blocked.address.offset - (uint64_t)a.offset < (uint64_t)bytes;
+            return (uint64_t)a.offset - (uint64_t)blocked.address.offset < (uint64_t)blocked.bytes;
+        };
+        auto read = [&](const State &state, Address address, int64_t bytes) {
+            if (bytes == 0) return;
+            for (auto &blocked : state.blocked) if (blocked.call != -2 && overlaps(address, bytes, blocked))
+                bad("normal output is read before its call completed or its target payload landed");
+        };
+        auto initialize = [&](State &state, Address address, int64_t bytes) {
+            for (auto iterator = state.blocked.begin(); iterator != state.blocked.end();) {
+                auto &blocked = *iterator;
+                bool covered = address.kind != Address::Kind::Unknown && address.SameBase(blocked.address) &&
+                    address.offset != INT64_MAX && blocked.address.offset != INT64_MAX && address.offset <= blocked.address.offset &&
+                    (bytes == INT64_MAX || (blocked.bytes != INT64_MAX && bytes >= blocked.bytes &&
+                        (uint64_t)blocked.address.offset - (uint64_t)address.offset <= (uint64_t)(bytes - blocked.bytes)));
+                if (covered) iterator = state.blocked.erase(iterator); else ++iterator;
+            }
+        };
+        auto output = [&](const State &state, int target, size_t result, size_t word) {
+            auto words = LowResultWords((*function.lowResults)[result]);
+            auto parameter = function.blocks[0].params[words[word].parameter].first;
+            (void)target;
+            return value(state, parameter).address;
+        };
+        State entry;
+        for (auto &parameter : function.blocks[0].params)
+            if (m.Type(parameter.second).kind == CoreType::Ptr) entry.values[parameter.first].address = { parameter.first, 0 };
+        for (auto &result : *function.lowResults) for (auto &word : LowResultWords(result)) if (word.bytes)
+            entry.blocked.insert({ value(entry, function.blocks[0].params[word.parameter].first).address, word.bytes,
+                holds_alternative<GirLowNonfixedResult>(result.layout) ? -2 : -1 });
+        for (auto &result : *function.lowResults) if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
+            auto address = value(entry, function.blocks[0].params[nonfixed->count].first).address;
+            entry.initialized.insert({ address, 8 });
+            address.offset += 8;
+            entry.initialized.insert({ address, 8 });
+        }
+        vector<map<int, State>> incoming(function.blocks.size());
+        incoming[0].emplace(-1, entry);
+        vector<pair<int, int>> work { { 0, -1 } };
+        auto merge = [&](int block, State state) {
+            auto partition = state.inFlight;
+            auto found = incoming[block].find(partition);
+            if (found == incoming[block].end()) {
+                incoming[block].emplace(partition, std::move(state));
+                work.push_back({ block, partition });
+                return;
+            }
+            auto next = found->second;
+            for (auto *facts : { &next.values, &next.members }) {
+                auto &other = facts == &next.values ? state.values : state.members;
+                for (auto iterator = facts->begin(); iterator != facts->end();) {
+                    auto found = other.find(iterator->first);
+                    if (found == other.end() || found->second != iterator->second) iterator = facts->erase(iterator); else ++iterator;
+                }
+            }
+            for (auto iterator = next.memory.begin(); iterator != next.memory.end();) {
+                auto found = state.memory.find(iterator->first);
+                if (found == state.memory.end() || found->second != iterator->second) iterator = next.memory.erase(iterator); else ++iterator;
+            }
+            for (auto iterator = next.bytePayloads.begin(); iterator != next.bytePayloads.end();) {
+                auto found = state.bytePayloads.find(iterator->first);
+                if (found == state.bytePayloads.end() || found->second != iterator->second) iterator = next.bytePayloads.erase(iterator); else ++iterator;
+            }
+            for (auto iterator = next.stackEnds.begin(); iterator != next.stackEnds.end();) {
+                auto found = state.stackEnds.find(iterator->first);
+                if (found == state.stackEnds.end() || found->second != iterator->second) iterator = next.stackEnds.erase(iterator); else ++iterator;
+            }
+            for (auto iterator = next.moves.begin(); iterator != next.moves.end();) {
+                auto found = state.moves.find(iterator->first);
+                if (found == state.moves.end() || found->second != iterator->second) iterator = next.moves.erase(iterator); else ++iterator;
+            }
+            for (auto iterator = next.payload.begin(); iterator != next.payload.end();) {
+                auto found = state.payload.find(iterator->first);
+                if (found == state.payload.end() || found->second != iterator->second) iterator = next.payload.erase(iterator); else ++iterator;
+            }
+            set<tuple<int, int, int>> extents;
+            set_intersection(next.extents.begin(), next.extents.end(), state.extents.begin(), state.extents.end(), inserter(extents, extents.end()));
+            next.extents = std::move(extents);
+            set<pair<Address, int64_t>> initialized;
+            set_intersection(next.initialized.begin(), next.initialized.end(), state.initialized.begin(), state.initialized.end(), inserter(initialized, initialized.end()));
+            next.initialized = std::move(initialized);
+            next.blocked.insert(state.blocked.begin(), state.blocked.end());
+            next.receiving.insert(state.receiving.begin(), state.receiving.end());
+            next.sourceReceiving.insert(state.sourceReceiving.begin(), state.sourceReceiving.end());
+            if (next.flag != state.flag) next.flag = -1;
+            if (next.pending != state.pending) bad("control flow merges different calls awaiting their return discriminants");
+            if (!(next == found->second)) { found->second = std::move(next); work.push_back({ block, partition }); }
+        };
+        auto receive = [&](State &state, Address destination, const Value &stored, bool bytes, int64_t extent, int byteValue) {
+            if (stored.target < 0 || !member(stored.target)) return;
+            auto &target = m.lowtargets[stored.target];
+            for (size_t result = 0; result < target.channels.size(); result++) {
+                auto &channel = target.channels[result];
+                bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
+                for (size_t word = 0; word < channel.escaped.size(); word++) if (channel.escaped[word] == stored.cell) {
+                    if (nonfixed && word == 1) continue;
+                    size_t outputWord = nonfixed && word == 0 ? 1 : word;
+                    if (bytes != (nonfixed ? word == 0 : holds_alternative<GirLowSnapshotResult>((*function.lowResults)[result].layout))) continue;
+                    if (destination != output(state, stored.target, result, outputWord)) continue;
+                    if (bytes) {
+                        if (nonfixed && !state.extents.count({ stored.target, stored.cell, byteValue })) continue;
+                        if (auto snapshot = get_if<GirLowSnapshotResult>(&(*function.lowResults)[result].layout))
+                            if (extent != snapshot->bytes) continue;
+                    } else {
+                        auto words = LowResultWords((*function.lowResults)[result]);
+                        if (extent != words[outputWord].bytes) continue;
+                    }
+                    state.receiving.erase({ stored.target, stored.cell });
+                    if (nonfixed && bytes) state.moves[{ stored.target, (int)result }] = byteValue;
+                }
+            }
+        };
+        auto invalidateBytes = [&](State &state, Address address, int64_t bytes) {
+            for (auto iterator = state.memory.begin(); iterator != state.memory.end();)
+                if (overlaps(address, bytes, { iterator->first, iterator->second.second, 0 })) iterator = state.memory.erase(iterator); else ++iterator;
+            for (auto iterator = state.bytePayloads.begin(); iterator != state.bytePayloads.end();)
+                if (overlaps(address, bytes, { iterator->first, iterator->second.second, 0 })) iterator = state.bytePayloads.erase(iterator); else ++iterator;
+            if (address.kind == Address::Kind::Frame) state.members.erase(address.root);
+        };
+        auto invalidateLanding = [&](State &state, Address address, int64_t bytes) {
+            if (state.inFlight < 0 || !member(state.inFlight)) return;
+            auto target = state.inFlight;
+            for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
+                auto &channel = m.lowtargets[target].channels[result];
+                auto words = LowResultWords((*function.lowResults)[result]);
+                bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
+                for (size_t word = 0; word < channel.escaped.size(); word++) {
+                    if (nonfixed && word == 1) continue;
+                    auto position = nonfixed && word == 0 ? 1 : word;
+                    auto extent = nonfixed && word == 0 ? INT64_MAX : words[position].bytes;
+                    if (overlaps(address, bytes, { output(state, target, result, position), extent, 0 }))
+                        state.receiving.insert({ target, channel.escaped[word] });
+                }
+            }
+        };
+        auto protect = [&](const State &state, Address address, int64_t bytes, const Value *landing = nullptr, int byteValue = -1) {
+            if (bytes == 0 || state.inFlight < 0) return;
+            auto target = state.inFlight;
+            auto &receiver = m.funcs[m.lowtargets[target].members[0]];
+            for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
+                auto &channel = m.lowtargets[target].channels[result];
+                auto &layout = (*receiver.lowResults)[result].layout;
+                bool nonfixed = holds_alternative<GirLowNonfixedResult>(layout);
+                auto snapshot = get_if<GirLowSnapshotResult>(&layout);
+                if (!nonfixed && !snapshot) continue;
+                auto cell = channel.escaped[0];
+                bool local = member(target);
+                if (local && !state.receiving.count({ target, cell })) continue;
+                auto destination = local ? output(state, target, result, nonfixed ? 1 : 0) : Address {};
+                auto incoming = state.payload.find({ target, channel.incoming[0] });
+                auto snapshotDestination = incoming == state.payload.end() ? Address::Target(target, channel.incoming[0], false) : incoming->second.address;
+                bool exactLanding = landing && landing->target == target && landing->cell == cell &&
+                    (local ? address == destination : snapshot && address == snapshotDestination) &&
+                    (nonfixed ? state.extents.count({ target, cell, byteValue }) != 0 : bytes == snapshot->bytes);
+                if (exactLanding) continue;
+                bool escapedAlias = address.kind == Address::Kind::Unknown ||
+                    (address.kind == Address::Kind::EscapedTarget && address.target == target &&
+                        (address.cell == cell || (nonfixed && address.cell == channel.escaped[1]))) ||
+                    (address.kind == Address::Kind::SavedTarget && address.target == target &&
+                        address.cell == channel.incoming[nonfixed ? 1 : 0]);
+                bool receivingAlias = local && overlaps(address, bytes, { destination, nonfixed ? INT64_MAX : snapshot->bytes, 0 });
+                if (escapedAlias || receivingAlias)
+                    bad("pending escaped payload bytes are overwritten before landing");
+            }
+        };
+        map<Address, int> stackRoots;
+        int callOrdinal = 0;
+        map<const GirInst *, int> callIds;
+        map<int, int> flagCalls;
+        for (auto &block : function.blocks) for (size_t position = 0; position < block.insts.size(); position++) {
+            auto &inst = block.insts[position];
+            if (inst.op != GirOp::Call) continue;
+            callIds[&inst] = callOrdinal++;
+            if (position + 1 < block.insts.size() && block.insts[position + 1].op == GirOp::ReturnFlagGet)
+                flagCalls[block.insts[position + 1].res] = callIds[&inst];
+        }
+        while (!work.empty()) {
+            auto [block, partition] = work.back(); work.pop_back();
+            auto state = incoming[block].at(partition);
+            for (auto &inst : function.blocks[block].insts) {
+                if (state.pending >= 0) {
+                    switch (inst.op) {
+                        case GirOp::ReturnFlagGet: case GirOp::Int: case GirOp::Bool: case GirOp::Unit:
+                        case GirOp::Bin: case GirOp::Un: case GirOp::Cmp: case GirOp::BoolCmp:
+                        case GirOp::Not: case GirOp::Conv: case GirOp::Next: case GirOp::PtrEq:
+                        case GirOp::PtrOffset: case GirOp::FrameAddr: case GirOp::GlobalAddr:
+                        case GirOp::Br: case GirOp::CondBr: case GirOp::Unreachable: break;
+                        default: bad("a call awaiting its return discriminant resumes effects before dispatch");
+                    }
+                }
+                if (GirDefinesValue(inst) && m.Type(fn.vt[inst.res]).kind == CoreType::Ptr)
+                    state.values[inst.res] = Value { { inst.res, 0 } };
+                if (inst.op == GirOp::StackAt || inst.op == GirOp::GlobalStack) {
+                    auto &address = state.values[inst.res].address;
+                    address.kind = inst.op == GirOp::StackAt ? Address::Kind::LocalStack : Address::Kind::GlobalStack;
+                    address.root = inst.idx;
+                    address.target = inst.op == GirOp::StackAt ? inst.a : -1;
+                }
+                if (inst.op == GirOp::StackMark) {
+                    auto stack = value(state, inst.a).address;
+                    auto &address = state.values[inst.res].address;
+                    if (stack.kind == Address::Kind::Unknown) address = Address {};
+                    else {
+                        auto root = stackRoots.emplace(stack, (int)stackRoots.size()).first->second;
+                        address.kind = Address::Kind::StackBytes;
+                        address.root = root;
+                        address.offset = INT64_MAX;
+                    }
+                    auto end = state.stackEnds.find(stack);
+                    if (stack.kind != Address::Kind::Unknown && end != state.stackEnds.end()) state.values[inst.res] = end->second;
+                }
+                if (inst.op == GirOp::StackBump || inst.op == GirOp::StackRelease) {
+                    auto stack = value(state, inst.a).address;
+                    if (state.inFlight >= 0) {
+                        auto target = state.inFlight;
+                        for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
+                            auto &channel = m.lowtargets[target].channels[result];
+                            if (channel.incoming.size() != 3) continue;
+                            auto incoming = state.payload.find({ target, channel.incoming[0] });
+                            auto active = incoming == state.payload.end() ? Address::Target(target, channel.incoming[0], false) : incoming->second.address;
+                            if (stack.kind != Address::Kind::Unknown && stack != active) continue;
+                            if (inst.op == GirOp::StackBump) bad("stack growth changes an in-flight escaped payload interval");
+                            auto landed = state.moves.find({ target, (int)result });
+                            bool preserves = false;
+                            if (member(target) && landed != state.moves.end()) {
+                                auto release = definitions[inst.b];
+                                preserves = release && release->op == GirOp::PtrOffset && release->idx == 1 && release->b == landed->second &&
+                                    value(state, release->a).address == output(state, target, result, 1);
+                            } else {
+                                auto mark = value(state, inst.b);
+                                preserves = mark.target == target && mark.cell == channel.escaped[1];
+                            }
+                            if (!preserves) bad("stack release crosses an in-flight escaped payload interval");
+                        }
+                    }
+                    if (inst.op == GirOp::StackBump) state.stackEnds.erase(stack);
+                    else if (stack.kind != Address::Kind::Unknown) state.stackEnds[stack] = value(state, inst.b);
+                }
+                if (inst.op == GirOp::HdrBase) state.values[inst.res].address = Address {};
+                if (inst.op == GirOp::GlobalAddr) {
+                    auto &address = state.values[inst.res].address;
+                    address.kind = Address::Kind::Global;
+                    address.root = inst.idx;
+                }
+                if (inst.op == GirOp::FrameAddr) state.values[inst.res].address = { -inst.idx - 1, 0 };
+                if (inst.op == GirOp::LocalSet) {
+                    state.members[inst.idx] = value(state, inst.a);
+                    auto bytes = function.members[inst.idx].kind != GirMember::Scalar || m.Type(function.members[inst.idx].ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(function.members[inst.idx].ty);
+                    Address address { -inst.idx - 1, 0 };
+                    protect(state, address, bytes);
+                    invalidateLanding(state, address, bytes);
+                    initialize(state, address, bytes);
+                    for (auto iterator = state.memory.begin(); iterator != state.memory.end();)
+                        if (overlaps(address, bytes, { iterator->first, iterator->second.second, 0 })) iterator = state.memory.erase(iterator); else ++iterator;
+                    invalidateBytes(state, address, bytes);
+                    state.members[inst.idx] = value(state, inst.a);
+                    state.memory[address] = { value(state, inst.a), bytes };
+                    state.initialized.insert({ address, bytes });
+                    receive(state, address, value(state, inst.a), false, bytes, -1);
+                }
+                if (inst.op == GirOp::LocalGet) {
+                    auto bytes = function.members[inst.idx].kind != GirMember::Scalar || m.Type(function.members[inst.idx].ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(function.members[inst.idx].ty);
+                    read(state, { -inst.idx - 1, 0 }, bytes);
+                    auto found = state.members.find(inst.idx);
+                    state.values[inst.res] = found == state.members.end() ? Value {} : found->second;
+                }
+                if (inst.op == GirOp::PtrOffset) {
+                    auto address = value(state, inst.a).address;
+                    auto index = constant(inst.b);
+                    if (!index || address.offset == INT64_MAX || inst.idx <= 0 ||
+                        *index > INT64_MAX / inst.idx || *index < INT64_MIN / inst.idx ||
+                        (*index >= 0 && address.offset > INT64_MAX - *index * inst.idx) ||
+                        (*index < 0 && address.offset < INT64_MIN - *index * inst.idx)) address.offset = INT64_MAX;
+                    else address.offset += *index * inst.idx;
+                    state.values[inst.res].address = address;
+                }
+                if (inst.op == GirOp::TargetLoad) {
+                    auto found = state.payload.find({ inst.idx, inst.idx2 });
+                    if (found != state.payload.end()) state.values[inst.res] = found->second;
+                    else state.values[inst.res] = Value { Address::Target(inst.idx, inst.idx2, false) };
+                }
+                if (inst.op == GirOp::TargetStore) {
+                    auto stored = value(state, inst.a);
+                    if (state.inFlight == inst.idx && !member(inst.idx))
+                        for (auto &channel : m.lowtargets[inst.idx].channels)
+                            if (find(channel.escaped.begin(), channel.escaped.end(), inst.idx2) != channel.escaped.end() &&
+                                (stored.target != inst.idx || stored.cell != inst.idx2))
+                                bad("forwarding frame changes an in-flight escaped payload cell");
+                    if (state.inFlight == inst.idx && member(inst.idx) && !state.receiving.empty())
+                        if (stored.target != inst.idx || stored.cell != inst.idx2)
+                            bad("target activation is restored or changed before its payload lands");
+                    state.payload[{ inst.idx, inst.idx2 }] = stored;
+                }
+                if (inst.op == GirOp::PLoad) {
+                    auto address = value(state, inst.a).address;
+                    auto bytes = m.Type(inst.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(inst.ty);
+                    read(state, address, bytes);
+                    auto found = state.memory.find(address);
+                    state.values[inst.res] = address.kind == Address::Kind::Unknown || address.offset == INT64_MAX ||
+                        found == state.memory.end() || found->second.second != bytes ? Value {} : found->second.first;
+                }
+                if (inst.op == GirOp::PStore) {
+                    auto address = value(state, inst.a).address;
+                    auto bytes = m.Type(inst.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(inst.ty);
+                    protect(state, address, bytes);
+                    invalidateLanding(state, address, bytes);
+                    initialize(state, address, bytes);
+                    for (auto iterator = state.memory.begin(); iterator != state.memory.end();)
+                        if (overlaps(address, bytes, { iterator->first, iterator->second.second, 0 })) iterator = state.memory.erase(iterator); else ++iterator;
+                    if (address.kind == Address::Kind::Frame) {
+                        state.members.erase(address.root);
+                        auto &field = function.members[address.root];
+                        auto width = field.kind != GirMember::Scalar || m.Type(field.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(field.ty);
+                        if (address.offset == 0 && bytes == width) state.members[address.root] = value(state, inst.b);
+                    }
+                    invalidateBytes(state, address, bytes);
+                    if (address.kind == Address::Kind::Frame && address.offset == 0) {
+                        auto &field = function.members[address.root];
+                        auto width = field.kind != GirMember::Scalar || m.Type(field.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(field.ty);
+                        if (bytes == width) state.members[address.root] = value(state, inst.b);
+                    }
+                    if (address.kind != Address::Kind::Unknown && address.offset != INT64_MAX)
+                        state.memory[address] = { value(state, inst.b), bytes };
+                    if (address.kind != Address::Kind::Unknown && address.offset != INT64_MAX)
+                        state.initialized.insert({ address, bytes });
+                    receive(state, address, value(state, inst.b), false, bytes, -1);
+                }
+                if (inst.op == GirOp::HdrBase || inst.op == GirOp::HdrLen) read(state, value(state, inst.a).address, 16);
+                if (inst.op == GirOp::OutBytes) read(state, value(state, inst.a).address, constant(inst.b).value_or(INT64_MAX));
+                if (inst.op == GirOp::BytesCopy || inst.op == GirOp::BytesMove || inst.op == GirOp::BytesFill) {
+                    auto bytes = inst.vals.empty() ? optional<int64_t>(inst.idx) : constant(inst.vals[0]);
+                    auto count = bytes && *bytes >= 0 ? *bytes : INT64_MAX;
+                    auto source = value(state, inst.b);
+                    if (inst.op == GirOp::BytesFill) {
+                        if (bytes && *bytes >= 0 && inst.idx >= 0 && *bytes <= INT64_MAX / max(inst.idx, 1)) count = *bytes * inst.idx;
+                        else count = INT64_MAX;
+                        read(state, source.address, count == 0 ? 0 : inst.idx);
+                    } else read(state, source.address, count);
+                    auto destination = value(state, inst.a).address;
+                    protect(state, destination, count, inst.op == GirOp::BytesFill ? nullptr : &source,
+                        inst.vals.empty() ? -1 : inst.vals[0]);
+                    if (destination.kind == Address::Kind::Frame) state.members.erase(destination.root);
+                    invalidateLanding(state, destination, count);
+                    for (auto iterator = state.memory.begin(); iterator != state.memory.end();)
+                        if (overlaps(destination, count, { iterator->first, iterator->second.second, 0 })) iterator = state.memory.erase(iterator); else ++iterator;
+                    invalidateBytes(state, destination, count);
+                    if (inst.op != GirOp::BytesFill && source.target >= 0 && destination.kind != Address::Kind::Unknown && destination.offset != INT64_MAX) {
+                        auto &target = m.lowtargets[source.target];
+                        for (size_t result = 0; result < target.channels.size(); result++)
+                            if (target.channels[result].escaped[0] == source.cell)
+                                if (auto snapshot = get_if<GirLowSnapshotResult>(&(*m.funcs[target.members[0]].lowResults)[result].layout))
+                                    if (bytes && *bytes == snapshot->bytes) state.bytePayloads[destination] = { source, *bytes };
+                    }
+                    bool exactPayload = !inst.vals.empty() && source.target >= 0 &&
+                        state.extents.count({ source.target, source.cell, inst.vals[0] });
+                    if (bytes && *bytes >= 0 && count != INT64_MAX) {
+                        initialize(state, destination, count);
+                        if (destination.kind != Address::Kind::Unknown && destination.offset != INT64_MAX)
+                            state.initialized.insert({ destination, count });
+                    }
+                    else if (exactPayload) initialize(state, destination, INT64_MAX);
+                    if (inst.op != GirOp::BytesFill)
+                        receive(state, destination, source, true, bytes.value_or(-1), inst.vals.empty() ? -1 : inst.vals[0]);
+                }
+                if (inst.op == GirOp::HdrInit || inst.op == GirOp::HdrSetLen || inst.op == GirOp::Format) {
+                    auto address = value(state, inst.op == GirOp::Format ? inst.b : inst.a).address;
+                    auto bytes = inst.op == GirOp::Format ? 32 : inst.op == GirOp::HdrInit ? 16 : 8;
+                    if (inst.op == GirOp::HdrSetLen) {
+                        if (address.offset == INT64_MAX || address.offset > INT64_MAX - 8) address.offset = INT64_MAX;
+                        else address.offset += 8;
+                    }
+                    protect(state, address, bytes);
+                    invalidateLanding(state, address, bytes);
+                    invalidateBytes(state, address, bytes);
+                }
+                if (inst.op == GirOp::Call) {
+                    if (state.inFlight >= 0 || state.flag > 0) bad("a frame resumes calls while an escaped result is in flight");
+                    for (auto *facts : { &state.values, &state.members })
+                        for (auto &[id, fact] : *facts) {
+                            (void)id;
+                            fact.target = fact.cell = fact.sourceResult = -1;
+                            if (fact.address.kind == Address::Kind::EscapedTarget) fact.address = Address {};
+                        }
+                    state.stackEnds.clear();
+                    state.memory.clear();
+                    state.bytePayloads.clear();
+                    for (size_t target = 0; target < m.lowtargets.size(); target++)
+                        for (auto &channel : m.lowtargets[target].channels) for (auto cell : channel.escaped)
+                            state.payload.erase({ (int)target, cell });
+                    state.extents.clear();
+                    auto &callee = m.funcs[inst.idx];
+                    set<int> outputParameters;
+                    for (auto &result : *callee.lowResults) for (auto &word : LowResultWords(result)) outputParameters.insert(word.parameter);
+                    for (size_t parameter = 1; parameter < callee.params.size(); parameter++)
+                        if (m.Type(callee.params[parameter]).kind == CoreType::Ptr && !outputParameters.count((int)parameter))
+                        {
+                            auto address = value(state, inst.vals[parameter]).address;
+                            read(state, address, INT64_MAX);
+                            protect(state, address, INT64_MAX);
+                        }
+                    for (auto &result : *callee.lowResults) if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
+                        auto address = value(state, inst.vals[nonfixed->count]).address;
+                        if (address.kind == Address::Kind::Unknown || address.offset == INT64_MAX || !state.initialized.count({ address, 8 })) bad("nonfixed call count metadata is not initialized");
+                        if (address.offset > INT64_MAX - 8) bad("nonfixed call identity metadata address overflows");
+                        address.offset += 8;
+                        if (address.kind == Address::Kind::Unknown || address.offset == INT64_MAX || !state.initialized.count({ address, 8 })) bad("nonfixed call destination identity metadata is not initialized");
+                    }
+                    vector<Blocked> outputs;
+                    for (auto &result : *callee.lowResults) for (auto &word : LowResultWords(result)) if (word.bytes) {
+                        Blocked output { value(state, inst.vals[word.parameter]).address,
+                            holds_alternative<GirLowNonfixedResult>(result.layout) ? 16 : word.bytes, 0 };
+                        for (auto &previous : outputs) if (overlaps(output.address, output.bytes, previous))
+                            bad("call result output cells overlap or have unknown aliasing");
+                        outputs.push_back(output);
+                    }
+                    if (state.inFlight >= 0 && member(state.inFlight))
+                        for (auto &output : outputs) invalidateLanding(state, output.address, output.bytes);
+                    auto &effect = lowReturnFlagEffects[inst.idx];
+                    bool escaping = (effect.preservesInput && state.flag != 0) || any_of(effect.values.begin(), effect.values.end(), [](auto flag) { return flag != 0; });
+                    for (auto &result : *callee.lowResults) {
+                        auto words = LowResultWords(result);
+                        for (size_t word = 0; word < words.size(); word++) if (words[word].bytes ||
+                            (holds_alternative<GirLowNonfixedResult>(result.layout) && word == 1)) {
+                            auto address = value(state, inst.vals[words[word].parameter]).address;
+                            auto bytes = words[word].bytes ? words[word].bytes : INT64_MAX;
+                            initialize(state, address, bytes);
+                            if (address.kind == Address::Kind::Frame) state.members.erase(address.root);
+                            if (escaping) {
+                                state.blocked.insert({ address, bytes, callIds.at(&inst) });
+                                for (auto iterator = state.initialized.begin(); iterator != state.initialized.end();)
+                                    if (overlaps(iterator->first, iterator->second, { address, bytes, 0 })) iterator = state.initialized.erase(iterator); else ++iterator;
+                            } else if (address.kind != Address::Kind::Unknown && address.offset != INT64_MAX)
+                                state.initialized.insert({ address, bytes });
+                        }
+                    }
+                    state.pending = escaping ? callIds.at(&inst) : -1;
+                    auto returnedFlags = effect.values;
+                    bool unknownInput = effect.preservesInput && state.flag < 0;
+                    if (effect.preservesInput && state.flag >= 0) returnedFlags.insert(state.flag);
+                    state.flag = !unknownInput && returnedFlags.size() == 1 ? (int)*returnedFlags.begin() : -1;
+                }
+                if (inst.op == GirOp::SourceTargetGet) {
+                    auto enter = definitions[inst.a];
+                    if (enter && enter->op == GirOp::SourceTargetEnter) {
+                        state.values[inst.res].target = enter->idx;
+                        state.values[inst.res].sourceResult = inst.idx;
+                    }
+                }
+                if (inst.op == GirOp::SourceTargetResult && state.inFlight == inst.idx)
+                    bad("forwarding or receiving frame replaces in-flight reference provenance");
+                if (inst.op == GirOp::SourceResult && state.inFlight >= 0 && member(state.inFlight)) {
+                    auto target = state.inFlight;
+                    for (size_t result = 0; result < function.lowResults->size(); result++) {
+                        auto &layout = (*function.lowResults)[result].layout;
+                        bool reference = holds_alternative<GirLowReferenceResult>(layout) || holds_alternative<GirLowResizableReferenceResult>(layout);
+                        if (!reference) continue;
+                        if (LowResultWords((*function.lowResults)[result])[0].parameter != inst.idx) continue;
+                        auto source = value(state, inst.a);
+                        if (source.target != target || source.sourceResult != (int)result)
+                            bad("target catch returns reference provenance from another result channel");
+                        state.sourceReceiving.erase({ target, (int)result });
+                    }
+                }
+                if (inst.op == GirOp::ReturnFlagSet) state.flag = (int)constant(inst.a).value_or(-1);
+                if (inst.op == GirOp::Ret) {
+                    if (state.inFlight >= 0 && member(state.inFlight) && state.flag != 0)
+                        bad("target member propagates an escape instead of completing its catch");
+                    if (state.inFlight >= 0 && !member(state.inFlight) && state.flag != state.inFlight + 1)
+                        bad("forwarding frame changes its in-flight target discriminant");
+                    if (state.flag > 0 && state.inFlight >= 0)
+                        for (auto &channel : m.lowtargets[state.inFlight].channels) for (auto cell : channel.escaped)
+                            if (!state.payload.count({ state.inFlight, cell })) bad("forwarding frame loses an in-flight payload cell");
+                    if (state.flag <= 0) {
+                        if (!state.sourceReceiving.empty()) bad("target catch omits its escaped reference provenance");
+                        if (!state.receiving.empty()) bad("target catch returns without transferring its escaped payload");
+                        for (auto &result : *function.lowResults) for (auto &word : LowResultWords(result)) if (word.bytes) {
+                            auto address = value(state, function.blocks[0].params[word.parameter].first).address;
+                            for (auto &blocked : state.blocked) if (overlaps(address, word.bytes, blocked))
+                                bad("normal return omits a declared primitive result output");
+                        }
+                    }
+                }
+            }
+            auto *term = LastTerm(function.blocks[block]);
+            if (!term) continue;
+            auto edge = [&](int destination, const vector<int> &arguments, bool positive) {
+                auto next = state;
+                if (term->op == GirOp::CondBr) {
+                    auto condition = definitions[term->a];
+                    if (condition && condition->op == GirOp::PtrEq) {
+                        auto left = value(state, condition->a).address, right = value(state, condition->b).address;
+                        if (!positive && left.kind != Address::Kind::Unknown && left == right && left.offset != INT64_MAX) return;
+                    }
+                    if (positive && condition && condition->op == GirOp::PtrEq) {
+                        auto prove = [&](int computed, int endpoint) {
+                            auto offset = computed >= 0 && computed < fn.nvalues ? definitions[computed] : nullptr;
+                            if (!offset || offset->op != GirOp::PtrOffset || offset->idx != 1) return;
+                            auto source = value(state, offset->a), end = value(state, endpoint);
+                            if (source.target < 0 || source.target != end.target) return;
+                            for (auto &channel : m.lowtargets[source.target].channels)
+                                if (channel.incoming.size() == 3 && source.cell == channel.escaped[0] && end.cell == channel.escaped[1])
+                                    next.extents.insert({ source.target, source.cell, offset->b });
+                        };
+                        prove(condition->a, condition->b);
+                        prove(condition->b, condition->a);
+                    }
+                    if (condition && condition->op == GirOp::Cmp && condition->cmp == CoreCmpOp::Eq) {
+                        int flag = condition->a;
+                        auto tag = constant(condition->b);
+                        if (!tag) { flag = condition->b; tag = constant(condition->a); }
+                        auto call = flagCalls.find(flag);
+                        if (positive && tag && call != flagCalls.end() && call->second == state.pending) {
+                            next.flag = (int)*tag;
+                            if (*tag == 0) {
+                                next.pending = -1;
+                                for (auto iterator = next.blocked.begin(); iterator != next.blocked.end();)
+                                    if (iterator->call == call->second) {
+                                        if (iterator->address.kind != Address::Kind::Unknown && iterator->address.offset != INT64_MAX)
+                                            next.initialized.insert({ iterator->address, iterator->bytes });
+                                        iterator = next.blocked.erase(iterator);
+                                    } else ++iterator;
+                            } else if (*tag > 0 && *tag <= (int64_t)m.lowtargets.size()) {
+                                int target = (int)*tag - 1;
+                                next.pending = -1;
+                                next.inFlight = target;
+                                for (auto &channel : m.lowtargets[target].channels) {
+                                    for (auto cell : channel.escaped)
+                                        next.payload[{ target, cell }] = Value { Address::Target(target, cell, true), target, cell };
+                                    auto result = (size_t)(&channel - m.lowtargets[target].channels.data());
+                                    auto &layout = (*m.funcs[m.lowtargets[target].members[0]].lowResults)[result].layout;
+                                    if (auto snapshot = get_if<GirLowSnapshotResult>(&layout)) {
+                                        auto payload = next.payload.at({ target, channel.escaped[0] });
+                                        next.bytePayloads[payload.address] = { payload, snapshot->bytes };
+                                    }
+                                    if (channel.incoming.size() == 3) {
+                                        auto stack = next.payload.find({ target, channel.incoming[0] });
+                                        auto address = stack == next.payload.end() ? Address::Target(target, channel.incoming[0], false) : stack->second.address;
+                                        next.stackEnds[address] = next.payload.at({ target, channel.escaped[1] });
+                                    }
+                                    if (member(target)) {
+                                        auto result = (size_t)(&channel - m.lowtargets[target].channels.data());
+                                        auto &layout = (*function.lowResults)[result].layout;
+                                        if (holds_alternative<GirLowReferenceResult>(layout) || holds_alternative<GirLowResizableReferenceResult>(layout))
+                                            next.sourceReceiving.insert({ target, (int)result });
+                                    }
+                                    for (size_t word = 0; word < channel.escaped.size(); word++) {
+                                        if (channel.incoming.size() == 3 && word == 1) continue;
+                                        if (member(target)) next.receiving.insert({ target, channel.escaped[word] });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for (size_t position = 0; position < arguments.size(); position++)
+                    next.values[function.blocks[destination].params[position].first] = value(state, arguments[position]);
+                merge(destination, std::move(next));
+            };
+            if (term->op == GirOp::Br) edge(term->idx, term->vals, true);
+            if (term->op == GirOp::CondBr) { edge(term->idx, term->vals, true); edge(term->idx2, term->vals2, false); }
+        }
+    }
+
     void CheckLowSources(const Fn &fn) {
         auto &function = *fn.f;
         auto kinds = GirSourceKinds(function);
         auto bad = [&](const string &message) { Fail("GIR-V090", cat(fn.label, ": ", message)); };
-        for (auto kind : kinds.values) if (kind == 4) bad("trace metadata merges with a program value or another token kind");
-        for (auto kind : kinds.members) if (kind >= 2) bad("a frame member stores a trace token or mixed program metadata");
+        for (auto kind : kinds.values) if (kind == GirSourceKind::Mixed) bad("trace metadata merges with a program value or another token kind");
+        for (auto kind : kinds.members) if (kind >= GirSourceKind::Scope) bad("a frame member stores a trace token or mixed program metadata");
         struct Call { int token, scope, callee = -1; bool operator==(const Call &) const = default; };
         struct State {
             vector<int> scopes;
             vector<Call> calls;
+            vector<pair<int, int>> targets;
             map<int, int> owners, members;
             set<int> outputs;
+            int flag = 0;
             bool operator==(const State &) const = default;
         };
         vector<optional<State>> incoming(function.blocks.size());
@@ -1171,7 +2370,8 @@ private:
             if (!incoming[target]) { incoming[target] = std::move(state); work.push_back(target); return; }
             auto previous = *incoming[target];
             auto next = previous;
-            if (next.scopes != state.scopes || next.calls != state.calls) bad("control-flow merge changes active trace scopes or calls");
+            if (next.scopes != state.scopes || next.calls != state.calls || next.targets != state.targets) bad("control-flow merge changes active trace scopes, targets, or calls");
+            if (next.flag != state.flag) next.flag = -1;
             for (auto *members : { &next.owners, &next.members }) {
                 auto &other = members == &next.owners ? state.owners : state.members;
                 for (auto iterator = members->begin(); iterator != members->end();) {
@@ -1200,7 +2400,7 @@ private:
                     bad("source descriptor used outside its live trace scope");
             };
             auto source = [&](int value) {
-                if (value < 0 || kinds.values[value] != 1) bad("trace operation consumes a program pointer instead of a source descriptor");
+                if (value < 0 || kinds.values[value] != GirSourceKind::Descriptor) bad("trace operation consumes a program pointer instead of a source descriptor");
                 live(value);
             };
             auto owner = [&](int result) {
@@ -1208,26 +2408,27 @@ private:
                 state.owners[result] = state.scopes.back();
             };
             auto call = [&](int token) -> Call & {
-                if (token < 0 || kinds.values[token] != 3 || state.calls.empty() || state.calls.back().token != token)
+                if (token < 0 || kinds.values[token] != GirSourceKind::Call || state.calls.empty() || state.calls.back().token != token)
                     bad("trace call token is dead or not the innermost call");
                 return state.calls.back();
             };
             for (auto &inst : function.blocks[block].insts) {
                 vector<int> uses;
                 Uses(inst, uses);
-                bool traceOperation = (inst.op >= GirOp::SourceNew && inst.op <= GirOp::SourceGlobal) ||
-                                      (inst.op >= GirOp::SourceLeave && inst.op <= GirOp::SourceGlobalSet);
-                for (auto value : uses) if (kinds.values[value] > 0 && !traceOperation) {
-                    if (inst.op == GirOp::LocalSet && kinds.values[value] == 1) source(value);
-                    else if ((inst.op == GirOp::Br || inst.op == GirOp::CondBr) && kinds.values[value] == 1 && value != inst.a) source(value);
+                bool traceOperation = (inst.op >= GirOp::SourceNew && inst.op <= GirOp::SourceTargetGet) ||
+                                      (inst.op >= GirOp::SourceLeave && inst.op <= GirOp::SourceTargetResult);
+                for (auto value : uses) if (kinds.values[value] > GirSourceKind::Ordinary && !traceOperation) {
+                    if (inst.op == GirOp::LocalSet && kinds.values[value] == GirSourceKind::Descriptor) source(value);
+                    else if ((inst.op == GirOp::Br || inst.op == GirOp::CondBr) && kinds.values[value] == GirSourceKind::Descriptor && value != inst.a) source(value);
                     else bad("trace metadata is used as ordinary program memory or an ABI argument");
                 }
                 switch (inst.op) {
                     case GirOp::SourceEnter: state.scopes.push_back(inst.res); break;
                     case GirOp::SourceLeave:
-                        if (inst.a < 0 || kinds.values[inst.a] != 2 || state.scopes.empty() || state.scopes.back() != inst.a)
+                        if (inst.a < 0 || kinds.values[inst.a] != GirSourceKind::Scope || state.scopes.empty() || state.scopes.back() != inst.a)
                             bad("trace scope token is dead or not the innermost scope");
                         for (auto &active : state.calls) if (active.scope == inst.a) bad("trace scope leaves before its call epilogue");
+                        if (!state.targets.empty()) bad("trace scope leaves before its target activation cleanup");
                         state.scopes.pop_back();
                         break;
                     case GirOp::SourceNew: {
@@ -1236,14 +2437,14 @@ private:
                             if (GirDefinesValue(candidate) && candidate.res == inst.a) identity = &candidate;
                         if (!identity || identity->op != GirOp::TraceId || identity->trace != GirTraceKind::Storage)
                             bad("source storage identity does not come from an object creation ordinal");
-                        if (kinds.values[inst.a] != 0) bad("storage identity comes from metadata");
-                        for (auto value : inst.vals) if (kinds.values[value] != 0) bad("source path contains metadata");
+                        if (kinds.values[inst.a] != GirSourceKind::Ordinary) bad("storage identity comes from metadata");
+                        for (auto value : inst.vals) if (kinds.values[value] != GirSourceKind::Ordinary) bad("source path contains metadata");
                         owner(inst.res);
                         break;
                     }
                     case GirOp::SourceChild:
                         source(inst.a);
-                        if (kinds.values[inst.b] != 0) bad("source path index is metadata");
+                        if (kinds.values[inst.b] != GirSourceKind::Ordinary) bad("source path index is metadata");
                         owner(inst.res);
                         break;
                     case GirOp::SourceGlobal:
@@ -1265,6 +2466,11 @@ private:
                         state.calls.push_back({ inst.res, state.scopes.back(), -1 });
                         break;
                     case GirOp::Call: {
+                        auto &effect = lowReturnFlagEffects[inst.idx];
+                        if (!(effect.preservesInput && effect.values.empty())) {
+                            if (!effect.preservesInput && effect.values.size() == 1) state.flag = (int)*effect.values.begin();
+                            else state.flag = -1;
+                        }
                         bool hasTraceParam = false;
                         for (auto &calleeBlock : m.funcs[inst.idx].blocks) for (auto &candidate : calleeBlock.insts)
                             hasTraceParam |= candidate.op == GirOp::SourceParam || candidate.op == GirOp::SourceResult;
@@ -1294,6 +2500,54 @@ private:
                         if (call(inst.a).callee < 0) bad("trace call token popped before the call");
                         state.calls.pop_back();
                         break;
+                    case GirOp::SourceTargetEnter: {
+                        if (state.scopes.empty() || inst.idx < 0 || inst.idx >= (int)m.lowtargets.size()) bad("target provenance activation has no live scope or checked target");
+                        auto &table = m.lowtargets[inst.idx];
+                        auto functionIndex = (int)(&function - m.funcs.data());
+                        if (find(table.members.begin(), table.members.end(), functionIndex) == table.members.end() ||
+                            inst.vals.size() != table.channels.size()) bad("target provenance activation does not belong to its member or channels");
+                        for (auto position : inst.vals)
+                            if (position >= 0 && !sourceResults(functionIndex).count(position)) bad("target provenance maps an unproduced primitive output position");
+                        state.targets.push_back({ inst.res, inst.idx });
+                        break;
+                    }
+                    case GirOp::SourceTargetLeave:
+                        if (state.targets.empty() || state.targets.back().first != inst.a || kinds.values[inst.a] != GirSourceKind::Target)
+                            bad("target provenance token is dead or not the innermost activation");
+                        state.targets.pop_back();
+                        break;
+                    case GirOp::SourceTargetGet: {
+                        auto active = find_if(state.targets.begin(), state.targets.end(), [&](auto entry) { return entry.first == inst.a; });
+                        if (active == state.targets.end() || kinds.values[inst.a] != GirSourceKind::Target) bad("target provenance lookup uses a dead activation");
+                        const GirInst *enter = nullptr;
+                        for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                            if (candidate.op == GirOp::SourceTargetEnter && candidate.res == inst.a) enter = &candidate;
+                        if (!enter || inst.idx < 0 || inst.idx >= (int)enter->vals.size() || enter->vals[inst.idx] < 0)
+                            bad("target provenance lookup does not map a reference result position");
+                        owner(inst.res);
+                        break;
+                    }
+                    case GirOp::SourceTargetResult:
+                        if (inst.idx < 0 || inst.idx >= (int)m.lowtargets.size() || inst.idx2 < 0 ||
+                            inst.idx2 >= (int)m.lowtargets[inst.idx].channels.size()) bad("target provenance result lies outside its checked channels");
+                        {
+                            bool referenceChannel = false;
+                            for (auto member : m.lowtargets[inst.idx].members)
+                                for (auto &candidateBlock : m.funcs[member].blocks) for (auto &candidate : candidateBlock.insts)
+                                    if (candidate.op == GirOp::SourceTargetEnter && candidate.idx == inst.idx && candidate.vals[inst.idx2] >= 0)
+                                        referenceChannel = true;
+                            if (!referenceChannel) bad("target provenance result does not name a reference output channel");
+                        }
+                        source(inst.a);
+                        break;
+                    case GirOp::ReturnFlagSet:
+                        state.flag = -1;
+                        for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                            if (candidate.op == GirOp::Int && candidate.res == inst.a) {
+                                auto parsed = from_chars(candidate.text.data(), candidate.text.data() + candidate.text.size(), state.flag);
+                                if (parsed.ec != errc()) bad("return discriminant is invalid");
+                            }
+                        break;
                     case GirOp::SourceResult: {
                         source(inst.a);
                         if (inst.idx <= 0 || inst.idx >= (int)function.params.size() || m.Type(function.params[inst.idx]).kind != CoreType::Ptr)
@@ -1309,13 +2563,13 @@ private:
                     }
                     case GirOp::SourceCopy:
                         source(inst.a);
-                        if (kinds.values[inst.b] != 0) bad("copy destination identity is metadata");
+                        if (kinds.values[inst.b] != GirSourceKind::Ordinary) bad("copy destination identity is metadata");
                         break;
                     case GirOp::LocalSet:
-                        if (kinds.members[inst.idx] == 1) { source(inst.a); state.members[inst.idx] = state.scopes.back(); }
+                        if (kinds.members[inst.idx] == GirSourceKind::Descriptor) { source(inst.a); state.members[inst.idx] = state.scopes.back(); }
                         break;
                     case GirOp::LocalGet:
-                        if (kinds.values[inst.res] == 1) {
+                        if (kinds.values[inst.res] == GirSourceKind::Descriptor) {
                             auto member = state.members.find(inst.idx);
                             if (member == state.members.end() || find(state.scopes.begin(), state.scopes.end(), member->second) == state.scopes.end())
                                 bad("source frame member is uninitialized or outside its scope");
@@ -1323,11 +2577,11 @@ private:
                         }
                         break;
                     case GirOp::FrameAddr:
-                        if (kinds.members[inst.idx] > 0) bad("program memory exposes a trace metadata member");
+                        if (kinds.members[inst.idx] > GirSourceKind::Ordinary) bad("program memory exposes a trace metadata member");
                         break;
                     case GirOp::Ret:
-                        if (!state.scopes.empty() || !state.calls.empty()) bad("normal return omits trace scope or call cleanup");
-                        for (auto position : sourceResults((int)(&function - m.funcs.data())))
+                        if (!state.scopes.empty() || !state.calls.empty() || !state.targets.empty()) bad("return omits trace scope, target, or call cleanup");
+                        if (state.flag <= 0) for (auto position : sourceResults((int)(&function - m.funcs.data())))
                             if (!state.outputs.count(position)) bad("normal return omits a source output channel");
                         break;
                     default: break;
@@ -1339,8 +2593,8 @@ private:
                 auto next = state;
                 for (size_t position = 0; position < values.size(); position++) {
                     auto parameter = function.blocks[target].params[position].first;
-                    if (kinds.values[parameter] == 1) next.owners[parameter] = state.owners.at(values[position]);
-                    else if (kinds.values[parameter] > 1) bad("control flow transfers a trace token");
+                    if (kinds.values[parameter] == GirSourceKind::Descriptor) next.owners[parameter] = state.owners.at(values[position]);
+                    else if (kinds.values[parameter] > GirSourceKind::Descriptor) bad("control flow transfers a trace token");
                 }
                 merge(target, std::move(next));
             };
@@ -1650,7 +2904,7 @@ private:
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
                     if (!GirDefinesValue(i) || i.res >= fn.nvalues || fn.vt[i.res] >= 0) continue;
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
                     auto r = GirTyper(env).Of(i);
                     if (r.ok()) {
                         fn.vt[i.res] = r.ty;
@@ -1664,7 +2918,7 @@ private:
 
     void CheckEffectTypes(const Fn &fn, const GirInst &i) {
         auto &f = *fn.f;
-        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
         GirTyper ty(env);
         auto need = [&](GirTyResult r) {
             if (!r.ok()) TypeFail(fn, r.error);
@@ -1827,9 +3081,12 @@ private:
             }
             case GirOp::DestBind: {
                 auto &carrier = m.Type(need(ty.Val(i.a)));
+                bool matches = false;
+                for (size_t result = 0; result < f.resultProtocols.size(); result++)
+                    matches |= f.resultProtocols[result].namedSlot == i.idx && f.results[result] == carrier.elem;
                 if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value || i.idx < 0 ||
-                    i.idx >= (int)f.slots.size() || f.slots[i.idx].ty != carrier.elem)
-                    TypeFail(fn, "named binding does not consume a matching value completion");
+                    i.idx >= (int)f.slots.size() || !matches)
+                    TypeFail(fn, "named binding does not consume its receiving channel completion");
                 break;
             }
             case GirOp::AppendValue: {
@@ -1847,7 +3104,7 @@ private:
                 if (v != i.ty) TypeFail(fn, "a store of a value of another type than the one stated");
                 break;
             }
-            case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet:
+            case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet: case GirOp::SourceTargetLeave: case GirOp::SourceTargetResult:
                 need(ty.PtrOf(i.a)); break;
             case GirOp::SourceCopy:
                 need(ty.PtrOf(i.a));
@@ -1947,7 +3204,7 @@ private:
 
     void CheckTermTypes(const Fn &fn, const GirInst &i) {
         auto &f = *fn.f;
-        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+        GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
         GirTyper ty(env);
         auto need = [&](GirTyResult r) {
             if (!r.ok()) TypeFail(fn, r.error);
@@ -2026,7 +3283,12 @@ private:
             if (protocol.namedSlot) {
                 auto slot = *protocol.namedSlot;
                 if (protocol.request != CoreRequest::Value || !GirNonfixed(m, type) || slot < 0 ||
-                    slot >= (int)f.slots.size() || f.slots[slot].ty != type || !aliases.insert(slot).second)
+                    slot >= (int)f.slots.size() || !aliases.insert(slot).second)
+                    TypeFail(fn, "named result slot aliases an invalid or repeated value channel");
+                auto local = f.slots[slot].ty;
+                bool sameLayout = local == type || (m.Type(type).kind == CoreType::VarArr &&
+                    GirResizableKind(m.Type(local).kind) && m.Type(local).elem == m.Type(type).elem);
+                if (!sameLayout)
                     TypeFail(fn, "named result slot aliases an invalid or repeated value channel");
             }
         }
@@ -2070,13 +3332,13 @@ private:
         for (auto &b : f.blocks)
             for (auto &i : b.insts) {
                 if (GirDefinesValue(i)) {
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
                     auto r = GirTyper(env).Of(i);
                     if (!r.ok()) TypeFail(fn, r.error);
                     if (fn.vt[i.res] != r.ty) TypeFail(fn, cat("value %", i.res, " has two types"));
                 } else if (i.op == GirOp::Call) {
                     // A call with no result in the low stage.
-                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members };
+                    GirTyEnv env { m, f.slots, sigs, fn.vt, &f.members, &f.blocks, &f };
                     auto r = GirTyper(env).Of(i);
                     if (!r.ok()) TypeFail(fn, r.error);
                 } else if (GirIsTerminator(i.op)) {
@@ -2141,7 +3403,7 @@ private:
             seen[b] = 1;
             bool ended = false;
             for (auto &i : f.blocks[b].insts) {
-                if (i.op == GirOp::Call && i.idx >= 0 && i.idx < (int)mayReturn.size() && !mayReturn[i.idx]) {
+                if ((i.op == GirOp::Call || i.op == GirOp::CallConstruct) && i.idx >= 0 && i.idx < (int)mayReturn.size() && !mayReturn[i.idx]) {
                     ended = true;
                     break;
                 }
@@ -2155,6 +3417,16 @@ private:
                     case GirOp::CondBr:
                         work.push_back(i.idx);
                         work.push_back(i.idx2);
+                        ended = true;
+                        break;
+                    case GirOp::Invoke:
+                        if (mayReturn[i.idx]) work.push_back(i.a);
+                        for (auto &edge : i.escapes) work.push_back(edge.block);
+                        ended = true;
+                        break;
+                    case GirOp::Escape:
+                        for (auto member : m.targets[i.idx].members)
+                            if (&m.funcs[member] == &f) return true;
                         ended = true;
                         break;
                     case GirOp::Abort: case GirOp::Exit:
@@ -2187,13 +3459,34 @@ private:
             for (auto &b : fn.f->blocks)
                 for (size_t k = 0; k < b.insts.size(); k++) {
                     if (b.insts[k].op != GirOp::Unreachable) continue;
-                    auto valid = k > 0 && b.insts[k - 1].op == GirOp::Call;
-                    if (valid) {
+                    auto valid = false;
+                    if (m.low && CoreHasConstruction(m.profile)) {
+                        auto function = find_if(m.funcs.begin(), m.funcs.end(), [&](const GirFunc &candidate) { return &candidate == fn.f; });
+                        auto block = find_if(fn.f->blocks.begin(), fn.f->blocks.end(), [&](const GirBlock &candidate) { return &candidate == &b; });
+                        if (function != m.funcs.end() && block != fn.f->blocks.end())
+                            valid = checkedTargetUnreachable.count({ (int)(function - m.funcs.begin()), (int)(block - fn.f->blocks.begin()) });
+                    }
+                    if (!valid && k > 0 && b.insts[k - 1].op == GirOp::Call) {
                         auto callee = b.insts[k - 1].idx;
                         valid = callee >= 0 && callee < (int)mayReturn.size() && !mayReturn[callee];
                     }
+                    if (!valid && CoreHasConstruction(m.profile) && k == 0) {
+                        bool reached = false;
+                        valid = true;
+                        auto destination = (int)(&b - fn.f->blocks.data());
+                        for (auto &predecessor : fn.f->blocks) {
+                            auto term = LastTerm(predecessor);
+                            if (!term) continue;
+                            auto successors = Successors(*term);
+                            if (find(successors.begin(), successors.end(), destination) == successors.end()) continue;
+                            reached = true;
+                            valid &= term->op == GirOp::Invoke && term->a == destination && !mayReturn[term->idx];
+                            for (auto &edge : term->escapes) if (edge.block == destination) valid = false;
+                        }
+                        valid &= reached;
+                    }
                     if (!valid)
-                        CfgFail(fn, "unreachable does not immediately follow a call to a function that cannot return");
+                        CfgFail(fn, "unreachable has no immediate call or invoke-normal proof that its callee cannot return");
                 }
     }
 
@@ -2621,8 +3914,11 @@ private:
 
     using Roots = vector<CoreRootRef>;
 
+    using ResultRootInfo = vector<vector<Roots>>;
+
     struct Prov {
         vector<Roots> slots, vals;
+        vector<vector<Roots>> packs;
     };
 
     static bool AddTo(vector<Roots> &a, int i, const Roots &rs) {
@@ -2666,7 +3962,7 @@ private:
                 continue;
             }
             auto annotated = ParamRoots(f, root.index);
-            if (!annotated || annotated->empty()) AddRoot(out, root);
+            if (!annotated) AddRoot(out, root);
             else AddRoots(out, *annotated);
         }
         return out;
@@ -2686,7 +3982,7 @@ private:
                 AddRoot(out, { CoreRootRef::Param, calleeParam });
             } else {
                 auto annotated = ParamRoots(*caller.f, r.index);
-                if (!annotated || annotated->empty()) {
+                if (!annotated) {
                     AddRoot(out, { CoreRootRef::Param, calleeParam });
                 } else {
                     for (auto &root : *annotated) {
@@ -2726,13 +4022,13 @@ private:
         return out;
     }
 
-    void CheckRootAnnotations(const vector<Roots> &res) {
+    void CheckRootAnnotations(const ResultRootInfo &res) {
         for (size_t k = 0; k < m.funcs.size(); k++) {
             auto &f = m.funcs[k];
             auto name = cat("function ", f.name);
             for (size_t r = 0; r < f.results.size(); r++) {
                 auto declared = r < f.roots.results.size() ? &f.roots.results[r] : nullptr;
-                if (r == 0) for (auto &root : RootsAt(res, (int)k))
+                for (auto &root : res[k][r])
                     if (!declared || find(declared->begin(), declared->end(), root) == declared->end())
                         Fail("GIR-V050", cat(name, " result ", r, " root info omits a root returned by the body"));
             }
@@ -2751,8 +4047,10 @@ private:
                         if (GirRefLike(m, callee.params[j])) {
                             auto expected = MapArgumentRoots(caller, p, i.vals[j], (int)j);
                             auto declared = ParamRoots(callee, (int)j);
+                            bool generic = !declared || (declared->size() == 1 &&
+                                (*declared)[0] == CoreRootRef { CoreRootRef::Param, (int)j });
                             for (auto &root : expected)
-                                if (!declared || find(declared->begin(), declared->end(), root) == declared->end())
+                                if (!generic && (!declared || find(declared->begin(), declared->end(), root) == declared->end()))
                                     Fail("GIR-V050", cat(label, " parameter ", j,
                                         " root info omits a root passed at a call site"));
                         }
@@ -2776,9 +4074,37 @@ private:
         return k == CoreType::Ref || k == CoreType::Slice || k == CoreType::View;
     }
 
-    Roots RootsOfDef(const vector<Roots> &res, const Fn &fn, const Prov &p, const GirInst &i) {
+    Roots RootsOfDef(const ResultRootInfo &res, const Fn &fn, const Prov &p, const GirInst &i) {
         switch (i.op) {
             case GirOp::Bytes: return { CoreRootRef { CoreRootRef::Static, 0 } };
+            case GirOp::DestOpen:
+                if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver)) return { CoreRootRef { CoreRootRef::Local, slot->slot } };
+                if (auto global = get_if<GirDestGlobalReceiver>(&i.destReceiver)) return { CoreRootRef { CoreRootRef::Global, global->global } };
+                if (auto whole = get_if<GirDestWholeReceiver>(&i.destReceiver)) return RootsAt(p.vals, whole->reference);
+                if (auto append = get_if<GirDestAppendReceiver>(&i.destReceiver)) return RootsAt(p.vals, append->reference);
+                if (auto push = get_if<GirDestPushReceiver>(&i.destReceiver)) return RootsAt(p.vals, push->reference);
+                return {};
+            case GirOp::DestFinish: case GirOp::DestAbandon: case GirOp::DestAdapt:
+            case GirOp::DestAdaptFinish: case GirOp::DestValue: case GirOp::DestRelocate:
+            case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestPublishRef:
+                return RootsAt(p.vals, i.a);
+            case GirOp::DestNamed: return { CoreRootRef { CoreRootRef::Local, i.idx } };
+            case GirOp::CallConstruct: {
+                Roots roots;
+                if (m.funcs[i.idx].results.size() == 1 && !i.vals2.empty()) return RootsAt(p.vals, i.vals2[0]);
+                return roots;
+            }
+            case GirOp::Result:
+                if (ValRefLike(fn, i.res) && i.idx < (int)p.packs[i.a].size()) return p.packs[i.a][i.idx];
+                for (auto &block : fn.f->blocks) for (auto &producer : block.insts)
+                    if (producer.res == i.a && producer.op == GirOp::CallConstruct &&
+                        GirNonfixed(m, m.funcs[producer.idx].results[i.idx])) {
+                        size_t position = 0;
+                        for (int result = 0; result < i.idx; result++)
+                            if (GirNonfixed(m, m.funcs[producer.idx].results[result])) position++;
+                        return RootsAt(p.vals, producer.vals2[position]);
+                    }
+                return {};
             case GirOp::Slot: return { CoreRootRef { CoreRootRef::Local, i.idx } };
             case GirOp::Global: return { CoreRootRef { CoreRootRef::Global, i.idx } };
             case GirOp::Field: return RootsAt(p.vals, i.a);
@@ -2809,7 +4135,8 @@ private:
             }
             case GirOp::Call: {
                 Roots out;
-                for (auto &r : RootsAt(res, i.idx)) {
+                if (!ValRefLike(fn, i.res) || res[i.idx].size() != 1) return out;
+                for (auto &r : res[i.idx][0]) {
                     if (r.kind == CoreRootRef::Param) {
                         if (r.index < (int)i.vals.size())
                             for (auto &x : RootsAt(p.vals, i.vals[r.index]))
@@ -2824,17 +4151,32 @@ private:
         }
     }
 
-    bool ProvRound(const vector<Roots> &res, const Fn &fn, Prov &p) {
+    bool ProvRound(const ResultRootInfo &res, const Fn &fn, Prov &p) {
         auto &f = *fn.f;
         auto changed = false;
         auto edge = [&](int b, const vector<int> &args) {
             auto &tb = f.blocks[b];
-            for (size_t k = 0; k < tb.params.size() && k < args.size(); k++)
+            for (size_t k = 0; k < tb.params.size() && k < args.size(); k++) {
                 changed |= AddTo(p.vals, tb.params[k].first, RootsAt(p.vals, args[k]));
+                for (size_t result = 0; result < p.packs[args[k]].size(); result++)
+                    changed |= AddTo(p.packs[tb.params[k].first], (int)result, p.packs[args[k]][result]);
+            }
         };
         for (auto &blk : f.blocks)
             for (auto &i : blk.insts) {
-                if (GirDefinesValue(i)) changed |= AddTo(p.vals, i.res, RootsOfDef(res, fn, p, i));
+                if (GirDefinesValue(i)) {
+                    changed |= AddTo(p.vals, i.res, RootsOfDef(res, fn, p, i));
+                    if ((i.op == GirOp::Call || i.op == GirOp::CallConstruct) && m.funcs[i.idx].results.size() > 1)
+                        for (size_t result = 0; result < res[i.idx].size(); result++) {
+                            Roots mapped;
+                            for (auto &root : res[i.idx][result]) {
+                                if (root.kind == CoreRootRef::Param && root.index < (int)i.vals.size())
+                                    AddRoots(mapped, RootsAt(p.vals, i.vals[root.index]));
+                                else if (root.kind == CoreRootRef::Global || root.kind == CoreRootRef::Static) AddRoot(mapped, root);
+                            }
+                            changed |= AddTo(p.packs[i.res], (int)result, mapped);
+                        }
+                }
                 else if (i.op == GirOp::Init) changed |= AddTo(p.slots, i.idx, RootsAt(p.vals, i.a));
                 else if (i.op == GirOp::Store) {
                     for (auto &root : RootsAt(p.vals, i.a))
@@ -2855,6 +4197,10 @@ private:
         Prov p;
         p.slots.assign(f.slots.size(), {});
         p.vals.assign(fn.nvalues, {});
+        p.packs.resize(fn.nvalues);
+        for (int value = 0; value < fn.nvalues; value++)
+            if (fn.vt[value] >= 0 && m.Type(fn.vt[value]).kind == CoreType::Tuple)
+                p.packs[value].resize(m.Type(fn.vt[value]).parts.size());
         auto &b0 = f.blocks[0];
         for (size_t k = 0; k < b0.params.size(); k++)
             if (ValRefLike(fn, b0.params[k].first) && b0.params[k].first < fn.nvalues) {
@@ -2868,29 +4214,31 @@ private:
         return p;
     }
 
-    Prov Provenance(const vector<Roots> &res, const Fn &fn) {
+    Prov Provenance(const ResultRootInfo &res, const Fn &fn) {
         auto p = ProvStart(fn);
         while (ProvRound(res, fn, p)) {}
         return p;
     }
 
-    Roots ReturnedRoots(const Fn &fn, const Prov &p) {
-        Roots out;
-        for (auto &b : fn.f->blocks)
-            for (auto &i : b.insts)
-                if (i.op == GirOp::Ret && i.vals.size() == 1)
-                    for (auto &r : RootsAt(p.vals, i.vals[0]))
-                        if (find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
+    vector<Roots> ReturnedRoots(const Fn &fn, const Prov &p) {
+        vector<Roots> out(fn.f->results.size());
+        for (auto &block : fn.f->blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::Ret)
+                for (size_t result = 0; result < inst.vals.size(); result++)
+                    if (GirRefLike(m, fn.f->results[result])) AddRoots(out[result], RootsAt(p.vals, inst.vals[result]));
         return out;
     }
 
-    vector<Roots> ResultRoots() {
-        vector<Roots> res(m.funcs.size());
+    ResultRootInfo ResultRoots() {
+        ResultRootInfo res(m.funcs.size());
+        for (size_t function = 0; function < m.funcs.size(); function++) res[function].resize(m.funcs[function].results.size());
         for (auto changed = true; changed;) {
             changed = false;
             auto next = res;
-            for (size_t k = 0; k < m.funcs.size(); k++)
-                changed |= AddTo(next, (int)k, ReturnedRoots(fns[k], Provenance(res, fns[k])));
+            for (size_t function = 0; function < m.funcs.size(); function++) {
+                auto roots = ReturnedRoots(fns[function], Provenance(res, fns[function]));
+                for (size_t result = 0; result < roots.size(); result++) changed |= AddTo(next[function], (int)result, roots[result]);
+            }
             res = std::move(next);
         }
         return res;
@@ -2922,6 +4270,10 @@ private:
                         break;
                     case GirOp::DestCopy:
                         AddTargets(e.reads, RootsAt(p.vals, i.b));
+                        break;
+                    case GirOp::DestPublish: case GirOp::DestPublishRef:
+                        AddTargets(e.writes, RootsAt(p.vals, i.a));
+                        AddTargets(e.grows, RootsAt(p.vals, i.a));
                         break;
                     case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen:
                         AddTargets(e.reads, RootsAt(p.vals, i.a));
@@ -3173,12 +4525,14 @@ private:
             int target = -1;
             int parent = -1;
             int slot = -1;
+            int pushReference = -1;
             int argumentFunction = -1;
             int argumentPosition = -1;
             int64_t count = 0;
             int64_t expected = -1;
             bool staged = false;
             bool valueAdapter = false;
+            GirTypeId adaptedFrom = -1;
             bool replacement = false;
             bool landed = false;
             bool operator==(const Ownership &) const = default;
@@ -3188,6 +4542,7 @@ private:
             map<int, Ownership> named;
             map<pair<int, int>, Ownership> packed;
             map<int, Ownership> arguments;
+            set<int> rendered;
             bool operator==(const State &) const = default;
         };
         vector<const GirInst *> definitions(fn.nvalues, nullptr);
@@ -3205,6 +4560,10 @@ private:
             auto parsed = from_chars(text.data(), text.data() + text.size(), n);
             return parsed.ec == errc() && parsed.ptr == text.data() + text.size() ? n : -1;
         };
+        auto fixedCount = [&](GirTypeId type) -> int64_t {
+            auto &array = m.Type(type);
+            return array.kind == CoreType::Arr ? array.count : -1;
+        };
         for (auto &block : f.blocks) for (auto &inst : block.insts) {
             vector<int> uses;
             Uses(inst, uses);
@@ -3221,6 +4580,7 @@ private:
             Ownership owner;
             owner.root = value;
             owner.channel = (int)result;
+            owner.expected = fixedCount(f.results[result]);
             initial.live[value] = owner;
         }
         auto handlesTarget = [&](int target) {
@@ -3243,6 +4603,7 @@ private:
                 return;
             }
             auto combined = *incoming[target];
+            if (combined.rendered != next.rendered) bad("control-flow merge changes unconsumed print snapshots");
             if (combined.live.size() != next.live.size() || combined.named.size() != next.named.size() ||
                 combined.packed.size() != next.packed.size() || combined.arguments.size() != next.arguments.size())
                 bad("control-flow merge changes outstanding destination ownership");
@@ -3310,17 +4671,22 @@ private:
                     case GirOp::DestOpen: {
                         Ownership owner;
                         owner.root = inst.res;
+                        owner.expected = fixedCount(inst.ty);
                         if (inst.knownCount) {
-                            owner.expected = constant(*inst.knownCount);
-                            if (owner.expected < 0 && definitions[*inst.knownCount] &&
+                            auto count = constant(*inst.knownCount);
+                            if (count < 0 && definitions[*inst.knownCount] &&
                                 definitions[*inst.knownCount]->op == GirOp::Int)
                                 bad("destination known count is negative or invalid");
+                            if (owner.expected >= 0 && count >= 0 && owner.expected != count)
+                                bad("destination known count differs from its fixed array length");
+                            if (count >= 0) owner.expected = count;
                         }
                         if (auto slot = get_if<GirDestSlotReceiver>(&inst.destReceiver)) {
                             owner.slot = slot->slot;
                             for (auto &[value, live] : state.live)
                                 if (live.slot == owner.slot) bad("receiver slot has another unfinished construction");
                         }
+                        if (auto push = get_if<GirDestPushReceiver>(&inst.destReceiver)) owner.pushReference = push->reference;
                         if (auto argument = get_if<GirDestArgReceiver>(&inst.destReceiver)) {
                             owner.argumentFunction = argument->function;
                             owner.argumentPosition = argument->parameter;
@@ -3333,6 +4699,7 @@ private:
                         Ownership child;
                         child.root = inst.res;
                         child.parent = parent.root;
+                        child.expected = fixedCount(inst.ty);
                         state.live[inst.res] = child;
                         break;
                     }
@@ -3346,7 +4713,20 @@ private:
                         if (owner.count >= 0) owner.count += (int64_t)inst.bytes.size();
                         break;
                     }
-                    case GirOp::DestText: case GirOp::DestCopy:
+                    case GirOp::Render:
+                        state.rendered.insert(inst.res);
+                        break;
+                    case GirOp::Print:
+                        for (auto &part : inst.parts)
+                            if (!part.text && definitions[part.val] && definitions[part.val]->op == GirOp::Render &&
+                                !state.rendered.erase(part.val)) bad("print consumes a rendered snapshot twice");
+                        break;
+                    case GirOp::DestText:
+                        if (definitions[inst.b] && definitions[inst.b]->op == GirOp::Render && !state.rendered.erase(inst.b))
+                            bad("text destination consumes a rendered snapshot twice");
+                        ready(inst.a).count = -1;
+                        break;
+                    case GirOp::DestCopy:
                         ready(inst.a).count = -1;
                         break;
                     case GirOp::DestSnapshot: {
@@ -3379,19 +4759,25 @@ private:
                     }
                     case GirOp::DestPublish: {
                         auto owner = consume(inst.a);
-                        if (owner.channel >= 0 || owner.parent >= 0 || owner.argumentFunction >= 0 || owner.staged)
+                        if (owner.channel >= 0 || owner.parent >= 0 || owner.argumentFunction >= 0 || owner.staged || owner.adaptedFrom >= 0)
                             bad("completion published at another owning receiver");
+                        break;
+                    }
+                    case GirOp::DestPublishRef: {
+                        auto owner = consume(inst.a);
+                        if (owner.pushReference < 0 || owner.channel >= 0 || owner.parent >= 0 || owner.staged || owner.adaptedFrom >= 0)
+                            bad("reference publication does not own a completed push receiver");
                         break;
                     }
                     case GirOp::DestAbandon:
                         transfer(inst.a, inst.res);
                         break;
                     case GirOp::DestCancel:
-                        consume(inst.a);
+                        if (consume(inst.a).adaptedFrom >= 0) bad("producer cancellation has not restored its receiving protocol");
                         break;
                     case GirOp::DestBind: {
                         auto owner = consume(inst.a);
-                        if (owner.channel < 0 || f.resultProtocols[owner.channel].namedSlot != inst.idx ||
+                        if (owner.adaptedFrom >= 0 || owner.channel < 0 || f.resultProtocols[owner.channel].namedSlot != inst.idx ||
                             state.named.count(inst.idx)) bad("named local does not own its declared incoming result channel");
                         owner.slot = inst.idx;
                         state.named[inst.idx] = owner;
@@ -3411,6 +4797,7 @@ private:
                         Ownership replacement;
                         replacement.root = inst.res;
                         replacement.channel = inst.idx;
+                        replacement.expected = fixedCount(inst.ty);
                         replacement.replacement = true;
                         state.live[inst.res] = replacement;
                         break;
@@ -3425,9 +4812,28 @@ private:
                         state.named.erase(found);
                         break;
                     }
+                    case GirOp::DestAdapt: {
+                        auto owner = consume(inst.a);
+                        if (owner.count != 0 || owner.adaptedFrom >= 0 || owner.valueAdapter)
+                            bad("destination adaptation begins after writes or inside another adapter");
+                        owner.adaptedFrom = fn.vt[inst.a];
+                        state.live[inst.res] = owner;
+                        break;
+                    }
+                    case GirOp::DestAdaptFinish: {
+                        auto owner = consume(inst.a);
+                        auto &restored = m.Type(fn.vt[inst.res]);
+                        if (owner.adaptedFrom < 0 || owner.valueAdapter ||
+                            m.Type(owner.adaptedFrom).elem != restored.elem ||
+                            m.Type(owner.adaptedFrom).request != restored.request)
+                            bad("producer completion or cancellation restores another receiving channel");
+                        owner.adaptedFrom = -1;
+                        state.live[inst.res] = owner;
+                        break;
+                    }
                     case GirOp::DestValue: {
                         auto owner = consume(inst.a);
-                        if (owner.count != 0) bad("value adapter changes a destination after writing elements");
+                        if (owner.count != 0 || owner.adaptedFrom >= 0) bad("value adapter begins after writes or during another adaptation");
                         owner.valueAdapter = true;
                         state.live[inst.res] = owner;
                         break;
@@ -3435,7 +4841,7 @@ private:
                     case GirOp::DestRelocate: {
                         auto owner = consume(inst.a);
                         if (inst.reason == GirEventReason::HeaderRemoval) {
-                            if (!owner.valueAdapter) bad("header removal has no preceding value adapter");
+                            if (!owner.valueAdapter || owner.adaptedFrom >= 0) bad("header removal has no restored value adapter");
                             owner.valueAdapter = false;
                         } else {
                             if (!owner.replacement || owner.landed) bad("exit landing has no pending replacement interval");
@@ -3450,7 +4856,7 @@ private:
                     }
                     case GirOp::DestStage: {
                         auto owner = consume(inst.a);
-                        if (owner.staged || owner.expected >= 0 || owner.count != 0)
+                        if (owner.staged || owner.expected >= 0 || owner.count != 0 || owner.adaptedFrom >= 0)
                             bad("capacity stage is repeated or has a known element count");
                         owner.staged = true;
                         state.live[inst.res] = owner;
@@ -3458,14 +4864,14 @@ private:
                     }
                     case GirOp::DestFit: {
                         auto owner = consume(inst.a);
-                        if (!owner.staged) bad("capacity fit does not consume its private stage");
+                        if (!owner.staged || owner.adaptedFrom >= 0) bad("capacity fit does not consume a restored private stage");
                         owner.staged = false;
                         state.live[inst.res] = owner;
                         break;
                     }
                     case GirOp::DestArg: {
                         auto owner = consume(inst.a);
-                        if (owner.argumentFunction < 0) bad("argument completion has no reserved call parameter region");
+                        if (owner.adaptedFrom >= 0 || owner.argumentFunction < 0) bad("argument completion has no reserved call parameter region");
                         state.arguments[inst.res] = owner;
                         break;
                     }
@@ -3508,10 +4914,10 @@ private:
                             if (!carrier(inst.vals[result])) continue;
                             auto owner = consume(inst.vals[result]);
                             if (owner.channel != (int)result || (owner.target >= 0 && !handlesTarget(owner.target)) ||
-                                owner.staged || owner.valueAdapter || (owner.replacement && !owner.landed))
+                                owner.staged || owner.valueAdapter || owner.adaptedFrom >= 0 || (owner.replacement && !owner.landed))
                                 bad("returned completion belongs to another channel or an unfinished adapter");
                         }
-                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty())
+                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty() || !state.rendered.empty())
                             bad("return leaves unfinished destination, named, argument, or pack ownership");
                         break;
                     case GirOp::Abort: case GirOp::Exit: case GirOp::Unreachable: break;
@@ -3519,6 +4925,7 @@ private:
                         Ownership owner;
                         owner.root = inst.res;
                         owner.channel = inst.idx2;
+                        owner.expected = fixedCount(inst.ty);
                         owner.target = inst.idx;
                         owner.replacement = true;
                         state.live[inst.res] = owner;
@@ -3593,7 +5000,7 @@ private:
                         for (size_t result = 0; result < inst.vals.size(); result++) {
                             if (!carrier(inst.vals[result])) continue;
                             auto owner = consume(inst.vals[result]);
-                            if (owner.target != inst.idx || owner.channel != (int)result || owner.staged || owner.valueAdapter)
+                            if (owner.target != inst.idx || owner.channel != (int)result || owner.staged || owner.valueAdapter || owner.adaptedFrom >= 0)
                                 bad("escape carrier belongs to another target or incomplete adapter");
                         }
                         {
@@ -3605,7 +5012,7 @@ private:
                                     bad("escape forwards another normal result channel's cancellation");
                             }
                         }
-                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty())
+                        if (!state.live.empty() || !state.named.empty() || !state.packed.empty() || !state.arguments.empty() || !state.rendered.empty())
                             bad("escape leaves unfinished local, result, argument, or pack ownership");
                         break;
                     case GirOp::Leave:
@@ -3855,7 +5262,7 @@ private:
         return states;
     }
 
-    void CheckShrinkReplace(const Fn &fn, const vector<Roots> &resultRoots) {
+    void CheckShrinkReplace(const Fn &fn, const ResultRootInfo &resultRoots) {
         const auto &f = *fn.f;
         auto provenance = Provenance(resultRoots, fn);
         auto fresh = FreshOwnerRuns(fn);
