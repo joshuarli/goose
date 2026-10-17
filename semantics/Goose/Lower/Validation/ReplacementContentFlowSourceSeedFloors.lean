@@ -54,7 +54,7 @@ theorem lowerContext_slot_seed_ceiling {module : Core.Module} {ctx : Context} {i
     refine ⟨(slot, declared), annotation, ?_⟩
     simp [variableRow, reference, ordinary]
   apply slotRootSeeds_contains (slot := slot) ?_ metadata
-  simpa [lowerContextAt, lowerImpl, lowerEnv] using
+  simpa [lowerContextAt, lowerImpl, lowerImplFromState, lowerEnv] using
     (Array.getElem?_eq_some_iff.mp variableRow).1
 
 theorem lowerContext_slot_seed_source {module : Core.Module} {ctx : Context} {impl : Impl}
@@ -85,7 +85,7 @@ theorem lowerContext_slot_seed_parameter {module : Core.Module} {ctx : Context} 
     refine ⟨(slot, declared), annotation, ?_⟩
     simp [variableRow, refLike, reference, parameterRow, aligned]
   apply slotRootSeeds_contains (slot := slot) ?_ metadata (.param slot) (by simp)
-  simpa [lowerContextAt, lowerImpl, lowerEnv] using
+  simpa [lowerContextAt, lowerImpl, lowerImplFromState, lowerEnv] using
     (Array.getElem?_eq_some_iff.mp variableRow).1
 
 #print axioms lowerContext_slot_seed_parameter
