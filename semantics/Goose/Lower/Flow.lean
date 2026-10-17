@@ -1,4 +1,5 @@
 import Goose.Lower.Return
+import Goose.Lower.FlowState
 
 namespace Goose.Lower
 
@@ -12,13 +13,6 @@ def stmtReturnOk : Stmt → Bool
 def stmtsReturnOk : List Stmt → Bool
   | [] => true
   | stmt :: rest => stmtReturnOk stmt && stmtsReturnOk rest
-
-def ReturnedAt (cx : FnCtx) (flow : Flow) (pt : Pt) (fr : GIR.Frame) : Prop :=
-  ∃ value org, flow = .ret value ∧ ReturnSite cx pt fr value org
-
-def StmtFlowPost (cfg : Cfg) (env : Env) (cx : FnCtx) (ls : LS) (fr : GIR.Frame)
-    (ls' : LS) (flow : Flow) (pt' : Pt) (fr' : GIR.Frame) : Prop :=
-  (flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) ∨ ReturnedAt cx flow pt' fr'
 
 def StmtReturnClaim (n : Nat) (lc : Option LoopCtx) (stmt : Stmt) : Prop :=
   stmtReturnOk stmt = true → ∀ (le : LEnv) (ls ls' : LS) (u : Unit) (pt : Pt)
@@ -41,19 +35,6 @@ theorem stmtReturnClaim (n : Nat) (lc : Option LoopCtx) (stmt : Stmt) :
       hlow hpp hext hrel) fun flow pt' fr' ⟨hflow, hpost⟩ => ?_
     subst flow
     exact SimG.ret (Or.inl ⟨rfl, hpost⟩)
-
-def returnStmtsTail (n : Nat) (cfg : Cfg) (env : Env) (rest : List Stmt) : Flow → M Flow
-  | .normal _ => execStmts n cfg env rest >>= prepareReturn env
-  | flow => pure flow
-
-theorem prepareReturn_execStmts (n : Nat) (cfg : Cfg) (env : Env)
-    (stmt : Stmt) (rest : List Stmt) :
-    (execStmts (n + 1) cfg env (stmt :: rest) >>= prepareReturn env) =
-      ((execStmt n cfg env stmt >>= prepareReturn env) >>= returnStmtsTail n cfg env rest) := by
-  simp only [execStmts, bind_assoc]
-  congr 1
-  funext flow
-  cases flow <;> simp [prepareReturn, returnStmtsTail, bind_assoc, pure_bind]
 
 def StatementsFlowSimulation (n : Nat) (lc : Option LoopCtx) (stmts : List Stmt) : Prop :=
   ∀ (le : LEnv) (ls ls' : LS) (u : Unit) (pt : Pt)
@@ -107,13 +88,6 @@ theorem stmtsReturnClaim (n : Nat) (lc : Option LoopCtx) (stmts : List Stmt) :
 def blockReturnOk : Core.Block → Bool
   | .mk _ stmts value => stmtsReturnOk stmts &&
       (match value with | none => true | some expr => exprOk expr)
-
-def BlockFlowPost (cfg : Cfg) (env : Env) (cx : FnCtx) (ls : LS) (fr : GIR.Frame)
-    (ls' : LS) (blk : Core.Block) (want : Bool) (r : ValueId)
-    (flow : Flow) (pt' : Pt) (fr' : GIR.Frame) : Prop :=
-  (∃ value, flow = .normal value ∧ (blk.value = none → value = .unit) ∧
-    Post cfg env cx ls fr ls' fr' pt' (blockCells blk want r value)) ∨
-    ReturnedAt cx flow pt' fr'
 
 theorem preparedBlock_core {n : Nat} {lc : Option LoopCtx} {sc : ScopeId}
     {stmts : List Stmt} {value : Option Expr} {pre : List (SlotId × ValueId × OriginId)}

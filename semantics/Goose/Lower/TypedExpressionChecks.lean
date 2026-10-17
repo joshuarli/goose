@@ -16,7 +16,7 @@ def boolCallee : Impl :=
 
 def sourceModule : Core.Module :=
   { files := #["typed.goose"], types := #[.bool], globals := #[], impls := #[sourceImpl, boolCallee],
-    contexts := #[initContext, ⟨1, "bools", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "typed"⟩] }
+    contexts := #[initContext, ⟨1, "bools", [], [], []⟩], entry := 0, origins := #[⟨0, 1, "expr"⟩] }
 
 def enteredState : St := { St.initial with nextAct := 1, nextScope := 1 }
 
@@ -159,7 +159,7 @@ def sliceHeaderModule : Core.Module :=
     globals := #[], impls := #[main, callee],
     contexts := #[⟨0, "main", [(1, [.local 0])], [], []⟩,
       ⟨1, "header", [(0, [.param 0]), (1, [.param 1])], [], [(0, [.param 1])]⟩],
-    entry := 0, origins := #[⟨0, 1, "slice-header"⟩] }
+    entry := 0, origins := #[⟨0, 1, "call"⟩] }
 
 #guard [ArtifactProfile.pilot, .shrink].all fun artifact =>
   let source := { sliceHeaderModule with profile := artifact }

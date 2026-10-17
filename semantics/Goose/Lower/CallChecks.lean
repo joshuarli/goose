@@ -25,7 +25,7 @@ def source : Core.Module :=
   { files := #["calls.goose"], types := #[.int .i64], globals := #[],
     impls := #[first, second, main], contexts := #[⟨1, "second", [], [[]], []⟩,
       ⟨0, "first", [], [[]], []⟩, ⟨2, "main", [], [], []⟩], entry := 2,
-    origins := #[⟨0, 1, "calls"⟩] }
+    origins := #[⟨0, 1, "call"⟩] }
 
 def argumentBuilder : LS :=
   (lowerArgs arguments (lowerEnv source variables []) initialBuilder).2
@@ -103,7 +103,7 @@ def referenceSource : Core.Module :=
   { files := #["reference.goose"], types := #[.int .i64, .ref .readOnly (.int .i64)],
     globals := #[], impls := #[referenceCallee, main],
     contexts := #[⟨0, "reference", [(0, [.param 0])], [[]], []⟩,
-      ⟨1, "main", [], [], []⟩], entry := 1, origins := #[⟨0, 1, "reference"⟩] }
+      ⟨1, "main", [], [], []⟩], entry := 1, origins := #[⟨0, 1, "param"⟩] }
 
 theorem concrete_reference_callee (profile : NumProfile) (n : Nat) :
     CalleeCallClaim n ⟨profile, referenceSource⟩ 0 :=

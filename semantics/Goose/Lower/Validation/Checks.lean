@@ -23,7 +23,7 @@ def parameterSlice : Module :=
     impls := #[emptyEntry, sliceReceiver],
     contexts := #[⟨0, "main", [], [], []⟩,
       ⟨1, "receiver", [(0, [.param 0])], [], [(0, [.param 0])]⟩],
-    entry := 0, origins := #[⟨0, 1, "test"⟩] }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩] }
 
 def undeclaredSliceSlot : Module :=
   { parameterSlice with
@@ -39,7 +39,7 @@ def readonlyShrinkBorrow : Module :=
   { files := #["readonly-shrink-borrow.goose"], types := #[],
     globals := #[⟨"g", owner, .immutable, .arrLit owner [], 0⟩],
     impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
-    entry := 0, origins := #[⟨0, 1, "test"⟩], profile := .shrink }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := .shrink }
 
 def readonlyReferenceLocal : Module :=
   let main : Impl :=
@@ -49,7 +49,7 @@ def readonlyReferenceLocal : Module :=
   { files := #["readonly-reference-local.goose"], types := #[],
     globals := #[⟨"g", .int .i64, .mutable, .lit .i64 1, 0⟩],
     impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
-    entry := 0, origins := #[⟨0, 1, "test"⟩] }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩] }
 
 def readonlyReferenceRebind : Module :=
   { readonlyReferenceLocal with
@@ -78,7 +78,7 @@ def readonlySliceLocal : Module :=
   { files := #["readonly-slice-local.goose"], types := #[],
     globals := #[⟨"g", owner, .mutable, .arrLit owner [.lit .i64 1], 0⟩],
     impls := #[main], contexts := #[⟨0, "main", [(0, [.global 0])], [], []⟩],
-    entry := 0, origins := #[⟨0, 1, "test"⟩] }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩] }
 
 def specializedSummary : Module :=
   let summary : SummaryAnn := .known ⟨[.global 0], [], [], [], [], false, true⟩
@@ -96,7 +96,7 @@ def specializedSummary : Module :=
     impls := #[main, receiver],
     contexts := #[⟨0, "main", [], [], []⟩,
       ⟨1, "receiver", [(0, [.global 0])], [], []⟩],
-    entry := 0, origins := #[⟨0, 1, "test"⟩] }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩] }
 
 def specializedParameterSummary : Module :=
   { specializedSummary with
@@ -118,7 +118,7 @@ def specializedStorageSummary : Module :=
     impls := #[main, receiver],
     contexts := #[⟨0, "main", [], [], []⟩,
       ⟨1, "receiver", [(0, [.global 0])], [], []⟩],
-    entry := 0, origins := #[⟨0, 1, "test"⟩], profile := .shrink }
+    entry := 0, origins := #[⟨0, 1, "expr"⟩], profile := .shrink }
 
 def specializedBindingSummary : Module :=
   { specializedSummary with

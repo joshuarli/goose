@@ -35,6 +35,9 @@ struct Parser {
     bool stmt_ended = false;
 
     SFunction *curfn = nullptr;      // The function whose body is being parsed.
+    // A for binder's type is followed by the loop's own `in`, so an index
+    // type there needs parentheses: `for w: (u32 in nodes) in edges`.
+    bool forbindtype = false;
 
     // Namespaces: the file's `namespace` directive,
     // and the namespace of the declaration being parsed -- the file's, or the
@@ -65,6 +68,15 @@ struct Parser {
         if (lex.tok != T_IDENT || lex.attr != "inline") return false;
         auto next = lex.PeekTok();
         return next == T_FN || next == T_RECURSIVE || next == T_THREADFN;
+    }
+
+    // `checkfree` likewise, before the rest of a declaration's modifiers
+    // (`inline` among them, which is a name to the lexer).
+    bool AtCheckfree() {
+        if (lex.tok != T_IDENT || lex.attr != "checkfree") return false;
+        auto next = lex.PeekTok();
+        return next == T_FN || next == T_RECURSIVE || next == T_THREADFN || next == T_SIMD ||
+               next == T_EXTERN || next == T_IDENT;
     }
 
     void Expect(TType t, const char *context) {
@@ -181,7 +193,7 @@ struct Parser {
         }
         declseen = true;
         auto declstart = lex.tokstart;
-        if (AtInline()) goto fndecl;
+        if (AtInline() || AtCheckfree()) goto fndecl;
         switch (lex.tok) {
             case T_STRUCT: ParseStructDecl(); return;
             case T_ENUM:   ParseEnumDecl();   return;
@@ -339,6 +351,11 @@ struct Parser {
         sf->line = line;
         sf->isnested = nested;
         sf->outer = curfn;
+        auto checkfree = false;
+        if (AtCheckfree()) {
+            checkfree = true;
+            lex.Next();
+        }
         if (lex.tok == T_EXPORT) {
             sf->isexport = true;
             if (nested) Error("export fn must be declared at top level");
@@ -358,6 +375,14 @@ struct Parser {
                 lex.Next();
             }
         }
+        if (!checkfree && AtCheckfree()) {
+            checkfree = true;
+            lex.Next();
+        }
+        if (checkfree && sf->isextern)
+            Error("extern fn cannot be checkfree: it has no body to check");
+        // A nested function is part of the body it is declared in.
+        sf->checkfree = checkfree || (nested && curfn && curfn->checkfree);
         if (IsNext(T_SIMD)) {
             if (sf->isextern) Error("extern fn cannot be simd: it has no body to compile");
             sf->issimd = true;
@@ -624,6 +649,28 @@ struct Parser {
         if (IsPrimTypeToken(lex.tok)) {
             auto t = ast.PrimTypeForToken(lex.tok);
             lex.Next();
+            auto upto = lex.tok == T_IDENT && lex.attr == "upto";
+            if (t->kind == TY_INT && !forbindtype && (lex.tok == T_IN || upto)) {
+                // `u32 in a` / `u32 upto a` (docs/design/index_types.md).
+                if (!IsUnsigned(t->intstorage))
+                    Error(cat("an index type is unsigned (u8, u16, u32 or u64), not ",
+                              IntStorageName(t->intstorage)));
+                lex.Next();
+                auto it = ast.NewType(TY_INT, line);
+                it->intstorage = t->intstorage;
+                it->ix = ast.NewDetail<TypeIndex>();
+                it->ix->upto = upto;
+                it->ix->name = ParseQualifiedName(upto ? "bound type" : "index type");
+                it->ix->ns = curns;
+                // It takes no postfix: `u32 in nodes[>..]` would read as an
+                // index into `nodes[>..]`.
+                if (lex.tok == T_LBRACKET || lex.tok == T_BITAND || lex.tok == T_QUESTION ||
+                    lex.tok == T_DOTDOT || lex.tok == T_DOT)
+                    Error(cat("an index type takes no postfix: parenthesize it, as in (",
+                              IntStorageName(it->intstorage), upto ? " upto " : " in ",
+                              it->ix->name, ")", TokStr()));
+                return it;
+            }
             return t;
         }
         switch (lex.tok) {
@@ -668,7 +715,10 @@ struct Parser {
             case T_LPAREN: {
                 // Grouping, e.g. (Sexp..&<varint>)[varint].
                 lex.Next();
+                auto forbind = forbindtype;
+                forbindtype = false;
                 auto t = ParseType();
+                forbindtype = forbind;
                 Expect(T_RPAREN, "parenthesized type");
                 return t;
             }
@@ -815,11 +865,19 @@ struct Parser {
         auto byref = IsNext(T_BITAND);
         auto var = ExpectIdent("for binding");
         TypeExpr *vartype = nullptr, *idxtype = nullptr;
-        if (IsNext(T_COLON)) vartype = ParseType();
         string_view idxvar;
-        if (IsNext(T_COMMA)) {
-            idxvar = ExpectIdent("for index binding");
-            if (IsNext(T_COLON)) idxtype = ParseType();
+        {
+            // Restored on the throw of an error a tentative parse backtracks over too.
+            struct Scope {
+                bool &f, saved;
+                Scope(bool &_f) : f(_f), saved(_f) { f = true; }
+                ~Scope() { f = saved; }
+            } fs(forbindtype);
+            if (IsNext(T_COLON)) vartype = ParseType();
+            if (IsNext(T_COMMA)) {
+                idxvar = ExpectIdent("for index binding");
+                if (IsNext(T_COLON)) idxtype = ParseType();
+            }
         }
         Expect(T_IN, "for statement");
         Node *iter;
@@ -1195,17 +1253,71 @@ struct Parser {
         return a;
     }
 
-    StructLit *ParseStructLitBody(TypeExpr *type, Line line) {
-        Expect(T_LCURLY, "struct literal");
-        auto sl = New<StructLit>(line, type);
+    ConstFor *ParseConstFor(bool initializers) {
+        auto cf = New<ConstFor>(CurLine());
+        Expect(T_CONST, "const for");
+        Expect(T_FOR, "const for");
+        Expect(T_LT, "const for bindings");
+        do {
+            auto name = ExpectIdent("const for binding");
+            if (find(cf->names.begin(), cf->names.end(), name) != cf->names.end())
+                Error(cat("duplicate const for binding: ", name));
+            cf->names.push_back(name);
+            if (!IsNext(T_COMMA)) break;
+        } while (lex.tok != T_GT);
+        ExpectClosingAngle("const for bindings");
+        Expect(T_IN, "const for");
+        if (IsNext(T_LBRACKET)) {
+            cf->source = ES_CONSTANTS;
+            auto sub = Sub();
+            while (lex.tok != T_RBRACKET) {
+                cf->constants.push_back(ParseExpr());
+                if (!IsNext(T_COMMA)) break;
+            }
+            Expect(T_RBRACKET, "const for constant list");
+        } else {
+            auto query = ExpectIdent("const for source");
+            if (query != "fields" && query != "types")
+                Error("const for source must be fields<T>, types<...>, or [constants]");
+            cf->source = query == "fields" ? ES_FIELDS : ES_TYPES;
+            Expect(T_LT, "const for source");
+            while (lex.tok != T_GT && lex.tok != T_SHR) {
+                cf->types.push_back(ParseType());
+                if (!IsNext(T_COMMA)) break;
+            }
+            ExpectClosingAngle("const for source");
+            if (cf->source == ES_FIELDS && cf->types.size() != 1)
+                Error("fields requires exactly one type");
+        }
+        auto arity = cf->source == ES_FIELDS ? 2u : 1u;
+        if (cf->names.size() != arity)
+            Error(cat("const for source requires exactly ", arity, " binding(s)"));
+        if (initializers) {
+            bool defaults = false;
+            ParseInitList(cf->inits, defaults, true);
+        } else {
+            cf->body = ParseBlockExpr("const for body");
+        }
+        return cf;
+    }
+
+    void ParseInitList(vector<FieldInit> &inits, bool &defaultall, bool fragment = false) {
+        Expect(T_LCURLY, "constructor initializers");
         auto sub = Sub();
         while (lex.tok != T_RCURLY) {
             // A trailing `..` fills in every field not given.
             if (IsNext(T_DOTDOT)) {
-                sl->defaultall = true;
+                if (fragment) Error("trailing .. belongs to the whole constructor, not a const for fragment");
+                defaultall = true;
                 break;
             }
             FieldInit fi;
+            if (lex.tok == T_CONST && lex.PeekTok() == T_FOR) {
+                fi.val = ParseConstFor(true);
+                inits.push_back(fi);
+                if (!IsNext(T_COMMA)) break;
+                continue;
+            }
             if (lex.tok == T_IDENT) {
                 // Only an `ident :` pair is a named initializer.
                 auto save2 = lex;
@@ -1214,12 +1326,21 @@ struct Parser {
                 if (IsNext(T_COLON)) fi.name = name; else lex = save2;
             }
             fi.val = ParseExpr();
-            sl->inits.push_back(fi);
+            inits.push_back(fi);
             if (!IsNext(T_COMMA)) break;
         }
         Expect(T_RCURLY, "struct literal");
+    }
+
+    StructLit *ParseStructLitBody(TypeExpr *type, Line line) {
+        auto sl = New<StructLit>(line, type);
+        ParseInitList(sl->inits, sl->defaultall);
         auto named = 0;
-        for (auto &fi : sl->inits) named += !fi.name.empty();
+        for (auto &fi : sl->inits) {
+            // Empty expansions may disappear; mixed-form checks follow flattening.
+            if (Is<ConstFor>(fi.val)) return sl;
+            named += !fi.name.empty();
+        }
         if (named && named != (int)sl->inits.size())
             Error("struct literal mixes named and positional initializers");
         return sl;
@@ -1280,9 +1401,13 @@ struct Parser {
             stmt_level = false;
             stmt_ended = false;
             if (IsNext(T_RCURLY)) break;
-            if (AtInline()) goto nestedfndecl;
+            if (AtInline() || AtCheckfree()) goto nestedfndecl;
             switch (lex.tok) {
                 case T_LET: case T_VAR: case T_CONST: case T_REUSABLE: {
+                    if (lex.tok == T_CONST && lex.PeekTok() == T_FOR) {
+                        b->stmts.push_back(ParseConstFor(false));
+                        continue;
+                    }
                     auto start = lex.tokstart;
                     auto vd = ParseVarDecl(false);
                     Expect(T_SEMI, "variable declaration");

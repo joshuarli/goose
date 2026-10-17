@@ -30,7 +30,7 @@ def eachModule (grow byRef : Bool) (tail : List Stmt) : Core.Module :=
     globals := #[⟨"owner", ownerType grow, .mutable,
       .arrLit (ownerType grow) (if grow then [.lit .i64 9] else [.lit .i64 9, .lit .i64 7]), 0⟩],
     impls := #[main], contexts := #[⟨0, "main", if byRef then [(0, [.global 0])] else [], [], []⟩], entry := 0,
-    origins := #[⟨0, 1, "each"⟩], profile := .shrink }
+    origins := #[⟨0, 1, "for"⟩], profile := .shrink }
 
 #guard [false, true].all fun grow => [false, true].all fun byRef =>
   [[], [.cont 0], [.brk 0], [.ret none 0]].all fun tail =>

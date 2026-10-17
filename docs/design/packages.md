@@ -574,7 +574,8 @@ writes `link-cc.rsp` and `link-msvc.rsp` under `pkg/…/<config>/` through the
 same wrapper and file-API probe as §5.2 (`cmake/package.cmake`, shared by
 the two). The compiler is built knowing that directory, as it knows
 `GOOSE_GFX_LINK_PATH` today, and looks there, then beside its own binary,
-then in `GOOSE_HOME`, for a builtin package's response file. A builtin
+for a builtin package's response file, as it does for the package's sources.
+A builtin
 package for a plain-C sidecar is the same minus `add_subdirectory`: CMake
 compiles `c_sources` itself.
 
@@ -585,6 +586,14 @@ The release binaries and CI configure with `all`; a developer's first
 `cmake -B build` builds the compiler alone in a fraction of the time, and
 the graphics samples still run, after one fetch and build into `~/.goose`,
 shared by every worktree.
+
+A release (`.github/workflows/release.yml`, laid out by
+`scripts/package_release.py`) has no build tree to look in: each builtin
+package is under `pkg/<name>/` beside the compiler, its sources without
+their vendored dependencies, and the static libraries of its link closure in
+`lib/`, which its response files there name relative to themselves. A link
+takes a copy of those under `GOOSE_HOME/build/builtin/` with the paths made
+absolute, one per place the compiler is unpacked.
 
 ### 7.2 What stays in the compiler
 

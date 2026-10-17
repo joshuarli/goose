@@ -412,7 +412,11 @@ public:
         Canon c;
         c.Tag('T').B(t->cq);
         switch (t->kind) {
-            case TY_INT: c.Tag('i').I(t->intstorage); break;
+            case TY_INT:
+                c.Tag('i').I(t->intstorage);
+                if (t->ix) c.Tag('x').Str(VarName(t->ix->arr)).B(t->ix->upto);
+                else c.Tag('_');
+                break;
             case TY_FLT: c.Tag('f').I(t->fltstorage); break;
             case TY_BOOL: c.Tag('b'); break;
             case TY_VOID: c.Tag('v'); break;

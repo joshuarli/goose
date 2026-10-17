@@ -82,8 +82,10 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                              (int64_t)spec->argtypes.size(), " worker argument(s)"));
             {
                 DestScope ds(*this, Dest {});
-                for (size_t i = 0; i < spec->argtypes.size(); i++)
+                for (size_t i = 0; i < spec->argtypes.size(); i++) {
+                    if (HoldsIndexT(spec->argtypes[i])) ThreadIndexError(c, spec->argtypes[i]);
                     CheckArg(args[1 + i], spec->argtypes[i]);
+                }
             }
             c->spec = spec;
             Val v;
@@ -95,6 +97,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             NoUntypedEmptyArray(av, args[0], d.name);
             if (av.type->kind == TY_VOID || av.type->kind == TY_FN || !IsFlat(av.type))
                 Error(c, cat("queue elements must be flat (§11.2), not ", TypeStr(av.type)));
+            if (HoldsIndexT(av.type)) ThreadIndexError(c, av.type);
             return VoidVal();
         }
         case B_QGET: case B_QPOLL: {
@@ -104,6 +107,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             ValidateType(t, c->line, VT_LOCAL);
             if (!IsFlat(t))
                 Error(c, cat("queue elements must be flat (§11.2), not ", TypeStr(t)));
+            if (HoldsIndexT(t)) ThreadIndexError(c, t);
             c->rettypes.push_back(t);
             Val first;
             first.type = t;
@@ -856,6 +860,7 @@ inline FnSpec *TypeCheck::UserFormatIn(Call *c, TypeExpr *t, string_view ns,
         ApplyCalleeRebinds(sp);
         ApplyCalleeGrows(c, sp, argvals, "format");
         ApplyCalleeWritableContents(sp, argvals);
+        CheckfreeCallee(c, sp->sf);
         c->fmtspecs.push_back({ t, sp });
         return sp;
     }
@@ -1148,6 +1153,15 @@ inline void TypeCheck::GrowOnlyShrinkAt(Node *c, const string &op, VarDef *vd,
     if (vd->reusable)
         Error(c, cat("cannot ", op, " reusable pool ", what,
                      ": its slots stay live for the freelist (§5.4)"));
+    // An index type relies on its array's length never going down, which
+    // any index held anywhere may still name (§3.11). Where the root only
+    // bounds the storage, any such array of the type may be the one.
+    for (auto ia : indexarrays) {
+        if (ia == vd || (bound && !vd->isglobal && ia->type && TypeEq(LoadType(ia->type), bound)))
+            Error(c, cat("cannot ", op, " ", what, ia == vd ? "" : cat(", which may be ", ia->name),
+                         ": an index type names ", ia->name, ", so its length never goes "
+                         "down (§3.11)"));
+    }
     // The elements freed: of the array itself, or for a bound, of an array
     // of its type. A parameter class's storage is not known here.
     auto arrtype = bound ? bound : vd->type ? LoadType(vd->type) : nullptr;
@@ -1511,6 +1525,11 @@ inline void TypeCheck::ApplyCalleeStores(FnSpec *spec, vector<Val> &argvals, Nod
     auto end = min(rec->eventend, storeevents.size());
     for (auto i = rec->eventstart; i < end; i++) {
         auto e = storeevents[i];
+        // A call back into a body still being checked leaves the events of
+        // that body's own variables as they are: a cycle's rounds keep the
+        // variables, so they are those of the activation being checked, which
+        // this call's arguments do not describe.
+        if (spec->inprogress && e.container && e.container->ownerspec == spec) continue;
         auto r = mapped(e.root, e.exact);
         auto src = source(e.src);
         e.classread = e.classread && IsClassRoot(src);
@@ -1724,6 +1743,13 @@ inline void TypeCheck::NoteGlobalBinding(VarDef *gd, const Roots &roots, bool by
         e.at = at;
         madestores.push_back(e);
     }
+}
+
+// Each thread program has a copy of the globals of its own, which grow apart
+// once it runs, so an index of one copy says nothing about another (§3.11).
+inline void TypeCheck::ThreadIndexError(Node *at, TypeExpr *t) {
+    Error(at, cat(TypeStr(t), " cannot pass between threads: it holds an index type, and each "
+                  "thread program's copy of the array it names grows on its own (§3.11)"));
 }
 
 // A shrink of global array vd, or of what vd only bounds, for

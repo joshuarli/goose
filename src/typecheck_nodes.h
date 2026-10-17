@@ -10,6 +10,7 @@ namespace goose {
 inline Val IntLit::Check(TypeCheck &tc, TypeExpr *) {
     Val v;
     v.type = tc.ast.inttypes[uns ? IS_U64 : IS_I64];
+    if (fixedtype) { v.type = fixedtype; v.nonneg = uns || val >= 0; return v; }
     v.ck = CK_INT;
     v.ival = val;
     v.uns = uns;
@@ -20,6 +21,7 @@ inline Val IntLit::Check(TypeCheck &tc, TypeExpr *) {
 inline Val FltLit::Check(TypeCheck &tc, TypeExpr *) {
     Val v;
     v.type = tc.ast.flttypes[FS_F64];
+    if (fixedtype) { v.type = fixedtype; return v; }
     v.ck = CK_FLT;
     v.fval = val;
     return v;
@@ -80,6 +82,7 @@ inline Val StrLit::Check(TypeCheck &tc, TypeExpr *expected) {
 }
 
 inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
+    if (!expansionerror.empty()) tc.Error(this, string(expansionerror));
     if (auto vd = tc.LookupVar(name, ns, this)) {
         vdef = vd;
         tc.RequireAssigned(vd, this);
@@ -291,6 +294,11 @@ inline Val ArrayLit::Check(TypeCheck &tc, TypeExpr *expected) {
 }
 
 inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
+    tc.ExpandInitializers(inits);
+    auto expandednamed = !inits.empty() && !inits[0].name.empty();
+    for (auto &fi : inits)
+        if (expandednamed != !fi.name.empty())
+            tc.Error(fi.val, "struct literal mixes named and positional initializers");
     fieldindices.clear();
     sinst = nullptr;
     einst = nullptr;
@@ -408,8 +416,7 @@ inline Val Binary::Check(TypeCheck &tc, TypeExpr *) {
 }
 
 inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
-    // EnumName.Variant: a payload-less variant constant.
-    if (auto id = Is<Ident>(obj)) {
+    if (auto id = Is<Ident>(obj); id && id->expansionerror.empty()) {
         const FnValBind *fb;
         if (!tc.LookupVar(id->name, id->ns) && !tc.LookupTypeParam(id->name, fb) && !fb)
             if (auto en = DepLookupEnum(tc.ast, id->name, id->ns))
@@ -427,6 +434,9 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
         ov.ClearReads();
         ov.reached = tc.LoadType(t);
     }
+    if (accessorowner && !tc.TypeEq(tc.ast.PlainOf(t), accessorowner))
+        tc.Error(this, cat("const for accessor belongs to ", tc.TypeStr(accessorowner),
+                           ", not ", tc.TypeStr(t)));
     // Builtin properties (.len/.cap) from the table.
     if (auto bd = LookupBuiltin(name); bd && (bd->flags & BF_PROPERTY)) {
         if (RecvKindOf(t) & bd->recv) {
@@ -507,12 +517,28 @@ inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
         tc.Error(this, cat("as can only convert between numeric types, not to ", tc.TypeStr(tt)));
     Val v;
     totype = v.type = tt;
+    // Into an index or bound type the conversion is a bounds check, made in
+    // every build, which no unchecked form skips; a conversion with a
+    // check of its own is never redundant (§3.11).
+    if (tt->ix) {
+        if (unchecked)
+            tc.Error(this, cat("as! cannot make a ", tc.TypeStr(tt), ": only the checked `as` "
+                               "converts into an index type (§3.11)"));
+        if (!IsIntT(st))
+            tc.Error(this, cat("only an integer converts to ", tc.TypeStr(tt), ", not ",
+                               tc.TypeStr(st), " (§3.11)"));
+        return v;
+    }
     tc.NoteCast(this, raw, cv, v);
     return v;
 }
 
 inline Val RangeExpr::Check(TypeCheck &tc, TypeExpr *) {
     tc.Error(this, "range expressions are only valid in for headers");
+}
+
+inline Val ConstFor::Check(TypeCheck &tc, TypeExpr *) {
+    tc.Error(this, "const for is only valid in statement or constructor initializer lists");
 }
 
 inline Val Block::Check(TypeCheck &tc, TypeExpr *expected) {
