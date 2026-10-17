@@ -1,33 +1,8 @@
-import Goose.Lower.Validation.SummaryPreservationReplayLocalRead
-import Goose.Lower.Validation.SummaryPreservationTypedSlots
+import Goose.Lower.Validation.SummaryPreservationReplayAcceptedReadOrigins
 
-namespace Goose.Lower.Validation.SummaryPreservation
+namespace Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
 
 open Goose.Core Goose.Core.Sound Goose.GIR
-
-theorem typedContextSlotUpper_local_read_refines {env : PEnv} {implementation : ImplId}
-    {variableId : VarId} {localVar : LocalVar} {before after : RState} {sourceRoots : List RootRef}
-    (accepted : Core.validate env.mod = .ok ())
-    (implementationRow : env.mod.impls[implementation]? = some env.impl)
-    (variableRow : env.impl.vars[variableId]? = some localVar)
-    (source : readRoots env (.var variableId) before = .ok (sourceRoots, after)) :
-    RootsRefine (lowerContextAt env.mod env.ctx env.impl)
-      (rootsAt (typedContextSlotUpper env.mod env.ctx env.impl) variableId)
-      (env.ann variableId |>.getD []) := by
-  by_cases reference : localVar.ty.isRefSlice = true
-  · have refLike : localVar.ty.isRefLike = true := by
-      cases type : localVar.ty <;> simp_all [Ty.isRefLike, Ty.isRefSlice]
-    cases annotation : env.ann variableId with
-    | none =>
-      simp only [readRoots, variableRow, refLike, ite_true, annotation] at source
-      cases source
-    | some roots =>
-      have refined := typedContextSlotUpper_refines accepted implementationRow variableRow annotation
-      simpa only [annotation, Option.getD_some] using refined
-  · rw [typedContextSlotUpper_at variableRow, if_neg reference]
-    exact refinedResultUpper_refines _ _
-
-namespace ReplayBuilder
 
 theorem acceptedLocalRead {env : PEnv} {context : ContextId} {variableId : VarId} {localVar : LocalVar}
     {before after : RState} {sourceRoots : List RootRef} {results : Array (List RootRef)}
@@ -57,17 +32,8 @@ theorem acceptedLocalRead {env : PEnv} {context : ContextId} {variableId : VarId
             (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1 then
             rootsAt (typedContextSlotUpper env.mod env.ctx env.impl) variableId else []) ∧
       ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
-  obtain ⟨found, foundRow, contextOk⟩ := (validate_modOk env.mod accepted).ctx context env.ctx contextRow
-  rw [implementationRow] at foundRow
-  cases Option.some.inj foundRow
-  have readReplay : readRoots env (.var variableId) before = .ok (sourceRoots, after) := by
-    simpa only [rpExpr_read_variable] using source
-  have slotBound : variableId < (lowerEnv env.mod env.impl.vars env.impl.results.toList).slots.size := by
-    simpa [lowerEnv] using (Array.getElem?_eq_some_iff.mp variableRow).1
-  obtain ⟨next, generated, value, growth⟩ := ready.localRead contextOk.annotationShape variableRow source
-    slotBound (typedContextSlotUpper_local_read_refines accepted implementationRow variableRow readReplay) scalarType
-  exact ⟨next, generated, value, growth⟩
+  obtain ⟨next, completed, value, retained, _⟩ := ready.acceptedLocalReadWithOrigins
+    accepted contextRow implementationRow variableRow source scalarType
+  exact ⟨next, completed, value, retained⟩
 
-end ReplayBuilder
-
-end Goose.Lower.Validation.SummaryPreservation
+end Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
