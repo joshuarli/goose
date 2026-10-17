@@ -6887,27 +6887,6 @@ private:
         return kept;
     }
 
-    // Source values can read or expose a cleared receiver even when the
-    // instruction's destination belongs to another root. Keep mutation targets
-    // out of this list; their receiver effects are handled separately.
-    vector<int> EmptyFactSourceOperands(const GirInst &inst) const {
-        vector<int> out;
-        if (inst.op == GirOp::Call || inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke ||
-            inst.op == GirOp::Clear || GirIsTerminator(inst.op) ||
-            GirLowOnly(inst.op))
-            return out;
-        Uses(inst, out);
-        switch (inst.op) {
-            case GirOp::Push: case GirOp::Pop: case GirOp::Store: case GirOp::Append: case GirOp::PopN:
-            case GirOp::Resize: case GirOp::Replace:
-                if (!out.empty()) out.erase(out.begin());
-                break;
-            default:
-                break;
-        }
-        return out;
-    }
-
     vector<int> TransferEmptyInst(const Fn &fn, const ReplacementQueries &queries, vector<int> facts,
                                   const GirInst &inst) const {
         auto contains = [&](int value) { return find(facts.begin(), facts.end(), value) != facts.end(); };
@@ -6918,27 +6897,11 @@ private:
         if (inst.op == GirOp::Call || inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke) {
             auto dependencies = CallDependencies(fn, queries, inst);
             facts = KillEmptyFacts(facts, dependencies, queries);
-        } else {
-            ReplacementRootQuery operands;
-            bool checksOperands = false;
-            switch (inst.op) {
-                case GirOp::Load: case GirOp::Snap: case GirOp::ArrayLen: case GirOp::SliceView:
-                case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::Index:
-                case GirOp::IndexProven: case GirOp::Push:
-                case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Store:
-                case GirOp::Append: case GirOp::Replace:
-                    operands = ReplacementRoots(queries, inst.a);
-                    checksOperands = true;
-                    break;
-                default:
-                    break;
-            }
-            if (checksOperands) facts = KillEmptyFacts(facts, operands, queries);
         }
-        for (auto value : EmptyFactSourceOperands(inst))
+        for (auto value : GirReplacementContentFlow::AccessOperands(inst, &GirVerifier::Uses))
             if (ValRefLike(fn, value)) facts = KillEmptyFacts(facts, ReplacementRoots(queries, value), queries);
-        if (GirDefinesValue(inst) && ValRefLike(fn, inst.res))
-            facts = KillEmptyFacts(facts, ReplacementRoots(queries, inst.res), queries);
+        if (auto value = GirReplacementContentFlow::LoadedResult(inst); value && ValRefLike(fn, *value))
+            facts = KillEmptyFacts(facts, ReplacementRoots(queries, *value), queries);
         return facts;
     }
 

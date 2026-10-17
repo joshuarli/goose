@@ -69,6 +69,23 @@ class GirReplacementContentFlow {
     };
     using Query = optional<vector<CoreRootRef>>;
     using OperandUses = void (*)(const GirInst &, vector<int> &);
+    static vector<int> AccessOperands(const GirInst &inst, OperandUses uses) {
+        if (GirIsTerminator(inst.op)) return {};
+        switch (inst.op) {
+            case GirOp::Slot: case GirOp::Global: case GirOp::Field: case GirOp::Freeze:
+            case GirOp::OwnerBorrow: case GirOp::Init: return {};
+            case GirOp::Store: return { inst.a };
+            default: {
+                vector<int> values;
+                uses(inst, values);
+                return values;
+            }
+        }
+    }
+    static optional<int> LoadedResult(const GirInst &inst) {
+        if (inst.op == GirOp::Load) return inst.res;
+        return nullopt;
+    }
     const GirModule &module;
     vector<vector<GirTypeId>> canonicalTypes;
     OperandUses operandUses;
@@ -102,6 +119,11 @@ class GirReplacementContentFlow {
         if (value < 0 || value >= (int)types.size() || types[value] < 0) return false;
         auto kind = module.Type(types[value]).kind;
         return kind == CoreType::Ref || kind == CoreType::Slice || kind == CoreType::View;
+    }
+    bool InteriorRefLike(const vector<GirTypeId> &types, int value) const {
+        if (!RefLike(types, value)) return false;
+        auto &type = module.Type(types[value]);
+        return type.kind != CoreType::Ref || !GirOwnerKind(module.Type(type.elem).kind);
     }
     bool RefSlice(GirTypeId type) const {
         return type >= 0 && module.Type(type).kind == CoreType::Ref &&
@@ -231,12 +253,8 @@ class GirReplacementContentFlow {
             Add(state.values, parameters[index].first, At(state.values, args[index]));
     }
     void Step(const vector<State> &closed, const GirFunc &function, const vector<GirTypeId> &types, State &state, const GirInst &inst) const {
-        if (!GirIsTerminator(inst.op)) {
-            vector<int> uses;
-            operandUses(inst, uses);
-            for (auto value : uses)
-                if (RefLike(types, value)) state.touched = state.touched.Join(At(state.values, value));
-        }
+        for (auto value : AccessOperands(inst, operandUses))
+            if (RefLike(types, value)) state.touched = state.touched.Join(At(state.values, value));
         if (inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke) {
             state.touched = FlowRoots::Opaque();
             Store(function, state, FlowRoots::Opaque(), FlowRoots::Opaque());
@@ -254,8 +272,8 @@ class GirReplacementContentFlow {
             Edge(function, state, inst.idx, inst.vals);
             Edge(function, state, inst.idx2, inst.vals2);
         } else if (inst.op == GirOp::Ret && inst.vals.size() == 1) state.returned = state.returned.Join(At(state.values, inst.vals[0]));
-        if (GirDefinesValue(inst) && RefLike(types, inst.res))
-            state.touched = state.touched.Join(At(state.values, inst.res));
+        if (auto value = LoadedResult(inst); value && InteriorRefLike(types, *value))
+            state.touched = state.touched.Join(At(state.values, *value));
     }
     State Round(const vector<State> &closed, const GirFunc &function, const vector<GirTypeId> &types, State state) const {
         for (auto &block : function.blocks) for (auto &inst : block.insts) Step(closed, function, types, state, inst);

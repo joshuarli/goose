@@ -764,6 +764,138 @@ void CertifiesRecursiveReferenceReturnBounds() {
     assert(Code(module) == "GIR-V060");
 }
 
+enum class OwnerReferenceForm { DirectCall, LocalCopyCall };
+enum class OwnerReferenceUse { Unused, Read, Length };
+
+CoreModule OwnerReferenceReplacement(bool dependent, OwnerReferenceUse use, OwnerReferenceForm form = OwnerReferenceForm::DirectCall) {
+    CoreModule core;
+    core.profile = CoreProfile::Shrink;
+    core.files = { "owner-reference-replacement.goose" };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto integer = core.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = integer;
+    auto ownerType = core.Intern(owner);
+    CoreType reference;
+    reference.kind = CoreType::Ref;
+    reference.mut = CoreMut::Const;
+    reference.elem = ownerType;
+    auto referenceType = core.Intern(reference);
+    int target = dependent ? 0 : 1;
+    for (auto name : { "owner", "other" }) {
+        CoreGlobal global;
+        global.name = name;
+        global.type = ownerType;
+        global.kind = CoreVarKind::Var;
+        global.org = origin;
+        global.init = make_unique<CoreExpr>();
+        global.init->kind = CoreExprKind::Arr;
+        global.init->type = ownerType;
+        core.globals.push_back(std::move(global));
+    }
+    CoreImpl main;
+    main.name = "main";
+    main.vars = { { "q", referenceType, CoreVarKind::Let, 1, origin } };
+    main.summary.unknown = true;
+    CoreStmt assignment;
+    assignment.kind = CoreStmtKind::AssignWhole;
+    assignment.org = origin;
+    assignment.place = make_unique<CorePlace>();
+    assignment.place->kind = CorePlace::Global;
+    assignment.expr = make_unique<CoreExpr>();
+    assignment.expr->kind = CoreExprKind::Arr;
+    assignment.expr->type = ownerType;
+    auto block = make_unique<CoreExpr>();
+    block->kind = CoreExprKind::Block;
+    block->then = make_unique<CoreBlock>();
+    block->then->scope = 1;
+    CoreStmt bind;
+    bind.kind = CoreStmtKind::Let;
+    bind.var = 0;
+    bind.org = origin;
+    bind.expr = make_unique<CoreExpr>();
+    bind.expr->kind = CoreExprKind::Call;
+    bind.expr->ctx = 1;
+    bind.expr->org = origin;
+    block->then->stmts.push_back(std::move(bind));
+    block->then->value = make_unique<CoreExpr>();
+    if (use == OwnerReferenceUse::Length) {
+        auto &value = *block->then->value;
+        value.kind = CoreExprKind::Len;
+        value.view = make_unique<CoreView>();
+        value.view->place = make_unique<CorePlace>();
+        value.view->place->kind = CorePlace::Deref;
+        value.view->place->expr = make_unique<CoreExpr>();
+        value.view->place->expr->kind = CoreExprKind::Read;
+        value.view->place->expr->place = make_unique<CorePlace>();
+    } else {
+        block->then->value->kind = CoreExprKind::Lit;
+        block->then->value->type = integer;
+        block->then->value->value = "0";
+    }
+    if (use == OwnerReferenceUse::Read) {
+        CoreStmt read;
+        read.kind = CoreStmtKind::Expr;
+        read.org = origin;
+        read.expr = make_unique<CoreExpr>();
+        read.expr->kind = CoreExprKind::Read;
+        read.expr->place = make_unique<CorePlace>();
+        block->then->stmts.push_back(std::move(read));
+    }
+    assignment.expr->elems.push_back(std::move(block));
+    main.body.stmts.push_back(std::move(assignment));
+    core.impls.push_back(std::move(main));
+    CoreContext mainContext;
+    mainContext.impl = 0;
+    mainContext.varroots = { { 0, { { CoreRootRef::Global, target } } } };
+    core.contexts.push_back(std::move(mainContext));
+    CoreImpl callee;
+    callee.name = "owner_address";
+    callee.results = { { referenceType } };
+    callee.body.value = make_unique<CoreExpr>();
+    callee.body.value->kind = CoreExprKind::Ref;
+    callee.body.value->mut = CoreMut::Const;
+    callee.body.value->place = make_unique<CorePlace>();
+    callee.body.value->place->kind = CorePlace::Global;
+    callee.body.value->place->index = target;
+    if (form == OwnerReferenceForm::LocalCopyCall) {
+        callee.vars = { { "r", referenceType, CoreVarKind::Let, 0, origin } };
+        CoreStmt bind;
+        bind.kind = CoreStmtKind::Let;
+        bind.var = 0;
+        bind.org = origin;
+        bind.expr = std::move(callee.body.value);
+        callee.body.stmts.push_back(std::move(bind));
+        callee.body.value = make_unique<CoreExpr>();
+        callee.body.value->kind = CoreExprKind::Read;
+        callee.body.value->place = make_unique<CorePlace>();
+    }
+    core.impls.push_back(std::move(callee));
+    CoreContext calleeContext;
+    calleeContext.impl = 1;
+    calleeContext.resultroots = { { { CoreRootRef::Global, target } } };
+    if (form == OwnerReferenceForm::LocalCopyCall) calleeContext.varroots = { { 0, { { CoreRootRef::Global, target } } } };
+    core.contexts.push_back(std::move(calleeContext));
+    return core;
+}
+
+void DistinguishesReturnedOwnerAddressesFromReads() {
+    for (auto form : { OwnerReferenceForm::DirectCall, OwnerReferenceForm::LocalCopyCall })
+        for (bool dependent : { true, false })
+            for (auto use : { OwnerReferenceUse::Unused, OwnerReferenceUse::Read, OwnerReferenceUse::Length }) {
+                auto core = OwnerReferenceReplacement(dependent, use, form);
+                auto gir = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+                    [](const CoreOrigin &) { return 0; }).Lower();
+                auto observed = Code(gir);
+                auto expected = dependent && use != OwnerReferenceUse::Unused ? "GIR-V060" : "";
+                if (observed != expected)
+                    fprintf(stderr, "owner return dependent=%d use=%d form=%d: %s\n",
+                        dependent, (int)use, (int)form, observed.c_str());
+                assert(observed == expected);
+            }
+}
+
 void LowersCrossParameterContentBounds() {
     CoreModule core;
     core.profile = CoreProfile::Shrink;
@@ -1059,6 +1191,7 @@ void IncludesActualRefSliceBackingReads() {
 }
 
 int main() {
+    DistinguishesReturnedOwnerAddressesFromReads();
     PreservesActualGlobalCallDependencies();
     RetainsSpecializedGlobalPolicyWithEmptyActualArguments();
     CertifiesRecursiveReferenceReturnBounds();
