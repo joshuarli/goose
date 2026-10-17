@@ -16,7 +16,7 @@ open Goose.Core Goose.Core.Sound Goose.GIR
     (valueChild : ∀ provenance, ExpressionReplayAt typingEnv env results vt target scopeCount expression
       (lowerPlace place (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 provenance) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.assign place expression origin) initial upper := by
-  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets native
+  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets _loopReplay native
   obtain ⟨info, childStart, placeTyped, valueTyped, shape, _writable, _⟩ := tyStmt_assign_children typed
   obtain ⟨placeRoots, placeState, placeReplay, tail⟩ := (st_bind_ok _ _ _ _).mp replay
   obtain ⟨valueRoots, valueState, valueReplay, _tail⟩ := (st_bind_ok _ _ _ _).mp tail

@@ -17,7 +17,7 @@ open Goose.Core Goose.Core.Sound Goose.GIR
         (lowerEnv env.mod env.impl.vars env.impl.results.toList)
         (lowerPlace owner (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2).2 provenance) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.assignWhole owner expression origin) initial upper := by
-  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets native
+  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets _loopReplay native
   obtain ⟨info, element, childStart, ownerTyped, _ownerType, valueTyped, _binding, _contents, _⟩ := tyStmt_assignWhole_children typed
   obtain ⟨ownerRoots, ownerState, ownerReplay, _tail⟩ := (st_bind_ok _ _ _ _).mp replay
   obtain ⟨valueRoots, valueState, valueReplay, sourceEffect⟩ := rpStmt_assignWhole_children ownerReplay replay

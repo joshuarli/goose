@@ -26,7 +26,7 @@ private theorem integerType_preserves (value : ValueId) (le : LEnv) (state : LS)
         (lowerEnv env.mod env.impl.vars env.impl.results.toList)
         (lowerPlace place (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2).2 provenance) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.assignOp operation place expression origin) initial upper := by
-  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets native
+  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets _loopReplay native
   obtain ⟨info, integer, childStart, placeTyped, infoType, valueTyped, _binding, _⟩ := tyStmt_assignOp_children typed
   obtain ⟨placeRoots, placeState, placeReplay, tail⟩ := (st_bind_ok _ _ _ _).mp replay
   obtain ⟨valueRoots, valueState, valueReplay, _tail⟩ := (st_bind_ok _ _ _ _).mp tail

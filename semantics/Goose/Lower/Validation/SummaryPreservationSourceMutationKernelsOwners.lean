@@ -14,7 +14,7 @@ theorem statementReplay_clear {owner : Place} (origin : OriginId) (loop : Option
     (implementationRow : env.mod.impls[env.ctx.impl]? = some env.impl)
     (child : PlaceReplayAt typingEnv env results vt target scopeCount owner initial upper) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.clear owner origin) initial upper := by
-  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets native
+  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets _loopReplay native
   obtain ⟨info, element, ownerTyped, _elementType, _writable, _⟩ := tyStmt_clear_children typed
   obtain ⟨ownerRoots, ownerState, ownerReplay, _tail⟩ := (st_bind_ok _ _ _ _).mp replay
   have sourceEffect := rpStmt_clear_effect ownerReplay replay

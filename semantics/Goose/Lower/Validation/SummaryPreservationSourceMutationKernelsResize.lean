@@ -28,7 +28,7 @@ theorem statementReplay_resizeWithFill {typingEnv : TEnv} {env : PEnv} {results 
       (lowerExpr size (lowerEnv env.mod env.impl.vars env.impl.results.toList)
         (lowerPlace owner (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2).2 provenance) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.resize owner size (some fill) origin) initial upper := by
-  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets native
+  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets _loopReplay native
   obtain ⟨info, element, integer, childStart, sizeFinish, ownerTyped, _elementType, sizeTyped, fillTyped, _writable, _⟩ :=
     tyStmt_resize_children typed
   obtain ⟨ownerRoots, ownerState, ownerReplay, tail⟩ := (st_bind_ok _ _ _ _).mp replay

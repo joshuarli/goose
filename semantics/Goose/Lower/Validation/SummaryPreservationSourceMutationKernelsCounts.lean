@@ -16,7 +16,7 @@ theorem statementReplay_popN {owner : Place} {count : Expr} (origin : OriginId) 
     (countChild : ∀ provenance, ExpressionReplayAt typingEnv env results vt target scopeCount count
       (lowerPlace owner (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 provenance) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.popN owner count origin) initial upper := by
-  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets native
+  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets _loopReplay native
   obtain ⟨info, element, integer, childStart, ownerTyped, _elementType, countTyped, _writable, _⟩ := tyStmt_popN_children typed
   obtain ⟨ownerRoots, ownerState, ownerReplay, tail⟩ := (st_bind_ok _ _ _ _).mp replay
   obtain ⟨countRoots, countState, countReplay, _tail⟩ := (st_bind_ok _ _ _ _).mp tail
@@ -64,7 +64,7 @@ theorem statementReplay_resizeWithoutFill {owner : Place} {count : Expr} (origin
     (countChild : ∀ provenance, ExpressionReplayAt typingEnv env results vt target scopeCount count
       (lowerPlace owner (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 provenance) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.resize owner count none origin) initial upper := by
-  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets native
+  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets _loopReplay native
   obtain ⟨info, element, integer, childStart, countFinish, ownerTyped, _elementType, countTyped, finishEq, _writable, _⟩ := tyStmt_resize_children typed
   subst countFinish
   obtain ⟨ownerRoots, ownerState, ownerReplay, tail⟩ := (st_bind_ok _ _ _ _).mp replay

@@ -102,7 +102,7 @@ theorem statementReplay_append {owner : Place} {view : View} (origin : OriginId)
     (viewChild : ∀ provenance, ViewReplayAt typingEnv env results vt target scopeCount view
       (lowerPlace owner (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 provenance) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.append owner view origin) initial upper := by
-  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets native
+  intro output start finish before after typed replay ceiling _sourceScopes _stack ready generated _loopTargets _loopReplay native
   obtain ⟨info, element, writable, childStart, ownerTyped, _elementType, viewTyped, _writable, _⟩ := tyStmt_append_children typed
   obtain ⟨ownerRoots, ownerState, ownerReplay, tail⟩ := (st_bind_ok _ _ _ _).mp replay
   obtain ⟨viewRoots, viewState, viewReplay, _tail⟩ := (st_bind_ok _ _ _ _).mp tail
