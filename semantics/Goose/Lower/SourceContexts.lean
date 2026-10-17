@@ -1597,7 +1597,7 @@ theorem StmtSource.expressionChildSource {cfg : Cfg} {env : Env} {stmt : Stmt}
     permission := source.permission, frame := frame, typed := typed, rooted := rooted,
     effects := effects }, rfl, rfl, rfl, rfl, rfl, rfl, rfl, may⟩
 
-private theorem firstExpressionSource {cfg : Cfg} {env : Env} {stmt : Stmt} {state : St}
+theorem StmtSource.firstExpressionChildSource {cfg : Cfg} {env : Env} {stmt : Stmt} {state : St}
     (source : StmtSource cfg env stmt state) (expr : Expr)
     (childAt : (DemandNode.statement stmt).child? 0 = some (.expression expr))
     (visible : ∀ x, x ∈ source.typingEnv.visible ↔
@@ -1671,7 +1671,7 @@ theorem StmtSource.exprChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} 
   obtain ⟨roots, rooted⟩ := rooted
   have childAt : (DemandNode.statement (.expr expr origin)).child? 0 = some (.expression expr) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨child, typingEq, rootsEq, _, _⟩ := firstExpressionSource source expr childAt
+  obtain ⟨child, typingEq, rootsEq, _, _⟩ := source.firstExpressionChildSource expr childAt
     (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
     (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
     (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
@@ -1707,7 +1707,7 @@ theorem StmtSource.letChild {cfg : Cfg} {env : Env} {state : St} {slot : VarId}
       exact tail
   have childAt : (DemandNode.statement (.letS slot expr origin)).child? 0 = some (.expression expr) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := firstExpressionSource source expr childAt
+  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := source.firstExpressionChildSource expr childAt
     (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
     (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
     (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
@@ -1738,7 +1738,7 @@ theorem StmtSource.rebindChild {cfg : Cfg} {env : Env} {state : St} {slot : VarI
       exact EffLe.refl _
   have childAt : (DemandNode.statement (.rebind slot expr origin)).child? 0 = some (.expression expr) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := firstExpressionSource source expr childAt
+  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := source.firstExpressionChildSource expr childAt
     (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
     (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
     (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
@@ -1763,7 +1763,7 @@ theorem StmtSource.retChild {cfg : Cfg} {env : Env} {state : St}
   obtain ⟨roots, finishRoots, rooted, _, endEq⟩ := rooted
   have childAt : (DemandNode.statement (.ret (some expr) origin)).child? 0 = some (.expression expr) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := firstExpressionSource source expr childAt
+  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := source.firstExpressionChildSource expr childAt
     (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
     (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
     (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
@@ -1802,7 +1802,7 @@ private theorem ifConditionData {cfg : Cfg} {env : Env} {state : St} {condition 
       child.context.mayShrink source.world.ownerP source.observation =
         source.context.mayShrink source.world.ownerP source.observation) := by
     intro finish roots finishRoots typed rooted effects
-    apply firstExpressionSource source condition childAt
+    apply source.firstExpressionChildSource condition childAt
       (by simp [DemandNode.visibleForChild])
       (by intro x member; cases no <;> simp [Stmt.variables, member])
       (fun parent => yes.variables ++ no.toList.flatMap Block.variables ++ parent.future)
@@ -2177,7 +2177,7 @@ private theorem whileConditionData {cfg : Cfg} {env : Env} {state : St} {conditi
       child.context.mayShrink source.world.ownerP source.observation =
         source.context.mayShrink source.world.ownerP source.observation) := by
     intro finish roots finishRoots typed rooted effects
-    apply firstExpressionSource source condition childAt
+    apply source.firstExpressionChildSource condition childAt
       (by simp [DemandNode.visibleForChild])
       (by intro x member; simp [Stmt.variables, member])
       (fun parent => parent.active.filter (condition.variables ++ body.variables).contains ++ parent.future)
@@ -2365,7 +2365,7 @@ theorem StmtSource.assertChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr
   obtain ⟨roots, finishRoots, rooted, aborts⟩ := rooted
   have childAt : (DemandNode.statement (.assertS expr origin)).child? 0 = some (.expression expr) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := firstExpressionSource source expr childAt
+  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := source.firstExpressionChildSource expr childAt
     (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
     (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
     (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
@@ -2390,7 +2390,7 @@ theorem StmtSource.exitChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} 
   obtain ⟨roots, finishRoots, rooted, aborts⟩ := rooted
   have childAt : (DemandNode.statement (.exit expr origin)).child? 0 = some (.expression expr) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := firstExpressionSource source expr childAt
+  obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := source.firstExpressionChildSource expr childAt
     (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
     (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
     (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
