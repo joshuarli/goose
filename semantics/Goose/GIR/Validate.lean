@@ -1007,6 +1007,11 @@ private def checkShrinkReplaceUsing (cache : ReplacementContentFlow) (m : Module
 def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit :=
   checkShrinkReplaceUsing (replacementContentFlow m) m label f vt
 
+@[simp] theorem checkShrinkReplace_canonical (m : Module) (label : String) (f : Func)
+    (vt : Array (Option VTy)) :
+    checkShrinkReplaceUsing (replacementContentFlow m) m label f vt =
+      checkShrinkReplace m label f vt := rfl
+
 theorem checkShrinkReplace_eq (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)) :
     checkShrinkReplace m label f vt = (do
   if m.profile == .shrink then
