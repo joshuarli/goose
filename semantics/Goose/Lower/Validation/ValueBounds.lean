@@ -65,6 +65,15 @@ theorem value_freezeTo {action : B ValueId} (bounded : ValueRun action) (mu : Mu
   · exact bounded _ _ _ _ firstRun live
   · exact value_emitDef _ _ _ _ _ fresh live
 
+theorem value_borrowTo {action : B ValueId} (bounded : ValueRun action) (mu : Mutability) :
+    ValueRun (do let value ← action; borrowTo mu value) := by
+  intro le before value after run live
+  obtain ⟨input, mid, firstRun, nextRun⟩ := bind_eq.mp run
+  rcases borrowTo_cases nextRun with frozen | borrowed
+  · exact value_freezeTo bounded mu le before value after
+      (bind_eq.mpr ⟨input, mid, firstRun, frozen⟩) live
+  · exact value_emitDef _ _ _ _ _ borrowed live
+
 private theorem patchBrs_vals (target : BlockId) :
     ∀ incoming le before result after, patchBrs target incoming le before = (result, after) →
       after.vals = before.vals
@@ -190,7 +199,7 @@ theorem value_lowerExpr : ∀ expr : Expr, ValueRun (lowerExpr expr)
     exact ValueRun.prepend fun _ => value_emitDef _
   | .ref mu place => by
     simp only [lowerExpr]
-    exact value_freezeTo (value_lowerPlace place) mu
+    exact value_borrowTo (value_lowerPlace place) mu
   | .cmp _ _ _ => by
     simp only [lowerExpr]
     refine ValueRun.prepend fun _ => ValueRun.prepend fun _ => ValueRun.prepend fun ty => ?_
@@ -291,7 +300,7 @@ theorem value_lowerView (view : View) : ValueRun (lowerView view) := by
 theorem value_lowerArg (arg : Arg) : ValueRun (lowerArg arg) := by
   cases arg with
   | byVal expr => exact value_lowerExpr expr
-  | byRef mu place => exact value_freezeTo (value_lowerPlace place) mu
+  | byRef mu place => exact value_borrowTo (value_lowerPlace place) mu
 
 def ValueListRun (action : B (List ValueId)) : Prop :=
   ∀ le before values after, action le before = (values, after) →
