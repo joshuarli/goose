@@ -1122,6 +1122,9 @@ private:
                         Fail("GIR-V010", cat("function ", fn.name, " uses a shrink operation under core-pilot"));
                 }
         };
+        for (auto &global : m.globals)
+            if (global.ty < 0 || global.ty >= (int)m.types.size() || GirRefLike(m, global.ty) || !GirStorable(m, global.ty))
+                Fail("GIR-V010", cat("global ", global.name, " must have a storable non-reference type"));
         for (auto &fn : m.funcs) scan(fn);
         for (auto &global : m.globals) scan(global.init);
         if (CoreHasConstruction(m.profile) && m.low && m.pointerBytes != 4 && m.pointerBytes != 8)
@@ -4576,9 +4579,15 @@ private:
             for (size_t k = 0; same && k < entryTypes.size(); k++) same = b0.params[k].second == entryTypes[k];
             if (!same) TypeFail(fn, "the parameters of block 0 are not the function's parameters");
         }
-        for (auto param : f.params)
+        for (auto param : f.params) {
+            if (param < 0 || param >= (int)m.types.size() ||
+                (m.Type(param).kind == CoreType::Ref && (m.Type(param).elem < 0 || m.Type(param).elem >= (int)m.types.size())))
+                TypeFail(fn, "a parameter names an absent type");
+            if (!m.low && !GirStorable(m, param) && !IsRefSlice(param))
+                TypeFail(fn, "a parameter has a type no parameter may have");
             if (GirOwnerKind(m.Type(param).kind) && !CoreHasConstruction(m.profile))
                 TypeFail(fn, "a nonfixed owner is a by-value parameter");
+        }
         if (CoreHasConstruction(m.profile) && !m.low)
             for (size_t parameter = 0; parameter < f.params.size(); parameter++) {
                 if (!GirNonfixed(m, f.params[parameter])) continue;
@@ -5298,10 +5307,10 @@ private:
                 if (auto contents = ContentRoots(*caller.f, r.index)) AddRoots(out, *contents);
             }
         }
-        return out;
+        return ExpandParameterRoots(*caller.f, out);
     }
 
-    Roots MapDeclaredContents(const Prov &p, const vector<int> &args, const Roots &declared) const {
+    Roots RawMapDeclaredContents(const Prov &p, const vector<int> &args, const Roots &declared) const {
         Roots out;
         for (auto &r : declared) {
             if (r.kind == CoreRootRef::Global || r.kind == CoreRootRef::Static) {
@@ -5311,6 +5320,10 @@ private:
             }
         }
         return out;
+    }
+
+    Roots MapDeclaredContents(const GirFunc &caller, const Prov &p, const vector<int> &args, const Roots &declared) const {
+        return ExpandParameterRoots(caller, RawMapDeclaredContents(p, args, declared));
     }
 
     void CheckRootAnnotations(const ResultRootInfo &res) {
@@ -5345,8 +5358,8 @@ private:
                         if (GirRefLike(m, callee.params[j])) {
                             auto expected = MapArgumentRoots(caller, p, i.vals[j], (int)j);
                             auto declared = ParamRoots(callee, (int)j);
-                            bool generic = !declared || (declared->size() == 1 &&
-                                (*declared)[0] == CoreRootRef { CoreRootRef::Param, (int)j });
+                            CoreRootRef self { CoreRootRef::Param, (int)j };
+                            bool generic = !declared || find(declared->begin(), declared->end(), self) != declared->end();
                             for (auto &root : expected)
                                 if (!generic && (!declared || find(declared->begin(), declared->end(), root) == declared->end()))
                                     Fail("GIR-V050", cat(label, " parameter ", j,
@@ -5355,7 +5368,7 @@ private:
                         if (IsRefSlice(callee.params[j]))
                             if (auto declared = ContentRoots(callee, (int)j)) {
                                 auto actual = ArgumentContents(caller, p, i.vals[j]);
-                                auto mapped = MapDeclaredContents(p, i.vals, *declared);
+                                auto mapped = MapDeclaredContents(f, p, i.vals, *declared);
                                 for (auto &root : actual)
                                     if (find(mapped.begin(), mapped.end(), root) == mapped.end())
                                         Fail("GIR-V050", cat(label, " content root info for parameter ", j,
@@ -5366,12 +5379,27 @@ private:
         }
     }
 
+    bool RootsWithin(const GirFunc &function, const Roots &actual, const Roots &ceiling) const {
+        return all_of(actual.begin(), actual.end(), [&](const CoreRootRef &root) {
+            if (find(ceiling.begin(), ceiling.end(), root) != ceiling.end()) return true;
+            if (root.kind != CoreRootRef::Param) return false;
+            auto expanded = ExpandParameterRoots(function, { root });
+            return all_of(expanded.begin(), expanded.end(), [&](const CoreRootRef &alias) {
+                return find(ceiling.begin(), ceiling.end(), alias) != ceiling.end();
+            });
+        });
+    }
+
+    Roots ReceiverContentCeiling(const GirFunc &function, const Prov &provenance, const CoreRootRef &root) const {
+        Roots roots;
+        if (root.kind == CoreRootRef::Local) roots = RootsAt(provenance.slots, root.index);
+        else if (root.kind == CoreRootRef::Param && root.index >= 0 && root.index < (int)function.params.size() && IsRefSlice(function.params[root.index])) {
+            if (auto ceiling = ContentRoots(function, root.index)) roots = *ceiling;
+        } else if (root.kind == CoreRootRef::Global) roots = { root };
+        return roots;
+    }
+
     void CheckAdmittedRegions(const ResultRootInfo &res) {
-        auto declared = any_of(fns.begin(), fns.end(), [](const Fn &fn) { return fn.f->roots.slots.has_value(); });
-        if (!declared) return;
-        for (auto &global : m.globals)
-            if (!GirStorable(m, global.ty) || GirRefLike(m, global.ty))
-                Fail("GIR-V050", cat("global ", global.name, " has a type no declared-region module may have"));
         auto within = [](const Roots &actual, const Roots &ceiling) {
             return all_of(actual.begin(), actual.end(), [&](const CoreRootRef &root) {
                 return find(ceiling.begin(), ceiling.end(), root) != ceiling.end();
@@ -5401,18 +5429,23 @@ private:
                             auto ceiling = ContentRoots(f, root.index);
                             if (!ceiling)
                                 Fail("GIR-V050", cat(fn.label, " stores slice contents through parameter ", root.index, " without content root info"));
-                            if (!within(ExpandParameterRoots(f, RootsAt(p.vals, inst.b)), ExpandParameterRoots(f, *ceiling)))
+                            if (!RootsWithin(f, RootsAt(p.vals, inst.b), *ceiling))
                                 Fail("GIR-V050", cat(fn.label, " content root info for parameter ", root.index, " omits a root stored by the body"));
                         }
-                } else if (inst.op == GirOp::Call) {
+                } else if (inst.op == GirOp::Call || inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke) {
                     auto &callee = m.funcs[inst.idx];
                     for (auto &row : callee.roots.contents) {
                         if (row.first < 0 || row.first >= (int)callee.params.size() || !IsRefSlice(callee.params[row.first])) continue;
                         auto actual = ArgumentContents(fn, p, inst.vals[row.first]);
-                        auto mapped = MapDeclaredContents(p, inst.vals, row.second);
+                        auto mapped = MapDeclaredContents(f, p, inst.vals, row.second);
                         if (!within(actual, mapped) || !within(mapped, actual))
                             Fail("GIR-V050", cat(fn.label, " call to ", callee.name, " content roots for parameter ", row.first,
                                 " differ from the receiving storage ceiling"));
+                        auto rawMapped = RawMapDeclaredContents(p, inst.vals, row.second);
+                        for (auto &root : RootsAt(p.vals, inst.vals[row.first]))
+                            if (!RootsWithin(f, rawMapped, ReceiverContentCeiling(f, p, root)))
+                                Fail("GIR-V050", cat(fn.label, " call to ", callee.name, " content roots for parameter ", row.first,
+                                    " exceed a possible receiving storage ceiling"));
                     }
                 }
             }

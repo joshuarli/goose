@@ -2555,7 +2555,8 @@ private:
             auto type = impl.vars[row.first].type;
             if (!GirRefLike(mod, type)) continue;
             auto &ty = mod.Type(type);
-            auto refSlice = ty.kind == CoreType::Ref && mod.Type(ty.elem).kind == CoreType::Slice;
+            auto refSlice = ty.kind == CoreType::Ref && mod.Type(ty.elem).kind == CoreType::Slice &&
+                row.first < (int)impl.params.size() && impl.params[row.first].var == row.first;
             out.slots->push_back({ row.first, refSlice ? vector<CoreRootRef> { { CoreRootRef::Param, row.first } } : ceiling(row.second) });
         }
         return out;
