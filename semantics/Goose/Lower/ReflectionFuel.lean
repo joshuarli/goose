@@ -231,4 +231,16 @@ theorem ReflectAtFuel.bind {cx : FnCtx} {pt : Pt} {fr : GIR.Frame}
     change (source₁ n >>= fun value => source₂ value n) state = _
     rw [bind_apply, hn]
 
+theorem ReflectAtFuel.mono_success {cx : FnCtx} {pt : Pt} {fr : GIR.Frame} {source : Nat → M α}
+    {p q : α → St → Pt → GIR.Frame → Prop} {state : St} {fuel : Nat}
+    (reflection : ReflectAtFuel fuel cx pt fr source p state)
+    (weaken : ∀ n value after pt' fr', source n state = .ok value after →
+      p value after pt' fr' → q value after pt' fr') :
+    ReflectAtFuel fuel cx pt fr source q state := by
+  intro result nonTimeout run
+  rcases reflection result nonTimeout run with success | stopped
+  · obtain ⟨n,value,after,pt',fr',residual,done,matched,bound,continuation⟩ := success
+    exact Or.inl ⟨n,value,after,pt',fr',residual,done,weaken n value after pt' fr' done matched,bound,continuation⟩
+  · exact Or.inr stopped
+
 end Goose.Lower
