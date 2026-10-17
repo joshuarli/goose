@@ -89,24 +89,6 @@ private theorem capabilities_lookup_bind (id : DestinationId) (action : Construc
   | none => exact valid
   | some destination => exact safe destination (valid id destination present) state valid
 
-private theorem capabilities_writable_bind (id : DestinationId) (action : ConstructionM PendingDestination)
-    (result : ∀ state, action state = match state.destinations[id]? with
-      | none => .fault .destination state
-      | some destination => match destinationCanWrite state id with
-        | true => .ok destination state
-        | false => .fault .protocol state)
-    (next : PendingDestination → ConstructionM α)
-    (safe : ∀ destination, destination.capability.id = id → PreservesDestinationCapabilities (next destination)) :
-    PreservesDestinationCapabilities (action >>= next) := by
-  intro state valid
-  simp only [bind, result]
-  cases present : state.destinations[id]? with
-  | none => exact valid
-  | some destination =>
-      cases destinationCanWrite state id with
-      | false => exact valid
-      | true => exact safe destination (valid id destination present) state valid
-
 private theorem capabilities_replace (id : DestinationId) (destination : PendingDestination)
     (action : ConstructionM Unit)
     (result : ∀ state, action state = if id < state.destinations.size then
@@ -259,7 +241,6 @@ theorem publishOperation_destination_capabilities (ids : List DestinationId) :
       | solve
         | with_reducible apply capabilities_replace _ _ _ (replaceDestination_result _ _)
           first | assumption | rfl
-      | with_reducible apply capabilities_writable_bind _ _ (writableDestination_result _)
       | with_reducible apply capabilities_lookup_bind _ _ (lookupDestination_result _)
       | with_reducible apply capabilities_bind
       | with_reducible apply capabilities_if
@@ -267,6 +248,34 @@ theorem publishOperation_destination_capabilities (ids : List DestinationId) :
       | dsimp only
       | split
       | intro value
+
+
+set_option maxHeartbeats 400000 in
+theorem landExitReplacement_destination_capabilities (replacementId : DestinationId) :
+    PreservesDestinationCapabilities (landExitReplacement replacementId) := by
+  unfold landExitReplacement
+  simp only [landCompletedReplacement_transition]
+  repeat' first
+    | simp only [construction_pure_bind, construction_bind_assoc, construction_if_bind]
+    | with_reducible exact capabilities_pure _
+    | with_reducible exact capabilities_fail _
+    | with_reducible exact capabilities_fault_bind _ _
+    | with_reducible exact landReceivingStorage_destination_capabilities _ _ _
+    | with_reducible exact protectedAbandonment_destination_capabilities _
+    | with_reducible exact capabilities_storage_lookup _ _ (lookupStorage_result _)
+    | with_reducible exact capabilities_storage_replace _ _ _ (replaceStorage_result _ _)
+    | with_reducible exact capabilities_emit _ _ (emit_result _)
+    | solve
+      | with_reducible apply capabilities_replace _ _ _ (replaceDestination_result _ _)
+        first | assumption | rfl
+    | with_reducible apply capabilities_lookup_bind _ _ (lookupDestination_result _)
+    | with_reducible apply capabilities_get_bind
+    | with_reducible apply capabilities_bind
+    | with_reducible apply capabilities_if
+    | assumption
+    | dsimp only
+    | split
+    | intro value
 
 
 end Goose.Proofs.ConstructionExecutionProtocol
