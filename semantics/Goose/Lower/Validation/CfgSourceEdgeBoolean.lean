@@ -64,10 +64,11 @@ theorem cfg_source_ifExpression {env : Core.TEnv} {results : List Ty} (condition
   by_cases same : (yesTy == noTy) = true
   · have typesEqual : yesTy = noTy := eq_of_beq same
     subst noTy
-    exact (conditionChild conditionSource).bind fun value => generated_edge_ifE_core _ none value (.data yesTy)
-      (yesChild yesSource none [] true) (noChild noSource none [] true)
-      (fun before value after run generated live => lowerBlock_generated_typed yes yesSource run live generated)
-      (fun before value after run generated live => lowerBlock_generated_typed no noSource run live generated)
+    exact (conditionChild conditionSource).bind fun value =>
+      generated_edge_ifE_core _ none value (.data yesTy) (sourceBlockScope yes)
+        (yesChild yesSource none [] true) (noChild noSource none [] true)
+        (fun before value after run generated live => lowerBlock_generated_typed yes yesSource run live generated)
+        (fun before value after run generated live => lowerBlock_generated_typed no noSource run live generated)
   · simp only [same] at source
     obtain ⟨_, _, rejected, _⟩ := (st_bind_ok _ _ _ _).mp source
     exact (rej_ok _ _ _ _).mp rejected |>.elim

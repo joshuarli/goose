@@ -4,7 +4,36 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
+private theorem generated_edge_recordValueRootRecipe (env : LEnv) (context : Option LoopCtx)
+    (value : ValueId) (sourceScope : ScopeId) :
+    GeneratedEdgeRun env context (recordValueRootRecipe value sourceScope) := by
+  have edgeRun : EdgeRun (recordValueRootRecipe value sourceScope) := by
+    intro edgeEnv before outcome after run checked
+    rw [recordValueRootRecipe_run] at run
+    have stateEq := (Prod.mk.inj run).2
+    have blocks : after.blocks = before.blocks := by
+      rw [← stateEq]
+    have types : ∀ (slot : ValueId) (ty : VTy), before.vals[slot]? = some (some ty) →
+        after.vals[slot]? = some (some ty) := by
+      intro slot ty typed
+      rw [← stateEq]
+      exact typed
+    have extension : EdgeExtension before after := by
+      refine ⟨?_, types⟩
+      refine ⟨?_, fun index block member => ?_⟩
+      · rw [blocks]
+        exact Nat.le_refl _
+      · refine ⟨block, ?_, rfl, [], by simp⟩
+        rw [blocks]
+        exact member
+    exact ⟨extension, BuilderEdgeArguments.of_blocks checked blocks types⟩
+  apply GeneratedEdgeRun.of_edgeRun edgeRun
+  intro before outcome after run generated loop
+  exact generated.of_runs (dense_recordValueRootRecipe value sourceScope)
+    (generatedTargets_recordValueRootRecipe context value sourceScope) loop.targets run
+
 theorem generated_edge_ifE_core (env : LEnv) (context : Option LoopCtx) (condition : ValueId) (ty : VTy)
+    (sourceScope : ScopeId)
     {yes no : B ValueId} (yesEdges : GeneratedEdgeRun env context yes) (noEdges : GeneratedEdgeRun env context no)
     (yesTyped : ∀ before value after, yes env before = (value, after) → GeneratedBuilderState before →
       after.cur.isSome = true → after.vals[value]? = some (some ty))
@@ -18,7 +47,9 @@ theorem generated_edge_ifE_core (env : LEnv) (context : Option LoopCtx) (conditi
       setCur (some noBlock)
       let noValue ← no
       let noEnd ← curBlock
-      joinValue yesEnd yesValue noEnd noValue) := by
+      let result ← joinValue yesEnd yesValue noEnd noValue
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   intro before result after run generated loop checked
   cases current : before.cur with
   | none =>
@@ -30,7 +61,8 @@ theorem generated_edge_ifE_core (env : LEnv) (context : Option LoopCtx) (conditi
     simp only [bind_eq] at run
     obtain ⟨⟨yesBlock, noBlock⟩, forked, forkRun, ignored, selectedYes, selectYes,
       yesValue, yesEnd, yesRun, yesCurrent, savedYes, saveYes, ignored', selectedNo, selectNo,
-      noValue, noEnd, noRun, noCurrent, savedNo, saveNo, joined⟩ := run
+      noValue, noEnd, noRun, noCurrent, savedNo, saveNo, joinedValue, joinedState, joinRun,
+      recipeUnit, recipeState, recipeRun, pureRun⟩ := run
     rw [curBlock_run] at saveYes
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj saveYes
     rw [curBlock_run] at saveNo
@@ -65,9 +97,16 @@ theorem generated_edge_ifE_core (env : LEnv) (context : Option LoopCtx) (conditi
       intro target live
       exact noTyped selectedNo noValue noEnd noRun selectedNoGenerated (by simp [live])
     obtain ⟨joinExtension, joinChecked, _⟩ := edge_joinValue_at yesEnd.cur noEnd.cur yesValue noValue ty
-      env noEnd after result joined noChecked yesResult noResult
-    have afterGenerated := noGenerated.joinValue yesEnd.cur yesValue noEnd.cur noValue joined
-    exact ⟨afterGenerated, firstExtension.trans (yesExtension.trans (selectNoExtension.trans (noExtension.trans joinExtension))), joinChecked⟩
+      env noEnd joinedState joinedValue joinRun noChecked yesResult noResult
+    have afterGenerated := noGenerated.joinValue yesEnd.cur yesValue noEnd.cur noValue joinRun
+    have beforeRecipe := firstExtension.trans
+      (yesExtension.trans (selectNoExtension.trans (noExtension.trans joinExtension)))
+    obtain ⟨recipeGenerated, recipeExtension, recipeChecked⟩ :=
+      generated_edge_recordValueRootRecipe env context joinedValue sourceScope joinedState recipeUnit
+        recipeState recipeRun afterGenerated (loop.extend beforeRecipe) joinChecked
+    rw [pure_run] at pureRun
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj pureRun
+    exact ⟨recipeGenerated, beforeRecipe.trans recipeExtension, recipeChecked⟩
 
 theorem generated_edge_ifS_some_core (env : LEnv) (context : Option LoopCtx) (condition : ValueId)
     {yes no : B ValueId} (yesEdges : GeneratedEdgeRun env context yes) (noEdges : GeneratedEdgeRun env context no)
