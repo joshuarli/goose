@@ -1,3 +1,4 @@
+import Goose.Lower.TypedEntry
 import Goose.Lower.TypedExpressionFamily
 import Goose.Lower.TypedIf
 import Goose.Lower.TypedWhile
@@ -128,5 +129,27 @@ private theorem typedStatementFamily_succ {n : Nat} {cfg : Cfg}
     exact typedWhileSimulation_succ (smaller.expressions.expr results condition)
       (fun context => smaller.block results (some context) [] [] false body)
       (smaller.whileLoop results condition body origin)
+
+private theorem typedStatementFamily_all (cfg : Cfg)
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+    ∀ n, TypedStatementFamily n cfg := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n earlier =>
+    cases n with
+    | zero => exact typedStatementFamily_zero cfg
+    | succ n =>
+      exact typedStatementFamily_succ
+        (fun fuel bound => earlier fuel (Nat.lt_succ_of_le bound)) shapes
+
+private theorem typedModule_of_ownerShapes {cfg : Cfg} (n : Nat)
+    (accepted : Core.validate cfg.mod = .ok ())
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+    EventualM (Core.runModule (n + 1) cfg)
+      (fun fuel => GIR.runModule fuel ⟨cfg.profile, lower cfg.mod⟩) St.initial := by
+  have family := typedStatementFamily_all cfg shapes
+  exact typedModule_simulation_succ n accepted
+    (fun _ global _ => (family (n + 1)).expressions.expr [global.ty] global.init)
+    (fun _ impl _ _ => (family n).block impl.results.toList none (callPre impl) [] false impl.body)
 
 end Goose.Lower
