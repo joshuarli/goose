@@ -1016,6 +1016,7 @@ private def emittedRawWire : String := "[\"module\",\"gir-h/0.4\",\"core-constru
 private def emittedRaw : Option Module := (Decode.decodeBytes emittedRawWire.toUTF8).toOption
 
 #guard emittedRaw.any (fun module => (Validate.validate module).isOk)
+#guard emittedRaw.any (fun module => Writer.write module == emittedRawWire)
 #guard emittedRaw.any (fun module => match Run.run 1000 .release module with
   | .done (.exited 19) stdout events => stdout.data.toList == [65,0,255,66,10] &&
       events == [.begin 0,.write 0 0,.write 0 1,.write 0 2,.write 0 3,.publish 0]
@@ -1212,6 +1213,8 @@ private def emittedPushReferenceWire : String := "[\"module\",\"gir-h/0.4\",\"co
 private def emittedPushReference : Option Module := (Decode.decodeBytes emittedPushReferenceWire.toUTF8).toOption
 
 #guard emittedPushReference.any (fun module => (Validate.validate module).isOk)
+#guard emittedPushReference.any (fun module =>
+  (Writer.write module).contains "[\"i_dest_publish_ref\",6,5,[0]]")
 
 end Goose.Construct.GIR.Checks
 
@@ -1222,6 +1225,9 @@ private def emittedAdaptGrowWire : String := "[\"module\",\"gir-h/0.4\",\"core-c
 private def emittedAdaptGrow : Option Module := (Decode.decodeBytes emittedAdaptGrowWire.toUTF8).toOption
 
 #guard emittedAdaptGrow.any (fun module => (Validate.validate module).isOk)
+#guard emittedAdaptGrow.any (fun module =>
+  (Writer.write module).contains "[\"i_dest_adapt\",2,1,3,\"value\",[0]]" &&
+  (Writer.write module).contains "[\"i_dest_adapt_finish\",4,3,[0]]")
 
 end Goose.Construct.GIR.Checks
 
@@ -1232,6 +1238,9 @@ private def emittedAdaptVarrWire : String := "[\"module\",\"gir-h/0.4\",\"core-c
 private def emittedAdaptVarr : Option Module := (Decode.decodeBytes emittedAdaptVarrWire.toUTF8).toOption
 
 #guard emittedAdaptVarr.any (fun module => (Validate.validate module).isOk)
+#guard emittedAdaptVarr.any (fun module =>
+  (Writer.write module).contains "[\"i_dest_adapt\",2,1,3,\"value\",[0]]" &&
+  (Writer.write module).contains "[\"i_dest_adapt_finish\",4,3,[0]]")
 
 end Goose.Construct.GIR.Checks
 
@@ -1332,18 +1341,24 @@ end Goose.Construct.GIR.Checks
 namespace Goose.Construct.GIR.Checks
 
 private def adaptedNamedProducer : Module :=
-  let original := emittedAdaptVarr.getD rawBytes
+  let owner := Ty.varr (.int .i64)
   let producer := Ty.grow (.int .i64)
-  let callee := { original.funcs[1] with
-    slots := #[⟨producer,.mutable,0,0⟩],
-    results := [⟨producer,.value,some 0⟩], summary := .unknown, blocks := #[⟨[(0,.dest producer .value)],[
+  let caller := function "entry" #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) owner .value none (some 0)),
+    .def 1 (.destAdapt 0 producer .value (some 0)),.def 2 (.callConstruct 1 [] [1] (some 0)),
+    .def 3 (.destAdaptFinish 2 (some 0)),.eff (.destPublish 3 (some 0)),
+    .def 4 (.slotAddr 0),.def 5 (.snapshot .owner 4),.def 6 (.render 5 (some 0)),
+    .eff (.print [.val 6] (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩]
+    #[⟨owner,.mutable,0,0⟩]
+  let callee := function "make" #[⟨[(0,.dest producer .value)],[
       .eff (.enter 0),.def 1 (.constInt .i64 7),.eff (.destWrite 0 1 (some 0)),
       .def 2 (.destFinish 0 (some 0)),.eff (.destBind 0 2 (some 0)),
       .def 3 (.slotAddr 0),.def 4 (.snapshot .owner 3),.def 5 (.constInt .i64 0),
       .def 6 (.indexChecked 4 5 (some 0)),.def 7 (.constInt .i64 9),.eff (.store 6 7 (some 0)),
       .def 8 (.snapshot .owner 3),.eff (.print [.val 8] (some 0)),.def 9 (.destNamed 0 (some 0)),
-      .eff (.leave 0),.term (.ret [9] (some 0))]⟩] }
-  { original with funcs := #[{ original.funcs[0] with summary := .unknown },callee] }
+      .eff (.leave 0),.term (.ret [9] (some 0))]⟩]
+    #[⟨producer,.mutable,0,0⟩] [⟨producer,.value,some 0⟩]
+  moduleOf #[caller,callee]
 
 #guard (Validate.validate adaptedNamedProducer).isOk
 #guard observation adaptedNamedProducer == some ("[9]\n[9]\n".toUTF8.data.toList,
