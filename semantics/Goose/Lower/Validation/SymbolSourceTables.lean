@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.SymbolTables
+import Goose.Lower.Validation.SummaryPreservationVariableShape
 
 namespace Goose.Lower.Validation
 
@@ -56,6 +57,84 @@ theorem checkAnnotationShape_row {module : Core.Module} {impl : Core.Impl} {ctx 
     by_cases bound : global < module.globals.size
     · exact bound
     · simp [bound, Core.reject, bind, Except.bind] at globalRow
+
+theorem checkAnnotationShape_root_bounds {module : Core.Module} {impl : Core.Impl} {ctx : Core.Context}
+    (checked : Core.checkAnnotationShape module impl ctx = .ok ())
+    {varId : VarId} {roots : List RootRef} (member : (varId, roots) ∈ ctx.varRoots) :
+    ∀ root ∈ roots,
+      match root with
+      | .local index => index < impl.vars.size
+      | .global index => index < module.globals.size
+      | .param index => index < impl.params.size := by
+  unfold Core.checkAnnotationShape at checked
+  obtain ⟨_, rows, _⟩ := (ex_bind_ok _ _ _).mp checked
+  have row := forIn_yields_member_core (checked := rows) (by
+    intro pair step one
+    obtain ⟨index, declared⟩ := pair
+    cases present : impl.vars[index]? with
+    | none => simp [present, Core.reject, bind, Except.bind] at one
+    | some localVar =>
+      simp only [present] at one
+      by_cases reference : localVar.ty.isRefLike = true
+      · simp only [reference, ite_true] at one
+        obtain ⟨_, _, last⟩ := (ex_bind_ok _ _ _).mp one
+        simpa [pure, Except.pure] using last.symm
+      · simp [reference, Core.reject, bind, Except.bind] at one) (varId, roots) member
+  cases lookup : impl.vars[varId]? with
+  | none => simp [lookup, Core.reject, bind, Except.bind] at row
+  | some localVar =>
+    simp only [lookup] at row
+    inv at row
+    intro root rootMember
+    have one := forIn_yields_member_core (checked := row.2) (by
+      intro selected step one
+      cases selected <;>
+        repeat' first
+        | (simpa [Core.reject, pure, Except.pure, bind, Except.bind] using one.symm)
+        | (split at one)) root rootMember
+    cases root with
+    | «local» index =>
+      cases target : impl.vars[index]? with
+      | none => simp [target, Core.reject, bind, Except.bind] at one
+      | some value => exact (Array.getElem?_eq_some_iff.mp target).1
+    | global index =>
+      by_cases bound : index < module.globals.size
+      · exact bound
+      · simp [bound, Core.reject, bind, Except.bind] at one
+    | param index =>
+      by_cases bound : index < impl.params.size
+      · exact bound
+      · simp [bound, Core.reject, bind, Except.bind] at one
+
+theorem lowerContextRootCeiling_root_bounds {module : Core.Module} {impl : Core.Impl} {ctx : Core.Context}
+    {roots : List RootRef}
+    (bounded : ∀ root ∈ roots,
+      match root with
+      | .local index => index < impl.vars.size
+      | .global index => index < module.globals.size
+      | .param index => index < impl.params.size) :
+    ∀ root ∈ lowerContextRootCeiling ctx impl roots,
+      match root with
+      | .local index => index < impl.vars.size
+      | .global index => index < module.globals.size
+      | .param index => index < impl.params.size := by
+  intro root member
+  rcases unionRoots_mem _ _ _ member with original | added
+  · exact bounded root original
+  · obtain ⟨⟨parameter, index⟩, atIndex, selected⟩ := List.mem_filterMap.mp added
+    have lookup : impl.params[index]? = some parameter := by
+      simpa only [Array.getElem?_toList] using List.mk_mem_zipIdx_iff_getElem?.mp atIndex
+    have bound := (Array.getElem?_eq_some_iff.mp lookup).1
+    simp only at selected
+    cases annotation : ctx.varRoots.find? (·.1 == parameter.var) with
+    | none => simp [annotation] at selected
+    | some row =>
+      simp only [annotation] at selected
+      split at selected
+      · simp only [Option.some.injEq] at selected
+        subst root
+        exact bound
+      · simp at selected
 
 theorem lowerContextAt_parameter_facts {module : Core.Module} {contextIndex : ContextId}
     {ctx : Core.Context} {impl : Core.Impl}
@@ -288,7 +367,7 @@ theorem lowerContextAt_symbol_tables {module : Core.Module} {contextIndex : Cont
     (contextAt : module.contexts[contextIndex]? = some ctx)
     (implAt : module.impls[ctx.impl]? = some impl) :
     SymbolTableFacts (lower module) (lowerContextAt module ctx impl) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · have positive := lowerImpl_blocks_nonempty module impl
     simpa only [Array.isEmpty, lowerContextAt, Nat.ne_of_gt positive, decide_false] using Bool.false_eq_false
   · intro index parent row
@@ -301,11 +380,48 @@ theorem lowerContextAt_symbol_tables {module : Core.Module} {contextIndex : Cont
   · exact lowerContextAt_parameter_facts accepted contextAt implAt
   · exact lowerContextAt_content_facts accepted contextAt implAt
   · exact lowerContextAt_result_facts accepted contextAt implAt
+  · intro slot roots member
+    obtain ⟨found, foundAt, context⟩ := (validate_modOk module accepted).ctx contextIndex ctx contextAt
+    rw [implAt] at foundAt
+    cases foundAt
+    change (slot, roots) ∈ (ctx.varRoots.filterMap fun (slot, roots) =>
+      match impl.vars[slot]? with
+      | some localVar => if !localVar.ty.isRefLike then none
+          else some (slot, if localVar.ty.isRefSlice &&
+            (impl.params[slot]?).any (fun parameter => parameter.var == slot) then [.param slot]
+            else lowerContextRootCeiling ctx impl roots)
+      | none => none).toArray.toList at member
+    simp only at member
+    obtain ⟨⟨sourceSlot, sourceRoots⟩, annotation, selected⟩ := List.mem_filterMap.mp member
+    cases present : impl.vars[sourceSlot]? with
+    | none => simp [present] at selected
+    | some localVar =>
+      simp only [present] at selected
+      split at selected
+      · simp at selected
+      · simp only [Option.some.injEq, Prod.mk.injEq] at selected
+        obtain ⟨rfl, rfl⟩ := selected
+        have slotBound := (Array.getElem?_eq_some_iff.mp present).1
+        constructor
+        · simpa [lowerContextAt, lowerImpl, lowerEnv] using slotBound
+        · intro root rootMember
+          split at rootMember
+          · have reference : localVar.ty.isRefSlice = true := by
+              simp_all only [Bool.and_eq_true]
+            obtain ⟨param, parameter, _, _⟩ := SummaryPreservation.accepted_refSlice_parameter
+              accepted implAt present reference
+            have parameterBound := (Array.getElem?_eq_some_iff.mp parameter).1
+            simp only [List.mem_singleton] at rootMember
+            subst root
+            simpa [lowerContextAt, lowerImpl] using parameterBound
+          · have bound := lowerContextRootCeiling_root_bounds
+              (checkAnnotationShape_root_bounds context.annotationShape annotation) root rootMember
+            cases root <;> simpa [lower, lowerContextAt, lowerImpl, lowerEnv] using bound
 
 theorem lowerGlobal_symbol_tables {module : Core.Module} {index : GlobalId} {global : Core.Global}
     (accepted : Core.validate module = .ok ()) (lookup : module.globals[index]? = some global) :
     SymbolTableFacts (lower module) (lowerGlobal module global).init := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · have positive := lowerGlobal_blocks_nonempty module global
     simp only [Array.isEmpty, Nat.ne_of_gt positive, decide_false]
   · intro scope parent row
@@ -314,6 +430,7 @@ theorem lowerGlobal_symbol_tables {module : Core.Module} {index : GlobalId} {glo
   · exact fun origin row => lowerGlobal_function_origin accepted lookup row
   · simp [lowerGlobal]
   · rfl
+  · simp [lowerGlobal]
   · simp [lowerGlobal]
   · simp [lowerGlobal]
   · simp [lowerGlobal]
