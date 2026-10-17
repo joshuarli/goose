@@ -1182,7 +1182,255 @@ CoreModule WaitingAfterNamedValue() {
     return core;
 }
 
+CoreModule FixedCallIntoLimited(int64_t capacity) {
+    CoreModule core;
+    core.profile = CoreProfile::Construction;
+    core.files = { "fixed-call-delivery.goose" };
+    auto u8 = core.IntType(CoreIntTy::U8);
+    auto fixed = core.Intern(CoreType { .kind = CoreType::Arr, .elem = u8, .count = 2 });
+    auto limited = core.Intern(CoreType { .kind = CoreType::Limited, .elem = u8, .count = capacity });
+    CoreImpl entry;
+    entry.name = "entry";
+    entry.body.scope = 0;
+    entry.summary.unknown = true;
+    entry.vars = { CoreVar { "owner", limited, CoreVarKind::Var, 0, origin } };
+    CoreStmt initialized;
+    initialized.kind = CoreStmtKind::Let;
+    initialized.var = 0;
+    initialized.org = origin;
+    initialized.expr = make_unique<CoreExpr>();
+    initialized.expr->kind = CoreExprKind::Call;
+    initialized.expr->type = fixed;
+    initialized.expr->ctx = 1;
+    initialized.expr->org = origin;
+    entry.body.stmts.push_back(std::move(initialized));
+    CorePrintArg delivered;
+    delivered.kind = CorePrintArg::View;
+    delivered.view = make_unique<CoreView>();
+    delivered.view->place = make_unique<CorePlace>();
+    delivered.view->place->index = 0;
+    CoreStmt inspect;
+    inspect.kind = CoreStmtKind::Print;
+    inspect.org = origin;
+    inspect.print.push_back(std::move(delivered));
+    entry.body.stmts.push_back(std::move(inspect));
+    CoreImpl producer;
+    producer.name = "producer";
+    producer.body.scope = 0;
+    producer.summary.outputs = true;
+    producer.results = { CoreResultDescriptor { fixed, CoreRequest::Register } };
+    CoreStmt effect;
+    effect.kind = CoreStmtKind::Print;
+    effect.org = origin;
+    effect.print.push_back(CorePrintArg { .kind = CorePrintArg::Text, .str = "effect" });
+    producer.body.stmts.push_back(std::move(effect));
+    producer.body.value = make_unique<CoreExpr>();
+    producer.body.value->kind = CoreExprKind::Arr;
+    producer.body.value->type = fixed;
+    producer.body.value->org = origin;
+    producer.body.value->elems.push_back(Integer(u8, "65"));
+    producer.body.value->elems.push_back(Integer(u8, "66"));
+    core.impls.push_back(std::move(entry));
+    core.impls.push_back(std::move(producer));
+    core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1, .resultroots = { {} } } };
+    return core;
+}
+
+CoreModule EscapingDeliveryBranch(bool variableLive) {
+    auto core = FixedCallIntoLimited(3);
+    core.files = { "escaping-delivery.goose" };
+    auto u8 = core.IntType(CoreIntTy::U8);
+    auto fixed = core.Intern(CoreType { .kind = CoreType::Arr, .elem = u8, .count = 2 });
+    auto variable = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = u8 });
+    auto array = [&](CoreTypeId type, bool third) {
+        auto value = make_unique<CoreExpr>();
+        value->kind = CoreExprKind::Arr;
+        value->type = type;
+        value->org = origin;
+        value->elems.push_back(Integer(u8, "65"));
+        value->elems.push_back(Integer(u8, "66"));
+        if (third) value->elems.push_back(Integer(u8, "67"));
+        return value;
+    };
+    auto expression = make_unique<CoreExpr>();
+    expression->kind = CoreExprKind::If;
+    expression->type = variableLive ? variable : fixed;
+    expression->org = origin;
+    expression->a = make_unique<CoreExpr>();
+    expression->a->kind = CoreExprKind::Bool;
+    expression->a->type = core.Intern(CoreType { .kind = CoreType::Bool });
+    expression->a->flag = false;
+    expression->then = make_unique<CoreBlock>();
+    expression->then->scope = 1;
+    CoreStmt aborted;
+    aborted.kind = CoreStmtKind::Abort;
+    aborted.message = "dead";
+    aborted.org = origin;
+    expression->then->stmts.push_back(std::move(aborted));
+    expression->then->value = array(variableLive ? fixed : variable, !variableLive);
+    expression->otherwise = make_unique<CoreBlock>();
+    expression->otherwise->scope = 2;
+    expression->otherwise->value = array(variableLive ? variable : fixed, variableLive);
+    core.impls[0].body.stmts[0].expr = std::move(expression);
+    return core;
+}
+
+CoreModule LowFuelBlockValue() {
+    auto core = FixedCallIntoLimited(1);
+    core.files = { "query-fuel.goose" };
+    core.impls.resize(1);
+    core.contexts.resize(1);
+    auto u8 = core.IntType(CoreIntTy::U8);
+    auto i64 = core.IntType(CoreIntTy::I64);
+    auto fixed = core.Intern(CoreType { .kind = CoreType::Arr, .elem = u8, .count = 1 });
+    auto variable = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = u8 });
+    auto conditional = make_unique<CoreExpr>();
+    conditional->kind = CoreExprKind::If;
+    conditional->type = fixed;
+    conditional->org = origin;
+    conditional->a = make_unique<CoreExpr>();
+    conditional->a->kind = CoreExprKind::Bool;
+    conditional->a->type = core.Intern(CoreType { .kind = CoreType::Bool });
+    conditional->a->flag = false;
+    conditional->then = make_unique<CoreBlock>();
+    conditional->then->scope = 2;
+    for (int index = 0; index < 80; index++) {
+        CoreStmt ignored;
+        ignored.kind = CoreStmtKind::Expr;
+        ignored.org = origin;
+        ignored.expr = Integer(i64, "0");
+        conditional->then->stmts.push_back(std::move(ignored));
+    }
+    CoreStmt aborted;
+    aborted.kind = CoreStmtKind::Abort;
+    aborted.message = "dead";
+    aborted.org = origin;
+    conditional->then->stmts.push_back(std::move(aborted));
+    conditional->then->value = make_unique<CoreExpr>();
+    conditional->then->value->kind = CoreExprKind::Arr;
+    conditional->then->value->type = variable;
+    conditional->then->value->org = origin;
+    conditional->then->value->elems.push_back(Integer(u8, "9"));
+    conditional->otherwise = make_unique<CoreBlock>();
+    conditional->otherwise->scope = 3;
+    CoreStmt effect;
+    effect.kind = CoreStmtKind::Print;
+    effect.org = origin;
+    effect.print.push_back(CorePrintArg { .kind = CorePrintArg::Text, .str = "effect" });
+    conditional->otherwise->stmts.push_back(std::move(effect));
+    conditional->otherwise->value = make_unique<CoreExpr>();
+    conditional->otherwise->value->kind = CoreExprKind::Arr;
+    conditional->otherwise->value->type = fixed;
+    conditional->otherwise->value->org = origin;
+    conditional->otherwise->value->elems.push_back(Integer(u8, "65"));
+    auto block = make_unique<CoreExpr>();
+    block->kind = CoreExprKind::Block;
+    block->type = fixed;
+    block->org = origin;
+    block->then = make_unique<CoreBlock>();
+    block->then->scope = 1;
+    block->then->value = std::move(conditional);
+    core.impls[0].body.stmts[0].expr = std::move(block);
+    return core;
+}
+
+CoreModule NestedDeliveryQuery() {
+    auto core = FixedCallIntoLimited(2);
+    core.files = { "nested-delivery-query.goose" };
+    auto u8 = core.IntType(CoreIntTy::U8);
+    auto i64 = core.IntType(CoreIntTy::I64);
+    auto row2 = core.Intern(CoreType { .kind = CoreType::Arr, .elem = u8, .count = 2 });
+    auto row3 = core.Intern(CoreType { .kind = CoreType::Arr, .elem = u8, .count = 3 });
+    auto rows2 = core.Intern(CoreType { .kind = CoreType::Arr, .elem = row2, .count = 1 });
+    auto rows3 = core.Intern(CoreType { .kind = CoreType::Arr, .elem = row3, .count = 1 });
+    auto limited = core.Intern(CoreType { .kind = CoreType::Limited, .elem = u8, .count = 2 });
+    auto &entry = core.impls[0];
+    entry.vars = { CoreVar { "a", rows2, CoreVarKind::Var, 0, origin },
+        CoreVar { "b", rows3, CoreVarKind::Var, 0, origin },
+        CoreVar { "out", limited, CoreVarKind::Var, 0, origin } };
+    entry.body.stmts.clear();
+    for (int width : { 2, 3 }) {
+        auto row = make_unique<CoreExpr>();
+        row->kind = CoreExprKind::Arr;
+        row->type = width == 2 ? row2 : row3;
+        row->org = origin;
+        row->elems.push_back(Integer(u8, "65"));
+        row->elems.push_back(Integer(u8, "66"));
+        if (width == 3) row->elems.push_back(Integer(u8, "67"));
+        auto rows = make_unique<CoreExpr>();
+        rows->kind = CoreExprKind::Arr;
+        rows->type = width == 2 ? rows2 : rows3;
+        rows->org = origin;
+        rows->elems.push_back(std::move(row));
+        CoreStmt initialized;
+        initialized.kind = CoreStmtKind::Let;
+        initialized.var = width - 2;
+        initialized.expr = std::move(rows);
+        initialized.org = origin;
+        entry.body.stmts.push_back(std::move(initialized));
+    }
+    auto sliced = [&](int local, CoreTypeId row) {
+        auto value = make_unique<CoreExpr>();
+        value->kind = CoreExprKind::Slice;
+        value->type = core.Intern(CoreType { .kind = CoreType::Slice, .mut = CoreMut::Const, .elem = row });
+        value->mut = CoreMut::Const;
+        value->org = origin;
+        value->view = make_unique<CoreView>();
+        value->view->place = make_unique<CorePlace>();
+        value->view->place->index = local;
+        return value;
+    };
+    auto choose = make_unique<CoreExpr>();
+    choose->kind = CoreExprKind::If;
+    choose->type = core.Intern(CoreType { .kind = CoreType::Slice, .mut = CoreMut::Const, .elem = row3 });
+    choose->org = origin;
+    choose->a = make_unique<CoreExpr>();
+    choose->a->kind = CoreExprKind::Bool;
+    choose->a->type = core.Intern(CoreType { .kind = CoreType::Bool });
+    choose->a->flag = false;
+    choose->then = make_unique<CoreBlock>();
+    choose->then->scope = 1;
+    CoreStmt dead;
+    dead.kind = CoreStmtKind::Abort;
+    dead.message = "dead";
+    dead.org = origin;
+    choose->then->stmts.push_back(std::move(dead));
+    choose->then->value = sliced(0, row2);
+    choose->otherwise = make_unique<CoreBlock>();
+    choose->otherwise->scope = 2;
+    CoreStmt effect;
+    effect.kind = CoreStmtKind::Print;
+    effect.org = origin;
+    effect.print.push_back(CorePrintArg { .kind = CorePrintArg::Text, .str = "effect" });
+    choose->otherwise->stmts.push_back(std::move(effect));
+    choose->otherwise->value = sliced(1, row3);
+    auto read = make_unique<CoreExpr>();
+    read->kind = CoreExprKind::Read;
+    read->type = row3;
+    read->org = origin;
+    read->place = make_unique<CorePlace>();
+    read->place->kind = CorePlace::Elem;
+    read->place->org = origin;
+    read->place->expr = Integer(i64, "0");
+    read->place->view = make_unique<CoreView>();
+    read->place->view->kind = CoreView::Val;
+    read->place->view->expr = std::move(choose);
+    CoreStmt initialized;
+    initialized.kind = CoreStmtKind::Let;
+    initialized.var = 2;
+    initialized.expr = std::move(read);
+    initialized.org = origin;
+    entry.body.stmts.push_back(std::move(initialized));
+    return core;
+}
+
 CoreModule Fixture(string_view name) {
+    if (name == "low-fuel-block-value") return LowFuelBlockValue();
+    if (name == "nested-query-overflow") return NestedDeliveryQuery();
+    if (name == "escaping-live-varr") return EscapingDeliveryBranch(true);
+    if (name == "escaping-live-fixed") return EscapingDeliveryBranch(false);
+    if (name == "fixed-call-fit") return FixedCallIntoLimited(3);
+    if (name == "fixed-call-overflow") return FixedCallIntoLimited(1);
     if (name == "waiting-named-break") return BorrowedWaitingNamed(CoreStmtKind::Break);
     if (name == "waiting-named-continue") return BorrowedWaitingNamed(CoreStmtKind::Continue);
     if (name == "waiting-child-break") return BorrowedWaitingChild(CoreStmtKind::Break);
@@ -1393,6 +1641,574 @@ void RawCompletionAliasesPreserveTheWritingPhase() {
     }
 }
 
+void FixedCallEffectsPrecedeTheKnownReceivingCheck() {
+    for (int64_t capacity : { 1, 3 }) {
+        auto core = FixedCallIntoLimited(capacity);
+        CoreWriter writer(core); writer.Write();
+        auto high = GirLowerer(core, writer.FileTable(), writer.OriginTable(),
+            [&](const CoreOrigin &source) { return writer.OriginId(source); }).Lower();
+        assert(!GirVerifier(high).Verify());
+        auto &instructions = high.funcs[0].blocks[0].insts;
+        int call = -1, open = -1;
+        map<int, string> integers;
+        for (size_t position = 0; position < instructions.size(); position++) {
+            auto &instruction = instructions[position];
+            if (instruction.op == GirOp::Int) integers[instruction.res] = instruction.text;
+            if (instruction.op == GirOp::Call) call = (int)position;
+            if (instruction.op == GirOp::DestOpen) {
+                open = (int)position;
+                assert(instruction.knownCount && integers.at(*instruction.knownCount) == "2");
+            }
+            assert(instruction.op != GirOp::DestStage && instruction.op != GirOp::DestFit);
+        }
+        assert(call >= 0 && open > call);
+        auto unsafe = high;
+        bool changed = false;
+        for (auto &instruction : unsafe.funcs[0].blocks[0].insts)
+            if (instruction.op == GirOp::Int && integers.count(instruction.res) && instruction.text == "2") {
+                instruction.text = "1"; changed = true;
+            }
+        auto rejected = GirVerifier(unsafe).Verify();
+        assert(changed && rejected && rejected->code == "GIR-V060");
+    }
+}
+
+void ReturningFixedBranchPrecedesTheReceivingCheck() {
+    auto core = EscapingDeliveryBranch(false);
+    CoreWriter writer(core); writer.Write();
+    auto high = GirLowerer(core, writer.FileTable(), writer.OriginTable(),
+        [&](const CoreOrigin &source) { return writer.OriginId(source); }).Lower();
+    assert(!GirVerifier(high).Verify());
+    int snapshots = 0, opens = 0;
+    for (auto &block : high.funcs[0].blocks) {
+        bool opened = false;
+        for (auto &instruction : block.insts) {
+            assert(instruction.op != GirOp::DestStage && instruction.op != GirOp::DestFit);
+            if (instruction.op == GirOp::DestOpen) { assert(instruction.knownCount); opened = true; opens++; }
+            if (instruction.op == GirOp::DestSnapshot) { assert(opened); snapshots++; }
+        }
+    }
+    assert(opens == 1 && snapshots == 1);
+}
+
+
+int NextValue(const GirFunc &function) {
+    int next = 0;
+    for (auto &block : function.blocks) {
+        for (auto [value, type] : block.params) next = max(next, value + 1);
+        for (auto &inst : block.insts) if (GirDefinesValue(inst)) next = max(next, inst.res + 1);
+    }
+    return next;
+}
+
+GirModule LimitedLow(bool staged) {
+    auto core = staged ? EscapingDeliveryBranch(true) : FixedCallIntoLimited(3);
+    auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    Valid(high);
+    auto low = GirToLow(high).Lower();
+    Valid(low);
+    return low;
+}
+
+void LimitedCursorControls() {
+    for (int control = 0; control < 33; control++) {
+        auto low = LimitedLow((control >= 4 && control <= 12) || (control >= 18 && control <= 22));
+        auto &function = low.funcs[0];
+        int cursor = -1, firstRaw = -1;
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::ControlReceivingNew && cursor < 0) cursor = inst.a;
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::ControlReceivingCurrent && firstRaw < 0) firstRaw = inst.res;
+        assert(cursor >= 0 && firstRaw >= 0);
+        bool changed = false;
+        for (auto &block : function.blocks) {
+            for (size_t position = 0; position < block.insts.size() && !changed; position++) {
+                auto &inst = block.insts[position];
+                if (control == 0 && inst.op == GirOp::PStore && inst.a == cursor) {
+                    block.insts.erase(block.insts.begin() + position); changed = true;
+                } else if (control == 1 && inst.op == GirOp::StackBump) {
+                    auto amount = inst.b;
+                    for (auto &sourceBlock : function.blocks) for (auto &source : sourceBlock.insts)
+                        if (source.res == amount && source.op == GirOp::Int) { source.text = "4"; changed = true; }
+                } else if (control == 2 && inst.op == GirOp::ControlReceivingNew) {
+                    inst.b = cursor; changed = true;
+                } else if (control == 3 && inst.op == GirOp::StackBump) {
+                    auto next = NextValue(function);
+                    GirInst amount; amount.op = GirOp::Int; amount.res = next++; amount.ty = low.IntType(CoreIntTy::I64); amount.text = "4";
+                    int active = firstRaw;
+                    for (auto &sourceBlock : function.blocks) for (auto &source : sourceBlock.insts)
+                        if (source.res == inst.a && source.op == GirOp::ControlAttemptStack) active = source.a;
+                    GirInst start; start.op = GirOp::ControlAttemptStart; start.res = next++; start.a = active;
+                    GirInst outside; outside.op = GirOp::PtrOffset; outside.res = next++; outside.a = start.res; outside.b = amount.res; outside.idx = 1;
+                    GirInst release; release.op = GirOp::StackRelease; release.a = cursor; release.b = outside.res;
+                    block.insts.insert(block.insts.begin() + position, { amount, start, outside, release }); changed = true;
+                } else if ((control >= 13 && control <= 17) && inst.op == GirOp::StackBump) {
+                    auto next = NextValue(function);
+                    int active = firstRaw;
+                    for (auto &sourceBlock : function.blocks) for (auto &source : sourceBlock.insts)
+                        if (source.res == inst.a && source.op == GirOp::ControlAttemptStack) active = source.a;
+                    GirInst start; start.op = GirOp::ControlAttemptStart; start.res = next++; start.a = active;
+                    GirInst distance; distance.op = GirOp::Int; distance.res = next++; distance.ty = low.IntType(CoreIntTy::I64); distance.text = control == 16 ? "9223372036854775807" : "4";
+                    GirInst outside; outside.op = GirOp::PtrOffset; outside.res = next++; outside.a = start.res;
+                    outside.b = control == 15 ? function.blocks[0].params[0].first : distance.res; outside.idx = 1;
+                    GirInst byte; byte.op = GirOp::Int; byte.res = next++; byte.ty = low.IntType(CoreIntTy::U8); byte.text = "0";
+                    GirInst write; write.op = GirOp::PStore; write.ty = low.IntType(CoreIntTy::U8); write.b = byte.res;
+                    if (control == 17) {
+                        auto safeBlock = (int)function.blocks.size();
+                        auto badBlock = safeBlock + 1;
+                        GirBlock continuation { {}, vector<GirInst>(block.insts.begin() + position, block.insts.end()) };
+                        GirBlock overflow;
+                        GirInst tooMuch; tooMuch.op = GirOp::Int; tooMuch.res = next++; tooMuch.ty = low.IntType(CoreIntTy::I64); tooMuch.text = "4";
+                        GirInst bump = inst; bump.b = tooMuch.res;
+                        GirInst resume; resume.op = GirOp::Br; resume.idx = safeBlock;
+                        overflow.insts = { tooMuch, bump, resume };
+                        GirInst large; large.op = GirOp::Int; large.res = next++; large.ty = low.IntType(CoreIntTy::I64); large.text = "256";
+                        GirInst narrow; narrow.op = GirOp::Conv; narrow.res = next++; narrow.a = large.res;
+                        narrow.ty = low.IntType(CoreIntTy::I64); narrow.ty2 = low.IntType(CoreIntTy::U8); narrow.conv = CoreConvKind::AsUnchecked;
+                        GirInst zero; zero.op = GirOp::Int; zero.res = next++; zero.ty = low.IntType(CoreIntTy::U8); zero.text = "0";
+                        GirInst compare; compare.op = GirOp::Cmp; compare.res = next++; compare.ty = low.IntType(CoreIntTy::U8);
+                        compare.cmp = CoreCmpOp::Eq; compare.a = narrow.res; compare.b = zero.res;
+                        GirInst branch; branch.op = GirOp::CondBr; branch.a = compare.res; branch.idx = badBlock; branch.idx2 = safeBlock;
+                        block.insts.erase(block.insts.begin() + position, block.insts.end());
+                        block.insts.insert(block.insts.end(), { large, narrow, zero, compare, branch });
+                        function.blocks.push_back(std::move(continuation)); function.blocks.push_back(std::move(overflow));
+                    } else if (control == 14) {
+                        GirBlock continuation { { { next++, low.PtrType() } }, vector<GirInst>(block.insts.begin() + position, block.insts.end()) };
+                        write.a = continuation.params[0].first;
+                        continuation.insts.insert(continuation.insts.begin(), { byte, write });
+                        block.insts.erase(block.insts.begin() + position, block.insts.end());
+                        block.insts.insert(block.insts.end(), { start, distance, outside });
+                        GirInst branch; branch.op = GirOp::Br; branch.idx = (int)function.blocks.size(); branch.vals = { outside.res };
+                        block.insts.push_back(branch); function.blocks.push_back(std::move(continuation));
+                    } else {
+                        GirMember member; member.kind = GirMember::Scalar; member.ty = low.PtrType(); member.scope = 0;
+                        auto local = (int)function.members.size(); function.members.push_back(member);
+                        GirInst saved; saved.op = GirOp::LocalSet; saved.a = outside.res; saved.idx = local;
+                        GirInst restored; restored.op = GirOp::LocalGet; restored.res = next++; restored.ty = low.PtrType(); restored.idx = local;
+                        write.a = restored.res;
+                        block.insts.insert(block.insts.begin() + position, { start, distance, outside, saved, restored, byte, write });
+                    }
+                    changed = true;
+                } else if (control >= 25 && control <= 28 && inst.op == (control == 26 ? GirOp::PStore : GirOp::StackBump) && (control != 26 || inst.a == cursor)) {
+                    auto next = NextValue(function);
+                    GirInst offset; offset.op = GirOp::Int; offset.res = next++; offset.ty = low.IntType(CoreIntTy::I64); offset.text = "0";
+                    GirInst address; address.op = GirOp::PtrOffset; address.res = next++; address.a = cursor; address.b = offset.res; address.idx = 1;
+                    int data = -1;
+                    for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                        if (candidate.op == GirOp::PStore && candidate.a == cursor) data = candidate.b;
+                    assert(data >= 0);
+                    if (control == 26) {
+                        inst.a = address.res;
+                        block.insts.insert(block.insts.begin() + position, { offset, address });
+                    } else if (control == 27) {
+                        GirInst byte; byte.op = GirOp::StaticBytes; byte.res = next++; byte.bytes = { 0 };
+                        GirInst amount; amount.op = GirOp::Int; amount.res = next++; amount.ty = low.IntType(CoreIntTy::I64); amount.text = "1";
+                        GirInst overwrite; overwrite.op = GirOp::BytesCopy; overwrite.a = cursor; overwrite.b = byte.res; overwrite.vals = { amount.res };
+                        block.insts.insert(block.insts.begin() + position, { byte, amount, overwrite });
+                    } else if (control == 28) {
+                        GirInst load; load.op = GirOp::PLoad; load.res = next++; load.ty = low.PtrType(); load.a = cursor;
+                        GirInst distance; distance.op = GirOp::Int; distance.res = next++; distance.ty = low.IntType(CoreIntTy::I64); distance.text = "4";
+                        GirInst outside = address; outside.res = next++; outside.a = load.res; outside.b = distance.res;
+                        GirInst byte; byte.op = GirOp::Int; byte.res = next++; byte.ty = low.IntType(CoreIntTy::U8); byte.text = "0";
+                        GirInst write; write.op = GirOp::PStore; write.ty = byte.ty; write.a = outside.res; write.b = byte.res;
+                        block.insts.insert(block.insts.begin() + position, { load, distance, outside, byte, write });
+                    } else {
+                        GirInst overwrite; overwrite.op = GirOp::PStore; overwrite.ty = low.PtrType(); overwrite.a = address.res; overwrite.b = data;
+                        block.insts.insert(block.insts.begin() + position, { offset, address, overwrite });
+                    }
+                    changed = true;
+                } else if (control >= 29 && inst.op == GirOp::StackBump) {
+                    auto next = NextValue(function);
+                    if (control == 30) {
+                        auto oldStack = inst.a;
+                        GirBlock continuation { { { next++, low.PtrType() } }, vector<GirInst>(block.insts.begin() + position, block.insts.end()) };
+                        continuation.insts.front().a = continuation.params[0].first;
+                        block.insts.erase(block.insts.begin() + position, block.insts.end());
+                        GirInst branch; branch.op = GirOp::Br; branch.idx = (int)function.blocks.size(); branch.vals = { oldStack };
+                        block.insts.push_back(branch); function.blocks.push_back(std::move(continuation));
+                    } else {
+                        GirMember member; member.kind = GirMember::Scalar; member.ty = low.PtrType(); member.scope = 0;
+                        auto local = (int)function.members.size(); function.members.push_back(member);
+                        if (control == 29) {
+                            GirInst saved; saved.op = GirOp::LocalSet; saved.a = inst.a; saved.idx = local;
+                            GirInst restored; restored.op = GirOp::LocalGet; restored.res = next++; restored.ty = low.PtrType(); restored.idx = local;
+                            inst.a = restored.res;
+                            block.insts.insert(block.insts.begin() + position, { saved, restored });
+                        } else {
+                            GirInst cell; cell.op = GirOp::FrameAddr; cell.res = next++; cell.idx = local;
+                            GirInst spill; spill.op = GirOp::PStore; spill.ty = low.PtrType(); spill.a = cell.res; spill.b = cursor;
+                            if (control == 31) block.insts.insert(block.insts.begin() + position, { cell, spill });
+                            else {
+                                GirMember bytes; bytes.kind = GirMember::Bytes; bytes.size = 4; bytes.scope = 0;
+                                auto storage = (int)function.members.size(); function.members.push_back(bytes);
+                                GirInst base = cell; base.res = next++; base.idx = storage;
+                                GirInst one; one.op = GirOp::Int; one.res = next++; one.ty = low.IntType(CoreIntTy::I64); one.text = "1";
+                                GirInst data; data.op = GirOp::PtrOffset; data.res = next++; data.a = base.res; data.b = one.res; data.idx = 1;
+                                spill.b = data.res;
+                                GirInst read; read.op = GirOp::PLoad; read.res = next++; read.ty = low.PtrType(); read.a = cell.res;
+                                block.insts.insert(block.insts.begin() + position, { cell, base, one, data, spill, read });
+                            }
+                        }
+                    }
+                    changed = true;
+                } else if ((control == 23 || control == 24) && inst.op == GirOp::StackBump) {
+                    auto next = NextValue(function);
+                    auto active = firstRaw;
+                    for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                        if (candidate.res == inst.a && candidate.op == GirOp::ControlAttemptStack) active = candidate.a;
+                    GirInst start; start.op = GirOp::ControlAttemptStart; start.res = next++; start.a = active;
+                    GirInst source; source.op = GirOp::StaticBytes; source.res = next++; source.bytes = { 0,0 };
+                    GirInst count; count.op = GirOp::Int; count.res = next++; count.ty = low.IntType(CoreIntTy::I64); count.text = control == 23 ? "2" : "1";
+                    GirInst fill; fill.op = GirOp::BytesFill; fill.a = start.res; fill.b = source.res; fill.vals = { count.res }; fill.idx = 2;
+                    block.insts.insert(block.insts.begin() + position, { start, source, count, fill }); changed = true;
+                } else if (control == 4 && inst.op == GirOp::ControlAttemptStage) {
+                    inst.vals[0] = inst.a; changed = true;
+                } else if (control == 5 && inst.op == GirOp::ControlAttemptStage) {
+                    auto old = inst.a;
+                    GirInst stale; stale.op = GirOp::ControlAttemptPrefix; stale.a = old; stale.res = NextValue(function);
+                    block.insts.insert(block.insts.begin() + position + 1, stale); changed = true;
+                } else if (control == 6 && inst.op == GirOp::ControlAttemptFit) {
+                    inst.b = inst.a; changed = true;
+                } else if (control == 7 && inst.op == GirOp::ControlAttemptStage) {
+                    auto next = NextValue(function);
+                    GirInst receiving; receiving.op = GirOp::ControlAttemptReceiving; receiving.res = next++; receiving.a = inst.a;
+                    GirInst reserved; reserved.op = GirOp::ControlExitReserve; reserved.res = next++; reserved.a = receiving.res;
+                    block.insts.insert(block.insts.begin() + position, { receiving, reserved }); changed = true;
+                } else if (control == 8 && inst.op == GirOp::ControlAttemptFit) {
+                    auto next = NextValue(function);
+                    GirInst repeated = inst; repeated.res = next++; repeated.a = inst.res;
+                    block.insts.insert(block.insts.begin() + position + 1, repeated); changed = true;
+                } else if (control == 18 && inst.op == GirOp::ControlAttemptFit) {
+                    auto next = NextValue(function);
+                    GirInst bytes; bytes.op = GirOp::StaticBytes; bytes.res = next++; bytes.bytes = { 4,0,0,0,0,0,0,0 };
+                    GirInst amount; amount.op = GirOp::Int; amount.res = next++; amount.ty = low.IntType(CoreIntTy::I64); amount.text = "8";
+                    GirInst copy; copy.op = GirOp::BytesCopy; copy.a = inst.a; copy.b = bytes.res; copy.vals = { amount.res };
+                    block.insts.insert(block.insts.begin() + position, { bytes, amount, copy }); changed = true;
+                } else if (control == 19 && inst.op == GirOp::ControlAttemptFit) {
+                    auto next = NextValue(function);
+                    GirInst progress; progress.op = GirOp::ControlAttemptProgress; progress.res = next++; progress.a = inst.a;
+                    GirInst opened; opened.op = GirOp::Int; opened.res = next++; opened.ty = low.IntType(CoreIntTy::I64);
+                    opened.text = to_string((int)GirConstructionProgress::Open);
+                    GirInst write; write.op = GirOp::PStore; write.ty = low.IntType(CoreIntTy::I64); write.a = progress.res; write.b = opened.res;
+                    block.insts.insert(block.insts.begin() + position, { progress, opened, write }); changed = true;
+                } else if (control == 20 && inst.op == GirOp::ControlAttemptFit) {
+                    auto old = inst.a, fitted = inst.res;
+                    block.insts.erase(block.insts.begin() + position);
+                    for (auto &sourceBlock : function.blocks) for (auto &source : sourceBlock.insts) {
+                        if (source.a == fitted) source.a = old;
+                        if (source.b == fitted) source.b = old;
+                        for (auto &value : source.vals) if (value == fitted) value = old;
+                        for (auto &value : source.vals2) if (value == fitted) value = old;
+                    }
+                    changed = true;
+                } else if (control == 21 && inst.op == GirOp::ControlAttemptStage) {
+                    GirInst pack; pack.op = GirOp::ControlAttemptPack; pack.a = inst.res;
+                    block.insts.insert(block.insts.begin() + position + 1, pack); changed = true;
+                } else if (control == 22 && inst.op == GirOp::ControlAttemptStage) {
+                    auto next = NextValue(function);
+                    GirInst zero; zero.op = GirOp::Int; zero.res = next++; zero.ty = low.IntType(CoreIntTy::I64); zero.text = "0";
+                    inst.vals[1] = zero.res; inst.vals[2] = zero.res;
+                    for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                        if (candidate.op == GirOp::PStore && candidate.a == cursor) inst.vals[0] = candidate.b;
+                    for (auto &sourceBlock : function.blocks) for (auto &source : sourceBlock.insts)
+                        if (source.op == GirOp::FrameAddr && source.res == cursor) {
+                            for (auto &initialBlock : function.blocks) for (auto &initial : initialBlock.insts)
+                                if (initial.op == GirOp::PStore && initial.a == cursor)
+                                    for (auto &baseBlock : function.blocks) for (auto &base : baseBlock.insts)
+                                        if (base.op == GirOp::PtrOffset && base.res == initial.b)
+                                            for (auto &ownerBlock : function.blocks) for (auto &owner : ownerBlock.insts)
+                                                if (owner.op == GirOp::FrameAddr && owner.res == base.a) function.members[owner.idx].size = 1;
+                        }
+                    block.insts.insert(block.insts.begin() + position, zero); changed = true;
+                } else if (control == 10 && inst.op == GirOp::ControlAttemptFit) {
+                    auto next = NextValue(function);
+                    GirInst yes; yes.op = GirOp::Bool; yes.res = next++; yes.flag = true;
+                    for (auto &predecessor : function.blocks) {
+                        auto &branch = predecessor.insts.back();
+                        if (branch.op == GirOp::CondBr && branch.idx == (int)(&block - function.blocks.data())) {
+                            branch.a = yes.res;
+                            predecessor.insts.insert(predecessor.insts.end() - 1, yes); changed = true; break;
+                        }
+                    }
+                } else if (control == 11 && inst.op == GirOp::ControlAttemptFit) {
+                    auto next = NextValue(function);
+                    GirInst count; count.op = GirOp::Int; count.res = next++; count.ty = low.IntType(CoreIntTy::I64); count.text = "4";
+                    GirInst write; write.op = GirOp::PStore; write.ty = low.IntType(CoreIntTy::I64); write.a = inst.a; write.b = count.res;
+                    block.insts.insert(block.insts.begin() + position, { count, write }); changed = true;
+                } else if (control == 12 && inst.op == GirOp::ControlAttemptFit) {
+                    auto next = NextValue(function);
+                    auto old = inst.a;
+                    GirBlock continuation { { { next, low.PtrType() } }, vector<GirInst>(block.insts.begin() + position, block.insts.end()) };
+                    continuation.insts.front().a = next;
+                    block.insts.erase(block.insts.begin() + position, block.insts.end());
+                    GirInst branch; branch.op = GirOp::Br; branch.idx = (int)function.blocks.size(); branch.vals = { old };
+                    block.insts.push_back(branch);
+                    function.blocks.push_back(std::move(continuation)); changed = true;
+                } else if (control == 9 && inst.op == GirOp::ControlAttemptFit) {
+                    auto next = NextValue(function);
+                    GirMember member; member.kind = GirMember::Scalar; member.ty = low.PtrType(); member.scope = 0;
+                    auto local = (int)function.members.size(); function.members.push_back(member);
+                    GirInst saved; saved.op = GirOp::LocalSet; saved.a = inst.a; saved.idx = local;
+                    GirInst restored; restored.op = GirOp::LocalGet; restored.res = next++; restored.ty = low.PtrType(); restored.idx = local;
+                    inst.a = restored.res;
+                    block.insts.insert(block.insts.begin() + position, { saved, restored }); changed = true;
+                }
+                if (changed) break;
+            }
+            if (changed) break;
+        }
+        set<int> defined;
+        for (auto &candidate : function.blocks) {
+            for (auto [value, type] : candidate.params) defined.insert(value);
+            for (auto &source : candidate.insts) if (GirDefinesValue(source)) defined.insert(source.res);
+        }
+        for (int value = 0, end = NextValue(function); value < end; value++) if (!defined.count(value)) {
+            GirInst filler; filler.op = GirOp::Int; filler.res = value; filler.ty = low.IntType(CoreIntTy::I64); filler.text = "0";
+            function.blocks[0].insts.insert(function.blocks[0].insts.begin(), filler);
+        }
+        auto error = GirVerifier(low).Verify();
+        if (!changed || ((control == 9 || control == 12 || control == 24 || control == 29 || control == 30 || control == 32) ? error.has_value() : !error || error->code != "GIR-V090")) {
+            fprintf(stderr, "control %d: changed=%d error=%s\n", control, changed, error ? error->message.c_str() : "accepted");
+            abort();
+        }
+    }
+}
+
+void InlineCursorLocalMembersAreRejected() {
+    vector<string> unexpected;
+    for (auto access : { GirOp::LocalGet, GirOp::LocalSet }) {
+        auto low = LimitedLow(true);
+        auto &function = low.funcs[0];
+        int cursor = -1, member = -1;
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::ControlReceivingNew) cursor = inst.a;
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::FrameAddr && inst.res == cursor) member = inst.idx;
+        assert(cursor >= 0 && member >= 0);
+        auto next = NextValue(function);
+        bool inserted = false;
+        for (auto &block : function.blocks) {
+            for (size_t position = 0; position < block.insts.size(); position++) {
+                if (block.insts[position].op != GirOp::PStore || block.insts[position].a != cursor) continue;
+                GirInst accessInstruction;
+                accessInstruction.op = access;
+                accessInstruction.idx = member;
+                if (access == GirOp::LocalGet) {
+                    accessInstruction.res = next;
+                    accessInstruction.ty = low.PtrType();
+                } else accessInstruction.a = cursor;
+                block.insts.insert(block.insts.begin() + position + 1, accessInstruction);
+                inserted = true;
+                break;
+            }
+            if (inserted) break;
+        }
+        assert(inserted);
+        auto violation = GirVerifier(low).Verify();
+        if (!violation || violation->code != "GIR-V090" ||
+            violation->message.find("private inline cursor cell is accessed through a frame local") == string::npos)
+            unexpected.push_back(access == GirOp::LocalGet ? "LocalGet" : "LocalSet");
+    }
+    if (!unexpected.empty()) {
+        fprintf(stderr, "inline cursor local access rejection mismatch: ");
+        for (size_t index = 0; index < unexpected.size(); index++)
+            fprintf(stderr, "%s%s", index ? ", " : "", unexpected[index].c_str());
+        fprintf(stderr, "\n");
+        abort();
+    }
+}
+
+void LimitedScratchControls() {
+    for (int control = 0; control < 3; control++) {
+        auto low = LimitedLow(true);
+        auto &function = low.funcs[0];
+        auto next = NextValue(function);
+        bool changed = false;
+        for (auto &block : function.blocks) {
+            for (size_t position = 0; position < block.insts.size(); position++) {
+                auto original = block.insts[position];
+                if (original.op != GirOp::ControlAttemptStage) continue;
+                vector<GirInst> extra;
+                auto define = [&](GirInst inst) { inst.res = next++; extra.push_back(inst); return inst.res; };
+                GirMember owner; owner.kind = GirMember::Bytes; owner.size = 4; owner.scope = 0;
+                auto storage = (int)function.members.size(); function.members.push_back(owner);
+                GirMember cursor; cursor.kind = GirMember::Scalar; cursor.ty = low.PtrType(); cursor.scope = 0;
+                auto cell = (int)function.members.size(); function.members.push_back(cursor);
+                GirInst address; address.op = GirOp::FrameAddr; address.idx = storage;
+                auto base = define(address);
+                GirInst one; one.op = GirOp::Int; one.ty = low.IntType(CoreIntTy::I64); one.text = "1";
+                auto offset = define(one);
+                GirInst pointer; pointer.op = GirOp::PtrOffset; pointer.a = base; pointer.b = offset; pointer.idx = 1;
+                auto data = define(pointer);
+                address.idx = cell; auto frame = define(address);
+                GirInst initialize; initialize.op = GirOp::PStore; initialize.ty = low.PtrType(); initialize.a = frame; initialize.b = data;
+                extra.push_back(initialize);
+                GirInst zero = one; zero.text = "0"; auto empty = define(zero);
+                GirInst receiving; receiving.op = GirOp::ControlReceivingNew; receiving.a = frame; receiving.b = data; receiving.vals = { empty, empty };
+                auto handle = define(receiving);
+                GirInst current; current.op = GirOp::ControlReceivingCurrent; current.a = handle;
+                auto raw = define(current);
+                GirInst capacity = one; capacity.text = "3"; auto count = define(capacity);
+                pointer.a = data; pointer.b = count; auto end = define(pointer);
+                auto scratch = original.b;
+                if (control == 0) {
+                    GirInst owned; owned.op = GirOp::StackAt; owned.a = function.blocks[0].params[0].first; owned.idx = function.stacks++;
+                    scratch = define(owned);
+                }
+                if (control == 2) {
+                    for (auto &instruction : extra) if (instruction.res == handle) {
+                        instruction.a = scratch;
+                        GirInst mark; mark.op = GirOp::StackMark; mark.a = scratch;
+                        auto result = next++;
+                        mark.res = result;
+                        instruction.b = result;
+                        extra.insert(find_if(extra.begin(), extra.end(), [&](const GirInst &candidate) { return candidate.res == handle; }), mark);
+                        break;
+                    }
+                } else {
+                    GirInst stage = original; stage.res = next++; stage.a = raw; stage.b = scratch; stage.vals = { end, count, offset };
+                    extra.push_back(stage);
+                }
+                GirInst cancel; cancel.op = GirOp::ControlReceivingCancel; cancel.a = handle;
+                auto certificate = define(cancel);
+                GirInst finish; finish.op = GirOp::ControlAttemptCancel; finish.a = certificate; extra.push_back(finish);
+                if (control == 2) {
+                    block.insts.insert(block.insts.begin() + position, extra.begin(), extra.end() - 2);
+                    block.insts.insert(block.insts.begin() + position + extra.size() - 1, extra.end() - 2, extra.end());
+                } else block.insts.insert(block.insts.begin() + position + 1, extra.begin(), extra.end());
+                changed = true; break;
+            }
+            if (changed) break;
+        }
+        auto error = GirVerifier(low).Verify();
+        if (!changed || (control == 0 ? error.has_value() : !error || error->code != "GIR-V090" || error->message.find("live private stack") == string::npos)) {
+            fprintf(stderr, "scratch control %d: %s\n", control, error ? error->message.c_str() : "accepted");
+            abort();
+        }
+    }
+}
+
+void LimitedReceivingAliasControls() {
+    for (int control = 0; control < 3; control++) {
+        auto low = LimitedLow(true);
+        auto &function = low.funcs[0];
+        int receiver = -1, alias = -1;
+        auto next = NextValue(function);
+        for (auto &block : function.blocks) for (size_t position = 0; position < block.insts.size(); position++) {
+            auto stage = block.insts[position];
+            if (stage.op != GirOp::ControlAttemptStage) continue;
+            for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                if (candidate.res == stage.a && candidate.op == GirOp::ControlReceivingCurrent) receiver = candidate.a;
+            assert(receiver >= 0);
+            GirMember member; member.kind = GirMember::Scalar; member.ty = low.PtrType(); member.scope = 0;
+            auto local = (int)function.members.size(); function.members.push_back(member);
+            GirInst saved; saved.op = GirOp::LocalSet; saved.a = receiver; saved.idx = local;
+            GirInst restored; restored.op = GirOp::LocalGet; restored.res = next++; restored.ty = low.PtrType(); restored.idx = local;
+            alias = restored.res;
+            block.insts.insert(block.insts.begin() + position, saved);
+            block.insts.insert(block.insts.begin() + position + 2, restored);
+            goto stored;
+        }
+        stored:
+        assert(alias >= 0);
+        bool renewed = false;
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (!renewed && inst.op == GirOp::ControlReceivingRenew) { inst.a = alias; renewed = true; }
+        assert(renewed);
+        if (control == 1) {
+            for (auto &block : function.blocks) for (auto &inst : block.insts)
+                if (inst.op == GirOp::ControlAttemptFit) {
+                    auto fitted = inst.res;
+                    GirInst query; query.op = GirOp::ControlAttemptPrefix; query.res = fitted; query.a = inst.a;
+                    inst = query;
+                    for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts) {
+                        if (candidate.a == fitted) candidate.a = query.a;
+                        if (candidate.b == fitted) candidate.b = query.a;
+                        for (auto &value : candidate.vals) if (value == fitted) value = query.a;
+                    }
+                    goto removed;
+                }
+        }
+        removed:
+        if (control == 2) {
+            for (size_t blockIndex = 0; blockIndex < function.blocks.size(); blockIndex++) {
+                auto &block = function.blocks[blockIndex];
+                for (size_t position = 0; position < block.insts.size(); position++)
+                    if (block.insts[position].op == GirOp::ControlReceivingRenew) {
+                        GirBlock continuation { { { next++, low.PtrType() } }, vector<GirInst>(block.insts.begin() + position, block.insts.end()) };
+                        continuation.insts.front().a = continuation.params[0].first;
+                        block.insts.erase(block.insts.begin() + position, block.insts.end());
+                        GirInst branch; branch.op = GirOp::Br; branch.idx = (int)function.blocks.size(); branch.vals = { alias };
+                        block.insts.push_back(branch); function.blocks.push_back(std::move(continuation));
+                        goto aliased;
+                    }
+            }
+        }
+        aliased:
+        auto error = GirVerifier(low).Verify();
+        if (control != 1 ? error.has_value() : !error || error->code != "GIR-V090" || error->message.find("required capacity fit") == string::npos) {
+            fprintf(stderr, "receiving alias control %d: %s\n", control, error ? error->message.c_str() : "accepted"); abort();
+        }
+    }
+}
+
+
+void LimitedFixedCopyUsesTheInlineSpan() {
+    auto core = FixedCallIntoLimited(3);
+    auto &entry = core.impls[0];
+    auto fixed = entry.body.stmts[0].expr->type;
+    entry.vars.push_back(CoreVar { "source", fixed, CoreVarKind::Let, 0, origin });
+    CoreStmt source; source.kind = CoreStmtKind::Let; source.var = 1; source.org = origin;
+    source.expr = std::move(core.impls[1].body.value);
+    core.impls[1].body.value = make_unique<CoreExpr>();
+    core.impls[1].body.value->kind = CoreExprKind::Arr; core.impls[1].body.value->type = fixed; core.impls[1].body.value->org = origin;
+    core.impls[1].body.value->elems.push_back(Integer(core.IntType(CoreIntTy::U8), "65"));
+    core.impls[1].body.value->elems.push_back(Integer(core.IntType(CoreIntTy::U8), "66"));
+    auto &expression = entry.body.stmts[0].expr;
+    expression = make_unique<CoreExpr>(); expression->kind = CoreExprKind::Copy; expression->type = fixed;
+    expression->org = origin; expression->place = make_unique<CorePlace>(); expression->place->index = 1;
+    entry.body.stmts.insert(entry.body.stmts.begin(), std::move(source));
+    core.contexts[0].varroots = { { 1, { { CoreRootRef::Local, 1 } } } };
+    auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    Valid(high);
+    Valid(GirToLow(high).Lower());
+}
+
+
+void LimitedStageAfterExposureRemainsExplicitlyUnsupported() {
+    auto core = EscapingDeliveryBranch(true);
+    auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    auto &function = high.funcs[0];
+    GirInst stage;
+    bool found = false;
+    for (auto &block : function.blocks) for (size_t position = 0; position < block.insts.size(); position++)
+        if (block.insts[position].op == GirOp::DestStage) {
+            stage = block.insts[position]; block.insts.erase(block.insts.begin() + position); found = true; goto removed;
+        }
+    removed:
+    assert(found);
+    for (auto &block : function.blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::ReceivingOpen && inst.a == stage.res) inst.a = stage.a;
+    for (auto &block : function.blocks) for (size_t position = 0; position < block.insts.size(); position++)
+        if (block.insts[position].op == GirOp::DestRenew) {
+            auto writer = block.insts[position].res;
+            for (auto &candidateBlock : function.blocks) for (auto &candidate : candidateBlock.insts)
+                {
+                    if (candidate.a == writer) candidate.a = stage.res;
+                    if (candidate.b == writer) candidate.b = stage.res;
+                    for (auto &value : candidate.vals) if (value == writer) value = stage.res;
+                    for (auto &value : candidate.vals2) if (value == writer) value = stage.res;
+                }
+            stage.a = writer;
+            block.insts.insert(block.insts.begin() + position + 1, stage); goto inserted;
+        }
+    inserted:
+    Valid(high);
+    try { auto low = GirToLow(high).Lower(); (void)low; assert(false); }
+    catch (const GirLowerUnsupported &error) { assert(error.feature == "limited-stage-after-exposure"); }
+}
+
+
 }
 
 int main(int argc, char **argv) try {
@@ -1436,13 +2252,21 @@ int main(int argc, char **argv) try {
         return 0;
     }
     assert(argc == 1);
-    for (auto name : { "break", "continue", "call", "named-borrow", "owner-child", "owner-named", "cross-same", "cross-different", "deferred-cleanup", "own-deferred-cleanup", "value-break-cleanup", "nested-break", "nested-continue", "waiting-implicit", "waiting-explicit", "waiting-nested-return", "waiting-stop", "waiting-built-before-tail", "waiting-own-catch", "waiting-guarded-call", "waiting-delegated-argument", "waiting-guarded-argument", "adapted-open", "adapted-built", "adapted-nested", "named-layout-result", "named-layout-nested-read", "named-layout-helper-read", "waiting-rearm-break", "waiting-rearm-continue", "waiting-after-named", "waiting-child-break", "waiting-child-continue", "waiting-named-break", "waiting-named-continue" }) {
+    for (auto name : { "low-fuel-block-value", "nested-query-overflow", "escaping-live-varr", "escaping-live-fixed", "fixed-call-fit", "fixed-call-overflow", "break", "continue", "call", "named-borrow", "owner-child", "owner-named", "cross-same", "cross-different", "deferred-cleanup", "own-deferred-cleanup", "value-break-cleanup", "nested-break", "nested-continue", "waiting-implicit", "waiting-explicit", "waiting-nested-return", "waiting-stop", "waiting-built-before-tail", "waiting-own-catch", "waiting-guarded-call", "waiting-delegated-argument", "waiting-guarded-argument", "adapted-open", "adapted-built", "adapted-nested", "named-layout-result", "named-layout-nested-read", "named-layout-helper-read", "waiting-rearm-break", "waiting-rearm-continue", "waiting-after-named", "waiting-child-break", "waiting-child-continue", "waiting-named-break", "waiting-named-continue" }) {
         auto core = Fixture(name);
         auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
         Valid(high);
         Valid(GirToLow(high).Lower());
     }
+    FixedCallEffectsPrecedeTheKnownReceivingCheck();
+    ReturningFixedBranchPrecedesTheReceivingCheck();
     RawCompletionAliasesPreserveTheWritingPhase();
+    LimitedCursorControls();
+    InlineCursorLocalMembersAreRejected();
+    LimitedScratchControls();
+    LimitedReceivingAliasControls();
+    LimitedFixedCopyUsesTheInlineSpan();
+    LimitedStageAfterExposureRemainsExplicitlyUnsupported();
     printf("compiler_gir_reservations ok\n");
 } catch (const CompileError &error) {
     fprintf(stderr, "%s\n", error.msg.c_str());

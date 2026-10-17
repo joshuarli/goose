@@ -28,6 +28,7 @@ enum class GirOp : uint8_t {
     ControlEnter, ControlCallPush, ControlCallParam, ControlCallGet, ControlOwnerNone, ControlOwnerIsNamed, ControlNamedBase, ControlNamedCount, ControlNamedBind, ControlOwnerBind, ControlOwnerParam, ControlOwnerGet, ControlOwnerTargetEnter, ControlOwnerTargetGet, ControlReceivingNew, ControlReceivingOpen, ControlReceivingCurrent,
     ControlReceivingRenew, ControlReceivingRefresh, ControlAttemptStack, ControlAttemptStart,
     ControlAttemptProgress, ControlAttemptPrefix, ControlAttemptMode, ControlAttemptReceiving,
+    ControlAttemptStage, ControlAttemptFit,
     ControlExitWait, ControlExitReserve, ControlExitIsNamed, ControlExitAdopt, ControlExitSelected, ControlExitPrepare, ControlExitCommit,
     ControlReceivingCancel, ControlAttemptAbandon,
     // Instructions that define none, high stage.
@@ -261,6 +262,8 @@ inline optional<GirControlContract> GirControlOf(GirOp op) {
         case GirOp::ControlAttemptStart: return GirControlContract { "l_control_attempt_start", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
         case GirOp::ControlAttemptProgress: return GirControlContract { "l_control_attempt_progress", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
         case GirOp::ControlAttemptPrefix: return GirControlContract { "l_control_attempt_prefix", Form::Operand, Kind::Int, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptStage: return GirControlContract { "l_control_attempt_stage", Form::PairValues, Kind::Ptr, { Kind::Ptr, Kind::Ptr, Kind::Ptr, Kind::Int, Kind::Int }, nullopt };
+        case GirOp::ControlAttemptFit: return GirControlContract { "l_control_attempt_fit", Form::Pair, Kind::Ptr, { Kind::Ptr, Kind::Ptr }, nullopt };
         case GirOp::ControlAttemptPrepareNamed: return GirControlContract { "l_control_attempt_prepare_named", Form::Pair, nullopt, { Kind::Ptr, Kind::Int }, nullopt };
         case GirOp::ControlAttemptPack: return GirControlContract { "l_control_attempt_pack", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
         case GirOp::ControlAttemptRemoveHeader: return GirControlContract { "l_control_attempt_remove_header", Form::Operand, nullopt, { Kind::Ptr }, nullopt };

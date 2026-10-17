@@ -101,6 +101,7 @@ private:
             case GirOp::ControlReceivingNew: case GirOp::ControlReceivingOpen: case GirOp::ControlReceivingCurrent:
             case GirOp::ControlReceivingRenew: case GirOp::ControlReceivingRefresh: case GirOp::ControlAttemptStack:
             case GirOp::ControlAttemptStart: case GirOp::ControlAttemptProgress: case GirOp::ControlAttemptPrefix: case GirOp::ControlAttemptMode:
+            case GirOp::ControlAttemptStage: case GirOp::ControlAttemptFit:
             case GirOp::ControlAttemptReceiving: case GirOp::ControlExitWait: case GirOp::ControlExitSelect: case GirOp::ControlExitReserve:
             case GirOp::ControlExitIsNamed: case GirOp::ControlExitAdopt: case GirOp::ControlExitSelected: case GirOp::ControlExitPrepare: case GirOp::ControlExitCommit:
             case GirOp::ControlReceivingCancel: case GirOp::ControlAttemptAbandon: case GirOp::ControlLeave:
@@ -1216,6 +1217,310 @@ private:
         return nullopt;
     }
 
+    struct InlineCursorSpan {
+        int member, storage;
+        int64_t base, end;
+    };
+
+    vector<optional<pair<int, int64_t>>> FrameByteLocations(const Fn &fn) const {
+        vector<const GirInst *> definitions(fn.nvalues, nullptr);
+        for (auto &block : fn.f->blocks) for (auto &inst : block.insts)
+            if (GirDefinesValue(inst)) definitions[inst.res] = &inst;
+        vector<optional<pair<int, int64_t>>> locations(fn.nvalues);
+        vector<bool> visited(fn.nvalues, false);
+        function<optional<pair<int, int64_t>>(int)> location = [&](int value) -> optional<pair<int, int64_t>> {
+            if (value < 0 || value >= fn.nvalues || !definitions[value]) return nullopt;
+            if (visited[value]) return locations[value];
+            visited[value] = true;
+            auto &inst = *definitions[value];
+            if (inst.op == GirOp::FrameAddr) return locations[value] = pair { inst.idx, int64_t(0) };
+            if (inst.op != GirOp::PtrOffset || inst.idx < 0 || inst.b < 0 || inst.b >= fn.nvalues ||
+                !definitions[inst.b] || definitions[inst.b]->op != GirOp::Int) return nullopt;
+            auto base = location(inst.a);
+            auto &text = definitions[inst.b]->text;
+            int64_t offset = 0;
+            auto parsed = from_chars(text.data(), text.data() + text.size(), offset);
+            if (!base || parsed.ec != errc() || parsed.ptr != text.data() + text.size() || offset < 0 ||
+                (offset && inst.idx > INT64_MAX / offset) || base->second > INT64_MAX - offset * inst.idx) return nullopt;
+            base->second += offset * inst.idx;
+            return locations[value] = base;
+        };
+        for (int value = 0; value < fn.nvalues; value++) location(value);
+        return locations;
+    }
+
+    map<int, InlineCursorSpan> InlineCursorSpans(const Fn &fn) const {
+        map<int, InlineCursorSpan> spans;
+        auto &function = *fn.f;
+        auto locations = FrameByteLocations(fn);
+        for (auto &block : function.blocks) for (auto &inst : block.insts) {
+            if (inst.op != GirOp::PStore || m.Type(inst.ty).kind != CoreType::Ptr) continue;
+            auto cursor = locations[inst.a], data = locations[inst.b];
+            if (!cursor || cursor->second || cursor->first < 0 || cursor->first >= (int)function.members.size() ||
+                !data || data->first < 0 || data->first >= (int)function.members.size()) continue;
+            auto &cell = function.members[cursor->first];
+            auto &storage = function.members[data->first];
+            if (cell.kind != GirMember::Scalar || m.Type(cell.ty).kind != CoreType::Ptr ||
+                storage.kind != GirMember::Bytes || data->second < 1 || data->second > storage.size ||
+                cell.scope != storage.scope) continue;
+            spans[cursor->first] = { cursor->first, data->first, data->second, storage.size };
+        }
+        set<int> used;
+        for (auto &block : function.blocks) for (auto &inst : block.insts) {
+            auto value = inst.op == GirOp::ControlAttemptFit ? inst.b :
+                inst.op == GirOp::StackMark || inst.op == GirOp::StackBump || inst.op == GirOp::StackRelease ||
+                inst.op == GirOp::ControlReceivingNew ? inst.a : -1;
+            if (value >= 0 && locations[value] && !locations[value]->second) used.insert(locations[value]->first);
+        }
+        erase_if(spans, [&](const auto &entry) { return !used.count(entry.first); });
+        return spans;
+    }
+
+    void CheckInlineCursorBounds(const Fn &fn, const StackFacts &physical) const {
+        auto spans = InlineCursorSpans(fn);
+        if (spans.empty()) return;
+        auto &function = *fn.f;
+        auto locations = FrameByteLocations(fn);
+        auto bad = [&](const string &message) { Fail("GIR-V090", cat(fn.label, ": ", message)); };
+        vector<const GirInst *> definitions(fn.nvalues, nullptr);
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (GirDefinesValue(inst)) definitions[inst.res] = &inst;
+        auto stack = [&](int value) -> int {
+            if (value < 0 || value >= (int)physical.stack.size() || physical.stack[value].kind != 8) return -1;
+            return physical.stack[value].index;
+        };
+        auto rawStack = [&](int value) -> int {
+            if (value < 0 || value >= (int)physical.control.size() || physical.control[value].kind != 8) return -1;
+            return physical.control[value].index;
+        };
+        struct State {
+            map<int, set<int64_t>> offsets;
+            map<int, pair<int, set<int64_t>>> pointers, locals;
+            map<pair<int, int>, pair<int, set<int64_t>>> targets;
+            map<int, int64_t> prefixes;
+            bool operator==(const State &) const = default;
+        };
+        vector<optional<State>> incoming(function.blocks.size());
+        incoming[0] = State {};
+        vector<int> pending { 0 };
+        auto enqueue = [&](int block, const State &state) {
+            if (!incoming[block]) { incoming[block] = state; pending.push_back(block); return; }
+            auto combined = *incoming[block];
+            for (auto cursor = combined.offsets.begin(); cursor != combined.offsets.end();) {
+                auto other = state.offsets.find(cursor->first);
+                if (other == state.offsets.end()) cursor = combined.offsets.erase(cursor);
+                else {
+                    cursor->second.insert(other->second.begin(), other->second.end());
+                    if (cursor->second.size() > 2) cursor->second.insert(spans.at(cursor->first).end);
+                    ++cursor;
+                }
+            }
+            auto mergePointers = [](auto &left, const auto &right) {
+                auto previous = left;
+                for (auto &[key, pointer] : left) {
+                    auto other = right.find(key);
+                    if (other == right.end() || other->second.first != pointer.first) pointer.second.insert(INT64_MIN);
+                    else {
+                        pointer.second.insert(other->second.second.begin(), other->second.second.end());
+                        if (pointer.second.size() > 3 || pointer.second.count(INT64_MIN)) pointer.second = { INT64_MIN };
+                    }
+                }
+                for (auto &[key, pointer] : right) if (!previous.count(key)) {
+                    left[key] = pointer; left[key].second.insert(INT64_MIN);
+                }
+            };
+            mergePointers(combined.pointers, state.pointers);
+            mergePointers(combined.locals, state.locals);
+            mergePointers(combined.targets, state.targets);
+            for (auto prefix = combined.prefixes.begin(); prefix != combined.prefixes.end();)
+                if (!state.prefixes.count(prefix->first) || state.prefixes.at(prefix->first) != prefix->second) prefix = combined.prefixes.erase(prefix);
+                else ++prefix;
+            if (combined != *incoming[block]) { incoming[block] = std::move(combined); pending.push_back(block); }
+        };
+        while (!pending.empty()) {
+            auto block = pending.back(); pending.pop_back();
+            auto state = *incoming[block];
+            std::function<optional<int64_t>(int, int)> known = [&](int value, int depth) -> optional<int64_t> {
+                if (value < 0 || value >= fn.nvalues || depth > fn.nvalues || !definitions[value]) return nullopt;
+                auto &inst = *definitions[value];
+                if (inst.op == GirOp::ControlAttemptPrefix && rawStack(inst.a) >= 0) {
+                    auto prefix = state.prefixes.find(rawStack(inst.a));
+                    return prefix == state.prefixes.end() ? nullopt : optional<int64_t>(prefix->second);
+                }
+                if (inst.op == GirOp::Int) {
+                    int64_t number = 0;
+                    auto parsed = from_chars(inst.text.data(), inst.text.data() + inst.text.size(), number);
+                    return parsed.ec == errc() && parsed.ptr == inst.text.data() + inst.text.size() ? optional<int64_t>(number) : nullopt;
+                }
+                if (inst.op == GirOp::Bool) return inst.flag;
+                if (inst.op == GirOp::Conv) {
+                    auto number = known(inst.a, depth + 1);
+                    auto &source = m.Type(inst.ty), &target = m.Type(inst.ty2);
+                    if (!number || source.kind != CoreType::Int || target.kind != CoreType::Int) return nullopt;
+                    if (!GirPreservesAll(source.ity, target.ity) &&
+                        !(CoreIntBits(source.ity) == 64 && CoreIntBits(target.ity) == 64 && *number >= 0)) return nullopt;
+                    return number;
+                }
+                if (inst.op != GirOp::Cmp) return nullopt;
+                auto a = known(inst.a, depth + 1), b = known(inst.b, depth + 1);
+                if (!a || !b) return nullopt;
+                auto unsignedType = m.Type(inst.ty).kind == CoreType::Int && m.Type(inst.ty).ity >= CoreIntTy::U8;
+                switch (inst.cmp) {
+                    case CoreCmpOp::Eq: return *a == *b;
+                    case CoreCmpOp::Ne: return *a != *b;
+                    case CoreCmpOp::Lt: return unsignedType ? (uint64_t)*a < (uint64_t)*b : *a < *b;
+                    case CoreCmpOp::Le: return unsignedType ? (uint64_t)*a <= (uint64_t)*b : *a <= *b;
+                    case CoreCmpOp::Gt: return unsignedType ? (uint64_t)*a > (uint64_t)*b : *a > *b;
+                    case CoreCmpOp::Ge: return unsignedType ? (uint64_t)*a >= (uint64_t)*b : *a >= *b;
+                }
+                return nullopt;
+            };
+            auto initialized = [&](int cursor) -> set<int64_t> & {
+                auto current = state.offsets.find(cursor);
+                if (current == state.offsets.end()) bad("inline construction cursor is used before exact initialization");
+                return current->second;
+            };
+            auto advance = [&](int cursor, int64_t amount) {
+                auto &span = spans.at(cursor);
+                set<int64_t> next;
+                for (auto offset : initialized(cursor)) {
+                    if (amount < 0 || offset > span.end || amount > span.end - offset)
+                        bad("inline construction cursor exceeds its exact data span");
+                    next.insert(offset + amount);
+                }
+                state.offsets[cursor] = std::move(next);
+            };
+            for (auto &inst : function.blocks[block].insts) {
+                if (inst.op == GirOp::PStore) {
+                    auto cell = locations[inst.a];
+                    if (cell && !cell->second && spans.count(cell->first)) {
+                        auto &span = spans.at(cell->first);
+                        auto data = locations[inst.b];
+                        if (m.Type(inst.ty).kind != CoreType::Ptr || !data || *data != pair { span.storage, span.base })
+                            bad("inline construction cursor is not initialized from its exact inactive data span");
+                        state.offsets[cell->first] = { span.base };
+                        state.prefixes[cell->first] = 0;
+                        state.pointers[inst.b] = { cell->first, { span.base } };
+                    }
+                }
+                if (inst.op == GirOp::ControlReceivingNew && stack(inst.a) >= 0) {
+                    auto cursor = stack(inst.a);
+                    auto start = state.pointers.find(inst.b);
+                    if (start == state.pointers.end() || start->second.first != cursor || start->second.second != set<int64_t> { spans.at(cursor).base })
+                        bad("inline construction receiving does not use its exact cursor start");
+                    if (initialized(cursor) != set<int64_t> { spans.at(cursor).base })
+                        bad("inline construction begins with a changed cursor or active receiving authority");
+                }
+                if (inst.op == GirOp::ControlAttemptStage) {
+                    auto cursor = rawStack(inst.a);
+                    if (cursor < 0 || inst.vals.size() != 3) bad("capacity stage has no exact inline span");
+                    auto end = state.pointers.find(inst.vals[0]);
+                    auto capacity = known(inst.vals[1], 0), element = known(inst.vals[2], 0);
+                    auto &span = spans.at(cursor);
+                    if (!capacity || !element || *capacity < 0 || *element <= 0 || (*element && *capacity > INT64_MAX / *element) ||
+                        *capacity * *element != span.end - span.base || end == state.pointers.end() ||
+                        end->second.first != cursor || end->second.second != set<int64_t> { span.end } ||
+                        initialized(cursor) != set<int64_t> { span.base })
+                        bad("capacity stage does not preserve its exact inline capacity span");
+                }
+                if (inst.op == GirOp::ControlAttemptFit) {
+                    auto cursor = stack(inst.b);
+                    if (cursor < 0) bad("capacity fit has no exact inline cursor");
+                    initialized(cursor) = { spans.at(cursor).base, spans.at(cursor).end };
+                    state.prefixes[cursor] = 0;
+                }
+                if (inst.op == GirOp::StackMark && stack(inst.a) >= 0)
+                    state.pointers[inst.res] = { stack(inst.a), initialized(stack(inst.a)) };
+                if (inst.op == GirOp::ControlAttemptStart && rawStack(inst.a) >= 0)
+                    state.pointers[inst.res] = { rawStack(inst.a), { spans.at(rawStack(inst.a)).base } };
+                if (inst.op == GirOp::PtrOffset) {
+                    auto pointer = state.pointers.find(inst.a);
+                    auto amount = known(inst.b, 0);
+                    if (pointer != state.pointers.end() && amount && *amount >= 0 && inst.idx >= 0 &&
+                        (!*amount || inst.idx <= INT64_MAX / *amount)) {
+                        set<int64_t> offsets;
+                        for (auto offset : pointer->second.second) {
+                            if (offset > INT64_MAX - *amount * inst.idx) offsets.insert(INT64_MIN);
+                            else offsets.insert(offset + *amount * inst.idx);
+                        }
+                        if (offsets.empty()) offsets.insert(INT64_MIN);
+                        state.pointers[inst.res] = { pointer->second.first, std::move(offsets) };
+                    } else if (pointer != state.pointers.end()) state.pointers[inst.res] = { pointer->second.first, { INT64_MIN } };
+                }
+                if (inst.op == GirOp::StackBump && stack(inst.a) >= 0) {
+                    auto amount = inst.b >= 0 ? known(inst.b, 0) : optional<int64_t>(inst.idx);
+                    if (!amount) bad("inline construction bump has no bounded byte count");
+                    advance(stack(inst.a), *amount);
+                }
+                if (inst.op == GirOp::StackRelease && stack(inst.a) >= 0) {
+                    auto cursor = stack(inst.a);
+                    auto point = state.pointers.find(inst.b);
+                    if (point == state.pointers.end() || point->second.first != cursor || point->second.second.empty())
+                        bad("inline construction release has no exact same-span restore point");
+                    for (auto offset : point->second.second)
+                        if (offset < spans.at(cursor).base || offset > spans.at(cursor).end)
+                            bad("inline construction release is outside its exact data span");
+                    initialized(cursor) = point->second.second;
+                }
+                if ((inst.op == GirOp::BytesCopy || inst.op == GirOp::BytesMove || inst.op == GirOp::BytesFill || inst.op == GirOp::PStore)) {
+                    if (stack(inst.a) >= 0 && inst.op != GirOp::PStore)
+                        bad("inline construction cursor cell is overwritten outside exact initialization");
+                    auto pointer = state.pointers.find(inst.a);
+                    if (pointer != state.pointers.end()) {
+                        auto bytes = inst.op == GirOp::PStore ? optional<int64_t>(m.Type(inst.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(inst.ty)) :
+                            inst.vals.size() == 1 ? known(inst.vals[0], 0) : nullopt;
+                        if (!bytes || *bytes < 0) bad("inline construction write has no exact bounded byte count");
+                        if (inst.op == GirOp::BytesFill) {
+                            if (inst.idx < 0 || (inst.idx && *bytes > INT64_MAX / inst.idx))
+                                bad("inline construction fill has no bounded byte extent");
+                            *bytes *= inst.idx;
+                        }
+                        auto &span = spans.at(pointer->second.first);
+                        for (auto offset : pointer->second.second)
+                            if (offset < span.base || offset > span.end || *bytes > span.end - offset)
+                                bad("inline construction write exceeds its exact data span");
+                    }
+                }
+                if ((inst.op == GirOp::ControlAttemptPack || inst.op == GirOp::ControlAttemptPrepareNamed) && rawStack(inst.a) >= 0) {
+                    auto prefix = inst.op == GirOp::ControlAttemptPack ? optional<int64_t>(4) : known(inst.b, 0);
+                    if (!prefix || (*prefix != 0 && *prefix != 4)) bad("inline construction prefix is not a closed layout");
+                    if (*prefix == 4 && (!state.prefixes.count(rawStack(inst.a)) || state.prefixes.at(rawStack(inst.a)) != 4))
+                        advance(rawStack(inst.a), 4);
+                    if (*prefix == 4) state.prefixes[rawStack(inst.a)] = 4;
+                }
+                if (inst.op == GirOp::Call)
+                    for (auto argument : inst.vals) if (stack(argument) >= 0)
+                        bad("inline construction cursor escapes its frame-local construction extent");
+                if (inst.op == GirOp::LocalSet) {
+                    if (state.pointers.count(inst.a)) state.locals[inst.idx] = state.pointers.at(inst.a);
+                    else state.locals.erase(inst.idx);
+                }
+                if (inst.op == GirOp::LocalGet && state.locals.count(inst.idx)) state.pointers[inst.res] = state.locals.at(inst.idx);
+                if (inst.op == GirOp::TargetStore) {
+                    if (state.pointers.count(inst.a)) state.targets[{ inst.idx, inst.idx2 }] = state.pointers.at(inst.a);
+                    else state.targets.erase({ inst.idx, inst.idx2 });
+                }
+                if (inst.op == GirOp::TargetLoad && state.targets.count({ inst.idx, inst.idx2 }))
+                    state.pointers[inst.res] = state.targets.at({ inst.idx, inst.idx2 });
+                auto edge = [&](int target, const vector<int> &arguments) {
+                    auto next = state;
+                    for (size_t position = 0; position < arguments.size(); position++) {
+                        auto parameter = function.blocks[target].params[position].first;
+                        if (state.pointers.count(arguments[position])) next.pointers[parameter] = state.pointers.at(arguments[position]);
+                        else next.pointers.erase(parameter);
+                    }
+                    enqueue(target, next);
+                };
+                if (inst.op == GirOp::Br) edge(inst.idx, inst.vals);
+                if (inst.op == GirOp::CondBr) {
+                    auto condition = known(inst.a, 0);
+                    if (!condition || *condition) edge(inst.idx, inst.vals);
+                    if (!condition || !*condition) edge(inst.idx2, inst.vals2);
+                }
+            }
+        }
+    }
+
     static bool ReturnableStackId(StackId id) {
         return id.kind == 2 || id.kind == 3 || id.kind == 4 || id.kind == 5;
     }
@@ -1301,6 +1606,7 @@ private:
         auto n = fn.vt.size();
         StackFacts facts { vector<StackId>(n), vector<StackId>(n), vector<StackId>(n), vector<StackId>(n) };
         auto returnedLoads = ReturnedCallLoads(fn, returnedPairs);
+        auto inlineCursors = InlineCursorSpans(fn);
         for (size_t b = 1; b < f.blocks.size(); b++)
             for (auto &p : f.blocks[b].params) {
                 facts.stack[p.first] = { -1, 0 };
@@ -1387,6 +1693,10 @@ private:
                                     if (dense < source.vals.size()) set(facts.control, i.res, at(facts.control, source.vals[dense]));
                                 }
                             break;
+                        case GirOp::ControlAttemptStage:
+                            set(facts.control, i.res, at(facts.stack, i.b)); break;
+                        case GirOp::ControlAttemptFit:
+                            set(facts.control, i.res, at(facts.stack, i.b)); break;
                         case GirOp::ControlAttemptStack:
                             set(facts.stack, i.res, at(facts.control, i.a)); break;
                         case GirOp::ControlAttemptStart: case GirOp::ControlExitPrepare:
@@ -1428,6 +1738,7 @@ private:
                             set(facts.markof, i.res, at(facts.markof, i.a));
                             break;
                         case GirOp::FrameAddr:
+                            if (inlineCursors.count(i.idx)) set(facts.stack, i.res, { 8, i.idx });
                             if (i.idx >= 0 && i.idx < (int)f.members.size() &&
                                 f.members[i.idx].kind == GirMember::Header)
                                 set(facts.header, i.res, { 1, f.members[i.idx].stack });
@@ -1821,6 +2132,10 @@ private:
             auto k = m.Type(t).kind;
             return k == CoreType::Int || k == CoreType::Bool || k == CoreType::Ptr;
         };
+        if (CoreHasConstruction(m.profile) && !InlineCursorSpans(fn).empty()) {
+            auto physical = AnalyzeStackFacts(fn, {}, lowReturnedOwnerPairs);
+            CheckInlineCursorBounds(fn, physical);
+        }
         if (CoreHasConstruction(m.profile)) { CheckConstructionControl(fn); CheckConstructionByteIntervals(fn); CheckLowSources(fn); CheckLowResultFlow(fn); }
         for (auto t : f.params) if (!scalar(t)) bad("a parameter whose layout is not resolved");
         for (auto t : f.results) if (!scalar(t)) bad("a result whose layout is not resolved");
@@ -1883,6 +2198,8 @@ private:
             return empty;
         }();
         auto physical = AnalyzeStackFacts(fn, passed, lowReturnedOwnerPairs);
+        auto inlineSpans = InlineCursorSpans(fn);
+        auto inlineLocations = FrameByteLocations(fn);
         auto referenceOutput = [&](const GirFunc &callee, size_t result) -> optional<int> {
             if (!callee.lowResults || result >= callee.lowResults->size()) return nullopt;
             auto &layout = (*callee.lowResults)[result].layout;
@@ -1890,7 +2207,7 @@ private:
             if (auto reference = get_if<GirLowResizableReferenceResult>(&layout)) return reference->header;
             return nullopt;
         };
-        enum class Kind { Unknown, Scope, Receiving, Attempt, Record, Ticket, Call, Stack, Start, Progress, Mode, Prefix, Prepared, Flag, Comparison, TicketRole, Owner, Binding, BindingRole, NamedBinding, OwnerTarget, Header, Whole };
+        enum class Kind { Unknown, Scope, Receiving, Attempt, Record, Ticket, Call, Stack, CursorCell, Start, Progress, Mode, Prefix, Prepared, Flag, Comparison, FitComparison, TicketRole, Owner, Binding, BindingRole, NamedBinding, OwnerTarget, Header, Whole };
         enum class Role { Waiting, Fresh, UnknownAlias, Named, Received };
         enum class RawState { Writing, Built, Cancelled };
         struct WaitingReceipt {
@@ -1900,6 +2217,9 @@ private:
         struct Fact {
             Kind kind = Kind::Unknown;
             int root = -1, owner = -1, ticket = -1, callee = -1, result = -1, target = -1, binding = -1, lineage = -1, parent = -1;
+            int stageCursor = -1, stageStack = -1;
+            int64_t stageCapacity = -1, stageElementBytes = -1;
+            bool stagePacked = false;
             RawState raw = RawState::Writing;
             Role role = Role::Fresh;
             optional<WaitingReceipt> waitingOrigin;
@@ -1916,7 +2236,7 @@ private:
             map<int, int> ownerOutputCells, ownerExtensions;
             map<int, pair<int, set<int>>> unselectedCompletions;
             set<int> scopes, handles, exposedHandles, attempts, tickets, calls, called, extracted, prepared;
-            set<int> writtenAttempts, namedPreparations;
+            set<int> writtenAttempts, namedPreparations, fitChecks;
             map<int, vector<Fact>> inputs;
             map<int, set<int>> outputs;
             int flag = 0;
@@ -1961,7 +2281,17 @@ private:
             };
             auto mergeBindings = [&](map<int, Fact> &left, const map<int, Fact> &right) {
                 auto role = [](Kind kind) { return kind == Kind::Owner || kind == Kind::Binding || kind == Kind::NamedBinding; };
+                for (auto &[value, fact] : right) if (fact.kind == Kind::CursorCell && !left.count(value))
+                    left[value] = Fact { Kind::CursorCell, -1 };
                 for (auto iterator = left.begin(); iterator != left.end();) {
+                    auto otherCursor = right.find(iterator->first);
+                    if (iterator->second.kind == Kind::CursorCell ||
+                        (otherCursor != right.end() && otherCursor->second.kind == Kind::CursorCell)) {
+                        auto exact = iterator->second.kind == Kind::CursorCell && otherCursor != right.end() &&
+                            otherCursor->second.kind == Kind::CursorCell && iterator->second.root == otherCursor->second.root;
+                        if (!exact) iterator->second = Fact { Kind::CursorCell, -1 };
+                        ++iterator; continue;
+                    }
                     auto other = right.find(iterator->first);
                     if (other != right.end() && iterator->second == other->second) { ++iterator; continue; }
                     if (other != right.end() && role(iterator->second.kind) && role(other->second.kind)) {
@@ -1977,6 +2307,9 @@ private:
             mergeBindings(combined.targets, next.targets);
             combined.writtenAttempts.insert(next.writtenAttempts.begin(), next.writtenAttempts.end());
             combined.namedPreparations.insert(next.namedPreparations.begin(), next.namedPreparations.end());
+            set<int> fitChecks;
+            set_intersection(combined.fitChecks.begin(), combined.fitChecks.end(), next.fitChecks.begin(), next.fitChecks.end(), inserter(fitChecks, fitChecks.end()));
+            combined.fitChecks = std::move(fitChecks);
             intersect(combined.localSources, next.localSources);
             mergeBindings(combined.returnedHeaders, next.returnedHeaders);
             set<int> checked;
@@ -2037,6 +2370,41 @@ private:
                     for (auto &[key, entry] : *facts)
                         if (entry.kind == Kind::Attempt && entry.root == value.root) entry.raw = RawState::Built;
             };
+            auto inactiveInlineCursor = [&](int cursor) {
+                for (auto &[value, entry] : state.values) {
+                    auto live = entry.kind == Kind::Receiving ? state.handles.count(entry.root) :
+                        entry.kind == Kind::Attempt && state.attempts.count(entry.root) &&
+                        (entry.raw != RawState::Cancelled || entry.owner >= 0);
+                    if (!live) continue;
+                    auto other = entry.stageCursor >= 0 ? entry.stageCursor :
+                        value < (int)physical.control.size() && physical.control[value].kind == 8 ? physical.control[value].index : -1;
+                    if (other >= 0 && inlineSpans.count(other) && inlineSpans.at(other).storage == inlineSpans.at(cursor).storage)
+                        bad("inline construction cursor still has live storage authority");
+                }
+            };
+            auto stageReceiving = [&](const Fact &raw) {
+                for (auto facts : { &state.values, &state.locals, &state.targets })
+                    for (auto &[value, entry] : *facts)
+                        if (entry.kind == Kind::Receiving && entry.root == raw.owner) {
+                            entry.stageCursor = raw.stageCursor; entry.stageStack = raw.stageStack;
+                            entry.stageCapacity = raw.stageCapacity; entry.stageElementBytes = raw.stageElementBytes;
+                            entry.stagePacked = raw.stagePacked;
+                        }
+            };
+            auto stageLayout = [&](const Fact &raw, bool packed) {
+                if (raw.stageCursor < 0) return;
+                for (auto facts : { &state.values, &state.locals, &state.targets })
+                    for (auto &[value, entry] : *facts)
+                        if ((entry.kind == Kind::Attempt && entry.root == raw.root) ||
+                            (entry.kind == Kind::Receiving && entry.root == raw.owner)) entry.stagePacked = packed;
+            };
+            auto invalidateFitChecks = [&](int raw) {
+                state.fitChecks.erase(raw);
+                for (auto facts : { &state.values, &state.locals, &state.targets })
+                    erase_if(*facts, [&](const auto &entry) {
+                        return entry.second.kind == Kind::FitComparison && entry.second.root == raw;
+                    });
+            };
             auto invalidateRoleQueries = [&](int ticket) {
                 for (auto facts : { &state.values, &state.locals, &state.targets })
                     erase_if(*facts, [&](const auto &entry) {
@@ -2076,6 +2444,7 @@ private:
                                 if (entry.kind == Kind::Binding && entry.root == authority.root) entry.kind = role;
                         }
                     }
+                    if (comparison.kind == Kind::FitComparison && condition->second) next.fitChecks.insert(comparison.root);
                     if (comparison.kind == Kind::Comparison) {
                         auto tag = comparison.result;
                         if (condition->second) {
@@ -2096,6 +2465,7 @@ private:
                     if (next.attempts.erase(from)) next.attempts.insert(to);
                     if (next.writtenAttempts.erase(from)) next.writtenAttempts.insert(to);
                     if (next.namedPreparations.erase(from)) next.namedPreparations.insert(to);
+                    if (next.fitChecks.erase(from)) next.fitChecks.insert(to);
                     for (auto &[key, value] : next.values) if (value.root == from) value.root = to;
                 }
                 merge(destination, std::move(next));
@@ -2105,7 +2475,23 @@ private:
                     bad("terminal waiting release resumes an ordinary construction effect");
                 if (GirControlOf(inst.op) && inst.op != GirOp::ControlEnter && state.scopes.empty())
                     bad("construction helper executes outside its activation lifetime");
+                if ((inst.op == GirOp::LocalGet || inst.op == GirOp::LocalSet) && inlineSpans.count(inst.idx))
+                    bad("private inline cursor cell is accessed through a frame local");
+                vector<int> operands;
+                Uses(inst, operands);
+                for (auto value : operands) if (fact(value).kind == Kind::CursorCell) {
+                    auto identity = inst.op == GirOp::LocalSet || inst.op == GirOp::TargetStore || inst.op == GirOp::Br ||
+                        (inst.op == GirOp::CondBr && value != inst.a);
+                    auto closed = ((inst.op == GirOp::PStore || inst.op == GirOp::StackMark || inst.op == GirOp::StackBump ||
+                        inst.op == GirOp::StackRelease || inst.op == GirOp::ControlReceivingNew) && value == inst.a && value != inst.b) ||
+                        (inst.op == GirOp::ControlAttemptFit && value == inst.b && value != inst.a);
+                    if (!identity && (!closed || fact(value).root < 0))
+                        bad("private inline cursor cell is used outside its closed construction operations");
+                }
                 switch (inst.op) {
+                    case GirOp::FrameAddr:
+                        if (inlineSpans.count(inst.idx)) state.values[inst.res] = Fact { Kind::CursorCell, inst.idx };
+                        break;
                     case GirOp::ControlEnter:
                         if (!state.scopes.empty() || block != 0) bad("construction control activation is entered more than once or outside entry");
                         state.scopes.insert(inst.res); state.values[inst.res] = Fact { Kind::Scope, inst.res }; break;
@@ -2128,6 +2514,7 @@ private:
                     }
                     case GirOp::ControlReceivingNew:
                         if (state.scopes.empty()) bad("construction receiving allocation has no activation lifetime");
+                        if (physical.stack[inst.a].kind == 8) inactiveInlineCursor(physical.stack[inst.a].index);
                         state.values[inst.res] = Fact { Kind::Receiving, inst.res };
                         state.values[inst.res].callee = -3;
                         state.handles.insert(inst.res); break;
@@ -2141,7 +2528,7 @@ private:
                             !state.exposedHandles.count(value.owner)) handle = bootstrap->second;
                         else handle.owner = value.owner;
                         handle.ticket = value.ticket; handle.selections = value.selections; handle.result = value.result;
-                        handle.target = value.target; handle.lineage = value.lineage; handle.parent = value.parent;
+                        handle.target = value.target; handle.lineage = value.lineage; handle.parent = value.parent; handle.stageCursor = value.stageCursor; handle.stageStack = value.stageStack; handle.stageCapacity = value.stageCapacity; handle.stageElementBytes = value.stageElementBytes; handle.stagePacked = value.stagePacked;
                         state.values[inst.res] = handle; state.handles.insert(handle.root); state.exposedHandles.insert(handle.root); break;
                     }
                     case GirOp::ControlReceivingDrop: {
@@ -2164,7 +2551,7 @@ private:
                                 return entry.second.kind == Kind::Ticket && entry.second.owner == handle.root &&
                                     entry.second.role == Role::Waiting && state.tickets.count(entry.second.root);
                             }))) bad("receiving renewal bypasses its waiting completion token");
-                        Fact value; value.owner = handle.root; value.lineage = handle.lineage; value.parent = handle.parent; value.ticket = handle.ticket; value.selections = handle.selections; value.result = handle.result; value.target = handle.target;
+                        Fact value; value.owner = handle.root; value.lineage = handle.lineage; value.parent = handle.parent; value.ticket = handle.ticket; value.selections = handle.selections; value.result = handle.result; value.target = handle.target; value.stageCursor = handle.stageCursor; value.stageStack = handle.stageStack; value.stageCapacity = handle.stageCapacity; value.stageElementBytes = handle.stageElementBytes; value.stagePacked = handle.stagePacked;
                         value.raw = handle.target >= 0 && state.flag == handle.target + 1 ? RawState::Built : RawState::Writing;
                         attempt(inst.res, value); break;
                     }
@@ -2187,8 +2574,59 @@ private:
                             raw.kind = inst.op == GirOp::ControlAttemptStack ? Kind::Stack : inst.op == GirOp::ControlAttemptStart ? Kind::Start :
                                 inst.op == GirOp::ControlAttemptProgress ? Kind::Progress :
                                 inst.op == GirOp::ControlAttemptPrefix ? Kind::Prefix : Kind::Mode;
+                            if (inst.op == GirOp::ControlAttemptStack && raw.stageCursor < 0 && physical.control[inst.a].kind == 8)
+                                raw = Fact { Kind::CursorCell, physical.control[inst.a].index };
                             state.values[inst.res] = raw;
                         }
+                        break;
+                    }
+                    case GirOp::ControlAttemptStage: {
+                        auto raw = require(inst.a, Kind::Attempt);
+                        auto scratch = physical.stack[inst.b];
+                        if (raw.raw != RawState::Writing || raw.stageCursor >= 0 || raw.ticket >= 0 ||
+                            state.writtenAttempts.count(raw.root) || state.exposedHandles.count(raw.owner) ||
+                            physical.control[inst.a].kind != 8 || scratch.kind != 1 ||
+                            scratch.index < 0 || scratch.index >= function.stacks)
+                            bad("capacity stage does not own a fresh inline cursor and private stack");
+                        if (any_of(state.values.begin(), state.values.end(), [&](const auto &entry) {
+                            return entry.second.kind == Kind::Ticket && entry.second.owner == raw.owner && state.tickets.count(entry.second.root);
+                        })) bad("capacity stage crosses a live reservation snapshot");
+                        auto capacity = integer(inst.vals[1]), element = integer(inst.vals[2]);
+                        if (!capacity || !element || *capacity < 0 || *element <= 0) bad("capacity stage has no exact constant layout");
+                        for (auto &[value, entry] : state.values)
+                            if (entry.kind == Kind::Attempt && state.attempts.count(entry.root) && entry.root != raw.root && entry.owner == raw.owner)
+                                bad("capacity stage has another live raw lease for its receiver");
+                        for (auto &member : function.members)
+                            if (member.kind == GirMember::Header && member.stack == scratch.index)
+                                bad("capacity stage borrows an owner member's stack");
+                        for (auto &[value, entry] : state.values) {
+                            auto live = (entry.kind == Kind::Attempt && state.attempts.count(entry.root)) ||
+                                (entry.kind == Kind::Receiving && state.handles.count(entry.root));
+                            auto backing = entry.stageStack >= 0 ? StackId { 1, entry.stageStack } :
+                                value < (int)physical.control.size() ? physical.control[value] : StackId {};
+                            if (live && backing.kind == 1 && backing.index == scratch.index)
+                                bad("capacity stage reuses another live private stack");
+                        }
+                        raw.stageStack = scratch.index;
+                        raw.stageCursor = physical.control[inst.a].index;
+                        raw.stageCapacity = *capacity; raw.stageElementBytes = *element;
+                        stageReceiving(raw);
+                        state.attempts.erase(raw.root);
+                        attempt(inst.res, raw);
+                        break;
+                    }
+                    case GirOp::ControlAttemptFit: {
+                        auto raw = require(inst.a, Kind::Attempt);
+                        auto cursor = physical.stack[inst.b];
+                        if (raw.raw != RawState::Built) bad("capacity fit does not consume a completed stage");
+                        if (raw.stageCursor < 0) bad("capacity fit has no retained inline stage");
+                        if (raw.stagePacked) bad("capacity fit has not restored its headerless stage layout");
+                        if (cursor.kind != 8 || cursor.index != raw.stageCursor) bad("capacity fit restores another inline cursor");
+                        if (!state.fitChecks.erase(raw.root)) bad("capacity fit has no exact preceding capacity check");
+                        raw.stageCursor = -1; raw.stageStack = -1; raw.stageCapacity = -1; raw.stageElementBytes = -1;
+                        stageReceiving(raw);
+                        state.attempts.erase(raw.root);
+                        attempt(inst.res, raw);
                         break;
                     }
                     case GirOp::ControlAttemptPrepareNamed: {
@@ -2210,14 +2648,18 @@ private:
                     }
                     case GirOp::ControlAttemptPack: {
                         auto raw = require(inst.a, Kind::Attempt);
+                        stageLayout(raw, true);
                         if (raw.raw != RawState::Writing || state.writtenAttempts.count(raw.root))
                             bad("physical packing does not own an unwritten destination");
                         break;
                     }
-                    case GirOp::ControlAttemptRemoveHeader:
-                        if (require(inst.a, Kind::Attempt).raw != RawState::Built)
-                            bad("header removal does not own a completed destination");
+                    case GirOp::ControlAttemptRemoveHeader: {
+                        auto raw = require(inst.a, Kind::Attempt);
+                        if (raw.raw != RawState::Built) bad("header removal does not own a completed destination");
+                        if (raw.stageCursor >= 0 && !raw.stagePacked) bad("stage header removal has no packed layout");
+                        stageLayout(raw, false);
                         break;
+                    }
                     case GirOp::ControlExitWait: {
                         auto handle = require(inst.a, Kind::Receiving);
                         if (handle.callee != -2 || handle.target >= 0 || state.unselectedCompletions.count(handle.root))
@@ -2226,7 +2668,7 @@ private:
                             if (entry.kind == Kind::Ticket && state.tickets.count(entry.root) && entry.owner == handle.root && entry.role == Role::Waiting)
                                 bad("completion result has two waiting obligations");
                         Fact ticket { Kind::Ticket, inst.res }; ticket.owner = handle.root; ticket.role = Role::Waiting;
-                        ticket.result = handle.result; ticket.target = handle.target;
+                        ticket.result = handle.result; ticket.target = handle.target; ticket.stageCursor = handle.stageCursor; ticket.stageStack = handle.stageStack;
                         ticket.waitingOrigin = WaitingReceipt { handle.root, handle.result, handle.target, handle.lineage, handle.parent };
                         updateTicket(state, ticket); state.tickets.insert(inst.res); break;
                     }
@@ -2244,7 +2686,8 @@ private:
                         Fact ticket { Kind::Ticket, ticketValue };
                         if (inst.op == GirOp::ControlExitSelect) ticket.waitingOrigin = require(inst.a, Kind::Ticket).waitingOrigin;
                         ticket.owner = handle.root; ticket.ticket = handle.ticket; ticket.selections = handle.selections;
-                        ticket.target = handle.target; ticket.result = handle.result;
+                        ticket.target = handle.target; ticket.result = handle.result; ticket.stageCursor = handle.stageCursor; ticket.stageStack = handle.stageStack;
+                        ticket.stageCapacity = handle.stageCapacity; ticket.stageElementBytes = handle.stageElementBytes; ticket.stagePacked = handle.stagePacked;
                         ticket.lineage = handle.lineage; ticket.parent = handle.parent;
                         if (auto binding = GirNamedExitBinding(inst.exitSource)) {
                             auto source = fact(*binding);
@@ -2276,7 +2719,8 @@ private:
                         if (!state.extracted.insert(ticket.root).second) bad("construction reservation extracts its selected attempt twice");
                         Fact raw; raw.owner = ticket.owner; raw.ticket = ticket.root; raw.selections = ticket.selections;
                         raw.selections.insert(ticket.root); raw.raw = ticket.role == Role::Named ? RawState::Built : RawState::Writing; raw.target = ticket.target; raw.result = ticket.result;
-                        raw.lineage = ticket.lineage; raw.parent = ticket.parent;
+                        raw.lineage = ticket.lineage; raw.parent = ticket.parent; raw.stageCursor = ticket.stageCursor; raw.stageStack = ticket.stageStack;
+                        raw.stageCapacity = ticket.stageCapacity; raw.stageElementBytes = ticket.stageElementBytes; raw.stagePacked = ticket.stagePacked;
                         attempt(inst.res, raw); break;
                     }
                     case GirOp::ControlExitAdopt: {
@@ -2344,6 +2788,9 @@ private:
                             break;
                         }
                         if (inst.op == GirOp::ControlExitDiscard) {
+                            if (ticket.stageCursor >= 0) for (auto facts : { &state.values, &state.locals, &state.targets })
+                                for (auto &[value, entry] : *facts)
+                                    if (entry.kind == Kind::Receiving && entry.root == ticket.owner) entry.stagePacked = ticket.stagePacked;
                             if (ticket.role == Role::Received) bad("received ticket cannot be discarded");
                             if (ticket.role == Role::Waiting && !state.unselectedCompletions.emplace(ticket.owner, pair { ticket.root, carried(inst.vals) }).second)
                                 bad("waiting completion repeats its unselected witness");
@@ -2432,6 +2879,7 @@ private:
                     }
                     case GirOp::ControlAttemptAttach: {
                         auto parent = require(inst.a, Kind::Attempt), child = require(inst.b, Kind::Attempt);
+                        if (child.stageCursor >= 0) bad("construction attach bypasses the child's required capacity fit");
                         if (child.raw != RawState::Built || child.parent != parent.lineage ||
                             (child.target >= 0 && child.target != parent.target))
                             bad("construction attach does not own this parent's exact completed child");
@@ -2441,6 +2889,8 @@ private:
                     }
                     case GirOp::ControlAttemptCancel: case GirOp::ControlAttemptPublish: case GirOp::ControlAttemptReturn: {
                         auto raw = require(inst.a, Kind::Attempt);
+                        if (inst.op != GirOp::ControlAttemptCancel && raw.stageCursor >= 0)
+                            bad("construction publication or return bypasses its required capacity fit");
                         if ((inst.op == GirOp::ControlAttemptCancel) != (raw.raw == RawState::Cancelled) || raw.raw == RawState::Writing)
                             bad("construction terminal transfer consumes the wrong raw state");
                         if (inst.op == GirOp::ControlAttemptPublish && (raw.target >= 0 || raw.result >= 0))
@@ -2449,10 +2899,13 @@ private:
                         if (inst.op == GirOp::ControlAttemptPublish && !state.exposedHandles.count(raw.owner)) state.handles.erase(raw.owner);
                         break;
                     }
-                    case GirOp::ControlReceivingTransfer:
+                    case GirOp::ControlReceivingTransfer: {
                         require(inst.a, Kind::Receiving);
-                        if (require(inst.b, Kind::Attempt).raw != RawState::Built) bad("target handoff transfers an unfinished raw payload");
+                        auto raw = require(inst.b, Kind::Attempt);
+                        if (raw.raw != RawState::Built) bad("target handoff transfers an unfinished raw payload");
+                        if (raw.stageCursor >= 0) bad("target handoff bypasses its private capacity fit");
                         break;
+                    }
                     case GirOp::ControlOwnerNone:
                         state.values[inst.res] = Fact { Kind::Owner, -1 }; break;
                     case GirOp::ControlOwnerIsNamed: {
@@ -2646,12 +3099,22 @@ private:
                         }
                         break;
                     case GirOp::BytesCopy: case GirOp::BytesMove:
-                        recordAddress(inst.a); recordAddress(inst.b); break;
+                        if (recordAddress(inst.a)) invalidateFitChecks(fact(inst.a).root);
+                        recordAddress(inst.b); break;
                     case GirOp::BytesFill:
-                        recordAddress(inst.a); break;
+                        if (recordAddress(inst.a)) invalidateFitChecks(fact(inst.a).root);
+                        break;
                     case GirOp::PStore:
+                        if (fact(inst.a).kind == Kind::CursorCell) {
+                            auto cursor = fact(inst.a).root;
+                            auto &span = inlineSpans.at(cursor);
+                            if (m.Type(inst.ty).kind != CoreType::Ptr || inlineLocations[inst.b] != optional<pair<int, int64_t>> { { span.storage, span.base } })
+                                bad("inline cursor write does not initialize its exact data span");
+                            inactiveInlineCursor(cursor);
+                        }
                         if (recordAddress(inst.a)) {
                             auto address = fact(inst.a);
+                            invalidateFitChecks(address.root);
                             if (address.kind == Kind::Attempt || address.kind == Kind::Record)
                                 state.writtenAttempts.insert(address.root);
                         }
@@ -2688,6 +3151,7 @@ private:
                         size_t dense = 0;
                         for (int result = 0; result < inst.idx; result++) dense += holds_alternative<GirLowNonfixedResult>(results[result].layout);
                         auto raw = state.inputs[call.root].at(dense); raw.raw = state.flag == 0 ? RawState::Built : RawState::Cancelled;
+                        if (state.flag == 0) raw.stagePacked = false;
                         attempt(inst.res, raw); break;
                     }
                     case GirOp::ControlCallPop: {
@@ -2701,6 +3165,17 @@ private:
                     case GirOp::ReturnFlagSet:
                         state.flag = (int)integer(inst.a).value_or(-1); break;
                     case GirOp::Cmp:
+                        if (inst.cmp == CoreCmpOp::Le && m.Type(inst.ty).kind == CoreType::Int && m.Type(inst.ty).ity == CoreIntTy::U64) {
+                            auto source = definitions[inst.a];
+                            if (source && source->op == GirOp::Conv && m.Type(source->ty2).kind == CoreType::Int && m.Type(source->ty2).ity == CoreIntTy::U64) source = definitions[source->a];
+                            auto maximum = integer(inst.b);
+                            if (source && source->op == GirOp::PLoad && source->ty == m.IntType(CoreIntTy::I64) && maximum) {
+                                auto raw = fact(source->a);
+                                if (raw.kind == Kind::Attempt && raw.stageCursor >= 0 && raw.stageCapacity == *maximum) {
+                                    Fact comparison { Kind::FitComparison, raw.root }; state.values[inst.res] = comparison;
+                                }
+                            }
+                        }
                         if (inst.cmp == CoreCmpOp::Eq) {
                             auto left = fact(inst.a), right = fact(inst.b);
                             auto number = left.kind == Kind::Flag ? integer(inst.b) : right.kind == Kind::Flag ? integer(inst.a) : nullopt;
@@ -2736,7 +3211,7 @@ private:
                         auto found = state.targets.find(inst.idx * 65536 + inst.idx2);
                         if (found != state.targets.end()) {
                             state.values[inst.res] = found->second;
-                            state.values[inst.res].target = inst.idx;
+                            if (state.values[inst.res].kind != Kind::CursorCell) state.values[inst.res].target = inst.idx;
                         }
                         else for (auto &channel : m.lowtargets[inst.idx].channels)
                             if (channel.incoming.size() == GirConstructionTargetIncomingWords && channel.incoming.back() == inst.idx2) {
@@ -2791,7 +3266,7 @@ private:
             uint16_t progressStates = 0;
             int graph = -1, graphTarget = -1, graphResult = -1, graphWord = -1;
             int controlTarget = -1, controlResult = -1;
-            Address graphStack, graphStart;
+            Address graphStack, graphStart, stageStack, stageStart;
             bool operator==(const Value &) const = default;
         };
         struct Blocked {
@@ -3180,7 +3655,7 @@ private:
                 if (inst.op == GirOp::ControlReceivingCurrent || inst.op == GirOp::ControlReceivingRenew || inst.op == GirOp::ControlCallGet ||
                     inst.op == GirOp::ControlReceivingRefresh || inst.op == GirOp::ControlExitSelected ||
                     inst.op == GirOp::ControlReceivingCancel || inst.op == GirOp::ControlAttemptAbandon ||
-                    inst.op == GirOp::ControlExitCommit) {
+                    inst.op == GirOp::ControlExitCommit || inst.op == GirOp::ControlAttemptStage || inst.op == GirOp::ControlAttemptFit) {
                     auto source = value(state, inst.op == GirOp::ControlReceivingRefresh || inst.op == GirOp::ControlExitCommit ? inst.b : inst.a);
                     if (inst.op == GirOp::ControlCallGet) {
                         source = Value {};
@@ -3192,6 +3667,19 @@ private:
                                 dense += holds_alternative<GirLowNonfixedResult>(results[result].layout);
                             if (dense < call->vals.size()) source = value(state, call->vals[dense]);
                         }
+                    }
+                    if (inst.op == GirOp::ControlAttemptStage) {
+                        source.stageStack = source.graphStack; source.stageStart = source.graphStart;
+                        source.graphStack = value(state, inst.b).address;
+                        source.graphStart.kind = Address::Kind::StackBytes;
+                        source.graphStart.root = stackRoots.emplace(source.graphStack, (int)stackRoots.size()).first->second;
+                        source.graphStart.offset = INT64_MAX;
+                        auto top = state.stackEnds.find(source.graphStack);
+                        if (top != state.stackEnds.end()) source.graphStart = top->second.address;
+                    }
+                    if (inst.op == GirOp::ControlAttemptFit) {
+                        source.graphStack = source.stageStack; source.graphStart = source.stageStart;
+                        source.stageStack = Address {}; source.stageStart = Address {};
                     }
                     auto &created = state.values[inst.res];
                     created = source;
@@ -7167,19 +7655,27 @@ private:
     using ReplacementRootQuery = optional<Roots>;
 
     struct ReplacementQueries {
-        vector<ReplacementRootQuery> values;
+        vector<ReplacementRootQuery> values, ownerDependencies;
         GirReplacementContentFlow::Function flow;
     };
 
     ReplacementQueries MakeReplacementQueries(const Fn &fn, const GirReplacementContentFlow &cache) const {
-        ReplacementQueries queries { {}, cache.ForFunction(*fn.f, fn.vt) };
-        for (int value = 0; value < fn.nvalues; value++) queries.values.push_back(queries.flow.Value(value));
+        ReplacementQueries queries { {}, {}, cache.ForFunction(*fn.f, fn.vt) };
+        for (int value = 0; value < fn.nvalues; value++) {
+            queries.values.push_back(queries.flow.Value(value));
+            queries.ownerDependencies.push_back(queries.flow.OwnerDependencies(value));
+        }
         return queries;
     }
 
     static ReplacementRootQuery ReplacementRoots(const ReplacementQueries &queries, int value) {
         if (value < 0 || value >= (int)queries.values.size()) return nullopt;
         return queries.values[value];
+    }
+
+    static ReplacementRootQuery ReplacementOwnerDependencies(const ReplacementQueries &queries, int value) {
+        if (value < 0 || value >= (int)queries.ownerDependencies.size()) return nullopt;
+        return queries.ownerDependencies[value];
     }
 
     static bool ReplacementOverlap(const ReplacementRootQuery &a, const ReplacementRootQuery &b) {
@@ -7203,7 +7699,7 @@ private:
         Roots out;
         for (auto arg : call.vals) {
             if (!ValRefLike(fn, arg)) continue;
-            auto actual = ReplacementRoots(queries, arg);
+            auto actual = ReplacementOwnerDependencies(queries, arg);
             if (!actual) return nullopt;
             AddRoots(out, *actual);
         }
@@ -7218,7 +7714,7 @@ private:
                     continue;
                 }
                 if (target.index < 0 || target.index >= (int)call.vals.size()) return false;
-                auto actual = ReplacementRoots(queries, call.vals[target.index]);
+                auto actual = ReplacementOwnerDependencies(queries, call.vals[target.index]);
                 if (!actual) return false;
                 AddRoots(out, *actual);
                 if (target.index < (int)callee.params.size())
@@ -7254,9 +7750,9 @@ private:
             facts = KillEmptyFacts(facts, dependencies, queries);
         }
         for (auto value : GirReplacementContentFlow::AccessOperands(inst, &GirVerifier::Uses))
-            if (ValRefLike(fn, value)) facts = KillEmptyFacts(facts, ReplacementRoots(queries, value), queries);
+            if (ValRefLike(fn, value)) facts = KillEmptyFacts(facts, ReplacementOwnerDependencies(queries, value), queries);
         if (auto value = GirReplacementContentFlow::LoadedResult(inst); value && ValRefLike(fn, *value))
-            facts = KillEmptyFacts(facts, ReplacementRoots(queries, *value), queries);
+            facts = KillEmptyFacts(facts, ReplacementOwnerDependencies(queries, *value), queries);
         return facts;
     }
 

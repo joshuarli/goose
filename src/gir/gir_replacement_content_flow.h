@@ -235,8 +235,9 @@ class GirReplacementContentFlow {
             Add(state.values, parameters[index].first, At(state.values, args[index]));
     }
     void Step(const vector<State> &closed, const GirFunc &function, const vector<GirTypeId> &types, State &state, const GirInst &inst) const {
-        for (auto value : AccessOperands(inst, operandUses))
-            if (RefLike(types, value)) state.touched = state.touched.Join(At(state.values, value));
+        if (inst.op != GirOp::Call)
+            for (auto value : AccessOperands(inst, operandUses))
+                if (RefLike(types, value)) state.touched = state.touched.Join(At(state.values, value));
         if (inst.op == GirOp::CallConstruct || inst.op == GirOp::Invoke) {
             state.touched = FlowRoots::Opaque();
             Store(function, state, FlowRoots::Opaque(), FlowRoots::Opaque());
@@ -280,6 +281,22 @@ class GirReplacementContentFlow {
             }
         }
         return result;
+    }
+    FlowRoots RawOwnerTouches(const FlowRoots &roots) const {
+        auto known = roots.KnownRoots();
+        if (!known || !all_of(module.globals.begin(), module.globals.end(), [&](const GirGlobal &global) {
+                return GirStorable(module, global.ty) && !GirRefLike(module, global.ty);
+            })) return roots;
+        vector<Atom> result;
+        for (auto &root : *known) {
+            if (root.kind == Atom::Global && root.index >= 0 && root.index < (int)module.globals.size() &&
+                !GirOwnerKind(module.Type(module.globals[root.index].ty).kind)) continue;
+            if (find(result.begin(), result.end(), root) == result.end()) result.push_back(root);
+        }
+        return FlowRoots::Known(std::move(result));
+    }
+    Query OwnerDependencies(const GirFunc &function, const FlowRoots &roots) const {
+        return Normalize(function, RawOwnerTouches(roots));
     }
     static bool Within(const Query &actual, const vector<CoreRootRef> &expected) {
         return actual && all_of(actual->begin(), actual->end(), [&](const CoreRootRef &root) {
@@ -434,18 +451,18 @@ class GirReplacementContentFlow {
                 !cache->ArgsTyped(*types, fn, args) || !cache->CheckCall(*function, *state, fn, args)) return nullopt;
             vector<CoreRootRef> result;
             for (auto arg : args) if (cache->RefLike(*types, arg)) {
-                auto actual = Value(arg);
+                auto actual = cache->OwnerDependencies(*function, At(state->values, arg));
                 if (!actual) return nullopt;
                 AddRoots(result, *actual);
             }
-            auto touched = cache->Normalize(*function, cache->Substitute(*function, *state, args, PublicTouches((*cache->states)[fn].touched)));
+            auto rawTouched = cache->Substitute(*function, *state, args, PublicTouches((*cache->states)[fn].touched));
+            auto touched = cache->OwnerDependencies(*function, rawTouched);
             if (!touched) return nullopt;
-            for (auto &root : *touched) {
-                if (root.kind == CoreRootRef::Global && root.index >= 0 && root.index < (int)cache->module.globals.size() &&
-                    !GirOwnerKind(cache->module.Type(cache->module.globals[root.index].ty).kind)) continue;
-                AddRoot(result, root);
-            }
+            AddRoots(result, *touched);
             return result;
+        }
+        Query OwnerDependencies(int value) const {
+            return state ? cache->OwnerDependencies(*function, At(state->values, value)) : nullopt;
         }
 
     };

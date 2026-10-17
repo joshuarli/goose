@@ -696,7 +696,7 @@ GirGlobal IntegerGlobal(GirModule &module) {
     return global;
 }
 
-void PreservesActualGlobalCallDependencies() {
+void PreservesExplicitGlobalCallDependencies() {
     for (bool writes : { false, true }) {
         auto module = EmptyContentReplacement();
         module.globals.push_back(IntegerGlobal(module));
@@ -739,7 +739,7 @@ void PreservesActualGlobalCallDependencies() {
         auto position = find_if(callerBody.begin(), callerBody.end(), [](const GirInst &inst) { return inst.op == GirOp::Call; });
         position->vals = { 8 };
         callerBody.insert(position, globalAddress);
-        assert(Code(module) == "GIR-V060");
+        assert(Code(module).empty());
     }
 }
 
@@ -957,6 +957,547 @@ CoreModule BroadSliceReturnReplacement(bool dependent) {
     calleeContext.resultroots = { { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } };
     core.contexts.push_back(std::move(calleeContext));
     return core;
+}
+
+CoreModule FixedGlobalSliceReturnReplacement() {
+    CoreModule core;
+    core.profile = CoreProfile::Shrink;
+    core.files = { "fixed-global-slice-return.goose" };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto integer = core.IntType(CoreIntTy::I64);
+    CoreType fixed;
+    fixed.kind = CoreType::Arr;
+    fixed.elem = integer;
+    fixed.count = 1;
+    auto fixedType = core.Intern(fixed);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = integer;
+    auto ownerType = core.Intern(owner);
+    CoreType slice;
+    slice.kind = CoreType::Slice;
+    slice.mut = CoreMut::Const;
+    slice.elem = integer;
+    auto sliceType = core.Intern(slice);
+    CoreType reference;
+    reference.kind = CoreType::Ref;
+    reference.mut = CoreMut::Mut;
+    reference.elem = ownerType;
+    auto referenceType = core.Intern(reference);
+
+    CoreGlobal global;
+    global.name = "fixed";
+    global.type = fixedType;
+    global.kind = CoreVarKind::Let;
+    global.org = origin;
+    global.init = make_unique<CoreExpr>();
+    global.init->kind = CoreExprKind::Arr;
+    global.init->type = fixedType;
+    auto initial = make_unique<CoreExpr>();
+    initial->kind = CoreExprKind::Lit;
+    initial->type = integer;
+    initial->value = "0";
+    global.init->elems.push_back(std::move(initial));
+    core.globals.push_back(std::move(global));
+
+    CoreImpl main;
+    main.name = "main";
+    main.summary.unknown = true;
+    core.impls.push_back(std::move(main));
+    CoreContext mainContext;
+    mainContext.impl = 0;
+    core.contexts.push_back(std::move(mainContext));
+
+    CoreImpl receiver;
+    receiver.name = "receiver";
+    receiver.params = { { 0, true } };
+    receiver.vars = { { "p", referenceType, CoreVarKind::Let, 0, origin } };
+    receiver.summary.unknown = true;
+    CoreStmt replacement;
+    replacement.kind = CoreStmtKind::AssignWhole;
+    replacement.org = origin;
+    replacement.place = make_unique<CorePlace>();
+    replacement.place->kind = CorePlace::Deref;
+    replacement.place->expr = make_unique<CoreExpr>();
+    replacement.place->expr->kind = CoreExprKind::Read;
+    replacement.place->expr->type = referenceType;
+    replacement.place->expr->place = make_unique<CorePlace>();
+    replacement.place->expr->place->kind = CorePlace::Local;
+    replacement.place->expr->place->index = 0;
+    replacement.expr = make_unique<CoreExpr>();
+    replacement.expr->kind = CoreExprKind::Arr;
+    replacement.expr->type = ownerType;
+    auto length = make_unique<CoreExpr>();
+    length->kind = CoreExprKind::Len;
+    length->type = integer;
+    length->org = origin;
+    length->view = make_unique<CoreView>();
+    length->view->kind = CoreView::Val;
+    length->view->expr = make_unique<CoreExpr>();
+    length->view->expr->kind = CoreExprKind::Call;
+    length->view->expr->type = sliceType;
+    length->view->expr->ctx = 2;
+    length->view->expr->org = origin;
+    replacement.expr->elems.push_back(std::move(length));
+    receiver.body.stmts.push_back(std::move(replacement));
+    core.impls.push_back(std::move(receiver));
+    CoreContext receiverContext;
+    receiverContext.impl = 1;
+    receiverContext.varroots = { { 0, { { CoreRootRef::Param, 0 } } } };
+    core.contexts.push_back(std::move(receiverContext));
+
+    CoreImpl reader;
+    reader.name = "reader";
+    reader.results = { { sliceType } };
+    reader.summary.unknown = true;
+    reader.body.value = make_unique<CoreExpr>();
+    reader.body.value->kind = CoreExprKind::Slice;
+    reader.body.value->type = sliceType;
+    reader.body.value->mut = CoreMut::Const;
+    reader.body.value->org = origin;
+    reader.body.value->view = make_unique<CoreView>();
+    reader.body.value->view->place = make_unique<CorePlace>();
+    reader.body.value->view->place->kind = CorePlace::Global;
+    reader.body.value->view->place->index = 0;
+    core.impls.push_back(std::move(reader));
+    CoreContext readerContext;
+    readerContext.impl = 2;
+    readerContext.resultroots = { { { CoreRootRef::Global, 0 } } };
+    core.contexts.push_back(std::move(readerContext));
+    return core;
+}
+
+CoreModule NestedFixedGlobalSliceReturnReplacement() {
+    auto core = FixedGlobalSliceReturnReplacement();
+    auto slice = find_if(core.types.begin(), core.types.end(), [](const CoreType &type) {
+        return type.kind == CoreType::Slice;
+    });
+    auto integer = find_if(core.types.begin(), core.types.end(), [](const CoreType &type) {
+        return type.kind == CoreType::Int && type.ity == CoreIntTy::I64;
+    });
+    auto sliceType = static_cast<CoreTypeId>(slice - core.types.begin());
+    auto integerType = static_cast<CoreTypeId>(integer - core.types.begin());
+    auto &element = core.impls[1].body.stmts[0].expr->elems[0];
+    auto reader = std::move(element->view->expr);
+    auto ignored = make_unique<CoreExpr>();
+    ignored->kind = CoreExprKind::Call;
+    ignored->type = integerType;
+    ignored->ctx = 3;
+    ignored->org = { 0, 1, CoreOriginKind::Expr };
+    ignored->args.push_back(CoreArgValue { std::move(reader) });
+    element = std::move(ignored);
+
+    CoreImpl ignore;
+    ignore.name = "ignore_slice";
+    ignore.params = { { 0, false } };
+    ignore.results = { { integerType } };
+    ignore.vars = { { "unused", sliceType, CoreVarKind::Let, 0, { 0, 1, CoreOriginKind::Expr } } };
+    ignore.body.value = make_unique<CoreExpr>();
+    ignore.body.value->kind = CoreExprKind::Lit;
+    ignore.body.value->type = integerType;
+    ignore.body.value->value = "0";
+    core.impls.push_back(std::move(ignore));
+    CoreContext ignoreContext;
+    ignoreContext.impl = 3;
+    ignoreContext.varroots = { { 0, { { CoreRootRef::Global, 0 } } } };
+    core.contexts.push_back(std::move(ignoreContext));
+    return core;
+}
+
+void FiltersNestedFixedGlobalCallDependencies() {
+    auto lower = [](const CoreModule &module) {
+        return GirLowerer(module, module.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+            [](const CoreOrigin &) { return 0; }).Lower();
+    };
+    auto core = NestedFixedGlobalSliceReturnReplacement();
+    assert(Code(lower(core)).empty());
+
+    auto ownerGlobal = NestedFixedGlobalSliceReturnReplacement();
+    auto owner = find_if(ownerGlobal.types.begin(), ownerGlobal.types.end(), [](const CoreType &type) {
+        return type.kind == CoreType::GrowShrink;
+    });
+    ownerGlobal.globals[0].type = static_cast<CoreTypeId>(owner - ownerGlobal.types.begin());
+    ownerGlobal.globals[0].init->type = ownerGlobal.globals[0].type;
+    assert(Code(lower(ownerGlobal)) == "GIR-V060");
+
+    auto parameter = NestedFixedGlobalSliceReturnReplacement();
+    auto slice = find_if(parameter.types.begin(), parameter.types.end(), [](const CoreType &type) {
+        return type.kind == CoreType::Slice;
+    });
+    auto sliceType = static_cast<CoreTypeId>(slice - parameter.types.begin());
+    auto &parameterReceiver = parameter.impls[1];
+    parameterReceiver.params.push_back({ 1, false });
+    parameterReceiver.vars.push_back({ "source", sliceType, CoreVarKind::Let, 0, { 0, 1, CoreOriginKind::Expr } });
+    auto parameterRead = make_unique<CoreExpr>();
+    parameterRead->kind = CoreExprKind::Read;
+    parameterRead->type = sliceType;
+    parameterRead->place = make_unique<CorePlace>();
+    parameterRead->place->kind = CorePlace::Local;
+    parameterRead->place->index = 1;
+    parameterReceiver.body.stmts[0].expr->elems[0]->args[0] = CoreArgValue { std::move(parameterRead) };
+    parameter.contexts[1].varroots.push_back({ 1, { { CoreRootRef::Global, 0 } } });
+    assert(Code(lower(parameter)) == "GIR-V060");
+
+    auto contents = NestedFixedGlobalSliceReturnReplacement();
+    auto contentsSlice = find_if(contents.types.begin(), contents.types.end(), [](const CoreType &type) {
+        return type.kind == CoreType::Slice;
+    });
+    auto contentsSliceType = static_cast<CoreTypeId>(contentsSlice - contents.types.begin());
+    CoreType sliceReference;
+    sliceReference.kind = CoreType::Ref;
+    sliceReference.mut = CoreMut::Mut;
+    sliceReference.elem = contentsSliceType;
+    auto sliceReferenceType = contents.Intern(sliceReference);
+    auto &contentsReceiver = contents.impls[1];
+    contentsReceiver.params.push_back({ 1, true });
+    contentsReceiver.vars.push_back({ "source", sliceReferenceType, CoreVarKind::Let, 0, { 0, 1, CoreOriginKind::Expr } });
+    auto address = make_unique<CoreExpr>();
+    address->kind = CoreExprKind::Read;
+    address->type = sliceReferenceType;
+    address->place = make_unique<CorePlace>();
+    address->place->kind = CorePlace::Local;
+    address->place->index = 1;
+    auto value = make_unique<CoreExpr>();
+    value->kind = CoreExprKind::Read;
+    value->type = contentsSliceType;
+    value->place = make_unique<CorePlace>();
+    value->place->kind = CorePlace::Deref;
+    value->place->expr = std::move(address);
+    contentsReceiver.body.stmts[0].expr->elems[0]->args[0] = CoreArgValue { std::move(value) };
+    contents.contexts[1].varroots.push_back({ 1, { { CoreRootRef::Param, 1 } } });
+    contents.contexts[1].content = { {}, { { CoreRootRef::Global, 0 } } };
+    contents.contexts[1].hascontent = { 0, 1 };
+    assert(Code(lower(contents)) == "GIR-V060");
+}
+
+CoreModule RefSliceArgumentRootCeiling() {
+    CoreModule core;
+    core.profile = CoreProfile::Shrink;
+    core.files = { "refslice-root-ceiling.goose" };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto integer = core.IntType(CoreIntTy::I64);
+    CoreType slice;
+    slice.kind = CoreType::Slice;
+    slice.mut = CoreMut::Const;
+    slice.elem = integer;
+    auto sliceType = core.Intern(slice);
+    CoreType sliceReference;
+    sliceReference.kind = CoreType::Ref;
+    sliceReference.mut = CoreMut::Mut;
+    sliceReference.elem = sliceType;
+    auto sliceReferenceType = core.Intern(sliceReference);
+    CoreType constSliceReference = sliceReference;
+    constSliceReference.mut = CoreMut::Const;
+    auto constSliceReferenceType = core.Intern(constSliceReference);
+    CoreType backing;
+    backing.kind = CoreType::Arr;
+    backing.elem = integer;
+    backing.count = 1;
+    auto backingType = core.Intern(backing);
+    for (auto name : { "G", "H" }) {
+        CoreGlobal global;
+        global.name = name;
+        global.type = backingType;
+        global.kind = CoreVarKind::Let;
+        global.org = origin;
+        global.init = make_unique<CoreExpr>();
+        global.init->kind = CoreExprKind::Arr;
+        global.init->type = backingType;
+        auto initial = make_unique<CoreExpr>();
+        initial->kind = CoreExprKind::Lit;
+        initial->type = integer;
+        initial->value = "0";
+        global.init->elems.push_back(std::move(initial));
+        core.globals.push_back(std::move(global));
+    }
+
+    CoreImpl main;
+    main.name = "main";
+    core.impls.push_back(std::move(main));
+    CoreContext mainContext;
+    mainContext.impl = 0;
+    core.contexts.push_back(std::move(mainContext));
+
+    CoreImpl wrapper;
+    wrapper.name = "wrapper";
+    wrapper.params = { { 0, true }, { 1, true } };
+    wrapper.vars = {
+        { "q", sliceReferenceType, CoreVarKind::Let, 0, origin },
+        { "r", sliceReferenceType, CoreVarKind::Let, 0, origin },
+        { "holder", sliceType, CoreVarKind::Var, 0, origin },
+    };
+    wrapper.summary.unknown = true;
+    CoreStmt initializeHolder;
+    initializeHolder.kind = CoreStmtKind::Let;
+    initializeHolder.var = 2;
+    initializeHolder.org = origin;
+    initializeHolder.expr = make_unique<CoreExpr>();
+    initializeHolder.expr->kind = CoreExprKind::Slice;
+    initializeHolder.expr->type = sliceType;
+    initializeHolder.expr->mut = CoreMut::Const;
+    initializeHolder.expr->org = origin;
+    initializeHolder.expr->view = make_unique<CoreView>();
+    initializeHolder.expr->view->place = make_unique<CorePlace>();
+    initializeHolder.expr->view->place->kind = CorePlace::Global;
+    initializeHolder.expr->view->place->index = 0;
+    CoreStmt callTarget;
+    callTarget.kind = CoreStmtKind::Expr;
+    callTarget.org = origin;
+    callTarget.expr = make_unique<CoreExpr>();
+    callTarget.expr->kind = CoreExprKind::Call;
+    callTarget.expr->type = core.UnitType();
+    callTarget.expr->ctx = 3;
+    auto holder = make_unique<CorePlace>();
+    holder->kind = CorePlace::Local;
+    holder->index = 2;
+    callTarget.expr->args.push_back(CoreArgReference { CoreMut::Const, std::move(holder) });
+    auto reference = make_unique<CoreExpr>();
+    reference->kind = CoreExprKind::Read;
+    reference->type = sliceReferenceType;
+    reference->place = make_unique<CorePlace>();
+    reference->place->kind = CorePlace::Local;
+    reference->place->index = 0;
+    auto dereference = make_unique<CorePlace>();
+    dereference->kind = CorePlace::Deref;
+    dereference->expr = std::move(reference);
+    callTarget.expr->args.push_back(CoreArgReference { CoreMut::Mut, std::move(dereference) });
+    wrapper.body.stmts.push_back(std::move(initializeHolder));
+    wrapper.body.stmts.push_back(std::move(callTarget));
+    core.impls.push_back(std::move(wrapper));
+
+    CoreImpl callee;
+    callee.name = "callee";
+    callee.params = { { 0, true }, { 1, true } };
+    callee.vars = {
+        { "holder", constSliceReferenceType, CoreVarKind::Let, 0, origin },
+        { "dependency", sliceReferenceType, CoreVarKind::Let, 0, origin },
+    };
+    callee.summary.unknown = true;
+    core.impls.push_back(std::move(callee));
+
+    CoreContext wrapperContext;
+    wrapperContext.impl = 1;
+    wrapperContext.varroots = {
+        { 0, { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } },
+        { 1, { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } },
+        { 2, { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } },
+    };
+    core.contexts.push_back(std::move(wrapperContext));
+    CoreContext alternateWrapperContext;
+    alternateWrapperContext.impl = 1;
+    alternateWrapperContext.varroots = {
+        { 0, { { CoreRootRef::Global, 0 } } },
+        { 1, { { CoreRootRef::Global, 0 } } },
+        { 2, { { CoreRootRef::Global, 0 } } },
+    };
+    core.contexts.push_back(std::move(alternateWrapperContext));
+    CoreContext calleeContext;
+    calleeContext.impl = 2;
+    calleeContext.varroots = {
+        { 0, { { CoreRootRef::Param, 0 } } },
+        { 1, { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } },
+    };
+    calleeContext.content = { { { CoreRootRef::Param, 1 } }, {} };
+    calleeContext.hascontent = { 1, 0 };
+    core.contexts.push_back(std::move(calleeContext));
+    core.entry = 0;
+    return core;
+}
+
+CoreModule ObservedRefSliceReadRootCeiling() {
+    auto core = RefSliceArgumentRootCeiling();
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto slice = find_if(core.types.begin(), core.types.end(), [](auto &type) {
+        return type.kind == CoreType::Slice;
+    });
+    assert(slice != core.types.end());
+    auto sliceType = static_cast<CoreTypeId>(slice - core.types.begin());
+    auto reference = find_if(core.types.begin(), core.types.end(), [&](auto &type) {
+        return type.kind == CoreType::Ref && type.elem == sliceType && type.mut == CoreMut::Mut;
+    });
+    assert(reference != core.types.end());
+    auto referenceType = static_cast<CoreTypeId>(reference - core.types.begin());
+    CoreType readonlyReference;
+    readonlyReference.kind = CoreType::Ref;
+    readonlyReference.mut = CoreMut::Const;
+    readonlyReference.elem = core.globals[0].type;
+    auto readonlyReferenceType = core.Intern(readonlyReference);
+
+    CoreImpl observing;
+    observing.name = "observing";
+    observing.params = { { 0, true }, { 1, true } };
+    observing.vars = {
+        { "q", referenceType, CoreVarKind::Let, 0, origin },
+        { "unused", readonlyReferenceType, CoreVarKind::Let, 0, origin },
+    };
+    observing.summary.unknown = true;
+    CoreStmt call;
+    call.kind = CoreStmtKind::Expr;
+    call.org = origin;
+    call.expr = make_unique<CoreExpr>();
+    call.expr->kind = CoreExprKind::Call;
+    call.expr->type = core.UnitType();
+    call.expr->ctx = 2;
+    auto q = make_unique<CoreExpr>();
+    q->kind = CoreExprKind::Read;
+    q->type = referenceType;
+    q->place = make_unique<CorePlace>();
+    q->place->kind = CorePlace::Local;
+    q->place->index = 0;
+    auto dereference = make_unique<CorePlace>();
+    dereference->kind = CorePlace::Deref;
+    dereference->expr = std::move(q);
+    call.expr->args.push_back(CoreArgReference { CoreMut::Mut, std::move(dereference) });
+    observing.body.stmts.push_back(std::move(call));
+
+    CoreImpl observed;
+    observed.name = "observed";
+    observed.params = { { 0, true } };
+    observed.vars = { { "q", referenceType, CoreVarKind::Let, 0, origin } };
+    observed.summary.unknown = true;
+    core.impls[1] = std::move(observing);
+    core.impls[2] = std::move(observed);
+
+    CoreContext observingContext;
+    observingContext.impl = 1;
+    observingContext.varroots = {
+        { 0, { { CoreRootRef::Param, 0 } } },
+        { 1, {} },
+    };
+    observingContext.content = {
+        { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } },
+        {},
+    };
+    observingContext.hascontent = { 1, 0 };
+    CoreContext observedContext;
+    observedContext.impl = 2;
+    observedContext.varroots = { { 0, { { CoreRootRef::Param, 0 } } } };
+    observedContext.content = { { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } };
+    observedContext.hascontent = { 1 };
+    core.contexts = { core.contexts[0], std::move(observingContext), std::move(observedContext) };
+    return core;
+}
+
+void RetainsRefSliceReadRootCeilingsPerContext() {
+    auto core = RefSliceArgumentRootCeiling();
+    auto gir = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(gir).empty());
+    for (auto [context, expected] : vector<pair<int, vector<CoreRootRef>>> {
+             { 1, { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 }, { CoreRootRef::Param, 0 } } },
+             { 2, { { CoreRootRef::Global, 0 }, { CoreRootRef::Param, 0 } } } }) {
+        auto &function = gir.funcs[context];
+        assert(function.roots.values && function.roots.values->size() == 1);
+        assert(function.roots.values->front().second == expected);
+        assert(find(expected.begin(), expected.end(), CoreRootRef { CoreRootRef::Param, 1 }) == expected.end());
+        assert(function.roots.slots);
+        auto parameterSlot = find_if(function.roots.slots->begin(), function.roots.slots->end(), [](auto &row) {
+            return row.first == 0;
+        });
+        assert(parameterSlot != function.roots.slots->end());
+        assert((parameterSlot->second == vector<CoreRootRef> { { CoreRootRef::Param, 0 } }));
+    }
+    auto erased = gir;
+    erased.funcs[1].roots.values.reset();
+    erased.funcs[2].roots.values.reset();
+    assert(Code(erased) == "GIR-V050");
+    auto misaligned = RefSliceArgumentRootCeiling();
+    misaligned.impls[1].params[0].var = 3;
+    CoreType arrayReference;
+    arrayReference.kind = CoreType::Ref;
+    arrayReference.mut = CoreMut::Mut;
+    arrayReference.elem = misaligned.globals[0].type;
+    auto arrayReferenceType = misaligned.Intern(arrayReference);
+    misaligned.impls[1].vars.push_back({ "other", arrayReferenceType, CoreVarKind::Let, 0, { 0, 1, CoreOriginKind::Expr } });
+    misaligned.contexts[1].varroots.push_back({ 3, {} });
+    auto misalignedGir = GirLowerer(misaligned, misaligned.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(misalignedGir.funcs[1].roots.values && misalignedGir.funcs[1].roots.values->size() == 1);
+    assert((misalignedGir.funcs[1].roots.values->front().second ==
+        vector<CoreRootRef> { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } }));
+
+    auto observed = ObservedRefSliceReadRootCeiling();
+    auto observedGir = GirLowerer(observed, observed.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(observedGir).empty());
+    auto &observedFunction = observedGir.funcs[1];
+    assert(observedFunction.roots.values && observedFunction.roots.values->size() == 1);
+    assert((observedFunction.roots.values->front().second ==
+        vector<CoreRootRef> { { CoreRootRef::Param, 0 } }));
+    assert(find(observedFunction.roots.values->front().second.begin(), observedFunction.roots.values->front().second.end(),
+        CoreRootRef { CoreRootRef::Param, 1 }) == observedFunction.roots.values->front().second.end());
+}
+
+void FiltersOnlyRawNonownerGlobalDependencies() {
+    auto core = FixedGlobalSliceReturnReplacement();
+    auto lower = [](const CoreModule &module) {
+        return GirLowerer(module, module.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+            [](const CoreOrigin &) { return 0; }).Lower();
+    };
+    auto gir = lower(core);
+    assert(Code(gir).empty());
+    auto owner = find_if(core.types.begin(), core.types.end(), [](const CoreType &type) {
+        return type.kind == CoreType::GrowShrink;
+    });
+    assert(owner != core.types.end());
+    core.globals[0].type = static_cast<CoreTypeId>(owner - core.types.begin());
+    core.globals[0].init->type = core.globals[0].type;
+    assert(Code(lower(core)) == "GIR-V060");
+
+    auto missingGlobal = FixedGlobalSliceReturnReplacement();
+    missingGlobal.contexts[1].varroots[0].second = { { CoreRootRef::Global, 9 } };
+    assert(Code(lower(missingGlobal)) == "GIR-V001");
+
+    auto parameter = FixedGlobalSliceReturnReplacement();
+    auto slice = find_if(parameter.types.begin(), parameter.types.end(), [](const CoreType &type) {
+        return type.kind == CoreType::Slice;
+    });
+    assert(slice != parameter.types.end());
+    auto sliceType = static_cast<CoreTypeId>(slice - parameter.types.begin());
+    auto &receiver = parameter.impls[1];
+    receiver.params.push_back({ 1, false });
+    receiver.vars.push_back({ "source", sliceType, CoreVarKind::Let, 0, { 0, 1, CoreOriginKind::Expr } });
+    auto parameterRead = make_unique<CoreExpr>();
+    parameterRead->kind = CoreExprKind::Read;
+    parameterRead->type = sliceType;
+    parameterRead->place = make_unique<CorePlace>();
+    parameterRead->place->kind = CorePlace::Local;
+    parameterRead->place->index = 1;
+    receiver.body.stmts[0].expr->elems[0]->view->expr = std::move(parameterRead);
+    parameter.contexts[1].varroots.push_back({ 1, { { CoreRootRef::Global, 0 } } });
+    assert(Code(lower(parameter)) == "GIR-V060");
+
+    auto contents = FixedGlobalSliceReturnReplacement();
+    auto contentsSlice = find_if(contents.types.begin(), contents.types.end(), [](const CoreType &type) {
+        return type.kind == CoreType::Slice;
+    });
+    assert(contentsSlice != contents.types.end());
+    auto contentsSliceType = static_cast<CoreTypeId>(contentsSlice - contents.types.begin());
+    CoreType sliceReference;
+    sliceReference.kind = CoreType::Ref;
+    sliceReference.mut = CoreMut::Mut;
+    sliceReference.elem = contentsSliceType;
+    auto sliceReferenceType = contents.Intern(sliceReference);
+    auto &contentsReceiver = contents.impls[1];
+    contentsReceiver.params.push_back({ 1, false });
+    contentsReceiver.vars.push_back({ "source", sliceReferenceType, CoreVarKind::Let, 0, { 0, 1, CoreOriginKind::Expr } });
+    auto address = make_unique<CoreExpr>();
+    address->kind = CoreExprKind::Read;
+    address->type = sliceReferenceType;
+    address->place = make_unique<CorePlace>();
+    address->place->kind = CorePlace::Local;
+    address->place->index = 1;
+    auto value = make_unique<CoreExpr>();
+    value->kind = CoreExprKind::Read;
+    value->type = contentsSliceType;
+    value->place = make_unique<CorePlace>();
+    value->place->kind = CorePlace::Deref;
+    value->place->expr = std::move(address);
+    contentsReceiver.body.stmts[0].expr->elems[0]->view->expr = std::move(value);
+    contents.contexts[1].varroots.push_back({ 1, { { CoreRootRef::Param, 1 } } });
+    contents.contexts[1].content = { {}, { { CoreRootRef::Global, 0 } } };
+    contents.contexts[1].hascontent = { 0, 1 };
+    assert(Code(lower(contents)) == "GIR-V060");
 }
 
 void PreservesLeastActualReturnRoots() {
@@ -2453,9 +2994,139 @@ void IncludesActualRefSliceBackingReads() {
     assert(Code(module).empty());
 }
 
+CoreModule CallAddressTransportReplacement(bool consume) {
+    CoreModule core;
+    core.profile = CoreProfile::Shrink;
+    core.files = { "call-address-transport.goose" };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto integer = core.IntType(CoreIntTy::I64);
+    auto unit = core.UnitType();
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = integer;
+    auto ownerType = core.Intern(owner);
+    CoreType reference;
+    reference.kind = CoreType::Ref;
+    reference.mut = CoreMut::Const;
+    reference.elem = ownerType;
+    auto referenceType = core.Intern(reference);
+
+    CoreGlobal global;
+    global.name = "backing";
+    global.type = ownerType;
+    global.kind = CoreVarKind::Var;
+    global.org = origin;
+    global.init = make_unique<CoreExpr>();
+    global.init->kind = CoreExprKind::Arr;
+    global.init->type = ownerType;
+    core.globals.push_back(std::move(global));
+
+    CoreImpl main;
+    main.name = "main";
+    main.summary.unknown = true;
+    CoreStmt replace;
+    replace.kind = CoreStmtKind::AssignWhole;
+    replace.org = origin;
+    replace.place = make_unique<CorePlace>();
+    replace.place->kind = CorePlace::Global;
+    replace.expr = make_unique<CoreExpr>();
+    replace.expr->kind = CoreExprKind::Arr;
+    replace.expr->type = ownerType;
+    auto element = make_unique<CoreExpr>();
+    element->kind = CoreExprKind::Block;
+    element->type = integer;
+    element->then = make_unique<CoreBlock>();
+    element->then->scope = 1;
+    element->then->value = make_unique<CoreExpr>();
+    element->then->value->kind = CoreExprKind::Call;
+    element->then->value->type = integer;
+    element->then->value->ctx = 1;
+    element->then->value->org = origin;
+    replace.expr->elems.push_back(std::move(element));
+    main.body.stmts.push_back(std::move(replace));
+    core.impls.push_back(std::move(main));
+    CoreContext mainContext;
+    mainContext.impl = 0;
+    core.contexts.push_back(std::move(mainContext));
+
+    CoreImpl wrapper;
+    wrapper.name = "wrapper";
+    wrapper.results = { { integer } };
+    if (consume) wrapper.summary.reads = { { true, 0 } };
+    CoreStmt callIgnore;
+    callIgnore.kind = CoreStmtKind::Expr;
+    callIgnore.org = origin;
+    callIgnore.expr = make_unique<CoreExpr>();
+    callIgnore.expr->kind = CoreExprKind::Call;
+    callIgnore.expr->type = unit;
+    callIgnore.expr->ctx = 2;
+    callIgnore.expr->org = origin;
+    CoreArgReference address;
+    address.mut = CoreMut::Const;
+    address.place = make_unique<CorePlace>();
+    address.place->kind = CorePlace::Global;
+    address.place->index = 0;
+    callIgnore.expr->args.push_back(std::move(address));
+    wrapper.body.stmts.push_back(std::move(callIgnore));
+    wrapper.body.value = make_unique<CoreExpr>();
+    wrapper.body.value->kind = CoreExprKind::Lit;
+    wrapper.body.value->type = integer;
+    wrapper.body.value->value = "0";
+    core.impls.push_back(std::move(wrapper));
+    CoreContext wrapperContext;
+    wrapperContext.impl = 1;
+    wrapperContext.resultroots = { {} };
+    core.contexts.push_back(std::move(wrapperContext));
+
+    CoreImpl callee;
+    callee.name = consume ? "consume" : "ignore";
+    callee.params = { { 0, true } };
+    callee.vars = { { "q", referenceType, CoreVarKind::Let, 0, origin } };
+    if (consume) {
+        callee.summary.reads = { { false, 0 } };
+        auto read = make_unique<CoreExpr>();
+        read->kind = CoreExprKind::Read;
+        read->type = referenceType;
+        read->place = make_unique<CorePlace>();
+        read->place->kind = CorePlace::Local;
+        read->place->index = 0;
+        auto dereference = make_unique<CorePlace>();
+        dereference->kind = CorePlace::Deref;
+        dereference->expr = std::move(read);
+        auto length = make_unique<CoreExpr>();
+        length->kind = CoreExprKind::Len;
+        length->type = integer;
+        length->org = origin;
+        length->view = make_unique<CoreView>();
+        length->view->kind = CoreView::Of;
+        length->view->place = std::move(dereference);
+        CoreStmt consumeCall;
+        consumeCall.kind = CoreStmtKind::Expr;
+        consumeCall.org = origin;
+        consumeCall.expr = std::move(length);
+        callee.body.stmts.push_back(std::move(consumeCall));
+    }
+    core.impls.push_back(std::move(callee));
+    CoreContext calleeContext;
+    calleeContext.impl = 2;
+    calleeContext.varroots = { { 0, { { CoreRootRef::Param, 0 } } } };
+    core.contexts.push_back(std::move(calleeContext));
+    return core;
+}
+
+void DistinguishesCallAddressTransportFromConsumption() {
+    auto lower = [](CoreModule core) {
+        return GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+            [](const CoreOrigin &) { return 0; }).Lower();
+    };
+    assert(Code(lower(CallAddressTransportReplacement(false))).empty());
+    assert(Code(lower(CallAddressTransportReplacement(true))) == "GIR-V060");
+}
+
 }
 
 int main() {
+    FiltersOnlyRawNonownerGlobalDependencies();
     PreservesLeastActualReturnRoots();
     PreservesReturnedContentCorrelation();
     PreservesSpecializedContentCorrelation();
@@ -2471,11 +3142,13 @@ int main() {
     PreservesOptionalSlotRootMetadata();
     PreservesOptionalValueRootMetadata();
     EnforcesSourceValueRootCeilings();
+    FiltersNestedFixedGlobalCallDependencies();
+    RetainsRefSliceReadRootCeilingsPerContext();
     RejectsWideValueRootsAtNarrowSlots();
     LowersStoppedConditionalRootsPerContext();
     AdmitsCallerStorageThroughGenericContentBounds();
     DistinguishesReturnedOwnerAddressesFromReads();
-    PreservesActualGlobalCallDependencies();
+    PreservesExplicitGlobalCallDependencies();
     RetainsSpecializedGlobalPolicyWithEmptyActualArguments();
     CertifiesRecursiveReferenceReturnBounds();
     IncludesActualRefSliceBackingReads();
@@ -2483,6 +3156,7 @@ int main() {
     LowersCrossParameterContentBounds();
     ChecksActualHolderAliasesAfterCallWrites();
     ChecksInitializerHolderAliasesAfterCallWrites();
+    DistinguishesCallAddressTransportFromConsumption();
     AcceptsReplacementAfterKnownEmptyContentRead();
     AcceptsStoresBetweenEmptyParameterContents();
     PreservesKnownEmptyLocalCopies();

@@ -847,6 +847,184 @@ static void rearm_rejection(int kind) {
     exit(99);
 }
 
+static void limited_staging(void) {
+    uint8_t inline_bytes[5] = {239, 190, 190, 190, 239};
+    uint8_t scratch_bytes[16] = {0};
+    gs_stack inline_cursor = { inline_bytes + 1 };
+    gs_stack scratch = { scratch_bytes };
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&inline_cursor, inline_bytes + 1, 223, 0);
+    uint8_t *raw = gir_control_attempt_stage(gir_control_receiving_current(receiver), (uint8_t *)&scratch,
+        inline_bytes + 4, 3, 1);
+    gir_control_require(inline_cursor.top == inline_bytes + 1 && inline_bytes[1] == 190 &&
+        gir_control_node(raw)->metadata.identity == 223 && gir_control_node(raw)->stack == &scratch);
+    uint8_t *inputs[] = {raw};
+    uint8_t *call = gir_control_call_push(1, inputs, 0, NULL);
+    uint8_t *callee = gir_control_enter();
+    uint8_t *incoming = gir_control_call_param(0);
+    raw = gir_control_receiving_current(incoming);
+    gir_control_require(gir_control_receiving_open(raw) == incoming);
+    raw = gir_control_receiving_current(incoming);
+    *scratch.top++ = 65;
+    *scratch.top++ = 66;
+    ((gir_control_metadata *)raw)->count = 2;
+    gir_control_attempt_finish(raw);
+    gir_control_attempt_return(raw);
+    gir_control_leave(callee);
+    raw = gir_control_call_get(call, 0);
+    gir_control_call_pop(call);
+    gir_control_require(gir_control_node(raw)->staging.cursor == &inline_cursor);
+    gir_control_receiving_drop(receiver);
+    raw = gir_control_attempt_fit(raw, (uint8_t *)&inline_cursor);
+    gir_control_require(inline_bytes[0] == 239 && inline_bytes[1] == 65 && inline_bytes[2] == 66 &&
+        inline_bytes[3] == 190 && inline_bytes[4] == 239 && inline_cursor.top == inline_bytes + 3 &&
+        scratch.top == scratch_bytes && gir_control_node(raw)->metadata.identity == 223 &&
+        !gir_control_node(raw)->staging.cursor && ((gir_control_metadata *)raw)->count == 2);
+    gir_control_attempt_publish(raw);
+    gir_control_leave(scope);
+}
+
+static void limited_staging_renewal(void) {
+    uint8_t inline_bytes[3] = {190, 190, 239};
+    uint8_t scratch_bytes[16] = {0};
+    gs_stack inline_cursor = { inline_bytes };
+    gs_stack scratch = { scratch_bytes };
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&inline_cursor, inline_bytes, 229, 0);
+    uint8_t *raw = gir_control_attempt_stage(gir_control_receiving_current(receiver), (uint8_t *)&scratch,
+        inline_bytes + 2, 2, 1);
+    receiver = gir_control_receiving_open(raw);
+    uint8_t *ticket = gir_control_exit_wait(receiver);
+    for (int retry = 0; retry < 1000; retry++) {
+        gir_control_exit_select(ticket, 0, NULL);
+        uint8_t *guard = gir_control_receiving_open(gir_control_exit_selected(ticket));
+        raw = gir_control_receiving_renew(guard);
+        *scratch.top++ = 65;
+        ((gir_control_metadata *)raw)->count = 1;
+        gir_control_attempt_cancel(gir_control_receiving_cancel(guard, 0, NULL));
+        gir_control_exit_rearm(ticket);
+        gir_control_require(scratch.top == scratch_bytes && inline_cursor.top == inline_bytes &&
+            inline_bytes[0] == 190 && inline_bytes[1] == 190 && node_count(((gir_control_receiving *)receiver)->graph) <= 2);
+    }
+    gir_control_exit_select(ticket, 0, NULL);
+    raw = gir_control_exit_selected(ticket);
+    *scratch.top++ = 67;
+    ((gir_control_metadata *)raw)->count = 1;
+    gir_control_attempt_finish(raw);
+    uint8_t *start = gir_control_exit_prepare(ticket, raw);
+    gir_control_exit_commit(ticket, raw, start);
+    gir_control_exit_release(ticket);
+    gir_control_receiving_drop(receiver);
+    raw = gir_control_attempt_fit(raw, (uint8_t *)&inline_cursor);
+    gir_control_require(inline_bytes[0] == 67 && inline_bytes[1] == 190 && inline_bytes[2] == 239 &&
+        scratch.top == scratch_bytes && inline_cursor.top == inline_bytes + 1);
+    gir_control_attempt_publish(raw);
+    gir_control_leave(scope);
+}
+
+static void limited_staging_replacement(void) {
+    uint8_t inline_bytes[3] = {190, 190, 239};
+    uint8_t scratch_bytes[16] = {0};
+    gs_stack inline_cursor = { inline_bytes };
+    gs_stack scratch = { scratch_bytes };
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&inline_cursor, inline_bytes, 233, 0);
+    uint8_t *raw = gir_control_attempt_stage(gir_control_receiving_current(receiver), (uint8_t *)&scratch,
+        inline_bytes + 2, 2, 1);
+    receiver = gir_control_receiving_open(raw);
+    raw = gir_control_receiving_renew(receiver);
+    *scratch.top++ = 65;
+    ((gir_control_metadata *)raw)->count = 1;
+    gir_control_attempt_finish(raw);
+    gir_control_attempt_return(raw);
+    uint8_t *ticket = gir_control_exit_reserve(receiver, 0, NULL);
+    raw = gir_control_exit_selected(ticket);
+    *scratch.top++ = 66;
+    ((gir_control_metadata *)raw)->count = 1;
+    gir_control_attempt_finish(raw);
+    uint8_t *carried[] = {raw};
+    gir_control_attempt_cancel(gir_control_receiving_cancel(receiver, 1, carried));
+    uint8_t *start = gir_control_exit_prepare(ticket, raw);
+    memmove(start, gir_control_find_lease(raw)->start, 1);
+    scratch.top = start + 1;
+    gir_control_exit_commit(ticket, raw, start);
+    gir_control_exit_release(ticket);
+    raw = gir_control_attempt_fit(raw, (uint8_t *)&inline_cursor);
+    gir_control_require(inline_bytes[0] == 66 && inline_bytes[1] == 190 && inline_bytes[2] == 239 &&
+        scratch.top == scratch_bytes && inline_cursor.top == inline_bytes + 1);
+    gir_control_attempt_publish(raw);
+    gir_control_leave(scope);
+}
+
+static void limited_staging_distinct(void) {
+    uint8_t inline_bytes[2][3] = {{190, 190, 239}, {190, 190, 239}};
+    uint8_t scratch_bytes[2][8] = {{0}, {0}};
+    gs_stack inline_cursor[2] = {{inline_bytes[0]}, {inline_bytes[1]}};
+    gs_stack scratch[2] = {{scratch_bytes[0]}, {scratch_bytes[1]}};
+    uint8_t *scope = gir_control_enter();
+    uint8_t *raw[2];
+    for (int index = 0; index < 2; index++) {
+        uint8_t *receiver = gir_control_receiving_new((uint8_t *)&inline_cursor[index], inline_bytes[index], 233 + index, 0);
+        raw[index] = gir_control_attempt_stage(gir_control_receiving_current(receiver), (uint8_t *)&scratch[index],
+            inline_bytes[index] + 2, 2, 1);
+    }
+    for (int index = 0; index < 2; index++) {
+        *scratch[index].top++ = (uint8_t)(65 + index);
+        ((gir_control_metadata *)raw[index])->count = 1;
+        gir_control_attempt_finish(raw[index]);
+        raw[index] = gir_control_attempt_fit(raw[index], (uint8_t *)&inline_cursor[index]);
+        gir_control_require(inline_bytes[index][0] == 65 + index && inline_bytes[index][1] == 190 && inline_bytes[index][2] == 239);
+        gir_control_attempt_publish(raw[index]);
+    }
+    gir_control_leave(scope);
+}
+
+static void limited_staging_rejection(int kind) {
+    uint8_t inline_bytes[16] = {0};
+    uint8_t scratch_bytes[16] = {0};
+    gs_stack inline_cursor = { inline_bytes };
+    gs_stack scratch = { scratch_bytes };
+    gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&inline_cursor, inline_bytes, 227, 0);
+    uint8_t *raw = gir_control_receiving_current(receiver);
+    if (kind == 1) {
+        receiver = gir_control_receiving_open(raw);
+        raw = gir_control_receiving_renew(receiver);
+    }
+    if (kind == 2) gir_control_exit_wait(receiver);
+    if (kind == 18) gir_control_receiving_new((uint8_t *)&scratch, scratch.top, 237, 0);
+    if (kind == 19) {
+        uint8_t other_inline[3] = {0};
+        gs_stack other_cursor = {other_inline};
+        uint8_t *other = gir_control_receiving_new((uint8_t *)&other_cursor, other_inline, 239, 0);
+        gir_control_attempt_stage(gir_control_receiving_current(other), (uint8_t *)&scratch, other_inline + 3, 3, 1);
+    }
+    if (kind == 3) ((gir_control_metadata *)raw)->count = 1;
+    if (kind == 14) gir_control_find_lease(raw)->prefix = 4;
+    raw = gir_control_attempt_stage(raw, kind == 6 ? (uint8_t *)&inline_cursor : (uint8_t *)&scratch,
+        inline_bytes + (kind == 4 ? 2 : 3), kind == 13 ? INT64_MAX : 3,
+        kind == 5 ? 0 : (kind == 13 ? 2 : 1));
+    uint8_t *parent = NULL;
+    if (kind == 17) {
+        uint8_t *parent_receiver = gir_control_receiving_new((uint8_t *)&scratch, scratch.top, 229, 0);
+        parent = gir_control_receiving_current(parent_receiver);
+        gir_control_attempt_child(parent, raw);
+    }
+    if (kind == 7) gir_control_attempt_fit(raw, (uint8_t *)&inline_cursor);
+    int count = kind == 8 ? 4 : 2;
+    for (int index = 0; index < count; index++) *scratch.top++ = 65;
+    ((gir_control_metadata *)raw)->count = kind == 10 ? 1 : count;
+    gir_control_attempt_finish(raw);
+    if (kind == 17) gir_control_attempt_attach(parent, raw);
+    if (kind == 15) gir_control_attempt_publish(raw);
+    if (kind == 16) gir_control_receiving_transfer(receiver, raw, 0);
+    if (kind == 11) scratch.top++;
+    if (kind == 12) inline_cursor.top++;
+    gs_stack wrong = { inline_bytes };
+    gir_control_attempt_fit(raw, kind == 9 ? (uint8_t *)&wrong : (uint8_t *)&inline_cursor);
+    exit(99);
+}
+
 static void physical_rejection(int kind) {
     uint8_t bytes[128] = {0};
     gs_stack stack = {0};
@@ -939,7 +1117,8 @@ int main(int argc, char **argv) {
         int kind = atoi(argv[1]);
         if (kind <= 10) waiting_rejection(kind);
         else if (kind <= 27) physical_rejection(kind - 10);
-        else rearm_rejection(kind - 27);
+        else if (kind <= 37) rearm_rejection(kind - 27);
+        else limited_staging_rejection(kind - 37);
     }
     normal_call(); cancelled_retries(); bounded_call(); target_handoff(); completed_aliases(); named_owner_bindings();
     cancellation_certificate(); historical_named_source(); displaced_child_cleanup();
@@ -948,7 +1127,7 @@ int main(int argc, char **argv) {
     waiting_calls(0); waiting_calls(1); waiting_selection(0); waiting_selection(1);
     waiting_terminal_release(); waiting_supersession(); cancellation_without_wait(0); cancellation_without_wait(1);
     physical_layout(0, 0); physical_layout(0, 4); physical_layout(4, 0); physical_layout(4, 4);
-    explicit_prefix_adapters(); immutable_named_views(); waiting_rearms(); named_waiting_rearms();
+    explicit_prefix_adapters(); immutable_named_views(); waiting_rearms(); named_waiting_rearms(); limited_staging_distinct(); limited_staging(); limited_staging_renewal(); limited_staging_replacement();
     gir_control_require(gir_control_live_attempts == NULL);
     return 0;
 }

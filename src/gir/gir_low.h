@@ -264,6 +264,8 @@ private:
         int resultPosition = -1;
         int target = -1;
         int binding = -1;
+        int limited = -1;
+        int stageSource = -1;
     };
 
     const GirFunc *hf = nullptr;
@@ -762,7 +764,7 @@ private:
         if (CoreHasConstruction(h.profile)) {
             for (auto &block : hf->blocks) for (auto &instruction : block.insts)
                 if ((instruction.op == GirOp::DestOpen && holds_alternative<GirDestArgReceiver>(instruction.destReceiver)) ||
-                    instruction.op == GirOp::Render)
+                    instruction.op == GirOp::DestStage || instruction.op == GirOp::Render)
                     scratchStacks[instruction.res] = stacks++;
             for (auto &block : hf->blocks) for (auto &instruction : block.insts)
                 if (instruction.op == GirOp::Print) printStacks[&instruction] = stacks++;
@@ -1388,6 +1390,17 @@ private:
         PStoreV(I64(), shape[value].w[2], BinW(CoreBinOp::Add, I64(), count, ConstI(I64(), 1)));
     }
 
+    int InlineCursor(int base, int scope) {
+        GirMember member;
+        member.kind = GirMember::Scalar;
+        member.ty = Ptr();
+        member.scope = scope;
+        member.name = "limited_cursor";
+        auto address = Simple(GirOp::FrameAddr, Ptr(), -1, -1, Member(std::move(member)));
+        PStoreV(Ptr(), address, base);
+        return address;
+    }
+
     void Open(const GirInst &inst) {
         Destination destination;
         destination.type = inst.ty;
@@ -1397,7 +1410,10 @@ private:
             destination.receiverSlot = slot->slot;
             auto &place = places.at(slot->slot);
             destination.source = CreateObject(slot->slot);
-            destination.stack = StackOf(place.stack);
+            if (HT(inst.ty).kind == CoreType::Limited) {
+                destination.limited = Simple(GirOp::FrameAddr, Ptr(), -1, -1, place.members[0]);
+                destination.stack = InlineCursor(LimitedData(destination.limited, inst.ty), hf->slots[slot->slot].scope);
+            } else destination.stack = StackOf(place.stack);
             if (place.kind == Place::Header) destination.header = Simple(GirOp::FrameAddr, Ptr(), -1, -1, place.members[0]);
         } else if (auto global = get_if<GirDestGlobalReceiver>(&inst.destReceiver)) {
             destination.receiverGlobal = global->global;
@@ -1420,6 +1436,9 @@ private:
             destination.stack = shape[reference].w[1];
             if (destination.append || destination.push) destination.oldLength = Simple(GirOp::HdrLen, I64(), destination.header);
         }
+        if (destination.limited >= 0 && inst.knownCount)
+            CheckThen(CmpI(CoreCmpOp::Le, U64(), Conv(W0(*inst.knownCount), I64(), U64()),
+                ConstI(U64(), HT(inst.ty).count)), AbortBlock(GirAbortKind::Capacity, {}, inst.org));
         destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
         auto words = Raw(Control(GirOp::ControlReceivingCurrent,
             NewReceiving(destination.stack, destination.base, destination.type, destination.request)));
@@ -1581,7 +1600,15 @@ private:
         auto element = HT(HT(hvt[inst.a]).elem).elem;
         if (shape[inst.b].source < 0) throw CompileError { "construction copy has no retained storage source" };
         SimpleE(GirOp::SourceCopy, shape[inst.b].source, DestinationId(inst.a));
-        CopyRun(inst.a, base, count, element);
+        auto sourceType = HT(hvt[inst.b]);
+        if (HT(HT(hvt[inst.a]).elem).kind == CoreType::Limited && sourceType.kind == CoreType::Ref && HT(sourceType.elem).kind == CoreType::Arr) {
+            auto bytes = ConstI(I64(), Size(sourceType.elem));
+            auto stack = shape[inst.a].w[0];
+            auto target = Simple(GirOp::StackMark, Ptr(), stack);
+            SimpleE(GirOp::StackBump, stack, bytes);
+            Copy(target, base, Size(sourceType.elem), true);
+            ForCount(ConstI(I64(), HT(sourceType.elem).count), [&](int) { IncrementDestination(inst.a); });
+        } else CopyRun(inst.a, base, count, element);
     }
 
     void RepeatDestination(const GirInst &inst) {
@@ -1605,6 +1632,7 @@ private:
         if (destination.push) count = ConstI(I64(), 1);
         if (destination.append || destination.push) count = BinW(CoreBinOp::Add, I64(), destination.oldLength, count, true, org);
         if (destination.header >= 0) SimpleE(GirOp::HdrSetLen, destination.header, count);
+        if (destination.limited >= 0) SetLimitedLength(destination.limited, destination.type, count);
         if (destination.receiverSlot >= 0 && places[destination.receiverSlot].kind == Place::Dynamic)
             SimpleE(GirOp::LocalSet, shape[value].w[1], -1, places[destination.receiverSlot].members[0]);
         if (destination.receiverGlobal >= 0 && l.lowglobals[destination.receiverGlobal].kind == GirMember::Dynamic)
@@ -1625,8 +1653,36 @@ private:
             });
             return;
         }
-        if (inst.op == GirOp::DestStage || inst.op == GirOp::DestFit)
-            throw GirLowerUnsupported { "limited-stage", hf->name, inst.org };
+        if (inst.op == GirOp::DestStage) {
+            const GirInst *opened = nullptr;
+            for (auto &block : hf->blocks) for (auto &source : block.insts)
+                if (source.res == inst.a && GirDefinesValue(source)) opened = &source;
+            if (!opened || opened->op != GirOp::DestOpen)
+                throw GirLowerUnsupported { "limited-stage-after-exposure", hf->name, inst.org };
+            auto &destination = destinations.at(carrierRoots[inst.a]);
+            if (destination.limited < 0) throw CompileError { "capacity stage has no inline Limited receiver" };
+            auto &array = HT(destination.type);
+            if (Size(array.elem) <= 0) throw GirLowerUnsupported { "limited-stage-zero-sized-element", hf->name, inst.org };
+            auto inlineEnd = PtrAt(shape[inst.a].w[1], ConstI(I64(), array.count), Size(array.elem));
+            auto staged = Control(GirOp::ControlAttemptStage, shape[inst.a].w[2], StackOf(scratchStacks.at(inst.res)),
+                { inlineEnd, ConstI(I64(), array.count), ConstI(I64(), Size(array.elem)) });
+            destination.stageSource = NewSource(TraceId(GirTraceKind::Storage));
+            Define(inst, Raw(staged));
+            Event(GirEventKind::Stage, { DestinationId(inst.res) }, GirEventReason::CapacityCheck);
+            return;
+        }
+        if (inst.op == GirOp::DestFit) {
+            auto &destination = destinations.at(carrierRoots[inst.a]);
+            if (destination.limited < 0 || destination.stageSource < 0)
+                throw CompileError { "capacity fit has no inline Limited stage" };
+            auto count = DestinationCount(inst.a);
+            CheckThen(CmpI(CoreCmpOp::Le, U64(), Conv(count, I64(), U64()), ConstI(U64(), HT(destination.type).count)),
+                AbortBlock(GirAbortKind::Capacity, {}, inst.org));
+            auto fitted = Control(GirOp::ControlAttemptFit, shape[inst.a].w[2], destination.stack);
+            Define(inst, Raw(fitted));
+            SimpleE(GirOp::SourceCopy, destination.stageSource, DestinationId(inst.res));
+            return;
+        }
         if (inst.op == GirOp::DestRelocate && inst.reason == GirEventReason::HeaderRemoval) {
             Control(GirOp::ControlAttemptRemoveHeader, shape[inst.a].w[2]);
             return;

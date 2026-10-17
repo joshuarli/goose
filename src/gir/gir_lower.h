@@ -283,7 +283,12 @@ private:
     vector<pair<vector<GirTypeId>, vector<GirTypeId>>> sigs;
     vector<pair<GirTypeId, CoreVarKind>> globaltypes;
     vector<char> noReturn;
-    vector<pair<int, int>> sourceValueRecipes;
+    struct SourceValueRootRecipe {
+        enum Kind { ConditionalScope, RefSliceVar } kind;
+        int value;
+        int source;
+    };
+    vector<SourceValueRootRecipe> sourceValueRecipes;
 
     static bool Plain(const CoreStmt &s) {
         switch (s.kind) {
@@ -563,7 +568,17 @@ private:
             }
             case CoreExprKind::Read: {
                 auto r = LowerPlace(*e.place);
-                return Def(GirOp::Load, r);
+                auto value = Def(GirOp::Load, r);
+                if (cur >= 0 && currentImpl >= 0 && e.place && e.place->kind == CorePlace::Local) {
+                    auto variable = e.place->index;
+                    auto &implementation = core.impls[currentImpl];
+                    if (variable >= 0 && variable < (int)implementation.vars.size()) {
+                        auto &type = core.Type(implementation.vars[variable].type);
+                        if (type.kind == CoreType::Ref && core.Type(type.elem).kind == CoreType::Slice)
+                            sourceValueRecipes.push_back({ SourceValueRootRecipe::RefSliceVar, value, variable });
+                    }
+                }
+                return value;
             }
             case CoreExprKind::Ref: {
                 auto r = LowerPlace(*e.place);
@@ -732,7 +747,7 @@ private:
                 if (cur >= 0) {
                     auto kind = mod.Type(ValTy(joined)).kind;
                     if (kind == CoreType::Ref || kind == CoreType::Slice || kind == CoreType::View)
-                        sourceValueRecipes.push_back({ joined, e.then->scope });
+                        sourceValueRecipes.push_back({ SourceValueRootRecipe::ConditionalScope, joined, e.then->scope });
                 }
                 return joined;
             }
@@ -960,7 +975,31 @@ private:
         return expression.type >= 0 && GirNonfixed(mod, expression.type);
     }
 
-    int OpenDestination(const CoreExpr &expression, GirDestReceiver receiver, CoreRequest request, int org) {
+    optional<int64_t> LiteralConstructionCount(const CoreExpr &expression) const {
+        switch (expression.kind) {
+            case CoreExprKind::Bytes: return expression.bytes.size();
+            case CoreExprKind::Arr: return expression.elems.size();
+            case CoreExprKind::Fill:
+                if (mod.Type(expression.type).kind == CoreType::Arr) return mod.Type(expression.type).count;
+                return nullopt;
+            case CoreExprKind::String: {
+                int64_t count = 0;
+                for (auto &part : expression.print) {
+                    if (part.kind != CorePrintArg::Text) return nullopt;
+                    count += part.str.size();
+                }
+                return count;
+            }
+            case CoreExprKind::Copy: {
+                auto type = core.PlaceType(currentImpl, *expression.place);
+                return type && mod.Type(*type).kind == CoreType::Arr ? optional<int64_t>(mod.Type(*type).count) : nullopt;
+            }
+            default: return nullopt;
+        }
+    }
+
+    int OpenDestination(const CoreExpr &expression, GirDestReceiver receiver, CoreRequest request, int org,
+                        optional<int64_t> materializedCount = nullopt) {
         GirInst open;
         open.op = GirOp::DestOpen;
         open.destReceiver = std::move(receiver);
@@ -972,10 +1011,8 @@ private:
         if (auto append = get_if<GirDestAppendReceiver>(&open.destReceiver)) open.ty = mod.Type(ValTy(append->reference)).elem;
         if (auto push = get_if<GirDestPushReceiver>(&open.destReceiver)) open.ty = mod.Type(mod.Type(ValTy(push->reference)).elem).elem;
         open.request = request;
-        if (expression.kind == CoreExprKind::Bytes)
-            open.knownCount = ConstInt(I64(), to_string(expression.bytes.size()));
-        if (expression.kind == CoreExprKind::Arr)
-            open.knownCount = ConstInt(I64(), to_string(expression.elems.size()));
+        auto count = materializedCount ? materializedCount : LiteralConstructionCount(expression);
+        if (count) open.knownCount = ConstInt(I64(), to_string(*count));
         open.org = org;
         return EmitDef(std::move(open));
     }
@@ -1777,9 +1814,52 @@ private:
         return values;
     }
 
+    bool OrdinaryFixedProducer(const CoreExpr &expression) const {
+        if (expression.type < 0 || mod.Type(expression.type).kind != CoreType::Arr || !GirFlat(mod, expression.type)) return false;
+        return !LiteralConstructionCount(expression);
+    }
+
+    int CompleteFixedSnapshot(int snapshot, int destination, int org) {
+        auto receiving = OpenReceiving(destination);
+        destination = RenewReceiving(receiving);
+        GirInst write;
+        write.op = GirOp::DestSnapshot;
+        write.a = destination;
+        write.b = snapshot;
+        write.org = org;
+        EmitEffect(std::move(write));
+        return FinishDestination(destination, org);
+    }
+
     void LowerConstructionValue(const CoreExpr &expression, GirDestReceiver receiver, int org) {
+        if (OrdinaryFixedProducer(expression)) {
+            auto snapshot = LowerExpr(expression);
+            if (cur < 0) return;
+            auto destination = OpenDestination(expression, std::move(receiver), CoreRequest::Value, org,
+                mod.Type(ValTy(snapshot)).count);
+            PublishDestination(CompleteFixedSnapshot(snapshot, destination, org), org);
+            return;
+        }
         auto destination = OpenDestination(expression, std::move(receiver), CoreRequest::Value, org);
+        auto staged = mod.Type(mod.Type(ValTy(destination)).elem).kind == CoreType::Limited && !LiteralConstructionCount(expression);
+        if (staged) {
+            GirInst stage;
+            stage.op = GirOp::DestStage;
+            stage.a = destination;
+            stage.reason = GirEventReason::CapacityCheck;
+            stage.org = org;
+            destination = EmitDef(std::move(stage));
+        }
         auto completed = LowerConstruct(expression, destination, org);
+        if (cur >= 0 && staged) {
+            GirInst fit;
+            fit.op = GirOp::DestFit;
+            fit.a = completed;
+            fit.org = org;
+            auto fitted = EmitDef(std::move(fit));
+            rawReceivings[fitted] = rawReceivings.at(completed);
+            completed = fitted;
+        }
         if (cur >= 0) PublishDestination(completed, org);
     }
 
@@ -2811,13 +2891,31 @@ private:
             out.slots->push_back({ row.first, refSlice ? vector<CoreRootRef> { { CoreRootRef::Param, row.first } } : ceiling(row.second) });
         }
         if (!sourceValueRecipes.empty()) {
-            auto sourceRows = CoreSourceRootProjection(core, &impl, &context).Run(impl.body);
+            CoreSourceRootProjection::Rows sourceRows;
+            if (any_of(sourceValueRecipes.begin(), sourceValueRecipes.end(), [](auto &recipe) {
+                    return recipe.kind == SourceValueRootRecipe::ConditionalScope;
+                }))
+                sourceRows = CoreSourceRootProjection(core, &impl, &context).Run(impl.body);
             out.values.emplace();
-            for (auto &[value, scope] : sourceValueRecipes) {
-                auto source = sourceRows.find(scope);
-                if (source == sourceRows.end())
-                    throw CompileError { "internal compiler error: missing source value-root projection" };
-                out.values->push_back({ value, ceiling(source->second) });
+            for (auto &recipe : sourceValueRecipes) {
+                if (recipe.kind == SourceValueRootRecipe::ConditionalScope) {
+                    auto source = sourceRows.find(recipe.source);
+                    if (source == sourceRows.end())
+                        throw CompileError { "internal compiler error: missing source value-root projection" };
+                    out.values->push_back({ recipe.value, ceiling(source->second) });
+                    continue;
+                }
+                vector<CoreRootRef> roots;
+                auto annotation = find_if(context.varroots.begin(), context.varroots.end(), [&](auto &row) {
+                    return row.first == recipe.source;
+                });
+                if (annotation != context.varroots.end()) roots = annotation->second;
+                if (recipe.source >= 0 && recipe.source < (int)impl.params.size() &&
+                    impl.params[recipe.source].var == recipe.source) {
+                    CoreRootRef parameter { CoreRootRef::Param, recipe.source };
+                    if (find(roots.begin(), roots.end(), parameter) == roots.end()) roots.push_back(parameter);
+                }
+                out.values->push_back({ recipe.value, std::move(roots) });
             }
         }
         return out;
@@ -2912,11 +3010,13 @@ private:
         if (!sourceValueRecipes.empty()) {
             auto sourceRows = CoreSourceRootProjection(core, nullptr, nullptr).Run(*g.init);
             out.init.roots.values.emplace();
-            for (auto &[value, scope] : sourceValueRecipes) {
-                auto source = sourceRows.find(scope);
+            for (auto &recipe : sourceValueRecipes) {
+                if (recipe.kind != SourceValueRootRecipe::ConditionalScope)
+                    throw CompileError { "internal compiler error: initializer read has no source variable" };
+                auto source = sourceRows.find(recipe.source);
                 if (source == sourceRows.end())
                     throw CompileError { "internal compiler error: missing initializer value-root projection" };
-                out.init.roots.values->push_back({ value, source->second });
+                out.init.roots.values->push_back({ recipe.value, source->second });
             }
         }
         out.init.summary.unknown = true;

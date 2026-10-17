@@ -235,10 +235,12 @@ private:
         if (constructionTrace) {
             out += "static int64_t gir_control_identity(void) { return gir_trace_destination++; }\n";
             out += "static void gir_control_event(const char *name, int64_t identity) { gir_trace_record(name, \"\", 1, &identity); }\n";
+            out += "static void gir_control_stage(int64_t identity) { gir_trace_record(\"stage\", \"capacity-check\", 1, &identity); }\n";
             out += "static void gir_control_header_removal(int64_t identity) { gir_trace_record(\"relocate\", \"header-removal\", 1, &identity); }\n";
         } else {
             out += "static int64_t gir_control_identity(void) { return 0; }\n";
             out += "static void gir_control_event(const char *name, int64_t identity) { (void)name; (void)identity; }\n";
+            out += "static void gir_control_stage(int64_t identity) { (void)identity; }\n";
             out += "static void gir_control_header_removal(int64_t identity) { (void)identity; }\n";
         }
         out += R"GIRCONTROL(
@@ -265,6 +267,11 @@ typedef struct gir_control_snapshot {
     int64_t count, progress, prefix, receiving_prefix;
     gir_control_attempt *expected;
 } gir_control_snapshot;
+typedef struct gir_control_staging {
+    gs_stack *cursor;
+    uint8_t *base, *end;
+    int64_t capacity, element_bytes;
+} gir_control_staging;
 struct gir_control_attempt {
     gir_control_metadata metadata;
     int64_t progress;
@@ -280,6 +287,7 @@ struct gir_control_attempt {
     uint8_t *start, *receiving_start, *write_end, *rollback_end;
     int64_t prefix, receiving_prefix;
     gir_control_snapshot resumption, extension_snapshot;
+    gir_control_staging staging;
 };
 struct gir_control_graph {
     size_t references;
@@ -609,13 +617,37 @@ static gir_control_lease *gir_control_take_lease(uint8_t *metadata) {
     }
     return lease;
 }
-static void gir_control_drop_lease(uint8_t *metadata) {
-    gir_control_lease *lease = gir_control_take_lease(metadata);
+static void gir_control_release_lease(gir_control_lease *lease) {
     gir_control_attempt *attempt = lease->attempt;
     gir_control_graph *graph = attempt->graph;
     free(lease);
     gir_control_node_release(attempt);
     gir_control_graph_release(graph);
+}
+static void gir_control_drop_lease(uint8_t *metadata) {
+    gir_control_release_lease(gir_control_take_lease(metadata));
+}
+static uint8_t *gir_control_rebase_lease(gir_control_lease *previous) {
+    gir_control_attempt *attempt = previous->attempt;
+    gir_control_lease *lease = (gir_control_lease *)gir_control_alloc(sizeof(*lease));
+    lease->metadata = attempt->metadata;
+    lease->progress = attempt->progress;
+    lease->start = attempt->start;
+    lease->end = attempt->write_end;
+    lease->prefix = attempt->prefix;
+    lease->attempt = attempt;
+    lease->receiving = previous->receiving;
+    lease->mode = previous->mode;
+    lease->cleanup = GIR_CONTROL_NO_CLEANUP;
+    gir_control_require(gir_control_scope_top->next_lease != SIZE_MAX);
+    lease->sequence = gir_control_scope_top->next_lease++;
+    lease->next = gir_control_scope_top->leases;
+    gir_control_scope_top->leases = lease;
+    attempt->active = lease;
+    gir_control_node_retain(attempt);
+    gir_control_graph_retain(attempt->graph);
+    gir_control_release_lease(previous);
+    return (uint8_t *)&lease->metadata;
 }
 static void gir_control_owner_retain(gir_control_owner *owner) {
     if (!owner) return;
@@ -1027,11 +1059,72 @@ static void gir_control_attempt_normalize(uint8_t *metadata) {
     gir_control_require(attempt->receiving_prefix == 0);
     gir_control_remove_header_lease(lease);
 }
+static uint8_t *gir_control_attempt_stage(uint8_t *metadata, uint8_t *scratch_stack,
+                                          uint8_t *inline_end, int64_t capacity, int64_t element_bytes) {
+    gir_control_lease *lease = gir_control_find_lease(metadata);
+    gir_control_attempt *attempt = lease->attempt;
+    gir_control_receiving *receiving = lease->receiving;
+    gir_control_capture(attempt);
+    gir_control_require(attempt->active == lease && lease->cleanup == GIR_CONTROL_NO_CLEANUP &&
+        lease->progress == GIR_CONTROL_OPEN && lease->metadata.count == 0 && lease->prefix == 0 &&
+        !attempt->staging.cursor && receiving && receiving->scope == gir_control_scope_top &&
+        !receiving->exposed && !receiving->input && !receiving->consumed && !receiving->handoff &&
+        !receiving->unselected && !attempt->graph->tickets && !attempt->parent && !attempt->expected &&
+        !attempt->successor && !attempt->resumable && !attempt->extension &&
+        attempt->receiving_prefix == 0 && attempt->receiving_start == lease->start &&
+        attempt->stack->top == lease->start && lease->end == lease->start &&
+        capacity >= 0 && element_bytes > 0 && capacity <= INT64_MAX / element_bytes);
+    uintptr_t base = (uintptr_t)lease->start, end = (uintptr_t)inline_end;
+    gir_control_require(end >= base && end - base == (uint64_t)capacity * (uint64_t)element_bytes);
+    gs_stack *scratch = (gs_stack *)scratch_stack;
+    gir_control_require(scratch && scratch != attempt->stack &&
+        ((uintptr_t)scratch->top < base || (uintptr_t)scratch->top >= end) && scratch->top != lease->start);
+    for (gir_control_lease *owned = gir_control_scope_top->leases; owned; owned = owned->next)
+        gir_control_require(owned->attempt->stack != scratch);
+    for (gir_control_receiving *owned = gir_control_scope_top->receivers; owned; owned = owned->next)
+        for (gir_control_attempt *node = owned->graph->attempts; node; node = node->next)
+            gir_control_require(node->stack != scratch);
+    for (gir_control_owner_ref *owned = gir_control_scope_top->owners; owned; owned = owned->next)
+        gir_control_require(owned->owner->stack != scratch);
+    lease = gir_control_take_lease(metadata);
+    attempt->staging = (gir_control_staging) { attempt->stack, lease->start, inline_end, capacity, element_bytes };
+    attempt->stack = scratch;
+    attempt->start = attempt->receiving_start = attempt->write_end = attempt->rollback_end = scratch->top;
+    return gir_control_rebase_lease(lease);
+}
+static uint8_t *gir_control_attempt_fit(uint8_t *metadata, uint8_t *inline_cursor) {
+    gir_control_lease *lease = gir_control_find_lease(metadata);
+    gir_control_attempt *attempt = lease->attempt;
+    gir_control_capture(attempt);
+    gir_control_staging stage = attempt->staging;
+    gir_control_require(attempt->active == lease && lease->cleanup == GIR_CONTROL_NO_CLEANUP &&
+        lease->progress == GIR_CONTROL_BUILT && lease->prefix == 0 && stage.cursor &&
+        (uint8_t *)stage.cursor == inline_cursor && !attempt->graph->tickets &&
+        lease->metadata.count >= 0 && lease->metadata.count <= stage.capacity && stage.element_bytes > 0 &&
+        stage.capacity <= INT64_MAX / stage.element_bytes && stage.cursor->top == stage.base &&
+        attempt->stack != stage.cursor && attempt->stack->top == lease->end &&
+        attempt->receiving_start == lease->start);
+    uint64_t bytes = (uint64_t)lease->metadata.count * (uint64_t)stage.element_bytes;
+    uintptr_t start = (uintptr_t)lease->start, end = (uintptr_t)lease->end;
+    uintptr_t base = (uintptr_t)stage.base, bound = (uintptr_t)stage.end;
+    gir_control_require(end >= start && end - start == bytes && bound >= base &&
+        bound - base == (uint64_t)stage.capacity * (uint64_t)stage.element_bytes && bytes <= bound - base &&
+        (end <= base || start >= bound));
+    lease = gir_control_take_lease(metadata);
+    if (bytes) memmove(stage.base, lease->start, (size_t)bytes);
+    attempt->stack->top = lease->start;
+    attempt->stack = stage.cursor;
+    attempt->start = attempt->receiving_start = attempt->rollback_end = stage.base;
+    attempt->write_end = stage.base + bytes;
+    attempt->stack->top = attempt->write_end;
+    memset(&attempt->staging, 0, sizeof(attempt->staging));
+    return gir_control_rebase_lease(lease);
+}
 static void gir_control_receiving_transfer(uint8_t *control, uint8_t *metadata, uint8_t mode) {
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_attempt *attempt = gir_control_node(metadata);
     gir_control_capture(attempt);
-    gir_control_require(receiving->graph == attempt->graph && attempt->progress == GIR_CONTROL_BUILT);
+    gir_control_require(receiving->graph == attempt->graph && attempt->progress == GIR_CONTROL_BUILT && !attempt->staging.cursor);
     if (receiving->handoff) {
         gir_control_require(receiving->handoff == attempt && receiving->handoff_mode == mode);
         return;
@@ -1101,6 +1194,7 @@ static gir_control_attempt *gir_control_renew_node(gir_control_receiving *receiv
     renewed->receiving_start = snapshot.receiving_start;
     renewed->receiving_prefix = snapshot.receiving_prefix;
     renewed->rollback_end = snapshot.rollback_end;
+    renewed->staging = attempt->staging;
     renewed->extension = attempt->extension;
     renewed->extension_snapshot = attempt->extension_snapshot;
     gir_control_set_parent(renewed, attempt->parent, attempt->parent_kind);
@@ -1116,6 +1210,7 @@ static gir_control_attempt *gir_control_renew_node(gir_control_receiving *receiv
         attempt->stack->top += offset + prefix;
     }
     gir_control_event("begin", renewed->metadata.identity);
+    if (renewed->staging.cursor) gir_control_stage(renewed->metadata.identity);
     if (receiving->boundary == attempt) {
         gir_control_node_retain(renewed);
         gir_control_node_release(receiving->boundary);
@@ -1288,6 +1383,7 @@ static void gir_control_exit_select(uint8_t *token, uint8_t alias, uint8_t *bind
             gir_control_identity(), frontier->prefix);
         selected->receiving_start = start - receiving->view_offset;
         selected->receiving_prefix = frontier->receiving_prefix;
+        selected->staging = frontier->staging;
         gir_control_set_parent(selected, frontier, GIR_CONTROL_REPLACEMENT);
     }
     gir_control_ticket_snapshot(ticket, boundary, frontier, selected);
@@ -1726,6 +1822,7 @@ static void gir_control_attempt_attach(uint8_t *parent_metadata, uint8_t *child_
     gir_control_capture(parent);
     gir_control_capture(child);
     gir_control_require(parent->progress == GIR_CONTROL_SUSPENDED && child->progress == GIR_CONTROL_BUILT &&
+                        !child->staging.cursor &&
                         parent->expected && gir_control_resolve(parent->expected) == child &&
                         child->parent_kind == GIR_CONTROL_CHILD && child->parent == parent);
     parent->expected = NULL;
@@ -1739,7 +1836,7 @@ static void gir_control_attempt_attach(uint8_t *parent_metadata, uint8_t *child_
 static void gir_control_attempt_publish(uint8_t *metadata) {
     gir_control_attempt *attempt = gir_control_node(metadata);
     gir_control_capture(attempt);
-    gir_control_require(attempt->progress == GIR_CONTROL_BUILT && !attempt->graph->tickets);
+    gir_control_require(attempt->progress == GIR_CONTROL_BUILT && !attempt->graph->tickets && !attempt->staging.cursor);
     gir_control_progress(attempt, GIR_CONTROL_PUBLISHED);
     gir_control_graph *graph = attempt->graph;
     gir_control_close_graph_handles(graph);
