@@ -1330,6 +1330,69 @@ void Valid(GirModule module) {
     assert(!violation);
 }
 
+void RawCompletionAliasesPreserveTheWritingPhase() {
+    auto core = Fixture("adapted-open");
+    auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    Valid(high);
+    auto original = GirToLow(high).Lower();
+    Valid(original);
+    enum class Alias { Direct, Local, Branch };
+    for (auto transport : { Alias::Direct, Alias::Local, Alias::Branch }) for (bool repeated : { false, true }) {
+        auto candidate = original;
+        bool changed = false;
+        for (auto &function : candidate.funcs) {
+            int next = 0;
+            for (auto &block : function.blocks) {
+                for (auto [value, type] : block.params) next = max(next, value + 1);
+                for (auto &instruction : block.insts) if (GirDefinesValue(instruction)) next = max(next, instruction.res + 1);
+            }
+            for (size_t block = 0; block < function.blocks.size(); block++) {
+                auto &instructions = function.blocks[block].insts;
+                auto finish = find_if(instructions.begin(), instructions.end(), [](const auto &instruction) {
+                    return instruction.op == GirOp::ControlAttemptFinish;
+                });
+                if (finish == instructions.end()) continue;
+                auto completed = *finish;
+                auto position = finish - instructions.begin();
+                if (transport == Alias::Direct) {
+                    if (repeated) instructions.insert(finish + 1, completed);
+                } else if (transport == Alias::Local) {
+                    auto member = (int)function.members.size();
+                    function.members.push_back(GirMember { .kind = GirMember::Scalar, .ty = candidate.PtrType(), .scope = 0 });
+                    GirInst saved; saved.op = GirOp::LocalSet; saved.idx = member; saved.a = completed.a;
+                    GirInst restored; restored.op = GirOp::LocalGet; restored.res = next; restored.idx = member;
+                    auto aliasFinish = completed; aliasFinish.a = next;
+                    if (repeated) {
+                        instructions.insert(instructions.begin() + position, saved);
+                        instructions.insert(instructions.begin() + position + 2, { restored, aliasFinish });
+                    } else {
+                        instructions[position] = aliasFinish;
+                        instructions.insert(instructions.begin() + position, { saved, restored });
+                    }
+                } else {
+                    GirBlock continuation { { { next, candidate.PtrType() } }, vector<GirInst>(finish, instructions.end()) };
+                    instructions.erase(finish, instructions.end());
+                    GirInst nextBlock; nextBlock.op = GirOp::Br; nextBlock.idx = (int)function.blocks.size(); nextBlock.vals = { completed.a };
+                    instructions.push_back(std::move(nextBlock));
+                    if (repeated) {
+                        auto aliasFinish = completed; aliasFinish.a = next;
+                        continuation.insts.insert(continuation.insts.begin() + 1, aliasFinish);
+                    } else continuation.insts.front().a = next;
+                    function.blocks.push_back(std::move(continuation));
+                }
+                changed = true;
+                break;
+            }
+            if (changed) break;
+        }
+        auto violation = GirVerifier(candidate).Verify();
+        if (repeated)
+            assert(changed && violation && violation->code == "GIR-V090" &&
+                violation->message.find("finish does not own an active writer") != string::npos);
+        else assert(changed && !violation);
+    }
+}
+
 }
 
 int main(int argc, char **argv) try {
@@ -1379,6 +1442,7 @@ int main(int argc, char **argv) try {
         Valid(high);
         Valid(GirToLow(high).Lower());
     }
+    RawCompletionAliasesPreserveTheWritingPhase();
     printf("compiler_gir_reservations ok\n");
 } catch (const CompileError &error) {
     fprintf(stderr, "%s\n", error.msg.c_str());
