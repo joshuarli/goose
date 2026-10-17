@@ -201,4 +201,34 @@ theorem ReflectMFuel.call_op {cx : FnCtx} {fr : GIR.Frame} {callee : FnId}
   rw [step] at run
   exact call.map RVal.val result nonTimeout run
 
+theorem ReflectAtFuel.bind {cx : FnCtx} {pt : Pt} {fr : GIR.Frame}
+    {source₁ : Nat → M α} {source₂ : α → Nat → M β}
+    {p : α → St → Pt → GIR.Frame → Prop} {q : β → St → Pt → GIR.Frame → Prop} {state : St} {fuel : Nat}
+    (first : ReflectAtFuel fuel cx pt fr source₁ p state)
+    (second : ∀ n value after pt' fr', source₁ n state = .ok value after →
+      p value after pt' fr' → ∀ residual, residual ≤ fuel →
+      ReflectAtFuel residual cx pt' fr' (source₂ value) q after)
+    (mono₁ : FuelMonotone source₁)
+    (mono₂ : ∀ value, FuelMonotone (source₂ value)) :
+    ReflectAtFuel fuel cx pt fr (fun n => source₁ n >>= fun value => source₂ value n) q state := by
+  intro result hresult hrun
+  rcases first result hresult hrun with h | h
+  · obtain ⟨n,value,after,pt',fr',residual,hn,hp,hle,hr⟩ := h
+    rcases second n value after pt' fr' hn hp residual hle result hresult hr with h | h
+    · obtain ⟨k,value',after',pt'',fr'',residual',hk,hq,hle',hr'⟩ := h
+      refine Or.inl ⟨max n k,value',after',pt'',fr'',residual',?_,hq,Nat.le_trans hle' hle,hr'⟩
+      change (source₁ (max n k) >>= fun value => source₂ value (max n k)) state = _
+      rw [bind_apply, (mono₁ n (max n k) (Nat.le_max_left _ _) state).1 value after hn]
+      exact (mono₂ value k (max n k) (Nat.le_max_right _ _) after).1 value' after' hk
+    · obtain ⟨k,stop,after',hk,hr'⟩ := h
+      refine Or.inr ⟨max n k,stop,after',?_,hr'⟩
+      change (source₁ (max n k) >>= fun value => source₂ value (max n k)) state = _
+      rw [bind_apply, (mono₁ n (max n k) (Nat.le_max_left _ _) state).1 value after hn]
+      exact ((mono₂ value k (max n k) (Nat.le_max_right _ _) after).2 stop after' hk).resolve_left
+        (by cases stop <;> simp [isTimeout] at *; exact (hresult after' hr').elim)
+  · obtain ⟨n,stop,after,hn,hr⟩ := h
+    refine Or.inr ⟨n,stop,after,?_,hr⟩
+    change (source₁ n >>= fun value => source₂ value n) state = _
+    rw [bind_apply, hn]
+
 end Goose.Lower
