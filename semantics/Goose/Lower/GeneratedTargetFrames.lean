@@ -201,6 +201,22 @@ theorem TermEdgesFramed.extend {loop : Option LoopCtx} {base current after : LS}
     exact oldFrames source previous term target previousRow previousTerm successor targetBound
   · exact Or.inr frame
 
+theorem TermEdgesFramed.rebase {outer inner : Option LoopCtx} {base middle after : LS}
+    (oldFrames : TermEdgesFramed outer base middle)
+    (newFrames : TermEdgesFramed inner middle after)
+    (extension : base.Ext middle)
+    (transfer : ∀ target, LoopBuilderFrameTarget inner target →
+      LoopBuilderFrameTarget outer target ∨ base.blocks.size ≤ target) :
+    TermEdgesFramed outer base after := by
+  intro source body term target row member successor targetBound
+  have middleBound := Nat.lt_of_lt_of_le targetBound extension.1
+  rcases newFrames source body term target row member successor middleBound with previous | innerTarget
+  · rcases previous with ⟨old, oldRow, oldMember⟩
+    exact oldFrames source old term target oldRow oldMember successor targetBound
+  · rcases transfer target innerTarget with outerTarget | fresh
+    · exact Or.inr outerTarget
+    · exact False.elim (Nat.not_lt_of_ge fresh targetBound)
+
 theorem TermEdgesFramed.compose {loop : Option LoopCtx} {base current after : LS}
     (oldFrames : TermEdgesFramed loop base current)
     (newFrames : TermEdgesFramed none current after)
@@ -330,6 +346,13 @@ theorem generatedTargetFrame_emitTerm (loop : Option LoopCtx) (term : Term)
   have advancing := (advB_emitTerm term env current result after run).ext
   exact ⟨oldFrames.emitTermAt run (fun target successor targetBound =>
     targets base target successor targetBound), advancing⟩
+
+theorem generatedTargetFrame_emitNoSuccessors (loop : Option LoopCtx) (term : Term)
+    (noSuccessors : term.successors = []) : GeneratedTargetFrameRun loop (emitTerm term) := by
+  apply generatedTargetFrame_emitTerm loop term
+  intro base target successor targetBound
+  rw [noSuccessors] at successor
+  cases successor
 
 theorem generatedTargetFrame_emitDef (loop : Option LoopCtx) (op : Op) :
     GeneratedTargetFrameRun loop (emitDef op) := by

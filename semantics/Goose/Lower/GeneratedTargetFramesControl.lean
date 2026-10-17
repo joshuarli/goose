@@ -38,6 +38,51 @@ theorem newBlock_fresh {base state : LS} {types : List VTy}
   rw [← id]
   exact baseState.1
 
+theorem newBlock_params {types : List VTy} {env : LEnv} {before after : LS}
+    {result : BlockId × List ValueId}
+    (run : newBlock types env before = (result, after)) :
+    ∃ block, after.blocks[result.1]? = some block ∧ block.params = result.2.zip types := by
+  rw [newBlock_run_general] at run
+  rcases Prod.mk.inj run with ⟨rfl, rfl⟩
+  refine ⟨⟨(paramIds types before.vals).zip types, #[]⟩, ?_, rfl⟩
+  simp
+
+theorem fork_emptyRows {condition : ValueId} {env : LEnv} {before after : LS}
+    {result : BlockId × BlockId}
+    (run : fork condition env before = (result, after)) :
+    (∃ body, after.blocks[result.1]? = some body ∧ body.params = []) ∧
+      (∃ exit, after.blocks[result.2]? = some exit ∧ exit.params = []) := by
+  unfold fork at run
+  simp only [bind_eq] at run
+  obtain ⟨⟨body, bodyParams⟩, first, firstRun, tail⟩ := run
+  obtain ⟨⟨exit, exitParams⟩, second, secondRun, tail⟩ := tail
+  obtain ⟨ignored, branched, branchRun, finished⟩ := tail
+  rw [pure_run] at finished
+  obtain ⟨resultEq, afterEq⟩ := Prod.mk.inj finished
+  have bodyParamsEmpty : bodyParams = [] := by
+    rw [newBlock_run_general] at firstRun
+    have resultEq := (Prod.mk.inj firstRun).1
+    simpa [paramIds] using (congrArg Prod.snd resultEq).symm
+  have exitParamsEmpty : exitParams = [] := by
+    rw [newBlock_run_general] at secondRun
+    have resultEq := (Prod.mk.inj secondRun).1
+    simpa [paramIds] using (congrArg Prod.snd resultEq).symm
+  have firstExt := (advB_newBlock0 env before (body, bodyParams) first firstRun).ext
+  have secondExt := (advB_newBlock0 env first (exit, exitParams) second secondRun).ext
+  have branchExt := (advB_emitTerm (.condbr condition body [] exit []) env second () branched branchRun).ext
+  subst result
+  subst after
+  obtain ⟨bodyBlock, bodyAt, bodyShape⟩ := newBlock_params firstRun
+  obtain ⟨exitBlock, exitAt, exitShape⟩ := newBlock_params secondRun
+  have bodyAt' : first.blocks[body]? = some bodyBlock := by simpa using bodyAt
+  have exitAt' : second.blocks[exit]? = some exitBlock := by simpa using exitAt
+  have bodyFinal := (secondExt.trans branchExt).2 body bodyBlock bodyAt'
+  have exitFinal := branchExt.2 exit exitBlock exitAt'
+  rcases bodyFinal with ⟨bodyAfter, bodyAt', bodyEq, _⟩
+  rcases exitFinal with ⟨exitAfter, exitAt', exitEq, _⟩
+  exact ⟨⟨bodyAfter, bodyAt', bodyEq.trans (by simpa [bodyParamsEmpty] using bodyShape)⟩,
+    ⟨exitAfter, exitAt', exitEq.trans (by simpa [exitParamsEmpty] using exitShape)⟩⟩
+
 theorem generatedTargetFrame_fork (loop : Option LoopCtx) (condition : ValueId) :
     GeneratedTargetFrameRun loop (fork condition) := by
   intro base env current result after baseCurrent frames terms run
@@ -66,6 +111,103 @@ theorem generatedTargetFrame_fork (loop : Option LoopCtx) (condition : ValueId) 
   have branchExt := (advB_emitTerm (.condbr condition yes [] no []) env second () branched branchRun).ext
   exact ⟨branchFrames,
     firstChecked.2.trans (secondChecked.2.trans branchExt)⟩
+
+theorem generatedTargetFrame_forkFresh {base current after : LS} {env : LEnv}
+    {condition : ValueId} {result : BlockId × BlockId}
+    (baseCurrent : base.Ext current)
+    (run : fork condition env current = (result, after)) :
+    base.blocks.size ≤ result.1 ∧ base.blocks.size ≤ result.2 := by
+  unfold fork at run
+  simp only [bind_eq] at run
+  obtain ⟨⟨yes, yesParams⟩, first, firstRun, tail⟩ := run
+  obtain ⟨⟨no, _⟩, second, secondRun, tail⟩ := tail
+  obtain ⟨ignored, branched, branchRun, finished⟩ := tail
+  rw [pure_run] at finished
+  obtain ⟨resultEq, _⟩ := Prod.mk.inj finished
+  have firstFresh := newBlock_fresh baseCurrent firstRun
+  have firstExt := (advB_newBlock0 env current (yes, yesParams) first firstRun).ext
+  have secondFresh := newBlock_fresh (baseCurrent.trans firstExt) secondRun
+  have resultYes : result.1 = yes := (congrArg Prod.fst resultEq).symm
+  have resultNo : result.2 = no := (congrArg Prod.snd resultEq).symm
+  exact ⟨resultYes ▸ firstFresh, resultNo ▸ secondFresh⟩
+
+theorem generatedTargetFrame_scFork (loop : Option LoopCtx) (isAnd : Bool)
+    (value : ValueId) : GeneratedTargetFrameRun loop (scFork isAnd value) := by
+  cases isAnd <;> {
+  intro base env current result after baseCurrent frames terms run
+  have runOriginal := run
+  unfold scFork at run
+  simp only [bind_eq, Bool.false_eq_true, ite_false, ite_true] at run
+  obtain ⟨⟨rhs, rhsParams⟩, first, firstRun, ⟨join, joinParams⟩, second, secondRun,
+    ignored, closed, closedRun, finished⟩ := run
+  rw [pure_run] at finished
+  obtain ⟨_, rfl⟩ := Prod.mk.inj finished
+  have firstChecked := generatedTargetFrame_newBlock loop [] base env current
+    (rhs, rhsParams) first baseCurrent frames terms firstRun
+  have secondChecked := generatedTargetFrame_newBlock loop [.data .bool] base env first
+    (join, joinParams) second (baseCurrent.trans firstChecked.2) frames firstChecked.1 secondRun
+  have rhsFresh := newBlock_fresh baseCurrent firstRun
+  have joinFresh := newBlock_fresh (baseCurrent.trans firstChecked.2) secondRun
+  have closedChecked := secondChecked.1.emitTermAt closedRun (by
+    intro target successor targetBound
+    simp only [Term.successors] at successor
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at successor
+    have fresh : base.blocks.size ≤ target := by
+      rcases successor with h | h <;>
+        first | simpa [h] using rhsFresh | simpa [h] using joinFresh
+    exact False.elim (Nat.not_lt_of_ge fresh targetBound))
+  exact ⟨closedChecked, (advB_scFork _ value env current result closed runOriginal).ext⟩
+  }
+
+theorem generatedTargetFrame_scForkFresh {base current after : LS} {env : LEnv}
+    {isAnd : Bool} {value : ValueId} {result : BlockId × BlockId × ValueId}
+    (baseCurrent : base.Ext current)
+    (run : scFork isAnd value env current = (result, after)) :
+    base.blocks.size ≤ result.1 ∧ base.blocks.size ≤ result.2.1 := by
+  obtain ⟨resultEq, _⟩ := scFork_ids run
+  have rhsId : result.1 = current.blocks.size := by simpa using congrArg Prod.fst resultEq
+  have joinId : result.2.1 = current.blocks.size + 1 := by
+    simpa using congrArg (fun values : BlockId × BlockId × ValueId => values.2.1) resultEq
+  constructor
+  · rw [rhsId]
+    exact baseCurrent.1
+  · rw [joinId]
+    exact Nat.le_trans baseCurrent.1 (Nat.le_succ _)
+
+theorem generatedTargetFrame_shortCircuit (loop : Option LoopCtx) (isAnd : Bool)
+    (value : ValueId) {rhs : B ValueId}
+    (rhsRun : GeneratedTargetFrameRun loop rhs) :
+    GeneratedTargetFrameRun loop (shortCircuit isAnd value rhs) := by
+  unfold shortCircuit
+  refine generatedTargetFrame_whenLive loop 0 fun _ => ?_
+  intro base env current result after baseCurrent frames terms run
+  have runOriginal := run
+  simp only [bind_eq] at run
+  obtain ⟨⟨rhsBlock, join, parameter⟩, forked, forkRun,
+    ignored, selected, selectedRun, rhsValue, body, bodyRun,
+    ignored', closed, closedRun, ignored'', final, finalRun, finished⟩ := run
+  rw [pure_run] at finished
+  obtain ⟨_, rfl⟩ := Prod.mk.inj finished
+  have forkChecked := generatedTargetFrame_scFork loop isAnd value base env current
+    (rhsBlock, join, parameter) forked baseCurrent frames terms forkRun
+  have selectedChecked := generatedTargetFrame_setCur loop (some rhsBlock) base env forked ()
+    selected (baseCurrent.trans forkChecked.2) frames forkChecked.1 selectedRun
+  have baseSelected := baseCurrent.trans (forkChecked.2.trans selectedChecked.2)
+  have currentSelected := forkChecked.2.trans selectedChecked.2
+  have bodyChecked := rhsRun base env selected rhsValue body baseSelected frames
+    selectedChecked.1 bodyRun
+  have joinFresh := (generatedTargetFrame_scForkFresh baseCurrent forkRun).2
+  have closedChecked := bodyChecked.1.emitTermAt closedRun (by
+    intro target successor targetBound
+    simp only [Term.successors, List.mem_singleton] at successor
+    subst target
+    exact False.elim (Nat.not_lt_of_ge joinFresh targetBound))
+  have closedExt := (advB_emitTerm (.br join [rhsValue]) env body () closed closedRun).ext
+  have baseClosed := baseSelected.trans (bodyChecked.2.trans closedExt)
+  have finalChecked := generatedTargetFrame_setCur loop (some join) base env closed () final
+    baseClosed frames closedChecked finalRun
+  exact ⟨finalChecked.1,
+    currentSelected.trans (bodyChecked.2.trans (closedExt.trans finalChecked.2))⟩
 
 theorem TermEdgesFramed.patchBrsAt {loop : Option LoopCtx} {base before after : LS}
     {env : LEnv} {result : Unit} {join : BlockId} {pending : List (BlockId × ValueId)}
@@ -183,6 +325,40 @@ theorem generatedTargetFrame_joinArms (loop : Option LoopCtx) (yes no : Option B
   · exact generatedTargetFrame_setCur loop none
   · exact generatedTargetFrame_joinArmsAt loop
       (yes.toList ++ no.toList)
+
+theorem generatedTargetFrame_ifS_none_core (loop : Option LoopCtx) (condition : ValueId)
+    {yes : B Unit} (yesRun : GeneratedTargetFrameRun loop yes) :
+    GeneratedTargetFrameRun loop (whenLive () fun _ => do
+      let (yesBlock, join) ← fork condition
+      setCur (some yesBlock)
+      let _ ← yes
+      emitTerm (.br join [])
+      setCur (some join)) := by
+  refine generatedTargetFrame_whenLive loop () fun _ => ?_
+  intro base env current result after baseCurrent frames terms run
+  simp only [bind_eq] at run
+  obtain ⟨⟨yesBlock, join⟩, forked, forkRun, ignored, selected, selectRun,
+    value, body, bodyRun, ignored', closed, closedRun, finalRun⟩ := run
+  have forkChecked := generatedTargetFrame_fork loop condition base env current
+    (yesBlock, join) forked baseCurrent frames terms forkRun
+  have selectedChecked := generatedTargetFrame_setCur loop (some yesBlock) base env forked ()
+    selected (baseCurrent.trans forkChecked.2) frames forkChecked.1 selectRun
+  have currentSelected := forkChecked.2.trans selectedChecked.2
+  have baseSelected := baseCurrent.trans currentSelected
+  have bodyChecked := yesRun base env selected value body baseSelected frames
+    selectedChecked.1 bodyRun
+  have joinFresh := (generatedTargetFrame_forkFresh baseCurrent forkRun).2
+  have closedChecked := bodyChecked.1.emitTermAt closedRun (by
+    intro target successor targetBound
+    simp only [Term.successors, List.mem_singleton] at successor
+    subst target
+    exact False.elim (Nat.not_lt_of_ge joinFresh targetBound))
+  have closedExt := (advB_emitTerm (.br join []) env body () closed closedRun).ext
+  have finalChecked := generatedTargetFrame_setCur loop (some join) base env closed () after
+    (baseSelected.trans
+      (bodyChecked.2.trans closedExt)) frames closedChecked finalRun
+  exact ⟨finalChecked.1,
+    currentSelected.trans (bodyChecked.2.trans (closedExt.trans finalChecked.2))⟩
 
 theorem generatedTargetFrame_ifE_core (loop : Option LoopCtx) (condition : ValueId)
     {yes no : B ValueId} (yesRun : GeneratedTargetFrameRun loop yes)
@@ -328,6 +504,40 @@ theorem generatedTargetFrame_growOwner (loop : Option LoopCtx) (value : ValueId)
       | _ => exact generatedTargetFrame_pure loop false
     | _ => exact generatedTargetFrame_pure loop false
   | view _ _ => exact generatedTargetFrame_pure loop false
+
+theorem generatedTargetFrame_regrowOf (loop : Option LoopCtx) (owner : Option ValueId) :
+    GeneratedTargetFrameRun loop (regrowOf owner) := by
+  cases owner with
+  | none => exact generatedTargetFrame_pure loop false
+  | some owner => exact generatedTargetFrame_growOwner loop owner
+
+theorem generatedTargetFrame_eachSampled (loop : Option LoopCtx) (regrow : Bool)
+    (view : ValueId) : GeneratedTargetFrameRun loop (eachSampled regrow view) := by
+  cases regrow
+  · exact generatedTargetFrame_emitDef loop _
+  · exact generatedTargetFrame_pure loop _
+
+theorem generatedTargetFrame_eachLen (loop : Option LoopCtx) (regrow : Bool)
+    (owner : Option ValueId) (sampled : ValueId) :
+    GeneratedTargetFrameRun loop (eachLen regrow owner sampled) := by
+  cases regrow
+  · exact generatedTargetFrame_pure loop _
+  · exact generatedTargetFrame_emitDef loop _
+
+theorem generatedTargetFrame_eachElemValue (loop : Option LoopCtx) (slot : VarId)
+    (byRef : Bool) (element : ValueId) :
+    GeneratedTargetFrameRun loop (eachElemValue slot byRef element) := by
+  unfold eachElemValue
+  cases byRef
+  · exact generatedTargetFrame_emitDef loop _
+  · refine GeneratedTargetFrameRun.bind (generatedTargetFrame_read loop) fun env => ?_
+    cases env.vars[slot]? with
+    | none => exact generatedTargetFrame_pure loop _
+    | some declaration =>
+      dsimp only
+      cases declaration.ty <;> first
+        | exact generatedTargetFrame_pure loop _
+        | exact generatedTargetFrame_freezeTo loop _ _
 
 theorem generatedTargetFrame_leaveAll (loop : Option LoopCtx) : ∀ scopes,
     GeneratedTargetFrameRun loop (leaveAll scopes)
