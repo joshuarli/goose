@@ -4,7 +4,7 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-theorem complete_ifE (condition : ValueId) {thenAction elseAction : B ValueId}
+theorem complete_ifE (condition : ValueId) (sourceScope : ScopeId) {thenAction elseAction : B ValueId}
     (thenChild : CompletionAction thenAction) (elseChild : CompletionAction elseAction) :
     CompletionAction (whenLive 0 fun _ => do
       let (thenBlock, elseBlock) ← fork condition
@@ -14,9 +14,11 @@ theorem complete_ifE (condition : ValueId) {thenAction elseAction : B ValueId}
       setCur (some elseBlock)
       let elseValue ← elseAction
       let endElse ← curBlock
-      joinValue endThen thenValue endElse elseValue) := by
-  refine ⟨⟨advB_ifE_core condition thenChild.openAction.advance elseChild.openAction.advance,
-    opens_ifE_core condition thenChild.openAction.advance elseChild.openAction.advance⟩, ?_⟩
+      let result ← joinValue endThen thenValue endElse elseValue
+      recordValueRootRecipe result sourceScope
+      pure result) := by
+  refine ⟨⟨advB_ifE_core condition sourceScope thenChild.openAction.advance elseChild.openAction.advance,
+    opens_ifE_core condition sourceScope thenChild.openAction.advance elseChild.openAction.advance⟩, ?_⟩
   intro env before result after run openBefore shapedBefore
   cases current : before.cur with
   | none =>
@@ -29,7 +31,8 @@ theorem complete_ifE (condition : ValueId) {thenAction elseAction : B ValueId}
     obtain ⟨⟨thenBlock, elseBlock⟩, forked, forkRun, _, thenStart, thenStartRun,
       thenValue, thenEnd, thenRun, endThen, thenRead, thenReadRun,
       _, elseStart, elseStartRun, elseValue, elseEnd, elseRun,
-      endElse, elseRead, elseReadRun, joinRun⟩ := run
+      endElse, elseRead, elseReadRun, joinedValue, joinedState, joinRun,
+      _, recordedState, recipeRun, finalRun⟩ := run
     obtain ⟨thenCurrent, thenSame⟩ := curBlock_eq thenReadRun
     obtain ⟨elseCurrent, elseSame⟩ := curBlock_eq elseReadRun
     subst thenRead
@@ -123,7 +126,31 @@ theorem complete_ifE (condition : ValueId) {thenAction elseAction : B ValueId}
     obtain ⟨shapeJoin, countJoin⟩ := joinValue_complete endThen endElse thenValue elseValue env elseEnd
       shapeElseEnd unique incomingOpen
     rw [joinRun] at shapeJoin countJoin
-    refine ⟨shapeJoin, ?_⟩
+    rw [recordValueRootRecipe_run] at recipeRun
+    have recipeStateEq :
+        { joinedState with valueRootRecipes :=
+          if joinedState.cur.isSome && (match joinedState.vals[joinedValue]?.join with
+            | some (.data type) => type.isRefLike
+            | some (.view ..) => true
+            | none => false)
+          then joinedState.valueRootRecipes.push (joinedValue, sourceScope)
+          else joinedState.valueRootRecipes } = recordedState := (Prod.mk.inj recipeRun).2
+    have recipeBlocks : recordedState.blocks = joinedState.blocks := by
+      have same := congrArg LS.blocks recipeStateEq
+      simpa using same.symm
+    have recipeCurrent : recordedState.cur = joinedState.cur := by
+      have same := congrArg LS.cur recipeStateEq
+      simpa using same.symm
+    have afterStateEq : after = recordedState := (pure_eq.mp finalRun).2.symm
+    have afterBlocks : after.blocks = joinedState.blocks := by
+      exact (congrArg LS.blocks afterStateEq).trans recipeBlocks
+    refine ⟨shapeJoin.of_blocks afterBlocks, ?_⟩
+    have afterOpenCount : OpenCount after = OpenCount joinedState := by
+      unfold OpenCount
+      rw [afterBlocks]
+    have afterLiveCount : LiveCount after = LiveCount joinedState := by
+      unfold LiveCount
+      rw [afterStateEq, recipeCurrent]
     have countThenStart : OpenCount thenStart = OpenCount forked := by simp only [OpenCount, setCur_blocks thenStartRun]
     have countElseStart : OpenCount elseStart = OpenCount thenEnd := by simp only [OpenCount, setCur_blocks elseStartRun]
     have liveBefore : LiveCount before = 1 := by simp [LiveCount, current]
@@ -135,6 +162,7 @@ theorem complete_ifE (condition : ValueId) {thenAction elseAction : B ValueId}
     have liveElseEnd : LiveCount elseEnd = endElse.toList.length := by
       simp only [LiveCount, ← elseCurrent]
       cases endElse <;> rfl
+    rw [afterOpenCount, afterLiveCount]
     dsimp only at countFork countJoin
     omega
 

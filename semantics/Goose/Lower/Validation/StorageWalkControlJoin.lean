@@ -145,6 +145,36 @@ theorem storageWalk_joinValue_flow {slots : Array Slot}
   · exact storageWalk_joinLive_flow config _ facts run
   · exact storageWalk_joinLive_flow config _ facts run
 
+theorem storageWalk_joinValue_flow_recorded {slots : Array Slot}
+    {entry exit : BlockId → List ScopeId} {env : LEnv} {before after : LS}
+    (config : StorageWalkConfiguration slots entry exit before)
+    {endT endF : Option BlockId} {valueT valueF result : ValueId}
+    (thenFacts : ∀ block, endT = some block → block < before.blocks.size ∧ exit block = before.stack)
+    (elseFacts : ∀ block, endF = some block → block < before.blocks.size ∧ exit block = before.stack)
+    (sourceScope : ScopeId)
+    (run : (do
+      let joined ← joinValue endT valueT endF valueF
+      recordValueRootRecipe joined sourceScope
+      (Pure.pure joined : B ValueId)) env before = (result, after)) :
+    ∃ nextEntry nextExit, StorageWalkConfiguration slots nextEntry nextExit after ∧
+      ScopeMapAdvance before entry exit nextEntry nextExit := by
+  simp only [bind_eq] at run
+  obtain ⟨joined, joinedState, joinRun, _, recordedState, recipeRun, finalRun⟩ := run
+  obtain ⟨nextEntry, nextExit, joinedConfig, maps⟩ :=
+    storageWalk_joinValue_flow config thenFacts elseFacts joinRun
+  rw [recordValueRootRecipe_run] at recipeRun
+  have stateEq := (Prod.mk.inj recipeRun).2
+  have blocks : recordedState.blocks = joinedState.blocks := by
+    simpa using (congrArg LS.blocks stateEq).symm
+  have current : recordedState.cur = joinedState.cur := by
+    simpa using (congrArg LS.cur stateEq).symm
+  have stack : recordedState.stack = joinedState.stack := by
+    simpa using (congrArg LS.stack stateEq).symm
+  have recordedConfig := joinedConfig.of_state blocks current stack
+  have afterEq := (pure_eq.mp finalRun).2.symm
+  rw [afterEq]
+  exact ⟨nextEntry, nextExit, recordedConfig, maps⟩
+
 theorem storageWalk_joinEmpty_flow {slots : Array Slot}
     {entry exit : BlockId → List ScopeId} {env : LEnv} {before after : LS}
     (config : StorageWalkConfiguration slots entry exit before) (incoming : List BlockId)
@@ -362,7 +392,7 @@ theorem storageWalk_flowIfBranches {slots : Array Slot} {stack : List ScopeId}
   exact ⟨afterEntry, afterExit, afterConfig, secondFrame.trans secondEndAdvance tailMaps⟩
 
 theorem StorageWalkAction.ifValue {slots : Array Slot} {stack : List ScopeId}
-    {loop : Option LoopCtx} (condition : ValueId) {first second : B ValueId}
+    {loop : Option LoopCtx} (condition : ValueId) (sourceScope : ScopeId) {first second : B ValueId}
     (firstAction : StorageWalkAction slots stack loop first)
     (secondAction : StorageWalkAction slots stack loop second) :
     StorageWalkAction slots stack loop (Goose.Lower.whenLive 0 fun _ => do
@@ -373,8 +403,10 @@ theorem StorageWalkAction.ifValue {slots : Array Slot} {stack : List ScopeId}
       Goose.Lower.setCur (some eb)
       let valueF ← second
       let endF ← Goose.Lower.curBlock
-      joinValue endT valueT endF valueF) := by
-  refine ⟨advB_ifE_core condition firstAction.advance secondAction.advance, ?_⟩
+      let result ← joinValue endT valueT endF valueF
+      recordValueRootRecipe result sourceScope
+      (Pure.pure result : B ValueId)) := by
+  refine ⟨advB_ifE_core condition sourceScope firstAction.advance secondAction.advance, ?_⟩
   intro env before entry exit config context stackEq
   generalize run : (Goose.Lower.whenLive 0 fun _ => do
       let (tb, eb) ← Goose.Lower.fork condition
@@ -384,7 +416,9 @@ theorem StorageWalkAction.ifValue {slots : Array Slot} {stack : List ScopeId}
       Goose.Lower.setCur (some eb)
       let valueF ← second
       let endF ← Goose.Lower.curBlock
-      joinValue endT valueT endF valueF) env before = result
+      let result ← joinValue endT valueT endF valueF
+      recordValueRootRecipe result sourceScope
+      (Pure.pure result : B ValueId)) env before = result
   obtain ⟨resultValue, after⟩ := result
   dsimp only
   cases live : before.cur with
@@ -395,9 +429,12 @@ theorem StorageWalkAction.ifValue {slots : Array Slot} {stack : List ScopeId}
   | some current =>
     rw [whenLive_some _ _ _ live] at run
     exact storageWalk_flowIfBranches condition firstAction secondAction
-      (fun endT valueT endF valueF => joinValue endT valueT endF valueF)
+      (fun endT valueT endF valueF => do
+        let result ← joinValue endT valueT endF valueF
+        recordValueRootRecipe result sourceScope
+        (Pure.pure result : B ValueId))
       (fun _ _ _ _ _ _ _ _ config thenFacts elseFacts _ _ run =>
-        storageWalk_joinValue_flow config thenFacts elseFacts run)
+        storageWalk_joinValue_flow_recorded config thenFacts elseFacts sourceScope run)
       env before entry exit config context stackEq current live run
 
 theorem StorageWalkAction.ifArms {slots : Array Slot} {stack : List ScopeId}

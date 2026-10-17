@@ -71,8 +71,10 @@ theorem open_lowerExpr : ∀ expr : Expr, OpenAction (lowerExpr expr)
   | .ifE condition yes no => by
     simp only [lowerExpr]
     exact OpenAction.bind (open_lowerExpr condition) fun value =>
-      ⟨advB_ifE_core value (open_lowerBlock none [] true yes).advance (open_lowerBlock none [] true no).advance,
-        opens_ifE_core value (open_lowerBlock none [] true yes).advance (open_lowerBlock none [] true no).advance⟩
+      ⟨advB_ifE_core value (sourceBlockScope yes)
+          (open_lowerBlock none [] true yes).advance (open_lowerBlock none [] true no).advance,
+        opens_ifE_core value (sourceBlockScope yes)
+          (open_lowerBlock none [] true yes).advance (open_lowerBlock none [] true no).advance⟩
   | .blockE block => open_lowerBlock none [] true block
   | .arrLit _ es => by
     simp only [lowerExpr]

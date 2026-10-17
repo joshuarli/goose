@@ -38,7 +38,7 @@ theorem storageWalk_source_ifExpression {env : Core.TEnv} {results : List Ty} {s
   obtain ⟨yesType, yesFinish, yesSource, source⟩ := (st_bind_ok _ _ _ _).mp source
   obtain ⟨noType, noFinish, noSource, source⟩ := (st_bind_ok _ _ _ _).mp source
   exact (conditionChild conditionSource visible loop).bind fun value =>
-    StorageWalkAction.ifValue value
+    StorageWalkAction.ifValue value (sourceBlockScope yes)
       ((storageWalk_source_emptyBlock (yesChild (Core.exprEnv env)) yesSource visible none true).weakenLoop loop)
       ((storageWalk_source_emptyBlock (noChild (Core.exprEnv env)) noSource visible none true).weakenLoop loop)
 
