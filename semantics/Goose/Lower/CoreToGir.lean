@@ -242,6 +242,13 @@ def freezeTo (m : Mutability) (r : ValueId) : B ValueId := do
   | .readOnly, .data (.ref .mutable _) => emitDef (.refFreeze r)
   | _, _ => pure r
 
+def borrowTo (m : Mutability) (r : ValueId) : B ValueId := do
+  match m, (← read).mod.profile, (← valTy r) with
+  | .mutable, .shrink, .data (.ref .mutable (.grow _))
+  | .mutable, .shrink, .data (.ref .mutable (.growshrink _)) =>
+    emitDef (.ownerBorrow r)
+  | _, _, _ => freezeTo m r
+
 def coerceTo (target : Ty) (r : ValueId) (org : OriginId) : B ValueId := do
   match target, (← valTy r) with
   | .ref .readOnly _, .data (.ref .mutable _) => emitDef (.refFreeze r)
@@ -308,7 +315,7 @@ def eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) : B ValueId := do
     match (← read).vars[x]? with
     | some lv =>
       match lv.ty with
-      | .ref m _ => freezeTo m elem
+      | .ref m _ => borrowTo m elem
       | _ => pure elem
     | none => pure elem
   else emitDef (.load elem)
@@ -422,7 +429,7 @@ def lowerExpr : Expr → B ValueId
     emitDef (.load r)
   | .ref m p => do
     let r ← lowerPlace p
-    freezeTo m r
+    borrowTo m r
   | .slice m v lo hi org => do
     let vw ← lowerView v
     let l ← lowerBound lo
@@ -501,7 +508,7 @@ def lowerArg : Arg → B ValueId
   | .byVal e => lowerExpr e
   | .byRef m p => do
     let r ← lowerPlace p
-    freezeTo m r
+    borrowTo m r
 
 def lowerArgs : List Arg → B (List ValueId)
   | [] => pure []

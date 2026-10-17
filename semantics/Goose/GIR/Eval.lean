@@ -261,7 +261,7 @@ def execPure (cx : FnCtx) (fr : Frame) : Op → M RVal
       let (_, k) ← expectInt (← getVal fr i)
       if 0 ≤ k then pure (.val (.ref ⟨vw.loc.root, vw.loc.path ++ [vw.start + k.toNat]⟩))
       else fault .pathRange
-    | .refFreeze r => do
+    | .refFreeze r | .ownerBorrow r => do
       pure (.val (.ref (← expectRef (← getVal fr r))))
     | .load r => do
       pure (.val (← readLoc (← expectRef (← getVal fr r))))

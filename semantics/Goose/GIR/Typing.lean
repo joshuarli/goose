@@ -124,6 +124,12 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
   | .refFreeze r => do
     let (_, t) ← env.refTy r
     pure (.data (.ref .readOnly t))
+  | .ownerBorrow r => do
+    let (m, t) ← env.refTy r
+    unless m == .mutable do tyErr "an owner borrow of a read-only reference"
+    match t with
+    | .grow _ | .growshrink _ => pure (.data (.ref .mutable t))
+    | _ => tyErr "an owner borrow of a non-resizable reference"
   | .load r => do
     let (_, t) ← env.refTy r
     pure (.data t)
@@ -254,6 +260,9 @@ def Func.permissionOfOp (globalKinds : Array VarKind) (structs : Array StructDef
     | some kind => (kind == .mutable, true)
     | none => (false, false)
   | .refFreeze _ => (false, false)
+  | .ownerBorrow owner =>
+    let contents := (permissionsAt caps owner).2
+    (contents, contents)
   | .fieldAddr owner field =>
     match vt[owner]? with
     | some (some (.data (.ref _ (.structT sid _)))) =>
