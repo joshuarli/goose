@@ -345,4 +345,267 @@ theorem operands_coerceTo {target : Ty} {input : ValueId} {origin : OriginId}
   · obtain ⟨_, rfl⟩ := pure_eq.mp remaining
     exact checked
 
+theorem live_value_through {action : B α} (advances : AdvB action) (dead : DeadRun action)
+    {le before result after value} (run : action le before = (result, after))
+    (bounded : before.cur.isSome = true → value < before.vals.size)
+    (live : after.cur.isSome = true) : value < after.vals.size :=
+  Nat.lt_of_lt_of_le (bounded (live_before dead run live)) ((advances _ _ _ _ run).vals)
+
+theorem operands_lowerExpr_push (place : Place) (expr : Expr) (origin : Option OriginId)
+    (first : OperandRun (lowerPlace place)) (second : OperandRun (lowerExpr expr)) :
+    OperandRun (lowerExpr (.push place expr origin)) := by
+  apply first.emitDefAfterTwo second (value_lowerPlace place) (value_lowerExpr expr)
+    (advB_lowerExpr expr) (dead_lowerExpr expr)
+    (inspect := fun x y => pure (.push x y origin))
+  · intros; rfl
+  · intro x y le state value member
+    simpa [pure_run, Op.uses] using member
+
+theorem operands_lowerPlace_elem (view : View) (index : Expr) (origin : OriginId)
+    (first : OperandRun (lowerView view)) (second : OperandRun (lowerExpr index)) :
+    OperandRun (lowerPlace (.elem view index origin)) := by
+  apply first.emitDefAfterTwo second (value_lowerView view) (value_lowerExpr index)
+    (advB_lowerExpr index) (dead_lowerExpr index)
+    (inspect := fun x y => pure (.indexChecked x y (some origin)))
+  · intros; rfl
+  · intro x y le state value member
+    simpa [pure_run, Op.uses] using member
+
+theorem operands_lowerExpr_cmp (op : CmpOp) (left right : Expr)
+    (first : OperandRun (lowerExpr left)) (second : OperandRun (lowerExpr right)) :
+    OperandRun (lowerExpr (.cmp op left right)) := by
+  intro le before result after run checked
+  obtain ⟨x, mid, leftRun, y, next, rightRun, ty, loaded, loading, emission⟩ :=
+    (by simpa only [lowerExpr, bind_eq] using run)
+  have same := valTy_eq loading
+  subst loaded
+  have bounds : ∀ value, value = x ∨ value = y →
+      next.cur.isSome = true → value < next.vals.size := by
+    intro value either live
+    rcases either with rfl | rfl
+    · exact live_value_through (advB_lowerExpr right) (dead_lowerExpr right) rightRun
+        (value_lowerExpr left _ _ _ _ leftRun) live
+    · exact value_lowerExpr right _ _ _ _ rightRun live
+  cases ty with
+  | data ty =>
+    cases ty <;> apply operands_emitDef emission
+      (second _ _ _ _ rightRun (first _ _ _ _ leftRun checked)) <;>
+      simpa [Op.uses] using (fun live value member => bounds value member live)
+  | view _ _ =>
+    apply operands_emitDef emission (second _ _ _ _ rightRun (first _ _ _ _ leftRun checked))
+    simpa [Op.uses] using (fun live value member => bounds value member live)
+
+theorem operands_lowerExpr_conv (kind : ConvKind) (target : Ty) (expr : Expr) (origin : OriginId)
+    (child : OperandRun (lowerExpr expr)) :
+    OperandRun (lowerExpr (.conv kind target expr origin)) := by
+  apply child.emitDefAfterValueInspect (value_lowerExpr expr)
+    (inspect := fun value => do
+      let source ← intTyOf value
+      pure (.conv kind source (match target with | .int dest => dest | _ => source) value (some origin)))
+  · intro input le state
+    simp only [bind_run, intTyOf_state, pure_run]
+  · intro input le state value member
+    simpa only [bind_run, pure_run, Op.uses, List.mem_singleton] using member
+
+theorem operands_lowerBound (bound : Bound)
+    (child : match bound with
+      | .omitted => True
+      | .expr expr | .fromEnd expr => OperandRun (lowerExpr expr)) :
+    OperandRun (lowerBound bound) := by
+  cases bound with
+  | omitted => exact OperandRun.pure _
+  | expr expr | fromEnd expr => exact OperandRun.bind child fun _ => OperandRun.pure _
+
+theorem operands_lowerExpr_slice (mu : Mutability) (view : View) (lo hi : Bound) (origin : OriginId)
+    (first : OperandRun (lowerView view)) (low : OperandRun (lowerBound lo))
+    (high : OperandRun (lowerBound hi)) : OperandRun (lowerExpr (.slice mu view lo hi origin)) := by
+  intro le before result after run checked
+  obtain ⟨input, viewed, viewRun, lower, lowed, lowRun, upper, highed, highRun, emission⟩ :=
+    (by simpa only [lowerExpr, bind_eq] using run)
+  apply operands_emitDef emission (high _ _ _ _ highRun
+    (low _ _ _ _ lowRun (first _ _ _ _ viewRun checked)))
+  intro live value member
+  simp only [Op.uses, List.mem_cons, List.mem_append] at member
+  rcases member with rfl | lowMember | highMember
+  · exact live_value_through (advB_lowerBound hi) (dead_lowerBound hi) highRun
+      (live_value_through (advB_lowerBound lo) (dead_lowerBound lo) lowRun
+        (value_lowerView view _ _ _ _ viewRun)) live
+  · exact live_value_through (advB_lowerBound hi) (dead_lowerBound hi) highRun
+      (fun liveLow => values_lowerBound lo lowRun liveLow value lowMember) live
+  · exact values_lowerBound hi highRun live value highMember
+
+theorem operands_patchTerm {block : BlockId} {term : Term} {le before result after}
+    (run : patchTerm block term le before = (result, after)) (checked : OperandBounds before)
+    (bounded : ∀ value ∈ term.uses, value < before.vals.size) : OperandBounds after := by
+  rw [patchTerm_run] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  exact operands_appendInst checked block (.term term) bounded
+
+theorem operands_setCur (current : Option BlockId) : OperandRun (setCur current) := by
+  apply OperandRun.of_unchanged <;> intros <;> rw [setCur_run]
+  · rfl
+  · exact Nat.le_refl _
+
+theorem operands_read : OperandRun (read : B LEnv) := by
+  exact OperandRun.of_unchanged (by intros; rfl) (by intros; exact Nat.le_refl _)
+
+theorem operands_get : OperandRun (get : B LS) := by
+  exact OperandRun.of_unchanged (by intros; rfl) (by intros; exact Nat.le_refl _)
+
+theorem operands_curBlock : OperandRun curBlock := by
+  exact OperandRun.of_unchanged (by intros; rw [curBlock_run]) (by intros; rw [curBlock_run]; exact Nat.le_refl _)
+
+theorem OperandRun.inScope (scope : ScopeId) {action : B α} (child : OperandRun action) :
+    OperandRun (inScope scope action) := by
+  intro le before result after run checked
+  obtain ⟨mid, actionRun, rfl⟩ := inScope_eq run
+  exact child le _ result mid actionRun checked
+
+theorem operands_patchBrs (target : BlockId) :
+    ∀ incoming le before result after, patchBrs target incoming le before = (result, after) →
+      OperandBounds before →
+      (∀ pair ∈ incoming, pair.2 < before.vals.size) → OperandBounds after
+  | [], le, before, result, after, run, checked, _ => by
+    obtain ⟨_, rfl⟩ := pure_eq.mp run
+    exact checked
+  | (block, value) :: rest, le, before, result, after, run, checked, bounded => by
+    obtain ⟨_, mid, patch, tail⟩ := bind_eq.mp run
+    have next := operands_patchTerm patch checked (by simpa [Term.uses] using bounded (block, value) (by simp))
+    have same : mid.vals = before.vals := by
+      rw [patchTerm_run] at patch
+      exact congrArg (fun pair => pair.2.vals) patch.symm
+    exact operands_patchBrs target rest _ _ _ _ tail next (by
+      intro pair member
+      rw [same]
+      exact bounded pair (by simp [member]))
+
+theorem operands_joinValue {endT endF : Option BlockId} {vt vf : ValueId} {le before result after}
+    (run : joinValue endT vt endF vf le before = (result, after)) (checked : OperandBounds before)
+    (trueBound : endT.isSome = true → vt < before.vals.size)
+    (falseBound : endF.isSome = true → vf < before.vals.size) : OperandBounds after := by
+  unfold joinValue at run
+  cases endT <;> cases endF
+  · obtain ⟨_, mid, change, remaining⟩ := bind_eq.mp run
+    obtain ⟨_, rfl⟩ := pure_eq.mp remaining
+    exact operands_setCur _ _ _ _ _ change checked
+  all_goals
+    simp only [bind_eq] at run
+    obtain ⟨ty, mid, typeRun, ⟨block, params⟩, allocated, allocation,
+      _, patched, patch, _, resumed, resume, pureRun⟩ := run
+    have same := valTy_eq typeRun
+    subst mid
+    have allocatedBounds := operands_newBlock _ _ _ _ _ allocation checked
+    have growth := (adv_newBlock1 allocation).vals
+    have patchedBounds := operands_patchBrs _ _ _ _ _ _ patch allocatedBounds (by
+      intro pair member
+      simp at member
+      rcases member with rfl | rfl <;>
+        first
+        | exact Nat.lt_of_lt_of_le (trueBound rfl) growth
+        | exact Nat.lt_of_lt_of_le (falseBound rfl) growth)
+    obtain ⟨_, rfl⟩ := pure_eq.mp pureRun
+    exact operands_setCur _ _ _ _ _ resume patchedBounds
+
+theorem operands_fork {condition : ValueId} {le before result after}
+    (run : fork condition le before = (result, after)) (checked : OperandBounds before)
+    (bounded : before.cur.isSome = true → condition < before.vals.size) : OperandBounds after := by
+  obtain ⟨⟨left, _⟩, first, allocateLeft, ⟨right, _⟩, second, allocateRight,
+    _, closed, closing, remaining⟩ := (by simpa only [fork, bind_eq] using run)
+  have firstBounds := operands_newBlock _ _ _ _ _ allocateLeft checked
+  have secondBounds := operands_newBlock _ _ _ _ _ allocateRight firstBounds
+  rw [newBlock0_run] at allocateLeft allocateRight
+  obtain ⟨_, rfl⟩ := Prod.mk.inj allocateLeft
+  obtain ⟨_, rfl⟩ := Prod.mk.inj allocateRight
+  obtain ⟨_, rfl⟩ := pure_eq.mp remaining
+  exact operands_emitTerm closing secondBounds (by simpa [Term.uses] using bounded)
+
+theorem operands_scFork {isAnd : Bool} {condition : ValueId} {le before result after}
+    (run : scFork isAnd condition le before = (result, after)) (checked : OperandBounds before)
+    (bounded : before.cur.isSome = true → condition < before.vals.size) : OperandBounds after := by
+  unfold scFork at run
+  obtain ⟨⟨right, _⟩, first, allocateRight, ⟨join, params⟩, second, allocateJoin, remaining⟩ :=
+    (by simpa only [bind_eq] using run)
+  have firstBounds := operands_newBlock _ _ _ _ _ allocateRight checked
+  have secondBounds := operands_newBlock _ _ _ _ _ allocateJoin firstBounds
+  rw [newBlock0_run] at allocateRight
+  obtain ⟨_, rfl⟩ := Prod.mk.inj allocateRight
+  rw [newBlock1_run] at allocateJoin
+  obtain ⟨_, rfl⟩ := Prod.mk.inj allocateJoin
+  cases isAnd <;> simp only [Bool.false_eq_true, ↓reduceIte, bind_eq] at remaining <;>
+    obtain ⟨_, closed, closing, pureRun⟩ := remaining <;>
+    obtain ⟨_, rfl⟩ := pure_eq.mp pureRun <;>
+    apply operands_emitTerm closing secondBounds <;>
+    intro live value member <;>
+    simp [Term.uses] at member <;>
+    subst value <;>
+    simpa using Nat.lt_succ_of_lt (bounded live)
+
+theorem operands_shortCircuit {isAnd : Bool} {condition : ValueId} {rhs : B ValueId}
+    (child : OperandRun rhs) (valueBound : ValueRun rhs) {le before result after}
+    (run : shortCircuit isAnd condition rhs le before = (result, after))
+    (checked : OperandBounds before)
+    (bounded : before.cur.isSome = true → condition < before.vals.size) : OperandBounds after := by
+  cases current : before.cur with
+  | none =>
+    rw [shortCircuit, whenLive_none _ _ le current] at run
+    obtain ⟨_, rfl⟩ := Prod.mk.inj run
+    exact checked
+  | some block =>
+    rw [shortCircuit, whenLive_some _ _ le current] at run
+    obtain ⟨⟨right, join, param⟩, forked, forkRun, _, selected, select,
+      value, evaluated, evaluate, _, closed, close, _, resumed, resume, pureRun⟩ :=
+      (by simpa only [bind_eq] using run)
+    have forkedBounds := operands_scFork forkRun checked bounded
+    have selectedBounds := operands_setCur _ _ _ _ _ select forkedBounds
+    have evaluatedBounds := child _ _ _ _ evaluate selectedBounds
+    have closedBounds := operands_emitTerm close evaluatedBounds
+      (by simpa [Term.uses] using valueBound _ _ _ _ evaluate)
+    obtain ⟨_, rfl⟩ := pure_eq.mp pureRun
+    exact operands_setCur _ _ _ _ _ resume closedBounds
+
+theorem operands_lowerExpr_shortCircuit (isAnd : Bool) (left right : Expr)
+    (first : OperandRun (lowerExpr left)) (second : OperandRun (lowerExpr right)) :
+    OperandRun (do let condition ← lowerExpr left; shortCircuit isAnd condition (lowerExpr right)) := by
+  intro le before result after run checked
+  obtain ⟨condition, mid, leftRun, remaining⟩ := bind_eq.mp run
+  exact operands_shortCircuit second (value_lowerExpr right) remaining
+    (first _ _ _ _ leftRun checked) (value_lowerExpr left _ _ _ _ leftRun)
+
+theorem operands_lowerExpr_ifE (condition : Expr) (trueArm falseArm : Core.Block)
+    (conditionRun : OperandRun (lowerExpr condition))
+    (trueRun : OperandRun (lowerBlock none [] true trueArm))
+    (falseRun : OperandRun (lowerBlock none [] true falseArm)) :
+    OperandRun (lowerExpr (.ifE condition trueArm falseArm)) := by
+  intro le before result after run checked
+  obtain ⟨cv, tested, testRun, remaining⟩ := bind_eq.mp run
+  have testedBounds := conditionRun _ _ _ _ testRun checked
+  cases current : tested.cur with
+  | none =>
+    rw [whenLive_none _ _ le current] at remaining
+    obtain ⟨_, rfl⟩ := Prod.mk.inj remaining
+    exact testedBounds
+  | some block =>
+    rw [whenLive_some _ _ le current] at remaining
+    obtain ⟨⟨left, right⟩, forked, forkRun, _, selectedT, selectT,
+      vt, trueEnd, runT, endT, savedT, saveT, _, selectedF, selectF,
+      vf, falseEnd, runF, endF, savedF, saveF, joinRun⟩ :=
+      (by simpa only [bind_eq] using remaining)
+    have forkedBounds := operands_fork forkRun testedBounds
+      (value_lowerExpr condition _ _ _ _ testRun)
+    have selectedTBounds := operands_setCur _ _ _ _ _ selectT forkedBounds
+    have trueEndBounds := trueRun _ _ _ _ runT selectedTBounds
+    rw [curBlock_run] at saveT saveF
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj saveT
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj saveF
+    have selectedFBounds := operands_setCur _ _ _ _ _ selectF trueEndBounds
+    have falseEndBounds := falseRun _ _ _ _ runF selectedFBounds
+    apply operands_joinValue joinRun falseEndBounds
+    · intro live
+      have firstBound := value_lowerBlock none [] trueArm _ _ _ _ runT live
+      have growth := (advB_lowerBlock none [] true falseArm _ _ _ _ runF).vals
+      rw [setCur_run] at selectF
+      obtain ⟨_, rfl⟩ := Prod.mk.inj selectF
+      exact Nat.lt_of_lt_of_le firstBound growth
+    · exact value_lowerBlock none [] falseArm _ _ _ _ runF
+
 end Goose.Lower.Validation
