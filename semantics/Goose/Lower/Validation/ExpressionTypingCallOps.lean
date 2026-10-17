@@ -126,6 +126,61 @@ theorem tyArgs_byVal_head {env : Core.TEnv} {callee : Core.Impl} {param : Param}
       · simp [permission, chk] at source
   · simp [mode, chk] at source
 
+theorem tyArgs_byRef_head {env : Core.TEnv} {callee : Core.Impl} {param : Param}
+    {params : List Param} {mu : Mutability} {place : Place} {args : List Arg} {start finish : Nat}
+    (source : Core.tyArgs env callee (param :: params) (.byRef mu place :: args) start = .ok ((), finish)) :
+    ∃ localVar info childFinish restStart,
+      callee.vars[param.var]? = some localVar ∧
+      Core.tyPlace env place start = .ok (info, childFinish) ∧
+      (mu = .mutable → info.referenceWritable env.mod.profile = true) ∧
+      (Ty.ref mu info.ty).passableTo localVar.ty = true ∧
+      Core.tyArgs env callee params args restStart = .ok ((), finish) := by
+  simp only [Core.tyArgs, Core.argMode] at source
+  by_cases mode : (Mode.byRef == param.mode) = true
+  · simp only [mode, ite_true] at source
+    cases row : callee.vars[param.var]? with
+    | none => simp [row, chk] at source
+    | some localVar =>
+      simp only [row] at source
+      obtain ⟨info, childFinish, childTyped, source⟩ := (st_bind_ok _ _ _ _).mp source
+      obtain ⟨_, fieldFinish, _, source⟩ := (st_bind_ok _ _ _ _).mp source
+      by_cases target : (info.ty.refTarget ||
+          (info.ty.isSlice && info.referenceWritable env.mod.profile && place.sliceArg)) = true
+      · simp only [target, ite_true] at source
+        cases mu with
+        | readOnly =>
+          by_cases permission : (Ty.ref .readOnly info.ty).passableTo localVar.ty = true
+          · simp only [permission, ite_true] at source
+            exact ⟨localVar, info, childFinish, fieldFinish, rfl, childTyped,
+              (by intro h; cases h), permission, source⟩
+          · simp [permission, chk] at source
+        | mutable =>
+          have writeBind : (requireWrite "a mutable argument" (info.referenceWritable env.mod.profile) >>=
+              fun _ => do
+                unless (Ty.ref .mutable info.ty).passableTo localVar.ty do
+                  rej .call s!"argument of a type or mutability the parameter {localVar.name} does not accept"
+                Core.tyArgs env callee params args) fieldFinish = .ok ((), finish) := by
+            simpa [Functor.map, StateT.map] using source
+          obtain ⟨_, restStart, writable, source⟩ := (st_bind_ok _ _ _ _).mp writeBind
+          have writePermission := (requireWrite_ok _ _ _ _).mp writable
+          by_cases permission : (Ty.ref .mutable info.ty).passableTo localVar.ty = true
+          · simp only [permission, ite_true] at source
+            exact ⟨localVar, info, childFinish, restStart, rfl, childTyped,
+              fun _ => writePermission.1, permission, source⟩
+          · simp [permission, chk] at source
+      · simp [target, chk] at source
+  · simp [mode, chk] at source
+
+theorem lowerArg_byRef_typed_of_place {le : LEnv} {before middle : LS}
+    {place : Place} {address : ValueId} {actual requested : Mutability} {ty : Ty} {block : BlockId}
+    (placeRun : lowerPlace place le before = (address, middle))
+    (placeTyped : middle.vals[address]? = some (some (.data (.ref actual ty))))
+    (permission : actual.atLeast requested = true) (live : middle.cur = some block) :
+    let (value, after) := lowerArg (.byRef requested place) le before
+    after.vals[value]? = some (some (.data (.ref requested ty))) := by
+  simp only [lowerArg, bind_run, placeRun]
+  exact (freezeTo_typed placeTyped permission live).2
+
 theorem call_result_tail_run (le : LEnv) (state : LS) (context : ContextId) (value : ValueId) :
     ((do
       if (← read).mod.noReturn context then emitTerm .unreachable

@@ -37,10 +37,15 @@ def RecursiveExpressions : List Expr → Prop
   | [] => True
   | expr :: rest => RecursiveExpression expr ∧ RecursiveExpressions rest
 
+def RecursiveArgument : Arg → Prop
+  | .byVal expr => RecursiveExpression expr
+  | .byRef .readOnly place => RecursivePlace place
+  | .byRef .mutable (.var _) | .byRef .mutable (.global _) => True
+  | _ => False
+
 def RecursiveArguments : List Arg → Prop
   | [] => True
-  | .byVal e :: args => RecursiveExpression e ∧ RecursiveArguments args
-  | _ => False
+  | arg :: args => RecursiveArgument arg ∧ RecursiveArguments args
 
 end
 
@@ -458,7 +463,53 @@ theorem lowerArgs_recursive_typed (args : List Arg) (supported : RecursiveArgume
     | nil => simp at sameLength
     | cons param params =>
       cases arg with
-      | byRef mu place => contradiction
+      | byRef mu place =>
+        obtain ⟨childSupported, restSupported⟩ := supported
+        obtain ⟨localVar, info, childFinish, restStart, row, placeSource, writable, permission, restSource⟩ :=
+          tyArgs_byRef_head source
+        simp only [lowerArgs] at run
+        obtain ⟨value, middle, childRun, run⟩ := bind_eq.mp run
+        obtain ⟨restValues, restAfter, restRun, run⟩ := bind_eq.mp run
+        obtain ⟨rfl, rfl⟩ := pure_eq.mp run
+        have restTyped := lowerArgs_recursive_typed args restSupported (by simpa using sameLength)
+          restSource restRun live
+        have middleLive := (dead_lowerArgs args).live_before restRun live
+        have lowering := childRun
+        simp only [lowerArg] at lowering
+        obtain ⟨address, placeAfter, placeRun, freezeRun⟩ := bind_eq.mp lowering
+        have placeLive := (dead_freezeTo mu address).live_before freezeRun middleLive
+        have childTyped : middle.vals[value]? = some (some (.data (.ref mu info.ty))) := by
+          cases mu with
+          | readOnly =>
+            obtain ⟨actual, placeTyped⟩ := lowerPlace_recursive_typed place childSupported placeSource placeRun placeLive
+            cases current : placeAfter.cur with
+            | none => simp [current] at placeLive
+            | some block =>
+              have permission : actual.atLeast .readOnly = true := by cases actual <;> rfl
+              have typed := lowerArg_byRef_typed_of_place placeRun placeTyped permission current
+              rw [childRun] at typed
+              exact typed
+          | mutable =>
+            have initial := (dead_lowerPlace place).live_before placeRun placeLive
+            cases current : before.cur with
+            | none => simp [current] at initial
+            | some block =>
+              have placeTyped :
+                  let (address, after) := lowerPlace place (lowerEnv env.mod env.vars results) before
+                  after.cur = before.cur ∧ after.vals[address]? = some (some (referenceType info env.mod.profile)) := by
+                cases place with
+                | var x => exact lowerPlace_var_exact placeSource results before current
+                | global g => exact lowerPlace_global_exact placeSource env.vars results before current
+                | _ => contradiction
+              rw [placeRun] at placeTyped
+              have permission : (if info.referenceWritable env.mod.profile then Mutability.mutable else .readOnly).atLeast .mutable = true := by
+                simp [writable rfl, Mutability.atLeast]
+              have typed := lowerArg_byRef_typed_of_place placeRun
+                (by simpa only [referenceType] using placeTyped.2) permission (placeTyped.1.trans current)
+              rw [childRun] at typed
+              exact typed
+        have retained := types_lowerArgs args _ _ _ _ restRun value (.data (.ref mu info.ty)) childTyped
+        exact .cons ⟨.ref mu info.ty, retained, by simpa [tyOfVar, row] using permission⟩ restTyped
       | byVal expr =>
         obtain ⟨exprSupported, argsSupported⟩ := supported
         obtain ⟨localVar, argTy, childStart, childFinish, restStart,

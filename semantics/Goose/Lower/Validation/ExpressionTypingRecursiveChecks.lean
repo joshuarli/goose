@@ -96,6 +96,28 @@ theorem struct_typed {before after : LS} {value : ValueId}
 #guard let (_, after) := lowerExpr structExpression (lowerEnv structModule env.vars []) initial
        after.cur.isSome
 
+def referenceCallee : Core.Impl :=
+  { callee with
+    params := #[⟨0, .byRef⟩, ⟨1, .byRef⟩],
+    vars := #[⟨"element", .ref .readOnly (.int .i64), .immutable, 0, 0⟩,
+      ⟨"array", .ref .readOnly (.arr (.int .i64) 4), .immutable, 0, 0⟩] }
+
+def referenceModule : Core.Module := { callModule with impls := #[referenceCallee] }
+def referenceEnv : Core.TEnv := { env with mod := referenceModule }
+def referenceCall : Expr :=
+  .call 1 [.byRef .readOnly (.deref (.blockE (.mk 1 [] (some (.read (.var 0)))))),
+    .byRef .mutable (.var 1)] 0
+
+theorem reference_call_source : Core.tyExpr referenceEnv referenceCall 2 = .ok (.int .i64, 2) := by rfl
+
+theorem reference_call_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr referenceCall (lowerEnv referenceModule env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.int .i64))) := by
+  exact lowerExpr_recursive_typed referenceCall (by trivial) reference_call_source run live
+
+#guard let (value, after) := lowerExpr referenceCall (lowerEnv referenceModule env.vars []) initial
+       after.cur.isSome && after.vals[value]? == some (some (.data (.int .i64)))
+
 #print axioms lowerExprs_recursive_typed
 #print axioms structLiteral_resultTy
 #print axioms arrayLiteral_resultTy
