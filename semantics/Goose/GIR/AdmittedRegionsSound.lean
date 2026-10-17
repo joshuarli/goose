@@ -33,8 +33,25 @@ theorem Func.checkAdmittedRegions_call {m : Module} {vt : Array (Option VTy)}
   have bound := List.all_eq_true.mp instruction (parameter,ceiling) row
   simp only [reference, Bool.not_true, Bool.false_or, Bool.and_eq_true] at bound
   constructor
-  · simpa only [List.contains_iff_mem] using List.all_eq_true.mp bound.1
-  · simpa only [List.contains_iff_mem] using List.all_eq_true.mp bound.2
+  · simpa only [List.contains_iff_mem] using List.all_eq_true.mp bound.1.1
+  · simpa only [List.contains_iff_mem] using List.all_eq_true.mp bound.1.2
+
+theorem Func.checkAdmittedRegions_call_receiver {m : Module} {vt : Array (Option VTy)}
+    {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ())
+    {block : Block} (blockMember : block ∈ f.blocks.toList)
+    {value fn : Nat} {args : List ValueId} {org : Option OriginId}
+    (called : Inst.def value (.call fn args org) ∈ block.insts)
+    {callee : Func} (calleeAt : m.funcs[fn]? = some callee)
+    {parameter : Nat} {ceiling : List RootRef} (row : (parameter,ceiling) ∈ callee.roots.contents.toList)
+    (reference : (callee.params[parameter]?).any Ty.isRefSlice = true)
+    {receiver : RootRef} (receiverMember : receiver ∈ rootsAt p.vals args[parameter]!) :
+    ∀ root ∈ mapContentRoots f p args ceiling, root ∈ f.receiverContentCeiling p receiver := by
+  have instruction := f.checkAdmittedRegions_instruction checked blockMember called
+  simp only [Func.admittedInstruction, calleeAt] at instruction
+  have bound := List.all_eq_true.mp instruction (parameter,ceiling) row
+  simp only [reference, Bool.not_true, Bool.false_or, Bool.and_eq_true] at bound
+  have receiverBound := List.all_eq_true.mp bound.2 receiver receiverMember
+  simpa only [List.contains_iff_mem] using List.all_eq_true.mp receiverBound
 
 theorem Func.checkAdmittedRegions_store {m : Module} {vt : Array (Option VTy)}
     {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ())

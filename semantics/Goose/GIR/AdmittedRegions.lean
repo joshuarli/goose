@@ -13,6 +13,19 @@ def Func.admittedSlots (f : Func) (p : Prov) : Bool :=
     (f.slots[slot]?).any fun storage =>
       storage.ty.isRefLike && (rootsAt p.slots slot).all ceiling.contains
 
+def Func.receiverContentCeiling (f : Func) (p : Prov) (root : RootRef) : List RootRef :=
+  let roots := match root with
+    | .local slot => rootsAt p.slots slot
+    | .param parameter =>
+        if (f.params[parameter]?).any Ty.isRefSlice then f.contentRoots parameter else []
+    | .global global => [.global global]
+  roots.flatMap f.expandParameterRoot
+
+def Func.admittedCallReceiver (f : Func) (p : Prov) (value : ValueId)
+    (mapped : List RootRef) : Bool :=
+  (rootsAt p.vals value).all fun root =>
+    mapped.all (f.receiverContentCeiling p root).contains
+
 def Func.admittedInstruction (m : Module) (vt : Array (Option VTy))
     (f : Func) (p : Prov) : Inst → Bool
   | .term (.ret values _) =>
@@ -35,7 +48,8 @@ def Func.admittedInstruction (m : Module) (vt : Array (Option VTy))
           !(callee.params[parameter]?).any Ty.isRefSlice ||
             let actual := argumentContents f p args[parameter]!
             let mapped := mapContentRoots f p args ceiling
-            actual.all mapped.contains && mapped.all actual.contains
+            actual.all mapped.contains && mapped.all actual.contains &&
+              f.admittedCallReceiver p args[parameter]! mapped
   | _ => true
 
 def Func.checkAdmittedRegions (m : Module) (vt : Array (Option VTy))
@@ -63,12 +77,15 @@ theorem Func.checkAdmittedRegions_slots {m : Module} {vt : Array (Option VTy)}
     cases instCase : (f.blocks.toList.flatMap (·.insts)).all (f.admittedInstruction m vt p) <;>
     simp_all [Func.checkAdmittedRegions, bind, Except.bind, throw]
 
+def Module.checkRegionGlobalTypes (m : Module) : Except String Unit := do
+  for global in m.globals do
+    unless global.ty.storable && !global.ty.isRefLike do
+      throw s!"global {global.name} has a type no source module may have"
+
 def Module.checkAdmittedRegions (m : Module) (types : Array (Array (Option VTy)))
     (results : Array (List RootRef)) (nRoots : Nat) : Except String Unit := do
   if !m.hasDeclaredRegions then return ()
-  for global in m.globals do
-    unless global.ty.storable && !global.ty.isRefLike do
-      throw s!"global {global.name} has a type no declared-region module may have"
+  m.checkRegionGlobalTypes
   for (f, index) in m.funcs.toList.zipIdx do
     let vt := types[index]?.getD #[]
     f.checkAdmittedRegions m vt (f.provenance results vt nRoots)

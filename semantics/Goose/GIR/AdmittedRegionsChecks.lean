@@ -175,6 +175,40 @@ private def unsafeEffect : Module := module #[caller,callee] #[global]
   (caller.provenance (resultRoots unsafeEffect unsafeEffect.implTypes)
     (caller.valueTypes unsafeEffect) unsafeEffect.rootCount))).isOk
 
+private def phiCallee : Func :=
+  { function "phi.callee" [holder] #[]
+    [.def 1 (.globalAddr 1), .def 2 (.snapshot .owner 1),
+     .def 3 (.viewSlice .mutable 2 .omitted .omitted (some 0)),
+     .eff (.store 0 3 (some 0)), .term (.ret [] (some 0))]
+    { params := #[(0,[.param 0])], contents := #[(0,[.global 0,.global 1])], slots := some #[] }
+    with summary := .known ⟨[.global 1],[.param 0],[],[],[.param 0],false,false⟩ }
+private def phiCaller : Func :=
+  { name := "phi.main", params := [], results := [],
+    slots := #[⟨slice,.mutable,0,0⟩,⟨slice,.mutable,0,1⟩], scopes := #[none],
+    blocks := #[
+      ⟨[],[.eff (.enter 0), .def 0 (.globalAddr 0), .def 1 (.snapshot .owner 0),
+        .def 2 (.viewSlice .mutable 1 .omitted .omitted (some 0)), .eff (.slotInit 0 2 (some 0)),
+        .def 3 (.globalAddr 1), .def 4 (.snapshot .owner 3),
+        .def 5 (.viewSlice .mutable 4 .omitted .omitted (some 0)), .eff (.slotInit 1 5 (some 0)),
+        .def 6 (.slotAddr 0), .def 7 (.slotAddr 1), .def 8 (.constBool true),
+        .term (.condbr 8 1 [6] 1 [7])]⟩,
+      ⟨[(9,.data holder)],[.def 10 (.call 1 [9] (some 0)), .def 11 (.slotAddr 0),
+        .def 12 (.load 11), .def 13 (.sliceView 12), .def 14 (.constInt .i64 0),
+        .def 15 (.indexChecked 13 14 (some 0)), .def 16 (.constInt .i64 7),
+        .eff (.store 15 16 (some 0)), .eff (.leave 0), .term (.ret [] (some 0))]⟩],
+    roots := { slots := some #[(0,[.global 0]),(1,[.global 1])] },
+    summary := .known ⟨[.global 0,.global 1],[.global 0],[],[],[],true,false⟩, org := some 0 }
+private def phiModule : Module := module #[phiCaller,phiCallee] #[global,{ global with name := "Q" }]
+private def phiProv : Prov := phiCaller.provenance
+  (resultRoots phiModule phiModule.implTypes) (phiCaller.valueTypes phiModule) phiModule.rootCount
+#guard rootsChecked phiModule
+#guard (argumentContents phiCaller phiProv 9).all
+  (mapContentRoots phiCaller phiProv [9] [.global 0,.global 1]).contains
+#guard (mapContentRoots phiCaller phiProv [9] [.global 0,.global 1]).all
+  (argumentContents phiCaller phiProv 9).contains
+#guard !admitted phiModule
+#guard (phiCaller.summaryClosed (phiCaller.effects phiModule phiProv)).isOk
+
 private def headerGlobal : Global :=
   { name := "header", ty := slice, kind := .mutable, org := 0,
     init := { function "header.init" [] #[]
