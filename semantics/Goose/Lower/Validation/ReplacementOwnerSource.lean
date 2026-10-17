@@ -112,6 +112,22 @@ inductive IndependentOwnerBlockShape : Core.Block → Prop
 end
 
 mutual
+theorem IndependentOwnerShape.fresh {expr : Expr} (shape : IndependentOwnerShape expr) : expr.freshOwner = true := by
+  cases shape with
+  | literal => rfl
+  | conditional condition scalar yes no =>
+    simp only [Core.Expr.freshOwner, IndependentOwnerBlockShape.fresh yes, IndependentOwnerBlockShape.fresh no,
+      Bool.and_self]
+  | block body => exact IndependentOwnerBlockShape.fresh body
+
+theorem IndependentOwnerBlockShape.fresh {body : Core.Block} (shape : IndependentOwnerBlockShape body) :
+    body.freshOwner = true := by
+  cases shape with
+  | result scope expr => exact IndependentOwnerShape.fresh expr
+  | prefixResult scope statements prefixIndependent expr => exact IndependentOwnerShape.fresh expr
+end
+
+mutual
 theorem independentOwner_of_source {expr : Expr} (shape : IndependentOwnerShape expr)
     {env : Core.TEnv} {ty : Ty} {start finish : Nat}
     (source : Core.tyExpr env expr start = .ok (ty, finish)) : IndependentOwnerExpr expr := by
