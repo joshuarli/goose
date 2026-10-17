@@ -26,9 +26,14 @@ def loopTargets : Option LoopCtx → List BlockId
   | some context => context.breakTo :: [match context.cont with
     | .jump header | .next header _ _ => header]
 
+def loopValues : Option LoopCtx → List ValueId
+  | some ⟨_, _, .next _ _ counter⟩ => [counter]
+  | _ => []
+
 structure LoopImportsReady (loop : Option LoopCtx) (state : LS) (imports : ImportedValues) : Prop where
   bounds : ∀ target ∈ loopTargets loop, target < state.blocks.size
   available : ∀ target ∈ loopTargets loop, AvailableValues state imports (imports target)
+  counters : AvailableValues state imports (loopValues loop)
 
 structure ImportedState (state : LS) (imports : ImportedValues) : Prop where
   certificate : BuilderImportedSSA state imports
@@ -50,12 +55,23 @@ theorem SSAResult.loop {before after : LS} {beforeImports afterImports : Importe
     {values : List ValueId} (result : SSAResult before after beforeImports afterImports values)
     {loop : Option LoopCtx} (ready : LoopImportsReady loop before beforeImports) :
     LoopImportsReady loop after afterImports := by
-  refine ⟨?_, ?_⟩
+  refine ⟨?_, ?_, result.frame _ ready.counters⟩
   · intro target member
     exact Nat.lt_of_lt_of_le (ready.bounds target member) result.advance.ext.1
   · intro target member
     rw [result.imports target (ready.bounds target member)]
     exact result.frame _ (ready.available target member)
+
+theorem SSAResult.trans {before middle after : LS} {beforeImports middleImports afterImports : ImportedValues}
+    {firstValues lastValues : List ValueId}
+    (one : SSAResult before middle beforeImports middleImports firstValues)
+    (two : SSAResult middle after middleImports afterImports lastValues) :
+    SSAResult before after beforeImports afterImports lastValues := by
+  refine ⟨two.checked, one.advance.trans two.advance, ?_, ?_, two.available⟩
+  · intro block bound
+    exact (two.imports block (Nat.lt_of_lt_of_le bound one.advance.ext.1)).trans (one.imports block bound)
+  · intro values available
+    exact two.frame values (one.frame values available)
 
 def SSARun (loop : Option LoopCtx) (inputs : List ValueId) (outputs : α → List ValueId)
     (action : B α) : Prop :=
@@ -122,6 +138,13 @@ theorem SSARun.congr_outputs {loop : Option LoopCtx} {inputs : List ValueId}
   intro env before result after run imports checked ready arguments
   obtain ⟨nextImports, preserved⟩ := source env before result after run imports checked ready arguments
   exact ⟨nextImports, { preserved with available := preserved.available.subset (subset result) }⟩
+
+theorem SSARun.withLoop {inputs : List ValueId} {outputs : α → List ValueId} {action : B α}
+    (source : SSARun none inputs outputs action) (loop : Option LoopCtx) :
+    SSARun loop inputs outputs action := by
+  intro env before result after run imports checked _ arguments
+  exact source env before result after run imports checked
+    ⟨by simp [loopTargets], by simp [loopTargets], by simp [AvailableValues, loopValues]⟩ arguments
 
 theorem ImportedState.initState : ImportedState initState (fun _ => []) := by
   refine ⟨BuilderImportedSSA.initState, LS.denseDefinitions_initState, ?_, ?_, ?_⟩

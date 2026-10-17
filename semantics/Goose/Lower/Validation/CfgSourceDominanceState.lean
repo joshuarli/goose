@@ -122,6 +122,31 @@ theorem ImportedState.allocate_current {state : LS} {imports : ImportedValues}
       exact False.elim (Nat.not_lt_zero block bound)
   · exact currentValues_bounded checked.definitions checked.opened.bound checked.importsBounded
 
+theorem currentValues_available {state : LS} {imports : ImportedValues}
+    (bounded : LiveBound state) : AvailableValues state imports (currentValues state imports) := by
+  intro block current value member
+  exact available_of_exitValues (bounded block current)
+    (by simpa only [currentValues, current] using member)
+
+theorem SSAResult.of_imports {before after : LS} {beforeImports afterImports : ImportedValues}
+    {values : List ValueId} (checked : ImportedState after afterImports) (advance : before.Adv after)
+    (imports : ∀ block, block < before.blocks.size → afterImports block = beforeImports block)
+    (live : before.cur.isSome = true) {target : BlockId} (current : after.cur = some target)
+    (captured : currentValues before beforeImports ⊆ afterImports target)
+    (available : AvailableValues after afterImports values) :
+    SSAResult before after beforeImports afterImports values := by
+  refine ⟨checked, advance, imports, ?_, available⟩
+  intro saved framed block selected value member
+  have same : block = target := Option.some.inj (selected.symm.trans current)
+  subst block
+  cases original : before.cur with
+  | none => simp [original] at live
+  | some source =>
+    have imported : value ∈ currentValues before beforeImports := by
+      simpa only [currentValues, original] using (framed source original value member).exitValues
+    obtain ⟨body, row, _⟩ := checked.opened target current
+    exact ⟨body, row, Or.inl (captured imported)⟩
+
 theorem ssa_inScope {loop : Option LoopCtx} {inputs : List ValueId} {outputs : α → List ValueId}
     {action : B α} (scope : ScopeId) (advance : AdvB action)
     (source : SSARun loop inputs outputs action) : SSARun loop inputs outputs (inScope scope action) := by
@@ -129,7 +154,7 @@ theorem ssa_inScope {loop : Option LoopCtx} {inputs : List ValueId} {outputs : �
   obtain ⟨middle, bodyRun, same⟩ := inScope_eq run
   let entered : LS := { before with stack := scope :: before.stack }
   have enteredChecked : ImportedState entered imports := checked.of_tables rfl rfl rfl
-  have enteredReady : LoopImportsReady loop entered imports := ⟨ready.bounds, ready.available⟩
+  have enteredReady : LoopImportsReady loop entered imports := ⟨ready.bounds, ready.available, ready.counters⟩
   have enteredArguments : AvailableValues entered imports inputs := arguments
   obtain ⟨nextImports, preserved⟩ := source env entered result middle bodyRun imports
     enteredChecked enteredReady enteredArguments
