@@ -79,4 +79,46 @@ theorem readRoots_variable_load_represent {env : PEnv} {varId : VarId} {localVar
   · simpa only [refLike, ite_true] using slotRoots
   · simpa [refLike] using rootsRepresent_empty func []
 
+
+theorem readRoots_variable_annotation {env : PEnv} {varId : VarId} {localVar : LocalVar}
+    {sourceRoots : List RootRef} {start finish : RState}
+    (checked : checkAnnotationShape env.mod env.impl env.ctx = .ok ())
+    (variableRow : env.impl.vars[varId]? = some localVar)
+    (source : readRoots env (.var varId) start = .ok (sourceRoots, finish)) :
+    sourceRoots = (env.ann varId).getD [] := by
+  rw [readRoots_variable_eq variableRow source]
+  by_cases reference : localVar.ty.isRefLike = true
+  · simp [reference]
+  · have missing : env.ann varId = none := by
+      unfold PEnv.ann
+      cases annotation : env.ctx.varRoots.find? (·.1 == varId) with
+      | none => rfl
+      | some entry =>
+        have entryVar : entry.1 = varId := eq_of_beq
+          (List.find?_some (p := fun entry : VarId × List RootRef => entry.1 == varId)
+            (a := entry) annotation)
+        obtain ⟨declaredVar, declaredLookup, refLike, _⟩ :=
+          Core.Declarative.annotationRows_sound env.mod env.impl env.ctx checked entry.1 entry.2
+            (List.mem_of_find?_eq_some annotation)
+        rw [entryVar, variableRow] at declaredLookup
+        cases declaredLookup
+        exact False.elim (reference refLike)
+    simp [reference, missing]
+
+theorem readRoots_variable_load_represent_of_annotations {env : PEnv}
+    {varId : VarId} {localVar : LocalVar} {sourceRoots : List RootRef} {start finish : RState}
+    {res : Array (List RootRef)} {vt : Array (Option VTy)} {func : Func}
+    {provenance : Prov} {result address : ValueId}
+    (checked : checkAnnotationShape env.mod env.impl env.ctx = .ok ())
+    (variableRow : env.impl.vars[varId]? = some localVar)
+    (source : readRoots env (.var varId) start = .ok (sourceRoots, finish))
+    (addressRoots : rootsAt provenance.vals address = [.local varId])
+    (slotRoots : RootsRepresent func (rootsAt provenance.slots varId) (env.ann varId |>.getD [])) :
+    RootsRepresent func (rootsOfDef res vt func provenance result (.load address)) sourceRoots := by
+  rw [rootsOfDef_load_slot addressRoots]
+  split
+  · rw [readRoots_variable_annotation checked variableRow source]
+    exact slotRoots
+  · exact rootsRepresent_empty func sourceRoots
+
 end Goose.Lower.Validation.SummaryPreservation
