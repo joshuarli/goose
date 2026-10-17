@@ -206,14 +206,20 @@ private:
         }
     }
 
-    // A mutable address frozen to read-only when a read-only reference is wanted.
-    int FreezeTo(CoreMut m, int r) {
+    int BorrowTo(CoreMut m, int r) {
         auto &t = mod.Type(ValTy(r));
         if (m == CoreMut::Const && t.kind == CoreType::Ref && t.mut == CoreMut::Mut) {
             GirInst i;
             i.op = GirOp::Freeze;
             i.a = r;
             return EmitDef(std::move(i));
+        }
+        if (m == CoreMut::Mut && mod.profile == CoreProfile::Shrink && t.kind == CoreType::Ref &&
+            t.mut == CoreMut::Mut && GirResizableKind(mod.Type(t.elem).kind)) {
+            GirInst borrow;
+            borrow.op = GirOp::OwnerBorrow;
+            borrow.a = r;
+            return EmitDef(std::move(borrow));
         }
         return r;
     }
@@ -302,7 +308,7 @@ private:
             }
             case CoreExprKind::Ref: {
                 auto r = LowerPlace(*e.place);
-                return FreezeTo(e.mut, r);
+                return BorrowTo(e.mut, r);
             }
             case CoreExprKind::Slice: {
                 auto vw = LowerView(*e.view);
@@ -541,7 +547,7 @@ private:
             } else {
                 auto &reference = get<CoreArgReference>(argument);
                 auto address = LowerPlace(*reference.place);
-                out.push_back(FreezeTo(reference.mut, address));
+                out.push_back(BorrowTo(reference.mut, address));
             }
             if (cur < 0) return {};
         }
@@ -1682,7 +1688,7 @@ private:
         int ev;
         if (s.byRef) {
             auto &vt = mod.Type((*vars)[s.var].type);
-            ev = vt.kind == CoreType::Ref ? FreezeTo(vt.mut, elem) : elem;
+            ev = vt.kind == CoreType::Ref ? BorrowTo(vt.mut, elem) : elem;
         } else {
             ev = Def(GirOp::Load, elem);
         }
