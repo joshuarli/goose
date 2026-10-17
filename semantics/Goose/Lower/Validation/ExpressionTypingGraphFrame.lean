@@ -102,7 +102,7 @@ theorem ContentsOperation.replace_types {globalKinds : Array VarKind} {structs :
     refine ⟨permitted, mu, id, fields, descriptor, field, ?_, descriptorRow, fieldRow, writable⟩
     rw [← agreement owner permitted]
     exact typed
-  | snapshot _ _ | refElem _ _ | indexChecked _ _ _ | indexProven _ _ => exact operation
+  | ownerBorrow _ | snapshot _ _ | refElem _ _ | indexChecked _ _ _ | indexProven _ _ => exact operation
   | _ => simpa only [ContentsOperation, typedPermissions, ← agreement value member] using operation
 
 theorem ContentsClosed.replace_types {globalKinds : Array VarKind} {structs : Array StructDef}

@@ -47,7 +47,7 @@ def WritableOperation (globalKinds : Array VarKind) (structs : Array StructDef)
   | .fieldAddr owner index => contents owner ∧ ∃ mu id fields descriptor field,
       types[owner]? = some (some (.data (.ref mu (.structT id fields)))) ∧
       structs[id]? = some descriptor ∧ descriptor.fields[index]? = some field ∧ field.binding = .mutable
-  | .snapshot _ owner | .refElem owner _ | .indexChecked owner _ _ | .indexProven owner _ => contents owner
+  | .ownerBorrow owner | .snapshot _ owner | .refElem owner _ | .indexChecked owner _ _ | .indexProven owner _ => contents owner
   | _ => (typedPermissions types value).1 = true
 
 theorem WritableOperation.check {globalKinds : Array VarKind} {structs : Array StructDef}
@@ -67,7 +67,7 @@ theorem WritableOperation.check {globalKinds : Array VarKind} {structs : Array S
   | fieldAddr owner index =>
     obtain ⟨member, mu, id, fields, descriptor, field, typed, descriptorRow, fieldRow, writable⟩ := operation
     simp [Func.permissionOfOp, typed, descriptorRow, fieldRow, writable, present owner member]
-  | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ =>
+  | ownerBorrow owner | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ =>
     exact present owner operation
   | _ => exact operation
 
