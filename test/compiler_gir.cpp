@@ -951,6 +951,15 @@ void RejectsParameterRootUnderapproximationAtCall() {
     touch.summary.reads = { CoreTarget { false, 0 } };
     m.funcs.push_back(touch);
 
+    assert(Code(m) == "");
+    auto absent = m;
+    absent.funcs[1].roots.params.clear();
+    assert(Code(absent) == "");
+    m.funcs[1].roots.params[0].second.clear();
+    assert(Code(m) == "GIR-V050");
+    m.funcs[1].roots.params[0].second = {
+        { CoreRootRef::Param, 0 }, { CoreRootRef::Static, 0 }
+    };
     assert(Code(m) == "GIR-V050");
 }
 
@@ -4195,6 +4204,8 @@ void FieldCallArgumentsKeepTheirOwnerRoot() {
     call.vals = { 4 };
     call.org = 0;
     Main(m).blocks[0].insts = { Enter(0), one, two, make, init, owner, field, call, Leave(0), Ret() };
+    assert(Code(m) == "");
+    m.funcs[1].roots.params = { { 0, {} } };
     assert(Code(m) == "GIR-V050");
 }
 
@@ -5353,6 +5364,29 @@ void ConstructionRecursiveArraysUseExplicitPackedTraversal() {
     Main(escaped).slots.push_back({ escaped.SliceType(CoreMut::Const, escaped.IntType(CoreIntTy::U8)), CoreVarKind::Let, 0, 1 });
     Main(escaped).blocks[0].insts.insert(Main(escaped).blocks[0].insts.end() - 2, store);
     assert(Code(escaped) != "");
+    auto incomplete = m;
+    auto fixed = incomplete.Type(Main(incomplete).slots[0].ty);
+    fixed.count = 3;
+    auto lengthThree = incomplete.Intern(fixed);
+    Main(incomplete).slots[0].ty = lengthThree;
+    Main(incomplete).blocks[0].insts[1].ty = lengthThree;
+    assert(Code(incomplete) == "GIR-V060");
+    for (bool dynamicProducer : { false, true }) {
+        auto invalid = m;
+        auto producer = invalid.Type(Main(invalid).slots[0].ty);
+        if (dynamicProducer) producer.kind = CoreType::Grow;
+        else producer.count = 3;
+        auto adapt = Def(GirOp::DestAdapt, 1);
+        adapt.a = 0;
+        adapt.ty = invalid.Intern(producer);
+        adapt.org = 0;
+        GirInst trap;
+        trap.op = GirOp::Abort;
+        trap.abort = GirAbortKind::Assert;
+        trap.org = 0;
+        Main(invalid).blocks[0].insts = { Enter(0), Main(invalid).blocks[0].insts[1], adapt, trap };
+        assert(Code(invalid) == "GIR-V010");
+    }
 }
 
 void ConstructionCallsAndCarrierBranchesLowerToPrimitiveChannels() {
@@ -5581,7 +5615,572 @@ void StorageSummaryCoverageNormalizesSpecializedAndGenericRoots() {
     }
 }
 
+GirModule ConstructionNamedAliasModule();
+
+GirModule ConstructionNamedGrowAsPackedResultModule() {
+    auto m = ConstructionNamedAliasModule();
+    auto grow = Main(m).slots[0].ty;
+    CoreType packed;
+    packed.kind = CoreType::VarArr;
+    packed.elem = m.Type(grow).elem;
+    auto packedType = m.Intern(packed);
+    Main(m).slots[0].ty = packedType;
+    Main(m).blocks[0].insts[2].ty = packedType;
+    Main(m).blocks[0].insts[2].knownCount.reset();
+    auto &callee = m.funcs[1];
+    callee.results[0] = packedType;
+    callee.blocks[0].params[0].second = m.CarrierType(CoreType::Dest, packedType, CoreRequest::Value);
+    auto local = Def(GirOp::Slot, 4);
+    local.idx = 0;
+    auto append = Def(GirOp::Push, 6);
+    append.a = 4;
+    append.b = 5;
+    append.org = 0;
+    auto sample = Def(GirOp::Snap, 7);
+    sample.a = 4;
+    sample.snap = GirSnapshotMode::Owner;
+    auto render = Def(GirOp::Render, 8);
+    render.a = 7;
+    render.org = 0;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, {}, 8 } };
+    print.org = 0;
+    auto &instructions = callee.blocks[0].insts;
+    auto beforeNamed = find_if(instructions.begin(), instructions.end(), [](auto &inst) { return inst.op == GirOp::DestNamed; });
+    instructions.insert(beforeNamed, { local, Int(m, 5, "9"), append, sample, render, print });
+    callee.summary.outputs = true;
+    auto slot = Def(GirOp::Slot, 3);
+    slot.idx = 0;
+    auto output = Def(GirOp::Snap, 4);
+    output.a = 3;
+    output.snap = GirSnapshotMode::Owner;
+    auto outputRender = Def(GirOp::Render, 5);
+    outputRender.a = 4;
+    outputRender.org = 0;
+    print.parts[0].val = 5;
+    auto &caller = Main(m).blocks[0].insts;
+    caller.insert(caller.end() - 2, { slot, output, outputRender, print });
+    Main(m).summary.outputs = true;
+    return m;
+}
+
+void ConstructionNamedGrowAliasesReserveTheReceivingPrefix() {
+    auto high = ConstructionNamedGrowAsPackedResultModule();
+    assert(Code(high) == "");
+    assert(Code(GirToLow(high).Lower()) == "");
+    auto wrong = high;
+    wrong.funcs[1].slots[0].ty = wrong.IntType(CoreIntTy::I64);
+    assert(Code(wrong) == "GIR-V010");
+}
+
+CoreModule ConstructionSourceTargetModule() {
+    CoreModule core;
+    core.profile = CoreProfile::Construction;
+    core.files = { "source-target.goose" };
+    core.types = { CoreType { .kind = CoreType::Int, .ity = CoreIntTy::I64 },
+                   CoreType { .kind = CoreType::Grow, .elem = 0 }, CoreType { .kind = CoreType::Unit } };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    CoreImpl entry;
+    entry.name = "main";
+    entry.body.scope = 0;
+    entry.vars = { CoreVar { "out", 1, CoreVarKind::Let, 0, origin } };
+    auto call = make_unique<CoreExpr>();
+    call->kind = CoreExprKind::Call;
+    call->ctx = 1;
+    call->type = 1;
+    call->org = origin;
+    CoreStmt receive;
+    receive.kind = CoreStmtKind::Let;
+    receive.var = 0;
+    receive.expr = std::move(call);
+    receive.org = origin;
+    entry.body.stmts.push_back(std::move(receive));
+    CoreImpl target;
+    target.name = "target";
+    target.body.scope = 0;
+    target.results = { CoreResultDescriptor { 1, CoreRequest::Value, nullopt } };
+    target.summary.constructs = { 0 };
+    auto helperCall = make_unique<CoreExpr>();
+    helperCall->kind = CoreExprKind::Call;
+    helperCall->ctx = 2;
+    helperCall->type = 2;
+    helperCall->org = origin;
+    CoreStmt invoke;
+    invoke.kind = CoreStmtKind::Expr;
+    invoke.expr = std::move(helperCall);
+    invoke.org = origin;
+    target.body.stmts.push_back(std::move(invoke));
+    CoreImpl helper;
+    helper.name = "helper";
+    helper.body.scope = 0;
+    helper.summary.needs = { 0 };
+    helper.summary.escapes = { 0 };
+    auto array = make_unique<CoreExpr>();
+    array->kind = CoreExprKind::Arr;
+    array->type = 1;
+    array->org = origin;
+    auto element = make_unique<CoreExpr>();
+    element->kind = CoreExprKind::Lit;
+    element->type = 0;
+    element->value = "7";
+    array->elems.push_back(std::move(element));
+    CoreStmt escape;
+    escape.kind = CoreStmtKind::ReturnFrom;
+    escape.target = 0;
+    escape.values.push_back(std::move(array));
+    escape.org = origin;
+    helper.body.stmts.push_back(std::move(escape));
+    core.impls.push_back(std::move(entry));
+    core.impls.push_back(std::move(target));
+    core.impls.push_back(std::move(helper));
+    core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1 }, CoreContext { .impl = 2 } };
+    core.targets = { CoreTargetSet { { 1 } } };
+    return core;
+}
+
+void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
+    auto core = ConstructionSourceTargetModule();
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    assert(GirWriter(high).Write().find("t_invoke") != string::npos);
+    assert(GirWriter(high).Write().find("t_escape") != string::npos);
+    bool unsupported = false;
+    try {
+        auto low = GirToLow(high).Lower();
+        assert(low.lowtargets.size() == 1);
+        assert(Code(low) == "");
+        assert(GirWriter(low).WriteLow().find("[\"lchannel\",0,") != string::npos);
+
+        auto unusedPayload = low;
+        auto targetFunction = low.lowtargets[0].members[0];
+        auto &targetBody = unusedPayload.funcs[targetFunction];
+        auto normalDispatch = find_if(targetBody.blocks[0].insts.begin(), targetBody.blocks[0].insts.end(),
+            [](const GirInst &inst) { return inst.op == GirOp::CondBr; });
+        assert(normalDispatch != targetBody.blocks[0].insts.end());
+        auto targetDispatch = normalDispatch->idx2;
+        auto hit = unusedPayload.funcs[targetFunction].blocks[targetDispatch].insts.back().idx;
+        auto &handler = unusedPayload.funcs[targetFunction].blocks[hit];
+        auto payloadUse = find_if(handler.insts.begin(), handler.insts.end(), [](const GirInst &inst) {
+            return inst.op == GirOp::Br;
+        });
+        assert(payloadUse != handler.insts.end() && payloadUse->vals.size() >= 2);
+        auto savedStart = find_if(targetBody.blocks[0].insts.begin(), targetBody.blocks[0].insts.end(),
+            [](const GirInst &inst) { return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == 4; });
+        assert(savedStart != targetBody.blocks[0].insts.end());
+        payloadUse->vals[1] = savedStart->res;
+        assert(Code(unusedPayload) == "GIR-V090");
+
+
+        auto missingPosition = low;
+        missingPosition.lowtargets[0].channels[0].position = -1;
+        assert(Code(missingPosition) == "GIR-V090");
+
+        auto duplicatePosition = low;
+        duplicatePosition.lowtargets[0].channels.push_back(duplicatePosition.lowtargets[0].channels[0]);
+        assert(Code(duplicatePosition) == "GIR-V090");
+
+        auto missingActivation = low;
+        auto &missingEntry = missingActivation.funcs[targetFunction].blocks[0].insts;
+        auto active = find_if(missingEntry.begin(), missingEntry.end(), [](const GirInst &inst) {
+            return inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == 0;
+        });
+        assert(active != missingEntry.end());
+        missingEntry.erase(active);
+        assert(!Code(missingActivation).empty());
+
+        auto duplicateActivation = low;
+        auto &duplicateEntry = duplicateActivation.funcs[targetFunction].blocks[0].insts;
+        auto activeStore = find_if(duplicateEntry.begin(), duplicateEntry.end(), [](const GirInst &inst) {
+            return inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == 0;
+        });
+        assert(activeStore != duplicateEntry.end());
+        duplicateEntry.insert(activeStore, *activeStore);
+        assert(!Code(duplicateActivation).empty());
+
+        auto missingDispatch = low;
+        auto duplicateDispatch = low;
+        auto missingHandler = low;
+        for (auto &block : missingDispatch.funcs[targetFunction].blocks) {
+            auto *term = GirIsTerminator(block.insts.back().op) ? &block.insts.back() : nullptr;
+            if (!term || term->op != GirOp::CondBr) continue;
+            for (auto &inst : block.insts) if (inst.op == GirOp::Call && inst.idx == 2) {
+                auto dispatch = term->idx2;
+                auto *caseTerm = &missingDispatch.funcs[targetFunction].blocks[dispatch].insts.back();
+                assert(caseTerm && caseTerm->op == GirOp::CondBr);
+                caseTerm->op = GirOp::Br;
+                caseTerm->idx2 = -1;
+                goto missing_dispatch_changed;
+            }
+        }
+missing_dispatch_changed:
+        assert(!Code(missingDispatch).empty());
+
+        for (auto &block : duplicateDispatch.funcs[targetFunction].blocks) {
+            auto *term = GirIsTerminator(block.insts.back().op) ? &block.insts.back() : nullptr;
+            if (!term || term->op != GirOp::CondBr) continue;
+            for (auto &inst : block.insts) if (inst.op == GirOp::Call && inst.idx == 2) {
+                auto dispatch = term->idx2;
+                auto &caseBlock = duplicateDispatch.funcs[targetFunction].blocks[dispatch];
+                for (auto &compare : caseBlock.insts) if (compare.op == GirOp::Cmp && compare.cmp == CoreCmpOp::Eq) {
+                    auto tag = compare.b;
+                    for (auto &definition : caseBlock.insts) if (definition.res == tag && definition.op == GirOp::Int)
+                        definition.text = "0";
+                }
+                goto duplicate_dispatch_changed;
+            }
+        }
+duplicate_dispatch_changed:
+        assert(!Code(duplicateDispatch).empty());
+
+        for (auto &block : missingHandler.funcs[targetFunction].blocks) {
+            auto *term = GirIsTerminator(block.insts.back().op) ? &block.insts.back() : nullptr;
+            if (!term || term->op != GirOp::CondBr) continue;
+            for (auto &inst : block.insts) if (inst.op == GirOp::Call && inst.idx == 2) {
+                auto dispatch = term->idx2;
+                auto *caseTerm = &missingHandler.funcs[targetFunction].blocks[dispatch].insts.back();
+                assert(caseTerm && caseTerm->op == GirOp::CondBr);
+                caseTerm->idx = caseTerm->idx2;
+                goto missing_handler_changed;
+            }
+        }
+missing_handler_changed:
+        assert(!Code(missingHandler).empty());
+    } catch (const GirLowerUnsupported &) {
+        unsupported = true;
+    }
+    assert(!unsupported);
+    auto forged = high;
+    forged.funcs[2].blocks[0].insts.back().op = GirOp::Ret;
+    forged.funcs[2].blocks[0].insts.back().vals.clear();
+    forged.funcs[2].blocks[0].insts.back().vals2.clear();
+    assert(Code(forged) == "GIR-V020");
+    auto differentEdge = high;
+    for (auto &block : differentEdge.funcs[1].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::Invoke) inst.escapes[0].block = inst.a;
+    assert(Code(differentEdge) == "GIR-V020");
+}
+
+void ConstructionReturnFlagsFollowCalls() {
+    auto core = ConstructionSourceTargetModule();
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    auto low = GirToLow(high).Lower();
+    assert(Code(low) == "");
+    auto i64 = low.IntType(CoreIntTy::I64);
+    GirFunc ordinary;
+    ordinary.name = "ordinary";
+    ordinary.params = { i64 };
+    ordinary.scopes = { -1 };
+    GirInst setNormal;
+    setNormal.op = GirOp::ReturnFlagSet;
+    setNormal.a = 1;
+    ordinary.blocks = { GirBlock { { { 0, i64 } }, { Int(low, 1, "0"), setNormal, Ret() } } };
+    low.funcs.push_back(ordinary);
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 3;
+    call.vals = { 0 };
+    call.org = 0;
+    auto &escape = low.funcs[2].blocks[0].insts;
+    auto flag = find_if(escape.begin(), escape.end(), [](const GirInst &inst) {
+        return inst.op == GirOp::ReturnFlagSet;
+    });
+    assert(flag != escape.end());
+    escape.insert(flag + 1, call);
+    assert(!Code(low).empty());
+}
+
+void ConstructionPointerEqualityRejectsTraceMetadata() {
+    auto low = ConstructionAliasedProvenanceModule();
+    auto &function = Main(low);
+    int valueCount = 0;
+    for (auto &block : function.blocks) {
+        valueCount += (int)block.params.size();
+        for (auto &inst : block.insts) valueCount += GirDefinesValue(inst);
+    }
+    auto comparison = Def(GirOp::PtrEq, valueCount);
+    comparison.a = 1;
+    comparison.b = 1;
+    auto &instructions = function.blocks[0].insts;
+    instructions.insert(instructions.end() - 2, comparison);
+    assert(Code(low) == "");
+    instructions[instructions.size() - 3].a = 4;
+    assert(Code(low) == "GIR-V090");
+}
+
+GirModule ConstructionMixedReferenceResultModule() {
+    auto m = ConstructionReturnedReferenceCopyModule();
+    auto &callee = m.funcs[1];
+    auto integer = m.IntType(CoreIntTy::I64);
+    callee.results.insert(callee.results.begin(), integer);
+    callee.resultProtocols.insert(callee.resultProtocols.begin(), GirResultProtocol {});
+    callee.roots.results.insert(callee.roots.results.begin(), vector<CoreRootRef> {});
+    auto &instructions = callee.blocks[0].insts;
+    instructions.insert(instructions.begin() + 2, Int(m, 1, "7"));
+    instructions.back() = Ret({ 1, 0 });
+    auto &caller = Main(m).blocks[0].insts;
+    auto projection = Def(GirOp::Result, 8);
+    projection.a = 6;
+    projection.idx = 1;
+    for (size_t position = 0; position < caller.size(); position++)
+        if (caller[position].op == GirOp::DestCopy) {
+            caller[position].b = 8;
+            caller.insert(caller.begin() + position, projection);
+            break;
+        }
+    return m;
+}
+
+void ConstructionReferenceProvenanceUsesEachResultPosition() {
+    auto high = ConstructionMixedReferenceResultModule();
+    assert(Code(high) == "");
+    assert(Code(GirToLow(high).Lower()) == "");
+    high.funcs[1].roots.results[1].clear();
+    assert(Code(high) == "GIR-V050");
+}
+
+GirModule ConstructionAdaptedCallModule(bool receivingVariable) {
+    auto m = ConstructionCallModule();
+    auto grow = Main(m).slots[0].ty;
+    CoreType variable;
+    variable.kind = CoreType::VarArr;
+    variable.elem = m.Type(grow).elem;
+    auto variableType = m.Intern(variable);
+    auto receiving = receivingVariable ? variableType : grow;
+    auto producer = receivingVariable ? grow : variableType;
+    Main(m).slots[0].ty = receiving;
+    auto &callee = m.funcs[1];
+    callee.results[0] = producer;
+    callee.blocks[0].params[0].second = m.CarrierType(CoreType::Dest, producer, CoreRequest::Value);
+    auto open = Main(m).blocks[0].insts[2];
+    open.ty = receiving;
+    auto adapt = Def(GirOp::DestAdapt, 2);
+    adapt.a = 1;
+    adapt.ty = producer;
+    adapt.request = CoreRequest::Value;
+    adapt.org = 0;
+    auto call = Main(m).blocks[0].insts[3];
+    call.res = 3;
+    call.vals2 = { 2 };
+    auto restore = Def(GirOp::DestAdaptFinish, 4);
+    restore.a = 3;
+    restore.org = 0;
+    auto publish = Main(m).blocks[0].insts[4];
+    publish.a = 4;
+    auto slot = Def(GirOp::Slot, 5);
+    slot.idx = 0;
+    auto sample = Def(GirOp::Snap, 6);
+    sample.a = 5;
+    sample.snap = GirSnapshotMode::Owner;
+    auto render = Def(GirOp::Render, 7);
+    render.a = 6;
+    render.org = 0;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, {}, 7 } };
+    print.org = 0;
+    Main(m).summary.outputs = true;
+    Main(m).blocks[0].insts = { Enter(0), Int(m, 0, "1"), open, adapt, call, restore, publish,
+                              slot, sample, render, print, Leave(0), Ret() };
+    return m;
+}
+
+void ConstructionAdaptersRestoreExactCompletionAndCancellation() {
+    for (bool receivingVariable : { false, true }) {
+        auto m = ConstructionAdaptedCallModule(receivingVariable);
+        assert(Code(m) == "");
+        assert(GirWriter(m).Write().find("i_dest_adapt_finish") != string::npos);
+        auto low = GirToLow(m).Lower();
+        assert(Code(low) == "");
+        m = ConstructionAdaptedCallModule(receivingVariable);
+        Main(m).blocks[0].insts[5].a = 1;
+        assert(Code(m) == "GIR-V010");
+        m = ConstructionAdaptedCallModule(receivingVariable);
+        Main(m).blocks[0].insts[3].request = CoreRequest::Register;
+        assert(Code(m) == "GIR-V010");
+        m = ConstructionAdaptedCallModule(receivingVariable);
+        Main(m).blocks[0].insts[4].vals2 = { 1 };
+        assert(Code(m) == "GIR-V010");
+        m = ConstructionAdaptedCallModule(receivingVariable);
+        auto reuse = Def(GirOp::DestAbandon, 8);
+        reuse.a = 1;
+        reuse.org = 0;
+        Main(m).blocks[0].insts.insert(Main(m).blocks[0].insts.begin() + 4, reuse);
+        assert(Code(m) == "GIR-V060");
+        m = ConstructionAdaptedCallModule(receivingVariable);
+        auto abandon = Def(GirOp::DestAbandon, 3);
+        abandon.a = 2;
+        abandon.org = 0;
+        Main(m).blocks[0].insts[4] = abandon;
+        Main(m).blocks[0].insts[6].op = GirOp::DestCancel;
+        Main(m).blocks[0].insts.resize(7);
+        Main(m).blocks[0].insts.push_back(Leave(0));
+        Main(m).blocks[0].insts.push_back(Ret());
+        m.funcs.resize(1);
+        assert(Code(m) == "");
+        assert(Code(GirToLow(m).Lower()) == "");
+        Main(m).blocks[0].insts[6].a = 3;
+        assert(Code(m) == "GIR-V060");
+    }
+}
+
+GirModule ConstructionNamedAliasModule() {
+    auto m = ConstructionCallModule();
+    auto &callee = m.funcs[1];
+    callee.slots = { { callee.results[0], CoreVarKind::Var, 0, 0 } };
+    callee.resultProtocols[0].namedSlot = 0;
+    GirInst bind;
+    bind.op = GirOp::DestBind;
+    bind.idx = 0;
+    bind.a = 2;
+    bind.org = 0;
+    auto named = Def(GirOp::DestNamed, 3);
+    named.idx = 0;
+    named.org = 0;
+    auto &instructions = callee.blocks[0].insts;
+    instructions.insert(instructions.begin() + 4, bind);
+    instructions.insert(instructions.begin() + 5, named);
+    instructions.back() = Ret({ 3 });
+    return m;
+}
+
+void ConstructionNamedAliasesUseTheIncomingStack() {
+    auto high = ConstructionNamedAliasModule();
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(Code(low) == "");
+    assert(low.funcs[1].stacks == 0);
+    int initialization = 0;
+    for (auto &block : low.funcs[1].blocks) for (auto &inst : block.insts) initialization += inst.op == GirOp::HdrInit;
+    assert(initialization == 1);
+    for (auto &block : low.funcs[1].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::HdrInit) inst.b = inst.a;
+    assert(Code(low) == "GIR-V090");
+}
+
+GirModule ConstructionPushReferenceModule() {
+    auto m = Base();
+    m.profile = CoreProfile::Construction;
+    auto byte = m.IntType(CoreIntTy::U8);
+    CoreType inner;
+    inner.kind = CoreType::VarArr;
+    inner.elem = byte;
+    auto innerType = m.Intern(inner);
+    CoreType outer;
+    outer.kind = CoreType::Grow;
+    outer.elem = innerType;
+    auto outerType = m.Intern(outer);
+    Main(m).slots = { { outerType, CoreVarKind::Let, 0, 0 } };
+    Main(m).summary.aborts = true;
+    Main(m).summary.outputs = true;
+    auto empty = Def(GirOp::DestOpen, 1);
+    empty.ty = outerType;
+    empty.knownCount = 0;
+    empty.destReceiver = GirDestSlotReceiver { 0 };
+    empty.org = 0;
+    auto finishEmpty = Def(GirOp::DestFinish, 2);
+    finishEmpty.a = 1;
+    GirInst publishEmpty;
+    publishEmpty.op = GirOp::DestPublish;
+    publishEmpty.a = 2;
+    publishEmpty.org = 0;
+    auto owner = Def(GirOp::Slot, 3);
+    owner.idx = 0;
+    auto push = Def(GirOp::DestOpen, 4);
+    push.ty = innerType;
+    push.destReceiver = GirDestPushReceiver { 3 };
+    push.org = 0;
+    GirInst bytes;
+    bytes.op = GirOp::DestBytes;
+    bytes.a = 4;
+    bytes.bytes = { 65 };
+    bytes.org = 0;
+    auto finish = Def(GirOp::DestFinish, 5);
+    finish.a = 4;
+    auto reference = Def(GirOp::DestPublishRef, 6);
+    reference.a = 5;
+    reference.org = 0;
+    auto sample = Def(GirOp::Snap, 7);
+    sample.a = 6;
+    auto element = Def(GirOp::Elem, 9);
+    element.a = 7;
+    element.b = 8;
+    element.org = 0;
+    auto value = Def(GirOp::Int, 10);
+    value.ty = byte;
+    value.text = "66";
+    GirInst store;
+    store.op = GirOp::Store;
+    store.a = 9;
+    store.b = 10;
+    store.org = 0;
+    auto length = Def(GirOp::ArrayLen, 11);
+    length.a = 3;
+    auto render = Def(GirOp::Render, 12);
+    render.a = 11;
+    render.org = 0;
+    auto sampleAgain = Def(GirOp::Snap, 13);
+    sampleAgain.a = 6;
+    auto byteReference = Def(GirOp::Elem, 14);
+    byteReference.a = 13;
+    byteReference.b = 8;
+    byteReference.org = 0;
+    auto load = Def(GirOp::Load, 15);
+    load.a = 14;
+    auto renderByte = Def(GirOp::Render, 16);
+    renderByte.a = 15;
+    renderByte.org = 0;
+    GirInst print;
+    print.op = GirOp::Print;
+    print.parts = { { false, {}, 12 }, { true, " ", -1 }, { false, {}, 16 } };
+    print.org = 0;
+    Main(m).blocks[0].insts = { Enter(0), Int(m, 0, "0"), empty, finishEmpty, publishEmpty,
+        owner, push, bytes, finish, reference, sample, Int(m, 8, "0"), element, value, store,
+        length, render, sampleAgain, byteReference, load, renderByte, print, Leave(0), Ret() };
+    return m;
+}
+
+void ConstructionPushPublishesOneMutableElementReference() {
+    auto high = ConstructionPushReferenceModule();
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(Code(low) == "");
+    int beginnings = 0, publications = 0;
+    for (auto &function : low.funcs) for (auto &block : function.blocks) for (auto &inst : block.insts) {
+        beginnings += inst.op == GirOp::Event && inst.event == GirEventKind::Begin;
+        publications += inst.op == GirOp::Event && inst.event == GirEventKind::Publish;
+    }
+    assert(beginnings == 2 && publications == 2);
+    auto &instructions = Main(high).blocks[0].insts;
+    instructions[6].destReceiver = GirDestSlotReceiver { 0 };
+    instructions[6].ty = Main(high).slots[0].ty;
+    assert(Code(high) == "GIR-V010");
+}
+
+void ConstructionPrintSnapshotsHaveOneResumedConsumer() {
+    auto high = ConstructionPushReferenceModule();
+    auto &instructions = Main(high).blocks[0].insts;
+    auto print = find_if(instructions.begin(), instructions.end(), [](auto &inst) { return inst.op == GirOp::Print; });
+    print->parts.push_back(print->parts[0]);
+    assert(Code(high) == "GIR-V060");
+    high = ConstructionPushReferenceModule();
+    auto &unconsumed = Main(high).blocks[0].insts;
+    unconsumed.erase(find_if(unconsumed.begin(), unconsumed.end(), [](auto &inst) { return inst.op == GirOp::Print; }));
+    assert(Code(high) == "GIR-V060");
+}
+
 int main() {
+    ConstructionPrintSnapshotsHaveOneResumedConsumer();
+    ConstructionNamedGrowAliasesReserveTheReceivingPrefix();
+    ConstructionSourceTargetsLowerToCheckedReceivingEdges();
+    ConstructionReturnFlagsFollowCalls();
+    ConstructionPointerEqualityRejectsTraceMetadata();
+    ConstructionReferenceProvenanceUsesEachResultPosition();
+    ConstructionPushPublishesOneMutableElementReference();
+    ConstructionAdaptersRestoreExactCompletionAndCancellation();
+    ConstructionNamedAliasesUseTheIncomingStack();
     StorageSummaryCoverageNormalizesSpecializedAndGenericRoots();
     ConstructionReturnedReferenceRetainsCopyProvenance();
     ConstructionProvenanceShadowsDistinguishAliasedArguments();

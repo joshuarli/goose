@@ -19,21 +19,21 @@ enum class GirOp : uint8_t {
     Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
     Struct, Field, Bytes, Result, DestOpen, DestChild, DestFinish, DestNamed, ResultExitDest,
     DestAbandonNamed, DestArg, DestAbandon, DestValue, DestRelocate, DestStage, DestFit,
-    CallConstruct, TargetDest, Render,
+    CallConstruct, TargetDest, Render, DestPublishRef, DestAdapt, DestAdaptFinish,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
-    HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId, SourceNew, SourceChild, SourceParam, SourceEnter, SourceCallPush, SourceCallGet, SourceGlobal,
+    HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId, PtrEq, SourceNew, SourceChild, SourceParam, SourceEnter, SourceCallPush, SourceCallGet, SourceGlobal, SourceTargetEnter, SourceTargetGet,
     // Instructions that define none, high stage.
     Init, Store, Append, AppendValue, PopN, Resize, Clear, Replace, DestWrite, DestAttach,
     DestBytes, DestText, DestCopy, DestRepeat, DestSnapshot, DestBind, DestPublish, DestCancel, Enter, Leave, Print,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
-    BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event, SourceLeave, SourceCallPop, SourceResult, SourceCopy, SourceGlobalSet,
+    BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event, SourceLeave, SourceCallPop, SourceResult, SourceCopy, SourceGlobalSet, SourceTargetLeave, SourceTargetResult,
     // Terminators.
     Br, CondBr, Invoke, Ret, Escape, Abort, Exit, Unreachable,
 };
 
-inline bool GirDefines(GirOp op) { return op <= GirOp::SourceGlobal; }
+inline bool GirDefines(GirOp op) { return op <= GirOp::SourceTargetGet; }
 inline bool GirIsTerminator(GirOp op) { return op >= GirOp::Br; }
 
 // Whether an instruction belongs to the high stage only, the low stage only,
@@ -51,7 +51,7 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::ResultExitDest: case GirOp::DestAbandonNamed: case GirOp::DestArg:
         case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
         case GirOp::DestStage: case GirOp::DestFit: case GirOp::CallConstruct:
-        case GirOp::TargetDest: case GirOp::Render: case GirOp::AppendValue: case GirOp::DestAttach:
+        case GirOp::TargetDest: case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestAdapt: case GirOp::DestAdaptFinish: case GirOp::AppendValue: case GirOp::DestAttach:
         case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot: case GirOp::DestBind:
         case GirOp::DestCancel: case GirOp::Invoke: case GirOp::Escape:
         case GirOp::Unit: case GirOp::Init:
@@ -62,8 +62,8 @@ inline bool GirHighOnly(GirOp op) {
     }
 }
 inline bool GirLowOnly(GirOp op) {
-    return (op >= GirOp::PtrOffset && op <= GirOp::SourceGlobal) ||
-           (op >= GirOp::PStore && op <= GirOp::SourceGlobalSet);
+    return (op >= GirOp::PtrOffset && op <= GirOp::SourceTargetGet) ||
+           (op >= GirOp::PStore && op <= GirOp::SourceTargetResult);
 }
 
 enum class GirAbortKind : uint8_t {
@@ -335,8 +335,10 @@ struct GirModule {
     const CoreType &Type(GirTypeId t) const { return types[t]; }
 };
 
+enum class GirSourceKind : int { Unknown = -1, Ordinary, Descriptor, Scope, Call, Target, Mixed };
+
 struct GirSourceClassification {
-    vector<int> values, members;
+    vector<GirSourceKind> values, members;
 };
 
 inline GirSourceClassification GirSourceKinds(const GirFunc &function) {
@@ -345,27 +347,28 @@ inline GirSourceClassification GirSourceKinds(const GirFunc &function) {
         count += (int)block.params.size();
         for (auto &instruction : block.insts) count += GirDefinesValue(instruction);
     }
-    GirSourceClassification kinds { vector<int>(count, 0), vector<int>(function.members.size(), -1) };
+    GirSourceClassification kinds { vector<GirSourceKind>(count, GirSourceKind::Ordinary), vector<GirSourceKind>(function.members.size(), GirSourceKind::Unknown) };
     for (size_t block = 1; block < function.blocks.size(); block++)
-        for (auto &parameter : function.blocks[block].params) kinds.values[parameter.first] = -1;
+        for (auto &parameter : function.blocks[block].params) kinds.values[parameter.first] = GirSourceKind::Unknown;
     for (auto &block : function.blocks) for (auto &instruction : block.insts) {
         switch (instruction.op) {
-            case GirOp::SourceNew: case GirOp::SourceChild: case GirOp::SourceParam: case GirOp::SourceCallGet: case GirOp::SourceGlobal:
-                kinds.values[instruction.res] = 1; break;
-            case GirOp::SourceEnter: kinds.values[instruction.res] = 2; break;
-            case GirOp::SourceCallPush: kinds.values[instruction.res] = 3; break;
-            case GirOp::LocalGet: kinds.values[instruction.res] = -1; break;
+            case GirOp::SourceNew: case GirOp::SourceChild: case GirOp::SourceParam: case GirOp::SourceCallGet: case GirOp::SourceGlobal: case GirOp::SourceTargetGet:
+                kinds.values[instruction.res] = GirSourceKind::Descriptor; break;
+            case GirOp::SourceTargetEnter: kinds.values[instruction.res] = GirSourceKind::Target; break;
+            case GirOp::SourceEnter: kinds.values[instruction.res] = GirSourceKind::Scope; break;
+            case GirOp::SourceCallPush: kinds.values[instruction.res] = GirSourceKind::Call; break;
+            case GirOp::LocalGet: kinds.values[instruction.res] = GirSourceKind::Unknown; break;
             default: break;
         }
     }
-    auto merge = [](int current, int value) {
-        if (value < 0) return current;
-        if (current < 0) return value;
-        return current == value ? current : 4;
+    auto merge = [](GirSourceKind current, GirSourceKind value) {
+        if (value == GirSourceKind::Unknown) return current;
+        if (current == GirSourceKind::Unknown) return value;
+        return current == value ? current : GirSourceKind::Mixed;
     };
     for (int round = 0; round < count * 4 + 8; round++) {
         auto previous = kinds;
-        fill(kinds.members.begin(), kinds.members.end(), -1);
+        fill(kinds.members.begin(), kinds.members.end(), GirSourceKind::Unknown);
         for (auto &block : function.blocks) for (auto &instruction : block.insts)
             if (instruction.op == GirOp::LocalSet)
                 kinds.members[instruction.idx] = merge(kinds.members[instruction.idx], kinds.values[instruction.a]);
