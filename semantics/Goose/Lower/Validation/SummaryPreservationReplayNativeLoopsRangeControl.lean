@@ -20,7 +20,7 @@ theorem loopRangeNative (ready : ReplayBuilder module results vt func target le 
     (counterScalar : rootsAt upper.vals counter = [])
     (generated : GeneratedBuilderState ls)
     (native : NativeRows vt (lowerRange type counter bound header body le ls).2)
-    (bodyAdv : ∀ depth exit, AdvB (body depth exit)) (bodyTypes : ∀ depth exit, TypeRun (body depth exit))
+    (bodyAdv : ∀ depth exit, AdvB (body depth exit))
     (bodyStep : ∀ provenance,
       let compared := Goose.Lower.emitDef (.cmp .lt type counter bound) le ls
       let split := fork compared.1 le compared.2
@@ -29,6 +29,7 @@ theorem loopRangeNative (ready : ReplayBuilder module results vt func target le 
       GeneratedBuilderState started → NativeRows vt (body compared.2.stack.length split.1.2 le started).2 →
       header < started.blocks.size → split.1.2 < started.blocks.size → counter < started.vals.size →
       rootsAt provenance.vals counter = [] →
+      (∀ old, old < upper.vals.size → rootsAt provenance.vals old = rootsAt upper.vals old) →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots
           (body compared.2.stack.length split.1.2 le started).2 next ∧
         (∀ old, old < provenance.vals.size → rootsAt next.vals old = rootsAt provenance.vals old) ∧
@@ -60,7 +61,7 @@ theorem loopRangeNative (ready : ReplayBuilder module results vt func target le 
       dsimp only
       intro stateReady stateGenerated stateNative exitBound blocks values
       exact bodyStep compareProv stateReady stateGenerated stateNative (Nat.lt_of_lt_of_le headerStill blocks) exitBound
-        (Nat.lt_of_lt_of_le counterStill values) counterRoots)
+        (Nat.lt_of_lt_of_le counterStill values) counterRoots compareGrowth)
     (by
       intro state provenance stateReady blocks values priorRoots
       exact stateReady.loopRangeBack type counter header (Nat.lt_of_lt_of_le headerStill blocks) (Nat.lt_of_lt_of_le counterStill values))

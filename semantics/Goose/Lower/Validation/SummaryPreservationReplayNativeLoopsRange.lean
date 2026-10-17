@@ -11,7 +11,7 @@ def nativeRangeStart (low high : Expr) (le : LEnv) (state : LS) : LS :=
   let last := lowerExpr high le first.2
   let type := (intTyOf first.1 le last.2).1
   let allocated := newBlock [.data (.int type)] le last.2
-  let bridged := emitTerm (.br allocated.1.1 [first.1]) le allocated.2
+  let bridged := Goose.Lower.emitTerm (.br allocated.1.1 [first.1]) le allocated.2
   (Goose.Lower.setCur (some allocated.1.1) le bridged.2).2
 
 namespace ReplayBuilder
@@ -74,7 +74,7 @@ theorem typedRangeNative {typingEnv output : TEnv} {env : PEnv} {variableId : Va
         let type ← intTyOf first.1
         let (header, parameters) ← newBlock [.data (.int type)]
         let counter := parameters.headD 0
-        emitTerm (.br header [first.1])
+        Goose.Lower.emitTerm (.br header [first.1])
         Goose.Lower.setCur (some header)
         lowerRange type counter last.1 header (fun depth exit => lowerBlock
           (some ⟨depth, exit, .next header type counter⟩) [(variableId, counter, origin)] false body)
@@ -131,7 +131,7 @@ theorem typedRangeNative {typingEnv output : TEnv} {env : PEnv} {variableId : Va
       obtain ⟨headerProv, headerReady, counterEmpty, headerGrowth⟩ := lastReady.loopScalarBlock (.data (.int actualType))
       have firstAfterHeader : rootsAt headerProv.vals first.1 = [] :=
         (headerGrowth first.1 (by simpa only [lastReady.roots.valueSize] using firstBound)).trans firstScalar
-      let bridged := emitTerm (.br allocated.1.1 [first.1]) le allocated.2
+      let bridged := Goose.Lower.emitTerm (.br allocated.1.1 [first.1]) le allocated.2
       have bridgeReady := headerReady.loopBranch allocated.1.1 [first.1] headerBound
         (by simpa [allocated, newBlock1_run] using Nat.lt_succ_of_lt firstBound) (by simpa using firstAfterHeader)
       have bridgeAdv := advB_emitTerm (.br allocated.1.1 [first.1]) le allocated.2 bridged.1 bridged.2 rfl
@@ -146,14 +146,14 @@ theorem typedRangeNative {typingEnv output : TEnv} {env : PEnv} {variableId : Va
           have same : destination = allocated.1.1 := List.mem_singleton.mp member
           subst destination
           exact headerBound)
-        (rfl : emitTerm (.br allocated.1.1 [first.1]) le allocated.2 = ((), bridged.2))
+        (rfl : Goose.Lower.emitTerm (.br allocated.1.1 [first.1]) le allocated.2 = ((), bridged.2))
       have startedGenerated := bridgeGenerated.setCur (some allocated.1.1) (by intro b row; cases row; exact headerStill)
         (rfl : Goose.Lower.setCur (some allocated.1.1) le bridged.2 = ((), started))
       have startEq : nativeRangeStart low high le ls = started := by
         unfold nativeRangeStart
         change (let type := (intTyOf first.1 le last.2).1
           let allocated := newBlock [.data (.int type)] le last.2
-          let bridged := emitTerm (.br allocated.1.1 [first.1]) le allocated.2
+          let bridged := Goose.Lower.emitTerm (.br allocated.1.1 [first.1]) le allocated.2
           (Goose.Lower.setCur (some allocated.1.1) le bridged.2).2) = started
         rw [typeRun]
       let bodyAction := fun depth exit => lowerBlock (some ⟨depth, exit, .next allocated.1.1 actualType counter⟩)
@@ -177,15 +177,21 @@ theorem typedRangeNative {typingEnv output : TEnv} {env : PEnv} {variableId : Va
       obtain ⟨next, nextReady, growth, transfer⟩ := startedReady.loopRangeNative expected actualType counter last.1 allocated.1.1 bodyAction
         (by rfl) headerStill (Nat.lt_of_lt_of_le counterBound bridgeAdv.vals) (Nat.lt_of_lt_of_le lastResult.bound valueGrowth)
         (by simpa only [counterEq] using counterEmpty) startedGenerated nativeRange (fun _ _ => advB_lowerBlock _ _ _ _)
-        (fun _ _ => types_lowerBlock _ _ _ _)
         (by
           intro provenance
           dsimp only
-          intro stateReady stateGenerated stateNative headerBound exitBound counterBound counterScalar
+          intro stateReady stateGenerated stateNative headerBound exitBound counterBound counterScalar priorRoots
           let compared := Goose.Lower.emitDef (.cmp .lt actualType counter last.1) le started
           let split := fork compared.1 le compared.2
           let bodyEntry := nativeRangeBody actualType counter last.1 le started
           have bounds : LoopBuilderTargets (some ⟨compared.2.stack.length, split.1.2, .next allocated.1.1 actualType counter⟩) bodyEntry := ⟨exitBound, headerBound⟩
+          have replayBounds : LoopReplayBounds (some ⟨compared.2.stack.length, split.1.2, .next allocated.1.1 actualType counter⟩)
+              scopeCount bodyEntry := by
+            refine ⟨counterBound, ?_⟩
+            change ∀ entered ∈ (loopBodyEntry compared.1 le compared.2).stack.take
+              ((loopBodyEntry compared.1 le compared.2).stack.length - compared.2.stack.length), entered < scopeCount
+            rw [native_loopBody_entry_stack]
+            simp
           obtain ⟨next, nextReady, _, retained, transfer⟩ := bodyChild compared.2.stack.length allocated.1.1 split.1.2 actualType counter bodyEntry provenance
             (by change actualType = (intTyOf first.1 le last.2).1; rw [typeRun]) headerEq counterEq
             (by change bodyEntry = nativeRangeBody actualType counter last.1 le (nativeRangeStart low high le ls); rw [startEq])
@@ -200,7 +206,7 @@ theorem typedRangeNative {typingEnv output : TEnv} {env : PEnv} {variableId : Va
               change entered ∈ bridged.2.stack at member
               rw [bridgeAdv.stack, allocatedAdv.stack, lastAdv.stack, firstAdv.stack] at member
               exact member)
-            stateReady stateGenerated bounds stateNative
+            stateReady stateGenerated bounds replayBounds stateNative
           exact ⟨next, nextReady, retained, transfer⟩)
       have headerReturns : ReturnMembershipFrame last.2 started := by
         apply ReturnFrameRun.of_absence (fun _ => ReturnFrames.returnAbsent_header1 (.data (.int actualType)) first.1 (fun _ _ => ReturnFrames.returnAbsent_pure ()))

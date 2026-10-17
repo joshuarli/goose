@@ -7,7 +7,7 @@ open Goose.Core Goose.Core.Sound Goose.GIR
 
 def nativeWhileHeader (le : LEnv) (state : LS) : LS :=
   let allocated := newBlock [] le state
-  let bridged := emitTerm (.br allocated.1.1 []) le allocated.2
+  let bridged := Goose.Lower.emitTerm (.br allocated.1.1 []) le allocated.2
   (Goose.Lower.setCur (some allocated.1.1) le bridged.2).2
 
 def nativeWhileContext (condition : Expr) (le : LEnv) (state : LS) : LoopCtx :=
@@ -56,7 +56,7 @@ theorem typedWhileNative {typingEnv output : TEnv} {env : PEnv} {condition : Exp
   have headerEq : allocated.1.1 = ls.blocks.size := by simp [allocated, newBlock0_run]
   have allocatedReady := ready.loopEmptyBlock
   have headerBound : allocated.1.1 < allocated.2.blocks.size := by simp [allocated, newBlock0_run]
-  let bridged := emitTerm (.br allocated.1.1 []) le allocated.2
+  let bridged := Goose.Lower.emitTerm (.br allocated.1.1 []) le allocated.2
   have bridgeReady := allocatedReady.loopBranch allocated.1.1 [] headerBound (by simp) (by simp)
   have bridgeAdv := advB_emitTerm (.br allocated.1.1 []) le allocated.2 bridged.1 bridged.2 rfl
   have headerStill := Nat.lt_of_lt_of_le headerBound bridgeAdv.ext.1
@@ -64,7 +64,7 @@ theorem typedWhileNative {typingEnv output : TEnv} {env : PEnv} {condition : Exp
   have startedReady := bridgeReady.setCur (some allocated.1.1) (by intro b row; cases row; exact headerStill)
   have allocatedGenerated := generated.newBlock [] (rfl : newBlock [] le ls = allocated)
   have bridgeGenerated := allocatedGenerated.emitTerm (.br allocated.1.1 [])
-    (by simpa [Term.successors, allocated, newBlock0_run] using headerBound) (rfl : emitTerm (.br allocated.1.1 []) le allocated.2 = bridged)
+    (by simpa [Term.successors, allocated, newBlock0_run] using headerBound) (rfl : Goose.Lower.emitTerm (.br allocated.1.1 []) le allocated.2 = bridged)
   have startedGenerated := bridgeGenerated.setCur (some allocated.1.1)
     (by intro b row; cases row; exact headerStill) (rfl : Goose.Lower.setCur (some allocated.1.1) le bridged.2 = ((), started))
   let tested := lowerExpr condition le started
@@ -114,15 +114,15 @@ theorem typedWhileNative {typingEnv output : TEnv} {env : PEnv} {condition : Exp
       by rw [stopped]; exact entryTransfer.trans conditionTransfer⟩
   | some block =>
     have live : tested.2.cur.isSome = true := by simp [current]
-    have nativeLoop : NativeRows vt (Goose.Lower.loopBody tested.1 bodyAction (emitTerm (.br allocated.1.1 [])) le tested.2).2 := by
+    have nativeLoop : NativeRows vt (Goose.Lower.loopBody tested.1 bodyAction (Goose.Lower.emitTerm (.br allocated.1.1 [])) le tested.2).2 := by
       rw [whole] at native
       change NativeRows vt (whenLive () _ le tested.2).2 at native
       rw [whenLive_some _ _ _ current] at native
       exact native
-    have backReturns : ReturnFrameRun (emitTerm (.br allocated.1.1 [])) :=
+    have backReturns : ReturnFrameRun (Goose.Lower.emitTerm (.br allocated.1.1 [])) :=
       .of_absence (fun _ => ReturnFrames.returnAbsent_emitTerm _ (by intro _ _ same; cases same))
     obtain ⟨next, nextReady, growth, transfer⟩ := conditionReady.loopBodyNative expected tested.1
-      (conditionValue live).bound live bodyAction (emitTerm (.br allocated.1.1 [])) testedGenerated nativeLoop
+      (conditionValue live).bound live bodyAction (Goose.Lower.emitTerm (.br allocated.1.1 [])) testedGenerated nativeLoop
       (fun _ _ => advB_lowerBlock _ _ _ _) (advB_emitTerm _) (types_emitTerm _) backReturns
       (by
         dsimp only
@@ -131,6 +131,12 @@ theorem typedWhileNative {typingEnv output : TEnv} {env : PEnv} {condition : Exp
           Nat.lt_of_lt_of_le (Nat.lt_of_lt_of_le headerStill testedAdv.ext.1) blocks
         have bounds : LoopBuilderTargets (some ⟨tested.2.stack.length, (fork tested.1 le tested.2).1.2, .jump allocated.1.1⟩)
             (loopBodyEntry tested.1 le tested.2) := ⟨exitBound, header⟩
+        have replayBounds : LoopReplayBounds (some ⟨tested.2.stack.length, (fork tested.1 le tested.2).1.2, .jump allocated.1.1⟩)
+            scopeCount (loopBodyEntry tested.1 le tested.2) := by
+          constructor
+          · trivial
+          · rw [native_loopBody_entry_stack]
+            simp
         obtain ⟨next, nextReady, _, retained, transfer⟩ := bodyChild conditionProv bodyType conditionFinish finish
           conditionState after bodyRoots bodyRange bodyTyped bodyReplay wholeEffect scopes (by simp) (by simp) (by simp)
           (by
@@ -140,14 +146,15 @@ theorem typedWhileNative {typingEnv output : TEnv} {env : PEnv} {condition : Exp
             change entered ∈ (loopBodyEntry tested.1 le tested.2).stack at member
             rw [native_loopBody_entry_stack, testedAdv.stack, startStack] at member
             exact member)
-          stateReady stateGenerated (by simpa only [nativeWhileContext, nativeWhileBody, headerEq] using bounds) stateNative
+          stateReady stateGenerated (by simpa only [nativeWhileContext, nativeWhileBody, headerEq] using bounds)
+          (by simpa only [nativeWhileContext, nativeWhileBody, headerEq] using replayBounds) stateNative
         exact ⟨next, nextReady, retained, transfer⟩)
       (by
         intro state provenance stateReady blocks values priorRoots
         exact ⟨provenance, stateReady.loopBranch allocated.1.1 []
           (Nat.lt_of_lt_of_le (Nat.lt_of_lt_of_le headerStill testedAdv.ext.1) blocks) (by simp) (by simp), fun _ _ => rfl⟩)
     have same : lowerStmt loop (.while condition body origin) le ls =
-        Goose.Lower.loopBody tested.1 bodyAction (emitTerm (.br allocated.1.1 [])) le tested.2 := by
+        Goose.Lower.loopBody tested.1 bodyAction (Goose.Lower.emitTerm (.br allocated.1.1 [])) le tested.2 := by
       rw [whole]
       change whenLive () _ le tested.2 = _
       rw [whenLive_some _ _ _ current]
