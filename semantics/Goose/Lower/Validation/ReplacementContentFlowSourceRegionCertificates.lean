@@ -1,5 +1,6 @@
 import Goose.GIR.AdmittedRegionsSound
 import Goose.GIR.ReplacementContentFlowProofsSteps
+import Goose.Lower.Validation.SummaryPreservationRootRefinement
 
 namespace Goose.Lower.Validation.ReplacementContentFlowSource
 
@@ -37,13 +38,17 @@ theorem admitted_parameter_store_within {module : GIR.Module} {func : Func}
     (reference : valRefLike types value = true)
     (target : RootRef.param parameter ∈ rootsAt provenance.vals address)
     (sliceReference : (func.params[parameter]?).any Ty.isRefSlice = true)
+    (closed : SummaryPreservation.ParameterRootsClosed func)
     (operand : (flowAt state.values value).NormalizedWithin func
       ((rootsAt provenance.vals value).flatMap func.expandParameterRoot)) :
     ∃ ceiling, func.roots.contents.find? (·.1 == parameter) = some (parameter, ceiling) ∧
       (flowAt state.values value).NormalizedWithin func (ceiling.flatMap func.expandParameterRoot) := by
   obtain ⟨ceiling, row, within⟩ := func.checkAdmittedRegions_store checked blockMember instruction
     reference target sliceReference
-  exact ⟨ceiling, row, operand.mono within⟩
+  refine ⟨ceiling, row, operand.mono ?_⟩
+  intro root member
+  obtain ⟨source, sourceMember, expanded⟩ := List.mem_flatMap.mp member
+  exact SummaryPreservation.RootsRefine.expanded closed within source sourceMember root expanded
 
 theorem checkReturned_of_normalized_bound {func : Func} {state : State}
     {type : Ty} {declared : List RootRef}
