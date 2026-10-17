@@ -240,6 +240,35 @@ theorem shaped_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : EmittedShapeRun
     EmittedShapeRun.bind (shaped_curBlock module le) fun _ => EmittedShapeRun.bind (shaped_setCur module le _) fun _ =>
     EmittedShapeRun.bind h2 fun _ => EmittedShapeRun.bind (shaped_curBlock module le) fun _ => shaped_joinValue tables _ _ _ _
 
+omit tables in
+theorem shaped_recordValueRootRecipe (value : ValueId) (scope : ScopeId) :
+    EmittedShapeRun module le (recordValueRootRecipe value scope) :=
+  EmittedShapeRun.of_unchanged
+    (fun _ => by rw [recordValueRootRecipe_run])
+    (fun _ => by rw [recordValueRootRecipe_run])
+
+theorem shaped_ifE_recorded_core (cv : ValueId) (scope : ScopeId) {a1 a2 : B ValueId}
+    (h1 : EmittedShapeRun module le a1) (h2 : EmittedShapeRun module le a2) :
+    EmittedShapeRun module le (whenLive 0 fun _ => do
+      let (tb, eb) ← fork cv
+      setCur (some tb)
+      let vt ← a1
+      let endT ← curBlock
+      setCur (some eb)
+      let vf ← a2
+      let endF ← curBlock
+      let value ← joinValue endT vt endF vf
+      recordValueRootRecipe value scope
+      pure value) := by
+  exact shaped_whenLive tables _ fun _ =>
+    EmittedShapeRun.bind (shaped_fork tables _) fun ⟨_, _⟩ =>
+    EmittedShapeRun.bind (shaped_setCur module le _) fun _ => EmittedShapeRun.bind h1 fun _ =>
+    EmittedShapeRun.bind (shaped_curBlock module le) fun _ => EmittedShapeRun.bind (shaped_setCur module le _) fun _ =>
+    EmittedShapeRun.bind h2 fun _ => EmittedShapeRun.bind (shaped_curBlock module le) fun _ =>
+    EmittedShapeRun.bind (shaped_joinValue tables _ _ _ _) fun value =>
+    EmittedShapeRun.bind (shaped_recordValueRootRecipe (module := module) (le := le) value scope) fun _ =>
+    EmittedShapeRun.pure module le value
+
 theorem shaped_ifS_some_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : EmittedShapeRun module le a1) (h2 : EmittedShapeRun module le a2) :
     EmittedShapeRun module le (whenLive () fun _ => do
       let (tb, eb) ← fork cv

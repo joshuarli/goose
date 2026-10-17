@@ -111,7 +111,7 @@ theorem shaped_lowerExpr : ∀ e : Expr, ShapeExprAnnotations module e → Emitt
     try simp only [ShapeExprAnnotations, ShapeOptionalAnnotations] at annotations
     simp only [lowerExpr]
     exact EmittedShapeRun.bind (shaped_lowerExpr c (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2)) fun cv =>
-      shaped_ifE_core tables cv (shaped_lowerBlock none [] true t (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2)) (shaped_lowerBlock none [] true f (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2))
+      shaped_ifE_recorded_core tables cv (sourceBlockScope t) (shaped_lowerBlock none [] true t (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2)) (shaped_lowerBlock none [] true f (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2))
   | .blockE b => by
     intro annotations
     try simp only [ShapeExprAnnotations, ShapeOptionalAnnotations] at annotations
