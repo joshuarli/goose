@@ -106,4 +106,33 @@ theorem lowerImpl_slotTypeChecks {module : Core.Module} {index : ImplId} {impl :
           simpa only [List.getElem?_eq_getElem paramsBound, Option.some.injEq] using parameterType
         simp [stored, referenceSlice, parameterValue, paramsBound, pure, Except.pure]
 
+theorem lowerImpl_parameter_types {module : Core.Module} {index : ImplId} {impl : Core.Impl}
+    (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl) :
+    ∀ ty ∈ (lowerImpl module impl).params, ty.paramOk = true := by
+  intro ty member
+  change ty ∈ impl.params.toList.map (fun param => tyOfVar impl param.var) at member
+  obtain ⟨param, paramMember, rfl⟩ := List.mem_map.mp member
+  obtain ⟨position, parameterLookup⟩ :=
+    Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp paramMember)
+  obtain ⟨aligned, localVar, variableLookup, _, shape⟩ :=
+    (validate_modOk module accepted).impl index impl lookup |>.params position param parameterLookup
+  simpa [tyOfVar, aligned, variableLookup] using shape
+
+theorem lowerImpl_parameterTypeChecks {module : Core.Module} {index : ImplId} {impl : Core.Impl}
+    (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl) :
+    (GIR.checkAll (lowerImpl module impl).params fun ty => do
+      unless ty.paramOk do throw "a parameter has a type no parameter may have") =
+      (Except.ok () : Except String Unit) := by
+  apply Origins.checkAll_ok_of_forall
+  intro ty member
+  simp [lowerImpl_parameter_types accepted lookup ty member, pure, Except.pure]
+
+theorem lowerContextAt_parameterTypeChecks {module : Core.Module} {index : ImplId}
+    {impl : Core.Impl} (ctx : Core.Context)
+    (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl) :
+    (GIR.checkAll (lowerContextAt module ctx impl).params fun ty => do
+      unless ty.paramOk do throw "a parameter has a type no parameter may have") =
+      (Except.ok () : Except String Unit) :=
+  lowerImpl_parameterTypeChecks accepted lookup
+
 end Goose.Lower.Validation

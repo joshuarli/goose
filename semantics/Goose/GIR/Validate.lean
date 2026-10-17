@@ -313,6 +313,9 @@ def checkTypes (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)
           if m.profile != .shrink && k ∈ [.popEmpty, .popNRange, .resizeNegative, .resizeFill, .capacity] then
             throw s!"abort kind {k.tag.quote} requires core-shrink"
         | _ => pure ()
+    checkAll f.params fun t => do
+      unless t.paramOk do
+        throw "a parameter has a type no parameter may have"
     checkAll f.results fun t => do
       unless !t.isRefSlice do
         throw "a reference-to-slice type is only valid for a parameter"
