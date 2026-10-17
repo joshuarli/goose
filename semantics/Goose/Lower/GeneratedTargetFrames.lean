@@ -80,6 +80,7 @@ theorem LoopBuilderFrames.mono {loop : Option LoopCtx} {before after : LS}
         rcases blockAfter with ⟨block', blockAt', blockParams', _⟩
         exact ⟨⟨exit', exitAt', exitParams'.trans exitParams⟩,
           ⟨block', blockAt', blockParams'.trans blockParams⟩⟩
+
       | next header ty counter =>
         simp only [LoopBuilderFrames, kind] at frames ⊢
         rcases frames with ⟨⟨exit, exitAt, exitParams⟩, ⟨block, blockAt, blockParams⟩⟩
@@ -89,6 +90,24 @@ theorem LoopBuilderFrames.mono {loop : Option LoopCtx} {before after : LS}
         rcases blockAfter with ⟨block', blockAt', blockParams', _⟩
         exact ⟨⟨exit', exitAt', exitParams'.trans exitParams⟩,
           ⟨block', blockAt', blockParams'.trans blockParams⟩⟩
+
+theorem LoopBuilderFrames.of_blocks {loop : Option LoopCtx} {before after : LS}
+    (frames : LoopBuilderFrames loop before) (same : after.blocks = before.blocks) :
+    LoopBuilderFrames loop after := by
+  cases loop with
+  | none => trivial
+  | some context =>
+      cases kind : context.cont with
+      | jump header =>
+          simp only [LoopBuilderFrames, kind] at frames ⊢
+          rcases frames with ⟨⟨exit, exitAt, exitParams⟩, ⟨block, blockAt, blockParams⟩⟩
+          exact ⟨⟨exit, by rw [same]; exact exitAt, exitParams⟩,
+            ⟨block, by rw [same]; exact blockAt, blockParams⟩⟩
+      | next header ty counter =>
+          simp only [LoopBuilderFrames, kind] at frames ⊢
+          rcases frames with ⟨⟨exit, exitAt, exitParams⟩, ⟨block, blockAt, blockParams⟩⟩
+          exact ⟨⟨exit, by rw [same]; exact exitAt, exitParams⟩,
+            ⟨block, by rw [same]; exact blockAt, blockParams⟩⟩
 
 theorem loopBuilderFrames_jump {state : LS} {depth exit header : Nat}
     {exitBlock headerBlock : BlockB}
@@ -186,6 +205,36 @@ theorem TermEdgesFramed.compose {loop : Option LoopCtx} {base current after : LS
   · exact Or.inl old
   · cases impossible
 
+theorem TermEdgesFramed.emitTermAt {loop : Option LoopCtx} {base current after : LS}
+    {env : LEnv} {result : Unit} {term : Term}
+    (oldFrames : TermEdgesFramed loop base current)
+    (run : emitTerm term env current = (result, after))
+    (targets : ∀ target, target ∈ term.successors → target < base.blocks.size →
+      LoopBuilderFrameTarget loop target) : TermEdgesFramed loop base after := by
+  have afterEq : after = (emitTerm term env current).2 := (congrArg Prod.snd run).symm
+  cases currentBlock : current.cur with
+  | none =>
+      rw [emitTerm_none term env currentBlock] at afterEq
+      subst after
+      exact oldFrames
+  | some block =>
+      rw [emitTerm_run term env currentBlock] at afterEq
+      apply TermEdgesFramed.extend oldFrames
+      intro source body emitted target row member successor targetBound
+      rw [afterEq] at row
+      simp only [Array.getElem?_modify] at row
+      by_cases same : block = source
+      · subst source
+        simp only [↓reduceIte, Option.map_eq_some_iff] at row
+        obtain ⟨old, oldAt, rfl⟩ := row
+        rcases List.mem_append.mp (by simpa only [Array.toList_push] using member) with oldMember | addedMember
+        · exact Or.inl ⟨old, oldAt, oldMember⟩
+        · simp at addedMember
+          subst emitted
+          exact Or.inr (targets target successor targetBound)
+      · simp only [same, ite_false] at row
+        exact Or.inl ⟨body, row, member⟩
+
 theorem GeneratedTargetFrameRun.bind {loop : Option LoopCtx} {first : B α} {next : α → B β}
     (one : GeneratedTargetFrameRun loop first)
     (two : ∀ value, GeneratedTargetFrameRun loop (next value)) :
@@ -232,35 +281,8 @@ theorem generatedTargetFrame_emitTerm (loop : Option LoopCtx) (term : Term)
     GeneratedTargetFrameRun loop (emitTerm term) := by
   intro base env current result after baseCurrent frames oldFrames run
   have advancing := (advB_emitTerm term env current result after run).ext
-  have afterEq : after = (emitTerm term env current).2 := (congrArg Prod.snd run).symm
-  cases currentBlock : current.cur with
-  | none =>
-      rw [emitTerm_none term env currentBlock] at afterEq
-      subst after
-      exact ⟨oldFrames, advancing⟩
-  | some block =>
-      rw [emitTerm_run term env currentBlock] at afterEq
-      have newTargets : ∀ (source : BlockId) (body : BlockB) (emitted : Term) (target : BlockId),
-          after.blocks[source]? = some body →
-          Inst.term emitted ∈ body.insts.toList → target ∈ emitted.successors →
-          target < base.blocks.size →
-          (∃ old, current.blocks[source]? = some old ∧ Inst.term emitted ∈ old.insts.toList) ∨
-            LoopBuilderFrameTarget loop target := by
-        intro source body emitted target row member successor targetBound
-        rw [afterEq] at row
-        simp only [Array.getElem?_modify] at row
-        by_cases same : block = source
-        · subst source
-          simp only [↓reduceIte, Option.map_eq_some_iff] at row
-          obtain ⟨old, oldAt, rfl⟩ := row
-          rcases List.mem_append.mp (by simpa only [Array.toList_push] using member) with oldMember | addedMember
-          · exact Or.inl ⟨old, oldAt, oldMember⟩
-          · simp at addedMember
-            subst emitted
-            exact Or.inr (targets base target successor targetBound)
-        · simp only [same, ite_false] at row
-          exact Or.inl ⟨body, row, member⟩
-      exact ⟨TermEdgesFramed.extend oldFrames newTargets, advancing⟩
+  exact ⟨oldFrames.emitTermAt run (fun target successor targetBound =>
+    targets base target successor targetBound), advancing⟩
 
 theorem generatedTargetFrame_emitDef (loop : Option LoopCtx) (op : Op) :
     GeneratedTargetFrameRun loop (emitDef op) := by
