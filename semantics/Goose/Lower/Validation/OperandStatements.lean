@@ -441,7 +441,7 @@ theorem operands_lowerBlock (context : Option LoopCtx) (pre : List (SlotId × Va
   obtain ⟨_, initialized, initialization, _, executed, execution,
     value, evaluated, evaluation, _, left, leave, pureRun⟩ :=
     (by simpa only [bind_eq] using bodyRun)
-  have initialBounds := operands_initSlots pre _ _ _ _ initialization enteredBounds (by
+  have initialBounds := operands_initSlots pre _ _ _ _ initialization ⟨enteredBounds.uses, enteredBounds.definitions⟩ (by
     intro binding member
     exact Nat.lt_of_lt_of_le (preBounds binding member) enterAdvance.vals)
   have initializedAdvance := advB_initSlots pre _ _ _ _ initialization
@@ -457,6 +457,6 @@ theorem operands_lowerBlock (context : Option LoopCtx) (pre : List (SlotId × Va
     | some expr => exact tailRun expr rfl _ _ _ _ evaluation executedBounds
   have leftBounds := operands_emitEffect leave evaluatedBounds (by simp [Effect.uses])
   obtain ⟨_, rfl⟩ := pure_eq.mp pureRun
-  exact leftBounds
+  exact ⟨leftBounds.uses, leftBounds.definitions⟩
 
 end Goose.Lower.Validation
