@@ -104,4 +104,43 @@ theorem emitted_checked_lowerExpr_read {le : LEnv} {initial before : LS} (place 
       subst operand
       exact (Array.getElem?_eq_some_iff.mp row).1
 
+
+theorem emitted_checked_lowerExpr_read_var {env : Core.TEnv} {variableId : VarId} {type : Ty}
+    {start finish : Nat} (source : Core.tyExpr env (.read (.var variableId)) start = .ok (type, finish))
+    (results : List Ty) {initial before : LS}
+    (builder : EmittedBuilder (lowerEnv env.mod env.vars results) initial before) :
+    EmittedBuilder (lowerEnv env.mod env.vars results) initial
+      (lowerExpr (.read (.var variableId)) (lowerEnv env.mod env.vars results) before).2 := by
+  obtain ⟨info, next, placeSource, same⟩ := tyExpr_read_place source
+  apply emitted_checked_lowerExpr_read (.var variableId) (emitted_checked_lowerPlace_var placeSource results builder)
+  intro block current
+  cases live : before.cur with
+  | none =>
+    have stopped := emitDef_none (.slotAddr variableId) (lowerEnv env.mod env.vars results) live
+    simp only [lowerPlace, stopped] at current
+    rw [live] at current
+    cases current
+  | some previous =>
+    have place := lowerPlace_var_exact placeSource results before live
+    exact ⟨_, _, place.2⟩
+
+theorem emitted_checked_lowerExpr_read_global {env : Core.TEnv} {globalId : GlobalId} {type : Ty}
+    {start finish : Nat} (source : Core.tyExpr env (.read (.global globalId)) start = .ok (type, finish))
+    (results : List Ty) {initial before : LS}
+    (builder : EmittedBuilder (lowerEnv env.mod env.vars results) initial before) :
+    EmittedBuilder (lowerEnv env.mod env.vars results) initial
+      (lowerExpr (.read (.global globalId)) (lowerEnv env.mod env.vars results) before).2 := by
+  obtain ⟨info, next, placeSource, same⟩ := tyExpr_read_place source
+  apply emitted_checked_lowerExpr_read (.global globalId) (emitted_checked_lowerPlace_global placeSource results builder)
+  intro block current
+  cases live : before.cur with
+  | none =>
+    have stopped := emitDef_none (.globalAddr globalId) (lowerEnv env.mod env.vars results) live
+    simp only [lowerPlace, stopped] at current
+    rw [live] at current
+    cases current
+  | some previous =>
+    have place := lowerPlace_global_exact placeSource env.vars results before live
+    exact ⟨_, _, place.2⟩
+
 end Goose.Lower.Validation
