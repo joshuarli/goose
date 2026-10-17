@@ -6735,6 +6735,90 @@ void ConstructionTargetDestinationsForwardProgressThroughCalls() {
     assert(Code(GirToLow(high).Lower()) == "");
 }
 
+void ConstructionCompletedResultsSurviveLaterEscapingOperands() {
+    for (auto forwarded : { false, true }) for (auto branched : { false, true }) {
+        auto core = ConstructionSourceTargetModule();
+        auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+        auto literal = [&] {
+            auto value = make_unique<CoreExpr>();
+            value->kind = CoreExprKind::Lit;
+            value->type = 0;
+            value->value = "5";
+            return value;
+        };
+        auto empty = [&] {
+            auto value = make_unique<CoreExpr>();
+            value->kind = CoreExprKind::Arr;
+            value->type = 1;
+            value->org = origin;
+            return value;
+        };
+        auto returned = [&](bool escaping) {
+            CoreStmt statement;
+            statement.kind = forwarded ? CoreStmtKind::RetForward : CoreStmtKind::RetValues;
+            statement.org = origin;
+            vector<CoreExprP> values;
+            values.push_back(empty());
+            auto scalar = literal();
+            if (escaping) {
+                scalar->kind = CoreExprKind::Call;
+                scalar->ctx = 3;
+                scalar->org = origin;
+            }
+            values.push_back(std::move(scalar));
+            if (forwarded) {
+                statement.expr = make_unique<CoreExpr>();
+                statement.expr->kind = CoreExprKind::Values;
+                statement.expr->values = std::move(values);
+            } else statement.values = std::move(values);
+            return statement;
+        };
+        core.impls[0].vars.push_back(CoreVar { "code", 0, CoreVarKind::Let, 0, origin });
+        core.impls[0].body.stmts[0].kind = CoreStmtKind::Receive;
+        core.impls[0].body.stmts[0].vars = { 0, 1 };
+        auto &target = core.impls[1];
+        target.results.push_back(CoreResultDescriptor { 0, CoreRequest::Register, nullopt });
+        target.body.stmts.clear();
+        if (branched) {
+            CoreStmt branch;
+            branch.kind = CoreStmtKind::If;
+            branch.expr = make_unique<CoreExpr>();
+            branch.expr->kind = CoreExprKind::Bool;
+            branch.expr->flag = true;
+            branch.then = make_unique<CoreBlock>();
+            branch.then->scope = 1;
+            branch.then->stmts.push_back(returned(true));
+            branch.otherwise = make_unique<CoreBlock>();
+            branch.otherwise->scope = 2;
+            branch.otherwise->stmts.push_back(returned(false));
+            target.body.stmts.push_back(std::move(branch));
+        } else target.body.stmts.push_back(returned(true));
+        auto &escape = core.impls[2].body.stmts[0];
+        escape.values[0] = empty();
+        escape.values.push_back(literal());
+        CoreImpl trigger;
+        trigger.name = "trigger";
+        trigger.body.scope = 0;
+        trigger.results = { CoreResultDescriptor { 0, CoreRequest::Register, nullopt } };
+        trigger.summary.needs = { 0 };
+        trigger.summary.escapes = { 0 };
+        CoreStmt invoke;
+        invoke.kind = CoreStmtKind::Expr;
+        invoke.org = origin;
+        invoke.expr = make_unique<CoreExpr>();
+        invoke.expr->kind = CoreExprKind::Call;
+        invoke.expr->ctx = 2;
+        invoke.expr->type = 2;
+        invoke.expr->org = origin;
+        trigger.body.stmts.push_back(std::move(invoke));
+        core.impls.push_back(std::move(trigger));
+        core.contexts.push_back(CoreContext { .impl = 3 });
+        auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+        assert(Code(high) == "");
+        assert(Code(GirToLow(high).Lower()) == "");
+    }
+}
+
 void OwnerBorrowsMakeMutableOwnerAuthorityExplicit() {
     for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
         auto m = Base();
@@ -6837,6 +6921,7 @@ int main() {
     OwnerBorrowsMakeMutableOwnerAuthorityExplicit();
     OwnerReferencesLowerThroughExplicitBorrowFormation();
     ConstructionTargetDestinationsForwardProgressThroughCalls();
+    ConstructionCompletedResultsSurviveLaterEscapingOperands();
     ConstructionNonfixedResultsTransferProgressAndIdentity();
     ConstructionTargetPayloadsRetainIdentityAndMode();
     ConstructionSnapshotPayloadsSurviveAggregateStaging();
