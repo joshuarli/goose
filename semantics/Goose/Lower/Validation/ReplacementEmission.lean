@@ -178,4 +178,50 @@ theorem emitsOnly_after_clear {property : Inst → Prop} {env : LEnv}
   refine ⟨next, tail, nextAt, ?_, valid⟩
   simpa [Array.toList_push, List.append_assoc] using append
 
+theorem emitsOnly_clear_current {property : Inst → Prop} {env : LEnv}
+    {before cleared captured : LS} {owner : ValueId} {origin : Option OriginId}
+    (live : LiveBound before)
+    (clearRun : emitEffect (.clear owner origin) env before = ((), cleared))
+    (emitted : EmitsOnly property cleared captured)
+    {index : BlockId} {body : BlockB}
+    (current : cleared.cur = some index) (row : captured.blocks[index]? = some body) :
+    ∃ head tail, body.insts.toList = head ++ (.eff (.clear owner origin) :: tail) ∧
+      ∀ inst ∈ tail, property inst := by
+  cases oldCurrent : before.cur with
+  | none =>
+    rw [emitEffect_none _ _ oldCurrent] at clearRun
+    cases clearRun
+    simp [oldCurrent] at current
+  | some oldIndex =>
+    have bound := live oldIndex oldCurrent
+    let old := before.blocks[oldIndex]
+    have oldAt : before.blocks[oldIndex]? = some old := by simp [old, bound]
+    have sameCur : cleared.cur = some oldIndex := by
+      rw [emitEffect_run _ _ oldCurrent] at clearRun
+      cases clearRun
+      exact oldCurrent
+    have same : index = oldIndex := Option.some.inj (current.symm.trans sameCur)
+    subst index
+    obtain ⟨next, tail, nextAt, split, valid⟩ := emitsOnly_after_clear oldCurrent oldAt clearRun emitted
+    have sameBody : next = body := Option.some.inj (nextAt.symm.trans row)
+    subst next
+    exact ⟨old.insts.toList, tail, split, valid⟩
+
+theorem replacementRegion_closed_of_emission {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner : ValueId} {origin : Option OriginId}
+    {env : LEnv} {before cleared captured after : LS} (live : LiveBound before)
+    (clearRun : emitEffect (.clear owner origin) env before = ((), cleared))
+    (emitted : EmitsOnly (ReplacementInstApart module types queries owner) cleared captured)
+    (advance : cleared.Adv captured) (bounded : TargetsBounded cleared)
+    {loop : Option LoopCtx} (frames : LoopBuilderFrames loop cleared)
+    (framed : TermEdgesFramed loop captured after) (extension : captured.Ext after)
+    (shaped : ∀ (index : BlockId) (body : BlockB), captured.blocks[index]? = some body → OpenBlock body ∨ ClosedBlock body)
+    (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
+    {func : Func} (blocks : func.blocks = finishBlocks after.blocks) :
+    EmptyFactsClosed module func types queries (ReplacementRegionFacts cleared captured owner) := by
+  apply replacementRegion_closed advance bounded frames framed extension shaped closed blocks emitted.fresh
+  intro index body current row
+  obtain ⟨head, tail, split, valid⟩ := emitsOnly_clear_current live clearRun emitted current row
+  exact ⟨head, tail, origin, split, valid⟩
+
 end Goose.Lower.Validation
