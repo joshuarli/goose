@@ -3044,7 +3044,7 @@ theorem typed_call_sim {n : Nat} {cfg : Cfg} {results : List Ty} {c : ContextId}
     (hc : ∀ values after, mapList (evalArg n cfg env) args state = .ok values after →
       EventualM (enterCall n cfg env.depth c values)
         (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ env.depth
-          (((cfg.mod.contexts[c]?).map (·.impl)).getD 0) values) after)
+          c values) after)
     (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame)
     (hlow : lowerExpr (.call c args org) (lowerEnv cfg.mod env.vars results) ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
@@ -3073,7 +3073,7 @@ theorem typed_call_sim {n : Nat} {cfg : Cfg} {results : List Ty} {c : ContextId}
     rfl
   have hcall : EventualM (enterCall n cfg env.depth c values)
       (fun fuel => callFn fuel cx.cfg fr1.depth
-        (((le.mod.contexts[c]?).map (·.impl)).getD 0) values) afterArgs := by
+        c values) afterArgs := by
     rw [hcfg, P.rel.depth]
     exact hc values afterArgs hdone
   have hs := SimEAt.call_step hi hread hcall
@@ -3091,7 +3091,7 @@ theorem typedExprClaim_call {n : Nat} {cfg : Cfg} {results : List Ty} {c : Conte
       mapList (evalArg n cfg env) args state = .ok values after →
       EventualM (enterCall n cfg env.depth c values)
         (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ env.depth
-          (((cfg.mod.contexts[c]?).map (·.impl)).getD 0) values) after) :
+          c values) after) :
     TypedExprClaim (n + 1) cfg results (.call c args origin) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
   obtain ⟨argsSource, argsMetadata⟩ := source.callArgs n results hmetadata
