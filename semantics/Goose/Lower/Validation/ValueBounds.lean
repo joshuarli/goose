@@ -244,7 +244,10 @@ theorem value_lowerExpr : ∀ expr : Expr, ValueRun (lowerExpr expr)
     intro block
     exact ValueRun.prepend fun ⟨_, _⟩ => ValueRun.prepend fun _ =>
       ValueRun.prepend fun _ => ValueRun.prepend fun _ => ValueRun.prepend fun _ =>
-      ValueRun.prepend fun _ => ValueRun.prepend fun _ => value_joinValue _ _ _ _
+      ValueRun.prepend fun _ => ValueRun.prepend fun _ =>
+        ValueRun.post (value_joinValue _ _ _ _)
+          (fun result => advB_recordValueRootRecipe result _)
+          (fun result => dead_recordValueRootRecipe result _)
   | .blockE body => by
     simp only [lowerExpr]
     exact value_lowerBlock _ _ body

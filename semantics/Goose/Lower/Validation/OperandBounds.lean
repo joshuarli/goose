@@ -40,6 +40,16 @@ theorem OperandRun.of_unchanged {action : B α}
     rw [same] at member
     exact checked.definitions result op member value use
 
+theorem operands_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    OperandRun (recordValueRootRecipe value sourceScope) := by
+  apply OperandRun.of_unchanged
+  · intro le state
+    rw [recordValueRootRecipe_run]
+    rfl
+  · intro le state
+    rw [recordValueRootRecipe_run]
+    exact Nat.le_refl _
+
 theorem insts_appendInst_member {before : LS} {block : BlockId} {inst next : Inst} :
     next ∈ (before.appendInst block inst).insts → next ∈ before.insts ∨ next = inst := by
   intro member
@@ -622,7 +632,8 @@ theorem operands_lowerExpr_ifE (condition : Expr) (trueArm falseArm : Core.Block
     rw [whenLive_some _ _ le current] at remaining
     obtain ⟨⟨left, right⟩, forked, forkRun, _, selectedT, selectT,
       vt, trueEnd, runT, endT, savedT, saveT, _, selectedF, selectF,
-      vf, falseEnd, runF, endF, savedF, saveF, joinRun⟩ :=
+      vf, falseEnd, runF, endF, savedF, saveF, joinedValue, joined, joinRun,
+      _, recorded, recipeRun, outputRun⟩ :=
       (by simpa only [bind_eq] using remaining)
     have forkedBounds := operands_fork forkRun testedBounds
       (value_lowerExpr condition _ _ _ _ testRun)
@@ -633,6 +644,8 @@ theorem operands_lowerExpr_ifE (condition : Expr) (trueArm falseArm : Core.Block
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj saveF
     have selectedFBounds := operands_setCur _ _ _ _ _ selectF trueEndBounds
     have falseEndBounds := falseRun _ _ _ _ runF selectedFBounds
+    obtain ⟨rfl, rfl⟩ := pure_eq.mp outputRun
+    apply operands_recordValueRootRecipe joinedValue (sourceBlockScope trueArm) _ _ _ _ recipeRun
     apply operands_joinValue joinRun falseEndBounds
     · intro live
       have firstBound := value_lowerBlock none [] trueArm _ _ _ _ runT live
