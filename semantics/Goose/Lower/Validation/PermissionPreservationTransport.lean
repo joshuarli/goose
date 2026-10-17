@@ -19,7 +19,7 @@ theorem WritableOperation.replace_types {globalKinds : Array VarKind} {structs :
     refine ⟨permitted, mu, id, fields, descriptor, field, ?_, descriptorRow, fieldRow, binding⟩
     rw [← agreement owner (Or.inr permitted)]
     exact typed
-  | snapshot _ _ | refElem _ _ | indexChecked _ _ _ | indexProven _ _ => exact operation
+  | ownerBorrow _ | snapshot _ _ | refElem _ _ | indexChecked _ _ _ | indexProven _ _ => exact operation
   | _ => simpa only [WritableOperation, typedPermissions, ← agreement value (Or.inl member)] using operation
 
 theorem WritableClosed.replace_types {globalKinds : Array VarKind} {structs : Array StructDef}
@@ -36,17 +36,17 @@ theorem WritableClosed.replace_types {globalKinds : Array VarKind} {structs : Ar
     exact (closed.definitions block blockMember value op member permitted).replace_types agreement permitted
   · exact closed.edges
 
-theorem PermissionTransfer.mono {writable contents widerWritable widerContents : ValueId → Prop}
-    {value : ValueId} {ty : Ty} (allowed : PermissionTransfer writable contents value ty)
+theorem PermissionTransfer.mono {profile : ArtifactProfile} {writable contents widerWritable widerContents : ValueId → Prop}
+    {value : ValueId} {ty : Ty} (allowed : PermissionTransfer profile writable contents value ty)
     (bindings : ∀ candidate, writable candidate → widerWritable candidate)
     (elements : ∀ candidate, contents candidate → widerContents candidate) :
-    PermissionTransfer widerWritable widerContents value ty := by
+    PermissionTransfer profile widerWritable widerContents value ty := by
   cases ty with
   | ref mu referent =>
     cases mu with
     | readOnly => trivial
     | mutable =>
-      cases referent <;> simp only [PermissionTransfer] at allowed ⊢ <;>
+      cases profile <;> cases referent <;> simp only [PermissionTransfer, reduceCtorEq, ↓reduceIte] at allowed ⊢ <;>
         first | exact elements value allowed
               | exact ⟨bindings value allowed.1, elements value allowed.2⟩
               | exact bindings value allowed
@@ -65,6 +65,8 @@ theorem PermissionRule.mono {module : GIR.Module} {func : Func} {types : Array (
     exact (rule.storeValue owner value origin mu ty shape typed).mono bindings elements
   · intro owner mutation
     exact elements owner (rule.mutation owner mutation)
+  · intro value owner shape
+    exact elements owner (rule.ownerBorrow value owner shape)
   · intro owner value origin shape
     have both := rule.replacement owner value origin shape
     exact ⟨bindings owner both.1, elements owner both.2⟩
