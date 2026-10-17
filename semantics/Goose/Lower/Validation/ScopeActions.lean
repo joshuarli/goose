@@ -202,4 +202,38 @@ theorem ScopeAction.initSlots (parents : Array (Option ScopeId)) (parent : Optio
     (ScopeAction.emitNeutralEffect parents parent (.slotInit slot value (some origin)) rfl).bind
       fun _ => ScopeAction.initSlots parents parent rest
 
+theorem ScopeAction.regrowOf (parents : Array (Option ScopeId)) (parent : Option ScopeId)
+    (owner : Option ValueId) : ScopeAction parents parent (Goose.Lower.regrowOf owner) := by
+  cases owner with
+  | none => exact ScopeAction.pure parents parent _
+  | some value => exact ScopeAction.growOwner parents parent value
+
+theorem ScopeAction.eachSampled (parents : Array (Option ScopeId)) (parent : Option ScopeId)
+    (regrow : Bool) (view : ValueId) : ScopeAction parents parent (Goose.Lower.eachSampled regrow view) := by
+  cases regrow
+  · exact ScopeAction.emitDef parents parent _
+  · exact ScopeAction.pure parents parent _
+
+theorem ScopeAction.eachLen (parents : Array (Option ScopeId)) (parent : Option ScopeId)
+    (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) :
+    ScopeAction parents parent (Goose.Lower.eachLen regrow owner sampled) := by
+  cases regrow
+  · exact ScopeAction.pure parents parent _
+  · exact ScopeAction.emitDef parents parent _
+
+theorem ScopeAction.eachElemValue (parents : Array (Option ScopeId)) (parent : Option ScopeId)
+    (localId : VarId) (byRef : Bool) (element : ValueId) :
+    ScopeAction parents parent (Goose.Lower.eachElemValue localId byRef element) := by
+  unfold Goose.Lower.eachElemValue
+  cases byRef
+  · exact ScopeAction.emitDef parents parent _
+  · refine (ScopeAction.read parents parent).bind fun env => ?_
+    cases env.vars[localId]? with
+    | none => exact ScopeAction.pure parents parent _
+    | some localVar =>
+      dsimp only
+      cases localVar.ty with
+      | ref mutability type => exact ScopeAction.freezeTo parents parent mutability element
+      | _ => exact ScopeAction.pure parents parent _
+
 end Goose.Lower.Validation
