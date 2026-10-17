@@ -1,25 +1,8 @@
 import Goose.Core.Roots
 import Goose.GIR.Typing
+import Goose.GIR.RootSeeds
 
-/-!
-Where a reference may point, and the effects of a function body.
 
-A module has no root annotations, so provenance is computed from the body.
-Every reference, slice or view value gets the set of roots it may be rooted at:
-a slot of the function (a local), a global, or what the caller passed as a
-parameter. The set of a value is a union over everything that can flow into it,
-without regard to order, and a slot holds the union of everything stored in it.
-The result roots of a function are the roots of what it returns, in terms of
-its parameters and globals, and are mapped to the arguments at each call. The
-computation is a least fixed point, found by rounds bounded by the number of
-roots that could be added.
-
-The effects of a body are then the targets it reads, writes, grows and rebinds,
-whether it may abort and whether it prints, in the vocabulary of a summary:
-parameters and globals only. The rules mirror the Core rules for the same
-operations, so a summary that closes over a Core body also closes over its
-lowering.
--/
 
 namespace Goose.GIR
 
@@ -124,7 +107,7 @@ def provStart (vt : Array (Option VTy)) (f : Func) : Prov :=
       (b.params.zipIdx).foldl (fun a ((v, _), i) =>
         if valRefLike vt v && v < a.size then a.set! v [.param i] else a)
         (Array.replicate f.numValues [])
-  ⟨Array.replicate f.slots.size [], vals⟩
+  ⟨f.slotRootSeeds, vals⟩
 
 /-- Rounds until nothing changes. A round that changes something adds a root to
 a cell, so the number of rounds is at most the number of cells times roots. -/
@@ -148,7 +131,7 @@ def Func.returnedRoots (f : Func) (p : Prov) : List RootRef :=
 /-- Result roots of every function, by rounds over the whole module. -/
 def resultRoots (m : Module) (vts : Array (Array (Option VTy))) : Array (List RootRef) :=
   let nRoots := m.globals.size + m.funcs.foldl (fun n f => n + f.params.length + f.slots.size) 0
-  let initial := m.funcs.map fun _ => []
+  let initial := m.declaredResultRoots
   let one (res : Array (List RootRef)) : Array (List RootRef) × Bool :=
     let next := (m.funcs.zip vts).mapIdx fun k (f, vt) =>
       unionRoots (res[k]?.getD []) (f.returnedRoots (f.provenance res vt nRoots))
