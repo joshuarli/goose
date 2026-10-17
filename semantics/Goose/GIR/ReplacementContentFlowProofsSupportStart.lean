@@ -8,37 +8,6 @@ theorem Atom.ofRootRef_injective : Function.Injective Atom.ofRootRef := by
   intro left right equal
   cases left <;> cases right <;> simp_all [Atom.ofRootRef]
 
-theorem declaredReturn_supported {m : Module} {f : Func}
-    (valid : annotationsValid m f = true) : (declaredReturn f).Supported (atomUniverse m f) := by
-  have parts := valid
-  simp only [annotationsValid, Bool.and_eq_true] at parts
-  have rows := parts.2
-  unfold declaredReturn
-  split
-  · split
-    · cases found : f.roots.results[0]? with
-      | none => trivial
-      | some roots =>
-        have bounded : 0 < f.roots.results.size := (Array.getElem?_eq_some_iff.mp found).choose
-        have row := Array.all_eq_true.mp rows 0 bounded
-        rw [show f.roots.results[0] = roots from (Array.getElem?_eq_some_iff.mp found).choose_spec] at row
-        constructor
-        · apply List.pairwise_map.mpr
-          apply List.Pairwise.imp _ (list_nodup_eraseDups roots)
-          intro left right different equal
-          exact different (Atom.ofRootRef_injective equal)
-        · intro atom member
-          obtain ⟨root, rootMember, equal⟩ := List.mem_map.mp member
-          subst atom
-          have rootBound := List.all_eq_true.mp row root (List.mem_eraseDups.mp rootMember)
-          cases root with
-          | «local» slot => simp at rootBound
-          | global index => exact (atomUniverse_global m f index).mpr (of_decide_eq_true rootBound)
-          | param index => exact (atomUniverse_param m f index).mpr (of_decide_eq_true rootBound)
-    · simp [Roots.Supported]
-  · simp [Roots.Supported]
-  · trivial
-
 theorem start_shape (f : Func) (vt : Array (Option VTy)) : (start f vt).Shape f := by
   constructor
   · cases found : f.blocks[0]? with
@@ -64,7 +33,7 @@ theorem start_components (f : Func) (vt : Array (Option VTy)) :
                    contents := f.params.toArray.mapIdx fun index type =>
                      if type.isRefSlice then .known [.contents index] else .known []
                    writes := Array.replicate f.params.length .unchanged
-                   returned := declaredReturn f } := by
+                   returned := .known [] } := by
   cases found : f.blocks[0]? <;>
     simp [start, found, List.forIn_pure_yield_eq_foldl]
 
@@ -101,7 +70,7 @@ theorem start_supported {m : Module} {f : Func} (vt : Array (Option VTy))
     · simp [Roots.Supported]
   · exact ArrayBounded.replicate _ _ trivial
   · simp [Roots.Supported]
-  · exact declaredReturn_supported valid
+  · simp [Roots.Supported]
 
 def FunctionAddressesBounded (m : Module) (f : Func) : Prop :=
   (∀ block ∈ f.blocks.toList, ∀ inst ∈ block.insts,
@@ -208,7 +177,6 @@ theorem globalAddr_inBounds (env : TyEnv) (global : GlobalId) (type : VTy)
   | some value => exact (Array.getElem?_eq_some_iff.mp found).choose
 
 #print axioms Atom.ofRootRef_injective
-#print axioms declaredReturn_supported
 #print axioms start_shape
 #print axioms start_supported
 #print axioms moduleStart_finite
