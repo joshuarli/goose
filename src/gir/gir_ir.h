@@ -352,6 +352,7 @@ struct GirRootInfo {
     vector<pair<int, vector<CoreRootRef>>> params;
     vector<pair<int, vector<CoreRootRef>>> contents;
     vector<vector<CoreRootRef>> results;
+    optional<vector<pair<int, vector<CoreRootRef>>>> slots;
 };
 
 // A member of a low function's frame: a scalar, a block of bytes, or the

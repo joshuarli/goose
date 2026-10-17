@@ -2533,21 +2533,30 @@ private:
                 if (context.varroots[j].first == var && context.hascontent[j])
                     out.contents.push_back({ (int)i, j < context.content.size() ? context.content[j] : vector<CoreRootRef> {} });
         }
-        for (size_t i = 0; i < context.resultroots.size() && i < out.results.size(); i++) {
-            out.results[i] = context.resultroots[i];
+        auto ceiling = [&](const vector<CoreRootRef> &source) {
+            auto roots = source;
             for (size_t j = 0; j < impl.params.size(); j++) {
                 auto var = impl.params[j].var;
                 auto parameterRoots = find_if(context.varroots.begin(), context.varroots.end(),
                     [&](auto &entry) { return entry.first == var; });
                 if (parameterRoots == context.varroots.end()) continue;
                 auto fullyIncluded = all_of(parameterRoots->second.begin(), parameterRoots->second.end(),
-                    [&](auto &root) {
-                        return find(out.results[i].begin(), out.results[i].end(), root) != out.results[i].end();
-                    });
+                    [&](auto &root) { return find(source.begin(), source.end(), root) != source.end(); });
                 CoreRootRef alias { CoreRootRef::Param, (int)j };
-                if (fullyIncluded && find(out.results[i].begin(), out.results[i].end(), alias) == out.results[i].end())
-                    out.results[i].push_back(alias);
+                if (fullyIncluded && find(roots.begin(), roots.end(), alias) == roots.end()) roots.push_back(alias);
             }
+            return roots;
+        };
+        for (size_t i = 0; i < out.results.size(); i++)
+            out.results[i] = ceiling(i < context.resultroots.size() ? context.resultroots[i] : vector<CoreRootRef> {});
+        out.slots.emplace();
+        for (auto &row : context.varroots) {
+            if (row.first < 0 || row.first >= (int)impl.vars.size()) continue;
+            auto type = impl.vars[row.first].type;
+            if (!GirRefLike(mod, type)) continue;
+            auto &ty = mod.Type(type);
+            auto refSlice = ty.kind == CoreType::Ref && mod.Type(ty.elem).kind == CoreType::Slice;
+            out.slots->push_back({ row.first, refSlice ? vector<CoreRootRef> { { CoreRootRef::Param, row.first } } : ceiling(row.second) });
         }
         return out;
     }

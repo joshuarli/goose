@@ -336,7 +336,12 @@ private:
             if (i) out += ',';
             Roots(out, r.results[i]);
         }
-        out += "]]";
+        out += ']';
+        if (r.slots) {
+            out += ',';
+            RootRows(out, *r.slots, "sr");
+        }
+        out += ']';
     }
 
     static void Fact(string &out, const GirFact &fact) {

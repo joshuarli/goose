@@ -880,6 +880,28 @@ CoreModule OwnerReferenceReplacement(bool dependent, OwnerReferenceUse use, Owne
     return core;
 }
 
+void PreservesOptionalSlotRootMetadata() {
+    auto raw = Module();
+    auto oldWire = GirWriter(raw).Write();
+    assert(oldWire.find("[\"roots\",[],[],[]]") != string::npos);
+    raw.funcs[0].roots.slots.emplace();
+    auto sourceWire = GirWriter(raw).Write();
+    assert(sourceWire.find("[\"roots\",[],[],[],[]]") != string::npos);
+    raw.funcs[0].roots.slots.reset();
+    assert(GirWriter(raw).Write() == oldWire);
+    auto core = OwnerReferenceReplacement(false, OwnerReferenceUse::Unused, OwnerReferenceForm::LocalCopyCall);
+    auto gir = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    vector<pair<int, vector<CoreRootRef>>> expected { { 0, { { CoreRootRef::Global, 1 } } } };
+    assert(gir.funcs[0].roots.slots == expected);
+    assert(gir.funcs[1].roots.slots == expected);
+    assert(GirWriter(gir).Write().find("[\"sr\",0,[[\"r_global\",1]]]") != string::npos);
+    core = OwnerReferenceReplacement(false, OwnerReferenceUse::Unused);
+    gir = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(gir.funcs[1].roots.slots && gir.funcs[1].roots.slots->empty());
+}
+
 void DistinguishesReturnedOwnerAddressesFromReads() {
     for (auto form : { OwnerReferenceForm::DirectCall, OwnerReferenceForm::LocalCopyCall })
         for (bool dependent : { true, false })
@@ -1264,6 +1286,7 @@ void IncludesActualRefSliceBackingReads() {
 }
 
 int main() {
+    PreservesOptionalSlotRootMetadata();
     AdmitsCallerStorageThroughGenericContentBounds();
     DistinguishesReturnedOwnerAddressesFromReads();
     PreservesActualGlobalCallDependencies();
