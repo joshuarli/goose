@@ -42,6 +42,11 @@ theorem reflectionFuelBound_positive (syntaxCap targetFuel nodeSize : Nat) :
   unfold reflectionFuelBound
   omega
 
+theorem reflectionFuelBound_minimum (syntaxCap targetFuel nodeSize : Nat) :
+    8 ≤ reflectionFuelBound syntaxCap targetFuel nodeSize := by
+  unfold reflectionFuelBound
+  omega
+
 theorem reflectionFuelBound_subterm {syntaxCap targetFuel child parent : Nat}
     (smaller : child < parent) :
     reflectionFuelBound syntaxCap targetFuel child + 8 ≤
@@ -86,6 +91,24 @@ theorem reflectionFuelBound_parent {syntaxCap fuel parent cost : Nat}
     (positive : 0 < parent) (small : cost ≤ 8) :
     reflectionFuelBound syntaxCap fuel (parent - 1) + cost ≤ reflectionFuelBound syntaxCap fuel parent := by
   unfold reflectionFuelBound
+  omega
+
+theorem reflectionFuelBound_child_spare {syntaxCap residual fuel child parent : Nat}
+    (earlier : residual ≤ fuel) (smaller : child < parent) :
+    reflectionFuelBound syntaxCap residual child ≤ reflectionFuelBound syntaxCap fuel parent - 8 := by
+  have first := reflectionFuelBound_target_mono (syntaxCap := syntaxCap) (nodeSize := child) earlier
+  have second := reflectionFuelBound_subterm (syntaxCap := syntaxCap) (targetFuel := fuel) smaller
+  omega
+
+theorem reflectionFuelBound_recursive_spare {syntaxCap residual fuel child parent : Nat}
+    (earlier : residual < fuel) (bounded : child ≤ syntaxCap) :
+    reflectionFuelBound syntaxCap residual child ≤ reflectionFuelBound syntaxCap fuel parent - 8 := by
+  have enough := reflectionFuelBound_recursive (parent := parent) earlier bounded
+  omega
+
+theorem reflectionFuelBound_spare_cost {syntaxCap fuel size cost : Nat} (small : cost ≤ 8) :
+    reflectionFuelBound syntaxCap fuel size - 8 + cost ≤ reflectionFuelBound syntaxCap fuel size := by
+  have enough := reflectionFuelBound_minimum syntaxCap fuel size
   omega
 
 end Goose.Lower
