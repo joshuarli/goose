@@ -77,8 +77,10 @@ private def rawReceiver (aliased called knownSummary emptyStored : Bool) : GIR.M
   let receiver : GIR.Func :=
     { name := "replace", params := [reference, sliceTy] ++ (if aliased then [mutableHolder] else []),
       results := [], slots := #[], scopes := #[none], summary := .unknown, org := none,
-      roots := { params := #[(0, [.param 0]), (1, if emptyStored then [] else [.global 0])] ++
-        (if aliased then #[(2, [.param 2])] else #[]), contents := #[(0, [])] },
+      roots := {
+        params := (#[(0, [.param 0]), (1, if emptyStored then [] else [.global 0])] ++
+          (if aliased then #[(2, [.param 2])] else #[])),
+        contents := #[(0, [])] ++ (if aliased && emptyStored then #[(2, [])] else #[]) },
       blocks := #[⟨[(0, .data reference), (7, .data sliceTy)] ++
         (if aliased then [(8, .data mutableHolder)] else []),
         [.def 1 (.arrLit ownerTy []), write, .def 2 (.globalAddr 0), .def 3 (.load 0),
@@ -93,17 +95,17 @@ private def rawReceiver (aliased called knownSummary emptyStored : Bool) : GIR.M
         [.eff (.store 0 1 (some 0)), .term (.ret [] (some 0))]⟩] }
   rawModule receiver (if called then #[callee] else #[])
 
-#guard rejectsV050 (rawReceiver false false false false) == false
-#guard match GIR.validate (rawReceiver false false false false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (rawReceiver true false false false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (rawReceiver false true false false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (rawReceiver true true false false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (rawReceiver false true true false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (rawReceiver true true true false) with | .error e => e.code == .v060 | _ => false
+#guard rejectsV050 (rawReceiver false false false false)
+#guard match GIR.validate (rawReceiver false false false false) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (rawReceiver true false false false) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (rawReceiver false true false false) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (rawReceiver true true false false) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (rawReceiver false true true false) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (rawReceiver true true true false) with | .error e => e.code == .v050 | _ => false
 #guard (GIR.validate (rawReceiver false false false true)).toBool
 #guard (GIR.validate (rawReceiver true false false true)).toBool
-#guard match GIR.validate (rawReceiver false true true true) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (rawReceiver true true true true) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (rawReceiver false true true true) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (rawReceiver true true true true) with | .error e => e.code == .v050 | _ => false
 
 private def globalMutation (knownSummary : Bool) : GIR.Module :=
   let header : GIR.Global :=
@@ -129,8 +131,8 @@ private def globalMutation (knownSummary : Bool) : GIR.Module :=
           .def 6 (.arrLit ownerTy [5]), .eff (.replace 2 6 (some 0)), .term (.ret [] (some 0))]⟩] }
   { rawModule receiver #[callee] with globals := #[ownerGlobal, header] }
 
-#guard match GIR.validate (globalMutation false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (globalMutation true) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (globalMutation false) with | .error e => e.code == .v010 | _ => false
+#guard match GIR.validate (globalMutation true) with | .error e => e.code == .v010 | _ => false
 
 private def globalMutationWithEmptyArgument (knownSummary : Bool) : GIR.Module :=
   let input := globalMutation knownSummary
@@ -148,8 +150,8 @@ private def globalMutationWithEmptyArgument (knownSummary : Bool) : GIR.Module :
         params := [sliceTy], roots := { params := #[(0, [])] },
         blocks := callee.blocks.modify 0 fun block => { block with params := [(4, .data sliceTy)] } } }
 
-#guard match GIR.validate (globalMutationWithEmptyArgument false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (globalMutationWithEmptyArgument true) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (globalMutationWithEmptyArgument false) with | .error e => e.code == .v010 | _ => false
+#guard match GIR.validate (globalMutationWithEmptyArgument true) with | .error e => e.code == .v010 | _ => false
 
 private def globalMutationThroughChain : GIR.Module :=
   let input := globalMutation false
@@ -161,7 +163,7 @@ private def globalMutationThroughChain : GIR.Module :=
         { block with insts := block.insts.map fun
           | .def value (.call _ args origin) => .def value (.call 3 args origin)
           | inst => inst } }).push wrapper }
-#guard match GIR.validate globalMutationThroughChain with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate globalMutationThroughChain with | .error e => e.code == .v010 | _ => false
 
 private def changedLocalContents (knownSummary : Bool) : GIR.Module :=
   let receiver : GIR.Func :=
@@ -183,8 +185,8 @@ private def changedLocalContents (knownSummary : Bool) : GIR.Module :=
       blocks := #[⟨[(0, .data mutableHolder), (1, .data sliceTy), (2, .data sliceTy)],
         [.eff (.store 0 1 (some 0)), .term (.ret [] (some 0))]⟩] }
   rawModule receiver #[callee]
-#guard match GIR.validate (changedLocalContents false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (changedLocalContents true) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (changedLocalContents false) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (changedLocalContents true) with | .error e => e.code == .v050 | _ => false
 
 private def unchangedLocalContents (knownSummary : Bool) : GIR.Module :=
   let input := changedLocalContents knownSummary
@@ -196,22 +198,30 @@ private def unchangedLocalContents (knownSummary : Bool) : GIR.Module :=
 #guard (GIR.validate (unchangedLocalContents true)).toBool
 
 private def specializedGlobalMutation (localArgument : Bool) : GIR.Module :=
-  let input := globalMutationWithEmptyArgument true
-  { input with funcs := input.funcs.modify 2 (fun callee =>
-      { callee with
-        roots := { params := #[(0, if localArgument then [.param 0, .global 1] else [.global 1])] },
-        summary := .known ⟨[.global 0], [.param 0], [], [], [], false, false⟩ }) |>.modify 1 fun receiver =>
-      if !localArgument then receiver else
-        { receiver with
-          slots := #[⟨ownerTy, .mutable, 0, 0⟩],
-          blocks := receiver.blocks.map fun block =>
-            { block with insts := [.eff (.enter 0), .def 8 (.arrLit ownerTy []), .eff (.slotInit 0 8 (some 0)),
-                .def 9 (.slotAddr 0), .def 10 (.snapshot .owner 9),
-                .def 11 (.viewSlice .readOnly 10 .omitted .omitted (some 0))] ++
-              block.insts.flatMap fun
-                | .def value (.call fn _ origin) => [.def value (.call fn [11] origin)]
-                | .term (.ret values origin) => [.eff (.leave 0), .term (.ret values origin)]
-                | inst => [inst] } } }
+  let callee : GIR.Func :=
+    { emptyMain with
+      name := "declared_global_mutation", params := [sliceTy],
+      roots := { params := #[(0, if localArgument then [.param 0, .global 0] else [.global 0])] },
+      summary := .known ⟨[], [.param 0], [], [.param 0], [], false, false⟩,
+      blocks := #[⟨[(0, .data sliceTy)], [.term (.ret [] (some 0))]⟩] }
+  let receiver : GIR.Func :=
+    if !localArgument then
+      { emptyMain with
+        name := "empty_argument", params := [sliceTy],
+        roots := { params := #[(0, [])] },
+        blocks := #[⟨[(0, .data sliceTy)], [.def 1 (.globalAddr 0), .eff (.clear 1 (some 0)),
+          .def 2 (.call 2 [0] (some 0)), .def 3 (.constInt .i64 0),
+          .def 4 (.arrLit ownerTy [3]), .eff (.replace 1 4 (some 0)), .term (.ret [] (some 0))]⟩] }
+    else
+      { emptyMain with
+        name := "local_argument", slots := #[⟨ownerTy, .mutable, 0, 0⟩],
+        blocks := #[⟨[], [.eff (.enter 0), .def 0 (.arrLit ownerTy []), .eff (.slotInit 0 0 (some 0)),
+          .def 1 (.slotAddr 0), .def 2 (.snapshot .owner 1),
+          .def 3 (.viewSlice .readOnly 2 .omitted .omitted (some 0)),
+          .def 4 (.globalAddr 0), .eff (.clear 4 (some 0)), .def 5 (.call 2 [3] (some 0)),
+          .def 6 (.constInt .i64 0), .def 7 (.arrLit ownerTy [6]), .eff (.replace 4 7 (some 0)),
+          .eff (.leave 0), .term (.ret [] (some 0))]⟩] }
+  rawModule receiver #[callee]
 #guard match GIR.validate (specializedGlobalMutation false) with | .error e => e.code == .v060 | _ => false
 #guard match GIR.validate (specializedGlobalMutation true) with | .error e => e.code == .v060 | _ => false
 
@@ -230,17 +240,17 @@ private def staleLocalContents (emptyInitial : Bool) : GIR.Module :=
               | .eff (.slotInit slot _ origin) => .eff (.slotInit slot 12 origin)
               | inst => inst } } }
 
-#guard match GIR.validate (staleLocalContents true) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (staleLocalContents false) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (staleLocalContents true) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (staleLocalContents false) with | .error e => e.code == .v050 | _ => false
 
 private def trackedLocalContents (emptyInitial safePayload : Bool) : GIR.Module :=
   let input := staleLocalContents emptyInitial
   { input with funcs := input.funcs.modify 2 (fun callee =>
       { callee with roots := { callee.roots with contents := #[(0, [.param 1, .global 1])] } }) |>.modify 1 fun receiver =>
-      if !safePayload then receiver else
-        { receiver with roots := { receiver.roots with
-          params := receiver.roots.params.map fun (parameter, roots) =>
-            (parameter, if parameter == 1 then [.global 1] else roots) } } }
+      { receiver with roots := { receiver.roots with
+        slots := some #[(0, (if safePayload then [.global 1] else [.global 0, .global 1]) ++ [.param 3])]
+        params := receiver.roots.params.map fun (parameter, roots) =>
+          (parameter, if parameter == 1 && safePayload then [.global 1] else roots) } } }
 private def trackedQuery (emptyInitial safePayload : Bool) : GIR.ReplacementRootQuery :=
   let input := trackedLocalContents emptyInitial safePayload
   input.funcs[1]?.bind fun receiver =>
