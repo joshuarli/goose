@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.SummaryPreservationRefinedBuilder
+import Goose.Lower.Validation.SummaryPreservationDefFrame
 
 namespace Goose.Lower.Validation.SummaryPreservation
 
@@ -26,21 +26,13 @@ theorem emitDef_relay_refined_witness_growth {module : GIR.Module}
   have delta : EffectRefinement func (func.effectStep module vt upper {} (.def ls.vals.size op)) source := by
     rw [neutral]
     exact effectRefinement_empty func source
-  obtain ⟨next, rootWitness, effects, returned, slots, growth⟩ := emitDef_refined_witness_growth
-    symbols current blockBound witness prior (op := op)
-    (value := (emitDef op le ls).1) (final := (emitDef op le ls).2) uses delta rfl
-  refine ⟨next, rootWitness, effects, ?_, slots, ?_, ?_, ?_, ?_, growth⟩
-  · rw [returned]
-    have result : (emitDef op le ls).1 = ls.vals.size := by rw [emitDef_run _ _ current]
-    rw [result, relay]
-    exact roots
-  · rw [emitDef_run _ _ current]
-    exact symbols.emitDef current blockBound (Inst.SymbolsWithin.def uses origin references)
-  · rw [emitDef_run _ _ current]
-    exact current
-  · rw [emitDef_run _ _ current]
-    simpa using blockBound
-  · rw [emitDef_run _ _ current]
-    simp
+  obtain ⟨next, rootWitness, effects, returned, slots, nextSymbols, nextCurrent,
+    nextBlockBound, nextValueBound, growth⟩ := emitDef_refined_frame_growth op symbols current
+    blockBound witness prior uses origin references delta
+  refine ⟨next, rootWitness, effects, ?_, slots, nextSymbols, nextCurrent, nextBlockBound, nextValueBound, growth⟩
+  rw [returned]
+  have value : (emitDef op le ls).1 = ls.vals.size := by rw [emitDef_run _ _ current]
+  rw [value, relay]
+  exact roots
 
 end Goose.Lower.Validation.SummaryPreservation
