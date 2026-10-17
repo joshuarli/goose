@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ReplacementScalarSource
+import Goose.Lower.Validation.ReplacementBooleanSource
 import Goose.Lower.Validation.ReplacementEmission
 import Goose.Lower.Validation.FreshRunSource
 
@@ -181,6 +181,48 @@ theorem lowerExpr_scalar_array_apart {env : LEnv} {before captured : LS}
   have middleLive := liveBound_of_adv (advB_lowerExprs exprs _ _ _ _ first) live
   exact firstApart.trans (emitsOnly_literal_of_source_graphs builder blocks slots globals sigs structs profile
     graphs source next middleLive extension)
+
+theorem lowerExpr_boolean_array_apart {env : LEnv} {before captured : LS}
+    {queries : ReplacementQueries} {owner value : ValueId} {ty : Ty} {exprs : List Expr}
+    {sourceEnv : Core.TEnv} {result : Ty} {start finish : Nat}
+    (source : Core.tyExpr sourceEnv (.arrLit ty exprs) start = .ok (result, finish))
+    (scalars : ∀ expr ∈ exprs, ScalarBooleanExpr expr)
+    (run : lowerExpr (.arrLit ty exprs) env before = (value, captured))
+    (live : LiveBound before) (extension : captured.Ext state) :
+    EmitsOnly (ReplacementInstApart module (func.valueTypes module) queries owner) before captured := by
+  change (lowerExprs exprs >>= fun values => emitDef (.arrLit ty values)) env before = (value, captured) at run
+  obtain ⟨values, middle, first, next⟩ := bind_eq.mp run
+  have firstExtension := (adv_emitDef next).ext.trans extension
+  have firstApart : EmitsOnly (ReplacementInstApart module (func.valueTypes module) queries owner) before middle := by
+    apply (scalarBoolean_lowerExprs scalars env before values middle first).map
+    intro inst member scalar
+    rcases scalar with scalar | control
+    · obtain ⟨value, op, rfl, scalar⟩ := scalar
+      exact replacementScalarApart_of_source_graphs builder blocks slots globals sigs structs profile graphs
+        (extension_inst_member firstExtension member) scalar
+    · exact .control control
+  have middleLive := liveBound_of_adv (advB_lowerExprs exprs _ _ _ _ first) live
+  exact firstApart.trans (emitsOnly_literal_of_source_graphs builder blocks slots globals sigs structs profile
+    graphs source next middleLive extension)
+
+theorem replacementRegion_boolean_array_closed {env : LEnv} {before cleared captured : LS}
+    {queries : ReplacementQueries} {owner value : ValueId} {origin : Option OriginId}
+    {ty : Ty} {exprs : List Expr} {sourceEnv : Core.TEnv} {result : Ty} {start finish : Nat}
+    (source : Core.tyExpr sourceEnv (.arrLit ty exprs) start = .ok (result, finish))
+    (scalars : ∀ expr ∈ exprs, ScalarBooleanExpr expr)
+    (clearRun : emitEffect (.clear owner origin) env before = ((), cleared))
+    (rhsRun : lowerExpr (.arrLit ty exprs) env cleared = (value, captured))
+    (live : LiveBound before) (bounded : TargetsBounded cleared)
+    {loop : Option LoopCtx} (frames : LoopBuilderFrames loop cleared)
+    (framed : TermEdgesFramed loop captured state) (extension : captured.Ext state)
+    (shaped : ∀ (index : BlockId) (body : BlockB), captured.blocks[index]? = some body → OpenBlock body ∨ ClosedBlock body)
+    (closed : ∀ body ∈ state.blocks.toList, ClosedBlock body) :
+    EmptyFactsClosed module func (func.valueTypes module) queries (ReplacementRegionFacts cleared captured owner) := by
+  have clearedLive := liveBound_of_adv (adv_emitEffect clearRun) live
+  have emitted := lowerExpr_boolean_array_apart (queries := queries) (owner := owner)
+    builder blocks slots globals sigs structs profile graphs source scalars rhsRun clearedLive extension
+  exact replacementRegion_closed_of_emission live clearRun emitted
+    (advB_lowerExpr (.arrLit ty exprs) _ _ _ _ rhsRun) bounded frames framed extension shaped closed blocks
 
 end ScalarLiterals
 
