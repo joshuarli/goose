@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ExpressionTypingSliceOps
+import Goose.Lower.Validation.ExpressionTypingMutableOps
 
 namespace Goose.Lower.Validation
 
@@ -8,6 +8,7 @@ mutual
 
 def RecursiveExpression : Expr → Prop
   | .read p | .ref .readOnly p => RecursivePlace p
+  | .ref .mutable (.field owner _) => RecursivePlace owner
   | .un _ e _ | .not e | .conv _ _ e _ => RecursiveExpression e
   | .bin _ a b _ | .cmp _ a b => RecursiveExpression a ∧ RecursiveExpression b
   | .push owner expr _ => RecursivePlace owner ∧ RecursiveExpression expr
@@ -90,13 +91,39 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
   | ref mu p =>
     cases mu with
     | mutable =>
-      have initial := (dead_lowerExpr _).live_before run live
-      cases current : before.cur with
-      | none => simp [current] at initial
-      | some block =>
-        have typed := lowerExpr_static_typed _ supported source results before current
-        rw [run] at typed
-        exact typed.2
+      cases p with
+      | field owner index =>
+        obtain ⟨ownerInfo, ownerFinish, field, fieldFinish, info, placeFinish,
+          ownerSource, _, _, shape, _, _⟩ := tyExpr_ref_mutable_field_binding source
+        have lowering := run
+        simp only [lowerExpr] at lowering
+        obtain ⟨address, mid, placeRun, frozenRun⟩ := bind_eq.mp lowering
+        have midLive := (dead_freezeTo .mutable address).live_before frozenRun live
+        have placeLowering := placeRun
+        simp only [lowerPlace] at placeLowering
+        obtain ⟨ownerValue, ownerState, ownerRun, emitted⟩ := bind_eq.mp placeLowering
+        have ownerLive := (dead_emitDef (.fieldAddr ownerValue index)).live_before emitted midLive
+        obtain ⟨mu, ownerTyped⟩ := lowerPlace_recursive_typed owner supported ownerSource ownerRun ownerLive
+        cases current : ownerState.cur with
+        | none => simp [current] at ownerLive
+        | some block =>
+          have typed := lowerPlace_ref_mutable_field_typed_of_owner source ownerSource ownerRun ownerTyped current
+          rw [placeRun] at typed
+          cases midCurrent : mid.cur with
+          | none => simp [midCurrent] at midLive
+          | some midBlock =>
+            rw [shape] at typed
+            have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed.2 (by rfl) midCurrent
+            rw [frozenRun] at frozen
+            simpa only [shape] using frozen.2
+      | var _ | global _ | deref _ | elem _ _ _ =>
+        have initial := (dead_lowerExpr _).live_before run live
+        cases current : before.cur with
+        | none => simp [current] at initial
+        | some block =>
+          have typed := lowerExpr_static_typed _ supported source results before current
+          rw [run] at typed
+          exact typed.2
     | readOnly =>
       obtain ⟨info, next, placeSource, shape, _⟩ := tyExpr_ref_place source
       subst ty
