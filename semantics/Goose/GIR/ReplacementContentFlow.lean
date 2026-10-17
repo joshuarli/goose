@@ -95,10 +95,6 @@ def content (f : Func) (state : State) (address : Roots) : Roots :=
         if (f.params[index]?).any Ty.isRefSlice then flowAt state.contents index else .unknown
     | .global _ | .contents _ => .unknown
 
-def holdersOverlap (f : Func) (left right : Nat) : Bool :=
-  (f.parameterRoots left).any fun a =>
-    (f.parameterRoots right).any (Goose.Core.rootsMayOverlap a)
-
 def write (f : Func) (state : State) (address value : Roots) : State :=
   match address with
   | .pending => state
@@ -111,12 +107,9 @@ def write (f : Func) (state : State) (address value : Roots) : State :=
       | .local slot => { state with slots := addFlow state.slots slot value }
       | .param index =>
           if (f.params[index]?).any Ty.isRefSlice then
-            f.params.zipIdx.foldl (fun state (type, target) =>
-              if type.isRefSlice && (index == target || holdersOverlap f index target) then
-                { state with contents := addFlow state.contents target value
-                             writes := state.writes.set! target
-                               ((state.writes[target]?.getD (.assigned .unknown)).join (.assigned value)) }
-              else state) state
+            { state with contents := addFlow state.contents index value
+                         writes := state.writes.set! index
+                           ((state.writes[index]?.getD (.assigned .unknown)).join (.assigned value)) }
           else state
       | .global _ | .contents _ =>
           { state with touched := .unknown }) state

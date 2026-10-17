@@ -222,11 +222,7 @@ theorem write_extends (f : Func) (state : State) (address roots : Roots) :
     | param index =>
       dsimp only
       split
-      · apply state_foldl_extends
-        intro next parameter
-        split
-        · exact State.extends_contents _ _ _
-        · exact State.Extends.refl _
+      · exact State.extends_contents _ _ _
       · exact State.Extends.refl _
 
 theorem state_forIn_extends {α : Type} (values : List α)

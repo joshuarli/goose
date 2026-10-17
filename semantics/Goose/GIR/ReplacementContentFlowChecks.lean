@@ -257,4 +257,54 @@ private def duplicatedReturnModule := module #[duplicatedReturnBound, pure] #[gl
 #guard ReplacementContentFlow.Model.declaredReturn duplicatedReturnBound == .known [.global 0]
 #guard (localFlow duplicatedReturnModule duplicatedReturnBound).value 0 == some [.global 0]
 
+private def independentWriter := function "independentWriter" [holder, holder, slice] [] #[]
+  [.eff (.store 0 2 (some 0)), .term (.ret [] (some 0))]
+  { params := #[(0, [.param 0]), (1, [.param 1]), (2, [.param 2])]
+    contents := #[(0, [.param 2]), (1, [])] }
+private def independentWriterModule := module #[independentWriter, pure]
+#guard (localFlow independentWriterModule pure).value 0 == some []
+
+private def actualAliasWriter := { aliasWriter with roots :=
+  { aliasWriter.roots with params := #[(0, [.param 0]), (1, [.param 1]), (2, [.global 1])] } }
+private def actualAliasModule := module #[aliasCaller, actualAliasWriter] #[global owner, global owner]
+private def actualAliasWriterOnly := module #[actualAliasWriter] #[global owner, global owner]
+#guard (localFlow actualAliasWriterOnly actualAliasWriter).value 3 == some [.global 0]
+#guard (localFlow actualAliasModule aliasCaller).value 3 == none
+
+private def compatibleAliasWriter := { actualAliasWriter with roots :=
+  { actualAliasWriter.roots with
+      contents := #[(0, [.global 0, .global 1]), (1, [.global 0, .global 1])]
+      results := #[[.global 0, .global 1]] } }
+private def compatibleAliasModule := module #[aliasCaller, compatibleAliasWriter] #[global owner, global owner]
+#guard ((localFlow compatibleAliasModule aliasCaller).value 3).any fun roots =>
+  roots.contains (.global 0) && roots.contains (.global 1)
+#guard ((localFlow compatibleAliasModule aliasCaller).call 1 [2, 2, 1]).any (·.contains (.global 1))
+
+private def aliasForwarder (compatible recursive : Bool) : Func :=
+  let callee := if compatible then compatibleAliasWriter else actualAliasWriter
+  function "aliasForwarder" callee.params callee.results #[]
+    ([.def 3 (.call 2 [0, 1, 2] (some 0))] ++
+      (if recursive then [.def 4 (.call 1 [0, 1, 2] (some 0))] else []) ++
+      [.term (.ret [3] (some 0))]) callee.roots
+private def nestedAliasModule (compatible recursive : Bool) :=
+  module #[aliasCaller, aliasForwarder compatible recursive,
+    if compatible then compatibleAliasWriter else actualAliasWriter] #[global owner, global owner]
+#guard (localFlow (nestedAliasModule false false) aliasCaller).value 3 == none
+#guard ((localFlow (nestedAliasModule true false) aliasCaller).value 3).any (·.contains (.global 1))
+#guard (localFlow (nestedAliasModule false true) aliasCaller).value 3 == none
+#guard ((localFlow (nestedAliasModule true true) aliasCaller).value 3).any (·.contains (.global 1))
+
+private def aliasInitializer := function "aliasInitializer" [] [element] #[⟨slice, .mutable, 0, 0⟩]
+  [.def 0 (.globalAddr 0), .def 1 (.snapshot .owner 0),
+   .def 2 (.viewSlice .readOnly 1 .omitted .omitted (some 0)),
+   .def 3 (.globalAddr 1), .def 4 (.snapshot .owner 3),
+   .def 5 (.viewSlice .readOnly 4 .omitted .omitted (some 0)),
+   .eff (.slotInit 0 2 (some 0)), .def 6 (.slotAddr 0),
+   .def 7 (.call 1 [6, 6, 5] (some 0)), .def 8 (.constInt .i64 1), .term (.ret [8] (some 0))]
+private def initializerAliasModule (compatible : Bool) :=
+  module #[pure, if compatible then compatibleAliasWriter else actualAliasWriter]
+    #[global owner, global owner, { global element with init := aliasInitializer }]
+#guard (localFlow (initializerAliasModule false) pure).value 0 == none
+#guard ((localFlow (initializerAliasModule true) aliasInitializer).value 7).any (·.contains (.global 1))
+
 end Goose.GIR.ReplacementContentFlowChecks
