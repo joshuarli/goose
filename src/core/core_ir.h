@@ -70,7 +70,7 @@ using CoreTargetId = int;
 
 struct CoreType {
     enum Kind : uint8_t { Int, Bool, Unit, Arr, VarArr, Grow, GrowShrink, Limited, Ref, Slice, View, Ptr,
-                          Tuple, Struct, Dest, Built, Cancelled } kind = Unit;
+                          Tuple, Struct, Dest, Built, Cancelled, Receiving, ExitReservation } kind = Unit;
     CoreIntTy ity = CoreIntTy::I64;
     CoreMut mut = CoreMut::Mut;
     CoreTypeId elem = -1;

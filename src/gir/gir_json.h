@@ -1,4 +1,4 @@
-// Goose compiler — GIR-H, serialization (schema gir-h/0.4).
+// Goose compiler — GIR serialization: pilot/shrink H0.4/L0.2, construction H0.5/L0.3.
 //
 // Records are tagged arrays as in the Core encoding. The file and origin
 // tables are the Core module's, unchanged; the type table is numbered by first
@@ -9,6 +9,9 @@
 namespace goose {
 
 inline constexpr const char *GIR_SCHEMA = "gir-h/0.4";
+inline constexpr const char *GIR_CONSTRUCTION_SCHEMA = "gir-h/0.5";
+inline constexpr const char *GIR_LOW_SCHEMA = "gir-l/0.2";
+inline constexpr const char *GIR_CONSTRUCTION_LOW_SCHEMA = "gir-l/0.3";
 
 class GirWriter {
 public:
@@ -31,7 +34,7 @@ public:
         if (CoreHasShrink(m.profile))
             for (size_t i = 0; i < m.types.size(); i++)
                 if (m.types[i].kind == CoreType::Struct) T((int)i);
-        string out = cat("[\"module\",\"", GIR_SCHEMA, "\",\"", CoreProfileName(m.profile), "\",[");
+        string out = cat("[\"module\",\"", CoreHasConstruction(m.profile) ? GIR_CONSTRUCTION_SCHEMA : GIR_SCHEMA, "\",\"", CoreProfileName(m.profile), "\",[");
         for (size_t i = 0; i < m.files.size(); i++) {
             if (i) out += ',';
             out += "[\"file\",";
@@ -74,7 +77,6 @@ public:
         return out;
     }
 
-    // The low stage (schema gir-l/0.2): the same style, written but not read.
     string WriteLow() {
         typenum.clear();
         typeorder.clear();
@@ -97,7 +99,7 @@ public:
         objs += ']';
         if (CoreHasConstruction(m.profile))
             for (auto &target : m.lowtargets) for (auto cell : target.cells) T(cell);
-        string out = cat("[\"module\",\"gir-l/0.2\",\"", CoreProfileName(m.profile), "\",[");
+        string out = cat("[\"module\",\"", CoreHasConstruction(m.profile) ? GIR_CONSTRUCTION_LOW_SCHEMA : GIR_LOW_SCHEMA, "\",\"", CoreProfileName(m.profile), "\",[");
         for (size_t i = 0; i < m.files.size(); i++) {
             if (i) out += ',';
             out += "[\"file\",";
@@ -225,6 +227,12 @@ private:
                 break;
             case CoreType::Cancelled:
                 Append(out, "[\"cancelled\",", typenum.at(t.elem), ",\"", CoreRequestName(t.request), "\"]");
+                break;
+            case CoreType::Receiving:
+                Append(out, "[\"receiving\",", typenum.at(t.elem), ",\"", CoreRequestName(t.request), "\"]");
+                break;
+            case CoreType::ExitReservation:
+                Append(out, "[\"exit_reservation\",", typenum.at(t.elem), ",\"", CoreRequestName(t.request), "\"]");
                 break;
         }
     }
@@ -507,6 +515,46 @@ private:
     }
 
     void LowInst(string &out, const GirInst &i) {
+        if (auto contract = GirControlOf(i.op)) {
+            Append(out, "[\"", contract->wire, "\"");
+            if (contract->result) Append(out, ",", i.res);
+            switch (contract->form) {
+                case GirControlForm::None: break;
+                case GirControlForm::Parameter: Append(out, ",", i.idx); break;
+                case GirControlForm::TargetPositions:
+                    Append(out, ",", i.idx, ",[");
+                    for (size_t position = 0; position < i.ownerPositions.size(); position++) {
+                        if (position) out += ',';
+                        out += '[';
+                        if (i.ownerPositions[position]) Append(out, *i.ownerPositions[position]);
+                        out += ']';
+                    }
+                    out += ']'; break;
+                case GirControlForm::TargetResult: Append(out, ",", i.idx, ",", i.idx2, ",", i.a); break;
+                case GirControlForm::Call:
+                    Append(out, ",", i.idx, ","); Ints(out, i.vals); out += ",[";
+                    for (size_t position = 0; position < i.ownerBindings.size(); position++) {
+                        if (position) out += ',';
+                        out += '[';
+                        if (i.ownerBindings[position]) Append(out, *i.ownerBindings[position]);
+                        out += ']';
+                    }
+                    out += ']'; break;
+                case GirControlForm::Operand: Append(out, ",", i.a); break;
+                case GirControlForm::OperandParameter: Append(out, ",", i.a, ",", i.idx); break;
+                case GirControlForm::Pair: Append(out, ",", i.a, ",", i.b); break;
+                case GirControlForm::Values: out += ','; Ints(out, i.vals); break;
+                case GirControlForm::OperandValues:
+                    Append(out, ",", i.a, ","); Ints(out, i.vals); break;
+                case GirControlForm::PairValues:
+                    Append(out, ",", i.a, ",", i.b, ","); Ints(out, i.vals); break;
+                case GirControlForm::Source:
+                    Append(out, ",", i.a, ","); ExitSource(out, i.exitSource); break;
+            }
+            out += ']';
+            return;
+        }
+
         auto def = [&](const char *tag) { Append(out, "[\"", tag, "\",", i.res); };
         switch (i.op) {
             case GirOp::Int: def("i_int"); Append(out, ",", T(i.ty), ",\"", i.text, "\"]"); return;
@@ -671,6 +719,7 @@ private:
         auto type = functionValues[inst.res];
         auto kind = m.Type(type).kind;
         if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled ||
+            kind == CoreType::Receiving || kind == CoreType::ExitReservation ||
             kind == CoreType::Tuple || inst.op == GirOp::Bytes || inst.op == GirOp::Render) T(type);
     }
 
@@ -680,6 +729,11 @@ private:
             case GirBound::Val: Append(out, "[\"bd_val\",", b.val, "]"); break;
             case GirBound::End: Append(out, "[\"bd_end\",", b.val, "]"); break;
         }
+    }
+
+    void ExitSource(string &out, const GirExitSource &source) {
+        if (auto binding = GirNamedExitBinding(source)) Append(out, "[\"named_alias\",", *binding, "]");
+        else out += "[\"new_value\"]";
     }
 
     void Inst(string &out, const GirInst &i) {
@@ -833,15 +887,31 @@ private:
                 def("i_dest_adapt_finish"); Append(out, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::DestPublishRef:
                 def("i_dest_publish_ref"); Append(out, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
-            case GirOp::DestNamed:
-                def("i_dest_named"); Append(out, ",", i.idx, ","); OptOrg(out, i.org); out += ']'; return;
-            case GirOp::ResultExitDest:
-                def("i_result_exit_dest"); Append(out, ",", i.idx, ","); OptOrg(out, i.org); out += ']'; return;
-            case GirOp::DestAbandonNamed:
-                def("i_dest_abandon_named"); Append(out, ",", i.idx, ",", i.a, ",");
+            case GirOp::ReceivingOpen: case GirOp::DestRenew: case GirOp::ReservedDest: case GirOp::ReservedNamed:
+                def(i.op == GirOp::ReceivingOpen ? "i_receiving_open" : i.op == GirOp::DestRenew ? "i_dest_renew" :
+                    i.op == GirOp::ReservedDest ? "i_reserved_dest" : "i_reserved_named");
+                Append(out, ",", i.a, "]"); return;
+            case GirOp::DestRefresh: case GirOp::ExitLand: case GirOp::ExitAdopt:
+                def(i.op == GirOp::DestRefresh ? "i_dest_refresh" : i.op == GirOp::ExitLand ? "i_exit_land" : "i_exit_adopt");
+                Append(out, ",", i.a, ",", i.b);
+                if (i.op == GirOp::ExitLand) { out += ','; OptOrg(out, i.org); }
+                out += ']'; return;
+            case GirOp::ReceivingCancel:
+                def("i_receiving_cancel"); Append(out, ",", i.a, ","); Ints(out, i.vals); out += ','; OptOrg(out, i.org); out += ']'; return;
+            case GirOp::TargetReceiving:
+                def("i_target_receiving"); Append(out, ",", i.idx, ",", i.idx2, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::ExitIsNamed: def("i_exit_is_named"); Append(out, ",", i.a, "]"); return;
+            case GirOp::ExitReserve:
+                def("i_exit_reserve"); Append(out, ",", i.a, ","); ExitSource(out, i.exitSource); out += ',';
                 OptOrg(out, i.org); out += ']'; return;
-            case GirOp::TargetDest:
-                def("i_target_dest"); Append(out, ",", i.idx, ",", i.idx2, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::ReceivingDrop:
+                Append(out, "[\"x_receiving_drop\",", i.a, ']'); return;
+            case GirOp::ExitMarkNamed:
+                Append(out, "[\"x_exit_mark_named\",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::ExitRelease:
+                Append(out, "[\"x_exit_release\",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
+            case GirOp::ExitDiscard:
+                Append(out, "[\"x_exit_discard\",", i.a, ","); Ints(out, i.vals); out += ','; OptOrg(out, i.org); out += ']'; return;
             case GirOp::DestArg: case GirOp::DestValue: case GirOp::DestRelocate:
             case GirOp::DestStage: case GirOp::DestFit:
                 def(i.op == GirOp::DestArg ? "i_dest_arg" : i.op == GirOp::DestValue ? "i_dest_value" :

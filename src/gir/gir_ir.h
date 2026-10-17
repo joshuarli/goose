@@ -17,23 +17,33 @@ enum class GirOp : uint8_t {
     // Instructions that define a value, high stage.
     Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, OwnerBorrow, Load,
     Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
-    Struct, Field, Bytes, Result, DestOpen, DestChild, DestFinish, DestNamed, ResultExitDest,
-    DestAbandonNamed, DestArg, DestAbandon, DestValue, DestRelocate, DestStage, DestFit,
-    CallConstruct, TargetDest, Render, DestPublishRef, DestAdapt, DestAdaptFinish,
+    Struct, Field, Bytes, Result, DestOpen, DestChild, DestFinish,
+    DestArg, DestAbandon, DestValue, DestRelocate, DestStage, DestFit,
+    CallConstruct, Render, DestPublishRef, DestAdapt, DestAdaptFinish,
+    ReceivingOpen, TargetReceiving, DestRenew, DestRefresh, ExitReserve, ExitIsNamed, ReservedDest, ReservedNamed,
+    ExitLand, ExitAdopt, ReceivingCancel,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
     HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId, PtrEq, SourceNew, SourceChild, SourceParam, SourceEnter, SourceCallPush, SourceCallGet, SourceGlobal, SourceTargetEnter, SourceTargetGet,
+    ControlEnter, ControlCallPush, ControlCallParam, ControlCallGet, ControlOwnerNone, ControlNamedBind, ControlOwnerBind, ControlOwnerParam, ControlOwnerGet, ControlOwnerTargetEnter, ControlOwnerTargetGet, ControlReceivingNew, ControlReceivingOpen, ControlReceivingCurrent,
+    ControlReceivingRenew, ControlReceivingRefresh, ControlAttemptStack, ControlAttemptStart,
+    ControlAttemptProgress, ControlAttemptMode, ControlAttemptReceiving, ControlAttemptView,
+    ControlExitReserve, ControlExitIsNamed, ControlExitAdopt, ControlExitSelected, ControlExitPrepare, ControlExitCommit,
+    ControlReceivingCancel, ControlAttemptAbandon,
     // Instructions that define none, high stage.
     Init, Store, Append, AppendValue, PopN, Resize, Clear, Replace, DestWrite, DestAttach,
     DestBytes, DestText, DestCopy, DestRepeat, DestSnapshot, DestBind, DestPublish, DestCancel, Enter, Leave, Print,
+    ExitRelease, ExitDiscard, ExitMarkNamed, ReceivingDrop,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
     BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event, SourceLeave, SourceCallPop, SourceResult, SourceCopy, SourceGlobalSet, SourceTargetLeave, SourceTargetResult,
+    ControlLeave, ControlCallPop, ControlOwnerCheck, ControlOwnerExtend, ControlOwnerUpdate, ControlOwnerResult, ControlOwnerTargetResult, ControlOwnerTargetLeave, ControlReceivingDrop, ControlReceivingTransfer, ControlExitMarkNamed, ControlExitRelease, ControlExitDiscard, ControlAttemptCancel,
+    ControlAttemptChild, ControlAttemptFinish, ControlAttemptAttach, ControlAttemptPublish, ControlAttemptReturn,
     // Terminators.
     Br, CondBr, Invoke, Ret, Escape, Abort, Exit, Unreachable,
 };
 
-inline bool GirDefines(GirOp op) { return op <= GirOp::SourceTargetGet; }
+inline bool GirDefines(GirOp op) { return op <= GirOp::ControlAttemptAbandon; }
 inline bool GirIsTerminator(GirOp op) { return op >= GirOp::Br; }
 
 // Whether an instruction belongs to the high stage only, the low stage only,
@@ -47,12 +57,16 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::Push: case GirOp::Pop: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
         case GirOp::DestOpen: case GirOp::DestFinish: case GirOp::DestWrite:
         case GirOp::DestBytes: case GirOp::DestPublish:
-        case GirOp::Bytes: case GirOp::Result: case GirOp::DestChild: case GirOp::DestNamed:
-        case GirOp::ResultExitDest: case GirOp::DestAbandonNamed: case GirOp::DestArg:
+        case GirOp::Bytes: case GirOp::Result: case GirOp::DestChild:
+        case GirOp::DestArg:
         case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
         case GirOp::DestStage: case GirOp::DestFit: case GirOp::CallConstruct:
-        case GirOp::TargetDest: case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestAdapt: case GirOp::DestAdaptFinish: case GirOp::AppendValue: case GirOp::DestAttach:
+        case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestAdapt: case GirOp::DestAdaptFinish: case GirOp::AppendValue: case GirOp::DestAttach:
         case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot: case GirOp::DestBind:
+        case GirOp::ReceivingOpen: case GirOp::TargetReceiving: case GirOp::DestRenew: case GirOp::DestRefresh:
+        case GirOp::ExitReserve: case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed:
+        case GirOp::ExitLand: case GirOp::ExitAdopt: case GirOp::ReceivingCancel:
+        case GirOp::ExitRelease: case GirOp::ExitDiscard: case GirOp::ExitMarkNamed: case GirOp::ReceivingDrop:
         case GirOp::DestCancel: case GirOp::Invoke: case GirOp::Escape:
         case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
@@ -62,8 +76,8 @@ inline bool GirHighOnly(GirOp op) {
     }
 }
 inline bool GirLowOnly(GirOp op) {
-    return (op >= GirOp::PtrOffset && op <= GirOp::SourceTargetGet) ||
-           (op >= GirOp::PStore && op <= GirOp::SourceTargetResult);
+    return (op >= GirOp::PtrOffset && op <= GirOp::ControlAttemptAbandon) ||
+           (op >= GirOp::PStore && op <= GirOp::ControlAttemptReturn);
 }
 
 enum class GirAbortKind : uint8_t {
@@ -75,6 +89,14 @@ enum class GirAbortKind : uint8_t {
 // reference. Direct owners remain writable even when their variable binding is
 // immutable; borrowed views inherit the reference's mutability.
 enum class GirSnapshotMode : uint8_t { Owner, Borrowed };
+struct GirExitNewValue { bool operator==(const GirExitNewValue &) const = default; };
+struct GirExitNamedAlias { int binding; bool operator==(const GirExitNamedAlias &) const = default; };
+using GirExitSource = variant<GirExitNewValue, GirExitNamedAlias>;
+
+inline optional<int> GirNamedExitBinding(const GirExitSource &source) {
+    if (auto alias = get_if<GirExitNamedAlias>(&source)) return alias->binding;
+    return nullopt;
+}
 
 enum class GirFormatKind : uint8_t { Int, Uint, Bool };
 enum class GirTraceKind : uint8_t { Storage, Destination };
@@ -145,6 +167,12 @@ struct GirResultProtocol {
     bool operator==(const GirResultProtocol &) const = default;
 };
 
+enum class GirConstructionIncomingWord : size_t { Stack, Start, Metadata, Progress, Receiving, Count };
+enum class GirConstructionEscapedWord : size_t { Start, End, Count, Identity, Replacement, WordCount };
+inline constexpr size_t GirConstructionOutputWords = 4;
+inline constexpr size_t GirConstructionTargetIncomingWords = (size_t)GirConstructionIncomingWord::Count;
+inline constexpr size_t GirConstructionEscapedWords = (size_t)GirConstructionEscapedWord::WordCount;
+
 struct GirLowChannel {
     int position = -1;
     vector<int> incoming;
@@ -168,6 +196,7 @@ struct GirInst {
     CoreCmpOp cmp = CoreCmpOp::Eq;
     CoreConvKind conv = CoreConvKind::Widen;
     CoreMut mut = CoreMut::Mut;
+    GirExitSource exitSource = GirExitNewValue {};
     GirSnapshotMode snap = GirSnapshotMode::Borrowed;
     GirAbortKind abort = GirAbortKind::Assert;
     CoreRequest request = CoreRequest::Value;
@@ -182,10 +211,105 @@ struct GirInst {
     vector<uint8_t> bytes;
     GirBound lo, hi;
     vector<int> vals, vals2, forwarded;
+    vector<optional<int>> ownerBindings, ownerPositions;
     vector<GirEscapeEdge> escapes;
     vector<GirPart> parts;
     int org = -1;
 };
+
+enum class GirControlForm : uint8_t { None, Parameter, Call, Operand, OperandParameter, Pair, Values, OperandValues, PairValues, Source, TargetPositions, TargetResult };
+
+struct GirControlContract {
+    const char *wire;
+    GirControlForm form;
+    optional<CoreType::Kind> result;
+    vector<CoreType::Kind> inputs;
+    optional<CoreType::Kind> repeatedInput;
+};
+
+inline optional<GirControlContract> GirControlOf(GirOp op) {
+    using Form = GirControlForm;
+    using Kind = CoreType;
+    switch (op) {
+        case GirOp::ControlEnter: return GirControlContract { "l_control_enter", Form::None, Kind::Ptr, {}, nullopt };
+        case GirOp::ControlCallPush: return GirControlContract { "l_control_call_push", Form::Call, Kind::Ptr, {}, Kind::Ptr };
+        case GirOp::ControlCallParam: return GirControlContract { "l_control_call_param", Form::Parameter, Kind::Ptr, {}, nullopt };
+        case GirOp::ControlCallGet: return GirControlContract { "l_control_call_get", Form::OperandParameter, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlNamedBind: return GirControlContract { "l_control_named_bind", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerNone: return GirControlContract { "l_control_owner_none", Form::None, Kind::Ptr, {}, nullopt };
+        case GirOp::ControlOwnerTargetEnter: return GirControlContract { "l_control_owner_target_enter", Form::TargetPositions, Kind::Ptr, {}, nullopt };
+        case GirOp::ControlOwnerTargetGet: return GirControlContract { "l_control_owner_target_get", Form::OperandParameter, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerTargetResult: return GirControlContract { "l_control_owner_target_result", Form::TargetResult, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerTargetLeave: return GirControlContract { "l_control_owner_target_leave", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlExitMarkNamed: return GirControlContract { "l_control_exit_mark_named", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerBind: return GirControlContract { "l_control_owner_bind", Form::PairValues, Kind::Ptr, { Kind::Ptr, Kind::Ptr, Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerParam: return GirControlContract { "l_control_owner_param", Form::Parameter, Kind::Ptr, {}, nullopt };
+        case GirOp::ControlOwnerGet: return GirControlContract { "l_control_owner_get", Form::OperandParameter, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerExtend: return GirControlContract { "l_control_owner_extend", Form::Pair, nullopt, { Kind::Ptr, Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerCheck: return GirControlContract { "l_control_owner_check", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerUpdate: return GirControlContract { "l_control_owner_update", Form::PairValues, nullopt, { Kind::Ptr, Kind::Int, Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerResult: return GirControlContract { "l_control_owner_result", Form::OperandParameter, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlReceivingNew: return GirControlContract { "l_control_receiving_new", Form::PairValues, Kind::Ptr, { Kind::Ptr, Kind::Ptr, Kind::Int, Kind::Int }, nullopt };
+        case GirOp::ControlReceivingOpen: return GirControlContract { "l_control_receiving_open", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlReceivingCurrent: return GirControlContract { "l_control_receiving_current", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlReceivingRenew: return GirControlContract { "l_control_receiving_renew", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlReceivingRefresh: return GirControlContract { "l_control_receiving_refresh", Form::PairValues, Kind::Ptr, { Kind::Ptr, Kind::Ptr, Kind::Ptr, Kind::Int }, nullopt };
+        case GirOp::ControlAttemptStack: return GirControlContract { "l_control_attempt_stack", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptStart: return GirControlContract { "l_control_attempt_start", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptProgress: return GirControlContract { "l_control_attempt_progress", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptMode: return GirControlContract { "l_control_attempt_mode", Form::Operand, Kind::Bool, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptReceiving: return GirControlContract { "l_control_attempt_receiving", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptView: return GirControlContract { "l_control_attempt_view", Form::PairValues, Kind::Ptr, { Kind::Ptr, Kind::Ptr, Kind::Int }, nullopt };
+        case GirOp::ControlExitIsNamed: return GirControlContract { "l_control_exit_is_named", Form::Operand, Kind::Bool, { Kind::Ptr }, nullopt };
+        case GirOp::ControlExitReserve: return GirControlContract { "l_control_exit_reserve", Form::Source, Kind::Ptr, { Kind::Ptr }, Kind::Ptr };
+        case GirOp::ControlExitAdopt: return GirControlContract { "l_control_exit_adopt", Form::Pair, Kind::Ptr, { Kind::Ptr, Kind::Ptr }, nullopt };
+        case GirOp::ControlExitSelected: return GirControlContract { "l_control_exit_selected", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlExitPrepare: return GirControlContract { "l_control_exit_prepare", Form::Pair, Kind::Ptr, { Kind::Ptr, Kind::Ptr }, nullopt };
+        case GirOp::ControlExitCommit: return GirControlContract { "l_control_exit_commit", Form::PairValues, Kind::Ptr, { Kind::Ptr, Kind::Ptr, Kind::Ptr }, nullopt };
+        case GirOp::ControlReceivingCancel: return GirControlContract { "l_control_receiving_cancel", Form::OperandValues, Kind::Ptr, { Kind::Ptr }, Kind::Ptr };
+        case GirOp::ControlAttemptAbandon: return GirControlContract { "l_control_attempt_abandon", Form::OperandValues, Kind::Ptr, { Kind::Ptr }, Kind::Ptr };
+        case GirOp::ControlLeave: return GirControlContract { "l_control_leave", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlCallPop: return GirControlContract { "l_control_call_pop", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlReceivingDrop: return GirControlContract { "l_control_receiving_drop", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlReceivingTransfer: return GirControlContract { "l_control_receiving_transfer", Form::PairValues, nullopt, { Kind::Ptr, Kind::Ptr, Kind::Bool }, nullopt };
+        case GirOp::ControlExitRelease: return GirControlContract { "l_control_exit_release", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlExitDiscard: return GirControlContract { "l_control_exit_discard", Form::OperandValues, nullopt, { Kind::Ptr }, Kind::Ptr };
+        case GirOp::ControlAttemptCancel: return GirControlContract { "l_control_attempt_cancel", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptChild: return GirControlContract { "l_control_attempt_child", Form::Pair, nullopt, { Kind::Ptr, Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptFinish: return GirControlContract { "l_control_attempt_finish", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptAttach: return GirControlContract { "l_control_attempt_attach", Form::Pair, nullopt, { Kind::Ptr, Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptPublish: return GirControlContract { "l_control_attempt_publish", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptReturn: return GirControlContract { "l_control_attempt_return", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        default: return nullopt;
+    }
+}
+
+inline vector<int> GirControlOperands(const GirInst &inst, GirControlForm form) {
+    vector<int> operands;
+    switch (form) {
+        case GirControlForm::None: case GirControlForm::Parameter: case GirControlForm::TargetPositions: break;
+        case GirControlForm::Operand: case GirControlForm::OperandParameter: case GirControlForm::TargetResult: operands = { inst.a }; break;
+        case GirControlForm::Source:
+            operands = { inst.a };
+            if (auto binding = GirNamedExitBinding(inst.exitSource)) operands.push_back(*binding);
+            break;
+        case GirControlForm::Pair: operands = { inst.a, inst.b }; break;
+        case GirControlForm::Call:
+            operands = inst.vals;
+            for (auto binding : inst.ownerBindings) if (binding) operands.push_back(*binding);
+            break;
+        case GirControlForm::Values: operands = inst.vals; break;
+        case GirControlForm::OperandValues:
+            operands = { inst.a };
+            operands.insert(operands.end(), inst.vals.begin(), inst.vals.end());
+            break;
+        case GirControlForm::PairValues:
+            operands = { inst.a, inst.b };
+            operands.insert(operands.end(), inst.vals.begin(), inst.vals.end());
+            break;
+    }
+    return operands;
+}
 
 // Whether an instruction defines a value: a call of a function with no result
 // in the low stage does not.

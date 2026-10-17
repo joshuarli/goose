@@ -125,7 +125,20 @@ private:
         int header;
         GirTypeId ty;
         int counter;
+        size_t exitDepth;
+        size_t constructionDepth;
     };
+    const Loop *lexicalLoop = nullptr;
+    struct ValueBoundary {
+        int receiving = -1;
+        int catchBlock = -1;
+        int catchValue = -1;
+        GirTypeId type = -1;
+        int depth = 0;
+        size_t exitDepth = 0;
+        size_t constructionDepth = 0;
+    };
+    ValueBoundary *valueBoundary = nullptr;
     vector<GirBlock> blocks;
     vector<GirTypeId> vals;
     int cur = -1;
@@ -137,7 +150,12 @@ private:
     int functionOrigin = -1;
     int currentImpl = -1;
     int currentFunction = -1;
-    vector<int> resultDestinations, activeDestinations;
+    vector<int> activeReceivings;
+    vector<int> resultReceivings;
+    map<int, int> rawReceivings;
+    map<int, int> receivingParents;
+    vector<int> exitReservations;
+    map<int, int> reservationReceivings, reservationBuilders, rawReservations, receivingReservations;
     set<int> boundNamedSlots;
 
     int Org(const CoreOrigin &o) { return originof(o); }
@@ -431,6 +449,7 @@ private:
                     auto destination = OpenDestination(*e.a, GirDestPushReceiver { r }, CoreRequest::Value, Org(e.org));
                     auto completed = LowerConstruct(*e.a, destination, Org(e.org));
                     if (cur < 0) return 0;
+                    DropCompletedReceiving(completed);
                     GirInst publish;
                     publish.op = GirOp::DestPublishRef;
                     publish.a = completed;
@@ -461,14 +480,14 @@ private:
                 (void)ts; (void)es;
                 EmitTerm(CondBr(cv, tb, {}, eb, {}));
                 cur = tb;
-                auto vt = LowerBlock(nullptr, {}, true, *e.then);
+                auto vt = LowerBlock(lexicalLoop, {}, true, *e.then);
                 auto endT = cur;
                 cur = eb;
-                auto vf = LowerBlock(nullptr, {}, true, *e.otherwise);
+                auto vf = LowerBlock(lexicalLoop, {}, true, *e.otherwise);
                 auto endF = cur;
                 return JoinValue(endT, vt, endF, vf);
             }
-            case CoreExprKind::Block: return LowerBlock(nullptr, {}, true, *e.then);
+            case CoreExprKind::Block: return LowerValueBlock(*e.then, e.type);
             case CoreExprKind::Bytes:
                 throw CompileError { "internal compiler error: byte construction has no receiving destination" };
             case CoreExprKind::Arr: {
@@ -543,7 +562,7 @@ private:
                 if (cur < 0) return {};
                 constructed.push_back(out.size());
                 out.push_back(completed);
-                activeDestinations.push_back(completed);
+                activeReceivings.push_back(rawReceivings.at(completed));
             } else {
                 auto &reference = get<CoreArgReference>(argument);
                 auto address = LowerPlace(*reference.place);
@@ -553,14 +572,15 @@ private:
         }
         for (auto position : constructed) {
             auto completed = out[position];
+            auto active = find(activeReceivings.begin(), activeReceivings.end(), rawReceivings.at(completed));
+            if (active == activeReceivings.end()) throw CompileError { "completed argument lost its owned receiving region" };
+            activeReceivings.erase(active);
+            DropCompletedReceiving(completed);
             GirInst argument;
             argument.op = GirOp::DestArg;
             argument.a = completed;
             argument.org = org;
             out[position] = EmitDef(std::move(argument));
-            auto active = find(activeDestinations.begin(), activeDestinations.end(), completed);
-            if (active == activeDestinations.end()) throw CompileError { "completed argument lost its owned receiving region" };
-            activeDestinations.erase(active);
         }
         return out;
     }
@@ -636,6 +656,8 @@ private:
     // the value (a unit when one is wanted and the block has none) and leave
     // the scope. Yields the value; 0 when nothing was produced.
     int LowerBlock(const Loop *lc, const vector<Binding> &pre, bool want, const CoreBlock &b) {
+        auto savedLoop = lexicalLoop;
+        lexicalLoop = lc;
         {
             GirInst i;
             i.op = GirOp::Enter;
@@ -675,6 +697,7 @@ private:
             EmitEffect(std::move(i));
         }
         stack.pop_back();
+        lexicalLoop = savedLoop;
         return r;
     }
 
@@ -720,7 +743,9 @@ private:
         adapt.ty = producer.type;
         adapt.request = producer.request;
         adapt.org = org;
-        return { EmitDef(std::move(adapt)), true };
+        auto adapted = EmitDef(std::move(adapt));
+        rawReceivings[adapted] = rawReceivings.at(destination);
+        return { adapted, true };
     }
 
     int RestoreProducerDestination(int closed, bool adapted, int org) {
@@ -729,23 +754,61 @@ private:
         restore.op = GirOp::DestAdaptFinish;
         restore.a = closed;
         restore.org = org;
-        return EmitDef(std::move(restore));
+        auto restored = EmitDef(std::move(restore));
+        if (auto receiving = rawReceivings.find(closed); receiving != rawReceivings.end())
+            rawReceivings[restored] = receiving->second;
+        return restored;
+    }
+
+    void DropCompletedReceiving(int completed, int stop = -1) {
+        auto found = rawReceivings.find(completed);
+        if (found == rawReceivings.end()) return;
+        auto receiver = found->second;
+        while (receiver >= 0 && receiver != stop) {
+            if (find(resultReceivings.begin(), resultReceivings.end(), receiver) != resultReceivings.end() ||
+                find(activeReceivings.begin(), activeReceivings.end(), receiver) != activeReceivings.end() ||
+                any_of(exitReservations.begin(), exitReservations.end(), [&](int ticket) {
+                    return reservationReceivings.at(ticket) == receiver;
+                })) break;
+            GirInst drop;
+            drop.op = GirOp::ReceivingDrop;
+            drop.a = receiver;
+            EmitEffect(std::move(drop));
+            receiver = receivingParents.at(receiver);
+            found->second = receiver;
+        }
     }
 
     int FinishDestination(int destination, int org) {
+        destination = RefreshDestination(destination);
         GirInst finish;
         finish.op = GirOp::DestFinish;
         finish.a = destination;
         finish.org = org;
-        return EmitDef(std::move(finish));
+        auto completed = EmitDef(std::move(finish));
+        rawReceivings[completed] = rawReceivings.at(destination);
+        return completed;
     }
 
     void PublishDestination(int completed, int org) {
+        DropCompletedReceiving(completed);
         GirInst publish;
         publish.op = GirOp::DestPublish;
         publish.a = completed;
         publish.org = org;
         EmitEffect(std::move(publish));
+    }
+
+    int LowerValueBlock(const CoreBlock &block, GirTypeId type) {
+        ValueBoundary boundary { -1, -1, -1, type, (int)stack.size(), exitReservations.size(), activeReceivings.size() };
+        auto previous = valueBoundary;
+        valueBoundary = &boundary;
+        auto value = LowerBlock(lexicalLoop, {}, true, block);
+        valueBoundary = previous;
+        if (boundary.catchBlock < 0) return value;
+        if (cur >= 0) EmitTerm(Br(boundary.catchBlock, { value }));
+        cur = boundary.catchBlock;
+        return boundary.catchValue;
     }
 
     int LowerConstructBlock(const CoreBlock &block, int destination, int org) {
@@ -757,9 +820,9 @@ private:
         stack.push_back(block.scope);
         for (auto &statement : block.stmts) {
             if (cur < 0) break;
-            LowerStmt(nullptr, statement);
+            LowerStmt(lexicalLoop, statement);
         }
-        auto completed = cur < 0 ? 0 : LowerConstruct(*block.value, destination, org);
+        auto completed = cur < 0 ? 0 : LowerConstruct(*block.value, RefreshDestination(destination), org);
         GirInst leave;
         leave.op = GirOp::Leave;
         leave.idx = block.scope;
@@ -769,12 +832,18 @@ private:
     }
 
     int LowerConstruct(const CoreExpr &expression, int destination, int org) {
-        auto inserted = find(activeDestinations.begin(), activeDestinations.end(), destination) == activeDestinations.end();
-        if (inserted) activeDestinations.push_back(destination);
+        auto receiving = OpenReceiving(destination);
+        destination = RenewReceiving(receiving);
+        auto inserted = find(activeReceivings.begin(), activeReceivings.end(), receiving) == activeReceivings.end();
+        if (inserted) activeReceivings.push_back(receiving);
         auto done = [&](int completed) {
+            if (cur >= 0 && mod.Type(ValTy(completed)).kind == CoreType::Built) {
+                DropCompletedReceiving(completed, receiving);
+                rawReceivings[completed] = receiving;
+            }
             if (inserted) {
-                auto found = find(activeDestinations.begin(), activeDestinations.end(), destination);
-                if (found != activeDestinations.end()) activeDestinations.erase(found);
+                auto found = find(activeReceivings.begin(), activeReceivings.end(), receiving);
+                if (found != activeReceivings.end()) activeReceivings.erase(found);
             }
             return completed;
         };
@@ -794,6 +863,7 @@ private:
             case CoreExprKind::Arr:
                 for (auto &element : expression.elems) {
                     if (GirNonfixed(mod, element->type)) {
+                        destination = RefreshDestination(destination);
                         GirInst child;
                         child.op = GirOp::DestChild;
                         child.a = destination;
@@ -802,6 +872,8 @@ private:
                         auto childDestination = EmitDef(std::move(child));
                         auto completed = LowerConstruct(*element, childDestination, org);
                         if (cur < 0) return done(0);
+                        destination = RefreshDestination(destination);
+                        DropCompletedReceiving(completed);
                         GirInst attach;
                         attach.op = GirOp::DestAttach;
                         attach.a = destination;
@@ -811,6 +883,7 @@ private:
                     } else {
                         auto value = LowerExpr(*element);
                         if (cur < 0) return done(0);
+                        destination = RefreshDestination(destination);
                         GirInst write;
                         write.op = GirOp::DestWrite;
                         write.a = destination;
@@ -823,6 +896,7 @@ private:
             case CoreExprKind::Copy: case CoreExprKind::ResultLocal: {
                 auto source = expression.kind == CoreExprKind::Copy ? LowerPlace(*expression.place) :
                               EmitDef([&] { GirInst slot; slot.op = GirOp::Slot; slot.idx = expression.var; return slot; }());
+                destination = RefreshDestination(destination);
                 GirInst copy;
                 copy.op = GirOp::DestCopy;
                 copy.a = destination;
@@ -843,6 +917,7 @@ private:
                     } else {
                         auto value = argument.kind == CorePrintArg::View ? LowerView(*argument.view) : LowerExpr(*argument.expr);
                         if (cur < 0) return done(0);
+                        destination = RefreshDestination(destination);
                         GirInst text;
                         text.op = GirOp::DestText;
                         text.a = destination;
@@ -852,25 +927,44 @@ private:
                     }
                 }
                 return done(FinishDestination(destination, org));
-            case CoreExprKind::Block:
-                return done(LowerConstructBlock(*expression.then, destination, org));
+            case CoreExprKind::Block: {
+                auto type = mod.CarrierType(CoreType::Built, mod.Type(ValTy(destination)).elem, mod.Type(ValTy(destination)).request);
+                auto blockReceiving = OpenReceiving(destination);
+                ValueBoundary boundary { blockReceiving, -1, -1, type, (int)stack.size(), exitReservations.size(), activeReceivings.size() };
+                auto previous = valueBoundary;
+                valueBoundary = &boundary;
+                auto completed = LowerConstructBlock(*expression.then, RenewReceiving(blockReceiving), org);
+                valueBoundary = previous;
+                if (cur >= 0) {
+                    DropCompletedReceiving(completed, blockReceiving);
+                    CancelDestination(CancelReceiving(blockReceiving, { completed }, org), org);
+                }
+                if (boundary.catchBlock < 0) return done(completed);
+                if (cur >= 0) EmitTerm(Br(boundary.catchBlock, { completed }));
+                cur = boundary.catchBlock;
+                rawReceivings[boundary.catchValue] = receiving;
+                return done(boundary.catchValue);
+            }
             case CoreExprKind::If: {
                 auto condition = LowerExpr(*expression.a);
                 if (cur < 0) return done(0);
+                destination = RefreshDestination(destination);
                 auto [thenBlock, thenParams] = NewBlock({});
                 auto [elseBlock, elseParams] = NewBlock({});
                 (void)thenParams;
                 (void)elseParams;
                 EmitTerm(CondBr(condition, thenBlock, {}, elseBlock, {}));
-                auto saved = activeDestinations;
+                auto saved = activeReceivings;
                 cur = thenBlock;
                 auto thenValue = LowerConstructBlock(*expression.then, destination, org);
+                if (cur >= 0) DropCompletedReceiving(thenValue, receiving);
                 auto thenEnd = cur;
-                activeDestinations = saved;
+                activeReceivings = saved;
                 cur = elseBlock;
                 auto elseValue = LowerConstructBlock(*expression.otherwise, destination, org);
+                if (cur >= 0) DropCompletedReceiving(elseValue, receiving);
                 auto elseEnd = cur;
-                activeDestinations = saved;
+                activeReceivings = saved;
                 return done(JoinValue(thenEnd, thenValue, elseEnd, elseValue));
             }
             case CoreExprKind::Call: {
@@ -881,6 +975,7 @@ private:
                 if (!GirNonfixed(mod, core.impls[callee].results[0].type)) {
                     auto snapshot = LowerExpr(expression);
                     if (cur < 0) return done(0);
+                    destination = RefreshDestination(destination);
                     GirInst write;
                     write.op = GirOp::DestSnapshot;
                     write.a = destination;
@@ -891,11 +986,14 @@ private:
                 }
                 if (!core.impls[callee].summary.escapes.empty()) {
                     auto arguments = LowerArgs(expression.args, context, org);
+                    if (cur < 0) return done(0);
+                    destination = RefreshDestination(destination);
                     auto values = InvokeValues(context, std::move(arguments), { destination }, org);
                     return done(cur >= 0 ? values[0] : 0);
                 }
                 auto arguments = LowerArgs(expression.args, context, org);
                 if (cur < 0) return done(0);
+                destination = RefreshDestination(destination);
                 auto [producerDestination, adapted] = AdaptProducerDestination(destination, core.impls[callee].results[0], org);
                 GirInst call;
                 call.op = GirOp::CallConstruct;
@@ -910,6 +1008,9 @@ private:
                 slots.push_back({ expression.a->type, CoreVarKind::Let, stack.empty() ? 0 : stack.back(), slot });
                 auto source = OpenDestination(*expression.a, GirDestSlotReceiver { slot }, CoreRequest::Value, org);
                 auto completed = LowerConstruct(*expression.a, source, org);
+                if (cur < 0) return done(0);
+                destination = RefreshDestination(destination);
+                DropCompletedReceiving(completed);
                 GirInst repeat;
                 repeat.op = GirOp::DestRepeat;
                 repeat.a = destination;
@@ -925,6 +1026,131 @@ private:
     bool HandlesTarget(int target) const {
         auto &members = core.targets.at(target).members;
         return find(members.begin(), members.end(), currentImpl) != members.end();
+    }
+
+    int OpenReceiving(int destination) {
+        auto parent = rawReceivings.find(destination);
+        auto parentReceiving = parent == rawReceivings.end() ? -1 : parent->second;
+        GirInst open;
+        open.op = GirOp::ReceivingOpen;
+        open.a = destination;
+        auto receiving = EmitDef(std::move(open));
+        rawReceivings[destination] = receiving;
+        receivingParents[receiving] = parentReceiving;
+        if (auto ticket = rawReservations.find(destination); ticket != rawReservations.end()) {
+            receivingReservations[receiving] = ticket->second;
+            reservationBuilders.try_emplace(ticket->second, receiving);
+        }
+        return receiving;
+    }
+
+    int RenewReceiving(int receiving) {
+        GirInst renew;
+        renew.op = GirOp::DestRenew;
+        renew.a = receiving;
+        auto destination = EmitDef(std::move(renew));
+        rawReceivings[destination] = receiving;
+        if (auto ticket = receivingReservations.find(receiving); ticket != receivingReservations.end())
+            rawReservations[destination] = ticket->second;
+        return destination;
+    }
+
+    int RefreshDestination(int destination) {
+        auto found = rawReceivings.find(destination);
+        if (found == rawReceivings.end()) throw CompileError { "raw writer has no receiving lease" };
+        GirInst refresh;
+        refresh.op = GirOp::DestRefresh;
+        refresh.a = found->second;
+        refresh.b = destination;
+        auto current = EmitDef(std::move(refresh));
+        rawReceivings[current] = found->second;
+        if (auto ticket = rawReservations.find(destination); ticket != rawReservations.end())
+            rawReservations[current] = ticket->second;
+        return current;
+    }
+
+    int ReserveExit(int receiving, GirExitSource source, int org) {
+        GirInst reserve;
+        reserve.op = GirOp::ExitReserve;
+        reserve.a = receiving;
+        reserve.exitSource = source;
+        reserve.org = org;
+        auto ticket = EmitDef(std::move(reserve));
+        exitReservations.push_back(ticket);
+        reservationReceivings[ticket] = receiving;
+        return ticket;
+    }
+
+    int AdoptExit(int receiving, int completed) {
+        GirInst adopt;
+        adopt.op = GirOp::ExitAdopt;
+        adopt.a = receiving;
+        adopt.b = completed;
+        auto ticket = EmitDef(std::move(adopt));
+        exitReservations.push_back(ticket);
+        reservationReceivings[ticket] = receiving;
+        return ticket;
+    }
+
+    int ExtractExit(int ticket, GirExitSource source) {
+        GirInst selected;
+        selected.op = GirNamedExitBinding(source).has_value() ? GirOp::ReservedNamed : GirOp::ReservedDest;
+        selected.a = ticket;
+        auto raw = EmitDef(std::move(selected));
+        rawReservations[raw] = ticket;
+        return raw;
+    }
+
+    int LandExit(int ticket, int completed, int org) {
+        GirInst land;
+        land.op = GirOp::ExitLand;
+        land.a = ticket;
+        land.b = completed;
+        land.org = org;
+        return EmitDef(std::move(land));
+    }
+
+    void MarkNamedExit(int ticket, int org) {
+        GirInst mark;
+        mark.op = GirOp::ExitMarkNamed;
+        mark.a = ticket;
+        mark.org = org;
+        EmitEffect(std::move(mark));
+    }
+
+    void ReleaseExit(int ticket, int org) {
+        GirInst release;
+        release.op = GirOp::ExitRelease;
+        release.a = ticket;
+        release.org = org;
+        EmitEffect(std::move(release));
+    }
+
+    void DiscardExits(size_t first, const vector<int> &carried, int org) {
+        for (size_t position = exitReservations.size(); position > first; position--) {
+            GirInst discard;
+            discard.op = GirOp::ExitDiscard;
+            discard.a = exitReservations[position - 1];
+            discard.vals = carried;
+            discard.org = org;
+            EmitEffect(std::move(discard));
+        }
+    }
+
+    int CancelReceiving(int receiving, const vector<int> &carried, int org) {
+        GirInst cancel;
+        cancel.op = GirOp::ReceivingCancel;
+        cancel.a = receiving;
+        cancel.vals = carried;
+        cancel.org = org;
+        auto certificate = EmitDef(std::move(cancel));
+        auto parent = receivingParents.find(receiving);
+        for (auto value : carried) {
+            auto raw = rawReceivings.find(value);
+            if (raw != rawReceivings.end() && ReceivingWithin(raw->second, receiving))
+                raw->second = parent == receivingParents.end() ? -1 : parent->second;
+        }
+        return certificate;
     }
 
     int AbandonDestination(int destination, int org) {
@@ -943,72 +1169,60 @@ private:
         EmitEffect(std::move(cancel));
     }
 
-    void FinishTargetReturn(int target, vector<int> values, map<int, int> incomingCancelled, int org) {
+    vector<int> CancelNormalReceivings(const vector<int> &carried, int org) {
         vector<int> cancellations;
-        set<int> normalChannels;
-        for (size_t result = 0; result < currentResults->size(); result++) {
-            auto &descriptor = (*currentResults)[result];
-            if (!GirNonfixed(mod, descriptor.type)) continue;
-            auto original = resultDestinations[result];
-            auto named = descriptor.namedLocal;
-            int cancelled = -1;
-            if (named && boundNamedSlots.count(*named)) {
-                if (HandlesTarget(target)) {
-                    GirInst abandon;
-                    abandon.op = GirOp::DestAbandonNamed;
-                    abandon.idx = *named;
-                    abandon.a = values[result];
-                    abandon.org = org;
-                    cancelled = EmitDef(std::move(abandon));
-                } else {
-                    GirInst completed;
-                    completed.op = GirOp::DestNamed;
-                    completed.idx = *named;
-                    completed.org = org;
-                    cancelled = AbandonDestination(EmitDef(std::move(completed)), org);
-                }
-                boundNamedSlots.erase(*named);
-            } else if (auto found = incomingCancelled.find(original); found != incomingCancelled.end()) {
-                cancelled = found->second;
-                incomingCancelled.erase(found);
-            } else if (original >= 0) cancelled = AbandonDestination(original, org);
-            if (cancelled < 0) throw CompileError { "target exit has no owned normal-result cancellation" };
-            cancellations.push_back(cancelled);
-            if (original >= 0) normalChannels.insert(original);
+        for (auto receiving : resultReceivings)
+            if (receiving >= 0) cancellations.push_back(CancelReceiving(receiving, carried, org));
+        boundNamedSlots.clear();
+        return cancellations;
+    }
+
+    void FinishTargetReturn(int target, vector<int> values, map<int, int> incomingCancelled, int org,
+                            vector<int> tickets = {}, size_t first = 0) {
+        if (tickets.empty()) {
+            first = exitReservations.size();
+            tickets.assign(values.size(), -1);
+            if (HandlesTarget(target))
+                for (size_t result = 0; result < values.size(); result++)
+                    if (GirNonfixed(mod, (*currentResults)[result].type))
+                        tickets[result] = AdoptExit(resultReceivings[result], values[result]);
         }
-        for (auto &[original, cancelled] : incomingCancelled) CancelDestination(cancelled, org);
-        for (auto active = activeDestinations.rbegin(); active != activeDestinations.rend(); ++active)
-            if (!normalChannels.count(*active) && !incomingCancelled.count(*active))
-                CancelDestination(AbandonDestination(*active, org), org);
-        activeDestinations.clear();
+        auto carried = RawCompletions(values);
+        CancelActiveReceivings(org, carried);
+        DiscardEnclosingExits(first, carried, org);
+        for (auto &[original, cancelled] : incomingCancelled) {
+            (void)original;
+            CancelDestination(cancelled, org);
+        }
+        auto cancellations = CancelNormalReceivings(carried, org);
         if (HandlesTarget(target)) {
             for (auto cancelled : cancellations) CancelDestination(cancelled, org);
-            auto &descriptor = core.impls[core.targets[target].members[0]];
-            for (size_t result = 0; result < values.size(); result++) {
-                if (!GirNonfixed(mod, descriptor.results[result].type)) continue;
-                GirInst land;
-                land.op = GirOp::DestRelocate;
-                land.a = values[result];
-                land.reason = GirEventReason::ExitValue;
-                land.org = org;
-                values[result] = EmitDef(std::move(land));
-            }
-            LeaveTo(0);
-            GirInst ret;
-            ret.op = GirOp::Ret;
-            ret.vals = std::move(values);
-            ret.org = org;
-            EmitTerm(std::move(ret));
+            for (size_t result = 0; result < values.size(); result++)
+                if (tickets[result] >= 0) values[result] = LandExit(tickets[result], values[result], org);
         } else {
-            LeaveTo(0);
-            GirInst escape;
-            escape.op = GirOp::Escape;
-            escape.idx = target;
-            escape.vals = std::move(values);
-            escape.vals2 = std::move(cancellations);
-            escape.org = org;
-            EmitTerm(std::move(escape));
+            for (size_t result = 0; result < tickets.size(); result++)
+                if (tickets[result] >= 0)
+                    DropCompletedReceiving(values[result], reservationReceivings.at(tickets[result]));
         }
+        for (auto ticket = tickets.rbegin(); ticket != tickets.rend(); ++ticket)
+            if (*ticket >= 0) ReleaseExit(*ticket, org);
+        if (!HandlesTarget(target))
+            for (auto ticket : tickets)
+                if (ticket >= 0) {
+                    GirInst drop;
+                    drop.op = GirOp::ReceivingDrop;
+                    drop.a = reservationReceivings.at(ticket);
+                    EmitEffect(std::move(drop));
+                }
+        exitReservations.resize(first);
+        LeaveTo(0);
+        GirInst term;
+        term.op = HandlesTarget(target) ? GirOp::Ret : GirOp::Escape;
+        term.idx = target;
+        term.vals = std::move(values);
+        if (term.op == GirOp::Escape) term.vals2 = std::move(cancellations);
+        term.org = org;
+        EmitTerm(std::move(term));
     }
 
     vector<int> InvokeValues(int context, vector<int> arguments, const vector<int> &receivers, int org) {
@@ -1053,12 +1267,14 @@ private:
         auto edges = invoke.escapes;
         EmitTerm(std::move(invoke));
         auto savedScopes = stack;
-        auto savedActive = activeDestinations;
+        auto savedActive = activeReceivings;
         auto savedNamed = boundNamedSlots;
+        auto savedReservations = exitReservations;
         for (size_t edge = 0; edge < edges.size(); edge++) {
             stack = savedScopes;
-            activeDestinations = savedActive;
+            activeReceivings = savedActive;
             boundNamedSlots = savedNamed;
+            exitReservations = savedReservations;
             cur = edges[edge].block;
             auto target = edges[edge].target;
             auto resultCount = core.impls[core.targets[target].members[0]].results.size();
@@ -1069,8 +1285,9 @@ private:
             FinishTargetReturn(target, std::move(payload), std::move(cancelled), org);
         }
         stack = std::move(savedScopes);
-        activeDestinations = std::move(savedActive);
+        activeReceivings = std::move(savedActive);
         boundNamedSlots = std::move(savedNamed);
+        exitReservations = std::move(savedReservations);
         cur = normalBlock;
         auto canReturn = context >= 0 && context < (int)noReturn.size() && !noReturn[context];
         if (!canReturn) {
@@ -1086,90 +1303,163 @@ private:
         return normalValues;
     }
 
+    void LowerExitOperands(const vector<const CoreExpr *> &operands, const vector<int> &tickets,
+                           const vector<int> &receivings, const vector<GirExitSource> &sources,
+                           size_t position, vector<int> values,
+                           const function<void(vector<int>)> &finish, int org) {
+        if (cur < 0) return;
+        if (position == operands.size()) {
+            for (size_t result = 0; result < values.size(); result++)
+                if (values[result] < 0) {
+                    values[result] = ExtractExit(tickets[result], sources[result]);
+                    boundNamedSlots.erase(*GirNamedExitBinding(sources[result]));
+                }
+            finish(std::move(values));
+            return;
+        }
+        auto advance = [&](int value) {
+            auto next = values;
+            next.push_back(value);
+            LowerExitOperands(operands, tickets, receivings, sources, position + 1, std::move(next), finish, org);
+        };
+        if (tickets[position] < 0) {
+            auto value = LowerExpr(*operands[position]);
+            if (cur >= 0) advance(value);
+            return;
+        }
+        auto fresh = [&] {
+            auto selected = ExtractExit(tickets[position], GirExitNewValue {});
+            rawReceivings[selected] = receivings[position];
+            auto completed = LowerConstruct(*operands[position], selected, org);
+            if (cur >= 0) advance(completed);
+        };
+        if (!GirNamedExitBinding(sources[position])) { fresh(); return; }
+        GirInst role;
+        role.op = GirOp::ExitIsNamed;
+        role.a = tickets[position];
+        auto named = EmitDef(std::move(role));
+        auto [namedBlock, namedParams] = NewBlock({});
+        auto [freshBlock, freshParams] = NewBlock({});
+        (void)namedParams; (void)freshParams;
+        EmitTerm(CondBr(named, namedBlock, {}, freshBlock, {}));
+        auto saved = make_tuple(stack, activeReceivings, exitReservations, boundNamedSlots, rawReceivings,
+                                rawReservations, receivingParents, reservationReceivings, reservationBuilders,
+                                receivingReservations);
+        cur = namedBlock;
+        MarkNamedExit(tickets[position], Org(operands[position]->org));
+        advance(-1);
+        tie(stack, activeReceivings, exitReservations, boundNamedSlots, rawReceivings,
+            rawReservations, receivingParents, reservationReceivings, reservationBuilders,
+            receivingReservations) = saved;
+        cur = freshBlock;
+        fresh();
+    }
+
     void LowerTargetReturn(const CoreStmt &statement, int org) {
+        auto savedReservations = exitReservations;
+        auto savedActive = activeReceivings;
+        auto savedNamed = boundNamedSlots;
         auto &target = core.impls[core.targets.at(statement.target).members[0]];
+        auto first = exitReservations.size();
+        vector<int> tickets(target.results.size(), -1);
+        vector<int> receiving(target.results.size(), -1);
         vector<int> destinations(target.results.size(), -1);
+        vector<const CoreExpr *> operands;
+        for (auto &value : statement.values) operands.push_back(value.get());
+        if (operands.empty() && statement.expr && statement.kind != CoreStmtKind::ReturnFromForward)
+            operands.push_back(statement.expr.get());
+        if (statement.kind != CoreStmtKind::ReturnFromForward && operands.size() != target.results.size())
+            throw CompileError { "target return operands differ from its descriptors" };
+        vector<GirExitSource> sources(target.results.size(), GirExitNewValue {});
         for (size_t result = 0; result < target.results.size(); result++) {
             auto &descriptor = target.results[result];
             if (!GirNonfixed(mod, descriptor.type)) continue;
-            GirInst destination;
-            destination.op = GirOp::TargetDest;
-            destination.idx = statement.target;
-            destination.idx2 = (int)result;
-            destination.ty = descriptor.type;
-            destination.request = descriptor.request;
-            destination.org = org;
-            destinations[result] = EmitDef(std::move(destination));
+            if (HandlesTarget(statement.target)) receiving[result] = resultReceivings[result];
+            else {
+                GirInst channel;
+                channel.op = GirOp::TargetReceiving;
+                channel.idx = statement.target;
+                channel.idx2 = (int)result;
+                channel.org = org;
+                receiving[result] = EmitDef(std::move(channel));
+                receivingParents[receiving[result]] = -1;
+            }
+            if (!operands.empty() && operands[result]->kind == CoreExprKind::ResultLocal &&
+                boundNamedSlots.count(operands[result]->var)) sources[result] = GirExitNamedAlias { operands[result]->var };
+            tickets[result] = ReserveExit(receiving[result], sources[result], org);
         }
         vector<int> values;
-        if (statement.kind == CoreStmtKind::ReturnFromForward) values = LowerProducer(*statement.expr, destinations, org);
-        else {
-            vector<const CoreExpr *> operands;
-            for (auto &value : statement.values) operands.push_back(value.get());
-            if (operands.empty() && statement.expr) operands.push_back(statement.expr.get());
-            if (operands.size() != destinations.size()) throw CompileError { "target return operands differ from its descriptors" };
-            for (size_t result = 0; result < operands.size(); result++) {
-                values.push_back(destinations[result] >= 0 ? LowerConstruct(*operands[result], destinations[result], org) : LowerExpr(*operands[result]));
-                if (cur < 0) return;
-            }
+        if (statement.kind == CoreStmtKind::ReturnFromForward) {
+            for (size_t result = 0; result < tickets.size(); result++)
+                if (tickets[result] >= 0) {
+                    destinations[result] = ExtractExit(tickets[result], sources[result]);
+                    rawReceivings[destinations[result]] = receiving[result];
+                }
+            values = LowerProducer(*statement.expr, destinations, org);
+        } else {
+            LowerExitOperands(operands, tickets, receiving, sources, 0, {}, [&](vector<int> completed) {
+                FinishTargetReturn(statement.target, std::move(completed), {}, org, tickets, first);
+            }, org);
         }
-        if (cur >= 0) FinishTargetReturn(statement.target, std::move(values), {}, org);
+        if (statement.kind == CoreStmtKind::ReturnFromForward && cur >= 0)
+            FinishTargetReturn(statement.target, std::move(values), {}, org, tickets, first);
+        exitReservations = std::move(savedReservations);
+        activeReceivings = std::move(savedActive);
+        boundNamedSlots = std::move(savedNamed);
     }
 
     vector<int> LowerProducer(const CoreExpr &expression, const vector<int> &destinations, int org) {
-        auto savedDestinations = resultDestinations;
-        auto values = LowerProducerValues(expression, destinations, org);
-        resultDestinations = std::move(savedDestinations);
+        vector<int> receiving(destinations.size(), -1);
+        vector<int> writers = destinations;
+        auto savedActive = activeReceivings;
+        for (size_t position = 0; position < destinations.size(); position++)
+            if (destinations[position] >= 0) {
+                receiving[position] = OpenReceiving(destinations[position]);
+                writers[position] = RenewReceiving(receiving[position]);
+                activeReceivings.push_back(receiving[position]);
+            }
+        auto values = LowerProducerValues(expression, writers, org);
+        for (size_t position = 0; cur >= 0 && position < values.size(); position++)
+            if (receiving[position] >= 0) {
+                DropCompletedReceiving(values[position], receiving[position]);
+                rawReceivings[values[position]] = receiving[position];
+            }
+        activeReceivings = std::move(savedActive);
         return values;
     }
 
     vector<int> LowerProducerValues(const CoreExpr &expression, const vector<int> &destinations, int org) {
         vector<int> values;
-        auto activeValues = destinations;
-        for (auto destination : destinations)
-            if (destination >= 0 && find(activeDestinations.begin(), activeDestinations.end(), destination) == activeDestinations.end())
-                activeDestinations.push_back(destination);
-        auto finished = [&](vector<int> results) {
-            for (auto destination : activeValues) {
-                auto active = find(activeDestinations.begin(), activeDestinations.end(), destination);
-                if (active != activeDestinations.end()) activeDestinations.erase(active);
-            }
-            return results;
-        };
         if (expression.kind == CoreExprKind::Values) {
             if (expression.values.size() != destinations.size()) throw CompileError { "producer result count differs from its receiving channels" };
             for (size_t position = 0; position < destinations.size(); position++) {
                 auto &operand = *expression.values[position];
                 values.push_back(destinations[position] >= 0 ? LowerConstruct(operand, destinations[position], org) : LowerExpr(operand));
-                if (cur < 0) return finished({});
-                if (destinations[position] >= 0) {
-                    auto active = find(activeDestinations.begin(), activeDestinations.end(), destinations[position]);
-                    if (active != activeDestinations.end()) *active = values.back();
-                    activeValues[position] = values.back();
-                    for (auto &result : resultDestinations)
-                        if (result == destinations[position]) result = values.back();
-                }
+                if (cur < 0) return {};
             }
-            return finished(std::move(values));
+            return values;
         }
         if (expression.kind != CoreExprKind::Call) throw CompileError { "multiple-result producer is not values or a call" };
         auto context = expression.ctx;
         auto callee = core.contexts[context].impl;
         auto &function = core.impls[callee];
         if (function.results.size() != destinations.size()) throw CompileError { "call result count differs from its receiving channels" };
+        auto arguments = LowerArgs(expression.args, context, org);
+        if (cur < 0) return {};
+        auto writers = destinations;
+        for (auto &writer : writers)
+            if (writer >= 0) writer = RefreshDestination(writer);
         if (!function.summary.escapes.empty())
-            return finished(InvokeValues(context, LowerArgs(expression.args, context, org), destinations, org));
+            return InvokeValues(context, std::move(arguments), writers, org);
         GirInst call;
         call.op = GirOp::Call;
         call.idx = context;
         vector<bool> adapted(destinations.size(), false);
-        auto arguments = LowerArgs(expression.args, context, org);
-        if (cur < 0) return finished({});
         for (size_t position = 0; position < destinations.size(); position++) {
             if (!GirNonfixed(mod, function.results[position].type)) continue;
             if (destinations[position] < 0) throw CompileError { "nonfixed call result has no receiving destination" };
             call.op = GirOp::CallConstruct;
-            auto producer = AdaptProducerDestination(destinations[position], function.results[position], org);
+            auto producer = AdaptProducerDestination(writers[position], function.results[position], org);
             adapted[position] = producer.second;
             call.vals2.push_back(producer.first);
         }
@@ -1178,7 +1468,7 @@ private:
         if (!function.summary.escapes.empty() || function.summary.unknown)
             throw CompileError { "escaping call requires invoke receiving edges" };
         auto pack = EmitDef(std::move(call));
-        if (destinations.size() == 1) return finished({ RestoreProducerDestination(pack, adapted[0], org) });
+        if (destinations.size() == 1) return { RestoreProducerDestination(pack, adapted[0], org) };
         for (size_t position = 0; position < destinations.size(); position++) {
             GirInst result;
             result.op = GirOp::Result;
@@ -1186,7 +1476,7 @@ private:
             result.idx = (int)position;
             values.push_back(RestoreProducerDestination(EmitDef(std::move(result)), adapted[position], org));
         }
-        return finished(std::move(values));
+        return values;
     }
 
     void LowerConstructionValue(const CoreExpr &expression, GirDestReceiver receiver, int org) {
@@ -1195,101 +1485,120 @@ private:
         if (cur >= 0) PublishDestination(completed, org);
     }
 
-    void AbandonActiveDestinations(int org) {
-        for (auto destination = activeDestinations.rbegin(); destination != activeDestinations.rend(); ++destination) {
-            GirInst abandon;
-            abandon.op = GirOp::DestAbandon;
-            abandon.a = *destination;
-            abandon.org = org;
-            auto cancelled = EmitDef(std::move(abandon));
-            GirInst cancel;
-            cancel.op = GirOp::DestCancel;
-            cancel.a = cancelled;
-            cancel.org = org;
-            EmitEffect(std::move(cancel));
-        }
-        activeDestinations.clear();
+    vector<int> RawCompletions(const vector<int> &values) {
+        vector<int> carried;
+        for (auto value : values)
+            if (mod.Type(ValTy(value)).kind == CoreType::Built) carried.push_back(value);
+        return carried;
     }
 
-    void LowerFunctionReturn(const vector<const CoreExpr *> &operands, int org) {
-        auto savedDestinations = resultDestinations;
-        LowerReturnOperands(operands, org);
-        resultDestinations = std::move(savedDestinations);
+    bool ReceivingWithin(int receiving, int ancestor) const {
+        for (auto current = receiving; current >= 0;) {
+            if (current == ancestor) return true;
+            auto parent = receivingParents.find(current);
+            if (parent == receivingParents.end()) return false;
+            current = parent->second;
+        }
+        return false;
     }
 
-    void LowerReturnOperands(const vector<const CoreExpr *> &operands, int org) {
-        if (!currentResults || operands.size() != currentResults->size())
-            throw CompileError { "return operands do not match the current function result descriptors" };
-        vector<int> values;
-        vector<pair<int, int>> replacements;
-        for (size_t result = 0; result < operands.size(); result++) {
-            auto &descriptor = (*currentResults)[result];
-            auto &expression = *operands[result];
-            if (!GirNonfixed(mod, descriptor.type)) {
-                values.push_back(LowerExpr(expression));
-                if (cur < 0) return;
-                continue;
-            }
-            if (expression.kind == CoreExprKind::ResultLocal && descriptor.namedLocal == expression.var &&
-                boundNamedSlots.count(expression.var)) {
-                GirInst named;
-                named.op = GirOp::DestNamed;
-                named.idx = expression.var;
-                named.org = org;
-                values.push_back(EmitDef(std::move(named)));
-                resultDestinations[result] = values.back();
-                boundNamedSlots.erase(expression.var);
-                continue;
-            }
-            auto destination = resultDestinations[result];
-            auto replacement = destination < 0 || find(activeDestinations.begin(), activeDestinations.end(), destination) != activeDestinations.end();
-            if (replacement) {
-                GirInst exitDestination;
-                exitDestination.op = GirOp::ResultExitDest;
-                exitDestination.idx = (int)result;
-                exitDestination.ty = descriptor.type;
-                exitDestination.request = descriptor.request;
-                exitDestination.org = org;
-                destination = EmitDef(std::move(exitDestination));
-            }
-            auto completed = LowerConstruct(expression, destination, org);
-            if (cur < 0) return;
-            values.push_back(completed);
-            resultDestinations[result] = completed;
-            if (replacement) replacements.push_back({ (int)result, completed });
-        }
-        for (auto &[result, completed] : replacements) {
-            auto named = (*currentResults)[result].namedLocal;
-            if (named && boundNamedSlots.count(*named)) {
-                GirInst abandon;
-                abandon.op = GirOp::DestAbandonNamed;
-                abandon.idx = *named;
-                abandon.a = completed;
-                abandon.org = org;
-                auto cancelled = EmitDef(std::move(abandon));
-                GirInst cancel;
-                cancel.op = GirOp::DestCancel;
-                cancel.a = cancelled;
-                cancel.org = org;
-                EmitEffect(std::move(cancel));
-                boundNamedSlots.erase(*named);
+    set<int> CancelReceivingRoots(const vector<int> &receivings, const vector<int> &protectedBoundaries,
+                                  const vector<int> &carried, int org) {
+        set<int> cancelled;
+        for (auto selected = receivings.rbegin(); selected != receivings.rend(); ++selected) {
+            auto receiving = *selected;
+            if (receiving < 0 || cancelled.count(receiving)) continue;
+            auto protectedReceiver = any_of(protectedBoundaries.begin(), protectedBoundaries.end(), [&](int boundary) {
+                return boundary >= 0 && ReceivingWithin(receiving, boundary);
+            });
+            auto nested = any_of(receivings.begin(), receivings.end(), [&](int owner) {
+                return owner >= 0 && owner != receiving && ReceivingWithin(receiving, owner);
+            });
+            if (!protectedReceiver && !nested) {
+                CancelDestination(CancelReceiving(receiving, carried, org), org);
+                cancelled.insert(receiving);
             }
         }
-        AbandonActiveDestinations(org);
-        for (auto &[result, completed] : replacements) {
-            GirInst land;
-            land.op = GirOp::DestRelocate;
-            land.a = completed;
-            land.reason = GirEventReason::ExitValue;
-            land.org = org;
-            values[result] = EmitDef(std::move(land));
+        return cancelled;
+    }
+
+    void CancelActiveReceivings(int org, const vector<int> &carried = {}) {
+        CancelReceivingRoots(activeReceivings, resultReceivings, carried, org);
+        activeReceivings.clear();
+    }
+
+    void DiscardEnclosingExits(size_t end, const vector<int> &carried, int org) {
+        for (size_t position = end; position > 0; position--) {
+            GirInst discard;
+            discard.op = GirOp::ExitDiscard;
+            discard.a = exitReservations[position - 1];
+            discard.vals = carried;
+            discard.org = org;
+            EmitEffect(std::move(discard));
         }
+    }
+
+    void FinishFunctionReturn(vector<int> values, const vector<int> &tickets, size_t first, int org) {
+        auto carried = RawCompletions(values);
+        CancelActiveReceivings(org, carried);
+        DiscardEnclosingExits(first, carried, org);
+        for (auto cancelled : CancelNormalReceivings(carried, org)) CancelDestination(cancelled, org);
+        for (size_t result = 0; result < tickets.size(); result++)
+            if (tickets[result] >= 0) values[result] = LandExit(tickets[result], values[result], org);
+        for (auto ticket = tickets.rbegin(); ticket != tickets.rend(); ++ticket)
+            if (*ticket >= 0) ReleaseExit(*ticket, org);
+        exitReservations.resize(first);
         LeaveTo(0);
         GirInst ret;
         ret.op = GirOp::Ret;
         ret.vals = std::move(values);
         ret.org = org;
         EmitTerm(std::move(ret));
+    }
+
+    void LowerFunctionReturn(const vector<const CoreExpr *> &operands, int org) {
+        auto savedActive = activeReceivings;
+        auto savedReservations = exitReservations;
+        auto savedNamed = boundNamedSlots;
+        LowerReturnOperands(operands, org);
+        activeReceivings = std::move(savedActive);
+        exitReservations = std::move(savedReservations);
+        boundNamedSlots = std::move(savedNamed);
+    }
+
+    void LowerReturnOperands(const vector<const CoreExpr *> &operands, int org) {
+        if (!currentResults || operands.size() != currentResults->size())
+            throw CompileError { "return operands do not match the current function result descriptors" };
+        auto first = exitReservations.size();
+        vector<int> tickets(operands.size(), -1);
+        vector<GirExitSource> sources(operands.size(), GirExitNewValue {});
+        for (size_t result = 0; result < operands.size(); result++) {
+            auto &descriptor = (*currentResults)[result];
+            if (!GirNonfixed(mod, descriptor.type)) continue;
+            auto &expression = *operands[result];
+            if (expression.kind == CoreExprKind::ResultLocal && boundNamedSlots.count(expression.var))
+                sources[result] = GirExitNamedAlias { expression.var };
+            tickets[result] = ReserveExit(resultReceivings[result], sources[result], org);
+        }
+        LowerExitOperands(operands, tickets, resultReceivings, sources, 0, {}, [&](vector<int> completed) {
+            FinishFunctionReturn(std::move(completed), tickets, first, org);
+        }, org);
+    }
+
+    void CancelInterruptedReturn(const Loop &loop, int org) {
+        vector<int> active(activeReceivings.begin() + loop.constructionDepth, activeReceivings.end());
+        auto cancelled = CancelReceivingRoots(active, {}, {}, org);
+        DiscardExits(loop.exitDepth, {}, org);
+        vector<int> unfinished;
+        for (size_t position = loop.exitDepth; position < exitReservations.size(); position++)
+            if (auto selected = reservationBuilders.find(exitReservations[position]); selected != reservationBuilders.end()) {
+                auto receiving = selected->second;
+                auto closed = any_of(cancelled.begin(), cancelled.end(), [&](int ancestor) {
+                    return ReceivingWithin(receiving, ancestor);
+                });
+                if (!closed) unfinished.push_back(receiving);
+            }
+        CancelReceivingRoots(unfinished, {}, {}, org);
     }
 
     void LowerStmt(const Loop *lc, const CoreStmt &s) {
@@ -1300,15 +1609,15 @@ private:
                     if (currentResults)
                         for (size_t result = 0; result < currentResults->size(); result++)
                             if ((*currentResults)[result].namedLocal == s.var) {
-                                auto completed = LowerConstruct(*s.expr, resultDestinations[result], org);
+                                auto completed = LowerConstruct(*s.expr, RenewReceiving(resultReceivings[result]), org);
                                 if (cur < 0) return;
+                                DropCompletedReceiving(completed);
                                 GirInst bind;
                                 bind.op = GirOp::DestBind;
                                 bind.idx = s.var;
                                 bind.a = completed;
                                 bind.org = org;
                                 EmitEffect(std::move(bind));
-                                resultDestinations[result] = -1;
                                 boundNamedSlots.insert(s.var);
                                 return;
                             }
@@ -1463,7 +1772,7 @@ private:
                 (void)bs; (void)xs;
                 EmitTerm(CondBr(cv, bb, {}, xb, {}));
                 cur = bb;
-                Loop l { depth, xb, false, hb, -1, -1 };
+                Loop l { depth, xb, false, hb, -1, -1, exitReservations.size(), activeReceivings.size() };
                 LowerBlock(&l, {}, false, *s.then);
                 EmitTerm(Br(hb, {}));
                 cur = xb;
@@ -1491,7 +1800,7 @@ private:
                 (void)bs; (void)xs;
                 EmitTerm(CondBr(c, bb, {}, xb, {}));
                 cur = bb;
-                Loop l { depth, xb, true, hb, t, i };
+                Loop l { depth, xb, true, hb, t, i, exitReservations.size(), activeReceivings.size() };
                 LowerBlock(&l, { { s.var, i, org } }, false, *s.then);
                 if (cur >= 0) Increment(l);
                 cur = xb;
@@ -1517,12 +1826,14 @@ private:
             }
             case CoreStmtKind::Break:
                 if (lc) {
+                    CancelInterruptedReturn(*lc, org);
                     LeaveTo(lc->depth);
                     EmitTerm(Br(lc->breakto, {}));
                 }
                 return;
             case CoreStmtKind::Continue:
                 if (lc) {
+                    CancelInterruptedReturn(*lc, org);
                     LeaveTo(lc->depth);
                     if (!lc->counted) EmitTerm(Br(lc->header, {}));
                     else Increment(*lc);
@@ -1632,27 +1943,77 @@ private:
                 return;
             }
             case CoreStmtKind::RetForward: {
-                vector<int> destinations = resultDestinations;
-                for (size_t position = 0; position < destinations.size(); position++) {
-                    auto &descriptor = (*currentResults)[position];
-                    if (!GirNonfixed(mod, descriptor.type)) continue;
-                    if (destinations[position] < 0) throw CompileError { "forward return replaces an already bound named channel" };
+                if (s.expr->kind == CoreExprKind::Values) {
+                    vector<const CoreExpr *> operands;
+                    for (auto &value : s.expr->values) operands.push_back(value.get());
+                    LowerFunctionReturn(operands, org);
+                    return;
                 }
+                auto savedActive = activeReceivings;
+                auto savedReservations = exitReservations;
+                auto savedNamed = boundNamedSlots;
+                auto first = exitReservations.size();
+                vector<int> tickets(currentResults->size(), -1);
+                vector<int> destinations(currentResults->size(), -1);
+                for (size_t result = 0; result < currentResults->size(); result++)
+                    if (resultReceivings[result] >= 0)
+                        tickets[result] = ReserveExit(resultReceivings[result], GirExitNewValue {}, org);
+                for (size_t result = 0; result < tickets.size(); result++)
+                    if (tickets[result] >= 0) {
+                        destinations[result] = ExtractExit(tickets[result], GirExitNewValue {});
+                        rawReceivings[destinations[result]] = resultReceivings[result];
+                    }
                 auto values = LowerProducer(*s.expr, destinations, org);
-                if (cur < 0) return;
-                AbandonActiveDestinations(org);
-                LeaveTo(0);
-                GirInst ret;
-                ret.op = GirOp::Ret;
-                ret.vals = std::move(values);
-                ret.org = org;
-                EmitTerm(std::move(ret));
+                if (cur >= 0) FinishFunctionReturn(std::move(values), tickets, first, org);
+                activeReceivings = std::move(savedActive);
+                exitReservations = std::move(savedReservations);
+                boundNamedSlots = std::move(savedNamed);
                 return;
             }
             case CoreStmtKind::ReturnFrom: case CoreStmtKind::ReturnFromForward:
                 return LowerTargetReturn(s, org);
-            case CoreStmtKind::BreakValue:
-                throw CompileError { "construction break requires its enclosing value receiver" };
+            case CoreStmtKind::BreakValue: {
+                if (!valueBoundary) throw CompileError { "value break has no enclosing value block" };
+                auto &boundary = *valueBoundary;
+                auto savedReservations = exitReservations;
+                auto ticket = boundary.receiving < 0 ? -1 : ReserveExit(boundary.receiving, GirExitNewValue {}, org);
+                int value;
+                if (ticket < 0) value = LowerExpr(*s.expr);
+                else {
+                    auto destination = ExtractExit(ticket, GirExitNewValue {});
+                    rawReceivings[destination] = boundary.receiving;
+                    value = LowerConstruct(*s.expr, destination, org);
+                }
+                if (cur >= 0) {
+                    auto carried = RawCompletions({ value });
+                    vector<int> active(activeReceivings.begin() + boundary.constructionDepth, activeReceivings.end());
+                    CancelReceivingRoots(active, { boundary.receiving }, carried, org);
+                    for (size_t position = exitReservations.size(); position > boundary.exitDepth; position--) {
+                        auto enclosing = exitReservations[position - 1];
+                        if (enclosing == ticket) continue;
+                        GirInst discard;
+                        discard.op = GirOp::ExitDiscard;
+                        discard.a = enclosing;
+                        discard.vals = carried;
+                        discard.org = org;
+                        EmitEffect(std::move(discard));
+                    }
+                    if (ticket >= 0) {
+                        CancelDestination(CancelReceiving(boundary.receiving, carried, org), org);
+                        value = LandExit(ticket, value, org);
+                        ReleaseExit(ticket, org);
+                    }
+                    if (boundary.catchBlock < 0) {
+                        auto [catchBlock, caught] = NewBlock({ boundary.type });
+                        boundary.catchBlock = catchBlock;
+                        boundary.catchValue = caught[0];
+                    }
+                    LeaveTo(boundary.depth);
+                    EmitTerm(Br(boundary.catchBlock, { value }));
+                }
+                exitReservations = std::move(savedReservations);
+                return;
+            }
         }
     }
 
@@ -1715,7 +2076,7 @@ private:
         }
         vector<Binding> pre { { s.var, ev, org } };
         if (s.index >= 0) pre.push_back({ s.index, i, org });
-        Loop l { depth, xb, true, hb, I64(), i };
+        Loop l { depth, xb, true, hb, I64(), i, exitReservations.size(), activeReceivings.size() };
         LowerBlock(&l, pre, false, *s.then);
         if (cur >= 0) Increment(l);
         cur = xb;
@@ -1807,6 +2168,8 @@ private:
         blocks.clear();
         vals.clear();
         cur = -1;
+        lexicalLoop = nullptr;
+        valueBoundary = nullptr;
         stack.clear();
         slots.clear();
         vars = vs;
@@ -1815,8 +2178,15 @@ private:
         functionOrigin = -1;
         currentImpl = -1;
         currentFunction = -1;
-        resultDestinations.clear();
-        activeDestinations.clear();
+        activeReceivings.clear();
+        resultReceivings.clear();
+        rawReceivings.clear();
+        receivingParents.clear();
+        exitReservations.clear();
+        reservationReceivings.clear();
+        reservationBuilders.clear();
+        rawReservations.clear();
+        receivingReservations.clear();
         boundNamedSlots.clear();
         if (vs)
             for (size_t i = 0; i < vs->size(); i++)
@@ -1866,7 +2236,8 @@ private:
         currentImpl = implIndex;
         currentFunction = contextIndex;
         functionBody = &impl.body;
-        functionOrigin = impl.vars.empty() ? -1 : Org(impl.vars[0].org);
+        functionOrigin = !impl.vars.empty() ? Org(impl.vars[0].org) :
+            !impl.body.stmts.empty() ? Org(impl.body.stmts[0].org) : impl.body.value ? Org(impl.body.value->org) : -1;
         vector<GirTypeId> ptys;
         for (auto &p : impl.params) ptys.push_back(impl.vars[p.var].type);
         vector<GirTypeId> entryTypes;
@@ -1879,11 +2250,13 @@ private:
                     entryTypes.push_back(mod.CarrierType(CoreType::Dest, result.type, result.request));
         auto [b0, ps] = NewBlock(entryTypes);
         cur = b0;
-        resultDestinations.assign(impl.results.size(), -1);
+        resultReceivings.assign(impl.results.size(), -1);
         size_t channel = ptys.size();
         if (CoreHasConstruction(core.profile))
             for (size_t result = 0; result < impl.results.size(); result++)
-                if (GirNonfixed(mod, impl.results[result].type)) resultDestinations[result] = ps[channel++];
+                if (GirNonfixed(mod, impl.results[result].type)) {
+                    resultReceivings[result] = OpenReceiving(ps[channel++]);
+                }
         vector<Binding> pre;
         for (size_t k = 0; k < impl.params.size(); k++)
             pre.push_back({ impl.params[k].var, ps[k], Org(impl.vars[impl.params[k].var].org) });
@@ -1909,7 +2282,7 @@ private:
         f.blocks = std::move(blocks);
         f.roots = Roots(contextIndex, implIndex);
         f.summary = impl.summary;
-        f.org = impl.vars.empty() ? -1 : Org(impl.vars[0].org);
+        f.org = functionOrigin;
         f.key = core.contexts[contextIndex].stablekey;
         f.module = core.contexts[contextIndex].module;
         return f;

@@ -210,6 +210,21 @@ void AcceptsReplacementAfterKnownEmptyContentRead() {
     assert(Code(module) == "GIR-V050");
 }
 
+void AcceptsStoresBetweenEmptyParameterContents() {
+    auto module = EmptyContentReplacement();
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    auto reference = module.RefType(CoreMut::Mut, slice);
+    auto &function = module.funcs[1];
+    function.params = { reference, reference };
+    function.slots[0].ty = reference;
+    function.blocks[0].params = { { 0, reference }, { 7, reference } };
+    function.roots.params.push_back({ 1, { { CoreRootRef::Param, 1 } } });
+    function.roots.contents.push_back({ 1, {} });
+    auto &instructions = function.blocks[0].insts;
+    instructions.insert(instructions.begin() + 4, { Inst(GirOp::Load, 8, 7), Inst(GirOp::Store, -1, 0, 8) });
+    assert(Code(module).empty());
+}
+
 GirModule LocalEmptyContentReplacement(bool initialize = true) {
     auto module = EmptyContentReplacement();
     auto slice = module.Type(module.funcs[1].params[0]).elem;
@@ -361,7 +376,7 @@ void RejectsChangedEmptyParameterContents() {
                 assert(Code(module) == "GIR-V060");
             }
             module.funcs[1].roots.params[1].second.clear();
-            assert(Code(module).empty());
+            assert(Code(module) == (called ? "GIR-V060" : ""));
         }
 }
 
@@ -407,6 +422,180 @@ void RejectsGlobalContentChangesFromNoArgumentCalls() {
     assert(Code(module) == "GIR-V060");
 }
 
+void RejectsGlobalContentChangesWithUnusedEmptyArgument() {
+    auto module = GlobalEmptyContentReplacement();
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    GirGlobal global;
+    global.name = "slice_header";
+    global.ty = slice;
+    global.kind = CoreVarKind::Var;
+    global.init.name = "slice_header_init";
+    global.init.results = { slice };
+    global.init.scopes = { -1 };
+    global.init.summary.unknown = true;
+    global.init.roots.results = { { { CoreRootRef::Global, 0 } } };
+    auto owner = Inst(GirOp::Global, 0);
+    owner.idx = 0;
+    auto view = Inst(GirOp::Snap, 1, 0);
+    auto content = Inst(GirOp::ViewSlice, 2, 1);
+    content.mut = CoreMut::Const;
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 2 };
+    global.init.blocks = { { {}, { owner, view, content, ret } } };
+    module.globals.push_back(global);
+    GirFunc callee;
+    callee.name = "change_global_slice_header";
+    callee.scopes = { -1 };
+    callee.summary.unknown = true;
+    auto header = Inst(GirOp::Global, 3);
+    header.idx = 1;
+    callee.blocks = { { {}, { owner, view, content, header, Inst(GirOp::Store, -1, 3, 2), Inst(GirOp::Ret) } } };
+    callee.params = { slice };
+    callee.roots.params = { { 0, {} } };
+    callee.blocks[0].params = { { 4, slice } };
+    module.funcs.push_back(callee);
+    auto &function = module.funcs[1];
+    function.roots.params[0].second = { { CoreRootRef::Global, 1 } };
+    function.params.push_back(slice);
+    function.roots.params.push_back({ 1, {} });
+    function.blocks[0].params.push_back({ 7, slice });
+    auto call = Inst(GirOp::Call);
+    call.vals = { 7 };
+    call.idx = 2;
+    function.blocks[0].insts.insert(function.blocks[0].insts.begin() + 4, call);
+    assert(Code(module) == "GIR-V060");
+    module.funcs[2].summary.unknown = false;
+    module.funcs[2].summary.aborts = true;
+    module.funcs[2].summary.reads = { { true, 0 } };
+    module.funcs[2].summary.writes = { { true, 1 } };
+    assert(Code(module) == "GIR-V060");
+    module.funcs[2].roots.params[0].second = { { CoreRootRef::Global, 1 } };
+    module.funcs[2].summary.writes = { { false, 0 } };
+    assert(Code(module) == "GIR-V060");
+    module.funcs[2].roots.params[0].second = { { CoreRootRef::Param, 0 }, { CoreRootRef::Global, 1 } };
+    auto local = Inst(GirOp::Slot, 8);
+    local.idx = 1;
+    auto localView = Inst(GirOp::Snap, 9, 8);
+    auto localSlice = Inst(GirOp::ViewSlice, 10, 9);
+    localSlice.mut = CoreMut::Const;
+    auto &instructions = module.funcs[1].blocks[0].insts;
+    auto position = find_if(instructions.begin(), instructions.end(), [](const GirInst &instruction) {
+        return instruction.op == GirOp::Call;
+    });
+    position->vals = { 10 };
+    instructions.insert(position, { local, localView, localSlice });
+    assert(Code(module) == "GIR-V060");
+}
+
+void RejectsLocalContentChangesWithUnusedEmptyArgument() {
+    for (int initialRoots : { 0, 1, 2 }) {
+        auto module = LocalEmptyContentReplacement();
+        auto slice = module.Type(module.funcs[1].params[0]).elem;
+        auto reference = module.RefType(CoreMut::Mut, slice);
+        auto &function = module.funcs[1];
+        function.slots[2].kind = CoreVarKind::Var;
+        if (initialRoots != 0) {
+            function.params.push_back(slice);
+            function.roots.params.push_back({ 1, {} });
+            function.blocks[0].params.push_back({ 11, slice });
+            for (auto &instruction : function.blocks[0].insts)
+                if (instruction.op == GirOp::Init && instruction.idx == 2) instruction.a = 11;
+        }
+        auto &instructions = function.blocks[0].insts;
+        auto clear = instructions[4];
+        instructions.erase(instructions.begin() + 4);
+        auto position = find_if(instructions.begin(), instructions.end(), [](const GirInst &instruction) {
+            return instruction.op == GirOp::Load && instruction.res == 8;
+        });
+        auto view = Inst(GirOp::Snap, 9, 2);
+        auto alias = Inst(GirOp::ViewSlice, 10, 9);
+        alias.mut = CoreMut::Const;
+        auto call = Inst(GirOp::Call);
+        call.idx = 2;
+        call.vals = { 7, 3, 10, initialRoots ? 11 : 3 };
+        instructions.insert(position, { view, alias, call, clear });
+        GirFunc callee;
+        callee.name = "replace_local_holder";
+        callee.params = { reference, slice, slice, slice };
+        callee.roots.contents = { { 0, { { CoreRootRef::Param, 1 }, { CoreRootRef::Param, 2 }, { CoreRootRef::Param, 3 } } } };
+        callee.scopes = { -1 };
+        callee.summary.writes = { { false, 0 } };
+        callee.summary.rebinds = { { false, 0 } };
+        callee.blocks = { { { { 0, reference }, { 1, slice }, { 2, slice }, { 3, slice } },
+            { Inst(GirOp::Store, -1, 0, 2), Inst(GirOp::Ret) } } };
+        module.funcs.push_back(callee);
+        if (initialRoots == 2) {
+            module.globals = GlobalEmptyContentReplacement().globals;
+            module.funcs[1].roots.params[1].second = { { CoreRootRef::Global, 0 } };
+            module.funcs[2].roots.contents[0].second.push_back({ CoreRootRef::Global, 0 });
+        }
+        assert(Code(module) == "GIR-V060");
+        module.funcs[2].summary.unknown = true;
+        assert(Code(module) == "GIR-V060");
+        module.funcs[2].blocks[0].insts[0].b = 1;
+        assert(Code(module).empty());
+    }
+}
+
+GirModule UnknownCallGraphReplacement(int count, bool cycle, bool mutates) {
+    auto module = mutates ? GlobalEmptyContentReplacement() : EmptyContentReplacement();
+    auto integer = module.IntType(CoreIntTy::I64);
+    for (int index = 0; index < count; index++) {
+        GirFunc callee;
+        callee.name = cat("unknown_call_", index);
+        callee.params = { integer };
+        callee.scopes = { -1 };
+        callee.summary.unknown = true;
+        GirBlock entry;
+        entry.params = { { 0, integer } };
+        if (index + 1 < count || cycle) {
+            auto call = Inst(GirOp::Call);
+            call.idx = index + 1 < count ? index + 3 : 2;
+            call.vals = { 0 };
+            entry.insts.push_back(call);
+        }
+        if (mutates && index + 1 == count) {
+            auto address = Inst(GirOp::Global, 1);
+            address.idx = 0;
+            entry.insts.push_back(address);
+            entry.insts.push_back(Inst(GirOp::Push, 2, 1, 0));
+        }
+        entry.insts.push_back(Inst(GirOp::Ret));
+        callee.blocks = { entry };
+        module.funcs.push_back(callee);
+    }
+    auto call = Inst(GirOp::Call);
+    call.idx = 2;
+    call.vals = { 5 };
+    auto &instructions = module.funcs[1].blocks[0].insts;
+    auto position = find_if(instructions.begin(), instructions.end(), [](const GirInst &instruction) {
+        return instruction.op == GirOp::Replace;
+    });
+    instructions.insert(position, call);
+    return module;
+}
+
+void CertifiesUnknownMemoryFreeCallGraphs() {
+    assert(Code(UnknownCallGraphReplacement(1, false, false)).empty());
+    assert(Code(UnknownCallGraphReplacement(3, false, false)).empty());
+    assert(Code(UnknownCallGraphReplacement(3, true, false)).empty());
+    assert(Code(UnknownCallGraphReplacement(3, false, true)) == "GIR-V060");
+    assert(Code(UnknownCallGraphReplacement(3, true, true)) == "GIR-V060");
+    auto module = UnknownCallGraphReplacement(1, false, false);
+    module.globals = GlobalEmptyContentReplacement().globals;
+    auto &instructions = module.funcs[1].blocks[0].insts;
+    swap(instructions[4], instructions[5]);
+    for (auto &instruction : instructions)
+        if (instruction.res == 2) {
+            instruction.op = GirOp::Global;
+            instruction.idx = 0;
+        }
+    assert(Code(module).empty());
+    module.funcs[2].summary.unknown = false;
+    module.funcs[2].summary.writes = { { true, 0 } };
+    assert(Code(module) == "GIR-V060");
+}
+
 void PreservesConservativeCallDependencies() {
     auto local = LocalEmptyContentReplacement();
     auto slice = local.Type(local.funcs[1].params[0]).elem;
@@ -434,7 +623,10 @@ void PreservesConservativeCallDependencies() {
     };
     assert(Code(addCall(local, { 5 }, { integer })).empty());
     assert(Code(addCall(local, { 3 }, { slice })).empty());
-    assert(Code(addCall(local, { 7 }, { reference })) == "GIR-V060");
+    assert(Code(addCall(local, { 7 }, { reference })).empty());
+    auto unknownPure = addCall(local, { 7 }, { reference });
+    unknownPure.funcs[2].summary.unknown = true;
+    assert(Code(unknownPure).empty());
     assert(Code(addCall(local, { 7, 3 }, { reference, slice })).empty());
 
     auto opaque = EmptyContentReplacement();
@@ -452,19 +644,415 @@ void PreservesConservativeCallDependencies() {
     instructions.insert(instructions.begin() + 6, call);
     for (auto &instruction : instructions)
         if (instruction.op == GirOp::SliceView) instruction.a = 7;
+    assert(Code(opaque).empty());
+    opaque.funcs[2].roots.results.clear();
     assert(Code(opaque) == "GIR-V060");
+}
+
+
+GirGlobal IntegerGlobal(GirModule &module) {
+    auto integer = module.IntType(CoreIntTy::I64);
+    GirGlobal global;
+    global.ty = integer;
+    global.kind = CoreVarKind::Var;
+    global.init.name = "integer_global";
+    global.init.results = { integer };
+    global.init.scopes = { -1 };
+    auto zero = Inst(GirOp::Int, 0);
+    zero.ty = integer;
+    zero.text = "0";
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 0 };
+    global.init.blocks = { { {}, { zero, ret } } };
+    return global;
+}
+
+void PreservesActualGlobalCallDependencies() {
+    for (bool writes : { false, true }) {
+        auto module = EmptyContentReplacement();
+        module.globals.push_back(IntegerGlobal(module));
+        GirFunc callee;
+        callee.name = "unknown_global_access";
+        callee.summary.unknown = true;
+        callee.scopes = { -1 };
+        auto address = Inst(GirOp::Global, 0);
+        address.idx = 0;
+        vector<GirInst> body = { address, Inst(GirOp::Load, 1, 0) };
+        if (writes) body.push_back(Inst(GirOp::Store, -1, 0, 1));
+        body.push_back(Inst(GirOp::Ret));
+        callee.blocks = { { {}, body } };
+        module.funcs.push_back(callee);
+        auto call = Inst(GirOp::Call);
+        call.idx = 2;
+        auto &instructions = module.funcs[1].blocks[0].insts;
+        instructions.insert(instructions.end() - 3, call);
+        assert(Code(module).empty());
+        auto &caller = module.funcs[1];
+        auto receiverType = module.RefType(CoreMut::Mut, caller.slots[1].ty);
+        caller.params.push_back(receiverType);
+        caller.blocks[0].params.push_back({ 7, receiverType });
+        caller.roots.params[0].second.clear();
+        for (auto &inst : caller.blocks[0].insts)
+            if (inst.op == GirOp::Clear || inst.op == GirOp::Replace) inst.a = 7;
+        assert(Code(module).empty());
+        module.funcs[2].summary.unknown = false;
+        module.funcs[2].summary.reads = { { true, 0 } };
+        if (writes) module.funcs[2].summary.writes = { { true, 0 } };
+        assert(Code(module) == "GIR-V060");
+        auto scalarReference = module.RefType(CoreMut::Mut, module.globals[0].ty);
+        module.funcs[2].params = { scalarReference };
+        module.funcs[2].blocks = { { { { 0, scalarReference } }, { Inst(GirOp::Load, 1, 0), Inst(GirOp::Ret) } } };
+        module.funcs[2].summary = {};
+        module.funcs[2].summary.unknown = true;
+        auto globalAddress = Inst(GirOp::Global, 8);
+        globalAddress.idx = 0;
+        auto &callerBody = caller.blocks[0].insts;
+        auto position = find_if(callerBody.begin(), callerBody.end(), [](const GirInst &inst) { return inst.op == GirOp::Call; });
+        position->vals = { 8 };
+        callerBody.insert(position, globalAddress);
+        assert(Code(module) == "GIR-V060");
+    }
+}
+
+void CertifiesRecursiveReferenceReturnBounds() {
+    auto module = EmptyContentReplacement();
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    GirFunc callee;
+    callee.name = "recursive_reference";
+    callee.results = { slice };
+    callee.roots.results = { {} };
+    callee.summary.unknown = true;
+    callee.scopes = { -1 };
+    auto recursive = Inst(GirOp::Call, 0);
+    recursive.idx = 2;
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 0 };
+    callee.blocks = { { {}, { recursive, ret } } };
+    module.funcs.push_back(callee);
+    auto call = Inst(GirOp::Call, 7);
+    call.idx = 2;
+    auto &instructions = module.funcs[1].blocks[0].insts;
+    instructions.insert(instructions.begin() + 6, call);
+    for (auto &instruction : instructions)
+        if (instruction.op == GirOp::SliceView) instruction.a = 7;
+    assert(Code(module).empty());
+    module.funcs[2].roots.results.clear();
+    assert(Code(module) == "GIR-V060");
+}
+
+void LowersCrossParameterContentBounds() {
+    CoreModule core;
+    core.profile = CoreProfile::Shrink;
+    core.files = { "cross-parameter-content.goose" };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Let };
+    auto integer = core.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = integer;
+    auto ownerType = core.Intern(owner);
+    CoreType slice;
+    slice.kind = CoreType::Slice;
+    slice.mut = CoreMut::Mut;
+    slice.elem = core.BoolType();
+    auto sliceType = core.Intern(slice);
+    CoreType reference;
+    reference.kind = CoreType::Ref;
+    reference.mut = CoreMut::Mut;
+    reference.elem = sliceType;
+    auto referenceType = core.Intern(reference);
+    CoreImpl main;
+    main.name = "main";
+    main.summary.unknown = true;
+    main.vars = { { "owner", ownerType, CoreVarKind::Var, 0, origin } };
+    CoreStmt initial;
+    initial.kind = CoreStmtKind::Let;
+    initial.var = 0;
+    initial.org = origin;
+    initial.expr = make_unique<CoreExpr>();
+    initial.expr->kind = CoreExprKind::Arr;
+    initial.expr->type = ownerType;
+    main.body.stmts.push_back(std::move(initial));
+    CoreStmt replacement;
+    replacement.kind = CoreStmtKind::AssignWhole;
+    replacement.org = origin;
+    replacement.place = make_unique<CorePlace>();
+    replacement.expr = make_unique<CoreExpr>();
+    replacement.expr->kind = CoreExprKind::Arr;
+    replacement.expr->type = ownerType;
+    auto zero = make_unique<CoreExpr>();
+    zero->kind = CoreExprKind::Read;
+    zero->place = make_unique<CorePlace>();
+    zero->place->kind = CorePlace::Global;
+    zero->place->index = 0;
+    replacement.expr->elems.push_back(std::move(zero));
+    CoreGlobal global;
+    global.name = "scalar";
+    global.type = integer;
+    global.org = origin;
+    global.init = make_unique<CoreExpr>();
+    global.init->kind = CoreExprKind::Lit;
+    global.init->type = integer;
+    global.init->value = "0";
+    core.globals.push_back(std::move(global));
+    main.body.stmts.push_back(std::move(replacement));
+    core.impls.push_back(std::move(main));
+    CoreContext mainContext;
+    mainContext.impl = 0;
+    core.contexts.push_back(std::move(mainContext));
+    for (int index : { 1, 2 }) {
+        CoreImpl function;
+        function.name = index == 1 ? "wrapper" : "callee";
+        function.params = { { 0, true }, { 1, true } };
+        function.vars = { { "a", referenceType, CoreVarKind::Let, 0, origin },
+                          { "b", referenceType, CoreVarKind::Let, 0, origin } };
+        function.summary.unknown = true;
+        if (index == 1) {
+            CoreStmt call;
+            call.kind = CoreStmtKind::Expr;
+            call.org = origin;
+            call.expr = make_unique<CoreExpr>();
+            call.expr->kind = CoreExprKind::Call;
+            call.expr->ctx = 2;
+            call.expr->org = origin;
+            for (int variable : { 0, 1 }) {
+                auto dereference = make_unique<CorePlace>();
+                dereference->kind = CorePlace::Deref;
+                dereference->expr = make_unique<CoreExpr>();
+                dereference->expr->kind = CoreExprKind::Read;
+                dereference->expr->place = make_unique<CorePlace>();
+                dereference->expr->place->index = variable;
+                call.expr->args.push_back(CoreArgReference { CoreMut::Mut, std::move(dereference) });
+            }
+            function.body.stmts.push_back(std::move(call));
+        }
+        core.impls.push_back(std::move(function));
+        CoreContext context;
+        context.impl = index;
+        context.varroots = { { 0, { { CoreRootRef::Param, 0 } } }, { 1, { { CoreRootRef::Param, 1 } } } };
+        context.content = { { { CoreRootRef::Param, 1 } }, {} };
+        context.hascontent = { 1, 1 };
+        core.contexts.push_back(std::move(context));
+    }
+    auto gir = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(gir).empty());
+    gir.funcs[2].roots.contents[0].second.clear();
+    assert(Code(gir) == "GIR-V050");
+    CoreImpl writer;
+    writer.name = "independent_writer";
+    writer.params = { { 0, true }, { 1, true }, { 2, false } };
+    writer.vars = { { "a", referenceType, CoreVarKind::Let, 0, origin },
+                    { "b", referenceType, CoreVarKind::Let, 0, origin },
+                    { "value", sliceType, CoreVarKind::Let, 0, origin } };
+    writer.summary.unknown = true;
+    CoreStmt assignment;
+    assignment.kind = CoreStmtKind::Assign;
+    assignment.org = origin;
+    assignment.place = make_unique<CorePlace>();
+    assignment.place->kind = CorePlace::Deref;
+    assignment.place->expr = make_unique<CoreExpr>();
+    assignment.place->expr->kind = CoreExprKind::Read;
+    assignment.place->expr->place = make_unique<CorePlace>();
+    assignment.expr = make_unique<CoreExpr>();
+    assignment.expr->kind = CoreExprKind::Read;
+    assignment.expr->place = make_unique<CorePlace>();
+    assignment.expr->place->index = 2;
+    writer.body.stmts.push_back(std::move(assignment));
+    core.impls.push_back(std::move(writer));
+    CoreContext writerContext;
+    writerContext.impl = 3;
+    writerContext.varroots = { { 0, { { CoreRootRef::Param, 0 } } }, { 1, { { CoreRootRef::Param, 1 } } },
+                              { 2, { { CoreRootRef::Param, 2 } } } };
+    writerContext.content = { { { CoreRootRef::Param, 2 } }, {}, {} };
+    writerContext.hascontent = { 1, 1, 0 };
+    core.contexts.push_back(std::move(writerContext));
+    auto independent = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(independent).empty());
+}
+
+GirModule ActualHolderAliasModule(bool aliased) {
+    auto module = GlobalEmptyContentReplacement();
+    auto other = module.globals[0];
+    other.name = "other_owner";
+    module.globals.push_back(other);
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    auto mutableReference = module.RefType(CoreMut::Mut, slice);
+    auto &callee = module.funcs[1];
+    callee.params.push_back(mutableReference);
+    callee.params.push_back(slice);
+    callee.blocks[0].params.push_back({ 7, mutableReference });
+    callee.blocks[0].params.push_back({ 8, slice });
+    callee.roots.params.push_back({ 1, { { CoreRootRef::Param, 1 } } });
+    callee.roots.params.push_back({ 2, { { CoreRootRef::Global, 0 } } });
+    callee.roots.contents[0].second = { { CoreRootRef::Global, 1 } };
+    callee.roots.contents.push_back({ 1, { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } });
+    callee.blocks[0].insts.insert(callee.blocks[0].insts.begin() + 4, Inst(GirOp::Store, -1, 7, 8));
+    auto &entry = module.funcs[0];
+    entry.summary.unknown = true;
+    entry.slots = { { slice, CoreVarKind::Var, 0, 0 }, { slice, CoreVarKind::Var, 0, 1 } };
+    auto enter = Inst(GirOp::Enter);
+    enter.idx = 0;
+    auto global = Inst(GirOp::Global, 0);
+    global.idx = 1;
+    auto initial = Inst(GirOp::ViewSlice, 2, 1);
+    initial.mut = CoreMut::Const;
+    auto firstInit = Inst(GirOp::Init, -1, 2);
+    firstInit.idx = 0;
+    auto secondInit = firstInit;
+    secondInit.idx = 1;
+    auto first = Inst(GirOp::Slot, 3);
+    first.idx = 0;
+    auto second = Inst(GirOp::Slot, 4);
+    second.idx = 1;
+    auto receiver = Inst(GirOp::Global, 5);
+    receiver.idx = 0;
+    auto payload = Inst(GirOp::ViewSlice, 7, 6);
+    payload.mut = CoreMut::Const;
+    auto call = Inst(GirOp::Call);
+    call.idx = 1;
+    call.vals = { 3, aliased ? 3 : 4, 7 };
+    auto leave = Inst(GirOp::Leave);
+    leave.idx = 0;
+    entry.blocks[0].insts = { enter, global, Inst(GirOp::Snap, 1, 0), initial, firstInit, secondInit,
+        first, second, receiver, Inst(GirOp::Snap, 6, 5), payload, call, leave, Inst(GirOp::Ret) };
+    return module;
+}
+
+void ChecksActualHolderAliasesAfterCallWrites() {
+    for (bool aliased : { false, true })
+        assert(Code(ActualHolderAliasModule(aliased)) == (aliased ? "GIR-V060" : ""));
+}
+
+void ChecksInitializerHolderAliasesAfterCallWrites() {
+    for (bool aliased : { false, true }) {
+        auto module = ActualHolderAliasModule(aliased);
+        auto initializer = std::move(module.funcs[0]);
+        module.funcs[0] = Module().funcs[0];
+        auto integer = module.IntType(CoreIntTy::I64);
+        initializer.results = { integer };
+        initializer.blocks[0].insts.pop_back();
+        auto zero = Inst(GirOp::Int, 8);
+        zero.ty = integer;
+        zero.text = "0";
+        initializer.blocks[0].insts.push_back(zero);
+        auto ret = Inst(GirOp::Ret);
+        ret.vals = { 8 };
+        initializer.blocks[0].insts.push_back(ret);
+        GirGlobal global;
+        global.name = "initializer_callsite";
+        global.ty = integer;
+        global.init = std::move(initializer);
+        module.globals.push_back(std::move(global));
+        assert(Code(module) == (aliased ? "GIR-V060" : ""));
+    }
+}
+
+void PreservesActualReturnedAliases() {
+    auto module = EmptyContentReplacement();
+    module.funcs.reserve(3);
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    auto &instructions = module.funcs[1].blocks[0].insts;
+    auto clear = instructions[4];
+    auto emptyLoad = instructions[5];
+    instructions.erase(instructions.begin() + 4, instructions.begin() + 6);
+    auto view = Inst(GirOp::Snap, 7, 2);
+    auto alias = Inst(GirOp::ViewSlice, 8, 7);
+    alias.mut = CoreMut::Const;
+    auto call = Inst(GirOp::Call, 9);
+    call.idx = 2;
+    call.vals = { 8 };
+    instructions.insert(instructions.begin() + 4, { emptyLoad, view, alias, call, clear });
+    for (auto &inst : instructions)
+        if (inst.op == GirOp::SliceView) inst.a = 9;
+    GirFunc identity;
+    identity.name = "slice_identity";
+    identity.params = { slice };
+    identity.results = { slice };
+    identity.roots.results = { { { CoreRootRef::Param, 0 } } };
+    identity.summary.unknown = true;
+    identity.scopes = { -1 };
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 0 };
+    identity.blocks = { { { { 0, slice } }, { ret } } };
+    module.funcs.push_back(identity);
+    assert(Code(module) == "GIR-V060");
+    for (auto &inst : instructions)
+        if (inst.op == GirOp::Call) inst.vals = { 3 };
+    assert(Code(module).empty());
+    module.funcs[2].roots.results[0].push_back({ CoreRootRef::Param, 0 });
+    assert(Code(module).empty());
+    assert(module.funcs[2].roots.results[0].size() == 2);
+    module.funcs[2].roots.results = { {} };
+    assert(Code(module) == "GIR-V050");
+}
+
+void IncludesActualRefSliceBackingReads() {
+    auto module = LocalEmptyContentReplacement();
+    module.funcs.reserve(3);
+    module.globals = GlobalEmptyContentReplacement().globals;
+    auto reference = module.funcs[1].params[0];
+    auto &instructions = module.funcs[1].blocks[0].insts;
+    for (auto &inst : instructions)
+        if (inst.op == GirOp::Slot && inst.res == 2) { inst.op = GirOp::Global; inst.idx = 0; }
+    auto clear = instructions[4];
+    instructions.erase(instructions.begin() + 4);
+    auto snapshot = Inst(GirOp::Snap, 8, 2);
+    auto sliced = Inst(GirOp::ViewSlice, 9, 8);
+    sliced.mut = CoreMut::Const;
+    auto initialize = find_if(instructions.begin(), instructions.end(), [](const GirInst &inst) {
+        return inst.op == GirOp::Init && inst.idx == 2;
+    });
+    initialize->a = 9;
+    instructions.insert(initialize, { snapshot, sliced });
+    auto load = find_if(instructions.begin(), instructions.end(), [](const GirInst &inst) { return inst.op == GirOp::Load && inst.res == 8; });
+    auto offset = load - instructions.begin();
+    instructions.erase(instructions.begin() + offset);
+    instructions.insert(instructions.begin() + offset, clear);
+    for (auto &inst : instructions)
+        if (inst.op == GirOp::SliceView && inst.res == 4) inst.a = 3;
+    GirFunc reader;
+    reader.name = "read_backing";
+    reader.params = { reference };
+    reader.scopes = { -1 };
+    reader.summary.unknown = true;
+    reader.roots.contents = { { 0, { { CoreRootRef::Global, 0 } } } };
+    reader.blocks = { { { { 0, reference } }, { Inst(GirOp::Load, 1, 0), Inst(GirOp::SliceView, 2, 1),
+        Inst(GirOp::ViewLen, 3, 2), Inst(GirOp::Ret) } } };
+    module.funcs.push_back(reader);
+    auto call = Inst(GirOp::Call);
+    call.idx = 2;
+    call.vals = { 7 };
+    instructions.insert(instructions.end() - 3, call);
+    assert(Code(module) == "GIR-V060");
+    module.funcs[2].blocks[0].insts = { Inst(GirOp::Load, 1, 0), Inst(GirOp::Ret) };
+    assert(Code(module) == "GIR-V060");
+    module.funcs[2].blocks[0].insts = { Inst(GirOp::Load, 1, 0), Inst(GirOp::SliceView, 2, 1), Inst(GirOp::Ret) };
+    assert(Code(module) == "GIR-V060");
+    module.funcs[2].blocks[0].insts = { Inst(GirOp::Ret) };
+    module.funcs[2].roots.contents.clear();
+    assert(Code(module).empty());
 }
 
 }
 
 int main() {
+    PreservesActualGlobalCallDependencies();
+    CertifiesRecursiveReferenceReturnBounds();
+    IncludesActualRefSliceBackingReads();
+    PreservesActualReturnedAliases();
+    LowersCrossParameterContentBounds();
+    ChecksActualHolderAliasesAfterCallWrites();
+    ChecksInitializerHolderAliasesAfterCallWrites();
     AcceptsReplacementAfterKnownEmptyContentRead();
+    AcceptsStoresBetweenEmptyParameterContents();
     PreservesKnownEmptyLocalCopies();
     RequiresEveryJoinInputKnownEmpty();
     RetainsNonemptyContentAliases();
     RejectsChangedEmptyParameterContents();
     RejectsGlobalContentChangesFromNoArgumentCalls();
+    RejectsGlobalContentChangesWithUnusedEmptyArgument();
     PreservesConservativeCallDependencies();
+    CertifiesUnknownMemoryFreeCallGraphs();
+    RejectsLocalContentChangesWithUnusedEmptyArgument();
     assert(Code(ContentAliasStore()).empty());
     assert(Code(ParameterContentStore()).empty());
     RequiresRebind(LocalBindingStore(false));

@@ -1875,7 +1875,7 @@ def main():
                 else:
                     r.ok(f"compiler {name}")
         for name in ("compiler_roots", "compiler_containers", "compiler_ident", "compiler_units",
-                     "compiler_units_builder", "compiler_core", "compiler_gir", "compiler_gir_contexts", "compiler_gir_globals", "compiler_gir_effects", "compiler_reader") if wanted("extra/compiler_units") else ():
+                     "compiler_units_builder", "compiler_core", "compiler_gir", "compiler_gir_contexts", "compiler_gir_globals", "compiler_gir_effects", "compiler_gir_reservations", "compiler_reader") if wanted("extra/compiler_units") else ():
             r.show_task(compiler_unit, name)
 
         def units_last_record():

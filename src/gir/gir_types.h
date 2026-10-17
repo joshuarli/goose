@@ -193,6 +193,7 @@ public:
 
     GirTyResult Of(const GirInst &i) {
         auto &m = env.m;
+        if (GirControlOf(i.op)) return Control(i);
         switch (i.op) {
             case GirOp::Int:
                 if (m.Type(i.ty).kind != CoreType::Int || !GirInRange(m.Type(i.ty).ity, i.text))
@@ -501,6 +502,65 @@ public:
                 auto mut = fields[i.idx].binding == CoreVarKind::Var ? CoreMut::Mut : CoreMut::Const;
                 return GirTyOk(m.RefType(mut, fields[i.idx].type));
             }
+            case GirOp::ReceivingOpen: case GirOp::DestRenew: case GirOp::ExitReserve:
+            case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed: {
+                if (m.low || !CoreHasConstruction(m.profile))
+                    return GirTyErr("receiving ownership operation outside core-construction GIR-H");
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                auto expected = i.op == GirOp::ReceivingOpen ? CoreType::Dest :
+                    (i.op == GirOp::DestRenew || i.op == GirOp::ExitReserve) ? CoreType::Receiving : CoreType::ExitReservation;
+                if (carrier.kind != expected) return GirTyErr("receiving ownership operation has another input capability");
+                if (i.op == GirOp::ExitIsNamed) return GirTyOk(m.BoolType());
+                if (i.op == GirOp::ExitReserve) if (auto slot = GirNamedExitBinding(i.exitSource)) {
+                    if (!env.function || *slot < 0 || *slot >= (int)env.slots.size() ||
+                        !GirAdaptsTo(m, env.slots[*slot].ty, carrier.elem) ||
+                        none_of(env.function->resultProtocols.begin(), env.function->resultProtocols.end(),
+                                [&](const auto &protocol) { return protocol.namedSlot == *slot; }))
+                        return GirTyErr("named exit source is not an exact in-scope named result binding");
+                }
+                auto result = i.op == GirOp::ReceivingOpen ? CoreType::Receiving :
+                    i.op == GirOp::ExitReserve ? CoreType::ExitReservation :
+                    i.op == GirOp::ReservedNamed ? CoreType::Built : CoreType::Dest;
+                return GirTyOk(m.CarrierType(result, carrier.elem, carrier.request));
+            }
+            case GirOp::DestRefresh: case GirOp::ExitLand: case GirOp::ExitAdopt: case GirOp::ReceivingCancel: {
+                if (m.low || !CoreHasConstruction(m.profile))
+                    return GirTyErr("receiving ownership operation outside core-construction GIR-H");
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                auto expected = i.op == GirOp::ExitLand ? CoreType::ExitReservation : CoreType::Receiving;
+                if (carrier.kind != expected) return GirTyErr("receiving ownership operation has another input capability");
+                if (i.op == GirOp::ReceivingCancel) {
+                    for (auto value : i.vals) {
+                        auto carried = Val(value);
+                        if (!carried.ok()) return carried;
+                        if (m.Type(carried.ty).kind != CoreType::Built)
+                            return GirTyErr("receiving cancellation protects a value that is not a raw completion");
+                    }
+                    return GirTyOk(m.CarrierType(CoreType::Cancelled, carrier.elem, carrier.request));
+                }
+                auto previous = Val(i.b);
+                if (!previous.ok()) return previous;
+                auto raw = m.Type(previous.ty);
+                if (raw.kind != (i.op == GirOp::DestRefresh ? CoreType::Dest : CoreType::Built) ||
+                    raw.elem != carrier.elem || raw.request != carrier.request)
+                    return GirTyErr("receiving operation uses another raw carrier protocol");
+                return GirTyOk(i.op == GirOp::ExitAdopt
+                    ? m.CarrierType(CoreType::ExitReservation, carrier.elem, carrier.request) : previous.ty);
+            }
+            case GirOp::TargetReceiving: {
+                if (m.low || !CoreHasConstruction(m.profile) || i.idx < 0 || i.idx >= (int)m.targets.size() ||
+                    m.targets[i.idx].members.empty())
+                    return GirTyErr("receiving target is outside core-construction GIR-H");
+                auto &member = m.funcs[m.targets[i.idx].members[0]];
+                if (i.idx2 < 0 || i.idx2 >= (int)member.results.size() ||
+                    member.resultProtocols.size() != member.results.size() || !GirNonfixed(m, member.results[i.idx2]))
+                    return GirTyErr("receiving target has no nonfixed result channel");
+                return GirTyOk(m.CarrierType(CoreType::Receiving, member.results[i.idx2], member.resultProtocols[i.idx2].request));
+            }
             case GirOp::DestAdapt: {
                 auto input = Val(i.a);
                 if (!input.ok()) return input;
@@ -609,40 +669,6 @@ public:
                     return GirTyErr("nested destination does not match the next variable element");
                 return GirTyOk(m.CarrierType(CoreType::Dest, i.ty, CoreRequest::Value));
             }
-            case GirOp::DestNamed:
-                if (i.idx < 0 || i.idx >= (int)env.slots.size() || !env.function)
-                    return GirTyErr("named result has no enclosing slot and result descriptor");
-                for (size_t result = 0; result < env.function->resultProtocols.size(); result++)
-                    if (env.function->resultProtocols[result].namedSlot == i.idx)
-                        return GirTyOk(m.CarrierType(CoreType::Built, env.function->results[result], CoreRequest::Value));
-                return GirTyErr("named result slot has no receiving result channel");
-            case GirOp::ResultExitDest: case GirOp::TargetDest:
-                if (i.ty < 0 || i.ty >= (int)m.types.size() || !GirNonfixed(m, i.ty) ||
-                    (i.request != CoreRequest::Value && i.request != CoreRequest::ElementRun))
-                    return GirTyErr("exit destination has no nonfixed result descriptor");
-                if (i.op == GirOp::TargetDest) {
-                    if (i.idx < 0 || i.idx >= (int)m.targets.size() || m.targets[i.idx].members.empty())
-                        return GirTyErr("exit target is outside the target table");
-                    auto &member = m.funcs[m.targets[i.idx].members[0]];
-                    if (i.idx2 < 0 || i.idx2 >= (int)member.results.size() || member.results[i.idx2] != i.ty ||
-                        member.resultProtocols.size() != member.results.size() ||
-                        member.resultProtocols[i.idx2].request != i.request)
-                        return GirTyErr("exit destination differs from its target result descriptor");
-                }
-                return GirTyOk(m.CarrierType(CoreType::Dest, i.ty, i.request));
-            case GirOp::DestAbandonNamed: {
-                auto replacement = Val(i.a);
-                if (!replacement.ok()) return replacement;
-                auto &carrier = m.Type(replacement.ty);
-                if (carrier.kind != CoreType::Built || i.idx < 0 || i.idx >= (int)env.slots.size() ||
-                    !env.function)
-                    return GirTyErr("named abandonment does not match the replacement completion");
-                bool matches = false;
-                for (size_t result = 0; result < env.function->resultProtocols.size(); result++)
-                    matches |= env.function->resultProtocols[result].namedSlot == i.idx && env.function->results[result] == carrier.elem;
-                if (!matches) return GirTyErr("named abandonment does not restore its receiving channel");
-                return GirTyOk(m.CarrierType(CoreType::Cancelled, carrier.elem, carrier.request));
-            }
             case GirOp::DestArg: {
                 auto completed = Val(i.a);
                 if (!completed.ok()) return completed;
@@ -666,7 +692,7 @@ public:
                     if (i.reason == GirEventReason::HeaderRemoval) {
                         if (carrier.request != CoreRequest::Value) return GirTyErr("header removal requires a value completion");
                         carrier.request = CoreRequest::ElementRun;
-                    } else if (i.reason != GirEventReason::ExitValue) return GirTyErr("unknown destination relocation reason");
+                    } else return GirTyErr("exit landing requires a bounded reservation ticket");
                 }
                 return GirTyOk(m.Intern(carrier));
             }
@@ -796,13 +822,54 @@ public:
             return GirTyErr(cat("value %", v, " has no type"));
         return GirTyOk(env.vals[v]);
     }
+    GirTyResult Control(const GirInst &inst) {
+        auto contract = GirControlOf(inst.op);
+        if (!contract) return GirTyErr("unknown construction control operation");
+        if (!env.m.low || !CoreHasConstruction(env.m.profile))
+            return GirTyErr("construction control operation outside core-construction GIR-L");
+        auto operands = GirControlOperands(inst, contract->form);
+        if (operands.size() < contract->inputs.size() ||
+            (!contract->repeatedInput && operands.size() != contract->inputs.size()))
+            return GirTyErr("construction control operation has another operand count");
+        for (size_t position = 0; position < operands.size(); position++) {
+            auto input = Data(operands[position]);
+            if (!input.ok()) return input;
+            auto expected = position < contract->inputs.size() ? contract->inputs[position] : *contract->repeatedInput;
+            if (env.m.Type(input.ty).kind != expected ||
+                (expected == CoreType::Int && input.ty != env.m.IntType(CoreIntTy::I64)))
+                return GirTyErr("construction control operand has another primitive type");
+        }
+        if ((contract->form == GirControlForm::Parameter || contract->form == GirControlForm::OperandParameter) && inst.idx < 0)
+            return GirTyErr("construction control parameter position is negative");
+        if (contract->form == GirControlForm::Call && (inst.idx < 0 || inst.idx >= (int)env.m.funcs.size()))
+            return GirTyErr("construction control call names an unknown callee");
+        if (contract->form == GirControlForm::Call && inst.ownerBindings.size() + 1 != env.m.funcs[inst.idx].params.size())
+            return GirTyErr("construction call owner bindings do not align with primitive argument positions");
+        if (contract->form == GirControlForm::TargetPositions) {
+            if (inst.idx < 0 || inst.idx >= (int)env.m.lowtargets.size() ||
+                inst.ownerPositions.size() != env.m.lowtargets[inst.idx].channels.size())
+                return GirTyErr("owner target binding map does not align with logical result positions");
+            for (auto position : inst.ownerPositions)
+                if (position && (!env.function || *position <= 0 || *position >= (int)env.function->params.size()))
+                    return GirTyErr("owner target binding map has another primitive output position");
+        }
+        if (contract->form == GirControlForm::TargetResult &&
+            (inst.idx < 0 || inst.idx >= (int)env.m.lowtargets.size() || inst.idx2 < 0 ||
+                inst.idx2 >= (int)env.m.lowtargets[inst.idx].channels.size()))
+            return GirTyErr("owner target binding result is outside its logical result table");
+
+        if (!contract->result) return GirTyOk(env.m.UnitType());
+        return GirTyOk(*contract->result == CoreType::Bool ? env.m.BoolType() : env.m.PtrType());
+    }
+
     GirTyResult Data(int v) {
         auto t = Val(v);
         if (!t.ok()) return t;
         auto kind = env.m.Type(t.ty).kind;
         if (kind == CoreType::View)
             return GirTyErr(cat("value %", v, " is a view where a data value is required"));
-        if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled)
+        if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled ||
+            kind == CoreType::Receiving || kind == CoreType::ExitReservation)
             return GirTyErr(cat("value %", v, " is a construction carrier where a data value is required"));
         return t;
     }

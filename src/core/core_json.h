@@ -231,6 +231,7 @@ private:
                 break;
             case CoreType::Struct: Append(out, "[\"struct\",", t.structid, "]"); break;
             case CoreType::Dest: case CoreType::Built: case CoreType::Cancelled:
+            case CoreType::Receiving: case CoreType::ExitReservation:
                 throw CompileError { "internal compiler error: Core contains a GIR construction carrier" };
         }
     }
