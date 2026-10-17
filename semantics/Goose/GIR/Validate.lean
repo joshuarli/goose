@@ -760,7 +760,7 @@ def freshRunRound (f : Func) (valid : Array Bool) : Array Bool × Bool := Id.run
         changed := true
   return (valid, changed)
 
-def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
+def literalRunSeeds (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
   let mut valid := Array.replicate f.numValues false
   for b in f.blocks do
     for i in b.insts do
@@ -768,6 +768,10 @@ def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
       | .def r (.arrLit t _) =>
         if isLiteralRunType t && vt[r]? == some (some (.data t)) then valid := valid.set! r true
       | _ => pure ()
+  return valid
+
+def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
+  let mut valid := literalRunSeeds f vt
   let mut changed := true
   let mut fuel := f.numValues + 1
   while changed && fuel > 0 do

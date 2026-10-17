@@ -10,18 +10,9 @@ theorem freshRuns_literal (func : Func) (types : Array (Option VTy))
     (literal : Inst.def result (.arrLit ty values) ∈ block.insts)
     (runType : isLiteralRunType ty = true) (typed : types[result]? = some (some (.data ty)))
     (bounded : result < func.numValues) : (freshRuns func types)[result]? = some true := by
-  let seed : Array Bool := Id.run do
-    let mut valid := Array.replicate func.numValues false
-    for b in func.blocks do
-      for i in b.insts do
-        match i with
-        | .def r (.arrLit t _) =>
-          if isLiteralRunType t && types[r]? == some (some (.data t)) then
-            valid := valid.set! r true
-        | _ => pure ()
-    return valid
+  let seed : Array Bool := literalRunSeeds func types
   have seeded : seed[result]? = some true := by
-    unfold seed
+    unfold seed literalRunSeeds
     change (Id.run (forIn (m := Id) func.blocks (Array.replicate func.numValues false) _))[result]? = some true
     rw [← Array.forIn_toList]
     refine list_forIn_establishes (property := fun flags : Array Bool => flags.size = func.numValues)
