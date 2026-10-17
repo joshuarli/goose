@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.SourceSymbolSourceEntry
+import Goose.Lower.ContextLowering
 import Goose.Lower.Validation.OperandFunctions
 import Goose.Lower.GeneratedTargetsFunctions
 import Goose.Lower.Validation.SymbolSourceTables
@@ -77,7 +78,7 @@ theorem lower_labelled_checkSymbols {module : Core.Module}
     | some context =>
       obtain ⟨impl, implAt, _⟩ := (validate_modOk module accepted).ctx index context contextAt
       have lowered : (lower module).funcs[index]? = some (lowerContextAt module context impl) := by
-        simp [lower, Array.getElem?_map, contextAt, implAt, lowerContextAt]
+        exact lower_func_at contextAt implAt
       have equal := Option.some.inj (lowered.symm.trans lookup)
       rw [← equal]
       exact lowerContextAt_checkSymbols accepted contextAt implAt label

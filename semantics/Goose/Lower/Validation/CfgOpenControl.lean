@@ -87,7 +87,7 @@ theorem opens_ifS_none_core (condition : ValueId) {childAction : B ValueId} (chi
     exact restore_currentOpen startedRow openBody different
       ((child env started value childEnd childRun).trans (adv_emitTerm closeRun)) joinRun
 
-theorem opens_ifE_core (condition : ValueId) {thenAction elseAction : B ValueId}
+theorem opens_ifE_core (condition : ValueId) (sourceScope : ScopeId) {thenAction elseAction : B ValueId}
     (thenAdvance : AdvB thenAction) (elseAdvance : AdvB elseAction)
     :
     BoundedRun CurrentOpen (whenLive 0 fun _ => do
@@ -98,7 +98,9 @@ theorem opens_ifE_core (condition : ValueId) {thenAction elseAction : B ValueId}
       setCur (some elseBlock)
       let elseValue ← elseAction
       let endElse ← curBlock
-      joinValue endThen thenValue endElse elseValue) := by
+      let result ← joinValue endThen thenValue endElse elseValue
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   intro env before result after run _ bounded
   cases current : before.cur with
   | none =>
@@ -111,7 +113,8 @@ theorem opens_ifE_core (condition : ValueId) {thenAction elseAction : B ValueId}
     obtain ⟨⟨thenBlock, elseBlock⟩, forked, forkRun, _, thenStart, thenStartRun,
       thenValue, thenEnd, thenRun, endThen, thenRead, thenReadRun,
       _, elseStart, elseStartRun, elseValue, elseEnd, elseRun,
-      endElse, elseRead, elseReadRun, joinRun⟩ := run
+      endElse, elseRead, elseReadRun, _, _, joinRun,
+      _, _, recipeRun, finalRun⟩ := run
     obtain ⟨thenCurrent, thenSame⟩ := curBlock_eq thenReadRun
     obtain ⟨elseCurrent, elseSame⟩ := curBlock_eq elseReadRun
     subst thenRead
@@ -144,7 +147,10 @@ theorem opens_ifE_core (condition : ValueId) {thenAction elseAction : B ValueId}
       exact elseEndBound block (elseCurrent.symm.trans present)
     have joined := joinValue_currentOpen elseEnd endThen endElse thenValue elseValue thenBound elseBound env
     rw [joinRun] at joined
-    exact joined
+    rw [recordValueRootRecipe_run] at recipeRun
+    obtain ⟨_, rfl⟩ := Prod.mk.inj recipeRun
+    obtain ⟨_, rfl⟩ := pure_eq.mp finalRun
+    exact joined.of_state rfl rfl
 
 theorem opens_ifS_some_core (condition : ValueId) {thenAction elseAction : B ValueId}
     (thenAdvance : AdvB thenAction) (elseAdvance : AdvB elseAction)

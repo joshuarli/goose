@@ -15,7 +15,7 @@ theorem lower_context_function (module : Core.Module) (callee : ContextId)
     (contextRow : module.contexts[callee]? = some context)
     (implRow : module.impls[context.impl]? = some impl) :
     (lower module).funcs[callee]? = some (lowerContextAt module context impl) := by
-  simp [lower, Array.getElem?_map, contextRow, implRow, lowerContextAt]
+  simp [lower, Array.getElem?_map, contextRow, implRow, lowerContextAt, lowerImpl]
 
 theorem lower_returnTransfer_barrier (module : Core.Module) (source : SourceStoppingReturnFree module)
     (current : Array Bool) (_sized : current.size = (lower module).funcs.size)

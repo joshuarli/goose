@@ -8,6 +8,12 @@ theorem ReturnFreeRun.unchanged {action : B α}
     (same : ∀ env state, (action env state).2 = state) : ReturnFreeRun action :=
   ReturnFreeRun.of_blocks (fun env state => congrArg LS.blocks (same env state))
 
+theorem returnFree_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    ReturnFreeRun (recordValueRootRecipe value sourceScope) := by
+  apply ReturnFreeRun.of_blocks
+  intro env state
+  rw [recordValueRootRecipe_run]
+
 theorem returnFree_pure (value : α) : ReturnFreeRun (pure value) := ReturnFreeRun.pure value
 
 theorem returnFree_read : ReturnFreeRun (read : B LEnv) := ReturnFreeRun.unchanged (by intros; rfl)

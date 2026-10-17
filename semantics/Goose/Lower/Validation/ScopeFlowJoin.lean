@@ -169,6 +169,36 @@ theorem scope_joinValue_flow {parents : Array (Option ScopeId)}
   · exact scope_joinLive_flow config _ facts run
   · exact scope_joinLive_flow config _ facts run
 
+theorem scope_joinValue_flow_recorded {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {env : LEnv} {before after : LS}
+    (config : ScopeConfiguration parents entry exit before)
+    {endT endF : Option BlockId} {valueT valueF result : ValueId}
+    (thenFacts : ∀ block, endT = some block → block < before.blocks.size ∧ exit block = before.stack)
+    (elseFacts : ∀ block, endF = some block → block < before.blocks.size ∧ exit block = before.stack)
+    (sourceScope : ScopeId)
+    (run : (do
+      let joined ← joinValue endT valueT endF valueF
+      recordValueRootRecipe joined sourceScope
+      (Pure.pure joined : B ValueId)) env before = (result, after)) :
+    ∃ nextEntry nextExit, ScopeConfiguration parents nextEntry nextExit after ∧
+      ScopeMapAdvance before entry exit nextEntry nextExit := by
+  simp only [bind_eq] at run
+  obtain ⟨joined, joinedState, joinRun, _, recordedState, recipeRun, finalRun⟩ := run
+  obtain ⟨nextEntry, nextExit, joinedConfig, maps⟩ :=
+    scope_joinValue_flow config thenFacts elseFacts joinRun
+  rw [recordValueRootRecipe_run] at recipeRun
+  have stateEq := (Prod.mk.inj recipeRun).2
+  have blocks : recordedState.blocks = joinedState.blocks := by
+    simpa using (congrArg LS.blocks stateEq).symm
+  have current : recordedState.cur = joinedState.cur := by
+    simpa using (congrArg LS.cur stateEq).symm
+  have stack : recordedState.stack = joinedState.stack := by
+    simpa using (congrArg LS.stack stateEq).symm
+  have recordedConfig := joinedConfig.of_state blocks current stack
+  have afterEq := (pure_eq.mp finalRun).2.symm
+  rw [afterEq]
+  exact ⟨nextEntry, nextExit, recordedConfig, maps⟩
+
 theorem scope_joinEmpty_flow {parents : Array (Option ScopeId)}
     {entry exit : BlockId → List ScopeId} {env : LEnv} {before after : LS} {result : Unit}
     (config : ScopeConfiguration parents entry exit before) (incoming : List BlockId)
@@ -382,7 +412,7 @@ theorem scope_flowIfBranches {parents : Array (Option ScopeId)} {parent : Option
   exact ⟨afterEntry, afterExit, afterConfig, secondFrame.trans secondEndAdvance tailMaps⟩
 
 theorem ScopeFlowAction.ifValue {parents : Array (Option ScopeId)} {parent : Option ScopeId}
-    {loop : Option LoopCtx} (condition : ValueId) {first second : B ValueId}
+    {loop : Option LoopCtx} (condition : ValueId) (sourceScope : ScopeId) {first second : B ValueId}
     (firstAction : ScopeFlowAction parents parent loop first)
     (secondAction : ScopeFlowAction parents parent loop second) :
     ScopeFlowAction parents parent loop (Goose.Lower.whenLive 0 fun _ => do
@@ -393,8 +423,10 @@ theorem ScopeFlowAction.ifValue {parents : Array (Option ScopeId)} {parent : Opt
       setCur (some eb)
       let valueF ← second
       let endF ← Goose.Lower.curBlock
-      joinValue endT valueT endF valueF) := by
-  refine ⟨ScopeAction.ifValue condition firstAction.scopes secondAction.scopes, ?_⟩
+      let result ← joinValue endT valueT endF valueF
+      recordValueRootRecipe result sourceScope
+      (Pure.pure result : B ValueId)) := by
+  refine ⟨ScopeAction.ifValue condition sourceScope firstAction.scopes secondAction.scopes, ?_⟩
   intro env before entry exit config context head
   generalize run : (Goose.Lower.whenLive 0 fun _ => do
       let (tb, eb) ← fork condition
@@ -404,7 +436,9 @@ theorem ScopeFlowAction.ifValue {parents : Array (Option ScopeId)} {parent : Opt
       setCur (some eb)
       let valueF ← second
       let endF ← Goose.Lower.curBlock
-      joinValue endT valueT endF valueF) env before = result
+      let result ← joinValue endT valueT endF valueF
+      recordValueRootRecipe result sourceScope
+      (Pure.pure result : B ValueId)) env before = result
   obtain ⟨resultValue, after⟩ := result
   dsimp only
   cases live : before.cur with
@@ -415,8 +449,12 @@ theorem ScopeFlowAction.ifValue {parents : Array (Option ScopeId)} {parent : Opt
   | some current =>
     rw [whenLive_some _ _ _ live] at run
     exact scope_flowIfBranches condition firstAction secondAction
-      (fun endT valueT endF valueF => joinValue endT valueT endF valueF)
-      (fun _ _ _ _ _ _ _ _ config thenFacts elseFacts _ _ run => scope_joinValue_flow config thenFacts elseFacts run)
+      (fun endT valueT endF valueF => do
+        let result ← joinValue endT valueT endF valueF
+        recordValueRootRecipe result sourceScope
+        (Pure.pure result : B ValueId))
+      (fun _ _ _ _ _ _ _ _ config thenFacts elseFacts _ _ run =>
+        scope_joinValue_flow_recorded config thenFacts elseFacts sourceScope run)
       env before entry exit config context head current live run
 
 theorem ScopeFlowAction.ifArms {parents : Array (Option ScopeId)} {parent : Option ScopeId}

@@ -54,7 +54,18 @@ theorem independentOwner_lowerExpr {expr : Expr} (source : IndependentOwnerExpr 
     intro noValue
     apply EmitsOnlyRun.bind (EmitsOnlyRun.unchanged (fun _ _ => rfl))
     intro noEnd
-    exact emitsOnly_joinValue _ (fun term => Or.inl (Or.inr (.term term))) yesEnd noEnd yesValue noValue
+    apply EmitsOnlyRun.bind (emitsOnly_joinValue IndependentOwnerInstruction
+      (fun (term : Term) => Or.inl (Or.inr (ReplacementControlInst.term term)))
+      yesEnd noEnd yesValue noValue)
+    intro result
+    apply EmitsOnlyRun.bind
+      (EmitsOnlyRun.unchanged
+        (action := recordValueRootRecipe result _)
+        (by
+          intro env state
+          rw [recordValueRootRecipe_run]))
+    intro _
+    exact .pure _ _
   | block body => exact independentOwner_lowerBlock body
 
 theorem independentOwner_lowerBlock {body : Core.Block} (source : IndependentOwnerBlock body) :

@@ -26,6 +26,29 @@ theorem EmittedProfileRun.ifValue (condition : ValueId) {yes no : B ValueId}
         noRun.bind fun valueF => EmittedProfileRun.curBlock.bind fun endF =>
           EmittedProfileRun.joinValue (endT, endF) valueT valueF
 
+theorem EmittedProfileRun.ifValue_recorded (condition : ValueId) (sourceScope : ScopeId) {yes no : B ValueId}
+    (yesRun : EmittedProfileRun profile le yes) (noRun : EmittedProfileRun profile le no) :
+    EmittedProfileRun profile le (Goose.Lower.whenLive 0 fun _ => do
+      let (tb, eb) ← Goose.Lower.fork condition
+      Goose.Lower.setCur (some tb)
+      let valueT ← yes
+      let endT ← Goose.Lower.curBlock
+      Goose.Lower.setCur (some eb)
+      let valueF ← no
+      let endF ← Goose.Lower.curBlock
+      let value ← Goose.Lower.joinValue endT valueT endF valueF
+      Goose.Lower.recordValueRootRecipe value sourceScope
+      Pure.pure value) := by
+  apply EmittedProfileRun.whenLive
+  intro current
+  exact (EmittedProfileRun.fork condition).bind fun pair =>
+    (EmittedProfileRun.setCur _).bind fun _ => yesRun.bind fun valueT =>
+      EmittedProfileRun.curBlock.bind fun endT => (EmittedProfileRun.setCur _).bind fun _ =>
+        noRun.bind fun valueF => EmittedProfileRun.curBlock.bind fun endF =>
+          (EmittedProfileRun.joinValue (endT, endF) valueT valueF).bind fun value =>
+            (EmittedProfileRun.recordValueRootRecipe value sourceScope).bind fun _ =>
+              EmittedProfileRun.pure value
+
 theorem EmittedProfileRun.ifThen (condition : ValueId) {body : B ValueId}
     (bodyRun : EmittedProfileRun profile le body) :
     EmittedProfileRun profile le (Goose.Lower.whenLive () fun _ => do
@@ -85,7 +108,7 @@ theorem profile_source_ifExpression {env : Core.TEnv} {results : List Ty}
   obtain ⟨_, yesStart, _, source⟩ := (st_bind_ok _ _ _ _).mp source
   obtain ⟨yesType, yesFinish, yesSource, source⟩ := (st_bind_ok _ _ _ _).mp source
   obtain ⟨noType, noFinish, noSource, _⟩ := (st_bind_ok _ _ _ _).mp source
-  exact (conditionChild conditionSource).bind fun value => EmittedProfileRun.ifValue value
+  exact (conditionChild conditionSource).bind fun value => EmittedProfileRun.ifValue_recorded value (sourceBlockScope yes)
     (yesChild (Core.exprEnv env) yesSource none [] true) (noChild (Core.exprEnv env) noSource none [] true)
 
 theorem profile_source_conditional {env : Core.TEnv} {results : List Ty} (scope : ScopeId)

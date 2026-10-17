@@ -249,6 +249,44 @@ theorem scope_joinValue {parents : Array (Option ScopeId)}
   · exact key run
   · exact key run
 
+theorem scope_joinValue_recorded {parents : Array (Option ScopeId)}
+    {entry exit : BlockId → List ScopeId} {env : LEnv} {before after : LS}
+    (valid : ScopeBuilder parents entry exit before) (bound : ScopeLiveBound before)
+    {endT endF : Option BlockId} {valueT valueF result : ValueId} (sourceScope : ScopeId)
+    (run : (do
+      let joined ← Goose.Lower.joinValue endT valueT endF valueF
+      Goose.Lower.recordValueRootRecipe joined sourceScope
+      (Pure.pure joined : B ValueId)) env before = (result, after)) :
+    ∃ nextEntry nextExit, ScopeBuilder parents nextEntry nextExit after ∧
+      ScopeMapAdvance before entry exit nextEntry nextExit := by
+  simp only [bind_eq] at run
+  obtain ⟨joined, joinedState, joinRun, _, recordedState, recipeRun, finalRun⟩ := run
+  obtain ⟨nextEntry, nextExit, joinedValid, maps⟩ := scope_joinValue valid bound joinRun
+  rw [recordValueRootRecipe_run] at recipeRun
+  have stateEq := (Prod.mk.inj recipeRun).2
+  have afterEq := (pure_eq.mp finalRun).2.symm
+  have recipeBlocks : recordedState.blocks = joinedState.blocks := by
+    simpa using (congrArg LS.blocks stateEq).symm
+  have recipeCurrent : recordedState.cur = joinedState.cur := by
+    simpa using (congrArg LS.cur stateEq).symm
+  have recipeStack : recordedState.stack = joinedState.stack := by
+    simpa using (congrArg LS.stack stateEq).symm
+  have recordedValid : ScopeBuilder parents nextEntry nextExit recordedState := by
+    constructor
+    · intro block body row
+      have joinedRow : joinedState.blocks[block]? = some body := by
+        rw [recipeBlocks] at row
+        exact row
+      exact joinedValid.traces block body joinedRow
+    · intro block live
+      have joinedLive : joinedState.cur = some block := by
+        rw [recipeCurrent] at live
+        exact live
+      rw [recipeStack]
+      exact joinedValid.current block joinedLive
+  rw [afterEq]
+  exact ⟨nextEntry, nextExit, recordedValid, maps⟩
+
 theorem scope_joinArms {parents : Array (Option ScopeId)}
     {entry exit : BlockId → List ScopeId} {env : LEnv} {before after : LS}
     (valid : ScopeBuilder parents entry exit before) (bound : ScopeLiveBound before)
@@ -395,7 +433,7 @@ theorem scope_ifBranches {parents : Array (Option ScopeId)} {parent : Option Sco
   exact ⟨afterEntry, afterExit, afterValid, secondFrame.trans secondEndAdvance tailMaps⟩
 
 theorem ScopeAction.ifValue {parents : Array (Option ScopeId)} {parent : Option ScopeId}
-    (condition : ValueId) {first second : B ValueId}
+    (condition : ValueId) (sourceScope : ScopeId) {first second : B ValueId}
     (firstAction : ScopeAction parents parent first) (secondAction : ScopeAction parents parent second) :
     ScopeAction parents parent (Goose.Lower.whenLive 0 fun _ => do
       let (tb, eb) ← Goose.Lower.fork condition
@@ -405,8 +443,10 @@ theorem ScopeAction.ifValue {parents : Array (Option ScopeId)} {parent : Option 
       Goose.Lower.setCur (some eb)
       let valueF ← second
       let endF ← Goose.Lower.curBlock
-      Goose.Lower.joinValue endT valueT endF valueF) := by
-  refine ⟨advB_ifE_core condition firstAction.advance secondAction.advance, ?_⟩
+      let result ← Goose.Lower.joinValue endT valueT endF valueF
+      Goose.Lower.recordValueRootRecipe result sourceScope
+      (Pure.pure result : B ValueId)) := by
+  refine ⟨advB_ifE_core condition sourceScope firstAction.advance secondAction.advance, ?_⟩
   intro env before entry exit valid bound head
   generalize run : (Goose.Lower.whenLive 0 fun _ => do
       let (tb, eb) ← Goose.Lower.fork condition
@@ -416,7 +456,9 @@ theorem ScopeAction.ifValue {parents : Array (Option ScopeId)} {parent : Option 
       Goose.Lower.setCur (some eb)
       let valueF ← second
       let endF ← Goose.Lower.curBlock
-      Goose.Lower.joinValue endT valueT endF valueF) env before = result
+      let result ← Goose.Lower.joinValue endT valueT endF valueF
+      Goose.Lower.recordValueRootRecipe result sourceScope
+      (Pure.pure result : B ValueId)) env before = result
   obtain ⟨resultValue, after⟩ := result
   dsimp only
   cases live : before.cur with
@@ -427,8 +469,12 @@ theorem ScopeAction.ifValue {parents : Array (Option ScopeId)} {parent : Option 
   | some current =>
     rw [whenLive_some _ _ _ live] at run
     exact scope_ifBranches condition firstAction secondAction
-      (fun endT valueT endF valueF => Goose.Lower.joinValue endT valueT endF valueF)
-      (fun _ _ _ _ _ _ _ _ valid bound _ _ run => scope_joinValue valid bound run)
+      (fun endT valueT endF valueF => do
+        let result ← Goose.Lower.joinValue endT valueT endF valueF
+        Goose.Lower.recordValueRootRecipe result sourceScope
+        (Pure.pure result : B ValueId))
+      (fun _ _ _ _ _ _ _ _ valid bound _ _ run =>
+        scope_joinValue_recorded valid bound sourceScope run)
       env before entry exit valid bound head current live run
 
 theorem ScopeAction.ifArms {parents : Array (Option ScopeId)} {parent : Option ScopeId}

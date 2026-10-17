@@ -94,7 +94,7 @@ theorem returnFree_joinArms (yes no : Option BlockId) : ReturnFreeRun (joinArms 
   · refine ReturnFreeRun.bind (returnFree_newBlock []) fun pair => ?_
     exact ReturnFreeRun.bind (returnFree_patchBrs0 _ _) fun _ => returnFree_setCur _
 
-theorem returnFree_ifE_core (condition : ValueId)
+theorem returnFree_ifE_core (condition : ValueId) (sourceScope : ScopeId)
     {yes no : B ValueId} (yesRun : ReturnFreeRun yes) (noRun : ReturnFreeRun no) :
     ReturnFreeRun (whenLive 0 fun _ => do
       let (yesBlock, noBlock) ← fork condition
@@ -104,7 +104,9 @@ theorem returnFree_ifE_core (condition : ValueId)
       setCur (some noBlock)
       let noValue ← no
       let noEnd ← curBlock
-      joinValue yesEnd yesValue noEnd noValue) := by
+      let result ← joinValue yesEnd yesValue noEnd noValue
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   refine returnFree_whenLive _ fun _ => ?_
   refine ReturnFreeRun.bind (returnFree_fork condition) fun blocks => ?_
   refine ReturnFreeRun.bind (returnFree_setCur _) fun _ => ?_
@@ -113,7 +115,8 @@ theorem returnFree_ifE_core (condition : ValueId)
   refine ReturnFreeRun.bind (returnFree_setCur _) fun _ => ?_
   refine ReturnFreeRun.bind noRun fun noValue => ?_
   refine ReturnFreeRun.bind (returnFree_curBlock) fun noEnd => ?_
-  exact returnFree_joinValue yesEnd noEnd yesValue noValue
+  refine ReturnFreeRun.bind (returnFree_joinValue yesEnd noEnd yesValue noValue) fun result => ?_
+  exact ReturnFreeRun.bind (returnFree_recordValueRootRecipe result sourceScope) fun _ => returnFree_pure result
 
 theorem returnFree_ifS_some_core (condition : ValueId)
     {yes no : B ValueId} (yesRun : ReturnFreeRun yes) (noRun : ReturnFreeRun no) :

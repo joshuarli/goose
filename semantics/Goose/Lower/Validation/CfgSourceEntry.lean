@@ -66,7 +66,9 @@ theorem entry_lowerExpr (lc : Option LoopCtx) : ∀ e : Expr, EntryRun lc (lower
   | .ifE c t f => by
     simp only [lowerExpr]
     exact EntryRun.bind (entry_lowerExpr lc c) fun cv =>
-      entry_ifE_core lc cv ((entry_lowerBlock none [] true t).withLoop (advB_lowerBlock none [] true t) lc) ((entry_lowerBlock none [] true f).withLoop (advB_lowerBlock none [] true f) lc)
+      entry_ifE_core lc cv (sourceBlockScope t)
+        ((entry_lowerBlock none [] true t).withLoop (advB_lowerBlock none [] true t) lc)
+        ((entry_lowerBlock none [] true f).withLoop (advB_lowerBlock none [] true f) lc)
   | .blockE b => by
     simp only [lowerExpr]
     exact (entry_lowerBlock none [] true b).withLoop (advB_lowerBlock none [] true b) lc

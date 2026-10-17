@@ -110,7 +110,7 @@ theorem resolved_lowerExpr : ∀ e : Expr, ResolvedExprAnnotations module e → 
     try simp only [ResolvedExprAnnotations, ResolvedOptionalAnnotations] at annotations
     simp only [lowerExpr]
     exact EmittedResolvedRun.bind (resolved_lowerExpr c (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2)) fun cv =>
-      resolved_ifE_core tables cv (resolved_lowerBlock none [] true t (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2)) (resolved_lowerBlock none [] true f (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2))
+      resolved_ifE_recorded_core tables cv (sourceBlockScope t) (resolved_lowerBlock none [] true t (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2)) (resolved_lowerBlock none [] true f (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2))
   | .blockE b => by
     intro annotations
     try simp only [ResolvedExprAnnotations, ResolvedOptionalAnnotations] at annotations

@@ -31,6 +31,7 @@ structure RootBounds (results : Array (List RootRef)) (func : Func) (globalCount
     Inst.def value (.globalAddr global) ∈ block.insts → global < globalCount
   contents : ∀ row ∈ func.roots.contents, ∀ root ∈ row.2, ValidRoot globalCount func root
   slotSeeds : ∀ row ∈ func.roots.slots.getD #[], ∀ root ∈ row.2, ValidRoot globalCount func root
+  valueSeeds : ∀ row ∈ func.roots.values.getD #[], ∀ root ∈ row.2, ValidRoot globalCount func root
   results : ∀ callee global, RootRef.global global ∈ rootsAt results callee → global < globalCount
 
 theorem RootBounds.finite {results : Array (List RootRef)} {func : Func} {globalCount : Nat}
@@ -55,6 +56,8 @@ theorem RootBounds.finite {results : Array (List RootRef)} {func : Func} {global
     exact mem_finiteRootUniverse.mpr (bound.contents row rowMember root member)
   · intro row rowMember root member
     exact mem_finiteRootUniverse.mpr (bound.slotSeeds row rowMember root member)
+  · intro row rowMember root member
+    exact mem_finiteRootUniverse.mpr (bound.valueSeeds row rowMember root member)
   · intro callee global member
     exact mem_finiteRootUniverse.mpr (bound.results callee global member)
 

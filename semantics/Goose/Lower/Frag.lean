@@ -513,6 +513,57 @@ theorem recipesUnchangedB_borrowTo (mode : Mutability) (value : ValueId) :
                 | _ => exact recipesUnchangedB_freezeTo .mutable value
             | _ => exact recipesUnchangedB_freezeTo .mutable value
 
+theorem recipesUnchangedB_coerceTo (target : Ty) (value : ValueId) (org : OriginId) :
+    RecipesUnchangedB (coerceTo target value org) := by
+  unfold coerceTo
+  refine RecipesUnchangedB.bind (recipesUnchangedB_valTy value) fun source => ?_
+  cases target with
+  | ref targetMode target =>
+    cases targetMode with
+    | mutable => exact RecipesUnchangedB.pure value
+    | readOnly =>
+      cases source with
+      | view _ _ => exact RecipesUnchangedB.pure value
+      | data source =>
+        cases source with
+        | ref sourceMode _ =>
+          cases sourceMode with
+          | mutable => exact recipesUnchangedB_emitDef (.refFreeze value)
+          | readOnly => exact RecipesUnchangedB.pure value
+        | _ => exact RecipesUnchangedB.pure value
+  | slice targetMode elem =>
+    cases targetMode with
+    | mutable => exact RecipesUnchangedB.pure value
+    | readOnly =>
+      cases source with
+      | view _ _ => exact RecipesUnchangedB.pure value
+      | data source =>
+        cases source with
+        | slice sourceMode _ =>
+          cases sourceMode with
+          | mutable =>
+            exact RecipesUnchangedB.bind (recipesUnchangedB_emitDef (.sliceView value)) fun view =>
+              recipesUnchangedB_emitDef (.viewSlice .readOnly view .omitted .omitted (some org))
+          | readOnly => exact RecipesUnchangedB.pure value
+        | _ => exact RecipesUnchangedB.pure value
+  | int _ => exact RecipesUnchangedB.pure value
+  | bool => exact RecipesUnchangedB.pure value
+  | unit => exact RecipesUnchangedB.pure value
+  | arr _ _ => exact RecipesUnchangedB.pure value
+  | grow _ => exact RecipesUnchangedB.pure value
+  | growshrink _ => exact RecipesUnchangedB.pure value
+  | limited _ _ => exact RecipesUnchangedB.pure value
+  | tuple _ => exact RecipesUnchangedB.pure value
+  | structT _ _ => exact RecipesUnchangedB.pure value
+
+theorem recipesUnchangedB_coerceResult (value : ValueId) (org : OriginId) :
+    RecipesUnchangedB (coerceResult value org) := by
+  unfold coerceResult
+  exact RecipesUnchangedB.bind recipesUnchangedB_read fun env => by
+    cases env.results.head? with
+    | none => exact RecipesUnchangedB.pure _
+    | some destination => exact recipesUnchangedB_coerceTo destination value org
+
 theorem recipesUnchangedB_growOwner (value : ValueId) :
     RecipesUnchangedB (growOwner value) := by
   unfold growOwner

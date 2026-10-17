@@ -70,7 +70,8 @@ theorem complete_lowerExpr : ∀ expr : Expr, CompletionAction (lowerExpr expr)
   | .ifE condition yes no => by
     simp only [lowerExpr]
     exact CompletionAction.bind (complete_lowerExpr condition) fun value =>
-      complete_ifE value (complete_lowerBlock none [] true yes) (complete_lowerBlock none [] true no)
+      complete_ifE value (sourceBlockScope yes)
+        (complete_lowerBlock none [] true yes) (complete_lowerBlock none [] true no)
   | .blockE block => complete_lowerBlock none [] true block
   | .arrLit _ es => by
     simp only [lowerExpr]

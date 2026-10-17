@@ -212,7 +212,7 @@ theorem lowerExpr_references (le : LEnv) (count : Nat) (parent : Option Nat)
       and_true, true_and] at refs scopes
     simp only [Goose.Lower.lowerExpr]
     exact (lowerExpr_references le count parent condition refs.1.1 scopes.1.1).bind fun value =>
-      LS.SourceSymbolsRun.ifValue value
+      LS.SourceSymbolsRun.ifValue value (sourceBlockScope yes)
         (lowerBlock_references le count parent none [] true yes refs.1.2 scopes.1.2 (by simp))
         (lowerBlock_references le count parent none [] true no refs.2 scopes.2 (by simp))
 termination_by sizeOf expr

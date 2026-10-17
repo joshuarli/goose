@@ -64,7 +64,9 @@ theorem returnFree_lowerExpr : ∀ e : Expr, ReturnFreeExpr e → ReturnFreeRun 
   | .ifE c t f, free => by
     simp only [lowerExpr]
     exact ReturnFreeRun.bind (returnFree_lowerExpr c (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun cv =>
-      returnFree_ifE_core cv (returnFree_lowerBlock none [] true t (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) (returnFree_lowerBlock none [] true f (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2))
+      returnFree_ifE_core cv (sourceBlockScope t)
+        (returnFree_lowerBlock none [] true t (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2))
+        (returnFree_lowerBlock none [] true f (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2))
   | .blockE b, free => by
     simp only [lowerExpr]
     exact returnFree_lowerBlock none [] true b (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)

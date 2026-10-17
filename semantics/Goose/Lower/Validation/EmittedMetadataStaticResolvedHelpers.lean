@@ -223,6 +223,12 @@ theorem resolved_lowerEach (regrow : Bool) (owner : Option ValueId) (sampled : V
   exact EmittedResolvedRun.bind (resolved_eachLen tables _ _ _) fun n => EmittedResolvedRun.bind (resolved_emitDef tables _ (fun _ => trivial)) fun c =>
     resolved_loopBody tables c hbody (resolved_rangeBack tables _ _ _)
 
+omit tables in
+theorem resolved_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    EmittedResolvedRun module le (recordValueRootRecipe value sourceScope) := by
+  apply EmittedResolvedRun.of_unchanged
+  all_goals intro before; rw [recordValueRootRecipe_run]
+
 theorem resolved_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : EmittedResolvedRun module le a1) (h2 : EmittedResolvedRun module le a2) :
     EmittedResolvedRun module le (whenLive 0 fun _ => do
       let (tb, eb) ← fork cv
@@ -238,6 +244,27 @@ theorem resolved_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : EmittedResolv
     EmittedResolvedRun.bind (resolved_setCur module le _) fun _ => EmittedResolvedRun.bind h1 fun _ =>
     EmittedResolvedRun.bind (resolved_curBlock module le) fun _ => EmittedResolvedRun.bind (resolved_setCur module le _) fun _ =>
     EmittedResolvedRun.bind h2 fun _ => EmittedResolvedRun.bind (resolved_curBlock module le) fun _ => resolved_joinValue tables _ _ _ _
+
+theorem resolved_ifE_recorded_core (cv : ValueId) (sourceScope : ScopeId) {a1 a2 : B ValueId} (h1 : EmittedResolvedRun module le a1) (h2 : EmittedResolvedRun module le a2) :
+    EmittedResolvedRun module le (whenLive 0 fun _ => do
+      let (tb, eb) ← fork cv
+      setCur (some tb)
+      let vt ← a1
+      let endT ← curBlock
+      setCur (some eb)
+      let vf ← a2
+      let endF ← curBlock
+      let value ← joinValue endT vt endF vf
+      recordValueRootRecipe value sourceScope
+      Pure.pure value) := by
+  exact resolved_whenLive tables _ fun _ =>
+    EmittedResolvedRun.bind (resolved_fork tables _) fun ⟨_, _⟩ =>
+    EmittedResolvedRun.bind (resolved_setCur module le _) fun _ => EmittedResolvedRun.bind h1 fun _ =>
+    EmittedResolvedRun.bind (resolved_curBlock module le) fun _ => EmittedResolvedRun.bind (resolved_setCur module le _) fun _ =>
+    EmittedResolvedRun.bind h2 fun _ => EmittedResolvedRun.bind (resolved_curBlock module le) fun _ =>
+      EmittedResolvedRun.bind (resolved_joinValue tables _ _ _ _) fun value =>
+      EmittedResolvedRun.bind (resolved_recordValueRootRecipe (module := module) (le := le) value sourceScope) fun _ =>
+      EmittedResolvedRun.pure module le value
 
 theorem resolved_ifS_some_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : EmittedResolvedRun module le a1) (h2 : EmittedResolvedRun module le a2) :
     EmittedResolvedRun module le (whenLive () fun _ => do

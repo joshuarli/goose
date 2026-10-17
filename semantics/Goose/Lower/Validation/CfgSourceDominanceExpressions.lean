@@ -90,7 +90,7 @@ theorem ssa_ifExpr (loop : Option LoopCtx) {condition : Expr} {thenBlock elseBlo
     (thenSource : SSARun loop [] (fun result => [result]) (lowerBlock none [] true thenBlock))
     (elseSource : SSARun loop [] (fun result => [result]) (lowerBlock none [] true elseBlock)) :
     SSARun loop [] (fun result => [result]) (lowerExpr (.ifE condition thenBlock elseBlock)) :=
-  conditionSource.bind fun value => ssa_ifE_core loop value thenSource elseSource
+  conditionSource.bind fun value => ssa_ifE_core loop value (sourceBlockScope thenBlock) thenSource elseSource
 
 theorem ssa_exprs_cons (loop : Option LoopCtx) {expr : Expr} {rest : List Expr}
     (source : SSARun loop [] (fun result => [result]) (lowerExpr expr))

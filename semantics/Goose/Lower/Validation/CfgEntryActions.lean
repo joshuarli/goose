@@ -85,6 +85,13 @@ theorem entry_emitTerm (loop : Option LoopCtx) (term : Term)
   intro env before bounded targets
   exact bounded.emitTerm term (references before targets) env
 
+theorem entry_recordValueRootRecipe (loop : Option LoopCtx) (value : ValueId) (sourceScope : ScopeId) :
+    EntryRun loop (recordValueRootRecipe value sourceScope) := by
+  apply EntryRun.of_targets (advB_recordValueRootRecipe value sourceScope)
+  intro env before bounded _
+  rw [recordValueRootRecipe_run]
+  exact bounded.of_blocks rfl
+
 theorem entry_newBlock (loop : Option LoopCtx) (types : List VTy) :
     EntryRun loop (newBlock types) := by
   intro env before result after run bounded targets

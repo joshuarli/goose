@@ -89,13 +89,10 @@ theorem reachable_checkReturned_of_value_bounds {module : GIR.Module} {callees :
     (values : ∀ value, (flowAt final.values value).NormalizedWithin func
       ((rootsAt provenance.vals value).flatMap func.expandParameterRoot)) :
     checkReturned func final = true := by
-  have initial : (start func types).returned = .known (declared.eraseDups.map Atom.ofRootRef) := by
-    cases entry : func.blocks[0]? <;> simp [start, entry, declaredReturn, result, reference, row]
-  obtain ⟨roots, known, members⟩ := normalize_rootMap_dedup_known func declared
   have initialBound : (start func types).returned.NormalizedWithin func
       (declared.flatMap func.expandParameterRoot) := by
-    rw [initial]
-    exact Or.inr ⟨roots, known, fun root member => (members root).mp member⟩
+    rw [start_returned]
+    exact Or.inr ⟨[], rfl, by simp⟩
   have finalBound := reachable_returned_within reachable initialBound (by
     intro block member value origin instruction
     apply (values value).mono
@@ -106,7 +103,7 @@ theorem reachable_checkReturned_of_value_bounds {module : GIR.Module} {callees :
     rw [row, Option.getD_some] at permitted
     exact List.mem_flatMap.mpr ⟨source, permitted, expanded⟩)
   apply checkReturned_of_normalized_bound result reference row finalBound
-  exact reachable.extends.returned.ready (by rw [initial]; simp)
+  exact reachable.extends.returned.ready (by rw [start_returned]; simp)
 
 #print axioms reachable_checkReturned_of_value_bounds
 #print axioms round_returned_within

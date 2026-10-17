@@ -4,7 +4,7 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-theorem paths_ifE_core (condition : ValueId) {thenAction elseAction : B ValueId}
+theorem paths_ifE_core (condition : ValueId) (sourceScope : ScopeId) {thenAction elseAction : B ValueId}
     (thenAdvance : AdvB thenAction) (elseAdvance : AdvB elseAction)
     (thenPaths : BoundedRun ReachableBuilder thenAction)
     (elsePaths : BoundedRun ReachableBuilder elseAction) :
@@ -16,7 +16,9 @@ theorem paths_ifE_core (condition : ValueId) {thenAction elseAction : B ValueId}
       setCur (some elseBlock)
       let elseValue ← elseAction
       let endElse ← curBlock
-      joinValue endThen thenValue endElse elseValue) := by
+      let value ← joinValue endThen thenValue endElse elseValue
+      recordValueRootRecipe value sourceScope
+      pure value) := by
   intro env before result after run paths bounded
   cases current : before.cur with
   | none =>
@@ -29,7 +31,8 @@ theorem paths_ifE_core (condition : ValueId) {thenAction elseAction : B ValueId}
     obtain ⟨⟨thenBlock, elseBlock⟩, forked, forkRun, _, thenStart, thenStartRun,
       thenValue, thenEnd, thenRun, endThen, thenRead, thenReadRun,
       _, elseStart, elseStartRun, elseValue, elseEnd, elseRun,
-      endElse, elseRead, elseReadRun, joinRun⟩ := run
+      endElse, elseRead, elseReadRun, joinedValue, joinState, joinRun,
+      _, recipeState, recipeRun, pureRun⟩ := run
     obtain ⟨thenCurrent, thenSame⟩ := curBlock_eq thenReadRun
     obtain ⟨elseCurrent, elseSame⟩ := curBlock_eq elseReadRun
     subst thenRead
@@ -67,7 +70,11 @@ theorem paths_ifE_core (condition : ValueId) {thenAction elseAction : B ValueId}
       exact elseEndBound block (elseCurrent.symm.trans present)
     have joined := elseEndPaths.joinValue endThen endElse thenValue elseValue thenBound elseBound env
     rw [joinRun] at joined
-    exact joined
+    rw [recordValueRootRecipe_run] at recipeRun
+    obtain ⟨_, rfl⟩ := Prod.mk.inj recipeRun
+    rw [pure_run] at pureRun
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj pureRun
+    exact joined.of_blocks (by simp)
 
 theorem paths_ifS_some_core (condition : ValueId) {thenAction elseAction : B ValueId}
     (thenAdvance : AdvB thenAction) (elseAdvance : AdvB elseAction)

@@ -257,8 +257,8 @@ private def trackedQuery (emptyInitial safePayload : Bool) : GIR.ReplacementRoot
     (GIR.replacementQueries input receiver (receiver.valueTypes input)).value 11
 #guard (trackedQuery true false).any (fun roots => roots.contains (.global 0))
 #guard (trackedQuery false false).any (fun roots => roots.contains (.global 0))
-#guard match GIR.validate (trackedLocalContents true false) with | .error e => e.code == .v060 | _ => false
-#guard match GIR.validate (trackedLocalContents false false) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (trackedLocalContents true false) with | .error e => e.code == .v050 | _ => false
+#guard match GIR.validate (trackedLocalContents false false) with | .error e => e.code == .v050 | _ => false
 #guard trackedQuery true true == some [.global 1]
 #guard trackedQuery false true == some [.global 1]
 #guard (GIR.validate (trackedLocalContents true true)).toBool

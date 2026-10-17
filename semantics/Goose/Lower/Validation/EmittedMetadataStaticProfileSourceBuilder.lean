@@ -31,6 +31,13 @@ theorem EmittedProfileRun.of_blocks_eq {profile : ArtifactProfile} {le : LEnv} {
   change after.blocks = before.blocks at blocks
   exact checked inst (by simpa only [LS.insts, blocks] using member)
 
+theorem EmittedProfileRun.recordValueRootRecipe {profile : ArtifactProfile} {le : LEnv}
+    (value : ValueId) (sourceScope : ScopeId) :
+    EmittedProfileRun profile le (Goose.Lower.recordValueRootRecipe value sourceScope) := by
+  apply EmittedProfileRun.of_blocks_eq
+  intro before
+  rw [recordValueRootRecipe_run]
+
 theorem EmittedProfile.appendInst {profile : ArtifactProfile} {before : LS}
     (checked : EmittedProfile profile before) (block : BlockId) (inst : Inst)
     (allowed : EmittedProfileInst profile inst) : EmittedProfile profile (before.appendInst block inst) := by

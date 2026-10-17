@@ -12,6 +12,20 @@ structure StorageWalkConfiguration (slots : Array Slot)
   bounded : TargetsBounded state
   edges : ScopeEdges entry exit state
 
+theorem StorageWalkConfiguration.of_state {slots : Array Slot}
+    {entry exit : BlockId → List ScopeId} {before after : LS}
+    (config : StorageWalkConfiguration slots entry exit before)
+    (blocks : after.blocks = before.blocks) (current : after.cur = before.cur)
+    (stack : after.stack = before.stack) : StorageWalkConfiguration slots entry exit after := by
+  refine ⟨?_, config.openCurrent.of_state blocks current, config.bounded.of_blocks blocks,
+    config.edges.of_blocks blocks⟩
+  constructor
+  · simpa only [StorageWalkBlockTraces, blocks] using config.builder.traces
+  · intro block live
+    rw [current] at live
+    rw [stack]
+    exact config.builder.current block live
+
 theorem StorageWalkConfiguration.emitDef {slots : Array Slot}
     {entry exit : BlockId → List ScopeId} {before : LS}
     (config : StorageWalkConfiguration slots entry exit before) (op : Op) (env : LEnv)

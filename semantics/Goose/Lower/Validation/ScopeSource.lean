@@ -94,7 +94,8 @@ theorem scope_lowerExpr (parents : Array (Option ScopeId)) (parent : Option Scop
     simp only [exprScopes, ScopeTableContains.append] at source
     simp only [lowerExpr]
     exact (scope_lowerExpr parents parent condition source.1.1).bind fun value =>
-      ScopeAction.ifValue value (scope_lowerBlock parents parent none [] true yes source.1.2)
+      ScopeAction.ifValue value (sourceBlockScope yes)
+        (scope_lowerBlock parents parent none [] true yes source.1.2)
         (scope_lowerBlock parents parent none [] true no source.2)
   | .blockE block, source => by
     simp only [lowerExpr]

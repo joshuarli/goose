@@ -55,6 +55,10 @@ theorem unreachable_eachElemValue (slot : VarId) (byRef : Bool)
         | exact unreachable_pure _
         | exact unreachable_borrowTo _ _
 
+theorem unreachable_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    UnreachableRun (recordValueRootRecipe value sourceScope) :=
+  UnreachableRun.of_blocks (by intros; rw [recordValueRootRecipe_run])
+
 theorem unreachable_fork (condition : ValueId) : UnreachableRun (fork condition) := by
   unfold fork
   refine UnreachableRun.bind (unreachable_newBlock []) fun yes => ?_
@@ -94,7 +98,7 @@ theorem unreachable_joinArms (yes no : Option BlockId) : UnreachableRun (joinArm
   · refine UnreachableRun.bind (unreachable_newBlock []) fun pair => ?_
     exact UnreachableRun.bind (unreachable_patchBrs0 _ _) fun _ => unreachable_setCur _
 
-theorem unreachable_ifE_core (condition : ValueId)
+theorem unreachable_ifE_core (condition : ValueId) (sourceScope : ScopeId)
     {yes no : B ValueId} (yesRun : UnreachableRun yes) (noRun : UnreachableRun no) :
     UnreachableRun (whenLive 0 fun _ => do
       let (yesBlock, noBlock) ← fork condition
@@ -104,7 +108,9 @@ theorem unreachable_ifE_core (condition : ValueId)
       setCur (some noBlock)
       let noValue ← no
       let noEnd ← curBlock
-      joinValue yesEnd yesValue noEnd noValue) := by
+      let value ← joinValue yesEnd yesValue noEnd noValue
+      recordValueRootRecipe value sourceScope
+      pure value) := by
   refine unreachable_whenLive _ fun _ => ?_
   refine UnreachableRun.bind (unreachable_fork condition) fun blocks => ?_
   refine UnreachableRun.bind (unreachable_setCur _) fun _ => ?_
@@ -113,7 +119,9 @@ theorem unreachable_ifE_core (condition : ValueId)
   refine UnreachableRun.bind (unreachable_setCur _) fun _ => ?_
   refine UnreachableRun.bind noRun fun noValue => ?_
   refine UnreachableRun.bind (unreachable_curBlock) fun noEnd => ?_
-  exact unreachable_joinValue yesEnd noEnd yesValue noValue
+  refine UnreachableRun.bind (unreachable_joinValue yesEnd noEnd yesValue noValue) fun value => ?_
+  exact UnreachableRun.bind (unreachable_recordValueRootRecipe value sourceScope) fun _ =>
+    unreachable_pure value
 
 theorem unreachable_ifS_some_core (condition : ValueId)
     {yes no : B ValueId} (yesRun : UnreachableRun yes) (noRun : UnreachableRun no) :
