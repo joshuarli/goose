@@ -16,25 +16,45 @@ theorem rootsOverlap_false_of_disjoint {left right : List RootRef}
   obtain ⟨alias, aliasMember, overlaps⟩ := List.any_eq_true.mp overlapping
   simpa [disjoint root member alias aliasMember] using overlaps
 
-def ReplacementApart (provenance : Prov) (owner : ValueId) (roots : List RootRef) : Prop :=
-  roots ≠ [] ∧ rootsAt provenance.vals owner ≠ [] ∧
-    DemandRootsDisjoint roots (rootsAt provenance.vals owner)
+def ReplacementApart (queries : ReplacementQueries) (owner : ValueId)
+    (roots : ReplacementRootQuery) : Prop :=
+  roots = some [] ∨ queries.value owner = some [] ∨
+    ∃ left right, roots = some left ∧ queries.value owner = some right ∧
+      DemandRootsDisjoint left right
 
-theorem killEmptyFacts_retains {facts : List ValueId} {roots : List RootRef}
-    {provenance : Prov} {owner : ValueId} (present : owner ∈ facts)
+theorem replacementOverlap_false_of_apart {queries : ReplacementQueries} {owner : ValueId}
+    {roots : ReplacementRootQuery} (apart : ReplacementApart queries owner roots) :
+    replacementOverlap roots (queries.value owner) = false := by
+  rcases apart with empty | empty | ⟨left, right, rfl, equal, disjoint⟩
+  · simp [empty, replacementOverlap]
+  · cases roots with
+    | none => simp [empty, replacementOverlap]
+    | some roots => cases roots <;> simp [empty, replacementOverlap]
+  · rw [equal]
+    cases left with
+    | nil => rfl
+    | cons head tail =>
+      cases right with
+      | nil => rfl
+      | cons other rest =>
+        simp only [replacementOverlap]
+        apply List.any_eq_false.mpr
+        intro root member overlapping
+        obtain ⟨alias, aliasMember, overlaps⟩ := List.any_eq_true.mp overlapping
+        simpa [disjoint root member alias aliasMember] using overlaps
+
+theorem killEmptyFacts_retains {facts : List ValueId} {roots : ReplacementRootQuery}
+    {provenance : ReplacementQueries} {owner : ValueId} (present : owner ∈ facts)
     (apart : ReplacementApart provenance owner roots) :
     owner ∈ killEmptyFacts facts roots provenance := by
-  have rootsNotEmpty : roots.isEmpty = false := List.isEmpty_eq_false_iff.mpr apart.1
-  have aliasesNotEmpty : (rootsAt provenance.vals owner).isEmpty = false :=
-    List.isEmpty_eq_false_iff.mpr apart.2.1
-  simp only [killEmptyFacts, rootsNotEmpty, Bool.false_eq_true, ite_false, List.mem_filter]
-  exact ⟨present, by simp [aliasesNotEmpty, rootsOverlap_false_of_disjoint apart.1 apart.2.1 apart.2.2]⟩
+  simp only [killEmptyFacts, List.mem_filter]
+  exact ⟨present, by simp [replacementOverlap_false_of_apart apart]⟩
 
 theorem killEmptyFactSources_retains {facts operands : List ValueId}
-    {types : Array (Option VTy)} {provenance : Prov} {owner : ValueId}
+    {types : Array (Option VTy)} {provenance : ReplacementQueries} {owner : ValueId}
     (present : owner ∈ facts)
     (apart : ∀ operand ∈ operands, valRefLike types operand = true →
-      ReplacementApart provenance owner (rootsAt provenance.vals operand)) :
+      ReplacementApart provenance owner (provenance.value operand)) :
     owner ∈ killEmptyFactSources facts operands types provenance := by
   induction operands generalizing facts with
   | nil => exact present
@@ -47,7 +67,7 @@ theorem killEmptyFactSources_retains {facts operands : List ValueId}
       exact apart next (by simp [member]) reference
 
 theorem transferEmptyInst_clear_has_owner (module : GIR.Module) (types : Array (Option VTy))
-    (provenance : Prov) (facts : List ValueId) (owner : ValueId) (origin : Option OriginId) :
+    (provenance : ReplacementQueries) (facts : List ValueId) (owner : ValueId) (origin : Option OriginId) :
     owner ∈ transferEmptyInst module types provenance facts (.eff (.clear owner origin)) := by
   simp only [transferEmptyInst, emptyFactSourceOperands, killEmptyFactSources, List.foldl_nil]
   split

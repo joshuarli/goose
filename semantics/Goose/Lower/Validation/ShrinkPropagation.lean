@@ -70,7 +70,7 @@ theorem KnownStatesPreserved.known {before after : Array (Option (List ValueId))
   exact preserved.2 target facts present
 
 theorem emptyFactRound_edge_known (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (states : Array (Option (List ValueId)))
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (states : Array (Option (List ValueId)))
     (size : states.size = func.blocks.size) {source target : BlockId} {body : GIR.Block}
     (sourceAt : func.blocks[source]? = some body) (sourceKnown : EmptyStateKnown states source)
     {args : List ValueId} (edge : (target, args) ∈ body.terms.flatMap termEdges)
@@ -192,7 +192,7 @@ theorem emptyFactRound_edge_known (module : GIR.Module) (func : Func)
         nat_omega
 
 theorem emptyFactsAtBlocks_size (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (nonempty : 0 < func.blocks.size) :
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (nonempty : 0 < func.blocks.size) :
     (emptyFactsAtBlocks module func types provenance).size = func.blocks.size := by
   rw [emptyFactsAtBlocks_eq_rounds module func types provenance nonempty]
   apply dataflowRounds_invariant (property := fun states : Array (Option (List ValueId)) => states.size = func.blocks.size)
@@ -201,7 +201,7 @@ theorem emptyFactsAtBlocks_size (module : GIR.Module) (func : Func)
   · simp
 
 theorem emptyFactsAtBlocks_edge_known (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (nonempty : 0 < func.blocks.size)
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (nonempty : 0 < func.blocks.size)
     (operands : ∀ block ∈ func.blocks.toList, ∀ inst ∈ block.insts,
       ∀ value ∈ inst.uses, value < func.numValues)
     (parameters : ∀ block ∈ func.blocks.toList, ∀ param ∈ block.params, param.1 < func.numValues)
@@ -233,7 +233,7 @@ theorem successor_has_edge (term : Term) {target : BlockId} (successor : target 
   | exit value origin => simp [Term.successors] at successor
 
 theorem emptyFactsAtBlocks_known_of_reachable (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (nonempty : 0 < func.blocks.size)
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (nonempty : 0 < func.blocks.size)
     (operands : ∀ block ∈ func.blocks.toList, ∀ inst ∈ block.insts,
       ∀ value ∈ inst.uses, value < func.numValues)
     (parameters : ∀ block ∈ func.blocks.toList, ∀ param ∈ block.params, param.1 < func.numValues)

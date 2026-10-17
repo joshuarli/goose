@@ -780,12 +780,39 @@ def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
 def rootsOverlap (a b : List RootRef) : Bool :=
   a.isEmpty || b.isEmpty || a.any (fun x => b.any (Goose.Core.rootsMayOverlap x))
 
-def killEmptyFacts (facts : List ValueId) (roots : List RootRef) (p : Prov) : List ValueId :=
-  if roots.isEmpty then [] else facts.filter fun fact =>
-    let aliases := rootsAt p.vals fact
-    !aliases.isEmpty && !rootsOverlap roots aliases
+abbrev ReplacementRootQuery := Option (List RootRef)
 
-def callSummaryRoots (m : Module) (p : Prov) (fn : FnId) (args : List ValueId) : Option (List RootRef) :=
+structure ReplacementQueries where
+  parameters : Array (Nat × List RootRef)
+  values : Array (List RootRef)
+
+def replacementQueries (f : Func) (p : Prov) : ReplacementQueries :=
+  ⟨f.roots.params, p.vals⟩
+
+def ReplacementQueries.expand (queries : ReplacementQueries) : RootRef → List RootRef
+  | .param index =>
+    match queries.parameters.find? (·.1 == index) with
+    | some (_, roots) => roots
+    | none => [.param index]
+  | root => [root]
+
+def ReplacementQueries.value (queries : ReplacementQueries) (value : ValueId) : ReplacementRootQuery :=
+  match rootsAt queries.values value with
+  | [] => none
+  | roots => some (roots.flatMap queries.expand)
+
+def replacementOverlap (left right : ReplacementRootQuery) : Bool :=
+  match left, right with
+  | some [], _ | _, some [] => false
+  | some left, some right => left.any fun root => right.any (Goose.Core.rootsMayOverlap root)
+  | _, _ => true
+
+def killEmptyFacts (facts : List ValueId) (roots : ReplacementRootQuery)
+    (queries : ReplacementQueries) : List ValueId :=
+  facts.filter fun fact => !replacementOverlap roots (queries.value fact)
+
+def callSummaryRoots (m : Module) (queries : ReplacementQueries) (fn : FnId)
+    (args : List ValueId) : ReplacementRootQuery :=
   match m.funcs[fn]? with
   | none => none
   | some callee =>
@@ -798,25 +825,23 @@ def callSummaryRoots (m : Module) (p : Prov) (fn : FnId) (args : List ValueId) :
         match target with
         | .global g => pure (unionRoots roots [.global g])
         | .param i =>
-          match args[i]? with
-          | none => none
-          | some arg =>
-            let actual := rootsAt p.vals arg
-            if actual.isEmpty then none else
-              let annotated := ((callee.roots.params.find? (·.1 == i)).map (·.2)).getD [] |>.filterMap fun
-                | .global g => some (.global g)
-                | _ => none
-              pure (unionRoots roots (actual ++ annotated))
+          let arg ← args[i]?
+          let actual ← queries.value arg
+          let annotated := ((callee.roots.params.find? (·.1 == i)).map (·.2)).getD [] |>.filterMap fun
+            | .global g => some (.global g)
+            | _ => none
+          pure (unionRoots roots (actual ++ annotated))
 
-def callDependencies (m : Module) (vt : Array (Option VTy)) (p : Prov)
-    (fn : FnId) (args : List ValueId) : Option (List RootRef) :=
-  let argumentRoots := args.foldlM (init := []) fun roots arg => do
-    if !valRefLike vt arg then pure roots else
-      let actual := rootsAt p.vals arg
-      if actual.isEmpty then none else pure (unionRoots roots actual)
-  argumentRoots.bind fun roots => do
-    let touched ← callSummaryRoots m p fn args
-    pure (unionRoots roots touched)
+def callDependencies (m : Module) (vt : Array (Option VTy)) (queries : ReplacementQueries)
+    (fn : FnId) (args : List ValueId) : ReplacementRootQuery :=
+  if args.any (fun arg => valRefLike vt arg && queries.value arg == some []) then some [] else
+    let argumentRoots := args.foldlM (init := []) fun roots arg => do
+      if !valRefLike vt arg then pure roots else
+        let actual ← queries.value arg
+        pure (unionRoots roots actual)
+    argumentRoots.bind fun roots => do
+      let touched ← callSummaryRoots m queries fn args
+      pure (unionRoots roots touched)
 
 /-- Values evaluated as sources by an instruction. Mutation targets are handled
 separately, calls use their summary, and edge arguments only transport facts
@@ -834,35 +859,32 @@ def emptyFactSourceOperands : Inst → List ValueId
   | .term _ => []
 
 def killEmptyFactSources (facts : List ValueId) (operands : List ValueId)
-    (vt : Array (Option VTy)) (p : Prov) : List ValueId :=
+    (vt : Array (Option VTy)) (p : ReplacementQueries) : List ValueId :=
   operands.foldl (fun current operand =>
-    if valRefLike vt operand then killEmptyFacts current (rootsAt p.vals operand) p
+    if valRefLike vt operand then killEmptyFacts current (p.value operand) p
     else current) facts
 
-def transferEmptyInst (m : Module) (vt : Array (Option VTy)) (p : Prov)
+def transferEmptyInst (m : Module) (vt : Array (Option VTy)) (p : ReplacementQueries)
     (facts : List ValueId) (inst : Inst) : List ValueId := Id.run do
   let afterReceiver := match inst with
     | .eff (.clear r _) => if facts.contains r then facts else facts ++ [r]
     | .def _ (.call fn args _) =>
-      match callDependencies m vt p fn args with
-      | none => []
-      | some [] => facts
-      | some roots => killEmptyFacts facts roots p
+      killEmptyFacts facts (callDependencies m vt p fn args) p
     | .def _ (.load r) | .def _ (.snapshot _ r) | .def _ (.arrayLen r)
     | .def _ (.sliceView r) | .def _ (.viewLen r) | .def _ (.viewSlice _ r ..)
     | .def _ (.indexChecked r ..) | .def _ (.indexProven r ..)
     | .def _ (.push r ..) | .def _ (.pop r ..)
     | .eff (.store r ..) | .eff (.append r ..) | .eff (.popN r ..)
-    | .eff (.resize r ..) | .eff (.replace r ..) => killEmptyFacts facts (rootsAt p.vals r) p
+    | .eff (.resize r ..) | .eff (.replace r ..) => killEmptyFacts facts (p.value r) p
     | _ => facts
   let afterSources := killEmptyFactSources afterReceiver (emptyFactSourceOperands inst) vt p
   match inst with
   | .def res _ =>
-    if valRefLike vt res then pure (killEmptyFacts afterSources (rootsAt p.vals res) p)
+    if valRefLike vt res then pure (killEmptyFacts afterSources (p.value res) p)
     else pure afterSources
   | _ => pure afterSources
 
-def transferEmptyBlock (m : Module) (vt : Array (Option VTy)) (p : Prov)
+def transferEmptyBlock (m : Module) (vt : Array (Option VTy)) (p : ReplacementQueries)
     (facts : List ValueId) (b : Block) : List ValueId :=
   b.insts.foldl (transferEmptyInst m vt p) facts
 
@@ -878,7 +900,7 @@ def transferEmptyEdge (f : Func) (facts : List ValueId) (target : BlockId)
       if current.contains argument && !current.contains parameter then current ++ [parameter]
       else current) facts
 
-def emptyFactRound (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
+def emptyFactRound (m : Module) (f : Func) (vt : Array (Option VTy)) (p : ReplacementQueries)
     (states : Array (Option (List ValueId))) : Array (Option (List ValueId)) × Bool := Id.run do
   let mut states := states
   let mut changed := false
@@ -902,7 +924,7 @@ def emptyFactRound (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
             | none => pure ()
   return (states, changed)
 
-def emptyFactsAtBlocks (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) :
+def emptyFactsAtBlocks (m : Module) (f : Func) (vt : Array (Option VTy)) (p : ReplacementQueries) :
     Array (Option (List ValueId)) := Id.run do
   let mut states : Array (Option (List ValueId)) := Array.replicate f.blocks.size none
   if !f.blocks.isEmpty then states := states.set! 0 (some [])
@@ -915,7 +937,7 @@ def emptyFactsAtBlocks (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Pr
     fuel := fuel - 1
   return states
 
-def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) (validRuns : Array Bool)
+def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : ReplacementQueries) (validRuns : Array Bool)
     (label : String) (facts : List ValueId) (inst : Inst) : Check Unit := do
   match inst with
   | .eff (.replace owner run _) =>
@@ -928,14 +950,10 @@ def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) (v
       violation .v060 s!"{label}: x_replace owner was not cleared on every path"
   | _ => pure ()
 
-def replacementProvenance (f : Func) (p : Prov) : Prov :=
-  { slots := p.slots.map fun roots => roots.flatMap f.expandParameterRoot
-    vals := p.vals.map fun roots => roots.flatMap f.expandParameterRoot }
-
 def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Option VTy))
     (p : Prov) : Check Unit := do
   if m.profile == .shrink then
-    let p := replacementProvenance f p
+    let p := replacementQueries f p
     let validRuns := freshRuns f vt
     let states := emptyFactsAtBlocks m f vt p
     for h : b in [0:f.blocks.size] do

@@ -55,4 +55,34 @@ private def sharedGlobal : Core.Module :=
 #guard rejectedGir (lower sharedGlobal) .v060
 #guard GIR.rootsOverlap [.param 0] [.param 1]
 
+private def emptyParameterContext : Core.Module :=
+  { module with
+    impls := module.impls.modify 0 fun impl => { impl with body := .mk 0 [] none },
+    contexts := module.contexts.modify 1 fun context =>
+      { context with varRoots := [(0, [.global 0]), (1, [])] } }
+
+#guard (Core.validate emptyParameterContext).toBool
+#guard (GIR.validate (lower emptyParameterContext)).toBool
+#guard GIR.replacementOverlap none (some [.global 0])
+#guard GIR.replacementOverlap none none
+#guard !GIR.replacementOverlap (some []) none
+#guard !GIR.replacementOverlap (some []) (some [])
+#guard (GIR.ReplacementQueries.mk #[(0, [])] #[[.param 0]]).value 0 == some []
+#guard (GIR.ReplacementQueries.mk #[(0, [])] #[[]]).value 0 == none
+#guard (GIR.ReplacementQueries.mk #[] #[[.param 0]]).value 0 == some [.param 0]
+
+private def unknownQueries : GIR.ReplacementQueries := ⟨#[], #[[.global 0], []]⟩
+private def queryTypes : Array (Option GIR.VTy) :=
+  #[some (.data (.ref .mutable (.growshrink (.int .i64)))),
+    some (.data (.ref .readOnly (.int .i64)))]
+
+#guard GIR.killEmptyFacts [0] (unknownQueries.value 1) unknownQueries == []
+#guard GIR.transferEmptyInst (lower module) queryTypes unknownQueries [0] (.def 2 (.load 1)) == []
+#guard GIR.transferEmptyInst (lower module) queryTypes unknownQueries [0] (.def 2 (.call 99 [1] none)) == []
+#guard GIR.transferEmptyInst (lower module) queryTypes unknownQueries [0] (.def 2 (.call 99 [] none)) == []
+
+private def emptyQueries : GIR.ReplacementQueries := ⟨#[(1, [])], #[[.global 0], [.param 1]]⟩
+#guard GIR.transferEmptyInst (lower module) queryTypes emptyQueries [0] (.def 2 (.load 1)) == [0]
+#guard GIR.transferEmptyInst (lower module) queryTypes emptyQueries [0] (.def 2 (.call 99 [1] none)) == [0]
+
 end Goose.Lower.Validation.ReplacementChecks
