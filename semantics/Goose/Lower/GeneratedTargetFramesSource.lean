@@ -19,7 +19,7 @@ theorem generatedTargetFrame_lowerExpr (lc : Option LoopCtx) : ∀ e : Expr, Gen
     exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerPlace lc p) fun _ => generatedTargetFrame_emitDef lc _
   | .ref m p => by
     simp only [lowerExpr]
-    exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerPlace lc p) fun r => generatedTargetFrame_freezeTo lc m r
+    exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerPlace lc p) fun r => generatedTargetFrame_borrowTo lc m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerView lc v) fun _ => GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerBound lc lo) fun _ =>
@@ -89,7 +89,7 @@ theorem generatedTargetFrame_lowerArg (lc : Option LoopCtx) : ∀ a : Arg, Gener
   | .byVal e => by simp only [lowerArg]; exact generatedTargetFrame_lowerExpr lc e
   | .byRef m p => by
     simp only [lowerArg]
-    exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerPlace lc p) fun r => generatedTargetFrame_freezeTo lc m r
+    exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerPlace lc p) fun r => generatedTargetFrame_borrowTo lc m r
 
 theorem generatedTargetFrame_lowerArgs (lc : Option LoopCtx) : ∀ as : List Arg, GeneratedTargetFrameRun lc (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact generatedTargetFrame_pure lc _
