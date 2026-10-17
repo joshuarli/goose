@@ -375,6 +375,12 @@ def certificate (m : Module) (types : Array (Array (Option VTy))) (states : Arra
       global.init.params.isEmpty && global.init.results == [global.ty] &&
       (closeFunction m states global.init (global.init.valueTypes m)).isSome
 
+def ownerTouches (m : Module) (roots : List RootRef) : List RootRef :=
+  if storageClosed m then roots.filter fun
+    | .global index => (m.globals[index]?).all fun global => global.ty.ownerElem?.isSome
+    | .local _ | .param _ => true
+  else roots
+
 def callQuery (m : Module) (f : Func) (vt : Array (Option VTy))
     (states : Array State) (state : State) (fn : FnId) (args : List ValueId) : Option (List RootRef) :=do
   let env : TyEnv := { m.tyEnv f with vals := vt }
@@ -386,7 +392,7 @@ def callQuery (m : Module) (f : Func) (vt : Array (Option VTy))
       let actual ← normalize f (flowAt state.values value)
       pure (unionRoots roots actual)
   let touched ← normalize f (substitute f state args (publicTouches effects.touched))
-  pure (unionRoots arguments touched)
+  pure (unionRoots arguments (ownerTouches m touched))
 
 
 def mutationQuery (m : Module) (f : Func) (vt : Array (Option VTy))

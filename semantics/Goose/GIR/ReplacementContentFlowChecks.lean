@@ -63,7 +63,7 @@ private def scalar := function "scalar" [] [element] #[]
 private def scalarCaller := function "scalarCaller" [] [] #[]
   [.def 0 (.call 1 [] (some 0)), .term (.ret [] (some 0))]
 private def scalarModule := module #[scalarCaller, scalar] #[global element]
-#guard (localFlow scalarModule scalarCaller).call 1 [] == some [.global 0]
+#guard (localFlow scalarModule scalarCaller).call 1 [] == some []
 
 private def pure := function "pure" [] [element] #[]
   [.def 0 (.constInt .i64 1), .term (.ret [0] (some 0))]
@@ -140,7 +140,7 @@ private def recursiveGlobal := function "recursiveGlobal" [] [element] #[]
   [.def 0 (.globalAddr 0), .def 1 (.load 0), .def 2 (.call 0 [] (some 0)),
    .term (.ret [1] (some 0))]
 private def recursiveGlobalModule := module #[recursiveGlobal] #[global element]
-#guard (localFlow recursiveGlobalModule recursiveGlobal).call 0 [] == some [.global 0]
+#guard (localFlow recursiveGlobalModule recursiveGlobal).call 0 [] == some []
 
 private def constantEmpty := function "constantEmpty" [slice] [slice] #[]
   [.term (.ret [0] (some 0))] { params := #[(0, [])], results := #[[]] }
@@ -203,5 +203,32 @@ private def forgedReturnModule := module #[forgedReturnBound, pure] #[global own
 private def globalReturnBound := { forgedReturnBound with roots := { results := #[[.global 0]] } }
 private def globalReturnModule := module #[globalReturnBound, pure] #[global owner]
 #guard (localFlow globalReturnModule globalReturnBound).value 0 == some [.global 0]
+
+private def genericReceiver := function "genericReceiver" [.ref .mutable owner] [] #[]
+  [.eff (.clear 0 (some 0)), .def 1 (.call 1 [] (some 0)), .term (.ret [] (some 0))]
+  { params := #[(0, [.param 0])] }
+private def genericScalarReadModule := module #[genericReceiver, scalar] #[global element]
+#guard (localFlow genericScalarReadModule genericReceiver).call 1 [] == some []
+
+private def scalarWriter := function "scalarWriter" [] [element] #[]
+  [.def 0 (.globalAddr 0), .def 1 (.constInt .i64 1), .eff (.store 0 1 (some 0)),
+   .term (.ret [1] (some 0))]
+private def genericScalarWriteModule := module #[genericReceiver, scalarWriter] #[global element]
+#guard (localFlow genericScalarWriteModule genericReceiver).call 1 [] == some []
+
+private def ownerReader := function "ownerReader" [] [element] #[]
+  [.def 0 (.globalAddr 0), .def 1 (.arrayLen 0), .term (.ret [1] (some 0))]
+private def genericOwnerReadModule := module #[genericReceiver, ownerReader] #[global owner]
+#guard (localFlow genericOwnerReadModule genericReceiver).call 1 [] == some [.global 0]
+
+private def scalarRefReader := function "scalarRefReader" [.ref .readOnly element] [element] #[]
+  [.def 1 (.load 0), .term (.ret [1] (some 0))] { params := #[(0, [.param 0])] }
+private def scalarRefCaller := function "scalarRefCaller" [] [] #[]
+  [.def 0 (.globalAddr 0), .def 1 (.refFreeze 0), .def 2 (.call 1 [1] (some 0)),
+   .term (.ret [] (some 0))]
+private def scalarRefModule := module #[scalarRefCaller, scalarRefReader] #[global element]
+#guard (localFlow scalarRefModule scalarRefCaller).call 1 [1] == some [.global 0]
+#guard ReplacementContentFlow.Model.ownerTouches scalarModule [.global 20] == [.global 20]
+#guard ReplacementContentFlow.Model.ownerTouches (module #[pure] #[global holder]) [.global 0] == [.global 0]
 
 end Goose.GIR.ReplacementContentFlowChecks
