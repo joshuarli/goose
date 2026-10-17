@@ -1998,7 +1998,7 @@ GirModule ShrinkReplaceFromSavedElement() {
     return m;
 }
 
-GirModule ShrinkReplaceAfterDiscardedSlotAddress() {
+GirModule ShrinkReplaceAfterUnusedSlotAddress() {
     auto m = Base();
     m.profile = CoreProfile::Shrink;
     auto i64 = m.IntType(CoreIntTy::I64);
@@ -2375,7 +2375,7 @@ GirModule ShrinkReplaceAfterAppendSourceAlias() {
     return m;
 }
 
-GirModule ShrinkReplaceAfterSlotInitSourceAlias() {
+GirModule ShrinkReplaceAfterUnusedSlotInitSourceAlias() {
     auto m = Base();
     m.profile = CoreProfile::Shrink;
     auto i64 = m.IntType(CoreIntTy::I64);
@@ -2980,7 +2980,7 @@ void RejectsInvalidShrinkReplacementProofs() {
     assert(Code(ShrinkReplaceClearedOnOneBranch()) == "GIR-V060");
     assert(Code(ShrinkReplaceReceiverViaSlotLoad()) == "");
     assert(Code(ShrinkReplaceFromSavedElement()) == "");
-    assert(Code(ShrinkReplaceAfterDiscardedSlotAddress()) == "GIR-V060");
+    assert(Code(ShrinkReplaceAfterUnusedSlotAddress()).empty());
     assert(Code(ShrinkBranchConditionSelectsRun()) == "");
     assert(Code(ShrinkCallResultReadsGlobalBeforeReplace(false)) == "");
     assert(Code(ShrinkCallResultReadsGlobalBeforeReplace(true)) == "");
@@ -3000,7 +3000,7 @@ void RejectsInvalidShrinkReplacementProofs() {
         assert(Code(ShrinkReplaceAfterClearReadIntoRun(readElement)) == "GIR-V060");
     assert(Code(ShrinkReplaceAfterCallArgument()) == "GIR-V060");
     assert(Code(ShrinkReplaceAfterAppendSourceAlias()) == "GIR-V060");
-    assert(Code(ShrinkReplaceAfterSlotInitSourceAlias()) == "GIR-V060");
+    assert(Code(ShrinkReplaceAfterUnusedSlotInitSourceAlias()).empty());
 }
 
 void RejectsUnresolvedLayout() {
