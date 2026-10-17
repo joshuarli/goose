@@ -1,6 +1,23 @@
 import Goose.Lower.Validation.ReplacementDemandSitesOwners
 import Goose.Core.Sound.ShrinkBridge
 
+namespace Goose.Core.Sound
+
+theorem NodeContext.readWholeRootsChecked
+    {module : Core.Module} {plans : Array (Array DemandPoint)}
+    {planContext : PlanContext module plans} {path : List Nat} {place : Place}
+    (context : NodeContext planContext path (.expression (.read place)) .expression)
+    (forbiddenOwner : DemandOwner) (forbidden : forbiddenOwner ∈ context.expected.forbidden) :
+    ∃ roots, planContext.approvals.access.exprRoots (.read place) = .ok roots ∧
+      DemandRootsDisjoint forbiddenOwner.roots roots := by
+  obtain ⟨roots, rootsAt, request, requestAt, requestOwner, requestRoots⟩ :=
+    context.sourceAt.readWholeRootsRequest planContext.approvals.accessMatches forbidden
+  obtain ⟨approval, _, _, ownerEq, rootsEq, _⟩ := context.wholeRootsApproval requestAt
+  refine ⟨roots, rootsAt, ?_⟩
+  simpa [ownerEq, requestOwner, rootsEq, requestRoots] using approval.disjoint
+
+end Goose.Core.Sound
+
 namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound
@@ -45,6 +62,20 @@ theorem ReplacementDemandContext.descendant_place_disjoint {module : Core.Module
   obtain ⟨roots, rootsAt, disjoint⟩ := descendant.placeWholeRootsChecked target selected
   exact ⟨target, roots, ownerAt, rootsAt, disjoint⟩
 
+theorem ReplacementDemandContext.descendant_read_disjoint {module : Core.Module}
+    {owner : Nat} {path : List Nat} {place : Place} {rhs : Expr} {origin : OriginId}
+    (context : ReplacementDemandContext module owner path place rhs origin)
+    {suffix : List Nat} {child : Place}
+    (source : DemandNodeAt (.expression rhs) suffix (.expression (.read child))) :
+    ∃ target roots,
+      context.planContext.approvals.access.owner place = .ok target ∧
+      context.planContext.approvals.access.exprRoots (.read child) = .ok roots ∧
+      DemandRootsDisjoint target.roots roots := by
+  obtain ⟨target, ownerAt, forbidden⟩ := context.owner_forbidden
+  obtain ⟨descendant, selected⟩ := demand_descendant_forbidden source context.rhsTransition.context forbidden
+  obtain ⟨roots, rootsAt, disjoint⟩ := descendant.readWholeRootsChecked target selected
+  exact ⟨target, roots, ownerAt, rootsAt, disjoint⟩
+
 theorem ReplacementDemandContext.descendant_call_disjoint {module : Core.Module}
     {owner : Nat} {path : List Nat} {place : Place} {rhs : Expr} {origin : OriginId}
     (context : ReplacementDemandContext module owner path place rhs origin)
@@ -69,6 +100,9 @@ theorem ReplacementDemandContext.descendant_call_disjoint {module : Core.Module}
   obtain ⟨approval, _, _, ownerEq, rootsEq, _⟩ := mutation.context.wholeRootsApproval (requests effect member)
   simpa only [ownerEq, rootsEq] using approval.disjoint
 
+#print axioms DemandExpectedSourceAt.readWholeRootsRequest
+#print axioms NodeContext.readWholeRootsChecked
+#print axioms ReplacementDemandContext.descendant_read_disjoint
 #print axioms demand_descendant_forbidden
 #print axioms ReplacementDemandContext.descendant_place_disjoint
 #print axioms ReplacementDemandContext.descendant_call_disjoint
