@@ -4,26 +4,38 @@ namespace Goose.Lower.Validation.SummaryPreservation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
-theorem rpCall_effects {env : PEnv} {calleeId : ContextId} {ctx : Context} {callee : Impl}
+theorem rpCall_replay_contract {env : PEnv} {calleeId : ContextId} {ctx : Context} {callee : Impl}
     {args : List (List RootRef)} {roots : List RootRef} {before after : RState}
     (contextLookup : env.mod.contexts[calleeId]? = some ctx)
     (implLookup : env.mod.impls[ctx.impl]? = some callee)
     (replay : rpCall env calleeId args before = .ok (roots, after)) :
-    after.eff = callEffects callee ctx args before.eff := by
+    forAll (List.range callee.params.size) (checkArgRoots callee ctx args) = .ok () ∧
+      after.eff = callEffects callee ctx args before.eff ∧
+      callResultRoots callee ctx args = .ok roots := by
   unfold rpCall at replay
   simp only [contextLookup, implLookup] at replay
-  obtain ⟨_, middle, checked, tail⟩ := (st_bind_ok _ _ _ _).mp replay
-  obtain ⟨_, checkedState⟩ := (liftV_ok _ _ _).mp checked
+  obtain ⟨checkedValue, middle, checked, tail⟩ := (st_bind_ok _ _ _ _).mp replay
+  obtain ⟨arguments, checkedState⟩ := (liftV_ok _ _ _).mp checked
+  cases checkedValue
   have middleEq : middle = before := checkedState
   subst middle
   obtain ⟨_, modified, update, result⟩ := (st_bind_ok _ _ _ _).mp tail
   have updatedState := (st_modify_ok _ _ _).mp update
   have modifiedEffect : modified.eff = callEffects callee ctx args before.eff :=
     congrArg (fun pair => pair.2.eff) updatedState
-  obtain ⟨_, resultState⟩ := (liftV_ok _ _ _).mp result
+  obtain ⟨returned, resultState⟩ := (liftV_ok _ _ _).mp result
   have afterEq : after = modified := resultState
+  refine ⟨arguments, ?_, returned⟩
   rw [afterEq]
   exact modifiedEffect
+
+theorem rpCall_effects {env : PEnv} {calleeId : ContextId} {ctx : Context} {callee : Impl}
+    {args : List (List RootRef)} {roots : List RootRef} {before after : RState}
+    (contextLookup : env.mod.contexts[calleeId]? = some ctx)
+    (implLookup : env.mod.impls[ctx.impl]? = some callee)
+    (replay : rpCall env calleeId args before = .ok (roots, after)) :
+    after.eff = callEffects callee ctx args before.eff :=
+  (rpCall_replay_contract contextLookup implLookup replay).2.1
 
 theorem effectStep_call_from_source {env : PEnv} {calleeId : ContextId}
     {ctx : Context} {callee : Impl} {caller : Func} {provenance : Prov}
