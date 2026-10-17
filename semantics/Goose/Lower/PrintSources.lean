@@ -208,7 +208,7 @@ private theorem printSourcesSuffix {cfg : Cfg} {env : Env} {all : List PrintArg}
           have effectsExpr : EffLe rootsNext.eff source.world.E :=
             ((rpPrintArgs_mono hrootedRest).2.trans effects)
           obtain ⟨child, hTypingEnv, hRootsEnv, hChildTy, hWorld, hObservation,
-              hChildFuture, hRetained, hMayShrink⟩ := source.expressionChildSource offset expr
+              hChildFuture, hRetained, hMayShrink, _⟩ := source.expressionChildSource offset expr
                 childAt visible typingStart typingNext ty rootsStart rootsNext roots
                 htypedExpr hrootedExpr effectsExpr childFrame observed classified
           have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
