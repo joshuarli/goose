@@ -20,12 +20,12 @@ theorem accepted_context_returnedRoots_below {module : Core.Module} {ctx : Conte
   obtain ⟨roots, range, after, upper, replayed, ready, returned, retained⟩ :=
     accepted_context_replay_produced accepted contextRow implementationRow bounded
   exact ready.finished_returnedRoots (cfg_context_blocks module ctx impl)
-    (accepted_context_provenance_seed accepted implementationRow retained) returned rootCount
+    (accepted_context_provenance_seed accepted contextRow implementationRow ready.slotsEq retained) returned rootCount
 
 theorem accepted_resultRoots_below {module : Core.Module} (accepted : Core.validate module = .ok ()) :
     RootsBelow (resultRoots (lower module) ((lower module).funcs.map fun func => func.valueTypes (lower module)))
       (moduleTypedResultUpper module) := by
-  apply resultRoots_below
+  apply resultRoots_below (lower_declaredResultRoots_below module)
   intro candidate bounded index func types paired
   obtain ⟨funcRow, typeRow⟩ := Array.getElem?_zip_eq_some.mp paired
   have bound : index < module.contexts.size := by
@@ -56,7 +56,7 @@ theorem accepted_context_provenance_upper {module : Core.Module} {ctx : Context}
   obtain ⟨roots, range, after, upper, replayed, ready, returned, retained⟩ :=
     accepted_context_replay_produced accepted contextRow implementationRow bounded
   exact ⟨upper, ready.finished_provenance (cfg_context_blocks module ctx impl)
-    (accepted_context_provenance_seed accepted implementationRow retained) rootCount, returned⟩
+    (accepted_context_provenance_seed accepted contextRow implementationRow ready.slotsEq retained) rootCount, returned⟩
 
 theorem accepted_context_computed_summaryClosed {module : Core.Module} {ctx : Context} {impl : Impl}
     {context : ContextId} {candidate : Array (List RootRef)}
@@ -72,7 +72,7 @@ theorem accepted_context_computed_summaryClosed {module : Core.Module} {ctx : Co
     accepted_context_replay_produced accepted contextRow implementationRow bounded
   exact accepted_finished_summaryClosed accepted contextRow implementationRow replayed ready
     (cfg_context_blocks module ctx impl) rfl
-    (accepted_context_provenance_seed accepted implementationRow retained) rootCount
+    (accepted_context_provenance_seed accepted contextRow implementationRow ready.slotsEq retained) rootCount
 
 theorem accepted_resultRoots_declared {module : Core.Module} {ctx : Context} {impl : Impl}
     {context : ContextId} (accepted : Core.validate module = .ok ())
