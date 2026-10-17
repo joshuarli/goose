@@ -59,9 +59,9 @@ theorem typedIfExpression {module : GIR.Module} {results : Array (List RootRef)}
   let generatedCondition := lowerExpr condition le ls
   obtain ⟨next, completed, returned, retained⟩ := conditionReady.ifExpression (.data type) rfl
     (fun live => (conditionValue live).bound) replayedCondition replayedYes replayedNo replayed
-    (fun state provenance stateReady => blockChild yes (Or.inl rfl) conditionCounter yesCounter
+    (fun state provenance _live _entry stateReady => blockChild yes (Or.inl rfl) conditionCounter yesCounter
       yesRoots yesRange conditionState yesState state provenance typedYes replayedYes yesEffect stateReady)
-    (fun state provenance stateReady => blockChild no (Or.inr rfl) yesCounter finish
+    (fun state provenance _live _entry stateReady => blockChild no (Or.inr rfl) yesCounter finish
       noRoots noRange yesState after state provenance typedNo replayedNo wholeEffect stateReady)
   refine ⟨next, completed, returned, ?_⟩
   intro index bound

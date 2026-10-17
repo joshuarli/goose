@@ -20,7 +20,8 @@ theorem ifExpression {module : GIR.Module} {results : Array (List RootRef)}
     (yesReplay : rpBlockValue env [] yes conditionState = .ok ((yesRoots, yesRange), yesState))
     (noReplay : rpBlockValue env [] no yesState = .ok ((noRoots, noRange), after))
     (source : rpExpr env (.ifE condition yes no) initialSource = .ok (sourceRoots, after))
-    (yesChild : ∀ state provenance,
+    (yesChild : ∀ state provenance, ls.cur.isSome = true →
+      state = { (fork conditionValue le ls).2 with cur := some ls.blocks.size } →
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots
           (lowerBlock none [] true yes le state).2 next ∧
@@ -28,7 +29,10 @@ theorem ifExpression {module : GIR.Module} {results : Array (List RootRef)}
           ReplayValue func next (lowerBlock none [] true yes le state).2
             (lowerBlock none [] true yes le state).1 yesRoots type) ∧
         ∀ index, index < provenance.vals.size → rootsAt next.vals index = rootsAt provenance.vals index)
-    (noChild : ∀ state provenance,
+    (noChild : ∀ state provenance, ls.cur.isSome = true →
+      state = { (lowerBlock none [] true yes le
+        { (fork conditionValue le ls).2 with cur := some ls.blocks.size }).2 with
+          cur := some (ls.blocks.size + 1) } →
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots
           (lowerBlock none [] true no le state).2 next ∧
@@ -65,7 +69,7 @@ theorem ifExpression {module : GIR.Module} {results : Array (List RootRef)}
         rw [forkSize]
         omega)
       simpa only [setCur_run] using selected
-    obtain ⟨middle, yesCompleted, yesValue, yesPrefix⟩ := yesChild yesStart upper yesReady
+    obtain ⟨middle, yesCompleted, yesValue, yesPrefix⟩ := yesChild yesStart upper (by simp [current]) rfl yesReady
     let yesResult := lowerBlock none [] true yes le yesStart
     have yesGrowth := advB_lowerBlock none [] true yes le yesStart yesResult.1 yesResult.2 rfl
     let noStart := { yesResult.2 with cur := some (ls.blocks.size + 1) }
@@ -78,7 +82,7 @@ theorem ifExpression {module : GIR.Module} {results : Array (List RootRef)}
         rw [forkSize]
         omega)
       simpa only [setCur_run] using selected
-    obtain ⟨next, noCompleted, noValue, noPrefix⟩ := noChild noStart middle noReady
+    obtain ⟨next, noCompleted, noValue, noPrefix⟩ := noChild noStart middle (by simp [current]) rfl noReady
     let noResult := lowerBlock none [] true no le noStart
     have noGrowth := advB_lowerBlock none [] true no le noStart noResult.1 noResult.2 rfl
     have firstBound (reachable : yesResult.2.cur.isSome = true) : yesResult.1 < noResult.2.vals.size :=
