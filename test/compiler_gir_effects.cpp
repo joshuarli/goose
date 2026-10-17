@@ -900,6 +900,218 @@ void PreservesOptionalSlotRootMetadata() {
     gir = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
         [](const CoreOrigin &) { return 0; }).Lower();
     assert(gir.funcs[1].roots.slots && gir.funcs[1].roots.slots->empty());
+    assert(Code(gir).empty());
+    auto low = GirToLow(gir).Lower();
+    assert(Code(low).empty());
+    for (auto &function : low.funcs) assert(!function.roots.slots);
+    assert(gir.funcs[0].roots.slots && !gir.funcs[0].roots.slots->empty());
+}
+
+void EnforcesDeclaredRegionCeilings() {
+    auto lower = [](CoreModule core) {
+        return GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+            [](const CoreOrigin &) { return 0; }).Lower();
+    };
+    auto module = lower(OwnerReferenceReplacement(false, OwnerReferenceUse::Unused, OwnerReferenceForm::LocalCopyCall));
+    assert(Code(module).empty());
+    module.funcs[0].roots.slots->at(0).second = { { CoreRootRef::Global, 0 } };
+    assert(Code(module) == "GIR-V050");
+    module = lower(OwnerReferenceReplacement(false, OwnerReferenceUse::Unused));
+    module.funcs[0].roots.slots->push_back(module.funcs[0].roots.slots->at(0));
+    assert(Code(module) == "GIR-V001");
+    module = lower(OwnerReferenceReplacement(false, OwnerReferenceUse::Length));
+    module.funcs[1].roots.results[0].push_back({ CoreRootRef::Global, 0 });
+    auto call = Inst(GirOp::Call, 0);
+    call.idx = 1;
+    auto &entry = module.funcs[0];
+    entry.slots.clear();
+    entry.roots.slots->clear();
+    entry.summary = {};
+    entry.summary.reads = { { true, 1 } };
+    entry.blocks = { { {}, { call, Inst(GirOp::Snap, 1, 0), Inst(GirOp::ViewLen, 2, 1), Inst(GirOp::Ret) } } };
+    assert(Code(module) == "GIR-V050");
+    for (auto &function : module.funcs) function.roots.slots.reset();
+    assert(Code(module).empty());
+    module = GlobalEmptyContentReplacement();
+    module.funcs = Module().funcs;
+    auto reference = module.RefType(CoreMut::Const, module.globals[0].ty);
+    GirGlobal referenceGlobal;
+    referenceGlobal.name = "reference_global";
+    referenceGlobal.ty = reference;
+    referenceGlobal.init.name = "reference_global_init";
+    referenceGlobal.init.results = { reference };
+    referenceGlobal.init.scopes = { -1 };
+    referenceGlobal.init.roots.results = { { { CoreRootRef::Global, 0 } } };
+    auto globalAddress = Inst(GirOp::Global, 0);
+    globalAddress.idx = 0;
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 1 };
+    referenceGlobal.init.blocks = { { {}, { globalAddress, Inst(GirOp::Freeze, 1, 0), ret } } };
+    module.globals.push_back(std::move(referenceGlobal));
+    assert(Code(module).empty());
+    module.funcs[0].roots.slots.emplace();
+    assert(Code(module) == "GIR-V050");
+    module = GlobalEmptyContentReplacement();
+    module.funcs = Module().funcs;
+    auto second = module.globals[0];
+    second.name = "second_owner";
+    module.globals.push_back(std::move(second));
+    auto owner = module.globals[0].ty;
+    auto &initializer = module.globals[1].init;
+    initializer.slots = { { module.RefType(CoreMut::Mut, owner), CoreVarKind::Let, 0, 0 } };
+    initializer.roots.slots = vector<pair<int, vector<CoreRootRef>>> { { 0, { { CoreRootRef::Global, 1 } } } };
+    auto enter = Inst(GirOp::Enter);
+    enter.idx = 0;
+    auto initialize = Inst(GirOp::Init, -1, 0);
+    initialize.idx = 0;
+    auto leave = Inst(GirOp::Leave);
+    leave.idx = 0;
+    auto empty = Inst(GirOp::Arr, 1);
+    empty.ty = owner;
+    initializer.blocks = { { {}, { enter, globalAddress, initialize, leave, empty, ret } } };
+    assert(Code(module) == "GIR-V050");
+    initializer.roots.slots->at(0).second = { { CoreRootRef::Global, 0 } };
+    assert(Code(module).empty());
+}
+
+CoreModule WidenedLocalContentRegion() {
+    CoreModule core;
+    core.profile = CoreProfile::Pilot;
+    core.files = { "widened-local-content.goose" };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Call };
+    auto boolean = core.BoolType();
+    CoreType slice;
+    slice.kind = CoreType::Slice;
+    slice.mut = CoreMut::Mut;
+    slice.elem = boolean;
+    auto sliceType = core.Intern(slice);
+    CoreType holder;
+    holder.kind = CoreType::Ref;
+    holder.mut = CoreMut::Mut;
+    holder.elem = sliceType;
+    auto holderType = core.Intern(holder);
+    CoreImpl main;
+    main.name = "main";
+    main.summary.unknown = true;
+    core.impls.push_back(std::move(main));
+    CoreContext mainContext;
+    mainContext.impl = 0;
+    core.contexts.push_back(std::move(mainContext));
+    auto read = [](int variable) {
+        auto expression = make_unique<CoreExpr>();
+        expression->kind = CoreExprKind::Read;
+        expression->place = make_unique<CorePlace>();
+        expression->place->index = variable;
+        return expression;
+    };
+    CoreImpl wrapper;
+    wrapper.name = "wrapper";
+    wrapper.params = { { 0, true }, { 1, false }, { 2, false } };
+    wrapper.vars = { { "holder", holderType, CoreVarKind::Let, 0, origin },
+        { "a", sliceType, CoreVarKind::Let, 0, origin }, { "b", sliceType, CoreVarKind::Let, 0, origin },
+        { "wide", sliceType, CoreVarKind::Let, 0, origin } };
+    wrapper.summary.unknown = true;
+    CoreStmt bind;
+    bind.kind = CoreStmtKind::Let;
+    bind.var = 3;
+    bind.org = origin;
+    bind.expr = read(1);
+    wrapper.body.stmts.push_back(std::move(bind));
+    CoreStmt call;
+    call.kind = CoreStmtKind::Expr;
+    call.org = origin;
+    call.expr = make_unique<CoreExpr>();
+    call.expr->kind = CoreExprKind::Call;
+    call.expr->ctx = 2;
+    call.expr->org = origin;
+    auto place = make_unique<CorePlace>();
+    place->kind = CorePlace::Deref;
+    place->expr = read(0);
+    call.expr->args.push_back(CoreArgReference { CoreMut::Mut, std::move(place) });
+    call.expr->args.push_back(CoreArgValue { read(3) });
+    wrapper.body.stmts.push_back(std::move(call));
+    core.impls.push_back(std::move(wrapper));
+    CoreContext wrapperContext;
+    wrapperContext.impl = 1;
+    wrapperContext.varroots = { { 0, { { CoreRootRef::Param, 0 } } }, { 1, { { CoreRootRef::Param, 1 } } },
+        { 2, { { CoreRootRef::Param, 2 } } }, { 3, { { CoreRootRef::Param, 1 }, { CoreRootRef::Param, 2 } } } };
+    wrapperContext.content = { { { CoreRootRef::Param, 1 }, { CoreRootRef::Param, 2 } }, {}, {}, {} };
+    wrapperContext.hascontent = { 1, 0, 0, 0 };
+    core.contexts.push_back(std::move(wrapperContext));
+    CoreImpl callee;
+    callee.name = "callee";
+    callee.params = { { 0, true }, { 1, false } };
+    callee.vars = { { "holder", holderType, CoreVarKind::Let, 0, origin }, { "value", sliceType, CoreVarKind::Let, 0, origin } };
+    callee.summary.unknown = true;
+    core.impls.push_back(std::move(callee));
+    CoreContext calleeContext;
+    calleeContext.impl = 2;
+    calleeContext.varroots = { { 0, { { CoreRootRef::Param, 0 } } }, { 1, { { CoreRootRef::Param, 1 } } } };
+    calleeContext.content = { { { CoreRootRef::Param, 1 } }, {} };
+    calleeContext.hascontent = { 1, 0 };
+    core.contexts.push_back(std::move(calleeContext));
+    return core;
+}
+
+void PreservesWidenedSourceLocalContentRegions() {
+    auto core = WidenedLocalContentRegion();
+    auto gir = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Call } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(gir).empty());
+    for (auto &function : gir.funcs) function.roots.slots.reset();
+    assert(Code(gir) == "GIR-V050");
+}
+
+void ChecksDeclaredContentStoresAndCallRegions() {
+    auto module = Module();
+    auto integer = module.IntType(CoreIntTy::I64);
+    auto slice = module.SliceType(CoreMut::Mut, integer);
+    auto holder = module.RefType(CoreMut::Mut, slice);
+    GirFunc writer;
+    writer.name = "region_writer";
+    writer.params = { holder, slice };
+    writer.scopes = { -1 };
+    writer.summary.unknown = true;
+    writer.blocks = { { { { 0, holder }, { 1, slice } }, { Inst(GirOp::Store, -1, 0, 1), Inst(GirOp::Ret) } } };
+    module.funcs.push_back(writer);
+    assert(Code(module).empty());
+    module.funcs[0].roots.slots.emplace();
+    assert(Code(module) == "GIR-V050");
+    module.funcs[1].roots.contents = { { 0, { { CoreRootRef::Param, 1 } } } };
+    assert(Code(module).empty());
+    module.funcs[1].roots.contents[0].second = { { CoreRootRef::Param, 0 } };
+    assert(Code(module) == "GIR-V050");
+    module.funcs[1].params = { holder, slice, slice };
+    module.funcs[1].blocks = { { { { 0, holder }, { 1, slice }, { 2, slice } }, { Inst(GirOp::Ret) } } };
+    module.funcs[1].roots.contents = { { 0, { { CoreRootRef::Param, 1 }, { CoreRootRef::Param, 2 } } } };
+    GirFunc caller;
+    caller.name = "region_caller";
+    caller.params = { slice, slice };
+    caller.scopes = { -1 };
+    caller.summary.unknown = true;
+    caller.slots = { { slice, CoreVarKind::Var, 0, 0 } };
+    auto enter = Inst(GirOp::Enter);
+    enter.idx = 0;
+    auto init = Inst(GirOp::Init, -1, 0);
+    init.idx = 0;
+    auto address = Inst(GirOp::Slot, 2);
+    address.idx = 0;
+    auto call = Inst(GirOp::Call);
+    call.idx = 1;
+    call.vals = { 2, 0, 1 };
+    auto leave = Inst(GirOp::Leave);
+    leave.idx = 0;
+    caller.blocks = { { { { 0, slice }, { 1, slice } }, { enter, init, address, call, leave, Inst(GirOp::Ret) } } };
+    module.funcs.push_back(caller);
+    assert(Code(module) == "GIR-V050");
+    module.funcs[0].roots.slots.reset();
+    assert(Code(module).empty());
+    module.funcs[0].roots.slots.emplace();
+    module.funcs[2].roots.slots = vector<pair<int, vector<CoreRootRef>>> {
+        { 0, { { CoreRootRef::Param, 0 }, { CoreRootRef::Param, 1 } } } };
+    assert(Code(module).empty());
+    module.funcs[2].roots.slots->at(0).second = { { CoreRootRef::Param, 1 } };
+    assert(Code(module) == "GIR-V050");
 }
 
 void DistinguishesReturnedOwnerAddressesFromReads() {
@@ -1286,6 +1498,9 @@ void IncludesActualRefSliceBackingReads() {
 }
 
 int main() {
+    PreservesWidenedSourceLocalContentRegions();
+    ChecksDeclaredContentStoresAndCallRegions();
+    EnforcesDeclaredRegionCeilings();
     PreservesOptionalSlotRootMetadata();
     AdmitsCallerStorageThroughGenericContentBounds();
     DistinguishesReturnedOwnerAddressesFromReads();

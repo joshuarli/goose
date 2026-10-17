@@ -4072,6 +4072,16 @@ private:
         if (((CoreHasConstruction(m.profile) && !m.low) || !f.roots.results.empty()) && f.roots.results.size() != f.results.size())
             SymbolFail(fn, "root info has another number of result rows than the function signature");
         for (auto &roots : f.roots.results) checkRoots(roots, true);
+        if (f.roots.slots) {
+            vector<char> seen(f.slots.size(), 0);
+            for (auto &row : *f.roots.slots) {
+                if (row.first < 0 || row.first >= (int)f.slots.size())
+                    SymbolFail(fn, cat("slot root info names absent slot ", row.first));
+                if (seen[row.first]) SymbolFail(fn, cat("slot root info repeats slot ", row.first));
+                seen[row.first] = 1;
+                checkRoots(row.second, false);
+            }
+        }
         // Value ids are dense and each is defined once.
         auto n = NumValues(f);
         fn.nvalues = n;
@@ -5356,6 +5366,59 @@ private:
         }
     }
 
+    void CheckAdmittedRegions(const ResultRootInfo &res) {
+        auto declared = any_of(fns.begin(), fns.end(), [](const Fn &fn) { return fn.f->roots.slots.has_value(); });
+        if (!declared) return;
+        for (auto &global : m.globals)
+            if (!GirStorable(m, global.ty) || GirRefLike(m, global.ty))
+                Fail("GIR-V050", cat("global ", global.name, " has a type no declared-region module may have"));
+        auto within = [](const Roots &actual, const Roots &ceiling) {
+            return all_of(actual.begin(), actual.end(), [&](const CoreRootRef &root) {
+                return find(ceiling.begin(), ceiling.end(), root) != ceiling.end();
+            });
+        };
+        for (auto &fn : fns) {
+            auto &f = *fn.f;
+            auto p = Provenance(res, fn);
+            if (f.roots.slots)
+                for (auto &row : *f.roots.slots) {
+                    if (row.first < 0 || row.first >= (int)f.slots.size() || !GirRefLike(m, f.slots[row.first].ty))
+                        Fail("GIR-V050", cat(fn.label, " slot root info requires existing reference-like storage"));
+                    if (!within(RootsAt(p.slots, row.first), row.second))
+                        Fail("GIR-V050", cat(fn.label, " slot ", row.first, " root info omits a root stored by the body"));
+                }
+            for (auto &block : f.blocks) for (auto &inst : block.insts) {
+                if (inst.op == GirOp::Ret) {
+                    for (size_t index = 0; index < inst.vals.size(); index++) {
+                        if (!ValRefLike(fn, inst.vals[index])) continue;
+                        Roots ceiling = index < f.roots.results.size() ? f.roots.results[index] : Roots {};
+                        if (!within(RootsAt(p.vals, inst.vals[index]), ceiling))
+                            Fail("GIR-V050", cat(fn.label, " result ", index, " root info omits a root returned by the body"));
+                    }
+                } else if (inst.op == GirOp::Store && ValRefLike(fn, inst.b)) {
+                    for (auto &root : RootsAt(p.vals, inst.a))
+                        if (root.kind == CoreRootRef::Param && root.index >= 0 && root.index < (int)f.params.size() && IsRefSlice(f.params[root.index])) {
+                            auto ceiling = ContentRoots(f, root.index);
+                            if (!ceiling)
+                                Fail("GIR-V050", cat(fn.label, " stores slice contents through parameter ", root.index, " without content root info"));
+                            if (!within(ExpandParameterRoots(f, RootsAt(p.vals, inst.b)), ExpandParameterRoots(f, *ceiling)))
+                                Fail("GIR-V050", cat(fn.label, " content root info for parameter ", root.index, " omits a root stored by the body"));
+                        }
+                } else if (inst.op == GirOp::Call) {
+                    auto &callee = m.funcs[inst.idx];
+                    for (auto &row : callee.roots.contents) {
+                        if (row.first < 0 || row.first >= (int)callee.params.size() || !IsRefSlice(callee.params[row.first])) continue;
+                        auto actual = ArgumentContents(fn, p, inst.vals[row.first]);
+                        auto mapped = MapDeclaredContents(p, inst.vals, row.second);
+                        if (!within(actual, mapped) || !within(mapped, actual))
+                            Fail("GIR-V050", cat(fn.label, " call to ", callee.name, " content roots for parameter ", row.first,
+                                " differ from the receiving storage ceiling"));
+                    }
+                }
+            }
+        }
+    }
+
     bool ValRefLike(const Fn &fn, int v) const {
         if (v < 0 || v >= (int)fn.vt.size() || fn.vt[v] < 0) return false;
         auto k = m.Type(fn.vt[v]).kind;
@@ -5483,6 +5546,8 @@ private:
         auto &f = *fn.f;
         Prov p;
         p.slots.assign(f.slots.size(), {});
+        if (f.roots.slots)
+            for (auto &row : *f.roots.slots) AddTo(p.slots, row.first, row.second);
         p.vals.assign(fn.nvalues, {});
         p.packs.resize(fn.nvalues);
         for (int value = 0; value < fn.nvalues; value++)
@@ -5518,7 +5583,12 @@ private:
 
     ResultRootInfo ResultRoots() {
         ResultRootInfo res(m.funcs.size());
-        for (size_t function = 0; function < m.funcs.size(); function++) res[function].resize(m.funcs[function].results.size());
+        for (size_t function = 0; function < m.funcs.size(); function++) {
+            auto &f = m.funcs[function];
+            res[function].resize(f.results.size());
+            if (f.roots.slots && f.results.size() == 1 && GirRefLike(m, f.results[0]) && !f.roots.results.empty())
+                res[function][0] = f.roots.results[0];
+        }
         for (auto changed = true; changed;) {
             changed = false;
             auto next = res;
@@ -5674,6 +5744,7 @@ private:
     void CheckEffects() {
         auto res = ResultRoots();
         CheckRootAnnotations(res);
+        CheckAdmittedRegions(res);
         for (size_t k = 0; k < m.funcs.size(); k++) {
             auto &f = m.funcs[k];
             if (f.summary.unknown) continue;
