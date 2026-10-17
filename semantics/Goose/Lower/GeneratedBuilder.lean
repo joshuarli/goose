@@ -10,6 +10,18 @@ structure GeneratedBuilderState (state : LS) : Prop where
   live : LiveBound state
   targets : TargetsBounded state
 
+theorem lowerImplFromState_numValues_of_dense (m : Goose.Core.Module) (impl : Goose.Core.Impl) (state : LS)
+    (dense : state.DenseDefinitions) :
+    (lowerImplFromState m impl state).numValues = state.vals.size := by
+  calc
+    (lowerImplFromState m impl state).numValues =
+        ((lowerImplFromState m impl state).blocks.toList.flatMap GIR.Block.defs).length :=
+      Goose.Lower.Validation.Func.numValues_eq_definition_count _
+    _ = state.vals.size := by
+      rw [lowerImplFromState_blocks, finishBlocks_defs]
+      change state.defs.length = state.vals.size
+      exact dense.length
+
 theorem GeneratedBuilderState.of_runs {loop : Option LoopCtx} {action : B α}
     (denseRun : DenseRun action) (targetRun : GeneratedTargetRun loop action)
     {env : LEnv} {before after : LS} {result : α}
