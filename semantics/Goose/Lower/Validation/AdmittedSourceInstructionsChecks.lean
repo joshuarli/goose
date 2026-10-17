@@ -41,6 +41,26 @@ example : Core.validate source = .ok () := by cbv
 #guard !(GIR.validate { lower source with funcs := (lower source).funcs.map fun func =>
   { func with roots := { func.roots with values := none } } }).isOk
 
+private def returning : Core.Module :=
+  { source with
+    impls := #[main, { callee with results := #[.slice .readOnly (.int .i64)], body := .mk 0 [] (some (.read (.deref (.read (.var 0))))) }],
+    contexts := #[⟨0,"main",[(0,[.global 0,.global 1])],[],[]⟩,
+      ⟨1,"receiver",[(0,[.param 0]),(1,[.global 0,.global 1])],[[.param 1]],[(0,[.param 1])]⟩] }
+private def returningFunction : Func :=
+  lowerContextAt returning ⟨0,"main",[(0,[.global 0,.global 1])],[],[]⟩ main
+private def returningFlow : ReplacementFunctionFlow :=
+  (replacementContentFlow (lower returning)).forFunction returningFunction
+    (returningFunction.valueTypes (lower returning))
+private def returningCalls : List (ValueId × List ValueId) :=
+  (returningFunction.blocks.toList.flatMap (·.insts)).filterMap fun
+    | .def value (.call _ arguments _) => some (value, arguments)
+    | _ => none
+example : Core.validate returning = .ok () := by cbv
+#guard (GIR.validate (lower returning)).isOk
+#guard returningCalls.any fun (value, arguments) =>
+  ((arguments[1]?).bind returningFlow.value == some [.global 1]) &&
+    returningFlow.value value == some [.global 0]
+
 private def scalarExpression : Expr :=
   .ifE (.bool false) (.mk 1 [] (some (.lit .i64 0))) (.mk 2 [] (some (.lit .i64 1)))
 private def scalarImpl : Impl :=
@@ -51,6 +71,21 @@ private def scalar : Core.Module :=
 example : Core.validate scalar = .ok () := by cbv
 #guard (GIR.validate (lower scalar)).isOk
 #guard ((lower scalar).funcs[0]?).any (·.roots.values.isNone)
+
+private def unusedForwarder : Impl :=
+  { name := "forward", params := #[⟨0,.byRef⟩], results := #[],
+    vars := #[⟨"holder",.ref .mutable (.slice .readOnly (.int .i64)),.immutable,0,0⟩],
+    body := .mk 0 [.expr (.call 2 [.byRef .mutable (.deref (.read (.var 0)))] 0) 0] none,
+    summary := .unknown }
+private def unusedTarget : Impl :=
+  { unusedForwarder with name := "unused", body := .mk 0 [] none }
+private def unusedForwarding : Core.Module :=
+  { source with
+    impls := #[scalarImpl,unusedForwarder,unusedTarget],
+    contexts := #[⟨0,"main",[],[],[]⟩,⟨1,"forward",[(0,[.param 0])],[],[]⟩,
+      ⟨2,"unused",[(0,[.param 0])],[],[]⟩] }
+example : Core.validate unusedForwarding = .ok () := by cbv
+#guard (GIR.validate (lower unusedForwarding)).isOk
 
 private def specializedImpl : Impl :=
   { name := "specialized", params := #[⟨0,.byRef⟩,⟨1,.byRef⟩],
