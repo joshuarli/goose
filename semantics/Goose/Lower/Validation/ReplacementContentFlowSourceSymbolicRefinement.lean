@@ -8,7 +8,8 @@ open Goose.GIR.ReplacementContentFlow.Model
 open SummaryPreservation
 
 def SymbolicRootsRefine (func : Func) (roots : Roots) (source : List RootRef) : Prop :=
-  roots = .pending ∨ ∃ actual, symbolicRoots func roots = some actual ∧ RootsRefine func actual source
+  roots = .pending ∨ ∃ actual, symbolicRoots func roots = some actual ∧
+    SummaryPreservation.RootsRefine func actual source
 
 theorem SymbolicRootsRefine.pending (func : Func) (source : List RootRef) :
     SymbolicRootsRefine func .pending source := Or.inl rfl
@@ -55,12 +56,12 @@ theorem SymbolicRootsRefine.actual {func : Func} {roots : Roots} {source : List 
 theorem SymbolicRootsRefine.global_iff (func : Func) (global : GlobalId) (source : List RootRef) :
     SymbolicRootsRefine func (.known [.global global]) source ↔ RootRef.global global ∈ source := by
   have known : symbolicRoots func (.known [.global global]) = some [.global global] := rfl
-  simp [SymbolicRootsRefine, known, RootsRefine, Func.expandParameterRoot]
+  simp [SymbolicRootsRefine, known, Goose.GIR.RootsRefine, Func.expandParameterRoot]
 
 theorem SymbolicRootsRefine.parameter_iff (func : Func) (index : Nat) (source : List RootRef) :
     SymbolicRootsRefine func (.known [.param index]) source ↔
       RootRef.param index ∈ source ∨ func.parameterRoots index ⊆ source := by
-  simp [SymbolicRootsRefine, symbolicRoots_parameter, RootsRefine, Func.expandParameterRoot,
+  simp [SymbolicRootsRefine, symbolicRoots_parameter, Goose.GIR.RootsRefine, Func.expandParameterRoot,
     List.subset_def]
 
 theorem SymbolicRootsRefine.contents {func : Func} {index : Nat} {source : List RootRef}
