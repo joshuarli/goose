@@ -158,6 +158,56 @@ theorem emitted_checked_generated_ifValue {le : LEnv} {initial before : LS}
           generated.joinValue evaluatedT.cur valueT evaluatedF.cur valueF rfl⟩) rfl
 
 
+theorem emitted_checked_generated_ifValue_recorded {le : LEnv} {initial before : LS}
+    (builder : EmittedBuilder le initial before) (generated : GeneratedBuilderState before)
+    (condition : ValueId) (sourceScope : ScopeId)
+    (conditionBound : before.cur.isSome = true → condition < before.vals.size)
+    (first second : B ValueId)
+    (firstChecked : ∀ initial started, EmittedBuilder le initial started → GeneratedBuilderState started →
+      TypePrefix before started → before.blocks.size ≤ started.blocks.size →
+      EmittedBuilder le initial (first le started).2 ∧ GeneratedBuilderState (first le started).2)
+    (secondChecked : ∀ initial started, EmittedBuilder le initial started → GeneratedBuilderState started →
+      TypePrefix before started → before.blocks.size ≤ started.blocks.size →
+      EmittedBuilder le initial (second le started).2 ∧ GeneratedBuilderState (second le started).2)
+    (firstAdvance : AdvB first) (secondAdvance : AdvB second) (firstTypes : TypeRun first)
+    (firstBound : ValueRun first) (secondBound : ValueRun second) :
+    let after := ((Goose.Lower.whenLive 0 fun _ => do
+      let (tb, eb) ← Goose.Lower.fork condition
+      Goose.Lower.setCur (some tb)
+      let valueT ← first
+      let endT ← Goose.Lower.curBlock
+      Goose.Lower.setCur (some eb)
+      let valueF ← second
+      let endF ← Goose.Lower.curBlock
+      let value ← Goose.Lower.joinValue endT valueT endF valueF
+      Goose.Lower.recordValueRootRecipe value sourceScope
+      Pure.pure value) le before).2
+    EmittedBuilder le initial after ∧ GeneratedBuilderState after := by
+  dsimp only
+  cases live : before.cur with
+  | none => rw [whenLive_none _ _ _ live]; exact ⟨builder, generated⟩
+  | some block =>
+    rw [whenLive_some _ _ _ live]
+    exact emitted_checked_generated_branches builder generated condition conditionBound first second firstChecked secondChecked
+      firstAdvance secondAdvance firstTypes (fun endT valueT endF valueF => do
+        let value ← Goose.Lower.joinValue endT valueT endF valueF
+        Goose.Lower.recordValueRootRecipe value sourceScope
+        Pure.pure value)
+      (fun _ startedT evaluatedT valueT startedF evaluatedF valueF builder generated firstRun secondRun growth => by
+        let joined := Goose.Lower.joinValue evaluatedT.cur valueT evaluatedF.cur valueF le evaluatedF
+        have joinedBuilder := builder.joinValue evaluatedT.cur evaluatedF.cur valueT valueF
+          (fun live => Nat.lt_of_lt_of_le (firstBound le startedT _ _ firstRun live) growth)
+          (fun live => secondBound le startedF _ _ secondRun live)
+        have joinedGenerated : GeneratedBuilderState joined.2 :=
+          generated.joinValue (env := le) (result := joined.1) evaluatedT.cur valueT evaluatedF.cur valueF rfl
+        have recordedBuilder := joinedBuilder.recordValueRootRecipe joined.1 sourceScope
+        have recordedGenerated : GeneratedBuilderState
+            (Goose.Lower.recordValueRootRecipe joined.1 sourceScope le joined.2).2 := GeneratedBuilderState.of_runs (env := le)
+          (dense_recordValueRootRecipe joined.1 sourceScope)
+          (generatedTargets_recordValueRootRecipe none joined.1 sourceScope) joinedGenerated trivial rfl
+        exact ⟨recordedBuilder, recordedGenerated⟩) rfl
+
+
 theorem emitted_checked_generated_ifArms {le : LEnv} {initial before : LS}
     (builder : EmittedBuilder le initial before) (generated : GeneratedBuilderState before)
     (condition : ValueId)
