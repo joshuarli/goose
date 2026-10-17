@@ -349,21 +349,6 @@ theorem moduleHeight_le_fuel {m : Module} {states : Array State}
   have fuel := moduleFuel_eq m
   exact Nat.lt_of_le_of_lt comparison.1 (by omega)
 
-theorem closeFrom_success_of_module_bound {m : Module} {types : Array (Array (Option VTy))}
-    (preserved : ∀ states, ModuleBounded m states → ModuleBounded m (moduleRound m types states))
-    {initial : Array State} (valid : ModuleBounded m initial) :
-    ∃ result, closeFrom m types (moduleFuel m) initial = some result := by
-  apply closeFrom_success_of_bounded_rank (moduleHeight m) (ModuleBounded m) (moduleFuel m - 1)
-    preserved
-  · intro states bounded
-    have known := moduleHeight_le_fuel bounded
-    omega
-  · intro states bounded changed
-    exact moduleRound_height_lt bounded changed
-  · exact valid
-  · have positive := moduleHeight_le_fuel valid
-    omega
-
 #print axioms Roots.Extends.eq_of_height_eq
 #print axioms Write.Extends.eq_of_height_eq
 #print axioms arrayHeight_comparison
@@ -375,6 +360,5 @@ theorem closeFrom_success_of_module_bound {m : Module} {types : Array (Array (Op
 #print axioms moduleRound_height_lt
 #print axioms moduleFuel_eq
 #print axioms moduleHeight_le_fuel
-#print axioms closeFrom_success_of_module_bound
 
 end Goose.GIR.ReplacementContentFlow.Model
