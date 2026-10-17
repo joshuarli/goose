@@ -42,7 +42,7 @@ theorem lowerImpl_call_blocks (m : Core.Module) (impl : Impl) :
         (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars impl.results.toList) (callEntry impl)).1
         (lowerBlock none (callPre impl) false impl.body (lowerEnv m impl.vars impl.results.toList) (callEntry impl)).2).blocks := by
   simp [lowerImpl, callEntry, callEntryTypes, callPre, bodyTail, newBlock, initState,
-    bind_run, setCur_run, set]
+    lowerImplState, lowerImplFromState, bind_run, setCur_run, set]
   rfl
 
 theorem checkParam_scope {impl : Impl} {i : Nat} {p : Param}
