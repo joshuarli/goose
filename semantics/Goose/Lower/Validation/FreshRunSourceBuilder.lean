@@ -9,6 +9,37 @@ private theorem frameRun_none {action : B α} (source : GeneratedTargetFrameRun 
     TermEdgesFramed none before after ∧ before.Ext after :=
   source before env before value after (.refl before) trivial (.refl none before) run
 
+private theorem futureLiteralValue_joinValue_record {env : LEnv} {before current captured : LS}
+    {yes no : Option BlockId} {yesValue noValue value : ValueId} (sourceScope : ScopeId)
+    (run : (do
+      let result ← joinValue yes yesValue no noValue
+      recordValueRootRecipe result sourceScope
+      pure result) env current = (value, captured))
+    (live : captured.cur.isSome = true) (bounded : TargetsBounded current)
+    (yesBound : ∀ block, yes = some block → block < current.blocks.size)
+    (noBound : ∀ block, no = some block → block < current.blocks.size)
+    (startExtension : before.Ext current)
+    (yesFresh : yes.isSome = true → FutureLiteralValue before captured yesValue)
+    (noFresh : no.isSome = true → FutureLiteralValue before captured noValue) :
+    FutureLiteralValue before captured value := by
+  obtain ⟨result, joined, joinRun, run⟩ := bind_eq.mp run
+  obtain ⟨_, recorded, recordRun, run⟩ := bind_eq.mp run
+  obtain ⟨rfl, rfl⟩ := pure_eq.mp run
+  rw [recordValueRootRecipe_run] at recordRun
+  obtain ⟨_, rfl⟩ := Prod.mk.inj recordRun
+  change FutureLiteralValue before joined result
+  exact futureLiteralValue_joinValue (captured := joined) joinRun live bounded yesBound noBound startExtension yesFresh noFresh
+
+private theorem frame_joinValue_record (sourceScope : ScopeId)
+    (yes no : Option BlockId) (yesValue noValue : ValueId) :
+    GeneratedTargetFrameRun none (do
+      let value ← joinValue yes yesValue no noValue
+      recordValueRootRecipe value sourceScope
+      pure value) :=
+  GeneratedTargetFrameRun.bind (generatedTargetFrame_joinValue none yes no yesValue noValue) fun value =>
+    GeneratedTargetFrameRun.bind (generatedTargetFrame_recordValueRootRecipe none value sourceScope) fun _ =>
+      generatedTargetFrame_pure none value
+
 mutual
 theorem ownerFreshExpr_future (expr : Expr) (source : OwnerFreshExpr expr)
     {env : LEnv} {before captured : LS} {value : ValueId}
@@ -61,7 +92,7 @@ theorem ownerFreshExpr_future (expr : Expr) (source : OwnerFreshExpr expr)
         exact Nat.lt_of_lt_of_le ((Array.getElem?_eq_some_iff.mp elseAt).1)
           (thenSelectExt.trans thenExt).1) elseStartRun
       have elseAfterGenerated := elseGenerated.lowerBlock none [] true no trivial elseRun
-      apply futureLiteralValue_joinValue joinRun live elseAfterGenerated.targets
+      apply futureLiteralValue_joinValue_record (sourceBlockScope yes) joinRun live elseAfterGenerated.targets
       · intro selected selectedAt
         exact Nat.lt_of_lt_of_le (thenAfterGenerated.live selected selectedAt) (elseSelectExt.trans elseExt).1
       · exact elseAfterGenerated.live
@@ -74,20 +105,20 @@ theorem ownerFreshExpr_future (expr : Expr) (source : OwnerFreshExpr expr)
               GeneratedTargetFrameRun.bind (generatedTargetFrame_setCur none (some arms.2)) fun _ =>
                 GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerBlock none [] true no) fun elseValue =>
                   GeneratedTargetFrameRun.bind (generatedTargetFrame_curBlock none) fun elseEnd =>
-                    generatedTargetFrame_joinValue none thenEnd elseEnd thenValue elseValue)
+                    frame_joinValue_record (sourceBlockScope yes) thenEnd elseEnd thenValue elseValue)
             thenTailRun).2
         · exact (frameRun_none
             (GeneratedTargetFrameRun.bind (generatedTargetFrame_curBlock none) fun thenEnd =>
               GeneratedTargetFrameRun.bind (generatedTargetFrame_setCur none (some arms.2)) fun _ =>
                 GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerBlock none [] true no) fun elseValue =>
                   GeneratedTargetFrameRun.bind (generatedTargetFrame_curBlock none) fun elseEnd =>
-                    generatedTargetFrame_joinValue none thenEnd elseEnd thenValue elseValue)
+                    frame_joinValue_record (sourceBlockScope yes) thenEnd elseEnd thenValue elseValue)
             thenTailRun).1
       · intro elseLive
         have child := ownerFreshBlock_future no noFresh elseRun elseLive elseGenerated
         have tail := frameRun_none
           (GeneratedTargetFrameRun.bind (generatedTargetFrame_curBlock none) fun elseEnd =>
-            generatedTargetFrame_joinValue none thenAfter.cur elseEnd thenValue elseValue) elseTailRun
+            frame_joinValue_record (sourceBlockScope yes) thenAfter.cur elseEnd thenValue elseValue) elseTailRun
         exact child.weaken elsePrefix tail.2 tail.1
 
 theorem ownerFreshBlock_future (body : Core.Block) (source : OwnerFreshBlock body)
