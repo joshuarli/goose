@@ -45,7 +45,7 @@ theorem validated_evidence {m : GIR.Module} {fn : Func} (accepted : Goose.GIR.va
   have evidence : (checkAll m.infos fun info =>
       asCheck .v080 info.label (checkEvidence m info.f info.vt)) = .ok () := by
     unfold Goose.GIR.validate at accepted
-    iterate 10 (obtain ⟨_, _, accepted⟩ := Goose.GIR.bind_ok accepted)
+    iterate 11 (obtain ⟨_, _, accepted⟩ := Goose.GIR.bind_ok accepted)
     obtain ⟨ignored, checked, _⟩ := Goose.GIR.bind_ok accepted
     cases ignored
     exact checked
