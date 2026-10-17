@@ -614,9 +614,9 @@ theorem LS.SourceSymbolsRun.lowerExpr_call {le : LEnv} {scopeCount : Nat}
     apply LS.SourceSymbolsRun.bind (action := (read : B LEnv)) LS.SourceSymbolsRun.readAction
     intro env
     cases returns : env.mod.noReturn context
-    · simp only [returns, Bool.false_eq_true, ↓reduceIte]
+    · simp only [Bool.false_eq_true, ↓reduceIte]
       exact LS.SourceSymbolsRun.pure result
-    · simp only [returns, ↓reduceIte]
+    · simp only [↓reduceIte]
       apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitTerm .unreachable)
       · apply LS.SourceSymbolsRun.emitTerm
         intro value equality
