@@ -67,11 +67,11 @@ private def emptyParameterContext : Core.Module :=
 #guard GIR.replacementOverlap none none
 #guard !GIR.replacementOverlap (some []) none
 #guard !GIR.replacementOverlap (some []) (some [])
-#guard (GIR.ReplacementQueries.mk #[(0, [])] #[[.param 0]] #[true] #[] #[true]).value 0 == some []
-#guard (GIR.ReplacementQueries.mk #[(0, [])] #[[]] #[] #[] #[]).value 0 == none
-#guard (GIR.ReplacementQueries.mk #[] #[[.param 0]] #[] #[] #[true]).value 0 == some [.param 0]
+#guard (GIR.ReplacementQueries.mk #[some []] (fun _ _ => none)).value 0 == some []
+#guard (GIR.ReplacementQueries.mk #[none] (fun _ _ => none)).value 0 == none
+#guard (GIR.ReplacementQueries.mk #[some [.param 0]] (fun _ _ => none)).value 0 == some [.param 0]
 
-private def unknownQueries : GIR.ReplacementQueries := ⟨#[], #[[.global 0], []], #[], #[], #[true, false]⟩
+private def unknownQueries : GIR.ReplacementQueries := ⟨#[some [.global 0], none], fun _ _ => none⟩
 private def queryTypes : Array (Option GIR.VTy) :=
   #[some (.data (.ref .mutable (.growshrink (.int .i64)))),
     some (.data (.ref .readOnly (.int .i64)))]
@@ -81,7 +81,7 @@ private def queryTypes : Array (Option GIR.VTy) :=
 #guard GIR.transferEmptyInst (lower module) queryTypes unknownQueries [0] (.def 2 (.call 99 [1] none)) == []
 #guard GIR.transferEmptyInst (lower module) queryTypes unknownQueries [0] (.def 2 (.call 99 [] none)) == []
 
-private def emptyQueries : GIR.ReplacementQueries := ⟨#[(1, [])], #[[.global 0], [.param 1]], #[false, true], #[], #[true, true]⟩
+private def emptyQueries : GIR.ReplacementQueries := ⟨#[some [.global 0], some []], fun _ _ => none⟩
 #guard GIR.transferEmptyInst (lower module) queryTypes emptyQueries [0] (.def 2 (.load 1)) == [0]
 #guard GIR.transferEmptyInst (lower module) queryTypes emptyQueries [0] (.def 2 (.call 99 [1] none)) == []
 

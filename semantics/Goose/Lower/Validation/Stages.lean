@@ -28,8 +28,7 @@ theorem gir_validate_stages (module : Module) :
       (checkAll (List.range module.funcs.size)
         (checkSummaryOf module module.implTypes (resultRoots module module.implTypes) module.rootCount)) = .ok () ∧
       (checkAll module.infos fun info =>
-        let provenance := info.f.provenance (resultRoots module module.implTypes) info.vt module.rootCount
-        checkShrinkReplace module info.label info.f info.vt provenance) = .ok () ∧
+        checkShrinkReplace module info.label info.f info.vt) = .ok () ∧
       (checkAll module.infos fun info =>
         asCheck .v080 info.label (checkEvidence module info.f info.vt)) = .ok () ∧
       (checkAll module.infos fun info => checkOrigins module.profile info.label info.f) = .ok () := by

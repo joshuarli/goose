@@ -64,10 +64,10 @@ theorem replacementTrace_of_regions {module : GIR.Module} {types : Array (Option
   exact mono cleared
 
 theorem lowerContextAt_checkShrinkReplace_of_regions (module : Core.Module) (context : Core.Context)
-    (impl : Core.Impl) (types : Array (Option VTy)) (provenance : Prov) (label : String)
+    (impl : Core.Impl) (types : Array (Option VTy)) (label : String)
     (regions : List (BlockId → List ValueId))
     (closed : ∀ region ∈ regions, EmptyFactsClosed (lower module) (lowerContextAt module context impl)
-      types (replacementQueries (lower module) (lowerContextAt module context impl) types provenance) region)
+      types (replacementQueries (lower module) (lowerContextAt module context impl) types) region)
     (entry : ∀ region ∈ regions, region 0 = [])
     (sites : ∀ (index : BlockId) (block : GIR.Block),
       (lowerContextAt module context impl).blocks[index]? = some block →
@@ -75,19 +75,19 @@ theorem lowerContextAt_checkShrinkReplace_of_regions (module : Core.Module) (con
         (∃ element, ownerTy types owner = some (.grow element) ∨ ownerTy types owner = some (.growshrink element)) ∧
         (freshRuns (lowerContextAt module context impl) types)[run]? = some true ∧
         ∃ region ∈ regions, owner ∈ head.foldl
-          (transferEmptyInst (lower module) types (replacementQueries (lower module) (lowerContextAt module context impl) types provenance))
+          (transferEmptyInst (lower module) types (replacementQueries (lower module) (lowerContextAt module context impl) types))
           (region index)) :
-    checkShrinkReplace (lower module) label (lowerContextAt module context impl) types provenance = .ok () := by
-  apply lowerContextAt_checkShrinkReplace_of_required module context impl types provenance label
+    checkShrinkReplace (lower module) label (lowerContextAt module context impl) types = .ok () := by
+  apply lowerContextAt_checkShrinkReplace_of_required module context impl types label
     (replacementRequirements regions) (replacementRequirements_closed closed) (replacementRequirements_entry entry)
   intro index block row
   exact replacementTrace_of_regions (sites index block row)
 
 theorem lowerGlobal_checkShrinkReplace_of_regions (module : Core.Module) (global : Core.Global)
-    (types : Array (Option VTy)) (provenance : Prov) (label : String)
+    (types : Array (Option VTy)) (label : String)
     (regions : List (BlockId → List ValueId))
     (closed : ∀ region ∈ regions, EmptyFactsClosed (lower module) (lowerGlobal module global).init
-      types (replacementQueries (lower module) (lowerGlobal module global).init types provenance) region)
+      types (replacementQueries (lower module) (lowerGlobal module global).init types) region)
     (entry : ∀ region ∈ regions, region 0 = [])
     (sites : ∀ (index : BlockId) (block : GIR.Block),
       (lowerGlobal module global).init.blocks[index]? = some block →
@@ -95,10 +95,10 @@ theorem lowerGlobal_checkShrinkReplace_of_regions (module : Core.Module) (global
         (∃ element, ownerTy types owner = some (.grow element) ∨ ownerTy types owner = some (.growshrink element)) ∧
         (freshRuns (lowerGlobal module global).init types)[run]? = some true ∧
         ∃ region ∈ regions, owner ∈ head.foldl
-          (transferEmptyInst (lower module) types (replacementQueries (lower module) (lowerGlobal module global).init types provenance))
+          (transferEmptyInst (lower module) types (replacementQueries (lower module) (lowerGlobal module global).init types))
           (region index)) :
-    checkShrinkReplace (lower module) label (lowerGlobal module global).init types provenance = .ok () := by
-  apply lowerGlobal_checkShrinkReplace_of_required module global types provenance label
+    checkShrinkReplace (lower module) label (lowerGlobal module global).init types = .ok () := by
+  apply lowerGlobal_checkShrinkReplace_of_required module global types label
     (replacementRequirements regions) (replacementRequirements_closed closed) (replacementRequirements_entry entry)
   intro index block row
   exact replacementTrace_of_regions (sites index block row)

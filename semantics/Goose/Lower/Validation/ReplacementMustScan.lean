@@ -21,35 +21,35 @@ theorem ReplacementTrace.mono {module : GIR.Module} {types : Array (Option VTy)}
     exact .cons (safe.mono subset) (ih (transferEmptyInst_mono module types queries _ subset))
 
 theorem lowerContextAt_checkShrinkReplace_of_required (module : Core.Module) (context : Core.Context)
-    (impl : Core.Impl) (types : Array (Option VTy)) (provenance : Prov) (label : String)
+    (impl : Core.Impl) (types : Array (Option VTy)) (label : String)
     (required : BlockId → List ValueId)
     (closed : EmptyFactsClosed (lower module) (lowerContextAt module context impl) types
-      (replacementQueries (lower module) (lowerContextAt module context impl) types provenance) required)
+      (replacementQueries (lower module) (lowerContextAt module context impl) types) required)
     (entry : required 0 = [])
     (traces : ∀ (index : Nat) (block : GIR.Block),
       (lowerContextAt module context impl).blocks[index]? = some block →
-        ReplacementTrace (lower module) types (replacementQueries (lower module) (lowerContextAt module context impl) types provenance)
+        ReplacementTrace (lower module) types (replacementQueries (lower module) (lowerContextAt module context impl) types)
           (freshRuns (lowerContextAt module context impl) types) (required index) block.insts) :
-    checkShrinkReplace (lower module) label (lowerContextAt module context impl) types provenance = .ok () := by
+    checkShrinkReplace (lower module) label (lowerContextAt module context impl) types = .ok () := by
   apply checkShrinkReplace_of_blocks
   intro index block row
-  obtain ⟨facts, state, contains⟩ := lowerContextAt_required_emptyFacts module context impl types provenance
+  obtain ⟨facts, state, contains⟩ := lowerContextAt_required_emptyFacts module context impl types
     required closed entry ((Array.getElem?_eq_some_iff.mp row).1)
   exact ⟨facts, state, (traces index block row).mono contains⟩
 
 theorem lowerGlobal_checkShrinkReplace_of_required (module : Core.Module) (global : Core.Global)
-    (types : Array (Option VTy)) (provenance : Prov) (label : String) (required : BlockId → List ValueId)
+    (types : Array (Option VTy)) (label : String) (required : BlockId → List ValueId)
     (closed : EmptyFactsClosed (lower module) (lowerGlobal module global).init types
-      (replacementQueries (lower module) (lowerGlobal module global).init types provenance) required)
+      (replacementQueries (lower module) (lowerGlobal module global).init types) required)
     (entry : required 0 = [])
     (traces : ∀ (index : Nat) (block : GIR.Block),
       (lowerGlobal module global).init.blocks[index]? = some block →
-        ReplacementTrace (lower module) types (replacementQueries (lower module) (lowerGlobal module global).init types provenance)
+        ReplacementTrace (lower module) types (replacementQueries (lower module) (lowerGlobal module global).init types)
           (freshRuns (lowerGlobal module global).init types) (required index) block.insts) :
-    checkShrinkReplace (lower module) label (lowerGlobal module global).init types provenance = .ok () := by
+    checkShrinkReplace (lower module) label (lowerGlobal module global).init types = .ok () := by
   apply checkShrinkReplace_of_blocks
   intro index block row
-  obtain ⟨facts, state, contains⟩ := lowerGlobal_required_emptyFacts module global types provenance
+  obtain ⟨facts, state, contains⟩ := lowerGlobal_required_emptyFacts module global types
     required closed entry ((Array.getElem?_eq_some_iff.mp row).1)
   exact ⟨facts, state, (traces index block row).mono contains⟩
 

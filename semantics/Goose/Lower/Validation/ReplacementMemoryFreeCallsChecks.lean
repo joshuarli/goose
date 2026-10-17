@@ -54,4 +54,19 @@ private def scalarRecursive : Core.Module :=
 #guard (Core.validate scalarRecursive).toBool
 #guard (GIR.validate (lower scalarRecursive)).toBool
 
+private def scalarGlobalRead : Core.Module :=
+  { scalarCall with
+    globals := #[⟨"other", .int .i64, .immutable, .lit .i64 1, 0⟩],
+    impls := scalarCall.impls.modify 2 fun impl =>
+      { impl with body := .mk 0 [] (some (.read (.global 0))) } }
+private def scalarGlobalWrite : Core.Module :=
+  { scalarCall with
+    globals := #[⟨"other", .int .i64, .mutable, .lit .i64 1, 0⟩],
+    impls := scalarCall.impls.modify 2 fun impl =>
+      { impl with body := .mk 0 [.assign (.global 0) (.lit .i64 2) 0] (some (.lit .i64 1)) } }
+#guard (Core.validate scalarGlobalRead).toBool
+#guard (GIR.validate (lower scalarGlobalRead)).toBool
+#guard (Core.validate scalarGlobalWrite).toBool
+#guard (GIR.validate (lower scalarGlobalWrite)).toBool
+
 end Goose.Lower.Validation.ReplacementEmptyContentChecks

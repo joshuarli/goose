@@ -255,38 +255,4 @@ theorem provenance_globalAddr (results : Array (List RootRef)) (types : Array (O
   provenance_static_definition results types func rootCount blockMember definition
     (fun _ => by simp [rootsOfDef]) bounded
 
-theorem replacementQueries_known_roots (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (value : ValueId) {roots : List RootRef}
-    (known : (replacementQueries module func types provenance).value value = some roots) :
-    roots = (rootsAt provenance.vals value).flatMap func.expandParameterRoot := by
-  rw [replacementQueries_value] at known
-  split at known
-  · split at known
-    · simp only [Option.some.injEq] at known
-      subst roots
-      exact (List.isEmpty_iff.mp (by assumption)).symm
-    · contradiction
-  · split at known
-    · contradiction
-    · split at known
-      · contradiction
-      · exact (Option.some.inj known).symm
-
-theorem replacementQueries_roots_within (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (value : ValueId) :
-    ((replacementQueries module func types provenance).value value).getD [] ⊆
-      (rootsAt provenance.vals value).flatMap func.expandParameterRoot := by
-  cases known : (replacementQueries module func types provenance).value value with
-  | none => simp
-  | some roots =>
-    simpa only [Option.getD_some,
-      replacementQueries_known_roots module func types provenance value known] using
-      (List.Subset.refl ((rootsAt provenance.vals value).flatMap func.expandParameterRoot))
-
-theorem replacementQueries_unknown (module : GIR.Module) (func : Func) (types : Array (Option VTy)) (provenance : Prov) (value : ValueId)
-    (unknown : rootsAt provenance.vals value = [])
-    (notEmpty : (replacementEmptyValues module func types provenance)[value]?.getD false = false) :
-    (replacementQueries module func types provenance).value value = none := by
-  simp [replacementQueries_value, unknown, notEmpty]
-
 end Goose.Lower.Validation

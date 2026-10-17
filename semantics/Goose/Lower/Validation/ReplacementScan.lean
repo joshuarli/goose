@@ -60,16 +60,16 @@ private theorem list_forIn'_checked {items : List α}
     exact ih (fun next member => checked next (by simp [member]))
 
 def ReplacementBlocksSafe (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) : Prop :=
+    (types : Array (Option VTy)) : Prop :=
   ∀ (index : Nat) (block : GIR.Block), func.blocks[index]? = some block →
-    ∃ facts, (emptyFactsAtBlocks module func types (replacementQueries module func types provenance))[index]? = some (some facts) ∧
-      ReplacementTrace module types (replacementQueries module func types provenance)
+    ∃ facts, (emptyFactsAtBlocks module func types (replacementQueries module func types))[index]? = some (some facts) ∧
+      ReplacementTrace module types (replacementQueries module func types)
         (freshRuns func types) facts block.insts
 
 theorem checkShrinkReplace_of_blocks (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (label : String)
-    (safe : ReplacementBlocksSafe module func types provenance) :
-    checkShrinkReplace module label func types provenance = .ok () := by
+    (types : Array (Option VTy)) (label : String)
+    (safe : ReplacementBlocksSafe module func types) :
+    checkShrinkReplace module label func types = .ok () := by
   rw [checkShrinkReplace_eq]
   split
   · dsimp only
@@ -85,7 +85,7 @@ theorem checkShrinkReplace_of_blocks (module : GIR.Module) (func : Func)
     have row : func.blocks[index]? = some block := by simp [block, bounded]
     obtain ⟨facts, state, trace⟩ := safe index block row
     simp only [row, state, Option.join_some]
-    rw [replacementTrace_scan module func types (replacementQueries module func types provenance)
+    rw [replacementTrace_scan module func types (replacementQueries module func types)
       (freshRuns func types) label trace]
     rfl
   · rfl
@@ -108,35 +108,35 @@ theorem replacementTrace_of_no_replacements (module : GIR.Module)
     · exact ih (by intro next member; exact absent next (by simp [member])) _
 
 theorem lowerImpl_checkShrinkReplace_without_replacements (module : Core.Module)
-    (impl : Core.Impl) (types : Array (Option VTy)) (provenance : Prov) (label : String)
+    (impl : Core.Impl) (types : Array (Option VTy)) (label : String)
     (absent : NoReplacements (lowerImpl module impl)) :
-    checkShrinkReplace (lower module) label (lowerImpl module impl) types provenance = .ok () := by
+    checkShrinkReplace (lower module) label (lowerImpl module impl) types = .ok () := by
   apply checkShrinkReplace_of_blocks
   intro index block row
-  obtain ⟨facts, state⟩ := lowerImpl_emptyFacts_known module impl types (replacementQueries (lower module) (lowerImpl module impl) types provenance)
+  obtain ⟨facts, state⟩ := lowerImpl_emptyFacts_known module impl types (replacementQueries (lower module) (lowerImpl module impl) types)
     ((Array.getElem?_eq_some_iff.mp row).1)
   exact ⟨facts, state, replacementTrace_of_no_replacements _ _ _ _ _
     (absent block (Array.mem_toList_iff.mpr (Array.mem_of_getElem? row))) facts⟩
 
 theorem lowerContextAt_checkShrinkReplace_without_replacements (module : Core.Module)
     (context : Core.Context) (impl : Core.Impl) (types : Array (Option VTy))
-    (provenance : Prov) (label : String) (absent : NoReplacements (lowerContextAt module context impl)) :
-    checkShrinkReplace (lower module) label (lowerContextAt module context impl) types provenance = .ok () := by
+    (label : String) (absent : NoReplacements (lowerContextAt module context impl)) :
+    checkShrinkReplace (lower module) label (lowerContextAt module context impl) types = .ok () := by
   apply checkShrinkReplace_of_blocks
   intro index block row
   obtain ⟨facts, state⟩ := lowerContextAt_emptyFacts_known module context impl types
-    (replacementQueries (lower module) (lowerContextAt module context impl) types provenance)
+    (replacementQueries (lower module) (lowerContextAt module context impl) types)
     ((Array.getElem?_eq_some_iff.mp row).1)
   exact ⟨facts, state, replacementTrace_of_no_replacements _ _ _ _ _
     (absent block (Array.mem_toList_iff.mpr (Array.mem_of_getElem? row))) facts⟩
 
 theorem lowerGlobal_checkShrinkReplace_without_replacements (module : Core.Module)
-    (global : Core.Global) (types : Array (Option VTy)) (provenance : Prov) (label : String)
+    (global : Core.Global) (types : Array (Option VTy)) (label : String)
     (absent : NoReplacements (lowerGlobal module global).init) :
-    checkShrinkReplace (lower module) label (lowerGlobal module global).init types provenance = .ok () := by
+    checkShrinkReplace (lower module) label (lowerGlobal module global).init types = .ok () := by
   apply checkShrinkReplace_of_blocks
   intro index block row
-  obtain ⟨facts, state⟩ := lowerGlobal_emptyFacts_known module global types (replacementQueries (lower module) (lowerGlobal module global).init types provenance)
+  obtain ⟨facts, state⟩ := lowerGlobal_emptyFacts_known module global types (replacementQueries (lower module) (lowerGlobal module global).init types)
     ((Array.getElem?_eq_some_iff.mp row).1)
   exact ⟨facts, state, replacementTrace_of_no_replacements _ _ _ _ _
     (absent block (Array.mem_toList_iff.mpr (Array.mem_of_getElem? row))) facts⟩

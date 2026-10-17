@@ -220,25 +220,25 @@ theorem emptyFactsAtBlocks_required (module : GIR.Module) (func : Func) (types :
   exact known
 
 theorem lowerContextAt_required_emptyFacts (module : Core.Module) (context : Core.Context)
-    (impl : Core.Impl) (types : Array (Option VTy)) (provenance : Prov)
+    (impl : Core.Impl) (types : Array (Option VTy))
     (required : BlockId → List ValueId)
     (closed : EmptyFactsClosed (lower module) (lowerContextAt module context impl) types
-      (replacementQueries (lower module) (lowerContextAt module context impl) types provenance) required)
+      (replacementQueries (lower module) (lowerContextAt module context impl) types) required)
     (entry : required 0 = []) {block : BlockId} (bounded : block < (lowerContextAt module context impl).blocks.size) :
     ∃ facts, (emptyFactsAtBlocks (lower module) (lowerContextAt module context impl) types
-      (replacementQueries (lower module) (lowerContextAt module context impl) types provenance))[block]? = some (some facts) ∧
+      (replacementQueries (lower module) (lowerContextAt module context impl) types))[block]? = some (some facts) ∧
       required block ⊆ facts := by
   obtain ⟨facts, known⟩ := lowerContextAt_emptyFacts_known module context impl types _ bounded
   exact ⟨facts, known, emptyFactsAtBlocks_required _ _ _ _ _ closed entry
     (lowerImpl_blocks_nonempty module impl) block facts known⟩
 
 theorem lowerGlobal_required_emptyFacts (module : Core.Module) (global : Core.Global)
-    (types : Array (Option VTy)) (provenance : Prov) (required : BlockId → List ValueId)
+    (types : Array (Option VTy)) (required : BlockId → List ValueId)
     (closed : EmptyFactsClosed (lower module) (lowerGlobal module global).init types
-      (replacementQueries (lower module) (lowerGlobal module global).init types provenance) required)
+      (replacementQueries (lower module) (lowerGlobal module global).init types) required)
     (entry : required 0 = []) {block : BlockId} (bounded : block < (lowerGlobal module global).init.blocks.size) :
     ∃ facts, (emptyFactsAtBlocks (lower module) (lowerGlobal module global).init types
-      (replacementQueries (lower module) (lowerGlobal module global).init types provenance))[block]? = some (some facts) ∧
+      (replacementQueries (lower module) (lowerGlobal module global).init types))[block]? = some (some facts) ∧
       required block ⊆ facts := by
   obtain ⟨facts, known⟩ := lowerGlobal_emptyFacts_known module global types _ bounded
   exact ⟨facts, known, emptyFactsAtBlocks_required _ _ _ _ _ closed entry
