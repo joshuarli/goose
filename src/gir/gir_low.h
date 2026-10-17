@@ -71,7 +71,7 @@ public:
                     channel.incoming.push_back((int)low.cells.size());
                     low.cells.push_back(Ptr());
                 }
-                auto escaped = GirNonfixed(h, function.results[result]) ? vector<GirTypeId> { Ptr(), Ptr(), I64() } : signature.resultWords[result];
+                auto escaped = GirNonfixed(h, function.results[result]) ? vector<GirTypeId> { Ptr(), Ptr(), I64(), I64(), l.BoolType() } : signature.resultWords[result];
                 for (auto word : escaped) {
                     channel.escaped.push_back((int)low.cells.size());
                     low.cells.push_back(word);
@@ -120,7 +120,7 @@ private:
             case CoreType::Int: return { l.IntType(c.ity) };
             case CoreType::Bool: return { l.BoolType() };
             case CoreType::Arr: case CoreType::VarArr: return { Ptr() };
-            case CoreType::Dest: case CoreType::Built: case CoreType::Cancelled: return { Ptr(), Ptr(), Ptr() };
+            case CoreType::Dest: case CoreType::Built: case CoreType::Cancelled: return { Ptr(), Ptr(), Ptr(), Ptr(), l.BoolType() };
             case CoreType::Tuple: {
                 vector<GirTypeId> words;
                 for (auto part : c.parts) { auto value = Words(part); words.insert(words.end(), value.begin(), value.end()); }
@@ -173,7 +173,7 @@ private:
             for (auto parameter : f.params)
                 for (auto word : GirNonfixed(h, parameter) ? vector<GirTypeId> { Ptr(), Ptr() } : Words(parameter)) s.params.push_back(word);
             for (auto result : f.results) {
-                auto words = GirNonfixed(h, result) ? vector<GirTypeId> { Ptr(), Ptr(), Ptr() } : Words(result);
+                auto words = GirNonfixed(h, result) ? vector<GirTypeId> { Ptr(), Ptr(), Ptr(), Ptr() } : Words(result);
                 s.resultWords.push_back(words);
                 for (size_t word = 0; word < words.size(); word++) s.params.push_back(Ptr());
             }
@@ -243,6 +243,8 @@ private:
         int stack = -1;
         int base = -1;
         int metadata = -1;
+        int progress = -1;
+        int mode = -1;
         GirTypeId type = -1;
         CoreRequest request = CoreRequest::Value;
         int receiverSlot = -1;
@@ -891,7 +893,7 @@ private:
                             auto kind = HT(type).kind;
                             if (GirNonfixed(h, type))
                                 lf.lowResults->push_back({ type, GirLowNonfixedResult { f.resultProtocols[result].request,
-                                    positions[0], positions[1], positions[2] } });
+                                    positions[0], positions[1], positions[2], positions[3] } });
                             else if (IsAggregate(type))
                                 lf.lowResults->push_back({ type, GirLowSnapshotResult { Size(type), positions[0] } });
                             else if (kind == CoreType::Ref) {
@@ -959,11 +961,13 @@ private:
                         destination.stack = Simple(GirOp::GlobalStack, Ptr(), -1, -1, global);
                         destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
                         destination.metadata = Metadata(TraceId(GirTraceKind::Destination));
+                        destination.progress = Progress();
                         destination.receiverGlobal = global;
                         destination.source = NewSource(TraceId(GirTraceKind::Storage));
                         SimpleE(GirOp::SourceGlobalSet, destination.source, -1, global);
                         if (receiver == GirMember::Header) destination.header = Simple(GirOp::GlobalAddr, Ptr(), -1, -1, global);
-                        shape[value].w = { destination.stack, destination.base, destination.metadata };
+                        destination.mode = ConstBool(false);
+                        shape[value].w = { destination.stack, destination.base, destination.metadata, destination.progress, destination.mode };
                         destinations[carrierRoots[value]] = destination;
                         Event(GirEventKind::Begin, { DestinationId(value) });
                         StartPrefix(value);
@@ -971,6 +975,9 @@ private:
                         destination.stack = shape[value].w[0];
                         destination.base = shape[value].w[1];
                         destination.metadata = shape[value].w[2];
+                        destination.progress = shape[value].w[3];
+                        destination.mode = ConstBool(false);
+                        shape[value].w.push_back(destination.mode);
                     }
                     destinations[carrierRoots[value]] = destination;
                 }
@@ -1183,24 +1190,54 @@ private:
     }
 
     int Metadata(int trace) {
-        auto address = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(16));
+        auto address = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(GirConstructionMetadataBytes));
         PStoreV(I64(), address, ConstI(I64(), 0));
-        PStoreV(I64(), WordAt(address, 1), trace);
+        PStoreV(I64(), PtrAt(address, ConstI(I64(), GirConstructionIdentityOffset), 1), trace);
         return address;
     }
 
     Destination DestinationAt(int value) {
         auto destination = destinations.at(carrierRoots.at(value));
-        if (shape[value].w.size() == 3) {
+        if (shape[value].w.size() == 5) {
             destination.stack = shape[value].w[0];
             destination.base = shape[value].w[1];
             destination.metadata = shape[value].w[2];
+            destination.progress = shape[value].w[3];
+            destination.mode = shape[value].w[4];
         }
         return destination;
     }
 
+    int Progress(GirConstructionProgress state = GirConstructionProgress::Open) {
+        auto address = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(GirConstructionProgressBytes));
+        PStoreV(I64(), address, ConstI(I64(), (int64_t)state));
+        return address;
+    }
+
+    void SetProgress(int value, GirConstructionProgress state) {
+        PStoreV(I64(), shape[value].w[3], ConstI(I64(), (int64_t)state));
+    }
+
+    void When(int condition, const function<void()> &body) {
+        auto yes = NewBlockL({});
+        auto done = NewBlockL({});
+        GirInst branch;
+        branch.op = GirOp::CondBr;
+        branch.a = condition;
+        branch.idx = yes;
+        branch.idx2 = done;
+        Term(std::move(branch));
+        cur = yes;
+        body();
+        GirInst jump;
+        jump.op = GirOp::Br;
+        jump.idx = done;
+        Term(std::move(jump));
+        cur = done;
+    }
+
     int DestinationCount(int value) { return PLoadV(I64(), shape[value].w[2]); }
-    int DestinationId(int value) { return PLoadV(I64(), WordAt(shape[value].w[2], 1)); }
+    int DestinationId(int value) { return PLoadV(I64(), PtrAt(shape[value].w[2], ConstI(I64(), GirConstructionIdentityOffset), 1)); }
     int Prefix(GirTypeId type, CoreRequest request) const {
         return HT(type).kind == CoreType::VarArr && request == CoreRequest::Value ? 4 : 0;
     }
@@ -1233,6 +1270,8 @@ private:
         destination.type = inst.ty;
         destination.request = inst.request;
         destination.metadata = Metadata(TraceId(GirTraceKind::Destination));
+        destination.progress = Progress();
+        destination.mode = ConstBool(false);
         if (auto slot = get_if<GirDestSlotReceiver>(&inst.destReceiver)) {
             destination.receiverSlot = slot->slot;
             auto &place = places.at(slot->slot);
@@ -1260,11 +1299,67 @@ private:
         }
         destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
         destinations[carrierRoots[inst.res]] = destination;
-        Define(inst, { destination.stack, destination.base, destination.metadata });
+        Define(inst, { destination.stack, destination.base, destination.metadata, destination.progress, destination.mode });
         Event(GirEventKind::Begin, { DestinationId(inst.res) });
         if (destination.header >= 0 && !destination.append && !destination.push)
             SimpleE(GirOp::HdrInit, destination.header, destination.base);
         StartPrefix(inst.res);
+    }
+
+    void ExitDestination(const GirInst &inst, const vector<int> &incoming, bool target) {
+        auto &carrier = HT(hvt[inst.res]);
+        Destination destination;
+        destination.type = carrier.elem;
+        destination.request = carrier.request;
+        destination.resultPosition = target ? inst.idx2 : inst.idx;
+        destination.target = target ? inst.idx : -1;
+        vector<int> values;
+        auto joined = NewBlockL({ Ptr(), Ptr(), Ptr(), Ptr(), l.BoolType() }, &values);
+        auto replace = NewBlockL({});
+        auto direct = NewBlockL({});
+        auto open = CmpI(CoreCmpOp::Eq, I64(), PLoadV(I64(), incoming[3]), ConstI(I64(), (int64_t)GirConstructionProgress::Open));
+        auto checkEmpty = NewBlockL({});
+        GirInst branch;
+        branch.op = GirOp::CondBr;
+        branch.a = open;
+        branch.idx = checkEmpty;
+        branch.idx2 = replace;
+        Term(std::move(branch));
+        cur = checkEmpty;
+        branch = GirInst {};
+        branch.op = GirOp::CondBr;
+        branch.a = CmpI(CoreCmpOp::Eq, I64(), PLoadV(I64(), incoming[2]), ConstI(I64(), 0));
+        branch.idx = direct;
+        branch.idx2 = replace;
+        Term(std::move(branch));
+        cur = direct;
+        GirInst jump;
+        jump.op = GirOp::Br;
+        jump.idx = joined;
+        jump.vals = { incoming[0], incoming[1], incoming[2], incoming[3], ConstBool(false) };
+        Term(std::move(jump));
+        cur = replace;
+        PStoreV(I64(), incoming[3], ConstI(I64(), (int64_t)GirConstructionProgress::Exiting));
+        auto start = Simple(GirOp::StackMark, Ptr(), incoming[0]);
+        auto identity = TraceId(GirTraceKind::Destination);
+        auto metadata = Metadata(identity);
+        auto progress = Progress();
+        auto prefix = Prefix(carrier.elem, carrier.request);
+        if (prefix) SimpleE(GirOp::StackBump, incoming[0], ConstI(I64(), prefix));
+        Event(GirEventKind::Begin, { identity });
+        jump = GirInst {};
+        jump.op = GirOp::Br;
+        jump.idx = joined;
+        jump.vals = { incoming[0], start, metadata, progress, ConstBool(true) };
+        Term(std::move(jump));
+        cur = joined;
+        destination.stack = values[0];
+        destination.base = values[1];
+        destination.metadata = values[2];
+        destination.progress = values[3];
+        destination.mode = values[4];
+        destinations[carrierRoots[inst.res]] = destination;
+        Define(inst, std::move(values));
     }
 
     void WriteFixed(int destination, GirTypeId element, const vector<int> &words) {
@@ -1411,6 +1506,7 @@ private:
             SimpleE(GirOp::LocalSet, shape[value].w[1], -1, places[destination.receiverSlot].members[0]);
         if (destination.receiverGlobal >= 0 && l.lowglobals[destination.receiverGlobal].kind == GirMember::Dynamic)
             PStoreV(Ptr(), Simple(GirOp::GlobalAddr, Ptr(), -1, -1, destination.receiverGlobal), shape[value].w[1]);
+        SetProgress(value, GirConstructionProgress::Published);
         Event(GirEventKind::Publish, { DestinationId(value) });
     }
 
@@ -1474,6 +1570,29 @@ private:
             auto destination = DestinationAt(inst.a);
             if (destination.resultPosition < 0) throw CompileError { "exit value has no matching receiving channel" };
             auto target = resultOutputs.at(destination.resultPosition)[1];
+            auto direct = NewBlockL({});
+            auto replace = NewBlockL({});
+            auto landed = NewBlockL({});
+            GirInst branch;
+            branch.op = GirOp::CondBr;
+            branch.a = shape[inst.a].w[4];
+            branch.idx = replace;
+            branch.idx2 = direct;
+            Term(std::move(branch));
+            cur = direct;
+            CheckThen(Simple(GirOp::PtrEq, l.BoolType(), shape[inst.a].w[1], target),
+                AbortBlock(GirAbortKind::Assert, {}, inst.org));
+            if (destination.target >= 0) {
+                if (destination.payloadEndMember < 0) throw CompileError { "target landing omits its escaped endpoint" };
+                auto end = Simple(GirOp::LocalGet, Ptr(), -1, -1, destination.payloadEndMember);
+                CheckThen(Simple(GirOp::PtrEq, l.BoolType(), Simple(GirOp::StackMark, Ptr(), shape[inst.a].w[0]), end),
+                    AbortBlock(GirAbortKind::Assert, {}, inst.org));
+            }
+            GirInst jump;
+            jump.op = GirOp::Br;
+            jump.idx = landed;
+            Term(std::move(jump));
+            cur = replace;
             auto prefix = Prefix(before.elem, before.request);
             auto count = DestinationCount(inst.a);
             auto bytes = WalkElements(HT(before.elem).elem, PtrAt(shape[inst.a].w[1], ConstI(I64(), prefix), 1), count);
@@ -1485,14 +1604,27 @@ private:
                 CheckThen(Simple(GirOp::PtrEq, l.BoolType(), computedEnd, end),
                     AbortBlock(GirAbortKind::Assert, {}, inst.org));
             }
-            GirInst move;
-            move.op = GirOp::BytesMove;
-            move.a = target;
-            move.b = shape[inst.a].w[1];
-            move.vals = { bytes };
-            EmitE(std::move(move));
-            SimpleE(GirOp::StackRelease, shape[inst.a].w[0], PtrAt(target, bytes, 1));
+            auto equal = Simple(GirOp::PtrEq, l.BoolType(), target, shape[inst.a].w[1]);
+            GirInst negate;
+            negate.op = GirOp::Not;
+            negate.a = equal;
+            When(Emit(std::move(negate), l.BoolType()), [&] {
+                GirInst move;
+                move.op = GirOp::BytesMove;
+                move.a = target;
+                move.b = shape[inst.a].w[1];
+                move.vals = { bytes };
+                EmitE(std::move(move));
+                SimpleE(GirOp::StackRelease, shape[inst.a].w[0], PtrAt(target, bytes, 1));
+                Event(GirEventKind::Relocate, { DestinationId(inst.a) }, inst.reason);
+            });
+            jump = GirInst {};
+            jump.op = GirOp::Br;
+            jump.idx = landed;
+            Term(std::move(jump));
+            cur = landed;
             shape[inst.res].w[1] = target;
+            return;
         }
         Event(GirEventKind::Relocate, { DestinationId(inst.a) }, inst.reason);
     }
@@ -1748,13 +1880,16 @@ private:
             }
             case GirOp::DestOpen: return Open(i);
             case GirOp::DestChild: {
+                SetProgress(i.a, GirConstructionProgress::Suspended);
                 Destination child;
                 child.stack = shape[i.a].w[0];
                 child.base = Simple(GirOp::StackMark, Ptr(), child.stack);
                 child.metadata = Metadata(TraceId(GirTraceKind::Destination));
+                child.progress = Progress();
+                child.mode = ConstBool(false);
                 child.type = i.ty;
                 destinations[carrierRoots[i.res]] = child;
-                Define(i, { child.stack, child.base, child.metadata });
+                Define(i, { child.stack, child.base, child.metadata, child.progress, child.mode });
                 Event(GirEventKind::Begin, { DestinationId(i.res) });
                 StartPrefix(i.res);
                 return;
@@ -1776,9 +1911,14 @@ private:
             }
             case GirOp::DestCopy: return CopyDestination(i);
             case GirOp::DestRepeat: return RepeatDestination(i);
-            case GirOp::DestAttach: IncrementDestination(i.a); return;
+            case GirOp::DestAttach:
+                SetProgress(i.b, GirConstructionProgress::Attached);
+                SetProgress(i.a, GirConstructionProgress::Open);
+                IncrementDestination(i.a);
+                return;
             case GirOp::DestFinish: {
                 PatchPrefix(i.a, i.org);
+                SetProgress(i.a, GirConstructionProgress::Built);
                 shape[i.res] = shape[i.a];
                 return;
             }
@@ -1828,55 +1968,46 @@ private:
                     auto header = Simple(GirOp::LocalGet, Ptr(), -1, -1, places[i.idx].members[0]);
                     PStoreV(I64(), destination.metadata, Simple(GirOp::HdrLen, I64(), header));
                 }
-                Define(i, { destination.stack, destination.base, destination.metadata });
+                Define(i, { destination.stack, destination.base, destination.metadata, destination.progress, destination.mode });
                 PatchPrefix(i.res, i.org);
                 return;
             }
             case GirOp::DestAbandon: {
-                Event(GirEventKind::Abandon, { DestinationId(i.a) });
+                auto abandon = [&] {
+                    Event(GirEventKind::Abandon, { DestinationId(i.a) });
+                    SetProgress(i.a, GirConstructionProgress::Abandoned);
+                };
+                if (HT(hvt[i.a]).kind == CoreType::Dest) {
+                    auto progress = PLoadV(I64(), shape[i.a].w[3]);
+                    When(CmpI(CoreCmpOp::Ne, I64(), progress, ConstI(I64(), (int64_t)GirConstructionProgress::Built)), abandon);
+                } else abandon();
                 shape[i.res] = shape[i.a];
                 return;
             }
             case GirOp::DestCancel:
-                if (!shape[i.a].w.empty()) ReleaseUnprotected(shape[i.a].w[0], shape[i.a].w[1]);
+                if (!shape[i.a].w.empty()) {
+                    auto progress = PLoadV(I64(), shape[i.a].w[3]);
+                    When(CmpI(CoreCmpOp::Ne, I64(), progress, ConstI(I64(), (int64_t)GirConstructionProgress::Built)), [&] {
+                        ReleaseUnprotected(shape[i.a].w[0], shape[i.a].w[1]);
+                        SetProgress(i.a, GirConstructionProgress::Cancelled);
+                    });
+                }
                 return;
             case GirOp::DestValue: case GirOp::DestRelocate: case GirOp::DestStage: case GirOp::DestFit:
             case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
                 return AdaptDestination(i);
-            case GirOp::ResultExitDest: {
-                auto outputs = resultOutputs.at(i.idx);
-                Destination destination;
-                destination.stack = outputs[0];
-                destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
-                destination.metadata = outputs[2];
-                PStoreV(I64(), destination.metadata, ConstI(I64(), 0));
-                destination.type = i.ty;
-                destination.request = i.request;
-                destination.resultPosition = i.idx;
-                destinations[carrierRoots[i.res]] = destination;
-                Define(i, { destination.stack, destination.base, destination.metadata });
-                StartPrefix(i.res);
-                return;
-            }
+            case GirOp::ResultExitDest: return ExitDestination(i, resultOutputs.at(i.idx), false);
             case GirOp::TargetDest: {
-                auto &channel = l.lowtargets[i.idx].channels[i.idx2];
-                Destination destination;
-                destination.stack = TargetCell(i.idx, channel.incoming[0]);
-                destination.base = Simple(GirOp::StackMark, Ptr(), destination.stack);
-                destination.metadata = TargetCell(i.idx, channel.incoming[2]);
-                destination.type = i.ty;
-                destination.request = i.request;
-                destination.resultPosition = i.idx2;
-                destination.target = i.idx;
-                PStoreV(I64(), destination.metadata, ConstI(I64(), 0));
-                destinations[carrierRoots[i.res]] = destination;
-                Define(i, { destination.stack, destination.base, destination.metadata });
-                StartPrefix(i.res);
-                return;
+                vector<int> incoming;
+                for (auto cell : l.lowtargets[i.idx].channels[i.idx2].incoming) incoming.push_back(TargetCell(i.idx, cell));
+                return ExitDestination(i, incoming, true);
             }
             case GirOp::DestAbandonNamed: {
                 auto destination = namedDestinations.at(i.idx);
-                Event(GirEventKind::Abandon, { PLoadV(I64(), WordAt(destination.metadata, 1)) });
+                When(shape[i.a].w[4], [&] {
+                    Event(GirEventKind::Abandon, { PLoadV(I64(), PtrAt(destination.metadata, ConstI(I64(), GirConstructionIdentityOffset), 1)) });
+                    PStoreV(I64(), destination.progress, ConstI(I64(), (int64_t)GirConstructionProgress::Abandoned));
+                });
                 Define(i, {});
                 namedDestinations.erase(i.idx);
                 return;
@@ -2716,7 +2847,10 @@ private:
             size_t channel = 0;
             for (size_t result = 0; result < g.results.size(); result++) {
                 vector<int> cells;
-                if (GirNonfixed(h, g.results[result])) cells = shape[i.vals2[channel++]].w;
+                if (GirNonfixed(h, g.results[result])) {
+                    auto &carrier = shape[i.vals2[channel++]].w;
+                    cells.assign(carrier.begin(), carrier.begin() + 4);
+                }
                 else for (auto wordType : s.resultWords[result]) {
                     auto size = IsAggregate(g.results[result]) ? Size(g.results[result]) : 8;
                     auto pointer = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(size));
@@ -2771,14 +2905,18 @@ private:
                         if (GirNonfixed(h, results[result])) {
                             auto stack = TargetCell(edge.target, channel.incoming[0]);
                             auto start = TargetCell(edge.target, channel.escaped[0]);
-                            auto metadata = TargetCell(edge.target, channel.incoming[2]);
+                            auto metadata = Metadata(TargetCell(edge.target, channel.escaped[3]));
                             PStoreV(I64(), metadata, TargetCell(edge.target, channel.escaped[2]));
-                            payload.w = { stack, start, metadata };
+                            auto progress = Progress(GirConstructionProgress::Built);
+                            auto mode = TargetCell(edge.target, channel.escaped[4]);
+                            payload.w = { stack, start, metadata, progress, mode };
                             auto parameter = hf->blocks[edge.block].params[result].first;
                             Destination destination;
                             destination.stack = stack;
                             destination.base = start;
                             destination.metadata = metadata;
+                            destination.progress = progress;
+                            destination.mode = mode;
                             destination.type = results[result];
                             destination.request = h.funcs[h.targets[edge.target].members[0]].resultProtocols[result].request;
                             destination.resultPosition = (int)result;
@@ -2833,16 +2971,19 @@ private:
                 else callResultSources[i.res] = resultSources;
             }
             vector<int> results;
-            for (size_t result = 0; result < g.results.size(); result++)
+            channel = 0;
+            for (size_t result = 0; result < g.results.size(); result++) {
                 for (size_t word = 0; word < s.resultWords[result].size(); word++)
                     results.push_back(GirNonfixed(h, g.results[result]) || IsAggregate(g.results[result]) ? addresses[result][word] :
                                       PLoadV(s.resultWords[result][word], addresses[result][word]));
+                if (GirNonfixed(h, g.results[result])) results.push_back(shape[i.vals2[channel++]].w[4]);
+            }
             if (i.op == GirOp::Invoke) {
                 vector<Shape> produced;
                 size_t offset = 0;
                 for (size_t result = 0; result < g.results.size(); result++) {
                     Shape value;
-                    auto count = s.resultWords[result].size();
+                    auto count = s.resultWords[result].size() + (GirNonfixed(h, g.results[result]) ? 1 : 0);
                     value.w.assign(results.begin() + offset, results.begin() + offset + count);
                     value.source = resultSources[result];
                     produced.push_back(std::move(value));
@@ -2891,6 +3032,8 @@ private:
                 auto type = hf->results[result];
                 if (GirNonfixed(h, type)) {
                     PStoreV(I64(), resultOutputs[result][2], DestinationCount(i.vals[result]));
+                    PStoreV(I64(), PtrAt(resultOutputs[result][2], ConstI(I64(), GirConstructionIdentityOffset), 1), DestinationId(i.vals[result]));
+                    PStoreV(I64(), resultOutputs[result][3], ConstI(I64(), (int64_t)GirConstructionProgress::Built));
                 } else if (IsAggregate(type)) Copy(resultOutputs[result][0], value.w[0], Size(type));
                 else {
                     auto words = Words(type);
@@ -2944,6 +3087,8 @@ private:
                 SetTargetCell(i.idx, channel.escaped[0], shape[value].w[1]);
                 SetTargetCell(i.idx, channel.escaped[1], Simple(GirOp::StackMark, Ptr(), shape[value].w[0]));
                 SetTargetCell(i.idx, channel.escaped[2], DestinationCount(value));
+                SetTargetCell(i.idx, channel.escaped[3], DestinationId(value));
+                SetTargetCell(i.idx, channel.escaped[4], shape[value].w[4]);
             } else if (IsAggregate(results[result])) {
                 auto destination = TargetCell(i.idx, channel.incoming[0]);
                 Copy(destination, shape[value].w[0], Size(results[result]));
