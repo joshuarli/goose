@@ -144,33 +144,33 @@ theorem emptyFactRound_preserves_known (module : GIR.Module) (func : Func)
       · exact checked
     · exact checked
 
-private def finiteRounds (round : σ → σ × Bool) (state : σ) (changed : Bool) (fuel : Nat) : σ :=
+def dataflowRounds (round : σ → σ × Bool) (state : σ) (changed : Bool) (fuel : Nat) : σ :=
   ((forIn (m := Id) Lean.Loop.mk (state, changed, fuel) fun _ state =>
     if state.2.1 && decide (state.2.2 > 0) then
       let next := round state.1
       pure (.yield (next.1, next.2, state.2.2 - 1))
     else pure (.done state)) : Id (σ × Bool × Nat)).1
 
-private theorem finiteRounds_invariant {property : σ → Prop} (round : σ → σ × Bool)
+theorem dataflowRounds_invariant {property : σ → Prop} (round : σ → σ × Bool)
     (preserved : ∀ state, property state → property (round state).1)
     (state : σ) (changed : Bool) (fuel : Nat) (initial : property state) :
-    property (finiteRounds round state changed fuel) := by
+    property (dataflowRounds round state changed fuel) := by
   induction fuel generalizing state changed with
   | zero =>
-    unfold finiteRounds
+    unfold dataflowRounds
     change property (Lean.Loop.forIn (m := Id) (β := σ × Bool × Nat) _ _ _).1
     rw [Lean.Loop.forIn_eq_of_monadTail]
     simp only [Nat.not_lt_zero, decide_false, Bool.and_false, Bool.false_eq_true, ite_false]
     change property state
     exact initial
   | succ fuel ih =>
-    unfold finiteRounds
+    unfold dataflowRounds
     change property (Lean.Loop.forIn (m := Id) (β := σ × Bool × Nat) _ _ _).1
     rw [Lean.Loop.forIn_eq_of_monadTail]
     cases changed
     · change property state
       exact initial
-    · change property (finiteRounds round (round state).1 (round state).2 fuel)
+    · change property (dataflowRounds round (round state).1 (round state).2 fuel)
       exact ih _ _ (preserved state initial)
 
 theorem emptyFactsAtBlocks_entry_known (module : GIR.Module) (func : Func)
@@ -182,14 +182,14 @@ theorem emptyFactsAtBlocks_entry_known (module : GIR.Module) (func : Func)
     rw [Array.getElem?_setIfInBounds]
     simp [nonempty]
   have preserved : KnownStatesPreserved seed
-      (finiteRounds (emptyFactRound module func types provenance) seed true
+      (dataflowRounds (emptyFactRound module func types provenance) seed true
         ((func.blocks.size + 1) * (func.numValues + 1) + 1)) := by
-    apply finiteRounds_invariant
+    apply dataflowRounds_invariant
     · intro state checked
       exact checked.trans (emptyFactRound_preserves_known module func types provenance state)
     · exact .refl seed
   have algorithm : emptyFactsAtBlocks module func types provenance =
-      finiteRounds (emptyFactRound module func types provenance) seed true
+      dataflowRounds (emptyFactRound module func types provenance) seed true
         ((func.blocks.size + 1) * (func.numValues + 1) + 1) := by
     have present : func.blocks.isEmpty = false := by
       simp [Array.isEmpty, Nat.ne_of_gt nonempty]
@@ -198,5 +198,40 @@ theorem emptyFactsAtBlocks_entry_known (module : GIR.Module) (func : Func)
     rfl
   rw [algorithm]
   exact preserved.2 0 [] entry
+
+theorem dataflowRounds_false (round : σ → σ × Bool) (state : σ) (fuel : Nat) :
+    dataflowRounds round state false fuel = state := by
+  unfold dataflowRounds
+  change (Lean.Loop.forIn (m := Id) (β := σ × Bool × Nat) _ _ _).1 = state
+  rw [Lean.Loop.forIn_eq_of_monadTail]
+  rfl
+
+theorem dataflowRounds_step (round : σ → σ × Bool) (state : σ) (fuel : Nat) :
+    dataflowRounds round state true (fuel + 1) =
+      dataflowRounds round (round state).1 (round state).2 fuel := by
+  unfold dataflowRounds
+  change (Lean.Loop.forIn (m := Id) (β := σ × Bool × Nat) _ _ _).1 = _
+  rw [Lean.Loop.forIn_eq_of_monadTail]
+  rfl
+
+theorem dataflowRounds_stable {property : σ → Prop} (round : σ → σ × Bool) (measure : σ → Nat)
+    (progress : ∀ state, property state → property (round state).1 ∧
+      ((round state).2 = true → measure (round state).1 < measure state))
+    (unchanged : ∀ state, property state → (round state).2 = false → (round state).1 = state)
+    (state : σ) (fuel : Nat) (checked : property state) (enough : measure state < fuel) :
+    (round (dataflowRounds round state true fuel)).1 = dataflowRounds round state true fuel := by
+  induction fuel generalizing state with
+  | zero => omega
+  | succ fuel ih =>
+    rw [dataflowRounds_step]
+    have next := progress state checked
+    cases changed : (round state).2
+    · rw [dataflowRounds_false]
+      have same := unchanged state checked changed
+      rw [same]
+      exact same
+    · apply ih _ next.1
+      have decreases := next.2 changed
+      omega
 
 end Goose.Lower.Validation
