@@ -129,30 +129,12 @@ class GirReplacementContentFlow {
         return type >= 0 && module.Type(type).kind == CoreType::Ref &&
             module.Type(module.Type(type).elem).kind == CoreType::Slice;
     }
-    FlowRoots DeclaredReturn(const GirFunc &function) const {
-        if (function.results.empty()) return FlowRoots::Known();
-        if (function.results.size() != 1) return FlowRoots::Opaque();
-        if (!GirRefLike(module, function.results[0])) return FlowRoots::Known();
-        if (function.roots.results.empty()) return FlowRoots::Opaque();
-        vector<Atom> result;
-        for (auto &root : function.roots.results[0]) {
-            Atom atom;
-            switch (root.kind) {
-                case CoreRootRef::Local: atom = { Atom::Local, root.index }; break;
-                case CoreRootRef::Global: atom = { Atom::Global, root.index }; break;
-                case CoreRootRef::Param: atom = { Atom::Param, root.index }; break;
-                case CoreRootRef::Static: return FlowRoots::Opaque();
-            }
-            if (find(result.begin(), result.end(), atom) == result.end()) result.push_back(atom);
-        }
-        return FlowRoots::Known(std::move(result));
-    }
     State Start(const GirFunc &function, const vector<GirTypeId> &types) const {
         State state;
         state.values.resize(types.size());
         state.slots.resize(function.slots.size());
         state.writes.resize(function.params.size(), Unchanged {});
-        state.returned = DeclaredReturn(function);
+        state.returned = FlowRoots::Known();
         for (size_t parameter = 0; parameter < function.params.size(); parameter++)
             state.contents.push_back(RefSlice(function.params[parameter]) ?
                 FlowRoots::Known({ { Atom::Contents, (int)parameter } }) : FlowRoots::Known());

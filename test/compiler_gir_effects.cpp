@@ -885,6 +885,196 @@ CoreModule OwnerReferenceReplacement(bool dependent, OwnerReferenceUse use, Owne
     return core;
 }
 
+CoreModule BroadSliceReturnReplacement(bool dependent) {
+    CoreModule core;
+    core.profile = CoreProfile::Shrink;
+    core.files = { "broad-slice-return.goose" };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto integer = core.IntType(CoreIntTy::I64);
+    CoreType owner;
+    owner.kind = CoreType::GrowShrink;
+    owner.elem = integer;
+    auto ownerType = core.Intern(owner);
+    CoreType slice;
+    slice.kind = CoreType::Slice;
+    slice.mut = CoreMut::Const;
+    slice.elem = integer;
+    auto sliceType = core.Intern(slice);
+    for (auto name : { "owner", "other" }) {
+        CoreGlobal global;
+        global.name = name;
+        global.type = ownerType;
+        global.kind = CoreVarKind::Var;
+        global.org = origin;
+        global.init = make_unique<CoreExpr>();
+        global.init->kind = CoreExprKind::Arr;
+        global.init->type = ownerType;
+        core.globals.push_back(std::move(global));
+    }
+    CoreImpl main;
+    main.name = "main";
+    main.summary.unknown = true;
+    CoreStmt assignment;
+    assignment.kind = CoreStmtKind::AssignWhole;
+    assignment.org = origin;
+    assignment.place = make_unique<CorePlace>();
+    assignment.place->kind = CorePlace::Global;
+    assignment.expr = make_unique<CoreExpr>();
+    assignment.expr->kind = CoreExprKind::Arr;
+    assignment.expr->type = ownerType;
+    auto length = make_unique<CoreExpr>();
+    length->kind = CoreExprKind::Len;
+    length->org = origin;
+    length->view = make_unique<CoreView>();
+    length->view->kind = CoreView::Val;
+    length->view->expr = make_unique<CoreExpr>();
+    length->view->expr->kind = CoreExprKind::Call;
+    length->view->expr->ctx = 1;
+    length->view->expr->org = origin;
+    assignment.expr->elems.push_back(std::move(length));
+    main.body.stmts.push_back(std::move(assignment));
+    core.impls.push_back(std::move(main));
+    CoreContext mainContext;
+    mainContext.impl = 0;
+    core.contexts.push_back(std::move(mainContext));
+    CoreImpl callee;
+    callee.name = "broad_slice_return";
+    callee.results = { { sliceType } };
+    callee.summary.reads = { { true, dependent ? 0 : 1 } };
+    callee.summary.aborts = true;
+    callee.summary.outputs = true;
+    callee.body.value = make_unique<CoreExpr>();
+    callee.body.value->kind = CoreExprKind::Slice;
+    callee.body.value->mut = CoreMut::Const;
+    callee.body.value->org = origin;
+    callee.body.value->view = make_unique<CoreView>();
+    callee.body.value->view->place = make_unique<CorePlace>();
+    callee.body.value->view->place->kind = CorePlace::Global;
+    callee.body.value->view->place->index = dependent ? 0 : 1;
+    core.impls.push_back(std::move(callee));
+    CoreContext calleeContext;
+    calleeContext.impl = 1;
+    calleeContext.resultroots = { { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } } };
+    core.contexts.push_back(std::move(calleeContext));
+    return core;
+}
+
+void PreservesLeastActualReturnRoots() {
+    auto lower = [](bool dependent) {
+        auto core = BroadSliceReturnReplacement(dependent);
+        return GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+            [](const CoreOrigin &) { return 0; }).Lower();
+    };
+    for (bool dependent : { false, true }) {
+        auto observed = Code(lower(dependent));
+        auto expected = dependent ? "GIR-V060" : "";
+        if (observed != expected) fprintf(stderr, "broad return dependent=%d: %s\n", dependent, observed.c_str());
+        assert(observed == expected);
+    }
+    auto module = lower(true);
+    auto &instructions = module.funcs[0].blocks[0].insts;
+    auto position = find_if(instructions.begin(), instructions.end(), [](const GirInst &inst) { return inst.op == GirOp::Call; });
+    auto delayedReturn = *position;
+    instructions.erase(position);
+    position = find_if(instructions.begin(), instructions.end(), [](const GirInst &inst) { return inst.op == GirOp::Clear; });
+    instructions.insert(position, delayedReturn);
+    assert(Code(module) == "GIR-V060");
+    module = lower(false);
+    auto &callee = module.funcs[1];
+    auto slice = callee.results[0];
+    auto recursive = Inst(GirOp::Call, 0);
+    recursive.idx = 1;
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 0 };
+    callee.summary.unknown = true;
+    callee.blocks = { { {}, { recursive, ret } } };
+    assert(Code(module).empty());
+    auto condition = Inst(GirOp::Bool, 0);
+    condition.flag = true;
+    auto branch = Inst(GirOp::CondBr, -1, 0);
+    branch.idx = 1;
+    branch.idx2 = 2;
+    recursive.res = 1;
+    ret.vals = { 1 };
+    auto global = Inst(GirOp::Global, 2);
+    global.idx = 1;
+    auto returned = Inst(GirOp::ViewSlice, 4, 3);
+    returned.mut = CoreMut::Const;
+    auto baseRet = Inst(GirOp::Ret);
+    baseRet.vals = { 4 };
+    callee.blocks = { { {}, { condition, branch } }, { {}, { recursive, ret } },
+        { {}, { global, Inst(GirOp::Snap, 3, 2), returned, baseRet } } };
+    assert(Code(module).empty());
+    callee.blocks[2].insts[0].idx = 0;
+    assert(Code(module) == "GIR-V060");
+    callee.blocks[2].insts[0].idx = 1;
+    auto anotherBase = callee.blocks[2];
+    anotherBase.insts[0].res = 6;
+    anotherBase.insts[0].idx = 0;
+    anotherBase.insts[1] = Inst(GirOp::Snap, 7, 6);
+    anotherBase.insts[2].res = 8;
+    anotherBase.insts[2].a = 7;
+    anotherBase.insts[3].vals = { 8 };
+    auto otherCondition = Inst(GirOp::Bool, 5);
+    auto otherBranch = Inst(GirOp::CondBr, -1, 5);
+    otherBranch.idx = 2;
+    otherBranch.idx2 = 4;
+    callee.blocks[0].insts[1].idx2 = 3;
+    callee.blocks.push_back({ {}, { otherCondition, otherBranch } });
+    callee.blocks.push_back(std::move(anotherBase));
+    assert(Code(module) == "GIR-V060");
+    module = lower(false);
+    GirFunc forwarder;
+    forwarder.name = "return_forwarder";
+    forwarder.results = { slice };
+    forwarder.roots.results = module.funcs[1].roots.results;
+    forwarder.roots.slots.emplace();
+    forwarder.scopes = { -1 };
+    forwarder.summary.unknown = true;
+    auto call = Inst(GirOp::Call, 0);
+    call.idx = 1;
+    ret.vals = { 0 };
+    forwarder.blocks = { { {}, { call, ret } } };
+    module.funcs.push_back(forwarder);
+    for (auto &inst : module.funcs[0].blocks[0].insts)
+        if (inst.op == GirOp::Call) inst.idx = 2;
+    assert(Code(module).empty());
+    GirGlobal initializer;
+    initializer.name = "returned_length";
+    initializer.ty = module.IntType(CoreIntTy::I64);
+    initializer.kind = CoreVarKind::Let;
+    initializer.init.name = "returned_length_init";
+    initializer.init.results = { initializer.ty };
+    initializer.init.scopes = { -1 };
+    initializer.init.summary.unknown = true;
+    global = Inst(GirOp::Global, 0);
+    global.idx = 0;
+    call.res = 1;
+    call.idx = 2;
+    auto array = Inst(GirOp::Arr, 4);
+    array.ty = module.globals[0].ty;
+    array.vals = { 3 };
+    auto zero = Inst(GirOp::Int, 5);
+    zero.ty = initializer.ty;
+    zero.text = "0";
+    ret.vals = { 5 };
+    initializer.init.blocks = { { {}, { global, Inst(GirOp::Clear, -1, 0), call,
+        Inst(GirOp::SliceView, 2, 1), Inst(GirOp::ViewLen, 3, 2), array,
+        Inst(GirOp::Replace, -1, 0, 4), zero, ret } } };
+    module.globals.push_back(std::move(initializer));
+    module.funcs[0] = Module().funcs[0];
+    assert(Code(module).empty());
+    auto &body = module.funcs[1].blocks[0].insts;
+    auto actualGlobal = find_if(body.begin(), body.end(), [](const GirInst &inst) { return inst.op == GirOp::Global; });
+    actualGlobal->idx = 0;
+    module.funcs[1].summary.reads = { { true, 0 } };
+    assert(Code(module) == "GIR-V060");
+    actualGlobal->idx = 1;
+    module.funcs[1].summary.reads = { { true, 1 } };
+    module.funcs[1].roots.results = { { { CoreRootRef::Global, 0 } } };
+    assert(Code(module) == "GIR-V050");
+}
+
 void PreservesOptionalSlotRootMetadata() {
     auto raw = Module();
     auto oldWire = GirWriter(raw).Write();
@@ -2094,6 +2284,7 @@ void IncludesActualRefSliceBackingReads() {
 }
 
 int main() {
+    PreservesLeastActualReturnRoots();
     PreservesReturnedContentCorrelation();
     PreservesSpecializedContentCorrelation();
     RejectsNestedReferenceParameters();
