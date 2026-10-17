@@ -4,67 +4,150 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
+variable {targets : List BlockId}
+
+def ReplacementSitesFree (le : LEnv) (before : LS) (action : B α) : Prop :=
+  ReplacementSitesBuilder (targets := targets) le before →
+    before.Ext (action le before).2 ∧ ReplacementSitesBuilder (targets := targets) le (action le before).2
+
 def ReplacementSitesAt (le : LEnv) (before : LS) (action : B α) : Prop :=
-  ReplacementSitesBuilder le before → ReplacementSitesBuilder le (action le before).2
+  ReplacementTargetsBound targets before → ReplacementSitesFree (targets := targets) le before action
+
+theorem ReplacementSitesFree.bind {le : LEnv} {before : LS} {first : B α} {next : α → B β}
+    (one : ReplacementSitesFree (targets := targets) le before first)
+    (two : ReplacementSitesFree (targets := targets) le (first le before).2 (next (first le before).1)) :
+    ReplacementSitesFree (targets := targets) le before (first >>= next) := by
+  intro checked
+  obtain ⟨firstExt, middle⟩ := one checked
+  obtain ⟨nextExt, finalState⟩ := two middle
+  exact ⟨firstExt.trans nextExt, finalState⟩
+
+theorem ReplacementSitesFree.at {le : LEnv} {before : LS} {action : B α}
+    (free : ReplacementSitesFree (targets := targets) le before action) :
+    ReplacementSitesAt (targets := targets) le before action := fun _ => free
 
 theorem ReplacementSitesAt.bind {le : LEnv} {before : LS} {first : B α} {next : α → B β}
-    (firstStorage : ReplacementSitesAt le before first)
-    (nextStorage : ReplacementSitesAt le (first le before).2 (next (first le before).1)) :
-    ReplacementSitesAt le before (first >>= next) := fun checked => nextStorage (firstStorage checked)
+    (one : ReplacementSitesAt (targets := targets) le before first)
+    (two : ReplacementSitesAt (targets := targets) le (first le before).2 (next (first le before).1)) :
+    ReplacementSitesAt (targets := targets) le before (first >>= next) := by
+  intro bounded checked
+  obtain ⟨firstExt, middle⟩ := one bounded checked
+  obtain ⟨nextExt, finalState⟩ := two (bounded.mono firstExt) middle
+  exact ⟨firstExt.trans nextExt, finalState⟩
 
-theorem ReplacementSitesAt.pure (le : LEnv) (before : LS) (value : α) : ReplacementSitesAt le before (pure value) :=
-  fun checked => checked
+theorem ReplacementSitesAt.reserve_prefix {le : LEnv} {before : LS} {first : B α} {next : α → B β}
+    (extra : List BlockId) (fresh : ∀ target ∈ extra, before.blocks.size ≤ target)
+    (one : ReplacementSitesFree (targets := extra ++ targets) le before first)
+    (boundedExtra : ∀ target ∈ extra, target < (first le before).2.blocks.size)
+    (two : ReplacementSitesAt (targets := extra ++ targets) le (first le before).2 (next (first le before).1)) :
+    ReplacementSitesAt (targets := targets) le before (first >>= next) := by
+  intro bounded checked
+  obtain ⟨firstExt, middle⟩ := one (checked.reserveMany extra fresh)
+  have extendedBound : ReplacementTargetsBound (extra ++ targets) (first le before).2 := by
+    intro target member
+    rcases List.mem_append.mp member with added | inherited
+    · exact boundedExtra target added
+    · exact (bounded.mono firstExt) target inherited
+  obtain ⟨nextExt, finalState⟩ := two extendedBound middle
+  exact ⟨firstExt.trans nextExt, finalState.weaken (fun target member => List.mem_append_right extra member)⟩
+
+theorem ReplacementSitesFree.pure (le : LEnv) (before : LS) (value : α) :
+    ReplacementSitesFree (targets := targets) le before (pure value) := fun checked => ⟨.refl _, checked⟩
+
+theorem ReplacementSitesAt.pure (le : LEnv) (before : LS) (value : α) :
+    ReplacementSitesAt (targets := targets) le before (pure value) := (ReplacementSitesFree.pure le before value).at
 
 theorem ReplacementSitesAt.of_state {le : LEnv} {before : LS} {action : B α}
-    (same : (action le before).2 = before) : ReplacementSitesAt le before action := by
-  intro checked
+    (same : (action le before).2 = before) : ReplacementSitesAt (targets := targets) le before action := by
+  intro _ checked
   rw [same]
-  exact checked
+  exact ⟨.refl _, checked⟩
 
-theorem ReplacementSitesAt.emitDef {le : LEnv} {before : LS} (op : Op)
+theorem ReplacementSitesFree.emitDef {le : LEnv} {before : LS} (op : Op)
     (emitted : before.cur.isSome = true → ∀ value, NotReplacement (.def value op)) :
-    ReplacementSitesAt le before (Goose.Lower.emitDef op) := by
+    ReplacementSitesFree (targets := targets) le before (Goose.Lower.emitDef op) := by
   intro checked
+  refine ⟨(advB_emitDef op le before _ _ rfl).ext, ?_⟩
   cases live : before.cur with
   | none => rw [emitDef_none op le live]; exact checked
   | some block => exact checked.emitDef (emitted (by simp [live])) rfl
 
-theorem ReplacementSitesAt.emitEffect {le : LEnv} {before : LS} (effect : Effect)
+theorem ReplacementSitesAt.emitDef {le : LEnv} {before : LS} (op : Op)
+    (emitted : before.cur.isSome = true → ∀ value, NotReplacement (.def value op)) :
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.emitDef op) :=
+  (ReplacementSitesFree.emitDef op emitted).at
+
+theorem ReplacementSitesFree.emitEffect {le : LEnv} {before : LS} (effect : Effect)
     (emitted : before.cur.isSome = true → NotReplacement (.eff effect)) :
-    ReplacementSitesAt le before (Goose.Lower.emitEffect effect) := by
+    ReplacementSitesFree (targets := targets) le before (Goose.Lower.emitEffect effect) := by
   intro checked
+  refine ⟨(advB_emitEffect effect le before _ _ rfl).ext, ?_⟩
   cases live : before.cur with
   | none => rw [emitEffect_none effect le live]; exact checked
   | some block => exact checked.emitEffect (emitted (by simp [live])) rfl
 
-theorem ReplacementSitesAt.emitTerm (le : LEnv) (before : LS) (term : Term) :
-    ReplacementSitesAt le before (Goose.Lower.emitTerm term) := fun checked => checked.emitTerm rfl
+theorem ReplacementSitesAt.emitEffect {le : LEnv} {before : LS} (effect : Effect)
+    (emitted : before.cur.isSome = true → NotReplacement (.eff effect)) :
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.emitEffect effect) :=
+  (ReplacementSitesFree.emitEffect effect emitted).at
 
-theorem ReplacementSitesAt.patchTerm (le : LEnv) (before : LS) (block : BlockId) (term : Term) :
-    ReplacementSitesAt le before (Goose.Lower.patchTerm block term) := fun checked => checked.patchTerm rfl
+theorem ReplacementSitesFree.emitTerm (le : LEnv) (before : LS) (term : Term)
+    (allowed : ∀ target ∈ term.successors, target ∈ targets ∨ before.blocks.size ≤ target) :
+    ReplacementSitesFree (targets := targets) le before (Goose.Lower.emitTerm term) :=
+  fun checked => ⟨(advB_emitTerm term le before _ _ rfl).ext, checked.emitTerm allowed rfl⟩
+
+theorem ReplacementSitesAt.emitTerm (le : LEnv) (before : LS) (term : Term)
+    (allowed : ∀ target ∈ term.successors, target ∈ targets ∨ before.blocks.size ≤ target := by
+      simp [Term.successors]) :
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.emitTerm term) :=
+  (ReplacementSitesFree.emitTerm le before term allowed).at
+
+theorem ReplacementSitesFree.patchTerm (le : LEnv) (before : LS) (block : BlockId) (term : Term)
+    (allowed : ∀ target ∈ term.successors, target ∈ targets ∨ before.blocks.size ≤ target) :
+    ReplacementSitesFree (targets := targets) le before (Goose.Lower.patchTerm block term) :=
+  fun checked => ⟨patchTerm_ext (env := le) rfl, checked.patchTerm rfl allowed⟩
+
+theorem ReplacementSitesAt.patchTerm (le : LEnv) (before : LS) (block : BlockId) (term : Term)
+    (allowed : ∀ target ∈ term.successors, target ∈ targets ∨ before.blocks.size ≤ target := by
+      simp [Term.successors]) :
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.patchTerm block term) :=
+  (ReplacementSitesFree.patchTerm le before block term allowed).at
+
+theorem ReplacementSitesFree.newBlock (le : LEnv) (before : LS) (types : List VTy) :
+    ReplacementSitesFree (targets := targets) le before (Goose.Lower.newBlock types) := by
+  intro checked
+  have framed := generatedTargetFrame_newBlock none types before le before _ _ (.refl _) trivial
+    (TermEdgesFramed.refl none before) rfl
+  exact ⟨framed.2, checked.newBlock rfl⟩
 
 theorem ReplacementSitesAt.newBlock (le : LEnv) (before : LS) (types : List VTy) :
-    ReplacementSitesAt le before (Goose.Lower.newBlock types) := fun checked => checked.newBlock rfl
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.newBlock types) :=
+  (ReplacementSitesFree.newBlock le before types).at
+
+theorem ReplacementSitesFree.setCur (le : LEnv) (before : LS) (current : Option BlockId) :
+    ReplacementSitesFree (targets := targets) le before (Goose.Lower.setCur current) :=
+  fun checked => ⟨.refl _, checked.of_emits (.of_blocks rfl) (.refl _) (.of_blocks rfl)⟩
 
 theorem ReplacementSitesAt.setCur (le : LEnv) (before : LS) (current : Option BlockId) :
-    ReplacementSitesAt le before (Goose.Lower.setCur current) := fun checked => checked.of_emits (.of_blocks rfl) (.refl _)
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.setCur current) :=
+  (ReplacementSitesFree.setCur le before current).at
 
-theorem ReplacementSitesAt.get (le : LEnv) (before : LS) : ReplacementSitesAt le before (get : B LS) :=
-  fun checked => checked
+theorem ReplacementSitesAt.get (le : LEnv) (before : LS) : ReplacementSitesAt (targets := targets) le before (get : B LS) :=
+  fun _ checked => ⟨.refl _, checked⟩
 
-theorem ReplacementSitesAt.read (le : LEnv) (before : LS) : ReplacementSitesAt le before (read : B LEnv) :=
-  fun checked => checked
+theorem ReplacementSitesAt.read (le : LEnv) (before : LS) : ReplacementSitesAt (targets := targets) le before (read : B LEnv) :=
+  fun _ checked => ⟨.refl _, checked⟩
 
-theorem ReplacementSitesAt.curBlock (le : LEnv) (before : LS) : ReplacementSitesAt le before Goose.Lower.curBlock :=
-  fun checked => checked
+theorem ReplacementSitesAt.curBlock (le : LEnv) (before : LS) : ReplacementSitesAt (targets := targets) le before Goose.Lower.curBlock :=
+  fun _ checked => ⟨.refl _, checked⟩
 
 theorem ReplacementSitesAt.valTy (le : LEnv) (before : LS) (value : ValueId) :
-    ReplacementSitesAt le before (Goose.Lower.valTy value) := by
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.valTy value) := by
   apply ReplacementSitesAt.of_state
   rw [valTy_run]
 
 theorem ReplacementSitesAt.intTyOf (le : LEnv) (before : LS) (value : ValueId) :
-    ReplacementSitesAt le before (Goose.Lower.intTyOf value) := by
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.intTyOf value) := by
   unfold Goose.Lower.intTyOf
   apply (ReplacementSitesAt.valTy _ _ _).bind
   cases (Goose.Lower.valTy value le before).1 with
@@ -72,10 +155,10 @@ theorem ReplacementSitesAt.intTyOf (le : LEnv) (before : LS) (value : ValueId) :
   | view _ _ => exact ReplacementSitesAt.pure _ _ _
 
 theorem ReplacementSitesAt.whenLive {le : LEnv} {before : LS} (default : α) (action : BlockId → B α)
-    (branches : ∀ block, before.cur = some block → ReplacementSitesAt le before (action block)) :
-    ReplacementSitesAt le before (Goose.Lower.whenLive default action) := by
+    (branches : ∀ block, before.cur = some block → ReplacementSitesAt (targets := targets) le before (action block)) :
+    ReplacementSitesAt (targets := targets) le before (Goose.Lower.whenLive default action) := by
   cases live : before.cur with
   | none => apply ReplacementSitesAt.of_state; exact congrArg Prod.snd (whenLive_none _ _ _ live)
-  | some block => simpa only [ReplacementSitesAt, whenLive_some _ _ _ live] using branches block live
+  | some block => simpa only [ReplacementSitesAt, ReplacementSitesFree, whenLive_some _ _ _ live] using branches block live
 
 end Goose.Lower.Validation

@@ -23,7 +23,9 @@ theorem joinValue_live_refined_witness {module : GIR.Module}
     ∃ next : Prov, BuilderRootWitness results vt func next final ∧
       BuilderEffectRefinement module vt func next source final ∧
       RootsRefine func (rootsAt next.vals value) sourceRoots ∧ next.slots = upper.slots ∧
-      ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
+      (∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index) ∧
+      rootsAt next.vals value = live.flatMap (fun pair => rootsAt upper.vals pair.2) ∧
+      value < final.vals.size := by
   simp only [bind_eq] at run
   obtain ⟨ty, typeState, typeRun, ⟨join, params⟩, allocated, allocation,
     patchUnit, patched, patchRun, curUnit, selected, selecting, returned⟩ := run
@@ -58,9 +60,12 @@ theorem joinValue_live_refined_witness {module : GIR.Module}
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj selecting
   rw [pure_run] at returned
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj returned
-  refine ⟨next, ⟨?_, patchedWitness.1.instructions⟩, patchedWitness.2.1, ?_, slots, growth⟩
+  refine ⟨next, ⟨?_, patchedWitness.1.instructions⟩, patchedWitness.2.1, ?_, slots, growth,
+    parameterRoots, ?_⟩
   · exact patchedWitness.1.valueSize
   · simpa [parameterRoots] using seedRefines
+  · rw [patchedWitness.2.2.2.1]
+    simp [newBlock1_run]
 
 
 theorem joinValue_refined_witness {module : GIR.Module}
@@ -95,7 +100,7 @@ theorem joinValue_refined_witness {module : GIR.Module}
         next.slots = upper.slots ∧
         ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
     intro live bounds roots step
-    obtain ⟨next, generated, effects, returned, slots, growth⟩ :=
+    obtain ⟨next, generated, effects, returned, slots, growth, _rawRoots, _bound⟩ :=
       joinValue_live_refined_witness live symbols witness prior bounds roots step
     exact ⟨next, generated, effects, fun _ => returned, slots, growth⟩
   unfold joinValue at run
