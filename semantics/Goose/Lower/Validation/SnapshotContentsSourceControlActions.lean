@@ -6,6 +6,21 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
+theorem SnapshotSourceTrace.recordValueRootRecipe {le : LEnv} {first : ValueId}
+    {before after : LS} {value : ValueId} {scope : ScopeId} {result : Unit}
+    (trace : SnapshotSourceTrace le first before before)
+    (run : Goose.Lower.recordValueRootRecipe value scope le before = (result, after)) :
+    SnapshotSourceTrace le first after after := by
+  rw [recordValueRootRecipe_run] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  intro snapshot mode owner member bound
+  obtain ⟨site, fresh, extension, typedPrefix, retention⟩ := trace snapshot mode owner member bound
+  refine ⟨site, fresh, extension, typedPrefix, ?_⟩
+  intro authorized witness
+  have retained := retention authorized witness
+  exact ⟨retained.closed, retained.noninteger, retained.ownerMember,
+    retained.fresh, retained.beforeSnapshot⟩
+
 def SnapshotFreeRun (action : B α) : Prop :=
   ∀ le before, NoNewSnapshots before (action le before).2
 
