@@ -34,8 +34,7 @@ private theorem validate_of_stages (module : GIR.Module)
     (summaries : checkAll (List.range module.funcs.size)
       (checkSummaryOf module module.implTypes (resultRoots module module.implTypes) module.rootCount) = .ok ())
     (replacement : checkAll module.infos (fun info =>
-      let provenance := info.f.provenance (resultRoots module module.implTypes) info.vt module.rootCount
-      checkShrinkReplace module info.label info.f info.vt provenance) = .ok ())
+      checkShrinkReplace module info.label info.f info.vt) = .ok ())
     (evidence : checkAll module.infos (fun info => asCheck .v080 info.label (checkEvidence module info.f info.vt)) = .ok ())
     (origins : checkAll module.infos (fun info => checkOrigins module.profile info.label info.f) = .ok ()) :
     GIR.validate module = .ok () := by
@@ -61,6 +60,7 @@ private theorem validate_of_stages (module : GIR.Module)
       cases found : walk.scopes with
       | none => simp [pure, Except.pure]
       | some message => simp [found, violation] at checked
-    · rw [summaries, replacement, evidence, origins]
+    · simp only [GIR.checkShrinkReplace_canonical]
+      rw [summaries, replacement, evidence, origins]
 
 end Goose.Lower.Validation

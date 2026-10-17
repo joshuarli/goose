@@ -139,15 +139,14 @@ private theorem validate_of_checks (m : GIR.Module)
     (scopes : (checkAll (m.infos.map fun i => walkScopes i.label i.f) fun w => do
       if let some msg := w.scopes then violation .v040 msg) = .ok ())
     (summaries : checkAll (List.range m.funcs.size) (checkSummaryOf m m.implTypes (resultRoots m m.implTypes) m.rootCount) = .ok ())
-    (shrink : (checkAll m.infos fun i =>
-      let p := i.f.provenance (resultRoots m m.implTypes) i.vt m.rootCount
-      checkShrinkReplace m i.label i.f i.vt p) = .ok ())
+    (shrink : (checkAll m.infos fun i => checkShrinkReplace m i.label i.f i.vt) = .ok ())
     (evidence : (checkAll m.infos fun i => asCheck .v080 i.label (checkEvidence m i.f i.vt)) = .ok ())
     (origins : (checkAll m.infos fun i => checkOrigins m.profile i.label i.f) = .ok ()) :
     GIR.validate m = .ok () := by
   simp only [bind, Except.bind, pure, Except.pure] at storage scopes
   simp only [GIR.validate, entry, symbols, structs, types, cfg, unreachable,
-    summaries, shrink, evidence, origins, bind, Except.bind, pure, Except.pure]
+    summaries, GIR.checkShrinkReplace_canonical, shrink, evidence, origins,
+    bind, Except.bind, pure, Except.pure]
   unfold GIR.validate.match_1 validate_of_checks.match_3 at *
   simp only [storage, scopes]
 
