@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.SummaryPreservationReplayValue
+import Goose.Lower.Validation.SummaryPreservationReplayLiveEmit
 import Goose.Lower.Validation.SummaryPreservationScalarEmit
 
 namespace Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
@@ -52,7 +52,7 @@ theorem binary {env : PEnv} {op : BinOp} {left right : Expr} {origin : OriginId}
     (leftRun : lowerExpr left le initial = (leftValue, middle))
     (rightRun : lowerExpr right le middle = (rightValue, ls))
     (typeRun : intTyOf leftValue le ls = (ty, ls))
-    (leftBound : leftValue < ls.vals.size) (rightBound : rightValue < ls.vals.size)
+    (inputs : ls.cur.isSome = true → leftValue < ls.vals.size ∧ rightValue < ls.vals.size)
     (originBound : origin < le.mod.origins.size) :
     ∃ next, ReplayBuilder module results vt func target le scopeCount slots
         (lowerExpr (.bin op left right origin) le initial).2 next ∧
@@ -66,9 +66,9 @@ theorem binary {env : PEnv} {op : BinOp} {left right : Expr} {origin : OriginId}
   have delta := (effectStep_bin_refines (module := module) (vt := vt) (provenance := upper)
     (result := ls.vals.size) (left := leftValue) (right := rightValue) (op := op)
     (ty := ty) (origin := some origin) (effectRefinement_empty func before.eff)).trans wholeEffect
-  exact ready.emitTypedDef (.bin op ty leftValue rightValue (some origin)) [] (.data (.int ty))
-    (by simpa [Op.uses] using And.intro leftBound rightBound)
-    (by simpa [Op.origin] using originBound) (by simp [Op.SymbolRefsValid]) delta
-    (fun _ member => by cases member) (fun _ => rfl)
+  exact ready.emitTypedDef_live (.bin op ty leftValue rightValue (some origin)) [] (.data (.int ty))
+    (by intro live; simpa [Op.uses] using inputs live)
+    (by simpa [Op.origin] using originBound) (by simp [Op.SymbolRefsValid]) (fun _ => delta)
+    (fun _ _ member => by cases member) (fun _ _ => rfl)
 
 end Goose.Lower.Validation.SummaryPreservation.ReplayBuilder

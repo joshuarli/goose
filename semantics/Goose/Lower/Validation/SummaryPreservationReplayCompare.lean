@@ -18,7 +18,7 @@ theorem comparison {env : PEnv} {op : CmpOp} {left right : Expr}
     (leftRun : lowerExpr left le initial = (leftValue, middle))
     (rightRun : lowerExpr right le middle = (rightValue, ls))
     (typeRun : valTy leftValue le ls = (valueTy, ls))
-    (leftBound : leftValue < ls.vals.size) (rightBound : rightValue < ls.vals.size) :
+    (inputs : ls.cur.isSome = true → leftValue < ls.vals.size ∧ rightValue < ls.vals.size) :
     ∃ next, ReplayBuilder module results vt func target le scopeCount slots
         (lowerExpr (.cmp op left right) le initial).2 next ∧
       ((lowerExpr (.cmp op left right) le initial).2.cur.isSome = true →
@@ -36,18 +36,21 @@ theorem comparison {env : PEnv} {op : CmpOp} {left right : Expr}
     | data ty => cases ty <;> rfl
     | view => rfl
   rw [whole]
-  apply ready.emitTypedDef emitted [] (.data .bool)
-  · dsimp only [emitted]
-    split <;> simpa [Op.uses] using And.intro leftBound rightBound
+  apply ready.emitTypedDef_live emitted [] (.data .bool)
+  · intro live
+    dsimp only [emitted]
+    split <;> simpa [Op.uses] using inputs live
   · dsimp only [emitted]
     split <;> simp [Op.origin]
   · dsimp only [emitted]
     split <;> simp [Op.SymbolRefsValid]
-  · dsimp only [emitted]
-    split <;> exact effectRefinement_empty func target
-  · dsimp only [emitted]
-    split <;> intro root member <;> cases member
   · intro _
+    dsimp only [emitted]
+    split <;> exact effectRefinement_empty func target
+  · intro _
+    dsimp only [emitted]
+    split <;> intro root member <;> cases member
+  · intro _ _
     dsimp only [emitted]
     split <;> rfl
 
