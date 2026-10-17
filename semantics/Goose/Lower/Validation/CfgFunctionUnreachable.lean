@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.CfgSourceUnreachable
+import Goose.Lower.ContextLowering
 
 namespace Goose.Lower.Validation
 
@@ -63,8 +64,11 @@ theorem lowerImpl_unreachableCode (module : Core.Module) (impl : Core.Impl) :
   have preserves : ∀ params, UnreachableRun (continuation params) := fun params =>
     UnreachableRun.bind (unreachable_lowerBlock none _ false impl.body) fun value =>
       unreachable_finishFunction impl value
+  let state := lowerImplState module impl
   have checked := unreachable_function_start types continuation preserves env
-  exact checked.finished (lowerImpl module impl) rfl
+  change BuilderUnreachable module.noReturn state at checked
+  change FunctionUnreachable module.noReturn (lowerImplFromState module impl state)
+  exact checked.finished _ (lowerImplFromState_blocks module impl state)
 
 theorem lowerContextAt_unreachableCode (module : Core.Module) (context : Core.Context) (impl : Core.Impl) :
     FunctionUnreachable module.noReturn (lowerContextAt module context impl) :=
@@ -79,30 +83,36 @@ theorem lowerGlobal_unreachableCode (module : Core.Module) (global : Core.Global
   have preserves : ∀ params, UnreachableRun (continuation params) := fun _ =>
     UnreachableRun.bind (unreachable_lowerExpr global.init) fun _ =>
       unreachable_emitTerm _ (by intro h; cases h)
+  let action : B Unit := do
+    let (entry, _) ← newBlock []
+    setCur (some entry)
+    continuation []
+  let state := (action env initState).2
   have checked := unreachable_function_start [] continuation preserves env
-  exact checked.finished (lowerGlobal module global).init rfl
+  change BuilderUnreachable module.noReturn state at checked
+  have blocks : (lowerGlobal module global).init.blocks = finishBlocks state.blocks := rfl
+  exact checked.finished _ blocks
 
 theorem lower_unreachableCode (module : Core.Module) (func : Func)
     (member : func ∈ (lower module).funcs.toList ++ (lower module).globals.toList.map (·.init)) :
     FunctionUnreachable module.noReturn func := by
   rcases List.mem_append.mp member with implementation | initializer
-  · change func ∈ (module.contexts.map fun context =>
-        match (module.impls.map fun impl => (impl, lowerImpl module impl))[context.impl]? with
-        | some (impl, body) => { body with roots := lowerContextRootInfo context impl }
-        | none => invalidContextFunction context).toList at implementation
-    simp only [Array.toList_map, List.mem_map] at implementation
-    obtain ⟨context, _, equality⟩ := implementation
-    rw [Array.getElem?_map] at equality
-    cases source : module.impls[context.impl]? with
-    | none =>
-      simp only [source, Option.map_none] at equality
-      subst func
-      intro block member
-      simp [invalidContextFunction] at member
-    | some impl =>
-      simp only [source, Option.map_some] at equality
-      subst func
-      exact lowerContextAt_unreachableCode module context impl
+  · obtain ⟨index, lookup⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp implementation)
+    cases contextAt : module.contexts[index]? with
+    | none => simp [lower, Array.getElem?_map, contextAt] at lookup
+    | some context =>
+      cases source : module.impls[context.impl]? with
+      | none =>
+        have invalidAt : (lower module).funcs[index]? = some (invalidContextFunction context) := by
+          simp [lower, Array.getElem?_map, contextAt, source]
+        have same := Option.some.inj (lookup.symm.trans invalidAt)
+        subst func
+        intro block member
+        simp [invalidContextFunction] at member
+      | some impl =>
+        have same := Option.some.inj (lookup.symm.trans (lower_func_at contextAt source))
+        rw [same]
+        exact lowerContextAt_unreachableCode module context impl
   · obtain ⟨global, globalMember, rfl⟩ := List.mem_map.mp initializer
     change global ∈ (module.globals.map (lowerGlobal module)).toList at globalMember
     simp only [Array.toList_map, List.mem_map] at globalMember
