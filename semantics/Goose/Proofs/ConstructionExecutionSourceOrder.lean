@@ -272,6 +272,32 @@ theorem evalProduce_values_success_count (fuel : Nat) (config : EvalConfig)
   evalOperands_success_count fuel config environment (evalProduce_values_success_trace
     fuel config environment channels operands initial final carriers result)
 
+theorem evalValue_fixedFill_source_once (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (element : Ty) (count : Nat) (operand : Expr)
+    (origin : Goose.Core.OriginId) (initial final : ExecutionState) (values : Array Value)
+    (fixed : (Ty.arr element count).nonfixed = false)
+    (result : evalValue (fuel + 1) config environment (.fill (.arr element count) operand origin)
+      initial = .ok (.fixed values) final) :
+    ∃ value, evalValue fuel config environment operand initial = .ok value final ∧
+      values = Array.replicate count value := by
+  simp only [evalValue] at result
+  have notTrue : ¬ (Ty.arr element count).nonfixed = true := by simp [fixed]
+  rw [ite_eq_right notTrue] at result
+  simp only [bind, pure] at result
+  cases operandResult : evalValue fuel config environment operand initial with
+  | ok value final' =>
+      rw [operandResult] at result
+      have valuesEq : values = Array.replicate count value := by
+        injection result with valueEq stateEq
+        injection valueEq with valuesEq
+        exact valuesEq.symm
+      have finalEq : final' = final := by injection result
+      subst final'
+      exact ⟨value, rfl, valuesEq⟩
+  | stop reason final' => rw [operandResult] at result; cases result
+  | escape address carriers final' => rw [operandResult] at result; cases result
+  | jump target kind final' => rw [operandResult] at result; cases result
+
 theorem evalValue_fixedArray_operands_success_order (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
     (origin : Goose.Core.OriginId) (initial final : ExecutionState) (values : List Value)
@@ -302,13 +328,14 @@ theorem evalValue_fixedArray_operands_success_order (fuel : Nat) (config : EvalC
   | escape address carriers final' => simp only [operandsResult] at result; cases result
   | jump target kind final' => simp only [operandsResult] at result; cases result
 
-theorem evalValue_fixedArray_operands_stopped_prefix (fuel : Nat) (config : EvalConfig)
+theorem evalValue_fixedArray_operands_stopped_trace (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
     (origin : Goose.Core.OriginId) (reason : Goose.Core.Stop) (initial final : ExecutionState)
     (fixed : ty.nonfixed = false)
     (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
       .stop reason final) :
-    ∃ visited, SourcePrefix visited operands := by
+    ∃ visited, ListMapMLoopStopped (fun operand => evalValue fuel config environment operand)
+      operands [] initial reason final visited := by
   simp only [evalValue] at result
   have notTrue : ¬ ty.nonfixed = true := by simp [fixed]
   rw [ite_eq_right notTrue] at result
@@ -316,8 +343,42 @@ theorem evalValue_fixedArray_operands_stopped_prefix (fuel : Nat) (config : Eval
   cases operandsResult : operands.mapM (evalValue fuel config environment) initial with
   | ok evaluated final' => simp only [operandsResult] at result; cases result
   | stop stopped final' =>
-      exact listMapM_stopped_source_prefix _ _ _ _ _ operandsResult
+      simp only [operandsResult] at result
+      cases result
+      exact listMapMLoop_stopped_trace _ _ [] _ reason _ operandsResult
   | escape address carriers final' => simp only [operandsResult] at result; cases result
+  | jump target kind final' => simp only [operandsResult] at result; cases result
+
+theorem evalValue_fixedArray_operands_stopped_prefix (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (reason : Goose.Core.Stop) (initial final : ExecutionState)
+    (fixed : ty.nonfixed = false)
+    (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+      .stop reason final) :
+    ∃ visited, SourcePrefix visited operands := by
+  obtain ⟨visited, trace⟩ := evalValue_fixedArray_operands_stopped_trace
+    fuel config environment ty operands origin reason initial final fixed result
+  exact ⟨visited, sourcePrefix_of_stopped trace⟩
+
+theorem evalValue_fixedArray_operands_escaped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (address : ExitAddress) (carriers : List Carrier)
+    (initial final : ExecutionState) (fixed : ty.nonfixed = false)
+    (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+      .escape address carriers final) :
+    ∃ visited, ListMapMLoopEscaped (fun operand => evalValue fuel config environment operand)
+      operands [] initial address carriers final visited := by
+  simp only [evalValue] at result
+  have notTrue : ¬ ty.nonfixed = true := by simp [fixed]
+  rw [ite_eq_right notTrue] at result
+  simp only [bind, pure] at result
+  cases operandsResult : operands.mapM (evalValue fuel config environment) initial with
+  | ok evaluated final' => simp only [operandsResult] at result; cases result
+  | stop reason final' => simp only [operandsResult] at result; cases result
+  | escape address' carriers' final' =>
+      simp only [operandsResult] at result
+      cases result
+      exact listMapMLoop_escaped_trace _ _ [] _ address carriers _ operandsResult
   | jump target kind final' => simp only [operandsResult] at result; cases result
 
 theorem evalValue_fixedArray_operands_escaped_prefix (fuel : Nat) (config : EvalConfig)
@@ -327,15 +388,8 @@ theorem evalValue_fixedArray_operands_escaped_prefix (fuel : Nat) (config : Eval
     (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
       .escape address carriers final) :
     ∃ visited, SourcePrefix visited operands := by
-  simp only [evalValue] at result
-  have notTrue : ¬ ty.nonfixed = true := by simp [fixed]
-  rw [ite_eq_right notTrue] at result
-  simp only [bind, pure] at result
-  cases operandsResult : operands.mapM (evalValue fuel config environment) initial with
-  | ok evaluated final' => simp only [operandsResult] at result; cases result
-  | stop reason final' => simp only [operandsResult] at result; cases result
-  | escape address' carriers' final' =>
-      exact listMapM_escaped_source_prefix _ _ _ _ _ _ operandsResult
-  | jump target kind final' => simp only [operandsResult] at result; cases result
+  obtain ⟨visited, trace⟩ := evalValue_fixedArray_operands_escaped_trace
+    fuel config environment ty operands origin address carriers initial final fixed result
+  exact ⟨visited, sourcePrefix_of_escaped trace⟩
 
 end Goose.Proofs.ConstructionExecution
