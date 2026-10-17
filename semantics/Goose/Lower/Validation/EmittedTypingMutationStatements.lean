@@ -132,4 +132,69 @@ theorem emitted_checked_lowerStmt_rebind {le : LEnv} {initial before : LS}
       exact Nat.lt_of_lt_of_le bound (advB_emitDef (.slotAddr slot) le coerced.2 _ _ rfl).vals)
   simpa only [lowerStmt, bind_run, child, coerced, addressed] using finished
 
+theorem emitted_checked_effectAfterThree {le : LEnv} {initial before : LS}
+    (first second third : B ValueId) (effect : ValueId → ValueId → ValueId → Effect)
+    (builder : EmittedBuilder le initial (third le (second le (first le before).2).2).2)
+    (firstValue : ValueRun first) (secondValue : ValueRun second) (thirdValue : ValueRun third)
+    (secondAdvance : AdvB second) (thirdAdvance : AdvB third)
+    (secondDead : DeadRun second) (thirdDead : DeadRun third)
+    (references : ∀ x y z operand, operand ∈ (effect x y z).uses → operand = x ∨ operand = y ∨ operand = z) :
+    EmittedBuilder le initial ((do
+      let x ← first
+      let y ← second
+      let z ← third
+      emitEffect (effect x y z)) le before).2 := by
+  apply builder.emitEffect
+  intro active operand member
+  rcases references _ _ _ operand member with rfl | rfl | rfl
+  · have secondLive := thirdDead.live_before rfl active
+    have firstLive := secondDead.live_before rfl secondLive
+    have bound := firstValue le before _ _ rfl firstLive
+    exact Nat.lt_of_lt_of_le bound
+      (Nat.le_trans (secondAdvance le (first le before).2 _ _ rfl).vals
+        (thirdAdvance le (second le (first le before).2).2 _ _ rfl).vals)
+  · have secondLive := thirdDead.live_before rfl active
+    have bound := secondValue le (first le before).2 _ _ rfl secondLive
+    exact Nat.lt_of_lt_of_le bound (thirdAdvance le (second le (first le before).2).2 _ _ rfl).vals
+  · exact thirdValue le (second le (first le before).2).2 _ _ rfl active
+
+theorem emitted_checked_lowerStmt_resize_none {le : LEnv} {initial before : LS}
+    (loop : Option LoopCtx) (place : Place) (size : Expr) (origin : OriginId)
+    (builder : EmittedBuilder le initial (lowerExpr size le (lowerPlace place le before).2).2) :
+    EmittedBuilder le initial (lowerStmt loop (.resize place size none origin) le before).2 := by
+  exact emitted_checked_effectAfterTwo (lowerPlace place) (lowerExpr size)
+    (fun x y => .resize x y none (some origin)) builder (value_lowerPlace place) (value_lowerExpr size)
+    (advB_lowerExpr size) (dead_lowerExpr size) (by intro x y operand member; simpa [Effect.uses] using member)
+
+theorem emitted_checked_lowerStmt_resize_some {le : LEnv} {initial before : LS}
+    (loop : Option LoopCtx) (place : Place) (size fill : Expr) (origin : OriginId)
+    (builder : EmittedBuilder le initial (lowerExpr fill le (lowerExpr size le (lowerPlace place le before).2).2).2) :
+    EmittedBuilder le initial (lowerStmt loop (.resize place size (some fill) origin) le before).2 := by
+  exact emitted_checked_effectAfterThree (lowerPlace place) (lowerExpr size) (lowerExpr fill)
+    (fun x y z => .resize x y (some z) (some origin)) builder
+    (value_lowerPlace place) (value_lowerExpr size) (value_lowerExpr fill)
+    (advB_lowerExpr size) (advB_lowerExpr fill) (dead_lowerExpr size) (dead_lowerExpr fill)
+    (by intro x y z operand member; simpa [Effect.uses] using member)
+
+theorem emitted_checked_lowerStmt_assignWhole {le : LEnv} {initial before : LS}
+    (loop : Option LoopCtx) (place : Place) (replacement : Expr) (origin : OriginId)
+    (builder : EmittedBuilder le initial
+      (lowerExpr replacement le (emitEffect (.clear (lowerPlace place le before).1 (some origin))
+        le (lowerPlace place le before).2).2).2) :
+    EmittedBuilder le initial (lowerStmt loop (.assignWhole place replacement origin) le before).2 := by
+  let address := lowerPlace place le before
+  let cleared := emitEffect (.clear address.1 (some origin)) le address.2
+  let value := lowerExpr replacement le cleared.2
+  apply builder.emitEffect (.replace address.1 value.1 (some origin))
+  intro active operand member
+  have either : operand = address.1 ∨ operand = value.1 := by simpa [Effect.uses] using member
+  rcases either with rfl | rfl
+  · have clearedLive := (dead_lowerExpr replacement).live_before rfl active
+    have addressLive := (dead_emitEffect (.clear address.1 (some origin))).live_before rfl clearedLive
+    have bound := value_lowerPlace place le before _ _ rfl addressLive
+    exact Nat.lt_of_lt_of_le bound
+      (Nat.le_trans (advB_emitEffect (.clear address.1 (some origin)) le address.2 _ _ rfl).vals
+        (advB_lowerExpr replacement le cleared.2 _ _ rfl).vals)
+  · exact value_lowerExpr replacement le cleared.2 _ _ rfl active
+
 end Goose.Lower.Validation
