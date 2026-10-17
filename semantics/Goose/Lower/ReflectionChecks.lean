@@ -1,4 +1,4 @@
-import Goose.Lower.ReflectionSteps
+import Goose.Lower.ReflectionInduction
 
 namespace Goose.Lower.ReflectionChecks
 
@@ -34,7 +34,7 @@ theorem header_cycle (fuel : Nat) (frame : GIR.Frame) (state : St) :
         { state with nextScope := state.nextScope + 1 } := by
   simp [runAt, loopContext, loopFunction, instsAt, exec, execOp, execPure,
     execEff, enterBlock, bindParams, mapList, getVal, getCell, setCell_eq,
-    Frame.set, freshScope, releaseSlots, bind_apply, pure_apply]
+    Frame.set, bind_apply, pure_apply]
   rfl
 
 theorem header_timeout (fuel : Nat) (frame : GIR.Frame) (state : St) :
@@ -89,19 +89,17 @@ theorem lowered_module_timeout (fuel : Nat) (state : St) :
             { state with nextAct := state.nextAct + 1 }
           refine ⟨after, ?_⟩
           simp [runAt, loopContext, loopFunction, instsAt] at result
-          simp [callFn, lookupFn, functions, enterFn, enterBlock, bindParams, mapList,
-            freshAct, bind_apply, pure_apply, maxCallDepth, loopFunction, result]
+          simp [callFn, lookupFn, functions, enterFn, enterBlock, bindParams,
+            freshAct, bind_apply, maxCallDepth, loopFunction, result]
 
 theorem lowered_module_reflection :
     ReflectM (fun n => Core.runModule n ⟨.release,infiniteSource⟩)
       (fun n => GIR.runModule n ⟨.release,lower infiniteSource⟩) St.initial := by
-  intro fuel result hresult hrun
-  obtain ⟨after,htimeout⟩ := lowered_module_timeout fuel St.initial
-  exact (hresult after (hrun.symm.trans htimeout)).elim
+  exact acceptedModule_reflection infiniteSource_accepted
 
 theorem lowered_infinite_never_faults (fuel : Nat) (kind : FaultKind) :
     GIR.run fuel .release (lower infiniteSource) ≠ .fault kind :=
-  reflected_lowering_never_faults infiniteSource_accepted .release lowered_module_reflection fuel kind
+  acceptedModule_never_faults infiniteSource_accepted .release fuel kind
 
 def mutantFunction : Func :=
   { loopFunction with blocks := loopFunction.blocks.modify 2 fun block =>
