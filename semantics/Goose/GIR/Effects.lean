@@ -102,11 +102,11 @@ def provRound (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func) 
 rooted at its own parameter. -/
 def provStart (vt : Array (Option VTy)) (f : Func) : Prov :=
   let vals := match f.blocks[0]? with
-    | none => Array.replicate f.numValues []
+    | none => f.valueRootSeeds
     | some b =>
       (b.params.zipIdx).foldl (fun a ((v, _), i) =>
-        if valRefLike vt v && v < a.size then a.set! v [.param i] else a)
-        (Array.replicate f.numValues [])
+        if valRefLike vt v && v < a.size then a.set! v (unionRoots (rootsAt a v) [.param i]) else a)
+        f.valueRootSeeds
   ⟨f.slotRootSeeds, vals⟩
 
 /-- Rounds until nothing changes. A round that changes something adds a root to
