@@ -22,8 +22,26 @@ theorem emptyParameterResult_core_accepted :
     Core.validate emptyParameterResult = .ok () := by
   cbv
 
-theorem emptyParameterResult_gir_rejected :
-    GIR.validate (lower emptyParameterResult) =
+theorem emptyParameterResult_gir_accepted :
+    GIR.validate (lower emptyParameterResult) = .ok () := by
+  cbv
+
+
+def partialParameterResult : Module :=
+  { emptyParameterResult with
+    globals := #[⟨"first", .int .i64, .mutable, .lit .i64 0, 0⟩,
+      ⟨"second", .int .i64, .mutable, .lit .i64 1, 0⟩],
+    contexts := emptyParameterResult.contexts.modify 1 fun ctx =>
+      { ctx with varRoots := [(0, [.global 0, .global 1])], resultRoots := [[.global 0]] } }
+
+theorem partialParameterResult_core_rejected :
+    (match Core.validate partialParameterResult with
+    | .error rejection => rejection.rule == .result
+    | .ok _ => false) = true := by
+  cbv
+
+theorem partialParameterResult_gir_rejected :
+    GIR.validate (lower partialParameterResult) =
       .error ⟨.v050, "function receiver result 0 root info omits a root returned by the body"⟩ := by
   cbv
 
