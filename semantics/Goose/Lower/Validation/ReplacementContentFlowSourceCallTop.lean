@@ -56,7 +56,8 @@ theorem accepted_expanded_source_root_support {module : Core.Module} {context : 
     simpa only [SourceRootIndexWithin, lower, Array.size_map] using bounded
   | param parameter =>
     apply parameter_roots_supported tables (index := parameter) ?_ expanded
-    simpa only [SourceRootIndexWithin, lowerContextAt, lowerImpl, List.length_map, Array.length_toList] using bounded
+    simpa only [SourceRootIndexWithin, lowerContextAt, lowerImpl, lowerImplFromState,
+      List.length_map, Array.length_toList] using bounded
 
 #print axioms accepted_expanded_source_root_support
 
