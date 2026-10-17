@@ -18,7 +18,7 @@ theorem open_lowerExpr : ∀ expr : Expr, OpenAction (lowerExpr expr)
     exact OpenAction.bind (open_lowerPlace place) fun _ => open_emitDef _
   | .ref mu place => by
     simp only [lowerExpr]
-    exact OpenAction.bind (open_lowerPlace place) fun value => open_freezeTo mu value
+    exact OpenAction.bind (open_lowerPlace place) fun value => open_borrowTo mu value
   | .slice _ view lo hi _ => by
     simp only [lowerExpr]
     exact OpenAction.bind (open_lowerView view) fun _ => OpenAction.bind (open_lowerBound lo) fun _ =>
@@ -91,7 +91,7 @@ theorem open_lowerArg : ∀ arg : Arg, OpenAction (lowerArg arg)
   | .byVal expr => open_lowerExpr expr
   | .byRef mu place => by
     simp only [lowerArg]
-    exact OpenAction.bind (open_lowerPlace place) fun value => open_freezeTo mu value
+    exact OpenAction.bind (open_lowerPlace place) fun value => open_borrowTo mu value
 
 theorem open_lowerArgs : ∀ args : List Arg, OpenAction (lowerArgs args)
   | [] => OpenAction.pure _

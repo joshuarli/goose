@@ -41,7 +41,7 @@ theorem emitted_checked_rangeHeader {le : LEnv} {initial before : LS}
     (upperTyped : before.vals[upper]? = some (some (.data (.int type))))
     (body : BlockId → ValueId → Nat → BlockId → B ValueId)
     (bodyChecked : ∀ header counter depth target initial started, EmittedBuilder le initial started →
-      started.vals[counter]? = some (some (.data (.int type))) →
+      started.vals[counter]? = some (some (.data (.int type))) → TypePrefix before started →
       EmittedBuilder le initial (body header counter depth target le started).2)
     (bodyAdvance : ∀ header counter depth target, AdvB (body header counter depth target))
     (bodyTypes : ∀ header counter depth target, TypeRun (body header counter depth target)) :
@@ -79,9 +79,12 @@ theorem emitted_checked_rangeHeader {le : LEnv} {initial before : LS}
   have retainedUpper := retained upper (.data (.int type))
     ((emittedTypePrefix_newBlock [.data (.int type)] le before).typed upper (.data (.int type)) upperTyped)
   have live : started.2.cur = some allocated.1.1 := rfl
+  have headerTypes := (types_newBlock [.data (.int type)] le before _ _ rfl).trans retained
   have output := emitted_checked_lowerRange startedBuilder allocated.1.1 type counter upper live
     counterTyped retainedUpper (body allocated.1.1 counter)
-    (bodyChecked allocated.1.1 counter) (bodyAdvance allocated.1.1 counter) (bodyTypes allocated.1.1 counter)
+    (fun depth target initial started builder counterTyped prefixProof =>
+      bodyChecked allocated.1.1 counter depth target initial started builder counterTyped (headerTypes.trans prefixProof))
+    (bodyAdvance allocated.1.1 counter) (bodyTypes allocated.1.1 counter)
   simpa only [bind_run, allocated, counter, closed, started] using output
 
 end Goose.Lower.Validation

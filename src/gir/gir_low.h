@@ -2023,7 +2023,7 @@ private:
             case GirOp::DestText: return TextDestination(i);
             case GirOp::CallConstruct: return LowerCall(i);
             case GirOp::AppendValue: return LowerAppendValue(i);
-            case GirOp::Freeze: shape[i.res] = shape[i.a]; return;
+            case GirOp::OwnerBorrow: case GirOp::Freeze: shape[i.res] = shape[i.a]; return;
             case GirOp::Load: return LowerLoad(i);
             case GirOp::Snap: return LowerSnap(i);
             case GirOp::SliceView: shape[i.res] = shape[i.a]; return;

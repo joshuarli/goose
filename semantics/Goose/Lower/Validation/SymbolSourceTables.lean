@@ -252,7 +252,7 @@ theorem lowerContextAt_result_facts {module : Core.Module} {contextIndex : Conte
     let parameters := impl.params.toList.zipIdx.filterMap fun (param, position) =>
       match ctx.varRoots.find? (·.1 == param.var) with
       | some (_, parameterRoots) =>
-        if declared.any parameterRoots.contains then some (.param position) else none
+        if parameterRoots.all declared.contains then some (.param position) else none
       | none => none
     unionRoots declared parameters).toArray.toList at member
   simp only at member

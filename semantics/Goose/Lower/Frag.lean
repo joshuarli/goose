@@ -428,6 +428,12 @@ theorem advB_freezeTo (m : Mutability) (r : ValueId) : AdvB (freezeTo m r) := by
     | exact AdvB.pure _
     | (rename_i t; cases t <;> first | exact AdvB.pure _ | (rename_i m' _; cases m' <;> first | exact AdvB.pure _ | exact advB_emitDef _))
 
+theorem advB_borrowTo (m : Mutability) (r : ValueId) : AdvB (borrowTo m r) := by
+  unfold borrowTo
+  refine AdvB.bind advB_read fun le => ?_
+  refine AdvB.bind (advB_valTy r) fun t => ?_
+  split <;> dsimp only <;> split <;> first | exact advB_emitDef _ | exact advB_freezeTo _ r
+
 theorem advB_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : AdvB (coerceTo target r org) := by
   unfold coerceTo
   refine AdvB.bind (advB_valTy r) fun source => ?_
@@ -688,6 +694,38 @@ theorem freezeTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS} {r' 
         | exact Or.inl ⟨(Prod.mk.inj h).1.symm, (Prod.mk.inj h).2.symm⟩
         | exact Or.inr h
 
+theorem borrowTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS}
+    {r' : ValueId} {ls' : LS} (h : borrowTo m r le ls = (r', ls')) :
+    freezeTo m r le ls = (r', ls') ∨ emitDef (.ownerBorrow r) le ls = (r', ls') := by
+  unfold borrowTo at h
+  simp only [bind_run, read_apply] at h
+  have hs := valTy_run r le ls
+  cases hv : valTy r le ls with
+  | mk ty same =>
+    rw [hv] at hs h
+    simp only at hs h
+    subst hs
+    let owner := match ty with
+      | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+      | _ => false
+    change (if (m == .mutable && le.mod.profile == .shrink && owner) = true then
+      emitDef (.ownerBorrow r) else freezeTo m r) le same = (r', ls') at h
+    by_cases borrow : (m == .mutable && le.mod.profile == .shrink && owner) = true
+    · rw [if_pos borrow] at h
+      exact Or.inr h
+    · rw [if_neg borrow] at h
+      exact Or.inl h
+
+theorem borrowTo_ref_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS}
+    {r' : ValueId} {ls' : LS} (h : borrowTo m r le ls = (r', ls')) :
+    (r' = r ∧ ls' = ls) ∨ emitDef (.refFreeze r) le ls = (r', ls') ∨
+      emitDef (.ownerBorrow r) le ls = (r', ls') := by
+  rcases borrowTo_cases h with freeze | owner
+  · rcases freezeTo_cases freeze with same | emitted
+    · exact Or.inl same
+    · exact Or.inr (Or.inl emitted)
+  · exact Or.inr (Or.inr owner)
+
 theorem adv_joinValue {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option BlockId} {vt vf : ValueId}
     (hT : ∀ b, endT = some b → Mine ls0 b) (hF : ∀ b, endF = some b → Mine ls0 b)
     {le : LEnv} {r : ValueId} {ls' : LS} (hj : joinValue endT vt endF vf le ls1 = (r, ls')) :
@@ -903,7 +941,7 @@ theorem advB_eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) :
     | some lv =>
       dsimp only
       cases lv.ty with
-      | ref m t => exact advB_freezeTo m elem
+      | ref m t => exact advB_borrowTo m elem
       | _ => exact AdvB.pure _
 
 theorem advB_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : AdvB a1) (h2 : AdvB a2) :
@@ -1160,7 +1198,7 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
     exact AdvB.bind (advB_lowerPlace p) fun _ => advB_emitDef _
   | .ref m p => by
     simp only [lowerExpr]
-    exact AdvB.bind (advB_lowerPlace p) fun r => advB_freezeTo m r
+    exact AdvB.bind (advB_lowerPlace p) fun r => advB_borrowTo m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact AdvB.bind (advB_lowerView v) fun _ => AdvB.bind (advB_lowerBound lo) fun _ =>
@@ -1230,7 +1268,7 @@ theorem advB_lowerArg : ∀ a : Arg, AdvB (lowerArg a)
   | .byVal e => by simp only [lowerArg]; exact advB_lowerExpr e
   | .byRef m p => by
     simp only [lowerArg]
-    exact AdvB.bind (advB_lowerPlace p) fun r => advB_freezeTo m r
+    exact AdvB.bind (advB_lowerPlace p) fun r => advB_borrowTo m r
 
 theorem advB_lowerArgs : ∀ as : List Arg, AdvB (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact AdvB.pure _

@@ -33,6 +33,28 @@ theorem FreshContentsEvidence.ext {le : LEnv} {first : Nat} {before after : LS} 
   intro candidate member
   simpa only [permissionFunc_numValues beforeDense le] using closed.bounded candidate member
 
+theorem FreshContentsEvidence.of_run {α : Type} {action : B α} {le : LEnv} {first : Nat}
+    {before after : LS} {value : ValueId} {result : α} {loop : Option LoopCtx}
+    (evidence : FreshContentsEvidence le first before value) (run : action le before = (result, after))
+    (dense : DenseRun action) (advances : AdvB action) (typed : TypeRun action)
+    (beforeDense : before.DenseDefinitions) (bounded : LiveBound before)
+    (frames : LoopBuilderFrames loop before) (framed : TermEdgesFramed loop before after) :
+    FreshContentsEvidence le first after value := by
+  have afterDense := (dense le before result after run beforeDense bounded).1
+  have advanced := advances le before result after run
+  exact evidence.ext beforeDense afterDense advanced.ext advanced.vals
+    (typed le before result after run) frames framed
+
+theorem FreshContentsEvidence.of_framed_run {α : Type} {action : B α} {le : LEnv} {first : Nat}
+    {before after : LS} {value : ValueId} {result : α} {loop : Option LoopCtx}
+    (evidence : FreshContentsEvidence le first before value) (run : action le before = (result, after))
+    (dense : DenseRun action) (advances : AdvB action) (typed : TypeRun action)
+    (frameRun : GeneratedTargetFrameRun loop action)
+    (beforeDense : before.DenseDefinitions) (bounded : LiveBound before)
+    (frames : LoopBuilderFrames loop before) : FreshContentsEvidence le first after value := by
+  have framed := (frameRun before le before result after (.refl _) frames (.refl loop before) run).1
+  exact evidence.of_run run dense advances typed beforeDense bounded frames framed
+
 theorem freshContentsEvidence_definition {le : LEnv} {before after : LS} {value : ValueId} {op : Op}
     {current : BlockId} (checked : before.DenseDefinitions) (bounded : LiveBound before)
     (live : before.cur = some current) (run : emitDef op le before = (value, after))

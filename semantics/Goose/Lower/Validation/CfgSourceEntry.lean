@@ -17,7 +17,7 @@ theorem entry_lowerExpr (lc : Option LoopCtx) : ∀ e : Expr, EntryRun lc (lower
     exact EntryRun.bind (entry_lowerPlace lc p) fun _ => entry_emitDef lc _
   | .ref m p => by
     simp only [lowerExpr]
-    exact EntryRun.bind (entry_lowerPlace lc p) fun r => entry_freezeTo lc m r
+    exact EntryRun.bind (entry_lowerPlace lc p) fun r => entry_borrowTo lc m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact EntryRun.bind (entry_lowerView lc v) fun _ => EntryRun.bind (entry_lowerBound lc lo) fun _ =>
@@ -87,7 +87,7 @@ theorem entry_lowerArg (lc : Option LoopCtx) : ∀ a : Arg, EntryRun lc (lowerAr
   | .byVal e => by simp only [lowerArg]; exact entry_lowerExpr lc e
   | .byRef m p => by
     simp only [lowerArg]
-    exact EntryRun.bind (entry_lowerPlace lc p) fun r => entry_freezeTo lc m r
+    exact EntryRun.bind (entry_lowerPlace lc p) fun r => entry_borrowTo lc m r
 
 theorem entry_lowerArgs (lc : Option LoopCtx) : ∀ as : List Arg, EntryRun lc (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact entry_pure lc _

@@ -154,7 +154,7 @@ theorem emitted_checked_lowerRange {le : LEnv} {initial before : LS}
     (upperTyped : before.vals[upper]? = some (some (.data (.int type))))
     (body : Nat → BlockId → B ValueId)
     (bodyChecked : ∀ depth target initial started, EmittedBuilder le initial started →
-      started.vals[counter]? = some (some (.data (.int type))) →
+      started.vals[counter]? = some (some (.data (.int type))) → TypePrefix before started →
       EmittedBuilder le initial (body depth target le started).2)
     (bodyAdvance : ∀ depth target, AdvB (body depth target))
     (bodyTypes : ∀ depth target, TypeRun (body depth target)) :
@@ -175,7 +175,8 @@ theorem emitted_checked_lowerRange {le : LEnv} {initial before : LS}
     (fun _ => (Array.getElem?_eq_some_iff.mp comparisonTyped).1) body
     (Goose.Lower.rangeBack type counter header)
     (fun depth target initial started builder retained =>
-      bodyChecked depth target initial started builder (retained counter (.data (.int type)) retainedCounter))
+      bodyChecked depth target initial started builder (retained counter (.data (.int type)) retainedCounter)
+        ((types_emitDef (.cmp .lt type counter upper) le before _ _ rfl).trans retained))
     bodyAdvance bodyTypes
     (fun _ _ builder retained => builder.rangeBack type counter header (retained counter (.data (.int type)) retainedCounter))
     (advB_rangeBack _ _ _)

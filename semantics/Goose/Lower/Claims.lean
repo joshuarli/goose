@@ -349,12 +349,13 @@ theorem exprClaim_ref (n : Nat) (ihp : ∀ p, PlaceClaim n p) (m : Mutability) (
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, h2⟩ := hlow
-  rcases freezeTo_cases h2 with ⟨hr, hls⟩ | ⟨hf⟩
+  rcases borrowTo_ref_cases h2 with ⟨hr, hls⟩ | hf | hf
   · subst hr; subst hls
     simp only [evalExpr]
     refine SimG.bind (ihp p (by okpf) le ls r ls' pt cfg env cx fr h1 hpp hext hrel) fun l pt1 fr1 P1 => ?_
     exact SimG.ret P1
-  · have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
+  all_goals
+    have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
     simp only [evalExpr]
     refine SimG.bind (ihp p (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
     have hc : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)

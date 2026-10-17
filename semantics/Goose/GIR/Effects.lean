@@ -55,7 +55,7 @@ def rootsOfDef (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func)
   | .globalAddr g => [.global g]
   | .fieldAddr v _ | .refElem v _ | .viewSlice _ v _ _ _
   | .indexChecked v _ _ | .indexProven v _ => rootsAt p.vals v
-  | .refFreeze a | .sliceView a | .push a _ _ => rootsAt p.vals a
+  | .refFreeze a | .ownerBorrow a | .sliceView a | .push a _ _ => rootsAt p.vals a
   | .snapshot _ a => rootsAt p.vals a
   | .load a =>
     if valRefLike vt r then
@@ -82,9 +82,8 @@ def rootsOfDef (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func)
       | .local _ => []
   | _ => []
 
-/-- One round over the whole function; the flag says whether anything changed. -/
-def provRound (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func) (p : Prov) :
-    Prov × Bool :=
+def Func.provStep (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func)
+    (acc : Prov × Bool) (i : Inst) : Prov × Bool :=
   let edge (acc : Prov × Bool) (b : BlockId) (args : List ValueId) : Prov × Bool :=
     match f.blocks[b]? with
     | none => acc
@@ -92,24 +91,29 @@ def provRound (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func) 
       (tb.params.zip args).foldl (fun (p, ch) (prm, a) =>
         let (vs, c) := addTo p.vals prm.1 (rootsAt p.vals a)
         ({ p with vals := vs }, ch || c)) acc
-  f.blocks.foldl (fun acc blk => blk.insts.foldl (fun (p, ch) i =>
-    match i with
-    | .def r op =>
-      let (vs, c) := addTo p.vals r (rootsOfDef res vt f p r op)
-      ({ p with vals := vs }, ch || c)
-    | .eff (.slotInit s v _) =>
-      let (ss, c) := addTo p.slots s (rootsAt p.vals v)
-      ({ p with slots := ss }, ch || c)
-    | .eff (.store r v _) =>
-      (rootsAt p.vals r).foldl (fun (p, ch) root =>
-        match root with
-        | .local s =>
-          let (ss, c) := addTo p.slots s (rootsAt p.vals v)
-          ({ p with slots := ss }, ch || c)
-        | _ => (p, ch)) (p, ch)
-    | .term (.br b args) => edge (p, ch) b args
-    | .term (.condbr _ t ta e ea) => edge (edge (p, ch) t ta) e ea
-    | _ => (p, ch)) acc) (p, false)
+  let (p, ch) := acc
+  match i with
+  | .def r op =>
+    let (vs, c) := addTo p.vals r (rootsOfDef res vt f p r op)
+    ({ p with vals := vs }, ch || c)
+  | .eff (.slotInit s v _) =>
+    let (ss, c) := addTo p.slots s (rootsAt p.vals v)
+    ({ p with slots := ss }, ch || c)
+  | .eff (.store r v _) =>
+    (rootsAt p.vals r).foldl (fun (p, ch) root =>
+      match root with
+      | .local s =>
+        let (ss, c) := addTo p.slots s (rootsAt p.vals v)
+        ({ p with slots := ss }, ch || c)
+      | _ => (p, ch)) (p, ch)
+  | .term (.br b args) => edge (p, ch) b args
+  | .term (.condbr _ t ta e ea) => edge (edge (p, ch) t ta) e ea
+  | _ => (p, ch)
+
+/-- One round over the whole function; the flag says whether anything changed. -/
+def provRound (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func) (p : Prov) :
+    Prov × Bool :=
+  f.blocks.foldl (fun acc blk => blk.insts.foldl (f.provStep res vt) acc) (p, false)
 
 /-- The starting provenance: each reference-like parameter of the entry block is
 rooted at its own parameter. -/

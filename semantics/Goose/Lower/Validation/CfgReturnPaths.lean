@@ -85,4 +85,19 @@ theorem ReturnClosed.antitone {left right : Array Bool} (order : ReturnBitsLE le
   · rw [same]
     exact flow
 
+theorem ReturnPath.of_blocks {mayReturn : Array Bool} {left right : Func}
+    (blocks : left.blocks = right.blocks) {block : BlockId} (path : ReturnPath mayReturn left block) :
+    ReturnPath mayReturn right block := by
+  induction path with
+  | missing row => exact .missing (by rw [← blocks]; exact row)
+  | returns row flow => exact .returns (by rw [← blocks]; exact row) flow
+  | branch row flow member next ih => exact .branch (by rw [← blocks]; exact row) flow member ih
+
+theorem ReturnClosed.of_blocks {mayReturn : Array Bool} {left right : Func}
+    (blocks : left.blocks = right.blocks) {closed : BlockId → Prop}
+    (safe : ReturnClosed mayReturn left closed) : ReturnClosed mayReturn right closed := by
+  intro block present
+  obtain ⟨body, row, flow⟩ := safe block present
+  exact ⟨body, by rw [← blocks]; exact row, flow⟩
+
 end Goose.Lower.Validation

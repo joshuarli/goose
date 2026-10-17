@@ -139,6 +139,15 @@ theorem generatedTargets_freezeTo (loop : Option LoopCtx) (m : Mutability) (r : 
     | exact generatedTargets_pure loop _
     | (rename_i t; cases t <;> first | exact generatedTargets_pure loop _ | (rename_i m' _; cases m' <;> first | exact generatedTargets_pure loop _ | exact generatedTargets_emitDef loop _))
 
+theorem generatedTargets_borrowTo (loop : Option LoopCtx) (m : Mutability) (r : ValueId) :
+    GeneratedTargetRun loop (borrowTo m r) := by
+  unfold borrowTo
+  refine GeneratedTargetRun.bind (generatedTargets_read loop) fun le => ?_
+  refine GeneratedTargetRun.bind (generatedTargets_valTy loop r) fun ty => ?_
+  split <;> dsimp only <;> split <;> first
+    | exact generatedTargets_emitDef loop _
+    | exact generatedTargets_freezeTo loop _ r
+
 theorem generatedTargets_coerceTo (loop : Option LoopCtx) (target : Ty) (r : ValueId) (org : OriginId) : GeneratedTargetRun loop (coerceTo target r org) := by
   unfold coerceTo
   refine GeneratedTargetRun.bind (generatedTargets_valTy loop r) fun source => ?_

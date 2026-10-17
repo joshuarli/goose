@@ -213,7 +213,7 @@ theorem ContentsOperation.of_permission
           exact ⟨facts.1, mu, id, fields, descriptor, field, typed, descriptorRow,
             fieldRow, beq_iff_eq.mp facts.2⟩
     · contradiction
-  | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ => exact allowed
+  | ownerBorrow owner | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ => exact allowed
   | _ => exact allowed
 
 theorem contentsClosed_permissions (globalKinds : Array VarKind) (structs : Array StructDef)

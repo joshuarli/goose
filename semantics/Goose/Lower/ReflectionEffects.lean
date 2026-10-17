@@ -91,13 +91,13 @@ theorem leaf_eff_reflectAtFuel {cfg : Cfg} {env : Env} {cx : FnCtx}
 theorem ReflectAtFuel.complete_expectReturned {cx : FnCtx} {pt : Pt} {fr : Frame}
     {source : Nat → M Flow} {post : Flow → St → Pt → Frame → Prop} {state : St} {fuel : Nat}
     (reflection : ReflectAtFuel fuel cx pt fr source post state)
-    (terminal : ∀ flow after pt' fr', post flow after pt' fr' →
+    (terminal : ∀ n flow after pt' fr', source n state = .ok flow after → post flow after pt' fr' →
       ∃ value, (flow = .normal value ∨ flow = .ret value) ∧ ReturnEndpoint cx pt' fr' value) :
     ReflectMFuel fuel (fun n => source n >>= expectReturned) (fun n => runAt cx pt fr n) state := by
   intro result nonTimeout run
   rcases reflection result nonTimeout run with success | stopped
   · obtain ⟨n, flow, after, pt', fr', residual, sourceRun, matched, bound, continuation⟩ := success
-    obtain ⟨value, sourceFlow, returnEndpoint⟩ := terminal flow after pt' fr' matched
+    obtain ⟨value, sourceFlow, returnEndpoint⟩ := terminal n flow after pt' fr' sourceRun matched
     have coreResult : expectReturned flow after = .ok value after := by
       rcases sourceFlow with sourceNormal | sourceReturn
       · rw [sourceNormal]

@@ -152,4 +152,19 @@ private theorem typedModule_of_ownerShapes {cfg : Cfg} (n : Nat)
     (fun _ global _ => (family (n + 1)).expressions.expr [global.ty] global.init)
     (fun _ impl _ _ => (family n).block impl.results.toList none (callPre impl) [] false impl.body)
 
+private theorem typedModule_allFuel_of_ownerShapes {cfg : Cfg} (fuel : Nat)
+    (accepted : Core.validate cfg.mod = .ok ())
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+    EventualM (Core.runModule fuel cfg)
+      (fun targetFuel => GIR.runModule targetFuel ⟨cfg.profile, lower cfg.mod⟩) St.initial := by
+  have next := typedModule_of_ownerShapes fuel accepted shapes
+  have mono := Goose.Proofs.Fuel.MonoM.runModule fuel (fuel + 1) (Nat.le_succ fuel) cfg St.initial
+  constructor
+  · intro value after completed
+    exact next.1 value after (mono.1 value after completed)
+  · intro stop after completed final
+    have completedNext := (mono.2 stop after completed).resolve_left (by
+      cases stop <;> simp_all [Goose.Proofs.Fuel.isTimeout, IsFinal])
+    exact next.2 stop after completedNext final
+
 end Goose.Lower

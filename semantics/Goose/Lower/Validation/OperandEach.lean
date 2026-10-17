@@ -111,9 +111,11 @@ theorem value_eachElemValue_of_bounded {slot : VarId} {byRef : Bool} {input : Va
   have nonempty : 0 < before.vals.size := Nat.lt_of_le_of_lt (Nat.zero_le input) bounded
   rcases eachElemValue_cases run with ⟨rfl, rfl⟩ | ⟨mu, freeze⟩ | load
   · exact bounded
-  · rcases freezeTo_cases freeze with ⟨rfl, rfl⟩ | fresh
-    · exact bounded
-    · exact value_emitDef_of_nonempty fresh nonempty
+  · rcases borrowTo_cases freeze with frozen | borrowed
+    · rcases freezeTo_cases frozen with ⟨rfl, rfl⟩ | fresh
+      · exact bounded
+      · exact value_emitDef_of_nonempty fresh nonempty
+    · exact value_emitDef_of_nonempty borrowed nonempty
   · exact value_emitDef_of_nonempty load nonempty
 
 theorem operands_eachBody (slot : VarId) (index : Option VarId) (view counter : ValueId)

@@ -12,7 +12,7 @@ theorem WritableOperation.monoContents {globalKinds : Array VarKind} {structs : 
     WritableOperation globalKinds structs func types second value op := by
   cases op with
   | fieldAddr owner index => exact ⟨inclusion owner operation.1, operation.2⟩
-  | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ =>
+  | ownerBorrow owner | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ =>
     exact inclusion owner operation
   | _ => exact operation
 
@@ -40,7 +40,7 @@ theorem WritableOperation.retained {le : LEnv} {before after : LS} {contents : V
   | fieldAddr owner index =>
     obtain ⟨member, mu, id, fields, descriptor, field, typed, descriptorRow, fieldRow, writable⟩ := operation
     exact ⟨member, mu, id, fields, descriptor, field, extension owner _ typed, descriptorRow, fieldRow, writable⟩
-  | snapshot _ _ | refElem _ _ | indexChecked _ _ _ | indexProven _ _ => exact operation
+  | ownerBorrow _ | snapshot _ _ | refElem _ _ | indexChecked _ _ _ | indexProven _ _ => exact operation
   | _ => exact typedPermissions_binding_retained extension operation
 
 theorem WritableClosed.emitDef_preserve {le : LEnv} {before after : LS}

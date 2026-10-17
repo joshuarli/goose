@@ -180,6 +180,12 @@ theorem dense_freezeTo (m : Mutability) (r : ValueId) : DenseRun (freezeTo m r) 
     | exact DenseRun.pure _
     | (rename_i t; cases t <;> first | exact DenseRun.pure _ | (rename_i m' _; cases m' <;> first | exact DenseRun.pure _ | exact dense_emitDef _))
 
+theorem dense_borrowTo (m : Mutability) (r : ValueId) : DenseRun (borrowTo m r) := by
+  intro le before result after run
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact dense_freezeTo m r le before result after frozen
+  · exact dense_emitDef _ le before result after borrowed
+
 theorem dense_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : DenseRun (coerceTo target r org) := by
   unfold coerceTo
   refine DenseRun.bind (dense_valTy r) fun source => ?_
@@ -238,7 +244,7 @@ theorem dense_eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) :
     | some lv =>
       dsimp only
       cases lv.ty with
-      | ref m t => exact dense_freezeTo m elem
+      | ref m t => exact dense_borrowTo m elem
       | _ => exact DenseRun.pure _
 
 theorem dense_regrowOf (o : Option ValueId) : DenseRun (regrowOf o) := by
@@ -593,7 +599,7 @@ theorem dense_lowerExpr : ∀ e : Expr, DenseRun (lowerExpr e)
     exact DenseRun.bind (dense_lowerPlace p) fun _ => dense_emitDef _
   | .ref m p => by
     simp only [lowerExpr]
-    exact DenseRun.bind (dense_lowerPlace p) fun r => dense_freezeTo m r
+    exact DenseRun.bind (dense_lowerPlace p) fun r => dense_borrowTo m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact DenseRun.bind (dense_lowerView v) fun _ => DenseRun.bind (dense_lowerBound lo) fun _ =>
@@ -664,7 +670,7 @@ theorem dense_lowerArg : ∀ a : Arg, DenseRun (lowerArg a)
   | .byVal e => by simp only [lowerArg]; exact dense_lowerExpr e
   | .byRef m p => by
     simp only [lowerArg]
-    exact DenseRun.bind (dense_lowerPlace p) fun r => dense_freezeTo m r
+    exact DenseRun.bind (dense_lowerPlace p) fun r => dense_borrowTo m r
 
 theorem dense_lowerArgs : ∀ as : List Arg, DenseRun (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact DenseRun.pure _

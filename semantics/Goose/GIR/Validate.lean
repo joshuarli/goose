@@ -594,11 +594,11 @@ def checkStorage (m : Module) (label : String) (f : Func) (vt : Array (Option VT
 contents permission. A read-only borrowed reference never gains either. -/
 def checkPermissions (m : Module) (label : String) (f : Func) (vt : Array (Option VTy)) : Check Unit := do
   let caps := f.permissions m vt
-  let passable (v : ValueId) (t : Ty) := match t with
+  let passable (v : ValueId) (t : Ty) : Bool := match t with
     | .ref .mutable referent =>
       let c := caps[v]?.getD (false, false)
       match referent with
-      | .grow _ | .growshrink _ => c.2
+      | .grow _ | .growshrink _ => if m.profile == .shrink then c.1 && c.2 else c.2
       | .structT .. | .arr .. | .limited .. => c.1 && c.2
       | _ => c.1
     | _ => true
@@ -621,6 +621,9 @@ def checkPermissions (m : Module) (label : String) (f : Func) (vt : Array (Optio
         let cap := caps[r]?.getD (false, false)
         unless cap.1 && cap.2 do
           violation .v030 s!"{label}: replacement without whole-owner permission"
+      | .def _ (.ownerBorrow owner) =>
+        unless (caps[owner]?.getD (false, false)).2 do
+          violation .v030 s!"{label}: an owner borrow without contents permission"
       | .def v (.snapshot _ _) =>
         match vt[v]? with
         | some (some (.view .mutable _)) =>
@@ -925,9 +928,14 @@ def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) (v
       violation .v060 s!"{label}: x_replace owner was not cleared on every path"
   | _ => pure ()
 
+def replacementProvenance (f : Func) (p : Prov) : Prov :=
+  { slots := p.slots.map fun roots => roots.flatMap f.expandParameterRoot
+    vals := p.vals.map fun roots => roots.flatMap f.expandParameterRoot }
+
 def checkShrinkReplace (m : Module) (label : String) (f : Func) (vt : Array (Option VTy))
     (p : Prov) : Check Unit := do
   if m.profile == .shrink then
+    let p := replacementProvenance f p
     let validRuns := freshRuns f vt
     let states := emptyFactsAtBlocks m f vt p
     for h : b in [0:f.blocks.size] do

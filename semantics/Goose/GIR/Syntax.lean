@@ -86,6 +86,7 @@ inductive Op
   | refElem (v i : ValueId)
   /-- The same address as a read-only reference. -/
   | refFreeze (r : ValueId)
+  | ownerBorrow (owner : ValueId)
   | load (r : ValueId)
   | snapshot (mode : SnapshotMode) (r : ValueId)
   | sliceView (s : ValueId)
@@ -234,7 +235,7 @@ def Op.uses : Op → List ValueId
   | .bin _ _ a b _ | .cmp _ _ a b | .boolCmp _ a b => [a, b]
   | .un _ _ a _ | .boolNot a | .conv _ _ _ a _ | .next _ a => [a]
   | .refElem v i | .indexChecked v i _ | .indexProven v i => [v, i]
-  | .refFreeze r | .load r | .sliceView r | .viewLen r | .arrayLen r => [r]
+  | .refFreeze r | .ownerBorrow r | .load r | .sliceView r | .viewLen r | .arrayLen r => [r]
   | .snapshot _ r => [r]
   | .viewSlice _ v lo hi _ => v :: (lo.uses ++ hi.uses)
   | .push r v _ => [r, v]

@@ -29,6 +29,13 @@ theorem complete_freezeTo (mu : Mutability) (value : ValueId) : CompletionAction
   · exact ⟨shapedBefore.of_blocks (by rw [same]), by simp [same]⟩
   · exact (complete_emitDef _).complete env before result after emitted openBefore shapedBefore
 
+theorem complete_borrowTo (mu : Mutability) (value : ValueId) : CompletionAction (borrowTo mu value) := by
+  refine ⟨open_borrowTo mu value, ?_⟩
+  intro env before result after run openBefore shapedBefore
+  rcases borrowTo_cases run with frozen | emitted
+  · exact (complete_freezeTo mu value).complete env before result after frozen openBefore shapedBefore
+  · exact (complete_emitDef _).complete env before result after emitted openBefore shapedBefore
+
 theorem complete_coerceTo (target : Ty) (value : ValueId) (origin : OriginId) :
     CompletionAction (coerceTo target value origin) := by
   refine ⟨open_coerceTo target value origin, ?_⟩
@@ -108,7 +115,7 @@ theorem complete_eachElemValue (var : VarId) (byRef : Bool) (elem : ValueId) :
     | none => exact CompletionAction.pure _
     | some localVar =>
       dsimp only
-      cases localVar.ty <;> first | exact CompletionAction.pure _ | exact complete_freezeTo _ _
+      cases localVar.ty <;> first | exact CompletionAction.pure _ | exact complete_borrowTo _ _
 
 theorem CompletionAction.advance {action : B α} (child : CompletionAction action) : AdvB action :=
   child.openAction.advance

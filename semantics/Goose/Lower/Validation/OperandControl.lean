@@ -291,7 +291,7 @@ theorem operands_lowerStmt_assert (context : Option LoopCtx) (condition : Expr) 
 theorem eachElemValue_cases {slot : VarId} {byRef : Bool} {input : ValueId} {le before result after}
     (run : eachElemValue slot byRef input le before = (result, after)) :
     (result = input ∧ after = before) ∨
-      (∃ mu, freezeTo mu input le before = (result, after)) ∨
+      (∃ mu, borrowTo mu input le before = (result, after)) ∨
       emitDef (.load input) le before = (result, after) := by
   unfold eachElemValue at run
   cases byRef
@@ -313,7 +313,7 @@ theorem operands_eachElemValue {slot : VarId} {byRef : Bool} {input : ValueId} {
     (bounded : before.cur.isSome = true → input < before.vals.size) : OperandBounds after := by
   rcases eachElemValue_cases run with ⟨rfl, rfl⟩ | ⟨mu, freeze⟩ | load
   · exact checked
-  · exact operands_freezeTo freeze checked bounded
+  · exact operands_borrowTo freeze checked bounded
   · exact operands_emitDef load checked (by simpa [Op.uses] using bounded)
 
 theorem value_eachElemValue {slot : VarId} {byRef : Bool} {input : ValueId} {le before result after}
@@ -322,9 +322,11 @@ theorem value_eachElemValue {slot : VarId} {byRef : Bool} {input : ValueId} {le 
     (live : after.cur.isSome = true) : result < after.vals.size := by
   rcases eachElemValue_cases run with ⟨rfl, rfl⟩ | ⟨mu, freeze⟩ | load
   · exact bounded live
-  · rcases freezeTo_cases freeze with ⟨rfl, rfl⟩ | fresh
-    · exact bounded live
-    · exact value_emitDef _ _ _ _ _ fresh live
+  · rcases borrowTo_cases freeze with frozen | borrowed
+    · rcases freezeTo_cases frozen with ⟨rfl, rfl⟩ | fresh
+      · exact bounded live
+      · exact value_emitDef _ _ _ _ _ fresh live
+    · exact value_emitDef _ _ _ _ _ borrowed live
   · exact value_emitDef _ _ _ _ _ load live
 
 theorem operands_eachLen {regrow : Bool} {owner : Option ValueId} {sampled : ValueId}

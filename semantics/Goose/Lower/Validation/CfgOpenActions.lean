@@ -39,6 +39,13 @@ theorem open_freezeTo (mu : Mutability) (value : ValueId) : OpenAction (freezeTo
   · simpa [same] using paths
   · exact opens_emitDef _ env before result after emitted paths bounded
 
+theorem open_borrowTo (mu : Mutability) (value : ValueId) : OpenAction (borrowTo mu value) := by
+  refine ⟨advB_borrowTo mu value, ?_⟩
+  intro env before result after run paths bounded
+  rcases borrowTo_cases run with frozen | emitted
+  · exact (open_freezeTo mu value).paths env before result after frozen paths bounded
+  · exact opens_emitDef _ env before result after emitted paths bounded
+
 theorem open_coerceTo (target : Ty) (value : ValueId) (origin : OriginId) :
     OpenAction (coerceTo target value origin) := by
   refine ⟨advB_coerceTo target value origin, ?_⟩
@@ -116,7 +123,7 @@ theorem open_eachElemValue (var : VarId) (byRef : Bool) (elem : ValueId) :
     | none => exact OpenAction.pure _
     | some localVar =>
       dsimp only
-      cases localVar.ty <;> first | exact OpenAction.pure _ | exact open_freezeTo _ _
+      cases localVar.ty <;> first | exact OpenAction.pure _ | exact open_borrowTo _ _
 
 theorem OpenAction.live {action : B α} (child : OpenAction action) : LiveOpenRun action :=
   LiveOpenRun.of_bounded child.paths

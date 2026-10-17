@@ -5,8 +5,9 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-def PermissionTransfer (writable contents : ValueId → Prop) (value : ValueId) : Ty → Prop
-  | .ref .mutable (.grow _) | .ref .mutable (.growshrink _) => contents value
+def PermissionTransfer (profile : ArtifactProfile) (writable contents : ValueId → Prop) (value : ValueId) : Ty → Prop
+  | .ref .mutable (.grow _) | .ref .mutable (.growshrink _) =>
+    if profile = .shrink then writable value ∧ contents value else contents value
   | .ref .mutable (.structT ..) | .ref .mutable (.arr ..) | .ref .mutable (.limited ..) =>
     writable value ∧ contents value
   | .ref .mutable _ => writable value
@@ -24,28 +25,29 @@ structure PermissionRule (module : GIR.Module) (func : Func) (types : Array (Opt
     (writable contents : ValueId → Prop) (instruction : Inst) : Prop where
   storeBinding : ∀ owner value origin, instruction = .eff (.store owner value origin) → writable owner
   storeValue : ∀ owner value origin mu ty, instruction = .eff (.store owner value origin) →
-    types[owner]? = some (some (.data (.ref mu ty))) → PermissionTransfer writable contents value ty
+    types[owner]? = some (some (.data (.ref mu ty))) → PermissionTransfer module.profile writable contents value ty
   mutation : ∀ owner, ContentsMutation owner instruction → contents owner
+  ownerBorrow : ∀ result owner, instruction = .def result (.ownerBorrow owner) → contents owner
   replacement : ∀ owner value origin, instruction = .eff (.replace owner value origin) →
     writable owner ∧ contents owner
   snapshot : ∀ value mode owner ty, instruction = .def value (.snapshot mode owner) →
     types[value]? = some (some (.view .mutable ty)) → contents value
   call : ∀ value callee args origin descriptor, instruction = .def value (.call callee args origin) →
     module.funcs[callee]? = some descriptor → ∀ entry ∈ descriptor.params.zip args,
-      PermissionTransfer writable contents entry.2 entry.1
+      PermissionTransfer module.profile writable contents entry.2 entry.1
   binding : ∀ slot value origin descriptor, instruction = .eff (.slotInit slot value origin) →
-    func.slots[slot]? = some descriptor → PermissionTransfer writable contents value descriptor.ty
+    func.slots[slot]? = some descriptor → PermissionTransfer module.profile writable contents value descriptor.ty
   result : ∀ values origin, instruction = .term (.ret values origin) →
-    ∀ entry ∈ func.results.zip values, PermissionTransfer writable contents entry.2 entry.1
+    ∀ entry ∈ func.results.zip values, PermissionTransfer module.profile writable contents entry.2 entry.1
 
-theorem PermissionTransfer.check {writable contents : ValueId → Prop} {value : ValueId} {ty : Ty}
-    {caps : Array (Bool × Bool)} (allowed : PermissionTransfer writable contents value ty)
+theorem PermissionTransfer.check {profile : ArtifactProfile} {writable contents : ValueId → Prop} {value : ValueId} {ty : Ty}
+    {caps : Array (Bool × Bool)} (allowed : PermissionTransfer profile writable contents value ty)
     (bindings : WritablePresent caps writable) (elements : ContentsPresent caps contents) :
     (match (generalizing := false) ty with
       | .ref .mutable referent =>
         let cap := permissionsAt caps value
         match (generalizing := false) referent with
-        | .grow _ | .growshrink _ => cap.2
+        | .grow _ | .growshrink _ => if profile == .shrink then cap.1 && cap.2 else cap.2
         | .structT .. | .arr .. | .limited .. => cap.1 && cap.2
         | _ => cap.1
       | _ => true) = true := by
@@ -54,7 +56,7 @@ theorem PermissionTransfer.check {writable contents : ValueId → Prop} {value :
     cases mu with
     | readOnly => rfl
     | mutable =>
-      cases referent <;> simp only [PermissionTransfer] at allowed <;>
+      cases profile <;> cases referent <;> simp only [PermissionTransfer, reduceCtorEq, ↓reduceIte] at allowed <;>
         first | exact elements value allowed
               | exact Bool.and_eq_true_iff.mpr ⟨bindings value allowed.1, elements value allowed.2⟩
               | exact bindings value allowed
@@ -93,6 +95,11 @@ theorem checkPermissions_of_rules {module : GIR.Module} {func : Func} {types : A
   cases instruction with
   | «def» value op =>
     cases op <;> simp only <;> try rfl
+    case ownerBorrow owner =>
+      have allowed := elements owner (rule.ownerBorrow value owner rfl)
+      simp only [permissionsAt] at allowed
+      simp only [allowed, ite_true]
+      rfl
     case snapshot mode owner =>
       split <;> try rfl
       rename_i ty typed
@@ -120,7 +127,7 @@ theorem checkPermissions_of_rules {module : GIR.Module} {func : Func} {types : A
         simp only [permissionsAt] at allowed
         cases shape : entry.1 <;> simp_all [pure, Except.pure]
         case ref mu referent =>
-          cases mu <;> cases referent <;> simp_all
+          cases profile : module.profile <;> cases mu <;> cases referent <;> simp_all
   | eff effect =>
     cases effect <;> simp only <;> try rfl
     case slotInit slot value origin =>
@@ -131,7 +138,7 @@ theorem checkPermissions_of_rules {module : GIR.Module} {func : Func} {types : A
         simp only [permissionsAt] at allowed
         cases shape : descriptor.ty <;> simp_all [pure, Except.pure]
         case ref mu referent =>
-          cases mu <;> cases referent <;> simp_all
+          cases profile : module.profile <;> cases mu <;> cases referent <;> simp_all
     case store owner value origin =>
       have binding := bindings owner (rule.storeBinding owner value origin rfl)
       simp only [permissionsAt] at binding
@@ -142,7 +149,7 @@ theorem checkPermissions_of_rules {module : GIR.Module} {func : Func} {types : A
       simp only [permissionsAt] at allowed
       cases ty <;> simp_all [pure, Except.pure, bind, Except.bind]
       case ref mu referent =>
-        cases mu <;> cases referent <;> simp_all
+        cases profile : module.profile <;> cases mu <;> cases referent <;> simp_all
     case append owner value origin =>
       have allowed := elements owner (rule.mutation owner (.append owner value origin))
       simp only [permissionsAt] at allowed
@@ -178,7 +185,7 @@ theorem checkPermissions_of_rules {module : GIR.Module} {func : Func} {types : A
       simp only [permissionsAt] at allowed
       cases shape : entry.1 <;> simp_all [pure, Except.pure]
       case ref mu referent =>
-        cases mu <;> cases referent <;> simp_all
+        cases profile : module.profile <;> cases mu <;> cases referent <;> simp_all
 
 structure PermissionAuthority (module : GIR.Module) (func : Func) (types : Array (Option VTy))
     (writable contents : ValueId → Prop) : Prop where

@@ -1906,6 +1906,64 @@ private:
         return ReadOf(std::move(place), Ty(inner));
     }
 
+    CoreExprP UnreachableElementValue(CoreTypeId type) {
+        auto t = mod.Type(type);
+        switch (t.kind) {
+            case CoreType::Int: return IntLiteral(type, false, 0);
+            case CoreType::Bool: return NewExpr(CoreExprKind::Bool, type);
+            case CoreType::Arr: {
+                auto e = NewExpr(CoreExprKind::Fill, type);
+                e->a = UnreachableElementValue(t.elem);
+                e->org = Org(here, CoreOriginKind::Expr);
+                return e;
+            }
+            case CoreType::VarArr: {
+                auto e = NewExpr(CoreExprKind::Arr, type);
+                e->org = Org(here, CoreOriginKind::Expr);
+                return e;
+            }
+            case CoreType::Struct: {
+                auto e = NewExpr(CoreExprKind::Struct, type);
+                for (auto &field : mod.structs[t.structid].fields)
+                    e->elems.push_back(UnreachableElementValue(field.type));
+                return e;
+            }
+            default: Fail("unreachable-element-type");
+        }
+    }
+
+    bool NeverReturns(Node *n) const {
+        if (!n) return false;
+        if (auto call = Is<Call>(n)) {
+            if (call->builtin == B_ABORT || call->builtin == B_EXIT) return true;
+            return call->spec && !call->spec->inprogress && !call->spec->record.mayreturn;
+        }
+        if (auto block = Is<Block>(n)) {
+            for (auto stmt : block->stmts)
+                if (NeverReturns(stmt)) return true;
+            return NeverReturns(block->tail);
+        }
+        if (auto branch = Is<IfExpr>(n))
+            return NeverReturns(branch->cond) ||
+                   (NeverReturns(branch->thenb) && NeverReturns(branch->elseb));
+        return Is<Return>(n) != nullptr;
+    }
+
+    CoreExprP ElementValue(Node *n, CoreTypeId type) {
+        if (!n->exprtype || n->exprtype->kind != TY_VOID) return Value(n);
+        if (!NeverReturns(n)) Fail("bottom-element", n->line);
+        here = n->line;
+        auto e = NewExpr(CoreExprKind::Block, type);
+        e->org = Org(n->line, CoreOriginKind::Expr);
+        ExprBlockScope inexpr(*this);
+        e->then = make_unique<CoreBlock>();
+        e->then->scope = cur.nextscope++;
+        Stmt(n, *e->then);
+        here = n->line;
+        e->then->value = UnreachableElementValue(type);
+        return e;
+    }
+
     CoreExprP ArrayValue(ArrayLit *a) {
         if (a->capexpr) Fail("runtime-capacity");
         auto t = a->exprtype;
@@ -1919,12 +1977,13 @@ private:
                 Fail("owner-fill-literal", a->line);
             if (ct.kind != CoreType::Arr) Fail("fill-grow");
             auto e = NewExpr(CoreExprKind::Fill, ty);
-            e->a = Value(a->fillval);
+            e->a = ElementValue(a->fillval, ct.elem);
             e->org = Org(a->line, CoreOriginKind::Expr);
             return e;
         }
         auto e = NewExpr(CoreExprKind::Arr, ty);
-        for (auto el : a->elems) e->elems.push_back(Value(el));
+        auto element = ct.elem;
+        for (auto el : a->elems) e->elems.push_back(ElementValue(el, element));
         e->org = Org(a->line, CoreOriginKind::Expr);
         return e;
     }
@@ -2060,7 +2119,7 @@ private:
             if (inst->st->fields[i].ispad) continue;
             auto init = literal->InitFor((int)i);
             if (!init) Fail("struct");
-            e->elems.push_back(Value(init));
+            e->elems.push_back(ElementValue(init, Ty(inst->ftypes[i])));
         }
         return e;
     }

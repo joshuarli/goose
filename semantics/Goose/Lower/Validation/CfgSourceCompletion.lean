@@ -19,7 +19,7 @@ theorem complete_lowerExpr : ∀ expr : Expr, CompletionAction (lowerExpr expr)
     exact CompletionAction.bind (complete_lowerPlace place) fun _ => complete_emitDef _
   | .ref mu place => by
     simp only [lowerExpr]
-    exact CompletionAction.bind (complete_lowerPlace place) fun value => complete_freezeTo mu value
+    exact CompletionAction.bind (complete_lowerPlace place) fun value => complete_borrowTo mu value
   | .slice _ view lo hi _ => by
     simp only [lowerExpr]
     exact CompletionAction.bind (complete_lowerView view) fun _ => CompletionAction.bind (complete_lowerBound lo) fun _ =>
@@ -89,7 +89,7 @@ theorem complete_lowerArg : ∀ arg : Arg, CompletionAction (lowerArg arg)
   | .byVal expr => complete_lowerExpr expr
   | .byRef mu place => by
     simp only [lowerArg]
-    exact CompletionAction.bind (complete_lowerPlace place) fun value => complete_freezeTo mu value
+    exact CompletionAction.bind (complete_lowerPlace place) fun value => complete_borrowTo mu value
 
 theorem complete_lowerArgs : ∀ args : List Arg, CompletionAction (lowerArgs args)
   | [] => CompletionAction.pure _

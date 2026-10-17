@@ -18,7 +18,7 @@ theorem path_lowerExpr : ∀ expr : Expr, PathAction (lowerExpr expr)
     exact PathAction.bind (path_lowerPlace place) fun _ => path_emitDef _
   | .ref mu place => by
     simp only [lowerExpr]
-    exact PathAction.bind (path_lowerPlace place) fun value => path_freezeTo mu value
+    exact PathAction.bind (path_lowerPlace place) fun value => path_borrowTo mu value
   | .slice _ view lo hi _ => by
     simp only [lowerExpr]
     exact PathAction.bind (path_lowerView view) fun _ => PathAction.bind (path_lowerBound lo) fun _ =>
@@ -92,7 +92,7 @@ theorem path_lowerArg : ∀ arg : Arg, PathAction (lowerArg arg)
   | .byVal expr => path_lowerExpr expr
   | .byRef mu place => by
     simp only [lowerArg]
-    exact PathAction.bind (path_lowerPlace place) fun value => path_freezeTo mu value
+    exact PathAction.bind (path_lowerPlace place) fun value => path_borrowTo mu value
 
 theorem path_lowerArgs : ∀ args : List Arg, PathAction (lowerArgs args)
   | [] => PathAction.pure _
