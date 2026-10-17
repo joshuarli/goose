@@ -9,9 +9,9 @@ def LiveCompletionRun (action : B α) : Prop :=
     CurrentOpen before → ShapedBlocks before → before.cur.isSome = true →
       ShapedBlocks after ∧ OpenCount after + LiveCount before = OpenCount before + LiveCount after
 
-theorem complete_header (types : List VTy) (arguments : List ValueId)
+theorem complete_header_live (types : List VTy) (arguments : List ValueId)
     {tail : BlockId → List ValueId → B Unit}
-    (child : ∀ header params, CompletionRun (tail header params)) :
+    (child : ∀ header params, LiveCompletionRun (tail header params)) :
     LiveCompletionRun (do
       let (header, params) ← newBlock types
       emitTerm (.br header arguments)
@@ -49,6 +49,7 @@ theorem complete_header (types : List VTy) (arguments : List ValueId)
       env initial _ closed closeRun openInitial shapeInitial
     have shapeStarted : ShapedBlocks started := shapeClosed.of_blocks (setCur_blocks startRun)
     obtain ⟨shapeAfter, countTail⟩ := child header params env started result after tailRun openStarted shapeStarted
+      (by simp [setCur_current startRun])
     refine ⟨shapeAfter, ?_⟩
     have countStarted : OpenCount started = OpenCount closed := by
       simp only [OpenCount, setCur_blocks startRun]
@@ -63,5 +64,16 @@ theorem complete_header (types : List VTy) (arguments : List ValueId)
     have liveStarted : LiveCount started = 1 := by simp [LiveCount, setCur_current startRun]
     dsimp only at countInitial
     omega
+
+theorem complete_header (types : List VTy) (arguments : List ValueId)
+    {tail : BlockId → List ValueId → B Unit}
+    (child : ∀ header params, CompletionRun (tail header params)) :
+    LiveCompletionRun (do
+      let (header, params) ← newBlock types
+      emitTerm (.br header arguments)
+      setCur (some header)
+      tail header params) :=
+  complete_header_live types arguments fun header params env before result after run openBefore shapedBefore _ =>
+    child header params env before result after run openBefore shapedBefore
 
 end Goose.Lower.Validation
