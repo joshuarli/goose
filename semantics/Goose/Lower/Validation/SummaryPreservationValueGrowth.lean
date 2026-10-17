@@ -70,4 +70,61 @@ theorem old_def_roots_closed_after_push {res : Array (List RootRef)} {vt : Array
   rw [rootsOfDef_push_fresh bounds, rootsAt_push_old resultBound]
   exact closed
 
+
+theorem edge_roots_closed_after_push {func : Func} {before : Prov}
+    {newRoots : List RootRef} {target : BlockId} {args : List ValueId}
+    (closed : EdgeRootsClosed func before target args)
+    (arguments : ∀ value ∈ args, value < before.vals.size)
+    (parameters : ∀ block, func.blocks[target]? = some block →
+      ∀ pair ∈ block.params, pair.1 < before.vals.size) :
+    EdgeRootsClosed func { before with vals := before.vals.push newRoots } target args := by
+  intro block lookup pair member root rootMember
+  have parameterMember := List.of_mem_zip member
+  have argumentMember := List.of_mem_zip member
+  rw [rootsAt_push_old (arguments pair.2 argumentMember.2)] at rootMember
+  rw [rootsAt_push_old (parameters block lookup pair.1 parameterMember.1)]
+  exact closed block lookup pair member root rootMember
+
+theorem instruction_roots_closed_after_push {res : Array (List RootRef)}
+    {vt : Array (Option VTy)} {func : Func} {before : Prov} {newRoots : List RootRef}
+    {inst : Inst}
+    (closed : InstructionRootsClosed res vt func before inst)
+    (uses : ∀ value ∈ inst.uses, value < before.vals.size)
+    (definitions : ∀ result op, inst = .def result op → result < before.vals.size)
+    (parameters : ∀ block ∈ func.blocks.toList,
+      ∀ pair ∈ block.params, pair.1 < before.vals.size) :
+    InstructionRootsClosed res vt func { before with vals := before.vals.push newRoots } inst := by
+  have edge : ∀ target args, (∀ value ∈ args, value < before.vals.size) →
+      EdgeRootsClosed func before target args →
+      EdgeRootsClosed func { before with vals := before.vals.push newRoots } target args := by
+    intro target args arguments prior
+    apply edge_roots_closed_after_push prior arguments
+    intro block lookup
+    exact parameters block (by simpa using Array.mem_of_getElem? lookup)
+  cases inst with
+  | «def» result op =>
+    exact old_def_roots_closed_after_push closed (definitions result op rfl) uses
+  | eff effect =>
+    cases effect with
+    | slotInit slot value origin =>
+      change ∀ root ∈ rootsAt (before.vals.push newRoots) value, _
+      rw [rootsAt_push_old (uses value (by simp [Inst.uses, Effect.uses]))]
+      exact closed
+    | store address value origin =>
+      change ∀ slot, RootRef.local slot ∈ rootsAt (before.vals.push newRoots) address →
+        ∀ root ∈ rootsAt (before.vals.push newRoots) value, _
+      rw [rootsAt_push_old (uses address (by simp [Inst.uses, Effect.uses])),
+        rootsAt_push_old (uses value (by simp [Inst.uses, Effect.uses]))]
+      exact closed
+    | _ => trivial
+  | term term =>
+    cases term with
+    | br target args => exact edge target args uses closed
+    | condbr condition left leftArgs right rightArgs =>
+      exact ⟨edge left leftArgs (fun value member => uses value (by
+        simp [Inst.uses, Term.uses, member])) closed.1,
+        edge right rightArgs (fun value member => uses value (by
+          simp [Inst.uses, Term.uses, member])) closed.2⟩
+    | _ => trivial
+
 end Goose.Lower.Validation.SummaryPreservation
