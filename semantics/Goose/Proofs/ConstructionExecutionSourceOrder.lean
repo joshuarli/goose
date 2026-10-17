@@ -83,6 +83,46 @@ theorem listMapM_success_trace (action : α → EvalM β) (inputs : List α)
   apply listMapMLoop_success_trace action inputs [] initial values final
   simpa only [List.mapM] using result
 
+private def listForInUnit (action : α → EvalM Unit) (inputs : List α) : EvalM PUnit :=
+  forIn inputs PUnit.unit (fun input _ => do
+    action input
+    pure (ForInStep.yield PUnit.unit))
+
+private theorem listForInUnit_success_trace (action : α → EvalM Unit) (inputs : List α)
+    (accumulator : List Unit) (initial final : ExecutionState)
+    (result : listForInUnit action inputs initial = .ok PUnit.unit final) :
+    ∃ values, ListMapMLoopSuccess action inputs accumulator initial values final := by
+  induction inputs generalizing accumulator initial final with
+  | nil =>
+      simp only [listForInUnit, List.forIn_nil, pure] at result
+      cases result
+      exact ⟨accumulator.reverse, .nil accumulator initial⟩
+  | cons input inputs ih =>
+      simp only [listForInUnit, List.forIn_cons] at result
+      cases head : action input initial with
+      | ok value middle =>
+          simp only [bind, head, pure] at result
+          obtain ⟨values, tail⟩ := ih (value :: accumulator) middle final result
+          exact ⟨values, .cons head tail⟩
+      | stop reason middle => simp only [bind, head] at result; cases result
+      | escape address carriers middle => simp only [bind, head] at result; cases result
+      | jump target kind middle => simp only [bind, head] at result; cases result
+
+private theorem protectDestination_success (origin : Goose.Core.OriginId)
+    (destination : Goose.Core.DestinationId) (action : EvalM α)
+    (initial : ExecutionState) (value : α) (final : ExecutionState)
+    (result : protectDestination origin destination action initial = .ok value final) :
+    action initial = .ok value final := by
+  cases actionResult : action initial with
+  | ok actual state => simp only [protectDestination, actionResult] at result; cases result; rfl
+  | stop reason state => simp only [protectDestination, actionResult] at result; cases result
+  | escape address carriers state =>
+      simp only [protectDestination, actionResult] at result
+      split at result <;> cases result
+  | jump target kind state =>
+      simp only [protectDestination, actionResult] at result
+      split at result <;> cases result
+
 theorem listMapMLoop_success_length (action : α → EvalM β) {inputs : List α}
     {accumulator : List β} {initial : ExecutionState} {values : List β} {final : ExecutionState}
     (trace : ListMapMLoopSuccess action inputs accumulator initial values final) :
@@ -92,6 +132,58 @@ theorem listMapMLoop_success_length (action : α → EvalM β) {inputs : List α
   | @cons item rest accumulator initial middle final value values head tail ih =>
       simp only [List.length_cons] at ih ⊢
       omega
+
+theorem buildExpr_arrayLiteral_success_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (ty : Ty)
+    (operands : List Expr) (origin : Goose.Core.OriginId)
+    (initial final : ExecutionState)
+    (result : buildExpr (fuel + 1) config environment destination (.arrLit ty operands origin)
+      initial = .ok () final) :
+    ∃ pending before element values after,
+      getDestination destination initial = .ok pending before ∧
+      elementType pending.capability.logicalType = some element ∧
+      ListMapMLoopSuccess
+        (fun operand => buildElement fuel config environment destination element operand)
+        operands [] before values after ∧
+      values.length = operands.length ∧
+      liftConstruction origin (finishDestination destination) after = .ok () final := by
+  simp only [buildExpr, expressionOrigin] at result
+  have bodyResult : (do
+      let pending ← getDestination destination
+      let some element := elementType pending.capability.logicalType | fault .shape
+      for operand in operands do
+        buildElement fuel config environment destination element operand
+      liftConstruction origin (finishDestination destination)) initial = .ok () final :=
+    protectDestination_success origin destination _ initial () final result
+  cases pendingResult : getDestination destination initial with
+  | ok pending before =>
+      simp only [bind, pendingResult] at bodyResult
+      cases elementResult : elementType pending.capability.logicalType with
+      | none => simp only [elementResult] at bodyResult; cases bodyResult
+      | some element =>
+          simp only [elementResult] at bodyResult
+          split at bodyResult
+          case h_1 _ value after loopResult =>
+              have loopSuccess : listForInUnit
+                  (fun operand => buildElement fuel config environment destination element operand)
+                  operands before = .ok PUnit.unit after := by
+                exact loopResult
+              obtain ⟨values, trace⟩ := listForInUnit_success_trace
+                (fun operand => buildElement fuel config environment destination element operand)
+                operands [] before after loopSuccess
+              have count : values.length = operands.length := by
+                simpa using listMapMLoop_success_length
+                  (fun operand => buildElement fuel config environment destination element operand)
+                  trace
+              refine ⟨pending, before, element, values, after, ?_, elementResult, trace,
+                count, bodyResult⟩
+              rfl
+          case h_2 _ _ _ _ => cases bodyResult
+          case h_3 _ _ _ _ => cases bodyResult
+          case h_4 _ _ _ _ => cases bodyResult
+  | stop reason before => simp only [bind, pendingResult] at bodyResult; cases bodyResult
+  | escape address carriers before => simp only [bind, pendingResult] at bodyResult; cases bodyResult
+  | jump target kind before => simp only [bind, pendingResult] at bodyResult; cases bodyResult
 
 theorem listMapMLoop_stopped_trace (action : α → EvalM β) (inputs : List α)
     (accumulator : List β) (initial : ExecutionState) (reason : Goose.Core.Stop)
