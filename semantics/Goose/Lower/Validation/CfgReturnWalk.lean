@@ -216,4 +216,14 @@ theorem funcMayReturn_of_closed {mayReturn : Array Bool} {func : Func} {closed :
   | false => rfl
   | true => exact False.elim (safe.excludes (funcMayReturn_sound run) entry)
 
+theorem funcMayReturn_of_blocks (mayReturn : Array Bool) {left right : Func}
+    (blocks : left.blocks = right.blocks) : funcMayReturn mayReturn left = funcMayReturn mayReturn right := by
+  cases one : funcMayReturn mayReturn left <;> cases two : funcMayReturn mayReturn right
+  · rfl
+  · obtain ⟨closed, entry, safe⟩ := funcMayReturn_closed one
+    exact False.elim ((safe.of_blocks blocks).excludes (funcMayReturn_sound two) entry)
+  · obtain ⟨closed, entry, safe⟩ := funcMayReturn_closed two
+    exact False.elim ((safe.of_blocks blocks.symm).excludes (funcMayReturn_sound one) entry)
+  · rfl
+
 end Goose.Lower.Validation
