@@ -6,15 +6,15 @@
 
 ## Current checkpoint
 
-The integrated source checkpoint is `master` at `4f7ccf1a`. The semantic tree is unchanged from `f885b7be`. Staging snapshot `d8b16216` passed a 1,308-module source-aware rehash, but it is a source-only region-aligned stage, not a closing candidate. Full validation, whole-evaluation proofs, fresh executable audit, same-checkpoint parity, final regression, and performance gates remain open.
+The integrated source checkpoint is `master` at `d8b16216`. Its full source-aware rehash covers 144 changed roots plus `Goose.Audit`, 1,308 modules in 1,309 jobs, and all 171 registered claims, with only `propext`, `Classical.choice`, and `Quot.sound` reported. This source-only checkpoint establishes source elaboration and transitive audit results. It does not establish a fresh executable `goose-semantics` audit, whole evaluation, cross-layer parity, or final gates. Full validation, whole-evaluation proofs, same-checkpoint parity, final regression, and performance gates remain open.
 
 ### Evidence by scope
 
 #### Source kernel and transitive audit
 
-At `4f7ccf1a`, the semantic and verifier sources match the frozen `dc7cb23b` tree. The selected source closure covers 216 changed or new Lean roots since `09374665`, plus `Goose.Audit`, for 1,290 modules. `verify_closure.py` fully rehashed the closure. The exact selected command is in `.work/wt/resume-semantic-check-nextplain/.work/tmp/nextplain-command.txt`; its completion log is `nextplain-closure-restart.log`. The separate `Goose.Audit` import reported 171 claims using only `propext`, `Classical.choice`, and `Quot.sound`; the runner and output are `.work/tmp/nextplain-audit.lean` and `.work/tmp/nextplain-audit.jsonl` in that worktree. This is source elaboration and a transitive declaration audit, not an executable `goose-semantics` build or audit.
+The predecessor checkpoint `4f7ccf1a` matched frozen source `dc7cb23b`. Its closure covered 216 changed or new Lean roots since `09374665`, plus `Goose.Audit`, for 1,290 modules. `verify_closure.py` fully rehashed the closure. The exact selected command is in `.work/wt/resume-semantic-check-nextplain/.work/tmp/nextplain-command.txt`; its completion log is `nextplain-closure-restart.log`. A separate `Goose.Audit` import reported 171 claims using only `propext`, `Classical.choice`, and `Quot.sound`; its runner and output are `.work/tmp/nextplain-audit.lean` and `.work/tmp/nextplain-audit.jsonl` in that worktree. This predecessor receipt is source elaboration and a transitive declaration audit, not an executable `goose-semantics` build or audit.
 
-The staged region-aligned snapshot `d8b16216daee678d5f766e7665d070cc11e1beab` rehashed 144 changed roots plus `Goose.Audit`, 1,308 modules in 1,309 jobs, and all 171 audit registrations. The invocation and result are in `.work/wt/resume-native-regions-aligned/.work/tmp/regions-aligned-check1-resumed.log`. This snapshot does not include the subsequent model-knownness and SSA-value metadata, whole-evaluation proofs, Core/runtime updates, or GIR-H 0.5. It is not the integrated root.
+The current integrated root is the region-aligned source snapshot `d8b16216daee678d5f766e7665d070cc11e1beab`. It rehashed 144 changed roots plus `Goose.Audit`, 1,308 modules in 1,309 jobs, and all 171 audit registrations with the same three reported axioms. The invocation and result are in `.work/wt/resume-native-regions-aligned/.work/tmp/regions-aligned-check1-resumed.log`. The integrated source closure still excludes the subsequent model-knownness and SSA-value metadata, whole-evaluation proofs, Core/runtime updates, and GIR-H 0.5.
 
 Three closed lowering results remain valid for the definitions they state. `28eb9cc1` proves forward lowering preservation for accepted Core modules at every source fuel bound. `1da41160` checks reverse execution and all-fuel target-fault exclusion. `770db8aa` proves the converse fuel bound `8 * (moduleSyntaxCap + 1) * (targetFuel + 2) + 1`; its 265-module closure and independent review passed. Neither direction assumes source termination or an owner-shape certificate. These model results do not establish C++ lowering or native-emitter correctness.
 
@@ -46,7 +46,7 @@ Named-value sampling allocates no storage. A reference call retains one two-poin
 
 #### Resource and performance
 
-Two sampled process-tree cases measured a warm 1,290-module closure at about 1.09 GiB and an existing serial compiler fixture at about 1.52 GiB. The samples and sampler are `nextplain-rss-warm.log`, `verifier-rss-real-inputs.log`, and `sample-verifier-rss.py` in `resume-semantic-check-nextplain/.work/tmp`. Sampling can miss peaks, and summed RSS counts shared pages more than once. No full-rebuild aggregate peak, worst-case memory bound, binary-size result, or timing result is established. Performance gates remain open.
+Two sampled process-tree cases measured the predecessor's warm 1,290-module closure at about 1.09 GiB and an existing serial compiler fixture at about 1.52 GiB. The samples and sampler are `nextplain-rss-warm.log`, `verifier-rss-real-inputs.log`, and `sample-verifier-rss.py` in `resume-semantic-check-nextplain/.work/tmp`. Sampling can miss peaks, and summed RSS counts shared pages more than once. No full-rebuild aggregate peak, worst-case memory bound, binary-size result, or timing result is established. Performance gates remain open.
 
 #### Remaining proof obligations
 
