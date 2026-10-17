@@ -6,7 +6,7 @@
 
 ## Current checkpoint
 
-The integrated semantic and C++ sources remain at `0463de24`, with newer proof and construction work on branches. The native 41-case, eight-configuration comparison passed against fresh Core output. The independent GIR comparison now matches all 41 cases in both numeric profiles at sufficient fuel. The earlier case-41 result at equal fuel 30 is inconclusive: Core returns and GIR exhausts its instruction budget. SHRINK validation, whole-evaluation ownership proofs, cumulative source qualification, fresh Main/paranoid qualification, and resource and performance gates remain open.
+The integrated C++ construction packet is `d5861339`. Integrated semantic sources remain at `0463de24`, with newer proof and construction work on branches. The independent GIR comparison matches all 41 cases in both numeric profiles at sufficient fuel. The earlier case-41 result at equal fuel 30 is inconclusive: Core returns and GIR exhausts its instruction budget. Fresh native comparisons for the integrated packet are in progress. SHRINK validation, whole-evaluation ownership proofs, cumulative source qualification, paranoid qualification, and resource and performance gates remain open.
 
 ### Evidence by scope
 
@@ -50,9 +50,11 @@ Three closed lowering results remain valid for the definitions they state. `28eb
 
 #### Fresh executable semantics
 
-No fresh `goose-semantics` Main build or executable audit is established for the integrated root. Lean 4.35 is built in an installed prefix, and focused upstream paranoid, sorry, and audit checks passed. The Goose source recheck is running; a fresh Main/paranoid audit is pending. The repository's default Lean remains 4.34 until that qualification finishes. The old 158- and 157-claim executable audits are not current evidence.
+No fresh `goose-semantics` Main build or executable audit is established for the integrated root. The Lean 4.35 upgrade candidate passed all 1,814 live library roots, a fresh executable build, and its 171-claim audit using only the three standard axioms. The combined construction candidate has a separate source recheck in progress. Full paranoid qualification remains incomplete: nanoda overflowed its default stack, then exceeded the guarded memory budget with a larger stack. A single-thread nanoda run is being prepared. The default Lean remains 4.34 until qualification finishes. The old 158- and 157-claim executable audits are not current evidence.
 
 #### Integrated C++ candidate
+
+The current packet `d5861339` integrates limited receiving construction, staged storage, and private cursor validation. Review found that `LocalGet` and `LocalSet` could bypass cursor protection. Both now reject private inline cursor members with `GIR-V090`, with negative controls that accepted before the fix. All three focused GIR units pass on the integrated commit. The candidate also passed a fresh serial Debug build, both GIR source scripts, and four numeric and optimization configurations of 56 sanitized receiving-lifetime guards. Those checks do not establish the remaining semantic or performance gates.
 
 The checked candidate `a26a9783` is the source base for the six C++ commits now integrated at `153f44f0`. A Git comparison confirmed that `src`, `test`, the GIR specification, and native construction contract files are byte-identical between them. From `resume-cpp-closing`, all three focused GIR units passed:
 
