@@ -31,6 +31,15 @@ theorem StorageWalkVisible.add {env : Core.TEnv} {stack : List ScopeId} {index :
     exact active localVar row
   · exact visible found localVar member row
 
+theorem StorageWalkVisible.prepend {env : Core.TEnv} {stack : List ScopeId}
+    (visible : StorageWalkVisible env stack) (prefixVars : List VarId)
+    (active : ∀ index ∈ prefixVars, ∀ localVar, env.vars[index]? = some localVar → localVar.scope ∈ stack) :
+    StorageWalkVisible {env with visible := prefixVars ++ env.visible} stack := by
+  intro index localVar member row
+  rcases List.mem_append.mp member with before | after
+  · exact active index before localVar row
+  · exact visible index localVar after row
+
 theorem StorageWalkVisible.varOf {env : Core.TEnv} {stack : List ScopeId}
     (visible : StorageWalkVisible env stack) {index : VarId} {localVar : LocalVar} {start finish : Nat}
     (source : Core.varOf env index start = .ok (localVar, finish)) : localVar.scope ∈ stack := by
@@ -131,6 +140,21 @@ theorem storageWalk_sliceRef_visible {env : Core.TEnv} {index : VarId} {type : T
   by_cases member : index ∈ env.visible
   · exact member
   · simp [Core.sliceRefTy, member] at source
+
+theorem storageWalk_declared_index_scope {env : Core.TEnv} {index : Option VarId} {scope start finish : Nat}
+    (source : Core.declareIndex env scope index start = .ok ((), finish)) :
+    ∀ variableId ∈ index.toList, ∀ localVar, env.vars[variableId]? = some localVar → localVar.scope = scope := by
+  intro variableId member localVar row
+  cases index with
+  | none => cases member
+  | some actual =>
+    have same : variableId = actual := by simpa using member
+    subst variableId
+    obtain ⟨_, declared, declaredAt, declaredScope, declaredType⟩ :=
+      (declareIndex_ok _ _ _ _ _ source).2 actual rfl
+    have sameLocal : declared = localVar := Option.some.inj (declaredAt.symm.trans row)
+    subst declared
+    exact declaredScope
 
 #print axioms StorageWalkVisible.varOf
 #print axioms StorageWalkVisible.declarePre
