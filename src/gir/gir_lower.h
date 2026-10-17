@@ -1117,13 +1117,20 @@ private:
     }
 
     vector<int> LowerProducer(const CoreExpr &expression, const vector<int> &destinations, int org) {
+        auto savedDestinations = resultDestinations;
+        auto values = LowerProducerValues(expression, destinations, org);
+        resultDestinations = std::move(savedDestinations);
+        return values;
+    }
+
+    vector<int> LowerProducerValues(const CoreExpr &expression, const vector<int> &destinations, int org) {
         vector<int> values;
         auto activeValues = destinations;
         for (auto destination : destinations)
             if (destination >= 0 && find(activeDestinations.begin(), activeDestinations.end(), destination) == activeDestinations.end())
                 activeDestinations.push_back(destination);
         auto finished = [&](vector<int> results) {
-            if (cur >= 0) for (auto destination : activeValues) {
+            for (auto destination : activeValues) {
                 auto active = find(activeDestinations.begin(), activeDestinations.end(), destination);
                 if (active != activeDestinations.end()) activeDestinations.erase(active);
             }
@@ -1134,11 +1141,13 @@ private:
             for (size_t position = 0; position < destinations.size(); position++) {
                 auto &operand = *expression.values[position];
                 values.push_back(destinations[position] >= 0 ? LowerConstruct(operand, destinations[position], org) : LowerExpr(operand));
-                if (cur < 0) return {};
+                if (cur < 0) return finished({});
                 if (destinations[position] >= 0) {
                     auto active = find(activeDestinations.begin(), activeDestinations.end(), destinations[position]);
                     if (active != activeDestinations.end()) *active = values.back();
                     activeValues[position] = values.back();
+                    for (auto &result : resultDestinations)
+                        if (result == destinations[position]) result = values.back();
                 }
             }
             return finished(std::move(values));
@@ -1155,7 +1164,7 @@ private:
         call.idx = context;
         vector<bool> adapted(destinations.size(), false);
         auto arguments = LowerArgs(expression.args, context, org);
-        if (cur < 0) return {};
+        if (cur < 0) return finished({});
         for (size_t position = 0; position < destinations.size(); position++) {
             if (!GirNonfixed(mod, function.results[position].type)) continue;
             if (destinations[position] < 0) throw CompileError { "nonfixed call result has no receiving destination" };
@@ -1203,6 +1212,12 @@ private:
     }
 
     void LowerFunctionReturn(const vector<const CoreExpr *> &operands, int org) {
+        auto savedDestinations = resultDestinations;
+        LowerReturnOperands(operands, org);
+        resultDestinations = std::move(savedDestinations);
+    }
+
+    void LowerReturnOperands(const vector<const CoreExpr *> &operands, int org) {
         if (!currentResults || operands.size() != currentResults->size())
             throw CompileError { "return operands do not match the current function result descriptors" };
         vector<int> values;
@@ -1210,7 +1225,11 @@ private:
         for (size_t result = 0; result < operands.size(); result++) {
             auto &descriptor = (*currentResults)[result];
             auto &expression = *operands[result];
-            if (!GirNonfixed(mod, descriptor.type)) { values.push_back(LowerExpr(expression)); continue; }
+            if (!GirNonfixed(mod, descriptor.type)) {
+                values.push_back(LowerExpr(expression));
+                if (cur < 0) return;
+                continue;
+            }
             if (expression.kind == CoreExprKind::ResultLocal && descriptor.namedLocal == expression.var &&
                 boundNamedSlots.count(expression.var)) {
                 GirInst named;
@@ -1218,6 +1237,7 @@ private:
                 named.idx = expression.var;
                 named.org = org;
                 values.push_back(EmitDef(std::move(named)));
+                resultDestinations[result] = values.back();
                 boundNamedSlots.erase(expression.var);
                 continue;
             }
@@ -1235,6 +1255,7 @@ private:
             auto completed = LowerConstruct(expression, destination, org);
             if (cur < 0) return;
             values.push_back(completed);
+            resultDestinations[result] = completed;
             if (replacement) replacements.push_back({ (int)result, completed });
         }
         for (auto &[result, completed] : replacements) {
