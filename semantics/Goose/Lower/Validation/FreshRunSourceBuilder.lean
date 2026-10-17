@@ -134,15 +134,15 @@ theorem lowerExpr_freshOwner_freshRuns {expr : Expr} {env : Core.TEnv} {ty : Ty}
     (owner : isLiteralRunType ty = true) {results : List Ty} {before captured : LS} {value : ValueId}
     (run : lowerExpr expr (lowerEnv env.mod env.vars results) before = (value, captured))
     (live : captured.cur.isSome = true) (generated : GeneratedBuilderState before)
-    {loop : Option LoopCtx} {after : LS} {func : Func} {types : Array (Option VTy)}
-    (frames : LoopBuilderFrames loop before) (framed : TermEdgesFramed loop captured after)
+    {after : LS} {func : Func} {types : Array (Option VTy)}
+    (framed : IntervalEdgesFramed before captured after)
     (extension : captured.Ext after) (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     (blocks : func.blocks = finishBlocks after.blocks)
     (dense : (func.blocks.toList.flatMap GIR.Block.defs).Perm (List.range func.numValues))
     (rows : OwnerLiteralRows func types) : (freshRuns func types)[value]? = some true := by
   have shape := ownerFreshExpr_of_source expr source fresh owner
   have future := ownerFreshExpr_future expr shape run live generated
-  exact (future loop after func types frames framed extension closed blocks dense rows).checked
+  exact (future after func types framed extension closed blocks dense rows).checked
     (Func.parameter_ids_bounded_of_dense dense)
 
 theorem lowerBlock_freshOwner_freshRuns {body : Core.Block} {env : Core.TEnv} {ty : Ty} {start finish : Nat}
@@ -150,15 +150,15 @@ theorem lowerBlock_freshOwner_freshRuns {body : Core.Block} {env : Core.TEnv} {t
     (owner : isLiteralRunType ty = true) {results : List Ty} {before captured : LS} {value : ValueId}
     (run : lowerBlock none [] true body (lowerEnv env.mod env.vars results) before = (value, captured))
     (live : captured.cur.isSome = true) (generated : GeneratedBuilderState before)
-    {loop : Option LoopCtx} {after : LS} {func : Func} {types : Array (Option VTy)}
-    (frames : LoopBuilderFrames loop before) (framed : TermEdgesFramed loop captured after)
+    {after : LS} {func : Func} {types : Array (Option VTy)}
+    (framed : IntervalEdgesFramed before captured after)
     (extension : captured.Ext after) (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     (blocks : func.blocks = finishBlocks after.blocks)
     (dense : (func.blocks.toList.flatMap GIR.Block.defs).Perm (List.range func.numValues))
     (rows : OwnerLiteralRows func types) : (freshRuns func types)[value]? = some true := by
   have shape := ownerFreshBlock_of_source body source fresh owner
   have future := ownerFreshBlock_future body shape run live generated
-  exact (future loop after func types frames framed extension closed blocks dense rows).checked
+  exact (future after func types framed extension closed blocks dense rows).checked
     (Func.parameter_ids_bounded_of_dense dense)
 
 end Goose.Lower.Validation

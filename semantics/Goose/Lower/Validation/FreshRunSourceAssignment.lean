@@ -11,8 +11,8 @@ theorem assignWhole_freshRuns_reconstructed {env output : Core.TEnv} {place : Pl
     {results : List Ty} {before captured after : LS} {value : ValueId}
     (run : lowerExpr expr (lowerEnv env.mod env.vars results) before = (value, captured))
     (live : captured.cur.isSome = true) (generated : GeneratedBuilderState before)
-    {loop : Option LoopCtx} {module : GIR.Module} {func : Func}
-    (frames : LoopBuilderFrames loop before) (framed : TermEdgesFramed loop captured after)
+    {module : GIR.Module} {func : Func}
+    (framed : IntervalEdgesFramed before captured after)
     (extension : captured.Ext after) (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     (builder : EmittedBuilder (lowerEnv env.mod env.vars results) initState after)
     (blocks : func.blocks = finishBlocks after.blocks)
@@ -26,7 +26,7 @@ theorem assignWhole_freshRuns_reconstructed {env output : Core.TEnv} {place : Pl
   have ownerResult : isLiteralRunType info.ty = true := by
     rcases ownerShape with grow | growshrink <;> simp_all [isLiteralRunType]
   exact lowerExpr_freshOwner_reconstructed childSource (tyStmt_assignWhole_fresh source) ownerResult run
-    live generated frames framed extension closed builder blocks (dense_finishBlocks builder.checkpoint.dense blocks)
+    live generated framed extension closed builder blocks (dense_finishBlocks builder.checkpoint.dense blocks)
     slots globals sigs structs profile graphs
 
 end Goose.Lower.Validation

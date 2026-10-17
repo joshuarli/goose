@@ -1,5 +1,7 @@
 import Goose.Lower.Validation.ValidationTypedModuleInterfaces
 import Goose.Lower.Validation.EmittedMetadataStatic
+import Goose.Lower.Validation.ValidationTypedModuleResolved
+import Goose.Lower.Validation.EmittedMetadataStaticProfileSourceModule
 
 namespace Goose.Lower.Validation
 
@@ -196,5 +198,44 @@ private theorem struct_types_of_rows {module : Core.Module}
   rw [globals]
   simp only []
   rw [functions]
+
+private theorem body_resolved_finished_rows {module : Core.Module} {func : Func} {state : LS}
+    (source : EmittedBodyResolved module state) (blocks : func.blocks = finishBlocks state.blocks)
+    {block : GIR.Block} (member : block ∈ func.blocks.toList) :
+    (∀ parameter ∈ block.params, EmittedVTyResolved module parameter.2) ∧
+      (∀ instruction ∈ block.insts, EmittedAnnotationResolved module instruction) := by
+  rw [blocks, finishBlocks, Array.toList_map] at member
+  obtain ⟨original, originalMember, rfl⟩ := List.mem_map.mp member
+  constructor
+  · exact source.parameters original originalMember
+  · intro instruction instructionMember
+    exact source.annotations instruction (List.mem_flatMap.mpr ⟨original, originalMember, instructionMember⟩)
+
+theorem lower_function_bodyResolved_of_accepted {module : Core.Module}
+    (accepted : Core.validate module = .ok ()) {func : Func}
+    (member : func ∈ (lower module).funcs.toList ++ (lower module).globals.toList.map (·.init))
+    {block : GIR.Block} (blockMember : block ∈ func.blocks.toList) :
+    (∀ parameter ∈ block.params, EmittedVTyResolved module parameter.2) ∧
+      (∀ instruction ∈ block.insts, EmittedAnnotationResolved module instruction) := by
+  obtain ⟨info, infoMember, same⟩ := function_info member
+  rw [← same] at blockMember
+  obtain ⟨_, source⟩ := lower_info_source accepted infoMember
+  rcases source with ⟨contextIndex, context, impl, contextAt, implAt, same⟩ |
+    ⟨globalIndex, global, globalAt, same⟩
+  · rw [same] at blockMember
+    exact body_resolved_finished_rows (lowerImpl_resolved_of_accepted accepted implAt).toEmittedBodyResolved
+      (cfg_context_blocks module context impl) blockMember
+  · rw [same] at blockMember
+    exact body_resolved_finished_rows (lowerGlobal_resolved_of_accepted accepted globalAt).toEmittedBodyResolved
+      (cfg_global_blocks module global) blockMember
+
+theorem lower_checkStructTypes_of_accepted {module : Core.Module}
+    (accepted : Core.validate module = .ok ()) : checkStructTypes (lower module) = .ok () := by
+  apply struct_types_of_rows accepted
+  intro func member block blockMember
+  obtain ⟨parameters, annotations⟩ := lower_function_bodyResolved_of_accepted accepted member blockMember
+  exact ⟨parameters, fun instruction instructionMember =>
+    ⟨lower_functionProfile_of_accepted accepted func member block blockMember instruction instructionMember,
+      annotations instruction instructionMember⟩⟩
 
 end Goose.Lower.Validation

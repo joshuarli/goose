@@ -213,13 +213,12 @@ theorem replacementRegion_closed_of_emission {module : GIR.Module} {types : Arra
     (clearRun : emitEffect (.clear owner origin) env before = ((), cleared))
     (emitted : EmitsOnly (ReplacementInstApart module types queries owner) cleared captured)
     (advance : cleared.Adv captured) (bounded : TargetsBounded cleared)
-    {loop : Option LoopCtx} (frames : LoopBuilderFrames loop cleared)
-    (framed : TermEdgesFramed loop captured after) (extension : captured.Ext after)
+    (framed : IntervalEdgesFramed cleared captured after) (extension : captured.Ext after)
     (shaped : ∀ (index : BlockId) (body : BlockB), captured.blocks[index]? = some body → OpenBlock body ∨ ClosedBlock body)
     (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
     {func : Func} (blocks : func.blocks = finishBlocks after.blocks) :
     EmptyFactsClosed module func types queries (ReplacementRegionFacts cleared captured owner) := by
-  apply replacementRegion_closed advance bounded frames framed extension shaped closed blocks emitted.fresh
+  apply replacementRegion_closed advance bounded framed extension shaped closed blocks emitted.fresh
   intro index body current row
   obtain ⟨head, tail, split, valid⟩ := emitsOnly_clear_current live clearRun emitted current row
   exact ⟨head, tail, origin, split, valid⟩
