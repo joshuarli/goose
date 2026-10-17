@@ -103,4 +103,24 @@ theorem lowered_infinite_never_faults (fuel : Nat) (kind : FaultKind) :
     GIR.run fuel .release (lower infiniteSource) ≠ .fault kind :=
   reflected_lowering_never_faults infiniteSource_accepted .release lowered_module_reflection fuel kind
 
+def mutantFunction : Func :=
+  { loopFunction with blocks := loopFunction.blocks.modify 2 fun block =>
+    { block with insts := [.eff (.enter 1), .eff (.leave 1), .term .unreachable] } }
+
+def mutantModule : GIR.Module :=
+  { lower infiniteSource with funcs := #[mutantFunction] }
+
+theorem mutant_fault : GIR.run 12 .release mutantModule = .fault .flow := by cbv
+
+theorem mutant_not_reflected :
+    ¬ ReflectM (fun n => Core.runModule n ⟨.release,infiniteSource⟩)
+      (fun n => GIR.runModule n ⟨.release,mutantModule⟩) St.initial := by
+  intro reflection
+  have fault : GIR.runModule 12 ⟨.release,mutantModule⟩ St.initial =
+      .stop (.fault .flow) { St.initial with nextAct := 1, nextScope := 2 } := by cbv
+  obtain ⟨fuel, source⟩ := reflection 12 _ (by intro state impossible; cases impossible) fault
+  have safe := Goose.Proofs.Safety.validated_never_faults infiniteSource infiniteSource_accepted fuel .release .flow
+  apply safe
+  simp [Core.eval, source]
+
 end Goose.Lower.ReflectionChecks

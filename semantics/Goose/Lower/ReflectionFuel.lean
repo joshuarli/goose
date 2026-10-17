@@ -112,4 +112,93 @@ theorem ReflectAtFuel.def_step {cx : FnCtx} {pt : Pt} {fr : GIR.Frame}
           cases hn
           exact Or.inr ⟨n,stop,after,hs,hrun.symm⟩
 
+theorem ReflectMFuel.map {source target : Nat → M α} {state : St} {fuel : Nat}
+    (reflection : ReflectMFuel fuel source target state) (inject : α → β) :
+    ReflectMFuel fuel (fun n => source n >>= fun value => pure (inject value))
+      (fun n => target n >>= fun value => pure (inject value)) state := by
+  intro result hresult htarget
+  change (target fuel >>= fun value => pure (inject value)) state = result at htarget
+  change ∃ n, (source n >>= fun value => pure (inject value)) state = result
+  rw [bind_apply] at htarget
+  cases ht : target fuel state with
+  | ok value after =>
+      rw [ht] at htarget
+      obtain ⟨n,hn⟩ := reflection (.ok value after) (NonTimeout.ok _ _) ht
+      exact ⟨n,by rw [bind_apply, hn]; exact htarget⟩
+  | stop stop after =>
+      rw [ht] at htarget
+      have hnon : NonTimeout (Res.stop stop after : Res α) := by
+        intro s h
+        cases h
+        exact hresult after htarget.symm
+      obtain ⟨n,hn⟩ := reflection (.stop stop after) hnon ht
+      exact ⟨n,by rw [bind_apply, hn]; exact htarget⟩
+
+
+theorem ReflectMFuel.of_timeout {source target : Nat → M α} {state after : St} {fuel : Nat}
+    (stopped : target fuel state = .stop .timeout after) :
+    ReflectMFuel fuel source target state := by
+  intro result nonTimeout run
+  exact (nonTimeout after (run.symm.trans stopped)).elim
+
+theorem ReflectAtFuel.of_source {cx : FnCtx} {pt : Pt} {fr : GIR.Frame}
+    {source other : Nat → M α} {post : α → St → Pt → GIR.Frame → Prop} {state : St} {fuel : Nat}
+    (reflection : ReflectAtFuel fuel cx pt fr source post state)
+    (equal : ∀ n, ∃ k, other k state = source n state) :
+    ReflectAtFuel fuel cx pt fr other post state := by
+  intro result nonTimeout run
+  rcases reflection result nonTimeout run with success | stopped
+  · obtain ⟨n,value,after,pt',fr',residual,sourceRun,matched,bound,targetRun⟩ := success
+    obtain ⟨k,equal⟩ := equal n
+    exact Or.inl ⟨k,value,after,pt',fr',residual,equal.trans sourceRun,matched,bound,targetRun⟩
+  · obtain ⟨n,stop,after,sourceRun,targetRun⟩ := stopped
+    obtain ⟨k,equal⟩ := equal n
+    exact Or.inr ⟨k,stop,after,equal.trans sourceRun,targetRun⟩
+
+theorem runAt_condbr_step {cx : FnCtx} {pt : Pt} {fr : GIR.Frame} {condition : ValueId}
+    {yes no : BlockId} {yesBlock noBlock : GIR.Block} {selected : Bool}
+    (instruction : instAt cx.fn pt = some (.term (.condbr condition yes [] no [])))
+    (value : fr.vals[condition]? = some (.val (.bool selected)))
+    (yesAt : cx.fn.blocks[yes]? = some yesBlock) (yesParameters : yesBlock.params = [])
+    (noAt : cx.fn.blocks[no]? = some noBlock) (noParameters : noBlock.params = []) (fuel : Nat) :
+    runAt cx pt fr (fuel + 1) = runAt cx (if selected then (yes,0) else (no,0)) fr fuel := by
+  unfold runAt
+  rw [instsAt_cons instruction, exec]
+  cases selected
+  · simp only [getVal_of value, Core.expectBool, pure_bind, Bool.false_eq_true, ↓reduceIte,
+      mapList, enterBlock, noAt, noParameters, List.length_nil, bindParams]
+    have next : instsAt cx.fn (no,0) = noBlock.insts := by simp [instsAt, noAt]
+    rw [next]
+  · simp only [getVal_of value, Core.expectBool, pure_bind, ↓reduceIte,
+      mapList, enterBlock, yesAt, yesParameters, List.length_nil, bindParams]
+    have next : instsAt cx.fn (yes,0) = yesBlock.insts := by simp [instsAt, yesAt]
+    rw [next]
+
+theorem ReflectAtFuel.condbr {cx : FnCtx} {pt : Pt} {fr : GIR.Frame} {condition : ValueId}
+    {yes no : BlockId} {yesBlock noBlock : GIR.Block} {selected : Bool}
+    {source : Nat → M α} {post : α → St → Pt → GIR.Frame → Prop} {state : St} {fuel : Nat}
+    (instruction : instAt cx.fn pt = some (.term (.condbr condition yes [] no [])))
+    (value : fr.vals[condition]? = some (.val (.bool selected)))
+    (yesAt : cx.fn.blocks[yes]? = some yesBlock) (yesParameters : yesBlock.params = [])
+    (noAt : cx.fn.blocks[no]? = some noBlock) (noParameters : noBlock.params = [])
+    (reflection : ReflectAtFuel fuel cx (if selected then (yes,0) else (no,0)) fr source post state) :
+    ReflectAtFuel (fuel + 1) cx pt fr source post state :=
+  ReflectAtFuel.step (congrFun
+    (runAt_condbr_step instruction value yesAt yesParameters noAt noParameters fuel) state) reflection
+
+theorem ReflectMFuel.call_op {cx : FnCtx} {fr : GIR.Frame} {callee : FnId}
+    {args : List ValueId} {values : List Val} {origin : Option OriginId}
+    {source : Nat → M Val} {state : St} {fuel : Nat}
+    (arguments : mapList (getVal fr) args = pure values)
+    (call : ReflectMFuel fuel source (fun n => callFn n cx.cfg fr.depth callee values) state) :
+    ReflectMFuel (fuel + 1) (fun n => source n >>= fun value => pure (RVal.val value))
+      (fun n => execOp n cx fr (.call callee args origin)) state := by
+  intro result nonTimeout run
+  have step : execOp (fuel + 1) cx fr (.call callee args origin) =
+      (callFn fuel cx.cfg fr.depth callee values >>= fun value => pure (RVal.val value)) := by
+    simp only [execOp, arguments, pure_bind]
+  change execOp (fuel + 1) cx fr (.call callee args origin) state = result at run
+  rw [step] at run
+  exact call.map RVal.val result nonTimeout run
+
 end Goose.Lower
