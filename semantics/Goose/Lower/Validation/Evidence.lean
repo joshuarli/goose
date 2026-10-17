@@ -38,6 +38,13 @@ theorem CheckedRun.of_unchanged {action : B α}
   rw [run] at equality
   simpa only [CheckedIndices, equality] using checked
 
+theorem checked_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    CheckedRun (recordValueRootRecipe value sourceScope) := by
+  apply CheckedRun.of_unchanged
+  intro le state
+  rw [recordValueRootRecipe_run]
+  rfl
+
 theorem checked_appendInst {before : LS} (checked : CheckedIndices before)
     (block : BlockId) (inst : Inst) (instruction : Inst.CheckedIndex inst) :
     CheckedIndices (before.appendInst block inst) := by
@@ -359,7 +366,7 @@ theorem checked_lowerEach (regrow : Bool) (owner : Option ValueId) (sampled : Va
   exact CheckedRun.bind (checked_eachLen _ _ _) fun n => CheckedRun.bind (checked_emitDef _) fun c =>
     checked_loopBody c hbody (checked_rangeBack _ _ _)
 
-theorem checked_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : CheckedRun a1) (h2 : CheckedRun a2) :
+theorem checked_ifE_core (cv : ValueId) (sourceScope : ScopeId) {a1 a2 : B ValueId} (h1 : CheckedRun a1) (h2 : CheckedRun a2) :
     CheckedRun (whenLive 0 fun _ => do
       let (tb, eb) ← fork cv
       setCur (some tb)
@@ -368,12 +375,16 @@ theorem checked_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : CheckedRun a1)
       setCur (some eb)
       let vf ← a2
       let endF ← curBlock
-      joinValue endT vt endF vf) := by
+      let result ← joinValue endT vt endF vf
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   exact checked_whenLive _ fun _ =>
     CheckedRun.bind (checked_fork _) fun ⟨_, _⟩ =>
     CheckedRun.bind (checked_setCur _) fun _ => CheckedRun.bind h1 fun _ =>
     CheckedRun.bind checked_curBlock fun _ => CheckedRun.bind (checked_setCur _) fun _ =>
-    CheckedRun.bind h2 fun _ => CheckedRun.bind checked_curBlock fun _ => checked_joinValue _ _ _ _
+    CheckedRun.bind h2 fun _ => CheckedRun.bind checked_curBlock fun _ =>
+    CheckedRun.bind (checked_joinValue _ _ _ _) fun result =>
+    CheckedRun.bind (checked_recordValueRootRecipe result sourceScope) fun _ => CheckedRun.pure result
 
 theorem checked_ifS_some_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : CheckedRun a1) (h2 : CheckedRun a2) :
     CheckedRun (whenLive () fun _ => do
@@ -496,7 +507,7 @@ theorem checked_lowerExpr : ∀ e : Expr, CheckedRun (lowerExpr e)
   | .ifE c t f => by
     simp only [lowerExpr]
     exact CheckedRun.bind (checked_lowerExpr c) fun cv =>
-      checked_ifE_core cv (checked_lowerBlock none [] true t) (checked_lowerBlock none [] true f)
+      checked_ifE_core cv (sourceBlockScope t) (checked_lowerBlock none [] true t) (checked_lowerBlock none [] true f)
   | .blockE b => by
     simp only [lowerExpr]
     exact checked_lowerBlock none [] true b
@@ -814,11 +825,7 @@ theorem lower_checkedIndices (module : Core.Module) (func : Func)
     (member : func ∈ (lower module).funcs.toList ++ (lower module).globals.toList.map (·.init)) :
     Func.CheckedIndices func := by
   rcases List.mem_append.mp member with implementation | initializer
-  · change func ∈ (module.contexts.map fun ctx =>
-        match (module.impls.map fun impl => (impl, lowerImpl module impl))[ctx.impl]? with
-        | some (impl, body) => { body with roots := lowerContextRootInfo ctx impl }
-        | none => invalidContextFunction ctx).toList at implementation
-    simp only [Array.toList_map, List.mem_map] at implementation
+  · simp only [lower, Array.toList_map, List.mem_map] at implementation
     obtain ⟨ctx, _, equality⟩ := implementation
     rw [Array.getElem?_map] at equality
     cases source : module.impls[ctx.impl]? with
@@ -840,11 +847,7 @@ theorem lower_certificate_none (module : Core.Module) (func : Func)
     (member : func ∈ (lower module).funcs.toList ++ (lower module).globals.toList.map (·.init)) :
     func.certificate = none := by
   rcases List.mem_append.mp member with implementation | initializer
-  · change func ∈ (module.contexts.map fun ctx =>
-        match (module.impls.map fun impl => (impl, lowerImpl module impl))[ctx.impl]? with
-        | some (impl, body) => { body with roots := lowerContextRootInfo ctx impl }
-        | none => invalidContextFunction ctx).toList at implementation
-    simp only [Array.toList_map, List.mem_map] at implementation
+  · simp only [lower, Array.toList_map, List.mem_map] at implementation
     obtain ⟨ctx, _, equality⟩ := implementation
     rw [Array.getElem?_map] at equality
     cases source : module.impls[ctx.impl]? <;>
