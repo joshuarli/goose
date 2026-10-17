@@ -54,7 +54,7 @@ theorem list_forIn_establishes {property known : σ → Prop} (items : List α) 
     change known (forIn rest mid body)
     rcases List.mem_cons.mp member with equal | inRest
     · subst first
-      apply list_forIn_invariant
+      apply list_forIn_state_invariant
       · simpa [run] using established start initial
       · exact retained
     · apply ih mid inRest
@@ -90,7 +90,7 @@ theorem emptyFactRound_edge_known (module : GIR.Module) (func : Func)
     dsimp only
     split
     · split
-      · apply list_forIn_invariant (property := fun current : Array (Option (List ValueId)) × Bool =>
+      · apply list_forIn_state_invariant (property := fun current : Array (Option (List ValueId)) × Bool =>
           KnownStatesPreserved states current.1)
         · exact checked
         · intro edge current checked
@@ -110,7 +110,7 @@ theorem emptyFactRound_edge_known (module : GIR.Module) (func : Func)
     dsimp only
     split
     · split
-      · apply list_forIn_invariant (property := fun current : Array (Option (List ValueId)) × Bool =>
+      · apply list_forIn_state_invariant (property := fun current : Array (Option (List ValueId)) × Bool =>
           EmptyStateKnown current.1 target)
         · exact checked
         · intro edge current checked

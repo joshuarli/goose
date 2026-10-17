@@ -84,10 +84,10 @@ theorem literalRunSeeds_size (func : Func) (types : Array (Option VTy)) :
   unfold literalRunSeeds
   change ((forIn (m := Id) func.blocks (Array.replicate func.numValues false) _)).size = func.numValues
   rw [← Array.forIn_toList]
-  apply list_forIn_invariant (property := fun flags : Array Bool => flags.size = func.numValues)
+  apply list_forIn_state_invariant (property := fun flags : Array Bool => flags.size = func.numValues)
   · simp
   · intro block flags sized
-    apply list_forIn_invariant (property := fun flags : Array Bool => flags.size = func.numValues)
+    apply list_forIn_state_invariant (property := fun flags : Array Bool => flags.size = func.numValues)
     · exact sized
     · intro inst flags sized
       cases inst with
@@ -151,7 +151,7 @@ theorem freshRunRound_parameter (func : Func) (flags : Array Bool)
   · simp only [List.mem_range']
     simp [Std.Legacy.Range.size, targetBound]
   · intro block member state checked
-    apply list_forIn_invariant (property := fun state : Array Bool × Bool => TrueFlagsPreserved flags state.1)
+    apply list_forIn_state_invariant (property := fun state : Array Bool × Bool => TrueFlagsPreserved flags state.1)
     · exact checked
     · intro param state checked
       obtain ⟨⟨result, ty⟩, index⟩ := param
@@ -160,7 +160,7 @@ theorem freshRunRound_parameter (func : Func) (flags : Array Bool)
       · exact checked.trans (trueFlags_set _ _)
       · exact checked
   · intro block member state known
-    apply list_forIn_invariant (property := fun state : Array Bool × Bool => state.1[value]? = some true)
+    apply list_forIn_state_invariant (property := fun state : Array Bool × Bool => state.1[value]? = some true)
     · exact known
     · intro param state known
       obtain ⟨⟨result, ty⟩, index⟩ := param

@@ -27,7 +27,7 @@ theorem list_forIn'_invariant {property : σ → Prop} (items : List α) (start 
       · intro item member state checked
         exact preserved item (by simp [member]) state checked
 
-theorem list_forIn_invariant {property : σ → Prop} (items : List α) (start : σ)
+theorem list_forIn_state_invariant {property : σ → Prop} (items : List α) (start : σ)
     (body : α → σ → Id (ForInStep σ))
     (initial : property start)
     (preserved : ∀ item state, property state → property (body item state).value) :
@@ -77,7 +77,7 @@ theorem freshRunRound_preserves_true (func : Func) (flags : Array Bool) :
   apply list_forIn'_invariant (property := fun state : Array Bool × Bool => TrueFlagsPreserved flags state.1)
   · exact .refl flags
   · intro target member state checked
-    apply list_forIn_invariant (property := fun state : Array Bool × Bool => TrueFlagsPreserved flags state.1)
+    apply list_forIn_state_invariant (property := fun state : Array Bool × Bool => TrueFlagsPreserved flags state.1)
     · exact checked
     · intro param state checked
       obtain ⟨⟨value, ty⟩, index⟩ := param
@@ -127,7 +127,7 @@ theorem emptyFactRound_preserves_known (module : GIR.Module) (func : Func)
     dsimp only
     split
     · split
-      · apply list_forIn_invariant (property := fun state : Array (Option (List ValueId)) × Bool =>
+      · apply list_forIn_state_invariant (property := fun state : Array (Option (List ValueId)) × Bool =>
           KnownStatesPreserved states state.1)
         · exact checked
         · intro edge state checked
