@@ -40,7 +40,7 @@ theorem loopRange (ready : ReplayBuilder module results vt func target le scopeC
   obtain ⟨next, nextReady, growth⟩ := compareReady.loopBody compare.1 (compareValue compareLive).bound compareLive
     body (rangeBack type counter header) bodyAdv (advB_rangeBack _ _ _)
     (by
-      intro depth exit state provenance stateReady exitBound blocks values priorRoots
+      intro depth exit state provenance stateReady stateLive exitBound blocks values priorRoots
       have oldBound : counter < compareProv.vals.size := by
         simpa only [compareReady.roots.valueSize] using counterStill
       exact bodyStep depth exit state provenance stateReady (Nat.lt_of_lt_of_le headerStill blocks)

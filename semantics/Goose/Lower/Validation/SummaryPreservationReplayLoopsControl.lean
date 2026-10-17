@@ -17,7 +17,7 @@ theorem loopBody (ready : ReplayBuilder module results vt func target le scopeCo
     (bodyAdv : ∀ depth exit, AdvB (body depth exit)) (backAdv : AdvB back)
     (bodyStep : ∀ depth exit state provenance,
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
-      exit < state.blocks.size → ls.blocks.size ≤ state.blocks.size → ls.vals.size ≤ state.vals.size →
+      state.cur.isSome = true → exit < state.blocks.size → ls.blocks.size ≤ state.blocks.size → ls.vals.size ≤ state.vals.size →
       (∀ index, index < upper.vals.size → rootsAt provenance.vals index = rootsAt upper.vals index) →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots (body depth exit le state).2 next ∧
         ∀ index, index < provenance.vals.size → rootsAt next.vals index = rootsAt provenance.vals index)
@@ -54,7 +54,7 @@ theorem loopBody (ready : ReplayBuilder module results vt func target le scopeCo
       rw [startValues]
       exact Nat.le_refl _
     obtain ⟨bodyProv, bodyReady, bodyGrowth⟩ := bodyStep ls.stack.length split.1.2 started upper
-      startReady (by simpa only [startBlocks] using exitBound) blocksGrow valuesGrow (fun _ _ => rfl)
+      startReady (by rfl) (by simpa only [startBlocks] using exitBound) blocksGrow valuesGrow (fun _ _ => rfl)
     let bodyState := (body ls.stack.length split.1.2 le started).2
     have bodyAdvanced := bodyAdv ls.stack.length split.1.2 le started
       (body ls.stack.length split.1.2 le started).1 bodyState rfl
@@ -106,7 +106,7 @@ theorem loopWhile (ready : ReplayBuilder module results vt func target le scopeC
     obtain ⟨next, nextReady, growth⟩ := conditionReady.loopBody (condition le ls).1 (conditionBound live) live
       body (emitTerm (.br header [])) bodyAdv (advB_emitTerm _)
       (by
-        intro depth exit state provenance ready exitBound blocks values priorRoots
+        intro depth exit state provenance ready stateLive exitBound blocks values priorRoots
         exact bodyStep depth exit state provenance ready (Nat.lt_of_lt_of_le headerStill blocks) exitBound)
       (by
         intro state provenance ready blocks values priorRoots

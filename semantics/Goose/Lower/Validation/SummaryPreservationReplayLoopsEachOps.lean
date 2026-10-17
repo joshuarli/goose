@@ -106,7 +106,8 @@ theorem loopEach (ready : ReplayBuilder module results vt func target le scopeCo
     (bodyAdv : ∀ depth exit, AdvB (body depth exit))
     (bodyStep : ∀ depth exit state provenance,
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
-      header < state.blocks.size → exit < state.blocks.size → counter < state.vals.size → rootsAt provenance.vals counter = [] →
+      state.cur.isSome = true → header < state.blocks.size → exit < state.blocks.size → counter < state.vals.size → rootsAt provenance.vals counter = [] →
+      ls.vals.size ≤ state.vals.size →
       (∀ index, index < upper.vals.size → rootsAt provenance.vals index = rootsAt upper.vals index) →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots (body depth exit le state).2 next ∧
         ∀ index, index < provenance.vals.size → rootsAt next.vals index = rootsAt provenance.vals index) :
@@ -148,11 +149,12 @@ theorem loopEach (ready : ReplayBuilder module results vt func target le scopeCo
   obtain ⟨next, nextReady, growth⟩ := compareReady.loopBody compare.1 (compareValue compareLive).bound compareLive
     body (rangeBack .i64 counter header) bodyAdv (advB_rangeBack _ _ _)
     (by
-      intro depth exit state provenance stateReady exitBound blocks values priorRoots
+      intro depth exit state provenance stateReady stateLive exitBound blocks values priorRoots
       have compareCounterBound : counter < compareProv.vals.size := by
         simpa only [compareReady.roots.valueSize] using counterStill
-      apply bodyStep depth exit state provenance stateReady (Nat.lt_of_lt_of_le headerStill blocks)
+      apply bodyStep depth exit state provenance stateReady stateLive (Nat.lt_of_lt_of_le headerStill blocks)
         exitBound (Nat.lt_of_lt_of_le counterStill values) ((priorRoots counter compareCounterBound).trans compareCounter)
+        (Nat.le_trans lengthAdv.vals (Nat.le_trans compareAdv.vals values))
       intro index bound
       have lengthBound : index < lengthProv.vals.size := by
         rw [lengthReady.roots.valueSize]
