@@ -447,8 +447,8 @@ def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (
   let start := Array.replicate f.numValues (true, true)
   let round (caps : Array (Bool × Bool)) := Id.run do
     let mut next := caps
-    for block in f.blocks do
-      for (v, _) in block.params do next := next.set! v (meet (capAt next v) (typed v))
+    if let some entry := f.blocks[0]? then
+      for (v, _) in entry.params do next := next.set! v (meet (capAt next v) (typed v))
     for b in f.blocks do
       for i in b.insts do
         match i with
@@ -486,8 +486,13 @@ def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (
           for (target, args) in edges do
             if let some dest := f.blocks[target]? then
               let leading := dest.params.length - args.length
+              if term matches .invoke .. then
+                for (v, _) in dest.params.take leading do
+                  next := next.set! v (meet (capAt next v) (typed v))
               for ((v, _), arg) in (dest.params.drop leading).zip args do
-                next := next.set! v (meet (capAt next v) (meet (capAt caps arg) (typed v)))
+                let source := capAt caps arg
+                let declared := typed v
+                next := next.set! v (meet (capAt next v) (source.1 && declared.1,source.2))
         | _ => pure ()
     return next
   let rec fix : Nat → Array (Bool × Bool) → Array (Bool × Bool)

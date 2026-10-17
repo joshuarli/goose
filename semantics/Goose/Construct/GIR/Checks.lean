@@ -1434,6 +1434,24 @@ private def invokeWritableForward : Module :=
 #guard (Validate.validate invokeWritableForward).isOk
 #guard observation invokeWritableForward == some ([66,10],[])
 
+private def invokeImmutableArrayContents : Module :=
+  let ty := Ty.arr (.int .u8) 1
+  let entry := function "entry" #[
+    ⟨[],[
+      .eff (.enter 0),.def 0 (.constInt .u8 65),.def 1 (.arrLit ty [0]),
+      .eff (.slotInit 0 1 (some 0)),.def 2 (.slotAddr 0),.term (.br 1 [2])]⟩,
+    ⟨[(3,.data (.ref .readOnly ty))],[.term (.invoke 1 [] [] 2 [3] [] (some 0))]⟩,
+    ⟨[(4,.data (.ref .readOnly ty))],[
+      .def 5 (.snapshot .borrowed 4),.def 6 (.constInt .i64 0),.def 7 (.indexChecked 5 6 (some 0)),
+      .def 8 (.constInt .u8 66),.eff (.store 7 8 (some 0)),.eff (.print [.val 5] (some 0)),
+      .eff (.leave 0),.term (.ret [] none)]⟩]
+    #[⟨ty,.immutable,0,0⟩]
+  let callee := function "callee" #[⟨[],[.term (.ret [] none)]⟩]
+  moduleOf #[entry,callee]
+
+#guard (Validate.validate invokeImmutableArrayContents).isOk
+#guard observation invokeImmutableArrayContents == some ([66,10],[])
+
 private def publishCalledLocalRef : Module :=
   let byteTy := Ty.varr (.int .u8)
   let ownerTy := Ty.grow byteTy
