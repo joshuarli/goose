@@ -39,7 +39,8 @@ theorem effectStep_store_local {module : Core.Module} {ctx : Context} {impl : Im
     {vt : Array (Option VTy)} {provenance : Prov} {actual : Core.Eff}
     {address value : ValueId} {varId : VarId} {localVar : LocalVar} {org : OriginId}
     (variableRow : impl.vars[varId]? = some localVar) (reference : localVar.ty.isRefLike = true)
-    (roots : rootsAt provenance.vals address = [.local varId]) :
+    (roots : rootsAt provenance.vals address = [.local varId])
+    (owner : (ownerTy vt address).any Ty.isRefLike = true) :
     (lowerContextAt module ctx impl).effectStep (lower module) vt provenance actual
       (.eff (.store address value (some org))) =
       if varId < impl.params.size then
@@ -49,7 +50,7 @@ theorem effectStep_store_local {module : Core.Module} {ctx : Context} {impl : Im
   by_cases parameter : varId < impl.params.size
   all_goals simp [Func.effectStep, roots, targetsOf, rootsTargets, rootTarget,
     List.filterMap_cons, List.filterMap_nil, lowerContext_slot (module := module) (ctx := ctx) variableRow,
-    reference, count, parameter, addTargets]
+    reference, count, parameter, owner, addTargets]
 
 
 theorem effectStep_rebind_refines_from_source {env : PEnv} {varId : VarId} {expression : Expr}
@@ -57,12 +58,13 @@ theorem effectStep_rebind_refines_from_source {env : PEnv} {varId : VarId} {expr
     {vt : Array (Option VTy)} {provenance : Prov} {address value : ValueId} {localVar : LocalVar}
     (variableRow : env.impl.vars[varId]? = some localVar) (reference : localVar.ty.isRefLike = true)
     (addressRoots : rootsAt provenance.vals address = [.local varId])
+    (owner : (ownerTy vt address).any Ty.isRefLike = true)
     (operand : rpExpr env expression initial = .ok (roots, before))
     (source : rpStmt env (.rebind varId expression org) initial = .ok ((), after)) :
     EffectRefinement (lowerContextAt env.mod env.ctx env.impl)
       ((lowerContextAt env.mod env.ctx env.impl).effectStep (lower env.mod) vt provenance {}
         (.eff (.store address value (some org)))) after.eff := by
-  rw [effectStep_store_local variableRow reference addressRoots,
+  rw [effectStep_store_local variableRow reference addressRoots owner,
     (rpStmt_rebind_contract operand source).2]
   split
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩

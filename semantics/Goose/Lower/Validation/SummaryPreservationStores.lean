@@ -20,31 +20,31 @@ theorem RootsRefine.local_member {func : Func} {actual source : List RootRef} {s
   · exact expanded (.local slot) (by simp [Func.expandParameterRoot])
 
 
-theorem effectStep_store_nonSlice_no_rebinds {module : Core.Module} {ctx : Context} {impl : Impl}
+theorem ownerTy_nonref_notSlice {vt : Array (Option VTy)} {address : ValueId}
+    (owner : (ownerTy vt address).any Ty.isRefLike = false) :
+    (ownerTy vt address).any Ty.isSlice = false := by
+  cases row : ownerTy vt address with
+  | none => simp [row]
+  | some ty => cases ty <;> simp_all [Ty.isRefLike, Ty.isSlice]
+
+
+theorem effectStep_store_nonref_no_rebinds {module : GIR.Module} {func : Func}
     {vt : Array (Option VTy)} {provenance : Prov} {address value : ValueId} {origin : OriginId}
-    {sourceRoots : List RootRef}
-    (roots : RootsRefine (lowerContextAt module ctx impl)
-      (rootsAt provenance.vals address) sourceRoots)
-    (locals : ∀ slot, RootRef.local slot ∈ sourceRoots →
-      ∃ localVar, impl.vars[slot]? = some localVar ∧ localVar.ty.isRefLike = false)
-    (owner : (ownerTy vt address).any Ty.isSlice = false) :
-    ((lowerContextAt module ctx impl).effectStep (lower module) vt provenance {}
-      (.eff (.store address value origin))).rebinds = [] := by
+    (owner : (ownerTy vt address).any Ty.isRefLike = false) :
+    (func.effectStep module vt provenance {} (.eff (.store address value origin))).rebinds = [] := by
+  have notSlice := ownerTy_nonref_notSlice owner
   simp only [Func.effectStep]
   change addTargets [] _ = addTargets [] []
   apply congrArg (addTargets [])
   apply List.filterMap_eq_nil_iff.mpr
   intro root member
   cases root with
-  | «local» slot =>
-    obtain ⟨localVar, variableRow, nonReference⟩ := locals slot (roots.local_member member)
-    simp [lowerContext_slot variableRow, nonReference]
-  | param index =>
-    cases lookup : (lowerContextAt module ctx impl).params[index]? <;> simp [lookup, owner]
+  | «local» slot => cases row : func.slots[slot]? <;> simp [row, owner]
+  | param index => cases row : func.params[index]? <;> simp [row, notSlice]
   | global global => rfl
 
 
-theorem effectStep_store_nonSlice_refines {module : Core.Module} {context : ContextId}
+theorem effectStep_store_nonref_refines {module : Core.Module} {context : ContextId}
     {ctx : Context} {impl : Impl} {vt : Array (Option VTy)} {provenance : Prov}
     {address value : ValueId} {origin : OriginId} {sourceRoots : List RootRef} {source : Core.Eff}
     (accepted : Core.validate module = .ok ())
@@ -52,15 +52,14 @@ theorem effectStep_store_nonSlice_refines {module : Core.Module} {context : Cont
     (implLookup : module.impls[ctx.impl]? = some impl)
     (roots : RootsRefine (lowerContextAt module ctx impl)
       (rootsAt provenance.vals address) sourceRoots)
-    (locals : ∀ slot, RootRef.local slot ∈ sourceRoots →
-      ∃ localVar, impl.vars[slot]? = some localVar ∧ localVar.ty.isRefLike = false)
-    (owner : (ownerTy vt address).any Ty.isSlice = false) :
+    (owner : (ownerTy vt address).any Ty.isRefLike = false) :
     EffectRefinement (lowerContextAt module ctx impl)
       ((lowerContextAt module ctx impl).effectStep (lower module) vt provenance {}
         (.eff (.store address value origin)))
       { source with writes := addTargets source.writes (rootsTargets sourceRoots) } := by
   have closed := lowerContextAt_parameterRoots_closed accepted contextLookup implLookup
-  have noRebind := effectStep_store_nonSlice_no_rebinds (value := value) (origin := origin) roots locals owner
+  have noRebind := effectStep_store_nonref_no_rebinds (module := lower module)
+    (func := lowerContextAt module ctx impl) (provenance := provenance) (value := value) (origin := origin) owner
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp [Func.effectStep, Func.storageTargets]
   · intro target member
