@@ -775,7 +775,7 @@ def lowerContextRootInfo (ctx : Context) (impl : Impl) : GIR.RootInfo :=
     match impl.vars[slot]? with
     | some localVar =>
       if !localVar.ty.isRefLike then none
-      else some (slot, if localVar.ty.isRefSlice then [.param slot]
+      else some (slot, if localVar.ty.isRefSlice && (impl.params[slot]?).any (·.var == slot) then [.param slot]
         else lowerContextRootCeiling ctx impl roots)
     | none => none
   { params := params.toArray, contents := contents.toArray, results := results.toArray,
