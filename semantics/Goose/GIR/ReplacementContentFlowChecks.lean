@@ -189,4 +189,19 @@ private def emptyAliasStore := function "emptyAliasStore" [.ref .readOnly slice,
   { params := #[(0, [.param 0]), (1, []), (2, [.param 2])], contents := #[(0, [])], results := #[[]] }
 #guard (localFlow (module #[emptyAliasStore]) emptyAliasStore).value 3 == some []
 
+private def recursiveReference := function "recursiveReference" [] [.ref .readOnly element] #[]
+  [.def 0 (.call 0 [] (some 0)), .term (.ret [0] (some 0))] { results := #[[]] }
+private def recursiveReferenceModule := module #[recursiveReference, pure]
+#guard (localFlow recursiveReferenceModule pure).value 0 == some []
+#guard (localFlow recursiveReferenceModule recursiveReference).value 0 == some []
+
+private def forgedReturnBound := function "forgedReturnBound" [] [.ref .mutable owner] #[]
+  [.def 0 (.globalAddr 0), .term (.ret [0] (some 0))] { results := #[[]] }
+private def forgedReturnModule := module #[forgedReturnBound, pure] #[global owner]
+#guard (localFlow forgedReturnModule pure).value 0 == none
+
+private def globalReturnBound := { forgedReturnBound with roots := { results := #[[.global 0]] } }
+private def globalReturnModule := module #[globalReturnBound, pure] #[global owner]
+#guard (localFlow globalReturnModule globalReturnBound).value 0 == some [.global 0]
+
 end Goose.GIR.ReplacementContentFlowChecks

@@ -60,6 +60,20 @@ structure State where
   returned : Roots := .pending
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq
 
+def declaredReturn (f : Func) : Roots :=
+  match f.results with
+  | [type] =>
+      if type.isRefLike then
+        match f.roots.results[0]? with
+        | none => .unknown
+        | some roots => .known (roots.map fun
+            | .local slot => .local slot
+            | .global global => .global global
+            | .param index => .param index)
+      else .known []
+  | [] => .known []
+  | _ => .unknown
+
 def start (f : Func) (vt : Array (Option VTy)) : State := Id.run do
   let mut values := Array.replicate f.numValues Roots.pending
   if let some entry := f.blocks[0]? then
@@ -69,7 +83,8 @@ def start (f : Func) (vt : Array (Option VTy)) : State := Id.run do
            slots := Array.replicate f.slots.size .pending
            contents := f.params.toArray.mapIdx fun index type =>
              if type.isRefSlice then .known [.contents index] else .known []
-           writes := Array.replicate f.params.length .unchanged }
+           writes := Array.replicate f.params.length .unchanged
+           returned := declaredReturn f }
 
 def content (f : Func) (state : State) (address : Roots) : Roots :=
   address.bind fun
@@ -244,6 +259,16 @@ def checkWrites (f : Func) (state : State) : Bool :=
         actual == some [] || (f.roots.contents.find? (·.1 == index)).any fun row =>
           rootsWithin actual (row.2.flatMap f.expandParameterRoot)
 
+def checkReturned (f : Func) (state : State) : Bool :=
+  match f.results with
+  | [type] =>
+      if type.isRefLike then
+        (f.roots.results[0]?).any fun roots =>
+          rootsWithin (normalize f state.returned) (roots.flatMap f.expandParameterRoot)
+      else true
+  | [] => true
+  | _ => false
+
 def mappedBound (f callee : Func) (state : State) (args : List ValueId)
     (bound : List RootRef) : Option (List RootRef) :=
   bound.foldlM (init := []) fun result root => do
@@ -305,7 +330,7 @@ def check (m : Module) (f : Func) (vt : Array (Option VTy)) (state : State) : Bo
   let env : TyEnv := { m.tyEnv f with vals := vt }
   f.params.all Ty.paramOk && annotationsValid m f &&
     (f.blocks[0]?).any (fun entry => entry.params.map (·.2) == f.params.map VTy.data) &&
-    checkWrites f state && f.blocks.all fun block =>
+    checkWrites f state && checkReturned f state && f.blocks.all fun block =>
     block.params.all (fun (value, type) => vt[value]? == some (some type)) &&
     block.insts.all fun inst =>
       refReady vt state inst && match inst with
