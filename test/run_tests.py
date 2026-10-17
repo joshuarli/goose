@@ -101,7 +101,7 @@ EXTRAS = (
     "extra/clang", "extra/extern_types", "extra/native_rebuild", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
     "extra/runtime_cache", "extra/s8_struct_contract",
     "extra/cli_paths", "extra/exit_race", "extra/huge_pages",
-    "extra/native_toolchain", "extra/native_builder",
+    "extra/native_toolchain", "extra/native_builder", "extra/reference_examples",
 )
 
 
@@ -1517,7 +1517,7 @@ def main():
         else:
             r.say("\n".join(lines) if lines else "the checker printed nothing")
             r.local.out.failures += max(1, sum(line.startswith("FAIL ") for line in lines))
-    doc_examples_future = r.task(doc_examples, alone=True)
+    doc_examples_future = r.task(doc_examples, alone=True) if wanted("extra/reference_examples") else None
 
     # One level of category directories; nested syntax helpers and the modules
     # of the goose_in_goose bootstrap are exercised through their entry points.
@@ -1855,6 +1855,7 @@ def main():
             if name == "compiler_units_builder":
                 sources.extend((tc.REPO_ROOT / "src" / "process.cpp",
                                 tc.REPO_ROOT / "src" / "progress.cpp"))
+                unit_extra.insert(0, f"-I{tc.REPO_ROOT / 'test' / 'fixtures' / 'compiler_units_builder'}")
                 unit_extra.append(f"-I{tc.REPO_ROOT / 'third_party' / 'subprocess'}")
                 if not tc.IS_WINDOWS and not tc.IS_MACOS:
                     unit_libs.append("-ldl")
@@ -2286,8 +2287,9 @@ def main():
     for future in deep:
         r.show(future)
 
-    r.section("language reference examples (docs/reference.md)")
-    r.show(doc_examples_future)
+    if doc_examples_future:
+        r.section("language reference examples (docs/reference.md)")
+        r.show(doc_examples_future)
 
     r.section("samples")
     if samples_future:

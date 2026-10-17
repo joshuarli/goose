@@ -106,7 +106,7 @@ inline string AbsoluteLinkFile(const string &rsp, const string &pkgname, const s
         if (item.size() > 1 && item.front() == '"' && item.back() == '"')
             item = item.substr(1, item.size() - 2);
         auto path = filesystem::path(item);
-        if (item[0] != '-' && path.is_relative() && filesystem::exists(dir / path, ec))
+        if (item[0] != '-' && path.is_relative() && PathExists((dir / path).generic_string()))
             item = (dir / path).lexically_normal().generic_string();
         Append(out, item.find(' ') != string::npos ? cat("\"", item, "\"") : item, "\n");
     }

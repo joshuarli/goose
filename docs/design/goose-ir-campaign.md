@@ -1,18 +1,26 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** paused 2026-10-14 at the owner's request. Start no lane until the owner resumes the campaign.
+**Status:** resumed 2026-10-17 at the owner's request. Local implementation and verification are active. Pushes remain unauthorized.
 **Branch:** `master`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
+
+## Current execution
+
+The resumed compiler built in Debug mode. H2 recovery cases E11–E16 and the separate 60-step sequence with seed 1 passed at `f570b026`. E10 exposed a builder-test include failure and a raw filesystem probe that bypassed input recording; `c203aa9d` repairs both, and its focused compiler-unit checks passed. E10 is being checked again on the integrated compiler. These runs establish no performance result.
+
+The argument-root proof module exceeded the 4 GiB Lean heap cap. Splitting root declarations from global-effect replay passed both modules under the original cap without changing the existing theorem conclusions; integrated as `67e984bb`. A separate thread-creation failure came from an 8 GiB virtual-address limit, which has been removed while retaining the Lean heap limit.
+
+The construction GIR lane independently decoded, validated, re-encoded byte-for-byte, and executed raw-byte, source-values and source-exit fixtures using the rebuilt construction compiler. These are lane results pending integration and review. Native target handling, whole-profile proofs and the final gates remain open.
 
 ## Handoff for the next executor
 
 **Resume:** "Resume the paused Goose IR campaign from docs/design/goose-ir-campaign.md. Finish the remaining gates unattended. Take recommended decisions by default." First run `git status --short --branch`. On an authorized resume, cancel campaign closeout before selecting work. Recreate a missing selected worktree under `.work/wt` from its named branch.
 
-**State:** The integration branch is `master`. The code checkpoint before this handoff is `a9d3c620`. Winddown started at `dffdf0c2` after the completed integration checkpoint `66b8cdcc`. No work is pushed.
+**State at pause:** The integration branch is `master`. The code checkpoint before this handoff is `a9d3c620`. Winddown started at `dffdf0c2` after the completed integration checkpoint `66b8cdcc`. No work is pushed.
 
 This winddown integrated accepted callee sources, actual global-initializer and entry frames, and the typed block constructor. It also integrated source-versus-receiver exit ownership, exact producer counts, explicit receiving adaptation, producer normalization, and checked allocation and trace-prefix kernel frames. Four positive lowering fixture records now use recognized origin kinds. Their programs, assertions and source lines are unchanged.
 
-The independent Core judgment now proves `validate m = .ok () → WellFormed m`, including unconditional origin validity. Adversarial review found no P1 or P2 defect. Its Audit registration and coverage entry still need updating. The universal BCE replacement proof is merged. The last full executable audit checked 157 claims at `9e888683`; no fresh full audit of the current code is claimed.
+The independent Core judgment now proves `validate m = .ok () → WellFormed m`, including unconditional origin validity. Adversarial review found no P1 or P2 defect. Its Audit registration and coverage entry were integrated on resume in `f6ef88c6`. The exact-source Audit closure passed before the later argument-root module split; the final executable audit remains open. The universal BCE replacement proof is merged. The last full executable audit checked 157 claims at `9e888683`; no fresh full audit of the current code is claimed.
 
 **Known red:** Whole-profile lowering and validation preservation remain incomplete. The unmerged readonly-destination change `920c9e42` invalidates unrestricted legacy fragment claims. Replace those claims with accepted-state composition before integration. The construction whole-execution and exit gates remain incomplete.
 
@@ -24,7 +32,7 @@ Production BCE qualification is also red. The seven fixtures on `goose-ir-finish
 
 Recommended construction-only publication, adapter, provenance and target operations are approved. The parked implementation uses `i_dest_publish_ref`, `i_dest_adapt` and `i_dest_adapt_finish`. Adapter finish preserves the built or cancelled kind and restores the original receiving metadata. Document exact wire operands and native target operations before integrating those unfinished changes. No owner decision is pending.
 
-**Open lanes:** No campaign process is running. Incomplete working edits were committed on their lane branches before stopping. The table below names all 37 unmerged local branches. Eleven are current campaign lanes or the performance baseline. Twenty-six are owner-managed refs. A different branch history does not prove its patch is missing from master. Review specific file deltas and dependencies.
+**Open lanes:** The owner accelerated the campaign on 2026-10-17. Accepted-state lowering, validation preservation, generic expression SSA typing, native construction handlers, construction execution proofs, production BCE, H2 closeout, exact-module verification tooling, and independent construction GIR review have separate owners. The Core audit registration and H2 probe repairs are integrated. Construction GIR wire checks are committed and under independent review. The paused inventory below records their starting branches. Incomplete working edits were committed on their lane branches before stopping. The table below names all 37 unmerged local branches. Eleven are current campaign lanes or the performance baseline. Twenty-six are owner-managed refs. A different branch history does not prove its patch is missing from master. Review specific file deltas and dependencies.
 
 | Unmerged branch | Tip | Item | State | Next step after resume |
 |---|---|---|---|---|
@@ -566,6 +574,8 @@ The most common exact multi-feature sets are `string-value + struct` (7 programs
 - The checker already groups roots into classes: one helper called with many distinct globals and many locals at different depths gets two specializations, not one per call site. The synthetic family therefore has to vary the dimensions that do multiply specializations; `B1`'s dimension attribution on Aincrad3 says which those are, and `B5` builds its members from that.
 
 ## 13. Campaign log
+
+- **Resumed 2026-10-17 at the owner's request.** Integration starts from `8eb50c00`, which includes upstream updates after the pause. Campaign closeout is inactive. Five lanes resume accepted-state lowering, construction GIR, native handlers, whole-execution proofs, and independent Core audit registration. Retained per-lane Lean caches are empty. Seed focused builds from a copy of the main checkout's `.lake/build`, then let Lake revalidate inputs. The external Aincrad3-owned worktree is preserved. No new gate result or performance claim is made.
 
 *(append-only; one line per gate or phase end. Resumed entries here supersede
 the pending statuses in the paused handoff above.)*

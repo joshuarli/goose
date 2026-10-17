@@ -213,6 +213,7 @@ end Goose.Audit
 #audit Goose.Proofs.Bounds.exec_indexProven_eq_checked
 
 #audit Goose.Core.Sound.validate_modOk
+#audit Goose.Proofs.Core.validate_wellFormed
 #audit Goose.Core.Sound.specs_all
 #audit Goose.Proofs.Safety.validated_context_sound
 #audit Goose.Proofs.Safety.validated_steps_keep_invariant
