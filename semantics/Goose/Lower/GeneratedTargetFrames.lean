@@ -146,6 +146,15 @@ theorem TermEdgesFramed.refl (loop : Option LoopCtx) (state : LS) :
   intro source body term target row member successor targetBound
   exact Or.inl ⟨body, row, member⟩
 
+theorem TermEdgesFramed.weakenLoop {inner outer : Option LoopCtx} {base state : LS}
+    (framed : TermEdgesFramed inner base state)
+    (fresh : ∀ target, LoopBuilderFrameTarget inner target → base.blocks.size ≤ target) :
+    TermEdgesFramed outer base state := by
+  intro source body term target row member successor targetBound
+  rcases framed source body term target row member successor targetBound with old | innerFrame
+  · exact Or.inl old
+  · exact False.elim (Nat.not_lt_of_ge (fresh target innerFrame) targetBound)
+
 def GeneratedTargetFrameRun (loop : Option LoopCtx) (action : B α) : Prop :=
   ∀ base env current result after, base.Ext current → LoopBuilderFrames loop base →
     TermEdgesFramed loop base current → action env current = (result, after) →
@@ -166,6 +175,17 @@ theorem TermEdgesFramed.extend {loop : Option LoopCtx} {base current after : LS}
     exact oldFrames source previous term target previousRow previousTerm successor targetBound
   · exact Or.inr frame
 
+theorem TermEdgesFramed.compose {loop : Option LoopCtx} {base current after : LS}
+    (oldFrames : TermEdgesFramed loop base current)
+    (newFrames : TermEdgesFramed none current after)
+    (baseCurrent : base.Ext current) : TermEdgesFramed loop base after := by
+  apply TermEdgesFramed.extend oldFrames
+  intro source body term target row member successor targetBound
+  have currentBound := Nat.lt_of_lt_of_le targetBound baseCurrent.1
+  rcases newFrames source body term target row member successor currentBound with old | impossible
+  · exact Or.inl old
+  · cases impossible
+
 theorem GeneratedTargetFrameRun.bind {loop : Option LoopCtx} {first : B α} {next : α → B β}
     (one : GeneratedTargetFrameRun loop first)
     (two : ∀ value, GeneratedTargetFrameRun loop (next value)) :
@@ -176,6 +196,13 @@ theorem GeneratedTargetFrameRun.bind {loop : Option LoopCtx} {first : B α} {nex
   have baseMiddle := baseCurrent.trans firstResult.2
   have nextResult := two value base env middle result after baseMiddle frames firstResult.1 nextRun
   exact ⟨nextResult.1, firstResult.2.trans nextResult.2⟩
+
+theorem GeneratedTargetFrameRun.withLoop {action : B α} {outer : Option LoopCtx}
+    (checked : GeneratedTargetFrameRun none action) : GeneratedTargetFrameRun outer action := by
+  intro base env current result after baseCurrent frames terms run
+  have result := checked current env current result after (.refl _) trivial
+    (TermEdgesFramed.refl none current) run
+  exact ⟨terms.compose result.1 baseCurrent, result.2⟩
 
 theorem generatedTargetFrame_pure (loop : Option LoopCtx) (value : α) :
     GeneratedTargetFrameRun loop (pure value) := by
