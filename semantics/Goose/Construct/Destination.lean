@@ -110,30 +110,32 @@ private def lookupDestination (id : DestinationId) : ConstructionM PendingDestin
   | some destination => pure destination
   | none => ConstructionM.fail .destination
 
+def destinationCanWrite (state : ConstructionState) (id : DestinationId) : Bool := Id.run do
+  let mut current := id
+  for _ in [0:state.destinations.size + 1] do
+    let some owner := state.destinations[current]? | return false
+    match owner.use with
+    | .receiver => return true
+    | .child parentId =>
+        let some parent := state.destinations[parentId]? | return false
+        match parent.progress with
+        | .suspended _ expected =>
+            if expected != current then return false
+            current := parentId
+        | _ => return false
+    | .replacement supersededId =>
+        let some superseded := state.destinations[supersededId]? | return false
+        match superseded.progress with
+        | .exiting _ expected =>
+            if expected != current then return false
+            current := supersededId
+        | _ => return false
+  return false
+
 private def writableDestination (id : DestinationId) : ConstructionM PendingDestination := do
   let destination ← lookupDestination id
   let state ← ConstructionM.get
-  let valid := Id.run do
-    let mut current := id
-    for _ in [0:state.destinations.size + 1] do
-      let some owner := state.destinations[current]? | return false
-      match owner.use with
-      | .receiver => return true
-      | .child parentId =>
-          let some parent := state.destinations[parentId]? | return false
-          match parent.progress with
-          | .suspended _ expected =>
-              if expected != current then return false
-              current := parentId
-          | _ => return false
-      | .replacement supersededId =>
-          let some superseded := state.destinations[supersededId]? | return false
-          match superseded.progress with
-          | .exiting _ expected =>
-              if expected != current then return false
-              current := supersededId
-          | _ => return false
-    return false
+  let valid := destinationCanWrite state id
   if !valid then ConstructionM.fail .protocol
   pure destination
 
@@ -158,6 +160,64 @@ private def replaceStorage (id : StorageId) (storage : ReceivingStorage) : Const
 private def emit (event : ConstructionEvent) : ConstructionM Unit := do
   let state ← ConstructionM.get
   ConstructionM.set { state with events := state.events ++ [event] }
+
+theorem lookupDestination_result (id : DestinationId) (state : ConstructionState) :
+    lookupDestination id state = match state.destinations[id]? with
+      | some destination => .ok destination state
+      | none => .fault .destination state := by
+  simp only [lookupDestination, ConstructionM.get, bind]
+  cases state.destinations[id]? <;> rfl
+
+theorem lookupStorage_result (id : StorageId) (state : ConstructionState) :
+    lookupStorage id state = match state.storage[id]? with
+      | some storage => .ok storage state
+      | none => .fault .storage state := by
+  simp only [lookupStorage, ConstructionM.get, bind]
+  cases state.storage[id]? <;> rfl
+
+theorem replaceDestination_result (id : DestinationId) (destination : PendingDestination)
+    (state : ConstructionState) :
+    replaceDestination id destination state =
+      if id < state.destinations.size then
+        .ok () { state with destinations := state.destinations.set! id destination }
+      else .fault .destination state := by
+  by_cases valid : id < state.destinations.size
+  · simp [replaceDestination, ConstructionM.get, bind, valid, ConstructionM.set]
+  · simp [replaceDestination, ConstructionM.get, bind, valid, ConstructionM.fail]
+
+theorem replaceStorage_result (id : StorageId) (storage : ReceivingStorage) (state : ConstructionState) :
+    replaceStorage id storage state =
+      if id < state.storage.size then
+        .ok () { state with storage := state.storage.set! id storage }
+      else .fault .storage state := by
+  by_cases valid : id < state.storage.size
+  · simp [replaceStorage, ConstructionM.get, bind, valid, ConstructionM.set]
+  · simp [replaceStorage, ConstructionM.get, bind, valid, ConstructionM.fail]
+
+theorem emit_result (event : ConstructionEvent) (state : ConstructionState) :
+    emit event state = .ok () { state with events := state.events ++ [event] } := rfl
+
+theorem writableDestination_result (id : DestinationId) (state : ConstructionState) :
+    writableDestination id state = match state.destinations[id]? with
+      | none => .fault .destination state
+      | some destination =>
+          match destinationCanWrite state id with
+          | true => .ok destination state
+          | false => .fault .protocol state := by
+  simp only [writableDestination, lookupDestination_result, ConstructionM.get, bind]
+  cases present : state.destinations[id]? with
+  | none => simp [present, ConstructionM.fail, pure]
+  | some destination =>
+      cases canWrite : destinationCanWrite state id <;>
+        simp [present, canWrite, ConstructionM.fail, pure]
+
+theorem writableDestination_finalState (id : DestinationId) (state : ConstructionState) :
+    (writableDestination id state).finalState = state := by
+  rw [writableDestination_result]
+  cases state.destinations[id]? with
+  | none => rfl
+  | some destination =>
+      cases destinationCanWrite state id <;> rfl
 
 def reserveStorage (bytes : ByteArray := ByteArray.empty) (publishedCount : Nat := 0) :
     ConstructionM StorageId := do
