@@ -1,3 +1,4 @@
+import Goose.Lower.TypedEntry
 import Goose.Lower.ECall
 import Goose.Lower.CallChecks
 
@@ -11,70 +12,84 @@ def referenceEntry : Impl :=
       .expr (.call 0 [.byRef .readOnly (.var 0)] 0) 0] none, summary := .unknown }
 
 private theorem reference_stmt (profile : NumProfile) (n : Nat) (lc : Option LoopCtx) :
-    StatementESimulation n ⟨profile, referenceSource⟩ lc
+    TypedStatementLoopSimulation n ⟨profile, referenceSource⟩ [] lc
       (.expr (.call 0 [.byRef .readOnly (.var 0)] 0) 0) := by
   cases n with
-  | zero => exact statementESimulation_zero _ _ _
-  | succ n => exact stmt_exprE_sim n _ lc _ 0 (concrete_reference_call_expression profile n)
-
-private theorem nil_stmts (profile : NumProfile) (n : Nat) (lc : Option LoopCtx) :
-    StatementsESimulation n ⟨profile, referenceSource⟩ lc [] := by
-  cases n with
-  | zero => exact statementsESimulation_zero _ _ _
-  | succ n => exact statementsE_nil n _ lc
+  | zero => exact typedStatementLoopSimulation_zero _ _ _ _
+  | succ n =>
+    exact typedStatementLoopSimulation_expr (concrete_reference_call_expression profile n [])
 
 private theorem reference_tail (profile : NumProfile) (n : Nat) (lc : Option LoopCtx) :
-    StatementsESimulation n ⟨profile, referenceSource⟩ lc
+    TypedStatementsLoopSimulation n ⟨profile, referenceSource⟩ [] lc
       [.expr (.call 0 [.byRef .readOnly (.var 0)] 0) 0] := by
   cases n with
-  | zero => exact statementsESimulation_zero _ _ _
+  | zero => exact typedStatementsLoopSimulation_zero _ _ _ _
   | succ n =>
-    exact statementsE_cons n _ lc _ [] (reference_stmt profile n lc) (nil_stmts profile n lc)
+    exact typedStatementsLoopSimulation_cons n _ [] lc _ [] (reference_stmt profile n lc)
+      (typedStatementsLoopSimulation_nil n _ [] lc)
 
 theorem reference_stmts (profile : NumProfile) (n : Nat) (lc : Option LoopCtx) :
-    StatementsESimulation n ⟨profile, referenceSource⟩ lc referenceEntry.body.stmts := by
+    TypedStatementsLoopSimulation n ⟨profile, referenceSource⟩ [] lc referenceEntry.body.stmts := by
   cases n with
-  | zero => exact statementsESimulation_zero _ _ _
+  | zero => exact typedStatementsLoopSimulation_zero _ _ _ _
   | succ n =>
-    exact statementsE_cons n _ lc (.letS 0 (.lit .i64 42) 0) _
-      (statementESimulation_fragment n _ lc _ rfl) (reference_tail profile n lc)
+    apply typedStatementsLoopSimulation_cons
+    · cases n with
+      | zero => exact typedStatementLoopSimulation_zero _ _ _ _
+      | succ n => exact typedStatementLoopSimulation_let (typedExprClaim_lit n _ [] .i64 42)
+    · exact reference_tail profile n lc
 
 theorem reference_block (profile : NumProfile) (n : Nat) (pre : List (VarId × Val)) :
-    BlockESimulation n ⟨profile, referenceSource⟩ none (callPre referenceEntry) pre
+    TypedBlockLoopSimulation n ⟨profile, referenceSource⟩ [] none (callPre referenceEntry) pre
       false referenceEntry.body := by
   cases n with
-  | zero => exact blockESimulation_zero _ _ _ _ _ _
+  | zero => exact typedBlockLoopSimulation_zero _ _ _ _ _ _ _
   | succ n =>
-    exact blockESimulation_succ n _ none _ pre false 0 _ none
-      (reference_stmts profile n none) trivial
-
-theorem actual_calling_callee_block (profile : NumProfile) (n : Nat) :
-    CalleeBlockClaim n ⟨profile, referenceSource⟩ 1 referenceEntry :=
-  calleeBlockClaim_of_simulation rfl profile n (reference_block profile n)
+    apply typedBlockLoopSimulation_succ
+    · exact reference_stmts profile n none
+    · trivial
 
 theorem actual_calling_entry (profile : NumProfile) (n : Nat) :
-    CalleeCallClaim n ⟨profile, referenceSource⟩ referenceSource.entry := by
-  cases n with
-  | zero => exact calleeCallClaim_zero _ _
-  | succ n =>
-    exact calleeCallClaim_noResults_of_body (ctx := ⟨1, "main", [], [], []⟩)
-      (impl := referenceEntry) rfl rfl rfl profile n (actual_calling_callee_block profile n)
+    EventualM (enterCall (n + 1) ⟨profile, referenceSource⟩ 0 referenceSource.entry [])
+      (fun fuel => callFn fuel ⟨profile, lower referenceSource⟩ 0 (lower referenceSource).entry [])
+      St.initial := by
+  apply typedEntry_simulation n 1 (by cbv) (by rfl)
+  intro context impl contextAt implAt
+  have contextEq : context = ⟨1, "main", [], [], []⟩ := by
+    simpa [referenceSource] using contextAt.symm
+  subst context
+  have implEq : impl = referenceEntry := by simpa [referenceSource, referenceEntry] using implAt.symm
+  subst impl
+  exact reference_block profile n []
 
-theorem actual_calling_module_agree (profile : NumProfile) (n : Nat) (state : St) :
+theorem actual_calling_module_agree (profile : NumProfile) (n : Nat) :
     EventualM (Core.runModule n ⟨profile, referenceSource⟩)
-      (fun fuel => GIR.runModule fuel ⟨profile, lower referenceSource⟩) state := by
-  have hglobals : referenceSource.globals.size = 0 := rfl
-  have hgirGlobals : (lower referenceSource).globals.size = 0 := by simp [lower, referenceSource]
-  have hentry : (lower referenceSource).entry = 1 := rfl
-  simp only [Core.runModule, GIR.runModule, hglobals, hgirGlobals, hentry,
-    List.range_zero, Core.initGlobals, GIR.initGlobals, pure_bind]
-  exact EventualM.bind (actual_calling_entry profile n 0 [] state)
-    (fun _ after _ => EventualM.refl (pure ()) after)
+      (fun fuel => GIR.runModule fuel ⟨profile, lower referenceSource⟩) St.initial := by
+  cases n with
+  | zero =>
+    refine ⟨fun value after done => ?_, fun err after done final => ?_⟩
+    · simp [Core.runModule, referenceSource, Core.initGlobals, enterCall, Core.timeout,
+        bind_apply, pure_apply, M.stop, Functor.map, M.bind', M.pure'] at done
+    · simp [Core.runModule, referenceSource, Core.initGlobals, enterCall, Core.timeout,
+        bind_apply, pure_apply, M.stop, Functor.map, M.bind', M.pure'] at done
+      obtain ⟨rfl, rfl⟩ := done
+      cases final
+  | succ n =>
+    apply typedModule_simulation_succ n (by cbv)
+    · intro id global globalAt
+      simp [referenceSource] at globalAt
+    · intro context impl contextAt implAt
+      have contextEq : context = ⟨1, "main", [], [], []⟩ := by
+        simpa [referenceSource] using contextAt.symm
+      subst context
+      have implEq : impl = referenceEntry := by simpa [referenceSource, referenceEntry] using implAt.symm
+      subst impl
+      exact reference_block profile n []
 
 theorem actual_calling_module_correct (n : Nat) (p : NumProfile)
     (o : Outcome) (t : String) (h : eval n p referenceSource = .done o t) :
     ∃ k, GIR.run k p (lower referenceSource) = .done o t := by
-  have hA := actual_calling_module_agree p n St.initial
+  have hA := actual_calling_module_agree p n
   unfold eval at h
   unfold GIR.run
   cases hr : Goose.Core.runModule n ⟨p, referenceSource⟩ St.initial with

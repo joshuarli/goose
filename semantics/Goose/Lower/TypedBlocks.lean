@@ -5,10 +5,33 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 
+def LoopSourceMatches (typingEnv : TEnv) (loop : Option LoopCtx) : Prop :=
+  loop = none ↔ typingEnv.loops = 0
+
+theorem LoopSourceMatches.transport {before after : TEnv} {loop : Option LoopCtx}
+    (h : LoopSourceMatches before loop) (hloops : after.loops = before.loops) :
+    LoopSourceMatches after loop := by
+  unfold LoopSourceMatches at h ⊢
+  rw [hloops]
+  exact h
+
+def TypedStatementLoopSimulation (n : Nat) (cfg : Cfg) (results : List Ty)
+    (loop : Option LoopCtx) (stmt : Stmt) : Prop :=
+  ∀ (env : Env) (state : St) (source : StmtSource cfg env stmt state),
+    SourceResults source.typingEnv source.rootsEnv results → LoopSourceMatches source.typingEnv loop →
+    ∀ (ls ls' : LS) (result : Unit) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
+    lowerStmt loop stmt (lowerEnv cfg.mod env.vars results) ls = (result, ls') →
+    ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → LoopDepthFits env loop →
+    (match loop with | none => True | some context => LoopTargets cx.fn context) →
+    LoopCounterAt loop ls fr →
+    SimEAt cx pt fr (execStmt n cfg env stmt >>= prepareLoopFlow env loop)
+      (StatementLoopPost cfg env cx ls fr ls' loop) state
+
 def TypedStatementsLoopSimulation (n : Nat) (cfg : Cfg) (results : List Ty)
     (loop : Option LoopCtx) (stmts : List Stmt) : Prop :=
   ∀ (env : Env) (state : St) (source : StmtsSource cfg env stmts state),
-    SourceResults source.typingEnv source.rootsEnv results →
+    SourceResults source.typingEnv source.rootsEnv results → LoopSourceMatches source.typingEnv loop →
     ∀ (ls ls' : LS) (result : Unit) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerStmts loop stmts (lowerEnv cfg.mod env.vars results) ls = (result, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
@@ -21,7 +44,7 @@ def TypedStatementsLoopSimulation (n : Nat) (cfg : Cfg) (results : List Ty)
 theorem typedStatementsLoopSimulation_zero (cfg : Cfg) (results : List Ty)
     (loop : Option LoopCtx) (stmts : List Stmt) :
     TypedStatementsLoopSimulation 0 cfg results loop stmts := by
-  intro env state source hmetadata ls ls' result pt cx fr hlow hpp hext hrel
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
     hgir hresults hdepth htargets hcounter
   simp only [execStmts]
   exact SimEAt.of_simG SimG.of_timeout_bind state
@@ -31,7 +54,7 @@ theorem typedStatementsLoopSimulation_nil (n : Nat) (cfg : Cfg) (results : List 
   cases n with
   | zero => exact typedStatementsLoopSimulation_zero cfg results loop []
   | succ n =>
-    intro env state source hmetadata ls ls' result pt cx fr hlow hpp hext hrel
+    intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
       hgir hresults hdepth htargets hcounter
     simp only [lowerStmts, pure_run] at hlow
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
@@ -79,11 +102,25 @@ theorem SourceResults.transport {before after : TEnv} {rootsBefore rootsAfter : 
   obtain ⟨hroot, hresults⟩ := h impl (htyping.symm.trans himpl)
   exact ⟨hroots.trans hroot, hresults⟩
 
+theorem SimEAt.prepareNormalLoopFlow {cfg : Cfg} {env : Env} {cx : FnCtx}
+    {ls ls' : LS} {fr : GIR.Frame} {pt : Pt} {state : St} {loop : Option LoopCtx}
+    {source : M Flow}
+    (h : SimEAt cx pt fr source (fun flow pt' fr' =>
+      flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) state) :
+    SimEAt cx pt fr (source >>= prepareLoopFlow env loop)
+      (StatementLoopPost cfg env cx ls fr ls' loop) state := by
+  refine h.bind fun flow _ pt' fr' _ ⟨hflow, P⟩ => ?_
+  subst flow
+  cases loop <;> simp only [prepareLoopFlow, prepareReturn, prepareLoopExit, pure_bind]
+  all_goals
+    apply SimEAt.ret
+    exact Or.inl ⟨rfl, P⟩
+
 def TypedBlockLoopSimulation (n : Nat) (cfg : Cfg) (results : List Ty)
     (loop : Option LoopCtx) (pre : List (SlotId × ValueId × OriginId))
     (pre' : List (VarId × Val)) (want : Bool) (block : Core.Block) : Prop :=
   ∀ (env : Env) (state : St) (source : BlockSource cfg env pre' block state),
-    SourceResults source.typingEnv source.rootsEnv results →
+    SourceResults source.typingEnv source.rootsEnv results → LoopSourceMatches source.typingEnv loop →
     ∀ (ls ls' : LS) (result : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerBlock loop pre want block (lowerEnv cfg.mod env.vars results) ls = (result, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls → PreRel fr pre pre' →
@@ -106,6 +143,7 @@ theorem TypedBlockLoopSimulation.function {n : Nat} {cfg : Cfg} {results : List 
     (h : TypedBlockLoopSimulation n cfg results none pre pre' want block)
     (env : Env) (state : St) (source : BlockSource cfg env pre' block state)
     (hmetadata : SourceResults source.typingEnv source.rootsEnv results)
+    (hloops : source.typingEnv.loops = 0)
     (ls ls' : LS) (result : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame)
     (hlow : lowerBlock none pre want block (lowerEnv cfg.mod env.vars results) ls = (result, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
@@ -113,7 +151,9 @@ theorem TypedBlockLoopSimulation.function {n : Nat} {cfg : Cfg} {results : List 
     (hresults : cx.fn.results = results) :
     SimEAt cx pt fr (execBlock n cfg env pre' block >>= prepareReturn env)
       (BlockFlowPost cfg env cx ls fr ls' block want result) state := by
-  have hs := h env state source hmetadata ls ls' result pt cx fr hlow hpp hext hrel hpre
+  have halign : LoopSourceMatches source.typingEnv none := by
+    exact ⟨fun _ => hloops, fun _ => rfl⟩
+  have hs := h env state source hmetadata halign ls ls' result pt cx fr hlow hpp hext hrel hpre
     hgir hresults trivial trivial trivial
   rw [prepareLoopFlow_none] at hs
   exact hs.mono fun flow _ pt' fr' _ hp => BlockLoopPost.none.mp hp
@@ -122,7 +162,7 @@ theorem typedBlockLoopSimulation_zero (cfg : Cfg) (results : List Ty)
     (loop : Option LoopCtx) (pre : List (SlotId × ValueId × OriginId))
     (pre' : List (VarId × Val)) (want : Bool) (block : Core.Block) :
     TypedBlockLoopSimulation 0 cfg results loop pre pre' want block := by
-  intro env state source hmetadata ls ls' result pt cx fr hlow hpp hext hrel hpre
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel hpre
     hgir hresults hdepth htargets hcounter
   simp only [execBlock]
   exact SimEAt.of_simG SimG.of_timeout_bind state
@@ -134,7 +174,7 @@ theorem typedBlockLoopSimulation_succ (n : Nat) (cfg : Cfg) (results : List Ty)
     (hstmts : TypedStatementsLoopSimulation n cfg results loop stmts)
     (hvalue : match value with | none => True | some expr => TypedExprClaim n cfg results expr) :
     TypedBlockLoopSimulation (n + 1) cfg results loop pre pre' want (.mk scope stmts value) := by
-  intro env state source hmetadata ls ls' result pt cx fr hlow hpp hext hrel hpre
+  intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel hpre
     hgir hresults hdepth htargets hcounter
   obtain ⟨ls1, ls_p, ls_s, ls_x, ls_l, u0, u, rx, h1, h2, h3, h4, h5, hls', hr⟩ :=
     prefixBlock_unfold hlow
@@ -153,7 +193,11 @@ theorem typedBlockLoopSimulation_succ (n : Nat) (cfg : Cfg) (results : List Ty)
       · rw [htyping]
         exact source.same.impl
       · rw [hroots]
-    exact hstmts _ _ statements hmeta ls_p ls_s u pt_s cx fr_s h3 hpp_s hext_s hrel_s
+    have halign : LoopSourceMatches statements.typingEnv loop := by
+      apply hloops.transport
+      rw [htyping]
+      exact source.same.loops
+    exact hstmts _ _ statements hmeta halign ls_p ls_s u pt_s cx fr_s h3 hpp_s hext_s hrel_s
       hgir hresults (loopDepthFits_entered scope _ hdepth) htargets
       (hcounter.sameValues hvalues hfrontier)
   · intro si entered initialized after hfresh hbind hactual pt_x fr_x hpp_x hext_x hrel_x

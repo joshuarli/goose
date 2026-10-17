@@ -309,7 +309,9 @@ A `view` is a sampled `(region, start, length)`. It is an SSA value only: it can
 
 ### 8.3 Lowering from Core
 
-Lowering is a function of an implementation alone; it never reads a context. Each Core rule maps to a fixed instruction sequence, so evaluation order is the instruction order: `E-INDEX` becomes `array.snapshot`, the index computation, `array.index.checked`; `E-ASSIGN` computes the destination reference before the right side. `forRange` puts its induction variable in a block parameter of the loop header, with the bound computed before the loop. A Core call to context `c` becomes a call to `c`'s implementation.
+Executable body lowering is a function of an implementation. GIR-H contains one function row per Core context, in context order. Each row carries that context's parameter, slice-content and result roots. Contexts sharing an implementation reuse its executable body without merging their root annotations.
+
+Each Core rule maps to a fixed instruction sequence, so evaluation order is the instruction order: `E-INDEX` becomes `array.snapshot`, the index computation, `array.index.checked`; `E-ASSIGN` computes the destination reference before the right side. `forRange` puts its induction variable in a block parameter of the loop header, with the bound computed before the loop. A Core call to context `c` becomes a GIR-H call to function `c`. The entry retains its Core context index. Signatures are indexed by context as well. A context naming a missing implementation lowers to a function with no blocks, which the verifier rejects.
 
 ## 9. GIR-H verifier
 
@@ -563,7 +565,7 @@ Enumerations: those of §12.1 (`IntTy`, `Mut`, `VarKind`, `UnOp`, `BinOp`, `CmpO
 
 #### Numbering
 
-The file table and the origin table are those of the Core module the lowering read, unchanged, so an abort names the same origin in both representations. Functions are the implementations of the Core module in order; the initializer of a global is the function held by its `global` record. Slots, scopes and globals have the numbers of the variables, blocks and globals of Core: slot `k` is variable `k`, scope `k` is the Core block numbered `k`. The remaining tables are numbered by these rules:
+The file table and the origin table are those of the Core module the lowering read, unchanged, so an abort names the same origin in both representations. Functions are the contexts of the Core module in order. Each row takes its executable body and unchanged summary from the implementation named by that context. Calls and entry retain context indices. The initializer of a global is the function held by its `global` record. Slots, scopes and globals have the numbers of the variables, blocks and globals of Core: slot `k` is variable `k`, scope `k` is the Core block numbered `k`. The remaining tables are numbered by these rules:
 
 | Table | Order |
 |---|---|
@@ -578,7 +580,7 @@ The file table and the origin table are those of the Core module the lowering re
 |---|---|---|
 | `module` | `str` schema (`gir-h/0.4`), `str` profile (`core-pilot`), `[file]` files, `[Ty]` types, `[global]` globals, `[func]` funcs, `fn` entry, `[origin]` origins | `file` and `origin` are as in §12.1. The entry function has no parameters and no results. |
 | `global` | `str` name, `ty`, `VarKind`, `func` init, `org` | The initializer is a function with no parameters whose one result has the global's type; it is run in global order, in a fresh activation, before the entry. Its summary is `summary_unknown` and its origin is the global's. |
-| `func` | `str` name, `[ty]` params, `[ty]` results, `[slot]`, `[scope]`, `[block]`, `roots`, `Summary`, `[org]?` origin, `[certificate]?` | Block 0 is the entry and its parameters have the types `params`. `roots` carries conservative parameter, slice-content and result roots from the Core contexts, using parameter positions and the function's slot and global numbers. The verifier checks that the body and call sites fit these annotations before using them to check effects. The summary is the one of the Core implementation, unchanged, and is checked against the body (§9, `GIR-V050`). The origin of an implementation is that of its first variable, absent when it has none. The optional certificate has one fact set per block and is required exactly when the function contains `i_index_proven`. |
+| `func` | `str` name, `[ty]` params, `[ty]` results, `[slot]`, `[scope]`, `[block]`, `roots`, `Summary`, `[org]?` origin, `[certificate]?` | Block 0 is the entry and its parameters have the types `params`. `roots` carries conservative parameter, slice-content and result roots from this function's Core context alone, using parameter positions and the function's slot and global numbers. The verifier checks that the body and call sites fit these annotations before using them to check effects. The summary is the one of the Core implementation, unchanged, and is checked against the body (§9, `GIR-V050`). The origin of an implementation is that of its first variable, absent when it has none. The optional certificate has one fact set per block and is required exactly when the function contains `i_index_proven`. |
 | `slot` | `ty`, `VarKind`, `scope` owner, `nat` var | Memory-resident storage of the source variable `var`. Its address is a `ref` that is `mut` exactly when the kind is `var`. |
 | `scope` | `[scope]?` parent | A parent has a smaller number. |
 | `block` | `[bp]` params, `[inst]` | One terminator is required, last. Zero or several are decoded and rejected by the verifier. |

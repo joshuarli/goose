@@ -35,6 +35,27 @@ theorem ReturnSite.run {cx : FnCtx} {pt : Pt} {frame : GIR.Frame} {value : Val} 
     rfl
 
 
+theorem stmt_ret_none_prepared (n : Nat) (lc : Option LoopCtx) (org : OriginId)
+    (le : LEnv) (ls ls' : LS) (r : Unit) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
+    (fr : GIR.Frame) (hlow : lowerStmt lc (.ret none org) le ls = (r, ls'))
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
+    SimG cx pt fr (execStmt n cfg env (.ret none org) >>= prepareReturn env)
+      (fun flow pt' fr' => flow = .ret .unit ∧ ReturnSite cx pt' fr' .unit org) := by
+  cases n with
+  | zero => simp only [execStmt]; exact SimG.of_timeout_bind
+  | succ n =>
+    simp only [lowerStmt, bind_eq] at hlow
+    obtain ⟨ids, same, hids, u, unwound, hleave, hterm⟩ := hlow
+    rw [pure_run] at hids
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hids
+    have hextUnwound := hext.of_adv (adv_emitTerm hterm)
+    have hsim := leaveTo_sim cfg env cx le 0 ls unwound u pt fr hrel hleave hpp hextUnwound
+    simp only [execStmt, pure_bind, prepareReturn]
+    simp only [Nat.sub_zero, List.take_length, List.drop_length] at hsim
+    refine SimG.bind hsim fun _ pt' fr' hpost => ?_
+    obtain ⟨_, _, _, hinst⟩ := emitTerm_facts hterm hpost.pp hext
+    exact SimG.ret ⟨rfl, ⟨⟨[], hinst, Or.inl ⟨rfl, rfl⟩⟩, hpost.scopes⟩⟩
+
 def preparedCoreBlock (n : Nat) (cfg : Cfg) (env : Env) (scope : ScopeId)
     (stmts : List Stmt) (value : Option Expr) (pre : List (VarId × Val)) : M Flow := do
   let scopeInstance ← freshScope

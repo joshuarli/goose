@@ -5,29 +5,8 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 
-theorem stmt_ret_none_prepared (n : Nat) (lc : Option LoopCtx) (org : OriginId)
-    (le : LEnv) (ls ls' : LS) (r : Unit) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
-    (fr : GIR.Frame) (hlow : lowerStmt lc (.ret none org) le ls = (r, ls'))
-    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
-    SimG cx pt fr (execStmt n cfg env (.ret none org) >>= prepareReturn env)
-      (fun flow pt' fr' => flow = .ret .unit ∧ ReturnSite cx pt' fr' .unit org) := by
-  cases n with
-  | zero => simp only [execStmt]; exact SimG.of_timeout_bind
-  | succ n =>
-    simp only [lowerStmt, bind_eq] at hlow
-    obtain ⟨ids, same, hids, u, unwound, hleave, hterm⟩ := hlow
-    rw [pure_run] at hids
-    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hids
-    have hextUnwound := hext.of_adv (adv_emitTerm hterm)
-    have hsim := leaveTo_sim cfg env cx le 0 ls unwound u pt fr hrel hleave hpp hextUnwound
-    simp only [execStmt, pure_bind, prepareReturn]
-    simp only [Nat.sub_zero, List.take_length, List.drop_length] at hsim
-    refine SimG.bind hsim fun _ pt' fr' hpost => ?_
-    obtain ⟨_, _, _, hinst⟩ := emitTerm_facts hterm hpost.pp hext
-    exact SimG.ret ⟨rfl, ⟨⟨[], hinst, Or.inl ⟨rfl, rfl⟩⟩, hpost.scopes⟩⟩
-
 theorem stmt_ret_some_prepared (n : Nat) (lc : Option LoopCtx) (expr : Expr) (org : OriginId)
-    (hok : exprOk expr = true) (le : LEnv) (ls ls' : LS) (r : Unit) (pt : Pt)
+    (hok : exprOk expr = true) (le : LEnv) (hnoResult : le.results.head? = none) (ls ls' : LS) (r : Unit) (pt : Pt)
     (cfg : Cfg) (env : Env) (cx : FnCtx) (fr : GIR.Frame)
     (hlow : lowerStmt lc (.ret (some expr) org) le ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
@@ -37,7 +16,9 @@ theorem stmt_ret_some_prepared (n : Nat) (lc : Option LoopCtx) (expr : Expr) (or
   | zero => simp only [execStmt]; exact SimG.of_timeout_bind
   | succ n =>
     simp only [lowerStmt, bind_eq] at hlow
-    obtain ⟨id, middle, hexpr, ids, same, hpure, u, unwound, hleave, hterm⟩ := hlow
+    obtain ⟨id, middle, hexpr, coerced, casted, hcast, ids, same, hpure, u, unwound, hleave, hterm⟩ := hlow
+    simp only [coerceResult, bind_run, read_apply, hnoResult, pure_run] at hcast
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hcast
     rw [pure_run] at hpure
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpure
     have hextUnwound := hext.of_adv (adv_emitTerm hterm)
@@ -56,7 +37,7 @@ theorem stmt_ret_some_prepared (n : Nat) (lc : Option LoopCtx) (expr : Expr) (or
     exact SimG.ret ⟨value, rfl, ⟨⟨[id], hinst, Or.inr ⟨id, rfl, hcell⟩⟩, hunwind.scopes⟩⟩
 
 theorem stmt_ret_prepared_sim (n : Nat) (lc : Option LoopCtx) (expr : Option Expr) (org : OriginId)
-    (hok : (match expr with | none => true | some e => exprOk e) = true)
+    (hok : (match expr with | none => true | some _ => false) = true)
     (le : LEnv) (ls ls' : LS) (r : Unit) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (fr : GIR.Frame) (hlow : lowerStmt lc (.ret expr org) le ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
@@ -66,12 +47,10 @@ theorem stmt_ret_prepared_sim (n : Nat) (lc : Option LoopCtx) (expr : Option Exp
   | none =>
     exact (stmt_ret_none_prepared n lc org le ls ls' r pt cfg env cx fr
       hlow hpp hext hrel).mono (fun _ _ _ h => ⟨.unit, h.1, h.2⟩)
-  | some expr =>
-    exact stmt_ret_some_prepared n lc expr org hok le ls ls' r pt cfg env cx fr
-      hlow hpp hext hrel
+  | some expr => cases hok
 
 theorem stmt_ret_prepared_correct (n : Nat) (lc : Option LoopCtx) (expr : Option Expr) (org : OriginId)
-    (hok : (match expr with | none => true | some e => exprOk e) = true)
+    (hok : (match expr with | none => true | some _ => false) = true)
     (le : LEnv) (ls ls' : LS) (r : Unit) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (fr : GIR.Frame) (hlow : lowerStmt lc (.ret expr org) le ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)

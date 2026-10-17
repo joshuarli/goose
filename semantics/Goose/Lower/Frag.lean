@@ -436,9 +436,21 @@ theorem advB_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : AdvB (coerc
   · exact AdvB.bind (advB_emitDef _) (fun _ => advB_emitDef _)
   · exact AdvB.pure _
 
-theorem advB_implOfContext (c : ContextId) : AdvB (implOfContext c) := by
-  unfold implOfContext
-  exact AdvB.bind advB_read fun _ => AdvB.pure _
+theorem advB_coerceSlot (slot : SlotId) (value : ValueId) (org : OriginId) :
+    AdvB (coerceSlot slot value org) := by
+  unfold coerceSlot
+  refine AdvB.bind advB_read fun le => ?_
+  cases le.slots[slot]? with
+  | none => exact AdvB.pure _
+  | some destination => exact advB_coerceTo _ _ _
+
+theorem advB_coerceResult (value : ValueId) (org : OriginId) :
+    AdvB (coerceResult value org) := by
+  unfold coerceResult
+  refine AdvB.bind advB_read fun le => ?_
+  cases le.results.head? with
+  | none => exact AdvB.pure _
+  | some destination => exact advB_coerceTo _ _ _
 
 theorem advB_growOwner (r : ValueId) : AdvB (growOwner r) := by
   unfold growOwner
@@ -1184,8 +1196,7 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
     exact AdvB.bind (advB_lowerExpr e) fun a => AdvB.bind (advB_intTyOf a) fun _ => advB_emitDef _
   | .call c args org => by
     simp only [lowerExpr]
-    exact AdvB.bind (advB_lowerArgs args) fun _ => AdvB.bind (advB_implOfContext c) fun _ =>
-      AdvB.bind (advB_emitDef _) fun r => AdvB.bind advB_read fun le => by
+    exact AdvB.bind (advB_lowerArgs args) fun _ => AdvB.bind (advB_emitDef _) fun r => AdvB.bind advB_read fun le => by
         cases hnr : le.mod.noReturn c <;> simp only [hnr, Bool.false_eq_true, ↓reduceIte] <;>
           first | exact AdvB.pure _ | exact AdvB.bind (advB_emitTerm _) fun _ => AdvB.pure _
   | .push owner e org => by
@@ -1300,7 +1311,8 @@ theorem advB_lowerPrintArgs : ∀ as : List PrintArg, AdvB (lowerPrintArgs as)
 theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc s)
   | .letS x e org => by
     simp only [lowerStmt]
-    exact AdvB.bind (advB_lowerExpr e) fun _ => advB_emitEffect _
+    exact AdvB.bind (advB_lowerExpr e) fun v =>
+      AdvB.bind (advB_coerceSlot x v org) fun _ => advB_emitEffect _
   | .assign p e org => by
     simp only [lowerStmt]
     exact AdvB.bind (advB_lowerPlace p) fun _ => AdvB.bind (advB_lowerExpr e) fun _ => advB_emitEffect _
@@ -1311,7 +1323,9 @@ theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc 
       AdvB.bind (advB_emitDef _) fun _ => advB_emitEffect _
   | .rebind x e org => by
     simp only [lowerStmt]
-    exact AdvB.bind (advB_lowerExpr e) fun _ => AdvB.bind (advB_emitDef _) fun _ => advB_emitEffect _
+    exact AdvB.bind (advB_lowerExpr e) fun v =>
+      AdvB.bind (advB_coerceSlot x v org) fun _ =>
+        AdvB.bind (advB_emitDef _) fun _ => advB_emitEffect _
   | .expr e _ => by
     simp only [lowerStmt]
     exact AdvB.bind (advB_lowerExpr e) fun _ => AdvB.pure _
@@ -1382,8 +1396,8 @@ theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc 
     cases e with
     | some e =>
       simp only [lowerStmt]
-      exact AdvB.bind (advB_lowerExpr e) fun _ => AdvB.bind (AdvB.pure _) fun _ =>
-        AdvB.bind (advB_leaveTo 0) fun _ => advB_emitTerm _
+      exact AdvB.bind (advB_lowerExpr e) fun v => AdvB.bind (advB_coerceResult v org) fun _ =>
+        AdvB.bind (AdvB.pure _) fun _ => AdvB.bind (advB_leaveTo 0) fun _ => advB_emitTerm _
     | none =>
       simp only [lowerStmt]
       exact AdvB.bind (AdvB.pure _) fun _ => AdvB.bind (advB_leaveTo 0) fun _ => advB_emitTerm _

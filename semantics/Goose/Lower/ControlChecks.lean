@@ -1,5 +1,9 @@
 import Goose.Lower.Control
 import Goose.Lower.ReturnChecks
+import Goose.Lower.TypedIf
+import Goose.Lower.TypedStatements
+import Goose.Lower.TypedTransfers
+import Goose.Lower.TypedLists
 
 namespace Goose.Lower.ControlChecks
 
@@ -7,33 +11,96 @@ open Goose.Core Goose.GIR Goose.Lower.UnwindChecks
 
 def returnedSeven : Stmt := .ret (some (.lit .i64 7)) 0
 
+def nestedChoice : Stmt :=
+  .ifS (.bool false) (.mk 4 [Goose.Lower.ReturnChecks.returningStmt] none)
+    (some (.mk 5 [returnedSeven] none)) 0
+
 def nestedBlock : Core.Block := .mk 2
   [.ifS (.bool true)
-    (.mk 3 [.ifS (.bool false) (.mk 4 [Goose.Lower.ReturnChecks.returningStmt] none)
-      (some (.mk 5 [returnedSeven] none)) 0] none)
+    (.mk 3 [nestedChoice] none)
     (some (.mk 6 [Goose.Lower.ReturnChecks.returningStmt] none)) 0] none
 
 def nestedResult (m : Core.Module) : ValueId × LS :=
-  lowerBlock none [] false nestedBlock (lowerEnv m variables []) scopedBuilder
+  lowerBlock none [] false nestedBlock (lowerEnv m variables [.int .i64]) scopedBuilder
 
 def nestedBuilder (m : Core.Module) : LS := (nestedResult m).2
 
 def nestedFunction (m : Core.Module) : Func :=
-  { scopeFunction with blocks := finishBlocks (nestedBuilder m).blocks }
+  { scopeFunction with results := [.int .i64], blocks := finishBlocks (nestedBuilder m).blocks }
 
-theorem concrete_nested_returning_block (cfg : Cfg) (fuel : Nat) :
-    SimG ⟨⟨cfg.profile, lower cfg.mod⟩, nestedFunction cfg.mod⟩ (0, 0) beforeFrame
+private theorem singleBlockClaim (cfg : Cfg) (results : List Ty) (scope : Nat) (stmt : Stmt)
+    (statement : ∀ n, TypedStatementLoopSimulation n cfg results none stmt) (n : Nat) :
+    TypedBlockLoopSimulation n cfg results none [] [] false (.mk scope [stmt] none) := by
+  cases n with
+  | zero => exact typedBlockLoopSimulation_zero _ _ _ _ _ _ _
+  | succ n =>
+    apply typedBlockLoopSimulation_succ
+    · cases n with
+      | zero => exact typedStatementsLoopSimulation_zero _ _ _ _
+      | succ k =>
+        exact typedStatementsLoopSimulation_cons k cfg results none stmt []
+          (statement k) (typedStatementsLoopSimulation_nil k cfg results none)
+    · trivial
+
+private theorem returnedLocalClaim (cfg : Cfg) (n : Nat) :
+    TypedStatementLoopSimulation n cfg [.int .i64] none ReturnChecks.returningStmt := by
+  cases n with
+  | zero => exact typedStatementLoopSimulation_zero _ _ _ _
+  | succ n =>
+    apply typedStatementLoopSimulation_return_some
+    cases n with
+    | zero => exact typedExprClaim_zero _ _ _
+    | succ k =>
+      exact typedExprClaim_read (typedPlaceClaim_var k cfg [.int .i64] 0)
+
+private theorem returnedSevenClaim (cfg : Cfg) (n : Nat) :
+    TypedStatementLoopSimulation n cfg [.int .i64] none returnedSeven := by
+  cases n with
+  | zero => exact typedStatementLoopSimulation_zero _ _ _ _
+  | succ n =>
+    exact typedStatementLoopSimulation_return_some
+      (typedExprClaim_lit n cfg [.int .i64] .i64 7)
+
+private theorem nestedChoiceClaim (cfg : Cfg) (n : Nat) :
+    TypedStatementLoopSimulation n cfg [.int .i64] none nestedChoice := by
+  cases n with
+  | zero => exact typedStatementLoopSimulation_zero _ _ _ _
+  | succ n =>
+    exact typedStatementLoopSimulation_if_some
+      (typedExprClaim_bool n cfg [.int .i64] false)
+      (singleBlockClaim cfg [.int .i64] 4 _ (returnedLocalClaim cfg) n)
+      (singleBlockClaim cfg [.int .i64] 5 _ (returnedSevenClaim cfg) n)
+
+private theorem nestedBlockClaim (cfg : Cfg) (n : Nat) :
+    TypedBlockLoopSimulation n cfg [.int .i64] none [] [] false nestedBlock := by
+  apply singleBlockClaim
+  intro fuel
+  cases fuel with
+  | zero => exact typedStatementLoopSimulation_zero _ _ _ _
+  | succ k =>
+    exact typedStatementLoopSimulation_if_some
+      (typedExprClaim_bool k cfg [.int .i64] true)
+      (singleBlockClaim cfg [.int .i64] 3 _ (nestedChoiceClaim cfg) k)
+      (singleBlockClaim cfg [.int .i64] 6 _ (returnedLocalClaim cfg) k)
+
+theorem concrete_nested_returning_block (cfg : Cfg) (fuel : Nat) (state : St)
+    (source : BlockSource cfg beforeEnv [] nestedBlock state)
+    (metadata : SourceResults source.typingEnv source.rootsEnv [.int .i64])
+    (loops : source.typingEnv.loops = 0) :
+    SimEAt ⟨⟨cfg.profile, lower cfg.mod⟩, nestedFunction cfg.mod⟩ (0, 0) beforeFrame
       (execBlock fuel cfg beforeEnv [] nestedBlock >>= prepareReturn beforeEnv)
       (BlockFlowPost cfg beforeEnv ⟨⟨cfg.profile, lower cfg.mod⟩, nestedFunction cfg.mod⟩
-        scopedBuilder beforeFrame (nestedBuilder cfg.mod) nestedBlock false (nestedResult cfg.mod).1) := by
-  apply (flowClaims fuel).block none [] [] false nestedBlock rfl cfg beforeEnv
-    (by simp) (lowerEnv cfg.mod variables []) scopedBuilder (nestedBuilder cfg.mod) (nestedResult cfg.mod).1
-    (0, 0) ⟨⟨cfg.profile, lower cfg.mod⟩, nestedFunction cfg.mod⟩ beforeFrame
+        scopedBuilder beforeFrame (nestedBuilder cfg.mod) nestedBlock false (nestedResult cfg.mod).1) state := by
+  apply (nestedBlockClaim cfg fuel).function beforeEnv state source metadata loops
+    scopedBuilder (nestedBuilder cfg.mod) (nestedResult cfg.mod).1 (0, 0)
+    ⟨⟨cfg.profile, lower cfg.mod⟩, nestedFunction cfg.mod⟩ beforeFrame
   · exact (Prod.eta (nestedResult cfg.mod)).symm
   · rfl
   · exact Goose.Proofs.Lower.extT_finish (nestedBuilder cfg.mod)
   · exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
   · trivial
+  · rfl
+  · rfl
 
 #guard match (execBlock 30 ⟨.release, Goose.Lower.ReturnChecks.sourceModule⟩ beforeEnv []
     nestedBlock >>= prepareReturn beforeEnv) localState with
