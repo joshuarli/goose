@@ -4,7 +4,7 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 def NotReplacement : Inst → Prop
   | .eff (.replace _ _ _) => False
@@ -29,13 +29,13 @@ theorem EmitsOnly.members {property : Inst → Prop} {before after : LS}
   · exact .inr (emitted.fresh index body row (Nat.le_of_not_gt old) inst present)
 
 theorem ReplacementSitesBuilder.of_emits {le : LEnv} {before after : LS}
-    (checked : ReplacementSitesBuilder (targets := targets) le before)
+    (checked : ReplacementSitesBuilder (root := root) (targets := targets) le before)
     (emitted : EmitsOnly NotReplacement before after) (types : TypePrefix before after)
     (preserved : ReplacementIntervalsPreserved targets before after) :
-    ReplacementSitesBuilder (targets := targets) le after := by
+    ReplacementSitesBuilder (root := root) (targets := targets) le after := by
   intro block body row position instruction lookup
   have contradictionOfFresh : NotReplacement instruction →
-      ReplacementSourceAuthority (targets := targets) le after block position instruction := by
+      ReplacementSourceAuthority (root := root) (targets := targets) le after block position instruction := by
     intro fresh
     cases instruction with
     | eff effect => cases effect <;> first | exact True.intro | exact False.elim fresh
@@ -62,39 +62,39 @@ theorem ReplacementSitesBuilder.of_emits {le : LEnv} {before after : LS}
       (by exact Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup))
 
 theorem ReplacementSitesBuilder.emitDef {le : LEnv} {before after : LS} {result : ValueId} {op : Op}
-    (checked : ReplacementSitesBuilder (targets := targets) le before)
+    (checked : ReplacementSitesBuilder (root := root) (targets := targets) le before)
     (emitted : ∀ value, NotReplacement (.def value op))
-    (run : emitDef op le before = (result, after)) : ReplacementSitesBuilder (targets := targets) le after :=
+    (run : emitDef op le before = (result, after)) : ReplacementSitesBuilder (root := root) (targets := targets) le after :=
   checked.of_emits (emitsOnly_emitDef run (emitted _)) (types_emitDef op le before result after run)
     (.of_run (generatedTargetFrame_emitDef none op) run)
 
 theorem ReplacementSitesBuilder.emitEffect {le : LEnv} {before after : LS} {result : Unit} {effect : Effect}
-    (checked : ReplacementSitesBuilder (targets := targets) le before) (emitted : NotReplacement (.eff effect))
-    (run : emitEffect effect le before = (result, after)) : ReplacementSitesBuilder (targets := targets) le after :=
+    (checked : ReplacementSitesBuilder (root := root) (targets := targets) le before) (emitted : NotReplacement (.eff effect))
+    (run : emitEffect effect le before = (result, after)) : ReplacementSitesBuilder (root := root) (targets := targets) le after :=
   checked.of_emits (emitsOnly_emitEffect effect emitted le before result after run)
     (types_emitEffect effect le before result after run)
     (.of_run (generatedTargetFrame_emitEffect none effect) run)
 
 theorem ReplacementSitesBuilder.emitTerm {le : LEnv} {before after : LS} {result : Unit} {term : Term}
-    (checked : ReplacementSitesBuilder (targets := targets) le before)
+    (checked : ReplacementSitesBuilder (root := root) (targets := targets) le before)
     (allowed : ∀ target ∈ term.successors, target ∈ targets ∨ before.blocks.size ≤ target)
-    (run : emitTerm term le before = (result, after)) : ReplacementSitesBuilder (targets := targets) le after :=
+    (run : emitTerm term le before = (result, after)) : ReplacementSitesBuilder (root := root) (targets := targets) le after :=
   checked.of_emits (emitsOnly_emitTerm term trivial le before result after run)
     (types_emitTerm term le before result after run)
     (.emitTerm run allowed)
 
 theorem ReplacementSitesBuilder.patchTerm {le : LEnv} {before after : LS} {result : Unit}
-    {block : BlockId} {term : Term} (checked : ReplacementSitesBuilder (targets := targets) le before)
+    {block : BlockId} {term : Term} (checked : ReplacementSitesBuilder (root := root) (targets := targets) le before)
     (run : patchTerm block term le before = (result, after))
-    (allowed : ∀ target ∈ term.successors, target ∈ targets ∨ before.blocks.size ≤ target) : ReplacementSitesBuilder (targets := targets) le after := by
+    (allowed : ∀ target ∈ term.successors, target ∈ targets ∨ before.blocks.size ≤ target) : ReplacementSitesBuilder (root := root) (targets := targets) le after := by
   have preserved := ReplacementIntervalsPreserved.patchTerm run allowed
   rw [patchTerm_run] at run
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
   exact checked.of_emits (.append before block (.term term) trivial) (.refl before) preserved
 
 theorem ReplacementSitesBuilder.newBlock {le : LEnv} {before after : LS} {types : List VTy}
-    {result : BlockId × List ValueId} (checked : ReplacementSitesBuilder (targets := targets) le before)
-    (run : newBlock types le before = (result, after)) : ReplacementSitesBuilder (targets := targets) le after := by
+    {result : BlockId × List ValueId} (checked : ReplacementSitesBuilder (root := root) (targets := targets) le before)
+    (run : newBlock types le before = (result, after)) : ReplacementSitesBuilder (root := root) (targets := targets) le after := by
   have preserved : ReplacementIntervalsPreserved targets before after :=
     .of_run (generatedTargetFrame_newBlock none types) run
   have typed := types_newBlock types le before result after run

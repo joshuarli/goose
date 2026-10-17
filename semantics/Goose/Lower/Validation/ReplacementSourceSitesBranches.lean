@@ -4,17 +4,17 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 theorem ReplacementSitesAt.fork_actions_generated {le : LEnv} {before : LS} {loop : Option LoopCtx}
     (condition : ValueId) {first : B α} {second : B β}
     {join : Option BlockId → α → Option BlockId → β → B γ}
     (generated : GeneratedBuilderState before) (bounds : LoopBuilderTargets loop before)
     (firstDense : DenseRun first) (firstTargets : GeneratedTargetRun loop first)
-    (one : ∀ state, GeneratedBuilderState state → LoopBuilderTargets loop state → ReplacementSitesAt (targets := targets) le state first)
-    (two : ∀ state, GeneratedBuilderState state → LoopBuilderTargets loop state → ReplacementSitesAt (targets := targets) le state second)
-    (joining : ∀ endT valueT endF valueF state, ReplacementSitesAt (targets := targets) le state (join endT valueT endF valueF)) :
-    ReplacementSitesAt (targets := targets) le before (do
+    (one : ∀ state, GeneratedBuilderState state → LoopBuilderTargets loop state → ReplacementSitesAt (root := root) (targets := targets) le state first)
+    (two : ∀ state, GeneratedBuilderState state → LoopBuilderTargets loop state → ReplacementSitesAt (root := root) (targets := targets) le state second)
+    (joining : ∀ endT valueT endF valueF state, ReplacementSitesAt (root := root) (targets := targets) le state (join endT valueT endF valueF)) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (do
       let (thenBlock, elseBlock) ← Goose.Lower.fork condition
       Goose.Lower.setCur (some thenBlock)
       let thenValue ← first
@@ -64,8 +64,8 @@ theorem ReplacementSitesAt.ifThen_generated {le : LEnv} {before : LS} {loop : Op
     (condition : ValueId) {body : B ValueId}
     (generated : GeneratedBuilderState before) (bounds : LoopBuilderTargets loop before)
     (child : ∀ state, GeneratedBuilderState state → LoopBuilderTargets loop state →
-      ReplacementSitesAt (targets := (before.blocks.size + 1) :: targets) le state body) :
-    ReplacementSitesAt (targets := targets) le before (do
+      ReplacementSitesAt (root := root) (targets := (before.blocks.size + 1) :: targets) le state body) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (do
       let (thenBlock, elseBlock) ← Goose.Lower.fork condition
       Goose.Lower.setCur (some thenBlock)
       let _ ← body
@@ -87,7 +87,7 @@ theorem ReplacementSitesAt.ifThen_generated {le : LEnv} {before : LS} {loop : Op
     Goose.Lower.setCur (some pair.1)
     Pure.pure pair
   have openedValue : (opened le before).1 = forked.1 := by rfl
-  change ReplacementSitesAt (targets := targets) le before (do
+  change ReplacementSitesAt (root := root) (targets := targets) le before (do
     let pair ← opened
     let _ ← body
     Goose.Lower.emitTerm (.br pair.2 [])
@@ -97,7 +97,7 @@ theorem ReplacementSitesAt.ifThen_generated {le : LEnv} {before : LS} {loop : Op
     have same : target = forked.1.2 := by simpa using member
     simp only [same, ids.1]
     nat_omega
-  · change ReplacementSitesFree (targets := [forked.1.2] ++ targets) le before opened
+  · change ReplacementSitesFree (root := root) (targets := [forked.1.2] ++ targets) le before opened
     apply (ReplacementSitesFree.fork _ _ _).bind
     apply (ReplacementSitesFree.setCur _ _ _).bind
     exact ReplacementSitesFree.pure _ _ _
@@ -106,7 +106,7 @@ theorem ReplacementSitesAt.ifThen_generated {le : LEnv} {before : LS} {loop : Op
     change target < forked.2.blocks.size
     simp only [same, ids.1, ids.2]
     nat_omega
-  · have childChecked : ReplacementSitesAt (targets := forked.1.2 :: targets) le entered.2 body := by
+  · have childChecked : ReplacementSitesAt (root := root) (targets := forked.1.2 :: targets) le entered.2 body := by
       simpa only [ids.1] using child entered.2 enteredGenerated enteredBounds
     apply childChecked.bind
     apply (ReplacementSitesAt.emitTerm _ _ _ (by

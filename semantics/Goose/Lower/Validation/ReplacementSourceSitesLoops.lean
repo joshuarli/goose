@@ -4,15 +4,15 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 theorem ReplacementSitesAt.loopBody_generated {le : LEnv} {before : LS} (condition : ValueId)
     {body : Nat → BlockId → B ValueId} {back : B Unit}
     (generated : GeneratedBuilderState before)
     (bodySites : ∀ depth exit state, GeneratedBuilderState state → exit < state.blocks.size →
-      before.blocks.size ≤ state.blocks.size → ReplacementSitesAt (targets := exit :: targets) le state (body depth exit))
-    (backSites : ∀ exit state, ReplacementSitesAt (targets := exit :: targets) le state back) :
-    ReplacementSitesAt (targets := targets) le before (Goose.Lower.loopBody condition body back) := by
+      before.blocks.size ≤ state.blocks.size → ReplacementSitesAt (root := root) (targets := exit :: targets) le state (body depth exit))
+    (backSites : ∀ exit state, ReplacementSitesAt (root := root) (targets := exit :: targets) le state back) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (Goose.Lower.loopBody condition body back) := by
   let forked := Goose.Lower.fork condition le before
   let entered := Goose.Lower.setCur (some forked.1.1) le forked.2
   have forkGenerated := generated.fork condition (show Goose.Lower.fork condition le before = forked from rfl)
@@ -33,7 +33,7 @@ theorem ReplacementSitesAt.loopBody_generated {le : LEnv} {before : LS} (conditi
     let pair ← Goose.Lower.fork condition
     Goose.Lower.setCur (some pair.1)
     Pure.pure pair
-  change ReplacementSitesAt (targets := targets) le before (do
+  change ReplacementSitesAt (root := root) (targets := targets) le before (do
     let state ← (MonadState.get : B LS)
     let pair ← opened
     let result ← body state.stack.length pair.2
@@ -46,7 +46,7 @@ theorem ReplacementSitesAt.loopBody_generated {le : LEnv} {before : LS} (conditi
     have same : target = forked.1.2 := by simpa using member
     simp only [same, ids.1]
     nat_omega
-  · change ReplacementSitesFree (targets := [forked.1.2] ++ targets) le before opened
+  · change ReplacementSitesFree (root := root) (targets := [forked.1.2] ++ targets) le before opened
     apply (ReplacementSitesFree.fork _ _ _).bind
     apply (ReplacementSitesFree.setCur _ _ _).bind
     exact ReplacementSitesFree.pure _ _ _
@@ -61,11 +61,11 @@ theorem ReplacementSitesAt.loopBody_generated {le : LEnv} {before : LS} (conditi
 
 theorem ReplacementSitesAt.lowerWhile_generated {le : LEnv} {before : LS} (header : BlockId) (allowed : header ∈ targets)
     {condition : B ValueId} {body : Nat → BlockId → B ValueId}
-    (conditionSites : ReplacementSitesAt (targets := targets) le before condition)
+    (conditionSites : ReplacementSitesAt (root := root) (targets := targets) le before condition)
     (conditionGenerated : GeneratedBuilderState (condition le before).2)
     (bodySites : ∀ depth exit state, GeneratedBuilderState state → exit < state.blocks.size →
-      (condition le before).2.blocks.size ≤ state.blocks.size → ReplacementSitesAt (targets := exit :: targets) le state (body depth exit)) :
-    ReplacementSitesAt (targets := targets) le before (Goose.Lower.lowerWhile header condition body) := by
+      (condition le before).2.blocks.size ≤ state.blocks.size → ReplacementSitesAt (root := root) (targets := exit :: targets) le state (body depth exit)) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (Goose.Lower.lowerWhile header condition body) := by
   unfold Goose.Lower.lowerWhile
   apply conditionSites.bind
   apply ReplacementSitesAt.whenLive
@@ -79,8 +79,8 @@ theorem ReplacementSitesAt.lowerRange_generated {le : LEnv} {before : LS} (type 
     (generated : GeneratedBuilderState before)
     (bodySites : ∀ depth exit state, GeneratedBuilderState state → exit < state.blocks.size →
       (Goose.Lower.emitDef (.cmp .lt type index bound) le before).2.blocks.size ≤ state.blocks.size →
-      ReplacementSitesAt (targets := exit :: targets) le state (body depth exit)) :
-    ReplacementSitesAt (targets := targets) le before (Goose.Lower.lowerRange type index bound header body) := by
+      ReplacementSitesAt (root := root) (targets := exit :: targets) le state (body depth exit)) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (Goose.Lower.lowerRange type index bound header body) := by
   unfold Goose.Lower.lowerRange
   apply (ReplacementSitesAt.emitDef _ (by intros; trivial)).bind
   exact ReplacementSitesAt.loopBody_generated _ (generated.emitDef _ rfl) bodySites
@@ -92,8 +92,8 @@ theorem ReplacementSitesAt.lowerEach_generated {le : LEnv} {before : LS} (regrow
     (bodySites : ∀ depth exit state, GeneratedBuilderState state → exit < state.blocks.size →
       (Goose.Lower.emitDef (.cmp .lt .i64 index (Goose.Lower.eachLen regrow owner sampled le before).1)
         le (Goose.Lower.eachLen regrow owner sampled le before).2).2.blocks.size ≤ state.blocks.size →
-      ReplacementSitesAt (targets := exit :: targets) le state (body depth exit)) :
-    ReplacementSitesAt (targets := targets) le before (Goose.Lower.lowerEach regrow owner sampled header index body) := by
+      ReplacementSitesAt (root := root) (targets := exit :: targets) le state (body depth exit)) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (Goose.Lower.lowerEach regrow owner sampled header index body) := by
   unfold Goose.Lower.lowerEach
   apply (ReplacementSitesAt.eachLen _ _ _ _ _).bind
   apply (ReplacementSitesAt.emitDef _ (by intros; trivial)).bind

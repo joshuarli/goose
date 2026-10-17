@@ -5,11 +5,11 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 theorem ReplacementSitesAt.eachElemValue (le : LEnv) (before : LS) (slot : SlotId) (byReference : Bool) (element : ValueId)
     (loaded : before.cur.isSome = true → ∀ value, NotReplacement (.def value (.load element))) :
-    ReplacementSitesAt (targets := targets) le before (Goose.Lower.eachElemValue slot byReference element) := by
+    ReplacementSitesAt (root := root) (targets := targets) le before (Goose.Lower.eachElemValue slot byReference element) := by
   cases byReference with
   | false => exact ReplacementSitesAt.emitDef _ loaded
   | true =>

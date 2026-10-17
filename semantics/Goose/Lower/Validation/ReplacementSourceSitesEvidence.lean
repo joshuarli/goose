@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.ReplacementEmissionSite
+import Goose.Lower.Validation.ReplacementDemandSitesLocation
 import Goose.Lower.Validation.ReplacementEmissionMap
 import Goose.Lower.GeneratedBuilder
 import Goose.Lower.Validation.ValueTypes
@@ -8,7 +9,7 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 structure AcceptedReplacementSite (le : LEnv) (finalState : LS)
     (owner value : ValueId) (origin : OriginId) where
@@ -22,6 +23,9 @@ structure AcceptedReplacementSite (le : LEnv) (finalState : LS)
   finish : Nat
   output : Core.TEnv
   accepted : Core.tyStmt sourceEnv scope (.assignWhole place rhs origin) start = .ok (output, finish)
+  sourceRoot : DemandNode
+  sourcePath : List Nat
+  structuralSource : DemandNodeAt sourceRoot sourcePath (.statement (.assignWhole place rhs origin))
   initial : LS
   finished : LS
   site : ReplacementEmissionSite le initial finished place rhs origin
@@ -182,50 +186,52 @@ theorem ReplacementIntervalsPreserved.patchTerm {le : LEnv} {before after : LS}
   · exact avoids target inherited
   · exact Or.inr (Nat.le_trans extension.1 fresh)
 
-structure ReservedReplacementSiteAt (targets : List BlockId) (le : LEnv) (state : LS)
+structure ReservedReplacementSiteAt (root : DemandNode) (targets : List BlockId) (le : LEnv) (state : LS)
     (block position owner value : Nat) (origin : OriginId) where
   site : ReplacementSiteAt le state block position owner value origin
   avoids : IntervalTargetsAvoid site.source.site.cleared site.source.site.captured targets
+  root_eq : site.source.sourceRoot = root
 
 def ReservedReplacementSiteAt.retained {le : LEnv} {before after : LS}
     {block position owner value : Nat} {origin : OriginId}
-    (witness : ReservedReplacementSiteAt targets le before block position owner value origin)
+    (witness : ReservedReplacementSiteAt root targets le before block position owner value origin)
     (extension : before.Ext after) (types : TypePrefix before after)
     (preserved : ReplacementIntervalsPreserved targets before after) :
-    ReservedReplacementSiteAt targets le after block position owner value origin :=
+    ReservedReplacementSiteAt root targets le after block position owner value origin :=
   { site := witness.site.retained extension types
       (preserved _ _ witness.site.source.captured_extension witness.avoids witness.site.source.framed)
-    avoids := witness.avoids }
+    avoids := witness.avoids
+    root_eq := witness.root_eq }
 
 def ReservedReplacementSiteAt.weaken {le : LEnv} {state : LS} {first second : List BlockId}
     {block position owner value : Nat} {origin : OriginId}
-    (witness : ReservedReplacementSiteAt first le state block position owner value origin)
+    (witness : ReservedReplacementSiteAt root first le state block position owner value origin)
     (included : ∀ target ∈ second, target ∈ first) :
-    ReservedReplacementSiteAt second le state block position owner value origin :=
+    ReservedReplacementSiteAt root second le state block position owner value origin :=
   { witness with avoids := witness.avoids.mono included }
 
 def ReservedReplacementSiteAt.reserve {le : LEnv} {state : LS}
     {block position owner value : Nat} {origin : OriginId}
-    (witness : ReservedReplacementSiteAt targets le state block position owner value origin)
+    (witness : ReservedReplacementSiteAt root targets le state block position owner value origin)
     (target : BlockId) (fresh : state.blocks.size ≤ target) :
-    ReservedReplacementSiteAt (target :: targets) le state block position owner value origin :=
+    ReservedReplacementSiteAt root (target :: targets) le state block position owner value origin :=
   { witness with avoids := witness.avoids.cons (Or.inr (Nat.le_trans witness.site.source.captured_extension.1 fresh)) }
 
 def ReplacementSourceAuthority (le : LEnv) (state : LS) (block position : Nat) : Inst → Prop
-  | .eff (.replace owner value (some origin)) => Nonempty (ReservedReplacementSiteAt targets le state block position owner value origin)
+  | .eff (.replace owner value (some origin)) => Nonempty (ReservedReplacementSiteAt root targets le state block position owner value origin)
   | .eff (.replace _ _ none) => False
   | _ => True
 
 def ReplacementSitesBuilder (le : LEnv) (state : LS) : Prop :=
   ∀ block body, state.blocks[block]? = some body → ∀ position instruction,
-    body.insts[position]? = some instruction → ReplacementSourceAuthority (targets := targets) le state block position instruction
+    body.insts[position]? = some instruction → ReplacementSourceAuthority (root := root) (targets := targets) le state block position instruction
 
 theorem ReplacementSourceAuthority.retained {le : LEnv} {before after : LS}
     {block position : Nat} {inst : Inst}
-    (valid : ReplacementSourceAuthority (targets := targets) le before block position inst)
+    (valid : ReplacementSourceAuthority (root := root) (targets := targets) le before block position inst)
     (extension : before.Ext after) (types : TypePrefix before after)
     (preserved : ReplacementIntervalsPreserved targets before after) :
-    ReplacementSourceAuthority (targets := targets) le after block position inst := by
+    ReplacementSourceAuthority (root := root) (targets := targets) le after block position inst := by
   cases inst with
   | eff effect =>
     cases effect <;> try exact valid
@@ -237,9 +243,9 @@ theorem ReplacementSourceAuthority.retained {le : LEnv} {before after : LS}
 
 theorem ReplacementSourceAuthority.weaken {le : LEnv} {state : LS} {first second : List BlockId}
     {block position : Nat} {inst : Inst}
-    (valid : ReplacementSourceAuthority (targets := first) le state block position inst)
+    (valid : ReplacementSourceAuthority (root := root) (targets := first) le state block position inst)
     (included : ∀ target ∈ second, target ∈ first) :
-    ReplacementSourceAuthority (targets := second) le state block position inst := by
+    ReplacementSourceAuthority (root := root) (targets := second) le state block position inst := by
   cases inst with
   | eff effect =>
     cases effect <;> try exact valid
@@ -250,14 +256,14 @@ theorem ReplacementSourceAuthority.weaken {le : LEnv} {state : LS} {first second
   | _ => exact valid
 
 theorem ReplacementSitesBuilder.weaken {le : LEnv} {state : LS} {first second : List BlockId}
-    (checked : ReplacementSitesBuilder (targets := first) le state)
+    (checked : ReplacementSitesBuilder (root := root) (targets := first) le state)
     (included : ∀ target ∈ second, target ∈ first) :
-    ReplacementSitesBuilder (targets := second) le state :=
+    ReplacementSitesBuilder (root := root) (targets := second) le state :=
   fun block body row position inst lookup => (checked block body row position inst lookup).weaken included
 
 theorem ReplacementSitesBuilder.reserve {le : LEnv} {state : LS}
-    (checked : ReplacementSitesBuilder (targets := targets) le state) (target : BlockId)
-    (fresh : state.blocks.size ≤ target) : ReplacementSitesBuilder (targets := target :: targets) le state := by
+    (checked : ReplacementSitesBuilder (root := root) (targets := targets) le state) (target : BlockId)
+    (fresh : state.blocks.size ≤ target) : ReplacementSitesBuilder (root := root) (targets := target :: targets) le state := by
   intro block body row position inst lookup
   have valid := checked block body row position inst lookup
   cases inst with
@@ -270,9 +276,9 @@ theorem ReplacementSitesBuilder.reserve {le : LEnv} {state : LS}
   | _ => exact valid
 
 theorem ReplacementSitesBuilder.reserveMany {le : LEnv} {state : LS}
-    (checked : ReplacementSitesBuilder (targets := targets) le state) (extra : List BlockId)
+    (checked : ReplacementSitesBuilder (root := root) (targets := targets) le state) (extra : List BlockId)
     (fresh : ∀ target ∈ extra, state.blocks.size ≤ target) :
-    ReplacementSitesBuilder (targets := extra ++ targets) le state := by
+    ReplacementSitesBuilder (root := root) (targets := extra ++ targets) le state := by
   induction extra with
   | nil => exact checked
   | cons target rest ih =>

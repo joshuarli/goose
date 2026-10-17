@@ -8,7 +8,7 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 attribute [local irreducible] ReplacementSitesAt
 
@@ -17,16 +17,16 @@ theorem replacementSites_forEach_source {env output : Core.TEnv} {results : List
     {slot : VarId} {index : Option VarId} {view : View} {byReference : Bool}
     {body : Core.Block} {origin : OriginId} {scope start finish : Nat}
     (source : Core.tyStmt env scope (.forEach slot index view byReference body origin) start = .ok (output, finish))
-    (viewChild : ReplacementSitesViewChild (targets := targets) env results view)
+    (viewChild : ReplacementSitesViewChild (root := root) (targets := targets) env results view)
     (bodyChild : ∀ {childTargets : List BlockId} {type : Ty} {first last : Nat},
       Core.tyBlock { env with loops := env.loops + 1, visible := slot :: index.toList ++ env.visible }
         [] body first = .ok (type, last) →
       ∀ (loop : Option LoopCtx) (pre : List (VarId × ValueId × OriginId)) {state : LS},
         GeneratedBuilderState state → LoopBuilderTargets loop state →
         ReplacementLoopTargetsIncluded loop childTargets →
-        ReplacementSitesAt (targets := childTargets) (lowerEnv env.mod env.vars results) state (lowerBlock loop pre false body))
+        ReplacementSitesAt (root := root) (targets := childTargets) (lowerEnv env.mod env.vars results) state (lowerBlock loop pre false body))
     {before : LS} (generated : GeneratedBuilderState before) (loop : Option LoopCtx) :
-    ReplacementSitesAt (targets := targets) (lowerEnv env.mod env.vars results) before
+    ReplacementSitesAt (root := root) (targets := targets) (lowerEnv env.mod env.vars results) before
       (lowerStmt loop (.forEach slot index view byReference body origin)) := by
   obtain ⟨localVar, element, writable, indexStart, viewStart, viewFinish, bodyType,
     _, _, viewSource, _, bodySource, _⟩ := tyStmt_forEach_children source
@@ -35,7 +35,7 @@ theorem replacementSites_forEach_source {env output : Core.TEnv} {results : List
   let regrown := regrowOf sourced.1.1 le sourced.2
   let sampled := eachSampled regrown.1 sourced.1.2 le regrown.2
   let started := emitDef (.constInt .i64 0) le sampled.2
-  have sourceSites : ReplacementSitesAt (targets := targets) le before (lowerEachSource view) := by
+  have sourceSites : ReplacementSitesAt (root := root) (targets := targets) le before (lowerEachSource view) := by
     unfold ReplacementSitesAt ReplacementSitesFree
     intro bounded checked
     have viewed := viewChild viewSource generated

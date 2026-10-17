@@ -7,19 +7,19 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 attribute [local irreducible] ReplacementSitesAt
 
-theorem ReplacementSitesBuilder.initState (le : LEnv) : ReplacementSitesBuilder (targets := targets) le Goose.Lower.initState := by
+theorem ReplacementSitesBuilder.initState (le : LEnv) : ReplacementSitesBuilder (root := root) (targets := targets) le Goose.Lower.initState := by
   intro block body row
   simp [Goose.Lower.initState] at row
 
 theorem ReplacementSitesAt.startBlock_generated {le : LEnv} {before : LS} (types : List VTy)
     {tail : BlockId → List ValueId → B α} (generated : GeneratedBuilderState before)
     (child : ∀ block parameters state, GeneratedBuilderState state → block < state.blocks.size →
-      ReplacementSitesAt (targets := targets) le state (tail block parameters)) :
-    ReplacementSitesAt (targets := targets) le before (do
+      ReplacementSitesAt (root := root) (targets := targets) le state (tail block parameters)) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (do
       let (block, parameters) ← Goose.Lower.newBlock types
       Goose.Lower.setCur (some block)
       tail block parameters) := by
@@ -38,17 +38,17 @@ theorem ReplacementSitesAt.startBlock_generated {le : LEnv} {before : LS} (types
   exact child allocated.1.1 allocated.1.2 entered.2 enteredGenerated bound
 
 theorem ReplacementSitesAt.finishFunction (le : LEnv) (before : LS) (impl : Core.Impl) (value : ValueId) :
-    ReplacementSitesAt (targets := targets) le before (Goose.Lower.finishFunction impl value) :=
+    ReplacementSitesAt (root := root) (targets := targets) le before (Goose.Lower.finishFunction impl value) :=
   (ReplacementSitesFree.finishFunction le before impl value).at
 
 theorem lowerImpl_replacement_sites {module : Core.Module} (accepted : Core.validate module = .ok ())
     {index : ImplId} {impl : Core.Impl} (lookup : module.impls[index]? = some impl) :
-    ReplacementSitesBuilder (targets := []) (lowerEnv module impl.vars impl.results.toList) (cfg_implState module impl) := by
+    ReplacementSitesBuilder (root := .block impl.body) (targets := []) (lowerEnv module impl.vars impl.results.toList) (cfg_implState module impl) := by
   have implementation := validate_implementation_checks accepted (Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup))
   obtain ⟨bodyType, finish, bodySource, _⟩ := (checkImpl_ok module impl implementation).body
   have sourceTypes : SourceReadableEnvironment (implEnv module impl) :=
     .implementation accepted lookup rfl
-  have action : ReplacementSitesAt (targets := []) (lowerEnv module impl.vars impl.results.toList) initState (do
+  have action : ReplacementSitesAt (root := .block impl.body) (targets := []) (lowerEnv module impl.vars impl.results.toList) initState (do
       let (entry, parameters) ← newBlock (impl.params.toList.map fun parameter => .data (tyOfVar impl parameter.var))
       setCur (some entry)
       let pre := (impl.params.toList.zip parameters).map fun (parameter, value) =>
@@ -67,17 +67,17 @@ theorem lowerImpl_replacement_sites {module : Core.Module} (accepted : Core.vali
       (show setCur _ le allocated.2 = entered from rfl)
     apply (ReplacementSitesAt.newBlock _ _ _).bind
     apply (ReplacementSitesAt.setCur _ _ _).bind
-    exact (replacementSites_lowerBlock impl.body sourceTypes bodySource impl.results.toList none _ false current trivial (by simp [ReplacementLoopTargetsIncluded, LoopBuilderFrameTargets])).bind
+    exact (replacementSites_lowerBlock impl.body sourceTypes bodySource impl.results.toList none _ false current trivial (by simp [ReplacementLoopTargetsIncluded, LoopBuilderFrameTargets]) (.here (.block impl.body))).bind
       (ReplacementSitesAt.finishFunction _ _ _ _)
   unfold ReplacementSitesAt at action
   exact (action (by simp [ReplacementTargetsBound]) (ReplacementSitesBuilder.initState _)).2
 
 theorem lowerGlobal_replacement_sites {module : Core.Module} (accepted : Core.validate module = .ok ())
     {index : GlobalId} {global : Core.Global} (lookup : module.globals[index]? = some global) :
-    ReplacementSitesBuilder (targets := []) (lowerEnv module #[] [global.ty]) (cfg_globalState module global) := by
+    ReplacementSitesBuilder (root := .expression global.init) (targets := []) (lowerEnv module #[] [global.ty]) (cfg_globalState module global) := by
   obtain ⟨_, finish, source⟩ := checkGlobal_ok module index global (validate_global_checks accepted lookup)
   have sourceTypes : SourceReadableEnvironment (initEnv module index) := .empty accepted rfl
-  have action : ReplacementSitesAt (targets := []) (lowerEnv module #[] [global.ty]) initState (do
+  have action : ReplacementSitesAt (root := .expression global.init) (targets := []) (lowerEnv module #[] [global.ty]) initState (do
       let (entry, _) ← newBlock []
       setCur (some entry)
       let value ← lowerExpr global.init
@@ -88,12 +88,12 @@ theorem lowerGlobal_replacement_sites {module : Core.Module} (accepted : Core.va
         let value ← lowerExpr global.init
         emitTerm (.ret [value] (some global.org))) [] GeneratedBuilderState.initState ?_
     intro entry parameters state current bound
-    exact (replacementSites_lowerExpr global.init sourceTypes source [global.ty] current).bind (ReplacementSitesAt.emitTerm _ _ _)
+    exact (replacementSites_lowerExpr global.init sourceTypes source [global.ty] current (.here (.expression global.init))).bind (ReplacementSitesAt.emitTerm _ _ _)
   unfold ReplacementSitesAt at action
   exact (action (by simp [ReplacementTargetsBound]) (ReplacementSitesBuilder.initState _)).2
 
 theorem ReplacementSitesBuilder.finishBlocks {le : LEnv} {state : LS} {func : Func}
-    (checked : ReplacementSitesBuilder (targets := targets) le state)
+    (checked : ReplacementSitesBuilder (root := root) (targets := targets) le state)
     (blocks : func.blocks = Goose.Lower.finishBlocks state.blocks)
     {blockIndex : Nat} {block : GIR.Block} (row : func.blocks[blockIndex]? = some block)
     {position : Nat} {owner value : ValueId} {origin : Option OriginId}

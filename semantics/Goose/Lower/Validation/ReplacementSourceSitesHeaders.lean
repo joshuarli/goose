@@ -4,13 +4,13 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 theorem ReplacementSitesAt.header_generated {le : LEnv} {before : LS} (types : List VTy) (arguments : List ValueId)
     {tail : BlockId → List ValueId → B α} (generated : GeneratedBuilderState before)
     (child : ∀ header parameters state, GeneratedBuilderState state → header < state.blocks.size →
-      ReplacementSitesAt (targets := header :: targets) le state (tail header parameters)) :
-    ReplacementSitesAt (targets := targets) le before (do
+      ReplacementSitesAt (root := root) (targets := header :: targets) le state (tail header parameters)) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (do
       let (header, parameters) ← Goose.Lower.newBlock types
       Goose.Lower.emitTerm (.br header arguments)
       Goose.Lower.setCur (some header)
@@ -38,14 +38,14 @@ theorem ReplacementSitesAt.header_generated {le : LEnv} {before : LS} (types : L
     Goose.Lower.emitTerm (.br pair.1 arguments)
     Goose.Lower.setCur (some pair.1)
     Pure.pure pair
-  change ReplacementSitesAt (targets := targets) le before
+  change ReplacementSitesAt (root := root) (targets := targets) le before
     (opened >>= fun pair => tail pair.1 pair.2)
   refine ReplacementSitesAt.reserve_prefix [allocated.1.1] ?_ ?_ ?_ ?_
   · intro target member
     have same : target = allocated.1.1 := by simpa using member
     rw [same, id]
     exact Nat.le_refl _
-  · change ReplacementSitesFree (targets := [allocated.1.1] ++ targets) le before _
+  · change ReplacementSitesFree (root := root) (targets := [allocated.1.1] ++ targets) le before _
     apply (ReplacementSitesFree.newBlock _ _ _).bind
     apply (ReplacementSitesFree.emitTerm _ _ _ (by
       intro target member

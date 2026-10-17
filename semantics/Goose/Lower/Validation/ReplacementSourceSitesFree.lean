@@ -5,12 +5,12 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 theorem ReplacementSitesFree.of_runs {le : LEnv} {before : LS} {action : B α}
     (emitted : EmitsOnlyRun NotReplacement action) (types : TypeRun action)
     (frames : GeneratedTargetFrameRun none action) :
-    ReplacementSitesFree (targets := targets) le before action := by
+    ReplacementSitesFree (root := root) (targets := targets) le before action := by
   intro checked
   have emitted := emitted le before _ _ rfl
   exact ⟨emitted.extension, checked.of_emits emitted (types le before _ _ rfl) (.of_run frames rfl)⟩
@@ -18,7 +18,7 @@ theorem ReplacementSitesFree.of_runs {le : LEnv} {before : LS} {action : B α}
 theorem ReplacementSitesFree.of_interval_runs {le : LEnv} {before : LS} {action : B α}
     (emitted : EmitsOnlyRun NotReplacement action) (types : TypeRun action)
     (frames : GeneratedIntervalFrameRun none targets action) :
-    ReplacementSitesFree (targets := targets) le before action := by
+    ReplacementSitesFree (root := root) (targets := targets) le before action := by
   intro checked
   have emitted := emitted le before _ _ rfl
   refine ⟨emitted.extension, checked.of_emits emitted (types le before _ _ rfl) ?_⟩
@@ -71,14 +71,14 @@ private theorem emits_patchBrs0 (target : BlockId) (incoming : List BlockId) :
   | cons block rest ih => exact (emits_patchTerm _ _).bind (fun _ => ih)
 
 theorem ReplacementSitesFree.fork (le : LEnv) (before : LS) (condition : ValueId) :
-    ReplacementSitesFree (targets := targets) le before (Goose.Lower.fork condition) := by
+    ReplacementSitesFree (root := root) (targets := targets) le before (Goose.Lower.fork condition) := by
   refine .of_runs ?_ (types_fork condition) (generatedTargetFrame_fork none condition)
   unfold Goose.Lower.fork
   exact (emits_newBlock _).bind fun _ => (emits_newBlock _).bind fun _ =>
     (emitsOnly_emitTerm _ trivial).bind fun _ => .pure _ _
 
 theorem ReplacementSitesFree.scFork (le : LEnv) (before : LS) (isAnd : Bool) (condition : ValueId) :
-    ReplacementSitesFree (targets := targets) le before (Goose.Lower.scFork isAnd condition) := by
+    ReplacementSitesFree (root := root) (targets := targets) le before (Goose.Lower.scFork isAnd condition) := by
   refine .of_runs ?_ (types_scFork isAnd condition) (generatedTargetFrame_scFork none isAnd condition)
   cases isAnd <;> unfold Goose.Lower.scFork
   all_goals exact (emits_newBlock _).bind fun _ => (emits_newBlock _).bind fun _ =>
@@ -86,7 +86,7 @@ theorem ReplacementSitesFree.scFork (le : LEnv) (before : LS) (isAnd : Bool) (co
 
 theorem ReplacementSitesFree.joinValue (le : LEnv) (before : LS) (yes : Option BlockId) (yesValue : ValueId)
     (no : Option BlockId) (noValue : ValueId) :
-    ReplacementSitesFree (targets := targets) le before (Goose.Lower.joinValue yes yesValue no noValue) := by
+    ReplacementSitesFree (root := root) (targets := targets) le before (Goose.Lower.joinValue yes yesValue no noValue) := by
   refine .of_runs ?_ (types_joinValue yes yesValue no noValue)
     (generatedTargetFrame_joinValue none yes no yesValue noValue)
   unfold Goose.Lower.joinValue
@@ -96,7 +96,7 @@ theorem ReplacementSitesFree.joinValue (le : LEnv) (before : LS) (yes : Option B
       (emits_patchBrs _ _).bind fun _ => (emits_setCur _).bind fun _ => .pure _ _
 
 theorem ReplacementSitesFree.joinArms (le : LEnv) (before : LS) (yes no : Option BlockId) :
-    ReplacementSitesFree (targets := targets) le before (Goose.Lower.joinArms yes no) := by
+    ReplacementSitesFree (root := root) (targets := targets) le before (Goose.Lower.joinArms yes no) := by
   refine .of_runs ?_ (types_joinArms yes no) (generatedTargetFrame_joinArms none yes no)
   unfold Goose.Lower.joinArms
   split
@@ -104,7 +104,7 @@ theorem ReplacementSitesFree.joinArms (le : LEnv) (before : LS) (yes no : Option
   · exact (emits_newBlock _).bind fun _ => (emits_patchBrs0 _ _).bind fun _ => emits_setCur _
 
 theorem ReplacementSitesFree.finishFunction (le : LEnv) (before : LS) (impl : Core.Impl) (value : ValueId) :
-    ReplacementSitesFree (targets := targets) le before (Goose.Lower.finishFunction impl value) := by
+    ReplacementSitesFree (root := root) (targets := targets) le before (Goose.Lower.finishFunction impl value) := by
   refine .of_interval_runs ?_ ?_ (generatedIntervalFrame_finishFunction none targets impl value)
   · unfold Goose.Lower.finishFunction
     refine (emits_unchanged (read : B LEnv) (by intros; rfl)).bind fun env =>

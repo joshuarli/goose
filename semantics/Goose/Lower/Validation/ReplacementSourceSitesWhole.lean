@@ -4,15 +4,15 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 theorem ReplacementSitesBuilder.emitReplacement {le : LEnv} {before after : LS}
     {owner value : ValueId} {origin : OriginId}
-    (checked : ReplacementSitesBuilder (targets := targets) le before)
+    (checked : ReplacementSitesBuilder (root := root) (targets := targets) le before)
     (run : Goose.Lower.emitEffect (.replace owner value (some origin)) le before = ((), after))
     (source : ∀ block body, before.cur = some block → before.blocks[block]? = some body →
-      Nonempty (ReservedReplacementSiteAt targets le after block body.insts.size owner value origin)) :
-    ReplacementSitesBuilder (targets := targets) le after := by
+      Nonempty (ReservedReplacementSiteAt root targets le after block body.insts.size owner value origin)) :
+    ReplacementSitesBuilder (root := root) (targets := targets) le after := by
   have extension := (advB_emitEffect (.replace owner value (some origin)) le before () after run).ext
   have preserved : ReplacementIntervalsPreserved targets before after :=
     .of_run (generatedTargetFrame_emitEffect none _) run
@@ -51,10 +51,11 @@ theorem ReplacementSitesBuilder.emitReplacement {le : LEnv} {before after : LS}
 theorem replacementSites_assignWhole_source {env output : Core.TEnv} {results : List Ty}
     {owner : Place} {expr : Expr} {origin : OriginId} {scope start finish : Nat}
     (source : Core.tyStmt env scope (.assignWhole owner expr origin) start = .ok (output, finish))
-    (placeChild : ReplacementSitesPlaceChild (targets := targets) env results owner)
-    (exprChild : ReplacementSitesExprChild (targets := targets) env results expr)
-    (loop : Option LoopCtx) {before : LS} (generated : GeneratedBuilderState before) :
-    ReplacementSitesAt (targets := targets) (lowerEnv env.mod env.vars results) before
+    (placeChild : ReplacementSitesPlaceChild (root := root) (targets := targets) env results owner)
+    (exprChild : ReplacementSitesExprChild (root := root) (targets := targets) env results expr)
+    (loop : Option LoopCtx) {before : LS} (generated : GeneratedBuilderState before)
+    (location : ReplacementDemandLocation root (.statement (.assignWhole owner expr origin))) :
+    ReplacementSitesAt (root := root) (targets := targets) (lowerEnv env.mod env.vars results) before
       (lowerStmt loop (.assignWhole owner expr origin)) := by
   obtain ⟨info, element, childStart, placeSource, shape, childSource, _, _, _⟩ :=
     tyStmt_assignWhole_children source
@@ -73,7 +74,7 @@ theorem replacementSites_assignWhole_source {env output : Core.TEnv} {results : 
   intro bounded checked
   have addressedResult := placeChild placeSource generated bounded checked
   have clearedExt := (advB_emitEffect (.clear addressed.1 (some origin)) le addressed.2 _ _ rfl).ext
-  have clearedChecked : ReplacementSitesBuilder (targets := targets) le cleared.2 :=
+  have clearedChecked : ReplacementSitesBuilder (root := root) (targets := targets) le cleared.2 :=
     addressedResult.2.emitEffect (effect := .clear addressed.1 (some origin)) trivial rfl
   have capturedResult := exprChild childSource clearedGenerated
     (bounded.mono (addressedResult.1.trans clearedExt)) clearedChecked
@@ -86,7 +87,7 @@ theorem replacementSites_assignWhole_source {env output : Core.TEnv} {results : 
       (show emitEffect (.replace addressed.1 captured.1 (some origin)) le captured.2 = published from rfl)
       cleared.2 captured.2 (.refl _) avoids (.refl _ _)
   refine ⟨addressedResult.1.trans (clearedExt.trans (capturedResult.1.trans publishedExt)), ?_⟩
-  change ReplacementSitesBuilder (targets := targets) le published.2
+  change ReplacementSitesBuilder (root := root) (targets := targets) le published.2
   cases live : captured.2.cur with
   | none =>
     have same : published.2 = captured.2 := congrArg Prod.snd
@@ -109,6 +110,9 @@ theorem replacementSites_assignWhole_source {env output : Core.TEnv} {results : 
       finish := finish
       output := output
       accepted := source
+      sourceRoot := root
+      sourcePath := location.path
+      structuralSource := location.source
       initial := before
       finished := published.2
       site := {
@@ -132,6 +136,7 @@ theorem replacementSites_assignWhole_source {env output : Core.TEnv} {results : 
       current := selectedCurrent
       row := selectedRow
       position_eq := rfl }
-      avoids := avoids }⟩
+      avoids := avoids
+      root_eq := rfl }⟩
 
 end Goose.Lower.Validation

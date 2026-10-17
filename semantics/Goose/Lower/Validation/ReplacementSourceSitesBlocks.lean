@@ -4,16 +4,16 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-variable {targets : List BlockId}
+variable {root : DemandNode} {targets : List BlockId}
 
 theorem ReplacementSitesAt.block_generated {le : LEnv} {before : LS} (loop : Option LoopCtx)
     (pre : List (SlotId × ValueId × OriginId)) (want : Bool) (scope : ScopeId)
     (statements : List Stmt) (value : Option Expr)
     (generated : GeneratedBuilderState before) (bounds : LoopBuilderTargets loop before)
     (statementSites : ∀ state, GeneratedBuilderState state → LoopBuilderTargets loop state →
-      ReplacementSitesAt (targets := targets) le state (lowerStmts loop statements))
-    (valueSites : ∀ state, GeneratedBuilderState state → ReplacementSitesAt (targets := targets) le state (lowerBlockValue want value)) :
-    ReplacementSitesAt (targets := targets) le before (lowerBlock loop pre want (.mk scope statements value)) := by
+      ReplacementSitesAt (root := root) (targets := targets) le state (lowerStmts loop statements))
+    (valueSites : ∀ state, GeneratedBuilderState state → ReplacementSitesAt (root := root) (targets := targets) le state (lowerBlockValue want value)) :
+    ReplacementSitesAt (root := root) (targets := targets) le before (lowerBlock loop pre want (.mk scope statements value)) := by
   let entered := Goose.Lower.emitEffect (.enter scope) le before
   let pushed := Goose.Lower.pushScope scope le entered.2
   let initialized := Goose.Lower.initSlots pre le pushed.2
