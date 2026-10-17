@@ -63,7 +63,7 @@ theorem ssa_joinLive {before state : LS} {beforeImports imports : ImportedValues
   have patchedDefinitions := dense_patchBrs state.blocks.size incoming env allocated _ patched rfl
     allocation.checked.definitions allocation.checked.opened.bound
   have patchSize : patched.blocks.size = allocated.blocks.size := (patchBrs_size incoming rfl).symm
-  have patchValues : patched.vals = allocated.vals := patchBrs_values _ _ _ _
+  have patchValues : patched.vals = allocated.vals := ssa_patchBrs_values _ _ _ _
   have patchedRow : patched.blocks[state.blocks.size]? = some ⟨[(state.vals.size, ty)], #[]⟩ := by
     rw [patchBrs_other state.blocks.size incoming env allocated state.blocks.size
       (fun pair member => Nat.ne_of_lt (bounds pair member))]
