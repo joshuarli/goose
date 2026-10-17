@@ -5,21 +5,21 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-theorem ContentsOperation.replace_function {globalKinds : Array VarKind} {structs : Array StructDef}
+theorem ContentsOperation.to_finished_function {globalKinds : Array VarKind} {structs : Array StructDef}
     {before after : Func} {types : Array (Option VTy)} {contents : ValueId → Prop}
     {value : ValueId} {op : Op} (slots : before.slots = after.slots)
     (operation : ContentsOperation globalKinds structs before types contents value op) :
     ContentsOperation globalKinds structs after types contents value op := by
   cases op <;> simp only [ContentsOperation, slots] at operation ⊢ <;> exact operation
 
-theorem WritableOperation.replace_function {globalKinds : Array VarKind} {structs : Array StructDef}
+theorem WritableOperation.to_finished_function {globalKinds : Array VarKind} {structs : Array StructDef}
     {before after : Func} {types : Array (Option VTy)} {contents : ValueId → Prop}
     {value : ValueId} {op : Op} (slots : before.slots = after.slots)
     (operation : WritableOperation globalKinds structs before types contents value op) :
     WritableOperation globalKinds structs after types contents value op := by
   cases op <;> simp only [WritableOperation, slots] at operation ⊢ <;> exact operation
 
-theorem ContentsClosed.replace_function {globalKinds : Array VarKind} {structs : Array StructDef}
+theorem ContentsClosed.to_finished_function {globalKinds : Array VarKind} {structs : Array StructDef}
     {before after : Func} {types : Array (Option VTy)} {contents : ValueId → Prop}
     (closed : ContentsClosed globalKinds structs before types contents)
     (blocks : before.blocks = after.blocks) (slots : before.slots = after.slots) :
@@ -29,10 +29,10 @@ theorem ContentsClosed.replace_function {globalKinds : Array VarKind} {structs :
   · simpa only [blocks] using closed.entry
   · intro block member value op instruction permitted
     rw [← blocks] at member
-    exact (closed.definitions block member value op instruction permitted).replace_function slots
+    exact (closed.definitions block member value op instruction permitted).to_finished_function slots
   · simpa only [blocks] using closed.edges
 
-theorem WritableClosed.replace_function {globalKinds : Array VarKind} {structs : Array StructDef}
+theorem WritableClosed.to_finished_function {globalKinds : Array VarKind} {structs : Array StructDef}
     {before after : Func} {types : Array (Option VTy)} {writable contents : ValueId → Prop}
     (closed : WritableClosed globalKinds structs before types writable contents)
     (blocks : before.blocks = after.blocks) (slots : before.slots = after.slots) :
@@ -42,7 +42,7 @@ theorem WritableClosed.replace_function {globalKinds : Array VarKind} {structs :
   · simpa only [blocks] using closed.entry
   · intro block member value op instruction permitted
     rw [← blocks] at member
-    exact (closed.definitions block member value op instruction permitted).replace_function slots
+    exact (closed.definitions block member value op instruction permitted).to_finished_function slots
   · simpa only [blocks] using closed.edges
 
 theorem checkPermissions_of_lowered_evidence {le : LEnv} {state : LS} {module : GIR.Module}
@@ -57,17 +57,17 @@ theorem checkPermissions_of_lowered_evidence {le : LEnv} {state : LS} {module : 
   apply checkPermissions_of_rules rules
   · intro value evidence
     obtain ⟨writable, contents, bindings, elements, _, _, permitted⟩ := evidence
-    have actualBindings := bindings.replace_function blocks slots
-    have actualElements := elements.replace_function blocks slots
+    have actualBindings := bindings.to_finished_function blocks slots
+    have actualElements := elements.to_finished_function blocks slots
     simpa only [Func.permissions, globals, structs] using
       actualBindings.permissions actualElements value permitted
   · intro value evidence
     obtain ⟨contents, elements, _, permitted⟩ := evidence
-    have actualElements := elements.replace_function blocks slots
+    have actualElements := elements.to_finished_function blocks slots
     simpa only [Func.permissions, globals, structs] using actualElements.permissions value permitted
 
-#print axioms ContentsClosed.replace_function
-#print axioms WritableClosed.replace_function
+#print axioms ContentsClosed.to_finished_function
+#print axioms WritableClosed.to_finished_function
 #print axioms checkPermissions_of_lowered_evidence
 
 end Goose.Lower.Validation
