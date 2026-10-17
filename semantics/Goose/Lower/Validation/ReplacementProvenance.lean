@@ -99,6 +99,31 @@ private theorem edge_provenance_extends {func : Func} {original current : Prov}
     intro acc checked pair member
     exact checked.trans (ProvenanceExtends.addValues _ _ _)
 
+theorem provStep_extends (results : Array (List RootRef)) (types : Array (Option VTy))
+    (func : Func) (provenance : Prov) (changed : Bool) (inst : Inst) :
+    ProvenanceExtends provenance (func.provStep results types (provenance, changed) inst).1 := by
+  unfold Func.provStep
+  dsimp only
+  cases inst with
+  | «def» result op => exact ProvenanceExtends.addValues _ _ _
+  | eff effect =>
+    cases effect with
+    | slotInit slot value origin => exact ProvenanceExtends.addSlots _ _ _
+    | store address value origin =>
+      apply List.foldlRecOn (motive := fun acc : Prov × Bool => ProvenanceExtends provenance acc.1)
+        (rootsAt provenance.vals address) _ (ProvenanceExtends.refl provenance)
+      intro acc checked root member
+      cases root with
+      | «local» slot => exact checked.trans (ProvenanceExtends.addSlots _ _ _)
+      | _ => exact checked
+    | _ => exact .refl provenance
+  | term term =>
+    cases term with
+    | br target args => exact edge_provenance_extends (.refl provenance)
+    | condbr condition left leftArgs right rightArgs =>
+      exact edge_provenance_extends (edge_provenance_extends (.refl provenance))
+    | _ => exact .refl provenance
+
 theorem provRound_extends (results : Array (List RootRef)) (types : Array (Option VTy))
     (func : Func) (provenance : Prov) :
     ProvenanceExtends provenance (provRound results types func provenance).1 := by
@@ -110,25 +135,7 @@ theorem provRound_extends (results : Array (List RootRef)) (types : Array (Optio
   apply List.foldlRecOn (motive := fun acc : Prov × Bool => ProvenanceExtends provenance acc.1)
     block.insts _ checked
   intro step checked inst member
-  cases inst with
-  | «def» result op => exact checked.trans (ProvenanceExtends.addValues _ _ _)
-  | eff effect =>
-    cases effect with
-    | slotInit slot value origin => exact checked.trans (ProvenanceExtends.addSlots _ _ _)
-    | store address value origin =>
-      apply List.foldlRecOn (motive := fun acc : Prov × Bool => ProvenanceExtends provenance acc.1)
-        (rootsAt step.1.vals address) _ checked
-      intro acc checked root member
-      cases root with
-      | «local» slot => exact checked.trans (ProvenanceExtends.addSlots _ _ _)
-      | _ => exact checked
-    | _ => exact checked
-  | term term =>
-    cases term with
-    | br target args => exact edge_provenance_extends checked
-    | condbr condition left leftArgs right rightArgs =>
-      exact edge_provenance_extends (edge_provenance_extends checked)
-    | _ => exact checked
+  exact checked.trans (provStep_extends results types func _ _ inst)
 
 theorem provFix_extends (results : Array (List RootRef)) (types : Array (Option VTy))
     (func : Func) (fuel : Nat) (provenance : Prov) :
@@ -161,5 +168,123 @@ theorem list_foldl_establishes {property known : σ → Prop} (items : List α) 
       intro state checked item member
       exact retained state item checked
     · exact ih (step start first) later (preserved start first initial)
+
+theorem provRound_static_definition (results : Array (List RootRef)) (types : Array (Option VTy))
+    (func : Func) (provenance : Prov) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
+    {result : ValueId} {op : Op} (definition : .def result op ∈ block.insts)
+    {root : RootRef} (produced : ∀ state, root ∈ rootsOfDef results types func state result op)
+    (bounded : result < provenance.vals.size) :
+    root ∈ rootsAt (provRound results types func provenance).1.vals result := by
+  unfold provRound
+  rw [← Array.foldl_toList]
+  refine list_foldl_establishes
+    (property := fun acc : Prov × Bool => ProvenanceExtends provenance acc.1)
+    (known := fun acc => root ∈ rootsAt acc.1.vals result)
+    _ _ _ block blockMember (.refl provenance) ?_ ?_ ?_
+  · intro state body checked
+    apply List.foldlRecOn (motive := fun acc : Prov × Bool => ProvenanceExtends provenance acc.1)
+      body.insts _ checked
+    intro acc checked inst member
+    exact checked.trans (provStep_extends results types func _ _ inst)
+  · intro state body known
+    apply List.foldlRecOn (motive := fun acc : Prov × Bool => root ∈ rootsAt acc.1.vals result)
+      body.insts _ known
+    intro acc known inst member
+    exact (provStep_extends results types func _ _ inst).2.2.2 result root known
+  · intro state checked
+    refine list_foldl_establishes
+      (property := fun acc : Prov × Bool => ProvenanceExtends provenance acc.1)
+      (known := fun acc => root ∈ rootsAt acc.1.vals result)
+      _ _ _ (.def result op) definition checked ?_ ?_ ?_
+    · intro acc inst checked
+      exact checked.trans (provStep_extends results types func _ _ inst)
+    · intro acc inst known
+      exact (provStep_extends results types func _ _ inst).2.2.2 result root known
+    · intro acc checked
+      exact addTo_inserts (by rw [checked.2.1]; exact bounded) (produced acc.1)
+
+theorem provStart_values_size (func : Func) (types : Array (Option VTy)) :
+    (provStart types func).vals.size = func.numValues := by
+  unfold provStart
+  cases row : func.blocks[0]? with
+  | none => simp
+  | some block =>
+    apply List.foldlRecOn (motive := fun vals : Array (List RootRef) => vals.size = func.numValues)
+      block.params.zipIdx _ (by simp)
+    intro vals size pair member
+    dsimp only
+    split <;> simpa using size
+
+theorem provenance_static_definition (results : Array (List RootRef)) (types : Array (Option VTy))
+    (func : Func) (rootCount : Nat) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
+    {result : ValueId} {op : Op} (definition : .def result op ∈ block.insts)
+    {root : RootRef} (produced : ∀ state, root ∈ rootsOfDef results types func state result op)
+    (bounded : result < func.numValues) :
+    root ∈ rootsAt (func.provenance results types rootCount).vals result := by
+  have known := provRound_static_definition results types func (provStart types func)
+    blockMember definition produced (by simpa only [provStart_values_size] using bounded)
+  unfold Func.provenance
+  generalize fuelEq : (func.numValues + func.slots.size + 1) * (rootCount + 1) = fuel
+  cases fuel with
+  | zero =>
+    have positive : 0 < (func.numValues + func.slots.size + 1) * (rootCount + 1) :=
+      Nat.mul_pos (by omega) (by omega)
+    omega
+  | succ fuel =>
+    change root ∈ rootsAt
+      (if (provRound results types func (provStart types func)).2 then
+        provFix results types func fuel (provRound results types func (provStart types func)).1
+      else (provRound results types func (provStart types func)).1).vals result
+    split
+    · exact (provFix_extends results types func fuel _).2.2.2 result root known
+    · exact known
+
+theorem provenance_slotAddr (results : Array (List RootRef)) (types : Array (Option VTy))
+    (func : Func) (rootCount : Nat) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
+    {result : ValueId} {slot : SlotId} (definition : .def result (.slotAddr slot) ∈ block.insts)
+    (bounded : result < func.numValues) :
+    RootRef.local slot ∈ rootsAt (func.provenance results types rootCount).vals result :=
+  provenance_static_definition results types func rootCount blockMember definition
+    (fun _ => by simp [rootsOfDef]) bounded
+
+theorem provenance_globalAddr (results : Array (List RootRef)) (types : Array (Option VTy))
+    (func : Func) (rootCount : Nat) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
+    {result : ValueId} {global : GlobalId} (definition : .def result (.globalAddr global) ∈ block.insts)
+    (bounded : result < func.numValues) :
+    RootRef.global global ∈ rootsAt (func.provenance results types rootCount).vals result :=
+  provenance_static_definition results types func rootCount blockMember definition
+    (fun _ => by simp [rootsOfDef]) bounded
+
+theorem replacementProvenance_values (func : Func) (provenance : Prov) (value : ValueId) :
+    rootsAt (replacementProvenance func provenance).vals value =
+      (rootsAt provenance.vals value).flatMap func.expandParameterRoot := by
+  cases row : provenance.vals[value]? <;>
+    simp [replacementProvenance, rootsAt, Array.getElem?_map, row]
+
+theorem replacementProvenance_slots (func : Func) (provenance : Prov) (slot : SlotId) :
+    rootsAt (replacementProvenance func provenance).slots slot =
+      (rootsAt provenance.slots slot).flatMap func.expandParameterRoot := by
+  cases row : provenance.slots[slot]? <;>
+    simp [replacementProvenance, rootsAt, Array.getElem?_map, row]
+
+theorem replacementProvenance_slotAddr (results : Array (List RootRef)) (types : Array (Option VTy))
+    (func : Func) (rootCount : Nat) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
+    {result : ValueId} {slot : SlotId} (definition : .def result (.slotAddr slot) ∈ block.insts)
+    (bounded : result < func.numValues) :
+    RootRef.local slot ∈ rootsAt (replacementProvenance func (func.provenance results types rootCount)).vals result := by
+  rw [replacementProvenance_values]
+  exact List.mem_flatMap.mpr ⟨.local slot,
+    provenance_slotAddr results types func rootCount blockMember definition bounded,
+    by simp [Func.expandParameterRoot]⟩
+
+theorem replacementProvenance_globalAddr (results : Array (List RootRef)) (types : Array (Option VTy))
+    (func : Func) (rootCount : Nat) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
+    {result : ValueId} {global : GlobalId} (definition : .def result (.globalAddr global) ∈ block.insts)
+    (bounded : result < func.numValues) :
+    RootRef.global global ∈ rootsAt (replacementProvenance func (func.provenance results types rootCount)).vals result := by
+  rw [replacementProvenance_values]
+  exact List.mem_flatMap.mpr ⟨.global global,
+    provenance_globalAddr results types func rootCount blockMember definition bounded,
+    by simp [Func.expandParameterRoot]⟩
 
 end Goose.Lower.Validation
