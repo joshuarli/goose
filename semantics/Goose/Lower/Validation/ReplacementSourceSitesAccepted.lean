@@ -135,7 +135,15 @@ theorem replacementSites_lowerExpr {targets : List BlockId} (expr : Expr) {env :
       exact replacementSites_lowerBlock (location := (location.child 1 _ (by simp [DemandNode.child?, DemandNode.children]))) (targets := _) thenBody sourceTypes.exprEnv thenSource results none [] true current trivial (by simp [ReplacementLoopTargetsIncluded, LoopBuilderFrameTargets])
     · intro state current bounds
       exact replacementSites_lowerBlock (location := (location.child 2 _ (by simp [DemandNode.child?, DemandNode.children]))) (targets := _) elseBody sourceTypes.exprEnv elseSource results none [] true current trivial (by simp [ReplacementLoopTargetsIncluded, LoopBuilderFrameTargets])
-    · exact fun _ _ _ _ state => ReplacementSitesAt.joinValue _ state _ _ _ _
+    · intro endT valueT endF valueF state
+      change ReplacementSitesAt (root := root) (targets := _) _ state
+        (joinValue endT valueT endF valueF >>= fun result => do
+          recordValueRootRecipe result (sourceBlockScope thenBody)
+          pure result)
+      apply ReplacementSitesAt.bind
+      · exact ReplacementSitesAt.joinValue _ state endT valueT endF valueF
+      · apply (ReplacementSitesFree.recordValueRootRecipe _ _ _ _).at.bind
+        exact ReplacementSitesAt.pure _ _ _
 termination_by sizeOf expr
 
 theorem replacementSites_lowerPlace {targets : List BlockId} (place : Place) {env : Core.TEnv} (sourceTypes : SourceReadableEnvironment env)
