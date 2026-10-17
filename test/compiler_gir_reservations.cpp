@@ -188,6 +188,72 @@ CoreModule InterruptedReturn(CoreStmtKind interruption, bool nested = false) {
     return core;
 }
 
+CoreModule BorrowedWaiting(CoreStmtKind interruption) {
+    auto core = InterruptedReturn(interruption);
+    core.files = {"borrowed-waiting.goose"};
+    auto &producer = core.impls[1];
+    auto bytes = producer.results[0].type;
+    producer.vars[0].scope = 2;
+    auto loop = std::move(producer.body.stmts[0]);
+    loop.then->scope = 2;
+    auto &broken = loop.then->stmts[0];
+    broken.kind = CoreStmtKind::BreakValue;
+    broken.expr = std::move(broken.values[0]);
+    broken.values.clear();
+    broken.expr->elems[1]->then->scope = 3;
+    producer.body.stmts.clear();
+    producer.body.value = make_unique<CoreExpr>();
+    producer.body.value->kind = CoreExprKind::Block;
+    producer.body.value->type = bytes;
+    producer.body.value->org = origin;
+    producer.body.value->then = make_unique<CoreBlock>();
+    producer.body.value->then->scope = 1;
+    producer.body.value->then->stmts.push_back(std::move(loop));
+    producer.body.value->then->value = Bytes(bytes, 67);
+    return core;
+}
+
+CoreModule BorrowedWaitingChild(CoreStmtKind interruption) {
+    auto core = BorrowedWaiting(interruption);
+    auto &producer = core.impls[1];
+    auto outer = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = producer.results[0].type });
+    producer.results[0].type = outer;
+    producer.summary.aborts = true;
+    auto child = std::move(producer.body.value);
+    producer.body.value = make_unique<CoreExpr>();
+    producer.body.value->kind = CoreExprKind::Arr;
+    producer.body.value->type = outer;
+    producer.body.value->org = origin;
+    producer.body.value->elems.push_back(std::move(child));
+    core.impls[0].vars[0].type = outer;
+    core.impls[0].body.stmts[0].expr->type = outer;
+    return core;
+}
+
+CoreModule BorrowedWaitingNamed(CoreStmtKind interruption) {
+    auto core = BorrowedWaiting(interruption);
+    auto &producer = core.impls[1];
+    auto array = producer.results[0].type;
+    producer.vars.insert(producer.vars.begin(), CoreVar {"named", array, CoreVarKind::Var, 0, origin});
+    producer.results[0].namedLocal = 0;
+    CoreStmt initialized;
+    initialized.kind = CoreStmtKind::Let;
+    initialized.var = 0;
+    initialized.org = origin;
+    initialized.expr = Bytes(array, 65);
+    producer.body.stmts.push_back(std::move(initialized));
+    auto &loop = producer.body.value->then->stmts[0];
+    loop.var = 1;
+    loop.then->stmts[0].expr->elems[0]->value = "66";
+    auto &tail = producer.body.value->then->value;
+    tail = make_unique<CoreExpr>();
+    tail->kind = CoreExprKind::ResultLocal;
+    tail->var = 0;
+    tail->type = array;
+    tail->org = origin;
+    return core;
+}
+
 CoreModule InterruptedCall() {
     CoreModule core;
     core.profile = CoreProfile::Construction;
@@ -1093,7 +1159,37 @@ CoreModule NamedHelperRead() {
     return core;
 }
 
+CoreModule WaitingAfterNamedValue() {
+    auto core = NamedLayout(true);
+    auto &producer = core.impls[1];
+    auto packed = producer.vars[0].type;
+    producer.results[0].type = packed;
+    core.impls[0].vars[0].type = packed;
+    core.impls[0].body.stmts[0].expr->type = packed;
+    auto named = std::move(producer.body.value);
+    producer.body.value = make_unique<CoreExpr>();
+    producer.body.value->kind = CoreExprKind::Block;
+    producer.body.value->type = packed;
+    producer.body.value->org = origin;
+    producer.body.value->then = make_unique<CoreBlock>();
+    producer.body.value->then->scope = 1;
+    CoreStmt returned;
+    returned.kind = CoreStmtKind::RetValues;
+    returned.org = origin;
+    returned.values.push_back(Bytes(packed, 66));
+    producer.body.value->then->stmts.push_back(std::move(returned));
+    producer.body.value->then->value = std::move(named);
+    return core;
+}
+
 CoreModule Fixture(string_view name) {
+    if (name == "waiting-named-break") return BorrowedWaitingNamed(CoreStmtKind::Break);
+    if (name == "waiting-named-continue") return BorrowedWaitingNamed(CoreStmtKind::Continue);
+    if (name == "waiting-child-break") return BorrowedWaitingChild(CoreStmtKind::Break);
+    if (name == "waiting-child-continue") return BorrowedWaitingChild(CoreStmtKind::Continue);
+    if (name == "waiting-rearm-break") return BorrowedWaiting(CoreStmtKind::Break);
+    if (name == "waiting-rearm-continue") return BorrowedWaiting(CoreStmtKind::Continue);
+    if (name == "waiting-after-named") return WaitingAfterNamedValue();
     if (name == "named-layout-helper-read") return NamedHelperRead();
     if (name == "named-layout-nested-read") return NamedNestedRead();
     if (name == "named-layout-result") return NamedLayout(false);
@@ -1277,7 +1373,7 @@ int main(int argc, char **argv) try {
         return 0;
     }
     assert(argc == 1);
-    for (auto name : { "break", "continue", "call", "named-borrow", "owner-child", "owner-named", "cross-same", "cross-different", "deferred-cleanup", "own-deferred-cleanup", "value-break-cleanup", "nested-break", "nested-continue", "waiting-implicit", "waiting-explicit", "waiting-nested-return", "waiting-stop", "waiting-built-before-tail", "waiting-own-catch", "waiting-guarded-call", "waiting-delegated-argument", "waiting-guarded-argument", "adapted-open", "adapted-built", "adapted-nested", "named-layout-result", "named-layout-nested-read", "named-layout-helper-read" }) {
+    for (auto name : { "break", "continue", "call", "named-borrow", "owner-child", "owner-named", "cross-same", "cross-different", "deferred-cleanup", "own-deferred-cleanup", "value-break-cleanup", "nested-break", "nested-continue", "waiting-implicit", "waiting-explicit", "waiting-nested-return", "waiting-stop", "waiting-built-before-tail", "waiting-own-catch", "waiting-guarded-call", "waiting-delegated-argument", "waiting-guarded-argument", "adapted-open", "adapted-built", "adapted-nested", "named-layout-result", "named-layout-nested-read", "named-layout-helper-read", "waiting-rearm-break", "waiting-rearm-continue", "waiting-after-named", "waiting-child-break", "waiting-child-continue", "waiting-named-break", "waiting-named-continue" }) {
         auto core = Fixture(name);
         auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
         Valid(high);

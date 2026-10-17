@@ -2026,6 +2026,7 @@ private:
                 Define(i, { Control(GirOp::ControlExitAdopt, W0(i.a), shape[i.b].w[2]) }); return;
             case GirOp::ExitLand: Land(i); return;
             case GirOp::ExitRelease: Control(GirOp::ControlExitRelease, W0(i.a)); return;
+            case GirOp::ExitRearm: Control(GirOp::ControlExitRearm, W0(i.a)); return;
             case GirOp::ExitDiscard: Control(GirOp::ControlExitDiscard, W0(i.a), -1, Carried(i.vals)); return;
             case GirOp::ReceivingDrop: Control(GirOp::ControlReceivingDrop, W0(i.a)); return;
             case GirOp::ReceivingCancel:

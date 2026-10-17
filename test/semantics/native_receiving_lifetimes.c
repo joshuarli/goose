@@ -729,6 +729,124 @@ static void immutable_named_views(void) {
     gir_control_leave(scope);
 }
 
+static void waiting_rearms(void) {
+    uint8_t bytes[128] = {0};
+    gs_stack stack = {0};
+    stack.top = bytes;
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&stack, bytes, 211, 0);
+    gir_control_receiving_open(gir_control_receiving_current(receiver));
+    uint8_t *token = gir_control_exit_wait(receiver);
+    gir_control_ticket *ticket = (gir_control_ticket *)token;
+    for (int retry = 0; retry < 1000; retry++) {
+        gir_control_exit_select(token, 0, NULL);
+        uint8_t *guard = gir_control_receiving_open(gir_control_exit_selected(token));
+        uint8_t *raw = gir_control_receiving_renew(guard);
+        *stack.top++ = 65;
+        ((gir_control_metadata *)raw)->count = 1;
+        uint8_t *cancelled = gir_control_receiving_cancel(guard, 0, NULL);
+        gir_control_attempt_cancel(cancelled);
+        gir_control_exit_rearm(token);
+        gir_control_require(ticket->role == GIR_CONTROL_WAITING && ticket->selected == NULL &&
+            ticket->snapshot_attempt == NULL && !((gir_control_receiving *)receiver)->unselected &&
+            ticket->graph->tickets == ticket && !ticket->previous && !ticket->scope_next &&
+            gir_control_scope_top->tickets == ticket && !gir_control_scope_top->leases &&
+            gir_control_scope_top->receivers == (gir_control_receiving *)receiver &&
+            !((gir_control_receiving *)receiver)->next && node_count(ticket->graph) <= 2 && stack.top == bytes);
+    }
+    gir_control_exit_select(token, 0, NULL);
+    uint8_t *raw = gir_control_exit_selected(token);
+    *stack.top++ = 67;
+    ((gir_control_metadata *)raw)->count = 1;
+    gir_control_attempt_finish(raw);
+    uint8_t *start = gir_control_exit_prepare(token, raw);
+    gir_control_exit_commit(token, raw, start);
+    gir_control_exit_release(token);
+    gir_control_attempt_publish(raw);
+    gir_control_leave(scope);
+}
+
+static void named_waiting_rearms(void) {
+    uint8_t bytes[128] = {0};
+    gs_stack stack = {0};
+    stack.top = bytes;
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&stack, bytes, 213, 0);
+    gir_control_receiving_open(gir_control_receiving_current(receiver));
+    uint8_t *raw = gir_control_receiving_renew(receiver);
+    *stack.top++ = 65;
+    ((gir_control_metadata *)raw)->count = 1;
+    gir_control_attempt_finish(raw);
+    uint8_t *binding = gir_control_named_bind(raw);
+    gir_control_attempt_return(raw);
+    size_t references = ((gir_control_owner *)binding)->references;
+    uint8_t *token = gir_control_exit_wait(receiver);
+    for (int ready = 0; ready < 2; ready++) {
+        gir_control_exit_select(token, 1, binding);
+        if (ready) gir_control_exit_mark_named(token);
+        gir_control_exit_rearm(token);
+        gir_control_require(((gir_control_owner *)binding)->references == references &&
+            ((gir_control_receiving *)receiver)->boundary->progress == GIR_CONTROL_BUILT &&
+            ((gir_control_receiving *)receiver)->boundary->metadata.count == 1 &&
+            bytes[0] == 65 && stack.top == bytes + 1);
+    }
+    gir_control_exit_select(token, 1, binding);
+    gir_control_exit_mark_named(token);
+    raw = gir_control_exit_selected(token);
+    uint8_t *start = gir_control_exit_prepare(token, raw);
+    gir_control_exit_commit(token, raw, start);
+    gir_control_exit_release(token);
+    gir_control_attempt_publish(raw);
+    gir_control_leave(scope);
+}
+
+static void rearm_rejection(int kind) {
+    uint8_t bytes[128] = {0};
+    gs_stack stack = {0};
+    stack.top = bytes;
+    gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&stack, bytes, 217, 0);
+    gir_control_receiving_open(gir_control_receiving_current(receiver));
+    uint8_t *token = kind == 1 ? gir_control_exit_reserve(receiver, 0, NULL) : gir_control_exit_wait(receiver);
+    if (kind == 1 || kind == 2) gir_control_exit_rearm(token);
+    if (kind == 8) {
+        gir_control_exit_discard(token, 0, NULL);
+        gir_control_exit_rearm(token);
+    }
+    gir_control_exit_select(token, 0, NULL);
+    if (kind == 9) {
+        gir_control_exit_rearm(token);
+        gir_control_exit_rearm(token);
+    }
+    if (kind == 7) {
+        gir_control_enter();
+        gir_control_exit_rearm(token);
+    }
+    uint8_t *raw = gir_control_exit_selected(token);
+    if (kind == 3) gir_control_exit_rearm(token);
+    if (kind == 6) {
+        uint8_t *inputs[] = {raw};
+        gir_control_call_push(1, inputs, 0, NULL);
+        gir_control_drop_lease(raw);
+        gir_control_exit_rearm(token);
+    }
+    gir_control_attempt_finish(raw);
+    if (kind == 4) gir_control_exit_rearm(token);
+    if (kind == 5) {
+        gir_control_exit_release(token);
+        gir_control_receiving_transfer(receiver, raw, 0);
+        token = gir_control_exit_adopt(receiver, raw);
+        gir_control_attempt_return(raw);
+        gir_control_exit_rearm(token);
+    }
+    if (kind == 10) {
+        gir_control_exit_prepare(token, raw);
+        gir_control_attempt_return(raw);
+        gir_control_exit_rearm(token);
+    }
+    exit(99);
+}
+
 static void physical_rejection(int kind) {
     uint8_t bytes[128] = {0};
     gs_stack stack = {0};
@@ -820,7 +938,8 @@ int main(int argc, char **argv) {
     if (argc == 2) {
         int kind = atoi(argv[1]);
         if (kind <= 10) waiting_rejection(kind);
-        else physical_rejection(kind - 10);
+        else if (kind <= 27) physical_rejection(kind - 10);
+        else rearm_rejection(kind - 27);
     }
     normal_call(); cancelled_retries(); bounded_call(); target_handoff(); completed_aliases(); named_owner_bindings();
     cancellation_certificate(); historical_named_source(); displaced_child_cleanup();
@@ -829,7 +948,7 @@ int main(int argc, char **argv) {
     waiting_calls(0); waiting_calls(1); waiting_selection(0); waiting_selection(1);
     waiting_terminal_release(); waiting_supersession(); cancellation_without_wait(0); cancellation_without_wait(1);
     physical_layout(0, 0); physical_layout(0, 4); physical_layout(4, 0); physical_layout(4, 4);
-    explicit_prefix_adapters(); immutable_named_views();
+    explicit_prefix_adapters(); immutable_named_views(); waiting_rearms(); named_waiting_rearms();
     gir_control_require(gir_control_live_attempts == NULL);
     return 0;
 }
