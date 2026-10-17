@@ -90,7 +90,7 @@ theorem lowerImpl_summaryTarget_bounds {module : Module} {index : ImplId} {impl 
       | .global global => global < (lower module).globals.size := by
   intro target member
   have bound := validate_summaryTarget_bounds checked lookup known target member
-  cases target <;> simpa only [Target.Within, lowerImpl, lower, Array.size_map,
+  cases target <;> simpa only [Target.Within, lowerImpl, lowerImplFromState, lower, Array.size_map,
     List.length_map, Array.length_toList] using bound
 
 end Goose.Lower.Validation
