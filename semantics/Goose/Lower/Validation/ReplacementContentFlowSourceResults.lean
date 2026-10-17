@@ -35,6 +35,23 @@ theorem lowerContextAt_result_refines_source {module : Core.Module} {ctx : Conte
         exact Core.Sound.subsetRoots_mem subset concrete concreteMember
       · simp at selected
 
+theorem accepted_context_result_expanded {module : Core.Module} {context : ContextId}
+    {ctx : Context} {impl : Impl} {result : Nat}
+    (accepted : Core.validate module = .ok ())
+    (contextRow : module.contexts[context]? = some ctx)
+    (implementationRow : module.impls[ctx.impl]? = some impl)
+    (resultBound : result < impl.results.size) :
+    ∀ root ∈ (((lowerContextAt module ctx impl).roots.results[result]?).getD []).flatMap
+        (lowerContextAt module ctx impl).expandParameterRoot,
+      root ∈ (ctx.resultRoots[result]?.getD []).flatMap
+        (lowerContextAt module ctx impl).expandParameterRoot := by
+  intro root member
+  obtain ⟨abstract, abstractMember, expandedMember⟩ := List.mem_flatMap.mp member
+  exact (lowerContextAt_result_refines_source resultBound).expanded
+    (lowerContextAt_parameterRoots_closed accepted contextRow implementationRow)
+    abstract abstractMember root expandedMember
+
+#print axioms accepted_context_result_expanded
 #print axioms lowerContextAt_result_refines_source
 
 end Goose.Lower.Validation.ReplacementContentFlowSource
