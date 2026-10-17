@@ -227,7 +227,15 @@ def checkSymbols (m : Module) (label : String) (f : Func) : Check Unit := do
         | .local x => unless x < f.slots.size do throw s!"slot root info names local slot {x}, outside the slot table"
         | .global g => unless g < m.globals.size do throw s!"slot root info names global {g}, outside the global table"
         | .param p => unless p < f.params.length do throw s!"slot root info names parameter {p}, which does not exist"
-    -- Value ids are dense and each is defined once.
+    unless ((f.roots.values.getD #[]).toList.map Prod.fst).Nodup do
+      throw "value root info names a value more than once"
+    for (value, roots) in f.roots.values.getD #[] do
+      unless value < f.numValues do throw s!"value root info names value %{value}, outside the value table"
+      for root in roots do
+        match root with
+        | .local x => unless x < f.slots.size do throw s!"value root info names local slot {x}, outside the slot table"
+        | .global g => unless g < m.globals.size do throw s!"value root info names global {g}, outside the global table"
+        | .param p => unless p < f.params.length do throw s!"value root info names parameter {p}, which does not exist"
     let n := f.numValues
     let mut seen := Array.replicate n false
     for b in f.blocks do
