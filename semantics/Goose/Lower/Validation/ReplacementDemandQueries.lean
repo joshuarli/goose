@@ -165,6 +165,33 @@ theorem ReplacementDemandContext.descendant_read_load_apart {module : Core.Modul
   · intro result fn args callOrigin same
     cases same
 
+theorem ReplacementDemandContext.descendant_replay_read_load_apart {module : Core.Module}
+    {planOwner : Nat} {path : List Nat} {place : Place} {rhs : Expr} {origin : OriginId}
+    (context : ReplacementDemandContext module planOwner path place rhs origin)
+    {suffix : List Nat} {child : Place}
+    (source : DemandNodeAt (.expression rhs) suffix (.expression (.read child)))
+    {target : DemandOwner}
+    (targetAt : context.planContext.approvals.access.owner place = .ok target)
+    {env : PEnv} (access : env.access = context.planContext.approvals.access)
+    {before addressAfter readAfter : RState} {addressRoots readRoots : List RootRef}
+    (addressReplay : rpPlace env child before = .ok (addressRoots, addressAfter))
+    (readReplay : rpExpr env (.read child) before = .ok (readRoots, readAfter))
+    {girModule : GIR.Module} {func : Func} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner address value : ValueId}
+    (closed : ParameterRootsClosed func)
+    (ownerKnown : ReplacementRootsWithin (queries.value owner) (target.roots.flatMap func.expandParameterRoot))
+    (addressKnown : ReplacementRootsWithin (queries.value address)
+      (addressRoots.flatMap func.expandParameterRoot))
+    (readKnown : ReplacementRootsWithin (queries.value value) (readRoots.flatMap func.expandParameterRoot)) :
+    ReplacementInstApart girModule types queries owner (.def value (.load address)) := by
+  have childSource : DemandNodeAt (.expression rhs) (suffix ++ [0]) (.place child) :=
+    source.snoc 0 (by simp [DemandNode.child?, DemandNode.children])
+  obtain ⟨_, actualAddress, _, addressAt, _⟩ := context.descendant_place_disjoint childSource
+  obtain ⟨_, actualRead, _, readAt, _⟩ := context.descendant_read_disjoint source
+  apply context.descendant_read_load_apart source targetAt addressAt readAt closed ownerKnown
+  · exact addressKnown.access_place addressReplay (access ▸ addressAt)
+  · exact readKnown.access_expr readReplay (access ▸ readAt)
+
 #print axioms replacementApart_of_expanded_source
 #print axioms ReplacementRootsWithin.access_place
 #print axioms ReplacementRootsWithin.access_expr
@@ -172,6 +199,7 @@ theorem ReplacementDemandContext.descendant_read_load_apart {module : Core.Modul
 #print axioms ReplacementDemandContext.descendant_place_query_apart
 #print axioms ReplacementDemandContext.descendant_call_query_apart
 #print axioms ReplacementDemandContext.rhs_alias_query_apart
+#print axioms ReplacementDemandContext.descendant_replay_read_load_apart
 #print axioms ReplacementDemandContext.descendant_read_load_apart
 
 end Goose.Lower.Validation
