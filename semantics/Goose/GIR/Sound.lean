@@ -96,6 +96,7 @@ theorem validate_stages {m : Module} (h : validate m = .ok ()) :
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, hs, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
@@ -150,6 +151,7 @@ theorem typed_of_types {m : Module} {label : String} {f : Func} {vt : Array (Opt
   subst hvt
   unfold checkTypes at h
   have hin := asCheck_ok h
+  obtain ⟨_, _, hin⟩ := bind_ok hin
   obtain ⟨_, _, hin⟩ := bind_ok hin
   obtain ⟨_, _, hin⟩ := bind_ok hin
   obtain ⟨_, _, hin⟩ := bind_ok hin
